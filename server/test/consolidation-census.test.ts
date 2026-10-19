@@ -74,7 +74,7 @@ describe('feedRecordCallSites: recordFeedEvent( call expressions under server/sr
     expect(sites[0]!.text).toContain('deps.coord.recordFeedEvent(log.epoch, ev);');
   });
 
-  it("REAL: it finds pushOne's ring record in watch.ts, and every site is a call", () => {
+  it("REAL: it finds pushOne's archive write in watch.ts, and every site is a call", () => {
     const sites = feedRecordCallSites();
     show('feedRecordCallSites', sites);
     expect(sites.some((s) => s.file === 'server/src/watch.ts' && /\bcoord\?\.recordFeedEvent\(log\.epoch, recorded\)/.test(s.text)),

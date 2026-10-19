@@ -7330,9 +7330,12 @@ describe("the lane's kind is derived in one place, shared/roster.ts (D-5517)", (
 //   - `mail-disabled`: hand-only ("removable only by a human at a terminal", `ccd/ccrc`). Nothing in the tree writes it.
 // The O13 describe's `writes` is block-local to that describe, so this one defines its own classifiers, and they also
 // follow a shell variable that holds the path (`local marker="$REG/reclaim-paused"` … `touch -- "$marker"`), which is
-// how the one writer spells it. A writer is named `file:function` (`file:(top level)` outside a function). KNOWN
-// WIDTH: a name assembled from pieces, a variable assigned in one function and written in another, and an fs call
-// split over lines are not seen.
+// how the one writer spells it. The corpus is bash (ccd/, deploy/, install.sh), TS under ROOTS, .mjs, and every tracked
+// .py; the tree's .mts files are all .d.mts declarations. TS/.mjs and Python follow a `const|let|var` (Python: a plain
+// assignment) whose initialiser builds the path, per FILE, and count a spawn/exec of a write verb naming it. A bash
+// writer is named `file:function` (`file:(top level)` outside a function); a TS or Python writer by its file. KNOWN
+// WIDTH: a name assembled from pieces, a bash variable assigned in one function and written in another, a path passed
+// through a parameter or object field, and an fs call split over lines are not seen.
 // The import sits here, not at the head, so the append moves no cited line (ESM hoists it either way).
 import { markerDefinitions } from './consolidationCensus.js';
 describe('one writer per fact (ARCH-40): the switches whose writer set is already at target (D-5849)', () => {
@@ -7356,10 +7359,60 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     }
     return [...out];
   };
-  /** A TS or .mjs code line that writes `name`'s path: a file-changing fs call naming the literal or its constant. */
+  /** The alternation that names `name`'s path: the literal, or one of `ids` (constants and variables holding it). */
+  const naming = (name: string, ids: readonly string[]): string =>
+    [esc(name), ...ids.map((c) => `\\b${esc(c)}\\b`)].join('|');
+  /** A TS or .mjs code line that writes `name`'s path: a file-changing fs call, or a spawn/exec of a write verb, naming
+   *  the literal or one of `consts`. */
   const tsWrites = (line: string, name: string, consts: readonly string[]): boolean =>
     new RegExp(`\\b(?:writeFile|appendFile|rename|copyFile|symlink|link|truncate|open|mkdir|rm|unlink|cp)(?:Sync)?\\s*\\([^;]*(?:${
-      [esc(name), ...consts.map((c) => `\\b${c}\\b`)].join('|')})`).test(line);
+      naming(name, consts)})`).test(line)
+    || new RegExp(`\\b(?:execFile|spawn|exec)(?:Sync)?\\s*\\(\\s*[\`'"]${WRITE_VERB}\\b[^;]*(?:${naming(name, consts)})`).test(line);
+  /** The ids a text binds to `name`'s PATH, followed to a fixed point (`const m = join(reg, X)`, then `const q = m`).
+   *  `decl` captures the id and the initialiser of one line; an initialiser binds only when it names the path AND builds
+   *  one (`pathy`: a join, a string or template, a concatenation) or is a bare alias, so `const r = f(names.includes(X))`
+   *  does not bind `r`. Per FILE: two functions' same-named locals merge. */
+  const boundIds = (lines: readonly string[], name: string, seed: readonly string[], decl: RegExp,
+    pathy: RegExp): string[] => {
+    const ids = [...seed];
+    for (let grew = true; grew;) {
+      grew = false;
+      const named = new RegExp(naming(name, ids));
+      const alias = new RegExp(`^\\s*(?:${[esc(name), ...ids.map(esc)].join('|')})\\s*;?\\s*$`);
+      for (const l of lines) {
+        const m = decl.exec(l);
+        if (m && !ids.includes(m[1]!) && named.test(m[2]!) && (pathy.test(m[2]!) || alias.test(m[2]!))) {
+          ids.push(m[1]!); grew = true;
+        }
+      }
+    }
+    return ids;
+  };
+  /** A TS or .mjs FILE's code writes `name`'s path, directly or through a `const|let|var` bound to it (D-5849). */
+  const tsFileWrites = (text: string, name: string, consts: readonly string[]): boolean => {
+    const lines = text.split('\n');
+    const ids = boundIds(lines, name, consts, /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]*)?=(?![=>])(.*)/,
+      /^\s*(?:(?:await\s+)?(?:path\.)?(?:join|resolve)\s*\(|[`'"]|[\w$.]+\s*\+)/);
+    return lines.some((l) => tsWrites(l, name, ids));
+  };
+  /** A Python FILE's code writes `name`'s path (an `open` for writing, a pathlib/os/shutil change, a write verb in
+   *  argv), directly or through a name assigned from it (D-5849). */
+  const pyFileWrites = (text: string, name: string): boolean => {
+    const lines = text.split('\n').filter((l) => !l.trim().startsWith('#'));
+    const target = new RegExp(naming(name, boundIds(lines, name, [], /^\s*([A-Za-z_]\w*)\s*(?::[^=]*)?=(?!=)(.*)/,
+      /^\s*(?:os\.path\.(?:join|abspath|realpath)\s*\(|(?:pathlib\.)?Path\s*\(|[rbf]?['"]|\(|[\w.]+\s*[/+])/)));
+    const write = new RegExp([
+      `\\bopen\\s*\\(.*,\\s*(?:mode\\s*=\\s*)?['"][a-z]*[wax+]`,
+      '\\.(?:touch|write_text|write_bytes|mkdir|unlink|rename|replace|symlink_to|hardlink_to|rmdir)\\s*\\(',
+      '\\bos\\.(?:replace|renames?|remove|unlink|mknod|symlink|link|mkdirs?|makedirs|rmdir|truncate)\\s*\\(',
+      '\\bshutil\\.(?:copy\\w*|move|rmtree)\\s*\\(',
+      `['"]${WRITE_VERB}['"]`,
+    ].join('|'));
+    return lines.some((l) => target.test(l) && write.test(l));
+  };
+  /** Every tracked Python file (none is a bash, TS or .mjs corpus member). */
+  const PY = spawnSync('git', ['ls-files', '-z', '*.py'], { cwd: ccrcRoot, encoding: 'utf8' }).stdout
+    .split('\0').filter(Boolean).map((f) => path.join(ccrcRoot, f));
   /** The constants that hold `name` (`const X = 'name'`), from the census module's own query. */
   const constsOf = (name: string): string[] =>
     markerDefinitions(name).map((s) => /\bconst\s+([A-Za-z_$][\w$]*)/.exec(s.text)![1]!);
@@ -7367,9 +7420,8 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     const out: string[] = [];
     for (const f of BASH) for (const fn of bashWriters(readFileSync(f, 'utf8'), name)) out.push(`${rel(f)}:${fn}`);
     const consts = constsOf(name);
-    for (const f of [...ALL, ...ALL_MJS]) {
-      if (stallCode(f).split('\n').some((l) => tsWrites(l, name, consts))) out.push(rel(f));
-    }
+    for (const f of [...ALL, ...ALL_MJS]) if (tsFileWrites(stallCode(f), name, consts)) out.push(rel(f));
+    for (const f of PY) if (pyFileWrites(readFileSync(f, 'utf8'), name)) out.push(rel(f));
     return out.sort();
   };
 
@@ -7394,6 +7446,23 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(tsWrites("writeFileSync(join(reg, 'reclaim-paused'), '');", 'reclaim-paused', ['RECLAIM_PAUSE_MARKER'])).toBe(true);
     expect(tsWrites('await writeFile(path.join(reg, RECLAIM_PAUSE_MARKER), "");', 'reclaim-paused', ['RECLAIM_PAUSE_MARKER'])).toBe(true);
     expect(tsWrites('if (names.includes(RECLAIM_PAUSE_MARKER)) return;', 'reclaim-paused', ['RECLAIM_PAUSE_MARKER'])).toBe(false);
+    const C = ['RECLAIM_PAUSE_MARKER'];
+    expect(tsFileWrites("function raise(reg) {\n  const marker = join(reg, RECLAIM_PAUSE_MARKER);\n  writeFileSync(marker, '');\n}",
+      'reclaim-paused', C)).toBe(true);
+    expect(tsFileWrites("let p: string = path.join(reg, 'reclaim-paused');\nconst q = p;\nawait rm(q, { force: true });",
+      'reclaim-paused', C)).toBe(true);
+    expect(tsFileWrites("execFileSync('touch', [join(reg, RECLAIM_PAUSE_MARKER)]);", 'reclaim-paused', C)).toBe(true);
+    expect(tsFileWrites("spawnSync(`rm`, ['-f', m]);\nconst m = join(reg, RECLAIM_PAUSE_MARKER);", 'reclaim-paused', C)).toBe(true);
+    expect(tsFileWrites("const p = join(reg, RECLAIM_PAUSE_MARKER);\nif (existsSync(p)) return;\nwriteFileSync(other, '');",
+      'reclaim-paused', C)).toBe(false);
+    expect(tsFileWrites("execFileSync('ls', [join(reg, RECLAIM_PAUSE_MARKER)]);", 'reclaim-paused', C)).toBe(false);
+    expect(pyFileWrites("with open(os.path.join(reg, 'mail-disabled'), 'w') as f:\n    pass", 'mail-disabled')).toBe(true);
+    expect(pyFileWrites("m = os.path.join(reg, 'mail-disabled')\nos.remove(m)", 'mail-disabled')).toBe(true);
+    expect(pyFileWrites("(Path(reg) / 'mail-disabled').touch()", 'mail-disabled')).toBe(true);
+    expect(pyFileWrites("subprocess.run(['touch', os.path.join(reg, 'mail-disabled')])", 'mail-disabled')).toBe(true);
+    expect(pyFileWrites("m = os.path.join(reg, 'mail-disabled')\nif os.path.exists(m):\n    open(m).read()", 'mail-disabled'))
+      .toBe(false);
+    expect(pyFileWrites("# open(os.path.join(reg, 'mail-disabled'), 'w') is the operator's", 'mail-disabled')).toBe(false);
     expect(constsOf('reclaim-paused')).toEqual(['RECLAIM_PAUSE_MARKER']);
     expect(constsOf('mail-disabled')).toEqual(['MAIL_DISABLED_MARKER', 'MAIL_DISABLED_MARKER']);
   });
