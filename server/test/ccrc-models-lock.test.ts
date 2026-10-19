@@ -193,8 +193,8 @@ function pathWithout(h: string, ...tools: string[]): string {
   return `${head}:${d}`;
 }
 
-/** Every writing arm of `ccrc models <id>` this build has (Task 6 adds hold, release and revert). Lock-busy is
- *  answered before node, so each argv only has to pass the arm's own usage checks. */
+/** Every writing arm of `ccrc models <id>` this build has. Lock-busy is answered before node, so each argv only
+ *  has to pass the arm's own usage checks. */
 const WRITING_ARMS: [string, string[]][] = [
   ['init', ['init', 'codex']],
   ['set-class', ['set-class', 'fable', 'model-6-delta']],
@@ -206,6 +206,9 @@ const WRITING_ARMS: [string, string[]][] = [
   ['rm', ['rm']],
   ['set-window', ['set-window', 'model-6.1-alpha', '400000']],
   ['clear-window', ['clear-window', 'model-6.1-alpha']],
+  ['hold', ['hold', 'opus']],
+  ['release', ['release', 'opus']],
+  ['revert', ['revert', 'opus']],
 ];
 
 describe.skipIf(!HAVE_FLOCK)('the lane-files lock itself: _codex_lock\'s contract (D21)', () => {

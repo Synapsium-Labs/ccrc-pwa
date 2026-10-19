@@ -76,7 +76,7 @@ import {
   modelEnvBlock, readRegular,
 } from '../shared/modelenv.mjs';
 import {
-  AdvanceInvalid, backfillAdvance, familyOf, parseAdvance, reconcilePending,
+  AdvanceInvalid, backfillAdvance, familyOf, parseAdvance, reconcilePending, recordMove, resolveEffort,
 } from '../shared/model-advance.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
@@ -386,6 +386,17 @@ function readAdvance(id) {
   }
 }
 
+/** The lane's advance file as `show` reports it (auto-advance spec §2.7, D14: the Models panel reads it through
+ *  `show`): `absent`; `ok` with each class's family, hold, previous and history; or `unreadable` / `invalid` with
+ *  the reason. Never folded into `absent`: "nothing recorded yet" and "a file nobody can read" have two remedies. */
+function advanceReport(id) {
+  const r = readAdvance(id);
+  if (r.err !== undefined) {
+    return { state: r.err[0] === 'advance-file-unreadable' ? 'unreadable' : 'invalid', detail: r.err[1] };
+  }
+  return r.advance === null ? { state: 'absent' } : { state: 'ok', classes: r.advance.classes };
+}
+
 /** The sentence every `writeJsonFile` refusal ends with, named because one caller rewords it: a set-class whose
  *  hand intent is already on disk when its registry write fails (`handIntentLeft`), where it would be false. */
 const NOTHING_CHANGED = 'Nothing was changed.';
@@ -563,6 +574,148 @@ function backfillOp(a, account, registry) {
   const b = why === null ? backfillOnce(a.id, registry) : { created: false, why };
   if (b.err !== undefined) return refuse(1, b.err[0], b.err[1]);
   out({ ok: true, op: 'advance-backfill', id: a.id, created: b.created, ...(b.created ? {} : { why: b.why }) });
+  return 0;
+}
+
+/** A writer's refusal of an advance file it cannot read: the verb rewrites that file and will not overwrite one it
+ *  cannot read. */
+const refuseAdvance = (err, opName, id) => refuse(1, err[0], `${err[1]} ${opName} rewrites account "${id}"'s `
+  + 'advance file and will not overwrite one it cannot read. Fix it by hand, or delete it (the next write re-creates '
+  + 'it from the registry, with no holds and no history), then re-run. Nothing was written.');
+
+/** `hold <class>` and `release <class>` (auto-advance spec §2.7, D3, D12): set or clear a class's hold, the one
+ *  brake the automatic advance honours. They touch only the lane's advance file — the registry, its pins and the
+ *  lane's settings stay as they are, so nothing re-materialises. A hold records WHEN (`now()`) and the ACT that set
+ *  it, `hand` here (D-5190). A second hold, or a release of a class not held, changes nothing and says so
+ *  (`changed: false`); a pending intent found on the way is still settled and written. */
+function holdOp(opName, a, account, registry, catalogue, win) {
+  const loaded = advanceForWrite(a.id, registry);
+  if (loaded.err !== undefined) return refuseAdvance(loaded.err, opName, a.id);
+  const c = loaded.advance.classes[a.class];
+  let changed = false;
+  if (opName === 'hold' && c.hold === null) {
+    c.hold = { at: now(), by: 'hand' };
+    changed = true;
+  }
+  if (opName === 'release' && c.hold !== null) {
+    c.hold = null;
+    changed = true;
+  }
+  if (changed || loaded.dirty) {
+    const w = writeAdvance(a.id, loaded.advance);
+    if (w !== null) return refuse(1, w[0], w[1]);
+  }
+  out({ ok: true, op: opName, class: a.class, changed, ...describe(account, registry, catalogue, win) });
+  return 0;
+}
+
+/**
+ * `revert <class>` (auto-advance spec §2.7): put back the model the class had before its last automatic advance
+ * (`previous`, with its effort level — D-5189 — through `resolveEffort` when that model no longer offers it), and
+ * hold the class there so the next hour cannot move it again. One act.
+ *  - REFUSED, writing nothing: no advance on record (`no-previous`); a previous model the catalogue no longer lists
+ *    (`previous-not-in-catalogue`); one another class pins now (`previous-taken`: a revert never empties another
+ *    class); a registry the validator or the renderer refuses (`registry-invalid`, `unroutable-lane`).
+ *  - THE BRAKE FIRST (D-5206): the hold reaches the advance file before the registry moves, so a revert stopped
+ *    anywhere leaves the class held, never free to be advanced again. It is `{at: now(), by: 'revert'}` whatever
+ *    hold stood before, a hand one included: a hold records the act that set it last (D-5190), and the panel and
+ *    doctor name that act.
+ *  - COMMIT AFTER MATERIALISE, as an advance commits (D21): `previous` is cleared and the move recorded only once the
+ *    lane's files are rendered. A materialise that fails puts the old registry back and renders it again, and the
+ *    refusal says the class is held.
+ */
+function revertOp(a, account, registry, catalogue, win) {
+  const loaded = advanceForWrite(a.id, registry);
+  if (loaded.err !== undefined) return refuseAdvance(loaded.err, 'revert', a.id);
+  const adv = loaded.advance;
+  const c = adv.classes[a.class];
+  const from = registry.classes[a.class];
+  if (c.previous === null) {
+    return refuse(1, 'no-previous',
+      `account "${a.id}"'s ${a.class} class has no automatic advance on record, so there is nothing to revert to. `
+      + `'ccrc models ${a.id} set-class ${a.class} <modelId|none>' sets it by hand. Nothing was written.`);
+  }
+  const to = c.previous.model;
+  const rowOf = (id) => (id === null || catalogue === null ? undefined : catalogue.models.find((m) => m.id === id));
+  if (to !== null && catalogue !== null && rowOf(to) === undefined) {
+    return refuse(1, 'previous-not-in-catalogue',
+      `${a.class}'s previous model "${to}" is no longer in account "${a.id}"'s catalogue, so it cannot be put back. `
+      + `'ccrc models ${a.id} show' lists what the lane offers, and set-class picks one by hand. Nothing was written.`);
+  }
+  const taker = to === null ? undefined : CLASSES.find((o) => o !== a.class && registry.classes[o] === to);
+  if (taker !== undefined) {
+    return refuse(1, 'previous-taken',
+      `${a.class}'s previous model "${to}" is the ${taker} class's model now, and a revert never empties another `
+      + `class. Move ${taker} first, or set ${a.class} by hand. Nothing was written.`);
+  }
+  const next = JSON.parse(JSON.stringify(registry));
+  next.classes[a.class] = to;
+  const effortFrom = isObj(registry.effort) && typeof registry.effort[a.class] === 'string'
+    ? registry.effort[a.class] : null;
+  let effortTo = c.previous.effort;
+  const toRow = rowOf(to);
+  if (effortTo !== null && toRow !== undefined && toRow.efforts.length > 0 && !toRow.efforts.includes(effortTo)) {
+    effortTo = resolveEffort({ stored: effortTo, oldEfforts: rowOf(from)?.efforts ?? null, newEfforts: toRow.efforts })
+      ?? null;
+  }
+  if (effortTo === null) {
+    if (isObj(next.effort)) {
+      delete next.effort[a.class];
+      if (Object.keys(next.effort).length === 0) delete next.effort;
+    }
+  } else {
+    next.effort = { ...(isObj(next.effort) ? next.effort : {}), [a.class]: effortTo };
+  }
+  // An explicit discovery list has to offer what a class routes to: set-class's own rule, and like it never on an
+  // openrouter lane, whose list grows only through `discovery add`'s whitelist check.
+  if (to !== null && registry.probe !== 'openrouter' && Array.isArray(next.discovery) && !next.discovery.includes(to)) {
+    next.discovery = [...next.discovery, to];
+  }
+  let validated;
+  try {
+    validated = parseRegistry(next, catalogue);
+  } catch (e) {
+    if (e instanceof RegistryInvalid) return refuseRegistry(e, a.id);
+    throw e;
+  }
+  // RULE 2's render check, inline rather than `renderRefusal` (D-5784's one helper): that helper answers null for a
+  // registry with nothing assigned, the legal unseeded state, and a revert that leaves a lane's every class empty
+  // must refuse `unroutable-lane` there, never write it, as the mutation tail's seeded-to-unseeded branch does.
+  try {
+    modelEnvBlock(validated, catalogue, windowsOf(win));
+  } catch (e) {
+    if (e instanceof ModelEnvInvalid) return refuse(1, 'unroutable-lane', `${e.message} Nothing was written.`);
+    throw e;
+  }
+  // THE BRAKE FIRST (D-5206), over any hold already standing: the act that set it last.
+  c.hold = { at: now(), by: 'revert' };
+  const w0 = writeAdvance(a.id, adv);
+  if (w0 !== null) return refuse(1, w0[0], w0[1]);
+  const w1 = writeRegistry(a.id, validated);
+  if (w1 !== null) return refuse(1, w1[0], `${w1[1]} ${a.class} is held now, and stays on ${from ?? 'none'}.`);
+  const mat = materialise(account, validated, catalogue, windowsOf(win));
+  if (mat.err !== undefined) {
+    const back = writeRegistry(a.id, registry);
+    const again = back === null ? materialise(account, registry, catalogue, windowsOf(win)) : { err: back };
+    const how = back !== null ? 'could NOT be put back'
+      : again.err === undefined ? 'was put back, and the lane re-rendered on it'
+        : `was put back, and rendering it failed too (${again.err[1]})`;
+    return refuse(1, mat.err[0], `${mat.err[1]} The registry ${how}; ${a.class} is held, on ${from ?? 'none'}, and `
+      + 'its previous model is still on record, so the revert can be run again.');
+  }
+  c.previous = null;
+  const done = recordMove(adv, a.class, {
+    at: now(), how: 'revert', from, to, ok: true, canary: 'not-run',
+    ...(effortFrom !== effortTo ? { effort: { from: effortFrom, to: effortTo } } : {}),
+  });
+  const w2 = writeAdvance(a.id, done);
+  const answer = { ok: true, op: 'revert', class: a.class, from, to, ...describe(account, validated, catalogue, win) };
+  if (w2 !== null) {
+    answer.advanceNote = `${w2[0]}: ${w2[1]} The class was reverted and is held; its previous model is still on `
+      + 'record, so a second revert changes nothing.';
+    process.stderr.write(`${SELF}: ${answer.advanceNote}\n`);
+  }
+  out(answer);
   return 0;
 }
 
@@ -818,7 +971,7 @@ function renderRefusal(registry, catalogue, windows) {
  *  when there is no registry file: an Anthropic lane, or one `init` never ran
  *  on. An unseeded registry (deviation B-1, every class null) still gets the
  *  decision, `{ tokens: null, rule: 'none', unmeasured: [] }`: no key, as
- *  `materialise` writes no env block for it. */
+ *  `materialise` writes no env block for it. `advance` is the lane's advance file (`advanceReport`). */
 function describe(account, registry, catalogue, reading) {
   const anthropic = isAnthropicLane(account);
   const derived = deriveModels(registry, catalogue);
@@ -835,6 +988,7 @@ function describe(account, registry, catalogue, reading) {
     renderRefusal: renderRefusal(registry, catalogue, windows),
     windows: windowsReport(reading),
     contextWindow: registry === null ? null : contextWindowFor(registry, catalogue, windows),
+    advance: advanceReport(account.id),
   };
 }
 
@@ -860,6 +1014,7 @@ function orphanDescribe(id, registry, catalogue, reading) {
     settingsDrift: [],
     windows: windowsReport(reading),
     contextWindow: contextWindowFor(registry, catalogue, windowsOf(reading)),
+    advance: advanceReport(id),
   };
 }
 
@@ -925,6 +1080,10 @@ const OPS = {
   rm: { keys: ['file', 'id'], required: ['file', 'id'], writes: true },
   // auto-advance spec §2.1: create the lane's advance file when it has none (`backfillOp`); never rewrites one.
   'advance-backfill': { keys: ['file', 'id'], required: ['file', 'id'], writes: true },
+  // auto-advance spec §2.7 (D12): the hold the automatic advance honours, and the one-act revert.
+  hold: { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
+  release: { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
+  revert: { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
   // `commit` is OPTIONAL and defaults to check-only (fix round 1): omitted or
   // any value other than the literal string "true" renders and reports
   // `changed` without writing; `--commit true` performs the write. See the
@@ -1481,6 +1640,13 @@ function main(argv) {
     return windowOp(opName, a, account, registry, catalogue, win);
   }
   if (opName === 'advance-backfill') return backfillOp(a, account, registry);
+  if (opName === 'hold' || opName === 'release' || opName === 'revert') {
+    if (!CLASSES.includes(a.class)) {
+      return refuse(1, 'unknown-class', `"${a.class}" is not a class: the four are ${CLASSES.join(', ')}.`);
+    }
+    return opName === 'revert' ? revertOp(a, account, registry, catalogue, win)
+      : holdOp(opName, a, account, registry, catalogue, win);
+  }
   const next = JSON.parse(JSON.stringify(registry));
 
   if (opName === 'set-class') {

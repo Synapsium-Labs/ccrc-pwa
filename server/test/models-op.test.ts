@@ -24,6 +24,7 @@ import { ADVANCE_EXAMPLE, ADV_CATALOGUE, ADV_DEEP_TEXT, ADV_REGISTRY, ADV_SEEDS 
 import { backfillAdvance, chooseCandidate, familyOf, recordMove, serializeAdvance } from '../../shared/model-advance.mjs';
 import type { Advance, HistoryEntry } from '../../shared/model-advance.mjs';
 import type { ModelClass, Registry } from '../../shared/models.js';
+import { parseRegistry } from '../../shared/models.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -2610,6 +2611,250 @@ describe('the advance file through init, set-class, rm and advance-backfill (aut
   });
 });
 
+describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
+  const ID = LEGACY_EXTERNAL_ID;
+  /** A lane as an automatic advance leaves it: opus moved from model-5.6-gamma to model-6.1-gamma, its effort
+   *  resolved from max down to xhigh (the newer row offers four levels). */
+  const ADVANCED: Registry = {
+    ...ADV_REGISTRY, classes: { ...ADV_REGISTRY.classes, opus: 'model-6.1-gamma' },
+    effort: { ...ADV_REGISTRY.effort, opus: 'xhigh' },
+  };
+  const advanced = (previous: { model: string | null; effort: string | null } = { model: 'model-5.6-gamma', effort: 'max' },
+    registry: Registry = ADVANCED, cls: ModelClass = 'opus'): void => {
+    plantAdv(ID, registry);
+    const adv = backfillAdvance({ registry, seedFamilies: CODEX_SEEDS });
+    adv.classes[cls].previous = previous;
+    adv.classes[cls].history = [{ at: '2026-10-14T10:00:00Z', how: 'advance', from: previous.model,
+      to: registry.classes[cls], ok: true, canary: 'passed' }];
+    plantAdvance(ID, adv);
+  };
+  const verb = (v: string, cls = 'opus', extra: NodeJS.ProcessEnv = {}): Result =>
+    opEnv({ CCRC_MODELS_NOW: NOW, ...extra }, v, '--file', rosterPath(), '--id', ID, '--class', cls);
+  /** Every file under ~/.ccrc/models, name → bytes: what "writes nothing" is measured against. */
+  const modelFiles = (): Record<string, string> => {
+    const d = path.join(home, '.ccrc', 'models');
+    return Object.fromEntries(fs.readdirSync(d).sort().map((n) => [n, fs.readFileSync(path.join(d, n), 'utf8')]));
+  };
+
+  it('hold records when and by what act; a second hold changes nothing; release clears it; a second release changes nothing', () => {
+    plantAdv();
+    const h1 = verb('hold');
+    expect(h1.code, h1.stdout + h1.stderr).toBe(0);
+    expect(h1.body).toMatchObject({ ok: true, op: 'hold', class: 'opus', changed: true });
+    expect(advanceOf(ID).classes.opus.hold).toEqual({ at: NOW, by: 'hand' });
+    const held = fs.readFileSync(advPath(ID), 'utf8');
+    expect(verb('hold', 'opus', { CCRC_MODELS_NOW: '2026-10-16T00:00:00Z' }).body).toMatchObject({ changed: false });
+    expect(fs.readFileSync(advPath(ID), 'utf8')).toBe(held);
+    expect(verb('release').body).toMatchObject({ ok: true, op: 'release', class: 'opus', changed: true });
+    expect(advanceOf(ID).classes.opus.hold).toBeNull();
+    expect(verb('release').body).toMatchObject({ changed: false });
+    expect(fs.readFileSync(regPath(ID), 'utf8'), 'a hold never touches the registry')
+      .toBe(`${JSON.stringify(ADV_REGISTRY, null, 2)}\n`);
+  });
+
+  it("revert puts previous back — the pin, its effort and the lane's env — turns the hold on, clears previous and records the move", () => {
+    advanced();
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'revert', class: 'opus', from: 'model-6.1-gamma', to: 'model-5.6-gamma' });
+    const reg = registryOf(ID) as unknown as Registry;
+    expect([reg.classes.opus, reg.effort?.opus]).toEqual(['model-5.6-gamma', 'max']);
+    expect(settingsOf(LEGACY_SUFFIX).env['ANTHROPIC_DEFAULT_OPUS_MODEL']).toBe('model-5.6-gamma');
+    const opus = advanceOf(ID).classes.opus;
+    expect(opus.hold).toEqual({ at: NOW, by: 'revert' });
+    expect(opus.previous).toBeNull();
+    expect(opus.history[opus.history.length - 1]).toEqual({ at: NOW, how: 'revert', from: 'model-6.1-gamma',
+      to: 'model-5.6-gamma', ok: true, canary: 'not-run', effort: { from: 'xhigh', to: 'max' } });
+  });
+
+  it('a revert whose materialise fails puts the registry back and leaves the class held, previous and history as they were (D-5206)', () => {
+    advanced();
+    const reg0 = fs.readFileSync(regPath(ID), 'utf8');
+    const opus0 = advanceOf(ID).classes.opus;
+    fs.writeFileSync(path.join(home, LEGACY_SUFFIX, 'settings.json'), '{ this is not json');
+    const r = verb('revert');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('settings-unwritable');
+    expect(String(r.body['detail'])).toMatch(/opus is held, on model-6\.1-gamma/);
+    expect(fs.readFileSync(regPath(ID), 'utf8')).toBe(reg0);
+    const opus = advanceOf(ID).classes.opus;
+    expect(opus.hold).toEqual({ at: NOW, by: 'revert' });
+    expect([opus.previous, opus.history]).toEqual([opus0.previous, opus0.history]);
+  });
+
+  it('revert sets its own hold over a hand hold already standing: the hold records the act that set it last (D-5190)', () => {
+    advanced();
+    expect(verb('hold').code).toBe(0);   // { at: NOW, by: 'hand' }
+    const later = '2026-10-16T00:00:00Z';
+    const r = verb('revert', 'opus', { CCRC_MODELS_NOW: later });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(advanceOf(ID).classes.opus.hold).toEqual({ at: later, by: 'revert' });
+  });
+
+  it.each([
+    ['no-previous: no automatic advance on record', (): void => { plantAdv(); }, 'opus', 'no-previous'],
+    ['previous-not-in-catalogue', (): void => { advanced({ model: 'model-9-omega', effort: 'max' }); }, 'opus',
+      'previous-not-in-catalogue'],
+    ['previous-taken: another class pins it now', (): void => { advanced({ model: 'model-6-beta', effort: 'high' }); },
+      'opus', 'previous-taken'],
+    ['registry-invalid: the class subagents run as would be emptied', (): void => {
+      advanced({ model: null, effort: null },
+        { ...ADV_REGISTRY, classes: { ...ADV_REGISTRY.classes, sonnet: 'model-6.1-beta' } }, 'sonnet');
+    }, 'sonnet', 'registry-invalid'],
+    ['unroutable-lane: nothing left for an unqualified request', (): void => {
+      advanced({ model: null, effort: null }, { probe: 'codex', classes: { haiku: 'model-6.1-alpha', sonnet: null,
+        opus: null, fable: null }, subagent: 'haiku', discovery: 'catalogue' }, 'haiku');
+    }, 'haiku', 'unroutable-lane'],
+  ] as [string, () => void, string, string][])('revert refuses %s, and writes nothing', (_why, plant, cls, error) => {
+    plant();
+    const before = modelFiles();
+    const r = verb('revert', cls);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(r.body['error']).toBe(error);
+    expect(modelFiles()).toEqual(before);
+  });
+
+  it('revert puts back an effort level its model no longer offers through resolveEffort (D-5189)', () => {
+    advanced({ model: 'model-5.6-gamma', effort: 'ultra' });
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((registryOf(ID) as unknown as Registry).effort?.opus).toBe('low');
+  });
+
+  it('hold settles a pending intent first: the next locked writer records the move that landed (Review Focus: the crash gap)', () => {
+    // A writer killed between the registry rename and its commit leaves this: the pin already on `to`, the intent
+    // still in the advance file.
+    plantAdv(ID, ADVANCED);
+    const adv = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS });
+    adv.pending = { class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma', effortFrom: 'max', effortTo: 'xhigh',
+      at: '2026-10-14T10:00:00Z' };
+    plantAdvance(ID, adv);
+    expect(verb('hold', 'sonnet').code).toBe(0);
+    const after = advanceOf(ID);
+    expect(after.pending).toBeNull();
+    expect(after.classes.opus.previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
+    expect(after.classes.opus.history).toEqual([{ at: '2026-10-14T10:00:00Z', how: 'advance', from: 'model-5.6-gamma',
+      to: 'model-6.1-gamma', ok: true, canary: 'passed', effort: { from: 'max', to: 'xhigh' }, recovered: true }]);
+    expect(after.classes.sonnet.hold).toEqual({ at: NOW, by: 'hand' });
+  });
+
+  it('an intent that never landed is dropped by the next locked writer, even one whose own change is nothing', () => {
+    plantAdv();   // the pin is still model-5.6-gamma: the rename never happened
+    const adv = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS });
+    adv.classes.sonnet.hold = { at: NOW, by: 'hand' };
+    adv.pending = { class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma', effortFrom: 'max', effortTo: 'xhigh',
+      at: '2026-10-14T10:00:00Z' };
+    plantAdvance(ID, adv);
+    expect(verb('hold', 'sonnet').body).toMatchObject({ changed: false });
+    const after = advanceOf(ID);
+    expect(after.pending).toBeNull();
+    expect(after.classes.opus.history).toEqual([]);
+  });
+
+  it("hold settles a hand intent a set-class left between its rename and its record: the move recorded as hand, the emptied class's family cleared, previous untouched (Review Focus: the crash gap, a hand set-class cut short)", () => {
+    // `set-class opus none` killed after its registry rename: the pin already none, the hand intent still on disk.
+    plantAdv(ID, { ...ADV_REGISTRY, classes: { ...ADV_REGISTRY.classes, opus: null } });
+    const adv = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS });
+    adv.classes.opus.previous = { model: 'model-5-gamma', effort: 'max' };
+    adv.pending = { how: 'hand', class: 'opus', from: 'model-5.6-gamma', to: null, emptied: [], at: '2026-10-14T10:00:00Z' };
+    plantAdvance(ID, adv);
+    expect(verb('hold', 'sonnet').code).toBe(0);
+    const opus = advanceOf(ID).classes.opus;
+    expect(advanceOf(ID).pending).toBeNull();
+    expect(opus.history).toEqual([{ at: '2026-10-14T10:00:00Z', how: 'hand', from: 'model-5.6-gamma', to: null, ok: true,
+      canary: 'not-run' }]);
+    expect(opus.family).toBeNull();
+    expect(opus.previous).toEqual({ model: 'model-5-gamma', effort: 'max' });
+  });
+
+  it.each([['hold'], ['release'], ['revert']])('%s refuses an advance file it cannot read, and leaves it as it is', (v) => {
+    plantAdv();
+    plantAdvance(ID, '{"v": 2}');
+    const r = verb(v);
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('advance-file-invalid');
+    expect(String(r.body['detail'])).toMatch(/will not overwrite one it cannot read/);
+    expect(fs.readFileSync(advPath(ID), 'utf8')).toBe('{"v": 2}');
+  });
+
+  it.each([['hold'], ['release'], ['revert']])('%s is refused on an Anthropic lane, as every op but show is', (v) => {
+    const r = opEnv({ CCRC_MODELS_NOW: NOW }, v, '--file', rosterPath(), '--id', ROSTER.accounts[1]!.id, '--class', 'opus');
+    expect([r.code, r.body['error']]).toEqual([1, 'anthropic-lane']);
+  });
+
+  it('an unknown class is refused by name, writing nothing', () => {
+    plantAdv();
+    const r = verb('hold', 'subagent');
+    expect([r.code, r.body['error']]).toEqual([1, 'unknown-class']);
+    expect(fs.existsSync(advPath(ID))).toBe(false);
+  });
+
+  it('hold on a lane whose probe is not codex writes its advance file too, with no family seeded: a hand act is recorded on any lane, and only the codex arm advances one (D-5198)', () => {
+    const router = ROSTER.accounts[3]!.id;
+    expect(op('init', '--file', rosterPath(), '--id', router, '--probe', 'compatible',
+      '--base-url', 'https://compatible.example.invalid').code).toBe(0);
+    expect(fs.existsSync(advPath(router)), 'init compatible wrote an advance file').toBe(false);
+    const r = opEnv({ CCRC_MODELS_NOW: NOW }, 'hold', '--file', rosterPath(), '--id', router, '--class', 'opus');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const adv = advanceOf(router);
+    expect(adv.classes.opus.hold).toEqual({ at: NOW, by: 'hand' });
+    expect(Object.values(adv.classes).map((c) => c.family)).toEqual([null, null, null, null]);
+    // The hourly step still writes nothing there, and says why.
+    expect(op('advance-backfill', '--file', rosterPath(), '--id', router).body).toMatchObject({ created: false });
+  });
+
+  it("a clock that is not of the advance file's form is refused by writeAdvance's read-back, and nothing is written", () => {
+    plantAdv();
+    const r = verb('hold', 'opus', { CCRC_MODELS_NOW: 'yesterday' });
+    expect([r.code, r.body['error']]).toEqual([1, 'advance-invalid']);
+    expect(fs.existsSync(advPath(ID))).toBe(false);
+  });
+
+  it.each([
+    ['absent', (): void => {}, { state: 'absent' }],
+    ['ok', (): void => { plantAdvance(ID, backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS })); },
+      { state: 'ok', classes: backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS }).classes }],
+    ['invalid', (): void => { plantAdvance(ID, '{ this is not json'); }, { state: 'invalid' }],
+    ['unreadable', (): void => { fs.mkdirSync(advPath(ID)); }, { state: 'unreadable' }],
+  ] as [string, () => void, Record<string, unknown>][])('show carries the advance state: %s', (_why, plant, want) => {
+    plantAdv();
+    plant();
+    const r = op('show', '--file', rosterPath(), '--id', ID);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['advance']).toMatchObject(want);
+    if (want['state'] === 'invalid' || want['state'] === 'unreadable') {
+      expect(String((r.body['advance'] as { detail: string }).detail)).toContain(advPath(ID));
+    }
+  });
+
+  it('the class registry stays what an older parser reads, with an advance file beside it (D13)', () => {
+    const KEYS = ['probe', 'classes', 'subagent', 'discovery', 'effort', 'baseUrl'];
+    expect(fs.readFileSync(path.join(REPO, 'shared', 'models.mjs'), 'utf8'))
+      .toContain(`const REGISTRY_KEYS = [${KEYS.map((k) => `'${k}'`).join(', ')}];`);
+    const id = CODEX_ROW.id;
+    const compatible = (step: string): void => {
+      const text = fs.readFileSync(regPath(id), 'utf8');
+      const json = JSON.parse(text) as Record<string, unknown>;
+      expect(Object.keys(json).filter((k) => !KEYS.includes(k)), step).toEqual([]);
+      expect(text, step).toBe(`${JSON.stringify(parseRegistry(json), null, 2)}\n`);
+      expect(fs.existsSync(advPath(id)), step).toBe(true);
+    };
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+    writeCatalogue(id, ADV_CATALOGUE);
+    expect(opAt('init', '--file', rosterPath(), '--id', id, '--probe', 'codex').code).toBe(0);
+    compatible('init');
+    expect(opAt('set-class', '--file', rosterPath(), '--id', id, '--class', 'opus', '--model', 'model-5.6-gamma').code).toBe(0);
+    compatible('set-class');
+    expect(opAt('hold', '--file', rosterPath(), '--id', id, '--class', 'sonnet').code).toBe(0);
+    compatible('hold');
+    const adv = advanceOf(id);
+    adv.classes.opus.previous = { model: 'model-6-delta', effort: 'max' };
+    plantAdvance(id, adv);
+    expect(opAt('revert', '--file', rosterPath(), '--id', id, '--class', 'opus').code).toBe(0);
+    compatible('revert');
+  });
+});
+
 // C6: the guard is at OP ENTRY, so every op that takes an `--id` refuses a
 // bad one before touching the roster or any path — not just `rm`, which is
 // the one the finding's own repro happened to exploit.
@@ -2622,6 +2867,9 @@ describe('the account-id guard applies to every op, not just rm (C6)', () => {
     ['set-window', ['--model', 'model-9-omega', '--tokens', '400000']],
     ['clear-window', ['--model', 'model-9-omega']],
     ['advance-backfill', []],
+    ['hold', ['--class', 'opus']],
+    ['release', ['--class', 'opus']],
+    ['revert', ['--class', 'opus']],
   ] as [string, string[]][])('%s refuses a bad --id', (opName, extra) => {
     const r = op(opName, '--file', rosterPath(), '--id', '../etc/passwd', ...extra);
     expect(r.code).toBe(1);
@@ -2721,6 +2969,15 @@ describe('a FIFO at a lane file\'s path is that read\'s unreadable answer, never
     expect(classesOf(CODEX_ROW.id)['opus']).toBe('model-6-delta');
     expect(String(r.body['advanceNote'])).toMatch(/^advance-file-unreadable: .*not a regular file/);
     expect(fs.statSync(adv).isFIFO(), 'set-class replaced the FIFO it could not read').toBe(true);
+  }, 20_000);
+
+  it('show with a FIFO advance file answers ok: the advance state unreadable, never a block (auto-advance spec §2.7)', () => {
+    plantAdv(CODEX_ROW.id);
+    fifo(path.join(home, '.ccrc', 'models', `${CODEX_ROW.id}.advance.json`));
+    const r = bounded('show', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.body['advance']).toMatchObject({ state: 'unreadable' });
+    expect((r.body['advance'] as { detail: string }).detail).toMatch(/not a regular file/);
   }, 20_000);
 
   it('show with a FIFO settings.json keeps today\'s answer for an unreadable one: every key missing', () => {

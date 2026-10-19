@@ -541,7 +541,8 @@ describe('the models dispatcher', () => {
     const m = /^MODELS_SUBS="([^"]*)"$/m.exec(src);
     expect(m, 'ccd/ccrc has no file-scope MODELS_SUBS').toBeTruthy();
     expect(m![1]!.split(' ').filter(Boolean).sort())
-      .toEqual(['clear-window', 'discovery', 'init', 'rm', 'set-class', 'set-effort', 'set-subagent', 'set-window', 'show']);
+      .toEqual(['clear-window', 'discovery', 'hold', 'init', 'release', 'revert', 'rm', 'set-class', 'set-effort',
+        'set-subagent', 'set-window', 'show']);
   });
 
   it('spells the reserved first-token words once, at file scope', () => {
@@ -1211,6 +1212,82 @@ describe('ccrc models <id> set-window and clear-window (codex-bridge spec §2.7)
 
   it('show --json still prints nothing on stderr', () => {
     expect(run(['models', ID, 'set-window', OPUS, '400000']).code).toBe(0);
+    expect(run(['models', ID, 'show', '--json']).stderr).toBe('');
+  });
+});
+
+describe('ccrc models <id> hold, release and revert (auto-advance spec §2.7, D12)', () => {
+  // Model ids are read off the fixtures, and roster ids by position: this repository is public.
+  const ID = LEGACY_EXTERNAL_ID;
+  const NOW = '2026-10-15T00:00:00Z';
+  const advPath = (): string => join(home, '.ccrc', 'models', `${ID}.advance.json`);
+  const holdOf = (cls: string): unknown => JSON.parse(fs.readFileSync(advPath(), 'utf8')).classes[cls].hold;
+
+  beforeEach(() => {
+    writeCatalogue(ID);
+    seedCodex(ID);
+  });
+
+  it('hold reaches the op: one JSON object, and the class held by hand at the time given', () => {
+    const r = run(['models', ID, 'hold', 'opus'], { CCRC_MODELS_NOW: NOW });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(oneObject(r)).toMatchObject({ ok: true, op: 'hold', class: 'opus', changed: true });
+    expect(holdOf('opus')).toEqual({ at: NOW, by: 'hand' });
+  });
+
+  it('release reaches the op and clears the hold', () => {
+    expect(run(['models', ID, 'hold', 'opus'], { CCRC_MODELS_NOW: NOW }).code).toBe(0);
+    const r = run(['models', ID, 'release', 'opus']);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(oneObject(r)).toMatchObject({ op: 'release', changed: true });
+    expect(holdOf('opus')).toBeNull();
+  });
+
+  it('revert reaches the op: with no automatic advance on record it refuses no-previous at exit 1, its sentence on stderr', () => {
+    const r = run(['models', ID, 'revert', 'opus']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('no-previous');
+    expect(r.stderr).toMatch(/has no automatic advance on record/);
+  });
+
+  it.each([['hold'], ['release'], ['revert']])('%s refuses a class typo at exit 2, before node, writing nothing', (verb) => {
+    for (const bad of ['subagent', 'opuss']) {
+      const r = run(['models', ID, verb, bad]);
+      expect(r.code, `${verb} ${bad}`).toBe(2);
+      expect(oneObject(r)['error']).toBe('unknown-class');
+    }
+    expect(fs.existsSync(advPath())).toBe(false);
+  });
+
+  it.each([['hold'], ['release'], ['revert']])('%s takes exactly one class', (verb) => {
+    expect(oneObject(run(['models', ID, verb]))['error']).toBe('missing-argument');
+    expect(oneObject(run(['models', ID, verb, 'opus', 'extra']))['error']).toBe('unknown-argument');
+  });
+
+  it('an Anthropic lane refuses all three', () => {
+    for (const verb of ['hold', 'release', 'revert']) {
+      const r = run(['models', ROSTER.accounts[1]!.id, verb, 'opus']);
+      expect(r.code, verb).toBe(1);
+      expect(oneObject(r)['error']).toBe('anthropic-lane');
+    }
+  });
+
+  it('show names a held class in its summary, with the act and the time', () => {
+    expect(run(['models', ID, 'hold', 'opus'], { CCRC_MODELS_NOW: NOW }).code).toBe(0);
+    const r = run(['models', ID, 'show']);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain(`  held, so no automatic advance moves them: opus (hand, since ${NOW})`);
+  });
+
+  it('show names an advance file it cannot read', () => {
+    fs.writeFileSync(advPath(), '[]');
+    const r = run(['models', ID, 'show']);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/the advance file cannot be read \(invalid\): /);
+  });
+
+  it('show --json still prints nothing on stderr with a class held', () => {
+    expect(run(['models', ID, 'hold', 'opus'], { CCRC_MODELS_NOW: NOW }).code).toBe(0);
     expect(run(['models', ID, 'show', '--json']).stderr).toBe('');
   });
 });

@@ -2183,14 +2183,14 @@ INST_DEGRADED=()
 # The per-lane subcommands this build implements, spelled ONCE at file scope:
 # the dispatcher and the refusal that lists what exists must read one string,
 # or a subcommand can dispatch while the refusal claims it does not exist.
-MODELS_SUBS="clear-window discovery init rm set-class set-effort set-subagent set-window show"
+MODELS_SUBS="clear-window discovery hold init release revert rm set-class set-effort set-subagent set-window show"
 
 # The node ops that WRITE a lane's model files (auto-advance spec D21). Every call of one of them goes through
 # `_models_answer_locked` or `_models_node_locked`, so it runs under the lane-files lock. The same list as
 # `deploy/models-op.mjs`'s `OPS` rows marked `writes: true`, which `single-definition.test.ts` checks in both
 # directions; `ccrc-models-lock.test.ts` forbids a bare call of any of them (`materialise --check true` excepted,
 # since it writes nothing).
-MODELS_WRITE_OPS="advance-backfill clear-window discovery init materialise rm set-class set-effort set-subagent set-window"
+MODELS_WRITE_OPS="advance-backfill clear-window discovery hold init materialise release revert rm set-class set-effort set-subagent set-window"
 
 # The BOX-WIDE subcommands this build implements — a different question from a
 # lane's own classes, on a different cadence (§5).
@@ -2262,6 +2262,9 @@ already running).
             set-window/clear-window record or drop a measured context
             window per model; once every class model has one, the lane's
             window is the smallest of them.
+            hold/release/revert <class> keep a class where it is, let it
+            move again, or put back the model it had before its last
+            automatic advance and hold it there.
             "ccrc models refresh <id>|--all" probes the provider catalogues
             those classes are classified against
             . "ccrc models litellm <id>" regenerates the Codex lane's
@@ -10029,6 +10032,12 @@ _models_summary() {   # <json body> — the human sentences, on STDERR
      elif .windows.state == "unreadable" then
        "  the windows file cannot be read, so the default rule applies: \(.windows.reason)"
      else empty end),
+    (if .advance == null or .advance.state == "absent" then empty
+     elif .advance.state == "ok" then
+       ([.advance.classes | to_entries[] | select(.value.hold != null)
+         | "\(.key) (\(.value.hold.by), since \(.value.hold.at))"]
+        | if length > 0 then "  held, so no automatic advance moves them: \(join(", "))" else empty end)
+     else "  the advance file cannot be read (\(.advance.state)): \(.advance.detail)" end),
     (if (.derived.unclassified | length) > 0 then
        "  unclassified (\(.derived.unclassified | length)): \(.derived.unclassified | join(", "))" else empty end),
     (if (.derived.retired | length) > 0 then
@@ -10307,6 +10316,18 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
       shift
       [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id clear-window takes one model, and got \"$1\""
       _models_answer_locked "$id" clear-window --file "$file" --id "$id" --model "$model" || exit $?
+      return 0
+      ;;
+    hold|release|revert)
+      # auto-advance spec §2.7, D12: the shell form of the Models panel's Hold and Revert, for a box whose console
+      # is down. A class typo is a usage error, answered here at exit 2 before node is asked.
+      local cls="${1:-}"
+      [ -n "$cls" ] \
+        || _models_refuse missing-argument 2 "ccrc models $id $sub needs a class: ccrc models $id $sub <${MODELS_CLASSES// /|}>"
+      shift
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id $sub takes one class, and got \"$1\""
+      _models_class_ok "$cls"
+      _models_answer_locked "$id" "$sub" --file "$file" --id "$id" --class "$cls" || exit $?
       return 0
       ;;
     discovery)
