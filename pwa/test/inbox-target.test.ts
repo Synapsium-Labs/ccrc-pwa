@@ -65,6 +65,12 @@ describe('inboxTarget', () => {
       .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
     expect(src).toContain('eventRunId(');
     expect(src).not.toMatch(/\.runId\b/);
+    expect(src).not.toMatch(/\[\s*['"`]runId['"`]\s*\]/);
+    // A non-number runId (a string '7' from a malformed row) is null to eventRunId,
+    // so a board keyed by that string never answers: the record is one about no run.
+    const stringRun = { seq: 2, at: 1_000, kind: 'mail', sessionId: 'ws-gone', title: 't', body: 'b', runId: '7' } as unknown as NotifyEvent;
+    const keyedByString = new Map<number, Pick<RunSummary, 'id'>>([['7' as unknown as number, { id: 7 }]]);
+    expect(inboxTarget(stringRun, sessions(LISTED), keyedByString)).toEqual({ kind: 'none', why: 'session gone' });
   });
 
   // Step 0's map (the module's header carries it): which fields each kind's
