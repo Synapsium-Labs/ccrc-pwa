@@ -32,19 +32,21 @@
 //     surface can read a registry the lane's own settings do not match — and,
 //     on a codex-kind lane, `~/.ccrc/codex/<id>/lane.json` (spec §5.4) with
 //     them, so its `probeModel` follows every reclassification.
+//     The two window ops (`set-window`, `clear-window`) obey all three against
+//     their own sibling file (`windowOp`), and re-materialise the same way.
 //
 // `rm` (spec §4.1 Lifecycle, §10, §11) is a DELIBERATE exception to rules 2 and
 // 3: it is a REAP, not a mutation, and re-validating or materialising a
 // registry it is about to delete would be pointless — worse, it would refuse to
 // reap a registry that no longer parses, which is exactly the file this verb
-// exists to clean up. It still obeys rule 1. It reaps the four MODEL files —
-// registry, catalogue, TSV, effort map — and DELIBERATELY not `lane.json`,
-// though this file generates that too: the manifest carries the roster's lane
-// topology (auth dir, ports), which belongs to the ACCOUNT, not the registry.
-// Its owner is the codex arm of account removal (`_acct_remove`, spec §9,
-// Plan 2b-2) — and that owner must reap it, because an id removed and later
-// re-added would otherwise inherit the old lane's authDir and ports until its
-// next mutation: one lane spending another account's OAuth.
+// exists to clean up. It still obeys rule 1. It reaps the five MODEL files —
+// registry, catalogue, TSV, effort map, measured windows — and DELIBERATELY not
+// `lane.json`, though this file generates that too: the manifest carries the
+// roster's lane topology (auth dir, ports), which belongs to the ACCOUNT, not
+// the registry. Its owner is the codex arm of account removal (`_acct_remove`,
+// spec §9, Plan 2b-2) — and that owner must reap it, because an id removed and
+// later re-added would otherwise inherit the old lane's authDir and ports until
+// its next mutation: one lane spending another account's OAuth.
 //
 // It borrows two idioms `main` already uses for a node helper `ccrc` shells out
 // to, and cites them: `deploy/gen-accounts.mjs`'s "the remedy reaches stderr
@@ -58,12 +60,12 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from '
 import path from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 import {
-  CLASSES, CatalogueInvalid, MODEL_ID_RE, PROBE_KINDS, RegistryInvalid, SUBAGENT_CLASSES, availableFor,
-  deriveModels, parseCatalogue, parseRegistry,
+  CLASSES, CatalogueInvalid, MODEL_ID_RE, PROBE_KINDS, RegistryInvalid, SUBAGENT_CLASSES, WINDOW_MAX, WINDOW_MIN,
+  availableFor, deriveModels, parseCatalogue, parseRegistry, parseWindows,
 } from '../shared/models.mjs';
 import {
-  MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, effortFile, mergeSettingsEnv, modelEnvBlock,
-  readRegular,
+  MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor, effortFile, mergeSettingsEnv,
+  modelEnvBlock, readRegular,
 } from '../shared/modelenv.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
@@ -71,11 +73,11 @@ const SELF = 'models-op';
 
 /** The account-id shape (C6), spelled once, here — the same shape as
  *  `ccd/ccrc`'s `WRAPPER_ID_RE` (`shared/roster.ts`'s ID_RE, in bash). An
- *  account id becomes a path segment below, in FIVE places (`registryPath`,
- *  `cataloguePath`, `classesTsvPath`, `effortPath`, `laneJsonPath`), so this
- *  file validates its own `--id` at op entry rather than depending on `ccd/ccrc`'s
- *  `_models_id_ok` — a usage-level gate one layer up, not this file's own —
- *  to have run first. */
+ *  account id becomes a path segment below, in SIX places (`registryPath`,
+ *  `cataloguePath`, `classesTsvPath`, `effortPath`, `laneJsonPath`,
+ *  `windowsPath`), so this file validates its own `--id` at op entry rather
+ *  than depending on `ccd/ccrc`'s `_models_id_ok` — a usage-level gate one
+ *  layer up, not this file's own — to have run first. */
 export const ACCOUNT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 /** What `init` plants per probe kind.
@@ -117,6 +119,10 @@ const registryPath = (id) => path.join(modelsDir(), `${id}.classes.json`);
 // id has no `account` to build a path off, so neither builds one off it.
 const classesTsvPath = (id) => path.join(modelsDir(), `${id}.classes.tsv`);
 const effortPath = (id) => path.join(modelsDir(), `${id}.effort.json`);
+/** The lane's measured context windows (codex-bridge spec §2.7): a SIBLING of
+ *  the registry, never a key in it — `shared/models.mjs`'s `parseWindows` says
+ *  why. `readWindowsFile` reads it, `writeWindows` writes it, `rm` reaps it. */
+const windowsPath = (id) => path.join(modelsDir(), `${id}.windows.json`);
 /** Spec §4.3's "lane manifest" row, and §5.4's first line. */
 const laneJsonPath = (id) => path.join(HOME, '.ccrc', 'codex', id, 'lane.json');
 
@@ -255,22 +261,96 @@ function readRegistry(id, catalogue) {
   }
 }
 
-/** tmp + rename, 0600, this repo's rule for any file another process reads —
- *  the server's fleet poll and Plan 3a's routes read this one, and a
- *  `compatible` lane's registry names its endpoint. 2-space indent and a
- *  trailing newline, the shape every hand-editable ccrc file has. */
-function writeRegistry(id, registry) {
-  const p = registryPath(id);
+/** The lane's measured windows, as EXACTLY ONE of three states — never an
+ *  overloaded null:
+ *   - `{ state: 'absent' }`: no file, so no model on this lane is measured.
+ *   - `{ state: 'ok', windows, raw }`: `windows` is `parseWindows`' frozen map;
+ *     `raw` is the parsed JSON as it was on disk, unknown keys and all, which
+ *     `set-window`/`clear-window` edit and write back, so a key this build does
+ *     not know survives (spec §2.7: the file is forward-compatible).
+ *   - `{ state: 'unreadable', reason }`: a file that exists and cannot be read,
+ *     is not JSON, or is not a windows file. `materialise`, the hourly refresh
+ *     (which runs `materialise`) and the drift check treat it as NO windows,
+ *     the default rule, so they never block on it; `show` names `reason`; the
+ *     two window verbs refuse.
+ *  Type-tested first (`readRegular`): a FIFO here is `unreadable`, never a
+ *  block. */
+function readWindowsFile(id) {
+  const p = windowsPath(id);
+  let text;
+  try {
+    text = readRegular(p);
+  } catch (e) {
+    if (e.code === 'ENOENT') return { state: 'absent' };
+    return { state: 'unreadable', reason: `${p} could not be read: ${e.message}` };
+  }
+  let raw;
+  try {
+    raw = JSON.parse(text);
+  } catch (e) {
+    return { state: 'unreadable', reason: `${p} is not valid JSON: ${e.message}` };
+  }
+  try {
+    return { state: 'ok', windows: parseWindows(raw), raw };
+  } catch (e) {
+    if (e instanceof RegistryInvalid) {
+      return { state: 'unreadable', reason: `${p} is not a windows file this build reads: ${e.message}` };
+    }
+    throw e;
+  }
+}
+
+/** The map `modelEnvBlock` and `contextWindowFor` take: an `ok` reading's
+ *  windows, and null for `absent` and `unreadable` alike. Both mean "no
+ *  measured window" to the RULE (spec §2.7), which is why this is the one
+ *  place the two fold; every other reader keeps the three states apart. */
+const windowsOf = (reading) => (reading.state === 'ok' ? reading.windows : null);
+
+/** `show`'s report of a reading: each measured window with its `setAt` (null
+ *  when the entry carries none), or the reason the file could not be read. */
+function windowsReport(reading) {
+  if (reading.state === 'absent') return { state: 'absent' };
+  if (reading.state === 'unreadable') return { state: 'unreadable', reason: reading.reason };
+  const byModel = {};
+  for (const id of Object.keys(reading.windows)) {
+    const setAt = reading.raw.windows[id].setAt;
+    byModel[id] = { tokens: reading.windows[id], setAt: typeof setAt === 'string' ? setAt : null };
+  }
+  return { state: 'ok', byModel };
+}
+
+/** The ONE write of a hand-editable JSON file here — the class registry
+ *  (`writeRegistry`) and the measured windows (`writeWindows`): tmp + rename,
+ *  0600, this repo's rule for any file another process reads. 2-space indent
+ *  and a trailing newline, the shape every hand-editable ccrc file has. Returns
+ *  null, or `[error, detail]` with the caller's own error word; a failed write
+ *  unlinks its tmp, so it leaves nothing behind. One writer for both files,
+ *  rather than a second copy of `writeRegistry`'s shape for the windows, is
+ *  a ruled departure from the Stage 0 plan's Task 4 (D-5783). */
+function writeJsonFile(p, value, error) {
   const tmp = `${p}.${process.pid}.tmp`;
   try {
-    mkdirSync(modelsDir(), { recursive: true });
-    writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o600 });
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, p);
     return null;
   } catch (e) {
     try { unlinkSync(tmp); } catch { /* the tmp may never have been created */ }
-    return ['registry-unwritable', `${p} could not be written: ${e.message}. Nothing was changed.`];
+    return [error, `${p} could not be written: ${e.message}. Nothing was changed.`];
   }
+}
+
+/** The class registry's write — the server's fleet poll and Plan 3a's routes
+ *  read this file, and a `compatible` lane's registry names its endpoint. */
+function writeRegistry(id, registry) {
+  return writeJsonFile(registryPath(id), registry, 'registry-unwritable');
+}
+
+/** The measured windows' write (codex-bridge spec §2.7). `raw` is a copy of
+ *  the parsed object `readWindowsFile` returned, edited, so keys this build
+ *  does not know are written back as they were. */
+function writeWindows(id, raw) {
+  return writeJsonFile(windowsPath(id), raw, 'windows-unwritable');
 }
 
 /** Spec §5.4's lane manifest — "id, config dir, ports, auth dir, unit names,
@@ -336,15 +416,19 @@ const HAIKU_UNASSIGNED_REMEDY = (id) =>
   + 'usage publisher refuses to publish until haiku is assigned. Run '
   + `'ccrc models ${id} set-class haiku <modelId>'.`;
 
-/** §6.1 + §6.4 + §7's TSV, from a lane's registry and its catalogue — and, on
- *  a codex-kind lane, §5.4's `lane.json` (`laneManifest` above). Returns the
- *  four paths, `settings` NULL when the registry is unseeded — such a lane
- *  has no env block to write ("a lane needs at least one class") but still gets
- *  its TSV, because ccd reads that file on every spawn and an ABSENT file is a
- *  different question from a lane with nothing assigned — and `lane` NULL when
- *  the account is not `exec.kind: 'codex'`, the same "legitimately not
- *  written" idiom. `wrote` is null only when there is no registry at all. */
-function materialise(account, registry, catalogue) {
+/** §6.1 + §6.4 + §7's TSV, from a lane's registry, its catalogue and its
+ *  measured windows — and, on a codex-kind lane, §5.4's `lane.json`
+ *  (`laneManifest` above). `windows` is `windowsOf(reading)`: the map, or null
+ *  when the windows file is absent or unreadable. An unreadable one never
+ *  blocks a materialise (codex-bridge spec §2.7): the lane gets the default
+ *  rule and `show` names the file. Returns the four paths, `settings` NULL when
+ *  the registry is unseeded — such a lane has no env block to write ("a lane
+ *  needs at least one class") but still gets its TSV, because ccd reads that
+ *  file on every spawn and an ABSENT file is a different question from a lane
+ *  with nothing assigned — and `lane` NULL when the account is not
+ *  `exec.kind: 'codex'`, the same "legitimately not written" idiom. `wrote` is
+ *  null only when there is no registry at all. */
+function materialise(account, registry, catalogue, windows) {
   if (registry === null) return { wrote: null };
   const settings = path.join(HOME, account.configDirSuffix, 'settings.json');
   const classes = classesTsvPath(account.id);
@@ -353,11 +437,11 @@ function materialise(account, registry, catalogue) {
   const lane = manifest === null ? null : laneJsonPath(account.id);
   let block = null;
   try {
-    // `catalogue` is the SAME parsed value the caller already loaded to
-    // compute `derived`/`settingsDrift` (spec §6.1 amendment) — never a
-    // second read of `<id>.json`, so a materialise never disagrees with the
-    // `show` answer it is bundled with about whether the catalogue is stale.
-    block = modelEnvBlock(registry, catalogue);
+    // `catalogue` and `windows` are the SAME values the caller already loaded
+    // to compute `derived`/`settingsDrift` (spec §6.1 amendment) — never a
+    // second read of `<id>.json` or of the windows file, so a materialise never
+    // disagrees with the `show` answer it is bundled with.
+    block = modelEnvBlock(registry, catalogue, windows);
   } catch (e) {
     if (!(e instanceof ModelEnvInvalid)) throw e;
     // Fix round 2A (N1): a registry reached here WITHOUT going through the
@@ -388,7 +472,7 @@ function materialise(account, registry, catalogue) {
     }
   }
   // Every tmp name this call creates, so the catch below can unlink whichever
-  // ones are still around — `writeRegistry`'s own catch does the same for its
+  // ones are still around — `writeJsonFile`'s own catch does the same for its
   // one tmp; this function has up to three.
   const tmps = [];
   try {
@@ -424,7 +508,7 @@ function materialise(account, registry, catalogue) {
     // name would overwrite it. `${p}.${process.pid}.tmp` means a run that
     // keeps failing (e.g. a wedged permissions problem on the hourly timer)
     // leaves a NEW stray file every time instead, so the catch unlinks
-    // whatever it created this call, the same way `writeRegistry` does.
+    // whatever it created this call, the same way `writeJsonFile` does.
     for (const tmp of tmps) { try { unlinkSync(tmp); } catch { /* renamed away, or never created */ } }
     if (e instanceof ModelEnvInvalid) return { err: ['settings-unwritable', e.message] };
     return { err: ['materialise-failed', `${e.message}`] };
@@ -438,10 +522,17 @@ function materialise(account, registry, catalogue) {
  *  own id and the backend 404s opaquely, which is the exact failure the
  *  sentinel exists to prevent, so "absent" and "wrong" are the same finding
  *  here. The eighth key is the one where "absent from `want`" is the CORRECT
- *  answer whenever the catalogue cannot measure it (§6.1 amendment) — `want`
- *  simply does not carry the key then, so the `Object.keys(want)` filter below
- *  never asks about it, and a settings file that also lacks it drifts on
- *  nothing.
+ *  answer whenever the rule yields no window (§6.1 amendment): `want` does not
+ *  carry the key then, and a settings file that also lacks it drifts on
+ *  nothing. A settings file that STILL CARRIES it drifts on it (D-5785): the
+ *  next materialise deletes it (`mergeSettingsEnv` deletes every member of
+ *  `MODEL_ENV_KEYS` its block omits), so the second filter below asks the same
+ *  question of the same keys. Before measured windows that copy held at most
+ *  `min(catalogue context, 200000)`; a measured one can hold up to 1000000.
+ *  With a stale or absent catalogue the rule yields nothing, the hourly refresh
+ *  materialises only after a successful probe, and a windows file deleted or
+ *  broken outside the two window verbs (or a rollback past them) would leave
+ *  that number in force with `show` reporting no drift at all.
  *
  *  Returned in `modelEnvBlock`'s own key order rather than sorted, so two boxes
  *  reporting the same drift print the same list. Read-only: `show` NAMES the
@@ -449,14 +540,14 @@ function materialise(account, registry, catalogue) {
  *  hand-edited settings file would destroy the edit before its author saw the
  *  report. Every mutation re-materialises, so the remedy is any of them.
  *
- *  Takes the SAME `catalogue` the caller already parsed for `derived` — never
- *  a second read — because `modelEnvBlock` needs it to know whether the
- *  eighth key belongs in `want` at all. */
-function settingsDrift(account, registry, catalogue) {
+ *  Takes the SAME `catalogue` and `windows` the caller already read — never a
+ *  second read — because `modelEnvBlock` needs both to know what the eighth
+ *  key should be, and whether it belongs in `want` at all. */
+function settingsDrift(account, registry, catalogue, windows) {
   if (registry === null) return [];
   let want;
   try {
-    want = modelEnvBlock(registry, catalogue);
+    want = modelEnvBlock(registry, catalogue, windows);
   } catch {
     // An unseeded (or unroutable) lane has no expected block to compare against.
     return [];
@@ -470,7 +561,10 @@ function settingsDrift(account, registry, catalogue) {
     // below reports one by one — a more useful answer than a single "no file".
     env = {};
   }
-  return Object.keys(want).filter((k) => env[k] !== want[k]);
+  return [
+    ...Object.keys(want).filter((k) => env[k] !== want[k]),
+    ...MODEL_ENV_KEYS.filter((k) => !(k in want) && Object.prototype.hasOwnProperty.call(env, k)),
+  ];
 }
 
 /** Fix round 2A (N1): the message `modelEnvBlock` would throw rendering this
@@ -484,12 +578,19 @@ function settingsDrift(account, registry, catalogue) {
  *  asked for. Any other throw (a fable-only lane with no primary class, or —
  *  the case this round exists for — a legacy `subagent: opus`/`fable` left
  *  on disk from before the 2026-09-09 narrowing, or one naming a null slot)
- *  is a real, operator-actionable problem. */
-function renderRefusal(registry, catalogue) {
+ *  is a real, operator-actionable problem.
+ *
+ *  It is also RULE 2's render check, run BEFORE any write: the mutation tail
+ *  (on the validated registry) and `windowOp` each refuse `unroutable-lane`
+ *  with this message. So "this lane's env block cannot be rendered" is decided
+ *  in one place for `show` and both writers, and an unseeded registry is never
+ *  refused by either (D-5784: `windowOp` calls this rather than carrying its
+ *  own copy of the tail's render block). */
+function renderRefusal(registry, catalogue, windows) {
   if (registry === null) return null;
   if (!CLASSES.some((c) => registry.classes[c] !== null)) return null;
   try {
-    modelEnvBlock(registry, catalogue);
+    modelEnvBlock(registry, catalogue, windows);
     return null;
   } catch (e) {
     if (!(e instanceof ModelEnvInvalid)) throw e;
@@ -498,10 +599,17 @@ function renderRefusal(registry, catalogue) {
 }
 
 /** The `show` answer, which every mutation also returns so a caller sees the
- *  state it produced without a second call. */
-function describe(account, registry, catalogue) {
+ *  state it produced without a second call. `windows` is the measured-windows
+ *  reading as `windowsReport` puts it, and `contextWindow` is the eighth key's
+ *  decision (`contextWindowFor`: tokens, rule, unmeasured). It is null only
+ *  when there is no registry file: an Anthropic lane, or one `init` never ran
+ *  on. An unseeded registry (deviation B-1, every class null) still gets the
+ *  decision, `{ tokens: null, rule: 'none', unmeasured: [] }`: no key, as
+ *  `materialise` writes no env block for it. */
+function describe(account, registry, catalogue, reading) {
   const anthropic = isAnthropicLane(account);
   const derived = deriveModels(registry, catalogue);
+  const windows = windowsOf(reading);
   return {
     id: account.id,
     anthropic,
@@ -510,8 +618,10 @@ function describe(account, registry, catalogue) {
     catalogue: catalogue === null
       ? null
       : { fetchedAt: catalogue.fetchedAt, stale: catalogue.stale, count: catalogue.models.length },
-    settingsDrift: settingsDrift(account, registry, catalogue),
-    renderRefusal: renderRefusal(registry, catalogue),
+    settingsDrift: settingsDrift(account, registry, catalogue, windows),
+    renderRefusal: renderRefusal(registry, catalogue, windows),
+    windows: windowsReport(reading),
+    contextWindow: registry === null ? null : contextWindowFor(registry, catalogue, windows),
   };
 }
 
@@ -521,8 +631,9 @@ function describe(account, registry, catalogue) {
  *  ACCOUNT here to read a `configDirSuffix` or a `telemetry` field from, so
  *  every class reads as UNAVAILABLE regardless of what the registry itself
  *  assigns — nothing routes a session to this id — and `settingsDrift` is
- *  meaningless with no settings.json to compare the registry against. */
-function orphanDescribe(id, registry, catalogue) {
+ *  meaningless with no settings.json to compare the registry against. The
+ *  windows are reported as for any lane: `rm` reaps them with the rest. */
+function orphanDescribe(id, registry, catalogue, reading) {
   const derived = deriveModels(registry, catalogue);
   return {
     id,
@@ -534,6 +645,8 @@ function orphanDescribe(id, registry, catalogue) {
       ? null
       : { fetchedAt: catalogue.fetchedAt, stale: catalogue.stale, count: catalogue.models.length },
     settingsDrift: [],
+    windows: windowsReport(reading),
+    contextWindow: contextWindowFor(registry, catalogue, windowsOf(reading)),
   };
 }
 
@@ -583,6 +696,11 @@ const OPS = {
   'set-class': { keys: ['file', 'id', 'class', 'model'], required: ['file', 'id', 'class', 'model'] },
   'set-subagent': { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'] },
   'set-effort': { keys: ['file', 'id', 'class', 'level'], required: ['file', 'id', 'class', 'level'] },
+  // Codex-bridge spec §2.7: a lane's measured context windows, in their own
+  // sibling file (`windowOp`). `tokens` is checked against WINDOW_MIN and
+  // WINDOW_MAX here, never in bash.
+  'set-window': { keys: ['file', 'id', 'model', 'tokens'], required: ['file', 'id', 'model', 'tokens'] },
+  'clear-window': { keys: ['file', 'id', 'model'], required: ['file', 'id', 'model'] },
   discovery: { keys: ['file', 'id', 'action', 'model', 'endpoints'], required: ['file', 'id', 'action'] },
   // `check` is OPTIONAL (Plan 3a Task 4): `--check true` is the check-only
   // form, which writes nothing and answers `changed`; omitted, the op writes,
@@ -649,6 +767,136 @@ function materialiseCheck(account, registry, catalogue) {
   return { changed };
 }
 
+/** `set-window <model> <tokens>` and `clear-window <model>` (codex-bridge spec
+ *  §2.7, Stage 0): the lane's measured context windows, in their own sibling
+ *  file (`windowsPath`) and NEVER in the class registry. These two ops do not
+ *  write `<id>.classes.json` at all, so an older ccrc, after a rollback, reads
+ *  exactly the registry it wrote.
+ *
+ *  Both obey the file header's three rules: one JSON object on stdout; nothing
+ *  written until the edited object is known to read back and the lane's env
+ *  block renders; and a re-materialise on success, as `set-effort` does, so
+ *  the lane's settings.json carries the rule's answer at once. The edited
+ *  object reads back by construction: every entry already in the file was
+ *  read through `parseWindows`, and the one entry `set-window` adds has passed
+ *  the same model-id test and bounds below. So `parseWindows` builds the map
+ *  the rule reads from it and cannot refuse it here, which is why it carries
+ *  no refusal of its own (D-5782: the plan's `windows-invalid` re-validation is
+ *  not shipped, because the guards before it make it unreachable and so no
+ *  row could turn it red). The render comes first for the mutation tail's
+ *  reason, through the tail's own check (`renderRefusal`, D-5784): a lane
+ *  whose block cannot be rendered, such as a legacy `subagent: opus|fable` that
+ *  `parseRegistry` still reads, would otherwise have the windows file change
+ *  and then `materialise` refuse. It is refused with the tail's own word,
+ *  `unroutable-lane`, and nothing written. A materialise that still fails
+ *  after the write (an I/O cause, such as a settings.json that is not JSON)
+ *  says in its refusal that the windows file was already updated.
+ *
+ *  `set-window` refuses a `tokens` that is not digits only or lies outside
+ *  `WINDOW_MIN`..`WINDOW_MAX`, and — the typo guard — a model that is neither in
+ *  the lane's catalogue nor one of its class models: a window for such a model
+ *  changes nothing, so writing it would hide the typo. `clear-window` has no
+ *  typo guard: removing a stale entry for a model the lane no longer names is
+ *  the point. Clearing an absent entry is ok with `removed: false` and writes
+ *  nothing; clearing the LAST entry deletes the file, so "absent" keeps meaning
+ *  "no measured window" — unless the file holds a top-level key this build does
+ *  not know. That file is kept, with an empty `windows`, rather than destroyed
+ *  (D-5161): the writer's preservation rule wins over the delete, and the rule
+ *  reads an empty `windows` as no measured window, exactly as it reads an
+ *  absent file.
+ *
+ *  An UNREADABLE file is refused by both, with the remedy: they rewrite that
+ *  file and will not overwrite one they cannot read. Every other reader
+ *  (`materialise`, the hourly refresh, the drift check) treats it as no windows
+ *  and carries on. No lock here: the auto-advance plan wraps both verbs in the
+ *  per-lane lock. */
+function windowOp(opName, a, account, registry, catalogue, reading) {
+  if (!MODEL_ID_RE.test(a.model)) {
+    return refuse(1, 'bad-model-id',
+      `"${a.model}" is not a model id: a letter or digit followed by up to 127 of letters, digits, ".", "_", `
+      + '":", "/" and "-". Nothing was written.', 'model');
+  }
+  if (reading.state === 'unreadable') {
+    return refuse(1, 'windows-unreadable',
+      `${reading.reason} — ${opName} rewrites that file and will not overwrite one it cannot read. Fix it by hand, `
+      + `or delete it to drop every measured window on account "${a.id}" (its lane then uses the default rule), `
+      + 'then re-run. Nothing was written.');
+  }
+  if (opName === 'set-window') {
+    if (!/^[0-9]+$/.test(a.tokens) || Number(a.tokens) < WINDOW_MIN || Number(a.tokens) > WINDOW_MAX) {
+      return refuse(1, 'bad-window',
+        `"${a.tokens}" is not a window: it is a whole number of tokens from ${WINDOW_MIN} to ${WINDOW_MAX}, written `
+        + 'in digits only (400000, not 400k, 400,000 or 4e5). Nothing was written.', 'tokens');
+    }
+    const known = (catalogue !== null && catalogue.models.some((m) => m.id === a.model))
+      || CLASSES.some((c) => registry.classes[c] === a.model);
+    if (!known) {
+      return refuse(1, 'unknown-window-model',
+        `"${a.model}" is neither in account "${a.id}"'s catalogue nor one of its class models, so a window for it `
+        + 'would change nothing. set-window takes a MODEL id, not a class. Run '
+        + `'ccrc models ${a.id} show' to see the lane's class models, or 'ccrc models refresh ${a.id}' if the `
+        + 'model is new. Nothing was written.', 'model');
+    }
+  }
+  // RULE 2's render, before any write: the mutation tail's own check, with
+  // its gate (an unseeded registry renders no block and is not refused). The
+  // windows play no part in the answer (the eighth key is written or omitted,
+  // never refused); they are passed for consistency with every other call.
+  const unroutable = renderRefusal(registry, catalogue, windowsOf(reading));
+  if (unroutable !== null) return refuse(1, 'unroutable-lane', `${unroutable} No window was written.`);
+  // The raw object, cloned: unknown keys, at the top level and inside each
+  // entry, ride through untouched (spec §2.7: the file is forward-compatible).
+  const raw = reading.state === 'ok' ? JSON.parse(JSON.stringify(reading.raw)) : { windows: {} };
+  let extra;
+  if (opName === 'set-window') {
+    const tokens = Number(a.tokens);
+    const previous = reading.state === 'ok' && Object.prototype.hasOwnProperty.call(reading.windows, a.model)
+      ? reading.windows[a.model] : null;
+    const prev = isObj(raw.windows[a.model]) ? raw.windows[a.model] : {};
+    raw.windows[a.model] = { ...prev, tokens, setAt: new Date().toISOString() };
+    extra = { model: a.model, tokens, previous };
+  } else {
+    const removed = Object.prototype.hasOwnProperty.call(raw.windows, a.model);
+    if (removed) delete raw.windows[a.model];
+    extra = { model: a.model, removed };
+  }
+
+  let next = reading;
+  if (opName === 'set-window' || extra.removed === true) {
+    if (Object.keys(raw.windows).length === 0 && Object.keys(raw).length === 1) {
+      try {
+        unlinkSync(windowsPath(a.id));
+      } catch (e) {
+        if (e.code !== 'ENOENT') {
+          return refuse(1, 'windows-unwritable',
+            `${windowsPath(a.id)} could not be removed: ${e.message}. Nothing was changed.`);
+        }
+      }
+      next = { state: 'absent' };
+    } else {
+      // The map the rule reads, built from the very object about to be
+      // written. It cannot refuse that object (the docstring says why), so it
+      // carries no refusal of its own.
+      const windows = parseWindows(raw);
+      const w = writeWindows(a.id, raw);
+      if (w !== null) return refuse(1, w[0], w[1]);
+      next = { state: 'ok', windows, raw };
+    }
+  }
+  const mat = materialise(account, registry, catalogue, windowsOf(next));
+  if (mat.err !== undefined) {
+    // Unlike every refusal above, the windows file has moved by now (when
+    // `next` is a new reading), so the sentence says so rather than leave the
+    // operator to infer that nothing changed.
+    const detail = next === reading ? mat.err[1]
+      : `${mat.err[1]} (${windowsPath(a.id)} itself was already updated: the lane's settings.json takes the `
+        + 'new window at the next materialise that succeeds.)';
+    return refuse(1, mat.err[0], detail);
+  }
+  out({ ok: true, op: opName, ...extra, ...describe(account, registry, catalogue, next) });
+  return 0;
+}
+
 /** `--key value` pairs, refused rather than ignored, with a strict `i += 2`
  *  walk: a value that itself starts with `--` is refused, because accepting it
  *  would consume the NEXT token as a key and shift every following pair by one
@@ -684,7 +932,7 @@ function main(argv) {
   if (pairs.err !== undefined) return refuse(2, 'bad-argv', pairs.err);
   const a = pairs.got;
 
-  // C6: at op entry, before any of the five per-account paths are built and
+  // C6: at op entry, before any of the six per-account paths are built and
   // before the roster is even read — `rm`'s own unlink loop runs before the
   // no-such-account gate (an orphan is the expected case there), which used
   // to mean it ran before ANY id validation. A `..`-bearing id built a path
@@ -740,14 +988,14 @@ function main(argv) {
   const account = findAccount(json, a.id);
 
   if (opName === 'rm') {
-    // REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): deletes the four
+    // REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): deletes the five
     // model-registry files this design owns and clears exactly the eight settings
     // keys `modelEnvBlock` can write — nothing else in that file. NOT
     // `lane.json`, which `materialise` also writes: it is the account's, and the
     // file header names its owner and why that owner must reap it. It runs BEFORE
     // the no-such-account and anthropic-lane gates below, and never routes the
     // registry or catalogue through their validators: `rm -f` semantics apply
-    // to each of the four files on its own, so a broken (unparseable)
+    // to each of the five files on its own, so a broken (unparseable)
     // registry or catalogue is still reaped rather than blocking the one verb
     // that exists to clean it up. `ccrc account remove` deliberately never
     // deletes under ~/.ccrc/models/ and names this verb as the remedy, so an
@@ -755,7 +1003,8 @@ function main(argv) {
     // error: there is no configDirSuffix to find a settings.json through, so
     // the settings step is skipped, and the answer says so.
     const removed = [];
-    for (const p of [registryPath(a.id), cataloguePath(a.id), classesTsvPath(a.id), effortPath(a.id)]) {
+    for (const p of [registryPath(a.id), cataloguePath(a.id), classesTsvPath(a.id), effortPath(a.id),
+      windowsPath(a.id)]) {
       try {
         unlinkSync(p);
         removed.push(p);
@@ -790,7 +1039,8 @@ function main(argv) {
       if (reg0.err !== undefined) return refuse(1, reg0.err[0], reg0.err[1]);
       if (reg0.invalid !== undefined) return refuseRegistry(reg0.invalid, a.id);
       if (reg0.registry !== null) {
-        out({ ok: true, op: 'show', ...orphanDescribe(a.id, reg0.registry, cat0.catalogue) });
+        out({ ok: true, op: 'show',
+          ...orphanDescribe(a.id, reg0.registry, cat0.catalogue, readWindowsFile(a.id)) });
         return 0;
       }
     }
@@ -818,9 +1068,14 @@ function main(argv) {
   if (reg.err !== undefined) return refuse(1, reg.err[0], reg.err[1]);
   if (reg.invalid !== undefined) return refuseRegistry(reg.invalid, a.id);
   let registry = reg.registry;
+  // Codex-bridge spec §2.7: the lane's measured windows, read ONCE per op, so
+  // the answer, the materialise and the drift check agree about them. An
+  // unreadable file is a READING here, never a refusal: only the two window
+  // verbs refuse on it.
+  const win = readWindowsFile(a.id);
 
   if (opName === 'show') {
-    out({ ok: true, op: 'show', ...describe(account, registry, catalogue) });
+    out({ ok: true, op: 'show', ...describe(account, registry, catalogue, win) });
     return 0;
   }
 
@@ -908,7 +1163,7 @@ function main(argv) {
       out({ ok: true, op: 'materialise', id: a.id, check: true, changed: chk.changed });
       return 0;
     }
-    const mat = materialise(account, registry, catalogue);
+    const mat = materialise(account, registry, catalogue, windowsOf(win));
     if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
     out({ ok: true, op: 'materialise', id: a.id, wrote: mat.wrote });
     return 0;
@@ -929,7 +1184,7 @@ function main(argv) {
           + `this run was asked for "${a.probe}". Changing a lane's probe kind is not an init — `
           + `remove ${registryPath(a.id)} deliberately if that is what you mean.`, 'probe');
       }
-      out({ ok: true, op: 'init', created: false, ...describe(account, registry, catalogue) });
+      out({ ok: true, op: 'init', created: false, ...describe(account, registry, catalogue, win) });
       return 0;
     }
     // A CODEX REGISTRY IS CREATED ON A CODEX-KIND LANE ONLY (Plan 3a Task 2,
@@ -964,9 +1219,9 @@ function main(argv) {
     }
     const w = writeRegistry(a.id, registry);
     if (w !== null) return refuse(1, w[0], w[1]);
-    const mat = materialise(account, registry, catalogue);
+    const mat = materialise(account, registry, catalogue, windowsOf(win));
     if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
-    const answer = { ok: true, op: 'init', created: true, ...describe(account, registry, catalogue) };
+    const answer = { ok: true, op: 'init', created: true, ...describe(account, registry, catalogue, win) };
     if (CLASSES.every((c) => registry.classes[c] === null)) {
       answer.remedy = `probe "${a.probe}" ships no seed mapping — only you can say which of its `
         + `models belongs in which class. Build the lane with 'ccrc models ${a.id} discovery add `
@@ -976,11 +1231,16 @@ function main(argv) {
     return 0;
   }
 
-  // Every remaining op MUTATES an existing registry.
+  // Every remaining op needs an existing registry. All but the two window ops
+  // MUTATE it; those two read its class models (their typo guard) and
+  // re-materialise it, but write only the sibling windows file.
   if (registry === null) {
     return refuse(1, 'no-registry',
       `account "${a.id}" has no class registry yet. Run 'ccrc models ${a.id} init `
       + `<${PROBE_KINDS.join('|')}>' first — it creates ${registryPath(a.id)}.`);
+  }
+  if (opName === 'set-window' || opName === 'clear-window') {
+    return windowOp(opName, a, account, registry, catalogue, win);
   }
   const next = JSON.parse(JSON.stringify(registry));
 
@@ -1172,15 +1432,13 @@ function main(argv) {
     extra = { ...extra, scope: Array.isArray(validated.discovery) ? 'list' : 'catalogue' };
   }
   if (CLASSES.some((c) => validated.classes[c] !== null)) {
-    try {
-      // The eighth key can never throw (it is written or omitted, never
-      // refused), so `catalogue` only matters here for consistency with every
-      // other call — this check is purely "does the lane route anywhere".
-      modelEnvBlock(validated, catalogue);
-    } catch (e) {
-      if (e instanceof ModelEnvInvalid) return refuse(1, 'unroutable-lane', e.message);
-      throw e;
-    }
+    // The eighth key can never throw (it is written or omitted, never
+    // refused), so `catalogue` and the windows matter here only for
+    // consistency with every other call — this check is purely "does the
+    // lane route anywhere". `renderRefusal` is that one check; `windowOp`
+    // runs it too.
+    const unroutable = renderRefusal(validated, catalogue, windowsOf(win));
+    if (unroutable !== null) return refuse(1, 'unroutable-lane', unroutable);
   } else if (CLASSES.some((c) => registry.classes[c] !== null)) {
     // Going from seeded to unseeded is the one transition that would silently
     // un-route a live lane, so it is refused with the materialiser's own
@@ -1191,9 +1449,9 @@ function main(argv) {
   }
   const w = writeRegistry(a.id, validated);
   if (w !== null) return refuse(1, w[0], w[1]);
-  const mat = materialise(account, validated, catalogue);
+  const mat = materialise(account, validated, catalogue, windowsOf(win));
   if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
-  const answer = { ok: true, op: opName, ...extra, ...describe(account, validated, catalogue) };
+  const answer = { ok: true, op: opName, ...extra, ...describe(account, validated, catalogue, win) };
   // Keyed on the manifest having been WRITTEN — the same gate `laneManifest`
   // applies — so a lane with no lane.json, whose haiku nothing publishes from,
   // is never told its publication stopped.
