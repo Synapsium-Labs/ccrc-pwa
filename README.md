@@ -2376,9 +2376,11 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   Before a pane-observed UUID rotation (a `/clear`), `_sync_uuid` promotes the outgoing transcript's acknowledged
   operator `/model` and `/effort` through the same parser and one combined route operation, BEFORE replacing the
   registry UUID. `/clear` starts a new transcript; compaction keeps the existing transcript. Background-follow and
-  continuation-chain UUID writes do not promote. A kind the operator already set in the new transcript (a `/model`
-  or `/effort` typed after the `/clear`, before the tick saw it) is not overwritten from the outgoing one, and the
-  fields the promotion writes are recorded applied, so it never makes ccd type into the live pane. The live
+  continuation-chain UUID writes do not promote. It also reads the incoming transcript, and each kind takes the
+  newest acknowledged command in either, by time (a tie goes to the incoming one): a `/model` or `/effort` typed after
+  the `/clear`, before the tick saw it, wins; an in-pane `/resume` into an older conversation does not overwrite a newer
+  outgoing command; a newer command that no acknowledgement confirms changes nothing and is logged once. The fields the
+  promotion writes are recorded applied, so it never makes ccd type into the live pane. The live
   promotion neither creates nor removes `choicekept`: that marker still means a dead session was read before
   its next spawn. A command ccd journalled is excluded, a newer route-field write wins, and unavailable or
   unrecognised input is logged without blocking UUID synchronisation. Non-Anthropic operator-choice semantics
@@ -2629,18 +2631,18 @@ is never answered, and that apply ends `apply-unconfirmed`. A switch counts only
 … for this session only` line naming the row chosen, whole: the Default row's name is the model in its own
 `(currently …)` plus ` (default)`. A class the pane already runs needs no keystroke: when the session's usage
 sidecar (below) is under 30 minutes old, was written after `routeapplied` was last stamped (a spawn, an apply, a
-read-back), belongs to the session's own `uuid`, and names a model of the pending class, the tick records the class
-applied, clears its retry count and refusal note, and writes one `route-readback` line to swap.log. When the sidecar
-cannot answer, an idle pane's case, the session's transcript is asked instead, and only when it has changed: its
-newest `/model`, acknowledged after both this pane's tmux session was created and the stamp, naming a model of the
-pending class that no later sidecar reading contradicts, is recorded the same way, and a fresh sidecar is overruled
-only by a newer `/model` there naming another class. A conclusive refusal is kept in `$REG/<id>.readbackseen`
-(purged with the row) so an unchanged transcript is not read again, and `apply-gave-up` names it (`; transcript:
-before-spawn`). Clearing the retry count re-opens an effort still pending, which the same tick may type. An effort level
-never reads back, since the status line shows a model's default level the same way as one that was set, and the
-tick types it. `default` never reads back either, since no model id names it. `haiku` takes no effort level, and
-the pair is refused whichever order it arrives in. A session
-with no record spawns as it always did.
+read-back, the seed, a live UUID rotation's promotion of the operator's own choice), belongs to the session's own
+`uuid`, and names a model of the pending class, the tick records the class applied, clears its retry count and
+refusal note, and writes one `route-readback` line to swap.log. When the sidecar cannot answer, an idle pane's case,
+the session's transcript is asked instead, and only when it has changed: its newest `/model`, acknowledged after
+both this pane's tmux session was created and the stamp, naming a model of the pending class that no later sidecar
+reading contradicts, is recorded the same way, and a fresh sidecar is overruled only by a newer `/model` there
+naming another class. A conclusive refusal is kept in `$REG/<id>.readbackseen` (purged with the row) so an unchanged
+transcript is not read again, and `apply-gave-up` names it (`; transcript: before-spawn`). Clearing the retry count
+re-opens an effort still pending, which the same tick may type. An effort level never reads back, since the status
+line shows a model's default level the same way as one that was set, and the tick types it. `default` never reads
+back either, since no model id names it. `haiku` takes no effort level, and the pair is refused whichever order it
+arrives in. A session with no record spawns as it always did.
 
 **From the phone**, the session header's model and effort chips (or **Change model** / **Change effort** in its
 menu) write one field each through `POST /api/sessions/:id/route`, which runs `ccd route … --apply` (`501` from a

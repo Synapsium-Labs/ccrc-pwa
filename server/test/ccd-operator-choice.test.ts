@@ -938,6 +938,7 @@ describe('wave 3\'s residue: the marker, the order of the checks, and the swap a
 describe('live UUID rotation keeps the outgoing operator choice', () => {
   const NEXT = 'deadbeef-0000-4000-8000-000000000001';
   const THIRD = 'deadbeef-0000-4000-8000-000000000002';
+  const OLDER = 'deadbeef-0000-4000-8000-0000000000aa';
   const sync = (sid: string, controls = '', cfg = '.claude'): string => {
     const dir = path.join(h.home, cfg, 'sessions');
     fs.mkdirSync(dir, { recursive: true });
@@ -1207,13 +1208,17 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
     },
   );
 
-  // ── FINAL-REVIEW F1 (D-4319): a newer choice in the INCOMING transcript wins, and a promotion types nothing ──
+  // ── THE EPOCH MERGE (D-4321, replacing D-4319's existence skip): the newest acknowledged command per kind wins, whichever conversation holds it ──
   // The tick that sees a `/clear` can run after the operator has already typed a
-  // `/model` or `/effort` into the NEW conversation. Those commands are newer than
-  // anything in the outgoing transcript by construction, so the outgoing one of the
-  // same kind is not promoted: promoted, it would stamp its field at wall time, later
-  // than the new command, and the next keep's "record wins when newer" would drop the
-  // operator's newest choice. No record mtime is backdated here.
+  // `/model` or `/effort` into the NEW conversation, and a rotation can also be an
+  // in-pane `/resume` INTO an older conversation, so the incoming transcript is not
+  // newer by construction: both are read and TIME decides, per kind. A command that
+  // the pane refused or that no acknowledgement confirms changes nothing and never
+  // suppresses the kind's acknowledged winner (it is logged, once). Promoted, the
+  // winner stamps its field at wall time, so what is promoted must be the newest
+  // acknowledged command, or the next keep's "record wins when newer" would keep an
+  // older one. ONE cmd_route writes the surviving pair. No record mtime is backdated
+  // here.
   const incoming = (lines: string[], sid = NEXT): string => {
     const p = path.join(path.dirname(h.sh(`_transcript_path ${ID}`)), `${sid}.jsonl`);
     fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -1221,7 +1226,7 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
     return p;
   };
 
-  it('/clear then /model sonnet before the tick: the outgoing /model opus is not promoted, and the next keep reads sonnet', () => {
+  it('/clear then /model sonnet before the tick: the newer incoming /model wins its kind and the outgoing /effort high still goes, in one cmd_route', () => {
     seed(); record({ class: 'fable', effort: 'low' });
     const t = now() - 600;
     writeTranscript([
@@ -1231,15 +1236,16 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
     incoming([cmd(now() - 5, 'model', 'sonnet'), ack(now() - 5, MODEL_ACK('Sonnet 5.5'))]);
     expect(sync(NEXT)).toBe('rc=0');
     expect(h.reg(ID, 'uuid')).toBe(NEXT);
-    expect(h.reg(ID, 'class')).toBe('fable');
-    expect(h.reg(ID, 'effort'), 'the kind the new conversation has not set is still promoted').toBe('high');
-    expect(routeLines()).toHaveLength(1);
+    expect(h.reg(ID, 'class')).toBe('sonnet');
+    expect(h.reg(ID, 'effort')).toBe('high');
+    expect(routeLines(), 'one cmd_route writes one line per field it wrote').toHaveLength(2);
     expect(keep()).toBe('rc=0');
     expect(h.reg(ID, 'class')).toBe('sonnet');
     expect(h.reg(ID, 'effort')).toBe('high');
+    expect(routeLines()).toHaveLength(2);
   });
 
-  it('/clear then /effort medium before the tick: the outgoing /effort high is not promoted, and the next keep reads medium', () => {
+  it('/clear then /effort medium before the tick: the newer incoming /effort wins its kind and the outgoing /model opus still goes', () => {
     seed(); record({ class: 'fable', effort: 'low' });
     const t = now() - 600;
     writeTranscript([
@@ -1249,21 +1255,127 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
     incoming([cmd(now() - 5, 'effort', 'medium'), ack(now() - 5, EFFORT_ACK('medium'))]);
     expect(sync(NEXT)).toBe('rc=0');
     expect(h.reg(ID, 'class')).toBe('opus');
-    expect(h.reg(ID, 'effort')).toBe('low');
-    expect(routeLines()).toHaveLength(1);
+    expect(h.reg(ID, 'effort')).toBe('medium');
+    expect(routeLines()).toHaveLength(2);
     expect(keep()).toBe('rc=0');
     expect(h.reg(ID, 'class')).toBe('opus');
     expect(h.reg(ID, 'effort')).toBe('medium');
+    expect(routeLines()).toHaveLength(2);
   });
 
-  it('an unacknowledged /model in the new conversation is still newer: the outgoing /model opus is not promoted', () => {
+  it('R1: an in-pane /resume into an OLDER conversation does not overwrite the newer outgoing /model: opus wins, and the next keep keeps it', () => {
+    seed(); record({ class: 'fable' });
+    const t = now();
+    writeTranscript([cmd(t - 60, 'model', 'opus'), ack(t - 60, MODEL_ACK('Opus 5.5'))]);
+    incoming([cmd(t - 3600, 'model', 'sonnet'), ack(t - 3600, MODEL_ACK('Sonnet 5.5'))], OLDER);
+    expect(sync(OLDER)).toBe('rc=0');
+    expect(h.reg(ID, 'uuid')).toBe(OLDER);
+    expect(h.reg(ID, 'class')).toBe('opus');
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('opus');
+  });
+
+  it('F1: a haiku record, outgoing /model opus + /effort high, incoming /model sonnet newer: sonnet AND high, the pair checked once, no refusal', () => {
+    seed(); record({ class: 'haiku' });
+    const t = now();
+    writeTranscript([
+      cmd(t - 121, 'model', 'opus'), ack(t - 121, MODEL_ACK('Opus 5.5')),
+      cmd(t - 120, 'effort', 'high'), ack(t - 120, EFFORT_ACK('high')),
+    ]);
+    incoming([cmd(t - 5, 'model', 'sonnet'), ack(t - 5, MODEL_ACK('Sonnet 5.5'))]);
+    expect(sync(NEXT)).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('sonnet');
+    expect(h.reg(ID, 'effort')).toBe('high');
+    expect(swapLog()).not.toContain('refused by the route record');
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('sonnet');
+    expect(h.reg(ID, 'effort')).toBe('high');
+    expect(swapLog()).not.toContain('refused by the route record');
+  });
+
+  it('F1: a haiku record, outgoing /effort high only, incoming /model sonnet newer: sonnet + high in ONE route call', () => {
+    seed(); record({ class: 'haiku' });
+    const t = now();
+    writeTranscript([cmd(t - 120, 'effort', 'high'), ack(t - 120, EFFORT_ACK('high'))]);
+    incoming([cmd(t - 5, 'model', 'sonnet'), ack(t - 5, MODEL_ACK('Sonnet 5.5'))]);
+    expect(sync(NEXT)).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('sonnet');
+    expect(h.reg(ID, 'effort')).toBe('high');
+    // ONE cmd_route: both of its per-field lines carry the one reason that names both commands.
+    expect(routeLines().map((l) => l.replace(/^\S+ \S+ /, ''))).toEqual([
+      `route ${ID}: effort ∅ -> high [actor=operator-session] (its own /effort and /model, kept before a uuid rotation)`,
+      `route ${ID}: class haiku -> sonnet [actor=operator-session] (its own /effort and /model, kept before a uuid rotation)`,
+    ]);
+    expect(swapLog()).not.toContain('refused by the route record');
+  });
+
+  it('F7: a newer /effort the pane refused changes nothing: the outgoing acknowledged /effort high is promoted and stamped, and the drift is logged once', () => {
+    seed(); record({ class: 'fable', effort: 'low' });
+    const t = now();
+    writeTranscript([cmd(t - 600, 'effort', 'high'), ack(t - 600, EFFORT_ACK('high'))]);
+    incoming([cmd(t - 5, 'effort', 'bogus'), ack(t - 5, 'Invalid argument: bogus. Valid options are: low, medium, high, xhigh, max')]);
+    expect(sync(NEXT)).toBe('rc=0');
+    expect(h.reg(ID, 'effort')).toBe('high');
+    expect(h.sh(`_route_applied_get ${ID} effort`)).toBe('high');
+    expect(driftLines()).toHaveLength(1);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'effort')).toBe('high');
+    expect(driftLines(), 'the keep after the rotation logs no second line').toHaveLength(1);
+  });
+
+  it('F7: a newer /model with no acknowledgement this ccd recognises changes nothing: the outgoing acknowledged /model opus is promoted, and the drift is logged once', () => {
     seed(); record({ class: 'fable' });
     const t = now() - 600;
     writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
     incoming([cmd(now() - 5, 'model', 'sonnet'), ack(now() - 5, 'an unrecognised acknowledgement')]);
     expect(sync(NEXT)).toBe('rc=0');
-    expect(h.reg(ID, 'class')).toBe('fable');
-    expect(routeLines()).toEqual([]);
+    expect(h.reg(ID, 'class')).toBe('opus');
+    expect(h.sh(`_route_applied_get ${ID} class`)).toBe('opus');
+    expect(routeLines()).toHaveLength(1);
+    expect(driftLines()).toHaveLength(1);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('opus');
+    expect(driftLines()).toHaveLength(1);
+  });
+
+  it('a same-second tie goes to the incoming transcript', () => {
+    seed(); record({ class: 'fable' });
+    const t = now() - 30;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    incoming([cmd(t, 'model', 'sonnet'), ack(t, MODEL_ACK('Sonnet 5.5'))]);
+    expect(sync(NEXT)).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('sonnet');
+  });
+
+  it('F7: a drift from the same second as the outgoing acknowledgement is logged, and never suppresses it', () => {
+    seed(); record({ class: 'fable', effort: 'low' });
+    const t = now() - 30;
+    writeTranscript([cmd(t, 'effort', 'high'), ack(t, EFFORT_ACK('high'))]);
+    incoming([cmd(t, 'effort', 'bogus'), ack(t, 'Invalid argument: bogus')]);
+    expect(sync(NEXT)).toBe('rc=0');
+    expect(h.reg(ID, 'effort')).toBe('high');
+    expect(driftLines()).toHaveLength(1);
+  });
+
+  it('a drift OLDER than its kind\'s acknowledged winner is superseded by it: promoted, and nothing is logged', () => {
+    seed(); record({ class: 'fable', effort: 'low' });
+    const t = now();
+    writeTranscript([cmd(t - 60, 'effort', 'high'), ack(t - 60, EFFORT_ACK('high'))]);
+    incoming([cmd(t - 600, 'effort', 'bogus'), ack(t - 600, 'Invalid argument: bogus')]);
+    expect(sync(NEXT)).toBe('rc=0');
+    expect(h.reg(ID, 'effort')).toBe('high');
+    expect(driftLines()).toEqual([]);
+  });
+
+  it('control: an incoming read that fails after printing holds nothing back: its partial lines are discarded', () => {
+    seed(); record({ class: 'fable' });
+    const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    incoming([cmd(now() - 5, 'model', 'sonnet'), ack(now() - 5, MODEL_ACK('Sonnet 5.5'))]);
+    expect(sync(NEXT, `eval "_oc_real() $(declare -f _operator_choice_read | tail -n +2)"
+      _operator_choice_read() { local r rc; r=$(_oc_real "$@"); rc=$?; printf '%s\\n' "$r"; [[ "$1" == *${NEXT}.jsonl ]] && return 1; return $rc; }`)).toBe('rc=0');
+    expect(h.reg(ID, 'uuid')).toBe(NEXT);
+    expect(h.reg(ID, 'class')).toBe('opus');
   });
 
   it('control: ccd\'s own journalled /model in the new conversation does not hold back the outgoing choice', () => {
@@ -1282,6 +1394,23 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
     writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
     const dir = incoming([]); fs.rmSync(dir); fs.mkdirSync(dir);   // a directory where the new transcript should be
     expect(sync(NEXT)).toBe('rc=0');
+    expect(h.reg(ID, 'uuid')).toBe(NEXT);
+    expect(h.reg(ID, 'class')).toBe('opus');
+  });
+
+  it('control: a FIFO where the incoming transcript should be is never opened: the rotation lands and the outgoing choice promotes', () => {
+    seed(); record({ class: 'fable' });
+    const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    const fifo = incoming([]); fs.rmSync(fifo); h.sh(`mkfifo ${JSON.stringify(fifo)}`);   // a grep on it blocks until somebody writes
+    const dir = path.join(h.home, '.claude', 'sessions');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '424242.json'), JSON.stringify({ sessionId: NEXT }));
+    const out = h.sh(`tmux() { [[ "$1" == list-panes ]] && printf '%s\\n' 424242; return 0; };
+      _sync_uuid ${ID} & pid=$!
+      for _ in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+      if kill -0 "$pid" 2>/dev/null; then kill "$pid"; : > ${JSON.stringify(fifo)}; echo held; else wait "$pid"; echo "rc=$?"; fi`);
+    expect(out, 'a grep on a FIFO blocks the rotation until somebody writes to it').toBe('rc=0');
     expect(h.reg(ID, 'uuid')).toBe(NEXT);
     expect(h.reg(ID, 'class')).toBe('opus');
   });
@@ -1326,6 +1455,38 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
     expect(tick(NEXT)).toBe('rc=0');
     expect(sent()).toEqual([]);
   });
+
+  // The merge's own shapes through the REAL applier on the same tick: whichever
+  // conversation held the winner, the promotion stamped exactly what it wrote, so
+  // nothing is pending and nothing is typed. Each case's `want` is its end state.
+  type Lines = (t: number) => string[];
+  const M = (ago: number, v: string, shown: string): Lines => (t) => [cmd(t - ago, 'model', v), ack(t - ago, MODEL_ACK(shown))];
+  const E = (ago: number, v: string): Lines => (t) => [cmd(t - ago, 'effort', v), ack(t - ago, EFFORT_ACK(v))];
+  const both = (...ls: Lines[]): Lines => (t) => ls.flatMap((l) => l(t));
+  it.each([
+    ['the /clear race, /model', { class: 'fable', effort: 'low' }, both(M(600, 'opus', 'Opus 5.5'), E(599, 'high')), M(5, 'sonnet', 'Sonnet 5.5'), NEXT, { class: 'sonnet', effort: 'high' }],
+    ['the /clear race, /effort', { class: 'fable', effort: 'low' }, both(M(600, 'opus', 'Opus 5.5'), E(599, 'high')), E(5, 'medium'), NEXT, { class: 'opus', effort: 'medium' }],
+    ['R1, an older incoming conversation', { class: 'fable' }, M(60, 'opus', 'Opus 5.5'), M(3600, 'sonnet', 'Sonnet 5.5'), OLDER, { class: 'opus', effort: '' }],
+    ['F1, a haiku record and a split pair', { class: 'haiku' }, both(M(121, 'opus', 'Opus 5.5'), E(120, 'high')), M(5, 'sonnet', 'Sonnet 5.5'), NEXT, { class: 'sonnet', effort: 'high' }],
+    ['F7, a refused /effort', { class: 'fable', effort: 'low' }, E(600, 'high'),
+      (t: number) => [cmd(t - 5, 'effort', 'bogus'), ack(t - 5, 'Invalid argument: bogus')], NEXT, { class: 'fable', effort: 'high' }],
+    ['F7, an unrecognised /model', { class: 'fable' }, M(600, 'opus', 'Opus 5.5'),
+      (t: number) => [cmd(t - 5, 'model', 'sonnet'), ack(t - 5, 'an unrecognised acknowledgement')], NEXT, { class: 'opus', effort: '' }],
+  ] as [string, Record<string, string>, Lines, Lines, string, { class: string; effort: string }][])(
+    'on the same tick, %s: the real applier types nothing', (_name, rec, outgoingLines, incomingLines, sid, want) => {
+      seed(); record({ ...rec });
+      h.sh(`_reg_set ${ID} routeapplied "${Object.entries(rec).map(([f, v]) => `${f}=${v}`).join(' ')}"`);
+      const t = now();
+      writeTranscript(outgoingLines(t));
+      incoming(incomingLines(t), sid);
+      expect(tick(sid)).toBe('rc=0');
+      expect(h.reg(ID, 'uuid')).toBe(sid);
+      expect(h.reg(ID, 'class')).toBe(want.class);
+      expect(h.reg(ID, 'effort') ?? '').toBe(want.effort);
+      expect(sent()).toEqual([]);
+      expect(h.sh(`_route_pending_word ${ID}`)).toBe('');
+    },
+  );
 
   it('control: the dead-session keep records nothing applied — the spawn that follows composes and stamps its own', () => {
     seed(); record({ class: 'fable', effort: 'low' });
