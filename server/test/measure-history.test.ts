@@ -4872,5 +4872,87 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
       expect(sha9(cj9(edited))).not.toBe(gate9.COUNTERS_DEF_V1_SHA256);
       expect(GATE_TEXT).not.toMatch(/COUNTERS_DEF_V1_SHA256 = sha256Hex/);
     });
+
+    it('final A: a halts value decideGate would throw on is value-outside-set at its key (W2-D90 forbids repairing it after the window)', () => {
+      const at = (key: string, v: number): Err[] => verdict(set(draft(), `halts.${key}`, v));
+      for (const key of ['run_failed_max', 'absent_rate_max']) {
+        for (const bad of [1, 1.5, -0.1, 0.0500001, 1e-7]) {
+          expect(at(key, bad), `${key} = ${bad}`).toEqual([{ path: `halts.${key}`, word: 'value-outside-set' }]);
+        }
+        for (const ok of [0, 0.05, 0.999999, 0.000001]) expect(at(key, ok), `CONTROL ${key} = ${ok}`).toEqual([]);
+      }
+      for (const bad of [7, 1.5, -0.1, 0.1234567]) {
+        expect(at('handcheck_agreement_min', bad), `agreement = ${bad}`).toEqual([{ path: 'halts.handcheck_agreement_min', word: 'value-outside-set' }]);
+      }
+      for (const ok of [0, 0.8, 1, 0.123456]) expect(at('handcheck_agreement_min', ok), `CONTROL agreement = ${ok}`).toEqual([]);
+      expect(verdict(draft()), 'CONTROL: the defaults').toEqual([]);
+      // The refusal is exactly decideGate's own rule: a value the validator lets through is one decideGate reads.
+      expect(() => gate9.decideGate({ halts: { run_failed_max: 1, absent_rate_max: 0.05, handcheck_agreement_min: 0.8 } })).toThrow();
+    });
+
+    it('final A: a halts value that is not a number is still field-malformed (the shape answers first, nothing throws)', () => {
+      expect(verdict(set(draft(), 'halts.run_failed_max', '0.05'))).toEqual([{ path: 'halts.run_failed_max', word: 'field-malformed' }]);
+    });
+
+    it('final B: a second node with an already-seen store_id is value-outside-set at nodes[i].store_id', () => {
+      const two = set(draft(), 'nodes', [{ label: 'node-a', store_id: STORE_A }, { label: 'node-a2', store_id: STORE_A }]);
+      two.step0a = [two.step0a[0]];   // one entry, for the one store: before the fix it covered both nodes
+      expect(verdict(two)).toEqual([{ path: 'nodes[1].store_id', word: 'value-outside-set' }]);
+      const three = set(draft(), 'nodes', [{ label: 'node-a', store_id: STORE_A }, { label: 'node-b', store_id: STORE_B }, { label: 'node-b2', store_id: STORE_B }]);
+      expect(verdict(three), 'the later of three, by its own index').toEqual([{ path: 'nodes[2].store_id', word: 'value-outside-set' }]);
+      expect(verdict(draft()), 'CONTROL: distinct stores').toEqual([]);
+    });
+
+    it('final F: a negative active_rule.lookback_ms is value-outside-set; zero passes; a fraction stays field-malformed', () => {
+      expect(verdict(set(draft(), 'active_rule.lookback_ms', -1))).toEqual([{ path: 'active_rule.lookback_ms', word: 'value-outside-set' }]);
+      expect(verdict(set(draft(), 'active_rule.lookback_ms', Number.MIN_SAFE_INTEGER))).toEqual([{ path: 'active_rule.lookback_ms', word: 'value-outside-set' }]);
+      expect(verdict(set(draft(), 'active_rule.lookback_ms', 0)), 'CONTROL: zero is a look-back activeFamilies reads').toEqual([]);
+      expect(verdict(set(draft(), 'active_rule.lookback_ms', 1.5))).toEqual([{ path: 'active_rule.lookback_ms', word: 'field-malformed' }]);
+      const census = { as_of_ms: T0, families: [] };
+      expect(() => gate9.activeFamilies(STORE_A, census, { lookbackMs: -1 }), 'the value the validator now refuses is one activeFamilies throws on').toThrow();
+      expect(() => gate9.activeFamilies(STORE_A, census, { lookbackMs: 0 }), 'and zero is one it reads').not.toThrow();
+    });
+
+    it('final G: a final may supersede a pre-window final under a re-frozen quiz, and the successor\'s own quiz is still checked against the new frozen list', () => {
+      const d = draft();
+      const f1 = final(d);
+      const fewer = QUIZ.slice(1);
+      const refrozen = { families: fewer.map(refOf), n_questions: N_QUESTIONS + 6 };
+      const successor = (over: Rec = {}): Rec => {
+        const f = { ...structuredClone(f1), supersedes: gate9.recordSha256(f1), ...over };
+        f.quiz = { ...f.quiz, families: fewer.map(refOf), n_families: fewer.length, n_questions: refrozen.n_questions };
+        return f;
+      };
+      const ctxFor = (frozen: Ctx['frozen']): Ctx => ({ draft: d, predecessor: f1, frozen });
+      expect(verdict(successor(), ctxFor(refrozen)), 'before window start, a re-frozen quiz supersedes wholesale (W2-D90)').toEqual([]);
+      expect(verdict(successor(), ctxFor(FROZEN)), 'CONTROL: the successor\'s own quiz is checked against ctx.frozen, so the old list refuses it')
+        .toEqual([{ path: 'quiz.families', word: 'quiz-mismatch' }, { path: 'quiz.n_questions', word: 'quiz-mismatch' }]);
+      // After window start the rule is unchanged: only amendments may be appended, so the quiz is post-start-change.
+      expect(verdict(successor({ finalized_ms: T0 + DAY }), ctxFor(refrozen))).toEqual([{ path: 'quiz', word: 'post-start-change' }]);
+    });
+
+    it('final G: a predecessor final with a malformed quiz is chain-mismatch and nothing throws', () => {
+      const d = draft();
+      const f1 = final(d);
+      for (const [name, quiz] of [['no quiz', undefined], ['a bare quiz', {}], ['families not an array', { ...f1.quiz, families: 'x' }],
+        ['n_questions a string', { ...f1.quiz, n_questions: '64' }], ['a non-family entry', { ...f1.quiz, families: [null] }]] as const) {
+        const pred = structuredClone(f1);
+        if (quiz === undefined) delete pred.quiz; else pred.quiz = quiz;
+        const f2 = { ...structuredClone(f1), supersedes: gate9.recordSha256(pred) };
+        expect(verdict(f2, { draft: d, predecessor: pred, frozen: FROZEN }), name).toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
+      }
+    });
+
+    it('final H: a handcheck value other than the one handcheckSample implements is constant-mismatch at its path', () => {
+      for (const [key, bad] of [['share', 0.25], ['of', 'all'], ['per_arm', false], ['judge_failed', 'sampled']] as const) {
+        expect(verdict(set(draft(), `handcheck.${key}`, bad)), key).toEqual([{ path: `handcheck.${key}`, word: 'constant-mismatch' }]);
+      }
+      expect(verdict(set(draft(), 'handcheck.share', 0.2)), 'CONTROL: one fifth').toEqual([]);
+    });
+
+    it('final H: a q18_settings.procedure other than the one q18Power implements is constant-mismatch', () => {
+      expect(verdict(set(draft(), 'q18_settings.procedure', 'grid-scan'))).toEqual([{ path: 'q18_settings.procedure', word: 'constant-mismatch' }]);
+      expect(verdict(set(draft(), 'q18_settings.procedure', gate9.Q18_DEFAULTS.procedure)), 'CONTROL').toEqual([]);
+    });
   });
 });

@@ -1453,6 +1453,9 @@ const AUTH_FAILED = 'authentication_failed';
 
 /** W2-D81's share of the judged answers per arm, 20%, as an exact fraction: ceil(n * 1/5) in integers. */
 const HANDCHECK_SHARE = Object.freeze({ num: 1, den: 5 });
+/** W2-D81's other three terms, which handcheckSample implements and nothing else: the share is of the judged answers,
+ *  drawn per arm, and every judge-failed item is checked outside it. validateOpenRecord refuses a record signing others. */
+const HANDCHECK_RULE = Object.freeze({ of: 'judged', per_arm: true, judge_failed: 'always' });
 
 /** Criterion 1's floor on the treatment point accuracy, 0.40 (§10.2:2715), and criterion 2's margin, 3 points. */
 const ACCURACY_MIN = frac(2, 5);
@@ -1588,15 +1591,25 @@ export function handcheckAgreement(pairs) {
 }
 
 /** A halt threshold read exactly: a decimal with at most six places, 0.05 read as 5/100. `below1` refuses 1, so a
- *  share of every question can always exceed it. */
-function fracOfDecimal(x, name, below1) {
-  if (typeof x !== 'number' || !Number.isFinite(x) || x < 0 || x > 1 || (below1 && x === 1)) {
-    throw new TypeError(`decideGate: halts.${name} must be a number in [0, ${below1 ? '1)' : '1]'}`);
-  }
+ *  share of every question can always exceed it. It answers the fraction or the reason it cannot, and never throws:
+ *  decideGate throws on the reason, and validateOpenRecord (W2-D25) refuses the same value before it is signed.
+ *  @param {unknown} x @param {boolean} below1
+ *  @returns {{ok: true, frac: {num: number, den: number}} | {ok: false, why: 'range' | 'places'}} */
+function decimalFrac(x, below1) {
+  if (typeof x !== 'number' || !Number.isFinite(x) || x < 0 || x > 1 || (below1 && x === 1)) return { ok: false, why: 'range' };
   const m = /^(\d+)(?:\.(\d{1,6}))?$/.exec(String(x));
-  if (m === null) throw new TypeError(`decideGate: halts.${name} must be a decimal of at most six places`);
+  if (m === null) return { ok: false, why: 'places' };
   const places = m[2] ?? '';
-  return frac(Number(m[1] + places), 10 ** places.length);
+  return { ok: true, frac: frac(Number(m[1] + places), 10 ** places.length) };
+}
+function fracOfDecimal(x, name, below1) {
+  const d = decimalFrac(x, below1);
+  if (!d.ok) {
+    throw new TypeError(d.why === 'range'
+      ? `decideGate: halts.${name} must be a number in [0, ${below1 ? '1)' : '1]'}`
+      : `decideGate: halts.${name} must be a decimal of at most six places`);
+  }
+  return d.frac;
 }
 
 /** a + b over integers. */
@@ -2049,10 +2062,10 @@ const REC_DRAFT = recFields({
     absent_rate_max: recField('number', 'default', { value: HALT_DEFAULTS.absent_rate_max }),
   }) }),
   handcheck: recField('object', 'default', { fields: recFields({
-    share: recField('number', 'default', { value: 0.2 }),
-    of: recField('string', 'default', { value: 'judged' }),
-    per_arm: recField('boolean', 'default', { value: true }),
-    judge_failed: recField('string', 'default', { value: 'always' }),
+    share: recField('number', 'default', { value: HANDCHECK_SHARE.num / HANDCHECK_SHARE.den }),
+    of: recField('string', 'default', { value: HANDCHECK_RULE.of }),
+    per_arm: recField('boolean', 'default', { value: HANDCHECK_RULE.per_arm }),
+    judge_failed: recField('string', 'default', { value: HANDCHECK_RULE.judge_failed }),
   }) }),
   freezes: recField('object', 'default', { fields: recFields({
     maintenance_from: recField('string', 'default', { value: 'pilot-sourcing' }),
@@ -2258,6 +2271,11 @@ function recValidate(record, ctx, checkLink) {
     ...Object.keys(LABELLER).map((l) => [`labeller.${l}`, r.labeller[l], LABELLER[l]]),
     ['quiz.kinds', r.quiz.kinds, FACT_KINDS],
     ['active_rule.legacy_excluded', r.active_rule.legacy_excluded, true],
+    // Defaults the gate implements one way only (W2-D81, W2-D21): a signed different value would be validated, then ignored.
+    ['handcheck.share', r.handcheck.share, HANDCHECK_SHARE.num / HANDCHECK_SHARE.den],
+    ['handcheck.of', r.handcheck.of, HANDCHECK_RULE.of], ['handcheck.per_arm', r.handcheck.per_arm, HANDCHECK_RULE.per_arm],
+    ['handcheck.judge_failed', r.handcheck.judge_failed, HANDCHECK_RULE.judge_failed],
+    ['q18_settings.procedure', r.q18_settings.procedure, Q18_DEFAULTS.procedure],
   ];
   for (const [p, got, want] of fixed) if (!recSame(got, want)) refuse(p, 'constant-mismatch');
 
@@ -2298,7 +2316,12 @@ function recValidate(record, ctx, checkLink) {
   // when every entry is bound once: an entry refused here already refuses the record, and the brief-pinned
   // unknown-store case keeps its one answer.
   if (r.nodes.length === 0) refuse('nodes', 'value-outside-set');
-  const nodeStores = new Set(r.nodes.map((n) => n.store_id));
+  const nodeStores = new Set();
+  // A node's store_id is its identity here (step 0a binds by it): a second node with a seen one would let one entry cover both.
+  r.nodes.forEach((n, i) => {
+    if (nodeStores.has(n.store_id)) refuse(`nodes[${i}].store_id`, 'value-outside-set');
+    nodeStores.add(n.store_id);
+  });
   const boundStores = new Set();
   let entryRefused = false;
   r.step0a.forEach((s, i) => {
@@ -2312,6 +2335,12 @@ function recValidate(record, ctx, checkLink) {
   // A node is covered by an entry that names its store_id, and only by that: the label is operator text (W2-D25).
   if (!entryRefused) r.nodes.forEach((n, i) => { if (!boundStores.has(n.store_id)) refuse(`nodes[${i}]`, 'field-missing'); });
   if (r.window_plan.planned_days < 1) refuse('window_plan.planned_days', 'value-outside-set');
+  // Values the gate cannot honour (the final whole-branch review): a part 1 signed with one validates, and decideGate then
+  // throws at report time, after the window, when W2-D90 no longer lets part 2 change it. The rule is decideGate's own.
+  for (const key of ['run_failed_max', 'absent_rate_max']) if (!decimalFrac(r.halts[key], true).ok) refuse(`halts.${key}`, 'value-outside-set');
+  if (!decimalFrac(r.halts.handcheck_agreement_min, false).ok) refuse('halts.handcheck_agreement_min', 'value-outside-set');
+  // activeFamilies throws on a negative look-back (the integer type is already checked).
+  if (r.active_rule.lookback_ms < 0) refuse('active_rule.lookback_ms', 'value-outside-set');
 
   // The pilot section signed under part 1's own settings (W2-D76, W2-D71).
   const used = r.pilot.used;
@@ -2336,7 +2365,13 @@ function recValidate(record, ctx, checkLink) {
     if (r.supersedes === null ? prior !== null : r.supersedes !== recordSha256(prior)) refuse('supersedes', 'chain-mismatch');
   }
   if (pred !== null) {
-    const predCtx = { draft: final ? ctx.draft : null, predecessor: null, frozen: final ? ctx.frozen : null };
+    // A predecessor final is valid against ITS OWN frozen quiz, not the successor's: before window start a final may
+    // supersede part 2 wholesale, a re-frozen quiz included (W2-D90, decisions section 4 step 5). The successor's own quiz
+    // is still checked against ctx.frozen below. A malformed predecessor quiz gives no frozen list, which refuses it.
+    const pq = final ? pred.quiz : null;
+    const predFrozen = !final ? null : REC_TYPE_OK.object(pq) && Array.isArray(pq.families) && Number.isSafeInteger(pq.n_questions)
+      ? { families: pq.families, n_questions: pq.n_questions } : null;
+    const predCtx = { draft: final ? ctx.draft : null, predecessor: null, frozen: predFrozen };
     predOk = pred.part === record.part && recValidate(pred, predCtx, false).ok;
     if (!predOk) refuse('supersedes', 'chain-mismatch');
     else if (pred.bootstrap.seed !== r.bootstrap.seed) refuse('bootstrap.seed', 'seed-changed');
