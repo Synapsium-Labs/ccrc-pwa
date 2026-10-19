@@ -775,11 +775,12 @@ describe('W2-3 Task 2: the gate module is pure and its words are its own', () =>
   const gate = async () => import('../../deploy/history-gate.mjs');
   /** Every specifier a static import or re-export names, and every bare `import '…'`. It is anchored at no line start
    *  and skips no text between the keyword and the quote, so a comment (with an apostrophe in it) inside a brace list,
-   *  or an import after a `;` on the same line, cannot hide one. The gate's own text never spells a quote straight
-   *  after the word from, except in its one import line, so a hit that is no import is a red too. */
+   *  or an import after a `;` on the same line, cannot hide one. A from or import preceded by a word character or a
+   *  quote is no keyword (a property name in a string, `'from'`), so the gate may spell it. Any other hit that is no
+   *  import is a red too. */
   const specifiers = (text: string): string[] => [
-    ...[...text.matchAll(/\bfrom\s*['"]([^'"]+)['"]/g)].map((m) => m[1]!),
-    ...[...text.matchAll(/\bimport\s*['"]([^'"]+)['"]/g)].map((m) => m[1]!),
+    ...[...text.matchAll(/(?<![\w'"])from\s*['"]([^'"]+)['"]/g)].map((m) => m[1]!),
+    ...[...text.matchAll(/(?<![\w'"])import\s*['"]([^'"]+)['"]/g)].map((m) => m[1]!),
   ];
   /** W2-D11's banned spellings, read over the WHOLE text: a comment or a string that spells one is a red too. */
   const FORBIDDEN: ReadonlyArray<readonly [string, RegExp]> = [
@@ -847,6 +848,14 @@ describe('W2-3 Task 2: the gate module is pure and its words are its own', () =>
     expect(declares(OWN_WORDS[0]).test(`import { ${OWN_WORDS[0]} } from '../deploy/history-gate.mjs';`)).toBe(false);
     expect(declares(OWN_WORDS[1]).test(`const { ${OWN_WORDS[1]} } = gate;`)).toBe(false);
     expect(enumeratesClasses(readFileSync(path.join(ROOT, 'deploy', 'models-op.mjs'), 'utf8')), 'a known holder').toBe(true);
+  });
+
+  it('CONTROL: a quoted word from or import (a property name in a string, not a keyword) is no specifier, and the real shapes still read', () => {
+    expect(specifiers("if (!Object.hasOwn(body, 'from')) x();"), 'a quote straight after from, no later quote').toEqual([]);
+    expect(specifiers("if (!Object.hasOwn(body, 'from') || !Object.hasOwn(body, 'to')) x();"), 'a quote straight after from, a later quote').toEqual([]);
+    expect(specifiers("if (!Object.hasOwn(body, 'import') || !Object.hasOwn(body, 'to')) x();"), 'the same for import').toEqual([]);
+    expect(specifiers("const a = { from: 1 }; const f = 'from'; const g = 'x';"), 'a word from inside an identifier or a string').toEqual([]);
+    expect(specifiers("import {a} from 'node:fs';import 'node:path';export * from './c.mjs';"), 'imports with no space before them').toEqual(['node:fs', './c.mjs', 'node:path']);
   });
 
   it('imports only node:crypto and lib.mjs, and lib.mjs exactly as W2-D11 lists it', () => {
@@ -2242,5 +2251,81 @@ describe('W2-3 Task 5: changed families and the assembled reports', () => {
       { store_id: STORE_A, ccrc_id: 'demo-a', generation: G2 },
     ];
     expect(changedOf([change(STORE_A, 15_000, 'demo-a', 14_000)], list)).toEqual([key(STORE_A, 'demo-a', G1), key(STORE_A, 'demo-a', G2)]);
+  });
+
+  // ── Fix round 1 (Task 5): refusals by throw where the function has no refusal shape, and the null-sha edges ──
+  /** A TypeError whose message names the guard, so a guard that language semantics would half-cover still has to be written. */
+  const throwsType = (fn: () => unknown, re: RegExp, name: string): void => {
+    let caught: unknown;
+    try { fn(); } catch (e) { caught = e; }
+    expect(caught, name).toBeInstanceOf(TypeError);
+    expect((caught as Error).message, name).toMatch(re);
+  };
+
+  it('fix round 1: changedFamilies throws a TypeError unless its window is two safe integers with start before end', () => {
+    const rows = [change(STORE_A, 15_000, 'demo-a', null)];
+    const run = (w: unknown): unknown => gateT5.changedFamilies(rows, w as never, LIST);
+    expect(() => run(W), 'CONTROL: the well-formed window answers').not.toThrow();
+    for (const [name, w] of [
+      ['missing', undefined], ['null', null], ['empty', {}], ['the report spelling', { window_start_ms: W.start_ms, window_end_ms: W.end_ms }],
+      ['start missing', { end_ms: W.end_ms }], ['end missing', { start_ms: W.start_ms }], ['NaN start', { start_ms: Number.NaN, end_ms: W.end_ms }],
+      ['NaN end', { start_ms: W.start_ms, end_ms: Number.NaN }], ['Infinity end', { start_ms: W.start_ms, end_ms: Infinity }],
+      ['fractional start', { start_ms: 0.5, end_ms: W.end_ms }], ['string end', { start_ms: W.start_ms, end_ms: String(W.end_ms) }],
+      ['empty window', { start_ms: W.start_ms, end_ms: W.start_ms }], ['reversed window', { start_ms: W.end_ms, end_ms: W.start_ms }],
+    ] as const) throwsType(() => run(w), /changedFamilies: the window is/, name);
+    expect(() => run({ start_ms: W.start_ms, end_ms: W.start_ms + 1 }), 'a one-millisecond window is a window').not.toThrow();
+  });
+
+  it('fix round 1: changedFamilies throws a TypeError on a change or gap row whose store_id is not a string, and reads a foreign row as other', () => {
+    const run = (rows: unknown[]): unknown => gateT5.changedFamilies(rows as never, W, LIST);
+    const c = change(STORE_A, 15_000, 'demo-a', null);
+    const g = gap(STORE_A, 15_000, null);
+    expect(() => run([c, g]), 'CONTROL').not.toThrow();
+    for (const bad of [undefined, null, 7]) {
+      throwsType(() => run([{ ...c, store_id: bad }]), /carries no string store_id/, `change ${String(bad)}`);
+      throwsType(() => run([{ ...g, store_id: bad }]), /carries no string store_id/, `gap ${String(bad)}`);
+    }
+    const noStore: { k: string; v: string } = { k: c.k, v: c.v };
+    throwsType(() => run([noStore]), /carries no string store_id/, 'a row with no store_id at all');
+    expect(() => run([{ store_id: undefined, k: `${PFX}seen_ms`, v: '1' }]), 'a row that is neither change nor gap is not read').not.toThrow();
+  });
+
+  it('fix round 1: assembleReports throws a TypeError on a malformed w2 or family, and keeps the brief\'s row-cap-mismatch for a report with no w2', () => {
+    const { reports, record } = one();
+    const fams = reports[0]!.w2!.families;
+    const withW2 = (w2: unknown): MReport => rep(STORE_A, fams, { w2: w2 as MReport['w2'] });
+    const w2Of = (families: unknown): unknown => ({ row_cap: gateT5.ROW_CAP, ...ECHO, families });
+    expect(() => assemble([rep(STORE_A, fams)], record), 'CONTROL').not.toThrow();
+    // The brief maps a report with no w2 (W1) to a GATE_REASONS word; the words stay.
+    refusedAs(assemble([withW2(null)], record), 'row-cap-mismatch');
+    refusedAs(assemble([withW2(undefined)], record), 'row-cap-mismatch');
+    // A w2 that is no object with a families array is internally malformed.
+    for (const [name, w2] of [
+      ['families absent', { row_cap: gateT5.ROW_CAP, ...ECHO }], ['families null', w2Of(null)], ['families an object', w2Of({})],
+      ['families a string', w2Of('x')], ['w2 a number', 5], ['w2 a string', 'x'],
+    ] as const) throwsType(() => assemble([withW2(w2)], record), /w2 is no object holding a families array/, name);
+    const goodFam = fams[0]!;
+    const withFam = (f: unknown): MReport => rep(STORE_A, [f as Family]);
+    const dropped = (k: keyof Family): Record<string, unknown> => { const f: Record<string, unknown> = { ...goodFam }; delete f[k]; return f; };
+    for (const [name, f] of [
+      ['generation missing', dropped('generation')], ['generation null', { ...goodFam, generation: null }], ['generation a number', { ...goodFam, generation: 3 }],
+      ['ccrc_id missing', dropped('ccrc_id')], ['ccrc_id a number', { ...goodFam, ccrc_id: 3 }],
+      ['found missing', dropped('found')], ['found undefined', { ...goodFam, found: undefined }], ['found null', { ...goodFam, found: null }],
+      ['found a string', { ...goodFam, found: 'true' }], ['family null', null], ['family a string', 'x'],
+    ] as const) throwsType(() => assemble([withFam(f)], record), /a listed family needs/, name);
+    // An empty-string generation is a string (the legacy family), and a family whose found is false still reads.
+    expect(() => assemble([withFam({ ...goodFam, found: false })], record), 'found:false is a boolean').not.toThrow();
+  });
+
+  it('fix round 1: a null sha is unmeasured on either side, as a missing one is, and no flag stamps it', () => {
+    const { reports, record } = one();
+    const fams = reports[0]!.w2!.families;
+    const nullSha = rep(STORE_A, fams, { script_sha256: null as never });
+    const nullPin = rec(record.assignment, { gate_code: { release_tag: 'v0.0.0-t5', files: { 'deploy/measure-history.py': null as never } } });
+    for (const allowCodeChange of [false, true]) {
+      refusedAs(assemble([nullSha], record, { allowCodeChange }), 'code-unmeasured');
+      refusedAs(assemble(reports, nullPin, { allowCodeChange }), 'code-unmeasured');
+      refusedAs(assemble([nullSha], nullPin, { allowCodeChange }), 'code-unmeasured');
+    }
   });
 });

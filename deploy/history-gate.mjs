@@ -515,7 +515,7 @@ export function parseRecallOffRow(k, v) {
   let body;
   try { body = JSON.parse(v); } catch { return recallOffOffGrammar(k, 'its value is not JSON'); }
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return recallOffOffGrammar(k, 'its value is not an object');
-  if (body.from === undefined || body.to === undefined) return recallOffOffGrammar(k, 'its value lacks from or to');
+  if (!Object.hasOwn(body, 'from') || !Object.hasOwn(body, 'to')) return recallOffOffGrammar(k, 'its value lacks from or to');
   if (kind === 'gap') {
     if (!(body.from === null || isMsValue(body.from)) || !isMsValue(body.to)) {
       return recallOffOffGrammar(k, 'a gap row\'s from is an ms or null, and its to an ms');
@@ -546,10 +546,19 @@ const recallOffIdKey = (storeId, id) => canonicalJson([storeId, id]);
  * @returns {{changed: string[], gaps: Array<{store_id: string, ts_ms: number, from: number | null, to: number}>}}
  */
 export function changedFamilies(metaRows, window, list) {
+  // An unruled window is refused by a throw, never read as "nothing changed": every comparison against a missing or
+  // NaN bound is false, which would drop no family and report none.
+  if (window === null || typeof window !== 'object' || !Number.isSafeInteger(window.start_ms)
+    || !Number.isSafeInteger(window.end_ms) || !(window.start_ms < window.end_ms)) {
+    throw new TypeError(`changedFamilies: the window is {start_ms, end_ms}, two safe integers with start before end: ${JSON.stringify(window ?? null)}`);
+  }
   const hit = new Set();
   const gaps = [];
   for (const row of metaRows) {
     const r = parseRecallOffRow(row.k, row.v);
+    if (r.kind !== 'other' && typeof row.store_id !== 'string') {
+      throw new TypeError(`changedFamilies: a ${r.kind} row (${JSON.stringify(row.k)}) carries no string store_id: ${JSON.stringify(row.store_id ?? null)}`);
+    }
     if (r.kind === 'change') {
       if ((r.prev_seen_ms ?? -Infinity) < window.end_ms && r.ts_ms >= window.start_ms) hit.add(recallOffIdKey(row.store_id, r.id));
     } else if (r.kind === 'gap') {
@@ -577,6 +586,10 @@ export function changedFamilies(metaRows, window, list) {
  * with no measured window (zero_windows; W2-D18: such a family is no cluster), each unmeasured window (unmeasured,
  * keyed `canonicalJson([store_id, ccrc_id, generation, boundary_uuid])`), and each assigned family that no report
  * lists (not_listed). No void threshold. Every list is sorted, so report order changes nothing.
+ * Internally malformed input throws a TypeError rather than being read as empty: a non-null `w2` with no families array,
+ * and a listed family without a string ccrc_id, a string generation and a boolean found (a report with no `w2` is
+ * row-cap-mismatch). `changedFamilies` throws a TypeError on a window that is not two safe integers with start before
+ * end, and on a change or gap row without a string store_id.
  * @param {Array<{store_id: string | null, script_sha256?: string, w2: {row_cap: number, window_start_ms: number, window_end_ms: number, families: Array<object>} | null}>} reports
  * @param {{nodes: Array<{store_id: string}>, assignment: Array<{store_id: string, ccrc_id: string, generation: string, arm: string}>,
  *   gate_code: {files: Record<string, string>}, window: {start_ms: number, end_ms: number}}} record
@@ -601,7 +614,15 @@ export function assembleReports(reports, record, opts = {}) {
     if (seen.has(rep.store_id)) return refuse('store-id-duplicate', `${at}: store ${rep.store_id} is measured by an earlier report too`);
     seen.add(rep.store_id);
     if (!nodes.has(rep.store_id)) return refuse('store-id-unlisted', `${at}: store ${rep.store_id} is not one of the record's nodes`);
+    // A report with no w2 (a W1 report) reaches row-cap-mismatch below; a w2 that is no object with a families array
+    // is internally malformed, never an empty list (an assigned family would then land in not_listed unnoticed).
+    if (rep.w2 !== null && rep.w2 !== undefined && !Array.isArray(rep.w2.families)) {
+      throw new TypeError(`assembleReports: ${at}: w2 is no object holding a families array`);
+    }
     for (const f of rep.w2?.families ?? []) {
+      if (f === null || typeof f !== 'object' || typeof f.ccrc_id !== 'string' || typeof f.generation !== 'string' || typeof f.found !== 'boolean') {
+        throw new TypeError(`assembleReports: ${at}: a listed family needs a string ccrc_id, a string generation and a boolean found: ${JSON.stringify(f ?? null)}`);
+      }
       const key = familyKey(rep.store_id, f.ccrc_id, f.generation);
       if (!arms.has(key)) return refuse('family-unassigned', `${at}: family ${key} is not in the record's assignment`);
       keyed.push({ key, store_id: rep.store_id, f });
