@@ -33,12 +33,24 @@ import { CoordBanner } from '../src/fleet/CoordBanner';
 import { MailBadge } from '../src/fleet/MailBadge';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
 import {
-  BARE_ROW, CONTROL_ROW, CollapsibleStrip, MailStrip, SELECT, Select, TEXT_INPUT, buttonVariants,
+  BARE_ROW, CONTROL_ROW, CollapsibleStrip, LIST_ROW, MailStrip, SELECT, Select, TEXT_INPUT, buttonVariants,
 } from '@ccrc/ui';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
 import { ReapSheet } from '../src/session/ReapSheet';
 import { RootFallback, ScreenFallback } from '../src/components/RenderBoundary';
+import { DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, type DocsProjectsResponse } from '../../shared/docs';
+import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
+import { DocsScreen } from '../src/screens/DocsScreen';
+import { DocsFailureView } from '../src/docs/DocsFailureView';
+import { DOC_MARKDOWN_ACTION } from '../src/docs/DocMarkdown';
+import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT } from '../src/docs/docsText';
+import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
+import { SessionHeader } from '../src/session/SessionHeader';
+import { parseMarkdown } from '../src/lib/markdownParse';
+import type { MarkdownParser } from '../src/lib/markdownRunner';
+import { navigate } from '../src/lib/router';
+import { draftOf, entry, failedAnswer, fakeLoaders, fileResponse, holder, okTree, treeOk, type FakeLoaders } from './docsFixtures';
 
 const read = (...seg: string[]): string =>
   readFileSync(path.join(import.meta.dirname, '..', 'src', ...seg), 'utf8');
@@ -51,6 +63,7 @@ const tokensCss = readUi('styles', 'tokens.css');
 /** The mail strip is the design system's now, and its stylesheet travelled
  *  with it — the tap floor is asserted where the rule actually lives. */
 const mailStripCss = readUi('components', 'mail-strip.css');
+const docsCss = read('docs', 'docs.css');
 
 // Fix round 3, verifier P5. These three stylesheets belong to the ui-css lane
 // and are being edited in parallel with this file, so the scrape must survive
@@ -323,6 +336,10 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(fleetCss, '.run-row .run-abandon'),
       ruleIn(fleetCss, '.caps-input'), ruleIn(fleetCss, '.mail-chip'),
       ruleIn(fleetCss, '.proj-released-archive'),
+      ruleIn(docsCss, '.docs-door'), ruleIn(docsCss, '.docs-back'), ruleIn(docsCss, '.docs-crumb'),
+      ruleIn(docsCss, '.docs-row'), ruleIn(docsCss, '.docs-fresh'), ruleIn(docsCss, '.docs-copy'),
+      ruleIn(docsCss, '.docs-action'), ruleIn(docsCss, '.docs-filter'), ruleIn(docsCss, '.docs-nodocs > summary'),
+      ruleIn(docsCss, '.btn-ghost.docs-banner-action'), ruleIn(docsCss, '.doc-img-link'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -816,5 +833,270 @@ describe('.render-fallback .btn-primary — the boundary fallbacks’ Reload and
     expect(back).toHaveClass('btn-primary');
     expect(back, 'the tap floor did not reach the rendered button').toHaveClass('min-h-tap');
     expect(back.closest('.render-fallback')).not.toBeNull();
+  });
+});
+
+// — native Docs reader W5 part 1, Task 11: the Docs door, the session links and the Docs screen's controls (spec
+// 2026-10-01 4.8 and 4.14) —
+//
+// Both halves for each: the rule in docs/docs.css (or, for a control that rides a shared class, that class's own
+// rule) holds `min-height: var(--tap-min)`, and a rendered element carries the class. The Docs screen renders with
+// injected loaders and a parser that parses in this thread; nothing reaches a server. Placeholders only: project
+// `demo`, branch `main`, `example-org/example-repo`, `https://a.example`.
+
+const docsParser: MarkdownParser = async (src) => parseMarkdown(src, 'docs');
+
+/** The Docs screen at `url`, as the app's docs arm mounts it. */
+function openDocs(url: string, f: FakeLoaders, parser: MarkdownParser = docsParser): void {
+  navigate(url);
+  render(<DocsScreen path={location.pathname} search={location.search} loaders={f.loaders} parser={parser} />);
+}
+
+/** A markdown leaf `specs/a.md` whose text is `text`. */
+function markdownLeaf(text: string, entries = [entry('specs', 'a.md')]): FakeLoaders {
+  const r = fileResponse(text);
+  return fakeLoaders({
+    tree: okTree(treeOk({ entries })),
+    file: { s: 'ok', value: { ...r, show: { ...r.show, size: text.length } } },
+  });
+}
+
+const DOCS_INDEX: DocsProjectsResponse = {
+  ok: true, cacheAgeMs: 0,
+  index: {
+    v: 1, verb: 'docs-index', ok: true, elapsedMs: 5, unlisted: 0, duplicates: [],
+    projects: [
+      { project: 'demo', state: 'ready', github: { state: 'none' },
+        default: { name: 'main', via: 'default:origin-head', commit: 'a'.repeat(40) },
+        sections: { specs: 1, plans: 1, 'product-design': 0, conventions: 0 } },
+      { project: 'a', state: 'linked-worktree', github: { state: 'none' }, owner: 'demo', branch: 'main' },
+      { project: 'b', state: 'ready', github: { state: 'none' },
+        default: { name: 'main', via: 'default:origin-head', commit: 'b'.repeat(40) },
+        sections: { specs: 0, plans: 0, 'product-design': 0, conventions: 0 } },
+    ],
+  },
+};
+
+const floorIn = (css: string, sel: string): string | null => declValue(ruleIn(css, sel), 'min-height');
+
+describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
+  afterEach(() => { history.replaceState(null, '', '/'); });
+
+  describe('.docs-door — the fleet header’s door to /docs', () => {
+    it('is at least one tap tall, off the shared token', () => {
+      expect(floorIn(docsCss, '.docs-door')).toBe('var(--tap-min)');
+    });
+    it('is the class the rendered door actually carries', () => {
+      render(<FleetScreen store={makeStore()} />);
+      expect(screen.getByRole('button', { name: 'Docs: specs, plans and design notes' })).toHaveClass('docs-door');
+    });
+    it('reaches the main stylesheet: DocsScreen imports docs.css, and app.tsx imports DocsScreen statically', () => {
+      // A text scan, NOT EXHAUSTIVE: a re-export, or a lazy import spelled another way, is not seen. The plan's build
+      // check reads the BUILT index css for `.docs-door`, which is the proof; this pins the two imports it rests on.
+      expect(read('screens', 'DocsScreen.tsx')).toMatch(/^import '\.\.\/docs\/docs\.css';$/m);
+      expect(read('app.tsx')).toMatch(/^import \{ DocsScreen \} from '\.\/screens\/DocsScreen';$/m);
+    });
+  });
+
+  describe('.docs-back, .docs-crumb and .docs-crumbs-more — the header’s way up', () => {
+    it('are at least one tap tall, off the shared token', () => {
+      expect(floorIn(docsCss, '.docs-back')).toBe('var(--tap-min)');
+      expect(declValue(ruleIn(docsCss, '.docs-back'), 'min-width')).toBe('var(--tap-min)');
+      expect(floorIn(docsCss, '.docs-crumb')).toBe('var(--tap-min)');
+      expect(floorIn(docsCss, '.docs-crumbs-more')).toBe('var(--tap-min)');
+      // D-5502: one tap wide too. The … button drew 16 px wide at 360 and 390, and a short crumb about 39 px.
+      expect(declValue(ruleIn(docsCss, '.docs-crumbs-more'), 'min-width')).toBe('var(--tap-min)');
+      expect(declValue(ruleIn(docsCss, '.docs-crumbs-more'), 'justify-content')).toBe('center');
+      expect(declValue(ruleIn(docsCss, '.docs-crumb'), 'min-width')).toBe('var(--tap-min)');
+    });
+    it('are the classes the rendered back button, crumb and … button carry (a phone folds the crumbs)', async () => {
+      openDocs('/docs/demo/specs', fakeLoaders());
+      expect(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.back })).toHaveClass('docs-back');
+      expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.crumbsMore })).toHaveClass('docs-crumbs-more');
+      expect(screen.getByRole('link', { name: 'demo' })).toHaveClass('docs-crumb');
+    });
+  });
+
+  describe('.docs-row and .docs-filter — every listing row, and the filter above it', () => {
+    it('are at least one tap tall, off the shared token', () => {
+      expect(floorIn(docsCss, '.docs-row')).toBe('var(--tap-min)');
+      expect(floorIn(docsCss, '.docs-filter')).toBe('var(--tap-min)');
+    });
+    it('are the classes a section’s rendered rows and filter carry', async () => {
+      openDocs('/docs/demo/specs', fakeLoaders());
+      const rows = await screen.findAllByRole('button', { name: /^a\.md|^b\.md/ });
+      expect(rows).toHaveLength(2);
+      for (const row of rows) expect(row).toHaveClass('docs-row');
+      expect(screen.getByRole('searchbox', { name: DOCS_VIEW_TEXT.filterEntries })).toHaveClass('docs-filter');
+    });
+  });
+
+  describe('the index: .docs-row, .docs-owner-link and the no-docs fold’s summary', () => {
+    it('are at least one tap tall, off the shared token', () => {
+      expect(floorIn(docsCss, '.docs-owner-link')).toBe('var(--tap-min)');
+      expect(floorIn(docsCss, '.docs-nodocs > summary')).toBe('var(--tap-min)');
+    });
+    it('are the classes the rendered index carries', async () => {
+      const f = fakeLoaders();
+      f.projects.mockResolvedValue({ s: 'ok', value: DOCS_INDEX });
+      openDocs('/docs', f);
+      expect(await screen.findByRole('button', { name: /^demo/ })).toHaveClass('docs-row');
+      expect(screen.getByRole('link', { name: 'part of demo' })).toHaveClass('docs-owner-link');
+      expect(document.querySelector('.docs-nodocs > summary')?.textContent).toBe('Projects with no docs (1)');
+    });
+  });
+
+  describe('.docs-fresh, .docs-copy and .docs-action — the truth line’s chip, copy commit and View on GitHub', () => {
+    it('are at least one tap tall, off the shared token', () => {
+      expect(floorIn(docsCss, '.docs-fresh')).toBe('var(--tap-min)');
+      expect(floorIn(docsCss, '.docs-copy')).toBe('var(--tap-min)');
+      expect(floorIn(docsCss, '.docs-action')).toBe('var(--tap-min)');
+    });
+    it('are the classes the rendered chip, copy button and GitHub link carry', async () => {
+      openDocs('/docs/demo/specs', fakeLoaders());
+      expect(await screen.findByRole('button', { name: /never fetched/ })).toHaveClass('docs-fresh');
+      expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.copyCommit })).toHaveClass('docs-copy');
+      expect(screen.getByRole('link', { name: DOCS_HEAD_TEXT.github })).toHaveClass('docs-action');
+    });
+  });
+
+  describe('every banner action: .docs-banner-action (a btn-ghost) and .docs-hint-link', () => {
+    it('are at least one tap tall, off the shared token, and the banner rule gives back only the width', () => {
+      expect(buttonVariants({ variant: 'ghost' })).toContain('min-h-tap'); // @ccrc/ui's ghost Button carries the floor
+      expect(floorIn(docsCss, '.btn-ghost.docs-banner-action')).toBe('var(--tap-min)');
+      expect(floorIn(docsCss, '.docs-hint-link')).toBe('var(--tap-min)');
+    });
+    it('are the classes the rendered Retry and hint link carry', async () => {
+      openDocs('/docs/demo/specs', fakeLoaders({
+        tree: okTree(treeOk({ drafts: { state: 'unsettled', branch: 'main', worktree: '/repo/wt/a' } })),
+      }));
+      const retry = await screen.findByRole('button', { name: DOCS_BANNER_TEXT.retry });
+      expect(retry).toHaveClass('btn-ghost', 'docs-banner-action');
+      cleanup();
+      openDocs('/docs/demo/specs', fakeLoaders({
+        tree: okTree(treeOk({ drafts: holder(), entries: [entry('specs', 'a.md', { draft: draftOf('modified') })] })),
+      }));
+      expect(await screen.findByRole('link', { name: DOCS_VIEW_TEXT.openDraftView })).toHaveClass('docs-hint-link');
+    });
+  });
+
+  describe('the failure view’s Retry and Fetch from origin (.docs-fail-action, a btn-ghost)', () => {
+    it('are at least one tap tall, off the shared token', () => {
+      expect(buttonVariants({ variant: 'ghost' })).toContain('min-h-tap'); // @ccrc/ui's ghost Button carries the floor
+      expect(floorIn(docsCss, '.btn-ghost.docs-fail-action')).toBe('var(--tap-min)');
+    });
+    it('are the classes both rendered buttons carry', () => {
+      render(<DocsFailureView answer={failedAnswer('unresolved-ref')} onFetchFromOrigin={() => {}} />);
+      expect(screen.getByRole('button', { name: 'Fetch from origin' })).toHaveClass('btn-ghost', 'docs-fail-action');
+      cleanup();
+      render(<DocsFailureView answer={{ s: 'unreachable' }} onRetry={() => {}} />);
+      expect(screen.getByRole('button', { name: 'Retry' })).toHaveClass('btn-ghost', 'docs-fail-action');
+    });
+  });
+
+  describe('.docs-leaf-action — a leaf’s Source and Download', () => {
+    it('is at least one tap tall, off the shared token', () => {
+      expect(floorIn(docsCss, '.docs-leaf-action')).toBe('var(--tap-min)');
+    });
+    it('is the class both rendered buttons of the html stand-in carry', async () => {
+      const r = fileResponse('<p>a</p>');
+      openDocs('/docs/demo/specs/x.html', fakeLoaders({
+        tree: okTree(treeOk({ entries: [entry('specs', 'x.html')] })),
+        file: { s: 'ok', value: { ...r, contentClass: 'html', show: { ...r.show, path: 'x.html' } } },
+      }));
+      expect(await screen.findByRole('button', { name: DOCS_VIEW_TEXT.source })).toHaveClass('docs-leaf-action');
+      expect(screen.getByRole('button', { name: DOCS_VIEW_TEXT.download })).toHaveClass('docs-leaf-action');
+    });
+  });
+
+  describe('.doc-gate-btn — the gate’s Format anyway and Show as text', () => {
+    it('is at least one tap tall, off the shared token', () => {
+      expect(floorIn(docsCss, '.doc-gate-btn')).toBe('var(--tap-min)');
+    });
+    it('is the class both rendered choices carry', async () => {
+      openDocs('/docs/demo/specs/a.md', markdownLeaf('a\n'.repeat(DOCS_RENDER_GATE_BYTES / 2 + 1)));
+      expect(await screen.findByRole('button', { name: DOC_MARKDOWN_ACTION.formatAnyway })).toHaveClass('doc-gate-btn');
+      expect(screen.getByRole('button', { name: DOC_MARKDOWN_ACTION.showAsText })).toHaveClass('doc-gate-btn');
+    });
+  });
+
+  describe('.doc-plain-action — the plain text’s Retry or Format anyway', () => {
+    it('is at least one tap tall, off the shared token', () => {
+      expect(floorIn(docsCss, '.doc-plain-action')).toBe('var(--tap-min)');
+    });
+    it('is the class the rendered Retry carries when the worker failed', async () => {
+      const failed: MarkdownParser = async () => ({ kind: 'worker-failed', error: 'Error' });
+      openDocs('/docs/demo/specs/a.md', markdownLeaf('# A\n'), failed);
+      expect(await screen.findByRole('button', { name: DOC_MARKDOWN_ACTION.retry })).toHaveClass('doc-plain-action');
+    });
+  });
+
+  describe('.doc-img-load, .doc-img-action and .doc-img-link — Load image, Open image externally, and an image', () => {
+    it('are at least one tap tall, off the shared token', () => {
+      expect(floorIn(docsCss, '.doc-img-load')).toBe('var(--tap-min)');
+      expect(floorIn(docsCss, '.doc-img-action')).toBe('var(--tap-min)');
+      expect(floorIn(docsCss, '.doc-img-link')).toBe('var(--tap-min)');
+    });
+    it('are the classes the rendered controls carry', async () => {
+      const png = new Uint8Array([...DOCS_RASTER_TYPES.png.magic[0][0].bytes, 0, 255]);
+      const images = Array.from({ length: DOCS_MAX_IMAGES_PER_PAGE + 1 }, (_, i) => `![i${i}](i.png)`).join('\n\n');
+      const f = markdownLeaf(`${images}\n\n![e](https://a.example/x.png)\n`, [entry('specs', 'a.md'), entry('specs', 'i.png')]);
+      f.raster.mockResolvedValue({ s: 'ok', value: { bytes: png, mime: 'image/png' } });
+      openDocs('/docs/demo/specs/a.md', f);
+      expect(await screen.findByRole('button', { name: DOC_IMAGE_TEXT.load })).toHaveClass('doc-img-load');
+      expect(screen.getByRole('button', { name: DOC_IMAGE_TEXT.openExternal })).toHaveClass('doc-img-action');
+      expect((await screen.findAllByRole('button', { name: 'i0' }))[0]).toHaveClass('doc-img-link');
+    });
+  });
+
+  describe('the session links: the actions sheet’s row (a btn-ghost) and the session menu’s item (a menu-item)', () => {
+    const session = sess({ project: 'demo', workspace: 'ws-old', branch: 'main' });
+    it('ride the shared rules’ floors: .btn-ghost on the token, .menu-item at or above it', () => {
+      expect(buttonVariants({ variant: 'ghost' })).toContain('min-h-tap'); // @ccrc/ui's ghost Button carries the floor
+      // `.menu-item` is the session menu's `MenuItem`, a @ccrc/ui `ListRow`, whose LIST_ROW floors at the `--row-h`
+      // density role (`min-h-row`): Refined's default 52px, above the 44px token, and held to the token everywhere but
+      // under a fine pointer by skin-identity.test.ts's floor case (f2). W5 edits neither; the Docs item adds no rule
+      // that could lower it.
+      const token = Number.parseFloat(declValue(ruleIn(tokensCss, ':root'), '--tap-min') ?? 'NaN');
+      const menu = /(?:^|\s)min-h-(tap|row|\[(\d+)px\])(?:\s|$)/.exec(LIST_ROW);
+      expect(menu, LIST_ROW).not.toBeNull();
+      const rowH = Number.parseFloat(declValue(ruleIn(tokensCss, ':root'), '--row-h') ?? 'NaN');
+      const floor = menu?.[1] === 'tap' ? token : menu?.[1] === 'row' ? rowH : Number(menu?.[2]);
+      expect(floor >= token, `${String(menu?.[0])}: ${floor}px against --tap-min ${token}px`).toBe(true);
+      // docs.css may carry OVERFLOW rules for the two (a long branch must not push the word off the row), but no rule
+      // whose selector list names either class may declare a min-height: the floor stays the shared class's.
+      const naming = stripComments(docsCss).split('}')
+        .map((chunk) => chunk.split('{'))
+        .filter(([sel]) => /\.docs-menu-item|\.docs-session-row/.test(sel ?? ''));
+      expect(naming.length).toBeGreaterThan(0);
+      for (const [sel, body] of naming) expect(body ?? '', sel).not.toMatch(/min-height/);
+    });
+    it('keep a long branch name on its own line: the hint truncates beside the word, the row label breaks (jsdom lays nothing out, so the declarations are pinned)', () => {
+      // `.menu-hint` is `flex: none` in chat.css, so beside a 200-character branch the `.menu-label` ("Docs")
+      // collapses; the Docs item's hint may shrink and ellipsise instead. The row's label is a bare text node in a
+      // `display: flex` btn-ghost, which cannot break a branch with no space in it unless the row says it may.
+      const hint = ruleIn(docsCss, '.docs-menu-item .menu-hint');
+      expect(declValue(hint, 'flex')).toBe('0 1 auto');
+      expect(declValue(hint, 'min-width')).toBe('0');
+      expect(declValue(hint, 'overflow')).toBe('hidden');
+      expect(declValue(hint, 'text-overflow')).toBe('ellipsis');
+      expect(declValue(hint, 'white-space')).toBe('nowrap');
+      const row = ruleIn(docsCss, '.docs-session-row');
+      expect(declValue(row, 'overflow-wrap')).toBe('anywhere');
+      expect(declValue(row, 'min-width')).toBe('0');
+    });
+    it('are the classes the rendered row and item carry', () => {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ accounts: [], projected: null, roster: [] }),
+        { status: 200, headers: { 'content-type': 'application/json' } })));
+      render(<SessionActionsSheet session={session} open onClose={() => {}} onReap={() => {}} />);
+      expect(screen.getByRole('button', { name: 'Docs on main' })).toHaveClass('btn-ghost', 'docs-session-row');
+      cleanup();
+      render(<SessionHeader session={session} status="idle" statusUpdatedAt={null} onInterrupt={() => {}}
+        onOpenTerminal={() => {}} onBack={() => {}} onChangeModel={() => {}} onChangeEffort={() => {}}
+        onMoveAccount={() => {}} onArchive={() => {}} onRestore={() => {}} onOpenHistory={() => {}}
+        onReapWorkspace={() => {}} />);
+      fireEvent.click(screen.getByRole('button', { name: 'More' }));
+      expect(screen.getByRole('button', { name: 'Docs' })).toHaveClass('menu-item', 'docs-menu-item');
+    });
   });
 });
