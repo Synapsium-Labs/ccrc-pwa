@@ -236,6 +236,37 @@ describe('measure-history.py: the named queries over planted rows (O52)', () => 
       ],
     }] });
   });
+
+  // W2-3 Task 3 (W2-D14, D-5770): O52's window half re-pinned against the Node builder. W1's pin read 3 calls over
+  // 14 assistant entries: B1 ended INCLUSIVE at its 10th entry (3900) and B2 at the copy's last row (7100, past B3).
+  // Now a window is the first K = 10 assistant TURNS (here one row each: no msg_id or request_id is planted) and ends
+  // EXCLUSIVE at turn 11's first row or at the next main boundary, whichever is earlier:
+  //   B1 [2000, 4000): turns 3000..3900; calls k1 2500, k2 3900 and k3 3950 (k3 is now inside; k4 1999 is before it);
+  //   B2 [5000, 7000), ended by B3's row: turns 5100, 5200, 5300; call k6 5200, the merged '' family's.
+  // k5 is a replay arm's and never reaches Node (Task 1), B3 (7000) is past --window-end, the subagent boundary is not
+  // a main one, and demo-b is listed under another store. Totals: windows 2, with_call 2, calls 4, turns 13.
+  it('W2-3 Task 3: O52 re-pinned against the Node builder: windows 2, with_call 2, calls 4, turns 13, unmeasured 0; calls at exactly 4000 and 7000 stay outside', async () => {
+    const g = await t3Gate();
+    const f = plantedStore();
+    const TOTALS = { windows: 2, with_call: 2, calls: 4, turns: 13, unmeasured: 0 };
+    const before = g.buildWindows(t3Planted(f, g.ROW_CAP));
+    expect(before.map((w) => [w.boundary_uuid, w.state, w.start_ms, w.end_ms, w.end_inclusive, w.turns, w.calls])).toEqual([
+      [f.b1, 'measured', 2000, 4000, false, 10, 3],
+      [f.b2, 'measured', 5000, 7000, false, 3, 1],
+    ]);
+    expect(g.windowTotals(before)).toEqual(TOTALS);
+    const db = new DatabaseSync(f.db);
+    try {
+      const ins = db.prepare("INSERT INTO recall_calls (event_key, ccrc_id, generation, ts_ms, verb, rc, ms, arm) VALUES (?, 'demo-a', ?, ?, 'expand', 0, 40, NULL)");
+      ins.run('k8', G1, 4000);   // exactly B1's end: turn 11's first row
+      ins.run('k9', G1, 7000);   // exactly B2's end: B3's row
+    } finally {
+      db.close();
+    }
+    const after = t3Planted(f, g.ROW_CAP);
+    expect(after.calls.map((c) => c[0]), 'CONTROL: both planted calls reach Node').toEqual(expect.arrayContaining([4000, 7000]));
+    expect(g.windowTotals(g.buildWindows(after))).toEqual(TOTALS);
+  });
 });
 
 describe('measure-history.py: read-only, and a missing input is refused, never created', () => {
@@ -923,5 +954,338 @@ describe('W2-3 Task 2: the gate module is pure and its words are its own', () =>
     expect(g.familyKey(OTHER_STORE, 'demo-id', G1)).toBe(lib.canonicalJson([OTHER_STORE, 'demo-id', G1]));
     expect(g.familyKey(OTHER_STORE, 'demo-id', G1)).not.toBe(g.familyKey('00000000-0000-4000-8000-000000000002', 'demo-id', G1));
     expect(g.familyKey(OTHER_STORE, 'a","b', '')).toBe(`["${OTHER_STORE}","a\\",\\"b",""]`);
+  });
+});
+
+// ── W2-3 Task 3: windows over assistant turns, and the two copy rules (W2-D14, W2-D15, W2-D16, W2-D17) ─────────────
+// END-APPENDED. measure-history.py emits raw rows (Task 1) and deploy/history-gate.mjs builds every window in Node
+// (D-5770): K = 10 assistant TURNS, rows grouped by msg_id ?? request_id ?? uuid, an angle-bracketed model's row
+// dropped and a null-model row kept; open at the boundary's ts inclusive; end EXCLUSIVE at the earlier of turn 11's
+// first row and the next main boundary, else INCLUSIVE at the copy's last timed row; unmeasured when the row cap cut
+// the copy before turn 11 was seen, when the copy has no timed row, or (chosen) when a row that would end the window
+// has no ts. The window reads W1's longest copy, the producer lib.pickHoldingCopy's (D-5771). Every store below is a
+// fixture HOME that createStore made, read by the real script under -I -B; turnStore is plantedStore's sibling.
+
+/** One assistant row as measure-history.py emits it: [line, ts_ms, msg_id, request_id, uuid, model]. */
+type T3RawRow = [number, number | null, string | null, string | null, string, string | null];
+/** One call: [ts_ms, rc, verb]. */
+type T3Call = [number, number, string];
+interface T3Copy {
+  file_id: number; source_key: string; boundary_line: number; after_count: number; summary_line: number | null;
+  next_boundary_line: number | null; next_boundary_ts_ms: number | null; last_ts_ms: number | null;
+  rows: T3RawRow[]; models: Array<string | null>; truncated: boolean;
+}
+interface T3Boundary { boundary_uuid: string; ts_ms: number; copies: T3Copy[] }
+interface T3Family { ccrc_id: string; generation: string; found: boolean; merged_generations: string[]; calls: T3Call[]; boundaries: T3Boundary[] }
+interface T3Window {
+  boundary_uuid: string; ts_ms: number; producer: 'anthropic' | 'other' | 'unknown'; state: 'measured' | 'unmeasured';
+  start_ms: number; end_ms: number | null; end_inclusive: boolean; turns: number; calls: number; with_call: boolean;
+}
+/** The names Task 3 adds to deploy/history-gate.mjs, and the three of Task 2's it reads. */
+interface T3Gate {
+  K: number; ROW_CAP: number; WINDOW_STATES: readonly string[];
+  turnKey(row: T3RawRow): string;
+  turnsOf(rows: T3RawRow[]): Array<{ key: string; first_line: number; first_ts_ms: number | null; rows: T3RawRow[] }>;
+  windowCopyOf(copies: T3Copy[]): T3Copy | null;
+  producerCopyOf(copies: T3Copy[]): T3Copy | null;
+  producerOfBoundary(copies: T3Copy[]): 'anthropic' | 'other' | 'unknown';
+  windowOf(boundary: T3Boundary, calls: T3Call[], k?: number): T3Window;
+  buildWindows(family: T3Family, k?: number): T3Window[];
+  windowTotals(windows: T3Window[]): { windows: number; with_call: number; calls: number; turns: number; unmeasured: number };
+  splitAtFirstExit8(calls: T3Call[]): { upTo: T3Call[]; after: T3Call[] };
+}
+const t3Gate = async (): Promise<T3Gate> => (await import('../../deploy/history-gate.mjs')) as unknown as T3Gate;
+
+/** One entry of turnStore's main transcript. */
+interface T3Row { type: 'assistant' | 'user' | 'system'; ts: number | null; msg?: string | null; req?: string | null; model?: string | null; summary?: boolean; boundary?: boolean }
+/** One copy of that transcript: its rows as indexes into the entries, in file order. */
+interface T3CopyPlan { source_key?: string; lines: readonly number[] }
+const T3_ID = 'demo-t3';
+const T3_GEN = '0189abcd-1234-5678-9abc-0123456789f3';
+const T3_SID = '33333333-4444-4555-8666-777777777777';
+const t3B = (ts: number | null): T3Row => ({ type: 'system', ts, boundary: true });
+const t3S = (ts: number | null): T3Row => ({ type: 'user', ts, summary: true });
+const t3A = (ts: number | null, msg: string | null, model: string | null = 'claude-fixture-a', req: string | null = null): T3Row =>
+  ({ type: 'assistant', ts, msg, req, model });
+/** `n` one-row turns from `t0`, `step` apart, each with its own msg_id. */
+const t3Turns = (n: number, t0: number, step = 100): T3Row[] => Array.from({ length: n }, (_, i) => t3A(t0 + i * step, `m${t0 + i * step}`));
+/** Turn 10 is two rows (2000, 2010); turn 11 opens at 2100. */
+const T3_TEN_SPLIT = (): T3Row[] => [t3B(1000), t3S(1001), ...t3Turns(9, 1100), t3A(2000, 'm10'), t3A(2010, 'm10'), t3A(2100, 'm11'), t3A(2200, 'm12')];
+/** P1: B1's only non-unknown model lies after the next main boundary. */
+const T3_P1 = (): T3Row[] => [t3B(1000), t3S(1001), t3A(1100, 'm1', null), t3A(1200, 'm2', '<synthetic>'), t3B(2000), t3S(2001), t3A(2100, 'm3', 'claude-fixture-a')];
+/** P2: the only non-unknown model is the 4th row, past a row cap of 2; no next boundary. */
+const T3_P2 = (): T3Row[] => [t3B(1000), t3S(1001), t3A(1100, 'm1', null), t3A(1200, 'm2', null), t3A(1300, 'm3', null), t3A(1400, 'm4', 'other-fixture-b')];
+/** P3: a retired copy (source_key 'seg-1', the smaller file_id) holds one row more than the live copy. */
+const T3_P3 = (): T3Row[] => [t3B(1000), t3S(1001), t3A(1100, 'm1', null), t3A(1200, 'm2', 'claude-fixture-a')];
+const T3_P3_COPIES: readonly T3CopyPlan[] = [{ source_key: 'seg-1', lines: [0, 1, 2, 3] }, { lines: [0, 1, 2] }];
+
+/** A store createStore made, holding ONE family, listed in `families`, whose one main transcript holds `rows` (entry uuids
+ *  `t3-<index>`). `copies` are its ingest files, each a list of row indexes in file order (default: one live copy of every
+ *  row). Each boundary's anchor_uuid is its own uuid, so derive's summary pick is the first compact summary after it, the
+ *  row Task 1 reads. `calls` are the family's recall_calls rows, arm NULL. */
+function turnStore(rows: T3Row[], calls: T3Call[] = [], copies: readonly T3CopyPlan[] = [{ lines: rows.map((_, i) => i) }]): { db: string; families: string } {
+  const home = mkTmp('ccrc-measure-history-t3-');
+  const { storeId } = createStore(home);
+  const dbPath = path.join(home, '.ccrc', 'history', 'db', 'history.db');
+  const db = new DatabaseSync(dbPath);
+  try {
+    for (const t of ['counters', 'ticks', 'recall_calls']) db.exec(`DELETE FROM ${t}`);
+    const ins = (sql: string, ...p: Array<string | number | null | Uint8Array>): number => Number(db.prepare(sql).run(...p).lastInsertRowid);
+    const blob = ins("INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, 'br5', NULL, 0)",
+      createHash('sha256').update('measure-history t3 fixture').digest());
+    const pk = ins('INSERT INTO sessions (ccrc_id, generation, project, first_seen_ms, merged_into) VALUES (?, ?, ?, ?, NULL)', T3_ID, T3_GEN, 'demo', 1);
+    ins("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, 1, ?, 'startup', 'hook', 1)", pk, T3_SID);
+    const tpk = ins("INSERT INTO transcripts (cc_session_uuid, agent_id) VALUES (?, '')", T3_SID);
+    const ids = rows.map((r, i) => ins('INSERT INTO entries (uuid, transcript_pk, type, ts_ms, is_compact_summary, model, msg_id, request_id, '
+      + 'provenance, prov_version, struct_rank_ns, struct_file_id, blob_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, ?)',
+    `t3-${i}`, tpk, r.type, r.ts, r.summary === true ? 1 : 0, r.model ?? null, r.msg ?? null, r.req ?? null,
+    r.type === 'assistant' ? 'model' : r.summary === true ? 'summary' : 'harness', blob));
+    let ord = 0;
+    rows.forEach((r, i) => {
+      if (r.boundary === true) ins('INSERT INTO boundaries (entry_id, transcript_pk, ord, anchor_uuid) VALUES (?, ?, ?, ?)', ids[i]!, tpk, ++ord, `t3-${i}`);
+    });
+    copies.forEach((c, k) => {
+      const fid = ins("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, status, parser_version) VALUES (1, ?, ?, ?, 'live', 1)", 300 + k, c.source_key ?? '', tpk);
+      c.lines.forEach((i, at) => ins('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)', fid, ids[i]!, at + 1));
+    });
+    calls.forEach(([ts, rc, verb], k) => ins('INSERT INTO recall_calls (event_key, ccrc_id, generation, ts_ms, verb, rc, ms, arm) VALUES (?, ?, ?, ?, ?, ?, 40, NULL)',
+      `t3k${k}`, T3_ID, T3_GEN, ts, verb, rc));
+  } finally {
+    db.close();
+  }
+  const families = path.join(home, 'families.json');
+  writeFileSync(families, JSON.stringify([{ store_id: storeId, ccrc_id: T3_ID, generation: T3_GEN }]));
+  return { db: dbPath, families };
+}
+
+/** turnStore's family, through `script` (the real one by default) over every time, at `rowCap`. */
+function t3Family(s: { db: string; families: string }, rowCap = 400, script = SCRIPT): T3Family {
+  const r = spawnSync('python3', [...PY_ISOLATED, script, '--db', s.db, '--families', s.families, '--window-start', '0', '--window-end', '1000000',
+    '--row-cap', String(rowCap)], { encoding: 'utf8', env: { ...scrubbedEnv(process.env), PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
+  expect(r.status, r.stderr).toBe(0);
+  const fams = (JSON.parse(r.stdout) as { w2: { families: T3Family[] } }).w2.families;
+  expect(fams.map((x) => [x.ccrc_id, x.found])).toEqual([[T3_ID, true]]);
+  return fams[0]!;
+}
+
+/** The planted fixture's listed family through the real script over [1500, 6000), O52's own window. */
+function t3Planted(f: Planted, rowCap: number): T3Family {
+  const fams = (report(['--db', f.db, '--now', String(NOW), '--families', f.families, '--window-start', '1500', '--window-end', '6000',
+    '--row-cap', String(rowCap)]) as unknown as { w2: { families: T3Family[] } }).w2.families;
+  expect(fams.map((x) => x.ccrc_id), 'demo-b is listed under another store').toEqual(['demo-a']);
+  return fams[0]!;
+}
+
+/** derive.mjs:313-316's producer for one boundary, composed as derive composes it: holdingCopyOf's copy, its rows in file
+ *  order, lib.summaryRowFor's pick (else the boundary row) and lib.producerOfCopy. Opens the store read-only. */
+async function t3DeriveProducer(dbPath: string, uuid: string): Promise<{ fileId: number | null; producer: string }> {
+  const D = (await import('../../ccd/history/derive.mjs')) as unknown as {
+    holdingCopyOf(db: DatabaseSync, b: { entry_id: number; transcript_pk: number }): { file_id: number } | null;
+  };
+  const L = await import('../../ccd/history/lib.mjs');
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const b = db.prepare('SELECT b.entry_id AS entry_id, b.transcript_pk AS transcript_pk, b.anchor_uuid AS anchor_uuid FROM boundaries b '
+      + 'JOIN entries e ON e.entry_id = b.entry_id WHERE e.uuid = ?').get(uuid) as { entry_id: number; transcript_pk: number; anchor_uuid: string | null };
+    const copy = D.holdingCopyOf(db, b);
+    if (copy === null) return { fileId: null, producer: 'unknown' };
+    const rows = db.prepare('SELECT e.uuid AS uuid, e.type AS type, e.model AS model, e.provenance AS provenance, e.is_compact_summary AS cs '
+      + 'FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? ORDER BY m.line')
+      .all(copy.file_id) as Array<{ uuid: string; type: string; model: string | null; provenance: string; cs: number }>;
+    const pick = L.summaryRowFor({ boundaryUuid: uuid, anchorUuid: b.anchor_uuid,
+      rows: rows.map((r) => ({ uuid: r.uuid, isCompactSummary: r.cs === 1, isEcho: r.type === 'user' && r.provenance === 'harness' })) });
+    return { fileId: Number(copy.file_id), producer: L.producerOfCopy(rows, rows.findIndex((r) => r.uuid === (pick.uuid ?? uuid))) };
+  } finally {
+    db.close();
+  }
+}
+
+describe('W2-3 Task 3: windows over assistant turns', () => {
+  /** A window as [state, start, end, end inclusive, turns, calls]. */
+  const W = (ws: T3Window[]): unknown[] => ws.map((w) => [w.state, w.start_ms, w.end_ms, w.end_inclusive, w.turns, w.calls]);
+
+  it('RP6: three rows sharing a msg_id are one turn, so turn 11 is the 12th turn and a call at 1950 is inside; the window holds K turns, not every turn seen', async () => {
+    const g = await t3Gate();
+    const fam = t3Family(turnStore([t3B(1000), t3S(1001), t3A(1100, 'm1'), t3A(1110, 'm1'), t3A(1120, 'm1'), ...t3Turns(11, 1200)], [[1950, 0, 'expand']]));
+    const turns = g.turnsOf(fam.boundaries[0]!.copies[0]!.rows);
+    expect(turns.map((t) => t.rows.length)).toEqual([3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+    expect(turns[0]).toMatchObject({ key: 'm1', first_line: 3, first_ts_ms: 1100 });
+    expect(W(g.buildWindows(fam))).toEqual([['measured', 1000, 2100, false, 10, 1]]);
+  });
+
+  it('RP6: a call between turn 10 and turn 11 is inside: after turn 10\'s last row, before turn 11\'s first', async () => {
+    const g = await t3Gate();
+    expect(W(g.buildWindows(t3Family(turnStore(T3_TEN_SPLIT(), [[2050, 0, 'expand']]))))).toEqual([['measured', 1000, 2100, false, 10, 1]]);
+  });
+
+  it('RP6: the 11th-turn case: a call at turn 11\'s first ts is outside, one a millisecond earlier inside', async () => {
+    const g = await t3Gate();
+    expect(W(g.buildWindows(t3Family(turnStore(T3_TEN_SPLIT(), [[2099, 0, 'expand'], [2100, 0, 'expand']]))))).toEqual([['measured', 1000, 2100, false, 10, 1]]);
+  });
+
+  it('RP6: a <synthetic> row is not a turn, and the script hands it to Node unread', async () => {
+    const g = await t3Gate();
+    const fam = t3Family(turnStore([t3B(1000), t3S(1001), ...t3Turns(5, 1100), t3A(1550, 'syn', '<synthetic>'), ...t3Turns(7, 1600)], [[2050, 0, 'expand']]));
+    expect(fam.boundaries[0]!.copies[0]!.rows.map((r) => r[5]), 'CONTROL: the row reaches Node').toContain('<synthetic>');
+    expect(W(g.buildWindows(fam))).toEqual([['measured', 1000, 2100, false, 10, 1]]);
+  });
+
+  it('RP6: two boundaries three turns apart: a call after the second counts once, in the second window', async () => {
+    const g = await t3Gate();
+    const ws = g.buildWindows(t3Family(turnStore([t3B(1000), t3S(1001), ...t3Turns(3, 1100), t3B(2000), t3S(2001), ...t3Turns(3, 2100)], [[2150, 0, 'expand']])));
+    expect(W(ws)).toEqual([['measured', 1000, 2000, false, 3, 0], ['measured', 2000, 2300, true, 3, 1]]);
+    expect(g.windowTotals(ws)).toEqual({ windows: 2, with_call: 1, calls: 1, turns: 6, unmeasured: 0 });
+  });
+
+  it('RP6: a copy the row cap cut before turn 11 is unmeasured even with a later next boundary; the next window is measured', async () => {
+    const g = await t3Gate();
+    const fam = t3Family(turnStore([t3B(1000), t3S(1001), ...t3Turns(12, 1100), t3B(3000), t3S(3001), t3A(3100, 'm3100')], [[1500, 0, 'expand']]), 5);
+    expect(fam.boundaries[0]!.copies[0]!, 'CONTROL: cut at 5 rows, with a timed next boundary').toMatchObject({ truncated: true, next_boundary_line: 15, next_boundary_ts_ms: 3000 });
+    expect(fam.boundaries[0]!.copies[0]!.rows).toHaveLength(5);
+    const ws = g.buildWindows(fam);
+    expect(W(ws)).toEqual([['unmeasured', 1000, null, false, 0, 0], ['measured', 3000, 3100, true, 1, 0]]);
+    expect(g.windowTotals(ws)).toEqual({ windows: 1, with_call: 0, calls: 0, turns: 1, unmeasured: 1 });
+    for (const w of ws) expect(g.WINDOW_STATES).toContain(w.state);
+  });
+
+  it('RP6 (W2-D17): a null-model row is a turn; only an angle-bracketed model drops its row', async () => {
+    const g = await t3Gate();
+    const fam = t3Family(turnStore([t3B(1000), t3S(1001), ...t3Turns(4, 1100), t3A(1500, 'm1500', null), ...t3Turns(7, 1600)], [[2150, 0, 'expand']]));
+    expect(W(g.buildWindows(fam))).toEqual([['measured', 1000, 2100, false, 10, 0]]);
+  });
+
+  it('chosen: a window whose ending row has no ts is unmeasured, whether that row is turn 11\'s first or the next main boundary', async () => {
+    const g = await t3Gate();
+    const a = t3Family(turnStore([t3B(1000), t3S(1001), ...t3Turns(10, 1100), t3A(null, 'm11'), t3A(2200, 'm12')]));
+    expect(W(g.buildWindows(a))).toEqual([['unmeasured', 1000, null, false, 0, 0]]);
+    const b = t3Family(turnStore([t3B(1000), t3S(1001), ...t3Turns(2, 1100), t3B(null), t3S(null), t3A(1300, 'm1300')]));
+    expect(b.boundaries[0]!.copies[0]!, 'CONTROL: the next boundary is seen, untimed').toMatchObject({ next_boundary_line: 5, next_boundary_ts_ms: null });
+    expect(W(g.buildWindows(b))).toEqual([['unmeasured', 1000, null, false, 0, 0]]);
+  });
+
+  it('chosen: a boundary with no summary of its own, whose summary search lands past the next main boundary, is unmeasured, never a 0-turn window running to that boundary', async () => {
+    const g = await t3Gate();
+    // B1 (line 1) has no summary; its twelve turns run 1100 to 2200; B2 (line 14) at 3000 has its summary (line 15). W1's
+    // search gives B1 the summary at line 15, past line 14, so its rows are empty. A call at 2150, after turn 11's first
+    // row (2100), lies outside any first-K-turns window, and a window that ran to B2 would count it.
+    const fam = t3Family(turnStore([t3B(1000), ...t3Turns(12, 1100), t3B(3000), t3S(3001), t3A(3100, 'm3100')], [[2150, 0, 'expand']]));
+    expect(fam.boundaries[0]!.copies[0]!, 'CONTROL: B1 reads B2\'s summary, past B2').toMatchObject({ summary_line: 15, next_boundary_line: 14, next_boundary_ts_ms: 3000, truncated: false });
+    expect(fam.boundaries[0]!.copies[0]!.rows, 'CONTROL: so its rows are empty').toHaveLength(0);
+    const ws = g.buildWindows(fam);
+    expect(W(ws)).toEqual([['unmeasured', 1000, null, false, 0, 0], ['measured', 3000, 3100, true, 1, 0]]);
+    expect(g.windowTotals(ws)).toEqual({ windows: 1, with_call: 0, calls: 0, turns: 1, unmeasured: 1 });
+  });
+
+  it('turnKey is msg_id, then request_id, then uuid; consecutive rows with one key are one turn', async () => {
+    const g = await t3Gate();
+    expect(g.turnKey([1, 1, 'm', 'r', 'u', null])).toBe('m');
+    expect(g.turnKey([1, 1, null, 'r', 'u', null])).toBe('r');
+    expect(g.turnKey([1, 1, null, null, 'u', null])).toBe('u');
+    expect(g.turnsOf([[1, 1, null, 'r', 'u1', null], [2, 2, null, 'r', 'u2', null], [3, 3, null, null, 'u3', null]]).map((t) => t.key)).toEqual(['r', 'u3']);
+  });
+
+  it('copy rules: the window copy has the greatest after_count and ties go to pickHoldingCopy (live, then the smaller file_id); the producer copy is pickHoldingCopy over all', async () => {
+    const g = await t3Gate();
+    const c = (file_id: number, source_key: string, after_count: number): T3Copy => ({ file_id, source_key, boundary_line: 1, after_count,
+      summary_line: null, next_boundary_line: null, next_boundary_ts_ms: null, last_ts_ms: 1, rows: [], models: [], truncated: false });
+    expect(g.windowCopyOf([c(1, 'seg-1', 5), c(2, '', 5), c(3, '', 3)])?.file_id, 'a tie: the live copy').toBe(2);
+    expect(g.windowCopyOf([c(4, '', 1), c(3, '', 1)])?.file_id, 'a tie of live copies: the smaller file_id').toBe(3);
+    expect(g.windowCopyOf([c(1, '', 2), c(2, 'seg-1', 9)])?.file_id, 'the longest, though retired').toBe(2);
+    expect(g.producerCopyOf([c(1, 'seg-1', 9), c(3, '', 1), c(2, '', 0)])?.file_id, 'live, then the smaller file_id, whatever the length').toBe(2);
+    expect(g.windowCopyOf([])).toBeNull();
+    expect(g.producerCopyOf([])).toBeNull();
+  });
+
+  it('no timed row, no copy, a family not found: an unmeasured window or none, never a guessed end', async () => {
+    const g = await t3Gate();
+    const untimed: T3Copy = { file_id: 1, source_key: '', boundary_line: 1, after_count: 0, summary_line: null, next_boundary_line: null,
+      next_boundary_ts_ms: null, last_ts_ms: null, rows: [], models: [], truncated: false };
+    const w = g.windowOf({ boundary_uuid: 'u-1', ts_ms: 1000, copies: [untimed] }, [[1000, 0, 'expand']]);
+    expect(w).toEqual({ boundary_uuid: 'u-1', ts_ms: 1000, producer: 'unknown', state: 'unmeasured', start_ms: 1000, end_ms: null,
+      end_inclusive: false, turns: 0, calls: 0, with_call: false });
+    expect(g.windowOf({ boundary_uuid: 'u-2', ts_ms: 1000, copies: [] }, []).state).toBe('unmeasured');
+    expect(g.buildWindows({ ccrc_id: T3_ID, generation: T3_GEN, found: false, merged_generations: [], calls: [], boundaries: [] })).toEqual([]);
+    expect(g.windowTotals([w])).toEqual({ windows: 0, with_call: 0, calls: 0, turns: 0, unmeasured: 1 });
+  });
+
+  it('splitAtFirstExit8: the calls up to and including the first exit 8, and the rest apart (spec 10.2:2722, :2728)', async () => {
+    const g = await t3Gate();
+    const lib = await import('../../ccd/history/lib.mjs');
+    const r8 = lib.EXIT.RECALL_OFF;
+    expect(r8).toBe(8);
+    expect(g.splitAtFirstExit8([[1, 0, 'grep'], [2, r8, 'expand'], [3, r8, 'grep'], [4, 0, 'grep']]))
+      .toEqual({ upTo: [[1, 0, 'grep'], [2, r8, 'expand']], after: [[3, r8, 'grep'], [4, 0, 'grep']] });
+    expect(g.splitAtFirstExit8([[1, 0, 'grep']])).toEqual({ upTo: [[1, 0, 'grep']], after: [] });
+    expect(g.splitAtFirstExit8([])).toEqual({ upTo: [], after: [] });
+  });
+
+  it('RA-10 parity: producerOfBoundary over the script\'s output equals derive\'s producerOfCopy over holdingCopyOf\'s copy, and both read one file', async () => {
+    const g = await t3Gate();
+    const planted = plantedStore();
+    const p1 = turnStore(T3_P1());
+    const p2 = turnStore(T3_P2());
+    const p3 = turnStore(T3_P3(), [], T3_P3_COPIES);
+    const cases: Array<[string, string, T3Family]> = [['planted', planted.db, t3Planted(planted, g.ROW_CAP)], ['P1', p1.db, t3Family(p1)],
+      ['P2', p2.db, t3Family(p2, 2)], ['P3', p3.db, t3Family(p3)]];
+    const seen: string[] = [];
+    for (const [name, db, fam] of cases) {
+      for (const b of fam.boundaries) {
+        const d = await t3DeriveProducer(db, b.boundary_uuid);
+        expect(g.producerOfBoundary(b.copies), `${name} ${b.boundary_uuid}`).toBe(d.producer);
+        expect(g.producerCopyOf(b.copies)?.file_id, `${name} ${b.boundary_uuid}`).toBe(d.fileId);
+        seen.push(`${name}:${d.producer}`);
+      }
+    }
+    expect(seen, 'CONTROL: every backend word is exercised').toEqual(['planted:unknown', 'planted:unknown', 'P1:anthropic', 'P1:anthropic', 'P2:other', 'P3:unknown']);
+  });
+
+  it('producer CONTROL: the witness after the next main boundary (P1) and past the row cap (P2) is read; a script whose models stop at its rows loses both', async () => {
+    const g = await t3Gate();
+    const src = readFileSync(SCRIPT, 'utf8');
+    const MAIN = "if __name__ == '__main__':";
+    expect(src.split(MAIN).length - 1, 'one entry guard to plant the mutant above').toBe(1);
+    const mutant = path.join(mkTmp('ccrc-measure-history-t3-mutant-'), 'measure-history.py');
+    writeFileSync(mutant, src.replace(MAIN, [
+      '_t3_copy_record = copy_record',
+      '',
+      '',
+      'def copy_record(*a, **kw):   # the mutant: a copy\'s models read from its capped rows, which stop at the next main boundary',
+      '    c = _t3_copy_record(*a, **kw)',
+      "    c['models'] = list(dict.fromkeys(r[5] for r in c['rows']))",
+      '    return c',
+      '',
+      '',
+      MAIN,
+    ].join('\n')));
+    const p1 = turnStore(T3_P1());
+    const p2 = turnStore(T3_P2());
+    const real1 = t3Family(p1).boundaries[0]!.copies[0]!;
+    const real2 = t3Family(p2, 2).boundaries[0]!.copies[0]!;
+    expect(real1.rows.map((r) => r[5]), 'CONTROL: no witness before the next boundary').toEqual([null, '<synthetic>']);
+    expect(real1.models).toEqual([null, '<synthetic>', 'claude-fixture-a']);
+    expect(real2.rows.map((r) => r[5]), 'CONTROL: no witness under the cap').toEqual([null, null]);
+    expect(real2).toMatchObject({ truncated: true, models: [null, 'other-fixture-b'] });
+    expect([g.producerOfBoundary([real1]), g.producerOfBoundary([real2])]).toEqual(['anthropic', 'other']);
+    const mut1 = t3Family(p1, 400, mutant).boundaries[0]!.copies[0]!;
+    const mut2 = t3Family(p2, 2, mutant).boundaries[0]!.copies[0]!;
+    expect([g.producerOfBoundary([mut1]), g.producerOfBoundary([mut2])], 'the mutant script loses both witnesses').toEqual(['unknown', 'unknown']);
+  });
+
+  it('copy rules disagree (D-5771): on planted B1 the window reads the longest copy and the producer pickHoldingCopy\'s; on P3 the window reads a longer retired copy', async () => {
+    const g = await t3Gate();
+    const f = plantedStore();
+    const fam = t3Planted(f, g.ROW_CAP);
+    const b1 = fam.boundaries.find((b) => b.boundary_uuid === f.b1)!;
+    expect(b1.copies.map((c) => c.after_count).sort((x, y) => x - y), 'CONTROL: two live copies hold B1').toEqual([1, 22]);
+    const win = g.windowCopyOf(b1.copies)!;
+    const prod = g.producerCopyOf(b1.copies)!;
+    expect([win.after_count, prod.after_count]).toEqual([22, 1]);
+    expect(prod.file_id, 'both live, so pickHoldingCopy takes the smaller file_id').toBeLessThan(win.file_id);
+    expect(W([g.windowOf(b1, fam.calls)])).toEqual([['measured', 2000, 4000, false, 10, 3]]);
+    const p3 = t3Family(turnStore(T3_P3(), [], T3_P3_COPIES)).boundaries[0]!;
+    expect(g.windowCopyOf(p3.copies)?.source_key, 'the longest copy, though retired').toBe('seg-1');
+    expect(g.producerCopyOf(p3.copies)?.source_key, 'the live copy').toBe('');
+    expect(W([g.windowOf(p3, [])])).toEqual([['measured', 1000, 1200, true, 2, 0]]);
+    expect(g.producerOfBoundary(p3.copies)).toBe('unknown');
   });
 });

@@ -176,3 +176,154 @@ export const GATE_REASONS = Object.freeze([
 export function familyKey(storeId, ccrcId, generation) {
   return canonicalJson([storeId, ccrcId, generation]);
 }
+
+// ── W2-3 Task 3: turns, windows and the two copy rules (W2-D14, W2-D15, W2-D16, W2-D17; D-5770, D-5771) ───────────
+// measure-history.py emits raw rows and spells no K, no turn rule and no model test (W2-D13, D-5772); every window
+// decision is this section's. A window is the first K assistant TURNS after a main boundary (ruled Q14, W2-D14):
+//   a turn     the window copy's assistant rows in file order, with an angle-bracketed model's row dropped, and
+//              consecutive rows with one turnKey (msg_id ?? request_id ?? uuid) grouped; a null-model row stays a
+//              turn (W2-D17);
+//   it opens   at the boundary's ts_ms, inclusive;
+//   it ends    EXCLUSIVE at the earlier of turn K+1's first row's ts_ms and the next main boundary's ts_ms in that
+//              copy; with neither, INCLUSIVE at the copy's last timed row;
+//   unmeasured when the copy has no timed row; when the row cap cut the copy and turn K+1's first row was not seen,
+//              whether or not a next boundary exists (the true turn K+1 may lie between the cap and that boundary);
+//              and, chosen by W2-3's plan, when a row that would end the window has a null ts_ms.
+// The two copy rules (W2-D15, D-5771): the window reads W1's longest copy (the greatest after_count, ties by lib's
+// rule); the producer reads lib.pickHoldingCopy's copy, the one derive.mjs:316 reads, and folds that copy's `models`
+// (every assistant row after the summary to the end of the copy, uncapped) through lib.producerOf (W2-D16).
+// W2-6 imports turnsOf for its re-discovery unit.
+
+/** @typedef {[number, number|null, string|null, string|null, string, string|null]} RawRow
+ *  One assistant entry as measure-history.py emits it: [line, ts_ms, msg_id, request_id, uuid, model]. */
+/** @typedef {[number, number, string]} CallRow  One recall_calls row with arm NULL: [ts_ms, rc, verb]. */
+/** @typedef {{file_id: number, source_key: string, boundary_line: number, after_count: number,
+ *    summary_line: number|null, next_boundary_line: number|null, next_boundary_ts_ms: number|null,
+ *    last_ts_ms: number|null, rows: RawRow[], models: Array<string|null>, truncated: boolean}} Copy
+ *  One copy holding a boundary (W2-D13). */
+/** @typedef {{boundary_uuid: string, ts_ms: number, copies: Copy[]}} BoundaryReport */
+/** @typedef {{ccrc_id: string, generation: string, found: boolean, merged_generations: string[],
+ *    calls: CallRow[], boundaries: BoundaryReport[]}} FamilyReport */
+/** @typedef {{key: string, first_line: number, first_ts_ms: number|null, rows: RawRow[]}} Turn */
+/** @typedef {{boundary_uuid: string, ts_ms: number, producer: 'anthropic'|'other'|'unknown',
+ *    state: 'measured'|'unmeasured', start_ms: number, end_ms: number|null, end_inclusive: boolean,
+ *    turns: number, calls: number, with_call: boolean}} Window */
+
+/** TEMPORARY (W2-D17): Claude Code's own notices carry an angle-bracketed model name and are no backend's turn.
+ *  W2-1 extracts lib's isSyntheticModel, has backendOf use it, and rewires this file to import it in place of this
+ *  module-local test. A null or empty model is not synthetic: that row stays a turn.
+ *  @param {string|null} model @returns {boolean} */
+function isSyntheticLocal(model) {
+  return typeof model === 'string' && model.startsWith('<') && model.endsWith('>');
+}
+
+/** One API response's key (W2-D14): msg_id, else request_id, else the entry's own uuid.
+ *  @param {RawRow} row @returns {string} */
+export function turnKey(row) {
+  return row[2] ?? row[3] ?? row[4];
+}
+
+/** A copy's assistant turns in file order (W2-D14): synthetic rows dropped, consecutive rows with one key grouped.
+ *  @param {RawRow[]} rows @returns {Turn[]} */
+export function turnsOf(rows) {
+  /** @type {Turn[]} */
+  const turns = [];
+  for (const row of rows) {
+    if (isSyntheticLocal(row[5])) continue;
+    const key = turnKey(row);
+    const last = turns.length === 0 ? null : turns[turns.length - 1];
+    if (last !== null && last.key === key) last.rows.push(row);
+    else turns.push({ key, first_line: row[0], first_ts_ms: row[1], rows: [row] });
+  }
+  return turns;
+}
+
+/** lib.pickHoldingCopy among copies that each hold the boundary: a live one (source_key '') first, then the
+ *  smaller file_id. @param {Copy[]} copies @returns {Copy|null} */
+function holdingCopyAmong(copies) {
+  const id = pickHoldingCopy(copies.map((c) => ({ fileId: c.file_id, live: c.source_key === '', holds: true })));
+  return id === null ? null : copies.find((c) => c.file_id === id) ?? null;
+}
+
+/** The WINDOW's copy (W2-D15): W1's longest-copy rule, the copy with the most membership rows after the boundary,
+ *  so a swap's continued copy is read rather than the one left behind; ties go to lib's rule. Null when no copy
+ *  holds the boundary. @param {Copy[]} copies @returns {Copy|null} */
+export function windowCopyOf(copies) {
+  if (copies.length === 0) return null;
+  const most = Math.max(...copies.map((c) => c.after_count));
+  return holdingCopyAmong(copies.filter((c) => c.after_count === most));
+}
+
+/** The PRODUCER's copy (W2-D15, D-5771): lib.pickHoldingCopy over every copy, the copy derive.mjs:316 reads, so
+ *  a window's stratum equals its leaf's producer. @param {Copy[]} copies @returns {Copy|null} */
+export function producerCopyOf(copies) {
+  return holdingCopyAmong(copies);
+}
+
+/** A boundary's producer (W2-D16): lib.producerOf over the producer copy's models, folded here, never in Python.
+ *  @param {Copy[]} copies @returns {'anthropic'|'other'|'unknown'} */
+export function producerOfBoundary(copies) {
+  const c = producerCopyOf(copies);
+  return c === null ? 'unknown' : producerOf(c.models);
+}
+
+/** One boundary's window over its window copy (W2-D14), with the calls whose ts_ms lies inside it. An unmeasured
+ *  window carries end_ms null and no turns or calls, so no total can count it by accident.
+ *  @param {BoundaryReport} boundary @param {CallRow[]} calls @param {number} [k] @returns {Window} */
+export function windowOf(boundary, calls, k = K) {
+  const start = boundary.ts_ms;
+  const head = { boundary_uuid: boundary.boundary_uuid, ts_ms: start, producer: producerOfBoundary(boundary.copies) };
+  /** @type {Window} */
+  const unmeasured = { ...head, state: 'unmeasured', start_ms: start, end_ms: null, end_inclusive: false, turns: 0, calls: 0, with_call: false };
+  const copy = windowCopyOf(boundary.copies);
+  if (copy === null || copy.last_ts_ms === null) return unmeasured;
+  // P4: W1's summary search is not bounded by the next main boundary, so a boundary with no summary of its own reads
+  // the next one's; its rows are then empty and its first K turns unseen. Unmeasured, never a 0-turn window to that boundary.
+  if (copy.summary_line !== null && copy.next_boundary_line !== null && copy.summary_line > copy.next_boundary_line) return unmeasured;
+  const turns = turnsOf(copy.rows);
+  const sawNext = turns.length > k;
+  if (!sawNext && copy.truncated) return unmeasured;
+  /** @type {Array<number|null>} */
+  const ends = [];
+  if (sawNext) ends.push(turns[k].first_ts_ms);
+  if (copy.next_boundary_line !== null) ends.push(copy.next_boundary_ts_ms);
+  if (ends.some((t) => t === null)) return unmeasured;
+  const inclusive = ends.length === 0;
+  const end = inclusive ? copy.last_ts_ms : Math.min(.../** @type {number[]} */ (ends));
+  const inside = (/** @type {number} */ ts) => ts >= start && (inclusive ? ts <= end : ts < end);
+  const n = calls.filter((c) => inside(c[0])).length;
+  return { ...head, state: 'measured', start_ms: start, end_ms: end, end_inclusive: inclusive, turns: Math.min(turns.length, k), calls: n, with_call: n > 0 };
+}
+
+/** Every window of one family's report, in its boundaries' order; none for a family the store does not hold.
+ *  @param {FamilyReport} family @param {number} [k] @returns {Window[]} */
+export function buildWindows(family, k = K) {
+  if (!family.found) return [];
+  return family.boundaries.map((b) => windowOf(b, family.calls, k));
+}
+
+/** The totals O52 pins: measured windows, those with a call, their calls and turns; unmeasured windows counted
+ *  apart and never in the others. @param {Window[]} windows
+ *  @returns {{windows: number, with_call: number, calls: number, turns: number, unmeasured: number}} */
+export function windowTotals(windows) {
+  const t = { windows: 0, with_call: 0, calls: 0, turns: 0, unmeasured: 0 };
+  for (const w of windows) {
+    if (w.state !== 'measured') {
+      t.unmeasured += 1;
+      continue;
+    }
+    t.windows += 1;
+    t.with_call += w.with_call ? 1 : 0;
+    t.calls += w.calls;
+    t.turns += w.turns;
+  }
+  return t;
+}
+
+/** A family's ts-ordered calls split at its first exit 8 (spec §10.2:2722, :2728): `upTo` holds every call up to and
+ *  including the first rc === EXIT.RECALL_OFF, `after` the rest, reported apart. No exit 8: every call is `upTo`.
+ *  @param {CallRow[]} calls @returns {{upTo: CallRow[], after: CallRow[]}} */
+export function splitAtFirstExit8(calls) {
+  const i = calls.findIndex((c) => c[1] === EXIT.RECALL_OFF);
+  return i < 0 ? { upTo: [...calls], after: [] } : { upTo: calls.slice(0, i + 1), after: calls.slice(i + 1) };
+}
