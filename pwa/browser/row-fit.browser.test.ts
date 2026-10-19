@@ -137,9 +137,11 @@ interface RowFit {
   readonly suggested: number;
   /** Per row: how far its right edge, and its keyboard ring's, run past the sheet body's right edge (<= 0 fits);
    *  how far the furthest item of its identity group (the name, the pill, the pool tag) runs past the group, into
-   *  the gauges (<= 0 fits); and whether the name chip draws all of its text. */
+   *  the gauges (<= 0 fits); whether the name chip draws all of its text; and whether the pool tag is cut although
+   *  its text is no wider than the group (it should have dropped under the name instead). */
   readonly over: readonly {
-    readonly label: string; readonly row: number; readonly ring: number; readonly ident: number; readonly nameWhole: boolean;
+    readonly label: string; readonly row: number; readonly ring: number; readonly ident: number;
+    readonly nameWhole: boolean; readonly poolCutNeedlessly: boolean;
   }[];
 }
 
@@ -158,6 +160,7 @@ function measureRows(page: Page): Promise<RowFit> {
       const right = row.getBoundingClientRect().right;
       const group = row.querySelector<HTMLElement>('.acct-ident');
       const chip = row.querySelector<HTMLElement>('.chip');
+      const pool = row.querySelector<HTMLElement>('.acct-pool');
       const items = group === null ? [] : [...group.children].map((k) => k.getBoundingClientRect().right);
       return {
         label: chip?.textContent ?? '',
@@ -165,6 +168,8 @@ function measureRows(page: Page): Promise<RowFit> {
         ring: right + reach - edge,
         ident: group === null ? NaN : Math.max(...items) - group.getBoundingClientRect().right,
         nameWhole: chip !== null && chip.scrollWidth <= chip.clientWidth + 0.5,
+        poolCutNeedlessly: pool !== null && group !== null
+          && pool.scrollWidth > pool.clientWidth + 0.5 && pool.scrollWidth <= group.clientWidth,
       };
     });
     (document.activeElement as HTMLElement | null)?.blur();
@@ -184,6 +189,7 @@ function expectFits(fit: RowFit, where: string): void {
     expect.soft(r.ring, `${where}: ${r.label}'s keyboard ring is cut by the sheet body (or was not drawn)`).toBeLessThanOrEqual(0.5);
     expect.soft(r.ident, `${where}: ${r.label}'s name or tags run out of their group into the gauges`).toBeLessThanOrEqual(0.5);
     expect.soft(r.nameWhole, `${where}: ${r.label}'s name is cut`).toBe(true);
+    expect.soft(r.poolCutNeedlessly, `${where}: ${r.label}'s pool tag is cut beside the name instead of dropping under it`).toBe(false);
   }
 }
 
