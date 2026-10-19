@@ -2131,6 +2131,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 08:55: unchanged, boxes still differ as recorded; v0.0.331 (#696) followed, unapplied. STATUS: newest
         v0.0.331, stable v0.0.328, intent dev/auto=off, backups fleet 159M/server 2211M, disk free fleet 209G/work
         volume 96G/server 31G.
+      - **2026-10-19 09:55 UTC: both boxes moved to v0.0.331 (#696) by the operator's console tap**, fleet first
+        (09:01:16 to 09:02:34, from v0.0.326), then the server (09:02:56 to 09:03:44, from v0.0.325); both reports
+        `done`, `from: pwa`, sweep `down: 3` on the fleet and `ok` on the server; the server gate answered
+        v0.0.331. Fleet doctor 38 passed, 7 warned, 0 failed; server 28 passed, 1 warned (`approval-key-colocated`).
+        So the boxes agree again, and both carry the blackout fix (v0.0.328 and later); `ccrc.service` restarted at
+        09:03:20. Server backups 2330M, the new snapshot 295M. v0.0.332 (#496) followed, unapplied.
+        STATUS: fleet and server v0.0.331, newest v0.0.332, stable v0.0.328, intent dev/auto=off, backups fleet
+        159M/server 2330M, disk free fleet 210G/work volume 94G/server 31G, no anomalies. The blackout on the fixed
+        build is being measured.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
