@@ -38,6 +38,7 @@ export const COLLECT_SECTION_TEXT = {
   liveNote: 'Removes a leftover temporary directory only after two idle audits have found it unused.',
   when: 'Turn it Live once its reports look right. Turn it Off if a removal surprised you.',
   reconfirm: 'Confirm Live again',
+  reconfirmWhen: "When the collector's node changed and you still want Live.",
   confirmTitle: 'Set the temp root collector to Live?',
   confirmLabel: 'Set Live',
   unanswered: "The server's answer did not arrive, or was not one this section knows, so the choice may or may not have been saved; the section re-read it.",

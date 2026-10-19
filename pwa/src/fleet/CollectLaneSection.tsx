@@ -216,6 +216,7 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
             {COLLECT_SECTION_TEXT.reconfirm}
           </Button>
           <ResultLine line={reconfirmLine.line} />
+          <p className="settings-note">{COLLECT_SECTION_TEXT.reconfirmWhen}</p>
         </>
       )}
       <PauseAllCleanup store={store} childReclaimPause={childReclaimPause} />

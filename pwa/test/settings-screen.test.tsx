@@ -3349,4 +3349,120 @@ describe('SettingsScreen — the words, the notes and the result lines (settings
     expect(select.style.maxWidth).toBe('320px');
     expect(select.getAttribute('style') ?? '', 'no colour rides on the cap').not.toMatch(/color/);
   });
+
+  it("a Quiet time write's refusal sits directly under the select, never under the level", async () => {
+    await swMount(swView());
+    vi.spyOn(api, 'setStallWatch').mockRejectedValue(
+      new ApiError(400, { ok: false, error: 'bad-request', detail: 'quietMs must be a 30-minute step' }));
+    const select = within(swSection()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet });
+    fireEvent.change(select, { target: { value: String(3 * SW_H) } });
+    await lineUnder(() => within(swSection()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }),
+      'Nothing was changed: quietMs must be a 30-minute step', 'refusal');
+    const afterLevel = within(swSection()).getByRole('group', { name: STALL_SECTION_TEXT.level }).nextElementSibling;
+    expect(afterLevel?.classList.contains('settings-result') ?? false, 'no line under the level').toBe(false);
+  });
+
+  it('a cancelled confirm or a refused write leaves the full sentence on the checked level, never the tapped one', async () => {
+    await swMount(swView({ chosen: swChosen({ level: 'check' }) }));
+    const full = (): Array<string | null> =>
+      Array.from(swSection().querySelectorAll<HTMLElement>('[data-stall-full]')).map((el) => el.textContent);
+    vi.spyOn(api, 'setStallWatch')
+      .mockRejectedValueOnce(swConfirm(swEffect({ turnsOn: ['wave2'], before: swStages(), after: swStages({ wave2: true }) }), 'key-all'))
+      .mockRejectedValueOnce(new ApiError(400, { ok: false, error: 'bad-request', detail: 'refused' }));
+    // A tap focuses the option, then picks it; the 409 opens the confirm, and Cancel keeps Check.
+    act(() => { swRadio(STALL_LEVEL_TEXT.all.label).focus(); });
+    fireEvent.click(swRadio(STALL_LEVEL_TEXT.all.label));
+    const sheet = await screen.findByRole('dialog');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(swRadio(STALL_LEVEL_TEXT.check.label)).toBeChecked();
+    expect(full(), 'the sentence is the checked level\'s after Cancel').toEqual([STALL_LEVEL_TEXT.check.does]);
+    // The keyboard's path: the arrow focuses and picks Alert; the refusal keeps Check, and so does the sentence.
+    act(() => { swRadio(STALL_LEVEL_TEXT.alert.label).focus(); });
+    fireEvent.click(swRadio(STALL_LEVEL_TEXT.alert.label));
+    await within(swSection()).findByText('Nothing was changed: refused');
+    await waitFor(() => expect(swRadio(STALL_LEVEL_TEXT.check.label)).not.toBeDisabled());
+    expect(swRadio(STALL_LEVEL_TEXT.check.label)).toBeChecked();
+    expect(full(), 'the sentence is the checked level\'s after a refusal').toEqual([STALL_LEVEL_TEXT.check.does]);
+  });
+
+  it('a move answer appears under exactly one opener: the release that opened it, no other row, no node', async () => {
+    vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [T8_NODE_A, T8_NODE_B], skipped: [] });
+    const region = await mountUpdates(updatesView({ releases: [t8Release('v0.0.11'), t8Release('v0.0.10')] }));
+    const row = region.querySelector<HTMLElement>('li[data-tag="v0.0.10"]')!;
+    expect(within(region.querySelector<HTMLElement>('li[data-tag="v0.0.11"]')!).getByRole('button', { name: 'Install' }))
+      .toBeInTheDocument();
+    fireEvent.click(within(row).getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update v0.0.10' }));
+    await lineUnder(() => region.querySelector('li[data-tag="v0.0.10"] .settings-release-actions')!, MOVE_REQUESTED_TEXT, 'answer');
+    expect(region.querySelector('li[data-tag="v0.0.11"] .settings-result'), 'no line under the other release').toBeNull();
+    expect(region.querySelectorAll('.settings-result'), 'one line on the whole section').toHaveLength(1);
+    const nodes = within(region).getByRole('list', { name: 'Nodes' });
+    expect(nodes.querySelector('.settings-result'), 'no node row carries the release\'s line').toBeNull();
+  });
+
+  it("a node's Roll back answers under its own action only, never twice on a node that offers Update too", async () => {
+    vi.spyOn(api, 'rollbackUpdate').mockResolvedValue({ ok: true, requested: [T9_NODE_A], skipped: [] });
+    const region = await mountUpdates(updatesView({
+      releases: [t9Release('v0.0.9'), t9Release('v0.0.8'), t9Release('v0.0.10')],
+      nodes: [t9Node({ desiredTag: 'v0.0.10', previousVersion: 'v0.0.8' })],
+    }));
+    const nodeRow = (): HTMLElement => region.querySelector<HTMLElement>(`li[data-node-id="${T9_NODE_A}"]`)!;
+    expect(within(nodeRow()).getByRole('button', { name: 'Update' })).toBeEnabled();
+    fireEvent.click(within(nodeRow()).getByRole('button', { name: 'Roll back' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Roll back fleet' }));
+    await lineUnder(() => nodeRow().querySelector('.settings-node-actions')!, MOVE_REQUESTED_TEXT, 'answer');
+    expect(nodeRow().querySelectorAll('.settings-result'), 'one line, the Roll back\'s').toHaveLength(1);
+    expect(region.querySelectorAll('.settings-result')).toHaveLength(1);
+  });
+
+  it('a refused move whose sheet was dismissed in flight is an error toast with the move sentence, and no line', async () => {
+    let refuse!: (e: unknown) => void;
+    const refusal = new ApiError(503, { ok: false, error: 'journal-unwritable' });
+    vi.spyOn(api, 'applyUpdate').mockReturnValue(new Promise((_, rej) => { refuse = rej; }));
+    const region = await mountUpdates();
+    const row = region.querySelector<HTMLElement>('li[data-tag="v0.0.10"]')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update v0.0.10' }));
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await act(async () => { refuse(refusal); });
+    const toastEl = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('.toast');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(toastEl).toHaveTextContent(updateErrorText(refusal));
+    expect(toastEl, 'an error toast').toHaveClass('toast--error');
+    expect(region.querySelector('.settings-result'), 'the sheet that asked is gone, so no line').toBeNull();
+  });
+
+  it('a refused intent write followed by a clean one leaves no line', async () => {
+    const set = vi.spyOn(api, 'setUpdateIntent')
+      .mockRejectedValueOnce(new ApiError(503, { ok: false, error: 'journal-unwritable' }))
+      .mockResolvedValueOnce({ ok: true, intent: t7Intent({ channel: 'dev' }), epoch: 2 });
+    const region = await mountUpdates();
+    const channel = (): Element => within(region).getByRole('group', { name: 'Channel' });
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
+    await lineUnder(channel, 'The server cannot write its intent journal — nothing was changed.', 'refusal');
+    await waitFor(() => expect(channel()).not.toBeDisabled());
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(channel()).not.toBeDisabled());
+    expect(channel().nextElementSibling?.classList.contains('settings-result') ?? false, 'the clean write cleared the line').toBe(false);
+    expect(region.querySelector('.settings-result')).toBeNull();
+  });
+
+  it("the gate note carries its when-line while it shows, and an option's note takes no pointer", async () => {
+    expect(UPDATES_TEXT.autoGateWhen).toBe('Update the named nodes first.');
+    const region = await mountUpdates(updatesView({ nodes: [t7Node()] }));
+    const gate = await within(region).findByText(/^Auto-install needs every node to run a ccrc with the update gate\. Not yet: /);
+    expect(gate.nextElementSibling).toHaveTextContent(UPDATES_TEXT.autoGateWhen);
+    expect(gate.nextElementSibling).toHaveClass('settings-note');
+    cleanup();
+    const quiet = await mountUpdates(updatesView({ nodes: [t7Node({ caps: T7_GATED })] }));
+    expect(within(quiet).queryByText(UPDATES_TEXT.autoGateWhen), 'no gate note, no when-line').toBeNull();
+    // The note is pulled up over its option's tap row; it must let a tap through to the label (44 px).
+    expect(declValue(ruleIn(fleetCss, '.settings-option-note'), 'pointer-events')).toBe('none');
+  });
 });

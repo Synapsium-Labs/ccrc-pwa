@@ -17,7 +17,7 @@ import {
   collectUnmeasurableLines,
 } from '../src/fleet/collectLaneWords';
 import { COORD_CONFIRM_MS } from '../src/fleet/coordWords';
-import { ApiError, COORD_UNSUPPORTED_TEXT, api } from '../src/lib/api';
+import { ApiError, COORD_UNSUPPORTED_TEXT, api, apiErrorText } from '../src/lib/api';
 import { ToastHost } from '@ccrc/ui';
 import { UNCONFIRMED_TEXT } from '../src/screens/settingsText';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -429,6 +429,29 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     expect(await screen.findByText(UNCONFIRMED_TEXT, { selector: '.toast' })).toBeInTheDocument();
   });
 
+  it("Confirm Live again's answer sits directly under that button, never under the choice; its when-line follows it", async () => {
+    await mount(OTHER_NODE);
+    vi.spyOn(api, 'setCollectLane').mockRejectedValue(
+      new ApiError(403, { ok: false, error: 'sign-in-unarmed', detail: 'Live needs sign-in armed on this server' }));
+    const button = within(section()).getByRole('button', { name: COLLECT_SECTION_TEXT.reconfirm });
+    fireEvent.click(button);
+    const text = `${COLLECT_REFUSAL_TEXT['sign-in-unarmed']} (Live needs sign-in armed on this server)`;
+    const line = await waitFor(() => {
+      const next = within(section()).getByRole('button', { name: COLLECT_SECTION_TEXT.reconfirm }).nextElementSibling as HTMLElement | null;
+      expect(next, 'the line sits directly under Confirm Live again').toHaveTextContent(text);
+      return next as HTMLElement;
+    });
+    expect(line).toHaveAttribute('role', 'status');
+    expect(line).toHaveClass('settings-result', 'settings-catalogue--amber');
+    const afterChoice = within(section()).getByRole('group', { name: COLLECT_SECTION_TEXT.legend }).nextElementSibling;
+    expect(afterChoice?.classList.contains('settings-result') ?? false, 'no line under the choice').toBe(false);
+    expect(within(section()).getAllByText(text)).toHaveLength(1);
+    expect(document.querySelector('.toast'), 'not a toast').toBeNull();
+    expect(COLLECT_SECTION_TEXT.reconfirmWhen).toBe("When the collector's node changed and you still want Live.");
+    expect(line.nextElementSibling, 'the when-line follows the button and its line').toHaveTextContent(COLLECT_SECTION_TEXT.reconfirmWhen);
+    expect(line.nextElementSibling).toHaveClass('settings-note');
+  });
+
   it('the section opens with its purpose, and each choice carries its note; the when-line follows the choice', async () => {
     await mount(OFF_LATCHED);
     const s = section();
@@ -587,6 +610,23 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
       expect(await within(section()).findByText(COORD_UNSUPPORTED_TEXT)).toBeInTheDocument();
       expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeEnabled();
       expect(document.querySelector('.toast')).toBeNull();
+    });
+
+    it("any other refusal says apiErrorText's sentence directly under the button, amber, as a status, never a toast", async () => {
+      const refusal = new ApiError(503, { ok: false, error: 'journal-unwritable', detail: 'the switch could not be written' });
+      const pause = vi.fn<(state: 'on' | 'off') => Promise<void>>().mockRejectedValue(refusal);
+      const { store } = await mount(LIVE_HERE, pause);
+      seen(store, coord());
+      fireEvent.click(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));
+      const line = await waitFor(() => {
+        const next = within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }).nextElementSibling as HTMLElement | null;
+        expect(next, 'the line sits directly under Pause all cleanup').toHaveTextContent(apiErrorText(refusal));
+        return next as HTMLElement;
+      });
+      expect(line).toHaveAttribute('role', 'status');
+      expect(line).toHaveAttribute('aria-live', 'polite');
+      expect(line).toHaveClass('settings-result', 'settings-catalogue--amber');
+      expect(document.querySelector('.toast'), 'not a toast: the button is still on screen').toBeNull();
     });
 
     it('offers Pause only: an unreadable switch still offers Pause, a paused one offers no Resume, and the file never asks off', async () => {

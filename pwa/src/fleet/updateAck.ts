@@ -123,7 +123,7 @@ export type AckOutcome = 'acked' | 'unreadable' | 'refused' | 'unanswered';
  *  flag, re-poll) always runs; it answers the outcome, so a caller can hold its button down until a poll shows the
  *  row changed (ackNode acks ANY settled row, idle included, and clears its request). A rejection ends `refused` only
  *  for a 4xx `ApiError`; every other rejection ends `unanswered`. */
-export function sendAck(nodeId: string, say: (text: string, tone?: ResultTone) => void = () => {}): Promise<AckOutcome> {
+export function sendAck(nodeId: string, say: (text: string, tone?: ResultTone) => void): Promise<AckOutcome> {
   return api.ackUpdateNode(nodeId).then(
     (answer): AckOutcome => {
       if (answer === 'unreadable') { say(ACK_UNREADABLE_TEXT); return 'unreadable'; }

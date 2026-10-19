@@ -47,6 +47,8 @@ export const UPDATES_TEXT = {
     + 'turn (the fleet box, then the server), and a node whose new build fails its health check returns to the build '
     + 'it had. It never reinstalls a release a node was rolled back from: it waits for a newer one.',
   autoWhen: 'Once. Leave it Off if you want to choose when each release lands.',
+  /** The gate note's when-line (spec §5.1), shown only while the gate note is. */
+  autoGateWhen: 'Update the named nodes first.',
 } as const;
 
 /** How often the server asks GitHub, in minutes. The server's `CATALOGUE_POLL_INTERVAL_MS` is not importable here

@@ -737,6 +737,7 @@ function UpdatesBody({ view, stale, now, reload }: {
       />
       <ResultLine line={autoLine.line} />
       {gateNote !== null && <p id={gateNoteId} className="settings-note">{gateNote}</p>}
+      {gateNote !== null && <p className="settings-note">{UPDATES_TEXT.autoGateWhen}</p>}
       <p className="settings-note">{UPDATES_TEXT.autoPurpose}</p>
       <p className="settings-note">{UPDATES_TEXT.autoWhen}</p>
       <Button variant="ghost" className="settings-check" disabled={busy} onClick={checkNow}>

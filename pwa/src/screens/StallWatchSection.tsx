@@ -322,6 +322,10 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
   // is STALL_CONFIRM_TEXT.unanswered (D-4043). Neither says "Saved" or "Nothing was changed"; both re-read.
   const write = (request: StallWatchRequest, confirm?: string): void => {
     setBusy(true);
+    // A write disables the fieldset, and a browser then drops the focus without a blur, so the focused option would
+    // keep the full sentence after a cancelled confirm or a refusal. The write ends the keyboard's preview: the
+    // sentence is the checked level's again.
+    setFocused(null);
     const line = request.level !== undefined ? levelLine : quietLine;
     line.clear();
     void api.setStallWatch(confirm === undefined ? request : { ...request, confirm })

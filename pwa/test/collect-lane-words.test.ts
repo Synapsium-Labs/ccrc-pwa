@@ -64,6 +64,7 @@ describe('the words (path-identity spec §5.7)', () => {
     expect(COLLECT_SECTION_TEXT.legend).toBe('Collector');
     expect(COLLECT_SECTION_TEXT.liveNote).toBe('Removes a leftover temporary directory only after two idle audits have found it unused.');
     expect(COLLECT_SECTION_TEXT.when).toBe('Turn it Live once its reports look right. Turn it Off if a removal surprised you.');
+    expect(COLLECT_SECTION_TEXT.reconfirmWhen).toBe("When the collector's node changed and you still want Live.");
     expect(COLLECT_SECTION_TEXT.purpose).toMatch(/^Each session gets its own temporary directory\. /);
     expect(COLLECT_SECTION_TEXT.purpose).toMatch(/only after two audits, at least an idle period apart, have found it unused\.$/);
   });
