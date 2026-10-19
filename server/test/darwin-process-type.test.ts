@@ -31,7 +31,8 @@ const box = (cls: string | null): string => {
 
 /** Source `file` under `home` (contained: no real gh, systemd, tmux or network) and run `expr`. */
 const run = (file: string, home: string, expr: string) => {
-  const r = spawnSync('bash', ['-c', `f=$1; set --; source "$f" >/dev/null 2>&1; ${expr}`, 'x', file], {
+  // A constant script: the file and the expression arrive as arguments, never spliced into the command.
+  const r = spawnSync('bash', ['-c', 'f=$1; e=$2; set --; source "$f" >/dev/null 2>&1; eval "$e"', 'x', file, expr], {
     encoding: 'utf8', env: ghContainedEnv(home, { PATH: process.env.PATH ?? '', HOME: home }, { systemd: true, tmux: true, net: true }),
   });
   return { code: r.status, stdout: r.stdout.trim(), stderr: r.stderr };
