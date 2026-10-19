@@ -4,11 +4,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md` (rev 2, approved by the operator 2026-10-19). §5.1 (the rules every wave follows) and §5.2 (W0) bind every task; the clusters each task pins are named in its header. Read them before Step 0.
 
-**Status:** rev 0 (2026-10-19). **The spec was approved by the operator 2026-10-19**, in their words: "answers locked" (the twelve decisions of its §6, each at its recommended option; O1 (d), the sliced W0 then W1a, clicked explicitly). This plan was written in the same docs PR as the spec's rev 2 and the W1a plan (`2026-10-19-consolidation-w1a-switches-notify.md`). Tasks dispatch as their gates open.
+**Status:** rev 1 (2026-10-19): rev 0 with two reviews applied (§Review log). **The spec was approved by the operator 2026-10-19**, in their words: "answers locked" (the twelve decisions of its §6, each at its recommended option; O1 (d), the sliced W0 then W1a, clicked explicitly). This plan was written in the same docs PR as the spec's rev 2 and the W1a plan (`2026-10-19-consolidation-w1a-switches-notify.md`). Tasks dispatch as their gates open.
 
-**Inputs.** The spec's §5.1 rules 1, 1b, 3 and 6, §5.2, K6 and K12 (the facts W1a moves), §2.1's rule (f) (one writer per fact); the Linear tickets ARCH-00 (CCRCP-97), ARCH-01 (CCRCP-98), ARCH-06 (CCRCP-126); the existing writer and holder scans in `server/test/single-definition.test.ts` (for example "deploy.sh is the only writer…" ≈:1457, "child-reclamation wave 4 — one 'reclaim-paused' literal" ≈:2337); the CI selector's rule 2 (`.github/ci/select-tests.mjs`, `RULE_NAMES` 2 `ALWAYS`: a test that reads `.git` is always selected).
+**Inputs.** The spec's §5.1 rules 1, 1b, 3 and 6, §5.2, K6 and K12 (the facts W1a moves), §2.1's rule (f) (one writer per fact); the Linear tickets ARCH-00 (#525), ARCH-01 (#526), ARCH-06 (#554); the existing writer and holder scans in `server/test/single-definition.test.ts` (for example "deploy.sh is the only writer…" ≈:1457, "child-reclamation wave 4 — one 'reclaim-paused' literal" ≈:2337); the CI selector's rule 2 (`.github/ci/select-tests.mjs`, `RULE_NAMES` 2 `ALWAYS`: a test that reads `.git` is always selected).
 
-**Base:** `origin/main` `f64c27b65`. Code is cited by file and by function, constant or `describe` title, with `≈` line hints measured at that sha. Step 0 of each task re-grounds them by content on the tree it starts from.
+**Base:** `origin/main` `f64c27b65`. Code is cited by file and by function, constant or `describe` title, with `≈` line hints measured at that sha; hints added in rev 1 are measured at `4bc6c756d` (after #397 merged as `6ae03d2de`) and marked `(4bc6c756d)`. Step 0 of each task re-grounds them by content on the tree it starts from.
 
 **Deploy class.** Tests and docs only. **Zero production bytes change**: no file under `server/src`, `agent/src`, `shared/`, `pwa/`, `ui/`, `ccd/` or `deploy/` is edited, and the ccd launcher's SHA-256 is unchanged. No deploy is needed for any task. The one non-test edit is C0f's exact `devDependency` pin in `server/package.json` and its lockfile, which ships nothing.
 
@@ -21,9 +21,9 @@
 | `main` | nothing | no size check on any god file; no census behind the spec's counts; no pin on how a feed row is written or how a pause is read |
 | C0a | a growth table in each PR's test output | `growth-check.test.ts`: net code-line growth of nine listed files against the merge-base, reporting only |
 | C0b | nothing | `consolidationCensus.ts` with the named queries W1a's exits use; the writers pin for the two switches already at one writer |
-| C0c | nothing | `feed-writers-pin.test.ts`, part 1: `pushOne`'s four flag combinations and the five writers outside `coord/` |
-| C0d | nothing | the same pin, part 2: the ten writers in `coord/` and `stopDoneSweep.ts` |
-| C0e | nothing | `reclaim-pause-pin.test.ts`: every reader's verdict, word for word, and "a pause raised between the pass and the act holds" |
+| C0c | nothing | `feed-writers-pin.test.ts`, part 1: `pushOne`'s three reachable flag combinations, the idle nudge's landing gate, and the four hand-written pairs outside `coord/` |
+| C0d | nothing | the same pin, part 2: the ten writers in `coord/` and `stopDoneSweep.ts`, and `endDeadCoordinator`'s multi-row failure |
+| C0e | nothing | `reclaim-pause-pin.test.ts`: every reader's verdict, word for word, over four listings, and "a pause raised during the act holds" at each executor's late read |
 | C0f | nothing | `server/test/scan/parse.ts`, the one TS parser wrapper (after OA-C1) |
 | C0g | nothing | `server/test/scan/symbols.ts` and the literal source pins on W1a's files moved onto it |
 
@@ -33,27 +33,26 @@
 
 Measured on 2026-10-19 at `f64c27b65` with `gh pr list -R Synapsium-Labs/ccrc-pwa --state open --json number,title,files` (26 open PRs; the dependency bumps edit only lockfiles, `package.json` files and `.github/workflows/*`).
 
-- **#397** (path identity W1a) and **#737** (history 5h-1) both hold `server/test/single-definition.test.ts`: #397 one hunk at ≈:5917, #737 one at ≈:5237. C0b appends one `describe` after the file's last line (≈:7250), which is line-disjoint from both. No other task here edits a file an open PR holds.
-- **#397** also changes the code C0c, C0d and C0e drive (`watch.ts`, `coord/routes.ts`, `coord/childReclaim.ts`, `coord/expireArchived.ts`, `server.ts`, `coord/reclaim.ts`). Their pin rows use ids valid under #397's id gate (Step 0 reads its id grammar from the PR), so its merge does not red them. If it does, #397 wins: the pin's row is re-grounded in a follow-up commit, and #397 never rebases (spec §5.1 rule 6).
+- **#397** (path identity W1a) **merged on 2026-10-19 as `6ae03d2de`**, after this plan's rev 0 was measured. Every pin is written on the tree after it, with ids valid under its id gate; it gates nothing here any more.
+- **#737** (history 5h-1) holds `server/test/single-definition.test.ts` (one hunk, ≈:5237 at `f64c27b65`). C0b appends one `describe` after the file's last line (≈:7322 at `4bc6c756d`), which is line-disjoint from it. No other task here edits a file an open PR holds.
 - **#364** holds `.github/workflows/*`. No task edits a workflow: C0a and C0b read `.git`, so the selector runs them on every PR without one.
 - **#424** bumps `typescript` in `ui/`, not `server/`. C0f pins its parser package in `server/package.json` exactly; no open PR holds that file outside the dependabot groups (#366, #367, #368), whose `package.json` hunks are version lines C0f does not touch. C0f merges `main` and re-runs `npm ci` if one of them lands first.
 - **OA-C1** (the operator's parser choice for ARCH-00) gates C0f, and through it C0g. Nothing else here waits for an operator act.
 
 | Task | #397 | #737 | #364 / deps | OA | Other |
 |---|---|---|---|---|---|
-| C0a growth check | no | no | no | — | — |
-| C0b census and writers pin | disjoint (tail append) | disjoint (tail append) | no | — | — |
-| C0c feed pin, part 1 | no (rows valid under its id gate) | no | no | — | — |
-| C0d feed pin, part 2 | no (rows valid under its id gate) | no | no | — | C0c (shared fixture) |
-| C0e pause pin | no (rows valid under its id gate) | no | no | — | — |
-| C0f parser | no | no | merge `main` if a server bump lands | **OA-C1** | — |
-| C0g symbol slice | no | no | no | — | C0f |
+| C0a growth check | merged | no | no | — | — |
+| C0b census and writers pin | merged | disjoint (tail append) | no | — | — |
+| C0c feed pin, part 1 | merged | no | no | — | — |
+| C0d feed pin, part 2 | merged | no | no | — | C0c (shared fixture) |
+| C0e pause pin | merged | no | no | — | — |
+| C0f parser | merged | no | merge `main` if a server bump lands | **OA-C1** | — |
+| C0g symbol slice | merged | no | no | — | C0f |
 
 ## In flight, and what it fences off
 
 | In flight | Files it changes that this plan would otherwise touch | Tasks it gates |
 |---|---|---|
-| #397 | `server/test/single-definition.test.ts` (≈:5917) | none (C0b is a tail append) |
 | #737 | `server/test/single-definition.test.ts` (≈:5237) | none (C0b is a tail append) |
 | #366, #367, #368 | `server/package.json`, `server/package-lock.json` (version lines) | C0f merges `main` first if one lands |
 
@@ -90,13 +89,13 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 1. **A pin that reads source text.** Every C0c, C0d and C0e row calls code and asserts on what it returns, records or sends. A `readFileSync` of a `server/src` file in those suites is a STOP (C0g is where source slices live, and only through `symbols.ts`).
 2. **A growth check that can red what is already in flight.** C0a reports and never fails until OA-C2. It holds no per-file absolute constant, so two concurrent PRs cannot conflict on it.
 3. **A census that counts comments.** The `reclaim-paused` census counts `includes(RECLAIM_PAUSE_MARKER)` expressions, not files that name the marker (12 files name it, mostly in comments; 10 expressions in 6 files parse it). The feed census counts `recordFeedEvent(` call expressions outside `coord/store.ts`, not docstring mentions.
-4. **A feed pin that assumes three modes.** `pushOne` has two independent flags, so the pin states all four combinations, and for each hand-written pair it records the record gate, the push, where the flush happens and whether a failed ring record is caught (spec K6, rev 2).
-5. **A pause pin without the act-time row.** For every executor that re-reads the switch at the act (`coord/childReclaim.ts`, `coord/expireArchived.ts`, `coord/collectTempRoot.ts`, `coord/endDeadCoordinator.ts`), a pause raised after the pass decided and before the act runs holds the act. Deleting the act-time read is the mutant.
+4. **A feed pin that asserts what production cannot observe.** `pushOne` has two independent flags, but only three combinations have a caller (every `recordOnly` caller also sets `recordAlways`); the pin drives those three through lanes and records the fourth as "no caller". For each hand-written pair it asserts only what production can see: the record gate, the push, the archive row, isolation of a throwing archive, the degrade sentence printed byte for byte, a flush after the ring record, and (for `endDeadCoordinator`) which rows survive a failure mid-batch. Where the flush sits relative to the archive, and whether a throwing ring record is caught, are recorded as observations in the PR body, never asserted: `NotifyLog.record` is in-memory and cannot throw, and `flush` is a chained async write (spec K6, rev 2.1).
+5. **A pause pin without the late read.** Each executor reads the switch twice inside the act (expiry: step 2 and step 6, "NEAREST THE ARGV"; collect: its first and last reads; `endDeadCoordinator`: step 1 and `stillCrashed` inside `abandon`), and `releaseRetiredChildHold` reads it at its step 6. A row that raises the marker before the executor's first read cannot tell the two reads apart. The fake `readdir` is scripted per call, so the marker appears only from the late read on. Deleting the late read is the mutant, one per executor.
 6. **A writers pin that is a freeze.** C0b pins only facts whose writer set is already at its target (spec §5.1 rule 3, rev 2). The feed archive's writer set is not pinned here; C1e lands it.
 
 ## Tasks
 
-### Task C0a: the god-file growth check, reporting (D-5848; ARCH-01; spec §5.2) — lands now
+### Task C0a: the god-file growth check, reporting (D-5848; ARCH-01 (#526); spec §5.2) — lands now
 
 **Routing:** band 2. **Lane:** tests only. **Needs:** nothing.
 
@@ -125,7 +124,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 
 **Exit (GATES):** the check runs on every PR (recorded: the selector's trace for this PR names it); zero production bytes. **OBSERVATION:** the nine files' code lines at `f64c27b65`, in the PR body. **Not in this task:** the CI job summary with FleetWatcher's method count (it needs ARCH-00's parser; it lands with C0f's follow-up in a later slice), and arming (OA-C2).
 
-### Task C0b: the census module and the writers pin for the facts at target (D-5849; ARCH-40; spec §2.1 rule (f), §5.1 rule 3) — lands now
+### Task C0b: the census module and the writers pin for the facts at target (D-5849; ARCH-40 (#775); spec §2.1 rule (f), §5.1 rule 3) — lands now
 
 **Routing:** band 2. **Lane:** tests only. **Needs:** nothing (a tail append to `single-definition.test.ts`, line-disjoint from #397 and #737).
 
@@ -159,29 +158,32 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 
 **Exit (GATES):** four named queries exist and each finds its cited site; the two writer sets are pinned at one and zero; zero production bytes.
 
-### Task C0c: the feed writers' pin, part 1 — `pushOne` and the writers outside `coord/` (D-5850; ARCH-54's characterization half; spec K6) — lands now
+### Task C0c: the feed writers' pin, part 1 — `pushOne` and the writers outside `coord/` (D-5850; ARCH-54 (#789)'s characterization half; spec K6) — lands now
 
 **Routing:** band 2 (`/handoff`-able rows; the orchestrator reviews the table). **Lane:** tests only. **Needs:** nothing.
 
 **Files:**
-- Create `server/test/feedWriterFixture.ts`: a recording fake for the three sinks that logs every call in order into one array: `NotifyLog.record` (returns `{ epoch, seq }`), `NotifyLog.flush`, `CoordStore.recordFeedEvent`, `PushService.notify`, and a presence fake (`isVisible(id)` per session). Each sink can be told to throw once.
+- Create `server/test/feedWriterFixture.ts`: a recording fake for the three sinks that logs every call in order into one array: `NotifyLog.record` (returns `{ epoch, seq }`, never throws, like the real one), `NotifyLog.flush`, `CoordStore.recordFeedEvent`, `PushService.notify`, and a presence fake (`isVisible(id)` per session). `recordFeedEvent` can be told to throw on its n-th call; `console.warn` is spied so each degrade sentence can be asserted byte for byte. The ring events are kept as recorded objects, so a row can compare `JSON.stringify` of what reaches catch-up (key order included).
 - Create `server/test/feed-writers-pin.test.ts`, part 1:
-  - **`pushOne`'s four combinations** (driven through the lanes that call it, never by reaching into a private method): for `visible ∈ {true, false}` × `recordAlways ∈ {unset, true}` × `recordOnly ∈ {unset, true}`, the call log. Today: not visible records, flushes, archives and pushes unless `recordOnly`; visible records only with `recordAlways`, and never pushes.
-  - **The order:** ring record, then flush, then archive, then push (the call log, exactly).
-  - **Failure isolation:** a throwing `recordFeedEvent` leaves the ring record and the push in place (`watch.ts` ≈:3172).
-  - **The writers outside `coord/`, one row each, with their sink calls in order and their failure isolation:** `watch.ts`'s two hand pairs (≈:4984, the collector's `run` row; ≈:5003, the collector's `coord` row), `interruptlog.ts` `recordInterrupt` (≈:53), and `server.ts`'s hand pair (≈:2485). For each: record gate (`always` or `unless-visible`), push (`never` or `unless-visible`), where the flush happens (in a `finally` or after), and whether a throwing ring record is caught.
+  - **`pushOne`'s three reachable combinations** (driven through the lanes that call it, never by reaching into a private method): for `visible ∈ {true, false}` × {neither flag, `recordAlways`, `recordAlways` + `recordOnly`}, the sinks reached. Today: not visible records, archives and pushes unless `recordOnly`; visible records only with `recordAlways`, and never pushes. **The fourth combination** (`recordOnly` without `recordAlways`) has no caller on `origin/main` (every `recordOnly` call site also sets `recordAlways`); it is recorded in the PR body as "no caller", with the `git grep -n recordOnly server/src` list, not as a row.
+  - **The order:** the ring record comes before the archive, and the archive before the push; a flush follows the ring record. Where the flush sits relative to the archive is recorded in the PR body as an observation, not asserted (it is unobservable in production).
+  - **Failure isolation:** a throwing `recordFeedEvent` leaves the ring record and the push in place, and prints `pushOne`'s sentence, `— feed archive degraded, ring/push unaffected`, byte for byte (`watch.ts` ≈:3172).
+  - **The idle nudge's landing gate** (`watch.ts` `idleNudgeOne`, ≈:6705–6713 (4bc6c756d)), through the idle-nudge lane with a fake tmux and queue: the archive throws → the nudge is not typed (no `sendPrompt` call) and the "the feed record did not land — nothing typed" line is printed; no `notifyLog` configured → nothing typed. This gate is not a dedupe and stays through W1a (spec K6, rev 2.1).
+  - **The writers outside `coord/`, one row each:** `watch.ts`'s two hand pairs (≈:4984, the collector's `run` row; ≈:5003, the collector's `coord` row), `interruptlog.ts` `recordInterrupt` (≈:53), and `server.ts`'s hand pair (≈:2485). For each: record gate (`always` or `unless-visible`), push (`never` or `unless-visible`), the archive row, a flush after the record, and, with the archive throwing, the act's own result unchanged and the writer's degrade sentence byte for byte (for example `— interrupt answered, feed archive degraded`).
 
-- [ ] **Step 0: Re-ground.** Read each site and its docstring; write the expected call log for each in the PR body before writing a row. Find the narrowest existing seam each writer is reachable through (the collector lane's tests, `recordInterrupt`'s callers, the `server.ts` route under `inject`).
+- [ ] **Step 0: Re-ground.** Read each site and its docstring; write the expected sinks, degrade sentence and observations (flush placement, ring-throw handling) for each in the PR body before writing a row. Find the narrowest existing seam each writer is reachable through (the collector lane's tests, `recordInterrupt`'s callers, the `server.ts` route under `inject`, the idle-nudge lane's suite).
 - [ ] **Step 1: Rows.** Write each row against `main`; it must be green.
 - [ ] **Step 2: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
   |---|---|---|
-  | `pushOne`: swap the archive and the flush | feed-writers-pin | "ring, flush, archive, push" |
+  | `pushOne`: push before the ring record | feed-writers-pin | "ring, archive, push" |
   | `pushOne`: drop `if (visible && !e.recordAlways) return` | feed-writers-pin | "visible without recordAlways records nothing" |
   | `pushOne`: drop `if (e.recordOnly) return` | feed-writers-pin | "recordOnly never pushes" |
   | `pushOne`: remove the `try` around `recordFeedEvent` | feed-writers-pin | "a failed archive leaves the push" |
-  | `watch.ts` ≈:4984: move the flush out of its `finally` | feed-writers-pin | "the collector's run row flushes after a failed archive" |
+  | `idleNudgeOne`: drop the `hasFeedEvent` check before `sendPrompt` | feed-writers-pin | "a row that did not land types nothing" |
+  | `watch.ts` ≈:4984: move `void log.flush()` into the `try` body after `recordFeedEvent` | feed-writers-pin | "the collector's run row flushes after a failed archive" |
+  | `interruptlog.ts`: reword the degrade sentence | feed-writers-pin | "recordInterrupt's degrade sentence" |
   | `interruptlog.ts`: drop the archive call | feed-writers-pin | "an interrupt is archived" |
 
 - [ ] **Step 3: Verify.**
@@ -189,20 +191,21 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
       cd server && ./node_modules/.bin/tsc --noEmit
       cd server && ./node_modules/.bin/vitest run test/feed-writers-pin.test.ts --maxWorkers=2
 
-**Exit (GATES):** `pushOne`'s four combinations and 4 of the 15 hand-written pairs pinned (5 of the 16 call lines, `pushOne`'s included); zero production bytes.
+**Exit (GATES):** `pushOne`'s three reachable combinations, its archive-failure sentence and the idle nudge's landing gate pinned; 4 of the 15 hand-written pairs pinned (5 of the 16 call lines, `pushOne`'s included), each with its degrade sentence; zero production bytes.
 
-### Task C0d: the feed writers' pin, part 2 — the writers in `coord/` and `stopDoneSweep.ts` (D-5851; ARCH-54's characterization half; spec K6) — after C0c
+### Task C0d: the feed writers' pin, part 2 — the writers in `coord/` and `stopDoneSweep.ts` (D-5851; ARCH-54 (#789)'s characterization half; spec K6) — after C0c
 
 **Routing:** band 2 for the rows; the `coord/routes.ts` ≈:4545 row (the approval ruling's feed row) and the three `coord/childReclaim.ts` rows are on the approval and destructive paths, so **the orchestrator writes those four rows natively** (band 3) and a worker may write the rest. **Lane:** tests only. **Needs:** C0c (the shared fixture).
 
 **Files:**
-- Modify `server/test/feed-writers-pin.test.ts`, part 2, one row per writer, same four facts as C0c:
+- Modify `server/test/feed-writers-pin.test.ts`, part 2, one row per writer, the same observable facts as C0c (record gate, push, archive row, a flush after the record, and with the archive throwing the act's result unchanged and the writer's degrade sentence byte for byte):
   - `coord/routes.ts`'s five pairs (≈:2485, ≈:2703, ≈:2859, ≈:3985, ≈:4545), each through its route under `inject`; the ≈:4545 row asserts the ruling is stored when the archive throws ("ruling stored, feed archive degraded");
   - `coord/childReclaim.ts`'s three (≈:1692, ≈:1719, ≈:1758), each "recorded and NEVER pushed" (≈:1679's ruling, "every reclaim lands in the feed; no push per reap"), whatever the presence;
   - `coord/expireArchived.ts` (≈:287), `coord/endDeadCoordinator.ts` (≈:280);
+  - **`endDeadCoordinator`'s batch** (`recordRows`, one `try` over several rows): two dead-coordinator rows with the archive throwing on the first. Today the first row is in the ring, the second is in neither the ring nor the archive, and one degrade sentence (`— dead coordinator <what>, feed archive degraded`) is printed. The row asserts the ring contents and the archive rows;
   - `stopDoneSweep.ts` (≈:159). It is pinned now and moves in W4; W1a never touches it.
 
-- [ ] **Step 0: Re-ground** as C0c's Step 0, for these ten sites. Check that each `coord/` executor's row uses only fixture registries and a fake runner (SAFETY).
+- [ ] **Step 0: Re-ground** as C0c's Step 0, for these eleven sites (ten in `coord/`, plus `stopDoneSweep.ts`). Check that each `coord/` executor's row uses only fixture registries and a fake runner (SAFETY).
 - [ ] **Step 1: Rows**, green on `main`.
 - [ ] **Step 2: Mutation table, RUN.**
 
@@ -213,35 +216,47 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
   | `routes.ts` ≈:4545: let the archive's throw escape | feed-writers-pin | "ruling stored, feed archive degraded" |
   | `expireArchived.ts` ≈:287: drop the flush | feed-writers-pin | "expiry's row is flushed" |
   | `stopDoneSweep.ts` ≈:159: drop the archive call | feed-writers-pin | "stop-done's sleep has a feed row" |
+  | `endDeadCoordinator.ts` `recordRows`: one `try` per row | feed-writers-pin | "a failed archive mid-batch drops the rows after it" |
+  | `childReclaim.ts` ≈:1720: reword the degrade sentence | feed-writers-pin, child-reclaim-sweep | "child reclaim kept, feed archive degraded" |
 
 - [ ] **Step 3: Verify** as C0c's Step 3.
 
-**Exit (GATES):** all 16 call lines' writers pinned (`feedRecordCallSites()` lists 16, and every site in the list has a row); zero production bytes.
+**Exit (GATES):** all 16 call lines' writers pinned (`feedRecordCallSites()` lists 16, and every site in the list has a row), each with its degrade sentence; `endDeadCoordinator`'s mid-batch failure pinned; zero production bytes.
 
-### Task C0e: the `reclaim-paused` verdict pin, and the mail switch's two definitions (D-5852; ARCH-70's characterization half; spec K12) — lands now
+### Task C0e: the `reclaim-paused` verdict pin, and the mail switch's two definitions (D-5852; ARCH-70 (#805)'s characterization half; spec K12) — lands now
 
-**Routing:** band 2 for the lane-selection rows; the four executors' act-time rows are on the destructive path, so **the orchestrator writes them natively** (band 3). **Lane:** tests only. **Needs:** nothing.
+**Routing:** band 2 for the lane-selection rows; the late-read rows are on the destructive path, so **the orchestrator writes them natively** (band 3). **Lane:** tests only. **Needs:** nothing.
 
 **Files:**
-- Create `server/test/reclaim-pause-pin.test.ts`. One row per parse site (`reclaimPauseParseSites()`'s 10), each over three registry listings: marker present, marker absent, listing failed. Each row asserts the verdict word and its sentence byte for byte:
-  - `coord/childReclaim.ts` ≈:1013 (`'set' | 'clear'`) and its `paused-at-server` deferral ≈:1123–1129;
-  - `coord/collectTempRoot.ts` ≈:365 (`paused`, `why: 'raised'` or the unlistable cause, ≈:252–253's words);
-  - `coord/endDeadCoordinator.ts` ≈:161–162 (the act-time `switch` verdict) and ≈:193–196 (the pass's `paused-at-server`);
-  - `coord/expireArchived.ts` ≈:137–140;
+- Create `server/test/reclaim-pause-pin.test.ts`. One row per parse site (`reclaimPauseParseSites()`'s 10), each over **four** registry listings: marker present, marker absent, listing `null` (the `FleetIO` adapters' fold), and `readdir` rejecting. Each row asserts the verdict word and its sentence byte for byte:
+  - `coord/childReclaim.ts` ≈:1013 (`childReclaimPauseRead`, `'set' | 'clear'`) and its `paused-at-server` deferral ≈:1123–1129. A **rejecting** `readdir` keeps its own sentence here ("whether reclaim-paused is raised could not be read (<err>)"), while collect, expiry and `endDeadCoordinator` fold a reject into the unlistable sentence ("the registry did not list, so …"); both are pinned;
+  - `coord/childReclaim.ts` `releaseRetiredChildHold` step 6 (≈:1549 (4bc6c756d)), the second caller of `childReclaimPauseRead`: present → `'changed'`, absent → continues to step 7, `null` → `'failed'`, rejecting → `'failed'` plus its warning;
+  - `coord/collectTempRoot.ts` ≈:365 (`collectSwitches`: `paused`, `why: 'raised'` or the unlistable cause, ≈:252–253's words);
+  - `coord/endDeadCoordinator.ts` ≈:161–162 (`stillCrashed`, the act's late `switch` verdict, "was raised during the act") and ≈:193–196 (the executor's step 1, `paused-at-server`). The lane's pass read is `watch.ts` ≈:5471;
+  - `coord/expireArchived.ts` ≈:137–140 (`expirySwitches`, called at step 2 and again at step 6);
   - `stopDoneSweep.ts` ≈:172 (with `stop-done-disabled` beside it);
-  - `watch.ts` ≈:2858 (the switch summary's `reclaim` field), ≈:4065, ≈:5261 (with the expire capability), ≈:5471.
-- **The act-time rows ("a pause raised between the pass and the act holds").** For each executor that re-reads at the act (`childReclaim`, `expireArchived`, `collectTempRoot`, `endDeadCoordinator`): the fake `FleetIO` lists clean for the pass and lists the marker on the executor's own read; the act does not run, the fake runner records no destructive argv, and the verdict names the pause.
+  - `watch.ts` ≈:2858 (the switch summary's `reclaim` field), ≈:4065, ≈:5261 (with the expire capability), ≈:5471 (the dead-coordinator lane's pass).
+- **The coord frame's switch bytes.** One row: `emitCoord`'s `reclaim` field is `'set'`, `'clear'` or `'unmeasurable'` (the wire's `MarkerState`, `shared/api.ts`) for present, absent and `null`, asserted on the frame's bytes, so C1a's `readSwitches` can answer the same vocabulary without a translation.
+- **The late-read rows ("a pause raised during the act holds").** The fake `readdir` is scripted per call: clean for the tick's listing and for the executor's first read, the marker raised only from the late read on. One row per late read:
+  - expiry: raised during the fake audit, so step 6's `expirySwitches` sees it; no destructive argv, verdict `paused`;
+  - collect: raised before its last read; no destructive argv;
+  - `endDeadCoordinator`: raised inside `abandon`'s `stillCrashed` callback; the close does not run, verdict "was raised during the act";
+  - `releaseRetiredChildHold`: raised before step 6; outcome `'changed'`, no release.
+  - And the same shape for the lane-live markers those late reads carry: `expire-lane-live` removed before step 6 (outcome would-expire, nothing deleted), and the dead-coordinator lane disarmed during the act (`deadCoordinatorLaneArmed` false at `stillCrashed`).
 - **The mail switch.** One row: `MAIL_DISABLED_MARKER` in `coord/rundefs.ts` and `watch.ts`'s private copy spell the same string, and a listing holding it stops `coord/dispatch.ts`'s dispatch (≈:515) and `watch.ts`'s mail lane alike.
 
-- [ ] **Step 0: Re-ground.** List the 10 sites with `reclaimPauseParseSites()` if C0b has landed, or with `git grep -n "includes(RECLAIM_PAUSE_MARKER)"` if not; the PR body carries the list.
+- [ ] **Step 0: Re-ground.** List the 10 sites with `reclaimPauseParseSites()` if C0b has landed, or with `git grep -n "includes(RECLAIM_PAUSE_MARKER)"` if not, plus every caller of `childReclaimPauseRead`, `expirySwitches`, `collectSwitches` and `stillCrashed`; the PR body carries the list.
 - [ ] **Step 1: Rows**, green on `main`.
 - [ ] **Step 2: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
   |---|---|---|
-  | `expireArchived.ts`: skip the act-time listing | reclaim-pause-pin | "a pause raised between the pass and the act holds: expiry" |
+  | `expireArchived.ts`: delete step 6's `expirySwitches` call | reclaim-pause-pin | "a pause raised during the act holds: expiry" |
+  | `collectTempRoot.ts`: delete the last switch read | reclaim-pause-pin | "…holds: collect" |
+  | `endDeadCoordinator.ts` ≈:162: drop the check in `stillCrashed` | reclaim-pause-pin | "…holds: dead coordinator" |
+  | `childReclaim.ts` `releaseRetiredChildHold`: delete step 6 | reclaim-pause-pin | "…holds: retired-child release" |
   | `childReclaim.ts` ≈:1123: treat a failed listing as clear | reclaim-pause-pin | "an unlistable registry cannot rule the pause out" |
-  | `endDeadCoordinator.ts` ≈:162: drop the act-time check | reclaim-pause-pin | "…holds: dead coordinator" |
+  | `childReclaim.ts`: fold a rejecting `readdir` into `null` | reclaim-pause-pin | "childReclaim names a read that failed" |
   | `collectTempRoot.ts` ≈:365: `why` always `raised` | reclaim-pause-pin | "the two causes are not one fact" |
   | `watch.ts` ≈:678: change the private copy's string | reclaim-pause-pin | "both spellings of mail-disabled agree" |
 
@@ -250,13 +265,13 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
       cd server && ./node_modules/.bin/tsc --noEmit
       cd server && ./node_modules/.bin/vitest run test/reclaim-pause-pin.test.ts --maxWorkers=2
 
-**Exit (GATES):** 10 of 10 parse sites pinned; 4 of 4 act-time re-reads pinned; zero production bytes.
+**Exit (GATES):** 10 of 10 parse sites and `releaseRetiredChildHold` pinned over four listings; 4 of 4 executors' late reads and the two lane-live late reads pinned; the coord frame's switch bytes pinned; zero production bytes.
 
-### Task C0f: one TS parser for the test scanners (D-5853; ARCH-00) — GATED: after OA-C1
+### Task C0f: one TS parser for the test scanners (D-5853; ARCH-00 (#525)) — GATED: after OA-C1
 
 **Routing:** band 2, orchestrator-reviewed (the ticket's own routing). **Lane:** tests only (a dev-only dependency). **Needs:** OA-C1.
 
-**Files:** as the ticket (CCRCP-97) says, with the operator's option: create `server/test/scan/parse.ts` (`parseFile(path) → { imports, exportedTypeAliases, symbols }`, syntax only) and its self-test `server/test/scan-parse.test.ts`; pin the chosen package exactly in `server/package.json` (an option (a) alias or (b) package), or wrap `typescript/unstable/ast` (option (c)); add a scanner row to `single-definition.test.ts`'s ARCH-40 `describe` (C0b's tail block): only `scan/parse.ts` imports the chosen package. Record the choice and its reason in the spec's §8 log in the same PR.
+**Files:** as the ticket (#525) says, with the operator's option: create `server/test/scan/parse.ts` (`parseFile(path) → { imports, exportedTypeAliases, symbols }`, syntax only) and its self-test `server/test/scan-parse.test.ts`; pin the chosen package exactly in `server/package.json` (an option (a) alias or (b) package), or wrap `typescript/unstable/ast` (option (c)); add a scanner row to `single-definition.test.ts`'s ARCH-40 `describe` (C0b's tail block): only `scan/parse.ts` imports the chosen package. Record the choice and its reason in the spec's §8 log in the same PR.
 
 - [ ] **Step 0: Re-ground.** Re-run the ticket's probe (`typeof require('typescript').createSourceFile` in `server/`) on the PR's base.
 - [ ] **Step 1: Red.** The self-test parses a fixture holding an `import`, an `import type`, an exported literal union, a class method and an arrow property; red against `main` (no module).
@@ -270,13 +285,14 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 
 **Exit (GATES):** one parser wrapper, one importer; the version is exact; zero production bytes.
 
-### Task C0g: symbol-keyed source slices for W1a's files (D-5854; ARCH-06, the W1a slice) — GATED: after C0f
+### Task C0g: symbol-keyed source slices for W1a's files (D-5854; ARCH-06 (#554), the W1a slice) — GATED: after C0f
 
 **Routing:** band 2. **Lane:** tests only. **Needs:** C0f.
 
 **Files:**
 - Create `server/test/scan/symbols.ts`: `sourceOfSymbol(file, 'FleetWatcher.pushOne')`, `callsIn(symbol)`, as the ticket says (`sqlStatementsIn` arrives with the slice that needs it), and its tests over methods, arrow-function properties and nested functions.
 - Modify only the suites whose literal source pins read the code W1a moves: the feed pairs (the 16 sites), the `reclaim-paused` parse sites and both `MAIL_DISABLED_MARKER` definitions. Step 0 finds them. Each moves onto `symbols.ts` with its assertions unchanged. The two `single-definition.test.ts` blocks that pin where the `reclaim-paused` and `mail-disabled` literals live (≈:2337 and its neighbours) are **security- and switch-relevant censuses**: each moves in its own commit, never in bulk (ticket risk).
+- **What symbol keying cannot rescue.** A slice keyed on a symbol survives code that moves; it does not survive code that is **rewritten**. A literal pin over text W1a rewrites (for example "watch.ts reaches the reclaim marker through the shared constant", `toContain('names.includes(RECLAIM_PAUSE_MARKER)')`, ≈:2347–2351, which C1b's rewrite of the four `watch.ts` sites turns red) is listed in Step 0's output as **re-pointed by W1a**, with the W1a task that re-points it in its own named commit. C0g does not touch it.
 - Modify `server/test/single-definition.test.ts`'s ARCH-40 block: the ticket's ratchet predicate (a test file counts when it reads a `server/src` `.ts` path with `readFileSync`; a pin counts when `indexOf`, `toContain` or `match` is called with a literal on that variable), applied to **W1a's files only** for this slice, pinned at what it measures on merge day.
 
 - [ ] **Step 0: Re-ground.** List every suite that reads `watch.ts`, `server.ts`, `interruptlog.ts`, `coord/routes.ts`, `coord/childReclaim.ts`, `coord/expireArchived.ts`, `coord/collectTempRoot.ts`, `coord/endDeadCoordinator.ts` or `coord/rundefs.ts` with `readFileSync` and asserts a literal over a region W1a moves. Check each against every open PR's file list; a suite an open PR holds waits for it, and the PR body says which.
@@ -288,7 +304,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 
 ## Operator acts in this wave
 
-- **OA-C1 (before C0f): the parser option for ARCH-00.** The ticket (CCRCP-97) offers (a) a pinned `devDependency` alias of an older TypeScript, (b) a standalone parser package, or (c) `typescript/unstable/ast` behind the wrapper. The ask presents all three with the ticket's risk line; the plan does not choose. Nothing on a box is touched.
+- **OA-C1 (before C0f): the parser option for ARCH-00.** The ticket (#525) offers (a) a pinned `devDependency` alias of an older TypeScript, (b) a standalone parser package, or (c) `typescript/unstable/ast` behind the wrapper. The ask presents all three with the ticket's risk line; the plan does not choose. Nothing on a box is touched.
 - **OA-C2 (after C0a, when ready): arm the growth check.** Flip `GROWTH_ARMED` to `true` in one commit. The ask lists the PRs that were open when C0a landed and grow a listed file, so the operator can wait for them to merge or name them exempt (spec §5.2, rev 2; O3 (a)).
 - **No deploy.** W0 ships no production byte.
 
@@ -310,9 +326,9 @@ The allocator issued the consolidation wave a block of 30 numbers, 5848 to 5877,
   - **Departs from ARCH-01:** the ticket lands it red, with a CI job summary. Red on landing would stop PRs already in flight that grow a listed file, which O3 (a) ("nothing pauses") rules out; the summary's method count needs ARCH-00's parser and follows it. The file list is the union of the ticket's seven and the spec's §5.2 (adding `ccd/ccrc` and `sessionws.ts`).
 - **D-5849** — `consolidation-census-and-writers-at-target` (Task C0b; ARCH-40): the wave's counts come from one census module of named queries that return their sites, and a census reports until its series reaches its target. The W0 writers pin covers only the two switches already at their target: `reclaim-paused` (one writer, ccd's `reclaim-pause` verb) and `mail-disabled` (hand-only, no writer in the tree).
   - **Departs from ARCH-40 as the spec's §4.2 sized it:** the writer sets for facts not yet at target (the feed archive among them) are pinned by the series that reaches each target (C1e for the feed), not in W0 (spec §5.1 rule 3, rev 2).
-- **D-5850** — `feed-writers-pin-outside-coord` (Task C0c; ARCH-54's characterization half): `pushOne`'s four flag combinations, its ring-flush-archive-push order and its archive-failure isolation are pinned through the lanes that call it, and so are the four hand-written pairs outside `coord/` (two in `watch.ts`, `recordInterrupt`, `server.ts`), each with its record gate, push, flush placement and ring-failure handling.
-- **D-5851** — `feed-writers-pin-coord` (Task C0d; ARCH-54's characterization half): the same four facts for the ten writers in `coord/` and `stopDoneSweep.ts`, including "no push per reap" for the three child-reclaim rows and "ruling stored, feed archive degraded" for the approval ruling's row. The approval and child-reclaim rows are written natively.
-- **D-5852** — `reclaim-pause-verdicts-pinned` (Task C0e; ARCH-70's characterization half): every `includes(RECLAIM_PAUSE_MARKER)` site's verdict and words are pinned over present, absent and unlistable listings; each of the four executors' act-time re-read is pinned as "a pause raised between the pass and the act holds"; and the two spellings of `mail-disabled` are pinned equal.
+- **D-5850** — `feed-writers-pin-outside-coord` (Task C0c; ARCH-54's characterization half): `pushOne`'s three reachable flag combinations (the fourth has no caller), its ring-archive-push order and its archive-failure isolation are pinned through the lanes that call it, and so are the idle nudge's landing gate (a row that did not land types nothing) and the four hand-written pairs outside `coord/` (two in `watch.ts`, `recordInterrupt`, `server.ts`), each with its record gate, push and degrade sentence. Flush placement and ring-throw handling are observations, not assertions, because production cannot observe them.
+- **D-5851** — `feed-writers-pin-coord` (Task C0d; ARCH-54's characterization half): the same observable facts for the ten writers in `coord/` and `stopDoneSweep.ts`, `endDeadCoordinator`'s stop-on-first-failure batch, including "no push per reap" for the three child-reclaim rows and "ruling stored, feed archive degraded" for the approval ruling's row. The approval and child-reclaim rows are written natively.
+- **D-5852** — `reclaim-pause-verdicts-pinned` (Task C0e; ARCH-70's characterization half): every `includes(RECLAIM_PAUSE_MARKER)` site's verdict and words, and `releaseRetiredChildHold`'s, are pinned over present, absent, `null` and rejecting listings; each executor's late read inside the act is pinned with a per-call scripted listing ("a pause raised during the act holds"), so deleting it is red; the coord frame's `MarkerState` bytes are pinned; and the two spellings of `mail-disabled` are pinned equal.
 - **D-5853** — `one-scan-parser` (Task C0f; ARCH-00): one wrapper, `server/test/scan/parse.ts`, is the only importer of the TS parser the operator chose (OA-C1), pinned exactly.
   - **As planned:** the spec's rev 1 put ARCH-00 in a later slice; rev 2 moves it into W0 now because ARCH-06 depends on it.
 - **D-5854** — `symbol-slices-for-w1a` (Task C0g; ARCH-06, first slice): `scan/symbols.ts` replaces literal source slices, and the suites that pin W1a's moved regions move onto it first, with the ticket's ratchet predicate applied to W1a's files.
@@ -324,4 +340,22 @@ Every later W0 slice (spec §5.2): ARCH-02a, ARCH-02b's programme ruling, ARCH-0
 
 ## Review log
 
-**rev 0 (2026-10-19).** Written from the spec's rev 2 and measured on `origin/main` `f64c27b65`. Not yet reviewed.
+**rev 0 (2026-10-19).** Written from the spec's rev 2 and measured on `origin/main` `f64c27b65`.
+
+**rev 1 (2026-10-19).** Two reviews (A, B). Each finding was re-measured on `origin/main` `4bc6c756d`, after #397 merged as `6ae03d2de`. Findings that touch only the W1a plan are in its log.
+
+| # | Sev | Finding (short) | Checked against | Outcome | Where |
+|---|---|---|---|---|---|
+| A5, B9 | medium, low | `pushOne`'s fourth flag combination has no caller, so a lane cannot drive it | `git grep recordOnly server/src`: every call site also sets `recordAlways` | Applied: three reachable combinations pinned; the fourth recorded as "no caller" | C0c, D-5850, focus 4 |
+| A8 | low | moving the collector's flush out of its `finally` is an equivalent mutant (the catch swallows) | `watch.ts` `collectRecordFeed` | Applied: the mutant moves the flush into the `try` body | C0c |
+| A11 | low | "five writers outside `coord/`" and "these ten sites" miscount | the lists themselves | Applied: four pairs; eleven sites | Goal table, C0d |
+| B2 | high | the act-time rows cannot tell an executor's first switch read from its late read | `expireArchived.ts` `expirySwitches` called at steps 2 and 6; `collectSwitches`; `endDeadCoordinator` step 1 vs `stillCrashed` | Applied: the fake `readdir` is scripted per call; one late-read row and one deletion mutant per executor, plus the two lane-live late reads; the ≈:193 label fixed to "executor step 1", the pass named as `watch.ts` ≈:5471 | C0e, D-5852, focus 5 |
+| A3, B4 | medium | flush placement and ring-throw handling are pinned through a fake, though production cannot observe them; the funnel then cannot keep the rows | `notifylog.ts` `record` is in-memory and cannot throw; `flush` is a chained async write | Applied (B4's form): only observable facts are asserted; flush placement and ring-throw handling are PR-body observations. **Rejected in part:** A3's per-call flush-placement option for `notify` is not needed once the pin stops asserting it | C0c, C0d, focus 4 |
+| B5 | medium | each hand pair prints its own degrade sentence, and an existing suite pins one | `child-reclaim-sweep.test.ts` ≈:2502 | Applied: every row asserts its writer's sentence byte for byte | C0c, C0d |
+| B6 | medium | `endDeadCoordinator`'s `recordRows` drops the rows after a failed archive | `endDeadCoordinator.ts` `recordRows` | Applied: a mid-batch failure row and mutant | C0d, D-5851 |
+| B1 (C0 half) | high | the idle nudge's `hasFeedEvent` after the record is a landing gate before a pane keystroke | `watch.ts` `idleNudgeOne` | Applied: C0c pins "archive throws → nothing typed" | C0c |
+| B7 | medium | `releaseRetiredChildHold` is a second, unpinned act-time reader | `childReclaim.ts` step 6 | Applied | C0e |
+| B8 | medium | a rejecting `readdir` is worded differently by `childReclaim` | `childReclaim.ts` ≈:1133–1141 vs the other three | Applied: a fourth listing, and a mutant | C0e |
+| B10 (C0 half) | low | the wire already names the switch state `MarkerState` | `shared/api.ts` ≈:4044 | Applied: C0e pins the coord frame's bytes so C1a can reuse the vocabulary | C0e |
+| A4 (C0 half) | medium | symbol keying cannot rescue a literal pin over text W1a rewrites | `single-definition.test.ts` ≈:2347–2351 | Applied: C0g lists such pins as re-pointed by W1a | C0g |
+| A7 | low | #397's file list was incomplete | `gh pr view 397` | Superseded: #397 merged on 2026-10-19; the gates say so | Gates |
