@@ -812,6 +812,20 @@ describe('a legacy subagent: opus/fable already on disk (fix round 2A, N1)', () 
     // Refused, nothing changed — the legacy value survives untouched.
     expect(registryOf('gpt')['subagent']).toBe('opus');
   });
+
+  // The mutation tail's render check, before the write (`renderRefusal`, the
+  // one check `set-window`/`clear-window` share): the edit itself is valid,
+  // `parseRegistry` accepts it, and only the render refuses. Without the
+  // check the registry would be rewritten and `materialise` then refuse.
+  it('(v) set-effort is refused unroutable-lane BEFORE the write, and the registry is unchanged', () => {
+    const id = LEGACY_EXTERNAL_ID;
+    const before = fs.readFileSync(regPath(id), 'utf8');
+    const r = op('set-effort', '--file', rosterPath(), '--id', id, '--class', 'sonnet', '--level', 'xhigh');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('unroutable-lane');
+    expect(String(r.body['detail'])).toMatch(/set-subagent <haiku\|sonnet>/);
+    expect(fs.readFileSync(regPath(id), 'utf8')).toBe(before);
+  });
 });
 
 describe('set-effort', () => {
@@ -1816,6 +1830,277 @@ describe('the measured windows file — read, applied, reported, reaped (codex-b
   });
 });
 
+describe('set-window and clear-window (codex-bridge spec §2.7)', () => {
+  const ID = LEGACY_EXTERNAL_ID;
+  const OPUS = SEEDED.classes.opus!;
+  const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  const windowsFile = (): Record<string, unknown> & { windows: Record<string, Record<string, unknown>> } =>
+    JSON.parse(fs.readFileSync(winPath(ID), 'utf8'));
+  const setWindow = (model: string, tokens: string, id: string = ID): Result =>
+    op('set-window', '--file', rosterPath(), '--id', id, '--model', model, '--tokens', tokens);
+  const clearWindow = (model: string, id: string = ID): Result =>
+    op('clear-window', '--file', rosterPath(), '--id', id, '--model', model);
+  const showOf = (): Result => op('show', '--file', rosterPath(), '--id', ID);
+
+  beforeEach(() => {
+    writeCatalogue(ID);
+    plantCodex(ID);
+  });
+
+  it('set-window records the window with a UTC setAt, answers previous: null, and re-materialises', () => {
+    const r = setWindow(OPUS, '400000');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'set-window', model: OPUS, tokens: 400000, previous: null });
+    const entry = windowsFile().windows[OPUS]!;
+    expect(entry['tokens']).toBe(400000);
+    expect(String(entry['setAt'])).toMatch(ISO_UTC);
+    // Two class models are still unmeasured, so the rule is still the default.
+    expect(eighthKey()).toBe('200000');
+    expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default',
+      unmeasured: CLASS_MODELS.filter((m) => m !== OPUS) });
+  });
+
+  it('the LAST class model measured flips the lane to the smallest window, in that same call', () => {
+    const [m0, m1, m2] = CLASS_MODELS as [string, string, string];
+    expect(setWindow(m0, '511000').code).toBe(0);
+    expect(setWindow(m1, '450000').code).toBe(0);
+    expect(eighthKey()).toBe('200000');
+    const r = setWindow(m2, '400000');
+    expect(r.code).toBe(0);
+    expect(eighthKey()).toBe('400000');
+    expect(r.body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+    expect(r.body['settingsDrift']).toEqual([]);
+  });
+
+  it('set-window again replaces the value and answers the previous one', () => {
+    expect(setWindow(OPUS, '400000').code).toBe(0);
+    const r = setWindow(OPUS, '350000');
+    expect(r.body).toMatchObject({ tokens: 350000, previous: 400000 });
+    expect(windowsFile().windows[OPUS]!['tokens']).toBe(350000);
+  });
+
+  it.each(['1000', '1000000'])('accepts the bound %s exactly', (tokens) => {
+    expect(setWindow(OPUS, tokens).code).toBe(0);
+  });
+
+  it.each(['400k', '400,000', '4e5', '400000.0', '-400000', ' 400000', '999', '1000001', ''])(
+    'refuses %j as a window, naming the field and the digits-only form, and writes nothing', (tokens) => {
+      const r = setWindow(OPUS, tokens);
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('bad-window');
+      expect(r.body['field']).toBe('tokens');
+      expect(String(r.body['detail'])).toMatch(/from 1000 to 1000000, written in digits only/);
+      expect(fs.existsSync(winPath(ID))).toBe(false);
+    });
+
+  it('refuses a model neither in the catalogue nor a class model — the typo guard — and writes nothing', () => {
+    const r = setWindow('model-9-omega', '400000');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('unknown-window-model');
+    expect(r.body['field']).toBe('model');
+    expect(String(r.body['detail'])).toContain(`ccrc models ${ID} show`);
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
+  it('refuses a CLASS name where a model id belongs, and says which it takes', () => {
+    const r = setWindow('opus', '400000');
+    expect(r.body['error']).toBe('unknown-window-model');
+    expect(String(r.body['detail'])).toMatch(/takes a MODEL id, not a class/);
+  });
+
+  it('accepts a catalogue model no class names yet — measure it before a class moves to it', () => {
+    const spare = CODEX.models.find((m) => !CLASS_MODELS.includes(m.id))!.id;
+    const r = setWindow(spare, '400000');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((r.body['contextWindow'] as { rule: string }).rule).toBe('default');
+  });
+
+  it('accepts a class model on a lane no catalogue vouches for (never probed)', () => {
+    fs.rmSync(path.join(home, '.ccrc', 'models', `${ID}.json`));
+    expect(setWindow(OPUS, '400000').code).toBe(0);
+  });
+
+  it('refuses an id that is not a model id', () => {
+    const r = setWindow('../escape', '400000');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('bad-model-id');
+  });
+
+  it('never rewrites the class registry — bytes and mtime unchanged, the rollback property', () => {
+    const before = fs.readFileSync(regPath(ID), 'utf8');
+    const mtime = fs.statSync(regPath(ID)).mtimeMs;
+    expect(setWindow(OPUS, '400000').code).toBe(0);
+    expect(clearWindow(OPUS).code).toBe(0);
+    expect(fs.readFileSync(regPath(ID), 'utf8')).toBe(before);
+    expect(fs.statSync(regPath(ID)).mtimeMs).toBe(mtime);
+    expect(Object.keys(registryOf(ID))).not.toContain('windows');
+  });
+
+  it('PRESERVES keys this build does not know, at the top level and inside an entry', () => {
+    const [m0, m1] = CLASS_MODELS as [string, string];
+    plantWindows(ID, { version: 2, windows: { [m0]: { tokens: 300000, source: 'probe' } } });
+    expect(setWindow(m1, '400000').code).toBe(0);
+    expect(setWindow(m0, '350000').code).toBe(0);
+    const f = windowsFile();
+    expect(f['version']).toBe(2);
+    expect(f.windows[m0]).toMatchObject({ tokens: 350000, source: 'probe' });
+    expect(f.windows[m1]).toMatchObject({ tokens: 400000 });
+  });
+
+  it('clear-window of an absent entry is ok with removed: false, and writes no file', () => {
+    const r = clearWindow(OPUS);
+    expect(r.code).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'clear-window', model: OPUS, removed: false });
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
+  it('clear-window drops one entry and re-materialises: one class model unmeasured is the default rule again', () => {
+    for (const m of CLASS_MODELS) expect(setWindow(m, '400000').code).toBe(0);
+    expect(eighthKey()).toBe('400000');
+    const r = clearWindow(OPUS);
+    expect(r.body).toMatchObject({ removed: true });
+    expect(eighthKey()).toBe('200000');
+    expect(Object.keys(windowsFile().windows)).toEqual(CLASS_MODELS.filter((m) => m !== OPUS));
+  });
+
+  it('clearing the LAST entry deletes the file, so absent keeps meaning no measured window', () => {
+    expect(setWindow(OPUS, '400000').code).toBe(0);
+    expect(clearWindow(OPUS).body).toMatchObject({ removed: true });
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+    expect(showOf().body['windows']).toEqual({ state: 'absent' });
+  });
+
+  it('clearing the last entry KEEPS a file that still holds a top-level key this build does not know', () => {
+    plantWindows(ID, { version: 2, windows: { [OPUS]: { tokens: 300000 } } });
+    expect(clearWindow(OPUS).body).toMatchObject({ removed: true });
+    expect(windowsFile()).toEqual({ version: 2, windows: {} });
+  });
+
+  it('clear-window has no typo guard: a stale entry for a model the lane no longer names is removable', () => {
+    plantWindows(ID, windowsFor({ 'model-9-omega': 5000 }));
+    expect(clearWindow('model-9-omega').body).toMatchObject({ ok: true, removed: true });
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
+  it('a stale entry for a model no class names is ignored by the rule and still listed by show', () => {
+    plantWindows(ID, windowsFor({ ...Object.fromEntries(CLASS_MODELS.map((m) => [m, 400000])), 'model-9-omega': 5000 }));
+    const r = showOf();
+    expect(r.body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+    expect(Object.keys((r.body['windows'] as { byModel: Record<string, unknown> }).byModel)).toContain('model-9-omega');
+  });
+
+  it.each([
+    ['not JSON', '{ this is not json'],
+    ['an array', '[]'],
+    ['a window too small', JSON.stringify({ windows: { 'model-9-omega': { tokens: 5 } } })],
+  ])('an unreadable windows file (%s): both verbs refuse with the remedy, and the file is untouched', (_why, body) => {
+    plantWindows(ID, body);
+    for (const r of [setWindow(OPUS, '400000'), clearWindow(OPUS)]) {
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('windows-unreadable');
+      expect(String(r.body['detail'])).toContain(winPath(ID));
+      expect(String(r.body['detail'])).toMatch(/delete it to drop every measured window/);
+    }
+    expect(fs.readFileSync(winPath(ID), 'utf8')).toBe(body);
+  });
+
+  it('a DIRECTORY at the windows path: both verbs refuse windows-unreadable, never a block', () => {
+    fs.mkdirSync(winPath(ID), { recursive: true });
+    for (const r of [setWindow(OPUS, '400000'), clearWindow(OPUS)]) {
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('windows-unreadable');
+      expect(String(r.body['detail'])).toMatch(/not a regular file/);
+    }
+    expect(fs.statSync(winPath(ID)).isDirectory()).toBe(true);
+  });
+
+  it('a lane whose env block cannot be rendered refuses both, as set-effort does, with nothing written', () => {
+    // A legacy `subagent: opus` left on disk from before the 2026-09-09
+    // narrowing: `parseRegistry` still reads it, `modelEnvBlock` refuses to
+    // render it. Written first, the window would change on disk and the op
+    // would then answer `materialise`'s refusal; refused first, nothing moves.
+    plantWindows(ID, windowsFor({ [OPUS]: 300000 }));
+    const before = fs.readFileSync(winPath(ID), 'utf8');
+    const reg = JSON.parse(fs.readFileSync(regPath(ID), 'utf8'));
+    reg.subagent = 'opus';
+    fs.writeFileSync(regPath(ID), `${JSON.stringify(reg, null, 2)}\n`);
+    for (const r of [setWindow(OPUS, '400000'), clearWindow(OPUS)]) {
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('unroutable-lane');
+      expect(String(r.body['detail'])).toMatch(/set-subagent <haiku\|sonnet>/);
+      expect(String(r.body['detail'])).toMatch(/No window was written/);
+    }
+    expect(fs.readFileSync(winPath(ID), 'utf8')).toBe(before);
+  });
+
+  it('a settings.json the materialise cannot rewrite: the refusal says the window was already recorded', () => {
+    fs.writeFileSync(path.join(home, LEGACY_SUFFIX, 'settings.json'), '{ this is not json');
+    const r = setWindow(OPUS, '400000');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('settings-unwritable');
+    expect(String(r.body['detail'])).toContain(`${winPath(ID)} itself was already updated`);
+    expect(windowsFile().windows[OPUS]!['tokens']).toBe(400000);
+  });
+
+  it('an anthropic lane refuses both, as it refuses every op but show', () => {
+    const anthropic = ROSTER.accounts[1]!.id;
+    for (const r of [setWindow(OPUS, '400000', anthropic), clearWindow(OPUS, anthropic)]) {
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('anthropic-lane');
+    }
+  });
+
+  it('a lane with no class registry refuses both, naming init', () => {
+    const bare = ROSTER.accounts[3]!.id;
+    for (const r of [setWindow(OPUS, '400000', bare), clearWindow(OPUS, bare)]) {
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('no-registry');
+    }
+  });
+
+  it('writes the file 0600 under a permissive umask, and leaves no temp file', () => {
+    const prev = process.umask(0o022);
+    try {
+      expect(setWindow(OPUS, '400000').code).toBe(0);
+    } finally {
+      process.umask(prev);
+    }
+    expect(fs.statSync(winPath(ID)).mode & 0o777).toBe(0o600);
+    expect(fs.readdirSync(path.dirname(winPath(ID))).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+
+  // Root ignores a directory's write bit, so this proves nothing there: a
+  // visible skip, not a false red (the lane.json rename case's own reason).
+  it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
+    'a models directory it cannot write: both verbs answer windows-unwritable, and the file is unchanged', () => {
+      expect(setWindow(OPUS, '400000').code).toBe(0);
+      const before = fs.readFileSync(winPath(ID), 'utf8');
+      const dir = path.dirname(winPath(ID));
+      fs.chmodSync(dir, 0o555);
+      try {
+        const set = setWindow(OPUS, '350000');
+        expect(set.code).toBe(1);
+        expect(set.body['error']).toBe('windows-unwritable');
+        expect(String(set.body['detail'])).toMatch(/could not be written/);
+        // OPUS is the only entry, so clearing it is the unlink arm.
+        const clear = clearWindow(OPUS);
+        expect(clear.code).toBe(1);
+        expect(clear.body['error']).toBe('windows-unwritable');
+        expect(String(clear.body['detail'])).toMatch(/could not be removed/);
+      } finally {
+        fs.chmodSync(dir, 0o755);
+      }
+      expect(fs.readFileSync(winPath(ID), 'utf8')).toBe(before);
+    });
+
+  it('a missing --tokens or --model is a usage error at exit 2', () => {
+    const r = op('set-window', '--file', rosterPath(), '--id', ID, '--model', OPUS);
+    expect(r.code).toBe(2);
+    expect(String(r.body['detail'])).toContain('--tokens');
+    expect(op('clear-window', '--file', rosterPath(), '--id', ID).code).toBe(2);
+  });
+});
+
 // C6: the guard is at OP ENTRY, so every op that takes an `--id` refuses a
 // bad one before touching the roster or any path — not just `rm`, which is
 // the one the finding's own repro happened to exploit.
@@ -1825,6 +2110,8 @@ describe('the account-id guard applies to every op, not just rm (C6)', () => {
     ['set-subagent', ['--class', 'opus']],
     ['materialise', []],
     ['discovery', ['--action', 'catalogue']],
+    ['set-window', ['--model', 'model-9-omega', '--tokens', '400000']],
+    ['clear-window', ['--model', 'model-9-omega']],
   ] as [string, string[]][])('%s refuses a bad --id', (opName, extra) => {
     const r = op(opName, '--file', rosterPath(), '--id', '../etc/passwd', ...extra);
     expect(r.code).toBe(1);

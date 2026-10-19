@@ -32,6 +32,8 @@
 //     surface can read a registry the lane's own settings do not match — and,
 //     on a codex-kind lane, `~/.ccrc/codex/<id>/lane.json` (spec §5.4) with
 //     them, so its `probeModel` follows every reclassification.
+//     The two window ops (`set-window`, `clear-window`) obey all three against
+//     their own sibling file (`windowOp`), and re-materialise the same way.
 //
 // `rm` (spec §4.1 Lifecycle, §10, §11) is a DELIBERATE exception to rules 2 and
 // 3: it is a REAP, not a mutation, and re-validating or materialising a
@@ -58,8 +60,8 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from '
 import path from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 import {
-  CLASSES, CatalogueInvalid, MODEL_ID_RE, PROBE_KINDS, RegistryInvalid, SUBAGENT_CLASSES, availableFor,
-  deriveModels, parseCatalogue, parseRegistry, parseWindows,
+  CLASSES, CatalogueInvalid, MODEL_ID_RE, PROBE_KINDS, RegistryInvalid, SUBAGENT_CLASSES, WINDOW_MAX, WINDOW_MIN,
+  availableFor, deriveModels, parseCatalogue, parseRegistry, parseWindows,
 } from '../shared/models.mjs';
 import {
   MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor, effortFile, mergeSettingsEnv,
@@ -317,22 +319,36 @@ function windowsReport(reading) {
   return { state: 'ok', byModel };
 }
 
-/** tmp + rename, 0600, this repo's rule for any file another process reads —
- *  the server's fleet poll and Plan 3a's routes read this one, and a
- *  `compatible` lane's registry names its endpoint. 2-space indent and a
- *  trailing newline, the shape every hand-editable ccrc file has. */
-function writeRegistry(id, registry) {
-  const p = registryPath(id);
+/** The ONE write of a hand-editable JSON file here — the class registry
+ *  (`writeRegistry`) and the measured windows (`writeWindows`): tmp + rename,
+ *  0600, this repo's rule for any file another process reads. 2-space indent
+ *  and a trailing newline, the shape every hand-editable ccrc file has. Returns
+ *  null, or `[error, detail]` with the caller's own error word; a failed write
+ *  unlinks its tmp, so it leaves nothing behind. */
+function writeJsonFile(p, value, error) {
   const tmp = `${p}.${process.pid}.tmp`;
   try {
-    mkdirSync(modelsDir(), { recursive: true });
-    writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o600 });
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, p);
     return null;
   } catch (e) {
     try { unlinkSync(tmp); } catch { /* the tmp may never have been created */ }
-    return ['registry-unwritable', `${p} could not be written: ${e.message}. Nothing was changed.`];
+    return [error, `${p} could not be written: ${e.message}. Nothing was changed.`];
   }
+}
+
+/** The class registry's write — the server's fleet poll and Plan 3a's routes
+ *  read this file, and a `compatible` lane's registry names its endpoint. */
+function writeRegistry(id, registry) {
+  return writeJsonFile(registryPath(id), registry, 'registry-unwritable');
+}
+
+/** The measured windows' write (codex-bridge spec §2.7). `raw` is a copy of
+ *  the parsed object `readWindowsFile` returned, edited, so keys this build
+ *  does not know are written back as they were. */
+function writeWindows(id, raw) {
+  return writeJsonFile(windowsPath(id), raw, 'windows-unwritable');
 }
 
 /** Spec §5.4's lane manifest — "id, config dir, ports, auth dir, unit names,
@@ -454,7 +470,7 @@ function materialise(account, registry, catalogue, windows) {
     }
   }
   // Every tmp name this call creates, so the catch below can unlink whichever
-  // ones are still around — `writeRegistry`'s own catch does the same for its
+  // ones are still around — `writeJsonFile`'s own catch does the same for its
   // one tmp; this function has up to three.
   const tmps = [];
   try {
@@ -490,7 +506,7 @@ function materialise(account, registry, catalogue, windows) {
     // name would overwrite it. `${p}.${process.pid}.tmp` means a run that
     // keeps failing (e.g. a wedged permissions problem on the hourly timer)
     // leaves a NEW stray file every time instead, so the catch unlinks
-    // whatever it created this call, the same way `writeRegistry` does.
+    // whatever it created this call, the same way `writeJsonFile` does.
     for (const tmp of tmps) { try { unlinkSync(tmp); } catch { /* renamed away, or never created */ } }
     if (e instanceof ModelEnvInvalid) return { err: ['settings-unwritable', e.message] };
     return { err: ['materialise-failed', `${e.message}`] };
@@ -550,7 +566,13 @@ function settingsDrift(account, registry, catalogue, windows) {
  *  asked for. Any other throw (a fable-only lane with no primary class, or —
  *  the case this round exists for — a legacy `subagent: opus`/`fable` left
  *  on disk from before the 2026-09-09 narrowing, or one naming a null slot)
- *  is a real, operator-actionable problem. */
+ *  is a real, operator-actionable problem.
+ *
+ *  It is also RULE 2's render check, run BEFORE any write: the mutation tail
+ *  (on the validated registry) and `windowOp` each refuse `unroutable-lane`
+ *  with this message. So "this lane's env block cannot be rendered" is decided
+ *  in one place for `show` and both writers, and an unseeded registry is never
+ *  refused by either. */
 function renderRefusal(registry, catalogue, windows) {
   if (registry === null) return null;
   if (!CLASSES.some((c) => registry.classes[c] !== null)) return null;
@@ -661,6 +683,11 @@ const OPS = {
   'set-class': { keys: ['file', 'id', 'class', 'model'], required: ['file', 'id', 'class', 'model'] },
   'set-subagent': { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'] },
   'set-effort': { keys: ['file', 'id', 'class', 'level'], required: ['file', 'id', 'class', 'level'] },
+  // Codex-bridge spec §2.7: a lane's measured context windows, in their own
+  // sibling file (`windowOp`). `tokens` is checked against WINDOW_MIN and
+  // WINDOW_MAX here, never in bash.
+  'set-window': { keys: ['file', 'id', 'model', 'tokens'], required: ['file', 'id', 'model', 'tokens'] },
+  'clear-window': { keys: ['file', 'id', 'model'], required: ['file', 'id', 'model'] },
   discovery: { keys: ['file', 'id', 'action', 'model', 'endpoints'], required: ['file', 'id', 'action'] },
   // `check` is OPTIONAL (Plan 3a Task 4): `--check true` is the check-only
   // form, which writes nothing and answers `changed`; omitted, the op writes,
@@ -725,6 +752,134 @@ function materialiseCheck(account, registry, catalogue) {
     changed[key] = onDisk !== text;
   }
   return { changed };
+}
+
+/** `set-window <model> <tokens>` and `clear-window <model>` (codex-bridge spec
+ *  §2.7, Stage 0): the lane's measured context windows, in their own sibling
+ *  file (`windowsPath`) and NEVER in the class registry. These two ops do not
+ *  write `<id>.classes.json` at all, so an older ccrc, after a rollback, reads
+ *  exactly the registry it wrote.
+ *
+ *  Both obey the file header's three rules: one JSON object on stdout; nothing
+ *  written until the edited object is known to read back and the lane's env
+ *  block renders; and a re-materialise on success, as `set-effort` does, so
+ *  the lane's settings.json carries the rule's answer at once. The edited
+ *  object reads back by construction: every entry already in the file was
+ *  read through `parseWindows`, and the one entry `set-window` adds has passed
+ *  the same model-id test and bounds below. So `parseWindows` builds the map
+ *  the rule reads from it and cannot refuse it here, which is why it carries
+ *  no refusal of its own. The render comes first for the mutation tail's
+ *  reason, through the tail's own check (`renderRefusal`): a lane whose block
+ *  cannot be rendered, such as a legacy `subagent: opus|fable` that
+ *  `parseRegistry` still reads, would otherwise have the windows file change
+ *  and then `materialise` refuse. It is refused with the tail's own word,
+ *  `unroutable-lane`, and nothing written. A materialise that still fails
+ *  after the write (an I/O cause, such as a settings.json that is not JSON)
+ *  says in its refusal that the windows file was already updated.
+ *
+ *  `set-window` refuses a `tokens` that is not digits only or lies outside
+ *  `WINDOW_MIN`..`WINDOW_MAX`, and — the typo guard — a model that is neither in
+ *  the lane's catalogue nor one of its class models: a window for such a model
+ *  changes nothing, so writing it would hide the typo. `clear-window` has no
+ *  typo guard: removing a stale entry for a model the lane no longer names is
+ *  the point. Clearing an absent entry is ok with `removed: false` and writes
+ *  nothing; clearing the LAST entry deletes the file, so "absent" keeps meaning
+ *  "no measured window" — unless the file holds a top-level key this build does
+ *  not know. That file is kept, with an empty `windows`, rather than destroyed
+ *  (D-5161): the writer's preservation rule wins over the delete, and the rule
+ *  reads an empty `windows` as no measured window, exactly as it reads an
+ *  absent file.
+ *
+ *  An UNREADABLE file is refused by both, with the remedy: they rewrite that
+ *  file and will not overwrite one they cannot read. Every other reader
+ *  (`materialise`, the hourly refresh, the drift check) treats it as no windows
+ *  and carries on. No lock here: the auto-advance plan wraps both verbs in the
+ *  per-lane lock. */
+function windowOp(opName, a, account, registry, catalogue, reading) {
+  if (!MODEL_ID_RE.test(a.model)) {
+    return refuse(1, 'bad-model-id',
+      `"${a.model}" is not a model id: a letter or digit followed by up to 127 of letters, digits, ".", "_", `
+      + '":", "/" and "-". Nothing was written.', 'model');
+  }
+  if (reading.state === 'unreadable') {
+    return refuse(1, 'windows-unreadable',
+      `${reading.reason} — ${opName} rewrites that file and will not overwrite one it cannot read. Fix it by hand, `
+      + `or delete it to drop every measured window on account "${a.id}" (its lane then uses the default rule), `
+      + 'then re-run. Nothing was written.');
+  }
+  if (opName === 'set-window') {
+    if (!/^[0-9]+$/.test(a.tokens) || Number(a.tokens) < WINDOW_MIN || Number(a.tokens) > WINDOW_MAX) {
+      return refuse(1, 'bad-window',
+        `"${a.tokens}" is not a window: it is a whole number of tokens from ${WINDOW_MIN} to ${WINDOW_MAX}, written `
+        + 'in digits only (400000, not 400k, 400,000 or 4e5). Nothing was written.', 'tokens');
+    }
+    const known = (catalogue !== null && catalogue.models.some((m) => m.id === a.model))
+      || CLASSES.some((c) => registry.classes[c] === a.model);
+    if (!known) {
+      return refuse(1, 'unknown-window-model',
+        `"${a.model}" is neither in account "${a.id}"'s catalogue nor one of its class models, so a window for it `
+        + 'would change nothing. set-window takes a MODEL id, not a class. Run '
+        + `'ccrc models ${a.id} show' to see the lane's class models, or 'ccrc models refresh ${a.id}' if the `
+        + 'model is new. Nothing was written.', 'model');
+    }
+  }
+  // RULE 2's render, before any write: the mutation tail's own check, with
+  // its gate (an unseeded registry renders no block and is not refused). The
+  // windows play no part in the answer (the eighth key is written or omitted,
+  // never refused); they are passed for consistency with every other call.
+  const unroutable = renderRefusal(registry, catalogue, windowsOf(reading));
+  if (unroutable !== null) return refuse(1, 'unroutable-lane', `${unroutable} No window was written.`);
+  // The raw object, cloned: unknown keys, at the top level and inside each
+  // entry, ride through untouched (spec §2.7: the file is forward-compatible).
+  const raw = reading.state === 'ok' ? JSON.parse(JSON.stringify(reading.raw)) : { windows: {} };
+  let extra;
+  if (opName === 'set-window') {
+    const tokens = Number(a.tokens);
+    const previous = reading.state === 'ok' && Object.prototype.hasOwnProperty.call(reading.windows, a.model)
+      ? reading.windows[a.model] : null;
+    const prev = isObj(raw.windows[a.model]) ? raw.windows[a.model] : {};
+    raw.windows[a.model] = { ...prev, tokens, setAt: new Date().toISOString() };
+    extra = { model: a.model, tokens, previous };
+  } else {
+    const removed = Object.prototype.hasOwnProperty.call(raw.windows, a.model);
+    if (removed) delete raw.windows[a.model];
+    extra = { model: a.model, removed };
+  }
+
+  let next = reading;
+  if (opName === 'set-window' || extra.removed === true) {
+    if (Object.keys(raw.windows).length === 0 && Object.keys(raw).length === 1) {
+      try {
+        unlinkSync(windowsPath(a.id));
+      } catch (e) {
+        if (e.code !== 'ENOENT') {
+          return refuse(1, 'windows-unwritable',
+            `${windowsPath(a.id)} could not be removed: ${e.message}. Nothing was changed.`);
+        }
+      }
+      next = { state: 'absent' };
+    } else {
+      // The map the rule reads, built from the very object about to be
+      // written. It cannot refuse that object (the docstring says why), so it
+      // carries no refusal of its own.
+      const windows = parseWindows(raw);
+      const w = writeWindows(a.id, raw);
+      if (w !== null) return refuse(1, w[0], w[1]);
+      next = { state: 'ok', windows, raw };
+    }
+  }
+  const mat = materialise(account, registry, catalogue, windowsOf(next));
+  if (mat.err !== undefined) {
+    // Unlike every refusal above, the windows file has moved by now (when
+    // `next` is a new reading), so the sentence says so rather than leave the
+    // operator to infer that nothing changed.
+    const detail = next === reading ? mat.err[1]
+      : `${mat.err[1]} (${windowsPath(a.id)} itself was already updated: the lane's settings.json takes the `
+        + 'new window at the next materialise that succeeds.)';
+    return refuse(1, mat.err[0], detail);
+  }
+  out({ ok: true, op: opName, ...extra, ...describe(account, registry, catalogue, next) });
+  return 0;
 }
 
 /** `--key value` pairs, refused rather than ignored, with a strict `i += 2`
@@ -1061,11 +1216,16 @@ function main(argv) {
     return 0;
   }
 
-  // Every remaining op MUTATES an existing registry.
+  // Every remaining op needs an existing registry. All but the two window ops
+  // MUTATE it; those two read its class models (their typo guard) and
+  // re-materialise it, but write only the sibling windows file.
   if (registry === null) {
     return refuse(1, 'no-registry',
       `account "${a.id}" has no class registry yet. Run 'ccrc models ${a.id} init `
       + `<${PROBE_KINDS.join('|')}>' first — it creates ${registryPath(a.id)}.`);
+  }
+  if (opName === 'set-window' || opName === 'clear-window') {
+    return windowOp(opName, a, account, registry, catalogue, win);
   }
   const next = JSON.parse(JSON.stringify(registry));
 
@@ -1257,16 +1417,13 @@ function main(argv) {
     extra = { ...extra, scope: Array.isArray(validated.discovery) ? 'list' : 'catalogue' };
   }
   if (CLASSES.some((c) => validated.classes[c] !== null)) {
-    try {
-      // The eighth key can never throw (it is written or omitted, never
-      // refused), so `catalogue` and the windows matter here only for
-      // consistency with every other call — this check is purely "does the
-      // lane route anywhere".
-      modelEnvBlock(validated, catalogue, windowsOf(win));
-    } catch (e) {
-      if (e instanceof ModelEnvInvalid) return refuse(1, 'unroutable-lane', e.message);
-      throw e;
-    }
+    // The eighth key can never throw (it is written or omitted, never
+    // refused), so `catalogue` and the windows matter here only for
+    // consistency with every other call — this check is purely "does the
+    // lane route anywhere". `renderRefusal` is that one check; `windowOp`
+    // runs it too.
+    const unroutable = renderRefusal(validated, catalogue, windowsOf(win));
+    if (unroutable !== null) return refuse(1, 'unroutable-lane', unroutable);
   } else if (CLASSES.some((c) => registry.classes[c] !== null)) {
     // Going from seeded to unseeded is the one transition that would silently
     // un-route a live lane, so it is refused with the materialiser's own

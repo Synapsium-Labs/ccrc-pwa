@@ -614,7 +614,7 @@ describe('C7\'s tmp names are unique per process — a static pin, not a race (r
     for (const l of lines) expect(l).toContain('${process.pid}');
   });
 
-  it('all three tmp-name sites in deploy/models-op.mjs (writeRegistry, materialise, litellm render) carry ${process.pid}', () => {
+  it('all three tmp-name sites in deploy/models-op.mjs (writeJsonFile, materialise, litellm render) carry ${process.pid}', () => {
     const lines = tmpAssignmentLines(path.join(REPO_ROOT, 'deploy', 'models-op.mjs'));
     expect(lines.length, `expected 3 tmp-name sites, found: ${JSON.stringify(lines)}`).toBe(3);
     for (const l of lines) expect(l).toContain('${process.pid}');
