@@ -14,7 +14,7 @@
 //   4. THE LOCK. `step-up-locked` reads its sentence and offers no button: a button the server will refuse is a
 //      trap.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { useState, type ReactNode } from 'react';
 import { ConfirmItsYou, LOCKED_TEXT } from '../src/accounts/ConfirmItsYou';
 import {
@@ -147,6 +147,8 @@ describe('Confirm it\'s you (D-5512, spec §3.2)', () => {
     expect(toB64url((pk.challenge as Uint8Array).buffer as ArrayBuffer)).toBe(CHALLENGE);
     expect(pk.rpId).toBe('box.example.invalid');
     expect(pk.userVerification).toBe('required');
+    // The prompt's own timeout is the one the TTL sum pins: a longer one could sign a challenge the box has expired.
+    expect(pk.timeout).toBe(STEP_UP_CEREMONY_MS);
 
     // The assertion reaches /finish, and the stamp it earns hides the step: checked AFTER the finish settles, since
     // the button reads "Confirming…" while it is in flight (D-5690 (3): the earned stamp outranks the screen's read).
@@ -218,6 +220,9 @@ describe('Confirm it\'s you (D-5512, spec §3.2)', () => {
     render(<Sheet freshUntil={null} deps={deps} />);
     const field = await screen.findByLabelText(/passphrase/i) as HTMLInputElement;
     expect(field.type).toBe('password');
+    // The box login passphrase, as LoginScreen asks for it; and the step says why it is there.
+    expect(field.getAttribute('autocomplete')).toBe('current-password');
+    expect(screen.getByText(/needs a fresh check that it.s you/i)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /confirm it.s you/i })).toBeNull();
 
     // On submit: cleared at once, before the answer.
@@ -387,6 +392,8 @@ describe('Confirm it\'s you (D-5512, spec §3.2)', () => {
     expect(screen.getByRole('status').textContent).toBe(STALE_CHALLENGE_TEXT);
     await waitFor(() => expect(box.calls()).toEqual(['/api/auth/step-up/start', '/api/auth/step-up/start']));
     await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    // The fresh challenge has landed, so "Getting a fresh check" is no longer true.
+    expect(screen.getByRole('status').textContent).toBe('');
     tap(confirmButton());
     expect(auth.syncCalls).toBe(1);
   });
@@ -548,5 +555,73 @@ describe('Confirm it\'s you (D-5512, spec §3.2)', () => {
     fireEvent.submit(field.closest('form')!);
     await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
     expect(box.bodies('/api/auth/step-up/passphrase')).toEqual([]);
+  });
+  it('a second confirm while a prompt is open does not open another (the hook alone, without the button)', async () => {
+    // A host may call `confirm` from its own control; the disabled button is not the only guard.
+    const box = fakeBox();
+    const auth = fakeAuthenticator();
+    const real = auth.get;
+    auth.get = (o) => { void real(o); return new Promise(() => undefined); };
+    const deps = { client: createApi(box.fetch as unknown as typeof fetch), credentials: auth };
+    const { result } = renderHook(() => useStepUp(null, deps));
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    act(() => { result.current.confirm(); });
+    act(() => { result.current.confirm(); });
+    expect(auth.calls).toBe(1);
+  });
+
+  it('an assertion that comes back past the challenge\'s life is never sent: a fresh start instead (D-5826)', async () => {
+    // The WebAuthn timeout is a hint the browser may ignore: a prompt held open longer signs a challenge the box
+    // has expired, and sending it would spend one of the session's attempts.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const box = fakeBox();
+    const auth = fakeAuthenticator();
+    const real = auth.get;
+    let finishGet: (c: Credential | null) => void = () => undefined;
+    auth.get = (o) => { const c = real(o); return new Promise((r) => { finishGet = (x) => { void c.then((got) => r(x ?? got)); }; }); };
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: auth }} />);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    tap(confirmButton());
+    expect(auth.syncCalls).toBe(1);
+    vi.setSystemTime(Date.now() + CHALLENGE_REFRESH_MS + STEP_UP_CEREMONY_MS + 1_000);
+    await act(async () => { finishGet(null); await Promise.resolve(); });
+    await waitFor(() => expect(starts(box)).toBe(2));
+    expect(box.bodies('/api/auth/step-up/finish')).toEqual([]);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+  });
+
+  it('an assertion back inside the challenge\'s life is sent', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const box = fakeBox();
+    const auth = fakeAuthenticator();
+    const real = auth.get;
+    let finishGet: () => void = () => undefined;
+    auth.get = (o) => { const c = real(o); return new Promise((r) => { finishGet = () => { void c.then(r); }; }); };
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: auth }} />);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    tap(confirmButton());
+    vi.setSystemTime(Date.now() + STEP_UP_CEREMONY_MS);
+    await act(async () => { finishGet(); await Promise.resolve(); });
+    await waitFor(() => expect(box.bodies('/api/auth/step-up/finish')).toHaveLength(1));
+  });
+
+  it('`step-up-required` without `verdict: wrong` is not called a wrong proof (D-5827)', async () => {
+    // The box answers that when the session row vanished or the secret is not measured: the operator did nothing
+    // wrong.
+    const box = fakeBox({ answer: () => json(403, { ok: false, error: 'step-up-required' }) });
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: fakeAuthenticator() }} />);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    tap(confirmButton());
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe(OTHER));
+    expect(starts(box)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('`step-up-required` without `verdict: wrong` on the passphrase arm is not "Wrong passphrase" either (D-5827)', async () => {
+    const box = fakeBox({ ids: [], answer: () => json(403, { ok: false, error: 'step-up-required' }) });
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: fakeAuthenticator() }} />);
+    const field = await screen.findByLabelText(/passphrase/i) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: 'pass-one' } });
+    fireEvent.submit(field.closest('form')!);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe(OTHER));
   });
 });
