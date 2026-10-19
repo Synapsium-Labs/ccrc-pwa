@@ -34,8 +34,9 @@ const named = (v: AppView): string => `${v.skin}, ${v.theme}, ${v.width}px`;
 
 // ---- the fixture ---------------------------------------------------------------------------------------------------
 // Neutral names only. Two kinds of row, because they fail differently. Long labels and pool names, as long as real
-// ones get (19 to 29 characters): D-5570's overflow came from the widest row's one-line min-content, which short
-// strings never reach, and a label wider than the group is the extreme case where the name wraps inside its pill.
+// ones get (19 to 27 characters): D-5570's overflow came from the widest row's one-line min-content, which short
+// strings never reach, and a label wider than the group is the extreme case where the name wraps inside its pill
+// (one has no hyphen to break at, so only `overflow-wrap: anywhere` keeps it there).
 // Short ones: a name and a tag that each fit the group but not side by side, so the tag or the pill has to drop
 // under the name rather than squeeze it or be cut.
 
@@ -48,7 +49,9 @@ const ROSTER = [
   { id: 'lane-a', label: 'lane-a-with-a-long-label', hue: 'cyan', pool: POOL_HOME },
   { id: 'lane-b', label: 'lane-b', hue: 'violet', pool: POOL_HOME },
   { id: 'lane-c', label: 'lane-c-label', hue: 'blue', pool: POOL_SHORT },
-  { id: 'lane-d', label: 'lane-d-with-a-longest-label', hue: 'amber', pool: POOL_LONG },
+  // No hyphen to break at, and wider than the group at 360: only `overflow-wrap: anywhere` on `.acct-ident` keeps it
+  // inside its pill (with `normal` it runs out of the chip and the group).
+  { id: 'lane-d', label: 'laneDwithAnUnbrokenLabel', hue: 'amber', pool: POOL_LONG },
 ].map((r) => ({ ...r, homeAble: true, hidden: false }));
 
 const usage = (wrapper: string, five: number, seven: number): object => ({
@@ -148,7 +151,8 @@ interface RowFit {
    *  wider than the group. Either of the last two means the group squeezed its items where it should have wrapped
    *  them: the pill and the tag drop under the name. */
   readonly over: readonly {
-    readonly label: string; readonly row: number; readonly ring: number; readonly content: number; readonly ident: number;
+    readonly label: string; readonly row: number; readonly ring: number; readonly ringDrawn: boolean;
+    readonly content: number; readonly ident: number;
     readonly nameWhole: boolean; readonly nameWrapsNeedlessly: boolean; readonly poolCutNeedlessly: boolean;
   }[];
 }
@@ -193,6 +197,7 @@ function measureRows(page: Page): Promise<RowFit> {
         label: chip?.textContent ?? '',
         row: right - edge,
         ring: right + reach - edge,
+        ringDrawn: row.matches(':focus-visible') && cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0,
         content: Math.max(...[...row.children].map((k) => k.getBoundingClientRect().right)) - (right - parseFloat(cs.paddingRight)),
         ident: group === null ? NaN : Math.max(...items) - group.getBoundingClientRect().right,
         nameWhole: chip !== null && chip.scrollWidth <= chip.clientWidth + 0.5,
@@ -215,7 +220,8 @@ function measureRows(page: Page): Promise<RowFit> {
 function expectFits(fit: RowFit, where: string): void {
   for (const r of fit.over) {
     expect.soft(r.row, `${where}: ${r.label}'s row runs past the sheet body`).toBeLessThanOrEqual(0.5);
-    expect.soft(r.ring, `${where}: ${r.label}'s keyboard ring is cut by the sheet body (or was not drawn)`).toBeLessThanOrEqual(0.5);
+    expect.soft(r.ring, `${where}: ${r.label}'s keyboard ring is cut by the sheet body`).toBeLessThanOrEqual(0.5);
+    expect.soft(r.ringDrawn, `${where}: ${r.label}'s keyboard ring is not drawn under :focus-visible`).toBe(true);
     expect.soft(r.content, `${where}: ${r.label}'s gauges or chevron run out of the row`).toBeLessThanOrEqual(0.5);
     expect.soft(r.ident, `${where}: ${r.label}'s name or tags run out of their group into the gauges`).toBeLessThanOrEqual(0.5);
     expect.soft(r.nameWhole, `${where}: ${r.label}'s name is cut`).toBe(true);
