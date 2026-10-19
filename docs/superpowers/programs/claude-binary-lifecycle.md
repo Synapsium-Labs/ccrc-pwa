@@ -6,7 +6,7 @@ Plans: `docs/superpowers/plans/2026-10-19-claude-binary-lifecycle-w1-observe.md`
 `docs/superpowers/plans/2026-10-19-claude-binary-lifecycle-w3-install.md` (wave 3, CB3a to CB3j, OA-4 and OA-5),
 `docs/superpowers/plans/2026-10-19-claude-binary-lifecycle-w4-self-update-off.md` (wave 4, CB4a),
 `docs/superpowers/plans/2026-10-19-claude-binary-lifecycle-w5-auto-roll.md` (wave 5, CB5a to CB5c, OA-6)
-Home project: `ccrc-pwa`   Brief: CCRCP-32 (GitHub #218)   Workspace: **a fresh child per wave**
+Home project: `ccrc-pwa`   Brief: GitHub #218   Workspace: **a fresh child per wave**
 **Status: approved; wave 1 in progress** (R2, 2026-10-19; CB1a landed as #726). The spec's rev 3, the five plans and this ledger land in one docs PR.
 
 **What this program is.** ccrc owns Claude Code releases on the fleet.
