@@ -2922,6 +2922,18 @@ describe('SettingsScreen — the release window (D-5505)', () => {
     expect(region.querySelector(`li[data-tag="${W_TAG(22)}"] details.settings-release-notes-fold`)).toBeNull();
   });
 
+  it('an empty catalogue draws no release window, and a halted mixed fleet then shows no halt line (nothing it gates is drawn)', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(wView([], [
+      t8Node({ current: t8Stamp(W_TAG(4)), highestVersion: W_TAG(4), ...HALTED }),
+      t8Server({ current: t8Stamp(W_TAG(9)), highestVersion: W_TAG(9) }),
+    ]));
+    render(<SettingsScreen />);
+    await screen.findByRole('list', { name: 'Nodes' });
+    expect(screen.queryByRole('region', { name: 'Releases' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Update all to/ })).toBeNull();
+    expect(screen.queryByText(/^Update all waits:/)).toBeNull();
+  });
+
   it('unmeasured because the channel is unread: no Roll back is drawn under "no rollback is offered" (D-5609)', async () => {
     const region = await mount({ ...wView(w22(), at(W_TAG(22))), intent: [] });
     expect(within(region).getByText('The channel could not be read, so no rollback is offered.')).toBeInTheDocument();
