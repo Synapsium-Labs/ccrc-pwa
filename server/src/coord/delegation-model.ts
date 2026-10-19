@@ -558,33 +558,58 @@ export function deriveDelegationLineageId(parts: DelegationLineageIdParts): stri
 }
 
 /**
- * Reads the immutable mapping first. A natural key with a mapping ALWAYS gets its mapped ID back, whatever journalId the
- * caller now holds: a key never mints a second activity, and an ID is never re-hashed from a later event because the
- * original naming record was pruned (O4). Only a missing mapping allocates, and that needs the `journalId` of an accepted
- * qualifying retained record.
+ * The mapping-first rule, written INTO the caller's own mapping (D-5833). It reads the mapping first by an OWN property
+ * only: a natural key with a mapping ALWAYS gets its mapped ID back, whatever journalId the caller now holds, and the
+ * mapping is left as it was (a key never mints a second activity, and an ID is never re-hashed from a later event because
+ * the original naming record was pruned: O4). Only a missing mapping allocates, and that needs the `identityJournalId` of
+ * an accepted qualifying retained record: it throws `identity-journal-id-required` without one and
+ * `bad-identity-journal-id` for a malformed one, and a refusal writes nothing. An allocation sets `mapping[encoded]` and
+ * returns the ID. The encoded key is length-prefixed, so it can never be an inherited name and the assignment is an own
+ * write.
  *
- * The returned checkpoint is a NEW object carrying the mapping; the argument is untouched and its `revision` is left to
- * the serialized checkpoint replacement. THE ID MUST NOT ESCAPE (be returned to a caller, inserted into `coord.db`,
- * logged as an outcome, or put in a report) until a checkpoint holding this mapping and the activity row has been
- * durably replaced (O1): until then it is a candidate, and a crash discards it.
+ * `mapping` is MUTATED, so the caller must own it: the checkpoint builder's fold does (its mapping is private to the
+ * builder, copied by `adoptRows` and `clone` and re-materialised by `build`), and `restoreOrAllocateActivityId` passes a
+ * copy. THE ID MUST NOT ESCAPE (be returned to a caller, inserted into `coord.db`, logged as an outcome, or put in a
+ * report) until a checkpoint holding this mapping and the activity row has been durably replaced (O1): until then it is a
+ * candidate, and a crash discards it.
+ */
+export function allocateDelegationActivityIdInto(
+  mapping: Record<string, string>,
+  key: DelegationActivityNaturalKey,
+  identityJournalId: string | null,
+): string {
+  const encoded = encodeDelegationNaturalKey(key);
+  const mapped = Object.hasOwn(mapping, encoded) ? mapping[encoded] : undefined;
+  if (mapped !== undefined) return mapped;
+  if (identityJournalId === null) {
+    throw new DelegationModelError('identity-journal-id-required',
+      'a natural key with no mapping needs the journalId of an accepted qualifying record');
+  }
+  const activityId = deriveDelegationActivityId(key, identityJournalId);
+  mapping[encoded] = activityId;
+  return activityId;
+}
+
+/**
+ * The pure form of `allocateDelegationActivityIdInto`: the same mapping-first rule over a checkpoint it does not touch
+ * (O4). A hit returns the SAME checkpoint object, a miss a NEW one carrying the mapping with the key added, whose
+ * `revision` is left to the serialized checkpoint replacement. After D-5833 the checkpoint builder's fold allocates in
+ * place and no longer calls this, so its only callers are the O4 rows in `delegation-model.test.ts`.
+ *
+ * How a hit is told WITHOUT a second mapping-first read: the in-place function writes the copy only on a miss, so the
+ * copy's own-key count is unchanged by a hit and one greater after a miss (a miss always adds exactly the one new key).
+ * The count is a measure of the write, not a second read of the key. THE ID MUST NOT ESCAPE until durably replaced (O1).
  */
 export function restoreOrAllocateActivityId(
   key: DelegationActivityNaturalKey,
   identityJournalId: string | null,
   checkpoint: DelegationCheckpointV1,
 ): { activityId: string; checkpoint: DelegationCheckpointV1 } {
-  const encoded = encodeDelegationNaturalKey(key);
-  const mapped = Object.hasOwn(checkpoint.activityIdsByNaturalKey, encoded) ? checkpoint.activityIdsByNaturalKey[encoded] : undefined;
-  if (mapped !== undefined) return { activityId: mapped, checkpoint };
-  if (identityJournalId === null) {
-    throw new DelegationModelError('identity-journal-id-required',
-      'a natural key with no mapping needs the journalId of an accepted qualifying record');
-  }
-  const activityId = deriveDelegationActivityId(key, identityJournalId);
-  return {
-    activityId,
-    checkpoint: { ...checkpoint, activityIdsByNaturalKey: { ...checkpoint.activityIdsByNaturalKey, [encoded]: activityId } },
-  };
+  const copy = { ...checkpoint.activityIdsByNaturalKey };
+  const before = Object.keys(copy).length;
+  const activityId = allocateDelegationActivityIdInto(copy, key, identityJournalId);
+  if (Object.keys(copy).length === before) return { activityId, checkpoint };
+  return { activityId, checkpoint: { ...checkpoint, activityIdsByNaturalKey: copy } };
 }
 
 /** An activity's source as the lease provenance it implies: `bash-worktree` is raw use of a worktree, `raw` on a lease.

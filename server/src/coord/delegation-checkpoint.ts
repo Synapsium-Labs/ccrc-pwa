@@ -41,6 +41,7 @@ import {
   DelegationModelError,
   DELEGATION_JOURNAL_ENTRY_KINDS,
   DELEGATION_PRUNING_HOLD_REASONS,
+  allocateDelegationActivityIdInto,
   assertDelegationCheckpointIdentity,
   assertWave3Leases,
   canonicalDelegationJson,
@@ -53,7 +54,6 @@ import {
   leaseSourceKindOfActivity,
   parseDelegationInstant,
   planDelegationCursorRetention,
-  restoreOrAllocateActivityId,
   sortedProjectionRows,
   WAVE3_LEASE_SOURCE_KINDS,
   type DeepReadonly,
@@ -776,17 +776,17 @@ export class DelegationCheckpointBuilder {
 
   /** `c` carries no `sequence`: opening never reads it, and a worker opened from its run's row has no candidate record to take one from. */
   private openFromCandidate(c: Omit<DelegationActivityCandidate, 'sequence'>, encoded: string): string {
-    // The ID is derived from the IDENTITY RECORD's accepted journalId, through the model's mapping-first function.
-    const allocated = restoreOrAllocateActivityId(c.key, c.journalId, { ...emptyDelegationCheckpoint(), activityIdsByNaturalKey: this.mapping });
-    this.mapping = { ...allocated.checkpoint.activityIdsByNaturalKey };
+    // The ID is derived from the IDENTITY RECORD's accepted journalId, through the model's mapping-first function, written
+    // INTO this builder's own mapping (D-5833): the mapping is private to the builder, so there is no wrapper and no copy.
+    const activityId = allocateDelegationActivityIdInto(this.mapping, c.key, c.journalId);
     const ended = c.endedAt !== null;
-    this.activities.set(allocated.activityId, {
-      activityId: allocated.activityId, parentId: c.key.parentId, parentIncarnation: c.key.parentIncarnation, sourceKind: c.key.sourceKind,
+    this.activities.set(activityId, {
+      activityId, parentId: c.key.parentId, parentIncarnation: c.key.parentIncarnation, sourceKind: c.key.sourceKind,
       upstreamId: c.key.upstreamId, identityJournalId: c.journalId, displayName: null, executionState: ended ? 'ended' : 'active',
       openedAt: c.observedAt, endedAt: ended && c.endedAt !== null ? maxInstant(c.endedAt, c.observedAt) : null, lastEventAt: c.lastObservedAt,
     });
     this.candidates.delete(encoded);
-    return allocated.activityId;
+    return activityId;
   }
 
   /**
