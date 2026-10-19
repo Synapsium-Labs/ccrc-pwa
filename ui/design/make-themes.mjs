@@ -594,6 +594,19 @@ function build(seed) {
       t['--ink-on-danger'] = INKS[0];
     }
   }
+  // THE DEAD BANNER'S LIFT AND PRESS, LIGHT PALETTES ONLY (D-5688). tokens.css's
+  // :root derives `--bg-hover-on-dead` and `--bg-pressed-on-dead` at 35% and
+  // 70% toward `--ink-on-danger`, and a dark seed keeps them. On a light
+  // palette 35% put the hover under the palette's own card hover step (1.072
+  // to 1.076 against 1.080 to 1.100 here), so a light block re-declares the
+  // pair further along the same mix, as the hand-tuned light block does. Kept
+  // as color-mix() of the block's own tokens, not pre-composited: the two
+  // inputs are already this block's, and the gate resolves the mix per palette.
+  if (!dark) {
+    const onDead = (p) => `color-mix(in srgb, var(--ink-on-danger) ${p}%, var(--status-dead-tint-solid))`;
+    t['--bg-hover-on-dead'] = onDead(60);
+    t['--bg-pressed-on-dead'] = onDead(95);
+  }
   t['--status-done'] = dot('done');       t['--status-done-text'] = text('done');
   t['--status-cleanup'] = dot('cleanup'); t['--status-cleanup-text'] = text('cleanup');
 

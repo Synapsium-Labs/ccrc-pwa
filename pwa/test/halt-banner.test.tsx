@@ -109,6 +109,18 @@ describe('HaltBanner — when it speaks', () => {
   });
 });
 
+// D-5689: the halt banner is amber, not the dead banner, so its danger-ghost Ack keeps the card's grounds. Held at
+// the call site: `ground="dead"` here would paint the red-ward dead mix on the amber (the review's mutant V1).
+describe('HaltBanner — the Ack sits on the card ground, not the dead banner\'s (D-5689)', () => {
+  it('its Ack lifts and presses on --bg-hover and --bg-pressed, with no -on-dead ground', () => {
+    mount(view([server(), failed()]));
+    const ack = screen.getByRole('button', { name: 'Ack fleet' });
+    expect(ack.className).toContain('enabled:hover:bg-hover');
+    expect(ack.className).toContain('enabled:active:bg-pressed');
+    expect(ack.className).not.toMatch(/on-dead/);
+  });
+});
+
 describe('HaltBanner — the Ack in place is the Settings Ack', () => {
   it('sends POST /api/updates/ack for that node once, then re-polls', async () => {
     const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: node() });

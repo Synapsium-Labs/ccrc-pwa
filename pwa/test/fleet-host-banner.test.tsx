@@ -108,6 +108,15 @@ describe('FleetHostBanner', () => {
     expect(screen.getByRole('button', { name: 'Reboot' }).className).toContain('flex-none');
   });
 
+  it("Reboot lifts and sinks to the dead banner's own grounds, not the card's (D-5688)", async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(health());
+    render(<FleetHostBanner />);
+    const cls = (await screen.findByRole('button', { name: 'Reboot' })).className;
+    expect(cls).toMatch(/(^|\s)enabled:hover:bg-hover-on-dead(\s|$)/);
+    expect(cls).toMatch(/(^|\s)enabled:active:bg-pressed-on-dead(\s|$)/);
+    expect(cls).not.toMatch(/(^|\s)enabled:(hover:bg-hover|active:bg-pressed)(\s|$)/);
+  });
+
   it('warns when the host is UP but the two boxes disagree about the roster', async () => {
     vi.spyOn(api, 'fleetHealth').mockResolvedValue(
       health({ connected: true, downSince: null, roster: 'divergent' }));

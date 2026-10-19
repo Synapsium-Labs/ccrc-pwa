@@ -240,8 +240,8 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
     case 'bad-transition':
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
     // `detail` spread, not `detail: r.detail`: an L4 adapter may not narrow a
-    // distinction it received (`route: <why>[ <field>]`, present only for the
-    // malformed-route refusal), so its PRESENCE rides the wire exactly as
+    // distinction it received (`route: <why>[ <field>]` or `slug: <why>`,
+    // present only for those refusals), so its PRESENCE rides the wire exactly as
     // this member carries it — never `''` standing in for "nothing to say".
     case 'bad-request':
       return reply.code(400).send({ ok: false, error: 'bad-request', ...(r.detail === undefined ? {} : { detail: r.detail }) });
@@ -1533,7 +1533,7 @@ export function registerCoordRoutes(
     const id = parseCanonicalPositiveSafeInteger(idParam);
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown };
+    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown; slug?: unknown };
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState, tmux: deps.tmux, queue: deps.queue,
       // The one place a wrapper becomes a directory, called from L4 where the
@@ -1547,7 +1547,7 @@ export function registerCoordRoutes(
       turnVerdict: (rec, uuid) => turnVerdictFor(turnReads, rec, uuid),
       // D-5242: the wake budget's one list, the watcher's (optional: a test's stand-in watcher may carry none).
       ...(watcher?.admitWake === undefined ? {} : { admitWake: (kind: 'asked', sid: string) => watcher.admitWake(kind, sid) }) };
-    const run = () => coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route));
+    const run = () => coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route, body.slug));
     const outcome = await run();
     // D-5238: a pane this dispatch STARTED and has not published a live file. The wait is HERE, outside
     // `coordMutex` (close, reclaim, settle and the dead-coordinator lane's abandons share it), and only a measured
