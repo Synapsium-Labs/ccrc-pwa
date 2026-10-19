@@ -2145,6 +2145,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         block, but not the bench's under 1 s. About 3 to 4 s remains unexplained. Mail 6628 gave the broker's
         coordinator the numbers and offered a per-thread and checkpoint/WAL bracket to split the remainder. For
         this programme the watchdog's margin is now comfortable (a 5 s block against its 25 s sampling span).
+      - 10:15: the remainder split, at the broker's request (mail 6629), read-only, 10:11:20 to 10:16:51; five
+        blocks. Once a second: `/health`, the checkpoint, WAL and journal mtimes, and per-thread CPU. The shape, the
+        same four times:
+        - first the flush: the journal append, the checkpoint rename, then the WAL commit of its projection, about
+          0.6 s;
+        - then 4 to 5 s of main-thread CPU with no file writes, closed by one WAL commit.
+        The fifth block ran about 4 s with no flush at all, so the long stretch is reconcile or the repair
+        projection's transaction; mtimes cannot split those two. Other threads stay near 0 inside a block, so GC is
+        not the story. The checkpoint is 9.6 MB (+1.03 MB since 02:41). Census trees on the fleet box: 367 across
+        14 repositories (85 agent or workflow), unchanged since the morning. Mail 6630.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
