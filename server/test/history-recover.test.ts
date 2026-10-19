@@ -3961,7 +3961,7 @@ describe('W1-B4 Task 10: export replay in the recovery step (spec §9.14 "Export
     }
   });
 
-  it('the cursor: each chunk commits its segment and position with what it applied; a step split over many small budgets re-applies nothing and keeps +pairs through both export phases', async () => {
+  it('the cursor: each chunk commits its segment and position with what it applied; a step split over many small budgets re-applies nothing and keeps +pairs through the three export phases', async () => {
     const { box, ids, db } = x10Store('ccrc-history-b4-cursor-', 'index+pairs');
     try {
       const t0 = Date.now() - 400 * X10_DAY;

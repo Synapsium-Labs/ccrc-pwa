@@ -7304,8 +7304,9 @@ cp ccd/history/sweep.mjs "$SCRATCH/sweep.orig"
 cp ccd/history/lib.mjs "$SCRATCH/lib.orig"
 T() { (cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t "$1"); }
 
-# M1 (BK21's CONTROL): rows before blobs — the two export phases swapped in lib's order.
-mut ccd/history/lib.mjs "Object.freeze(['index', 'apply', 'export-blobs', 'export-rows', 'reindex'])" "Object.freeze(['index', 'apply', 'export-rows', 'export-blobs', 'reindex'])"
+# M1 (BK21's CONTROL): rows before blobs — the rows phase moved before both blob phases in lib's order (three export
+# phases since D-5397 (history-export-replay-bytes-before-stubs); re-anchored and re-measured red for review 621).
+mut ccd/history/lib.mjs "Object.freeze(['index', 'apply', 'export-blobs', 'export-stubs', 'export-rows', 'reindex'])" "Object.freeze(['index', 'apply', 'export-rows', 'export-blobs', 'export-stubs', 'reindex'])"
 T 'BK21'; cp "$SCRATCH/lib.orig" ccd/history/lib.mjs
 # Expected RED: expected [] to deeply equal [ { uuid: …, blobSeg: '2.feedface.db', … } ] (export_row_blob_missing 1).
 
@@ -7769,7 +7770,7 @@ that text:
   home-filesystem preflight (`planCopy` with that filesystem's own floor and the 256 MiB segment bound), the
   mark-failure backoff and the check after a bind (RD2: the sweep measures and acts), the row-level due rule that
   carries a due row's unexported blobs (B2's per-copy reducer as its default, the census's, so the two keep one
-  clock), the oldest due-since, the two export recovery phases and their cursor arm, the
+  clock), the oldest due-since, the three export recovery phases (D-5397) and their cursor arm, the
   segment replay verdict, and doctor's `export-due` rule with the writer live;
 - store.mjs segments: a temp written `O_EXCL` 0600 with journal mode off, published by `link()` (never by rename, never
   overwritten), a read-only open, page readers, the listing and stale temps;
