@@ -2254,6 +2254,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         (server free disk under 15G) stands, and the server has 29.7G free. v0.0.369 to v0.0.378 followed,
         unapplied. STATUS: fleet and server v0.0.368, newest v0.0.378, stable v0.0.328, intent dev/auto=off,
         backups fleet 196M/server 3203M, disk free fleet 207G/work volume 92G/server 30G.
+      - 23:55: the history programme's coordinator (mail 6908) measured its check clean at about 23:05, lag 341 s.
+        The two timed-out passes had 2.3 and 3.4 CPU-minutes in their 10, so they read as starved under the fleet
+        box's load, not hung. A tap made under that load can show the same two FAILs again; they clear within a few
+        passes. v0.0.379 (#818) to v0.0.383 (#830) followed, unapplied. STATUS: fleet and server v0.0.368, newest
+        v0.0.383, stable v0.0.328, intent dev/auto=off, backups fleet 196M/server 3203M, disk free fleet 207G/work
+        volume 104G/server 29G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
