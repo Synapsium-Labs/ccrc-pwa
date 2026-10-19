@@ -17,7 +17,7 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
-import { GROUND_MOTION } from '../lib/press';
+import { GROUND_MOTION, PRESS_GROUND } from '../lib/press';
 
 export const buttonVariants = cva(
   `flex min-h-tap cursor-pointer items-center justify-center rounded-md font-ui ${GROUND_MOTION} enabled:active:scale-[0.97] disabled:cursor-default ${FOCUS_RING}`,
@@ -108,7 +108,7 @@ export const buttonVariants = cva(
       },
     },
     compoundVariants: [
-      { variant: 'danger-ghost', ground: 'card', class: 'enabled:hover:bg-hover enabled:active:bg-pressed' },
+      { variant: 'danger-ghost', ground: 'card', class: PRESS_GROUND },
       { variant: 'danger-ghost', ground: 'dead', class: 'enabled:hover:bg-hover-on-dead enabled:active:bg-pressed-on-dead' },
     ],
     defaultVariants: { variant: 'primary', size: 'full', ground: 'card' },
