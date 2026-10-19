@@ -466,3 +466,182 @@ export function activeFamilies(storeId, census, opts = {}) {
   };
   return { active: active.sort(byKey), excluded: excluded.sort(byKey) };
 }
+
+// ── W2-3 Task 5: changed families and the assembled reports (W2-D22, W2-D23, W2-D24) ─────────────────────────────
+// Pure, like the rest of this module. changedFamilies reads the presence record's meta rows (W2-D30's keys) and
+// answers which listed families' recall-off files changed during the window; the drop applies to the reported arm
+// comparisons only, never to criterion 3 (W2-D23; decideGate, Task 8). assembleReports turns each node's
+// measure-history.py report into keyed families with their windows, or refuses with one GATE_REASONS word and no
+// partial answer (W2-D22), re-checking each report's script_sha256 against the record's gate_code (W2-D24).
+
+/** TEMPORARY (W2-D23): the presence record's meta prefix (W2-D30), spelled here only until W2-1 defines
+ *  `RECALL_OFF_META` in lib.mjs, replaces this binding with an import of it and adds the Python twin pin. Module-
+ *  local and never exported, so no other module can come to read this spelling. */
+const RECALL_OFF_PREFIX_LOCAL = 'recall_off:';
+
+/** A key's ms field: a decimal integer with no sign, no fraction and no leading zero. */
+const RECALL_OFF_MS_RE = /^(?:0|[1-9][0-9]*)$/;
+
+/** A meta row value's ms field: a non-negative safe integer. */
+const isMsValue = (v) => Number.isSafeInteger(v) && v >= 0;
+
+/** A presence row off W2-D30's grammar is a store defect, never "no change": it throws, so a malformed change row
+ *  can never read as a family that did not change. */
+function recallOffOffGrammar(k, why) {
+  throw new Error(`recall-off meta row ${JSON.stringify(k)}: ${why}`);
+}
+
+/**
+ * One meta row of the recall-off presence record (W2-D30), read: `recall_off:change:<ts_ms>:<id>` with
+ * `{from, to, prev_seen_ms}`, and `recall_off:gap:<ts_ms>` with `{from, to}`. Every other key, including the
+ * record's own `state:<id>` and `seen_ms` rows, is `{kind: 'other'}`. A change or gap row off the grammar throws.
+ * @param {string} k
+ * @param {string} v
+ * @returns {{kind: 'change', ts_ms: number, id: string, from: unknown, to: unknown, prev_seen_ms: number | null}
+ *   | {kind: 'gap', ts_ms: number, from: number | null, to: number}
+ *   | {kind: 'other'}}
+ */
+export function parseRecallOffRow(k, v) {
+  if (typeof k !== 'string' || !k.startsWith(RECALL_OFF_PREFIX_LOCAL)) return { kind: 'other' };
+  const rest = k.slice(RECALL_OFF_PREFIX_LOCAL.length);
+  const kind = rest.startsWith('change:') ? 'change' : rest.startsWith('gap:') ? 'gap' : null;
+  if (kind === null) return { kind: 'other' };
+  const tail = rest.slice(kind.length + 1);
+  const colon = tail.indexOf(':');
+  const tsText = kind === 'change' && colon >= 0 ? tail.slice(0, colon) : tail;
+  if (!RECALL_OFF_MS_RE.test(tsText)) return recallOffOffGrammar(k, 'its ts_ms is not a decimal integer');
+  const ts_ms = Number(tsText);
+  if (!Number.isSafeInteger(ts_ms)) return recallOffOffGrammar(k, 'its ts_ms is past the safe integers');
+  let body;
+  try { body = JSON.parse(v); } catch { return recallOffOffGrammar(k, 'its value is not JSON'); }
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return recallOffOffGrammar(k, 'its value is not an object');
+  if (body.from === undefined || body.to === undefined) return recallOffOffGrammar(k, 'its value lacks from or to');
+  if (kind === 'gap') {
+    if (!(body.from === null || isMsValue(body.from)) || !isMsValue(body.to)) {
+      return recallOffOffGrammar(k, 'a gap row\'s from is an ms or null, and its to an ms');
+    }
+    return { kind: 'gap', ts_ms, from: body.from, to: body.to };
+  }
+  const id = colon >= 0 ? tail.slice(colon + 1) : '';
+  if (id === '') return recallOffOffGrammar(k, 'a change row\'s key names no id');
+  if (!Object.hasOwn(body, 'prev_seen_ms') || !(body.prev_seen_ms === null || isMsValue(body.prev_seen_ms))) {
+    return recallOffOffGrammar(k, 'a change row\'s prev_seen_ms is an ms or null');
+  }
+  return { kind: 'change', ts_ms, id, from: body.from, to: body.to, prev_seen_ms: body.prev_seen_ms };
+}
+
+/** A recall-off file is per id on one store, so a change row reaches every listed generation of its id there. */
+const recallOffIdKey = (storeId, id) => canonicalJson([storeId, id]);
+
+/**
+ * W2-D23: the listed families whose recall-off file changed during the window. A family of the list is dropped
+ * when any change row of its store and id satisfies `(prev_seen_ms ?? -Infinity) < window.end_ms && ts_ms >=
+ * window.start_ms`: the change happened after the last observation before the window's end and was recorded at or
+ * after its start. A null prev_seen_ms (the first observation, or the first after a recovery) reads as -Infinity.
+ * Gap rows are reported, by the same overlap test over `(from, ts_ms)`, and drop nothing. Both lists are sorted, so
+ * the answer does not depend on row order. The drop applies to the reported arm comparisons only (decideGate).
+ * @param {Array<{store_id: string, k: string, v: string}>} metaRows
+ * @param {{start_ms: number, end_ms: number}} window
+ * @param {Array<{store_id: string, ccrc_id: string, generation: string}>} list
+ * @returns {{changed: string[], gaps: Array<{store_id: string, ts_ms: number, from: number | null, to: number}>}}
+ */
+export function changedFamilies(metaRows, window, list) {
+  const hit = new Set();
+  const gaps = [];
+  for (const row of metaRows) {
+    const r = parseRecallOffRow(row.k, row.v);
+    if (r.kind === 'change') {
+      if ((r.prev_seen_ms ?? -Infinity) < window.end_ms && r.ts_ms >= window.start_ms) hit.add(recallOffIdKey(row.store_id, r.id));
+    } else if (r.kind === 'gap') {
+      if ((r.from ?? -Infinity) < window.end_ms && r.ts_ms >= window.start_ms) gaps.push({ store_id: row.store_id, ts_ms: r.ts_ms, from: r.from, to: r.to });
+    }
+  }
+  const changed = [...new Set(list.filter((f) => hit.has(recallOffIdKey(f.store_id, f.ccrc_id)))
+    .map((f) => familyKey(f.store_id, f.ccrc_id, f.generation)))].sort();
+  gaps.sort((a, b) => (a.store_id < b.store_id ? -1 : a.store_id > b.store_id ? 1 : a.ts_ms - b.ts_ms));
+  return { changed, gaps };
+}
+
+/**
+ * W2-D22 and W2-D24: every node's measure-history.py report (Task 1's shape, `w2 = {row_cap, window_start_ms,
+ * window_end_ms, families}`), keyed and
+ * checked against the open record. Refused, with the first GATE_REASONS word found and no partial answer, in this
+ * order per report: a null store_id (store-id-null); a store_id an earlier report carried (store-id-duplicate); a
+ * store_id outside `record.nodes` (store-id-unlisted); a family whose `familyKey(store_id, ccrc_id, generation)` is
+ * not in `record.assignment` (family-unassigned); a `w2.row_cap` other than ROW_CAP, a W1 report's absent w2
+ * included (row-cap-mismatch); a `script_sha256` missing on either side (code-unmeasured, which no flag covers:
+ * W2-D24, amended 2026-10-19); a `script_sha256` other than `gate_code.files['deploy/measure-history.py']`
+ * (code-changed), where `opts.allowCodeChange` refuses nothing and stamps `code_changed: true` instead; and an echoed window that is not the record's `window`, part 2's, or none (window-mismatch; W2-D13 and W2-D22, amended
+ * 2026-10-19: a report measured over another window than the record's is never assembled). A record whose `window` is not
+ * two safe integers is refused window-mismatch before any report is read. Excluded and reported, never refused: `found: false` families (not_found), families
+ * with no measured window (zero_windows; W2-D18: such a family is no cluster), each unmeasured window (unmeasured,
+ * keyed `canonicalJson([store_id, ccrc_id, generation, boundary_uuid])`), and each assigned family that no report
+ * lists (not_listed). No void threshold. Every list is sorted, so report order changes nothing.
+ * @param {Array<{store_id: string | null, script_sha256?: string, w2: {row_cap: number, window_start_ms: number, window_end_ms: number, families: Array<object>} | null}>} reports
+ * @param {{nodes: Array<{store_id: string}>, assignment: Array<{store_id: string, ccrc_id: string, generation: string, arm: string}>,
+ *   gate_code: {files: Record<string, string>}, window: {start_ms: number, end_ms: number}}} record
+ * @param {{allowCodeChange?: boolean}} [opts]
+ * @returns {{ok: true, families: Array<{key: string, store_id: string, ccrc_id: string, generation: string, arm: string, windows: Array<object>}>,
+ *   excluded: {not_found: string[], zero_windows: string[], unmeasured: {count: number, keys: string[]}, not_listed: string[]},
+ *   code_changed: boolean} | {ok: false, reason: string, detail: string}}
+ */
+export function assembleReports(reports, record, opts = {}) {
+  const refuse = (reason, detail) => ({ ok: false, reason, detail });
+  const nodes = new Set(record.nodes.map((n) => n.store_id));
+  const arms = new Map(record.assignment.map((a) => [familyKey(a.store_id, a.ccrc_id, a.generation), a.arm]));
+  const pinned = record.gate_code.files['deploy/measure-history.py'];
+  const seen = new Set();
+  const keyed = [];
+  let codeChanged = false;
+  const want = [record.window?.start_ms, record.window?.end_ms];   // part 2's window, half-open (W2-D22, amended)
+  if (!want.every((ms) => Number.isSafeInteger(ms))) return refuse('window-mismatch', `the record carries no window (window.start_ms, window.end_ms): ${JSON.stringify(record.window ?? null)}`);
+  for (const [i, rep] of reports.entries()) {
+    const at = `report ${i}`;
+    if (rep.store_id === null || rep.store_id === undefined) return refuse('store-id-null', `${at} names no store_id: its store has no meta store_id`);
+    if (seen.has(rep.store_id)) return refuse('store-id-duplicate', `${at}: store ${rep.store_id} is measured by an earlier report too`);
+    seen.add(rep.store_id);
+    if (!nodes.has(rep.store_id)) return refuse('store-id-unlisted', `${at}: store ${rep.store_id} is not one of the record's nodes`);
+    for (const f of rep.w2?.families ?? []) {
+      const key = familyKey(rep.store_id, f.ccrc_id, f.generation);
+      if (!arms.has(key)) return refuse('family-unassigned', `${at}: family ${key} is not in the record's assignment`);
+      keyed.push({ key, store_id: rep.store_id, f });
+    }
+    if (rep.w2?.row_cap !== ROW_CAP) return refuse('row-cap-mismatch', `${at}: row_cap ${JSON.stringify(rep.w2?.row_cap ?? null)}, and the gate's ROW_CAP is ${ROW_CAP}`);
+    if (typeof pinned !== 'string' || typeof rep.script_sha256 !== 'string') return refuse('code-unmeasured', `${at}: measure-history.py sha256 ${JSON.stringify(rep.script_sha256 ?? null)}, and gate_code records ${JSON.stringify(pinned ?? null)}: a missing sha is unmeasured, never a change`);
+    if (rep.script_sha256 !== pinned) {
+      if (opts.allowCodeChange !== true) return refuse('code-changed', `${at}: measure-history.py sha256 ${JSON.stringify(rep.script_sha256)}, and gate_code records ${JSON.stringify(pinned)}`);
+      codeChanged = true;
+    }
+    const echo = [rep.w2.window_start_ms, rep.w2.window_end_ms];
+    if (echo[0] !== want[0] || echo[1] !== want[1]) return refuse('window-mismatch', `${at}: window ${JSON.stringify(echo)}, and the record's is ${JSON.stringify(want)}`);
+  }
+  const families = [];
+  const notFound = [];
+  const zeroWindows = [];
+  const unmeasured = [];
+  const listed = new Set();
+  for (const { key, store_id, f } of keyed) {
+    if (listed.has(key)) throw new Error(`assembleReports: family ${key} is listed twice in one report`);
+    listed.add(key);
+    if (f.found !== true) { notFound.push(key); continue; }
+    const measured = [];
+    for (const w of buildWindows(f)) {
+      if (w.state === 'measured') measured.push(w);
+      else unmeasured.push(canonicalJson([store_id, f.ccrc_id, f.generation, w.boundary_uuid]));
+    }
+    if (measured.length === 0) { zeroWindows.push(key); continue; }
+    families.push({ key, store_id, ccrc_id: f.ccrc_id, generation: f.generation, arm: arms.get(key), windows: measured });
+  }
+  const byKey = (a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+  return {
+    ok: true,
+    families: families.sort(byKey),
+    excluded: {
+      not_found: notFound.sort(),
+      zero_windows: zeroWindows.sort(),
+      unmeasured: { count: unmeasured.length, keys: unmeasured.sort() },
+      not_listed: [...arms.keys()].filter((k) => !listed.has(k)).sort(),
+    },
+    code_changed: codeChanged,
+  };
+}

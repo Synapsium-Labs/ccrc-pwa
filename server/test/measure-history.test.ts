@@ -1839,3 +1839,408 @@ describe('W2-3 Task 4: the census and the active rule', () => {
     expect(g.activeFamilies(STORE, pure([good])).active, 'CONTROL: the well-formed row alone answers').toHaveLength(1);
   });
 });
+
+// ── W2-3 Task 5: changed families and the assembled reports (W2-D22, W2-D23, W2-D24; RP7-pure's keying half) ─────
+// Pure: every report, record and meta row below is a literal built in this describe, so no store and no python run.
+// The windows come from Task 3's buildWindows: a "measured" boundary's one copy holds two assistant turns and no
+// next boundary, so its window ends inclusive at the copy's last timed row; an "unmeasured" boundary's copy has no
+// timed row (W2-D14). The presence record's keys are W2-D30's grammar, spelled here as text: the gate's prefix is
+// module-local and temporary until W2-1 (W2-D23).
+import * as gateT5 from '../../deploy/history-gate.mjs';
+
+describe('W2-3 Task 5: changed families and the assembled reports', () => {
+  const STORE_A = '00000000-0000-4000-8000-0000000000a5';
+  const STORE_B = '00000000-0000-4000-8000-0000000000b5';
+  const STORE_X = '00000000-0000-4000-8000-0000000000c5';
+  const PY_SHA = createHash('sha256').update('w2-3 task 5: the measure-history.py bytes the record pinned').digest('hex');
+  const OTHER_SHA = createHash('sha256').update('w2-3 task 5: other measure-history.py bytes').digest('hex');
+  const PFX = 'recall_off:';   // W2-D30's meta prefix, as the presence record writes it
+  type Row = [number, number | null, string | null, string | null, string, string | null];
+  interface Copy {
+    file_id: number; source_key: string; boundary_line: number; after_count: number; summary_line: number | null;
+    next_boundary_line: number | null; next_boundary_ts_ms: number | null; last_ts_ms: number | null;
+    rows: Row[]; models: string[]; truncated: boolean;
+  }
+  interface Boundary { boundary_uuid: string; ts_ms: number; copies: Copy[] }
+  interface Family {
+    ccrc_id: string; generation: string; found: boolean; merged_generations: string[];
+    calls: Array<[number, number, string]>; boundaries: Boundary[];
+  }
+  interface MReport {
+    store_id: string | null; user_version: number; script_sha256?: string; counters: Record<string, number>;
+    w1b_lag_p95_ms: number | null; w1c_duplicate_entries: number; w1e: null; w1f_grep_p95_ms: number | null;
+    w2: { row_cap: number; window_start_ms: number; window_end_ms: number; families: Family[] } | null; census: null;
+  }
+  interface Ref { store_id: string; ccrc_id: string; generation: string }
+  interface Rec {
+    nodes: Array<{ label: string; store_id: string }>;
+    assignment: Array<Ref & { arm: 'treatment' | 'control' }>;
+    gate_code: { release_tag: string; files: Record<string, string> };
+    window: { start_ms: number; end_ms: number };
+  }
+  interface Win { boundary_uuid: string; state: string; calls: number; with_call: boolean }
+  type Assembled =
+    | { ok: true; families: Array<Ref & { key: string; arm: string; windows: Win[] }>;
+        excluded: { not_found: string[]; zero_windows: string[]; unmeasured: { count: number; keys: string[] }; not_listed: string[] };
+        code_changed: boolean }
+    | { ok: false; reason: string; detail: string };
+
+  /** A boundary whose one copy holds two assistant turns after its summary and no next boundary: measured. */
+  const measuredAt = (uuid: string, ts: number): Boundary => ({ boundary_uuid: uuid, ts_ms: ts, copies: [{
+    file_id: 1, source_key: '', boundary_line: 10, after_count: 3, summary_line: 11, next_boundary_line: null,
+    next_boundary_ts_ms: null, last_ts_ms: ts + 200, models: ['model-t5'], truncated: false,
+    rows: [[12, ts + 100, `msg-${uuid}-1`, null, `row-${uuid}-1`, 'model-t5'], [13, ts + 200, `msg-${uuid}-2`, null, `row-${uuid}-2`, 'model-t5']],
+  }] });
+  /** A boundary whose one copy has no timed row after it: unmeasured. */
+  const unmeasuredAt = (uuid: string, ts: number): Boundary => ({ boundary_uuid: uuid, ts_ms: ts, copies: [{
+    file_id: 2, source_key: '', boundary_line: 20, after_count: 1, summary_line: 21, next_boundary_line: null,
+    next_boundary_ts_ms: null, last_ts_ms: null, models: [], truncated: false, rows: [],
+  }] });
+  const fam = (id: string, gen: string, boundaries: Boundary[], calls: Array<[number, number, string]> = []): Family =>
+    ({ ccrc_id: id, generation: gen, found: true, merged_generations: [], calls, boundaries });
+  const missing = (id: string, gen: string): Family =>
+    ({ ccrc_id: id, generation: gen, found: false, merged_generations: [], calls: [], boundaries: [] });
+  /** The window every fixture report echoes and every fixture record carries as part 2's `window` (W2-D13, W2-D22, amended):
+   *  a report over the record's window assembles. */
+  const ECHO = { window_start_ms: 0, window_end_ms: 1_209_600_000 } as const;
+  const rep = (storeId: string | null, families: Family[], over: Partial<MReport> = {}): MReport => ({
+    store_id: storeId, user_version: 1, script_sha256: PY_SHA, counters: {}, w1b_lag_p95_ms: null,
+    w1c_duplicate_entries: 0, w1e: null, w1f_grep_p95_ms: null, w2: { row_cap: gateT5.ROW_CAP, ...ECHO, families }, census: null, ...over,
+  });
+  const rec = (assignment: Rec['assignment'], over: Partial<Rec> = {}): Rec => ({
+    nodes: [{ label: 'node-a', store_id: STORE_A }, { label: 'node-b', store_id: STORE_B }],
+    assignment,
+    gate_code: { release_tag: 'v0.0.0-t5', files: { 'deploy/measure-history.py': PY_SHA } },
+    window: { start_ms: ECHO.window_start_ms, end_ms: ECHO.window_end_ms },
+    ...over,
+  });
+  const assemble = (reports: MReport[], record: Rec, opts?: { allowCodeChange?: boolean }): Assembled =>
+    gateT5.assembleReports(reports as never, record as never, opts) as unknown as Assembled;
+  const key = (s: string, id: string, gen: string): string => gateT5.familyKey(s, id, gen);
+  const ok = (r: Assembled): Extract<Assembled, { ok: true }> => {
+    if (!r.ok) throw new Error(`refused ${r.reason}: ${r.detail}`);
+    return r;
+  };
+  /** The one-family fixture every refusal case starts from: it assembles. */
+  const one = (): { reports: MReport[]; record: Rec } => ({
+    reports: [rep(STORE_A, [fam('demo-a', G1, [measuredAt('b-a1', 1000)])])],
+    record: rec([{ store_id: STORE_A, ccrc_id: 'demo-a', generation: G1, arm: 'treatment' }]),
+  });
+  const refusedAs = (r: Assembled, word: string): void => {
+    expect(r.ok).toBe(false);
+    expect(Object.keys(r).sort(), 'a refusal carries no partial answer').toEqual(['detail', 'ok', 'reason']);
+    expect((r as { reason: string }).reason).toBe(word);
+    expect(gateT5.GATE_REASONS).toContain(word);
+  };
+
+  it('CONTROL: the one-family fixture every refusal case starts from assembles, unstamped', () => {
+    const { reports, record } = one();
+    const r = ok(assemble(reports, record));
+    expect(r.families.map((f) => [f.key, f.arm, f.windows.map((w) => [w.boundary_uuid, w.state])]))
+      .toEqual([[key(STORE_A, 'demo-a', G1), 'treatment', [['b-a1', 'measured']]]]);
+    expect(r.code_changed).toBe(false);
+  });
+
+  it('refuses store-id-null: a report whose store carries no meta store_id', () => {
+    const { reports, record } = one();
+    refusedAs(assemble([rep(null, reports[0]!.w2!.families)], record), 'store-id-null');
+  });
+
+  it('refuses store-id-duplicate: one store measured by two reports', () => {
+    const { reports, record } = one();
+    refusedAs(assemble([...reports, rep(STORE_A, [])], record), 'store-id-duplicate');
+  });
+
+  it('refuses store-id-unlisted: a report from a store outside the record\'s nodes', () => {
+    const { reports, record } = one();
+    refusedAs(assemble([...reports, rep(STORE_X, [])], record), 'store-id-unlisted');
+  });
+
+  it('refuses family-unassigned: a listed family the assignment does not hold, though its id is assigned on another store', () => {
+    const { reports, record } = one();
+    refusedAs(assemble([...reports, rep(STORE_B, [fam('demo-a', G1, [measuredAt('b-b1', 1000)])])], record), 'family-unassigned');
+  });
+
+  it('refuses row-cap-mismatch: a report measured at another row cap, and a W1 report with no w2', () => {
+    const { reports, record } = one();
+    const fams = reports[0]!.w2!.families;
+    refusedAs(assemble([rep(STORE_A, fams, { w2: { row_cap: gateT5.ROW_CAP - 1, ...ECHO, families: fams } })], record), 'row-cap-mismatch');
+    refusedAs(assemble([rep(STORE_A, fams, { w2: null })], record), 'row-cap-mismatch');
+  });
+
+  it('refuses code-changed: a script_sha256 other than gate_code\'s, both measured', () => {
+    const { reports, record } = one();
+    const fams = reports[0]!.w2!.families;
+    refusedAs(assemble([rep(STORE_A, fams, { script_sha256: OTHER_SHA })], record), 'code-changed');
+  });
+
+  it('refuses code-unmeasured: a sha missing on either side, with or without allowCodeChange (W2-D24, amended)', () => {
+    const { reports, record } = one();
+    const noSha = rep(STORE_A, reports[0]!.w2!.families);
+    delete noSha.script_sha256;
+    const noPin = rec(record.assignment, { gate_code: { release_tag: 'v0.0.0-t5', files: {} } });
+    for (const allowCodeChange of [false, true]) {
+      refusedAs(assemble([noSha], record, { allowCodeChange }), 'code-unmeasured');
+      refusedAs(assemble(reports, noPin, { allowCodeChange }), 'code-unmeasured');
+      refusedAs(assemble([noSha], noPin, { allowCodeChange }), 'code-unmeasured');
+    }
+  });
+
+  it("refuses window-mismatch: a report whose echoed window is not the record's, one that echoes none, and a record that carries none (W2-D13, W2-D22)", () => {
+    const { reports, record } = one();
+    const fams = reports[0]!.w2!.families;
+    const onB = (w2: MReport['w2']): MReport => rep(STORE_B, [], { w2 });
+    expect(ok(assemble([...reports, onB({ row_cap: gateT5.ROW_CAP, ...ECHO, families: [] })], record)).families,
+      "CONTROL: two stores over the record's window assemble").toHaveLength(1);
+    refusedAs(assemble([...reports, onB({ row_cap: gateT5.ROW_CAP, ...ECHO, window_end_ms: ECHO.window_end_ms + 1, families: [] })], record), 'window-mismatch');
+    refusedAs(assemble([...reports, onB({ row_cap: gateT5.ROW_CAP, ...ECHO, window_start_ms: ECHO.window_start_ms + 1, families: [] })], record), 'window-mismatch');
+    // Reports that agree with each other and not with the record: the record's window is the reference, one report included.
+    const later = { window_start_ms: ECHO.window_start_ms + 86_400_000, window_end_ms: ECHO.window_end_ms + 86_400_000 };
+    refusedAs(assemble([rep(STORE_A, fams, { w2: { row_cap: gateT5.ROW_CAP, ...later, families: fams } })], record), 'window-mismatch');
+    refusedAs(assemble([rep(STORE_A, fams, { w2: { row_cap: gateT5.ROW_CAP, ...later, families: fams } }),
+      onB({ row_cap: gateT5.ROW_CAP, ...later, families: [] })], record), 'window-mismatch');
+    const noEcho = rep(STORE_A, fams, { w2: { row_cap: gateT5.ROW_CAP, families: fams } as MReport['w2'] });
+    refusedAs(assemble([noEcho], record), 'window-mismatch');
+    // A record with no window against a report that echoes none: undefined never matches undefined.
+    const noWindow: Partial<Rec> = { ...record };
+    delete noWindow.window;
+    refusedAs(assemble([noEcho], noWindow as Rec), 'window-mismatch');
+  });
+
+  it('allowCodeChange stamps code_changed and refuses nothing: the same families, stamped', () => {
+    const { reports, record } = one();
+    const plain = ok(assemble(reports, record));
+    const stamped = ok(assemble([rep(STORE_A, reports[0]!.w2!.families, { script_sha256: OTHER_SHA })], record, { allowCodeChange: true }));
+    expect(stamped.code_changed).toBe(true);
+    expect(stamped.families).toEqual(plain.families);
+    expect(stamped.excluded).toEqual(plain.excluded);
+    expect(ok(assemble(reports, record, { allowCodeChange: true })).code_changed, 'nothing changed, nothing stamped').toBe(false);
+  });
+
+  it('RP7-pure keying: one ccrc id and generation string on two stores assembles as two keyed families, each with its own arm', () => {
+    const reports = [
+      rep(STORE_A, [fam('demo-a', G1, [measuredAt('b-a1', 1000)], [[1100, 0, 'expand']])]),
+      rep(STORE_B, [fam('demo-a', G1, [measuredAt('b-b1', 5000), measuredAt('b-b2', 9000)])]),
+    ];
+    const record = rec([
+      { store_id: STORE_A, ccrc_id: 'demo-a', generation: G1, arm: 'treatment' },
+      { store_id: STORE_B, ccrc_id: 'demo-a', generation: G1, arm: 'control' },
+    ]);
+    const r = ok(assemble(reports, record));
+    const kA = key(STORE_A, 'demo-a', G1);
+    const kB = key(STORE_B, 'demo-a', G1);
+    expect(kA).not.toBe(kB);
+    expect(r.families.map((f) => [f.key, f.store_id, f.ccrc_id, f.generation, f.arm, f.windows.length]).sort())
+      .toEqual([[kA, STORE_A, 'demo-a', G1, 'treatment', 1], [kB, STORE_B, 'demo-a', G1, 'control', 2]].sort());
+    expect(r.families.find((f) => f.key === kA)!.windows[0]).toMatchObject({ boundary_uuid: 'b-a1', calls: 1, with_call: true });
+    expect(ok(assemble([...reports].reverse(), record)), 'report order changes nothing').toEqual(r);
+  });
+
+  it('found:false, 0-window and unmeasured exclusions are counted by key; an assigned family no report lists is not_listed', () => {
+    const reports = [rep(STORE_A, [
+      fam('demo-a', G1, [measuredAt('b-a1', 1000), unmeasuredAt('b-a2', 3000)]),
+      missing('demo-b', G1),
+      fam('demo-c', G1, []),
+      fam('demo-d', G1, [unmeasuredAt('b-d1', 4000)]),
+    ])];
+    const record = rec(['demo-a', 'demo-b', 'demo-c', 'demo-d', 'demo-e'].map((id) => ({ store_id: STORE_A, ccrc_id: id, generation: G1, arm: 'treatment' as const })));
+    const r = ok(assemble(reports, record));
+    expect(r.families.map((f) => [f.key, f.windows.map((w) => w.boundary_uuid)])).toEqual([[key(STORE_A, 'demo-a', G1), ['b-a1']]]);
+    expect(r.excluded).toEqual({
+      not_found: [key(STORE_A, 'demo-b', G1)],
+      zero_windows: [key(STORE_A, 'demo-c', G1), key(STORE_A, 'demo-d', G1)].sort(),
+      unmeasured: { count: 2, keys: [JSON.stringify([STORE_A, 'demo-a', G1, 'b-a2']), JSON.stringify([STORE_A, 'demo-d', G1, 'b-d1'])].sort() },
+      not_listed: [key(STORE_A, 'demo-e', G1)],
+    });
+  });
+
+  it('a family listed twice in one report throws: two answers for one key are never merged', () => {
+    const { record } = one();
+    const twice = rep(STORE_A, [fam('demo-a', G1, [measuredAt('b-a1', 1000)]), fam('demo-a', G1, [])]);
+    expect(() => assemble([twice], record)).toThrow(/listed twice in one report/);
+  });
+
+  // ── changedFamilies (W2-D23) over W2-D30's rows ──
+  const W = { start_ms: 10_000, end_ms: 20_000 };
+  const change = (store: string, ts: number, id: string, prev: number | null): { store_id: string; k: string; v: string } =>
+    ({ store_id: store, k: `${PFX}change:${ts}:${id}`, v: JSON.stringify({ from: 'absent', to: 'value', prev_seen_ms: prev }) });
+  const gap = (store: string, ts: number, from: number | null): { store_id: string; k: string; v: string } =>
+    ({ store_id: store, k: `${PFX}gap:${ts}`, v: JSON.stringify({ from, to: ts }) });
+  const LIST: Ref[] = [{ store_id: STORE_A, ccrc_id: 'demo-a', generation: G1 }];
+  const changedOf = (rows: Array<{ store_id: string; k: string; v: string }>, list: Ref[] = LIST): string[] =>
+    gateT5.changedFamilies(rows, W, list).changed;
+
+  it('parseRecallOffRow reads a change row and a gap row, and every other key, the record\'s own state and seen_ms rows included, is other', () => {
+    expect(gateT5.parseRecallOffRow(`${PFX}change:15000:demo-a`, JSON.stringify({ from: 'unobserved', to: 'value', prev_seen_ms: null })))
+      .toEqual({ kind: 'change', ts_ms: 15_000, id: 'demo-a', from: 'unobserved', to: 'value', prev_seen_ms: null });
+    expect(gateT5.parseRecallOffRow(`${PFX}gap:15000`, JSON.stringify({ from: 12_000, to: 15_000 })))
+      .toEqual({ kind: 'gap', ts_ms: 15_000, from: 12_000, to: 15_000 });
+    for (const k of [`${PFX}state:demo-a`, `${PFX}seen_ms`, 'store_id', 'recall_offchange:1:demo-a']) {
+      expect(gateT5.parseRecallOffRow(k, '{}'), k).toEqual({ kind: 'other' });
+    }
+  });
+
+  it('the temporary recall_off: prefix is module-local: the gate exports no binding of it for another module to read', () => {
+    expect(Object.keys(gateT5).filter((n) => /RECALL_OFF/.test(n))).toEqual([]);
+  });
+
+  it('parseRecallOffRow throws on a change or gap row off the grammar, never reading it as other', () => {
+    const v = JSON.stringify({ from: 'absent', to: 'value', prev_seen_ms: 9000 });
+    for (const [k, val] of [
+      [`${PFX}change:15x00:demo-a`, v], [`${PFX}change:015000:demo-a`, v], [`${PFX}change:15000:`, v], [`${PFX}change:15000`, v],
+      [`${PFX}change:15000:demo-a`, 'not json'], [`${PFX}change:15000:demo-a`, JSON.stringify({ from: 'absent', to: 'value' })],
+      [`${PFX}change:15000:demo-a`, JSON.stringify({ from: 'absent', to: 'value', prev_seen_ms: -1 })],
+      [`${PFX}gap:15000`, JSON.stringify({ from: 12_000, to: null })], [`${PFX}gap:-1`, JSON.stringify({ from: null, to: 1 })],
+    ] as const) expect(() => gateT5.parseRecallOffRow(k, val), `${k} ${val}`).toThrow(/recall-off meta row/);
+  });
+
+  it('a change row with prev_seen_ms null reads as -Infinity and drops the family', () => {
+    expect(changedOf([change(STORE_A, 15_000, 'demo-a', null)])).toEqual([key(STORE_A, 'demo-a', G1)]);
+  });
+
+  it('a change row at exactly window.start_ms drops the family, and one a millisecond before it keeps it', () => {
+    expect(changedOf([change(STORE_A, W.start_ms, 'demo-a', 9_000)])).toEqual([key(STORE_A, 'demo-a', G1)]);
+    expect(changedOf([change(STORE_A, W.start_ms - 1, 'demo-a', 9_000)])).toEqual([]);
+  });
+
+  it('a change row whose prev_seen_ms is exactly window.end_ms keeps the family, and one a millisecond earlier drops it', () => {
+    expect(changedOf([change(STORE_A, 20_500, 'demo-a', W.end_ms)])).toEqual([]);
+    expect(changedOf([change(STORE_A, 20_500, 'demo-a', W.end_ms - 1)])).toEqual([key(STORE_A, 'demo-a', G1)]);
+  });
+
+  it('a change drops every listed generation of its id on its store, and nothing on another store or of another id', () => {
+    const list: Ref[] = [
+      { store_id: STORE_A, ccrc_id: 'demo-a', generation: G1 }, { store_id: STORE_A, ccrc_id: 'demo-a', generation: G2 },
+      { store_id: STORE_B, ccrc_id: 'demo-a', generation: G1 }, { store_id: STORE_A, ccrc_id: 'demo-b', generation: G1 },
+    ];
+    expect(changedOf([change(STORE_A, 15_000, 'demo-a', 14_000), change(STORE_A, 15_100, 'demo-a', 15_000)], list))
+      .toEqual([key(STORE_A, 'demo-a', G1), key(STORE_A, 'demo-a', G2)].sort());
+  });
+
+  it('a gap row is reported and drops nothing; the record\'s other rows drop nothing either', () => {
+    const r = gateT5.changedFamilies([
+      gap(STORE_A, 15_000, 12_000), gap(STORE_B, 11_000, null), gap(STORE_A, 9_000, 8_000),
+      { store_id: STORE_A, k: `${PFX}state:demo-a`, v: JSON.stringify({ s: 'value', v: 'x' }) },
+      { store_id: STORE_A, k: `${PFX}seen_ms`, v: '15000' },
+    ], W, LIST);
+    expect(r.changed).toEqual([]);
+    expect(r.gaps).toEqual([
+      { store_id: STORE_A, ts_ms: 15_000, from: 12_000, to: 15_000 },
+      { store_id: STORE_B, ts_ms: 11_000, from: null, to: 11_000 },
+    ]);
+  });
+
+  // ── Edge pins added after the brief's cases (Task 5) ──
+  it('edge: an undefined store_id is store-id-null too, and the refusals come in W2-D22\'s order, the record\'s window first', () => {
+    const { reports, record } = one();
+    const fams = reports[0]!.w2!.families;
+    const undef = rep(STORE_A, fams);
+    delete (undef as Partial<MReport>).store_id;
+    refusedAs(assemble([undef], record), 'store-id-null');
+    const bad = fam('demo-zz', G1, [measuredAt('b-z1', 1000)]);   // not in the assignment
+    const wrongCap = (families: Family[], over: Partial<MReport> = {}): MReport =>
+      rep(STORE_A, families, { w2: { row_cap: gateT5.ROW_CAP - 1, ...ECHO, families }, ...over });
+    refusedAs(assemble([wrongCap([bad])], record), 'family-unassigned');   // the family comes before the row cap
+    refusedAs(assemble([wrongCap(fams, { script_sha256: OTHER_SHA })], record), 'row-cap-mismatch');   // the row cap before the sha
+    const unsigned = wrongCap(fams);
+    delete unsigned.script_sha256;
+    refusedAs(assemble([unsigned], record), 'row-cap-mismatch');   // and before an unmeasured sha too
+    const later = { window_start_ms: 5, window_end_ms: 6 };
+    refusedAs(assemble([rep(STORE_A, fams, { script_sha256: OTHER_SHA, w2: { row_cap: gateT5.ROW_CAP, ...later, families: fams } })], record), 'code-changed');
+    const noSha = rep(STORE_A, fams, { w2: { row_cap: gateT5.ROW_CAP, ...later, families: fams } });
+    delete noSha.script_sha256;
+    refusedAs(assemble([noSha], record), 'code-unmeasured');   // the sha before the window
+    const noWin: Partial<Rec> = { ...record };
+    delete noWin.window;
+    refusedAs(assemble([undef], noWin as Rec), 'window-mismatch');   // the record's window before any report is read
+  });
+
+  it('edge: a record window that is not two safe integers is refused even when a report echoes the same, and the flag must be true itself', () => {
+    const { reports, record } = one();
+    const fams = reports[0]!.w2!.families;
+    const echoing = (w2: object): MReport => rep(STORE_A, fams, { w2: { row_cap: gateT5.ROW_CAP, families: fams, ...w2 } as MReport['w2'] });
+    refusedAs(assemble([echoing({ window_start_ms: 0 })], { ...record, window: { start_ms: 0 } as Rec['window'] }), 'window-mismatch');
+    refusedAs(assemble([echoing({ window_end_ms: 9 })], { ...record, window: { end_ms: 9 } as Rec['window'] }), 'window-mismatch');
+    refusedAs(assemble([echoing({ window_start_ms: 0.5, window_end_ms: 1.5 })], { ...record, window: { start_ms: 0.5, end_ms: 1.5 } }), 'window-mismatch');
+    refusedAs(assemble([echoing({ window_start_ms: 0, window_end_ms: Number.NaN })], { ...record, window: { start_ms: 0, end_ms: Number.NaN } }), 'window-mismatch');
+    const changed = rep(STORE_A, fams, { script_sha256: OTHER_SHA });
+    refusedAs(assemble([changed], record, { allowCodeChange: 1 as never }), 'code-changed');
+    refusedAs(assemble([changed], record, { allowCodeChange: undefined }), 'code-changed');
+  });
+
+  it('edge: code_changed stays stamped when a later report matches the pinned sha', () => {
+    const reports = [
+      rep(STORE_A, [fam('demo-a', G1, [measuredAt('b-a1', 1000)])], { script_sha256: OTHER_SHA }),
+      rep(STORE_B, [fam('demo-b', G1, [measuredAt('b-b1', 1000)])]),
+    ];
+    const record = rec([
+      { store_id: STORE_A, ccrc_id: 'demo-a', generation: G1, arm: 'treatment' },
+      { store_id: STORE_B, ccrc_id: 'demo-b', generation: G1, arm: 'control' },
+    ]);
+    expect(ok(assemble(reports, record, { allowCodeChange: true })).code_changed).toBe(true);
+    expect(ok(assemble([...reports].reverse(), record, { allowCodeChange: true })).code_changed).toBe(true);
+  });
+
+  it('edge: a found:false family listed twice in one report throws too, and every excluded list is sorted whatever the listing order', () => {
+    const { record } = one();
+    expect(() => assemble([rep(STORE_A, [missing('demo-a', G1), missing('demo-a', G1)])], record)).toThrow(/listed twice in one report/);
+    const ids = ['demo-z', 'demo-y', 'demo-x', 'demo-w', 'demo-v', 'demo-u', 'demo-t'];
+    const reports = [rep(STORE_A, [
+      missing('demo-z', G1), missing('demo-y', G1),
+      fam('demo-x', G1, []), fam('demo-w', G1, []),
+      fam('demo-v', G1, [unmeasuredAt('b-v1', 1000), unmeasuredAt('b-v0', 3000)]),
+    ])];
+    const r = ok(assemble(reports, rec(ids.map((id) => ({ store_id: STORE_A, ccrc_id: id, generation: G1, arm: 'treatment' as const })))));
+    const k = (id: string): string => key(STORE_A, id, G1);
+    expect(r.excluded.not_found).toEqual([k('demo-y'), k('demo-z')]);
+    expect(r.excluded.zero_windows).toEqual([k('demo-v'), k('demo-w'), k('demo-x')]);
+    expect(r.excluded.unmeasured.keys).toEqual([JSON.stringify([STORE_A, 'demo-v', G1, 'b-v0']), JSON.stringify([STORE_A, 'demo-v', G1, 'b-v1'])]);
+    expect(r.excluded.not_listed).toEqual([k('demo-t'), k('demo-u')]);
+  });
+
+  // ── parseRecallOffRow and changedFamilies, the edges ──
+  it('edge: parseRecallOffRow reads a near-miss kind, a non-string key and an unrelated key as other, and a colon inside an id whole', () => {
+    for (const k of [`${PFX}changes:1:a`, `${PFX}gapped:5`, `${PFX}change`, `${PFX}gap`, `${PFX}`]) {
+      expect(gateT5.parseRecallOffRow(k, '{}'), k).toEqual({ kind: 'other' });
+    }
+    expect(gateT5.parseRecallOffRow(undefined as never, '{}')).toEqual({ kind: 'other' });
+    expect(gateT5.parseRecallOffRow(`${PFX}change:7:demo:a`, JSON.stringify({ from: null, to: 'x', prev_seen_ms: 0 })))
+      .toEqual({ kind: 'change', ts_ms: 7, id: 'demo:a', from: null, to: 'x', prev_seen_ms: 0 });
+    expect(gateT5.parseRecallOffRow(`${PFX}gap:0`, JSON.stringify({ from: 0, to: 0 }))).toEqual({ kind: 'gap', ts_ms: 0, from: 0, to: 0 });
+  });
+
+  it('edge: parseRecallOffRow throws on a ts past the safe integers, a value that is no object, and every field off its kind', () => {
+    const ch = (b: unknown): string => JSON.stringify(b);
+    const good = { from: 'a', to: 'b', prev_seen_ms: 1 };
+    for (const [k, val] of [
+      [`${PFX}change:99999999999999999999:demo-a`, ch(good)], [`${PFX}gap:99999999999999999999`, ch({ from: null, to: 1 })],
+      [`${PFX}change:1:demo-a`, 'null'], [`${PFX}change:1:demo-a`, '[]'], [`${PFX}change:1:demo-a`, '5'], [`${PFX}gap:1`, 'null'],
+      [`${PFX}change:1:demo-a`, ch({ to: 'b', prev_seen_ms: 1 })], [`${PFX}change:1:demo-a`, ch({ from: 'a', prev_seen_ms: 1 })],
+      [`${PFX}change:1:demo-a`, ch({ ...good, prev_seen_ms: 1.5 })], [`${PFX}change:1:demo-a`, ch({ ...good, prev_seen_ms: '1' })],
+      [`${PFX}gap:5`, ch({ from: -1, to: 5 })], [`${PFX}gap:5`, ch({ from: 1.5, to: 5 })], [`${PFX}gap:5`, ch({ from: '1', to: 5 })],
+      [`${PFX}gap:5`, ch({ from: 1, to: 1.5 })], [`${PFX}gap:5`, ch({ from: 1, to: -1 })], [`${PFX}gap:5`, ch({ to: 5 })], [`${PFX}gap:5:x`, ch({ from: 1, to: 5 })],
+    ] as const) expect(() => gateT5.parseRecallOffRow(k, val), `${k} ${val}`).toThrow(/recall-off meta row/);
+  });
+
+  it('edge: a gap row is reported at exactly window.start_ms and not a millisecond before, by its from against window.end_ms, sorted by store then ts', () => {
+    const r = gateT5.changedFamilies([
+      gap(STORE_B, W.end_ms + 5, W.end_ms),            // from at the end: out
+      gap(STORE_B, W.end_ms + 4, W.end_ms - 1),        // from a millisecond before the end: in
+      gap(STORE_A, W.start_ms + 2, null),
+      gap(STORE_A, W.start_ms, 1),                     // ts at the start: in
+      gap(STORE_A, W.start_ms - 1, 1),                 // ts a millisecond before: out
+      gap(STORE_A, W.start_ms + 1, 0),
+    ], W, LIST);
+    expect(r.gaps.map((g) => [g.store_id === STORE_A ? 'A' : 'B', g.ts_ms])).toEqual([
+      ['A', W.start_ms], ['A', W.start_ms + 1], ['A', W.start_ms + 2], ['B', W.end_ms + 4],
+    ]);
+  });
+
+  it('edge: the changed families are sorted and unique whatever the list order', () => {
+    const list: Ref[] = [
+      { store_id: STORE_A, ccrc_id: 'demo-a', generation: G2 }, { store_id: STORE_A, ccrc_id: 'demo-a', generation: G1 },
+      { store_id: STORE_A, ccrc_id: 'demo-a', generation: G2 },
+    ];
+    expect(changedOf([change(STORE_A, 15_000, 'demo-a', 14_000)], list)).toEqual([key(STORE_A, 'demo-a', G1), key(STORE_A, 'demo-a', G2)]);
+  });
+});
