@@ -584,7 +584,11 @@ describe('release.yml: the release body is written by the notes script, through 
   it('writes the notes after the attest step and before the publish, outside the publish glob', () => {
     const src = wf();
     const attest = src.search(/^      - uses: actions\/attest-build-provenance@v4$/m);
-    const notes = src.search(/^        run: node deploy\/release-notes\.mjs --tag "\$GITHUB_REF_NAME" --out "\$RUNNER_TEMP\/release-notes\.txt"/m);
+    // A `|` block, never the one-line form (D-5566): that line carries two
+    // `: ` — `release.yml: could not` and the shell no-op `; : >` — and a
+    // `: ` inside a PLAIN scalar is a mapping indicator, so either one alone
+    // left release.yml unparseable.
+    const notes = src.search(/^        run: \|\n          node deploy\/release-notes\.mjs --tag "\$GITHUB_REF_NAME" --out "\$RUNNER_TEMP\/release-notes\.txt"/m);
     const publish = src.search(/^        run: gh release create /m);
     expect(notes).toBeGreaterThan(attest);
     expect(publish).toBeGreaterThan(notes);
