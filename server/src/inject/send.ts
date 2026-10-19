@@ -1348,6 +1348,28 @@ const boxText = (ansiPane: string): string =>
   [draftOf(ansiPane), ...continuationRows(ansiPane)].filter((r) => r !== '').join('\n');
 
 /**
+ * READ-ONLY box probe for the mail lane's PARKED deliveries (D-5838,
+ * CCRCP-204): what the input box holds right now, or `null` when that cannot
+ * be said — the pane is gone, a menu owns the keyboard, or the capture holds
+ * no box at all (`draftOfMeasured`'s `absent`). An empty box reads `''`.
+ *
+ * It presses nothing. It goes through the session's `KeyedQueue` all the
+ * same, so it never reads a box halfway through another caller's send. The
+ * sweep compares the answer against the text the box held when the row parked
+ * and wakes the row on a difference; `boxText` is the reading because a
+ * change on row 2..N is a change too.
+ */
+export function readBoxText(d: SendDeps, id: string): Promise<string | null> {
+  return d.queue.run(id, async (): Promise<string | null> => {
+    const pane = await d.tmux.captureAnsi(id);
+    if (pane === null) return null;
+    if (hasMenu(pane.replace(SGR, ''))) return null;
+    if (draftOfMeasured(pane).box === 'absent') return null;
+    return boxText(pane);
+  });
+}
+
+/**
  * Press Enter once on a box that already holds `expect`.
  *
  * The rescue for `sendPrompt`'s `enter-ignored`: the text is verified present

@@ -6091,7 +6091,10 @@ export type MailGate =
   | 'registry-absent' | 'registry-unmeasurable'
   | 'tmux-gone' | 'session-dead' | 'tmux-unknown' | 'hibernated'   // D-5242: asleep, never parked — the mail lane wakes it
   | 'pending-ask' | 'no-pane' | 'no-config-dir'
-  | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable';
+  | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable'
+  // D-5840 (D-5838): an `enter-ignored` PARK whose recipient's box still holds what it
+  // held at the park — our own nudge, unsubmitted. Nothing is pressed or typed.
+  | 'parked';
 
 /** Total, so a refusal path added to `sweepMail` without a member here is a
  *  TS2739 rather than a silent hole — the `RUN_REFUSE_CODE_MAP` shape, and the
@@ -6101,7 +6104,7 @@ const MAIL_GATE_MAP: Record<MailGate, true> = {
   'registry-absent': true, 'registry-unmeasurable': true,
   'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true, hibernated: true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
-  'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true,
+  'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true, parked: true,
 };
 export const MAIL_GATES: readonly MailGate[] = Object.keys(MAIL_GATE_MAP) as MailGate[];
 
@@ -6241,8 +6244,17 @@ export interface RunHealth {
    *  cross-repo §4) and a `child workspace reclaimed` park (the server
    *  reclaimed a finished child, spec 2026-09-22 §5.6) are all the machinery
    *  working as designed, and reporting any of them would announce a change
-   *  that has already been handled. */
+   *  that has already been handled.
+   *
+   *  NOT the parked STATE below: this count is the older sense of the word, a
+   *  delivery the lane gave up on and rejected, and it stays exactly that. */
   readonly mailParked: number;
+  /** Deliveries of this run's mail still OUTSTANDING and PARKED (D-5838,
+   *  CCRCP-204; a field of its own, not a second sense of `mailParked`, D-5839): the recipient is alive, its input box would not take the
+   *  nudge, and the lane is waiting for the box to change (or its retry timer)
+   *  to deliver it — not lost, and not yet delivered. OPTIONAL because an older
+   *  server omits it; absence means "nothing to say", never zero. */
+  readonly mailParkedLive?: number;
   /** MAX(`replayCount`) across this run's deliveries. Mail 120 reached 722
    *  delivery attempts and mail 129 reached 911, each arriving after the work it
    *  was meant to steer; this is the number that was climbing the whole time
@@ -7060,6 +7072,17 @@ export interface MailSummary {
   gateCount: number;
   gateSince: number | null;
   gateAt: number | null;
+  /**
+   * D-5838 (CCRCP-204): when this delivery was PARKED, or `null` when it is
+   * not. A parked delivery is still `state: 'queued'` — outstanding, not lost:
+   * its recipient is alive, its input box would not take the nudge, and the lane
+   * delivers it when the box changes (or on its retry timer), rejecting it only
+   * after 24 h parked. `state` deliberately does NOT gain a member for it, so
+   * every reader that counts `queued` as outstanding stays right. Set only on a
+   * `queued` row. ADDITIVE and OPTIONAL: an older server omits it, and absence
+   * means "nothing to say about a park".
+   */
+  parkedAt?: number | null;
 }
 
 /** The two enforced caps (spec:199-201). The two COUNTS are queries over

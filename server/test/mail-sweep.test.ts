@@ -933,7 +933,7 @@ describe('sweepMail: the send', () => {
     expect(row2.lastError).toBe('dialog-open');
   });
 
-  it('parks as rejected(undeliverable) at MAIL_MAX_ATTEMPTS, mail row intact', async () => {
+  it('PARKS at MAIL_MAX_ATTEMPTS — outstanding, never rejected while the recipient lives (D-5838); mail row intact', async () => {
     const h = harness({ panes: ['❯ half-typed draft\n'] });
     const coord = store(h.home);
     const { w } = await primedWatcher(h, coord);
@@ -945,14 +945,14 @@ describe('sweepMail: the send', () => {
 
     await w.sweepMail();
     const row = deliveryRow(coord, id);
-    expect(row.state).toBe('rejected');
-    expect(row.rejectCode).toBe('undeliverable');
+    expect(row.state).toBe('queued');
+    expect(row.rejectCode).toBeNull();
     // spec:170-172 — the record of what was said survives the failure to say
     // it: the mail row this delivery pointed at is untouched by the park.
     expect(coord.db.prepare('SELECT id FROM mail WHERE id = ?').get(mailId)).toBeTruthy();
   });
 
-  it('parks IMMEDIATELY on enter-ignored — the text is in the box and a blind retry is forbidden', async () => {
+  it('parks IMMEDIATELY on enter-ignored — the text is in the box and a blind retry is forbidden (D-5838: parked, not rejected)', async () => {
     // Echoes on the first read, then NEVER clears — `submitted()` never sees
     // our text leave the box, on either Enter press.
     const h = harness({ panes: [emptyBox, echoedBox(NUDGE)] });
@@ -965,12 +965,11 @@ describe('sweepMail: the send', () => {
 
     await w.sweepMail();
     const row = deliveryRow(coord, id);
-    expect(row.state).toBe('rejected');
-    expect(row.rejectCode).toBe('undeliverable');
+    expect(row.state).toBe('queued');
+    expect(row.rejectCode).toBeNull();
     expect(row.lastError).toBe('enter-ignored');
-    // Parked on the FIRST attempt — never routed through the ordinary
-    // backoff counter at all, which `rejectDelivery` never touches.
-    expect(row.attempts).toBe(0);
+    // Parked on the FIRST attempt — the park counts it, once.
+    expect(row.attempts).toBe(1);
     expect(coord.db.prepare('SELECT id FROM mail WHERE id = ?').get(mailId)).toBeTruthy();
   }, 10_000);
 
@@ -1971,10 +1970,10 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
       await w.sweepMail();
       advance(MAIL_SWEEP_MS + 16 * 60_000);   // past the largest back-off step
     }
-    expect(deliveryRow(coord, d.id).state).toBe('rejected');
-    // Parking is KEPT — a message that can never land should not retry
-    // forever. What was wrong was parking SILENTLY.
-    const parks = sent.filter((p) => p.sessionId === 'demo-boss' && /gave up|undeliverable/.test(p.body));
+    // D-5838: the park is the outstanding PARKED state now, not a reject — and
+    // it is still never SILENT: the operator hears it once.
+    expect(deliveryRow(coord, d.id).state).toBe('queued');
+    const parks = sent.filter((p) => p.sessionId === 'demo-boss' && /parked/.test(p.body));
     expect(parks).toHaveLength(1);
   });
 
@@ -2085,10 +2084,10 @@ describe('sweepMail: a blocked delivery reaches its SENDER', () => {
       await w.sweepMail();
       advance(MAIL_SWEEP_MS + 16 * 60_000);
     }
-    expect(deliveryRow(coord, d.id).state).toBe('rejected');
+    expect(deliveryRow(coord, d.id).state).toBe('queued');   // D-5838: parked, outstanding
 
     const feed = coord.feedEvents(50);
-    const parkRows = feed.filter((e) => e.sessionId === 'demo-boss' && /gave up|undeliverable/.test(e.body));
+    const parkRows = feed.filter((e) => e.sessionId === 'demo-boss' && /parked/.test(e.body));
     expect(parkRows).toHaveLength(1);
     // The park is about the run the parked mail was queued on (review finding 1,
     // fix round 3) — `tellSender`'s `pushOne` call passes `runId: origin.runId`,
@@ -3640,4 +3639,287 @@ describe('sweepMail: a hibernated recipient is woken, never parked (D-5242)', ()
       await app.close();
     }
   });
+});
+
+// D-5838 (CCRCP-204): a mail is never rejected `undeliverable` while its
+// recipient session is alive. A send that cannot land on a LIVE recipient —
+// `enter-ignored` at once, any other refusal at `MAIL_MAX_ATTEMPTS` — PARKS
+// instead: it stays outstanding (`state` stays `queued`), wakes when the input
+// box changes, retries every `MAIL_PARK_RETRY_MS` otherwise, tells its sending
+// session by system mail, escalates to the operator once, and is rejected with
+// an explicit reason only at the `MAIL_PARK_CEILING_MS` ceiling.
+describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', () => {
+  const MAIL_PARK_RETRY_MS = 600_000;
+  const MAIL_PARK_ESCALATE_MS = 900_000;
+  const MAIL_PARK_CEILING_MS = 24 * 60 * 60_000;
+  const MAIL_PARK_PROBE_MS = 30_000;
+  const SENDER = 'demo-boss';
+
+  /** A pane that behaves like a terminal: typed text lands in the box, and
+   *  Enter takes it only while `enterWorks` is true. Every capture reads the
+   *  CURRENT box, so a test changes what the next probe sees by assigning. */
+  const liveHarness = (st: { box: string; enterWorks: boolean; gone?: boolean }): Harness => {
+    const home = mkTmp('ccrc-mail-park-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const calls: string[][] = [];
+    const run: Runner = async (_cmd, args) => {
+      calls.push([...args]);
+      if (args[0] === 'has-session') {
+        return st.gone === true ? { code: 1, stdout: '', stderr: "can't find session: cc-x\n" }
+          : { code: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      if (args[0] === 'capture-pane') {
+        return st.gone === true ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: `❯ ${st.box}\n`, stderr: '' };
+      }
+      if (args[0] === 'send-keys') {
+        if (args[3] === '-l') st.box += args[5]!;
+        else if (args[3] === 'Enter' && st.enterWorks) st.box = '';
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      return { code: 1, stdout: '', stderr: '' };
+    };
+    return { home, calls, run };
+  };
+
+  const seedRecipient = (h: Harness): void => {
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID);
+    seedLiveState(h.home);
+  };
+
+  const queueFromSender = (coord: CoordStore, fromId = SENDER): { id: number } => {
+    const mail = coord.insertMail({ fromId, fromUuid: `u-${fromId}`, toId: ID, runId: null,
+      kind: 'status', subject: 'wave-brief', body: 'go', artifacts: [] });
+    return coord.queueDelivery(mail.id, ID, ENVELOPE);
+  };
+
+  const parkCols = (coord: CoordStore, id: number): { parkedAt: number | null; parkReason: string | null } =>
+    coord.db.prepare('SELECT parkedAt, parkReason FROM mail_deliveries WHERE id = ?')
+      .get(id) as unknown as { parkedAt: number | null; parkReason: string | null };
+
+  const noticesTo = (coord: CoordStore, toId: string): { fromId: string; subject: string; body: string }[] =>
+    coord.db.prepare("SELECT fromId, subject, body FROM mail WHERE toId = ? AND subject LIKE 'mail parked%'")
+      .all(toId) as unknown as { fromId: string; subject: string; body: string }[];
+
+  /** Drives a fresh row to the attempts ceiling against a dirty box. */
+  const toCeiling = async (w: FleetWatcher): Promise<void> => {
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS; i++) {
+      await w.sweepMail();
+      advance(MAIL_SWEEP_MS + 16 * 60_000);
+    }
+  };
+
+  it('enter-ignored PARKS on a live recipient — outstanding, not rejected', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+
+    await w.sweepMail();
+    const row = deliveryRow(coord, d.id);
+    expect(row.state).toBe('queued');
+    expect(row.rejectCode).toBeNull();
+    expect(row.lastError).toBe('enter-ignored');
+    expect(parkCols(coord, d.id)).toEqual({ parkedAt: Date.now(), parkReason: 'enter-ignored' });
+    expect(row.nextAttemptAt).toBe(Date.now() + MAIL_PARK_RETRY_MS);
+  }, 10_000);
+
+  it('an enter-ignored park never presses a blind Enter and never types the nudge again while its box is unchanged', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    await w.sweepMail();
+    expect(st.box).toBe(NUDGE);
+    const keysAfterPark = h.calls.filter((a) => a[0] === 'send-keys').length;
+
+    for (let i = 0; i < 4; i++) {
+      advance(MAIL_PARK_RETRY_MS + 1_000);
+      await w.sweepMail();
+    }
+    expect(h.calls.filter((a) => a[0] === 'send-keys').length).toBe(keysAfterPark);
+    expect(deliveryRow(coord, d.id).state).toBe('queued');
+    expect(deliveryRow(coord, d.id).lastGate).toBe('parked');
+    expect(parkCols(coord, d.id).parkReason).toBe('enter-ignored');
+  }, 10_000);
+
+  it('an enter-ignored park re-attempts once its box is seen EMPTY, before the retry timer, and types the nudge once', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    await w.sweepMail();
+
+    st.box = '';            // a human submitted or cleared the stranded nudge
+    st.enterWorks = true;
+    advance(MAIL_PARK_PROBE_MS + 1_000);
+    await w.sweepMail();    // the probe sees the change and wakes the row
+    advance(MAIL_SWEEP_MS + 1_000);
+    await w.sweepMail();
+    expect(deliveryRow(coord, d.id).state).toBe('delivered');
+    expect(literalSends(h.calls)).toEqual([NUDGE, NUDGE]);
+    expect(parkCols(coord, d.id)).toEqual({ parkedAt: null, parkReason: null });
+  }, 10_000);
+
+  it('draft-present at the ceiling PARKS instead of rejecting, and retries on the park timer', async () => {
+    const st = { box: 'half-typed human draft', enterWorks: true };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    await toCeiling(w);
+
+    const row = deliveryRow(coord, d.id);
+    expect(row.state).toBe('queued');
+    expect(row.rejectCode).toBeNull();
+    expect(parkCols(coord, d.id).parkReason).toBe('draft-present');
+    // Still being retried: more ceilings' worth of sweeps never reject it.
+    await toCeiling(w);
+    expect(deliveryRow(coord, d.id).state).toBe('queued');
+    expect(literalSends(h.calls)).toEqual([]);   // never typed over the human's draft
+  }, 20_000);
+
+  it('a draft-present park wakes when the draft is cleared and delivers without waiting out the timer', async () => {
+    const st = { box: 'half-typed human draft', enterWorks: true };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    await toCeiling(w);
+    await w.sweepMail();
+    expect(parkCols(coord, d.id).parkedAt).not.toBeNull();
+
+    st.box = '';
+    advance(MAIL_PARK_PROBE_MS + 1_000);
+    await w.sweepMail();
+    advance(MAIL_SWEEP_MS + 1_000);
+    await w.sweepMail();
+    expect(deliveryRow(coord, d.id).state).toBe('delivered');
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+  }, 20_000);
+
+  it('rejects at the 24 h ceiling with an explicit reason', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    await w.sweepMail();
+
+    advance(MAIL_PARK_CEILING_MS - 60_000);
+    await w.sweepMail();
+    expect(deliveryRow(coord, d.id).state).toBe('queued');
+    advance(120_000);
+    await w.sweepMail();
+    const row = deliveryRow(coord, d.id);
+    expect(row.state).toBe('rejected');
+    expect(row.rejectCode).toBe('undeliverable');
+    expect(row.lastError).toBe('parked 24 h, never delivered: enter-ignored');
+  }, 10_000);
+
+  it('tells the SENDING session once, by system mail, naming the subject, the recipient and the condition', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    queueFromSender(coord);
+    await w.sweepMail();
+    for (let i = 0; i < 3; i++) { advance(MAIL_PARK_RETRY_MS + 1_000); await w.sweepMail(); }
+
+    const notes = noticesTo(coord, SENDER);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]!.fromId).toBe('operator');
+    expect(notes[0]!.body).toContain('wave-brief');
+    expect(notes[0]!.body).toContain(ID);
+    expect(notes[0]!.body).toContain('is parked');
+    expect(notes[0]!.body).toContain('it will be delivered when');
+  }, 10_000);
+
+  it('never mails a ROLE sender: an operator-sent park notifies no session', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    queueFromSender(coord, 'operator');
+    await w.sweepMail();
+    expect(coord.db.prepare("SELECT COUNT(*) AS n FROM mail WHERE subject LIKE 'mail parked%'").get())
+      .toEqual({ n: 0 });
+  }, 10_000);
+
+  it('escalates to the operator ONCE, at 15 minutes parked — not at the park, and not again', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    await w.sweepMail();
+    const parked = (): PushPayload[] => sent.filter((p) => p.tag === `mail-parked-${d.id}`);
+    expect(parked()).toHaveLength(0);
+
+    advance(MAIL_PARK_ESCALATE_MS - 60_000);
+    await w.sweepMail();
+    expect(parked()).toHaveLength(0);
+    advance(120_000);
+    await w.sweepMail();
+    expect(parked()).toHaveLength(1);
+    for (let i = 0; i < 3; i++) { advance(MAIL_PARK_RETRY_MS + 1_000); await w.sweepMail(); }
+    expect(parked()).toHaveLength(1);
+  }, 10_000);
+
+  it('a parked row whose recipient is then STOPPED is rejected as today', async () => {
+    const st: { box: string; enterWorks: boolean; gone?: boolean } = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    await w.sweepMail();
+    expect(deliveryRow(coord, d.id).state).toBe('queued');
+
+    seedStopped(h.home, ID);   // archived: the stop stamp, and the pane gone
+    st.gone = true;
+    // The lifecycle rung's own terms, unchanged: it backs off and rejects at the
+    // attempts ceiling — well inside the park's 24 h.
+    for (let i = 0; i < MAIL_MAX_ATTEMPTS + 1; i++) {
+      advance(MAIL_BACKOFF_MAX_MS + 1_000);
+      await w.sweepMail();
+    }
+    const row = deliveryRow(coord, d.id);
+    expect(row.state).toBe('rejected');
+    expect(row.lastError).toBe('recipient session is stopped');
+  }, 10_000);
+
+  it('puts `parkedAt` on the wire for the mail strip, and counts live parks on the run board', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const opened = coord.openRun({ program: 'p', title: 'T', project: 'demo', wave: 1, waveOf: 1, claimedBy: SENDER });
+    if (!('id' in opened)) throw new Error('fixture openRun refused');
+    const mail = coord.insertMail({ fromId: SENDER, fromUuid: 'u', toId: ID, runId: opened.id,
+      kind: 'status', subject: 'wave-brief', body: 'go', artifacts: [] });
+    coord.queueDelivery(mail.id, ID, ENVELOPE);
+    await w.sweepMail();
+
+    const wire = coord.mailForRecipient(ID);
+    expect(wire[0]!.parkedAt).toBe(Date.now());
+    const health = coord.runHealth([opened.id], []).get(opened.id)!;
+    expect(health.mailParkedLive).toBe(1);
+    expect(health.mailParked).toBe(0);   // the existing count stays "rejected, lost"
+  }, 10_000);
 });
