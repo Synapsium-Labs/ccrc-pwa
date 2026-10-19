@@ -21,12 +21,12 @@ cluster K10), not standalone builds (decision D-5920).
 
 | # | item | issue | gate | state |
 |---|---|---|---|---|
-| 1 | D1 mail: never park a message as undeliverable while its recipient is alive; tell the sender | #754 | none | to spec |
+| 1 | D1 mail: never park a message as undeliverable while its recipient is alive; tell the sender | #754 | none | in review, PR #821 |
 | 2 | D3 dispatch: confirm the wave brief was taken within 5 min, retry, then tell the coordinator | #755 | D1 (its retry rides D1's parked path) | to spec |
 | 3 | D2 mail: surface pending mail inside a running turn (hook); the `busy` gate | #756 | D1; arming is OA-D2 | to spec |
 | 4 | D4 coordinator: re-inject its run roster on compaction, resume, clear and wake | #757 | none (ordered after D2) | to spec |
 | 5 | D5 worker restart: re-attach notice and a coordinator heads-up | #759 | none (ordered after D4) | to spec |
-| 6 | D7 drift reconciler, digest section, held questions across a restart | #760 | the consolidation's W1a for the pushes | specced and planned (tail spec, Tasks DT1 to DT5) |
+| 6 | D7 drift reconciler, digest section, held questions across a restart | #760 | #821 for DT1; the consolidation's W1a C1c and W1b for DT2; skins P4a and P7 for DT4; DT5 none | specced and planned (tail spec rev 1, Tasks DT1 to DT5) |
 | W6 input | D6 parent derivation checks the worker's birth; runs released when their coordinator is archived | #758 | the consolidation's W6 | input to W6's `bindingOf`; its listing half is D7's `claimant-gone` |
 | W6 input | D8 the coordinator's uuid on the claim; an attributed reclaim offered after an id-changing revive | #761 | the consolidation's W6 | specced and planned (Tasks DT6, DT7); DT7 conditional on the 30-day rule |
 
@@ -55,5 +55,6 @@ cluster K10), not standalone builds (decision D-5920).
 
 ## Next-wave brief
 
-Start D1 (#754): it has no gate and D3 depends on it. For the tail, Task DT1 (the pure drift decider) and Task DT5 (held
-questions across a restart) have no gate and may run beside D1; DT2 waits for W1a.
+Land D1 (#754, PR #821): D3 depends on it, and so does the tail's DT1 (its mail kinds read #821's park columns). Task DT5
+(held questions and approvals across a restart) has no gate and may run now, rule 6 against #821 on `watch.ts`. DT1
+follows #821; DT2 waits for W1a's C1c and W1b.
