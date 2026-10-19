@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=84e7415fa9bd328d3231fb974cf95d1dc9e4537330dcdf872272b2f6b4fc9eff
+# ccrc:generated 1 sha256=3653a9510d27acd5b65d902c443005306919217fb03b0b2b6ef19bbf11360326
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -7939,10 +7939,28 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
            die "worktree record not cleared for $workdir — the session was stopped; git refused: unlock it (git -C $main worktree unlock $workdir) or clean the tree, then re-run — and if the directory is already gone, git -C $main worktree prune clears the record"; }
   fi
 
+  # D-5880 (#138): `branch -d` asks "is it merged?", which protects unfinished
+  # work, not a branch whose value is its NAME — a workspace on the repo's
+  # shared `main`, at an ancestor of origin/main, lost the repo's local `main`
+  # here. So the delete below never takes main, master, develop or
+  # origin/HEAD's target, whatever the registry or git's record says. D-5881:
+  # no `ws/` shape test — ws-rename (ccd's own verb) gives a workspace's own
+  # branch any free name, and `ws-rename --branch <old>` is how a registry
+  # comes to say `main` at all. Only ever narrows what ws-rm deletes.
+  local ownbr=1 dfltbr
+  dfltbr=$(git -C "$main" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  dfltbr=${dfltbr#origin/}
+  case "$branch" in
+    main|master|develop) ownbr=0 ;;
+    *) [[ -n "$dfltbr" && "$branch" == "$dfltbr" ]] && ownbr=0 ;;
+  esac
   # DECLARED IN THE R4-1 BLOCK ABOVE NOW, not here: the attic pin needs it to
   # resolve a tip from the registry when the worktree is gone, and a SECOND
   # `local` in the same function re-declares and blanks it. One reader, one place.
-  if [[ -n "$branch" ]]; then
+  if [[ -n "$branch" ]] && (( ownbr == 0 )); then
+    # Loud, never silent: the operator learns the name ws-rm refused to touch.
+    echo "kept branch $branch (shared, not this workspace's own) — ws-rm never deletes main, master, develop or origin/HEAD's target" >&2
+  elif [[ -n "$branch" ]]; then
     # git had a record, so the registry is a witness, never the decider: a
     # divergence means the branch was renamed outside ccd, and the name to
     # delete is the one git actually had checked out there.
