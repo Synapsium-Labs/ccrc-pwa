@@ -98,9 +98,9 @@ export interface DelegationListingWindow {
 
 /** One tree's question. Its four arrays (`activities`, `acceptedEvidence`, `pointMetas`, `listingWindows`) are the PASS's, shared by every tree,
  *  and the module memoises what it derives from them by identity (D-5604, D-5642): a caller never changes one, or a row of one, after handing
- *  it over. The lane freezes the windows, their listings and the window list (D-5643), and the evidence array with its `{journalId, event}`
- *  rows (not each `event`) and the meta array with its rows, which it builds afresh each pass; the checkpoint's activities are replaced,
- *  never written. */
+ *  it over. The lane freezes the windows, their listings and the window list (D-5643), the evidence array and its `{journalId, event}`
+ *  rows, both built afresh each pass (not each `event`), and the meta array, built afresh each pass, with its rows, frozen in place; the
+ *  checkpoint's activities are replaced, never written. */
 export interface DelegationCorrelationInput {
   record: DelegationCensusRecord;
   runChildAgreement: {
@@ -809,8 +809,8 @@ function claimedAgentOf(event: DelegationEventEnvelopeV1): string | null {
 /** D-5642: a memo keyed weakly by the array (or list) it describes, built the first time a tree asks. The lane hands every census tree,
  *  and every ladder rerun, the SAME pass-wide arrays (`watch.ts`, reconcile), so what used to be a per-tree scan of one is built once per
  *  pass and looked up. Nothing outlives the array it is keyed by (the L1 header holds). The lane freezes the window list and its windows,
- *  the evidence array and its rows (not each row's `event`) and the meta array and its rows (D-5643), each built afresh per pass, and the
- *  checkpoint's activities are replaced, never written. */
+ *  the evidence array and its rows (not each row's `event`) and the meta array and its rows (D-5643): every array is built afresh per pass,
+ *  the meta rows are frozen in place, and the checkpoint's activities are replaced, never written. */
 function memoOf<K extends object, V>(memos: WeakMap<K, V>, key: K, build: (key: K) => V): V {
   let value = memos.get(key);
   if (value === undefined) { value = build(key); memos.set(key, value); }
