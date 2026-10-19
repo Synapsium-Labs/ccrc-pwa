@@ -9344,8 +9344,16 @@ export function delegationPassSlowLine(fields: Readonly<Partial<Record<Delegatio
 }
 /** D-5692: what one pass records for its timing line: summed elapsed ms per phase (present iff the phase ran, even at 0) and the sizes it
  *  measured, read only at the pass's settle. `step` ends the open phase of `reconcile`'s consecutive stretch. */
+/** D-5692: the line's verdict and effect counts, by the correlation kind and the effect kind each counts. */
+const LANE_VERDICT_SIZES = [
+  ['vLinked', 'linked'], ['vRunChild', 'run-child-owned'], ['vUnresolved', 'unresolved'], ['vConflicting', 'conflicting'], ['vUnmeasured', 'unmeasured'],
+] as const satisfies readonly (readonly [DelegationPassSlowKey, string])[];
+const LANE_EFFECT_SIZES = [
+  ['eLease', 'request-linked-lease-identity'], ['eRunChild', 'record-run-child-owned'], ['eUnowned', 'record-unowned-worktree'],
+  ['eAbsence', 'record-measured-absence'], ['eRepair', 'repair-report-projection'], ['eInterval', 'record-observation-interval'],
+] as const satisfies readonly (readonly [DelegationPassSlowKey, DelegationReportEffect['kind']])[];
 interface LanePassTiming {
-  ms: Map<string, number>; sizes: Map<string, number>; startedAt: number; durable: DelegationDurability | null;
+  ms: Map<DelegationPassSlowKey, number>; sizes: Map<DelegationPassSlowKey, number>; startedAt: number; durable: DelegationDurability | null;
   rewrites: number; rewriteEvents: number; step: (() => void) | null;
 }
 /** What one read of the lane may take (the stat fallback after a failed range read included: it is bounded by the pass signal). */
@@ -9821,15 +9829,15 @@ class DelegationLane {
   private mono(): number { return this.deps.monotonicMs?.() ?? performance.now(); }
   /** D-5692: begins a timed phase or part: reads the clock, tells `onPassPhase`, and answers the call that ends it. Times are ELAPSED ms, so an
    *  awaited phase holds its waits; a phase that ran is on the line even at 0, and one that did not run is absent. Summed over repeats. */
-  private phase(pass: LanePass, key: string): () => void {
+  private phase(pass: LanePass, key: DelegationPassSlowKey): () => void {
     const at = this.mono();
     this.seams.onPassPhase?.(key);
     return () => { const ms = this.timings.get(pass)?.ms; if (ms !== undefined) ms.set(key, (ms.get(key) ?? 0) + (this.mono() - at)); };
   }
   /** (A step or a size of a pass that has no record, as when a row calls `applyEffects` or `reconcile` alone, is dropped.) */
-  private size(pass: LanePass, key: string, n: number): void { this.timings.get(pass)?.sizes.set(key, n); }
+  private size(pass: LanePass, key: DelegationPassSlowKey, n: number): void { this.timings.get(pass)?.sizes.set(key, n); }
   /** D-5692: `reconcile`'s consecutive phases: ends the open one and begins `key`. `reconcile`'s caller ends the last with `stepEnd`. */
-  private stepTo(pass: LanePass, key: string): void { this.stepEnd(pass); const t = this.timings.get(pass); if (t !== undefined) t.step = this.phase(pass, key); }
+  private stepTo(pass: LanePass, key: DelegationPassSlowKey): void { this.stepEnd(pass); const t = this.timings.get(pass); if (t !== undefined) t.step = this.phase(pass, key); }
   private stepEnd(pass: LanePass): void { const t = this.timings.get(pass); if (t === undefined) return; const end = t.step; t.step = null; end?.(); }
   /** D-5692: opens a pass's record at `run`'s entry; it is also where the port's rewrites land until a later pass starts. */
   private startTiming(pass: LanePass): LanePassTiming {
@@ -9864,16 +9872,18 @@ class DelegationLane {
    *  late settle, which is why `cut` is read now). `block` sums the lane's own work and writes, and leaves out the read phases (`open
    *  recover root load owners readMetas`), `rewrite` (it overlaps its callers), `reconcile` (its stretches are summed instead) and the
    *  effect parts (inside `effects`). `pre` and the stretch from `prep` to `policy` hold no await, so their elapsed time is the lane's
-   *  own and a slow read is never taken for a block. Written iff `block` is MORE than `DELEGATION_PASS_SLOW_MS`; never throws out of `run`. */
+   *  own and a slow read is never taken for a block. The awaited blocking phases (`expire`, `flush`, `upkeep`, `prune`, `effects`) are
+   *  elapsed too, so their writes' waits (a journal fsync, the repair's yields between chunks) count in `block`: a reader sets them against
+   *  the await-free stretches before calling the time CPU. Written iff `block` is MORE than `DELEGATION_PASS_SLOW_MS`; never throws out of `run`. */
   private passLine(pass: LanePass, t: LanePassTiming): void {
     try {
-      const sum = (keys: readonly string[]): number => keys.reduce((n, k) => n + (t.ms.get(k) ?? 0), 0);
+      const sum = (keys: readonly DelegationPassSlowKey[]): number => keys.reduce((n, k) => n + (t.ms.get(k) ?? 0), 0);
       const block = sum(['noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects']);
       if (!(block > DELEGATION_PASS_SLOW_MS)) return;
       const total = this.mono() - t.startedAt;
       const f: Partial<Record<DelegationPassSlowKey, number>> = {};
-      for (const [k, v] of t.ms) f[k as DelegationPassSlowKey] = v;
-      for (const [k, v] of t.sizes) f[k as DelegationPassSlowKey] = v;
+      for (const [k, v] of t.ms) f[k] = v;
+      for (const [k, v] of t.sizes) f[k] = v;
       f.block = block; f.cut = pass.signal.aborted ? 1 : 0; f.total = total;
       f.other = Math.max(0, total - sum(['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile']));
       if (t.ms.has('rewrite')) { f.rewrites = t.rewrites; f.rewriteEvents = t.rewriteEvents; }
@@ -10252,9 +10262,9 @@ class DelegationLane {
         try {
           await durable.recover();
         } finally {
-          endRecover();
           this.recovering = false;                                       // R116: settled, returned or thrown
           this.recoveredAt = Date.now();                                 // R112, R116: the settle, for whichever pass sets the next instant
+          endRecover();
         }
         // On a return these run in the same synchronous continuation as the `finally`, so no pass sees the recovery settled with the old
         // slice still marked loaded. (A throw skips them, as before: `recover()` throws only before it clears its failure, since its
@@ -10999,7 +11009,7 @@ class DelegationLane {
     let ladder = 0;                                                      // D-5692: the calls correlation received
     const pairs = flat.map((record) => { ladder += 1; return { record, verdict: correlateDelegation(inputFor(record)) }; });
     this.size(pass, 'ladder', ladder);
-    for (const [key, kind] of [['vLinked', 'linked'], ['vRunChild', 'run-child-owned'], ['vUnresolved', 'unresolved'], ['vConflicting', 'conflicting'], ['vUnmeasured', 'unmeasured']] as const) {
+    for (const [key, kind] of LANE_VERDICT_SIZES) {
       this.size(pass, key, pairs.filter((x) => x.verdict.kind === kind).length);
     }
     this.stepTo(pass, 'forced');
@@ -11043,7 +11053,7 @@ class DelegationLane {
       previousSuccessfulCensus: this.previous === null ? null : this.previous.flat,
       censusedProjects: censused, previousCensusedProjects: this.previous === null ? null : this.previous.projects,
     });
-    for (const [key, kind] of [['eLease', 'request-linked-lease-identity'], ['eRunChild', 'record-run-child-owned'], ['eUnowned', 'record-unowned-worktree'], ['eAbsence', 'record-measured-absence'], ['eRepair', 'repair-report-projection'], ['eInterval', 'record-observation-interval']] as const) {
+    for (const [key, kind] of LANE_EFFECT_SIZES) {
       this.size(pass, key, effects.filter((x) => x.kind === kind).length);
     }
 
