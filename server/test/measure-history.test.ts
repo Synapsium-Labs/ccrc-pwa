@@ -2329,3 +2329,469 @@ describe('W2-3 Task 5: changed families and the assembled reports', () => {
     }
   });
 });
+
+// ── W2-3 Task 6: the bootstrap, the assignment and Q18 (W2-D18, W2-D19, W2-D21) ─────────────────────────────────────
+// Pure: every seed is a parameter. The seed is assembled at runtime and is no real draw; store ids, ccrc ids and
+// generations are synthetic. The xoshiro128** reference words were re-derived by an independent implementation.
+import * as gate6 from '../../deploy/history-gate.mjs';
+
+describe('W2-3 Task 6: the bootstrap, the assignment and Q18', () => {
+  const SEED6 = '5eed'.repeat(16);
+  const OTHER_SEED6 = 'd1ce'.repeat(16);
+  const STORE6_A = '00000000-0000-4000-8000-0000000000a1';
+  const STORE6_B = '00000000-0000-4000-8000-0000000000a2';
+  const take = (rng: { nextU32: () => number }, n: number): number[] => Array.from({ length: n }, () => rng.nextU32());
+  /** The stream substream(seed, label) must equal: sha256(seed:label)'s first 16 bytes as four little-endian words. */
+  const wordsOf = (seed: string, label: string): [number, number, number, number] => {
+    const d = createHash('sha256').update(`${seed}:${label}`, 'utf8').digest();
+    return [d.readUInt32LE(0), d.readUInt32LE(4), d.readUInt32LE(8), d.readUInt32LE(12)];
+  };
+  /** An rng that answers the given words in order, then throws. */
+  const scripted = (ws: number[]): { nextU32: () => number; used: () => number } => {
+    let i = 0;
+    return { nextU32: () => { if (i >= ws.length) throw new Error('scripted rng ran dry'); return ws[i++]!; }, used: () => i };
+  };
+  const fam6 = (store: string, id: string): { store_id: string; ccrc_id: string; generation: string } =>
+    ({ store_id: store, ccrc_id: id, generation: G1 });
+  const TWELVE = Array.from({ length: 12 }, (_, i) => fam6(STORE6_A, `wrap-a-proj-${String.fromCharCode(97 + i)}`));
+
+  it('xoshiro128** from the state [1, 2, 3, 4] gives the reference words', () => {
+    expect(take(gate6.xoshiro128ss([1, 2, 3, 4]), 6)).toEqual([11520, 0, 5927040, 70819200, 2031721883, 1637235492]);
+  });
+
+  it('an all-zero state is refused, and so is a state that is not four u32 words', () => {
+    expect(() => gate6.xoshiro128ss([0, 0, 0, 0])).toThrow(/all-zero state is refused/);
+    expect(() => gate6.xoshiro128ss([1, 2, 3] as unknown as [number, number, number, number])).toThrow(/four u32 words/);
+    expect(() => gate6.xoshiro128ss([1, 2, 3, 2 ** 32])).toThrow(/four u32 words/);
+  });
+
+  it('a substream is sha256(seed:label)\'s first 16 bytes as four little-endian words; the same seed and label give the same stream twice, another label or seed another', () => {
+    const live = take(gate6.substream(SEED6, 'live-ci'), 8);
+    expect(live).toEqual(take(gate6.xoshiro128ss(wordsOf(SEED6, 'live-ci')), 8));
+    expect(take(gate6.substream(SEED6, 'live-ci'), 8)).toEqual(live);
+    expect(take(gate6.substream(SEED6, 'quiz-ci'), 8)).not.toEqual(live);
+    expect(take(gate6.substream(OTHER_SEED6, 'live-ci'), 8)).not.toEqual(live);
+  });
+
+  it('every SUBSTREAMS label and PILOT_SUBSTREAM opens a stream; any other label, ASSIGN_LABEL included, is refused', () => {
+    for (const label of [...gate6.SUBSTREAMS, gate6.PILOT_SUBSTREAM]) expect(() => gate6.substream(SEED6, label)).not.toThrow();
+    expect(() => gate6.substream(SEED6, gate6.ASSIGN_LABEL)).toThrow(/is not a substream label/);
+    expect(() => gate6.substream(SEED6, 'q19')).toThrow(/is not a substream label/);
+    expect(() => gate6.substream('', 'q18')).toThrow(/the seed is a non-empty string/);
+  });
+
+  it('randInt draws by rejection: a word at or above the largest multiple of n below 2^32 is drawn again', () => {
+    const n = 3 * 2 ** 30;   // the largest multiple of n below 2^32 is n itself: a quarter of the words are redrawn
+    const r = scripted([2 ** 32 - 1, 5]);
+    expect(gate6.randInt(r, n)).toBe(5);
+    expect(r.used()).toBe(2);
+    const rng = gate6.substream(SEED6, 'live-ci');
+    const seen = new Set<number>();
+    for (let i = 0; i < 10_000; i++) {
+      const v = gate6.randInt(rng, 7);
+      expect(Number.isInteger(v) && v >= 0 && v < 7, String(v)).toBe(true);
+      seen.add(v);
+    }
+    expect(seen.size).toBe(7);
+  });
+
+  it('randInt is unbiased on a constructed bound where a bare modulo is not: draws below 2^30 out of [0, 3 * 2^30) are a third, not a half', () => {
+    const n = 3 * 2 ** 30;
+    const rng = gate6.substream(SEED6, 'live-ci');
+    let low = 0;
+    for (let i = 0; i < 3000; i++) if (gate6.randInt(rng, n) < 2 ** 30) low += 1;
+    expect(low / 3000).toBeGreaterThan(0.30);
+    expect(low / 3000).toBeLessThan(0.37);
+  });
+
+  it('the nearest-rank ranks are ceil(0.025 B) and ceil(0.975 B): 250 and 9,750 at B = 10,000; 1 and 30 at B = 30', () => {
+    expect(gate6.nearestRankBounds(10_000)).toEqual({ lowRank: 250, highRank: 9_750 });
+    expect(gate6.nearestRankBounds(gate6.BOOTSTRAP.B)).toEqual({ lowRank: 250, highRank: 9_750 });
+    expect(gate6.nearestRankBounds(30)).toEqual({ lowRank: 1, highRank: 30 });
+  });
+
+  it('a family with 0 measured windows is not a cluster: the result is the one without it, draw for draw; with none left there is no statistic', () => {
+    const real = [{ num: 3, den: 5 }, { num: 0, den: 4 }, { num: 2, den: 2 }];
+    const withEmpty = gate6.clusterBootstrap({ clusters: [...real, { num: 0, den: 0 }], B: 400, rng: gate6.substream(SEED6, 'live-ci'), mode: 'share' });
+    const without = gate6.clusterBootstrap({ clusters: real, B: 400, rng: gate6.substream(SEED6, 'live-ci'), mode: 'share' });
+    expect(withEmpty).toEqual(without);
+    expect(withEmpty.point).toEqual({ num: 5, den: 11 });
+    const paired = [{ t: 2, c: 1, n: 3 }, { t: 1, c: 1, n: 2 }];
+    expect(gate6.clusterBootstrap({ clusters: [...paired, { t: 0, c: 0, n: 0 }], B: 400, rng: gate6.substream(SEED6, 'quiz-ci'), mode: 'paired' }))
+      .toEqual(gate6.clusterBootstrap({ clusters: paired, B: 400, rng: gate6.substream(SEED6, 'quiz-ci'), mode: 'paired' }));
+    expect(() => gate6.clusterBootstrap({ clusters: [{ num: 0, den: 0 }], B: 400, rng: gate6.substream(SEED6, 'live-ci'), mode: 'share' }))
+      .toThrow(/no cluster has a measured unit/);
+  });
+
+  it('the statistic is pooled and exact: share is sum(with_call) / sum(windows), paired is (sum t - sum c) / sum n, never reduced, never a float', () => {
+    const s = gate6.clusterBootstrap({ clusters: [{ num: 1, den: 3 }, { num: 1, den: 7 }], B: 400, rng: gate6.substream(SEED6, 'live-ci'), mode: 'share' });
+    expect(s.point).toEqual({ num: 2, den: 10 });
+    const p = gate6.clusterBootstrap({ clusters: [{ t: 3, c: 1, n: 4 }, { t: 1, c: 1, n: 2 }], B: 400, rng: gate6.substream(SEED6, 'quiz-ci'), mode: 'paired' });
+    expect(p.point).toEqual({ num: 2, den: 6 });
+    for (const r of [s, p]) {
+      for (const f of [r.point, r.lower, r.upper]) expect(Number.isSafeInteger(f.num) && Number.isSafeInteger(f.den) && f.den >= 1, JSON.stringify(f)).toBe(true);
+      expect(gate6.cmpFrac(r.lower, r.point)).toBeLessThanOrEqual(0);
+      expect(gate6.cmpFrac(r.point, r.upper)).toBeLessThanOrEqual(0);
+    }
+    expect(() => gate6.clusterBootstrap({ clusters: [{ t: 3, c: 1, n: 4 }], B: 400, rng: gate6.substream(SEED6, 'quiz-ci'), mode: 'share' }))
+      .toThrow(/is not a share cluster/);
+  });
+
+  it('the order is exact: two fractions one float apart compare unequal, and a product past 2^53 compares in BigInt', () => {
+    const third = gate6.frac(1, 3);
+    const near = gate6.frac(3_002_399_751_580_330, 9_007_199_254_740_991);   // 1/3 - 1/(3 * (2^53 - 1))
+    expect(near.num / near.den, 'CONTROL: as floats the two are one value').toBe(1 / 3);
+    expect(gate6.cmpFrac(near, third)).toBe(-1);
+    expect(gate6.cmpFrac(third, near)).toBe(1);
+    expect(gate6.cmpFrac(gate6.frac(2, 6), third)).toBe(0);
+    const big = 2 ** 53;
+    expect(gate6.cmpFrac(gate6.frac(big - 1, big - 2), gate6.frac(big - 2, big - 3))).toBe(-1);
+    expect(() => gate6.frac(1, 0)).toThrow(/not an exact fraction/);
+    expect(() => gate6.frac(0.5, 1)).toThrow(/not an exact fraction/);
+  });
+
+  it('the same seed and clusters give the same interval twice; B defaults to BOOTSTRAP.B and is injectable', () => {
+    const clusters = [{ num: 1, den: 4 }, { num: 0, den: 3 }, { num: 2, den: 2 }, { num: 1, den: 5 }];
+    const once = gate6.clusterBootstrap({ clusters, rng: gate6.substream(SEED6, 'live-ci'), mode: 'share' });
+    expect(gate6.clusterBootstrap({ clusters, rng: gate6.substream(SEED6, 'live-ci'), mode: 'share' })).toEqual(once);
+    expect(gate6.clusterBootstrap({ clusters, B: gate6.BOOTSTRAP.B, rng: gate6.substream(SEED6, 'live-ci'), mode: 'share' })).toEqual(once);
+  });
+
+  it('a family\'s arm is bit 0 of the first byte of sha256(seed:assign:canonicalJson([store_id, ccrc_id, generation])), 1 treatment', () => {
+    for (const f of TWELVE) {
+      const bit = createHash('sha256').update(`${SEED6}:assign:${JSON.stringify([f.store_id, f.ccrc_id, f.generation])}`, 'utf8').digest()[0]! & 1;
+      expect(gate6.armOf(SEED6, f), f.ccrc_id).toBe(bit === 1 ? 'treatment' : 'control');
+      expect(gate6.ASSIGNMENT_ARMS).toContain(gate6.armOf(SEED6, f));
+    }
+    expect(new Set(TWELVE.map((f) => gate6.armOf(SEED6, f))).size, 'CONTROL: the fixture holds both arms').toBe(2);
+  });
+
+  it('removing one family leaves every other family\'s arm unchanged', () => {
+    const all = new Map(gate6.assignArms(SEED6, TWELVE).map((e) => [e.ccrc_id, e.arm]));
+    for (let drop = 0; drop < TWELVE.length; drop++) {
+      for (const e of gate6.assignArms(SEED6, TWELVE.filter((_, i) => i !== drop))) expect(e.arm, `${drop}: ${e.ccrc_id}`).toBe(all.get(e.ccrc_id));
+    }
+  });
+
+  it('shuffled input gives the same list, sorted by canonicalJson, and the same assignment_sha256', () => {
+    const list = gate6.assignArms(SEED6, TWELVE);
+    const shuffled = [...TWELVE.slice(7), ...TWELVE.slice(0, 7).reverse()];
+    expect(gate6.assignArms(SEED6, shuffled)).toEqual(list);
+    const canon = list.map((e) => JSON.stringify({ arm: e.arm, ccrc_id: e.ccrc_id, generation: e.generation, store_id: e.store_id }));
+    expect(canon).toEqual([...canon].sort());
+    const sha = createHash('sha256').update(`[${canon.join(',')}]`, 'utf8').digest('hex');
+    expect(gate6.assignmentSha256(list)).toBe(sha);
+    expect(gate6.assignmentSha256([...list].reverse())).toBe(sha);
+    const tampered = list.map((e, i) => (i === 0 ? { ...e, arm: e.arm === 'treatment' ? 'control' : 'treatment' } : e));
+    expect(gate6.assignmentSha256(tampered)).not.toBe(sha);
+    expect(() => gate6.assignArms(SEED6, [TWELVE[0]!, TWELVE[0]!])).toThrow(/is listed twice/);
+  });
+
+  it('RP7-pure: one ccrc id string on two stores is two families with two independent draws (this seed gives them different arms)', () => {
+    const a = fam6(STORE6_A, 'wrap-a-proj-a');
+    const b = fam6(STORE6_B, 'wrap-a-proj-a');
+    expect(gate6.armOf(SEED6, a)).toBe('control');
+    expect(gate6.armOf(SEED6, b)).toBe('treatment');
+    expect(gate6.assignArms(SEED6, [a, b])).toHaveLength(2);
+  });
+
+  it('betaDraw has mean p and variance p (1 - p) rho; rho 0 gives p and draws nothing', () => {
+    const rng = gate6.substream(SEED6, 'q18');
+    expect(gate6.betaDraw(rng, 0.3, 0)).toBe(0.3);
+    expect(rng.nextU32(), 'rho 0 took no word').toBe(gate6.substream(SEED6, 'q18').nextU32());
+    const draws = Array.from({ length: 4000 }, () => gate6.betaDraw(rng, 0.3, 0.3));
+    const mean = draws.reduce((s, v) => s + v, 0) / draws.length;
+    const variance = draws.reduce((s, v) => s + (v - mean) ** 2, 0) / (draws.length - 1);
+    expect(mean).toBeGreaterThan(0.28);
+    expect(mean).toBeLessThan(0.32);
+    expect(variance).toBeGreaterThan(0.055);
+    expect(variance).toBeLessThan(0.071);
+    expect(draws.every((v) => v >= 0 && v <= 1)).toBe(true);
+  });
+
+  it('binomialDraw stays in [0, n], gives 0 at p 0 and n at p 1, and has mean n p', () => {
+    const rng = gate6.substream(SEED6, 'q18');
+    expect(gate6.binomialDraw(rng, 10, 0)).toBe(0);
+    expect(gate6.binomialDraw(rng, 10, 1)).toBe(10);
+    const draws = Array.from({ length: 2000 }, () => gate6.binomialDraw(rng, 10, 0.3));
+    expect(draws.every((k) => Number.isInteger(k) && k >= 0 && k <= 10)).toBe(true);
+    const mean = draws.reduce((s, v) => s + v, 0) / draws.length;
+    expect(mean).toBeGreaterThan(2.85);
+    expect(mean).toBeLessThan(3.15);
+  });
+
+  it('expected windows are round(windows * planned_days / covered_days), and a family expecting 0 is dropped', () => {
+    expect(gate6.expectedWindows([
+      { key: 'k1', windows: 3, covered_days: 7 },
+      { key: 'k2', windows: 1, covered_days: 28 },
+      { key: 'k3', windows: 1, covered_days: 30 },
+      { key: 'k4', windows: 0, covered_days: 14 },
+    ], 14)).toEqual([{ key: 'k1', n: 6 }, { key: 'k2', n: 1 }]);
+    expect(() => gate6.expectedWindows([{ key: 'k1', windows: 3, covered_days: 0 }], 14)).toThrow(/positive covered_days/);
+  });
+
+  const Q18_FAMILIES = Array.from({ length: 12 }, (_, i) => ({ key: `fam-${String(i).padStart(2, '0')}`, windows: 4 + (i % 4), covered_days: 14 }));
+  const q18Input = (o: Partial<Parameters<typeof gate6.q18Power>[0]> = {}): Parameters<typeof gate6.q18Power>[0] =>
+    ({ families: Q18_FAMILIES, plannedDays: 14, seedHex: SEED6, rho: 0.3, power: 0.5, sims: 24, gridStep: 0.05, B: 200, ...o });
+
+  it('Q18 is deterministic for small injected S and B, and another seed gives other shares', () => {
+    const once = gate6.q18Power(q18Input());
+    expect(gate6.q18Power(q18Input())).toEqual(once);
+    expect(once.procedure).toBe('bisection-on-grid-crn');
+    expect(gate6.q18Power(q18Input({ seedHex: OTHER_SEED6 })).points).not.toEqual(once.points);
+  });
+
+  it('Q18\'s figure is a grid point at least X whose share and upper neighbour\'s share reach the power level, and the point below it does not', () => {
+    const step = q18Input().gridStep;
+    const x = gate6.X.num / gate6.X.den;
+    // 0.95 is a level where this fixture's shares are not monotone in p (0.55 passes, 0.6 does not), so the
+    // upper-neighbour clause decides the figure there.
+    for (const power of [...gate6.Q18_DEFAULTS.power, 0.95]) {
+      const r = gate6.q18Power(q18Input({ power }));
+      expect(r.figure, `power ${power}`).not.toBeNull();
+      const fig = r.figure!;
+      expect(fig).toBeGreaterThanOrEqual(x);
+      const at = (p: number): number | undefined => r.points.find((q) => Math.abs(q.p - p) < 1e-9)?.share;
+      expect(at(fig), `power ${power}: the figure's own share`).toBeGreaterThanOrEqual(power);
+      const up = at(fig + step);
+      if (fig < 1 - 1e-9) expect(up !== undefined && up >= power, `power ${power}: its upper neighbour's share (${up}) reaches it`).toBe(true);
+      const below = at(fig - step);
+      if (fig > x + 1e-9) expect(below !== undefined && below < power, `power ${power}: the point below's share (${below}) misses it`).toBe(true);
+      expect(r.points.map((q) => q.p)).toEqual(r.points.map((q) => q.p).sort((a, b) => a - b));
+    }
+  });
+
+  it('Q18 answers null, never a number, when no family expects a window or the top of the grid misses the power level', () => {
+    expect(gate6.q18Power(q18Input({ families: [{ key: 'fam-00', windows: 1, covered_days: 30 }] })))
+      .toEqual({ figure: null, procedure: 'bisection-on-grid-crn', points: [] });
+    const one = gate6.q18Power(q18Input({ families: [{ key: 'fam-00', windows: 6, covered_days: 14 }], power: 0.8 }));
+    expect(one.figure).toBeNull();
+    expect(one.points).toHaveLength(1);
+    expect(one.points[0]!.p).toBe(1);
+    expect(one.points[0]!.share).toBeLessThan(0.8);
+  });
+
+  it('Q18_DEFAULTS are part 1\'s q18_settings, and the grid must divide the span from X to 1', () => {
+    expect(gate6.Q18_DEFAULTS).toEqual({ rho_headline: 0.3, power: [0.5, 0.8], lookback_days: 14, sims: 1000, grid_step: 0.005, procedure: 'bisection-on-grid-crn' });
+    expect(Object.isFrozen(gate6.Q18_DEFAULTS)).toBe(true);
+    expect(() => gate6.q18Power(q18Input({ gridStep: 0.07 }))).toThrow(/does not divide 1 - x/);
+  });
+
+  it('no Task 6 function takes a default seed: every seed is a parameter', () => {
+    const src = readFileSync(path.join(ROOT, 'deploy', 'history-gate.mjs'), 'utf8');
+    const DEFAULT_SEED = /[(,{]\s*seedHex\s*=(?!=)/;
+    expect(src.split('\n').filter((l) => DEFAULT_SEED.test(l))).toEqual([]);
+    expect(DEFAULT_SEED.test('export function armOf(seedHex = SEED, f) {'), 'CONTROL: the needle sees a default parameter').toBe(true);
+    expect(DEFAULT_SEED.test('export function q18Power({ families, seedHex = SEED }) {'), 'CONTROL: and a destructured one').toBe(true);
+    expect(DEFAULT_SEED.test("  if (typeof seedHex !== 'string' || seedHex === '') throw"), 'CONTROL: a comparison is not a default').toBe(false);
+  });
+
+  // ── Edge pins (added after the brief's cases): each walks a guard or comparison the cases above leave unpinned ──
+  it('Edge: a state word must be a u32 (not negative, not fractional), and only the ALL-zero state is refused', () => {
+    expect(() => gate6.xoshiro128ss([-1, 2, 3, 4])).toThrow(/four u32 words/);
+    expect(() => gate6.xoshiro128ss([1.5, 2, 3, 4])).toThrow(/four u32 words/);
+    expect(() => gate6.xoshiro128ss([1, 2, 3, 4, 5] as unknown as [number, number, number, number])).toThrow(/four u32 words/);
+    expect(() => gate6.xoshiro128ss([0, 0, 0, 1])).not.toThrow();
+    expect(() => gate6.xoshiro128ss([1, 2, 3, 0])).not.toThrow();
+    expect(() => gate6.xoshiro128ss([0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff])).not.toThrow();
+  });
+
+  it('Edge: a substream seed must be a string, a label that is not a string is no label', () => {
+    expect(() => gate6.substream(5 as unknown as string, 'q18')).toThrow(/the seed is a non-empty string/);
+    expect(() => gate6.substream(SEED6, undefined as unknown as string)).toThrow(/is not a substream label/);
+  });
+
+  it('Edge: randInt redraws a word EQUAL to the limit and keeps limit - 1; n = 2^32 is allowed, 0 and 2^32 + 1 and 1.5 are not', () => {
+    const n = 3 * 2 ** 30;   // the limit is n itself
+    const at = scripted([n, 5]);
+    expect(gate6.randInt(at, n)).toBe(5);
+    expect(at.used()).toBe(2);
+    const below = scripted([n - 1, 5]);
+    expect(gate6.randInt(below, n)).toBe(n - 1);
+    expect(below.used()).toBe(1);
+    expect(gate6.randInt(scripted([2 ** 32 - 1]), 2 ** 32)).toBe(2 ** 32 - 1);
+    expect(gate6.randInt(scripted([123]), 1)).toBe(0);
+    // a scripted rng throws when dry, so a guard that is gone cannot hang the case
+    for (const bad of [0, 2 ** 32 + 1, 1.5, -3, Number.NaN]) expect(() => gate6.randInt(scripted([1, 2, 3]), bad), String(bad)).toThrow(/is not an integer in \[1, 2\^32\]/);
+  });
+
+  it('Edge: nearest-rank bounds at the exact multiples and one past, and B must be a positive integer', () => {
+    expect(gate6.nearestRankBounds(1)).toEqual({ lowRank: 1, highRank: 1 });
+    expect(gate6.nearestRankBounds(40)).toEqual({ lowRank: 1, highRank: 39 });
+    expect(gate6.nearestRankBounds(41)).toEqual({ lowRank: 2, highRank: 40 });
+    expect(gate6.nearestRankBounds(1000)).toEqual({ lowRank: 25, highRank: 975 });
+    for (const bad of [0, -1, 1.5, Number.NaN]) expect(() => gate6.nearestRankBounds(bad), String(bad)).toThrow(/is not a positive integer/);
+    expect(() => gate6.clusterBootstrap({ clusters: [{ num: 1, den: 2 }], B: 0, rng: scripted([]), mode: 'share' })).toThrow(/is not a positive integer/);
+  });
+
+  it('Edge: the interval is the sorted replicates at ranks 1 and 30 of B = 30, drawn B x m words and no more', () => {
+    // two clusters {0/1, 1/1}: a replicate picks one of them twice, so it is 0/2, 1/2 or 2/2. Word 0 picks cluster 0, 1 picks cluster 1.
+    const clusters = [{ num: 0, den: 1 }, { num: 1, den: 1 }];
+    const words: number[] = [];
+    for (let b = 0; b < 30; b++) words.push(...(b === 10 ? [0, 0] : b === 20 ? [1, 1] : [0, 1]));
+    const r = scripted(words);
+    const out = gate6.clusterBootstrap({ clusters, B: 30, rng: r, mode: 'share' });
+    expect(r.used()).toBe(60);
+    expect(out.point).toEqual({ num: 1, den: 2 });
+    expect(out.lower).toEqual({ num: 0, den: 2 });
+    expect(out.upper).toEqual({ num: 2, den: 2 });
+    // the same rank bounds one replicate in: the extremes at the 2nd place and 2nd from the top are not the interval
+    const inner: number[] = [];
+    for (let b = 0; b < 30; b++) inner.push(...(b === 10 || b === 11 ? [0, 0] : b === 20 || b === 21 ? [1, 1] : [0, 1]));
+    const o2 = gate6.clusterBootstrap({ clusters, B: 30, rng: scripted(inner), mode: 'share' });
+    expect([o2.lower, o2.upper]).toEqual([{ num: 0, den: 2 }, { num: 2, den: 2 }]);
+  });
+
+  it('Edge: a cluster that is not a count is refused at every bound, in both modes, and an unknown mode is refused', () => {
+    const share = (num: number, den: number): unknown => gate6.clusterBootstrap({ clusters: [{ num, den }], B: 10, rng: scripted([]), mode: 'share' });
+    expect(() => share(3, 2)).toThrow(/is not a share cluster/);
+    expect(() => share(-1, 2)).toThrow(/is not a share cluster/);
+    expect(() => share(1, -2)).toThrow(/is not a share cluster/);
+    expect(() => share(0.5, 2)).toThrow(/is not a share cluster/);
+    const paired = (t: number, c: number, n: number): unknown => gate6.clusterBootstrap({ clusters: [{ t, c, n }], B: 10, rng: substreamFor(), mode: 'paired' });
+    const substreamFor = (): { nextU32: () => number } => gate6.substream(SEED6, 'quiz-ci');
+    expect(() => paired(4, 1, 3)).toThrow(/is not a paired cluster/);
+    expect(() => paired(1, 4, 3)).toThrow(/is not a paired cluster/);
+    expect(() => paired(-1, 0, 3)).toThrow(/is not a paired cluster/);
+    expect(() => paired(1, -1, 3)).toThrow(/is not a paired cluster/);
+    expect(() => paired(1, 0, -3)).toThrow(/is not a paired cluster/);
+    expect(() => paired(1.5, 0, 3)).toThrow(/is not a paired cluster/);
+    expect(() => paired(3, 3, 3)).not.toThrow();   // t = c = n is allowed: the bound is inclusive
+    expect(() => gate6.clusterBootstrap({ clusters: [{ num: 1, den: 2 }] as never, B: 10, rng: scripted([]), mode: 'paired' })).toThrow(/is not a paired cluster/);
+    expect(() => gate6.clusterBootstrap({ clusters: [{ num: 1, den: 2 }], B: 10, rng: scripted([]), mode: 'mean' as never })).toThrow(/neither paired nor share/);
+  });
+
+  it('Edge: a paired replicate can be negative, and the order stays exact for negative products past 2^53', () => {
+    const p = gate6.clusterBootstrap({ clusters: [{ t: 0, c: 2, n: 3 }], B: 10, rng: gate6.substream(SEED6, 'quiz-ci'), mode: 'paired' });
+    expect(p.point).toEqual({ num: -2, den: 3 });
+    expect(p.lower).toEqual({ num: -2, den: 3 });
+    expect(p.upper).toEqual({ num: -2, den: 3 });
+    const big = 2 ** 53;
+    expect(gate6.cmpFrac(gate6.frac(-(big - 1), big - 2), gate6.frac(-(big - 2), big - 3))).toBe(1);
+    expect(gate6.cmpFrac(gate6.frac(-(big - 2), big - 3), gate6.frac(-(big - 1), big - 2))).toBe(-1);
+  });
+
+  it('Edge: frac is frozen and refuses a negative or NaN denominator', () => {
+    expect(Object.isFrozen(gate6.frac(1, 2))).toBe(true);
+    expect(gate6.frac(-3, 4)).toEqual({ num: -3, den: 4 });
+    for (const [n, d] of [[1, -1], [1, Number.NaN], [Number.NaN, 1], [2 ** 53, 1], [1, Infinity]] as Array<[number, number]>) {
+      expect(() => gate6.frac(n, d), `${n}/${d}`).toThrow(/not an exact fraction/);
+    }
+  });
+
+  it('Edge: an arm needs a non-empty string seed and a whole family, each field a string', () => {
+    const f = fam6(STORE6_A, 'wrap-a-proj-a');
+    expect(() => gate6.armOf('', f)).toThrow(/the seed is a non-empty string/);
+    expect(() => gate6.armOf(5 as unknown as string, f)).toThrow(/the seed is a non-empty string/);
+    for (const bad of [null, undefined, 'x', 7, { ...f, store_id: 7 }, { ...f, ccrc_id: null }, { ...f, generation: 3 }, { ccrc_id: 'c', generation: G1 }, { store_id: 's', generation: G1 }, { store_id: 's', ccrc_id: 'c' }]) {
+      expect(() => gate6.armOf(SEED6, bad as never), JSON.stringify(bad)).toThrow(/is not a family/);
+    }
+    expect(() => gate6.assignArms(SEED6, [null as never])).toThrow(/is not a family/);
+  });
+
+  it('Edge: an empty list assigns nothing and hashes the empty array', () => {
+    expect(gate6.assignArms(SEED6, [])).toEqual([]);
+    expect(gate6.assignmentSha256([])).toBe(createHash('sha256').update('[]', 'utf8').digest('hex'));
+    const one = fam6(STORE6_A, 'wrap-a-proj-a');
+    const [e] = gate6.assignArms(SEED6, [one]);
+    expect(Object.keys(e!).sort()).toEqual(['arm', 'ccrc_id', 'generation', 'store_id']);
+    expect(gate6.assignArms(SEED6, [{ ...one, extra: 1 } as never])[0]).toEqual(e);
+  });
+
+  it('Edge: a uniform is strictly above 0 (the half step), so a probability below one half-step never succeeds on the all-zero words', () => {
+    expect(gate6.binomialDraw(scripted([0, 0]), 1, 1e-17)).toBe(0);   // half a step is 5.55e-17
+    expect(gate6.binomialDraw(scripted([0, 0]), 1, 1e-16)).toBe(1);
+  });
+
+  it('Edge: betaDraw refuses a mean or a rho outside range, returns a mean of 0 or 1 without a draw, and at rho near 1 answers an endpoint, never NaN', () => {
+    for (const bad of [-0.1, 1.5, Number.NaN]) expect(() => gate6.betaDraw(scripted([]), bad, 0.3), `mean ${bad}`).toThrow(/is outside \[0, 1\]/);
+    for (const bad of [-0.1, 1, 1.5, Number.NaN]) expect(() => gate6.betaDraw(scripted([]), 0.3, bad), `rho ${bad}`).toThrow(/is outside \[0, 1\)/);
+    expect(gate6.betaDraw(scripted([]), 0, 0.3)).toBe(0);
+    expect(gate6.betaDraw(scripted([]), 1, 0.3)).toBe(1);
+    const rng = gate6.substream(SEED6, 'q18');
+    const draws = Array.from({ length: 200 }, () => gate6.betaDraw(rng, 0.3, 1 - 1e-12));
+    expect(draws.every((v) => v === 0 || v === 1), 'every draw is an endpoint').toBe(true);
+    const ones = draws.filter((v) => v === 1).length;
+    expect(ones).toBeGreaterThan(30);   // 200 draws at 0.3: mean 60, sd 6.5
+    expect(ones).toBeLessThan(90);
+  });
+
+  it('Edge: binomialDraw takes 2n words whatever p, draws nothing at n = 0, and refuses a non-count or a p outside [0, 1]', () => {
+    for (const p of [0, 0.3, 1]) {
+      const r = scripted([1, 2, 3, 4, 5, 6]);
+      gate6.binomialDraw(r, 3, p);
+      expect(r.used(), `p ${p}`).toBe(6);
+    }
+    expect(gate6.binomialDraw(scripted([]), 0, 0.5)).toBe(0);
+    for (const bad of [-1, 1.5, Number.NaN]) expect(() => gate6.binomialDraw(scripted([]), bad, 0.5), `n ${bad}`).toThrow(/is not a count/);
+    for (const bad of [-0.1, 1.1, Number.NaN]) expect(() => gate6.binomialDraw(scripted([1, 2]), 1, bad), `p ${bad}`).toThrow(/is outside \[0, 1\]/);
+  });
+
+  it('Edge: expected windows refuse a non-positive plan, a negative or fractional count and a negative covered_days, and rounding is half-up', () => {
+    const one = (o: object): unknown => gate6.expectedWindows([{ key: 'k', windows: 3, covered_days: 7, ...o }], 14);
+    expect(() => gate6.expectedWindows([{ key: 'k', windows: 3, covered_days: 7 }], 0)).toThrow(/planned_days 0 is not positive/);
+    expect(() => gate6.expectedWindows([{ key: 'k', windows: 3, covered_days: 7 }], -14)).toThrow(/is not positive/);
+    expect(() => one({ windows: -1 })).toThrow(/positive covered_days/);
+    expect(() => one({ windows: 1.5 })).toThrow(/positive covered_days/);
+    expect(() => one({ covered_days: -7 })).toThrow(/positive covered_days/);
+    expect(() => one({ covered_days: Number.NaN })).toThrow(/positive covered_days/);
+    expect(gate6.expectedWindows([{ key: 'k', windows: 5, covered_days: 28 }], 14)).toEqual([{ key: 'k', n: 3 }]);   // 2.5 rounds up
+    expect(gate6.expectedWindows([], 14)).toEqual([]);
+  });
+
+  it('Edge: Q18_DEFAULTS.power is frozen too', () => {
+    expect(Object.isFrozen(gate6.Q18_DEFAULTS.power)).toBe(true);
+  });
+
+  it('Edge: Q18 refuses a power, sims, B, x or step outside range, and a step as wide as the whole span is one interval', () => {
+    for (const bad of [0, -0.5, 1.01, Number.NaN]) expect(() => gate6.q18Power(q18Input({ power: bad })), `power ${bad}`).toThrow(/is outside \(0, 1\]/);
+    for (const bad of [0, -1, 1.5]) expect(() => gate6.q18Power(q18Input({ sims: bad })), `sims ${bad}`).toThrow(/is not a positive integer/);
+    expect(() => gate6.q18Power(q18Input({ B: 0 }))).toThrow(/is not a positive integer/);
+    // checked up front, not only when a simulation first bootstraps: no family expecting a window never bootstraps
+    expect(() => gate6.q18Power(q18Input({ B: 0, families: [{ key: 'fam-00', windows: 1, covered_days: 30 }] }))).toThrow(/is not a positive integer/);
+    expect(() => gate6.q18Power(q18Input({ x: gate6.frac(0, 1) }))).toThrow(/x lies outside \(0, 1\)/);
+    expect(() => gate6.q18Power(q18Input({ x: gate6.frac(1, 1) }))).toThrow(/x lies outside \(0, 1\)/);
+    expect(() => gate6.q18Power(q18Input({ x: gate6.frac(3, 2) }))).toThrow(/x lies outside \(0, 1\)/);
+    for (const bad of [0, -0.05, 0.95, Number.NaN]) expect(() => gate6.q18Power(q18Input({ gridStep: bad })), `step ${bad}`).toThrow(/does not divide 1 - x/);
+    expect(() => gate6.q18Power(q18Input({ power: 1 }))).not.toThrow();
+    const wide = gate6.q18Power(q18Input({ gridStep: 0.9, power: 0.001 }));
+    expect(wide.points.map((q) => q.p)).toEqual([0.1, 1]);
+  });
+
+  /** One family expecting 2 windows, rho 0 (so p_f is p itself), x = 1/2, a grid of 1/2 and 1. */
+  const oneFamily = (o: object = {}): ReturnType<typeof gate6.q18Power> =>
+    gate6.q18Power({ families: [{ key: 'f', windows: 2, covered_days: 14 }], plannedDays: 14, seedHex: SEED6, rho: 0, power: 0.2, sims: 400, gridStep: 0.5, B: 20, x: gate6.frac(1, 2), ...o });
+
+  it('Edge: a simulation whose lower bound EQUALS x passes (>=, not >), and the smallest passing point can be x itself', () => {
+    // At p = 1/2 a family treated with k = 1 of 2 has the lower bound 1/2 exactly, a tie with x. Passing shares: k >= 1 is 1/2 * 3/4, k = 2 alone is 1/2 * 1/4.
+    const r = oneFamily();
+    const at = (p: number): number => r.points.find((q) => Math.abs(q.p - p) < 1e-9)!.share;
+    expect(at(0.5)).toBeGreaterThan(0.25);
+    expect(at(0.5)).toBeLessThan(0.5);
+    expect(at(1)).toBeGreaterThan(0.35);   // p = 1: every treated simulation passes, 1/2 of them
+    expect(at(1)).toBeLessThan(0.65);
+    expect(r.figure).toBe(0.5);
+    expect(r.points.map((q) => q.p)).toEqual([0.5, 1]);
+  });
+
+  it('Edge: a share equal to the power level passes, and one a hair above misses', () => {
+    const base = oneFamily();
+    const top = base.points.find((q) => q.p === 1)!.share;
+    expect(oneFamily({ power: top }).figure).not.toBeNull();
+    expect(oneFamily({ power: top + 1e-9 }).figure).toBeNull();
+  });
+
+  it('Edge: the first word of the q18 stream decides the first family\'s arm (odd is treatment), and the order families arrive in changes nothing', () => {
+    const seeds = [SEED6, OTHER_SEED6, 'aa'.repeat(32), 'bb'.repeat(32), 'cc'.repeat(32), 'dd'.repeat(32)];
+    const parities = new Set<number>();
+    for (const seed of seeds) {
+      const first = gate6.substream(seed, 'q18').nextU32() & 1;
+      parities.add(first);
+      // one family of 1 window, rho 0, p = 1: the single simulation passes iff the family is treated
+      const r = gate6.q18Power({ families: [{ key: 'f', windows: 1, covered_days: 14 }], plannedDays: 14, seedHex: seed, rho: 0, power: 1, sims: 1, gridStep: 0.9, B: 20 });
+      expect(r.points.find((q) => q.p === 1)!.share, seed.slice(0, 4)).toBe(first);
+    }
+    expect(parities.size, 'CONTROL: the seeds cover both parities').toBe(2);
+    expect(gate6.q18Power(q18Input({ families: [...Q18_FAMILIES].reverse() }))).toEqual(gate6.q18Power(q18Input()));
+  });
+});

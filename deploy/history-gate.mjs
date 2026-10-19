@@ -666,3 +666,402 @@ export function assembleReports(reports, record, opts = {}) {
     code_changed: codeChanged,
   };
 }
+
+// ── W2-3 Task 6: the bootstrap, the assignment and Q18 (W2-D18, W2-D19, W2-D21) ────────────────────────────────────
+// Every draw the gate makes comes from here, and every one is seeded from a parameter: no function below reads a
+// seed, a clock or an ambient source of randomness, and none takes a default seed. A substream's state is the first
+// 16 bytes of sha256Hex(seedHex + ':' + label), read as four little-endian u32 words, over the closed SUBSTREAMS plus
+// PILOT_SUBSTREAM (passed only with the pilot's own seed); the generator is xoshiro128**, and an all-zero state is
+// refused. Integers are drawn by rejection, never by a bare modulo. Every statistic is an exact integer fraction,
+// pooled per resample and compared by cross-multiplication. A family's arm is one hash bit of its own key (W2-D19),
+// so no family's arm depends on which other families are listed. Q18 (W2-D21) is the math only: W2-5a's `power`
+// gathers its inputs.
+
+/** An exact fraction: safe integers, den >= 1, never reduced (a pooled statistic keeps its counts).
+ *  @typedef {{ readonly num: number, readonly den: number }} Frac */
+/** A seeded stream of u32 words.
+ *  @typedef {{ nextU32: () => number }} Rng */
+
+/**
+ * @param {number} num
+ * @param {number} den
+ * @returns {Frac}
+ */
+export function frac(num, den) {
+  if (!Number.isSafeInteger(num) || !Number.isSafeInteger(den) || den < 1) {
+    throw new RangeError(`frac: ${num}/${den} is not an exact fraction (safe integers, den >= 1)`);
+  }
+  return Object.freeze({ num, den });
+}
+
+/**
+ * The sign of a.num * b.den - b.num * a.den. A product past 2^53 is taken again in BigInt, so the answer is exact
+ * at every size: a float product at or below MAX_SAFE_INTEGER is the exact product.
+ * @param {Frac} a
+ * @param {Frac} b
+ * @returns {-1|0|1}
+ */
+export function cmpFrac(a, b) {
+  const l = a.num * b.den;
+  const r = b.num * a.den;
+  if (Math.abs(l) <= Number.MAX_SAFE_INTEGER && Math.abs(r) <= Number.MAX_SAFE_INTEGER) return l < r ? -1 : l > r ? 1 : 0;
+  const L = BigInt(a.num) * BigInt(b.den);
+  const R = BigInt(b.num) * BigInt(a.den);
+  return L < R ? -1 : L > R ? 1 : 0;
+}
+
+/**
+ * xoshiro128** (Blackman and Vigna, 2018) over four u32 words. A zero state stays zero for ever, so it is refused.
+ * @param {[number, number, number, number]} words
+ * @returns {Rng}
+ */
+export function xoshiro128ss(words) {
+  if (!Array.isArray(words) || words.length !== 4 || !words.every((w) => Number.isInteger(w) && w >= 0 && w <= 0xffffffff)) {
+    throw new RangeError('xoshiro128ss: the state is four u32 words');
+  }
+  if (words.every((w) => w === 0)) throw new RangeError('xoshiro128ss: an all-zero state is refused');
+  let [s0, s1, s2, s3] = words;
+  const rotl = (x, k) => ((x << k) | (x >>> (32 - k))) >>> 0;
+  return {
+    nextU32() {
+      const result = Math.imul(rotl(Math.imul(s1, 5) >>> 0, 7), 9) >>> 0;
+      const t = (s1 << 9) >>> 0;
+      s2 = (s2 ^ s0) >>> 0;
+      s3 = (s3 ^ s1) >>> 0;
+      s1 = (s1 ^ s2) >>> 0;
+      s0 = (s0 ^ s3) >>> 0;
+      s2 = (s2 ^ t) >>> 0;
+      s3 = rotl(s3, 11);
+      return result;
+    },
+  };
+}
+
+/**
+ * The stream for one label of one seed (W2-D18). The label must be a SUBSTREAMS member or PILOT_SUBSTREAM: the
+ * assignment's ASSIGN_LABEL is a hash label, never a stream.
+ * @param {string} seedHex
+ * @param {string} label
+ * @returns {Rng}
+ */
+export function substream(seedHex, label) {
+  if (typeof seedHex !== 'string' || seedHex === '') throw new TypeError('substream: the seed is a non-empty string, passed in');
+  if (!SUBSTREAMS.includes(label) && label !== PILOT_SUBSTREAM) throw new RangeError(`substream: '${label}' is not a substream label`);
+  const hex = sha256Hex(`${seedHex}:${label}`);
+  const byte = (i) => parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  const word = (w) => (byte(w * 4) | (byte(w * 4 + 1) << 8) | (byte(w * 4 + 2) << 16) | (byte(w * 4 + 3) << 24)) >>> 0;
+  return xoshiro128ss([word(0), word(1), word(2), word(3)]);
+}
+
+/**
+ * A uniform integer in [0, n), by rejection: a word at or above the largest multiple of n below 2^32 is drawn again.
+ * @param {Rng} rng
+ * @param {number} n
+ * @returns {number}
+ */
+export function randInt(rng, n) {
+  if (!Number.isInteger(n) || n < 1 || n > 0x100000000) throw new RangeError(`randInt: n=${n} is not an integer in [1, 2^32]`);
+  const limit = 0x100000000 - (0x100000000 % n);
+  for (;;) {
+    const w = rng.nextU32();
+    if (w < limit) return w % n;
+  }
+}
+
+/**
+ * The nearest-rank percentile ranks (1-based) of a 95% interval over B sorted replicates: ceil(0.025 B), ceil(0.975 B).
+ * @param {number} B
+ * @returns {{ lowRank: number, highRank: number }}
+ */
+export function nearestRankBounds(B) {
+  if (!Number.isSafeInteger(B) || B < 1) throw new RangeError(`nearestRankBounds: B=${B} is not a positive integer`);
+  return { lowRank: Math.ceil((B * 25) / 1000), highRank: Math.ceil((B * 975) / 1000) };
+}
+
+/**
+ * One cluster's counts as a pooled numerator and denominator. share: {num: windows with a call, den: measured
+ * windows}. paired: {t: correct in treatment, c: correct in control, n: questions}, giving (t - c) over n.
+ * @param {{num: number, den: number} | {t: number, c: number, n: number}} k
+ * @param {'paired'|'share'} mode
+ * @returns {{ num: number, den: number }}
+ */
+function bootstrapUnit(k, mode) {
+  const nat = (v) => Number.isSafeInteger(v) && v >= 0;
+  if (mode === 'share') {
+    const s = /** @type {{num: number, den: number}} */ (k);
+    if (!nat(s.num) || !nat(s.den) || s.num > s.den) throw new RangeError(`clusterBootstrap: ${JSON.stringify(k)} is not a share cluster`);
+    return { num: s.num, den: s.den };
+  }
+  const q = /** @type {{t: number, c: number, n: number}} */ (k);
+  if (!nat(q.t) || !nat(q.c) || !nat(q.n) || q.t > q.n || q.c > q.n) throw new RangeError(`clusterBootstrap: ${JSON.stringify(k)} is not a paired cluster`);
+  return { num: q.t - q.c, den: q.n };
+}
+
+/**
+ * The session-cluster bootstrap (W2-D18): B resamples of the clusters with replacement, each replicate the pooled
+ * exact fraction of the resampled clusters' counts, and the nearest-rank 95% interval. A cluster with a zero
+ * denominator (a family with 0 measured windows, or 0 questions) is not a cluster. With no cluster left it throws:
+ * there is no statistic, and no number stands in for one.
+ * @param {{ clusters: Array<{num: number, den: number} | {t: number, c: number, n: number}>, B?: number, rng: Rng, mode: 'paired'|'share' }} input
+ * @returns {{ point: Frac, lower: Frac, upper: Frac }}
+ */
+export function clusterBootstrap({ clusters, B = BOOTSTRAP.B, rng, mode }) {
+  if (mode !== 'paired' && mode !== 'share') throw new RangeError(`clusterBootstrap: mode '${mode}' is neither paired nor share`);
+  const units = clusters.map((k) => bootstrapUnit(k, mode)).filter((u) => u.den > 0);
+  if (units.length === 0) throw new RangeError('clusterBootstrap: no cluster has a measured unit');
+  const { lowRank, highRank } = nearestRankBounds(B);
+  const m = units.length;
+  /** @type {Frac[]} */
+  const reps = new Array(B);
+  for (let b = 0; b < B; b++) {
+    let num = 0;
+    let den = 0;
+    for (let i = 0; i < m; i++) {
+      const u = units[randInt(rng, m)];
+      num += u.num;
+      den += u.den;
+    }
+    reps[b] = frac(num, den);
+  }
+  reps.sort(cmpFrac);
+  let num = 0;
+  let den = 0;
+  for (const u of units) {
+    num += u.num;
+    den += u.den;
+  }
+  return { point: frac(num, den), lower: reps[lowRank - 1], upper: reps[highRank - 1] };
+}
+
+/** @param {unknown} f @returns {asserts f is FamilyRef} */
+function assertFamilyRef(f) {
+  const o = /** @type {Record<string, unknown>} */ (f);
+  if (o === null || typeof o !== 'object' || typeof o.store_id !== 'string' || typeof o.ccrc_id !== 'string' || typeof o.generation !== 'string') {
+    throw new TypeError(`assignment: ${JSON.stringify(f)} is not a family (store_id, ccrc_id, generation)`);
+  }
+}
+
+/**
+ * A family's arm (W2-D19): bit 0 of the first byte of sha256 over the UTF-8 bytes of
+ * seedHex + ':assign:' + canonicalJson([store_id, ccrc_id, generation]); 1 is treatment, 0 control.
+ * @param {string} seedHex
+ * @param {FamilyRef} f
+ * @returns {'treatment'|'control'}
+ */
+export function armOf(seedHex, f) {
+  if (typeof seedHex !== 'string' || seedHex === '') throw new TypeError('armOf: the seed is a non-empty string, passed in');
+  assertFamilyRef(f);
+  const h = sha256Hex(`${seedHex}:${ASSIGN_LABEL}:${familyKey(f.store_id, f.ccrc_id, f.generation)}`);
+  return (parseInt(h.slice(0, 2), 16) & 1) === 1 ? 'treatment' : 'control';
+}
+
+/**
+ * Entries sorted by their canonicalJson, compared as strings.
+ * @template T
+ * @param {T[]} list
+ * @returns {T[]}
+ */
+function sortByCanonical(list) {
+  return list.map((e) => /** @type {[string, T]} */ ([canonicalJson(e), e]))
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([, e]) => e);
+}
+
+/**
+ * The assignment list: every family with its arm, sorted by canonicalJson. A family listed twice is refused.
+ * @param {string} seedHex
+ * @param {FamilyRef[]} families
+ * @returns {Array<FamilyRef & { arm: 'treatment'|'control' }>}
+ */
+export function assignArms(seedHex, families) {
+  const seen = new Set();
+  return sortByCanonical(families.map((f) => {
+    assertFamilyRef(f);
+    const key = familyKey(f.store_id, f.ccrc_id, f.generation);
+    if (seen.has(key)) throw new RangeError(`assignArms: family ${key} is listed twice`);
+    seen.add(key);
+    return { store_id: f.store_id, ccrc_id: f.ccrc_id, generation: f.generation, arm: armOf(seedHex, f) };
+  }));
+}
+
+/**
+ * assignment_sha256 (W2-D19): sha256Hex(canonicalJson(the list sorted by canonicalJson)). It sorts a copy itself,
+ * so the order an input arrives in never moves it; a changed arm does.
+ * @param {Array<FamilyRef & { arm: string }>} list
+ * @returns {string}
+ */
+export function assignmentSha256(list) {
+  return sha256Hex(canonicalJson(sortByCanonical([...list])));
+}
+
+/** A double from two words (53 bits, offset by half a step): never 0, and 1 only on the one pair of all-ones words, 2^-53 of draws, where the sum rounds up. @param {Rng} rng */
+function uniformOpen01(rng) {
+  const a = rng.nextU32() >>> 5;
+  const b = rng.nextU32() >>> 6;
+  return (a * 67108864 + b + 0.5) / 9007199254740992;
+}
+
+/** A standard normal draw: Box and Muller, one of the pair. @param {Rng} rng */
+function normalDraw(rng) {
+  const u1 = uniformOpen01(rng);
+  const u2 = uniformOpen01(rng);
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+/** A Gamma(shape, 1) draw: Marsaglia and Tsang (2000), with the U^(1/shape) boost below shape 1.
+ *  @param {Rng} rng @param {number} shape @returns {number} */
+function gammaDraw(rng, shape) {
+  if (shape < 1) {
+    const g = gammaDraw(rng, shape + 1);
+    return g * Math.pow(uniformOpen01(rng), 1 / shape);
+  }
+  const d = shape - 1 / 3;
+  const c = 1 / Math.sqrt(9 * d);
+  for (;;) {
+    let x;
+    let v;
+    do {
+      x = normalDraw(rng);
+      v = 1 + c * x;
+    } while (v <= 0);
+    v = v * v * v;
+    const u = uniformOpen01(rng);
+    if (Math.log(u) < 0.5 * x * x + d - d * v + d * Math.log(v)) return d * v;
+  }
+}
+
+/**
+ * p_f for one family (W2-D21): a Beta with mean `mean` and intra-cluster correlation `rho`, that is shapes
+ * mean (1 - rho) / rho and (1 - mean) (1 - rho) / rho, so its variance is mean (1 - mean) rho. rho 0 (and a mean of
+ * 0 or 1) gives the mean itself and draws nothing. Two Gamma draws that both underflow to 0 (shapes near 0, rho near
+ * 1) answer the Beta's own limit, an endpoint drawn with probability `mean`.
+ * @param {Rng} rng
+ * @param {number} mean
+ * @param {number} rho
+ * @returns {number}
+ */
+export function betaDraw(rng, mean, rho) {
+  if (!(mean >= 0 && mean <= 1)) throw new RangeError(`betaDraw: mean ${mean} is outside [0, 1]`);
+  if (!(rho >= 0 && rho < 1)) throw new RangeError(`betaDraw: rho ${rho} is outside [0, 1)`);
+  if (rho === 0 || mean === 0 || mean === 1) return mean;
+  const k = (1 - rho) / rho;
+  const x = gammaDraw(rng, mean * k);
+  const y = gammaDraw(rng, (1 - mean) * k);
+  if (x + y === 0) return uniformOpen01(rng) < mean ? 1 : 0;
+  return x / (x + y);
+}
+
+/**
+ * A Binomial(n, p) draw as n Bernoulli trials; it always takes 2n words, whatever p.
+ * @param {Rng} rng
+ * @param {number} n
+ * @param {number} p
+ * @returns {number}
+ */
+export function binomialDraw(rng, n, p) {
+  if (!Number.isSafeInteger(n) || n < 0) throw new RangeError(`binomialDraw: n=${n} is not a count`);
+  if (!(p >= 0 && p <= 1)) throw new RangeError(`binomialDraw: p ${p} is outside [0, 1]`);
+  let k = 0;
+  for (let i = 0; i < n; i++) if (uniformOpen01(rng) < p) k += 1;
+  return k;
+}
+
+/**
+ * Per-family expected windows over the planned window (W2-D21): n_f = round(windows_f * planned_days /
+ * covered_days), Math.round's half-up; a family whose n_f is 0 is dropped.
+ * @param {Array<{ key: string, windows: number, covered_days: number }>} families
+ * @param {number} plannedDays
+ * @returns {Array<{ key: string, n: number }>}
+ */
+export function expectedWindows(families, plannedDays) {
+  if (!(plannedDays > 0)) throw new RangeError(`expectedWindows: planned_days ${plannedDays} is not positive`);
+  /** @type {Array<{ key: string, n: number }>} */
+  const out = [];
+  for (const f of families) {
+    if (!Number.isSafeInteger(f.windows) || f.windows < 0 || !(f.covered_days > 0)) {
+      throw new RangeError(`expectedWindows: ${JSON.stringify(f)} needs a window count and a positive covered_days`);
+    }
+    const n = Math.round((f.windows * plannedDays) / f.covered_days);
+    if (n > 0) out.push({ key: f.key, n });
+  }
+  return out;
+}
+
+/** Q18's defaults as part 1 records them (section 4's q18_settings). */
+export const Q18_DEFAULTS = Object.freeze({
+  rho_headline: 0.3, power: Object.freeze([0.5, 0.8]), lookback_days: 14, sims: 1000, grid_step: 0.005,
+  procedure: /** @type {'bisection-on-grid-crn'} */ ('bisection-on-grid-crn'),
+});
+
+/**
+ * The pass share at one grid point: `sims` simulations from a fresh 'q18' stream (common random numbers: every
+ * point starts from the same first draw). Each simulation flips every family (one word, bit 0: 1 is treatment),
+ * draws its p_f and its Binomial(n_f, p_f) windows with a call, draws all three for a control family too so the
+ * stream stays aligned, and runs clusterBootstrap over the treatment families; it passes when the lower bound is
+ * at least x. A simulation with no treatment family fails.
+ * @param {Array<{ key: string, n: number }>} nf
+ * @param {number} p
+ * @param {{ seedHex: string, rho: number, sims: number, B: number, x: Frac }} o
+ * @returns {number}
+ */
+function q18ShareAt(nf, p, o) {
+  const rng = substream(o.seedHex, 'q18');
+  let passes = 0;
+  for (let s = 0; s < o.sims; s++) {
+    /** @type {Array<{ num: number, den: number }>} */
+    const clusters = [];
+    for (const f of nf) {
+      const treated = (rng.nextU32() & 1) === 1;
+      const k = binomialDraw(rng, f.n, betaDraw(rng, p, o.rho));
+      if (treated) clusters.push({ num: k, den: f.n });
+    }
+    if (clusters.length > 0 && cmpFrac(clusterBootstrap({ clusters, B: o.B, rng, mode: 'share' }).lower, o.x) >= 0) passes += 1;
+  }
+  return passes / o.sims;
+}
+
+/**
+ * Q18, the smallest passing point uptake (W2-D21), procedure 'bisection-on-grid-crn': the grid runs from x to 1
+ * in steps of gridStep (which must divide 1 - x); the answer is the smallest grid point whose pass share is at least
+ * `power` and whose upper neighbour's is too (the top point needs only its own), found by bisection; null when the
+ * top point does not reach `power`, or no family expects a window. `points` lists every point evaluated, by p.
+ * @param {{ families: Array<{ key: string, windows: number, covered_days: number }>, plannedDays: number, seedHex: string, rho: number, power: number, sims: number, gridStep: number, B: number, x?: Frac }} input
+ * @returns {{ figure: number|null, procedure: 'bisection-on-grid-crn', points: Array<{ p: number, share: number }> }}
+ */
+export function q18Power({ families, plannedDays, seedHex, rho, power, sims, gridStep, B, x = X }) {
+  if (!(power > 0 && power <= 1)) throw new RangeError(`q18Power: power ${power} is outside (0, 1]`);
+  if (!Number.isSafeInteger(sims) || sims < 1) throw new RangeError(`q18Power: sims=${sims} is not a positive integer`);
+  nearestRankBounds(B);
+  if (cmpFrac(x, frac(0, 1)) <= 0 || cmpFrac(x, frac(1, 1)) >= 0) throw new RangeError('q18Power: x lies outside (0, 1)');
+  const span = (x.den - x.num) / x.den;
+  const N = Math.round(span / gridStep);
+  if (!(gridStep > 0) || N < 1 || Math.abs(N * gridStep - span) > 1e-9) throw new RangeError(`q18Power: grid step ${gridStep} does not divide 1 - x`);
+  const procedure = Q18_DEFAULTS.procedure;
+  const nf = expectedWindows(families, plannedDays).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  if (nf.length === 0) return { figure: null, procedure, points: [] };
+  /** grid point i as one division of exact integers: (x.num N + i (x.den - x.num)) / (x.den N). @param {number} i */
+  const pAt = (i) => (x.num * N + i * (x.den - x.num)) / (x.den * N);
+  /** @type {Map<number, number>} */
+  const shares = new Map();
+  /** @param {number} i @returns {number} */
+  const shareAt = (i) => {
+    if (!shares.has(i)) shares.set(i, q18ShareAt(nf, pAt(i), { seedHex, rho, sims, B, x }));
+    return /** @type {number} */ (shares.get(i));
+  };
+  /** @param {number} i */
+  const good = (i) => shareAt(i) >= power && (i === N || shareAt(i + 1) >= power);
+  const answer = (/** @type {number|null} */ i) => ({
+    figure: i === null ? null : pAt(i), procedure,
+    points: [...shares.keys()].sort((a, b) => a - b).map((j) => ({ p: pAt(j), share: /** @type {number} */ (shares.get(j)) })),
+  });
+  if (!good(N)) return answer(null);
+  if (good(0)) return answer(0);
+  let lo = 0;
+  let hi = N;
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (good(mid)) hi = mid;
+    else lo = mid;
+  }
+  return answer(hi);
+}
