@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ec979d6338339f7b572760d70302bc46e6679fa1228e68f1f6372b32b1205cfb
+# ccrc:generated 1 sha256=66762912dc2c89d3450b2c410225de20f539bdf3047414726965f098057b7fa6
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -21177,8 +21177,9 @@ _operator_choice_promote() {   # id [reason] [incoming-sid] — the keep's read 
   # the newest ACKNOWLEDGED command in either transcript by epoch, a tie going to
   # the incoming one, and the surviving pair is written by ONE `cmd_route` below.
   # A drift (a command the pane refused, or acknowledged in a wording this ccd does
-  # not recognise) proves nothing changed: it never suppresses its kind's
-  # acknowledged winner, and is logged once. ONE READER: the same
+  # not recognise) is TREATED as changing nothing, though it may have (the stamp
+  # below is wrong then): it never suppresses its kind's acknowledged winner, and
+  # is logged once. ONE READER: the same
   # `_operator_choice_read` over the same journal. An incoming transcript that is
   # absent (the ordinary case right after a `/clear`), not a readable regular file
   # (`_ci_transcript_path` answers only a regular file), or that the reader fails
@@ -21186,23 +21187,26 @@ _operator_choice_promote() {   # id [reason] [incoming-sid] — the keep's read 
   if [[ -n "$sid" ]] && fin=$(_ci_transcript_path "$id" "$(_cfg_dir "$w")" "$sid") && [[ -r "$fin" ]]; then
     inc=$(_operator_choice_read "$fin" "$typed") || inc=""
   fi
-  while read -r kind val at n; do   # the incoming lines are LAST, so `<=` hands a tie to the incoming transcript
-    [[ "$at" =~ ^[0-9]+$ ]] || continue
-    case "$kind" in
-      model|effort)             (( ${acka[$kind]:--1} <= 10#$at )) && { ackv[$kind]=$val; acka[$kind]=$((10#$at)); ackn[$kind]=$n; } ;;
-      drift-model|drift-effort) (( ${drifta[${kind#drift-}]:--1} <= 10#$at )) && drifta[${kind#drift-}]=$((10#$at)) ;;
-    esac
-  done <<<"$out"$'\n'"$inc"
-  # The merged lines come back in the reader's own order (effort, then model, each
-  # drift after its acknowledgements), so the dead-session keep, which has no
-  # incoming lines, reads exactly what the reader printed. `>=`: the reader prints
-  # a drift from its acknowledgement's own second, and across two transcripts a
-  # same-second drift is logged and never suppresses. A drift older than its kind's
-  # winner is superseded by it and says nothing.
-  for kind in effort model; do [[ -n "${acka[$kind]+x}" ]] && merged+="$kind ${ackv[$kind]} ${acka[$kind]} ${ackn[$kind]}"$'\n'; done
-  for kind in effort model; do
-    [[ -n "${drifta[$kind]+x}" ]] && (( drifta[$kind] >= ${acka[$kind]:--1} )) && merged+="drift-$kind x ${drifta[$kind]} 0"$'\n'
-  done
+  if [[ -z "$inc" ]]; then
+    merged="$out"   # NO INCOMING LINES: the reader's own lines, byte for byte, never a rebuild of them, so the dead-session keep is exactly the keep it always was (a drift whose timestamp runs backwards in file order is still logged)
+  else
+    while read -r kind val at n; do   # the incoming lines are LAST, so `<=` hands a tie to the incoming transcript
+      [[ "$at" =~ ^[0-9]+$ ]] || continue
+      case "$kind" in
+        model|effort)             (( ${acka[$kind]:--1} <= 10#$at )) && { ackv[$kind]=$val; acka[$kind]=$((10#$at)); ackn[$kind]=$n; } ;;
+        drift-model|drift-effort) (( ${drifta[${kind#drift-}]:--1} <= 10#$at )) && drifta[${kind#drift-}]=$((10#$at)) ;;
+      esac
+    done <<<"$out"$'\n'"$inc"
+    # The merged lines come back in the reader's own order (effort, then model, each
+    # drift after its acknowledgements). `>=`: the reader prints a drift from its
+    # acknowledgement's own second, and across two transcripts a same-second drift
+    # is logged and never suppresses. A drift older than its kind's winner is
+    # superseded by it and says nothing.
+    for kind in effort model; do [[ -n "${acka[$kind]+x}" ]] && merged+="$kind ${ackv[$kind]} ${acka[$kind]} ${ackn[$kind]}"$'\n'; done
+    for kind in effort model; do
+      [[ -n "${drifta[$kind]+x}" ]] && (( drifta[$kind] >= ${acka[$kind]:--1} )) && merged+="drift-$kind x ${drifta[$kind]} 0"$'\n'
+    done
+  fi
   while read -r kind val at n; do
     [[ "$at" =~ ^[0-9]+$ ]] || continue
     case "$kind" in
@@ -21229,16 +21233,20 @@ _operator_choice_promote() {   # id [reason] [incoming-sid] — the keep's read 
   done <<<"$merged"
   if (( ${#kinds[@]} )); then   # ONE call for the pair: `cmd_route` checks class against effort on the merged sets, so a haiku record that takes /model opus AND /effort high keeps both (a call per field refused the effort first)
     if ( cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, $reason" ) >/dev/null 2>&1; then
-      # A LIVE PROMOTION TYPES NOTHING (D-4319, kept under D-4321). The supervise
-      # tick runs the applier right after `_sync_uuid`, and a promoted field
-      # pending against `routeapplied` was typed back into the live pane —
+      # A LIVE PROMOTION TYPES NOTHING IT WROTE (D-4319, kept under D-4321). The
+      # supervise tick runs the applier right after `_sync_uuid`, and a promoted
+      # field pending against `routeapplied` was typed back into the live pane —
       # `/effort`, which never reads back, every time. The newest acknowledged
       # command is what the pane runs (wrong only if a drifted one really changed
-      # the setting, or ccd typed after it with no record write; the next spawn
+      # the setting, ccd typed after it with no record write, or an incoming read
+      # failed while the incoming transcript held a newer command; the next spawn
       # heals), so exactly the fields written here are recorded applied, as an
       # acknowledged apply records them; every other pending field is still typed.
       # Only a live rotation (an incoming sid): a dead session's keep is followed
-      # by a spawn that composes and stamps its own.
+      # by a spawn that composes and stamps its own. RETAINED COST: this stamp
+      # rewrites `routeapplied`, so a class already pending that the pane runs
+      # cannot be confirmed by a sidecar reading from before the rotation
+      # (`_route_readback`), and the applier may type that `/model` once.
       if [[ -n "$sid" ]]; then
         for kv in "${sets[@]}"; do [[ "$kv" == --set ]] || _route_applied_set "$id" "${kv%%=*}" "${kv#*=}"; done
       fi
@@ -21420,7 +21428,9 @@ _route_readback() {   # id -> 0 iff it recorded the pending class as already run
   # process's last render, and it must be strictly later. The stamp is
   # whatever last wrote `routeapplied` — a spawn, an acknowledged apply, a
   # read-back, the seed, a live rotation's promotion — which is stricter than
-  # "the last spawn", and safe: it costs one more render.
+  # "the last spawn", and safe: it costs one more render. After a promotion's
+  # stamp, a reading from before the rotation cannot confirm a class that was
+  # already pending, so the applier may type that `/model` once until it renders.
   #
   # A READING OF ANOTHER CLAUDE IS NOT THIS PANE'S (review finding 10). The
   # hook names the file after the tmux SESSION, so a second interactive

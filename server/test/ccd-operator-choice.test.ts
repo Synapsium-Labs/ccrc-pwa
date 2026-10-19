@@ -1488,6 +1488,27 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
     },
   );
 
+  // The reader prints a drift for a command the pane did not acknowledge, whatever its
+  // timestamp: in a transcript whose timestamps run backwards in file order that drift is
+  // OLDER than the acknowledgement printed beside it. The merge's age filter belongs to
+  // the two-transcript comparison; with no incoming lines the promotion hands the loop
+  // the reader's own lines, so the keep (and a rotation with nothing incoming) logs
+  // exactly what it always logged.
+  it.each(['the dead-session keep', 'a live rotation with no incoming transcript'] as const)(
+    'control: %s logs the reader\'s own drift line even when its timestamp runs backwards in file order', (who) => {
+      seed(); record({ class: 'fable', effort: 'low' });
+      const t = now();
+      writeTranscript([
+        cmd(t - 60, 'effort', 'high'), ack(t - 60, EFFORT_ACK('high')),
+        cmd(t - 600, 'effort', 'bogus'), ack(t - 600, 'Invalid argument: bogus'),
+      ]);
+      if (who === 'the dead-session keep') expect(keep()).toBe('rc=0');
+      else expect(sync(NEXT)).toBe('rc=0');
+      expect(h.reg(ID, 'effort')).toBe('high');
+      expect(driftLines()).toHaveLength(1);
+    },
+  );
+
   it('control: the dead-session keep records nothing applied — the spawn that follows composes and stamps its own', () => {
     seed(); record({ class: 'fable', effort: 'low' });
     h.sh(`_reg_set ${ID} routeapplied "class=fable effort=low"`);

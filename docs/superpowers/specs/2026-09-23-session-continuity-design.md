@@ -698,9 +698,11 @@ promote): the same parser, journal floor, typed-command filter, route-field mtim
 vocabulary and one combined `cmd_route` call for the pair. It also reads the incoming transcript, and each kind takes the
 newest acknowledged command in either, by time (a tie goes to the incoming one): a `/model` or `/effort` typed after the
 `/clear`, before the tick saw it, wins; an in-pane `/resume` into an older conversation does not overwrite a newer outgoing
-command; a newer command that no acknowledgement confirms changes nothing and is logged once. The fields the promotion
-writes are recorded applied in `routeapplied`, so it never causes a keystroke into the live pane (D-4319, D-4321). The
-marker stays the dead-session keep's: a live promotion
+command; a newer command that no acknowledgement confirms is treated as changing nothing and is logged once. The fields
+the promotion writes are recorded applied in `routeapplied`, so it never types a field it wrote into the live pane; but
+that stamp rewrites `routeapplied`, so a class already pending that the pane runs can no longer be confirmed by a sidecar
+reading from before the rotation, and the applier may type that pending `/model` once, until the next render (D-4319,
+D-4321). The marker stays the dead-session keep's: a live promotion
 neither writes nor clears `choicekept`. Unreadable, malformed or unrecognised input is logged in the existing words and never
 blocks UUID synchronisation; a non-Anthropic lane is still skipped (this is not the applicability rule of §5.6's variable).
 Because live promotions and dead keeps share one writer and one `swap.log` stream, §9's stage-7 keys, whose names are kept,
