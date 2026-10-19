@@ -347,7 +347,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   wave 2): it then ends the coordinator's open runs through the abandon door's own decision, on the coordination
   serialiser, and consults no box token — session-gated when the auth gate is armed, like the abandon door. It is
   registered in `server.ts` for the kickoff route's reason, so `box-token-census.test.ts` names it beside that
-  route's literal. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
+  route's literal. So does `POST /api/digest/correct` (coordinator-first routing D-5300): it queues the operator's
+  correction of a digest line as durable system mail to that line's coordinator, consults no box token, is
+  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
   the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
   the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which
   the census reads as a lane source of its own and checks against `CODE_DOORS` and `TOKEN_DOORS` in both directions.

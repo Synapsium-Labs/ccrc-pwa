@@ -2334,6 +2334,7 @@ button.proj-card-pool::before {
 
 .mail-screen { display: grid; gap: var(--sp-2); padding: var(--sp-2); }
 .mail-head { display: flex; align-items: center; gap: var(--sp-2); }
+.mail-head .mail-digest { margin-left: auto; }
 .mail-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
 .mail-note { font-size: var(--fs-meta); color: var(--ink-secondary); }
 .mail-dropped { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-secondary); }

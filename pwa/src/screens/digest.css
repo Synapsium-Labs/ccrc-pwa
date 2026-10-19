@@ -1,0 +1,73 @@
+/* The daily digest (coordinator-first routing spec §10, D-5300). The mail screen's shape and its token pairs: a page
+   of self-grounded rows (--bg-surface under --ink-primary), machine voice (mono) for ids, times and the children's
+   commands, sans for the sentences the app says. Every line wraps, so the screen holds from a 360 px phone to a wide
+   desktop pane with no horizontal scroll: the grid's middle track is minmax(0, 1fr), and the text that comes from a
+   child breaks anywhere. Nothing is read out of colour: a line's kind is its first word. */
+
+.digest-screen {
+  display: grid; gap: var(--sp-2); padding: var(--sp-2); min-width: 0; max-width: 60rem;
+  /* Self-grounded on the page's own ground (body's --bg-page, which .shell-detail does not repaint), so the audit
+     measures every line below against it through the named-ancestor route instead of the uncovered census. */
+  background: var(--bg-page); color: var(--ink-primary);
+}
+.digest-head { display: flex; align-items: center; gap: var(--sp-2); }
+.digest-screen .digest-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
+.digest-days { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); }
+.digest-screen .digest-day {
+  font-family: var(--family-mono); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; color: var(--ink-primary);
+}
+.digest-screen .digest-note { font-size: var(--fs-meta); color: var(--ink-secondary); }
+.digest-screen .digest-totals { font-family: var(--family-mono); font-size: var(--fs-sm); color: var(--ink-primary); overflow-wrap: anywhere; }
+.digest-coordinators { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); }
+.digest-screen .digest-coordinator-count {
+  font-family: var(--family-mono); font-size: var(--fs-2xs); color: var(--ink-secondary); overflow-wrap: anywhere;
+}
+.digest-screen .digest-empty { padding: var(--sp-4); color: var(--ink-secondary); }
+.digest-screen .digest-error { font-size: var(--fs-meta); color: var(--ink-primary); }
+.digest-list { display: grid; gap: var(--sp-1); }
+
+.digest-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--sp-1) var(--sp-2); align-items: baseline;
+  padding: var(--sp-2); border-left: 2px solid transparent;
+  background: var(--bg-surface); color: var(--ink-primary); border-radius: var(--r-md);
+}
+.digest-row[data-corrected='true'] { border-left-color: var(--edge-strong); }
+/* Scoped under the self-grounded row, as `.mail-row`'s descendants are, so the audit reads each ground off it. */
+.digest-row .digest-kind {
+  font: var(--weight-medium) var(--fs-2xs) / 1.6 var(--family-mono); color: var(--ink-secondary); white-space: nowrap;
+}
+.digest-row .digest-who {
+  min-width: 0; font-family: var(--family-mono); font-size: var(--fs-sm); color: var(--ink-primary); overflow-wrap: anywhere;
+}
+.digest-row .digest-arrow { color: var(--ink-tertiary); }
+/* Each id wraps as a whole when it fits on the next line, and breaks inside only when it alone is wider than the row. */
+.digest-who > .digest-coordinator, .digest-who > .digest-child { display: inline-block; max-width: 100%; }
+.digest-row .digest-when {
+  font-family: var(--family-mono); font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
+  white-space: nowrap;
+}
+.digest-row .digest-text {
+  grid-column: 1 / -1; min-width: 0;
+  font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-primary);
+  overflow-wrap: anywhere; white-space: pre-wrap;
+}
+.digest-row .digest-what { margin-right: var(--sp-2); font-size: var(--fs-2xs); color: var(--ink-tertiary); }
+.digest-row .digest-cleared { color: var(--ink-secondary); }
+.digest-row .digest-detail {
+  grid-column: 1 / -1; min-width: 0; font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere;
+}
+.digest-row .digest-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; }
+.digest-row .digest-corrected { font-size: var(--fs-2xs); color: var(--ink-secondary); }
+.digest-correct { grid-column: 1 / -1; display: grid; gap: var(--sp-2); min-width: 0; }
+/* The correction field: a multi-line field, so not the design system's one-line TextInput, but its look — the raised
+   ground under the primary ink, the subtle hairline, and --fs-input (16 px) so iOS Safari does not zoom on focus. The
+   focus cue is base.css's one ring. */
+.digest-correct-input {
+  width: 100%; min-height: calc(var(--tap-min) * 2); padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--edge-subtle); border-radius: var(--r-md);
+  background: var(--bg-raised); color: var(--ink-primary);
+  font: var(--weight-regular) var(--fs-input) / 1.4 var(--family-ui); resize: vertical;
+}
+.digest-correct-input::placeholder { color: var(--ink-tertiary); }
+.digest-correct-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-2); }

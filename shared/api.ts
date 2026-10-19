@@ -11488,3 +11488,100 @@ export const APPROVAL_CHILD_SHELL = '/bin/bash';
 /** The server box's journal of `409 digest-mismatch` refusals, under its `~/.ccrc` (D-5490): one line each,
  *  `<epoch ms> digest-mismatch <session id>`. Doctor's `approval-digest-mismatch` counts the last seven days. */
 export const APPROVAL_REFUSALS_LOG = 'approval-refusals.log';
+
+// ── the daily digest (coordinator-first routing plan Task 17, spec §10, D-5300) ──────────────────────────────────
+
+/**
+ * One decision a coordinator took in the operator's name, as the digest lists it (spec §10). One line per row, its
+ * final coordinator decision:
+ *  `answer`     a question the held-for coordinator answered (late answers included, D-5289);
+ *  `allow`, `deny`  an approval the held-for coordinator ruled, signed by the server;
+ *  `hand-over`  the coordinator released the question or approval itself (`declined`);
+ *  `lapse`      the window passed with no ruling, so the operator was pushed (an ask or approval held for a
+ *               coordinator that the coordinator never answered, whoever acted after).
+ * A row the operator answered while it was still held is not a line, and neither is a row minted released.
+ */
+export const DIGEST_LINE_KINDS = ['answer', 'allow', 'deny', 'hand-over', 'lapse'] as const;
+export type DigestLineKind = (typeof DIGEST_LINE_KINDS)[number];
+
+/** Which table a digest line came from, and so which id space `id` is in. */
+export type DigestRowKind = 'ask' | 'approval';
+
+/** A digest line on the wire. Every text field is redacted (`redactCommand`) when the digest is built, whatever the
+ *  row stored: `text` is the question, or the command's first `DIGEST_COMMAND_CHARS` characters. */
+export interface DigestLine {
+  readonly rowKind: DigestRowKind;
+  readonly id: number;
+  readonly kind: DigestLineKind;
+  readonly at: number;
+  readonly coordinator: string;
+  readonly childId: string;
+  readonly text: string;
+  /** The approval's tool and class; null on a question. */
+  readonly tool: string | null;
+  readonly class: string | null;
+  /** The chosen option on an answered question; null otherwise. */
+  readonly answer: string | null;
+  /** The coordinator's reason on a ruled approval; null otherwise. */
+  readonly reason: string | null;
+  /** The operator has already sent a correction for this row (`POST /api/digest/correct`). */
+  readonly corrected: boolean;
+}
+
+/** The digest's totals. `decisions` is the line count; `guardForbidden` counts the requests the classifier classed
+ *  `forbidden` in the window, which went straight to the operator and are not lines (D-5492). */
+export interface DigestTotals {
+  readonly decisions: number;
+  readonly answers: number;
+  readonly allows: number;
+  readonly denies: number;
+  readonly handOvers: number;
+  readonly lapses: number;
+  readonly guardForbidden: number;
+}
+
+/** `GET /api/digest?day=` (session-gated): the digest for `day`, a UTC date, covering the 24 hours before that day's
+ *  digest hour (`fromMs` to `toMs`). `sentAt` is when the daily beat ran for that day (null: not yet, or never on this
+ *  box); `pushed` whether it sent the push (a day with no decisions sends none). */
+export interface DigestAnswer {
+  readonly v: 1;
+  readonly day: string;
+  readonly hourUtc: number;
+  readonly fromMs: number;
+  readonly toMs: number;
+  readonly totals: DigestTotals;
+  readonly byCoordinator: readonly { readonly coordinator: string; readonly decisions: number }[];
+  readonly lines: readonly DigestLine[];
+  readonly sentAt: number | null;
+  readonly pushed: boolean;
+}
+
+/** `POST /api/digest/correct`'s body: which row, and the operator's sentence, mailed verbatim to the coordinator. */
+export interface DigestCorrectBody {
+  readonly rowKind: DigestRowKind;
+  readonly id: number;
+  readonly text: string;
+}
+
+/** Its 200: the mail queued (its delivery id, which the coordinator acks) and the row now marked corrected. */
+export interface DigestCorrectAnswer {
+  readonly ok: true;
+  readonly mailId: number;
+  readonly deliveryId: number;
+}
+
+/** The longest correction accepted, in characters. */
+export const DIGEST_CORRECTION_MAX_CHARS = 2000;
+
+/** The first characters of an approval's redacted command a digest line carries (spec §10). */
+export const DIGEST_COMMAND_CHARS = 160;
+
+/** The digest routes' own refusal words, each answered at its one status by `REFUSAL_STATUS` (`shared/refusal.ts`):
+ *  `not-coordinator`    the row is not a coordinator's decision (the operator answered it while it was held, or it was
+ *                       minted released): there is no coordinator to correct.
+ *  `digest-unreadable`  the asks or approvals rows could not be read back. */
+export const DIGEST_REFUSALS = ['not-coordinator', 'digest-unreadable'] as const;
+export type DigestRefusal = (typeof DIGEST_REFUSALS)[number];
+
+/** The server box's override of the digest hour, under its `~/.ccrc`: one integer, 0 to 23 (UTC). */
+export const DIGEST_HOUR_FILE = 'digest-hour';
