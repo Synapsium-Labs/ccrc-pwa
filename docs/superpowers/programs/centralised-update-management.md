@@ -2161,6 +2161,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 10:55: v0.0.333 (#410) and v0.0.334 (#627) followed, unapplied. STATUS: fleet and server v0.0.331, newest
         v0.0.334, stable v0.0.328, intent dev/auto=off, backups fleet 159M/server 2330M, disk free fleet 210G/work
         volume 93G/server 31G, no anomalies.
+      - **11:55 UTC: both boxes moved to v0.0.334 (#627) by the operator's console tap**, fleet first (11:29:33 to
+        11:30:58), then the server (11:31:03 to 11:31:52); both reports `done`, `from: pwa`, sweep `down: 3` on the
+        fleet and `ok` on the server; the server gate answered v0.0.334. Fleet doctor 38 passed, 7 warned, 0 failed;
+        server 28 passed, 1 warned (`approval-key-colocated`). `ccrc.service` restarted at 11:31:29, so the 13:35
+        sample measures v0.0.334 two hours after a restart. Server backups 2458M, the new snapshot 309M; the
+        server's free disk is 30G. v0.0.335 (#565) to v0.0.339 (#701) followed, unapplied. STATUS: fleet and server
+        v0.0.334, newest v0.0.339, stable v0.0.328, intent dev/auto=off, backups fleet 160M/server 2458M, disk free
+        fleet 210G/work volume 92G/server 30G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
