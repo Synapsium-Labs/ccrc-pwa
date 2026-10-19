@@ -48,7 +48,10 @@ import './fleet.css';
  *  make `not-dispatched`, `prhistory-unreadable` and the five `verifyDone`
  *  codes structurally unreachable on THIS route (pinned server-side,
  *  `coord-abandon.test.ts`) — adding members for them here would be
- *  copy-pasting a vocabulary this route can never actually speak. */
+ *  copy-pasting a vocabulary this route can never actually speak. The one
+ *  exception is `registry-unmeasurable` (D-5971): the abandon route's close
+ *  outcome does not send it today, but it is the shared fleet-read refusal,
+ *  so the sheet names it defensively instead of calling it a failed release. */
 export const ABANDON_COPY: Record<
   'unknown-run' | 'bad-transition' | 'unsupported' | 'fleet-failed' | 'registry-unmeasurable' | 'unknown',
   string

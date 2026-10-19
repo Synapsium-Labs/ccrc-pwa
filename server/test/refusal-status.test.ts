@@ -98,7 +98,7 @@ const HELPER_WORD = /\brefuseRoute\(\s*reply\s*,\s*'([^']+)'/g;
 const INLINE_SEND_PINS: Readonly<Record<string, number>> = {
   'auth/gate.ts': 2,
   'coord/routes.ts': 149,  // D-5384: the open route's 24 precondition, child-gate, openRun-conflict and hold-verb sends answer through refuseRoute/refuseRun; D-5298: requireAttribution's 5 through refuseRoute; path identity W1a: the advance route's stored-id reject (`reject: { code: 'bad-session' }`, the advance route's own inline body, which no helper sends)
-  'server.ts': 123,       // D-5971 (#549, ARCH-11b): the eight 503 `registry-unmeasurable` sends answer through refuseRoute; D-5242: the swap route's three 409s (session-busy, status-unknown and the new hibernated) answer through refuseRoute; path identity W1a: its `readSessionRecord` `kind` switches send four literal 503s where four computed ternaries were
+  'server.ts': 123,       // D-5971 (#549, ARCH-11b): the eight 503 `registry-unmeasurable` sends answer through refuseRoute; D-5242: the swap route's three 409s (session-busy, status-unknown and the new hibernated) answer through refuseRoute; path identity W1a: its `readSessionRecord` `kind` switches' four literal 503s are refuseRoute calls since D-5971
   'token/routes.ts': 2,   // the rotate route's 501, a `RotateAnswer`; the claim door's oversized-body 413
 };
 
@@ -175,7 +175,7 @@ describe('registry-unmeasurable has one status (D-5971)', () => {
   const WORD = 'registry-unmeasurable';
   /** Every send whose body names the word, literal or computed. */
   const sendsOfWord = (text: string): Send[] =>
-    refusalSends(text).filter((s) => s.word === WORD || new RegExp(`'${WORD}'`).test(s.body));
+    refusalSends(text).filter((s) => s.word === WORD || new RegExp(`['"\`]${WORD}['"\`]`).test(s.body));
   /** THE PREDICATE: a send of the word whose status is neither the table's
    *  literal value nor the table itself. The live case below runs it too. */
   const offTable = (text: string): Send[] =>
@@ -196,15 +196,17 @@ describe('registry-unmeasurable has one status (D-5971)', () => {
     expect([...text.matchAll(/\brefuseRoute\(\s*reply\s*,\s*'registry-unmeasurable'/g)].length).toBeGreaterThanOrEqual(8);
   });
 
-  it('the scan is live — it catches a 503 send, a ternary and a header chain of the word', () => {
+  it('the scan is live — it catches a 503 send, a ternary, a header chain and any quote style of the word', () => {
     const sample = [
       "reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });",
       "reply.code(x ? 503 : 404).send({ ok: false, error: x ? 'registry-unmeasurable' : 'unknown-session' });",
       "reply.code(503).header('retry-after', '1').send({ ok: false, error: 'registry-unmeasurable' });",
       "reply.code(502).send({ ok: false, error: 'registry-unmeasurable' });",
       "reply.code(REFUSAL_STATUS[code]).send({ ok: false, error: code, detail: 'registry-unmeasurable' });",
+      'reply.code(503).send({ ok: false, error: "registry-unmeasurable" });',
+      'reply.code(504).send({ ok: false, error: `registry-unmeasurable` });',
     ].join('\n');
-    expect(offTable(sample).map((s) => s.line)).toEqual([1, 2, 3]);
+    expect(offTable(sample).map((s) => s.line)).toEqual([1, 2, 3, 6, 7]);
   });
 });
 

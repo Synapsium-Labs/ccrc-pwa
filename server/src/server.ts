@@ -3706,7 +3706,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const flags = archiveFlags(req.body);
     if (flags === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     // The row itself, `/stop`'s ladder. An unlistable registry has already answered 502 above; the `unlistable` arm
-    // below can only answer if the registry goes unreadable between the two reads (503 too). The identity fields are a
+    // below can only answer if the registry goes unreadable between the two reads (502 too, D-5971). The identity fields are a
     // separate arm: an unmeasured one is refused rather than guessed at — the stop argv recomputes a tmux name from them.
     const read = await readSessionRecord(deps.io, deps.cfg, id);
     switch (read.kind) {

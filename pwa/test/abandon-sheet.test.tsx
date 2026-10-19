@@ -639,8 +639,8 @@ it('a run with neither workspace nor branch is named by its id', () => {
   expect(screen.getByText(/^Abandon run 3 — 3\?/)).toBeInTheDocument();
 });
 
-// D-5971 (#549, ARCH-11b): this route's `registry-unmeasurable` (the dispatch outcome's, with an optional stderr)
-// is its own sentence, read off the WORD at whatever status it arrives: "the release failed" is a different fact.
+// D-5971 (#549, ARCH-11b): a defensive arm. The abandon route's close outcome does not send `registry-unmeasurable`
+// today; if it ever does (with or without stderr), the sheet reads the WORD at any status: "the release failed" is a different fact.
 describe('an abandon refused registry-unmeasurable (D-5971)', () => {
   const refusedWith = (err: unknown): void => {
     render(<AbandonSheet run={run()} onClose={() => {}}
