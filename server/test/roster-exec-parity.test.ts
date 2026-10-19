@@ -43,3 +43,61 @@ describe('EXEC_KINDS parity between the parser and its bare-Node mirror', () => 
     expect(execKindsIn('shared/roster-json.mjs')).toContain('codex');
   });
 });
+
+/** The same extraction for `telemetry`'s closed set (D-5521, D-5753). A value in the
+ *  parser but not the mirror is the loud half (`ccrc install` refuses); a value in the
+ *  mirror but not the parser is the crash loop above. A26 writes `openrouter` from the
+ *  box, AGENT-FIRST, so both parsers must accept it before that verb ships. */
+function telemetryValuesIn(file: string): string[] {
+  const src = readFileSync(path.join(root, file), 'utf8');
+  // An object of `<value>: true`, not an array (single-definition.test.ts reads two provider ids in one `[...]`
+  // as a restatement of the provider table), so the keys are what is compared.
+  const m = src.match(/TELEMETRY_VALUES[^=]*=\s*(?:Object\.freeze\()?\{([^}]*)\}/);
+  if (m === null) throw new Error(`no TELEMETRY_VALUES declaration found in ${file} - re-read it`);
+  return [...m[1]!.matchAll(/([a-z]+):\s*true/g)].map((x) => x[1]!).sort();
+}
+
+describe('TELEMETRY_VALUES parity between the parser and its bare-Node mirror (D-5521)', () => {
+  it('the two sets are identical', () => {
+    expect(telemetryValuesIn('shared/roster-json.mjs')).toEqual(telemetryValuesIn('shared/roster.ts'));
+  });
+
+  it('both name openrouter beside the three earlier values', () => {
+    for (const f of ['shared/roster.ts', 'shared/roster-json.mjs']) {
+      expect(telemetryValuesIn(f)).toEqual(['anthropic', 'codex', 'none', 'openrouter']);
+    }
+  });
+});
+
+/** The behaviour, not only the declaration: a set the check never reads would pass the
+ *  extraction above and still refuse the value. */
+describe('telemetry "openrouter" in both parsers (D-5521)', () => {
+  const rosterWith = (telemetry: unknown) => ({
+    version: 1,
+    accounts: [
+      { id: 'lane-a', label: 'lane-a', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'lane-d', label: 'lane-d', configDirSuffix: '.claude-lane-d',
+        exec: { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/lane-d-openrouter.env' },
+        homeAble: true, hue: 'amber', telemetry },
+    ],
+  });
+
+  it('a roster with telemetry openrouter parses in both parsers', async () => {
+    const { parseRoster } = await import('../../shared/roster.js');
+    const { rosterFromJson } = await import('../../shared/roster-json.mjs');
+    expect(parseRoster(rosterWith('openrouter')).accounts[1]!.telemetry).toBe('openrouter');
+    expect(rosterFromJson(rosterWith('openrouter')).accounts[1]!.telemetry).toBe('openrouter');
+  });
+
+  it('an unknown value is still refused by both, and both name the four values', async () => {
+    const { parseRoster } = await import('../../shared/roster.js');
+    const { rosterFromJson } = await import('../../shared/roster-json.mjs');
+    for (const parse of [parseRoster, rosterFromJson] as const) {
+      let caught: unknown;
+      try { parse(rosterWith('open-router')); } catch (e) { caught = e; }
+      expect(String((caught as Error | undefined)?.message)).toMatch(/invalid telemetry "open-router"/);
+      expect((caught as { remedy?: string }).remedy).toMatch(/"anthropic", "codex", "openrouter" or "none"/);
+    }
+  });
+});

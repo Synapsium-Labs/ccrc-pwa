@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
 import type { ProjectedHome } from '../../shared/api.js';
-import { inRoster, type Roster } from '../../shared/roster.js';
+import { inRoster, type AccountDef, type Roster } from '../../shared/roster.js';
 import { poolEligible, poolUndecidable } from './poolrule.js';
 import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
 import { serviceability, type ShareReading } from '../../shared/serviceability.js';
@@ -162,6 +162,20 @@ export const measured = (l: AccountLimits | undefined): number | null => {
 export const sevenOf = (l: AccountLimits | undefined): number | null =>
   (!l || l.seven === null || l.sevenRolledOver ? null : l.seven);
 
+/** Whether a lane's telemetry has a `~/.cc-limits` writer (D-5754): `projectHome`'s `scorable`. */
+function reportsLimits(t: AccountDef['telemetry']): boolean {
+  switch (t) {
+    case 'anthropic':
+    case 'codex':
+      return true;
+    case 'none':
+    case 'openrouter':
+      return false;
+    default:
+      return t satisfies never;
+  }
+}
+
 /**
  * The account a new workspace would land on, and its pressure score.
  *
@@ -187,7 +201,9 @@ export const sevenOf = (l: AccountLimits | undefined): number | null =>
  * Three accounts are excluded from scoring for two different reasons, and
  * conflating them is what produced the bug:
  *   - `telemetry: 'none'` (`shared/roster.ts`) — this account will NEVER report,
- *     so its permanent unknown must not be read as permanent emptiness.
+ *     so its permanent unknown must not be read as permanent emptiness. An
+ *     OpenRouter lane's `telemetry: 'openrouter'` (D-5521) is the same answer
+ *     here: no `~/.cc-limits` writer (`reportsLimits`, D-5754).
  *   - `disabled` — ccd's per-lane kill switch, since `_account_ok` (ccd:252)
  *     gates `_ws_least_loaded` on exactly that marker.
  *   - `authDead` — the health probe measured this credential dead, so its
@@ -306,6 +322,8 @@ export function projectHome(
   // pre-slice-3 answer byte for byte. ccd's `_ws_least_loaded project [class]`
   // is the twin; `projected-home.test.ts` drives both over one fixture table.
   const live = cls === 'default' ? eligible : eligible.filter((a) =>
+    // `anthropic` is `telemetry === 'anthropic'`: an `openrouter` lane and a `none` compatible lane (D-5521)
+    // are not Anthropic backends, so `fable` is `unservable` (`backend`) there.
     serviceability(cls, { anthropic: a.telemetry === 'anthropic', seven: sevenOf(limits[a.id]), share: shareFor(shares, a.id) }, nowS)
       .kind !== 'unservable');
   // THE THIRD MEANING OF `null` IS BORN HERE (the docstring's own paragraph, and
@@ -315,7 +333,11 @@ export function projectHome(
   // because a second value here would make this function disagree with the
   // authority it forecasts. The caller is where they are told apart.
   if (live.length === 0) return null;
-  const scorable = live.filter((a) => a.telemetry !== 'none');
+  // WHO COULD REPORT (D-5754): the lanes with a `~/.cc-limits` writer, `anthropic` (the statusline, through
+  // CCRC_MEASURED) and `codex` (its own publisher). `none` never reports, and neither does `openrouter`
+  // (D-5521; its meter is the key's credit), which `_account_measured` already skips for `firstm`. Spelled as
+  // a switch so a fifth telemetry value is a compile error here, not a lane that silently counts as reporting.
+  const scorable = live.filter((a) => reportsLimits(a.telemetry));
   // ONE PREDICATE, TWO CONSUMERS, AND THAT IS THE MIRROR. `_ws_least_loaded`
   // reads `_authdead` once per candidate and spends the answer twice: a
   // condemned lane never enters the scored comparison, and it lands in the

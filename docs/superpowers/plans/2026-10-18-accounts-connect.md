@@ -1317,19 +1317,26 @@ Split from A26 at rev 2. **Routing:** band 3, one reviewer (no credential; a par
 
 **The shape.** `telemetry` gains `'openrouter'` in both parsers, held equal by the parity test. The consumers of `telemetry === 'anthropic'` say what the two D-5521 changes mean to them: an `openrouter` lane and a `compatible` lane that now writes `'none'` are not in `CCRC_MEASURED` and not in the anthropic id list (`generate.mjs`), are not `anthropic` to `serviceability` (`limits.ts`), and are not `isAnthropicLane` (`models-op.mjs`). This is the reading the plan proposes; Step 0 checks each consumer against it, and a consumer that needs another reading is a STOP for the operator, never a guess.
 
-- [ ] **Step 1: Red.** "a roster with telemetry `openrouter` parses in both parsers, and an unknown value is still refused by both"; "`generate.mjs` leaves an `openrouter` lane and a `none` compatible lane out of `CCRC_MEASURED`"; "`isAnthropicLane` is false for both".
-- [ ] **Step 2: Green.**
-- [ ] **Step 3: Mutation table, RUN.**
+**Step 0, as checked.** Every consumer that asks `telemetry === 'anthropic'` takes the proposed reading with no code change: `generate.mjs` (`CCRC_MEASURED`, `CCRC_ANTHROPIC_BACKEND`; `CCRC_CODEX_BACKEND` asks `=== 'codex'`), `limits.ts`'s `serviceability` flag, `models-op.mjs`'s `isAnthropicLane`, and outside the Files list `shared/models.mjs`'s callers, `ccd/ccd-account-health`'s subject list and `ccd/ccrc-doctor-checks`' roster read. One consumer asks the negative, `projectHome`'s `scorable` (`telemetry !== 'none'`), which would have counted an OpenRouter lane as one that could report while its bash twin `_account_measured` (CCRC_MEASURED) does not. That is the proposed reading applied to the TypeScript half of an existing parity pair, not another reading, and is recorded as D-5754.
+
+- [x] **Step 1: Red.** "a roster with telemetry `openrouter` parses in both parsers, and an unknown value is still refused by both"; "`generate.mjs` leaves an `openrouter` lane and a `none` compatible lane out of `CCRC_MEASURED`"; "`isAnthropicLane` is false for both".
+- [x] **Step 2: Green.**
+- [x] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
   |---|---|---|
   | `'openrouter'` added to `shared/roster.ts` only | roster-exec-parity (or roster) | "…parses in both parsers…" |
   | `CCRC_MEASURED` counts `openrouter` | roster-generate | "…out of `CCRC_MEASURED`" |
+  | `CCRC_ANTHROPIC_BACKEND` counts `openrouter` | roster-generate | "…out of both backend arrays…" |
+  | `scorable` back to `!== 'none'` (D-5754) | projected-home | "…an openrouter lane declared first is not the lane that COULD report…" |
+  | `serviceability`'s `anthropic` as "not `none`, not `codex`" | projected-home | "…not anthropic to serviceability: no Fable there" |
+  | `isAnthropicLane` counts `openrouter` | models-op | "init on an openrouter-telemetry lane writes its registry…" |
+  | the check in either parser deleted | roster / roster-exec-parity | "…still refuses a value outside the four…" |
 
-- [ ] **Step 4: Per width × skin × mode.** No UI: "no UI" in all sixteen cells.
-- [ ] **Step 5: Verify.**
+- [x] **Step 4: Per width × skin × mode.** No UI: "no UI" in all sixteen cells. A27 is the first screen that shows an OpenRouter lane's telemetry.
+- [x] **Step 5: Verify.**
 
-      cd server && ./node_modules/.bin/vitest run test/roster.test.ts test/roster-exec-parity.test.ts test/roster-generate.test.ts test/limits.test.ts test/models-probe.test.ts
+      cd server && ./node_modules/.bin/vitest run test/roster.test.ts test/roster-exec-parity.test.ts test/roster-generate.test.ts test/limits.test.ts test/models-probe.test.ts test/models-op.test.ts test/projected-home.test.ts   # the last two per D-5753 (2)
       cd server && ./node_modules/.bin/tsc --noEmit
 
 ### Task A26: OpenRouter by paste on the box: validate first, the right key kind, its telemetry and its suggested models (D-5520, D-5521, D-5556, N4; G7, G8, G28) — W2d
@@ -1769,6 +1776,13 @@ Issued and unused (Task A6): none.
 - **D-5751** — `roster-wire-kind-as-built` (Task A1): five decisions Task A1's Files list did not make. (1) **The vocabulary's one home.** `RosterKind` and `RosterKindWire` are declared in `shared/roster.ts` beside `rosterKindOf`, and `RosterWire` (`shared/api.ts`) `extends RosterKindWire`, so the four fields' types are written once. `telemetry` is typed `AccountDef['telemetry']`, so A26a's `openrouter` member reaches the wire with no edit here. (2) **Where the provider comes from.** `upstream` is `anthropic` by construction (`ExecSpec`'s header) and carries `sign-in`, or `token` if it declares a `secretsFile`. A `generated` entry with no provider is `anthropic`, because that is the parser's documented default (with its warning) and `rosterKindOf` reads the parsed entry. An `external` entry with no provider is undeclared: no `provider`, no `kind`, and `telemetry` still rides, because the roster requires it. (3) **`managed` rides OpenAI lanes only**: true for `exec.kind: 'codex'`, false for an `external` OpenAI launcher, which is `kind: 'codex'` too, and absent on every other provider. (4) **The closed-union fixture's runner.** The suite that compiles `server/test/types/bypasses/` and holds each fixture to its codes is `ccdargv-brand.test.ts`, not `typecheck-tests.test.ts`, which only asserts that the directory stays out of the test program. `b8-roster-wire-open-string.ts` is registered there, and because that suite compares a set of codes, an appended describe asserts TS2322 on each field's marked line, so the mutant that types `kind` as `string` goes red by the field's name. (5) **`accounts-route.test.ts` changes.** It pinned the exact `RosterWire` key list and said `telemetry` stays server-side. It now pins the kind fields per entry. Its comment, `server.ts`'s builder comment and `RosterWire`'s docstring now say that `telemetry` crossed on purpose, as a closed union with no path, and that `exec` and `configDirSuffix` still stay on the server.
 
 Issued and unused (Task A1): 5752.
+
+### Issued 2026-10-19 and defined here (Task A26a)
+
+- **D-5753** — `roster-telemetry-openrouter-as-built` (Task A26a): three decisions Task A26a's Files list did not make. (1) **One declaration per parser.** Each parser declares `TELEMETRY_VALUES` (`shared/roster.ts`, `shared/roster-json.mjs`) and its check reads it, so `roster-exec-parity.test.ts` compares the two declarations as it compares `EXEC_KINDS`, and a behavioural describe runs both parsers over one roster. It is an object of `<value>: true`, not an array, because `single-definition.test.ts` reads two provider ids in one `[...]` as a restatement of the provider table, and `anthropic` and `openrouter` are both; in `shared/roster.ts` it is typed `Record<AccountDef['telemetry'], true>`, so the union and the accepted values cannot drift. Both refusals name the four values. (2) **Two more suites.** `isAnthropicLane` is private to `deploy/models-op.mjs`, so its red case drives the op through `server/test/models-op.test.ts`, and the `serviceability` reading is driven through `projectHome` in `server/test/projected-home.test.ts`; both suites join Step 5. (3) **One home for the union.** `shared/roster-json.d.mts` types `telemetry` as `AccountDef['telemetry']` rather than a second literal union.
+- **D-5754** — `openrouter-lane-not-scorable` (Task A26a, from Step 0): `projectHome`'s `scorable` (`server/src/limits.ts`) asked `telemetry !== 'none'`, so a home-able OpenRouter lane declared first would be the "could report" fallback on a box with nothing measured, while ccd's `_ws_least_loaded`, which asks `_account_measured` (CCRC_MEASURED, `anthropic` only), skips it and names the next lane. `scorable` now asks `reportsLimits`: true for `anthropic` and `codex`, the two values with a `~/.cc-limits` writer, false for `none` and `openrouter`, as an exhaustive switch so a fifth value is a compile error. The `codex` answer is unchanged: bash's `firstm` still skips a Codex lane where `scorable` keeps it, a difference that predates this task and is left as it was.
+
+Issued and unused (Task A26a): none.
 
 ### Departures defined here by slug, awaiting numbers
 

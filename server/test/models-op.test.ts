@@ -2410,3 +2410,38 @@ describe('a FIFO at a lane file\'s path is that read\'s unreadable answer, never
     expect(fs.statSync(settingsPath()).isDirectory()).toBe(true);
   }, 20_000);
 });
+
+// D-5521 (A26a): `isAnthropicLane` is `telemetry === 'anthropic'`, so an OpenRouter lane
+// writing `openrouter` and a compatible lane writing `none` are both registry lanes. Red
+// before A26a for the openrouter half: `rosterFromJson` refused the whole roster.
+describe('key lanes after D-5521 are not Anthropic lanes', () => {
+  const KEY_ROSTER = {
+    version: 1,
+    accounts: [
+      ROSTER.accounts[0],
+      { id: 'lane-d', label: 'lane-d', configDirSuffix: '.claude-lane-d',
+        exec: { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/lane-d-openrouter.env' },
+        homeAble: true, hue: 'amber', telemetry: 'openrouter' },
+      { id: 'lane-e', label: 'lane-e', configDirSuffix: '.claude-lane-e',
+        exec: { kind: 'generated', provider: 'compatible', baseUrl: 'https://compatible.example.invalid', secretsFile: '.cc-secrets/lane-e-compatible.env' },
+        homeAble: true, hue: 'green', telemetry: 'none' },
+    ],
+  };
+
+  it('init on an openrouter-telemetry lane writes its registry rather than refusing anthropic-lane', () => {
+    seed(KEY_ROSTER);
+    const r = op('init', '--file', rosterPath(), '--id', 'lane-d', '--probe', 'openrouter');
+    expect(r.body['error']).toBeUndefined();
+    expect(r.code).toBe(0);
+    expect(registryOf('lane-d')['probe']).toBe('openrouter');
+  });
+
+  it('…and so does init on a none compatible lane', () => {
+    seed(KEY_ROSTER);
+    const r = op('init', '--file', rosterPath(), '--id', 'lane-e', '--probe', 'compatible',
+      '--base-url', 'https://compatible.example.invalid');
+    expect(r.body['error']).toBeUndefined();
+    expect(r.code).toBe(0);
+    expect(registryOf('lane-e')['probe']).toBe('compatible');
+  });
+});

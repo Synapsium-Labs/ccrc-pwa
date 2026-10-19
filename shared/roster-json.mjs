@@ -213,6 +213,9 @@ export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
 const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 const EXEC_KINDS = new Set(['upstream', 'generated', 'external', 'codex']);
+// Mirrors `shared/roster.ts`'s `TELEMETRY_VALUES`; `roster-exec-parity.test.ts` compares the two declarations.
+// `openrouter` is D-5521's OpenRouter key lane (D-5753).
+const TELEMETRY_VALUES = Object.freeze({ anthropic: true, codex: true, none: true, openrouter: true });
 // Mirrors `shared/roster.ts`: dotless GPT-lane names, not account ids — ccrc's `ccrc-codex` and
 // `ccgpt-runtime`, and `ccgpt`, which a box may still carry as another repository's (D-3478). Refused before any wrapper.
 const GPT_TOOLCHAIN_ACCOUNT_IDS = new Set(['ccrc-codex', 'ccgpt-runtime', 'ccgpt']);
@@ -486,9 +489,9 @@ function checkAccount(raw, index) {
   }
 
   const telemetry = raw['telemetry'];
-  if (telemetry !== 'anthropic' && telemetry !== 'codex' && telemetry !== 'none') {
+  if (typeof telemetry !== 'string' || !Object.hasOwn(TELEMETRY_VALUES, telemetry)) {
     bad(`account "${id}" has an invalid telemetry ${JSON.stringify(telemetry)}.`,
-      `Set "telemetry" for account "${id}" to "anthropic", "codex" or "none".`);
+      `Set "telemetry" for account "${id}" to "anthropic", "codex", "openrouter" or "none".`);
   }
 
   // Optional — `parseRoster` auto-assigns one when it is absent, and the

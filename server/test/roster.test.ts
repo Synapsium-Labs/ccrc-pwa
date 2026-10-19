@@ -740,3 +740,30 @@ describe('exec.secretsFile is legal on all three kinds — and gated on all thre
       .toEqual({ kind: 'external', provider: 'openai', secretsFile: '.cc-secrets/lane.env' });
   });
 });
+
+// D-5521 (A26a): `telemetry` gains `openrouter`, the value A26 writes for an OpenRouter
+// lane. `roster-exec-parity.test.ts` holds the bare-Node mirror to the same set.
+describe('parseRoster — telemetry "openrouter" (D-5521)', () => {
+  const withKeyLane = (telemetry: unknown) => ({
+    version: 1,
+    accounts: [
+      { id: 'lane-a', label: 'lane-a', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'lane-d', label: 'lane-d', configDirSuffix: '.claude-lane-d',
+        exec: { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/lane-d-openrouter.env' },
+        homeAble: true, hue: 'amber', telemetry },
+    ],
+  });
+
+  it('keeps an openrouter lane\'s telemetry as written', () => {
+    expect(parseRoster(withKeyLane('openrouter')).byId.get('lane-d')!.telemetry).toBe('openrouter');
+  });
+
+  it('still refuses a value outside the four, naming them in the remedy', () => {
+    let caught: unknown;
+    try { parseRoster(withKeyLane('OpenRouter')); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(RosterError);
+    expect((caught as RosterError).message).toMatch(/invalid telemetry "OpenRouter": it must be "anthropic", "codex", "openrouter" or "none"\./);
+    expect((caught as RosterError).remedy).toMatch(/to "anthropic", "codex", "openrouter" or "none"\./);
+  });
+});

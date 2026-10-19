@@ -673,7 +673,7 @@ describe('ccd and projectHome agree about telemetry, not only about limits files
 
   afterEach(() => { if (h !== undefined) fs.rmSync(h, { recursive: true, force: true }); });
 
-  const acct = (id: string, label: string, telemetry: 'anthropic' | 'none', homeAble = true) => ({
+  const acct = (id: string, label: string, telemetry: 'anthropic' | 'none' | 'openrouter', homeAble = true) => ({
     id, label, configDirSuffix: `.claude-${id}`,
     exec: id === 'a' ? { kind: 'upstream' } : { kind: 'external' },
     homeAble, hue: id === 'a' ? 'cyan' : id === 'b' ? 'violet' : 'blue', telemetry,
@@ -753,6 +753,37 @@ describe('ccd and projectHome agree about telemetry, not only about limits files
       { state: 'untagged' }, NO_EDGES);
     expect(projected).toEqual({ wrapper: 'a', score: 0 });
     expect(shH('_ws_least_loaded')).toBe('a');
+  });
+
+  it('with NOTHING measured, an openrouter lane declared first is not the lane that COULD report, on either side (D-5521, D-5754)', async () => {
+    // An OpenRouter lane writes `telemetry: "openrouter"` (D-5521) and never reports
+    // Claude Code's rate limits: it is not in CCRC_MEASURED, so `_account_measured`
+    // skips it for `firstm`. `scorable` is that question spelled in TypeScript, so it
+    // must skip it too, or the two name different lanes on a fresh box.
+    const roster = { version: 1, accounts: [
+      acct('o', 'key·router', 'openrouter'),
+      acct('a', 'team·max', 'anthropic'),
+    ] };
+    seedBoth(roster);
+    const cfg = loadConfig({ CCRC_HOME: h });
+    const projected = projectHome(cfg.roster, await readLimits(localIO, cfg), { state: 'untagged' }, NO_EDGES);
+    expect(projected).toEqual({ wrapper: 'a', score: 0 });
+    expect(shH('_ws_least_loaded'), 'ccd disagrees with projectHome').toBe('a');
+  });
+
+  it('an openrouter lane is not anthropic to serviceability: no Fable there (D-5521)', async () => {
+    // `serviceability`'s `anthropic` flag is `telemetry === 'anthropic'`. With the one
+    // Anthropic lane switched off, a Fable placement has nowhere to go, while the
+    // class-blind placement still lands on the openrouter lane.
+    const roster = { version: 1, accounts: [
+      acct('o', 'key·router', 'openrouter'),
+      acct('a', 'team·max', 'anthropic'),
+    ] };
+    seedBoth(roster);
+    const cfg = loadConfig({ CCRC_HOME: h });
+    const limits: Record<string, AccountLimits> = { a: { five: null, seven: null, ts: null, fiveResetAt: null, sevenResetAt: null, disabled: true } as AccountLimits };
+    expect(projectHome(cfg.roster, limits, { state: 'untagged' }, NO_EDGES, 'fable')).toBeNull();
+    expect(projectHome(cfg.roster, limits, { state: 'untagged' }, NO_EDGES)).toEqual({ wrapper: 'o', score: 0 });
   });
 
   it('an accounts.sh that predates CCRC_MEASURED means "the roster did not say", not "nothing reports"', () => {

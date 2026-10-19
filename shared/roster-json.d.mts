@@ -1,4 +1,4 @@
-import type { Hue, ExecSpec } from './roster.js';
+import type { AccountDef, Hue, ExecSpec } from './roster.js';
 
 /**
  * One account as validated by `rosterFromJson` — the flattened shape Task
@@ -13,7 +13,8 @@ export interface RosterJsonAccount {
   label: string;
   configDirSuffix: string;
   homeAble: boolean;
-  telemetry: 'anthropic' | 'codex' | 'none';
+  /** `AccountDef['telemetry']`, so the union has one home (D-5753). */
+  telemetry: AccountDef['telemetry'];
   hue: Hue;
   /** The account's pool, or `null` for untagged — `AccountDef.pool`
    *  (`shared/roster.ts`) one-for-one, including that a JSON `null` is

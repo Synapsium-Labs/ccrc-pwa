@@ -206,7 +206,9 @@ function findAccount(json, id) {
 /** Deviation B-3: `origin/main`'s roster has no `exec.provider`, and
  *  `telemetry: 'anthropic'` is its own declaration that an account is an
  *  Anthropic subscription lane — the field `limits.ts` scores on. `gpt` carries
- *  `telemetry: 'none'`. This is the one place the boolean is computed here. */
+ *  `telemetry: 'none'`. This is the one place the boolean is computed here.
+ *  An OpenRouter lane (`telemetry: 'openrouter'`) and a compatible lane (`'none'`)
+ *  are registry lanes, never Anthropic ones (D-5521). */
 const isAnthropicLane = (account) => account.telemetry === 'anthropic';
 
 /** A lane a registry can sit on at all: not upstream (that entry names the
