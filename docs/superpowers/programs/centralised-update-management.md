@@ -2193,6 +2193,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         sample was lost: Claude Code's memory-pressure reaper stopped both background jobs while this session was
         idle (the fleet box had 4 GiB available of 30). Per its rule, they are not restarted without the operator's
         word. Mail 6690 to the broker's coordinator.
+      - 13:55: v0.0.346 (#692) to v0.0.352 (#721) followed, unapplied. STATUS: fleet and server v0.0.340, newest
+        v0.0.352, stable v0.0.328, intent dev/auto=off, backups fleet 161M/server 2578M, disk free fleet 210G/work
+        volume 86G/server 30G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
