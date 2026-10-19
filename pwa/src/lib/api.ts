@@ -358,6 +358,15 @@ const API_ERROR_TEXT: Record<string, string> = {
  *  `{ ok:false, error, ...fields }`. Those server shapes are disjoint, so these
  *  branches do not express precedence between two fields on one response. The
  *  bare message stays the floor. */
+/** `registry-unmeasurable`, read off the WORD (D-5971, #549, ARCH-11b). The
+ *  server answers it at the table's 502 everywhere (`shared/refusal.ts`), and
+ *  until then `server.ts` answered 503, so a reader that branched on the
+ *  status rendered it as a box failure or as a reason it did not recognise.
+ *  The four sheets that render it inline ask this BEFORE their status arms. */
+export const isRegistryUnmeasurable = (err: unknown): boolean =>
+  err instanceof ApiError && typeof err.body === 'object' && err.body !== null
+  && (err.body as { error?: unknown }).error === 'registry-unmeasurable';
+
 export function apiErrorText(err: unknown): string {
   if (err instanceof ApiError && typeof err.body === 'object' && err.body !== null) {
     const stderr = (err.body as { stderr?: unknown }).stderr;

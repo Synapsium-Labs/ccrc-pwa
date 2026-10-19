@@ -36,7 +36,7 @@ import type { ReactNode } from 'react';
 import { isRunState, type FleetSession, type RunSummary } from '../../../shared/api';
 import { RUN_WORD, childMarkOf } from './runWords';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, toast } from '@ccrc/ui';
-import { ApiError, COORD_UNSUPPORTED_TEXT, UNKNOWN_RUN_TEXT, api } from '../lib/api';
+import { ApiError, COORD_UNSUPPORTED_TEXT, UNKNOWN_RUN_TEXT, api, isRegistryUnmeasurable } from '../lib/api';
 import './fleet.css';
 
 /** The refusal vocabulary this sheet renders its OWN sentence for. A total
@@ -50,7 +50,7 @@ import './fleet.css';
  *  `coord-abandon.test.ts`) — adding members for them here would be
  *  copy-pasting a vocabulary this route can never actually speak. */
 export const ABANDON_COPY: Record<
-  'unknown-run' | 'bad-transition' | 'unsupported' | 'fleet-failed' | 'unknown',
+  'unknown-run' | 'bad-transition' | 'unsupported' | 'fleet-failed' | 'registry-unmeasurable' | 'unknown',
   string
 > = {
   'unknown-run': UNKNOWN_RUN_TEXT,
@@ -61,6 +61,8 @@ export const ABANDON_COPY: Record<
   // component.
   unsupported: COORD_UNSUPPORTED_TEXT,
   'fleet-failed': 'the release failed',
+  // D-5971: the box could not read the registry, so it could not look — not a release that failed.
+  'registry-unmeasurable': 'the registry could not be read, so the box could not finish the abandon — try again',
   unknown: 'the abandon was refused, for a reason this build does not recognise',
 };
 
@@ -72,6 +74,11 @@ export const ABANDON_COPY: Record<
  *  to — a failed abandon has nowhere else to be said. */
 function abandonErrorText(err: unknown): string {
   if (!(err instanceof ApiError)) return ABANDON_COPY.unknown;
+  // D-5971: the word, at any status. ccd's stderr, when it came too, is the more specific fact.
+  if (isRegistryUnmeasurable(err)) {
+    const stderr = (err.body as { stderr?: unknown }).stderr;
+    return typeof stderr === 'string' && stderr.trim().length > 0 ? stderr.trim() : ABANDON_COPY['registry-unmeasurable'];
+  }
   if (err.status === 404) return ABANDON_COPY['unknown-run'];
   if (err.status === 409) {
     const body = err.body;
