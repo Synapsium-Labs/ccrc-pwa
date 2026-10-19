@@ -469,9 +469,16 @@ describe('Chip', () => {
     expect(CHIP_DOT).toContain('bg-current');
     expect(CHIP_DOT).toContain('size-[5px]');
     expect(CHIP_DOT).toContain('rounded-full');
-    // `.chip i` declared three things. `flex-none` would stop the dot
-    // shrinking under a long label, which the original allowed.
-    expect(CHIP_DOT).not.toContain('flex-none');
+  });
+
+  it('never lets a long label squeeze the dot (D-5578)', () => {
+    // `.chip i` allowed the dot to shrink, and a label of about 18 characters
+    // that wraps inside its pill at 360 or 390 drew it 2 to 3px wide. The
+    // coordinator's ruling: a chip's dot never squeezes. `shrink-0` keeps the
+    // flex basis (`size-[5px]`) and nothing else, so it is the whole fix;
+    // `flex-none` would also zero the grow factor, which the dot never had.
+    expect(CHIP_DOT.split(/\s+/)).toContain('shrink-0');
+    expect(CHIP_DOT).not.toMatch(/(^|\s)(shrink|flex-shrink)(-[1-9]\d*)?(\s|$)/);
   });
 
   it('renders the dot only when asked, and always aria-hidden', () => {

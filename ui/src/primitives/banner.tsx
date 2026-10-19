@@ -12,9 +12,11 @@
 // fleet.css: `.fleet-host-banner` (dead red, carries a destructive action),
 // `.fleet-host-banner--warn` (attention amber, roster divergence) and
 // `.substrate-banner` (attention amber, no action). 77 lines of CSS for one
-// shape in two tones. The declarations are reproduced here token for token —
-// see banner.test.tsx, which measures the old rules against this cva rather
-// than trusting that claim.
+// shape in two tones. The declarations are reproduced here token for token.
+// The old rules are gone, so nothing measures them against this cva (D-5578);
+// what pins the banner now is `pwa/test/fleet-host-banner.test.tsx` (the
+// rendered banner, its tones and its action) and
+// `pwa/test/dead-banner-grounds.test.ts` (the dead tone's grounds, D-5574).
 //
 // NO STYLESHEET, deliberately. Every tone sets both its ground and its ink, so
 // each pair is self-grounded and `pwa/test/utility-pairs.test.ts` derives and
