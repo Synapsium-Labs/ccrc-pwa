@@ -32,16 +32,44 @@ const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'f
 const NAME = '.proj-card[data-holds-selection] .proj-card-name';
 const TOGGLE = '.proj-card[data-holds-selection] .proj-card-toggle';
 
+// The rules that apply in ordinary rendering: the file with every @media
+// block cut out. The helpers above ignore @media context, and the forced-colors
+// block already holds a rule for NAME (D-5495's outline), so moving the floor
+// into it would keep `effectiveValue(css, NAME, ...)` green while normal
+// rendering lost the fix (the review's mutant M2).
+function outsideMedia(text: string): string {
+  let out = stripComments(text);
+  for (let at = out.indexOf('@media'); at >= 0; at = out.indexOf('@media')) {
+    const open = out.indexOf('{', at);
+    let depth = 1;
+    let i = open + 1;
+    for (; i < out.length && depth > 0; i += 1) {
+      if (out[i] === '{') depth += 1;
+      else if (out[i] === '}') depth -= 1;
+    }
+    out = out.slice(0, at) + out.slice(i);
+  }
+  return out;
+}
+const plain = outsideMedia(css);
+const forced = stripComments(atBlock(css, '@media (forced-colors: active)'));
+
 describe("the folded card's name has a floor (D-5574)", () => {
   it('never shrinks below its own width', () => {
-    expect(effectiveValue(css, NAME, 'flex-shrink')).toBe('0');
+    expect(effectiveValue(plain, NAME, 'flex-shrink')).toBe('0');
+  });
+
+  it('holds in ordinary rendering, not under forced colours alone', () => {
+    // The forced-colors rule for the same selector carries the outline only.
+    expect(forced).toMatch(/\.proj-card-name/);
+    expect(forced).not.toMatch(/flex-shrink|max-width/);
   });
 
   it('is capped at the line less its chevron, so a long name ellipsises beside it', () => {
     // Capped at the full line, a name longer than the card wrapped onto a line
     // of its own and left the chevron alone above it (measured at 1280 and
     // 1920, both skins). The chevron draws 6.84px at the toggle's 1em.
-    expect(effectiveValue(css, NAME, 'max-width')).toBe('calc(100% - 1em - var(--sp-2))');
+    expect(effectiveValue(plain, NAME, 'max-width')).toBe('calc(100% - 1em - var(--sp-2))');
     // The ellipsis it falls back on is the base rule's, and still there.
     expect(effectiveValue(css, '.proj-card-name', 'text-overflow')).toBe('ellipsis');
     expect(effectiveValue(css, '.proj-card-name', 'white-space')).toBe('nowrap');
@@ -63,8 +91,8 @@ describe("the folded card's name has a floor (D-5574)", () => {
 
 describe("the folded card's toggle wraps rather than overflowing (D-5575)", () => {
   it('wraps, with a small gap between its lines', () => {
-    expect(effectiveValue(css, TOGGLE, 'flex-wrap')).toBe('wrap');
-    expect(effectiveValue(css, TOGGLE, 'row-gap')).toBe('2px');
+    expect(effectiveValue(plain, TOGGLE, 'flex-wrap')).toBe('wrap');
+    expect(effectiveValue(plain, TOGGLE, 'row-gap')).toBe('2px');
   });
 
   it('only on the card holding the selection, and not under forced colours alone', () => {
