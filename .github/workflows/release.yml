@@ -92,7 +92,8 @@ jobs:
       # Outside release-out/, so the publish glob never ships it as an asset.
       # A writer that fails costs the release its body, never the release.
       - name: Write the release notes
-        run: node deploy/release-notes.mjs --tag "$GITHUB_REF_NAME" --out "$RUNNER_TEMP/release-notes.txt" || { echo "::warning::release.yml: could not write the release notes for $GITHUB_REF_NAME; publishing with an empty body"; : > "$RUNNER_TEMP/release-notes.txt"; }
+        run: |
+          node deploy/release-notes.mjs --tag "$GITHUB_REF_NAME" --out "$RUNNER_TEMP/release-notes.txt" || { echo "::warning::release.yml: could not write the release notes for $GITHUB_REF_NAME; publishing with an empty body"; : > "$RUNNER_TEMP/release-notes.txt"; }
 
       # All three artifacts ride the glob. --verify-tag: the release is cut
       # only for a tag that exists on the remote. --prerelease: born on dev.
