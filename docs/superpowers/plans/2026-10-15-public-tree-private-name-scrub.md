@@ -379,7 +379,7 @@ Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here whe
   without reading neutral vocabulary as private were swept by hand, each recorded in the local `variants.tsv`: a lane's
   bare suffix standing for the lane (the same word is part of the neutral fixture vocabulary), a lane-family suffix or
   a suffix fragment beside a lane stand-in, a name written with a space, URL-encoded or split by a control-byte escape
-  (a comment's example then still renders as its stand-in), and a `run` name inside a
+  (a comment's example then still renders as its stand-in), a name built from string parts, and a `run` name inside a
   hyphen run. Decision 10's `/home/<x>` became `/home/u` in files with no list hit too, the producer and the expectation
   together. The 29-character id (Task 6 Step 2) is `project-h-id-pad-keen-prairie` on all four lines that state the
   length.
