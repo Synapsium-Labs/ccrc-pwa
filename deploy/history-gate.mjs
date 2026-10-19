@@ -1807,3 +1807,570 @@ export function decideGate(inputs) {
     ok: true,
   };
 }
+
+// ── W2-3 Task 9: the counter definitions, the open record and its validator ─────────────────────────────────────
+// W2-D87 freezes the text of the five spec counters and of re-discovery here; W2-6's counter module imports it, and
+// part 1 signs its sha. OPEN_RECORD_V1 is the field schema of the two parts of the open record (decisions §4);
+// `open --template` (W2-5a) derives its skeleton from it, and the repo holds no template file (W2-D25).
+// validateOpenRecord refuses every W2-D25 bullet and W2-D90's rule, with GATE_REASONS words only: `refuse` throws
+// on any other word, so a word this section invents is a red suite, not a silent new vocabulary. checkGateCode is
+// W2-D24's comparison; the measured shas are data (W2-4's codeShas() measures them, and this module reads no file).
+
+/** W2-D87 and W2-D86: what each report-only counter counts, per window of a listed family, by arm and by the
+ *  producer of the window's boundary (W2-D15). Part 1 signs `counters_def: {id: 'v1', sha256}`; descoping any of
+ *  them at open takes a D-number then. Order: the five spec counters in §10.2's order, then re-discovery. */
+export const COUNTERS_DEF_V1 = Object.freeze([
+  {
+    name: 'compliance',
+    text: 'Per window: the PARSE_STATUS distribution of the leaf whose boundary opens the window, and its ok plus degraded share, '
+      + 'read from that leaf\'s nodes row through store.mjs openReader. The expected value is not-requested throughout: '
+      + 'it is W3\'s baseline and a check that nothing was steered.',
+  },
+  {
+    name: 'echo_hits',
+    text: 'Per window: the recall-echo rows in the window, by lib provenanceOf\'s structural rule (spec section 6.2), whose '
+      + 'tool_result is not an error, read from the window copy\'s rows through openReader. Reported beside the window\'s '
+      + 'recall_calls count; a gap between the two is reported, never repaired.',
+  },
+  {
+    name: 'lag',
+    text: 'Per window: the lag_ms of the newest ticks row at or before the boundary\'s ts_ms that has a measured lag, read '
+      + 'through openReader; unmeasured when there is none. It says how stale the index was when the compaction happened.',
+  },
+  {
+    name: 'card_served',
+    text: 'Per boundary: lib decideCardDelivery({ids, leafId, windowComplete}) over cardIdsIn of the hook_additional_context '
+      + 'attachments in the first CARD_MEASURE_ROWS rows after the boundary in the copy pickHoldingCopy chooses, with '
+      + 'cardWindowComplete, the functions the sweep\'s card measure uses; counted when it answers served. Control '
+      + 'windows carry no card line by design: their figure is reported, never compared.',
+  },
+  {
+    name: 'card_id_mismatch',
+    text: 'Per boundary: the same decideCardDelivery call as card_served, counted when it answers mismatch (the card lines '
+      + 'in the window name only other leaves). Control windows carry no card line by design: their figure is reported, '
+      + 'never compared.',
+  },
+  {
+    name: 'rediscovery',
+    text: 'Per window, over the window\'s turns from turnsOf and the window builder: a Read tool_use in turns 1 to 10 whose '
+      + 'file_path, made absolute, is the file_path of a Read, Edit, MultiEdit, Write or NotebookEdit tool_use in leaf N\'s '
+      + 'span. Reported as an indicator and a distinct-path count. Bash reads are not counted.',
+  },
+].map((c) => Object.freeze(c)));
+
+/** The sha part 1 signs as `counters_def.sha256`: sha256Hex over the canonical JSON of COUNTERS_DEF_V1. */
+export const COUNTERS_DEF_V1_SHA256 = sha256Hex(canonicalJson(COUNTERS_DEF_V1));
+
+/** The open record's `kind` (decisions §4, part 1's first row). */
+export const OPEN_RECORD_KIND = 'ccrc-history-w2-open-record';
+
+/** An exact model id, never an alias (W2-D25): `claude-`, one or more lower-case words, then one or more numeric
+ *  segments, so `claude-opus-9-1` passes and a bare class word, `claude-<class>`, `claude-<class>-latest`, a `[1m]`
+ *  suffix, a provider prefix or a dotted version are alias-shaped. */
+export const EXACT_MODEL_ID_RE = /^claude-[a-z]+(?:-[a-z]+)*(?:-[0-9]+)+$/;
+/** An arm model matching this is refused (W2-D25). */
+export const ARM_MODEL_FORBIDDEN_RE = /fable/i;
+/** A writer or judge model not matching this is refused (W2-D25, W2-D72, W2-D79). */
+export const OPUS_MODEL_RE = /^claude-opus-/;
+
+const RECORD_DAY_MS = 86_400_000;
+const RECORD_HEX64_RE = /^[0-9a-f]{64}$/;
+
+/** @typedef {'string'|'integer'|'number'|'boolean'|'hex64'|'object'|'array'} FieldType */
+/** @typedef {'fixed'|'default'|'operator'|'measured'|'derived'} FieldStatus */
+/** A field of the open record: its type, whether null is allowed, its status in decisions §4's tables, the value a
+ *  `fixed` or `default` field holds, and, for an object, its fields (closed: any other key is field-unknown) or the
+ *  field every value of a map is, or, for an array, its item. An object with neither `fields` nor `values` holds
+ *  whatever its producer measured (W2-4's and W2-5a's outputs), checked for its type only.
+ *  @typedef {{type: FieldType, nullable: boolean, status: FieldStatus, value?: unknown, fields?: FieldSpec, items?: Field, values?: Field}} Field */
+/** @typedef {Readonly<Record<string, Field>>} FieldSpec */
+
+/** @param {FieldType} type @param {FieldStatus} status @param {Partial<Field>} [extra] @returns {Field} */
+const recField = (type, status, extra = {}) => Object.freeze({ type, nullable: false, status, ...extra });
+/** @param {Record<string, Field>} fields @returns {FieldSpec} */
+const recFields = (fields) => Object.freeze(fields);
+
+const REC_FAMILY_REF = recFields({
+  store_id: recField('string', 'measured'),
+  ccrc_id: recField('string', 'measured'),
+  generation: recField('string', 'measured'),
+});
+const REC_CODE_SHAS = recFields(Object.fromEntries(GATE_CODE_FILES.map((f) => [f, recField('hex64', 'measured')])));
+const REC_LABELLER = recFields({
+  sha_admit_prefix: recField('integer', 'fixed', { value: LABELLER.sha_admit_prefix }),
+  path_min: recField('integer', 'fixed', { value: LABELLER.path_min }),
+  window: recField('integer', 'fixed', { value: LABELLER.window }),
+  path_forms: recField('array', 'fixed', { value: LABELLER.path_forms, items: recField('string', 'fixed') }),
+  boundaries: recField('string', 'fixed', { value: LABELLER.boundaries }),
+});
+/** The build freeze's surface (W2-D6), the default `freezes.surface`. */
+const REC_FREEZE_SURFACE = Object.freeze([
+  'ccd/history/**', 'ccd/ccd-history-sweep', 'ccd/history-skill/**', 'ccd/install-history-skill.sh', 'ccd/session-hook.sh',
+  'ccd/install-session-hooks.sh', 'ccd/compact-card.mjs', 'ccd/ccrc#history-dispatch-block', 'ccd/ccd#generation-blocks',
+  'shared/wrapper.mjs', 'deploy/systemd/ccd-history-sweep.service', 'deploy/systemd/ccd-history-sweep.timer',
+  'deploy/history-*.mjs', 'deploy/measure-history.py',
+]);
+
+/** Part 1 (draft): decisions §4's first table, row by row. */
+const REC_DRAFT = recFields({
+  kind: recField('string', 'fixed', { value: OPEN_RECORD_KIND }),
+  version: recField('integer', 'fixed', { value: 1 }),
+  part: recField('string', 'fixed', { value: 'draft' }),
+  drafted_ms: recField('integer', 'measured'),
+  supersedes: recField('hex64', 'fixed', { nullable: true, value: null }),
+  nodes: recField('array', 'operator', { items: recField('object', 'operator', { fields: recFields({
+    label: recField('string', 'operator'), store_id: recField('string', 'operator') }) }) }),
+  account: recField('string', 'operator'),
+  arm_model: recField('string', 'operator'),
+  writer_model: recField('string', 'operator'),
+  judge_model: recField('string', 'operator'),
+  // Each entry is W2-4's step 0a output (W2-4 Task 8's fifteen Step0aOutput keys), field for field, plus the label and
+  // store_id `open --draft` binds it to (W2-D25, amended 2026-10-19). kind and v are typed only: W2-4's loadStep0a
+  // checked both, and this module does not spell the driver's kind again. writer_init and judge_init are not
+  // nullable here: the writer and the judge are probed before part 1, so a null is field-missing.
+  step0a: recField('array', 'measured', { items: recField('object', 'measured', { fields: recFields({
+    label: recField('string', 'operator'),
+    store_id: recField('string', 'operator'),
+    kind: recField('string', 'measured'),
+    v: recField('integer', 'measured'),
+    measured_ms: recField('integer', 'measured'),
+    account: recField('string', 'measured'),
+    settings_mode: recField('string', 'measured'),
+    claude_code_version: recField('string', 'measured'),
+    wrapper_sha256: recField('hex64', 'measured', { nullable: true }),
+    flags_accepted: recField('object', 'measured', { values: recField('boolean', 'measured') }),
+    writer_init: recField('object', 'measured'),
+    judge_init: recField('object', 'measured'),
+    box_init: recField('object', 'measured', { nullable: true }),
+    code_shas: recField('object', 'measured', { fields: REC_CODE_SHAS }),
+    release_stamp: recField('string', 'measured'),
+    budget: recField('integer', 'measured'),
+    spend: recField('integer', 'measured'),
+  }) }) }),
+  settings_mode: recField('string', 'default', { value: 'restricted' }),
+  window_plan: recField('object', 'default', { fields: recFields({ planned_days: recField('integer', 'default', { value: 14 }) }) }),
+  k: recField('integer', 'fixed', { value: K }),
+  k_unit: recField('string', 'fixed', { value: K_UNIT }),
+  x: recField('object', 'fixed', { value: X, fields: recFields({ num: recField('integer', 'fixed'), den: recField('integer', 'fixed') }) }),
+  metric: recField('string', 'fixed', { value: METRIC_TEXT }),
+  row_cap: recField('integer', 'fixed', { value: ROW_CAP }),
+  bootstrap: recField('object', 'fixed', { fields: recFields({
+    B: recField('integer', 'fixed', { value: BOOTSTRAP.B }),
+    ci: recField('integer', 'fixed', { value: BOOTSTRAP.ci }),
+    method: recField('string', 'fixed', { value: BOOTSTRAP.method }),
+    percentile: recField('string', 'fixed', { value: BOOTSTRAP.percentile }),
+    statistic: recField('string', 'fixed', { value: BOOTSTRAP.statistic }),
+    prng: recField('string', 'fixed', { value: BOOTSTRAP.prng }),
+    seed: recField('hex64', 'measured'),
+    substreams: recField('array', 'fixed', { value: SUBSTREAMS, items: recField('string', 'fixed') }),
+  }) }),
+  labeller: recField('object', 'fixed', { fields: recFields({
+    ...REC_LABELLER,
+    sha_min_prefix: recField('integer', 'default', { value: 7 }),
+  }) }),
+  answer_protocol_sha256: recField('hex64', 'fixed', { value: ANSWER_PROTOCOL_SHA256 }),
+  writer_prompt_sha256: recField('hex64', 'fixed', { value: WRITER_PROMPT_SHA256 }),
+  rubric_id: recField('string', 'default', { value: 'v1' }),
+  rubric_sha256: recField('hex64', 'default', { value: RUBRIC_SHA256.v1 }),
+  quiz: recField('object', 'default', { fields: recFields({
+    kinds: recField('array', 'fixed', { value: FACT_KINDS, items: recField('string', 'fixed') }),
+    target: recField('integer', 'default', { value: 100 }),
+    min_families: recField('integer', 'default', { value: 20 }),
+    caps: recField('object', 'default', { fields: recFields({
+      family: recField('integer', 'default', { value: 5 }),
+      boundary: recField('integer', 'default', { value: 3 }),
+      kind_per_family: recField('integer', 'default', { value: 2 }),
+    }) }),
+    halt_floor: recField('object', 'default', { fields: recFields({
+      questions: recField('integer', 'default', { value: 60 }),
+      families: recField('integer', 'default', { value: 12 }),
+    }) }),
+    writer_input: recField('string', 'default', { value: 'excerpt' }),
+    baseline_files: recField('string', 'default', { value: 'v1' }),
+  }) }),
+  counters_def: recField('object', 'default', { fields: recFields({
+    id: recField('string', 'default', { value: 'v1' }),
+    sha256: recField('hex64', 'fixed', { value: COUNTERS_DEF_V1_SHA256 }),
+  }) }),
+  active_rule: recField('object', 'default', { fields: recFields({
+    lookback_ms: recField('integer', 'default', { value: ACTIVE_LOOKBACK_MS }),
+    legacy_excluded: recField('boolean', 'fixed', { value: true }),
+    text: recField('string', 'default'),
+  }) }),
+  q18_settings: recField('object', 'default', { fields: recFields({
+    rho_headline: recField('number', 'default', { value: Q18_DEFAULTS.rho_headline }),
+    power: recField('array', 'default', { value: Q18_DEFAULTS.power, items: recField('number', 'default') }),
+    lookback_days: recField('integer', 'default', { value: Q18_DEFAULTS.lookback_days }),
+    sims: recField('integer', 'default', { value: Q18_DEFAULTS.sims }),
+    grid_step: recField('number', 'default', { value: Q18_DEFAULTS.grid_step }),
+    procedure: recField('string', 'default', { value: Q18_DEFAULTS.procedure }),
+  }) }),
+  pilot: recField('object', 'measured', { fields: recFields({
+    seed: recField('hex64', 'measured'),
+    n_fidelity: recField('integer', 'default', { value: 5 }),
+    n_usage: recField('integer', 'default', { value: 5 }),
+    tolerance: recField('number', 'default', { value: 0.25 }),
+    families: recField('array', 'measured', { items: recField('object', 'measured', { fields: REC_FAMILY_REF }) }),
+    frozen_sha256: recField('hex64', 'measured'),
+    writer_model: recField('string', 'measured'),
+    used: recField('object', 'measured', { fields: recFields({
+      labeller: recField('object', 'measured', { fields: REC_LABELLER }),
+      sha_min_prefix: recField('integer', 'measured'),
+      writer_input: recField('string', 'measured'),
+      baseline_files: recField('string', 'measured'),
+      writer_prompt_sha256: recField('hex64', 'measured'),
+      answer_protocol_sha256: recField('hex64', 'measured'),
+    }) }),
+    code_shas: recField('object', 'measured', { fields: REC_CODE_SHAS }),
+    release_stamp: recField('string', 'measured'),
+    budget: recField('integer', 'measured'),
+    spend: recField('integer', 'measured'),
+  }) }),
+  limits: recField('object', 'default', { fields: recFields({
+    threshold_pct: recField('integer', 'default', { value: 70 }),
+    max_age_ms: recField('integer', 'default', { value: 3_600_000 }),
+    batch_max: recField('integer', 'default', { value: 10 }),
+    concurrency: recField('integer', 'default', { value: 2 }),
+  }) }),
+  pilot_budget: recField('integer', 'default', { value: 3_000_000 }),
+  halts: recField('object', 'default', { fields: recFields({
+    handcheck_agreement_min: recField('number', 'default', { value: HALT_DEFAULTS.handcheck_agreement_min }),
+    run_failed_max: recField('number', 'default', { value: HALT_DEFAULTS.run_failed_max }),
+    absent_rate_max: recField('number', 'default', { value: HALT_DEFAULTS.absent_rate_max }),
+  }) }),
+  handcheck: recField('object', 'default', { fields: recFields({
+    share: recField('number', 'default', { value: 0.2 }),
+    of: recField('string', 'default', { value: 'judged' }),
+    per_arm: recField('boolean', 'default', { value: true }),
+    judge_failed: recField('string', 'default', { value: 'always' }),
+  }) }),
+  freezes: recField('object', 'default', { fields: recFields({
+    maintenance_from: recField('string', 'default', { value: 'pilot-sourcing' }),
+    build_from: recField('string', 'default', { value: 'final-rollout' }),
+    surface: recField('array', 'default', { value: REC_FREEZE_SURFACE, items: recField('string', 'default') }),
+  }) }),
+  order: recField('object', 'default', { fields: recFields({
+    quiz_arms_during_window: recField('boolean', 'default', { value: true }),
+  }) }),
+  gate_code: recField('object', 'measured', { fields: recFields({
+    release_tag: recField('string', 'measured'),
+    files: recField('object', 'measured', { fields: REC_CODE_SHAS }),
+  }) }),
+});
+
+/** Part 2 (final) carries every part 1 field unchanged, so a `--record <final>` consumer reads one file, and adds
+ *  decisions §4's second table. Its `quiz` is part 1's quiz plan with the frozen list's four fields added. */
+const REC_FINAL = recFields({
+  ...REC_DRAFT,
+  part: recField('string', 'fixed', { value: 'final' }),
+  supersedes: recField('hex64', 'fixed'),
+  finalized_ms: recField('integer', 'measured'),
+  census: recField('array', 'measured', { items: recField('object', 'measured', { fields: recFields({
+    store_id: recField('string', 'measured'), census_ms: recField('integer', 'measured'), census_sha256: recField('hex64', 'measured') }) }) }),
+  registry_drops: recField('array', 'measured', { items: recField('object', 'measured', { fields: recFields({
+    ...REC_FAMILY_REF, reason: recField('string', 'measured') }) }) }),
+  q18: recField('object', 'measured', { fields: recFields({
+    headline: recField('number', 'measured', { nullable: true }),
+    at_power_80: recField('number', 'measured', { nullable: true }),
+    at_rho_0: recField('number', 'measured', { nullable: true }),
+    rho_hat: recField('number', 'measured', { nullable: true }),
+    n_f: recField('object', 'measured'),
+    coverage: recField('object', 'measured'),
+    pre_window_uptake: recField('object', 'measured'),
+    power_output_sha256: recField('hex64', 'measured'),
+    decision: recField('string', 'operator'),
+  }) }),
+  pilot_result: recField('object', 'measured', { fields: recFields({
+    fidelity: recField('array', 'measured', { items: recField('object', 'measured') }),
+    usage_extrapolation: recField('object', 'measured'),
+    step0b_sha256: recField('hex64', 'measured'),
+    settings_mode: recField('string', 'measured'),
+    absent_rate: recField('object', 'measured'),
+  }) }),
+  spend_budget: recField('integer', 'derived'),
+  assignment: recField('array', 'derived', { items: recField('object', 'derived', { fields: recFields({
+    ...REC_FAMILY_REF, arm: recField('string', 'derived') }) }) }),
+  assignment_sha256: recField('hex64', 'derived'),
+  quiz: recField('object', 'measured', { fields: recFields({
+    ...REC_DRAFT.quiz.fields,
+    sha256: recField('hex64', 'measured'),
+    n_questions: recField('integer', 'measured'),
+    n_families: recField('integer', 'measured'),
+    families: recField('array', 'measured', { items: recField('object', 'measured', { fields: REC_FAMILY_REF }) }),
+  }) }),
+  window: recField('object', 'operator', { fields: recFields({
+    start_ms: recField('integer', 'operator'), end_ms: recField('integer', 'operator') }) }),
+  amendments: recField('array', 'measured', { value: Object.freeze([]), items: recField('object', 'measured', { fields: recFields({
+    kind: recField('string', 'operator'),
+    node_label_ref: recField('string', 'operator', { nullable: true }),
+    at_ms: recField('integer', 'measured'),
+    detail_sha256: recField('hex64', 'measured'),
+    detail: recField('object', 'measured'),
+  }) }) }),
+});
+
+/** The field schema of both parts (decisions §4). `open --template` (W2-5a) prints a skeleton from it. */
+export const OPEN_RECORD_V1 = Object.freeze({ version: 1, draft: REC_DRAFT, final: REC_FINAL });
+
+/** @type {Readonly<Record<FieldType, (v: unknown) => boolean>>} */
+const REC_TYPE_OK = Object.freeze({
+  string: (v) => typeof v === 'string',
+  integer: (v) => Number.isSafeInteger(v),
+  number: (v) => typeof v === 'number' && Number.isFinite(v),
+  boolean: (v) => typeof v === 'boolean',
+  hex64: (v) => typeof v === 'string' && RECORD_HEX64_RE.test(v),
+  object: (v) => v !== null && typeof v === 'object' && !Array.isArray(v),
+  array: (v) => Array.isArray(v),
+});
+
+/** W2-D24: gate_code.files against measured shas, file by file over GATE_CODE_FILES. A file whose sha is absent on
+ *  either side is unmeasured, never a change, and is answered first (code-unmeasured: W2-D24 and W2-D56, amended
+ *  2026-10-19, so --allow-code-change can never stamp it); otherwise each file whose shas differ is mismatched
+ *  (code-changed). The shas are data: W2-4's codeShas() measures them, step 0a and the pilot record them.
+ *  @param {{release_tag: string, files: Record<string, string>}} gateCode @param {Record<string, string>} shas
+ *  @returns {{ok: true} | {ok: false, word: 'code-unmeasured', unmeasured: string[]} | {ok: false, word: 'code-changed', mismatched: string[]}} */
+export function checkGateCode(gateCode, shas) {
+  const unmeasured = GATE_CODE_FILES.filter((f) => !(typeof shas?.[f] === 'string' && typeof gateCode?.files?.[f] === 'string'));
+  if (unmeasured.length > 0) return { ok: false, word: 'code-unmeasured', unmeasured: [...unmeasured] };
+  const mismatched = GATE_CODE_FILES.filter((f) => gateCode.files[f] !== shas[f]);
+  return mismatched.length === 0 ? { ok: true } : { ok: false, word: 'code-changed', mismatched: [...mismatched] };
+}
+
+/** A record's sha256 (W2-D25): the one `--record-sha256` names and a successor's `supersedes` carries. It is the
+ *  sha256 of the bytes `open` prints, the record's canonical JSON and one newline, the form W2-4 writes step 0a's
+ *  output in. validateOpenRecord compares `supersedes` with it (W2-D25, amended 2026-10-19: chained).
+ *  @param {object} record @returns {string} */
+export function recordSha256(record) {
+  return sha256Hex(canonicalJson(record) + '\n');
+}
+
+/** One list of errors, each a GATE_REASONS word at a path, listed once per path; any other word throws (W2-D12,
+ *  W2-D25). */
+function recRefusals() {
+  /** @type {Array<{path: string, word: string}>} */
+  const errors = [];
+  /** @param {string} path @param {string} word */
+  const refuse = (path, word) => {
+    if (!GATE_REASONS.includes(word)) throw new Error(`history-gate: '${word}' is not a GATE_REASONS word`);
+    if (!errors.some((e) => e.path === path && e.word === word)) errors.push({ path, word });
+  };
+  return { errors, refuse };
+}
+
+/** A missing field, or a null where the schema allows none, is `field-missing`; a present one of the wrong type is
+ *  `field-malformed`; and, the schema being closed (W2-D25, amended 2026-10-19), a field outside it is
+ *  `field-unknown`. */
+function recShapeErrors(value, spec, path, refuse) {
+  for (const [k, f] of Object.entries(spec)) {
+    const p = path === '' ? k : `${path}.${k}`;
+    if (!Object.hasOwn(value, k)) refuse(p, 'field-missing');
+    else recFieldErrors(value[k], f, p, refuse);
+  }
+  for (const k of Object.keys(value)) if (!Object.hasOwn(spec, k)) refuse(path === '' ? k : `${path}.${k}`, 'field-unknown');
+}
+function recFieldErrors(v, f, p, refuse) {
+  if (v === null && f.nullable) return;
+  if (v === null) { refuse(p, 'field-missing'); return; }   // null carries no value: a part 1 writer_init among them
+  if (!REC_TYPE_OK[f.type](v)) { refuse(p, 'field-malformed'); return; }
+  if (f.fields) recShapeErrors(v, f.fields, p, refuse);
+  if (f.values) for (const [k, x] of Object.entries(v)) recFieldErrors(x, f.values, `${p}.${k}`, refuse);
+  if (f.items) v.forEach((item, i) => recFieldErrors(item, f.items, `${p}[${i}]`, refuse));
+}
+
+const recSame = (a, b) => canonicalJson(a) === canonicalJson(b);
+const recRefOf = (f) => ({ store_id: f.store_id, ccrc_id: f.ccrc_id, generation: f.generation });
+const recKeyOf = (f) => familyKey(f.store_id, f.ccrc_id, f.generation);
+const recWithout = (o, k) => Object.fromEntries(Object.entries(o).filter(([key]) => key !== k));
+/** A record's part 1 view: every part 1 field but `part` and `supersedes`, with `quiz` cut to part 1's quiz plan. */
+function recPartOneView(r) {
+  const view = {};
+  for (const k of Object.keys(REC_DRAFT)) {
+    if (k === 'part' || k === 'supersedes') continue;
+    view[k] = k === 'quiz'
+      ? Object.fromEntries(Object.keys(REC_DRAFT.quiz.fields).map((q) => [q, r.quiz[q]]))
+      : r[k];
+  }
+  return view;
+}
+/** What W2-D90 leaves free after window start: everything but these three is frozen. */
+const REC_AMEND_FREE = Object.freeze(['finalized_ms', 'supersedes', 'amendments']);
+
+/** W2-D25's validator, both parts, their amendments and the chain between them (decisions §4 step 7). Closed,
+ *  chained and self-checking (W2-D25, amended 2026-10-19), and its context is required, never a narrower check:
+ *  ctx.draft: the part 1 a final finalizes (required for a final; ignored for a draft).
+ *  ctx.predecessor: the record this one supersedes, of the same part (null for a first draft or a first final, whose
+ *  `supersedes` names its draft; required for a draft whose `supersedes` is not null).
+ *  ctx.frozen: the frozen quiz list's families and question count (required for a final; ignored for a draft).
+ *  A null or missing ctx, or a missing key, is field-missing at `ctx` or `ctx.<key>`, and nothing else is checked.
+ *  @param {object} record
+ *  @param {{draft: object|null, predecessor: object|null, frozen: {families: Array<{store_id: string, ccrc_id: string, generation: string}>, n_questions: number}|null}} ctx
+ *  @returns {{ok: true} | {ok: false, errors: Array<{path: string, word: string}>}} */
+export function validateOpenRecord(record, ctx) {
+  return recValidate(record, ctx, true);
+}
+
+/** validateOpenRecord's body. `checkLink` is false only when a predecessor or a draft is itself validated: its own
+ *  `supersedes` was checked against its own predecessor when it was published, so a chain is checked a link at a time. */
+function recValidate(record, ctx, checkLink) {
+  const { errors, refuse } = recRefusals();
+  const done = () => (errors.length === 0 ? { ok: true } : { ok: false, errors });
+  // The context (W2-D25, amended 2026-10-19): required, never read as a narrower check.
+  if (!REC_TYPE_OK.object(ctx)) { refuse('ctx', 'field-missing'); return done(); }
+  for (const k of ['draft', 'predecessor', 'frozen']) {
+    if (!Object.hasOwn(ctx, k)) refuse(`ctx.${k}`, 'field-missing');
+    else if (ctx[k] !== null && !REC_TYPE_OK.object(ctx[k])) refuse(`ctx.${k}`, 'field-malformed');
+  }
+  if (errors.length > 0) return done();
+  if (!REC_TYPE_OK.object(record)) { refuse('', 'field-malformed'); return done(); }
+  if (!Object.hasOwn(record, 'part')) { refuse('part', 'field-missing'); return done(); }
+  if (record.part !== 'draft' && record.part !== 'final') { refuse('part', 'constant-mismatch'); return done(); }
+  const final = record.part === 'final';
+  recShapeErrors(record, OPEN_RECORD_V1[record.part], '', refuse);
+  if (errors.length > 0) return done();   // the checks below read a well-shaped record only
+  const r = /** @type {any} */ (record);
+  // What this record's part needs from the context: a final its draft and the frozen list; a superseding draft its
+  // predecessor (a final's first predecessor is its draft).
+  if (final && ctx.draft === null) refuse('ctx.draft', 'field-missing');
+  if (final && ctx.frozen === null) refuse('ctx.frozen', 'field-missing');
+  else if (final && !(REC_TYPE_OK.array(ctx.frozen.families) && REC_TYPE_OK.integer(ctx.frozen.n_questions)
+    && ctx.frozen.families.every((f) => REC_TYPE_OK.object(f) && ['store_id', 'ccrc_id', 'generation'].every((k) => typeof f[k] === 'string')))) {
+    refuse('ctx.frozen', 'field-malformed');   // the context is refused, never read: an item that is no family would throw in the key builder
+  }
+  if (checkLink && !final && r.supersedes !== null && ctx.predecessor === null) refuse('ctx.predecessor', 'field-missing');
+  if (errors.length > 0) return done();
+
+  // Fixed fields: the module constants (W2-D14, W2-D18, W2-D20, W2-D22, W2-D60, W2-D62).
+  const fixed = [
+    ['kind', r.kind, OPEN_RECORD_KIND], ['version', r.version, OPEN_RECORD_V1.version],
+    ['k', r.k, K], ['k_unit', r.k_unit, K_UNIT], ['x', r.x, X], ['metric', r.metric, METRIC_TEXT], ['row_cap', r.row_cap, ROW_CAP],
+    ...Object.keys(BOOTSTRAP).map((b) => [`bootstrap.${b}`, r.bootstrap[b], BOOTSTRAP[b]]),
+    ['bootstrap.substreams', r.bootstrap.substreams, SUBSTREAMS],
+    ...Object.keys(LABELLER).map((l) => [`labeller.${l}`, r.labeller[l], LABELLER[l]]),
+    ['quiz.kinds', r.quiz.kinds, FACT_KINDS],
+    ['active_rule.legacy_excluded', r.active_rule.legacy_excluded, true],
+  ];
+  for (const [p, got, want] of fixed) if (!recSame(got, want)) refuse(p, 'constant-mismatch');
+
+  // Closed sets (W2-D63, W2-D79, W2-D72, W2-D87).
+  if (!SHA_MIN_PREFIXES.includes(r.labeller.sha_min_prefix)) refuse('labeller.sha_min_prefix', 'value-outside-set');
+  if (!RUBRIC_IDS.includes(r.rubric_id)) refuse('rubric_id', 'value-outside-set');
+  if (!WRITER_INPUTS.includes(r.quiz.writer_input)) refuse('quiz.writer_input', 'value-outside-set');
+  if (r.counters_def.id !== 'v1') refuse('counters_def.id', 'value-outside-set');
+
+  // Models (W2-D25): exact ids for every role; the arm model not Fable; writer and judge Opus.
+  for (const role of ['arm_model', 'writer_model', 'judge_model']) {
+    const id = r[role];
+    if (!EXACT_MODEL_ID_RE.test(id)) refuse(role, 'model-alias');
+    else if (role === 'arm_model' ? ARM_MODEL_FORBIDDEN_RE.test(id) : !OPUS_MODEL_RE.test(id)) refuse(role, 'model-forbidden');
+  }
+
+  // The signed texts (W2-D64, W2-D72, W2-D79, W2-D87).
+  if (r.answer_protocol_sha256 !== ANSWER_PROTOCOL_SHA256) refuse('answer_protocol_sha256', 'signed-text-mismatch');
+  if (r.writer_prompt_sha256 !== WRITER_PROMPT_SHA256) refuse('writer_prompt_sha256', 'signed-text-mismatch');
+  if (RUBRIC_IDS.includes(r.rubric_id) && r.rubric_sha256 !== RUBRIC_SHA256[r.rubric_id]) refuse('rubric_sha256', 'signed-text-mismatch');
+  if (r.counters_def.sha256 !== COUNTERS_DEF_V1_SHA256) refuse('counters_def.sha256', 'signed-text-mismatch');
+
+  // gate_code against what step 0a and the pilot ran under (W2-D24, W2-D57).
+  const ranUnder = [...r.step0a.map((s, i) => [`step0a[${i}]`, s]), ['pilot', r.pilot]];
+  for (const [p, s] of ranUnder) {
+    if (!checkGateCode(r.gate_code, s.code_shas).ok) refuse(`${p}.code_shas`, 'code-changed');
+    if (s.release_stamp !== r.gate_code.release_tag) refuse(`${p}.release_stamp`, 'release-mismatch');
+  }
+
+  // Each step 0a output bound to a named node and to part 1's settings mode, and every flag it measured accepted
+  // (W2-D25, amended 2026-10-19 at the final W2-3/W2-4 plan review, and by the coordinator's settings-mode ruling).
+  // A store_id that names no node, or a settings_mode other than part 1's top-level one, is value-outside-set. Only
+  // part 1's settings_mode binds step 0a; part 2's pilot_result.settings_mode is a later record, never read here.
+  // A flag measured false is flag-rejected, with no exception: under spec §10.2's fallback settings mode step 0a
+  // writes no --restricted key, so refusing every false loses nothing.
+  const nodeStores = new Set(r.nodes.map((n) => n.store_id));
+  r.step0a.forEach((s, i) => {
+    if (!nodeStores.has(s.store_id)) refuse(`step0a[${i}].store_id`, 'value-outside-set');
+    if (s.settings_mode !== r.settings_mode) refuse(`step0a[${i}].settings_mode`, 'value-outside-set');
+    for (const [flag, accepted] of Object.entries(s.flags_accepted)) {
+      if (accepted === false) refuse(`step0a[${i}].flags_accepted.${flag}`, 'flag-rejected');
+    }
+  });
+
+  // The pilot section signed under part 1's own settings (W2-D76, W2-D71).
+  const used = r.pilot.used;
+  const drift = [
+    ['pilot.used.labeller', used.labeller, recWithout(r.labeller, 'sha_min_prefix')],
+    ['pilot.used.sha_min_prefix', used.sha_min_prefix, r.labeller.sha_min_prefix],
+    ['pilot.used.writer_input', used.writer_input, r.quiz.writer_input],
+    ['pilot.used.baseline_files', used.baseline_files, r.quiz.baseline_files],
+    ['pilot.used.writer_prompt_sha256', used.writer_prompt_sha256, r.writer_prompt_sha256],
+    ['pilot.used.answer_protocol_sha256', used.answer_protocol_sha256, r.answer_protocol_sha256],
+    ['pilot.writer_model', r.pilot.writer_model, r.writer_model],
+  ];
+  for (const [p, got, want] of drift) if (!recSame(got, want)) refuse(p, 'pilot-drift');
+
+  // The chain (W2-D25, amended 2026-10-19: chained). `supersedes` is recordSha256 of the record it supersedes: a
+  // draft's earlier draft, a final's earlier final, or, for a first final, its draft (open --finalize supplies it).
+  // That record is of the same part and itself valid, and the seed never changes across a supersede.
+  const pred = ctx.predecessor;
+  let predOk = false;   // a predecessor of the right part that validates; the post-start rule below reads only such a one
+  if (checkLink) {
+    const prior = final ? (pred ?? ctx.draft) : pred;
+    if (r.supersedes === null ? prior !== null : r.supersedes !== recordSha256(prior)) refuse('supersedes', 'chain-mismatch');
+  }
+  if (pred !== null) {
+    const predCtx = { draft: final ? ctx.draft : null, predecessor: null, frozen: final ? ctx.frozen : null };
+    predOk = pred.part === record.part && recValidate(pred, predCtx, false).ok;
+    if (!predOk) refuse('supersedes', 'chain-mismatch');
+    else if (pred.bootstrap.seed !== r.bootstrap.seed) refuse('bootstrap.seed', 'seed-changed');
+  }
+  if (!final) return done();
+
+  const draft = ctx.draft;
+  if (draft.part !== 'draft' || !recValidate(draft, { draft: null, predecessor: null, frozen: null }, false).ok) refuse('supersedes', 'chain-mismatch');
+  else if (draft.bootstrap.seed !== r.bootstrap.seed) refuse('bootstrap.seed', 'seed-changed');
+  else {
+    const mine = recPartOneView(r);
+    const theirs = recPartOneView(draft);
+    for (const k of Object.keys(mine)) if (k !== 'bootstrap' && !recSame(mine[k], theirs[k])) refuse(k, 'draft-mismatch');
+  }
+
+  // The window: planned_days long, up to one day more, of the draft it finalizes (W2-D25, a chosen tolerance).
+  const plannedMs = (draft.window_plan?.planned_days ?? r.window_plan.planned_days) * RECORD_DAY_MS;
+  const lengthMs = r.window.end_ms - r.window.start_ms;
+  if (lengthMs < plannedMs || lengthMs > plannedMs + RECORD_DAY_MS) refuse('window', 'window-length');
+
+  // The assignment re-derives from the seed (W2-D19).
+  const seed = r.bootstrap.seed;
+  r.assignment.forEach((a, i) => { if (a.arm !== armOf(seed, a)) refuse(`assignment[${i}].arm`, 'assignment-mismatch'); });
+  // A family listed twice is refused here: assignArms throws on it, and this validator answers a word, never a throw.
+  const assignedKeys = r.assignment.map(recKeyOf);
+  const assignedTwice = new Set(assignedKeys).size !== assignedKeys.length;
+  if (assignedTwice || !recSame(r.assignment, assignArms(seed, r.assignment.map(recRefOf)))) refuse('assignment', 'assignment-mismatch');
+  if (r.assignment_sha256 !== assignmentSha256(r.assignment)) refuse('assignment_sha256', 'assignment-mismatch');
+
+  // The quiz families: consistent with their counts and the frozen file; no control-held id; no pilot family
+  // (W2-D25, W2-D77, W2-D76).
+  const quizKeys = r.quiz.families.map(recKeyOf);
+  if (new Set(quizKeys).size !== quizKeys.length || r.quiz.n_families !== quizKeys.length) refuse('quiz.n_families', 'quiz-mismatch');
+  const frozen = ctx.frozen;
+  if (!recSame([...new Set(quizKeys)].sort(), [...new Set(frozen.families.map(recKeyOf))].sort())) refuse('quiz.families', 'quiz-mismatch');
+  if (r.quiz.n_questions !== frozen.n_questions) refuse('quiz.n_questions', 'quiz-mismatch');
+  const pilotKeys = new Set(r.pilot.families.map(recKeyOf));
+  r.quiz.families.forEach((q, i) => {
+    if (r.assignment.some((a) => a.arm === 'control' && a.store_id === q.store_id && a.ccrc_id === q.ccrc_id)) refuse(`quiz.families[${i}]`, 'quiz-holds-control');
+    if (pilotKeys.has(recKeyOf(q))) refuse(`quiz.families[${i}]`, 'pilot-quiz-overlap');
+  });
+
+  // Amendments (W2-D90): a closed kind set, a version move carries its re-pilot sha, and every detail_sha256 is
+  // recomputed from its detail (W2-D25, amended 2026-10-19).
+  r.amendments.forEach((a, i) => {
+    if (!AMENDMENT_KINDS.includes(a.kind)) refuse(`amendments[${i}].kind`, 'amendment-kind');
+    else if (a.kind === 'version-move' && !REC_TYPE_OK.hex64(a.detail.repilot_sha256)) refuse(`amendments[${i}].detail.repilot_sha256`, 'version-move-unpiloted');
+    if (a.detail_sha256 !== sha256Hex(canonicalJson(a.detail))) refuse(`amendments[${i}].detail_sha256`, 'amendment-detail-mismatch');
+  });
+
+  // After window start, a superseding final only appends amendments (W2-D90).
+  if (predOk && r.finalized_ms >= pred.window.start_ms) {
+    const keys = new Set([...Object.keys(r), ...Object.keys(pred)]);
+    for (const k of [...keys].sort()) if (!REC_AMEND_FREE.includes(k) && !recSame(r[k], pred[k])) refuse(k, 'post-start-change');
+    if (!recSame(r.amendments.slice(0, pred.amendments.length), pred.amendments)) refuse('amendments', 'post-start-change');
+  }
+  return done();
+}

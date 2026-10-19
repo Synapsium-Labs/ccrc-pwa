@@ -4093,3 +4093,624 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
     expect(v.criteria.uptake).toBeNull();
   });
 });
+
+// ── W2-3 Task 9: the counter definitions and the open record (W2-D87, W2-D25, W2-D24, W2-D90; D-5781) ──────────
+// Pure: every input is a parameter, the seed included (W2-D19: no function reads a seed from anywhere else). The
+// records are synthetic stand-ins: store ids, ccrc ids, generations, model ids and release tags are made up here,
+// and every sha- or seed-shaped value is assembled at runtime by hashing a label, so no key-shaped literal is
+// committed. Import declarations are hoisted, so this block's own imports may sit at the end of the file.
+import * as gate9 from '../../deploy/history-gate.mjs';
+import { canonicalJson as cj9, sha256Hex as sha9 } from '../../ccd/history/lib.mjs';
+
+describe('W2-3 Task 9: the counter definitions and the open record', () => {
+  type Ref = { store_id: string; ccrc_id: string; generation: string };
+  type Rec = Record<string, any>;
+  type Err = { path: string; word: string };
+  type Spec = { type: string; status: string; value?: unknown; fields?: Record<string, Spec>; items?: Spec };
+  const DAY = 86_400_000;
+  const T0 = 1_800_000_000_000;
+  /** A sha- or seed-shaped value, assembled at runtime from a label. */
+  const hex = (label: string): string => sha9(`w2-3 task 9 fixture: ${label}`);
+  const SEED = hex('seed');
+  const STORE_A = '00000000-0000-4000-8000-0000000000a1';
+  const STORE_B = '00000000-0000-4000-8000-0000000000b2';
+  const gen = (n: number): string => `0189abcd-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const OPUS = 'claude-opus-9-1';
+  const ARM = 'claude-arm-9-1';
+  const TAG = 'v0.0.900';
+  const CODE: Record<string, string> = Object.fromEntries(gate9.GATE_CODE_FILES.map((f: string) => [f, hex(`code ${f}`)]));
+  const refOf = (f: Ref): Ref => ({ store_id: f.store_id, ccrc_id: f.ccrc_id, generation: f.generation });
+  const armOf = (f: Ref): string => gate9.armOf(SEED, f);
+  /** An amendment whose detail_sha256 is its detail's sha256, which the validator recomputes (W2-D25, amended). */
+  const amendment = (kind: string, node: string | null, at: number, detail: Rec): Rec =>
+    ({ kind, node_label_ref: node, at_ms: at, detail_sha256: sha9(cj9(detail)), detail });
+
+  /** One (store, id) whose two generations draw opposite arms under SEED: found by search, so the fixture holds
+   *  for whatever bit the seed gives. */
+  const SPLIT = ((): { treated: Ref; controlled: Ref } => {
+    let treated: Ref | null = null;
+    let controlled: Ref | null = null;
+    for (let n = 200; treated === null || controlled === null; n += 1) {
+      const f = { store_id: STORE_A, ccrc_id: 'sess-split', generation: gen(n) };
+      if (armOf(f) === 'treatment') treated ??= f;
+      else controlled ??= f;
+    }
+    return { treated, controlled };
+  })();
+  const FAMILIES: Ref[] = [
+    ...[...Array(10)].map((_, i) => ({ store_id: i % 2 === 0 ? STORE_A : STORE_B, ccrc_id: `sess-${i}`, generation: gen(i) })),
+    SPLIT.treated, SPLIT.controlled,
+  ];
+  const ASSIGNMENT: Array<Ref & { arm: string }> = gate9.assignArms(SEED, FAMILIES);
+  const SOLO = ASSIGNMENT.filter((a) => a.ccrc_id !== 'sess-split');
+  const QUIZ: Ref[] = SOLO.filter((a) => a.arm === 'treatment').map(refOf);
+  const CONTROL_SOLO: Ref = refOf(SOLO.find((a) => a.arm === 'control')!);
+  const PILOT: Ref[] = [{ store_id: STORE_A, ccrc_id: 'pilot-0', generation: gen(100) }];
+  const N_QUESTIONS = 64;
+
+  const labeller = (): Rec => ({ ...gate9.LABELLER, path_forms: [...gate9.LABELLER.path_forms] });
+  function draft(): Rec {
+    return {
+      kind: gate9.OPEN_RECORD_KIND, version: 1, part: 'draft', drafted_ms: T0 - 30 * DAY, supersedes: null,
+      nodes: [{ label: 'node-a', store_id: STORE_A }, { label: 'node-b', store_id: STORE_B }],
+      account: 'account-a', arm_model: ARM, writer_model: OPUS, judge_model: OPUS,
+      // W2-4 Task 8's Step0aOutput, field for field, plus the label and store_id open --draft binds it to (W2-D25, amended).
+      step0a: [STORE_A, STORE_B].map((s, i) => ({
+        label: `node-${'ab'[i]}`, store_id: s, kind: 'ccrc-history-w2-step0a', v: 1, measured_ms: T0 - 32 * DAY, account: 'account-a',
+        settings_mode: 'restricted', claude_code_version: '9.1.0', wrapper_sha256: null,
+        flags_accepted: { '--output-format': true, '--verbose': true }, writer_init: { tools: [] }, judge_init: { tools: [] }, box_init: null,
+        code_shas: { ...CODE }, release_stamp: TAG, budget: 100_000, spend: 1_200,
+      })),
+      settings_mode: 'restricted', window_plan: { planned_days: 14 },
+      k: gate9.K, k_unit: gate9.K_UNIT, x: { ...gate9.X }, metric: gate9.METRIC_TEXT, row_cap: gate9.ROW_CAP,
+      bootstrap: { ...gate9.BOOTSTRAP, seed: SEED, substreams: [...gate9.SUBSTREAMS] },
+      labeller: { ...labeller(), sha_min_prefix: 7 },
+      answer_protocol_sha256: gate9.ANSWER_PROTOCOL_SHA256, writer_prompt_sha256: gate9.WRITER_PROMPT_SHA256,
+      rubric_id: 'v1', rubric_sha256: gate9.RUBRIC_SHA256.v1,
+      quiz: { kinds: [...gate9.FACT_KINDS], target: 100, min_families: 20, caps: { family: 5, boundary: 3, kind_per_family: 2 },
+        halt_floor: { questions: 60, families: 12 }, writer_input: 'excerpt', baseline_files: 'v1' },
+      counters_def: { id: 'v1', sha256: gate9.COUNTERS_DEF_V1_SHA256 },
+      active_rule: { lookback_ms: 604_800_000, legacy_excluded: true, text: 'a synthetic rule text' },
+      q18_settings: { rho_headline: 0.3, power: [0.5, 0.8], lookback_days: 14, sims: 1000, grid_step: 0.005, procedure: 'bisection-on-grid-crn' },
+      pilot: {
+        seed: hex('pilot seed'), n_fidelity: 5, n_usage: 5, tolerance: 0.25, families: PILOT.map(refOf), frozen_sha256: hex('pilot frozen'),
+        writer_model: OPUS,
+        used: { labeller: labeller(), sha_min_prefix: 7, writer_input: 'excerpt', baseline_files: 'v1',
+          writer_prompt_sha256: gate9.WRITER_PROMPT_SHA256, answer_protocol_sha256: gate9.ANSWER_PROTOCOL_SHA256 },
+        code_shas: { ...CODE }, release_stamp: TAG, budget: 3_000_000, spend: 900_000,
+      },
+      limits: { threshold_pct: 70, max_age_ms: 3_600_000, batch_max: 10, concurrency: 2 },
+      pilot_budget: 3_000_000,
+      halts: { handcheck_agreement_min: 0.8, run_failed_max: 0.05, absent_rate_max: 0.05 },
+      handcheck: { share: 0.2, of: 'judged', per_arm: true, judge_failed: 'always' },
+      freezes: { maintenance_from: 'pilot-sourcing', build_from: 'final-rollout', surface: ['deploy/history-*.mjs'] },
+      order: { quiz_arms_during_window: true },
+      gate_code: { release_tag: TAG, files: { ...CODE } },
+    };
+  }
+  function final(d: Rec = draft()): Rec {
+    return {
+      ...structuredClone(d), part: 'final', supersedes: gate9.recordSha256(d), finalized_ms: T0 - DAY,
+      census: [STORE_A, STORE_B].map((s) => ({ store_id: s, census_ms: T0 - 3 * DAY, census_sha256: hex(`census ${s}`) })),
+      registry_drops: [],
+      q18: { headline: 0.2, at_power_80: 0.3, at_rho_0: 0.15, rho_hat: 0.1, n_f: {}, coverage: {}, pre_window_uptake: {},
+        power_output_sha256: hex('power'), decision: 'keep' },
+      pilot_result: { fidelity: [{ pass: true }], usage_extrapolation: {}, step0b_sha256: hex('step0b'), settings_mode: 'restricted',
+        absent_rate: { num: 0, den: 10 } },
+      spend_budget: 30_000_000,
+      assignment: ASSIGNMENT.map((a) => ({ ...a })),
+      assignment_sha256: gate9.assignmentSha256(ASSIGNMENT),
+      quiz: { ...structuredClone(d.quiz), sha256: hex('quiz'), n_questions: N_QUESTIONS, n_families: QUIZ.length, families: QUIZ.map(refOf) },
+      window: { start_ms: T0, end_ms: T0 + 14 * DAY },
+      amendments: [],
+    };
+  }
+  const FROZEN = { families: QUIZ.map(refOf), n_questions: N_QUESTIONS };
+  type Ctx = { draft: Rec | null; predecessor: Rec | null; frozen: { families: Ref[]; n_questions: number } | null };
+  const CTX0: Ctx = { draft: null, predecessor: null, frozen: null };
+  const chainOf = (d: Rec): Ctx => ({ draft: d, predecessor: null, frozen: FROZEN });
+  const verdict = (r: Rec, ctx: Ctx = CTX0): Err[] => {
+    const v = gate9.validateOpenRecord(r, ctx);
+    return v.ok ? [] : v.errors;
+  };
+  /** The validator called as a careless consumer might: with no context, or a partial one. */
+  const bare = gate9.validateOpenRecord as unknown as (r: unknown, ctx?: unknown) => { ok: boolean; errors?: Err[] };
+  /** Set a dotted path, `a.b[2].c`, on a record. */
+  const set = (r: Rec, p: string, value: unknown): Rec => {
+    const keys = p.replace(/\[(\d+)\]/g, '.$1').split('.');
+    let o = r;
+    for (const k of keys.slice(0, -1)) o = o[k];
+    o[keys[keys.length - 1]!] = value;
+    return r;
+  };
+  /** A quiz whose families are `fams`, kept consistent with its counts and the frozen file. */
+  const withQuiz = (r: Rec, fams: Ref[]): { r: Rec; ctx: Ctx } => {
+    r.quiz.families = fams.map(refOf);
+    r.quiz.n_families = fams.length;
+    return { r, ctx: { draft: draft(), predecessor: null, frozen: { families: fams.map(refOf), n_questions: N_QUESTIONS } } };
+  };
+
+  it('the fixture holds: the assignment has both arms, and one id holds a treatment and a control generation', () => {
+    expect(new Set(ASSIGNMENT.map((a) => a.arm))).toEqual(new Set(['treatment', 'control']));
+    expect(QUIZ.length).toBeGreaterThan(1);
+    expect(armOf(SPLIT.treated)).toBe('treatment');
+    expect(armOf(SPLIT.controlled)).toBe('control');
+  });
+
+  it('COUNTERS_DEF_V1 names exactly the five spec counters and rediscovery, frozen, and its sha is recomputed from it', () => {
+    expect(gate9.COUNTERS_DEF_V1.map((c: { name: string }) => c.name))
+      .toEqual(['compliance', 'echo_hits', 'lag', 'card_served', 'card_id_mismatch', 'rediscovery']);
+    for (const c of gate9.COUNTERS_DEF_V1) expect(c.text.length, c.name).toBeGreaterThan(40);
+    expect(Object.isFrozen(gate9.COUNTERS_DEF_V1)).toBe(true);
+    for (const c of gate9.COUNTERS_DEF_V1) expect(Object.isFrozen(c), c.name).toBe(true);
+    expect(gate9.COUNTERS_DEF_V1_SHA256).toBe(sha9(cj9(gate9.COUNTERS_DEF_V1)));
+    expect(gate9.COUNTERS_DEF_V1_SHA256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('OPEN_RECORD_V1 holds every row of both tables, pilot families included, and part 2 carries part 1 whole', () => {
+    expect(gate9.OPEN_RECORD_KIND).toBe('ccrc-history-w2-open-record');
+    expect(gate9.OPEN_RECORD_V1.version).toBe(1);
+    const PART1 = ['kind', 'version', 'part', 'drafted_ms', 'supersedes', 'nodes', 'account', 'arm_model', 'writer_model',
+      'judge_model', 'step0a', 'settings_mode', 'window_plan', 'k', 'k_unit', 'x', 'metric', 'row_cap', 'bootstrap', 'labeller',
+      'answer_protocol_sha256', 'writer_prompt_sha256', 'rubric_id', 'rubric_sha256', 'quiz', 'counters_def', 'active_rule',
+      'q18_settings', 'pilot', 'limits', 'pilot_budget', 'halts', 'handcheck', 'freezes', 'order', 'gate_code'];
+    const PART2 = ['finalized_ms', 'census', 'registry_drops', 'q18', 'pilot_result', 'spend_budget', 'assignment',
+      'assignment_sha256', 'window', 'amendments'];
+    expect(Object.keys(gate9.OPEN_RECORD_V1.draft).sort()).toEqual([...PART1].sort());
+    expect(Object.keys(gate9.OPEN_RECORD_V1.final).sort()).toEqual([...PART1, ...PART2].sort());
+    const spec = gate9.OPEN_RECORD_V1 as unknown as { draft: Record<string, Spec>; final: Record<string, Spec> };
+    const sub = (f: Spec | undefined): Record<string, Spec> => f?.fields ?? {};
+    expect(sub(spec.draft.pilot).families).toMatchObject({ type: 'array', status: 'measured' });   // W2-D76, D-5781
+    expect(Object.keys(sub(sub(spec.draft.pilot).families?.items))).toEqual(['store_id', 'ccrc_id', 'generation']);
+    expect(Object.keys(sub(spec.final.quiz))).toEqual([...Object.keys(sub(spec.draft.quiz)), 'sha256', 'n_questions', 'n_families', 'families']);
+    expect(sub(spec.draft.active_rule).legacy_excluded).toMatchObject({ status: 'fixed', value: true });
+    expect(sub(spec.draft.counters_def).sha256).toMatchObject({ status: 'fixed', value: gate9.COUNTERS_DEF_V1_SHA256 });
+    expect(Object.keys(sub(sub(spec.draft.gate_code).files))).toEqual([...gate9.GATE_CODE_FILES]);
+  });
+
+  it('a valid chain passes: a draft, a superseding draft with its seed, a final, and an amended final', () => {
+    const d1 = draft();
+    expect(verdict(d1)).toEqual([]);
+    const d2 = set(draft(), 'supersedes', gate9.recordSha256(d1));
+    d2.window_plan.planned_days = 21;
+    expect(verdict(d2, { draft: null, predecessor: d1, frozen: null })).toEqual([]);
+    const f1 = final(d1);
+    expect(verdict(f1, chainOf(d1))).toEqual([]);
+    const f2 = { ...structuredClone(f1), supersedes: gate9.recordSha256(f1), finalized_ms: T0 + 2 * DAY,
+      amendments: [amendment('forced-act', 'node-a', T0 + DAY, { act: 'prune --apply' })] };
+    expect(verdict(f2, { draft: d1, predecessor: f1, frozen: FROZEN })).toEqual([]);
+    expect(gate9.recordSha256(d1), 'a record\'s sha is its canonical JSON and one newline').toBe(sha9(`${cj9(d1)}\n`));
+  });
+
+  it('a missing field is field-missing at its path, pilot families and amendments included; a wrong type is field-malformed', () => {
+    const d = draft();
+    delete d.account;
+    expect(verdict(d)).toEqual([{ path: 'account', word: 'field-missing' }]);
+    const p = draft();
+    delete p.pilot.families;
+    expect(verdict(p)).toEqual([{ path: 'pilot.families', word: 'field-missing' }]);
+    const f = final();
+    delete f.amendments;
+    expect(verdict(f)).toEqual([{ path: 'amendments', word: 'field-missing' }]);
+    expect(verdict(set(draft(), 'bootstrap.seed', 'not-a-seed'))).toEqual([{ path: 'bootstrap.seed', word: 'field-malformed' }]);
+    expect(verdict(set(draft(), 'step0a[1].budget', 1.5))).toEqual([{ path: 'step0a[1].budget', word: 'field-malformed' }]);
+  });
+
+  it('a seed change across a supersede is refused, draft to draft and draft to final', () => {
+    const d1 = draft();
+    const d2 = set(set(draft(), 'supersedes', gate9.recordSha256(d1)), 'bootstrap.seed', hex('another seed'));
+    expect(verdict(d2, { draft: null, predecessor: d1, frozen: null })).toEqual([{ path: 'bootstrap.seed', word: 'seed-changed' }]);
+    const other = set(draft(), 'bootstrap.seed', hex('another seed'));
+    expect(verdict(set(final(), 'supersedes', gate9.recordSha256(other)), chainOf(other))).toEqual([{ path: 'bootstrap.seed', word: 'seed-changed' }]);
+  });
+
+  it.each([
+    ['k', 11], ['k_unit', 'assistant-entries'], ['x', { num: 1, den: 20 }], ['metric', 'another metric'], ['row_cap', 401],
+    ['bootstrap.B', 1000], ['bootstrap.method', 'bca'], ['bootstrap.substreams', ['quiz-ci']], ['quiz.kinds', ['sha', 'path', 'command', 'error', 'decision']],
+    ['labeller.path_min', 9], ['labeller.window', 41], ['labeller.boundaries', 'v2'], ['version', 2], ['kind', 'another-record'],
+  ])('a fixed field moved off its module constant is refused: %s', (p, value) => {
+    const r = set(draft(), p, value);
+    if (p.startsWith('labeller.')) set(r, `pilot.used.${p}`, value);   // the pilot signed under the same labeller
+    expect(verdict(r)).toEqual([{ path: p, word: 'constant-mismatch' }]);
+  });
+
+  it('legacy_excluded other than true is refused (W2-D20: fixed)', () => {
+    expect(verdict(set(draft(), 'active_rule.legacy_excluded', false))).toEqual([{ path: 'active_rule.legacy_excluded', word: 'constant-mismatch' }]);
+  });
+
+  it('sha_min_prefix 7 and 40 pass, any other is refused', () => {
+    const at = (n: number): Err[] => verdict(set(set(draft(), 'labeller.sha_min_prefix', n), 'pilot.used.sha_min_prefix', n));
+    expect(at(7)).toEqual([]);
+    expect(at(40)).toEqual([]);
+    expect(at(8)).toEqual([{ path: 'labeller.sha_min_prefix', word: 'value-outside-set' }]);
+  });
+
+  it('a rubric id outside RUBRIC_IDS is refused, and v1-strict signed with its own sha passes', () => {
+    expect(verdict(set(set(draft(), 'rubric_id', 'v1-strict'), 'rubric_sha256', gate9.RUBRIC_SHA256['v1-strict']))).toEqual([]);
+    expect(verdict(set(draft(), 'rubric_id', 'v2'))).toEqual([{ path: 'rubric_id', word: 'value-outside-set' }]);
+  });
+
+  it('a writer input outside WRITER_INPUTS is refused, and leaf-span signed by both parts passes', () => {
+    const at = (w: string): Err[] => verdict(set(set(draft(), 'quiz.writer_input', w), 'pilot.used.writer_input', w));
+    expect(at('leaf-span')).toEqual([]);
+    expect(at('whole-leaf')).toEqual([{ path: 'quiz.writer_input', word: 'value-outside-set' }]);
+  });
+
+  it('a counters_def id other than v1 is refused', () => {
+    expect(verdict(set(draft(), 'counters_def.id', 'v2'))).toEqual([{ path: 'counters_def.id', word: 'value-outside-set' }]);
+  });
+
+  it.each(['opus', 'claude-opus', 'claude-opus-latest', 'claude-opus-9-1[1m]', 'us.anthropic.claude-opus-9-1', 'claude-opus-9.1'])(
+    'an alias-shaped writer model is refused: %s', (id) => {
+      expect(verdict(set(set(draft(), 'writer_model', id), 'pilot.writer_model', id))).toEqual([{ path: 'writer_model', word: 'model-alias' }]);
+    });
+
+  it('an alias-shaped arm or judge model is refused', () => {
+    expect(verdict(set(draft(), 'arm_model', 'claude-arm'))).toEqual([{ path: 'arm_model', word: 'model-alias' }]);
+    expect(verdict(set(draft(), 'judge_model', 'claude-opus-latest'))).toEqual([{ path: 'judge_model', word: 'model-alias' }]);
+  });
+
+  it('a Fable arm model is refused, in any case', () => {
+    expect(verdict(set(draft(), 'arm_model', 'claude-fable-9-1'))).toEqual([{ path: 'arm_model', word: 'model-forbidden' }]);
+    expect(verdict(set(draft(), 'arm_model', 'claude-arm-fable-9-1'))).toEqual([{ path: 'arm_model', word: 'model-forbidden' }]);
+    expect(verdict(set(draft(), 'arm_model', OPUS)), 'CONTROL: an Opus arm is not Fable').toEqual([]);
+  });
+
+  it('a non-Opus judge or writer is refused', () => {
+    expect(verdict(set(draft(), 'judge_model', ARM))).toEqual([{ path: 'judge_model', word: 'model-forbidden' }]);
+    expect(verdict(set(set(draft(), 'writer_model', ARM), 'pilot.writer_model', ARM))).toEqual([{ path: 'writer_model', word: 'model-forbidden' }]);
+  });
+
+  it.each([
+    ['answer_protocol_sha256', (): string => sha9(`${gate9.ANSWER_PROTOCOL} `), ['pilot.used.answer_protocol_sha256']],
+    ['writer_prompt_sha256', (): string => sha9(`${gate9.WRITER_PROMPT} `), ['pilot.used.writer_prompt_sha256']],
+    ['rubric_sha256', (): string => sha9(`${gate9.RUBRICS.v1} `), []],
+    ['counters_def.sha256', (): string => sha9(cj9(gate9.COUNTERS_DEF_V1.map((c: { name: string; text: string }, i: number) =>
+      (i === 0 ? { name: c.name, text: `${c.text} ` } : c)))), []],
+  ])('a signed text changed without a record change is refused: %s', (p, shaOfOld, alsoSigned) => {
+    const old = shaOfOld();
+    const r = set(draft(), p, old);
+    for (const q of alsoSigned) set(r, q, old);   // the pilot signed the same old text
+    expect(verdict(r)).toEqual([{ path: p, word: 'signed-text-mismatch' }]);
+  });
+
+  it('a step 0a entry or the pilot whose code shas differ from gate_code is code-changed; a release stamp, release-mismatch', () => {
+    const s = draft();
+    s.step0a[1].code_shas['deploy/history-replay.mjs'] = hex('older replay');
+    expect(verdict(s)).toEqual([{ path: 'step0a[1].code_shas', word: 'code-changed' }]);
+    expect(verdict(set(draft(), 'step0a[0].release_stamp', 'v0.0.899'))).toEqual([{ path: 'step0a[0].release_stamp', word: 'release-mismatch' }]);
+    const p = draft();
+    p.pilot.code_shas['ccd/history/lib.mjs'] = hex('older lib');
+    expect(verdict(p)).toEqual([{ path: 'pilot.code_shas', word: 'code-changed' }]);
+    expect(verdict(set(draft(), 'pilot.release_stamp', 'v0.0.899'))).toEqual([{ path: 'pilot.release_stamp', word: 'release-mismatch' }]);
+  });
+
+  it('checkGateCode names each mismatched file, in GATE_CODE_FILES order, and a file absent on either side is code-unmeasured, never code-changed', () => {
+    const gc = { release_tag: TAG, files: { ...CODE } };
+    expect(gate9.checkGateCode(gc, { ...CODE })).toEqual({ ok: true });
+    const files: string[] = [...gate9.GATE_CODE_FILES];
+    const two = { ...CODE, [files[3]!]: hex('x'), [files[0]!]: hex('y') };
+    expect(gate9.checkGateCode(gc, two)).toEqual({ ok: false, word: 'code-changed', mismatched: [files[0], files[3]] });
+    const absent: Record<string, string> = { ...CODE };
+    delete absent[files[2]!];
+    const gcAbsent = { release_tag: TAG, files: { ...absent } };
+    const unmeasured = { ok: false, word: 'code-unmeasured', unmeasured: [files[2]] };
+    expect(gate9.checkGateCode(gc, absent), 'absent from the measured shas').toEqual(unmeasured);
+    expect(gate9.checkGateCode(gcAbsent, { ...CODE }), 'absent from gate_code').toEqual(unmeasured);
+    expect(gate9.checkGateCode(gcAbsent, absent), 'absent on both sides').toEqual(unmeasured);
+    expect(gate9.checkGateCode(gc, { ...two, [files[2]!]: undefined } as unknown as Record<string, string>), 'unmeasured is answered before a mismatch')
+      .toEqual(unmeasured);
+    expect(gate9.GATE_REASONS).toEqual(expect.arrayContaining(['code-changed', 'code-unmeasured']));
+  });
+
+  it.each([
+    ['pilot.used.labeller', { ...gate9.LABELLER, boundaries: 'v0' }],
+    ['pilot.used.sha_min_prefix', 40],
+    ['pilot.used.writer_input', 'leaf-span'],
+    ['pilot.used.baseline_files', 'v0'],
+    ['pilot.used.writer_prompt_sha256', hex('another prompt')],
+    ['pilot.used.answer_protocol_sha256', hex('another protocol')],
+    ['pilot.writer_model', 'claude-opus-9-2'],
+  ])('a pilot section signed under other settings than part 1 is refused: %s', (p, value) => {
+    expect(verdict(set(draft(), p, value))).toEqual([{ path: p, word: 'pilot-drift' }]);
+  });
+
+  it('quiz.families inconsistent with the frozen file or with n_families is refused', () => {
+    expect(verdict(final(), { ...chainOf(draft()), frozen: { families: QUIZ.slice(1), n_questions: N_QUESTIONS } }))
+      .toEqual([{ path: 'quiz.families', word: 'quiz-mismatch' }]);
+    expect(verdict(final(), { ...chainOf(draft()), frozen: { families: QUIZ, n_questions: N_QUESTIONS - 1 } }))
+      .toEqual([{ path: 'quiz.n_questions', word: 'quiz-mismatch' }]);
+    expect(verdict(set(final(), 'quiz.n_families', QUIZ.length + 1), chainOf(draft()))).toEqual([{ path: 'quiz.n_families', word: 'quiz-mismatch' }]);
+    const dup = withQuiz(final(), [...QUIZ, QUIZ[0]!]);
+    dup.r.quiz.n_families = QUIZ.length;
+    expect(verdict(dup.r, dup.ctx)).toEqual([{ path: 'quiz.n_families', word: 'quiz-mismatch' }]);
+  });
+
+  it('a quiz family whose store and id hold a control-assigned family is refused, at the same or another generation (W2-D77)', () => {
+    const same = withQuiz(final(), [...QUIZ, CONTROL_SOLO]);
+    expect(verdict(same.r, same.ctx)).toEqual([{ path: `quiz.families[${QUIZ.length}]`, word: 'quiz-holds-control' }]);
+    const other = withQuiz(final(), [...QUIZ, SPLIT.treated]);
+    expect(verdict(other.r, other.ctx)).toEqual([{ path: `quiz.families[${QUIZ.length}]`, word: 'quiz-holds-control' }]);
+    const control = withQuiz(final(), QUIZ.slice(1));
+    expect(verdict(control.r, control.ctx), 'CONTROL: a treatment-only id passes').toEqual([]);
+  });
+
+  it('a pilot family in the quiz is refused (W2-D76)', () => {
+    const o = withQuiz(final(), [...QUIZ, PILOT[0]!]);
+    expect(verdict(o.r, o.ctx)).toEqual([{ path: `quiz.families[${QUIZ.length}]`, word: 'pilot-quiz-overlap' }]);
+  });
+
+  it('the window is planned_days long, up to one day more: 13 days and 15 days plus 1 ms are refused on a 14-day plan', () => {
+    const len = (ms: number): Err[] => verdict(set(final(), 'window.end_ms', T0 + ms), chainOf(draft()));
+    expect(len(14 * DAY)).toEqual([]);
+    expect(len(15 * DAY)).toEqual([]);
+    expect(len(13 * DAY)).toEqual([{ path: 'window', word: 'window-length' }]);
+    expect(len(14 * DAY - 1)).toEqual([{ path: 'window', word: 'window-length' }]);
+    expect(len(15 * DAY + 1)).toEqual([{ path: 'window', word: 'window-length' }]);
+  });
+
+  it('the window is measured against the draft it finalizes', () => {
+    const d21 = set(draft(), 'window_plan.planned_days', 21);
+    const errs = verdict(final(), chainOf(d21));
+    expect(errs).toContainEqual({ path: 'window', word: 'window-length' });
+    expect(errs).toContainEqual({ path: 'window_plan', word: 'draft-mismatch' });
+  });
+
+  it('a tampered arm is refused, even with its sha recomputed; a wrong sha or order is refused too (W2-D19)', () => {
+    const t = final();
+    const i = t.assignment.findIndex((a: { arm: string }) => a.arm === 'control');
+    t.assignment[i].arm = 'treatment';
+    t.assignment_sha256 = gate9.assignmentSha256(t.assignment);
+    expect(verdict(t, chainOf(draft()))).toContainEqual({ path: `assignment[${i}].arm`, word: 'assignment-mismatch' });
+    expect(verdict(set(final(), 'assignment_sha256', hex('another list')), chainOf(draft()))).toEqual([{ path: 'assignment_sha256', word: 'assignment-mismatch' }]);
+    const rev = final();
+    rev.assignment.reverse();
+    rev.assignment_sha256 = gate9.assignmentSha256(rev.assignment);
+    expect(verdict(rev, chainOf(draft()))).toEqual([{ path: 'assignment', word: 'assignment-mismatch' }]);
+  });
+
+  it('a final whose part 1 fields differ from its draft is refused', () => {
+    const f = set(final(), 'arm_model', 'claude-arm-9-2');
+    expect(verdict(f, chainOf(draft()))).toEqual([{ path: 'arm_model', word: 'draft-mismatch' }]);
+    expect(verdict(f), 'without its draft and frozen list, the final is refused, never checked on its own')
+      .toEqual([{ path: 'ctx.draft', word: 'field-missing' }, { path: 'ctx.frozen', word: 'field-missing' }]);
+  });
+
+  it('a predecessor of the other part, or one that is itself invalid, is chain-mismatch', () => {
+    expect(verdict(final(), { draft: draft(), predecessor: draft(), frozen: FROZEN })).toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
+    const bad = set(final(), 'k', 11);
+    expect(verdict(set(final(), 'finalized_ms', T0 - DAY / 2), { draft: draft(), predecessor: bad, frozen: FROZEN }))
+      .toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
+  });
+
+  it("a supersedes that is not the superseded record's sha is chain-mismatch: a draft, a first final and an amended final (W2-D25, amended)", () => {
+    const d1 = draft();
+    const d2 = set(draft(), 'supersedes', hex('not d1'));
+    expect(verdict(d2, { draft: null, predecessor: d1, frozen: null })).toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
+    expect(verdict(set(final(), 'supersedes', hex('not the draft')), chainOf(draft())), 'open --finalize supplies the draft')
+      .toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
+    const f1 = final();
+    const f2 = { ...structuredClone(f1), supersedes: gate9.recordSha256(draft()), finalized_ms: T0 - DAY / 2 };
+    expect(verdict(f2, { draft: draft(), predecessor: f1, frozen: FROZEN }), 'an amended final names its predecessor, not its draft')
+      .toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
+    expect(verdict(d1, { draft: null, predecessor: d1, frozen: null }), 'a first draft supplied a predecessor')
+      .toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
+    expect(verdict(set(draft(), 'supersedes', gate9.recordSha256(d1))), 'a superseding draft needs its predecessor supplied')
+      .toEqual([{ path: 'ctx.predecessor', word: 'field-missing' }]);
+  });
+
+  it('a null or missing validation context is refused, never read as a narrower check (W2-D25, amended)', () => {
+    expect(bare(draft())).toEqual({ ok: false, errors: [{ path: 'ctx', word: 'field-missing' }] });
+    expect(bare(draft(), null)).toEqual({ ok: false, errors: [{ path: 'ctx', word: 'field-missing' }] });
+    expect(bare(final(), { draft: draft(), frozen: FROZEN })).toEqual({ ok: false, errors: [{ path: 'ctx.predecessor', word: 'field-missing' }] });
+    expect(bare(draft(), { draft: null, predecessor: 'd1', frozen: null })).toEqual({ ok: false, errors: [{ path: 'ctx.predecessor', word: 'field-malformed' }] });
+    expect(verdict(final(), { draft: draft(), predecessor: null, frozen: null })).toEqual([{ path: 'ctx.frozen', word: 'field-missing' }]);
+    expect(verdict(final(), { draft: null, predecessor: null, frozen: FROZEN })).toEqual([{ path: 'ctx.draft', word: 'field-missing' }]);
+    expect(verdict(final(), chainOf(draft())), 'CONTROL: the whole context').toEqual([]);
+  });
+
+  it('a field outside the schema is field-unknown at its path: at the top, nested, in a step 0a entry, and a part 2 field in a draft (W2-D25, amended)', () => {
+    expect(verdict({ ...draft(), extra: 1 })).toEqual([{ path: 'extra', word: 'field-unknown' }]);
+    expect(verdict(set(draft(), 'bootstrap.extra', 1))).toEqual([{ path: 'bootstrap.extra', word: 'field-unknown' }]);
+    expect(verdict(set(draft(), 'step0a[1].note', 'x'))).toEqual([{ path: 'step0a[1].note', word: 'field-unknown' }]);
+    expect(verdict({ ...draft(), window: { start_ms: T0, end_ms: T0 + 14 * DAY } })).toEqual([{ path: 'window', word: 'field-unknown' }]);
+    expect(verdict(set(draft(), 'step0a[0].writer_init.extra', 1)), 'CONTROL: a producer\'s measured object stays open').toEqual([]);
+  });
+
+  it("the step 0a entry is W2-4's producer shape: flags_accepted a map of booleans, writer_init and judge_init non-null, box_init nullable (W2-D25, amended)", () => {
+    expect(verdict(set(draft(), 'step0a[0].writer_init', null))).toEqual([{ path: 'step0a[0].writer_init', word: 'field-missing' }]);
+    expect(verdict(set(draft(), 'step0a[1].judge_init', null))).toEqual([{ path: 'step0a[1].judge_init', word: 'field-missing' }]);
+    expect(verdict(set(draft(), 'step0a[0].box_init', { tools: [] })), 'box_init is an object or null').toEqual([]);
+    expect(verdict(set(draft(), 'step0a[0].flags_accepted', true))).toEqual([{ path: 'step0a[0].flags_accepted', word: 'field-malformed' }]);
+    expect(verdict(set(draft(), 'step0a[0].flags_accepted', { '--verbose': 'yes' })))
+      .toEqual([{ path: 'step0a[0].flags_accepted.--verbose', word: 'field-malformed' }]);
+    const short = draft();
+    delete short.step0a[1].box_init;
+    expect(verdict(short)).toEqual([{ path: 'step0a[1].box_init', word: 'field-missing' }]);
+  });
+
+  it('a step 0a entry whose store_id names no node of part 1 is value-outside-set (W2-D25, amended)', () => {
+    const STORE_C = '00000000-0000-4000-8000-0000000000c3';
+    expect(verdict(set(draft(), 'step0a[1].store_id', STORE_C))).toEqual([{ path: 'step0a[1].store_id', word: 'value-outside-set' }]);
+    const named = set(draft(), 'step0a[1].store_id', STORE_C);
+    named.nodes.push({ label: 'node-c', store_id: STORE_C });
+    expect(verdict(named), "CONTROL: the node set is the record's own nodes").toEqual([]);
+  });
+
+  it("a step 0a entry whose settings_mode differs from part 1's is value-outside-set (W2-D25, amended)", () => {
+    expect(verdict(set(draft(), 'step0a[1].settings_mode', 'fallback'))).toEqual([{ path: 'step0a[1].settings_mode', word: 'value-outside-set' }]);
+    expect(verdict(set(draft(), 'settings_mode', 'fallback')), "part 1's settings_mode binds every entry")
+      .toEqual([{ path: 'step0a[0].settings_mode', word: 'value-outside-set' }, { path: 'step0a[1].settings_mode', word: 'value-outside-set' }]);
+    const d = set(draft(), 'step0a[1].settings_mode', 'fallback');
+    expect(verdict(set(final(d), 'pilot_result.settings_mode', 'fallback'), chainOf(d)), "part 2's pilot_result.settings_mode is a later record, not an excuse")
+      .toEqual([{ path: 'step0a[1].settings_mode', word: 'value-outside-set' }, { path: 'supersedes', word: 'chain-mismatch' }]);
+    const both = set(draft(), 'settings_mode', 'fallback');
+    both.step0a.forEach((s: Rec) => { s.settings_mode = 'fallback'; });
+    expect(verdict(both), 'CONTROL: part 1 and its step 0a under one settings mode').toEqual([]);
+  });
+
+  it("a flag step 0a measured rejected is flag-rejected, whatever part 1's settings mode (W2-D25, amended)", () => {
+    expect(verdict(set(draft(), 'step0a[0].flags_accepted', { '--output-format': true, '--verbose': false })))
+      .toEqual([{ path: 'step0a[0].flags_accepted.--verbose', word: 'flag-rejected' }]);
+    /** Part 1 and every step 0a entry under one settings mode, so the binding holds and only the flags are read. */
+    const underMode = (mode: string, flags: Record<string, boolean>): Rec => {
+      const r = set(draft(), 'settings_mode', mode);
+      r.step0a.forEach((s: Rec) => { s.settings_mode = mode; });
+      return set(r, 'step0a[1].flags_accepted', flags);
+    };
+    expect(verdict(underMode('restricted', { '--restricted': false, '--verbose': true })))
+      .toEqual([{ path: 'step0a[1].flags_accepted.--restricted', word: 'flag-rejected' }]);
+    expect(verdict(underMode('fallback', { '--restricted': false, '--verbose': true })), 'the fallback excuses no flag, --restricted included')
+      .toEqual([{ path: 'step0a[1].flags_accepted.--restricted', word: 'flag-rejected' }]);
+    expect(verdict(underMode('fallback', { '--setting-sources': true, '--settings': false })))
+      .toEqual([{ path: 'step0a[1].flags_accepted.--settings', word: 'flag-rejected' }]);
+    expect(verdict(underMode('fallback', { '--setting-sources': true, '--settings': true })), 'CONTROL: the fallback, every flag accepted').toEqual([]);
+  });
+
+  describe('W2-D90: after window start a final may only append amendments', () => {
+    // f1 is built per call, never at collection: final() calls this task's recordSha256, which the red run lacks.
+    const f1 = (): Rec => final();
+    const amend = (over: Rec, at = T0 + 2 * DAY): Rec => ({ ...f1(), supersedes: gate9.recordSha256(f1()), finalized_ms: at, ...over });
+    const ctx = (): Ctx => ({ draft: draft(), predecessor: f1(), frozen: FROZEN });
+    const forced = amendment('forced-act', 'node-a', T0 + DAY, { act: 'reparse' });
+
+    it('an appended amendment after window start is accepted', () => {
+      expect(verdict(amend({ amendments: [forced] }), ctx())).toEqual([]);
+    });
+
+    it('any other change after window start is refused, at the boundary instant too', () => {
+      const moved = amend({ amendments: [forced], window: { start_ms: T0, end_ms: T0 + 14 * DAY + 3_600_000 } });
+      expect(verdict(moved, ctx())).toEqual([{ path: 'window', word: 'post-start-change' }]);
+      const atStart = amend({ amendments: [forced], window: { start_ms: T0, end_ms: T0 + 14 * DAY + 3_600_000 } }, T0);
+      expect(verdict(atStart, ctx())).toEqual([{ path: 'window', word: 'post-start-change' }]);
+      const before = amend({ window: { start_ms: T0 + DAY, end_ms: T0 + 15 * DAY } }, T0 - 1);
+      expect(verdict(before, ctx()), 'CONTROL: before window start a final is superseded wholesale').toEqual([]);
+    });
+
+    it('a rewritten earlier amendment is refused', () => {
+      const f2 = amend({ amendments: [forced] });
+      const f3 = { ...structuredClone(f2), supersedes: gate9.recordSha256(f2), finalized_ms: T0 + 3 * DAY,
+        amendments: [amendment('forced-act', 'node-a', T0 + DAY, { act: 'prune --apply' }), { ...forced, at_ms: T0 + 2 * DAY }] };
+      expect(verdict(f3, { draft: draft(), predecessor: f2, frozen: FROZEN })).toEqual([{ path: 'amendments', word: 'post-start-change' }]);
+    });
+
+    it('an amendment kind outside AMENDMENT_KINDS is refused', () => {
+      expect(verdict(amend({ amendments: [{ ...forced, kind: 'window-move' }] }), ctx())).toEqual([{ path: 'amendments[0].kind', word: 'amendment-kind' }]);
+    });
+
+    it('a version move without a re-pilot sha is refused, and with one it is accepted', () => {
+      const move = amendment('version-move', 'node-b', T0 + DAY, { claude_code_version: '9.2.0' });
+      expect(verdict(amend({ amendments: [move] }), ctx())).toEqual([{ path: 'amendments[0].detail.repilot_sha256', word: 'version-move-unpiloted' }]);
+      const piloted = amendment('version-move', 'node-b', T0 + DAY, { claude_code_version: '9.2.0', repilot_sha256: hex('repilot') });
+      expect(verdict(amend({ amendments: [piloted] }), ctx())).toEqual([]);
+    });
+
+    it("an amendment whose detail_sha256 is not its detail's sha256 is refused (W2-D25, amended)", () => {
+      expect(verdict(amend({ amendments: [{ ...forced, detail_sha256: hex('another detail') }] }), ctx()))
+        .toEqual([{ path: 'amendments[0].detail_sha256', word: 'amendment-detail-mismatch' }]);
+      expect(verdict(amend({ amendments: [{ ...forced, detail: { act: 'prune --apply' } }] }), ctx()), 'a detail changed under its old sha')
+        .toEqual([{ path: 'amendments[0].detail_sha256', word: 'amendment-detail-mismatch' }]);
+    });
+  });
+
+  it('a malformed final predecessor is chain-mismatch and nothing throws, before and after window start (P-2)', () => {
+    const f1 = final();
+    const windowless = structuredClone(f1);
+    delete windowless.window;
+    const under = (pred: Rec, at: number): Err[] => verdict({ ...structuredClone(f1), supersedes: gate9.recordSha256(pred), finalized_ms: at },
+      { draft: draft(), predecessor: pred, frozen: FROZEN });
+    expect(under(windowless, T0 + 2 * DAY), 'a windowless final, after window start').toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
+    expect(under(windowless, T0 - DAY / 2), 'a windowless final, before window start').toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
+    expect(under({ part: 'final' }, T0 + 2 * DAY), 'a bare final').toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
+    const noAmendments = structuredClone(f1);
+    delete noAmendments.amendments;
+    expect(under(noAmendments, T0 + 2 * DAY), 'a final without its amendments').toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
+  });
+
+  it('an assignment that lists one family twice is assignment-mismatch at assignment, never a throw (P-3)', () => {
+    const f = final();
+    f.assignment.push({ ...f.assignment[0] });
+    f.assignment_sha256 = gate9.assignmentSha256(f.assignment);
+    expect(verdict(f, chainOf(draft()))).toEqual([{ path: 'assignment', word: 'assignment-mismatch' }]);
+  });
+
+  it('a frozen list whose entry is no family is field-malformed at ctx.frozen, never read (P-4)', () => {
+    const bad = (item: unknown): Err[] => verdict(final(), { draft: draft(), predecessor: null, frozen: { families: [...QUIZ, item as Ref], n_questions: N_QUESTIONS } });
+    const want = [{ path: 'ctx.frozen', word: 'field-malformed' }];
+    expect(bad(null)).toEqual(want);
+    expect(bad('a-family')).toEqual(want);
+    expect(bad([QUIZ[0]])).toEqual(want);
+    expect(bad({ store_id: STORE_A, ccrc_id: 'sess-x' })).toEqual(want);
+    expect(bad({ store_id: STORE_A, ccrc_id: 'sess-x', generation: 7 })).toEqual(want);
+    expect(bad({ store_id: STORE_A, ccrc_id: 'sess-x', generation: gen(9) }), 'CONTROL: a well-formed extra family is a quiz-mismatch, not a malformed context')
+      .toEqual([{ path: 'quiz.families', word: 'quiz-mismatch' }]);
+  });
+
+  describe('edge pins: the comparisons the cases above leave at their middle', () => {
+    it('a quiz family sharing a pilot family\'s store and id at another generation is no overlap (W2-D76 keys by generation)', () => {
+      const o = withQuiz(final(), [...QUIZ, { ...PILOT[0]!, generation: gen(101) }]);
+      expect(verdict(o.r, o.ctx)).toEqual([]);
+    });
+
+    it('a quiz family whose id is a control family\'s on another store holds no control (W2-D77 keys by store and id)', () => {
+      const elsewhere = CONTROL_SOLO.store_id === STORE_A ? STORE_B : STORE_A;
+      const o = withQuiz(final(), [...QUIZ, { store_id: elsewhere, ccrc_id: CONTROL_SOLO.ccrc_id, generation: gen(301) }]);
+      expect(verdict(o.r, o.ctx)).toEqual([]);
+    });
+
+    it('a version move whose re-pilot sha is not 64 lowercase hex is unpiloted, and dropping an earlier amendment is post-start-change', () => {
+      const forced = amendment('forced-act', 'node-a', T0 + DAY, { act: 'reparse' });
+      const f1 = final();
+      const f2 = { ...structuredClone(f1), supersedes: gate9.recordSha256(f1), finalized_ms: T0 + 2 * DAY, amendments: [forced] };
+      const ctx2: Ctx = { draft: draft(), predecessor: f1, frozen: FROZEN };
+      for (const bad of ['not-a-sha', hex('repilot').toUpperCase(), hex('repilot').slice(1), 7]) {
+        const move = amendment('version-move', 'node-b', T0 + DAY, { repilot_sha256: bad });
+        expect(verdict({ ...structuredClone(f2), amendments: [move] }, ctx2), String(bad))
+          .toEqual([{ path: 'amendments[0].detail.repilot_sha256', word: 'version-move-unpiloted' }]);
+      }
+      const f3 = { ...structuredClone(f2), supersedes: gate9.recordSha256(f2), finalized_ms: T0 + 3 * DAY, amendments: [] };
+      expect(verdict(f3, { draft: draft(), predecessor: f2, frozen: FROZEN })).toEqual([{ path: 'amendments', word: 'post-start-change' }]);
+    });
+
+    it('a record that is no object, or has no usable part, is refused at once', () => {
+      expect(bare(null, CTX0)).toEqual({ ok: false, errors: [{ path: '', word: 'field-malformed' }] });
+      expect(bare([], CTX0)).toEqual({ ok: false, errors: [{ path: '', word: 'field-malformed' }] });
+      expect(bare({}, CTX0)).toEqual({ ok: false, errors: [{ path: 'part', word: 'field-missing' }] });
+      expect(bare({ part: 'other' }, CTX0)).toEqual({ ok: false, errors: [{ path: 'part', word: 'constant-mismatch' }] });
+    });
+
+    it('a final\'s frozen list must be an array and a safe-integer count, and a draft ignores the frozen list altogether', () => {
+      const frozen = (f: unknown): Err[] => verdict(final(), { draft: draft(), predecessor: null, frozen: f as Ctx['frozen'] });
+      const want = [{ path: 'ctx.frozen', word: 'field-malformed' }];
+      expect(frozen({ families: QUIZ, n_questions: '64' })).toEqual(want);
+      expect(frozen({ families: QUIZ, n_questions: 64.5 })).toEqual(want);
+      expect(frozen({ families: 'x', n_questions: N_QUESTIONS })).toEqual(want);
+      expect(frozen({})).toEqual(want);
+      expect(verdict(draft(), { draft: null, predecessor: null, frozen: {} as Ctx['frozen'] })).toEqual([]);
+      expect(verdict(draft(), { draft: null, predecessor: null, frozen: { families: [null], n_questions: 'x' } as unknown as Ctx['frozen'] })).toEqual([]);
+    });
+
+    it('a chain of three drafts passes: a predecessor is checked with its own link taken as checked', () => {
+      const d1 = draft();
+      const d2 = set(draft(), 'supersedes', gate9.recordSha256(d1));
+      d2.window_plan.planned_days = 21;
+      const d3 = set(draft(), 'supersedes', gate9.recordSha256(d2));
+      d3.window_plan.planned_days = 28;
+      expect(verdict(d3, { draft: null, predecessor: d2, frozen: null })).toEqual([]);
+    });
+
+    it('a link that fails two ways is one chain-mismatch at supersedes (a word is listed once per path)', () => {
+      const wrongSha = set(final(), 'supersedes', hex('not the predecessor'));
+      expect(verdict(wrongSha, { draft: draft(), predecessor: draft(), frozen: FROZEN })).toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
+    });
+  });
+
+  it('every word the validator spells is a GATE_REASONS word, and refuse throws on any other', () => {
+    const src = readFileSync(path.join(ROOT, 'deploy', 'history-gate.mjs'), 'utf8');
+    const section = src.slice(src.indexOf('// ── W2-3 Task 9:'));
+    const words = [...section.matchAll(/refuse\([^;]*?'([a-z0-9-]+)'\)/g)].map((m) => m[1]!);
+    expect(words.length).toBeGreaterThan(20);
+    for (const w of new Set(words)) expect(gate9.GATE_REASONS, w).toContain(w);
+    expect(section).toContain('if (!GATE_REASONS.includes(word)) throw');
+  });
+});
