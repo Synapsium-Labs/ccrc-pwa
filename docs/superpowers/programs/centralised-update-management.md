@@ -2128,6 +2128,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         and the question to the operator stands. v0.0.329 (#693) and v0.0.330 (#695) followed, unapplied. STATUS: newest
         v0.0.330, stable v0.0.328, intent dev/auto=off, backups fleet 159M/server 2211M, disk free fleet 209G/work
         volume 96G/server 31G.
+      - 08:55: unchanged, boxes still differ as recorded; v0.0.331 (#696) followed, unapplied. STATUS: newest
+        v0.0.331, stable v0.0.328, intent dev/auto=off, backups fleet 159M/server 2211M, disk free fleet 209G/work
+        volume 96G/server 31G.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
