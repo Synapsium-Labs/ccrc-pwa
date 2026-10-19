@@ -748,6 +748,16 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - The worker owes authorized corrections and truthful evidence, or a concrete Task-3 contract proposal where
     the approved seam cannot meet the existing requirements. A new tip needs a new independent review. Tasks 1-4
     remain NOT accepted; Task 5 and Task 7 retain their gates. End the turn for actual mail; no polling.
+- **2026-10-19 15:05 UTC - Task 3 contract question handed to the operator; no option approved.**
+  - The worker reports that the approved outgoing-only promotion seam cannot satisfy both the no-pane-keystroke
+    and newer-incoming clear-race controls. Its structured question offers an epoch merge or deferral to the keep.
+    These are worker claims/options, not independently verified implementation or an approved contract.
+  - The notification was acknowledged once and the question released through the server to the operator. This is
+    a new interface/read/write or tradeoff decision, not authority the coordinator can derive from the earlier
+    plan approval. No option was selected; the wider promotion contract remains unapproved.
+  - Task 3 awaits that ruling. Independent residue/evidence corrections may continue under the existing fix-round
+    brief; their permission does not extend to the blocked contract. A corrected handoff still needs a new review.
+    Tasks 1-4 remain unaccepted, with Task 5 and Task 7 gated. No redispatch, clear or additional routing change.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -813,8 +823,10 @@ was approved on 2026-10-15** at `3d8e5559b11ed4f8243911c08b105b39e6a1e26b`. Its 
 and remains unchanged. Review 630 closed DONE at 14:32 UTC on 2026-10-19 with the original report fingerprint
 accepted. The 14:46 rulings require intent-preservation fixes, a real half-pair mutation owner and truthful
 committed evidence; they do not authorize the widened promotion contract. At 14:50 UTC the server accepted the
-worker effort change to xhigh, work 308's retreat to working and one fix-round mail. Await actual worker mail;
-do not redispatch. Required server CI at the reviewed tip is red for an inherited README-size guard;
+worker effort change to xhigh, work 308's retreat to working and one fix-round mail. At 15:05 UTC Task 3's new
+contract question was handed to the operator without selecting an option; independent residue/evidence fixes may
+continue. Await the ruling and actual worker mail; do not redispatch. Required server CI at the reviewed tip is
+red for an inherited README-size guard;
 its 714-file selection is established, not a full-suite waiver. Tasks 1-4 remain four settled items; Task 5 is pending.
 - **Its FIRST commit is wave 4's residue:** review 305 F1(a), the qualified doctor PASS line, I1, `s6_inert`'s
   staleness, the zombie child, the paused log line, baseline B's non-zero check and the per-task minors.
