@@ -7320,3 +7320,103 @@ describe("the lane's kind is derived in one place, shared/roster.ts (D-5517)", (
     expect(holders(/\brosterKindOf\(/)).toEqual(['server/src/server.ts', 'shared/roster.ts']);
   });
 });
+
+// D-5849 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0b; ARCH-40 (#775); spec 2026-10-19
+// §2.1 rule (f), §5.1 rule 3). APPENDED, because this file is cited by line. One writer per fact, for the two switches
+// whose writer set is ALREADY at its target, so each set may only shrink (a pin on a fact not yet at target would be a
+// freeze; those land with the series that reaches it, the feed archive's with C1e).
+//   - `reclaim-paused`: one writer, ccd's `reclaim-pause` verb (`cmd_reclaim_pause` in `ccd/ccd`), which the server
+//     reaches only through its CCD_ARGV row. No TS or .mjs file writes it.
+//   - `mail-disabled`: hand-only ("removable only by a human at a terminal", `ccd/ccrc`). Nothing in the tree writes it.
+// The O13 describe's `writes` is block-local to that describe, so this one defines its own classifiers, and they also
+// follow a shell variable that holds the path (`local marker="$REG/reclaim-paused"` … `touch -- "$marker"`), which is
+// how the one writer spells it. A writer is named `file:function` (`file:(top level)` outside a function). KNOWN
+// WIDTH: a name assembled from pieces, a variable assigned in one function and written in another, and an fs call
+// split over lines are not seen.
+// The import sits here, not at the head, so the append moves no cited line (ESM hoists it either way).
+import { markerDefinitions } from './consolidationCensus.js';
+describe('one writer per fact (ARCH-40): the switches whose writer set is already at target (D-5849)', () => {
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const WRITE_VERB = '(?:touch|mv|cp|ln|rm|rmdir|mkdir|install|tee|truncate)';
+  /** The functions of one bash text that write `name`'s path, directly or through a variable assigned from it. */
+  const bashWriters = (text: string, name: string): string[] => {
+    const out = new Set<string>();
+    let fn = '(top level)';
+    let vars: string[] = [];
+    for (const raw of text.split('\n')) {
+      const open = /^([A-Za-z_][\w-]*)\s*\(\)\s*\{/.exec(raw);
+      if (open) { fn = open[1]!; vars = []; }
+      if (isBashComment(raw)) continue;
+      const l = raw.replace(/\d?>\s*\/dev\/null|>&\d/g, '');
+      for (const m of l.matchAll(new RegExp(`\\b([A-Za-z_]\\w*)=["']?[^\\s"';]*${esc(name)}\\b`, 'g'))) vars.push(m[1]!);
+      const target = [`[^\\s"'<>|;&]*${esc(name)}\\b`, ...vars.map((v) => `\\$\\{?${v}\\}?(?![\\w])`)].join('|');
+      if (new RegExp(`>{1,2}\\s*["']?(?:${target})`).test(l)
+        || new RegExp(`(?:^|[\\s;&|({])${WRITE_VERB}\\s[^;&|]*?["']?(?:${target})`).test(l)) out.add(fn);
+      if (/^}\s*$/.test(raw)) { fn = '(top level)'; vars = []; }
+    }
+    return [...out];
+  };
+  /** A TS or .mjs code line that writes `name`'s path: a file-changing fs call naming the literal or its constant. */
+  const tsWrites = (line: string, name: string, consts: readonly string[]): boolean =>
+    new RegExp(`\\b(?:writeFile|appendFile|rename|copyFile|symlink|link|truncate|open|mkdir|rm|unlink|cp)(?:Sync)?\\s*\\([^;]*(?:${
+      [esc(name), ...consts.map((c) => `\\b${c}\\b`)].join('|')})`).test(line);
+  /** The constants that hold `name` (`const X = 'name'`), from the census module's own query. */
+  const constsOf = (name: string): string[] =>
+    markerDefinitions(name).map((s) => /\bconst\s+([A-Za-z_$][\w$]*)/.exec(s.text)![1]!);
+  const writersOf = (name: string): string[] => {
+    const out: string[] = [];
+    for (const f of BASH) for (const fn of bashWriters(readFileSync(f, 'utf8'), name)) out.push(`${rel(f)}:${fn}`);
+    const consts = constsOf(name);
+    for (const f of [...ALL, ...ALL_MJS]) {
+      if (stallCode(f).split('\n').some((l) => tsWrites(l, name, consts))) out.push(rel(f));
+    }
+    return out.sort();
+  };
+
+  it('CONTROL (fixture): the classifiers see the verb, a second writer, a write through a variable, and pass over a read', () => {
+    const verb = [
+      'cmd_reclaim_pause() {',
+      '  local marker="$REG/reclaim-paused"',
+      '  touch -- "$marker" || die "could not raise it"',
+      '}',
+      'cmd_reap() {',
+      '  [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \\',
+      '    || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }',
+      '  # touch "$REG/reclaim-paused" is the operator\'s, not this function\'s',
+      '}',
+    ].join('\n');
+    expect(bashWriters(verb, 'reclaim-paused')).toEqual(['cmd_reclaim_pause']);
+    expect(bashWriters(`${verb}\ncmd_other() {\n  : > "$REG/reclaim-paused"\n}`, 'reclaim-paused'))
+      .toEqual(['cmd_reclaim_pause', 'cmd_other']);
+    expect(bashWriters('cmd_x() {\n  local m="$REG/reclaim-paused"\n  rm -f -- "$m"\n}', 'reclaim-paused')).toEqual(['cmd_x']);
+    expect(bashWriters('cmd_y() {\n  touch "$REG/mail-disabled"\n}', 'mail-disabled')).toEqual(['cmd_y']);
+    expect(bashWriters('cmd_z() {\n  [[ -e "$REG/mail-disabled" ]] && return 0\n}', 'mail-disabled')).toEqual([]);
+    expect(tsWrites("writeFileSync(join(reg, 'reclaim-paused'), '');", 'reclaim-paused', ['RECLAIM_PAUSE_MARKER'])).toBe(true);
+    expect(tsWrites('await writeFile(path.join(reg, RECLAIM_PAUSE_MARKER), "");', 'reclaim-paused', ['RECLAIM_PAUSE_MARKER'])).toBe(true);
+    expect(tsWrites('if (names.includes(RECLAIM_PAUSE_MARKER)) return;', 'reclaim-paused', ['RECLAIM_PAUSE_MARKER'])).toBe(false);
+    expect(constsOf('reclaim-paused')).toEqual(['RECLAIM_PAUSE_MARKER']);
+    expect(constsOf('mail-disabled')).toEqual(['MAIL_DISABLED_MARKER', 'MAIL_DISABLED_MARKER']);
+  });
+
+  it("reclaim-paused: one writer, ccd's reclaim-pause verb", () => {
+    expect(writersOf('reclaim-paused')).toEqual(['ccd/ccd:cmd_reclaim_pause']);
+  });
+
+  it('reclaim-paused: the server reaches the verb only through its CCD_ARGV row', () => {
+    const verb = /(['"])reclaim-pause\1/;
+    const holders = ALL.filter((f) => rel(f).startsWith('server/src/') && verb.test(stallCode(f))).map(rel).sort();
+    expect(holders).toEqual(['server/src/ccdargv.ts']);
+    const lines = stallCode(path.join(ccrcRoot, 'server/src/ccdargv.ts')).split('\n');
+    const at = lines.findIndex((l) => /^export const CCD_ARGV\s*=\s*\{/.test(l));
+    const end = lines.findIndex((l, i) => i > at && /^\}/.test(l));
+    expect(at, 'ccdargv.ts declares no CCD_ARGV').toBeGreaterThan(-1);
+    const uses = lines.flatMap((l, i) => (verb.test(l) ? [i] : []));
+    expect(uses.length).toBe(1);
+    expect(uses[0]!, 'the reclaim-pause argv is spelled outside CCD_ARGV').toBeGreaterThan(at);
+    expect(uses[0]!).toBeLessThan(end);
+  });
+
+  it('mail-disabled: hand-only, no writer in the tree', () => {
+    expect(writersOf('mail-disabled')).toEqual([]);
+  });
+});
