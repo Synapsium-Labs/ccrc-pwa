@@ -1683,6 +1683,37 @@ export const MIGRATIONS: readonly string[] = [
   );
   ALTER TABLE asks ADD COLUMN corrected INTEGER NOT NULL DEFAULT 0;
   `,
+  // ── 26: user_version 25 -> 26 ─────────────────────────────────────────────
+  // D-5516 (accounts-connect spec 2026-10-18 §3.6, plan Task A7): `account_events`, the session-only audit of every
+  // account act. Its ONE writer is `AccountAudit.write` (`server/src/accounts/audit.ts`), which refuses any value
+  // outside the closed vocabularies and grammars before the INSERT, so no column can carry a secret, a code, a URL, a
+  // key hint, a key hash or an email. `at` is epoch ms; `actor` is `<device label> <8 hex of idHash>`, never an IP.
+  // `laneId` and `provider` are NULL only for the laneless acts (`step-up-locked`, `management-remove`,
+  // `ceiling-lower`); `method`, `code` and `keyName` (a minted key's fixed NAME, D-5555) are NULL when the act has
+  // none; `fleetIdentity` is the node-id the act ran against, NULL when it was not known. Rows older than 365 days are
+  // swept (`AccountAudit.sweep`), which the index on `at` serves. v1 ships no reader (spec §3.6).
+  //
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 26` takes rule 3 (it warns, reads
+  // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE account_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    at            INTEGER NOT NULL,
+    actor         TEXT    NOT NULL,
+    act           TEXT    NOT NULL,
+    laneId        TEXT,
+    provider      TEXT,
+    method        TEXT,
+    outcome       TEXT    NOT NULL CHECK (outcome IN ('ok', 'refused', 'failed', 'unknown')),
+    code          TEXT,
+    keyName       TEXT,
+    fleetIdentity TEXT
+  );
+  CREATE INDEX account_events_by_at ON account_events(at);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

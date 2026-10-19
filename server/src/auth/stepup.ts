@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { StepUpAnswer, StepUpStart } from '../../../shared/api.js';
 import { STEP_UP_FRESH_MS, isStepUpFresh, stepUpFreshUntil } from '../../../shared/accounts.js';
 import { refuseRoute } from '../refuse.js';
+import { actorOf, type AccountAudit } from '../accounts/audit.js';
 import { parseCookies, SESSION_COOKIE } from './cookie.js';
 import type { PasskeyStore } from './credentials.js';
 import type { SecretState } from './gate.js';
@@ -49,8 +50,8 @@ import { ChallengeStore, verifyAssertion } from './webauthn.js';
 /** Every step-up route lives under this prefix, and {@link StepUp.noStore} keys on it. */
 export const STEP_UP_PATH_PREFIX = '/api/auth/step-up/';
 
-/** What a lock reports to its one listener: the session, and the device label its row carries. A7 writes the
- *  `step-up-locked` audit row from it. */
+/** What a lock reports to its one listener: the session, and the device label its row carries. The
+ *  `step-up-locked` audit row is written beside it, through {@link StepUpDeps.audit} (A7). */
 export interface StepUpLockedEvent {
   idHash: string;
   device: string | null;
@@ -71,8 +72,12 @@ export interface StepUpDeps {
   rpId: string;
   /** The device label of the session presenting `req` (the gate's `device`), for {@link onStepUpLocked}. */
   device: (req: FastifyRequest) => string | null;
-  /** Called once, when a session's step-up budget is spent. A7 adds the audit row here. */
+  /** Called once, when a session's step-up budget is spent. */
   onStepUpLocked?: (event: StepUpLockedEvent) => void;
+  /** The account audit (D-5516, A7): the lock writes one `step-up-locked` row, with no lane, through it. */
+  audit?: Pick<AccountAudit, 'write'>;
+  /** The node-id the fleet stands at for that row, or `null` when it is not known (`knownFleetIdentity`). */
+  fleetIdentity?: () => string | null;
   /** The clock. A parameter so a test can stand at the window's edge. */
   now?: () => number;
   /** The budget. Built here when absent; a parameter for tests. */
@@ -121,7 +126,14 @@ export function createStepUp(deps: StepUpDeps): StepUp {
     console.warn(`ccrc-server: step-up refused for session ${idHash.slice(0, 8)} (${why})`);
     if (limiter.fail(idHash)) {
       console.warn(`ccrc-server: step-up-locked for session ${idHash.slice(0, 8)}`);
-      deps.onStepUpLocked?.({ idHash, device: deps.device(req) });
+      const device = deps.device(req);
+      // THE AUDIT ROW (D-5512, D-5516): the lock is an account-security fact, recorded with the session's actor and
+      // no lane. The row's answer is not awaited for anything: the refusal below is sent either way.
+      deps.audit?.write({
+        act: 'step-up-locked', laneId: null, provider: null, outcome: 'refused', code: 'step-up-locked',
+        fleetIdentity: deps.fleetIdentity?.() ?? null, actor: actorOf(device, idHash),
+      });
+      deps.onStepUpLocked?.({ idHash, device });
     }
     return refuseRoute(reply, 'step-up-required', { verdict: 'wrong' });
   };
