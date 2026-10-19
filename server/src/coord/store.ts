@@ -7682,7 +7682,10 @@ export class CoordStore {
   correctWithMail<T>(rowKind: 'ask' | 'approval', id: number, queue: () => T): T {
     return tx(this.db, () => {
       const queued = queue();
-      this.db.prepare(`UPDATE ${rowKind === 'ask' ? 'asks' : 'approvals'} SET corrected = 1 WHERE id = ?`).run(id);
+      // Two literal statements, never a table named by interpolation (`delegation-wave3`'s closed scope census reads
+      // every UPDATE's table off its text).
+      if (rowKind === 'ask') this.db.prepare('UPDATE asks SET corrected = 1 WHERE id = ?').run(id);
+      else this.db.prepare('UPDATE approvals SET corrected = 1 WHERE id = ?').run(id);
       return queued;
     });
   }
