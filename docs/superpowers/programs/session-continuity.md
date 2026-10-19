@@ -758,6 +758,20 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - Task 3 awaits that ruling. Independent residue/evidence corrections may continue under the existing fix-round
     brief; their permission does not extend to the blocked contract. A corrected handoff still needs a new review.
     Tasks 1-4 remain unaccepted, with Task 5 and Task 7 gated. No redispatch, clear or additional routing change.
+- **2026-10-19 17:29 UTC - Task 4 parser-contract question handed to the operator; no option selected.**
+  - The worker reports that valid non-kill notification shapes outside the approved strict envelope keep the
+    stage-6 direct-notification reading partial, preventing a measured zero for Task 5. This is a remedial-review
+    claim, not independently verified coverage or a finding accepted by this coordinator. The offered choices
+    are to widen the parser now or report the limitation without changing it; neither was selected here.
+  - The question also discloses an out-of-brief read-only live-transcript count. No transcript content was
+    supplied or accessed by this coordinator. That departure does not authorize further live-transcript access
+    or disclosure, and its aggregate result is not accepted as independent implementation evidence.
+  - The notification was acknowledged once and the held question released to the operator. A separate worker
+    boundary notice was accepted: no parser widening is authorized by this coordinator; preserve partial or
+    unmeasured results rather than asserting zero. Existing independent corrections may continue, using fixture
+    HOMEs for tests. No whole-run hold, redispatch, clear, routing change or terminal-item mutation was requested.
+  - No operator answer to this question was observed. A corrected handoff still needs a NEW independent review;
+    Tasks 1-4 remain unaccepted and Tasks 5 and 7 remain gated. No merge, rollout, restart, arming or settings act.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -824,9 +838,10 @@ and remains unchanged. Review 630 closed DONE at 14:32 UTC on 2026-10-19 with th
 accepted. The 14:46 rulings require intent-preservation fixes, a real half-pair mutation owner and truthful
 committed evidence; they do not authorize the widened promotion contract. At 14:50 UTC the server accepted the
 worker effort change to xhigh, work 308's retreat to working and one fix-round mail. At 15:05 UTC Task 3's new
-contract question was handed to the operator without selecting an option; independent residue/evidence fixes may
-continue. Await the ruling and actual worker mail; do not redispatch. Required server CI at the reviewed tip is
-red for an inherited README-size guard;
+contract question was handed to the operator without a coordinator selection. At 17:29 UTC Task 4's parser-contract
+question was also handed over, with no option selected; its out-of-brief live-transcript count remains unverified.
+No fresh operator ruling was observed here. Independent authorized corrections may continue; await actual rulings
+and worker mail, without redispatch. Required server CI at the reviewed tip is red for an inherited README-size guard;
 its 714-file selection is established, not a full-suite waiver. Tasks 1-4 remain four settled items; Task 5 is pending.
 - **Its FIRST commit is wave 4's residue:** review 305 F1(a), the qualified doctor PASS line, I1, `s6_inert`'s
   staleness, the zombie child, the paused log line, baseline B's non-zero check and the per-task minors.
