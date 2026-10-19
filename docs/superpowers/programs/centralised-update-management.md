@@ -2187,6 +2187,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         backups 2578M, the new snapshot 312M. v0.0.341 (#709) to v0.0.345 (#713) followed, unapplied. STATUS: fleet
         and server v0.0.340, newest v0.0.345, stable v0.0.328, intent dev/auto=off, backups fleet 161M/server 2578M,
         disk free fleet 210G/work volume 88G/server 30G, no anomalies.
+      - 13:50: the 13:35 sample, in part. Over 15 consecutive checkpoint writes from 13:35 to 13:52, one per
+        pass, the checkpoint's `revision` rose by exactly 1 each time (1378 to 1393) and `appliedJournalSequence` by
+        5 to 38. So no pass persisted extra re-encodes. Re-encodes in memory are not visible this way. The blackout
+        sample was lost: Claude Code's memory-pressure reaper stopped both background jobs while this session was
+        idle (the fleet box had 4 GiB available of 30). Per its rule, they are not restarted without the operator's
+        word. Mail 6690 to the broker's coordinator.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
