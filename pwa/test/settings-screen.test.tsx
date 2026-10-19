@@ -22,7 +22,9 @@ import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, UPDATE_GATE_CAP } from '../../sh
 import { LOOPBACK_HOSTS } from '../../shared/base-url';
 import {
   AUTO_LABELS,
+  AUTO_NOTES,
   autoGateMissing,
+  CHANNEL_NOTES,
   CHANNEL_SENTENCES,
   NOTIFY_LABELS,
   SettingsScreen,
@@ -52,6 +54,12 @@ import {
   sortReleases,
   verifiedAt,
 } from '../src/screens/updates';
+import {
+  CATALOGUE_CHECK_MINUTES, CATALOGUE_EXPLAIN_TEXT, NOTIFICATIONS_TEXT, STALL_LEVEL_NOTE, STALL_WORDS, UPDATES_TEXT,
+  nodeRollbackNote, stallQuietBoundsText,
+} from '../src/screens/settingsText';
+import { ackNote } from '../src/fleet/updateAck';
+import { MOVE_REQUESTED_TEXT } from '../src/fleet/UpdateMoveSheet';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { ApiError, api, apiErrorText, updateErrorText } from '../src/lib/api';
@@ -195,7 +203,8 @@ const T7_ASKED = 'GitHub was asked too recently — try again in a few minutes.'
 const T7_NOT_CONFIGURED = 'This box has no update control plane — it runs without a coordination database.';
 const T7_UNREAD = 'The update plane could not be read — the screen tries again every minute.';
 const T7_STALE = 'The latest read failed — this is the last answer that landed.';
-const T7_GATE_NOTE = 'Auto-install needs the rollback gate on every node — not yet on: ';
+/** The gate note's lead (settings spec §5.1); the labels follow, then a full stop (`autoGateNoteText`). */
+const T7_GATE_NOTE = 'Auto-install needs every node to run a ccrc with the update gate. Not yet: ';
 /** Mount the screen (beside a toast host) over one answer; resolves once the Updates section has its controls. */
 const t7Mount = async (view: UpdatesView): Promise<HTMLElement> => {
   vi.spyOn(api, 'updates').mockResolvedValue(view);
@@ -203,6 +212,25 @@ const t7Mount = async (view: UpdatesView): Promise<HTMLElement> => {
   const region = screen.getByRole('region', { name: 'Updates' });
   await within(region).findByRole('button', { name: 'Check now' });
   return region;
+};
+
+/** The result line a control's server action wrote (settings spec §6.4, D-5507): the element DIRECTLY after the
+ *  control, `role="status"`, polite, holding the sentence the toast held, amber exactly for a refusal, and no toast.
+ *  Waits for it, so a case reads it the way it read the toast. */
+const lineUnder = async (control: () => Element, text: string, tone: 'answer' | 'refusal'): Promise<HTMLElement> => {
+  const line = await waitFor(() => {
+    const next = control().nextElementSibling as HTMLElement | null;
+    expect(next, 'the line sits directly under its control').not.toBeNull();
+    expect(next).toHaveTextContent(text);
+    return next as HTMLElement;
+  });
+  expect(line).toHaveAttribute('role', 'status');
+  expect(line).toHaveAttribute('aria-live', 'polite');
+  expect(line).toHaveClass('settings-result');
+  if (tone === 'refusal') expect(line, 'a refusal is amber').toHaveClass('settings-catalogue--amber');
+  else expect(line, 'an answer is not amber').not.toHaveClass('settings-catalogue--amber');
+  expect(document.querySelector('.toast'), 'not a toast: the control is still on screen').toBeNull();
+  return line;
 };
 
 describe('SettingsScreen — Updates: helpers (W3 Task 7)', () => {
@@ -380,19 +408,18 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     await waitFor(() => expect(screen.getByRole('group', { name: 'Channel' })).not.toBeDisabled());
   });
 
-  it('a write whose answer is unreadable toasts that it is unconfirmed; a refusal toasts the update sentence as an error', async () => {
+  it('a write whose answer is unreadable says, under the control, that it is unconfirmed; a refusal says the update sentence there, amber', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(t7View());
     const set = vi.spyOn(api, 'setUpdateIntent')
       .mockResolvedValueOnce('unreadable')
       .mockRejectedValueOnce(new ApiError(503, { ok: false, error: 'journal-unwritable', detail: 'the intent journal could not be written — see the server log' }));
     render(<><ToastHost /><SettingsScreen /></>);
     fireEvent.click(await screen.findByRole('radio', { name: CHANNEL_SENTENCES.dev }));
-    expect(await screen.findByText("Saved — the server's answer could not be read; the screen will re-check.")).toBeInTheDocument();
-    expect(document.querySelector('.toast--error')).toBeNull();
-    await waitFor(() => expect(screen.getByRole('group', { name: 'Channel' })).not.toBeDisabled());
+    const channel = (): Element => screen.getByRole('group', { name: 'Channel' });
+    await lineUnder(channel, "Saved — the server's answer could not be read; the screen will re-check.", 'answer');
+    await waitFor(() => expect(channel()).not.toBeDisabled());
     fireEvent.click(screen.getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
-    await waitFor(() => expect(document.querySelector('.toast--error'))
-      .toHaveTextContent('The server cannot write its intent journal — nothing was changed.'));
+    await lineUnder(channel, 'The server cannot write its intent journal — nothing was changed.', 'refusal');
     expect(set).toHaveBeenCalledTimes(2);
   });
 
@@ -407,8 +434,8 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     for (const m of AUTO_MODES.filter((mode) => mode !== 'off')) {
       expect(within(auto).getByRole('radio', { name: AUTO_LABELS[m] })).toBeDisabled();
     }
-    expect(within(region).getByText(`${T7_GATE_NOTE}fleet, server`)).toHaveClass('settings-note');
-    expect(auto).toHaveAccessibleDescription(`${T7_GATE_NOTE}fleet, server`);
+    expect(within(region).getByText(`${T7_GATE_NOTE}fleet, server.`)).toHaveClass('settings-note');
+    expect(auto).toHaveAccessibleDescription(`${T7_GATE_NOTE}fleet, server.`);
     // Only the non-off auto choices are gated: the channel and Check now stay live.
     expect(within(region).getByRole('group', { name: 'Channel' })).not.toBeDisabled();
     expect(within(region).getByRole('button', { name: 'Check now' })).not.toBeDisabled();
@@ -430,7 +457,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     const auto = within(region).getByRole('group', { name: 'Auto-install' });
     expect(within(auto).getByRole('radio', { name: AUTO_LABELS.stable })).toBeDisabled();
     expect(within(auto).getByRole('radio', { name: AUTO_LABELS.off })).not.toBeDisabled();
-    expect(within(region).getByText(`${T7_GATE_NOTE}server`)).toBeInTheDocument();
+    expect(within(region).getByText(`${T7_GATE_NOTE}server.`)).toBeInTheDocument();
   });
 
   it('enables auto-install when every node carries the word, and a tap sends {scope: "*", auto}', async () => {
@@ -438,7 +465,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     const region = await t7Mount(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: T7_GATED })] }));
     const auto = within(region).getByRole('group', { name: 'Auto-install' });
     expect(auto).not.toBeDisabled();
-    expect(within(region).queryByText(/not yet on:/)).toBeNull();
+    expect(within(region).queryByText(/Not yet:/)).toBeNull();
     fireEvent.click(within(auto).getByRole('radio', { name: AUTO_LABELS.stable }));
     await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
     expect(set).toHaveBeenCalledWith({ scope: FLEET_SCOPE, auto: 'stable' });
@@ -449,7 +476,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
       new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_SERVER_ID, 'gone-node-id'] }));
     const region = await t7Mount(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: T7_GATED })] }));
     fireEvent.click(within(region).getByRole('radio', { name: AUTO_LABELS.channel }));
-    expect(await within(region).findByText(`${T7_GATE_NOTE}server, gone-node-id`)).toHaveClass('settings-note');
+    expect(await within(region).findByText(`${T7_GATE_NOTE}server, gone-node-id.`)).toHaveClass('settings-note');
     expect(document.querySelector('.toast--error')).toBeNull();
   });
 
@@ -466,12 +493,12 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
       new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
     render(<><ToastHost /><SettingsScreen /></>);
     const region = await screen.findByRole('region', { name: 'Updates' });
-    await within(region).findByText(`${T7_GATE_NOTE}fleet`);
+    await within(region).findByText(`${T7_GATE_NOTE}fleet.`);
     fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
     // The write's own reload fetches `after` — a fresh, distinct poll where
     // the fleet node now carries update-gate — and supersedes the stale 409
     // list rather than outliving it.
-    await waitFor(() => expect(within(region).queryByText(/not yet on:/)).toBeNull());
+    await waitFor(() => expect(within(region).queryByText(/Not yet:/)).toBeNull());
   });
 
   it('supersedes fully, not by intersection — a 409 naming only [A] still leaves B named once a later poll clears A but not B (fix round 2, item 1)', async () => {
@@ -490,10 +517,10 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
       new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
     render(<><ToastHost /><SettingsScreen /></>);
     const region = await screen.findByRole('region', { name: 'Updates' });
-    await within(region).findByText(`${T7_GATE_NOTE}fleet, server`);
+    await within(region).findByText(`${T7_GATE_NOTE}fleet, server.`);
     fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
-    await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}server`)).toBeInTheDocument());
-    expect(within(region).queryByText(`${T7_GATE_NOTE}fleet`)).toBeNull();
+    await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}server.`)).toBeInTheDocument());
+    expect(within(region).queryByText(`${T7_GATE_NOTE}fleet.`)).toBeNull();
   });
 
   it("the 409's list stands until a genuinely LATER poll lands, even when every real poll answer is a FRESH object (fix round 2, item 1)", async () => {
@@ -514,15 +541,15 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
       new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
     render(<><ToastHost /><SettingsScreen /></>);
     const region = await screen.findByRole('region', { name: 'Updates' });
-    await within(region).findByText(`${T7_GATE_NOTE}fleet, server`);
+    await within(region).findByText(`${T7_GATE_NOTE}fleet, server.`);
     fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
     // The 409 landed; its own reload is in flight but has not resolved yet —
     // the route's list stands, unfiltered (fleet only, not "fleet, server").
-    await within(region).findByText(`${T7_GATE_NOTE}fleet`);
+    await within(region).findByText(`${T7_GATE_NOTE}fleet.`);
     // A genuinely fresh, distinct poll object lands: fleet now carries the
     // word, server still does not.
     afterDeferred.resolve(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: ['verify', 'node-id', 'floor'] })] }));
-    await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}server`)).toBeInTheDocument());
+    await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}server.`)).toBeInTheDocument());
   });
 
   it("a poll landing MID-WRITE is not a LATER poll — the refusal is stamped with the view live when the 409 LANDS, never the one closed over at the tap (W5 review 161, F-A)", async () => {
@@ -544,12 +571,12 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     vi.spyOn(api, 'setUpdateIntent').mockReturnValue(write.promise);
     render(<><ToastHost /><SettingsScreen /></>);
     const region = await screen.findByRole('region', { name: 'Updates' });
-    await within(region).findByText(`${T7_GATE_NOTE}fleet`);   // tapView: fleet lacks the gate
+    await within(region).findByText(`${T7_GATE_NOTE}fleet.`);   // tapView: fleet lacks the gate
     fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));   // the tap
     // A routine poll lands WHILE the write is still in flight, before the 409
     // — a fresh, distinct object naming a DIFFERENT missing node.
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
-    await within(region).findByText(`${T7_GATE_NOTE}server`);   // midWriteView landed: server lacks it now
+    await within(region).findByText(`${T7_GATE_NOTE}server.`);   // midWriteView landed: server lacks it now
     // The 409 lands. Stamping the stale TAP-time view (`fleet` missing) would
     // compare unequal to the CURRENT view (`server` missing) and read as
     // already superseded, silently falling back to midWriteView's own
@@ -557,28 +584,28 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     // AT LANDING time makes the two compare equal, so the route's own list —
     // naming fleet, never server — stands.
     write.reject(new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
-    await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}fleet`)).toBeInTheDocument());
-    expect(within(region).queryByText(`${T7_GATE_NOTE}server`)).toBeNull();
+    await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}fleet.`)).toBeInTheDocument());
+    expect(within(region).queryByText(`${T7_GATE_NOTE}server.`)).toBeNull();
   });
 
-  it('a 409 auto-needs-rollback-gate naming an EMPTY node list falls back to the route\'s own toast, not an empty "not yet on:" note', async () => {
+  it('a 409 auto-needs-rollback-gate naming an EMPTY node list falls back to the route\'s own line, under Auto-install, not an empty "Not yet:" note', async () => {
     vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
       new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [] }));
     const region = await t7Mount(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: T7_GATED })] }));
     fireEvent.click(within(region).getByRole('radio', { name: AUTO_LABELS.channel }));
-    await waitFor(() => expect(document.querySelector('.toast--error'))
-      .toHaveTextContent('Auto-install needs the rollback gate on every node, and at least one does not carry it yet.'));
-    expect(within(region).queryByText(/not yet on:/)).toBeNull();
+    await lineUnder(() => within(region).getByRole('group', { name: 'Auto-install' }),
+      'Auto-install needs the rollback gate on every node, and at least one does not carry it yet.', 'refusal');
+    expect(within(region).queryByText(/Not yet:/)).toBeNull();
   });
 
-  it('a 409 auto-needs-rollback-gate naming only NON-STRING ids falls back to the route\'s own toast', async () => {
+  it('a 409 auto-needs-rollback-gate naming only NON-STRING ids falls back to the route\'s own line, under Auto-install', async () => {
     vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
       new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [42] }));
     const region = await t7Mount(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: T7_GATED })] }));
     fireEvent.click(within(region).getByRole('radio', { name: AUTO_LABELS.channel }));
-    await waitFor(() => expect(document.querySelector('.toast--error'))
-      .toHaveTextContent('Auto-install needs the rollback gate on every node, and at least one does not carry it yet.'));
-    expect(within(region).queryByText(/not yet on:/)).toBeNull();
+    await lineUnder(() => within(region).getByRole('group', { name: 'Auto-install' }),
+      'Auto-install needs the rollback gate on every node, and at least one does not carry it yet.', 'refusal');
+    expect(within(region).queryByText(/Not yet:/)).toBeNull();
   });
 
   it('Check now refreshes once and re-polls; a 429 says GitHub was asked too recently', async () => {
@@ -1220,7 +1247,7 @@ describe('SettingsScreen — the node inventory: helpers', () => {
   });
 
   it("spells spec §13's Darwin sentence", () => {
-    expect(MACOS_UNMANAGED_TEXT).toBe('macOS: not centrally managed');
+    expect(MACOS_UNMANAGED_TEXT).toBe('Not updated from here. Update this Mac with ccrc on the Mac itself.');
   });
 
   it('resolveDetailLine: qualified only while lastOkAt is null or the node is unreachable, otherwise verbatim (wave 8 item F1, D-3590)', () => {
@@ -1478,7 +1505,7 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     expect(within(rowOf(list, T9_NODE_B)).getByRole('button', { name: 'Ack' })).toBeEnabled();
   });
 
-  it("a refused ack is the route's sentence in an error toast — the route stays the authority", async () => {
+  it("a refused ack says the route's sentence under the Ack, amber — the route stays the authority", async () => {
     // A race: the poll read the row idle with its request, and by the tap the route found it busy.
     const busy = new ApiError(409, { ok: false, error: 'busy', detail: 'applying' });
     vi.spyOn(api, 'ackUpdateNode').mockRejectedValue(busy);
@@ -1487,17 +1514,15 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     expect(button).toBeEnabled();
     fireEvent.click(button);
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Withdraw the request' }));
-    const t = await screen.findByText(updateErrorText(busy), { selector: '.toast' });
-    expect(t).toHaveClass('toast--error');
+    await lineUnder(() => rowOf(list, T9_NODE_A).querySelector('.settings-node-actions')!, updateErrorText(busy), 'refusal');
   });
 
-  it('an ack whose answer could not be read says so, and does not claim failure', async () => {
+  it('an ack whose answer could not be read says so under the Ack, and does not claim failure', async () => {
     vi.spyOn(api, 'ackUpdateNode').mockResolvedValue('unreadable');
     const { list } = await renderNodes([t9Node({ update: { state: 'reverted', target: null, startedAt: null, detail: null } })]);
     fireEvent.click(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Ack' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));
-    const t = await screen.findByText(ACK_UNREADABLE_TEXT, { selector: '.toast' });
-    expect(t).not.toHaveClass('toast--error');
+    await lineUnder(() => rowOf(list, T9_NODE_A).querySelector('.settings-node-actions')!, ACK_UNREADABLE_TEXT, 'answer');
   });
 
   it('renders a label and a report.detail carrying markup as literal text', async () => {
@@ -1658,7 +1683,7 @@ const t10PushBrowser = (): void => {
 const t10Settle = async (): Promise<void> => {
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 };
-const t10Group = (): Promise<HTMLElement> => screen.findByRole('group', { name: 'Release notifications' });
+const t10Group = (): Promise<HTMLElement> => screen.findByRole('group', { name: 'Announce new releases' });
 
 describe('SettingsScreen — notifications: helpers', () => {
   it('unarmedExposure: the gate reported off AND a non-loopback hostname — both, and nothing else', () => {
@@ -1697,10 +1722,10 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
     const group = await t10Group();
     const radios = within(group).getAllByRole('radio');
     expect(radios.map((r) => r.getAttribute('value'))).toEqual([...NOTIFY_MODES]);
-    expect(within(group).getByRole('radio', { name: 'stable only' })).toBeChecked();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable })).toBeChecked();
     // The node row (listed first, notify 'off') is not what the fleet setting reads.
-    expect(within(group).getByRole('radio', { name: 'off' })).not.toBeChecked();
-    expect(within(group).getByRole('radio', { name: 'on my channel' })).not.toBeChecked();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.off })).not.toBeChecked();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.channel })).not.toBeChecked();
   });
 
   it('a tap writes {scope: \'*\', notify} once, re-polls, and keeps the stored choice checked while the poll lags', async () => {
@@ -1708,13 +1733,13 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
     const write = vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(t10Answer('stable', T10_T0 + 1));
     render(<SettingsScreen />);
     const group = await t10Group();
-    fireEvent.click(within(group).getByRole('radio', { name: 'stable only' }));
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable }));
     await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
     expect(write).toHaveBeenCalledTimes(1);
     expect(write).toHaveBeenCalledWith({ scope: FLEET_SCOPE, notify: 'stable' });
     await t10Settle();
     // The re-poll still answered the OLD row (setAt T0 < the answer's T0 + 1): the route's answer is shown.
-    expect(within(group).getByRole('radio', { name: 'stable only' })).toBeChecked();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable })).toBeChecked();
   });
 
   it('once the poll carries a row at least as new as the answer, the poll is what is checked', async () => {
@@ -1724,8 +1749,8 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
     vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(t10Answer('stable', T10_T0 + 1));
     render(<SettingsScreen />);
     const group = await t10Group();
-    fireEvent.click(within(group).getByRole('radio', { name: 'stable only' }));
-    await waitFor(() => expect(within(group).getByRole('radio', { name: 'off' })).toBeChecked());
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable }));
+    await waitFor(() => expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.off })).toBeChecked());
   });
 
   it('a poll row whose setAt EQUALS the answer\'s setAt is already caught up (>=, never >)', async () => {
@@ -1738,8 +1763,8 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
     vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(t10Answer('stable', T10_T0 + 1));
     render(<SettingsScreen />);
     const group = await t10Group();
-    fireEvent.click(within(group).getByRole('radio', { name: 'stable only' }));
-    await waitFor(() => expect(within(group).getByRole('radio', { name: 'off' })).toBeChecked());
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable }));
+    await waitFor(() => expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.off })).toBeChecked());
   });
 
   it('a write in flight disables the three radios, so a second tap cannot race the first', async () => {
@@ -1747,10 +1772,10 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
     const write = vi.spyOn(api, 'setUpdateIntent').mockReturnValue(new Promise(() => {}));
     render(<SettingsScreen />);
     const group = await t10Group();
-    fireEvent.click(within(group).getByRole('radio', { name: 'off' }));
-    await waitFor(() => expect(within(group).getByRole('radio', { name: 'off' })).toBeDisabled());
-    expect(within(group).getByRole('radio', { name: 'off' })).toBeChecked();
-    fireEvent.click(within(group).getByRole('radio', { name: 'stable only' }));
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
+    await waitFor(() => expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.off })).toBeDisabled());
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.off })).toBeChecked();
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable }));
     expect(write).toHaveBeenCalledTimes(1);
   });
 
@@ -1759,9 +1784,9 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
     vi.spyOn(api, 'setUpdateIntent').mockResolvedValue('unreadable');
     render(<><ToastHost /><SettingsScreen /></>);
     const group = await t10Group();
-    fireEvent.click(within(group).getByRole('radio', { name: 'off' }));
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
     expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
-    expect(within(group).getByRole('radio', { name: 'on my channel' })).toBeChecked();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.channel })).toBeChecked();
   });
 
   // fix round 1 (mutation-table finding): a 2xx answer that IS readable as JSON
@@ -1777,9 +1802,9 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
       { ok: true, intent: { ...t10Intent(), notify: 'loud' as NotifyMode }, epoch: 2 });
     render(<><ToastHost /><SettingsScreen /></>);
     const group = await t10Group();
-    fireEvent.click(within(group).getByRole('radio', { name: 'off' }));
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
     expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
-    expect(within(group).getByRole('radio', { name: 'on my channel' })).toBeChecked();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.channel })).toBeChecked();
   });
 
   it('a non-number setAt in the answer is not stored — unconfirmed, not a guess (typeof setAt guard)', async () => {
@@ -1788,9 +1813,9 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
       { ok: true, intent: { ...t10Intent(), notify: 'off', setAt: 'soon' as unknown as number }, epoch: 2 });
     render(<><ToastHost /><SettingsScreen /></>);
     const group = await t10Group();
-    fireEvent.click(within(group).getByRole('radio', { name: 'off' }));
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
     expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
-    expect(within(group).getByRole('radio', { name: 'on my channel' })).toBeChecked();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.channel })).toBeChecked();
   });
 
   it('an answer with no intent field at all is not stored — unconfirmed, not a guess (the ?? null guard)', async () => {
@@ -1798,21 +1823,21 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
     vi.spyOn(api, 'setUpdateIntent').mockResolvedValue({ ok: true } as unknown as IntentWriteAnswer);
     render(<><ToastHost /><SettingsScreen /></>);
     const group = await t10Group();
-    fireEvent.click(within(group).getByRole('radio', { name: 'off' }));
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
     expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
-    expect(within(group).getByRole('radio', { name: 'on my channel' })).toBeChecked();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.channel })).toBeChecked();
   });
 
-  it('a refusal toasts the update route\'s own sentence and puts the stored choice back', async () => {
+  it('a refusal says the update route\'s own sentence under the control and puts the stored choice back', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
     vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
       new ApiError(503, { ok: false, error: 'journal-unwritable', detail: 'the intent journal could not be written — see the server log' }));
     render(<><ToastHost /><SettingsScreen /></>);
     const group = await t10Group();
-    fireEvent.click(within(group).getByRole('radio', { name: 'stable only' }));
-    expect(await screen.findByText('The server cannot write its intent journal — nothing was changed.')).toBeInTheDocument();
-    expect(within(group).getByRole('radio', { name: 'on my channel' })).toBeChecked();
-    expect(within(group).getByRole('radio', { name: 'stable only' })).not.toBeChecked();
+    fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable }));
+    await lineUnder(() => group, 'The server cannot write its intent journal — nothing was changed.', 'refusal');
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.channel })).toBeChecked();
+    expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable })).not.toBeChecked();
   });
 
   it('renders the section while /api/updates is pending and on a box with no control plane — with no release radios', async () => {
@@ -1820,13 +1845,13 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
     render(<SettingsScreen />);
     expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
     expect(screen.getByText('This browser cannot receive Web Push.')).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: 'Release notifications' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Announce new releases' })).toBeNull();
     cleanup();
     vi.spyOn(api, 'updates').mockRejectedValue(new ApiError(501, { ok: false, error: 'not-configured' }));
     render(<SettingsScreen />);
     await screen.findByText('This box has no update control plane — it runs without a coordination database.');
     expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: 'Release notifications' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Announce new releases' })).toBeNull();
   });
 
   it('reuses the literal NotificationBell where the browser can do Web Push', async () => {
@@ -2405,8 +2430,8 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(within(s).getByText(STALL_NEXT_TEXT.waitsOn)).toBeInTheDocument();
     expect(within(s).getByText(STALL_STAGE_TEXT.alerts.gate)).toBeInTheDocument();
     expect(within(s).getByText('2 h (built-in)')).toBeInTheDocument();
-    expect(within(s).getByText('30 min to 12 h')).toBeInTheDocument();
-    expect(within(s).getByText(STALL_QUIET_NOTE)).toBeInTheDocument();
+    expect(within(s).getByText('Built-in: 2 h · Range: 30 min to 12 h')).toBeInTheDocument();
+    expect(within(s).getByText(STALL_WORDS.quietLine)).toBeInTheDocument();
     expect(within(s).getByText('Last 48 h')).toBeInTheDocument();
     expect(within(s).getByText(`${STALL_NOTICE_TEXT.checks} — 1 sent · 2 shadow`)).toBeInTheDocument();
     expect(within(s).getByText(`${STALL_NOTICE_TEXT.pushes} — 4 sent · 0 shadow`)).toBeInTheDocument();
@@ -2592,12 +2617,13 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(write).toHaveBeenNthCalledWith(3, { level: 'alert', confirm: 'key-2' });
   });
 
-  it('P2: a refused write toasts the server\'s detail, re-reads, and leaves the stored radio checked', async () => {
+  it('P2: a refused write says the server\'s detail under the level, amber, re-reads, and leaves the stored radio checked', async () => {
     const { read } = await mount(swView());
     vi.spyOn(api, 'setStallWatch').mockRejectedValue(
       new ApiError(400, { ok: false, error: 'bad-request', detail: 'quietMs must be a 30-minute step' }));
     fireEvent.click(radio(STALL_LEVEL_TEXT.all.label));
-    expect(await screen.findByText('Nothing was changed: quietMs must be a 30-minute step')).toBeInTheDocument();
+    await lineUnder(() => within(section()).getByRole('group', { name: STALL_SECTION_TEXT.level }),
+      'Nothing was changed: quietMs must be a 30-minute step', 'refusal');
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
     expect(radio(STALL_LEVEL_TEXT.all.label)).not.toBeChecked();
     expect(radio(`${STALL_FOLLOW_LABEL} (they say: ${STALL_LEVEL_TEXT.check.label})`)).toBeChecked();
@@ -2642,12 +2668,12 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   });
 
-  it('P2 (D-4045): a gateway 502 says the choice may or may not have been saved, plain, never "Nothing was changed", and re-reads', async () => {
+  it('P2 (D-4045): a gateway 502 says, under the level, the choice may or may not have been saved, plain, never "Nothing was changed", and re-reads', async () => {
     const { read } = await mount(swView());
     vi.spyOn(api, 'setStallWatch').mockRejectedValue(new ApiError(502, 'Bad Gateway'));
     fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
-    const t = await screen.findByText(fillStallText(STALL_CONFIRM_TEXT.unconfirmed, { detail: 'request failed (502)' }), { selector: '.toast' });
-    expect(t, 'a plain toast, as the unanswered line').not.toHaveClass('toast--error');
+    await lineUnder(() => within(section()).getByRole('group', { name: STALL_SECTION_TEXT.level }),
+      fillStallText(STALL_CONFIRM_TEXT.unconfirmed, { detail: 'request failed (502)' }), 'answer');
     expect(screen.queryByText(/^Nothing was changed/)).toBeNull();
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
     expect(radio(STALL_LEVEL_TEXT.log.label)).not.toBeChecked();
@@ -3111,5 +3137,332 @@ describe('SettingsScreen — Ack is confirmed (D-5507)', () => {
     const nodeTones = [...nodes.querySelector<HTMLElement>(`li[data-node-id="${T9_NODE_A}"] .settings-node-actions`)!
       .querySelectorAll<HTMLElement>('.settings-move')].map((b) => b.textContent);
     expect(nodeTones).toEqual(['Update', 'Roll back', 'Ack']);
+  });
+});
+
+// ── Settings Task R1c: the words, the notes and the result lines (D-5503's words, D-5507's results) ──────────────
+describe('SettingsScreen — the words, the notes and the result lines (settings Task R1c)', () => {
+  afterEach(() => { Reflect.deleteProperty(document, 'visibilityState'); });
+
+  const updatesView = (over: Partial<UpdatesView> = {}): UpdatesView => ({
+    catalogue: { lastOkAt: T8_T0, lastError: null },
+    releases: [t8Release('v0.0.10')],
+    nodes: [t8Node({ current: t8Stamp('v0.0.9') }), t8Server({ current: t8Stamp('v0.0.9') })],
+    intent: [{ scope: FLEET_SCOPE, channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: T8_T0, setBy: 'test' }],
+    ...over,
+  });
+  const mountUpdates = async (v: UpdatesView = updatesView()): Promise<HTMLElement> => {
+    vi.spyOn(api, 'updates').mockResolvedValue(v);
+    render(<><ToastHost /><SettingsScreen /></>);
+    const region = screen.getByRole('region', { name: 'Updates' });
+    await within(region).findByRole('button', { name: 'Check now' });
+    return region;
+  };
+
+  it("the labels read spec §11.2's words: auto-install, announce, channel and the macOS row", () => {
+    expect(AUTO_LABELS).toEqual({ off: 'Off', stable: 'On the Stable channel only', channel: 'On any channel' });
+    expect(NOTIFY_LABELS).toEqual({ channel: "Every release on the fleet's channel", stable: 'Stable releases only', off: 'None' });
+    expect(CHANNEL_SENTENCES).toEqual({ stable: 'Stable', dev: 'Dev' });
+    expect(CHANNEL_NOTES).toEqual({ stable: 'Releases promoted only after they have baked.', dev: 'Every merge, minutes after it lands.' });
+    expect(AUTO_NOTES).toEqual({
+      off: 'Nothing installs until you press Install or Update.',
+      stable: 'Installs each new stable release by itself. While the channel is Dev, nothing installs by itself.',
+      channel: 'Installs each new release on the chosen channel by itself, Dev included.',
+    });
+    expect(NOTIFICATIONS_TEXT.announceLegend).toBe('Announce new releases');
+  });
+
+  it('each Channel and Auto-install option carries its note under it, as its description, outside its name', async () => {
+    const region = await mountUpdates();
+    for (const c of ['stable', 'dev'] as const) {
+      const r = within(region).getByRole('radio', { name: CHANNEL_SENTENCES[c] });
+      expect(r).toHaveAccessibleDescription(CHANNEL_NOTES[c]);
+      const note = within(region).getByText(CHANNEL_NOTES[c]);
+      expect(note).toHaveClass('settings-note');
+      expect(r.closest('label')!.nextElementSibling, 'the note sits under its option').toBe(note);
+    }
+    for (const m of AUTO_MODES) {
+      expect(within(region).getByRole('radio', { name: AUTO_LABELS[m] })).toHaveAccessibleDescription(AUTO_NOTES[m]);
+    }
+  });
+
+  it("Updates says what each control does and when you would use it (spec §5.1)", async () => {
+    const region = await mountUpdates();
+    for (const line of [
+      UPDATES_TEXT.channelPurpose, UPDATES_TEXT.channelWhen, UPDATES_TEXT.autoPurpose, UPDATES_TEXT.autoWhen,
+      UPDATES_TEXT.checkNowNote, UPDATES_TEXT.checkNowWhen, UPDATES_TEXT.nodesLead, CATALOGUE_EXPLAIN_TEXT,
+    ]) expect(within(region).getByText(line), line).toHaveClass('settings-note');
+  });
+
+  it("the catalogue line's interval is the server's own CATALOGUE_POLL_INTERVAL_MS", () => {
+    const src = readFileSync(path.join(import.meta.dirname, '..', '..', 'server', 'src', 'update', 'catalogue.ts'), 'utf8');
+    const m = /export const CATALOGUE_POLL_INTERVAL_MS = (\d+) \* 60_000;/.exec(src);
+    expect(m, 'the server still spells the interval in minutes').not.toBeNull();
+    expect(CATALOGUE_CHECK_MINUTES).toBe(Number(m![1]));
+    expect(CATALOGUE_EXPLAIN_TEXT).toBe(`The server checks GitHub for new releases every ${m![1]} minutes.`);
+  });
+
+  it("See what's new carries its note and when-line while a release is waiting", async () => {
+    const region = await mountUpdates(updatesView({
+      nodes: [
+        t8Node({ current: t8Stamp('v0.0.9'), highestVersion: 'v0.0.9', desiredTag: 'v0.0.10' }),
+        t8Server({ current: t8Stamp('v0.0.9'), highestVersion: 'v0.0.9', desiredTag: 'v0.0.10' }),
+      ],
+      releases: [t8Release('v0.0.10'), t8Release('v0.0.9')],
+    }));
+    expect(within(region).getByRole('button', { name: "See what's new" })).toBeInTheDocument();
+    expect(within(region).getByText(UPDATES_TEXT.whatsNewNote)).toHaveClass('settings-note');
+    expect(within(region).getByText(UPDATES_TEXT.whatsNewWhen)).toHaveClass('settings-note');
+  });
+
+  it('a node row notes its Update and Roll back where each is offered', async () => {
+    const region = await mountUpdates(updatesView({
+      nodes: [t8Node({ current: t8Stamp('v0.0.10'), previousVersion: 'v0.0.9' }), t8Server({ current: t8Stamp('v0.0.10') })],
+      releases: [t8Release('v0.0.10'), t8Release('v0.0.9')],
+    }));
+    const row = region.querySelector<HTMLElement>(`li[data-node-id="${T8_NODE_A}"]`)!;
+    expect(within(row).getByText(nodeRollbackNote('v0.0.9'))).toHaveClass('settings-note');
+    expect(within(row).queryByText(/^Moves this node to /), 'no Update offered, so no Update note').toBeNull();
+  });
+
+  it("Ack's note follows its branch, and every branch adds when to use it", () => {
+    const failed = t9Node({ update: { state: 'failed', target: 'v0.0.10', startedAt: T9_T0, detail: null } });
+    const request = t9Node({ request: { tag: 'v0.0.10', kind: 'update', at: T9_T0 } });
+    const refusal = t9Node();
+    const refused = [t9Release('v0.0.10', { refused: [{ by: T9_NODE_A, at: T9_T0 }] } as Partial<ReleaseWire>)];
+    const after = ' Use it after you have fixed what made the move fail.';
+    expect(ackNote(failed, [])).toBe(`Clears this node's failed move, so it returns to idle.${after}`);
+    expect(ackNote(request, [])).toBe(`Withdraws the request standing on this node (update to v0.0.10).${after}`);
+    expect(ackNote(refusal, refused)).toBe(`Makes this node forget the releases it refused (v0.0.10).${after}`);
+    expect(ackNote(t9Node(), []), 'no Ack, no note').toBeNull();
+  });
+
+  it('Check now: a refusal says its sentence under the button, amber, not a toast', async () => {
+    vi.spyOn(api, 'refreshUpdates').mockRejectedValue(new ApiError(503, { ok: false, error: 'journal-unwritable' }));
+    const region = await mountUpdates();
+    const check = within(region).getByRole('button', { name: 'Check now' });
+    fireEvent.click(check);
+    await lineUnder(() => check, updateErrorText(new ApiError(503, { ok: false, error: 'journal-unwritable' })), 'refusal');
+  });
+
+  it('a move whose 202 lands says "Requested. The nodes report back within a minute." under the control that opened it', async () => {
+    vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [T8_NODE_A, T8_NODE_B], skipped: [] });
+    const region = await mountUpdates();
+    const row = region.querySelector<HTMLElement>('li[data-tag="v0.0.10"]')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update v0.0.10' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(MOVE_REQUESTED_TEXT).toBe('Requested. The nodes report back within a minute.');
+    await lineUnder(() => region.querySelector('li[data-tag="v0.0.10"] .settings-release-actions')!, MOVE_REQUESTED_TEXT, 'answer');
+  });
+
+  it('a confirm closed while the request was in flight still toasts', async () => {
+    let answer!: (v: { ok: true; requested: string[]; skipped: [] }) => void;
+    vi.spyOn(api, 'applyUpdate').mockReturnValue(new Promise((r) => { answer = r; }));
+    const region = await mountUpdates();
+    const row = region.querySelector<HTMLElement>('li[data-tag="v0.0.10"]')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update v0.0.10' }));
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await act(async () => { answer({ ok: true, requested: [T8_NODE_A, T8_NODE_B], skipped: [] }); });
+    expect(await screen.findByText(MOVE_REQUESTED_TEXT, { selector: '.toast' })).toBeInTheDocument();
+    expect(region.querySelector('.settings-result'), 'the sheet that asked is gone, so no line').toBeNull();
+  });
+
+  it('Announce new releases carries its purpose and when-line; This browser says what push does', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(updatesView());
+    render(<SettingsScreen />);
+    const group = await screen.findByRole('group', { name: NOTIFICATIONS_TEXT.announceLegend });
+    const section = group.closest('section')!;
+    expect(within(section).getByText(NOTIFICATIONS_TEXT.announcePurpose)).toHaveClass('settings-note');
+    expect(within(section).getByText(NOTIFICATIONS_TEXT.announceWhen)).toHaveClass('settings-note');
+    expect(within(section).getByText(NOTIFICATIONS_TEXT.browserPurpose)).toHaveClass('settings-note');
+    expect(within(section).getByText(NOTIFICATIONS_TEXT.browserWhen)).toHaveClass('settings-note');
+  });
+
+  // ── Stall watch (spec §5.4) ──
+  const swSection = (): HTMLElement =>
+    screen.getByRole('heading', { name: STALL_SECTION_TEXT.title, hidden: true }).closest('section')!;
+  const swMount = async (first: StallWatchView): Promise<HTMLElement> => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'stallWatch').mockResolvedValue(first);
+    render(<><ToastHost /><SettingsScreen /></>);
+    return within(swSection()).findByRole('group', { name: STALL_SECTION_TEXT.level });
+  };
+  const swRadio = (name: string): HTMLElement => within(swSection()).getByRole('radio', { name });
+
+  it('every stall level has a note, and the notes are the plan\'s table', () => {
+    expect(STALL_LEVEL_NOTE).toEqual({
+      off: 'Nothing runs.',
+      log: 'Records what it would send, and sends nothing.',
+      check: 'Mails a check to a worker quiet past the quiet time.',
+      alert: 'Tells its coordinator, then you, when a check goes unanswered, and tells you about other long waits.',
+      deliver: 'Delivers mail to a session whose main turn has ended, while its background work runs.',
+      all: 'Adds checks for workers that died, froze or failed, and for stuck mail.',
+    });
+    expect(Object.keys(STALL_LEVEL_NOTE)).toEqual(STALL_LEVELS);
+    expect(STALL_WORDS.followNote).toBe('Uses the arming files set by hand on the fleet box, as before this setting existed.');
+  });
+
+  it('the level reads its purpose, its lead, and each option with its note as its description', async () => {
+    const group = await swMount(swView());
+    expect(within(swSection()).getByText(STALL_WORDS.purpose)).toHaveClass('settings-note');
+    expect(within(group).getByText(STALL_WORDS.levelLead)).toHaveClass('settings-note');
+    for (const level of STALL_LEVELS) {
+      expect(swRadio(STALL_LEVEL_TEXT[level].label)).toHaveAccessibleDescription(STALL_LEVEL_NOTE[level]);
+    }
+    expect(swRadio(`${STALL_FOLLOW_LABEL} (they say: ${STALL_LEVEL_TEXT.check.label})`), 'the default keeps its live clause')
+      .toHaveAccessibleDescription(STALL_WORDS.followNote);
+  });
+
+  it('the full sentence shows for the checked or focused option only', async () => {
+    const group = await swMount(swView({ chosen: swChosen({ level: 'log' }) }));
+    const full = Array.from(swSection().querySelectorAll<HTMLElement>('[data-stall-full]'));
+    expect(full.map((el) => el.textContent), 'one sentence, the checked option\'s').toEqual([STALL_LEVEL_TEXT.log.does]);
+    expect(group).toHaveAccessibleDescription(STALL_LEVEL_TEXT.log.does);
+    for (const level of STALL_LEVELS.filter((l) => l !== 'log')) {
+      expect(within(group).queryByText(STALL_LEVEL_TEXT[level].does), level).toBeNull();
+    }
+  });
+
+  it('the full sentence shows for the focused option while the keyboard moves', async () => {
+    const group = await swMount(swView({ chosen: swChosen({ level: 'log' }) }));
+    const full = (): HTMLElement[] => Array.from(swSection().querySelectorAll<HTMLElement>('[data-stall-full]'));
+    act(() => { swRadio(STALL_LEVEL_TEXT.deliver.label).focus(); });
+    expect(full().map((el) => el.textContent)).toEqual([STALL_LEVEL_TEXT.deliver.does]);
+    act(() => { swRadio(STALL_LEVEL_TEXT.all.label).focus(); });
+    expect(full().map((el) => el.textContent)).toEqual([STALL_LEVEL_TEXT.all.does]);
+    act(() => { (document.activeElement as HTMLElement).blur(); });
+    expect(full().map((el) => el.textContent), 'back to the checked one once the focus leaves').toEqual([STALL_LEVEL_TEXT.log.does]);
+    expect(group).toBeInTheDocument();
+  });
+
+  it("Quiet time is one line, its bounds from the wire, and its select capped at 320 px", async () => {
+    await swMount(swView());
+    const s = swSection();
+    expect(within(s).getByText(STALL_WORDS.quietLine)).toHaveClass('settings-note');
+    const v = swView().quiet;
+    expect(within(s).getByText(stallQuietBoundsText(quietText(v.builtInMs), quietText(v.minMs), quietText(v.maxMs)))).toHaveClass('settings-note');
+    expect(within(s).queryByText(STALL_QUIET_NOTE), 'the paragraph became one line').toBeNull();
+    const select = within(s).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet });
+    expect(select.style.maxWidth).toBe('320px');
+    expect(select.getAttribute('style') ?? '', 'no colour rides on the cap').not.toMatch(/color/);
+  });
+
+  it("a Quiet time write's refusal sits directly under the select, never under the level", async () => {
+    await swMount(swView());
+    vi.spyOn(api, 'setStallWatch').mockRejectedValue(
+      new ApiError(400, { ok: false, error: 'bad-request', detail: 'quietMs must be a 30-minute step' }));
+    const select = within(swSection()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet });
+    fireEvent.change(select, { target: { value: String(3 * SW_H) } });
+    await lineUnder(() => within(swSection()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }),
+      'Nothing was changed: quietMs must be a 30-minute step', 'refusal');
+    const afterLevel = within(swSection()).getByRole('group', { name: STALL_SECTION_TEXT.level }).nextElementSibling;
+    expect(afterLevel?.classList.contains('settings-result') ?? false, 'no line under the level').toBe(false);
+  });
+
+  it('a cancelled confirm or a refused write leaves the full sentence on the checked level, never the tapped one', async () => {
+    await swMount(swView({ chosen: swChosen({ level: 'check' }) }));
+    const full = (): Array<string | null> =>
+      Array.from(swSection().querySelectorAll<HTMLElement>('[data-stall-full]')).map((el) => el.textContent);
+    vi.spyOn(api, 'setStallWatch')
+      .mockRejectedValueOnce(swConfirm(swEffect({ turnsOn: ['wave2'], before: swStages(), after: swStages({ wave2: true }) }), 'key-all'))
+      .mockRejectedValueOnce(new ApiError(400, { ok: false, error: 'bad-request', detail: 'refused' }));
+    // A tap focuses the option, then picks it; the 409 opens the confirm, and Cancel keeps Check.
+    act(() => { swRadio(STALL_LEVEL_TEXT.all.label).focus(); });
+    fireEvent.click(swRadio(STALL_LEVEL_TEXT.all.label));
+    const sheet = await screen.findByRole('dialog');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(swRadio(STALL_LEVEL_TEXT.check.label)).toBeChecked();
+    expect(full(), 'the sentence is the checked level\'s after Cancel').toEqual([STALL_LEVEL_TEXT.check.does]);
+    // The keyboard's path: the arrow focuses and picks Alert; the refusal keeps Check, and so does the sentence.
+    act(() => { swRadio(STALL_LEVEL_TEXT.alert.label).focus(); });
+    fireEvent.click(swRadio(STALL_LEVEL_TEXT.alert.label));
+    await within(swSection()).findByText('Nothing was changed: refused');
+    await waitFor(() => expect(swRadio(STALL_LEVEL_TEXT.check.label)).not.toBeDisabled());
+    expect(swRadio(STALL_LEVEL_TEXT.check.label)).toBeChecked();
+    expect(full(), 'the sentence is the checked level\'s after a refusal').toEqual([STALL_LEVEL_TEXT.check.does]);
+  });
+
+  it('a move answer appears under exactly one opener: the release that opened it, no other row, no node', async () => {
+    vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [T8_NODE_A, T8_NODE_B], skipped: [] });
+    const region = await mountUpdates(updatesView({ releases: [t8Release('v0.0.11'), t8Release('v0.0.10')] }));
+    const row = region.querySelector<HTMLElement>('li[data-tag="v0.0.10"]')!;
+    expect(within(region.querySelector<HTMLElement>('li[data-tag="v0.0.11"]')!).getByRole('button', { name: 'Install' }))
+      .toBeInTheDocument();
+    fireEvent.click(within(row).getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update v0.0.10' }));
+    await lineUnder(() => region.querySelector('li[data-tag="v0.0.10"] .settings-release-actions')!, MOVE_REQUESTED_TEXT, 'answer');
+    expect(region.querySelector('li[data-tag="v0.0.11"] .settings-result'), 'no line under the other release').toBeNull();
+    expect(region.querySelectorAll('.settings-result'), 'one line on the whole section').toHaveLength(1);
+    const nodes = within(region).getByRole('list', { name: 'Nodes' });
+    expect(nodes.querySelector('.settings-result'), 'no node row carries the release\'s line').toBeNull();
+  });
+
+  it("a node's Roll back answers under its own action only, never twice on a node that offers Update too", async () => {
+    vi.spyOn(api, 'rollbackUpdate').mockResolvedValue({ ok: true, requested: [T9_NODE_A], skipped: [] });
+    const region = await mountUpdates(updatesView({
+      releases: [t9Release('v0.0.9'), t9Release('v0.0.8'), t9Release('v0.0.10')],
+      nodes: [t9Node({ desiredTag: 'v0.0.10', previousVersion: 'v0.0.8' })],
+    }));
+    const nodeRow = (): HTMLElement => region.querySelector<HTMLElement>(`li[data-node-id="${T9_NODE_A}"]`)!;
+    expect(within(nodeRow()).getByRole('button', { name: 'Update' })).toBeEnabled();
+    fireEvent.click(within(nodeRow()).getByRole('button', { name: 'Roll back' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Roll back fleet' }));
+    await lineUnder(() => nodeRow().querySelector('.settings-node-actions')!, MOVE_REQUESTED_TEXT, 'answer');
+    expect(nodeRow().querySelectorAll('.settings-result'), 'one line, the Roll back\'s').toHaveLength(1);
+    expect(region.querySelectorAll('.settings-result')).toHaveLength(1);
+  });
+
+  it('a refused move whose sheet was dismissed in flight is an error toast with the move sentence, and no line', async () => {
+    let refuse!: (e: unknown) => void;
+    const refusal = new ApiError(503, { ok: false, error: 'journal-unwritable' });
+    vi.spyOn(api, 'applyUpdate').mockReturnValue(new Promise((_, rej) => { refuse = rej; }));
+    const region = await mountUpdates();
+    const row = region.querySelector<HTMLElement>('li[data-tag="v0.0.10"]')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update v0.0.10' }));
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await act(async () => { refuse(refusal); });
+    const toastEl = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('.toast');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(toastEl).toHaveTextContent(updateErrorText(refusal));
+    expect(toastEl, 'an error toast').toHaveClass('toast--error');
+    expect(region.querySelector('.settings-result'), 'the sheet that asked is gone, so no line').toBeNull();
+  });
+
+  it('a refused intent write followed by a clean one leaves no line', async () => {
+    const set = vi.spyOn(api, 'setUpdateIntent')
+      .mockRejectedValueOnce(new ApiError(503, { ok: false, error: 'journal-unwritable' }))
+      .mockResolvedValueOnce({ ok: true, intent: t7Intent({ channel: 'dev' }), epoch: 2 });
+    const region = await mountUpdates();
+    const channel = (): Element => within(region).getByRole('group', { name: 'Channel' });
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
+    await lineUnder(channel, 'The server cannot write its intent journal — nothing was changed.', 'refusal');
+    await waitFor(() => expect(channel()).not.toBeDisabled());
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(channel()).not.toBeDisabled());
+    expect(channel().nextElementSibling?.classList.contains('settings-result') ?? false, 'the clean write cleared the line').toBe(false);
+    expect(region.querySelector('.settings-result')).toBeNull();
+  });
+
+  it("the gate note carries its when-line while it shows, and an option's note takes no pointer", async () => {
+    expect(UPDATES_TEXT.autoGateWhen).toBe('Update the named nodes first.');
+    const region = await mountUpdates(updatesView({ nodes: [t7Node()] }));
+    const gate = await within(region).findByText(/^Auto-install needs every node to run a ccrc with the update gate\. Not yet: /);
+    expect(gate.nextElementSibling).toHaveTextContent(UPDATES_TEXT.autoGateWhen);
+    expect(gate.nextElementSibling).toHaveClass('settings-note');
+    cleanup();
+    const quiet = await mountUpdates(updatesView({ nodes: [t7Node({ caps: T7_GATED })] }));
+    expect(within(quiet).queryByText(UPDATES_TEXT.autoGateWhen), 'no gate note, no when-line').toBeNull();
+    // The note is pulled up over its option's tap row; it must let a tap through to the label (44 px).
+    expect(declValue(ruleIn(fleetCss, '.settings-option-note'), 'pointer-events')).toBe('none');
   });
 });

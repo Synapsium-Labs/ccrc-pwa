@@ -17,7 +17,7 @@ import {
   collectUnmeasurableLines,
 } from '../src/fleet/collectLaneWords';
 import { COORD_CONFIRM_MS } from '../src/fleet/coordWords';
-import { ApiError, COORD_UNSUPPORTED_TEXT, api } from '../src/lib/api';
+import { ApiError, COORD_UNSUPPORTED_TEXT, api, apiErrorText } from '../src/lib/api';
 import { ToastHost } from '@ccrc/ui';
 import { UNCONFIRMED_TEXT } from '../src/screens/settingsText';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -206,16 +206,18 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     const write = vi.spyOn(api, 'setCollectLane').mockReturnValue(new Promise(() => {}));
     const stands = cv();
     const { read } = await mount(stands);
+    // The held reason, read apart from Off's own option note (settings Task R1c), which every Off carries.
     const noteOf = (): string | null => {
-      const id = radio('off').getAttribute('aria-describedby');
-      return id === null ? null : document.getElementById(id)?.textContent ?? null;
+      const ids = (radio('off').getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean);
+      const reason = ids.map((id) => document.getElementById(id)).find((el) => el !== null && !el.classList.contains('settings-option-note'));
+      return reason?.textContent ?? null;
     };
     expect(radio('off')).toBeDisabled();
     expect(radio('off')).toBeChecked();
     expect(noteOf()).toBe(COLLECT_OFF_NOTE_TEXT.stands);
     expect(collectOffNote(stands)).toBe(COLLECT_OFF_NOTE_TEXT.stands);
     expect(radio('live')).toBeEnabled();
-    expect(radio('live').getAttribute('aria-describedby')).toBeNull();
+    expect(radio('live'), 'Live is described by its note alone').toHaveAccessibleDescription(COLLECT_SECTION_TEXT.liveNote);
     fireEvent.click(radio('off'));
     expect(write).not.toHaveBeenCalled();
 
@@ -236,7 +238,7 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     await mount(LIVE_HERE);
     const write = vi.spyOn(api, 'setCollectLane').mockResolvedValue({ ...OFF_LATCHED, notice: NOTICE });
     expect(radio('off')).toBeEnabled();
-    expect(radio('off').getAttribute('aria-describedby')).toBeNull();
+    expect(radio('off'), 'Off is described by its note alone').toHaveAccessibleDescription(COLLECT_SECTION_TEXT.offNote);
     fireEvent.click(radio('off'));
     await waitFor(() => expect(radio('off')).toBeChecked());
     expect(write).toHaveBeenCalledTimes(1);
@@ -273,7 +275,7 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     expect(within(section()).queryByText(COLLECT_REFUSAL_TEXT['marker-still-controls'])).toBeNull();
     expect(within(section()).queryByRole('alert')).toBeNull();
     expect(radio('off')).toBeEnabled();
-    expect(radio('off').getAttribute('aria-describedby')).toBeNull();
+    expect(radio('off'), 'Off is described by its note alone').toHaveAccessibleDescription(COLLECT_SECTION_TEXT.offNote);
   });
 
   it('a stored Live for another node shows its line and "Confirm Live again", which posts {choice:\'live\'} with no key', async () => {
@@ -393,16 +395,70 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     expect(write.mock.calls[2]![0]).toStrictEqual({ choice: 'live', confirm: 'e5f60718' });
   });
 
-  it('403 sign-in-unarmed toasts, re-reads, and leaves Live unchecked', async () => {
+  it('403 sign-in-unarmed says, under the control, amber, re-reads, and leaves Live unchecked', async () => {
     const { read } = await mount(OFF_LATCHED);
     vi.spyOn(api, 'setCollectLane').mockRejectedValue(
       new ApiError(403, { ok: false, error: 'sign-in-unarmed', detail: 'Live needs sign-in armed on this server' }));
     fireEvent.click(radio('live'));
-    expect(await screen.findByText(`${COLLECT_REFUSAL_TEXT['sign-in-unarmed']} (Live needs sign-in armed on this server)`)).toBeInTheDocument();
+    const text = `${COLLECT_REFUSAL_TEXT['sign-in-unarmed']} (Live needs sign-in armed on this server)`;
+    const line = await waitFor(() => {
+      const next = within(section()).getByRole('group', { name: COLLECT_SECTION_TEXT.legend }).nextElementSibling as HTMLElement | null;
+      expect(next, 'the line sits directly under the choice').toHaveTextContent(text);
+      return next as HTMLElement;
+    });
+    expect(line).toHaveAttribute('role', 'status');
+    expect(line).toHaveAttribute('aria-live', 'polite');
+    expect(line).toHaveClass('settings-result', 'settings-catalogue--amber');
+    expect(document.querySelector('.toast'), 'not a toast: the choice is still on screen').toBeNull();
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
     expect(radio('live')).not.toBeChecked();
     expect(radio('off')).toBeChecked();
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('a confirm closed while the request was in flight still toasts: the section left before the answer came', async () => {
+    let answer!: (v: 'unreadable') => void;
+    vi.spyOn(api, 'collectLane').mockResolvedValue(OFF_LATCHED);
+    render(<ToastHost />);
+    const section1 = render(<CollectLaneSection store={makeStore()} childReclaimPause={vi.fn(() => new Promise<void>(() => {}))} />);
+    await choiceGroup();
+    vi.spyOn(api, 'setCollectLane').mockReturnValueOnce(new Promise((r) => { answer = r as (v: 'unreadable') => void; }));
+    fireEvent.click(radio('live'));
+    section1.unmount();
+    await act(async () => { answer('unreadable'); });
+    expect(await screen.findByText(UNCONFIRMED_TEXT, { selector: '.toast' })).toBeInTheDocument();
+  });
+
+  it("Confirm Live again's answer sits directly under that button, never under the choice; its when-line follows it", async () => {
+    await mount(OTHER_NODE);
+    vi.spyOn(api, 'setCollectLane').mockRejectedValue(
+      new ApiError(403, { ok: false, error: 'sign-in-unarmed', detail: 'Live needs sign-in armed on this server' }));
+    const button = within(section()).getByRole('button', { name: COLLECT_SECTION_TEXT.reconfirm });
+    fireEvent.click(button);
+    const text = `${COLLECT_REFUSAL_TEXT['sign-in-unarmed']} (Live needs sign-in armed on this server)`;
+    const line = await waitFor(() => {
+      const next = within(section()).getByRole('button', { name: COLLECT_SECTION_TEXT.reconfirm }).nextElementSibling as HTMLElement | null;
+      expect(next, 'the line sits directly under Confirm Live again').toHaveTextContent(text);
+      return next as HTMLElement;
+    });
+    expect(line).toHaveAttribute('role', 'status');
+    expect(line).toHaveClass('settings-result', 'settings-catalogue--amber');
+    const afterChoice = within(section()).getByRole('group', { name: COLLECT_SECTION_TEXT.legend }).nextElementSibling;
+    expect(afterChoice?.classList.contains('settings-result') ?? false, 'no line under the choice').toBe(false);
+    expect(within(section()).getAllByText(text)).toHaveLength(1);
+    expect(document.querySelector('.toast'), 'not a toast').toBeNull();
+    expect(COLLECT_SECTION_TEXT.reconfirmWhen).toBe("When the collector's node changed and you still want Live.");
+    expect(line.nextElementSibling, 'the when-line follows the button and its line').toHaveTextContent(COLLECT_SECTION_TEXT.reconfirmWhen);
+    expect(line.nextElementSibling).toHaveClass('settings-note');
+  });
+
+  it('the section opens with its purpose, and each choice carries its note; the when-line follows the choice', async () => {
+    await mount(OFF_LATCHED);
+    const s = section();
+    expect(within(s).getByText(COLLECT_SECTION_TEXT.purpose)).toHaveClass('settings-note');
+    expect(radio('live')).toHaveAccessibleDescription(COLLECT_SECTION_TEXT.liveNote);
+    expect(radio('off')).toHaveAccessibleDescription(COLLECT_SECTION_TEXT.offNote);
+    expect(within(s).getByText(COLLECT_SECTION_TEXT.when)).toHaveClass('settings-note');
   });
 
   it('the counts line, and the not-measured line', async () => {
@@ -554,6 +610,23 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
       expect(await within(section()).findByText(COORD_UNSUPPORTED_TEXT)).toBeInTheDocument();
       expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeEnabled();
       expect(document.querySelector('.toast')).toBeNull();
+    });
+
+    it("any other refusal says apiErrorText's sentence directly under the button, amber, as a status, never a toast", async () => {
+      const refusal = new ApiError(503, { ok: false, error: 'journal-unwritable', detail: 'the switch could not be written' });
+      const pause = vi.fn<(state: 'on' | 'off') => Promise<void>>().mockRejectedValue(refusal);
+      const { store } = await mount(LIVE_HERE, pause);
+      seen(store, coord());
+      fireEvent.click(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));
+      const line = await waitFor(() => {
+        const next = within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }).nextElementSibling as HTMLElement | null;
+        expect(next, 'the line sits directly under Pause all cleanup').toHaveTextContent(apiErrorText(refusal));
+        return next as HTMLElement;
+      });
+      expect(line).toHaveAttribute('role', 'status');
+      expect(line).toHaveAttribute('aria-live', 'polite');
+      expect(line).toHaveClass('settings-result', 'settings-catalogue--amber');
+      expect(document.querySelector('.toast'), 'not a toast: the button is still on screen').toBeNull();
     });
 
     it('offers Pause only: an unreadable switch still offers Pause, a paused one offers no Resume, and the file never asks off', async () => {

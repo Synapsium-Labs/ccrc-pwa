@@ -40,7 +40,10 @@ export { elapsedWords };
 import {
   isManagedNode, rollbackBlockers, type MoveIntent,
 } from '../fleet/movePlan';
-import { ACK_UNREADABLE_TEXT, AckConfirm, canAck, sendAck } from '../fleet/updateAck';
+import { ACK_UNREADABLE_TEXT, AckConfirm, ackNote, canAck, sendAck } from '../fleet/updateAck';
+import {
+  ResultLine, UPDATES_TEXT, nodeRollbackNote, nodeUpdateNote, useResultLine, type ResultLineValue,
+} from './settingsText';
 import { WITHDRAWN_KEPT_CLAUSE, rollbackBlockedText } from '../fleet/UpdateMoveSheet';
 import { haltingNodes, updateAllHaltedText } from '../fleet/updateHalt';
 import { isPlaceableInstant, newestPending, nodeVersion, pendingTag } from '../fleet/useUpdatesView';
@@ -423,6 +426,23 @@ function MoveButton({ disabled, onClick, children, describedBy, tone = 'move' }:
   );
 }
 
+/** A move's answer (D-5507, spec §6.4): the line the 202 wrote, drawn under the control whose `moveKey` opened it. */
+export interface MoveResult { key: string; line: ResultLineValue }
+
+/** The one key for the control that opens a move: its intent, so a release row, the mixed fleet's Update all and a
+ *  node's Update or Roll back each find their own line. */
+export function moveKey(intent: MoveIntent): string {
+  return intent.scope === 'node'
+    ? `node:${intent.nodeId}:${intent.direction}`
+    : `fleet:${intent.direction}:${intent.direction === 'rollback' ? intent.to : intent.tag}`;
+}
+
+/** The move line under one opener, or nothing when the answer belongs to another control. */
+function MoveLine({ result, intent }: { result: MoveResult | null; intent: MoveIntent | null }): ReactNode {
+  if (result === null || intent === null || result.key !== moveKey(intent)) return null;
+  return <ResultLine line={result.line} />;
+}
+
 /** Wave 19, R24(a): while a node halts the fleet the dispatcher refuses every move but the Ack (spec §10;
  *  `moveRefusal`'s first clause), so the release window's Install and Update all (`{all: true}`) and every node's
  *  Update wait, and say why with Update all's own reason line, verbatim (`updateAllHaltedText`; who halts is
@@ -484,10 +504,11 @@ function RefusedFold({ release: r, nodes }: { release: ReleaseWire; nodes: reado
 /** One release row (spec §7.4): the facts on the left, the row's one action on the right of their first line, and
  *  under both the row's notes, folds and refusal lines. The summary and the meta line are the date's tertiary ink;
  *  withdrawn and refusal words the refusal line's amber; role words the running line's quiet ink. */
-function ReleaseItem({ item, nodes, haltedBy, source, waiting, buttons, rollbackOffered, onMove }: {
+function ReleaseItem({ item, nodes, haltedBy, source, waiting, buttons, rollbackOffered, onMove, result }: {
   item: WindowRow; nodes: readonly NodeWire[]; haltedBy: string | null; source: ReleaseSourceWire | undefined;
   waiting: boolean; buttons: boolean; rollbackOffered: boolean;
   onMove: (intent: MoveIntent) => void;
+  result: MoveResult | null;
 }): ReactNode {
   const r = item.release;
   const direction = releaseDirection(r.tag, nodes);
@@ -547,6 +568,7 @@ function ReleaseItem({ item, nodes, haltedBy, source, waiting, buttons, rollback
           </MoveButton>
         </div>
       )}
+      <MoveLine result={result} intent={intent} />
       <RefusedFold release={r} nodes={nodes} />
       {r.yanked === true && direction !== 'running' && <p className="settings-release-refused">{WITHDRAWN_NOTE}</p>}
       {item.floored.map((label) => <p key={label} className="settings-note">{floorLine(label, r.tag)}</p>)}
@@ -567,6 +589,7 @@ function ReleaseGroup({ label, title, items, ...rest }: {
   label: string; title: string | null; items: readonly WindowRow[];
   nodes: readonly NodeWire[]; haltedBy: string | null; source: ReleaseSourceWire | undefined;
   pending: string | null; buttons: boolean; rollbackOffered?: boolean; onMove: (intent: MoveIntent) => void;
+  result: MoveResult | null;
 }): ReactNode {
   if (items.length === 0) return null;
   return (
@@ -577,7 +600,7 @@ function ReleaseGroup({ label, title, items, ...rest }: {
           <ReleaseItem
             key={it.release.tag} item={it} nodes={rest.nodes} haltedBy={rest.haltedBy} source={rest.source}
             waiting={it.release.tag === rest.pending} buttons={rest.buttons}
-            rollbackOffered={rest.rollbackOffered ?? true} onMove={rest.onMove}
+            rollbackOffered={rest.rollbackOffered ?? true} onMove={rest.onMove} result={rest.result}
           />
         ))}
       </ul>
@@ -606,15 +629,19 @@ export function WhatsNewButton({ onClick, children }: { onClick: () => void; chi
 /** The release window (D-5505): at most three rows in any group, in every fleet state, with what is left out
  *  counted. `channel` is the fleet's (the `'*'` intent's); `haltedBy` is the one halt line's id, when the page
  *  draws it; `onWhatsNew` and `whatsNewSince` open the What's-new sheet from the Newer count line. */
-export function ReleaseList({ releases, nodes, channel, source, haltedBy = null, onWhatsNew, whatsNewSince = null, onMove }: {
+export function ReleaseList({
+  releases, nodes, channel, source, haltedBy = null, onWhatsNew, whatsNewSince = null, onMove, result = null,
+}: {
   releases: readonly ReleaseWire[]; nodes: readonly NodeWire[]; channel?: UpdateChannel | null; source?: ReleaseSourceWire;
   haltedBy?: string | null; onWhatsNew?: () => void; whatsNewSince?: string | null;
   onMove: (intent: MoveIntent) => void;
+  /** The last move's answer and the opener it belongs to (D-5507). */
+  result?: MoveResult | null;
 }): ReactNode {
   const w = releaseWindow(releases, nodes, channel);
   if (w.empty) return null;
   const halted = haltedReason(nodes) !== null;
-  const shared = { nodes, haltedBy, source, pending: w.pending, onMove };
+  const shared = { nodes, haltedBy, source, pending: w.pending, onMove, result };
   if (w.state !== 'measured') {
     return (
       <section className="settings-window" aria-label="Releases">
@@ -653,6 +680,7 @@ export function ReleaseList({ releases, nodes, channel, source, haltedBy = null,
               {`Update all to ${w.mixed.hi}`}
             </MoveButton>
           </div>
+          <MoveLine result={result} intent={{ scope: 'fleet', direction: 'update', tag: w.mixed.hi }} />
         </>
       ) : w.running !== null && w.running.release !== null ? (
         <ReleaseGroup label="Running" title="Running" items={[row(w.running.release)]} buttons {...shared} />
@@ -699,7 +727,8 @@ export function ReleaseList({ releases, nodes, channel, source, haltedBy = null,
 // a 409 `busy`, rendered as updateErrorText's sentence, and the view is
 // re-polled either way.
 
-export const MACOS_UNMANAGED_TEXT = 'macOS: not centrally managed';
+/** A macOS row's sentence in place of its desired version (spec §11.2's rename of "macOS: not centrally managed"). */
+export const MACOS_UNMANAGED_TEXT = 'Not updated from here. Update this Mac with ccrc on the Mac itself.';
 // The Ack's gate and tap live in fleet/updateAck.ts since wave 14 (D-4267): the home screen's halt banner offers the
 // same Ack. Re-exported so this screen's callers and tests keep their import.
 export { ACK_UNREADABLE_TEXT, canAck };
@@ -783,11 +812,12 @@ export function finishedLine(n: NodeWire, now: number): string | null {
   return `${lead}${phase} ${target} · ${when}${said}`;
 }
 
-function NodeItem({ node: n, releases, now, catalogueLastOkAt, halted, haltedBy, onAcked, onMove }: {
+function NodeItem({ node: n, releases, now, catalogueLastOkAt, halted, haltedBy, onAcked, onMove, result }: {
   node: NodeWire; releases: readonly ReleaseWire[]; now: number; catalogueLastOkAt: number | null;
   halted: boolean; haltedBy: string | null;
   onAcked: () => void;
   onMove: (intent: MoveIntent) => void;
+  result: MoveResult | null;
 }): ReactNode {
   const [acking, setAcking] = useState(false);
   const rowRef = useRef<HTMLLIElement>(null);
@@ -811,13 +841,20 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, halted, haltedBy,
   // hands the focus to this row when the Ack it disables was focused (wave 19, R26(a)).
   const [confirming, setConfirming] = useState(false);
 
+  // D-5507: how the Ack ended is a line under the row's actions (spec §6.4); `sendAck` toasts nothing of its own.
+  const ackLine = useResultLine();
   const ack = (): void => {
     setAcking(true);
-    void sendAck(n.nodeId).finally(() => {
+    ackLine.clear();
+    void sendAck(n.nodeId, ackLine.say).finally(() => {
       setAcking(false);
       onAcked();
     });
   };
+  const updateIntent: MoveIntent | null = next === null ? null : { scope: 'node', direction: 'update', nodeId: n.nodeId, tag: next };
+  const rollbackIntent: MoveIntent | null = previous === null || previousRefusal !== null
+    ? null : { scope: 'node', direction: 'rollback', nodeId: n.nodeId, to: previous };
+  const ackSays = ackNote(n, releases);
 
   let desired: ReactNode = null;
   if (darwin) {
@@ -872,14 +909,14 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, halted, haltedBy,
             <MoveButton
               disabled={next === null || halted}
               describedBy={next !== null && halted && haltedBy !== null ? haltedBy : undefined}
-              onClick={() => { if (next !== null) onMove({ scope: 'node', direction: 'update', nodeId: n.nodeId, tag: next }); }}
+              onClick={() => { if (updateIntent !== null) onMove(updateIntent); }}
             >
               Update
             </MoveButton>
             <MoveButton
               disabled={previous === null || previousRefusal !== null}
               tone="danger"
-              onClick={() => { if (previous !== null && previousRefusal === null) onMove({ scope: 'node', direction: 'rollback', nodeId: n.nodeId, to: previous }); }}
+              onClick={() => { if (rollbackIntent !== null) onMove(rollbackIntent); }}
             >
               Roll back
             </MoveButton>
@@ -887,29 +924,41 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, halted, haltedBy,
         )}
         <MoveButton disabled={!ackable || acking} tone="danger" onClick={() => setConfirming(true)}>Ack</MoveButton>
       </div>
+      {/* The answers, directly under the actions that asked (D-5507), then what each offered action does (spec §5.1). */}
+      <ResultLine line={ackLine.line} />
+      <MoveLine result={result} intent={updateIntent} />
+      <MoveLine result={result} intent={rollbackIntent} />
+      {!darwin && next !== null && <p className="settings-note">{nodeUpdateNote(next)}</p>}
+      {!darwin && rollbackIntent !== null && previous !== null && <p className="settings-note">{nodeRollbackNote(previous)}</p>}
+      {ackSays !== null && <p className="settings-note">{ackSays}</p>}
       <AckConfirm node={n} releases={releases} open={confirming} onClose={() => setConfirming(false)} onConfirm={ack} rowRef={rowRef} />
     </li>
   );
 }
 
-export function NodeList({ nodes, releases, now, catalogueLastOkAt, haltedBy = null, onAcked, onMove }: {
+export function NodeList({ nodes, releases, now, catalogueLastOkAt, haltedBy = null, onAcked, onMove, result = null }: {
   nodes: readonly NodeWire[]; releases: readonly ReleaseWire[]; now: number; catalogueLastOkAt: number | null;
   /** The one halt line's id (settings spec §5.1): the page draws the line, and each pending Update it gates names it. */
   haltedBy?: string | null;
   onAcked: () => void;
   onMove: (intent: MoveIntent) => void;
+  /** The last move's answer and the opener it belongs to (D-5507). */
+  result?: MoveResult | null;
 }): ReactNode {
   if (nodes.length === 0) return null;
   const halted = haltedReason(nodes) !== null;
   return (
-    <ul className={`settings-nodes ${RESET_LIST}`} aria-label="Nodes">
-      {nodes.map((n) => (
-        <NodeItem
-          key={n.nodeId} node={n} releases={releases} now={now} catalogueLastOkAt={catalogueLastOkAt}
-          halted={halted} haltedBy={haltedBy} onAcked={onAcked} onMove={onMove}
-        />
-      ))}
-    </ul>
+    <>
+      <p className="settings-note">{UPDATES_TEXT.nodesLead}</p>
+      <ul className={`settings-nodes ${RESET_LIST}`} aria-label="Nodes">
+        {nodes.map((n) => (
+          <NodeItem
+            key={n.nodeId} node={n} releases={releases} now={now} catalogueLastOkAt={catalogueLastOkAt}
+            halted={halted} haltedBy={haltedBy} onAcked={onAcked} onMove={onMove} result={result}
+          />
+        ))}
+      </ul>
+    </>
   );
 }
 // ── Appearance ───────────────────────────────────────────────────────────────
