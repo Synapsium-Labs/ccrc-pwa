@@ -324,6 +324,7 @@ function expectCappedName(m: CardName, where: string): void {
   expect(m.holdsSelection, `${where}: the card must not hold the selection`).toBe(false);
   expect(m.textWidth, `${where}: the long name should need more than its line`).toBeGreaterThan(m.width);
   expect(m.width, `${where}: the long name is cut before its cap (${m.cap.toFixed(1)}px)`).toBeGreaterThanOrEqual(m.cap - 0.5);
+  expect(m.width, `${where}: the long name runs past its cap (${m.cap.toFixed(1)}px)`).toBeLessThanOrEqual(m.cap + 0.5);
   expect(m.onChevronLine, `${where}: the long name left its chevron's line`).toBe(true);
   expect(m.toggleOverrun, `${where}: the long name runs past the toggle`).toBeLessThanOrEqual(0.5);
   expect(m.wrapped, `${where}: the meta did not drop under the long name`).toBe(true);
