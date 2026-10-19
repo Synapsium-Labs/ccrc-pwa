@@ -520,10 +520,17 @@ function materialise(account, registry, catalogue, windows) {
  *  own id and the backend 404s opaquely, which is the exact failure the
  *  sentinel exists to prevent, so "absent" and "wrong" are the same finding
  *  here. The eighth key is the one where "absent from `want`" is the CORRECT
- *  answer whenever the catalogue cannot measure it (§6.1 amendment) — `want`
- *  simply does not carry the key then, so the `Object.keys(want)` filter below
- *  never asks about it, and a settings file that also lacks it drifts on
- *  nothing.
+ *  answer whenever the rule yields no window (§6.1 amendment): `want` does not
+ *  carry the key then, and a settings file that also lacks it drifts on
+ *  nothing. A settings file that STILL CARRIES it drifts on it (D-5785): the
+ *  next materialise deletes it (`mergeSettingsEnv` deletes every member of
+ *  `MODEL_ENV_KEYS` its block omits), so the second filter below asks the same
+ *  question of the same keys. Before measured windows that copy held at most
+ *  `min(catalogue context, 200000)`; a measured one can hold up to 1000000.
+ *  With a stale or absent catalogue the rule yields nothing, the hourly refresh
+ *  materialises only after a successful probe, and a windows file deleted or
+ *  broken outside the two window verbs (or a rollback past them) would leave
+ *  that number in force with `show` reporting no drift at all.
  *
  *  Returned in `modelEnvBlock`'s own key order rather than sorted, so two boxes
  *  reporting the same drift print the same list. Read-only: `show` NAMES the
@@ -552,7 +559,10 @@ function settingsDrift(account, registry, catalogue, windows) {
     // below reports one by one — a more useful answer than a single "no file".
     env = {};
   }
-  return Object.keys(want).filter((k) => env[k] !== want[k]);
+  return [
+    ...Object.keys(want).filter((k) => env[k] !== want[k]),
+    ...MODEL_ENV_KEYS.filter((k) => !(k in want) && Object.prototype.hasOwnProperty.call(env, k)),
+  ];
 }
 
 /** Fix round 2A (N1): the message `modelEnvBlock` would throw rendering this

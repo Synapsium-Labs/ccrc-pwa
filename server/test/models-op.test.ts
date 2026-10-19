@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { CODEX, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
+import { CODEX, CODEX_STALE, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
 import { codexAuthDir } from './codexLaneFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -1827,6 +1827,73 @@ describe('the measured windows file — read, applied, reported, reaped (codex-b
     expect(r.body['orphan']).toBe(true);
     expect((r.body['windows'] as { state: string }).state).toBe('ok');
     expect((r.body['contextWindow'] as { rule: string }).rule).toBe('measured');
+  });
+});
+
+// D-5785. With a stale or absent catalogue the default rule yields nothing,
+// so the block OMITS the eighth key, and the hourly refresh materialises only
+// after a successful probe. A windows file deleted or broken outside the two
+// verbs then leaves a measured key of up to 1000000 in settings.json, which
+// a drift check that asked only about the block's own keys never named. The
+// key is drift whenever the next materialise would delete it.
+describe('a measured key the block omits is drift until a materialise removes it (D-5785)', () => {
+  const ID = LEGACY_EXTERNAL_ID;
+  const KEY = 'CLAUDE_CODE_MAX_CONTEXT_TOKENS';
+  const show = (): Result => op('show', '--file', rosterPath(), '--id', ID);
+  const driftOf = (): unknown => show().body['settingsDrift'];
+  const measureAll = (): void => {
+    for (const m of CLASS_MODELS) {
+      const r = op('set-window', '--file', rosterPath(), '--id', ID, '--model', m, '--tokens', '400000');
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+    }
+    expect(eighthKey()).toBe('400000');
+  };
+  const breaks: Record<string, () => void> = {
+    deleted: () => fs.rmSync(winPath(ID)),
+    'not JSON': () => fs.writeFileSync(winPath(ID), '{ this is not json'),
+  };
+
+  const catalogues: Record<string, unknown> = { absent: null, stale: CODEX_STALE };
+
+  it.each([
+    ['absent', 'deleted'],
+    ['absent', 'not JSON'],
+    ['stale', 'deleted'],
+    ['stale', 'not JSON'],
+  ])('catalogue %s, windows file %s: show names the key, materialise removes it', (which, how) => {
+    if (catalogues[which] !== null) writeCatalogue(ID, catalogues[which]);
+    plantCodex(ID);
+    // No window and no catalogue number: no key, and nothing to report.
+    expect(eighthKey()).toBeUndefined();
+    expect(driftOf()).toEqual([]);
+    measureAll();
+    expect(driftOf()).toEqual([]);
+    breaks[how]!();
+    const s = show();
+    expect(s.code, s.stdout + s.stderr).toBe(0);
+    expect((s.body['contextWindow'] as { rule: string }).rule).toBe('none');
+    expect(s.body['settingsDrift']).toEqual([KEY]);
+    // `show` names the drift and never repairs it.
+    expect(eighthKey()).toBe('400000');
+    const m = op('materialise', '--file', rosterPath(), '--id', ID);
+    expect(m.code, m.stdout + m.stderr).toBe(0);
+    expect(Object.keys(settingsOf(LEGACY_SUFFIX).env)).not.toContain(KEY);
+    expect(driftOf()).toEqual([]);
+  });
+
+  // The block INCLUDES the key here (a fresh catalogue's default rule), so the
+  // answer is today's: the key once, by value, never a second time for being
+  // on disk. 'settingsDrift names the eighth key once the windows moved past
+  // the last materialise', above, is the same answer in the other direction.
+  it('a fresh catalogue: the block carries the key, and drift names it once, by value', () => {
+    writeCatalogue(ID);
+    plantCodex(ID);
+    measureAll();
+    fs.rmSync(winPath(ID));
+    expect(driftOf()).toEqual([KEY]);
+    expect(op('materialise', '--file', rosterPath(), '--id', ID).code).toBe(0);
+    expect(eighthKey()).toBe('200000');
+    expect(driftOf()).toEqual([]);
   });
 });
 
