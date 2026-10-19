@@ -275,7 +275,7 @@ ANTHROPIC_DEFAULT_FABLE_MODEL  = classes.fable  ?? "ccrc-unavailable-fable"
 ANTHROPIC_MODEL                = classes.opus ?? classes.sonnet ?? classes.haiku   (the lane's default; refused if all null)
 ANTHROPIC_SMALL_FAST_MODEL     = classes.haiku ?? classes.sonnet
 CLAUDE_CODE_SUBAGENT_MODEL     = subagent                            (the class ALIAS, haiku|sonnet; opus and fable refused at write and at render, never at read; refused if that class's slot is null)
-CLAUDE_CODE_MAX_CONTEXT_TOKENS = min(catalogue.context, 200000) of ANTHROPIC_MODEL's model   (only when a non-stale catalogue names it; otherwise the key is left unset)
+CLAUDE_CODE_MAX_CONTEXT_TOKENS = min(catalogue.context, 200000) of ANTHROPIC_MODEL's model   (only when a non-stale catalogue names it; otherwise the key is left unset) (the default rule; see the amendment note below)
 ```
 
 **Amendment, 2026-09-09:** `CLAUDE_CODE_SUBAGENT_MODEL` is materialised as the

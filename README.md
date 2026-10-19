@@ -1781,13 +1781,13 @@ Anthropic-compatible endpoint rostered that way by hand — carries a **class re
 `~/.ccrc/models/<id>.classes.json`, naming the concrete model each class means on that lane, which class
 subagents run as, and a default effort per class. Every accepted change is re-validated and then materialised
 into that lane's own `settings.json` `env` block — the four alias defaults, the primary and small models, the
-subagent model, and a context-window key (below; it reads `<id>.windows.json`) — plus
+subagent model, and a context-window key (below; set from `<id>.windows.json`) — plus
 `<id>.classes.tsv`, `<id>.effort.json` and, on a Codex lane, `~/.ccrc/codex/<id>/lane.json`, so nothing reads
 a registry the lane's settings disagree with.
 
 ```bash
 ccrc models <id> init <codex|openrouter|compatible> [--base-url <url>]   # seed a registry
-ccrc models <id> show [--json]             # classes, subagent class, catalogue, settings drift
+ccrc models <id> show [--json]             # classes, subagent class, catalogue, context window, settings drift
 ccrc models <id> set-class <haiku|sonnet|opus|fable> <modelId|none>
 ccrc models <id> set-subagent <haiku|sonnet>
 ccrc models <id> set-effort <class> <level|default>
@@ -1822,7 +1822,7 @@ than guess which was meant. `ccrc models` needs `node` and `jq`, and has no PWA 
 
 **The context window.** The eighth key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, follows one rule. A lane may record a
 measured window per model in `~/.ccrc/models/<id>.windows.json`, a sibling of the registry, never a key in it (an
-older ccrc refuses registry keys it does not know, so a rollback stays safe): `set-window` writes one, a whole number
+older ccrc refuses registry keys it does not know): `set-window` writes one, a whole number
 from 1,000 to 1,000,000 that you measured — a catalogue number never sets it — and `clear-window` drops one. When
 every model the lane's classes name has a measured window, the key is the smallest of them, rounded down to 1,000
 and capped at 1,000,000, because Claude Code applies one value to every model in the session, subagents included.
@@ -1830,9 +1830,15 @@ When any of them has none, the key keeps the default rule, `min(catalogue contex
 model, or is left out when the catalogue cannot say; so a class moved to a new model falls back to the default until
 the new model is measured. `set-window` refuses a model that is neither in the lane's catalogue nor one of its class
 models. A windows file that cannot be read counts as no measured windows: refresh, materialise and the drift check
-carry on under the default rule, `show` names the reason, and both verbs refuse until the file is fixed or deleted.
+carry on under the default rule (a measured key left in `settings.json` shows as drift until the next materialise
+removes it), `show` names the reason, and both verbs refuse until the file is fixed or deleted.
 `show` reports each measured window, the effective window, the rule that chose it and the models still unmeasured;
 `rm` reaps the file with the rest. A running session keeps its window until it restarts or swaps.
+A rollback to a ccrc from before measured windows is safe on a lane whose catalogue is fresh: its next successful
+refresh materialises and writes the default. With a stale or absent catalogue a measured key stays until the next
+successful probe, so before rolling back across this change on a lane with windows set, run
+`ccrc models <id> clear-window <model>` for each measured model: each one re-materialises, and clearing the last
+puts the lane on the default rule.
 
 ### A ChatGPT/Codex lane: `exec.kind: "codex"` and `ccrc codex`
 

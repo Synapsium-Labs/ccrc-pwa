@@ -324,7 +324,9 @@ function windowsReport(reading) {
  *  0600, this repo's rule for any file another process reads. 2-space indent
  *  and a trailing newline, the shape every hand-editable ccrc file has. Returns
  *  null, or `[error, detail]` with the caller's own error word; a failed write
- *  unlinks its tmp, so it leaves nothing behind. */
+ *  unlinks its tmp, so it leaves nothing behind. One writer for both files,
+ *  rather than a second copy of `writeRegistry`'s shape for the windows, is
+ *  a ruled departure from the Stage 0 plan's Task 4 (D-5783). */
 function writeJsonFile(p, value, error) {
   const tmp = `${p}.${process.pid}.tmp`;
   try {
@@ -582,7 +584,8 @@ function settingsDrift(account, registry, catalogue, windows) {
  *  (on the validated registry) and `windowOp` each refuse `unroutable-lane`
  *  with this message. So "this lane's env block cannot be rendered" is decided
  *  in one place for `show` and both writers, and an unseeded registry is never
- *  refused by either. */
+ *  refused by either (D-5784: `windowOp` calls this rather than carrying its
+ *  own copy of the tail's render block). */
 function renderRefusal(registry, catalogue, windows) {
   if (registry === null) return null;
   if (!CLASSES.some((c) => registry.classes[c] !== null)) return null;
@@ -778,9 +781,11 @@ function materialiseCheck(account, registry, catalogue) {
  *  read through `parseWindows`, and the one entry `set-window` adds has passed
  *  the same model-id test and bounds below. So `parseWindows` builds the map
  *  the rule reads from it and cannot refuse it here, which is why it carries
- *  no refusal of its own. The render comes first for the mutation tail's
- *  reason, through the tail's own check (`renderRefusal`): a lane whose block
- *  cannot be rendered, such as a legacy `subagent: opus|fable` that
+ *  no refusal of its own (D-5782: the plan's `windows-invalid` re-validation is
+ *  not shipped, because the guards before it make it unreachable and so no
+ *  row could turn it red). The render comes first for the mutation tail's
+ *  reason, through the tail's own check (`renderRefusal`, D-5784): a lane
+ *  whose block cannot be rendered, such as a legacy `subagent: opus|fable` that
  *  `parseRegistry` still reads, would otherwise have the windows file change
  *  and then `materialise` refuse. It is refused with the tail's own word,
  *  `unroutable-lane`, and nothing written. A materialise that still fails
