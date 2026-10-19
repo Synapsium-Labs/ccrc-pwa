@@ -9,7 +9,13 @@
 //      not-ready window, with their `before`; `delegationPassWindowsOf` returns the pass's list frozen and holding exactly the windows it was
 //      given, in the lane's order; and a write to any of them throws.
 //
-// Fixtures only: names are `lane-a-demo`, `project-a`, `/fixture/...`. No file is read or written.
+//   D-5643 R1, the call. The freeze above is of no use if reconcile builds its list some other way, so a source-text pin reads `watch.ts`
+//      (the one file this test reads; it writes nothing) and holds reconcile's window list to ONE `delegationPassWindowsOf(` call, never an
+//      inline spread of the builders (the list main built, which no one froze). The row anchors on that call alone.
+//
+// Fixtures only: names are `lane-a-demo`, `project-a`, `/fixture/...`.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import type { DelegationEventEnvelopeV1 } from '../../shared/api.js';
 import type { DelegationListingWindow } from '../src/coord/delegation-correlation.js';
@@ -123,5 +129,35 @@ describe('D-5643 R1: the lane\'s windows, their listings and the pass\'s window 
       expect(() => (w.before as string[]).push('x'), `${what}: a push to its before`).toThrow(TypeError);
     }
     expect(() => (window.after as string[]).push('x'), 'a push to a listing window\'s after').toThrow(TypeError);
+  });
+
+  it('D-5643 R1: reconcile hands its trees the list `delegationPassWindowsOf` builds, never an inline spread of the builders', () => {
+    const src = readFileSync(path.resolve(__dirname, '../src/watch.ts'), 'utf8');
+    const signature = 'private async reconcile(pass: LanePass, durable: DelegationDurability): Promise<void> {';
+    const from = src.indexOf(signature);
+    expect(from, 'reconcile\'s signature is in watch.ts').toBeGreaterThanOrEqual(0);
+    expect(src.indexOf(signature, from + 1), 'and only once').toBe(-1);
+    const end = src.indexOf('\n  }\n', from);               // the method's closing brace: the first one at two-space indent
+    const body = src.slice(from, end);
+    expect(end, 'the method ends').toBeGreaterThan(from);
+    expect(body).toContain(signature);
+    const call = 'const windows = delegationPassWindowsOf(';
+    const at = body.indexOf(call);
+    expect(at, 'the pass\'s window list is assigned from delegationPassWindowsOf').toBeGreaterThanOrEqual(0);
+    expect(body.split('delegationPassWindowsOf(').length - 1, 'exactly one call').toBe(1);
+    // The call's own text: from its open parenthesis to the one that closes it.
+    const open = at + call.length - 1;
+    let depth = 0;
+    let close = -1;
+    for (let i = open; i < body.length && close < 0; i++) {
+      if (body[i] === '(') depth += 1;
+      else if (body[i] === ')' && --depth === 0) close = i;
+    }
+    expect(close, 'the call closes').toBeGreaterThan(open);
+    const rest = body.slice(0, at) + body.slice(close + 1);
+    for (const spread of ['...delegationListingWindowsOf(', '...delegationLostWindowsOf(', '...this.pendingWindows(']) {
+      expect(body.includes(spread), `no inline spread of ${spread.slice(3, -1)}`).toBe(false);
+    }
+    expect(rest.includes('delegationNotReadyWindowOf('), 'the not-ready window is built inside the call alone').toBe(false);
   });
 });
