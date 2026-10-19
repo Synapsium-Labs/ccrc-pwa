@@ -26,9 +26,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  CLASSES, CatalogueInvalid, PROBE_KINDS, RegistryInvalid, UNAVAILABLE_PREFIX,
+  CLASSES, CatalogueInvalid, PROBE_KINDS, RegistryInvalid, UNAVAILABLE_PREFIX, WINDOW_MAX, WINDOW_MIN,
   availableFor, classOfModel, deriveModels, familyClassOf, parseCatalogue,
-  parseRegistry, resolveDiscovery,
+  parseRegistry, parseWindows, resolveDiscovery,
 } from '../../shared/models.js';
 import { CODEX, SEEDED, UNSEEDED, modelCases } from './fixtures/modelCases.js';
 
@@ -392,6 +392,78 @@ describe('parseRegistry (§4.1)', () => {
     push((r) => { r['probe'] = 'openrouter'; });
     for (const r of bad) {
       expect(() => parseRegistry(r), JSON.stringify(r)).toThrow();
+    }
+  });
+});
+
+// ── codex-bridge spec §2.7: a lane's measured context windows ──────────────
+// They live in a SIBLING of the registry, `<id>.windows.json`, read by
+// `parseWindows`. Neutral model ids only: this repository is public.
+describe('parseWindows (codex-bridge spec §2.7)', () => {
+  const A = 'model-6.1-alpha';
+  const B = 'model-6-beta';
+
+  it('reads each model\'s tokens into a frozen, null-prototype map', () => {
+    const w = parseWindows({ windows: {
+      [A]: { tokens: 511000, setAt: '2026-10-15T00:00:00.000Z' }, [B]: { tokens: 1000 } } });
+    expect({ ...w }).toEqual({ [A]: 511000, [B]: 1000 });
+    expect(Object.getPrototypeOf(w)).toBeNull();
+    expect(Object.isFrozen(w)).toBe(true);
+  });
+
+  it('an empty windows map is legal, and reads as no measured window', () => {
+    expect(Object.keys(parseWindows({ windows: {} }))).toEqual([]);
+  });
+
+  it('the bounds are 1000 and 1000000, and both are accepted exactly', () => {
+    expect(WINDOW_MIN).toBe(1000);
+    expect(WINDOW_MAX).toBe(1000000);
+    const w = parseWindows({ windows: { [A]: { tokens: WINDOW_MIN }, [B]: { tokens: WINDOW_MAX } } });
+    expect({ ...w }).toEqual({ [A]: 1000, [B]: 1000000 });
+  });
+
+  it('TOLERATES unknown keys at the top level and inside an entry — the registry\'s opposite', () => {
+    const w = parseWindows({ version: 2, future: { x: 1 },
+      windows: { [A]: { tokens: 400000, setAt: '2026-10-15T00:00:00.000Z', source: 'probe', note: 'x' } } });
+    expect({ ...w }).toEqual({ [A]: 400000 });
+  });
+
+  it.each([
+    ['a top level that is an array', [], ''],
+    ['a null top level', null, ''],
+    ['no windows key', {}, 'windows'],
+    ['a windows that is an array', { windows: [] }, 'windows'],
+    ['a key that is not a model id', { windows: { 'bad id': { tokens: 5000 } } }, 'windows.bad id'],
+    ['a __proto__ key', JSON.parse('{"windows":{"__proto__":{"tokens":5000}}}'), 'windows.__proto__'],
+    ['an entry that is a bare number', { windows: { [A]: 400000 } }, `windows.${A}`],
+    ['tokens as a string', { windows: { [A]: { tokens: '400000' } } }, `windows.${A}.tokens`],
+    ['tokens missing', { windows: { [A]: { setAt: '2026-10-15T00:00:00.000Z' } } }, `windows.${A}.tokens`],
+    ['a fractional tokens', { windows: { [A]: { tokens: 400000.5 } } }, `windows.${A}.tokens`],
+    ['tokens one below the minimum', { windows: { [A]: { tokens: 999 } } }, `windows.${A}.tokens`],
+    ['tokens one above the maximum', { windows: { [A]: { tokens: 1000001 } } }, `windows.${A}.tokens`],
+    ['a setAt that is not a string', { windows: { [A]: { tokens: 400000, setAt: 1789000000 } } }, `windows.${A}.setAt`],
+  ] as [string, unknown, string][])('refuses %s, as RegistryInvalid naming the field', (_why, json, field) => {
+    try {
+      parseWindows(json);
+      expect.unreachable('parseWindows accepted it');
+    } catch (e) {
+      expect(e).toBeInstanceOf(RegistryInvalid);
+      expect((e as RegistryInvalid).field).toBe(field);
+    }
+  });
+
+  it('the registry still refuses a windows key — the reason the windows live in a sibling file', () => {
+    // An older ccrc refuses any registry key it does not know, so a `windows`
+    // key in `<id>.classes.json` would brick every lane after a rollback. If
+    // this goes green-to-red, someone added `windows` to REGISTRY_KEYS: move
+    // it back to the sibling file instead.
+    const r = { ...(clone(SEEDED) as Record<string, unknown>), windows: {} };
+    try {
+      parseRegistry(r);
+      expect.unreachable('parseRegistry accepted a windows key');
+    } catch (e) {
+      expect(e).toBeInstanceOf(RegistryInvalid);
+      expect((e as RegistryInvalid).field).toBe('windows');
     }
   });
 });
