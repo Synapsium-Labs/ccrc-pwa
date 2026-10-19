@@ -22,7 +22,7 @@ import { CODEX, CODEX_STALE, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/mo
 import { codexAuthDir } from './codexLaneFixture.js';
 import { ADVANCE_EXAMPLE, ADV_CATALOGUE, ADV_DEEP_TEXT, ADV_REGISTRY, ADV_SEEDS } from './fixtures/advanceCases.js';
 import { backfillAdvance, chooseCandidate, familyOf, recordMove, serializeAdvance } from '../../shared/model-advance.mjs';
-import type { Advance } from '../../shared/model-advance.mjs';
+import type { Advance, HistoryEntry } from '../../shared/model-advance.mjs';
 import type { ModelClass, Registry } from '../../shared/models.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -2289,15 +2289,48 @@ describe('the advance file through init, set-class, rm and advance-backfill (aut
     expect(fs.existsSync(advPath(router))).toBe(false);
   });
 
-  it('init codex never overwrites an advance file it finds: holds and history survive a re-created registry', () => {
+  it('init codex over an advance file an earlier registry left keeps its holds and history, clears pending and previous, re-seeds every family as a fresh init does, and says so (D-5966)', () => {
     withCodexRow();
     fs.mkdirSync(path.dirname(advPath(CODEX_ROW.id)), { recursive: true });
-    const kept = backfillAdvance({ registry: SEEDED, seedFamilies: CODEX_SEEDS });
-    kept.classes.opus.hold = { at: NOW, by: 'hand' };
-    plantAdvance(CODEX_ROW.id, kept);
+    const fresh = backfillAdvance({ registry: SEEDED, seedFamilies: CODEX_SEEDS });
+    const familiesOf = (adv: Advance): Record<string, string | null> =>
+      Object.fromEntries(Object.entries(adv.classes).map(([c, x]) => [c, x.family]));
+    // Left by another registry: no family the new pins have (the empty class has none at all), a previous pin, a
+    // hold, a history entry, and a hand intent whose `to` is the very pin init is about to write.
+    const left = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: null });
+    const hold = { at: NOW, by: 'hand' } as const;
+    const history: HistoryEntry[] = [
+      { at: NOW, how: 'advance', from: 'model-5.6-gamma', to: 'model-6.1-gamma', ok: true, canary: 'passed' },
+    ];
+    left.classes.opus = { ...left.classes.opus, hold, previous: { model: 'model-5.6-gamma', effort: 'max' }, history };
+    left.pending = {
+      how: 'hand', class: 'opus', from: 'model-5.6-gamma', to: SEEDED.classes.opus, emptied: [], at: NOW,
+    };
+    // CONTROL: every family the file holds differs from the one a fresh init writes.
+    for (const [c, f] of Object.entries(familiesOf(left))) expect(f, c).not.toBe(familiesOf(fresh)[c]);
+    plantAdvance(CODEX_ROW.id, left);
     const r = opAt('init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex');
-    expect(r.body['created'], r.stdout + r.stderr).toBe(true);
-    expect(fs.readFileSync(advPath(CODEX_ROW.id), 'utf8')).toBe(serializeAdvance(kept));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['created']).toBe(true);
+    // Soft, so a mutation that keeps the old intent is seen by the false-move assertion below as well.
+    const adv = advanceOf(CODEX_ROW.id);
+    expect.soft(familiesOf(adv), 'every family as a fresh init writes it').toEqual(familiesOf(fresh));
+    expect.soft(adv.pending, 'the old intent is cleared').toBeNull();
+    expect.soft(Object.values(adv.classes).map((x) => x.previous), 'every previous cleared')
+      .toEqual([null, null, null, null]);
+    expect.soft([adv.classes.opus.hold, adv.classes.opus.history], 'the hold and the history kept')
+      .toEqual([hold, history]);
+    expect.soft(String(r.body['advanceNote']))
+      .toMatch(/^the lane already had an advance file, left by an earlier class registry, and it was reused \(D-5966\)/);
+    expect.soft(r.stderr).toContain(`models-op: ${String(r.body['advanceNote'])}`);
+    // The next set-class records its own move and nothing else: no intent of the old registry's lands as a move.
+    expect(opAt('set-class', '--file', rosterPath(), '--id', CODEX_ROW.id, '--class', 'sonnet', '--model', 'model-6.1-beta').code)
+      .toBe(0);
+    const after = advanceOf(CODEX_ROW.id);
+    expect(after.classes.opus.history, 'no false move').toEqual(history);
+    expect(after.classes.sonnet.history).toEqual([
+      { at: NOW, how: 'hand', from: SEEDED.classes.sonnet, to: 'model-6.1-beta', ok: true, canary: 'not-run' },
+    ]);
   });
 
   it('set-class records a hand entry and rewrites the family from a pin that parses', () => {
@@ -2367,7 +2400,7 @@ describe('the advance file through init, set-class, rm and advance-backfill (aut
     expect(r.stderr).toContain('models-op: advance-file-invalid: ');
   });
 
-  it("set-class with no advance file creates it by backfill first: the pins' families before the change, init's seed for the empty class, then the move", () => {
+  it("set-class with no advance file creates one: each pin's own family, init's seed for the empty class, and the move's hand entry", () => {
     plantAdv();
     expect(opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'sonnet', '--model', 'model-6.1-beta').code).toBe(0);
     const want = recordMove(backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS }), 'sonnet',
@@ -2421,6 +2454,35 @@ describe('the advance file through init, set-class, rm and advance-backfill (aut
     ]);
     expect(chooseCandidate({ registry: registryOf(ID) as unknown as Registry, catalogue: ADV_CATALOGUE, cls: 'opus',
       family: after.classes.opus.family })).toEqual({ candidate: null, reason: null, blocked: null });
+  });
+
+  it("a set-class whose registry write fails after its intent is written says what changed, never 'Nothing was changed', and the next writer records no move (D-5188)", () => {
+    plantAdv();
+    // The registry write is made to fail for real, in a COPY of the op (the probe idiom of the readAdvance and
+    // writeAdvance describe below): `writeRegistry` aims `writeJsonFile` under the registry FILE, so its mkdir fails
+    // after `beginHandMove` has written the intent. Every other byte of the copy is the op as it is.
+    const src = fs.readFileSync(OP, 'utf8');
+    const WRITE = "return writeJsonFile(registryPath(id), registry, 'registry-unwritable');";
+    expect(src.split(WRITE), 'writeRegistry has its one line').toHaveLength(2);
+    const copy = path.join(home, 'models-op-unwritable.mjs');
+    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+      .replace(WRITE, "return writeJsonFile(path.join(registryPath(id), 'x'), registry, 'registry-unwritable');"));
+    const run = spawnSync(process.execPath,
+      [copy, 'set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'model-6-delta'],
+      { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: NOW }, encoding: 'utf8' });
+    expect(run.status, run.stdout + run.stderr).toBe(1);
+    const body = JSON.parse(run.stdout.split('\n')[0]!) as Record<string, unknown>;
+    expect(body['error']).toBe('registry-unwritable');
+    expect(String(body['detail']))
+      .toMatch(/could not be written: .*\. The registry was not changed\. The hand intent this set-class wrote/);
+    expect(String(body['detail'])).not.toContain('Nothing was changed');
+    expect(classesOf(ID)['opus'], 'the registry did not move').toBe('model-5.6-gamma');
+    expect(advanceOf(ID).pending).toEqual(
+      { how: 'hand', class: 'opus', from: 'model-5.6-gamma', to: 'model-6-delta', emptied: [], at: NOW });
+    // The real op, next: it finds the pin unchanged and records no move from that intent.
+    expect(opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'sonnet', '--model', 'model-6.1-beta').code).toBe(0);
+    const after = advanceOf(ID);
+    expect([after.pending, after.classes.opus.family, after.classes.opus.history]).toEqual([null, 'gamma', []]);
   });
 
   it('a hand intent whose rename never happened is dropped by the next locked writer: no entry, and the family as it was', () => {

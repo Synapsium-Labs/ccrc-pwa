@@ -386,6 +386,10 @@ function readAdvance(id) {
   }
 }
 
+/** The sentence every `writeJsonFile` refusal ends with, named because one caller rewords it: a set-class whose
+ *  hand intent is already on disk when its registry write fails (`handIntentLeft`), where it would be false. */
+const NOTHING_CHANGED = 'Nothing was changed.';
+
 /** The ONE write of a hand-editable JSON file here — the class registry
  *  (`writeRegistry`), the measured windows (`writeWindows`) and the advance
  *  file (`writeAdvance`): tmp + rename, 0600, this repo's rule for any file
@@ -404,7 +408,7 @@ function writeJsonFile(p, value, error) {
     return null;
   } catch (e) {
     try { unlinkSync(tmp); } catch { /* the tmp may never have been created */ }
-    return [error, `${p} could not be written: ${e.message}. Nothing was changed.`];
+    return [error, `${p} could not be written: ${e.message}. ${NOTHING_CHANGED}`];
   }
 }
 
@@ -468,6 +472,27 @@ function backfillOnce(id, registry) {
   return w === null ? { created: true } : { err: w };
 }
 
+/** `init codex`'s advance file (auto-advance spec §2.2). With none, `backfillOnce` creates it. One already there
+ *  was LEFT by an earlier registry, because init creates a registry only where there is none: the
+ *  `probe-declared` remedy (delete the registry by hand), a rollback to a build whose `rm` reaps five files, or an
+ *  `rm` cut short before its last reap (D-5966). Adopted whole, its families would disagree
+ *  with the new pins, so an advance could cross families, and its `pending` would be settled as a move that never
+ *  happened. So it is REUSED: each class keeps its `hold` and its `history`, the operator's acts; `previous` is
+ *  cleared, because a revert to a pin of the registry that is gone would jump to an unrelated model; every family
+ *  is written exactly as a fresh init writes it; `pending` is cleared; unknown keys are kept. `{created: true}`,
+ *  `{reused: true}`, `{created: false, why}` for a file it cannot read (left as it is, as `backfillOnce` leaves
+ *  one), or `{err, reusing}` when the write failed. */
+function seedForInit(id, registry) {
+  const cur = readAdvance(id);
+  if (cur.err !== undefined) return { created: false, why: cur.err[0] };
+  if (cur.advance === null) return backfillOnce(id, registry);
+  const fresh = backfillAdvance({ registry, seedFamilies: SEED_FAMILIES[registry.probe] ?? null });
+  const next = { ...cur.advance, classes: { ...cur.advance.classes }, pending: null };
+  for (const c of CLASSES) next.classes[c] = { ...next.classes[c], family: fresh.classes[c].family, previous: null };
+  const w = writeAdvance(id, next);
+  return w === null ? { reused: true } : { err: w, reusing: true };
+}
+
 /** A hand `set-class`'s INTENT (auto-advance spec D21; D-5188), written to the advance file
  *  under the lane-files lock BEFORE the registry is renamed: `{how: 'hand', class, from, to, emptied, at}` — the
  *  class the call named, its pin before and after (`null` for none), the classes one model, one class empties (each
@@ -496,6 +521,17 @@ function beginHandMove(id, before, after, cls) {
   const w = writeAdvance(id, { ...loaded.advance, pending: intent });
   return { note: w === null ? null : `${w[0]}: ${w[1]} The class registry was written; the advance file is as it `
     + 'was, so this change has no history entry and no class family was rewritten.' };
+}
+
+/** A set-class's registry-write refusal once its hand intent is on disk (`beginHandMove` answered no note):
+ *  `writeJsonFile`'s closing `Nothing was changed.` is no longer true, because the advance file now holds the
+ *  intent, so that sentence is replaced by what did and did not change. The registry pin is still `from`, so the
+ *  lane's next locked writer records no move from the intent (`reconcilePending`; D-5188). */
+function handIntentLeft(detail) {
+  if (!detail.endsWith(NOTHING_CHANGED)) return detail;
+  return `${detail.slice(0, -NOTHING_CHANGED.length)}The registry was not changed. The hand intent this set-class `
+    + "wrote to the lane's advance file stays there, and the lane's next locked writer, finding the pin unchanged, "
+    + 'records no move from it.';
 }
 
 /** A hand `set-class`'s record, once the registry and the lane's files are written: the intent `beginHandMove` left
@@ -1401,14 +1437,25 @@ function main(argv) {
     const mat = materialise(account, registry, catalogue, windowsOf(win));
     if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
     // auto-advance spec §2.2: `init codex` seeds EVERY class's family as data, an empty class's included, so the
-    // automatic advance can later fill that class from its own family. Only when no advance file exists: one
-    // already here (holds, history) is never overwritten. Other probes seed none and write none.
-    const seeded = a.probe === 'codex' ? backfillOnce(a.id, registry) : { created: false };
+    // automatic advance can later fill that class from its own family. An advance file already here was left by
+    // an earlier registry: it is reused, its holds and history kept and the rest re-seeded (`seedForInit`,
+    // D-5966). Other probes seed none and write none.
+    const seeded = a.probe === 'codex' ? seedForInit(a.id, registry) : { created: false };
     const answer = { ok: true, op: 'init', created: true, ...describe(account, registry, catalogue, win) };
+    let advanceNote = null;
     if (seeded.err !== undefined) {
-      answer.advanceNote = `${seeded.err[0]}: ${seeded.err[1]} The class registry was created; the lane has no `
-        + 'advance file yet, and the next write of one creates it from the registry.';
-      process.stderr.write(`${SELF}: ${answer.advanceNote}\n`);
+      advanceNote = `${seeded.err[0]}: ${seeded.err[1]} The class registry was created; ${seeded.reusing
+        ? 'the advance file an earlier registry left is as it was, its families not re-seeded. Delete that file, '
+          + 'and the next write re-creates it from the registry.'
+        : 'the lane has no advance file yet, and the next write of one creates it from the registry.'}`;
+    } else if (seeded.reused === true) {
+      advanceNote = 'the lane already had an advance file, left by an earlier class registry, and it was reused '
+        + '(D-5966): each class keeps its hold and history, its family is re-seeded from the new '
+        + 'registry, and the old pending move and previous pins are cleared.';
+    }
+    if (advanceNote !== null) {
+      answer.advanceNote = advanceNote;
+      process.stderr.write(`${SELF}: ${advanceNote}\n`);
     }
     if (CLASSES.every((c) => registry.classes[c] === null)) {
       answer.remedy = `probe "${a.probe}" ships no seed mapping — only you can say which of its `
@@ -1642,7 +1689,7 @@ function main(argv) {
   // below, the registry having moved. Neither half ever refuses for that file: a note becomes `advanceNote`.
   const hand = opName === 'set-class' ? beginHandMove(a.id, registry, validated, a.class) : null;
   const w = writeRegistry(a.id, validated);
-  if (w !== null) return refuse(1, w[0], w[1]);
+  if (w !== null) return refuse(1, w[0], hand !== null && hand.note === null ? handIntentLeft(w[1]) : w[1]);
   const mat = materialise(account, validated, catalogue, windowsOf(win));
   if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
   const advanceNote = hand === null ? null : (hand.note ?? settleHandMove(a.id, validated));
