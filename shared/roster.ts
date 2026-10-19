@@ -180,8 +180,13 @@ export interface AccountDef {
    *  `telemetry === 'anthropic'` and drives the STATUSLINE writer — calling a
    *  Codex lane 'anthropic' would enlist a second writer racing ccgpt-usage on
    *  the same `~/.cc-limits/<id>.json`. It scores like a real account (it is not
-   *  `'none'`) and is written by its own publisher. */
-  telemetry: 'anthropic' | 'codex' | 'none';
+   *  `'none'`) and is written by its own publisher.
+   *
+   *  `'openrouter'` (D-5521) is an OpenRouter key lane. It reports no Claude Code rate limits (its meter
+   *  is the key's credit, read by validation and `check`), so it is not in `CCRC_MEASURED`, not an
+   *  Anthropic backend (`CCRC_ANTHROPIC_BACKEND`, `serviceability`'s `anthropic`, `models-op.mjs`'s
+   *  `isAnthropicLane`), and not scorable in `projectHome` (D-5754). A `compatible` lane writes `'none'`. */
+  telemetry: 'anthropic' | 'codex' | 'none' | 'openrouter';
   /** The operator's declaration that this entry is roster PLUMBING rather than
    *  one of their accounts.
    *
@@ -460,6 +465,10 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
 const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
 
 const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external', 'codex']);
+/** `AccountDef['telemetry']`'s values, keyed by the union so the two cannot drift here, and an object rather than
+ *  an array so it is not read as a restatement of the provider ids (`single-definition.test.ts`). The bare-Node
+ *  mirror (`shared/roster-json.mjs`) declares the same keys and `roster-exec-parity.test.ts` compares them (D-5753). */
+const TELEMETRY_VALUES: Readonly<Record<AccountDef['telemetry'], true>> = { anthropic: true, codex: true, none: true, openrouter: true };
 /** Dotless GPT-lane names fit the account-id grammar, so refuse them before wrapper convergence reaches its
  *  self-exec lock: ccrc's `ccrc-codex` and `ccgpt-runtime`, and `ccgpt` (a box may still carry another repository's). */
 const GPT_TOOLCHAIN_ACCOUNT_IDS: ReadonlySet<string> = new Set(['ccrc-codex', 'ccgpt-runtime', 'ccgpt']);
@@ -1002,11 +1011,11 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
   const pool = poolRaw === undefined ? null : poolRaw;
 
   const telemetry = raw['telemetry'];
-  if (telemetry !== 'anthropic' && telemetry !== 'codex' && telemetry !== 'none') {
+  if (typeof telemetry !== 'string' || !Object.hasOwn(TELEMETRY_VALUES, telemetry)) {
     throw new RosterError(
       `account "${id}" has an invalid telemetry ${JSON.stringify(telemetry)}: it must be ` +
-        '"anthropic", "codex" or "none".',
-      `Set "telemetry" for account "${id}" in ${ROSTER_PATH} to "anthropic", "codex" or "none".`,
+        '"anthropic", "codex", "openrouter" or "none".',
+      `Set "telemetry" for account "${id}" in ${ROSTER_PATH} to "anthropic", "codex", "openrouter" or "none".`,
     );
   }
 
@@ -1026,7 +1035,7 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
     hue = hueRaw;
   }
 
-  return { id, label, configDirSuffix, exec, homeAble, telemetry, hue, hidden, pool };
+  return { id, label, configDirSuffix, exec, homeAble, telemetry: telemetry as AccountDef['telemetry'], hue, hidden, pool };
 }
 
 /**

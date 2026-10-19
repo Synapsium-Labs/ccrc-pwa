@@ -73,11 +73,11 @@ describe('runForSession — the current wave during a boundary overlap (D-2616)'
     const outgoing = r({ id: 41, wave: 1, sessionId: 'shared-worker' });
     const incoming = r({ id: 44, wave: 2, sessionId: 'shared-worker', state: 'planned' });
 
-    expect(runForSession([outgoing, incoming], 'shared-worker')).toBe(incoming);
+    expect(runForSession([outgoing, incoming], { id: 'shared-worker' })).toBe(incoming);
   });
 
   it('returns null when no active row names the session', () => {
-    expect(runForSession([r({ sessionId: 'someone-else' })], 'shared-worker')).toBeNull();
+    expect(runForSession([r({ sessionId: 'someone-else' })], { id: 'shared-worker' })).toBeNull();
   });
 });
 
@@ -1809,5 +1809,16 @@ describe('a row whose claimant or close time the board does not have', () => {
     expect(body.indexOf('dated-one'),
       'the undated row sorted above a row that has a real close time')
       .toBeLessThan(body.indexOf('undated-one'));
+  });
+});
+
+// D-5102: the run board stands on the page scaffold, at the wide column.
+describe('the run board on the page scaffold (D-5102)', () => {
+  it('renders a PageScaffold with one h1, at --page-max-wide', () => {
+    const { container } = render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={() => new Promise(() => {})} />);
+    const h1 = screen.getAllByRole('heading', { level: 1 });
+    expect(h1).toHaveLength(1);
+    expect(h1[0]).toHaveAccessibleName('Runs');
+    expect(container.querySelector('[data-page-body]')?.className.split(/\s+/)).toContain('max-w-(--page-max-wide)');
   });
 });

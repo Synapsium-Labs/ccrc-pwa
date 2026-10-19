@@ -4,7 +4,7 @@ import {
   ACCOUNT_OP_KILL_GRACE_MS, ACCOUNT_OP_OUTPUT_MAX_BYTES, ACCOUNT_SUB_TIMEOUT_MS, type AccountSub,
 } from '../../../shared/api.js';
 import {
-  ACCOUNT_OP, accountOpRequestTimeoutMs, readAccountOpAnswer, updateLauncherPath, type AccountOpReq,
+  ACCOUNT_OP, ACCOUNT_OP_DRAIN_MS, accountOpRequestTimeoutMs, readAccountOpAnswer, updateLauncherPath, type AccountOpReq,
 } from '../../../shared/agent-protocol.js';
 import { buildAccountArgv, isAccountStdin, type AccountArgvRefusal } from '../../../shared/account-argv.js';
 import type { CcrcConfig } from '../config.js';
@@ -122,7 +122,11 @@ export function localAccountOps(opts: LocalAccountOpsOpts): AccountOps {
         // but a group member that ignores TERM and closed its stdio is still running and still gets KILL.
         resolve(r);
       };
-      /** SIGTERM to the whole group (the verb's `claude`, `curl`, `jq` too), then SIGKILL after the grace. */
+      /**
+       * SIGTERM to the whole group (the verb's `claude`, `curl`, `jq` too), SIGKILL after the grace, then one drain
+       * deadline, as the agent's port does (D-5622 (7)): a member that left the group (setsid) and holds stdout keeps
+       * `close` from firing, and must not hold the request, and the caller's stdin buffer, past the sub's window.
+       */
       const stop = (why: AccountOpResult): void => {
         if (ended !== null) return;
         ended = why;
@@ -131,7 +135,10 @@ export function localAccountOps(opts: LocalAccountOpsOpts): AccountOps {
           try { process.kill(-child.pid, s); } catch { /* the group is already gone */ }
         };
         signal('SIGTERM');
-        setTimeout(() => signal('SIGKILL'), grace).unref();
+        setTimeout(() => {
+          signal('SIGKILL');
+          setTimeout(() => settle(why), ACCOUNT_OP_DRAIN_MS).unref();
+        }, grace).unref();
       };
       try {
         child = spawn(launcher, argv, { env: { ...env }, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
@@ -142,8 +149,9 @@ export function localAccountOps(opts: LocalAccountOpsOpts): AccountOps {
       const bound = setTimeout(() => stop({ kind: 'timeout' }), timeoutOf(sub));
       child.on('error', () => settle({ kind: 'not-started' }));
       child.stdout!.on('data', (b: Buffer) => {
+        if (ended !== null) return;
         bytes += b.length;
-        if (bytes > cap) { stop({ kind: 'too-large' }); return; }
+        if (bytes > cap) { chunks.length = 0; stop({ kind: 'too-large' }); return; }
         chunks.push(b);
       });
       // Drained so a chatty verb cannot block on a full pipe; never kept, never logged.

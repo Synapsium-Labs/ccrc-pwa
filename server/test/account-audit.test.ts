@@ -102,6 +102,12 @@ describe('account_events (D-5516)', () => {
     expect(actorOf('\u009b31mevil\u202eabc\u200b\u2066x\u2069\ufeff\u0085y', 'cd'.repeat(32)).toString())
       .toBe(`31mevil abc x y ${'cd'.repeat(4)}`);
     expect(actorOf('\u202e\u200f\u009b', 'cd'.repeat(32)).toString()).toBe(`unknown device ${'cd'.repeat(4)}`);
+    // Every other Unicode format character (\p{Cf}) goes too, with the combining grapheme joiner: the Arabic
+    // letter mark, the soft hyphen, the Mongolian vowel separator, the interlinear annotation marks and the tag
+    // block (D-5621).
+    expect(actorOf('a\u061cb\u00adc\u180ed\u034fe\ufff9f\ufffbg\u{e0001}h\u{e0041}\u{e007f}i', 'cd'.repeat(32)).toString())
+      .toBe(`a b c d e f g h i ${'cd'.repeat(4)}`);
+    expect(actorOf('\u061c\u{e0020}\u00ad', 'cd'.repeat(32)).toString()).toBe(`unknown device ${'cd'.repeat(4)}`);
   });
 
   it("knownFleetIdentity is the node-id only while the identity is known (D-5516)", () => {

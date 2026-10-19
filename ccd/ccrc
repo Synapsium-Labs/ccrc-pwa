@@ -14808,6 +14808,14 @@ _inst_plist_server() {   # <label> <log> -> the plist bytes, on stdout
     <key>PATH</key><string>$(_svc_job_path)</string>
     <key>HOME</key><string>$HOME</string>
   </dict>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>Core</key><integer>0</integer>
+  </dict>
+  <key>HardResourceLimits</key>
+  <dict>
+    <key>Core</key><integer>0</integer>
+  </dict>
   <key>StandardOutPath</key><string>$log</string>
   <key>StandardErrorPath</key><string>$log</string>
 </dict>

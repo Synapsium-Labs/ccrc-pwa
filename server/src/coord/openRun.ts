@@ -1,4 +1,4 @@
-import { isPositiveDecimalSafeInteger, shapeProgramSlug } from '../../../shared/api.js';
+import { isPositiveDecimalSafeInteger, isRegistryId, shapeProgramSlug } from '../../../shared/api.js';
 import type { RunKind, RunRefuseCode, RunSummary } from '../../../shared/api.js';
 
 /**
@@ -193,7 +193,7 @@ export type OpenRunConflictCode = Extract<RunRefuseCode,
  *  the bare shape refusal has NO `detail` key, every other `error` has one. */
 export type OpenRunRefusal =
   | { gate: OpenRunGate; error: 'bad-request'; detail?: string }
-  | { gate: OpenRunGate; error: 'run-unreadable' | AttributionRefusal; detail: string }
+  | { gate: OpenRunGate; error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal; detail: string }
   | { gate: OpenRunGate; refused: OpenRunConflictCode; by?: string; detail?: string };
 
 /** The admitted open, shaped: what `CoordStore.openRun` and the route's later
@@ -227,7 +227,7 @@ interface Ctx {
   mark?: SessionMarkRead;
 }
 
-type GateResult = { error: 'bad-request'; detail?: string } | { error: 'run-unreadable' | AttributionRefusal; detail: string }
+type GateResult = { error: 'bad-request'; detail?: string } | { error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal; detail: string }
   | { refused: OpenRunConflictCode; by?: string; detail?: string } | undefined;
 type Gate = (c: Ctx) => GateResult | Promise<GateResult>;
 
@@ -263,6 +263,22 @@ const GATES = [
       !(homeProject === undefined || typeof homeProject === 'string'))
       ? { error: 'bad-request' } : undefined;
   }],
+  // Path identity (spec §2.3). Every id this route stores can later reach an
+  // id-taking argv: `wsHold`, then dispatch, close and the routing door. So
+  // each is asked the ONE predicate here, AS GIVEN: `openRun` stores the
+  // untrimmed body field, so a padded id is refused rather than stored. Right
+  // after the shape guard, so each names its field; ahead of the review arm,
+  // so a review open with a bad `sessionId` answers `bad-session-id` before
+  // `reviewSession` refuses any `sessionId`; and ahead of `attribution`,
+  // so no registry listing or field read is ever made for such an id. The
+  // project check is a work run's only: a review run's project is the
+  // reviewed run's, read at `reviewProject`. A new WORK row can then never
+  // carry a project ccd could read as a flag to `ws-add`. A new review row
+  // copies the reviewed run's STORED project, which this check does not read
+  // (carried as `work-run-project-reaches-ws-add-unchecked`).
+  ['claimedById', (c) => isRegistryId(c.b.claimedBy) ? undefined : { error: 'bad-session-id', detail: 'claimedBy is not a registry id' }],
+  ['sessionIdId', (c) => (c.b.sessionId === undefined || isRegistryId(c.b.sessionId)) ? undefined : { error: 'bad-session-id', detail: 'sessionId is not a registry id' }],
+  ['projectFlag', (c) => (!isReview(c) && /^[-.]/.test(c.b.project as string)) ? bad('project must not begin with - or .') : undefined],
   ['reviewsOnWork', (c) => (!isReview(c) && c.b.reviews !== undefined) ? bad('reviews is only accepted with kind review') : undefined],
   ['reviewsId', (c) => (isReview(c) && !isPositiveDecimalSafeInteger(c.b.reviews)) ? bad('reviews must name the work run under review (a positive run id)') : undefined],
   // ABOVE the review arm (Task 5 review I2): the reviewed run's `program` is
