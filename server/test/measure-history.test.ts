@@ -1338,6 +1338,20 @@ describe('W2-3 Task 3: windows over assistant turns', () => {
     expect(W([g.windowOf(p3, [])])).toEqual([['measured', 1000, 1200, true, 2, 0]]);
     expect(g.producerOfBoundary(p3.copies)).toBe('unknown');
   });
+
+  // ── Final fix wave, item E: a family without a boolean `found` is no family report ──
+  it('final E: buildWindows throws a TypeError unless found is a boolean; found:false still answers []', async () => {
+    const g = await t3Gate();
+    // Task 4's census rows carry no `found`: a W2-5a assembler that passed one in would read zero windows for every family.
+    const censusShaped = { ccrc_id: T3_ID, generation: T3_GEN, session_pk: 1, first_seen_ms: 1, last_main_ts_ms: 1, merged_into: null,
+      calls: [], boundaries: [] } as unknown as T3Family;
+    expect(() => g.buildWindows(censusShaped)).toThrow(TypeError);
+    for (const found of [undefined, null, 0, 1, 'true', 'false', {}]) {
+      expect(() => g.buildWindows({ ...censusShaped, found } as unknown as T3Family), String(found)).toThrow(/found/);
+    }
+    expect(g.buildWindows({ ...censusShaped, found: false } as unknown as T3Family), 'CONTROL: found:false is a family the store lacks').toEqual([]);
+    expect(g.buildWindows({ ...censusShaped, found: true } as unknown as T3Family), 'CONTROL: found:true with no boundary has no window').toEqual([]);
+  });
 });
 
 // ── W2-3 Task 4: the census and the active rule (W2-D13 census mode, W2-D20; D-5773 (history-w2-legacy-families-excluded)) ──

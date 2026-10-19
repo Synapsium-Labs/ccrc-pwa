@@ -298,6 +298,9 @@ export function windowOf(boundary, calls, k = K) {
 /** Every window of one family's report, in its boundaries' order; none for a family the store does not hold.
  *  @param {FamilyReport} family @param {number} [k] @returns {Window[]} */
 export function buildWindows(family, k = K) {
+  // `found` is measured and boolean (no overloaded null): a row without it, a census row for one, is no family report,
+  // and reading it as not-found would hand an assembler zero windows for every family.
+  if (typeof family.found !== 'boolean') throw new TypeError('buildWindows: family.found must be a boolean (a family report, not a census row)');
   if (!family.found) return [];
   return family.boundaries.map((b) => windowOf(b, family.calls, k));
 }
