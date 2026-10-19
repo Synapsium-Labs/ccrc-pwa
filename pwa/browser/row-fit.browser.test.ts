@@ -155,11 +155,16 @@ function measureRows(page: Page): Promise<RowFit> {
     if (body === undefined) throw new Error('no sheet body is open');
     const edge = body.getBoundingClientRect().right;
     const rows = [...body.querySelectorAll<HTMLElement>('.acct-list > button')];
-    /** How many lines an element's text is laid out on. */
+    /** How many lines an element's text is laid out on: its text nodes' line boxes only, never the chip's dot. */
     const lines = (el: HTMLElement): number => {
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      return new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top))).size;
+      const tops = new Set<number>();
+      const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let t = walk.nextNode(); t !== null; t = walk.nextNode()) {
+        const range = document.createRange();
+        range.selectNodeContents(t);
+        for (const r of range.getClientRects()) if (r.width > 0) tops.add(Math.round(r.top));
+      }
+      return tops.size;
     };
     /** The element's width with its text held on one line, measured and then put back. */
     const oneLineWidth = (el: HTMLElement): number => {
