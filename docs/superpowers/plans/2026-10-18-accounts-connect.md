@@ -274,14 +274,14 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
 
 **The shape.** `RosterWire` gains four optional, non-secret fields: `provider` (`'anthropic' | 'openai' | 'openrouter' | 'compatible'`), `kind` (`'sign-in' | 'token' | 'codex' | 'key'`), `telemetry` and `managed` (true for a ccrc-owned Codex lane). Each is derived once, from the parsed roster entry, by `rosterKindOf(entry)` in `shared/roster.ts`. **The roster has no method field** (`ACCOUNT_KEYS` is id, label, configDirSuffix, exec, homeAble, hue, telemetry, hidden and pool; `ExecSpec` carries no method), so `kind` for an Anthropic lane is derived from `exec.secretsFile`: present is `token`, absent is `sign-in`. Paste versus mint is not a roster fact; it lives in the lane state (`mintedAt`, A20) and reaches the screen through A12's `LaneWire`. No `method` field rides `RosterWire`, and no roster key is added. An entry that does not say is **absent** on the wire, never defaulted: an older roster mirror read by a newer PWA shows no kind chip rather than a wrong one.
 
-- [ ] **Step 1: Red.** `roster-wire-kind.test.ts`:
+- [x] **Step 1: Red.** `roster-wire-kind.test.ts`:
   - "a codex lane, an openrouter lane and a compatible lane each carry the provider and kind the spec's §4.1 names". Red: no fields.
   - "an Anthropic lane with `exec.secretsFile` is token, and one without it is sign-in".
   - "an entry with no provider carries no provider or kind: absence is not anthropic". Red: undefined vs a default.
   - "no new field can carry a secret": the four fields' types are closed unions or booleans. Vitest does not typecheck and `server/tsconfig.json` excludes `test/`, so this is a fixture under `server/test/types/bypasses/` (that directory's bypass-fixture pattern, `tsconfig.bypasses.json`) (one assignment of a string per field, each asserted to fail to compile), run by `typecheck-tests.test.ts`.
   - "one reader": `single-definition` finds `rosterKindOf` in exactly `shared/roster.ts`.
-- [ ] **Step 2: Green.** Implement the shape.
-- [ ] **Step 3: Mutation table, RUN.**
+- [x] **Step 2: Green.** Implement the shape.
+- [x] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
   |---|---|---|
@@ -291,8 +291,8 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   | `kind` read from a roster `method` key | roster-wire-kind | "…with `exec.secretsFile` is token…" |
   | a second `rosterKindOf` in `server/src` | single-definition | its registry row |
 
-- [ ] **Step 4: Per width × skin × mode.** No UI: "no UI" in all sixteen cells. A2 is the first screen that shows the kind.
-- [ ] **Step 5: Verify.**
+- [x] **Step 4: Per width × skin × mode.** No UI: "no UI" in all sixteen cells. A2 is the first screen that shows the kind.
+- [x] **Step 5: Verify.**
 
       cd server && ./node_modules/.bin/vitest run test/roster-wire-kind.test.ts test/single-definition.test.ts test/roster.test.ts test/typecheck-tests.test.ts
       cd server && ./node_modules/.bin/tsc --noEmit
@@ -1761,6 +1761,12 @@ Issued and unused (Task A8): none.
 - **D-5690** — `confirm-its-you-as-built` (Task A6): six decisions Task A6's Files list did not make. (1) **The ceremony's browser half is `assertStepUp` in `pwa/src/lib/passkey.ts`**, a file the Files list does not name, so that module stays the one that touches `navigator.credentials`. It takes `POST /api/auth/step-up/start`'s answer as a parameter and calls `credentials.get` before it returns; `assertPasskey` awaits its own start first, which spends iOS Safari's user activation, so it cannot serve. (2) **A held challenge is replaced, and never signed past its bound.** It is replaced after `CHALLENGE_REFRESH_MS` (55 s) while the page is visible, and a new one is fetched after every attempt, because a challenge is single-use. The bound plus the prompt's own timeout (`STEP_UP_CEREMONY_MS`, 60 s) stays five seconds inside the box's two-minute `CHALLENGE_TTL_MS`, and the test pins that sum. A timer does not fire on wall time while a page is suspended (a sleeping laptop, a throttled hidden tab, an iOS PWA in the background), so the hook also records when each challenge arrived: a tap on one past its bound signs nothing, says so and fetches a fresh one, and returning to the page replaces a stale one. While a replacement start is in flight the superseded challenge is dropped and the button is disabled, because the box's next issue kills it. A replacement is a new start, never a resent proof. The box keeps one live challenge per session, so the hook assumes one mounted instance per session; a hidden page never refreshes on the timer. (3) **The sheet owns the step.** `useStepUp(freshUntil, deps)` takes `connect.stepUpFreshUntil` as a parameter (A12 carries it; until then the caller passes it), and `runAct(act)` runs an act once and answers `'step-up'` on `step-up-required`, which is how a sheet feeds the refusal back. A stamp the step earns outranks the screen's read until it lapses, and a refused act outranks both until the next stamp. (4) **A browser without WebAuthn on a box with a passkey** shows `NO_PASSKEY_HERE_TEXT` and no button. The passphrase arm is never offered there, because the box would refuse it `passkey-enrolled`. A `passkey-enrolled` answer to the passphrase arm (a key enrolled since the step showed) re-reads start, which then offers the passkey arm. (5) **The passphrase is also cleared on `visibilitychange` to hidden**, spec §3.3's rule for a secret in a sheet, beside submit and hide. (6) **Sentences come from refusal words only.** `rate-limited`, `unmeasured` and an unreachable box offer Try again, which is a new start and never a resend; `auth-off` offers nothing to press. **`not-configured` at start shows the passphrase arm**: the box's passkey settings are broken, so no passkey can be verified, and the passphrase is the door every box has (spec §3.2's fallback). This is never a step down, because the passphrase route refuses `passkey-enrolled` itself; that answer after a `not-configured` start shows the `not-configured` sentence and nothing to press, rather than looping back to start.
 
 Issued and unused (Task A6): 5691.
+
+### Issued 2026-10-19 and defined here (Task A1)
+
+- **D-5751** — `roster-wire-kind-as-built` (Task A1): five decisions Task A1's Files list did not make. (1) **The vocabulary's one home.** `RosterKind` and `RosterKindWire` are declared in `shared/roster.ts` beside `rosterKindOf`, and `RosterWire` (`shared/api.ts`) `extends RosterKindWire`, so the four fields' types are written once. `telemetry` is typed `AccountDef['telemetry']`, so A26a's `openrouter` member reaches the wire with no edit here. (2) **Where the provider comes from.** `upstream` is `anthropic` by construction (`ExecSpec`'s header) and carries `sign-in`, or `token` if it declares a `secretsFile`. A `generated` entry with no provider is `anthropic`, because that is the parser's documented default (with its warning) and `rosterKindOf` reads the parsed entry. An `external` entry with no provider is undeclared: no `provider`, no `kind`, and `telemetry` still rides, because the roster requires it. (3) **`managed` rides OpenAI lanes only**: true for `exec.kind: 'codex'`, false for an `external` OpenAI launcher, which is `kind: 'codex'` too, and absent on every other provider. (4) **The closed-union fixture's runner.** The suite that compiles `server/test/types/bypasses/` and holds each fixture to its codes is `ccdargv-brand.test.ts`, not `typecheck-tests.test.ts`, which only asserts that the directory stays out of the test program. `b8-roster-wire-open-string.ts` is registered there, and because that suite compares a set of codes, an appended describe asserts TS2322 on each field's marked line, so the mutant that types `kind` as `string` goes red by the field's name. (5) **`accounts-route.test.ts` changes.** It pinned the exact `RosterWire` key list and said `telemetry` stays server-side. It now pins the kind fields per entry. Its comment, `server.ts`'s builder comment and `RosterWire`'s docstring now say that `telemetry` crossed on purpose, as a closed union with no path, and that `exec` and `configDirSuffix` still stay on the server.
+
+Issued and unused (Task A1): 5752.
 
 ### Departures defined here by slug, awaiting numbers
 
