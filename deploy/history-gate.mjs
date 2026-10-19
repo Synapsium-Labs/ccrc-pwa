@@ -1651,9 +1651,9 @@ function fracOrNull(v, name) {
  * @returns {{
  *   verdict: 'pass'|'fail'|'halt'|'incomplete', stamp: 'code-changed'|null, halts: string[],
  *   criteria: {
- *     accuracy: {point_t: {num: number, den: number}, point_c: {num: number, den: number}, lower: {num: number, den: number}, holds: boolean}|null,
+ *     accuracy: {point_t: {num: number, den: number}, point_c: {num: number, den: number}, lower: {num: number, den: number}, upper: {num: number, den: number}, holds: boolean}|null,
  *     fabrication: {t: {num: number, den: number}, c: {num: number, den: number}, holds: boolean}|null,
- *     uptake: {point: {num: number, den: number}, lower: {num: number, den: number}, holds: boolean}|null},
+ *     uptake: {point: {num: number, den: number}, lower: {num: number, den: number}, upper: {num: number, den: number}, holds: boolean}|null},
  *   counts: {Q: number, run_failed: number, absent: {treatment: {num: number, den: number}|null, control: {num: number, den: number}|null}},
  *   comparison: {dropped: string[]},
  *   report_only: unknown,
@@ -1753,7 +1753,7 @@ export function decideGate(inputs) {
     const pointT = frac(tally.treatment.correct, Q);
     const pointC = frac(tally.control.correct, Q);
     const boot = clusterBootstrap({ clusters: paired, B, rng: substream(seedHex, 'quiz-ci'), mode: 'paired' });
-    accuracy = { point_t: pointT, point_c: pointC, lower: boot.lower,
+    accuracy = { point_t: pointT, point_c: pointC, lower: boot.lower, upper: boot.upper,
       holds: cmpFrac(pointT, ACCURACY_MIN) >= 0 && cmpFrac(boot.lower, ZERO) > 0 };
   }
   // Criterion 2: not computed under the run-failed halt, or the hold.
@@ -1788,7 +1788,7 @@ export function decideGate(inputs) {
   let uptake = null;
   if (shares.length > 0) {
     const ub = clusterBootstrap({ clusters: shares, B, rng: substream(seedHex, 'live-ci'), mode: 'share' });
-    uptake = { point: ub.point, lower: ub.lower, holds: cmpFrac(ub.lower, X) >= 0 };
+    uptake = { point: ub.point, lower: ub.lower, upper: ub.upper, holds: cmpFrac(ub.lower, X) >= 0 };
   }
   // An empty arm (the coordinator's W2-3 ruling): criterion 1's or criterion 3's treatment set with no cluster left
   // halts, once, and neither empty set is ever bootstrapped.

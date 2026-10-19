@@ -3978,16 +3978,20 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
       const wantAcc = gateT8.clusterBootstrap({ clusters: paired, B: 10000, rng: gateT8.substream(seed, 'quiz-ci'), mode: 'paired' });
       expect(a.criteria.uptake!.lower, seed).toEqual(wantUp.lower);
       expect(a.criteria.accuracy!.lower, seed).toEqual(wantAcc.lower);
+      expect(a.criteria.uptake!.upper, seed).toEqual(wantUp.upper);
+      expect(a.criteria.accuracy!.upper, seed).toEqual(wantAcc.upper);
       // Criterion 1 skipped under an absent-rate halt: criterion 3's interval is the same one.
       const absent = quizOf(20, (i) => [...rep(3, () => q(R(), U())), q(U(), U()), i < 6 ? q(ans('uncertain', 'absent'), U()) : q(U(), U())]);
       const b = decide({ seedHex: seed, live, quiz: absent });
       expect(b.criteria.accuracy).toBeNull();
       expect(b.criteria.uptake!.lower, seed).toEqual(wantUp.lower);
+      expect(b.criteria.uptake!.upper, seed).toEqual(wantUp.upper);
     }
     // B is the caller's: B = 1 is a single replicate, which is both bounds.
     const one = decide({ live, quiz, B: 1 });
     const wantOne = gateT8.clusterBootstrap({ clusters, B: 1, rng: gateT8.substream(SEED, 'live-ci'), mode: 'share' });
     expect(one.criteria.uptake!.lower).toEqual(wantOne.lower);
+    expect(one.criteria.uptake!.upper).toEqual(wantOne.upper);
     expect(one.criteria.uptake!.lower).not.toEqual(decide({ live, quiz }).criteria.uptake!.lower);
   });
 
@@ -4091,6 +4095,35 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
     const v = decide({ live: { families: [] } });
     expect(v.halts).toEqual(['empty-arm']);
     expect(v.criteria.uptake).toBeNull();
+  });
+
+  // ── Final fix wave, item C (spec 10.2 "Always reported"; W2-D85): the CI's upper bound rides beside its lower ──
+  it('final C: the verdict carries the bootstrap upper bound beside the lower, in both criteria, exactly', () => {
+    // Criterion 3: four treatment families at 1, 9, 5 and 3 windows of 10 with a call; the pooled point is 18/40, the
+    // 2.5% rank is 8/40 and the 97.5% rank is 30/40 (measured with the gate's own substream 'live-ci').
+    const live: Inputs['live'] = { families: [
+      ...[1, 9, 5, 3].map((n, i) => liveFam(fk(100 + i), 'treatment', 10, n)),
+      ...[0, 1, 2, 3].map((i) => liveFam(fk(200 + i), 'control', 10, 0)),
+    ] };
+    const up = decide({ live }).criteria.uptake!;
+    expect(eq(up.point, fr(18, 40))).toBe(true);
+    expect(eq(up.lower, fr(8, 40))).toBe(true);
+    expect(eq(up.upper, fr(30, 40)), 'the upper bound is the 97.5% rank, not the lower').toBe(true);
+    // Criterion 1: the one-positive-family-in-20 quiz has the paired interval [0/20, 3/20].
+    const acc = decide({ quiz: quizOf(20, (i) => [i === 0 ? q(R(), U()) : i <= 8 ? q(R(), R()) : q(U(), U())]) }).criteria.accuracy!;
+    expect(eq(acc.lower, fr(0, 20))).toBe(true);
+    expect(eq(acc.upper, fr(3, 20))).toBe(true);
+    // The verdict's bounds are the bootstrap's own.
+    const clusters = live.families.filter((f) => f.arm === 'treatment').map((f) => ({ num: f.windows.filter((w) => w.with_call).length, den: f.windows.length }));
+    const want = gateT8.clusterBootstrap({ clusters, B: 10000, rng: gateT8.substream(SEED, 'live-ci'), mode: 'share' });
+    expect(up.upper).toEqual(want.upper);
+  });
+
+  it('final C: a criterion with no cluster left carries no interval at all, lower or upper (empty-arm)', () => {
+    const v = decide({ live: { families: [] } });
+    expect(v.criteria.uptake).toBeNull();
+    const w = decide({ quiz: quizOf(20, () => [q(ans('uncertain'), U(), true)]) });
+    expect(w.criteria.accuracy).toBeNull();
   });
 });
 
