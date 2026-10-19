@@ -84,9 +84,9 @@ describe('QuickConfirm — defaultFocus', () => {
     expect(document.activeElement).toBe(opener);
   });
 
-  // D-5610: `autoFocus` fires only when Cancel MOUNTS. In a browser the sheet keeps its closing content mounted for
+  // D-5610: a focus given on mount (as `autoFocus` was, and as `useCancelFirst`'s ref is) fires only when Cancel MOUNTS. In a browser the sheet keeps its closing content mounted for
   // the close transition (Radix's Presence waits for the exit animation it reads from the computed style), so a
-  // confirm reopened inside that window reuses the same Cancel node and `autoFocus` never runs again: measured, the
+  // confirm reopened inside that window reuses the same Cancel node and a mount-time focus never runs again: measured, the
   // focus stayed on the opener behind an open modal on 10 of 12 reopens at 1280. jsdom has no animations, so this
   // case gives the dialog a computed exit animation that never ends, which keeps the closed content mounted exactly
   // as the browser's transition does.
