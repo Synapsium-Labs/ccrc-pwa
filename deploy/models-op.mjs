@@ -861,10 +861,12 @@ function main(argv) {
       return 0;
     }
     // TWO-PHASE (fix round 1, this task's controller ruling): STOP-THEN-WRITE.
-    // `ccd/ccrc`'s `_models_litellm` owns the decision of whether a running
-    // proxy needs stopping — this op cannot make that call itself, since
-    // `pgrep`/`ccgpt` are box-level concerns kept out of node deliberately, so
-    // this op can be measured against a fixture HOME with no real process.
+    // `ccd/ccrc`'s `_models_litellm_lane_held` owns the decision of whether a
+    // running tier needs stopping — this op cannot make that call itself, since
+    // a lane's units and pids are box-level concerns kept out of node
+    // deliberately (the external arm's `pgrep`/`ccgpt` stop was retired by
+    // Plan 4), so this op can be measured against a fixture HOME with no real
+    // process.
     // Without `--commit true`, this call is CHECK-ONLY: it never writes, so a
     // caller that decides a restart is owed and then fails to stop the proxy
     // can walk away having changed nothing on disk, and the NEXT run sees the
@@ -1111,8 +1113,9 @@ function main(argv) {
           if (a.endpoints === undefined) {
             return refuse(1, 'endpoints-required',
               `account "${a.id}" is an openrouter lane: discovery add needs the probe's endpoints `
-              + `answer. Run 'ccrc-models-probe ${a.id} openrouter --endpoints <author/slug> --out `
-              + "<path>' first, then pass --endpoints <path> to this command.");
+              + `answer. Run 'ccrc models ${a.id} discovery add <author/slug>' — it runs the probe `
+              + 'ccrc ships and passes its answer here — or pass --endpoints <path> holding that '
+              + "probe's answer.");
           }
           const w = whitelistCheck(a.endpoints);
           if (w.err !== undefined) return refuse(1, w.err[0], w.err[1]);
