@@ -5263,7 +5263,8 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
         // rules out, and prune never takes a blob an unlinked row names: D-5399's residual is a row replay places against a
         // restore-held tombstone, never one stored here. Replay's replaySidecarRow does not do this: a replayed row travelled
         // already. Replay marks the blob and its referrers by the first segment that carries them, so after a rebuild no mark
-        // names the later segment that carried the new rows again, and its loss then drops them (the plan's first-wins residual).
+        // on them names the later segment that carried them again with the new rows: once that segment is lost nothing carries
+        // those rows again, and a second rebuild drops them (the plan's first-wins residual).
         if (!fresh && Number(q.blobUnmark.run(blobId).changes) === 1) clearReferrerMarks(db, [Number(blobId)]);
       }
       // W1-B4 Task 8 (D-4763 (history-export-late-sidecar-clears-marks), NEW): a sidecar row first linked after its entry was
@@ -8772,11 +8773,12 @@ export function checkSegmentMarks(db, ctx, record) {
       // marked with a segment that IS here, and its blob is exported no more, so the entries get their marks cleared with the
       // blobs'. A pruned blob is no exception: its bytes are gone, but a mark on it means its bytes were exported, and they are
       // held only by the segment the mark names (a stub is never marked), and an entry exported again later into another
-      // segment does not carry it again (planSegment carries only a blob no segment carried, and stubs every pruned blob with
-      // no mark, on every export of its entry, so a pruned blob with a mark gets neither). With that segment gone no live segment would hold the blob, and a rebuild from the live segments could
-      // not place the entry (export_row_blob_missing) or its variants. Clearing the entry lets the next pass that finds it due
-      // write it again, with a stub of the pruned blob (D-4759), in the segment that then marks it. Each entry is counted once,
-      // here or in the clear of its own segment's marks below.
+      // segment does not carry it again (planSegment carries only a live blob with no mark, and stubs every pruned blob with
+      // no mark, on every export of its entry, so a pruned blob with a mark gets neither). With that segment gone no live
+      // segment would hold the blob, and a rebuild from the live segments could not place the entry (export_row_blob_missing)
+      // or its variants. Clearing the entry lets the next pass that finds it due write it again, with a stub of the pruned
+      // blob (D-4759), in the segment that then marks it. Each entry is counted once, here or in the clear of its own
+      // segment's marks below.
       // Iterated, never materialised, and handed to the clears a batch at a time: the referrer clears touch `entries` only and
       // the blobs' marks go after the last of them, so the cursor over `blobs` is never written under.
       const batch = Number.isSafeInteger(ctx.deps?.exportBindBatch) && ctx.deps.exportBindBatch > 0 ? ctx.deps.exportBindBatch : EXPORT_BIND_BATCH;
