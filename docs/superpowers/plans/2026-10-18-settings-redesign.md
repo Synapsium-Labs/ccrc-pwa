@@ -834,6 +834,13 @@ The coordinator issued D-5612 and D-5613 for Task R1c's departures from its file
 
 - **D-5612** — `move-sheet-hands-its-answer` (Task R1c): the move's 202 line ("Requested. The nodes report back within a minute.", spec §6.4) is written under the control that opened the move sheet, which only the sheet can tell has answered. So `UpdateMoveSheet` (`pwa/src/fleet/UpdateMoveSheet.tsx`, not in R1c's file list) takes an optional `onAnswered(text)` and, when it is given, hands the caller `MOVE_REQUESTED_TEXT` (defined beside `MOVE_UNREADABLE_TEXT`), or `MOVE_UNREADABLE_TEXT` for a 2xx it could not read, as it closes on a request, instead of toasting. With `onAnswered`, an answer that lands after the sheet was dismissed (the scrim, Esc, a swipe) is toasted, the sentence it would have said, an error toast for a refusal, because the control that asked is gone: spec §6.4's one toast case. Without it (the update banner) the sheet behaves as before. Settings keys the line by the opener (`moveKey` of the intent, or the What's-new sheet's own Update all, whose line sits under "See what's new").
 
+### Issued for Task R1d and defined here
+
+The coordinator issued D-5614 and D-5615 for Task R1d's departures. Each is defined once, here.
+
+- **D-5614** — `box-token-card-inline-layout` (Task R1d): the card's foot hairline and its Details layout are inline styles in `SettingsScreen.tsx`, because R1d's file list holds no stylesheet and `contrast.test.ts` is frozen until #627 merges. The hairline is `border-top` 1px solid `var(--edge-subtle)`, the token `.settings-section`'s own top border already names, so no new colour is introduced; the Details `<dl>` grid and its values' `overflow-wrap: anywhere` carry no colour, as R1c's Quiet time cap does not. The fold reuses `.settings-release-fold`, keys wear `.settings-note` and values `.settings-catalogue`. R2b2, which restyles the cards, moves the three into the section's stylesheet.
+- **D-5615** — `rotate-note-names-no-interval` (Task R1d): Rotate now's note reads "Starts a rotation now instead of waiting for the next scheduled one. …" in place of spec §5.5's "instead of waiting for the weekly one". "Weekly" types the interval, which the card must read from `TOKEN_ROTATION_INTERVAL_MS` and never type; the definition directly above already states it from the constant. The rest of the note is the spec's.
+
 ### Issued and unused
 
 D-5613

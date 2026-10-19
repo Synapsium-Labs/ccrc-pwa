@@ -32,7 +32,7 @@ import { carriesUpdateGate } from '../../../shared/update-move';
 import { LOOPBACK_HOSTS } from '../../../shared/base-url';
 import {
   BackButton, Button, RadioFieldset,
-  SYSTEM, Skeleton, THEMES, toast, useNow,
+  SYSTEM, Skeleton, THEMES, elapsedShort, useNow,
 } from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { StallWatchSection } from './StallWatchSection';
@@ -40,8 +40,8 @@ import { AppearanceFieldset, AppearanceGroup, AppearanceRow } from './Appearance
 import { SkinFieldset } from './SkinFieldset';
 import { CollectLaneSection } from '../fleet/CollectLaneSection';
 import {
-  CATALOGUE_EXPLAIN_TEXT, NOTIFICATIONS_TEXT, NotedRadioSet, ResultLine, UNCONFIRMED_TEXT, UPDATES_TEXT, autoGateNoteText,
-  useResultLine,
+  CATALOGUE_EXPLAIN_TEXT, NOTIFICATIONS_TEXT, NotedRadioSet, ResultLine, SETTINGS_AMBER_NOTE, UNCONFIRMED_TEXT, UPDATES_TEXT,
+  autoGateNoteText, useResultLine,
 } from './settingsText';
 import { planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
@@ -52,6 +52,7 @@ import { ApiError, api, apiErrorText, readBoxTokenView, updateErrorText } from '
 // box-token card landed on main while that move was happening on this branch,
 // and it reads two of the same clocks.
 import type { BoxTokenView, RotateAnswer, TokenHold } from '../../../shared/box-token';
+import { TOKEN_ROTATION_INTERVAL_MS } from '../../../shared/box-token';
 import { readAuthStatus } from '../lib/auth';
 import { pushSupported } from '../lib/push';
 import { setTheme, useThemeChoice } from '../lib/theme';
@@ -419,17 +420,89 @@ function rotateAnswerText(a: RotateAnswer | 'unreadable'): string {
   return 'This server runs no box-token driver.';
 }
 
+// ── Settings Task R1d: the card's shape (spec §5.5; D-5503's words, D-5507's rule that Rotate stays one tap) ──
+// A definition, one summary sentence, today's key/value lines folded behind "Details", and Rotate now alone at the
+// foot after a hairline, with its note, its when-line and its answer as the card's result line. The hold, state and
+// answer sentences above are read by name, never retyped. Rotate now opens no 401 window and keeps the old key until
+// the fleet box confirms (box-token design G3), so it stays a one-tap ghost: no confirm, no danger tone.
+
+const SPAN_UNIT: Readonly<Record<string, string>> = { m: 'minute', h: 'hour', d: 'day' };
+
+/** "2 days", "5 hours", "40 minutes", "moments": `elapsedShort`'s one-unit ladder, said in words. */
+function spanWords(ms: number): string {
+  const short = elapsedShort(ms);
+  if (short === null) return 'moments';
+  const n = Number(short.slice(0, -1));
+  return `${n} ${SPAN_UNIT[short.slice(-1)] ?? short.slice(-1)}${n === 1 ? '' : 's'}`;
+}
+
+/** The card's words (spec §5.5). The interval is `TOKEN_ROTATION_INTERVAL_MS`, said in words at render, never typed:
+ *  `box-token-card.test.tsx` runs against a 3-day fixture of it. The note names no interval (D-5615). */
+const BOX_TOKEN_TEXT = {
+  purpose: (interval: string): string => 'The key that sessions and tools on the fleet box use to call this server, '
+    + `for mail and coordination. The server makes a new one every ${interval} and hands it to the fleet box itself. `
+    + 'The old key keeps working until the fleet box confirms the new one, so nothing restarts or drops.',
+  handedOut: 'Rotating: waiting for the fleet box to confirm. The old key still works.',
+  rotateNote: 'Starts a rotation now instead of waiting for the next scheduled one. Nothing restarts; the old key keeps '
+    + 'working until the fleet box confirms.',
+  rotateWhen: 'You think the key has leaked.',
+} as const;
+
+const sentenceCase = (t: string): string => t.charAt(0).toUpperCase() + t.slice(1);
+
+/** The summary's ink, from classes the page already carries: the note's secondary, the inline-refusal amber, and the
+ *  page's one red sentence (`.settings-unarmed`, self-grounded), so no colour-bearing rule is added. */
+const SUMMARY_CLASS = { calm: 'settings-note', amber: SETTINGS_AMBER_NOTE, red: 'settings-unarmed' } as const;
+
+/** One sentence from the view. "Healthy" only in `idle` with the fleet confirmed (`current`, or `own-write`: this box
+ *  writes the fleet copy itself) and nothing owed, stalled or failing. Amber for `held` or `behind`, red for `failed`,
+ *  each with its word, from today's state sentences. */
+export function boxTokenSummary(v: BoxTokenView, now: number): { text: string; tone: keyof typeof SUMMARY_CLASS } {
+  if (v.phase === 'failed') return { text: sentenceCase(boxTokenStateText(v)), tone: 'red' };
+  if (v.phase === 'held') return { text: sentenceCase(boxTokenStateText(v)), tone: 'amber' };
+  if (v.phase === 'handed-out') return { text: BOX_TOKEN_TEXT.handedOut, tone: 'calm' };
+  if (v.phase !== 'idle') return { text: sentenceCase(boxTokenStateText(v)), tone: 'calm' };
+  if (v.fleetConfirmed === 'behind') return { text: `Behind: fleet ${BOX_TOKEN_FLEET_TEXT.behind}`, tone: 'amber' };
+  const confirmed = v.fleetConfirmed === 'current' || v.fleetConfirmed === 'own-write';
+  if (!confirmed || v.rotationOwed || v.stalled !== null || v.banner) {
+    const parts = ['Idle'];
+    if (v.rotationOwed) parts.push(`rotation owed: ${v.owedWhy ?? 'unspecified'}`);
+    parts.push(`fleet: ${BOX_TOKEN_FLEET_TEXT[v.fleetConfirmed]}`);
+    return { text: parts.join(' · '), tone: 'calm' };
+  }
+  const parts = ['Healthy'];
+  parts.push(v.lastRotationAt !== null && isPlaceableInstant(v.lastRotationAt)
+    ? `rotated ${spanWords(now - v.lastRotationAt)} ago` : 'never rotated');
+  // `nextRotationAt` is optional and additive (an older server omits it), and `readBoxTokenView` passes it through
+  // unread, so it is checked here: anything but a placeable instant says nothing about the next rotation.
+  const next: unknown = v.nextRotationAt;
+  if (typeof next === 'number' && isPlaceableInstant(next)) {
+    parts.push(next > now ? `next in ${spanWords(next - now)}` : 'next due now');
+  }
+  return { text: parts.join(' · '), tone: 'calm' };
+}
+
+/** "key: value" said as a key and a value: today's lines, split at their first ": ". */
+const keyValue = (line: string): [string, string] => {
+  const at = line.indexOf(': ');
+  return [line.slice(0, at), line.slice(at + 2)];
+};
+
 function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number; reload: () => void }): ReactNode {
   const titleId = useId();
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
+  const result = useResultLine();
   const v = view.boxToken === undefined ? undefined : readBoxTokenView(view.boxToken);
 
+  // One tap, one POST, no confirm (box-token design G3). Its answer, a refusal or a failure is the line under it.
   const rotate = (): void => {
     setBusy(true);
-    setNote(null);
+    result.clear();
     void api.rotateBoxToken()
-      .then((a) => setNote(rotateAnswerText(a)), (err: unknown) => toast(apiErrorText(err), 'error'))
+      .then(
+        (a) => result.say(rotateAnswerText(a), a === 'unreadable' || a.ok ? 'answer' : 'refusal'),
+        (err: unknown) => result.say(apiErrorText(err), 'refusal'),
+      )
       .finally(() => { setBusy(false); reload(); });
   };
 
@@ -447,11 +520,13 @@ function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number
     lines.push(`fleet: ${BOX_TOKEN_FLEET_TEXT[v.fleetConfirmed]}`);
     lines.push(boxTokenTransportText(v.fleetTransport));
     if (v.lastSync !== null) lines.push(`last sync: ${v.lastSync.word} · ${dayClock(v.lastSync.at, now)}`);
-    lines.push(`previous still presented: ${v.previousPresented} · retired value presented: ${v.retiredPresented}`);
+    // Two facts, so two rows (R1d): one line held both before Details split each into a key and a value.
+    lines.push(`previous still presented: ${v.previousPresented}`);
+    lines.push(`retired value presented: ${v.retiredPresented}`);
     // Spec 10.3's proof that the leak is retired, shown where the coordinator reads it (plan assembly).
     lines.push(`retired value refused: ${v.retiredRefused ? 'yes' : 'not yet'}`);
     if (v.lastBootRecovery !== null) {
-      lines.push(`recovered at boot from the ${v.lastBootRecovery.source} file, ${dayClock(v.lastBootRecovery.at, now)}`);
+      lines.push(`recovered at boot: from the ${v.lastBootRecovery.source} file, ${dayClock(v.lastBootRecovery.at, now)}`);
     }
     if (v.fileProblem !== null) {
       lines.push(`server token file: ${v.fileProblem.file} ${v.fileProblem.word} on re-read (the last good value is kept), ${dayClock(v.fileProblem.at, now)}`);
@@ -465,29 +540,56 @@ function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number
         : v.stalled?.why === 'owed'
           ? `A box-token rotation has been owed${isPlaceableInstant(v.stalled.since) ? ` for ${elapsedWords(now - v.stalled.since)}` : ''} and has not completed${v.hold !== null ? ` (${boxTokenHoldText(v.hold, v.holdNode)})` : ''}.`
           : null;
+    const summary = boxTokenSummary(v, now);
     body = (
       <>
         {alert !== null && (
           <div className="settings-unarmed" role="alert">{alert}</div>
         )}
-        {lines.map((l) => <p key={l} className="settings-note">{l}</p>)}
-        {/* `<Button variant="ghost">`, not a hand-written `btn-ghost`: the
-            class belongs to the primitive, and the SAME screen's *Check now*
-            two sections down is already written this way. The hand-written
-            form arrived with the box-token card on main and this branch's two
-            new guards both named it on the merge — control-census as an
-            unregistered hand-drawn control, and the skin-constant guard as a
-            class the Button primitive owns. */}
-        <Button variant="ghost" className="settings-check" disabled={busy} onClick={rotate}>
-          Rotate now
-        </Button>
-        {note !== null && <p className="settings-note" aria-live="polite">{note}</p>}
+        <p className={SUMMARY_CLASS[summary.tone]} data-box-token="summary">{summary.text}</p>
+        {/* Today's lines, unchanged in fact: sans keys, mono values that wrap rather than scroll. The fold is the
+            release row's (`.settings-release-fold`: the tap-floored summary and its chevron); the grid and the
+            wrap are inline layout with no colour, as R1c's Quiet time cap is, so no stylesheet changes (D-5614). */}
+        <details className="settings-release-fold" data-box-token="details">
+          <summary className="settings-note">Details</summary>
+          <dl style={{ display: 'grid', gap: 'var(--sp-1)', margin: 0 }}>
+            {lines.map(keyValue).map(([k, val]) => (
+              <div key={k}>
+                <dt className="settings-note">{k}</dt>
+                <dd className="settings-catalogue" style={{ margin: 0, overflowWrap: 'anywhere' }}>{val}</dd>
+              </div>
+            ))}
+          </dl>
+        </details>
+        {/* The foot: Rotate now alone after a hairline (D-5614: inline, naming the section rule's own token). */}
+        <div
+          data-box-token="foot"
+          style={{
+            display: 'grid', gap: 'var(--sp-2)', paddingTop: 'var(--sp-3)',
+            borderTopWidth: 1, borderTopStyle: 'solid', borderTopColor: 'var(--edge-subtle)',
+          }}
+        >
+          {/* `<Button variant="ghost">`, not a hand-written `btn-ghost`: the
+              class belongs to the primitive, and the SAME screen's *Check now*
+              two sections down is already written this way. The hand-written
+              form arrived with the box-token card on main and this branch's two
+              new guards both named it on the merge — control-census as an
+              unregistered hand-drawn control, and the skin-constant guard as a
+              class the Button primitive owns. */}
+          <Button variant="ghost" className="settings-check" disabled={busy} onClick={rotate}>
+            Rotate now
+          </Button>
+          <ResultLine line={result.line} />
+          <p className="settings-note">{BOX_TOKEN_TEXT.rotateNote}</p>
+          <p className="settings-note">{BOX_TOKEN_TEXT.rotateWhen}</p>
+        </div>
       </>
     );
   }
   return (
     <section className="settings-section" aria-labelledby={titleId}>
       <h2 id={titleId} className="settings-section-title">Box token</h2>
+      <p className="settings-note" data-box-token="purpose">{BOX_TOKEN_TEXT.purpose(spanWords(TOKEN_ROTATION_INTERVAL_MS))}</p>
       {body}
     </section>
   );

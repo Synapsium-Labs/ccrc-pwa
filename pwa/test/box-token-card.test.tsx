@@ -13,10 +13,20 @@ import type { BoxTokenView, RotateAnswer } from '../../shared/box-token';
 import { BOX_TOKEN_PHASES, TOKEN_HOLDS } from '../../shared/box-token';
 import { SettingsScreen, boxTokenHoldText, boxTokenStateText, boxTokenTransportText } from '../src/screens/SettingsScreen';
 import { asUpdatesView } from '../src/fleet/useUpdatesView';
-import { ApiError, api, createApi, readBoxTokenView } from '../src/lib/api';
+import { ApiError, api, apiErrorText, createApi, readBoxTokenView } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { ToastHost } from '@ccrc/ui';
+
+// Settings Task R1d (D-5503's words): the card's definition states the schedule's interval, read from
+// `TOKEN_ROTATION_INTERVAL_MS` and never typed. So this file runs against a 3-day interval: a card that typed
+// "7 days" reds the definition case. The rest of the module is the real one (spread), so every reader and word
+// table this file pins is the shipped one. The value lives here, in a test file outside the seven-day scans' roots.
+const FIXTURE_INTERVAL_DAYS = 3;
+vi.mock('../../shared/box-token', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../shared/box-token')>()),
+  TOKEN_ROTATION_INTERVAL_MS: 3 * 24 * 60 * 60_000,
+}));
 
 afterEach(() => {
   cleanup();
@@ -55,6 +65,16 @@ const view = (boxToken: unknown, over: Partial<UpdatesView> = {}): UpdatesView =
 const spySectionReads = (): void => {
   vi.spyOn(api, 'stallWatch').mockRejectedValue(new ApiError(501, { error: 'not-configured' }));
   vi.spyOn(api, 'collectLane').mockRejectedValue(new ApiError(501, { error: 'not-configured' }));
+};
+/** The card's Details, one string per key/value row, spelled "key: value" (sans key, mono value). */
+const detailLines = (card: HTMLElement): string[] =>
+  [...card.querySelectorAll<HTMLElement>('details[data-box-token="details"] dl > div')]
+    .map((row) => `${row.querySelector('dt')?.textContent ?? ''}: ${row.querySelector('dd')?.textContent ?? ''}`);
+/** The card's one summary sentence. */
+const summaryOf = (card: HTMLElement): HTMLElement => {
+  const el = card.querySelector<HTMLElement>('[data-box-token="summary"]');
+  expect(el, 'the card has one summary line').not.toBeNull();
+  return el as HTMLElement;
 };
 /** Mount the screen over one answer; resolves with the card's region once it has rendered. */
 const mount = async (v: UpdatesView): Promise<HTMLElement> => {
@@ -122,9 +142,7 @@ describe('the card words (spec 4.7)', () => {
 
   it.each(Object.entries(FLEET_SENTENCES))('the fleet word %s renders exactly "%s" and no other fleet sentence', async (word, sentence) => {
     const card = await mount(view(BT({ fleetConfirmed: word as BoxTokenView['fleetConfirmed'] })));
-    expect(within(card).getByText(sentence)).toBeInTheDocument();
-    const fleetLines = within(card).getAllByText(/^fleet: /).map((e) => e.textContent);
-    expect(fleetLines).toEqual([sentence]);
+    expect(detailLines(card).filter((l) => l.startsWith('fleet: '))).toEqual([sentence]);
   });
 
   it('`behind` never says which side the fleet is on (review 362 F3)', async () => {
@@ -137,9 +155,8 @@ describe('the card words (spec 4.7)', () => {
   it('a box whose boot mint failed over history: no current value, no fleet confirmation of one', async () => {
     const card = await mount(view(BT({ phase: 'unconfigured', currentSeq: null, currentSince: null, fleetConfirmed: 'unknown',
       stalled: { why: 'mint-failed', since: Date.now() - 5 * MIN } })));
-    expect(within(card).getByText('state: no current value')).toBeInTheDocument();
-    expect(within(card).getByText('current value: none')).toBeInTheDocument();
-    expect(within(card).getByText('fleet: not yet measured')).toBeInTheDocument();
+    expect(detailLines(card)).toEqual(expect.arrayContaining(['state: no current value', 'current value: none',
+      'fleet: not yet measured']));
     expect(card.textContent ?? '').not.toMatch(/confirmed the current generation|writes the fleet copy itself|generation #/);
   });
 
@@ -152,20 +169,23 @@ describe('the card words (spec 4.7)', () => {
 
   it('renders age, last rotation, state, fleet confirmation, transport and both presented counts', async () => {
     const card = await mount(view(BT({ previousPresented: 2, retiredPresented: 1, fleetTransport: 'http' })));
-    expect(within(card).getByText('state: idle')).toBeInTheDocument();
-    expect(within(card).getByText('current value: generation #4, 1h 30m old')).toBeInTheDocument();
-    expect(within(card).getByText('last rotation: 1h 30m ago')).toBeInTheDocument();
-    expect(within(card).getByText('fleet: confirmed the current generation')).toBeInTheDocument();
-    expect(within(card).getByText('transport: http (unencrypted)')).toBeInTheDocument();
-    expect(within(card).getByText('previous still presented: 2 · retired value presented: 1')).toBeInTheDocument();
-    expect(within(card).getByText('retired value refused: yes')).toBeInTheDocument();     // spec 10.3, plan assembly
+    expect(detailLines(card)).toEqual(expect.arrayContaining([
+      'state: idle',
+      'current value: generation #4, 1h 30m old',
+      'last rotation: 1h 30m ago',
+      'fleet: confirmed the current generation',
+      'transport: http (unencrypted)',
+      'previous still presented: 2',
+      'retired value presented: 1',
+      'retired value refused: yes',     // spec 10.3, plan assembly
+    ]));
     expect(within(card).queryByRole('alert'), 'no banner below three failures').toBeNull();
   });
 
   // ── added at plan assembly (review findings) ──
   it('before the first retirement the proof line says not yet', async () => {
     const card = await mount(view(BT({ retiredRefused: false })));
-    expect(within(card).getByText('retired value refused: not yet')).toBeInTheDocument();
+    expect(detailLines(card)).toContain('retired value refused: not yet');
   });
 
   it('a stalled rotation raises the alert although no attempt failed; a failed mint does too', async () => {
@@ -198,26 +218,25 @@ describe('the card words (spec 4.7)', () => {
 
   it('a file finding from the re-read is shown with its file and word', async () => {
     const card = await mount(view(BT({ fileProblem: { at: Date.now() - 5 * MIN, file: 'current', word: 'changed' } })));
-    expect(within(card).getByText(/^server token file: current changed on re-read \(the last good value is kept\), /)).toBeInTheDocument();
+    expect(detailLines(card).some((l) => /^server token file: current changed on re-read \(the last good value is kept\), /.test(l))).toBe(true);
   });
 
   it('a held rotation renders the server\'s hold word with its node; an owed one says why', async () => {
     const card = await mount(view(BT({ phase: 'held', hold: 'update-in-flight', holdNode: 'fleet',
       rotationOwed: true, owedWhy: 'adopted', origin: 'adopted' })));
-    expect(within(card).getByText('state: held: an update is in flight on fleet')).toBeInTheDocument();
-    expect(within(card).getByText('rotation owed: adopted')).toBeInTheDocument();
-    expect(within(card).getByText('current value: generation #4, 1h 30m old (hand-made, adopted)')).toBeInTheDocument();
+    expect(detailLines(card)).toEqual(expect.arrayContaining(['state: held: an update is in flight on fleet',
+      'rotation owed: adopted', 'current value: generation #4, 1h 30m old (hand-made, adopted)']));
   });
 
   it('a failed rotation names its word; three in a row raise the banner', async () => {
     const card = await mount(view(BT({ phase: 'failed', failures: 3, lastFailure: 'proof-failed', banner: true })));
-    expect(within(card).getByText('state: failed (proof-failed)')).toBeInTheDocument();
+    expect(detailLines(card)).toContain('state: failed (proof-failed)');
     expect(within(card).getByRole('alert')).toHaveTextContent('Box-token rotation has failed 3 times in a row (last: proof-failed).');
   });
 
   it('a boot recovery is shown with its source', async () => {
     const card = await mount(view(BT({ lastBootRecovery: { at: Date.now() - 5 * MIN, source: 'pending' } })));
-    expect(within(card).getByText(/^recovered at boot from the pending file, /)).toBeInTheDocument();
+    expect(detailLines(card).some((l) => /^recovered at boot: from the pending file, /.test(l))).toBe(true);
   });
 
   it('an older server (no field) and a malformed field are two sentences, and neither shows a button', async () => {
@@ -290,6 +309,199 @@ describe('Rotate now', () => {
     await waitFor(() => expect(button).toBeDisabled());
     fireEvent.click(button);
     expect(rotate).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Settings Task R1d: the box token card (spec §5.5; D-5503's words, D-5507's rule that Rotate stays one tap) ──
+describe('the box token card: definition, summary, Details, and a one-tap Rotate now (settings Task R1d)', () => {
+  const DAY = 24 * 60 * MIN;
+  const purposeOf = (card: HTMLElement): string =>
+    card.querySelector('[data-box-token="purpose"]')?.textContent ?? '';
+
+  it('the definition names the fleet box, mail and coordination, and the old key working until confirmed', async () => {
+    const card = await mount(view(BT()));
+    const purpose = purposeOf(card);
+    expect(purpose).toMatch(/^The key that sessions and tools on the fleet box use to call this server, for mail and coordination\. /);
+    expect(purpose).toContain('hands it to the fleet box itself.');
+    expect(purpose).toContain('The old key keeps working until the fleet box confirms the new one, so nothing restarts or drops.');
+    // The definition is the card's, whatever the server reports: an older server's card still says what the key is.
+    cleanup();
+    const absent = await mount(view(undefined));
+    expect(purposeOf(absent)).toMatch(/^The key that sessions and tools on the fleet box use/);
+  });
+
+  it('the definition\'s interval follows TOKEN_ROTATION_INTERVAL_MS (a 3-day fixture), never a typed one', async () => {
+    const card = await mount(view(BT()));
+    expect(purposeOf(card)).toContain(`The server makes a new one every ${FIXTURE_INTERVAL_DAYS} days and hands it to the fleet box itself.`);
+    expect(card.textContent ?? '').not.toMatch(/\b(?:7|seven)[ -]days?\b|weekly/i);
+  });
+
+  it('the summary reads Healthy, with the last rotation and the next, only in idle with the fleet confirmed', async () => {
+    const card = await mount(view(BT({ lastRotationAt: Date.now() - (2 * DAY + 60 * MIN), nextRotationAt: Date.now() + 5 * DAY + 60 * MIN })));
+    const summary = summaryOf(card);
+    expect(summary.textContent).toBe('Healthy · rotated 2 days ago · next in 5 days');
+    expect(summary).toHaveClass('settings-note');
+    expect(summary).not.toHaveClass('settings-catalogue--amber');
+    expect(summary).not.toHaveClass('settings-unarmed');
+  });
+
+  it('a box that writes the fleet copy itself is confirmed by construction: Healthy', async () => {
+    const card = await mount(view(BT({ fleetConfirmed: 'own-write', nextRotationAt: Date.now() + 5 * DAY + 60 * MIN })));
+    expect(summaryOf(card).textContent).toMatch(/^Healthy · /);
+  });
+
+  it('an older server (no next instant), a due rotation and an unreadable instant say only what is known', async () => {
+    const two = Date.now() - (2 * DAY + 60 * MIN);
+    const older = await mount(view(BT({ lastRotationAt: two })));
+    expect(summaryOf(older).textContent).toBe('Healthy · rotated 2 days ago');
+    cleanup();
+    const due = await mount(view(BT({ lastRotationAt: two, nextRotationAt: Date.now() - MIN })));
+    expect(summaryOf(due).textContent).toBe('Healthy · rotated 2 days ago · next due now');
+    cleanup();
+    const odd = await mount(view({ ...BT({ lastRotationAt: two }), nextRotationAt: 'soon' }));
+    expect(summaryOf(odd).textContent).toBe('Healthy · rotated 2 days ago');
+    cleanup();
+    const never = await mount(view(BT({ lastRotationAt: null, origin: 'minted' })));
+    expect(summaryOf(never).textContent).toBe('Healthy · never rotated');
+  });
+
+  it('while handed out it says the fleet box has yet to confirm and the old key still works', async () => {
+    const card = await mount(view(BT({ phase: 'handed-out', fleetConfirmed: 'behind' })));
+    expect(summaryOf(card).textContent).toBe('Rotating: waiting for the fleet box to confirm. The old key still works.');
+    expect(summaryOf(card)).not.toHaveClass('settings-catalogue--amber');
+  });
+
+  it.each([
+    ['held', BT({ phase: 'held', hold: 'update-in-flight', holdNode: 'fleet' }), 'Held: an update is in flight on fleet'],
+    ['behind', BT({ fleetConfirmed: 'behind' }), 'Behind: fleet not on the current generation'],
+  ] as const)('%s is amber and carries its word as well as the tone', async (_w, bt, said) => {
+    const card = await mount(view(bt));
+    expect(summaryOf(card).textContent).toBe(said);
+    expect(summaryOf(card)).toHaveClass('settings-catalogue--amber');
+  });
+
+  it('failed is red and carries its word as well as the tone', async () => {
+    const card = await mount(view(BT({ phase: 'failed', failures: 1, lastFailure: 'proof-failed' })));
+    expect(summaryOf(card).textContent).toBe('Failed (proof-failed)');
+    expect(summaryOf(card)).toHaveClass('settings-unarmed');
+    expect(summaryOf(card)).not.toHaveClass('settings-catalogue--amber');
+  });
+
+  it.each([
+    ['held', BT({ phase: 'held', hold: 'link-down' })],
+    ['behind', BT({ fleetConfirmed: 'behind' })],
+    ['failed', BT({ phase: 'failed', lastFailure: 'timeout' })],
+    ['handed out', BT({ phase: 'handed-out' })],
+    ['staged', BT({ phase: 'staged' })],
+    ['grace', BT({ phase: 'grace' })],
+    ['unconfigured', BT({ phase: 'unconfigured', currentSeq: null, currentSince: null })],
+    ['idle, fleet not yet measured', BT({ fleetConfirmed: 'unknown' })],
+    ['idle, fleet file unreadable', BT({ fleetConfirmed: 'unreadable' })],
+    ['idle, no generation on the fleet box', BT({ fleetConfirmed: 'absent' })],
+    ['idle, a rotation owed', BT({ rotationOwed: true, owedWhy: 'adopted' })],
+    ['idle, a stall', BT({ stalled: { why: 'owed', since: Date.now() - 5 * MIN } })],
+    ['idle, three failures', BT({ failures: 3, banner: true, lastFailure: 'timeout' })],
+  ] as const)('the summary never reads Healthy when %s', async (_w, bt) => {
+    const card = await mount(view(bt));
+    expect(summaryOf(card).textContent ?? '').not.toMatch(/Healthy/);
+  });
+
+  it('Details holds every key/value line today\'s card shows, closed, and none of them sits outside it', async () => {
+    const card = await mount(view(BT({
+      rotationOwed: true, owedWhy: 'fleet-behind', previousPresented: 2, retiredPresented: 1,
+      lastBootRecovery: { at: Date.now() - 5 * MIN, source: 'previous' },
+      fileProblem: { at: Date.now() - 5 * MIN, file: 'pending', word: 'unreadable' },
+    })));
+    const details = card.querySelector<HTMLDetailsElement>('details[data-box-token="details"]');
+    expect(details).not.toBeNull();
+    expect(details!.open, 'Details starts closed').toBe(false);
+    expect(details!.querySelector('summary')?.textContent).toBe('Details');
+    const keys = detailLines(card).map((l) => l.slice(0, l.indexOf(': ')));
+    expect(keys).toEqual(['state', 'current value', 'last rotation', 'rotation owed', 'fleet', 'transport', 'last sync',
+      'previous still presented', 'retired value presented', 'retired value refused', 'recovered at boot',
+      'server token file']);
+    expect(detailLines(card)).toEqual(expect.arrayContaining(['state: idle', 'rotation owed: fleet-behind',
+      'fleet: confirmed the current generation', 'transport: https', 'previous still presented: 2',
+      'retired value presented: 1', 'retired value refused: yes']));
+    expect(detailLines(card).find((l) => l.startsWith('last sync: '))).toMatch(/^last sync: synced · /);
+    // Sans key, mono value.
+    const row = details!.querySelector('dl > div')!;
+    expect(row.querySelector('dt')).toHaveClass('settings-note');
+    expect(row.querySelector('dd')).toHaveClass('settings-catalogue');
+    // Nothing outside Details reads like one of its lines.
+    const outside = [...card.querySelectorAll('p')].filter((p) => !details!.contains(p)).map((p) => p.textContent ?? '');
+    for (const k of keys) expect(outside.filter((t) => t.startsWith(`${k}: `)), k).toEqual([]);
+  });
+
+  it('Details puts no value, code, hash or token prefix on the page', async () => {
+    const card = await mount(view(BT({ lastSync: { at: Date.now(), word: 'synced' },
+      lastBootRecovery: { at: Date.now(), source: 'pending' }, fileProblem: { at: Date.now(), file: 'current', word: 'changed' } })));
+    const values = [...card.querySelectorAll('details[data-box-token="details"] dd')].map((dd) => dd.textContent ?? '');
+    expect(values.length).toBeGreaterThan(8);
+    for (const v of values) expect(v).not.toMatch(/[0-9a-f]{12,}|[A-Za-z0-9_-]{24,}/);
+  });
+
+  it('Rotate now posts the rotate route once, on one tap, with no dialog; ghost, alone at the card\'s foot after Details', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view(BT()));
+    const rotate = vi.spyOn(api, 'rotateBoxToken').mockReturnValue(new Promise(() => {}));
+    const card = await mount(view(BT()));
+    expect(card.querySelectorAll('button'), 'Rotate now is the card\'s only action').toHaveLength(1);
+    const button = within(card).getByRole('button', { name: 'Rotate now' });
+    expect(button).toHaveClass('btn-ghost');
+    expect(button.className).not.toMatch(/danger/);
+    const foot = card.querySelector<HTMLElement>('[data-box-token="foot"]');
+    expect(foot, 'the foot').not.toBeNull();
+    expect(foot!.contains(button)).toBe(true);
+    expect(foot!.style.borderTopStyle, 'a hairline above the foot').toBe('solid');
+    const details = card.querySelector('details[data-box-token="details"]')!;
+    expect(details.compareDocumentPosition(foot!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(button);
+    expect(rotate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('Rotate now carries its note and its when-line under it', async () => {
+    const card = await mount(view(BT()));
+    const foot = card.querySelector<HTMLElement>('[data-box-token="foot"]')!;
+    expect(foot.textContent).toContain('Starts a rotation now instead of waiting for the next scheduled one. Nothing restarts; the old key keeps working until the fleet box confirms.');
+    expect(foot.textContent).toContain('You think the key has leaked.');
+  });
+
+  const lineUnderRotate = async (card: HTMLElement, text: string, tone: 'answer' | 'refusal'): Promise<void> => {
+    const button = within(card).getByRole('button', { name: 'Rotate now' });
+    const line = await waitFor(() => {
+      const next = button.nextElementSibling as HTMLElement | null;
+      expect(next, 'the line sits directly under Rotate now').not.toBeNull();
+      expect(next).toHaveTextContent(text);
+      return next as HTMLElement;
+    });
+    expect(line).toHaveAttribute('role', 'status');
+    expect(line).toHaveClass('settings-result');
+    if (tone === 'refusal') expect(line).toHaveClass('settings-catalogue--amber');
+    else expect(line).not.toHaveClass('settings-catalogue--amber');
+    expect(document.querySelector('.toast'), 'not a toast: Rotate now is still on screen').toBeNull();
+  };
+
+  it.each([
+    ['started', { ok: true, outcome: 'started', view: BT() }, 'Rotation started.', 'answer'],
+    ['rate-limited', { ok: false, error: 'rate-limited', retryAfterS: 42 }, 'At most one Rotate now a minute — try again in 42 s.', 'refusal'],
+    ['held', { ok: false, error: 'held', hold: 'stale-client', node: 'fleet', view: BT() }, 'Not started — held: a stale ccrc-api on fleet', 'refusal'],
+  ] as const)('Rotate\'s answer is a line under it, not a toast: %s', async (_w, answer, said, tone) => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view(BT()));
+    vi.spyOn(api, 'rotateBoxToken').mockResolvedValue(answer as RotateAnswer);
+    const card = await mount(view(BT()));
+    fireEvent.click(within(card).getByRole('button', { name: 'Rotate now' }));
+    await lineUnderRotate(card, said, tone);
+  });
+
+  it('Rotate\'s failure is a line under it, not a toast', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view(BT()));
+    const err = new ApiError(500, { ok: false, error: 'internal' });
+    vi.spyOn(api, 'rotateBoxToken').mockRejectedValue(err);
+    const card = await mount(view(BT()));
+    fireEvent.click(within(card).getByRole('button', { name: 'Rotate now' }));
+    await lineUnderRotate(card, apiErrorText(err), 'refusal');
   });
 });
 
