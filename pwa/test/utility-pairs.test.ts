@@ -378,6 +378,8 @@ describe('every class string survives the merge that renders it', () => {
     expect(cn('h-8', 'h-row')).toBe('h-row');
     expect(cn('p-3', 'p-card')).toBe('p-card');
     expect(cn('gap-2', 'gap-section')).toBe('gap-section');
+    expect(cn('min-h-11', 'min-h-head')).toBe('min-h-head');
+    expect(cn('min-h-head', 'min-h-11')).toBe('min-h-11');
     // And back: a scale step after a role replaces the role.
     expect(cn('p-gutter', 'p-4')).toBe('p-4');
   });
