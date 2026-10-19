@@ -4533,7 +4533,7 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
     const STORE_C = '00000000-0000-4000-8000-0000000000c3';
     expect(verdict(set(draft(), 'step0a[1].store_id', STORE_C))).toEqual([{ path: 'step0a[1].store_id', word: 'value-outside-set' }]);
     const named = set(draft(), 'step0a[1].store_id', STORE_C);
-    named.nodes.push({ label: 'node-c', store_id: STORE_C });
+    named.nodes[1].store_id = STORE_C;   // node B re-pointed to C, its label kept: every node still has exactly one entry
     expect(verdict(named), "CONTROL: the node set is the record's own nodes").toEqual([]);
   });
 
@@ -4716,6 +4716,10 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
       expect(verdict(one), 'a node with no entry').toEqual([{ path: 'nodes[1]', word: 'field-missing' }]);
       expect(verdict(set(draft(), 'step0a[1].store_id', STORE_A)), 'a second entry for an already-bound store')
         .toEqual([{ path: 'step0a[1].store_id', word: 'value-outside-set' }]);
+      const byLabel = set(draft(), 'step0a[1].store_id', '00000000-0000-4000-8000-0000000000c3');
+      byLabel.nodes.push({ label: 'node-c', store_id: '00000000-0000-4000-8000-0000000000c3' });
+      expect(verdict(byLabel), 'an entry that names node B by label but node C by store covers C only: coverage is by store_id')
+        .toEqual([{ path: 'nodes[1]', word: 'field-missing' }]);
       expect(verdict(draft()), 'CONTROL: one entry per node').toEqual([]);
     });
 

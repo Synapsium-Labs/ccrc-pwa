@@ -2284,22 +2284,23 @@ function recValidate(record, ctx, checkLink) {
   // A flag measured false is flag-rejected, with no exception: under spec §10.2's fallback settings mode step 0a
   // writes no --restricted key, so refusing every false loses nothing.
   // Step 0a is per node (decisions section 4, review fix round 1): a part 1 names at least one node, each node has
-  // exactly one entry, and a second entry for a bound store_id is refused.
+  // exactly one entry, and a second entry for a bound store_id is refused. A node left without an entry is reported only
+  // when every entry is bound once: an entry refused here already refuses the record, and the brief-pinned
+  // unknown-store case keeps its one answer.
   if (r.nodes.length === 0) refuse('nodes', 'value-outside-set');
   const nodeStores = new Set(r.nodes.map((n) => n.store_id));
   const boundStores = new Set();
+  let entryRefused = false;
   r.step0a.forEach((s, i) => {
-    if (!nodeStores.has(s.store_id) || boundStores.has(s.store_id)) refuse(`step0a[${i}].store_id`, 'value-outside-set');
+    if (!nodeStores.has(s.store_id) || boundStores.has(s.store_id)) { refuse(`step0a[${i}].store_id`, 'value-outside-set'); entryRefused = true; }
     boundStores.add(s.store_id);
     if (s.settings_mode !== r.settings_mode) refuse(`step0a[${i}].settings_mode`, 'value-outside-set');
     for (const [flag, accepted] of Object.entries(s.flags_accepted)) {
       if (accepted === false) refuse(`step0a[${i}].flags_accepted.${flag}`, 'flag-rejected');
     }
   });
-  // A node is covered by an entry that names its store_id or, for the brief-pinned shape where an entry's label names a
-  // node whose store_id it re-bound to another node, its label (report: the ruling binds by store_id, the label is a hole).
-  const boundLabels = new Set(r.step0a.map((s) => s.label));
-  r.nodes.forEach((n, i) => { if (!boundStores.has(n.store_id) && !boundLabels.has(n.label)) refuse(`nodes[${i}]`, 'field-missing'); });
+  // A node is covered by an entry that names its store_id, and only by that: the label is operator text (W2-D25).
+  if (!entryRefused) r.nodes.forEach((n, i) => { if (!boundStores.has(n.store_id)) refuse(`nodes[${i}]`, 'field-missing'); });
   if (r.window_plan.planned_days < 1) refuse('window_plan.planned_days', 'value-outside-set');
 
   // The pilot section signed under part 1's own settings (W2-D76, W2-D71).
@@ -2353,7 +2354,7 @@ function recValidate(record, ctx, checkLink) {
   // A draft that failed validation is never read: part 1 must equal the draft's anyway, so the final's own plan stands.
   const plannedMs = (draftOk ? draft : r).window_plan.planned_days * RECORD_DAY_MS;
   const lengthMs = r.window.end_ms - r.window.start_ms;
-  if (lengthMs <= 0 || lengthMs < plannedMs || lengthMs > plannedMs + RECORD_DAY_MS) refuse('window', 'window-length');
+  if (lengthMs < plannedMs || lengthMs > plannedMs + RECORD_DAY_MS) refuse('window', 'window-length');
 
   // The assignment re-derives from the seed (W2-D19).
   const seed = r.bootstrap.seed;
