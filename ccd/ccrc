@@ -2190,7 +2190,7 @@ MODELS_SUBS="clear-window discovery init rm set-class set-effort set-subagent se
 # `deploy/models-op.mjs`'s `OPS` rows marked `writes: true`, which `single-definition.test.ts` checks in both
 # directions; `ccrc-models-lock.test.ts` forbids a bare call of any of them (`materialise --check true` excepted,
 # since it writes nothing).
-MODELS_WRITE_OPS="clear-window discovery init materialise rm set-class set-effort set-subagent set-window"
+MODELS_WRITE_OPS="advance-backfill clear-window discovery init materialise rm set-class set-effort set-subagent set-window"
 
 # The BOX-WIDE subcommands this build implements — a different question from a
 # lane's own classes, on a different cadence (§5).
@@ -9030,9 +9030,9 @@ _acct_remove() {
   # Two
   # reasons, and the second is the load-bearing one:
   #
-  #   * there are FIVE of them, not one — `<id>.json`, `<id>.classes.json`,
-  #     `<id>.classes.tsv`, `<id>.effort.json` and `<id>.windows.json` — so naming
-  #     the registry alone told an operator about a fifth of what this removal left;
+  #   * there are SIX of them, not one — `<id>.json`, `<id>.classes.json`, `<id>.classes.tsv`,
+  #     `<id>.effort.json`, `<id>.windows.json` and `<id>.advance.json` — so naming
+  #     the registry alone told an operator about a sixth of what this removal left;
   #   * those names are `deploy/models-op.mjs`'s to spell.
   #     `single-definition.test.ts` holds `classes.json` to three files, none of
   #     them bash, because "a bash holder would be a second, unvalidated editor

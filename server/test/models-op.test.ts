@@ -20,8 +20,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { CODEX, CODEX_STALE, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
 import { codexAuthDir } from './codexLaneFixture.js';
-import { ADVANCE_EXAMPLE, ADV_DEEP_TEXT } from './fixtures/advanceCases.js';
-import { serializeAdvance } from '../../shared/model-advance.mjs';
+import { ADVANCE_EXAMPLE, ADV_CATALOGUE, ADV_DEEP_TEXT, ADV_REGISTRY, ADV_SEEDS } from './fixtures/advanceCases.js';
+import { backfillAdvance, chooseCandidate, familyOf, recordMove, serializeAdvance } from '../../shared/model-advance.mjs';
+import type { Advance } from '../../shared/model-advance.mjs';
+import type { ModelClass, Registry } from '../../shared/models.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -55,8 +57,13 @@ function seed(roster: unknown = ROSTER): void {
 
 interface Result { code: number; body: Record<string, unknown>; stderr: string; stdout: string }
 function op(...args: string[]): Result {
+  return opEnv({}, ...args);
+}
+
+/** `op`, with `extra` laid over its environment (`CCRC_MODELS_NOW`, the advance file's clock). */
+function opEnv(extra: NodeJS.ProcessEnv, ...args: string[]): Result {
   const r = spawnSync(process.execPath, [OP, ...args],
-    { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    { env: { ...process.env, HOME: home, ...extra }, encoding: 'utf8' });
   const stdout = r.stdout ?? '';
   // THE CONTRACT: exactly one JSON object on stdout, newline-terminated. A
   // helper rather than a `JSON.parse` per call site, because a progress line
@@ -160,6 +167,34 @@ const plantWindows = (id: string, body: unknown): void => {
 };
 const LEGACY_SUFFIX = ROSTER.accounts[2]!.configDirSuffix;
 const eighthKey = (): string | undefined => settingsOf(LEGACY_SUFFIX).env['CLAUDE_CODE_MAX_CONTEXT_TOKENS'];
+
+// auto-advance spec §2.1: the lane's advance file. The neutral fixture lane (`ADV_*`) is planted on this file's
+// external row, or on CODEX_ROW where a case needs a codex-kind lane. Neutral ids only.
+const NOW = '2026-10-15T00:00:00Z';
+const advPath = (id: string): string => path.join(home, '.ccrc', 'models', `${id}.advance.json`);
+const advanceOf = (id: string): Advance => JSON.parse(fs.readFileSync(advPath(id), 'utf8'));
+const opAt = (...args: string[]): Result => opEnv({ CCRC_MODELS_NOW: NOW }, ...args);
+function plantAdv(id: string = LEGACY_EXTERNAL_ID, registry: Registry = ADV_REGISTRY): void {
+  writeCatalogue(id, ADV_CATALOGUE);
+  fs.writeFileSync(regPath(id), `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o600 });
+  const m = op('materialise', '--file', rosterPath(), '--id', id);
+  expect(m.code, m.stdout + m.stderr).toBe(0);
+}
+const plantAdvance = (id: string, adv: Advance | string): void => {
+  fs.writeFileSync(advPath(id), typeof adv === 'string' ? adv : serializeAdvance(adv));
+};
+/** `SEED_FAMILIES.codex`'s one literal word, read off the source rather than spelled: this repository is public. */
+const SEED_EMPTY_FAMILY: string = ((): string => {
+  const src = fs.readFileSync(OP, 'utf8');
+  const m = /^\s*fable: '([a-z][a-z0-9]*)',$/m.exec(src.slice(src.indexOf('const SEED_FAMILIES')));
+  if (m === null) throw new Error('deploy/models-op.mjs has no SEED_FAMILIES literal');
+  return m[1]!;
+})();
+/** What `init codex` seeds: the families of SEEDED's three pins, and the literal for its empty class. */
+const CODEX_SEEDS = {
+  haiku: familyOf(SEEDED.classes.haiku), sonnet: familyOf(SEEDED.classes.sonnet),
+  opus: familyOf(SEEDED.classes.opus), fable: SEED_EMPTY_FAMILY,
+};
 
 beforeEach(() => { home = mkTmp('ccrc-models-op-'); seed(); });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
@@ -1029,7 +1064,7 @@ describe('the registry write', () => {
     const r = op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
     expect(r.body['created'], r.stderr).toBe(true);
     expect(fs.readdirSync(path.join(home, '.ccrc', 'models')).sort())
-      .toEqual(['codex-a.classes.json', 'codex-a.classes.tsv', 'codex-a.effort.json']);
+      .toEqual(['codex-a.advance.json', 'codex-a.classes.json', 'codex-a.classes.tsv', 'codex-a.effort.json']);
   });
 
   it('keeps 2-space indent and a trailing newline', () => {
@@ -2221,6 +2256,261 @@ describe('set-window and clear-window (codex-bridge spec §2.7)', () => {
   });
 });
 
+describe('the advance file through init, set-class, rm and advance-backfill (auto-advance spec §2.1, §2.2)', () => {
+  const ID = LEGACY_EXTERNAL_ID;
+  const withCodexRow = (): void => seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+  const plantSeededRegistry = (id: string): void => {
+    fs.mkdirSync(path.dirname(regPath(id)), { recursive: true });
+    fs.writeFileSync(regPath(id), SEEDED_REGISTRY_BYTES, { mode: 0o600 });
+  };
+
+  it("init codex writes the advance file: every class's family, the empty class's seed included, 0600", () => {
+    withCodexRow();
+    const prev = process.umask(0o022);
+    try {
+      const r = opAt('init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex');
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+    } finally {
+      process.umask(prev);
+    }
+    expect(fs.readFileSync(advPath(CODEX_ROW.id), 'utf8'))
+      .toBe(serializeAdvance(backfillAdvance({ registry: SEEDED, seedFamilies: CODEX_SEEDS })));
+    expect(Object.values(CODEX_SEEDS).every((f) => typeof f === 'string' && f.length > 0)).toBe(true);
+    expect(fs.statSync(advPath(CODEX_ROW.id)).mode & 0o777).toBe(0o600);
+  });
+
+  it.each([
+    ['openrouter', []],
+    ['compatible', ['--base-url', 'https://compatible.example.invalid']],
+  ] as [string, string[]][])('init %s writes no advance file', (probe, extra) => {
+    const router = ROSTER.accounts[3]!.id;
+    const r = op('init', '--file', rosterPath(), '--id', router, '--probe', probe, ...extra);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(fs.existsSync(advPath(router))).toBe(false);
+  });
+
+  it('init codex never overwrites an advance file it finds: holds and history survive a re-created registry', () => {
+    withCodexRow();
+    fs.mkdirSync(path.dirname(advPath(CODEX_ROW.id)), { recursive: true });
+    const kept = backfillAdvance({ registry: SEEDED, seedFamilies: CODEX_SEEDS });
+    kept.classes.opus.hold = { at: NOW, by: 'hand' };
+    plantAdvance(CODEX_ROW.id, kept);
+    const r = opAt('init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex');
+    expect(r.body['created'], r.stdout + r.stderr).toBe(true);
+    expect(fs.readFileSync(advPath(CODEX_ROW.id), 'utf8')).toBe(serializeAdvance(kept));
+  });
+
+  it('set-class records a hand entry and rewrites the family from a pin that parses', () => {
+    plantAdv();
+    const r = opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'model-6-delta');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const adv = advanceOf(ID);
+    expect(adv.classes.opus.family).toBe('delta');
+    expect(adv.classes.opus.history).toEqual([
+      { at: NOW, how: 'hand', from: 'model-5.6-gamma', to: 'model-6-delta', ok: true, canary: 'not-run' },
+    ]);
+    expect(adv.classes.sonnet.history, 'a class the call did not move gets no entry').toEqual([]);
+  });
+
+  it.each([
+    ['none', ['--class', 'haiku', '--model', 'none'], { haiku: { from: 'model-5.6-alpha', to: null } }],
+    ['a pin that breaks the id grammar', ['--class', 'opus', '--model', 'vendor-6-alpha-mini'],
+      { opus: { from: 'model-5.6-gamma', to: 'vendor-6-alpha-mini' } }],
+    ['a class one-model-one-class empties', ['--class', 'fable', '--model', 'model-5.6-alpha'],
+      { haiku: { from: 'model-5.6-alpha', to: null }, fable: { from: null, to: 'model-5.6-alpha' } }],
+  ] as [string, string[], Record<string, { from: string | null; to: string | null }>][])(
+    'set-class with %s records every class it changed, and clears the family of each one it emptied or pinned off-grammar (D-5195)',
+    (_why, args, moves) => {
+      plantAdv();
+      const r = opAt('set-class', '--file', rosterPath(), '--id', ID, ...args);
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      const adv = advanceOf(ID);
+      for (const [c, m] of Object.entries(moves)) {
+        expect(adv.classes[c as ModelClass].history, c).toEqual([{ at: NOW, how: 'hand', ...m, ok: true, canary: 'not-run' }]);
+        expect(adv.classes[c as ModelClass].family, c).toBe(familyOf(m.to));
+      }
+    });
+
+  it('set-class <class> none on a class that is already empty clears the family it was seeded with, and records no move (D-5195; Review Focus: a class emptied by hand)', () => {
+    plantAdv();   // ADV_REGISTRY: the fourth class empty
+    plantAdvance(ID, backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: ADV_SEEDS }));   // …and seeded 'delta'
+    const before = registryOf(ID) as unknown as Registry;
+    // CONTROL: seeded, the empty class would be filled from its family's newest eligible model.
+    expect(chooseCandidate({ registry: before, catalogue: ADV_CATALOGUE, cls: 'fable', family: 'delta' }).candidate)
+      .toBe('model-6-delta');
+    const r = opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'fable', '--model', 'none');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const fable = advanceOf(ID).classes.fable;
+    expect(fable.family).toBeNull();
+    expect(fable.history, 'an unchanged pin is no move: no history entry').toEqual([]);
+    expect(chooseCandidate({ registry: registryOf(ID) as unknown as Registry, catalogue: ADV_CATALOGUE, cls: 'fable',
+      family: fable.family })).toEqual({ candidate: null, reason: null, blocked: null });
+  });
+
+  it('set-class leaves previous alone, so Revert still undoes the last automatic advance', () => {
+    plantAdv();
+    const adv = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS });
+    adv.classes.opus.previous = { model: 'model-5.6-gamma', effort: 'max' };
+    plantAdvance(ID, adv);
+    expect(opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'model-6-delta').code).toBe(0);
+    expect(advanceOf(ID).classes.opus.previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
+  });
+
+  it('set-class over an advance file it cannot read still writes the registry, leaves that file byte for byte, and says so', () => {
+    plantAdv();
+    plantAdvance(ID, '{ this is not json');
+    const r = opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'model-6-delta');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(classesOf(ID)['opus']).toBe('model-6-delta');
+    expect(fs.readFileSync(advPath(ID), 'utf8')).toBe('{ this is not json');
+    expect(String(r.body['advanceNote'])).toMatch(/^advance-file-invalid: .*is not valid JSON/);
+    expect(r.stderr).toContain('models-op: advance-file-invalid: ');
+  });
+
+  it("set-class with no advance file creates it by backfill first: the pins' families before the change, init's seed for the empty class, then the move", () => {
+    plantAdv();
+    expect(opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'sonnet', '--model', 'model-6.1-beta').code).toBe(0);
+    const want = recordMove(backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS }), 'sonnet',
+      { at: NOW, how: 'hand', from: 'model-6-beta', to: 'model-6.1-beta', ok: true, canary: 'not-run' });
+    expect(fs.readFileSync(advPath(ID), 'utf8')).toBe(serializeAdvance(want));
+  });
+
+  it('set-class writes its hand intent before the registry is renamed, and records the move from it only after materialise (D-5188)', () => {
+    // The order is the guard and a source scan its only red: a SIGTERM cannot be aimed between two lines. The scan
+    // reads `main`'s mutation tail alone, because `revertOp` (Task 6) spells the same materialise line.
+    const whole = fs.readFileSync(OP, 'utf8');
+    const src = whole.slice(whole.indexOf('// Every remaining op needs an existing registry.'),
+      whole.indexOf('process.exit(main(process.argv));'));
+    const at = (text: string): number => {
+      const i = src.indexOf(text);
+      expect(i, `main's mutation tail lacks: ${text}`).toBeGreaterThan(0);
+      return i;
+    };
+    const begin = at("const hand = opName === 'set-class' ? beginHandMove(a.id, registry, validated, a.class) : null;");
+    const rename = at('const w = writeRegistry(a.id, validated);');
+    const mat = at('const mat = materialise(account, validated, catalogue, windowsOf(win));');
+    const settle = at('settleHandMove(a.id, validated)');
+    expect(begin).toBeLessThan(rename);
+    expect(mat).toBeLessThan(settle);
+  });
+
+  it('a set-class cut short after the registry rename leaves its hand intent, and the next locked writer records the move: the class stays empty (Review Focus: the crash gap, a hand set-class cut short)', () => {
+    plantAdv();
+    // A directory where the TSV goes: materialise fails AFTER the rename, where a SIGTERM would cut a set-class short.
+    const tsv = path.join(home, '.ccrc', 'models', `${ID}.classes.tsv`);
+    fs.rmSync(tsv);
+    fs.mkdirSync(tsv);
+    const r = opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'none');
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(r.body['error']).toBe('materialise-failed');
+    expect(classesOf(ID)['opus'], 'the registry moved').toBeNull();
+    const cut = advanceOf(ID);
+    expect(cut.pending).toEqual({ how: 'hand', class: 'opus', from: 'model-5.6-gamma', to: null, emptied: [], at: NOW });
+    expect([cut.classes.opus.family, cut.classes.opus.history]).toEqual(['gamma', []]);
+    // The next locked writer, a set-class of another class once the TSV path is fixed, settles it first.
+    fs.rmdirSync(tsv);
+    expect(opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'sonnet', '--model', 'model-6.1-beta').code).toBe(0);
+    const after = advanceOf(ID);
+    expect(after.pending).toBeNull();
+    expect(after.classes.opus.history).toEqual([
+      { at: NOW, how: 'hand', from: 'model-5.6-gamma', to: null, ok: true, canary: 'not-run' },
+    ]);
+    expect([after.classes.opus.family, after.classes.opus.previous]).toEqual([null, null]);
+    expect(after.classes.sonnet.history).toEqual([
+      { at: NOW, how: 'hand', from: 'model-6-beta', to: 'model-6.1-beta', ok: true, canary: 'not-run' },
+    ]);
+    expect(chooseCandidate({ registry: registryOf(ID) as unknown as Registry, catalogue: ADV_CATALOGUE, cls: 'opus',
+      family: after.classes.opus.family })).toEqual({ candidate: null, reason: null, blocked: null });
+  });
+
+  it('a hand intent whose rename never happened is dropped by the next locked writer: no entry, and the family as it was', () => {
+    plantAdv();   // the registry still pins model-5.6-gamma: the set-class died before its rename
+    const adv = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS });
+    adv.pending = { how: 'hand', class: 'opus', from: 'model-5.6-gamma', to: null, emptied: [], at: NOW };
+    plantAdvance(ID, adv);
+    expect(opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'sonnet', '--model', 'model-6.1-beta').code).toBe(0);
+    const after = advanceOf(ID);
+    expect(after.pending).toBeNull();
+    expect([after.classes.opus.family, after.classes.opus.history]).toEqual(['gamma', []]);
+  });
+
+  it("rm reaps the advance file with the lane's other model files, last", () => {
+    plantAdv();
+    plantWindows(ID, windowsFor({ 'model-5.6-gamma': 400000 }));
+    expect(opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'sonnet', '--model', 'model-6.1-beta').code).toBe(0);
+    const r = op('rm', '--file', rosterPath(), '--id', ID);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const dir = path.join(home, '.ccrc', 'models');
+    expect(r.body['removed']).toEqual([regPath(ID), path.join(dir, `${ID}.json`), path.join(dir, `${ID}.classes.tsv`),
+      path.join(dir, `${ID}.effort.json`), winPath(ID), advPath(ID)]);
+    expect(fs.existsSync(advPath(ID))).toBe(false);
+  });
+
+  it('advance-backfill creates the file once, from the registry, and never rewrites it', () => {
+    withCodexRow();
+    plantSeededRegistry(CODEX_ROW.id);
+    const first = op('advance-backfill', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(first.body).toEqual({ ok: true, op: 'advance-backfill', id: CODEX_ROW.id, created: true });
+    const bytes = fs.readFileSync(advPath(CODEX_ROW.id), 'utf8');
+    expect(bytes).toBe(serializeAdvance(backfillAdvance({ registry: SEEDED, seedFamilies: CODEX_SEEDS })));
+    const mtime = fs.statSync(advPath(CODEX_ROW.id)).mtimeMs;
+    const again = op('advance-backfill', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(again.body).toEqual({ ok: true, op: 'advance-backfill', id: CODEX_ROW.id, created: false, why: 'present' });
+    expect(fs.readFileSync(advPath(CODEX_ROW.id), 'utf8')).toBe(bytes);
+    expect(fs.statSync(advPath(CODEX_ROW.id)).mtimeMs).toBe(mtime);
+  });
+
+  it('advance-backfill answers why and writes nothing on a lane that is not codex-kind, or whose probe is not codex (D-5198)', () => {
+    plantCodex(ID);
+    expect(op('advance-backfill', '--file', rosterPath(), '--id', ID).body)
+      .toEqual({ ok: true, op: 'advance-backfill', id: ID, created: false, why: 'lane-not-codex-kind' });
+    expect(fs.existsSync(advPath(ID))).toBe(false);
+    withCodexRow();
+    expect(op('init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'compatible',
+      '--base-url', 'https://compatible.example.invalid').code).toBe(0);
+    expect(op('advance-backfill', '--file', rosterPath(), '--id', CODEX_ROW.id).body)
+      .toEqual({ ok: true, op: 'advance-backfill', id: CODEX_ROW.id, created: false, why: 'probe-not-codex' });
+    expect(fs.existsSync(advPath(CODEX_ROW.id))).toBe(false);
+  });
+
+  it('advance-backfill leaves an advance file it cannot read as it is, and says which', () => {
+    withCodexRow();
+    plantSeededRegistry(CODEX_ROW.id);
+    plantAdvance(CODEX_ROW.id, '[]');
+    expect(op('advance-backfill', '--file', rosterPath(), '--id', CODEX_ROW.id).body)
+      .toEqual({ ok: true, op: 'advance-backfill', id: CODEX_ROW.id, created: false, why: 'advance-file-invalid' });
+    expect(fs.readFileSync(advPath(CODEX_ROW.id), 'utf8')).toBe('[]');
+  });
+
+  it('advance-backfill refuses an Anthropic lane, and a lane with no registry', () => {
+    expect(op('advance-backfill', '--file', rosterPath(), '--id', ROSTER.accounts[1]!.id).body['error']).toBe('anthropic-lane');
+    expect(op('advance-backfill', '--file', rosterPath(), '--id', ROSTER.accounts[3]!.id).body['error']).toBe('no-registry');
+  });
+
+  it('a class emptied by hand stays empty: no later backfill, re-materialise, init or other set-class gives it a family back (Review Focus: a class emptied by hand)', () => {
+    withCodexRow();
+    plantAdv(CODEX_ROW.id);
+    expect(opAt('set-class', '--file', rosterPath(), '--id', CODEX_ROW.id, '--class', 'opus', '--model', 'none').code).toBe(0);
+    const emptied = fs.readFileSync(advPath(CODEX_ROW.id), 'utf8');
+    expect(advanceOf(CODEX_ROW.id).classes.opus.family).toBeNull();
+    // Every hour's first step (W2 runs advance-backfill, then the refresh's re-materialise), and init again:
+    expect(op('advance-backfill', '--file', rosterPath(), '--id', CODEX_ROW.id).body)
+      .toMatchObject({ created: false, why: 'present' });
+    expect(op('materialise', '--file', rosterPath(), '--id', CODEX_ROW.id).code).toBe(0);
+    expect(op('init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex').body['created']).toBe(false);
+    expect(fs.readFileSync(advPath(CODEX_ROW.id), 'utf8')).toBe(emptied);
+    // …and a hand change to another class leaves it emptied.
+    expect(opAt('set-class', '--file', rosterPath(), '--id', CODEX_ROW.id, '--class', 'haiku', '--model', 'model-6.1-alpha').code).toBe(0);
+    const after = advanceOf(CODEX_ROW.id);
+    expect(after.classes.opus.family).toBeNull();
+    const registry = registryOf(CODEX_ROW.id) as unknown as Registry;
+    expect(chooseCandidate({ registry, catalogue: ADV_CATALOGUE, cls: 'opus', family: after.classes.opus.family }))
+      .toEqual({ candidate: null, reason: null, blocked: null });
+    // CONTROL: the family it lost would have filled it from that family's newest eligible model.
+    expect(chooseCandidate({ registry, catalogue: ADV_CATALOGUE, cls: 'opus', family: 'gamma' }).candidate).toBe('model-6.1-gamma');
+  });
+});
+
 // C6: the guard is at OP ENTRY, so every op that takes an `--id` refuses a
 // bad one before touching the roster or any path — not just `rm`, which is
 // the one the finding's own repro happened to exploit.
@@ -2232,6 +2522,7 @@ describe('the account-id guard applies to every op, not just rm (C6)', () => {
     ['discovery', ['--action', 'catalogue']],
     ['set-window', ['--model', 'model-9-omega', '--tokens', '400000']],
     ['clear-window', ['--model', 'model-9-omega']],
+    ['advance-backfill', []],
   ] as [string, string[]][])('%s refuses a bad --id', (opName, extra) => {
     const r = op(opName, '--file', rosterPath(), '--id', '../etc/passwd', ...extra);
     expect(r.code).toBe(1);
@@ -2319,6 +2610,18 @@ describe('a FIFO at a lane file\'s path is that read\'s unreadable answer, never
     fifo(path.join(home, '.ccrc', 'models', `${CODEX_ROW.id}.windows.json`));
     const r = bounded('materialise', '--file', rosterPath(), '--id', CODEX_ROW.id);
     expect(r.code, r.stdout).toBe(0);
+  }, 20_000);
+
+  it('set-class with a FIFO advance file writes the registry and answers at once, the file unreadable and untouched — never a block (auto-advance spec §2.1)', () => {
+    plantAdv(CODEX_ROW.id);
+    const adv = path.join(home, '.ccrc', 'models', `${CODEX_ROW.id}.advance.json`);
+    fifo(adv);
+    const r = bounded('set-class', '--file', rosterPath(), '--id', CODEX_ROW.id,
+      '--class', 'opus', '--model', 'model-6-delta');
+    expect(r.code, r.stdout).toBe(0);
+    expect(classesOf(CODEX_ROW.id)['opus']).toBe('model-6-delta');
+    expect(String(r.body['advanceNote'])).toMatch(/^advance-file-unreadable: .*not a regular file/);
+    expect(fs.statSync(adv).isFIFO(), 'set-class replaced the FIFO it could not read').toBe(true);
   }, 20_000);
 
   it('show with a FIFO settings.json keeps today\'s answer for an unreadable one: every key missing', () => {
