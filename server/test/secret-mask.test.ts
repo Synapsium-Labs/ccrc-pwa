@@ -235,15 +235,15 @@ describe('a compatible key is masked by its exact bytes (D-5513)', () => {
   });
 
   it('a row is matched only under the token of its own generation', () => {
-    let tok = TOKEN_1;
-    const { m, db } = maskerWith({ token: () => tok });
-    tok = TOKEN_2;
-    m.maskText('x');   // the rotation is seen; TOKEN_1 is still held as the previous generation
-    // A row filed under the NEW generation but keyed with the OLD token is not this generation's fingerprint.
+    const { db } = maskerWith();   // CMP under TOKEN_1's generation
+    // A stray row filed under TOKEN_2's generation but keyed with TOKEN_1: no generation's own fingerprint.
     db.prepare('INSERT INTO secret_fingerprints (laneId, fp, gen, at) VALUES (?, ?, ?, ?)')
       .run('stray', fingerprintOf(TOKEN_1, CMP_OTHER), fingerprintGeneration(TOKEN_2), 1);
-    const fresh = new SecretMasker({ db, token: () => TOKEN_2 });
-    expect(fresh.maskText(`k=${CMP_OTHER}`)).toBe(`k=${CMP_OTHER}`);
+    let tok = TOKEN_1;
+    const m = new SecretMasker({ db, token: () => tok });
+    tok = TOKEN_2;   // a rotation: TOKEN_2 is current, TOKEN_1 is held as the previous generation
+    expect(m.maskText(`k=${CMP}`)).toBe(`k=${SECRET_MASK}`);       // TOKEN_1 still matches its own generation's row
+    expect(m.maskText(`k=${CMP_OTHER}`)).toBe(`k=${CMP_OTHER}`);   // and never another generation's
   });
 
   it('after a rotation, a compatible key is still masked before and after the re-key, and old-generation rows are dropped once the new ones land; the roster sub is requested', () => {
