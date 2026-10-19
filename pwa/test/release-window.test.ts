@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { NodeWire, ReleaseWire, UpdateChannel } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import {
-  RELEASE_WINDOW_MAX, olderClosingLine, releaseSummary, releaseWindow, rollbackLead,
+  RELEASE_WINDOW_MAX, haltLineText, olderClosingLine, releaseSummary, releaseWindow, rollbackLead, unmeasuredLead,
 } from '../src/screens/updates';
 
 const T0 = Date.UTC(2026, 9, 1, 12, 0, 0);
@@ -214,7 +214,9 @@ describe('releaseWindow: the unmeasured and unmanaged states (spec §7.1)', () =
     expect(tags(w.newer)).toEqual([tag(22), tag(21), tag(20)]);
     expect(w.rollback).toEqual([]);
     expect(w.olderHidden).toBe(19);
-    expect(w.unreported).toEqual(['server']);
+    // A node with a version but no measurement HAS reported one: it is named as not measured, not as unversioned.
+    expect(w.unreported).toEqual([]);
+    expect(w.notMeasured).toEqual(['server']);
   });
 
   it('an unversioned node, or an unread channel, is unmeasured too', () => {
@@ -248,6 +250,42 @@ describe('releaseWindow: the unmeasured and unmanaged states (spec §7.1)', () =
         expect(w.rollback.length).toBeLessThanOrEqual(RELEASE_WINDOW_MAX);
       }
     }
+  });
+});
+
+describe('releaseWindow: the unmeasured state says why, truthfully (verifier fix pass, D-5609)', () => {
+  it('the lead names what is missing: an unversioned node, an unmeasured one, both, or the unread channel', () => {
+    expect(unmeasuredLead(W(releases22(), [node(tag(22)), server(undefined)])))
+      .toBe('server has not reported a version yet, so no rollback is offered.');
+    expect(unmeasuredLead(W(releases22(), [node(tag(22)), server(tag(22), { measuredAt: null })])))
+      .toBe('server has not been measured yet, so no rollback is offered.');
+    expect(unmeasuredLead(W(releases22(), [node(undefined), server(tag(22), { measuredAt: null })])))
+      .toBe('fleet has not reported a version yet and server has not been measured yet, so no rollback is offered.');
+    expect(unmeasuredLead(W(releases22(), [node(undefined), server(undefined)])))
+      .toBe('fleet, server have not reported a version yet, so no rollback is offered.');
+    expect(unmeasuredLead(W(releases22(), uniform(tag(22)), null)))
+      .toBe('The channel could not be read, so no rollback is offered.');
+  });
+
+  it('withdrawn rows never take an unmeasured slot (the server refuses to install one, D-5608); the unmanaged group keeps them', () => {
+    const rs = releases22((n) => (n === 22 ? { yanked: true } : {}));
+    const un = W(rs, [node(tag(10)), server(undefined)]);
+    expect(un.state).toBe('unmeasured');
+    expect(tags(un.newer)).toEqual([tag(21), tag(20), tag(19)]);
+    expect(un.olderHidden).toBe(18);
+    const mac1 = W(rs, [mac(tag(10))]);
+    expect(tags(mac1.newer)).toEqual([tag(22), tag(21), tag(20)]);
+  });
+
+  it('an empty catalogue draws no window, so a halt gates nothing in it', () => {
+    const halted: Partial<NodeWire> = { update: { state: 'failed', target: tag(9), startedAt: T0, detail: 'gate: unit not up' } };
+    const ns = [node(tag(4), halted), server(tag(9))];
+    const w = W([], ns);
+    expect(w.empty).toBe(true);
+    expect(w.mixed, 'CONTROL: the fleet is still mixed').not.toBeNull();
+    expect(haltLineText(ns, w), 'no Update all is drawn, and no node has a pending Update').toBeNull();
+    expect(W(releases22(), ns).empty).toBe(false);
+    expect(haltLineText(ns, W(releases22(), ns)), 'CONTROL: with rows, the mixed line\'s Update all is gated').not.toBeNull();
   });
 });
 

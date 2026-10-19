@@ -3015,6 +3015,12 @@ button.proj-card-pool::before {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A #NNN link inside the summary is focusable; past the clip edge, focusing it would scroll the clipped line blank.
+   While the line holds focus it unfolds, so the focused link and its ring are in view (layout only). */
+.settings-release-date.settings-release-summary:focus-within {
+  white-space: normal;
+  overflow: visible;
+}
 .settings-release-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-3); }
 /* Notes, What these mean and Refused by are native disclosures: no height animation to honour under reduced
    motion, and the summary reaches the tap floor the buttons do. */
@@ -3024,6 +3030,25 @@ button.proj-card-pool::before {
   width: fit-content;
   min-height: var(--tap-min);
   cursor: pointer;
+}
+/* display:flex drops the native marker, so the disclosure draws its own: a chevron in the summary's own ink
+   (currentColor, no new colour) pointing right when shut and down when open, a touch cue that hover does not give. */
+.settings-release-fold > summary::-webkit-details-marker { display: none; }
+.settings-release-fold > summary::before {
+  content: "";
+  flex: none;
+  width: 0.4em;
+  height: 0.4em;
+  margin-inline-end: var(--sp-2);
+  border-style: solid;
+  border-width: 0 1.5px 1.5px 0;
+  border-color: currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-fast) var(--curve-swift);
+}
+.settings-release-fold[open] > summary::before { transform: rotate(45deg); }
+@media (prefers-reduced-motion: reduce) {
+  .settings-release-fold > summary::before { transition: none; }
 }
 .settings-release-fold > p { margin: 0 0 var(--sp-1); }
 .settings-window { display: grid; gap: var(--sp-2); min-width: 0; }

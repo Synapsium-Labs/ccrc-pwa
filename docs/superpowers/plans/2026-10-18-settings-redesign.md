@@ -814,6 +814,13 @@ D-5503 to D-5510 were given to the Settings redesign. The spec's §14 states D-5
 - **D-5509** — `security-compromise-disclosure` (Task R5): Settings › Security ends with a fifth card, "If this fleet host is ever compromised", which mounts the Accounts plan's all-provider disclosure (Accounts spec §3.11), folded, naming the providers the box may hold credentials for and printing nothing the roster holds. It sits after Box token, so the slot the spec reserves before Box token for "Recent account changes" is unchanged (C6). The Settings spec's §3.3 counts four Security cards; this plan adds the fifth because the Accounts spec's rev 3 placed the disclosure here after the Settings spec's rev 3 was written.
   - **As planned (rev 1):** the Accounts spec's §3.11 hides step 3 for a fleet with no OpenRouter lane. Settings widens that rule, failing toward disclosure: step 3 shows whenever an OpenRouter lane exists or the management key may be present (`connect.openrouterManagement.present`, or that read unavailable or failed), because the management key is installed from the CLI without any lane (Accounts §8.7) and is the strongest credential the box can hold; step 4 and the card always show. The coordinator carries the same widening to the Accounts plan, so its result-frame disclosures agree.
 
+### Issued for Task R1a's review fixes and defined here
+
+The coordinator issued D-5608 and D-5609 for the departures that Task R1a's verifiers found where the spec is silent or contradicts itself. Each is defined once, here.
+
+- **D-5608** — `unmeasured-skips-withdrawn` (Task R1a): the Unmeasured state's "newest three" leaves withdrawn releases out, because every row in that group carries a button and the server refuses to install a withdrawn tag (`unknown-tag`). This is spec §7.2's reason for keeping withdrawn rows out of Newer, applied to the group that replaces Newer. The Unmanaged group draws no button and keeps withdrawn rows, marked. The spec's §7.1 does not say either way.
+- **D-5609** — `unmeasured-draws-no-rollback` (Task R1a): the Unmeasured group draws no Roll back on a row whose `releaseDirection` is `rollback`. Its lead names what is missing: a node that has not reported a version (`nodeVersion` null), a node that has not been measured (`measuredAt` missing), or the unread channel, followed by "so no rollback is offered". This replaces spec §7.1's "each with the button `releaseDirection` gives" for rollback rows. It keeps §7.1's own "nothing is rolled back from a guess", which a channel-unread or unmeasured fleet on the newest tag would otherwise break with enabled Roll back buttons under that sentence.
+
 ### Spare
 
 D-5510

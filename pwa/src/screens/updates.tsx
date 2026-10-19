@@ -173,8 +173,12 @@ export interface ReleaseWindow {
   rule: 'stable' | 'dev';
   /** The waiting release (newestPending's tag), or null. */
   pending: string | null;
-  /** The managed nodes that have not reported a version (the unmeasured state's reason). */
+  /** The managed nodes that have not reported a version (nodeVersion null): one of the unmeasured state's reasons. */
   unreported: string[];
+  /** The managed nodes that reported a version but carry no measurement (measuredAt missing): the other reason. */
+  notMeasured: string[];
+  /** The catalogue holds no row, so ReleaseList draws nothing; the one predicate both it and the halt line read. */
+  empty: boolean;
 }
 
 function onChannel(r: ReleaseWire, channel: UpdateChannel | null): boolean {
@@ -194,17 +198,26 @@ export function releaseWindow(
   const tagged = sortReleases(releases).filter((r) => isReleaseTag(r.tag));
   const managed = nodes.filter(isManagedNode);
   const pending = newestPending(nodes)?.tag ?? null;
-  const unreported = managed.filter((n) => typeof n.measuredAt !== 'number' || nodeVersion(n) === null).map((n) => n.label);
-  const base = { newerHidden: 0, running: null, mixed: null, rollback: [], rule, pending, unreported };
+  const unreported = managed.filter((n) => nodeVersion(n) === null).map((n) => n.label);
+  const notMeasured = managed.filter((n) => nodeVersion(n) !== null && typeof n.measuredAt !== 'number').map((n) => n.label);
+  const base = {
+    newerHidden: 0, running: null, mixed: null, rollback: [], rule, pending, unreported, notMeasured,
+    empty: releases.length === 0,
+  };
 
   // Unmanaged and unmeasured: the newest three on the channel, and a count of the older rows below them.
-  if (managed.length === 0 || unreported.length > 0 || fleetChannel === null) {
-    const shown = tagged.filter((r) => onChannel(r, fleetChannel)).slice(0, RELEASE_WINDOW_MAX);
+  if (managed.length === 0 || unreported.length > 0 || notMeasured.length > 0 || fleetChannel === null) {
+    // D-5608: the unmeasured group offers a button on every row, so a withdrawn release (which the server refuses to
+    // install, `unknown-tag`) takes no slot there, as it takes none in Newer. The unmanaged group draws no button and
+    // keeps them, marked.
+    const unmanaged = managed.length === 0;
+    const shown = tagged.filter((r) => onChannel(r, fleetChannel) && (unmanaged || r.yanked !== true))
+      .slice(0, RELEASE_WINDOW_MAX);
     const last = shown[shown.length - 1];
     const olderHidden = last === undefined
       ? tagged.length
       : tagged.filter((r) => compareReleaseTags(r.tag, last.tag) === -1 && !shown.includes(r)).length;
-    return { ...base, state: managed.length === 0 ? 'unmanaged' : 'unmeasured', newer: shown.map((r) => row(r)), olderHidden };
+    return { ...base, state: unmanaged ? 'unmanaged' : 'unmeasured', newer: shown.map((r) => row(r)), olderHidden };
   }
 
   const versions = managed.map((n) => nodeVersion(n) as string).sort(compareReleaseTags);
@@ -278,6 +291,20 @@ export function olderClosingLine(n: number): string {
 export function newerHiddenLine(n: number): string {
   return `${n} more newer ${n === 1 ? 'release' : 'releases'} on this channel ${n === 1 ? 'is' : 'are'} not shown. `
     + 'Installing the newest brings in every change they made.';
+}
+
+/** The unmeasured state's lead (spec §7.1, D-5609): what the window is missing, said as it is, then that no rollback
+ *  is offered, which the group keeps true by drawing no Roll back. */
+export function unmeasuredLead(w: Pick<ReleaseWindow, 'unreported' | 'notMeasured'>): string {
+  const clause = (labels: readonly string[], one: string, many: string): string =>
+    `${labels.join(', ')} ${labels.length === 1 ? one : many}`;
+  const parts = [
+    ...(w.unreported.length > 0 ? [clause(w.unreported, 'has not reported a version yet', 'have not reported a version yet')] : []),
+    ...(w.notMeasured.length > 0 ? [clause(w.notMeasured, 'has not been measured yet', 'have not been measured yet')] : []),
+  ];
+  return parts.length > 0
+    ? `${parts.join(' and ')}, so no rollback is offered.`
+    : 'The channel could not be read, so no rollback is offered.';
 }
 
 /** The unmeasured and unmanaged groups' count line (spec §7.1). */
@@ -400,7 +427,8 @@ function haltedReason(nodes: readonly NodeWire[]): string | null {
 /** Whether the window draws a control a halt gates: an Install on a Newer or Releases row, or the mixed fleet's
  *  Update all. The unmanaged state draws no button at all. */
 function windowGates(w: ReleaseWindow, nodes: readonly NodeWire[]): boolean {
-  if (w.state === 'unmanaged') return false;
+  // ReleaseList draws nothing for an empty catalogue (the same `empty`), so nothing in it is gated.
+  if (w.empty || w.state === 'unmanaged') return false;
   if (w.mixed !== null) return true;
   return w.newer.some((r) => releaseDirection(r.release.tag, nodes) === 'install');
 }
@@ -455,9 +483,9 @@ function RefusedFold({ release: r, nodes }: { release: ReleaseWire; nodes: reado
 /** One release row (spec §7.4): the facts on the left, the row's one action on the right of their first line, and
  *  under both the row's notes, folds and refusal lines. The summary and the meta line are the date's tertiary ink;
  *  withdrawn and refusal words the refusal line's amber; role words the running line's quiet ink. */
-function ReleaseItem({ item, nodes, haltedBy, source, waiting, buttons, onMove }: {
+function ReleaseItem({ item, nodes, haltedBy, source, waiting, buttons, rollbackOffered, onMove }: {
   item: WindowRow; nodes: readonly NodeWire[]; haltedBy: string | null; source: ReleaseSourceWire | undefined;
-  waiting: boolean; buttons: boolean;
+  waiting: boolean; buttons: boolean; rollbackOffered: boolean;
   onMove: (intent: MoveIntent) => void;
 }): ReactNode {
   const r = item.release;
@@ -504,7 +532,9 @@ function ReleaseItem({ item, nodes, haltedBy, source, waiting, buttons, onMove }
           <p className="settings-release-refused">{WITHDRAWN_RUNNING_TEXT}</p>
         )}
       </div>
-      {buttons && direction !== 'running' && (
+      {/* D-5609: the unmeasured group draws no Roll back — its lead says none is offered (nothing is rolled back
+          from a guess, spec §7.1). */}
+      {buttons && direction !== 'running' && (rollbackOffered || direction !== 'rollback') && (
         <div className="settings-release-actions">
           <MoveButton
             disabled={blockers.length > 0 || gated || (direction === 'install' && item.installBlocked)}
@@ -534,7 +564,7 @@ function ReleaseItem({ item, nodes, haltedBy, source, waiting, buttons, onMove }
 function ReleaseGroup({ label, title, items, ...rest }: {
   label: string; title: string | null; items: readonly WindowRow[];
   nodes: readonly NodeWire[]; haltedBy: string | null; source: ReleaseSourceWire | undefined;
-  pending: string | null; buttons: boolean; onMove: (intent: MoveIntent) => void;
+  pending: string | null; buttons: boolean; rollbackOffered?: boolean; onMove: (intent: MoveIntent) => void;
 }): ReactNode {
   if (items.length === 0) return null;
   return (
@@ -544,7 +574,8 @@ function ReleaseGroup({ label, title, items, ...rest }: {
         {items.map((it) => (
           <ReleaseItem
             key={it.release.tag} item={it} nodes={rest.nodes} haltedBy={rest.haltedBy} source={rest.source}
-            waiting={it.release.tag === rest.pending} buttons={rest.buttons} onMove={rest.onMove}
+            waiting={it.release.tag === rest.pending} buttons={rest.buttons}
+            rollbackOffered={rest.rollbackOffered ?? true} onMove={rest.onMove}
           />
         ))}
       </ul>
@@ -578,22 +609,18 @@ export function ReleaseList({ releases, nodes, channel, source, haltedBy = null,
   haltedBy?: string | null; onWhatsNew?: () => void; whatsNewSince?: string | null;
   onMove: (intent: MoveIntent) => void;
 }): ReactNode {
-  if (releases.length === 0) return null;
   const w = releaseWindow(releases, nodes, channel);
+  if (w.empty) return null;
   const halted = haltedReason(nodes) !== null;
   const shared = { nodes, haltedBy, source, pending: w.pending, onMove };
   if (w.state !== 'measured') {
     return (
       <section className="settings-window" aria-label="Releases">
         <p className="settings-note">
-          {w.state === 'unmanaged'
-            ? 'macOS nodes are updated on the Mac itself.'
-            : w.unreported.length > 0
-              ? `${w.unreported.join(', ')} ${w.unreported.length === 1 ? 'has' : 'have'} not reported a version yet, so no rollback is offered.`
-              : 'The channel could not be read, so no rollback is offered.'}
+          {w.state === 'unmanaged' ? 'macOS nodes are updated on the Mac itself.' : unmeasuredLead(w)}
         </p>
         <WordsGlossary />
-        <ReleaseGroup label="Releases" title="Releases" items={w.newer} buttons={w.state === 'unmeasured'} {...shared} />
+        <ReleaseGroup label="Releases" title="Releases" items={w.newer} buttons={w.state === 'unmeasured'} rollbackOffered={false} {...shared} />
         {w.olderHidden > 0 && <p className="settings-note">{olderNotShownLine(w.olderHidden)}</p>}
       </section>
     );

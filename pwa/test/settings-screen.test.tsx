@@ -2866,6 +2866,97 @@ describe('SettingsScreen — the release window (D-5505)', () => {
     expect(fold(W_TAG(17)).open).toBe(false);
   });
 
+  // ── Verifier fix pass: pins for guards that had no red line, and the unmeasured state's truthful lead ──
+  it('a halted mixed fleet with no Newer row and no pending Update: the halt line shows, and Update all to hi is disabled and names it', async () => {
+    const region = await mount(wView(w22(), [
+      t8Node({ current: t8Stamp(W_TAG(4)), highestVersion: W_TAG(4), ...HALTED }),
+      t8Server({ current: t8Stamp(W_TAG(22)), highestVersion: W_TAG(22) }),
+    ]));
+    expect(within(region).queryByRole('button', { name: 'Install' }), 'CONTROL: nothing newer than hi').toBeNull();
+    for (const b of within(screen.getByRole('list', { name: 'Nodes' })).getAllByRole('button', { name: 'Update' })) {
+      expect(b.hasAttribute('aria-describedby'), 'CONTROL: no pending Update (each Update is idle, so not gated)').toBe(false);
+    }
+    const line = screen.getByText(/^Update all waits:/);
+    const all = within(region).getByRole('button', { name: `Update all to ${W_TAG(22)}` });
+    expect(all).toBeDisabled();
+    expect(all.getAttribute('aria-describedby')).toBe(line.id);
+  });
+
+  it('a halt whose only gated control is a node\'s pending Update (no newer release listed): the line shows and the Update names it', async () => {
+    const [f, sv] = at(W_TAG(22), { desiredTag: 'v0.1.23' });
+    const region = await mount(wView(w22(), [{ ...f!, ...HALTED }, sv!]));
+    expect(within(region).queryByRole('button', { name: 'Install' }), 'CONTROL: no Install in the window').toBeNull();
+    expect(within(region).queryByRole('button', { name: /^Update all/ }), 'CONTROL: not mixed').toBeNull();
+    const line = screen.getByText(/^Update all waits:/);
+    const updates = within(screen.getByRole('list', { name: 'Nodes' })).getAllByRole('button', { name: 'Update' });
+    expect(updates.length).toBeGreaterThan(0);
+    for (const b of updates) expect(b.getAttribute('aria-describedby')).toBe(line.id);
+  });
+
+  it('a Newer row at every managed node\'s floor: Install disabled and the floor line drawn for each node; the next row stays enabled', async () => {
+    const region = await mount(wView(w22(), at(W_TAG(19), { highestVersion: W_TAG(20) })));
+    const row20 = region.querySelector<HTMLElement>(`li[data-tag="${W_TAG(20)}"]`)!;
+    expect(within(row20).getByRole('button', { name: 'Install' })).toBeDisabled();
+    expect(within(row20).getByText(/^fleet was rolled back from this release\./)).toBeInTheDocument();
+    expect(within(row20).getByText(/^server was rolled back from this release\./)).toBeInTheDocument();
+    const row21 = region.querySelector<HTMLElement>(`li[data-tag="${W_TAG(21)}"]`)!;
+    expect(within(row21).getByRole('button', { name: 'Install' })).not.toBeDisabled();
+    expect(within(row21).queryByText(/was rolled back from this release/)).toBeNull();
+  });
+
+  it("Settings' See what's new, then the sheet's Update all, opens the move sheet for the waiting tag", async () => {
+    await mount(wView(w22(), at(W_TAG(20), { desiredTag: W_TAG(22) })));
+    fireEvent.click(screen.getByRole('button', { name: "See what's new" }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Update all' }));
+    const moves = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(moves).getAllByRole('listitem').map((li) => li.textContent).join(' ')).toContain(`${W_TAG(20)} → ${W_TAG(22)}`);
+  });
+
+  it("the measured window carries the 'What these mean' glossary; a row with no notes draws no Notes disclosure", async () => {
+    const region = await mount(wView(w22((n) => (n === 21 ? { notes: 'Changes since v0.1.20\n\nNew\n- A thing\n' } : {})), at(W_TAG(22))));
+    const glossary = within(region).getByText('What these mean');
+    expect(glossary.closest('details')).not.toBeNull();
+    expect(region.querySelector(`li[data-tag="${W_TAG(21)}"] details.settings-release-notes-fold`), 'CONTROL: a row with notes has one').not.toBeNull();
+    expect(region.querySelector(`li[data-tag="${W_TAG(20)}"] details.settings-release-notes-fold`)).toBeNull();
+    expect(region.querySelector(`li[data-tag="${W_TAG(22)}"] details.settings-release-notes-fold`)).toBeNull();
+  });
+
+  it('unmeasured because the channel is unread: no Roll back is drawn under "no rollback is offered" (D-5609)', async () => {
+    const region = await mount({ ...wView(w22(), at(W_TAG(22))), intent: [] });
+    expect(within(region).getByText('The channel could not be read, so no rollback is offered.')).toBeInTheDocument();
+    expect(region.querySelector(`li[data-tag="${W_TAG(21)}"]`), 'CONTROL: an older row is listed').not.toBeNull();
+    expect(within(region).queryAllByRole('button', { name: 'Roll back' })).toEqual([]);
+  });
+
+  it('unmeasured because a node has no measurement: the lead says so (not "has not reported a version"), and no Roll back is drawn', async () => {
+    const region = await mount(wView(w22(), [
+      t8Node({ current: t8Stamp(W_TAG(22)), highestVersion: W_TAG(22) }),
+      t8Server({ current: t8Stamp(W_TAG(22)), highestVersion: W_TAG(22), measuredAt: null }),
+    ]));
+    expect(within(region).getByText('server has not been measured yet, so no rollback is offered.')).toBeInTheDocument();
+    expect(within(region).queryAllByRole('button', { name: 'Roll back' })).toEqual([]);
+  });
+
+  it('unmeasured: a withdrawn newest release takes no slot and draws no Install (D-5608)', async () => {
+    const region = await mount(wView(w22((n) => (n === 22 ? { yanked: true } : {})), [
+      t8Node({ current: t8Stamp(W_TAG(10)), highestVersion: W_TAG(10) }),
+      t8Server({ current: t8Stamp(undefined), highestVersion: null }),
+    ]));
+    expect(region.querySelector(`li[data-tag="${W_TAG(22)}"]`)).toBeNull();
+    expect([...region.querySelectorAll('li[data-tag]')].map((li) => li.getAttribute('data-tag'))).toEqual([W_TAG(21), W_TAG(20), W_TAG(19)]);
+  });
+
+  it('a focused summary link unfolds its line instead of scrolling it blank; each disclosure carries a marker that turns when open', () => {
+    const focus = ruleIn(fleetCss, '.settings-release-date.settings-release-summary:focus-within');
+    expect(declValue(focus, 'white-space')).toBe('normal');
+    expect(declValue(focus, 'overflow')).toBe('visible');
+    const marker = ruleIn(fleetCss, '.settings-release-fold > summary::before');
+    expect(declValue(marker, 'border-color') ?? declValue(marker, 'border-right')).toMatch(/currentColor/);
+    expect(declValue(ruleIn(fleetCss, '.settings-release-fold[open] > summary::before'), 'transform')).toMatch(/rotate/);
+    expect(declValue(ruleIn(fleetCss, '.settings-release-fold > summary::-webkit-details-marker'), 'display')).toBe('none');
+  });
+
   it('TEXT IS TEXT: the notes surfaces carry no raw-HTML path, no <pre> of their own in the rows, and exactly one link — the TextLink built by pullUrl', () => {
     const src = (...p: string[]): string => readFileSync(path.join(import.meta.dirname, '..', 'src', ...p), 'utf8');
     const files: Array<[string, string]> = [
