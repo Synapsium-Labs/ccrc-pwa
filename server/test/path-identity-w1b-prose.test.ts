@@ -70,7 +70,7 @@ const DEPARTURES = ['surface-dash-rule-at-stop-and-ws-add-only', 'dot-rule-exten
   'ws-add-lock-precedes-the-cap', 'prelock-answer-precedes-in-progress',
   'dash-free-id-answers-unmeasured-registry-before-its-record',
   'dot-leading-audit-now-exits-1-and-the-server-retries', 'census-blind-below-line-5818',
-  'prelock-no-lock-clause-follows-the-detail'];
+  'prelock-no-lock-clause-follows-the-detail', 'hibernate-refuses-a-dash-leading-id'];
 
 /** What each task found while building, by slug: plan-text corrections, extra pins and measured notes. The rulings
  *  file's "Found while building" list names every one. */

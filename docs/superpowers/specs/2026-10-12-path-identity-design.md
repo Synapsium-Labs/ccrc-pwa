@@ -398,6 +398,17 @@ measured at the wave's tip unless it says otherwise.
 - the lane acts only once the operator arms it, by the fleet box's legacy marker or by the Settings switch where it
   has shipped.
 
+**At the landing, after the sixth absorption of `main`.**
+- `hibernate-refuses-a-dash-leading-id`: the absorption brought `ccd hibernate`, whose server argv puts the id first,
+  so an id spelled `--actor` took `--surface` as its value and the surface word became the id. Hibernate now refuses a
+  `--surface`, `--actor` or `--reason` value that begins with `-`, in either spelling, with its usage line, and its id
+  passes `_reg_id_ok`. So at hibernate, unlike the eight `--session` verbs, actor and reason prose may not begin with
+  `-`. `ccdargv-dash-id-parity.test.ts` covers it: its 16 hibernate rows went red against the binary before the fix.
+- The census gained rows for the absorption's new names, `<id>.deny-settings`, `<id>.no-hibernate` and
+  `<id>.rescueprev.tmp.XXXXXX`, none wider than the widest row, so the cap is unchanged. Its row for
+  `server/src/workflows/read.ts`'s `-<id>.js` is a workflow run id, not a session id: the row accounts for the scan's
+  hit and bounds nothing, since a run id is never a registry id.
+
 **Stated residuals.**
 - `dot-rule-only-at-the-token-verbs`: release, archive, restore, hold, rename and stop still accept a dot-leading id.
   Refusing it there is an operator option.
