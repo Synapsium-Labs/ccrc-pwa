@@ -2066,6 +2066,20 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         multiplier's test, measured by one method twice: a baseline now and a repeat after 06:05, once the slice
         has turned over since the 21:00:42 restart. Then the fix release becomes the rehearsal's target and
         stable's.
+      - **2026-10-19 04:55 UTC: both boxes moved to v0.0.318 (#677) by the operator's console tap**, fleet first
+        (04:23:44 to 04:24:58), then the server (04:25:15 to 04:25:59); both reports `done`, `from: pwa`, sweep
+        `down: 3` on the fleet and `ok` on the server; the server gate answered v0.0.318. Doctor now runs 57 checks:
+        fleet 36 passed, 7 warned, 0 failed; server 28 passed and **1 warned, new**: `approval-key-colocated`. It is
+        from #646's server-signed approvals: the server's approval signing key sits beside 8 session rows on the
+        server box, readable by a same-user session. It is not this programme's; it is reported to the operator.
+        - The server restarted at 04:25:39, so the 04:33 baseline came 8 to 20 minutes after a fresh restart: 12
+          blackouts, mean 14.3 s, max 16.1 s, period about 63 s (each span is at most 1.8 s long, the sampling
+          grain). At 03:10, 6 h after the previous restart, two blackouts ran about 18 s. So a fresh restart did
+          not lengthen them. Both samples fall inside the proposed 7-to-9-h window, though, so the multiplier's
+          test moves to 13:35, 9 h after this restart; the 06:05 run still gives a 1.7 h point.
+        - Server backups 2059M (1878M): the new snapshot is 287M. v0.0.319 (#623) to v0.0.322 (#679) followed,
+          unapplied. STATUS: fleet and server v0.0.318, newest v0.0.322, intent dev/auto=off, backups fleet
+          158M/server 2059M, disk free fleet 209G/work volume 95G/server 31G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
