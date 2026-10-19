@@ -11,8 +11,9 @@
 //
 //   D-5643 R1, the call. The freeze above is of no use if reconcile builds its list some other way, so a source-text pin reads `watch.ts`
 //      (the one file this test reads; it writes nothing) and holds reconcile's window list to ONE `delegationPassWindowsOf(` call, never an
-//      inline spread of the builders (the list main built, which no one froze), and its trees' input to `listingWindows: windows`, never a
-//      copy per tree (M28). The row anchors on those two texts, never on where the call's arguments are built or on any neighbour.
+//      inline spread of the builders (the list main built, which no one froze), and holds its body to the text `listingWindows: windows`,
+//      once (M28). The row anchors on those two texts, never on where the call's arguments are built or on any neighbour. Copies of the
+//      list are D-5643 R2's job (`delegation-watch.test.ts`, by behaviour): a text pin cannot see every way to copy a list.
 //
 // Fixtures only: names are `lane-a-demo`, `project-a`, `/fixture/...`.
 import { readFileSync } from 'node:fs';
@@ -148,6 +149,6 @@ describe('D-5643 R1: the lane\'s windows, their listings and the pass\'s window 
     for (const spread of ['...delegationListingWindowsOf(', '...delegationLostWindowsOf(', '...this.pendingWindows(']) {
       expect(body.includes(spread), `no inline spread of ${spread.slice(3, -1)}`).toBe(false);
     }
-    expect(body.match(/listingWindows: windows(?![\w$.[])/g)?.length ?? 0, 'every tree is handed the pass\'s list itself, never a copy (M28)').toBe(1);
+    expect(body.match(/listingWindows: windows(?![\w$.[])/g)?.length ?? 0, 'reconcile\'s body holds the text `listingWindows: windows` once (M28; copies of the list are D-5643 R2\'s, by behaviour)').toBe(1);
   });
 });
