@@ -2,11 +2,12 @@
 // the review polish (#661) held their geometry in Playwright scripts outside the repo, because there was no pwa
 // browser leg on main until #627 landed; this file is those measures, ported.
 //
-// - D-5570: an account picker's row fits `.sheet-body`, and so does its keyboard ring. Measured in the new-session
-//   sheet (every row wears its pool tag) and in the swap picker, both its plain list (the measured lane wears
-//   "suggested") and its "show other pools" rows (each wears a pool tag), at 360, 390, 1280 and 1920. Inside each
-//   row the gauges and chevron stay in the row, the name and its tags stay in their group, and a name wraps, or a tag
-//   is cut, only when it is wider than the whole group: otherwise the tag or the pill drops under the name.
+// - D-5570: an account picker's row fits `.sheet-body`, and so does its keyboard ring, which must be drawn under
+//   `:focus-visible`. Measured in the new-session sheet (every row wears its pool tag) and in the swap picker, both its
+//   plain list (the measured lane wears "suggested") and its "show other pools" rows (each wears a pool tag), at 360,
+//   390, 1280 and 1920. Inside each row the gauges and chevron stay in the row, the name and its tags stay in their
+//   group, and a name wraps, or a tag is cut, only when it is wider than the whole group: otherwise the tag or the pill
+//   drops under the name.
 // - D-5576: every project card keeps its name. On a card that does not hold the selection (the fleet route on a
 //   phone; another project's session open from 900 up), open and folded, a name that fits the line draws whole on its
 //   chevron's line and the meta wraps inside the toggle; a name longer than the line is cut only at its cap, still on
@@ -34,7 +35,7 @@ const named = (v: AppView): string => `${v.skin}, ${v.theme}, ${v.width}px`;
 
 // ---- the fixture ---------------------------------------------------------------------------------------------------
 // Neutral names only. Two kinds of row, because they fail differently. Long labels and pool names, as long as real
-// ones get (19 to 27 characters): D-5570's overflow came from the widest row's one-line min-content, which short
+// ones get (22 to 25 characters): D-5570's overflow came from the widest row's one-line min-content, which short
 // strings never reach, and a label wider than the group is the extreme case where the name wraps inside its pill
 // (one has no hyphen to break at, so only `overflow-wrap: anywhere` keeps it there).
 // Short ones: a name and a tag that each fit the group but not side by side, so the tag or the pill has to drop
