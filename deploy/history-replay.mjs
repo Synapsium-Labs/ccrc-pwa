@@ -22,8 +22,8 @@ import { accessSync, appendFileSync, chmodSync, closeSync, constants, fstatSync,
 import os from 'node:os';
 import path, { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
-import { EXIT, blobOverDecodeCap, canonicalJson, redactField, sha256Hex } from '../ccd/history/lib.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { EXIT, blobOverDecodeCap, canonicalJson, recallOffPath, redactField, sha256Hex } from '../ccd/history/lib.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -1032,6 +1032,218 @@ export function batchGate({ out, home, accountId, budget, limits, now = Date.now
     const stop = decideLimits(readLimitsRow(home, accountId, Math.floor(nowMs / 1000)), { nowMs, thresholdPct, maxAgeMs });
     if (stop !== null) refuse(stop.word, stop.detail);
   };
+}
+
+// ── W2-4 Task 7: the preflights W2-5a and W2-5b wire (W2-D56, W2-D24, W2-D6, W2-D78(ii), W2-D29, W2-D59) ────────
+// Mechanisms only: no subcommand here calls them yet. Before part 1 a spawning subcommand compares what step 0a
+// recorded (loadStep0a over `--step0a PATH --step0a-sha256 HEX`) with what it measures now; from part 1 it compares
+// part 1's values. W2-5a and W2-5b wire each of their own subcommands (W2-D24); step 0a (Task 8) RECORDS
+// codeShas() and the release stamp and never compares them.
+// Every reader keeps its conditions apart: a file that cannot be measured is never hashed as nothing, a stamp that
+// cannot be read is never "no stamp", and a recall-off entry that cannot be lstat'ed is never "absent".
+
+/** The four files whose installed bytes gate_code pins (W2-D24), relative to the tree the driver runs from. The
+ *  imports of lib.mjs (recall.mjs, derive.mjs, cli.mjs, store.mjs) are not hashed: the release stamp covers them. */
+export const CODE_SHA_FILES = Object.freeze(['deploy/history-gate.mjs', 'deploy/measure-history.py', 'deploy/history-replay.mjs', 'ccd/history/lib.mjs']);
+/** The tree this file was loaded from: the installed release on a node, the checkout in a test. */
+export const TREE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+/** Step 0a's output kind and its exact field set (W2-D57): loadStep0a's shape, and the one Task 8 writes. */
+export const STEP0A_KIND = 'ccrc-history-w2-step0a';
+export const STEP0A_FIELDS = Object.freeze(['kind', 'v', 'measured_ms', 'account', 'settings_mode', 'claude_code_version',
+  'wrapper_sha256', 'flags_accepted', 'writer_init', 'judge_init', 'box_init', 'code_shas', 'release_stamp', 'budget', 'spend']);
+const SHA256_RE = /^[0-9a-f]{64}$/;
+const VERSION_TIMEOUT_MS = 60_000;
+const VERSION_STDOUT_MAX = 65_536;
+
+/** The sha256 of each CODE_SHA_FILES member's bytes under `root`, or the first one that cannot be measured. An
+ *  absent file (history-gate.mjs before W2-3 lands) is `absent`; any other read failure is `unreadable`. */
+export function codeShas(root = TREE_ROOT) {
+  const files = {};
+  for (const rel of CODE_SHA_FILES) {
+    let bytes;
+    try {
+      bytes = readFileSync(path.join(root, rel));
+    } catch (e) {
+      return { state: 'unmeasured', path: rel, cause: e.code === 'ENOENT' ? 'absent' : 'unreadable' };
+    }
+    files[rel] = sha256Hex(bytes);
+  }
+  return { state: 'measured', files };
+}
+
+/** The installed release tag: `version` in `$HOME/.ccrc/build.json`, which an untagged build omits. Only the label
+ *  is read; shared/buildinfo.ts stays the one validator of the stamp's other fields. */
+export function readReleaseStamp(home) {
+  let text;
+  try {
+    text = readFileSync(path.join(home, '.ccrc', 'build.json'), 'utf8');
+  } catch (e) {
+    return e.code === 'ENOENT' ? { state: 'absent' } : { state: 'unreadable', code: String(e.code) };
+  }
+  let stamp;
+  try {
+    stamp = JSON.parse(text);
+  } catch {
+    return { state: 'malformed' };
+  }
+  if (stamp === null || typeof stamp !== 'object' || Array.isArray(stamp)) return { state: 'malformed' };
+  if (!Object.hasOwn(stamp, 'version')) return { state: 'untagged' };
+  if (typeof stamp.version !== 'string' || stamp.version === '') return { state: 'malformed' };
+  return { state: 'value', tag: stamp.version };
+}
+
+/** A generated account's wrapper bytes, hashed; null for upstream, which has no wrapper. A wrapper that cannot be
+ *  read refuses `wrapper-unmeasured` here (coordinator ruling): null is upstream's answer and never a failed read's,
+ *  and `wrapper-moved` names a measured mismatch only. */
+export function wrapperSha(launch) {
+  if (launch.kind === 'upstream') return null;
+  if (launch.kind !== 'generated' || typeof launch.wrapperPath !== 'string') throw new TypeError(`wrapperSha: not a LaunchSpec: ${JSON.stringify(launch)}`);
+  let bytes;
+  try {
+    bytes = readFileSync(launch.wrapperPath);
+  } catch (e) {
+    refuse('wrapper-unmeasured', `${launch.wrapperPath}: ${e.code}`);
+  }
+  return sha256Hex(bytes);
+}
+
+/** `<launcher> --version` under launchRun's rules: writer-mode env (no CCRC_RECALL_*), the poisoned PATH, a fresh
+ *  empty 0700 cwd removed afterwards, no shell, killed on its own pid past VERSION_TIMEOUT_MS. It spends nothing and
+ *  records nothing in the ledger. The version is the first stdout line, trimmed. `lang` is the caller's LANG from
+ *  main's env (undefined when unset), threaded as RunJob.lang is: this function reads no environment itself. The
+ *  child env is named childEnv and passed as `env: childEnv`, as launchRun's is: Task 5's env scan reds on the
+ *  shorthand `{ cwd, env }`.
+ *  @param {object} launch  @param {string} out  @param {string | undefined} lang */
+export async function measureClaudeVersion(launch, out, lang) {
+  const home = runHomeOf(launch);
+  const childEnv = spawnEnv({ mode: 'writer', home, configDir: launch.configDir, poisonBin: ensurePoisonBin(out), lang });
+  const cwd = makeRunCwd();
+  let r;
+  try {
+    r = await new Promise((resolve) => {
+      const child = spawn(launch.launcher, ['--version'], { cwd, env: childEnv, stdio: ['ignore', 'pipe', 'ignore'] });
+      const chunks = [];
+      let kept = 0;
+      child.stdout.on('data', (b) => {
+        if (kept < VERSION_STDOUT_MAX) { chunks.push(b.subarray(0, VERSION_STDOUT_MAX - kept)); kept += b.length; }
+      });
+      const timer = setTimeout(() => child.kill('SIGKILL'), VERSION_TIMEOUT_MS);
+      child.on('error', () => { clearTimeout(timer); resolve({ code: null, signal: null, stdout: '' }); });
+      child.on('close', (code, signal) => { clearTimeout(timer); resolve({ code, signal, stdout: Buffer.concat(chunks).toString('utf8') }); });
+    });
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+  const version = r.stdout.split('\n')[0].trim();
+  if (r.code !== 0 || r.signal !== null || version === '') return { state: 'failed', code: r.code, signal: r.signal };
+  return { state: 'value', version };
+}
+
+/** Compare what was recorded with what is measured, in W2-D56's fixed order: the Claude Code version, the release
+ *  stamp (W2-D6's tree-moved), the wrapper, the four code shas. A moved word names a MEASURED mismatch only; an
+ *  input that cannot be measured refuses its own word at its place (coordinator ruling): version-unmeasured,
+ *  tree-unmeasured, code-unmeasured (the wrapper's, wrapper-unmeasured, is wrapperSha's refusal, before this is
+ *  reached: measured.wrapperSha256 is a sha or upstream's null). Only the code-changed word, a MEASURED change,
+ *  may become a stamp, and only with allowCodeChange (W2-D24's --allow-code-change); no unmeasured word ever
+ *  does. Pure. */
+export function preflight(expected, measured, opts = {}) {
+  const v = measured.version;
+  if (v.state !== 'value') return { ok: false, word: 'version-unmeasured', detail: `--version failed (code ${v.code}, signal ${v.signal})` };
+  if (v.version !== expected.claude_code_version) return { ok: false, word: 'claude-version-moved', detail: `recorded ${expected.claude_code_version}, measured ${v.version}` };
+  const s = measured.stamp;
+  if (s.state !== 'value') return { ok: false, word: 'tree-unmeasured', detail: `the release stamp is ${s.state}${s.state === 'unreadable' ? ` (${s.code})` : ''}` };
+  if (s.tag !== expected.release_stamp) return { ok: false, word: 'tree-moved', detail: `recorded ${expected.release_stamp}, measured ${s.tag}` };
+  if (measured.wrapperSha256 !== expected.wrapper_sha256) return { ok: false, word: 'wrapper-moved', detail: `recorded ${expected.wrapper_sha256 ?? 'no wrapper'}, measured ${measured.wrapperSha256 ?? 'no wrapper'}` };
+  const c = measured.codeShas;
+  if (c.state !== 'measured') return { ok: false, word: 'code-unmeasured', detail: `${c.path} is ${c.cause}` };
+  const names = [...new Set([...CODE_SHA_FILES, ...Object.keys(expected.code_shas)])];
+  const moved = names.filter((f) => c.files[f] !== expected.code_shas[f]);
+  if (moved.length === 0) return { ok: true, stamps: [] };
+  if (opts.allowCodeChange === true) return { ok: true, stamps: ['code-changed'] };
+  return { ok: false, word: 'code-changed', detail: `changed ${moved.join(' ')}` };
+}
+
+const plainObject = (o) => o !== null && typeof o === 'object' && !Array.isArray(o);
+
+/** The first field of a parsed step 0a output that is not Step0aOutput's shape, or null. */
+function step0aShapeError(o) {
+  if (!plainObject(o)) return 'not-object';
+  const keys = Object.keys(o).sort().join(' ');
+  if (keys !== [...STEP0A_FIELDS].sort().join(' ')) return `fields ${keys}`;
+  if (o.kind !== STEP0A_KIND) return 'kind';
+  if (o.v !== 1) return 'v';
+  if (!Number.isSafeInteger(o.measured_ms) || o.measured_ms <= 0) return 'measured_ms';
+  if (typeof o.account !== 'string' || o.account === '') return 'account';
+  if (!SETTINGS_MODES.includes(o.settings_mode)) return 'settings_mode';
+  if (typeof o.claude_code_version !== 'string' || o.claude_code_version === '') return 'claude_code_version';
+  if (o.wrapper_sha256 !== null && !(typeof o.wrapper_sha256 === 'string' && SHA256_RE.test(o.wrapper_sha256))) return 'wrapper_sha256';
+  if (!plainObject(o.flags_accepted) || !Object.values(o.flags_accepted).every((b) => typeof b === 'boolean')) return 'flags_accepted';
+  for (const k of ['writer_init', 'judge_init', 'box_init']) if (o[k] !== null && !plainObject(o[k])) return k;
+  if (!plainObject(o.code_shas) || Object.keys(o.code_shas).sort().join(' ') !== [...CODE_SHA_FILES].sort().join(' ')
+    || !CODE_SHA_FILES.every((f) => typeof o.code_shas[f] === 'string' && SHA256_RE.test(o.code_shas[f]))) return 'code_shas';
+  if (typeof o.release_stamp !== 'string' || o.release_stamp === '') return 'release_stamp';
+  if (!Number.isSafeInteger(o.budget) || o.budget <= 0) return 'budget';
+  if (!Number.isSafeInteger(o.spend) || o.spend < 0) return 'spend';
+  return null;
+}
+
+/** Step 0a's output as a later subcommand's input (W2-D56): outside any git tree, its bytes' sha256 checked BEFORE
+ *  they are parsed (input-sha-mismatch, W2-D59), then its shape (input-invalid). */
+export function loadStep0a(p, sha256) {
+  if (typeof sha256 !== 'string' || !SHA256_RE.test(sha256)) refuse('args-invalid', '--step0a-sha256 is not 64 lowercase hex');
+  if (typeof p !== 'string' || p === '') refuse('args-invalid', '--step0a names no path');
+  const abs = path.resolve(p);
+  const g = insideGitTree(path.dirname(abs));
+  if (g.state === 'inside') refuse('input-invalid', `step0a in-git-tree ${g.at}`);
+  if (g.state === 'unmeasured') refuse('input-invalid', `step0a git-unmeasured ${g.at} ${g.code}`);
+  let bytes;
+  try {
+    bytes = readFileSync(abs);
+  } catch (e) {
+    refuse('input-invalid', `step0a unreadable ${e.code}`);
+  }
+  const got = sha256Hex(bytes);
+  if (got !== sha256) refuse('input-sha-mismatch', `step0a: expected ${sha256}, measured ${got}`);
+  let o;
+  try {
+    o = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    refuse('input-invalid', 'step0a not-json');
+  }
+  const bad = step0aShapeError(o);
+  if (bad !== null) refuse('input-invalid', `step0a shape ${bad}`);
+  return o;
+}
+
+/** Which ids have a recall-off entry (W2-D78(ii)): an lstat of lib's own path, whatever the entry's type or content,
+ *  so a directory, an empty file and a dangling symlink are each present. ENOENT alone is absent; any other lstat
+ *  error is unmeasured. An id that fails idOk makes recallOffPath throw a TypeError with no code, which refuses
+ *  input-invalid (coordinator ruling): never read as absent, never a defect's exit 1.
+ *  The driver never opens the entry (W2-D29): this lstat line is its one recall-off line. */
+export function recallOffPresence(home, ids) {
+  const present = [];
+  const unmeasured = [];
+  for (const id of ids) {
+    try {
+      lstatSync(recallOffPath(home, id));
+      present.push(id);
+    } catch (e) {
+      if (e instanceof TypeError && e.code === undefined) refuse('input-invalid', `family id ${JSON.stringify(id)} is not a session id`);
+      if (typeof e?.code !== 'string') throw e;
+      if (e.code !== 'ENOENT') unmeasured.push({ id, code: e.code });
+    }
+  }
+  return { present, unmeasured };
+}
+
+/** Refuse when any id is present or unmeasured: both are the one driver word (W2-D78(ii)). */
+export function refuseRecallOff(home, ids) {
+  const { present, unmeasured } = recallOffPresence(home, ids);
+  if (present.length === 0 && unmeasured.length === 0) return;
+  const parts = [];
+  if (present.length > 0) parts.push(`present ${present.join(' ')}`);
+  if (unmeasured.length > 0) parts.push(`unmeasured ${unmeasured.map((u) => `${u.id} ${u.code}`).join(', ')}`);
+  refuse('family-recall-off', parts.join('; '));
 }
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised

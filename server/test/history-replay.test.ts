@@ -1710,3 +1710,433 @@ describe('W2-4 Task 6: a stop is resumable (W2-D55: a stopped batch spawns nothi
     expect(stubLog(r.home)?.length, 'one spawn, then the stop').toBe(1);
   }, 60_000);
 });
+
+// ── W2-4 Task 7: preflights, codeShas, the release stamp and the recall-off presence check ──────────────────────
+// (W2-D56, W2-D24, W2-D6, W2-D78(ii), W2-D29, W2-D59). Function level, every HOME and tree a mkTmp fixture. The only
+// child spawned is a fixture `--version` stub under the fixture HOME, through the driver's own env and cwd rules.
+import * as t7fs from 'node:fs';
+import * as t7path from 'node:path';
+import { fileURLToPath as t7FileURLToPath } from 'node:url';
+import { describe as t7describe, expect as t7expect, it as t7it } from 'vitest';
+import * as t7drv from '../../deploy/history-replay.mjs';
+import { sha256Hex as t7Sha, canonicalJson as t7Canon } from '../../ccd/history/lib.mjs';
+import { mkTmp as t7MkTmp } from './tmpHelpers.js';
+
+t7describe('W2-4 Task 7: preflights, codeShas, the release stamp and recall-off presence', () => {
+  const REPO = t7path.resolve(t7path.dirname(t7FileURLToPath(import.meta.url)), '..', '..');
+  const ROOT_SKIP = typeof process.getuid === 'function' && process.getuid() === 0;
+  const H = (s: string): string => t7Sha(s);   // a well-formed sha256 for a fixture value
+  /** A fixture tree holding the four gate_code files, each with its own bytes. */
+  const plantTree = (): string => {
+    const root = t7MkTmp('t7-tree-');
+    for (const rel of t7drv.CODE_SHA_FILES) {
+      t7fs.mkdirSync(t7path.join(root, t7path.dirname(rel)), { recursive: true });
+      t7fs.writeFileSync(t7path.join(root, rel), `fixture bytes of ${rel}\n`);
+    }
+    return root;
+  };
+  const shasOf = (root: string): Record<string, string> =>
+    Object.fromEntries(t7drv.CODE_SHA_FILES.map((rel: string) => [rel, t7Sha(t7fs.readFileSync(t7path.join(root, rel)))]));
+  /** What a later subcommand compares against: step 0a's recorded values. */
+  const EXPECTED = (): { claude_code_version: string; release_stamp: string; wrapper_sha256: string | null; code_shas: Record<string, string> } => ({
+    claude_code_version: '9.9.9 (Claude Code)', release_stamp: 'v0.0.900', wrapper_sha256: H('wrapper'),
+    code_shas: Object.fromEntries(t7drv.CODE_SHA_FILES.map((f: string) => [f, H(f)])),
+  });
+  /** The same values measured now, unmoved; `o` moves one. */
+  const MEASURED = (o: Record<string, unknown> = {}): Record<string, unknown> => ({
+    version: { state: 'value', version: '9.9.9 (Claude Code)' }, stamp: { state: 'value', tag: 'v0.0.900' },
+    wrapperSha256: H('wrapper'), codeShas: { state: 'measured', files: { ...EXPECTED().code_shas } }, ...o,
+  });
+  /** The word and detail a DriverRefusal carries, or the throw itself when it is not one. */
+  const refusalOf = (fn: () => unknown): { word: string; detail: string } => {
+    try {
+      fn();
+    } catch (e) {
+      if (e instanceof t7drv.DriverRefusal) return { word: (e as { word: string }).word, detail: (e as { detail: string }).detail };
+      throw e;
+    }
+    throw new Error('expected a DriverRefusal, and nothing was thrown');
+  };
+
+  t7describe('codeShas over the four gate_code files, W2-D24', () => {
+    t7it('CODE_SHA_FILES is exactly the four files gate_code pins, frozen, and TREE_ROOT is the tree the driver runs from', () => {
+      t7expect([...t7drv.CODE_SHA_FILES]).toEqual(['deploy/history-gate.mjs', 'deploy/measure-history.py', 'deploy/history-replay.mjs', 'ccd/history/lib.mjs']);
+      t7expect(Object.isFrozen(t7drv.CODE_SHA_FILES)).toBe(true);
+      t7expect(t7drv.TREE_ROOT).toBe(REPO);
+    });
+
+    t7it('over a fixture root, each entry is that file\'s sha256 and there are exactly four', () => {
+      const root = plantTree();
+      t7expect(t7drv.codeShas(root)).toEqual({ state: 'measured', files: shasOf(root) });
+    });
+
+    t7it.each(['deploy/history-gate.mjs', 'deploy/measure-history.py', 'deploy/history-replay.mjs', 'ccd/history/lib.mjs'])(
+      'one changed byte in %s changes exactly that entry', (rel) => {
+        const root = plantTree();
+        const before = (t7drv.codeShas(root) as { files: Record<string, string> }).files;
+        const p = t7path.join(root, rel);
+        const b = t7fs.readFileSync(p);
+        b[0] = b[0]! ^ 1;
+        t7fs.writeFileSync(p, b);
+        const after = (t7drv.codeShas(root) as { files: Record<string, string> }).files;
+        t7expect(Object.keys(after).filter((k) => after[k] !== before[k])).toEqual([rel]);
+      });
+
+    t7it('an absent file answers unmeasured absent, never a hash of nothing; an empty file is bytes and is hashed', () => {
+      const root = plantTree();
+      t7fs.rmSync(t7path.join(root, 'deploy/history-gate.mjs'));
+      t7expect(t7drv.codeShas(root)).toEqual({ state: 'unmeasured', path: 'deploy/history-gate.mjs', cause: 'absent' });
+      const root2 = plantTree();
+      t7fs.writeFileSync(t7path.join(root2, 'ccd/history/lib.mjs'), '');
+      t7expect((t7drv.codeShas(root2) as { files: Record<string, string> }).files['ccd/history/lib.mjs']).toBe(t7Sha(''));
+    });
+
+    t7it('a directory where a file belongs answers unmeasured unreadable', () => {
+      const root = plantTree();
+      t7fs.rmSync(t7path.join(root, 'deploy/measure-history.py'));
+      t7fs.mkdirSync(t7path.join(root, 'deploy/measure-history.py'));
+      t7expect(t7drv.codeShas(root)).toEqual({ state: 'unmeasured', path: 'deploy/measure-history.py', cause: 'unreadable' });
+    });
+
+    t7it.skipIf(ROOT_SKIP)('a mode-000 file answers unmeasured unreadable', () => {
+      const root = plantTree();
+      t7fs.chmodSync(t7path.join(root, 'deploy/history-replay.mjs'), 0o000);
+      t7expect(t7drv.codeShas(root)).toEqual({ state: 'unmeasured', path: 'deploy/history-replay.mjs', cause: 'unreadable' });
+    });
+
+    t7it('over the real tree, before or after W2-3 lands: measured when history-gate.mjs exists, else unmeasured absent', () => {
+      const r = t7drv.codeShas();
+      if (t7fs.existsSync(t7path.join(REPO, 'deploy/history-gate.mjs'))) t7expect(r).toEqual({ state: 'measured', files: shasOf(REPO) });
+      else t7expect(r).toEqual({ state: 'unmeasured', path: 'deploy/history-gate.mjs', cause: 'absent' });
+    });
+  });
+
+  t7describe('readReleaseStamp keeps absent, unreadable, malformed and untagged apart', () => {
+    const stampHome = (text: string | null): string => {
+      const home = t7MkTmp('t7-stamp-');
+      t7fs.mkdirSync(t7path.join(home, '.ccrc'), { mode: 0o700 });
+      if (text !== null) t7fs.writeFileSync(t7path.join(home, '.ccrc', 'build.json'), text);
+      return home;
+    };
+    const STAMP = { sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-10-19T00:00:00Z', dirty: false };
+
+    t7it('a tagged stamp is its version', () => {
+      t7expect(t7drv.readReleaseStamp(stampHome(JSON.stringify({ ...STAMP, version: 'v0.0.900' })))).toEqual({ state: 'value', tag: 'v0.0.900' });
+    });
+    t7it('no build.json is absent', () => {
+      t7expect(t7drv.readReleaseStamp(stampHome(null))).toEqual({ state: 'absent' });
+    });
+    t7it('a stamp with no version field is untagged', () => {
+      t7expect(t7drv.readReleaseStamp(stampHome(JSON.stringify(STAMP)))).toEqual({ state: 'untagged' });
+    });
+    t7it('not JSON, an array, or a version that is not a non-empty string is malformed', () => {
+      for (const text of ['{"sha":', '[]', JSON.stringify({ ...STAMP, version: 7 }), JSON.stringify({ ...STAMP, version: '' })]) {
+        t7expect(t7drv.readReleaseStamp(stampHome(text)), text).toEqual({ state: 'malformed' });
+      }
+    });
+    t7it('a directory at build.json is unreadable, with its code', () => {
+      const home = stampHome(null);
+      t7fs.mkdirSync(t7path.join(home, '.ccrc', 'build.json'));
+      t7expect(t7drv.readReleaseStamp(home)).toEqual({ state: 'unreadable', code: 'EISDIR' });
+    });
+  });
+
+  t7describe('wrapperSha and measureClaudeVersion', () => {
+    /** A fixture home with one launcher at .local/bin/<id>, a node script that prints `out` and exits `rc`, logging
+     *  its argv, env key names, cwd and the cwd's entries to $HOME/version-stub.json. */
+    const versionHome = (id: string, out: string, rc = 0): { home: string; launcher: string } => {
+      const home = t7MkTmp('t7-ver-');
+      t7fs.mkdirSync(t7path.join(home, '.local', 'bin'), { recursive: true });
+      t7fs.mkdirSync(t7path.join(home, '.claude'), { mode: 0o700 });
+      const launcher = t7path.join(home, '.local', 'bin', id);
+      t7fs.writeFileSync(launcher, [
+        '#!/usr/bin/env node',
+        "const fs = require('node:fs');",
+        "const path = require('node:path');",
+        `fs.writeFileSync(path.join(process.env.HOME, 'version-stub.json'), JSON.stringify({ argv: process.argv.slice(2), envKeys: Object.keys(process.env).sort(), cwd: process.cwd(), entries: fs.readdirSync(process.cwd()) }));`,
+        `process.stdout.write(${JSON.stringify(out)});`,
+        `process.exit(${rc});`,
+        '',
+      ].join('\n'), { mode: 0o700 });
+      return { home, launcher };
+    };
+    const upstreamLaunch = (home: string, launcher: string) => ({
+      accountId: 'up-a', kind: 'upstream', launcher, configDir: t7path.join(home, '.claude'), wrapperPath: null, secretsPath: null,
+    });
+    const outDir = (): string => { const d = t7MkTmp('t7-out-'); t7fs.chmodSync(d, 0o700); return d; };
+
+    t7it('wrapperSha: a generated account\'s wrapper bytes hashed; null for upstream', () => {
+      const home = t7MkTmp('t7-wrap-');
+      const w = t7path.join(home, 'gen-a');
+      t7fs.writeFileSync(w, '#!/bin/sh\n# fixture wrapper\n');
+      t7expect(t7drv.wrapperSha({ accountId: 'gen-a', kind: 'generated', launcher: w, configDir: t7path.join(home, '.claude-gen-a'), wrapperPath: w, secretsPath: t7path.join(home, 's') }))
+        .toBe(t7Sha('#!/bin/sh\n# fixture wrapper\n'));
+      t7expect(t7drv.wrapperSha({ accountId: 'up-a', kind: 'upstream', launcher: w, configDir: t7path.join(home, '.claude'), wrapperPath: null, secretsPath: null })).toBeNull();
+    });
+
+    t7it('wrapperSha: an unreadable wrapper refuses wrapper-unmeasured, never wrapper-moved and never null (coordinator ruling)', () => {
+      const home = t7MkTmp('t7-wrap-');
+      const w = t7path.join(home, 'gen-a');
+      const r = refusalOf(() => t7drv.wrapperSha({ accountId: 'gen-a', kind: 'generated', launcher: w, configDir: t7path.join(home, '.claude-gen-a'), wrapperPath: w, secretsPath: t7path.join(home, 's') }));
+      t7expect(r.word).toBe('wrapper-unmeasured');
+      t7expect(r.detail).toBe(`${w}: ENOENT`);
+    });
+
+    t7it('measureClaudeVersion: the first stdout line, trimmed, from --version alone, under the writer env and a fresh cwd, spending nothing', async () => {
+      const { home, launcher } = versionHome('up-a', '  9.9.9 (Claude Code)  \nsecond line\n');
+      const out = outDir();
+      t7expect(await t7drv.measureClaudeVersion(upstreamLaunch(home, launcher), out, 'fixture.UTF-8')).toEqual({ state: 'value', version: '9.9.9 (Claude Code)' });
+      const log = JSON.parse(t7fs.readFileSync(t7path.join(home, 'version-stub.json'), 'utf8'));
+      t7expect(log.argv).toEqual(['--version']);
+      t7expect(log.envKeys).toEqual(['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
+      t7expect(log.entries).toEqual([]);
+      t7expect(log.cwd.startsWith(out)).toBe(false);
+      t7expect(t7fs.existsSync(log.cwd), 'the run cwd is removed afterwards').toBe(false);
+      t7expect(t7fs.existsSync(t7path.join(out, t7drv.SPEND_LEDGER)), '--version records no spend').toBe(false);
+    });
+
+    t7it('measureClaudeVersion: a non-zero exit, or an empty first line, is failed with its code', async () => {
+      const a = versionHome('up-a', '9.9.9 (Claude Code)\n', 3);
+      t7expect(await t7drv.measureClaudeVersion(upstreamLaunch(a.home, a.launcher), outDir(), undefined)).toEqual({ state: 'failed', code: 3, signal: null });
+      const b = versionHome('up-a', '\n9.9.9\n', 0);
+      t7expect(await t7drv.measureClaudeVersion(upstreamLaunch(b.home, b.launcher), outDir(), undefined)).toEqual({ state: 'failed', code: 0, signal: null });
+    });
+  });
+
+  t7describe('preflight, W2-D56: four words in a fixed order', () => {
+    t7it('nothing moved: ok with no stamps', () => {
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED())).toEqual({ ok: true, stamps: [] });
+    });
+    t7it('a moved version is claude-version-moved', () => {
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ version: { state: 'value', version: '9.9.10 (Claude Code)' } })))
+        .toEqual({ ok: false, word: 'claude-version-moved', detail: 'recorded 9.9.9 (Claude Code), measured 9.9.10 (Claude Code)' });
+    });
+    t7it('a failed --version is version-unmeasured, never claude-version-moved (coordinator ruling)', () => {
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ version: { state: 'failed', code: 3, signal: null } })))
+        .toEqual({ ok: false, word: 'version-unmeasured', detail: '--version failed (code 3, signal null)' });
+    });
+    t7it('a moved release stamp is tree-moved', () => {
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ stamp: { state: 'value', tag: 'v0.0.901' } })))
+        .toEqual({ ok: false, word: 'tree-moved', detail: 'recorded v0.0.900, measured v0.0.901' });
+    });
+    t7it.each([[{ state: 'absent' }], [{ state: 'untagged' }], [{ state: 'malformed' }], [{ state: 'unreadable', code: 'EACCES' }]])(
+      'a release stamp read as %j is tree-unmeasured, never tree-moved and never a pass (coordinator ruling)', (stamp) => {
+        t7expect(t7drv.preflight(EXPECTED(), MEASURED({ stamp })))
+          .toEqual({ ok: false, word: 'tree-unmeasured', detail: `the release stamp is ${stamp.state}${stamp.state === 'unreadable' ? ' (EACCES)' : ''}` });
+      });
+    t7it('each unmeasured input refuses its own word at its place: version-unmeasured, then tree-unmeasured, then code-unmeasured', () => {
+      const all = MEASURED({
+        version: { state: 'failed', code: 3, signal: null }, stamp: { state: 'absent' },
+        codeShas: { state: 'unmeasured', path: 'deploy/history-gate.mjs', cause: 'absent' },
+      });
+      const wordOf = (m: Record<string, unknown>): string => (t7drv.preflight(EXPECTED(), m) as { word: string }).word;
+      const back = MEASURED();
+      t7expect([
+        wordOf(all),
+        wordOf({ ...all, version: back.version }),
+        wordOf({ ...all, version: back.version, stamp: back.stamp }),
+      ]).toEqual(['version-unmeasured', 'tree-unmeasured', 'code-unmeasured']);
+    });
+    t7it('a moved wrapper is wrapper-moved, and so is a wrapper where none was recorded', () => {
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ wrapperSha256: H('other wrapper') }))).toMatchObject({ ok: false, word: 'wrapper-moved' });
+      t7expect(t7drv.preflight({ ...EXPECTED(), wrapper_sha256: null }, MEASURED())).toMatchObject({ ok: false, word: 'wrapper-moved' });
+      t7expect(t7drv.preflight({ ...EXPECTED(), wrapper_sha256: null }, MEASURED({ wrapperSha256: null }))).toEqual({ ok: true, stamps: [] });
+    });
+    t7it('one changed code sha is code-changed, naming that file', () => {
+      const files = { ...EXPECTED().code_shas, 'ccd/history/lib.mjs': H('one byte moved') };
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ codeShas: { state: 'measured', files } })))
+        .toEqual({ ok: false, word: 'code-changed', detail: 'changed ccd/history/lib.mjs' });
+    });
+    t7it('an unmeasured code file is code-unmeasured, never code-changed (coordinator ruling)', () => {
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ codeShas: { state: 'unmeasured', path: 'deploy/history-gate.mjs', cause: 'absent' } })))
+        .toEqual({ ok: false, word: 'code-unmeasured', detail: 'deploy/history-gate.mjs is absent' });
+    });
+    t7it('the order is fixed: with all four moved, each word shows only once those before it are put back', () => {
+      const all = MEASURED({
+        version: { state: 'value', version: 'moved' }, stamp: { state: 'value', tag: 'moved' }, wrapperSha256: H('moved'),
+        codeShas: { state: 'measured', files: { ...EXPECTED().code_shas, 'deploy/history-replay.mjs': H('moved') } },
+      });
+      const words: string[] = [];
+      const m = { ...all };
+      for (const [k, back] of Object.entries(MEASURED())) {
+        words.push((t7drv.preflight(EXPECTED(), m) as { word: string }).word);
+        m[k] = back;
+      }
+      t7expect(words).toEqual(['claude-version-moved', 'tree-moved', 'wrapper-moved', 'code-changed']);
+    });
+    t7it('allowCodeChange stamps code-changed and nothing else: an unmeasured code file still refuses code-unmeasured, a moved or unmeasured stamp still refuses', () => {
+      const files = { ...EXPECTED().code_shas, 'deploy/history-gate.mjs': H('moved') };
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ codeShas: { state: 'measured', files } }), { allowCodeChange: true })).toEqual({ ok: true, stamps: ['code-changed'] });
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ codeShas: { state: 'unmeasured', path: 'deploy/history-gate.mjs', cause: 'absent' } }), { allowCodeChange: true }))
+        .toEqual({ ok: false, word: 'code-unmeasured', detail: 'deploy/history-gate.mjs is absent' });
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ codeShas: { state: 'unmeasured', path: 'deploy/measure-history.py', cause: 'unreadable' } }), { allowCodeChange: true }))
+        .toEqual({ ok: false, word: 'code-unmeasured', detail: 'deploy/measure-history.py is unreadable' });
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED(), { allowCodeChange: true })).toEqual({ ok: true, stamps: [] });
+      for (const moved of [{ version: { state: 'value', version: 'moved' } }, { version: { state: 'failed', code: 3, signal: null } },
+        { stamp: { state: 'value', tag: 'moved' } }, { stamp: { state: 'untagged' } }, { wrapperSha256: H('moved') }]) {
+        t7expect(t7drv.preflight(EXPECTED(), MEASURED(moved), { allowCodeChange: true }).ok, JSON.stringify(moved)).toBe(false);
+      }
+    });
+  });
+
+  t7describe('loadStep0a checks the sha before parsing, then the shape', () => {
+    const step0a = (o: Record<string, unknown> = {}): Record<string, unknown> => ({
+      kind: t7drv.STEP0A_KIND, v: 1, measured_ms: 1_800_000_000_000, account: 'up-a', settings_mode: 'restricted',
+      claude_code_version: '9.9.9 (Claude Code)', wrapper_sha256: null, flags_accepted: { '--restricted': true },
+      writer_init: null, judge_init: null, box_init: null, code_shas: Object.fromEntries(t7drv.CODE_SHA_FILES.map((f: string) => [f, H(f)])),
+      release_stamp: 'v0.0.900', budget: 100_000, spend: 1_234, ...o,
+    });
+    const plant = (text: string): string => {
+      const dir = t7MkTmp('t7-s0a-');
+      const p = t7path.join(dir, 'step0a.json');
+      t7fs.writeFileSync(p, text);
+      return p;
+    };
+
+    t7it('a step 0a output with its own sha loads, whole', () => {
+      const text = t7Canon(step0a()) + '\n';
+      t7expect(t7drv.loadStep0a(plant(text), t7Sha(text))).toEqual(step0a());
+    });
+    t7it('a wrong sha refuses input-sha-mismatch, before the bytes are parsed: valid JSON and not-JSON alike', () => {
+      const good = t7Canon(step0a()) + '\n';
+      t7expect(refusalOf(() => t7drv.loadStep0a(plant(good), t7Sha('other bytes'))).word).toBe('input-sha-mismatch');
+      t7expect(refusalOf(() => t7drv.loadStep0a(plant('{"kind":'), t7Sha('other bytes'))).word).toBe('input-sha-mismatch');
+    });
+    t7it('the right sha over bytes that are not JSON refuses input-invalid not-json', () => {
+      t7expect(refusalOf(() => t7drv.loadStep0a(plant('{"kind":'), t7Sha('{"kind":')))).toEqual({ word: 'input-invalid', detail: 'step0a not-json' });
+    });
+    // D-5808: each field check of the step 0a shape, and loadStep0a's path, read and git-tree refusals, pinned by name.
+    const hexOf = (c: string): string => c.repeat(64);
+    t7it.each([
+      ['an extra field', { extra: 1 }, (keys: string) => `fields ${keys}`],
+      ['another kind', { kind: 'ccrc-history-w2-probe' }, () => 'kind'],
+      ['a code sha missing', { code_shas: { 'ccd/history/lib.mjs': H('x') } }, () => 'code_shas'],
+      ['a code sha that is not 64 lowercase hex', { code_shas: Object.fromEntries(t7drv.CODE_SHA_FILES.map((f: string) => [f, 'nothex'])) }, () => 'code_shas'],
+      ['an unknown settings mode', { settings_mode: 'bypass' }, () => 'settings_mode'],
+      ['a zero budget', { budget: 0 }, () => 'budget'],
+      ['a fractional budget', { budget: 1.5 }, () => 'budget'],
+      ['an empty release stamp', { release_stamp: '' }, () => 'release_stamp'],
+      ['a non-string release stamp', { release_stamp: 9 }, () => 'release_stamp'],
+      ['a version other than 1', { v: 2 }, () => 'v'],
+      ['a zero measured_ms', { measured_ms: 0 }, () => 'measured_ms'],
+      ['a fractional measured_ms', { measured_ms: 1.5 }, () => 'measured_ms'],
+      ['an empty account', { account: '' }, () => 'account'],
+      ['a non-string account', { account: 7 }, () => 'account'],
+      ['an empty claude_code_version', { claude_code_version: '' }, () => 'claude_code_version'],
+      ['a non-string claude_code_version', { claude_code_version: 1 }, () => 'claude_code_version'],
+      ['a wrapper_sha256 that is not a sha', { wrapper_sha256: 'nothex' }, () => 'wrapper_sha256'],
+      ['an uppercase wrapper_sha256', { wrapper_sha256: hexOf('A') }, () => 'wrapper_sha256'],
+      ['a non-object flags_accepted', { flags_accepted: null }, () => 'flags_accepted'],
+      ['an array flags_accepted', { flags_accepted: [true] }, () => 'flags_accepted'],
+      ['a non-boolean flag', { flags_accepted: { '--restricted': 'yes' } }, () => 'flags_accepted'],
+      ['a string writer_init', { writer_init: 'x' }, () => 'writer_init'],
+      ['an array judge_init', { judge_init: [] }, () => 'judge_init'],
+      ['a number box_init', { box_init: 3 }, () => 'box_init'],
+      ['a negative spend', { spend: -1 }, () => 'spend'],
+      ['a fractional spend', { spend: 0.5 }, () => 'spend'],
+    ])('the right sha over %s refuses input-invalid, naming the field', (_name, o, detail) => {
+      const text = t7Canon(step0a(o as Record<string, unknown>)) + '\n';
+      const keys = Object.keys(step0a(o as Record<string, unknown>)).sort().join(' ');
+      t7expect(refusalOf(() => t7drv.loadStep0a(plant(text), t7Sha(text)))).toEqual({ word: 'input-invalid', detail: `step0a shape ${(detail as (k: string) => string)(keys)}` });
+    });
+    t7it.each([['an array', '[]'], ['null', 'null'], ['a string', '"x"'], ['a number', '7']])('the right sha over %s refuses input-invalid not-object', (_name, text) => {
+      t7expect(refusalOf(() => t7drv.loadStep0a(plant(text), t7Sha(text)))).toEqual({ word: 'input-invalid', detail: 'step0a shape not-object' });
+    });
+    t7it('a step 0a path that does not exist refuses input-invalid unreadable ENOENT, not a raw error', () => {
+      const p = t7path.join(t7path.dirname(plant('x')), 'absent.json');
+      t7expect(refusalOf(() => t7drv.loadStep0a(p, t7Sha('x')))).toEqual({ word: 'input-invalid', detail: 'step0a unreadable ENOENT' });
+    });
+    t7it('a step 0a path that is a directory refuses input-invalid unreadable EISDIR', () => {
+      const dir = t7path.join(t7path.dirname(plant('x')), 'a-dir');
+      t7fs.mkdirSync(dir);
+      t7expect(refusalOf(() => t7drv.loadStep0a(dir, t7Sha('x')))).toEqual({ word: 'input-invalid', detail: 'step0a unreadable EISDIR' });
+    });
+    t7it('an empty or non-string step 0a path refuses args-invalid', () => {
+      const sha = t7Sha('x');
+      t7expect(refusalOf(() => t7drv.loadStep0a('', sha))).toEqual({ word: 'args-invalid', detail: '--step0a names no path' });
+      t7expect(refusalOf(() => t7drv.loadStep0a(undefined, sha))).toEqual({ word: 'args-invalid', detail: '--step0a names no path' });
+    });
+    t7it.skipIf(process.getuid?.() === 0)('a step 0a path whose ancestor cannot be measured refuses input-invalid git-unmeasured, before the file is read', () => {
+      const text = t7Canon(step0a()) + '\n';
+      const p = plant(text);
+      const dir = t7path.dirname(p);
+      t7fs.chmodSync(dir, 0o000);
+      try {
+        t7expect(refusalOf(() => t7drv.loadStep0a(p, t7Sha(text)))).toEqual({ word: 'input-invalid', detail: `step0a git-unmeasured ${t7path.join(dir, '.git')} EACCES` });
+      } finally {
+        t7fs.chmodSync(dir, 0o700);
+      }
+    });
+    t7it('a step 0a file inside a git tree refuses input-invalid, before it is read', () => {
+      const text = t7Canon(step0a()) + '\n';
+      const p = plant(text);
+      t7fs.mkdirSync(t7path.join(t7path.dirname(p), '.git'));
+      t7expect(refusalOf(() => t7drv.loadStep0a(p, t7Sha(text)))).toEqual({ word: 'input-invalid', detail: `step0a in-git-tree ${t7path.dirname(p)}` });
+    });
+    t7it('a --step0a-sha256 that is not 64 lowercase hex refuses args-invalid', () => {
+      const text = t7Canon(step0a()) + '\n';
+      t7expect(refusalOf(() => t7drv.loadStep0a(plant(text), t7Sha(text).toUpperCase())).word).toBe('args-invalid');
+    });
+  });
+
+  t7describe('recall-off presence, W2-D78 ii: lstat whatever the entry, ENOENT alone is absent', () => {
+    /** Where lib's recallOffPath puts `<id>` under `home` (the CONTROL below holds the two equal). */
+    const roPath = (home: string, id: string): string => t7path.join(home, '.ccrc', 'history', 'recall-off', id);
+    const roHome = (): { home: string; dir: string } => {
+      const home = t7MkTmp('t7-ro-');
+      const dir = t7path.dirname(roPath(home, 'fam-a'));
+      t7fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      return { home, dir };
+    };
+
+    t7it('CONTROL: the fixture path is lib\'s recallOffPath', async () => {
+      const lib = await import('../../ccd/history/lib.mjs');
+      const home = t7MkTmp('t7-ro-');
+      t7expect(lib.recallOffPath(home, 'fam-a')).toBe(roPath(home, 'fam-a'));
+    });
+    t7it('absent passes: no recall-off directory at all, and an empty one', () => {
+      t7expect(t7drv.recallOffPresence(t7MkTmp('t7-ro-'), ['fam-a', 'fam-b'])).toEqual({ present: [], unmeasured: [] });
+      const { home } = roHome();
+      t7expect(t7drv.recallOffPresence(home, ['fam-a'])).toEqual({ present: [], unmeasured: [] });
+      t7expect(() => t7drv.refuseRecallOff(home, ['fam-a'])).not.toThrow();
+    });
+    t7it.each([
+      ['a regular file', (p: string) => t7fs.writeFileSync(p, 'a-generation\n')],
+      ['an empty file', (p: string) => t7fs.writeFileSync(p, '')],
+      ['a directory', (p: string) => t7fs.mkdirSync(p)],
+      ['a dangling symlink', (p: string) => t7fs.symlinkSync(t7path.join(t7path.dirname(p), 'nowhere'), p)],
+    ])('%s is present, and refuses family-recall-off', (_name, plantEntry) => {
+      const { home, dir } = roHome();
+      plantEntry(t7path.join(dir, 'fam-b'));
+      t7expect(t7drv.recallOffPresence(home, ['fam-a', 'fam-b'])).toEqual({ present: ['fam-b'], unmeasured: [] });
+      t7expect(refusalOf(() => t7drv.refuseRecallOff(home, ['fam-a', 'fam-b']))).toEqual({ word: 'family-recall-off', detail: 'present fam-b' });
+    });
+    t7it.skipIf(ROOT_SKIP)('a recall-off directory with mode 000 answers unmeasured, and refuses', () => {
+      const { home, dir } = roHome();
+      t7fs.chmodSync(dir, 0o000);
+      try {
+        t7expect(t7drv.recallOffPresence(home, ['fam-a'])).toEqual({ present: [], unmeasured: [{ id: 'fam-a', code: 'EACCES' }] });
+        t7expect(refusalOf(() => t7drv.refuseRecallOff(home, ['fam-a']))).toEqual({ word: 'family-recall-off', detail: 'unmeasured fam-a EACCES' });
+      } finally {
+        t7fs.chmodSync(dir, 0o700);
+      }
+    });
+    t7it('an id lib refuses is input-invalid, never read as absent and never exit 1 (coordinator ruling)', () => {
+      t7expect(refusalOf(() => t7drv.recallOffPresence(t7MkTmp('t7-ro-'), ['../escape'])))
+        .toEqual({ word: 'input-invalid', detail: 'family id "../escape" is not a session id' });
+      t7expect(refusalOf(() => t7drv.refuseRecallOff(t7MkTmp('t7-ro-'), ['fam-a', '../escape'])), 'refuseRecallOff carries the same refusal')
+        .toEqual({ word: 'input-invalid', detail: 'family id "../escape" is not a session id' });
+    });
+    t7it('the driver names recall-off on exactly one code line, an lstatSync of recallOffPath, and never spells the directory', () => {
+      const code = t7fs.readFileSync(t7path.join(REPO, 'deploy', 'history-replay.mjs'), 'utf8').split('\n')
+        .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+      const naming = (lines: string[]): string[] => lines.filter((l) => l.includes('recallOffPath(')).map((l) => l.trim());
+      const spells = (lines: string[]): string[] => lines.filter((l) => /\/recall-off|'recall-off'|RECALL_OFF_DIR/.test(l));
+      t7expect(naming(code)).toEqual(['lstatSync(recallOffPath(home, id));']);
+      t7expect(spells(code)).toEqual([]);
+      // CONTROL: both needles see a planted line.
+      t7expect(naming(['  writeFileSync(recallOffPath(home, id), g);'])).toHaveLength(1);
+      t7expect(spells(["  const p = path.join(root, 'recall-off', id);"])).toHaveLength(1);
+    });
+  });
+});
