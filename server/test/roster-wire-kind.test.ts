@@ -37,15 +37,25 @@ const ROSTER = {
     }),
     entry('lane-f', 'green', { kind: 'external' }),
     entry('lane-g', 'cyan', { kind: 'external', provider: 'openai' }),
+    // The file, not `exec.kind`, decides token vs sign-in: a generated Anthropic lane with no file is sign-in
+    // (D-5517: a rule keyed off exec.kind must go red here, not only in accounts-route).
+    entry('lane-h', 'violet', { kind: 'generated', provider: 'anthropic' }, 'anthropic'),
   ],
 };
 
-const parsed = (): ReturnType<typeof parseRoster> => {
-  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-  try { return parseRoster(ROSTER); } finally { warn.mockRestore(); }
+/** The same roster with the upstream lane naming a secrets file: upstream with a file is token. */
+const ROSTER_UPSTREAM_FILE = {
+  ...ROSTER,
+  accounts: ROSTER.accounts.map((a) =>
+    a.id === 'lane-a' ? { ...a, exec: { kind: 'upstream', secretsFile: '.cc-secrets/lane-a-oauth.env' } } : a),
 };
-const byId = (id: string) => {
-  const a = parsed().accounts.find((x) => x.id === id);
+
+const parsed = (roster: unknown = ROSTER): ReturnType<typeof parseRoster> => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try { return parseRoster(roster); } finally { warn.mockRestore(); }
+};
+const byId = (id: string, roster: unknown = ROSTER) => {
+  const a = parsed(roster).accounts.find((x) => x.id === id);
   if (a === undefined) throw new Error(`fixture has no ${id}`);
   return a;
 };
@@ -62,6 +72,11 @@ describe('rosterKindOf: the lane kind, derived once from the parsed entry (D-551
     expect(rosterKindOf(byId('lane-b'))).toEqual({ provider: 'anthropic', kind: 'token', telemetry: 'anthropic' });
     // The upstream binary is `anthropic` by construction (`ExecSpec`'s header), and names no secrets file here.
     expect(rosterKindOf(byId('lane-a'))).toEqual({ provider: 'anthropic', kind: 'sign-in', telemetry: 'anthropic' });
+    // Crossed pairs, so the rule cannot be keyed off `exec.kind` (D-5517): generated without a file is sign-in,
+    // upstream with a file is token.
+    expect(rosterKindOf(byId('lane-h'))).toEqual({ provider: 'anthropic', kind: 'sign-in', telemetry: 'anthropic' });
+    expect(rosterKindOf(byId('lane-a', ROSTER_UPSTREAM_FILE)))
+      .toEqual({ provider: 'anthropic', kind: 'token', telemetry: 'anthropic' });
   });
 
   it('an entry with no provider carries no provider or kind: absence is not anthropic', () => {
@@ -77,7 +92,7 @@ describe('rosterKindOf: the lane kind, derived once from the parsed entry (D-551
   });
 
   it('managed rides OpenAI lanes only', () => {
-    for (const id of ['lane-a', 'lane-b', 'lane-d', 'lane-e', 'lane-f']) {
+    for (const id of ['lane-a', 'lane-b', 'lane-d', 'lane-e', 'lane-f', 'lane-h']) {
       expect('managed' in rosterKindOf(byId(id)), id).toBe(false);
     }
   });
@@ -109,6 +124,7 @@ describe('GET /api/accounts carries the kind on every roster entry (D-5517)', ()
       'lane-e': ['compatible', 'key', 'none', undefined],
       'lane-f': [undefined, undefined, 'none', undefined],
       'lane-g': ['openai', 'codex', 'none', false],
+      'lane-h': ['anthropic', 'sign-in', 'anthropic', undefined],
     });
     for (const r of roster) {
       expect(Object.keys(r), r.id).not.toContain('exec');

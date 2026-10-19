@@ -287,14 +287,14 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   |---|---|---|
   | `provider: entry.provider ?? 'anthropic'` | roster-wire-kind | "absence is not anthropic" |
   | a codex entry mapped to `kind: 'token'` | roster-wire-kind | "…each carry the provider and kind…" |
-  | `kind` typed `string` | typecheck-tests | the `test/types/bypasses/` fixture's case for `kind` |
+  | `kind` typed `string` | ccdargv-brand (D-5751 (4)) | the `test/types/bypasses/` fixture's case for `kind` |
   | `kind` read from a roster `method` key | roster-wire-kind | "…with `exec.secretsFile` is token…" |
   | a second `rosterKindOf` in `server/src` | single-definition | its registry row |
 
 - [x] **Step 4: Per width × skin × mode.** No UI: "no UI" in all sixteen cells. A2 is the first screen that shows the kind.
 - [x] **Step 5: Verify.**
 
-      cd server && ./node_modules/.bin/vitest run test/roster-wire-kind.test.ts test/single-definition.test.ts test/roster.test.ts test/typecheck-tests.test.ts
+      cd server && ./node_modules/.bin/vitest run test/roster-wire-kind.test.ts test/single-definition.test.ts test/roster.test.ts test/typecheck-tests.test.ts test/ccdargv-brand.test.ts   # ccdargv-brand runs the b8 fixture (D-5751 (4))
       cd server && ./node_modules/.bin/tsc --noEmit
       cd pwa && ./node_modules/.bin/tsc --noEmit
 
