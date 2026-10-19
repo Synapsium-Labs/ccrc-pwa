@@ -208,6 +208,22 @@ describe('Settings while a node halts — Install and Update wait, with Update a
   });
 });
 
+// D-5689: the Updates rows' Roll back and Ack are danger-ghosts on the page, not on the dead banner, so they keep the
+// card's grounds. Held at the call site, as the halt banner's Ack is in halt-banner.test.tsx.
+describe('Settings\' Roll back and Ack sit on the card ground, not the dead banner\'s (D-5689)', () => {
+  it('both lift and press on --bg-hover and --bg-pressed, with no -on-dead ground', () => {
+    const catalogue = [release('v0.0.10'), release('v0.0.8')];
+    const { list } = renderNodes([node(failed()), server({ previousVersion: 'v0.0.8' })], catalogue);
+    const back = within(rowOf(list, SERVER_ID)).getByRole('button', { name: 'Roll back' });
+    const ack = within(rowOf(list, FLEET_ID)).getByRole('button', { name: /^Ack/ });
+    for (const b of [back, ack]) {
+      expect(b.className).toContain('enabled:hover:bg-hover');
+      expect(b.className).toContain('enabled:active:bg-pressed');
+      expect(b.className).not.toMatch(/on-dead/);
+    }
+  });
+});
+
 // Wave 19's claim-gated fold (R24(d), and R24(b)'s Settings half): the screen asks the L0 gate read and says the
 // update plane's one stale sentence, rather than spelling either itself. Read from source: the screen's own suite is
 // another run's to edit, and behaviour is pinned there already (its gated fixtures and T7_STALE).

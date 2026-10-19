@@ -158,9 +158,9 @@
      so both only gain. Measured in the eight dark palettes: the hover 1.08 or
      more from the tint, the press 1.16 or more, the press 1.07 or more from
      the hover. Declared here for every dark palette; both inputs are
-     re-declared per theme. A LIGHT
-     palette re-declares the pair at 60% and 95% (D-5688): at 35% its hover
-     sat under its own card hover step. Those blocks say why. */
+     re-declared per theme. A LIGHT palette re-declares the pair at 60% and
+     95% (D-5688): at 35% its hover sat under its own card hover step. Those
+     blocks say why. */
   --bg-hover-on-dead:   color-mix(in srgb, var(--ink-on-danger) 35%, var(--status-dead-tint-solid));
   --bg-pressed-on-dead: color-mix(in srgb, var(--ink-on-danger) 70%, var(--status-dead-tint-solid));
 
