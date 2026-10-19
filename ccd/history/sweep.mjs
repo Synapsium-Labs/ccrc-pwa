@@ -66,7 +66,7 @@ import {
   decideSegmentWhole, decideSegmentOwn, readSegmentNameList,
   BUSY_TIMEOUT_MS, EXPORT_BIND_BATCH, EXPORT_BIND_BYTES, EXPORT_BIND_WAL_CEILING, markCheckStop, planMarkCheckBatch, formatMarkCheckState, nextMarkCheckState,
   segmentListingRecord, addSegmentToListing, segmentListingVanished,
-  segmentOrdersAfter,
+  decideReplayMark, parseSegmentName,
   carryHoldAdvice,
 } from './lib.mjs';
 import {
@@ -2669,6 +2669,10 @@ async function recoverReindexChunk(db, run, cursor) {
 // has one, and lib formatRecoverCursor refuses one beside an export phase. Replay writes no journal record (O36) and
 // no segment.
 
+/** D-5726 (history-export-replay-mark-one-writer): the counter of every mark replay takes off because another writer's segment
+ *  carries the row too, an entry's or a blob's; the over-export an operator can see. Spelled here once. */
+const EXPORT_MARK_TAKEN_OFF = 'export_mark_taken_off';
+
 /** Rows read per page of one segment; a chunk applies them until run.budget.chunkBytes. */
 const EXPORT_REPLAY_PAGE = 256;
 
@@ -2684,7 +2688,8 @@ function replayStmts(db) {
     // D-5637 (history-export-replay-last-carrier): a blob's mark moves to the LAST segment that carries its bytes; the sweep asks
     // lib segmentOrdersAfter of blobMarkOf's answer before it runs, so the statement itself no longer keeps a mark.
     blobMark: db.prepare('UPDATE blobs SET exported_ms = ?, exported_seg = ? WHERE sha256 = ? AND z IS NOT NULL'),
-    blobMarkOf: db.prepare('SELECT exported_seg AS seg FROM blobs WHERE sha256 = ? AND z IS NOT NULL'),
+    // D-5726 (history-export-replay-mark-one-writer): blob_id rides along, for the take-off's referrers (clearReferrerMarks).
+    blobMarkOf: db.prepare('SELECT blob_id, exported_seg AS seg FROM blobs WHERE sha256 = ? AND z IS NOT NULL'),
     // D-5397: asked only when a body's insert answered 0 changes, to tell a prune tombstone from a blob that holds bytes.
     blobTombstone: db.prepare('SELECT 1 AS x FROM blobs WHERE sha256 = ? AND z IS NULL'),
     blobId: db.prepare('SELECT blob_id FROM blobs WHERE sha256 = ?'),
@@ -2811,6 +2816,9 @@ function replayEntryRow(db, seg, r) {
   const blobId = blobIdOf(db, r.blob_sha256);
   if (blobId === null) { bump(db, 'export_row_blob_missing'); return; }
   const fileId = ensureDeadFile(db, seg, r.struct_path, r.struct_dev, r.struct_ino, t, null, null, null);
+  // D-5726: only where the listing holds more than one writer, whether the entry existed before this upsert (one lookup); with a
+  // single writer the answer cannot differ (a fresh entry is unmarked, and an unmarked one is marked), so it costs nothing.
+  const fresh = seg.multiWriter && replayStmts(db).entrySel.get(r.uuid) === undefined;
   stmts(db).entryUpsert.run(r.uuid, t, r.type, r.subtype, r.role, r.model, r.parent_uuid, r.ts_ms, r.request_id,
     r.api_block_index, r.msg_id, r.source_tool_use_id, r.tool_name, r.is_compact_summary, r.provenance, r.prov_version,
     r.parse_state, r.struct_rank_ns, fileId, blobId, 0);   // 0: a replayed copy never wins a tie (D-5638)
@@ -2829,7 +2837,17 @@ function replayEntryRow(db, seg, r) {
   // the next pass writes the entry with all it needs: over-clearing, never a loss. A segment that does not order after the
   // mark (the same one replayed again, or a restore's backup marked by a later segment) moves nothing and costs no lookup.
   // The rows of this segment that link a blob to the entry are judged by unmarkEntryOverBlobIn.
-  if (!segmentOrdersAfter(seg.name, e.exported_seg === null ? null : String(e.exported_seg))) return;
+  // D-5726 (history-export-replay-mark-one-writer): that holds WITHIN one writer only. Across writers the content order is unknown
+  // either way, so lib decideReplayMark answers instead: 'keep' returns (the same page again, a restore's backup mark of a later
+  // segment of this writer, or an unmarked entry of a multi-writer replay, whose take-off is sticky), 'take-off' takes the mark
+  // off (counted EXPORT_MARK_TAKEN_OFF) so the next pass writes the entry again, and 'mark' is the path below.
+  const word = decideReplayMark({ seg: seg.name, held: e.exported_seg === null ? null : String(e.exported_seg), fresh, multiWriter: seg.multiWriter });
+  if (word === 'keep') return;
+  if (word === 'take-off') {
+    stmts(db).exportClear.run(e.entry_id);
+    bump(db, EXPORT_MARK_TAKEN_OFF);
+    return;
+  }
   const states = s.entryBlobStates.all(e.entry_id, e.entry_id, t, e.entry_id, e.entry_id).map((b) => blobStateIn(seg, b, true));
   if (segmentMayMarkEntry({ blobs: states })) s.entryMark.run(seg.markMs, seg.name, e.entry_id);
   else stmts(db).exportClear.run(e.entry_id);
@@ -2953,7 +2971,11 @@ function rowBytes(row) {
 function exportReplayListing(run) {
   if (run.exportListing === undefined) {
     const dir = `${run.P.root}/${EXPORT_DIR}/${run.storeId}`;
-    run.exportListing = { dir, names: orderSegmentNames(listSegments(dir).map((s) => s.name)) };
+    const names = orderSegmentNames(listSegments(dir).map((s) => s.name));
+    // D-5726 (history-export-replay-mark-one-writer): whether the segments this replay orders belong to more than one writer,
+    // measured once from the same listing (a replay that spans steps recomputes it from the listing it resumes on). Lib's
+    // decideReplayMark decides with it; nothing here does.
+    run.exportListing = { dir, names, multiWriter: new Set(names.map((n) => parseSegmentName(n).writer)).size > 1 };
   }
   return run.exportListing;
 }
@@ -3022,7 +3044,8 @@ function noteSkippedSegment(db, name, verdict) {
 /** One page of one kind of one segment's blobs past `after` (a rowid), bounded by the chunk's bytes: `stubs` false is
  *  export-blobs' page (the blobs that carry bytes), true export-stubs' (D-5397 (history-export-replay-bytes-before-stubs)).
  *  insert-or-ignore by sha256 (§9.14) in both: a blob the store already holds, whole or pruned, keeps its row; one with
- *  bytes is marked with its last carrier (D-5637). A body ignored over a prune tombstone is counted export_blob_tombstone_kept; the
+ *  bytes is marked with its last carrier (D-5637) within one writer; across writers the mark comes off instead (D-5726, lib
+ *  decideReplayMark; export_mark_taken_off). A body ignored over a prune tombstone is counted export_blob_tombstone_kept; the
  *  probe runs only when the insert answered 0 changes, so a fresh blob costs no statement more, and no read's answer
  *  changes. A stub (no bytes) goes in pruned (D-4759 (history-export-pruned-row-stub)), dated by the replay. An empty
  *  page ends the segment. */
@@ -3031,6 +3054,7 @@ function replayBlobPage(db, run, sdb, dir, name, after, stubs) {
   if (page.length === 0) return { pos: after, done: true, bytes: 0 };
   const s = replayStmts(db);
   const markMs = run.now();
+  const { multiWriter } = exportReplayListing(run);
   let bytes = 0;
   for (const b of page) {
     const ins = s.blobIns.run(b.sha256, b.codec, b.z, b.raw_len, b.z === null ? markMs : null);
@@ -3038,11 +3062,23 @@ function replayBlobPage(db, run, sdb, dir, name, after, stubs) {
       // D-5637 (history-export-replay-last-carrier): the blob's mark goes to the last segment that carries its bytes. A fresh
       // row has no mark and costs no statement more; a blob the store held already is read once, and its mark moves only to
       // a segment that orders after it (a restore's backup may hold a mark naming a later segment, which stays).
+      // D-5726 (history-export-replay-mark-one-writer): that holds WITHIN one writer only. Lib decideReplayMark answers for a held
+      // blob: 'mark' moves it, 'keep' leaves it, and 'take-off' (another writer's segment holds it) takes the blob's referrers'
+      // marks off FIRST and then the blob's own, in this transaction (D-5395, D-5396: an entry holds its mark only while every
+      // blob it references is exported or pruned), so the pass writes the row again; each is counted EXPORT_MARK_TAKEN_OFF.
       if (Number(ins.changes) === 1) s.blobMark.run(markMs, name, b.sha256);
       else if (s.blobTombstone.get(b.sha256) !== undefined) bump(db, 'export_blob_tombstone_kept');
       else {
         const held = s.blobMarkOf.get(b.sha256);
-        if (held !== undefined && segmentOrdersAfter(name, held.seg === null ? null : String(held.seg))) s.blobMark.run(markMs, name, b.sha256);
+        if (held !== undefined) {
+          const word = decideReplayMark({ seg: name, held: held.seg === null ? null : String(held.seg), fresh: false, multiWriter });
+          if (word === 'mark') s.blobMark.run(markMs, name, b.sha256);
+          else if (word === 'take-off') {
+            clearReferrerMarks(db, [Number(held.blob_id)]);
+            sideStmts(db).blobUnmark.run(Number(held.blob_id));
+            bump(db, EXPORT_MARK_TAKEN_OFF);
+          }
+        }
       }
       bytes += b.z.length;
     }
@@ -3055,7 +3091,7 @@ function replayBlobPage(db, run, sdb, dir, name, after, stubs) {
 function replayRowPage(db, run, sdb, dir, name, meta, after) {
   const page = readSegmentPage(dir, name, () => segmentRowsAfter(sdb, after, EXPORT_REPLAY_PAGE));
   if (page.length === 0) return { pos: after, done: true, bytes: 0 };
-  const seg = { name, dir, sdb, markMs: run.now(), cutoffMs: meta.cutoffMs };   // sdb and dir: what segmentCarries reads (D-5396)
+  const seg = { name, dir, sdb, markMs: run.now(), cutoffMs: meta.cutoffMs, multiWriter: exportReplayListing(run).multiWriter };   // sdb and dir: what segmentCarries reads (D-5396); multiWriter: D-5726
   let bytes = 0;
   let pos = after;
   for (const r of page) {

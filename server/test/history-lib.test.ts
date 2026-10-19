@@ -8024,6 +8024,39 @@ describe('W1-B4: segment names, their order and the next number (spec 9.15 "Writ
       for (let j = 0; j < names.length; j += 1) expect(libSeg.segmentOrdersAfter(names[i]!, names[j]!), `${names[i]!} after ${names[j]!}: one order with orderSegmentNames`).toBe(i > j);
     }
   });
+  it('decideReplayMark: a fresh row is marked; an unmarked held row is kept under more than one writer and marked under one; the same segment keeps; another writer\'s mark comes off whichever way the order runs; the same writer\'s moves only forward (D-5726 (history-export-replay-mark-one-writer))', () => {
+    const seg = '5.0000000b.db';
+    const decide = (held: string | null, o: { fresh?: boolean; multiWriter?: boolean } = {}): string =>
+      libSeg.decideReplayMark({ seg, held, fresh: o.fresh ?? false, multiWriter: o.multiWriter ?? true });
+    // 1. fresh gives mark, whatever held is
+    for (const held of [null, seg, '9.0000000b.db', '1.0000000b.db', '1.0000000c.db', '9.0000000c.db', 'notes.db']) {
+      for (const multiWriter of [true, false]) expect(decide(held, { fresh: true, multiWriter }), `fresh over ${String(held)}`).toBe('mark');
+    }
+    // 2. held null
+    expect(decide(null, { multiWriter: true }), 'unmarked, more than one writer: the row stays owed, a take-off is sticky').toBe('keep');
+    expect(decide(null, { multiWriter: false }), 'unmarked, one writer: Task 5\'s rule, mark').toBe('mark');
+    // 3. the same segment
+    expect(decide(seg, { multiWriter: true }), 'the same page replayed again after a kill').toBe('keep');
+    expect(decide(seg, { multiWriter: false })).toBe('keep');
+    // 4. another writer's segment, after AND before seg: content order is unknown across writers
+    for (const multiWriter of [true, false]) {
+      expect(decide('9.0000000c.db', { multiWriter }), 'another writer, later seq').toBe('take-off');
+      expect(decide('1.0000000c.db', { multiWriter }), 'another writer, earlier seq').toBe('take-off');
+      expect(decide('5.0000000c.db', { multiWriter }), 'another writer, the same seq, later token').toBe('take-off');
+      expect(decide('5.0000000a.db', { multiWriter }), 'another writer, the same seq, earlier token').toBe('take-off');
+    }
+    // 5. the same writer: a move only forward
+    for (const multiWriter of [true, false]) {
+      expect(decide('1.0000000b.db', { multiWriter }), 'same writer, an earlier seq: the last carrier takes the mark').toBe('mark');
+      expect(decide('9.0000000b.db', { multiWriter }), 'same writer, a later seq: a restore\'s backup mark stays').toBe('keep');
+    }
+    // an off-grammar held counts as null
+    expect(decide('notes.db', { multiWriter: true }), 'off the grammar names no carrier: as null').toBe('keep');
+    expect(decide('notes.db', { multiWriter: false })).toBe('mark');
+    // an off-grammar seg is the caller's bug
+    expect(() => libSeg.decideReplayMark({ seg: '01.0000000b.db', held: null, fresh: true, multiWriter: true })).toThrow(TypeError);
+    expect(() => libSeg.decideReplayMark({ seg: 'notes.db', held: null, fresh: false, multiWriter: false })).toThrow(TypeError);
+  });
   it('O39: nextSegmentSeq is one past every seq on disk, of any writer, and past meta\'s; a counter behind the directory moves past it', () => {
     expect(libSeg.nextSegmentSeq({ onDisk: [], recorded: null })).toBe(1);
     expect(libSeg.nextSegmentSeq({ onDisk: [3, 9, 4], recorded: 5 })).toBe(10);

@@ -950,6 +950,7 @@ export function parseSegmentName(name: string): { seq: number; writer: string } 
 export function segmentTempName(name: string): string;
 export function orderSegmentNames(names: readonly string[]): string[];
 export function segmentOrdersAfter(a: string, b: string | null): boolean;
+export function decideReplayMark(i: { seg: string; held: string | null; fresh: boolean; multiWriter: boolean }): 'mark' | 'keep' | 'take-off';
 export function nextSegmentSeq(i: { onDisk: readonly number[]; recorded: number | null }): number;
 export function decideExportPass(i: { nowMs: number; lastPassMs: number | null; firstTickMs: number | null; lastAttemptMs?: number | null; intervalMs?: number }): 'run' | 'wait';
 export const EXPORT_MARK_BACKOFF_MAX_MS: number;
