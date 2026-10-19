@@ -5,13 +5,17 @@
 //
 // WHAT THIS FILE PINS
 //   R1  a full pass: one line; its phases, derived keys and sizes are exactly what ran, each size equal to a count measured INDEPENDENTLY
-//       of the lane's new code (spies on correlation and policy, the applier's own return values, the report, the checkpoint on disk)
-//   R2  strictly more than 1,000 ms of BLOCKING time writes a line; exactly 1,000 does not; a read phase (`owners`) is not blocking
+//       of the lane's new code (spies on correlation and policy, the applier's own return values, the report, the checkpoint on disk);
+//       the same for the five repair sizes (a real repair of a drifted `coord.db`, a null report, a throw), for an unknown-repository
+//       window (after a restart) and for the mark, dropped-key, lost-project and flag sizes (the lane's forgetting seams)
+//   R2  strictly more than 1,000 ms of BLOCKING time writes a line; exactly 1,000 does not; no read phase (`open recover root load owners
+//       readMetas`) is blocking
 //   R3  every phase and part adds to itself and to every phase that encloses it, and to no other (the table, plus the port's `rewrite`)
 //   R4  three phases each under the threshold whose BLOCKING sum is over it write the line
-//   R5  the line holds none of a census's strings and matches the fixed grammar; the formatter bounds its output and drops whole pairs
+//   R5  the line holds none of a census's strings and matches the fixed grammar; the formatter bounds its output, drops whole pairs and
+//       still tries the next key, and rounds and clamps each value
 //   R6  a pass with no reconcile (a census not newer) writes a line with no reconcile key at all
-//   R7  a pass cut by its budget writes its line at its late settle, once, with `cut=1`
+//   R7  a pass cut by its budget writes its line at its late settle, once, with `cut=1` (nothing at the cut itself)
 //
 // THE VIRTUAL CLOCK. `world()` hands the watcher `monotonicMs: () => clock.t`, the one clock the lane reads for timing. The lane reads
 // it at the start and end of each timed phase and calls `onPassPhase(key)` (a lane seam) right after the start read, so a row advances
@@ -38,7 +42,7 @@ import * as policy from '../src/coord/delegation-policy.js';
 import * as correlation from '../src/coord/delegation-correlation.js';
 import * as model from '../src/coord/delegation-model.js';
 import type { DelegationCensusPass, ParentIncarnation, WorktreeCensus } from '../src/coord/gitref.js';
-import { DELEGATION_CHECKPOINT_FILE, DelegationDurability, decodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_CHECKPOINT_FILE, DelegationDurability, decodeDelegationCheckpoint, type DelegationProjectionRepairReport } from '../src/coord/delegation-checkpoint.js';
 import { DELEGATION_EVENTS_CAP, type DelegationCensusRecord, type DelegationCheckpointV1 } from '../src/coord/delegation-model.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -46,6 +50,7 @@ import { mkTmp } from './tmpHelpers.js';
 const NOW = Date.UTC(2026, 9, 15, 10, 30, 0);                       // 2026-10-15T10:30Z; the hour 10:00 is open
 const INC = '0189abcd-1234-5678-9abc-0123456789ab';
 const CLAUDE = '6350faa0-a1be-4e78-939c-57485268f6fc';
+const BUCKET09 = '2026101509';
 const BUCKET10 = '2026101510';
 const PREFIX = 'ccrc-server: delegation pass slow:';
 
@@ -76,8 +81,9 @@ const recordOf = (id: string, project = 'demo') => ({ id, project, child: { kind
 type Sess = ReturnType<typeof sessionOf>;
 type Rec = ReturnType<typeof recordOf>;
 
-function world(): World {
-  const home = mkTmp('ccrc-dtiming-');
+/** `home`: a RESTART over the same fixture home (the journal, the checkpoint and `coord.db` are the first lane's). */
+function world(opts: { home?: string } = {}): World {
+  const home = opts.home ?? mkTmp('ccrc-dtiming-');
   const projectsRoot = mkTmp('ccrc-dtiming-projects-');
   seedRoster(home);
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
@@ -186,10 +192,11 @@ interface Rig {
   arm(adds: Record<string, number>, rewriteAfter?: 'flush' | 'repair'): void;
 }
 /** Installs the hook. The "last phase" ignores `rewrite` (the lane may announce it from inside the port's closures). */
-function rig(w: World): Rig {
+function rig(w: World, seams: Record<string, unknown> = {}): Rig {
   const st = { last: null as string | null, left: new Map<string, number>(), rewriteAfter: null as string | null };
   const fired: string[] = [];
   w.watcher.setDelegationSeams({
+    ...seams,
     onPassPhase: (k: string): void => {
       fired.push(k);
       if (k !== 'rewrite') st.last = k;
@@ -321,18 +328,26 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
   const agentStart = (w: World, agent: string, at: string): string =>
     lineOf(common('demo-a', { eventKind: 'SubagentStart', agentId: agent, agentType: null, cwd: '/w/demo', transcriptPath: path.join(tdir(w), `${CLAUDE}.jsonl`) }, at));
   const treeOfAgent = (agent: string): DelegationCensusRecord => record('demo', `agent-${agent}`, { canonicalPath: wtOf(`agent-${agent}`) });
-  const WITH_META = [1, 2, 3, 4, 5].map(agentId);                                // linked at rung 2: their metas are on disk
-  const NO_META = [6, 7, 8].map(agentId);                            // no meta: unmeasured
-  const SCRATCH = record('demo', 'scratch-tree');                       // a parent whose own cwd is in it, and a subagent working there
-  const LATE = [1, 2, 3, 4, 5, 6, 7].map((i) => record('demo', `late-${i}`));    // first listed by the armed pass: inside the birth wait
+  const WITH_META = [1, 2, 3].map(agentId);                                // linked at rung 2: their metas are on disk
+  const NO_META = [4, 5].map(agentId);                         // no meta: unmeasured
+  const SCRATCHES = [1, 2, 3, 4].map((i) => record('demo', `scratch-tree-${i}`));   // each: a parent whose own cwd is in it, and a subagent working there
+  const LATE = [1, 2, 3, 4, 5].map((i) => record('demo', `late-${i}`));    // first listed by the armed pass: inside the birth wait
   const OTHER = [record('other', 'x-one'), record('other', 'x-two')];
+  /** A parent whose own cwd is in scratch tree `n`, a subagent of it, and that subagent's bash call working there (an unowned-worktree attempt). */
+  const scratchLines = (owner: string, n: number): string[] => [
+    lineOf(common(owner, { eventKind: 'SessionStart', source: 'startup', cwd: SCRATCHES[n - 1]!.canonicalPath }, '2026-10-15T10:01:30.000Z')),
+    lineOf(common(owner, { eventKind: 'SubagentStart', agentId: `ag${n}`, agentType: null, cwd: '/w/demo' }, '2026-10-15T10:02:50.000Z')),
+    lineOf(common(owner, { eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: `toolu_s${n}`, outcome: 'completed', agentId: `ag${n}`, cwd: SCRATCHES[n - 1]!.canonicalPath }, '2026-10-15T10:03:00.000Z')),
+  ];
   const OWNERS = ['demo-a', 'demo-b', 'demo-c', 'demo-d', 'demo-e', 'demo-f', 'demo-g'];       // with a spool directory
-  const SESSIONS = [...OWNERS, 'demo-h', 'demo-i', 'demo-j'].map((id) => sessionOf(id));    // the last three have none
+  const SESSIONS = [...OWNERS, 'demo-h', 'demo-i', 'demo-j', 'demo-k', 'demo-l', 'demo-p'].map((id) => sessionOf(id));    // the last six have none
 
   it('D-5692 R1: one line; pairs=1500 and reconcile=1500; the key set is the phases that ran; every size equals its independent count', async () => {
     const warn = quietWarn();
     const w = world();
     for (const owner of OWNERS) writeBucket(w, owner, BUCKET10, startLine(owner, '2026-10-15T10:01:00.000Z'));
+    // demo-b and demo-c also have a bucket of the hour before: a second cursor (and a second observed hour) for each
+    for (const o of ['demo-b', 'demo-c']) writeBucket(w, o, BUCKET09, startLine(o, '2026-10-15T09:50:00.000Z'));
     for (const id of WITH_META) {
       mkdirSync(path.join(tdir(w), CLAUDE, 'subagents'), { recursive: true });
       writeFileSync(path.join(tdir(w), CLAUDE, 'subagents', `agent-${id}.meta.json`), JSON.stringify({ worktreePath: wtOf(`agent-${id}`) }));
@@ -354,7 +369,7 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
     const projected = vi.spyOn(w.coord, 'projectDelegationCheckpoint');
     const inserted = vi.spyOn(w.coord, 'insertDelegationEvents');
 
-    const demo = [OLD, RAW, SCRATCH, ...[...WITH_META, ...NO_META].map(treeOfAgent)];
+    const demo = [OLD, RAW, ...SCRATCHES, ...[...WITH_META, ...NO_META].map(treeOfAgent)];
     const view = { demo, other: OTHER };
     await censusPass(w, at(0), view, SESSIONS);
     await censusPass(w, at(1), view, SESSIONS);
@@ -365,9 +380,8 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
     appendBucket(w, 'demo-a', BUCKET10,
       ...[...WITH_META, ...NO_META].map((id, i) => agentStart(w, id, `2026-10-15T10:02:${second(i)}.000Z`)),
       bashPre('demo-a', 'toolu_wt1', ['old-tree'], '2026-10-15T10:05:00.000Z'), bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], '2026-10-15T10:05:03.000Z'),
-      lineOf(common('demo-a', { eventKind: 'SessionStart', source: 'startup', cwd: SCRATCH.canonicalPath }, '2026-10-15T10:01:30.000Z')),
-      lineOf(common('demo-a', { eventKind: 'SubagentStart', agentId: 'ag1', agentType: null, cwd: '/w/demo' }, '2026-10-15T10:02:50.000Z')),
-      lineOf(common('demo-a', { eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: 'toolu_s1', outcome: 'completed', agentId: 'ag1', cwd: SCRATCH.canonicalPath }, '2026-10-15T10:03:00.000Z')));
+      ...scratchLines(OWNERS[0]!, 1));
+    for (const [i, owner] of OWNERS.slice(1, SCRATCHES.length).entries()) appendBucket(w, owner, BUCKET10, ...scratchLines(owner, i + 2));
     // demo-b gets one more start; demo-c and demo-d each run a series of unrelated bash calls (five and six), long after the creator's
     appendBucket(w, 'demo-b', BUCKET10, startLine('demo-b', '2026-10-15T10:08:00.000Z'));
     for (const [owner, minute, count] of [['demo-c', 12, 5], ['demo-d', 14, 6]] as const) {
@@ -384,7 +398,7 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
       projected: projected.mock.calls.length, inserted: inserted.mock.calls.length,
     };
     r.arm({ pairs: 1500 });
-    // the armed pass lists `other` as unlistable (its view is null) and six late trees; its census was measured 7 s before it
+    // the armed pass lists `other` as unlistable (its view is null) and five late trees; its census was measured 7 s before it
     const AGE = 7000;
     await censusPass(w, at(2), { demo: [...demo, ...LATE], other: null }, SESSIONS, AGE);
 
@@ -410,7 +424,7 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
     const report = w.watcher.delegationReport();
     const windows = lastInput.listingWindows;
     const expected: Record<string, number> = {
-      // from the fixture's construction: ten sessions have a census incarnation, none is dead, none is pending
+      // from the fixture's construction: thirteen sessions have a census incarnation, none is dead, none is pending
       ownerCount: SESSIONS.length,
       // the applier's own calls: the buckets that had something new, and the records those calls appended
       staged: batches.reduce((s, [b]) => s + b.length, 0),
@@ -472,22 +486,30 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
     expect(m.get('rewrite'), 'the port\'s rewrite ran in 0 ms and is present').toBe(0);
     expect(r.fired, 'the lane announced its phases').toContain('pairs');
 
-    // The sizes the fixture can tell apart are pairwise different and not zero, so a swap of any two shows (the values: 10 4 36 35 18 11 8
-    // 21 5 20 14 12 6 9 3 1 7 7000). Left out, because the fixture CANNOT separate them from a listed one: groups that are equal by
-    // construction (`trees = ladder = markCalls`: one correlation call and one mark question per census tree; `vLinked = eLease = cpLeases
-    // = openLeases = cpLineage`: every link requests a lease, each with its lineage row; `vUnmeasured = lostCalls`: asked once per
-    // unmeasured tree no lease holds; `appended = rewriteEvents`: the records the pass journaled are the rows it projected), and
-    // `winLost` (always the two floor windows: the retention floor and the not-ready stretch), `cpAttempts = cpSessions`, `cpCursors =
-    // cpSessions` (seven owners with a bucket), `cpIntervals = ownerCount` (one hour each), and `rewrites = claimants`.
-    const distinct = ['ownerCount', 'staged', 'appended', 'evidence', 'trees', 'treesPastWait', 'claimants', 'activities', 'pointMetas', 'pathMap',
-      'win', 'winHeld', 'vLinked', 'vUnresolved', 'vUnmeasured', 'eUnowned', 'cpSessions', 'censusAge'];
+    // The sizes this fixture can tell apart are pairwise different and not zero, so a swap of any two of them shows. The values: ownerCount
+    // 13, evidence 41, appended 42, trees 16, treesPastWait 11, claimants 5, activities 21, pointMetas 3, pathMap 18, win 14, winHeld 12,
+    // vUnresolved 10, cpSessions 7, cpAttempts 8, cpIntervals 15, cpCursors 9, rewrites 6, censusAge 7000, and the two representatives of
+    // the tied groups below, vLinked 4 and vUnmeasured 2, and droppedMeasured, a flag, 1. The fixture untied what a modest change could
+    // (more agents, a fourth scratch tree, a second hour of spool for two owners, three more sessions): every size in this list is
+    // different from every other.
+    const distinct = ['ownerCount', 'evidence', 'appended', 'trees', 'treesPastWait', 'claimants', 'activities', 'pointMetas', 'pathMap', 'win',
+      'winHeld', 'vUnresolved', 'cpSessions', 'cpAttempts', 'cpIntervals', 'cpCursors', 'rewrites', 'censusAge', 'vLinked', 'vUnmeasured', 'droppedMeasured'];
     for (const key of distinct) expect(expected[key], `${key} is not zero`).toBeGreaterThan(0);
     expect(new Set(distinct.map((k) => expected[k])).size, `the sizes ${distinct.join(' ')} are pairwise different`).toBe(distinct.length);
-    // Sizes this fixture leaves 0, and why: `launches` (no Workflow launch), `droppedKeys` (no eviction), `winHeldNull` and `windowCalls`
-    // (every Bash window names a registered session; R1b makes one unknown), `vRunChild` and `eRunChild` (the lane has no datum that names
-    // a run's child: always 0), `vConflicting`, `eAbsence`, `eInterval`, `eRepair` (filtered), `markPaths`, `markIds`, `lostProjects`,
-    // `lostPrefixes`, `lossy` (no mark was ever set), `pendingOwners` (nothing stayed unread; the lane's own report does not expose it).
-    // `droppedMeasured` is 1 (a flag).
+    // Equal BY CONSTRUCTION, so each group is represented once above: `trees = ladder = markCalls` (one correlation call and one mark
+    // question per census tree); `vLinked = eLease = cpLeases = openLeases = cpLineage` (every link requests a lease, each with its lineage
+    // row); `vUnmeasured = lostCalls` (asked once per unmeasured tree no lease holds); `appended = rewriteEvents` (the records the pass
+    // journaled are the rows it projected).
+    // Equal by COINCIDENCE, which a modest change of the fixture did not remove (any change that moved one of them put another on a
+    // neighbour; measured over several hundred fixture shapes, none was free of ties), so a swap inside the group is NOT shown by this
+    // row: `winLost` (always the two floor windows: the retention floor and the not-ready stretch) with `vUnmeasured` (2), and `staged`
+    // (the four owners with something new) with `vLinked` and `eUnowned` (4). Each still equals its own independent count above.
+    // Sizes this fixture leaves 0, and where each is not zero instead: `launches` (no Workflow launch), `winHeldNull` and `windowCalls`
+    // (every Bash window names a registered session; the next row makes one unknown), `droppedKeys`, `markPaths`, `markIds`, `lostProjects`,
+    // `lostPrefixes`, `lossy` (nothing was evicted or marked; the marks row after it makes the lane forget), `eRepair` (the policy spy
+    // filters it; the repair row has it run), `vRunChild` and `eRunChild` (the lane has no datum that names a run's child: always 0),
+    // `vConflicting`, `eAbsence`, `eInterval` (R3 runs the shapes that plan them), `pendingOwners` (nothing stayed unread; the lane's own
+    // report does not expose it).
   });
 });
 
@@ -504,17 +526,20 @@ describe('D-5692 R1 (an unknown-repository window): the window sizes and the win
     writeBucket(w, 'demo-b', BUCKET10, startLine('demo-b', '2026-10-15T10:19:00.000Z'),
       bashPre('demo-b', 'toolu_b1', ['old-tree'], '2026-10-15T10:20:00.000Z'), bashPost('demo-b', 'toolu_b1', ['old-tree'], '2026-10-15T10:20:02.000Z'));
     await primed(w);
-    const r = rig(w);
     const corr = vi.spyOn(correlation, 'correlateDelegation');
     const windowForced = vi.spyOn(correlation, 'delegationUnknownWindowForced');
     const both = [sessionOf('demo-a'), sessionOf('demo-b')];
     await censusPass(w, at(0), { demo: [OLD, RAW] }, both);
     await censusPass(w, at(1), { demo: [OLD, RAW] }, both);
-    // the lane forgets the session's project only here, through its own memory (a restart would, too: it knows a session by what it has seen)
-    (w.watcher as unknown as { delegationLane(): { sessionProject: Map<string, string> } }).delegationLane().sessionProject.delete('demo-b');
+    // A RESTART over the same home: the new lane knows a session only by what it has been handed since, and it is handed demo-a alone, so
+    // demo-b's window (read back from the journal) has an UNKNOWN repository. An unarmed pass first sets its ready instant.
+    await w.watcher.closeDelegation();
+    const again = world({ home: w.home });
+    const r = rig(again);
+    await censusPass(again, at(2), { demo: [OLD, RAW] }, DEMO_A);
     const base = { corr: corr.mock.calls.length, win: windowForced.mock.calls.length };
     r.arm({ noteSessions: 1001 });
-    await censusPass(w, at(2), { demo: [OLD, RAW] }, DEMO_A);
+    await censusPass(again, at(3), { demo: [OLD, RAW] }, DEMO_A, 0);
     const input = corr.mock.calls.slice(base.corr).at(-1)![0];
     const unknown = input.listingWindows.filter((x) => x.lost !== true && x.repository === null);
     expect(unknown, 'the fixture holds one window of unknown repository').toHaveLength(1);
@@ -528,6 +553,133 @@ describe('D-5692 R1 (an unknown-repository window): the window sizes and the win
     expect(m.get('windowCalls')).toBe(asked);
     expect(m.get('winHeld')).toBe(input.listingWindows.filter((x) => x.lost !== true).length);
     expect(m.get('win')).toBe(input.listingWindows.length);
+  });
+});
+
+describe('D-5692 R1 (a repair report): the five repair sizes are the repair\'s own report, and absent when no report came back', () => {
+  const OWNERS_R = ['demo-a', 'demo-b', 'demo-c', 'demo-d', 'demo-e'];
+  /** Five owners with a spool, two unarmed census passes (each repairs a healthy projection: a report of zeros), then the rig. */
+  async function repairWorld() {
+    const warn = quietWarn();
+    const w = world();
+    for (const owner of OWNERS_R) writeBucket(w, owner, BUCKET10, startLine(owner, '2026-10-15T10:01:00.000Z'));
+    await primed(w);
+    const r = rig(w);
+    const repair = vi.spyOn(DelegationDurability.prototype, 'repairProjection');
+    const sessions = OWNERS_R.map((id) => sessionOf(id));
+    const view = { demo: [OLD, RAW] };
+    await censusPass(w, at(0), view, sessions);
+    await censusPass(w, at(1), view, sessions);
+    return { warn, w, r, repair, sessions, view, base: repair.mock.calls.length };
+  }
+  const sizeKeys = ['repairPasses', 'repairInserted', 'repairFull', 'repairWiped', 'repairHealed'];
+
+  it('D-5692 R1: after SQLite drifts (an event missing, three sessions\' events altered) the repair\'s report is on the line: passes 2, healed 3, inserted 4, a full replay and no wipe', async () => {
+    const { warn, w, r, repair, sessions, view, base } = await repairWorld();
+    // The drift, made in the coordination store's own tables: one event deleted from the middle (SQLite's count then disagrees with the
+    // journal's below its resume point: every event is replayed, one pass), and the events of three other sessions altered (the replay
+    // meets a different row under the same id: a conflict, so those sessions are deleted and replayed from the journal: a second pass).
+    const db = w.coord.db;
+    const eventOf = (owner: string): number => (db.prepare('SELECT MIN(journalSequence) AS m FROM delegation_events WHERE sessionId = ?').get(owner) as { m: number }).m;
+    db.prepare('DELETE FROM delegation_events WHERE journalSequence = ?').run(eventOf('demo-d'));
+    for (const owner of ['demo-a', 'demo-b', 'demo-c']) {
+      expect(db.prepare("UPDATE delegation_events SET payloadJson = payloadJson || ' ' WHERE journalSequence = ?").run(eventOf(owner)).changes, `${owner}'s event altered`).toBe(1);
+    }
+    r.arm({ noteSessions: 1001 });
+    await censusPass(w, at(2), view, sessions);
+    expect(repair.mock.calls.length - base, 'the pass repaired once').toBe(1);
+    const report = (await repair.mock.results.at(-1)!.value) as DelegationProjectionRepairReport;
+    // the report this fixture draws: what the repair did, read from the real code, before the line is looked at
+    expect(report.fullReplay, 'a full replay (the count below the resume point disagreed)').toBe(true);
+    expect(report.wipedAll, 'no wipe (every conflict was healed)').toBe(false);
+    expect([report.journalPasses, report.healedSessions, report.inserted], 'passes, healed and inserted are three different numbers').toEqual([2, 3, 4]);
+
+    const lines = slowLines(warn);
+    expect(lines, 'one slow line is written').toHaveLength(1);
+    const m = parse(lines[0]!);
+    expect(m.get('repairPasses')).toBe(report.journalPasses);
+    expect(m.get('repairInserted')).toBe(report.inserted);
+    expect(m.get('repairFull')).toBe(report.fullReplay ? 1 : 0);
+    expect(m.get('repairWiped')).toBe(report.wipedAll ? 1 : 0);
+    expect(m.get('repairHealed')).toBe(report.healedSessions);
+    expect(m.has('repair'), 'the repair phase ran').toBe(true);
+  });
+
+  it.each([
+    { title: 'a null report', arrange: (repair: { mockResolvedValueOnce(v: null): unknown }) => { repair.mockResolvedValueOnce(null); } },
+    { title: 'a repair that throws', arrange: (repair: { mockRejectedValueOnce(v: Error): unknown }) => { repair.mockRejectedValueOnce(new Error('a fixture failure')); } },
+  ])('D-5692 R1: $title leaves all five repair sizes off the line, while the repair phase is on it', async ({ arrange }) => {
+    const { warn, w, r, repair, sessions, view, base } = await repairWorld();
+    (arrange as (r: unknown) => void)(repair);
+    r.arm({ noteSessions: 1001 });
+    await censusPass(w, at(2), view, sessions);
+    expect(repair.mock.calls.length - base, 'the pass called repairProjection once').toBe(1);
+    const lines = slowLines(warn);
+    expect(lines, 'one slow line is written').toHaveLength(1);
+    const m = parse(lines[0]!);
+    expect(m.has('repair'), 'the repair phase ran').toBe(true);
+    expect(sizeKeys.filter((k) => m.has(k)), 'no repair size is on the line').toEqual([]);
+  });
+});
+
+describe('D-5692 R1 (marks and dropped evidence): the lane\'s own mark counts are on the line as the lane reports them', () => {
+  const toolAt = (owner: string, n: number, cwd: string, when: string, agentId?: string): string =>
+    lineOf(common(owner, { eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: `toolu_${n}`, outcome: 'completed', cwd, ...(agentId === undefined ? {} : { agentId }) }, when));
+  const AGENTS = [1, 2, 3].map((i) => `a1b2c3d4e5f6000${i}`);
+  /** The seams that drive the lane's forgetting, as `delegation-watch.test.ts` drives them: the evidence slice holds 3 events (the oldest are
+   *  dropped), the dropped keys are pruned into marks once 6 have been collected (so the last pass's four stay as keys), and `markCap` is
+   *  the mark set's bound. `rig` merges them with its own `onPassPhase` hook (the seams object is replaced whole). */
+  const SEAMS = { evidenceCap: 3, droppedPruneEvery: 6 };
+  /** Three passes. Pass 0: demo's three directories, three agents' bare events (an id names no project) and other's two: five events are
+   *  dropped, not yet pruned. Pass 1: three more of other's evict three more: the eight keys are pruned into marks. Pass 2 (the armed one):
+   *  four more evict four, which stay keys. */
+  async function marked(markCap: number) {
+    const warn = quietWarn();
+    const w = world();
+    const root = w.cfg.projectsRoot;
+    const sessions = [sessionOf('demo-a'), sessionOf('other-s', 'idle', 'other'), sessionOf('demo-b')];
+    writeBucket(w, 'demo-a', BUCKET10, ...Array.from({ length: 3 }, (_, i) => toolAt('demo-a', 400 + i, `${root}/demo/far-${i}`, `2026-10-15T10:00:0${i + 1}.000Z`)));
+    writeBucket(w, 'demo-b', BUCKET10, ...AGENTS.map((id, i) => toolAt('demo-b', 600 + i, `${root}/demo/b-dir-${i}`, `2026-10-15T10:00:00.${i}00Z`, id)));
+    writeBucket(w, 'other-s', BUCKET10, toolAt('other-s', 500, `${root}/other/o-0`, '2026-10-15T10:00:30.000Z'), toolAt('other-s', 501, `${root}/other/o-1`, '2026-10-15T10:00:31.000Z'));
+    const r = rig(w, { ...SEAMS, markCap });
+    const view = { demo: [OLD, RAW], other: [] };
+    await censusPass(w, at(0), view, sessions);
+    appendBucket(w, 'other-s', BUCKET10, ...[2, 3, 4].map((i) => toolAt('other-s', 500 + i, `${root}/other/o-${i}`, `2026-10-15T10:00:3${i}.000Z`)));
+    await censusPass(w, at(1), view, sessions);
+    expect(slowLines(warn), 'nothing was slow before the armed pass').toEqual([]);
+    appendBucket(w, 'other-s', BUCKET10, ...[0, 1, 2, 3].map((i) => toolAt('other-s', 510 + i, `${root}/other/o-9${i}`, `2026-10-15T10:00:5${i}.000Z`)));
+    r.arm({ noteSessions: 1001 });
+    await censusPass(w, at(2), view, sessions);
+    const report = w.watcher.delegationReport();
+    const lines = slowLines(warn);
+    expect(lines, 'one slow line is written').toHaveLength(1);
+    return { m: parse(lines[0]!), report };
+  }
+  const cases = [
+    // markCap, then what the lane holds: paths, ids, keys, lost projects, lost prefixes, lossy
+    { cap: 6, held: { markPaths: 2, markIds: 3, droppedKeys: 4, lostProjects: 1, lostPrefixes: 1, lossy: 0 }, why: 'demo is the biggest project at the cap and is lost; its prefix covers its marks' },
+    { cap: 100, held: { markPaths: 8, markIds: 3, droppedKeys: 4, lostProjects: 0, lostPrefixes: 0, lossy: 0 }, why: 'a cap nothing reaches: every path is kept as a mark and no project is lost' },
+    { cap: 2, held: { markPaths: 2, markIds: 2, droppedKeys: 4, lostProjects: 1, lostPrefixes: 1, lossy: 1 }, why: 'a cap the id marks overflow: the one global flag rises' },
+  ];
+  it.each(cases)('D-5692 R1: at markCap $cap ($why) the mark, id, lost-project, lost-prefix, flag and dropped-key sizes are the lane\'s report', async ({ cap, held }) => {
+    const { m, report } = await marked(cap);
+    // the lane's own report, read independently of the line (the fixture's constants are asserted too, so a drifting fixture is seen at once)
+    const fromReport = {
+      markPaths: report.marks.paths, markIds: report.marks.ids, droppedKeys: report.droppedEvidence.keys,
+      lostProjects: report.marks.lostProjects.length, lostPrefixes: report.marks.lostPrefixes, lossy: report.marks.lossy ? 1 : 0,
+    };
+    expect(fromReport, 'what the fixture draws').toEqual(held);
+    for (const [key, value] of Object.entries(fromReport)) expect(m.get(key), key).toBe(value);
+    expect(m.get('droppedMeasured'), 'the dropped evidence is measured').toBe(report.droppedEvidence.measured ? 1 : 0);
+    expect(m.get('pendingOwners')).toBe(0);
+  });
+
+  it('D-5692 R1: where the fixture can tell them apart the sizes are pairwise different, so a swap of any two shows (markCap 6: paths 2, ids 3, keys 4, one lost project)', async () => {
+    const { m } = await marked(6);
+    // `lostPrefixes` is left out: it is one per lost project here (one attributing prefix), so it equals `lostProjects` by construction
+    const keys = ['markPaths', 'markIds', 'droppedKeys', 'lostProjects'];
+    expect(keys.map((k) => m.get(k))).toEqual([2, 3, 4, 1]);
+    expect(new Set(keys.map((k) => m.get(k))).size, 'pairwise different').toBe(keys.length);
   });
 });
 
@@ -545,15 +697,19 @@ describe('D-5692 R2: strictly more than 1,000 ms of BLOCKING time writes the lin
     expect(m.get('block')).toBe(1001);
   });
 
-  it('D-5692 R2 (ii): a pass whose owners alone take 1,500 ms (a read wait) writes no line; with 1,001 ms of blocking beside it, the line reads the read wait but blocks only on the 1,001', async () => {
-    const reads = await scenario('std', { owners: 1500 });
-    expect(reads.reconciles).toBe(1);
-    expect(reads.lines, 'a read wait is not blocking').toEqual([]);
-    const both = await scenario('std', { owners: 1500, noteSessions: 1001 });
-    expect(both.reconciles).toBe(1);
+  // Every READ phase, each with the fixture R3 uses for it. A read waits on the fleet, not on the lane: it is not blocking.
+  const READS: Array<{ key: string; shape: Shape }> = ['open', 'recover', 'root', 'load', 'owners', 'readMetas'].map((key) => ({ key, shape: key === 'recover' ? 'recover' : 'std' }));
+  it.each(READS)('D-5692 R2 (ii): $key alone takes 1,500 ms (a read wait) and writes no line; with 1,001 ms of blocking beside it, the line reads the wait but blocks only on the 1,001', async ({ key, shape }) => {
+    const reads = await scenario(shape, { [key]: 1500 });
+    expectReached(key, reads);
+    expect(reads.lines, `${key}: a read wait is not blocking`).toEqual([]);
+    const both = await scenario(shape, { [key]: 1500, noteSessions: 1001 });
+    expectReached(key, both);
     expect(both.lines, 'the blocking time alone decides').toHaveLength(1);
-    const m = expectTimings(both.lines[0]!, { owners: 1500, noteSessions: 1001 });
-    expect(m.get('block'), 'owners is not summed into block').toBe(1001);
+    const ms: Record<string, number> = { [key]: 1500, noteSessions: 1001 };
+    for (const k of ENCLOSERS[key] ?? []) ms[k] = 1500;
+    const m = expectTimings(both.lines[0]!, ms);
+    expect(m.get('block'), `${key} is not summed into block`).toBe(1001);
     expect(m.get('total')).toBe(2501);
   });
 });
@@ -576,6 +732,11 @@ describe('D-5692 R3: 1,500 ms inside a phase or part is that phase\'s, its enclo
     const adds: Record<string, number> = tested ? { noteSessions: 1500 } : rewriteAfter === undefined ? { [key]: 1500, noteSessions: 1001 } : { noteSessions: 1001 };
     const sc = await scenario(shape, adds, rewriteAfter);
     expectReached(key, sc);
+    if (rewriteAfter === 'repair') {
+      // the rewrite is the repair's: the plan asked for it and the repair ran once, before the red assertion below reads its time
+      expect(sc.kinds, 'the repair was planned').toContain('repair-report-projection');
+      expect(sc.repairs, 'repairProjection ran once').toBe(1);
+    }
     expect(sc.lines, 'one slow line is written').toHaveLength(1);
     const callers = rewriteAfter === undefined ? [] : rewriteAfter === 'flush' ? ['flush'] : ['repair', 'effects', 'reconcile'];
     const ms: Record<string, number> = { [key]: 1500 };
@@ -690,6 +851,54 @@ describe('D-5692 R5: the line is numbers only, in a fixed grammar, and bounded',
     const none = format!({ block: 1200, total: 1200, dropped: 99 });
     expect(none).toBe(`${PREFIX} block=1200 total=1200`);
   });
+
+  it('D-5692 R5 (ii): a LONG pair that does not fit is dropped whole and a LATER SHORT pair is still tried and kept (no break on the first overflow); a pair that fits exactly is kept', () => {
+    const format = surface['delegationPassSlowLine'] as SlowLine | undefined;
+    expect(typeof format, 'delegationPassSlowLine is exported').toBe('function');
+    const reserve = ` dropped=${SLOW_KEYS.length}`.length;
+    // list order: block, cut, total, other. `total` is the long pair (16 digits), `other` the short one that follows it.
+    const fields = { block: 1200, total: Number.MAX_SAFE_INTEGER, other: 7 };
+    const fits = PREFIX.length + reserve + ' block=1200'.length + ' other=7'.length;
+    const exact = format!(fields, fits);
+    expect(exact, 'total is dropped whole, other (listed after it) is kept, and the one drop is counted').toBe(`${PREFIX} block=1200 other=7 dropped=1`);
+    expect(Buffer.byteLength(exact)).toBeLessThanOrEqual(fits);
+    // one byte less and the short pair no longer fits either: both are dropped, whole
+    expect(format!(fields, fits - 1)).toBe(`${PREFIX} block=1200 dropped=2`);
+    // room for every pair: nothing is dropped
+    expect(format!(fields, PREFIX.length + reserve + ' block=1200'.length + ` total=${Number.MAX_SAFE_INTEGER}`.length + ' other=7'.length))
+      .toBe(`${PREFIX} block=1200 total=${Number.MAX_SAFE_INTEGER} other=7`);
+    // the same through the full key list: the values alternate long (16 digits) and short (1 digit), so once the line is nearly full a long
+    // pair is dropped and a later short one still fits
+    const order = SLOW_KEYS.filter((k) => k !== 'dropped');
+    const mixed = Object.fromEntries(order.map((k, i) => [k, i % 2 === 0 ? Number.MAX_SAFE_INTEGER : 1]));
+    const BOUND = 600;
+    const pairs = parse(format!(mixed, BOUND));
+    const firstGap = order.findIndex((k) => !pairs.has(k));
+    expect(firstGap, 'a pair was dropped').toBeGreaterThan(-1);
+    const laterKept = order.slice(firstGap + 1).filter((k) => pairs.has(k));
+    expect(laterKept.length, 'and keys listed after the first drop are still on the line').toBeGreaterThan(0);
+    for (const k of laterKept) expect(pairs.get(k), `${k} is whole`).toBe(mixed[k]);
+    expect(pairs.get('dropped'), 'dropped counts them').toBe(order.filter((k) => !pairs.has(k)).length);
+  });
+
+  it('D-5692 R5 (ii): a value is rounded to the nearest whole number, clamped to 0 below and to the largest safe integer above, +Infinity is the largest and any other non-finite value is 0', () => {
+    const format = surface['delegationPassSlowLine'] as SlowLine | undefined;
+    expect(typeof format, 'delegationPassSlowLine is exported').toBe('function');
+    const MAX = Number.MAX_SAFE_INTEGER;
+    const rule = (v: number): string => format!({ block: v });
+    expect(rule(1.4), 'Math.round: 1.4 is 1').toBe(`${PREFIX} block=1`);
+    expect(rule(1.5), 'Math.round: 1.5 is 2').toBe(`${PREFIX} block=2`);
+    expect(rule(2.5), 'Math.round: 2.5 is 3').toBe(`${PREFIX} block=3`);
+    expect(rule(-5), 'a negative value is 0').toBe(`${PREFIX} block=0`);
+    expect(rule(-0.4), 'a value that rounds to negative zero is 0').toBe(`${PREFIX} block=0`);
+    expect(rule(Number.POSITIVE_INFINITY), '+Infinity is the largest safe integer').toBe(`${PREFIX} block=${MAX}`);
+    expect(rule(Number.NEGATIVE_INFINITY), '-Infinity is 0').toBe(`${PREFIX} block=0`);
+    expect(rule(Number.NaN), 'NaN is 0').toBe(`${PREFIX} block=0`);
+    expect(rule(MAX + 1000), 'above the largest safe integer is the largest').toBe(`${PREFIX} block=${MAX}`);
+    expect(rule(1e300), 'a value that prints in exponent form is the largest, written in full').toBe(`${PREFIX} block=${MAX}`);
+    expect(rule(MAX), 'the largest itself is written whole').toBe(`${PREFIX} block=${MAX}`);
+    expect(rule(0), 'zero is written, not left out').toBe(`${PREFIX} block=0`);
+  });
 });
 
 // ── R6 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -734,26 +943,29 @@ describe('D-5692 R7: a pass cut by its budget writes its line at its late settle
     const w = world();
     writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
     const r = rig(w);
-    r.arm({ flush: 1500 });                                           // the flush still runs after a cut: its results were read before it
+    // The flush still runs after a cut (its results were read before it). `noteSessions` runs BEFORE the cut (the pass has not yet reached
+    // the stuck read), and its 1,001 ms alone is over the threshold: a line written at the cut, in `sweep`, would show before the release.
+    r.arm({ noteSessions: 1001, flush: 1500 });
     let release!: () => void;
     w.hold.set('demo-a', new Promise<void>((resolve) => { release = resolve; }));
     setNow(NOW);
     setCensus(w, { demo: [] }, { 'demo-a': measured() }, NOW);
     const stuck = pass(w, DEMO_A);
-    await vi.waitFor(() => expect(w.calls.listings).toEqual(['demo-a']));
+    await vi.waitFor(() => expect(w.calls.listings).toEqual(['demo-a']), { timeout: 10_000 });
     await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);
     await stuck;                                                      // the pass ended although the read did not
-    expect(slowLines(warn), 'a pass that has not settled has written nothing').toEqual([]);
+    expect(slowLines(warn), 'a pass that has not settled has written nothing, though its block is already over the threshold').toEqual([]);
     release();                                                        // the late answer arrives: the cut pass runs its flush and settles
-    await vi.waitFor(() => expect(slowLines(warn), 'one line, at the late settle').toHaveLength(1));
+    await vi.waitFor(() => expect(slowLines(warn), 'one line, at the late settle').toHaveLength(1), { timeout: 10_000 });
     await vi.advanceTimersByTimeAsync(10);
     const lines = slowLines(warn);
     expect(lines, 'and exactly one').toHaveLength(1);
     const m = parse(lines[0]!);
     expect(m.get('cut')).toBe(1);
+    expect(m.get('noteSessions')).toBe(1001);
     expect(m.get('flush')).toBe(1500);
-    expect(m.get('block')).toBe(1500);
-    expect(m.get('total')).toBe(1500);
+    expect(m.get('block')).toBe(2501);
+    expect(m.get('total')).toBe(2501);
     expect(m.has('reconcile'), 'a cut pass reconciles nothing').toBe(false);
   });
 });
