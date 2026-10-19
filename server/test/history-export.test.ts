@@ -3481,6 +3481,26 @@ describe('a carried segment counts only when it is whole and this store\'s (W5h-
     });
   }, 120_000);
 
+  // ── fix round 1 (N1, D-5641): a busy answer out of the re-measure ends the tick, as everywhere; it is not the bug class FX2 counts ──
+  it('a busy answer out of the damaged-segment re-measure propagates out of the step (the tick ends as a busy tick does) and is not counted export_marks_check_failed', async () => {
+    const { box, ids, s2, at, dir } = await twoSegments('ccrc-history-export-segremeasure-busy-');
+    fs.truncateSync(path.join(dir, s2), Math.floor(fs.statSync(path.join(dir, s2)).size / 2));
+    await bindStep(box, ids, at, HOUR + MIN, HOUR + 2 * MIN);
+    expect(metaOf(box, HEALTH_META.exportSegmentDamaged), 'CONTROL: the damaged record holds a name').toBe(JSON.stringify([s2]));
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let threw: unknown = null;
+    try {
+      const remeasureDamaged = (): void => { throw Object.assign(new Error('database is locked'), { errcode: 5 }); };
+      await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(2 * HOUR + 3 * MIN), { deps: { remeasureDamaged } })));
+    } catch (e) {
+      threw = e;
+    } finally {
+      err.mockRestore();
+    }
+    expect((threw as { errcode?: number } | null)?.errcode, 'the busy error reached the caller').toBe(5);
+    expect(counters(box)['export_marks_check_failed'], 'and nothing was counted').toBeUndefined();
+  }, 120_000);
+
   // ── final fix FX3 (D-5634): a check that stops short still records the damaged segments it found ──
   it('a check stopped on its budget before its first batch still records the damaged segment: the record names it, export_segment_damaged counts it, the stop reads budget, and doctor WARNs export-segment-damaged', async () => {
     const { box, ids, s1, s2, at, dir } = await twoSegments('ccrc-history-export-segdmg-stopped-');
