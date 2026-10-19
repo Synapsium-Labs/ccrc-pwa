@@ -23,7 +23,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
-| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; run 308 awaiting review, four items settled; handoff `990c70cbb`, not independently accepted; review 489 failed without dispatch, replacement preparation resumed 2026-10-19 with corrected session default; required server CI red; Task 5 coordinator-owned; scope sweep remains SHADOWED |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -658,6 +658,96 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - No product acceptance, merge, manual rollout, updater-intent write, restart, scope-sweep arming or repository
     settings change follows. Task 5 waits for independent acceptance; landing-order Task 7 remains separately
     gated. The scope sweep stays SHADOWED. Following an accepted review dispatch, end the turn for reviewer mail.
+- **2026-10-19 13:16 UTC - review 630 dispatched; reviewer reports panel complete, suites still in progress.**
+  - After the routing correction was committed as `d995192bb`, a NEW review run 630 of work run 308 opened at
+    09:24 UTC and dispatched once at 09:29 UTC. The accepted response recorded `briefQueued:true`,
+    `skillState:present`, `resumed:false`, `adopted:false`, `clearedAt:null` and `spawnState:null`. Review 489 and
+    its original failure evidence are unchanged; its closure provenance remains unknown.
+  - The actual route is main Opus/xhigh, session subagent default Sonnet, workflows on, compact 40. The brief
+    preserves the literal three Opus/high lenses and three Sonnet/high refuters per finding, the immutable
+    approved plan, all Tasks 1-4 and the mandatory evidence annex. Task 5 is outside implementation acceptance.
+  - The latest run-board read still has work 308 at `awaiting-review`, four settled items, and review 630 at
+    `dispatched`, bound to its reviewer and not closed. The reviewer's 13:14 UTC STATUS, not `review-done`, says
+    it measured `990c70cbb5cd863f97d6d5e59dd01c203e111dba` once. It reports a complete 45-agent panel:
+    10 confirmed findings, four refuted, none unexamined and no lens unverified. These are progress claims;
+    there is no final report or accepted review fingerprint yet, so no finding-level ruling follows.
+  - The reviewer reports the nine owning-gate groups and server build green, with doctor describe partitions;
+    full-server coverage is still in progress at 55 of 71 bounded serial parts plus three oversized files.
+    Two parts were OOM-killed under shared pressure, not test outcomes. It reports one rerun green and the other
+    still owed, followed by the remaining server parts, agent/PWA suites and PWA build. No coverage waiver,
+    assumed process-exit proof or acceptance of those results is inferred; the report must retain the gaps.
+  - Before dispatch, CI job logs identified the last measured `server 5/12` failure as the README-size guard in
+    `pools-prose.test.ts`: the stated 6200 lines versus 6351 measured exceeded the allowed delta of 100 by 51.
+    That explains the red check, not whether it is inherited or introduced. The actual selector manifest is
+    still unestablished. Both questions were included in the review brief; no fresh CI result is claimed here.
+  - The status was acknowledged once. No new reviewer instruction, run advance/close, product acceptance,
+    feature edit, integration, merge, deployment, restart, updater-intent/settings write or arming follows.
+    Task 5 remains pending; Task 7 remains separately gated. End the turn for reviewer mail, without polling.
+- **2026-10-19 14:46 UTC - review 630 closed; implementation returned for correction, not accepted.**
+  - Review 630 closed DONE at 14:32 UTC with its original report fingerprint for
+    `990c70cbb5cd863f97d6d5e59dd01c203e111dba` accepted. The report is immutable. This accepts review provenance,
+    not Tasks 1-4. The review workspace remains retained while work 308 is open; review 489 is unchanged.
+  - The final panel reports 45 agents, zero errors/skips, ten confirmed and four refuted findings, none unexamined
+    and no lens unverified. Its disclosed safety-only shared-preamble addition is accepted as reconciliation with
+    the brief's current safety obligations, NOT described as a byte-for-byte script run. Literal models, efforts,
+    three lenses, three refuters per finding and majority logic were unchanged. The three additional whole-branch
+    findings are not panel-voted; they retain that provenance. No finding is accepted merely from its count.
+  - **F1, R1 and F7: fix.** Preserve the acknowledged class/effort pair through haiku-record rotation; preserve the
+    newer outgoing choice when resuming an older conversation; do not let refused/drifted incoming commands erase
+    the last effective acknowledged choice. Permanent fixture-contained reproductions must also preserve the
+    newer-incoming clear-race protection and no-pane-keystroke control. No loss tradeoff is waived by documenting it.
+  - **R2: uphold the conformance finding.** The third promotion argument, second transcript read and live applied-stamp
+    side effect are not approved merely by the worker's departure entry. Correct within the approved two-argument,
+    current-UUID, combined-route-writer seam if all controls can hold. Otherwise stop that part and submit the exact
+    proposed contract, reasons, costs and tests for an operator ruling; independent residue/evidence work may proceed.
+    Do not simply revert and reintroduce the demonstrated clear race. **R3:** make writer enumerations match the
+    resolved, authorized writer set, not an unapproved side effect.
+  - **F2: fix header/fixture, not stop authority.** Keep the approved fail-safe uppercase-state policy; readable
+    unsupported state `t` must carry without stop. **F3:** add an in-bounds half-clock pair that actually reds when
+    the helper's pair guard is removed, independently of regex, age and shell-arithmetic resets.
+  - **F4: partly overrule the product-change request.** The approved plan itself sets the carried prior verdict to
+    `carry` and retains the verdict-change announcement branch. Correct the stale verbatim-carry/first-ever prose
+    and pin re-announcement after carry; do not add persistence, widen the frozen carry format or expand stop authority.
+  - **F5: fix committed evidence.** Record actual final per-task findings/verdicts and fixes/re-reviews held in existing
+    artifacts. No child reasoning, chat or transcript access and no invented/backdated review. Any unrecoverable
+    historical gate is explicitly UNPROVEN; fresh Opus/high remedial task reviews at the corrected state must be
+    dated honestly before corrective commits. Review 630 is not a substitute for the missing task gates.
+  - **F6: correct checklists and history.** Literal unrun commands stay unrun. Allow future bounded foreground serial
+    full-suite parts with complete file/test-name accounting and actual exits; owning groups stay literal except
+    the oversized doctor may be partitioned with distinct-name coverage. Retain the background/interrupted first
+    RED, timeout/OOM attempts, repeated shards, missing worker JSON, overlapping counts, omitted timed-out-attempt
+    failures, single-case reruns and unproved worker-group exit. Worker-unrerun UTF-8 cases are not worker green;
+    later reviewer passes have separate provenance. This practical substitution never rewrites the original execution.
+  - **F8-F10:** list both base-red pin cases, correct zero README source anchors and the measured line counts, and
+    correct five-for-five comment replacement rather than six. Keep comment-only/line-neutral qualifications.
+  - The reviewer covered 686 server files at the reviewed tip with JSON, in 96 bounded serial parts. Its first complete
+    pass remains RED: 34,456 distinct passes, 103 skipped-only and six failed tests in five files. Its isolated/base
+    evidence classifies those failures; it does not turn the first pass green. Agent 494, PWA 4,990 and both builds
+    passed. Three OOM-killed parts were not test outcomes; their later green reruns and exact-process cleanup are
+    reviewer evidence, not this coordinator's actions or retroactive worker-group exit proof.
+  - The reviewed PR CI selected all 714 server files at its merge commit: 713 passed, the README-size guard failed.
+    The report establishes that failure already exceeded the bound on the merge base. Required server CI remains
+    RED for that inherited failure; skipped macOS/trace/full-suite legs are not green. These old-tip results do not
+    verify a changed fix-round tip. The historical 13:16 entry above retains what was known then.
+  - Routing evidence is original `suite:red`, `failure:unclear`, Opus/high with no prior route changes. Missed cases
+    and incomplete evidence warrant the effort-first rung to Opus/xhigh through the server route door; default Sonnet,
+    workflows off, compact 40 and explicit Sonnet/high implementers / Opus/high task reviewers stay unchanged.
+    At this entry's timestamp the rulings are written, but the route change, work-run retreat and fix-round mail
+    have NOT yet been submitted. Record their real responses below. Do not dispatch again or reset terminal items.
+  - Any corrected handoff needs a NEW independent review run, never reuse 630. Task 5 remains pending; Task 7 remains
+    separately gated. No merge, manual rollout, restart, arming, updater-intent or repository-settings act is authorized.
+- **2026-10-19 14:50 UTC - send-back accepted; worker correction now owns the next step.**
+  - The server accepted the effort-first route change, `high` to `xhigh`, for work 308's worker. This is an
+    effort change, not a class change: main Opus, default Sonnet, workflows off and compact 40 remain. No manual
+    routing command or apply was used, and no demotion or additional escalation is implied.
+  - The server accepted work 308's retreat from `awaiting-review` to `working` using the original verified
+    handoff fingerprint. Four of four terminal items remain settled; none was reopened or rewritten.
+  - One status/fix-round mail was accepted for the bound worker, with the original immutable review-report path
+    first and all finding-level rulings. This was mail, not a second dispatch or a clear. Mail acceptance proves
+    queueing, not that the worker has read it or begun a fix. The private receipt retains the exact payload/results.
+  - The worker owes authorized corrections and truthful evidence, or a concrete Task-3 contract proposal where
+    the approved seam cannot meet the existing requirements. A new tip needs a new independent review. Tasks 1-4
+    remain NOT accepted; Task 5 and Task 7 retain their gates. End the turn for actual mail; no polling.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -719,9 +809,13 @@ record remains `shadow` and `$REG/scope-sweep-live` remains operator-only.
 Wave 4b is run 308 (dispatched 2026-10-15 16:00 UTC; deviation numbers 4316 to 4325, written bare). Its plan is
 at `docs/superpowers/plans/2026-10-13-session-continuity-wave4b-pressure-reap-and-clear.md`; **written-plan review
 was approved on 2026-10-15** at `3d8e5559b11ed4f8243911c08b105b39e6a1e26b`. Its wave-done names PR #435 at
-`990c70cbb5cd863f97d6d5e59dd01c203e111dba`; run 308 is awaiting review, not accepted. Review 489 failed without
-dispatch; recovery prepares a new review with the corrected Sonnet session default and unchanged fixed panel.
-Required server CI remains red. Tasks 1-4 are its four settled items; Task 5 remains coordinator-owned and pending.
+`990c70cbb5cd863f97d6d5e59dd01c203e111dba`; implementation is NOT accepted. Review 489 failed without dispatch
+and remains unchanged. Review 630 closed DONE at 14:32 UTC on 2026-10-19 with the original report fingerprint
+accepted. The 14:46 rulings require intent-preservation fixes, a real half-pair mutation owner and truthful
+committed evidence; they do not authorize the widened promotion contract. At 14:50 UTC the server accepted the
+worker effort change to xhigh, work 308's retreat to working and one fix-round mail. Await actual worker mail;
+do not redispatch. Required server CI at the reviewed tip is red for an inherited README-size guard;
+its 714-file selection is established, not a full-suite waiver. Tasks 1-4 remain four settled items; Task 5 is pending.
 - **Its FIRST commit is wave 4's residue:** review 305 F1(a), the qualified doctor PASS line, I1, `s6_inert`'s
   staleness, the zombie child, the paused log line, baseline B's non-zero check and the per-task minors.
 - **Then it ships** `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment and 3925's `/clear`
