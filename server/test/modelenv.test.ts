@@ -9,11 +9,12 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, effortFile, mergeSettingsEnv, modelEnvBlock,
+  MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor, effortFile, mergeSettingsEnv,
+  modelEnvBlock,
 } from '../../shared/modelenv.mjs';
-import { CLASSES, parseRegistry } from '../../shared/models.js';
-import type { Registry } from '../../shared/models.js';
-import { CODEX, SEEDED, UNSEEDED } from './fixtures/modelCases.js';
+import { CLASSES, parseRegistry, parseWindows } from '../../shared/models.js';
+import type { Catalogue, ModelWindows, Registry } from '../../shared/models.js';
+import { CODEX, CODEX_STALE, SEEDED, UNSEEDED, modelCases } from './fixtures/modelCases.js';
 
 const MODELENV_MJS_URL = pathToFileURL(
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'shared', 'modelenv.mjs'),
@@ -296,6 +297,152 @@ describe('modelEnvBlock', () => {
       expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBeUndefined();
       expect(Object.keys(b)).toHaveLength(7);
     });
+});
+
+// ── codex-bridge spec §2.7: the measured-window rule ────────────────────────
+// Neutral model ids only: this repository is public.
+const ALPHA = 'model-6.1-alpha';
+const BETA = 'model-6.1-beta';
+const GAMMA = 'model-6.1-gamma';
+const DELTA = 'model-6.2-delta';
+const nrow = (id: string, context: number | null) => ({
+  id, label: id, context, maxContext: context, efforts: [], hidden: false, priceIn: null, priceOut: null,
+});
+const NEUTRAL: Registry = {
+  probe: 'codex',
+  classes: { haiku: GAMMA, sonnet: BETA, opus: ALPHA, fable: null },
+  subagent: 'sonnet',
+  discovery: 'catalogue',
+};
+const NEUTRAL_CAT: Catalogue = {
+  probe: 'codex', fetchedAt: 1789000000, stale: false,
+  models: [nrow(ALPHA, 272000), nrow(BETA, 272000), nrow(GAMMA, 272000), nrow(DELTA, 128000)],
+};
+/** Windows as `parseWindows` reads them off disk — the on-disk shape, never a
+ *  hand-built map, except where a case says it builds one in memory. */
+const measured = (byModel: Record<string, number>): ModelWindows =>
+  parseWindows({ windows: Object.fromEntries(Object.entries(byModel).map(([id, tokens]) => [id, { tokens }])) });
+const withClasses = (classes: Partial<Registry['classes']>): Registry =>
+  ({ ...NEUTRAL, classes: { ...NEUTRAL.classes, ...classes } });
+
+describe('contextWindowFor — the measured-window rule (codex-bridge spec §2.7)', () => {
+  it('every class model measured: the SMALLEST window, written as a string — above 200000 when measured so', () => {
+    const w = measured({ [ALPHA]: 511000, [BETA]: 400000, [GAMMA]: 450000 });
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w)).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+    expect(modelEnvBlock(NEUTRAL, NEUTRAL_CAT, w).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('400000');
+  });
+
+  it('rounds the smallest DOWN to a multiple of 1000', () => {
+    const w = measured({ [ALPHA]: 600000, [BETA]: 511999, [GAMMA]: 512500 });
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w).tokens).toBe(511000);
+  });
+
+  it('caps at WINDOW_MAX, for a map built in memory past what parseWindows admits', () => {
+    const w: ModelWindows = { [ALPHA]: 1500000, [BETA]: 1200000, [GAMMA]: 1100000 };
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w)).toEqual({ tokens: 1000000, rule: 'measured', unmeasured: [] });
+  });
+
+  it('ANY class model unmeasured keeps the default rule exactly, and names the unmeasured', () => {
+    const w = measured({ [ALPHA]: 511000, [BETA]: 511000 });
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w)).toEqual({ tokens: 200000, rule: 'default', unmeasured: [GAMMA] });
+    expect(modelEnvBlock(NEUTRAL, NEUTRAL_CAT, w).CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('200000');
+  });
+
+  it('a class that moves to an unmeasured model falls back to the default rule until it is measured', () => {
+    const moved = withClasses({ opus: DELTA });
+    // DELTA is now ANTHROPIC_MODEL's model, so the default rule reads ITS row.
+    expect(contextWindowFor(moved, NEUTRAL_CAT, measured({ [ALPHA]: 511000, [BETA]: 511000, [GAMMA]: 511000 })))
+      .toEqual({ tokens: 128000, rule: 'default', unmeasured: [DELTA] });
+    expect(contextWindowFor(moved, NEUTRAL_CAT,
+      measured({ [ALPHA]: 511000, [BETA]: 511000, [GAMMA]: 511000, [DELTA]: 300000 })))
+      .toEqual({ tokens: 300000, rule: 'measured', unmeasured: [] });
+  });
+
+  it('fable counts when it is pinned: four class models need four windows', () => {
+    const four = withClasses({ fable: DELTA });
+    expect(contextWindowFor(four, NEUTRAL_CAT, measured({ [ALPHA]: 511000, [BETA]: 511000, [GAMMA]: 511000 })))
+      .toEqual({ tokens: 200000, rule: 'default', unmeasured: [DELTA] });
+  });
+
+  it('two classes on one model need one window — the class models are DISTINCT', () => {
+    const shared = withClasses({ haiku: BETA });
+    expect(contextWindowFor(shared, NEUTRAL_CAT, measured({ [ALPHA]: 511000, [BETA]: 450000 })))
+      .toEqual({ tokens: 450000, rule: 'measured', unmeasured: [] });
+    expect(contextWindowFor(shared, NEUTRAL_CAT, measured({ [ALPHA]: 511000 })).unmeasured).toEqual([BETA]);
+  });
+
+  it('a window for a model no class names is ignored — it never lowers the lane', () => {
+    const w = measured({ [ALPHA]: 300000, [BETA]: 300000, [GAMMA]: 300000, [DELTA]: 5000 });
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w).tokens).toBe(300000);
+  });
+
+  it.each([['fresh', NEUTRAL_CAT], ['stale', { ...NEUTRAL_CAT, stale: true }], ['absent', null]] as
+    [string, Catalogue | null][])('the measured rule reads no catalogue: %s alike', (_why, cat) => {
+    const w = measured({ [ALPHA]: 400000, [BETA]: 400000, [GAMMA]: 400000 });
+    expect(contextWindowFor(NEUTRAL, cat, w)).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+  });
+
+  it('no windows and no catalogue: no key, rule none, every class model unmeasured in CLASSES order', () => {
+    expect(contextWindowFor(NEUTRAL, null, null)).toEqual({ tokens: null, rule: 'none', unmeasured: [GAMMA, BETA, ALPHA] });
+    expect(Object.keys(modelEnvBlock(NEUTRAL, null, null))).toHaveLength(7);
+  });
+
+  it('an unseeded registry is never "every class model measured": an empty set measures nothing', () => {
+    expect(contextWindowFor(UNSEEDED, null, measured({}))).toEqual({ tokens: null, rule: 'none', unmeasured: [] });
+  });
+
+  it('an in-memory window below WINDOW_MIN, or not an integer, counts as unmeasured — never a window', () => {
+    const w: ModelWindows = { [ALPHA]: 500, [BETA]: 400000.5, [GAMMA]: 400000 };
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w))
+      .toEqual({ tokens: 200000, rule: 'default', unmeasured: [BETA, ALPHA] });
+  });
+});
+
+describe('with no measured windows the env block is today\'s, byte for byte (codex-bridge spec §2.7)', () => {
+  /** The eighth key's rule before measured windows existed (§6.1, amended
+   *  2026-09-08), restated as the ORACLE. Kept here rather than imported:
+   *  importing the implementation would compare it with itself. */
+  const before = (reg: Registry, cat: Catalogue | null): string | undefined => {
+    const primary = reg.classes.opus ?? reg.classes.sonnet ?? reg.classes.haiku;
+    const row = cat === null || cat.stale ? undefined : cat.models.find((m) => m.id === primary);
+    return row !== undefined && typeof row.context === 'number' && Number.isInteger(row.context) && row.context > 0
+      ? String(Math.min(row.context, 200000)) : undefined;
+  };
+  const narrow = CODEX.models.find((m) => m.context === 128000)!.id;
+  const regs: Registry[] = [
+    SEEDED,
+    ...modelCases.map((c) => c.reg).filter((r): r is Registry => r !== null),
+    // ANTHROPIC_MODEL's model on a 272000 row and haiku on a 128000 one, then
+    // the reverse: a default rule that read any class but ANTHROPIC_MODEL's
+    // would move one of the two.
+    { ...SEEDED, classes: { ...SEEDED.classes, haiku: narrow } },
+    { ...SEEDED, classes: { ...SEEDED.classes, opus: narrow } },
+  ];
+  const cats: (Catalogue | null)[] = [CODEX, CODEX_STALE, null];
+  /** Every class model but the first measured: the reading a lane has while
+   *  its operator is part-way through set-window. */
+  const partial = (reg: Registry): ModelWindows => {
+    const ids = [...new Set(CLASSES.map((c) => reg.classes[c]).filter((v): v is string => v !== null))];
+    return measured(Object.fromEntries(ids.slice(1).map((id) => [id, 511000])));
+  };
+
+  it('every routable fixture, every catalogue: no reading, an empty one or a partial one changes nothing', () => {
+    let compared = 0;
+    for (const reg of regs) {
+      for (const cat of cats) {
+        let base: Record<string, string>;
+        try { base = modelEnvBlock(reg, cat); } catch { continue; } // unroutable today too
+        expect(base.CLAUDE_CODE_MAX_CONTEXT_TOKENS, JSON.stringify(reg.classes)).toBe(before(reg, cat));
+        expect(Object.keys(base)).toEqual(MODEL_ENV_KEYS.filter((k) => k in base));
+        for (const w of [null, measured({}), partial(reg)]) {
+          expect(JSON.stringify(modelEnvBlock(reg, cat, w)), JSON.stringify(reg.classes)).toBe(JSON.stringify(base));
+        }
+        compared += 1;
+      }
+    }
+    // Guards the guard: 11 routable registries × 3 catalogues today.
+    expect(compared).toBeGreaterThanOrEqual(30);
+  });
 });
 
 describe('mergeSettingsEnv', () => {

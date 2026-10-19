@@ -379,6 +379,14 @@ proactive compaction is the behaviour that keeps an unexpectedly large lane
 from hitting the provider's 400 ("input exceeds the context window"). (amended
 2026-09-08, fleet-host measurement; Task 16c)
 
+> **Amended by `2026-10-15-codex-bridge-design.md` §2.7 (2026-10-15).** The 196k premise above is withdrawn: it was
+> the maximum of one July sample from one home, and a whole-fleet scan found prompts of 548,799 and 584,415 tokens
+> accepted (that spec's §1.2). The "measured ceiling" this paragraph defers to now exists, as a sibling file of
+> per-model windows, `~/.ccrc/models/<id>.windows.json`, never a registry key (an older ccrc would refuse one after a
+> rollback). `ccrc models <id> set-window` and `clear-window` edit it. When every model the lane's classes name has a
+> window, the key is the smallest, rounded down to 1,000 and capped at 1,000,000; when any lacks one,
+> `min(catalogue.context, 200000)` above applies unchanged.
+
 A `null` slot is written as a **sentinel**, never left unset: unset, the alias
 falls through to Anthropic's own id and the proxied backend answers with an
 opaque 404 (today's Fable-on-gpt failure). The sentinel makes an in-session
