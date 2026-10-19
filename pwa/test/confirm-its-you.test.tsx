@@ -17,7 +17,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState, type ReactNode } from 'react';
 import { ConfirmItsYou, LOCKED_TEXT } from '../src/accounts/ConfirmItsYou';
-import { CHALLENGE_REFRESH_MS, STEP_UP_CEREMONY_MS, STALE_CHALLENGE_TEXT, useStepUp, type StepUpDeps } from '../src/accounts/useStepUp';
+import {
+  CANCELLED_TEXT, CHALLENGE_REFRESH_MS, STEP_UP_CEREMONY_MS, STALE_CHALLENGE_TEXT, WRONG_PASSKEY_TEXT, useStepUp, type StepUpDeps,
+} from '../src/accounts/useStepUp';
 import { ApiError, createApi } from '../src/lib/api';
 import { toB64url, type CredentialsApi } from '../src/lib/passkey';
 
@@ -427,5 +429,124 @@ describe('Confirm it\'s you (D-5512, spec §3.2)', () => {
     // `CHALLENGE_TTL_MS`, server/src/auth/webauthn.ts. A challenge used at the bound and signed at the timeout must
     // still be live when /finish reads it.
     expect(CHALLENGE_REFRESH_MS + STEP_UP_CEREMONY_MS).toBeLessThanOrEqual(120_000 - 5_000);
+  });
+
+  // ---- A6 follow-up: the verifiers' surviving mutants, and a return to the page (D-5691) ----
+
+  /** Runs `fn` with the page hidden, without firing `visibilitychange` on the way back. */
+  const whileHidden = async (fn: () => Promise<void>): Promise<void> => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    try {
+      await fn();
+    } finally {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    }
+  };
+  const starts = (box: Box): number => box.calls().filter((p) => p === '/api/auth/step-up/start').length;
+  const OTHER = 'The box refused that. Try again.';
+
+  it('the refresh timer never fires while a passkey prompt is open (D-5690 (2))', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const box = fakeBox();
+    let finishGet: (c: Credential | null) => void = () => undefined;
+    const auth = fakeAuthenticator();
+    const real = auth.get;
+    auth.get = (o) => { void real(o); return new Promise((r) => { finishGet = r; }); };
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: auth }} />);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    await act(async () => { await vi.advanceTimersByTimeAsync(50_000); });
+    tap(confirmButton());
+    expect(auth.syncCalls).toBe(1);
+    // The prompt stays open past the bound: no new start replaces the challenge being signed.
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(starts(box)).toBe(1);
+    await act(async () => { finishGet(null); await Promise.resolve(); });
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe(CANCELLED_TEXT));
+  });
+
+  it('a hidden page never refreshes on the timer (D-5690 (2))', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const box = fakeBox();
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: fakeAuthenticator() }} />);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    await whileHidden(async () => {
+      await act(async () => { await vi.advanceTimersByTimeAsync(CHALLENGE_REFRESH_MS + 1_000); });
+    });
+    expect(starts(box)).toBe(1);
+  });
+
+  it('coming back to the page always replaces the held challenge, however young (D-5691)', async () => {
+    // Another tab on the same session may have started since: the box keeps one live challenge per session.
+    const box = fakeBox();
+    const auth = fakeAuthenticator();
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: auth }} />);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    await whileHidden(async () => { fireEvent(document, new Event('visibilitychange')); });
+    expect(starts(box)).toBe(1);
+    fireEvent(document, new Event('visibilitychange'));
+    await waitFor(() => expect(starts(box)).toBe(2));
+    // And the superseded challenge is not tappable while the new one is on its way.
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    expect(auth.calls).toBe(0);
+  });
+
+  it('coming back to the page while a prompt is open does not replace the challenge being signed (D-5691)', async () => {
+    const box = fakeBox();
+    const auth = fakeAuthenticator();
+    const real = auth.get;
+    auth.get = (o) => { void real(o); return new Promise(() => undefined); };
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: auth }} />);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    tap(confirmButton());
+    fireEvent(document, new Event('visibilitychange'));
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(starts(box)).toBe(1);
+  });
+
+  it('a cancelled prompt reads the cancel sentence, not the wrong-passkey one', async () => {
+    const box = fakeBox();
+    const auth = fakeAuthenticator();
+    auth.get = async () => { auth.calls += 1; return null; };
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: auth }} />);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    tap(confirmButton());
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe(CANCELLED_TEXT));
+    expect(box.bodies('/api/auth/step-up/finish')).toHaveLength(0);
+  });
+
+  it('the wrong-passkey sentence survives the next challenge arriving', async () => {
+    const box = fakeBox({ answer: () => json(403, { ok: false, error: 'step-up-required', verdict: 'wrong' }) });
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: fakeAuthenticator() }} />);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    tap(confirmButton());
+    await waitFor(() => expect(starts(box)).toBe(2));
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    expect(screen.getByRole('status').textContent).toBe(WRONG_PASSKEY_TEXT);
+  });
+
+  it('an unknown refusal word at start offers Try again, and its text never reaches the page', async () => {
+    const box = fakeBox({ start: () => json(400, { ok: false, error: 'something-new', message: 'sk-ant-secret-looking' }) });
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: fakeAuthenticator() }} />);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe(OTHER));
+    expect(screen.getByRole('button', { name: /try again/i })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/sk-ant|something-new/);
+  });
+
+  it('an unknown refusal word from the confirmation reads the plain sentence, never the box\'s message', async () => {
+    const box = fakeBox({ answer: () => json(400, { ok: false, error: 'something-new', message: 'sk-ant-secret-looking' }) });
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: fakeAuthenticator() }} />);
+    await waitFor(() => expect(confirmButton()).not.toBeDisabled());
+    tap(confirmButton());
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe(OTHER));
+    expect(document.body.textContent).not.toMatch(/sk-ant|something-new/);
+  });
+
+  it('Enter on an empty passphrase field sends nothing', async () => {
+    const box = fakeBox({ ids: [] });
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: fakeAuthenticator() }} />);
+    const field = await screen.findByLabelText(/passphrase/i) as HTMLInputElement;
+    fireEvent.submit(field.closest('form')!);
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(box.bodies('/api/auth/step-up/passphrase')).toEqual([]);
   });
 });

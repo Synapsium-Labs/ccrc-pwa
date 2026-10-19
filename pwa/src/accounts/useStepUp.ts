@@ -26,7 +26,8 @@ import { PasskeyCeremonyError, assertStepUp, passkeyLoginSupported, type Credent
  * ONE INSTANCE PER SESSION AT A TIME. The box keeps one live step-up challenge per session, and each start replaces
  * the last, so two mounted instances on one session (two tabs, or an installed window beside a tab) would invalidate
  * each other's challenges. A host mounts one; a hidden page never refreshes on the timer, which keeps a background
- * tab from taking the challenge from the one in front.
+ * tab from taking the challenge from the one in front, and a page coming back to the front always replaces its own
+ * (D-5691), so switching between two tabs never signs a superseded challenge.
  */
 
 /** A held challenge is replaced after this long, and is never signed once it is this old (D-5690 (2)). With
@@ -216,14 +217,15 @@ export function useStepUp(freshUntil: number | null, deps: StepUpDeps = {}): Ste
     };
   }, [needed, generation, client, canPasskey, fail]);
 
-  // Back on the page: a challenge that aged past its bound while timers were suspended is replaced now. The age is
-  // read on the client clock, which keeps running while timers do not.
+  // Back on the page: the held challenge is replaced now, whatever its age (D-5691). It may have aged past its bound
+  // while timers were suspended, and another instance on this session (a second tab, an installed window) may have
+  // started since, which kills it on the box: signing it would spend one of the session's attempts. A start is not
+  // budgeted, so the replacement is free. A prompt in flight keeps its challenge.
   useEffect(() => {
     if (!needed) return undefined;
     const onVisibility = (): void => {
-      const c = challenge.current;
-      if (document.visibilityState !== 'visible' || busyRef.current || c === null) return;
-      if (Date.now() - c.fetchedAt >= CHALLENGE_REFRESH_MS) setGeneration((g) => g + 1);
+      if (document.visibilityState !== 'visible' || busyRef.current || challenge.current === null) return;
+      setGeneration((g) => g + 1);
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
