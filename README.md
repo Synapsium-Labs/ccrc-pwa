@@ -3471,6 +3471,15 @@ every tap. This is the standing "AGENT-FIRST" rule for anything touching `ccd/`,
 and `ccrc rollout`'s default order (fleet box first; `--server-first` inverts
 it).
 
+**A coordinator may name the child it dispatches.** The dispatch body's optional
+`slug` rides to `ws-add` as its `[slug]` positional, so the worktree, the `ws/<slug>`
+branch and the session id `<project>-<slug>` carry that name from birth — the only
+moment a name can be given: the path and the id never move, and the branch-only
+`ws-rename` refuses a held workspace. It is checked at
+the route against ccd's own slug grammar (`WORKSPACE_SLUG_RE`, held equal to
+`_ws_slug_valid` by `workspace-slug-grammar.test.ts`), refused on a run that resumes
+its bound session, and a named spawn binds only `<project>-<slug>`, never a stranger.
+
 **The work-item tally is the coordinator's write, and it is made after the
 server re-measured.** Items are declared once, at dispatch, on the dispatch
 body — the ledger is fixed there and `total` never grows. They are settled
@@ -5248,8 +5257,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8355-8357`), each with an operator sentence of its own at `:8407`,
-`:8415` and `:8428`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8361-8363`), each with an operator sentence of its own at `:8413`,
+`:8421` and `:8434`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
