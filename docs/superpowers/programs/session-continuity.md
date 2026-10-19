@@ -23,7 +23,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
-| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; run 308 dispatched 2026-10-15 (the run's wave 5), block 4316–4325; written plan approved, worker reports final gates running; no wave-done or independent acceptance yet; Task 5 coordinator-owned; scope sweep remains SHADOWED |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; run 308 awaiting review, four items settled; handoff `990c70cbb`, not independently accepted; review 489 failed without dispatch, replacement preparation resumed 2026-10-19 with corrected session default; required server CI red; Task 5 coordinator-owned; scope sweep remains SHADOWED |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -625,6 +625,39 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - Task 5 remains coordinator-owned and pending. No product acceptance, merge, deployment, updater-intent
     change, restart, scope-sweep arming or repository-settings act follows from this status. Mail wakes the next
     step; no polling or repeat dispatch.
+- **2026-10-19 09:14 UTC - handoff recorded; independent review recovery resumes with corrected routing.**
+  - Run 308 reads `awaiting-review`, with four of four items settled and no stored `handoffCommit`. The received
+    wave-done claims Tasks 1-4 at `990c70cbb5cd863f97d6d5e59dd01c203e111dba`, PR #435 open. Fresh local-ref,
+    remote-ref and PR-head measurements agree. That verifies the handoff coordinates, not product correctness.
+    The immutable approved plan remains `3d8e5559b11ed4f8243911c08b105b39e6a1e26b`; Task 5 is not started.
+  - The handoff reported `suite: red`, `failure: unclear`. Its claimed serial coverage of 686 server files,
+    isolated/base reruns, agent/PWA results, builds and mutations remain evidence for the reviewer to examine,
+    not accepted classifications. Preserve the earlier background launch, interrupted attempt, incomplete
+    UTF-8 reruns, owning-command substitution, coverage/exit gaps and code-tested-versus-handoff distinction.
+    PR #435's current check projection has `server 5/12` and `test (server)` red; the selected manifest and
+    actual failure still need examination. Neither a selected green check nor an untouched source file waives a red.
+  - The original review-489 dispatch put `opus` in the session's `subagent` field. The response was an untyped
+    502: the underlying command refused that value outside its vocabulary. This was the coordinator's payload
+    error, not a product defect or evidence that explicit Opus agents are unavailable. The server recorded a
+    dispatch attempt; no reviewer was assigned or dispatched. The underlying command's no-touch message does
+    not erase that server-side attempt record.
+  - Review 489 now reads `failed`, closed at `2026-10-16 21:15:00.251 UTC`, with no reviewer/session binding or
+    `dispatchedAt`. Its closure actor and reason have not been established. Keep that row and the original
+    refusal evidence; do not reopen it or silently describe it as a planned retry. The fresh closed-inclusive
+    run list contains no other review of run 308.
+  - The operator directed continuation through completion after the routing diagnosis. Recovery uses a NEW
+    review run of 308, after this routing record is committed: main Opus/xhigh, session subagent DEFAULT Sonnet,
+    workflows on, compact 40. The default is neither a ceiling nor a hard minimum for explicit per-call models.
+    The fixed panel stays three fresh Opus/high lenses and three fresh Sonnet/high refuters per finding, literal
+    in the prescribed script. Dead/empty lenses are unverified; all-dead refuters are unexamined, never approval.
+    Coordinator intent was declared before delegation. No replacement has yet been opened or dispatched.
+  - The reported landing order is #410 and #448, then #441, then #435. This is a peer's reported ordering, not
+    new merge authority. The previously measured `ccd/ccd` conflict is historical; obtain fresh landing checks
+    before any owner conflict-sync, preserve consent/citation/census fences, regenerate the stamp rather than
+    hand-resolve it, and independently review any changed tip. No integration into the worker's checkout here.
+  - No product acceptance, merge, manual rollout, updater-intent write, restart, scope-sweep arming or repository
+    settings change follows. Task 5 waits for independent acceptance; landing-order Task 7 remains separately
+    gated. The scope sweep stays SHADOWED. Following an accepted review dispatch, end the turn for reviewer mail.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -685,8 +718,10 @@ record remains `shadow` and `$REG/scope-sweep-live` remains operator-only.
 
 Wave 4b is run 308 (dispatched 2026-10-15 16:00 UTC; deviation numbers 4316 to 4325, written bare). Its plan is
 at `docs/superpowers/plans/2026-10-13-session-continuity-wave4b-pressure-reap-and-clear.md`; **written-plan review
-was approved on 2026-10-15** at `3d8e5559b11ed4f8243911c08b105b39e6a1e26b`. The worker reports final gates running;
-no wave-done or independent acceptance has been received. Tasks 1-4 are its four items; Task 5 remains coordinator-owned.
+was approved on 2026-10-15** at `3d8e5559b11ed4f8243911c08b105b39e6a1e26b`. Its wave-done names PR #435 at
+`990c70cbb5cd863f97d6d5e59dd01c203e111dba`; run 308 is awaiting review, not accepted. Review 489 failed without
+dispatch; recovery prepares a new review with the corrected Sonnet session default and unchanged fixed panel.
+Required server CI remains red. Tasks 1-4 are its four settled items; Task 5 remains coordinator-owned and pending.
 - **Its FIRST commit is wave 4's residue:** review 305 F1(a), the qualified doctor PASS line, I1, `s6_inert`'s
   staleness, the zombie child, the paused log line, baseline B's non-zero check and the per-task minors.
 - **Then it ships** `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment and 3925's `/clear`
