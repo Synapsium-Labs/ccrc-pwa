@@ -11,7 +11,7 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { MoveRequestAnswer, MoveSkip, MoveSkipWhy, NodeWire, UpdatesView } from '../../shared/api';
+import type { MoveRequestAnswer, MoveSkip, MoveSkipWhy, NodeWire, ReleaseWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { ApiError, api, apiErrorText, moveSkipText, updateErrorText } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
@@ -19,7 +19,8 @@ import { useFleetStore } from '../src/stores/fleet';
 import { ToastHost } from '@ccrc/ui';
 import { planMove, rollbackHowText, type MoveIntent, type PlannedMove } from '../src/fleet/movePlan';
 import {
-  MOVE_NOTHING_REQUESTED_TEXT, MOVE_REST_TEXT, MOVE_UNREADABLE_TEXT, MoveSendError, UpdateMoveSheet, sendMove,
+  MOVE_NOTHING_REQUESTED_TEXT, MOVE_REST_TEXT, MOVE_UNREADABLE_TEXT, MoveSendError, UpdateMoveSheet, rollbackNotRestoredText,
+  sendMove, withdrawnRollbackText,
 } from '../src/fleet/UpdateMoveSheet';
 
 afterEach(() => {
@@ -621,5 +622,77 @@ describe('UpdateMoveSheet — the degrade paths', () => {
     });
     expect(onDone, 'no node was requested, so there is nothing to re-poll for').not.toHaveBeenCalled();
     expect(screen.queryByRole('alert'), "the dismissed sheet's refusal renders nothing").toBeNull();
+  });
+});
+
+// Settings spec §6.3 (D-5507): a rollback is a danger action. Under `tone="danger"` the sheet asks the question,
+// commits in the filled red `danger` variant labelled with the verb, gives Cancel the focus, and says what a rollback
+// will not undo: a failed health check leaves the node on the target (it is not moved back), and auto-install will not
+// return to the release left. A withdrawn target says so; an unbundled one keeps today's blocked line. Under the
+// default tone nothing changes (every case above).
+describe('UpdateMoveSheet — tone danger (D-5507)', () => {
+  const mountDanger = (p: PlannedMove, release?: ReleaseWire) => {
+    render(<><ToastHost /><UpdateMoveSheet open plan={p} onClose={vi.fn()} onDone={vi.fn()} tone="danger"
+      {...(release === undefined ? {} : { release })} /></>);
+  };
+  const rel = (over: Partial<ReleaseWire> = {}): ReleaseWire => ({
+    tag: 'v0.0.8', version: 'v0.0.8', channel: 'stable', publishedAt: T0, commitSha: 'd'.repeat(40),
+    bundleListed: true, yanked: false, refused: [], notes: null, ...over,
+  });
+
+  it('a fleet rollback under tone danger: the question, the not-restored line and the floor line show, and the commit is danger', () => {
+    mountDanger(plan(DOWN));
+    expect(screen.getByText('Roll back the fleet to v0.0.8?')).toBeInTheDocument();
+    expect(screen.getByText(rollbackNotRestoredText(DOWN))).toHaveClass('qc-consequence');
+    expect(rollbackNotRestoredText(DOWN)).toBe(
+      "Each node installs v0.0.8 and runs its health check. If a node's health check fails, it stays on v0.0.8; it is not moved back.",
+    );
+    expect(screen.getByText('Auto-install will not return to v0.0.9. It waits for a newer release.')).toHaveClass('qc-consequence');
+    const commit = screen.getByRole('button', { name: 'Roll back 2 nodes' });
+    expect(commit).toHaveClass('btn-danger');
+    expect(commit).not.toHaveClass('btn-primary');
+    expect(screen.getByText(rollbackHowText('v0.0.8')), "today's how-line stays").toBeInTheDocument();
+  });
+
+  it('a node rollback under tone danger: only this node moves, and it is not returned to what it ran', () => {
+    const one: MoveIntent = { scope: 'node', direction: 'rollback', nodeId: FLEET_ID, to: 'v0.0.8' };
+    mountDanger(plan(one));
+    expect(screen.getByText('Roll back fleet to v0.0.8?')).toBeInTheDocument();
+    expect(screen.getByText('Only this node moves. If its health check fails, it stays on v0.0.8; it is not moved back.')).toBeInTheDocument();
+    expect(screen.getByText('Auto-install will not return it to v0.0.9. It waits for a newer release.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Roll back fleet' })).toHaveClass('btn-danger');
+  });
+
+  it('a mixed fleet names every release it leaves', () => {
+    mountDanger(plan(DOWN, [server({ current: stamp('v0.0.10') }), node()]));
+    expect(screen.getByText('Auto-install will not return to v0.0.10 or v0.0.9. It waits for a newer release.')).toBeInTheDocument();
+  });
+
+  it('the withdrawn line shows for a withdrawn target, and not for one that is not', () => {
+    mountDanger(plan(DOWN), rel({ yanked: true }));
+    expect(screen.getByText(withdrawnRollbackText('v0.0.8'))).toHaveClass('qc-consequence');
+    cleanup();
+    mountDanger(plan(DOWN), rel());
+    expect(screen.queryByText(withdrawnRollbackText('v0.0.8'))).toBeNull();
+  });
+
+  it("an unbundled target for a verified node keeps today's blocked line", () => {
+    mountDanger(plan(DOWN), rel({ bundleListed: false }));
+    expect(screen.getByText(/^Roll back not offered for (fleet, server|server, fleet): /)).toBeInTheDocument();
+  });
+
+  it('Cancel has the focus under tone danger', async () => {
+    mountDanger(plan(DOWN));
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }));
+  });
+
+  it('the default tone is unchanged: primary, the headline, no danger lines, Cancel not focused', async () => {
+    mount(plan(DOWN));
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(screen.getByRole('button', { name: 'Roll back to v0.0.8' })).toHaveClass('btn-primary');
+    expect(screen.queryByText(rollbackNotRestoredText(DOWN))).toBeNull();
+    expect(screen.queryByText(/^Auto-install will not return/)).toBeNull();
+    expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Cancel' }));
   });
 });

@@ -38,12 +38,12 @@ import { Button, RESET_LIST, elapsedWords } from '@ccrc/ui';
 // rather than two screens reaching separately into `@ccrc/ui` and `./updates`.
 export { elapsedWords };
 import {
-  isManagedNode, rollbackBlockers, type MoveIntent, type RollbackBlocker,
+  isManagedNode, rollbackBlockers, type MoveIntent,
 } from '../fleet/movePlan';
-import { ACK_UNREADABLE_TEXT, canAck, keepFocusInRow, sendAck } from '../fleet/updateAck';
+import { ACK_UNREADABLE_TEXT, AckConfirm, canAck, sendAck } from '../fleet/updateAck';
+import { rollbackBlockedText } from '../fleet/UpdateMoveSheet';
 import { haltingNodes, updateAllHaltedText } from '../fleet/updateHalt';
 import { isPlaceableInstant, newestPending, nodeVersion, pendingTag } from '../fleet/useUpdatesView';
-import { moveSkipText, noBundleRollbackText } from '../lib/api';
 import { NO_NOTES_TEXT, NoteText, ReleaseNotes, hasReleaseNotes } from '../fleet/ReleaseNotes';
 import { RELEASE_NOTE_GROUPS, parseReleaseNotes } from '../../../shared/release-notes';
 import '../fleet/fleet.css';
@@ -395,19 +395,29 @@ export function releaseDate(ms: number): string {
   return typeof ms === 'number' && isPlaceableInstant(ms) ? new Date(ms).toISOString().slice(0, 10) : '—';
 }
 
-/** One move control — Install, Roll back, Ack. FOUR CALL SITES, and what they
- *  share is the styling triple (`variant="ghost" size="fit"` on
- *  `.settings-move`), not the decision: each carries its own label, its own
- *  disabled condition and its own intent. Named so the triple is written once
- *  and a fifth control cannot style itself differently by accident. */
-function MoveButton({ disabled, onClick, children, describedBy }: {
+/** One move control — Install, Update, Roll back, Ack. FOUR CALL SITES, and what they
+ *  share is the styling triple (`size="fit"` on `.settings-move`, in one of two
+ *  variants), not the decision: each carries its own label, its own disabled
+ *  condition and its own intent. Named so the triple is written once and a fifth
+ *  control cannot style itself differently by accident.
+ *
+ *  `tone` splits it by intent (D-5507, settings spec §6.1, §6.3): `move`, the
+ *  default, is the ghost of Install and Update; `danger` is the red hairline
+ *  (`danger-ghost`) of Roll back and Ack, each of which opens a confirm. Both
+ *  tones pass `size="fit"`: the old `.btn-ghost.settings-move` sizing rule is
+ *  gone, and an app rule for either tone would be a reach-in
+ *  (`ui-package-boundary.test.ts`), so the size comes from `Button`. Within a
+ *  row the danger control comes after the safe one. `.settings-move` stays on
+ *  both as a hook class only. */
+function MoveButton({ disabled, onClick, children, describedBy, tone = 'move' }: {
   disabled: boolean;
   onClick: () => void;
   children: ReactNode;
   describedBy?: string;
+  tone?: 'move' | 'danger';
 }): ReactNode {
   return (
-    <Button variant="ghost" size="fit" className="settings-move"
+    <Button variant={tone === 'danger' ? 'danger-ghost' : 'ghost'} size="fit" className="settings-move"
             disabled={disabled} aria-describedby={describedBy} onClick={onClick}>
       {children}
     </Button>
@@ -449,17 +459,9 @@ export function HaltLine({ id, text }: { id: string; text: string }): ReactNode 
   return <p className="settings-release-refused" id={id}>{text}</p>;
 }
 
-/** Wave 8 item C: the reason a Roll back to `tag` is not offered, grouped by word. `no-bundle` is said with the tag
- *  (noBundleRollbackText); any other word through the route's own copy (`moveSkipText` reads `UPDATE_ERROR_TEXT`,
- *  and has a fallback for a word it does not know). */
-export function rollbackBlockedText(blockers: readonly RollbackBlocker[], tag: string): string | null {
-  if (blockers.length === 0) return null;
-  const words = [...new Set(blockers.map((b) => b.word))];
-  return words.map((w) => {
-    const who = blockers.filter((b) => b.word === w).map((b) => b.label).join(', ');
-    return `Roll back not offered for ${who}: ${w === 'no-bundle' ? noBundleRollbackText(tag) : moveSkipText(w)}`;
-  }).join(' ');
-}
+/** Wave 8 item C's blocked line. Defined beside the rollback sheet since D-5611, which says it too; re-exported so this
+ *  screen's callers and tests keep their import. */
+export { rollbackBlockedText };
 
 /** "Refused by 1 of 3 nodes", a sentence that opens the refusals (spec §7.4): which node, and when. */
 function RefusedFold({ release: r, nodes }: { release: ReleaseWire; nodes: readonly NodeWire[] }): ReactNode {
@@ -539,6 +541,7 @@ function ReleaseItem({ item, nodes, haltedBy, source, waiting, buttons, rollback
           <MoveButton
             disabled={blockers.length > 0 || gated || (direction === 'install' && item.installBlocked)}
             describedBy={gated && haltedBy !== null ? haltedBy : undefined}
+            tone={direction === 'rollback' ? 'danger' : 'move'}
             onClick={() => onMove(intent as MoveIntent)}
           >
             {direction === 'rollback' ? 'Roll back' : 'Install'}
@@ -805,9 +808,11 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, halted, haltedBy,
   const reach = reachabilityLine(n, now);
   const request = requestLine(n, now);
   const ackable = canAck(n, releases);
+  // D-5507: the Ack opens AckConfirm, the one confirm the halt banner opens too; only its commit sends. The confirm
+  // hands the focus to this row when the Ack it disables was focused (wave 19, R26(a)).
+  const [confirming, setConfirming] = useState(false);
 
   const ack = (): void => {
-    keepFocusInRow(rowRef.current);   // the tap disables this Ack while it is in flight (wave 19, R26(a))
     setAcking(true);
     void sendAck(n.nodeId).finally(() => {
       setAcking(false);
@@ -874,14 +879,16 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, halted, haltedBy,
             </MoveButton>
             <MoveButton
               disabled={previous === null || previousRefusal !== null}
+              tone="danger"
               onClick={() => { if (previous !== null && previousRefusal === null) onMove({ scope: 'node', direction: 'rollback', nodeId: n.nodeId, to: previous }); }}
             >
               Roll back
             </MoveButton>
           </>
         )}
-        <MoveButton disabled={!ackable || acking} onClick={ack}>Ack</MoveButton>
+        <MoveButton disabled={!ackable || acking} tone="danger" onClick={() => setConfirming(true)}>Ack</MoveButton>
       </div>
+      <AckConfirm node={n} releases={releases} open={confirming} onClose={() => setConfirming(false)} onConfirm={ack} rowRef={rowRef} />
     </li>
   );
 }

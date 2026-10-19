@@ -12,9 +12,12 @@
 // `buttonVariants` and owned by `@ccrc/ui` (design-system-boundary's OWNED
 // list): a call site cannot reach it by hand without that suite reding.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { Button, QuickConfirm, ToastHost } from '@ccrc/ui';
-import type { FleetHealth, FleetSession, RunSummary, WsAudit } from '../../shared/api';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { Button, QuickConfirm, ToastHost, buttonVariants } from '@ccrc/ui';
+import type { FleetHealth, FleetSession, NodeWire, ReleaseWire, RunSummary, UpdatesView, WsAudit } from '../../shared/api';
+import { FLEET_SCOPE } from '../../shared/api';
+import { SettingsScreen } from '../src/screens/SettingsScreen';
+import { HaltBanner } from '../src/fleet/HaltBanner';
 import { fleetSession } from './fleetFixture';
 import { api } from '../src/lib/api';
 import { AbandonSheet } from '../src/fleet/AbandonSheet';
@@ -168,5 +171,103 @@ describe("QuickConfirm's tone", () => {
     render(<QuickConfirm open onClose={() => {}} title="Release it?" consequence="It is released."
       confirmLabel="Release" onConfirm={() => {}} />);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Release' })).toHaveClass('btn-primary'));
+  });
+});
+
+// Settings spec §6.3 (D-5507): Roll back (release and node) and Ack (the node row and the home screen's halt banner)
+// are danger actions. Each trigger is the red hairline, `danger-ghost`, and each opens a confirm whose commit is the
+// filled red `danger`. Install and Update stay ghost. Every move button, either tone, sizes through Button's own
+// `size="fit"`: the old `.btn-ghost.settings-move` rule is gone and an app rule for it would be a reach-in.
+describe('the Updates danger actions (D-5507)', () => {
+  const T0 = Date.UTC(2026, 9, 18, 12, 0, 0);
+  const A = '77777777-7777-4777-8777-777777777777';
+  const B = '88888888-8888-4888-8888-888888888888';
+  const stamp = (version: string) => ({ sha: 'b'.repeat(40), ref: 'main', builtAt: '2026-10-18T12:00:00Z', dirty: false, version });
+  const node = (over: Partial<NodeWire> = {}): NodeWire => ({
+    nodeId: A, role: 'fleet', label: 'fleet', os: 'linux',
+    current: stamp('v0.0.9'), stampRead: 'ok', installState: 'complete', provenance: 'verified',
+    caps: ['verify', 'node-id', 'floor', 'update-gate'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: 'v0.0.8',
+    floorRead: 'measured', previousRead: 'measured',
+    measuredAt: T0, reachable: true, unreachableSince: null,
+    channel: 'stable', desiredTag: 'v0.0.10', resolveDetail: null,
+    request: null, report: null,
+    update: { state: 'failed', target: 'v0.0.10', startedAt: T0, detail: null },
+    ...over,
+  });
+  const release = (tag: string): ReleaseWire => ({
+    tag, version: tag, channel: 'stable', publishedAt: T0, commitSha: 'd'.repeat(40),
+    bundleListed: true, yanked: false, refused: [], notes: null,
+  });
+  const view = (): UpdatesView => ({
+    catalogue: { lastOkAt: T0, lastError: null },
+    releases: [release('v0.0.10'), release('v0.0.9'), release('v0.0.8')],
+    nodes: [node(), node({ nodeId: B, role: 'server', label: 'server', agentOps: null, update: { state: 'idle', target: null, startedAt: null, detail: null } })],
+    intent: [{ scope: FLEET_SCOPE, channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: T0, setBy: 'test' }],
+  });
+  const renderSettings = async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view());
+    render(<><ToastHost /><SettingsScreen /></>);
+    const releases = await screen.findByRole('region', { name: 'Releases' });
+    const nodes = await screen.findByRole('list', { name: 'Nodes' });
+    const nodeRow = nodes.querySelector<HTMLElement>(`li[data-node-id="${A}"]`)!;
+    const releaseRow = releases.querySelector<HTMLElement>('li[data-tag="v0.0.8"]')!;
+    return { releases, nodes, nodeRow, releaseRow };
+  };
+
+  it("the release row's Roll back is danger-ghost, and its sheet commits in danger", async () => {
+    const { releaseRow } = await renderSettings();
+    const trigger = within(releaseRow).getByRole('button', { name: 'Roll back' });
+    expect(trigger).toHaveClass('btn-danger-ghost');
+    expect(trigger).not.toHaveClass('btn-ghost');
+    fireEvent.click(trigger);
+    expect(await screen.findByRole('button', { name: 'Roll back 2 nodes' })).toHaveClass('btn-danger');
+  });
+
+  it("the node row's Roll back is danger-ghost, and its sheet commits in danger", async () => {
+    const { nodeRow } = await renderSettings();
+    const trigger = within(nodeRow).getByRole('button', { name: 'Roll back' });
+    expect(trigger).toHaveClass('btn-danger-ghost');
+    expect(trigger).not.toHaveClass('btn-ghost');
+    fireEvent.click(trigger);
+    expect(await screen.findByRole('button', { name: 'Roll back fleet' })).toHaveClass('btn-danger');
+  });
+
+  it("the node row's Ack is danger-ghost, and its confirm commits in danger", async () => {
+    const { nodeRow } = await renderSettings();
+    const trigger = within(nodeRow).getByRole('button', { name: 'Ack' });
+    expect(trigger).toHaveClass('btn-danger-ghost');
+    expect(trigger).not.toHaveClass('btn-ghost');
+    fireEvent.click(trigger);
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByRole('button', { name: 'Ack' })).toHaveClass('btn-danger');
+  });
+
+  it("the halt banner's Ack is danger-ghost, and its confirm commits in danger", async () => {
+    render(<><ToastHost /><HaltBanner updates={view()} seq={1} onAcked={() => 2} /></>);
+    const trigger = screen.getByRole('button', { name: 'Ack fleet' });
+    expect(trigger).toHaveClass('btn-danger-ghost');
+    expect(trigger).not.toHaveClass('btn-primary');
+    fireEvent.click(trigger);
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByRole('button', { name: 'Ack' })).toHaveClass('btn-danger');
+  });
+
+  it('Install and Update stay ghost', async () => {
+    const { releases, nodeRow } = await renderSettings();
+    expect(within(releases.querySelector<HTMLElement>('li[data-tag="v0.0.10"]')!).getByRole('button', { name: 'Install' })).toHaveClass('btn-ghost');
+    expect(within(nodeRow).getByRole('button', { name: 'Update' })).toHaveClass('btn-ghost');
+  });
+
+  it("every move button, ghost or danger-ghost, carries buttonVariants({ size: 'fit' })'s classes", async () => {
+    const { releases, nodes } = await renderSettings();
+    const moves = [...releases.querySelectorAll<HTMLElement>('.settings-move'), ...nodes.querySelectorAll<HTMLElement>('.settings-move')];
+    const tones = new Set(moves.map((b) => (b.classList.contains('btn-danger-ghost') ? 'danger-ghost' : b.classList.contains('btn-ghost') ? 'ghost' : 'other')));
+    expect(tones).toEqual(new Set(['ghost', 'danger-ghost']));
+    for (const b of moves) {
+      const variant = b.classList.contains('btn-danger-ghost') ? 'danger-ghost' : 'ghost';
+      const want = buttonVariants({ variant, size: 'fit' }).split(/\s+/).filter(Boolean);
+      const cls = b.className.split(/\s+/);
+      for (const c of want) expect(cls, `${b.textContent}: ${c}`).toContain(c);
+    }
   });
 });
