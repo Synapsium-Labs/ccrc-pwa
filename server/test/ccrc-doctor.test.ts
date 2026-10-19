@@ -14327,11 +14327,26 @@ describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, 
       names: (home) => [join(home, '.ccrc', 'history-max-gb')] },
     { word: 'schema-newer', cls: 'FAIL', plant: (home) => withStore(home, (db) => { freshTick(db); db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`); }) },
     // O41, the doctor half: the gap guard fires on the census's counts, never on a date
-    { name: 'O41: a due blob WARNs export-due, naming the count, and FAILs nothing while none is overdue', word: 'export-due', cls: 'WARN',
-      plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 0); }),
+    // O41's B4 cases: this build has the export writer, so a due count alone is the pass's cadence; the WARN needs
+    // a gap — the last pass over two intervals old, or the oldest due blob waiting longer than that.
+    { name: 'O41 (B4): a due blob with the last export pass over 2 h old WARNs export-due, naming the count, and FAILs nothing while none is overdue', word: 'export-due', cls: 'WARN',
+      plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 0); setHistoryMeta(db, HEALTH_META.exportPassMs, String(Date.now() - 3 * 3_600_000)); }),
       names: () => ['3'], absent: ['FAIL history: export-overdue'] },
+    // The writer is live in this build, so the remedy is the writer's (W1-B4 review 614), not B1's wait for a writer to ship.
     { name: 'O41: an overdue blob FAILs export-overdue', word: 'export-overdue', cls: 'FAIL',
-      plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 2); }) },
+      plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 2); }),
+      remedyNames: () => ['never --purge-history', 'one segment an hour'] },
+    { name: 'O41 (B4): a due blob that has waited over two pass intervals WARNs export-due, though the last pass is fresh', word: 'export-due', cls: 'WARN',
+      plant: (home) => withStore(home, (db) => {
+        freshTick(db);
+        setExport(db, 3, 0);
+        setHistoryMeta(db, HEALTH_META.exportPassMs, String(Date.now() - 10 * 60_000));
+        setHistoryMeta(db, HEALTH_META.exportDueOldestMs, String(Date.now() - 3 * 3_600_000));
+      }),
+      names: () => ['3'], absent: ['FAIL history: '] },
+    { name: 'O40 (B4): an export paused for room on the home filesystem WARNs export-paused-low-disk, and FAILs nothing', word: 'export-paused-low-disk', cls: 'WARN',
+      plant: (home) => withStore(home, metaOnFreshTick(HEALTH_META.exportPaused, 'low-disk')),   // Task 6 writes planExportRoom's word
+      absent: ['FAIL history: '] },
     { word: 'retention-lowered', cls: 'WARN',
       plant: (home) => withStore(home, (db) => {
         freshTick(db);
@@ -14440,6 +14455,20 @@ describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, 
     withStore(home, (db) => { freshTick(db); setExport(db, 0, 0); });
     const r = runHistoryCheck(home);
     expect(r.stdout).not.toMatch(/^(WARN|FAIL) history: export-(due|overdue): /m);
+    expect(r.code).toBe(0);
+  });
+
+  it('O41 (B4): steady state — three blobs due, an hourly pass 10 min ago, the oldest due 90 min ago — PASSes ok', () => {
+    const { home, storeId } = historyBox('ccrc-doctor-history-export-steady-');
+    withStore(home, (db) => {
+      freshTick(db);
+      setExport(db, 3, 0);
+      setHistoryMeta(db, HEALTH_META.exportPassMs, String(Date.now() - 10 * 60_000));
+      setHistoryMeta(db, HEALTH_META.exportDueOldestMs, String(Date.now() - 90 * 60_000));
+    });
+    const r = runHistoryCheck(home);
+    expect(historyLines(r.stdout), r.stdout).toHaveLength(1);
+    expect(historyLines(r.stdout)[0]).toMatch(new RegExp(`^PASS history: ok: store ${storeId}: `));
     expect(r.code).toBe(0);
   });
 });
@@ -14599,7 +14628,7 @@ describe('ccrc doctor: history — the relay (O15: every word, and the one rule 
     exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [], journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0,
     exportSegmentNewer: [], exportSegmentMissing: 0, journalUnwritable: false,
     dbPath: '/home/u/.ccrc/history/db', freeBytes: null, thresholdBytes: null, copyBps: null, backupsDb: [],
-    journalStoreDirs: [], extrasUnmeasured: [],
+    journalStoreDirs: [], extrasUnmeasured: [], exportLastPassMs: null, exportDueOldestMs: null,
   });
 
   it('CONTROL: deriveHealth answers the clean inputs with PASS ok and nothing to report', () => {

@@ -110,3 +110,49 @@ export function commitRestore(home: string, staged: StagedRestore, i: {
   nowMs: number; pairs?: readonly { len: number; sha256: string; t: number }[]; belt?: RestoreBelt | null;
 }): { storeId: string; writer: string };
 export function abortRestore(staged: StagedRestore): void;
+
+// --- W1-B4 Task 4: export segments (spec §9.15 "Write", "Who reads it"; §9.14 "Export replay")
+/** A dev, an ino or a nanosecond time: a number on the way in, a BigInt on the way out of a reader. */
+export type SegmentInt = number | bigint;
+export const SEGMENT_DDL: readonly string[];
+export interface SegmentMeta { storeId: string; writer: string; seq: number; harnesses: readonly string[]; cutoffMs: number; format: number }
+export interface SegmentHandle { db: DatabaseSync | null; readonly temp: string; readonly name: string }
+export interface SegmentBlobRow { sha256: Uint8Array; codec: string; raw_len: number; z: Uint8Array | null; pruned: boolean }
+export interface SegmentRows {
+  family: { ccrc_id: string; generation: string; project: string; first_seen_ms: number };
+  transcript: { cc_session_uuid: string; agent_id: string; harness: string; parent_tool_use_id: string | null; workflow_run_id: string | null; agent_type: string | null };
+  epoch: {
+    ccrc_id: string; generation: string; seq: number; cc_session_uuid: string; cause: string; declared_by: string;
+    started_ms: number | null; cwd: string | null; cwd_real: string | null; git_branch: string | null; confirmed_ms: number | null;
+  };
+  file: { path: string; dev: SegmentInt; ino: SegmentInt; cc_session_uuid: string; agent_id: string; size: number | null; mtime_ns: SegmentInt | null; eof_ms: number | null };
+  entry: {
+    uuid: string; cc_session_uuid: string; agent_id: string; type: string; subtype: string | null; role: string | null; model: string | null;
+    parent_uuid: string | null; ts_ms: number | null; request_id: string | null; api_block_index: number | null; msg_id: string | null;
+    source_tool_use_id: string | null; tool_name: string | null; is_compact_summary: number; provenance: string; prov_version: number;
+    parse_state: string; struct_rank_ns: SegmentInt; struct_path: string; struct_dev: SegmentInt; struct_ino: SegmentInt; blob_sha256: Uint8Array;
+  };
+  variant: { uuid: string; blob_sha256: Uint8Array; first_path: string; first_dev: SegmentInt; first_ino: SegmentInt; first_seen_ms: number; cause: string };
+  boundary: {
+    uuid: string; cc_session_uuid: string; agent_id: string; boundary_ord: number; trigger: string | null; head_uuid: string | null;
+    anchor_uuid: string | null; tail_uuid: string | null; kept_sha256: Uint8Array | null; pre_tokens: number | null; post_tokens: number | null;
+    duration_ms: number | null;
+  };
+  sidecar: { cc_session_uuid: string; agent_id: string; name: string; blob_sha256: Uint8Array; uuid: string | null; first_seen_ms: number };
+  membership: { path: string; dev: SegmentInt; ino: SegmentInt; uuid: string; line: number };
+}
+export type SegmentRowKind = keyof SegmentRows;
+export type SegmentInserts = { blob(row: SegmentBlobRow): void } & { [K in SegmentRowKind]: (row: SegmentRows[K]) => number };
+export type SegmentRowRead = { [K in SegmentRowKind]: { ord: number; kind: K; row: SegmentRows[K] } }[SegmentRowKind];
+export function ensureSegmentDir(exportRoot: string, storeId: string): string;
+export function createSegment(dir: string, name: string, meta: SegmentMeta): SegmentHandle;
+export function segmentInserts(seg: SegmentHandle): SegmentInserts;
+export function publishSegment(seg: SegmentHandle, dir: string, name: string): 'linked' | 'exists';
+export function setSegmentSeq(temp: string, seq: number): void;
+export function openSegment(path: string): DatabaseSync;
+export function segmentMeta(db: DatabaseSync): SegmentMeta;
+export function segmentBlobsAfter(db: DatabaseSync, rowid: number, maxBytes: number, kind: 'bytes' | 'stubs'): Array<SegmentBlobRow & { rowid: number }>;
+export function segmentHasBlob(db: DatabaseSync, sha256: Uint8Array): boolean;
+export function segmentRowsAfter(db: DatabaseSync, ord: number, limit: number): SegmentRowRead[];
+export function listSegments(dir: string): { name: string; seq: number; writer: string; bytes: number }[];
+export function removeStaleSegmentTemps(dir: string): string[];

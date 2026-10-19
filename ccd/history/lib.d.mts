@@ -328,7 +328,7 @@ export function exportHorizonDays(retentionDays: number): number;
 export function planExport(i: {
   nowMs: number; homeRetentionDays: Readonly<Record<string, number>>;
   blobs: readonly { key: string; referrers: readonly ExportCandidate[] }[]; reducer?: ExportReducer;
-}): { horizonDays: number; due: string[]; overdue: string[] };
+}): { horizonDays: number; due: string[]; overdue: string[]; oldestDueSinceMs: number | null };
 export function exportDates(i: {
   homeRetentionDays: Readonly<Record<string, number>>; holders: readonly ExportCandidate[]; files: readonly ExportFile[];
   reducer?: ExportReducer;
@@ -412,6 +412,12 @@ export interface HealthInputs {
   readonly exportOverdue: number;
   readonly exportWriterLive: boolean;
   readonly exportPausedLowDisk: boolean;
+  /** W1-B4 Task 9: the last completed export pass (meta HEALTH_META.exportPassMs); null before the first. */
+  readonly exportLastPassMs: number | null;
+  /** W1-B4 Task 9: when the oldest due blob the census counted became due (meta HEALTH_META.exportDueOldestMs, read by
+   *  readExportDueOldest): a time; null when the census counted nothing due; 'unmeasured' when no census of this build
+   *  has recorded it, or it could date none of the due blobs. Never a time at or before the epoch. */
+  readonly exportDueOldestMs: number | null | 'unmeasured';
   readonly retentionLowered: null | { readonly home: string; readonly days: number; readonly othersMin: number };
   readonly retentionUnmeasured: readonly string[];
   readonly journalGrowth30d: number;
@@ -444,6 +450,9 @@ export const HEALTH_META: Readonly<{
   recoverUnmovedTicks: 'recover_unmoved_ticks';
   exportSegmentNewer: 'export_segment_newer';
   exportSegmentMissing: 'export_segment_missing';
+  exportPassMs: 'export_pass_ms';
+  exportDueOldestMs: 'export_due_oldest_ms';
+  exportPaused: 'export_paused';
   heldPassMs: 'held_pass_ms';
 }>;
 export const HEALTH_COUNTERS: Readonly<{
@@ -677,8 +686,11 @@ export function decideReparse(i: { targets: number; prunedSpans: number }): { ok
 // --- W1-B2 Task 7: recovery and repair decisions (spec §9.14, §9.6, §8.4 doctor --repair)
 export const RECOVER_PHASES: readonly string[];
 export const RECOVER_JOURNAL_PHASES: readonly string[];
-/** `groupSize` is the file count of the replay group `file` leads, which `offset` is a position in (a byte offset for a group of one, an ordinal for a
- *  merge group); null or absent means it was not recorded (D-4607). */
+/** `file` and `offset` name a position in the phase's input. In the journal phases (index, apply) `file` is a journal file's name and
+ *  `groupSize` is the file count of the replay group it leads, which `offset` is a position in (a byte offset for a group of one, an
+ *  ordinal for a merge group); null or absent means it was not recorded (D-4607). In the export phases `file` is a segment's name and
+ *  `offset` is the last blobs rowid applied (export-blobs, export-stubs) or the last row ord applied (export-rows). Only the journal phases carry a
+ *  `groupSize`: formatRecoverCursor throws a TypeError for one beside any other phase. */
 export interface RecoverCursor { phase: string; file: string | null; offset: number; blobId: number | null; groupSize?: number | null; pairsAdded: boolean }
 export function formatRecoverCursor(c: RecoverCursor): string;
 export function parseRecoverCursor(s: string | null): RecoverCursor | null;
@@ -921,3 +933,48 @@ export function consumedBoundaryTs(i: {
 }): number | null;
 export function decideConsumedScope(i: { marker: Presence<string>; uuid: string; boundaryTsMs: number | null }): CardConsumedScope;
 export function decideCardWithdraw(p: CardPassFacts): { act: 'withdraw'; reason: CardWithdrawReason } | { act: 'keep' };
+// --- W1-B4 Task 1: the sole-copy export's names, numbers, cadence, room and dead-file key (spec §9.15, §9.3, §6.2)
+export const EXPORT_DIR: 'export';
+export const EXPORT_SEGMENT_MAX_BYTES: number;
+export const EXPORT_PASS_INTERVAL_MS: number;
+export const EXPORT_SEGMENT_FORMAT: number;
+export function segmentName(i: { seq: number; writer: string }): string;
+export function parseSegmentName(name: string): { seq: number; writer: string } | null;
+export function segmentTempName(name: string): string;
+export function orderSegmentNames(names: readonly string[]): string[];
+export function nextSegmentSeq(i: { onDisk: readonly number[]; recorded: number | null }): number;
+export function decideExportPass(i: { nowMs: number; lastPassMs: number | null; firstTickMs: number | null; lastAttemptMs?: number | null; intervalMs?: number }): 'run' | 'wait';
+export const EXPORT_MARK_BACKOFF_MAX_MS: number;
+export function exportPassIntervalMs(markFails: number): number;
+/** The sweep's statfsWithDeadline answer for ~/.ccrc/history/export, as planExportRoom takes it. */
+export type ExportProbe = { state: 'ok'; bytes: number; fsSize: number } | { state: 'unsettled' } | { state: 'threw' };
+export interface ExportRoom { admit: boolean; word: 'ok' | 'low-disk' | 'unsettled'; needBytes: number | null }
+export function planExportRoom(free: ExportProbe): ExportRoom;
+export function exportedSourceKey(path: string, dev: string | number | bigint, ino: string | number | bigint): string;
+export function deadFileSourceKey(path: string, dev: string | number | bigint, ino: string | number | bigint): string;
+// the marks' two decisions (RD2)
+export function exportMarkFailsOf(recorded: string | null): number;
+export type ExportMarkOutcome = 'marked' | 'mark-failed' | 'mark-busy' | 'write-failed';
+export function decideMarkOutcome(i: { outcome: ExportMarkOutcome; recorded: string | null }): { markFails: number; write: string | null; intervalMs: number };
+export function decideMarkCheck(i: { metaKeys: readonly string[]; checkedRecord: string | null }): { check: boolean; facts: string[]; record: string };
+export function missingSegmentNames(i: { named: Iterable<string>; present: Iterable<string> }): string[];
+export function entryMayHoldMark(i: { blobs: readonly { exported: boolean; pruned: boolean }[] }): boolean;
+export function segmentMayMarkEntry(i: { blobs: readonly { exported: boolean; pruned: boolean; carried: boolean }[] }): boolean;
+export function budgetHeldPass(i: { taken: number; selectionComplete: boolean; written: number; writeStopped: 'budget' | 'off' | null }): boolean;
+// --- W1-B4 Task 2: what one export segment carries (spec §9.15 "What is due", "Write")
+export interface SegmentBlob { key: string; zBytes: number; exported: boolean; pruned: boolean }
+export interface SegmentCandidate extends ExportCandidate { key: string; blobs: readonly SegmentBlob[] }
+export interface SegmentPlan { take: string[]; carry: string[]; stubs: string[]; bytes: number; leftDue: number; oldestLeftDueSinceMs: number | null }
+export const EXPORT_ROW_META_BYTES: number;
+export function planSegment(i: {
+  nowMs: number; homeRetentionDays: Readonly<Record<string, number>>; rows: readonly SegmentCandidate[]; boundBytes: number; reducer?: ExportReducer;
+  takenBefore?: boolean;
+}): SegmentPlan;
+
+// --- W1-B4 Task 3: export replay's decisions (spec §9.14 "Export replay")
+export function decideSegmentReplay(i: { meta: { storeId: string; format: number }; storeId: string }): 'replay' | 'newer' | 'foreign';
+
+// --- W1-B4 Task 9: the census's oldest due-since in meta, written and read back (no epoch, no overloaded null)
+export const EXPORT_DUE_OLDEST_UNMEASURED: 'unmeasured';
+export function exportDueOldestMeta(due: number, dueOldestMs: number | null): string;
+export function readExportDueOldest(v: string | undefined): number | null | 'unmeasured';
