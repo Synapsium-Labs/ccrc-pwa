@@ -20,9 +20,10 @@ const seedSession = (home: string, id: string, fields: Record<string, string>) =
 };
 
 /** A remote-shaped io over the real disk whose every read of a `.git` path
- *  fails the way a timed-out agent request does: `readdir` null, the measured
- *  readers unreadable / unmeasured. Everything else is the real disk. */
-const gitProbeTimesOut = (): FleetIO => {
+ *  fails: `readdir` null, `lstatMeasured` the given reason (`unmeasured` is a
+ *  timed-out agent request, `unreadable` a permission error, `absent` a `.git`
+ *  removed between the readdir and the lstat). Everything else is the real disk. */
+const gitProbeFails = (lstatReason: 'unmeasured' | 'unreadable' | 'absent'): FleetIO => {
   const isGit = (p: string) => path.basename(p) === '.git';
   return {
     ...localIO,
@@ -30,7 +31,7 @@ const gitProbeTimesOut = (): FleetIO => {
     async readdirMeasured(p, t, s) {
       return isGit(p) ? { ok: false, reason: 'unreadable' } : localIO.readdirMeasured(p, t, s);
     },
-    async lstatMeasured(p) { return isGit(p) ? { ok: false, reason: 'unmeasured' } : localIO.lstatMeasured(p); },
+    async lstatMeasured(p) { return isGit(p) ? { ok: false, reason: lstatReason } : localIO.lstatMeasured(p); },
     async statMeasured(p) { return isGit(p) ? { ok: false, reason: 'unreadable' } : localIO.statMeasured(p); },
   };
 };
@@ -57,14 +58,16 @@ const gitDir = (wd: string) => { mkdirSync(path.join(wd, '.git')); };
 const gitFile = (wd: string) => { writeFileSync(path.join(wd, '.git'), 'gitdir: /elsewhere/.git/worktrees/x\n'); };
 
 describe('listProjects — the linked-worktree fold keeps what it could not measure (D-5967)', () => {
-  it('a .git probe that times out keeps the project, through both doors', async () => {
+  it.each(['unmeasured', 'unreadable', 'absent'] as const)(
+    'a .git probe that fails (%s) keeps the project, through both doors', async (reason) => {
     const { cfg, inRoot, regOnly } = fixture(gitDir);
-    const out = await listProjects(gitProbeTimesOut(), cfg);
+    const out = await listProjects(gitProbeFails(reason), cfg);
     expect(out.projects).toEqual([
       { name: 'inroot', workdir: inRoot },
       { name: 'regonly', workdir: regOnly },
     ]);
-  });
+  },
+  );
 
   it('a .git FILE (linked worktree) is excluded, through both doors', async () => {
     const { cfg } = fixture(gitFile);
