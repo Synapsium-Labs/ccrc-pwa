@@ -222,7 +222,7 @@ export function withdrawnRollbackText(to: string): string {
 }
 
 /** The one measured fact both withdrawn lines state (this sheet's and the release row's `WITHDRAWN_NOTE`), spelled
- *  once so the two cannot drift. Each line ends it in its own words. */
+ *  once so the two cannot drift (D-5611). Each line ends it in its own words. */
 export const WITHDRAWN_KEPT_CLAUSE = 'A node that still keeps it on disk rolls back to it with no download; '
   + 'a node that does not will refuse';
 
