@@ -81,17 +81,22 @@ export function eligibleIds(registry, catalogue) {
  *     `model-advance-blocked` WARN names it, so it cannot go quiet.
  *  2. A missing family is derived from the pin. An empty class with no family gets nothing: an empty class is
  *     filled only from a family stored for it (init's seed, or the backfill's), never from a guess.
- *  3. The family's eligible ids; any version two of them share (a tie, 6 and 6.0 included) is dropped, so a
- *     tie is never a candidate until one of its ids leaves the catalogue.
- *  4. When the newest untied id of the family is pinned by ANOTHER class, the class is `blocked:
- *     'shared-family'`: two classes follow one family, and only the operator can say which keeps it.
+ *  3. SHARED FAMILY (D-5819). Over every eligible id of the family, ties included, take its newest version. The
+ *     class is `blocked: 'shared-family'` when an id at that version, other than the class's own pin, is
+ *     another class's pin: two classes follow one family, and only the operator can say which keeps it. A model
+ *     two classes pin is each one's own pin, so it blocks neither. The check reads the ties: a tied newest pair
+ *     is tested like any other id, never skipped in favour of an older one.
+ *  4. Then ties are dropped: any version two eligible ids share (6 and 6.0 included) loses both, so a tie is
+ *     never a candidate until one of its ids leaves the catalogue. Only ELIGIBLE ids make a tie: a hidden twin,
+ *     or one outside the discovery list, unties the other.
  *  5. Then, among the untied ids that neither this class nor another pins: an EMPTY class takes the newest
  *     (`empty`); a pin the catalogue no longer lists takes the newest (`retired`, the one move that may go to
  *     an older version) but only on a catalogue that is fresh, because absence from a stale one is not evidence
- *     (D-5199); otherwise the newest STRICTLY newer than the pin (`newer`).
- * Another class's pin is excluded in step 5 as well as tested in step 4. With step 4 standing the exclusion
- * changes no answer — an id another class pins is either the newest (blocked) or older than it (never
- * chosen) — and it is kept so step 5 states its own rule.
+ *     (D-5199); otherwise the newest STRICTLY newer than the pin (`newer`). A pin the catalogue lists HIDDEN is
+ *     listed, so it is never retired.
+ * Another class's pin is excluded in step 5 as well as tested in step 3, and a case pins it: when the family's
+ * newest version is a tie of two ids nobody pins, step 3 stays quiet, and only the exclusion keeps a class off
+ * the older id another class holds.
  * THE STALE GATE HERE COVERS THE RETIRED FALLBACK ONLY. On a stale catalogue this function still names a `newer`
  * or an `empty` candidate; the rule that nothing advances on a stale catalogue at all
  * (D-5199) is the ops' — `advance-plan` answers `why: catalogue-stale`, and
@@ -107,12 +112,13 @@ export function chooseCandidate({ registry, catalogue, cls, family }) {
     const p = parseModelId(id);
     if (p !== null && p.family === fam) inFamily.push({ id, version: p.version });
   }
-  const untied = inFamily.filter((m) => inFamily.filter((o) => compareVersions(o.version, m.version) === 0).length === 1);
-  const newestFirst = [...untied].sort((x, y) => compareVersions(y.version, x.version));
   const otherPins = new Set(CLASSES.filter((c) => c !== cls).map((c) => registry.classes[c])
     .filter((v) => v !== null && v !== undefined));
-  const top = newestFirst[0];
-  if (top !== undefined && top.id !== pin && otherPins.has(top.id)) return { ...none, blocked: 'shared-family' };
+  const topVersion = inFamily.reduce((v, m) => (v === null || compareVersions(m.version, v) > 0 ? m.version : v), null);
+  if (topVersion !== null && inFamily.some((m) => compareVersions(m.version, topVersion) === 0
+      && m.id !== pin && otherPins.has(m.id))) return { ...none, blocked: 'shared-family' };
+  const untied = inFamily.filter((m) => inFamily.filter((o) => compareVersions(o.version, m.version) === 0).length === 1);
+  const newestFirst = [...untied].sort((x, y) => compareVersions(y.version, x.version));
   const free = newestFirst.filter((m) => m.id !== pin && !otherPins.has(m.id));
   if (pin === null) return free.length > 0 ? { ...none, candidate: free[0].id, reason: 'empty' } : none;
   const listed = catalogue !== null && catalogue !== undefined && catalogue.models.some((m) => m.id === pin);
@@ -140,10 +146,13 @@ export function resolveEffort({ stored, oldEfforts, newEfforts }) {
   for (let i = rank - 1; i >= 0; i -= 1) {
     if (newEfforts.includes(oldEfforts[i])) return oldEfforts[i];
   }
-  return newEfforts[0];
+  return newEfforts[0]; // the model's lowest: the list is lowest first (see `canaryEffort`)
 }
 
-/** The canary's effort (§2.3 step 3): the lowest level the model offers, or null when it lists none. */
+/** The canary's effort (§2.3 step 3): the lowest level the model offers, or null when it lists none.
+ *  `efforts[0]` IS the lowest, here and in `resolveEffort`'s fallback: the probe keeps the provider's own order,
+ *  and the recorded catalogue (`server/test/fixtures/catalogues/codex-raw-2026-09-08.json`) lists every row
+ *  lowest first. A provider that reordered its levels would make this the wrong level, never an invalid one. */
 export function canaryEffort(efforts) {
   return efforts.length > 0 ? efforts[0] : null;
 }

@@ -9,7 +9,7 @@ import {
   resolveEffort,
 } from '../../shared/model-advance.mjs';
 import { CLASSES } from '../../shared/models.js';
-import { EFFORTS4, EFFORTS5, cat, mrow, reg } from './fixtures/advanceCases.js';
+import { ADV_CATALOGUE, ADV_REGISTRY, EFFORTS4, EFFORTS5, cat, mrow, reg } from './fixtures/advanceCases.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -48,6 +48,13 @@ describe('parseModelId — exactly <vendor>-<version>-<family> (D16)', () => {
     expect(parseModelId(id)).toBeNull();
     expect(familyOf(id)).toBeNull();
   });
+
+  it.each([[null], [undefined], [6], [{}], [['model-6-alpha']], [true]])(
+    'reads %j, which is no string, as no id at all: never a candidate, never a crash', (id) => {
+      expect(parseModelId(id as never)).toBeNull();
+      expect(familyOf(id as never)).toBeNull();
+    },
+  );
 
   it('familyOf takes the last part, and an empty class has no family of its own', () => {
     expect(familyOf('model-6.1-alpha')).toBe('alpha');
@@ -160,9 +167,91 @@ describe('chooseCandidate — one class, one family, forwards (§2.2)', () => {
     expect(chooseCandidate({ registry: r, catalogue: alpha, cls: 'haiku', family: 'alpha' })).toEqual(NONE);
   });
 
-  it('every blocked word it answers is one of BLOCKED_CAUSES', () => {
-    expect(BLOCKED_CAUSES).toContain('pin-grammar');
-    expect(BLOCKED_CAUSES).toContain('shared-family');
+  it('runs over a live-shaped catalogue (two-part, four-part and word-version ids listed beside the real rows) without throwing, and names each class its candidate', () => {
+    // ADV_CATALOGUE lists `model-6`, `vendor-6-alpha-mini` and `model-auto-alpha`: ids `parseModelId` refuses. A
+    // guard that let one through to `.family` would throw a TypeError here, on every hourly pass of a real lane.
+    const run = (cls: Parameters<typeof chooseCandidate>[0]['cls'], family: string) =>
+      chooseCandidate({ registry: ADV_REGISTRY, catalogue: ADV_CATALOGUE, cls, family });
+    expect(run('haiku', 'alpha')).toEqual({ candidate: 'model-6.1-alpha', reason: 'newer', blocked: null });
+    expect(run('sonnet', 'beta')).toEqual({ candidate: 'model-6.1-beta', reason: 'newer', blocked: null });
+    expect(run('opus', 'gamma')).toEqual({ candidate: 'model-6.1-gamma', reason: 'newer', blocked: null });
+    expect(run('fable', 'delta')).toEqual({ candidate: 'model-6-delta', reason: 'empty', blocked: null });
+    expect(run('fable', 'omega')).toEqual(NONE);
+  });
+
+  it('a pin the catalogue lists HIDDEN is listed, so never retired; and a visible twin of a hidden pin is not newer than it', () => {
+    // A hidden pin beside an older visible sibling: read as retired, it would move BACKWARDS to model-5.6-gamma.
+    const older = cat([mrow('model-5.6-gamma'), mrow('model-6.1-gamma', { hidden: true })]);
+    expect(chooseCandidate({ registry: reg({ opus: 'model-6.1-gamma' }), catalogue: older, cls: 'opus', family: 'gamma' }))
+      .toEqual(NONE);
+    // A hidden pin and a visible twin at its version (6 and 6.0): the strict comparison names no move to the twin.
+    const twin = cat([mrow('model-6-omega', { hidden: true }), mrow('model-6.0-omega')]);
+    expect(chooseCandidate({ registry: reg({ opus: 'model-6-omega' }), catalogue: twin, cls: 'opus', family: 'omega' }))
+      .toEqual(NONE);
+  });
+
+  it('a hidden twin, or one outside the discovery list, is no tie: only eligible ids count toward one (D-5819)', () => {
+    const r = reg({ opus: 'model-5.6-alpha' });
+    const visibleTwin = cat([mrow('model-5.6-alpha'), mrow('model-6-alpha'), mrow('model-6.0-alpha')]);
+    expect(chooseCandidate({ registry: r, catalogue: visibleTwin, cls: 'opus', family: 'alpha' })).toEqual(NONE);
+    const hiddenTwin = cat([mrow('model-5.6-alpha'), mrow('model-6-alpha'), mrow('model-6.0-alpha', { hidden: true })]);
+    expect(chooseCandidate({ registry: r, catalogue: hiddenTwin, cls: 'opus', family: 'alpha' }))
+      .toEqual({ candidate: 'model-6-alpha', reason: 'newer', blocked: null });
+    const scoped = reg({ opus: 'model-5.6-alpha' }, { discovery: ['model-5.6-alpha', 'model-6-alpha'] });
+    expect(chooseCandidate({ registry: scoped, catalogue: visibleTwin, cls: 'opus', family: 'alpha' }))
+      .toEqual({ candidate: 'model-6-alpha', reason: 'newer', blocked: null });
+  });
+
+  describe('shared-family reads the family\'s newest version with its ties (D-5819)', () => {
+    const SHARED = { candidate: null, reason: null, blocked: 'shared-family' };
+    const ids = (...v: string[]) => cat(v.map((x) => mrow(`model-${x}-alpha`)));
+
+    it('A1: ids 5.6, 6 and 6.0, one class on 6 and another on 5.6: the one on 5.6 is blocked, as it is without the twin', () => {
+      const r = reg({ haiku: 'model-6-alpha', opus: 'model-5.6-alpha' });
+      expect(chooseCandidate({ registry: r, catalogue: ids('5.6', '6', '6.0'), cls: 'opus', family: 'alpha' })).toEqual(SHARED);
+      expect(chooseCandidate({ registry: r, catalogue: ids('5.6', '6'), cls: 'opus', family: 'alpha' })).toEqual(SHARED);
+    });
+
+    it('A2: the same ids, one class on 6, and an empty class with that family: the empty class is blocked', () => {
+      const r = reg({ haiku: 'model-6-alpha' });
+      expect(chooseCandidate({ registry: r, catalogue: ids('5.6', '6', '6.0'), cls: 'fable', family: 'alpha' })).toEqual(SHARED);
+      expect(chooseCandidate({ registry: r, catalogue: ids('5.6', '6'), cls: 'fable', family: 'alpha' })).toEqual(SHARED);
+    });
+
+    it('A3: a tied newest pair (6.1 and 6.1.0), one class on 6 and another on 6.1: the one on 6 is blocked, the one on 6.1 has nothing', () => {
+      const r = reg({ haiku: 'model-6-alpha', sonnet: 'model-6.1-alpha' });
+      const c = ids('5.6', '6', '6.1', '6.1.0');
+      expect(chooseCandidate({ registry: r, catalogue: c, cls: 'haiku', family: 'alpha' })).toEqual(SHARED);
+      expect(chooseCandidate({ registry: r, catalogue: c, cls: 'sonnet', family: 'alpha' })).toEqual(NONE);
+    });
+
+    it('a model two classes pin (a hand-edited registry) is silent for both', () => {
+      const r = reg({ haiku: 'model-6-alpha', opus: 'model-6-alpha' });
+      const c = ids('5.6', '6');
+      expect(chooseCandidate({ registry: r, catalogue: c, cls: 'haiku', family: 'alpha' })).toEqual(NONE);
+      expect(chooseCandidate({ registry: r, catalogue: c, cls: 'opus', family: 'alpha' })).toEqual(NONE);
+    });
+  });
+
+  it("a model another class pins is excluded from the candidates even when it is not the newest: with the tied newest pair 6.1 and 6.1.0 nobody pins, the class on 5.6 has nothing", () => {
+    // Step 3 stays quiet (nobody pins 6.1 or 6.1.0), and the untied ids are 5.6 and 6: without the exclusion the
+    // class on 5.6 would be offered model-6-alpha, the model the class on 6 holds.
+    const c = cat([mrow('model-5.6-alpha'), mrow('model-6-alpha'), mrow('model-6.1-alpha'), mrow('model-6.1.0-alpha')]);
+    const r = reg({ haiku: 'model-6-alpha', opus: 'model-5.6-alpha' });
+    expect(chooseCandidate({ registry: r, catalogue: c, cls: 'opus', family: 'alpha' })).toEqual(NONE);
+  });
+
+  it('every blocked word it answers is one of BLOCKED_CAUSES: measured by running it over cases that block', () => {
+    const alpha = cat([mrow('model-5.6-alpha'), mrow('model-6-alpha')]);
+    const answers = [
+      chooseCandidate({ registry: reg({ opus: 'model-x-alpha' }), catalogue: alpha, cls: 'opus', family: 'alpha' }),
+      chooseCandidate({ registry: reg({ haiku: 'model-6-alpha', opus: 'model-5.6-alpha' }), catalogue: alpha, cls: 'opus', family: 'alpha' }),
+      chooseCandidate({ registry: reg({ opus: 'model-5.6-alpha' }), catalogue: alpha, cls: 'opus', family: 'alpha' }),
+      chooseCandidate({ registry: reg({}), catalogue: alpha, cls: 'fable', family: null }),
+    ];
+    const words = [...new Set(answers.map((a) => a.blocked).filter((w) => w !== null))].sort();
+    expect(words).toEqual(['pin-grammar', 'shared-family']);
+    for (const w of words) expect(BLOCKED_CAUSES).toContain(w);
     expect(Object.isFrozen(BLOCKED_CAUSES)).toBe(true);
   });
 });
@@ -204,7 +293,8 @@ describe('REASON_MAX — the one cap on a history reason', () => {
 describe('shared/model-advance.mjs is a pure module that spells no class word', () => {
   it('imports only ./models.mjs, and nothing of node:*', () => {
     const src = readFileSync(MODULE, 'utf8');
-    expect([...src.matchAll(/\bfrom\s+'([^']+)'/g)].map((m) => m[1])).toEqual(['./models.mjs']);
+    // A specifier after `from` or a bare `import`, in single or double quotes: `import 'node:fs'` has no `from`.
+    expect([...src.matchAll(/\b(?:from|import)\s*(['"])([^'"]+)\1/g)].map((m) => m[2])).toEqual(['./models.mjs']);
     expect(src).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);
   });
 
@@ -217,12 +307,21 @@ describe('shared/model-advance.mjs is a pure module that spells no class word', 
   });
 
   it('every runtime export is declared in the .d.mts, and the .d.mts declares nothing that does not run', () => {
-    const runs = [...readFileSync(MODULE, 'utf8').matchAll(/^export\s+(?:const|function|class)\s+([A-Za-z_$][\w$]*)/gm)]
-      .map((m) => m[1]).sort();
-    const declared = [...readFileSync(DECL, 'utf8').matchAll(/^export\s+declare\s+(?:const|function|class)\s+([A-Za-z_$][\w$]*)/gm)]
-      .map((m) => m[1]).sort();
-    expect(declared).toEqual(runs);
+    // The names a source exports: `export const|let|var|function|async function|class` (after `declare` in the
+    // .d.mts) and the names inside `export { … }`, an `as` alias exporting the alias. `export type` is no runtime name.
+    const namesOf = (src: string, declare: boolean): string[] => {
+      const kw = declare ? 'declare\\s+' : '';
+      const decl = [...src.matchAll(new RegExp(
+        `^export\\s+${kw}(?:const|let|var|function|async\\s+function|class)\\s+([A-Za-z_$][\\w$]*)`, 'gm'))].map((m) => m[1]);
+      const lists = [...src.matchAll(/^export\s*\{([^}]*)\}/gm)].flatMap((m) => m[1].split(',')
+        .map((x) => x.trim()).filter((x) => x !== '' && !x.startsWith('type ')).map((x) => x.split(/\s+as\s+/).pop() ?? x));
+      return [...decl, ...lists].sort();
+    };
+    const mod = readFileSync(MODULE, 'utf8');
+    const runs = namesOf(mod, false);
+    expect(namesOf(readFileSync(DECL, 'utf8'), true)).toEqual(runs);
     expect(runs).toContain('chooseCandidate');
+    expect(mod).not.toMatch(/^export\s+(?:default\b|\*)/m);
   });
 
   it('the tsc probe drives the rule half, with no cast', () => {
