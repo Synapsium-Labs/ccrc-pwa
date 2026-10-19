@@ -7,12 +7,14 @@ SQLite's, not this script's: opening a WAL database that no process holds open m
 `-wal` files, owned by whoever runs this, so run it as the store's own user, never under `sudo`.
 
     python3 deploy/measure-history.py [--db PATH] [--now MS]
-                                      [--families FILE --window-start MS --window-end MS]
+                                      [--families FILE --window-start MS --window-end MS --row-cap N]
 
 It prints ONE JSON object, headed by the store's own id. Outputs of several nodes are concatenated, never
 merged: two nodes' families with one ccrc id are two families (spec §6.9).
 
   store_id, user_version  the store measured: meta.store_id and PRAGMA user_version
+  script_sha256           the sha256 of this file's own bytes (read through realpath), so a record that pins
+                          the instrument's hash can tell which build measured (W2-D13, W2-D24)
   counters                every `counters` row, name -> n, exactly as the sweep folded it. A name carrying
                           `:<backend>` was folded by the sweep through lib.mjs's backendOf; this script reads
                           the word and never derives one, so the backend rule is spelled once (pin O32: no
@@ -35,33 +37,50 @@ merged: two nodes' families with one ccrc id are two families (spec §6.9).
                           <= 0.02), each null, never 0, when its denominator is 0. A reading whose
                           window holds a restore or rebuild is void; a served_share above 1 is its tell
   w1f_grep_p95_ms         W1-f: the p95 of recall_calls.ms over verb = 'grep' rows with arm IS NULL; null if none
-  w2                      null without --families; else the W2 window statistic, below
+  w2                      null without --families; else {row_cap, window_start_ms, window_end_ms, families},
+                          the W2 raw rows, below; the two window fields echo --window-start and --window-end
 p95 is NEAREST-RANK: the value at 1-based rank ceil(95n/100) of the sorted sample, in integer arithmetic.
 
-THE W2 WINDOW STATISTIC (§10.2). --families names a JSON array of {store_id, ccrc_id, generation}: the
-pre-registered list. A row naming another store is skipped (it is another node's). For each listed family:
-  * its sessions are its own row plus a '' family a re-key merged into it (sessions.merged_into, §6.1);
-  * its main boundaries are compact-boundary entries of a transcript whose agent_id is '', in one of its
-    confirmed epochs, with ts_ms inside [--window-start, --window-end);
-  * the copy holding a boundary is the ingest file holding it with the most rows after it (ties: the lowest
-    file_id), so a swap's continued copy is read rather than the one left behind;
-  * its summary row is the first is_compact_summary entry after the boundary in that copy (none: the window
-    opens at the boundary itself);
-  * the window is the first 10 assistant entries after that row, and ends at the 10th one's ts_ms, or at the
-    copy's last timed row when there are fewer;
-  * a window COUNTS when a recall_calls row of the family, with arm IS NULL, has a ts_ms from the boundary's
-    ts_ms to that end, both inclusive. Every recall_calls row is a read verb's: the sweep writes one only for
-    an ev:"recall" spool line, and only a read verb writes one (spec §8.1).
-It reports the windows, those with a call, the calls and assistant entries summed over windows, the per-turn
-rate (calls / assistant entries), the windows it could not time (`unmeasured`), and each family's windows.
-The bootstrap that turns this into the gate is the W2 driver's, not this file's.
+THE W2 RAW ROWS (§10.2; W2-D13, D-5770). This file emits rows and decides nothing about a window: the turn
+rule, the window's length and end, the copy a window reads, the producer and every statistic are built in
+Node by deploy/history-gate.mjs from what is printed here (W2-D14, W2-D15, W2-D16). --families names a JSON
+array of {store_id, ccrc_id, generation}: the pre-registered list. A row naming another store is skipped (it
+is another node's). --row-cap is required with --families and has no default. w2 echoes the window it was run
+over, so the gate can refuse reports measured over different windows (W2-D22). For each listed family:
+  ccrc_id, generation  as listed
+  found                false when the store holds no sessions row for it; its lists are then empty
+  merged_generations   the generations of the '' rows a re-key merged into it (sessions.merged_into, §6.1)
+  calls                [ts_ms, rc, verb] for every recall_calls row of its own and its merged generations with
+                       arm IS NULL and ts_ms >= --window-start, ordered by ts_ms then event_key. Every
+                       recall_calls row is a read verb's: the sweep writes one only for an ev:"recall" spool
+                       line, and only a read verb writes one (spec §8.1). arm IS NULL keeps a replay arm's
+                       calls out of every live output, here and in W1-f (W2-D13)
+  boundaries           its main boundaries: compact-boundary entries of a transcript whose agent_id is '', in
+                       one of its confirmed epochs, with ts_ms inside [--window-start, --window-end), ordered
+                       by ts_ms then entry_id, each {boundary_uuid, ts_ms, copies}
+A copy is one ingest file of the boundary's transcript that holds the boundary row, found by primary-key
+probes (the transcript's ingest_files, then memberships by (file_id, entry_id)), listed by file_id:
+  file_id, source_key  the ingest file ('' is a live copy)
+  boundary_line        the boundary row's line in it
+  after_count          the membership rows after that line, uncapped
+  summary_line         the first is_compact_summary row after the boundary, or null
+  next_boundary_line   the next boundary row after the boundary in this file, and its ts_ms; null when none
+  next_boundary_ts_ms
+  last_ts_ms           the ts_ms of the file's last timed row, or null when it has none
+  rows                 [line, ts_ms, msg_id, request_id, uuid, model] for each assistant entry after the
+                       summary row (after the boundary when there is none) and before the next boundary, in
+                       line order, at most --row-cap of them
+  truncated            true when the cap cut rows
+  models               the distinct values of entries.model over EVERY assistant entry after the summary row
+                       (or the boundary) to the end of the file, uncapped and not stopped at the next
+                       boundary, ordered by first appearance: the witnesses lib.mjs's producerOfCopy reads
+The model text is printed raw: this file never tests, compares or classifies it (O32 narrowed, D-5772).
 
-Exit 0 measured; 2 an input missing or unreadable.
+Exit 0 measured; 2 an input missing or unreadable, or a usage error.
 """
-import argparse, json, os, sqlite3, sys, time, urllib.parse
+import argparse, hashlib, json, os, sqlite3, sys, time, urllib.parse
 
 WEEK_MS = 7 * 86_400_000
-K = 10   # the window: the first K assistant entries after a main boundary's summary row (ruled Q14)
 
 
 def fail(msg):
@@ -118,80 +137,96 @@ def family_scope(db, ccrc_id, generation):
     if row is None:
         return [], []
     pks, gens = [row[0]], [generation]
-    for pk, gen in db.execute('SELECT session_pk, generation FROM sessions WHERE ccrc_id = ? AND merged_into = ?',
-                              (ccrc_id, row[0])).fetchall():
+    for pk, gen in db.execute('SELECT session_pk, generation FROM sessions WHERE ccrc_id = ? AND merged_into = ? '
+                              'ORDER BY session_pk', (ccrc_id, row[0])).fetchall():
         pks.append(pk)
         gens.append(gen)
     return pks, gens
 
 
-def family_windows(db, ccrc_id, generation, start_ms, end_ms):
+def script_sha256():
+    """The sha256 of this file's own bytes, read through realpath (W2-D13): the hash the open record's gate_code
+    pins for deploy/measure-history.py (W2-D24)."""
+    with open(os.path.realpath(__file__), 'rb') as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def copy_record(db, file_id, source_key, boundary_entry_id, row_cap):
+    """One copy of a boundary: the raw rows Node's window and producer read (W2-D13). Every query is keyed on
+    this file's memberships by line (memberships_order) or by its primary key; none reads a body."""
+    line = db.execute('SELECT line FROM memberships WHERE file_id = ? AND entry_id = ?',
+                      (file_id, boundary_entry_id)).fetchone()[0]
+    after_count = db.execute('SELECT count(*) FROM memberships WHERE file_id = ? AND line > ?',
+                             (file_id, line)).fetchone()[0]
+    summary = db.execute(
+        'SELECT m.line FROM memberships m JOIN entries e ON e.entry_id = m.entry_id '
+        'WHERE m.file_id = ? AND m.line > ? AND e.is_compact_summary = 1 ORDER BY m.line LIMIT 1',
+        (file_id, line)).fetchone()
+    summary_line = summary[0] if summary is not None else None
+    nxt = db.execute(
+        'SELECT m.line, e.ts_ms FROM memberships m JOIN boundaries b ON b.entry_id = m.entry_id '
+        'JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? AND m.line > ? ORDER BY m.line LIMIT 1',
+        (file_id, line)).fetchone()
+    next_line, next_ts = (nxt[0], nxt[1]) if nxt is not None else (None, None)
+    last = db.execute(
+        'SELECT e.ts_ms FROM memberships m JOIN entries e ON e.entry_id = m.entry_id '
+        'WHERE m.file_id = ? AND e.ts_ms IS NOT NULL ORDER BY m.line DESC LIMIT 1',
+        (file_id,)).fetchone()
+    opens = summary_line if summary_line is not None else line
+    rows = [list(r) for r in db.execute(
+        'SELECT m.line, e.ts_ms, e.msg_id, e.request_id, e.uuid, e.model '
+        'FROM memberships m JOIN entries e ON e.entry_id = m.entry_id '
+        "WHERE m.file_id = ? AND m.line > ? AND (? IS NULL OR m.line < ?) AND e.type = 'assistant' "
+        'ORDER BY m.line LIMIT ?',
+        (file_id, opens, next_line, next_line, row_cap + 1)).fetchall()]
+    witnesses = [r[0] for r in db.execute(
+        'SELECT e.model FROM memberships m JOIN entries e ON e.entry_id = m.entry_id '
+        "WHERE m.file_id = ? AND m.line > ? AND e.type = 'assistant' "
+        'GROUP BY e.model ORDER BY min(m.line)',
+        (file_id, opens)).fetchall()]
+    return {'file_id': file_id, 'source_key': source_key, 'boundary_line': line, 'after_count': after_count,
+            'summary_line': summary_line, 'next_boundary_line': next_line, 'next_boundary_ts_ms': next_ts,
+            'last_ts_ms': last[0] if last is not None else None,
+            'rows': rows[:row_cap], 'models': witnesses, 'truncated': len(rows) > row_cap}
+
+
+def boundary_copies(db, entry_id, transcript_pk, row_cap):
+    """Every copy holding one boundary, by file_id: the transcript's ingest files, each probed by the memberships
+    primary key (file_id, entry_id). Never a scan of memberships by entry_id (W2-D13)."""
+    out = []
+    for file_id, source_key in db.execute(
+            'SELECT file_id, source_key FROM ingest_files WHERE transcript_pk = ? ORDER BY file_id',
+            (transcript_pk,)).fetchall():
+        held = db.execute('SELECT 1 FROM memberships WHERE file_id = ? AND entry_id = ?',
+                          (file_id, entry_id)).fetchone()
+        if held is not None:
+            out.append(copy_record(db, file_id, source_key, entry_id, row_cap))
+    return out
+
+
+def family_report(db, ccrc_id, generation, start_ms, end_ms, row_cap):
+    """One listed family's raw rows (W2-D13). A family the store does not hold is found: false with empty
+    lists, never an empty list in its place."""
     pks, gens = family_scope(db, ccrc_id, generation)
     if not pks:
-        return []
+        return {'ccrc_id': ccrc_id, 'generation': generation, 'found': False, 'merged_generations': [],
+                'calls': [], 'boundaries': []}
+    calls = [list(r) for r in db.execute(
+        f'SELECT ts_ms, rc, verb FROM recall_calls WHERE ccrc_id = ? AND generation IN ({marks(len(gens))}) '
+        'AND arm IS NULL AND ts_ms >= ? ORDER BY ts_ms, event_key',
+        (ccrc_id, *gens, start_ms)).fetchall()]
     bounds = db.execute(
-        'SELECT DISTINCT b.entry_id, e.uuid, e.ts_ms FROM boundaries b '
+        'SELECT DISTINCT b.entry_id, b.transcript_pk, e.uuid, e.ts_ms FROM boundaries b '
         'JOIN entries e ON e.entry_id = b.entry_id '
         "JOIN transcripts t ON t.transcript_pk = b.transcript_pk AND t.agent_id = '' "
         'JOIN epochs p ON p.cc_session_uuid = t.cc_session_uuid AND p.confirmed_ms IS NOT NULL '
         f'WHERE p.session_pk IN ({marks(len(pks))}) AND e.ts_ms >= ? AND e.ts_ms < ? '
         'ORDER BY e.ts_ms, b.entry_id',
         (*pks, start_ms, end_ms)).fetchall()
-    out = []
-    for entry_id, uuid, ts in bounds:
-        copy = db.execute(
-            'SELECT m.file_id, m.line, '
-            '(SELECT count(*) FROM memberships n WHERE n.file_id = m.file_id AND n.line > m.line) AS after '
-            'FROM memberships m WHERE m.entry_id = ? ORDER BY after DESC, m.file_id LIMIT 1',
-            (entry_id,)).fetchone()
-        if copy is None:
-            out.append({'boundary_uuid': uuid, 'boundary_ts_ms': ts, 'end_ts_ms': None,
-                        'assistant_entries': 0, 'calls': None})
-            continue
-        file_id, line = copy[0], copy[1]
-        summary = db.execute(
-            'SELECT m.line FROM memberships m JOIN entries e ON e.entry_id = m.entry_id '
-            'WHERE m.file_id = ? AND m.line > ? AND e.is_compact_summary = 1 ORDER BY m.line LIMIT 1',
-            (file_id, line)).fetchone()
-        opens = summary[0] if summary is not None else line
-        turns = db.execute(
-            'SELECT e.ts_ms FROM memberships m JOIN entries e ON e.entry_id = m.entry_id '
-            "WHERE m.file_id = ? AND m.line > ? AND e.type = 'assistant' ORDER BY m.line LIMIT ?",
-            (file_id, opens, K)).fetchall()
-        if len(turns) == K:
-            end = turns[-1][0]
-        else:
-            last = db.execute(
-                'SELECT e.ts_ms FROM memberships m JOIN entries e ON e.entry_id = m.entry_id '
-                'WHERE m.file_id = ? AND e.ts_ms IS NOT NULL ORDER BY m.line DESC LIMIT 1',
-                (file_id,)).fetchone()
-            end = last[0] if last is not None else None
-        calls = None
-        if end is not None:
-            calls = db.execute(
-                f'SELECT count(*) FROM recall_calls WHERE ccrc_id = ? AND generation IN ({marks(len(gens))}) '
-                'AND arm IS NULL AND ts_ms >= ? AND ts_ms <= ?',
-                (ccrc_id, *gens, ts, end)).fetchone()[0]
-        out.append({'boundary_uuid': uuid, 'boundary_ts_ms': ts, 'end_ts_ms': end,
-                    'assistant_entries': len(turns), 'calls': calls})
-    return out
-
-
-def w2_statistic(db, families, start_ms, end_ms):
-    by_family, windows, with_call, calls, turns, unmeasured = [], 0, 0, 0, 0, 0
-    for ccrc_id, generation in families:
-        ws = family_windows(db, ccrc_id, generation, start_ms, end_ms)
-        by_family.append({'ccrc_id': ccrc_id, 'generation': generation, 'windows': ws})
-        for w in ws:
-            if w['calls'] is None:
-                unmeasured += 1
-                continue
-            windows += 1
-            with_call += 1 if w['calls'] > 0 else 0
-            calls += w['calls']
-            turns += w['assistant_entries']
-    return {'windows': windows, 'with_call': with_call, 'calls': calls, 'assistant_entries': turns,
-            'per_turn_rate': calls / turns if turns else None, 'unmeasured': unmeasured, 'by_family': by_family}
+    return {'ccrc_id': ccrc_id, 'generation': generation, 'found': True, 'merged_generations': gens[1:],
+            'calls': calls,
+            'boundaries': [{'boundary_uuid': uuid, 'ts_ms': ts, 'copies': boundary_copies(db, entry_id, tpk, row_cap)}
+                           for entry_id, tpk, uuid, ts in bounds]}
 
 
 def w1e_statistic(counters):
@@ -200,7 +235,7 @@ def w1e_statistic(counters):
     the hook wrote at that compaction's PreCompact: main (a line was due), other (subagent or ambiguous: no line
     was ever due) or unknown (the marker overwritten, emptied or unreadable). It counts card_served:<backend> or
     card_id_mismatch:<backend> once per leaf whose post-boundary SessionStart attachment named a node: its own
-    leaf, or another. The backend word after the colon is summed over and never read, so no model is classified
+    leaf, or another. The backend word after the colon is summed over and never read, so no model name is classified
     here (O32).
 
     served_share = served / (main + unknown): other is out of the denominator and reported beside it, and unknown
@@ -230,9 +265,14 @@ def main():
     ap.add_argument('--families', default=None)
     ap.add_argument('--window-start', type=int, default=None)
     ap.add_argument('--window-end', type=int, default=None)
+    ap.add_argument('--row-cap', type=int, default=None, help='the most assistant rows printed per copy; required with --families')
     a = ap.parse_args()
     if a.families is not None and (a.window_start is None or a.window_end is None):
         fail('--families needs --window-start and --window-end (epoch ms)')
+    if a.families is not None and a.row_cap is None:
+        fail('--families needs --row-cap')
+    if a.row_cap is not None and a.row_cap < 1:
+        fail('--row-cap must be a positive integer')
     now = a.now if a.now is not None else int(time.time() * 1000)
 
     db = open_db(a.db)
@@ -242,6 +282,7 @@ def main():
         report = {
             'store_id': store_id,
             'user_version': db.execute('PRAGMA user_version').fetchone()[0],
+            'script_sha256': script_sha256(),
             'counters': {name: n for name, n in db.execute('SELECT name, n FROM counters ORDER BY name').fetchall()},
             'w1b_lag_p95_ms': p95([r[0] for r in db.execute(
                 'SELECT lag_ms FROM ticks WHERE files_behind = 0 AND lag_ms IS NOT NULL AND ts_ms > ? AND ts_ms <= ?',
@@ -255,7 +296,9 @@ def main():
         }
         report['w1e'] = w1e_statistic(report['counters'])
         if a.families is not None:
-            report['w2'] = w2_statistic(db, load_families(a.families, store_id), a.window_start, a.window_end)
+            report['w2'] = {'row_cap': a.row_cap, 'window_start_ms': a.window_start, 'window_end_ms': a.window_end, 'families': [
+                family_report(db, ccrc_id, generation, a.window_start, a.window_end, a.row_cap)
+                for ccrc_id, generation in load_families(a.families, store_id)]}
     except sqlite3.Error as e:
         fail(f'cannot read {a.db}: {e}')
     finally:

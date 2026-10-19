@@ -20,13 +20,21 @@ const SCRIPT = path.join(ROOT, 'deploy', 'measure-history.py');
 /** Isolated (-I: no user site, no PYTHON* env, no script dir on sys.path) AND bytecode-free (-B): -I ignores PYTHONDONTWRITEBYTECODE, so only -B keeps a loaded instrument from writing deploy/__pycache__ (review 316 F25). */
 const PY_ISOLATED = ['-I', '-B'] as const;
 
-interface Window { boundary_uuid: string; boundary_ts_ms: number; end_ts_ms: number | null; assistant_entries: number; calls: number | null }
-interface W2 {
-  windows: number; with_call: number; calls: number; assistant_entries: number; per_turn_rate: number | null; unmeasured: number;
-  by_family: Array<{ ccrc_id: string; generation: string; windows: Window[] }>;
+/** W2-3 Task 1 (W2-D13): the raw rows measure-history.py prints; deploy/history-gate.mjs builds every window from them. */
+type RawRow = [line: number, ts_ms: number | null, msg_id: string | null, request_id: string | null, uuid: string, model: string | null];
+type CallRow = [ts_ms: number, rc: number, verb: string];
+interface Copy {
+  file_id: number; source_key: string; boundary_line: number; after_count: number; summary_line: number | null;
+  next_boundary_line: number | null; next_boundary_ts_ms: number | null; last_ts_ms: number | null;
+  rows: RawRow[]; models: Array<string | null>; truncated: boolean;
 }
+interface BoundaryReport { boundary_uuid: string; ts_ms: number; copies: Copy[] }
+interface FamilyReport {
+  ccrc_id: string; generation: string; found: boolean; merged_generations: string[]; calls: CallRow[]; boundaries: BoundaryReport[];
+}
+interface W2 { row_cap: number; window_start_ms: number; window_end_ms: number; families: FamilyReport[] }
 interface Report {
-  store_id: string | null; user_version: number; counters: Record<string, number>; w1b_lag_p95_ms: number | null;
+  store_id: string | null; user_version: number; script_sha256: string; counters: Record<string, number>; w1b_lag_p95_ms: number | null;
   w1c_duplicate_entries: number; w1f_grep_p95_ms: number | null; w2: W2 | null;
 }
 
@@ -191,19 +199,42 @@ describe('measure-history.py: the named queries over planted rows (O52)', () => 
     expect(rep.w2).toBeNull();
   });
 
-  it('the W2 window statistic: two windows, both with a call, three calls over fourteen assistant entries', () => {
+  it('the W2 raw rows: demo-a\'s calls and its two main boundaries, copy by copy and row by row (W2-D13)', () => {
     const f = plantedStore();
-    const rep = report(['--db', f.db, '--now', String(NOW), '--families', f.families, '--window-start', '1500', '--window-end', '6000']);
-    // B1: the first 10 turns after its summary end at 3900; k1 (2500) and k2 (3900, inclusive) count; k3, k4 are
-    //     outside, k5 is a replay arm's. B2: 4 turns after its summary (5100, 5200, 5300, 7100), fewer than 10, so
-    //     it ends at the copy's last row (7100); k6, the merged '' family's, counts. B3 (7000) is past
-    //     --window-end, the subagent boundary is not a main one, and demo-b is listed under another store.
-    expect(rep.w2).toMatchObject({ windows: 2, with_call: 2, calls: 3, assistant_entries: 14, unmeasured: 0 });
-    expect(rep.w2!.per_turn_rate).toBeCloseTo(3 / 14, 12);
-    expect(rep.w2!.by_family).toEqual([{ ccrc_id: 'demo-a', generation: G1, windows: [
-      { boundary_uuid: f.b1, boundary_ts_ms: 2000, end_ts_ms: 3900, assistant_entries: 10, calls: 2 },
-      { boundary_uuid: f.b2, boundary_ts_ms: 5000, end_ts_ms: 7100, assistant_entries: 4, calls: 1 },
-    ] }]);
+    const rep = report(['--db', f.db, '--now', String(NOW), '--families', f.families, '--window-start', '1500', '--window-end', '6000', '--row-cap', '400']);
+    // Worked by hand from plantedStore. f1's rows are planted first, so its line L is entry e-L (b1 = e-3, b2 = e-17).
+    // calls: demo-a's rows of G1 and of the merged '' family with no arm, at or after 1500, by ts_ms: k4 1999, k1 2500,
+    //   k2 3900, k3 3950, k6 5200 (gen ''). k5 (2600) is a replay arm's; k7 is demo-b's; the g* rows are demo-c's.
+    // boundaries in [1500, 6000): B1 (2000) and B2 (5000); B3 (7000) is past --window-end, the subagent boundary
+    //   (2500) is not a main one, and demo-b is listed under another store, so it is skipped.
+    // B1 is held by two copies, listed by file_id: f2 (planted first, the lower id) holds B1 at line 1 and its summary
+    //   at line 2, nothing after; f1 holds B1 at line 3 with 22 rows after it (lines 4..25), its summary at line 4,
+    //   the next boundary B2 at line 17 (5000), and its last timed row at line 25 (7100). The assistant rows after the
+    //   summary and before line 17 are lines 5..16, at 3000..4100. No planted row has a model, msg_id or request_id.
+    // B2 is held by f1 alone: line 17, 8 rows after it, summary 18, next boundary B3 at line 23 (7000); its rows are
+    //   lines 19..21 (line 22 is a user row, line 25 lies past B3). models run past B3 to line 25, still one null.
+    const [f2, f1] = fileIdsByIno(f.db);
+    const raw = (line: number, ts: number): RawRow => [line, ts, null, null, `e-${line}`, null];
+    expect(f.b1).toBe('e-3');
+    expect(f.b2).toBe('e-17');
+    // w2 echoes the window it was run over (W2-D13, amended), so assembleReports can refuse a report whose window is not the record's.
+    expect(rep.w2).toEqual({ row_cap: 400, window_start_ms: 1500, window_end_ms: 6000, families: [{
+      ccrc_id: 'demo-a', generation: G1, found: true, merged_generations: [''],
+      calls: [[1999, 0, 'expand'], [2500, 0, 'expand'], [3900, 0, 'describe'], [3950, 0, 'expand'], [5200, 0, 'expand']],
+      boundaries: [
+        { boundary_uuid: f.b1, ts_ms: 2000, copies: [
+          { file_id: f2, source_key: '', boundary_line: 1, after_count: 1, summary_line: 2, next_boundary_line: null,
+            next_boundary_ts_ms: null, last_ts_ms: 2001, rows: [], models: [], truncated: false },
+          { file_id: f1, source_key: '', boundary_line: 3, after_count: 22, summary_line: 4, next_boundary_line: 17,
+            next_boundary_ts_ms: 5000, last_ts_ms: 7100,
+            rows: Array.from({ length: 12 }, (_, k) => raw(5 + k, 3000 + 100 * k)), models: [null], truncated: false },
+        ] },
+        { boundary_uuid: f.b2, ts_ms: 5000, copies: [
+          { file_id: f1, source_key: '', boundary_line: 17, after_count: 8, summary_line: 18, next_boundary_line: 23,
+            next_boundary_ts_ms: 7000, last_ts_ms: 7100, rows: [raw(19, 5100), raw(20, 5200), raw(21, 5300)], models: [null], truncated: false },
+        ] },
+      ],
+    }] });
   });
 });
 
@@ -212,11 +243,11 @@ describe('measure-history.py: read-only, and a missing input is refused, never c
     const f = plantedStore();
     const sha = (): string => createHash('sha256').update(readFileSync(f.db)).digest('hex');
     const before = sha();
-    report(['--db', f.db, '--now', String(NOW), '--families', f.families, '--window-start', '0', '--window-end', '9000']);
+    report(['--db', f.db, '--now', String(NOW), '--families', f.families, '--window-start', '0', '--window-end', '9000', '--row-cap', '400']);
     expect(sha()).toBe(before);
   });
 
-  it('a missing store exits 2 and creates nothing; --families without its window exits 2', () => {
+  it('a missing store exits 2 and creates nothing; --families without its window exits 2, and without --row-cap exits 2', () => {
     const home = mkTmp('ccrc-measure-history-missing-');
     const p = path.join(home, 'nope.db');
     const r = measure(['--db', p]);
@@ -227,6 +258,10 @@ describe('measure-history.py: read-only, and a missing input is refused, never c
     const w = measure(['--db', f.db, '--families', f.families]);
     expect(w.code).toBe(2);
     expect(w.stderr).toContain('--families needs --window-start and --window-end');
+    const c = measure(['--db', f.db, '--families', f.families, '--window-start', '0', '--window-end', '9000']);
+    expect(c.code).toBe(2);
+    expect(c.stderr).toContain('--families needs --row-cap');
+    expect(c.stdout).toBe('');
   });
 });
 
@@ -379,7 +414,198 @@ describe('measure-history.py: W1-e, the card line served and its id mismatches (
   });
 
   it('W1-e sits between W1-c and W1-f in the report, which stays headed by its store id', () => {
-    expect(Object.keys(report(['--db', cardStore({}), '--now', String(NOW)]))).toEqual(['store_id', 'user_version', 'counters',
+    expect(Object.keys(report(['--db', cardStore({}), '--now', String(NOW)]))).toEqual(['store_id', 'user_version', 'script_sha256', 'counters',
       'w1b_lag_p95_ms', 'w1c_duplicate_entries', 'w1e', 'w1f_grep_p95_ms', 'w2']);
+  });
+});
+
+// ── W2-3 Task 1: raw window rows (W2-D13, W2-D16; D-5770, D-5772). END-APPENDED. ─────────────────────────────────
+// measure-history.py prints raw rows and decides nothing about a window: deploy/history-gate.mjs builds every window,
+// turn and producer from them (W2-D14, W2-D15). Each case below runs the real script against a store createStore made.
+
+/** The planted store's ingest file ids in planting order (ino 100, 101, …): f2, f1, the subagent's file, demo-b's. */
+function fileIdsByIno(dbPath: string): number[] {
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    return (db.prepare('SELECT file_id FROM ingest_files ORDER BY ino').all() as Array<{ file_id: number }>).map((r) => Number(r.file_id));
+  } finally {
+    db.close();
+  }
+}
+
+describe('W2-3 Task 1: raw window rows', () => {
+  /** plantedStore with models, msg_ids and request_ids set on f1's rows (line L is entry e-L): two rows of one API
+   *  message at lines 5 and 6, a `<synthetic>` row at 7, a second model at 14, and a third at 25, past B2's next
+   *  boundary (line 23). Every other row keeps a null model. */
+  const modelled = (): Planted => {
+    const f = plantedStore();
+    const db = new DatabaseSync(f.db);
+    try {
+      const set = db.prepare('UPDATE entries SET model = ?, msg_id = ?, request_id = ? WHERE uuid = ?');
+      for (const [uuid, model, msg, req] of [
+        ['e-5', 'model-a', 'msg-1', 'req-1'], ['e-6', 'model-a', 'msg-1', 'req-1'], ['e-7', '<synthetic>', null, null],
+        ['e-14', 'model-b', 'msg-9', null], ['e-25', 'model-c', null, 'req-20'],
+      ] as const) expect(Number(set.run(model, msg, req, uuid).changes), uuid).toBe(1);
+    } finally {
+      db.close();
+    }
+    return f;
+  };
+  const W2_ARGS = (f: Planted, cap: string): string[] =>
+    ['--db', f.db, '--now', String(NOW), '--families', f.families, '--window-start', '1500', '--window-end', '6000', '--row-cap', cap];
+  const demoA = (rep: Report): FamilyReport => {
+    const fam = rep.w2!.families.find((x) => x.ccrc_id === 'demo-a');
+    expect(fam, JSON.stringify(rep.w2)).toBeDefined();
+    return fam!;
+  };
+  /** The copy of boundary `uuid` held by file `fileId`. */
+  const copyOf = (fam: FamilyReport, uuid: string, fileId: number): Copy => {
+    const c = fam.boundaries.find((b) => b.boundary_uuid === uuid)?.copies.find((x) => x.file_id === fileId);
+    expect(c, `${uuid} in file ${fileId}`).toBeDefined();
+    return c!;
+  };
+
+  it('the arm pin: a replay arm\'s call (k5, inside B1) is absent from calls, as its grep is from W1-f', () => {
+    const f = plantedStore();
+    const rep = report(W2_ARGS(f, '400'));
+    expect(demoA(rep).calls.map((c) => c[0])).toEqual([1999, 2500, 3900, 3950, 5200]);
+    expect(demoA(rep).calls.map((c) => c[0])).not.toContain(2600);
+    expect(rep.w1f_grep_p95_ms).toBe(2000);
+  });
+
+  it('merged_generations holds the \'\' row a re-key merged into the family, and that row\'s call (k6) is in calls', () => {
+    const fam = demoA(report(W2_ARGS(plantedStore(), '400')));
+    expect(fam.merged_generations).toEqual(['']);
+    expect(fam.calls).toContainEqual([5200, 0, 'expand']);
+  });
+
+  it('a listed family the store does not hold is found: false with empty lists, never an empty list; another store\'s family is skipped', () => {
+    const f = plantedStore();
+    writeFileSync(f.families, JSON.stringify([
+      { store_id: f.storeId, ccrc_id: 'demo-a', generation: G1 },
+      { store_id: f.storeId, ccrc_id: 'demo-z', generation: G2 },
+      { store_id: OTHER_STORE, ccrc_id: 'demo-b', generation: G2 },
+    ]));
+    const rep = report(W2_ARGS(f, '400'));
+    expect(rep.w2!.families.map((x) => [x.ccrc_id, x.found])).toEqual([['demo-a', true], ['demo-z', false]]);
+    expect(rep.w2!.families[1]).toEqual({ ccrc_id: 'demo-z', generation: G2, found: false, merged_generations: [], calls: [], boundaries: [] });
+  });
+
+  it('rows carry msg_id, request_id, uuid and model raw: two rows of one message stay two rows, and a <synthetic> row is still a row', () => {
+    const f = modelled();
+    const [, f1] = fileIdsByIno(f.db);
+    const c = copyOf(demoA(report(W2_ARGS(f, '400'))), f.b1, f1);
+    expect(c.rows.slice(0, 3)).toEqual([
+      [5, 3000, 'msg-1', 'req-1', 'e-5', 'model-a'], [6, 3100, 'msg-1', 'req-1', 'e-6', 'model-a'], [7, 3200, null, null, 'e-7', '<synthetic>'],
+    ]);
+    expect(c.rows).toHaveLength(12);
+    expect(c.rows[9]).toEqual([14, 3900, 'msg-9', null, 'e-14', 'model-b']);
+  });
+
+  it('models: every assistant row after the summary to the end of the copy, distinct, by first appearance, past the next boundary', () => {
+    const f = modelled();
+    const [, f1] = fileIdsByIno(f.db);
+    const fam = demoA(report(W2_ARGS(f, '400')));
+    // B1 in f1: assistant rows at lines 5..16, 19..21 and 25. Line 25 lies past the next boundary (17) and past B3 (23).
+    expect(copyOf(fam, f.b1, f1).models).toEqual(['model-a', '<synthetic>', null, 'model-b', 'model-c']);
+    // B2 in f1: lines 19..21 (null) and 25 (model-c), which lies past its next boundary (23).
+    expect(copyOf(fam, f.b2, f1).models).toEqual([null, 'model-c']);
+  });
+
+  it('truncated: at --row-cap 3 B1\'s rows are cut to three and flagged, B2\'s exactly three are not, and models stay uncapped', () => {
+    const f = modelled();
+    const [f2, f1] = fileIdsByIno(f.db);
+    const rep = report(W2_ARGS(f, '3'));
+    expect(rep.w2!.row_cap).toBe(3);
+    const fam = demoA(rep);
+    const b1 = copyOf(fam, f.b1, f1);
+    expect(b1.rows.map((r) => r[0])).toEqual([5, 6, 7]);
+    expect(b1.truncated).toBe(true);
+    expect(b1.after_count, 'after_count is uncapped').toBe(22);
+    expect(b1.models).toEqual(['model-a', '<synthetic>', null, 'model-b', 'model-c']);
+    const b2 = copyOf(fam, f.b2, f1);
+    expect(b2.rows.map((r) => r[0])).toEqual([19, 20, 21]);
+    expect(b2.truncated).toBe(false);
+    expect(copyOf(fam, f.b1, f2)).toMatchObject({ rows: [], truncated: false });
+  });
+
+  it('--families without --row-cap exits 2 naming it, and a --row-cap below 1 exits 2; the W1 call takes none and reports w2 null', () => {
+    const f = plantedStore();
+    const none = measure(W2_ARGS(f, '400').slice(0, -2));
+    expect(none.code).toBe(2);
+    expect(none.stderr).toContain('--families needs --row-cap');
+    const zero = measure(W2_ARGS(f, '0'));
+    expect(zero.code).toBe(2);
+    expect(zero.stderr).toContain('--row-cap must be a positive integer');
+    expect(report(['--db', f.db, '--now', String(NOW)]).w2).toBeNull();
+  });
+
+  it('script_sha256 is the sha256 of the script\'s own bytes, and a byte-changed copy run from a temp directory reports its own', () => {
+    const f = plantedStore();
+    const sha = (p: string): string => createHash('sha256').update(readFileSync(p)).digest('hex');
+    expect(report(['--db', f.db, '--now', String(NOW)]).script_sha256).toBe(sha(SCRIPT));
+    const dir = mkTmp('ccrc-measure-history-sha-');
+    const copy = path.join(dir, 'measure-history.py');
+    writeFileSync(copy, `${readFileSync(SCRIPT, 'utf8')}\n# one byte-changed copy\n`);
+    const r = spawnSync('python3', [...PY_ISOLATED, copy, '--db', f.db, '--now', String(NOW)],
+      { encoding: 'utf8', env: { ...scrubbedEnv(process.env), PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const got = (JSON.parse(r.stdout) as Report).script_sha256;
+    expect(got).toBe(sha(copy));
+    expect(got).not.toBe(sha(SCRIPT));
+  });
+
+  // O32 narrowed (W2-D16, D-5772): the script prints entries.model raw and never tests it. The scan reads the whole
+  // source, comments and docstring included, so the prose there keeps these shapes out too.
+  const CLASSIFY: ReadonlyArray<readonly [string, RegExp]> = [
+    ['a model value on the left of a comparison or membership test',
+      /\bmodels?\b['"\]]?\s*(?:==|!=|<>|<=|>=|<|>|=|\bnot\s+in\b|\bin\b|\bis\b|\blike\b|\bglob\b|\bbetween\b)/i],
+    ['a model value on the right of a comparison or membership test', /(?:==|!=|<>|\bin|\blike|\bglob)\s*\(?\s*(?:\w+[.[])?['"]?models?\b/i],
+    ['a K binding', /^\s*K\s*=/m],
+  ];
+  it('O32 narrowed, CONTROL: each pattern catches the shape it bans, the 7d01973a2 K line among them', () => {
+    const samples = [
+      "K = 10   # the window: the first K assistant entries after a main boundary's summary row (ruled Q14)",
+      'if model not in seen:', "if row['model'] == wanted:", "WHERE e.model = ? AND e.model LIKE 'x%'", 'if wanted in models:',
+      'if model is None:',
+    ];
+    for (const [why, re] of CLASSIFY) expect(samples.some((s) => re.test(s)), why).toBe(true);
+    expect(CLASSIFY[2]![1].test(samples[0]!)).toBe(true);
+  });
+  it('O32 narrowed: no comparison or membership test is applied to a model value, and no K is bound, in measure-history.py', () => {
+    const src = readFileSync(SCRIPT, 'utf8');
+    for (const [why, re] of CLASSIFY) expect(src.match(re)?.[0] ?? null, `measure-history.py carries ${why}`).toBeNull();
+  });
+
+  // The no-blob pin (W2-D13): the census never reads a body, so it never selects blobs.z and loads no codec.
+  const BLOB_READ: ReadonlyArray<readonly [string, RegExp]> = [
+    ['a select of blobs.z', /\bz\s+FROM\s+blobs\b|\bblobs\.z\b|\bSELECT\s+z\b/i],
+    ['a compression import', /^[ \t]*(?:import|from)[ \t][^\n]*\b(?:zlib|gzip|bz2|lzma|brotli|zstandard|zstd)\b/m],
+  ];
+  it('the no-blob pin, CONTROL: a planted SELECT z FROM blobs line and each compression import go red', () => {
+    const src = readFileSync(SCRIPT, 'utf8');
+    expect(BLOB_READ[0]![1].test(`${src}\n    db.execute('SELECT z FROM blobs WHERE blob_id = ?', (1,))\n`)).toBe(true);
+    for (const mod of ['zlib', 'gzip', 'bz2', 'lzma', 'brotli', 'zstandard']) {
+      expect(BLOB_READ[1]![1].test(`${src}\nimport ${mod}\n`), mod).toBe(true);
+    }
+    expect(BLOB_READ[1]![1].test('import argparse, hashlib, json, zlib, os'), 'one more name on the import line').toBe(true);
+  });
+  it('the no-blob pin: measure-history.py selects no blobs.z and imports no compression module', () => {
+    const src = readFileSync(SCRIPT, 'utf8');
+    for (const [why, re] of BLOB_READ) expect(src.match(re)?.[0] ?? null, `measure-history.py carries ${why}`).toBeNull();
+  });
+
+  // The PK-probe pin (W2-D13): a copy is found by ingest_files of the boundary's transcript, then the memberships
+  // primary key (file_id, entry_id); never by a scan of memberships keyed on entry_id alone.
+  const ENTRY_SCAN = /FROM\s+memberships\b[\s\S]{0,200}?\bWHERE\s+(?:\w+\.)?entry_id\s*(?:=|\bIN\b)/i;
+  it('the PK-probe pin, CONTROL: the pattern matches the 7d01973a2 copy query', () => {
+    expect(ENTRY_SCAN.test("'FROM memberships m WHERE m.entry_id = ? ORDER BY after DESC, m.file_id LIMIT 1',")).toBe(true);
+    expect(ENTRY_SCAN.test("'SELECT m.file_id FROM memberships m JOIN ingest_files f ON f.file_id = m.file_id '\n            'WHERE m.entry_id = ?'"), 'a join between').toBe(true);
+  });
+  it('the PK-probe pin: no memberships query is keyed on entry_id alone, and the two probes are the ones the script runs', () => {
+    const src = readFileSync(SCRIPT, 'utf8');
+    expect(src.match(ENTRY_SCAN)?.[0] ?? null).toBeNull();
+    expect(src).toContain("'SELECT file_id, source_key FROM ingest_files WHERE transcript_pk = ? ORDER BY file_id'");
+    expect(src).toContain("'SELECT 1 FROM memberships WHERE file_id = ? AND entry_id = ?'");
   });
 });
