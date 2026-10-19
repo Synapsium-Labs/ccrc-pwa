@@ -314,6 +314,7 @@ describe('the verb’s answer — box words told apart from composition errors (
       'cmd_ws_collect failed probe-unmeasured',
       'cmd_ws_collect failed probe-unmeasured',
       'cmd_ws_collect failed probe-unmeasured',
+      'cmd_ws_collect failed probe-unmeasured',
       '_ws_collect_locked verdict state-changed',
       '_ws_collect_locked failed probe-unmeasured',
       '_ws_collect_locked failed probe-unmeasured',

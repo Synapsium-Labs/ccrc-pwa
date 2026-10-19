@@ -161,6 +161,9 @@ export function FleetHostBanner(
             // hairline in the dead-text ink rather than a red fill on red.
             // The commit is its confirm's, below: `tone="danger"`.
             variant="danger-ghost"
+            // Its lift and press are the dead banner's own grounds, not the
+            // card's, which barely register on this tint (D-5574, D-5688).
+            ground="dead"
             // `size="fit"` IS THE FIX, and it is the axis the design system
             // already had. `Button`'s default size is `full` (`w-full`), so
             // `flex-none` alone kept this button at the row's full width: it

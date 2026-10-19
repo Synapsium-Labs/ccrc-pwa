@@ -656,8 +656,25 @@ Each entry was issued its number by the ledger allocator when this plan was publ
 - **Why:** some deleted methods pin behaviour the old launcher had and ccrc deliberately does not, such as deriving a lane's paths and ports from its id instead of its roster row, or merging its settings by a heredoc. Each such row gives its one-line reason, and the PR body counts them.
 - **Cost if wrong:** a lost behaviour hidden under `none`, bounded by the per-row reason and the count.
 
+### D-5646 — the box-token half of the live-shape case is re-seated, with the fleet box's whole doctor class map
+
+- **Departs from:** Task C3, which retires the live-shape case with the external lane's shape.
+- **Why:** that case held two subjects. Its external shape goes with the external arm. Its box-token subject, a provisioned fleet box keeping `box-token` PASS through two fleet installs and doctor, is not external, and a guard keeps a holder (the mutation-table discipline). A new case, `box-token live shape: …`, holds it on a fleet box that plants the provisioned fleet files as the retired `liveBox` did. Retiring `BASE_LIVE_SHAPE` also dropped the only install-level check of a fleet box's whole doctor class map, so both box-token cases now compare that map against `FLEET_BOX_CLASSES`. The map was measured on this branch, never typed, and is re-measured at each merge of `main` that adds a doctor check.
+- **Cost if wrong:** one install case more than the plan names, and a class map that a merge adding a doctor check must re-measure.
+
+### D-5647 — four input checks of the other repository's shim are not ported
+
+- **Departs from:** spec §6's Pins: every case in the existing suite that covers the proxy moves with the code.
+- **Why:** Part A's mapping found four checks in the deleted shim with no counterpart in ccrc's: a client effort of `ultra`, a client effort that is not a string, a lane default that is not a string, and a `[1m]` alias. None can reach the shim from a ccrc lane. Claude Code's effort list is `low`, `medium`, `high`, `xhigh` and `max`, and it writes effort only as a string. It strips `[1m]` and `[2m]` before a request. ccrc's registry refuses an effort that is not a string, and ccrc's ids admit no brackets. A byte change to the shim also restarts both lanes' shim tiers. So the shim is not changed, and no ccrc case pins forwarding as sent, which would freeze a choice nobody has made.
+- **Cost if wrong:** a client other than Claude Code that sends a bad effort draws a provider 400 on every turn. The fix then is one string check where the shim reads the effort.
+
 ---
 
 ## Execution record
 
 The controller appends here, by shape only: the gate's readings, Part A's merge date (never its PR number, URL or commit; D-5309), Part B's window, removal count and verification, and Part C's PR (this repository's `#n`).
+
+- **G0.** The census of the 25-path list answered `rc=0`. Lane 1's refresh was clean and served a turn. One soak sample per lane answered `rc=0`, with two doctor WARNs the operator ruled unrelated. The operator read the roster agreement and waived the fifth item. The operator's go: 2026-10-18 12:37Z.
+- **Part A.** Merged in the other repository on 2026-10-18 (D-5309).
+- **Part B.** Window 2026-10-18 16:35–17:02Z, named by the operator. 25 paths removed at 16:37:09Z behind a box-local snapshot, with one `daemon-reload`. Verified 2026-10-19 09:07Z: every path absent, nothing kept moved, doctor 0 FAIL with its class set unchanged, and each lane served a completed turn after the removal. The soak samples stopped only on the two ruled WARNs and on the box's auto-update reading off, which the operator ruled their own setting.
+- **Part C.** #565.

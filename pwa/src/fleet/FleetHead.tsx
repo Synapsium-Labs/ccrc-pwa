@@ -1,4 +1,4 @@
-// The fleet screen's header — the wordmark, the readouts, and the four doors.
+// The fleet screen's header — the wordmark, the readouts, and the five doors.
 //
 // WHY IT IS ITS OWN FILE. `FleetScreen` was ONE component with a 932-line
 // body, worse than `SessionLine` was before this branch cut it. This header
@@ -12,7 +12,7 @@
 // rather than a fragment inlined in a screen: a reader looking for "how do I
 // reach settings" should land in a file that is only about that.
 import type { ReactNode } from 'react';
-import { Door, SETTINGS_GLYPH } from '@ccrc/ui';
+import { Door, Icon, SETTINGS_GLYPH } from '@ccrc/ui';
 import { MailBadge } from '../fleet/MailBadge';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { navigate } from '../lib/router';
@@ -37,6 +37,21 @@ export function FleetHead(
               {poolLag}
             </span>
           )}
+          {/* THE DOOR TO /docs (native Docs reader design 2026-10-01, section 4.8): the doors' pattern, a glyph AND a
+              word, placed immediately before `.accounts-door`. Rendered unconditionally, like Settings: the Docs index
+              lists every project, so a fleet with no sessions still has docs to read. It is a plain button rather than
+              a `Door`: its box is the `.docs-door` rule in docs/docs.css (the pre-`Door` door rules, restated there),
+              which the contrast gate, the tap floor and the build gate measure; that stylesheet reaches the main one
+              through app.tsx's static import of DocsScreen. */}
+          <button
+            type="button"
+            className="docs-door"
+            aria-label="Docs: specs, plans and design notes"
+            onClick={() => navigate('/docs')}
+          >
+            <span className="docs-door-glyph" aria-hidden="true"><Icon name="file-text" /></span>
+            Docs
+          </button>
           {/* THE DURABLE DOOR TO /accounts (D-161). The AccountsStrip tap
               target was the only one — its own comment says so — and its
               accessible name is "account usage — open accounts": a full-width

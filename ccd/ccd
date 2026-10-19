@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=19c7a89f50a8d05b2a6c15eaef27ea13efe9de3a19890e6186014d3189382935
+# ccrc:generated 1 sha256=a8862748bbf9b0e8f1fc5a2215d62006db3d4565e1ef018193e8549585fea48c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -6453,8 +6453,8 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # artifact under `$REG` is ever named `<id>.hookstate.json` or `<id>.turn.json`
 # for an aliasing id, so no alias follows from these explicit names either.
 #
-# Enforced at CREATION ONLY — `cmd_ws_add` and `cmd_start`, the two sites
-# that mint a NEW registry row for a project — never at `cmd_pr_state`,
+# Enforced at CREATION ONLY — `cmd_ws_add`, `cmd_start` and `cmd_enable`, the
+# sites that mint a NEW registry row for a project — never at `cmd_pr_state`,
 # which applies this same `^[A-Za-z0-9._-]+$` shape FOUR times (its
 # `--session` argv, its `--project` argv, the `*.workspace` loop's id
 # check, and the registry-project check), of which two are PROJECT checks.
@@ -6473,15 +6473,15 @@ _ws_project_valid() {   # project -> 0 when it is a legal project name to CREATE
   # calls BOTH — this for the project and `_pool_name_valid` for the pool — so
   # shadowing only the pool half would leave the verb half-fixed.
   # THE ASYMMETRY IS WHY IT MATTERS HERE RATHER THAN SOMEDAY. The reader is now
-  # locale-independent; this gate was not. A project tagged from an interactive
-  # shell (`LANG=en_US.UTF-8`) could then not be CLEARED from the fleet's own
-  # `claude-session@*` environment, which carries no `LANG` at all: the tag
-  # keeps constraining placement and `ccd project-pool --clear` refuses the very
-  # name that created it. A constraint you can create and cannot remove with the
-  # supported verb is worse than either locale's behaviour on its own.
+  # locale-independent; this gate was not, so a project tagged from a `LANG=en_US.UTF-8`
+  # shell could not be CLEARED from `claude-session@*`'s LANG-less environment: the tag
+  # kept constraining placement, and the verb that clears it refused its own name:
+  # `ccd project-pool --clear`. A constraint you can create and cannot remove is worse than either locale alone.
+  # NO LEADING DASH (path-identity spec §2.4): a dash-leading project mints a flag-spelled id.
   local LC_ALL=C
   [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
   [[ "$1" != .* ]] || return 1
+  [[ "$1" != -* ]] || return 1
 }
 
 # A slug is free only when the registry holds NOTHING for `<project>-<slug>` —
@@ -7002,12 +7002,12 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
       # So what the check buys HERE is the honest usage line; the
       # never-terminating loop is what it buys the day an arm is reordered
       # to shift before it reads its value.
-      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
+      --surface)   [[ $# -ge 2 && $2 != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
-      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
-      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
+      --surface=*) [[ ${1#--surface=} != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"; lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] && (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
                    lc_ga=1; lc_actor="$2"; shift 2 ;;
-      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --actor=*)   (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"; lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
       # REPEATABLE, one field per flag — the shape `cmd_route --set` already
       # has, so a dispatcher composing one argv for both verbs writes the same
       # pairs. Validated below, before anything on disk is touched.
@@ -7061,7 +7061,7 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # caught it, unedited, which is what that gate is for.
   local project="${1:?usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]}" slug="${2:-}"
   _ws_project_valid "$project" \
-    || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot (a dot-leading id aliases ccd's own hidden registry files — see _ws_project_valid)"
+    || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash (a dot-leading id aliases ccd's own hidden registry files, a dash-leading one spells a flag — see _ws_project_valid)"
   local main="$PROJECTS_ROOT/$project"
   [[ -d "$main/.git" ]] || die "not a git repo: $main"
 
@@ -7237,7 +7237,7 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
                         _ws_slug_free "$project" "$slug" || die "slug in use: $slug — in $REG: $(_ws_slug_residue "$project" "$slug")"; \
                           gs=$(_ws_slug_git_state "$project" "$slug") || { [[ $? -eq 1 ]] && die "slug in use: $slug — ${gs#taken }"; die "cannot judge slug $slug for $project — $gs"; }; }
   [[ -z "$slug" ]] && { slug=$(CCD_WS_SLUG="${CCD_WS_SLUG:-}" _ws_slug_new "$project") \
-                        || die "could not find a free slug for $project"; }
+                        || die "could not find a free slug for $project"; }; _reg_id_cap "$project-$slug" || die "$_REG_ID_CAP_WHY — choose a shorter project or slug; nothing was created"
 
   git -C "$main" fetch origin --quiet 2>/dev/null || echo "warn: fetch failed; basing on the last known origin" >&2
   local base
@@ -8112,15 +8112,14 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # WAVE 5 — THE DEC FLAGS, STRIPPED HERE AND NOT ONE LINE EARLIER. Below the
   # `_json_str` probe, because every refusal in this verb is a QUOTED JSON
   # answer at exit 0 and an unquotable detail is a parse error rather than the
-  # refusal it actually was. Above the arity rule, because the rule is exact
-  # and a flag left in argv would refuse a correct call. A THIRD ARRANGEMENT
-  # from Tasks 45-47's two: `cmd_ws_archive` (Task 45) binds no `id` until
-  # AFTER its arity check, so its block could go almost anywhere above that
-  # check; `cmd_ws_restore` (Task 46) binds `id="${2-}"` as its very first
-  # statement, so its block had to precede that binding specifically. This verb
-  # binds neither `id` nor `new` until AFTER the arity check below (`local
-  # id=$2 new=$4`, ccd:4022 pre-wave-5) — so, unlike Task 46's case, there is no
-  # earlier binding this placement could land on the wrong side of.
+  # refusal it actually was. Above the arity rule, because the rule is exact; the
+  # `--session` and `--branch` pairs are consumed WHOLE and kept in the residue
+  # for it, so neither value is scanned as a flag (path-identity spec §2.4). A
+  # THIRD ARRANGEMENT beside two other wave-5 verbs': `cmd_ws_archive` binds no
+  # `id` until AFTER its arity check; `cmd_ws_restore` binds `id="${2-}"` as its
+  # very first statement, so its block had to precede that binding. This verb
+  # binds neither `id` nor `new` until AFTER the arity check below (`local id=$2
+  # new=$4`), so there is no earlier binding this placement could land on.
   #
   # `break`, NOT a refusal in the loop body: a `return` inside the `while` would
   # leave the remaining argv unread, and the answer this verb owes is one
@@ -8134,6 +8133,7 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=() lc_bad=''
   while (( $# )); do
     case "$1" in
+      --session|--branch) if (( $# >= 2 )); then lc_args+=("$1" "$2"); shift 2; else lc_args+=("$1"); shift; fi ;;
       --surface)   if [[ $# -ge 2 ]]; then lc_gs=1; lc_surface="$2"; shift 2
                    else lc_bad='--surface needs a value'; break; fi ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -8200,7 +8200,7 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
     return 0
   fi
   local id=$2 new=$4
-  if [[ ! $id =~ ^[A-Za-z0-9._-]+$ ]]; then
+  if ! _reg_id_ok "$id"; then
     printf '{"refused":"bad-args","detail":%s,"paths":[]}\n' \
       "$(_json_str "bad session id: $id")"
     return 0
@@ -8757,11 +8757,11 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # everywhere — write it verbatim, parse it nowhere.
   # WAVE 5 — TWO FLAGS, NOT THREE, AND THAT IS THE DESIGN. `--reason` on this
   # verb is already the HOLD's reason: mandatory, positional (`$4`), and the
-  # display on every ccrc surface. Stripping it here would leave the residue at
-  # arity 2, refuse every correct call, and make the workspace unholdable; and
-  # accepting a SECOND `--reason` would put two different reasons on one verb
-  # with nothing to say which one a reader is looking at. Spec D2's `dec.reason`
-  # is therefore this same string — one reason, one meaning.
+  # display on every ccrc surface. Its arm consumes it as the positional PAIR,
+  # kept in the residue for the arity rule and never read as a decision reason,
+  # as `--session`'s arm keeps the id (path-identity spec §2.4): neither value
+  # is scanned as a flag, and a SECOND `--reason` still refuses on arity. Spec
+  # D2's `dec.reason` is therefore this same string — one reason, one meaning.
   #
   # Stripped BEFORE the exact-arity rule, `cmd_stop`'s order — and before any
   # positional binding, so a run like `ws-hold --surface pwa --session <id>
@@ -8770,9 +8770,9 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   local lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=()
   while (( $# )); do
     case "$1" in
-      # An explicit arity check, not a bare `shift 2`: ccd runs under
-      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
-      # shifts nothing, and this loop never terminates.
+      --session|--reason) if (( $# >= 2 )); then lc_args+=("$1" "$2"); shift 2; else lc_args+=("$1"); shift; fi ;;
+      # An explicit arity check, not a bare `shift 2`: ccd runs `set -uo pipefail` with NO
+      # `-e`, so a shift past the end of argv fails, shifts nothing, and the loop never ends.
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-hold [--surface <word>] [--actor <text>] --session <id> --reason <text>"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -8809,7 +8809,7 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # Task 49's emit site reads ONE variable on every verb rather than a special
   # case here, and so a future editor cannot "add the missing --reason".
   local lc_reason=$reason
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  _reg_id_ok "$id" || die "bad session id"
   [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
   # An empty reason is an orphan hold by construction — nobody could ever say
   # why it exists, and "visible on every surface, reason says why" is the whole
@@ -8882,10 +8882,10 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
   # WAVE 5 — THE DEC FLAGS ARE STRIPPED BEFORE THE ARITY RULE, and that order
   # is the whole correctness argument, exactly as `cmd_stop` states it in its
   # own header (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`): this verb's
-  # guard is EXACT arity on `--session <id>`, so a flag left in argv is not a
-  # wider call, it is a REFUSED one — `ccd ws-release --session x --surface pwa`
-  # would die in the usage check while the server reads the non-zero as "the
-  # release failed on the box".
+  # guard is EXACT arity on `--session <id>`, and the `--session` pair is
+  # consumed WHOLE and kept in the residue for that rule, so its value is never
+  # scanned as a flag: an id spelled `--actor` stays the id, and `_reg_id_ok`
+  # refuses it rather than binding the surface word (path-identity spec §2.4).
   #
   # THREE `given` FLAGS, not three value tests. `--surface ''` and no
   # `--surface` at all are two different facts: nobody declared a surface
@@ -8897,10 +8897,10 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
   while (( $# )); do
     case "$1" in
-      # An explicit arity check, not a bare `shift 2`: ccd runs under
-      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
-      # shifts nothing, and this loop never terminates (`cmd_stop` carries the
-      # same three lines over the same hazard).
+      --session)   if (( $# >= 2 )); then lc_args+=("$1" "$2"); shift 2; else lc_args+=("$1"); shift; fi ;;
+      # An explicit arity check, not a bare `shift 2`: ccd runs `set -uo pipefail`
+      # with NO `-e`, so a shift past the end of argv fails, shifts nothing, and this
+      # loop never terminates (`cmd_stop` carries the same lines over the same hazard).
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-release [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -8939,7 +8939,7 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
   fi
   [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-release --session <id>"
   local id=$2
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  _reg_id_ok "$id" || die "bad session id"
   [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
   if [[ -e "$REG/$id.hold" ]]; then
     # CHECKED, for `cmd_ws_hold`'s reason with the polarity reversed — fix-wave
@@ -9480,7 +9480,7 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
   # whitespace and slashes, so the joined path can never leave `$POOLS_DIR` and
   # a dot-leading name can never alias this directory's own tmp namespace.
   _ws_project_valid "$project" \
-    || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot (the tag is a file in $POOLS_DIR, whose dot-leading names are its tmp namespace)"
+    || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash (the tag is a file in $POOLS_DIR, whose dot-leading names are its tmp namespace)"
   [[ -d "$REG" ]] || die "no registry at $REG"
 
   local oldstate old="-" new="-"
@@ -9801,10 +9801,10 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # WAVE 5 — THE DEC FLAGS ARE STRIPPED BEFORE THE ARITY RULE, and that order
   # is the whole correctness argument, exactly as `cmd_stop` states it in its
   # own header (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`): this verb's
-  # guard is EXACT arity on `--session <id>`, so a flag left in argv is not a
-  # wider call, it is a REFUSED one — `ccd ws-archive --session x --surface pwa`
-  # would die in the usage check while the server reads the non-zero as "the
-  # archive failed on the box".
+  # guard is EXACT arity on `--session <id>`, and the `--session` pair is
+  # consumed WHOLE and kept in the residue for that rule, so its value is never
+  # scanned as a flag: an id spelled `--actor` stays the id, and `_reg_id_ok`
+  # refuses it rather than binding the surface word (path-identity spec §2.4).
   #
   # THREE `given` FLAGS, not three value tests. `--surface ''` and no
   # `--surface` at all are two different facts: nobody declared a surface
@@ -9816,10 +9816,10 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
   while (( $# )); do
     case "$1" in
-      # An explicit arity check, not a bare `shift 2`: ccd runs under
-      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
-      # shifts nothing, and this loop never terminates (`cmd_stop` carries the
-      # same three lines over the same hazard).
+      --session)   if (( $# >= 2 )); then lc_args+=("$1" "$2"); shift 2; else lc_args+=("$1"); shift; fi ;;
+      # An explicit arity check, not a bare `shift 2`: ccd runs `set -uo pipefail`
+      # with NO `-e`, so a shift past the end of argv fails, shifts nothing, and this
+      # loop never terminates (`cmd_stop` carries the same lines over the same hazard).
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-archive [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -9858,7 +9858,7 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   fi
   [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-archive --session <id>"
   local id=$2
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  _reg_id_ok "$id" || die "bad session id"
   [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
   [[ -n "$(_reg_get "$id" workspace)" ]] \
     || die "not a workspace — refusing to archive a main checkout"
@@ -10288,21 +10288,21 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
   while (( $# )); do
     case "$1" in
+      --session)   if (( $# >= 2 )); then lc_args+=("$1" "$2"); shift 2; else lc_args+=("$1"); shift; fi ;;
       # An explicit arity check, not a bare `shift 2`: ccd runs under
       # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
       # shifts nothing, and this loop never terminates.
-      # FIX ROUND 3 (operator escalation on F1's residual) — these three
-      # ARITY ("needs a value") refusals fire INSIDE the parsing loop, before
-      # the post-loop ladder below has validated anything. `lc_actor`/
-      # `lc_reason` can already hold an UNVALIDATED (blank or over-cap) value
-      # from an EARLIER `--actor`/`--reason` occurrence when a LATER flag's
-      # missing value triggers one of these — measured: `--actor <600B>
-      # --reason` (no value) put the full 600-byte actor on this refusal,
-      # unexamined, the same leak class F1 closed on the post-loop ladder,
-      # one arm over. Each arm below now applies the identical non-blank-
-      # and-within-cap test the post-loop ladder uses before adding
-      # `dec.actor`/`dec.reason` — a field that is not GIVEN is already ''
-      # here (blank, so excluded the same way) and needs no separate case.
+      # FIX ROUND 3 (operator escalation on F1's residual) — the three ARITY
+      # ("needs a value") refusals below fire INSIDE the parsing loop, before the
+      # post-loop ladder has validated anything. `lc_actor`/`lc_reason` can
+      # already hold an UNVALIDATED (blank or over-cap) value from an EARLIER
+      # `--actor`/`--reason` occurrence when a LATER flag's missing value
+      # triggers one — measured: `--actor <600B> --reason` (no value) put the
+      # full 600-byte actor on this refusal, unexamined, the leak class F1 closed
+      # on the post-loop ladder, one arm over. Each arm applies the post-loop
+      # ladder's non-blank-and-within-cap test before adding `dec.actor`/
+      # `dec.reason`; a field not GIVEN is already '' here (blank, excluded the
+      # same way). The `--session` arm refuses nothing: a lone key is arity's.
       --surface)   if [[ $# -lt 2 ]]; then
                      local lc_ra=(dec.surface "$lc_surface")
                      [[ -n "${lc_actor//[[:space:]]/}" ]] && _lc_dec_ok "$lc_actor" && lc_ra+=(dec.actor "$lc_actor")
@@ -10388,7 +10388,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   local id="${2-}"
   [[ $# -eq 2 && $1 == --session ]] \
     || _lc_refuse restore "$id" bad-args "usage: ccd ws-restore --session <id>"
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || _lc_refuse restore "$id" bad-session-id "bad session id"
+  _reg_id_ok "$id" || _lc_refuse restore "$id" bad-session-id "bad session id"
   [[ -f "$REG/$id.uuid" ]]       || _lc_refuse restore "$id" no-such-session "no such session: $id"
 
   # SERIALISED WITH `ws-reap`, ON WS-REAP'S OWN LOCK — final-round destructive
@@ -12885,7 +12885,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
     (( $# == 4 )) && defer=1
   fi
   local id=$2
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] && { [[ $mode != reclaim ]] || _ws_tmproot_id_ok "$id"; } || die "bad session id"
 
   # `_json_str`'s status, checked ONCE and up front — the same probe, for the
   # same reason, as `_ws_archive_manifest` (ccd:8133). Nineteen `_json_str` substitutions
@@ -22760,9 +22760,37 @@ _child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPA
 # once the leaf is PROVEN absent (`_ws_leaf_remove`, or `_ws_reclaim_absent`).
 _ws_tmproot_witness_file() { printf '%s' "$REG/tmproots/${1-}"; }   # id -> the witness's path (a path, not a decision)
 
-# THE ID A WITNESS MAY BE NAMED FOR: the tail's own id shape, never
-# dot-leading — `.`, `..` and the writer's `.<id>.*.tmp` names live there.
-_ws_tmproot_id_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ && "${1-}" != .* ]]; }
+# THE ID A VERB MAY BIND (path-identity spec §2.4): the registry charset, read under LC_ALL=C, and never
+# dash-leading, because a dash-leading word is a flag spelling and every decision flag the server appends begins `--`.
+_reg_id_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ && "${1-}" != -* ]]; }   # word -> 0 iff a --session or positional id may bind it
+
+# THE COMPOSED-ID CAP (path-identity spec §2.6). A NEW id must fit every name ccd, its hook
+# and the server derive from it within the 255-byte NAME_MAX, or a write that names it
+# fails long after the id exists. The widest such name is the hook's claim temp,
+# .<id>.compactcard.<pid>.<nonce>.session-claim.tmp: 81 bytes beyond the id (a 7-digit
+# pid, and the 41-byte compact-<ms>-<pid>-<R>-<R> nonce), which leaves 174. The hook's own
+# gate is lower: its CCRC_ID_MAX (128) makes the peer census skip a longer id, so that session
+# is left out of its peers' counts (its own card turns on its project). So the cap is 128, the lower.
+# ccd-id-cap.test.ts holds the census of every such name, and this number.
+#
+# BYTES under LC_ALL=C, as `_lc_dec_ok` counts its text. Three sites call it, each before any
+# row, worktree, branch or journal line exists, each with its own die line: ws-add (on its slug
+# line, after the per-project add lock, which every later ws-add refusal also leaves), start's
+# creating form (even when the row exists) and enable's two-argument form.
+# `start <id>` and `enable <id>` name a row that already exists and are not capped, so a
+# row planted by hand above the cap stays startable that way.
+_REG_ID_MAX=128
+_REG_ID_CAP_WHY=''   # the cap's one sentence; `_reg_id_cap` sets it whenever it answers 1
+_reg_id_cap() {   # id -> 0 iff its BYTES fit _REG_ID_MAX; 1 sets _REG_ID_CAP_WHY. Prints nothing; never dies.
+  local LC_ALL=C id="${1-}"
+  (( ${#id} <= _REG_ID_MAX )) && return 0
+  _REG_ID_CAP_WHY="id '$id' is ${#id} bytes; a new id may be at most $_REG_ID_MAX, so that every name ccd derives from it fits the 255-byte name limit"
+  return 1
+}
+
+# THE ID A WITNESS MAY BE NAMED FOR (path-identity spec §2.4): an id `_reg_id_ok` accepts, so never
+# dash-leading, and never dot-leading either — `.`, `..` and the writer's `.<id>.*.tmp` names live there.
+_ws_tmproot_id_ok() { _reg_id_ok "${1-}" && [[ "${1-}" != .* ]]; }   # id -> 0 iff a witness, a token verb or its audit may name it
 
 _ws_tmproot_witness_read() {   # id -> 0 parsed (sets _WS_WIT_DEV _WS_WIT_INO _WS_WIT_BTIME _WS_WIT_RUN _WS_WIT_UID _WS_WIT_AT) | 1 absent | 2 unreadable or malformed
   # THREE ANSWERS: a directory or a link planted at the name is not absent,
@@ -24140,11 +24168,12 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     # its own — its id is `<wrapper>-<project>`, and roster ids cannot lead
     # with a dot. Refusing the same value at BOTH creation verbs is what
     # makes the stronger, simpler statement true — no registry row EVER
-    # holds a dot-leading project — so no future reader has to re-derive
+    # holds a dot- or dash-leading project — so no future reader has to re-derive
     # which verb could alias and which could not. See `_ws_project_valid`.
     _ws_project_valid "$project" \
-      || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot"
+      || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash"
     id=$(_id "$wrapper" "$project")
+    _reg_id_cap "$id" || die "$_REG_ID_CAP_WHY — choose a shorter project; nothing was created"
   else
     id="${1:?usage: ccd start <id> | ccd start <wrapper> <project> [workdir]}"
     # The id becomes a path under $REG, so its shape is checked exactly as
@@ -28030,9 +28059,9 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # grant no route builds. §3.4 gives it the same one-argument id form as `start` — it takes the
   # SAME two shapes, so it needs its own usage line rather than borrowing start's, or a mistyped
   # `ccd enable` would answer as a verb the operator did not type.
-  # STRIPPED BEFORE `_id`, and that ordering is the whole point: `_id "$1" "$2"`
-  # on an unstripped argv mints `--cross-pool-<wrapper>` and this verb journals
-  # `enable` against a session id that does not exist.
+  # STRIPPED BEFORE `_id` AND THE WRAPPER CHECK: unstripped, `_id "$1" "$2"` would mint
+  # `--cross-pool-<wrapper>`, and the two-argument check below would refuse a valid
+  # `enable --cross-pool <wrapper> <project>` as the unknown wrapper `--cross-pool`.
   #
   # `--route` IS FORWARDED, NOT PARSED. This loop strips it only so the arity
   # rule below counts POSITIONALS, and hands the pairs back to `cmd_start`
@@ -28055,10 +28084,19 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # a raw argument — so this line names the row cmd_start actually touched,
   # even on the two-argument form once the registry's wrapper has won.
   local id; if [[ $# -ge 2 ]]; then id=$(_id "$1" "$2"); else id="$1"; fi
+  # THE WRAPPER AND THE PROJECT ARE ASKED BEFORE ANYTHING IS JOURNALED (path-identity spec §2.4). `cmd_start`
+  # refuses both, but only after the expiry gate's lock and this verb's `enable` line, which would then name an
+  # id nothing created. Empty input gets `cmd_start`'s usage line first, never a fall-through (`-demo` would pass the
+  # cap and open a reap lock). The wrapper check is `cmd_start`'s own, words and all; `_ws_project_valid` is the creation sites' rule.
+  if [[ $# -ge 2 ]]; then [[ -n "$1" && -n "$2" ]] || die "usage: ccd start <id> | ccd start <wrapper> <project> [workdir]"
+    _is_valid_wrapper "$1" || die "unknown wrapper '$1' (valid: ${CCRC_ACCOUNTS[*]})"
+    _ws_project_valid "$2" || die "invalid project '$2' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash"
+  fi
   # TWO EVENTS, NOT ONE. `cmd_start` runs in THIS process and writes its own
   # `start` line; this one records that boot-persistence was asked for. No
   # shared tx: tx is for one intent/outcome PAIR, never for a call tree, and
   # folding these would report one act where two happened.
+  if (( $# >= 2 )); then _reg_id_cap "$id" || die "$_REG_ID_CAP_WHY — choose a shorter project; nothing was created"; fi
   _ws_expire_refuse_return "$id" enable   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
   _lc_done enable "$id" ""
   cmd_start ${cross:+--cross-pool} "${route[@]}" "$@" || return $?
@@ -28071,6 +28109,14 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   # flag left in argv `ccd stop <id> --surface pwa` reads as a two-argument
   # stop and `_id` mints `<id>---surface` — aiming the stop at a session that
   # does not exist while the real one keeps running.
+  #
+  # THE FLAG MAY STAND ON EITHER SIDE OF THE ID, SO NO POSITIONAL MAY SPELL A FLAG
+  # (path-identity spec §2.4). With the pair after the id, an id of `--surface`
+  # is the key itself: `ccd stop --surface --surface pwa` would take `--surface`
+  # as the word and stop `pwa`. So a surface value never begins with `-`, no
+  # token left after the strip does either, and the composed id passes
+  # `_reg_id_ok` before anything is journaled. With the pair first,
+  # `ccd stop --surface pwa --surface` is the arm's own arity refusal.
   #
   # The surface arrives as an argv flag because nothing else can carry it: the
   # exec seam is `(cmd, args) => Promise<ExecResult>` with no env, and the
@@ -28086,14 +28132,19 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
     case "$1" in
       # An explicit arity check, not a bare `shift 2`: ccd runs under
       # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
-      # shifts nothing, and this loop never terminates.
-      --surface)   [[ $# -ge 2 ]] || die "usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>"
+      # shifts nothing, and this loop never terminates. A value that begins with
+      # `-`, in either spelling, is refused with the same usage line: it is a flag
+      # spelling (an id the server put first), never a surface word.
+      --surface)   [[ $# -ge 2 && $2 != -* ]] || die "usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>"
                    surface="$2"; declared="$2"; shift 2 ;;
-      --surface=*) surface="${1#--surface=}"; declared="$surface"; shift ;;
+      --surface=*) [[ ${1#--surface=} != -* ]] || die "usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>"
+                   surface="${1#--surface=}"; declared="$surface"; shift ;;
       *)           args+=("$1"); shift ;;
     esac
   done
   set -- "${args[@]}"
+  # Each token left is an id, a wrapper or a project, and none of them may begin with `-`.
+  local a; for a in "$@"; do [[ $a != -* ]] || die "bad session id: $a"; done
 
   # The two-argument form is the legacy one and recomputes `<wrapper>-<project>`.
   # That only works for ids that ENCODE a wrapper; a workspace id is
@@ -28107,6 +28158,9 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   else
     id="${1:?usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>}"
   fi
+  # The id AS COMPOSED, the one name every path, unit and pane below is built from: `_id`
+  # joins two words, so this is the check that sees the whole name, its charset included.
+  _reg_id_ok "$id" || die "bad session id: $id"
   # Through the choke point, never around it: the inlined `systemctl --user
   # disable --now` this replaces was the one stop path in the file that left
   # no record, which is how a deliberate stop became indistinguishable from a
@@ -28148,22 +28202,22 @@ _hib_wake_clear() {   # id — a start or an ensure ends a hibernation: `.hibern
 }
 
 cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id> — stop a long-idle session cleanly; `ccd ensure` wakes it.
-  # ONE POSITIONAL, AND THAT IS `cmd_ensure`'s SECURITY BOUNDARY: the agent
-  # grants the bare `['hibernate']` prefix, after which tokens are
-  # unconstrained, so the arity rule below is the only bound on what a caller
-  # can put here. The dec flags are stripped BEFORE it, exactly as
-  # `cmd_ws_archive`'s are (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`),
-  # and land on the `hibernate` row (`hibernate-verb-dec-and-idempotence` (D-5424)).
+  # ONE POSITIONAL, AND THAT IS `cmd_ensure`'s SECURITY BOUNDARY: the agent grants the bare `['hibernate']` prefix, after
+  # which tokens are unconstrained, so the arity rule below is the only bound on what a caller can put here. The dec flags
+  # are stripped BEFORE it, as `cmd_stop`'s are (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`), and land on the
+  # `hibernate` row (`hibernate-verb-dec-and-idempotence` (D-5424)). NO VALUE AND NO POSITIONAL MAY BEGIN WITH `-`
+  # (path-identity spec §2.4): the server composes the id FIRST, so an id of `--actor` would take `--surface` as its value
+  # and leave the surface word as the id. A dash-leading value is refused with the usage line; the id passes `_reg_id_ok`.
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
   while (( $# )); do
     case "$1" in
-      --surface)   [[ $# -ge 2 ]] || die "$usage"; lc_gs=1; lc_surface="$2"; shift 2 ;;
-      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
-      --actor)     [[ $# -ge 2 ]] || die "$usage"; lc_ga=1; lc_actor="$2"; shift 2 ;;
-      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
-      --reason)    [[ $# -ge 2 ]] || die "$usage"; lc_gr=1; lc_reason="$2"; shift 2 ;;
-      --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      --surface)   [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_gs=1; lc_surface="$2"; shift 2 ;;
+      --surface=*) [[ ${1#--surface=} != -* ]] || die "$usage"; lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_ga=1; lc_actor="$2"; shift 2 ;;
+      --actor=*)   [[ ${1#--actor=} != -* ]] || die "$usage"; lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --reason)    [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_gr=1; lc_reason="$2"; shift 2 ;;
+      --reason=*)  [[ ${1#--reason=} != -* ]] || die "$usage"; lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
       *)           lc_args+=("$1"); shift ;;
     esac
   done
@@ -28179,7 +28233,7 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
   fi
   [[ $# -eq 1 ]] || die "$usage"
   local id="$1"
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  _reg_id_ok "$id" || die "bad session id"
   [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
   # Idempotent on a row already asleep: no pane, the marker standing (D-5424: a sweep may retry a lost answer).
   if [[ -e "$REG/$id.hibernated" && "$(_session_verdict "$id")" == gone ]]; then echo "already hibernated $id"; return 0; fi
@@ -33320,6 +33374,10 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 defer=0 args=()
   while (( $# )); do
     case "$1" in
+      # THE IDENTITY PAIRS ARE TAKEN WHOLE (path-identity spec §2.4). A key and its value go to `args` together, so a
+      # value is never scanned again as a flag: an id of `--actor` no longer eats `--surface` and leaves the surface
+      # word to bind as the id. A key with no value goes alone, and the exact-arity rule below refuses it, as it did.
+      --expect|--child-of|--session) if (( $# >= 2 )); then args+=("$1" "$2"); shift 2; else args+=("$1"); shift; fi ;;
       --defer-expired) defer=1; shift ;;
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
@@ -33348,13 +33406,15 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
   local token=$2 childof=$4 id=$6
   # THE SESSION ID IS VALIDATED FIRST (spec §5.9). The two checks after it
   # journal their refusal against `$id`, so `$id` must already be a registry-safe
-  # charset (no `/`). Seven dies stay unjournaled, each for its reason:
+  # charset (no `/`) that spells no flag: `_reg_id_ok` refuses a leading `-`
+  # (path-identity spec §2.4), so an id of `--expect` never reaches the reap lock.
+  # Seven dies stay unjournaled, each for its reason:
   #   - the usage die and the four --actor/--reason checks above, because no
   #     id is bound yet;
   #   - a malformed session id, because it is no id to journal against;
   #   - the python3 probe below, which cannot journal at all, because the
   #     journal's encoder (`_lc_json`) is python3.
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]]         || die "bad session id"
+  _ws_tmproot_id_ok "$id" || die "bad session id"
   [[ $token =~ ^[0-9a-f]{64}$ ]]         || _lc_refuse reclaim "$id" token-malformed "bad token"
   # wave 1's grammar, ASCII under LC_ALL=C
   _child_runid_valid "$childof"          || _lc_refuse reclaim "$id" run-id-malformed "bad run id"
@@ -34154,6 +34214,9 @@ cmd_ws_expire() {   # ccd ws-expire --expect <token> --session <id> [--surface <
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 args=()
   while (( $# )); do
     case "$1" in
+      # THE IDENTITY PAIRS ARE TAKEN WHOLE, as in ws-reclaim's loop (path-identity spec §2.4): a key and its value go
+      # to `args` together, and a key with no value goes alone, for the exact-arity rule below to refuse.
+      --expect|--session) if (( $# >= 2 )); then args+=("$1" "$2"); shift 2; else args+=("$1"); shift; fi ;;
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -34181,7 +34244,8 @@ cmd_ws_expire() {   # ccd ws-expire --expect <token> --session <id> [--surface <
     || die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
   local token=$2 id=$4
   [[ $token =~ ^[0-9a-f]{64}$ ]]         || die "bad token"
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]]         || die "bad session id"
+  # NO FLAG SPELLING AND NO DOT-LEADING NAME BINDS: `_ws_tmproot_id_ok` refuses both (path-identity spec §2.4, §2.6), before the reap lock.
+  _ws_tmproot_id_ok "$id" || die "bad session id"
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the expiry record safely"
   # THE FLAVOUR, for this call and everything it reaches (THE FLAVOUR, RECLAIM region).
@@ -34317,7 +34381,7 @@ _ws_expire_audit() {   # id -> `ccd ws-audit --session <id> --expire`, whole: th
 
 _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_reclaim_contained` — call that
   local id="$1" exists=false aliveflag=false workdir reaping sens="[" first=1 s
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  _ws_tmproot_id_ok "$id" || die "bad session id"
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the audit record safely"
   _alive "$id" && aliveflag=true
@@ -35097,8 +35161,11 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # `not-witnessed` and takes NO lock: the audit never makes `.reap-<name>.lock`
 # for a name ccd never handed a temp root.
 #
-# THE LOCK. Inside the population the audit takes `$REG/.reap-<id>.lock`,
-# `-n` — the lock every verb that removes anything of the id takes. It writes
+# THE LOCK. Inside the population, and only once `_ws_collect_prelock`'s
+# advisory parse lets it (path-identity spec §2.5: a reap lock is never
+# unlinked, so that parse decides whether one is ever made), the audit takes
+# `$REG/.reap-<id>.lock`, `-n` — the lock every verb that removes anything of
+# the id takes. It writes
 # nothing that lock serialises; it holds it so the registry listing control
 # below has a name it KNOWS stands, its own lock file. Held by another process:
 # the retryable `in-progress`, nothing journaled.
@@ -35151,10 +35218,10 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # Then a slot of the id that no record names is the operator's
 # (`quarantine-kept`, and the witness stays beside it), and a quarantine that
 # is a link or not a directory, or whose slots cannot be listed, is unmeasured
-# `quarantine`. Past those it is collectable at once with a token of its own,
-# and the verb then drops the witness and nothing else. So a FRESH collection
-# never orphans a slot in silence (spec §5.10): the resume does not ask,
-# because a record names its own slot there, and the reclaim tail's witness
+# `quarantine`. Past those, and unless the cleanup pause stands, it is collectable
+# with a token of its own, and the verb then drops the witness and nothing else.
+# So a FRESH collection never orphans a slot in silence (spec §5.10): the resume
+# does not ask, because a record names its own slot there, and the reclaim tail's witness
 # drop is not the collector's (`tail-drop-ignores-a-recordless-slot`).
 #
 # THE DOCUMENT mirrors `ws-audit --expire`'s, with a `collect` object.
@@ -35172,15 +35239,15 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # reads anything, and so does a box whose `mv` has no `--no-copy` (`mv`): the
 # verb's move is one `renameat2(RENAME_NOREPLACE)` or nothing.
 #
-# BOUNDED, AND NOT ALWAYS INSIDE THE RUNNER'S ROW. The fresh rungs can spend,
-# in sequence, the idle walk's `WS_COLLECT_IDLE_SCAN_S` (30 s), the in-use
-# probe's `WS_PATH_USERS_SCAN_S` (10 s) and the checkout scan's
-# `REAP_SCAN_SECONDS` (30 s), and each `_plat_timeout` adds its TERM-to-KILL
-# grace (`CCD_TIMEOUT_KILL_AFTER`, 3 s by default, at most 8 s): about 79 s
-# by default and 94 s at the widest grace, before the row pass, which no bound
-# of its own caps — against ws-audit's 90 s runner row. A runner that kills the
-# audit gets no document, which the server reads as a failed audit and
-# retries: it fails closed. A budget keyed on the mode is wave 9's.
+# BOUNDED, AND INSIDE THE RUNNER'S ROW BUT FOR THE ROW PASS. The fresh rungs can
+# spend, in sequence, the idle walk's `WS_COLLECT_IDLE_SCAN_S` (30 s), the
+# in-use probe's `WS_PATH_USERS_SCAN_S` (10 s) and the checkout scan's
+# `REAP_SCAN_SECONDS` (30 s). A probe that reaches its bound ends the audit, so
+# ONE `_plat_timeout` TERM-to-KILL grace is paid (`CCD_TIMEOUT_KILL_AFTER`, 3 s
+# by default, at most 8 s): about 73 s, or 78 s at the widest grace, against
+# ws-audit's 90 s runner row (`collect-audit-budget.test.ts` holds the sum). The
+# row pass has no bound of its own; a runner that kills the audit there gets no
+# document, which the server reads as a failed audit and retries: it fails closed.
 _WS_COLLECT_PROBE=''; _WS_COLLECT_REG_WHY=''; _WS_COLLECT_PHASE=''; _WS_COLLECT_LEAF=''
 _WS_COLLECT_RECORD=''; _WS_COLLECT_SLOT=''; _WS_COLLECT_NEWEST_NS=''; _WS_COLLECT_ENTRIES=''
 _WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''
@@ -35223,6 +35290,17 @@ _ws_collect_paused() {   # -> 0 when reclamation is not paused; rc 1 with `pause
     || { _ws_collect_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused) — nothing is collected while it stands"; return 1; }
 }
 
+# THE DASH-FREE SENTENCE, ONE SOURCE (path-identity spec §2.5): an id with no
+# `-` names no project and slug, so `_ws_slug_free` cannot be asked of it —
+# split, `nodash` would be asked as `nodash-nodash` and read free. Both
+# `_ws_collect_registered`, under the lock, and `_ws_collect_prelock`, before
+# it, ask it here, so the detail they answer is one string.
+_ws_collect_slug_askable() {   # id -> 0 when id names a project and a slug (it holds a `-`); 1 with _WS_COLLECT_REG_WHY
+  local id="${1-}"
+  [[ "$id" == *-* ]] \
+    || { _WS_COLLECT_REG_WHY="$id names no project and slug, so whether its slug is free cannot be asked"; return 1; }
+}
+
 _ws_collect_registered() {   # id -> 0 when no registry row stands for id; 1 when one does; 2 when that could not be
   #                               told — each with _WS_COLLECT_REG_WHY. The CALLER HOLDS `$REG/.reap-<id>.lock`.
   local id="$1" f rc
@@ -35242,8 +35320,7 @@ _ws_collect_registered() {   # id -> 0 when no registry row stands for id; 1 whe
   ctl=("$REG/.reap-$id".lo[c]k)
   [[ ${#ctl[@]} -eq 1 && "${ctl[0]}" == "$REG/.reap-$id.lock" ]] \
     || { _WS_COLLECT_REG_WHY="a wildcard listing of $REG does not show the lock this process holds there, so $REG cannot be listed and no other row of $id could be seen"; return 2; }
-  [[ "$id" == *-* ]] \
-    || { _WS_COLLECT_REG_WHY="$id names no project and slug, so whether its slug is free cannot be asked"; return 2; }
+  _ws_collect_slug_askable "$id" || return 2
   _ws_slug_free "${id%-*}" "${id##*-}" && return 0
   _WS_COLLECT_REG_WHY="the registry still holds $(_ws_slug_residue "${id%-*}" "${id##*-}") — a row of $id, or what one left behind"
   return 1
@@ -35321,9 +35398,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   _ws_collect_registered "$id"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
   (( rc != 1 )) || { _ws_collect_refuse registered "$_WS_COLLECT_REG_WHY"; return 1; }
-  _ws_tmproot_witness_read "$id"; rc=$?
-  (( rc != 1 )) || { _ws_collect_refuse not-witnessed "no witness stands for $id at $(_ws_tmproot_witness_file "$id") and no quarantine record names it — there is nothing to collect"; return 1; }
-  (( rc != 2 )) || { _ws_collect_refuse witness-mismatch "the witness $(_ws_tmproot_witness_file "$id") cannot be read as ccd writes it — a temp root nothing vouches for is offered to the operator, never taken"; return 1; }
+  _ws_collect_witness_judge "$id" || return 1
   [[ "$_WS_WIT_BTIME" != - ]] \
     || { _ws_collect_refuse witness-mismatch "the witness of $id records no birth time, so device and inode alone would vouch for $leaf — it is offered to the operator, never taken"; return 1; }
   _ws_reclaim_absent "$leaf"; rc=$?
@@ -35460,15 +35535,10 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   # fact on every audit.
   local id="$1" rec name slot sleaf orig="$HOME/.cc-tmp/$1" rc sstate=absent ostate=other phase ents
   shift
-  (( $# == 1 )) \
-    || { _ws_collect_refuse quarantine-kept "$# quarantine records name $id — a resume completes one record and never chooses between several; they are kept for the operator"; return 1; }
-  rec="$1"; name="${rec##*/}"; _WS_COLLECT_RECORD="$rec"
-  _ws_collect_record_read "$rec"; rc=$?
-  (( rc != 1 )) || { _ws_collect_unmeasured records "the quarantine record $rec vanished while it was read"; return 1; }
-  (( rc != 3 )) || { _ws_collect_unmeasured quarantine "${_WS_QPATH_WHY:-the physical ~/.cc-tmp could not be resolved} — the slot of $rec was never derived, or whether it stands was never measured; the record stays as it is, and the next pass asks again"; return 1; }
-  (( rc == 0 )) || { _ws_collect_refuse quarantine-kept "the quarantine record $rec cannot be read as ccd writes it — it, and whatever it names, are kept for the operator"; return 1; }
-  [[ "${_WS_QREC_ID-}" == "$id" ]] \
-    || { _ws_collect_refuse quarantine-kept "the quarantine record $rec names ${_WS_QREC_ID-nothing}, not $id — it is kept for the operator"; return 1; }
+  # ONE RECORD, READ AS CCD WRITES IT AND NAMING THIS ID: `_ws_collect_records_judge`, the judgement the pre-lock
+  # pass shares (path-identity spec §2.5), so a junk or foreign record is answered in one set of words.
+  _ws_collect_records_judge "$id" "$@" || return 1
+  rec="$_WS_COLLECT_RECORD"; name="${rec##*/}"
   [[ "${_WS_QREC_BTIME-}" =~ ^[1-9][0-9]*$ ]] \
     || { _ws_collect_refuse quarantine-kept "the quarantine record $rec records no birth time, so device and inode alone would vouch for what it names — it is kept for the operator"; return 1; }
   # THE QUARANTINE, asked as the fresh arm asks it (`_ws_collect_qcheck`,
@@ -35561,6 +35631,107 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   REAP_VERDICT=collectable
 }
 
+_ws_collect_witness_judge() {   # id -> 0 the witness parsed (_WS_WIT_* set); 1 with `not-witnessed` (none stands)
+  #                                  or `witness-mismatch` (it is not as ccd writes it) set. Reads only; takes no lock
+  # THE FRESH RUNGS' WITNESS READ, moved here whole: `_ws_collect_eval` calls
+  # it in their place, and `_ws_collect_prelock` calls it before any lock, so a
+  # junk witness is answered in one set of words (path-identity spec §2.5). The
+  # birth-time rung stays in the fresh rungs, under the lock.
+  local id="$1" rc
+  _ws_tmproot_witness_read "$id"; rc=$?
+  (( rc != 1 )) || { _ws_collect_refuse not-witnessed "no witness stands for $id at $(_ws_tmproot_witness_file "$id") and no quarantine record names it — there is nothing to collect"; return 1; }
+  (( rc != 2 )) || { _ws_collect_refuse witness-mismatch "the witness $(_ws_tmproot_witness_file "$id") cannot be read as ccd writes it — a temp root nothing vouches for is offered to the operator, never taken"; return 1; }
+}
+
+_ws_collect_records_judge() {   # id record... -> 0 the ONE record parsed and names id (_WS_COLLECT_RECORD and
+  #                                  _WS_QREC_* set); 1 with the answer set: `quarantine-kept` (two or more records, a
+  #                                  body not as ccd writes it, or one naming another id), unmeasured `records` (it
+  #                                  vanished) or unmeasured `quarantine` (its slot cannot be derived). Reads only
+  # THE RESUME'S FIRST RUNGS, moved here whole: `_ws_collect_resume_eval`
+  # calls it in their place, and `_ws_collect_prelock` calls it before any
+  # lock, so a junk, foreign, vanished or underivable record is answered in one
+  # set of words (path-identity spec §2.5). The birth-time rung stays in the
+  # resume, under the lock. `name` is set as the resume set it; the resume
+  # derives its own from `_WS_COLLECT_RECORD`.
+  local id="$1" rec name rc
+  shift
+  (( $# == 1 )) \
+    || { _ws_collect_refuse quarantine-kept "$# quarantine records name $id — a resume completes one record and never chooses between several; they are kept for the operator"; return 1; }
+  rec="$1"; name="${rec##*/}"; _WS_COLLECT_RECORD="$rec"
+  _ws_collect_record_read "$rec"; rc=$?
+  (( rc != 1 )) || { _ws_collect_unmeasured records "the quarantine record $rec vanished while it was read"; return 1; }
+  (( rc != 3 )) || { _ws_collect_unmeasured quarantine "${_WS_QPATH_WHY:-the physical ~/.cc-tmp could not be resolved} — the slot of $rec was never derived, or whether it stands was never measured; the record stays as it is, and the next pass asks again"; return 1; }
+  (( rc == 0 )) || { _ws_collect_refuse quarantine-kept "the quarantine record $rec cannot be read as ccd writes it — it, and whatever it names, are kept for the operator"; return 1; }
+  [[ "${_WS_QREC_ID-}" == "$id" ]] \
+    || { _ws_collect_refuse quarantine-kept "the quarantine record $rec names ${_WS_QREC_ID-nothing}, not $id — it is kept for the operator"; return 1; }
+}
+
+_ws_collect_prelock() {   # id -> 0 the reap lock may be opened; 1 an answer is set (REAP_VERDICT and REAP_DETAIL;
+  #                            _WS_COLLECT_PROBE when unmeasured; _WS_COLLECT_RECORDS once the records were listed)
+  #                            and no lock may be opened. ADVISORY: it grants nothing, prints nothing, and writes no
+  #                            registry, lock, journal or quarantine state (it makes and removes two scratch files)
+  # A REAP LOCK IS NEVER UNLINKED, so the first open of `$REG/.reap-<id>.lock`
+  # makes a name for good (path-identity spec §2.5). The collect audit
+  # (`_ws_collect_audit_contained`) and `cmd_ws_collect` ask this first, so a
+  # junk witness, a junk or foreign record and an id with no dash make no lock.
+  # It answers only in the words the locked evaluation gives the same disk:
+  # `_ws_collect_slug_askable`, `_ws_collect_records_judge` and
+  # `_ws_collect_witness_judge` are those rungs, shared. The locked evaluation
+  # (`_ws_collect_fork`) lists, reads and parses everything again before any
+  # act, so a race between this pass and the lock can only refuse, or be
+  # judged again under the lock. In order:
+  #   an id with no dash names no slug to ask: unmeasured `registry`;
+  #   records that cannot be listed: unmeasured `records`;
+  #   a record that parses and names the id opens the lock — the resume judges
+  #     a second record, a birth time and the phase under it;
+  #   records stand, but none both parses and names the id: the resume's own
+  #     judgement answers here, the witness read for the document as the
+  #     fork's resume arm reads it;
+  #   no record: a witness that parses opens the lock, with a birth time or
+  #     none (one with none is `witness-mismatch` under the lock, as before);
+  #   a witness that does not parse: THE REGISTRY PEEK. Under the lock the
+  #     fresh rungs ask `registered` before the witness, and a row's retryable,
+  #     unjournaled `registered` must not become a terminal, journaled
+  #     `witness-mismatch` here. So the lock opens unless `$REG/<id>.child` and
+  #     `$REG/<id>.uuid` are PROVEN absent (`_ws_reclaim_absent`), a wildcard
+  #     of `$REG` lists exactly `$REG/tmproots`, where the witness was just
+  #     read (a readable bit is no such proof: an opendir can still fail, and
+  #     a glob that fails comes back empty), and `_ws_slug_free` answers free
+  #     over every field and dot family `_ws_collect_registered` reads. A lock
+  #     opened there is a row's;
+  #   otherwise the witness judgement answers: `not-witnessed` or
+  #     `witness-mismatch`.
+  # A judgement that reads sound on its second look met a writer between the
+  # two reads: unmeasured, and the next pass asks again.
+  local id="$1" out r rc
+  local -a recs=() ctl=()
+  _ws_collect_reset
+  _ws_collect_slug_askable "$id" || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
+  out=$(_ws_collect_records_of "$id"); rc=$?
+  (( rc == 0 )) || { _ws_collect_unmeasured records "the quarantine records of $id could not be listed"; return 1; }
+  [[ -z "$out" ]] || mapfile -t recs <<< "$out"
+  _WS_COLLECT_RECORDS=(${recs[@]+"${recs[@]}"})
+  if (( ${#recs[@]} )); then
+    for r in "${recs[@]}"; do
+      _ws_collect_record_read "$r" && [[ "${_WS_QREC_ID-}" == "$id" ]] && return 0
+    done
+    _ws_tmproot_witness_read "$id" || :   # the document reports it, as the fork's resume arm reads it
+    _ws_collect_records_judge "$id" "${recs[@]}" || return 1
+    _ws_collect_unmeasured records "the quarantine record of $id read as ccd writes it only on a second look, so it changed while it was read — the next pass asks again"
+    return 1
+  fi
+  _ws_tmproot_witness_read "$id" && return 0
+  # THE LISTING CONTROL, as `_ws_collect_registered` keeps one: the one name a
+  # wildcard of `$REG` must find is the directory the witness was read from.
+  ctl=("$REG"/tmproot[s])
+  _ws_reclaim_absent "$REG/$id.child" && _ws_reclaim_absent "$REG/$id.uuid" \
+    && [[ ${#ctl[@]} -eq 1 && "${ctl[0]}" == "$REG/tmproots" ]] \
+    && _ws_slug_free "${id%-*}" "${id##*-}" || return 0
+  _ws_collect_witness_judge "$id" || return 1
+  _ws_collect_unmeasured witness "the witness of $id read as ccd writes it only on a second look, so it changed while it was read — the next pass asks again"
+  return 1
+}
+
 _ws_collect_fork() {   # id -> THE ONE EVALUATION `ws-audit --collect` and `ws-collect` share: a standing record
   #                        RESUMES, else the fresh rungs. The CALLER HOLDS `$REG/.reap-<id>.lock`. Reads only.
   local id="$1" out rc
@@ -35622,6 +35793,11 @@ _ws_collect_audit_contained() {   # `_ws_collect_audit`'s body, run under `_ws_r
   command -v flock >/dev/null 2>&1 || {
     _ws_collect_unmeasured flock "flock (util-linux) is unavailable, so the reap lock of $id cannot be taken"
     _ws_collect_audit_doc "$id"; return; }
+  # THE ADVISORY PARSE (path-identity spec §2.5): a reap lock is never
+  # unlinked, so the audit opens it only for an id a parsed witness or record
+  # vouches for, or a registry row may own. It grants nothing: the fork below
+  # judges all of it again under the lock.
+  _ws_collect_prelock "$id" || { _ws_collect_audit_doc "$id"; return; }
   exec {lfd}>>"$REG/.reap-$id.lock" || {
     _ws_collect_unmeasured lock "cannot open the reap lock at $REG/.reap-$id.lock"
     _ws_collect_audit_doc "$id"; return; }
@@ -36346,6 +36522,9 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 args=()
   while (( $# )); do
     case "$1" in
+      # THE IDENTITY PAIRS ARE TAKEN WHOLE, as in ws-reclaim's loop (path-identity spec §2.4): a key and its value go
+      # to `args` together, and a key with no value goes alone, for the exact-arity rule below to refuse.
+      --expect|--session) if (( $# >= 2 )); then args+=("$1" "$2"); shift 2; else args+=("$1"); shift; fi ;;
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-collect --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -36373,7 +36552,8 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
     || die "usage: ccd ws-collect --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
   local token=$2 id=$4
   [[ $token =~ ^[0-9a-f]{64}$ ]]                            || die "bad token"
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] && _ws_tmproot_id_ok "$id" || die "bad session id"
+  # NO FLAG SPELLING BINDS (`_reg_id_ok`, path-identity spec §2.4), and no dot-leading name (`_ws_tmproot_id_ok`).
+  _ws_tmproot_id_ok "$id" || die "bad session id"
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the collection record safely"
   # THE FLAVOUR `_ws_reclaim_fail` journals under (act `collect`, verb
@@ -36416,6 +36596,19 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
     _ws_reclaim_fail "$id" "" probe-unmeasured \
       "$(_ws_leaf_why_line "no lock was taken, and nothing was moved or removed: no witness stands for $id ($wf) and its quarantine records could not be listed (${_WS_QRECS_WHY:-the listing failed}), so whether the collector may lock $id was never asked")"
     return 1
+  fi
+  # THE ADVISORY PARSE (path-identity spec §2.5): a reap lock is never
+  # unlinked, so it is opened only for an id a parsed witness or record vouches
+  # for, or a registry row may own. `_ws_collect_prelock` grants nothing:
+  # `_ws_collect_locked` judges all of it again under the lock. Its answer
+  # comes BEFORE the pause, which is read under the lock: nothing moves either way.
+  if ! _ws_collect_prelock "$id"; then
+    if [[ "${REAP_VERDICT-}" == unmeasured ]]; then
+      _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "${REAP_DETAIL-}; no lock was taken, and nothing was moved or removed")"
+      return 1
+    fi
+    _ws_collect_refused "$id" "" "${REAP_VERDICT-}" "no lock was taken: ${REAP_DETAIL-}" "$lc_surface" "$lc_actor" "$lc_reason"
+    return 0
   fi
   # THE SHARED LOCK: `$REG/.reap-<id>.lock`, the one ws-reap, ws-reclaim,
   # ws-expire and ws-restore take, so none of them runs on this id at once.
@@ -36499,9 +36692,9 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
 # quarantine record under `$REG/tmpquarantine/` — one ccd inode, one token
 # (spec 2026-09-22 §5.10, §8's wave 7). The server composes the destructive verb
 # ONLY behind `capSupported(state, 'collect-v1')`, which refuses on no evidence;
-# the collector's lane composes it, and this wave ships it inert. Both protected
-# shapes cross the direct-entry boundary at the top of this file and in
-# `ccd/ccd-entry.py`.
+# the collector's lane composes it, and acts only once the operator arms the lane
+# (the fleet box's legacy marker, or the Settings switch where it has shipped). Both protected
+# shapes cross the direct-entry boundary at the top of this file and in `ccd/ccd-entry.py`.
 # ── end temp-root collection ─────────────────────────────────────────────────── COLLECT-END ──
 
 # ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──

@@ -96,9 +96,10 @@ run row's own `wave`.
 ## 2 — Dispatch a wave
 
 `POST /api/runs/:id/dispatch`
-`{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…"}}`
+`{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…"},"slug":"<child name>"}`
 → `{"ok":true,"id":<run id>,"sessionId":…,"resumed":…,"clearedAt":…,"briefQueued":…}`
 with the run now `dispatched`, or a refusal:
+
 
 | refused | what it means | what you do |
 |---|---|---|
@@ -183,6 +184,23 @@ arrives within the wave's ordinary window, read the session's own screen before 
 provenance of the workspace survives the conversation. Every dispatch also writes its preflight
 there as `skill-preflight:<skillState>` — on all three answers, so a trail with no such line means
 an older build, never a healthy home.
+
+**`slug` — the child's name, chosen at birth.** `"slug"` is an optional
+WORKSPACE slug — not the programme slug of §1, which has its own grammar — for a
+fresh spawn only. It rides to `ws-add`, so the worktree, its `ws/<slug>` branch and
+the session id `<project>-<slug>` carry it from the first second; use it when the
+work keys on the workspace name (a ticket id, say). Nothing renames a child later:
+the path and the session id never move, and the branch-only `ws-rename` refuses a
+held workspace. It follows ccd's own slug grammar (`_ws_slug_valid`); a malformed one
+answers `error:'bad-request'` (400) with a `detail` reading `slug: must match …`, and
+a slug on a run that resumes its bound session answers 400 with `slug: this run
+resumes …` — drop it there, it names nothing. A named spawn binds ONLY
+`<project>-<slug>`: any other new workspace is never adopted in its place. A slug
+already in use — or one whose id outruns ccd's length cap with a long project
+name — fails the spawn with a 502 whose `stderr` carries ccd's own words: choose
+another name, never retry the same one. **Check the answer's `sessionId` equals
+`<project>-<slug>`**; an older server ignores the field and mints a random name, and
+that mismatch is a stop-and-report, not a retry.
 
 **`items` — the wave's declared ledger.** `"items"` is the machine-readable
 half of the wave plan whose other half is the brief: one title per unit of

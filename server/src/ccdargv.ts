@@ -429,9 +429,18 @@ export const CCD_ARGV = {
    * argv token for token. A NUMBER, not a string: the run id is a SQLite rowid
    * everywhere in the coordination store, and stringifying it here, once, means
    * no caller can hand ccd a padded or signed spelling its grammar would refuse.
+   *
+   * `slug`, the name the coordinator gives the child: the ONE positional this
+   * builder adds, straight after the project, because `cmd_ws_add` binds
+   * `<project> [slug]` once its strip loop has removed every flag wherever it
+   * sits — and a slug cannot start with `-` (`WORKSPACE_SLUG_RE`, ccd's
+   * `_ws_slug_valid`), so it can never be read as one. `null`, the default,
+   * composes the previous argv token for token.
    */
-  wsAddWorker: (p: string, dec: ActorFlags | null, route: RouteFields | null = null, child: number | null = null) =>
-                 argv(['ws-add', '--no-rc', ...childFlags(child), ...routeFlags(route), p, ...decFlags(dec)]),
+  wsAddWorker: (p: string, dec: ActorFlags | null, route: RouteFields | null = null, child: number | null = null,
+                slug: string | null = null) =>
+                 argv(['ws-add', '--no-rc', ...childFlags(child), ...routeFlags(route), p,
+                   ...(slug === null ? [] : [slug]), ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>

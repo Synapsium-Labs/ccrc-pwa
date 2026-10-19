@@ -19,6 +19,8 @@ import {
   BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, useNow,
 } from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
+import { navigate } from '../lib/router';
+import { sessionDocsHref } from '../docs/docsLinks';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { sessionLabel } from '../fleet/sessionLabel';
 // main's TypedLabel import is dropped, not lost: the component lives in
@@ -92,11 +94,12 @@ export interface SessionHeaderProps {
 /** One row of the session menu: a label, and — for the three that answer a
  *  slash command — the command itself, dimmed, read by nobody.
  *
- *  SIX CALL SITES in this file and nowhere else, which is why it lives here
+ *  SEVEN CALL SITES in this file and nowhere else, which is why it lives here
  *  rather than in `@ccrc/ui`: a menu row that knows a hint is a slash command
  *  is this app's idea, and three of these rows carry a substrate gate whose
  *  reasons are argued at the call sites below. The markup census named the
- *  three with hints; the three without are the same row with one child.
+ *  three with hints; the three without are the same row with one child. The
+ *  seventh, Docs (docs design 4.8), carries its branch as the hint.
  *
  *  `aria-hidden` on the hint is deliberate and was already: the label is the
  *  accessible name, and "/model" read aloud after it is noise. */
@@ -275,6 +278,10 @@ export function SessionHeader({
   const title = session ? session.project : (fallback?.title ?? '…');
   const crumb = session && session.workspace !== null ? sessionLabel(session) : null;
   const wrapper = session?.wrapper ?? fallback?.wrapper ?? '';
+  // The menu's Docs item (docs design 4.8), from the one builder the actions sheet's row also calls. No item while no
+  // row has arrived (a deep link before its first frame), and none when the builder answers null (the project fails
+  // the project grammar).
+  const docsLink = session === null ? null : sessionDocsHref(session);
 
   // Model / effort / ultracode / branch — read from the pane statusline the
   // server already parses. Tapping the model or effort chip opens its chooser.
@@ -412,6 +419,10 @@ export function SessionHeader({
           <MenuItem label="Change model" hint={<>/model</>} onClick={() => menuAct(onChangeModel)} />
           <MenuItem label="Change effort" hint={<>/effort</>} onClick={() => menuAct(onChangeEffort)} />
           <MenuItem label="History" hint="journal" onClick={() => menuAct(onOpenHistory)} />
+          {docsLink !== null && (
+            <MenuItem label="Docs" hint={docsLink.branch ?? 'default'} className="docs-menu-item"
+                      onClick={() => menuAct(() => navigate(docsLink.href))} />
+          )}
           {/* Gated like Archive below (branch review): this item opens the SAME
               SwapSheet as the actions sheet's gated opener, and SwapSheet's
               confirm fires api.swap with no substrate check of its own — so

@@ -490,10 +490,12 @@ def _fetch_headers(model: str, token: str):
     remove.
 
     The reference sends a FIFTH identity header beyond those four,
-    `ChatGPT-Account-Id`, derived by reading `auth.json`'s own `account_id`
-    field. That is dropped here, deliberately, and stays dropped: spec line
+    `ChatGPT-Account-Id`, taken from the Authenticator's `get_account_id()`
+    (before Plan 4 its other arm derived it by reading `auth.json`'s own
+    `account_id` field; no code ccrc ships opens `auth.json` now). That is
+    dropped here, deliberately, and stays dropped: spec line
     ~497 forbids reading OAuth file CONTENTS anywhere in ccrc ("existence
-    and mode only"), so this publisher cannot derive it that way.
+    and mode only"), so this publisher cannot derive it from the file.
     `lane.json`'s own `id` is ccrc's OWN lane name (e.g. `"codex-a"`), not
     the ChatGPT backend's per-workspace account identifier, so sending IT
     under this header would be sending the WRONG value, not merely an

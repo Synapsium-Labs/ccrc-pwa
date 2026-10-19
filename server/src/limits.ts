@@ -25,7 +25,7 @@ export interface AccountLimits {
    *  `measured()` reads this: an inferred 0 is not a score. */
   fiveRolledOver: boolean; sevenRolledOver: boolean;
   /** The WIDTH of the 5h window, straight from the producer
-   *  (`x-codex-secondary-window-minutes`, carried by infra/handoff/ccgpt-usage).
+   *  (`x-codex-secondary-window-minutes`, carried by `ccd/ccgpt-usage.py`).
    *  `0` means THE PLAN HAS NO 5h WINDOW AT ALL — which is a different fact from
    *  "nobody has measured the 5h window yet", though both look like `five: null`
    *  in the row. `measured()` needs the difference: with no 5h window the weekly

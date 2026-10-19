@@ -40,7 +40,7 @@ export const SEEDED: Registry = {
 /** `SEEDED` byte for byte as `init codex` writes it: `writeRegistry`'s 2-space
  *  JSON and a trailing newline (Plan 3a Task 2). Since operator ruling Z3 the
  *  op refuses to CREATE a codex registry on a row that is not exec.kind
- *  "codex", so a case that needs the live Codex lanes' shape (an external row
+ *  "codex", so a case that needs the other repository's Codex lanes' shape (an external row
  *  whose registry predates that refusal) plants these bytes instead.
  *  `models-op.test.ts`' `seeds today's codex registry, byte for byte, on a
  *  codex-kind lane` binds them to the op's own write. */

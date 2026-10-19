@@ -129,7 +129,10 @@ describe("the switch's prose is true (path-identity spec §5)", () => {
     const heading = '### §17 as built (wave 10, run 400)';
     expect(c.indexOf('- **R98 — corrections.**'), 'the note follows R98').toBeGreaterThan(-1);
     expect(c.indexOf(heading), 'the note follows R98').toBeGreaterThan(c.indexOf('- **R98 — corrections.**'));
-    const note = flat(c.slice(c.indexOf(heading)));
+    // The note ends at the next `##`/`###` heading, so a following note's text cannot satisfy it.
+    const at = c.indexOf(heading);
+    const next = c.slice(at + 1).search(/\n#{2,3} /);
+    const note = flat(c.slice(at, next < 0 ? c.length : at + 1 + next));
     expect(note).not.toMatch(DEVIATION);
     expect(note).toContain('**R96 (two arms, then one), reconciled before the build.**');
     expect(note).toContain('A stored Live while the current node is unmeasured or in collision is stopped as an unknown '

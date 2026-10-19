@@ -91,7 +91,7 @@ const harness = (cfg: HarnessCfg) => {
   };
   return {
     runId: opened.id, calls,
-    dispatch: (route?: unknown) => dispatchRun(deps, opened.id, 'go', undefined, route),
+    dispatch: (route?: unknown, slug?: unknown) => dispatchRun(deps, opened.id, 'go', undefined, route, slug),
     wsAdds: (): string[][] => calls.filter((c) => c[0] === 'ws-add'),
     events: (): string[] =>
       coord.runEvents(opened.id).map((e) => e.detail).filter((d): d is string => d !== null),
@@ -115,6 +115,23 @@ describe('dispatch marks the workspace it mints as a child of the run (spec §5.
       ['ws-add', '--no-rc', '--child', String(h.runId), '--route', 'class=opus', PROJECT,
        '--surface', 'agent', '--actor', `run:${h.runId} dispatch`],
     ]);
+  });
+
+  it('with a slug: it is the positional straight after the project, ahead of the dec flags ccd strips', async () => {
+    const h = harness({ ccdVerbs: WITH_CHILD });
+    // The fixture runner seeds `demo-quiet-mesa`, so name the child exactly that.
+    expect(await h.dispatch(undefined, 'quiet-mesa')).toMatchObject({ ok: true, sessionId: 'demo-quiet-mesa' });
+    expect(h.wsAdds()).toEqual([
+      ['ws-add', '--no-rc', '--child', String(h.runId), PROJECT, 'quiet-mesa',
+       '--surface', 'agent', '--actor', `run:${h.runId} dispatch`],
+    ]);
+  });
+
+  it('a slug on the RESUME arm names nothing: refused bad-request, and nothing is resumed or minted', async () => {
+    const h = harness({ ccdVerbs: WITH_CHILD, sessionId: 'demo-existing' });
+    expect(await h.dispatch(undefined, 'quiet-mesa')).toMatchObject({ ok: false, kind: 'bad-request',
+      detail: expect.stringMatching(/^slug: this run resumes/) });
+    expect(h.calls).toEqual([]);
   });
 
   it('a REVIEW run is dispatched through the same arm, and its workspace is a child too', async () => {

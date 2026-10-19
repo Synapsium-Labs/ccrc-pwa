@@ -1148,6 +1148,60 @@ describe('POST /api/runs/:id/dispatch', () => {
     expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT]]);
   });
 
+  // A coordinator may NAME the child it dispatches. `cmd_ws_add` already binds
+  // `<project> [slug]`, so the slug rides as the positional straight after the
+  // project — the worktree, branch and session id then carry the name the
+  // coordinator chose (tooling that keys work on the workspace name, e.g. a
+  // ticket id, reads it from the start; a held child can never be renamed).
+  describe('slug — the coordinator names the child', () => {
+    it('rides as the positional after the project, and binds exactly <project>-<slug>', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-task-42-login'] });
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id, { brief: 'do the thing', slug: 'task-42-login' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, sessionId: 'demo-task-42-login' });
+      expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT, 'task-42-login']]);
+      expect(okRun(w.coord.run(opened.id))).toMatchObject({ sessionId: 'demo-task-42-login', state: 'dispatched' });
+    });
+
+    it.each([
+      ['uppercase', 'Task-42'],
+      ['leading dash', '-task-42'],
+      ['too long', 'a'.repeat(32)],
+      ['one character', 'a'],
+      ['a dot', 'task.42'],
+      ['empty', ''],
+      ['not a string', 42],
+      ['null', null],
+    ] as const)('refuses a %s slug with 400 before any fleet work', async (_label, slug) => {
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh1'] });
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id, { brief: 'do the thing', slug });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'bad-request', detail: expect.stringMatching(/^slug: must match /) });
+      expect(calls.some((c) => c[0] === 'ws-add')).toBe(false);
+      expect(okRun(w.coord.run(opened.id))).toMatchObject({ state: 'planned', sessionId: null });
+    });
+
+    it('binds nothing when the new workspace is not <project>-<slug>', async () => {
+      // ws-add answered 0 but the only new row carries another name: the slug is
+      // the identity the coordinator asked for, so a stranger is never bound.
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-someone-else'] });
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id, { brief: 'do the thing', slug: 'task-42-login' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, refused: 'ambiguous-dispatch', candidates: 0 });
+      expect(calls.some((c) => c[0] === 'ws-hold')).toBe(false);
+      expect(okRun(w.coord.run(opened.id))).toMatchObject({ state: 'planned', sessionId: null });
+    });
+  });
+
   // T2's attribution half, inverted by its review round (D-410) and RE-LANDED
   // now that the ccd side exists: `cmd_ws_add` carries `cmd_ws_hold`'s
   // strip-then-bind loop and threads the dec into its own `create` row, so the

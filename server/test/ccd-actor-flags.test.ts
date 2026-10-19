@@ -436,16 +436,16 @@ describe('ws-hold keeps ONE reason — its own', () => {
   it('does NOT strip --reason: the hold reason is still positional and still mandatory', () => {
     // Fix round 1 on this task's review: the brief's own sample call here
     // never passed `--reason` at all, so this test refused identically with
-    // or without a `--reason` case arm in the strip loop — vacuous against
-    // the exact mutant it is paired with (reviewer measurement: 7 of 11
-    // sibling tests in this block went red under that mutant, this one did
-    // not). Fixed by making the call an actually-valid hold that INCLUDES
-    // `--reason`: if the loop had a `--reason` arm, it would strip both
-    // `--surface` and `--reason`+its value, leaving residue `--session <id>`
-    // alone — arity 2 — and the exact-arity guard would refuse a call that
-    // is really correct, making it impossible to hold a workspace with any
-    // wave-5 flag present at all. Under real code this call succeeds; under
-    // that mutant it refuses.
+    // or without a `--reason` strip — vacuous against the exact mutant it is
+    // paired with (reviewer measurement: 7 of 11 sibling tests in this block
+    // went red under that mutant, this one did not). Fixed by making the call
+    // an actually-valid hold that INCLUDES `--reason`. Since path-identity W1b
+    // the loop HAS a `--reason` arm, but it keeps the pair IN the residue as
+    // the positional key and value (path-identity spec §2.4). The mutant is
+    // an arm that STRIPS it as a decision reason (`lc_reason="$2"; shift 2`):
+    // the residue is then `--session <id>` alone, arity 2, and the exact-arity
+    // guard refuses a correct call, so no workspace could be held at all.
+    // Under real code this call succeeds; under that mutant it refuses.
     const id = seedWorkspace();
     const out = h.sh(`${HOLD_STUBS} cmd_ws_hold --session ${id} --reason 'program:x wave:1/4' --surface pwa`);
     expect(out).toBe(`held ${id}: program:x wave:1/4`);

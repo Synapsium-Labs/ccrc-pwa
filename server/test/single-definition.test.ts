@@ -1604,15 +1604,15 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
 
 // — The model-class registry (spec §4.1, §4.2, §6.1, §6.4, §7) —
 describe('the model files, and who reads each one', () => {
-  // FIVE paths — measured 2026-09-08 by counting this describe's own
+  // SIX paths — five measured 2026-09-08 by counting this describe's own
   // writer/reader rows below (the models directory, the catalogue, the
-  // registry, the LiteLLM config, the ownership whitelist) — each with a
-  // writer and a set of readers, and the whole reason to register them here
-  // is that they cross LANGUAGES: the catalogue is written by bash-and-python
-  // and read by TypeScript; the TSV is written by node and read (from Plan 2)
-  // by bash; the effort map is written by node and read by python in another
-  // repository. None of those pairs can share a constant, so agreement has to
-  // be a red suite instead.
+  // registry, the LiteLLM config, the ownership whitelist), and the sixth, the
+  // lane's `<id>.windows.json` — each with a writer and a set of readers, and
+  // the whole reason to register them here is that most cross LANGUAGES: the
+  // catalogue is written by bash-and-python and read by TypeScript; the TSV is
+  // written by node and read (from Plan 2) by bash; the effort map is written
+  // by node and read by python in another repository. None of those pairs can
+  // share a constant, so agreement has to be a red suite instead.
   //
   // THIS DESCRIBE BUILDS ITS OWN CORPUS, and that is load-bearing. `ALL` comes
   // from `sources()`, which filters `/\.tsx?$/` — so `shared/models.mjs` and
@@ -1752,6 +1752,15 @@ describe('the model files, and who reads each one', () => {
     ]);
   });
 
+  it('the WINDOWS file is named by exactly two files, and only models-op can write it (codex-bridge spec §2.7)', () => {
+    // `<id>.windows.json`, the lane's measured context windows.
+    // `deploy/models-op.mjs` builds its path (`windowsPath`) and is its one
+    // writer; `shared/models.mjs` names it in `parseWindows`' docstring and
+    // holds no fs call (it imports nothing). A bash tool or a server module
+    // spelling it would be a second, unvalidated reader or editor.
+    expect(spell('.windows.json')).toEqual(['deploy/models-op.mjs', 'shared/models.mjs']);
+  });
+
   it('the doctor\'s models check reads the registry file but never writes it', () => {
     // The other half of the ruling just above: admitting a reader is only
     // honest if that reader really never edits the same bytes. Same shape as
@@ -1799,24 +1808,22 @@ describe('the model files, and who reads each one', () => {
     expect(code.filter((l) => REGISTRY_FILENAME.test(l)).length).toBe(2);
   });
 
-  it('the LiteLLM config path is spelled once, in one tool, through one helper', () => {
-    // `ccgpt` (another repository) reads the same path from its own
-    // `${CCGPT_CONFIG:-…}` default, which is why the helper here honours the
-    // same override rather than hardcoding the default: two tools, one file,
-    // and only one of them is in this repo to be pinned.
-    expect(holdersOf('.handoff/litellm-config.yaml')).toEqual(['ccd/ccrc']);
+  it('no bash code line spells the retired box-global LiteLLM config path or its override (Plan 4)', () => {
+    // Plan 4 Task C1: the external LiteLLM arm rendered the other repository's
+    // box-global config, honouring that repository's own `CCGPT_CONFIG`
+    // override, and it left with that repository's lane. A lane's config is
+    // its own `~/.ccrc/codex/<id>/litellm.yaml` (`_codex_litellm_yaml`), so no
+    // line of shell in any tool here reads or writes the old path again.
+    expect(holdersOf('.handoff/litellm-config.yaml')).toEqual([]);
+    expect(holdersOf('CCGPT_CONFIG')).toEqual([]);
+  });
+
+  it('ccrc never runs the other repository\'s launcher (Plan 4)', () => {
+    // A bare `ccgpt stop` stops units by name, and those names are ccrc's own
+    // tiers (`ccgpt-<id>-{litellm,shim}.service`). The external arm was the
+    // last code line that ran it, or sent an operator to it.
     const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
-    // D-3482: the helper grew a codex-lane arm (an id argument),
-    // so the one spelling is now its no-argument line — still one line, and
-    // still inside `_models_litellm_path`, which the second pin binds.
-    expect(code.filter((l) => l.includes('.handoff/litellm-config.yaml'))).toEqual([
-      '  printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"',
-    ]);
-    const helper = /^_models_litellm_path\(\) \{[^\n]*\n([\s\S]*?)\n\}$/m
-      .exec(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8'));
-    expect(helper, 'ccd/ccrc still defines _models_litellm_path as a block').toBeTruthy();
-    expect(helper![1]!.split('\n'))
-      .toContain('  printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"');
+    expect(code.filter((l) => /\bccgpt (stop|start|login)\b|command -v ccgpt\b/.test(l))).toEqual([]);
   });
 
   it('the ownership whitelist is read by exactly one thing in this repo', () => {
@@ -4359,7 +4366,7 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   //     in `cmd_ws_archive` (`session-busy`, `status-unknown`) — the audit's seam, not the door's;
   //   - the temp-root collector's open-run hold word `run-open` (`server/src/collectLane.ts`,
   //     `server/src/coord/collectTempRoot.ts`) — the collector's seam, not the door's;
-  //   - the docs reader's `worktree-gone` (`server/src/docs/policy.ts`, `shared/docs.ts`) — the reader's own word;
+  //   - the docs reader's `worktree-gone` (`server/src/docs/policy.ts`, `shared/docs.ts`, `pwa/src/docs/docsText.ts`) — the reader's own word;
   //   - `className="run-open"` is the runs board's row button (D-287), a CSS identity — excluded by the pattern.
   // The collector's and the docs reader's excusals are by FILE (the `want` line below), a known width: a door code
   // spelled in one of those files is not seen.
@@ -4385,7 +4392,7 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   });
 
   it.each(CODES)("'%s' is a code-line literal in shared/api.ts alone", (code) => {
-    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'run-open' ? ['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['server/src/docs/policy.ts', 'shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
+    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'run-open' ? ['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['pwa/src/docs/docsText.ts', 'server/src/docs/policy.ts', 'shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
     expect(ALL.filter((f) => literal(code).test(stallCode(f))).map(rel).sort(), `a second '${code}'`).toEqual(want);
   });
 });
@@ -7135,5 +7142,109 @@ describe("the account op's builder, wire vocabulary and spawn port each have one
   it('one builder for both arms: it is called by the agent op and the server port, and nowhere else', () => {
     expect(holders(/\bbuildAccountArgv\(/)).toEqual(['agent/src/server.ts', 'server/src/accounts/ops.ts', 'shared/account-argv.ts']);
     expect(holders(/\breadAccountOpAnswer\(/)).toEqual(['server/src/accounts/ops.ts', 'shared/agent-protocol.ts']);
+  });
+});
+
+// Docs W5 part 1, Task 1 (spec 2026-10-01 3.11, amended 2026-10-13): the permalink builder, its answer type and the
+// one private URL assembler are declared once, in shared/docs.ts. A second `githubUrlAt` anywhere in the four roots
+// is a second assembler (M3.17's drift), and a second `githubPermalink` is a second Share link rule. APPENDED after
+// the file's last line, as its own describe: `session-hook.test.ts`'s citation audit cites this file by line, so the
+// docs section H block's TYPES and FUNCTIONS lists above are never edited. The same two declaration patterns as that
+// block, with a planted CONTROL: a third file holding a copy makes the holder list two long.
+// The function pattern accepts `async`, `default` and `declare` (and a generator star) before `function`, with a
+// planted control for each. It is a line-anchored regex, NOT EXHAUSTIVE, and not a parser: the evasions it still
+// misses are listed in the second CONTROL below (a method, a re-export, a CommonJS assignment, a copy in a comment or
+// string, a function expression bound by none of `const`, `let` or `var`).
+describe('docs section H, W5: GithubPermalink, githubPermalink and githubUrlAt are declared once, in shared/docs.ts', () => {
+  const TYPES = ['GithubPermalink'] as const;
+  const FUNCTIONS = ['githubPermalink', 'githubUrlAt'] as const;
+  const TYPE_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  // Any run of `export`, `default`, `declare` and `async` before `function [*] NAME` or `const|let|var NAME`.
+  const FN_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:(?:export|default|declare|async)\\s+)*(?:function(?:\\s*\\*\\s*|\\s+)${name}\\b|(?:const|let|var)\\s+${name}\\b)`, 'm');
+  // The holders of a declaration over the four roots, plus any planted [path, text] pairs, sorted.
+  const holders = (def: RegExp, planted: readonly (readonly [string, string])[] = []): string[] =>
+    [...ALL.map((f) => [rel(f), readFileSync(f, 'utf8')] as const), ...planted]
+      .filter(([, text]) => def.test(text)).map(([p]) => p).sort();
+
+  it('CONTROL: the patterns see a declaration, a local copy and an arrow copy, and not an import, a call or another name', () => {
+    expect(TYPE_DEF('GithubPermalink').test('export type GithubPermalink =')).toBe(true);
+    expect(TYPE_DEF('GithubPermalink').test("type GithubPermalink = { ok: true; url: string };"), 'a local copy').toBe(true);
+    expect(TYPE_DEF('GithubPermalink').test('export type GithubPermalinkRow = {'), 'another name').toBe(false);
+    expect(FN_DEF('githubPermalink').test('export function githubPermalink(github: DocsGithub, ref: Ref,')).toBe(true);
+    expect(FN_DEF('githubUrlAt').test('function githubUrlAt(slug: string, at: string, target: GithubTarget):')).toBe(true);
+    expect(FN_DEF('githubUrlAt').test('const githubUrlAt = (slug: string): string => slug;'), 'an arrow copy').toBe(true);
+    expect(FN_DEF('githubPermalink').test("import { githubPermalink } from '../../../shared/docs.js';"), 'an import').toBe(false);
+    expect(FN_DEF('githubPermalink').test('  const link = githubPermalink(github, ref, commit, target);'), 'a call').toBe(false);
+    expect(FN_DEF('githubUrlAt').test('function githubUrlAtCommit('), 'another name').toBe(false);
+  });
+
+  it('CONTROL: the function pattern sees an async, a default, a declare-d and a generator copy', () => {
+    for (const text of [
+      'export async function githubPermalink(',
+      'async function githubPermalink(',
+      'export default function githubUrlAt(',
+      'export default async function githubUrlAt(',
+      'export declare function githubPermalink(',
+      'declare function githubPermalink(',
+      'export function* githubPermalink(',
+      'export declare const githubUrlAt:',
+      'export const githubUrlAt = async (slug: string) => slug;',
+    ]) {
+      const name = text.includes('githubUrlAt') ? 'githubUrlAt' : 'githubPermalink';
+      expect(FN_DEF(name).test(text), text).toBe(true);
+    }
+    expect(FN_DEF('githubPermalink').test('export async function githubPermalinks('), 'another name').toBe(false);
+    expect(FN_DEF('githubPermalink').test('  await githubPermalink(github, ref);'), 'an awaited call').toBe(false);
+  });
+
+  it('CONTROL: what the function pattern still misses is named here, and a miss is not a pass', () => {
+    // NOT EXHAUSTIVE. These evasions are known and stay unseen: an object or class method (`githubPermalink(x) {`),
+    // a re-export under the name (`export { other as githubPermalink }`), a CommonJS assignment
+    // (`exports.githubPermalink = `), a copy inside a block comment or string, and a
+    // function expression that no `const`, `let` or `var` binds.
+    for (const text of [
+      '  githubPermalink(github: DocsGithub) {',
+      'export { other as githubPermalink };',
+      'exports.githubPermalink = function () {};',
+    ]) expect(FN_DEF('githubPermalink').test(text), text).toBe(false);
+  });
+
+  it('CONTROL: a third file holding a copy is seen beside shared/docs.ts', () => {
+    expect(holders(FN_DEF('githubPermalink'), [['pwa/src/docs/planted.ts', 'function githubPermalink(x: string) {}']]))
+      .toEqual(['pwa/src/docs/planted.ts', 'shared/docs.ts']);
+  });
+
+  for (const name of TYPES) {
+    it(`declares ${name} exactly once, in shared/docs.ts`, () => {
+      expect(holders(TYPE_DEF(name))).toEqual(['shared/docs.ts']);
+    });
+  }
+  for (const name of FUNCTIONS) {
+    it(`defines ${name} exactly once, in shared/docs.ts`, () => {
+      expect(holders(FN_DEF(name))).toEqual(['shared/docs.ts']);
+    });
+  }
+});
+
+// D-5517, D-5751 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A1). APPENDED. The lane's kind on
+// the wire has one reader: `rosterKindOf` derives `provider`, `kind`, `telemetry` and `managed` from a parsed roster
+// entry, and its vocabulary (`RosterKind`, `RosterKindWire`) is declared beside it. A second derivation in the server's
+// handler or the PWA would be a second answer to "what kind of lane is this", free to disagree with the first.
+describe("the lane's kind is derived in one place, shared/roster.ts (D-5517)", () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('rosterKindOf').test('export function rosterKindOf(entry: AccountDef)')).toBe(true);
+    expect(decl('rosterKindOf').test('...rosterKindOf(a),')).toBe(false);
+  });
+  it('rosterKindOf and its vocabulary are declared once, in shared/roster.ts', () => {
+    for (const c of ['rosterKindOf', 'RosterKind', 'RosterKindWire']) {
+      expect(holders(decl(c)), c).toEqual(['shared/roster.ts']);
+    }
+  });
+  it("it is called by the accounts handler alone, which is the RosterWire builder", () => {
+    expect(holders(/\brosterKindOf\(/)).toEqual(['server/src/server.ts', 'shared/roster.ts']);
   });
 });

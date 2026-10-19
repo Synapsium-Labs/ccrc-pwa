@@ -336,9 +336,9 @@ _auth_rostered() {   # <id> -> 0 when the roster claims it
 
 # ── which program an openai-login runs ─────────────────────────────────────
 # `exec.kind`, READ FROM THE ROSTER, and never CCRC_CODEX_BACKEND. That array
-# is keyed on `telemetry` (shared/generate.mjs), and the live Codex lanes are
-# `external` WITH codex telemetry, so a telemetry test would send another
-# repository's lane down ccrc's verb. `ccd-account-health` reads this same file
+# is keyed on `telemetry` (shared/generate.mjs), and an `external` row may carry
+# codex telemetry (the live Codex lanes did; retired by Plan 4): a telemetry test
+# would send such a row down ccrc's verb. `ccd-account-health` reads this same file
 # with jq for the same reason (a fact the projection does not carry): that is
 # the precedent for this helper.
 #

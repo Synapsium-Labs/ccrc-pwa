@@ -19,12 +19,14 @@
 //
 // This file MUST compile clean.
 import {
-  MODEL_ENV_KEYS, clearSettingsEnv, mergeSettingsEnv, modelEnvBlock,
+  MODEL_ENV_KEYS, clearSettingsEnv, contextWindowFor, mergeSettingsEnv, modelEnvBlock,
 } from '../../../../shared/modelenv.mjs';
-import type { Catalogue, Registry } from '../../../../shared/models.js';
+import type { ContextWindow } from '../../../../shared/modelenv.mjs';
+import type { Catalogue, ModelWindows, Registry } from '../../../../shared/models.js';
 
 declare const reg: Registry;
 declare const cat: Catalogue | null;
+declare const win: ModelWindows | null;
 declare const settingsPath: string;
 
 // The module's own canonical composition: `modelEnvBlock`'s return value —
@@ -35,3 +37,10 @@ export const merged = mergeSettingsEnv(settingsPath, modelEnvBlock(reg, cat));
 // `ccrc models <id> rm`'s whole settings step (Task 6): `MODEL_ENV_KEYS`
 // handed straight to `clearSettingsEnv`, no respelling.
 export const cleared = clearSettingsEnv(settingsPath, MODEL_ENV_KEYS);
+
+// Codex-bridge spec §2.7: the lane's measured windows, passed in
+// modelEnvBlock's third argument, and the decision `show` reports. Compiled
+// here, so a declaration that drifts from the `.mjs` is a red tsc, never a
+// quiet gap.
+export const mergedMeasured = mergeSettingsEnv(settingsPath, modelEnvBlock(reg, cat, win));
+export const room: ContextWindow = contextWindowFor(reg, cat, win);

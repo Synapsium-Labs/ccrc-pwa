@@ -155,8 +155,10 @@ every `SKIN_TOKENS` value as the selected skin resolves it.
 
 A build opens every story in the skin named by `STORYBOOK_SKIN`, read through
 `resolveSkin`, so an unset or unknown value is Refined. CI's `storybook-a11y`
-job runs axe over the default build only, for now. To run it over every story
-in both skins locally, build twice:
+job builds once per skin in `SKINS` and runs axe over every story in each
+(D-5093), and `server/test/ci-pipeline.test.ts` holds its runs equal to the
+catalogue's ids, so a new skin reds there until the job tests it too. To run
+the same thing locally, build twice:
 
     npm run build-storybook -- --quiet
     STORYBOOK_SKIN=instrument npm run build-storybook -- --quiet -o storybook-static-instrument

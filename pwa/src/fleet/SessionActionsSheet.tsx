@@ -19,6 +19,8 @@ import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
 import { api, failedTo } from '../lib/api';
 
 import { accountLabel } from '../lib/accounts';
+import { navigate } from '../lib/router';
+import { sessionDocsHref } from '../docs/docsLinks';
 import { sessionLabel } from './sessionLabel';
 import { narrowSinceWidened } from './spawnWords';
 import { hibernatedSince } from './hibernated';
@@ -240,6 +242,8 @@ export function SessionActionsSheet({
     : null;
 
   const label = sessionLabel(session);
+  // The session's link into Docs (docs design 4.8), from the one builder the session menu also calls.
+  const docsLink = sessionDocsHref(session);
   // D-5242: a row `ccd hibernate` put to sleep. The top button is the same `/ensure` (it WAKES it), Forget is not offered
   // (`ccd forget` refuses a sleeper, D-5423: wake it or stop it first), and the dead-pane notes do not speak of it.
   const asleep = hibernatedSince(session) !== null;
@@ -357,6 +361,15 @@ export function SessionActionsSheet({
             <p className="sess-sheet-note">
               {`This pane is running, but no registry row claims it — so nothing will resume it, swap it or record its death. Restart session writes the claim and adopts the pane: the same thing ccd ensure ${session.id} does at a terminal. Nothing is restarted and nothing in the conversation is lost.`}
             </p>
+          )}
+
+          {/* Docs for this session (docs design 4.8): the row right after Restart and its notes. It closes the sheet,
+              then navigates to the href `sessionDocsHref` built; no row when the project fails the project grammar. */}
+          {docsLink !== null && (
+            <Button variant="ghost" className="docs-session-row"
+                    onClick={() => { onClose(); navigate(docsLink.href); }}>
+              {docsLink.label}
+            </Button>
           )}
 
           <Button variant="ghost" onClick={() => setSwapOpen(true)}

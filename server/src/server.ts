@@ -19,7 +19,7 @@ import {
   readProjectPools, readProjectPoolsWithRoot,
 } from './pools.js';
 import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
-import { ACCOUNT_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';
+import { ACCOUNT_ID_RE, POOL_NAME_RE, rosterKindOf } from '../../shared/roster.js';
 import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -1478,8 +1478,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // never mentioned — `accounts` above is built from `.cc-limits/*.json`, so
     // an account that has never run has no row there at all, and the PWA would
     // otherwise have no way to learn its label or colour. Only the fields a
-    // browser can use (`RosterWire`): `exec`, `configDirSuffix` and `telemetry`
-    // stay server-side.
+    // browser can use (`RosterWire`): `exec` and `configDirSuffix` stay
+    // server-side. The lane's kind (`provider`, `kind`, `telemetry`, `managed`)
+    // is `rosterKindOf`'s one derivation, spread here (D-5517, D-5751).
     return {
       accounts,
       // THE UNTAGGED FORECAST, said out loud (account pools, spec §5.6): this
@@ -1494,6 +1495,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       roster: deps.cfg.roster.accounts.map((a) => ({
         id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
         pool: a.pool,
+        ...rosterKindOf(a),
         // T7-R2 (D-3076): the RESOLVED membership (central
         // beats declared beats untagged, design §5.6) — `pool` above is the
         // declared carrier alone, and a client that computed its own

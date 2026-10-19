@@ -10,6 +10,7 @@ import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '@ccrc/ui';
+import { ICONS } from '../../ui/src/icons/lucide';
 import { TEST_ROSTER } from './rosterFixture';
 
 // foldState.ts persists to localStorage — clear it so one test's fold can
@@ -3164,5 +3165,55 @@ describe('cross-project nesting on the fleet screen (D-5527)', () => {
     expect(labels).toEqual(['tidy-docs · wave 1 of 2', 'port-api · wave 5 of 7']);
     expect(document.querySelector('.sess-child')?.getAttribute('title'))
       .toBe('this workspace does one wave of Tidy the docs for the coordinator; it is stopped or reclaimed when the wave is done');
+  });
+});
+
+// ── native Docs reader W5 part 1, Task 11: the Docs door (design 2026-10-01 section 4.8, M4.L1) ───────────────
+//
+// The `/settings` door's twin above, with its placement pinned too: immediately before `.accounts-door` in the
+// header's control cluster, with the word beside an aria-hidden glyph, rendered whether or not the fleet has a
+// session. Its two tap-target halves live in tap-targets.test.tsx. The file-level afterEach does not reset the route.
+describe('the Docs door (docs design 4.8, M4.L1)', () => {
+  afterEach(() => navigate('/'));
+
+  it('sits in the fleet header immediately before the accounts door, says Docs, and routes to /docs', () => {
+    render(<FleetScreen store={makeStore()} />);
+    const door = screen.getByRole('button', { name: 'Docs: specs, plans and design notes' });
+    expect(door).toHaveClass('docs-door');
+    expect(door.parentElement).toHaveClass('fleet-head-right');
+    expect(door.nextElementSibling).toHaveClass('accounts-door');
+    const words = [...door.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent?.trim()).join('');
+    expect(words).toBe('Docs');
+    expect(door.querySelector('.docs-door-glyph')?.getAttribute('aria-hidden')).toBe('true');
+    // The glyph is `Icon file-text` (skins plan Task 8, "#402's 📄"; D-5500): an svg drawn from the vendored nodes,
+    // stroked in the door's ink, and no text of its own, so the platform's colour 📄 cannot come back here.
+    const glyph = door.querySelector('.docs-door-glyph')!;
+    expect(glyph.querySelector('svg')?.children.length).toBe(ICONS['file-text'].length);
+    expect(glyph.textContent).toBe('');
+    fireEvent.click(door);
+    expect(location.pathname).toBe('/docs');
+  });
+
+  it('renders with no sessions at all', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    act(() => { store.setState({ conn: 'open', sessions: [] }); });
+    expect(screen.getByRole('button', { name: 'Docs: specs, plans and design notes' })).toHaveClass('docs-door');
+  });
+
+  it('is still there, in the header cluster before the accounts door, with a session present', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', sessions: [session({ project: 'demo' })] });
+    // The fleet really holds a session now (the header counts it, and the first-run empty state is gone), so the
+    // empty-fleet cases above are not what this one measures.
+    expect(document.querySelector('.fleet-count')?.textContent).toContain('1 session');
+    expect(screen.queryByRole('heading', { name: 'No sessions yet' })).toBeNull();
+    const door = screen.getByRole('button', { name: 'Docs: specs, plans and design notes' });
+    expect(door).toHaveClass('docs-door');
+    expect(door.parentElement).toHaveClass('fleet-head-right');
+    expect(door.nextElementSibling).toHaveClass('accounts-door');
+    fireEvent.click(door);
+    expect(location.pathname).toBe('/docs');
   });
 });

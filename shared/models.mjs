@@ -358,6 +358,76 @@ export function parseRegistry(json, catalogue) {
   return out;
 }
 
+/** The bounds of a measured context window, in tokens (codex-bridge spec
+ *  §2.7: "an integer from 1,000 to 1,000,000"). `parseWindows` refuses a value
+ *  outside them, `deploy/models-op.mjs`'s `set-window` refuses to write one,
+ *  and `shared/modelenv.mjs`'s `contextWindowFor` caps at `WINDOW_MAX`. Defined
+ *  here, once, and imported by every reader — never re-spelled. */
+export const WINDOW_MIN = 1000;
+export const WINDOW_MAX = 1000000;
+
+/**
+ * `(json: unknown) => ModelWindows` — a lane's MEASURED context windows, read
+ * from `~/.ccrc/models/<id>.windows.json`:
+ * `{"windows": {"<model id>": {"tokens": <integer>, "setAt": "<ISO-8601 UTC>"}}}`.
+ * Returns a frozen, null-prototype object mapping each model id to its tokens.
+ *
+ * A SIBLING FILE, NOT A REGISTRY KEY (D-5160).
+ * `parseRegistry` above refuses any key outside `REGISTRY_KEYS`, so a
+ * `windows` key in `<id>.classes.json` would make an older ccrc, after a
+ * rollback, refuse every lane's registry — and with it every verb on the
+ * lane, the one that could remove the key included. An older ccrc never
+ * opens this file, so its lanes fall back to the default window rule, the
+ * safe direction.
+ *
+ * AND THE OPPOSITE POLICY ON UNKNOWN KEYS. The registry refuses them; this
+ * file TOLERATES them, at the top level and inside every entry, because it is
+ * forward-compatible by design (a later build may record more per model), and
+ * `deploy/models-op.mjs`'s writer PRESERVES them by editing the raw parsed
+ * object rather than this function's answer.
+ *
+ * What it refuses, naming the field the way `parseRegistry` does: a top level
+ * that is not an object; a `windows` that is missing or not an object; a key
+ * that is not a model id (`MODEL_ID_RE`, which refuses `__proto__` too); an
+ * entry that is not an object; a `tokens` that is not an integer from
+ * `WINDOW_MIN` to `WINDOW_MAX`; a `setAt` that is present and not a string.
+ */
+export function parseWindows(json) {
+  if (!isObj(json)) {
+    throw new RegistryInvalid('',
+      'a windows file must be a JSON object: {"windows": {"<model id>": {"tokens": <integer>}}}.');
+  }
+  const raw = json['windows'];
+  if (!isObj(raw)) {
+    throw new RegistryInvalid('windows',
+      `windows is missing or is not an object. It maps each model id to {"tokens": <integer from ${WINDOW_MIN} `
+      + `to ${WINDOW_MAX}>}.`);
+  }
+  const out = Object.create(null);
+  for (const [id, entry] of Object.entries(raw)) {
+    if (!MODEL_ID_RE.test(id)) {
+      throw new RegistryInvalid(`windows.${id}`,
+        `windows has the key ${JSON.stringify(id)}, which is not a model id.`);
+    }
+    if (!isObj(entry)) {
+      throw new RegistryInvalid(`windows.${id}`,
+        `windows.${id} is ${JSON.stringify(entry)}: each entry is an object, {"tokens": <integer>}.`);
+    }
+    const tokens = entry['tokens'];
+    if (typeof tokens !== 'number' || !Number.isInteger(tokens) || tokens < WINDOW_MIN || tokens > WINDOW_MAX) {
+      throw new RegistryInvalid(`windows.${id}.tokens`,
+        `windows.${id}.tokens is ${JSON.stringify(tokens)}: it must be an integer from ${WINDOW_MIN} to `
+        + `${WINDOW_MAX}.`);
+    }
+    if (entry['setAt'] !== undefined && typeof entry['setAt'] !== 'string') {
+      throw new RegistryInvalid(`windows.${id}.setAt`,
+        `windows.${id}.setAt is ${JSON.stringify(entry['setAt'])}: when present it is an ISO-8601 time string.`);
+    }
+    out[id] = tokens;
+  }
+  return Object.freeze(out);
+}
+
 /** `(reg, catalogue) => string[]`. What discovery and classification operate
  *  on. `'catalogue'` resolves to the catalogue's VISIBLE ids — hidden Codex
  *  models are excluded (§4.2, decision 6) and reachable only by an explicit

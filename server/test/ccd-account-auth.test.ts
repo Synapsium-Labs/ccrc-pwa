@@ -966,10 +966,11 @@ describe('ccd-account-auth — openai-login runs somebody else\'s program', () =
   });
 
   it('keys on exec.kind, never on telemetry: an EXTERNAL lane with codex telemetry still runs `<launcher> login`', () => {
-    // A fixture lane, `ext-a`, in the live Codex lanes' shape: exec.kind
-    // external, telemetry codex. CCRC_CODEX_BACKEND is telemetry-keyed, so it
-    // DOES name this lane (the control below), and routing on it would send
-    // another repository's lane down ccrc's verb.
+    // A fixture lane, `ext-a`, in the shape the live Codex lanes had before
+    // the cutover (retired by Plan 4): exec.kind external, telemetry codex.
+    // CCRC_CODEX_BACKEND is telemetry-keyed, so it DOES name this lane (the
+    // control below), and routing on it would send a lane that is not ccrc's
+    // down ccrc's verb.
     const EXT_A = {
       id: 'ext-a', label: 'ext-a', configDirSuffix: '.claude-ext-a',
       exec: { kind: 'external' }, homeAble: false, hue: 'amber', telemetry: 'codex',

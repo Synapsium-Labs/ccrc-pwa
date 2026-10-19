@@ -939,46 +939,126 @@ export function entryView(e: DocsEntry, d: DraftsFacts, mode: EntryMode): EntryV
   return view(committedKind !== null || isNew, committedSide, 'withheld', withheld);
 }
 
-/** What a "View on GitHub" action points at. A leaf's `uncommitted` is true when the entry has no committed side
- *  (`e.committed === null`): GitHub holds no copy of it, whether or not the draft opens (a withheld new file has
- *  `opens: 'none'` and is still uncommitted). A directory's `path` is relative to its section, like a leaf's. */
+/** What a "View on GitHub" action or a permalink points at. A leaf's `uncommitted` is true when the entry has no
+ *  committed side (`e.committed === null`): GitHub holds no copy of it, whether or not the draft opens (a withheld
+ *  new file has `opens: 'none'` and is still uncommitted). A directory's `path` is relative to its section, like a
+ *  leaf's. `repo` is resolveDocRef's in-repo, out-of-section kind (spec 4.11), its `repoPath` relative to the
+ *  repository root; `root` is the repository itself, for the project page. Neither has an uncommitted form. */
 export type GithubTarget =
   | { kind: 'leaf'; section: DocSectionSlug; path: string; uncommitted: boolean }
   | { kind: 'section'; section: DocSectionSlug }
-  | { kind: 'dir'; section: DocSectionSlug; path: string };
+  | { kind: 'dir'; section: DocSectionSlug; path: string }
+  | { kind: 'repo'; repoPath: string }
+  | { kind: 'root' };
 
-/** A link, with the caution `may-differ` ("GitHub's copy may differ from this view") or none; or the reason
- *  there is no link. `not-on-origin` is the PWA's "not pushed". */
+/** A View on GitHub link, or the reason there is none. `note` is `'may-differ'` ("GitHub's copy may differ from
+ *  this view") or `null`, which means one thing: GitHub's copy of the branch is this view's (the origin side is
+ *  served, or the local side equals origin). `not-on-origin` is the PWA's "not pushed". `bad-slug` judges the
+ *  slug; `bad-target` judges the branch name and the path, which come from the page, so a caller can tell the
+ *  two apart. */
 export type GithubLink =
   | { ok: true; url: string; note: 'may-differ' | null }
-  | { ok: false; why: 'no-github-origin' | 'not-on-origin' | 'uncommitted' };
+  | { ok: false; why: 'no-github-origin' | 'not-on-origin' | 'uncommitted' | 'bad-slug' | 'bad-target' };
+
+/** A commit permalink (spec 3.11; Share's link), naming the full commit it was given, or the reason there is none.
+ *  `not-on-origin` covers a ref never pushed and a local side ahead of origin or diverged from it (decision 10: the
+ *  commit may not be on GitHub, so the link would open a 404); `unmeasured` is a local side whose relation to
+ *  origin was not measured; `bad-target` also covers a commit that is not 40 or 64 lowercase hex. */
+export type GithubPermalink =
+  | { ok: true; url: string; commit: string }
+  | { ok: false; why: 'no-github-origin' | 'not-on-origin' | 'unmeasured' | 'uncommitted' | 'bad-slug' | 'bad-target' };
+
+/** True when the served ref is not on origin: a `local-only` relation, or a default resolved to a local branch
+ *  (`default:local-main`, `default:local-master`). Both builders answer it `not-on-origin`. */
+function servedRefIsLocalOnly(ref: DocsTreeOk['ref']): boolean {
+  return ref.relation === 'local-only' || ref.via === 'default:local-main' || ref.via === 'default:local-master';
+}
+
+/** THE one assembler of a GitHub URL (spec 3.11, "One assembler"): private, called by both builders, and the only
+ *  place this file spells GitHub's address. It refuses, in this order:
+ *   1. a slug that is not exactly two segments (owner/name, as ccd's GH_SLUG_RE requires), a slug segment that
+ *      is empty, `.` or `..`, or an owner (the first segment) that starts with `.`: `bad-slug` (the empty-segment
+ *      and shape halves are D-5502's). A repository name may start with a dot, so `org/.github` passes;
+ *   2. a segment of `at` or of the repo path that is empty, `.` or `..`: `bad-target`. encodeURIComponent leaves
+ *      `.` and `..` as they are, and a browser would resolve such a URL to another page.
+ *  Otherwise the URL is `/blob/<at>/<repo path>` for a leaf or a `repo` target, `/tree/<at>/<repo path>` for a
+ *  section or a directory, and `/tree/<at>` for `root`, after the slug. Each `/`-separated segment of the slug, of
+ *  `at` and of the repo path is encodeURIComponent-encoded on its own, so the branch `ws/a b` keeps its `/` and is
+ *  written `ws/a%20b`. No fragment is ever written. */
+function githubUrlAt(slug: string, at: string, target: GithubTarget):
+  { ok: true; url: string } | { ok: false; why: 'bad-slug' | 'bad-target' } {
+  const slugParts = slug.split('/');
+  if (slugParts.length !== 2 || slug.startsWith('.') || slugParts.some((s) => s === '' || s === '.' || s === '..')) {
+    return { ok: false, why: 'bad-slug' };
+  }
+  const repoPath = target.kind === 'root' ? null
+    : target.kind === 'repo' ? target.repoPath
+      : target.kind === 'section' ? DOC_SECTIONS[target.section]
+        : docRepoPath(target.section, target.path);
+  const atParts = at.split('/');
+  const pathParts = repoPath === null ? [] : repoPath.split('/');
+  if ([...atParts, ...pathParts].some((s) => s === '' || s === '.' || s === '..')) {
+    return { ok: false, why: 'bad-target' };
+  }
+  const encoded = (parts: readonly string[]): string => parts.map((s) => encodeURIComponent(s)).join('/');
+  const blob = target.kind === 'leaf' || target.kind === 'repo';
+  const url = 'https://github.com/' + encoded(slugParts) + (blob ? '/blob/' : '/tree/') + encoded(atParts)
+    + (pathParts.length === 0 ? '' : '/' + encoded(pathParts));
+  return { ok: true, url };
+}
 
 /** The View on GitHub builder (spec 3.11). The rows are checked in the spec table's order, the first match
  *  winning:
  *   1. no GitHub-shaped origin was read: `no-github-origin`;
- *   2. a `local-only` relation, or a default resolved to a local branch (`default:local-main`,
- *      `default:local-master`): `not-on-origin`;
- *   3. a leaf whose entry has no committed side (`uncommitted`, i.e. `e.committed === null`, whether or not the
+ *   2. a dot-segment slug: `bad-slug`; 3. an empty, `.` or `..` segment in the branch name or the path:
+ *      `bad-target` (both judged by githubUrlAt);
+ *   4. a `local-only` relation, or a default resolved to a local branch: `not-on-origin`;
+ *   5. a leaf whose entry has no committed side (`uncommitted`, i.e. `e.committed === null`, whether or not the
  *      draft opens): `uncommitted`;
- *   4. the origin side is served, or the local side equals origin: a link with no note;
- *   5. otherwise (the local side ahead, behind, diverged or unmeasured): a link with `may-differ`. A local side
+ *   6. the origin side is served, or the local side equals origin: a link with no note;
+ *   7. otherwise (the local side ahead, behind, diverged or unmeasured): a link with `may-differ`. A local side
  *      reading `origin-only` cannot arrive, because a local side means the local branch exists; if it did, it
  *      would land here, on the cautious answer.
- *  The URL names the branch, never a commit (the durable-link convention):
- *  `https://github.com/<slug>/blob/<ref.name>/<repo path>` for a leaf, and `/tree/` for a section or directory.
- *  Each `/`-separated segment of the slug, the branch name and the repo path is `encodeURIComponent`-encoded on
- *  its own, so the branch `ws/a b` keeps its `/` and is written `ws/a%20b`. */
+ *  The URL names the branch (`at` is `ref.name`), never a commit: the durable-link convention. */
 export function githubBlobUrl(github: DocsGithub, ref: DocsTreeOk['ref'], target: GithubTarget): GithubLink {
   if (github.state === 'none') return { ok: false, why: 'no-github-origin' };
-  if (ref.relation === 'local-only' || ref.via === 'default:local-main' || ref.via === 'default:local-master') {
-    return { ok: false, why: 'not-on-origin' };
-  }
+  const built = githubUrlAt(github.slug, ref.name, target);
+  if (!built.ok) return built;
+  if (servedRefIsLocalOnly(ref)) return { ok: false, why: 'not-on-origin' };
   if (target.kind === 'leaf' && target.uncommitted) return { ok: false, why: 'uncommitted' };
-  const segments = (p: string): string => p.split('/').map((s) => encodeURIComponent(s)).join('/');
-  const repoPath = target.kind === 'section' ? DOC_SECTIONS[target.section] : docRepoPath(target.section, target.path);
-  const url = 'https://github.com/' + segments(github.slug) + (target.kind === 'leaf' ? '/blob/' : '/tree/')
-    + segments(ref.name) + '/' + segments(repoPath);
-  return { ok: true, url, note: ref.side === 'origin' || ref.relation === 'equal' ? null : 'may-differ' };
+  return { ok: true, url: built.url, note: ref.side === 'origin' || ref.relation === 'equal' ? null : 'may-differ' };
+}
+
+/** The permalink builder (spec 3.11, amended 2026-10-13; decisions 10 and 11). `commit` is the commit the page
+ *  opened, and the URL's `at` is always that full id, never `ref.name`. The rows are checked in the spec table's
+ *  order, the first match winning:
+ *   1. no GitHub-shaped origin was read: `no-github-origin`;
+ *   2. a dot-segment slug: `bad-slug` (githubUrlAt);
+ *   3. `commit` not 40 or 64 lowercase hex (isDocsCommit), or an empty, `.` or `..` segment in it or in the path:
+ *      `bad-target`;
+ *   4. a `local-only` relation, or a default resolved to a local branch: `not-on-origin`;
+ *   5. a leaf whose entry has no committed side: `uncommitted`;
+ *   6. the origin side is served (which covers `origin-only`), or the relation is `equal` or `local-behind`: a
+ *      link, because the commit is on origin;
+ *   7. the local side ahead of origin or diverged from it: `not-on-origin`;
+ *   8. the relation was not measured: `unmeasured`.
+ *  Rows 7 and 8 are disjoint, so their order is the table's and changes nothing. A local side reading
+ *  `origin-only` cannot arrive (a local side means the local branch exists); no row links it, and it lands on
+ *  the refusal `not-on-origin`. */
+export function githubPermalink(
+  github: DocsGithub, ref: DocsTreeOk['ref'], commit: string, target: GithubTarget,
+): GithubPermalink {
+  if (github.state === 'none') return { ok: false, why: 'no-github-origin' };
+  const built = githubUrlAt(github.slug, commit, target);
+  if (!built.ok) return built;
+  if (!isDocsCommit(commit)) return { ok: false, why: 'bad-target' };
+  if (servedRefIsLocalOnly(ref)) return { ok: false, why: 'not-on-origin' };
+  if (target.kind === 'leaf' && target.uncommitted) return { ok: false, why: 'uncommitted' };
+  if (ref.side === 'origin' || ref.relation === 'equal' || ref.relation === 'local-behind') {
+    return { ok: true, url: built.url, commit };
+  }
+  if (ref.relation === 'unmeasured') return { ok: false, why: 'unmeasured' };
+  return { ok: false, why: 'not-on-origin' };
 }
 
 // ===========================================================================

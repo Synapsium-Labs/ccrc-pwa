@@ -1,5 +1,5 @@
 // Model + effort option lists for the session pickers. Wrapper-aware: the gpt
-// overflow lane maps the Anthropic aliases onto Codex tiers via the ccgpt env —
+// overflow lane maps the Anthropic aliases onto Codex tiers via its model env —
 // opus/sonnet/haiku onto GPT-5.6 Sol/Terra/Luna, and fable onto GPT-6 Astra.
 //
 // Routing spec 2026-09-14 §5.3, slice 4, Task 5: a tap no longer sends
@@ -12,10 +12,12 @@
 // D-2015: the fable alias on that lane used to name a deliberate sentinel
 // (`ccrc-unavailable-fable`) so `/model fable` failed loudly rather than
 // silently landing somewhere — the lane had only three tiers. It has four now.
-// The alias is set in TWO places, `~/.local/bin/ccgpt`'s exports and
-// `~/.claude-gpt/settings.json`'s `env` block, and SETTINGS WINS: Claude Code
-// Object.assigns settings env over the process environment at runtime. Both are
-// box tooling outside this repo; this list only has to agree with them.
+// The alias is set in ONE place now, the lane's `settings.json` `env` block
+// (`deploy/models-op.mjs`'s materialiser writes it, `shared/modelenv.mjs`
+// names its keys); the lane's launcher exports no model key. It used to be set
+// in TWO, the other repository's launcher exports being the second (retired by
+// Plan 4), and SETTINGS WON: Claude Code Object.assigns settings env over the
+// process environment at runtime. This list only has to agree with the block.
 import type { RouteField } from '../../../shared/api';
 import { EFFORT_LADDER, type EffortRung } from '../../../shared/routing-ladder';
 

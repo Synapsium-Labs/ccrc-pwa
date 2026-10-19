@@ -6,15 +6,18 @@
 //   - A job's result is applied only while that job is still the hook's running job. Unmount aborts the running
 //     job's signal and drops the waiting one, so a parser that answers after that is not heard.
 //   - A result becomes the `outcome` only while its request is still the latest one made; a result for an earlier
-//     request is kept as `lastGood` alone. A request the hook has already answered, or that the running job
-//     answers, queues nothing: so text A -> B -> A shows A's outcome throughout, never B's under A.
+//     request is kept as `lastGood` alone. The latest request is recorded at commit, in a layout effect, so a reply
+//     for an earlier text that settles after a newer text commits, but before that commit's passive effects run, is
+//     already an earlier request's (W5 Task 4, closing W4's carried commit-to-effect window). A request the hook
+//     has already answered, or that the running job answers, queues nothing: so text A -> B -> A shows A's outcome
+//     throughout, never B's under A.
 //   - `lastGood` is the last tree that settled, kept through any later outcome, so a caller can show it while a
 //     newer text parses.
 //   - A parser that throws before returning its promise settles its job as `threw` with the error's name.
 //   - A rejection ends the job with nothing applied, and the waiting job, if any, runs next. The runner rejects
 //     only on an abort (this hook's own, on unmount) or a `dispose()`.
 // `parser` is read when a request is made: a new function alone starts nothing.
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { Root as HastRoot } from 'hast';
 import type { MarkdownProfile, ParseOutcome } from './markdownParse';
 import type { MarkdownParser } from './markdownRunner';
@@ -59,7 +62,7 @@ interface Jobs {
   running: { readonly n: number; readonly ctrl: AbortController; readonly req: Request } | undefined;
   /** The one request waiting behind it; absent when none waits. */
   queued: Waiting | undefined;
-  /** The latest request the hook made; absent before the first. */
+  /** The latest request the hook made, recorded at every commit by a layout effect; absent before the first commit. */
   latest: Request | undefined;
   /** The request the settled `outcome` answers; absent until an outcome settles for a latest request. */
   answered: Request | undefined;
@@ -118,6 +121,9 @@ export function useParsedMarkdown(
 ): ParsedMarkdown {
   const { profile, budgetMs } = opts;
   const attempt = opts.attempt ?? 0;
+  // The request this render stands for, built once: the layout effect records it as the latest, the passive effect
+  // starts or queues it, and `pending` is measured against it, so no site can spell it differently from another.
+  const req: Request = { text, profile, budgetMs, attempt };
   const [settled, setSettled] = useState<Settled>({ outcome: null, lastGood: null });
   const jobs = useRef<Jobs>({ started: 0, running: undefined, queued: undefined, latest: undefined, answered: undefined });
 
@@ -131,12 +137,18 @@ export function useParsedMarkdown(
     };
   }, []);
 
-  // `parser` is deliberately not a dependency: it is read when a request is made.
+  // The latest request is written at every commit, before any passive effect of the same commit runs, so a reply
+  // that lands between this commit and the effect below already answers an earlier request (`start`'s `isLatest`).
+  // No dependency list: the committed render's props ARE the latest request, and an equal request changes nothing.
+  useLayoutEffect(() => {
+    jobs.current.latest = req;
+  });
+
+  // `parser` is deliberately not a dependency: it is read when a request is made. `req` is built from the four
+  // dependencies, so a render in which they are equal makes an equal request.
   useEffect(() => {
-    const req: Request = { text, profile, budgetMs, attempt };
     const next: Waiting = { req, parser };
     const j = jobs.current;
-    j.latest = req;
     // A request already answered, or answered by the running job, needs no job of its own.
     const covered =
       (j.answered !== undefined && sameRequest(j.answered, req)) ||
@@ -146,9 +158,9 @@ export function useParsedMarkdown(
       return;
     }
     start(j, next, setSettled);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text, profile, budgetMs, attempt]);
 
-  const current: Request = { text, profile, budgetMs, attempt };
-  const pending = settled.answers === undefined || !sameRequest(settled.answers, current);
+  const pending = settled.answers === undefined || !sameRequest(settled.answers, req);
   return { outcome: settled.outcome, lastGood: settled.lastGood, pending };
 }

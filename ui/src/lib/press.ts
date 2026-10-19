@@ -46,7 +46,8 @@ export const PRESS_TRANSFORM =
  *  Tailwind v4, so a phone never sticks on it. One constant because
  *  `ListRow` and `BareRow` both carry it, and a sentence spelled in two files
  *  drifts (`literal-census.test.ts`). The ghost and quiet buttons spell the
- *  same two utilities inside their cva variants. */
+ *  same two utilities inside their cva variants; the danger-ghost takes this
+ *  constant on its default `card` ground (D-5688). */
 export const PRESS_GROUND = 'enabled:hover:bg-hover enabled:active:bg-pressed';
 
 /** THE MOTION BEHIND THAT GROUND (D-5101, Task 9 Step 4): `transform` at

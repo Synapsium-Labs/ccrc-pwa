@@ -1,4 +1,5 @@
-// The Markdown pre-scan and the UTF-8 byte count (native Docs reader, W4 Task 3; design 2026-10-01 section 4.10).
+// The Markdown pre-scan, the UTF-8 byte count and the keystroke-chord predicate (native Docs reader, W4 Task 3, and
+// W5 Task 3 for the predicate; design 2026-10-01 section 4.10).
 // `prescanMarkdown` runs before any parse, in chat's synchronous path and in the parse worker: one iterative pass
 // over the lines that refuses two shapes. The first is more container markers on one line than the spec allows: a
 // `>` run of 10 000 makes the parser throw a RangeError, so this is the shape the pre-scan exists for. Container
@@ -10,11 +11,11 @@
 // `MD_MAX_TREE_DEPTH`, which turns a deep tree into 'too-deep'; and the worker's budget, the only time bound. Chat's
 // synchronous path renders a message of 4 KiB or less on the main thread, without `parseMarkdown`: it has no budget
 // and none of those other bounds, so for such a message the guards before the render are this pre-scan and chat's
-// table-cell bound (`countChatTableCells` in `markdown.tsx`, the operator's ruling on Task 11's review 2-3), which
+// table cell bound (`countChatTableCells` in `markdown.tsx`, the operator's ruling on Task 11's review 2-3), which
 // caps what its tables could draw.
 //
 // Imports only `markdownLimits.ts`: the parse worker's closure reaches this file (`markdown-purity.test.ts`).
-import { MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN } from './markdownLimits';
+import { MD_KEYSTROKE_MAX_CHARS, MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN } from './markdownLimits';
 
 export type PrescanResult =
   | { ok: true }
@@ -224,4 +225,22 @@ export function utf8ByteLength(s: string): number {
     } else bytes += 3;
   }
   return bytes;
+}
+
+/** Keystroke-shaped inline code: the named keys, and any one letter, digit or ASCII punctuation mark. */
+const NAMED_KEY =
+  /^(?:Ctrl|Control|Cmd|Command|⌘|Alt|Option|⌥|Opt|Shift|⇧|Win|Super|Meta|Fn|Esc|Escape|Enter|Return|↵|⏎|Tab|⇥|Space|Spacebar|Backspace|⌫|Delete|Del|Insert|Ins|Home|End|PageUp|PgUp|PageDown|PgDn|Up|Down|Left|Right|↑|↓|←|→|F(?:[1-9]|1[0-2]))$/;
+const SINGLE = /^[\p{L}\p{N}`~!@#$%^&*()\-_=+[\]{};:'",.<>/?\\|]$/u;
+/** The parts an inline code span draws as `<kbd>` chips (`Cmd+K`, `Esc`), or `null` when it is not a chord and stays
+ *  plain inline code. ONE predicate for the component that draws the chips (`SHARED_COMPONENTS.code` in
+ *  `markdown.tsx`) and the parse that counts them (`inlineCodeExtraElements` in `markdownParse.ts`), which is why it
+ *  lives here, in the worker's closure (W5 Task 3, the plan's refinement (d)). A span longer than
+ *  `MD_KEYSTROKE_MAX_CHARS` is `null` before it is trimmed or split (W5 bound r11): the split's pattern backtracks over
+ *  a run of whitespace, so its cost grows with the square of the span's length, and the check comes first. */
+export function keystrokeParts(raw: string): string[] | null {
+  if (raw.length > MD_KEYSTROKE_MAX_CHARS) return null;
+  const parts = raw.trim().split(/\s*\+\s*/);
+  const ok = (p: string): boolean => NAMED_KEY.test(p) || SINGLE.test(p);
+  if (parts.length > 1) return parts.every(ok) ? parts : null;
+  return NAMED_KEY.test(parts[0]!) ? parts : null; // bare single chars stay chips
 }

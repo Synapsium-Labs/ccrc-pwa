@@ -1096,31 +1096,26 @@ describe('pools-v1 is safe to advertise before --cross-pool lands on every verb 
     expect(r.stderr).toContain("unknown wrapper 'demo'");
   });
 
-  it('a leading --cross-pool on `enable` now journals the REAL id, because the strip runs before `_id`', () => {
-    // MEASURED after Task 6 moved `cmd_enable`'s own strip ABOVE `_id "$1"
-    // "$2"` (was: "`_lc_done enable "$id" ""` runs BEFORE delegating to
-    // `cmd_start`, so a skewed `enable --cross-pool …` writes a lifecycle
-    // entry for a bogus id — `_id "--cross-pool" demo` = `--cross-pool-demo`
-    // — and only THEN fails"). That side effect is exactly what the strip
-    // was FOR: with the flag gone from argv before `_id` ever runs,
-    // `_id demo pool-a` = `demo-pool-a` — the id this verb actually means —
-    // and `cmd_enable`'s `_lc_done enable "$id" ""` names THAT row, not a
-    // bogus one, before delegating into `cmd_start --cross-pool demo pool-a`.
+  it('a leading --cross-pool on `enable` is stripped before the wrapper check, which refuses the REAL wrapper before any journal line', () => {
+    // MEASURED when `cmd_enable`'s own strip moved ABOVE `_id "$1" "$2"`: with
+    // the flag gone from argv, `_id demo pool-a` is `demo-pool-a`, never the
+    // bogus `--cross-pool-demo`.
     //
-    // WHICH VERB ACTUALLY REFUSES is unchanged: `cmd_enable` has no wrapper
-    // check of its own — its only arity gate is `$# -ge 1`, which the
-    // stripped two positionals still pass — so the sentence on stderr is
-    // still `cmd_start`'s, reached through the `cmd_start ${cross:+--cross-pool}
-    // "$@"` this verb delegates to AFTER the lifecycle write, and it is the
-    // identical "demo" refusal the `start` case above measures directly.
+    // WHICH CHECK REFUSES changed in path-identity W1b (path-identity spec
+    // §2.4): `cmd_enable`'s two-argument form now asks `cmd_start`'s own
+    // wrapper check, words and all, BEFORE its `enable` line, so the refused
+    // `demo` leaves no row at all. The stderr line still proves the strip:
+    // unstripped, the wrapper would be the flag itself, and the refusal would
+    // name `--cross-pool`.
     const r = shFail('cmd_enable --cross-pool demo pool-a');
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain("unknown wrapper 'demo'");
     const lcDir = path.join(REG(), '.lifecycle');
-    expect(fs.existsSync(lcDir)).toBe(true);
-    const journal = fs.readdirSync(lcDir)
-      .map((f) => fs.readFileSync(path.join(lcDir, f), 'utf8')).join('\n');
-    expect(journal).toContain('"id":"demo-pool-a"');
+    const journal = fs.existsSync(lcDir)
+      ? fs.readdirSync(lcDir).map((f) => fs.readFileSync(path.join(lcDir, f), 'utf8')).join('\n')
+      : '';
+    expect(journal, 'no row for the bogus id').not.toContain('"id":"--cross-pool-demo"');
+    expect(journal, 'and none for the refused one').not.toContain('"id":"demo-pool-a"');
   });
 });
 

@@ -112,7 +112,7 @@ describe('_limit_field rollover', () => {
 });
 
 describe('_codex_lane_status on a python-written gpt.json', () => {
-  // ~/.cc-limits/gpt.json is written by infra/handoff/ccgpt-usage (python
+  // ~/.cc-limits/gpt.json is written by ccd/ccgpt-usage.py (python
   // json.dump), whose default separators put a space after every colon. Every
   // other reader in ccd tolerates that; _codex_lane_status must too, or `ccd ls`
   // silently drops the cooldown countdown it exists to print.

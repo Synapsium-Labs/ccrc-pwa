@@ -55,15 +55,13 @@ export const bannerVariants = cva(
         // light — under the floor. The -tint-solid token IS that wash
         // pre-composited on --bg-surface, which buys the measured ground back.
         //
-        // It also redefines the lift and press grounds for what it holds
-        // (D-5574, D-5575): the card's `--bg-hover` and `--bg-pressed` measure
-        // 1.03 and 1.00 against this tint, so the danger-ghost's feedback was a
-        // hue shift. The utilities read the two names where they paint
-        // (`theme.css` bridges them `@theme inline`), so the button's own
-        // classes are unchanged. The grounds and their measurements are in
-        // tokens.css; pwa/test/dead-banner-grounds.test.ts holds them.
-        dead: 'border-status-dead bg-status-dead-tint-solid text-status-dead-text'
-          + ' [--bg-hover:var(--bg-hover-on-dead)] [--bg-pressed:var(--bg-pressed-on-dead)]',
+        // The lift and press on this tint are the danger-ghost's, not the
+        // banner's: the card's `--bg-hover` and `--bg-pressed` measure 1.03
+        // and 1.00 against it (D-5574), so its trigger passes `ground="dead"`
+        // and paints `--bg-hover-on-dead` and `--bg-pressed-on-dead` (D-5688).
+        // Until then the banner re-scoped the two names for its subtree
+        // (D-5575). pwa/test/dead-banner-grounds.test.ts holds both halves.
+        dead: 'border-status-dead bg-status-dead-tint-solid text-status-dead-text',
         // The host is UP, so this is not the dead language — it is the amber
         // the fleet already uses for "waiting on you". Both tokens are solid in
         // both themes, so no pre-composition is needed on this side.

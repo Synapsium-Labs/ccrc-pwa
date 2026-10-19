@@ -147,17 +147,20 @@
      clears pressed clears hover. */
   --bg-hover:   color-mix(in srgb, var(--ink-primary) 5%, var(--bg-surface));
   --bg-pressed: color-mix(in srgb, var(--ink-primary) 9%, var(--bg-surface));
-  /* THE SAME TWO ON THE DEAD BANNER (D-5574). The fleet host's banner
-     re-scopes --bg-hover and --bg-pressed to these for what it holds (the
-     danger-ghost Reboot, D-5575), because the card's grounds barely register
-     on its tint: 1.00 for the press in light, 1.03 for the lift in dark. Its
-     own tint, mixed toward --ink-on-danger, which is the danger fill's ink and
-     so sits on the far side of the tint from --status-dead-text in every
-     palette (a red-black in the dark ones, white in the light ones): the step
-     moves away from the label and the hairline, so both only gain. Measured in
-     the twelve palettes: the hover 1.07 or more from the tint, the press 1.13
-     or more, the press 1.06 or more from the hover. Declared once, in :root
-     only, like the two above; both inputs are re-declared per theme. */
+  /* THE SAME TWO ON THE DEAD BANNER (D-5574). The danger-ghost Reboot paints
+     these with `ground="dead"` (D-5688; until then the banner re-scoped
+     --bg-hover and --bg-pressed, D-5575), because the card's grounds barely
+     register on its tint: 1.00 for the press in light, 1.03 for the lift in
+     dark. Its own tint, mixed toward --ink-on-danger, which is the danger
+     fill's ink and so sits on the far side of the tint from
+     --status-dead-text in every palette (a red-black in the dark ones, white
+     in the light ones): the step moves away from the label and the hairline,
+     so both only gain. Measured in the eight dark palettes: the hover 1.08 or
+     more from the tint, the press 1.16 or more, the press 1.07 or more from
+     the hover. Declared here for every dark palette; both inputs are
+     re-declared per theme. A LIGHT palette re-declares the pair at 60% and
+     95% (D-5688): at 35% its hover sat under its own card hover step. Those
+     blocks say why. */
   --bg-hover-on-dead:   color-mix(in srgb, var(--ink-on-danger) 35%, var(--status-dead-tint-solid));
   --bg-pressed-on-dead: color-mix(in srgb, var(--ink-on-danger) 70%, var(--status-dead-tint-solid));
 
@@ -488,6 +491,14 @@
   --status-dead:           #B2402C;  /* dot 5.73:1 vs surface, 3.15:1 vs lamp well */
   --status-dead-text:      #B2402C;  /* 5.73:1 vs surface */
   --status-dead-tint:      rgba(178, 64, 44, 0.12);  /* dead-text on it 4.81:1 over surface */
+  /* The dead banner's lift and press, mixed further than :root's 35/70
+     (D-5688): at 35% the hover measured 1.065 from the banner, under this
+     palette's own card hover step (1.102). At 60% it is 1.113; the press at
+     95% is 1.183 from the banner and 1.063 from the hover. 95%, not 100%:
+     the bare --ink-on-danger is white, a hole in the banner rather than a
+     ground on it. The generated light palettes carry the same two. */
+  --bg-hover-on-dead:   color-mix(in srgb, var(--ink-on-danger) 60%, var(--status-dead-tint-solid));
+  --bg-pressed-on-dead: color-mix(in srgb, var(--ink-on-danger) 95%, var(--status-dead-tint-solid));
 
   --acct-cyan:         #0A6377;  /* 5.80:1 on its tint */
   --acct-cyan-tint:    #DAF0F6;
@@ -1063,6 +1074,8 @@
   --status-dead-tint-solid:  #F9E4E6;
   --status-dead-text:        #C61427;
   --ink-on-danger:           #FFFFFF;
+  --bg-hover-on-dead:        color-mix(in srgb, var(--ink-on-danger) 60%, var(--status-dead-tint-solid));
+  --bg-pressed-on-dead:      color-mix(in srgb, var(--ink-on-danger) 95%, var(--status-dead-tint-solid));
   --status-done:             #23853D;
   --status-done-text:        #136F2E;
   --status-cleanup:          #6D757E;
@@ -1133,6 +1146,8 @@
   --status-dead-tint-solid:  #FBE3D9;
   --status-dead-text:        #C6131A;
   --ink-on-danger:           #FFFFFF;
+  --bg-hover-on-dead:        color-mix(in srgb, var(--ink-on-danger) 60%, var(--status-dead-tint-solid));
+  --bg-pressed-on-dead:      color-mix(in srgb, var(--ink-on-danger) 95%, var(--status-dead-tint-solid));
   --status-done:             #1A8981;
   --status-done-text:        #000001;
   --status-cleanup:          #6D7A7A;
@@ -1203,6 +1218,8 @@
   --status-dead-tint-solid:  #FAE2E7;
   --status-dead-text:        #C31A38;
   --ink-on-danger:           #FFFFFF;
+  --bg-hover-on-dead:        color-mix(in srgb, var(--ink-on-danger) 60%, var(--status-dead-tint-solid));
+  --bg-pressed-on-dead:      color-mix(in srgb, var(--ink-on-danger) 95%, var(--status-dead-tint-solid));
   --status-done:             #068C93;
   --status-done-text:        #000003;
   --status-cleanup:          #777A8B;

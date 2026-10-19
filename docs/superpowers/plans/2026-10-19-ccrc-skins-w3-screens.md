@@ -714,6 +714,12 @@ The ledger issued this plan a block of twenty-four, D-5580 to 5603 (the upper bo
 
 Issued and unused: 5595, 5596, 5597, 5598, 5599, 5600, 5601, 5602, 5603. Each is a spare for a departure a worker meets while executing a task here; the coordinator defines it here, once, in the PR that introduces it.
 
+### Issued 2026-10-19 and defined here (Task P5a)
+
+- **D-5650** — `run-group-finished` (Task P5a): `RUN_GROUP`, the state record D-5587 asks for, has three values, `needs`, `running` and `finished`, not the shape's two. A `Record<RunState, …>` is total, so `done` and `failed` need an answer, and the only honest one is the group `isRunClosed` already files them in; `run-groups.test.ts` holds the record's `finished` states to exactly `isRunClosed`'s, so the two cannot drift into two definitions of closed. Step 0's map is otherwise the shape's: `awaiting-review` alone is Needs you, `failed` and `done` are Finished, the rest (with `unknown`) are Running. `groupRuns` takes `finished` as the board passes it, its order and its cold-read source unchanged, and a closed run that reaches `active` anyway is filed under Finished rather than dropped.
+
+Issued and unused (Task P5a): 5651.
+
 ## Out of scope
 
 - **Every Settings screen item** (U11, U12, the Settings split): the Settings plan's R2b1 to R2e, R3a and R3b. W3 builds only the seam R3a registers into (P1a) and the inspector slot R3b fills (P1b).
