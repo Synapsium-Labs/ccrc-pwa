@@ -77,28 +77,23 @@ describe('groupRuns (D-5587)', () => {
       run({ id: 1, program: 'programme-b', programTitle: 'Programme B', wave: 1, waveOf: null, state: 'planned' }),
       run({ id: 2, program: 'programme-a', wave: 2, waveOf: 4, state: 'dispatched' }),
       run({ id: 3, program: 'programme-a', wave: 1, waveOf: 4, state: 'working' }),
-      // A Needs-you run at the furthest wave still counts toward its programme's wave.
-      run({ id: 4, program: 'programme-a', wave: 3, waveOf: 4, state: 'awaiting-review' }),
+      // programme-c's furthest wave waits on review: the programme's wave still counts it.
+      run({ id: 4, program: 'programme-c', programTitle: 'Programme C', wave: 2, waveOf: 3, state: 'working' }),
+      run({ id: 5, program: 'programme-c', programTitle: 'Programme C', wave: 3, waveOf: 3, state: 'awaiting-review' }),
     ];
     const g = groupRuns(active, []);
     const order = runsByProgram(active).map((group) => group.program);
     expect(g.running.map((group) => group.program)).toEqual(order);
     const a = g.running.find((group) => group.program === 'programme-a')!;
-    expect({ wave: a.wave, waveOf: a.waveOf }).toEqual(programWave(active.filter((r) => r.program === 'programme-a')));
-    expect(a.wave).toBe(3);
     expect(a.runs.map((r) => r.id)).toEqual([3, 2]);
+    expect(a.runs[0]!.wave).toBe(1);
+    expect({ wave: a.wave, waveOf: a.waveOf }).toEqual(programWave(active.filter((r) => r.program === 'programme-a')));
+    expect(a.wave).toBe(2);
     const b = g.running.find((group) => group.program === 'programme-b')!;
     expect({ wave: b.wave, waveOf: b.waveOf }).toEqual({ wave: 1, waveOf: null });
-  });
-
-  it("Running's wave is programWave's, not the head row's", () => {
-    const active = [
-      run({ id: 2, program: 'programme-a', wave: 2, state: 'dispatched' }),
-      run({ id: 3, program: 'programme-a', wave: 1, state: 'working' }),
-    ];
-    const [a] = groupRuns(active, []).running;
-    expect(a!.runs[0]!.wave).toBe(1);
-    expect(a!.wave).toBe(2);
+    const c = g.running.find((group) => group.program === 'programme-c')!;
+    expect(c.runs.map((r) => r.id)).toEqual([4]);
+    expect({ wave: c.wave, waveOf: c.waveOf }).toEqual({ wave: 3, waveOf: 3 });
   });
 
   it("a group's title is the programme's title, the slug only when no run has one", () => {
