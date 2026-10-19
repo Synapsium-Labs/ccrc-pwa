@@ -58,6 +58,17 @@ describe('the backfill (G35)', () => {
     expect(laneState(home, 'lane-b')).toEqual({ fleetIdentity: NODE_ID });
   });
 
+  it('is advisory, as the verbs\' write is: a lane-state file that cannot be written never stops an update', () => {
+    const home = laneBox('ccrc-lane-backfill-advisory-');
+    // Something that is not a directory where the lane-state directory goes (D-5755 (9)).
+    writeFileSync(laneStateDir(home), 'not a directory\n');
+    const r = backfill(home);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toBe('install: lane-state: wrote 0, kept 0, 2 not written\n');
+    expect(r.err).toContain("lane claude's state file");
+    expect(r.err).toContain("lane lane-b's state file");
+  });
+
   it('runs in the install spine `ccrc update` runs, after the wrappers and before the completed-install record', () => {
     const src = readFileSync(CCRC_SRC, 'utf8');
     const spine = /^CCRC_INST_SPINE=\(([\s\S]*?)\n\)/m.exec(src)![1]!.split('\n').map((l) => l.trim()).filter(Boolean);

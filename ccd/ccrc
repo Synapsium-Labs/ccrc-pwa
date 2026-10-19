@@ -6646,7 +6646,7 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   ) || ! chmod 600 "$tmp" || ! mv -f "$tmp" "$dest"; then
     rm -f "$tmp"
     ACCT_CREDENTIAL=""
-    _acct_refuse 1 secret-write "writing $dest failed — nothing was installed. Check that $ACCT_SECRETS_DIR exists and is writable by the user this box runs as; a retry overwrites the DESTINATION file, and this path has already removed its own temp. What nothing cleans up is a temp left by a run that was KILLED between the create and the mv: it is .$id-$tag.env.tmp.<pid> in that same directory, 0600 and holding a live credential, and no retry ever reuses the name because it carries the pid. Remove one by hand if you find it."
+    _acct_refuse 1 secret-write "writing $dest failed — nothing was installed. Check that $ACCT_SECRETS_DIR exists and is writable by the user this box runs as; a retry overwrites the DESTINATION file, and this path has already removed its own temp. A temp left by a run that was KILLED between the create and the mv (.$id-$tag.env.tmp.<pid> in that same directory, 0600 and holding a live credential) is removed by the next 'ccrc account add', 'credential' or 'remove' on this lane, under its lock (D-5755 (4))."
   fi
   # UNSET THE MOMENT THE FILE HAS IT — `cmd_passwd`'s `unset p1 p2` (:3123) — AND
   # RECORD THE PATH, never the value (D-2051: `_acct_add`'s `add-entry` refusal
@@ -8523,7 +8523,8 @@ _acct_credential() {
   # going to refuse anyway.
   _acct_read_credential "$cred"                # -> ACCT_CREDENTIAL, or refuses
   _acct_write_secret "$id" "$ACCT_PROVIDER" "$ACCT_SECRET_ENV"
-  _acct_lane_state "$id"
+  # A verdict measured on the old secret says nothing about this one (D-5755 (12)).
+  _acct_lane_state "$id" --clear check
   _acct_live "$id"
 
   # `${arr[@]+"${arr[@]}"}` — this tree's empty-array idiom under `set -u`.
@@ -16603,16 +16604,29 @@ _inst_legacy_verified_parent() {
 # writer's `if-absent` mode). Each write takes that lane's lock the way the
 # verbs do; a lane a verb is acting on right now is left to that verb, which
 # writes its own state.
+# ADVISORY, AS THE VERBS' WRITE IS (D-5755 (2), (9)). The file is for display
+# and an accident guard, and an absent file reads Not checked, so a box whose
+# lane-state files cannot be written (a registry that is not a directory, a
+# full disk) still takes its update: each failure is said on stderr, counted on
+# the summary line, and the next account verb on the lane writes it.
 _inst_lane_state() {
   if [ "$INST_ROLE" = server ]; then echo "install: lane-state: skipped — a server-role box hosts no sessions"; return 0; fi
   local sh="$HOME/.ccrc/accounts.sh" op="$CCRC_HERE/../deploy/account-op.mjs" locks="$HOME/.ccrc/locks"
-  local listed="" id="" rc=0 wrote=0 kept=0 busy=0
-  listed="$(
+  local listed="" id="" rc=0 wrote=0 kept=0 busy=0 failed=0
+  if ! listed="$(
     . "$sh" >/dev/null || exit 1
     declare -p CCRC_ACCOUNTS 2>/dev/null | grep -q '^declare -a ' || exit 1
     for a in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do printf '%s\n' "$a"; done
-  )" || _ccrc_die "$sh could not be sourced as an account projection, so no lane's state could be backfilled. Re-run 'ccrc install'."
-  mkdir -p -m 0700 "$locks" || _ccrc_die "cannot create $locks (0700), so no lane's state could be backfilled"
+  )"; then
+    printf '%s\n' "$PROG: install: lane-state: $sh could not be sourced as an account projection, so no lane's state was backfilled; each lane's next account verb writes its own" >&2
+    echo "install: lane-state: not backfilled — the account projection could not be read"
+    return 0
+  fi
+  if ! mkdir -p -m 0700 "$locks"; then
+    printf '%s\n' "$PROG: install: lane-state: cannot create $locks (0700), so no lane's state was backfilled; each lane's next account verb writes its own" >&2
+    echo "install: lane-state: not backfilled — $locks could not be created"
+    return 0
+  fi
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     if [ -e "$_SVC_REG/.accounts/$id.json" ] || [ -L "$_SVC_REG/.accounts/$id.json" ]; then
@@ -16629,11 +16643,13 @@ _inst_lane_state() {
     case "$rc" in
       0) wrote=$((wrote + 1)) ;;
       75) busy=$((busy + 1)) ;;
-      *) _ccrc_die "writing lane $id's state file under $_SVC_REG/.accounts failed (exit $rc) — read the line above" ;;
+      *) failed=$((failed + 1))
+         printf '%s\n' "$PROG: install: lane-state: lane $id's state file under $_SVC_REG/.accounts was not written (exit $rc; the line above says why); the lane's next account verb writes it" >&2 ;;
     esac
   done <<<"$listed"
   local tail=""
   [ "$busy" -eq 0 ] || tail=", $busy left to the account verb acting on it"
+  [ "$failed" -eq 0 ] || tail="$tail, $failed not written"
   echo "install: lane-state: wrote $wrote, kept $kept$tail"
 }
 

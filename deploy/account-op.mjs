@@ -709,7 +709,7 @@ const OPS = {
   // D-5755). `opLaneState` below states the shape. Every `ccrc account` verb
   // and `ccd-account-health` call this op, and nothing else writes the file.
   'lane-state': {
-    keys: ['id', 'mode', 'check-verdict', 'check-at', 'key-hash', 'retired-key-hash'], repeat: [],
+    keys: ['id', 'mode', 'check-verdict', 'check-at', 'key-hash', 'retired-key-hash', 'clear'], repeat: [],
   },
 };
 
@@ -1199,6 +1199,14 @@ function readNodeIdentity(home) {
  *     above all, so a health-timer rewrite or a `check` never drops what a mint
  *     wrote. A file that is not a JSON object is refused, never overwritten:
  *     the fields it held cannot be preserved, so the operator moves it aside.
+ *     WHAT IS KEPT IS SPEC §3.4'S FIELD LIST, NOTHING ELSE (`LANE_STATE_FIELDS`;
+ *     D-5755 (11)). A field the spec does not name is dropped on the rewrite,
+ *     so a secret some other same-uid process planted or hardlinked at this
+ *     path is never carried into the file the agent's poll serves: "never
+ *     holds a secret" rests on this writer, not on what others wrote.
+ *     `--clear check` drops `check`: `credential` passes it, because a verdict
+ *     measured on the old secret says nothing about the new one, and `enable`'s
+ *     readiness (A13) reads `check` (D-5755 (12)).
  *   - `fresh`: a new lane (`add`, `declare`) starts its state over. A stale
  *     file under a re-used id would otherwise lend the new lane an old
  *     identity or key hash.
@@ -1225,6 +1233,14 @@ const LANE_STATE_MODES = ['merge', 'fresh', 'if-absent', 'delete'];
 const CHECK_VERDICT_RE = /^[a-z][a-z-]{0,31}$/;
 const ISO_SECONDS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 const KEY_HASH_RE = /^[A-Za-z0-9_-]{1,128}$/;
+/** Spec §3.4's lane-state fields: the only ones a merge keeps (D-5755 (11)). */
+const LANE_STATE_FIELDS = [
+  'check', 'identity', 'identitySource', 'keyHint', 'keySource', 'keyHash', 'keyLimit', 'limitReset',
+  'keyExpiresAt', 'retiredKeyHash', 'validatedAt', 'credit', 'mintedAt', 'seedVerifiedAt', 'lastRunAt',
+  'fleetIdentity',
+];
+/** The fields `--clear` may drop. */
+const LANE_STATE_CLEARABLE = ['check'];
 
 function laneStateDir(home) {
   return join(home, '.cc-sessions', '.accounts');
@@ -1261,6 +1277,10 @@ function opLaneState(a) {
       refuse('bad-argv', `--${k} is not a key hash`);
       return 2;
     }
+  }
+  if (a['clear'] !== undefined && (!LANE_STATE_CLEARABLE.includes(a['clear']) || verdict !== undefined)) {
+    refuse('bad-argv', `--clear takes ${LANE_STATE_CLEARABLE.join(', ')}, and not with the field it clears`);
+    return 2;
   }
   if (mode === 'delete' && Object.keys(a).some((k) => k !== 'id' && k !== 'mode')) {
     refuse('bad-argv', 'lane-state --mode delete takes no field');
@@ -1323,7 +1343,11 @@ function opLaneState(a) {
     }
   }
 
-  const next = mode === 'merge' && current !== null ? { ...current } : {};
+  const next = {};
+  if (mode === 'merge' && current !== null) {
+    for (const k of LANE_STATE_FIELDS) if (Object.hasOwn(current, k)) next[k] = current[k];
+  }
+  if (a['clear'] !== undefined) delete next[a['clear']];
   if (verdict !== undefined) next.check = { verdict, at };
   if (a['key-hash'] !== undefined) next.keyHash = a['key-hash'];
   if (a['retired-key-hash'] !== undefined) next.retiredKeyHash = a['retired-key-hash'];

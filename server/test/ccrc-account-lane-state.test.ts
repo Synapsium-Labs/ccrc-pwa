@@ -4,7 +4,7 @@
 // that reads it. The fixture is `laneStateFixture.ts`.
 import { describe, it, expect, beforeEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ACCOUNT_OP, CANARY, HAVE_FLOCK, HEALTH_SRC, NODE_ID, addLane, answer, boxEnv, ccrcRun, laneBox, laneState,
@@ -25,14 +25,16 @@ function expectPrivateAndClean(home: string, id: string, secret = CANARY): void 
   expect(readFileSync(laneStatePath(home, id), 'utf8').includes(secret), 'a secret byte in the lane state').toBe(false);
 }
 
-/** `ccd-account-health` against the box, with a `curl` that answers 401 for every lane. */
-function health401(home: string): ReturnType<typeof spawnSync> {
+/** `ccd-account-health` against the box, with a `curl` that answers `status` and `body` for every lane. */
+function healthAnswers(home: string, status: number, body: string, script = '"$BASH" "$1"'): ReturnType<typeof spawnSync> {
   // The env FIRST: building it re-plants the curl poison, and this case's curl must stand in its place.
   const env = { ...boxEnv(home), CCRC_HEALTH_URL: 'https://fixture.invalid/api/oauth/usage' };
   writeFileSync(join(home, '.local', 'bin', 'curl'),
-    '#!/bin/sh\ncat >/dev/null\nprintf \'%s\\n%s\' \'{"type":"error"}\' 401\nexit 0\n', { mode: 0o755 });
-  return spawnSync(BASH_OF(), [HEALTH_SRC], { encoding: 'utf8', env });
+    `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n%s' '${body}' ${status}\nexit 0\n`, { mode: 0o755 });
+  return spawnSync(BASH_OF(), ['-c', script, '_', HEALTH_SRC], { encoding: 'utf8', env });
 }
+const health401 = (home: string, script?: string): ReturnType<typeof spawnSync> =>
+  healthAnswers(home, 401, '{"type":"error"}', script);
 const BASH_OF = (): string => spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 
 /** lane-b's OAuth token file, which `ccd-account-health` reads; a fixed non-secret value. */
@@ -44,25 +46,24 @@ function plantToken(home: string): void {
 
 describe('every verb writes the lane-state file (G16)', () => {
   it('every verb writes the file 0600 in a 0700 directory, and it holds no secret byte', () => {
+    // EACH VERB ON ITS OWN: the file is deleted before each verb, so the file after it is that verb's write and
+    // not one an earlier verb left behind.
     const home = laneBox('ccrc-lane-state-every-');
     const add = addLane(home, 'lane-c');
     expect(add.code, add.stderr).toBe(0);
     expectPrivateAndClean(home, 'lane-c');
     expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID });
 
-    const second = `${CANARY}-rotated`;
-    const cred = ccrcRun(home, ['account', 'credential', '--id', 'lane-c', '--credential', '-'], `${second}\n`);
-    expect(cred.code, cred.stderr).toBe(0);
-    expectPrivateAndClean(home, 'lane-c');
-    expectPrivateAndClean(home, 'lane-c', second);
-
     for (const verb of ['disable', 'enable']) {
+      rmSync(laneStatePath(home, 'lane-c'));
       const r = ccrcRun(home, ['account', verb, '--id', 'lane-c']);
       expect(r.code, `${verb}: ${r.stderr}`).toBe(0);
+      expect(existsSync(laneStatePath(home, 'lane-c')), `${verb} wrote the lane state`).toBe(true);
       expectPrivateAndClean(home, 'lane-c');
     }
 
     plantProbe(home, 'lane-c');
+    rmSync(laneStatePath(home, 'lane-c'));
     const check = ccrcRun(home, ['account', 'check', '--id', 'lane-c']);
     expect(check.code, check.stderr).toBe(0);
     expectPrivateAndClean(home, 'lane-c');
@@ -70,6 +71,38 @@ describe('every verb writes the lane-state file (G16)', () => {
     expect((s['check'] as { verdict: string }).verdict).toBe('ok');
     expect((s['check'] as { at: string }).at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
     expect(s['fleetIdentity']).toBe(NODE_ID);
+
+    // `credential` writes in merge mode and drops the old secret's `check` (D-5755 (12)); a field it does not own
+    // stands, which is how this case knows the file is a rewrite and not the one `check` left.
+    expect(writeLaneState(home, ['--id', 'lane-c', '--key-hash', 'kh0c11']).code).toBe(0);
+    const second = `${CANARY}-rotated`;
+    const cred = ccrcRun(home, ['account', 'credential', '--id', 'lane-c', '--credential', '-'], `${second}\n`);
+    expect(cred.code, cred.stderr).toBe(0);
+    expectPrivateAndClean(home, 'lane-c');
+    expectPrivateAndClean(home, 'lane-c', second);
+    expect(laneState(home, 'lane-c')).toEqual({ keyHash: 'kh0c11', fleetIdentity: NODE_ID });
+  });
+
+  it('`credential` writes the file even when none was there', () => {
+    const home = laneBox('ccrc-lane-state-cred-');
+    expect(addLane(home, 'lane-c').code).toBe(0);
+    rmSync(laneStatePath(home, 'lane-c'));
+    const cred = ccrcRun(home, ['account', 'credential', '--id', 'lane-c', '--credential', '-'], `${CANARY}-r\n`);
+    expect(cred.code, cred.stderr).toBe(0);
+    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID });
+    expectPrivateAndClean(home, 'lane-c', `${CANARY}-r`);
+  });
+
+  it('`declare` starts the lane\'s state over, as `add` does', () => {
+    const home = laneBox('ccrc-lane-state-declare-');
+    writeFileSync(join(home, '.local', 'bin', 'lane-d'), 'exit 0\n', { mode: 0o755 });
+    mkdirSync(laneStateDir(home), { recursive: true, mode: 0o700 });
+    writeFileSync(laneStatePath(home, 'lane-d'), JSON.stringify({ identity: 'someone@example.invalid', keyHash: 'h1' }));
+    const r = ccrcRun(home, ['account', 'declare', '--id', 'lane-d', '--provider', 'openai', '--label', 'lane·d',
+      '--hue', 'violet']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(laneState(home, 'lane-d')).toEqual({ fleetIdentity: NODE_ID });
+    expectPrivateAndClean(home, 'lane-d');
   });
 
   it('remove takes the file with the lane, and reports it', () => {
@@ -99,6 +132,29 @@ describe('every verb writes the lane-state file (G16)', () => {
 });
 
 describe('ccd-account-health writes the lane state (G16)', () => {
+  it('a lane a verb holds is left to that verb: a 401 then changes nothing', () => {
+    const home = laneBox('ccrc-lane-state-health-busy-');
+    plantToken(home);
+    const r = health401(home, 'mkdir -p -m 0700 "$HOME/.ccrc/locks"; exec 7>>"$HOME/.ccrc/locks/lane-b.lock"; '
+      + 'flock -n 7 || exit 3; "$BASH" "$1"');
+    expect(r.status, String(r.stderr)).toBe(0);
+    expect(String(r.stdout) + String(r.stderr)).toContain('dead (401)');
+    expect(String(r.stdout) + String(r.stderr)).toContain('lane state left to the account verb acting on it');
+    expect(laneState(home, 'lane-b')).toBeNull();
+  });
+
+  it('a 403 scope answer never writes `check`, so a lane that recovers reads its last verdict until a check', () => {
+    const home = laneBox('ccrc-lane-state-health-403-');
+    plantToken(home);
+    const planted = { verdict: 'auth-dead', at: '2026-10-19T00:00:00Z' };
+    expect(writeLaneState(home, ['--id', 'lane-b', '--check-verdict', planted.verdict, '--check-at', planted.at]).code)
+      .toBe(0);
+    const r = healthAnswers(home, 403, '{"error":{"type":"oauth_scope_insufficient"}}');
+    expect(r.status, String(r.stderr)).toBe(0);
+    expect(String(r.stdout) + String(r.stderr)).toContain('live (403 scope)');
+    expect(laneState(home, 'lane-b')!['check']).toEqual(planted);
+  });
+
   it('`ccd-account-health` writes `check` on a 401', () => {
     const home = laneBox('ccrc-lane-state-health-');
     plantToken(home);
@@ -139,6 +195,29 @@ describe('the writer keeps what it was not asked to set (spec §3.4)', () => {
     expect(laneState(home, 'lane-b')).toMatchObject({
       keyHash: 'kh0b11', retiredKeyHash: 'kh0b10', check: { verdict: 'auth-dead' }, fleetIdentity: NODE_ID,
     });
+  });
+
+  it('a merge keeps spec §3.4\'s fields only: a planted field, a secret above all, is dropped', () => {
+    const home = laneBox('ccrc-lane-state-allowlist-');
+    mkdirSync(laneStateDir(home), { recursive: true, mode: 0o700 });
+    writeFileSync(laneStatePath(home, 'lane-b'), JSON.stringify({
+      claudeAiOauth: { accessToken: CANARY }, keyHash: 'kh0b11', identity: 'lane-b@example.invalid', bogus: 1,
+    }));
+    const w = writeLaneState(home, ['--id', 'lane-b', '--check-verdict', 'ok', '--check-at', '2026-10-19T00:00:00Z']);
+    expect(w.code, w.stderr).toBe(0);
+    expect(laneState(home, 'lane-b')).toEqual({
+      keyHash: 'kh0b11', identity: 'lane-b@example.invalid',
+      check: { verdict: 'ok', at: '2026-10-19T00:00:00Z' }, fleetIdentity: NODE_ID,
+    });
+    expectPrivateAndClean(home, 'lane-b');
+  });
+
+  it('`--clear` takes `check` only, and never with a verdict', () => {
+    const home = laneBox('ccrc-lane-state-clear-');
+    expect(writeLaneState(home, ['--id', 'lane-b', '--clear', 'keyHash']).code).toBe(2);
+    expect(writeLaneState(home, ['--id', 'lane-b', '--clear', 'check', '--check-verdict', 'ok',
+      '--check-at', '2026-10-19T00:00:00Z']).code).toBe(2);
+    expect(laneState(home, 'lane-b')).toBeNull();
   });
 
   it('a file that is not a JSON object is refused, never overwritten', () => {

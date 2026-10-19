@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  BASH, CANARY, HAVE_FLOCK, addLane, answer, boxEnv, ccrcIn, laneBox, modeOf,
+  BASH, CANARY, HAVE_FLOCK, NODE_ID, addLane, answer, boxEnv, ccrcIn, laneBox, laneState, modeOf,
 } from './laneStateFixture.js';
 
 beforeEach((ctx) => { if (!HAVE_FLOCK) ctx.skip(); });
@@ -49,6 +49,50 @@ describe('one act per lane (G18)', () => {
     expect(JSON.parse(readFileSync(join(home, 'b.out'), 'utf8'))).toMatchObject({ ok: true });
     // `add` leaves a lane switched off; the refused `enable` changed nothing.
     expect(existsSync(join(home, '.cc-sessions', 'lane-c-disabled'))).toBe(true);
+  });
+
+  // EACH VERB ON ITS OWN (D-5755 (6)): the lane lock held from outside, the verb is refused and changes nothing.
+  const held = (home: string, id: string, verb: string, stdin = ''): Record<string, unknown> => {
+    const hold = `mkdir -p -m 0700 "$HOME/.ccrc/locks"; exec 7>>"$HOME/.ccrc/locks/${id}.lock"; flock -n 7 || exit 3; `
+      + `"$1" ${verb} >"$HOME/held.out"`;
+    const r = spawnSync(BASH, ['-c', hold, '_', ccrcIn(home)], { env: boxEnv(home), encoding: 'utf8', input: stdin });
+    expect(r.status, `${verb}: ${r.stderr}`).toBe(1);
+    const body = JSON.parse(readFileSync(join(home, 'held.out'), 'utf8')) as Record<string, unknown>;
+    expect(body, verb).toMatchObject({ ok: false, error: 'lane-busy' });
+    return body;
+  };
+
+  it('`credential` on a held lane is refused `lane-busy`, and the secret stands', () => {
+    const home = laneBox('ccrc-lane-lock-cred-');
+    expect(addLane(home, 'lane-c').code).toBe(0);
+    const secret = join(home, '.cc-secrets', 'lane-c-compatible.env');
+    const before = readFileSync(secret, 'utf8');
+    held(home, 'lane-c', 'account credential --id lane-c --credential -', `${CANARY}-rotated\n`);
+    expect(readFileSync(secret, 'utf8')).toBe(before);
+  });
+
+  it('`declare` on a held id is refused `lane-busy`, and nothing is rostered', () => {
+    const home = laneBox('ccrc-lane-lock-declare-');
+    writeFileSync(join(home, '.local', 'bin', 'lane-d'), 'exit 0\n', { mode: 0o755 });
+    held(home, 'lane-d', 'account declare --id lane-d --provider openai --label lane·d --hue violet');
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).not.toContain('lane-d');
+    expect(existsSync(join(home, '.cc-sessions', 'lane-d-disabled'))).toBe(false);
+  });
+
+  it('`check` on a held lane is refused `lane-busy`, and nothing is measured or written', () => {
+    const home = laneBox('ccrc-lane-lock-check-');
+    expect(addLane(home, 'lane-c').code).toBe(0);
+    held(home, 'lane-c', 'account check --id lane-c');
+    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID });
+  });
+
+  it('`remove` on a held lane is refused `lane-busy`, and the lane stands', () => {
+    const home = laneBox('ccrc-lane-lock-remove-');
+    expect(addLane(home, 'lane-c').code).toBe(0);
+    held(home, 'lane-c', 'account remove --id lane-c');
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toContain('"lane-c"');
+    expect(existsSync(join(home, '.cc-secrets', 'lane-c-compatible.env'))).toBe(true);
+    expect(laneState(home, 'lane-c')).not.toBeNull();
   });
 });
 

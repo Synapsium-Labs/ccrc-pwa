@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  BASH, CANARY, HAVE_FLOCK, addLane, ccrcSpawn, exited, laneBox, secretTemps, waitFor,
+  BASH, CANARY, HAVE_FLOCK, addLane, boxEnv, ccrcSpawn, exited, laneBox, secretTemps, waitFor,
 } from './laneStateFixture.js';
 
 beforeEach((ctx) => { if (!HAVE_FLOCK) ctx.skip(); });
@@ -30,10 +30,10 @@ function plantPausingMv(home: string): void {
   ].join('\n') + '\n', { mode: 0o755 });
 }
 
-/** `add`, paused with its secret temp on disk; resolves once the temp exists. */
-async function pausedAdd(home: string): Promise<ReturnType<typeof ccrcSpawn>> {
+/** A verb (`add` by default), paused with its secret temp on disk; resolves once the temp exists. */
+async function pausedAdd(home: string, args: string[] = ADD): Promise<ReturnType<typeof ccrcSpawn>> {
   plantPausingMv(home);
-  const c = ccrcSpawn(home, ADD, `${CANARY}\n`);
+  const c = ccrcSpawn(home, args, `${CANARY}\n`);
   await waitFor(join(home, 'mv-paused'));
   expect(secretTemps(home, 'lane-c'), 'the pause is between the temp create and the rename').toHaveLength(1);
   return c;
@@ -64,6 +64,27 @@ describe('a killed verb leaves no secret temp (G18)', () => {
     expect(retry.code, retry.stderr).toBe(0);
     expect(secretTemps(home, 'lane-c')).toEqual([]);
   });
+
+  // `credential` and `remove` sweep too (spec §3.9; D-5755 (4)): a rotation KILLED mid-write, then the next verb.
+  for (const [next, args] of [
+    ['credential', ['account', 'credential', '--id', 'lane-c', '--credential', '-']],
+    ['remove', ['account', 'remove', '--id', 'lane-c']],
+  ] as const) {
+    it(`a \`credential\` killed mid-write leaves no secret temp file after the next \`${next}\``, async () => {
+      const home = laneBox(`ccrc-lane-kill-cred-${next}-`);
+      expect(addLane(home, 'lane-c').code).toBe(0);
+      const c = await pausedAdd(home, ['account', 'credential', '--id', 'lane-c', '--credential', '-']);
+      const done = exited(c);
+      process.kill(-c.pid!, 'SIGKILL');
+      await done;
+      expect(secretTemps(home, 'lane-c'), 'a KILL runs no trap, so the temp is still there').toHaveLength(1);
+      rmSync(join(home, '.local', 'bin', 'mv'));
+      const r = spawnSync(BASH, ['-c', 'umask 022; exec "$@"', '_', BASH, join(home, 'ccrc', 'ccd', 'ccrc'), ...args],
+        { env: boxEnv(home), encoding: 'utf8', input: `${CANARY}-r\n` });
+      expect(r.status, `${next}: ${r.stdout}${r.stderr}`).toBe(0);
+      expect(secretTemps(home, 'lane-c')).toEqual([]);
+    });
+  }
 
   it('the sweep is exact: a neighbouring lane\'s temp, whose name shares the prefix, is left alone', async () => {
     const home = laneBox('ccrc-lane-kill-exact-');
