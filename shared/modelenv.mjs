@@ -144,7 +144,8 @@ function catalogueWindow(registry, catalogue) {
  * the only safe one. The rule reads no catalogue: a measured window is a fact
  * the operator measured about the backend, not a number a catalogue
  * advertised, so it holds whether the catalogue is fresh, stale or absent. A
- * window for a model no class names is ignored. An empty set of class models
+ * window for a model no class names is ignored, and only the map's OWN entries
+ * count: an inherited entry never counts. An empty set of class models
  * (an unseeded registry) is never "every one measured". A value built in
  * memory that is not an integer, or is below `WINDOW_MIN`, counts as
  * unmeasured: `parseWindows` refuses both on disk, and this function never
@@ -163,10 +164,10 @@ function catalogueWindow(registry, catalogue) {
  * first argued from a "196k wall", the largest prompt one home had ever had
  * accepted, in one July sample. A whole-fleet scan on 2026-10-15 withdrew it
  * (codex-bridge spec §1.2): prompts of 548,799 and 584,415 tokens had been
- * accepted on two different models in September, the six context refusals on
- * record sat near 373k and moved over time, and every model the lanes'
- * classes name accepted about 512k in a stepped probe that day. The cap stays
- * only where nothing is measured.
+ * accepted on two different models in September, six context refusals on
+ * record, five of them near 373k, with a limit that moves over time, and every
+ * model the lanes' classes name accepted about 512k in a stepped probe that
+ * day. The cap stays only where nothing is measured.
  *
  * `unmeasured` lists the class models with no measured window, distinct and in
  * `CLASSES` order. It is empty when `rule` is `measured`, and on an unseeded
@@ -327,7 +328,7 @@ export function modelEnvBlock(registry, catalogue, windows = null) {
  * other direction (measured, §1), and a lane's `settings.json` carries the
  * operator's own edits. The eighth key is the one exception because it alone
  * has no sentinel (§6.1 amendment): a catalogue going stale, or the lane's
- * default model changing to one with no measured context, must not leave a
+ * default model changing to one with no catalogue context, must not leave a
  * STALE number on disk — omission from `block` has to reach the file as a
  * deletion, or a re-materialise could only ever add this key, never retract
  * it.

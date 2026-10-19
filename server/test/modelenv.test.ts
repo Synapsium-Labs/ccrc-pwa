@@ -391,6 +391,16 @@ describe('contextWindowFor — the measured-window rule (codex-bridge spec §2.7
     expect(contextWindowFor(UNSEEDED, null, measured({}))).toEqual({ tokens: null, rule: 'none', unmeasured: [] });
   });
 
+  it('a window the map only INHERITS is not measured — own entries only', () => {
+    const w: ModelWindows = Object.assign(Object.create({ [GAMMA]: 400000 }), { [ALPHA]: 400000, [BETA]: 400000 });
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w)).toEqual({ tokens: 200000, rule: 'default', unmeasured: [GAMMA] });
+  });
+
+  it('a window of exactly WINDOW_MIN is measured: the boundary is inclusive', () => {
+    const w = measured({ [ALPHA]: 1000, [BETA]: 400000, [GAMMA]: 400000 });
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w)).toEqual({ tokens: 1000, rule: 'measured', unmeasured: [] });
+  });
+
   it('an in-memory window below WINDOW_MIN, or not an integer, counts as unmeasured — never a window', () => {
     const w: ModelWindows = { [ALPHA]: 500, [BETA]: 400000.5, [GAMMA]: 400000 };
     expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, w))
