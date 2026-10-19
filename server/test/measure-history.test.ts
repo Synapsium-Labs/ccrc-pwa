@@ -3990,4 +3990,106 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
     expect(one.criteria.uptake!.lower).toEqual(wantOne.lower);
     expect(one.criteria.uptake!.lower).not.toEqual(decide({ live, quiz }).criteria.uptake!.lower);
   });
+
+  // ── Fix round 1: inputs the brief's code read as defaults, and the pins it left open ──
+  it('fix1: a hand-check section that is missing, or lacks an arm key, is refused; explicit nulls are not', () => {
+    const none = { treatment: null, control: null };
+    expect(() => decide({ handcheck: undefined as never })).toThrow(/handcheck must be an object/);
+    expect(() => decide({ handcheck: null as never })).toThrow(/handcheck must be an object/);
+    expect(() => decide({ handcheck: {} as never })).toThrow(/handcheck.agreement must be an object/);
+    expect(() => decide({ handcheck: { agreement: null } as never })).toThrow(/handcheck.agreement must be an object/);
+    expect(() => decide({ handcheck: { agreement: { treatment: fr(9, 10) } } as never })).toThrow(/handcheck.agreement.control must be present/);
+    expect(() => decide({ handcheck: { agreement: { control: fr(9, 10) } } as never })).toThrow(/handcheck.agreement.treatment must be present/);
+    expect(() => decide({ handcheck: { agreement: Object.create({ treatment: null, control: null }) } as never }), 'inherited keys are not own').toThrow(/must be present/);
+    expect(() => decide({ handcheck: { agreement: { treatment: undefined, control: null } } as never })).toThrow(/handcheck.agreement.treatment must be a fraction or null/);
+    const v = decide({ handcheck: { agreement: none } });
+    expect(v.halts, 'explicit nulls: no pair, no halt').toEqual([]);
+    expect(v.verdict).toBe('pass');
+  });
+
+  it('fix1: an agreement is a share in [0, 1], an integer fraction with a positive denominator', () => {
+    const at = (treatment: unknown) => (): unknown => decide({ handcheck: { agreement: { treatment, control: null } } as never });
+    expect(at(fr(11, 10)), 'above 1').toThrow(/handcheck.agreement.treatment must lie in \[0, 1\]/);
+    expect(at(fr(-3, 1)), 'below 0').toThrow(/must lie in \[0, 1\]/);
+    expect(at(fr(1, -2)), 'a negative denominator').toThrow(/must be a fraction or null/);
+    expect(at(fr(1, 1.5)), 'a fractional denominator').toThrow(/must be a fraction or null/);
+    expect(at(fr(1, 0)), 'a zero denominator').toThrow(/must be a fraction or null/);
+    expect(at(fr(0.5, 2)), 'a fractional numerator').toThrow(/must be a fraction or null/);
+    expect((at(fr(10, 10)) as () => Verdict)().halts, 'exactly 1 is a share').toEqual([]);
+    expect((at(fr(0, 5)) as () => Verdict)().halts, 'exactly 0 is a share, and halts').toEqual(['handcheck-agreement']);
+  });
+
+  it('fix1: a seven-place threshold with no exponent is refused as "at most six places"', () => {
+    expect(String(0.1234567), 'CONTROL: no exponent in this rendering').toBe('0.1234567');
+    expect(() => decide({ halts: { ...gateT8.HALT_DEFAULTS, absent_rate_max: 0.1234567 } })).toThrow(/at most six places/);
+    expect(() => decide({ halts: { ...gateT8.HALT_DEFAULTS, handcheck_agreement_min: 0.8000001 } })).toThrow(/at most six places/);
+  });
+
+  it('fix1: an unlabelled judge-failed CONTROL answer holds the verdict too', () => {
+    const quiz = quizOf(20, (i) => [...rep(3, () => q(R(), U())), q(U(), U()), i === 0 ? q(U(), ans(null, 'value', true)) : q(U(), U())]);
+    const v = decide({ quiz });
+    expect(v.verdict).toBe('incomplete');
+    expect(v.criteria.accuracy).toBeNull();
+    expect(v.criteria.fabrication).toBeNull();
+    expect(v.criteria.uptake!.holds).toBe(true);
+    const labelled = quizOf(20, (i) => [...rep(3, () => q(R(), U())), q(U(), U()), i === 0 ? q(U(), ans('uncertain', 'value', true)) : q(U(), U())]);
+    expect(decide({ quiz: labelled }).verdict, 'labelled by the operator, it decides').toBe('pass');
+  });
+
+  it('fix1: the control arm point accuracy is its correct answers over Q', () => {
+    // 10 families of 5; treatment correct in 2, control in 1 of each; a run-failed question in family 0 (Q = 50, 51 frozen).
+    const quiz = quizOf(10, (i) => [q(R(), R()), q(R(), U()), ...rep(3, () => q(U(), U())), ...(i === 0 ? [q(R(), R(), true)] : [])]);
+    const v = decide({ quiz });
+    expect(v.counts).toMatchObject({ Q: 50, run_failed: 1 });
+    expect(eq(v.criteria.accuracy!.point_t, fr(20, 50))).toBe(true);
+    expect(eq(v.criteria.accuracy!.point_c, fr(10, 50))).toBe(true);
+    expect(v.criteria.accuracy!.holds).toBe(true);
+  });
+
+  it('fix1: a repeated or non-string qid is refused, a run-failed question\'s included', () => {
+    const withQid = (qid: unknown, where: 'live' | 'failed' = 'live') => {
+      const quiz = quizOf(20, () => [q(R(), U()), q(U(), U())]);
+      (quiz.families[3]!.questions[1] as { qid: unknown }).qid = qid;
+      if (where === 'failed') (quiz.families[3]!.questions[1] as { runFailed: boolean }).runFailed = true;
+      return quiz;
+    };
+    const taken = quizOf(20, () => [q(R(), U()), q(U(), U())]);
+    (taken.families[7]!.questions[0] as { qid: string }).qid = taken.families[2]!.questions[1]!.qid;
+    expect(() => decide({ quiz: taken })).toThrow(/qid .* is missing or repeated/);
+    const failedTwin = quizOf(20, () => [q(R(), U()), q(U(), U())]);
+    (failedTwin.families[9]!.questions[1] as { qid: string; runFailed: boolean }).qid = failedTwin.families[0]!.questions[0]!.qid;
+    (failedTwin.families[9]!.questions[1] as { qid: string; runFailed: boolean }).runFailed = true;
+    expect(() => decide({ quiz: failedTwin }), 'a run-failed question still has its own qid').toThrow(/qid .* is missing or repeated/);
+    expect(() => decide({ quiz: withQid(7) })).toThrow(/qid 7 is missing or repeated/);
+    expect(() => decide({ quiz: withQid(undefined) })).toThrow(/qid undefined is missing or repeated/);
+    expect(() => decide({ quiz: withQid(7, 'failed') })).toThrow(/qid 7 is missing or repeated/);
+  });
+
+  it('fix1: seedHex and B are refused on every path, a hold, a halt and a refusal included', () => {
+    const held = quizOf(20, (i) => [...rep(4, () => q(R(), U())), i === 0 ? q(ans(null, 'value', true), U()) : q(U(), U())]);
+    const absentHalt = quizOf(20, (i) => [...rep(3, () => q(R(), U())), q(U(), U()), i < 6 ? q(ans('uncertain', 'absent'), U()) : q(U(), U())]);
+    const notRun = quizOf(20, () => rep(5, () => q(R(), U())));
+    (notRun.families[0]!.questions[0]!.control as { answerState: string }).answerState = 'not-run';
+    for (const [name, quiz] of [['hold', held], ['halt', absentHalt], ['refusal', notRun], ['plain', passingQuiz()]] as const) {
+      for (const bad of [42, '', undefined, null]) {
+        expect(() => decide({ quiz, seedHex: bad as never }), `${name}: seedHex ${String(bad)}`).toThrow(/seedHex must be a non-empty string/);
+      }
+      for (const bad of [0, -1, 1.5, null, '10', Number.NaN, 2 ** 53]) {
+        expect(() => decide({ quiz, B: bad as never }), `${name}: B ${String(bad)}`).toThrow(/B must be a positive safe integer/);
+      }
+    }
+    expect(decide({ quiz: held, B: undefined }).verdict, 'an absent B takes the default').toBe('incomplete');
+    expect(decide({ B: undefined }).verdict).toBe('pass');
+    expect(decide({ B: 1 }).ok, 'B = 1 is a positive integer').toBe(true);
+  });
+
+  it('fix1: a missing live section is refused; an explicitly empty one halts empty-arm', () => {
+    expect(() => decide({ live: undefined as never })).toThrow(/live must be an object with a families array/);
+    expect(() => decide({ live: null as never })).toThrow(/live must be an object with a families array/);
+    expect(() => decide({ live: {} as never })).toThrow(/live must be an object with a families array/);
+    expect(() => decide({ live: { families: 'x' } as never })).toThrow(/live must be an object with a families array/);
+    const v = decide({ live: { families: [] } });
+    expect(v.halts).toEqual(['empty-arm']);
+    expect(v.criteria.uptake).toBeNull();
+  });
 });

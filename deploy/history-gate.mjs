@@ -1599,10 +1599,12 @@ function fracOfDecimal(x, name, below1) {
 /** a + b over integers. */
 const addFrac = (a, b) => frac(a.num * b.den + b.num * a.den, a.den * b.den);
 
-/** A Frac or null, as handcheck agreement arrives. */
+/** A share in [0, 1] or null, as handcheck agreement arrives: an integer fraction with a positive denominator. Null is
+ *  "no hand-checked pair"; an undefined or missing value is no answer and is refused by the caller. */
 function fracOrNull(v, name) {
   if (v === null) return null;
   if (!isObj(v) || !Number.isSafeInteger(v.num) || !Number.isSafeInteger(v.den) || v.den <= 0) throw new TypeError(`decideGate: ${name} must be a fraction or null`);
+  if (v.num < 0 || v.num > v.den) throw new TypeError(`decideGate: ${name} must lie in [0, 1]`);
   return v;
 }
 
@@ -1631,6 +1633,10 @@ function fracOrNull(v, name) {
  * never counted, held or halted. decideGate answers {ok: false, reason: 'question-not-run', detail, questions}, the
  * qids sorted, and computes no verdict; a verdict carries ok: true. Any other answer state outside ANSWER_STATES throws.
  *
+ * Unruled inputs throw, on every path (a hold or a halt included): a seedHex that is not a non-empty string, a B that is not
+ * a positive safe integer (only an undefined B takes the default), a missing live section, a missing handcheck section or
+ * arm key (an explicit null is "no hand-checked pair"), an agreement outside [0, 1], and a repeated or non-string qid.
+ *
  * @param {{
  *   seedHex: string, B?: number,
  *   halts: {handcheck_agreement_min: number, run_failed_max: number, absent_rate_max: number},
@@ -1657,8 +1663,20 @@ function fracOrNull(v, name) {
 export function decideGate(inputs) {
   if (!isObj(inputs)) throw new TypeError('decideGate: inputs must be an object');
   const { seedHex, codeChanged, quiz, live, handcheck } = inputs;
-  const B = inputs.B ?? BOOTSTRAP.B;
   if (typeof codeChanged !== 'boolean') throw new TypeError('decideGate: codeChanged must be a boolean');
+  // The caller's seed and B, refused up front so a hold or a halt, where no bootstrap runs, cannot hide a bad one. Only an
+  // absent or undefined B takes the default; null is no B.
+  if (typeof seedHex !== 'string' || seedHex === '') throw new TypeError('decideGate: seedHex must be a non-empty string');
+  const B = inputs.B === undefined ? BOOTSTRAP.B : inputs.B;
+  if (!Number.isSafeInteger(B) || B < 1) throw new TypeError('decideGate: B must be a positive safe integer');
+  if (!isObj(live) || !Array.isArray(live.families)) throw new TypeError('decideGate: live must be an object with a families array');
+  // The hand-check's agreement, W2-D81: each arm's key is present, a share or an explicit null (no pair, no halt). A
+  // missing section would read as no pair and so could never halt, so it is refused.
+  if (!isObj(handcheck) || !isObj(handcheck.agreement)) throw new TypeError(`decideGate: handcheck${isObj(handcheck) ? '.agreement' : ''} must be an object`);
+  for (const arm of ASSIGNMENT_ARMS) {
+    if (!Object.hasOwn(handcheck.agreement, arm)) throw new TypeError(`decideGate: handcheck.agreement.${arm} must be present (a fraction, or null for no pair)`);
+  }
+  const agreement = ASSIGNMENT_ARMS.map((arm) => fracOrNull(handcheck.agreement[arm], `handcheck.agreement.${arm}`));
   const absentMax = fracOfDecimal(inputs.halts?.absent_rate_max, 'absent_rate_max', true);
   const runFailedMax = fracOfDecimal(inputs.halts?.run_failed_max, 'run_failed_max', true);
   const agreementMin = fracOfDecimal(inputs.halts?.handcheck_agreement_min, 'handcheck_agreement_min', false);
@@ -1671,6 +1689,7 @@ export function decideGate(inputs) {
   let held = false;
   const notRun = new Set();   // qids with an arm still not-run: refused below, never counted (W2-D89, amended)
   const keys = new Set();
+  const qids = new Set();
   for (const fam of quiz?.families ?? []) {
     if (!isObj(fam) || typeof fam.key !== 'string' || keys.has(fam.key)) throw new TypeError(`decideGate: quiz family ${String(fam?.key)} is missing or repeated`);
     keys.add(fam.key);
@@ -1679,6 +1698,8 @@ export function decideGate(inputs) {
     let n = 0;
     for (const q of fam.questions) {
       frozen += 1;
+      if (typeof q.qid !== 'string' || qids.has(q.qid)) throw new TypeError(`decideGate: question qid ${String(q.qid)} is missing or repeated`);
+      qids.add(q.qid);
       if (typeof q.runFailed !== 'boolean') throw new TypeError(`decideGate: question ${String(q.qid)} needs a boolean runFailed`);
       if (q.runFailed) { runFailed += 1; continue; }   // W2-D80: excluded from both arms
       n += 1;
@@ -1724,8 +1745,6 @@ export function decideGate(inputs) {
   if (absentHalt) halts.push('absent-rate');
   const runFailedHalt = cmpFrac(frac(runFailed, frozen), runFailedMax) > 0;
   if (runFailedHalt) halts.push('run-failed');
-  const agreement = [fracOrNull(handcheck?.agreement?.treatment ?? null, 'handcheck.agreement.treatment'),
-    fracOrNull(handcheck?.agreement?.control ?? null, 'handcheck.agreement.control')];
   if (agreement.some((g) => g !== null && cmpFrac(g, agreementMin) < 0)) halts.push('handcheck-agreement');
 
   // Criterion 1: not computed under the absent-rate or run-failed halt, or the hold, or with no paired cluster.
@@ -1749,7 +1768,7 @@ export function decideGate(inputs) {
   const shares = [];
   const dropped = [];
   const liveKeys = new Set();
-  for (const f of live?.families ?? []) {
+  for (const f of live.families) {
     if (!isObj(f) || typeof f.key !== 'string' || liveKeys.has(f.key)) throw new TypeError(`decideGate: live family ${String(f?.key)} is missing or repeated`);
     liveKeys.add(f.key);
     if (!ASSIGNMENT_ARMS.includes(f.arm)) throw new TypeError(`decideGate: live family ${f.key} has arm ${String(f.arm)}`);
