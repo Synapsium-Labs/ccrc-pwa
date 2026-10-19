@@ -164,10 +164,11 @@ function measureRows(page: Page): Promise<RowFit> {
   });
 }
 
+/** Soft, so one red run reports every state and every row rather than the first. */
 function expectFits(fit: RowFit, where: string): void {
   for (const r of fit.over) {
-    expect(r.row, `${where}: ${r.label}'s row runs past the sheet body`).toBeLessThanOrEqual(0.5);
-    expect(r.ring, `${where}: ${r.label}'s keyboard ring is cut by the sheet body (or was not drawn)`).toBeLessThanOrEqual(0.5);
+    expect.soft(r.row, `${where}: ${r.label}'s row runs past the sheet body`).toBeLessThanOrEqual(0.5);
+    expect.soft(r.ring, `${where}: ${r.label}'s keyboard ring is cut by the sheet body (or was not drawn)`).toBeLessThanOrEqual(0.5);
   }
 }
 
