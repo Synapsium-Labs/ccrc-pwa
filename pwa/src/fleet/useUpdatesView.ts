@@ -12,7 +12,9 @@
 // becomes visible, because a phone that slept through three polls should not
 // show a 3-minute-old "vX is out" as current.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { type NodeWire, type UpdatesView } from '../../../shared/api';
+import { isReleaseTag, type NodeWire, type UpdatesView } from '../../../shared/api';
+import { compareReleaseTags } from '../../../shared/semver';
+import { nodeVersion, pendingTag } from '../../../shared/update-arrow';
 import { ApiError, api } from '../lib/api';
 
 /** THE ONE invalid-Date predicate (fix round 1, F13/item 8): a `lastOkAt`/
@@ -40,6 +42,13 @@ export const UPDATES_POLL_MS = 60_000;
  *  two different things: `not-configured` is a box with no control plane (a
  *  state, rendered as such), `failed` is a read that did not land (transient). */
 export type UpdatesFailure = 'not-configured' | 'failed';
+
+/** A later poll failed, so what a surface shows is the last answer that landed (`view` is kept, `failure` stands).
+ *  The update plane's one sentence for it (wave 19, R24(b)), shown by every surface that reads this poll's kept
+ *  view: the home screen's skew, halt and release banners and BuildLine, and announced once by the fleet screen's
+ *  own status region (D-5124). Settings' own stale line says it too (its own exposure, a separate screen),
+ *  imported from here. */
+export const UPDATES_STALE_TEXT = 'The latest read failed — this is the last answer that landed.';
 
 export interface UpdatesPoll {
   /** The LAST GOOD answer — a later failure never clears it. */
@@ -170,6 +179,33 @@ export function asUpdatesView(raw: unknown): UpdatesView | null {
 // here, unchanged, so SettingsScreen, UpdateBanner, movePlan and their tests
 // keep the import they already have and there is still ONE definition.
 export { nodeVersion, pendingTag } from '../../../shared/update-arrow';
+
+/** The release a waiting update names: the NEWEST `pendingTag` across the inventory in semver order, with the node
+ *  behind it. One definition for the update banner (`bannerRelease`) and the Settings release window
+ *  (`releaseWindow`, D-5505), so the two cannot name different waiting releases. `null` when no node has an arrow. */
+export function newestPending(nodes: readonly NodeWire[] | null | undefined): { tag: string; node: NodeWire } | null {
+  let best: { tag: string; node: NodeWire } | null = null;
+  for (const n of Array.isArray(nodes) ? nodes : []) {
+    const tag = pendingTag(n);
+    if (tag === null) continue;
+    if (best === null || compareReleaseTags(tag, best.tag) === 1) best = { tag, node: n };
+  }
+  return best;
+}
+
+/** The oldest measured version a node that is behind runs (a node with an arrow, `pendingTag`): what the What's-new
+ *  range counts from (`whatsNewReleases`), and the version the release window's "See every change since" names.
+ *  `null` when no behind node has a measured version. */
+export function behindSince(nodes: readonly NodeWire[] | null | undefined): string | null {
+  let since: string | null = null;
+  for (const n of Array.isArray(nodes) ? nodes : []) {
+    if (pendingTag(n) === null) continue;
+    const v = nodeVersion(n);
+    if (!isReleaseTag(v)) continue;
+    if (since === null || compareReleaseTags(v, since) === -1) since = v;
+  }
+  return since;
+}
 
 /** `not-configured` needs BOTH the status and the code: a 501 carrying any other
  *  word is a read that failed, and folding it into "this box has no control

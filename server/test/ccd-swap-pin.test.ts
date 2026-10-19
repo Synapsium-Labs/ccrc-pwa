@@ -204,7 +204,9 @@ describe('D-3097: cmd_swap mints the pin, and only on the operator path', () => 
     _transcript_matches() { echo found; }; _swap_carry_jsonl() { :; };
     _swap_carry_sidecars() { :; }; _sanitize_anthropic() { :; };
     _lc_done() { :; }; _account_still_rostered() { :; }; _wrapper_rostered_now() { return 0; };
-    tmux() { :; }; sleep() { :; };`;
+    tmux() { case "\${1:-}" in has-session) echo "can't find session: x" >&2; return 1 ;; esac; }; sleep() { :; };`;
+  // The pane is GONE: D-5240's manual gate reads `_ws_status` first, which a
+  // `tmux() { :; }` stub answers as an alive pane with no pid, i.e. unreadable.
 
   it('a human swap writes the target into the pin', () => {
     seed('claude');

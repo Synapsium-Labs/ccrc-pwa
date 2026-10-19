@@ -45,6 +45,7 @@ import {
   type MarkUnreachableResult, type NodeMeasurement, type NodeReport, type NodeRow, type RefuseReleaseResult,
   type RekeyNodeResult, type ReleaseLeaseResult, type SettleNodeResult, type UpsertNodeResult,
 } from '../coord/store.js';
+import type { FleetIdentityPublish, FleetIdentityUnmeasuredWhy, FleetNodeMeasured } from '../fleetidentity.js';
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO, ReadFailure } from '../io.js';
 import { openPoolReadDeadline, type PoolReadDeadline } from '../pools.js';
@@ -223,6 +224,28 @@ export function tagStateFrom(read: NodeFileRead): { tag: string | null; state: T
 export function nodeIdFrom(read: NodeFileRead): string | null {
   const line = firstLine(read);
   return line !== null && NODE_ID_RE.test(line) ? line : null;
+}
+
+/** Each node-id read failure keeps its own word (path-identity spec 2026-10-12 §5.2). `nodeIdFrom`'s one `null`
+ *  serves the row's keying, which falls back to the label for all four conditions; identity tells them apart. */
+const NODE_ID_UNREAD: Readonly<Record<Extract<NodeFileRead, { ok: false }>['reason'], FleetIdentityUnmeasuredWhy>> = {
+  absent: 'node-id-absent', unreadable: 'node-id-unreadable', 'too-large': 'node-id-too-large',
+};
+
+/** One sweep's answer as switch identity (path-identity spec 2026-10-12 §5.2, §5.9). It answers `known` ONLY from
+ *  this sweep's own direct read of `node-id`, validated by `nodeIdFrom` (the row's one validator), and only when the
+ *  sweep measured the row AND keyed it by that same id. It never answers from `outcome.nodeId` alone, because that
+ *  may be the connection label (no node-id read) or a uuid carried forward from the persisted row that this sweep
+ *  never read. A collision is `collision` and never known, whatever the release push counts it as. A disagreement
+ *  between the direct read and the outcome should be unreachable; it reads `node-id-malformed`. */
+export function fleetNodeMeasuredOf(nodeIdRead: NodeFileRead, outcome: SweepOutcome, measuredAt: number): FleetNodeMeasured {
+  if (outcome.result === 'node-id-collision') return { kind: 'collision', why: 'node-id-keys-another-live-row' };
+  if (outcome.result === 'unreachable') return { kind: 'unmeasured', why: 'link-down' };
+  if (outcome.result !== 'measured') return { kind: 'unmeasured', why: 'inventory-refused' };
+  if (!nodeIdRead.ok) return { kind: 'unmeasured', why: NODE_ID_UNREAD[nodeIdRead.reason] };
+  const direct = nodeIdFrom(nodeIdRead);
+  if (direct === null || direct !== outcome.nodeId) return { kind: 'unmeasured', why: 'node-id-malformed' };
+  return { kind: 'known', nodeId: direct, measuredAt };
 }
 
 /** Printable ASCII only — every run of anything else becomes one space — trimmed, cut to REPORT_DETAIL_MAX. */
@@ -466,9 +489,21 @@ export interface InventoryStore {
   node(nodeId: string): NodeRow | null;
   nodeByLabel(label: string): NodeRow | null;
 }
+/** L2, declared by this consumer: the identity cell narrowed to what a sweep asks of it (path-identity spec
+ *  2026-10-12 §5.2). `FleetIdentityCell` satisfies it structurally. */
+export interface FleetIdentityPublisher {
+  epochNow(): number;
+  publish(captured: number, measured: FleetNodeMeasured): FleetIdentityPublish;
+}
 export interface InventoryDeps {
   store: InventoryStore; localIo: FleetIO; ccrcDir: string; role: NodeRole;
-  fleet: { io: FleetIO; state: FleetState } | null;
+  /** `identity`: the agent connection's identity cell, remote mode only. Absent: this sweep publishes nothing,
+   *  which fails closed. */
+  fleet: { io: FleetIO; state: FleetState; identity?: FleetIdentityPublisher } | null;
+  /** Local mode only. This box IS the fleet node, so the server row's own sweep publishes its directly read node-id
+   *  into the never-invalidated cell (epoch 0). The remote arm never sets it, because the server box's node-id is
+   *  not the fleet node's. Absent: nothing is published. */
+  ownIdentity?: FleetIdentityPublisher;
   budgetMs?: number;
 }
 export type SweepOutcome =
@@ -645,31 +680,54 @@ function applyMeasurement(store: InventoryStore, measured: NodeMeasurement, unme
  *  likely) must not stop the fleet connection's row, below, from being
  *  measured on the same sweep. */
 async function sweepOwn(deps: InventoryDeps, budget: number, now: number): Promise<SweepOutcome> {
+  // Path-identity spec 2026-10-12 §5.2, local mode only. This box IS the fleet node, so its own read of `node-id`
+  // is the identity, published under the epoch captured here, before the one await. The remote arm never sets
+  // `ownIdentity`: there, the server box's node-id is not the fleet node's.
+  const identity = deps.ownIdentity === undefined ? null : { cell: deps.ownIdentity, captured: deps.ownIdentity.epochNow() };
+  let nodeIdRead: NodeFileRead | null = null;
+  let out: SweepOutcome;
   try {
     // Reads inlined (rather than through `measureNode`) so the raw report read
     // survives past validation — D-3210's fold decision needs to know whether
     // it was `unreadable`, not just what `reportFrom` turned it into.
     const ownReads = await readNodeFiles(deps.localIo, deps.ccrcDir, budget);
+    nodeIdRead = ownReads.nodeId;
     const own = measurementFrom(ownReads, { label: SERVER_LABEL, role: deps.role, agentOps: null }, now);
-    return applyMeasurement(deps.store, own, reportUnmeasured(ownReads.report), now);
+    out = applyMeasurement(deps.store, own, reportUnmeasured(ownReads.report), now);
   } catch (err) {
-    return { label: SERVER_LABEL, result: 'error', message: err instanceof Error ? err.message : String(err) };
+    out = { label: SERVER_LABEL, result: 'error', message: err instanceof Error ? err.message : String(err) };
   }
+  if (identity !== null && nodeIdRead !== null) identity.cell.publish(identity.captured, fleetNodeMeasuredOf(nodeIdRead, out, now));
+  return out;
 }
 
-/** C1's twin for the one agent connection. Same isolation, same reason. */
+/** C1's twin for the one agent connection. Same isolation, same reason.
+ *
+ *  THE IDENTITY (path-identity spec 2026-10-12 §5.2). The connection epoch is captured HERE, before the sweep's one
+ *  await, and the node this sweep read is published under it after the apply. A ready or a close accepted while the
+ *  reads were out has moved the epoch, so the publication answers `stale-epoch` and changes nothing: an earlier
+ *  connection's reads never become the current node. `linkUp` cannot tell this, because a drop and a reconnect read
+ *  `connected: true`. The row is written exactly as before, and the sweep the new ready triggers re-measures it
+ *  under the new epoch. A link down at the start reads nothing and publishes nothing; the close that took it down
+ *  already invalidated the cell. */
 async function sweepFleet(deps: InventoryDeps, fleet: NonNullable<InventoryDeps['fleet']>, budget: number, now: number): Promise<SweepOutcome> {
+  const identity = fleet.identity === undefined ? null : { cell: fleet.identity, captured: fleet.identity.epochNow() };
+  let nodeIdRead: NodeFileRead | null = null;
+  let out: SweepOutcome;
   try {
     const { io, state } = fleet;
     if (!linkUp(state)) return unreachable(deps.store, now);
     // `agentOps` is read inside the connected arm only: the field keeps the
     // last `ready`'s answer across a drop (Task 8).
     const fleetReads = await readNodeFiles(io, deps.ccrcDir, budget);
+    nodeIdRead = fleetReads.nodeId;
     const m = measurementFrom(fleetReads, { label: FLEET_LABEL, role: 'fleet', agentOps: state.agentOps ?? [] }, now);
-    return linkUp(state) ? applyMeasurement(deps.store, m, reportUnmeasured(fleetReads.report), now) : unreachable(deps.store, now);
+    out = linkUp(state) ? applyMeasurement(deps.store, m, reportUnmeasured(fleetReads.report), now) : unreachable(deps.store, now);
   } catch (err) {
-    return { label: FLEET_LABEL, result: 'error', message: err instanceof Error ? err.message : String(err) };
+    out = { label: FLEET_LABEL, result: 'error', message: err instanceof Error ? err.message : String(err) };
   }
+  if (identity !== null && nodeIdRead !== null) identity.cell.publish(identity.captured, fleetNodeMeasuredOf(nodeIdRead, out, now));
+  return out;
 }
 
 /**

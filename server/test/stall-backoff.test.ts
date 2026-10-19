@@ -40,7 +40,7 @@ function workerIdleSince(since: number): StallWorker {
 
 /** A current `done` turn marker whose Stop landed at `stopAt`, with no background work and no restart. */
 function doneMark(stopAt: number): TurnMarkRead {
-  return { ok: true, sessionId: 'uuid-1', state: 'done', event: 'Stop', at: stopAt, turnAt: stopAt - 20 * MIN, stopAt,
+  return { crons: null, ok: true, sessionId: 'uuid-1', state: 'done', event: 'Stop', at: stopAt, turnAt: stopAt - 20 * MIN, stopAt,
     bg: 0, bgKinds: [], bgIds: [], err: null, restartAt: null, lostBg: 0, lostKinds: [], lostIds: [], graceUntil: null };
 }
 

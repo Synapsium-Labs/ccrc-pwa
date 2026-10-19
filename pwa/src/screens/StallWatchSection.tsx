@@ -30,20 +30,23 @@ import type { ReactNode } from 'react';
 import {
   STALL_BUSY_GATE_OFF_TEXT, STALL_BUSY_GATE_TEXT, STALL_CONFIRM_TEXT, STALL_FALLBACK_TEXT, STALL_FILES_EXCEED_TEXT,
   STALL_FOLLOW_LABEL, STALL_HAZARD_TEXT, STALL_HELD_REASON, STALL_HELD_TEXT, STALL_LEVELS, STALL_LEVEL_TEXT,
-  STALL_NEXT_TEXT, STALL_NOTICE_TEXT, STALL_NOT_AVAILABLE_TEXT, STALL_QUIET_NOTE, STALL_RUNLESS_FOOTNOTE,
+  STALL_NEXT_TEXT, STALL_NOTICE_TEXT, STALL_NOT_AVAILABLE_TEXT, STALL_RUNLESS_FOOTNOTE,
   STALL_SECTION_TEXT, STALL_SOURCE_TEXT, STALL_STAGES, STALL_STAGE_TEXT, STALL_STORED_TEXT,
   type StallConfirmRequired, type StallHeld, type StallLevel, type StallLevelChoice, type StallNoticeCount,
   type StallStage, type StallWatchEffective, type StallWatchRequest, type StallWatchView, type StallWriteEffect,
 } from '../../../shared/api';
 import { stallDurationText } from '../../../shared/stall-watch';
 import {
-  QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Select, Skeleton, toast,
+  QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Select, Skeleton,
 } from '@ccrc/ui';
 import {
   asStallWatchView, stallWriteRefusal, useStallWatchView, type StallWatchPoll,
 } from '../fleet/useStallWatchView';
 import { api } from '../lib/api';
-import { UNCONFIRMED_TEXT } from './settingsText';
+import {
+  ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_NOW_CLASS, STALL_LEVEL_NOTE, STALL_WORDS, UNCONFIRMED_TEXT, focusLeaves,
+  optionNote, setLead, stallQuietBoundsText, useResultLine,
+} from './settingsText';
 
 /** Fill each `{name}` slot of an L0 text from `slots`. A slot it was not given stays as written; a value is
  *  inserted literally (a replacer function, so a `$` in a server's detail is never a replacement pattern). */
@@ -265,11 +268,7 @@ export function StallWatchSection(): ReactNode {
  *  server's effect and key. */
 interface PendingConfirm { request: StallWatchRequest; confirm: StallConfirmRequired }
 
-const NOW_CLASS: Record<StallNowTone, string> = {
-  head: 'settings-catalogue',
-  note: 'settings-note',
-  warn: 'settings-catalogue settings-catalogue--amber',
-};
+const NOW_CLASS: Readonly<Record<StallNowTone, string>> = SETTINGS_NOW_CLASS;
 /** The select's value for the built-in, and for a stored value the list does not hold (an unreadable one): an
  *  empty option, drawn blank, so the select never shows a value the server did not answer. A stored NUMBER equal to
  *  the view's built-in is not the built-in: the server reports it as a pinned choice (`chosen`), a `default` write
@@ -281,32 +280,54 @@ const NOW_CLASS: Record<StallNowTone, string> = {
 const QUIET_BUILT_IN = 'default';
 const QUIET_NONE = '';
 
-const levelOptions = (view: StallWatchView): Array<{ value: StallLevelChoice; label: string }> => {
+/** The level options, each with its note (D-5503, settings spec §5.4): the new part only, from the PWA's total
+ *  `STALL_LEVEL_NOTE`; the default keeps its live "(they say: …)" clause. */
+const levelOptions = (view: StallWatchView): Array<{ value: StallLevelChoice; label: string; note: string }> => {
   const { effective } = view;
   const theySay = effective.measured
     ? fillStallText(STALL_SECTION_TEXT.theySay, { level: levelLabel(effective.files) })
     : STALL_SECTION_TEXT.theySayUnknown;
   return [
-    { value: 'follow', label: `${STALL_FOLLOW_LABEL} (${theySay})` },
-    ...STALL_LEVELS.map((level) => ({ value: level, label: STALL_LEVEL_TEXT[level].label })),
+    { value: 'follow', label: `${STALL_FOLLOW_LABEL} (${theySay})`, note: STALL_WORDS.followNote },
+    ...STALL_LEVELS.map((level) => ({ value: level, label: STALL_LEVEL_TEXT[level].label, note: STALL_LEVEL_NOTE[level] })),
   ];
 };
+
+/** The one full sentence under the level group (U9's one live explanation): the focused option's while the keyboard
+ *  is on the set, else the checked one's; none for the default, whose note already says what it does. */
+export function stallFullSentence(checked: StallLevelChoice | 'unreadable', focused: StallLevelChoice | null): string | null {
+  const shown = focused ?? checked;
+  return shown === 'follow' || shown === 'unreadable' ? null : STALL_LEVEL_TEXT[shown].does;
+}
 
 function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: boolean; poll: StallWatchPoll }): ReactNode {
   const { reload, settle } = poll;
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<PendingConfirm | null>(null);
   const locked = busy || pending !== null;
+  // D-5507 (spec §6.4): a write's answer is a line under the control that asked, the level or the quiet time.
+  const levelLine = useResultLine();
+  const quietLine = useResultLine();
+  const [focused, setFocused] = useState<StallLevelChoice | null>(null);
+  const fullId = useId();
+  const noteBase = useId();
 
   // Only the field moved, and `confirm` only as the key the server sent. Every answer is the server's: a reply
   // that reads is settled, a 2xx the guard cannot read was answered and may have landed (UNCONFIRMED_TEXT, the
   // shared "Saved — the answer could not be read" line, then a re-read), a 409 the guard reads opens the sheet, and
-  // a refusal carrying one of the route's own codes is toasted with the server's detail before a re-read. Any other
+  // a refusal carrying one of the route's own codes is said, amber, under the control that asked, with the server's
+  // detail, before a re-read (D-5507: a line, a toast only once the section has gone). Any other
   // answer (a gateway's 502, a 500 after the store committed) confirms nothing: STALL_CONFIRM_TEXT.unconfirmed, with
   // its detail (`an-answer-without-a-refusal-code-reads-unconfirmed` (D-4045)). No answer at all (a network failure)
   // is STALL_CONFIRM_TEXT.unanswered (D-4043). Neither says "Saved" or "Nothing was changed"; both re-read.
   const write = (request: StallWatchRequest, confirm?: string): void => {
     setBusy(true);
+    // A write disables the fieldset, and a browser then drops the focus without a blur, so the focused option would
+    // keep the full sentence after a cancelled confirm or a refusal. The write ends the keyboard's preview: the
+    // sentence is the checked level's again.
+    setFocused(null);
+    const line = request.level !== undefined ? levelLine : quietLine;
+    line.clear();
     void api.setStallWatch(confirm === undefined ? request : { ...request, confirm })
       .then(
         (answer) => {
@@ -315,7 +336,7 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
             settle(reply);
             return;
           }
-          toast(UNCONFIRMED_TEXT);
+          line.say(UNCONFIRMED_TEXT);
           reload();
         },
         (err: unknown) => {
@@ -325,9 +346,9 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
             return;
           }
           if (refusal.kind === 'refused') {
-            toast(fillStallText(STALL_CONFIRM_TEXT.refused, { detail: refusal.detail }), 'error');
-          } else if (refusal.detail === null) toast(STALL_CONFIRM_TEXT.unanswered);
-          else toast(fillStallText(STALL_CONFIRM_TEXT.unconfirmed, { detail: refusal.detail }));
+            line.say(fillStallText(STALL_CONFIRM_TEXT.refused, { detail: refusal.detail }), 'refusal');
+          } else if (refusal.detail === null) line.say(STALL_CONFIRM_TEXT.unanswered);
+          else line.say(fillStallText(STALL_CONFIRM_TEXT.unconfirmed, { detail: refusal.detail }));
           reload();
         },
       )
@@ -353,15 +374,17 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
   const quietValue = stored === 'default'
     ? QUIET_BUILT_IN
     : pinnedBuiltIn !== null || choices.some((c) => c.value === stored) ? String(stored) : QUIET_NONE;
-  const quietLine = fillStallText(
+  const quietNow = fillStallText(
     view.quiet.source === 'chosen' ? STALL_SECTION_TEXT.chosenHere : STALL_SECTION_TEXT.builtIn,
     { value: quietText(view.quiet.effectiveMs) });
-  const range = fillStallText(STALL_SECTION_TEXT.range,
-    { min: quietText(view.quiet.minMs), max: quietText(view.quiet.maxMs) });
+  // "Built-in: 2 h · Range: 30 min to 12 h", every value the reply's (spec §5.4).
+  const bounds = stallQuietBoundsText(quietText(view.quiet.builtInMs), quietText(view.quiet.minMs), quietText(view.quiet.maxMs));
+  const full = stallFullSentence(view.chosen.level, focused);
 
   return (
     <>
-      {stale && <p className="settings-note settings-catalogue--amber">{STALL_SECTION_TEXT.stale}</p>}
+      <p className="settings-note">{STALL_WORDS.purpose}</p>
+      {stale && <p className={SETTINGS_AMBER_NOTE}>{STALL_SECTION_TEXT.stale}</p>}
       {now.map((line, i) => <p key={i} className={NOW_CLASS[line.tone]}>{line.text}</p>)}
       {next !== null && <p className="settings-catalogue">{next.lead}</p>}
       {next !== null && next.waitsOn.length > 0 && (
@@ -370,33 +393,49 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
           <ul className="settings-note">{next.waitsOn.map((gate) => <li key={gate}>{gate}</li>)}</ul>
         </>
       )}
-      <fieldset className={RADIO_FIELDSET} disabled={locked}>
+      {/* A stepped choice with one live explanation (spec §5.4, U9): the lead, each option's note, and the one full
+          `does` sentence under the group for the checked option, or the focused one while the keyboard moves. */}
+      <fieldset
+        className={RADIO_FIELDSET}
+        disabled={locked}
+        aria-describedby={full !== null ? fullId : undefined}
+        onBlur={(e) => { if (focusLeaves(e)) setFocused(null); }}
+      >
         <legend className={RADIO_LEGEND}>{STALL_SECTION_TEXT.level}</legend>
-        {levelOptions(view).map(({ value, label }) => (
+        {setLead(STALL_WORDS.levelLead)}
+        {levelOptions(view).map(({ value, label, note }) => [
           <Radio
             key={value}
             name="settings-stall-level"
             value={value}
             checked={view.chosen.level === value}
+            aria-describedby={`${noteBase}-${value}`}
             onChange={() => choose({ level: value })}
+            onFocus={() => setFocused(value)}
           >
             {label}
-          </Radio>
-        ))}
+          </Radio>,
+          optionNote(`${noteBase}-${value}`, note),
+        ])}
       </fieldset>
+      <ResultLine line={levelLine.line} />
+      {full !== null && <p id={fullId} className="settings-note" data-stall-full="">{full}</p>}
       <fieldset className={RADIO_FIELDSET} disabled={locked}>
         <legend className={RADIO_LEGEND}>{STALL_SECTION_TEXT.quiet}</legend>
-        <p className="settings-catalogue">{quietLine}</p>
-        <p className="settings-note">{range}</p>
+        <p className="settings-note">{STALL_WORDS.quietLine}</p>
+        <p className="settings-catalogue">{quietNow}</p>
+        <p className="settings-note">{bounds}</p>
+        {/* Capped at 320 px by an inline width that carries no colour, so no stylesheet rule is added (plan R1c). */}
         <Select
           aria-label={STALL_SECTION_TEXT.quiet}
           value={quietValue}
+          style={{ maxWidth: 320 }}
           onChange={(e) => choose({ quietMs: e.target.value === QUIET_BUILT_IN ? 'default' : Number(e.target.value) })}
         >
           {quietValue === QUIET_NONE && <option value={QUIET_NONE} disabled hidden />}
           {shown.map((c) => <option key={String(c.value)} value={String(c.value)}>{c.label}</option>)}
         </Select>
-        <p className="settings-note">{STALL_QUIET_NOTE}</p>
+        <ResultLine line={quietLine.line} />
       </fieldset>
       {view.notices.ok ? (
         <>

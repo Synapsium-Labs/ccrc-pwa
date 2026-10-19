@@ -3,13 +3,18 @@ import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import './styles/base.css';
 import { App } from './app';
+import { CommandLayer } from './command/CommandLayer';
 import { RenderBoundary, RootFallback } from './components/RenderBoundary';
 import { initTheme } from './lib/theme';
+import { initSkin } from './lib/skin';
 import { setUpdater } from './lib/swupdate';
 
 // Theme before first render (index.html pre-stamps the attribute so even the
 // pre-bundle paint is right; this adds the live change listener + meta sync).
 initTheme();
+// The skin likewise (D-5093): index.html stamped the stored value verbatim;
+// this resolves it against the catalogue, so an unknown one becomes Refined.
+initSkin();
 
 // The root boundary (design 2026-10-01 section 4.12): a throw anywhere in the
 // app while rendering shows "ccrc could not draw this screen." and Reload
@@ -19,6 +24,10 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <RenderBoundary where="root" resetKey="root" fallback={() => <RootFallback />}>
       <App />
+      {/* The ⌘K palette and the global keys (D-5103), beside the app rather
+          than in it: app.tsx is held by an in-flight change. W2's shells
+          take this mount. */}
+      <CommandLayer />
     </RenderBoundary>
   </StrictMode>,
 );

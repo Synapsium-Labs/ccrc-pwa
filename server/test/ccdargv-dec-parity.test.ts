@@ -144,6 +144,8 @@ const uuidRows = (): string[] =>
 
 const PROBES: Record<string, Probe> = {
   'ws-archive': { argv: (d) => CCD_ARGV.wsArchive(ABSENT, d), reached: refusedForTheAbsentSession },
+  // D-5242: `cmd_hibernate` strips the dec before its one-positional arity rule, then refuses the absent row by name.
+  hibernate: { argv: (d) => CCD_ARGV.hibernate(ABSENT, d), reached: refusedForTheAbsentSession },
   'ws-restore': { argv: (d) => CCD_ARGV.wsRestore(ABSENT, d), reached: refusedForTheAbsentSession },
   'ws-hold': { argv: (d) => CCD_ARGV.wsHold(ABSENT, 'probe reason', d), reached: refusedForTheAbsentSession },
   'ws-release': { argv: (d) => CCD_ARGV.wsRelease(ABSENT, d), reached: refusedForTheAbsentSession },
@@ -232,7 +234,7 @@ const runCcd = (args: readonly string[]): { code: number; out: string } => {
 };
 
 describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a dec on', () => {
-  it('derives the dec-appending verbs from the table, and finds nine — the five workspace verbs, ws-add, ws-reclaim, ws-expire and ws-collect', () => {
+  it('derives the dec-appending verbs from the table, and finds ten — the five workspace verbs, ws-add, ws-reclaim, ws-expire, ws-collect and hibernate', () => {
     // BOTH DIRECTIONS, and the second one is the one this suite was written
     // for. A verb ADDED here without a ccd that parses it is caught by the
     // execution test below; a verb SILENTLY added is caught right here, because
@@ -245,8 +247,10 @@ describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a de
     // safety of reusing one token across the two is not asserted here and is
     // not a property of source text: it is the AGENT-FIRST deploy order, stated
     // where the argv is composed.
+    // `hibernate` (D-5242) is the tenth: a new verb whose capability word IS its name (`verbSupported`), so no box
+    // receives the flags before it parses them.
     expect(decAppendingVerbs())
-      .toEqual(['ws-add', 'ws-archive', 'ws-collect', 'ws-expire', 'ws-hold', 'ws-reclaim', 'ws-release', 'ws-rename', 'ws-restore']);
+      .toEqual(['hibernate', 'ws-add', 'ws-archive', 'ws-collect', 'ws-expire', 'ws-hold', 'ws-reclaim', 'ws-release', 'ws-rename', 'ws-restore']);
   });
 
   it('has a probe for every derived verb — a new one cannot join unmeasured', () => {
@@ -348,6 +352,26 @@ describe('the child the server composes is the child real ccd records (child-wor
     const root = path.join(h.home, '.cc-tmp', id);
     expect(fs.statSync(root).isDirectory()).toBe(true);
     expect(fs.statSync(root).mode & 0o777).toBe(0o700);
+  });
+
+  it('wsAddWorker with a slug: real ccd names the child <project>-<slug>, on ws/<slug>, beside the marker and the dec', () => {
+    // The slug is a POSITIONAL, the one token here that is not a flag — the
+    // shape D-410 broke one flag to the left. Real ccd must bind it as the
+    // slug, not as the project, and not lose the dec or the marker around it.
+    h.makeRepo(PROJECT);
+    runCcd(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, 7, 'task-42'));
+    expect(uuidRows(), 'the slug was not the workspace name ccd minted').toEqual([`${PROJECT}-task-42.uuid`]);
+    const reg = path.join(h.home, '.cc-sessions');
+    expect(fs.readFileSync(path.join(reg, `${PROJECT}-task-42.child`), 'utf8')).toBe('7');
+    expect(fs.readFileSync(path.join(reg, `${PROJECT}-task-42.branch`), 'utf8').trim()).toBe('ws/task-42');
+    const created = eventsOf(h.home, 'create');
+    expect(created).toHaveLength(1);
+    expect(decOf(created[0]!)).toEqual({ surface: 'agent', actor: 'probe:dec parity' });
+  });
+
+  it('and handed no slug the argv is byte for byte the four-argument one', () => {
+    expect(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, 7, null))
+      .toEqual(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, 7));
   });
 
   it('and handed no child it writes no marker — absence permits, byte for byte the old argv', () => {

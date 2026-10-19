@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 import { swDenylist } from './src/lib/sw-denylist.js';
 import react from '@vitejs/plugin-react';
@@ -145,7 +145,10 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Precache the app shell only: JS/CSS/HTML + icons + manifest. Server
+        // Precache the app shell only: JS/CSS/HTML + icons + manifest + the
+        // self-hosted Geist pair (woff2, D-5095), so an installed client's offline
+        // second launch renders Geist rather than the system faces behind it
+        // (test/fonts-built.test.ts reads the emitted sw.js). Server
         // state must never be cached — /api and /ws are explicitly
         // network-only (and navigations to them never fall back to the shell).
         //
@@ -156,7 +159,7 @@ export default defineConfig({
         // The box that has co-tenants sets CCRC_SW_DENYLIST on the deploying
         // machine — see deploy/deploy.sh's header. An entry covering `/docs`,
         // ccrc's own Docs pages, fails the build (src/lib/sw-denylist.ts).
-        globPatterns: ['**/*.{js,css,html,png,svg,webmanifest}'],
+        globPatterns: ['**/*.{js,css,html,png,svg,webmanifest,woff2}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: swDenylist(process.env['CCRC_SW_DENYLIST']),
         // Web Push handlers (push + notificationclick) live in public/push-sw.js
@@ -168,7 +171,7 @@ export default defineConfig({
   ],
   // The Markdown parse worker (src/lib/markdownWorker.ts, spawned by
   // src/lib/markdownRunner.ts) is bundled as an ES module worker, with its own
-  // resolution of one package (workerSafeEntries, below).
+  // resolution of one package (workerSafeEntries, above).
   worker: { format: 'es', plugins: () => [workerSafeEntries()] },
   // The built shell lands inside the server package: ccrc-server statically
   // serves dist-pwa/ at / with SPA fallback (server.ts findPwaRoot).
@@ -186,6 +189,10 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./test/setup.ts'],
+    // The real-browser leg (browser/**, driven by vitest.browser.config.ts and CI's `browser (pwa)` job) needs a
+    // Chrome; the hermetic run never does. vitest's default include would collect browser/*.browser.test.ts, so it
+    // is excluded here, beside vitest's own defaults. Pinned by test/browser-leg.test.ts.
+    exclude: [...configDefaults.exclude, 'browser/**'],
     // Type-level tests (*.test-d.tsx) run as part of `vitest run`. Props here
     // are contracts — a widening like Sheet's ReactNode eyebrow is invisible at
     // runtime, so without this the only thing that catches a revert is a

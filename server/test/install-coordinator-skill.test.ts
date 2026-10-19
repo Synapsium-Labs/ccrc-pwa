@@ -42,6 +42,19 @@ describe('install-coordinator-skill', () => {
     }
   });
 
+  it('ships clause 17 (coordinator intent) to every home, and an older generation without it is replaced', () => {
+    // Delegation broker wave 3, Task 15. The clause is the only thing that tells a coordinator to declare its intent, and a skill
+    // reaches a home only once this installer has run there, so a home on the old generation is the case that matters.
+    const clause = 'Before delegating, declare coordinator intent for this session with `ccrc-api coordinators intent set --session <id>`;';
+    run();
+    for (const d of HOMES) expect(fs.readFileSync(skill(d, 'SKILL.md'), 'utf8')).toContain(`\n17. ${clause}`);
+    const older = fs.readFileSync(skill('.claude', 'SKILL.md'), 'utf8').replace(/\n17\. [^\n]*/, '').replace('These seventeen', 'These sixteen');
+    expect(older).not.toContain('coordinators intent');
+    fs.writeFileSync(skill('.claude', 'SKILL.md'), older);
+    run();
+    expect(fs.readFileSync(skill('.claude', 'SKILL.md'), 'utf8')).toContain(`\n17. ${clause}`);
+  });
+
   it('re-running converges — the second run does not rewrite a converged home', () => {
     // Byte-level idempotence is what install-session-hooks promises, and the
     // observable proof here is the inode: a rewrite would replace the file.

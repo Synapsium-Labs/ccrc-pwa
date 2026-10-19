@@ -20,6 +20,8 @@ import { navigate, useLocation } from './lib/router';
 import { useMediaQuery } from './lib/useMediaQuery';
 import { AccountsScreen } from './screens/AccountsScreen';
 import { ArchiveScreen } from './screens/ArchiveScreen';
+import { DigestScreen } from './screens/DigestScreen';
+import { DocsScreen } from './screens/DocsScreen';
 import { FleetScreen } from './screens/FleetScreen';
 import { MailScreen } from './screens/MailScreen';
 import { RunsScreen } from './screens/RunsScreen';
@@ -70,6 +72,13 @@ export function App(): ReactNode {
   const mail = /^\/mail\/?$/.test(path);
   const runs = /^\/runs\/?$/.test(path);
   const settings = /^\/settings\/?$/.test(path);
+  // `/digest?day=YYYY-MM-DD` (D-5300): the daily digest push's deep link, and any past day's digest. The screen
+  // validates nothing about `day` itself: the server answers 400 for a day that is not a UTC date.
+  const digest = /^\/digest\/?$/.test(path);
+  const digestDay = digest ? new URLSearchParams(search).get('day') : null;
+  // Docs (design 2026-10-01 section 4.2): `/docs` and every page under it, never `/docsearch`, so the pattern is
+  // `/docs` followed by a slash or the end, not a bare prefix.
+  const docs = new RegExp('^/docs(?:/|$)').test(path);
   // On desktop the accounts strip is a full-width top bar (rendered here, once);
   // on mobile it stays inside the fleet screen. useMediaQuery keeps it a single
   // instance either way — no duplication, no double polling.
@@ -133,6 +142,12 @@ export function App(): ReactNode {
     <RunsScreen />
   ) : settings ? (
     <SettingsScreen />
+  ) : digest ? (
+    <DigestScreen day={digestDay} />
+  ) : docs ? (
+    // NOT keyed: one mount spans one Docs visit (its listings, its auto-refresh set, its image queue), across every
+    // page, ref and view the visit opens.
+    <DocsScreen path={path} search={search} />
   ) : (
     <div className="shell-placeholder">
       <p className="shell-placeholder-mark" aria-hidden="true">
@@ -145,7 +160,7 @@ export function App(): ReactNode {
     <>
       {authLost && <LoginScreen />}
       {blocked && <BlockScreen />}
-      <div className="app-shell" data-view={sessionId || archive || accounts || mail || runs || settings ? 'session' : 'fleet'}>
+      <div className="app-shell" data-view={sessionId || archive || accounts || mail || runs || settings || digest || docs ? 'session' : 'fleet'}>
         {desktop && (
           <div className="shell-accounts">
             <AccountsStrip />

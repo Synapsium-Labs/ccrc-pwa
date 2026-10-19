@@ -228,12 +228,29 @@ const REGISTERED: Record<string, string> = {
     'DIFFERENT THINGS. Four declarations that spell `truncate`: min-width 0, '
     + 'hidden, ellipsis, nowrap. A component here would be a `<span>` with a '
     + 'utility on it.',
-  ['fleet.css .child-reclaim-banner .child-reclaim-item + fleet.css .settings-node-head '
+  // ONE IDIOM, TWO ENTRIES, because the clustering is greedy against a seed in
+  // sheet/selector order: the terminal drawer's ^C confirm (D-5007) sorts first
+  // and seeds the copies it is closest to, and the two it is not close enough
+  // to cluster on their own. Same argument for both.
+  ['chat.css .term-confirm + fleet.css .child-reclaim-status '
     + '+ fleet.css .settings-release-head + fleet.css .settings-theme-head']:
+    'DIFFERENT THINGS. Wrapping flex with a min-width floor and a centred cross '
+    + 'axis — the same idiom as the actions rows above, in four parts of the '
+    + 'tree. The terminal drawer\'s ^C confirm (the consequence, then `send ^C` '
+    + 'and `cancel`, in the key bar\'s place) joined it in stage 1 of the '
+    + 'every-width drawer; it shares the layout glue and nothing it means.',
+  'chat.css .term-keys-seq + fleet.css .child-reclaim-banner .child-reclaim-item':
     'DIFFERENT THINGS. Four declarations of wrapping flex with a min-width '
     + 'floor — the same idiom as the actions rows above, in a different part '
     + 'of the tree. The theme picker\'s head (a palette name and its swatch on '
-    + 'one line) joined it when the swatch moved beside the name.',
+    + 'one line) joined the idiom when the swatch moved beside the name, and '
+    + 'now clusters with the terminal confirm\'s entry instead. The terminal '
+    + 'key bar\'s half joined it when the bar stopped scrolling its keys and '
+    + 'wraps them where they do not fit (D-5113); '
+    + 'chat.css sorts first, so the half seeds this cluster and the settings '
+    + 'node head this entry used to pair the banner item with now clusters '
+    + 'with nothing. A half of a key bar and a line of a reclaim banner share '
+    + 'the layout glue and nothing they mean.',
   'fleet.css .proj-dir + fleet.css .sheet-panel .proj-ready-why':
     'DIFFERENT THINGS, and measurably so: DIFFERENT GROUNDS. '
     + 'Both sit in column 2 of a grid in mono `--fs-2xs`, and the overlap is '
@@ -480,11 +497,13 @@ describe('no app rule re-implements a shape that has already migrated', () => {
     for (const u of ['flex-wrap', 'min-h-tap', 'px-3', 'py-1', 'rounded-md', 'border-edge-subtle']) {
       expect(CONTROL_ROW, u).toContain(u);
     }
-    // The list row's two defining numbers: a hairline UNDER it, and 52px —
-    // eight above the tap floor, which is what separates neighbours a thumb is
-    // dragging over. Both were in both original rules; neither had a guard
-    // until a mutation removed each in turn and nothing went red.
-    for (const u of ['min-h-[52px]', 'border-b', 'border-edge-subtle', 'bg-transparent']) {
+    // The list row's two defining numbers: a hairline UNDER it, and its
+    // height — 52px in both original rules, eight above the tap floor, which
+    // is what separates neighbours a thumb is dragging over. Neither had a
+    // guard until a mutation removed each in turn and nothing went red. The
+    // height is now the `--row-h` role, Refined 52 (D-5093; the class follows
+    // it here, D-5460), and `role-census.test.ts` holds Refined's value.
+    for (const u of ['min-h-row', 'border-b', 'border-edge-subtle', 'bg-transparent']) {
       expect(LIST_ROW, u).toContain(u);
     }
     expect(LIST_ROW).not.toContain('min-h-tap');

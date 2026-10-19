@@ -179,7 +179,7 @@ export function AuthSection(): ReactNode {
         enrolled passkeys are unaffected. To end every session at once, rotate the passphrase with
         <code> ccrc passwd</code> on the box.
       </p>
-      <Button variant="primary" disabled={busy} onClick={() => void signOut()}>
+      <Button variant="ghost" disabled={busy} onClick={() => void signOut()}>
         {busy ? 'Signing out…' : 'Sign out'}
       </Button>
       {signOutNote !== null && <p className="accounts-fresh" role="status">{signOutNote}</p>}
@@ -261,9 +261,12 @@ export function AuthSection(): ReactNode {
             <li key={c.credentialIdB64url}>
               <span className="acct-win">{c.label}</span>
               <span className="accounts-fresh">
-                {` added ${formatAge(Math.floor(now / 1000) - Math.floor(c.enrolledAt / 1000))} ago`}
+                {/* `formatAge` says the whole phrase — "5m ago", or "just now"
+                    under two minutes — so nothing is appended to it. Both sites
+                    used to add " ago" again: "added 5m ago ago". */}
+                {` added ${formatAge(Math.floor(now / 1000) - Math.floor(c.enrolledAt / 1000))}`}
                 {c.lastUsedAt > c.enrolledAt
-                  ? `, last used ${formatAge(Math.floor(now / 1000) - Math.floor(c.lastUsedAt / 1000))} ago`
+                  ? `, last used ${formatAge(Math.floor(now / 1000) - Math.floor(c.lastUsedAt / 1000))}`
                   : ', never used'}
               </span>
               <button

@@ -168,7 +168,11 @@ export function Composer({
         active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'
         || (active as HTMLElement).isContentEditable
       );
-      if (editingElsewhere || document.querySelector('[role="dialog"]') !== null) return;
+      // Any dialog but a CLOSING one (D-5457): the ⌘K palette that just ran
+      // "Open session…" is still mounted while it animates out, at
+      // `data-state="closed"`, and must not cost the arrival its focus. A
+      // dialog with no state at all (the login cover) still holds it.
+      if (editingElsewhere || document.querySelector('[role="dialog"]:not([data-state="closed"])') !== null) return;
       el.focus({ preventScroll: true });
     }, 0);
     return () => clearTimeout(timer);
@@ -262,8 +266,11 @@ export function Composer({
         <span className="prompt-glyph" aria-hidden="true">
           ❯
         </span>
+        {/* `data-page-keys`: while empty, `[`, `]` and `?` reach the
+            command layer (useShortcuts.ts, D-5457). */}
         <textarea
           ref={box}
+          data-page-keys=""
           className="composer-input"
           aria-label="Message"
           rows={1}

@@ -10,6 +10,7 @@ import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '@ccrc/ui';
+import { ICONS } from '../../ui/src/icons/lucide';
 import { TEST_ROSTER } from './rosterFixture';
 
 // foldState.ts persists to localStorage — clear it so one test's fold can
@@ -168,8 +169,7 @@ describe('FleetScreen', () => {
     // account label also appears once in the accounts strip, so allow multiples.
     expect(screen.getByText('OpenClawHetzner')).toBeInTheDocument();
     expect(screen.getByText('mekwarlive')).toBeInTheDocument();
-    expect(screen.getAllByText('team·max').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('team·alt').length).toBeGreaterThan(0);
+    // D-5545: the account lane left the card (a header fact now).
 
     // Status is dot + word, never dot alone. SessionLine (unlike the SessionCard
     // it replaces) carries no relative timestamp — that's cut, not moved.
@@ -248,7 +248,8 @@ describe('FleetScreen', () => {
       sessions: [session({ subagents: [{ name: 'reviewer', startedAt: 1 }] })],
     });
 
-    expect(screen.getByLabelText('1 subagent')).toHaveTextContent('⑂ 1');
+    // D-5545: the subagent disclosure is a header fact; the card is a glance.
+    expect(screen.queryByLabelText('1 subagent')).toBeNull();
   });
 
   it('shows the muted ask summary line under a waiting session', () => {
@@ -259,7 +260,8 @@ describe('FleetScreen', () => {
       sessions: [session({ hookState: 'waiting', askSummary: 'Deploy now?' })],
     });
 
-    expect(screen.getByText('Deploy now?')).toBeInTheDocument();
+    // D-5545: the question is the header's; the card's marker says `needs you` on an attention row.
+    expect(screen.queryByText('Deploy now?')).toBeNull();
   });
 
   it("shows a persistent offline banner when conn is 'down', keeping last-known cards", () => {
@@ -362,6 +364,42 @@ describe('FleetScreen', () => {
       ],
     });
     expect(screen.getByRole('button', { name: /mail — 1 unread/i })).toBeInTheDocument();
+  });
+
+  // D-5431 (operator ruling 2026-10-18): an `interrupt` record stays in Mail but never raises the door's count, and
+  // ONLY that kind changes — the other record-only kinds (`coord`, `update`, `queue`, `nudge`) still count. The rows
+  // copy the server's own shape (`server/src/interruptlog.ts`: title `interrupt · <source>`, body
+  // `interruptEventBody`, no run), every one of them past the ack.
+  it("an interrupt record never raises the mail door's count; every other record-only kind still does (D-5431)", () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    const stamp = Date.now();
+    act(() => { ack(FEED_ACK_KEY, stamp); });
+    const after = stamp + 60_000;
+    seed(store, {
+      conn: 'open',
+      sessions: [],
+      feed: [
+        { seq: 1, at: after, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · keycap', body: 'source=keycap outcome=sent', runId: null },
+        { seq: 2, at: after + 1, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · escape-key', body: 'source=escape-key outcome=not-busy', runId: null },
+        { seq: 3, at: after + 2, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · drawer-escape', body: 'source=drawer-escape outcome=sent', runId: null },
+      ],
+    });
+    expect(screen.getByRole('button', { name: /mail — nothing unread/i })).toBeInTheDocument();
+
+    seed(store, {
+      conn: 'open',
+      sessions: [],
+      feed: [
+        { seq: 1, at: after, kind: 'interrupt', sessionId: 'proj-a-s1', title: 'interrupt · keycap', body: 'source=keycap outcome=sent', runId: null },
+        { seq: 2, at: after + 1, kind: 'coord', sessionId: '', title: 'caps changed', body: 'workers 3 → 5, per day 12 → 12', runId: null },
+        { seq: 3, at: after + 2, kind: 'update', sessionId: '', title: 'update fleet: auto update to v0.0.10', body: 'auto update from v0.0.9 to v0.0.10', runId: null },
+        { seq: 4, at: after + 3, kind: 'queue', sessionId: 'proj-a-s1', title: 'dequeued proj-a-s1', body: 'PR #42 left the merge queue without landing', runId: null },
+        { seq: 5, at: after + 4, kind: 'nudge', sessionId: 'proj-a-s1', title: '↻ Nudging after idle compaction', body: 'Nudging with a "continue" prompt after an idle compaction left open tasks (compaction k1)', runId: null },
+        { seq: 6, at: after + 5, kind: 'mail', sessionId: 'proj-a-s1', title: 'unread', body: '', runId: null },
+      ],
+    });
+    expect(screen.getByRole('button', { name: /mail — 5 unread/i })).toBeInTheDocument();
   });
 
   it('renders notices as dismissible banners', () => {
@@ -2138,8 +2176,9 @@ describe('a chip never names rows that are not on the screen', () => {
 
     // No fold expanded, and yet:
     expect(screen.getByText('merged')).toBeInTheDocument();
-    expect(screen.getByText('#157')).toBeInTheDocument();
-    expect(screen.getByText('1.2 GB')).toBeInTheDocument();
+    expect(screen.getByText('PR #157')).toBeInTheDocument(); // D-5545: the row's one context fact
+    // D-5545: the reclaimable size is a header fact; the row's one context fact is its PR.
+    expect(screen.queryByText('1.2 GB')).toBeNull();
     expect(screen.getByRole('img', { name: 'merged, ready to clean up' })).toBeInTheDocument();
   });
 
@@ -2251,7 +2290,9 @@ describe('a chip never names rows that are not on the screen', () => {
     expect(within(chip).queryByRole('button', { name: /mark all/i })).not.toBeInTheDocument();
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toBe(within(chip).getByText('Attention'));
-    expect(screen.getByRole('status')).toHaveTextContent('Attention: 2 marked seen');
+    // The bucket bar's region, named by its text: since wave 19 (D-5124) the screen has a status region of its own
+    // for the stale sentence, always mounted so an announcement lands in a live region that already exists.
+    expect(screen.getByText('Attention: 2 marked seen', { selector: '[role="status"]' })).toBeInTheDocument();
   });
 
   // Finding 4's screen-level half: the ack stamp is floored against the
@@ -2492,9 +2533,9 @@ describe('the programme tree on the fleet screen', () => {
     // …and the WORKING card (beta) does not: its own row is where that wave is.
     const beta = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'beta');
     expect(beta!.querySelector('.proj-abroad')).toBeNull();
-    // And beta's own row carries the orphan marker (Task 6), because the
-    // coordinator is on alpha's card.
-    expect(beta!.querySelector('.proj-crossing')?.textContent).toContain('home alpha');
+    // D-5545: no second line under beta's row any more — the orphan marker rides the row, and only for a
+    // coordinator the frame has measured (the home clause is in its title; see the case below).
+    expect(beta!.querySelector('.proj-crossing')).toBeNull();
     // …and a card that is neither the home nor the work says nothing at all.
     const gamma = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'gamma');
     expect(gamma, 'no card for gamma').toBeTruthy();
@@ -2553,8 +2594,8 @@ describe('the programme tree on the fleet screen', () => {
     });
     const cards = [...document.querySelectorAll('.proj-card')];
     const beta = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'beta')!;
-    const marker = beta.querySelector('.proj-crossing')!;
-    expect(marker.getAttribute('data-presence')).toBe('dead');
+    // D-5545: the marker rides the row (`data-marker`), no longer a `.proj-crossing` line under it.
+    const marker = beta.querySelector('[data-marker="coordinator-gone"]')!;
     expect(marker.getAttribute('title')).toContain('reclaim');
     // …and in the TEXT, which is the half a phone can read (final fix round):
     // the wiring case owns this too, because `data-presence` reaching the
@@ -2972,6 +3013,7 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     expect(order).toEqual(['banner', 'halt-banner', 'update-banner']);
     expect(updates, 'one poll for the whole screen').toHaveBeenCalledTimes(1);
     fireEvent.click(ackButton);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));   // through AckConfirm (D-5507)
     await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
     expect(ack.mock.calls).toEqual([[FLEET]]);
   });
@@ -3008,6 +3050,7 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     const ack = vi.spyOn(api, 'ackUpdateNode').mockRejectedValue(new TypeError('Failed to fetch'));
     render(<FleetScreen store={makeStore()} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Ack fleet' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));   // through AckConfirm (D-5507)
     await until(() => expect(updates).toHaveBeenCalledTimes(2));
     await until(() => expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeDisabled());
     expect(ack).toHaveBeenCalledTimes(1);
@@ -3016,5 +3059,161 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     act(() => { document.dispatchEvent(new Event('visibilitychange')); });
     await until(() => expect(updates).toHaveBeenCalledTimes(3));
     await until(() => expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled());
+  });
+
+  // Centralised-update wave 19, R24(b): a later poll failed, so every update surface on the screen is showing the
+  // last answer that landed, and each says so once, in the update plane's own sentence. Assistive tech hears it once,
+  // from the screen's one status region (D-5124). A screen that never had an answer says nothing of the kind: there
+  // is no "last answer" to mark.
+  it('wave 19, R24(b): after a failed later poll every update surface says it is the last answer, once each, announced once; with no answer ever, none does', async () => {
+    const until = async (check: () => void): Promise<void> => {   // the case above says why not waitFor
+      for (let i = 0; i < 100; i++) {
+        try { check(); return; } catch { /* not yet */ }
+        await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      }
+      check();
+    };
+    const STALE = 'The latest read failed — this is the last answer that landed.';
+    const count = (el: Element | null): number => (el?.textContent ?? '').split(STALE).length - 1;
+    const exposed = (): number => {   // text nodes carrying the sentence outside any aria-hidden subtree
+      const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      let n = 0;
+      for (let t = w.nextNode(); t !== null; t = w.nextNode()) {
+        if ((t.textContent ?? '').includes(STALE) && t.parentElement?.closest('[aria-hidden="true"]') == null) n++;
+      }
+      return n;
+    };
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null, roster: 'agreed', build: 'skewed' });
+    const updates = vi.spyOn(api, 'updates')
+      .mockImplementationOnce(() => Promise.resolve(halted()))
+      .mockImplementation(() => Promise.reject(new Error('offline')));
+    render(<FleetScreen store={makeStore()} />);
+    await screen.findByRole('button', { name: 'Ack fleet' });
+    await until(() => expect(screen.getByText(/run different builds/i)).toBeInTheDocument());
+    expect(count(document.body), 'the first read landed: nothing is stale yet').toBe(0);
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    await until(() => expect(updates).toHaveBeenCalledTimes(2));
+    await until(() => expect(count(document.querySelector('.halt-banner'))).toBe(1));
+    expect(count(document.querySelector('.banner')), 'the skew banner').toBe(1);
+    expect(count(document.querySelector('.update-banner')), 'the release banner').toBe(1);
+    expect(count(document.querySelector('.build-line')), 'the build line').toBe(1);
+    expect(count(document.body), 'four surfaces shown, and the one announcement').toBe(5);
+    expect(exposed(), 'said to assistive tech once').toBe(1);
+    expect(screen.getByText(/run different builds/i), 'and the skew arm no longer vouches for auto').toHaveTextContent('then run ccrc rollout');
+    cleanup();
+    vi.spyOn(api, 'updates').mockRejectedValue(new Error('offline'));
+    render(<FleetScreen store={makeStore()} />);
+    await until(() => expect(document.querySelector('.build-line')).not.toBeNull());
+    expect(count(document.body), 'no answer ever landed: nothing to call the last one').toBe(0);
+  });
+});
+
+// — D-5527: a coordinator's dispatched child from ANOTHER project nests under it, on its card, and says whose code
+// it works on; its label names the programme and wave, never a bare run number. Neutral names (public repo). —
+
+describe('cross-project nesting on the fleet screen (D-5527)', () => {
+  const seedCross = (store: FleetStore): void => seed(store, {
+    conn: 'open',
+    sessions: [
+      session({ id: 'lane-a-project-a', project: 'project-a', workspace: null, name: 'the coordinator', role: 'coordinator' }),
+      session({ id: 'lane-a-project-a-still-pond', project: 'project-a', workspace: 'still-pond', role: 'child',
+                child: { kind: 'child', runId: 40 }, boardProject: 'project-a' }),
+      // Minted by run 39 (wave 4), resumed by run 41 for wave 5; the server placed it on its coordinator's card.
+      session({ id: 'lane-b-project-b-quiet-river', project: 'project-b', workspace: 'quiet-river', role: 'child',
+                child: { kind: 'child', runId: 39 }, boardProject: 'project-a' }),
+      session({ id: 'lane-b-project-b', project: 'project-b', workspace: null }),
+    ],
+    runs: [
+      runRow({ id: 40, program: 'tidy-docs', programTitle: 'Tidy the docs', wave: 1, waveOf: 2, project: 'project-a',
+               homeProject: 'project-a', sessionId: 'lane-a-project-a-still-pond', claimedBy: 'lane-a-project-a' }),
+      runRow({ id: 41, program: 'port-api', programTitle: 'Port the API', wave: 5, waveOf: 7, project: 'project-b',
+               homeProject: 'project-b', sessionId: 'lane-b-project-b-quiet-river', claimedBy: 'lane-a-project-a', resumed: true }),
+    ],
+    runsFrameSeen: true,
+  });
+  const card = (name: string): Element =>
+    [...document.querySelectorAll('.proj-card')].find((c) => c.querySelector('.proj-card-name')?.textContent === name)!;
+
+  it('nests the child under its coordinator inside the coordinator’s project card, beside a same-project child', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seedCross(store);
+    const nested = [...card('project-a').querySelectorAll('.proj-nest .sess-label')].map((e) => e.textContent);
+    expect(nested).toEqual(['still-pond', 'quiet-river']);
+    expect([...card('project-b').querySelectorAll('.sess-line .sess-label')].map((e) => e.textContent)).toEqual(['lane-b-project-b']);
+    expect(card('project-b').querySelector('.proj-elsewhere-line')?.textContent).toBe('1 workspace under project-a');
+  });
+
+  it('the cross-project child names its project, and only it does', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seedCross(store);
+    const chips = [...document.querySelectorAll('.sess-workson')];
+    expect(chips.map((c) => c.textContent)).toEqual(['works on project-b']);
+    expect(chips[0]!.closest('.sess-line')?.querySelector('.sess-label')?.textContent).toBe('quiet-river');
+    expect(chips[0]!.querySelector('svg')).not.toBeNull();
+    // Inside the row button, so it rides the accessible name.
+    expect(screen.getByRole('button', { name: /^quiet-river.*works on.*project-b$/ })).toBeInTheDocument();
+  });
+
+  it('each child names its programme and wave — the CURRENT wave of a resumed workspace — and no run number', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seedCross(store);
+    const labels = [...document.querySelectorAll('.sess-child')].map((e) => e.textContent);
+    expect(labels).toEqual(['tidy-docs · wave 1 of 2', 'port-api · wave 5 of 7']);
+    expect(document.querySelector('.sess-child')?.getAttribute('title'))
+      .toBe('this workspace does one wave of Tidy the docs for the coordinator; it is stopped or reclaimed when the wave is done');
+  });
+});
+
+// ── native Docs reader W5 part 1, Task 11: the Docs door (design 2026-10-01 section 4.8, M4.L1) ───────────────
+//
+// The `/settings` door's twin above, with its placement pinned too: immediately before `.accounts-door` in the
+// header's control cluster, with the word beside an aria-hidden glyph, rendered whether or not the fleet has a
+// session. Its two tap-target halves live in tap-targets.test.tsx. The file-level afterEach does not reset the route.
+describe('the Docs door (docs design 4.8, M4.L1)', () => {
+  afterEach(() => navigate('/'));
+
+  it('sits in the fleet header immediately before the accounts door, says Docs, and routes to /docs', () => {
+    render(<FleetScreen store={makeStore()} />);
+    const door = screen.getByRole('button', { name: 'Docs: specs, plans and design notes' });
+    expect(door).toHaveClass('docs-door');
+    expect(door.parentElement).toHaveClass('fleet-head-right');
+    expect(door.nextElementSibling).toHaveClass('accounts-door');
+    const words = [...door.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent?.trim()).join('');
+    expect(words).toBe('Docs');
+    expect(door.querySelector('.docs-door-glyph')?.getAttribute('aria-hidden')).toBe('true');
+    // The glyph is `Icon file-text` (skins plan Task 8, "#402's 📄"; D-5500): an svg drawn from the vendored nodes,
+    // stroked in the door's ink, and no text of its own, so the platform's colour 📄 cannot come back here.
+    const glyph = door.querySelector('.docs-door-glyph')!;
+    expect(glyph.querySelector('svg')?.children.length).toBe(ICONS['file-text'].length);
+    expect(glyph.textContent).toBe('');
+    fireEvent.click(door);
+    expect(location.pathname).toBe('/docs');
+  });
+
+  it('renders with no sessions at all', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    act(() => { store.setState({ conn: 'open', sessions: [] }); });
+    expect(screen.getByRole('button', { name: 'Docs: specs, plans and design notes' })).toHaveClass('docs-door');
+  });
+
+  it('is still there, in the header cluster before the accounts door, with a session present', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', sessions: [session({ project: 'demo' })] });
+    // The fleet really holds a session now (the header counts it, and the first-run empty state is gone), so the
+    // empty-fleet cases above are not what this one measures.
+    expect(document.querySelector('.fleet-count')?.textContent).toContain('1 session');
+    expect(screen.queryByRole('heading', { name: 'No sessions yet' })).toBeNull();
+    const door = screen.getByRole('button', { name: 'Docs: specs, plans and design notes' });
+    expect(door).toHaveClass('docs-door');
+    expect(door.parentElement).toHaveClass('fleet-head-right');
+    expect(door.nextElementSibling).toHaveClass('accounts-door');
+    fireEvent.click(door);
+    expect(location.pathname).toBe('/docs');
   });
 });

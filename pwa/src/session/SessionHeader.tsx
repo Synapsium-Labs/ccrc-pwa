@@ -11,13 +11,16 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  substrateFault,
+  backgroundWork, backgroundWords, sessionWithCoordinator, substrateFault, withCoordinatorWords,
   type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
+import { restartWords } from '../lib/restart';
 import {
-  BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, elapsedShort, statusLabel, useNow,
+  BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, useNow,
 } from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
+import { navigate } from '../lib/router';
+import { sessionDocsHref } from '../docs/docsLinks';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { sessionLabel } from '../fleet/sessionLabel';
 // main's TypedLabel import is dropped, not lost: the component lives in
@@ -27,13 +30,19 @@ import { PrKeycap } from './PrKeycap';
 import { PrSheet } from './PrSheet';
 import './chat.css';
 import { substrateFaultText } from '../fleet/substrateWords';
+import { hibernatedSince } from '../fleet/hibernated';
+import { headerStatusWord } from '../fleet/sessionFacts';
 import { chipTone, metaChipTone } from './chipTones';
+import { SessionCoordination, SessionDetails } from './SessionDetails';
+import type { Coordination } from '../fleet/fleetTree';
+import type { SessionFactSet } from '../fleet/sessionFacts';
 
 export interface SessionHeaderProps {
   session: FleetSession | null;
   status: SessionStatus | null;
   statusUpdatedAt: number | null;
-  onInterrupt: () => void;
+  /** D-5237: called with the control that sent it, which the server records. */
+  onInterrupt: (source: 'keycap' | 'escape-key') => void;
   onOpenTerminal: () => void;
   onBack: () => void;
   /** "Change model" — opens the one-tap model chooser. */
@@ -74,35 +83,23 @@ export interface SessionHeaderProps {
    *  shown whenever known, there is no card here to imply it. `null`/absent
    *  renders nothing. */
   repo?: string | null;
+  /** D-5527: who this session works for (`fleetTree.ts`'s `coordinationOf`) — its coordinator's id and
+   *  state and the run number, which the session's facts do not carry. `null`: nobody's worker. */
+  coordination?: Coordination | null;
+  /** D-5545: the session's facts, from the same model the fleet card reads (`sessionFacts`), so the header
+   *  holds every fact the card shows and the rest beside it. `null` before the first fleet frame. */
+  facts?: SessionFactSet | null;
 }
-
-/** '04:12' (or '1:04:12') elapsed — rendered in tabular-nums mono. */
-function clock(elapsedMs: number): string {
-  const total = Math.max(0, Math.floor(elapsedMs / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const pad = (n: number): string => String(n).padStart(2, '0');
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-}
-
-/** '2m' | '3h' | '5d' — `elapsedShort`'s own ladder, and `null` under a
- *  minute because this header's sentences phrase that case themselves
- *  ("working…", "idle"). A FOURTH copy of those four lines lived here: the
- *  fold that collected `SessionLine`'s, `lifecycleWords`' and `PrKeycap`'s
- *  missed it, because this one took `(now, then)` rather than a span and so
- *  matched no signature the census was looking for. */
-const relShort = (now: number, then: number | null): string | null =>
-  then === null ? null : elapsedShort(now - then);
 
 /** One row of the session menu: a label, and — for the three that answer a
  *  slash command — the command itself, dimmed, read by nobody.
  *
- *  SIX CALL SITES in this file and nowhere else, which is why it lives here
+ *  SEVEN CALL SITES in this file and nowhere else, which is why it lives here
  *  rather than in `@ccrc/ui`: a menu row that knows a hint is a slash command
  *  is this app's idea, and three of these rows carry a substrate gate whose
  *  reasons are argued at the call sites below. The markup census named the
- *  three with hints; the three without are the same row with one child.
+ *  three with hints; the three without are the same row with one child. The
+ *  seventh, Docs (docs design 4.8), carries its branch as the hint.
  *
  *  `aria-hidden` on the hint is deliberate and was already: the label is the
  *  accessible name, and "/model" read aloud after it is noise. */
@@ -150,6 +147,8 @@ export function SessionHeader({
   roster = [],
   queuedField = null,
   repo = null,
+  coordination = null,
+  facts = null,
 }: SessionHeaderProps): ReactNode {
   const [menuOpen, setMenuOpen] = useState(false);
   const [prOpen, setPrOpen] = useState(false);
@@ -192,6 +191,10 @@ export function SessionHeader({
     st === 'dead' && session != null && session.archivedAt == null
       ? 'dead'
       : snapshotBucket ?? (st === null ? null : st === 'busy' ? 'working' : st);
+  // D-5242: a `dead` row `ccd hibernate` put to sleep reads `hibernated` beside the calm dot, never "✕ not running":
+  // this screen wakes it on open (SessionScreen), and "not running" above "Waking…" would contradict it. Read off the
+  // ROW (`hibernatedSince`, both halves), the same fact the wake trigger reads; the dead override above stays.
+  const asleepAt = bucket === 'dead' && session != null ? hibernatedSince(session) : null;
 
   // `working` drives the visible clock's tempo; `busy` (the LIVE status, not
   // the snapshot's bucket) stays the gate on interrupting, because stopping a
@@ -211,12 +214,21 @@ export function SessionHeader({
     if (!finePointer || !busy) return;
     const onKey = (e: globalThis.KeyboardEvent): void => {
       if (e.key !== 'Escape') return;
+      // D-5235: AN ESCAPE THAT CLOSES A SHEET IS NOT AN INTERRUPT. Radix's
+      // dismiss (under every `@ccrc/ui` Sheet and dialog, the terminal drawer
+      // included) handles the key in its document capture listener and
+      // prevents the default without stopping propagation, so the same
+      // keystroke reached this window listener and killed the turn. Both
+      // checks: the first is the one Radix sets today; the second holds if a
+      // layer ever handles Escape without preventing it.
+      if (e.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"][data-state="open"]') !== null) return;
       // Escape inside a text field dismisses autocomplete or clears the draft —
       // it must not reach through and kill the turn.
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable === true) return;
-      onInterrupt();
+      onInterrupt('escape-key');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -226,37 +238,27 @@ export function SessionHeader({
   // contradict itself either. The word is the bucket's, with the two facts
   // only this screen has — the live elapsed clock and the relative age —
   // spliced in; StatusDot supplies the glyph and the spoken label.
-  const rel = relShort(now, at);
-  const word =
-    bucket === 'attention'
-      ? 'waiting on you'
-      : bucket === 'working'
-        ? at !== null
-          ? `working · ${clock(now - at)}`
-          : 'working…'
-        : bucket === 'done'
-          ? rel
-            ? `done · ${rel} ago`
-            : 'done'
-          : bucket === 'idle'
-            ? rel
-              ? `idle · ${rel} ago`
-              : 'idle'
-            // THE THREE THAT ARE NOT COMPOSED take `StatusDot`'s own word
-            // (`statusLabel`, @ccrc/ui) rather than a second copy of it: the
-            // literal census found `merged, ready to clean up` written out
-            // here AND in the lamp's map. `done` and `idle` above stay spelled
-            // here, because this header composes them with an age the lamp
-            // knows nothing about.
-            : bucket === 'cleanup' || bucket === 'archived' || bucket === 'dead'
-              ? statusLabel(bucket)
-              : '';
+  // D-5231: a `working` row whose last main Stop left delegated work running
+  // reads `working · N in background` (the kinds in the title), as the card does.
+  const bg = bucket === 'working' && session != null ? backgroundWork(session) : null;
+  const bgWords = bg === null ? null : backgroundWords(bg);
+  // D-5296: a `working` row whose parent holds its question reads
+  // `with coordinator · <parent>`, in the calm (idle) tint, as the card does.
+  // The dialog stays answerable from this screen: nothing here gates it.
+  const wc = bucket === 'working' && session != null ? sessionWithCoordinator(session) : null;
+  const wcWords = wc === null || session == null ? null : withCoordinatorWords(wc, session.project);
+  // D-5237: "restarted · out of memory · 3m ago" for an hour after a process end.
+  const restart = session != null ? restartWords(session, now) : null;
+  // D-5545 (verifier round 1): the word is the MODEL's (`headerStatusWord`), from the bucket this strip paints —
+  // it always begins with the card's word (`exited` on both; the lamp still speaks `not running`), adding only
+  // what this screen knows: the live clock, the age, `on you`, `ready to clean up`.
+  const word = bucket === null ? '' : headerStatusWord({ bucket, asleepAt, background: bgWords, at, now });
   // Four tints for seven buckets, on purpose: `status-line--*` is the existing,
   // contrast-verified set (chat.css) and the glyph already carries the
   // distinction colour must not carry alone. done/cleanup/archived take idle's
   // matte ink, exactly as their dots do (StatusDot's table).
   const variant =
-    bucket === 'attention' ? 'attention' : working ? 'busy' : bucket === 'dead' ? 'dead' : 'idle';
+    bucket === 'attention' ? 'attention' : wcWords !== null || asleepAt !== null ? 'idle' : working ? 'busy' : bucket === 'dead' ? 'dead' : 'idle';
 
   // The substrate gate (spec §4): under a standing fault the console cannot
   // SEE this session, so Archive (and a main checkout's Restore) — an offer to act on a pane nobody can measure
@@ -276,6 +278,10 @@ export function SessionHeader({
   const title = session ? session.project : (fallback?.title ?? '…');
   const crumb = session && session.workspace !== null ? sessionLabel(session) : null;
   const wrapper = session?.wrapper ?? fallback?.wrapper ?? '';
+  // The menu's Docs item (docs design 4.8), from the one builder the actions sheet's row also calls. No item while no
+  // row has arrived (a deep link before its first frame), and none when the builder answers null (the project fails
+  // the project grammar).
+  const docsLink = session === null ? null : sessionDocsHref(session);
 
   // Model / effort / ultracode / branch — read from the pane statusline the
   // server already parses. Tapping the model or effort chip opens its chooser.
@@ -309,16 +315,32 @@ export function SessionHeader({
             </>
           )}
         </h1>
+        {/* D-5527: under the name, because it says what this session IS for —
+            whose code, whose programme — before the meta row says how it is. */}
+        {facts !== null && <SessionCoordination facts={facts} coordination={coordination} />}
         <div className="chat-meta">
           {bucket !== null && (
             <>
-              <StatusDot status={bucket} />
-              <span className={`status-line status-line--${variant}`}>{word}</span>
+              <StatusDot status={bucket} asleep={asleepAt !== null} />
+              <span className={cn('status-line', `status-line--${variant}`, wcWords !== null && 'status-line--coordinator')} title={wcWords?.title ?? bgWords?.title}>
+                {wcWords !== null ? (
+                  // D-5390: the phrase yields width before the parent's name does.
+                  <>
+                    <span className="status-line-lead">with coordinator</span>
+                    {' '}<span className="status-line-name">{`· ${wcWords.short}`}</span>
+                  </>
+                ) : word}
+              </span>
             </>
           )}
           {wrapper !== '' && (
-            <Chip dot className={chipTone('active')}>
+            <Chip dot className={chipTone('active')} title={facts?.lane.label}>
               {accountLabel(roster, wrapper)}
+            </Chip>
+          )}
+          {restart !== null && (
+            <Chip className={chipTone('restart')} title={restart.title} data-restart={restart.cause}>
+              {restart.text}
             </Chip>
           )}
           {repo !== null && (
@@ -370,6 +392,8 @@ export function SessionHeader({
             )}
             </>
           )}
+          {/* D-5545: every other fact, in full — a details row from 900px, behind one door on a phone. */}
+          {facts !== null && <SessionDetails facts={facts} coordination={coordination} />}
         </div>
       </div>
       <Keycap className="keycap--term" aria-label="Terminal" onClick={onOpenTerminal}>
@@ -385,7 +409,7 @@ export function SessionHeader({
         <PrKeycap pr={session.pr} onOpen={() => setPrOpen(true)} />
       )}
       {!finePointer && (
-        <Keycap className="keycap--esc" aria-label="Stop" disabled={!busy} onClick={onInterrupt}>
+        <Keycap className="keycap--esc" aria-label="Stop" disabled={!busy} onClick={() => onInterrupt('keycap')}>
           esc
         </Keycap>
       )}
@@ -395,6 +419,10 @@ export function SessionHeader({
           <MenuItem label="Change model" hint={<>/model</>} onClick={() => menuAct(onChangeModel)} />
           <MenuItem label="Change effort" hint={<>/effort</>} onClick={() => menuAct(onChangeEffort)} />
           <MenuItem label="History" hint="journal" onClick={() => menuAct(onOpenHistory)} />
+          {docsLink !== null && (
+            <MenuItem label="Docs" hint={docsLink.branch ?? 'default'} className="docs-menu-item"
+                      onClick={() => menuAct(() => navigate(docsLink.href))} />
+          )}
           {/* Gated like Archive below (branch review): this item opens the SAME
               SwapSheet as the actions sheet's gated opener, and SwapSheet's
               confirm fires api.swap with no substrate check of its own — so

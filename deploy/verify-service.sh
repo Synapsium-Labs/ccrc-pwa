@@ -67,6 +67,7 @@ LOG_LINES="${CCRC_VERIFY_LOG_LINES:-60}"
 # DEFAULTS bound the extra wait at ~10s, and only a FAILING session unit pays it.
 STOP_POLLS="${CCRC_VERIFY_STOP_POLLS:-10}"
 STOP_INTERVAL="${CCRC_VERIFY_STOP_INTERVAL:-1}"
+STOP_WHY=""   # the classifier's refusal cause, printed by fail (wave 16, D-5137); never inherited from the caller
 
 # ── A DELIBERATE SUPERVISOR STOP IS NOT A CRASH (wave 10, R12) ─────────────
 # `ccrc update`'s sweep and deploy.sh's SWEEP_CMD list the active supervisors
@@ -109,6 +110,9 @@ STOP_INTERVAL="${CCRC_VERIFY_STOP_INTERVAL:-1}"
 # and only here (D-3946). An ABSENT registry, or no HOME, is not a purged row —
 # nothing was measured — so it fails. The scope is the unit's NAME: ccrc.service
 # and ccrc-agent.service never reach the registry, and never cost a query.
+# Nor is a registry this user cannot SEARCH (wave 16, D-5137): without its x bit
+# every `-e`/`-L` under it answers false, so a kept row would read as purged and
+# a crash would pass. It fails, and the failure names that cause (STOP_WHY).
 #
 # R13(a) (wave 11, D-3976, D-3977, D-3978): the purged arm believes "purged" only of
 # a name ccd could have minted (`ccd_id_ok`), with NOTHING at <id>.uuid (a symlink,
@@ -127,21 +131,13 @@ ccd_id_ok() {   # <id> -> 0 iff ccd could have minted it
   case "$1" in ''|.*|*[!${az}${d}._-]*) return 1 ;; esac
 }
 
-stopped_on_purpose() {   # -> 0, and one stdout line, iff $UNIT is a session stopped on purpose
-  local id reg st n=0 s evidence load
-  case "$UNIT" in claude-session@?*.service) ;; *) return 1 ;; esac
-  id="${UNIT#claude-session@}"; id="${id%.service}"
-  case "$id" in */*) return 1 ;; esac
-  [ -n "${HOME:-}" ] || return 1
-  reg="$HOME/.cc-sessions"
-  [ -d "$reg" ] || return 1
-  st=$(systemctl --user is-active "$UNIT" 2>&1)
-  while [ "$st" = deactivating ] && [ "$n" -lt "$STOP_POLLS" ]; do
-    sleep "$STOP_INTERVAL"
-    n=$((n + 1))
-    st=$(systemctl --user is-active "$UNIT" 2>&1)
-  done
-  [ "$st" = inactive ] || return 1
+# registry_evidence — the registry half of stopped_on_purpose, which runs it with `id` and `reg` set (bash's dynamic
+# scope). rc 0 with `evidence` set: the stamp is present, or the row is purged. rc 1: the purged arm refused (not a ccd
+# id, or a unit systemd cannot load). rc 2: the stamp is ABSENT and `<id>.uuid` PRESENT — a hand stop, or `_reg_purge` caught
+# between two unlinks (it takes `<id>.stopped` before `<id>.uuid`; R18(a)), which stopped_on_purpose re-reads once
+# (wave 16, D-5138). Filesystem reads only, apart from the purged arm's one LoadState query.
+registry_evidence() {
+  local s load
   if [ -e "$reg/$id.stopped" ]; then
     # `-f` and not a symlink BEFORE the read, as ccd's `_reg_get` does: a FIFO
     # here would block the read for ever. Present is enough; the read only
@@ -164,8 +160,33 @@ stopped_on_purpose() {   # -> 0, and one stdout line, iff $UNIT is a session sto
     [ "$load" = loaded ] || return 1
     evidence="its registry row is purged (no ~/.cc-sessions/$id.uuid)"
   else
-    return 1
+    return 2
   fi
+  return 0
+}
+
+stopped_on_purpose() {   # -> 0, and one stdout line, iff $UNIT is a session stopped on purpose
+  local id reg st n=0 evidence rc=0
+  case "$UNIT" in claude-session@?*.service) ;; *) return 1 ;; esac
+  id="${UNIT#claude-session@}"; id="${id%.service}"
+  case "$id" in */*) return 1 ;; esac
+  [ -n "${HOME:-}" ] || return 1
+  reg="$HOME/.cc-sessions"
+  [ -d "$reg" ] || return 1
+  st=$(systemctl --user is-active "$UNIT" 2>&1)
+  while [ "$st" = deactivating ] && [ "$n" -lt "$STOP_POLLS" ]; do
+    sleep "$STOP_INTERVAL"
+    n=$((n + 1))
+    st=$(systemctl --user is-active "$UNIT" 2>&1)
+  done
+  [ "$st" = inactive ] || return 1
+  # An unsearchable registry answers every test below with "absent" (wave 16, D-5137; R18(a)): refuse, and say why.
+  [ -x "$reg" ] || { STOP_WHY="~/.cc-sessions cannot be searched (no x permission), so ccd's stop stamp and registry row cannot be read — a deliberate stop cannot be told from a crash"; return 1; }
+  # The purge window (wave 16, D-5138; R18(a)): ONE more read, STOP_INTERVAL later, of a stamp-absent, uuid-present
+  # row. A purge in flight then reads purged; a hand stop still reads the same, and fails as before.
+  registry_evidence; rc=$?
+  if [ "$rc" -eq 2 ]; then sleep "$STOP_INTERVAL"; registry_evidence; rc=$?; fi
+  [ "$rc" -eq 0 ] || return 1
   echo "stopped on purpose: $UNIT settled 'inactive', and $evidence — a deliberate stop, not a crash"
 }
 
@@ -178,6 +199,7 @@ fail() {
   echo "## DEPLOY FAILED — $UNIT did not come up clean after restart" >&2
   echo "##" >&2
   echo "## $1" >&2
+  [ -z "$STOP_WHY" ] || echo "## $STOP_WHY" >&2
   echo "##" >&2
   echo "## The restart itself SUCCEEDED; systemd returns as soon as it" >&2
   echo "## forks. This check is the difference between that and a" >&2

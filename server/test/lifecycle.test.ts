@@ -35,6 +35,15 @@ const seedDefault = (home: string) =>
     started: '1',
   });
 
+/** D-5240: the swap route reads the turn (`turnVerdictFor`) before the queue and inside it, fail-closed, and this
+ *  file's session runs on `claude2`, an account the test roster does not carry, which reads `unmeasured`. A swap case
+ *  here is about argv, queueing and the 502, so it moves the row onto a roster account and proves the pane gone: a
+ *  verdict of `idle` with no further read (`swap-route-busy.test.ts` owns busy and unmeasured). */
+const swappable = (home: string): void => {
+  writeFileSync(path.join(home, '.cc-sessions', `${ID}.wrapper`), 'claude');
+};
+const PANE_GONE = (args: string[]) => ({ code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` });
+
 /** Server over a seeded one-session registry; every exec succeeds (or fails with stderr 'boom').
  *  `ccdVerbs`, when given, seeds a real `fleetState` (mirroring
  *  `coord-pause-route.test.ts`'s own pattern) — the shape a skew test needs
@@ -49,6 +58,8 @@ async function makeApp(
     unswept?: boolean;
     /** F3: the `ledgerFloor` port the route reads per project. */
     coord?: unknown;
+    /** D-5240: a session the swap route's turn gate reads `idle` (`swappable`); tmux calls are then not recorded. */
+    swapIdle?: boolean;
   } = {},
 ): Promise<{
   app: FastifyInstance;
@@ -60,9 +71,15 @@ async function makeApp(
   seedRoster(home);
   seedDefault(home);
   const calls: string[][] = [];
+  if (opts.swapIdle) swappable(home);
   const run: Runner = async (cmd, args) => {
+    if (opts.swapIdle && args[0] === 'has-session') return PANE_GONE(args);
     calls.push([cmd, ...args]);
-    return opts.fail ? { code: 1, stdout: '', stderr: 'boom' } : { code: 0, stdout: '', stderr: '' };
+    if (opts.fail) return { code: 1, stdout: '', stderr: 'boom' };
+    // A real pane pid, as routes.test.ts's makeApp gives: since D-5234 a null pid on an alive pane is an unmeasured
+    // row, which the archive door refuses `status-unknown` (D-5274).
+    if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
   };
   const env: NodeJS.ProcessEnv = { CCRC_HOME: home };
   if (opts.projectsRoot) env.CCRC_PROJECTS_ROOT = opts.projectsRoot;
@@ -273,7 +290,7 @@ describe('lifecycle routes', () => {
   });
 
   it('POST /api/sessions/:id/swap sends exact argv', async () => {
-    const { app, calls, cfg } = await makeApp();
+    const { app, calls, cfg } = await makeApp({ swapIdle: true });
     const res = await app.inject({
       method: 'POST',
       url: `/api/sessions/${ID}/swap`,
@@ -285,7 +302,7 @@ describe('lifecycle routes', () => {
   });
 
   it('a failing ccd maps to 502 with stderr', async () => {
-    const { app } = await makeApp({ fail: true });
+    const { app } = await makeApp({ fail: true, swapIdle: true });
     const res = await app.inject({
       method: 'POST',
       url: `/api/sessions/${ID}/swap`,
@@ -319,8 +336,13 @@ describe('lifecycle routes', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedDefault(home);
+    swappable(home);
     const order: string[] = [];
-    const run: Runner = async (_cmd, args) => { order.push(args.join(' ')); return { code: 0, stdout: '', stderr: '' }; };
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return PANE_GONE(args);
+      order.push(args.join(' '));
+      return { code: 0, stdout: '', stderr: '' };
+    };
     const cfg = loadConfig({ CCRC_HOME: home });
     // Recording, so the enqueue itself is observable — see the wait below.
     const enqueued: string[] = [];
@@ -1061,7 +1083,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     W3: ['history-steer-files'],
   } as const;
   type HistoryPr = keyof typeof HISTORY_ROWS_BY_PR;
-  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2'];
+  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3', 'B4'];
 
   it('the history classes are §9.4\'s thirteen, each declared by the PR its Lands-in column names, and none before it (O17)', () => {
     const all: string[] = Object.values(HISTORY_ROWS_BY_PR).flat();
@@ -1175,6 +1197,18 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.tier).toBe('one store size per backup');
   });
 
+  it('declares history-export: an O class the sweep writes through store.mjs, kept with the store', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-export');
+    expect(c, 'shared/lifecycle.ts declares no history-export class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (through store.mjs)']);
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('kept with the store; removed only with it, or by hand by segment');
+    expect(c!.ruling).toContain('stale .tmp');
+    expect(c!.root).toContain('~/.ccrc/history/export/<store_id>/<seq>.<writer>.db');
+    expect(c!.tier).toContain('256 MiB');
+  });
+
   it('declares the server suite\'s per-run temp parent, an E class its own creator collects (#316)', () => {
     // One `ccrc-testrun-XXXXXX` directory per server vitest run, removed at teardown, by the signal arm, or by a
     // later run's reap. L0 cannot import the prefix, so the row's `root` is the one textual second copy of it,
@@ -1186,6 +1220,63 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.collector).toContain('run-tmp.globalsetup.mjs');
     expect(c!.collector).toContain('RUN_QUIET_S');
     expect(`${c!.collector} ${c!.bound}`, 'the row carries a copy of RUN_QUIET_S\'s number').not.toContain(String(RUN_QUIET_S));
+  });
+
+  // ── ccrc history W1-B3 (spec 2026-10-05 §9.4, O17's B3 half) ────────────
+  // The card line's two classes. Both are rolling (R):
+  //   - the hook rewrites a session's scope marker on every PreCompact;
+  //   - the sweep rewrites, consumes, withdraws and collects the card predictions.
+  // Each collector promise has its own case in history-card.test.ts:
+  //   - consumption: consumeAndWriteCards, counters card_consumed:<scope>;
+  //   - withdrawal on a pass that runs no card step: withdrawCards, counters card_withdrawn:<reason>;
+  //   - the 7-day purge: collectPurgedHistoryFiles, counters scope_files_purged and card_files_purged.
+  // A collector promise with no test can go false without a red, which is why each one names its case here.
+  it('declares history-scope-markers: an R class the hook writes and the sweep collects once its session is purged', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-scope-markers');
+    expect(c, 'shared/lifecycle.ts declares no history-scope-markers class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd/session-hook.sh']);
+    expect(c!.collector).toContain('ccd-history-sweep');
+    expect(c!.collector).toContain('the files of purged sessions after 7 days');
+    expect(c!.root).toBe('~/.ccrc/history/scope/<id>');
+    expect(c!.tier).toBe('<=64 B per session');
+    expect(c!.ruling).toBeNull();
+  });
+
+  it('declares history-card-files: an R class the sweep writes through card.mjs, deletes on consumption, withdraws on a pass that runs no card step and collects once its session is purged', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-card-files');
+    expect(c, 'shared/lifecycle.ts declares no history-card-files class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (through card.mjs)']);
+    expect(c!.collector).toContain('ccd-history-sweep');
+    expect(c!.collector).toContain('deleted on consumption');
+    expect(c!.collector).toContain('withdrawn by a pass that runs no card step');
+    expect(c!.collector).toContain('the files of purged sessions after 7 days');
+    // §9.4: the record goes with its session's files.
+    expect(c!.collector).toContain('the record included');
+    expect(c!.root).toContain('~/.ccrc/history/card/<id>/<uuid>.txt');
+    // R-recalloff-parity: the generation record Task 5 writes beside each prediction is in the same class, and
+    // §9.4 names it in the root column.
+    expect(c!.root, 'the class names no generation record').toContain('generation record <uuid>.gen');
+    expect(c!.tier).toBe('<=512 B per session');
+    expect(c!.ruling).toBeNull();
+  });
+
+  it("the B3 rows' numbers are the code's own: 7 days is PURGED_FILES_GRACE_MS, 512 B is CARD_LINE_MAX", async () => {
+    // The manifest is L0 and imports nothing, so its prose numbers are bound here instead. The writer prints only
+    // a grammar-valid line (at most 145 characters, 152 bytes with its LF), so the reader's CARD_LINE_MAX
+    // character cap is the file's bound; with its generation record (37 B, R-recalloff-parity) a session holds at
+    // most 189 B there.
+    const { PURGED_FILES_GRACE_MS, CARD_LINE_MAX } = await import('../../ccd/history/lib.mjs');
+    const days = PURGED_FILES_GRACE_MS / 86_400_000;
+    expect(Number.isInteger(days), 'PURGED_FILES_GRACE_MS is not a whole number of days').toBe(true);
+    for (const n of ['history-scope-markers', 'history-card-files']) {
+      const c = LIFECYCLE.find((x) => x.name === n);
+      expect(c, `shared/lifecycle.ts declares no ${n} class`).toBeTruthy();
+      expect(c!.collector, `${n}'s collector names another grace than the sweep's`)
+        .toContain(`the files of purged sessions after ${days} days`);
+    }
+    expect(LIFECYCLE.find((x) => x.name === 'history-card-files')!.tier).toBe(`<=${CARD_LINE_MAX} B per session`);
   });
 });
 

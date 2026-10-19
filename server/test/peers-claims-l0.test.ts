@@ -154,9 +154,10 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly five import lines, and all are types (D-3021)', () => {
+  it('shared/api.ts has exactly six import lines, and all are types (D-3021)', () => {
     // Account-pool membership, release rollout, the box-token console card and
-    // the node role each added an L0 sibling shape: no duplicate wire types, and
+    // the node role each added an L0 sibling shape, and the session's workflow
+    // rows (D-5560) a sixth: no duplicate wire types, and
     // the rule this pin defends holds: shared/api.ts imports nothing at runtime.
     const lines = readFileSync(apiPath, 'utf8').split('\n');
     const imports = lines.filter((l) => /^import\s/.test(l));
@@ -165,6 +166,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import type { AccountPoolWire } from './poolrule.js';",
       "import type { BuildInfo } from './buildinfo.js';",
       "import type { BoxTokenView } from './box-token.js';",
+      "import type { WorkflowView } from './workflows.js';",
       "import type { NodeRole } from './node-role.js';",
     ]);
   });
@@ -176,7 +178,7 @@ describe('the wire shapes compile as declared (typecheck-tests carries the real 
       id: 'ccrc-pwa-quiet-river', uuid: null, project: 'ccrc-pwa',
       workspace: 'quiet-river', branch: 'feat/mirror-lens', wrapper: null,
       lifecycle: 'running', deliverable: 'yes',
-      archivedAt: null, archivedStale: false,
+      archivedAt: null, archivedStale: false, hibernatedAt: null,
       held: null, intent: null,
     };
     expect(peer.deliverable).toBe('yes');

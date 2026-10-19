@@ -10,6 +10,7 @@ import type { FleetHealth, NodeWire, UpdateIntentWire } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { api } from '../src/lib/api';
 import { FleetHostBanner } from '../src/fleet/FleetHostBanner';
+import { UPDATES_STALE_TEXT } from '../src/fleet/useUpdatesView';
 
 afterEach(() => {
   cleanup();
@@ -105,6 +106,15 @@ describe('FleetHostBanner', () => {
     // `flex-none` stops the flex row shrinking it again. Measured — with only
     // the `w-auto` assertion, deleting `flex-none` left all 27 green.
     expect(screen.getByRole('button', { name: 'Reboot' }).className).toContain('flex-none');
+  });
+
+  it("Reboot lifts and sinks to the dead banner's own grounds, not the card's (D-5688)", async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(health());
+    render(<FleetHostBanner />);
+    const cls = (await screen.findByRole('button', { name: 'Reboot' })).className;
+    expect(cls).toMatch(/(^|\s)enabled:hover:bg-hover-on-dead(\s|$)/);
+    expect(cls).toMatch(/(^|\s)enabled:active:bg-pressed-on-dead(\s|$)/);
+    expect(cls).not.toMatch(/(^|\s)enabled:(hover:bg-hover|active:bg-pressed)(\s|$)/);
   });
 
   it('warns when the host is UP but the two boxes disagree about the roster', async () => {
@@ -350,5 +360,27 @@ describe('FleetHostBanner — the skew arm\'s remedy (R15(c))', () => {
     render(<FleetHostBanner health={skewed} nodes={[fleet, server]} intent={autoOn} />);
     expect(msg()).toContain('Run ccrc rollout from the deploying machine, or ccrc update on the lagging box, fleet box first.');
     expect(msg()).not.toMatch(/auto-install/i);
+  });
+
+  // Centralised-update wave 19, R24(b): a later poll failed, so the versions and the remedy come from the last answer
+  // that landed. The arm says so in the update plane's own sentence, and never vouches for auto on it.
+  it('stale: the terminal verbs where auto would have been, then the update plane\'s own stale sentence', () => {
+    render(<FleetHostBanner health={skewed} nodes={[movable('fleet', FLEET_V7), movable('server', SERVER_V9)]} intent={autoOn} stale />);
+    expect(msg()).toBe('The two boxes run different builds. fleet v0.0.7 (bd2bf57a) · server v0.0.9 (2985b9d1). '
+      + 'Run ccrc rollout from the deploying machine, or ccrc update on the lagging box, fleet box first. '
+      + UPDATES_STALE_TEXT);
+    expect(screen.getByText(UPDATES_STALE_TEXT, { exact: false, selector: '[aria-hidden="true"]' }),
+      'shown, not announced (D-5124)').toBeInTheDocument();
+  });
+
+  it('stale with a halt: the halt, then the terminal, then the stale sentence; fresh says no stale sentence', () => {
+    const fleet = { ...movable('fleet', FLEET_V7), update: { state: 'failed' as const, target: 'v0.0.9', startedAt: 1, detail: 'gate: unit not up' } };
+    const { rerender } = render(<FleetHostBanner health={skewed} nodes={[fleet, movable('server', SERVER_V9)]} intent={autoOn} stale />);
+    expect(msg()).toBe('The two boxes run different builds. fleet v0.0.7 (bd2bf57a) · server v0.0.9 (2985b9d1). '
+      + 'Nothing moves until fleet is acknowledged — tap Ack on it in the halt banner, then run ccrc rollout from the '
+      + 'deploying machine, or ccrc update on the lagging box, fleet box first. ' + UPDATES_STALE_TEXT);
+    rerender(<FleetHostBanner health={skewed} nodes={[fleet, movable('server', SERVER_V9)]} intent={autoOn} stale={false} />);
+    expect(msg()).not.toContain(UPDATES_STALE_TEXT);
+    expect(msg()).toContain('auto-install then moves the lagging box.');
   });
 });

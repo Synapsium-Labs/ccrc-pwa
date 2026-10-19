@@ -38,8 +38,10 @@ export const Filled: Story = {
   args: { defaultValue: 'build4-conversation-and-controls', 'aria-label': 'Program slug' },
 };
 
-/** The focus cue is the phosphor on the border, not a ring — a 44px field on a
- *  phone has no room for an offset ring. Tab into it to see it. */
+/** The focus cue is the ring, the one every other control draws — the field
+ *  no longer repaints its border as well, and nothing on it hides the ring
+ *  (its `outline-none` went with the border). Tab into it to see it: this
+ *  story is the ring with only this package's CSS loaded. */
 export const Focusable: Story = {
   args: { placeholder: 'Search projects', type: 'search', 'aria-label': 'Search projects' },
 };

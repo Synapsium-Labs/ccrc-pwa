@@ -2,6 +2,7 @@ import { createReadStream, watch, type FSWatcher } from 'node:fs';
 import { lstat, mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ReadFailure } from '../../shared/agent-protocol.js';
+import { isReadFromRange } from '../../shared/agent-protocol.js';
 
 /** Why a read couldn't produce content — and, since `MeasuredStat` below,
  *  why a `stat` couldn't produce {mtimeMs,size} either: ONE vocabulary for
@@ -92,6 +93,29 @@ export type MeasuredRangeRead =
   | { ok: true; data: string; size: number }
   | { ok: false; reason: ReadFailure };
 
+/** A directory listing that distinguishes its two failure modes instead of
+ *  collapsing both to `null`, as `readdir` below does. An EMPTY listing is a
+ *  positive answer, never a failure: `ok: true` with no entries means "the
+ *  directory is there and holds nothing". `absent` is a proven ENOENT and
+ *  nothing else; anything this io cannot tell from a missing directory — an
+ *  older agent that sends a bare `names: null`, a malformed answer, a refusal,
+ *  a timeout, a disconnect — is `unreadable`. `readdir` derives from this. */
+export type MeasuredDirectoryRead =
+  | { ok: true; entries: readonly string[] }
+  | { ok: false; reason: ReadFailure };
+
+/** A bounded BYTE-range read: the bytes themselves, never text. `bytes` is
+ *  exactly `min(maxBytes, size - offset)` long (empty at EOF, which is a
+ *  positive answer), `size` the file's measured size. A split multibyte
+ *  character stays split — decoding is the caller's job, after it has framed
+ *  complete lines — and an answer that cannot prove those bytes (an older
+ *  peer's decoded `data`, malformed or non-canonical base64, a length that
+ *  disagrees with `size`, a size that has regressed below `offset`) is
+ *  `unreadable`, never reconstructed. */
+export type MeasuredByteRangeRead =
+  | { ok: true; bytes: Uint8Array; size: number }
+  | { ok: false; reason: ReadFailure };
+
 /**
  * Fs-facade seam every fleet-fs access goes through. `local` (this module)
  * hits node:fs against this box's disk; a `remote` implementation (T3) proxies
@@ -116,11 +140,34 @@ export interface FleetIO {
    *  is a positive answer. `readFileFrom` derives from this. */
   readFileFromMeasured(path: string, offset: number): Promise<MeasuredRangeRead>;
   readFileFrom(path: string, offset: number): Promise<{ data: string; size: number } | null>;   // null on ANY failure; use readFileFromMeasured to tell absent from unreadable
+  /** The BYTE-exact sibling of `readFileFromMeasured`: at most `maxBytes` bytes
+   *  from `offset`, as a `Uint8Array`, with the file's `size`. `maxBytes` is
+   *  `1..READ_FROM_MAX_BYTES` and `offset` a non-negative safe integer; anything
+   *  else is `unreadable` before the disk or the wire is touched. An offset past
+   *  `size` is a size regression and `unreadable` — the same answer on both
+   *  adapters. The remote adapter reads only the agent's `dataB64`; an older
+   *  agent that ignores `maxBytes` answers decoded `data` alone and is
+   *  `unreadable`, because bytes are never rebuilt from text. `timeoutMs` and
+   *  `signal` are forwarded by the remote adapter; `localIO` ignores both, as
+   *  `readdir` does. `readFileFromMeasured` is unchanged and keeps its decoded
+   *  string. */
+  readFileFromBytesMeasured(
+    path: string,
+    offset: number,
+    maxBytes: number,
+    timeoutMs?: number,
+    signal?: AbortSignal,
+  ): Promise<MeasuredByteRangeRead>;
   /** Distinguishes absence, unreadability and over-cap. `readFileB64` derives
    *  from this. */
   readFileB64Measured(path: string): Promise<MeasuredB64Read>;
   readFileB64(path: string): Promise<string | null>;      // null on ANY failure — the agent's half folds a THIRD condition in here, over-cap (agent/src/fileops.ts's MAX_READ_B64_BYTES); localIO has no cap — binary-safe
-  readdir(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<string[] | null>;
+  /** Distinguishes an empty listing, a missing directory and an unlistable
+   *  one — see `MeasuredDirectoryRead`. `readdir` derives from this. The
+   *  optional arguments are forwarded by the remote adapter and ignored by
+   *  `localIO`, exactly as for `readdir`. */
+  readdirMeasured(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<MeasuredDirectoryRead>;
+  readdir(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<string[] | null>;   // null on ANY failure — absent and unreadable both collapse here; use readdirMeasured to tell them apart
   /** Distinguishes "genuinely does not exist" from "could not be measured".
    *  `stat` derives from this; see `MeasuredStat` above for why the wire's
    *  own absence marker could not be trusted before this existed. */
@@ -201,6 +248,25 @@ export const localIO: FleetIO = {
     return r.ok ? { data: r.data, size: r.size } : null;
   },
 
+  async readFileFromBytesMeasured(p, offset, maxBytes) {
+    if (!isReadFromRange(offset, maxBytes)) return { ok: false, reason: 'unreadable' };
+    let size: number;
+    try { size = (await stat(p)).size; } catch (err) { return { ok: false, reason: failureFor(err) }; }
+    // A cursor beyond the file is a file that SHRANK under it — the remote
+    // reader answers the same, from the same arithmetic, so the two adapters
+    // cannot disagree about a regression.
+    if (offset > size) return { ok: false, reason: 'unreadable' };
+    const owed = Math.min(maxBytes, size - offset);
+    if (owed === 0) return { ok: true, bytes: new Uint8Array(0), size };   // EOF: a measurement, not a miss
+    try {
+      const bytes = await readRange(p, offset, offset + owed);
+      // Fewer bytes than the size promised means the file shrank between the
+      // stat and the read: not a measurement of this range.
+      if (bytes.length !== owed) return { ok: false, reason: 'unreadable' };
+      return { ok: true, bytes: new Uint8Array(bytes), size };   // a copy: a plain Uint8Array, not a pooled Buffer view
+    } catch (err) { return { ok: false, reason: failureFor(err) }; }
+  },
+
   async readFileB64Measured(p) {
     try { return { ok: true, dataB64: (await readFile(p)).toString('base64') }; }
     catch (err) { return { ok: false, reason: failureFor(err) }; }
@@ -211,8 +277,14 @@ export const localIO: FleetIO = {
     return r.ok ? r.dataB64 : null;
   },
 
-  async readdir(p) {
-    try { return await readdir(p); } catch { return null; }
+  async readdirMeasured(p) {
+    try { return { ok: true, entries: await readdir(p) }; }
+    catch (err) { return { ok: false, reason: failureFor(err) }; }
+  },
+
+  async readdir(p, timeoutMs, signal) {
+    const r = await this.readdirMeasured(p, timeoutMs, signal);
+    return r.ok ? [...r.entries] : null;
   },
 
   async statMeasured(p) {

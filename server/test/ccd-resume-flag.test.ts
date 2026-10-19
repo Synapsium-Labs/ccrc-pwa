@@ -96,6 +96,18 @@ describe('the resume flag (D-2227)', () => {
     expect(p).toContain('ccd restarted this session');
   });
 
+  it('with a recent recorded end, the spawn line carries the composed prompt, still single-quote free (D-5237)', () => {
+    seed();
+    h.sh(`_reg_set myid lastend "$(( $(date +%s) - 60 )) swap-manual"`);
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid resume`);
+    const line = newSessions()[0]!;
+    const m = /CLAUDE_CODE_RESUME_PROMPT='([^']*)'/.exec(line);
+    expect(m).not.toBeNull();
+    expect(m![1]!.startsWith(RESUME_PROMPT_PREFIX)).toBe(true);
+    expect(m![1]).toContain('an account swap asked for by hand');
+    expect(m![1]).toBe(h.sh('_resume_prompt_for myid'));
+  });
+
   it("the stall detector's own copy of the sentence (ccd/ccd, `_transcript_stalled_pair`) is a prefix of both RESUME_PROMPT_PREFIX and RESUME_PROMPT — closing the coupling's fourth literal (D-2228)", () => {
     const literal = detectorLiteral();
     expect(RESUME_PROMPT_PREFIX.startsWith(literal)).toBe(true);

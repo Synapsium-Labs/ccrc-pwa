@@ -195,6 +195,265 @@ The operator rules on the rows marked Operator. The rows marked Coordinator are 
 - A fixture-HOME case for each verb in section 2.2, answering refused and never redirected. Among them: `stop --surface --surface pwa` is refused, and no stop of `pwa` happens; `ws-release --session --actor ...` is refused.
 - One pin per mint site at 222 and 223 characters.
 
+### 2.9 As built (W1b)
+
+W1b built ccd's half of this section. This subsection records where what it built narrows, corrects or spells out
+§2.2 to §2.8, and names the residuals it leaves. It amends, and rewrites none of the text above. Every claim is
+measured at the wave's tip unless it says otherwise.
+
+**One rule for an id a verb binds (SEC1, SEC3).**
+- `_reg_id_ok` is the rule: the registry charset, read under `LC_ALL=C`, and no leading `-`. The locale is fixed, so
+  a locale whose letter ranges admit a non-ASCII letter cannot widen it.
+- The eight `--session` verbs take each identity key and its value as one pair: `--session` at all eight, `--expect`
+  at ws-reclaim, ws-expire and ws-collect, `--child-of` at ws-reclaim, ws-hold's positional `--reason`, and
+  ws-rename's `--branch`. The pair goes to the loop's residue, never into a variable, so each verb's own arity and
+  order checks still refuse a duplicate key, a wrong order and a lone key, with the words they used before. No
+  identity arm refuses anything itself, and a value is never scanned again as a flag.
+- Every post-loop id check in those eight verbs refuses a leading `-` through `_reg_id_ok`. The three token verbs
+  reach it through `_ws_tmproot_id_ok`, which is built on it (SEC4 below).
+- Apart from the dot rule and the collector's pre-lock pass below, a call to these verbs that spells no id as a flag
+  answers as before, byte for byte.
+  A call whose id spells a flag may now answer `bad session id` where it answered a usage line, a "needs a value"
+  line, or bound another row. A few inputs change because a value itself spells a flag and is now taken whole:
+  - a token or run id at the token verbs answers `bad token` or `bad run id` where it answered the usage line, and
+    ws-reclaim journals that refusal against the real id; no server builder composes such a token or run id;
+  - a ws-rename `--branch` value answers `bad-branch` where the surface word became the new branch name;
+  - a hold reason is held verbatim where the surface word was held or the usage line answered;
+  - a `--session` key with no value of its own, followed by a decision flag, takes that flag as its id. So
+    `ws-release --session --actor ''` dies on the usage line where it died on `--actor must be non-blank`, and
+    `--expect <token> --session --surface=w` at a token verb answers `bad session id` where it answered the usage
+    line. At ws-restore the refusal row now names the flag as its id (`--surface`, for example), where it named `''`.
+    Each is still a refusal, with the same exit code and before any act: §2.4's atomic consumption.
+- `--actor` and `--reason` prose, and a hold reason, may still begin with `-`.
+- No refusal word, probe word or journal act was added, and the refusal scan's sanctioned `die` set is unchanged. The
+  verbs reuse `bad session id` and their usage lines. Stop's two new refusals print `bad session id: ` followed by
+  the token or the id they refused.
+
+**Corrections to §2.4.**
+- §2.4's "`--surface`, `--expect`, and `--branch` retain their existing verb-specific grammars" holds everywhere
+  except at stop and ws-add. Those are the two positional-id verbs, and there a `--surface` value that begins with
+  `-` is refused with the verb's usage line, in both the `--surface <v>` and the `--surface=<v>` spellings, because
+  there it closes a redirect. The eight `--session` verbs keep their surface grammar, since the `--session` pair
+  already closes their redirect.
+- `stop --surface pwa --surface` is refused by the loop's arity check, not by the post-loop id check.
+- §2.4's "remains non-blank and bounded": bounded holds for the `--actor` and `--reason` decision fields only.
+  ws-hold's positional reason is checked for blankness only, and W1b adds no byte cap to it.
+- Stop also refuses a residue token that begins with `-`, and a composed id that `_reg_id_ok` refuses (one holding a
+  `/` or a space, for example), before any unit call or journal row. In the two-argument form that includes a third,
+  dash-leading token: `stop <wrapper> <project> --x` was silently ignored, and now answers `bad session id: --x`. No
+  server builder composes it.
+- ws-add refuses a second `--actor`, in either spelling or any mix of them, with its usage line. That closes a
+  project spelled `--actor` without any change to the server's builder order.
+
+**The predicates (SEC4).**
+- `_ws_project_valid` refuses a leading `-` on a line of its own, beside its leading-`.` line. Its four callers that
+  print its refusal, `enable`'s new project check among them, say "no LEADING dot or dash". This closes the only mint
+  path for a dash-leading id. Before the edit, the wave's entry check counted no dash-leading name in the registry,
+  `pools/`, `tmproots/`, `tmpquarantine/`, the project directories or the worktrees, on either box (measured; counts
+  only, no names).
+- `_ws_tmproot_id_ok` is `_reg_id_ok` plus no leading `.`. It is ccd's mirror of `isTmpRootId` without the length
+  rule, pinned against it name by name.
+- `enable <wrapper> <project>` checks its project with `_ws_project_valid` before it journals anything. It refuses
+  more than before: a dot- or dash-leading project leaves no `enable` row. Ahead of it, enable asks its wrapper with
+  `cmd_start`'s own check and words, so an unrostered wrapper, or a flag-spelled one that reaches the two-argument
+  form, leaves no `enable` row and no reap lock either.
+
+**Dots (SEC6).**
+- ws-reclaim, ws-expire and ws-collect refuse a dot-leading id at entry through `_ws_tmproot_id_ok`. So do
+  `ws-audit --reclaim` and `ws-audit --expire`, for symmetry with `isRegistryId`. Plain `ws-audit` keeps the check it
+  had.
+- ws-release, ws-archive, ws-restore, ws-hold, ws-rename and stop still accept a dot-leading id
+  (`dot-rule-only-at-the-token-verbs`). A dot rule there is the operator's option, and was not built.
+- A dot-leading id at the reclaim and expire audits now exits 1, which the server's expiry and reclaim lanes read as
+  an unreadable audit, where it got a terminal `no-such-session` document at exit 0. It is reachable only through a
+  hand-planted run row, until the server's id gate lands.
+
+**The composed-id cap, in place of §2.6's 222 (SEC5).**
+- The cap comes from a census of every name derived from an id, in every file under `ccd/` (skill and doc text
+  excluded) and in `server/src`. The census covers:
+  - the registry fields and their dot-leading temp names;
+  - the hook-state and turn files and the supervise log;
+  - the compaction and generation locks and the start counter;
+  - the reap and ws-add locks, and the quarantine slot;
+  - the `claude-session@<id>.service` unit;
+  - the history sweep's draining name and the server's per-id usage file;
+  - the session hook's own temp and stage names.
+- The widest overhead is 81 bytes, for `.<id>.compactcard.<pid>.<nonce>.session-claim.tmp`, so 255 minus 81 is 174.
+  §2.6's 222 fit only the slot name.
+- The session hook bounds ids too:
+  - `CCRC_ID_MAX` is 128. The hook's peer census skips a longer id, and its `.project` reads stop at that length.
+  - `CCRC_PROJ_MAX` is 64. A session whose project is longer gets no ccrc peer card (`_ct_probe` refuses it, and
+    `_hook_ccrc_card` stays silent), and so does a session with no project whose id is longer.
+- `_REG_ID_MAX` is 128: the smaller of 174 and the hook's 128, so ccd never mints an id the hook's peer census would
+  skip.
+- ccd applies the cap at every mint site, before any row, worktree, branch or `.uuid` is created or journaled. Each
+  site has its own die line, ending "nothing was created", and the sentence before it lives once, in
+  `_REG_ID_CAP_WHY`. The sites:
+  - ws-add, once the slug is chosen and before `git fetch` and `git worktree add`, for a positional slug and for
+    `CCD_WS_SLUG` alike;
+  - start's creating form, even when the row already exists;
+  - enable's two-argument form, before its journal row.
+- The one thing a cap refusal can leave behind is ws-add's per-project add lock, which ws-add takes before it chooses
+  a slug, as every ws-add refusal after that lock does.
+- `ccd-id-cap.test.ts` holds the census table, the files it left out, and the number. A template added in a scanned
+  file without a row reds it.
+- The census left out `server/src/token/files.ts`, because its `${id}` is a box-token generation id, never a session
+  id, so `mail-pending-<generation>.token` embeds no registry id (`files-outside-the-name-census`).
+- Two sets of names are built from a bare id or a file name that the census scanner's spellings do not match, and are
+  stated residuals:
+  - `history-spool-names-outside-the-census-patterns`, the history store's own names: the hook's `spool/<id>.jsonl`,
+    the sweep's `.obs` sidecar, and `~/.ccrc/history/recall-off/<id>` (`recallOffPath`), a bare `/<id>` that adds no
+    bytes beyond the id. The table holds the draining name, `<id>.<ms>.<pid>.jsonl`, which is still the widest of
+    them, so the cap is unaffected. The history CLI's `${P.spool}/${id}.jsonl` (`writeRecallLine`) is now matched, and
+    counted under the `<id>.<field>` family with the field `jsonl`.
+  - `quarantine-record-names-outside-the-census-patterns`: the quarantine record `tmpquarantine/<id>.<ns>.<pid>`, 28
+    bytes, and the temp `.<id>.<ns>.<pid>.<pid>.<R>.tmp` its writer makes, 47 bytes, spell the id `$name`. The
+    witness writer's temp, `.<id>.<pid>.<R>.tmp` at 19 bytes, is built the same way. Each is narrower than the widest
+    row, so the cap is unaffected.
+- §2.8's "One pin per mint site at 222 and 223 characters" reads: one pin per mint site at `_REG_ID_MAX` and at one
+  byte more.
+
+**The reap lock is taken after a parse (SEC7).**
+- The collect audit and the collect verb open `$REG/.reap-<id>.lock` only after an advisory pass. The pass grants
+  nothing, prints nothing and writes no registry, lock, journal or quarantine state; listing the records makes two
+  scratch files and removes them before the pass returns. In order:
+  1. The id must contain a `-`. If it does not, the answer is unmeasured `registry`, in the same words the locked
+     evaluation uses.
+  2. Records are listed, and a listing that fails is unmeasured `records`. A record whose body parses and names the id
+     lets the lock open. If records exist but none both parses and names the id, the answer is the one the locked
+     resume gives: `quarantine-kept`, or unmeasured `records` or `quarantine`. At the audit every answer that the
+     locked evaluation also gives carries its word and detail byte for byte. The two second-look answers (a record
+     or a witness that reads sound only on a second look) are the pass's own, with details of their own. The verb
+     keeps the pass's word and detail, and adds its no-lock clause after the detail of an unmeasured answer, so the
+     clause never pushes the detail toward the reason cap: a cut takes the clause first, and reaches the detail only
+     when the detail alone passes the cap. It puts "no lock was taken: " before the detail of a refusal.
+  3. With no record, a witness whose body parses lets the lock open.
+  4. A witness that does not parse first gets a registry peek, and the lock opens unless all three of these hold:
+     `$REG/<id>.child` and `$REG/<id>.uuid` are proven absent; `$REG` can be listed; and the id's slug is free across
+     every `$REG/<id>.<field>` and every dot family. When the lock opens, the locked evaluation answers `registered`
+     or unmeasured `registry`, as before. Only when all three hold is the witness's answer given before the lock.
+- So a live row of any kind still answers `registered` ahead of `witness-mismatch`. The audit leaves `registered`
+  unjournaled, as it leaves every word that is not terminal; the verb journals it, as it journals every refusal document.
+  A junk witness or junk record of an id that no row names creates no permanent lock.
+- Under the lock every input is listed, read and parsed again before any act. A race between the pass and the lock
+  can therefore only refuse, or be judged again.
+- The verb reads the cleanup pause under the lock, so its pre-lock answers now come ahead of the cleanup pause. A
+  junk witness or record is refused with its own word and a detail saying "no lock was taken", even while the pause
+  stands. Nothing moves either way.
+- The pre-lock answers also come ahead of the lock's own. At the audit they precede unmeasured `lock` and
+  `in-progress`, and its `mv` and `flock` checks still run first. At the verb they precede `flock-unavailable`,
+  `lock-unopenable` and `in-progress`. So junk input answers terminal `witness-mismatch` or `quarantine-kept` while
+  another process holds the lock, as it does when none does: ccd writes a witness or a record by temp file and
+  rename, so a junk body is never a write in progress.
+- For an id with no `-`, unmeasured `registry` now comes ahead of every answer the resume gave before its registry
+  rung, ahead of a standing `.child` or `.uuid`'s `registered`. Once the id is in the collector's population, it also
+  comes ahead of the listing's unmeasured `records`; an id with no witness is asked its population first, so a failed
+  listing, or `not-witnessed`, answers before the pass. The audit document prints `records: []` for it. This is unreachable in practice: every mint composes `<a>-<b>`, and the
+  entry check counted no dash-free name on either box.
+
+**Proof (§2.8, §8).**
+- The real-binary proof is a file of its own, `ccdargv-dash-id-parity.test.ts`. It is not `ccdargv-dec-parity`,
+  which this wave leaves unedited.
+  - It composes every argv through the server's own builders and runs it on `ccd/ccd` under `bash -p`, with fixture
+    HOMEs.
+  - For stop it adds one typed argv: the order W1a composes.
+  - An anti-whitelist keeps every decision-appending verb in it.
+- §8's "the verb verdicts of section 2.2" were not measured by the entry check, which writes nothing. They were
+  measured by that matrix, run once against the pre-wave binary (a copy outside the tree). Of its 259 cases, 188 went
+  red there and 71 stayed green, and all 259 are green at the tip. The matrix agrees with §2.2's readings of the
+  loops, and shows more. Wherever no decision flag ate an id that spells a flag, the pre-wave binary bound it
+  literally and looked it up. At stop, stopPair, start and enable it also acted on it (stopped it, or created it), and
+  at ws-restore, ws-reclaim and ws-expire it also took a reap lock and journaled a line. And one verdict is wider than §2.2's: its stop row names the one-argument form, but the
+  two-argument form redirected too, since a project of `--surface` stopped `<wrapper>-pwa`.
+
+| Verb | Ids that went red before W1b | What the pre-wave binary did | At the tip |
+|---|---|---|---|
+| ws-release | all eight | `--actor`, `--surface` and `--reason` bound the surface word `agent` and released it; the other five bound the literal id and looked it up | Refused before any act |
+| ws-archive | all eight | Bound an id and looked it up as a row | Refused before any act |
+| ws-restore | all eight | Created a reap lock and journaled a line naming a decoy or the id | Refused before any lock |
+| ws-hold | `--reason`, `--expect`, `--defer-expired`, `--session`, `--branch`, `--child-of` | Bound the literal id and looked it up | Refused before any act |
+| ws-rename | `--expect`, `--defer-expired`, `--session`, `--branch`, `--child-of` | Bound the literal id and looked it up | Refused before any act |
+| ws-reclaim | all but `--defer-expired` | Looked the id up as a row, created a reap lock and journaled a line | Refused before any lock |
+| ws-expire | all eight | As ws-reclaim; `--defer-expired` also stayed literal and created a lock | Refused before any lock |
+| ws-collect | all eight | `--actor`, `--surface` and `--reason` bound `agent`, took its reap lock because a witness stood for it, and journaled a line; the other five answered `not-witnessed` and journaled a line | Refused before any lock |
+| ws-add | `--actor`, `--surface` as the project | Bound project `agent`, which is a create: a worktree, rows, a unit and a pane | Refused before any worktree |
+| stop | all eight in the builder's order, and all but `--surface` in the order W1a composes | The builder's order stopped the literal id, and an id of `--surface` stopped `pwa`; the other order stopped the literal id | Refused before any unit call |
+| Ids that arity already refused: ws-hold's `--actor` and `--surface`; ws-rename's `--actor`, `--surface` and `--reason`; ws-reclaim's `--defer-expired`; stop's `--surface` in the order W1a composes | None | Refused | Refused, as before |
+
+*Table 1. The decision-carrying verbs, under a decision with and without a reason (ws-add without only).*
+
+| Builder | Values that went red before W1b | What the pre-wave binary did | At the tip |
+|---|---|---|---|
+| `stopPair` | A dash-leading wrapper, `--surface` excepted, and a dash-leading project | Stopped `<dash>-<project>` or `<wrapper>-<dash>`, with a unit and a pane; a project of `--surface` stopped `<wrapper>-pwa` | Refused before any unit call |
+| `start`, `enable` | A dash-leading project | Created `<wrapper>-<dash>`: a unit, a pane and rows; a dash-leading wrapper was refused already | Refused before any row, start or journal line |
+| `forget`, `swap`, `swapCross` | None: their arity or usage checks refused them | Refused | Refused, as before |
+| `wsReclaimAudit`, `wsExpireAudit`, `wsCollectAudit` | All eight, for each | Answered an audit document at exit 0 for the dash-leading id, and took no lock | Refused at entry |
+| `wsAudit` | Not a refusal row: it audits the literal id | Audited the literal id | Kept as before (`verbs-outside-sec1-keep-the-inline-regex`) |
+
+*Table 2. The verbs that take a positional id and carry no decision.*
+
+**Comment carries (§7 items 29 to 31).** Each edit kept its line count. The collector's header now says three things:
+- the cleanup pause stops a witness-only collection;
+- the audit pays one kill grace, about 73 s, or 78 s at the widest grace, against ws-audit's 90 s row;
+- the lane acts only once the operator arms it, by the fleet box's legacy marker or by the Settings switch where it
+  has shipped.
+
+**Stated residuals.**
+- `dot-rule-only-at-the-token-verbs`: release, archive, restore, hold, rename and stop still accept a dot-leading id.
+  Refusing it there is an operator option.
+- `verbs-outside-sec1-keep-the-inline-regex`: ws-attic, pr-open, plain ws-audit, ws-reap, forget, `start <id>`,
+  `pr-state --session <id>` and `route --session <id>` keep the inline id check they had, which admits a leading
+  `-`. `ensure <id>` and `swap <id> <wrapper>` take their id with no shape check and need an existing row. Among
+  all these verbs the server gives only `route` any of the decision flags (`--actor` and `--reason`), and `route`
+  binds `--session` as a pair, so an id that spells one of them is bound literally and looked up. `forget` parses a
+  `--reason` of its own, which no server builder sends: an id that spells it dies on the usage line or is refused
+  `bad-args`, and never names another row. None of the other verbs parses the decision flags, so none can be
+  redirected by an id that spells one, and neither `route` nor `swap` redirects.
+  The inline checks, `route`'s included (`swap` has none), run without `LC_ALL=C`, so under a widening locale they
+  admit a non-ASCII id and bind it literally. Plain ws-audit audits a dash-leading id literally and acts on no
+  other row (pinned).
+- `enable-one-arg-journals-an-unchecked-id`: `enable <id>` journals its row before any check of the id, as it did
+  before the wave. `cmd_start`, which it calls next, applies the inline charset check and needs an existing row.
+- `stripped-flag-positional-collapses-to-the-id-form`: start and enable strip `--cross-pool`, `--`,
+  `--route=<f>=<v>` and the two-token `--route <v>`, and stop strips `--surface` and `--surface=`, from any position
+  before their arity rule, so a positional spelled as one of those never reaches the two-argument checks, and the
+  call collapses to the one-argument (id) form. The two-token `--route <v>` takes the next token whole as the route
+  pair, so it also eats the positional that follows it. For example, `enable --cross-pool <existing-id>` and
+  `enable <wrapper> --` journal `enable` against the other positional and start that existing id,
+  `start <existing-id> --route compact=50` (a project spelled `--route`, a workdir spelled as a route pair) restarts
+  that row and writes the pair, where an eaten token that is no valid route pair is refused by the route check, and
+  `stop <wrapper> --surface=x --surface pwa` stops `<wrapper>`. This is not a regression: the pre-wave binary does
+  the same. ccd never mints such a name (`=` is outside the charset and a leading `-` is refused). At start and
+  enable it is reachable only through an operator-typed request body to the server's session-creation route, whose
+  guard (refuse a wrapper outside the roster and a project failing the project rule) is carried to a later server
+  wave. Stop's half is reached through the stop route's `stopPair`, which takes the project from the registry row, so
+  it needs a hand-planted row whose project spells `--surface=<w>`.
+- `hand-planted-ids-over-the-cap`: a row planted by hand above `_REG_ID_MAX` is not refused. ccd never mints one.
+- `files-outside-the-name-census`: the file the cap's census left out, listed above.
+- `history-spool-names-outside-the-census-patterns` and `quarantine-record-names-outside-the-census-patterns`: the
+  history store's own names and the quarantine record's names, listed above, whose spelling the census scanner does
+  not match.
+- `random-slug-decides-the-cap-near-the-boundary`: ws-add caps the id after it chooses the slug. For a project of 114
+  to 118 bytes given no slug, the random slug's length, 9 to 14 bytes, decides whether the add succeeds or is refused.
+- `projects-over-64-get-no-hook-card`: the cap bounds the composed id, not the project. A project longer than
+  `CCRC_PROJ_MAX` still gets no ccrc peer card.
+- `hold-card-workdir-quote-silent-near-the-cap`: the hook's `CCRC_WD_MAX` is 127, one under the length its reads stop
+  at, and the hold card quotes a workspace's directory only when the path fits it. A worktree path past 127
+  characters, which an id near the cap can reach, loses the quote. The card degrades to silence, never to a false
+  statement.
+- `btime-less-witness-takes-the-lock`: a witness that parses but records no birth time opens the lock. Its
+  `witness-mismatch` stays an answer given under the lock.
+- `dash-leading-pool-tag-unclearable-on-an-upgraded-box`: on a box that already holds the pool tag of a dash-leading
+  project, `ccd project-pool --project -lead --clear` now refuses. The entry check counted none on either box, and the
+  doctor's text for a tag it cannot print as a command already says to remove it by hand.
+- `server-docstrings-call-ccds-predicate-dot-only`: the docstrings of `isTmpRootId` (`shared/api.ts`) and
+  `childReclaimLeafKept` (`server/src/childReclaimSweep.ts`) still describe ccd's `_ws_tmproot_id_ok` as refusing a
+  leading `.` only. They are carried to the next wave that edits those files.
+- `comments-say-ccd-scans-the-session-value`: the `isTmpRootId` docstring (`shared/api.ts`) and the comment above the
+  dash-leading rows of `collect-l0.test.ts` still say ccd's destructive verbs read their decision flags from any
+  position, `--session`'s value included. That is true only of a box on an older ccd: the eight `--session` verbs now
+  take each identity key and its value as one pair. It is carried to the next wave that edits them.
+
 ## 3. The temp-root tail and the collector
 
 This section hardens what the reclaim and expiry tail and the collector believe about a temp-root leaf, and what any removal is licensed against when a mount stands inside the tree. Everything here uses identity ccd already records (the witness's `dev=`) and helpers that already exist, so it needs no format change.
@@ -760,6 +1019,171 @@ Executor, route and census:
 - `SESSION_ONLY` adds the path so its source scan covers the POST and its auth assertion proves both GET and POST absent from `EXEMPT`; the no-box-token census and its CLAUDE.md prose add the POST coordination write. A separate route test proves the GET also consults no box token. The exempt-from-naming list and all three skill forbid-mention suites cover both methods and the marker.
 - PWA tests cover every state, the confirm sheet, pre-latch Off policy, other-node view, mismatch and 404.
 
+### §5 as built (CCR-15 wave 10, run 400)
+
+This note says how wave 10 of the child-reclamation programme (run 400) built this section, and where the build reads
+it more narrowly than the text above or Figure 5. It amends; it edits no earlier text. The programme contract's
+"§17 as built" states the same points. Inventory items 38, 40 and 41 shipped in this wave.
+
+**Reconciled before the build.** The wave 10 plan's rulings settle where the sections above and Figure 5 differ, and
+the code keeps each:
+- **Unknown node (§5.2, §5.5, §5.7).** A stored Live while the current node is unmeasured or in collision is stopped as
+  an unknown fleet, never shadowed: nothing is composed, every observation pair is cleared, no flip row is written,
+  and Settings shows "Unknown fleet". The legacy file still arms before its retirement, because Figure 5 asks about
+  the file before the node. A stored Live for a measured, different node is shadowed, and Settings asks for a fresh
+  confirm.
+- **Stopped and safety-stopped (§5.5).** A connection-epoch change is a stop, beside a raised pause and an unlistable
+  registry: nothing is composed, every pair is cleared, and no feed row is written. The executor names it
+  `epoch-changed`, and Settings shows it as "Unknown fleet". Only a control state that cannot be proved coherent is
+  safety-stopped, and only that writes a flip row, naming its reason.
+- **The job's epoch (§5.2, §5.5).** An act job carries the epoch its lane's pairs stand under, captured when the job is
+  queued. Step 6 compares it with the epoch read after the final listing, so a reconnect during the second audit, or
+  between the queueing and the start, composes nothing. The epoch is still read before the final listing, as §5.2
+  says. An epoch change between passes clears every pair. One during a pass's gather also ends that pass, and it retires nothing.
+- **The latch is decided apart from the arm (§5.4).** One helper retires the legacy file, from the pass's own listing
+  and from the executor's final listing, through the store's one writer, only when the listing is coherent, unpaused,
+  on the same epoch and shows the file absent with the latch unset. So a stored Live on an unknown node still retires
+  a removed file. It never runs from the route and never heals a mismatch. Its one `kind:'coord'` row is titled
+  `temp root collector setting changed`, and its body ends `; by collect sweep`.
+- **Step 6's order (§5.5).** Resolution and the flip come first, right after the final listing, as the file's flip
+  did; the per-id checks follow, and no await stands between the final listing and the argv. Both `collect-v1` and
+  `reclaim-pause-v1` are read again at step 6. The executor's flip word is now `switch-flip`. Warn latches are kept per
+  safety-stop reason and for a re-created file, and a coherent resolution re-arms them. A latch the store refuses,
+  fails or throws on before its append (a busy database) never rejects the job or the pass: the pass's outcome is
+  warned once per kind until the latch retires, and Off stays refused meanwhile.
+- **Local mode (§5.2).** The epoch is a constant 0, and the node is the server box's own, measured directly. The
+  connection label is never identity.
+- **Storage (§5.2, §5.3).** The row's columns are camelCase (`choice`, `fleetNodeId`, `markerRetiredAt`, `generation`,
+  `updatedAt`), the coordination database's own style. An absent row answers `503 state-unmeasurable` to both verbs,
+  and the server never inserts one. The GET answers 200 with a safety-stopped view for a malformed or unreadable row
+  and for every journal fault; the POST answers 503 for every control state it cannot measure.
+- **The route (§5.6).** `501 not-configured` also answers when no journal is wired. The confirm key is FNV-1a 32-bit
+  over the canonical JSON of the facts, eight lowercase hex digits, and binds a per-process boot nonce, so a key
+  minted before a restart cannot pass; the 409's facts carry neither the nonce nor the epoch. A Live that changes
+  nothing still needs a fresh confirm, then answers 200 with no generation and no event. Off never reads the listing:
+  before the latch it answers `409 marker-still-controls`, and after it Off is accepted while the registry is
+  unlistable or the epoch moved. A 200 says the choice applies from the collector's next check.
+- **Settings (§5.7).** The view's would-collect and held counts are the server's, read from the lane's own memory; the
+  PWA counts nothing. "Confirm Live again" is offered for a stored Live on another node and for a mismatch. Off's note
+  follows the listing: §5.7's text while the file stands, a pending line while it is absent and not yet retired, and
+  an unmeasured line otherwise. "Pause all cleanup" names the four lanes it stops: child reclamation,
+  archived-workspace expiry, the dead-coordinator lane and this collector. It offers Pause only; Resume stays on
+  `/runs`. The update apply sheet and the rollout report announce nothing about a stored Live.
+- **L0 (§5.7).** `shared/api.ts` also declares `CollectLaneRequest` and the route's refusal words,
+  `COLLECT_LANE_REFUSALS` with `isCollectLaneRefusal`.
+
+**How the control state fails (§5.3).**
+- The journal reader accepts value-equal spellings of a number, such as `1.0` or `1e0`, and a duplicate key resolves
+  last-wins. It proves values, not spelling, and only a hand edit can produce one.
+- A failed latch retire at the update or commit step leaves the lane safety-stopped, with Off refused. A confirmed Live
+  is the repair.
+- A failed journal append undoes itself (as built from fix round 1). On a failed append the adapter truncates the
+  existing journal to the length it measured before the call, or removes a file the failed call itself created. It
+  does this before the close, as a best effort, and rethrows the original error. A failed write therefore leaves the
+  lane exactly as it stood, row and journal alike, and the route answers `503 write-failed`. A failed Off over a stored
+  Live leaves the collector armed; Pause all cleanup still stops it. The undo restores bytes the call itself measured,
+  so it does not rebuild the journal from the row, which §5.2 forbids.
+- What the undo cannot cover (three residuals). An update or commit failure stops the lane and arms nothing, as above.
+  1. A process killed inside the write, or a power loss before the data reaches the disk (a failed fsync included), can
+     leave a torn, empty or zero-filled tail. It reads malformed, and the hand repair below applies.
+  2. Each of these leaves the journal one generation ahead, a mismatch that a fresh confirmed change repairs (Live, or
+     Off once the latch is recorded) and that arms nothing: a kill after the write but before the commit, an undo that
+     fails after a full write, a close that throws after a durable record, and a failure at the update or the commit.
+  3. An undo that itself fails after a short write, or on the created arm, leaves a torn or empty file without any
+     crash, and the same hand repair applies.
+- The hand repair. Settings cannot repair a malformed journal, and the server never rebuilds it from the row. If
+  Settings reports the generation journal malformed after the server stopped mid-write: (1) raise the cleanup pause
+  first (Pause all cleanup); (2) on the server box, cut `~/.ccrc/collect-lane-generation.log` just after its last
+  complete `{"generation":N}` record, removing only the bytes that follow that record and never a complete record;
+  (3) if the file holds no complete record, delete it, which is valid only beside the untouched seed, as a crash in the
+  very first write leaves it; (4) make a fresh confirmed change in Settings; (5) lower the pause.
+
+**The stated residual.** An Off accepted after an act's argv was handed to ccd cannot stop that act. This extends
+wave 9's `marker-removal-after-the-last-listing-still-composes` from the file to the switch.
+
+**A second stated residual: `pre-latch-snapshot-repair-readopts-an-unset-latch`.** Suppose `coord.db` is restored on its
+own from a snapshot taken before the latch was recorded, and the later journal stays beside it. The lane is then
+safety-stopped (§5.3). Its only repair is a confirmed Live, because Off is refused while the latch is unset and the latch
+never heals a mismatch. That Live keeps the restored row's unset latch. Once it has repaired the mismatch, a standing or
+re-created legacy file arms the lane again, on any node, and Off is refused again. This lasts until the next coherent,
+unpaused, same-epoch listing shows the file absent and retires the latch. So §5.3's "the restored null latch cannot
+revive the marker" holds only until that repair. The window needs the file to stand. While it stands, the confirm
+sheet says the file also arms the lane until this server records its removal, and over a mismatch it says the confirm
+also repairs the control state. It cannot say that this repair keeps the latch unset, or warn of a file re-created
+later, because the confirm's facts carry no latch.
+
+**Carried, not fixed.** The coordinator skill's `references/resume.md` still names the newest `coord.db` snapshot as
+the restore path with no word on the journal: skill text is outside this wave, and a restore that follows it fails safe,
+because no backup holds the journal. The manual-downgrade hint's copy of `coord.db` over a live write-ahead log is left as it was;
+this wave adds only the line that leaves the journal in place.
+
+**Citations, re-measured.** On this tree the marker's docstring and constant, cited above as `collectLane.ts:30-35` in
+§1.1 and §5.1, stand at `server/src/collectLane.ts:32-37`. The registry listing cited as `collectTempRoot.ts:290-296`
+is the `CollectSwitches` type and the `collectSwitches` function at `server/src/coord/collectTempRoot.ts:349-366`: the
+type's docstring starts at `:349`, the function's own docstring at `:357`, and the function closes at `:366`. The
+unlistable-registry arm cited as `:293` is `:363`. The earlier text is left as written.
+
+**Departures found while building.**
+- `control-state-calls-no-choice-guard`: The control state does not call the choice guard: the row measure reads any string as a choice, and the decision compares exact typed tokens.
+- `live-refuses-an-empty-node`: A Live write with an empty node id is refused, which the plan's text did not state.
+- `journal-record-refuses-any-carriage-return`: The journal grammar refuses a record that holds any carriage return, stricter than the plan's whitespace rule.
+- `oversize-bigint-held-by-two-walls`: An oversize integer is stopped by two independent checks, so a mutation that removes only the safe-range fold stays green by construction.
+- `control-state-extra-pins`: The control-state suite pins more than the plan lists, such as the derived journal-kind and unmeasurable-reason lists.
+- `journal-reads-non-canonical-number-spellings`: The journal reader proves values, not spelling; see "How the control state fails" above.
+- `non-primitive-raw-value-reads-conflict`: A non-primitive stored value, which only a hand edit can produce, never equals itself across two reads, so the write decision answers a conflict before unmeasurable; it fails closed and writes nothing.
+- `plan-ruling-number-in-shipped-comment`: Shipped source comments name a ruling's subject and no longer cite a bare plan ruling number, because those numbers collide with the programme contract's own; the source comments that carried one were reworded, while test titles keep the plan's wording, so four test sites still carry one.
+- `node-epoch-guard-two-sided`: The resolver's node-epoch guard is an exact comparison, and a case pins both sides: a node measured on a later connection than the one the check stands under is stopped as an unknown fleet, as an earlier one is.
+- `error-outcome-publishes-inventory-refused`: A sweep whose reads came back but whose apply threw or was refused publishes `inventory-refused` under its captured epoch, rather than publishing nothing.
+- `link-down-at-sweep-start-publishes-nothing`: A sweep that finds the link down before its await reads and publishes nothing, because the close already invalidated the identity cell.
+- `cell-answers-are-frozen`: Every answer from the identity cell is a frozen object built field by field.
+- `fleet-identity-imports-nothing-pin`: An extra case pins that the identity cell's module imports nothing and reads no clock.
+- `run-inventory-behaviour-pins`: Extra cases run the inventory entry point in local and remote mode and count exactly one publish, beside the source-text pin.
+- `sw7-case-reads-the-resolver`: The case for a stored Live across an update drives the resolver with the row unchanged: stopped until the same fleet node is known on the new connection, then armed again.
+- `boot-timing-red-under-load-also-at-base`: The boot suite's 3000 ms bound on a hung ccd delaying listen reds under box load on the base tree too, so it is not this wave's, and CI decides it.
+- `journal-reopen-without-create`: An append reopens an existing journal without `O_CREAT`, so a file removed between the two opens fails rather than being re-created, a shape the plan's text left open.
+- `decide-defect-injected-through-the-reads`: The store's decision-defect case is injected through the store's injected reads, not by editing the decision.
+- `older-build-boot-emulated-by-a-newer-file`: The older-build boot case puts this build where an older one stands, opening a file one version past it, because a test cannot run an older build.
+- `append-not-regular-code-eftype`: An append to a journal that opens but is not a regular file is refused with the code `EFTYPE`; a link is refused earlier, at the open.
+- `adapter-comment-trips-the-handle-reach-scan`: The journal adapter's header comment spells `coord.db` in backticks, because the plain spelling tripped the handle-reach scan of the single-definition suite; the scan stays armed and the meaning is unchanged.
+- `a-failed-journal-append-can-leave-a-torn-tail`: RETIRED, and named without a number, by `a-failed-append-undoes-its-own-bytes` below. The plan's adapter did not undo a failed write; as built from fix round 1 it does, and the residuals the undo cannot cover are in "How the control state fails" above.
+- `a-failed-append-undoes-its-own-bytes`: The plan's adapter left a torn or empty tail, or a journal one generation ahead, against its own contract that nothing changed at the append. As built, a failed append truncates the existing journal to its measured length, or removes a file the failed call created, before the close and as a best effort, and rethrows the original error, so a failed write leaves the lane as it stood. The three residuals and the hand repair are in "How the control state fails" above; §5.2 and §5.3 still govern a malformed journal.
+- `an-unknown-post-failure-reads-unconfirmed`: Only a known refusal code reads as a refusal in the Settings section. Any other failed answer (an unknown code, a body that is not an object, a gateway or server status, the gate's foreign-origin refusal) reads that the choice "may or may not have been saved", with its detail, and the section re-reads the choice.
+- `inline-refusal-cleared-by-a-newer-view`: The plan cleared an inline refusal only when the next write started. As built, a newer view clears it too: a poll's answer, or the re-read after a refusal.
+- `epoch-with-pause-reports-the-pause`: When the epoch moved and a pause is raised, the executor reports the pause as its stop reason.
+- `executor-guard-admits-resolver-kinds`: The executor's guard admits the resolver's kinds rather than a list of its own.
+- `epoch-detail-reads-the-listing-capture`: The `epoch-changed` detail says whether the connection moved after the job was queued or during the final listing, from an epoch captured before that listing.
+- `stop-whys-answered-at-step-five`: A stop found at the final check (a pause, a moved epoch or an unknown fleet) is answered as step 5, the final listing's step.
+- `unchanged-retire-reads-as-not-due`: A latch retire that the store reports as unchanged reads as not due.
+- `existing-executor-cases-keep-an-epoch-zero-job`: The executor's existing cases keep a job stamped with epoch 0, the rig's starting epoch.
+- `collect-act-epoch-scan`: An extra source-scan pin that the act path carries the job's epoch.
+- `lane-port-and-latch-row-cases`: Extra cases for the lane's port and the latch's feed row.
+- `collect-lane-caps-and-control-now-cases`: Extra cases for the lane's capabilities and for the control state read now.
+- `latch-warn-key-outlives-an-executor-retire`: A warn key for the latch can outlive a retirement made by the executor, so after a database restore under a running server one repeat warning may be suppressed; this is log hygiene only.
+- `lane-rig-gains-the-identity-cell-and-switch-handles`: The lane's test rig gains the identity cell and the switch's handles, in a file the plan's list did not name.
+- `queue-to-start-cases-are-pins`: The queue-to-start cases pass at entry, because an earlier task already holds them, so they pin rather than drive code.
+- `gather-move-re-seats-the-seen-epoch`: An epoch move during a pass's gather re-seats the lane's seen epoch as it clears every pair.
+- `three-passes-measured-as-three-act-jobs`: Three passes are measured as three separate act jobs.
+- `pass-case-title-first-sees-the-marker`: One pass case's title is worded around the first pass that sees the legacy file.
+- `route-suite-header-list-annotated`: The route suite types its list of header sets as string records so that the suite type-checks; its assertions are unchanged.
+- `row-12-coord-token-counts-check-sites-only`: The coordination token census counts `checkMailToken` call sites only, so a gate added through the `requireMailToken` helper is held by the route suite's behaviour and source-scan rows and by the pause route's ungated set, not by that census.
+- `writer-census-reads-server-src`: The writer census reads the server's source only, because the PWA client has a method of the same name that posts to the route and is not the store's writer.
+- `pins-have-no-red-first-run`: The pins cover code already shipped, so their first run is green, and their red half is the mutation table.
+- `skill-plant-in-memory-copy`: The skill suites prove their plant on an in-memory copy of the skill text and never edit a skill file.
+- `journal-adapter-built-once-pin`: An extra pin that the journal adapter is constructed exactly once, in the composition root.
+- `inventory-throw-publishes-refused-pinned`: A sweep case with a throwing store pins that a throw while recording a node publishes an `inventory-refused` cell, not nothing.
+- `collect-words-carry-the-sections-copy`: The Settings section keeps no words of its own: every line it renders comes from the words module.
+- `collect-words-totality-pin-in-a-test-d-file`: The words table's totality is pinned in a type-level test file.
+- `collect-view-reader-checks-armed-by-agrees`: The view reader checks the armed-by field against the agreement rule.
+- `collect-confirm-lines-name-the-pause`: The confirm sheet's lines name a raised pause.
+- `collect-off-note-unmeasured-latch-claims-no-control`: A latch that was not read gets the unmeasured Off note whatever the listing shows, so the note claims no control.
+- `pause-all-cleanup-case-split`: The Pause all cleanup cases are split into five inside one describe.
+- `stale-line-pinned-in-section`: The Settings section pins one case beyond the plan's list: a read that did not land keeps the last view, marked stale, so a kept Live is never shown as current.
+- `usage-rewrap-heredoc-neutral`: The rewrapped usage text keeps its heredoc's line count.
+- `journal-pins-green-at-entry`: The restore, watchdog and uninstall cases that leave the journal in place are green at entry, because none of those paths touches it, so their red half is a mutation row.
+- `usage-shift-unpinned-by-citations`: A shift in the update and backup usage text is measured by the citation anchors' hash, not by the session-hook suite, which stays green.
+
+Smaller departures carry no slug: three further pins in the store and journal suites, an epoch-pair case and a never-throw sentence on the latch writer's docstring added in review, the writer census bounded to the POST handler in review, and Tasks 11 and 12 (PWA only) built before Task 9. The stale line citations in §1.1 and §5.1 are re-measured above and left as written.
+
 ## 6. The waves
 
 This section orders the work. One rule shapes it: every `ccd/ccd` edit waits for workspace-lifecycle W6 (#351, which holds `ccd/ccd`) to merge, and the ccd waves then go in series. Anything shared with ws-expire also needs the consent of workspace-lifecycle's coordinator for each wave (the cross-programme precedent).
@@ -838,14 +1262,14 @@ This table has one row for every carried item (37 from the pre-flight and three 
 | 21 | ccd-cured-standing-residuals | correctness | standing, W4 | Proposed | standing; root sentinel cures renumbering only (TR10) |
 | 22 | registry-id-shape-gate (SECURITY) | security | W1a | Proposed | `isRegistryId`, `readSessionRecord.kind`, `RegistryRead.refused`, and classification or migration of all 12 compatibility callers (SEC2) |
 | 23 | run-and-pwa-session-ids-unshaped | security | W1a | Proposed | gate `knownId`, POST /api/runs, every stored-row argv seam including child-spent, and stop builder order (SEC2) |
-| 24 | ccd-id-predicates-admit-leading-dash | security | W1b | Proposed | refuse a leading dash after the Task 0 re-count (SEC3, SEC4) |
-| 25 | ccd-flag-loops-scan-session-value | security | W1b | Proposed | eight loops plus stop and ws-add, dash values refused (SEC1) |
-| 26 | collect-audit-creates-reap-lock-for-junk-names | security | W1b | Proposed | pure checks and a parse before the lock (SEC7) |
-| 27 | entry-id-dot-leading-rule | security | W1b | Proposed | refuse at ws-reclaim and ws-expire entry (SEC6) |
-| 28 | id-223-to-244-bytes-name-no-slot | correctness | W1b | Proposed | cap the composed id at 222 at every mint site (SEC5) |
-| 29 | witness-only-header-omits-the-pause-rung | prose | W1b, else W2 | Proposed | line-neutral comment fix, rides the first ccd restamp |
-| 30 | collector-budget-header-sums-a-grace-per-probe (F22) | prose | W1b, else W2 | Proposed | one grace, 73 s or 78 s; drop the stale wave-9 clause |
-| 31 | collect-v1-ships-it-inert | prose | W1b, else W2 | Proposed | say the lane is armed by the switch (marker or Settings) |
+| 24 | ccd-id-predicates-admit-leading-dash | security | W1b | Built (W1b) | refuse a leading dash after the Task 0 re-count (SEC3, SEC4) |
+| 25 | ccd-flag-loops-scan-session-value | security | W1b | Built (W1b) | eight loops plus stop and ws-add, dash values refused (SEC1) |
+| 26 | collect-audit-creates-reap-lock-for-junk-names | security | W1b | Built (W1b) | pure checks and a parse before the lock (SEC7) |
+| 27 | entry-id-dot-leading-rule | security | W1b | Built (W1b) | refuse at ws-reclaim and ws-expire entry (SEC6) |
+| 28 | id-223-to-244-bytes-name-no-slot | correctness | W1b | Built (W1b) | cap the composed id at 222 at every mint site (SEC5) |
+| 29 | witness-only-header-omits-the-pause-rung | prose | W1b, else W2 | Built (W1b) | line-neutral comment fix, rides the first ccd restamp |
+| 30 | collector-budget-header-sums-a-grace-per-probe (F22) | prose | W1b, else W2 | Built (W1b) | one grace, 73 s or 78 s; drop the stale wave-9 clause |
+| 31 | collect-v1-ships-it-inert | prose | W1b, else W2 | Built (W1b) | say the lane is armed by the switch (marker or Settings) |
 | 32 | stale-wave9-carry-comments-in-tests | prose | W2 | Proposed | re-point race-spawn; race-crash closed with TR4 |
 | 33 | c1-resume-boundary-spawn-pins | test-only | W2 | Proposed | a representative 6 in a Linux-only file (TR12) |
 | 34 | c13-reach-to-another-admin-entry | test-only | W2 | Proposed | add the sibling-entry case |

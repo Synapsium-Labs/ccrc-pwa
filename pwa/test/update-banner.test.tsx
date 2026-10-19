@@ -18,7 +18,7 @@ import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { buttonVariants } from '@ccrc/ui';
 import { useFleetStore } from '../src/stores/fleet';
-import { UPDATES_POLL_MS } from '../src/fleet/useUpdatesView';
+import { UPDATES_POLL_MS, UPDATES_STALE_TEXT } from '../src/fleet/useUpdatesView';
 import { bannerRelease, UpdateBanner, updateBannerText } from '../src/fleet/UpdateBanner';
 import { declValue, ruleIn } from './cssRule';
 
@@ -324,10 +324,14 @@ describe('UpdateBanner — its two buttons', () => {
     await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
   });
 
-  it("See what's new lands on /settings", () => {
+  // D-5549: it used to navigate to /settings, whose release list sits far
+  // below the fold, so the tap read as doing nothing. It opens the What's-new
+  // sheet in place (whats-new-sheet.test.tsx holds what the sheet says).
+  it("See what's new opens the What's new sheet in place, never leaving the screen", () => {
     render(<UpdateBanner updates={view()} />);
     fireEvent.click(screen.getByRole('button', { name: "See what's new" }));
-    expect(location.pathname).toBe('/settings');
+    expect(location.pathname).toBe('/');
+    expect(screen.getByRole('dialog')).toHaveTextContent("What's new since v0.0.7");
   });
 });
 
@@ -433,6 +437,31 @@ describe('UpdateBanner — Update all while a node halts the fleet (R15(b))', ()
     expect(all).not.toBeDisabled();
     expect(all).not.toHaveAttribute('aria-describedby');
     expect(screen.queryByText(/^Update all waits/)).toBeNull();
+  });
+
+  it('wave 19, R24(b): a stale view says so beside the release line, injected or self-polled; Update all is unchanged', async () => {
+    render(<UpdateBanner updates={view()} stale />);
+    expect([...banner()!.querySelectorAll('.update-banner-msg')].map((e) => e.textContent)).toEqual([
+      'v0.0.9 is out on stable — fleet and server are on v0.0.7.', UPDATES_STALE_TEXT,
+    ]);
+    expect(screen.getByText(UPDATES_STALE_TEXT), 'shown, not announced (D-5124)').toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByRole('button', { name: 'Update all' }), 'staleness is said, never a gate').not.toBeDisabled();
+    cleanup();
+    render(<UpdateBanner updates={view()} />);
+    expect(screen.queryByText(UPDATES_STALE_TEXT)).toBeNull();
+    cleanup();
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(api, 'updates').mockResolvedValueOnce(view()).mockRejectedValueOnce(new Error('offline'));
+      render(<UpdateBanner />);
+      await act(async () => {});
+      expect(screen.queryByText(UPDATES_STALE_TEXT), 'the first read landed').toBeNull();
+      await act(async () => { await vi.advanceTimersByTimeAsync(UPDATES_POLL_MS); });
+      await act(async () => {});
+      expect(screen.getByText(UPDATES_STALE_TEXT)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('enables again on the poll after the ack, with no reason line', () => {

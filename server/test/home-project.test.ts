@@ -63,8 +63,10 @@ describe('homeProjectVerdict', () => {
     // caller as the same bytes a malformed body gets (CLAUDE.md, "no overloaded
     // null at a seam"). PR #75 review round 1, F3.
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const src = readFileSync(path.resolve(here, '../src/coord/routes.ts'), 'utf8');
-    const arm = /homeVerdict\.kind === 'required'\) \{[\s\S]{0,700}?reply\.code\(400\)\.send\(\{[^}]*\bdetail: 'homeProject is required'/.exec(src);
+    // D-5384 moved the arm into the open route's L1 decider: the pin reads
+    // `coord/openRun.ts`, where `bad(detail)` is the detail-carrying refusal.
+    const src = readFileSync(path.resolve(here, '../src/coord/openRun.ts'), 'utf8');
+    const arm = /v\.kind === 'required'\) return bad\('homeProject is required'\)/.exec(src);
     expect(arm, "the `required` arm sends no `detail`").not.toBeNull();
   });
 

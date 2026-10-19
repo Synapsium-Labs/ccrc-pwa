@@ -892,7 +892,7 @@ PLIST
 
 # `systemctl --user enable --now` — install the unit AND start it now.
 # On launchd those are one verb (`bootstrap` both loads and, with RunAtLoad,
-# starts), which is why `_svc_enable` below is the same call minus the start:
+# starts), which is why `_svc_enable` below drops the start (and, on systemd, the reload):
 # a plist in ~/Library/LaunchAgents IS boot persistence, exactly as an enable
 # symlink is under systemd.
 _svc_enable_now() {   # <unit>
@@ -907,8 +907,8 @@ _svc_enable_now() {   # <unit>
   _svc_launchctl bootstrap "$d" "$(_svc_plist "$1")" 2>/dev/null
   _svc_launchctl kickstart "$d/$(_svc_label "$1")" >/dev/null 2>&1
 }
-_svc_enable() {   # <unit> — boot persistence only, no start
-  if [ "$CCD_OS" != darwin ]; then systemctl --user enable "$1" 2>/dev/null; return $?; fi
+_svc_enable() {   # <unit> — boot persistence only, no start, no reload
+  if [ "$CCD_OS" != darwin ]; then systemctl --user enable --no-reload "$1" 2>/dev/null; return $?; fi
   case "$1" in claude-session@*) _svc_write_session_plist "$1" || return 1 ;; esac
   _svc_launchctl enable "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null
   return 0
@@ -1863,8 +1863,11 @@ UPD_VERSION=""
 UPD_STAGED_SHA=""    # _upd_fetch: the extracted tree's OWN sha (review fix round 1 I3) — arm 3 compares it to old_sha to tell a same-tag REBUILD (mixed) from a same-tag REPEAT (not mixed)
 UPD_BACKUP_DIR=""
 BAK_DIRS=()        # `_bak_list`'s out-param: the timestamped backup dirs, oldest first
-BAK_KEEP_SNAP=""   # `_bak_keepset`'s out-params (wave 9 R10g): the newest earlier coord.db snapshot and the newest earlier tree backup,
+BAK_KEEP_SNAP=""   # `_bak_keepset`'s out-params (wave 9 R10g): the newest earlier valid coordination snapshot and the newest earlier tree backup,
 BAK_KEEP_TREE=""   # each chosen among the dirs the floor and this run's own path do not already protect
+BAK_KEEP_DATA=""   # `_bak_keepset`'s third out-param (D-4641): the newest earlier valid coordination snapshot that holds data
+BAK_SNAP_DATA=0    # `_bak_snap_class`'s out-params: whether a valid dir holds data, and why the classifier failed (rc 2)
+BAK_SNAP_WHY=""
 UPD_BAK_FLOOR=""   # the second this run first held ~/.ccrc/update.lock (`_upd_lock`); `_bak_gc` keeps every dir named at or after it
 UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<tag>/)
 UPD_URL_DIR_SAFE=""    # _upd_resolve: same, through _upd_redact — every "fetching …"/WARN line prints THIS, never UPD_URL_DIR, so a credentialed CCRC_RELEASE_BASE_URL never reaches stdout (review 155 C17, fix round 1 item 11); the real curl calls still read UPD_URL_DIR
@@ -1918,6 +1921,7 @@ UPD_REPORT_PID=""       # overrides a report's `pid` (empty = this process)
 # forger's export never survives to be read.
 unset UPD_FROM_CALLER_PID
 UPD_FAIL_PREFIX=""      # "provenance: " for a die that is a verdict on the RELEASE (plan D-3239)
+UPD_SWEEP_WORD=""       # what `_upd_sweep` did (or `died: abandoned`, cmd_watchdog's close, D-5329), one word; `_upd_phase` writes it as update.json's `sweep` key while set (wave 17, D-5314)
 UPD_LOCK_FD=""          # the descriptor _upd_lock holds; "" when not held, or when inherited
 UPD_LOCK_INHERITED=0    # 1 = a restore child under its parent's lock — measured by _upd_lock_probe, never assumed
 UPD_PREV_TAG=""      # _upd_read_previous: line 1 of ~/.ccrc/previous (a tag, or `untagged`)
@@ -2028,7 +2032,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|logs|passwd|expose|token|restamp|version|watchdog|history}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|coordination-snapshot|logs|passwd|expose|token|restamp|version|watchdog|history}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -2104,23 +2108,23 @@ already running).
             ~/ccrc-backups/<ts>/, then re-run the install spine from the
             verified staged tree (role-aware, from ccrc.env's CCRC_ROLE) and
             print the from -> to report. [--to vX.Y.Z] pins a version — the
-            rollback path too: a downgrade prints the coord.db restore
-            commands and never auto-restores. A target below this box's
-            floor (~/.ccrc/floor, the highest version it completed an
-            install of — a promotion can point latest at an older tag) is
-            refused; --downgrade is the typed way below it, and the floor
-            stays. A box already running the target, whose install
-            completed, is left alone (--force reinstalls). --check only
-            compares this box with what is published (exit 0 current, 1
-            otherwise) and writes nothing; its first line also carries caps=
-            (what this ccrc can do) and floor=, and a target below the floor
-            reads below-floor. Every release since W1 ships a
-            provenance bundle; the installed tree's verifier checks it
-            before extraction. --allow-unsigned admits a release with NO
-            bundle (never one that fails), and the box records the install
-            as unsigned (ccrc version says so). Every run that moves this
-            box reports each phase to ~/.ccrc/update.json, which the console
-            reads; [--from <who>] names who started it
+            rollback path too: a downgrade prints the coord.db restore commands,
+            never auto-restores, and leaves ~/.ccrc/collect-lane-generation.log
+            in place (no backup holds it). A target below this box's floor
+            (~/.ccrc/floor, the highest version it completed an install of — a
+            promotion can point latest at an older tag) is refused; --downgrade
+            is the typed way below it, and the floor stays. A box already
+            running the target, whose install completed, is left alone (--force
+            reinstalls). --check only compares this box with what is published
+            (exit 0 current, 1 otherwise) and writes nothing; its first line
+            also carries caps= (what this ccrc can do) and floor=, and a target
+            below the floor reads below-floor. Every release since W1 ships a
+            provenance bundle; the installed tree's verifier checks it before
+            extraction. --allow-unsigned admits a release with NO bundle (never
+            one that fails), and the box records the install as unsigned (ccrc
+            version says so). Every run that moves this box reports each phase
+            to ~/.ccrc/update.json, which the console reads; [--from <who>]
+            names who started it
             (${UPD_FROM_WORDS[*]}; default cli). restore, rollback and
             watchdog are CALLER words, not operator ones (D-3257): spoken
             only by the automatic restore and by 'ccrc rollback' itself,
@@ -2128,16 +2132,14 @@ already running).
             that caller, any of the three may go below the floor, which
             stays.
             --detach (Linux only, and it needs --to) hands the run to a
-            transient systemd --user unit and returns at once, so the
-            update survives the restart of the unit that asked for it; the
-            detached run gets the user manager's environment, not yours
-            (its argv is the whole contract), and its progress is
-            ~/.ccrc/update.json.
-            After the install a health gate waits up to
-            CCRC_UPDATE_HEALTH_S (default 90) for this role's unit to come
-            back and, with a server, for /health to answer the new version:
-            a failed gate exits 4; a doctor FAIL with the gate passed exits
-            3; --no-gate skips it.
+            transient systemd --user unit and returns at once, so the update
+            survives the restart of the unit that asked for it; the detached
+            run gets the user manager's environment, not yours (its argv is
+            the whole contract), and its progress is ~/.ccrc/update.json.
+            After the install a health gate waits up to CCRC_UPDATE_HEALTH_S
+            (default 90) for this role's unit to come back and, with a server,
+            for /health to answer the new version: a failed gate exits 4; a
+            doctor FAIL with the gate passed exits 3; --no-gate skips it.
             After a passed gate and a finished sweep, ~/ccrc-backups is
             pruned to the newest CCRC_BACKUP_KEEP (default 10) timestamped
             backups, never this run's own. CCRC_BACKUP_KEEP is read from the
@@ -2220,12 +2222,25 @@ already running).
             since 'ccrc memory --apply' it is the SOLE live copy, and a
             session's prose is not configuration) unless [--purge-memory]
             is also given; $(_uninst_history_kept_line); never worktrees, never tmux state
-  backup    take update's backup step standalone: coord.db snapshot, dists,
-            ccd and the units to ~/ccrc-backups/<ts>/, then prune to the
+  backup    take update's backup step standalone: coord.db snapshot, the
+            delegation journal and checkpoint with their manifest
+            (coordination-snapshot.json), dists, ccd and the units to
+            ~/ccrc-backups/<ts>/ (never
+            ~/.ccrc/collect-lane-generation.log: a restore leaves it in
+            place), then prune to the
             newest \$CCRC_BACKUP_KEEP (default 10) timestamped backups — never
             this run's own or one named after it began, nor the newest earlier
-            tree backup and coord.db snapshot; skipped while another ccrc run
-            holds ~/.ccrc/update.lock — hand-made siblings are never touched
+            tree backup, valid coordination snapshot and valid one that holds
+            data; skipped while another
+            ccrc run holds ~/.ccrc/update.lock — hand-made siblings are never touched
+  coordination-snapshot
+            validate --from <timestamp-directory>   classify a backup's coordination
+            snapshot (v1, legacy, none, invalid; exit 0, 0, 1, 2; usage or a helper
+            that cannot run: 70)
+            restore --from <timestamp-directory>   replace the live journal,
+            checkpoint and coord.db (and its WAL/SHM) from a valid v1 snapshot, as
+            one set; refuses unless ccrc.service is measured inactive
+            recover                finish an interrupted restore from its marker
   logs      this box's service journal: journalctl --user -u ccrc.service
             (or ccrc-agent.service when ccrc.env records CCRC_ROLE=fleet).
             Exit 3: the install completed but the trailing doctor failed
@@ -4485,10 +4500,10 @@ cmd_wrappers() {
       # thing moved out of the way is the LINK, and its backup must be the link
       # too. Without `-P`, cp follows it and saves the bytes behind it: a `mv`
       # of that backup would then put a frozen second copy of somebody else's
-      # launcher where the link to it was. A live fleet box has a launcher of
-      # exactly that shape (a symlink to another tool's launcher). `-P` changes
-      # nothing for a regular file, and both userlands take it: GNU cp, and BSD
-      # cp, whose `-P` without `-R` copies the link itself.
+      # launcher where the link to it was. A fleet box had a launcher of exactly
+      # that shape (a symlink to another tool's launcher, retired by Plan 4).
+      # `-P` changes nothing for a regular file, and both userlands take it: GNU
+      # cp, and BSD cp, whose `-P` without `-R` copies the link itself.
       cp -P -p -- "$WRAPPER_BIN_DIR/$id" "$WRAPPER_BIN_DIR/$backup" \
         || _ccrc_die "could not back up $WRAPPER_BIN_DIR/$id to $WRAPPER_BIN_DIR/$backup, so nothing was overwritten"
     fi
@@ -8616,9 +8631,9 @@ _acct_remove() {
   #
   # EVERY STOP IS IDENTITY-GATED (D-3488, ruling R8). `_codex_stop_lane`
   # stops a tier only when `_codex_tier_ours` proves it this lane's (0 or 4),
-  # and then only by exact unit name or verified pid. The live Codex lanes'
-  # tiers run under these same `ccgpt-<id>-*` unit names, from another
-  # repository.
+  # and then only by exact unit name or verified pid. A box may still run
+  # another repository's Codex tiers under these same `ccgpt-<id>-*` unit
+  # names (none has run on the fleet box since the cutover).
   # ITS VERDICT IS RE-MEASURED, NOT TAKEN FROM ITS RC. This verb's question is
   # "does a tier ccrc owns still run on this lane?", and `_codex_tier_ours`
   # answers it again, tier by tier, after the stop:
@@ -8644,7 +8659,7 @@ _acct_remove() {
   # and a `.lock` that only this run's own lock created is not reported as
   # something the account had.
   #
-  # `external` never reaches this. The live Codex lanes are external.
+  # `external` never reaches this (the other repository's Codex lanes were external; retired by Plan 4).
   if [ "$ACCT_KIND" = codex ]; then
     lane_dir="$(_codex_lane_dir "$id")"
     for f in "$lane_dir"/* "$lane_dir"/.[!.]* "$lane_dir"/..?*; do
@@ -9863,10 +9878,10 @@ _models_class_ok() {   # <class>
 # `[ -r "$HOME/${secrets}" ] && . "$HOME/${secrets}"`. BOTH branches unset the
 # credential names `ccrc-models-probe` actually reads: ANTHROPIC_AUTH_TOKEN
 # (the two arms that send it — openrouter --endpoints and compatible; the
-# codex arms send their own bearer header too, but via `_fetch_codex`'s or `_fetch_codex_lane`'s
+# codex arm sends its own bearer header too, but via `_fetch_codex_lane`'s
 # litellm `Authenticator`, driven by CHATGPT_TOKEN_DIR, never this
-# variable) and, on the codex arms only,
-# CHATGPT_TOKEN_DIR (it names the directory either codex arm's `Authenticator` reads `auth.json`
+# variable) and, on the codex arm only,
+# CHATGPT_TOKEN_DIR (it names the directory the codex arm's `Authenticator` reads `auth.json`
 # from) — measured fix, C3 of the final wave: without this, a lane with no
 # secrets file ran the probe against whatever this shell already had,
 # which on this fleet is ordinarily the CALLING lane's own key (every
@@ -9905,19 +9920,21 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
 
 # THE CODEX LANE'S PROBE INPUTS (spec §9.1; Plan 3a Task 1, D-3706).
 #   - An exec.kind "codex" row: this exports the row's own `exec.authDir`,
-#     under $HOME, as CHATGPT_TOKEN_DIR; the interpreter `ccgpt-runtime
+#     under $HOME, as CHATGPT_TOKEN_DIR, and the interpreter `ccgpt-runtime
 #     python` resolves as CCRC_CODEX_PYTHON, EMPTY when none resolves, so the
-#     probe refuses `runtime-absent` rather than inheriting a caller's value;
-#     and CCRC_PROBE_LANE_KIND=codex, the one marker that sends the probe
-#     down its codex-lane fetch, which has no default directory.
-#   - Every other row: it UNSETS CCRC_CODEX_PYTHON and CCRC_PROBE_LANE_KIND
-#     and touches nothing else. That row's CHATGPT_TOKEN_DIR is exactly what
-#     it was before this function existed (scrubbed above, then whatever its
-#     secrets file sets), so an external lane's fetch keeps today's bytes,
-#     default directory included, until its own flip (Plan 3b).
+#     probe refuses `runtime-absent` rather than inheriting a caller's value.
+#     The probe has one codex fetch for every caller (Plan 4), and it has no
+#     default directory.
+#   - Every other row: it UNSETS CCRC_CODEX_PYTHON and touches nothing else.
+#     That row's CHATGPT_TOKEN_DIR is whatever the scrub above and its secrets
+#     file leave. None, and the probe refuses `no-token-dir`; or a secrets
+#     file's, and it refuses `runtime-absent`, because the interpreter is
+#     withheld. Either way a codex probe on that row refuses before any
+#     interpreter runs, so it reads no directory and fetches nothing. Before
+#     Plan 4 it met the external fetch, with its default directory.
 # Called ONLY inside `_models_run_probe`'s two subshells, after the scrub and
 # the source line: neither a caller nor a secrets file can choose a lane's
-# arm, directory or interpreter, and none of it reaches the verb's own shell.
+# directory or interpreter, and none of it reaches the verb's own shell.
 # The row is read through the lane library's one reader of `exec.kind`
 # (`_models_litellm_codex`, that is `_codex_lanes`) and its one reader of a
 # row (`_codex_row`). A codex row that does not validate is refused with
@@ -9925,27 +9942,27 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
 # A ROSTER THAT CANNOT SAY (Plan 3b Task A1, D-4046): `_models_litellm_codex`
 # rc 2 is refused the same way. The lane library's own `ccrc codex:
 # roster-invalid:` or `missing-dependency:` line is already on stderr, its rc
-# is returned, and the probe never runs. Never "not codex": that arm hands an
-# exec.kind "codex" row to the external fetch, whose token directory has a
-# default, which is another lane's (D-3706's class). NO ROSTER FILE AT ALL
-# (rc 3, the final review's residual round) is refused too, `roster-absent` with
-# the install remedy, for the same reason: here "not codex" is that fetch.
+# is returned, and the probe never runs. Never "not codex": a codex row taken
+# for another kind is handed no interpreter, and no directory unless its
+# secrets file sets one, and would refuse `no-token-dir` or `runtime-absent`, a
+# remedy that is not its own. NO ROSTER FILE AT ALL (rc 3, the final review's
+# residual round) is refused too, `roster-absent` with the install remedy, for
+# the same reason: its word and remedy are the ones this operator needs.
 _models_probe_codex_env() {   # <accountId> -> 0; _codex_row's rc for a codex row that does not validate; the lane library's rc for a roster that cannot say; 1, roster-absent, for no roster file
   local kind=0
   _models_litellm_codex "$1" || kind=$?
   case "$kind" in
     0) ;;
-    1) unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
+    1) unset CCRC_CODEX_PYTHON
        return 0 ;;
-    3) unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
-       _codex_say roster-absent "\$HOME/.ccrc/accounts.json does not exist, so whether lane $1 is exec.kind \"codex\" cannot be told, and its probe does not run: a codex lane taken for an external one would be fetched with the external path's default token directory, another lane's. Run 'ccrc install' — it seeds one and never overwrites an existing one."
+    3) unset CCRC_CODEX_PYTHON
+       _codex_say roster-absent "\$HOME/.ccrc/accounts.json does not exist, so whether lane $1 is exec.kind \"codex\" cannot be told, and its probe does not run: a lane nobody read is never probed. Run 'ccrc install' — it seeds one and never overwrites an existing one."
        return "$MODELS_CODEX_UNTOLD_RC" ;;
-    *) unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
+    *) unset CCRC_CODEX_PYTHON
        return "$MODELS_CODEX_UNTOLD_RC" ;;
   esac
   _codex_row "$1" || return $?
   export CHATGPT_TOKEN_DIR="$HOME/$CX_AUTH"
-  export CCRC_PROBE_LANE_KIND=codex
   CCRC_CODEX_PYTHON="$("$(_codex_runtime_cli)" python 2>/dev/null)" || CCRC_CODEX_PYTHON=''
   export CCRC_CODEX_PYTHON
   return 0
@@ -10151,88 +10168,45 @@ _models_refresh_one() {   # <id> <probe> <baseUrl> -> 0 iff the probe wrote a fr
   return "$rc"
 }
 
-# Where a box keeps LiteLLM's config, and the template it is rendered from.
-# TWO ARMS, and the CALLER picks (spec §8, D-3482):
-#   - no argument: the EXTERNAL lane's box-global file — byte for byte what
-#     this helper answered before it took one. The destination is the ONE
-#     thing `ccgpt` (another repository's live launcher) and this verb must
-#     agree about (`infra/handoff/ccgpt:20` reads
-#     `${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}`), so the same
-#     override is honoured here.
-#   - an id: that CODEX-kind lane's own file, `_codex_litellm_yaml "$1"`
-#     (ruling PF-40 — one spelling, the same one `_codex_start_tier`'s
-#     `--config` and `_codex_litellm_ensure`'s presence check use).
-#     UNCONDITIONAL, on purpose: this helper never reads the roster, so no
-#     caller holding an id — a reap after the roster row is gone included —
-#     can ever be answered with the box-global path, which an identity check
-#     would then match against the OTHER repository's live LiteLLM. And
-#     CCGPT_CONFIG, that repository's variable, never redirects a lane ccrc
-#     owns. Which arm a lane takes is `_models_litellm_codex`'s question, not
-#     this helper's.
-_models_litellm_path() {   # [<codex accountId>] -> the LiteLLM config file
-  [ $# -eq 0 ] || { printf '%s' "$(_codex_litellm_yaml "$1")"; return 0; }
-  printf '%s' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"
+# Where a codex-kind lane keeps its LiteLLM config, and the template it is
+# rendered from (spec §8, D-3482). The config is that lane's own file,
+# `_codex_litellm_yaml "$1"` (ruling PF-40 — one spelling, the same one
+# `_codex_start_tier`'s `--config` and `_codex_litellm_ensure`'s presence
+# check use). UNCONDITIONAL, on purpose: this helper never reads the roster,
+# so a caller holding an id — a reap after the roster row is gone included —
+# is answered with that id's own path and nothing else. The helper's other
+# form, an external lane's box-global file, left with the other repository's
+# lane (Plan 4); which lanes get a config at all is the dispatcher's question
+# (`_models_litellm`, below), not this helper's.
+_models_litellm_path() {   # <codex accountId> -> that lane's LiteLLM config file
+  printf '%s' "$(_codex_litellm_yaml "$1")"
 }
 _models_litellm_template() { printf '%s' "$CCRC_HERE/../deploy/litellm-config.template.yaml"; }
 
-# The EXTERNAL arm's question only — a codex-kind lane asks `_codex_tier_ours` (`_models_litellm_lane_held`, below).
-# "Is LiteLLM up against this config?" — `pgrep -f`, matching the argv `ccgpt`
-# starts it with (`infra/handoff/ccgpt`'s own launch line: `litellm --config
-# "$CONFIG" …` — cited by shape, not by line number, because it lives in the
-# monorepo branch and drifts independently of this one). NOT a port check:
-# the port answering says something is listening, not that it
-# is listening on THESE bytes, and the question here is exactly whether the
-# process holds a config this run just replaced.
-_models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }
-
-# THE BARE STOP'S PRECONDITION (Plan 3a Task 2, operator ruling Z4,
-# D-3753). The external arm's only stop is
-# another repository's bare `ccgpt stop`, which stops units BY NAME, and a
-# codex-kind lane's own tiers carry those names (`ccgpt-<id>-{litellm,shim}
-# .service`, spec §19.2). With no codex-kind row on the roster, today's shape,
-# that stop can reach only that repository's own units: rc 1, nothing printed,
-# and the arm runs exactly as before. Once ANY row is codex-kind, ccrc cannot
-# tell whose units that stop would name: rc 0, the reason as one clause on
-# stdout, and the arm refuses before it writes. A roster whose codex lanes
-# cannot be told (`_codex_lanes` rc 1 or rc 2) answers rc 0 too, because
-# undecidable is never "no codex lane". Asked of `_codex_lanes`, the lane
-# library's ONE reader of exec.kind.
-_models_litellm_stop_blocked() {   # -> rc 0 and one clause on stdout iff the external arm must not run the bare stop
-  local ids rc=0
-  ids="$(_codex_lanes 2>/dev/null)" || rc=$?
-  if [ "$rc" -ne 0 ]; then
-    printf 'which roster lanes are codex-kind cannot be read (the lane library answered rc %s)' "$rc"
-    return 0
-  fi
-  [ -n "$ids" ] || return 1
-  printf 'the roster names codex-kind lane(s) %s' "${ids//$'\n'/, }"
-  return 0
-}
-
 # WHICH ARM, AND WHETHER IT CAN BE TOLD (D-3482; Plan 3b Task A1, D-4046):
 # `exec.kind == "codex"` read off ~/.ccrc/accounts.json by the lane library's
-# ONE reader of that question (`_codex_lanes`) — never accounts.sh's
-# CCRC_CODEX_BACKEND, which is keyed on `telemetry` and names today's EXTERNAL
-# live lanes. FOUR answers, never two:
+# ONE reader of that question (`_codex_lanes`) — never accounts.sh's CCRC_CODEX_BACKEND,
+# which is keyed on `telemetry`, so it names any EXTERNAL lane reporting codex usage
+# (the other repository's did; retired by Plan 4). FOUR answers, never two:
 #   - 0: the row is codex-kind;
 #   - 1: the roster was read, and the row is not;
 #   - 3: there is no roster file at all (not a dangling link): nothing was read,
-#     and nothing is undecidable either, so it is its own answer. Only the
-#     dispatcher may read it as "not codex", because its external arm's own read
-#     then refuses `roster-absent` ("run ccrc install"); the probe seam refuses
-#     it, because there "not codex" means the external fetch (D-3706's class);
+#     and nothing is undecidable either, so it is its own answer. The
+#     dispatcher refuses it `roster-absent` ("run ccrc install") in its own
+#     sentence (Plan 4), and the probe seam refuses it the same way, because a
+#     lane nobody read is never probed;
 #   - 2: the roster cannot say: `_codex_lanes` rc 1 (`roster-invalid`) or rc 2
 #     (`missing-dependency`); any other non-zero reads `roster-invalid`, the
 #     library's word for a roster it could not read. The library's own
 #     `ccrc codex: <word>:` line is LEFT ON STDERR, never discarded, and
 #     MODELS_CODEX_UNTOLD names the word, MODELS_CODEX_UNTOLD_RC the rc.
-# Undecidable is never "not codex" (Z4's rule, `_models_litellm_stop_blocked`
-# above). Folded into 1, it sent a codex row's probe down the external
-# fetch's default token directory, and its LiteLLM render into the
-# box-global file another repository's proxy reads. Both readers refuse 2 in
-# the library's word: `_models_probe_codex_env` and `_models_litellm`'s
-# dispatcher, the only two (Plan 3b Task A1's grep). Both call it in their
-# own shell, so the two names reach them.
+# Undecidable is never "not codex" (Z4's rule, D-3753). Folded into 1, it would
+# hand a codex row's probe no directory (`no-token-dir`, or `runtime-absent` when
+# its secrets file sets one: not its own remedy) and refuse its render; until
+# Plan 4 it went down the external arm, to a default token directory and a
+# box-global file. Both readers refuse 2 in the library's word:
+# `_models_probe_codex_env` and `_models_litellm`'s dispatcher, the only two (Plan
+# 3b Task A1's grep). Both call it in their own shell, so the two names reach them.
 MODELS_CODEX_UNTOLD=''
 MODELS_CODEX_UNTOLD_RC=0
 _models_litellm_codex() {   # <accountId> -> 0 codex, 1 not codex, 2 the roster cannot say, 3 no roster file (above)
@@ -10339,12 +10313,12 @@ _models_litellm_lane() {   # <codex accountId> -> prints exactly one JSON object
 #     cannot identify, into 1 would write under a process that may hold the
 #     old bytes, and 3 read as 2 would name a listener that may not exist.
 #   - the stop AND the start: ccrc's own `_codex_stop_tier`/
-#     `_codex_start_tier` for exactly this id — never `ccgpt`, which on a
-#     live box is another repository's launcher and, called bare, acts on
-#     ITS first lane. ONLY a 0 or a 4 reaches the stop
-#     (D-3488); a 2 or a 3 is LEFT RUNNING and named in the refusal,
-#     and the stop itself is by exact unit name or verified pid, which is
-#     `_codex_stop_tier`'s own gate.
+#     `_codex_start_tier` for exactly this id — never `ccgpt`: a box may
+#     still carry another repository's launcher there (the fleet box's
+#     copy was removed by Plan 4), and a bare one acts on ITS first lane.
+#     ONLY a 0 or a 4 reaches the stop (D-3488); a 2 or a 3 is LEFT
+#     RUNNING and named in the refusal, and the stop itself is by exact
+#     unit name or verified pid, which is `_codex_stop_tier`'s own gate.
 # THE STOP'S WORD IS CAPTURED (ruling PF-21), never folded: rc 0 from
 # `_codex_stop_tier` covers THREE answers — `stopped`, `not running`,
 # `foreign` — not only "the tier is down". A `foreign` word at rc 0 means
@@ -10361,9 +10335,9 @@ _models_litellm_lane() {   # <codex accountId> -> prints exactly one JSON object
 # unit nor a pidfile … must be stopped by hand" — not just this arm's
 # generic sentence). Both refusals below append its last line.
 # START follows the write because this arm stopped a tier live sessions were
-# using; the external arm leaves that to the next session because it never
-# owned its tier. "Started" is the promise `_svc_run_supervised` keeps — the
-# job was created — not readiness, which is `ccrc codex start`'s question.
+# using, and that tier is ccrc's own. "Started" is the promise
+# `_svc_run_supervised` keeps — the job was created — not readiness, which is
+# `ccrc codex start`'s question.
 # A write that fails after the stop starts the tier again on the bytes still
 # on disk, so the box is back where it was and the next run retries. Both
 # `start-failed` details append `_codex_start_tier`'s own last stderr line
@@ -10413,7 +10387,7 @@ _models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON o
     printf '%s\n' "$check"
     return 0
   fi
-  # THE TIER — asked only now, when the bytes differ, as the external arm asks.
+  # THE TIER — asked only now, when the bytes differ.
   # A 2 is NAMED in the same subshell as the measurement (CX_TIER_WHY lives
   # only there), through `_codex_foreign_what` (review A2), and that naming
   # runs in a subshell OF ITS OWN (fix wave, the Task 10 B1 shape): the rc of
@@ -10519,82 +10493,56 @@ _models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON o
   return 0
 }
 
-# STOP-THEN-WRITE (fix round 1, this task's controller ruling). Restart is
-# owed only when BOTH halves are true: the bytes changed AND a proxy is
-# holding the old ones — but deciding that and acting on it has to happen
-# BEFORE the new bytes land on disk, or a stop that fails leaves the config
-# already rewritten: the next run compares equal bytes, reports "unchanged",
-# and never retries the restart, while the box keeps serving the stale
-# rendering with no operator signal. So this is TWO calls into the op, not
-# one: PHASE 1 asks it to render and compare only (never write); if a restart
-# is owed and cannot be had, this function REFUSES here, before PHASE 2 —
-# the write — is ever asked for, so the next run sees the same difference and
-# retries. In-flight gpt turns fail once and retry (§6.3), which is a cost
-# worth paying for a config that has changed and not one for a config that
-# has not.
-_models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's final answer, or a refusal
-  # A codex-kind lane takes its own arm (`_models_litellm_lane`, above), and a
-  # roster that cannot say whether this row is one takes NEITHER (Plan 3b Task A1).
-  # Everything below is the EXTERNAL arm, unchanged byte for byte
-  # (D-3482) but for one guard (Plan 3a Task 2, D-3753): its bare stop is
-  # refused once any roster row is codex-kind. The live lanes are external, and
-  # another repository's LiteLLM reads that arm's file. Each lane leaves this
-  # arm at its own flip (Plan 3b), and Plan 4's ccrc PR deletes it (ruling Z8).
-  # WHICH ARM (Plan 3b Task A1, D-4046): a roster that cannot say is refused
-  # in the lane library's own word, as `_codex_row`'s refusals are propagated,
-  # and its own line is already on stderr. The external arm would render a
-  # codex row's model list into the box-global file another repository's
-  # LiteLLM reads; the codex arm would act on a row nobody read.
-  local kind=0
+# STOP-THEN-WRITE (fix round 1, this task's controller ruling; per lane since
+# D-3482). Restart is owed only when BOTH halves are true: the bytes changed
+# AND the lane's own LiteLLM tier is holding the old ones — but deciding that
+# and acting on it has to happen BEFORE the new bytes land on disk, or a stop
+# that fails leaves the config already rewritten: the next run compares equal
+# bytes, reports "unchanged", and never retries the restart, while the lane
+# keeps serving the stale rendering with no operator signal. So the codex arm
+# (`_models_litellm_lane_held`, above) makes TWO calls into the op, not one:
+# PHASE 1 asks it to render and compare only (never write); if a restart is
+# owed and cannot be had, it REFUSES there, before PHASE 2 — the write — is
+# ever asked for, so the next run sees the same difference and retries.
+# In-flight gpt turns fail once and retry (§6.3), which is a cost worth paying
+# for a config that has changed and not one for a config that has not.
+#
+# THE DISPATCHER (Plan 4): a codex-kind lane takes the codex arm, and every
+# other answer is a refusal, exit 1, before anything is rendered, stopped or
+# written: `no-such-account` for an id the roster lacks, `not-codex-kind` for a
+# row that is not codex-kind, `roster-absent` for no roster file at all, and,
+# for a roster that cannot say (Plan 3b Task A1, D-4046), the lane library's
+# own word, `roster-invalid` or `missing-dependency`, as `_codex_row`'s
+# refusals are propagated, with its line already on stderr. `not-codex-kind`
+# is this dispatcher's own word: models-op's `not-a-codex-lane` keeps its meaning, a row whose
+# registry is absent or not a codex probe (through this dispatcher, only a codex-kind row reaches it).
+# A row that is not codex-kind used to take the EXTERNAL arm, which rendered
+# its model list into the other repository's box-global config and stopped
+# that repository's proxy through that repository's own launcher. The arm left
+# with that repository's lane (Plan 4, ruling Z8).
+_models_litellm() {   # <accountId> -> prints exactly one JSON object: the codex arm's final answer, or a refusal
+  local kind=0 member=0
   _models_litellm_codex "$1" || kind=$?
   case "$kind" in
     0) _models_litellm_lane "$1"; return $? ;;
-    1) ;;
-    3) ;;   # no roster file: the external arm's own read refuses `roster-absent` (D-4046)
-    *) if [ "$MODELS_CODEX_UNTOLD" = missing-dependency ]; then
-         _models_refuse missing-dependency 1 "jq is not on PATH (the lane library's ccrc codex: missing-dependency line says so), so whether lane $1 is exec.kind \"codex\" cannot be told, and neither LiteLLM arm was taken: a codex lane's model list never goes to the box-global file, and an external lane's is never rendered as a codex one. Install jq, then re-run this command. Nothing was written and nothing was stopped."
-       fi
-       _models_refuse roster-invalid 1 "\$HOME/.ccrc/accounts.json could not be read as a roster (the lane library answered rc $MODELS_CODEX_UNTOLD_RC; its ccrc codex: roster-invalid line says why), so whether lane $1 is exec.kind \"codex\" cannot be told, and neither LiteLLM arm was taken: a codex lane's model list never goes to the box-global file, and an external lane's is never rendered as a codex one. Fix the roster ('ccrc wrappers' prints the validator's sentence), then re-run this command. Nothing was written and nothing was stopped." ;;
+    1) # The roster was read and names no codex lane by this id: either its row
+       # is some other kind, or there is no row at all. `_codex_lanes` lists
+       # codex ids only, so membership is a read of its own.
+       jq -e --arg id "$1" 'any((.accounts // [])[] | objects; .id == $id)' "$(_models_roster_path)" >/dev/null 2>&1 || member=$?
+       case "$member" in
+         0) _models_refuse not-codex-kind 1 "account $1 is not exec.kind \"codex\", so ccrc renders no LiteLLM config for it (an external lane's box-global config was retired by Plan 4). If it is a Codex lane, its roster row needs exec.kind \"codex\". Nothing was rendered, stopped or written." ;;
+         1) _models_refuse no-such-account 1 "\$HOME/.ccrc/accounts.json has no account \"$1\", so there is no lane to render a LiteLLM config for. 'ccrc status' lists the ids this box has. Nothing was rendered, stopped or written." ;;
+       esac
+       # Any other answer: the roster `_codex_lanes` just read could not be read
+       # again, so it cannot say after all. Refused below as `roster-invalid`.
+       MODELS_CODEX_UNTOLD=roster-invalid; MODELS_CODEX_UNTOLD_RC="$member" ;;
+    3) _models_refuse roster-absent 1 "\$HOME/.ccrc/accounts.json does not exist, so no lane's LiteLLM config can be rendered. Run 'ccrc install' — it seeds one and never overwrites an existing one." ;;
   esac
-  local file check crc
-  file="$(_models_roster_path)"
-  check="$(_models_answer litellm --file "$file" --id "$1" \
-             --template "$(_models_litellm_template)" --out "$(_models_litellm_path)")"; crc=$?
-  [ "$crc" -eq 0 ] || { printf '%s\n' "$check"; return "$crc"; }
-  if [ "$(printf '%s' "$check" | jq -r '.changed')" != "true" ]; then
-    printf '%s\n' "$check"
-    return 0
+  # 2, the roster cannot say (and the membership read's own failure, above).
+  if [ "$MODELS_CODEX_UNTOLD" = missing-dependency ]; then
+    _models_refuse missing-dependency 1 "jq is not on PATH (the lane library's ccrc codex: missing-dependency line says so), so whether lane $1 is exec.kind \"codex\" cannot be told, and no LiteLLM config was rendered. Install jq, then re-run this command. Nothing was written and nothing was stopped."
   fi
-  local restarted=false
-  if _models_litellm_running; then
-    # NEVER THE BARE STOP ONCE A CODEX-KIND LANE EXISTS (Plan 3a Task 2,
-    # operator ruling Z4, D-3753). Refused
-    # HERE, through this arm's own restart-failed path and before PHASE 2, so
-    # nothing is written and the next run sees the same difference again.
-    local blocked
-    if blocked="$(_models_litellm_stop_blocked)"; then
-      _models_refuse restart-failed 1 "the LiteLLM proxy is running on the PREVIOUS config, and ccrc will not stop it: $blocked, and the only stop this arm has is another repository's bare 'ccgpt stop', which stops units by name, the names a codex lane's own tiers carry. Stop that proxy by hand once you know which lane's units that stop would name, or flip lane $1 to codex (Plan 3b), then re-run this command — until then this box serves the old model list. Nothing was written and nothing was stopped."
-    fi
-    if command -v ccgpt >/dev/null 2>&1 && ccgpt stop >/dev/null 2>&1; then
-      restarted=true
-      echo "$PROG: stopped the running LiteLLM proxy — it was holding the previous rendering; the next gpt session starts it again on the new one." >&2
-    else
-      # Refuse HERE, before PHASE 2: nothing is written, so the bytes on disk
-      # stay exactly what they were, and the NEXT run sees the same
-      # difference and retries the whole decision rather than silently
-      # reporting "unchanged" forever after.
-      _models_refuse restart-failed 1 "the LiteLLM proxy is running on the PREVIOUS config and could not be stopped. Run 'ccgpt stop' by hand, then re-run this command — until then this box serves the old model list. Nothing was written."
-    fi
-  fi
-  local body
-  body="$(_models_answer litellm --file "$file" --id "$1" \
-            --template "$(_models_litellm_template)" --out "$(_models_litellm_path)" --commit true)"; crc=$?
-  if [ "$crc" -eq 0 ]; then
-    printf '%s\n' "$(printf '%s' "$body" | jq -c --argjson r "$restarted" '. + {restarted: $r}')"
-  else
-    printf '%s\n' "$body"
-  fi
-  return "$crc"
+  _models_refuse roster-invalid 1 "\$HOME/.ccrc/accounts.json could not be read as a roster (the lane library answered rc $MODELS_CODEX_UNTOLD_RC; its ccrc codex: roster-invalid line says why), so whether lane $1 is exec.kind \"codex\" cannot be told, and no LiteLLM config was rendered. Fix the roster ('ccrc wrappers' prints the validator's sentence), then re-run this command. Nothing was written and nothing was stopped."
 }
 
 # `ccrc codex start`'s config step (design contract `start`:
@@ -10602,11 +10550,9 @@ _models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's 
 # arm"). PRESENCE only — staleness is `ccrc models refresh`'s question,
 # asked hourly by its timer. Rendered by the ONE writer, through the arm's
 # body `_models_litellm_lane_held` DIRECTLY rather than through
-# `_models_litellm`'s dispatch: this caller must never reach the external
-# arm, whose failure mode is the live box's box-global file and a bare
-# `ccgpt stop`. And never through `_models_litellm_lane`, which takes the
-# lane lock: THE CALLER HOLDS IT (`_codex_cmd_start` takes it before
-# this step). `_codex_lock` is RE-ENTRANT there (R38: a second call would
+# `_models_litellm`'s dispatch, whose codex arm is `_models_litellm_lane`,
+# which takes the lane lock: THE CALLER HOLDS IT (`_codex_cmd_start` takes it
+# before this step). `_codex_lock` is RE-ENTRANT there (R38: a second call would
 # return 0 at once, not wait), but this function still never calls it, to
 # keep the lock's scope to `_codex_cmd_start`'s own call and the fake's
 # call log honest. Its answer is CAPTURED, never
@@ -10615,7 +10561,7 @@ _models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's 
 # refusal printer, carrying the op's own `.detail`, which names the specific
 # remedy (never-probed → refresh). PF-40: the presence check reads
 # `_codex_litellm_yaml <id>` directly — the same spelling
-# `_codex_start_tier`'s `--config` and `_models_litellm_path`'s id arm use.
+# `_codex_start_tier`'s `--config` and `_models_litellm_path` use.
 _codex_litellm_ensure() {   # <codex id> -> 0 iff ~/.ccrc/codex/<id>/litellm.yaml exists (rendered now when absent); else one stderr line, rc 1. The caller holds `_codex_lock <id>`.
   local path body rc=0 detail
   path="$(_codex_litellm_yaml "$1")"
@@ -10811,10 +10757,10 @@ _models_box_sub() {   # <subcommand> [args…]
 # THE ROSTER IS READ FOR `exec.kind`, NEVER FOR TELEMETRY. `accounts.sh`'s
 # `CCRC_CODEX_BACKEND` (and ccd's own `_codex_lanes`, a DIFFERENT function of
 # the same name in a file this one never sources) is keyed on
-# `telemetry == "codex"` — a usage-vocabulary question. The live Codex lanes
-# are `exec.kind: "external"` rows, which that list can name and this library
-# must never treat as lanes it runs: an external lane's launcher and tiers
-# belong to somebody else.
+# `telemetry == "codex"` — a usage-vocabulary question. The other repository's
+# Codex lanes were `exec.kind: "external"` rows (retired by Plan 4), which that
+# list can name. An external row's launcher and tiers belong to somebody else,
+# so this library must never treat one as a lane it runs.
 #
 # ONE SPELLING PER FACT: the lane directory is `_codex_lane_dir`, the shim's
 # code file `_codex_shim_file`, the runtime CLI `_codex_runtime_cli`, the
@@ -11140,12 +11086,12 @@ _codex_port_listening() {   # <port>
   esac
 }
 
-# Who answers `GET /ccgpt/lane` on <port>? Prints the lane id and answers 0
-# only for ccrc's shim's EXACT shape — status 200, `Content-Type:
-# application/json`, a body that is a JSON object whose only key is a string
-# `lane` (`ccd/ccgpt-proxy.py`'s `_lane`). 1 = nothing answered; 2 = something
-# answered in another shape. The other repository's shim answers `text/plain`
-# with the bare id, and that is exactly the listener this must not adopt.
+# Who answers `GET /ccgpt/lane` on <port>? Prints the lane id and answers 0 only for
+# ccrc's shim's EXACT shape — status 200, `Content-Type: application/json`, a body that
+# is a JSON object whose only key is a string `lane` (`ccd/ccgpt-proxy.py`'s `_lane`).
+# 1 = nothing answered; 2 = something answered in another shape. A box may still run
+# another repository's shim, which answers `text/plain` with the bare id (the fleet
+# box's copy was removed by Plan 4): exactly the listener this must not adopt.
 _codex_lane_answer() {   # <port>
   local resp head body status line ok=0 ct_re='^[[:space:]]*application/json([[:space:]]*;.*)?[[:space:]]*$'
   _codex_port_ok "${1:-}" || return 1
@@ -11322,16 +11268,16 @@ _codex_pid_listens() {   # <pid> <port> -> 0 listens; 1 another holds it; 3 cann
 #   1 = NOT RUNNING: nothing answers on the tier's port, no unit of its name is
 #       live, and its pidfile proves no live process of this lane's (a dead pid,
 #       or a STALE one: see below).
-#   2 = FOREIGN: something holds the port and is not proven this lane's, or a
-#       unit of this tier's name is live and its MainPID's command line does
-#       not prove this lane (the other repository's tiers run under these same
-#       unit names). Never adopted, never stopped, never started over. ONE 2
-#       CARRIES A PROVEN HANDLE: `listener-other-process`, this lane's own
-#       tier — LiteLLM or the shim — alive by its command line while ANOTHER
-#       process holds its port. The holder is foreign; the proven process is
-#       still this lane's, so a stop stops it through that handle and leaves
-#       the holder running. `_codex_tier_is_our_handle` is the ONE reading of
-#       that exception; no consumer re-derives it.
+#   2 = FOREIGN: something holds the port and is not proven this lane's, or a unit
+#       of this tier's name is live and its MainPID's command line does not prove
+#       this lane (a box may still run the other repository's tiers under these unit
+#       names; none has run on the fleet box since the cutover). Never adopted,
+#       never stopped, never started over. ONE 2 CARRIES A PROVEN HANDLE:
+#       `listener-other-process`, this lane's own tier — LiteLLM or the shim — alive
+#       by its command line while ANOTHER process holds its port. The holder is
+#       foreign; the proven process is still this lane's, so a stop stops it through
+#       that handle and leaves the holder running. `_codex_tier_is_our_handle` is
+#       the ONE reading of that exception; no consumer re-derives it.
 #   3 = CANNOT ASK: a tier word this build does not know, or a row `_codex_row`
 #       refuses (its sentence is on stderr). THIS FOLDS `_codex_row`'s OWN RC
 #       (2 usage, 1 any other refusal) INTO ONE CODE (ruling R3 keeps that
@@ -11725,9 +11671,9 @@ _codex_unlock() {   # always rc 0
 # DIRECTLY, right after that 2: it reads CX_TIER_WHY and `_codex_row`'s CX_*,
 # and it sets CX_FOREIGN_CODE, CX_FOREIGN_WHAT and CX_FOREIGN_FIX.
 #   - A live unit of this tier's name, whatever else answers: `unit-foreign`.
-#     Asked first because it is the fleet box's incident shape, the other
-#     repository's tier under this lane's unit name (m-livebox §3). Ruling R34
-#     keeps it foreign: that unit is not ccrc's to call stale.
+#     Asked first because it was the fleet box's incident shape before the
+#     cutover, the other repository's tier under this lane's unit name
+#     (m-livebox §3). Ruling R34 keeps it foreign: that unit is not ccrc's to call stale.
 #     When CX_TIER_WHY is `unit-unproven` (nothing answers on the port, and no
 #     live process of the unit proves this lane), the sentence says the
 #     identity is UNPROVEN and suggests a retry, and never names another tool
@@ -11921,13 +11867,13 @@ _codex_start_tier() {   # <id> <tier> -> rc 0 + "systemd <unit>" | "nohup <pid>"
 # D-3488, which departs from spec §7.4's "by exact unit, then by
 # verified identity"). It takes no lock: its callers hold `_codex_lock`.
 #   1. It stops the tier ONLY when `_codex_tier_ours` answers 0 (ours,
-#      running) or 4 (ours, starting), and only through the handle that proof
-#      came through: the unit, by the exact name lane.json gives it, when the
-#      proof was the unit's MainPID (CX_TIER_VIA=systemd); the verified pid
-#      when it was the pidfile's (nohup). A unit is never stopped for its NAME,
-#      because on the fleet box the other repository's live tiers run under
-#      these same names (m-livebox §3). A service-owned pid is never killed
-#      around its unit, because `Restart=always` would race the kill.
+#      running) or 4 (ours, starting), and only through the handle that proof came
+#      through: the unit, by the exact name lane.json gives it, when the proof was
+#      the unit's MainPID (CX_TIER_VIA=systemd); the verified pid when it was the
+#      pidfile's (nohup). A unit is never stopped for its NAME, because a box may
+#      still run the other repository's tiers under these same names (m-livebox §3;
+#      none has run on the fleet box since the cutover). A service-owned pid is
+#      never killed around its unit, because `Restart=always` would race the kill.
 #   2. A 2 (foreign: a listener on the port, or a same-named unit whose
 #      MainPID is not this lane's) is LEFT RUNNING and named on stderr, and the
 #      word is `foreign`. A 3 stops nothing and is stop-failed, because "down"
@@ -14209,6 +14155,20 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   # that is the DEFAULT path on a platform is not the no-op `ccd-cap-scopes`'
   # own comment warns about.
   _inst_atomic "$tree/ccd/ccd-account-auth" "$bin/ccd-account-auth" 755
+  # `ccrc-api`, the closed client every coordinator, worker and reviewer skill
+  # calls for its mail, runs, claims and ledger (wave 17, D-5313), on BOTH arms
+  # (it is portable: macos-platform.test.ts reads it in the GNU-call corpus)
+  # and ROLE-gated by a ONE-LINE `||` test, the history sweep's shape below,
+  # never a second `!= server` block (install-census.test.ts's gptGateBlock()
+  # requires exactly one): its callers are sessions, and a server-role box
+  # hosts none (D-3111). Until wave 17 the spine placed nothing here: a box
+  # carrying README's link to the tree followed every update, an unlinked one
+  # kept whatever copy the last fallback deploy left. On a linked box the source
+  # IS the link's target, so `_inst_atomic`'s `cmp` branch keeps the link.
+  # `_uninst_tree_bins` removes it on every role, as it does every name here.
+  local api_bin=""
+  [ "$INST_ROLE" = server ] || _inst_atomic "$tree/ccd/ccrc-api" "$bin/ccrc-api" 755
+  [ "$INST_ROLE" = server ] || api_bin=", ccrc-api"
   # The GPT lane's four common executables, BEFORE the platform `if` below, so
   # on BOTH arms — but ROLE-gated by this function's ONE `if [ "$INST_ROLE"
   # != server ]` block (spec §11 says so, and why). The history sweep's shim
@@ -14226,14 +14186,14 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   # and every commit on `main` must be installable. Dependencies first and the
   # launcher last, so a session a wrapper starts mid-run finds the new launcher
   # only once what it runs is already in place.
-  # The launcher is `ccrc-codex`, NOT `ccgpt` (D-3478): on a live fleet box
-  # `$HOME/.local/bin/ccgpt` is another repository's launcher, and
-  # `_inst_atomic` has no ownership check, so a file placed there would cut
-  # every lane over at once, silently. `ccgpt-usage.py` is placed on BOTH arms
-  # so an operator can run it by hand; its timer is placed by no installer yet
-  # (`_inst_units` says why), and whether macOS gets a launchd equivalent is
-  # Plan 3's decision too. `lane_bins` is what the closing line claims, set
-  # under the same gate — both closing lines below carry it.
+  # The launcher is `ccrc-codex`, NOT `ccgpt` (D-3478): a box may still carry
+  # another repository's launcher at `$HOME/.local/bin/ccgpt` (the fleet box's
+  # copy was removed by Plan 4), and `_inst_atomic` has no ownership check, so a
+  # file placed there would cut every lane over at once, silently.
+  # `ccgpt-usage.py` is placed on BOTH arms so an operator can run it by hand;
+  # its timer, `ccrc-codex-usage@.timer`, is `_inst_units`'s on Linux (a launchd
+  # equivalent for macOS is Plan 3's decision). `lane_bins` is what the closing
+  # line claims, set under the same gate — both closing lines below carry it.
   local lane_bins="" lane_note=" (no GPT-lane executables: a server box converges nothing per account)"
   local hist_bin=""
   if [ "$INST_ROLE" != server ]; then
@@ -14293,6 +14253,14 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
     # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name, or the
     # orphan scan in `_inst_wrappers` (every role) would report it.
     _inst_atomic "$tree/ccd/ccd-scope-sweep" "$bin/ccd-scope-sweep" 755
+    # D-5241: the tool-child priority's prefix, which `ccd`'s `_spawn_start`
+    # names in CLAUDE_CODE_SHELL_PREFIX on Linux only — so systemd only here
+    # too: macOS has no /proc/self/oom_score_adj to raise. Every role, on the
+    # sweeps' terms (inert where no session runs). Left behind by a rollback it
+    # is inert: nothing names it once the session respawns without the prefix.
+    # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name, or the
+    # orphan scan in `_inst_wrappers` (every role) would report it.
+    _inst_atomic "$tree/ccd/ccd-tool-adj" "$bin/ccd-tool-adj" 755
     # The account-health probe, on the sweep's exact terms: every ROLE, but not
     # Darwin — its only runner is a systemd timer, and a binary whose runner
     # never fires would be the same no-op cap-scopes' own comment warns about.
@@ -14328,9 +14296,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-tool-adj, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-pool-sync, ccd-update-sync${hist_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-tool-adj, ccd-pool-sync, ccd-update-sync${hist_bin}${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
   fi
 }
 
@@ -14352,6 +14320,9 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   # hook's guard for it is silent, so only this order makes a half-finished
   # converge fail in the harmless direction.
   _inst_atomic "$tree/ccd/compact-card.mjs" "$HOME/.cc-sessions/compact-card.mjs" 644
+  # The approval wait's ruling verifier (coordinator-first routing, plan Task 14, D-5297), 0644 for the same reason:
+  # a script `node` runs, never executed directly. The hook sends no request without it, so either order is safe.
+  _inst_atomic "$tree/ccd/approval-verify.mjs" "$HOME/.cc-sessions/approval-verify.mjs" 644
   _inst_atomic "$tree/ccd/session-hook.sh" "$HOME/.cc-sessions/session-hook.sh" 755
   _inst_atomic "$tree/ccd/install-session-hooks.sh" "$HOME/.cc-sessions/install-session-hooks.sh" 755
   _inst_atomic "$tree/deploy/notify.sh" "$HOME/.cc-sessions/notify.sh" 755
@@ -14364,7 +14335,56 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   _inst_atomic "$tree/ccd/tmux.conf" "$HOME/.tmux.conf" 644
   _inst_keep_aside "$tree/ccd/statusline-command.sh" "$HOME/.claude/statusline-command.sh"
   _inst_atomic "$tree/ccd/statusline-command.sh" "$HOME/.claude/statusline-command.sh" 755
-  echo "install: files: session hooks, the compaction-card helper, notify.sh, tmux.conf and the statusline in place"
+  echo "install: files: session hooks, the compaction-card helper, the approval verifier, notify.sh, tmux.conf and the statusline in place"
+  _inst_approval_key
+}
+
+# ── _inst_approval_key — pin the server's approval key, once (plan Task 14, spec §6.4, D-5297, D-5487) ──
+# A child's permission hook acts only on a ruling signed by the server's Ed25519 key, verified against the copy
+# pinned HERE, `~/.ccrc/approval-signing.pub`. It is read from the server through the closed client
+# (`ccrc-api approvals key`, `GET /api/approvals/key`) and written ONCE, when absent. A later run that is offered a
+# DIFFERENT key never replaces the pinned one: it records the offer in `~/.ccrc/approval-key-offered` and says so,
+# and doctor's `approval-key` check reports `approval-key-changed` until the operator acts, so only the operator
+# rotates it (remove the pinned file by hand, then update again). An older server (no route: `404`), an unreachable
+# one, or a malformed answer pins nothing and fails nothing: the hook then sends no request, as today. Never fatal.
+# Called from `_inst_files`, not as a spine step (D-5487): under AGENT-FIRST a fleet box that moved before its server
+# served the key pins it on its NEXT update.
+_inst_approval_key() {
+  local api="$HOME/.local/bin/ccrc-api" pinned="$HOME/.ccrc/approval-signing.pub" offered="$HOME/.ccrc/approval-key-offered"
+  local out code body key tmp
+  if [ "$INST_ROLE" = server ]; then return 0; fi
+  if [ ! -x "$api" ]; then echo "install: approval key: not pinned — no ccrc-api at $api"; return 0; fi
+  out=$("$api" approvals key 2>&1) || { echo "install: approval key: not pinned — the server did not answer"; return 0; }
+  code="${out##*http }"; body="${out%http *}"
+  if [ "$code" != 200 ]; then
+    echo "install: approval key: not pinned — the server answered ${code:0:3} (a server before coordinator-first approvals has no key route)"
+    return 0
+  fi
+  key=$(jq -r 'if .v == 1 and .alg == "ed25519" and (.publicKey | type) == "string" then .publicKey else empty end' <<<"$body" 2>/dev/null) || key=""
+  case "$key" in
+    '-----BEGIN PUBLIC KEY-----'*'-----END PUBLIC KEY-----'*) : ;;
+    *) echo "install: approval key: not pinned — the server's answer is not an Ed25519 public key"; return 0 ;;
+  esac
+  key="${key%$'\n'}"$'\n'
+  mkdir -p "$HOME/.ccrc" || return 0
+  if [ ! -e "$pinned" ]; then
+    tmp="$pinned.tmp.$$"
+    if printf '%s' "$key" > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$pinned"; then
+      rm -f -- "$offered"
+      echo "install: approval key: pinned the server's key into ~/.ccrc/approval-signing.pub"
+    else
+      rm -f -- "$tmp"; echo "install: approval key: not pinned — could not write $pinned"
+    fi
+    return 0
+  fi
+  if [ "$(cat -- "$pinned" 2>/dev/null)"$'\n' = "$key" ]; then
+    rm -f -- "$offered"
+    echo "install: approval key: the pinned key is the server's"
+    return 0
+  fi
+  printf '%s' "$key" > "$offered" 2>/dev/null || :
+  echo "install: approval key: REFUSED — the server offers a different key than the one pinned in ~/.ccrc/approval-signing.pub (approval-key-changed); the pinned key stays, and only the operator rotates it: if the server's key was rotated on purpose, remove the pinned file by hand and update again"
+  return 0
 }
 
 # ── _inst_stamp_shipped — the release-artifact arm (stage 4, Task 6) ──────
@@ -14946,15 +14966,15 @@ _inst_units() {
     _inst_atomic "$tree/deploy/systemd/ccrc-models.timer" "$dir/ccrc-models.timer" 644
     # Plan 3a Task 6: the Codex lanes' usage pair, under ccrc's OWN name
     # (D-3717). NEVER `ccgpt-usage@`:
-    # on a live fleet box that template is another repository's, with an
-    # instance ENABLED, and `_inst_atomic` replaces whatever sits at its
-    # destination (install-census.test.ts refuses the prefix). Role-gated for
-    # its own reason: its one consumer is a codex lane, which runs through a
-    # per-account launcher, and a server-role box converges nothing per account
-    # (D-3111). Linux only by construction — the Darwin arm returned at the top
-    # of this function, and `_inst_units_darwin` places no timer at all
-    # (decision 17). The TEMPLATE lands on every fleet/both box, codex lane or
-    # not: a template nobody enables runs nothing. Its instances are
+    # a box may still carry that template as another repository's, with an instance
+    # ENABLED (the fleet box's copy was removed by Plan 4), and `_inst_atomic`
+    # replaces whatever sits at its destination (install-census.test.ts refuses the
+    # prefix). Role-gated for its own reason: its one consumer is a codex lane,
+    # which runs through a per-account launcher, and a server-role box converges
+    # nothing per account (D-3111). Linux only by construction — the Darwin arm
+    # returned at the top of this function, and `_inst_units_darwin` places no
+    # timer at all (decision 17). The TEMPLATE lands on every fleet/both box, codex
+    # lane or not: a template nobody enables runs nothing. Its instances are
     # `_inst_codex_usage`'s, one per codex lane, from `_inst_enable`.
     _inst_atomic "$tree/deploy/systemd/ccrc-codex-usage@.service" "$dir/ccrc-codex-usage@.service" 644
     _inst_atomic "$tree/deploy/systemd/ccrc-codex-usage@.timer" "$dir/ccrc-codex-usage@.timer" 644
@@ -14976,7 +14996,23 @@ _inst_units() {
     "$dir/claude-session@.service.d/limits.conf" 644
   _inst_atomic "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" \
     "$slice/limits.conf" 644
-  echo "install: units: $role_unit, claude-session@.service, ccd-cap-scopes.{service,timer} and both drop-ins in \$HOME/.config/systemd/user"
+  # D-5241 (spec 2026-10-16 §5.10): the victim policy's two OOMPolicy=continue
+  # drop-ins, Linux only (the Darwin arm returned above) and on every role, as
+  # the two limits.conf files are: a drop-in for a scope a box never creates
+  # applies to nothing. `tmux-spawn-.scope.d` IS SPELLED WITH ITS TRAILING
+  # HYPHEN: that is systemd's prefix form, the one name that reaches every
+  # `tmux-spawn-<uuid>.scope` (measured on throwaway scopes, plan Task 13 step
+  # 1). Without the hyphen it names a unit called `tmux-spawn.scope` that never
+  # exists. NOTHING HERE OR IN AN OLDER RELEASE DELETES THEM: a rollback below
+  # this release removes both by hand (the plan's Task 15, README's "Memory
+  # guardrails"), and `cmd_uninstall` removes them.
+  mkdir -p "$dir/tmux-spawn-.scope.d" "$dir/ccrc-tmux-server.scope.d" \
+    || _ccrc_die "cannot create the scope drop-in directories in $dir"
+  _inst_atomic "$tree/deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf" \
+    "$dir/tmux-spawn-.scope.d/50-oom-continue.conf" 644
+  _inst_atomic "$tree/deploy/systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf" \
+    "$dir/ccrc-tmux-server.scope.d/50-oom-continue.conf" 644
+  echo "install: units: $role_unit, claude-session@.service, ccd-cap-scopes.{service,timer}, both drop-ins and the two OOMPolicy=continue scope drop-ins in \$HOME/.config/systemd/user"
 }
 
 # ── _inst_codex_runtime — the Codex lanes' LiteLLM runtime (spec §5.2) ────
@@ -14997,13 +15033,13 @@ _inst_units() {
 # spine runs on to `_inst_installed`, so `cmd_update` reads "spine completed".
 #
 # THE GATE IS `exec.kind`, READ FROM accounts.json by `_codex_lanes` — never
-# accounts.sh's `CCRC_CODEX_BACKEND`, which is keyed on telemetry and names
-# today's EXTERNAL lanes (m-spine H8). A box with no codex lane does the cheap
-# part only. A roster `_codex_lanes` cannot read (rc 1, its own
-# `roster-invalid` sentence on stderr) is NOT a box with no codex lane: this
-# step says so, builds nothing, and degrades — "none" printed over a file
-# nobody read would be an overloaded empty. A server-role box converges
-# nothing per account (D-3111), and `_inst_bins` places no builder there.
+# accounts.sh's `CCRC_CODEX_BACKEND`, which is keyed on telemetry, so it names any
+# EXTERNAL lane reporting codex usage (m-spine H8; the other repository's did, retired
+# by Plan 4). A box with no codex lane does the cheap part only. A roster
+# `_codex_lanes` cannot read (rc 1, its own `roster-invalid` sentence on stderr) is NOT
+# a box with no codex lane: this step says so, builds nothing, and degrades — "none"
+# printed over a file nobody read would be an overloaded empty. A server-role box
+# converges nothing per account (D-3111), and `_inst_bins` places no builder there.
 #
 # IT SAYS THE BUILD IS RUNNING BEFORE IT RUNS: a pip build can take minutes,
 # and an install that goes silent that long reads as hung. The requirement it
@@ -15080,12 +15116,12 @@ _inst_codex_runtime() {
 
 # ── The Codex lanes' usage pair: ccrc's OWN template, and whose timer is on ─
 # Plan 3a Task 6 (spec §10, §11; rulings R2, R6). ccrc's publisher runs as
-# `ccrc-codex-usage@<id>.{service,timer}`, NEVER as `ccgpt-usage@`: on a live
-# fleet box that template name is another repository's, with an instance
-# enabled, and `_inst_atomic` replaces whatever sits at its destination — a
-# merge placing the pair there would rewrite a running timer's definition on
-# the next auto-update and point its enabled instance at a lane.json that does
-# not exist (D-3717).
+# `ccrc-codex-usage@<id>.{service,timer}`, NEVER as `ccgpt-usage@`: a box may
+# still carry that template name as another repository's, with an instance
+# enabled (the fleet box's copy was removed by Plan 4), and `_inst_atomic`
+# replaces whatever sits at its destination — a merge placing the pair there
+# would rewrite a running timer's definition on the next auto-update and
+# point its enabled instance at a lane.json that does not exist (D-3717).
 #
 # "ENABLED" IS READ FROM THE MANAGER'S OWN LINKS, never asked
 # (D-3726). Enabling a timer whose
@@ -15132,9 +15168,9 @@ _codex_usage_enabled_ids() {
   done
   return 0
 }
-# Another repository's FLAT `ccgpt-usage.timer`. It names no lane — its lane is
-# that repository's own shell default, which ccrc does not spell — so ccrc can
-# say only THAT it is enabled, never which lane's row it writes.
+# Another repository's FLAT `ccgpt-usage.timer` (removed from the fleet box by Plan 4).
+# It names no lane — its lane is that repository's own shell default, which ccrc does
+# not spell — so ccrc can say only THAT it is enabled, never which lane's row it writes.
 _codex_usage_flat_foreign() {
   _codex_usage_enabled ccgpt-usage.timer
 }
@@ -15449,16 +15485,16 @@ _inst_enable() {
 #
 # ONLY A TIER THAT IS RUNNING, VERIFIED THIS LANE'S, AND STALE — the stop is
 # identity-gated (D-3488), and only `_codex_tier_ours` = 0 is ever
-# stopped here. A lazy lane stays lazy (1 is never started). A port or unit
-# that answers as something else (2) — on the fleet box a same-named unit of
-# another repository is live today (m-livebox §3) — is left alone and said
-# so, and so, in its own sentence, is an answer this step cannot read (3). A
-# tier of this lane's that is still STARTING (4: its handle proves the lane,
-# its port does not answer yet) is never restarted: that would kill it
-# mid-import and start it again. It is named with its remedy. Stale means
-# `<tier>.started` differs from `_codex_started_json`'s answer now: a new
-# generation, or new shim code — a running Python keeps its old code after
-# the file under it is replaced. "Cannot tell" (2) is not stale, and is said.
+# stopped here. A lazy lane stays lazy (1 is never started). A port or unit that
+# answers as something else (2) — a box may carry a same-named unit of another
+# repository (m-livebox §3; none has run on the fleet box since the cutover) —
+# is left alone and said so, and so, in its own sentence, is an answer this step
+# cannot read (3). A tier of this lane's that is still STARTING (4: its handle
+# proves the lane, its port does not answer yet) is never restarted: that would
+# kill it mid-import and start it again. It is named with its remedy. Stale
+# means `<tier>.started` differs from `_codex_started_json`'s answer now: a new
+# generation, or new shim code — a running Python keeps its old code after the
+# file under it is replaced. "Cannot tell" (2) is not stale, and is said.
 #
 # ONE LOCK PER LANE, `_codex_lock`, held from the lane's first question to its
 # last act and released through `_codex_unlock`, its ONLY release, before the
@@ -16527,10 +16563,14 @@ _inst_floor() {
 #      A box with no network answers with curl's failure and changes nothing.
 #   2. BACK UP (`_upd_backup`): coord.db by VACUUM INTO (never cp — the WAL
 #      has been measured holding 10x the main file; backup-coord.mjs's
-#      header), plus dists, ccd and the units, all under ONE
-#      `~/ccrc-backups/<ts>/`. BEFORE the install touches anything, so a
-#      fault at any later step leaves the backup complete — the ordering is
-#      pinned by a test that injects exactly that fault.
+#      header), plus dists, ccd and the units, and LAST the coordination
+#      snapshot (the delegation journal and checkpoint, with the manifest
+#      `coordination-snapshot.json` that describes them and the coord.db
+#      snapshot; `deploy/coordination-snapshot.mjs capture`), all under ONE
+#      `~/ccrc-backups/<ts>/`, never `~/.ccrc/collect-lane-generation.log`.
+#      BEFORE the install touches anything, so a fault at any later step leaves
+#      the backup complete — the ordering is pinned by a test that injects
+#      exactly that fault.
 #   3. INSTALL: the `_inst_*` spine, re-run FROM THE STAGED TREE by invoking
 #      the staged `ccrc install` (role-aware, per the CCRC_ROLE this box
 #      recorded in ccrc.env). Not a re-implementation and not a sourced
@@ -16552,13 +16592,13 @@ _inst_floor() {
 #      one scoped exception to CLAUDE.md's never-touch rule). A failed
 #      preflight refuses the SWEEP, never the UPDATE: the run continues to
 #      its report, degraded and saying so.
-#   5. REPORT (`_upd_report`): from → to off the build stamps — the old one
-#      read before anything changed, the new one re-measured off disk, never
-#      inferred from what step 3 was expected to do. A `--to` DOWNGRADE also
-#      prints the coord.db restore commands from this run's backup and NEVER
-#      performs them: migrations are forward-only, and an older server READS
-#      a newer coord.db (shipped behavior) — auto-restoring would destroy
-#      rows to fix a compatibility problem the system does not have.
+#   5. REPORT (`_upd_report`): from → to off the build stamps — the old one read
+#      before anything changed, the new one re-measured off disk, never inferred
+#      from what step 3 was expected to do. A `--to` DOWNGRADE also prints the
+#      coord.db restore commands from this run's backup (the collector's journal
+#      left in place) and NEVER performs them: migrations are forward-only, and an
+#      older server READS a newer coord.db (shipped behavior) — auto-restoring
+#      would destroy rows to fix a compatibility problem the system does not have.
 #
 # THE FLEET-FIRST WARNING (`_upd_fleet_warn`, D-150 aware): on a box that
 # knows its server's address, `/api/fleet/health` saying `skewed` earns a
@@ -18280,7 +18320,14 @@ cmd_watchdog() {
     attempt=$(( attempt + 1 ))
   done
   if [ "$prc" -eq 0 ]; then
+    # D-5329 (review 589 F1): the one phase the supervisor sweep runs in is
+    # `restarting`, so an updater the watchdog closes there died during or right
+    # after its sweep. The closed report carries `died: abandoned`, or the doctor's
+    # update-sweep WARN is lost at the next tick (the report would read as no sweep
+    # recorded, a SKIP naming three causes that are not the true one). Only the two
+    # arms below that close a `restarting` report set it; every pre-sweep phase stays keyless.
     if [ -n "$tgt" ] && [ "$cur_v" = "$tgt" ] && [ -n "$cur_sha" ] && [ "$rec" = "$cur_sha" ]; then
+      [ "$phase" != restarting ] || UPD_SWEEP_WORD='died: abandoned'
       _upd_phase failed "abandoned by its updater; box measures converged at $cur_v"
       echo "watchdog: stale report ($phase, ${age}s) on a box that measures converged at $cur_v and answers healthy — recorded as abandoned; nothing was reverted"
     elif [ -n "$tgt" ] && [ "$cur_v" = "$tgt" ]; then
@@ -18293,6 +18340,7 @@ cmd_watchdog() {
       hint="$(UPD_VERSION="$cur_v" _upd_rerun_hint)"
       # No path in the sentence: single-definition allows one non-comment
       # line naming the record's path, and it is the declaration.
+      [ "$phase" != restarting ] || UPD_SWEEP_WORD='died: abandoned'   # D-5329, as above
       _upd_phase failed "abandoned by its updater; box answers healthy on $cur_v but its install never completed (the completed-install record does not name its stamp); rerun: $hint"
       echo "watchdog: stale report ($phase, ${age}s) on a box that answers healthy on $cur_v, but its install never completed — recorded as abandoned; nothing was reverted. Rerun: $hint"
     else
@@ -18578,7 +18626,7 @@ _upd_detach() {
 # rc 0, and it never calls `_ccrc_die` (which calls it). A directory at the
 # name is refused rather than moved INTO, which `mv` would do silently.
 _upd_phase() {
-  local phase="$1" detail="${2:-}" now target="null" det tmp
+  local phase="$1" detail="${2:-}" now target="null" det tmp sw=""
   now="$(date +%s 2>/dev/null)"
   [[ "$now" =~ ^[1-9][0-9]{0,10}$ ]] || now=""
   [[ "$UPD_REPORT_STARTED" =~ ^[1-9][0-9]{0,10}$ ]] || UPD_REPORT_STARTED="$now"
@@ -18591,13 +18639,21 @@ _upd_phase() {
   # `_ccrc_die` the choke point for dies.
   detail="$(_upd_redact "$detail")"
   det="$(_upd_json_str "$detail")"
+  # The sweep's record (wave 17, D-5314, D-5315): an ADDITIVE eighth key, written
+  # only while `_upd_sweep` (or cmd_watchdog's close of an abandoned `restarting`
+  # report, `died: abandoned`, D-5329) has set UPD_SWEEP_WORD, so it is absent on every
+  # phase before the sweep, on every path that never swept, and in every report
+  # an older build wrote. Absent means NOT MEASURED, never "nothing was down";
+  # `ccrc doctor`'s update-sweep check reads it that way. The server's
+  # `reportFrom` reads keys by name and ignores this one.
+  [ -z "$UPD_SWEEP_WORD" ] || sw=",\"sweep\":$(_upd_json_str "$(_upd_redact "$UPD_SWEEP_WORD")")"
   tmp="$BOX_UPDATE_JSON.tmp.$$"
   _tmp_guard "$tmp"
   if [ -n "$now" ] \
      && { [ -d "${BOX_UPDATE_JSON%/*}" ] || mkdir -p "${BOX_UPDATE_JSON%/*}"; } 2>/dev/null \
      && [ ! -d "$BOX_UPDATE_JSON" ] \
-     && { printf '{"target":%s,"phase":"%s","startedAt":%s,"updatedAt":%s,"detail":%s,"from":"%s","pid":%s}\n' \
-            "$target" "$phase" "$UPD_REPORT_STARTED" "$now" "$det" "$UPD_FROM" "${UPD_REPORT_PID:-$$}" > "$tmp"; } 2>/dev/null \
+     && { printf '{"target":%s,"phase":"%s","startedAt":%s,"updatedAt":%s,"detail":%s,"from":"%s","pid":%s%s}\n' \
+            "$target" "$phase" "$UPD_REPORT_STARTED" "$now" "$det" "$UPD_FROM" "${UPD_REPORT_PID:-$$}" "$sw" > "$tmp"; } 2>/dev/null \
      && chmod 644 "$tmp" 2>/dev/null \
      && mv -f -- "$tmp" "$BOX_UPDATE_JSON" 2>/dev/null; then
     return 0
@@ -20095,7 +20151,28 @@ _upd_backup() {
       || _ccrc_die "the coord.db snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"
   fi
   _upd_backup_set
-  local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, dists, ccd and its body, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
+  # THE COORDINATION SNAPSHOT RUNS LAST (delegation broker wave 3, O3). The two authoritative sidecars
+  # (~/.ccrc/delegation-events.log and ~/.ccrc/delegation-checkpoint.json) are described, with the coord.db snapshot taken above,
+  # by one manifest, `coordination-snapshot.json`, which the helper writes only after every member is durable. They are NOT rows
+  # of `_upd_backup_set`: that list is what arm 3 of `_upd_restore` copies back, and a rollback must never put old sidecars over
+  # live ones (they are authority, written by a running server since the snapshot). Continue ONLY after a durable manifest.
+  # The helper's success line is dropped (the result line below describes it); its failure text is kept, on one line, and goes
+  # through `_ccrc_die`, so it is redacted like every other message of an update-family run.
+  local cerr=""
+  cerr="$(node --no-warnings "$CCRC_HERE/../deploy/coordination-snapshot.mjs" capture --dir "$UPD_BACKUP_DIR" 2>&1 >/dev/null)" \
+    || _ccrc_die "the coordination snapshot failed — refusing to install with an incomplete backup (${cerr//$'\n'/ })"
+  local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, coordination sidecars and manifest, dists, ccd and its body, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
+  # A torn journal tail (D-4655): the capture never writes the journal and the server heals its own, so a tail it finds is LEFT OUT of the
+  # snapshot, which is still a valid one, and the helper says so in one warning line on its stderr. The backup succeeded; the operator is
+  # told, after the result line, in the same WARN shape every other line of this family uses. Only the helper's own line is relayed.
+  local warn_line=""
+  while IFS= read -r warn_line; do
+    case "$warn_line" in
+      "coordination snapshot: warning: "*)
+        [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && warn_line="$(_upd_redact "$warn_line")"
+        echo "$say: WARN: ${warn_line#coordination snapshot: warning: }" ;;
+    esac
+  done <<<"$cerr"
 }
 
 # ── _upd_backup_set — the ONE list of what a backup copies ────────────────
@@ -20113,6 +20190,7 @@ _upd_backup_set() {
   _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
   _upd_backup_copy "$HOME/.cc-sessions/compact-card.mjs" compact-card.mjs
+  _upd_backup_copy "$HOME/.cc-sessions/approval-verify.mjs" approval-verify.mjs
   _upd_backup_copy "$HOME/.cc-sessions/notify.sh"  notify.sh
   # R34 (final whole-branch review): since `ccrc memory --apply`,
   # `~/.ccrc/memory` is the SOLE live copy of every project's durable
@@ -20166,9 +20244,9 @@ _upd_backup_copy() {
 # `_upd_backup_pairs` — `<class>\t<source>\t<name>` per row of `_upd_backup_set`,
 # every row whether or not it exists (arm 3 checks the BACKUP's side).
 # coord.db is no row: it goes through backup-coord.mjs and is never restored
-# (design §11 — an older server reads a newer db, the `current >
-# COORD_SCHEMA_VERSION` arm's own "Rule 3" comment in
-# `server/src/coord/db.ts`).
+# (design §11 — an older server reads a newer db, `server/src/coord/db.ts`'s
+# Rule 3). Nor is `~/.ccrc/collect-lane-generation.log`: no backup copies it,
+# so no arm puts an older copy back (path-identity spec §5.3).
 _upd_backup_pairs() {
   local UPD_BACKUP_LISTING=1
   _upd_backup_set
@@ -20409,12 +20487,12 @@ _upd_restore_arm2() {
   return 0
 }
 
-# Arm 3 — best effort, and said so. Removes the completed-install record,
-# copies every `tree` row of this run's backup back (never `data`, never
-# coord.db), then restarts the role's main unit so it runs the copied-back
-# dists. The tree is usually MIXED: shared/, ccd/ and node_modules are the
-# new install's, the dists the old one's — and the remedy for that is
-# deploy.sh, which the sentence names.
+# Arm 3 — best effort, and said so. Removes the completed-install record, copies
+# every `tree` row of this run's backup back (never `data`, never coord.db,
+# never the collector's journal, which no backup holds), then restarts the
+# role's main unit so it runs the copied-back dists. The tree is usually MIXED:
+# shared/, ccd/ and node_modules are the new install's, the dists the old one's
+# — and the remedy for that is deploy.sh, which the sentence names.
 #
 # THE VERDICT IS THREE CASES, AND THE STAGED SHA DECIDES MIXED (fix round 2,
 # F1, review 167, and the coordinator's ruling on review 173's F1r, W6 Task 8A):
@@ -20997,9 +21075,16 @@ _upd_legacy_target() {   # <tag> -> 0, or dies before anything is installed
 # (wave 10), so the arms differ there (D-3949, D-3975) (single-definition's
 # sweep pin holds the Linux halves together; the Darwin halves are pinned by
 # the same file's Darwin-arm test).
-_ccrc_job_pid() {   # <unit> -> the job's pid on stdout, or nothing when it has none
-  local out
-  out="$(_svc_launchctl print "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null)" || return 0
+# `_ccrc_job_pid` tells a `launchctl print` that FAILED from a job launchd does not hold (wave 16, R10j; D-5141): 113 is
+# launchd's one positive "not loaded" answer (`_svc_is_active`'s rule), so it prints nothing, as a job with no pid does;
+# any other non-zero exit prints `!<rc>`, a question never answered. It runs inside `$(…)`, so the answer rides stdout.
+_ccrc_job_pid() {   # <unit> -> the job's pid on stdout; nothing when it has none or is not loaded (113); `!<rc>` when print failed
+  local out rc=0
+  out="$(_svc_launchctl print "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    [ "$rc" -eq 113 ] || printf '!%s' "$rc"
+    return 0
+  fi
   case "$out" in
     *"pid = "*) out="${out#*pid = }"; printf '%s' "${out%%[!0-9]*}" ;;
   esac
@@ -21009,17 +21094,25 @@ _ccrc_job_stayed_up() {   # <unit>... -> 0 iff ONE pid held across ONE shared wi
   # One settle, one pid read per job, one window, a second read per job. With ONE unit this is the call sequence and
   # the CCRC_STAYED_DETAIL the gate and `_inst_enable` have always had. With several: CCRC_STAYED_BAD lists the jobs
   # whose pid did not hold, CCRC_STAYED_WHY their details in the same order, and CCRC_STAYED_DETAIL is the first one's.
-  local u i=0 d p2
+  # Wave 16 (R18(b); D-5139, D-5140): no unit is a refusal, never a vacuous pass, and each sleep runs in the background
+  # under a `wait`, which an INT to this shell alone interrupts at once (a foreground `sleep` defers it to the sleep's
+  # end). The orphaned `sleep` ends by itself. A caller that traps another signal and returns would cut the window short:
+  # no caller does. An unmeasured read (`!<rc>`, D-5141) never holds, even against an equal one.
+  local u i=0 d p2 a b
   local -a p1=()
   CCRC_STAYED_BAD=(); CCRC_STAYED_WHY=(); CCRC_STAYED_DETAIL=""
-  sleep "${CCRC_VERIFY_SETTLE:-3}"
+  [ "$#" -gt 0 ] || return 1
+  sleep "${CCRC_VERIFY_SETTLE:-3}" & wait $!
   for u in "$@"; do p1+=("$(_ccrc_job_pid "$u")"); done
-  sleep "${CCRC_VERIFY_WINDOW:-5}"
+  sleep "${CCRC_VERIFY_WINDOW:-5}" & wait $!
   for u in "$@"; do
     p2="$(_ccrc_job_pid "$u")"
-    d="pid ${p1[i]:-none} -> ${p2:-none} across ${CCRC_VERIFY_SETTLE:-3}s+${CCRC_VERIFY_WINDOW:-5}s"
+    a="${p1[i]:-none}"; b="${p2:-none}"
+    case "$a" in '!'*) a="unmeasured (launchctl print exited ${a#!})" ;; esac
+    case "$b" in '!'*) b="unmeasured (launchctl print exited ${b#!})" ;; esac
+    d="pid $a -> $b across ${CCRC_VERIFY_SETTLE:-3}s+${CCRC_VERIFY_WINDOW:-5}s"
     [ "$#" -eq 1 ] && CCRC_STAYED_DETAIL="$d"
-    if [ -z "${p1[i]}" ] || [ "${p1[i]}" != "$p2" ]; then
+    if [ -z "${p1[i]}" ] || [ "${p1[i]}" != "$p2" ] || [ "${p1[i]:0:1}" = '!' ]; then
       CCRC_STAYED_BAD+=("$u"); CCRC_STAYED_WHY+=("$d")
       [ -n "$CCRC_STAYED_DETAIL" ] || CCRC_STAYED_DETAIL="$d"
     fi
@@ -21035,6 +21128,7 @@ _ccrc_job_stayed_up() {   # <unit>... -> 0 iff ONE pid held across ONE shared wi
 # pipeline or `( … )`: `_ccrc_die` reports only from the run's own shell (`$BASHPID = $$`), so a die there would end
 # that subshell alone and the sweep would print its success line over a failed unit (the R12 critic's I8).
 _upd_sweep_die() {
+  UPD_SWEEP_WORD="died: sweep"   # R10k's record of a die (wave 17, D-5315): the failed report carries it; the detail says where
   if [ "${UPD_REPORTING:-0}" = 1 ] && ! _upd_report_is_mine; then
     echo "update: report: skipped — ~/.ccrc/update.json no longer names this run's pid (${UPD_REPORT_PID:-$$}); a newer update took the lock this run released before the sweep, and this run's failed report would have overwritten its in-flight one"
     UPD_REPORTING=0
@@ -21065,7 +21159,7 @@ _upd_sweep_launch() {
 }
 # _upd_sweep_stop <vdir> — stop the launcher of the batch in flight and wait for it, so that every job it forked has its
 # pid recorded before `_upd_sweep_kill` looks (wave 11, D-3988). The launcher's pid is `$vdir/launcher.proc`, written by
-# the sweep right after it starts the launcher and truncated right after it is reaped (a stale pid is never signalled).
+# the sweep right after it starts the launcher and truncated right after it is reaped (an INT in the few builtins between can TERM the reaped pid once).
 # It is not named `*.pid`: `_upd_sweep_kill` signals the process group of every such file.
 # It creates `$vdir/stop`; if the launcher has finished its loop (`looped`) it is only waiting for its jobs, so it is
 # TERMed; otherwise it reads the stop file at its next iteration, ends, and never waits for its jobs. BOUNDED either
@@ -21120,7 +21214,29 @@ _upd_sweep_spo() {
   while IFS= read -r l || [ -n "$l" ]; do case "$l" in 'stopped on purpose: '*) return 0 ;; esac; done < "$1"
   return 1
 }
+# `_upd_sweep_set_down [<unit>...]` — sets UPD_SWEEP_WORD from the units the
+# sweep found already `activating` or `failed` before its restart, whatever
+# they read after it (Reading 9's doctor half, wave 17, D-5314): the sweep
+# never verifies one of them, and one that reads `active` after try-restart is
+# usually a crash-looping Type=simple unit caught between restarts. `ok` when
+# there are none, else `down: <n>: <id> ...`, the COUNT first and WHOLE ids
+# only, as many as fit in `_upd_json_str`'s 200 characters, so the report never
+# carries a cut id that would read as a unit of its own. Ids are the unit names
+# without `claude-session@` and `.service`.
+_upd_sweep_set_down() {
+  local u id word
+  if [ "$#" -eq 0 ]; then UPD_SWEEP_WORD="ok"; return 0; fi
+  word="down: $#:"
+  for u in "$@"; do
+    id="${u#claude-session@}"; id="${id%.service}"
+    [ $(( ${#word} + 1 + ${#id} )) -le 200 ] || break
+    word="$word $id"
+  done
+  UPD_SWEEP_WORD="$word"
+}
 _upd_sweep() {
+  UPD_SWEEP_WORD=""   # wave 17, D-5314: set at each return below, and by `_upd_sweep_die` (`died: sweep`, D-5315)
+  local -a down=()    # Darwin: the start-limit units the sweep skipped (Linux records `prior` itself)
   # ── THE DARWIN ARM ──────────────────────────────────────────────────────
   # Same job, same guard, different observable — and the verify is not quite the
   # Linux one: no deliberate-stop classifier (D-3949), and a re-check of each
@@ -21159,6 +21275,7 @@ _upd_sweep() {
       # clean update. The remedy tail names the per-session fix the same way
       # the Linux line names its try-restart.
       echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted. Fix the job files above (ccd start <id> rewrites each), then restart per session: launchctl kickstart -k $(_svc_domain)/<label>"
+      UPD_SWEEP_WORD="refused: job-file"   # R10k, D-5315
       return 0
     fi
     # `_svc_try_restart`'s `_svc_is_loaded || return 0` skips a job launchd no
@@ -21174,6 +21291,7 @@ _upd_sweep() {
       if [ "$(_svc_is_active "$u")" = failed ]; then
         sid="${u#claude-session@}"; sid="${sid%.service}"
         echo "update: warning: $u is FAILED (start-limit stamp) — the sweep skipped it and did not verify it. On the box: ccd start $sid (it clears the stamp and re-bootstraps the job)" >&2
+        down+=("$u")
         continue
       fi
       _svc_is_loaded "$u" || continue
@@ -21217,6 +21335,7 @@ _upd_sweep() {
     else
       echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (AbandonProcessGroup verified in every job file; ${#kicked[@]} restarted and re-measured still up)"
     fi
+    _upd_sweep_set_down ${down[@]+"${down[@]}"}
     return 0
   fi
   # The bus contingency `_inst_enable` carries, for the same reason: without
@@ -21224,8 +21343,8 @@ _upd_sweep() {
   # for a reason that has nothing to do with this box.
   : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
   : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
-  local u km listing lu _ll la _lr lrc=0
-  local -a before=() after=() failed=()
+  local u km listing lu _ll la _lr lrc=0 fb fin pi pin pb
+  local -a before=() after=() failed=() prior=() priorw=() pback=()
   listing="$(systemctl --user list-units "claude-session@*" --plain --no-legend)" || lrc=$?
   # fix round 1 item 1 (D-3599): the plan's Task 5 code dropped this rc with
   # `|| :` and built `before` from this listing alone, so a transient failure
@@ -21237,14 +21356,18 @@ _upd_sweep() {
   if [ "$lrc" -ne 0 ]; then
     echo "update: sweep REFUSED — systemctl --user list-units \"claude-session@*\" --plain --no-legend failed (rc $lrc), so the supervisors to be checked could not be listed." >&2
     echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted. Once systemctl --user list-units 'claude-session@*' answers, confirm KillMode=process on each unit, then restart them."
+    UPD_SWEEP_WORD="refused: listing"   # R10k, D-5315
     return 0
   fi
   # Wave 8 item G: the supervisors the restart below can touch are the ones
   # ACTIVE before it runs — read from THIS listing's ACTIVE column (`--plain
   # --no-legend`: UNIT LOAD ACTIVE SUB DESCRIPTION), so no systemctl call is
-  # added, and the argv order below is unchanged.
+  # added, and the argv order below is unchanged. A unit that column shows
+  # `activating` or `failed` goes to `prior`, with its word: never verified,
+  # and named below (wave 16, D-5136).
   while read -r lu _ll la _lr; do
-    [ "$la" = active ] && before+=("$lu")
+    if [ "$la" = active ]; then before+=("$lu")
+    else case "$la" in activating|failed) prior+=("$lu"); priorw+=("$la") ;; esac; fi
   done <<< "$listing"
   for u in $(printf '%s\n' "$listing" | awk '{print $1}') \
            claude-session@ccrc-update-preflight.service; do
@@ -21252,6 +21375,7 @@ _upd_sweep() {
     if [ "$km" != "KillMode=process" ]; then
       echo "update: sweep REFUSED — $u resolves to ${km:-no answer from systemd}, and the sweep needs KillMode=process: systemds default is control-group, and whenever the tmux server placement falls back to a bare create every session on this box is a child of ONE tmux server sitting in a claude-session@ cgroup, so try-restart would kill the lot. A drop-in under $BOX_UNIT_DIR/claude-session@.service.d/ can set this without the base unit changing a byte." >&2
       echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted. Fix the KillMode above, then: systemctl --user try-restart 'claude-session@*'"
+      UPD_SWEEP_WORD="refused: killmode"   # R10k, D-5315
       return 0
     fi
   done
@@ -21264,8 +21388,13 @@ _upd_sweep() {
     || _upd_sweep_die "systemctl --user try-restart claude-session@* failed — the supervisors' state is now mixed; read: systemctl --user list-units 'claude-session@*'"
   # try-restart is a no-op on a failed unit (its own man page), so a
   # pre-existing failed session was neither restarted nor verified — not this
-  # update's doing, must not fail it, must not be silent either.
+  # update's doing, must not fail it, must not be silent either. A unit in
+  # `before` that reads failed here WAS restarted: it is the verify's below
+  # (D-3984), or item G's line when that cannot run, so it gets neither this
+  # line nor a place in `failed` (wave 16, D-5135; item 3 of 2026-10-06 01:29).
   for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk '{print $1}'); do
+    fin=0; for fb in ${before[@]+"${before[@]}"}; do [ "$fb" = "$u" ] && { fin=1; break; }; done
+    [ "$fin" -eq 0 ] || continue
     echo "update: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2
     failed+=("$u")
   done
@@ -21297,12 +21426,19 @@ _upd_sweep() {
   if [ "$arc" -ne 0 ] && [ "${#before[@]}" -gt 0 ]; then
     echo "update: warning: the post-restart set could not be listed (systemctl --user list-units \"claude-session@*\" --state=active --plain --no-legend failed, rc $arc) — no supervisor was verified." >&2
     echo "update: DEGRADED: every live claude-session@ supervisor was restarted, and none of them was verified by this sweep."
+    UPD_SWEEP_WORD="unverified: relist"   # R10k, D-5315
     return 0
   fi
   local -a units=() missing=() crash=() unrec=() ncfail=()
   local vdir="" vjobs="${CCRC_SWEEP_VERIFY_JOBS:-128}" i j k r lrc d o cu _cl cw _cs _cd clist crc=0 m inb cb kc=0 mn=0 rfail="" lpid="" ltrap=""
   [[ "$vjobs" =~ ^[1-9][0-9]{0,3}$ ]] || vjobs=128
-  for u in $(printf '%s\n' "$after_listing" | awk '{print $1}'); do units+=("$u"); done
+  # A unit the pre-restart listing showed `activating` or `failed` is never verified, even when this listing shows it
+  # active (wave 16, D-5136; one absent from that listing, or shown in any other state, is still verified). Type=simple
+  # reads `active` the moment try-restart forks it, so a crash-looping one is usually here: it goes to `pback`, named below.
+  for u in $(printf '%s\n' "$after_listing" | awk '{print $1}'); do
+    pin=0; for pb in ${prior[@]+"${prior[@]}"}; do [ "$pb" = "$u" ] && { pin=1; break; }; done
+    if [ "$pin" -eq 1 ]; then pback+=("$u"); else units+=("$u"); fi
+  done
   if [ -f "$verify" ]; then
     for cb in ${before[@]+"${before[@]}"}; do
       inb=0; for u in ${units[@]+"${units[@]}"}; do [ "$u" = "$cb" ] && { inb=1; break; }; done
@@ -21414,11 +21550,6 @@ _upd_sweep() {
     [ -z "$vdir" ] || rm -rf -- "$vdir"
   fi
   after=(${units[@]+"${units[@]}"})
-  if [ -n "$rfail" ]; then
-    _upd_sweep_die "sweep: $kc of ${#units[@]} supervisors did not stay up on a first verify; a re-check failed, $mn left un-re-checked — install complete, nothing was rolled back (first failed re-check: $rfail); read: systemctl --user status $rfail"
-  elif [ "${#ncfail[@]}" -gt 0 ]; then
-    _upd_sweep_die "sweep: ${#ncfail[@]} of ${#units[@]} supervisors exited non-zero after a 'stopped on purpose' line, never re-checked — install complete, nothing was rolled back (first: ${ncfail[0]}); read: systemctl --user status ${ncfail[0]}"
-  fi
   # Wave 8 item G: a claim that "every … now runs the ccd this update
   # installed" is false for a unit that WAS active before try-restart and is
   # neither active nor failed after it — this sweep did not verify it, and
@@ -21430,6 +21561,30 @@ _upd_sweep() {
     for a in ${after[@]+"${after[@]}"} ${failed[@]+"${failed[@]}"}; do [ "$a" = "$b" ] && { seen=1; break; }; done
     [ "$seen" -eq 1 ] || echo "update: warning: $b was active before try-restart and is not active after it — this sweep did not verify it. On the box: systemctl --user status $b" >&2
   done
+  # Reading 9's sweep half (the operator, 2026-10-15: warn only; wave 16, D-5136): a unit the pre-restart listing showed
+  # `activating` or `failed` is NAMED, once, and is never verified and never fails this update. One that item 3 named
+  # above is in `failed` and gets no second line. One the post-restart listing shows active is in `pback`. Only when
+  # that listing was READ (`arc` 0): an unread one proves nothing about "after it". Above the zero line, so a box
+  # with nothing active before still names it.
+  for ((pi = 0; arc == 0 && pi < ${#prior[@]}; pi++)); do
+    b="${prior[pi]}"; seen=""
+    for a in ${pback[@]+"${pback[@]}"}; do [ "$a" = "$b" ] && { seen=back; break; }; done
+    for a in ${failed[@]+"${failed[@]}"}; do [ "$a" = "$b" ] && { seen=failed; break; }; done
+    case "$seen" in
+      back) echo "update: warning: $b was already '${priorw[pi]}' before try-restart and reads 'active' after it — it is named, not verified, and does not fail this update (a supervisor already 'activating' or 'failed' before the restart is never verified; wave 16, D-5136). On the box: systemctl --user status $b" >&2 ;;
+      failed) ;;
+      *) echo "update: warning: $b was already '${priorw[pi]}' before try-restart and is not active after it — it is named, not verified, and does not fail this update (a supervisor already 'activating' or 'failed' before the restart is never verified; wave 16, D-5136). On the box: systemctl --user status $b" >&2 ;;
+    esac
+  done
+  if [ -n "$rfail" ]; then
+    _upd_sweep_die "sweep: $kc of ${#units[@]} supervisors did not stay up on a first verify; a re-check failed, $mn left un-re-checked — install complete, nothing was rolled back (first failed re-check: $rfail); read: systemctl --user status $rfail"
+  elif [ "${#ncfail[@]}" -gt 0 ]; then
+    _upd_sweep_die "sweep: ${#ncfail[@]} of ${#units[@]} supervisors exited non-zero after a 'stopped on purpose' line, never re-checked — install complete, nothing was rolled back (first: ${ncfail[0]}); read: systemctl --user status ${ncfail[0]}"
+  fi
+  # The record (wave 17, D-5314): every unit already `activating` or `failed`
+  # before the restart, read from the PRE-restart listing, so it needs no
+  # post-restart one (with `before` non-empty an unread one returned above).
+  _upd_sweep_set_down ${prior[@]+"${prior[@]}"}
   if [ "${#before[@]}" -eq 0 ]; then
     echo "update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart (KillMode=process verified before the restart; panes untouched)"
     return 0
@@ -21491,6 +21646,7 @@ _upd_report() {   # $1 = old description, $2 = old version ("" when unknown)
       echo "update: rollback:   $([ "$CCD_OS" = darwin ] && printf 'launchctl bootout %s/%s' "$(_svc_domain)" "$(_svc_label ccrc.service)" || printf 'systemctl --user stop ccrc.service')"
       echo "update: rollback:   cp $(_upd_redact "$UPD_BACKUP_DIR")/coord.db ~/.ccrc/coord.db"
       echo "update: rollback:   $(_svc_restart_hint ccrc.service)"
+      echo "update: rollback:   (leave ~/.ccrc/collect-lane-generation.log in place: no backup holds it and no arm restores it; if the collector switch changed after this snapshot, the restored coord.db leaves the temp-root collector stopped until a fresh choice in Settings)"
     else
       echo "update: rollback:   (no coord.db existed before this run — there is nothing to restore)"
     fi
@@ -22040,19 +22196,73 @@ cmd_backup() {
   _bak_prune
 }
 
+# ── cmd_coordination_snapshot — validate, restore or recover a coordination snapshot (delegation broker wave 3, O3) ──
+# `ccrc coordination-snapshot validate --from <timestamp-directory>` classifies a `~/ccrc-backups/<ts>/` directory by
+# `deploy/coordination-snapshot.mjs` (`v1`, `legacy`, `none`, `invalid`; exit 0, 0, 1, 2; and a second line `data: yes|no`).
+# `restore --from <dir>` replaces the live delegation journal, checkpoint and coord.db (with its WAL and SHM) from a VALID v1
+# snapshot, as one set: it validates the source first, requires ccrc.service MEASURED inactive (running and unmeasurable both
+# refuse; asked again once the marker is durable), stages, publishes an active restore marker (delegation recovery refuses to run
+# while it stands, and so does the server's boot, before coord.db opens), replaces, and makes `COMMITTED` durable before it cleans up.
+# `recover` finishes an interrupted restore from that marker: before `COMMITTED` back to the old set, after it forward to the new.
+# Both take ~/.ccrc/update.lock (`_ver_lock_try`) for the whole act, so `ccrc update` cannot restart the unit mid-restore.
+# The verb is a thin door: the helper is the whole implementation, and its exit code is this verb's. Its OWN refusals follow the
+# brief's table, not ccrc's house "2 is a usage error": a usage error, a missing node and a missing helper are 70 (a plain
+# `exit 70`: `_ccrc_die` is hard-wired to 1, which is `none`). It is NEVER reached by `ccrc update`, `ccrc rollback` or arm 3 of
+# `_upd_restore`: a rollback does not carry the sidecars.
+cmd_coordination_snapshot() {
+  local sub="${1:-}" helper="$CCRC_HERE/../deploy/coordination-snapshot.mjs"
+  case "$sub" in
+    -h|--help) usage; exit 0 ;;
+    validate|restore)
+      shift
+      [ $# -eq 2 ] && [ "$1" = --from ] && [ -n "$2" ] \
+        || { printf '%s\n' "usage: $PROG coordination-snapshot $sub --from <timestamp-directory>" >&2; exit 70; }
+      ;;
+    recover)
+      shift
+      [ $# -eq 0 ] || { printf '%s\n' "usage: $PROG coordination-snapshot recover" >&2; exit 70; }
+      ;;
+    *) printf '%s\n' "usage: $PROG coordination-snapshot {validate --from <timestamp-directory>|restore --from <timestamp-directory>|recover}" >&2; exit 70 ;;
+  esac
+  command -v node >/dev/null 2>&1 \
+    || { printf '%s\n' "$PROG: node is required by 'ccrc coordination-snapshot' (it runs deploy/coordination-snapshot.mjs) but is not on PATH — nothing was read or changed" >&2; exit 70; }
+  [ -f "$helper" ] \
+    || { printf '%s\n' "$PROG: coordination-snapshot: the helper deploy/coordination-snapshot.mjs is missing from this tree — nothing was read or changed" >&2; exit 70; }
+  if [ "$sub" != validate ]; then
+    local lrc=0
+    _ver_lock_try || lrc=$?
+    case "$lrc" in
+      0) ;;
+      1) printf '%s\n' "$PROG: coordination-snapshot $sub: another ccrc run holds ~/.ccrc/update.lock — nothing was changed" >&2; exit 2 ;;
+      *) printf '%s\n' "$PROG: coordination-snapshot $sub: ~/.ccrc/update.lock could not be taken (no flock, or it cannot be measured) — nothing was changed" >&2; exit 2 ;;
+    esac
+  fi
+  local rc=0
+  node --no-warnings "$helper" "$sub" "$@" || rc=$?
+  exit "$rc"
+}
+
 # `_keep_ok <value>` and `_keep_why <knob> <value>` — the ONE validator for
-# every KEEP knob (review 179 F6; D-3423): `CCRC_BACKUP_KEEP` below,
+# every KEEP knob in this file (review 179 F6; D-3423; `deploy/deploy.sh`'s
+# `prune_backups` spells the same DIGIT test a second time on purpose, held
+# equal by deploy-verify's D1c, D-5142; deploy.sh alone also refuses an
+# all-zeros KEEP, because its remote prune has no keeps, D-5144, wave 17's
+# Reading 4): `CCRC_BACKUP_KEEP` below,
 # `CCRC_VERSIONS_KEEP` in `_ver_gc` and `cmd_versions`. A whole number of one
 # to four digits, `0` to `9999`, and nothing else. `^[0-9]+$` let
 # `99999999999999999999` through, and there `[ -le ]`, `[ -lt ]` and bash
 # arithmetic fail or WRAP (`18446744073709551615` is -1), which read as "remove
 # everything" — an operator who meant "keep everything" got the opposite. Four
 # digits is far past any number of trees or backups a box keeps, and no value
-# that long can overflow anything. `_keep_why` is the refusal's own sentence:
+# that long can overflow anything. The class is ENUMERATED, `[0123456789]`, never
+# the range `[0-9]`: under a UTF-8 locale bash's `=~` range accepts non-ASCII
+# decimal digits (U+0663, U+FF15), which then fail as an arithmetic error
+# instead of this sentence (R34, D-5320); the enumeration needs no locale.
+# `_keep_why` is the refusal's own sentence:
 # it names the knob and the value, the value sanitised as `_upd_validate_timeout`
 # does (a non-printable byte becomes `?`) and capped at 32 characters, so a hostile
 # or absurd value cannot fill a line or drive a terminal.
-_keep_ok() { [[ "$1" =~ ^[0-9]{1,4}$ ]]; }
+_keep_ok() { [[ "$1" =~ ^[0123456789]{1,4}$ ]]; }
 _keep_why() {   # <knob> <value>
   local val="$2"
   [ "${#val}" -le 32 ] || val="${val:0:32}..."
@@ -22069,7 +22279,10 @@ _bak_list() {
   shopt -q nullglob && had_nullglob=1
   shopt -s nullglob
   for d in "$BOX_BACKUP_ROOT"/$BAK_TS_PAT; do   # $BAK_TS_PAT unquoted: it is the glob
-    [ -d "$d" ] && BAK_DIRS+=("$d")
+    # A link is never a backup (R10i, D-5319): `[ -d ]` follows one, so a
+    # timestamp-named link was counted in the newest-N window and could hold a
+    # keep through its target. `_ver_list` applies the same rule to versions.
+    { [ -d "$d" ] && [ ! -L "$d" ]; } && BAK_DIRS+=("$d")
   done
   [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
   return 0
@@ -22083,8 +22296,9 @@ _bak_list() {
 # expansion is already lexically sorted, which for this shape IS
 # chronological order.
 # Wave 9 R10g (D-3825, D-3826): the removal set is cut by `_bak_keepset`, the helper `_bak_gc` shares — this run's own dir,
-# every dir named at or after UPD_BAK_FLOOR (`cmd_backup` sets it before it backs up) and the newest earlier tree backup
-# and coord.db snapshot are never removed — and the prune holds ~/.ccrc/update.lock. Where `_bak_gc` WARNs and returns,
+# every dir named at or after UPD_BAK_FLOOR (`cmd_backup` sets it before it backs up), the newest earlier tree backup, the newest
+# earlier valid coordination snapshot and the newest earlier one that holds data (D-4641) are never removed — and the prune holds
+# ~/.ccrc/update.lock. Where `_bak_gc` WARNs and returns,
 # this verb says "prune skipped" and returns 0: the backup was taken, and its echo and its invalid-KEEP refusal (the two
 # `_ccrc_die`s) are unchanged. A floor that is not recorded (only a direct call reaches it) prunes nothing.
 _bak_prune() {
@@ -22105,14 +22319,17 @@ _bak_prune() {
     *) echo "backup: prune skipped — ~/.ccrc/update.lock could not be measured; nothing was pruned"; return 0 ;;
   esac
   _bak_list
-  local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name
-  _bak_keepset   # cannot fail here: the floor was checked above
+  local n=${#BAK_DIRS[@]} i d
+  local krc=0
+  _bak_keepset || krc=$?   # rc 1 cannot happen here (the floor was checked above); rc 2 is the classifier failing
+  if [ "$krc" -ne 0 ]; then
+    echo "backup: prune skipped — the coordination snapshot classifier failed (${BAK_SNAP_WHY:-no reason given}), so nothing can say which backup holds the newest valid snapshot; nothing was pruned"
+    if [ "$took" -eq 1 ]; then _upd_unlock; fi
+    return 0
+  fi
   for ((i = 0; i < n - keep; i++)); do
-    d="${BAK_DIRS[$i]}"; name="${d##*/}"
-    [ "$d" = "$UPD_BACKUP_DIR" ] && continue
-    [ "$((10#${name//-/}))" -ge "$floor" ] && continue
-    [ "$d" = "$BAK_KEEP_SNAP" ] && continue
-    [ "$d" = "$BAK_KEEP_TREE" ] && continue
+    d="${BAK_DIRS[$i]}"
+    _bak_removable "$d" || continue
     rm -rf -- "${BAK_DIRS[$i]}" \
       || _ccrc_die "could not prune ${BAK_DIRS[$i]} — the newer backups above it are all intact"
     echo "backup: pruned ${BAK_DIRS[$i]} (keeping the newest $keep timestamped backups; hand-made siblings are never touched)"
@@ -22121,30 +22338,110 @@ _bak_prune() {
   return 0
 }
 
-# ── _bak_keepset — which two earlier dirs a prune keeps beyond the floor (wave 9 R10g, D-3825) ──
-# The ONE spelling of the two extra keeps' SELECTION, shared by `_bak_gc` and `_bak_prune`: which earlier coord.db snapshot
-# and which earlier tree backup are kept, and the own-dir and floor pair that selection skips over. That is all that is
-# shared (fix round 1, F4). The four-line removal filter that APPLIES the keeps — own dir, floor, snapshot, tree — is
-# written twice, once in each pruner's loop, and nothing pins the two copies to each other.
-# The two extra keeps are chosen among dirs NOT already protected (below the floor, not this run's own): the protected
-# ones are kept anyway, so picking one of them would protect nothing. READS BAK_DIRS (`_bak_list` first), UPD_BACKUP_DIR and
-# UPD_BAK_FLOOR; WRITES BAK_KEEP_SNAP (the newest earlier coord.db snapshot) and BAK_KEEP_TREE (the newest earlier tree
-# backup), "" when none. rc 1 when UPD_BAK_FLOOR is not a timestamp, WITHOUT touching either out-param. It declares its
-# own floor and n: the callers' locals are not its to read. Links are counted as `_bak_list` counts them (R10i, deferred).
+# ── _bak_keepset — which three earlier dirs a prune keeps beyond the floor (wave 9 R10g, D-3825) ──
+# The ONE spelling of the extra keeps' SELECTION, shared by `_bak_gc` and `_bak_prune`: which earlier coordination snapshot,
+# which earlier snapshot that holds data, and which earlier tree backup are kept, and the own-dir and floor pair that selection
+# skips over. That is all that is shared (fix round 1, F4). The removal filter that APPLIES the keeps — own dir, floor, snapshot,
+# data snapshot, tree — is spelled ONCE, in `_bak_removable` below (R14(a), D-5318), and both pruners' loops call it.
+# The extra keeps are chosen among dirs NOT already protected (below the floor, not this run's own): the protected
+# ones are kept anyway, so picking one of them would protect nothing. They are INDEPENDENT of each other and of the newest-N keep
+# (delegation broker wave 3, O3): a dir is "the newest snapshot" by what the classifier says of its coordination snapshot,
+# "the newest data-bearing snapshot" by the classifier's `data: yes` (a v1 snapshot with any member present, or a legacy one; so a
+# newer snapshot of an EMPTY box never evicts the last one that holds data, D-4641), and "the newest tree backup" by its
+# `server-dist`/`agent-dist` entry, each searched on its own, so a dir kept as one is never what keeps, or evicts, another.
+# READS BAK_DIRS (`_bak_list` first), UPD_BACKUP_DIR and UPD_BAK_FLOOR; WRITES BAK_KEEP_SNAP (the newest earlier valid coordination
+# snapshot), BAK_KEEP_DATA (the newest earlier valid one that holds data) and BAK_KEEP_TREE (the newest earlier tree backup), ""
+# when none. rc 1 when UPD_BAK_FLOOR is not a timestamp, WITHOUT touching an out-param; rc 2 when the classifier itself FAILED
+# (`_bak_snap_class`; BAK_SNAP_WHY says why), all out-params "" — the caller prunes NOTHING and says why. It declares its
+# own floor and n: the callers' locals are not its to read. A link is never a backup: `_bak_list` lists none (R10i, D-5319).
 _bak_keepset() {
-  local floor n i d name
+  local floor n i d name src
   [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
   floor=$((10#${UPD_BAK_FLOOR//-/})); n=${#BAK_DIRS[@]}
-  BAK_KEEP_SNAP=""; BAK_KEEP_TREE=""
+  BAK_KEEP_SNAP=""; BAK_KEEP_DATA=""; BAK_KEEP_TREE=""
   for ((i = n - 1; i >= 0; i--)); do
     d="${BAK_DIRS[$i]}"; name="${d##*/}"
     [ "$d" = "$UPD_BACKUP_DIR" ] && continue
     [ "$((10#${name//-/}))" -ge "$floor" ] && continue
-    if [ -z "$BAK_KEEP_SNAP" ] && [ -f "$d/coord.db" ]; then BAK_KEEP_SNAP="$d"; fi
+    if [ -z "$BAK_KEEP_DATA" ]; then
+      src=0; _bak_snap_class "$d" || src=$?
+      case "$src" in
+        0)
+          [ -n "$BAK_KEEP_SNAP" ] || BAK_KEEP_SNAP="$d"
+          [ "$BAK_SNAP_DATA" -eq 1 ] && BAK_KEEP_DATA="$d"
+          ;;
+        1) ;;
+        *) BAK_KEEP_SNAP=""; BAK_KEEP_DATA=""; BAK_KEEP_TREE=""; return 2 ;;
+      esac
+    fi
     if [ -z "$BAK_KEEP_TREE" ] && { [ -e "$d/server-dist" ] || [ -e "$d/agent-dist" ]; }; then BAK_KEEP_TREE="$d"; fi
-    [ -n "$BAK_KEEP_SNAP" ] && [ -n "$BAK_KEEP_TREE" ] && break
+    [ -n "$BAK_KEEP_DATA" ] && [ -n "$BAK_KEEP_TREE" ] && break
   done
   return 0
+}
+
+# `_bak_removable <dir>` — rc 0 when a pruner may remove <dir>, rc 1 when it
+# must keep it (R14(a), D-5318): the ONE spelling of the removal filter that
+# `_bak_prune` and `_bak_gc` apply after `_bak_keepset` has chosen the keeps.
+# Kept: this run's own backup dir, every dir named at or after this run's
+# lock time, and the three keeps. It reads UPD_BAK_FLOOR itself (the callers'
+# locals are not its to read) and fails CLOSED: an unparsable floor keeps
+# everything, though both callers refuse before their loop anyway.
+_bak_removable() {
+  local d="$1" name="${1##*/}" floor
+  [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
+  floor=$((10#${UPD_BAK_FLOOR//-/}))
+  [ "$d" = "$UPD_BACKUP_DIR" ] && return 1
+  [ "$((10#${name//-/}))" -ge "$floor" ] && return 1
+  [ "$d" = "$BAK_KEEP_SNAP" ] && return 1
+  [ "$d" = "$BAK_KEEP_DATA" ] && return 1
+  [ "$d" = "$BAK_KEEP_TREE" ] && return 1
+  return 0
+}
+
+# `_bak_snap_class <timestamp dir>` — whether a backup dir holds a VALID coordination snapshot, by `coordination-snapshot.mjs
+# validate` (delegation broker wave 3): rc 0 yes (`v1`, or `legacy`: a bare, valid coord.db from before the sidecars), rc 1 no
+# (`none`, or `invalid`: a present manifest that does not hold up never falls back to the DB beside it), rc 2 the classifier
+# FAILED — which is not an answer, so the pruner deletes nothing. It FAILS when node is not on PATH, when the helper is not in the
+# running tree, and whenever the helper's (exit code, first word) is not exactly one of `0 v1`, `0 legacy`, `1 none`, `2 invalid`
+# with a `data: yes|no` second line: a node that could not even load the helper exits 1, which must never read as "none".
+# After a rollback to a tree that predates the helper the classifier is absent, so backups are not pruned until the box next
+# updates to a tree that has it; that costs disk, never a snapshot (R25). BAK_SNAP_DATA (0|1) says whether a valid dir holds
+# data, and BAK_SNAP_WHY carries a one-line reason on rc 2. A dir holding a valid sidecar snapshot and NO coord.db is a valid
+# snapshot (the live DB was absent when it was taken): the pre-filter below looks for any of the four names a snapshot is made of,
+# never for coord.db alone.
+_bak_snap_class() {
+  local d="$1" n any=0 rc=0 out first second helper="$CCRC_HERE/../deploy/coordination-snapshot.mjs"
+  BAK_SNAP_DATA=0; BAK_SNAP_WHY=""
+  for n in coordination-snapshot.json delegation-events.log delegation-checkpoint.json coord.db; do
+    if [ -e "$d/$n" ] || [ -L "$d/$n" ]; then any=1; break; fi
+  done
+  [ "$any" -eq 1 ] || return 1
+  if ! command -v node >/dev/null 2>&1; then BAK_SNAP_WHY="node is not on PATH"; return 2; fi
+  if [ ! -f "$helper" ]; then
+    BAK_SNAP_WHY="deploy/coordination-snapshot.mjs is not in the running ccrc tree (after a rollback to a tree that predates it, backups are not pruned until the next update to one that has it)"
+    return 2
+  fi
+  # STDOUT alone is the answer; stderr goes to a private temp file and is only ever the reason on a failure (an environment that
+  # prints a line on stderr, such as a debugger banner, must not turn a good answer into a failure).
+  local errf="" err1="" rest
+  errf="$(_plat_mktemp 2>/dev/null)" || errf=""
+  out="$(node --no-warnings "$helper" validate --from "$d" 2>"${errf:-/dev/null}")" || rc=$?
+  if [ -n "$errf" ]; then IFS= read -r err1 < "$errf" || :; rm -f -- "$errf"; fi
+  first="${out%%$'\n'*}"; second=""; rest=""
+  [ "$first" = "$out" ] || { rest="${out#*$'\n'}"; second="${rest%%$'\n'*}"; }
+  case "$rc:${first%%:*}" in
+    0:v1|0:legacy|1:none|2:invalid) ;;
+    *) BAK_SNAP_WHY="the classifier answered exit $rc, \"${first:0:100}\"${err1:+ (stderr: ${err1:0:100})}"; BAK_SNAP_WHY="${BAK_SNAP_WHY//[![:print:]]/?}"; return 2 ;;
+  esac
+  # Line 2 exactly the data line, and nothing after it.
+  if [ "$rest" != "$second" ]; then BAK_SNAP_WHY="the classifier's answer had more than two lines"; return 2; fi
+  case "$second" in
+    "data: yes") BAK_SNAP_DATA=1 ;;
+    "data: no") ;;
+    *) BAK_SNAP_WHY="the classifier's answer carried no data line"; return 2 ;;
+  esac
+  case "$rc" in 0) return 0 ;; *) return 1 ;; esac
 }
 
 # ── _bak_gc — update's and rollback's own prune of ~/ccrc-backups (wave 8 item B) ──
@@ -22154,11 +22451,14 @@ _bak_keepset() {
 # rollback never get here. It NEVER DIES and never writes update.json: a `_ccrc_die` here would turn a completed
 # update into a `failed` report. rc 0 done or nothing to do; rc 1 skipped or a removal failed; every caller writes
 # `|| :`. It keeps the newest $CCRC_BACKUP_KEEP timestamped dirs of any origin (the ONE bounded validator,
-# `_keep_ok`, D-3423; counted as `ccrc backup` and deploy.sh count them; read from the process env only), and four
+# `_keep_ok`, D-3423; counted as `ccrc backup` and deploy.sh count them (neither counts a link, D-5319);
+# read from the process env only), and four
 # more that can only LEAVE the removal set: this run's own backup by its exact path; every dir named at or after
 # this run's lock second (UPD_BAK_FLOOR) — both D-3593; and, among the dirs neither of those protects, the newest tree backup (D-3594; a
-# `server-dist` or `agent-dist` entry: another run's, a deploy's, or the previous update's) and the newest coord.db
-# snapshot (D-3595). The lock was released before the sweep (design §10), so it is RE-TAKEN (D-3592) without dying: any other holder
+# `server-dist` or `agent-dist` entry: another run's, a deploy's, or the previous update's) and the newest VALID coordination
+# snapshot (D-3595, widened by delegation broker wave 3: `_bak_snap_class` asks `coordination-snapshot.mjs classify`, so a v1
+# snapshot with sidecars and no coord.db counts, and an invalid manifest never does) and, beside it, the newest valid snapshot that HOLDS DATA (D-4641:
+# a v1 with a member present, or a legacy one), so an empty-box snapshot never evicts the last one with data. The sets are independent. The lock was released before the sweep (design §10), so it is RE-TAKEN (D-3592) without dying: any other holder
 # means nothing is pruned.
 _bak_gc() {   # <lead word: update|rollback>
   local lead="$1" keep="${CCRC_BACKUP_KEEP:-10}"
@@ -22181,17 +22481,20 @@ _bak_gc() {   # <lead word: update|rollback>
     *) echo "$lead: backups: WARN: ~/.ccrc/update.lock could not be measured — nothing pruned"; return 1 ;;
   esac
   _bak_list
-  local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name shown rc=0
-  _bak_keepset   # wave 9 R10g: the selection of the two extra keeps, shared with `_bak_prune`; the floor was checked above
+  local n=${#BAK_DIRS[@]} i d shown rc=0
+  local krc=0
+  _bak_keepset || krc=$?   # wave 9 R10g: the selection of the two extra keeps, shared with `_bak_prune`; the floor was checked above
+  if [ "$krc" -ne 0 ]; then
+    echo "$lead: backups: WARN: the coordination snapshot classifier failed (${BAK_SNAP_WHY:-no reason given}), so nothing can say which backup holds the newest valid snapshot — nothing pruned"
+    if [ "$took" -eq 1 ]; then _upd_unlock; fi
+    return 1
+  fi
   for ((i = 0; i < n - keep; i++)); do
-    d="${BAK_DIRS[$i]}"; name="${d##*/}"
-    [ "$d" = "$UPD_BACKUP_DIR" ] && continue   # D-3593
-    [ "$((10#${name//-/}))" -ge "$floor" ] && continue   # D-3593
-    [ "$d" = "$BAK_KEEP_SNAP" ] && continue
-    [ "$d" = "$BAK_KEEP_TREE" ] && continue
+    d="${BAK_DIRS[$i]}"
+    _bak_removable "$d" || continue   # D-3593's own-dir and floor clauses live there now
     shown="$d"; case "$d" in "$HOME"/*) shown="\$HOME${d#"$HOME"}" ;; esac
     if rm -rf -- "$d" 2>/dev/null; then
-      echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups, every one named at or after this run took its lock, this run's own, the newest earlier tree backup and the newest earlier coord.db snapshot; hand-made siblings are never touched)"
+      echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups, every one named at or after this run took its lock, this run's own, the newest earlier tree backup, the newest earlier valid coordination snapshot and the newest earlier one that holds data; hand-made siblings are never touched)"
     else
       echo "$lead: backups: WARN: could not prune $shown — every newer backup is intact"
       rc=1
@@ -23096,8 +23399,8 @@ _uninst_units() {
   fi
   # ccrc's OWN usage pair, `ccrc-codex-usage@.{service,timer}`, goes with the
   # rest, its enabled instances disabled above first (Plan 3a). NEVER `ccgpt-usage@.{service,timer}` or an instance of it:
-  # on a live fleet box those names hold another repository's enabled units,
-  # and an uninstall removes only what ccrc placed.
+  # a box may still hold another repository's enabled units there (removed from
+  # the fleet box by Plan 4), and an uninstall removes only what ccrc placed.
   rm -f -- "$dir/${BOX_UNIT_NAMES[0]}" "$dir/${BOX_UNIT_NAMES[1]}" \
     "$dir/claude-session@.service" "$dir/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.timer" \
     "$dir/ccd-pool-sync.service" "$dir/ccd-pool-sync.timer" \
@@ -23115,11 +23418,18 @@ _uninst_units() {
     || _ccrc_die "removing the unit files under $dir failed"
   rm -rf -- "$dir/claude-session@.service.d" "$slice" \
     || _ccrc_die "removing the drop-in directories under $dir failed"
+  # D-5241: the two scope drop-ins, as FILES and never their directories whole:
+  # `ccrc-tmux-server.scope.d` may also hold an operator's own hand-placed
+  # drop-in (the 2026-10-12 recovery placed one), which is not ccrc's to remove.
+  # Each directory goes only if that leaves it empty.
+  rm -f -- "$dir/tmux-spawn-.scope.d/50-oom-continue.conf" "$dir/ccrc-tmux-server.scope.d/50-oom-continue.conf" \
+    || _ccrc_die "removing the scope drop-ins under $dir failed"
+  rmdir -- "$dir/tmux-spawn-.scope.d" "$dir/ccrc-tmux-server.scope.d" 2>/dev/null || :
   if command -v systemctl >/dev/null 2>&1; then
     systemctl --user daemon-reload \
       || echo "uninstall: units: daemon-reload failed — systemd may still list units whose files are gone until the next reload" >&2
   fi
-  echo "uninstall: units: stopped, disabled and removed (incl. both drop-ins and the slice escape)"
+  echo "uninstall: units: stopped, disabled and removed (incl. both drop-ins, the two OOMPolicy=continue scope drop-ins and the slice escape)"
 }
 
 # ── _uninst_codex — stop the Codex lanes' tiers, remove their runtime ─────
@@ -23148,10 +23458,10 @@ _uninst_units() {
 # in `_codex_foreign_what`'s words (review A2) — a unit whose identity is
 # only UNPROVEN says so, with the way to finish by hand — or cannot ask about
 # (3, or anything else), is LEFT RUNNING and named, each in its own sentence:
-# on the fleet box a
-# transient unit with a lane's exact tier name is live today and belongs to
-# another repository (m-livebox §3), and an uninstall removes only what ccrc
-# placed (`_uninst_units`' own rule, D-3172). A tier that is not running (1)
+# a transient unit with a lane's exact tier name may be live and belong to
+# another repository (m-livebox §3; none has run on the fleet box since the
+# cutover), and an uninstall removes only what ccrc placed (`_uninst_units`'
+# own rule, D-3172). A tier that is not running (1)
 # has nothing to stop.
 #
 # THE STOP'S STDOUT WORD IS CAPTURED, NEVER ONLY ITS RC (ruling PF-21):
@@ -23433,15 +23743,15 @@ _uninst_wrappers() {
     # which is verbatim what this case exists to prevent. `ccd-tmp-sweep`
     # joins on those same terms: id-shaped, unmarked, ours. So do the GPT
     # lane's two id-shaped executables, `ccgpt-runtime` and its launcher
-    # `ccrc-codex` (Plan 2b-2, in the commit that placed them). From that
-    # commit on, this list is not checked by eye: `install-census.test.ts`
-    # derives it against `_inst_bins`' id-shaped placements and
-    # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` and requires the
-    # three EQUAL (spec §5 Pin 4). NOT `ccgpt`: on a live fleet box that name
-    # is another repository's unmarked launcher, which the marker test below
-    # already keeps, and nothing here places it (D-3478). `ccd-update-sync`
+    # `ccrc-codex` (Plan 2b-2, in the commit that placed them). From that commit
+    # on, this list is not checked by eye: `install-census.test.ts` derives it
+    # against `_inst_bins`' id-shaped placements and `deploy/gen-wrappers.mjs`'s
+    # `TOOLCHAIN_EXECUTABLES` and requires the three EQUAL (spec §5 Pin 4). NOT
+    # `ccgpt`: a box may still carry that name as another repository's unmarked
+    # launcher (the fleet box's copy was removed by Plan 4), which the marker test
+    # below already keeps, and nothing here places it (D-3478). `ccd-update-sync`
     # joins on the same terms as the timer-bound binary from programme wave 4.
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex) continue ;; esac
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-tool-adj|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex|ccrc-api) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -23476,15 +23786,17 @@ _uninst_cc_sessions() {
     echo "uninstall: ~/.cc-sessions: not present — nothing of ccrc's to remove there"
     return 0
   fi
+  # `child-deny.settings.json` is the box's one children's deny file (D-5299); this is its
+  # ONE remover (D-5392): `install-session-hooks.sh --remove` runs per account and leaves it.
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
-    "$reg/compact-card.mjs" \
+    "$reg/compact-card.mjs" "$reg/approval-verify.mjs" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
     "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" \
-    "$reg/install-graphify-skill.sh" \
+    "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \
     || _ccrc_die "removing ccrc's files under $reg failed"
   rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" \
     || _ccrc_die "removing the skill trees under $reg failed"
-  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the four skill trees); the registry rows and operator switches stay"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's deny file, the four skill trees); the registry rows and operator switches stay"
 }
 
 # ── _uninst_graphify_skills — the per-home graphify skill directories ─────
@@ -23631,16 +23943,25 @@ _uninst_tree_bins() {
   # (Plan 2b-2, which added them here in the commit that placed them).
   # `_inst_bins` places all four on both platform arms and on every role but
   # server, so this census removes them on every platform and every role — on
-  # a server box that is a no-op, never an error. NOT `ccgpt`, and never: on a
-  # live fleet box that name is another repository's launcher, which ccrc never
-  # placed and so never removes (D-3478). (`graphify`, below, keeps its own
-  # rule and its own paragraph: it is the one name in this census that is not
-  # ccrc's own binary.)
+  # a server box that is a no-op, never an error. NOT `ccgpt`, and never: a box
+  # may still carry that name as another repository's launcher (the fleet box's
+  # copy was removed by Plan 4), which ccrc never placed and so never removes
+  # (D-3478). (`graphify`, below, keeps its own rule and its own paragraph: it
+  # is the one name in this census that is not ccrc's own binary.)
   #
   # `ccd-update-sync` (programme wave 4, the update-intent puller) joins on
   # `ccd-pool-sync`'s exact terms: `_inst_bins` places it on every
   # non-Darwin role and only its timer is fleet-gated, so it is removed here
   # on every role.
+  #
+  # `ccd-tool-adj` (D-5241, the tool-child priority's shell prefix) joins on
+  # `ccd-scope-sweep`'s terms: `_inst_bins` places it on every non-Darwin role.
+  #
+  # `ccrc-api` (wave 17, D-5313), the closed client the role skills call, joins
+  # on the GPT lane's terms: `_inst_bins` places it on both platform
+  # arms and every role but server, so it is removed here on every role (a
+  # no-op on a server box). Whatever is at the path goes, README's link to the
+  # tree or a copy deploy.sh or the spine placed: each is ccrc's own file.
   #
   # THE ORDINALS ARE GONE, and that is the fix, not an omission. This census
   # was hand-kept and was caught stale THREE times (D-1347; again at the
@@ -23657,10 +23978,12 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-telemetry-keepalive" "$HOME/.local/bin/ccd-account-auth" \
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
     "$HOME/.local/bin/ccd-tmp-sweep" "$HOME/.local/bin/ccd-scope-sweep" "$HOME/.local/bin/ccd-pool-sync" \
+    "$HOME/.local/bin/ccd-tool-adj" \
     "$HOME/.local/bin/ccd-history-sweep" \
     "$HOME/.local/bin/ccd-update-sync" \
     "$HOME/.local/bin/ccgpt-proxy.py" "$HOME/.local/bin/ccgpt-usage.py" \
     "$HOME/.local/bin/ccgpt-runtime" "$HOME/.local/bin/ccrc-codex" \
+    "$HOME/.local/bin/ccrc-api" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
   # ccd's BODY (D-3696), the other half of the pair the launcher above named,
   # and its directory only if that leaves it empty — anything else an operator
@@ -23668,7 +23991,7 @@ _uninst_tree_bins() {
   rm -f -- "$HOME/.local/libexec/ccrc/ccd" \
     || _ccrc_die "removing ccd's body from \$HOME/.local/libexec/ccrc failed"
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
@@ -24025,6 +24348,7 @@ case "$VERB" in
   rollout) cmd_rollout "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
   backup)  cmd_backup "$@" ;;
+  coordination-snapshot) cmd_coordination_snapshot "$@" ;;
   logs)    cmd_logs "$@" ;;
   passwd)  cmd_passwd "$@" ;;
   expose)  cmd_expose "$@" ;;

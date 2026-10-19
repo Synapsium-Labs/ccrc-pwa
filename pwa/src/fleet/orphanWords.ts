@@ -1,18 +1,23 @@
-// THE ORPHANED WORKER'S MARKER — the sentence a card prints beside a worker
-// whose coordinator is not one of its own live rows.
+// THE ORPHANED WORKER'S MARKER — what a card says about a worker whose
+// coordinator is not one of its own live rows.
+//
+// D-5545: it no longer prints a LINE. The card used to put `⇄ <programme> wave
+// 3/5 · coordinator gone` under the row, repeating the programme and wave the
+// row itself already names; now the row carries "coordinator gone" (or
+// "coordinator hibernated") as its one attention marker, and this file answers
+// only the presence and the guidance that rides the marker's `title`. The home
+// clause below survives in that title.
 //
 // Lifted out of `ProjectCard`, where it was eighty-odd lines of ruling between
 // the row list and the repo label. Every one of those rulings is about WHAT TO
 // SAY and WHEN TO STAY SILENT; none of it renders.
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import { coordPresence, type CoordPresence } from './coordWords';
-import { crossingNote, runForSession, waveLabel } from './runWords';
+import { crossingNote, runForSession } from './runWords';
 import type { FleetRow } from './nestFleet';
 
 export interface OrphanNote {
-  /** On the row itself. */
-  readonly text: string;
-  /** The `title`, which a phone never shows — see the `gone` clause below. */
+  /** The guidance for the row's marker `title` — a phone never shows it, which is why the marker itself says "coordinator gone". */
   readonly title: string;
   readonly presence: CoordPresence;
 }
@@ -67,6 +72,16 @@ export interface OrphanNote {
 // `Archived (N)` fold), just not among this card's LIVE rows, so a worker
 // left behind by one still reads as an orphan (and still says nothing about
 // home when that home is, measured, this card's own project).
+/** The orphan marker's guidance for a coordinator measured gone or asleep — the card's marker and the session
+ *  header's both carry it (`sessionFacts`' `coordinatorTitle`). `null` for any other presence. */
+export function orphanGuidance(parent: string, presence: CoordPresence): string | null {
+  return presence === 'dead'
+    ? `coordinator ${parent} is gone — reclaim this programme from the run board (the held cell opens it)`
+    : presence === 'hibernated'
+      ? `coordinator ${parent} is hibernated — mail or opening it wakes it`
+      : null;
+}
+
 export function orphanNote(
   row: FleetRow,
   runs: readonly RunSummary[],
@@ -82,27 +97,21 @@ export function orphanNote(
   if (parent === null || parent === row.session.id) return null;
   if (live.some((s) => s.id === parent)) return null;
   const crossing = crossingNote({ ...run, project });
-  const label = `${run.program} ${waveLabel(run)}`;
   // D-3009: the runs board's own three-answer read (`coordPresence`), off a
   // FLEET-WIDE lookup — the coordinator may sit on another card, in an
   // archive fold, or nowhere this pass — so the marker never claims more
   // than the frame has actually measured.
   const presence = coordPresence(parent, coordOf(parent), frameSeen);
-  const where = presence === 'dead'
-    ? `coordinator ${parent} is gone — reclaim this programme from the run board (the held cell opens it)`
-    : `this worker's coordinator is not among this card's live sessions`;
-  // …AND IN THE TEXT, not only in `title`/`data-presence` (final fix round).
-  // Both of those are invisible on touch — there is no hover on a phone, and
-  // this board is mobile-first — so the one measured fact that changes what
-  // the operator should DO (reclaim it) reached only a laptop. `dead` alone:
-  // `unknown` and `alive` say nothing new, because `coordPresence` refusing
-  // to measure is not a claim that anything is gone (D-1138).
-  const gone = presence === 'dead' ? ' · coordinator gone' : '';
+  // D-5242: a sleeping coordinator is not gone, and nothing should be reclaimed
+  // from it: mail or opening it wakes it.
+  const where = orphanGuidance(parent, presence) ?? `this worker's coordinator is not among this card's live sessions`;
+  // …AND IN WORDS, not only in `title` (final fix round): a `title` is
+  // invisible on touch, so the row's marker itself says "coordinator gone"
+  // (`sessionFacts.ts`, D-5545), and only for `dead` (or "coordinator
+  // hibernated"): `unknown` and `alive` say nothing new, because
+  // `coordPresence` refusing to measure is not a claim that anything is gone
+  // (D-1138).
   return crossing === null
-    ? { text: `${label}${gone}`, title: where, presence }
-    : {
-        text: `${label} · home ${crossing.home}${gone}`,
-        title: `${where}; the programme is homed in ${crossing.home}`,
-        presence,
-      };
+    ? { title: where, presence }
+    : { title: `${where}; the programme is homed in ${crossing.home}`, presence };
 }

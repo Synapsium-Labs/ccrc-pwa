@@ -8,6 +8,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REVIEWER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
+import { COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/reviewer-skill');
@@ -25,7 +26,7 @@ const CONTRACT = [
   "Report, never rule. This session never calls `POST /api/runs/:id/advance`, `POST /api/runs/:id/close`, `POST /api/runs/:id/dispatch` or `POST /api/ledger/deviations` on any run, never mails the worker, never sends work back and never allocates a deviation number. A finding that needs a ruling is written as such in the report — `needs a ruling:` and the question — and the coordinator rules.",
   "One report, written ONCE: to an absolute path under `$HOME/.cc-clips/<your session id>/`, by temp file and `mv` so a half-written report never exists at that path, named in the `review-done` mail's `artifacts`; after that mail you do not touch it. NOT under this worktree, however readable the file looks to you: the close route stats that path through the agent, whose read allowlist is `.cc-sessions`, `.cc-limits`, `.cc-clips`, `$HOME/.claude*` and the projects root — and every session worktree sits outside all five, so a report beside your checkout is refused `report-unreadable`. The mail's body opens with one JSON line, `{\"reviewedTip\":\"<sha>\",\"report\":\"<absolute path>\"}`, which the coordinator submits to the close route exactly as you wrote it.",
   "Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, for any reason.",
-  "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. Keep your input box empty: a half-typed draft makes the delivery lane refuse `draft-present`.",
+  "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. Keep your input box empty: a half-typed draft makes the delivery lane refuse `draft-present`. In a shell script, never delete through a variable (`rm -rf \"$X\"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.",
   "Remote control is decided at your creation, not by you: dispatched reviewers spawn WITHOUT it (`ws-add --no-rc`, the dispatch path's own declaration), and `~/.ccrc/remote-control` governs every non-dispatched session on this box. Neither is yours to write.",
 ];
 const FORBIDS_VERBS = CONTRACT[7]!;
@@ -36,6 +37,21 @@ describe('the reviewer skill: its contract', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
+  });
+
+  // D-5292 (coordinator-first routing, Task 1): subagents never read this
+  // skill, and they raised 25 of the 26 measured child permission prompts, so
+  // the no-variable-rm rule reaches them only if this session carries it into
+  // every brief it writes. That sentence is pinned as its OWN literal, against
+  // SKILL.md's clause 9 line itself, so dropping it reds by name rather than
+  // only as a whole-clause mismatch above.
+  it('clause 9 carries the no-variable-rm rule into every subagent brief (D-5292)', () => {
+    const SUBAGENT_BRIEF = 'every subagent brief you write carries this rule';
+    const line = skill.split('\n').find((l) => l.startsWith('9. '));
+    expect(line, 'SKILL.md has no clause 9').toBeTruthy();
+    expect(CONTRACT[8]).toContain(SUBAGENT_BRIEF);
+    expect(line, 'clause 9 no longer carries the rule into subagent briefs').toContain(SUBAGENT_BRIEF);
+    expect(line, 'clause 9 no longer forbids deletes through a variable').toContain('never delete through a variable (`rm -rf "$X"`)');
   });
 
   const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
@@ -221,5 +237,20 @@ describe('the reviewer skill: the report lands where the close route can read it
   // them.
   it('never names the stall-watch settings door — the worker a check is about is the session most motivated to lower the watch', () => {
     expect(skill).not.toContain('/api/coord/stall-watch');
+  });
+
+  // The collector switch is the operator's alone (path-identity spec 2026-10-12
+  // §5.6, §5.9). Settings, or the hand-touched legacy file, arms the deletion of
+  // temp roots that belong to dispatched workspaces, and a review workspace is
+  // one the server dispatched too. The skill names neither of the route's two
+  // methods, nor that file, which is read here from its definer. The bare
+  // `collect-lane` token covers the route, the file and the generation journal.
+  it('never names the collector switch or its legacy file — a reviewer told how to arm it would be told how to delete under the run it reads', () => {
+    const words = ['/api/coord/collect-lane', 'GET /api/coord/collect-lane', 'POST /api/coord/collect-lane',
+      'COLLECT_LANE_LIVE_MARKER', COLLECT_LANE_LIVE_MARKER, 'collect-lane'];
+    const named = (text: string): string[] => words.filter((w) => text.includes(w));
+    expect(named(`${skill}\nPOST /api/coord/collect-lane\n`), 'CONTROL: a mention planted in a scratch copy is seen')
+      .toEqual(['/api/coord/collect-lane', 'POST /api/coord/collect-lane', 'collect-lane']);
+    expect(named(skill)).toEqual([]);
   });
 });

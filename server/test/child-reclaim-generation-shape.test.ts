@@ -3,7 +3,7 @@
 // import TS, so two copies exist by construction; this file is the mechanism that keeps them one
 // (`auto-continue-armed.test.ts`'s shape). It reads ccd's TEXT only: no ccd runs here, and no HOME is touched.
 //
-// The declaration is pinned BY NAME, never by its text: `NODE_ID_RE` (server/src/coord/store.ts) carries the
+// The declaration is pinned BY NAME, never by its text: `NODE_ID_RE` (shared/agent-protocol.ts) carries the
 // identical text for another concept, an update node's id. A text pin would red on it, or invite merging the two.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -83,8 +83,13 @@ describe('REG_GENERATION_SHAPE is declared once, by NAME (spec §5.5)', () => {
   });
 
   it('NODE_ID_RE stays its own concept: its own declaration, never this name', () => {
+    // Its one declaration moved beside `NODE_FILES` in `shared/agent-protocol.ts` (accounts plan A8, D-5622), so the
+    // agent's `account` op answers `fleetIdentity` in the same grammar; `store.ts` re-exports it.
+    const proto = readFileSync(path.join(ccrcRoot, 'shared', 'agent-protocol.ts'), 'utf8');
     const store = readFileSync(path.join(ccrcRoot, 'server', 'src', 'coord', 'store.ts'), 'utf8');
-    expect(store).toMatch(/^export const NODE_ID_RE = \/\^/m);
+    expect(proto).toMatch(/^export const NODE_ID_RE = \/\^/m);
+    expect(store).toMatch(/^export \{ NODE_ID_RE \};$/m);
+    for (const f of [proto, store]) expect(f, 'NODE_ID_RE merged into the generation grammar').not.toMatch(/NODE_ID_RE\s*=\s*REG_GENERATION_SHAPE|REG_GENERATION_SHAPE\s*=\s*NODE_ID_RE/);
     expect(store, 'store.ts must not merge NODE_ID_RE into the generation grammar').not.toContain('REG_GENERATION_SHAPE');
     expect(NODE_ID_RE).not.toBe(REG_GENERATION_SHAPE);
   });

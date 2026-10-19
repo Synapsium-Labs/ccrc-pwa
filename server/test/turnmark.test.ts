@@ -222,7 +222,7 @@ describe('readTurnMarkMeasured: the ok arm', () => {
     expect(await read(seed())).toEqual({
       ok: true, sessionId: UUID, state: 'done', event: 'Stop', at: T, turnAt: T - MIN, stopAt: T,
       bg: 2, bgKinds: ['monitor', 'subagent'], bgIds: ['b989ocn62', 'a1'], err: null, restartAt: null,
-      lostBg: 0, lostKinds: [], lostIds: [], graceUntil: null,
+      lostBg: 0, lostKinds: [], lostIds: [], crons: null, graceUntil: null,
     });
   });
 
@@ -238,5 +238,27 @@ describe('readTurnMarkMeasured: the ok arm', () => {
   it('graceUntil: a restart after a Stop (a clean restart) opens none', async () => {
     const r = await read(seed({ event: 'SessionStart', at: T, turnAt: T - 10 * MIN, stopAt: T - MIN, restartAt: T, bg: 0 }));
     expect(r).toMatchObject({ ok: true, graceUntil: null });
+  });
+});
+
+// D-5242 (plan Task 17a): the Stop's `session_crons` length, recorded by Task 16's hook as `crons`. An integer from −1
+// up (−1: the Stop carried no array); anything else reads as ABSENT (null) and never condemns the line, because the
+// field is additive: a line from an older hook, or one this reader cannot judge, still answers every other consumer.
+describe('readTurnMarkMeasured: crons (D-5242)', () => {
+  it('an older hook writes no crons: absent, and the line stays ok', async () => {
+    expect(await read(seed())).toMatchObject({ ok: true, crons: null });
+  });
+  it('a count parses as itself', async () => {
+    expect(await read(seed({ crons: 0 }))).toMatchObject({ ok: true, crons: 0 });
+    expect(await read(seed({ crons: 2 }))).toMatchObject({ ok: true, crons: 2 });
+  });
+  it('-1 parses: the Stop carried no array', async () => {
+    expect(await read(seed({ crons: -1 }))).toMatchObject({ ok: true, crons: -1 });
+  });
+  it('"1", 1.5, -2 and null read as absent, and the line stays ok', async () => {
+    for (const bad of ['1', 1.5, -2, null, true, [1]]) {
+      const r = await read(seed({ crons: bad }));
+      expect(r, JSON.stringify(bad)).toMatchObject({ ok: true, state: 'done', crons: null });
+    }
   });
 });

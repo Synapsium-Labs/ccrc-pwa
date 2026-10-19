@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness, WIDE_PANE, DEAD_PANE, WIDE_PANE_IF_UP } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness, WIDE_PANE, DEAD_PANE, WIDE_PANE_IF_UP, toolAdjToken as adj } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-split-'); });
@@ -98,6 +98,19 @@ describe('_spawn_start / _spawn_settle', () => {
     expect(h.calls().some((c) => c.startsWith('tmux new-session'))).toBe(true);
     // THE INVARIANT: the start half is not the claiming half. The caller is.
     expect(h.reg('myid', 'started')).toBeNull();
+  });
+
+  it('_spawn_start reads the pane scope ONCE, after the pane that stands — the retry line included (D-5237)', () => {
+    seed('myid');
+    // RESUME_DIES, answering the pane pid as well.
+    h.sh(`${RESUME_DIES.replace('list-sessions) return 0 ;;', 'list-sessions) return 0 ;;\n        list-panes) case "$*" in *pane_pid*) echo 4242 ;; esac ;;')}
+          _panescope_proc_root() { echo procread >> "$HOME/ccd-calls"; printf '%s' "$HOME/proc"; }
+          rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
+    const calls = h.calls();
+    expect(calls.filter((c) => c === 'procread')).toHaveLength(1);
+    const lastNew = calls.map((c) => c.startsWith('tmux new-session')).lastIndexOf(true);
+    expect(newSessions()).toHaveLength(2);
+    expect(calls.indexOf('procread')).toBeGreaterThan(lastNew);
   });
 
   it('_spawn_start sets SPAWN_FROMSWAP=1 when the spawn lands within 300s of a swap', () => {
@@ -746,7 +759,7 @@ describe('_spawn_start: --remote-control only when the box says on', () => {
    *  same mechanism every other suite in this file uses to read `ccd` state) —
    *  one definition, read twice. */
   const expectedCommand = (sidflag: string, rc: boolean): string =>
-    `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')} '${h.home}/.local/bin/claude' `
+    `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)} '${h.home}/.local/bin/claude' `
     + `${rc ? "--remote-control 'myid' " : ' '}${sidflag} --dangerously-skip-permissions`;
 
   const UUID = 'deadbeef-0000-4000-8000-000000000000';

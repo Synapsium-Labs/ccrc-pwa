@@ -103,7 +103,10 @@ const floorRow = (id = ID): string | undefined => (h.reg(id, 'typed') ?? '').spl
 
 /** The real cmd_swap, with systemd, tmux and the flush wait stubbed (the
  *  `ccd-swap.test.ts` idiom); TMUX is emptied so the detached arm is never taken. */
-const SWAP = 'systemctl() { :; }; launchctl() { :; }; tmux() { :; }; sleep() { :; };';
+const SWAP = 'systemctl() { :; }; launchctl() { :; }; sleep() { :; };'
+  // GONE on `has-session` (D-5350): D-5240's manual gate reads `_ws_status` first, and
+  // `tmux() { :; }` alone is an alive pane with no pid, which it reads as unreadable.
+  + ' tmux() { case "${1:-}" in has-session) echo "can\'t find session: x" >&2; return 1 ;; esac; };';
 
 // ── THE JOURNAL ───────────────────────────────────────────────────────────────
 
@@ -763,8 +766,9 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
   // must call `_operator_choice_keep` as the statement before its stop, or a
   // stop after which no spawn follows, with the reason. A NEW function that
   // stops a session is in neither list, and this reds until it is classified.
-  it('every stop in ccd is classified: three keep the operator\'s choice first, the rest end the row', () => {
-    const KEEPS = ['cmd_stop', 'cmd_swap', 'cmd_ws_archive'];
+  it('every stop in ccd is classified: four keep the operator\'s choice first, the rest end the row', () => {
+    // `cmd_hibernate` (D-5242) is a stop a spawn follows: `ensure` or `start` wakes it from the record.
+    const KEEPS = ['cmd_stop', 'cmd_swap', 'cmd_ws_archive', 'cmd_hibernate'];
     // EVERY SPAWN READS, at ONE choke point: `_spawn_start` calls the keep itself — a
     // revival follows no ccd stop (Claude Code exited, most often a pane-scope OOM kill,
     // and `_supervised_start`'s two unsupervised fallbacks and ws-restore are spawns
@@ -813,6 +817,13 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
         expect(src[i]).toMatch(/^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id" /);
         expect(src[i + 1]).toMatch(/^ {2}_typed_note "\$id" since /);
         expect(src[i + 2]).toMatch(/^ {2}rm -f "\$REG\/\$id\.choicekept" /);
+      }
+      if (fn === 'cmd_hibernate') {   // the keep, then (past the comment) the marker, the unsupervise and the kill
+        expect(src[i]).toMatch(GUARD);
+        const next = src.slice(i + 1).filter(live).slice(0, 3);
+        expect(next[0]).toMatch(/^ {2}_reg_set "\$id" hibernated /);
+        expect(next[1]).toMatch(/^ {2}_ws_unsupervise "\$id" ccd$/);
+        expect(next[2]).toMatch(UNMARK);
       }
       if (fn === 'cmd_ws_archive') {
         expect(src[i]).toMatch(/^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id"; _ws_unsupervise "\$id" /);
@@ -871,6 +882,7 @@ describe('wave 3\'s residue: the marker, the order of the checks, and the swap a
     h.sh(`systemctl() { :; }; launchctl() { :; }; sleep() { :; };
       tmux() { [[ "\${1:-}" == kill-session ]] && return 1; return 0; };
       _session_probe() { PROBE_VERDICT=live; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; };
+      _ws_status() { echo idle; };   # the live session is idle, so D-5240's manual gate lets the swap through
       cmd_swap ${ID} claude-d`, { TMUX: '' });
     expect(OOV(), 'the swap\'s keep read').toBe(1);
     expect(marked(), 'a live session is never left marked by a swap').toBe(false);

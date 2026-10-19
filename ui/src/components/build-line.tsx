@@ -38,8 +38,13 @@ function side(label: string, b: BuildInfo | null, next: string | null): ReactNod
 /** Always visible at the foot of FleetScreen (spec §6). Reads the node
  *  inventory FleetScreen's one /api/updates poll hands down (§14) — the
  *  health answer supplies the mode and nothing else. Renders nothing for
- *  local mode or for no health answer. */
-export function BuildLine({ health, nodes }: { health: FleetHealth | null; nodes: readonly NodeWire[] | null }): ReactNode {
+ *  local mode or for no health answer. `staleNote` (centralised-update wave 19, R24(b)): the caller's sentence for
+ *  "a later poll failed, this is the last answer that landed", said after the server side in the affix's amber and
+ *  hidden from assistive tech, because the caller announces it once. The words are the caller's (this package
+ *  imports no app copy); absent or null says nothing. */
+export function BuildLine({ health, nodes, staleNote = null }: {
+  health: FleetHealth | null; nodes: readonly NodeWire[] | null; staleNote?: string | null;
+}): ReactNode {
   if (!health || health.mode !== 'remote') return null;
   // No inventory answer — not yet, or not for as long as /api/updates cannot
   // be read (a 5xx, the network, a malformed body): the line still stands,
@@ -68,6 +73,12 @@ export function BuildLine({ health, nodes }: { health: FleetHealth | null; nodes
       {side('fleet', fleetCurrent, fleet ? pendingTag(fleet) : null)}
       <span className="build-line-sep"> · </span>
       {side('server', serverCurrent, server ? pendingTag(server) : null)}
+      {staleNote !== null && (
+        <>
+          <span className="build-line-sep"> · </span>
+          <span className="build-line-next" aria-hidden="true">{staleNote}</span>
+        </>
+      )}
     </div>
   );
 }

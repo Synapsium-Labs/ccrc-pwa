@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createSessionStore } from '../src/stores/session';
 import { createFleetStore } from '../src/stores/fleet';
 import { saveMark, loadMark } from '../src/lib/notifymark';
-import { PRESENCE_TTL_MS, type CatchUp } from '../../shared/api';
+import { PRESENCE_REFRESH_MS, PRESENCE_TTL_MS, type CatchUp } from '../../shared/api';
 
 /** A WebSocket fake that records what was sent and can be opened at will. */
 function fakeSocket(): { ws: WebSocket; sent: unknown[]; open: () => void } {
@@ -119,7 +119,11 @@ describe('reporting which session is on screen', () => {
     }
   });
 
-  it('does not keep claiming a session while the tab is in the background', () => {
+  // D-5242 (plan Task 17a): the beat re-states the claim WHATEVER the visibility. The server keeps an OPEN claim per
+  // connection, re-stamped by every frame, that holds the session awake for `PRESENCE_OPEN_TTL_MS`; a hidden tab that
+  // went silent would let it lapse while the screen is still open. A hidden frame still deletes only the VISIBLE claim,
+  // so notifications behave exactly as before.
+  it('keeps beating while the tab is in the background, saying hidden every time', () => {
     vi.useFakeTimers();
     try {
       const f = fakeSocket();
@@ -129,10 +133,26 @@ describe('reporting which session is on screen', () => {
       setVisibility('hidden');
       document.dispatchEvent(new Event('visibilitychange'));
       const after = f.sent.length;
-      vi.advanceTimersByTime(PRESENCE_TTL_MS * 3);
-      // The hidden report already deleted the claim server-side; repeating a
-      // deletion says nothing new.
-      expect(f.sent).toHaveLength(after);
+      vi.advanceTimersByTime(PRESENCE_REFRESH_MS * 3);
+      expect(f.sent.slice(after)).toEqual([
+        { type: 'visible', visible: false }, { type: 'visible', visible: false }, { type: 'visible', visible: false },
+      ]);
+      store.getState().disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a visible tab still beats visible: true', () => {
+    vi.useFakeTimers();
+    try {
+      const f = fakeSocket();
+      const store = createSessionStore('cc-a', { makeSocket: () => f.ws });
+      store.getState().connect();
+      f.open();
+      const after = f.sent.length;
+      vi.advanceTimersByTime(PRESENCE_REFRESH_MS * 2);
+      expect(f.sent.slice(after)).toEqual([{ type: 'visible', visible: true }, { type: 'visible', visible: true }]);
       store.getState().disconnect();
     } finally {
       vi.useRealTimers();

@@ -18,6 +18,7 @@ import {
   DETACH_CAP, ROLLBACK_CAP, dispatchRefusalDetail, fleetGate, isHalting, moveRefusal, type DispatchNodeView, type FleetGate,
 } from './dispatch.js';
 import { UPDATE_OP } from '../../../shared/agent-protocol.js';
+import { REFUSAL_STATUS } from '../../../shared/refusal.js';
 import {
   isAutoMode, isNotifyMode, isReleaseTag, isUpdateChannel, compareDispatchOrder, dispatchRank, SETTLED_UPDATE_STATES, UPDATE_GATE_CAP,
   type AckAnswer, type CatalogueState, type DispatchRefusal, type IntentWriteAnswer, type MoveRequestAnswer,
@@ -30,8 +31,8 @@ import {
  * L4: it owns fastify and the clock and DECIDES NOTHING the resolver does not —
  * the auto-gate predicate is `autoGateBlockers`, the desired tag and every
  * resolve sentence are `resolveNodeIntent`'s, the projection's grammar is
- * `renderProjection`'s. What is decided here is only HTTP: which refusal maps to
- * which status.
+ * `renderProjection`'s. What is decided here is only HTTP: which refusal it answers;
+ * its status is `REFUSAL_STATUS`'s (D-5381).
  *
  * THE CREDENTIALS. Six routes are session-only and carry NO box-token check at
  * all (decision 15: the box token is one shared secret every fleet session
@@ -53,9 +54,9 @@ import {
  * name the box-token functions, and the projection read is registered LAST.
  */
 
-/** A refusal, typed as the one union every update route answers with. */
-const refuse = (reply: FastifyReply, code: number, body: Omit<UpdateRouteRefusal, 'ok'>): FastifyReply =>
-  reply.code(code).send({ ok: false, ...body } satisfies UpdateRouteRefusal);
+/** A refusal, typed as the one union every update route answers with, at its word's one status (D-5381). */
+const refuse = (reply: FastifyReply, body: Omit<UpdateRouteRefusal, 'ok'>): FastifyReply =>
+  reply.code(REFUSAL_STATUS[body.error]).send({ ok: false, ...body } satisfies UpdateRouteRefusal);
 
 /** Fix round 2 (R1, D-3218; corrected C3): DERIVED, never a hand-typed
  *  interval, and never against the door alone. D-3215's own text claimed
@@ -212,19 +213,19 @@ export function parseIntentBody(body: unknown): ParsedIntentBody {
  *  set an intent. The body carries a fixed sentence instead; the raw
  *  `r.detail` is logged SERVER-SIDE ONLY, by the caller, which has the
  *  request's logger and this function does not. */
-function intentRefusal(r: Exclude<SetIntentResult, { ok: true }>): { code: number; body: Omit<UpdateRouteRefusal, 'ok'> } {
+function intentRefusal(r: Exclude<SetIntentResult, { ok: true }>): Omit<UpdateRouteRefusal, 'ok'> {
   switch (r.why) {
-    case 'empty-patch': return { code: 400, body: { error: 'bad-request', field: 'body', detail: 'empty-patch' } };
-    case 'bad-field': return { code: 400, body: { error: r.field === 'pinnedTag' ? 'bad-tag' : 'bad-request', field: r.field } };
-    case 'unknown-scope': return { code: 404, body: { error: 'unknown-scope', detail: r.scope } };
+    case 'empty-patch': return { error: 'bad-request', field: 'body', detail: 'empty-patch' };
+    case 'bad-field': return { error: r.field === 'pinnedTag' ? 'bad-tag' : 'bad-request', field: r.field };
+    case 'unknown-scope': return { error: 'unknown-scope', detail: r.scope };
     // The merge base's stored channel reads null (a token this build cannot
     // name) and the patch names none: a state of the stored row, not of the
     // request — so 409, naming the scope whose row holds it.
-    case 'no-channel': return { code: 409, body: { error: 'no-channel', detail: r.base } };
+    case 'no-channel': return { error: 'no-channel', detail: r.base };
     case 'journal-unreadable':
-      return { code: 503, body: { error: 'journal-unreadable', detail: 'the intent journal could not be read — see the server log' } };
+      return { error: 'journal-unreadable', detail: 'the intent journal could not be read — see the server log' };
     case 'journal-unwritable':
-      return { code: 503, body: { error: 'journal-unwritable', detail: 'the intent journal could not be written — see the server log' } };
+      return { error: 'journal-unwritable', detail: 'the intent journal could not be written — see the server log' };
   }
 }
 
@@ -364,7 +365,7 @@ function skipDetail(refusal: DispatchRefusal, view: DispatchNodeView, target: st
 
 type SingleMove =
   | { ok: true; target: string }
-  | { ok: false; code: number; body: Omit<UpdateRouteRefusal, 'ok'> };
+  | { ok: false; body: Omit<UpdateRouteRefusal, 'ok'> };
 
 /**
  * THE SINGLE-NODE PREDICATE a move route answers with (spec §12: "the route evaluates the dispatcher's own
@@ -379,38 +380,38 @@ type SingleMove =
  */
 function singleNodeMove(coord: CoordStore, nodeId: string, kind: RequestKind, named: string | null): SingleMove {
   const row = coord.node(nodeId);
-  if (row === null) return { ok: false, code: 404, body: { error: 'unknown-node' } };
-  if (row.supersededBy !== null) return { ok: false, code: 409, body: { error: 'superseded', detail: row.supersededBy } };
+  if (row === null) return { ok: false, body: { error: 'unknown-node' } };
+  if (row.supersededBy !== null) return { ok: false, body: { error: 'superseded', detail: row.supersededBy } };
   const target = named ?? tagOrNull(kind === 'rollback' ? row.previousVersion : row.desiredTag);
   if (target === null) {
-    if (kind === 'rollback') return { ok: false, code: 409, body: { error: 'no-previous', ...(row.previousRead === 'unmeasured' ? { detail: 'the previous release has not been measured yet — name one with to' } : {}) } };   // D-3495 (D-3213: NULL is "none" only when previousRead is absent)
+    if (kind === 'rollback') return { ok: false, body: { error: 'no-previous', ...(row.previousRead === 'unmeasured' ? { detail: 'the previous release has not been measured yet — name one with to' } : {}) } };   // D-3495 (D-3213: NULL is "none" only when previousRead is absent)
     return {
-      ok: false, code: 409,
+      ok: false,
       body: row.resolveDetail === null ? { error: 'no-desired' } : { error: 'no-desired', detail: row.resolveDetail },
     };
   }
   if (!(SETTLED_UPDATE_STATES as readonly string[]).includes(row.updateState)) {
-    return { ok: false, code: 409, body: { error: 'busy', detail: row.updateState } };
+    return { ok: false, body: { error: 'busy', detail: row.updateState } };
   }
   const views = dispatchViewsFor(coord);
   const view = views.find((v) => v.row.nodeId === nodeId);
-  if (view === undefined) return { ok: false, code: 404, body: { error: 'unknown-node' } };
+  if (view === undefined) return { ok: false, body: { error: 'unknown-node' } };
   const gate = fleetGate(views.map((v) => v.row));
   const refusal = moveRefusal(view, { kind, target, source: 'request' }, resolveInputFor(coord, row).releases, gate);
   if (refusal === null) return { ok: true, target };
   const error = routeWord(refusal);
   const detail = error === 'halted' ? gate.haltedBy.join(', ') : dispatchRefusalDetail(error, view, target);
-  return { ok: false, code: 409, body: { error, detail } };
+  return { ok: false, body: { error, detail } };
 }
 
 /** `requestNode`'s refusals as HTTP. Every arm is unreachable past `singleNodeMove` in the same synchronous
  *  stretch, and each is mapped anyway, so a store that learns a refusal answers its word rather than a 500. */
-function requestRefusal(r: Exclude<RequestNodeResult, { ok: true }>, tagKey: 'tag' | 'to'): { code: number; body: Omit<UpdateRouteRefusal, 'ok'> } {
+function requestRefusal(r: Exclude<RequestNodeResult, { ok: true }>, tagKey: 'tag' | 'to'): Omit<UpdateRouteRefusal, 'ok'> {
   switch (r.why) {
-    case 'unknown-node': return { code: 404, body: { error: 'unknown-node' } };
-    case 'superseded': return { code: 409, body: { error: 'superseded', detail: r.supersededBy } };
-    case 'bad-tag': return { code: 400, body: { error: 'bad-tag', field: tagKey } };
-    case 'bad-kind': return { code: 400, body: { error: 'bad-request', field: 'kind' } };
+    case 'unknown-node': return { error: 'unknown-node' };
+    case 'superseded': return { error: 'superseded', detail: r.supersededBy };
+    case 'bad-tag': return { error: 'bad-tag', field: tagKey };
+    case 'bad-kind': return { error: 'bad-request', field: 'kind' };
   }
 }
 
@@ -578,7 +579,7 @@ export function registerUpdateRoutes(
   /** The whole surface the PWA's /settings reads (W3). Superseded rows are
    *  excluded by `nodes()` itself. Session-only: not in EXEMPT. */
   app.get('/api/updates', async (req, reply) => {
-    if (!deps.coord) return refuse(reply, 501, { error: 'not-configured' });
+    if (!deps.coord) return refuse(reply, { error: 'not-configured' });
     await ensureInventory(req);
     const view: UpdatesView = {
       catalogue: deps.catalogue?.state() ?? { lastOkAt: null, lastError: null },
@@ -588,6 +589,9 @@ export function registerUpdateRoutes(
       // Box-token lifecycle wave 1 (D-4392): the console card's one object, the driver's own view, read at
       // request time. No driver, no field — an absent `boxToken` is how an older server already answers.
       ...(deps.tokenDriver ? { boxToken: deps.tokenDriver.view() } : {}),
+      // D-5549: the pair the catalogue lists from, so the PWA can link a release note's `#NNN` from the number
+      // alone. No usable source, no field: the PWA then shows the number as text, never a guessed link.
+      ...(deps.cfg.releaseSource.ok ? { source: { owner: deps.cfg.releaseSource.owner, repo: deps.cfg.releaseSource.repo } } : {}),
     };
     return view;
   });
@@ -605,9 +609,9 @@ export function registerUpdateRoutes(
    * enforces the gate again later; that is the dispatcher's job.
    */
   app.post('/api/updates/intent', async (req, reply) => {
-    if (!deps.coord || !deps.updateIntentLog) return refuse(reply, 501, { error: 'not-configured' });
+    if (!deps.coord || !deps.updateIntentLog) return refuse(reply, { error: 'not-configured' });
     const parsed = parseIntentBody(req.body);
-    if (!parsed.ok) return refuse(reply, 400, { error: parsed.error, field: parsed.field });
+    if (!parsed.ok) return refuse(reply, { error: parsed.error, field: parsed.field });
     if (parsed.patch.auto !== undefined && parsed.patch.auto !== 'off') {
       // EXCEPTION to `reproject`'s "a write route must not wait out a whole
       // sweep's agent reads" (below): the auto gate must be measured, not
@@ -619,7 +623,7 @@ export function registerUpdateRoutes(
       await ensureInventory(req);
       const blockers = autoGateBlockers(parsed.scope,
         deps.coord.nodes().map((n) => ({ nodeId: n.nodeId, caps: n.caps })));
-      if (blockers.length > 0) return refuse(reply, 409, { error: 'auto-needs-rollback-gate', nodes: blockers });
+      if (blockers.length > 0) return refuse(reply, { error: 'auto-needs-rollback-gate', nodes: blockers });
     }
     const written = deps.coord.setIntent(parsed.scope, parsed.patch, deps.updateIntentLog, Date.now());
     if (!written.ok) {
@@ -633,8 +637,8 @@ export function registerUpdateRoutes(
       if (written.why === 'journal-unreadable' || written.why === 'journal-unwritable') {
         console.warn(`ccrc-server: update: the intent journal failed (${written.why}): ${written.detail}`);
       }
-      const { code, body } = intentRefusal(written);
-      return refuse(reply, code, body);
+      const body = intentRefusal(written);
+      return refuse(reply, body);
     }
     await reproject(req);
     // A request is not the only write that makes a node dispatchable: an `auto` write does
@@ -663,7 +667,7 @@ export function registerUpdateRoutes(
    * door: only an elapsed time in `[0, REFRESH_MIN_INTERVAL_MS)` refuses.
    */
   app.post('/api/updates/refresh', async (req, reply) => {
-    if (!deps.coord || !deps.catalogue) return refuse(reply, 501, { error: 'not-configured' });
+    if (!deps.coord || !deps.catalogue) return refuse(reply, { error: 'not-configured' });
     const now = Date.now();
     const last = deps.catalogue.lastRequestAt();
     if (last !== null) {
@@ -671,7 +675,7 @@ export function registerUpdateRoutes(
       if (since >= 0 && since < REFRESH_MIN_INTERVAL_MS) {
         const retryAfterS = Math.max(1, Math.ceil((REFRESH_MIN_INTERVAL_MS - since) / 1000));
         reply.header('retry-after', String(retryAfterS));
-        return refuse(reply, 429, { error: 'rate-limited', retryAfterS });
+        return refuse(reply, { error: 'rate-limited', retryAfterS });
       }
     }
     const state: CatalogueState = await deps.catalogue.poll(now);
@@ -690,18 +694,18 @@ export function registerUpdateRoutes(
    * release the node had refused is eligible again on the answer itself.
    */
   app.post('/api/updates/ack', async (req, reply) => {
-    if (!deps.coord) return refuse(reply, 501, { error: 'not-configured' });
+    if (!deps.coord) return refuse(reply, { error: 'not-configured' });
     const body = parseAckBody(req.body);
-    if (!body.ok) return refuse(reply, 400, { error: 'bad-request', field: body.field });
+    if (!body.ok) return refuse(reply, { error: 'bad-request', field: body.field });
     const acked = deps.coord.ackNode(body.nodeId);
     if (!acked.ok) {
-      if (acked.why === 'unknown-node') return refuse(reply, 404, { error: 'unknown-node' });
-      if (acked.why === 'superseded') return refuse(reply, 409, { error: 'superseded', detail: acked.supersededBy });
-      return refuse(reply, 409, { error: 'busy', detail: acked.state });
+      if (acked.why === 'unknown-node') return refuse(reply, { error: 'unknown-node' });
+      if (acked.why === 'superseded') return refuse(reply, { error: 'superseded', detail: acked.supersededBy });
+      return refuse(reply, { error: 'busy', detail: acked.state });
     }
     await reproject(req);
     const row = deps.coord.node(body.nodeId);
-    if (row === null) return refuse(reply, 404, { error: 'unknown-node' });
+    if (row === null) return refuse(reply, { error: 'unknown-node' });
     const answer: AckAnswer = { ok: true, node: toNodeWire(row) };
     return answer;
   });
@@ -719,9 +723,9 @@ export function registerUpdateRoutes(
    * noted on its node's row (`requestAll`).
    */
   app.post('/api/updates/apply', async (req, reply) => {
-    if (!deps.coord) return refuse(reply, 501, { error: 'not-configured' });
+    if (!deps.coord) return refuse(reply, { error: 'not-configured' });
     const parsed = parseApplyBody(req.body);
-    if (!parsed.ok) return refuse(reply, 400, { error: parsed.error, field: parsed.field });
+    if (!parsed.ok) return refuse(reply, { error: parsed.error, field: parsed.field });
     const now = Date.now();
     if ('all' in parsed.target) {
       const all = requestAll(deps.coord, parsed.tag, now);
@@ -730,11 +734,11 @@ export function registerUpdateRoutes(
     }
     const { nodeId } = parsed.target;
     const move = singleNodeMove(deps.coord, nodeId, 'update', parsed.tag);
-    if (!move.ok) return refuse(reply, move.code, move.body);
+    if (!move.ok) return refuse(reply, move.body);
     const written = deps.coord.requestNode(nodeId, move.target, 'update', now);
     if (!written.ok) {
-      const { code, body } = requestRefusal(written, 'tag');
-      return refuse(reply, code, body);
+      const body = requestRefusal(written, 'tag');
+      return refuse(reply, body);
     }
     watcher?.triggerDispatch();
     const answer: MoveRequestAnswer = { ok: true, requested: [nodeId], skipped: [] };
@@ -750,15 +754,15 @@ export function registerUpdateRoutes(
    * the op's own words, `no-detach-cap` and `agent-predates-update-op` (D-3387).
    */
   app.post('/api/updates/rollback', async (req, reply) => {
-    if (!deps.coord) return refuse(reply, 501, { error: 'not-configured' });
+    if (!deps.coord) return refuse(reply, { error: 'not-configured' });
     const parsed = parseRollbackBody(req.body);
-    if (!parsed.ok) return refuse(reply, 400, { error: parsed.error, field: parsed.field });
+    if (!parsed.ok) return refuse(reply, { error: parsed.error, field: parsed.field });
     const move = singleNodeMove(deps.coord, parsed.nodeId, 'rollback', parsed.to);
-    if (!move.ok) return refuse(reply, move.code, move.body);
+    if (!move.ok) return refuse(reply, move.body);
     const written = deps.coord.requestNode(parsed.nodeId, move.target, 'rollback', Date.now());
     if (!written.ok) {
-      const { code, body } = requestRefusal(written, 'to');
-      return refuse(reply, code, body);
+      const body = requestRefusal(written, 'to');
+      return refuse(reply, body);
     }
     watcher?.triggerDispatch();
     const answer: MoveRequestAnswer = { ok: true, requested: [parsed.nodeId], skipped: [] };
@@ -781,24 +785,24 @@ export function registerUpdateRoutes(
       if (session.reason !== 'session') {
         const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/updates/intent/:nodeId');
         if (token !== 'ok') {
-          return refuse(reply, 401, { error: 'unauthenticated', verdict: session.verdict });
+          return refuse(reply, { error: 'unauthenticated', verdict: session.verdict });
         }
       }
     }
-    if (!deps.coord) return refuse(reply, 501, { error: 'not-configured' });
+    if (!deps.coord) return refuse(reply, { error: 'not-configured' });
     const { nodeId } = req.params as { nodeId: string };
     // A `:nodeId` that is not a measured node-id (`NODE_ID_RE`, Global
     // Constraint "a node-id is a lowercase UUID") can never be a live row's
     // key — the SAME 404 the missing-node arm answers, not a distinct shape
     // that would tell a caller its malformed id was at least well-formed
     // (fix round 1, finding 4).
-    if (!NODE_ID_RE.test(nodeId)) return refuse(reply, 404, { error: 'unknown-node' });
+    if (!NODE_ID_RE.test(nodeId)) return refuse(reply, { error: 'unknown-node' });
     const row = deps.coord.node(nodeId);
-    if (row === null) return refuse(reply, 404, { error: 'unknown-node' });
-    if (row.supersededBy !== null) return refuse(reply, 409, { error: 'superseded', detail: row.supersededBy });
+    if (row === null) return refuse(reply, { error: 'unknown-node' });
+    if (row.supersededBy !== null) return refuse(reply, { error: 'superseded', detail: row.supersededBy });
     const resolution = resolveNodeIntent(resolveInputFor(deps.coord, row));
     const rendered = renderProjection(resolution, deps.coord.updateEpoch().epoch, Math.floor(Date.now() / 1000));
-    if (!rendered.ok) return refuse(reply, 409, { error: 'no-channel', detail: rendered.detail });
+    if (!rendered.ok) return refuse(reply, { error: 'no-channel', detail: rendered.detail });
     return reply.type('text/plain; charset=utf-8').send(rendered.text);
   });
 }

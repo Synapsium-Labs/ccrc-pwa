@@ -62,6 +62,7 @@ const palette = (theme) => {
     busy: of('--status-busy'), busyText: of('--status-busy-text'), idle: of('--status-idle'),
     att: of('--status-attention'), attText: of('--status-attention-text'), attTint: of('--status-attention-tint'),
     dead: of('--status-dead'), deadText: of('--status-dead-text'), deadTintSolid: of('--status-dead-tint-solid'),
+    dangerInk: of('--ink-on-danger'),
     done: of('--status-done'), doneText: of('--status-done-text'),
     cleanup: of('--status-cleanup'), cleanupText: of('--status-cleanup-text'),
     cyan: of('--acct-cyan'), cyanT: of('--acct-cyan-tint'),
@@ -76,8 +77,63 @@ const palette = (theme) => {
     // --pr-merged (tokens.css) aliases --acct-violet, so it resolves to that
     // same hex per theme rather than being a second colour to keep in sync.
     prMerged: of('--pr-merged'),
+    // The scrollbar thumb (D-5159), derived in :root and re-resolved here per
+    // palette like every other token.
+    thumb: of('--scrollbar-thumb'),
+    // The interactive grounds (D-5101), opaque derivations of the ink over
+    // the card. `of` refuses a translucent one, which is the point.
+    hover: of('--bg-hover'), pressed: of('--bg-pressed'),
+    // The same two on the dead banner (D-5574), painted by the danger-ghost
+    // with `ground="dead"` (D-5688): the banner's tint mixed toward
+    // --ink-on-danger, 35/70 in :root and 60/95 in a light palette, so they
+    // are opaque here too.
+    hoverOnDead: of('--bg-hover-on-dead'), pressedOnDead: of('--bg-pressed-on-dead'),
+    // Any token by name, for the ground lists below.
+    of,
   };
 };
+
+// ── the row grounds (D-5101) ────────────────────────────────────────────────
+// EACH NEW GROUND GETS EXACTLY THE INKS DRAWN ON IT, as Task 9's Step 0
+// measured them on its base, read off the primitives' class strings and the
+// fleet row's meta rules. Named lists, so pwa/test/hover-states.test.ts and
+// fleet-css.test.ts can hold the gate to them.
+//
+// The selected fleet row is `--accent-tint` with a rail. Its meta keeps its
+// hues there, so it carries the three neutral tiers, every status text and
+// every lane hue, at the 4.5 body floor, and every lamp dot at 3:1.
+const SELECTED_ROW_INKS = [
+  '--ink-primary', '--ink-secondary', '--ink-tertiary',
+  '--status-busy-text', '--status-attention-text', '--status-dead-text',
+  '--status-done-text', '--status-cleanup-text',
+  '--acct-cyan', '--acct-violet', '--acct-blue', '--acct-magenta', '--acct-amber', '--acct-green',
+];
+const SELECTED_ROW_DOTS = [
+  '--status-busy', '--status-idle', '--status-attention', '--status-dead', '--status-done', '--status-cleanup',
+];
+// A hovered row, menu item, door or ghost button lifts to `--bg-hover`. The
+// fleet row keeps its meta while hovered, so this is the same set of inks.
+const HOVER_INKS = [
+  '--ink-primary', '--ink-secondary', '--ink-tertiary',
+  '--status-busy-text', '--status-attention-text', '--status-dead-text',
+  '--status-done-text', '--status-cleanup-text',
+  '--acct-cyan', '--acct-violet', '--acct-blue', '--acct-magenta', '--acct-amber', '--acct-green',
+];
+// A pressed primitive sinks to `--bg-pressed`. Only `ListRow`, `BareRow` and
+// the ghost, danger-ghost (D-5495) and quiet buttons press to a ground, and
+// what they draw is the neutral tiers plus one coloured ink: the session
+// menu's danger row (`.menu-item--danger .menu-label`) and the danger-ghost's
+// label, both --status-dead-text. The fleet row never
+// presses to a ground, and a chip inside a pressed row paints its own. The
+// danger row is the one ink beyond the plan's neutral list (D-5454).
+const PRESSED_INKS = ['--ink-primary', '--ink-secondary', '--ink-tertiary', '--status-dead-text'];
+
+const rowPairs = (T, name) => [
+  ...SELECTED_ROW_INKS.map((k) => [`${name} ${k.slice(2)} / accent-tint (selected row)`, T.of(k), T.accentTint, 4.5]),
+  ...SELECTED_ROW_DOTS.map((k) => [`${name} ${k.slice(2)} dot / accent-tint (selected row, UI 3:1)`, T.of(k), T.accentTint, 3]),
+  ...HOVER_INKS.map((k) => [`${name} ${k.slice(2)} / hover`, T.of(k), T.hover, 4.5]),
+  ...PRESSED_INKS.map((k) => [`${name} ${k.slice(2)} / pressed`, T.of(k), T.pressed, 4.5]),
+];
 
 const hex = (c) => '#' + [0, 1, 2].map((i) => Math.round(c[i]).toString(16).padStart(2, '0')).join('');
 
@@ -221,18 +277,9 @@ const pairs = (T, name) => [
   // BAR and the bar is on the well.
   [`${name} accent-on-well / well`, T.accentOnWell, T.well, 4.5],
   [`${name} accent focus ring / page (UI 3:1)`, T.accent, T.page, 3],
-  // The selected fleet row inverts (.sess-line--active: background
-  // --ink-primary), so its 12px meta line takes --edge-strong ON the slab — a
-  // hairline token used as text, which is the ONE genuinely new combination
-  // this treatment introduces. Everything else it needs is already gated and
-  // ratios are symmetric: the label's ink (--bg-page on --ink-primary) is
-  // `ink-primary / page`, the ··· glyph is `ink-secondary / page`, and the four
-  // dots on the lamp plate are the `* dot / lamp well` pairs.
-  // Do NOT add "dot on the selected slab" pairs: pairs() runs every entry in
-  // BOTH themes (line below), and those dots measure 1.55-2.87 in dark, which
-  // would redden the gate for a state that cannot occur — the plate is what
-  // they actually sit on.
-  [`${name} selected-row meta ink / slab`, T.edgeStrong, T.inkP, 4.5],
+  // The selected fleet row's pairs are `rowPairs` above (D-5101). The slab it
+  // replaced, and its one pair (--edge-strong on --ink-primary), are retired.
+  ...rowPairs(T, name),
 
   // A GHOST BUTTON'S LABEL ON A TINTED BANNER. Button's ghost variant paints
   // its own --ink-primary and its background is transparent, so it is neither
@@ -249,6 +296,53 @@ const pairs = (T, name) => [
   // nobody meant to rely on.
   [`${name} ink-primary / dead banner tint`, T.inkP, T.deadTintSolid, 4.5],
   [`${name} ink-primary / attention tint`, T.inkP, T.attTint, 4.5],
+
+  // THE SCROLLBAR THUMB (D-5159). base.css paints `scrollbar-color:
+  // var(--scrollbar-thumb) transparent` on `html`, and the stylesheet half
+  // never reads it (`scrollbar-color` is not `color`). Its track is
+  // transparent, so its ground is whatever the scroll container paints —
+  // these five, the well included: dark in every palette, so a light
+  // palette's thumb must clear white AND near-black. A non-text mark, 3:1.
+  [`${name} scrollbar thumb / page (UI 3:1)`, T.thumb, T.page, 3],
+  [`${name} scrollbar thumb / surface (UI 3:1)`, T.thumb, T.surface, 3],
+  [`${name} scrollbar thumb / raised (UI 3:1)`, T.thumb, T.raised, 3],
+  [`${name} scrollbar thumb / sheet (UI 3:1)`, T.thumb, T.sheet, 3],
+  [`${name} scrollbar thumb / well (UI 3:1)`, T.thumb, T.well, 3],
+
+  // THE DANGER VARIANTS (D-5099). `danger` is a fill of --status-dead with
+  // --ink-on-danger on it: self-grounded, so utility-pairs.test.ts finds the
+  // pair in button.tsx, and this is its per-palette floor. `danger-ghost` is
+  // a --status-dead hairline around a --status-dead-text label on whatever
+  // the call site sits on: a sheet, a card or the page, and the fleet host's
+  // banner, whose ground is the 12% dead wash. Its label on that wash is the
+  // `dead-text / EXIT-badge pill` pair above; the hairline is a non-text
+  // boundary, 3:1 (WCAG 2.1 SC 1.4.11).
+  [`${name} ink-on-danger / status-dead`, T.dangerInk, T.dead, 4.5],
+  [`${name} dead-text / sheet`, T.deadText, T.sheet, 4.5],
+  [`${name} dead-text / page`, T.deadText, T.page, 4.5],
+  [`${name} danger hairline / sheet (UI 3:1)`, T.dead, T.sheet, 3],
+  [`${name} danger hairline / dead banner tint (UI 3:1)`, T.dead, T.deadTintSolid, 3],
+  // The danger-ghost lifts and sinks as `ghost` does (D-5495) on its default
+  // ground, a card (the Updates rows; the halt banner draws it too). Its label
+  // is in HOVER_INKS and PRESSED_INKS; its hairline is gated here. Nord's
+  // pressed pair is the thinnest, at 3.00.
+  [`${name} danger hairline / hover (UI 3:1)`, T.dead, T.hover, 3],
+  [`${name} danger hairline / pressed (UI 3:1)`, T.dead, T.pressed, 3],
+  // On the dead banner the two grounds are its own (D-5574): the danger-ghost
+  // paints them with `ground="dead"` (D-5688). Its label and hairline are
+  // gated on them, and so are the steps themselves, which are not text pairs:
+  // the lift must read as a ground against the tint, the press as a deeper
+  // one, and the press against the lift (the card's grounds measured 1.00 and
+  // 1.03 here). The light palettes mix further (60/95, D-5688), so the
+  // thinnest are now Phosphor & Ink's lift (1.08) and press (1.16), and
+  // Phosphor Daylight's press against the lift (1.06).
+  [`${name} dead-text / dead banner hover`, T.deadText, T.hoverOnDead, 4.5],
+  [`${name} dead-text / dead banner pressed`, T.deadText, T.pressedOnDead, 4.5],
+  [`${name} danger hairline / dead banner hover (UI 3:1)`, T.dead, T.hoverOnDead, 3],
+  [`${name} danger hairline / dead banner pressed (UI 3:1)`, T.dead, T.pressedOnDead, 3],
+  [`${name} dead banner hover / tint (a ground step)`, T.hoverOnDead, T.deadTintSolid, 1.05],
+  [`${name} dead banner pressed / tint (a ground step)`, T.pressedOnDead, T.deadTintSolid, 1.1],
+  [`${name} dead banner pressed / hover (a ground step)`, T.pressedOnDead, T.hoverOnDead, 1.05],
 ];
 
 let fail = 0, n = 0;
@@ -260,6 +354,107 @@ for (const [label, fg, bg, min] of ALL_PALETTES.flatMap(([n, t]) => pairs(palett
   if (!ok) fail++;
   n++;
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${r.toFixed(2).padStart(6)}  (min ${min})  ${label}  ${hex(fg)} on ${hex(bg)}`);
+}
+
+// ── ink tiers (D-5097) ──────────────────────────────────────────────────────
+// THREE TOKENS ARE NOT THREE INKS UNLESS SOMETHING MEASURES THE DISTANCE.
+// Every pair above holds a FLOOR, and a floor is satisfied just as well by
+// one ink wearing three names: the generator once fitted primary, secondary
+// and tertiary from the same seed against the same floor, and wherever the
+// seed already cleared it all three came out equal — ten of twelve palettes,
+// measured ΔL(primary, tertiary) 0.000 to 0.085, with this gate printing ALL
+// PASS. So the tiers are measured as a SEPARATION, in OKLab lightness (the
+// axis a reader perceives as "quieter"), signed toward the ground: tertiary
+// must sit at least 0.12 nearer the card than primary, and secondary strictly
+// between, at least 0.04 from each. The generator's quiet tiers aim at 0.14
+// (ui/design/make-themes.mjs), the generator-and-gate split of every floor
+// above — but primary is held to the palette's own ink (D-5155), so where the
+// aim is out of reach the band sits nearer this floor, and below it this file
+// is what says so, for every palette but the two named exceptions below. The
+// maths is the generator's, restated here because this file is the authority
+// and must not import what it rules on.
+const TIER_FLOOR = 0.12;
+const TIER_STEP = 0.04;
+/** THE ΔL FLOOR'S NAMED EXCEPTIONS (D-5155): exactly two palettes, each with
+ *  its reason. Primary is held within ΔEOK 0.02 of each palette's own ink, and
+ *  on these two light palettes that cap binds before the band reaches 0.12.
+ *  Their dark ink sits low on the lightness axis, where the same contrast span
+ *  is a shorter OKLab distance, and tertiary is already at the 4.5 text floor
+ *  on its binding ground. Both palettes are low-contrast by design and keep
+ *  their character, so the gate holds each to its measured band rounded DOWN
+ *  to 0.10 (0.100 and 0.105 when this was ruled). That is still a floor: a
+ *  drift below it reds.
+ *
+ *  Only the ΔL row is excepted. Both step rows keep 0.04, and every other
+ *  palette keeps 0.12. Two-way, like the audit's registries: an entry whose
+ *  palette clears 0.12 again is stale, and an entry that names no palette is
+ *  a typo or a leftover. An entry with a blank reason is a ruling nobody can
+ *  read. All three are FAIL rows. `pwa/test/ink-tiers.test.ts` pins the list
+ *  to exactly these two, at exactly these floors, so a third entry reds there
+ *  even for a palette that measures under 0.12, and so does a floor nudged
+ *  inside its rounding (0.105, 0.119): widening the exception is a ruling,
+ *  not an edit. */
+const TIER_FLOOR_EXCEPTIONS = {
+  'SOLARIZED-LIGHT': {
+    floor: 0.10,
+    why: 'light palette, low-contrast by design: primary held within ΔEOK 0.02 of its own ink, tertiary at the 4.5 floor on the accent tint',
+  },
+  'CATPPUCCIN-LATTE': {
+    floor: 0.10,
+    why: 'light palette, low-contrast by design: primary held within ΔEOK 0.02 of its own ink, tertiary at the 4.5 floor on raised',
+  },
+};
+const linear = (c) => {
+  const s = c / 255;
+  return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+};
+/** OKLab L of an sRGB triple (0–255). */
+const oklabL = (c) => {
+  const [r, g, b] = [c[0], c[1], c[2]].map(linear);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s;
+};
+
+console.log(`\n# ink tiers — OKLab lightness, signed from primary toward the ground`);
+const tierBand = new Map();
+for (const [name, theme] of ALL_PALETTES) {
+  const T = palette(theme);
+  const [p, s, t] = [T.inkP, T.inkS, T.inkT].map(oklabL);
+  // Toward the ground: down on a dark palette, up on a light one. An unsigned
+  // distance would pass a tertiary LOUDER than primary.
+  const toward = Math.sign(oklabL(T.surface) - p) || 1;
+  const excepted = Object.hasOwn(TIER_FLOOR_EXCEPTIONS, name.trim()) ? TIER_FLOOR_EXCEPTIONS[name.trim()] : undefined;
+  tierBand.set(name.trim(), (t - p) * toward);
+  for (const [label, d, min, a, b, note] of [
+    ['ΔL primary → tertiary', (t - p) * toward, excepted?.floor ?? TIER_FLOOR, T.inkP, T.inkT,
+      excepted ? `  — exception (D-5155): ${excepted.why}` : ''],
+    ['step primary → secondary', (s - p) * toward, TIER_STEP, T.inkP, T.inkS, ''],
+    ['step secondary → tertiary', (t - s) * toward, TIER_STEP, T.inkS, T.inkT, ''],
+  ]) {
+    const ok = d >= min;
+    if (!ok) fail++;
+    n++;
+    // The floor is printed EXACTLY, as the pair rows above print theirs: a
+    // floor rounded for display hides a wrong one (0.119 and 0.1201 both
+    // printed 0.12, and 0.098 and 0.104 both printed 0.10), and the tests read
+    // these rows.
+    console.log(`${ok ? 'PASS' : 'FAIL'}  ${d.toFixed(3).padStart(6)}  (min ${min})  TIER ${name.trim()}  ${label}  ${hex(a)} → ${hex(b)}${note}`);
+  }
+}
+// The exceptions' own two-way check, and their reasons. A FAIL row each,
+// never a PASS row: a registry that is in order adds nothing to the count.
+for (const [name, { floor, why }] of Object.entries(TIER_FLOOR_EXCEPTIONS)) {
+  const d = tierBand.get(name);
+  let problem = null;
+  if (d === undefined) problem = `names no palette: remove it`;
+  else if (d >= TIER_FLOOR) problem = `is stale: ${name} measures ${d.toFixed(3)}, which clears ${TIER_FLOOR} without it — remove it`;
+  else if (typeof why !== 'string' || !/\S/.test(why)) problem = `gives no reason: an exception is a ruling, and its row says why`;
+  if (problem === null) continue;
+  fail++;
+  n++;
+  console.log(`FAIL  ------  (tier)  TIER_FLOOR_EXCEPTIONS entry ${name} (floor ${floor}) ${problem}`);
 }
 
 console.log(`\n# stylesheets — ${report.sheets.join(', ')}`);

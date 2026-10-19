@@ -239,10 +239,10 @@ install_ccd_pair() {
 # this runs the deploy has verifiably succeeded, and a nonzero exit here
 # would report failure for services that are live and green.
 prune_backups() {   # keep the newest $CCRC_BACKUP_KEEP (default 10) timestamped backups
-  local keep="${CCRC_BACKUP_KEEP:-10}"
+  local keep="${CCRC_BACKUP_KEEP:-10}" v; [[ "$keep" =~ ^[0123456789]{1,4}$ ]] || { v="${keep:0:32}"; [ "${#keep}" -le 32 ] || v="$v..."; echo "deploy: warning: CCRC_BACKUP_KEEP='${v//[![:print:]]/?}' is not a whole number from 0 to 9999 — nothing pruned" >&2; return 1; }; ! [[ "$keep" =~ ^0+$ ]] || { echo "deploy: warning: CCRC_BACKUP_KEEP='$keep' keeps no backup, so the prune would remove every one — nothing pruned" >&2; return 1; }   # D-5142: ccd/ccrc's _keep_ok and _keep_why, spelled again (this file never sources ccd/ccrc); D-5144: an all-zeros KEEP is refused too, a separate test on this same line (lines keep their places)
   "${SSH[@]}" "$BOX" "cd ~/ccrc-backups 2>/dev/null || exit 0
-    ls -d [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null \
-      | sort | head -n -$keep | xargs -r rm -rf --"
+    for d in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do [ -d \"\$d\" ] && [ ! -L \"\$d\" ] && printf '%s\n' \"\$d\"; done \
+      | sort | head -n -$keep | grep -vxF -- '$TS' | xargs -r rm -rf --"
 }
 
 # The build stamp: what a box is RUNNING, stated by the box itself. Computed
@@ -571,7 +571,7 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
-    && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } \
+    && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } && { [ ! -f ~/.cc-sessions/approval-verify.mjs ] || cp -a ~/.cc-sessions/approval-verify.mjs ~/ccrc-backups/$TS/approval-verify.mjs; } \
     && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
     && { [ ! -f ~/.config/systemd/user/claude-session@.service ] || cp -a ~/.config/systemd/user/claude-session@.service ~/ccrc-backups/$TS/claude-session@.service; }"
   # `--exclude 'ccrc-mail.token'`: a checkout may still hold a gitignored
@@ -636,7 +636,7 @@ if [ "$TARGET" = "agent" ]; then
   # whole program (pinned — `ccrc-api-ship.test.ts`, and the shim's own header
   # above for what changes the day that stops being true).
   install_atomic ccd/ccrc-api .local/bin/ccrc-api 755
-  install_atomic deploy/notify.sh .cc-sessions/notify.sh 755
+  install_atomic deploy/notify.sh .cc-sessions/notify.sh 755; install_atomic ccd/approval-verify.mjs .cc-sessions/approval-verify.mjs 644   # the approval wait's verifier (plan Task 14), on this line so no cited anchor below moves
   # The compaction card's helper (compaction-card spec §2): plain node, no npm,
   # read by the hook's PreCompact and PostCompact arms under `_hook_timeout`.
   # 644 — `node` runs it; nothing executes it directly.
@@ -674,7 +674,7 @@ if [ "$TARGET" = "agent" ]; then
   # ruling R-C11). ccrc runs its own tree's copy, which the rsync of `ccd/`
   # above lands at ~/ccrc/ccd/. `ccrc update` never refreshes a PATH copy, and
   # a stale one reads lane one's OAuth directory for a codex lane too. An old
-  # copy is removed by hand at the box cleanup (Plan 4). This note is as long
+  # copy was removed by hand at the box cleanup (Plan 4). This note is as long
   # as the lines it replaced, so no line this file's readers cite moves.
   # D-1160: the sweep's DEFAULT noise list — ccrc's own footprint, kept out of
   # every corpus. Shipped on this lane and not only by `ccrc install`, because a
@@ -730,6 +730,10 @@ if [ "$TARGET" = "agent" ]; then
   # The pane-scope sweep (session-continuity wave 4), beside the reaper and on
   # its terms; its stop is shadowed until ~/.cc-sessions/scope-sweep-live exists.
   install_atomic ccd/ccd-scope-sweep .local/bin/ccd-scope-sweep 755
+  # D-5241: the tool-child priority's shell prefix, which `ccd` names in
+  # CLAUDE_CODE_SHELL_PREFIX on Linux. Unconditional here: this lane IS a
+  # session host.
+  install_atomic ccd/ccd-tool-adj .local/bin/ccd-tool-adj 755
   install_atomic ccd/tmux.conf .tmux.conf 644
   install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
   # `ccrc` joins ccd on PATH, in the same ordering class: after the roster it
@@ -761,7 +765,7 @@ if [ "$TARGET" = "agent" ]; then
   # condition on this box, which is why `ccd` carries CCD_DISK_FLOOR_GB) or an
   # ssh that drops — leaves a TRUNCATED unit at its live name. `set -euo
   # pipefail` then aborts the deploy before AGENT_CMD's `daemon-reload`, which
-  # sounds like containment and is not: `ccd`'s own `_svc_enable`/
+  # sounds like containment and is not: `ccd`'s own `_svc_enable_now`/
   # `_svc_disable_now` reload on the next session start or stop, and on a box
   # with ~20 live sessions that is minutes away.
   #
@@ -799,6 +803,11 @@ if [ "$TARGET" = "agent" ]; then
   # MemoryHigh=20G. The last-sorting file is the one old copies of deploy.sh
   # never overwrite. After daemon-reload, AGENT_CMD runs assert-slice-policy.sh
   # to read the enforced value and fail the deploy unless it is `infinity`.
+  # D-5241 (spec 2026-10-16 §5.10): the two OOMPolicy=continue scope drop-ins,
+  # `tmux-spawn-.scope.d` (systemd's PREFIX form, trailing hyphen and all, so
+  # it reaches every pane scope) and `ccrc-tmux-server.scope.d`, the same pair
+  # `ccrc install`'s `_inst_units` places. Nothing ever deletes them on a
+  # redeploy of an older tree; rolling back is removing them by hand.
   AGENT_BUILD_CMD='_unit_atomic() { cp -- "$1" "$2.incoming.$$" || return 1; chmod 644 "$2.incoming.$$" || return 1; mv -f -- "$2.incoming.$$" "$2" || return 1; rm -f -- "$2.incoming."*; }
 cd ~/ccrc/agent && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user \
@@ -808,6 +817,9 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/claude-session@.service.d/limits.conf ~/.config/systemd/user/claude-session@.service.d/limits.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/app-claude-session.slice.d/limits.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/limits.conf" \
     && _unit_atomic ~/ccrc/deploy/systemd/app-claude-session.slice.d/zz-no-memoryhigh.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/zz-no-memoryhigh.conf" \
+    && mkdir -p ~/.config/systemd/user/tmux-spawn-.scope.d ~/.config/systemd/user/ccrc-tmux-server.scope.d \
+    && _unit_atomic ~/ccrc/deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf ~/.config/systemd/user/tmux-spawn-.scope.d/50-oom-continue.conf \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf ~/.config/systemd/user/ccrc-tmux-server.scope.d/50-oom-continue.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/protect.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer \
@@ -849,9 +861,9 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # missing source aborts the lane mid-chain; the runtime builder and the
   # launcher joined in the commit that placed them in `_inst_bins`.
   # Dependencies first and the launcher last, as `_inst_bins` orders them. The
-  # launcher is `ccrc-codex`, never `ccgpt`: on a live fleet box
-  # `.local/bin/ccgpt` is another repository's launcher, and this helper
-  # replaces whatever sits at its destination (D-3478).
+  # launcher is `ccrc-codex`, never `ccgpt`: a box may still carry another
+  # repository's `.local/bin/ccgpt` (the fleet box's copy was removed by
+  # Plan 4), and this helper replaces whatever sits at its destination (D-3478).
   #
   # `server/test/install-census.test.ts` reds when a binary or unit file
   # `ccrc install` places is placed by NEITHER lane of this file (it reads the
@@ -1107,8 +1119,13 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # than a misplaced one). That fallback is exactly the state this guard is
   # written for, and it is unobservable from here. Do not delete it because a
   # healthy box makes it look unnecessary.
+  #
+  # A LISTING THAT FAILS REFUSES THE SWEEP (wave 16, R10c(3); D-5143), as `ccrc update`'s sweep refuses (D-3599): the
+  # loop below would otherwise see only the template probe, and try-restart would run over units nobody listed.
   SWEEP_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
-    && for u in $(systemctl --user list-units "claude-session@*" --plain --no-legend | awk "{print \$1}") claude-session@ccrc-deploy-preflight.service; do \
+    && { listing=$(systemctl --user list-units "claude-session@*" --plain --no-legend) \
+         || { echo "deploy: FAILED — systemctl --user list-units claude-session@* failed, so the supervisors to be checked could not be listed. REFUSING to sweep." >&2; exit 1; }; } \
+    && for u in $(printf "%s\n" "$listing" | awk "{print \$1}") claude-session@ccrc-deploy-preflight.service; do \
          km=$(systemctl --user show -p KillMode "$u" 2>/dev/null); \
          [ "$km" = "KillMode=process" ] \
            || { echo "deploy: FAILED — $u resolves to ${km:-no answer from systemd}, and the sweep needs KillMode=process. systemds default is control-group, and whenever the tmux server placement falls back to a bare create — no systemd-run, no D-Bus, or a scope name not yet collected — every session on this box is a child of ONE tmux server sitting in a claude-session@ cgroup, so try-restart would kill the lot. A drop-in under ~/.config/systemd/user/claude-session@.service.d/ can set this without the base unit changing a byte. REFUSING to sweep." >&2; exit 1; }; \
@@ -1216,9 +1233,18 @@ else
   # ever taken, unlike dist-pwa and coord.db beside it.
   "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS"
   "${SCP[@]}" deploy/backup-coord.mjs "$BOX":ccrc-backups/backup-coord.mjs
+  "${SCP[@]}" deploy/coordination-snapshot.mjs "$BOX":ccrc-backups/coordination-snapshot.mjs
   "${SSH[@]}" "$BOX" "{ [ ! -d ~/ccrc/server/dist-pwa ] || cp -a ~/ccrc/server/dist-pwa ~/ccrc-backups/$TS/dist-pwa; } \
     && { [ ! -f ~/.config/systemd/user/ccrc.service ] || cp -a ~/.config/systemd/user/ccrc.service ~/ccrc-backups/$TS/ccrc.service; } \
     && { [ ! -f ~/.ccrc/coord.db ] || node --no-warnings ~/ccrc-backups/backup-coord.mjs ~/.ccrc/coord.db ~/ccrc-backups/$TS/coord.db; }"
+  # The coordination snapshot (delegation broker wave 3, O3) is the LAST member of this set and is taken BEFORE the rsync below:
+  # the delegation journal and checkpoint are authority a running server wrote, and the rsync is the first step that can touch
+  # a box's tree. The helper (shipped fresh above, like backup-coord.mjs; it imports nothing from this tree) describes the SQLite
+  # snapshot just taken, copies both sidecars from one stable view, validates them, and writes its manifest only when every
+  # member is durable. A failure here aborts the deploy (`set -e` through ssh) before anything on the box has changed. A torn journal
+  # tail (D-4655) is NOT a failure: the helper leaves it out, exits 0 and prints one warning line on its stderr, which ssh passes
+  # through to this terminal (no redirect and no `-q` here, on purpose; a test pins both).
+  "${SSH[@]}" "$BOX" "node --no-warnings ~/ccrc-backups/coordination-snapshot.mjs capture --dir ~/ccrc-backups/$TS"
   # See the agent path's identical exclude, above, for why: this rsync also
   # ships `deploy/` whole, and without the exclude a stale, retired token left
   # in the checkout would ride along to the box, unhardened.

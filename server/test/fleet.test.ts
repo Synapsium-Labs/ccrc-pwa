@@ -1,13 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { assembleFleet, hookAskSummary, idHomeWrapper, liveStatus } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
-import type { HookState } from '../src/hookstate.js';
-import { ASK_OPERATOR_PRINCIPAL, type PrState } from '../../shared/api.js';
+import { readHookStateRawMeasured, type HookState } from '../src/hookstate.js';
+import { ASK_OPERATOR_PRINCIPAL, SERVER_CAPS_FILE, renderServerCaps, reviveFleetSession, type PrState } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -108,6 +109,68 @@ describe('assembleFleet', () => {
     const dead = fleet.find((s) => s.id === 'claude-dead-proj')!;
     expect(dead.status).toBe('dead');
     expect(dead.name).toBeNull();
+  });
+});
+
+// D-5301 (coordinator-first spec §8): every session the operator creates is a
+// coordinator, and the role is DERIVED from the one marker only a dispatch
+// writes — `$REG/<id>.child` — never marked. The rows below are the same shape
+// whichever operator path made them: a PWA "+", a `POST /api/sessions` start
+// and a CLI create (`cc <wrapper> <project>`, a hand-run `ccd ws-add`) leave
+// no `.child`, and no server route wrote any of these fixtures.
+describe('assembleFleet: the session role (D-5301)', () => {
+  it("is 'coordinator' for every row with no .child — a CLI create, a held row and a main checkout alike — and 'child' for a .child row, unreadable included", async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    // A CLI create: a workspace row nothing on the server made.
+    seedSession(home, 'lane-a-project-a-calm-mesa', 'lane-a', { workspace: 'calm-mesa' });
+    // A main checkout, started by hand.
+    seedSession(home, 'lane-a-project-a', 'lane-a');
+    // An operator-created row the operator then held: the hold is not the role.
+    seedSession(home, 'lane-a-project-a-open-dune', 'lane-a', { workspace: 'open-dune', hold: 'parked' });
+    // Dispatched children: a marker naming the minting run, and one that does not parse.
+    seedSession(home, 'lane-a-project-a-quiet-basin', 'lane-a', { workspace: 'quiet-basin', child: '7' });
+    seedSession(home, 'lane-a-project-a-still-cove', 'lane-a', { workspace: 'still-cove', child: 'not-a-run' });
+    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
+    const role = (id: string) => fleet.find((s) => s.id === id)!.role;
+    expect(role('lane-a-project-a-calm-mesa')).toBe('coordinator');
+    expect(role('lane-a-project-a')).toBe('coordinator');
+    expect(role('lane-a-project-a-open-dune')).toBe('coordinator');
+    expect(role('lane-a-project-a-quiet-basin')).toBe('child');
+    // An unreadable marker is still a `.child` file: the start card (Task 9)
+    // reads it as a child, so the badge does too — never a coordinator.
+    expect(role('lane-a-project-a-still-cove')).toBe('child');
+    // The fixtures are what they claim: the registry read both markers as children.
+    expect(fleet.find((s) => s.id === 'lane-a-project-a-quiet-basin')!.child).toEqual({ kind: 'child', runId: 7 });
+    expect(fleet.find((s) => s.id === 'lane-a-project-a-still-cove')!.child).toEqual({ kind: 'unreadable' });
+  });
+
+  describe('reviveFleetSession — role (ADDITIVE, absence-permits)', () => {
+    const assembledRow = async (): Promise<Record<string, unknown>> => {
+      const home = mkTmp('ccrc-');
+      seedRoster(home);
+      seedSession(home, 'lane-a-project-a', 'lane-a');
+      const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+      const [row] = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
+      return JSON.parse(JSON.stringify(row)) as Record<string, unknown>;
+    };
+
+    it('a snapshot from before the field (no key) and an explicit null revive null — never re-derived from child', async () => {
+      const raw = await assembledRow();
+      delete raw['role'];
+      expect(reviveFleetSession(raw)?.role).toBeNull();
+      expect(reviveFleetSession({ ...raw, role: null })?.role).toBeNull();
+    });
+
+    it.each(['coordinator', 'child'] as const)('round-trips %s exactly', async (role) => {
+      expect(reviveFleetSession({ ...(await assembledRow()), role })?.role).toBe(role);
+    });
+
+    it.each([['an unknown word', 'parent'], ['a boolean', true], ['an object', { kind: 'child' }]])(
+      'rejects the WHOLE session on %s — never laundered into either role', async (_what, role) => {
+        expect(reviveFleetSession({ ...(await assembledRow()), role })).toBeNull();
+      });
   });
 });
 
@@ -249,6 +312,34 @@ describe('assembleFleet: an unmeasured live status file is not a session at rest
     const io = degradedReadIO((p) => p.endsWith(LIVE));
     const status = await liveStatus(io, loadConfig({ CCRC_HOME: home }), new Tmux(run), ID);
     expect(status).toBe('idle');
+  });
+
+  // D-5234: the read one step earlier. `hasSession` says the pane is alive,
+  // and `panePid` comes back null (`list-panes` failed: a loaded tmux server, a
+  // dropped round trip). Nothing was measured about the session, so the card
+  // takes D-115's shape — `busy`, and declared unmeasured so the watcher never
+  // spends it as an edge — rather than the `alive` default `idle`.
+  const failedPid = (): { home: string; run: Runner } => {
+    const { home, run: healthy } = setup();
+    const run: Runner = async (cmd, args) => (args[0] === 'list-panes'
+      ? { code: 1, stdout: '', stderr: 'server exited unexpectedly' }
+      : healthy(cmd, args));
+    return { home, run };
+  };
+
+  it('D-5234: an alive pane whose panePid read fails is busy and statusUnmeasured, never a measured idle', async () => {
+    const { home, run } = failedPid();
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
+    const s = fleet.find((x) => x.id === ID)!;
+    expect(s.status).toBe('busy');
+    expect(s.statusUnmeasured).toBe(true);
+    expect(s.statusUpdatedAt).toBeNull();
+    expect(s.version).toBeNull();
+  });
+
+  it('D-5234: … and liveStatus on the SAME failed panePid still answers idle, so the interrupt route still refuses', async () => {
+    const { home, run } = failedPid();
+    expect(await liveStatus(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), ID)).toBe('idle');
   });
 });
 
@@ -1144,6 +1235,23 @@ describe('the ask chip (Task 19)', () => {
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
   });
 
+  it('folds DECLINED to no chip — the parent handed it over and the operator was pushed (D-5289)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-demo', 'claude');
+    const coord = mkCoord();
+    const id = coord.insertAsk({
+      childId: 'claude-demo', parentId: 'coord-1', runId: null, askKey: 'k',
+      askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: NOW_MS - 1000,
+    });
+    expect(coord.declineAsk(id, 2000)).toBe(true); // held -> declined
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
+  });
+
   it('folds STALE to no chip — the dialog itself is gone, nothing left to explain', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
@@ -1675,5 +1783,325 @@ describe('assembleFleet hands back the pane pids it read (worker stall watch wav
 
   it('records null for an alive row whose pid tmux did not answer, never dropping the row', async () => {
     expect([...await pidsFor({ code: 1, stdout: '' })]).toEqual([['claude-a-MekWarLive', null]]);
+  });
+});
+
+// `background-aware-working` (D-5231; spec §5.1): `fleet.ts` ships `background` ONLY when the live file's build covers
+// delegation (`liveCoversWorkflows`, 2.1.277 on), the hook state is a `Stop`'s `done`, and the count is above zero.
+describe('FleetSession.background (D-5231)', () => {
+  const ID = 'lane-a-project-a';
+  const UUID = '00000000-0000-4000-8000-000000000001';
+  const ROSTER = { version: 1, accounts: [{
+    id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a',
+    exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+  }] };
+  const HOOK_AT = 1_784_600_000_000;
+  const hook = (o: Partial<HookState> = {}): HookState => ({
+    state: 'done', updatedAt: HOOK_AT, event: 'Stop', ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0,
+    interrupted: false, background: { count: 2, kinds: ['subagent', 'workflow'] }, ...o,
+  });
+  const row = async (version: string, hs: HookState): Promise<{ background: unknown; bucket: string }> => {
+    const home = mkTmp('ccrc-bg-');
+    seedRoster(home, ROSTER);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields = { wrapper: 'lane-a', project: 'project-a', workdir: '/data/projects/project-a', uuid: UUID, started: '1' };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
+    mkdirSync(path.join(home, '.lane-a', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.lane-a', 'sessions', '40613.json'), JSON.stringify({
+      pid: 40613, sessionId: UUID, cwd: '/data/projects/project-a',
+      status: 'busy', statusUpdatedAt: HOOK_AT - 60_000, version,
+    }));
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), HOOK_AT / 1000,
+      undefined, undefined, undefined, undefined, new Map([[ID, hs]]));
+    return fleet.find((x) => x.id === ID)!;
+  };
+
+  it('a 2.1.296 live file, hook Stop done with the pair: background set, the row working', async () => {
+    const r = await row('2.1.296', hook());
+    expect(r.background).toEqual({ count: 2, kinds: ['subagent', 'workflow'] });
+    expect(r.bucket).toBe('working');
+  });
+
+  it('a 2.1.270 live file (below the floor): background null, D-75 answers done', async () => {
+    const r = await row('2.1.270', hook());
+    expect(r.background).toBeNull();
+    expect(r.bucket).toBe('done');
+  });
+
+  it('a hook `working`: background null', async () => {
+    expect((await row('2.1.296', hook({ state: 'working', event: 'PostToolUse' }))).background).toBeNull();
+  });
+
+  it.each(['SubagentStop', 'SubagentStart'])('a `done` the hook carried through a %s keeps background', async (event) => {
+    // the subagent arm carries the pair and (until D-5232's gated arm) rewrites `event`
+    const r = await row('2.1.296', hook({ event }));
+    expect(r.background).toEqual({ count: 2, kinds: ['subagent', 'workflow'] });
+    expect(r.bucket).toBe('working');
+  });
+
+  it.each(['SessionStart', 'PreCompact', null])('a `done` from %s, which never writes the pair: background null', async (event) => {
+    expect((await row('2.1.296', hook({ event }))).background).toBeNull();
+  });
+
+  it('the pair at count 0: background null, D-75 answers done', async () => {
+    const r = await row('2.1.296', hook({ background: { count: 0, kinds: [] } }));
+    expect(r.background).toBeNull();
+    expect(r.bucket).toBe('done');
+  });
+
+  it('no pair at all: background null', async () => {
+    const hs = hook();
+    delete hs.background;
+    expect((await row('2.1.296', hs)).background).toBeNull();
+  });
+});
+
+// `interrupt-and-restart-causes-recorded` (D-5237; spec §5.6): the registry's `lastend` reaches the wire as
+// `FleetSession.lastEnd`, unchanged; absent is null.
+describe('FleetSession.lastEnd (D-5237)', () => {
+  const ID = 'lane-a-project-a';
+  const UUID = '00000000-0000-4000-8000-000000000001';
+  const ROSTER = { version: 1, accounts: [{
+    id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a',
+    exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+  }] };
+  const row = async (lastend: string | null): Promise<{ lastEnd: unknown }> => {
+    const home = mkTmp('ccrc-lastend-');
+    seedRoster(home, ROSTER);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields: Record<string, string> = { wrapper: 'lane-a', project: 'project-a', workdir: '/data/projects/project-a', uuid: UUID, started: '1' };
+    if (lastend !== null) fields['lastend'] = lastend;
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1_784_600_000);
+    return fleet.find((x) => x.id === ID)!;
+  };
+  it('a recorded oom end rides the wire', async () => {
+    expect((await row('1784599820 oom')).lastEnd).toEqual({ at: 1_784_599_820_000, cause: 'oom' });
+  });
+  it('no lastend is null', async () => {
+    expect((await row(null)).lastEnd).toBeNull();
+  });
+});
+
+// D-5242 (plan Task 17a): the registry's `.hibernated` reaches the wire as `FleetSession.hibernatedAt`, epoch ms;
+// unlisted is null, and a malformed body is null with the row still on the wire.
+describe('FleetSession.hibernatedAt (D-5242)', () => {
+  const ID = 'lane-a-project-a';
+  const UUID = '00000000-0000-4000-8000-000000000001';
+  const ROSTER = { version: 1, accounts: [{
+    id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a',
+    exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+  }] };
+  const row = async (hibernated: string | null): Promise<{ hibernatedAt: unknown } | undefined> => {
+    const home = mkTmp('ccrc-hibernated-');
+    seedRoster(home, ROSTER);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields: Record<string, string> = { wrapper: 'lane-a', project: 'project-a', workdir: '/data/projects/project-a', uuid: UUID, started: '1', stopped: '1784599820 agent' };
+    if (hibernated !== null) fields['hibernated'] = hibernated;
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
+    const run: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1_784_600_000);
+    return fleet.find((x) => x.id === ID);
+  };
+  it('a hibernated row rides the wire with hibernatedAt, its bucket still dead', async () => {
+    expect(await row('1784599820 7')).toMatchObject({ hibernatedAt: 1_784_599_820_000, status: 'dead', bucket: 'dead' });
+  });
+  it('no .hibernated is null', async () => {
+    expect((await row(null))!.hibernatedAt).toBeNull();
+  });
+  it('a malformed .hibernated is null, and the row is still on the wire', async () => {
+    expect((await row('seven hours ago'))!.hibernatedAt).toBeNull();
+  });
+});
+
+// `compactions-write-no-hookstate` (D-5239; spec §5.8): an idle compaction behind the server's word leaves the Stop's
+// hookstate as it was, so the row's `bucketSince` stays the Stop's T0 (no fresh `done`, no badge). END TO END: the real
+// hook writes the file, the real reader parses it, `assembleFleet` ships the row. At base PostCompact `manual` writes a
+// fresh `done`, and `bucketSince` jumps to the compaction.
+describe('a compaction keeps bucketSince (D-5239)', () => {
+  const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
+  const FIVE = path.resolve(__dirname, 'fixtures/hook/stop-bg-five-kinds.json');
+  const ID = 'lane-a-project-a';
+  const UUID = '00000000-0000-4000-8000-000000000001';
+  const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
+  const ROSTER = { version: 1, accounts: [{
+    id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a',
+    exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+  }] };
+  const compaction = (trigger: 'auto' | 'manual'): object[] => ['PreCompact', 'PostCompact'].map((ev) => ({
+    session_id: UUID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${UUID}.jsonl`, cwd: '/rig/repo',
+    prompt_id: '00000000-0000-4000-8000-0000000000c1', hook_event_name: ev, trigger,
+    ...(ev === 'PreCompact' ? { custom_instructions: null } : { compact_summary: 'fixture summary' }),
+  }));
+
+  it('a row done at T0, through an idle manual compaction, keeps bucketSince T0', async () => {
+    const home = mkTmp('ccrc-compact-since-');
+    seedRoster(home, ROSTER);
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields = { wrapper: 'lane-a', project: 'project-a', workdir: '/data/projects/project-a', uuid: UUID, started: '1', generation: GENERATION };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
+    const bin = path.join(home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(['dispatch-live-gate-v1'], Math.floor(Date.now() / 1000)));
+    const hook = (p: object): void => {
+      execFileSync('bash', [HOOK], {
+        input: JSON.stringify(p), encoding: 'utf8',
+        env: { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+          CLAUDE_CODE_SESSION_ID: UUID, CLAUDE_PID: '40613', CCRC_SESSION_GENERATION: GENERATION },
+      });
+    };
+    hook({ ...(JSON.parse(readFileSync(FIVE, 'utf8')) as Record<string, unknown>), background_tasks: [] });
+    const hsFile = path.join(reg, `${ID}.hookstate.json`);
+    const T0 = Date.now() - 60_000;
+    writeFileSync(hsFile, JSON.stringify({ ...(JSON.parse(readFileSync(hsFile, 'utf8')) as object), updatedAt: T0 }) + '\n');
+    for (const p of compaction('manual')) hook(p);
+    const raw = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+    if (!raw.ok) throw new Error(`the hook wrote no readable hookstate: ${raw.reason}`);
+    mkdirSync(path.join(home, '.lane-a', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.lane-a', 'sessions', '40613.json'), JSON.stringify({
+      pid: 40613, sessionId: UUID, cwd: '/data/projects/project-a',
+      status: 'idle', statusUpdatedAt: T0 - 60_000, version: '2.1.296',
+    }));
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: args.includes(`=cc-${ID}:`) ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), Math.floor(Date.now() / 1000),
+      undefined, undefined, undefined, undefined, new Map([[ID, raw.state]]));
+    const r = fleet.find((x) => x.id === ID)!;
+    expect(r.bucket).toBe('done');
+    expect(r.bucketSince).toBe(T0);
+  });
+});
+
+// `with-coordinator-state` (D-5296; plan Task 7). `FleetSession.withCoordinator`
+// from the session's newest asks row: set while it is `held` or `answering` and
+// the assembly's clock is before `askNotifyAt(row.at)` (the MINT time, D-5364,
+// never `askAt`), null on every other state and from `notifyAt` on. The row
+// shape is the Task 19 block's own `insertAsk` fixture, neutral ids.
+describe('the quiet "with coordinator" state (D-5296)', () => {
+  const mkCoord = (): CoordStore =>
+    new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+  const dead = new Tmux(async () => ({ code: 1, stdout: '', stderr: '' }));
+  const live = new Tmux(async (_cmd, args) => {
+    if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
+    return { code: 0, stdout: '', stderr: '' };
+  });
+  const NOW_S = 1784600000;
+  const NOW_MS = NOW_S * 1000;
+  // `askAt` is deliberately far from the mint: a computation that read it
+  // instead of `at` would put `notifyAt` in 1970 and clear every case.
+  const mint = (coord: CoordStore, at: number, childId = 'project-a-quiet-basin'): number => coord.insertAsk({
+    childId, parentId: 'project-a-calm-mesa', runId: null, askKey: 'k',
+    askAt: 1000, dialogId: 'd', question: 'q', options: ['a', 'b'], now: at,
+  });
+  const assemble = async (coord: CoordStore, nowS: number, tmux: Tmux = dead, hookStates?: Map<string, HookState>) => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'project-a-quiet-basin', 'claude');
+    seedSession(home, 'project-a-calm-mesa', 'claude');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), tmux, nowS,
+      undefined, undefined, undefined, undefined, hookStates, undefined, coord,
+    );
+    return (id: string) => fleet.find((x) => x.id === id)!;
+  };
+
+  it('a held row one second before notifyAt sets the field; at notifyAt it is null', async () => {
+    // Minted 179 s before NOW: notifyAt = mint + 180 s = NOW + 1 s.
+    const coord = mkCoord();
+    mint(coord, NOW_MS - 179_000);
+    const before = await assemble(coord, NOW_S);
+    expect(before('project-a-quiet-basin').withCoordinator).toEqual({
+      kind: 'question', parentId: 'project-a-calm-mesa', since: NOW_MS - 179_000, notifyAt: NOW_MS + 1000,
+    });
+    const at = await assemble(coord, NOW_S + 1);
+    expect(at('project-a-quiet-basin').withCoordinator).toBeNull();
+  });
+
+  it('an answering row (mid-answer) keeps it', async () => {
+    const coord = mkCoord();
+    const id = mint(coord, NOW_MS - 10_000);
+    expect(coord.takeAskForAnswer(id, 1000).ok).toBe(true);
+    const get = await assemble(coord, NOW_S);
+    expect(get('project-a-quiet-basin').withCoordinator?.parentId).toBe('project-a-calm-mesa');
+  });
+
+  it('a declined, released or answered row gives null', async () => {
+    const declined = mkCoord();
+    expect(declined.declineAsk(mint(declined, NOW_MS - 10_000), NOW_MS - 5000)).toBe(true);
+    expect((await assemble(declined, NOW_S))('project-a-quiet-basin').withCoordinator).toBeNull();
+
+    const released = mkCoord();
+    expect(released.releaseAsk(mint(released, NOW_MS - 10_000), NOW_MS - 5000)).toBe(true);
+    expect((await assemble(released, NOW_S))('project-a-quiet-basin').withCoordinator).toBeNull();
+
+    const answered = mkCoord();
+    const id = mint(answered, NOW_MS - 10_000);
+    answered.takeAskForAnswer(id, 1000);
+    answered.settleAsk(id, 'project-a-calm-mesa', 'a', NOW_MS - 5000);
+    expect((await assemble(answered, NOW_S))('project-a-quiet-basin').withCoordinator).toBeNull();
+  });
+
+  it('a top-level session never has it, and neither does any session without a coord store', async () => {
+    const coord = mkCoord();
+    mint(coord, NOW_MS - 10_000);
+    const get = await assemble(coord, NOW_S);
+    expect(get('project-a-calm-mesa').withCoordinator).toBeNull();
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'project-a-quiet-basin', 'claude');
+    const bare = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S);
+    expect(bare.find((x) => x.id === 'project-a-quiet-basin')!.withCoordinator).toBeNull();
+  });
+
+  it('end to end: a live waiting child with the field is working, dated from the hold; without it, attention', async () => {
+    const hooks = new Map<string, HookState>([
+      ['project-a-quiet-basin', mkHookState({ state: 'waiting', updatedAt: NOW_MS - 2000 })],
+    ]);
+    const coord = mkCoord();
+    mint(coord, NOW_MS - 10_000);
+    const held = (await assemble(coord, NOW_S, live, hooks))('project-a-quiet-basin');
+    expect(held.withCoordinator).not.toBeNull();
+    expect({ bucket: held.bucket, bucketSince: held.bucketSince }).toEqual({ bucket: 'working', bucketSince: NOW_MS - 10_000 });
+    const lapsed = (await assemble(coord, NOW_S + 171, live, hooks))('project-a-quiet-basin');
+    expect(lapsed.withCoordinator).toBeNull();
+    expect(lapsed.bucket).toBe('attention');
+  });
+  // D-5298 (plan Task 16): a HELD approvals row is the same state, kind 'approval', inside the row's own window
+  // (`notifyAt`, D-5441); a row minted released was held for nobody and never sets it; a ruled one clears it.
+  const mintApproval = (coord: CoordStore, askAt: number, o: { releaseReason?: 'run-unclaimed' } = {}): number => coord.insertApproval({
+    childId: 'project-a-quiet-basin', parentId: 'project-a-calm-mesa', runId: null, digest: 'd'.repeat(64),
+    nonce: 'e'.repeat(32), agentId: '', tool: 'Bash', inputRedacted: 'rm -rf build', truncated: false, class: 'ordinary',
+    askAt, notifyAt: askAt + 60_000, ...o,
+  });
+  it('D-5298: withCoordinator.kind is approval while the row is held, and null once it lapses, is ruled, or was minted released', async () => {
+    const coord = mkCoord();
+    const id = mintApproval(coord, NOW_MS - 10_000);
+    expect((await assemble(coord, NOW_S))('project-a-quiet-basin').withCoordinator).toEqual({
+      kind: 'approval', parentId: 'project-a-calm-mesa', since: NOW_MS - 10_000, notifyAt: NOW_MS + 50_000,
+    });
+    expect((await assemble(coord, NOW_S + 50))('project-a-quiet-basin').withCoordinator).toBeNull();
+    expect(coord.takeApprovalForRule(id, { by: 'project-a-calm-mesa', verdict: 'deny', reason: 'r', ruling: '{}', now: NOW_MS }).ok).toBe(true);
+    expect((await assemble(coord, NOW_S))('project-a-quiet-basin').withCoordinator).toBeNull();
+    const released = mkCoord();
+    mintApproval(released, NOW_MS - 10_000, { releaseReason: 'run-unclaimed' });
+    expect((await assemble(released, NOW_S))('project-a-quiet-basin').withCoordinator).toBeNull();
   });
 });

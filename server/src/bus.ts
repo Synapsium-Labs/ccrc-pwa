@@ -1,16 +1,20 @@
 import { EventEmitter } from 'node:events';
-import type { CoordStatus, Divergence, FleetSession, RunSummary, SessionStreamMsg, ProjectPoolsWire } from '../../shared/api.js';
+import type { CoordStatus, Dialog, Divergence, FleetSession, RunSummary, SessionStreamMsg, ProjectPoolsWire } from '../../shared/api.js';
 
 export interface Notice { message: string }
 
 /** Per-session stream events, carrying a SessionStreamMsg payload. */
 export type SessionEventName = `session:${string}`;
 
+/** The screen an answer route saw the pane move to (`DialogAnswered`'s `next`, decision
+ *  `ask-answer-returns-next-screen`), for every open stream of that session: `answered:<id>`. */
+export type AnsweredEventName = `answered:${string}`;
+
 /**
  * Typed event bus shared between the watcher, routes, and websocket streams.
  * Events: 'fleet' (FleetSession[]), 'notice' ({message}), 'runs' (RunSummary[],
  * Build 7 — see `FleetWatcher.emitRuns`), 'coord' (CoordStatus, Build 4 — see
- * `FleetWatcher.emitCoord`), 'session:<id>' (SessionStreamMsg).
+ * `FleetWatcher.emitCoord`), 'session:<id>' (SessionStreamMsg), 'answered:<id>' (Dialog | null).
  */
 export class Bus extends EventEmitter {
   constructor() {
@@ -35,6 +39,7 @@ export class Bus extends EventEmitter {
   override emit(event: 'divergence', divergences: Divergence[]): boolean;
   override emit(event: 'pools', pools: ProjectPoolsWire): boolean;
   override emit(event: SessionEventName, msg: SessionStreamMsg): boolean;
+  override emit(event: AnsweredEventName, next: Dialog | null): boolean;
   override emit(event: string, ...args: unknown[]): boolean {
     return super.emit(event, ...args);
   }
@@ -46,6 +51,7 @@ export class Bus extends EventEmitter {
   override on(event: 'divergence', listener: (divergences: Divergence[]) => void): this;
   override on(event: 'pools', listener: (pools: ProjectPoolsWire) => void): this;
   override on(event: SessionEventName, listener: (msg: SessionStreamMsg) => void): this;
+  override on(event: AnsweredEventName, listener: (next: Dialog | null) => void): this;
   override on(event: string, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
@@ -57,6 +63,7 @@ export class Bus extends EventEmitter {
   override off(event: 'divergence', listener: (divergences: Divergence[]) => void): this;
   override off(event: 'pools', listener: (pools: ProjectPoolsWire) => void): this;
   override off(event: SessionEventName, listener: (msg: SessionStreamMsg) => void): this;
+  override off(event: AnsweredEventName, listener: (next: Dialog | null) => void): this;
   override off(event: string, listener: (...args: any[]) => void): this {
     return super.off(event, listener);
   }

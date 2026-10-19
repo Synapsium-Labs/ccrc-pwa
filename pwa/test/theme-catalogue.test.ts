@@ -144,7 +144,11 @@ describe('Storybook stamps themes the way the app does', () => {
   });
 
   it('defaults to the same palette the app defaults to', () => {
-    expect(preview).toContain('initialGlobals: { theme: PHOSPHOR }');
+    // The theme's entry in `initialGlobals`, not the whole literal (D-5157):
+    // the skin axis (D-5093) put a second global beside it, which is that
+    // axis's own business (`skin-catalogue.test.ts` runs the decorators and
+    // pins `skin: REFINED`), not this palette's.
+    expect(preview).toMatch(/initialGlobals:\s*\{[^}]*\btheme:\s*PHOSPHOR\b/);
   });
 });
 

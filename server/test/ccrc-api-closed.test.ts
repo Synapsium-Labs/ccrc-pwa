@@ -223,7 +223,35 @@ describe('the client stays closed', () => {
     // identity-bearing flag reds here the day it lands. (`--*)` is not matched —
     // `*` is outside the class.)
     const cases = [...clientCode().matchAll(/^\s*(--[a-z-]+)\)/gm)].map((m) => m[1]!);
-    expect(cases.sort()).toEqual(['--by', '--json']);
+    // `--session` (delegation broker wave 3, Task 15) is the third label and is NOT a second identity-bearing flag: it belongs to
+    // `parse_intent`, the focused grammar of `coordinators intent`, where it is an ASSERTION that must equal the pane-derived id
+    // (the next test holds that), the shape `asks list --parent` already has.
+    expect(cases.sort()).toEqual(['--by', '--json', '--session']);
+  });
+
+  it('`coordinators intent` takes its identity from the pane: --session is compared with it and never builds anything (Task 15)', () => {
+    // The whole focused grammar is one function, read here as TEXT so a mutation that lets the flag SELECT the session reds by its line.
+    const code = clientCode();
+    const start = code.indexOf('parse_intent() {');
+    expect(start, 'the focused intent grammar is gone').toBeGreaterThan(-1);
+    const fn = code.slice(start, code.indexOf('\n}', start));
+    // ONE flag, and it is the only case label in the function.
+    expect([...fn.matchAll(/^\s*(--[a-z-]+)\)/gm)].map((m) => m[1])).toEqual(['--session']);
+    // The identity is derived BEFORE the comparison, and the comparison refuses.
+    const derive = fn.indexOf('derive_identity');
+    const compare = fn.indexOf('[[ "$session" == "$DERIVED_ID" ]]');
+    expect(derive, 'parse_intent no longer derives the pane identity').toBeGreaterThan(-1);
+    expect(compare, 'parse_intent no longer compares --session with the derived id').toBeGreaterThan(derive);
+    expect(fn.slice(compare, compare + 160)).toContain("refuse 'session-mismatch'");
+    // The id and the body come from the derived pair; the flag's value is read into `session` and reaches nothing else.
+    const body = /^\s*INTENT_BODY=(.*)$/m.exec(fn)?.[1] ?? '';
+    expect(body).toContain('$DERIVED_ID');
+    expect(body).toContain('$DERIVED_UUID');
+    expect(body, 'the body is built from the --session value').not.toContain('$session');
+    expect(/^\s*INTENT_ID="\$DERIVED_ID"$/m.test(fn), 'the path id is not the derived id').toBe(true);
+    expect([...fn.matchAll(/\$\{?session\b/g)].length, '--session is used for something besides the one comparison').toBe(1);
+    // And the generic parser is told nothing: it runs on an emptied argument list for this row.
+    expect(code).toMatch(/if \[\[ "\$key" == 'coordinators\.intent' \]\]; then\n\s+parse_intent "\$@"\n[^\n]*\n\s+set --\n/);
   });
 
   it('never hands the token to anything that prints', () => {
@@ -283,6 +311,30 @@ describe('the client stays closed', () => {
     expect(src).toMatch(/SAFE_RE='\^\[A-Za-z0-9_-\]\+\$'/);
     expect((src.match(/=~ \$SAFE_RE/g) ?? []).length,
       'both the id and the query value must be checked').toBeGreaterThanOrEqual(3);
+  });
+
+  it('fills a body on exactly two rows, and the census of rows is unchanged (D-5298)', () => {
+    // A body fill is one of the two ways this client writes words its caller did not.
+    // `ledger.allocate` fills `byId`; `runs.open` fills `claimedByUuid`, the
+    // claimant's own `.uuid` (coordinator-first routing, plan Task 11a). A third
+    // row, or `runs.open`'s fill moved onto a row that sets no claimant, is a
+    // decision this census makes someone take on purpose. Neither fill is a new
+    // row, a new route or a passthrough. The other way is `coordinators.intent`
+    // (delegation broker wave 3, Task 15), whose body `parse_intent` builds whole
+    // from the pane's identity: it fills nothing, so the scan below does not see
+    // it, and its row took the table from twenty-four to twenty-five on the merge.
+    // The three approvals rows (coordinator-first routing, plan Task 14) took it to
+    // twenty-eight; they fill nothing either: the hook builds its request body whole.
+    // The claimant's three (plan Task 16) took it to thirty-one: `rule` and `release` carry the caller's own body,
+    // and `show` derives its query from the pane as `asks list` does — a query, not a body fill.
+    const code = clientCode();
+    const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
+      .map((m) => m[1]!).sort();
+    expect(filled).toEqual(['ledger.allocate', 'runs.open']);
+    expect(routeKeys().size).toBe(31);
+    // The claimant's identity is the PANE's, derived, never a value the caller
+    // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
+    expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);
   });
 });
 
