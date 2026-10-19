@@ -2648,8 +2648,8 @@ describe('W2-3 Task 6: the bootstrap, the assignment and Q18', () => {
     expect(() => share(-1, 2)).toThrow(/is not a share cluster/);
     expect(() => share(1, -2)).toThrow(/is not a share cluster/);
     expect(() => share(0.5, 2)).toThrow(/is not a share cluster/);
-    const paired = (t: number, c: number, n: number): unknown => gate6.clusterBootstrap({ clusters: [{ t, c, n }], B: 10, rng: substreamFor(), mode: 'paired' });
     const substreamFor = (): { nextU32: () => number } => gate6.substream(SEED6, 'quiz-ci');
+    const paired = (t: number, c: number, n: number): unknown => gate6.clusterBootstrap({ clusters: [{ t, c, n }], B: 10, rng: substreamFor(), mode: 'paired' });
     expect(() => paired(4, 1, 3)).toThrow(/is not a paired cluster/);
     expect(() => paired(1, 4, 3)).toThrow(/is not a paired cluster/);
     expect(() => paired(-1, 0, 3)).toThrow(/is not a paired cluster/);
@@ -2793,5 +2793,105 @@ describe('W2-3 Task 6: the bootstrap, the assignment and Q18', () => {
     }
     expect(parities.size, 'CONTROL: the seeds cover both parities').toBe(2);
     expect(gate6.q18Power(q18Input({ families: [...Q18_FAMILIES].reverse() }))).toEqual(gate6.q18Power(q18Input()));
+  });
+
+  // ── Fix round 1 pins ──
+  it('Fix 1: a simulation passes on the bootstrap\'s LOWER bound: at p = x with several treated families the lower bound sits below x while the point sits at it', () => {
+    // 8 families of 10 windows, rho 0, x = 1/2, grid {1/2, 1}. At p = 1/2 the pooled point is near 1/2 and the lower bound is
+    // well below it, so few simulations pass on .lower and about half on .point; at p = 1 every treated one passes.
+    const families = Array.from({ length: 8 }, (_, i) => ({ key: `fam-${i}`, windows: 10, covered_days: 14 }));
+    const r = gate6.q18Power({ families, plannedDays: 14, seedHex: SEED6, rho: 0, power: 0.5, sims: 400, gridStep: 0.5, B: 200, x: gate6.frac(1, 2) });
+    const at = (p: number): number => r.points.find((q) => Math.abs(q.p - p) < 1e-9)!.share;
+    expect(at(0.5)).toBeGreaterThan(0.1);
+    expect(at(0.5)).toBeLessThan(0.32);   // measured 0.2025 on .lower, 0.5725 on .point, 0.9125 on .upper
+    expect(at(1)).toBeGreaterThan(0.95);   // 1 - 2^-8 of simulations have a treated family, and then lower = 1
+    expect(r.figure).toBe(1);
+  });
+
+  const SEEDS40 = Array.from({ length: 40 }, (_, i) => i.toString(16).padStart(2, '0').repeat(32));
+
+  it('Fix 3a: every grid point restarts the q18 stream: each point\'s share follows the stream\'s first words', () => {
+    // one family of 1 window, rho 0, x = 1/2, grid {1/2, 1}. Word 0 is the flip, words 1 and 2 are the one Bernoulli trial.
+    const u = (w1: number, w2: number): number => ((w1 >>> 5) * 67108864 + (w2 >>> 6) + 0.5) / 9007199254740992;
+    let hits = 0;
+    for (const seed of SEEDS40) {
+      const rng = gate6.substream(seed, 'q18');
+      const [w0, w1, w2] = [rng.nextU32(), rng.nextU32(), rng.nextU32()];
+      const treated = (w0 & 1) === 1;
+      const r = gate6.q18Power({ families: [{ key: 'f', windows: 1, covered_days: 14 }], plannedDays: 14, seedHex: seed, rho: 0, power: 0.001, sims: 1, gridStep: 0.5, B: 20, x: gate6.frac(1, 2) });
+      const at = (p: number): number | undefined => r.points.find((q) => Math.abs(q.p - p) < 1e-9)?.share;
+      expect(at(1), seed.slice(0, 2)).toBe(treated ? 1 : 0);
+      if (treated) {
+        const expected = u(w1, w2) < 0.5 ? 1 : 0;
+        expect(at(0.5), `${seed.slice(0, 2)}: the second point starts from the same first words`).toBe(expected);
+        hits += expected;
+      } else {
+        expect(at(0.5), 'an untreated first point misses the power level, so the lower point is never evaluated').toBeUndefined();
+      }
+    }
+    expect(hits, 'CONTROL: the seeds include a treated family whose trial succeeds').toBeGreaterThan(2);
+  });
+
+  it('Fix 3b: a control family still draws its p_f and its 2n Binomial words, so the next family\'s flip is the same word either way', () => {
+    // family "a" expects 2 windows (rho 0: no Beta words; 1 flip word + 4 trial words), family "b" expects 1. With p = 1 a treated family always
+    // passes, so the share is whether "a" (word 0) or "b" (word 5) is treated.
+    let differs = 0;
+    for (const seed of SEEDS40) {
+      const rng = gate6.substream(seed, 'q18');
+      const w = Array.from({ length: 6 }, () => rng.nextU32());
+      const r = gate6.q18Power({
+        families: [{ key: 'b', windows: 1, covered_days: 14 }, { key: 'a', windows: 2, covered_days: 14 }],
+        plannedDays: 14, seedHex: seed, rho: 0, power: 1, sims: 1, gridStep: 0.9, B: 20,
+      });
+      const expected = ((w[0]! & 1) === 1 || (w[5]! & 1) === 1) ? 1 : 0;
+      expect(r.points.find((q) => q.p === 1)!.share, seed.slice(0, 2)).toBe(expected);
+      if ((w[0]! & 1) === 0 && (w[1]! & 1) !== (w[5]! & 1)) differs += 1;
+    }
+    expect(differs, 'CONTROL: the seeds include a control "a" whose skipped words would move "b"\'s flip').toBeGreaterThan(2);
+  });
+
+  it('Fix 4: a repeated family key is refused, and so is one among families that expect no window', () => {
+    const dup = [{ key: 'fam-00', windows: 4, covered_days: 14 }, { key: 'fam-01', windows: 4, covered_days: 14 }, { key: 'fam-00', windows: 6, covered_days: 14 }];
+    expect(() => gate6.q18Power(q18Input({ families: dup }))).toThrow(TypeError);
+    expect(() => gate6.q18Power(q18Input({ families: dup }))).toThrow(/family key fam-00 is listed twice/);
+    const idle = [{ key: 'z', windows: 1, covered_days: 30 }, { key: 'z', windows: 1, covered_days: 30 }];
+    expect(() => gate6.q18Power(q18Input({ families: idle }))).toThrow(/is listed twice/);
+  });
+
+  it('Fix 5: every parameter is validated before the empty answer: a missing seed or a bad rho is refused when no family expects a window', () => {
+    const idle = [{ key: 'z', windows: 1, covered_days: 30 }];
+    expect(() => gate6.q18Power(q18Input({ families: idle, seedHex: '' }))).toThrow(TypeError);
+    expect(() => gate6.q18Power(q18Input({ families: idle, seedHex: undefined as unknown as string }))).toThrow(/the seed is a non-empty string/);
+    for (const bad of [Number.NaN, -0.1, 1, 2]) expect(() => gate6.q18Power(q18Input({ families: idle, rho: bad })), `rho ${bad}`).toThrow(/rho .* is outside \[0, 1\)/);
+    expect(() => gate6.q18Power(q18Input({ families: [], plannedDays: 0 }))).toThrow(/is not positive/);
+    expect(gate6.q18Power(q18Input({ families: idle, rho: 0 }))).toEqual({ figure: null, procedure: 'bisection-on-grid-crn', points: [] });
+  });
+
+  /** The next double above x (x > 0). */
+  const nextUp = (x: number): number => {
+    const f = new Float64Array([x]);
+    const bits = new BigUint64Array(f.buffer);
+    bits[0]! += 1n;
+    return f[0]!;
+  };
+  /** True when the uniform made of these two words is exactly `expected`: p = expected misses, the next double up hits. */
+  const uniformIs = (words: [number, number], expected: number): boolean =>
+    gate6.binomialDraw(scripted([...words]), 1, expected) === 0 && gate6.binomialDraw(scripted([...words]), 1, nextUp(expected)) === 1;
+
+  it('Fix 6: the largest uniform is 1 - 2^-53, never 1: the all-ones words and the next pair down', () => {
+    const top = 1 - 2 ** -53;
+    expect(uniformIs([0xffffffff, 0xffffffff], top)).toBe(true);
+    expect(gate6.binomialDraw(scripted([0xffffffff, 0xffffffff]), 1, 1), 'a probability-1 trial always succeeds').toBe(1);
+    // a = 2^27 - 1, b = 2^26 - 2: the sum 2^53 - 1.5 rounds (to even) to 2^53 - 2
+    expect(uniformIs([0xffffffff, 0xffffff80], 1 - 2 ** -52)).toBe(true);
+    expect(uniformIs([0xffffffff, 0xffffffbf], 1 - 2 ** -52)).toBe(true);   // the low 6 bits of the second word are dropped
+  });
+
+  it('Fix 7: the uniform\'s bit layout: 27 bits from the first word, 26 from the second, half a step above', () => {
+    expect(uniformIs([0x00000020, 0x00000040], 67108865.5 / 9007199254740992)).toBe(true);   // a = 1, b = 1
+    expect(uniformIs([0x7fffffe0, 0xffffffff], 4503599627370495.5 / 9007199254740992)).toBe(true);   // a = 2^26 - 1, b = 2^26 - 1
+    expect(uniformIs([0x00000000, 0x00000000], 0.5 / 9007199254740992)).toBe(true);
+    expect(uniformIs([0x00000000, 0xffffffff], 67108863.5 / 9007199254740992)).toBe(true);   // b alone: 2^26 - 1
+    expect(uniformIs([0x00000040, 0x00000000], 134217728.5 / 9007199254740992)).toBe(true);   // a = 2
   });
 });

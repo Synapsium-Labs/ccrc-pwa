@@ -894,11 +894,16 @@ export function assignmentSha256(list) {
   return sha256Hex(canonicalJson(sortByCanonical([...list])));
 }
 
-/** A double from two words (53 bits, offset by half a step): never 0, and 1 only on the one pair of all-ones words, 2^-53 of draws, where the sum rounds up. @param {Rng} rng */
+/**
+ * A double strictly inside (0, 1) from two words: 27 bits of the first and 26 of the second make a 53-bit integer, offset
+ * by half a step, so 0 is never reached. Near the top that sum is not representable and rounds up to 2^53 (2^11 word pairs,
+ * 2^-53 of draws), which would be exactly 1, so the result is clamped to the largest double below 1; no other output moves.
+ * @param {Rng} rng
+ */
 function uniformOpen01(rng) {
   const a = rng.nextU32() >>> 5;
   const b = rng.nextU32() >>> 6;
-  return (a * 67108864 + b + 0.5) / 9007199254740992;
+  return Math.min((a * 67108864 + b + 0.5) / 9007199254740992, 1 - 2 ** -53);
 }
 
 /** A standard normal draw: Box and Muller, one of the pair. @param {Rng} rng */
@@ -1022,13 +1027,18 @@ function q18ShareAt(nf, p, o) {
 
 /**
  * Q18, the smallest passing point uptake (W2-D21), procedure 'bisection-on-grid-crn': the grid runs from x to 1
- * in steps of gridStep (which must divide 1 - x); the answer is the smallest grid point whose pass share is at least
- * `power` and whose upper neighbour's is too (the top point needs only its own), found by bisection; null when the
- * top point does not reach `power`, or no family expects a window. `points` lists every point evaluated, by p.
+ * in steps of gridStep (which must divide 1 - x). The answer is the bisection's boundary: a grid point whose pass share
+ * and whose upper neighbour's both reach `power` while the point below's does not (the top point needs only its own, and
+ * x itself needs no point below). It is the smallest passing grid point when the shares are monotone in p; with
+ * non-monotone Monte-Carlo shares it can be a larger one. It is null when the top point does not reach `power`, or when
+ * no family expects a window. Every parameter is validated first, whatever the families expect, and a repeated family
+ * key is refused. `points` lists every point evaluated, by p.
  * @param {{ families: Array<{ key: string, windows: number, covered_days: number }>, plannedDays: number, seedHex: string, rho: number, power: number, sims: number, gridStep: number, B: number, x?: Frac }} input
  * @returns {{ figure: number|null, procedure: 'bisection-on-grid-crn', points: Array<{ p: number, share: number }> }}
  */
 export function q18Power({ families, plannedDays, seedHex, rho, power, sims, gridStep, B, x = X }) {
+  if (typeof seedHex !== 'string' || seedHex === '') throw new TypeError('q18Power: the seed is a non-empty string, passed in');
+  if (!(rho >= 0 && rho < 1)) throw new RangeError(`q18Power: rho ${rho} is outside [0, 1)`);
   if (!(power > 0 && power <= 1)) throw new RangeError(`q18Power: power ${power} is outside (0, 1]`);
   if (!Number.isSafeInteger(sims) || sims < 1) throw new RangeError(`q18Power: sims=${sims} is not a positive integer`);
   nearestRankBounds(B);
@@ -1037,6 +1047,11 @@ export function q18Power({ families, plannedDays, seedHex, rho, power, sims, gri
   const N = Math.round(span / gridStep);
   if (!(gridStep > 0) || N < 1 || Math.abs(N * gridStep - span) > 1e-9) throw new RangeError(`q18Power: grid step ${gridStep} does not divide 1 - x`);
   const procedure = Q18_DEFAULTS.procedure;
+  const keys = new Set();
+  for (const f of families) {
+    if (keys.has(f.key)) throw new TypeError(`q18Power: family key ${f.key} is listed twice`);
+    keys.add(f.key);
+  }
   const nf = expectedWindows(families, plannedDays).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   if (nf.length === 0) return { figure: null, procedure, points: [] };
   /** grid point i as one division of exact integers: (x.num N + i (x.den - x.num)) / (x.den N). @param {number} i */
