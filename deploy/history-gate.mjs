@@ -1827,42 +1827,49 @@ export const COUNTERS_DEF_V1 = Object.freeze([
     name: 'compliance',
     text: 'Per window: the PARSE_STATUS distribution of the leaf whose boundary opens the window, and its ok plus degraded share, '
       + 'read from that leaf\'s nodes row through store.mjs openReader. The expected value is not-requested throughout: '
-      + 'it is W3\'s baseline and a check that nothing was steered.',
+      + 'it is W3\'s baseline and a check that nothing was steered.'
+      + ' Reported per window, by arm and by producer (the window\'s boundary producer).',
   },
   {
     name: 'echo_hits',
     text: 'Per window: the recall-echo rows in the window, by lib provenanceOf\'s structural rule (spec section 6.2), whose '
       + 'tool_result is not an error, read from the window copy\'s rows through openReader. Reported beside the window\'s '
-      + 'recall_calls count; a gap between the two is reported, never repaired.',
+      + 'recall_calls count; a gap between the two is reported, never repaired.'
+      + ' Reported per window, by arm and by producer (the window\'s boundary producer).',
   },
   {
     name: 'lag',
     text: 'Per window: the lag_ms of the newest ticks row at or before the boundary\'s ts_ms that has a measured lag, read '
-      + 'through openReader; unmeasured when there is none. It says how stale the index was when the compaction happened.',
+      + 'through openReader; unmeasured when there is none. It says how stale the index was when the compaction happened.'
+      + ' Reported per window, by arm and by producer (the window\'s boundary producer).',
   },
   {
     name: 'card_served',
     text: 'Per boundary: lib decideCardDelivery({ids, leafId, windowComplete}) over cardIdsIn of the hook_additional_context '
       + 'attachments in the first CARD_MEASURE_ROWS rows after the boundary in the copy pickHoldingCopy chooses, with '
       + 'cardWindowComplete, the functions the sweep\'s card measure uses; counted when it answers served. Control '
-      + 'windows carry no card line by design: their figure is reported, never compared.',
+      + 'windows carry no card line by design: their figure is reported, never compared.'
+      + ' Reported per window, by arm and by producer (the window\'s boundary producer).',
   },
   {
     name: 'card_id_mismatch',
     text: 'Per boundary: the same decideCardDelivery call as card_served, counted when it answers mismatch (the card lines '
       + 'in the window name only other leaves). Control windows carry no card line by design: their figure is reported, '
-      + 'never compared.',
+      + 'never compared.'
+      + ' Reported per window, by arm and by producer (the window\'s boundary producer).',
   },
   {
     name: 'rediscovery',
     text: 'Per window, over the window\'s turns from turnsOf and the window builder: a Read tool_use in turns 1 to 10 whose '
       + 'file_path, made absolute, is the file_path of a Read, Edit, MultiEdit, Write or NotebookEdit tool_use in leaf N\'s '
-      + 'span. Reported as an indicator and a distinct-path count. Bash reads are not counted.',
+      + 'span. Reported as an indicator and a distinct-path count. Bash reads are not counted.'
+      + ' Reported per window, by arm and by producer (the window\'s boundary producer). Changed families are dropped from the arm comparison only.',
   },
 ].map((c) => Object.freeze(c)));
 
-/** The sha part 1 signs as `counters_def.sha256`: sha256Hex over the canonical JSON of COUNTERS_DEF_V1. */
-export const COUNTERS_DEF_V1_SHA256 = sha256Hex(canonicalJson(COUNTERS_DEF_V1));
+/** The sha part 1 signs as `counters_def.sha256`: sha256Hex over the canonical JSON of COUNTERS_DEF_V1, written whole
+ *  like the other signed texts' shas (a one-word edit to a text above must move this literal with it, or the suite is red). */
+export const COUNTERS_DEF_V1_SHA256 = '804793ca157243a308dd3948c5e106127368af82a209d98a22e1c3ef1f197061';
 
 /** The open record's `kind` (decisions §4, part 1's first row). */
 export const OPEN_RECORD_KIND = 'ccrc-history-w2-open-record';

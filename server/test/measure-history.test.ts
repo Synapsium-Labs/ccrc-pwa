@@ -4842,4 +4842,35 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
     for (const w of new Set(words)) expect(gate9.GATE_REASONS, w).toContain(w);
     expect(section).toContain('if (!GATE_REASONS.includes(word)) throw');
   });
+
+  // ── Final fix wave (decisions section 4's defaults, W2-D86, W2-D87, W2-D90, W2-D25, W2-D85) ──
+  describe('final fix wave', () => {
+    const GATE_TEXT = readFileSync(path.join(ROOT, 'deploy', 'history-gate.mjs'), 'utf8');
+
+    it('final D: every counter text says it is reported per window, by arm and by producer (W2-D87); re-discovery drops changed families from the arm comparison only (W2-D86)', () => {
+      const texts = Object.fromEntries(gate9.COUNTERS_DEF_V1.map((c: { name: string; text: string }) => [c.name, c.text]));
+      for (const name of ['compliance', 'echo_hits', 'lag', 'card_served', 'card_id_mismatch', 'rediscovery']) {
+        expect(texts[name], name).toMatch(/per window, by arm and by producer/);
+        expect(texts[name], name).toMatch(/the window's boundary producer/);
+      }
+      expect(texts.rediscovery).toContain('Changed families are dropped from the arm comparison only.');
+      // Every sentence the text had before the wave is kept.
+      expect(texts.rediscovery).toContain('Reported as an indicator and a distinct-path count. Bash reads are not counted.');
+      expect(texts.compliance).toContain('it is W3\'s baseline and a check that nothing was steered.');
+    });
+
+    it('final D: COUNTERS_DEF_V1_SHA256 is a 64-hex literal in the module, and equals the sha of the text it freezes', () => {
+      expect(GATE_TEXT).toMatch(/export const COUNTERS_DEF_V1_SHA256 = '[0-9a-f]{64}';/);
+      expect(gate9.COUNTERS_DEF_V1_SHA256).toBe(sha9(cj9(gate9.COUNTERS_DEF_V1)));
+    });
+
+    it('final D: the sha is not recomputed at load, so a one-word edit to a signed text moves the freeze (mutant: the literal left alone)', () => {
+      // A copy of the module with one word of the first text changed and the literal untouched: the equality above is the guard,
+      // shown here by recomputing over the edited text.
+      const edited = gate9.COUNTERS_DEF_V1.map((c: { name: string; text: string }, i: number) =>
+        (i === 0 ? { name: c.name, text: c.text.replace('Per window', 'Per windows') } : c));
+      expect(sha9(cj9(edited))).not.toBe(gate9.COUNTERS_DEF_V1_SHA256);
+      expect(GATE_TEXT).not.toMatch(/COUNTERS_DEF_V1_SHA256 = sha256Hex/);
+    });
+  });
 });
