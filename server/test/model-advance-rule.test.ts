@@ -293,9 +293,18 @@ describe('REASON_MAX — the one cap on a history reason', () => {
 describe('shared/model-advance.mjs is a pure module that spells no class word', () => {
   it('imports only ./models.mjs, and nothing of node:*', () => {
     const src = readFileSync(MODULE, 'utf8');
-    // A specifier after `from` or a bare `import`, in single or double quotes: `import 'node:fs'` has no `from`.
-    expect([...src.matchAll(/\b(?:from|import)\s*(['"])([^'"]+)\1/g)].map((m) => m[2])).toEqual(['./models.mjs']);
+    // STATEMENTS only, each opening its line, in single or double quotes: `import … from '…'` and
+    // `export … from '…'` (the clause between is a name, `* as ns`, a `{ … }` list that may span lines, or a name
+    // and then one of those), and a bare `import '…'`, which has no `from`. Anchored, so a message that quotes a
+    // key named "from" is never read as an import; the controls below pin both halves of that.
+    const FROM = /^\s*(?:import|export)\s+(?:[\w$]+\s*,\s*)?(?:[\w$]+|\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s*from\s*(['"])([^'"]+)\1/gm;
+    const BARE = /^\s*import\s*(['"])([^'"]+)\1/gm;
+    const scan = (s: string): string[] => [...s.matchAll(FROM), ...s.matchAll(BARE)].map((m) => m[2]!);
+    expect(scan(src)).toEqual(['./models.mjs']);
     expect(src).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);
+    expect(scan(`  if (!x) bad('pending.from', 'is not {"from": <level|null>, "to": <level|null>}.');\n`)).toEqual([]);
+    expect(scan(`import { a,\n  b } from "m1";\nexport * from 'm2';\n  import x, * as y from 'm3';\nimport 'm4';\n`))
+      .toEqual(['m1', 'm2', 'm3', 'm4']);
   });
 
   it('neither it nor its .d.mts spells a class word, in code or prose: the four come from CLASSES', () => {

@@ -203,7 +203,7 @@ function checkEntry(e, f) {
   if (typeof e.ok !== 'boolean') bad(`${f}.ok`, 'is not true or false.');
   if (!CANARY_RESULTS.includes(e.canary)) bad(`${f}.canary`, `is not one of ${CANARY_RESULTS.join(', ')}.`);
   if (e.effort !== undefined && !(isObj(e.effort) && isLevelOrNull(e.effort.from) && isLevelOrNull(e.effort.to))) {
-    bad(`${f}.effort`, 'is not {from: <level|null>, to: <level|null>}.');
+    bad(`${f}.effort`, 'is not {"from": <level|null>, "to": <level|null>}.');
   }
   if (e.reason !== undefined && !(typeof e.reason === 'string' && REASON_RE.test(e.reason))) {
     bad(`${f}.reason`, `is not printable ASCII of at most ${REASON_MAX} characters.`);
@@ -224,16 +224,14 @@ function checkEntry(e, f) {
 function checkPending(p) {
   if (p === null) return;
   if (!isObj(p)) {
-    bad('pending', 'is not null or an intent: {class, from, to, effortFrom, effortTo, at} for an '
-      + 'automatic advance, {how: "hand", class, from, to, emptied, at} for a hand set-class.');
+    bad('pending', 'is not null or an intent: {"class", "from", "to", "effortFrom", "effortTo", "at"} for an '
+      + 'automatic advance, {"how": "hand", "class", "from", "to", "emptied", "at"} for a hand set-class.');
   }
   if (p.how !== undefined && p.how !== 'hand') {
     bad('pending.how', 'is not "hand" (a hand set-class), or absent (an automatic advance).');
   }
   if (!CLASSES.includes(p.class)) bad('pending.class', `is not one of ${CLASSES.join(', ')}.`);
-  // A template literal, as `checkEntry`'s fields are: a quote right after the word `from` reads to this module's
-  // import scan (`model-advance-rule.test.ts`) as a specifier, which is also why no message here quotes that key.
-  if (!isIdOrNull(p.from)) bad(`pending.from`, 'is not a model id or null.');
+  if (!isIdOrNull(p.from)) bad('pending.from', 'is not a model id or null.');
   if (!isAt(p.at)) bad('pending.at', 'is not a time of the form YYYY-MM-DDTHH:MM:SSZ.');
   if (p.how === 'hand') {
     if (!isIdOrNull(p.to)) bad('pending.to', 'is not a model id or null.');
