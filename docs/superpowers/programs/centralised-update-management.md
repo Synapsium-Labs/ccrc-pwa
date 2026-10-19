@@ -2114,6 +2114,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         - Server backups 2211M (2059M), from two more snapshots. v0.0.327 (#691) and v0.0.328 (#681, the blackout
           fix) followed. STATUS: fleet v0.0.326, server v0.0.325, newest v0.0.328, intent dev/auto=off, backups
           fleet 159M/server 2211M, disk free fleet 209G/work volume 96G/server 31G.
+      - 07:15: full run 39211404441 on v0.0.328 (`c44bea401`) is red only on test-macos 2/4 (job 117925528881):
+        `platform-hazards.test.ts`'s D-2661 FIFO-EOF case, a recorded flake (above, and account-connections wave
+        1's). 1 failed of 8,325 in the shard; every Linux leg and the other three macOS shards green. The failed
+        job is re-run, once, by the rule of 2026-10-18 22:05. On a green `full-suite` I promote.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
