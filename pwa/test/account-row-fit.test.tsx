@@ -18,9 +18,11 @@
 // min-content in Chromium, so the column grew to the spare row's full one-line
 // width (about 384px against a 328px list) and dragged every row with it.
 //
-// jsdom lays nothing out, so the geometry is held by the Playwright measure
-// in the PR (row right edge <= sheet body right edge, ring room >= 0, at 360
-// and 390, both skins, both modes). This file holds the two things that
+// jsdom lays nothing out, so the geometry is held in a real Chrome by
+// `browser/row-fit.browser.test.ts`, the pwa browser leg's port of the PR's
+// Playwright measure (rows and their keyboard ring inside the sheet body, the
+// group's items inside the group, a tag cut only past the group, at 360, 390,
+// 1280 and 1920, both skins, both modes). This file holds the two things that
 // produce that geometry: the markup groups the name with its secondary tags,
 // and the stylesheet lets that group, never the name, give way.
 import { afterEach, describe, expect, it, vi } from 'vitest';

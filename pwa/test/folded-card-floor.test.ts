@@ -30,6 +30,13 @@
 // the wrap now sit on the base `.proj-card-name` and `.proj-card-toggle`
 // rules, folded or not, selected or not, and the selection rule keeps only its
 // tint, rail and padding.
+//
+// This file pins the rules; the geometry they produce (a whole name on its
+// chevron's line, the meta wrapped inside the toggle, a long name cut only at
+// its cap) is measured in a real Chrome by `browser/row-fit.browser.test.ts`.
+// The leg cannot see one mutant this file kills: with the toggle wrapping, a
+// shrinkable name is laid out on a line of its own and never shrinks, so
+// `flex-shrink: 0` is held here alone.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
