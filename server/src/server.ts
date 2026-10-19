@@ -2916,7 +2916,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/sessions/:id/ensure', async (req, reply) => {
     const { id } = req.params as { id: string };
-    // NOT behind `knownId`, whose census of 18 stays what `routes.test.ts`
+    // NOT behind `knownId`, whose census of 21 stays what `routes.test.ts`
     // measures: the route asks the registry-id predicate itself, first
     // (path-identity spec §2.3, as built). ccd's `cmd_ensure` binds its argument
     // literally and dies on an absent row, so this is no redirect today; the

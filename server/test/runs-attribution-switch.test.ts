@@ -294,19 +294,23 @@ describe('POST /api/runs — the fleet does not carry the client yet (D-5298)', 
     });
   }
 
-  it('an unattributed claimedBy that is not a listed registry row is 403 unknown-sender, never path-joined into a field read', async () => {
+  it('an unattributed claimedBy that is not a listed registry row is 403 unknown-sender, and a path-like one is refused by the id gate first: neither is path-joined into a field read', async () => {
     // `../outside` would read `<registryDir>/../outside.project`, a file
     // outside the registry: its content must neither admit the open nor come
-    // back as `by`.
+    // back as `by`. Since path identity's landing round 3 the open's
+    // registry-id gate refuses it ahead of this gate (400 `bad-session-id`),
+    // so no listing is made for it at all. A registry-shaped id that is not a
+    // row is still this gate's.
     const home = mkTmp('ccrc-attr-');
     seedFleet(home);
     writeFileSync(path.join(home, 'outside.project'), 'project-a');
     const w = await openApp(home, notUpgraded(null)); app = w.app;
-    for (const claimedBy of ['../outside', 'project-a-not-listed']) {
-      const res = await post(app, { ...OPEN, claimedBy });
-      expect(res.statusCode, claimedBy).toBe(403);
-      expect(res.json()).toMatchObject({ ok: false, error: 'unknown-sender' });
-    }
+    const pathLike = await post(app, { ...OPEN, claimedBy: '../outside' });
+    expect(pathLike.statusCode).toBe(400);
+    expect(pathLike.json()).toMatchObject({ ok: false, error: 'bad-session-id' });
+    const res = await post(app, { ...OPEN, claimedBy: 'project-a-not-listed' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-sender' });
     expect(okRuns(w.coord.runs())).toHaveLength(0);
   });
 

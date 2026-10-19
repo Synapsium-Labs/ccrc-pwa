@@ -16,6 +16,7 @@ import type { FastifyInstance } from 'fastify';
 import { localIO, type FleetIO } from '../src/io.js';
 import { POOLS_CAP } from '../src/ccdargv.js';
 import type { FleetState } from '../src/fleetstate.js';
+import { Tmux, type Runner } from '../src/exec.js';
 import { mkTmp } from './tmpHelpers.js';
 import { appFor, recorder, seedRow } from './idGateFixture.js';
 import { EDGE_ACCEPTED_IDS, REFUSED_IDS } from './registryIdCases.js';
@@ -41,7 +42,7 @@ afterEach(async () => {
 
 /** A server over a fresh fixture HOME with `plant`'s rows on disk. `listings` counts `readdir`s of the registry. */
 const rig = async (
-  plant: readonly string[], opts: { fleetState?: FleetState; fail?: ReadonlySet<string> } = {},
+  plant: readonly string[], opts: { fleetState?: FleetState; fail?: ReadonlySet<string>; tmux?: Tmux } = {},
 ): Promise<Rig> => {
   const home = mkTmp('ccrc-knownid-');
   for (const id of plant) seedRow(home, id);
@@ -55,7 +56,10 @@ const rig = async (
     },
   };
   const { run, calls } = recorder(opts.fail === undefined ? {} : { fail: opts.fail });
-  const w = await appFor(home, run, { io, ...(opts.fleetState === undefined ? {} : { fleetState: opts.fleetState }) });
+  const w = await appFor(home, run, {
+    io, ...(opts.fleetState === undefined ? {} : { fleetState: opts.fleetState }),
+    ...(opts.tmux === undefined ? {} : { tmux: opts.tmux }),
+  });
   opened.push(w.app);
   return { app: w.app, calls, listings: () => n };
 };
@@ -164,7 +168,13 @@ describe('the two request-id routes outside knownId (spec §2.3, as built)', () 
   });
 
   it('control: /swap with crossPool:true for a--actor, pools-v1 advertised, composes the crossing', async () => {
-    const r = await rig(['a--actor'], { fleetState: POOLS_ADVERTISED });
+    // D-5240 (landing round 3): the swap route now reads the turn of both arms before the queue. tmux answers on its
+    // own runner, never recorded in `calls`: the pane is proven gone, so the verdict is `idle` with no further read
+    // (`swap-route-pool.test.ts`'s own adapter for the same gate).
+    const paneGone: Runner = async (_cmd, args) =>
+      args[0] === 'has-session' ? { code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` }
+        : { code: 0, stdout: '', stderr: '' };
+    const r = await rig(['a--actor'], { fleetState: POOLS_ADVERTISED, tmux: new Tmux(paneGone) });
     const res = await post(r.app, 'a--actor', 'swap', { wrapper: 'claude-b', crossPool: true });
     expect(res.statusCode).toBe(200);
     expect(r.calls).toEqual([['swap', '--cross-pool', 'a--actor', 'claude-b']]);

@@ -1399,13 +1399,15 @@ export function registerCoordRoutes(
     return coordMutex.run(async () => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     // THE PRECONDITIONS ARE DECIDED IN L1 (D-5384, audit ticket ARCH-21):
-    // `coord/openRun.ts`'s `openRunPreconditions` runs the body shape, the
-    // review arm (D-2799), the slug and home shaping (D-2349), F1's
-    // `project-mismatch`, F2's home verdict and §12's `claimant-is-a-worker`,
-    // in that order, before any row exists — so a refusal leaves no `planned`
-    // orphan and places no hold. Every read it makes is a synchronous DB read
-    // handed in here, called only by the gate that needs it. This route answers
-    // its refusal and acts on its plan; it decides none of it.
+    // `coord/openRun.ts`'s `openRunPreconditions` runs every precondition —
+    // the body shape, path identity's three id checks (spec §2.3), the review
+    // arm (D-2799), the slug and home shaping (D-2349), D-5298's attribution
+    // and registry gates, F1's `project-mismatch`, F2's home verdict and §12's
+    // `claimant-is-a-worker` — in its gate table's order, before any row
+    // exists, so a refusal leaves no `planned` orphan and places no hold.
+    // Every read it makes is handed in here, called only by the gate that
+    // needs it. This route answers its refusal and acts on its plan; it
+    // decides none of it.
     const pre = await openRunPreconditions({
       body, legacyAccepted: HOME_PROJECT_LEGACY_ACCEPTED,
       reviewed: (id) => { const r = coord.run(id); return r.ok ? r : { ok: false, detail: r.detail }; },
@@ -1722,10 +1724,10 @@ export function registerCoordRoutes(
       case 'heir-is-a-worker':
         return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
       // spec §2.3: `which` names the side that is not a registry id. The HEIR is
-      // this request's own value, so `bad-session-id` (400), the word every route
-      // answers for a request id ccd could read as a flag (D-5824). The stored
-      // CLAIMANT is a row no retry heals, so `bad-session` (409), and its detail
-      // names the abandon door. Nothing was re-pointed.
+      // this request's own value, so `bad-session-id` (400), the status main's
+      // refusal table (`shared/refusal.ts`) gives that word, where `bad-session`
+      // is 409. The stored CLAIMANT is a row no retry heals, so `bad-session`
+      // (409), and its detail names the abandon door. Nothing was re-pointed.
       case 'bad-session':
         return r.which === 'claimant'
           ? refuseRoute(reply, 'bad-session', { detail: r.detail })
@@ -4392,6 +4394,7 @@ export function registerCoordRoutes(
     const signer = signerFor();
     if (signer === null) return refuseRoute(reply, 'internal', { detail: 'the approval signing key is not loaded' });
 
+    // [registry-refused:refuses] a refused row is in no `recs`: the request answers `not-a-child`, and a refused claimant reads as `parent-not-live` in `heldFor`, which leaves the prompt the operator's.
     const recs = await readRegistry(deps.io, deps.cfg);
     const rec = recs.find((r) => r.id === sessionId) ?? null;
     if (rec === null || rec.child.kind !== 'child') return refuseRoute(reply, 'not-a-child');
@@ -4547,6 +4550,7 @@ export function registerCoordRoutes(
     if (now >= row.notifyAt) {
       return refuseRoute(reply, 'hook-gone', { detail: 'the window has passed: the child\'s hook has returned and the operator has the prompt' });
     }
+    // [registry-refused:refuses] a refused row is in no `recs`: the ruling answers `not-a-child`, and a refused claimant reads as `parent-not-live` in `heldFor`, so no ruling is stored.
     const recs = await readRegistry(deps.io, deps.cfg);
     const rec = recs.find((r) => r.id === row.childId) ?? null;
     if (rec === null || rec.child.kind !== 'child' || rec.child.runId !== row.runId) return refuseRoute(reply, 'not-a-child');

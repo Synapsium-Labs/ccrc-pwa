@@ -642,6 +642,12 @@ describe('the rejection table is total, in both directions', () => {
       'reclaim-paused',       // $REG marker filename, not a code (child-reclamation wave 4)
       'bad-request',          // the generic body-shape refusal server.ts
                                // already uses throughout; not a mail code
+      'bad-session-id',       // the request-id refusal server.ts's session routes
+                               // answer (400 in shared/refusal.ts's table); since
+                               // path identity's landing round 3, coord/routes.ts
+                               // and coord/openRun.ts answer it too, for a request
+                               // id that is not a registry id. Not a mail code,
+                               // and not a run refusal.
       'not-found',            // GET /api/mail/:id's generic 404 for an
                                // unknown delivery id; not a mail reject code
                                // (nothing was ever rejected — it never existed)

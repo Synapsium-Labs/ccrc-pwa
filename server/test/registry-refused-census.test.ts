@@ -132,7 +132,9 @@ const EXPECTED_SITES: readonly string[] = [
   'server.ts | GET /ws/fleet | readRegistryMeasured | stale',
   'coord/routes.ts | POST /api/mail | readRegistry | raw-name',
   'coord/routes.ts | POST /api/mail/:id/ack | readRegistry | raw-name',
-  'coord/routes.ts | requireAttribution | readRegistry | raw-name',
+  'coord/routes.ts | attributionVerdict | readRegistry | raw-name',
+  'coord/routes.ts | POST /api/approvals | readRegistry | refuses',
+  'coord/routes.ts | POST /api/approvals/:id/rule | readRegistry | refuses',
   'fleet.ts | assembleFleet | readRegistryMeasured | tests-only',
   'lifecycle.ts | listProjects | readRegistryMeasured | reports',
   'registry.ts | readRegistry | readRegistryMeasured | wrapper',
@@ -196,8 +198,8 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
       .toEqual([]);
   });
 
-  it('the classified set is exactly these 23 sites', () => {
-    expect(EXPECTED_SITES).toHaveLength(23);
+  it('the classified set is exactly these 25 sites', () => {
+    expect(EXPECTED_SITES).toHaveLength(25);
     expect(allSites().map(key).sort()).toEqual([...EXPECTED_SITES].sort());
   });
 
@@ -357,7 +359,7 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
       'a production call leaves its rows to the tests-only fallback').toEqual([]);
   });
 
-  it('the migrated readers carry their placed words, and readRegistry keeps 8 sites', () => {
+  it('the migrated readers carry their placed words, and readRegistry keeps 10 sites', () => {
     const sitesOf = (file: string, reader: 'readRegistry' | 'readRegistryMeasured') =>
       allSites().filter((s) => s.file === file && s.reader === reader);
     const words = (file: string): (string | null)[] => sitesOf(file, 'readRegistryMeasured').map((s) => s.word);
@@ -368,10 +370,10 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     expect(sitesOf('fleet.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('lifecycle.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('server.ts', 'readRegistry'), 'prTasks alone, placed knownId').toHaveLength(1);
-    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'attribution, mail and ack, placed raw-name').toHaveLength(3);
+    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'attribution, mail and ack, placed raw-name; the two approval routes, placed refuses').toHaveLength(5);
     const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
       allSites().filter((s) => s.reader === reader).length;
-    expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(8);
+    expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(10);
     expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(15);
   });
 });
