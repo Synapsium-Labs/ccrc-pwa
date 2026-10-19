@@ -7,7 +7,7 @@ Plans: `docs/superpowers/plans/2026-10-19-claude-binary-lifecycle-w1-observe.md`
 `docs/superpowers/plans/2026-10-19-claude-binary-lifecycle-w4-self-update-off.md` (wave 4, CB4a),
 `docs/superpowers/plans/2026-10-19-claude-binary-lifecycle-w5-auto-roll.md` (wave 5, CB5a to CB5c, OA-6)
 Home project: `ccrc-pwa`   Brief: CCRCP-32 (GitHub #218)   Workspace: **a fresh child per wave**
-**Status: approved; no wave started** (R2, 2026-10-19). The spec's rev 3, the five plans and this ledger land in one docs PR.
+**Status: approved; wave 1 in progress** (R2, 2026-10-19; CB1a landed as #726). The spec's rev 3, the five plans and this ledger land in one docs PR.
 
 **What this program is.** ccrc owns Claude Code releases on the fleet.
 - **Observe** (W1): every session's running build against its (node, lane kind) target, on the card, in the facts and on Settings → Updates.
@@ -20,7 +20,7 @@ Home project: `ccrc-pwa`   Brief: CCRCP-32 (GitHub #218)   Workspace: **a fresh 
 
 | # | scope | deploy class | tasks | PRs | state |
 |---|---|---|---|---|---|
-| 1 | observe: lexicon, deny rules, switches and `_mem_headroom`, installer in measure mode, the tenth node file, `FleetSession.claude`, chip and facts, the Settings card read-only | AGENT-FIRST (fleet), then server; PWA after S7a, S16, R2b1, R2b2 | CB1a to CB1h | — | not started |
+| 1 | observe: lexicon, deny rules, switches and `_mem_headroom`, installer in measure mode, the tenth node file, `FleetSession.claude`, chip and facts, the Settings card read-only | AGENT-FIRST (fleet), then server; PWA after S7a, S16, R2b1, R2b2 | CB1a to CB1h | #726 (CB1a) | in progress |
 | 2 | the roll: strict resume, the spawn carrier, `ccd roll` gate, act, canary health; the server's argv, holds, token and route; Restart onto | AGENT-FIRST (fleet), then server; PWA after S2d | CB2a to CB2h | — | not started |
 | 2a | the first manual canary, per (node, lane kind) | operator act | OA-2, OA-3 | — | not started |
 | 3 | install: intent and projection, pull, routes, canary approval, installer live, launcher adopted, descriptor, prune, bootstrap, Settings controls | AGENT-FIRST (the launcher is every lane's exec path), deployed by OA-4 | CB3a to CB3j | — | not started |
