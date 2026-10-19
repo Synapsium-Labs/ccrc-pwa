@@ -118,7 +118,7 @@ export async function approvalsFixture(over: { role?: 'server' | 'both' } = {}):
   const base = testDeps(home, runner);
   const deps = {
     // A two-box server is `server` over CCRC_FLEET=remote; `both` is the single box, CCRC_FLEET=local.
-    ...base, cfg: { ...base.cfg, role: over.role ?? 'server', fleetMode: (over.role ?? 'server') === 'both' ? 'local' : 'remote' },
+    ...base, cfg: { ...base.cfg, role: over.role ?? 'server', fleetMode: (over.role ?? 'server') === 'both' ? 'local' as const : 'remote' as const },
     mailToken: TOKEN, coord, notifyLog: log,
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
   };
