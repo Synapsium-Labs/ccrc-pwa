@@ -34,7 +34,7 @@ export { Icon, type IconName, type IconProps, type IconSize } from './primitives
 export { Well, WELL, type WellProps } from './primitives/well';
 // The page scaffold (D-5102; the C3 slots D-5666).
 export {
-  PageScaffold, PAGE_HEAD, PAGE_HEAD_ROW, PAGE_CARET, PAGE_TITLE, PAGE_ACTIONS, PAGE_BODY, type PageScaffoldProps,
+  PageScaffold, PAGE_HEAD, PAGE_HEAD_ROW, PAGE_CARET, PAGE_TITLE, PAGE_ACTIONS, PAGE_BODY, PAGE_FOCUS_CLEAR, type PageScaffoldProps,
 } from './primitives/page-scaffold';
 export {
   Section, SECTION, SECTION_HEAD, SECTION_TITLE, SECTION_SCOPE, SECTION_PURPOSE, SECTION_CARD, type SectionProps,

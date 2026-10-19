@@ -166,9 +166,30 @@ describe('PageScaffold (D-5102)', () => {
 
   it('D-5666: the nav slot renders beside the body, and the body keeps its own column', () => {
     const { container } = scaffold({ nav: <nav aria-label="sections">n</nav> });
-    expect(screen.getByRole('navigation', { name: 'sections' })).toBeInTheDocument();
+    const nav = screen.getByRole('navigation', { name: 'sections' });
     const body = container.querySelector('[data-page-body]')!;
     expect(body.className.split(/\s+/)).toContain('max-w-(--page-max)');
+    // Beside, from a 60rem PANE: the root is the query container (the pane's
+    // width, not the window's) and the wrapper holding the nav column and the
+    // body turns into two columns at that container width.
+    const root = container.querySelector('[data-page-scaffold]')!;
+    expect(root.className.split(/\s+/)).toContain('@container');
+    const wrapper = body.parentElement!;
+    expect(wrapper.contains(nav)).toBe(true);
+    expect(wrapper.className.split(/\s+/)).toContain('@min-[60rem]:grid-cols-[13rem_minmax(0,1fr)]');
+    expect([...wrapper.children].indexOf(nav.parentElement!)).toBe(0);
+    expect([...wrapper.children].indexOf(body)).toBe(1);
+  });
+
+  it('D-5667: focus scrolled into the body or the nav clears the sticky header (WCAG 2.2 SC 2.4.11)', () => {
+    const { container } = scaffold({ nav: <nav aria-label="sections">n</nav> });
+    const body = container.querySelector('[data-page-body]')!;
+    const navColumn = screen.getByRole('navigation', { name: 'sections' }).parentElement!;
+    for (const el of [body, navColumn]) {
+      expect(el.className.split(/\s+/)).toContain('[&_*]:scroll-mt-[calc(var(--head-h)+var(--sp-2))]');
+    }
+    // The header's height is the reserve, so it re-points with the skin.
+    expect(allTokens.has('--head-h')).toBe(true);
   });
 });
 
@@ -195,6 +216,25 @@ describe('Section (D-5102, D-5666)', () => {
     const head = screen.getByRole('heading', { level: 2 }).parentElement!;
     expect(head.className).toContain('[flex-direction:var(--section-flow)]');
     expect(allTokens.has('--section-flow')).toBe(true);
+  });
+
+  it('D-5666: the DOM order is the reading order, the title then whose it is', () => {
+    render(<Section scope="Whole fleet" title="Stall watch"><p>x</p></Section>);
+    const h2 = screen.getByRole('heading', { level: 2, name: 'Stall watch' });
+    const head = h2.parentElement!;
+    expect([...head.children].map((c) => c.tagName)).toEqual(['H2', 'P']);
+    expect(head.children[1]).toHaveTextContent('Whole fleet');
+  });
+
+  it('D-5666: Refined lifts the scope above the title, Instrument sets it beside', () => {
+    // Refined's place is the default, in tokens.css; Instrument's in skins.css's
+    // bare block (every width, every pointer), and nowhere else.
+    const flows = (css: string): string[] => [...css.matchAll(/--section-flow\s*:\s*([\w-]+)\s*;/g)].map((m) => m[1]!);
+    expect(flows(stripCss(read('ui/src/styles/tokens.css')))).toEqual(['column-reverse']);
+    const skins = stripCss(read('ui/src/styles/skins.css'));
+    expect(flows(skins)).toEqual(['row']);
+    const bare = /^:root\[data-skin='instrument'\]\s*\{([\s\S]*?)^\}/m.exec(skins)?.[1] ?? '';
+    expect(flows(bare)).toEqual(['row']);
   });
 });
 

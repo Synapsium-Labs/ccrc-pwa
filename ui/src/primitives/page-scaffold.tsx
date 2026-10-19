@@ -39,6 +39,13 @@ export const PAGE_CARET = 'flex-none font-mono text-title font-medium leading-ti
 export const PAGE_TITLE = 'm-0 min-w-0 flex-1 font-mono text-title font-medium leading-tight text-ink-primary wrap-break-word';
 export const PAGE_ACTIONS = 'flex flex-none items-center gap-2';
 export const PAGE_BODY = 'mx-auto grid w-full content-start gap-3 px-gutter pt-2 pb-section';
+/** Focus never lands under the sticky header (WCAG 2.2 SC 2.4.11). When Tab or
+ *  Shift+Tab scrolls a row into view, the browser stops at the row's scroll
+ *  margin, so every element in the body and the nav keeps the header's height
+ *  and one step of air clear above it (D-5667). On the scaffold, not on the
+ *  scrollers: the phone scrolls the document and the desktop the detail pane,
+ *  and only this page has a header to clear. */
+export const PAGE_FOCUS_CLEAR = '[&_*]:scroll-mt-[calc(var(--head-h)+var(--sp-2))]';
 
 const COLUMN = { page: 'max-w-(--page-max)', wide: 'max-w-(--page-max-wide)' } as const;
 
@@ -64,7 +71,7 @@ export function PageScaffold({
 }: PageScaffoldProps): ReactNode {
   const column = wide ? COLUMN.wide : COLUMN.page;
   const body = (
-    <div data-page-body="" className={cn(PAGE_BODY, column, nav !== undefined && 'mx-0')}>
+    <div data-page-body="" className={cn(PAGE_BODY, PAGE_FOCUS_CLEAR, column, nav !== undefined && 'mx-0')}>
       {children}
     </div>
   );
@@ -82,7 +89,7 @@ export function PageScaffold({
       </header>
       {nav === undefined ? body : (
         <div className="mx-auto grid w-full max-w-(--page-max-wide) @min-[60rem]:grid-cols-[13rem_minmax(0,1fr)] @min-[60rem]:gap-6">
-          <div className="min-w-0 px-gutter pt-2 @min-[60rem]:sticky @min-[60rem]:top-head @min-[60rem]:self-start @min-[60rem]:pr-0">
+          <div className={cn(PAGE_FOCUS_CLEAR, 'min-w-0 px-gutter pt-2 @min-[60rem]:sticky @min-[60rem]:top-head @min-[60rem]:self-start @min-[60rem]:pr-0')}>
             {nav}
           </div>
           {body}

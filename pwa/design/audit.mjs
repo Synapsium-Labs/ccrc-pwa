@@ -854,7 +854,7 @@ export const INHERITED_GROUNDS = {
   },
   '.mail-chip': {
     under: ['var(--bg-page)'],
-    why: "the OFF state of the programme filter chip (F4, cross-repo wave 2). `.mail-screen` sets no background of its own, so its real ground is body's --bg-page (styles/base.css). Its selector names no ancestor, so no route could ground it",
+    why: "the OFF state of the programme filter chip (F4, cross-repo wave 2). it sits in PageScaffold's body (D-5102), which sets no background of its own, so its real ground is body's --bg-page (styles/base.css). Its selector names no ancestor, so no route could ground it",
   },
   ".mail-chip[data-on]": {
     under: ['var(--bg-page)'],

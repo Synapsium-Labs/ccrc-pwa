@@ -167,7 +167,8 @@ describe('ArchiveScreen', () => {
 describe('ArchiveScreen on the page scaffold (D-5102)', () => {
   it('renders a PageScaffold with one h1 and Back to the fleet, with rows and without', () => {
     for (const sessions of [[s()], []]) {
-      const { unmount } = render(<ArchiveScreen sessions={sessions} onOpen={() => {}} />);
+      const { container, unmount } = render(<ArchiveScreen sessions={sessions} onOpen={() => {}} />);
+      expect(container.querySelector('[data-page-body]')?.className.split(/\s+/)).toContain('max-w-(--page-max)');
       const h1 = screen.getAllByRole('heading', { level: 1 });
       expect(h1).toHaveLength(1);
       expect(h1[0]).toHaveAccessibleName('Archive');
@@ -178,6 +179,17 @@ describe('ArchiveScreen on the page scaffold (D-5102)', () => {
 
   it('says "Nothing is archived." through EmptyState, on the scaffold', () => {
     render(<ArchiveScreen sessions={[]} onOpen={() => {}} />);
-    expect(screen.getByText('Nothing is archived.')).toBeInTheDocument();
+    const line = screen.getByText('Nothing is archived.');
+    expect(line.closest('[data-empty-state]')?.getAttribute('data-state')).toBe('ok');
+  });
+
+  it("each row sits in the Section's card on --bg-surface, the ground audit.mjs declares for it", () => {
+    const { container } = render(<ArchiveScreen sessions={[s(), s({ id: 'b', workspace: 'ws-b' })]} onOpen={() => {}} />);
+    const rows = [...container.querySelectorAll('.archive-row')];
+    expect(rows.length).toBe(2);
+    for (const row of rows) {
+      const card = row.parentElement!.closest('[class*="bg-"]');
+      expect(card?.className.split(/\s+/)).toContain('bg-surface');
+    }
   });
 });
