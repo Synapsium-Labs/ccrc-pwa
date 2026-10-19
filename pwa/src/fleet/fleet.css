@@ -2998,6 +2998,61 @@ button.proj-card-pool::before {
   border-top: 1px solid var(--edge-subtle);
 }
 .settings-release-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+/* The release window's row (D-5505; settings spec §7.4): a two-column grid, the facts on the left and the row's one
+   action on the right of their first line, so no date shares the action's line and a row never wraps it under the
+   date at 390. Every other child (refusals, notes, folds) spans both columns. LAYOUT ONLY, NO COLOUR: each line
+   wears a class that already carries its ink (.settings-release-date, -refused, -running, .settings-note). */
+.settings-release { grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--sp-3); }
+.settings-release > * { grid-column: 1 / -1; min-width: 0; }
+.settings-release > .settings-release-facts { grid-column: 1; display: grid; gap: var(--sp-1); }
+.settings-release > .settings-release-actions { grid-column: 2; grid-row: 1; align-self: start; }
+.settings-release-facts > p { margin: 0; }
+/* The summary: one line of sans, ellipsised; its ink is the date's. */
+.settings-release-date.settings-release-summary {
+  font-family: var(--family-ui);
+  line-height: var(--lh-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A #NNN link inside the summary is focusable; past the clip edge, focusing it would scroll the clipped line blank.
+   While the line holds focus it unfolds, so the focused link and its ring are in view (layout only). */
+.settings-release-date.settings-release-summary:focus-within {
+  white-space: normal;
+  overflow: visible;
+}
+.settings-release-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-3); }
+/* Notes, What these mean and Refused by are native disclosures: no height animation to honour under reduced
+   motion, and the summary reaches the tap floor the buttons do. */
+.settings-release-fold > summary {
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  min-height: var(--tap-min);
+  cursor: pointer;
+}
+/* display:flex drops the native marker, so the disclosure draws its own: a chevron in the summary's own ink
+   (currentColor, no new colour) pointing right when shut and down when open, a touch cue that hover does not give. */
+.settings-release-fold > summary::-webkit-details-marker { display: none; }
+.settings-release-fold > summary::before {
+  content: "";
+  flex: none;
+  width: 0.4em;
+  height: 0.4em;
+  margin-inline-end: var(--sp-2);
+  border-style: solid;
+  border-width: 0 1.5px 1.5px 0;
+  border-color: currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-fast) var(--curve-swift);
+}
+.settings-release-fold[open] > summary::before { transform: rotate(45deg); }
+@media (prefers-reduced-motion: reduce) {
+  .settings-release-fold > summary::before { transition: none; }
+}
+.settings-release-fold > p { margin: 0 0 var(--sp-1); }
+.settings-window { display: grid; gap: var(--sp-2); min-width: 0; }
+.settings-window > p, .settings-window > h3 { margin: 0; }
 .settings-release-tag { font: var(--weight-medium) var(--fs-sm) / 1 var(--family-mono); }
 .settings-release-date { font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono); color: var(--ink-tertiary); }
 .settings-badge {

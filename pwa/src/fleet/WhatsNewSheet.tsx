@@ -30,24 +30,19 @@ import { isReleaseTag } from '../../../shared/api';
 import { compareReleaseTags } from '../../../shared/semver';
 import { Button, QC_ACTIONS, RESET_LIST, Sheet } from '@ccrc/ui';
 import { releaseDate } from '../screens/updates';
-import { ReleaseNotes, hasReleaseNotes } from './ReleaseNotes';
-import { nodeVersion, pendingTag } from './useUpdatesView';
+import { NO_NOTES_TEXT, ReleaseNotes, hasReleaseNotes } from './ReleaseNotes';
+import { behindSince } from './useUpdatesView';
 import './fleet.css';
 
-export const NO_NOTES_TEXT = 'No notes for this release';
+// The one wording for empty notes, defined beside the component (the release rows' summary reads it too, D-5505).
+export { NO_NOTES_TEXT };
 /** A one-line sentence in the sheet: the no-notes line and the halted reason. */
 const SHEET_LINE = 'm-0 text-sm';
 
 /** The releases an update to `tag` brings, newest first, and the version they
  *  are counted from (`null` when no behind node has a measured version). */
 export function whatsNewReleases(view: UpdatesView, tag: string): { since: string | null; releases: ReleaseWire[] } {
-  let since: string | null = null;
-  for (const n of Array.isArray(view.nodes) ? view.nodes : []) {
-    if (pendingTag(n) === null) continue;
-    const v = nodeVersion(n);
-    if (!isReleaseTag(v)) continue;
-    if (since === null || compareReleaseTags(v, since) === -1) since = v;
-  }
+  const since = behindSince(view.nodes);
   const releases = (Array.isArray(view.releases) ? view.releases : [])
     .filter((r) => isReleaseTag(r.tag) && compareReleaseTags(r.tag, tag) <= 0
       && (since === null ? r.tag === tag : compareReleaseTags(r.tag, since) === 1))

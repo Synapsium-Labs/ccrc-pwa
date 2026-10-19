@@ -56,7 +56,12 @@ import { navigate } from '../lib/router';
 // The update plane's reading surface moved to a file of its own; this screen
 // composes it. `ACK_UNREADABLE_TEXT`/`canAck` come THROUGH it because
 // `NodeItem` is their consumer — see that file's header.
-import { NodeList, ReleaseList, catalogueLine, dayClock, elapsedWords } from './updates';
+import {
+  HaltLine, NodeList, ReleaseList, WhatsNewButton, catalogueLine, dayClock, elapsedWords, haltLineText, releaseWindow,
+} from './updates';
+import { bannerRelease } from '../fleet/UpdateBanner';
+import { WhatsNewSheet, whatsNewReleases } from '../fleet/WhatsNewSheet';
+import { haltingNodes, updateAllHaltedText } from '../fleet/updateHalt';
 import '../fleet/fleet.css';
 
 // ── The Updates section (spec §13; programme wave 3 Task 7) ──────────────────
@@ -558,6 +563,10 @@ function UpdatesBody({ view, stale, now, reload }: {
   // landing while the sheet is open cannot change the list under a thumb.
   const [move, setMove] = useState<PlannedMove | null>(null);
   const openMove = (intent: MoveIntent): void => setMove(planMove(view, intent));
+  // Updates' own "See what's new" (settings spec §4.1, D-5505): the banner's sheet, the banner's tag
+  // (`bannerRelease`), and its footer's Update all handing over to the one move sheet. One sheet at a time.
+  const [whatsNew, setWhatsNew] = useState(false);
+  const haltId = useId();
 
   const fleet = view.intent.find((i) => i.scope === FLEET_SCOPE) ?? null;
   const missing = autoGateMissing(view.nodes);
@@ -583,6 +592,11 @@ function UpdatesBody({ view, stale, now, reload }: {
     : missing.map((n) => n.label);
   const gateNote = gateLabels.length > 0 ? `${AUTO_GATE_NOTE}${gateLabels.join(', ')}` : null;
   const line = catalogueLine(view.catalogue, now);
+  const waiting = bannerRelease(view);
+  // THE ONE HALT LINE (settings spec §5.1): computed over what the window and the node rows will draw, so it shows
+  // only while a control it gates is on screen, and every such control names it.
+  const halt = haltLineText(view.nodes, releaseWindow(view.releases, view.nodes, fleet?.channel ?? null));
+  const halting = haltingNodes(view.nodes);
   // Wave 8 item F1: the same unplaceable-reads-as-null rule catalogueLine's own `lastOkAt` classification uses
   // (:136), so a node's resolveDetail is qualified on the same basis the catalogue line itself is.
   const catalogueLastOkAt = view.catalogue.lastOkAt !== null && isPlaceableInstant(view.catalogue.lastOkAt)
@@ -627,6 +641,13 @@ function UpdatesBody({ view, stale, now, reload }: {
     <>
       {/* A later poll failed: the update plane's one sentence for the last answer that landed (wave 19, R24(b)). */}
       {stale && <p className="settings-note">{UPDATES_STALE_TEXT}</p>}
+      {halt !== null && <HaltLine id={haltId} text={halt} />}
+      {waiting !== null && (
+        <div className="settings-release-actions">
+          <span className="settings-note">{`${waiting.tag} available`}</span>
+          <WhatsNewButton onClick={() => setWhatsNew(true)}>{"See what's new"}</WhatsNewButton>
+        </div>
+      )}
       <RadioFieldset
         legend="Channel"
         name="settings-channel"
@@ -660,12 +681,33 @@ function UpdatesBody({ view, stale, now, reload }: {
       <p className={line.tone === 'calm' ? 'settings-catalogue' : `settings-catalogue settings-catalogue--${line.tone}`}>
         {line.text}
       </p>
-      {view !== null && <ReleaseList releases={view.releases} nodes={view.nodes} source={view.source} onMove={openMove} />}
       {view !== null && (
-        <NodeList
-          nodes={view.nodes} releases={view.releases} now={now} catalogueLastOkAt={catalogueLastOkAt} onAcked={reload} onMove={openMove}
+        <ReleaseList
+          releases={view.releases} nodes={view.nodes} channel={fleet?.channel ?? null} source={view.source}
+          haltedBy={halt !== null ? haltId : null}
+          onWhatsNew={waiting !== null ? () => setWhatsNew(true) : undefined}
+          whatsNewSince={waiting !== null ? whatsNewReleases(view, waiting.tag).since : null}
+          onMove={openMove}
         />
       )}
+      {view !== null && (
+        <NodeList
+          nodes={view.nodes} releases={view.releases} now={now} catalogueLastOkAt={catalogueLastOkAt}
+          haltedBy={halt !== null ? haltId : null} onAcked={reload} onMove={openMove}
+        />
+      )}
+      <WhatsNewSheet
+        open={whatsNew && waiting !== null}
+        view={view}
+        tag={waiting?.tag ?? null}
+        halted={halting.length > 0 ? updateAllHaltedText(halting) : null}
+        onClose={() => setWhatsNew(false)}
+        onUpdateAll={() => {
+          if (waiting === null) return;
+          setWhatsNew(false);
+          setMove(planMove(view, { scope: 'fleet', direction: 'update', tag: waiting.tag }));
+        }}
+      />
       <UpdateMoveSheet open={move !== null} plan={move} onClose={() => setMove(null)} onDone={reload} />
     </>
   );
