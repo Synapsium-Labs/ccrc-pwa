@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a8862748bbf9b0e8f1fc5a2215d62006db3d4565e1ef018193e8549585fea48c
+# ccrc:generated 1 sha256=0e33f6aecdeaf51b3e67bd58b3fab47f041b8dc7066bba3a9cd21554edbc943d
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1297,7 +1297,7 @@ POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
 # Code on the ChatGPT-sub Codex backend — by name, which is why so many rules
 # below used to say `gpt` where they meant this.
 #
-# SUPERSEDED 2026-09-11. A Codex lane IS home-able now — `gpt` and `gpt2` carry
+# SUPERSEDED 2026-09-11. A Codex lane IS home-able now — `gpt` and `gpt7` carry
 # `telemetry: "codex"` and sit in CCRC_HOME_ABLE — so "such a lane is never a
 # HOME (no project STARTS there by accident)", which stood in this paragraph
 # until that date, is simply false about the live roster. The 272k window did
@@ -2144,7 +2144,7 @@ _codex_lane_status() {   # human-readable state of ONE Codex lane (for `ccd ls`)
   # PARAMETERISED 2026-09-14, was named _gpt_status — unbackticked because that
   # function no longer exists. `gpt` was written in five places; the footer it
   # feeds described one lane by name while the roster had carried two Codex lanes
-  # since 2026-09-10, so `gpt2` — the lane then holding sessions — had no line.
+  # since 2026-09-10, so `gpt7` — the lane then holding sessions — had no line.
   #
   # The prose below is Codex's own usage story ("Codex weekly cap", the 5h
   # cooldown, ccgpt-usage's JSON shape), which is a fact about THAT backend and
@@ -3138,7 +3138,7 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_
 # invocations across 173 non-comment lines.
 #
 # THE LAST MOVE WAS the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
-# then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
+# then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (#166 wave 3, Task 5), `_child_tmpdir`'s and #127's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
 # bookkeeping (`_route_apply_now`, `_route_note`, `_route_applied_set`,
@@ -3886,7 +3886,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46 and the background-job wait's `bgwait` 47 (#189) — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46 and the background-job wait's `bgwait` 47 (#189) — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
@@ -5330,7 +5330,7 @@ _ws_ignored_digest() {   # workdir -> sha256 of the ignored-entry set
   # NON-ZERO when the set could not be read at all.
   #
   # --ignored=matching, NEVER `ls-files --others --ignored`: the latter
-  # enumerates per file (measured 210,070 entries / 24.6 MB in custom-tools,
+  # enumerates per file (measured 210,070 entries / 24.6 MB in project-d,
   # against an 8 MB agent EXEC_MAX_BUFFER), while this collapses each ignored
   # directory to one entry.
   #
@@ -11543,7 +11543,7 @@ _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSID
   # BOUNDED, and the bound is a DEADLINE for the whole workspace rather than a
   # per-entry timeout, so a workspace with 226 ignored entries cannot cost 226
   # timeouts. Measured on this box against the tree `--ignored=matching` was
-  # chosen for (custom-tools: 226 collapsed entries, 355,392 entries beneath
+  # chosen for (project-d: 226 collapsed entries, 355,392 entries beneath
   # them): 3.4 s with one `find` per entry, 1.2 s as a single walk. The
   # performance reason for `--ignored=matching` still holds for the DISPLAY —
   # nothing here is printed, counted or sized, only matched — and sensitivity
@@ -15391,7 +15391,7 @@ _ws_gc_merged() {   # main branch -> 0 when the branch tip is an ancestor of ori
 #
 # SORTED sensitive-first then bytes-first and CAPPED at ten, the same shape and
 # the same reason as `_reap_ignored_json`'s ordering: a 226-entry workspace
-# (custom-tools, measured) would otherwise bury the reclaim line, and the cap is
+# (project-d, measured) would otherwise bury the reclaim line, and the cap is
 # stated out loud rather than silently applied. The COUNT and the TOTAL are
 # never capped.
 #
@@ -24121,8 +24121,8 @@ _resupervise_live() {   # id -> rc 0 it adopted (or tried), rc 1 there was nothi
 cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # THE ONE-ARGUMENT FORM IS THE CORRECT ONE FOR ANYTHING THAT ALREADY EXISTS.
   # `<wrapper> <project>` recomputes `<wrapper>-<project>`, and a session keeps
-  # the id it was born with across every swap — `claude2-expoAI-assistant` is
-  # still that id while its `wrapper` field reads `claude-dev0`. So an operator
+  # the id it was born with across every swap — `claude9-project-h` is
+  # still that id while its `wrapper` field reads `claude-lab0`. So an operator
   # reading the account off the board and typing it back MINTS A SECOND ID for
   # a session that already exists. `cmd_stop` grew this form first, for the
   # same reason, and its own comment records it.
@@ -24185,8 +24185,8 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
 
   # THE REGISTRY WINS OVER THE ARGUMENT, FOR THE ACCOUNT ONLY (spec §3.4).
   # `_reg_set "$id" wrapper "$wrapper"` used to be unconditional, so
-  # `ccd start claude2 expoAI-assistant` on a session auto-swap had moved to
-  # claude-dev0 rewrote the row to an account whose config dir does not hold
+  # `ccd start claude9 project-h` on a session auto-swap had moved to
+  # claude-lab0 rewrote the row to an account whose config dir does not hold
   # the transcript — the resumed session then finds no history under the very
   # account it was just told it lives on. `ccd swap` is the ONLY verb that
   # moves a session between accounts; a differing argument is a warning, and
@@ -27880,8 +27880,8 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   _swap_carry_sidecars "$srccfg" "$dstcfg" "$uuid"
   # The task list lives at <configdir>/tasks/<uuid>/ and is keyed by config dir,
   # so a swap orphans it under the OLD account: the resumed session forgets its
-  # plan entirely (seen 2026-07-26 — custom-tools kept 8 task files under
-  # .claude-gpt while running on claude-corp with an empty list). Carry it over
+  # plan entirely (seen 2026-07-26 — project-d kept 8 task files under
+  # .claude-gpt while running on claude-acme with an empty list). Carry it over
   # with the transcript. Copy, don't move: if the swap is reverted the old lane
   # still has its copy, and a stale dir costs a few KB.
   if [[ -d "$srccfg/tasks/$uuid" ]]; then
@@ -28477,7 +28477,7 @@ cmd_ls() {
   # ONE LINE PER CODEX LANE, driven by the roster rather than by a name in this
   # file. The previous version printed a single trailer for `gpt` and called it
   # "the gpt overflow lane", and by the time it was changed BOTH halves of that
-  # were wrong: `gpt2` had existed since 2026-09-10 and was carrying the
+  # were wrong: `gpt7` had existed since 2026-09-10 and was carrying the
   # sessions, and on 2026-09-11 both lanes became home-able, so neither is an
   # overflow lane any more — they are placement targets that a session can be
   # BORN on, ranked on usage beside every Anthropic lane.
@@ -33775,7 +33775,7 @@ _ws_expire_archived() {   # id -> 0 with EXPIRE_ARCHIVED_AT = the archive epoch,
 _ws_expire_not_child() {   # id -> 0 when NO `.child` marker stands; else rc 1 refused `child`
   # RUNG 2′, ITS SECOND HALF. A marker that reads as a child, or that stands and
   # cannot be read, refuses `child` — retryable, and never this verb's: a child
-  # is the RECLAIM lane's (spec §5.3, CCR-15 R29's direction: an unreadable
+  # is the RECLAIM lane's (spec §5.3, #166 R29's direction: an unreadable
   # marker defers). Presence is the test (`-e`, and `-L` for a dangling link),
   # never the grammar: a marker this box cannot parse is still not "none".
   local id="$1"
@@ -34086,7 +34086,7 @@ sys.stdout.write(str(v))
 }
 
 _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token, else REAP_VERDICT
-  # A CRASH MAY NOT LAUNDER A REFUSAL (CCR-15 §5.6, carried). What authorised
+  # A CRASH MAY NOT LAUNDER A REFUSAL (#166 §5.6, carried). What authorised
   # this expiry is re-asserted before anything else runs: the row; the ARCHIVE
   # EPOCH — still the one the tombstone recorded when the act began, and still
   # old enough (a workspace that was returned is `not-archived`; one archived
@@ -34278,7 +34278,7 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
   [[ "$surface" == none ]] || declared="$surface"
   _ws_expire_fork "$id"
   phase="$RECLAIM_RESUME_PHASE"; resumed="$phase"
-  # `crumb` (CCR-15 spec §5.6), said as ws-reclaim says it (workspace lifecycle
+  # `crumb` (#166 spec §5.6), said as ws-reclaim says it (workspace lifecycle
   # wave 6, question (k)): a resumed arm's breadcrumb already stands (`true`),
   # so its `probe-unmeasured` below is printed past it and the server reads it
   # resumable; a fresh arm's is not written yet (`false`: nothing started, so a
@@ -34325,7 +34325,7 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
       _ws_reclaim_fail "$id" "$lctx" pin-failed "$RECLAIM_PIN_WHY"
       return 1
     fi
-    # THE CONSENT BINDS THE BRANCH, as a reclaim's does (CCR-15 spec §5.5;
+    # THE CONSENT BINDS THE BRANCH, as a reclaim's does (#166 spec §5.5;
     # workspace lifecycle wave 5). The token was checked against the in-lock
     # recompute, and the pin read the branch again, itself. A branch deleted
     # (or made) between the two reads would have the act go on over what the
@@ -34416,7 +34416,7 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
     return 1
   else
     printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
-    # A TERMINAL refusal is journaled, and only a terminal one (CCR-15 §5.9's
+    # A TERMINAL refusal is journaled, and only a terminal one (#166 §5.9's
     # rule, carried): the server audits first and stops on a refusal, so this is
     # the one place it reaches the lifecycle mirror; a retryable word a pass
     # would bury the journal.
