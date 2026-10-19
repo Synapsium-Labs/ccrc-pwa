@@ -404,6 +404,8 @@ The allocator issued D-5695 to D-5724 to this programme (30 numbers, one per tas
 - **D-5701** — `claude-fact-one-reader` (Task CB1g): `sessionFacts` is the one PWA reader of `version` and `claude`; the chip, the header view's facts chip and `FactsSection` render its words and never format them; nothing says "updated" until the running build moves (spec §6.3, §9 trap 1).
 - **D-5702** — `claude-settings-card-slot` (Task CB1h): the Claude Code card sits on Settings → Updates between Nodes and Update policy, reads only the provider's single `/api/updates` read, and is read-only in W1; its controls arrive with the waves that make them act (CB3j, CB5c), and the Claude Code mode sits under Automation (decision 14; the Settings plan's C5, answered there).
 
+Issued and unused (Task CB1a): 5757, 5758.
+
 ## Out of scope
 
 Installing, promoting and pruning builds (W3); any roll (W2, W5); the launcher (W3); lane self-update (W4); any change to hibernation's gate, its N or its arming (decision 16).
