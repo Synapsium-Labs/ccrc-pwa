@@ -2099,6 +2099,21 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
           green `full-suite` I fast-forward `stable` to `c44bea401`.
         - The rehearsal moves to v0.0.328. If the server moves to it before 13:35, the 13:35 sample measures the
           fixed code, and I report it that way.
+      - **06:55 UTC: ANOMALY "boxes differ": the fleet box on v0.0.326, the server on v0.0.325; no failure.**
+        - 06:27:38 the fleet box moved v0.0.318 to v0.0.325, then 06:29:13 the server did, fleet first; both reports
+          `done`, `from: pwa`; the server gate answered v0.0.325; `ccrc.service` restarted at 06:29:36. Fleet doctor
+          38 passed, 7 warned, 0 failed; server 28 passed, 1 warned (`approval-key-colocated`, as before).
+        - 06:30:46 to 06:32:03 the fleet box alone moved to v0.0.326, `from: pwa`, `done`. The server started no
+          move after it.
+        - coord.db, read-only: both node rows `idle`, no requested tag. The server's `desiredTag` reads v0.0.326,
+          but that is the channel's newest eligible tag in the server's catalogue (`resolve.ts:192-193`), not an
+          order. The catalogue has not polled since the restart, so it does not yet list v0.0.327 or v0.0.328.
+        - Reading: a per-node tap of the fleet box to v0.0.326 is the design (one node at a time, and fleet ahead
+          of the server is the safe order). If it was a both-boxes move instead, its server leg never ran, and
+          that would be a defect. The server logs no apply request, so only the operator can say; I asked.
+        - Server backups 2211M (2059M), from two more snapshots. v0.0.327 (#691) and v0.0.328 (#681, the blackout
+          fix) followed. STATUS: fleet v0.0.326, server v0.0.325, newest v0.0.328, intent dev/auto=off, backups
+          fleet 159M/server 2211M, disk free fleet 209G/work volume 96G/server 31G.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
