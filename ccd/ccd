@@ -847,7 +847,7 @@ _svc_write_session_plist() {   # <unit> -> 0 iff its plist is on disk
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>3</integer>
   <key>AbandonProcessGroup</key><true/>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>$(if declare -F _launchd_class >/dev/null; then _launchd_class; else printf Background; fi)</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>$(_svc_job_path)</string>
@@ -40619,6 +40619,26 @@ def main():
 if __name__ == '__main__':
     main()
 DOCS_PY
+}
+
+# The launchd class (`ProcessType`) of a session job on macOS: the first word of
+# ~/.ccrc/launchd-class (Background, Standard, Adaptive or Interactive), Background
+# when the file is absent, empty or names anything else. Background starves a
+# session on a busy box. The same helper as ccrc's, byte for byte (that file says
+# why it is a file); outside the platform block, so `_svc_write_session_plist`
+# calls it behind `declare -F`.
+_launchd_class() {
+  local f="$HOME/.ccrc/launchd-class" v=""
+  if [ -r "$f" ]; then { IFS= read -r v || true; } < "$f"; fi
+  v="${v%$'\r'}"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%%[[:space:]]*}"
+  case "$v" in
+    ''|Background) printf 'Background' ;;
+    Standard)      printf 'Standard' ;;
+    Adaptive)      printf 'Adaptive' ;;
+    Interactive)   printf 'Interactive' ;;
+    *) printf "ccrc: %s names '%s', not Background, Standard, Adaptive or Interactive — using Background\n" "$f" "$v" >&2
+       printf 'Background' ;;
+  esac
 }
 
 # Guard so the script can be `source`d by tests without running a command.

@@ -1,4 +1,4 @@
-// macOS: the launchd class (`ProcessType`) the server job carries — the first word of ~/.ccrc/launchd-class, Background by default.
+// macOS: the launchd class (`ProcessType`) the server and session jobs carry — the first word of ~/.ccrc/launchd-class, Background by default.
 //
 // Background is launchd's lowest CPU and I/O class, and on a box busy with other
 // work it starves rather than slows: measured on a busy fleet box, the server's
@@ -16,6 +16,7 @@ import { mkTmp } from './tmpHelpers.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const CCRC = join(REPO, 'ccd', 'ccrc');
+const CCD = join(REPO, 'ccd', 'ccd');
 const IS_DARWIN = process.platform === 'darwin';
 
 /** A fixture HOME with a roster (ccd will not load without one) and, when
@@ -37,7 +38,7 @@ const run = (file: string, home: string, expr: string) => {
   return { code: r.status, stdout: r.stdout.trim(), stderr: r.stderr };
 };
 
-describe.each([['ccrc', CCRC]])('_launchd_class in %s', (_name, file) => {
+describe.each([['ccrc', CCRC], ['ccd', CCD]])('_launchd_class in %s', (_name, file) => {
   it.each([
     ['no file', null, 'Background'],
     ['an empty file', '', 'Background'],
@@ -74,6 +75,20 @@ describe('the jobs carry the chosen class', () => {
       const r = run(CCRC, home, 'CCD_OS=darwin; _inst_plist_server app.ccrc.ccrc "$HOME/.ccrc/logs/app.ccrc.ccrc.log"');
       expect(r.code, r.stderr).toBe(0);
       expect(procType(r.stdout)).toBe(want);
+    }
+  });
+
+  // The session job, written by the platform block's copy in each file.
+  it.each([['ccd', CCD], ['ccrc', CCRC]] as const)('the session plist (%s)', (_name, file) => {
+    for (const [cls, want] of [[null, 'Background'], ['Standard\n', 'Standard'], ['Turbo\n', 'Background']] as const) {
+      const home = box(cls);
+      const r = run(file, home, 'CCD_OS=darwin; _SVC_REG="$HOME/.cc-sessions"; u=claude-session@demo-a.service; '
+        + '_svc_write_session_plist "$u" && echo "$(_svc_plist "$u")"');
+      expect(r.code, r.stderr).toBe(0);
+      const p = r.stdout.split('\n').pop() ?? '';
+      const plist = readFileSync(p, 'utf8');
+      expect(procType(plist)).toBe(want);
+      lint(p);
     }
   });
 });
