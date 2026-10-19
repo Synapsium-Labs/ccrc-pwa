@@ -5,7 +5,8 @@
 //
 // What is pinned:
 //  - The stub sees the ABSOLUTE launcher, the built argv and the stdin bytes; the secret is on no argv.
-//  - A sub past its bound gets SIGTERM, then SIGKILL 5 s later, and the answer says `timeout`.
+//  - A sub past its bound gets SIGTERM, then SIGKILL 5 s later, and the answer says `timeout`; the KILL goes to the
+//    whole group even when the leader closed after the TERM.
 //  - The agent's own stdout and stderr never carry the canary from `stdinB64`, in either spelling.
 //  - The child's environment holds no `CCRC_*` variable at all (`CCRC_AGENT_TOKEN`, `CCRC_HETZNER_TOKEN`,
 //    `CCRC_VAPID_PRIVATE` or any other): exactly {HOME, PATH, LANG}.
@@ -147,23 +148,52 @@ describe('the account op', () => {
 
   it('a sub past its timeout gets TERM, then KILL 5 s later, and the answer says timeout', async () => {
     const h = contained();
-    // Traps TERM and keeps running, so only the SIGKILL ends it: the trap's record proves TERM came first.
+    // Traps TERM and keeps running, so only the SIGKILL ends it: the trap's record proves TERM came first. The trap
+    // is the stub's FIRST line and `ready` says it is in place; the bound is 2 s, far past a loaded shell's start-up,
+    // so a TERM that beats the trap is the machine, and the `ready` check names it as such (D-5623).
     const file = plantLauncher(h, [
-      `touch '${h}/temp'`,
       `trap "echo TERM >> '${h}/sig'; rm -f '${h}/temp'" TERM`,
+      `touch '${h}/temp' '${h}/ready'`,
       'while :; do sleep 0.05; done',
     ].join('\n'));
+    const BOUND = 2_000;
     const spawn = makeAccountOpSpawn(tokenSyncEnv(h));
     const t0 = Date.now();
-    const r = await spawn(file, ['account', 'check', '--id=lane-a'], null, { ...accountSpawnBounds('check'), timeoutMs: 300 });
+    const r = await spawn(file, ['account', 'check', '--id=lane-a'], null, { ...accountSpawnBounds('check'), timeoutMs: BOUND });
     const took = Date.now() - t0;
     expect(r).toEqual({ kind: 'timeout' });
+    expect(existsSync(path.join(h, 'ready')), 'the stub had not installed its trap when the bound ran out (load)').toBe(true);
     expect(existsSync(path.join(h, 'sig')), 'no SIGTERM before the SIGKILL: the trap never ran').toBe(true);
     expect(readFileSync(path.join(h, 'sig'), 'utf8')).toBe('TERM\n');
     expect(existsSync(path.join(h, 'temp')), 'the trap did not remove its temp').toBe(false);
-    expect(took, 'SIGKILL came before the grace').toBeGreaterThanOrEqual(300 + ACCOUNT_OP_KILL_GRACE_MS - 100);
-    expect(took).toBeLessThan(300 + ACCOUNT_OP_KILL_GRACE_MS + 2_500);
-  }, 15_000);
+    expect(took, 'SIGKILL came before the grace').toBeGreaterThanOrEqual(BOUND + ACCOUNT_OP_KILL_GRACE_MS - 100);
+    expect(took).toBeLessThan(BOUND + ACCOUNT_OP_KILL_GRACE_MS + 2_500);
+  }, 20_000);
+
+  it('the KILL is never cancelled once the TERM went: a group member that ignores TERM and closed its stdio is killed (D-5621 (1))', async () => {
+    const h = contained();
+    // The leader dies on TERM, so the child's `close` comes before the grace ends; its backgrounded member (same
+    // process group: a non-interactive shell does no job control) ignores TERM with its stdio closed. Only the
+    // group KILL after the grace can end it.
+    const file = plantLauncher(h, [
+      `/bin/sh -c 'trap "" TERM; echo $$ > "${h}/member.tmp"; mv "${h}/member.tmp" "${h}/member"; while :; do sleep 0.05; done' </dev/null >/dev/null 2>&1 &`,
+      `while [ ! -s '${h}/member' ]; do sleep 0.02; done`,
+      'while :; do sleep 0.05; done',
+    ].join('\n'));
+    const spawn = makeAccountOpSpawn(tokenSyncEnv(h));
+    const r = await spawn(file, ['account', 'check', '--id=lane-a'], null,
+      { ...accountSpawnBounds('check'), timeoutMs: 2_000, killGraceMs: 300 });
+    expect(r).toEqual({ kind: 'timeout' });
+    expect(existsSync(path.join(h, 'member')), 'the member had not started when the bound ran out (load)').toBe(true);
+    const pid = Number(readFileSync(path.join(h, 'member'), 'utf8').trim());
+    expect(pid).toBeGreaterThan(1);
+    const alive = (): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const until = Date.now() + 3_000;
+    while (alive() && Date.now() < until) await new Promise((res) => setTimeout(res, 50));
+    const survived = alive();
+    if (survived) process.kill(pid, 'SIGKILL');
+    expect(survived, 'the group member outlived the op').toBe(false);
+  }, 20_000);
 
   it('each sub carries its own bound: check 90 s, add 180 s, the rest 120 s, 5 s grace, 8 MiB cap', () => {
     expect(accountSpawnBounds('check')).toEqual({ timeoutMs: 90_000, killGraceMs: 5_000, maxOutputBytes: 8 * 1024 * 1024 });

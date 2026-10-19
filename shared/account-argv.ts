@@ -27,7 +27,9 @@ export type AccountArgvRefusal = (typeof ACCOUNT_ARGV_REFUSALS)[number];
 /** The most stdin a sub may carry: a secret or a code (spec §13.2, "≤ 8 KiB"). */
 export const ACCOUNT_STDIN_MAX_BYTES = 8 * 1024;
 
-/** C0 controls and DEL: a newline in a field is a second line in every file the verb writes it to. */
+/** C0 controls and DEL: a newline in a field is a second line in every file the verb writes it to. The spec's
+ *  `LABEL_UNSAFE_RE` (`shared/roster.ts`, module-private by design) re-spelled, one class for every field (D-5622 (2));
+ *  `account-argv.test.ts` pins the two literals equal. */
 const CONTROL_RE = /[\u0000-\u001f\u007f]/;
 /** A `..` path segment anywhere in a value (`../x`, `a/../b`, `..`). */
 const DOT_DOT_SEGMENT_RE = /(?:^|[/\\])\.\.(?:[/\\]|$)/;

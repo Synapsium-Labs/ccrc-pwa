@@ -9,7 +9,11 @@
 //    `attemptId` that is not 32 hex characters, and a `limit` that is not digits from 1 to 100000.
 //  - Every value is ONE argv word: a valid add builds `--label=<v>`, never `--label` `<v>`.
 //  - stdin: 1 to 8 KiB, no NUL, C0 or DEL (`key-charset`).
+//  - The builder's control class is the roster's `LABEL_UNSAFE_RE`, literal for literal (D-5622 (2)).
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ACCOUNT_STDIN_MAX_BYTES, ACCOUNT_SUB_ARGV, buildAccountArgv, isAccountStdin } from '../src/accountop.js';
 import { ACCOUNT_SUBS, type AccountSub } from '../../shared/api.js';
 
@@ -179,5 +183,18 @@ describe('the account argv builder: no free argv (spec §13.2)', () => {
     expect(isAccountStdin(new Uint8Array(ACCOUNT_STDIN_MAX_BYTES + 1).fill(0x41))).toBe(false);
     expect(isAccountStdin(new Uint8Array(0))).toBe(false);
     for (const bad of ['a\u0000b', 'ab\n', 'a\rb', 'a\u007fb', 'a\tb']) expect(isAccountStdin(enc(bad)), JSON.stringify(bad)).toBe(false);
+  });
+});
+
+describe("the builder's control class is the roster's (D-5622 (2))", () => {
+  const SHARED = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'shared');
+  const literalIn = (file: string, name: string): string => {
+    const m = new RegExp(`^(?:export )?const ${name} = (/.+/[a-z]*);$`, 'm').exec(readFileSync(path.join(SHARED, file), 'utf8'));
+    expect(m, `no single-line literal for ${name} in shared/${file}: teach this scan the new spelling`).not.toBeNull();
+    return m![1]!;
+  };
+
+  it("CONTROL_RE is LABEL_UNSAFE_RE character for character, so the spec's one policy has one meaning", () => {
+    expect(literalIn('account-argv.ts', 'CONTROL_RE')).toBe(literalIn('roster.ts', 'LABEL_UNSAFE_RE'));
   });
 });

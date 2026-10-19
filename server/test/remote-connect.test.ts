@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import v8 from 'node:v8';
+import vm from 'node:vm';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { RunningAgent } from '../../agent/src/server.js';
 import { connectFleet, FleetClient, LinkNotSentError, readReadyOps, type ConnectedFleet } from '../src/remote/client.js';
@@ -242,7 +244,7 @@ describe('FleetClient.request — every settlement releases its pending resource
     expect(reachable.pending.size).toBe(0);
   });
 
-  it("drops the frame once sent: a pending account op holds its settlement handles and nothing of the frame (spec §13.2, D-5513)", async () => {
+  it("drops the frame once sent: a pending account op keeps nothing of its frame alive (spec §13.2, D-5513)", async () => {
     const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     wss = server;
     const frames: string[] = [];
@@ -266,14 +268,26 @@ describe('FleetClient.request — every settlement releases its pending resource
 
     const canary = ['CANARY', 'client', String(process.pid)].join('-');
     const stdinB64 = Buffer.from(canary).toString('base64');
-    const request = fleet.client.request(
-      { t: 'req', op: 'account', sub: 'credential', laneId: 'lane-a', fields: {}, stdinB64 }, 60_000);
-    const reachable = fleet.client as unknown as { pending: Map<number, Record<string, unknown>> };
+    // The payload is built in a frame of its own and only a WeakRef to it survives here, so the one thing that can
+    // keep it alive while the request is pending is the client (its pending entry, a listener, a timer closure, a
+    // closure context the executor shares with them). A real collector run decides, not the entry's key shape:
+    // `--expose-gc` is switched on in-process and `gc` taken from a fresh context.
+    v8.setFlagsFromString('--expose-gc');
+    const gc = vm.runInNewContext('gc') as () => void;
+    const send = (): { request: Promise<unknown>; ref: WeakRef<object> } => {
+      const payload = { t: 'req' as const, op: 'account' as const, sub: 'credential' as const, laneId: 'lane-a',
+        fields: {}, stdinB64: Buffer.from(canary).toString('base64') };
+      return { request: fleet!.client.request(payload, 60_000), ref: new WeakRef(payload) };
+    };
+    const { request, ref } = send();
+    const reachable = fleet.client as unknown as { pending: Map<number, unknown> };
     expect(reachable.pending.size).toBe(1);
-    const entry = [...reachable.pending.values()][0]!;
-    // The whole entry: four handles, no field that could hold the frame or its text.
-    expect(Object.keys(entry).sort()).toEqual(['dispose', 'reject', 'resolve', 'timer']);
-    for (const v of Object.values(entry)) expect(typeof v === 'string' ? v : '').not.toContain(stdinB64);
+    for (let i = 0; i < 5 && ref.deref() !== undefined; i++) {
+      await new Promise((r) => setImmediate(r));
+      gc();
+    }
+    expect(reachable.pending.size, 'still pending while the collector ran').toBe(1);
+    expect(ref.deref(), 'a pending request keeps nothing of its frame alive').toBeUndefined();
     await vi.waitFor(() => expect(frames).toHaveLength(1), { timeout: 3000 });
     expect(frames[0], 'the frame did reach the wire (the control)').toContain(stdinB64);
     reply();

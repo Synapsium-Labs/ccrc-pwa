@@ -321,31 +321,35 @@ describe('the token-sync op', () => {
       fixture = makeFixture();
       contain(fixture.home);
       const h = fixture.home;
-      // Traps TERM and keeps running, so only the SIGKILL ends it: the trap's record proves TERM came first.
+      // Traps TERM and keeps running, so only the SIGKILL ends it: the trap's record proves TERM came first. The
+      // trap is the stub's first line and `ready` follows it; the 2 s bound is far past a loaded shell's start-up
+      // (the accounts plan's D-5623 (4) applies the same shape here).
       const file = plantLauncher(h, [
-        `touch '${h}/temp'`,
         `trap "echo TERM >> '${h}/sig'; rm -f '${h}/temp'" TERM`,
+        `touch '${h}/temp' '${h}/ready'`,
         'while :; do sleep 0.05; done',
       ].join('\n'));
+      const BOUND = 2_000;
       const spawnReal = makeTokenSyncSpawn(tokenSyncEnv(h));
       const t0 = Date.now();
-      const r = await spawnReal(file, tokenSyncSpawnArgv(), CODE, 300);
+      const r = await spawnReal(file, tokenSyncSpawnArgv(), CODE, BOUND);
       const took = Date.now() - t0;
       expect(r.killed).toBe(true);
+      expect(existsSync(path.join(h, 'ready')), 'the stub had not installed its trap when the bound ran out (load)').toBe(true);
       expect(readFileSync(path.join(h, 'sig'), 'utf8')).toBe('TERM\n');
       expect(existsSync(path.join(h, 'temp')), 'the trap did not remove its temp').toBe(false);
-      expect(took, 'SIGKILL came before the grace').toBeGreaterThanOrEqual(300 + TOKEN_SYNC_KILL_GRACE_MS - 100);
-      expect(took).toBeLessThan(300 + TOKEN_SYNC_KILL_GRACE_MS + 2_500);
+      expect(took, 'SIGKILL came before the grace').toBeGreaterThanOrEqual(BOUND + TOKEN_SYNC_KILL_GRACE_MS - 100);
+      expect(took).toBeLessThan(BOUND + TOKEN_SYNC_KILL_GRACE_MS + 2_500);
       expect(tokenSyncAnswer(r)).toEqual({ ok: false, err: 'spawn-failed', detail: 'stopped at the 40000 ms bound' });
-    });
+    }, 20_000);
 
     it('a child whose trap exits on SIGTERM answers at once, without waiting out the grace', async () => {
       fixture = makeFixture();
       contain(fixture.home);
       const h = fixture.home;
       const file = plantLauncher(h, [
-        `touch '${h}/temp'`,
         `trap "rm -f '${h}/temp'; exit 143" TERM`,
+        `touch '${h}/temp'`,
         'while :; do sleep 0.05; done',
       ].join('\n'));
       const t0 = Date.now();

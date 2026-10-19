@@ -172,9 +172,20 @@ export interface RemoteAccountOpsOpts {
  * agent that does not is answered `unsupported` with nothing sent, so a secret never travels to a peer that cannot
  * spawn it. An older agent that answers `bad-request` anyway maps to `unsupported` too (D-5620 (5)).
  *
- * The secret is `stdinB64` on the one frame and nowhere else: the client keeps no frame in its pending table
- * (`remote/client.ts`), and nothing here logs a frame, a field or an answer's stdout.
+ * The secret is `stdinB64` on the one frame: the frame is built in `sendAccountFrame` and kept by neither this arm
+ * across its await nor the client while the answer is pending (`remote/client.ts`; both proved by a WeakRef and a
+ * collector run, D-5623), and nothing here logs a frame, a field or an answer's stdout. The caller's `stdin`
+ * buffer is the caller's: it lives as long as the route holds it.
  */
+/** Builds the one `account` frame and hands it to the client; the frame is this call's alone and dies with it. */
+function sendAccountFrame(
+  client: Pick<FleetClient, 'request'>, sub: AccountSub, id: string | null, fields: AccountOpFields, stdin: Buffer | undefined,
+): ReturnType<FleetClient['request']> {
+  const frame: Omit<AccountOpReq, 'id'> = { t: 'req', op: ACCOUNT_OP, sub, laneId: id, fields: { ...fields } };
+  if (stdin !== undefined) frame.stdinB64 = stdin.toString('base64');
+  return client.request(frame, accountOpRequestTimeoutMs(sub));
+}
+
 export function remoteAccountOps(opts: RemoteAccountOpsOpts): AccountOps {
   const { client } = opts;
   const run: AccountOps['run'] = async (sub, id, fields, stdin) => {
@@ -182,10 +193,11 @@ export function remoteAccountOps(opts: RemoteAccountOpsOpts): AccountOps {
     const built = buildAccountArgv(sub, id, fields, stdin !== undefined);
     if (!built.ok) return { kind: 'refused', why: built.why };
     if (!(client.state.agentOps ?? []).includes(ACCOUNT_OP)) return { kind: 'unsupported' };
-    const frame: Omit<AccountOpReq, 'id'> = { t: 'req', op: ACCOUNT_OP, sub, laneId: id, fields: { ...fields } };
-    if (stdin !== undefined) frame.stdinB64 = stdin.toString('base64');
     try {
-      const res = await client.request(frame, accountOpRequestTimeoutMs(sub));
+      // D-5623: the frame is built and handed over inside `sendAccountFrame`, so this async frame never names it and
+      // nothing here keeps it (or its `stdinB64`) alive across the await. `stdin` itself is the caller's buffer and
+      // lives as long as the caller (the route) keeps it.
+      const res = await sendAccountFrame(client, sub, id, fields, stdin);
       const answer = readAccountOpAnswer(res);
       return answer ?? { kind: 'lost' };
     } catch (e) {
