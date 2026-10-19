@@ -6,7 +6,7 @@
 // WHAT THIS FILE PINS
 //   R1  a full pass: one line; its phases, derived keys and sizes are exactly what ran, each size equal to a count measured INDEPENDENTLY
 //       of the lane's new code (spies on correlation and policy, the applier's own return values, the report, the checkpoint on disk);
-//       the same for the five repair sizes (a real repair of a drifted `coord.db`, a null report, a throw), for an unknown-repository
+//       the same for the six repair sizes (a real repair of a drifted `coord.db`, a null report, a throw), for an unknown-repository
 //       window (after a restart) and for the mark, dropped-key, lost-project and flag sizes (the lane's forgetting seams)
 //   R2  strictly more than 1,000 ms of BLOCKING time writes a line; exactly 1,000 does not; no read phase (`open recover root load owners
 //       readMetas`) is blocking
@@ -543,8 +543,8 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
       cpLineage: cp.lineage.length, cpIntervals: cp.observationIntervals.length, cpCursors: cp.bucketCursors.length,
       // D-5832 (run 645): the virtual CPU clock and sampler read 0 in this pass (nothing sets them), so every CPU and stall key is present
       // and 0; the flush, upkeep, effects, reconcile and owners phases ran, the repair did not (the policy spy filters it), so there is no
-      // `repairCpu`, no `stallRepair`, no `repairRewrite` and no `repairSkipped`; the stretch the flush opened is still open at the line, so
-      // `stallMid` is the line's read; the pass took its turns (0 ms on the virtual clock), so `yields` is present and 0.
+      // `repairCpu`, no `stallRepair`, no `repairRewrite` and no `repairSkipped`; the stretch opened after turn 1 (`stallMid`; the flush's own was
+      // closed by turn 1's read) is the one open at the line, so `stallMid` is the line's read; the pass took its turns (0 ms on the virtual clock), so `yields` is present and 0.
       blockCpu: 0, flushCpu: 0, upkeepCpu: 0, effectsCpu: 0, reconcileCpu: 0, ownersCpu: 0, cpuThread: 0,
       stallMax: 0, stallP99: 0, stallFlush: 0, stallMid: 0, yields: 0,
       // the checkpoint's own counts; `attemptsSkipped` is 1 when the pass made no checkpoint change at all (upkeep changed nothing, asserted
@@ -646,7 +646,7 @@ describe('D-5692 R1 (an unknown-repository window): the window sizes and the win
   });
 });
 
-describe('D-5692 R1 (a repair report): the five repair sizes are the repair\'s own report, and absent when no report came back', () => {
+describe('D-5692 R1 (a repair report): the six repair sizes are the repair\'s own report, and absent when no report came back', () => {
   const OWNERS_R = ['demo-a', 'demo-b', 'demo-c', 'demo-d', 'demo-e'];
   /** Five owners with a spool, two unarmed census passes (each repairs a healthy projection: a report of zeros), then the rig. */
   async function repairWorld() {
@@ -695,13 +695,16 @@ describe('D-5692 R1 (a repair report): the five repair sizes are the repair\'s o
     expect(m.get('repairHealed')).toBe(report.healedSessions);
     // the deleted event makes the counts disagree, so the lane's per-pass repair takes the full path: it was not skipped
     expect(m.get('repairSkipped'), 'a repair that replayed the journal was not skipped').toBe(0);
+    // `repairRewrite` mirrors `rewrite`: present iff a port call was charged while the repair part was open. The full path made several.
+    expect(m.has('repairRewrite'), 'the repair made port calls, so repairRewrite is on the line').toBe(true);
+    expect(m.get('repairRewrite')!, 'and it is a share of the pass\'s rewrite').toBeLessThanOrEqual(m.get('rewrite')!);
     expect(m.has('repair'), 'the repair phase ran').toBe(true);
   });
 
   it.each([
     { title: 'a null report', arrange: (repair: { mockResolvedValueOnce(v: null): unknown }) => { repair.mockResolvedValueOnce(null); } },
     { title: 'a repair that throws', arrange: (repair: { mockRejectedValueOnce(v: Error): unknown }) => { repair.mockRejectedValueOnce(new Error('a fixture failure')); } },
-  ])('D-5692 R1: $title leaves all five repair sizes off the line, while the repair phase is on it', async ({ arrange }) => {
+  ])('D-5692 R1: $title leaves all six repair sizes off the line, while the repair phase is on it', async ({ arrange }) => {
     const { warn, w, r, repair, sessions, view, base } = await repairWorld();
     (arrange as (r: unknown) => void)(repair);
     r.arm({ noteSessions: 1001 });
@@ -712,6 +715,9 @@ describe('D-5692 R1 (a repair report): the five repair sizes are the repair\'s o
     const m = parse(lines[0]!);
     expect(m.has('repair'), 'the repair phase ran').toBe(true);
     expect(sizeKeys.filter((k) => m.has(k)), 'no repair size is on the line').toEqual([]);
+    // `repairRewrite` mirrors `rewrite`'s rule (present iff a port call was charged while the part was open): the repair part ran here but made
+    // no port call (the report is null, or the call threw before any), so it is absent although `repair` is present
+    expect(m.has('repairRewrite'), 'no port call was charged to the repair part').toBe(false);
   });
 });
 
@@ -1179,20 +1185,25 @@ describe('D-5832 R3: repairRewrite holds only the port time charged while the re
 
 describe('D-5832 R4 (owed from review 642 F6): a pass that throws out of run, and each not-ready return, still writes its one line', () => {
   const FAILURE = { code: 'journal-unreadable', detail: 'a fixture failure' };
-  const cases: Array<{ title: string; arrange: (ctx: { w: World; proto: typeof DelegationDurability.prototype }) => void; failed?: boolean }> = [
+  const cases: Array<{ title: string; arrange: (ctx: { w: World; proto: typeof DelegationDurability.prototype }) => void; failed?: boolean; recovers?: boolean }> = [
     { title: 'a throw out of run (the upkeep throws)', failed: true, arrange: () => { vi.spyOn(model, 'upkeepDelegationIntervals').mockImplementation(() => { throw new Error('a fixture throw'); }); } },
     { title: 'the not-ready return of a failed applier inside the retry interval', arrange: ({ w, proto }) => {
       laneOf(w)['lastRecoverAt'] = at(2);                              // the armed pass's own clock: the retry interval has not passed
       vi.spyOn(proto, 'failure').mockReturnValue(FAILURE as never);
     } },
     { title: 'the not-ready return while a recovery the lane started has not settled', arrange: ({ w }) => { laneOf(w)['recovering'] = true; } },
+    { title: 'the not-ready return after a recover() that leaves the applier failed', recovers: true, arrange: ({ proto }) => {
+      // `lastRecoverAt` is left old (the open was 32 minutes before the armed pass): the retry interval has passed, so recover() runs
+      vi.spyOn(proto, 'failure').mockReturnValue(FAILURE as never);
+    } },
     { title: 'the not-ready return of an applier that did not open', arrange: ({ w }) => {
       vi.spyOn(laneOf(w) as { applier(): Promise<unknown> }, 'applier').mockResolvedValue(null);
     } },
   ];
-  it.each(cases)('D-5832 R4 (green by design at main; MX1/MX2 red it): $title, with 1,001 ms of block, writes one line', async ({ arrange, failed }) => {
+  it.each(cases)('D-5832 R4 (green by design at main; MX1/MX2 red it): $title, with 1,001 ms of block, writes one line', async ({ arrange, failed, recovers }) => {
     const sc = await scenario('std', { noteSessions: 1001 }, undefined, { setup: ({ w }) => arrange({ w, proto: DelegationDurability.prototype }) });
     expect(sc.reconciles, 'the pass did not reach the reconcile').toBe(0);
+    if (recovers === true) expect(sc.recovered, 'the not-ready branch ran recover()').toBe(1);
     if (failed === true) expect(sc.warn.mock.calls.map((c) => String(c[0])).some((l) => l.includes('a delegation pass failed')), 'the pass threw out of run').toBe(true);
     const m = theLine(sc.lines);
     expect(m.get('noteSessions')).toBe(1001);
@@ -1218,7 +1229,10 @@ describe('D-5832 R5: the real loop: a 50 ms synchronous stall inside the store\'
     expect(m.has(key), `${key} is on the line`).toBe(true);
     expect(m.get(key), `${key} reads the 50 ms stall`).toBeGreaterThanOrEqual(50);
     expect(m.get('stallMax'), 'stallMax is at least every stretch').toBeGreaterThanOrEqual(m.get(key)!);
-    expect(m.get('stallP99'), 'and the pass-wide percentile saw it').toBeGreaterThanOrEqual(50);
+    expect(m.get('stallMax'), 'and the pass-wide max saw the 50 ms').toBeGreaterThanOrEqual(50);
+    // not `stallP99 >= 50`: past 100 sampler fires the 99th percentile is not the max, so a busy box would flake it
+    expect(m.get('stallP99'), 'the pass-wide percentile is measured').toBeGreaterThan(0);
+    expect(m.get('stallP99'), 'and never above the max').toBeLessThanOrEqual(m.get('stallMax')!);
   });
 });
 
@@ -1260,13 +1274,38 @@ describe('D-5834 R1: a pass whose attempts are all already filed makes no checkp
 
   it('D-5834 R1 (a): every attempt already on file: no applyCheckpointChange call, the same attempts, the lease request still reaches createLease, attemptsSkipped=1', async () => {
     let attemptsBefore: readonly DelegationAttemptRow[] = [];
-    const sc = await scenario('std', { noteSessions: 1001 }, undefined, { ...replay, setup: ({ w }) => { attemptsBefore = checkpointOf(w.home).attempts; } });
+    // The attempts part sits between two phase announcements: `attempts` (its start) and `leases` (the next, once it has ended). The lane's
+    // in-memory checkpoint and the file are read at both, so what the part itself did to the revision and the bytes is pinned apart from the
+    // flush's commit before it and the lease's after it.
+    type Snap = { revision: number; canonical: string; file: Buffer; ids: string[] };
+    const snap = (w: World): Snap => {
+      const cp = (laneOf(w)['durable'] as DelegationDurability).state().checkpoint as DelegationCheckpointV1;
+      return { revision: cp.revision, canonical: canonicalDelegationJson(cp), file: readFileSync(path.join(w.home, '.ccrc', DELEGATION_CHECKPOINT_FILE)), ids: cp.attempts.map((a) => a.attemptId) };
+    };
+    let start: Snap | null = null;
+    let end: Snap | null = null;
+    const sc = await scenario('std', { noteSessions: 1001 }, undefined, {
+      ...replay,
+      setup: ({ w, r }) => {
+        attemptsBefore = checkpointOf(w.home).attempts;
+        r.also('attempts', () => { start = snap(w); });
+        r.also('leases', () => { end = snap(w); });
+      },
+    });
     expectReached('attempts', sc);
     expect(attemptsBefore.length, 'the earlier pass filed the attempt and lost its lease').toBeGreaterThanOrEqual(1);
     expect(sc.armed(), 'the attempts part ran').toContain('attempts');
     expect(sc.leasesCreated, 'the filed attempt let its lease request through').toBeGreaterThanOrEqual(1);
     expect(sc.spies.applyChange.mock.calls.length - sc.before.applyChange, 'fileAttempts made no change call').toBe(0);
     expect(checkpointOf(sc.w.home).attempts, 'the attempts on file are what they were').toEqual(attemptsBefore);
+    // Zero calls, so the part changed nothing: same revision, same canonical checkpoint, same file bytes (at main the no-op call wrote
+    // nothing either, so these are parity pins), and the set `fileAttempts` answers (the attempt ids on file) is the one the lease part saw.
+    expect(start, 'the attempts part started').not.toBeNull();
+    expect(end, 'and the lease part began after it').not.toBeNull();
+    expect(end!.revision, 'the attempts part left the revision alone').toBe(start!.revision);
+    expect(end!.canonical, 'and the checkpoint\'s canonical bytes').toBe(start!.canonical);
+    expect(end!.file.equals(start!.file), 'and the file on disk').toBe(true);
+    expect([...end!.ids].sort(), 'the ids on file (the set the part answers) are the ones that were').toEqual(attemptsBefore.map((a) => a.attemptId).sort());
     expect(theLine(sc.lines).get('attemptsSkipped'), 'the line says the call was skipped').toBe(1);
   });
 
@@ -1284,6 +1323,9 @@ describe('D-5834 R1: a pass whose attempts are all already filed makes no checkp
     expectReached('attempts', sc);
     expect(attemptsBefore.length, 'the earlier pass filed the first attempt').toBeGreaterThanOrEqual(1);
     expect(sc.spies.applyChange.mock.calls.length - sc.before.applyChange, 'one change for the lot').toBe(1);
+    // (b)'s bytes follow from (a)'s and from this: the pre-filter hands the change only the fresh list, and `applyCheckpointChange`'s own
+    // `have` filter and no-op compare already made the filed attempt a no-op, so the checkpoint after the one call is (a)'s plus the new
+    // attempt row, and its ids are pinned exactly here.
     const after = checkpointOf(sc.w.home).attempts;
     expect(after.map((a) => a.attemptId).sort(), 'the new attempt is on file beside the old ones').toEqual([...attemptsBefore.map((a) => a.attemptId), NEW_ID].sort());
     expect(theLine(sc.lines).get('attemptsSkipped'), 'the line says a call was made').toBe(0);
@@ -1347,6 +1389,7 @@ describe('D-5835 R1: each turn gives the loop a macrotask turn, pinned by a real
     r.arm({});
     r.also('effects', () => { setImmediate(() => { ran = true; }); });
     await censusPass(w, at(0), { demo: [] });
+    expect(plan.mock.results.length, 'the pass planned').toBeGreaterThan(0);
     expect((plan.mock.results.at(-1)!.value as Array<{ kind: string }>).map((e) => e.kind), 'the pass\'s only effect is the repair').toEqual(['repair-report-projection']);
     expect(ranAtRepair, 'the immediate ran before the repair was entered').toBe(true);
   });
@@ -1374,6 +1417,7 @@ describe('D-5835 R2: the turns change no result', () => {
     await censusPass(w, at(1), view);
     appendBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:06:00.000Z'));
     await censusPass(w, at(2), view);
+    expect(plan.mock.results.length, 'the fixture planned at least once').toBeGreaterThan(0);
     const cp = checkpointOf(w.home);
     return {
       kinds: (plan.mock.results.at(-1)!.value as Array<{ kind: string }>).map((e) => e.kind),
