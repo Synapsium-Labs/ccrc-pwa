@@ -14,6 +14,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { createStore } from '../../ccd/history/store.mjs';
 import { SCHEMA_VERSION } from '../../ccd/history/lib.mjs';
 import { makeHistoryBox, runSweep, spoolLine, plantSession, openStoreRO, scrubbedEnv } from './historyHelpers.js';
+import * as gateT8 from '../../deploy/history-gate.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = path.join(ROOT, 'deploy', 'measure-history.py');
@@ -3325,5 +3326,668 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
       expect(t7Gate.parseQuestionLine('QUESTION: ok?\nQUESTION:\t ')).toEqual({ ok: false, word: 'writer-malformed' });
       expect(t7Gate.parseQuestionLine('QUESTION:')).toEqual({ ok: false, word: 'writer-malformed' });
     });
+  });
+});
+
+// ── W2-3 Task 8: run classes, the hand-check and the gate (W2-D80, W2-D81, W2-D89; spec §10.2:2713-2718, RP6) ─────
+// Pure, every input a parameter, the seed included. decideGate is the W2 gate: W2-5b's `report` gathers its inputs
+// and decides nothing (W2-D85). Fractions are compared with Task 6's cmpFrac, never as floats. Seeds are synthetic.
+describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
+  type Inputs = Parameters<typeof gateT8.decideGate>[0];
+  /** decideGate's verdict; its other answer, the question-not-run refusal, carries `ok: false`. */
+  type Verdict = Extract<ReturnType<typeof gateT8.decideGate>, { ok: true }>;
+  type Lbl = 'correct' | 'uncertain' | 'fabricated';
+  type State = 'value' | 'unknown' | 'absent';
+  type Ans = { label: Lbl | null; answerState: State; judgeFailed: boolean };
+  type Qn = { qid: string; runFailed: boolean; treatment: Ans; control: Ans };
+  type Fr = { num: number; den: number };
+  type LiveFam = Inputs['live']['families'][number];
+  const SEED = 'ab'.repeat(32);
+  const SEED2 = 'cd'.repeat(32);
+  const fr = (num: number, den: number): Fr => ({ num, den });
+  /** a equals b as a fraction (cross-multiplied, never reduced or divided). */
+  const eq = (a: Fr | null | undefined, b: Fr): boolean => a != null && gateT8.cmpFrac(a, b) === 0;
+  const fk = (i: number, store = 'store-a'): string => JSON.stringify([store, `demo-${i}`, 'gen']);
+  const ans = (label: Lbl | null, answerState: State = 'value', judgeFailed = false): Ans => ({ label, answerState, judgeFailed });
+  let qn = 0;
+  const q = (t: Ans, c: Ans, runFailed = false): Qn => ({ qid: `q-${++qn}`, runFailed, treatment: t, control: c });
+  const R = (): Ans => ans('correct');
+  const U = (): Ans => ans('uncertain');
+  const F = (): Ans => ans('fabricated');
+  /** `n` families, family i holding perFam(i)'s questions. */
+  const quizOf = (n: number, perFam: (i: number) => Qn[]): Inputs['quiz'] =>
+    ({ families: Array.from({ length: n }, (_, i) => ({ key: fk(i), questions: perFam(i) })) });
+  /** k copies of one question shape. */
+  const rep = (k: number, make: () => Qn): Qn[] => Array.from({ length: k }, make);
+  /** The passing quiz: 20 families of 5; treatment 3 correct and 2 uncertain, control 5 uncertain (60% against 0%). */
+  const passingQuiz = (): Inputs['quiz'] => quizOf(20, () => [...rep(3, () => q(R(), U())), ...rep(2, () => q(U(), U()))]);
+  const win = (withCall: boolean, state: 'measured' | 'unmeasured' = 'measured') =>
+    ({ boundary_uuid: 'b', ts_ms: 0, producer: 'unknown' as const, state, start_ms: 0, end_ms: 1, end_inclusive: false,
+      turns: 10, calls: withCall ? 1 : 0, with_call: withCall });
+  /** A live family: n measured windows, the first `withCall` of them with a call. */
+  const liveFam = (key: string, arm: 'treatment' | 'control', n: number, withCall: number, o: Partial<LiveFam> = {}): LiveFam =>
+    ({ key, arm, windows: Array.from({ length: n }, (_, i) => win(i < withCall)), changed: false, unrealised: false, ...o });
+  /** The passing live A/B: four treatment families at 5 of 10 (lower bound 1/2), four control families at 0 of 10. */
+  const passingLive = (): Inputs['live'] => ({ families: [
+    ...[0, 1, 2, 3].map((i) => liveFam(fk(100 + i), 'treatment', 10, 5)),
+    ...[0, 1, 2, 3].map((i) => liveFam(fk(200 + i), 'control', 10, 0)),
+  ] });
+  const base = (o: Partial<Inputs> = {}): Inputs => ({
+    seedHex: SEED, halts: { ...gateT8.HALT_DEFAULTS }, codeChanged: false,
+    quiz: passingQuiz(), live: passingLive(),
+    handcheck: { agreement: { treatment: fr(9, 10), control: fr(9, 10) } },
+    ...o,
+  });
+  const decide = (o: Partial<Inputs> = {}): Verdict => {
+    const v = gateT8.decideGate(base(o));
+    if (!v.ok) throw new Error(`decideGate refused ${v.reason}: ${v.detail}`);
+    return v;
+  };
+  const GATE_SRC = readFileSync(path.join(ROOT, 'deploy', 'history-gate.mjs'), 'utf8');
+
+  // ── classifyRun and questionOutcome (W2-D80) ──
+  const RESULT = { type: 'result', subtype: 'success', is_error: false, result: 'ANSWER: abc1234' };
+  const RUN = { spawned: true, stopped: false };
+
+  it('classifyRun: a run not spawned, or cut off by a driver stop, is not-run, whatever it shows', () => {
+    expect(gateT8.classifyRun([], null, { spawned: false, stopped: false })).toBe('not-run');
+    expect(gateT8.classifyRun([], null, { spawned: true, stopped: true })).toBe('not-run');
+    expect(gateT8.classifyRun([], 1, { spawned: true, stopped: true }), 'a stop is not a failure').toBe('not-run');
+    expect(gateT8.classifyRun([RESULT], 0, { spawned: true, stopped: true })).toBe('not-run');
+  });
+
+  it('classifyRun: model-level non-answers are answered: max turns, permission denials, empty text, no ANSWER line, a non-zero exit with a result', () => {
+    expect(gateT8.classifyRun([RESULT], 0, RUN)).toBe('answered');
+    expect(gateT8.classifyRun([{ ...RESULT, subtype: 'error_max_turns', is_error: true, result: '' }], 0, RUN)).toBe('answered');
+    expect(gateT8.classifyRun([{ ...RESULT, permission_denials: [{ tool_name: 'Bash' }] }], 0, RUN)).toBe('answered');
+    expect(gateT8.classifyRun([{ ...RESULT, result: '' }], 0, RUN)).toBe('answered');
+    expect(gateT8.classifyRun([{ ...RESULT, result: 'I could not find it.' }], 0, RUN)).toBe('answered');
+    expect(gateT8.classifyRun([RESULT], 1, RUN)).toBe('answered');
+  });
+
+  it('classifyRun: a spawned run with no result event is infra-failed, whatever the exit code', () => {
+    const noResult = [{ type: 'system', subtype: 'init' }, { type: 'assistant', message: { content: [] } }];
+    expect(gateT8.classifyRun(noResult, 0, RUN)).toBe('infra-failed');
+    expect(gateT8.classifyRun(noResult, 1, RUN), 'a non-zero exit with no result').toBe('infra-failed');
+    expect(gateT8.classifyRun([], null, RUN), 'ended by a signal the driver did not send').toBe('infra-failed');
+  });
+
+  it('classifyRun: an authentication error is infra-failed, even beside a result event', () => {
+    const auth = { type: 'assistant', error: 'authentication_failed', message: { content: [{ type: 'text', text: 'Invalid API key' }] } };
+    expect(gateT8.classifyRun([auth, { ...RESULT, is_error: true, result: 'Invalid API key' }], 1, RUN)).toBe('infra-failed');
+    expect(gateT8.classifyRun([auth], 1, RUN)).toBe('infra-failed');
+  });
+
+  it("classifyRun: every answer is a RUN_CLASSES member, and the gate never spells the driver's stop words", () => {
+    expect([...gateT8.RUN_CLASSES].sort()).toEqual(['answered', 'infra-failed', 'not-run']);
+    for (const [ev, code, ctx] of [[[RESULT], 0, RUN], [[], 0, RUN], [[], null, { spawned: false, stopped: false }]] as const) {
+      expect(gateT8.RUN_CLASSES).toContain(gateT8.classifyRun([...ev], code, ctx));
+    }
+    // The driver's stop words are its own (W2-D59, and W2-4's unmeasured words by coordinator ruling); a stop reaches
+    // the gate only as ctx.stopped. code-changed and code-unmeasured are GATE_REASONS' own spellings as well (the shared
+    // spelling the coordinator accepted), so the gate spells them: that is the CONTROL, which also shows GATE_SRC is the
+    // gate's real text, so the scan above cannot pass on an empty read.
+    for (const word of ['limits-', 'budget-exhausted', 'claude-version-moved', 'tree-moved', 'wrapper-moved',
+      'version-unmeasured', 'tree-unmeasured', 'wrapper-unmeasured']) {
+      expect(GATE_SRC.includes(word), word).toBe(false);
+    }
+    for (const word of ['code-changed', 'code-unmeasured']) {
+      expect(GATE_SRC.includes(word), `CONTROL: ${word} is a GATE_REASONS word the gate spells`).toBe(true);
+    }
+  });
+
+  it('questionOutcome: a first infra failure owes a re-run, a second makes the question run-failed', () => {
+    expect(gateT8.questionOutcome([])).toBe('not-run');
+    expect(gateT8.questionOutcome(['answered'])).toBe('answered');
+    expect(gateT8.questionOutcome(['infra-failed'])).toBe('rerun');
+    expect(gateT8.questionOutcome(['infra-failed', 'answered'])).toBe('answered');
+    expect(gateT8.questionOutcome(['infra-failed', 'infra-failed'])).toBe('run-failed');
+    for (const a of [[], ['answered'], ['infra-failed'], ['infra-failed', 'infra-failed']] as const) {
+      expect(gateT8.QUESTION_OUTCOMES).toContain(gateT8.questionOutcome([...a]));
+    }
+    expect(() => gateT8.questionOutcome(['failed' as never])).toThrow(/not a run class/);
+  });
+
+  it('questionOutcome: a stop never consumes the re-run', () => {
+    expect(gateT8.questionOutcome(['not-run'])).toBe('not-run');
+    expect(gateT8.questionOutcome(['not-run', 'not-run'])).toBe('not-run');
+    expect(gateT8.questionOutcome(['infra-failed', 'not-run'])).toBe('rerun');
+    expect(gateT8.questionOutcome(['not-run', 'infra-failed', 'not-run', 'not-run'])).toBe('rerun');
+    expect(gateT8.questionOutcome(['infra-failed', 'not-run', 'not-run', 'infra-failed'])).toBe('run-failed');
+    expect(gateT8.questionOutcome(['infra-failed', 'not-run', 'answered'])).toBe('answered');
+  });
+
+  // ── the hand-check (W2-D81) ──
+  type Item = { id: string; arm: 'treatment' | 'control'; judged: boolean; judgeFailed: boolean };
+  const items = (arm: Item['arm'], judged: number, failed: number, correct = 0): Item[] => [
+    ...Array.from({ length: judged }, (_, i) => ({ id: `${arm}-j${String(i).padStart(3, '0')}`, arm, judged: true, judgeFailed: false })),
+    ...Array.from({ length: failed }, (_, i) => ({ id: `${arm}-f${i}`, arm, judged: false, judgeFailed: true })),
+    ...Array.from({ length: correct }, (_, i) => ({ id: `${arm}-c${i}`, arm, judged: false, judgeFailed: false })),
+  ];
+
+  it('handcheckSample: ceil(n/5) of the judged answers per arm, and every judge-failed item outside the 20%', () => {
+    const all = [...items('treatment', 11, 1, 4), ...items('control', 10, 2, 5)];
+    const ids = gateT8.handcheckSample(SEED, all);
+    const judgedIn = (arm: string) => ids.filter((id) => id.startsWith(`${arm}-j`)).length;
+    expect(judgedIn('treatment'), 'ceil(11/5)').toBe(3);
+    expect(judgedIn('control'), 'ceil(10/5)').toBe(2);
+    for (const f of all.filter((i) => i.judgeFailed)) expect(ids).toContain(f.id);
+    expect(ids.filter((id) => id.includes('-c')), 'an unjudged (correct) answer is never sampled').toEqual([]);
+    expect(ids.length).toBe(3 + 2 + 3);
+    expect(gateT8.handcheckSample(SEED, items('treatment', 1, 0)).length, 'ceil(1/5)').toBe(1);
+    expect(gateT8.handcheckSample(SEED, items('control', 0, 0, 3)), 'nothing judged, nothing sampled').toEqual([]);
+    expect(() => gateT8.handcheckSample(SEED, [{ id: 'x', arm: 'treatment', judged: true, judgeFailed: true }])).toThrow(/both judged and judge-failed/);
+  });
+
+  it('handcheckSample: seeded, independent of input order, and another seed draws another sample', () => {
+    const all = [...items('treatment', 50, 0), ...items('control', 50, 0)];
+    const a = gateT8.handcheckSample(SEED, all);
+    expect(gateT8.handcheckSample(SEED, all)).toEqual(a);
+    expect(gateT8.handcheckSample(SEED, [...all].reverse()), 'input order').toEqual(a);
+    expect(gateT8.handcheckSample(SEED2, all)).not.toEqual(a);
+    expect(a.length).toBe(20);
+  });
+
+  it("applyHandcheck: the operator's label replaces the judge's on the items the operator labelled, and only there", () => {
+    const judge = new Map<string, Lbl>([['a', 'fabricated'], ['b', 'uncertain'], ['c', 'fabricated']]);
+    const operator = new Map<string, Lbl>([['a', 'uncertain'], ['d', 'fabricated']]);   // a sampled; d judge-failed
+    const out = gateT8.applyHandcheck(judge, operator);
+    expect([...out.entries()].sort()).toEqual([['a', 'uncertain'], ['b', 'uncertain'], ['c', 'fabricated'], ['d', 'fabricated']]);
+    expect(judge.get('a'), 'the judge map is not changed').toBe('fabricated');
+    expect(() => gateT8.applyHandcheck(new Map<string, Lbl>([['a', 'correct']]), new Map()), 'the judge never decides correct (W2-D63)').toThrow(/judge label correct/);
+    expect(() => gateT8.applyHandcheck(new Map<string, Lbl>([['a', 'fabricated']]), new Map<string, Lbl>([['a', 'correct']])), 'the operator never decides correct either (W2-D63, W2-D79)').toThrow(/operator label correct/);
+  });
+
+  it('handcheckAgreement: exact per arm and over both; an arm with no pair is null', () => {
+    const pairs = [
+      ...Array.from({ length: 10 }, (_, i) => ({ arm: 'treatment' as const, judge: 'fabricated' as Lbl, operator: (i < 8 ? 'fabricated' : 'uncertain') as Lbl })),
+      ...Array.from({ length: 3 }, (_, i) => ({ arm: 'control' as const, judge: 'uncertain' as Lbl, operator: (i < 2 ? 'uncertain' : 'fabricated') as Lbl })),
+    ];
+    const g = gateT8.handcheckAgreement(pairs);
+    expect(eq(g.treatment, fr(8, 10))).toBe(true);
+    expect(eq(g.control, fr(2, 3))).toBe(true);
+    expect(eq(g.all, fr(10, 13))).toBe(true);
+    expect(gateT8.handcheckAgreement(pairs.slice(0, 10)).control).toBeNull();
+    expect(gateT8.handcheckAgreement([])).toEqual({ treatment: null, control: null, all: null });
+  });
+
+  // ── decideGate (W2-D89, RP6, W2-D18's boundaries) ──
+  it('decideGate: a passing input passes, and the same seed and inputs give the same verdict twice', () => {
+    const inputs = base();
+    const before = structuredClone(inputs);
+    const v = gateT8.decideGate(inputs) as Verdict;
+    expect(v.ok, 'a verdict, not a refusal').toBe(true);
+    expect(v.verdict).toBe('pass');
+    expect(v.halts).toEqual([]);
+    expect(v.stamp).toBeNull();
+    expect(eq(v.criteria.accuracy!.point_t, fr(60, 100))).toBe(true);
+    expect(eq(v.criteria.uptake!.lower, fr(1, 2))).toBe(true);
+    expect(gateT8.decideGate(structuredClone(before))).toEqual(v);
+    expect(inputs, 'decideGate changes nothing it is given').toEqual(before);
+    expect(gateT8.VERDICTS).toContain(v.verdict);
+  });
+
+  it('RP6: 45% with a CI lower bound at or below 0 fails', () => {
+    // 20 families of one question: treatment correct in 9 (45%), control in 9; one family +1, one -1, the rest tie.
+    const v = decide({ quiz: quizOf(20, (i) => [i < 8 ? q(R(), R()) : i === 8 ? q(R(), U()) : i === 9 ? q(U(), R()) : q(U(), U())]) });
+    expect(eq(v.criteria.accuracy!.point_t, fr(9, 20))).toBe(true);
+    expect(gateT8.cmpFrac(v.criteria.accuracy!.lower, fr(0, 1))).toBeLessThanOrEqual(0);
+    expect(v.criteria.accuracy!.holds).toBe(false);
+    expect(v.verdict).toBe('fail');
+  });
+
+  it('RP6: 38% with a lower bound above 0 fails', () => {
+    // 10 families of 5: treatment correct 2 in nine of them and 1 in the tenth (19 of 50), control none.
+    const v = decide({ quiz: quizOf(10, (i) => [...rep(i < 9 ? 2 : 1, () => q(R(), U())), ...rep(i < 9 ? 3 : 4, () => q(U(), U()))]) });
+    expect(eq(v.criteria.accuracy!.point_t, fr(19, 50))).toBe(true);
+    expect(gateT8.cmpFrac(v.criteria.accuracy!.lower, fr(0, 1))).toBe(1);
+    expect(v.criteria.accuracy!.holds).toBe(false);
+    expect(v.verdict).toBe('fail');
+  });
+
+  it('W2-D18: exactly 40% passes criterion 1', () => {
+    const v = decide({ quiz: quizOf(10, () => [...rep(2, () => q(R(), U())), ...rep(3, () => q(U(), U()))]) });
+    expect(eq(v.criteria.accuracy!.point_t, fr(2, 5))).toBe(true);
+    expect(v.criteria.accuracy!.holds).toBe(true);
+    expect(v.verdict).toBe('pass');
+  });
+
+  it('W2-D18: a paired lower bound of exactly 0 fails (one positive family in 20)', () => {
+    // Family 0: treatment correct, control not; families 1-8: both correct; 9-19: neither. Point 9/20 = 45%. A resample
+    // holding no copy of family 0 has difference exactly 0, and (19/20)^20, about 36%, of them do: the 2.5% rank is 0.
+    const v = decide({ quiz: quizOf(20, (i) => [i === 0 ? q(R(), U()) : i <= 8 ? q(R(), R()) : q(U(), U())]) });
+    expect(eq(v.criteria.accuracy!.point_t, fr(9, 20))).toBe(true);
+    expect(eq(v.criteria.accuracy!.lower, fr(0, 1))).toBe(true);
+    expect(v.criteria.accuracy!.holds).toBe(false);
+    expect(v.verdict).toBe('fail');
+  });
+
+  /** 20 families of 10 questions (Q = 200): treatment 6 correct per family; `ft` and `fc` fabricated answers, spread one
+   *  per family from family 0, the rest uncertain. */
+  const fabQuiz = (ft: number, fc: number): Inputs['quiz'] =>
+    quizOf(20, (i) => [q(R(), i < fc ? F() : U()), ...rep(5, () => q(R(), U())), q(i < ft ? F() : U(), U()), ...rep(3, () => q(U(), U()))]);
+
+  it('RP6: fabrication at control + 4 fails', () => {
+    const v = decide({ quiz: fabQuiz(9, 1) });   // 4.5% against 0.5%
+    expect(eq(v.criteria.fabrication!.t, fr(9, 200))).toBe(true);
+    expect(eq(v.criteria.fabrication!.c, fr(1, 200))).toBe(true);
+    expect(v.criteria.fabrication!.holds).toBe(false);
+    expect(v.verdict).toBe('fail');
+  });
+
+  it('W2-D18: fabrication at exactly control + 3 passes, a tie a float comparison gets wrong', () => {
+    const v = decide({ quiz: fabQuiz(7, 1) });   // 3.5% against 0.5%: in floats 7/200 > 1/200 + 0.03
+    expect(7 / 200 <= 1 / 200 + 0.03, 'CONTROL: the float reading of this tie fails it').toBe(false);
+    expect(v.criteria.fabrication!.holds).toBe(true);
+    expect(v.verdict).toBe('pass');
+  });
+
+  it('RP6: a treatment window share whose lower bound is 9.9% fails even with control at 0, and 0.01 against 0 fails', () => {
+    const control = [0, 1].map((i) => liveFam(fk(200 + i), 'control', 100, 0));
+    const at99 = decide({ live: { families: [...[0, 1].map((i) => liveFam(fk(100 + i), 'treatment', 1000, 99)), ...control] } });
+    expect(eq(at99.criteria.uptake!.lower, fr(99, 1000))).toBe(true);
+    expect(at99.criteria.uptake!.holds).toBe(false);
+    expect(at99.verdict).toBe('fail');
+    const at1 = decide({ live: { families: [...[0, 1].map((i) => liveFam(fk(100 + i), 'treatment', 100, 1)), ...control] } });
+    expect(eq(at1.criteria.uptake!.point, fr(1, 100))).toBe(true);
+    expect(at1.criteria.uptake!.holds).toBe(false);
+    expect(at1.verdict).toBe('fail');
+  });
+
+  it('W2-D18: a treatment window share whose lower bound is exactly 10% passes criterion 3', () => {
+    const v = decide({ live: { families: [0, 1].map((i) => liveFam(fk(100 + i), 'treatment', 10, 1)) } });
+    expect(eq(v.criteria.uptake!.lower, gateT8.X)).toBe(true);
+    expect(v.criteria.uptake!.holds).toBe(true);
+    expect(v.verdict).toBe('pass');
+  });
+
+  it("RP6: dropping control's calls after its first exit 8 changes no verdict", () => {
+    // One control family's report, built into windows by Task 3: one boundary at 1000, three turns, no next boundary,
+    // so its window is [1000, 1300]. Its first exit-8 call is at 900, before the window; the next is inside it.
+    const EXIT8 = 8;   // lib's EXIT.RECALL_OFF
+    const calls: Array<[number, number, string]> = [[900, EXIT8, 'grep'], [1150, EXIT8, 'grep']];
+    const report = (cs: Array<[number, number, string]>) => ({
+      ccrc_id: 'demo-c', generation: 'gen', found: true, merged_generations: [], calls: cs,
+      boundaries: [{ boundary_uuid: 'b-1', ts_ms: 1000, copies: [{
+        file_id: 1, source_key: '', boundary_line: 1, after_count: 4, summary_line: 2,
+        next_boundary_line: null, next_boundary_ts_ms: null, last_ts_ms: 1300,
+        rows: [[3, 1100, 'm-1', null, 'u-1', 'model-a'], [4, 1200, 'm-2', null, 'u-2', 'model-a'], [5, 1300, 'm-3', null, 'u-3', 'model-a']],
+        models: ['model-a'], truncated: false }] }],
+    });
+    const split = gateT8.splitAtFirstExit8(calls);
+    expect(split.upTo, 'CONTROL: the split is at the first exit 8').toEqual([calls[0]]);
+    const full = gateT8.buildWindows(report(calls) as never);
+    const upTo = gateT8.buildWindows(report(split.upTo) as never);
+    expect([full[0]!.with_call, upTo[0]!.with_call], 'CONTROL: the drop changes the control window').toEqual([true, false]);
+    // Treatment sits exactly at X, so a gate that let control into criterion 3 would move with the drop.
+    const treatment = [0, 1].map((i) => liveFam(fk(100 + i), 'treatment', 10, 1));
+    const withControl = (ws: typeof full): Inputs['live'] => ({ families: [...treatment, { key: fk(200), arm: 'control', windows: ws, changed: false, unrealised: false }] });
+    const a = decide({ live: withControl(full) });
+    const b = decide({ live: withControl(upTo) });
+    expect(a.verdict).toBe('pass');
+    expect(b).toEqual(a);
+  });
+
+  it('RP6 and W2-D83: quiz uptake, the uptake difference and the task-embedded scores change no verdict', () => {
+    const one = { quiz_uptake: { treatment: fr(9, 10), control: fr(0, 10) }, uptake_difference: fr(9, 10), first_call: { treatment: fr(1, 2), control: fr(0, 1) },
+      task_embedded: { accuracy: { treatment: fr(1, 1), control: fr(0, 1) }, fabrication: { treatment: fr(0, 1), control: fr(1, 1) } } };
+    const two = { quiz_uptake: { treatment: fr(0, 10), control: fr(10, 10) }, uptake_difference: fr(-10, 10), first_call: { treatment: fr(0, 1), control: fr(1, 1) },
+      task_embedded: { accuracy: { treatment: fr(0, 1), control: fr(1, 1) }, fabrication: { treatment: fr(1, 1), control: fr(0, 1) } } };
+    const a = decide({ reportOnly: one });
+    const b = decide({ reportOnly: two });
+    const c = decide();
+    expect(a.report_only, 'passed through').toEqual(one);
+    expect(c.report_only).toBeNull();
+    const { report_only: _a, ...ra } = a;
+    const { report_only: _b, ...rb } = b;
+    const { report_only: _c, ...rc } = c;
+    expect(rb).toEqual(ra);
+    expect(rc).toEqual(ra);
+    // decideGate reads the report-only section in exactly one place: the line that passes it through.
+    const start = GATE_SRC.indexOf('export function decideGate(');
+    const body = GATE_SRC.slice(start, GATE_SRC.indexOf('\n}\n', start));
+    expect(start).toBeGreaterThan(0);
+    expect(body.split('reportOnly').length - 1).toBe(1);
+  });
+
+  it('W2-D89: an absent rate above absent_rate_max in either arm halts, and criterion 1 is not computed', () => {
+    // Q = 100 (20 families of 5); `a` absent answers in the named arm, one per family from family 0.
+    const absentQuiz = (arm: 'treatment' | 'control', a: number): Inputs['quiz'] =>
+      quizOf(20, (i) => [...rep(3, () => q(R(), U())), q(U(), U()),
+        i < a ? (arm === 'treatment' ? q(ans('uncertain', 'absent'), U()) : q(U(), ans('uncertain', 'absent'))) : q(U(), U())]);
+    const at5 = decide({ quiz: absentQuiz('treatment', 5) });
+    expect(eq(at5.counts.absent.treatment, fr(5, 100))).toBe(true);
+    expect(at5.halts, 'exactly 5% is not above 5%').toEqual([]);
+    expect(at5.verdict).toBe('pass');
+    for (const arm of ['treatment', 'control'] as const) {
+      const v = decide({ quiz: absentQuiz(arm, 6) });
+      expect(v.halts, arm).toEqual(['absent-rate']);
+      expect(v.verdict).toBe('halt');
+      expect(v.criteria.accuracy, 'criterion 1 is not computed').toBeNull();
+      expect(v.criteria.fabrication, 'criterion 2 still is').not.toBeNull();
+      expect(v.criteria.uptake!.holds).toBe(true);
+    }
+  });
+
+  it('W2-D89: more than run_failed_max of the questions run-failed halts, and criteria 1 and 2 are not computed', () => {
+    // 100 frozen questions; `k` of them run-failed, one per family from family 0.
+    const rfQuiz = (k: number): Inputs['quiz'] =>
+      quizOf(20, (i) => [...rep(3, () => q(R(), U())), q(U(), U()), q(U(), U(), i < k)]);
+    const at5 = decide({ quiz: rfQuiz(5) });
+    expect(at5.counts).toMatchObject({ Q: 95, run_failed: 5 });
+    expect(at5.halts, '5 of 100 frozen questions is not above 5%').toEqual([]);
+    expect(at5.verdict).toBe('pass');
+    const at6 = decide({ quiz: rfQuiz(6) });
+    expect(at6.counts).toMatchObject({ Q: 94, run_failed: 6 });
+    expect(at6.halts).toEqual(['run-failed']);
+    expect(at6.verdict).toBe('halt');
+    expect(at6.criteria.accuracy).toBeNull();
+    expect(at6.criteria.fabrication).toBeNull();
+    expect(at6.criteria.uptake!.holds, 'criterion 3 is still reported').toBe(true);
+  });
+
+  it('W2-D89: hand-check agreement below handcheck_agreement_min halts', () => {
+    expect(decide({ handcheck: { agreement: { treatment: fr(8, 10), control: fr(4, 5) } } }).halts, 'exactly 0.8 is not below it').toEqual([]);
+    expect(decide({ handcheck: { agreement: { treatment: null, control: null } } }).halts, 'no pair, nothing to disagree').toEqual([]);
+    for (const agreement of [{ treatment: fr(7, 10), control: fr(9, 10) }, { treatment: fr(9, 10), control: fr(79, 100) }]) {
+      const v = decide({ handcheck: { agreement } });
+      expect(v.halts).toEqual(['handcheck-agreement']);
+      expect(v.verdict).toBe('halt');
+      expect(v.criteria.accuracy!.holds && v.criteria.fabrication!.holds && v.criteria.uptake!.holds, 'every criterion still computed').toBe(true);
+    }
+    // handcheckAgreement's answer feeds the halt directly.
+    const pairs = Array.from({ length: 10 }, (_, i) => ({ arm: 'treatment' as const, judge: 'fabricated' as Lbl, operator: (i < 7 ? 'fabricated' : 'uncertain') as Lbl }));
+    const g = gateT8.handcheckAgreement(pairs);
+    expect(decide({ handcheck: { agreement: { treatment: g.treatment, control: g.control } } }).halts).toEqual(['handcheck-agreement']);
+  });
+
+  it('W2-D89: a judge-failed answer with no operator label holds the verdict incomplete', () => {
+    const held = (label: Lbl | null): Inputs['quiz'] =>
+      quizOf(20, (i) => [...rep(3, () => q(R(), U())), q(U(), U()), i === 0 ? q(ans(label, 'value', true), U()) : q(U(), U())]);
+    const v = decide({ quiz: held(null) });
+    expect(v.verdict).toBe('incomplete');
+    expect(v.criteria.accuracy).toBeNull();
+    expect(v.criteria.fabrication).toBeNull();
+    expect(v.criteria.uptake!.holds).toBe(true);
+    expect(decide({ quiz: held('uncertain') }).verdict, 'labelled by the operator, it decides').toBe('pass');
+    // The hold is the verdict even beside a halt, which is still listed.
+    const both = decide({ quiz: held(null), handcheck: { agreement: { treatment: fr(1, 2), control: null } } });
+    expect(both.verdict).toBe('incomplete');
+    expect(both.halts).toEqual(['handcheck-agreement']);
+  });
+
+  it('W2-D23: a changed treatment family stays in criterion 3 and leaves the comparison block', () => {
+    const v = decide({ live: { families: [
+      liveFam(fk(100), 'treatment', 10, 5, { changed: true }),
+      liveFam(fk(101), 'treatment', 10, 1),
+      liveFam(fk(200), 'control', 10, 0, { unrealised: true }),
+      liveFam(fk(201), 'control', 10, 0),
+    ] } });
+    expect(eq(v.criteria.uptake!.point, fr(6, 20)), 'the changed family is in the denominator').toBe(true);
+    expect(v.comparison.dropped).toEqual([fk(100), fk(200)].sort());
+  });
+
+  it('W2-D80: run-failed questions are absent from both arms', () => {
+    // 21 frozen: 20 families of one question (treatment correct in 12, control in none), plus one run-failed question
+    // whose labels would move both arms and whose judge failed: 1/21 is under 5%, so nothing halts.
+    const families = quizOf(20, (i) => [i < 12 ? q(R(), U()) : q(U(), U())]).families
+      .map((f, i) => (i === 0 ? { ...f, questions: [...f.questions, q(R(), ans(null, 'absent', true), true)] } : f));
+    const v = decide({ quiz: { families } });
+    expect(v.counts).toMatchObject({ Q: 20, run_failed: 1 });
+    expect(eq(v.criteria.accuracy!.point_t, fr(12, 20))).toBe(true);
+    expect(eq(v.counts.absent.control!, fr(0, 20))).toBe(true);
+    expect(v.verdict, 'its missing label holds nothing').toBe('pass');
+  });
+
+  it('W2-D89: unmeasured windows and treatment families with no measured window are out of criterion 3', () => {
+    const v = decide({ live: { families: [
+      { ...liveFam(fk(100), 'treatment', 10, 5), windows: [...liveFam(fk(100), 'treatment', 10, 5).windows, win(true, 'unmeasured'), win(true, 'unmeasured')] },
+      { ...liveFam(fk(101), 'treatment', 0, 0), windows: [win(true, 'unmeasured')] },
+      liveFam(fk(102), 'treatment', 0, 0),
+    ] } });
+    expect(eq(v.criteria.uptake!.point, fr(5, 10))).toBe(true);
+    expect(eq(v.criteria.uptake!.lower, fr(5, 10)), 'one cluster only').toBe(true);
+  });
+
+  it('W2-D89 and the coordinator ruling: a treatment set with no cluster left halts empty-arm, and no bootstrap runs on it', () => {
+    // Criterion 3: no listed treatment family holds a measured window (one has none, one only an unmeasured one).
+    const live = decide({ live: { families: [
+      liveFam(fk(102), 'treatment', 0, 0),
+      { ...liveFam(fk(103), 'treatment', 0, 0), windows: [win(true, 'unmeasured')] },
+      liveFam(fk(200), 'control', 10, 0),
+    ] } });
+    expect(live.halts).toEqual(['empty-arm']);
+    expect(live.verdict).toBe('halt');
+    expect(live.criteria.uptake, 'criterion 3 is not computed').toBeNull();
+    expect(live.criteria.accuracy!.holds && live.criteria.fabrication!.holds, 'criteria 1 and 2 still are').toBe(true);
+    // Criterion 1: every frozen question run-failed leaves no paired cluster; the run-failed halt fires beside it.
+    const quiz = decide({ quiz: quizOf(20, () => [q(R(), U(), true)]) });
+    expect(quiz.halts).toEqual(['run-failed', 'empty-arm']);
+    expect(quiz.verdict).toBe('halt');
+    expect(quiz.criteria.accuracy).toBeNull();
+    expect(quiz.criteria.uptake!.holds, 'criterion 3 is still reported').toBe(true);
+  });
+
+  it('W2-D89: the code-changed stamp is carried onto the verdict', () => {
+    const v = decide({ codeChanged: true });
+    expect(v.stamp).toBe('code-changed');
+    expect(v.verdict).toBe('pass');
+    expect(gateT8.GATE_REASONS).toContain('code-changed');
+  });
+
+  it('W2-D89: the halt words are HALT_WORDS, and decideGate refuses an input it has no rule for', () => {
+    expect([...gateT8.HALT_WORDS].sort()).toEqual(['absent-rate', 'empty-arm', 'handcheck-agreement', 'run-failed']);
+    expect(gateT8.HALT_DEFAULTS).toEqual({ handcheck_agreement_min: 0.8, run_failed_max: 0.05, absent_rate_max: 0.05 });
+    // A question still not-run at gate time is refused, never thrown, counted, held or halted (W2-D89, amended
+    // 2026-10-19): the refusal names the questions, so the operator runs or records them first.
+    const notRun = quizOf(20, () => rep(5, () => q(R(), U())));
+    (notRun.families[0]!.questions[0]!.treatment as { answerState: string }).answerState = 'not-run';
+    (notRun.families[3]!.questions[2]!.control as { answerState: string }).answerState = 'not-run';
+    const named = [notRun.families[0]!.questions[0]!.qid, notRun.families[3]!.questions[2]!.qid].sort();
+    expect(gateT8.decideGate(base({ quiz: notRun })), 'question-not-run (W2-D89, amended)').toEqual({ ok: false, reason: 'question-not-run',
+      detail: `decideGate: 2 question(s) still not-run: ${named.join(', ')}; run or record them first`, questions: named });
+    expect(gateT8.GATE_REASONS).toContain('question-not-run');
+    expect(() => decide({ quiz: quizOf(20, () => [q(ans('uncertain', 'skipped' as never), U())]) })).toThrow(/has answer state skipped/);
+    expect(() => decide({ quiz: quizOf(20, () => [q(ans('correct', 'absent'), U())]) })).toThrow(/absent and labelled correct/);
+    expect(() => decide({ quiz: quizOf(20, () => [q(ans(null), U())]) })).toThrow(/no label and is not judge-failed/);
+    expect(() => decide({ halts: { ...gateT8.HALT_DEFAULTS, run_failed_max: 1e-7 } })).toThrow(/at most six places/);
+  });
+
+  // ── Edge pins: guards and edges the cases above leave unpinned (each is measured against its mutant) ──
+  it('edge: classifyRun refuses a malformed call, and reads only the authentication field as an authentication failure', () => {
+    expect(() => gateT8.classifyRun('x' as never, 0, RUN)).toThrow(/events must be an array/);
+    expect(() => gateT8.classifyRun([], 1.5, RUN)).toThrow(/exitCode must be an integer or null/);
+    expect(() => gateT8.classifyRun([], undefined as never, RUN)).toThrow(/exitCode must be an integer or null/);
+    expect(() => gateT8.classifyRun([], 0, null as never)).toThrow(/ctx.spawned and ctx.stopped must be booleans/);
+    expect(() => gateT8.classifyRun([], 0, { spawned: true } as never)).toThrow(/ctx.spawned and ctx.stopped must be booleans/);
+    expect(() => gateT8.classifyRun([], 0, { spawned: 1, stopped: false } as never)).toThrow(/ctx.spawned and ctx.stopped must be booleans/);
+    expect(gateT8.classifyRun([RESULT], 0, { spawned: false, stopped: false }), 'a run never spawned is not-run whatever it shows').toBe('not-run');
+    expect(gateT8.classifyRun([{ type: 'assistant', error: 'rate_limit' }, RESULT], 0, RUN), 'another error value is no authentication failure').toBe('answered');
+    expect(gateT8.classifyRun([null, 'text', 3, RESULT], 0, RUN), 'a non-object event is skipped, not read').toBe('answered');
+    expect(gateT8.classifyRun([null, 'text'], 0, RUN)).toBe('infra-failed');
+  });
+
+  it('edge: questionOutcome refuses a non-array, and the first two infra failures settle the question for good', () => {
+    expect(() => gateT8.questionOutcome('answered' as never)).toThrow(/attempts must be an array/);
+    expect(gateT8.questionOutcome(['infra-failed', 'infra-failed', 'answered']), 'a third attempt never resurrects it').toBe('run-failed');
+    expect(gateT8.questionOutcome(['infra-failed', 'answered', 'infra-failed']), 'the first answer settles it').toBe('answered');
+  });
+
+  it('edge: handcheckSample refuses a malformed item, sorts by code unit and draws without replacement from the handcheck stream', () => {
+    const it0 = { id: 'x', arm: 'treatment' as const, judged: true, judgeFailed: false };
+    expect(() => gateT8.handcheckSample(SEED, 'x' as never)).toThrow(/items must be an array/);
+    expect(() => gateT8.handcheckSample(SEED, [null as never])).toThrow(/non-empty string id/);
+    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, id: '' }])).toThrow(/non-empty string id/);
+    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, id: 7 as never }])).toThrow(/non-empty string id/);
+    expect(() => gateT8.handcheckSample(SEED, [it0, { ...it0 }])).toThrow(/duplicate id x/);
+    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, arm: 'both' as never }])).toThrow(/has arm both/);
+    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, judged: 1 as never }])).toThrow(/boolean judged and judgeFailed/);
+    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, judgeFailed: 'no' as never }])).toThrow(/boolean judged and judgeFailed/);
+    // The answer is sorted by code unit ('A' < 'a' < 'b'), whatever order the judge-failed items arrive in.
+    const failed = (id: string) => ({ id, arm: 'control' as const, judged: false, judgeFailed: true });
+    expect(gateT8.handcheckSample(SEED, [failed('b'), failed('a'), failed('A')])).toEqual(['A', 'a', 'b']);
+    // An independent reading of W2-D81: per arm in ASSIGNMENT_ARMS order, a partial Fisher-Yates over the sorted judged
+    // ids from the 'handcheck' stream, then the judge-failed ids; ids of mixed case, so a locale sort would move it.
+    const ref = (seed: string, its: Item[]): string[] => {
+      const rng = gateT8.substream(seed, 'handcheck');
+      const out: string[] = [];
+      for (const arm of gateT8.ASSIGNMENT_ARMS) {
+        const pool = its.filter((i) => i.arm === arm && i.judged).map((i) => i.id).sort();
+        const k = Math.ceil(pool.length / 5);
+        for (let s = 0; s < k; s += 1) {
+          const j = s + gateT8.randInt(rng, pool.length - s);
+          [pool[s], pool[j]] = [pool[j]!, pool[s]!];
+          out.push(pool[s]!);
+        }
+      }
+      for (const i of its) if (i.judgeFailed) out.push(i.id);
+      return out.sort();
+    };
+    const mixed: Item[] = ['treatment', 'control'].flatMap((arm) =>
+      Array.from({ length: 100 }, (_, i) => ({ id: `${i % 2 === 0 ? 'a' : 'B'}-${arm}-${i}`, arm: arm as Item['arm'], judged: true, judgeFailed: false })));
+    mixed.push({ id: 'z-failed', arm: 'control', judged: false, judgeFailed: true });
+    for (const seed of [SEED, SEED2, 'ef'.repeat(32)]) {
+      const got = gateT8.handcheckSample(seed, mixed);
+      expect(got, seed).toEqual(ref(seed, mixed));
+      expect(new Set(got).size, 'no id is drawn twice').toBe(got.length);
+      expect(got.length).toBe(20 + 20 + 1);
+    }
+  });
+
+  it('edge: applyHandcheck refuses a non-map and a label outside the judge words, from either side', () => {
+    expect(() => gateT8.applyHandcheck({} as never, new Map())).toThrow(/both label sets must be Maps/);
+    expect(() => gateT8.applyHandcheck(new Map(), [] as never)).toThrow(/both label sets must be Maps/);
+    expect(() => gateT8.applyHandcheck(new Map<string, Lbl>([['a', 'bogus' as never]]), new Map())).toThrow(/judge label bogus/);
+    expect(() => gateT8.applyHandcheck(new Map(), new Map<string, Lbl>([['a', 'bogus' as never]]))).toThrow(/operator label bogus/);
+    expect(gateT8.applyHandcheck(new Map(), new Map()).size).toBe(0);
+  });
+
+  it('edge: handcheckAgreement refuses a non-array, an unknown arm and a label outside LABELS; an arm that never agrees is 0, not null', () => {
+    const p = { arm: 'treatment' as const, judge: 'fabricated' as Lbl, operator: 'uncertain' as Lbl };
+    expect(() => gateT8.handcheckAgreement('x' as never)).toThrow(/pairs must be an array/);
+    expect(() => gateT8.handcheckAgreement([null as never])).toThrow(/arm undefined/);
+    expect(() => gateT8.handcheckAgreement([{ ...p, arm: 'both' as never }])).toThrow(/arm both/);
+    expect(() => gateT8.handcheckAgreement([{ ...p, judge: 'bogus' as never }])).toThrow(/a label outside LABELS/);
+    expect(() => gateT8.handcheckAgreement([{ ...p, operator: 'bogus' as never }])).toThrow(/a label outside LABELS/);
+    const g = gateT8.handcheckAgreement([p, p]);
+    expect(eq(g.treatment, fr(0, 2))).toBe(true);
+    expect(g.control).toBeNull();
+    expect(eq(g.all, fr(0, 2))).toBe(true);
+  });
+
+  it('edge: a halts threshold is read exactly: one, a negative or a non-number is refused, six places are read, and a minimum of 1 is allowed', () => {
+    const D = gateT8.HALT_DEFAULTS;
+    expect(() => decide({ halts: { ...D, absent_rate_max: 1 } })).toThrow(/halts.absent_rate_max must be a number in \[0, 1\)/);
+    expect(() => decide({ halts: { ...D, run_failed_max: 1 } })).toThrow(/halts.run_failed_max must be a number in \[0, 1\)/);
+    expect(() => decide({ halts: { ...D, run_failed_max: -0.1 } })).toThrow(/halts.run_failed_max must be a number/);
+    expect(() => decide({ halts: { ...D, absent_rate_max: Number.NaN } })).toThrow(/halts.absent_rate_max must be a number/);
+    expect(() => decide({ halts: { ...D, absent_rate_max: '0.05' as never } })).toThrow(/halts.absent_rate_max must be a number/);
+    expect(() => decide({ halts: { ...D, handcheck_agreement_min: 1.5 } })).toThrow(/halts.handcheck_agreement_min must be a number in \[0, 1\]/);
+    expect(() => decide({ halts: { ...D, handcheck_agreement_min: -0.5 } })).toThrow(/halts.handcheck_agreement_min must be a number/);
+    expect(() => decide({ halts: undefined as never })).toThrow(/halts.absent_rate_max must be a number/);
+    expect(decide({ halts: { ...D, absent_rate_max: 0.000001 } }).halts, 'six places are read').toEqual([]);
+    // 1 is a legal minimum: only an arm in full agreement clears it.
+    const one = { ...D, handcheck_agreement_min: 1 };
+    expect(decide({ halts: one, handcheck: { agreement: { treatment: fr(1, 1), control: fr(3, 3) } } }).halts).toEqual([]);
+    expect(decide({ halts: one, handcheck: { agreement: { treatment: fr(1, 1), control: fr(99, 100) } } }).halts).toEqual(['handcheck-agreement']);
+    // 0 is a legal run_failed_max: any run-failed question halts, none does not.
+    const zero = { ...D, run_failed_max: 0 };
+    expect(decide({ halts: zero }).halts).toEqual([]);
+    expect(decide({ halts: zero, quiz: quizOf(20, () => [...rep(4, () => q(R(), U())), q(U(), U(), true)]) }).halts).toEqual(['run-failed']);
+  });
+
+  it('edge: decideGate refuses a malformed input with a throw, never a default', () => {
+    expect(() => gateT8.decideGate(null as never)).toThrow(/inputs must be an object/);
+    expect(() => decide({ codeChanged: 'yes' as never })).toThrow(/codeChanged must be a boolean/);
+    expect(() => decide({ quiz: { families: [] } })).toThrow(/no frozen question/);
+    const fams = passingQuiz().families;
+    const dup = { families: [fams[0]!, { ...fams[1]!, key: fams[0]!.key }, ...fams.slice(2)] };
+    expect(() => decide({ quiz: dup })).toThrow(/quiz family .* is missing or repeated/);
+    const noKey = passingQuiz();
+    (noKey.families[0] as { key: unknown }).key = 7;
+    expect(() => decide({ quiz: noKey })).toThrow(/quiz family 7 is missing or repeated/);
+    const badRf = quizOf(20, () => [q(R(), U())]);
+    (badRf.families[0]!.questions[0] as { runFailed: unknown }).runFailed = 'no';
+    expect(() => decide({ quiz: badRf })).toThrow(/needs a boolean runFailed/);
+    const badJf = quizOf(20, () => [q(R(), U())]);
+    (badJf.families[0]!.questions[0]!.control as { judgeFailed: unknown }).judgeFailed = undefined;
+    expect(() => decide({ quiz: badJf })).toThrow(/\(control\) needs a boolean judgeFailed/);
+    expect(() => decide({ quiz: quizOf(20, () => [q(ans('bogus' as never), U())]) })).toThrow(/\(treatment\) has label bogus/);
+    expect(() => decide({ quiz: quizOf(20, () => [q(ans('correct', 'unknown'), U())]) })).toThrow(/is unknown and labelled correct/);
+    expect(() => decide({ quiz: quizOf(20, () => [q(null as never, U())]) })).toThrow(/\(treatment\) has answer state undefined/);
+    const lf = (o: Partial<LiveFam>[]): Inputs['live'] => ({ families: o.map((x, i) => ({ ...liveFam(fk(300 + i), 'treatment', 2, 1), ...x })) });
+    expect(() => decide({ live: lf([{ key: fk(300) }, { key: fk(300) }]) })).toThrow(/live family .* is missing or repeated/);
+    expect(() => decide({ live: lf([{ arm: 'both' as never }]) })).toThrow(/has arm both/);
+    expect(() => decide({ live: lf([{ changed: 1 as never }]) })).toThrow(/needs boolean changed and unrealised/);
+    expect(() => decide({ live: lf([{ unrealised: undefined as never }]) })).toThrow(/needs boolean changed and unrealised/);
+    expect(() => decide({ live: lf([{ windows: [{ ...win(true), state: 'weird' as never }] }]) })).toThrow(/has a malformed window/);
+    expect(() => decide({ live: lf([{ windows: [{ ...win(true), with_call: 1 as never }] }]) })).toThrow(/has a malformed window/);
+    expect(() => decide({ live: lf([{ windows: [null as never] }]) })).toThrow(/has a malformed window/);
+    expect(() => decide({ handcheck: { agreement: { treatment: { num: 1, den: 0 }, control: null } } })).toThrow(/handcheck.agreement.treatment must be a fraction or null/);
+    expect(() => decide({ handcheck: { agreement: { treatment: null, control: { num: 1.5, den: 2 } } } })).toThrow(/handcheck.agreement.control must be a fraction or null/);
+    expect(() => decide({ handcheck: { agreement: { treatment: 'x' as never, control: null } } })).toThrow(/must be a fraction or null/);
+  });
+
+  it('edge: the question-not-run refusal lists each question once, sorted by code unit, and never lists a run-failed question', () => {
+    const named = (qid: string, mk: () => Qn): Qn => ({ ...mk(), qid });
+    const nr = (): Ans => ans(null, 'not-run' as never);
+    const bothNotRun = named('a', () => q(nr(), nr()));
+    const oneNotRun = named('B', () => q(R(), nr()));
+    const failedNotRun = named('c', () => q(nr(), nr(), true));
+    const quiz = quizOf(20, (i) => (i === 0 ? [bothNotRun, failedNotRun] : i === 1 ? [oneNotRun] : [q(R(), U())]));
+    const out = gateT8.decideGate(base({ quiz }));
+    expect(out).toEqual({ ok: false, reason: 'question-not-run', questions: ['B', 'a'], detail: 'decideGate: 2 question(s) still not-run: B, a; run or record them first' });
+    // A run-failed question's arms are never read, so a lone one is no refusal.
+    const only = quizOf(20, (i) => (i === 0 ? [named('c', () => q(nr(), nr(), true)), q(R(), U())] : [q(R(), U())]));
+    expect(gateT8.decideGate(base({ quiz: only })).ok).toBe(true);
+  });
+
+  it('edge: the halts are listed in the order absent-rate, run-failed, handcheck-agreement, empty-arm, and the first two beside the hold', () => {
+    // 20 families of 5 questions, 6 of them run-failed (family 0 to 5, the last question) and 6 absent treatment answers in the others.
+    const quiz = quizOf(20, (i) => [q(R(), U()), q(R(), U()), q(R(), U()), i < 6 ? q(U(), U(), true) : q(U(), U()),
+      i >= 6 && i < 12 ? q(ans('uncertain', 'absent'), U()) : q(U(), U())]);
+    const v = decide({ quiz, live: { families: [liveFam(fk(200), 'control', 10, 0)] }, handcheck: { agreement: { treatment: fr(1, 2), control: null } } });
+    expect(v.halts).toEqual(['absent-rate', 'run-failed', 'handcheck-agreement', 'empty-arm']);
+    expect(v.verdict).toBe('halt');
+    expect(v.criteria).toEqual({ accuracy: null, fabrication: null, uptake: null });
+    expect(v.counts).toMatchObject({ Q: 94, run_failed: 6 });
+    expect(eq(v.counts.absent.treatment, fr(6, 94))).toBe(true);
+  });
+
+  it('edge: the comparison block lists a family once, sorted, whichever drop it carries; an unrealised treatment family stays in criterion 3', () => {
+    const v = decide({ live: { families: [
+      liveFam(fk(300), 'control', 10, 0, { unrealised: true }),
+      liveFam(fk(100), 'treatment', 10, 5, { changed: true, unrealised: true }),
+      liveFam(fk(200), 'treatment', 10, 1, { unrealised: true }),
+      liveFam(fk(250), 'treatment', 10, 1),
+    ] } });
+    expect(v.comparison.dropped).toEqual([fk(100), fk(200), fk(300)]);
+    expect(eq(v.criteria.uptake!.point, fr(7, 30)), 'both dropped treatment families are in the denominator').toBe(true);
+  });
+
+  it('edge: B and the two substreams: criterion 1 draws from quiz-ci, criterion 3 from live-ci, and skipping one never moves the other', () => {
+    // Clusters of unequal shares and sizes, so the pooled denominators vary and a replicate stream can be told from another by its nearest-rank bounds.
+    const live: Inputs['live'] = { families: [1, 3, 5, 7, 9, 2, 6, 4].map((n, i) => liveFam(fk(100 + i), 'treatment', 10 - (i % 3), n)) };
+    const clusters = live.families.map((f) => ({ num: f.windows.filter((w) => w.with_call).length, den: f.windows.length }));
+    const quiz = quizOf(20, (i) => Array.from({ length: 3 + (i % 3) }, (_, j) => q(j < (i * 7) % 6 ? R() : U(), j < (i * 5) % 4 ? R() : U())));
+    const paired = quiz.families.map((f) => ({ t: f.questions.filter((x) => x.treatment.label === 'correct').length,
+      c: f.questions.filter((x) => x.control.label === 'correct').length, n: f.questions.length }));
+    for (const seed of [SEED, SEED2, 'ef'.repeat(32)]) {
+      const a = decide({ seedHex: seed, live, quiz });
+      const wantUp = gateT8.clusterBootstrap({ clusters, B: 10000, rng: gateT8.substream(seed, 'live-ci'), mode: 'share' });
+      const wantAcc = gateT8.clusterBootstrap({ clusters: paired, B: 10000, rng: gateT8.substream(seed, 'quiz-ci'), mode: 'paired' });
+      expect(a.criteria.uptake!.lower, seed).toEqual(wantUp.lower);
+      expect(a.criteria.accuracy!.lower, seed).toEqual(wantAcc.lower);
+      // Criterion 1 skipped under an absent-rate halt: criterion 3's interval is the same one.
+      const absent = quizOf(20, (i) => [...rep(3, () => q(R(), U())), q(U(), U()), i < 6 ? q(ans('uncertain', 'absent'), U()) : q(U(), U())]);
+      const b = decide({ seedHex: seed, live, quiz: absent });
+      expect(b.criteria.accuracy).toBeNull();
+      expect(b.criteria.uptake!.lower, seed).toEqual(wantUp.lower);
+    }
+    // B is the caller's: B = 1 is a single replicate, which is both bounds.
+    const one = decide({ live, quiz, B: 1 });
+    const wantOne = gateT8.clusterBootstrap({ clusters, B: 1, rng: gateT8.substream(SEED, 'live-ci'), mode: 'share' });
+    expect(one.criteria.uptake!.lower).toEqual(wantOne.lower);
+    expect(one.criteria.uptake!.lower).not.toEqual(decide({ live, quiz }).criteria.uptake!.lower);
   });
 });

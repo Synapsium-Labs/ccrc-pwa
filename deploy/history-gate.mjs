@@ -1426,3 +1426,365 @@ export function parseLabelLine(reply) {
   const m = lastLineMatch(reply, LABEL_LINE);
   return m === null ? { ok: false } : { ok: true, label: /** @type {'uncertain'|'fabricated'} */ (m[1]) };
 }
+
+// ── W2-3 Task 8: failed runs, the hand-check and decideGate (W2-D80, W2-D81, W2-D89) ─────────────────────────────
+// Every decision the W2 report makes, pure: W2-5b's `report` only gathers the inputs and calls decideGate (W2-D85).
+//   classifyRun / questionOutcome (W2-D80): a model-level non-answer is an answer and is judged; an infrastructure
+//     failure is re-run once, and a second one makes the question run-failed, excluded from both arms; a run the driver
+//     never spawned, or cut off with a stop, is not-run and never consumes the re-run. The driver says which by
+//     ctx.stopped; its stop words are its own (W2-D59) and this module never spells them, save code-changed and
+//     code-unmeasured, which are GATE_REASONS words too.
+//   handcheckSample / applyHandcheck / handcheckAgreement (W2-D81): a seeded ceil(n/5) of the judged answers per arm
+//     from the 'handcheck' substream, plus every judge-failed item; the operator's label replaces the judge's on the
+//     items the operator labelled; agreement is an exact fraction, per arm and over both.
+//   decideGate (W2-D89) restates spec §10.2:2713-2718 with every operator exact (cross-multiplied fractions, never a
+//     float): three criteria, their denominators, four halts and one hold. The fourth halt, empty-arm, is the
+//     coordinator's W2-3 ruling: a treatment set with no cluster left halts, and is never bootstrapped. The changed
+//     and assignment-unrealised drops (W2-D23) reach the comparison block only, never criterion 3. Report-only inputs
+//     ride through untouched. A question still not-run at gate time is not a halt (W2-D89, amended 2026-10-19):
+//     decideGate refuses with question-not-run, naming the questions, and the operator runs or records them first.
+
+/** The `error` value Claude Code's stream-json carries on an assistant message whose credential the API refused.
+ *  It is the stream format's word, not a driver word (W2-D80's "an authentication error"). */
+const AUTH_FAILED = 'authentication_failed';
+
+/** W2-D81's share of the judged answers per arm, 20%, as an exact fraction: ceil(n * 1/5) in integers. */
+const HANDCHECK_SHARE = Object.freeze({ num: 1, den: 5 });
+
+/** Criterion 1's floor on the treatment point accuracy, 0.40 (§10.2:2715), and criterion 2's margin, 3 points. */
+const ACCURACY_MIN = frac(2, 5);
+const FABRICATION_MARGIN = frac(3, 100);
+const ZERO = frac(0, 1);
+
+/** Part 1's `halts` defaults (decisions §4); the record's own `halts` is what W2-5b passes, which the operator signs. */
+export const HALT_DEFAULTS = Object.freeze({ handcheck_agreement_min: 0.8, run_failed_max: 0.05, absent_rate_max: 0.05 });
+
+const cmpId = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const isObj = (v) => v !== null && typeof v === 'object';
+
+/**
+ * W2-D80: the class of one spawned arm run. A run the driver never spawned, or one a driver stop cut off, is 'not-run'
+ * whatever else it shows. Otherwise an authentication error, or no `result` event at all (whatever the exit code,
+ * which covers a non-zero exit with no result), is 'infra-failed'. Everything else is 'answered': max turns, permission
+ * denials, empty text and a missing ANSWER line are the model's answers, and are judged.
+ * @param {ReadonlyArray<unknown>} events the run's stream-json events, parsed, in order
+ * @param {number|null} exitCode the process's exit code, null when a signal ended it
+ * @param {{spawned: boolean, stopped: boolean}} ctx
+ * @returns {'answered'|'infra-failed'|'not-run'}
+ */
+export function classifyRun(events, exitCode, ctx) {
+  if (!Array.isArray(events)) throw new TypeError('classifyRun: events must be an array');
+  if (exitCode !== null && !Number.isInteger(exitCode)) throw new TypeError('classifyRun: exitCode must be an integer or null');
+  if (!isObj(ctx) || typeof ctx.spawned !== 'boolean' || typeof ctx.stopped !== 'boolean') {
+    throw new TypeError('classifyRun: ctx.spawned and ctx.stopped must be booleans');
+  }
+  if (!ctx.spawned || ctx.stopped) return 'not-run';
+  if (events.some((e) => isObj(e) && e.error === AUTH_FAILED)) return 'infra-failed';
+  if (!events.some((e) => isObj(e) && e.type === 'result')) return 'infra-failed';
+  return 'answered';
+}
+
+/**
+ * W2-D80: a question's state from its attempts, in the order they ran. A not-run attempt is skipped: a stop never
+ * consumes the re-run. The first answered attempt settles it; a first infra failure owes one re-run ('rerun'); a
+ * second makes it 'run-failed'. No attempt but not-run ones leaves it 'not-run'.
+ * @param {ReadonlyArray<'answered'|'infra-failed'|'not-run'>} attempts
+ * @returns {'answered'|'rerun'|'run-failed'|'not-run'}
+ */
+export function questionOutcome(attempts) {
+  if (!Array.isArray(attempts)) throw new TypeError('questionOutcome: attempts must be an array');
+  let infra = 0;
+  for (const a of attempts) {
+    if (!RUN_CLASSES.includes(a)) throw new TypeError(`questionOutcome: ${String(a)} is not a run class`);
+    if (a === 'not-run') continue;
+    if (a === 'answered') return 'answered';
+    infra += 1;
+    if (infra === 2) return 'run-failed';
+  }
+  return infra === 1 ? 'rerun' : 'not-run';
+}
+
+/**
+ * W2-D81: the hand-check sample. Per arm, in ASSIGNMENT_ARMS order, ceil(n/5) of that arm's judged items, drawn
+ * without replacement from the seed's 'handcheck' substream over the items sorted by id (so input order never moves
+ * it); then every judge-failed item, outside the 20%. `judged` (the judge returned a label) and `judgeFailed` (it
+ * was malformed twice) are exclusive. Answers the sampled ids, sorted.
+ * @param {string} seedHex the open record's bootstrap seed, 64 lowercase hex characters
+ * @param {ReadonlyArray<{id: string, arm: 'treatment'|'control', judged: boolean, judgeFailed: boolean}>} items
+ * @returns {string[]}
+ */
+export function handcheckSample(seedHex, items) {
+  if (!Array.isArray(items)) throw new TypeError('handcheckSample: items must be an array');
+  const seen = new Set();
+  for (const i of items) {
+    if (!isObj(i) || typeof i.id !== 'string' || i.id === '') throw new TypeError('handcheckSample: every item needs a non-empty string id');
+    if (seen.has(i.id)) throw new TypeError(`handcheckSample: duplicate id ${i.id}`);
+    seen.add(i.id);
+    if (!ASSIGNMENT_ARMS.includes(i.arm)) throw new TypeError(`handcheckSample: ${i.id} has arm ${String(i.arm)}`);
+    if (typeof i.judged !== 'boolean' || typeof i.judgeFailed !== 'boolean') throw new TypeError(`handcheckSample: ${i.id} needs boolean judged and judgeFailed`);
+    if (i.judged && i.judgeFailed) throw new TypeError(`handcheckSample: ${i.id} is both judged and judge-failed`);
+  }
+  const rng = substream(seedHex, 'handcheck');
+  const picked = [];
+  for (const arm of ASSIGNMENT_ARMS) {
+    const pool = items.filter((i) => i.arm === arm && i.judged).map((i) => i.id).sort(cmpId);
+    const k = Math.floor((pool.length * HANDCHECK_SHARE.num + HANDCHECK_SHARE.den - 1) / HANDCHECK_SHARE.den);
+    for (let s = 0; s < k; s += 1) {
+      const j = s + randInt(rng, pool.length - s);
+      [pool[s], pool[j]] = [pool[j], pool[s]];
+      picked.push(pool[s]);
+    }
+  }
+  for (const i of items) if (i.judgeFailed) picked.push(i.id);
+  return picked.sort(cmpId);
+}
+
+/**
+ * W2-D81: the labels the gate reads. The operator's label replaces the judge's on every item the operator labelled
+ * (the sampled items, and every judge-failed item, which has no judge label); every other item keeps the judge's.
+ * Neither the judge nor the operator decides `correct`: it is the string match alone (W2-D63, spec §10.2 Scoring), and the
+ * hand-check only re-labels what the judge labels, stated uncertainty against fabrication (W2-D79's two words). A
+ * judge or operator label of `correct` is refused. Neither input is changed.
+ * @param {ReadonlyMap<string, 'correct'|'uncertain'|'fabricated'>} judgeLabels
+ * @param {ReadonlyMap<string, 'correct'|'uncertain'|'fabricated'>} operatorLabels
+ * @returns {Map<string, 'correct'|'uncertain'|'fabricated'>}
+ */
+export function applyHandcheck(judgeLabels, operatorLabels) {
+  if (!(judgeLabels instanceof Map) || !(operatorLabels instanceof Map)) throw new TypeError('applyHandcheck: both label sets must be Maps');
+  const out = new Map();
+  for (const [id, l] of judgeLabels) {
+    if (!LABELS.includes(l) || l === 'correct') throw new TypeError(`applyHandcheck: judge label ${String(l)} for ${id}`);
+    out.set(id, l);
+  }
+  for (const [id, l] of operatorLabels) {
+    if (l === 'correct' || !LABELS.includes(l)) throw new TypeError(`applyHandcheck: operator label ${String(l)} for ${id}`);
+    out.set(id, l);
+  }
+  return out;
+}
+
+/**
+ * W2-D81: hand-check agreement, the share of hand-checked items whose judge label equals the operator's, as an exact
+ * fraction per arm and over both; null for a set with no pair. A judge-failed item has no judge label, so it is no pair.
+ * @param {ReadonlyArray<{arm: 'treatment'|'control', judge: 'correct'|'uncertain'|'fabricated', operator: 'correct'|'uncertain'|'fabricated'}>} pairs
+ * @returns {{treatment: {num: number, den: number}|null, control: {num: number, den: number}|null, all: {num: number, den: number}|null}}
+ */
+export function handcheckAgreement(pairs) {
+  if (!Array.isArray(pairs)) throw new TypeError('handcheckAgreement: pairs must be an array');
+  const tally = new Map(ASSIGNMENT_ARMS.map((a) => [a, { agree: 0, n: 0 }]));
+  const all = { agree: 0, n: 0 };
+  for (const p of pairs) {
+    if (!isObj(p) || !tally.has(p.arm)) throw new TypeError(`handcheckAgreement: arm ${String(p?.arm)}`);
+    if (!LABELS.includes(p.judge) || !LABELS.includes(p.operator)) throw new TypeError('handcheckAgreement: a label outside LABELS');
+    const t = tally.get(p.arm);
+    const same = p.judge === p.operator ? 1 : 0;
+    t.n += 1; t.agree += same; all.n += 1; all.agree += same;
+  }
+  const f = (t) => (t.n === 0 ? null : frac(t.agree, t.n));
+  return { treatment: f(tally.get('treatment')), control: f(tally.get('control')), all: f(all) };
+}
+
+/** A halt threshold read exactly: a decimal with at most six places, 0.05 read as 5/100. `below1` refuses 1, so a
+ *  share of every question can always exceed it. */
+function fracOfDecimal(x, name, below1) {
+  if (typeof x !== 'number' || !Number.isFinite(x) || x < 0 || x > 1 || (below1 && x === 1)) {
+    throw new TypeError(`decideGate: halts.${name} must be a number in [0, ${below1 ? '1)' : '1]'}`);
+  }
+  const m = /^(\d+)(?:\.(\d{1,6}))?$/.exec(String(x));
+  if (m === null) throw new TypeError(`decideGate: halts.${name} must be a decimal of at most six places`);
+  const places = m[2] ?? '';
+  return frac(Number(m[1] + places), 10 ** places.length);
+}
+
+/** a + b over integers. */
+const addFrac = (a, b) => frac(a.num * b.den + b.num * a.den, a.den * b.den);
+
+/** A Frac or null, as handcheck agreement arrives. */
+function fracOrNull(v, name) {
+  if (v === null) return null;
+  if (!isObj(v) || !Number.isSafeInteger(v.num) || !Number.isSafeInteger(v.den) || v.den <= 0) throw new TypeError(`decideGate: ${name} must be a fraction or null`);
+  return v;
+}
+
+/**
+ * W2-D89: the W2 gate. Pure: the same inputs give the same verdict, and nothing but the arguments is read.
+ *
+ * Denominators. Q = the frozen questions minus the run-failed ones, which are excluded from both arms. Each arm's
+ * accuracy is correct/Q and its fabrication fabricated/Q, over the labels after the hand-check override; an unknown or
+ * absent answer is in Q and never correct. Criterion 3 reads every measured window of every listed treatment family:
+ * the caller has removed the registry drops; the changed and assignment-unrealised drops are NOT applied (they go to
+ * the comparison block); unmeasured windows and families with no measured window are out (W2-D14, W2-D18).
+ *
+ * Criteria, exact: (1) treatment point accuracy >= 2/5 and the lower bound of the paired cluster bootstrap of
+ * (treatment - control) > 0; (2) treatment fabrication <= control fabrication + 3/100; (3) the lower bound of the
+ * within-arm cluster bootstrap of the treatment window share >= X.
+ *
+ * Halts (verdict 'halt', every computable criterion still reported): the absent rate above absent_rate_max in either
+ * arm (criterion 1 not computed); run-failed questions above run_failed_max of the frozen questions (criteria 1 and 2
+ * not computed); hand-check agreement below handcheck_agreement_min in either arm; and empty-arm (the coordinator's
+ * ruling), when criterion 1's or criterion 3's treatment set has no cluster left: that criterion is not computed
+ * (uptake null) and no bootstrap runs on the empty set. Hold: a judge-failed answer with no operator label gives
+ * 'incomplete' (criteria 1 and 2 not computed), and the hold is reported before any halt. pass iff no halt or hold and
+ * all three hold; fail iff no halt or hold and any fails. `codeChanged` is carried as the stamp.
+ *
+ * Refusal (W2-D89, amended 2026-10-19): an arm whose answerState is 'not-run' (its run is still not-run, W2-D80) is
+ * never counted, held or halted. decideGate answers {ok: false, reason: 'question-not-run', detail, questions}, the
+ * qids sorted, and computes no verdict; a verdict carries ok: true. Any other answer state outside ANSWER_STATES throws.
+ *
+ * @param {{
+ *   seedHex: string, B?: number,
+ *   halts: {handcheck_agreement_min: number, run_failed_max: number, absent_rate_max: number},
+ *   codeChanged: boolean,
+ *   quiz: {families: ReadonlyArray<{key: string, questions: ReadonlyArray<{qid: string, runFailed: boolean,
+ *     treatment: {label: 'correct'|'uncertain'|'fabricated'|null, answerState: 'value'|'unknown'|'absent'|'not-run', judgeFailed: boolean},
+ *     control: {label: 'correct'|'uncertain'|'fabricated'|null, answerState: 'value'|'unknown'|'absent'|'not-run', judgeFailed: boolean}}>}>},
+ *   live: {families: ReadonlyArray<{key: string, arm: 'treatment'|'control', windows: ReadonlyArray<{state: 'measured'|'unmeasured', with_call: boolean}>, changed: boolean, unrealised: boolean}>},
+ *   handcheck: {agreement: {treatment: {num: number, den: number}|null, control: {num: number, den: number}|null}},
+ *   reportOnly?: unknown,
+ * }} inputs
+ * @returns {{
+ *   verdict: 'pass'|'fail'|'halt'|'incomplete', stamp: 'code-changed'|null, halts: string[],
+ *   criteria: {
+ *     accuracy: {point_t: {num: number, den: number}, point_c: {num: number, den: number}, lower: {num: number, den: number}, holds: boolean}|null,
+ *     fabrication: {t: {num: number, den: number}, c: {num: number, den: number}, holds: boolean}|null,
+ *     uptake: {point: {num: number, den: number}, lower: {num: number, den: number}, holds: boolean}|null},
+ *   counts: {Q: number, run_failed: number, absent: {treatment: {num: number, den: number}|null, control: {num: number, den: number}|null}},
+ *   comparison: {dropped: string[]},
+ *   report_only: unknown,
+ *   ok: true,
+ * } | {ok: false, reason: 'question-not-run', detail: string, questions: string[]}}
+ */
+export function decideGate(inputs) {
+  if (!isObj(inputs)) throw new TypeError('decideGate: inputs must be an object');
+  const { seedHex, codeChanged, quiz, live, handcheck } = inputs;
+  const B = inputs.B ?? BOOTSTRAP.B;
+  if (typeof codeChanged !== 'boolean') throw new TypeError('decideGate: codeChanged must be a boolean');
+  const absentMax = fracOfDecimal(inputs.halts?.absent_rate_max, 'absent_rate_max', true);
+  const runFailedMax = fracOfDecimal(inputs.halts?.run_failed_max, 'run_failed_max', true);
+  const agreementMin = fracOfDecimal(inputs.halts?.handcheck_agreement_min, 'handcheck_agreement_min', false);
+
+  // The quiz, tallied once. A run-failed question is skipped before either arm is read.
+  const tally = Object.fromEntries(ASSIGNMENT_ARMS.map((a) => [a, { correct: 0, fabricated: 0, absent: 0 }]));
+  const paired = [];
+  let frozen = 0;
+  let runFailed = 0;
+  let held = false;
+  const notRun = new Set();   // qids with an arm still not-run: refused below, never counted (W2-D89, amended)
+  const keys = new Set();
+  for (const fam of quiz?.families ?? []) {
+    if (!isObj(fam) || typeof fam.key !== 'string' || keys.has(fam.key)) throw new TypeError(`decideGate: quiz family ${String(fam?.key)} is missing or repeated`);
+    keys.add(fam.key);
+    let t = 0;
+    let c = 0;
+    let n = 0;
+    for (const q of fam.questions) {
+      frozen += 1;
+      if (typeof q.runFailed !== 'boolean') throw new TypeError(`decideGate: question ${String(q.qid)} needs a boolean runFailed`);
+      if (q.runFailed) { runFailed += 1; continue; }   // W2-D80: excluded from both arms
+      n += 1;
+      for (const arm of ASSIGNMENT_ARMS) {
+        const a = q[arm];
+        if (isObj(a) && a.answerState === 'not-run') { notRun.add(String(q.qid)); continue; }   // refused below, never counted
+        if (!isObj(a) || !ANSWER_STATES.includes(a.answerState)) {
+          throw new TypeError(`decideGate: question ${String(q.qid)} (${arm}) has answer state ${String(a?.answerState)}`);
+        }
+        if (typeof a.judgeFailed !== 'boolean') throw new TypeError(`decideGate: question ${q.qid} (${arm}) needs a boolean judgeFailed`);
+        if (a.answerState === 'absent') tally[arm].absent += 1;
+        if (a.label === null) {
+          if (!a.judgeFailed) throw new TypeError(`decideGate: question ${q.qid} (${arm}) has no label and is not judge-failed`);
+          held = true;   // W2-D81: the verdict waits for the operator's label
+          continue;
+        }
+        if (!LABELS.includes(a.label)) throw new TypeError(`decideGate: question ${q.qid} (${arm}) has label ${String(a.label)}`);
+        if (a.label === 'correct' && a.answerState !== 'value') throw new TypeError(`decideGate: question ${q.qid} (${arm}) is ${a.answerState} and labelled correct (W2-D64)`);
+        if (a.label === 'correct') tally[arm].correct += 1;
+        if (a.label === 'fabricated') tally[arm].fabricated += 1;
+      }
+      if (q.treatment.label === 'correct') t += 1;
+      if (q.control.label === 'correct') c += 1;
+    }
+    if (n > 0) paired.push({ t, c, n });   // a family whose every question is run-failed is no cluster
+  }
+  // W2-D89, amended 2026-10-19: a question still not-run at gate time is refused, naming the questions.
+  if (notRun.size > 0) {
+    const questions = [...notRun].sort(cmpId);
+    return { ok: false, reason: 'question-not-run', questions,
+      detail: `decideGate: ${questions.length} question(s) still not-run: ${questions.join(', ')}; run or record them first` };
+  }
+  if (frozen === 0) throw new TypeError('decideGate: the quiz has no frozen question');
+  const Q = frozen - runFailed;
+  const absent = {
+    treatment: Q === 0 ? null : frac(tally.treatment.absent, Q),
+    control: Q === 0 ? null : frac(tally.control.absent, Q),
+  };
+
+  // Halts, in this order. Each threshold is exceeded strictly; agreement falls strictly below its minimum.
+  const halts = [];
+  const absentHalt = Q > 0 && (cmpFrac(absent.treatment, absentMax) > 0 || cmpFrac(absent.control, absentMax) > 0);
+  if (absentHalt) halts.push('absent-rate');
+  const runFailedHalt = cmpFrac(frac(runFailed, frozen), runFailedMax) > 0;
+  if (runFailedHalt) halts.push('run-failed');
+  const agreement = [fracOrNull(handcheck?.agreement?.treatment ?? null, 'handcheck.agreement.treatment'),
+    fracOrNull(handcheck?.agreement?.control ?? null, 'handcheck.agreement.control')];
+  if (agreement.some((g) => g !== null && cmpFrac(g, agreementMin) < 0)) halts.push('handcheck-agreement');
+
+  // Criterion 1: not computed under the absent-rate or run-failed halt, or the hold, or with no paired cluster.
+  let accuracy = null;
+  if (!held && !absentHalt && !runFailedHalt && paired.length > 0) {
+    const pointT = frac(tally.treatment.correct, Q);
+    const pointC = frac(tally.control.correct, Q);
+    const boot = clusterBootstrap({ clusters: paired, B, rng: substream(seedHex, 'quiz-ci'), mode: 'paired' });
+    accuracy = { point_t: pointT, point_c: pointC, lower: boot.lower,
+      holds: cmpFrac(pointT, ACCURACY_MIN) >= 0 && cmpFrac(boot.lower, ZERO) > 0 };
+  }
+  // Criterion 2: not computed under the run-failed halt, or the hold.
+  let fabrication = null;
+  if (!held && !runFailedHalt && Q > 0) {
+    const ft = frac(tally.treatment.fabricated, Q);
+    const fc = frac(tally.control.fabricated, Q);
+    fabrication = { t: ft, c: fc, holds: cmpFrac(ft, addFrac(fc, FABRICATION_MARGIN)) <= 0 };
+  }
+
+  // Criterion 3 and the comparison block.
+  const shares = [];
+  const dropped = [];
+  const liveKeys = new Set();
+  for (const f of live?.families ?? []) {
+    if (!isObj(f) || typeof f.key !== 'string' || liveKeys.has(f.key)) throw new TypeError(`decideGate: live family ${String(f?.key)} is missing or repeated`);
+    liveKeys.add(f.key);
+    if (!ASSIGNMENT_ARMS.includes(f.arm)) throw new TypeError(`decideGate: live family ${f.key} has arm ${String(f.arm)}`);
+    if (typeof f.changed !== 'boolean' || typeof f.unrealised !== 'boolean') throw new TypeError(`decideGate: live family ${f.key} needs boolean changed and unrealised`);
+    if (f.changed || f.unrealised) dropped.push(f.key);   // W2-D23: the comparison block only
+    if (f.arm !== 'treatment') continue;                 // criterion 3 reads the treatment arm alone
+    let num = 0;
+    let den = 0;
+    for (const w of f.windows) {
+      if (!isObj(w) || !WINDOW_STATES.includes(w.state) || typeof w.with_call !== 'boolean') throw new TypeError(`decideGate: live family ${f.key} has a malformed window`);
+      if (w.state !== 'measured') continue;              // W2-D14: an unmeasured window is out of the denominator
+      den += 1;
+      if (w.with_call) num += 1;
+    }
+    if (den > 0) shares.push({ num, den });              // W2-D18: a family with no measured window is no cluster
+  }
+  let uptake = null;
+  if (shares.length > 0) {
+    const ub = clusterBootstrap({ clusters: shares, B, rng: substream(seedHex, 'live-ci'), mode: 'share' });
+    uptake = { point: ub.point, lower: ub.lower, holds: cmpFrac(ub.lower, X) >= 0 };
+  }
+  // An empty arm (the coordinator's W2-3 ruling): criterion 1's or criterion 3's treatment set with no cluster left
+  // halts, once, and neither empty set is ever bootstrapped.
+  if (paired.length === 0 || shares.length === 0) halts.push('empty-arm');
+
+  const allHold = accuracy !== null && accuracy.holds && fabrication !== null && fabrication.holds && uptake !== null && uptake.holds;
+  const verdict = held ? 'incomplete' : halts.length > 0 ? 'halt' : allHold ? 'pass' : 'fail';
+  return {
+    verdict,
+    stamp: codeChanged ? 'code-changed' : null,
+    halts,
+    criteria: { accuracy, fabrication, uptake },
+    counts: { Q, run_failed: runFailed, absent },
+    comparison: { dropped: dropped.sort(cmpId) },
+    report_only: inputs.reportOnly ?? null,
+    ok: true,
+  };
+}
