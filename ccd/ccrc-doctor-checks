@@ -6560,11 +6560,11 @@ _dr_codex_usage_surplus_rows() {   # <_dr_codex_usage_surplus's rc> -> WARN find
 #
 # THE POPULATION is the roster's `exec.kind == "codex"` rows, read by the lane
 # library's ONE reader of that question (`_codex_lanes`, ccd/ccrc) — never
-# accounts.sh's telemetry-keyed CCRC_CODEX_BACKEND, which names the EXTERNAL
-# lanes another repository runs — plus any lane directory left under
-# `_codex_lane_dir` for an id the roster no longer calls codex: a flip back to
-# another launcher keeps that state on purpose, and it is WARNed, never
-# silently skipped (D-3713).
+# accounts.sh's telemetry-keyed CCRC_CODEX_BACKEND, which names any
+# EXTERNAL lane reporting codex usage (another repository's did; retired by
+# Plan 4) — plus any lane directory left under `_codex_lane_dir` for an id
+# the roster no longer calls codex: a flip back to another launcher keeps
+# that state on purpose, and it is WARNed, never silently skipped (D-3713).
 #   - role `server`: SKIP, a server box converges nothing per account
 #     (D-3111). CCRC_ROLE unset or unreadable reads as NOT server, as
 #     `cmd_update` reads it.

@@ -1799,24 +1799,22 @@ describe('the model files, and who reads each one', () => {
     expect(code.filter((l) => REGISTRY_FILENAME.test(l)).length).toBe(2);
   });
 
-  it('the LiteLLM config path is spelled once, in one tool, through one helper', () => {
-    // `ccgpt` (another repository) reads the same path from its own
-    // `${CCGPT_CONFIG:-…}` default, which is why the helper here honours the
-    // same override rather than hardcoding the default: two tools, one file,
-    // and only one of them is in this repo to be pinned.
-    expect(holdersOf('.handoff/litellm-config.yaml')).toEqual(['ccd/ccrc']);
+  it('no bash code line spells the retired box-global LiteLLM config path or its override (Plan 4)', () => {
+    // Plan 4 Task C1: the external LiteLLM arm rendered the other repository's
+    // box-global config, honouring that repository's own `CCGPT_CONFIG`
+    // override, and it left with that repository's lane. A lane's config is
+    // its own `~/.ccrc/codex/<id>/litellm.yaml` (`_codex_litellm_yaml`), so no
+    // line of shell in any tool here reads or writes the old path again.
+    expect(holdersOf('.handoff/litellm-config.yaml')).toEqual([]);
+    expect(holdersOf('CCGPT_CONFIG')).toEqual([]);
+  });
+
+  it('ccrc never runs the other repository\'s launcher (Plan 4)', () => {
+    // A bare `ccgpt stop` stops units by name, and those names are ccrc's own
+    // tiers (`ccgpt-<id>-{litellm,shim}.service`). The external arm was the
+    // last code line that ran it, or sent an operator to it.
     const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
-    // D-3482: the helper grew a codex-lane arm (an id argument),
-    // so the one spelling is now its no-argument line — still one line, and
-    // still inside `_models_litellm_path`, which the second pin binds.
-    expect(code.filter((l) => l.includes('.handoff/litellm-config.yaml'))).toEqual([
-      '  printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"',
-    ]);
-    const helper = /^_models_litellm_path\(\) \{[^\n]*\n([\s\S]*?)\n\}$/m
-      .exec(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8'));
-    expect(helper, 'ccd/ccrc still defines _models_litellm_path as a block').toBeTruthy();
-    expect(helper![1]!.split('\n'))
-      .toContain('  printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"');
+    expect(code.filter((l) => /\bccgpt (stop|start|login)\b|command -v ccgpt\b/.test(l))).toEqual([]);
   });
 
   it('the ownership whitelist is read by exactly one thing in this repo', () => {
