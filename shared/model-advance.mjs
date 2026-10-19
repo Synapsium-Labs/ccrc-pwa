@@ -249,10 +249,32 @@ function checkPending(p) {
   if (!isLevelOrNull(p.effortTo)) bad('pending.effortTo', 'is not an effort level or null.');
 }
 
-/** `(json) => Advance`: an advance file read off disk, validated field by field (throws `AdvanceInvalid` naming
- *  the field), and answered as a deep COPY with every key it does not know kept. Every class must be present
- *  with all four facts; `hold`, `previous` and `pending` are `null` when unset, never absent. */
-export function parseAdvance(json) {
+/** What a file written from `value` would hold, and what its next reader would parse: `value`'s JSON round trip,
+ *  which keeps every own key and drops what JSON cannot carry (an inherited key; a hole in a list, which comes back
+ *  as null). A value `JSON.stringify` cannot copy, because it nests too deeply (`JSON.stringify` recurses and
+ *  `JSON.parse` does not, so such a file parses) or is too large, is refused as `AdvanceInvalid` at the top
+ *  level, so it never escapes a reader or the writer as a RangeError. */
+function fileCopy(value) {
+  let text;
+  try {
+    text = JSON.stringify(value);
+  } catch (e) {
+    if (e instanceof RangeError) {
+      throw new AdvanceInvalid('',
+        `this advance file nests too deeply, or is too large, to be written back (${e.message}).`);
+    }
+    throw e;
+  }
+  return text === undefined ? undefined : JSON.parse(text);
+}
+
+/** `(json) => Advance`: an advance file read off disk, COPIED FIRST (`fileCopy`), then the copy validated field by
+ *  field (throws `AdvanceInvalid` naming the field) and answered, every key it does not know kept. Checking the
+ *  copy, never the object handed in, is what makes `writeAdvance`'s read-back check the bytes it writes. Every
+ *  class must be present with all four facts; `hold`, `previous` and `pending` are `null` when unset, never
+ *  absent. */
+export function parseAdvance(input) {
+  const json = fileCopy(input);
   if (!isObj(json)) {
     throw new AdvanceInvalid('', 'an advance file must be a JSON object: {"v": 1, "classes": {…}, "pending": null}.');
   }
@@ -283,7 +305,7 @@ export function parseAdvance(json) {
     x.history.forEach((e, i) => checkEntry(e, `${f}.history[${i}]`));
   }
   checkPending(json.pending);
-  return copy(json);
+  return json;
 }
 
 /** The file's bytes: 2-space JSON and a trailing newline, the shape every hand-editable ccrc file has. */

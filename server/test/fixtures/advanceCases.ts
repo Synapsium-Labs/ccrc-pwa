@@ -80,3 +80,11 @@ export const ADVANCE_EXAMPLE: Advance = {
 
 /** Neutral seed families, one per class, for the pure backfill cases. */
 export const ADV_SEEDS = { haiku: 'alpha', sonnet: 'beta', opus: 'gamma', fable: 'delta' } as const;
+
+/** How deep `ADV_DEEP_TEXT` nests: far past the depth at which `JSON.stringify` overflows the stack (measured
+ *  between 4000 and 5000 on node 24), so a copy through JSON throws a RangeError on any supported node, while
+ *  `JSON.parse`, which does not recurse, reads it. Ten times the measured depth, not just past it, because the
+ *  depth at which the stack overflows varies with the node version and the platform. */
+export const ADV_DEEP = 50_000;
+/** A JSON list nested `ADV_DEEP` deep: about 100 KB, valid JSON, unknown to every reader. */
+export const ADV_DEEP_TEXT = `${'['.repeat(ADV_DEEP)}${']'.repeat(ADV_DEEP)}`;

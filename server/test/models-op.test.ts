@@ -16,10 +16,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { CODEX, CODEX_STALE, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
 import { codexAuthDir } from './codexLaneFixture.js';
+import { ADVANCE_EXAMPLE, ADV_DEEP_TEXT } from './fixtures/advanceCases.js';
+import { serializeAdvance } from '../../shared/model-advance.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -2409,4 +2411,65 @@ describe('a FIFO at a lane file\'s path is that read\'s unreadable answer, never
     expect(r.body['detail']).toMatch(/settings\.json could not be read: /);
     expect(fs.statSync(settingsPath()).isDirectory()).toBe(true);
   }, 20_000);
+});
+
+// ── auto-advance W1 Task 3, fix round 1: readAdvance and writeAdvance keep to their answers ──────────────────────
+// No op calls either until Task 5, and this file is a script that runs `main` when it is loaded, so these cases run
+// the shipped functions through a COPY of it: its one `process.exit(main(…))` line replaced by a probe, and its
+// `../shared/` imports pointed at this checkout's. Every other byte of the copy is the file as it is.
+describe('readAdvance and writeAdvance keep to their answers before any op calls them (auto-advance §2.1)', () => {
+  const LAST = 'process.exit(main(process.argv));';
+  const probe = (line: string): { code: number | null; stdout: string; stderr: string } => {
+    const src = fs.readFileSync(OP, 'utf8');
+    expect(src.split(LAST), 'models-op ends in its one main call').toHaveLength(2);
+    const shared = pathToFileURL(path.join(REPO, 'shared')).href;
+    const file = path.join(home, 'models-op-probe.mjs');
+    fs.writeFileSync(file, src.replaceAll("from '../shared/", `from '${shared}/`).replace(LAST, line));
+    const r = spawnSync(process.execPath, [file], { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  /** The probe's stdout as ONE JSON line, the shape every models-op answer has. */
+  const oneLine = (stdout: string): unknown => {
+    const one = stdout.endsWith('\n') && stdout.indexOf('\n') === stdout.length - 1;
+    expect(one, `one line: ${stdout.slice(0, 200)}`).toBe(true);
+    return JSON.parse(stdout);
+  };
+  const advFile = (): string => path.join(home, '.ccrc', 'models', 'lane-a.advance.json');
+  const EXAMPLE_JSON = JSON.stringify(JSON.stringify(ADVANCE_EXAMPLE));
+
+  it('a file nested too deeply to copy answers advance-file-invalid, as one JSON line, and never throws', () => {
+    fs.mkdirSync(path.dirname(advFile()), { recursive: true });
+    const deep = serializeAdvance(ADVANCE_EXAMPLE).replace(/\n}\n$/, `,\n  "note": ${ADV_DEEP_TEXT}\n}\n`);
+    fs.writeFileSync(advFile(), deep);
+    const r = probe("out(readAdvance('lane-a'));");
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+    const answer = oneLine(r.stdout) as { err: [string, string] };
+    expect(answer.err[0]).toBe('advance-file-invalid');
+    expect(answer.err[1]).toMatch(/nests too deeply/);
+  });
+
+  it.each([
+    ['a history with a hole at [0]', 'adv.classes.opus.history = [, adv.classes.opus.history[0]];',
+      'classes.opus.history[0]'],
+    ['a hold inherited rather than its own',
+      '{ const { hold, ...own } = adv.classes.fable; '
+        + 'adv.classes.fable = Object.assign(Object.create({ hold }), own); }',
+      'classes.fable.hold'],
+  ])('writeAdvance refuses %s as advance-invalid and writes nothing: it checks what a file would hold', (_why, edit, field) => {
+    const r = probe(`const adv = JSON.parse(${EXAMPLE_JSON}); ${edit} out({ answer: writeAdvance('lane-a', adv) });`);
+    expect(r.stderr).toBe('');
+    const { answer } = oneLine(r.stdout) as { answer: [string, string] | null };
+    expect(answer?.[0]).toBe('advance-invalid');
+    expect(answer?.[1]).toContain(`(${field} `);
+    expect(fs.existsSync(advFile()), 'a refused write leaves no file').toBe(false);
+  });
+
+  it("the control: the example unedited is written 0600 as serializeAdvance's bytes (D-5783), and reads back whole", () => {
+    const w = probe(`out({ answer: writeAdvance('lane-a', JSON.parse(${EXAMPLE_JSON})) });`);
+    expect(oneLine(w.stdout)).toEqual({ answer: null });
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(serializeAdvance(ADVANCE_EXAMPLE));
+    expect(fs.statSync(advFile()).mode & 0o777).toBe(0o600);
+    expect(oneLine(probe("out(readAdvance('lane-a'));").stdout)).toEqual({ advance: ADVANCE_EXAMPLE });
+  });
 });

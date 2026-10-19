@@ -12,7 +12,7 @@ import {
 import type { Advance, HandPending, HistoryEntry } from '../../shared/model-advance.mjs';
 import { CLASSES } from '../../shared/models.js';
 import type { Registry } from '../../shared/models.js';
-import { ADVANCE_EXAMPLE, ADV_REGISTRY, ADV_SEEDS, reg } from './fixtures/advanceCases.js';
+import { ADVANCE_EXAMPLE, ADV_DEEP_TEXT, ADV_REGISTRY, ADV_SEEDS, reg } from './fixtures/advanceCases.js';
 import { SEEDED } from './fixtures/modelCases.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -109,6 +109,17 @@ describe('parseAdvance and serializeAdvance', () => {
     ['a hand pending that empties its own class', (a) => { a.pending = { ...HAND, emptied: ['fable'] }; }, 'pending.emptied'],
     ['a hand pending that empties one class twice', (a) => { a.pending = { ...HAND, emptied: ['haiku', 'haiku'] }; }, 'pending.emptied'],
     ['a hand pending to none that empties another class', (a) => { a.pending = { ...HAND, to: null }; }, 'pending.emptied'],
+    // Fix round 1: parseAdvance checks the JSON copy it answers, so what it accepts is what a file can hold.
+    ['an unknown key nested too deeply to copy', (a) => { a.note = JSON.parse(ADV_DEEP_TEXT); }, ''],
+    ['a history with a hole at [0], which a file holds as null', (a) => {
+      const h: unknown[] = [];
+      h[1] = a.classes.opus.history[0];
+      a.classes.opus.history = h;
+    }, 'classes.opus.history[0]'],
+    ['a hold inherited rather than its own, which a file does not hold', (a) => {
+      const { hold, ...own } = a.classes.fable;
+      a.classes.fable = Object.assign(Object.create({ hold }), own);
+    }, 'classes.fable.hold'],
   ] as [string, (a: any) => unknown, string][])('refuses %s, as AdvanceInvalid naming the field', (_why, edit, field) => {
     const a = example();
     const made = edit(a);
@@ -332,7 +343,11 @@ describe('SEED_FAMILIES in deploy/models-op.mjs', () => {
     expect(word, `SEED_FAMILIES gives ${empty[0]} no literal family`).toBeDefined();
     expect(pinned.map((c) => familyOf(SEEDED.classes[c]!)), 'the empty class must not borrow a pinned family').not.toContain(word);
     const doc = src.slice(src.indexOf('/** What `init` plants per probe kind.'), src.indexOf('const SEEDS = {'));
-    expect(doc).toMatch(new RegExp(`\\b${word![0]!.toUpperCase()}${word!.slice(1)}\\b`));
+    // The docstring's own sentence, "… until the operator classifies <Family>.", names it: any other capitalised
+    // word there (one that opens a sentence) is not a family.
+    const named = /\bclassifies\s+([A-Z][a-z0-9]*)\./.exec(doc)?.[1];
+    expect(named, 'the SEEDS docstring names the family the operator classifies next').toBeDefined();
+    expect(word).toBe(named!.toLowerCase());
   });
 
   it('the tsc probe drives the file half too, with no cast', () => {

@@ -7281,6 +7281,13 @@ describe('the advance file and its clock, each spelled once (auto-advance spec Â
     expect(SHIPPED.filter((f) => CALL.test(textOf(f))).map(rel)).toEqual([]);
     expect(src.split('\n')
       .filter((l) => /\badvancePath\(/.test(l) && /\b(?:writeFileSync|renameSync|appendFileSync)\(/.test(l))).toEqual([]);
+    // Every call of advancePath in the file, pinned whole, the `.advance.json` case's idiom: a writer that holds the
+    // path in a variable, or an arrow const after writeAdvance (which the function cut above folds into it), adds a
+    // line here. readAdvance's and writeAdvance's today; Task 5's rm adds its reap.
+    expect(src.split('\n').filter((l) => /\badvancePath\(/.test(l)).map((l) => l.trim())).toEqual([
+      'const p = advancePath(id);',
+      "return writeJsonFile(advancePath(id), parsed, 'advance-unwritable');",
+    ]);
   });
 
   it('CCRC_MODELS_NOW is read in one place, and models-op reads the wall clock on two named lines only', () => {
