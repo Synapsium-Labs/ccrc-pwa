@@ -1467,8 +1467,8 @@ _models_answer_locked() {   # <id> <op> [--k v…]
 #   bound's watcher holds the lock. On a box with no coreutils `timeout`, `_plat_timeout`'s watcher is a subshell
 #   whose orphaned `sleep` outlives node by up to the whole bound, and with the fd it would keep the lane locked
 #   that long after node had answered. The lock is held by this shell, which waits for node. The price: a SIGKILL
-#   to this shell ALONE frees the lane while node may still be writing; a SIGINT to the process group (Ctrl-C) and a
-#   systemd stop of the unit's control group signal node too, so neither leaves a writer running unlocked.
+#   to this shell ALONE, or Ctrl-C on a box with no `timeout` (the pure-bash arm: node ignores SIGINT, the shell
+#   dies), frees the lane while node may still write. With `timeout`, Ctrl-C keeps it held; a systemd stop kills node.
 MODELS_NODE_BOUND_S=10
 _models_node_locked() {   # <id> <op> [--k v…]
   local id="$1" rc=0 took=1; shift
