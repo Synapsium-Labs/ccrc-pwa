@@ -152,6 +152,7 @@ The counted id-taking builder vocabulary is `ensure`, `stopId`, `stopPair`, `for
 Both halves are needed (judgement). The rebound id is the surface word, which passes every id regex, so predicates alone cannot stop the redirect. Loops alone would leave ccd able to mint a dash id.
 
 - Loops: in every loop W1b touches, each value-taking key consumes its key and value atomically, so a value is never scanned again as a flag. Identity values (`--session`, `--child-of`, and positional ids) and closed-grammar values keep or gain their own domain checks, and every post-loop id check refuses a leading `-`. Free-form `--actor` and `--reason` prose, including ws-hold's positional reason, remains non-blank and bounded but may begin with `-`; atomic consumption closes the rebinding defect without narrowing that existing input domain. `--surface`, `--expect`, and `--branch` retain their existing verb-specific grammars.
+- Recorded exception, 2026-10-19: `ccd hibernate`, which reached W1b with the sixth absorption of `main`, refuses `--actor` and `--reason` prose that begins with `-`, and a dash-leading `--surface` value, in both spellings. The server composes its id first, so its two-token checks close its redirect. Review 641 found the narrowing, and the operator accepted it. §2.9 records it as built (`hibernate-refuses-a-dash-leading-id`).
 - Why the builder order still changes for stop: with the id first, its loop cannot tell an id that spells `--surface` from the key itself. Moving the surface pair before the positional id gives the parser one atomic closed-grammar pair and leaves the final token or pair as the id. The post-loop id check then refuses `stop --surface pwa --surface`, rather than redirecting it to `pwa` (sourced: `ccdargv.ts:309-312`; `ccd/ccd:25904-25913`).
 - Predicates: `_ws_tmproot_id_ok` (`:21072`) and `_ws_project_valid` (`:6414-6431`) refuse a leading `-`. Making `_ws_project_valid` refuse it closes the only mint path (project `-` plus slug `actor`).
 - What was measured before tightening `_ws_project_valid`: 96 rows and 18 distinct projects, with 0 dash- or dot-leading project values. No workdir has a dash-leading path component, `~/projects` has no dash-leading entry, and there is no `~/.cc-sessions/pools/` directory. The comment warns that a tag you can create but not remove is worse (`:6421-6427`), but there is nothing to strand. W1b's Task 0 repeats the ls-only count on both boxes immediately before the edit and stops if any dash-leading name appears.
@@ -225,6 +226,8 @@ measured at the wave's tip unless it says otherwise.
     line. At ws-restore the refusal row now names the flag as its id (`--surface`, for example), where it named `''`.
     Each is still a refusal, with the same exit code and before any act: §2.4's atomic consumption.
 - `--actor` and `--reason` prose, and a hold reason, may still begin with `-`.
+  - Except at hibernate (recorded 2026-10-19): there `--actor` and `--reason` prose may not begin with `-`, by the
+    operator's ruling that accepted the narrowing (`hibernate-refuses-a-dash-leading-id`, below).
 - No refusal word, probe word or journal act was added, and the refusal scan's sanctioned `die` set is unchanged. The
   verbs reuse `bad session id` and their usage lines. Stop's two new refusals print `bad session id: ` followed by
   the token or the id they refused.
@@ -235,6 +238,9 @@ measured at the wave's tip unless it says otherwise.
   `-` is refused with the verb's usage line, in both the `--surface <v>` and the `--surface=<v>` spellings, because
   there it closes a redirect. The eight `--session` verbs keep their surface grammar, since the `--session` pair
   already closes their redirect.
+  - Except at hibernate (recorded 2026-10-19): it is a third verb that refuses a dash-leading `--surface` value, in
+    both spellings. It came with the sixth absorption of `main`, after W1b built the rule
+    (`hibernate-refuses-a-dash-leading-id`, below).
 - `stop --surface pwa --surface` is refused by the loop's arity check, not by the post-loop id check.
 - §2.4's "remains non-blank and bounded": bounded holds for the `--actor` and `--reason` decision fields only.
   ws-hold's positional reason is checked for blankness only, and W1b adds no byte cap to it.
@@ -365,6 +371,15 @@ measured at the wave's tip unless it says otherwise.
   literally and looked it up. At stop, stopPair, start and enable it also acted on it (stopped it, or created it), and
   at ws-restore, ws-reclaim and ws-expire it also took a reap lock and journaled a line. And one verdict is wider than §2.2's: its stop row names the one-argument form, but the
   two-argument form redirected too, since a project of `--surface` stopped `<wrapper>-pwa`.
+- As built at the landing (recorded 2026-10-19). The 259, 188 and 71 above are Task 10's figures, from before
+  hibernate existed, and they stand as that measurement. At #410's final head (`6968de956`) the file has 275 cases:
+  the sixth absorption of `main` added 16 hibernate rows, eight dash ids each with and without a reason.
+  - Re-run against the pre-wave binary, which has no `hibernate` verb, 188 go red and 87 stay green. The 16
+    hibernate rows are green there, because that binary refuses an unknown verb.
+  - Against `adca4a843`'s binary, which had hibernate without its fix, those 16 rows go red and the other 259 stay
+    green.
+  - Run 640 added one prose case per decision-appending verb, so the file now has 285 cases. Table 1 gains a
+    hibernate row.
 
 | Verb | Ids that went red before W1b | What the pre-wave binary did | At the tip |
 |---|---|---|---|
@@ -378,6 +393,7 @@ measured at the wave's tip unless it says otherwise.
 | ws-collect | all eight | `--actor`, `--surface` and `--reason` bound `agent`, took its reap lock because a witness stood for it, and journaled a line; the other five answered `not-witnessed` and journaled a line | Refused before any lock |
 | ws-add | `--actor`, `--surface` as the project | Bound project `agent`, which is a create: a worktree, rows, a unit and a pane | Refused before any worktree |
 | stop | all eight in the builder's order, and all but `--surface` in the order W1a composes | The builder's order stopped the literal id, and an id of `--surface` stopped `pwa`; the other order stopped the literal id | Refused before any unit call |
+| hibernate (the sixth absorption's; measured on `adca4a843`'s binary) | all eight | `--actor`, `--surface` and `--reason` bound the surface word `agent` and re-measured it, so only its hold refused the act; the other five bound the literal id and re-measured it | Refused before any act, on the usage line |
 | Ids that arity already refused: ws-hold's `--actor` and `--surface`; ws-rename's `--actor`, `--surface` and `--reason`; ws-reclaim's `--defer-expired`; stop's `--surface` in the order W1a composes | None | Refused | Refused, as before |
 
 *Table 1. The decision-carrying verbs, under a decision with and without a reason (ws-add without only).*
@@ -405,7 +421,11 @@ measured at the wave's tip unless it says otherwise.
   passes `_reg_id_ok`. So at hibernate, unlike the eight `--session` verbs, actor and reason prose may not begin with
   `-`. `ccdargv-dash-id-parity.test.ts` covers it: its 16 hibernate rows went red against the binary before the fix.
   Hibernate is a third verb that refuses a dash-leading `--surface` value, so the correction to §2.4 above, "except
-  at stop and ws-add", speaks of the verbs W1b built, not of hibernate, which came later.
+  at stop and ws-add", speaks of the verbs W1b built, not of hibernate, which came later. Review 641 found that this
+  narrows the prose §2.4 kept, and the operator accepted the narrowing on 2026-10-19. The two-token checks close the
+  redirect. The three `=`-form checks close none, since a `--key=value` token consumes only itself; they only refuse
+  `--surface=-x`, `--actor=-x` and `--reason=-x`. `ccd-hibernate.test.ts` pins all six checks, and the parity file
+  holds one prose case for each decision-appending verb: hibernate refuses dash-led prose, and the others accept it.
 - The census gained rows for the absorption's new names, `<id>.deny-settings`, `<id>.no-hibernate` and
   `<id>.rescueprev.tmp.XXXXXX`, none wider than the widest row, so the cap is unchanged. Its row for
   `server/src/workflows/read.ts`'s `-<id>.js` is a workflow run id, not a session id: the row accounts for the scan's
