@@ -156,6 +156,35 @@ describe('ccd hibernate: an idle session is put to sleep, journalled as delibera
     expect(dec).toMatchObject({ surface: 'agent', actor: 'sweep:hibernate' });
   });
 
+  // A DASH-LED VALUE IS REFUSED, in both spellings (review 641 F1 and F2; the operator ruled on 2026-10-19 to accept and
+  // record it: `hibernate-refuses-a-dash-leading-id`). The two-token checks close the id-first redirect that
+  // `ccdargv-dash-id-parity.test.ts` measures. The `=` checks close none, since a `--key=value` token consumes only
+  // itself, so these rows are what reds when one of them goes: on an idle row every one of them would hibernate.
+  it.each([
+    ['--surface=-x', `--surface=-x ${ID}`],
+    ['--actor=-x', `--actor=-x ${ID}`],
+    ['--reason=-x', `--reason=-x ${ID}`],
+    ['--surface -x', `--surface -x ${ID}`],
+    ['--actor -x', `--actor -x ${ID}`],
+    ['--reason -x', `--reason -x ${ID}`],
+  ])('%s is refused with the usage line, and the idle row is not touched', (_name, args) => {
+    idle();
+    const r = hibernate('', args);
+    expect(r.rc, r.out).toBe(1);
+    expect(r.err.trim()).toBe('ccd: usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>');
+    expect(has('hibernated'), 'the row was hibernated').toBe(false);
+    expect(eventsOf(h.home, 'hibernate')).toEqual([]);
+    expect(killed()).toBe(false);
+  });
+
+  it('control: the = spelling of a plain value lands on the journal row', () => {
+    idle();
+    const r = hibernate('', `--surface=agent --actor=sweep:hibernate --reason=idle ${ID}`);
+    expect(r.rc, r.err).toBe(0);
+    const dec = eventsOf(h.home, 'hibernate')[0]!['dec'] as Record<string, unknown>;
+    expect(dec).toMatchObject({ surface: 'agent', actor: 'sweep:hibernate', reason: 'idle' });
+  });
+
   it('a second positional is refused before anything is read', () => {
     idle();
     const r = hibernate('', `${ID} extra`);

@@ -135,12 +135,12 @@ afterEach(() => { h.cleanup(); });
 /** The binary under test, run as a program through its own dispatcher in the fixture HOME, under `bash -p` (the token
  *  verbs and their audits refuse any other entry). Both streams and the exit code are folded into one answer, because
  *  ccd refuses in two dialects: a `die` (stderr, exit 1), or a `{"refused":…}` document on stdout at exit 0. */
-const runCcd = (args: readonly string[]): { code: number; out: string } => {
+const runCcd = (args: readonly string[], extra: NodeJS.ProcessEnv = {}): { code: number; out: string } => {
   const stub = harnessBin(h.home);
   const opts = {
     encoding: 'utf8' as const, cwd: h.home,
     env: ghContainedEnv(h.home,
-      { ...inheritedEnv(), HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` },
+      { ...inheritedEnv(), ...extra, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` },
       { systemd: true, tmux: true }),
   };
   let res: { code: number; out: string };
@@ -336,8 +336,9 @@ describe('no dash-leading id redirects a verb the server composes, on the real b
   }
 
   it('a dec whose actor or reason begins with "-" still reaches the journal', () => {
-    // THE CONTROL (Review Focus 2): the fix narrows the id, never the prose. The dec reaches ws-release through its
-    // builder, and the declared pairs land in the `release` row byte for byte.
+    // THE CONTROL (Review Focus 2): at the verbs W1b built, the fix narrows the id, never the prose. hibernate is the
+    // one exception, ruled on 2026-10-19 (`hibernate-refuses-a-dash-leading-id`), and the cases below pin it. The dec
+    // reaches ws-release through its builder, and the declared pairs land in the `release` row byte for byte.
     const id = 'demo-quiet-basin';
     plantRow(h.home, id, { hold: DECOY_HOLD });
     const r = runCcd(CCD_ARGV.wsRelease(id, { surface: 'agent', actor: '-device', reason: '--tidy' }));
@@ -348,4 +349,77 @@ describe('no dash-leading id redirects a verb the server composes, on the real b
     expect(decOf(released[0]!)).toEqual({ surface: 'agent', actor: '-device', reason: '--tidy' });
     expect(fs.existsSync(path.join(regDirOf(h.home), `${id}.hold`))).toBe(false);
   });
+
+  // ONE PROSE CASE PER DEC-APPENDING VERB (review 641 F3; the operator's ruling of 2026-10-19). Each verb runs its own
+  // builder twice, each time in a fresh fixture HOME: once with a dec in plain words, once with the same dec led by a
+  // dash. A verb that keeps the prose answers both alike, wherever its answer lands, and journals the dash-led pairs
+  // as given. hibernate is the recorded exception (`hibernate-refuses-a-dash-leading-id`): its id comes first in the
+  // server's argv, so its loop refuses a dash-leading value with its usage line, where the plain dec reaches the row.
+  const PROSE_ID = 'demo-quiet-basin';
+  const PLAIN_WORDS = { actor: 'probe:prose', reason: 'probe reason' } as const;
+  const DASH_WORDS = { actor: '-device', reason: '--tidy' } as const;
+  /** ws-add's loop has no `--reason` arm. */
+  const proseDec = (verb: string, dash: boolean): ActorFlags => {
+    const w = dash ? DASH_WORDS : PLAIN_WORDS;
+    return { surface: 'agent', actor: w.actor, reason: verb === 'ws-add' ? null : w.reason };
+  };
+  /** The verb's own builder. ws-hold's builder drops the dec's reason and sends the hold reason as its `--reason`, so
+   *  there the prose under test is the hold reason. */
+  const proseArgv = (verb: string, id: string, dec: ActorFlags): readonly string[] =>
+    (verb === 'ws-hold' ? CCD_ARGV.wsHold(id, dec.reason!, dec) : DASH_PROBES[verb]!.argv(id, dec)[0]!);
+  /** One run in the current fixture HOME, on a workspace row (ws-add: on a repo, its project): the answer with the
+   *  HOME's path folded, the journal without its clock, and the registry's rows. Only the verbs whose act a hold
+   *  gates, or whose plain answer needs one to land (ws-release), get the decoy hold. */
+  const proseRun = (verb: string, dash: boolean) => {
+    const id = verb === 'ws-add' ? 'demo' : PROSE_ID;
+    if (verb === 'ws-add') h.makeRepo(id);
+    else {
+      const workdir = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+      fs.mkdirSync(workdir, { recursive: true });
+      plantRow(h.home, id, {
+        project: 'demo', workspace: 'quiet-basin', workdir, branch: 'ws/quiet-basin', wrapper: 'claude',
+        ...(verb === 'ws-release' || verb === 'hibernate' ? { hold: DECOY_HOLD } : {}),
+      });
+    }
+    const r = runCcd(proseArgv(verb, id, proseDec(verb, dash)), { CCD_WS_SLUG: 'quiet-basin' });
+    const journal = readJournal(h.home).map((e) => ({
+      act: e['act'], id: e['id'], outcome: e['outcome'], refusal: e['refusal'], dec: e['dec'] === undefined ? null : decOf(e),
+    }));
+    return { code: r.code, out: r.out.split(h.home).join('<home>'), journal, rows: rowFiles() };
+  };
+  const decWords = (d: ActorFlags): Record<string, string> =>
+    ({ surface: d.surface, actor: d.actor, ...(d.reason === null ? {} : { reason: d.reason }) });
+  const sameDec = (a: unknown, b: unknown): boolean =>
+    JSON.stringify(Object.entries(a ?? {}).sort()) === JSON.stringify(Object.entries(b ?? {}).sort());
+
+  for (const verb of decAppendingVerbs()) {
+    it(`${verb}: a dec whose prose begins with "-" ${
+      verb === 'hibernate' ? 'is refused on the usage line, where the plain dec reaches the row' : 'gets the plain dec\'s answer'}`, () => {
+      expect(DASH_PROBES[verb], `${verb} has no probe`).toBeDefined();
+      const plain = proseRun(verb, false);
+      h.cleanup();
+      h = makeCcdHarness('ccrc-dash-parity-');
+      const dashed = proseRun(verb, true);
+      expect(plain.out, 'the plain dec was refused on the usage line').not.toMatch(/usage: ccd /);
+      if (verb === 'hibernate') {
+        expect(dashed.code).toBe(1);
+        expect(dashed.out).toBe('ccd: usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>');
+        expect(dashed.journal, 'a refused prose value journals nothing').toEqual([]);
+        expect(dashed.rows, 'a refused prose value changes no row').not.toContain(`${PROSE_ID}.hibernated`);
+        // The plain dec found the row and re-measured it: the hold refuses it there, not at the parse.
+        expect(plain.out).toMatch(/session-busy: held/);
+        return;
+      }
+      // An answer that echoes the prose (ws-hold's `held <id>: <reason>`) echoes the dash-led words; folded back, the
+      // answers are equal.
+      const folded = dashed.out.split(DASH_WORDS.reason).join(PLAIN_WORDS.reason).split(DASH_WORDS.actor).join(PLAIN_WORDS.actor);
+      expect({ code: dashed.code, out: folded, rows: dashed.rows }, 'the dash-led dec changed the answer')
+        .toEqual({ code: plain.code, out: plain.out, rows: plain.rows });
+      // The journal is the plain run's, line for line, with each line that carried the plain pairs carrying the
+      // dash-led ones instead. A line the verb writes with pairs of its own (`surface: none`) stays as it was.
+      const expected = plain.journal.map((e) =>
+        (sameDec(e.dec, decWords(proseDec(verb, false))) ? { ...e, dec: decWords(proseDec(verb, true)) } : e));
+      expect(dashed.journal, 'the dash-led dec changed the journal').toEqual(expected);
+    });
+  }
 });

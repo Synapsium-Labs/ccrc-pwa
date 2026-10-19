@@ -242,7 +242,37 @@ describe('ws-rename binds its identity pair whole (path-identity spec §2.2, §2
   });
 });
 
+// THE PROSE CONTROLS. At these five verbs the identity arms narrow the id and no prose, so a dash-led `--actor` or
+// `--reason` reaches each verb's act and its journal row as given. hibernate is the one dec-appending verb that refuses
+// dash-led prose, by the operator's ruling of 2026-10-19 (`hibernate-refuses-a-dash-leading-id`); its loop is not one
+// of these, and `ccdargv-dash-id-parity.test.ts` holds one prose case for every dec-appending verb, hibernate's
+// refusal included.
 describe('the identity arms narrow nothing else (path-identity spec §2.4)', () => {
+  it('ws-archive and ws-restore journal a dash-led actor and reason as given', () => {
+    const DASH_DEC = { surface: 'agent', actor: '-device', reason: '--tidy' };
+    const DASH_TAIL = "--surface agent --actor '-device' --reason '--tidy'";
+    plantWorkspace(REAL, null);
+    const arc = run(`${ARCHIVE_STUBS} cmd_ws_archive --session ${REAL} ${DASH_TAIL}`);
+    expect(arc.code, arc.stderr).toBe(0);
+    expect(h.reg(REAL, 'archived'), 'ws-archive did not archive').toMatch(/^\d+$/);
+    expect(decOf(eventsOf(h.home, 'archive')[0] ?? {})).toEqual(DASH_DEC);
+    // ws-restore reaches its act: it removes the archive stamps and journals its row. The fixture's spawn never
+    // settles, so the row's outcome is `spawn-failed` (rc 3); a refusal at the parse would remove nothing.
+    run(`${RESTORE_STUBS} cmd_ws_restore --session ${REAL} ${DASH_TAIL}`);
+    expect(h.reg(REAL, 'archived'), 'ws-restore did not reach its act').toBeNull();
+    expect(decOf(eventsOf(h.home, 'restore')[0] ?? {})).toEqual(DASH_DEC);
+  });
+
+  it('a ws-rename whose actor and reason lead with a dash renames the branch and journals them as given', () => {
+    h.makeRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const r = run(`${RENAME_STUBS} cmd_ws_rename --session ${REAL} --branch ws/renamed `
+      + "--surface agent --actor '-device' --reason '--tidy'");
+    expect(r.code, r.stderr).toBe(0);
+    expect(h.reg(REAL, 'branch')).toBe('ws/renamed');
+    expect(decOf(eventsOf(h.home, 'rename')[0] ?? {})).toEqual({ surface: 'agent', actor: '-device', reason: '--tidy' });
+  });
+
   it('prose may lead with a dash', () => {
     plantWorkspace(REAL, HOLD_REASON);
     const rel = run(`${REL_STUBS} cmd_ws_release --session ${REAL} --actor '-device' --reason '--tidy'`);
