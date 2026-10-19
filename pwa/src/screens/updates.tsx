@@ -43,12 +43,13 @@ import {
 import { ACK_UNREADABLE_TEXT, AckConfirm, ackNote, canAck, sendAck } from '../fleet/updateAck';
 import {
   ResultLine, UPDATES_TEXT, nodeRollbackNote, nodeUpdateNote, useResultLine, type ResultLineValue,
-} from './settingsText';
+} from '../fleet/settingsText';
 import { WITHDRAWN_KEPT_CLAUSE, rollbackBlockedText } from '../fleet/UpdateMoveSheet';
 import { haltingNodes, updateAllHaltedText } from '../fleet/updateHalt';
 import { isPlaceableInstant, newestPending, nodeVersion, pendingTag } from '../fleet/useUpdatesView';
 import { NO_NOTES_TEXT, NoteText, ReleaseNotes, hasReleaseNotes } from '../fleet/ReleaseNotes';
 import { RELEASE_NOTE_GROUPS, parseReleaseNotes } from '../../../shared/release-notes';
+import { releaseDate } from '../lib/format';
 import '../fleet/fleet.css';
 
 export function clockTime(ms: number): string {
@@ -393,9 +394,6 @@ export function refusedLine(r: ReleaseWire, nodes: readonly NodeWire[]): string 
   return `Refused by ${by.size} of ${m} node${m === 1 ? '' : 's'}`;
 }
 
-export function releaseDate(ms: number): string {
-  return typeof ms === 'number' && isPlaceableInstant(ms) ? new Date(ms).toISOString().slice(0, 10) : '—';
-}
 
 /** One move control — Install, Update, Roll back, Ack. FOUR CALL SITES, and what they
  *  share is the styling triple (`size="fit"` on `.settings-move`, in one of two
