@@ -1083,7 +1083,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     W3: ['history-steer-files'],
   } as const;
   type HistoryPr = keyof typeof HISTORY_ROWS_BY_PR;
-  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3'];
+  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3', 'B4'];
 
   it('the history classes are §9.4\'s thirteen, each declared by the PR its Lands-in column names, and none before it (O17)', () => {
     const all: string[] = Object.values(HISTORY_ROWS_BY_PR).flat();
@@ -1195,6 +1195,18 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.ruling).toContain('removes a stale .tmp first');
     expect(c!.root).toBe('~/.ccrc/history/db/backups/<ts>.db, and its .<ts>.db.tmp while one is written');
     expect(c!.tier).toBe('one store size per backup');
+  });
+
+  it('declares history-export: an O class the sweep writes through store.mjs, kept with the store', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-export');
+    expect(c, 'shared/lifecycle.ts declares no history-export class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (through store.mjs)']);
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('kept with the store; removed only with it, or by hand by segment');
+    expect(c!.ruling).toContain('stale .tmp');
+    expect(c!.root).toContain('~/.ccrc/history/export/<store_id>/<seq>.<writer>.db');
+    expect(c!.tier).toContain('256 MiB');
   });
 
   it('declares the server suite\'s per-run temp parent, an E class its own creator collects (#316)', () => {

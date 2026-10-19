@@ -80,6 +80,12 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd/history/sweep.mjs (--op backup)'], collector: null,
     bound: 'until removed by hand', tier: 'one store size per backup',
     ruling: 'operator-made by `ccrc history doctor --backup`; remove by hand (the next --backup removes a stale .tmp first)' },
+  // ccrc history, W1-B4 (spec 2026-10-05 §9.4, §9.15): the sole-copy export, one immutable segment per pass on the home
+  // filesystem, never under db/; kept with the store like the journal.
+  { name: 'history-export', root: '~/.ccrc/history/export/<store_id>/<seq>.<writer>.db, and its .<seq>.<writer>.db.tmp while one is written', pattern: 'O',
+    creators: ['ccd/history/sweep.mjs (through store.mjs)'], collector: null,
+    bound: 'store lifetime', tier: 'about the store\'s growth rate once text nears its retention (inferred); at most one segment of about 256 MiB an hour; paused below the home filesystem\'s floor',
+    ruling: 'kept with the store; removed only with it, or by hand by segment (the writer removes a stale .tmp itself)' },
   // ccrc history, W1-B3 (spec 2026-10-05 §9.4): the card line's two rolling classes. The hook rewrites a session's
   // scope marker on every PreCompact; the sweep writes one card prediction per session id through card.mjs, deletes
   // it once the boundary that consumed it is ingested, and withdraws them all on a pass that runs no card step; both

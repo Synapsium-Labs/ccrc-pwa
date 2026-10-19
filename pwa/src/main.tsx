@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import './styles/base.css';
 import { App } from './app';
+import { CommandLayer } from './command/CommandLayer';
 import { RenderBoundary, RootFallback } from './components/RenderBoundary';
 import { initTheme } from './lib/theme';
 import { initSkin } from './lib/skin';
@@ -23,6 +24,10 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <RenderBoundary where="root" resetKey="root" fallback={() => <RootFallback />}>
       <App />
+      {/* The ⌘K palette and the global keys (D-5103), beside the app rather
+          than in it: app.tsx is held by an in-flight change. W2's shells
+          take this mount. */}
+      <CommandLayer />
     </RenderBoundary>
   </StrictMode>,
 );

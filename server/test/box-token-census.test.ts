@@ -219,6 +219,12 @@ const KICKOFF = '/api/sessions/:id/kickoff';
  *  cannot see it, for the kickoff route's reason; named here beside it. */
 const ARCHIVE = '/api/sessions/:id/archive';
 
+/** The digest's correction door (coordinator-first routing plan Task 17, D-5300, D-5493 (6)). It queues the operator's sentence as
+ *  durable system mail to a coordinator, so it is a coordination WRITE — session-gated, no box token (the operator's
+ *  door, like the kickoff route). Registered in `server.ts`, so `SESSION_ONLY` cannot see it, for the kickoff route's
+ *  reason; named here beside it. */
+const DIGEST_CORRECT = '/api/digest/correct';
+
 /** Every coordination write the bullet must describe as carrying no box token. */
 /** The update control plane's session-only routes (design 2026-09-20 §12 census
  *  step (b): all six of §12's session routes — W2's four and wave 5's two moves). Registered from `server/src/update/routes.ts`,
@@ -240,7 +246,7 @@ const CODE_DOORS = ['/api/token/claim'];
 const TOKEN_DOORS = ['/api/token/rotate'];
 
 /** Every session-only route the bullet must describe as carrying no box token. */
-const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, ...UPDATE_DOORS, ...TOKEN_DOORS];
+const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...UPDATE_DOORS, ...TOKEN_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -250,7 +256,8 @@ const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, ...UPDATE_DOO
 const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
   'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
   'eighteen', 'nineteen', 'twenty', 'twenty-one', 'twenty-two', 'twenty-three', 'twenty-four',
-  'twenty-five', 'twenty-six', 'twenty-seven', 'twenty-eight', 'twenty-nine', 'thirty'];
+  'twenty-five', 'twenty-six', 'twenty-seven', 'twenty-eight', 'twenty-nine', 'thirty', 'thirty-one', 'thirty-two',
+  'thirty-three', 'thirty-four', 'thirty-five', 'thirty-six'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -401,6 +408,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // everything.
     expect(ALL_LANES).not.toContain('POST /api/sessions/:id/kickoff');
     expect(ALL_LANES).not.toContain(`POST ${ARCHIVE}`);
+    expect(ALL_LANES).not.toContain(`POST ${DIGEST_CORRECT}`);
     for (const door of UNGATED_DOORS) expect(ALL_LANES).not.toContain(`POST ${door}`);
   });
 

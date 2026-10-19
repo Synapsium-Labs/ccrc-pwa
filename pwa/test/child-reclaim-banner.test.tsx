@@ -405,6 +405,22 @@ describe('the collapsed kept line', () => {
     expect([...screen.queryAllByRole('button'), ...screen.queryAllByRole('link')]).toHaveLength(1);
   });
 
+  // D-5527 / operator ruling 2026-10-18: a reclaim target leads with its programme and wave when the board holds its
+  // run (RunsScreen hands the banner its live and finished runs), keeping `run #N` as the secondary key.
+  it('a target whose run the board holds leads with the programme and wave, then "run #N · id"', () => {
+    const store = makeStore();
+    const one = kept();
+    seen(store, coord({ childReclaimAttention: [one, keptMany(2)] }));
+    const r = { id: 171, program: 'port-api', programTitle: 'Port the API', wave: 5, waveOf: 7, kind: 'work' as const };
+    const m0 = { id: 200, program: 'tidy-docs', programTitle: 'Tidy the docs', wave: 2, waveOf: null, kind: 'review' as const };
+    render(<ChildReclaimBanner store={store} runs={[r, m0]} />);
+    const rows = rowsOf();
+    expect(whoOf(rows[0]!)).toEqual([`port-api · wave 5 of 7 · run #171 · ${one.sessionId}`]);
+    const many = keptMany(2);
+    expect(whoOf(rows[1]!)).toEqual(many.members.map((m) =>
+      m.runId === 200 ? `tidy-docs · review of wave 2 · run #200 · ${m.sessionId}` : `run #${m.runId} · ${m.sessionId}`));
+  });
+
   // (ii) The existing reader's path: a `kept` item has a `sessionId` and no
   // `at`, and renders like any other item.
   it('a kept item renders "run #171 · id" and its sentence, like any item', () => {

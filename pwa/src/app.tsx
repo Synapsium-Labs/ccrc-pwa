@@ -20,6 +20,7 @@ import { navigate, useLocation } from './lib/router';
 import { useMediaQuery } from './lib/useMediaQuery';
 import { AccountsScreen } from './screens/AccountsScreen';
 import { ArchiveScreen } from './screens/ArchiveScreen';
+import { DigestScreen } from './screens/DigestScreen';
 import { FleetScreen } from './screens/FleetScreen';
 import { MailScreen } from './screens/MailScreen';
 import { RunsScreen } from './screens/RunsScreen';
@@ -70,6 +71,10 @@ export function App(): ReactNode {
   const mail = /^\/mail\/?$/.test(path);
   const runs = /^\/runs\/?$/.test(path);
   const settings = /^\/settings\/?$/.test(path);
+  // `/digest?day=YYYY-MM-DD` (D-5300): the daily digest push's deep link, and any past day's digest. The screen
+  // validates nothing about `day` itself: the server answers 400 for a day that is not a UTC date.
+  const digest = /^\/digest\/?$/.test(path);
+  const digestDay = digest ? new URLSearchParams(search).get('day') : null;
   // On desktop the accounts strip is a full-width top bar (rendered here, once);
   // on mobile it stays inside the fleet screen. useMediaQuery keeps it a single
   // instance either way — no duplication, no double polling.
@@ -133,6 +138,8 @@ export function App(): ReactNode {
     <RunsScreen />
   ) : settings ? (
     <SettingsScreen />
+  ) : digest ? (
+    <DigestScreen day={digestDay} />
   ) : (
     <div className="shell-placeholder">
       <p className="shell-placeholder-mark" aria-hidden="true">
@@ -145,7 +152,7 @@ export function App(): ReactNode {
     <>
       {authLost && <LoginScreen />}
       {blocked && <BlockScreen />}
-      <div className="app-shell" data-view={sessionId || archive || accounts || mail || runs || settings ? 'session' : 'fleet'}>
+      <div className="app-shell" data-view={sessionId || archive || accounts || mail || runs || settings || digest ? 'session' : 'fleet'}>
         {desktop && (
           <div className="shell-accounts">
             <AccountsStrip />

@@ -866,6 +866,7 @@ jobs:
           test/history-recall.test.ts
           test/history-maint.test.ts
           test/history-recover.test.ts
+          test/history-export.test.ts
           test/measure-history.test.ts
           test/history-derive.test.ts
           test/history-skill.test.ts

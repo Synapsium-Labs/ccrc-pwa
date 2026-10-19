@@ -12,6 +12,7 @@ import type { Hue } from './roster.js';
 import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
+import type { WorkflowView } from './workflows.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -4489,6 +4490,16 @@ export type SessionStreamMsg =
        *  the list has no open item, no stat answered, or the server is older;
        *  absence renders the strip as it always did. */
       touchedAt?: number }
+  /** D-5560: the workflows Claude Code is running in this session, plus any
+   *  that finished in the last `WORKFLOW_EVICT_MS` (`shared/workflows.ts`).
+   *  Sent on connect whenever the session has a workflow directory (an empty
+   *  list included, so a reconnecting client drops rows that finished while it
+   *  was away), then on change only; never for a session that has run none.
+   *  `unreadable: true` — this box could not list the session's workflow
+   *  directory this pass: `workflows` is then the last rows it DID read (or
+   *  none), and the panel says so rather than reading an empty list as "nothing
+   *  running". Absent from an older server: no frame, no panel. */
+  | { type: 'workflows'; workflows: WorkflowView[]; unreadable?: true }
   /** This session's own OUTSTANDING mail — `state` restricted server-side to
    *  `queued` or `delivered`, never `acked`/`rejected` (`sessionws.ts`'s
    *  `checkMail`). Read directly off `CoordStore.outstandingMailFor` in-process,
@@ -9443,8 +9454,19 @@ export const FLEET_SCOPE = '*';
 /** The poller's own state (§7). `{lastOkAt: null, lastError: null}` = never
  *  checked since this process started — never "up to date". */
 export interface CatalogueState { lastOkAt: number | null; lastError: { at: number; reason: string } | null }
-/** `GET /api/updates` (§12). */
-export interface UpdatesView { catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[]; boxToken?: BoxTokenView }
+/** The GitHub owner/repo the catalogue lists releases from (D-5549) — the pair
+ *  the server's release source READ (`server/src/config.ts`), sent so the PWA
+ *  can link a release note's `#NNN` to that repo's pull request from the
+ *  number alone. No TS root spells the org (`single-definition.test.ts`), so
+ *  this is the only way a client learns it. */
+export interface ReleaseSourceWire { owner: string; repo: string }
+/** `GET /api/updates` (§12). `source` is ADDITIVE (D-5549): absent from an
+ *  older server and from one with no usable release source, and the PWA then
+ *  shows a `#NNN` as plain text — never a guessed link. */
+export interface UpdatesView {
+  catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[]; boxToken?: BoxTokenView;
+  source?: ReleaseSourceWire;
+}
 
 /** Every refusal word an update route answers with (§12). */
 export type UpdateRouteError =
@@ -10708,18 +10730,47 @@ export function parseServerCaps(text: string, nowS: number): ServerCapsParse {
  *  coordinator-first routing spec §5.2) — the row's `releaseReason`, `null`
  *  on every row the hold minted. Rides `GET /api/asks` as an additive field.
  *
+ *  D-5530 (cross-project-claimant-holds-asks, the operator's ruling of
+ *  2026-10-18): an ask is held for the child's run's recorded claimant
+ *  wherever that claimant sits, so no reason compares projects. Every reason
+ *  below is a fail-closed release to the operator:
+ *
  *  `parent-not-live`          the parent has no registry row, is archived or
  *                             stopped, or the dead-coordinator predicate
  *                             measures it dead.
- *  `parent-project-mismatch`  the run's claimant is a session of another
- *                             project (a run opened before the attributed
- *                             binding, spec §6.4).
+ *  `parent-unmeasured`        the parent could not be measured (the claimant
+ *                             ladder answered `unmeasurable`): doubt, never a
+ *                             hold.
+ *  `run-unclaimed`            the child's run records no claimant (a
+ *                             reconstructed programme's), so nobody is held for.
+ *  `run-other-programme`      the run the child's mark names is claimed by
+ *                             someone other than the claimant of the newest
+ *                             open run naming the child: the child belongs to
+ *                             another programme's coordinator.
+ *  `run-unattributed`         D-5531: the run the child's mark names records
+ *                             a claimant nobody ATTRIBUTED — journaled
+ *                             `unattributed` (opened with no `claimedByUuid`
+ *                             before the fleet carried the client), or with no
+ *                             `coordProject` stamp (opened before the
+ *                             attributed binding). A recorded claimedBy alone
+ *                             is not a parent.
+ *  `parent-project-mismatch`  READ ONLY since D-5530: an older build wrote it
+ *                             when the claimant was a session of another
+ *                             project. Never written again; a row carrying it
+ *                             stays refused to the parent and unlisted.
  *  `unknown`                  a token this build does not know, read off disk;
  *                             never written. */
-export type AskReleaseReason = 'parent-not-live' | 'parent-project-mismatch' | 'unknown';
+export type AskReleaseReason =
+  | 'parent-not-live' | 'parent-unmeasured' | 'run-unclaimed' | 'run-other-programme'
+  | 'run-unattributed' | 'parent-project-mismatch' | 'unknown';
+
+/** The reasons a mint may WRITE (D-5530): every `AskReleaseReason` but the
+ *  read-only legacy word and the reader's degrade. */
+export type AskMintReleaseReason = Exclude<AskReleaseReason, 'parent-project-mismatch' | 'unknown'>;
 
 export const ASK_RELEASE_REASON_MAP: Record<AskReleaseReason, true> = {
-  'parent-not-live': true, 'parent-project-mismatch': true, unknown: true,
+  'parent-not-live': true, 'parent-unmeasured': true, 'run-unclaimed': true, 'run-other-programme': true,
+  'run-unattributed': true, 'parent-project-mismatch': true, unknown: true,
 };
 
 export function isAskReleaseReason(v: unknown): v is AskReleaseReason {
@@ -11065,18 +11116,18 @@ export interface DelegationHealthInput {
 }
 
 /** The size and shape bounds of one delegation spool line (delegation broker wave 3, spec §5.3), declared ONCE. The hook's
- *  jq program and shell block spell the same numbers in `ccd/session-hook.sh` (`def idmax:`, `def maxline:`, `def maxlabel:` and
- *  `def maxpath:` in the jq text, `CCRC_ID_MAX` for the owner, and the `DSP_` constants beside the append) because a hook cannot
- *  import this file; `delegation-spool.test.ts` reads both and fails on any drift, and the server's reader imports THIS object.
+ *  jq program and shell block spell the same numbers in `ccd/session-hook.sh` (`def idmax:`, `def maxlabel:` and `def maxpath:` in
+ *  the jq text, `CCRC_ID_MAX` for the owner, `DSP_LINE_BELOW` and `DSP_LINE_SMALL`, the jq's `maxline` among their readers, and the
+ *  other `DSP_` constants beside the append) because a hook cannot import this file; `delegation-spool.test.ts` reads both and fails on any drift, and the server's reader imports THIS object.
  *  Every byte count is UTF-8 bytes, never characters.
  *
  *  Each value is chosen from measurement, on the fixture corpus (`fixtures/delegation/<version>/`: 14 versions, 2.1.280 to
  *  2.1.299, 193 measured cells; its paths are sanitised and shorter than a real fleet's) and on the fleet's own transcript
  *  trees, never from a guess:
- *   - `lineBytesBelow`: the plan says LESS than 4096 bytes, not less than or equal, counting the LF. A line that is built
- *     in one buffered `printf` and so reaches the file in ONE `write(2)` must fit one 4096-byte stdio block, and 4095 is the
- *     most that block holds. An O_APPEND write of one block is the only append the hook can make that two hooks racing on
- *     one bucket never interleave.
+ *   - `lineBytesBelow`, and `lineBytesBelowSmall` off glibc Linux (D-5436): LESS than the cap, counting the LF. A builtin `printf`
+ *     goes through bash's stdout buffer, so a line reaches the file in ONE `write(2)` only if it fits: glibc with a distro bash
+ *     sizes it from st_blksize (4096 on the usual filesystems), bash's own malloc 1008 or 2016, BSD and macOS libc and musl 1024. One
+ *     O_APPEND write is the only append two hooks racing on one bucket never interleave. The server's reader bounds every line at 4096.
  *   - `idBytes`: the longest id in the corpus is 36 (a Claude session UUID; agent ids 17, task ids 9, run ids 15); a real
  *     `tool_use_id` is about 30 (the corpus's are shorter placeholders). 64 is the
  *     bound the hook's own agent-id grammar already uses (`idmax`), so one number covers agent, tool-use, task, run and
@@ -11095,18 +11146,19 @@ export interface DelegationHealthInput {
  *   - `listingNameBytes`: the longest admin record name on the fleet is 37 bytes (the busiest repos' longest are 23 to 37;
  *     Claude Code's own `agent-<17 hex>` is 23, which is also the corpus's longest). A name longer than 64 bytes, or outside
  *     `[A-Za-z0-9._@+-]`, drops the listing.
- *   A listing of 93 real names is about 2.6 KiB, so the line cap (not the count) is what usually drops a listing: the
- *   cap is reached at about 130 names of the usual length, which is the ~3.9 KiB case the plan measures.
+ *   A listing of 93 real names is about 2.6 KiB, so the line cap (not the count) is what usually drops a listing: the 4096
+ *   cap is reached at about 130 names of the usual length (the plan's ~3.9 KiB case), the small one at about 15 to 20 (D-5436).
  *
- *  When a line is over `lineBytesBelow` its optional fields are dropped in this order until it fits, and `truncated: true`
+ *  When a line is over its cap its optional fields are dropped in this order until it fits, and `truncated: true`
  *  is set: `listing`, `claudeVersion`, `cwd`, `agentType` (omitted where optional, null where the variant requires the key),
  *  `transcriptPath`. The required identity fields, `agentTranscriptPath` and a launch among them, are never dropped (the
  *  required-but-nullable ones are not nulled to fit; a line they alone push over the cap is not written). With every bound
- *  above at its maximum and nothing escaped they sum to under 3.2 KiB; a line whose required fields alone pass the cap
- *  (a launch whose paths are inflated six-fold by control-character escapes) is not written at all, because a lost line can
- *  delay a link and an over-cap line could tear one. */
+ *  above at its maximum and nothing escaped they sum to under 3.2 KiB, which only the 4096 cap holds (on 1008 a deep-path
+ *  Workflow launch is not written, D-5436); a line whose required fields alone pass the cap is not written at all, because a lost
+ *  line can delay a link and an over-cap line could tear one, so "a line that cannot fit is a bug" holds on the 4096 cap only. */
 export const DELEGATION_SPOOL_BOUNDS = {
   lineBytesBelow: 4096,
+  lineBytesBelowSmall: 1008,
   idBytes: 64,
   ownerIdBytes: 128,
   labelBytes: 128,
@@ -11164,3 +11216,464 @@ export type ChildShellMark =
 export const DENY_SETTINGS_DIGEST = /^[0-9a-f]{64}$/;
 /** A `.childshell` value: an absolute path of plain characters. */
 export const CHILD_SHELL_PATH = /^\/[A-Za-z0-9._/-]+$/;
+
+// ── approvals, the fleet half (plan Task 14, D-5297, D-5299, D-5439, D-5440, D-5441) ──────────────────────────────
+
+/** The ceiling on a child's PermissionRequest hook's wait for a ruling, in seconds (spec §6.3 step 4): under the managed
+ *  hook timeout (`HOOK_TIMEOUT_S`, 600, `ccd/install-session-hooks.sh`). The hook waits for the request's own window,
+ *  the `waitS` the server's `201` answers (D-5441), and never past this. The hook's bash copy is held equal by
+ *  `session-hook-approval-wait.test.ts`. */
+export const APPROVAL_HOOK_WAIT_S = 540;
+
+/** The Claude Code versions on which a recorded rig capture proved spec §6.9's criteria as restated on 2026-10-18
+ *  (D-5439, D-5440, D-5441): plan Task 13's Linux re-check record, read with its macOS record. 2.1.299 is out: it has
+ *  no Linux capture (D-5481). The server mints an approval request only for a child whose live version is listed. */
+export const APPROVAL_HOOK_VERSIONS: readonly string[] = ['2.1.296', '2.1.300', '2.1.301', '2.1.302'];
+
+/** The versions on which the rig proved that a PermissionRequest's `cwd` equals the shell's working directory after a
+ *  `cd` in an earlier Bash call, on the main thread and in a subagent (spec §6.9; Task 13's Linux re-check record, L6).
+ *  A subset of `APPROVAL_HOOK_VERSIONS`, never wider: elsewhere the classifier is given `cwd = null`. */
+export const APPROVAL_CWD_TRUSTED: readonly string[] = ['2.1.296', '2.1.300', '2.1.301', '2.1.302'];
+
+/** The pinned public key's file name under the fleet box's `~/.ccrc` (spec §6.4), and the server's private key's under
+ *  the server box's: both carry `approval-signing`, the word the child's PreToolUse deny and the classifier's forbidden
+ *  match refuse in any path (D-5297). */
+export const APPROVAL_SIGNING_PUB_FILE = 'approval-signing.pub';
+export const APPROVAL_SIGNING_KEY_FILE = 'approval-signing.key';
+
+/** A ruling-route answer whose row is in one of these states carries no ruling and never will for this wait: the hook
+ *  stops polling and prints nothing (D-5440; spec §6.3 hook step 4, amended). Task 16's `APPROVAL_STATE_MAP` holds
+ *  each of them; the hook's bash copy is held equal by iteration. */
+export const APPROVAL_HOOK_STOP_STATES: readonly string[] = ['declined', 'released', 'operator', 'stale'];
+
+/** The canonical JSON of a value (spec §6.3 "The canonical form, exactly"), or `null` when it has none: no whitespace;
+ *  object keys in Unicode code-point order (jq's `-S`; JavaScript's default sort is by UTF-16 code unit and differs
+ *  above U+FFFF); every UTF-16 code unit outside printable ASCII, U+007F included, as a lowercase `\uXXXX`, except
+ *  `\b \f \n \r \t`, `\"` and `\\`; `/` never escaped; a number only as an integer of magnitude at most 2^53 − 1, in
+ *  plain decimal (`1.0` and `1E+2` are `1` and `100`; `-0` is `0`). The hook's `jq -cSa` program and the verifier's
+ *  copy are held equal to it over `server/test/fixtures/approvals/digest-corpus.json` and a record corpus. */
+const codePoints = (s: string): number[] => Array.from(s, (c) => c.codePointAt(0) as number);
+const byCodePoint = (a: string, b: string): number => {
+  const x = codePoints(a), y = codePoints(b);
+  for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return (x[i] as number) - (y[i] as number);
+  return x.length - y.length;
+};
+const CANON_ESC: Readonly<Record<number, string>> = { 8: '\\b', 9: '\\t', 10: '\\n', 12: '\\f', 13: '\\r', 34: '\\"', 92: '\\\\' };
+const canonString = (s: string): string => {
+  let out = '"';
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    const e = CANON_ESC[c];
+    if (e !== undefined) out += e;
+    else if (c < 0x20 || c >= 0x7f) out += `\\u${c.toString(16).padStart(4, '0')}`;
+    else out += s[i];
+  }
+  return `${out}"`;
+};
+export function canonicalJson(v: unknown): string | null {
+  if (v === null) return 'null';
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'number') return Number.isInteger(v) && Math.abs(v) <= Number.MAX_SAFE_INTEGER ? String(v === 0 ? 0 : v) : null;
+  if (typeof v === 'string') return canonString(v);
+  if (Array.isArray(v)) {
+    const parts: string[] = [];
+    for (const x of v) { const c = canonicalJson(x); if (c === null) return null; parts.push(c); }
+    return `[${parts.join(',')}]`;
+  }
+  if (typeof v === 'object') {
+    const parts: string[] = [];
+    for (const k of Object.keys(v as object).sort(byCodePoint)) {
+      const c = canonicalJson((v as Record<string, unknown>)[k]);
+      if (c === null) return null;
+      parts.push(`${canonString(k)}:${c}`);
+    }
+    return `{${parts.join(',')}}`;
+  }
+  return null;
+}
+
+/** A request's canonical array (spec §6.3 "Keying"): `[session_id, agent_id, tool_name, cwd, tool_input]` from the
+ *  PermissionRequest hook input, `agent_id` `""` on the main thread (absent, `null` or `false`, as jq's `//` reads it)
+ *  and `cwd` the input's own, `null` when absent. Its sha256 is the request's input digest. `null` when the input has
+ *  no canonical form: spec §6.3 spells the hook's program as the integer-only `walk` over the WHOLE input and then the
+ *  array, so a non-integer number anywhere in the input (not only inside the array) leaves the request unsent. The
+ *  hook's spelling is `APPROVAL_DIGEST_JQ` in `ccd/session-hook.sh`. */
+export function approvalDigestBytes(hookInput: Readonly<Record<string, unknown>>): string | null {
+  if (canonicalJson(hookInput) === null) return null;
+  const field = (k: string): unknown => (Object.prototype.hasOwnProperty.call(hookInput, k) ? hookInput[k] : null);
+  const aid = field('agent_id');
+  return canonicalJson([field('session_id'), aid === null || aid === false ? '' : aid, field('tool_name'),
+    field('cwd'), field('tool_input')]);
+}
+
+/** A signed ruling's record (spec §6.3 server half, step 5). `sessionId` is the child's REGISTRY id (the request
+ *  body's `sessionId`), not Claude Code's `session_id`; `rowId` is the row the `201` named, and the verifier checks
+ *  both (D-5488). `expiresAt` is epoch milliseconds, the request window's end (D-5441). */
+export interface ApprovalRulingRecord {
+  readonly v: 1;
+  readonly rowId: number;
+  readonly sessionId: string;
+  readonly agentId: string;
+  readonly digest: string;
+  readonly nonce: string;
+  /** An `ApprovalClass` word, as `approvalClass` (server/src/coord/approvalguard.ts) answered it; spelled there once. */
+  readonly class: string;
+  readonly verdict: 'allow' | 'deny';
+  readonly reason: string;
+  readonly expiresAt: number;
+}
+
+/** The bytes the server signs and the verifier checks: the record's ten fields, and only those, in canonical form.
+ *  `null` for a record with no canonical form. `ccd/approval-verify.mjs` carries the documented second copy, held
+ *  equal by `approval-verify.test.ts`. */
+export function approvalRulingBytes(r: ApprovalRulingRecord): string | null {
+  return canonicalJson({ v: r.v, rowId: r.rowId, sessionId: r.sessionId, agentId: r.agentId, digest: r.digest,
+    nonce: r.nonce, class: r.class, verdict: r.verdict, reason: r.reason, expiresAt: r.expiresAt });
+}
+
+/** `POST /api/approvals`'s body, as the child's hook sends it through `ccrc-api approvals request` (spec §6.3 hook
+ *  step 3). `canonical` is the request's canonical array (`approvalDigestBytes`), `digest` its lowercase hex sha256,
+ *  `nonce` 128 bits as 32 lowercase hex. A canonical string over `APPROVAL_REQUEST_MAX_BYTES` is not sent: the body
+ *  says `truncated` instead, and such a request can never be allowed. */
+export interface ApprovalRequestBody {
+  readonly v: 1;
+  readonly sessionId: string;
+  readonly sessionUuid: string;
+  readonly canonical?: string;
+  readonly truncated?: true;
+  readonly digest: string;
+  readonly nonce: string;
+}
+export const APPROVAL_REQUEST_MAX_BYTES = 64 * 1024;
+
+/** `201`'s answer to that request: the row id, and the window the hook waits for (D-5441). */
+export interface ApprovalRequestAccepted { readonly id: number; readonly waitS: number }
+
+/** `GET /api/approvals/:id/ruling?nonce=`'s answer: the row's state, and the signed ruling once one is taken. `sig` is
+ *  the base64 Ed25519 signature over `approvalRulingBytes(record)`. */
+export interface ApprovalRulingAnswer {
+  readonly state: string;
+  readonly ruling?: { readonly record: ApprovalRulingRecord; readonly sig: string };
+}
+
+/** `GET /api/approvals/key`'s answer: the server's public key, PEM SPKI, which the install spine pins once into the
+ *  fleet box's `~/.ccrc/approval-signing.pub` (spec §6.4). */
+export interface ApprovalKeyAnswer { readonly v: 1; readonly alg: 'ed25519'; readonly publicKey: string }
+
+// ── approvals, the server half (plan Task 16, D-5298, D-5440, D-5441, D-5530, D-5531) ─────────────────────────────
+
+/**
+ * An `approvals` row's state (spec §6.3 server half, step 5), one home, read through `isApprovalState`:
+ *  `held`      minted for the run's attributed claimant, inside its window (`notifyAt`); the operator's push waits.
+ *  `allowed`   the held-for claimant allowed it, and the server signed the ruling (an `ordinary` row only).
+ *  `denied`    the held-for claimant denied it, signed the same way.
+ *  `declined`  the claimant handed it over (`POST /api/approvals/:id/release`): the operator's push fires at once,
+ *              and the hook stops (D-5440). Terminal.
+ *  `released`  minted released (a `releaseReason`: forbidden, truncated, unparseable, or no claimant to hold it for,
+ *              D-5530, D-5531), or held and lapsed at `notifyAt`. The hook has returned or stops; the operator has it.
+ *  `operator`  the operator answered the dialog (`POST /api/sessions/:id/dialog`), or the painted dialog closed with
+ *              no ruling taken: every approval has an answering principal. Terminal.
+ *  `stale`     the hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal. Terminal.
+ *  `unknown`   a token this build does not know, read off disk; never written.
+ * `declined`, `released`, `operator` and `stale` are `APPROVAL_HOOK_STOP_STATES`: the ruling route answers them with
+ * no ruling, and the hook stops on that answer (D-5440).
+ */
+export type ApprovalState = 'held' | 'allowed' | 'denied' | 'declined' | 'released' | 'operator' | 'stale' | 'unknown';
+
+export const APPROVAL_STATE_MAP: Readonly<Record<ApprovalState, true>> = {
+  held: true, allowed: true, denied: true, declined: true, released: true, operator: true, stale: true, unknown: true,
+};
+
+export const APPROVAL_STATES: readonly ApprovalState[] = Object.keys(APPROVAL_STATE_MAP) as ApprovalState[];
+
+export function isApprovalState(v: unknown): v is ApprovalState {
+  return typeof v === 'string' && (APPROVAL_STATES as readonly string[]).includes(v);
+}
+
+/** How long an approval row keeps its redacted input (spec §6.7): after this many days `pruneApprovalInputs` clears
+ *  the `inputRedacted` column and keeps the row as the journal. The asks' question text follows the same retention. */
+export const APPROVAL_INPUT_RETENTION_DAYS = 30;
+
+/** Why an approval row was minted `released` (spec §6.3 server steps 1 and 2): the asks lane's fail-closed words
+ *  (`AskMintReleaseReason`, D-5530, D-5531: no claimant to hold it for, or a parent this tick cannot vouch for), and
+ *  the request's own three: `forbidden` (the classifier's class), `truncated` (the hook sent no canonical string, over
+ *  `APPROVAL_REQUEST_MAX_BYTES`), `unparseable` (the canonical string is not a request's five-element array). The
+ *  parent is never asked about any of them, and the operator's push fires at once. `unknown` is the reader's degrade. */
+export type ApprovalReleaseReason = AskMintReleaseReason | 'forbidden' | 'truncated' | 'unparseable' | 'unknown';
+export type ApprovalMintReleaseReason = Exclude<ApprovalReleaseReason, 'unknown'>;
+
+export const APPROVAL_RELEASE_REASON_MAP: Readonly<Record<ApprovalReleaseReason, true>> = {
+  'parent-not-live': true, 'parent-unmeasured': true, 'run-unclaimed': true, 'run-other-programme': true,
+  'run-unattributed': true, forbidden: true, truncated: true, unparseable: true, unknown: true,
+};
+
+export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(APPROVAL_RELEASE_REASON_MAP, v);
+}
+
+/**
+ * The words the approval routes refuse with in `error` (plan Task 16), each answered at its one status by
+ * `REFUSAL_STATUS` (`shared/refusal.ts`, D-5381), never spelled at a call site:
+ *  `not-a-child`         the session's `ChildMark` is not `{kind: 'child', runId}`, its run is gone, no open run names
+ *                        it, or it is its own claimant: nothing minted (spec §6.3 server step 1, amended by D-5530).
+ *  `approvals-disabled`  either kill switch is on (`$REG/approvals-disabled`, `~/.ccrc/approvals-disabled`).
+ *  `single-box`          this server's role is `both` and the operator has not placed `~/.ccrc/approvals-single-box`.
+ *  `deny-not-engaged`    the child's `.deny-settings` is not the managed deny file's digest, or its `.childshell`
+ *                        does not show the bash pin (D-5360's requirement, Task 15's two fields).
+ *  `digest-mismatch`     the digest is not sha256 over the canonical string sent, or that string does not
+ *                        re-canonicalise to itself. Journaled for doctor's `approval-digest-mismatch`.
+ *  `version-unverified`  the child's live Claude Code version is not in `APPROVAL_HOOK_VERSIONS`.
+ *  `approval-released`   the row was minted `released` (`releaseReason` in the body): the operator has it.
+ *  `unknown-approval`    no such row, or (on the ruling route) another nonce: answered alike, so a nonce is not probed.
+ *  `approval-unreadable` the row could not be read back.
+ *  `parent-changed`      the caller is the row's stored parent, but the child's binding no longer answers it.
+ *  `guard-forbidden`, `guard-escalate`  an allow of a row the classifier did not class `ordinary`.
+ *  `declined`            the claimant handed this row over and may not rule it later.
+ *  `hook-gone`           the row's window has passed: the hook has returned and cannot print a ruling (D-5441).
+ *  `already-ruled`       a principal (the claimant or the operator) already acted on the row.
+ */
+export const APPROVAL_REFUSALS = [
+  'not-a-child', 'approvals-disabled', 'single-box', 'deny-not-engaged', 'digest-mismatch',
+  'version-unverified', 'approval-released', 'unknown-approval', 'approval-unreadable', 'parent-changed',
+  'guard-forbidden', 'guard-escalate', 'declined', 'hook-gone', 'already-ruled',
+] as const;
+export type ApprovalRefusal = (typeof APPROVAL_REFUSALS)[number];
+
+export function isApprovalRefusal(v: unknown): v is ApprovalRefusal {
+  return typeof v === 'string' && (APPROVAL_REFUSALS as readonly string[]).includes(v);
+}
+
+/** `POST /api/approvals/:id/rule`'s body: the attribution pair, the verdict and a reason (at most
+ *  `APPROVAL_REASON_MAX_CHARS`, one line). Nothing else: `permanent`, `updatedPermissions` and `mode` are refused
+ *  `400`, because a ruling allows once only (spec §6.5 procedure rules). */
+export interface ApprovalRuleBody {
+  readonly fromId: string;
+  readonly fromUuid: string;
+  readonly verdict: 'allow' | 'deny';
+  readonly reason: string;
+}
+export const APPROVAL_REASON_MAX_CHARS = 1000;
+
+/** `GET /api/approvals/:id`'s row as the held-for claimant, or the operator, reads it: the redacted input only (null
+ *  after the retention prune), never the digest's unredacted text, which the server holds only for the request. */
+export interface ApprovalView {
+  readonly id: number;
+  readonly childId: string;
+  readonly parentId: string;
+  readonly runId: number | null;
+  readonly agentId: string;
+  readonly tool: string;
+  readonly input: string | null;
+  readonly truncated: boolean;
+  readonly class: string;
+  readonly state: ApprovalState;
+  readonly releaseReason: ApprovalReleaseReason | null;
+  readonly askAt: number;
+  readonly notifyAt: number;
+  readonly ruledAt: number | null;
+  readonly verdict: 'allow' | 'deny' | null;
+  readonly reason: string | null;
+  readonly answeredBy: string | null;
+  readonly toolUseId: string | null;
+}
+
+/** The managed deny file's name in the fleet box's `~/.cc-sessions` (plan Task 15): the server reads it to learn the
+ *  digest a child's `.deny-settings` must equal (`409 deny-not-engaged`). `ccd/install-session-hooks.sh` writes it. */
+export const CHILD_DENY_SETTINGS_FILE = 'child-deny.settings.json';
+
+/** The shell a `.child` spawn pins its Bash tool to (D-5360's requirement, D-5391): the server mints no ruling for a
+ *  child whose `.childshell` names anything else, because the classifier's grammar is bash's. */
+export const APPROVAL_CHILD_SHELL = '/bin/bash';
+
+/** The server box's journal of `409 digest-mismatch` refusals, under its `~/.ccrc` (D-5490): one line each,
+ *  `<epoch ms> digest-mismatch <session id>`. Doctor's `approval-digest-mismatch` counts the last seven days. */
+export const APPROVAL_REFUSALS_LOG = 'approval-refusals.log';
+
+// ── the daily digest (coordinator-first routing plan Task 17, spec §10, D-5300) ──────────────────────────────────
+
+/**
+ * One decision a coordinator took in the operator's name, as the digest lists it (spec §10). One line per row, its
+ * final coordinator decision:
+ *  `answer`     a question the held-for coordinator answered (late answers included, D-5289);
+ *  `allow`, `deny`  an approval the held-for coordinator ruled, signed by the server;
+ *  `hand-over`  the coordinator released the question or approval itself (`declined`);
+ *  `lapse`      the window passed with no ruling, so the operator was pushed (an ask or approval held for a
+ *               coordinator that the coordinator never answered, whoever acted after).
+ * A row the operator answered while it was still held is not a line, and neither is a row minted released.
+ */
+export const DIGEST_LINE_KINDS = ['answer', 'allow', 'deny', 'hand-over', 'lapse'] as const;
+export type DigestLineKind = (typeof DIGEST_LINE_KINDS)[number];
+
+/** Which table a digest line came from, and so which id space `id` is in. */
+export type DigestRowKind = 'ask' | 'approval';
+
+/** A digest line on the wire. Every text field is redacted (`redactCommand`) when the digest is built, whatever the
+ *  row stored: `text` is the question, or the command's first `DIGEST_COMMAND_CHARS` characters. */
+export interface DigestLine {
+  readonly rowKind: DigestRowKind;
+  readonly id: number;
+  readonly kind: DigestLineKind;
+  readonly at: number;
+  readonly coordinator: string;
+  readonly childId: string;
+  readonly text: string;
+  /** The approval's tool and class; null on a question. */
+  readonly tool: string | null;
+  readonly class: string | null;
+  /** The chosen option on an answered question; null otherwise. */
+  readonly answer: string | null;
+  /** The coordinator's reason on a ruled approval; null otherwise. */
+  readonly reason: string | null;
+  /** The operator has already sent a correction for this row (`POST /api/digest/correct`). */
+  readonly corrected: boolean;
+}
+
+/** The digest's totals. `decisions` is the line count; `guardForbidden` counts the requests the classifier classed
+ *  `forbidden` in the window, which went straight to the operator and are not lines (D-5492). */
+export interface DigestTotals {
+  readonly decisions: number;
+  readonly answers: number;
+  readonly allows: number;
+  readonly denies: number;
+  readonly handOvers: number;
+  readonly lapses: number;
+  readonly guardForbidden: number;
+}
+
+/** `GET /api/digest?day=` (session-gated): the digest for `day`, a UTC date, covering the 24 hours before that day's
+ *  digest hour (`fromMs` to `toMs`). `sentAt` is when the daily beat ran for that day (null: not yet, or never on this
+ *  box); `pushed` whether it sent the push (a day with no decisions sends none). */
+export interface DigestAnswer {
+  readonly v: 1;
+  readonly day: string;
+  readonly hourUtc: number;
+  readonly fromMs: number;
+  readonly toMs: number;
+  readonly totals: DigestTotals;
+  readonly byCoordinator: readonly { readonly coordinator: string; readonly decisions: number }[];
+  readonly lines: readonly DigestLine[];
+  readonly sentAt: number | null;
+  readonly pushed: boolean;
+}
+
+/** `POST /api/digest/correct`'s body: which row, and the operator's sentence, mailed verbatim to the coordinator. */
+export interface DigestCorrectBody {
+  readonly rowKind: DigestRowKind;
+  readonly id: number;
+  readonly text: string;
+}
+
+/** Its 200: the mail queued (its delivery id, which the coordinator acks) and the row now marked corrected. */
+export interface DigestCorrectAnswer {
+  readonly ok: true;
+  readonly mailId: number;
+  readonly deliveryId: number;
+}
+
+/** The longest correction accepted, in characters. */
+export const DIGEST_CORRECTION_MAX_CHARS = 2000;
+
+/** The first characters of an approval's redacted command a digest line carries (spec §10). */
+export const DIGEST_COMMAND_CHARS = 160;
+
+/** The digest routes' own refusal words, each answered at its one status by `REFUSAL_STATUS` (`shared/refusal.ts`):
+ *  `not-coordinator`    the row is not a coordinator's decision (the operator answered it while it was held, or it was
+ *                       minted released): there is no coordinator to correct.
+ *  `digest-unreadable`  the asks or approvals rows could not be read back. */
+export const DIGEST_REFUSALS = ['not-coordinator', 'digest-unreadable'] as const;
+export type DigestRefusal = (typeof DIGEST_REFUSALS)[number];
+
+/** The server box's override of the digest hour, under its `~/.ccrc`: one integer, 0 to 23 (UTC). */
+export const DIGEST_HOUR_FILE = 'digest-hour';
+
+/** The step-up routes' refusal words (D-5512, spec §3.2; plan Task A5), each answered at its one status by
+ *  `REFUSAL_STATUS` (`shared/refusal.ts`):
+ *  `step-up-required`  no step-up from the last five minutes on this session, or this attempt did not prove one
+ *                      (the body then carries `verdict: 'wrong'`); the sheet shows Confirm it's you again.
+ *  `step-up-locked`    this session spent its step-up budget; it stays locked until it ends or the operator
+ *                      signs in again. Another session keeps its own budget.
+ *  `passkey-enrolled`  the passphrase arm, refused because a passkey is enrolled: a stolen session may not step
+ *                      down to the weaker factor.
+ *  `auth-off`          the gate is dark, so there is no session to step up (D-5618: defined here, before the
+ *                      account gate that also answers it, A7). */
+export const STEP_UP_REFUSALS = ['step-up-required', 'step-up-locked', 'passkey-enrolled', 'auth-off'] as const;
+export type StepUpRefusal = (typeof STEP_UP_REFUSALS)[number];
+
+/** `POST /api/auth/step-up/start`'s 200: the passkey ceremony's challenge, bound to the requesting session,
+ *  with the configured `rpId` and the enrolled credential ids (the `PasskeyAssertStart` fields). */
+export interface StepUpStart {
+  readonly challengeB64url: string;
+  readonly rpId: string;
+  readonly allowCredentialIdsB64url: readonly string[];
+}
+
+/** `POST /api/auth/step-up/finish`'s and `/passphrase`'s 200: the requesting session's stamp, as the first
+ *  instant it is no longer fresh. No cookie, no new session, the same `generation` (D-5512). */
+export interface StepUpAnswer {
+  readonly ok: true;
+  readonly stepUpFreshUntil: number;
+}
+
+// ── Accounts: the account gate, the audit and the AccountOps port (D-5511, D-5516; plan Task A7) ─────────────────
+
+/** The `ccrc account` subs the `AccountOps` port may run (spec §13.2), and so the closed `sub` of the agent's
+ *  `account` op (A8). There is deliberately NO sub that installs or replaces the OpenRouter management key and none
+ *  that raises its ceiling (D-5554: CLI-only), and no `seed` (`check` runs the seed in-verb, D-5518). */
+export const ACCOUNT_SUBS = [
+  'add', 'auth-start', 'auth-code', 'auth-cancel', 'set', 'check', 'enable', 'disable', 'credential', 'remove',
+  'roster', 'or-management-remove', 'or-management-lower',
+] as const;
+export type AccountSub = (typeof ACCOUNT_SUBS)[number];
+
+/** Each sub's bound, after which the child gets SIGTERM, then SIGKILL `ACCOUNT_OP_KILL_GRACE_MS` later (spec §3.9,
+ *  §13.2): `check` 90 s (its probe turn), `add` 180 s, the rest 120 s. One home for both arms (A7's local spawn,
+ *  A8's agent op). */
+export const ACCOUNT_SUB_TIMEOUT_MS: Readonly<Record<AccountSub, number>> = {
+  'add': 180_000, 'auth-start': 120_000, 'auth-code': 120_000, 'auth-cancel': 120_000, 'set': 120_000,
+  'check': 90_000, 'enable': 120_000, 'disable': 120_000, 'credential': 120_000, 'remove': 120_000,
+  'roster': 120_000, 'or-management-remove': 120_000, 'or-management-lower': 120_000,
+};
+export const ACCOUNT_OP_KILL_GRACE_MS = 5_000;
+/** The most a sub's stdout may carry before the answer is cut and refused (spec §13.2's 8 MiB cap). */
+export const ACCOUNT_OP_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
+
+/** The acts `account_events` records (D-5516; spec §3.6), closed. `step-up-locked` (D-5512), `management-remove` and
+ *  `ceiling-lower` (D-5554) name no lane; every other act names the lane it touched. */
+export const ACCOUNT_ACTS = [
+  'add', 'auth-start', 'auth-code', 'auth-cancel', 'auth-url-untrusted', 'set', 'check', 'enable', 'disable',
+  'credential', 'retire-key', 'remove', 'discard', 'reconcile', 'management-remove', 'ceiling-lower',
+  'revoke-acknowledged', 'step-up-locked',
+] as const;
+export type AccountAct = (typeof ACCOUNT_ACTS)[number];
+
+/** The acts that name no lane, so their row's `laneId` is NULL (and only theirs). */
+export const ACCOUNT_LANELESS_ACTS: readonly AccountAct[] = ['step-up-locked', 'management-remove', 'ceiling-lower'];
+
+/** How an act ended (D-5516): `unknown` is the outcome-unknown state of D-5518, never retried on its own. */
+export const ACCOUNT_OUTCOMES = ['ok', 'refused', 'failed', 'unknown'] as const;
+export type AccountOutcome = (typeof ACCOUNT_OUTCOMES)[number];
+
+/** OpenRouter's key-plane outcomes, which ride an audit row's `code` beside the route refusal words (spec §3.6). */
+export const ACCOUNT_KEY_PLANE_CODES = [
+  'minted-deleted', 'minted-not-installed', 'pkce-minted-deleted', 'pkce-minted-not-installed', 'provider-delete-failed',
+] as const;
+export type AccountKeyPlaneCode = (typeof ACCOUNT_KEY_PLANE_CODES)[number];
+
+/** How long an `account_events` row is kept (D-5516): a row older than this is swept. */
+export const ACCOUNT_AUDIT_RETENTION_DAYS = 365;
+
+/** Every word the account gate (`server/src/accounts/gate.ts`, D-5511) answers, in the order it refuses, each at its
+ *  one status in `REFUSAL_STATUS` (`shared/refusal.ts`):
+ *  `auth-off`          the gate is dark (501, D-5618's definition, reused): no loopback exception, because a dark
+ *                      loopback box is the default deployment.
+ *  `insecure-origin`   the gate is armed and `cfg.origin` is plain HTTP on a host that is not loopback (403): the
+ *                      session cookie and the bundle are open to a man in the middle. Read from `cfg.origin` only.
+ *  `unauthenticated`   any verdict but `session` (401). A box token is never one.
+ *  `unsupported`       the fleet does not advertise the route's cap word, or the fleet state is unmeasured (501).
+ *  `step-up-required`  the route asked for a step-up and this session has none from the last five minutes (403). */
+export const ACCOUNT_GATE_REFUSALS = ['auth-off', 'insecure-origin', 'unauthenticated', 'unsupported', 'step-up-required'] as const;
+export type AccountGateRefusal = (typeof ACCOUNT_GATE_REFUSALS)[number];
+
+/** The class of `cfg.origin` the gate decides on, and `GET /api/accounts`'s `connect.origin` (A12): https, plain HTTP
+ *  on a loopback host, or anything else. */
+export type AccountOriginClass = 'https' | 'loopback' | 'insecure';

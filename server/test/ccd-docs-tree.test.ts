@@ -2302,7 +2302,8 @@ describe('docs draft snapshot (docs W1a Task 14)', () => {
       const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
       for (let i = 0; i < 20; i++) t14fs.writeFileSync(t14path.join(wt, T14_S, `long-name-${i}-${'x'.repeat(40)}.md`), 'n\n');
       const o = t14phase({ served: head, kw: 'stdout_cap=200' });
-      expect(o.facts).toMatchObject({ state: 'too-many', branch: 'ws/a', worktree: wt });
+      // The message carries the whole facts: an `unreadable` here names its step and detail (wave 20 follow-up).
+      expect(o.facts, JSON.stringify(o.facts)).toMatchObject({ state: 'too-many', branch: 'ws/a', worktree: wt });
       expect(o.facts['bytes']).toBe(200);
       expect(o.facts['count']).toBeLessThan(20);
       expect(o.entries).toBe(1);
@@ -3471,9 +3472,14 @@ describe('docs-tree: a spent deadline degrades the drafts, never the tree (D-416
 // can see it. These units replay Darwin's answer through the helper's own seam: the helper's `os` is the unit's
 // `os`, so the unit swaps `os.killpg` for one that reads the group's members from /proc and answers as XNU's
 // killpg does (no member: ESRCH; every member a zombie: EPERM; else the real call). Linux only (/proc); row 64
-// itself stays byte-unchanged as the macOS proof. Its first answer, and case 2's racing kill, each wait (bounded)
+// itself is the macOS proof, its assertions unchanged (since the 2026-10-18 follow-up its first one carries the whole
+// facts as its message, D-5336). Its first answer, and case 2's racing kill, each wait (bounded)
 // for the leader to be a zombie, so a zombie leader at the first signal is a fact of each run, not a race won. Every
-// answer is logged to $HOME/killpg.log, so a green row shows that the EPERM was met.
+// answer is logged to $HOME/killpg.log, so a green row shows that the EPERM was met. Cases 5 and 6 (the follow-up)
+// replay Darwin's other EPERM, for a leader that is still alive and exiting at the SIGTERM.
+import { REAL_GIT as t20realGit } from './ccdDocsHelpers.js';
+import { harnessBin as t20bin } from './ccdWsHelpers.js';
+
 const T20_DARWIN_KILLPG: string[] = [
   'import errno as _t20_errno',
   'import os as _t20_os',
@@ -3519,7 +3525,47 @@ const t20log = (): string[] => {
   return t14fs.existsSync(p) ? t14fs.readFileSync(p, 'utf8').trim().split('\n') : [];
 };
 
-describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers EPERM for a group of zombies (wave 20, B2)', () => {
+/** Darwin's other EPERM, measured by the B2 probe in `platform-hazards.test.ts` on macOS 26.6.2 (follow-up
+ *  2026-10-18, D-5338): killpg also answers EPERM while the leader is still EXITING, before a wait can reap it (36 of
+ *  40 overflowed `git status` stops; a non-reaping waitid said "not exited", and each leader was reapable 0.6 to
+ *  3.8 ms later). The replay: the first answer is EPERM with nothing signalled, it logs the leader's /proc state (a
+ *  live one, so poll() is None at that EPERM), and it releases the lingering leader, which then exits on its own.
+ *  Every later answer is `T20_DARWIN_KILLPG`'s. */
+const t20exiting = (release: string): string[] => [
+  `_t20_release = ${JSON.stringify(release)}`,
+  'def _t20_state(pid):',
+  '    try:',
+  '        with open("/proc/%d/stat" % pid) as f:',
+  '            s = f.read()',
+  '    except OSError:',
+  '        return "gone"',
+  '    return s[s.rindex(")") + 2:].split()[0]',
+  'def _t20_exiting(pgid, sig):',
+  '    _t20_answer(sig, "EPERM leader=" + _t20_state(pgid))',
+  '    _t20_os.killpg = _t20_killpg',
+  '    open(_t20_release, "w").close()',
+  '    raise OSError(_t20_errno.EPERM, "Operation not permitted")',
+  '_t20_os.killpg = _t20_exiting',
+];
+/** A PATH git whose `status` answers in full, then lingers, alive and unreaped, until `release` exists (bounded at
+ *  10 s), so the overflow's SIGTERM meets a leader that has not exited. Every other call is the real git. */
+function t20lingeringGit(release: string): void {
+  const q = (v: string): string => `'${v.replace(/'/g, "'\\''")}'`;
+  t14fs.writeFileSync(t14path.join(t20bin(h.home), 'git'), [
+    '#!/bin/sh',
+    'case " $* " in',
+    '  *" status "*)',
+    `    ${q(t20realGit)} "$@"; rc=$?`,
+    '    i=0',
+    `    while [ ! -e ${q(release)} ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done`,
+    '    exit $rc ;;',
+    'esac',
+    `exec ${q(t20realGit)} "$@"`,
+    '',
+  ].join('\n'), { mode: 0o755 });
+}
+
+describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers EPERM for a group of zombies, and for a leader still exiting (wave 20, B2)', () => {
   it('row 64, Darwin answer injected: a status overflow whose git exited unreaped is too-many, never unreadable', () => {
     const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
     for (let i = 0; i < 20; i++) t14fs.writeFileSync(t14path.join(wt, T14_S, `long-name-${i}-${'x'.repeat(40)}.md`), 'n\n');
@@ -3559,8 +3605,8 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
   // T20-M3 pin the SIGTERM call's predicate, not end-to-end loudness: under a refusal that holds at every signal, as a
   // real one does, either mutant still raises the same EPERM, KILL_GRACE_S later, at the SIGKILL.
   it('EPERM stays loud: a live leader that refuses the SIGTERM, and a leader already reaped that refuses it, both raise EPERM; any other errno raises even against an exited, unreaped leader', () => {
-    const got = unitJson<Record<string, string>>(h.home, [
-      'import errno, os, signal, subprocess',
+    const got = unitJson<{ live: string; reaped: string; einval: string; liveS: number }>(h.home, [
+      'import errno, os, signal, subprocess, time',
       'real = os.killpg',
       'def at_term(err):',
       '    def fake(pgid, sig):',
@@ -3578,8 +3624,10 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
       '    finally:',
       '        os.killpg = real',
       'res = {}',
-      "live = subprocess.Popen(['sleep', '3'], start_new_session=True)",
+      "live = subprocess.Popen(['sleep', '10'], start_new_session=True)   # outlives the absorb's wait, KILL_GRACE_S (D-5339)",
+      't0 = time.monotonic()',
       "res['live'] = stop(live)",
+      "res['liveS'] = time.monotonic() - t0",
       'try:',
       '    real(live.pid, signal.SIGKILL)',
       'except OSError:',
@@ -3594,7 +3642,12 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
       'odd.wait()',
       'out(res)',
     ].join('\n'), { timeoutMs: 60_000 });
-    expect(got).toEqual({ live: 'raised EPERM', reaped: 'raised EPERM', einval: 'raised EINVAL' });
+    const { liveS, ...arms } = got;
+    expect(arms).toEqual({ live: 'raised EPERM', reaped: 'raised EPERM', einval: 'raised EINVAL' });
+    // The live leader's refusal raises when the absorb's wait runs out, at the stop's own grace deadline (D-5339):
+    // never at once, and never at a deadline of its own past that grace.
+    expect(liveS).toBeGreaterThanOrEqual(1.9);
+    expect(liveS).toBeLessThan(4);
   }, 60000);
 
   it('the absorb is the SIGTERM call\'s alone: at the SIGKILL, an EPERM against an exited, unreaped leader raises (D-5335)', () => {
@@ -3625,5 +3678,57 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
       'out(res)',
     ].join('\n'), { timeoutMs: 60_000 });
     expect(got).toEqual({ kill: 'raised EPERM', signals: [15, 9] });
+  }, 60000);
+
+  it('row 64, Darwin\'s exiting answer injected: a status overflow whose leader is not yet reapable at the SIGTERM is too-many, never unreadable (D-5338)', () => {
+    const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+    for (let i = 0; i < 20; i++) t14fs.writeFileSync(t14path.join(wt, T14_S, `long-name-${i}-${'x'.repeat(40)}.md`), 'n\n');
+    const release = t14path.join(h.home, 't20-release');
+    t20lingeringGit(release);
+    const o = t14phase({ served: head, kw: 'stdout_cap=200', pre: [...T20_DARWIN_KILLPG, ...t20exiting(release)] });
+    expect(o.facts, JSON.stringify(o.facts)).toMatchObject({ state: 'too-many', branch: 'ws/a', worktree: wt });
+    expect(o.facts['bytes']).toBe(200);
+    expect(o.entries).toBe(1);
+    // Non-vacuity: the EPERM met a live leader, in any /proc state but a zombie (Z), dead (X) or gone, and the stop then
+    // found the group empty. Under load the lingering shim reads D as well as R and S (review 609's F1).
+    const log = t20log();
+    expect(log[0]).toMatch(/^15 EPERM leader=(?!(?:Z|X|gone)$)\S+$/);
+    expect(log.slice(1)).toEqual(['0 ESRCH']);
+  }, 60000);
+
+  // One deadline for the whole stop (D-5339): an absorb that waited for the leader leaves the grace loop what is left of
+  // KILL_GRACE_S, never a fresh one. The leader exits on its own 1.2 s after a SIGTERM that Darwin's EPERM refused, and
+  // leaves a member alive in its group, so that member gets the SIGKILL at the grace deadline, 2 s after the SIGTERM.
+  it('a late absorb keeps the stop\'s one grace: a member left alive after the leader exits is SIGKILLed KILL_GRACE_S after the SIGTERM, not later (D-5339)', () => {
+    const got = unitJson<{ rc: number; signals: number[]; s: number }>(h.home, [
+      'import errno, os, signal, subprocess, time',
+      'real = os.killpg',
+      'seen = []',
+      'def darwin_exiting(pgid, sig):',
+      '    if sig != 0:',
+      '        seen.append(sig)',
+      '    if sig == signal.SIGTERM:',
+      '        raise OSError(errno.EPERM, "Operation not permitted")   # nothing signalled: the leader is still exiting',
+      '    return real(pgid, sig)',
+      "p = subprocess.Popen(['sh', '-c', 'sleep 30 & sleep 1.2'], start_new_session=True,",
+      '                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)',
+      'os.killpg = darwin_exiting',
+      't0 = time.monotonic()',
+      'try:',
+      '    H.SYS._stop(p)',
+      'finally:',
+      '    os.killpg = real',
+      '    s = time.monotonic() - t0',
+      '    try:',
+      '        real(p.pid, signal.SIGKILL)',
+      '    except OSError:',
+      '        pass',
+      "out({'rc': p.returncode, 'signals': seen, 's': s})",
+    ].join('\n'), { timeoutMs: 60_000 });
+    const { s, ...rest } = got;
+    // The leader exited by itself (rc 0, never signalled); its group still had a live member, so the SIGKILL went out.
+    expect(rest).toEqual({ rc: 0, signals: [15, 9] });
+    expect(s).toBeGreaterThanOrEqual(1.9);
+    expect(s).toBeLessThan(2.7);
   }, 60000);
 });

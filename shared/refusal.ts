@@ -41,7 +41,7 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { CollectLaneRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, SwapRefusal, UpdateRouteError } from './api.js';
+import type { AccountGateRefusal, ApprovalRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { SWAP_REFUSALS } from './api.js';
 
 /** The mail codes a route answers in `error`. The done-authority codes travel
@@ -70,7 +70,9 @@ export const GENERIC_REFUSALS = [
 ] as const;
 export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
 
-export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal;
+/** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
+export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
+  | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -110,6 +112,24 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'unavailable': 503, 'journal-unreadable': 503, 'journal-unwritable': 503, 'ask-unreadable': 503,
   'pool-unreadable': 503, 'registry-unreadable': 503, 'run-unreadable': 503, 'runs-unreadable': 503,
   'state-unmeasurable': 503, 'write-failed': 503, 'application-failed': 503, 'not-ready': 503,
+  // The approval routes (plan Task 16, D-5298): CHOSEN, not measured — new words. 404 for a row the caller cannot
+  // name (another nonce reads as no row), 503 for a row that could not be read back, 409 for every other refusal,
+  // the conflict status spec §6.3 names them with.
+  'unknown-approval': 404, 'approval-unreadable': 503,
+  'not-a-child': 409, 'approvals-disabled': 409, 'single-box': 409, 'deny-not-engaged': 409, 'digest-mismatch': 409,
+  'version-unverified': 409, 'approval-released': 409, 'parent-changed': 409, 'guard-forbidden': 409,
+  'guard-escalate': 409, 'declined': 409, 'hook-gone': 409, 'already-ruled': 409,
+  // The digest routes (plan Task 17, D-5300): CHOSEN, not measured — new words, the approval routes' statuses.
+  'not-coordinator': 409, 'digest-unreadable': 503,
+  // The step-up routes (D-5512, plan Task A5): CHOSEN, not measured — new words. 403 for a session that is signed
+  // in and not fresh (never 401, which raises the login screen over a live session), 429 for a spent budget, 409
+  // for the passphrase arm on a box with a passkey, and 501 for a dark gate, the status the other auth routes
+  // answer dark (`not-configured`), which keeps them in the gate sweep's `FLAG_AWARE` set (D-5618).
+  'step-up-required': 403, 'step-up-locked': 429, 'passkey-enrolled': 409, 'auth-off': 501,
+  // The account gate (D-5511, D-5620, plan Task A7): CHOSEN, not measured — one new word. 403, the status `foreign-origin`
+  // answers, and never 401: the credential is fine, the box's own origin is not, and a 401 with a verdict would raise
+  // the PWA's login screen, which no passphrase could clear. Its other four words are defined above.
+  'insecure-origin': 403,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */

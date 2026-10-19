@@ -86,9 +86,18 @@ jobs:
           [ -f "release-out/ccrc-$GITHUB_REF_NAME.tar.gz" ] || { echo "release.yml: the build named its artifact after another release tag at HEAD (this commit carries more than one); refusing to publish $GITHUB_REF_NAME — delete the extra tag, or cut the minor on a commit release-main did not auto-tag" >&2; exit 1; }
           cp -- "$CCRC_BUNDLE_PATH" "release-out/ccrc-$GITHUB_REF_NAME.tar.gz.sigstore.json"
 
+      # The body (D-5548): what changed since the previous release tag,
+      # written by the script from git — commit text goes from git to the file
+      # and from the file to gh, never through a run: line or an expression.
+      # Outside release-out/, so the publish glob never ships it as an asset.
+      # A writer that fails costs the release its body, never the release.
+      - name: Write the release notes
+        run: |
+          node deploy/release-notes.mjs --tag "$GITHUB_REF_NAME" --out "$RUNNER_TEMP/release-notes.txt" || { echo "::warning::release.yml: could not write the release notes for $GITHUB_REF_NAME; publishing with an empty body"; : > "$RUNNER_TEMP/release-notes.txt"; }
+
       # All three artifacts ride the glob. --verify-tag: the release is cut
       # only for a tag that exists on the remote. --prerelease: born on dev.
       - name: Publish the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release-out/* --verify-tag --prerelease
+        run: gh release create "$GITHUB_REF_NAME" release-out/* --verify-tag --prerelease --notes-file "$RUNNER_TEMP/release-notes.txt"

@@ -1109,9 +1109,13 @@ describe('O38: the export\'s due rule, re-run under the per-copy default (B1 hal
     expect(countOf(box, 'entries'), 'every row ingested by the first pass').toBe(7);
     return { box, MS, settings, nullFile, mainFile };
   }
-  /** One census, k periodic intervals on, so SCAN_INTERVAL_MS has passed since the last. */
+  /** One census, k periodic intervals on, so SCAN_INTERVAL_MS has passed since the last. From k = 2 the pass clock is past the
+   *  store's first tick plus an hour, so the export would run and take due blobs before the census counts (W1-B4 Task 6;
+   *  spec §9.15 "The pass"); these cases are about the census's own due rule, written before the export existed. The export's
+   *  filesystem is fixed at 0 bytes free of 1 TiB (§9.15 "Preflight"), so its preflight pauses it before it selects, writes
+   *  or marks anything, and no case here reads an exact counters map, a meta listing or health. */
   function census(box: HistoryBox, MS: string[], k: number): void {
-    const r = runDriver(box, { offsetMs: k * 31 * MIN, managedSettings: MS });
+    const r = runDriver(box, { offsetMs: k * 31 * MIN, managedSettings: MS }, [], { env: { HISTORY_TEST_STATFS_EXPORT: '0:1099511627776' } });
     expect(r.code, r.stderr).toBe(0);
   }
   const due = (box: HistoryBox): number => Number(metaOf(box, 'export_due'));

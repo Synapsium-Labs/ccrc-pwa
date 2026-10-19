@@ -179,7 +179,7 @@ function markChild(f: ReturnType<typeof fixture>, childId: string, runId: number
 async function mintHold(f: ReturnType<typeof fixture>, childId: string, parentId: string): Promise<number> {
   const run = f.coord.openRun({
     program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-    wave: 1, waveOf: null, claimedBy: parentId,
+    wave: 1, waveOf: null, claimedBy: parentId, coordProject: 'ccrc-pwa',
   }) as { id: number };
   f.coord.setSession(run.id, childId);
   markChild(f, childId, run.id, parentId);
@@ -241,7 +241,7 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const run = f.coord.openRun({
       program: 'prog', title: 'Prog', project: 'ccrc-pwa',
-      wave: 1, waveOf: null, claimedBy: 'coord-1',
+      wave: 1, waveOf: null, claimedBy: 'coord-1', coordProject: 'ccrc-pwa',
     }) as { id: number };
     f.coord.setSession(run.id, 'cc-a');
     markChild(f, 'cc-a', run.id, 'coord-1');           // a hold in every respect but the switch

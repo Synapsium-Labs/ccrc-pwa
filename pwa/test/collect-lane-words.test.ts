@@ -60,6 +60,23 @@ describe('the words (path-identity spec §5.7)', () => {
     expect(COLLECT_SECTION_TEXT.title).toBe('Temp root collector');
   });
 
+  it("the legend, the two choices' notes and the when-line are settings spec §5.4's words (Task R1c)", () => {
+    expect(COLLECT_SECTION_TEXT.legend).toBe('Collector');
+    expect(COLLECT_SECTION_TEXT.liveNote).toBe('Removes a leftover temporary directory only after two idle audits have found it unused.');
+    expect(COLLECT_SECTION_TEXT.when).toBe('Turn it Live once its reports look right. Turn it Off if a removal surprised you.');
+    expect(COLLECT_SECTION_TEXT.reconfirmWhen).toBe("When the collector's node changed and you still want Live.");
+    expect(COLLECT_SECTION_TEXT.purpose).toMatch(/^Each session gets its own temporary directory\. /);
+    expect(COLLECT_SECTION_TEXT.purpose).toMatch(/only after two audits, at least an idle period apart, have found it unused\.$/);
+  });
+
+  it("the Off note says what the shadowed collector does: it watches and REPORTS, and removes nothing", () => {
+    // Off is `shadowed` on the server (COLLECT_STATE_TEXT.shadowed): it reports what it would remove. A note that said
+    // only "removes nothing" would hide that it still watches and reports.
+    expect(COLLECT_SECTION_TEXT.offNote).toBe('Watches and reports what it would remove, and removes nothing.');
+    expect(COLLECT_SECTION_TEXT.offNote).toMatch(/\breports\b/);
+    expect(COLLECT_STATE_TEXT.shadowed.line).toMatch(/^reports what it would remove and removes nothing\.$/);
+  });
+
   it('each armedBy line', () => {
     expect(COLLECT_ARMED_BY_TEXT).toEqual({
       settings: 'Armed by: Settings.',

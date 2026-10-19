@@ -17,6 +17,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const SCRIPT = join(REPO, 'deploy', 'release-main.sh');
 const BUILDER = join(REPO, 'deploy', 'build-release.sh');
+const NOTES = join(REPO, 'deploy', 'release-notes.mjs');
 
 const GIT_ENV = {
   GIT_AUTHOR_NAME: 'ccrc fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
@@ -50,7 +51,7 @@ const FILES: Record<string, string> = {
 
 /** `<home>/repo` with one commit, `<home>/origin.git` bare and added as
  *  `origin`, optional existing tags (pushed to origin too, as real ones are). */
-function fixture(home: string, opts: { tags?: string[]; tagHead?: string } = {}): string {
+function fixture(home: string, opts: { tags?: string[]; tagHead?: string; notes?: boolean } = {}): string {
   const root = join(home, 'repo');
   for (const [rel, body] of Object.entries(FILES)) {
     mkdirSync(path.dirname(join(root, rel)), { recursive: true });
@@ -58,6 +59,9 @@ function fixture(home: string, opts: { tags?: string[]; tagHead?: string } = {})
   }
   copyFileSync(BUILDER, join(root, 'deploy', 'build-release.sh'));
   copyFileSync(SCRIPT, join(root, 'deploy', 'release-main.sh'));
+  // D-5548: the notes writer rides beside the script, as in the real tree;
+  // `notes: false` leaves it out, the shape of a writer that fails.
+  if (opts.notes !== false) copyFileSync(NOTES, join(root, 'deploy', 'release-notes.mjs'));
   chmodSync(join(root, 'deploy', 'build-release.sh'), 0o755);
   chmodSync(join(root, 'deploy', 'release-main.sh'), 0o755);
   git(root, 'init', '-q', '-b', 'main');
@@ -210,9 +214,32 @@ describe('release-main.sh: prepare (tag locally, build) then publish (push, thre
     expect(readFileSync(join(home, 'origin-pushes'), 'utf8')).toBe(`refs/tags/${next}\n`);
     // All three artifacts NAMED, the flag trailing (the stub records `$*` as one line).
     expect(readFileSync(join(home, 'gh-argv'), 'utf8').trim())
-      .toBe(`release create ${next} ${out}/ccrc-${next}.tar.gz ${out}/SHA256SUMS ${out}/ccrc-${next}.tar.gz.sigstore.json --verify-tag --prerelease`);
+      .toBe(`release create ${next} ${out}/ccrc-${next}.tar.gz ${out}/SHA256SUMS ${out}/ccrc-${next}.tar.gz.sigstore.json --verify-tag --prerelease --notes-file ${out}/release-notes.txt`);
+    // D-5548: the body says what changed since the previous release tag.
+    const prev = tags.filter((t) => /^v\d+\.\d+\.\d+$/.test(t)).sort((a, b) => a.localeCompare(b, 'en', { numeric: true })).pop();
+    // The fixture's commits after `prev`, newest first: the merge, then each
+    // later tag's own `release <t>` commit (a tag that is not release-shaped
+    // sits inside the range), then `first` when there is no previous tag.
+    const later = tags.slice(prev === undefined ? 0 : tags.indexOf(prev) + 1).reverse().map((t) => `- Release ${t}`);
+    expect(readFileSync(join(out, 'release-notes.txt'), 'utf8')).toBe([
+      prev === undefined ? 'First release' : `Changes since ${prev}`, '',
+      'Behind the scenes', '- The merge under release', ...later, ...(prev === undefined ? ['- First'] : []), '',
+    ].join('\n'));
     expect(existsSync(join(out, `ccrc-${next}.tar.gz.sigstore.json`))).toBe(true);
     expect(q.stdout).toMatch(/published v[0-9.]+ as a prerelease/);
+  });
+
+  it('a notes writer that fails never stops the release: publish says so and ships an empty body (D-5548)', () => {
+    const home = mkTmp('ccrc-relmain-nonotes-');
+    const root = fixture(home, { tags: ['v0.0.1'], notes: false });
+    const out = join(home, 'out');
+    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    const q = run(root, home, ['publish', '--out', out], 0, { CCRC_BUNDLE_PATH: plantBundle(home) });
+    expect(q.code, q.stderr).toBe(0);
+    expect(q.stderr).toMatch(/could not write the release notes for v0\.0\.2 — publishing with an empty body/);
+    expect(readFileSync(join(out, 'release-notes.txt'), 'utf8')).toBe('');
+    expect(readFileSync(join(home, 'gh-argv'), 'utf8').trim()).toMatch(/--prerelease --notes-file \S+\/release-notes\.txt$/);
+    expect(originTags(home)).toContain('v0.0.2');
   });
 
   it('publish pushes the tag BEFORE gh runs — --verify-tag needs it on origin', () => {
@@ -310,5 +337,11 @@ describe('release-main.sh: source pins', () => {
   });
   it('names all three artifacts to gh rather than globbing, and publishes a PRERELEASE (design §4, §18 rows 1 and 7)', () => {
     expect(src()).toContain('"$tarball" "$sums" "$bundle" --verify-tag --prerelease');
+  });
+  it('hands gh the notes as a FILE, written by release-notes.mjs — commit text never reaches a command line (D-5548)', () => {
+    expect(src()).toContain('--verify-tag --prerelease --notes-file "$notes"');
+    expect(src()).toContain('node "$ROOT/deploy/release-notes.mjs" --repo "$ROOT" --tag "$tag" --out "$notes"');
+    expect(src(), 'the script must not read commit text itself').not.toMatch(/git[^\n]* log\b/);
+    expect(src(), 'no --notes argument: the body goes through a file').not.toMatch(/--notes /);
   });
 });

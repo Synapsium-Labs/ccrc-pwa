@@ -1606,6 +1606,26 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
       .toEqual([]);
   });
 
+  // THE OTHER WAY, for binaries only (wave 17, D-5313): a name the fallback
+  // deploy puts on PATH and the install spine does not is a file a box moved
+  // only by `ccrc update` keeps at whatever version the last fallback deploy
+  // left (`ccrc-api` was that name until wave 17). No exemption list: deploy.sh
+  // places nothing under .local/bin that the spine should not.
+  it('every binary deploy.sh places under .local/bin, _inst_bins places too (wave 17)', () => {
+    const placed = placedBins();
+    const deployed = deployPlacedBins();
+    expect(deployed.size,
+      'the deploy.sh `install_atomic` extractor found too few binaries under .local/bin — it has gone stale, unless deploy.sh really lost most of them')
+      .toBeGreaterThan(BIN_FLOOR);
+    expect([...deployed].filter((n) => !placed.has(n)).sort(),
+      `these are placed under .local/bin by an \`install_atomic\` in ${DEPLOY_WHERE} and by no \`_inst_atomic\` `
+      + `destination in _inst_bins, so a box moved only by \`ccrc update\` keeps whatever copy the last fallback deploy `
+      + 'left, or none. Place them in _inst_bins (and remove them in _uninst_tree_bins).')
+      .toEqual([]);
+    expect(deployed, 'this reader no longer sees `ccrc-api` in deploy.sh — the row checks a set that lost its reason')
+      .toContain('ccrc-api');
+  });
+
   it('every systemd unit file _inst_units places, deploy.sh places too (except DEPLOY_SH_WITHHOLDS.units)', () => {
     const placed = placedUnits();
     const deployed = deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS);

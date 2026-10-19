@@ -84,33 +84,14 @@ const REPO = path.resolve(__dirname, '..', '..');
 const ROOTS = ['server/test', 'agent/test'] as const;
 const SELF = 'server/test/raw-spawn-census.test.ts';
 
-/** Files whose BARE spawns of a script are known and reasoned, with their exact count. Claimed files cannot be edited
- *  by this wave; each entry says what it reaches and when it is to be fixed. */
-const ALLOWED = new Map<string, { count: number; reason: string }>([
-  ['server/test/ccrc-doctor.test.ts', {
-    count: 1,
-    reason: '`_box_role never asserts a state it did not measure`: sources ccrc and calls `_box_role`, which reads only '
-      + 'the preset BOX_UNITS array, with HOME a path that does not exist; no tool runs. The file is under another '
-      + 'run\'s claim in wave 18: fix it (ccrcContainedEnv) in the first wave that may write the file.',
-  }],
-]);
+/** Files whose BARE spawns of a script are known and reasoned, with their exact count. An entry is only for a file a
+ *  wave may not edit, and says what it reaches and when it is to be fixed. Empty since wave 17 (D-5322): the last
+ *  entry's spawn runs contained, and a new bare one must be fixed or listed here with its reason. */
+const ALLOWED = new Map<string, { count: number; reason: string }>([]);
 
 /** Files whose BARE spawns of text SLICED from a script are known and reasoned, with their exact count (D-5251). A
  *  slice runs whatever its functions call, so each reason names the functions and what they reach. */
 const SLICED_ALLOWED = new Map<string, { count: number; reason: string }>([
-  ['server/test/ccrc-doctor.test.ts', {
-    count: 1,
-    reason: '`_exp_env_write` with PROG=, _upd_redact and _ccrc_die, sliced from ccrc and run once per exposure arm with '
-      + 'the parent\'s env and a fixture HOME; it writes the exposure file under that HOME. Under another run\'s claim in '
-      + 'wave 18: give it ccrcContainedEnv in the first wave that may write the file.',
-  }],
-  ['server/test/ccrc-install.test.ts', {
-    count: 2,
-    reason: '`_ver_newer` (version arithmetic) and the `_inst_installed` harness R14(b) named (it reads '
-      + 'CCRC_UPDATE_VERIFIED and CCRC_UPDATE_SPINE from the inherited env and writes BOX_INSTALLED_FILE under a fixture '
-      + 'HOME), each sliced from ccrc and run with no env. Under another run\'s claim in wave 18: give each a builder in '
-      + 'the first wave that may write the file.',
-  }],
   ['server/test/continued-in-parity.test.ts', {
     count: 1,
     reason: 'ccd\'s CONTINUED_IN_JQ program, sliced from ccd and handed in the env (P) to every jq binary the box has, '
@@ -870,16 +851,27 @@ describe('every spawn of the real ccd or ccrc script gets a contained env (wave 
     for (const [f, a] of [...ALLOWED, ...SLICED_ALLOWED]) expect(a.reason.trim().length, f).toBeGreaterThan(40);
   });
 
-  it('decides the function-extraction spawn R14(b) named by rule: no env, and it runs sliced text, not the script', () => {
+  it('decides the function-extraction spawn R14(b) named by rule: contained (ccrcContainedEnv), and it runs sliced text, not the script (wave 17, D-5322)', () => {
     // `ccrc-install.test.ts`'s `_inst_installed` harness: `bash -c <harness>`, the harness text sliced out of the
-    // script, with no env. Not an ALLOWED hit by the EXECUTES rule; counted in SLICED_ALLOWED (D-5251). A change
-    // that made it spawn the script itself would turn it into an ALLOWED hit here.
+    // script, under `ccrcContainedEnv`. Not an ALLOWED hit by the EXECUTES rule, and since wave 17 not a
+    // SLICED_ALLOWED one either: a contained slice is no hit (D-5251, D-5322). A change that made it spawn the script
+    // itself would turn it into an ALLOWED hit here, and one that dropped its env would put it back in `slicedHits`.
     const src = SOURCES.find((s) => s.rel === 'server/test/ccrc-install.test.ts')!.raw.split('\n');
     const inst = c.spawns.filter((x) => x.file === 'server/test/ccrc-install.test.ts' && /\['-c', harness\]/.test(x.argText)
       && src.slice(x.line - 30, x.line).some((l) => l.includes('/^_inst_installed\\(\\) \\{')));
     expect(inst.length, 'the _inst_installed harness spawn').toBe(1);
-    expect(inst[0]!.shape, 'it has no env').toBe('no env');
+    expect(inst[0]!.shape, 'it is contained: a builder env, so not bare').toBeNull();
+    // `shape === null` also holds for a literal env such as `env: { HOME: home }`, which is no builder (review 589 F3):
+    // so the env the spawn names must resolve, through the census's own binding reader, to a `ccrcContainedEnv(` call.
+    const ownSrc = SOURCES.find((s) => s.rel === 'server/test/ccrc-install.test.ts')!;
+    const spawnEnd = ownSrc.raw.split('\n').slice(0, inst[0]!.line).join('\n').length;
+    const inline = /\benv\s*:\s*([\s\S]*)\}\s*\)$/.exec(inst[0]!.argText);
+    const shorthand = /[{,]\s*env\s*[,}]/.test(inst[0]!.argText) ? nearest(bindingsOf(ownSrc), 'env', spawnEnd) : undefined;
+    const envExpr = shorthand ? ownSrc.text.slice(shorthand.init[0], shorthand.init[1]).trim() : (inline?.[1] ?? '').trim();
+    expect(envExpr, 'the spawn\'s env resolves to a ccrcContainedEnv( call, not a literal').toMatch(/^ccrcContainedEnv\(/);
     expect(inst[0]!.kind, 'it runs text sliced from the script').toBe('sliced');
+    expect(c.slicedHits.filter((x) => x.file === 'server/test/ccrc-install.test.ts' && x.line === inst[0]!.line),
+      'it is no sliced hit').toEqual([]);
   });
 
   it('decides every spelling on a fixture corpus: each line gets the verdict its comment names, and no other line gets one', () => {

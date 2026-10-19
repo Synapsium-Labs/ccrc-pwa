@@ -17,6 +17,8 @@ import { mkTmp } from './tmpHelpers.js';
 import { unreadableField as withUnreadableField } from './ioDoubles.js';
 import { okRun } from './coordReadHelpers.js';
 import { isChildReclaimKebab } from '../src/coord/childReclaim.js';
+import { isApprovalKebab } from '../src/coord/approvalsign.js';
+import { isDigestKebab } from '../src/coord/digest.js';
 import { isStallKebab } from '../src/coord/stall.js';
 import { isHibernateKebab } from '../src/coord/hibernate.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
@@ -892,6 +894,12 @@ describe('the rejection table is total, in both directions', () => {
         // the latch outcomes. None is a mail rejection or a run refusal. Admitted through the exported guard, derived
         // from `collectLane.ts`'s tables, never NOT_CODES, for the reason every union above gives.
         || isCollectLaneKebab(tok)
+        // COORDINATOR-FIRST ROUTING, PLAN TASK 16 (D-5298): the approvals lane's own words — its route refusals,
+        // its release reasons and its two operator files — through its own exported guard, never NOT_CODES.
+        || isApprovalKebab(tok)
+        // COORDINATOR-FIRST ROUTING, PLAN TASK 17 (D-5300): the daily digest's line kinds and route refusals, through its
+        // own exported guard, derived from `shared/api.ts`'s tables, never NOT_CODES.
+        || isDigestKebab(tok)
         // CHILD RECLAMATION, WAVE 10, THE ROUTE: the next union after `isCollectLaneKebab`, its ordinal counted on the
         // merged tree rather than fixed here. It is checked together and never merged, on the standing rule
         // `enter-ignored` above states. `GET`/`POST /api/coord/collect-lane` (coord/routes.ts) answers with the

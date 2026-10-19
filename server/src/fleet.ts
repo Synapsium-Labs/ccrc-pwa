@@ -7,14 +7,14 @@ import { readLimits } from './limits.js';
 import { liveSessionStatus, liveStatusCoversDelegation, readLiveState, readLiveStateMeasured } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
-import type { FleetSession, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
+import type { FleetSession, HookAsk, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
 import { sessionBucket, sessionLifecycle, sessionRoleOf, spawnVerdict } from '../../shared/api.js';
 import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
-import type { AskRow, CoordStore } from './coord/store.js';
+import type { ApprovalRow, AskRow, CoordStore } from './coord/store.js';
 // Task 3: the pure board-placement decision (Task 2) — this file supplies its
 // ONE port (`stampOf`) from a `coord.db` read, placement.ts itself imports
 // nothing from here. D-2921 moved the fold that BUILDS that port into
@@ -26,6 +26,7 @@ import { foldLastRuns, releasedFrom, type ReleasedLookup } from './coord/release
 // windows. It lives in `askwindow.ts` because `watch.ts` (their first
 // reader) imports this module, so the constants could not stay there.
 import { ASK_HELD_CHIP_MAX_MS, askNotifyAt } from './askwindow.js';
+import { redactCommand } from './coord/redact.js';
 
 /** `FleetSession.askSummary`'s ceiling — a fleet card row, not a transcript; an ask push's too (D-5356). */
 export const ASK_SUMMARY_MAX_LEN = 80;
@@ -64,7 +65,16 @@ const BACKGROUND_CARRIER_EVENTS: ReadonlySet<string> = new Set(['Stop', 'Subagen
  */
 export function hookAskSummary(hs: HookState | null, liveWaitingFor: string | null = null): string | null {
   const text = hookAskText(hs) ?? (liveWaitingFor?.trim() || null);
-  return text === null || text === '' ? null : text.slice(0, ASK_SUMMARY_MAX_LEN);
+  // D-5298 (spec §6.7): redacted where it enters the wire — an approval summary is a child's raw command (hookstate
+  // keeps it raw, cut to 200 characters), and a question can carry a token too. Redacted BEFORE the cut, so a mask is
+  // never split into a half-token.
+  return text === null || text === '' ? null : redactCommand(text).slice(0, ASK_SUMMARY_MAX_LEN);
+}
+
+/** D-5298 (spec §6.7): the hookstate envelope as it leaves this server on the session frame (`sessionws.ts`), with an
+ *  approval's `summary` redacted. A question envelope is the operator's answer sheet and is sent as read. */
+export function wireHookAsk(ask: HookAsk): HookAsk {
+  return 'approval' in ask ? { approval: { tool: ask.approval.tool, summary: redactCommand(ask.approval.summary) } } : ask;
 }
 
 function hookAskText(hs: HookState | null): string | null {
@@ -171,12 +181,34 @@ function fleetAsk(row: AskRow | null, nowMs: number): FleetSession['ask'] {
  * operator's push fires (D-5364). Plan Task 16 adds the approvals source
  * here, through this one function.
  */
-function fleetWithCoordinator(row: AskRow | null, nowMs: number): FleetSession['withCoordinator'] {
+function fleetWithCoordinator(row: AskRow | null, nowMs: number, approval: ApprovalRow | null = null): FleetSession['withCoordinator'] {
+  // D-5298 (plan Task 16): a held permission prompt first — the hook is waiting on it, inside its own window
+  // (`notifyAt`, D-5441), and a row minted released was held for nobody.
+  if (approval !== null && approval.state === 'held' && approval.releaseReason === null && nowMs < approval.notifyAt) {
+    return { kind: 'approval', parentId: approval.parentId, since: approval.askAt, notifyAt: approval.notifyAt };
+  }
   if (row === null) return null;
   if (row.state !== 'held' && row.state !== 'answering') return null;
   const notifyAt = askNotifyAt(row.at);
   if (nowMs >= notifyAt) return null;
   return { kind: 'question', parentId: row.parentId, since: row.at, notifyAt };
+}
+
+/** `coord.heldApprovalsFor`'s guarded whole-frame read, `readCurrentAsks`' twin: a broken store degrades every row's
+ *  approval source to none (Needs-you, the safe direction), never a throw out of `assembleFleet`. */
+function readHeldApprovals(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, ApprovalRow> {
+  if (!coord || childIds.length === 0) return new Map();
+  try {
+    const read = coord.heldApprovalsFor(childIds);
+    if (!read.ok) {
+      console.warn(`ccrc-server: heldApprovalsFor refused — ${read.detail} — one bad read must not kill the poll`);
+      return new Map();
+    }
+    return read.rows;
+  } catch (err) {
+    console.warn(`ccrc-server: heldApprovalsFor failed — ${err instanceof Error ? err.message : String(err)} — one bad read must not kill the poll`);
+    return new Map();
+  }
 }
 
 /**
@@ -535,6 +567,7 @@ export async function assembleFleet(
   // rows carry millisecond timestamps (`settleAsk`'s callers all pass
   // `Date.now()`), so `nowMs` is computed once and threaded into `fleetAsk`.
   const asksByChild = readCurrentAsks(coord, recs.map((r) => r.id));
+  const approvalsByChild = readHeldApprovals(coord, recs.map((r) => r.id));
   // Task 3: ONE pass over the stamped runs, reused by every row below — see
   // `readCoordPlacements`'s own docstring for why this is batched rather than
   // a per-row query.
@@ -771,7 +804,7 @@ export async function assembleFleet(
       // `assembleFleet`, which neither caller wraps.
       ask: fleetAsk(asksByChild.get(r.id) ?? null, nowMs),
       // D-5296: the quiet "with coordinator" state, from the same row.
-      withCoordinator: fleetWithCoordinator(asksByChild.get(r.id) ?? null, nowMs),
+      withCoordinator: fleetWithCoordinator(asksByChild.get(r.id) ?? null, nowMs, approvalsByChild.get(r.id) ?? null),
       subagents: hs?.subagents ?? null,
       // `background-aware-working` (D-5231): the delegated work a main Stop
       // left running, and ONLY when the live file's own word covers that work

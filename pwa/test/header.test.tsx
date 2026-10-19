@@ -130,7 +130,8 @@ describe('SessionHeader', () => {
       status: 'dead',
       session: fleetSession({ status: 'busy', dialogPending: true, bucket: 'attention' }),
     });
-    expect(screen.getByText('not running')).toBeInTheDocument();
+    // D-5545: the word is the card's (`exited`, headerStatusWord); the lamp still speaks `not running`.
+    expect(screen.getByText('exited')).toBeInTheDocument();
     expect(screen.queryByText('waiting on you')).not.toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
   });
@@ -195,7 +196,8 @@ describe('SessionHeader', () => {
   it('still says not running for a dead session', () => {
     renderHeader({ status: 'dead', session: fleetSession({ status: 'dead', bucket: 'dead' }) });
     expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
-    expect(screen.getByText('not running')).toBeInTheDocument();
+    // D-5545: the word is the card's (`exited`, headerStatusWord); the lamp still speaks `not running`.
+    expect(screen.getByText('exited')).toBeInTheDocument();
   });
 
   it('paints from the live status alone before the fleet snapshot lands', () => {
@@ -643,8 +645,9 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
     // The sheet's own confirm button — by wrapper class, since the menu's
     // same-named opener may still be unmounting behind it (the actions-sheet
     // suite's Release idiom).
-    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-primary')).not.toBeNull());
-    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-primary')!);
+    // The archive confirm is the danger variant now (D-5099); its hook class follows (D-5449).
+    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-danger')).not.toBeNull());
+    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-danger')!);
     expect(spy).not.toHaveBeenCalled();
     expect(await screen.findByText(/tmux unreachable — x/)).toBeInTheDocument();
   });
@@ -1279,12 +1282,13 @@ describe('the header of a hibernated row (D-5242)', () => {
   const AT = Date.now() - 6 * 3_600_000;
   it('a dead row with hibernatedAt reads `hibernated` with the calm dot, never "not running"', () => {
     renderHeader({ status: 'dead', session: hibernatedSession(AT, { id: 'project-a-quiet-basin', project: 'project-a' }) });
-    expect(screen.getByText('hibernated')).toBeInTheDocument();
+    // D-5545: the card's own words, its age included (`hibernated · 6h`), so the header never says less.
+    expect(screen.getByText('hibernated · 6h')).toBeInTheDocument();
     expect(screen.queryByText('not running')).toBeNull();
     const dot = screen.getByRole('img', { name: 'hibernated' });
     expect(dot.className).toMatch(/dot--idle/);
     // The word wears the calm ink too, not the dead tone: colour must not contradict "Waking…" below.
-    const line = screen.getByText('hibernated').closest('.status-line');
+    const line = screen.getByText('hibernated · 6h').closest('.status-line');
     expect(line?.className).toMatch(/status-line--idle/);
     expect(line?.className).not.toMatch(/status-line--dead/);
   });
@@ -1294,9 +1298,76 @@ describe('the header of a hibernated row (D-5242)', () => {
     expect(screen.queryByRole('img', { name: 'not running' })).toBeNull();
   });
 
-  it('a dead row without hibernatedAt still reads "not running"', () => {
+  it('a dead row without hibernatedAt still reads "exited" (the lamp: "not running")', () => {
     renderHeader({ status: 'dead', session: fleetSession({ status: 'dead', bucket: 'dead' }) });
-    expect(screen.getByText('not running')).toBeInTheDocument();
+    // D-5545: the word is the card's (`exited`, headerStatusWord); the lamp still speaks `not running`.
+    expect(screen.getByText('exited')).toBeInTheDocument();
     expect(screen.queryByText('hibernated')).toBeNull();
+  });
+});
+
+// — D-5527: a coordinated workspace says, in words, whose code it works on and who coordinates it —
+
+describe('SessionScreen: the coordination line (D-5527)', () => {
+  const CHILD = 'lane-b-project-b-quiet-river';
+  const COORD = 'lane-a-project-a';
+  const run41 = {
+    id: 41, program: 'port-api', programTitle: 'Port the API', wave: 5, waveOf: 7,
+    project: 'project-b', homeProject: 'project-b', sessionId: CHILD, workspace: 'quiet-river', branch: null,
+    state: 'dispatched', kind: 'work', reviews: null, claimedBy: COORD, resumed: true, clearedAt: null,
+    openedAt: 1_800_000_000_000, dispatchStartedAt: null, dispatchedAt: null, closedAt: null, handoffCommit: null,
+    items: { done: 0, total: 0 }, unreadMail: 0,
+    health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
+              briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null,
+  } as const;
+  const mount = (sessions: FleetSession[], runs: readonly (typeof run41)[] = [run41]) => {
+    const store = createSessionStore(CHILD, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const fleet = createFleetStore({ makeSocket: fakeSocket });
+    act(() => {
+      fleet.setState({ sessions, runs: runs.map((r) => ({ ...r })), runsFrameSeen: true, conn: 'open' });
+    });
+    render(<SessionScreen id={CHILD} store={store} fleet={fleet} />);
+  };
+  const child = baseSession({
+    id: CHILD, project: 'project-b', workspace: 'quiet-river', role: 'child',
+    child: { kind: 'child', runId: 39 }, boardProject: 'project-a',
+  });
+
+  // D-5545: the coordination row is clause boxes with NO separator glyph (a wrapped line never starts with a lone
+  // `·`); the programme and the coordinator are links, the coordinator with its state; the run number is a detail.
+  const parts = (): string[] => [...document.querySelectorAll('.chat-coord > *')].map((e) => e.textContent ?? '');
+  const openDetails = (): void => { fireEvent.click(screen.getByRole('button', { name: 'Session details' })); };
+
+  it('a cross-project child: whose code, then its programme and its coordinator as links, the run in the details', () => {
+    mount([baseSession({ id: COORD, project: 'project-a', name: 'the coordinator', role: 'coordinator' }), child]);
+    expect(parts()).toEqual(['works on project-b', '≡port-api · wave 5 of 7', '⤴coordinator the coordinator · idle']);
+    for (const p of parts()) expect(p.trimStart().startsWith('·')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Open the run board — port-api · wave 5 of 7' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open the coordinator — the coordinator' })).toBeInTheDocument();
+    // ONE sentence with the fleet row's (`runSentence`): a work run "does one wave".
+    expect(document.querySelector('.chat-coord')).toHaveAttribute('title',
+      'this workspace does one wave of Port the API on project-b’s code for the coordinator; it is stopped or reclaimed when the wave is done');
+    openDetails();
+    expect(screen.getByText('run #41')).toBeInTheDocument();
+  });
+
+  it('a coordinator the fleet does not carry is named by the project it coordinates from, and is no link', () => {
+    mount([child]);
+    expect(parts()).toEqual(['works on project-b', '≡port-api · wave 5 of 7', 'coordinated from project-a']);
+    expect(screen.queryByRole('button', { name: /Open the coordinator/ })).toBeNull();
+  });
+
+  it('names the ACTIVE run, never a closed one the store still holds with a higher id', () => {
+    const closed = { ...run41, id: 45, wave: 6, state: 'done', closedAt: 1_800_000_100_000 } as unknown as typeof run41;
+    mount([baseSession({ id: COORD, project: 'project-a', name: 'the coordinator', role: 'coordinator' }), child], [run41, closed]);
+    expect(parts()).toContain('≡port-api · wave 5 of 7');
+    openDetails();
+    expect(screen.getByText('run #41')).toBeInTheDocument();
+    expect(screen.queryByText('run #45')).toBeNull();
+  });
+
+  it('a session nobody coordinates has no coordination line — the no-regression baseline', () => {
+    mount([baseSession({ id: CHILD, project: 'project-b' })], []);
+    expect(document.querySelector('.chat-coord')).toBeNull();
   });
 });

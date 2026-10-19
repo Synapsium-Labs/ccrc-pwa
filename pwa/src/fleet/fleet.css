@@ -34,7 +34,7 @@
   margin-right: 0.4em;
 }
 .fleet-count {
-  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
@@ -54,7 +54,7 @@
    viewport (369px with no count) rather than holding everything on one line, as
    this note assumes — see the head-wrap override comment below.) */
 .pool-epoch-lag {
-  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
   white-space: nowrap;
@@ -283,7 +283,7 @@
   border-radius: var(--r-md);
   background: var(--bg-raised);
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-medium) var(--fs-meta) / 1 var(--family-mono);
   letter-spacing: var(--ls-caps);
 }
 /* The 6px dot is `ATTENTION_DOT` — the same five declarations
@@ -361,7 +361,7 @@
 /* Status line — mono readout beside the chip; tabular so ticking relative
    times never jitter sideways. */
 .status-line {
-  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
 }
 .status-line--busy {
@@ -438,7 +438,7 @@
  *  option grammar: 52px hairline-separated, mono machine voice.       *
  * ------------------------------------------------------------------ */
 .sheet-copy {
-  font-size: var(--fs-base);
+  font-size: var(--fs-ui);
   line-height: var(--lh-normal);
   color: var(--ink-secondary);
   margin-bottom: var(--sp-4);
@@ -453,6 +453,11 @@
 }
 .acct-list {
   display: grid;
+  /* D-5570: one column that never sizes past the list. An `auto` track grows
+     to its widest row's min-content, and a pool tag's `nowrap` counts there at
+     full length whatever its `flex`, so one tagged row widened every row past
+     `.sheet-body` at 360 and 390 and cut the right of the focus ring. */
+  grid-template-columns: minmax(0, 1fr);
   border-top: 1px solid var(--edge-subtle);
 }
 /* Scoped to the list on purpose. `.acct-row` names two unrelated things: this
@@ -477,6 +482,22 @@
    wears its own name, `acct-pick`, which no rule here selects, and
    `hook-class-collision.test.ts` reds on any class name a @ccrc/ui component
    and another element both wear. */
+/* D-5570: the name and its secondary tags, as the part of the row that gives
+   way. It takes the room the gauges and chevron leave (`1 1 0`, floor 0) and
+   wraps, so on a phone the suggested pill and the pool tag sit under the name
+   rather than squeezing it. The column gap is the row's own `gap-3`, so a row
+   with room draws as before. `overflow-wrap: anywhere` reaches the chip's
+   label: a name longer than the group wraps inside its pill, and is never cut. */
+.acct-ident {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--sp-3);
+  row-gap: var(--sp-1);
+  overflow-wrap: anywhere;
+}
 .acct-suggested {
   flex: none;
   font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
@@ -522,11 +543,10 @@
   color: var(--ink-tertiary);
   text-align: right;
 }
-/* Greying a condemned row's gauge fills is `.accounts-row[data-disabled='true']
-   .acct-fill`'s rule, one surface over, for its exact reason: nothing runs on
-   the lane to refresh its statusline, so a frozen crit-red bar keeps reading as
-   live pressure on an account the same row calls expired. Scoped to `.acct-list`
-   like every other picker-row rule in this block. */
+/* A condemned row's gauge fills grey through `Meter`'s `off` (AccountRow
+   passes it), for the reason AccountsScreen greys its own: nothing runs on the
+   lane to refresh its statusline, so a frozen crit-red bar keeps reading as
+   live pressure on an account the same row calls expired (D-5098). */
 /* A picker with nothing to offer says which emptiness it is (SwapSheet's
    `pickerEmptiness`), rather than rendering a bare empty list under "Pick where
    it should live meanwhile". Same treatment as `.proj-none`, the sibling
@@ -544,7 +564,7 @@
 }
 .acct-chev {
   flex: none;
-  font: var(--weight-regular) var(--fs-base) / 1 var(--family-ui);
+  font: var(--weight-regular) var(--fs-ui) / 1 var(--family-ui);
   color: var(--ink-tertiary);
 }
 
@@ -557,7 +577,7 @@
   border: none;
   background: none;
   padding: 0;
-  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  font: var(--weight-medium) var(--fs-meta) / 1 var(--family-mono);
   color: var(--ink-secondary);
   cursor: pointer;
   transition: color var(--dur-fast) var(--curve-swift);
@@ -603,7 +623,7 @@
 }
 .proj-glyph {
   grid-row: span 2;
-  font: var(--weight-semibold) var(--fs-base) / 1 var(--family-mono);
+  font: var(--weight-semibold) var(--fs-ui) / 1 var(--family-mono);
   color: var(--accent);
 }
 .proj-name {
@@ -777,32 +797,15 @@
   font-size: var(--fs-2xs);
 }
 .acct-win { color: var(--ink-tertiary); }
-.acct-meter {
-  height: 5px;
-  border-radius: var(--r-full);
-  background: var(--bg-well);
-  overflow: hidden;
-}
-.acct-fill {
-  display: block;
-  height: 100%;
-  border-radius: var(--r-full);
-  background: var(--limit-ok);
-  transition: width var(--dur-base) var(--curve-swift);
-}
-/* THE CRIT FILL IS MAIN'S RENDERED RED, `#f85149`, on purpose — and it is a
-   known defect, kept. Main writes `var(--limit-crit, #f85149)`; the token is
-   spelled `--limit-critical`, so the fallback is what every build has painted,
-   identical in both themes and belonging to no palette. Spelling the token
-   right is a VISIBLE change (#E06A55 dark, #B2402C light), and the operator
-   ruled this PR ships none beyond the Appearance section and two defect fixes
-   (2026-10-15). So the value main renders is written as what it is — a literal
-   — rather than through a var() that names a token that does not exist
-   (`css-vars.test.ts` refuses that shape). The fix is one line, for its own
-   change: `background: var(--limit-critical)`. */
-.acct-meter[data-band='warn'] .acct-fill { background: var(--limit-warn); }
-.acct-meter[data-band='crit'] .acct-fill { background: #f85149; }
-.acct-meter[data-band='none'] .acct-fill { background: var(--edge-subtle); }
+/* The meter between the window and the percentage is `Meter` (@ccrc/ui,
+   D-5098), and it owns its whole box: height, radius, track, overflow, and
+   the fill's display, height, radius and colour. No rule here sizes, rounds
+   or paints `.acct-meter` or `.acct-fill` — this sheet is unlayered and would
+   beat the meter's utilities, keeping a skin's meter shape off the strip and
+   the Accounts screen (pwa/test/meter.test.tsx). The two classes stay on the
+   elements as hooks. The crit fill was `#f85149`, a red no palette owned, on
+   a `--bg-well` track that was black in Daylight; the meter's are the
+   palette's `--limit-critical` and `--limit-track`. */
 .acct-pct { color: var(--ink-secondary); text-align: right; min-width: 2.6em; }
 .acct-reset { color: var(--ink-tertiary); white-space: nowrap; }
 
@@ -829,163 +832,64 @@
   min-height: var(--tap-min); /* thumb target — the row is a tap surface, not a label */
   padding: var(--sp-1) var(--sp-2);
   border-radius: var(--r-md);
+  /* The hover ground fades in at the skin's --dur-fast (180ms Refined, 120ms
+     Instrument; Task 9 Step 4) rather than snapping. Stilled under reduced
+     motion by the block at the end of this file. */
+  transition: background-color var(--dur-fast) var(--curve-swift);
 }
 
-/* ── SELECTION — reverse video ────────────────────────────────────
-   Selection takes the two loudest channels a row has — the fill and the
-   POLARITY of its ink — and status is evicted from both. It cannot be
-   chromatic here: --accent and --status-busy are the same hex (#45D67E,
-   tokens.css) and the four account hues own the cool half of the wheel, so
-   any coloured selection on THIS screen is a status or identity collision by
-   construction. Polarity is the one channel status does not use and cannot
-   use, and it reads in every vision type and in greyscale.
-   The old signal was --bg-raised on --bg-surface: 1.10:1 dark / 1.17:1 light
-   — less than the hairline that merely separates one card from the next
-   (1.25 / 1.31), and the same fill the ··· button already wears on every row.
-   The new one is 15.68:1 dark / 16.58:1 light.
+/* ── HOVER (D-5101) ───────────────────────────────────────────────
+   A row under the mouse lifts to --bg-hover, the opaque 5% ink-primary mix
+   over the card that every interactive primitive shares. Only inside
+   `(hover: hover)`: a coarse pointer has no hover, and an unguarded :hover
+   sticks on the last-tapped row of a phone. The meta keeps its status and
+   lane hues on this ground, so the gate holds every status text and lane hue
+   against --bg-hover (design/contrast-check.mjs).
+   `:not(.sess-line--active)` (D-5455): the selected row keeps its tint and
+   rail under the mouse. A bare `.sess-line:hover` (0,2,0) outranks
+   `.sess-line--active` (0,1,0) and would turn the selected row grey. */
+@media (hover: hover) {
+  .sess-line:not(.sess-line--active):hover { background: var(--bg-hover); }
+}
+
+/* ── SELECTION — tint plus rail (D-5101) ──────────────────────────
+   The selected row is the accent tint with a 2px phosphor rail inset on its
+   leading edge, and its label steps up to semibold. It replaces the
+   reverse-video slab (background: var(--ink-primary)) and the achromatic
+   group that slab needed, which painted every meta cell --edge-strong
+   because the status texts and lane hues died on a near-white bar. On the
+   tint they live: the meta keeps busy, attention and dead hues and the lane
+   hues, and design/contrast-check.mjs gates each of them on --accent-tint
+   in every palette, with the dots at 3:1. The rail, not the tint, is what
+   separates selection from a status: a hue fill alone would collide with
+   --status-busy, the rail is a shape at the row's edge that no status uses.
+   The lamp needs no plate and the ··· no re-ground: both sit on a ground the
+   gate already measures. The focus ring keeps base.css's accent, which reads
+   on the tint the way it reads on the card.
    Desktop-only by construction: shell.css hides .shell-nav below 900px once a
    session is open, so no phone ever renders a selected row. */
 .sess-line--active {
-  background: var(--ink-primary);
-  color: var(--bg-page);               /* 16.94:1 dark / 15.26:1 light */
+  background: var(--accent-tint);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
-/* .sess-open is color: inherit, so the label inherits the flip. Weight is the
-   second, non-colour channel. */
+/* .sess-open is color: inherit, so the label keeps the card's ink. Weight is
+   the second, non-colour channel. */
 .sess-line--active .sess-label { font-weight: var(--weight-semibold); }
 
-/* The meta line goes achromatic. --status-*-text and the account hues are
-   tuned for --bg-surface and die on the slab (busy-text 1.47:1 dark / 2.61:1
-   light; acct claude 1.46 / 2.42). The SEMANTICS survive: the state is still
-   the word working/waiting/exited, ⚠ is still a shape, the account is still
-   its mono name (tokens.css: "colour is the secondary cue"), and the status
-   hue survives in the lamp two cells left. --edge-strong rather than
-   --bg-raised: it flips polarity with the pair (#39403A dark, #C3CAC2 light)
-   and lands at 9.27:1 / 9.91:1, which keeps a REAL ink step under the 16.94:1
-   label instead of two maximal inks pretending to be a hierarchy. */
-.sess-line--active .sess-meta,
-.sess-line--active .sess-state,
-.sess-line--active .sess-tally,
-.sess-line--active .sess-graph,
-.sess-line--active .sess-subagents,
-.sess-line--active .sess-warn,
-.sess-line--active .sess-acct,
-.sess-line--active .sess-acct-away,
-.sess-line--active .sess-ask,
-.sess-line--active .sess-subagent-row,
-/* The six ink-tertiary meta cells (.sess-held / .sess-lifecycle /
-   .sess-swapblocked / .sess-ask-state share one rule; .sess-unmeasured and
-   .sess-substrate each have their own). Being
-   INSIDE .sess-meta is not enough for them: a child's own `color` beats the
-   colour it would inherit from its parent, so on the selected row they went
-   on painting --ink-tertiary on the --ink-primary slab — 2.72:1 dark /
-   2.91:1 light, against this file's 4.5:1 body floor, where --edge-strong
-   reads 9.27 / 9.91 (design/audit.mjs's resolver, the gate's own engine).
-   .sess-held shipped that way on main; .sess-lifecycle and .sess-swapblocked
-   joined its declarations later and inherited the omission with them, which
-   is what widened it — .sess-lifecycle renders on every non-running row.
-   .sess-ask-state (Task 19) joins already knowing better — no new pair for
-   design/contrast-check.mjs: it joins the pair this rule already declares. */
-.sess-line--active .sess-held,
-.sess-line--active .sess-restart,
-.sess-line--active .sess-lifecycle,
-.sess-line--active .sess-swapblocked,
-.sess-line--active .sess-stranded,
-.sess-line--active .sess-offpool,
-.sess-line--active .sess-ask-state,
-.sess-line--active .sess-unmeasured,
-.sess-line--active .sess-substrate,
-.sess-line--active .sess-child,
-/* Task 6: .sess-repo paints --ink-tertiary of its own — it sits inside
-   `.sess-open` on the row's FIRST line, beside the label, not inside
-   `.sess-meta` like the cells above, but the same rule applies: a child's
-   own `color` beats the inherited flip, so without this line it strands on
-   the selected slab exactly the way `.sess-held` did before it joined this
-   group. Joins the pair this rule already declares — no new pair for
-   design/contrast-check.mjs. */
-.sess-line--active .sess-repo,
-/* D-5301: the coordinator badge sits beside `.sess-repo` in the same register
-   and strands on the selected slab the same way. */
-.sess-line--active .sess-role,
-/* §1.6b's chip paints --status-dead-text (and --ink-tertiary on two variants)
-   of its own, so it strands on the selected slab exactly the way .sess-warn
-   would without this line. */
-.sess-line--active .sess-spawn,
-/* …and its two ink-tertiary VARIANTS, which are (0,2,0) exactly like the line
-   above and are declared LATER in this file, so the bare selector alone would
-   lose the tie to them on the selected row — the same stranding, one attribute
-   deeper. `[data-spawn]` (0,3,0) settles it by specificity rather than by
-   source order, so moving either rule stays free. */
-.sess-line--active .sess-spawn[data-spawn],
-/* The context-pressure chip (D-2011) paints --status-attention-text of its
-   own, so it strands on the selected slab exactly like .sess-warn above
-   without this line. */
-.sess-line--active .sess-ctxpressure,
-/* …and its wedge VARIANT (D-2016), same shape as .sess-spawn's own variant
-   two lines up: `[data-wedge]` is (0,2,0), equal to the bare
-   `.sess-line--active .sess-ctxpressure` above and declared LATER in this
-   file (fleet.css's own `.sess-ctxpressure[data-wedge]` rule), so the tie
-   would go to source order without a higher-specificity member here too. */
-.sess-line--active .sess-ctxpressure[data-wedge],
-.sess-line--active .sess-meta > *:not(:first-child)::before {
-  color: var(--edge-strong);
-}
-
-/* The lamp keeps its hue by keeping its floor. --lamp-size (18px) has sat in
-   tokens.css since day one, documented as exactly this ("status-dot lamp
-   bezel: --bg-well floor") and used nowhere. The plate is what makes every dot
-   on this row sit on --bg-well — the one background design/contrast-check.mjs
-   already verifies all four dots against at 3:1 in BOTH themes (dark 10.67 /
-   11.20 / 5.31 / 6.08; light 4.10 / 4.64 / 3.83 / 3.15). Without it the
-   dark-theme dots die on the near-white slab (busy 1.63, attention 1.55).
-   Absolutely positioned so it costs the first grid column nothing: widening
-   .sess-lamp would push this row's label ~10px right of every sibling's and
-   break the shared left edge. At 18px centred on an 8px dot it overhangs 5px
-   per side into the row's own 8px padding and 8px gap — no reflow, no tap
-   target moves. */
-.sess-line--active .sess-lamp { position: relative; }
-.sess-line--active .sess-lamp::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: var(--lamp-size);
-  height: var(--lamp-size);
-  margin: calc(var(--lamp-size) / -2) 0 0 calc(var(--lamp-size) / -2);
-  border-radius: var(--r-full);
-  background: var(--bg-well);
-}
-/* The plate is positioned; without this it paints over the unpositioned dot. */
-.sess-line--active .sess-lamp > .dot { position: relative; }
-
-/* The ··· keeps its 32×32 box, hairline and tap overlay — it flips polarity
-   with the row instead of dissolving into it. Its normal --bg-raised fill is
-   14.32:1 against the slab, i.e. a bright chip punched into the bar, the
-   inverse of its shipped identity. Re-grounding to --bg-page keeps the matched
-   pair with .proj-card-add intact in form (glyph 9.36:1 dark / 6.81:1 light on
-   that fill). The hairline stays exempt as a hairline, exactly as
-   --edge-subtle on --bg-raised is. */
-.sess-line--active .sess-actions {
-  background: var(--bg-page);
-  border-color: var(--edge-strong);
-  color: var(--ink-secondary);
-}
-
-/* base.css draws :focus-visible in --accent, which measures 1.63:1 on the dark
-   slab — an invisible ring on exactly the row most likely to hold focus.
-   Colour only, plus a 1px offset so the ring's outer edge lands 3px out,
-   inside the row's own 4px padding, instead of flush with the slab's edge
-   where subpixel rounding can drop 1px onto --bg-surface. */
-.sess-line--active :focus-visible {
-  outline-color: var(--bg-page);
-  outline-offset: 1px;
-}
-
-/* Forced colours flatten fill AND ink to Canvas/CanvasText: the polarity
-   channel does not exist there, and the row would be left with font-weight
-   alone. An inset border is the channel that survives. */
+/* Forced colours flatten fill AND ink to Canvas/CanvasText and drop the
+   inset box-shadow, so neither the tint nor the rail exists there, and the
+   row would be left with font-weight alone. An inset outline is the channel
+   that survives. */
 @media (forced-colors: active) {
   .sess-line--active {
+    outline: 2px solid CanvasText;
+    outline-offset: -2px;
+  }
+  /* D-5495: the folded card's name stands in for the hidden selected row with
+     the same tint and rail, which forced colours drop too; every card name is
+     semibold already, so it takes the row's outline. */
+  .proj-card[data-holds-selection] .proj-card-name {
     outline: 2px solid CanvasText;
     outline-offset: -2px;
   }
@@ -1268,8 +1172,9 @@
    rather than a cell inside the .sess-meta the tally sits in. Unlike
    .sess-tally/.sess-cleanup-fact/.sess-subagents above, .sess-subagent-row
    below sets its own colour rather than inheriting .sess-meta's (it is not a
-   descendant of it) — same shape as .sess-ask further down, and it needs the
-   matching .sess-line--active override for the same reason that one does.
+   descendant of it) — same shape as .sess-ask further down. On the selected
+   row it keeps that colour on the accent tint, where the gate measures it
+   (D-5101).
    A real <ul> now that a <div>, not a <button>, is the ancestor: list-style
    and the list's own margin/padding are zeroed here rather than trusted to
    preflight, same reasoning as .sess-subagents above. */
@@ -1319,15 +1224,11 @@
    long time reads louder than the quiet reading above, so it borrows
    .sess-warn's own --status-dead-text rather than minting a new ink. An
    ATTRIBUTE variant, not a class, so `session-line.test.tsx`'s automated
-   "every coloured class is answered on the selected slab" census (which
-   scans literal `className` strings only) never has to know this state
-   exists — same idiom `.sess-spawn[data-spawn]`'s own variants already use,
-   and the same reason: this file states the achromatic answer for the BASE
-   class below, and this rule's own higher specificity — not source order —
-   is what keeps the selected+wedged row from losing that answer to this
-   variant (mirrors `.sess-line--active .sess-spawn[data-spawn]` a few
-   screens down; see fleet-css.test.ts's dedicated specificity proof on that
-   cell for the failure mode this avoids). */
+   "every coloured cell paints an ink the gate measures on the tint" census
+   (which scans literal `className` strings only) never has to know this
+   state exists — same idiom `.sess-spawn[data-spawn]`'s own variants already
+   use. Its --status-dead-text is one of the inks that census admits, and
+   the selected row keeps it on the accent tint (D-5101). */
 .sess-ctxpressure[data-wedge] {
   color: var(--status-dead-text);
   font-weight: var(--weight-medium);
@@ -1371,9 +1272,8 @@
    fleet screen carries the amber; a red chip per row would say it N times).
    Fixed words ("unreachable tmux"), so `flex: none` like its sibling — the
    reason lives in `title`, never rendered here. Its own `color` takes it out
-   of .sess-meta's inheritance, so it is also named in .sess-line--active's
-   achromatic group above — see that rule's comment for the ratios this
-   costs while a cell is not. */
+   of .sess-meta's inheritance, and the selected row keeps it on the accent
+   tint, where the gate measures --ink-tertiary (D-5101). */
 .sess-substrate {
   color: var(--ink-tertiary);
   flex: none;
@@ -1386,13 +1286,66 @@
    selector on the rule above, because that rule's key is grandfathered in
    the contrast gate's uncovered census and renaming it would read as a new
    blind spot. Its own `color` takes it out of .sess-meta's
-   inheritance, so it is also named in .sess-line--active's achromatic group,
-   which answers the selected row. The unselected row's ground is the project
+   inheritance, and the selected row keeps it on the accent tint, where the
+   gate measures --ink-tertiary (D-5101). The unselected row's ground is the project
    card: design/audit.mjs's INHERITED_GROUNDS entry for this rule is what makes
    that pair MEASURED rather than a new entry in the uncovered census. */
 .sess-child {
   color: var(--ink-tertiary);
   flex: none;
+}
+/* D-5528 — the programme-and-wave label (`ProgrammeWave` in SessionMeta.tsx),
+   in `.sess-child` or, when an active run explains the hold, in `.sess-held`'s
+   place. The slug is variable-length, so the plain `.sess-child` text's
+   `flex: none` (fixed hedges: "run not on the board", "child marker
+   unreadable") no longer holds for it: the PROGRAMME ellipsises and the wave —
+   the fact the operator asked for — stays whole. The cell's floor is the
+   middot plus the wave, in mono characters: `--pw-wave` is set on the row's
+   `.sess-meta` from the wave's own text (a flex item's min-content would be
+   the whole label, so the floor cannot come from layout). `display: flex` on
+   the cell keeps `.sess-meta`'s middot `::before` on the label's line. No
+   colour here: the cell's own rule answers. (Measured and rejected: a shrink
+   factor under 1 so the lane gives way first — a lone unfrozen item whose
+   factor sums under 1 takes only that fraction of the deficit, so the cell
+   never shrank and the row's clip ate the wave.) */
+.sess-held:has(> .sess-pw),
+.sess-child:has(> .sess-pw) {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: calc(var(--pw-wave) + 1ch + 2 * var(--sp-1));
+  overflow: hidden;
+  font-family: var(--family-mono);
+}
+/* The context-pressure alarm never shrinks, and an alarm outranks the wave:
+   on a row that carries both and has no room, the floor stands down and the
+   wave clips (its words stay in the cell's title). */
+.sess-held:has(> .sess-pw):has(~ .sess-ctxpressure),
+.sess-child:has(> .sess-pw):has(~ .sess-ctxpressure) {
+  min-width: 0;
+}
+/* `--pw-wave`'s declared default; the row's inline style (SessionMeta.tsx)
+   outranks it with the wave's own width. */
+.sess-meta:has(> * > .sess-pw) {
+  --pw-wave: 0ch;
+}
+/* The lane gives way before the programme on a crowded phone row: the account
+   is a hue and a name repeated in the row's title, the programme is the row's
+   one statement of what it is doing. */
+.sess-meta:has(> * > .sess-pw) > .sess-acct {
+  flex-shrink: 20;
+}
+.sess-pw {
+  display: flex;
+  min-width: 0;
+}
+.sess-pw-prog {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sess-pw-wave {
+  flex: none;
+  white-space: pre;
 }
 
 /* D-5237: "restarted · out of memory · 3m ago", for an hour after a recorded
@@ -1403,8 +1356,8 @@
    truncating mono cells (below), so the shape census sees one rule; its ink
    is its own rule, not a member of .sess-held's colour group, so that
    grandfathered selector stays as it is, and design/audit.mjs grounds it on
-   the project card. The selected row is answered by the achromatic group
-   above. */
+   the project card. The selected row keeps it on the accent tint, where the
+   gate measures --ink-tertiary (D-5101). */
 .sess-restart {
   color: var(--ink-tertiary);
 }
@@ -1424,10 +1377,10 @@
    the same reason — a short, verbatim, ink-tertiary fact with its full text
    in `title`.
 
-   The `color` below is UNSELECTED ink only. Setting a colour here at all is
-   what takes these cells out of .sess-meta's inheritance, so each one also
-   has to be named in .sess-line--active's achromatic group above — see the
-   comment on that rule for the ratios this cost while they were not. */
+   The `color` below is the cells' ink on every row. Setting a colour here at
+   all takes these cells out of .sess-meta's inheritance; the selected row
+   keeps it on the accent tint, where the gate measures --ink-tertiary
+   (D-5101). */
 /* ONE TRUNCATING MONO CELL, seven slots of the session line. The four
    declarations under the colour are the same four `.sess-stranded` and
    `.sess-acct` each declared for themselves — siblings in one component, so
@@ -1466,6 +1419,43 @@
    guarding that ceiling the same way `.sess-label` guards its own width. No
    `margin-left` any more — `.sess-open`'s `gap` (above) now does the
    spacing between the two cells, and doing it twice would double it. */
+/* D-5527 — whose code a row works on, when the card it renders on is another
+   project's (a coordinator's dispatched child from a different project). On the
+   label's line, before `.sess-repo`, because the meta line ellipsises at 360
+   and this is the one fact that must survive there. The project name in mono,
+   like the card head's own project name, with the vendored `folder-code` icon
+   stroked in the same ink; a hairline in that ink marks it as a chip, on the
+   card's own surface, painted here so the contrast gate measures the pair
+   (a chip whose ground only the DOM knows would join the uncovered census,
+   which is frozen while the skins foundations' #402 is open). `flex: none` keeps it whole while
+   `.sess-label` ellipsises first; a very long project name ellipsises inside. */
+.sess-workson {
+  flex: none;
+  display: inline-flex;
+  align-self: center;
+  align-items: center;
+  gap: 3px;
+  max-width: 45%;
+  padding: 0 var(--sp-1);
+  border: 1px solid currentColor;
+  border-radius: var(--r-sm);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  line-height: 1.5;
+  color: var(--ink-secondary);
+  background: var(--bg-surface);
+  white-space: nowrap;
+}
+.sess-workson-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sess-workson svg {
+  width: 12px;
+  height: 12px;
+}
+
 .sess-repo {
   flex: none;
   max-width: 45%;
@@ -1535,10 +1525,9 @@ button.sess-held {
      button font, and it also outranks `.sess-held`'s own `font-family`
      declaration above (0,1,1 beats 0,1,0), so the mono face has to be restated
      here or the cell silently changes typeface the moment it becomes a door.
-     `color` is deliberately NOT restated — `.sess-held` above and
-     `.sess-line--active .sess-held` (0,2,0, which still outranks this rule)
-     both keep answering for it, and a copy here would be one more place to
-     forget. */
+     `color` is deliberately NOT restated — `.sess-held` above answers for
+     it on every row, the selected one's tint included (D-5101), and a copy
+     here would be one more place to forget. */
   font: inherit;
   font-family: var(--family-mono);
   text-align: left;
@@ -1614,7 +1603,7 @@ button.sess-held {
 
 .sess-sheet-note {
   margin: 0;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-secondary);
 }
 
@@ -1643,7 +1632,7 @@ button.sess-held {
    its failed-fetch text (--status-dead-text), so this needs no new pair. */
 .sess-hold-error {
   margin: 0;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--status-dead-text);
 }
 
@@ -1704,6 +1693,12 @@ button.sess-held {
   color: inherit;
   cursor: pointer;
   text-align: left;
+  /* D-5575, D-5576: with the name floored, what does not fit beside it drops
+     to a second line inside the toggle, the way #647's cells wrap rather than
+     squeeze (D-5545). Every card, folded or not, selected or not: the meta ran
+     past the toggle, under the card's + button. Layout only. */
+  flex-wrap: wrap;
+  row-gap: 2px;
 }
 
 .proj-card-chevron { color: var(--ink-secondary); }
@@ -1713,11 +1708,22 @@ button.sess-held {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
+  /* D-5574, D-5576: a floor, so a long card meta can never crush the name.
+     Every card's, not only the folded one holding the selection: an
+     unselected card's drew at 0px folded at 1280, 16.8px at 360. The floor is
+     the whole name, capped at the line less the chevron and its gap (the
+     chevron draws 6.84px of the toggle's 1em), where the ellipsis above takes
+     over (D-5577: only a name longer than that line is cut); capped at the
+     full line, a long name wrapped away from its chevron.
+     Not a `min-width` length: that pads a short name's tint past its last
+     letter. */
+  flex-shrink: 0;
+  max-width: calc(100% - 1em - var(--sp-2));
 }
 
 .proj-card-count {
   font-family: var(--family-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
   color: var(--ink-secondary);
 }
@@ -1737,19 +1743,23 @@ button.sess-held {
 .proj-card-busy {
   flex: none;
   font-family: var(--family-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--status-busy-text);
 }
 
 /* A fold hides the selected row exactly as it would hide a pending dialog, so
-   the card name wears the slab at chip scale — one idiom at two scales, so
-   "inverted = the one you are in" reads the same on a row and on a folded
-   card. Costs 8px of a nowrap+ellipsis name, on one card, only while folded. */
+   the card name says "the one you are in" on the folded card, in the selected
+   row's own idiom (D-5101, D-5495): the accent tint plus a 2px accent rail,
+   with the name keeping the card's ink and its semibold. It was the row's
+   retired slab at chip scale (an inverted chip). The left padding clears the
+   rail. Costs 10px of a nowrap+ellipsis name, on one card, only while folded. */
 .proj-card[data-holds-selection] .proj-card-name {
-  background: var(--ink-primary);
-  color: var(--bg-page);
+  background: var(--accent-tint);
+  box-shadow: inset 2px 0 0 var(--accent);
   border-radius: var(--r-sm);
-  padding: 0 var(--sp-1);
+  padding: 0 var(--sp-1) 0 calc(var(--sp-1) + 2px);
+  /* The name's floor (D-5574) is the base rule's, every card's (D-5576); it
+     drew at 10px here, its own padding, beside five meta items at 1280. */
 }
 
 /* Pinned account — mono like every other machine value on this screen, and
@@ -1885,7 +1895,7 @@ button.proj-card-pool::before {
   margin-top: var(--sp-3);
 }
 .pool-new-label {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-tertiary);
 }
 /* `.pool-new-input` is `<TextInput>` wearing `TEXT_INPUT_INLINE` plus its own
@@ -1907,6 +1917,15 @@ button.proj-card-pool::before {
   color: var(--ink-tertiary);
 }
 
+/* D-5570: inside an account row's identity group the tag keeps its own width,
+   so it wraps under the name when the line is full, and ellipses only when it
+   is longer than the whole group. `1 1 0` (above) would keep it on the name's
+   line at zero width. Project rows keep the base rule. */
+.acct-ident .acct-pool {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
 .proj-row--selected .acct-pool {
   color: var(--ink-tertiary);
 }
@@ -1918,7 +1937,7 @@ button.proj-card-pool::before {
   background: none;
   border: 0;
   font-family: var(--family-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-secondary);
   text-align: left;
   cursor: pointer;
@@ -1927,7 +1946,7 @@ button.proj-card-pool::before {
 /* An unknown pool changes disclosure, not eligibility. */
 .pool-note {
   margin: 0;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-tertiary);
 }
 
@@ -2008,7 +2027,7 @@ button.proj-card-pool::before {
   gap: var(--sp-1);
   min-height: var(--tap-min);
   min-width: 0;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-secondary);
 }
 .proj-pending-glyph { flex: none; color: var(--ink-tertiary); }
@@ -2121,12 +2140,13 @@ button.proj-card-pool::before {
    label drops --ink-primary -> --ink-secondary (15.68 -> 8.67 dark,
    16.58 -> 7.41 light, both already-gated pairs) and gives up its medium
    weight. Two channels, no compositing, floor cleared in both themes.
-   :not(.sess-line--active) because the selected row reverses out and fills
-   with --ink-primary as a BACKGROUND — --ink-secondary on that slab is 1.81
-   dark / 2.24 light, and project-card.test.tsx:337 renders precisely an
-   archived selected row. This rule sits after .sess-line--active .sess-label
-   in source order and has equal specificity, so the guard is load-bearing,
-   not decorative. */
+   :not(.sess-line--active) keeps the selected archived row's label in the
+   row's own ink and semibold weight, the selection's non-colour channel: this
+   rule sits after .sess-line--active .sess-label in source order with equal
+   specificity, so without the guard it would take the weight back. The
+   selector is kept byte for byte (D-5101): design/audit.mjs's INHERITED_GROUNDS
+   key and contrast.test.ts's mutation anchors name it, and
+   project-card.test.tsx renders precisely an archived selected row. */
 .proj-archived-body .sess-line:not(.sess-line--active) .sess-label {
   color: var(--ink-secondary);
   font-weight: var(--weight-regular);
@@ -2143,11 +2163,11 @@ button.proj-card-pool::before {
 .fleet-runs-row {
   padding: 0 var(--sp-2);
   font-family: var(--family-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-tertiary);
 }
 .archive-screen { display: grid; gap: var(--sp-1); padding: var(--sp-2); }
-.archive-total { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.archive-total { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-secondary); }
 /* `.archive-row` is `<BareRow>` — five rules in this file declared the same six
    declarations. What stays is this row's own grid and ink — see `.fleet-archived-row`. */
 .archive-row {
@@ -2159,7 +2179,7 @@ button.proj-card-pool::before {
 }
 .archive-project { font-size: var(--fs-sm); color: var(--ink-secondary); }
 .archive-slug { font-family: var(--family-mono); font-size: var(--fs-sm); }
-.archive-size { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-tertiary); }
+.archive-size { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-tertiary); }
 .archive-empty { padding: var(--sp-4); color: var(--ink-secondary); }
 
 /* — Task 6 (Build 3 PR G): AccountsScreen — */
@@ -2177,7 +2197,7 @@ button.proj-card-pool::before {
 /* Prose in the UI face, by the rule of voice: "Next workspace lands on … —
    least-loaded" is a sentence. `.accounts-fresh` ("last reported 5m ago") is a
    readout beside a gauge and stays mono; so do the percentages. */
-.accounts-projection { font-family: var(--family-ui); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.accounts-projection { font-family: var(--family-ui); font-size: var(--fs-meta); color: var(--ink-secondary); }
 .accounts-list { display: grid; gap: var(--sp-3); }
 /* ONE CARD IDIOM, two places. `.auth-block` (the passkey block, further down
    this sheet) declared the identical six. Both are SELF-GROUNDED, which is what
@@ -2197,16 +2217,12 @@ button.proj-card-pool::before {
 /* A sentence ("disabled on the fleet host"), so the UI face — see
    `.accounts-projection`. */
 .accounts-disabled-note { font-family: var(--family-ui); font-size: var(--fs-2xs); color: var(--ink-tertiary); }
-/* A disabled lane greys the WHOLE row, not just its label: without this, a
-   lane disabled while its 5h/7d telemetry sat at crit keeps a solid red bar
-   forever (nothing runs there to refresh it), which reads as live pressure
-   on an account the same row calls switched off. Same specificity as the
-   band rules above (.acct-meter[data-band=…] .acct-fill) — this wins on
-   source order (it comes later in the file) regardless of which band a
-   frozen reading happened to land in. Also the only CSS consumer of
-   data-disabled; the two test files' row selector was previously the
-   attribute's only reason to exist. */
-.accounts-row[data-disabled='true'] .acct-fill { background: var(--edge-subtle); }
+/* A disabled lane's meters grey through `Meter`'s `off`, which AccountsScreen
+   passes for the row — not through a rule here reaching into the fill. A lane
+   disabled while its telemetry sat at crit would otherwise keep a solid red
+   bar forever (nothing runs there to refresh it), live pressure on an account
+   the same row calls switched off; `data-band` keeps the frozen reading. The
+   row's `data-disabled` stays for the tests that select the row. */
 /* Freshness ("last reported …") and the disabled note share the same muted
    tertiary ink already vetted elsewhere (.sess-held uses it identically) —
    no new token, no opacity fade to register with the contrast gate. */
@@ -2320,9 +2336,10 @@ button.proj-card-pool::before {
 
 .mail-screen { display: grid; gap: var(--sp-2); padding: var(--sp-2); }
 .mail-head { display: flex; align-items: center; gap: var(--sp-2); }
+.mail-head .mail-digest { margin-left: auto; }
 .mail-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
-.mail-note { font-size: var(--fs-xs); color: var(--ink-secondary); }
-.mail-dropped { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.mail-note { font-size: var(--fs-meta); color: var(--ink-secondary); }
+.mail-dropped { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-secondary); }
 .mail-empty { padding: var(--sp-4); color: var(--ink-secondary); }
 .mail-list { display: grid; gap: var(--sp-1); }
 .mail-row {
@@ -2348,7 +2365,7 @@ button.proj-card-pool::before {
   font-family: var(--family-mono); font-size: var(--fs-2xs);
   font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
-.mail-row .mail-body { grid-column: 1 / -1; font-size: var(--fs-xs); color: var(--ink-secondary); }
+.mail-row .mail-body { grid-column: 1 / -1; font-size: var(--fs-meta); color: var(--ink-secondary); }
 
 /* The programme filter and its headers. Chips take the same ground and the same
    inks the rest of this screen does — `--ink-secondary` for a chip that is off,
@@ -2429,7 +2446,7 @@ button.proj-card-pool::before {
   color: var(--ink-primary); font: inherit;
 }
 .run-row .run-glyph { color: var(--ink-tertiary); }
-.run-row .run-state { font-size: var(--fs-xs); color: var(--ink-secondary); }
+.run-row .run-state { font-size: var(--fs-meta); color: var(--ink-secondary); }
 .run-ws { font-size: var(--fs-sm); }
 /* F4 (cross-repo): which repo this run is in, and whether that is its
    programme's home. Scoped under `.run-row` — self-grounded above, background
@@ -2800,7 +2817,7 @@ button.proj-card-pool::before {
 .program-start-sheet .program-start-ledger,
 .program-start-sheet .program-start-note {
   margin: 0;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-meta);
   color: var(--ink-tertiary);
 }
 /* `--ink-secondary` on `--bg-surface` — 8.67:1 DARK / 7.41:1 LIGHT: the
@@ -2871,8 +2888,8 @@ button.proj-card-pool::before {
   display: flex; flex-wrap: wrap; gap: var(--sp-2);
   padding: var(--sp-1) 0; border-top: 1px solid var(--edge-subtle);
 }
-.hotfiles-holder { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
-.hotfiles-expiry { margin-left: auto; color: var(--ink-tertiary); font-size: var(--fs-xs); }
+.hotfiles-holder { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-secondary); }
+.hotfiles-expiry { margin-left: auto; color: var(--ink-tertiary); font-size: var(--fs-meta); }
 .hotfiles-intent { flex-basis: 100%; color: var(--ink-primary); }
 .hotfiles-paths { list-style: none; margin: 0; padding: 0; flex-basis: 100%; }
 
@@ -2947,7 +2964,14 @@ button.proj-card-pool::before {
    so nothing a contrast-gate entry names moved with them, and the tap floor
    the row carries is the component's rather than this file's. What stays
    below is the part that PAINTS: the theme picker's own rows. */
-.settings-note { font-size: var(--fs-xs); line-height: var(--lh-normal); color: var(--ink-secondary); }
+.settings-note { font-size: var(--fs-meta); line-height: var(--lh-normal); color: var(--ink-secondary); }
+/* Settings Task R1c (D-5503, D-5507): spacing only, no colour; each line's ink is `.settings-note`'s or the amber
+   note's. An option's note sits under its option, its start aligned with the option's sentence (past the 18px radio
+   and the row's gap), pulled up into the tap row's slack. It takes no pointer, so a tap on the band it overlaps still
+   lands on the option's label and the option keeps its 44px tap height. A result line sits directly under its control and takes a
+   line of its own inside a wrapping flex row (the halt banner's node row), wrapping at any width. */
+.settings-option-note { margin: calc(-1 * var(--sp-2)) 0 var(--sp-1); padding-inline-start: calc(18px + var(--sp-2)); pointer-events: none; }
+.settings-result { flex-basis: 100%; min-width: 0; margin: 0; overflow-wrap: anywhere; }
 /* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
    disabled ink; this only stops it filling the section's width. */
 .settings-section .settings-check { width: auto; justify-self: start; padding: 0 var(--sp-3); }
@@ -2981,8 +3005,63 @@ button.proj-card-pool::before {
   border-top: 1px solid var(--edge-subtle);
 }
 .settings-release-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+/* The release window's row (D-5505; settings spec §7.4): a two-column grid, the facts on the left and the row's one
+   action on the right of their first line, so no date shares the action's line and a row never wraps it under the
+   date at 390. Every other child (refusals, notes, folds) spans both columns. LAYOUT ONLY, NO COLOUR: each line
+   wears a class that already carries its ink (.settings-release-date, -refused, -running, .settings-note). */
+.settings-release { grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--sp-3); }
+.settings-release > * { grid-column: 1 / -1; min-width: 0; }
+.settings-release > .settings-release-facts { grid-column: 1; display: grid; gap: var(--sp-1); }
+.settings-release > .settings-release-actions { grid-column: 2; grid-row: 1; align-self: start; }
+.settings-release-facts > p { margin: 0; }
+/* The summary: one line of sans, ellipsised; its ink is the date's. */
+.settings-release-date.settings-release-summary {
+  font-family: var(--family-ui);
+  line-height: var(--lh-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A #NNN link inside the summary is focusable; past the clip edge, focusing it would scroll the clipped line blank.
+   While the line holds focus it unfolds, so the focused link and its ring are in view (layout only). */
+.settings-release-date.settings-release-summary:focus-within {
+  white-space: normal;
+  overflow: visible;
+}
+.settings-release-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-3); }
+/* Notes, What these mean and Refused by are native disclosures: no height animation to honour under reduced
+   motion, and the summary reaches the tap floor the buttons do. */
+.settings-release-fold > summary {
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  min-height: var(--tap-min);
+  cursor: pointer;
+}
+/* display:flex drops the native marker, so the disclosure draws its own: a chevron in the summary's own ink
+   (currentColor, no new colour) pointing right when shut and down when open, a touch cue that hover does not give. */
+.settings-release-fold > summary::-webkit-details-marker { display: none; }
+.settings-release-fold > summary::before {
+  content: "";
+  flex: none;
+  width: 0.4em;
+  height: 0.4em;
+  margin-inline-end: var(--sp-2);
+  border-style: solid;
+  border-width: 0 1.5px 1.5px 0;
+  border-color: currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-fast) var(--curve-swift);
+}
+.settings-release-fold[open] > summary::before { transform: rotate(45deg); }
+@media (prefers-reduced-motion: reduce) {
+  .settings-release-fold > summary::before { transition: none; }
+}
+.settings-release-fold > p { margin: 0 0 var(--sp-1); }
+.settings-window { display: grid; gap: var(--sp-2); min-width: 0; }
+.settings-window > p, .settings-window > h3 { margin: 0; }
 .settings-release-tag { font: var(--weight-medium) var(--fs-sm) / 1 var(--family-mono); }
-.settings-release-date { font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono); color: var(--ink-tertiary); }
+.settings-release-date { font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono); color: var(--ink-tertiary); }
 .settings-badge {
   padding: 2px var(--sp-2);
   border: 1px solid var(--edge-subtle);
@@ -2999,7 +3078,7 @@ button.proj-card-pool::before {
 /* Green only for a MEASURED verdict — some node's provenance at this tag —
    never for `bundle listed`, which keeps the base badge's quiet ink. */
 .settings-badge--verified { background: var(--bg-raised); color: var(--status-busy-text); }
-.settings-release-refused { margin: 0; font-size: var(--fs-xs); color: var(--status-attention-text); }
+.settings-release-refused { margin: 0; font-size: var(--fs-meta); color: var(--status-attention-text); }
 /* Notes are untrusted same-user text, rendered as ONE text child: wrapping
    keeps a long line or an unbroken URL inside the phone's width, and there is
    no markdown, HTML or link pass anywhere on this path. */
@@ -3019,7 +3098,7 @@ button.proj-card-pool::before {
 .settings-node-actions,
 .update-banner-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 /* Wave 8 item F2 (D-3591): the running row's words, in place of a button — quiet, not a badge or a warning. */
-.settings-release-running { font-size: var(--fs-xs); color: var(--ink-tertiary); }
+.settings-release-running { font-size: var(--fs-meta); color: var(--ink-tertiary); }
 /* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
    disabled ink; this only stops it filling the row. Compound on purpose: it
    wins .btn-ghost's `width: 100%` by SPECIFICITY (0,2,0 over 0,1,0), not by
@@ -3060,7 +3139,7 @@ button.proj-card-pool::before {
    same ink .build-line-side--warn uses for the same meaning. */
 .settings-node-current--amber { color: var(--status-attention-text); }
 .settings-node-desired { display: inline-flex; align-items: center; gap: var(--sp-1); }
-.settings-node-detail { margin: 0; font-size: var(--fs-xs); color: var(--ink-tertiary); overflow-wrap: anywhere; }
+.settings-node-detail { margin: 0; font-size: var(--fs-meta); color: var(--ink-tertiary); overflow-wrap: anywhere; }
 /* The three node buttons carry the `btn-ghost settings-move` pair: .btn-ghost
    (primitives.css) supplies the tap floor, the border and the disabled ink,
    and Task 8's compound .btn-ghost.settings-move already stops it filling the
@@ -3160,6 +3239,34 @@ button.proj-card-pool::before {
   color: var(--status-dead-text);
 }
 
+/* — What's new (D-5549): the update banner's sheet (WhatsNewSheet.tsx) —
+   LAYOUT ONLY, NO COLOUR. The notes inside wear `.settings-release-notes`, the
+   self-grounded block the Settings rows already use, so every pair is one the
+   contrast gate already measures; the tag and date lines take the sheet's own
+   ink. In the sheet the notes read at the prose size rather than the Settings
+   row's compact one.
+   ≥900 the panel is a centred dialog (the skins rules' desktop arm for a sheet,
+   which the shared Sheet does not have yet): this rule is unlayered, so it
+   re-places the primitive's layered bottom-sheet utilities — all four insets
+   to 0, auto margins and a content height centre it, the corners all round. */
+.whats-new-sheet .settings-release-notes { font-size: var(--fs-sm); }
+@media (min-width: 900px) {
+  .whats-new-panel {
+    inset: 0;
+    margin: auto;
+    width: min(40rem, calc(100vw - 2 * var(--sp-8)));
+    height: fit-content;
+    max-height: calc(100dvh - 2 * var(--sp-8));
+    border-radius: var(--r-xl);
+  }
+  /* vaul draws an `::after` under a bottom drawer (`top: 100%; height: 200%`,
+     the panel's own ground) to cover an overscroll pull. Under a centred panel
+     it is a strip of sheet below the dialog. vaul injects that rule unlayered at
+     runtime, after this sheet, at higher specificity, so only importance removes
+     it — the handle-ground precedent in `sheet.tsx`. */
+  .whats-new-panel::after { content: none !important; }
+}
+
 /* HaltBanner (centralised-update programme wave 14, R15(a)): the home screen's halt, with each halting node's Ack
    in place. Self-grounded on the attention pair the fleet-host banner's warn arms and .substrate-banner already use
    (--status-attention-text on --status-attention-tint, both solid, floored at 4.5 by design/contrast-check.mjs), so
@@ -3213,9 +3320,13 @@ button.proj-card-pool::before {
  *  and inside a stamped swatch the token resolves to the palette      *
  *  being previewed. That is why there is no list of hexes to drift.   *
  * ------------------------------------------------------------------ */
+/* The radio rides the NAME's line (D-5458): on a phone the note wraps to two
+   or three lines, and a radio centred on the whole row floated beside the
+   note, away from the word it chooses. `baseline` puts the radio on the
+   name's first line at every width, with or without a swatch. */
 .settings-theme {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: var(--sp-3);
   min-height: var(--tap-min);
   padding: var(--sp-2) var(--sp-2);
@@ -3247,7 +3358,7 @@ button.proj-card-pool::before {
 }
 .settings-theme-name {
   font-family: var(--family-ui);
-  font-size: var(--fs-base);
+  font-size: var(--fs-ui);
   color: var(--ink-primary);
 }
 /* A group heading inside the fieldset — not a second <legend>, which would be
@@ -3273,28 +3384,65 @@ button.proj-card-pool::before {
 }
 
 /* ── reduced motion, part two ──────────────────────────────────────────
-   A SECOND block, and its POSITION is the whole point. A media query adds
-   no specificity, so the block near the top of this file can only beat a
-   rule declared BEFORE it — every selector it names is, which is why it
-   works. `.acct-fill` is declared later, so naming it up there sets
-   `transition: none` and then the rule's own `transition` re-declares it a
-   thousand lines down and wins. Measured: adding it to the first block
-   changed nothing.
-
-   `.program-start-door` and `.program-start-go` were the other two, and both
-   left when they became `<Button variant="quiet">`: the component carries
-   `motion-reduce:transition-none` itself, which is a utility on the element
-   rather than a rule in this sheet, so no position argument applies to them.
-
-   .acct-fill animates its WIDTH as a usage window fills. The first block's
-   `.acct-list .acct-row` entry never covered it — `transition` does not
-   inherit, and that row declares none of its own. The two program-start
-   controls are ordinary press transforms that were simply missed.
-
-   motion-reduced.test.ts checks BOTH halves now: that a moving rule is
-   named, and that the naming block is positioned to win. */
+   A SECOND block, and its POSITION is the whole point: a media query adds no
+   specificity, so the block near the top of this file can only beat a rule
+   declared BEFORE it. It once held `.acct-fill`, whose own `transition` sat a
+   thousand lines below the first block; the fill's motion is now `Meter`'s,
+   which carries `motion-reduce:transition-none` on the element itself
+   (D-5098), so that entry went with the rule it governed.
+   `.sess-line` now needs it: its hover ground fades at --dur-fast (D-5101,
+   Task 9 Step 4), and the row is declared after the first block.
+   motion-reduced.test.ts checks BOTH halves: that a moving rule is named, and
+   that the naming block is positioned to win. */
 @media (prefers-reduced-motion: reduce) {
-  .acct-fill {
+  .sess-line {
     transition: none;
   }
+}
+
+/* D-5545: THE CARD IS A GLANCE, and no fact on it is cut by an ellipsis. The
+   name and the programme are shortened by whole tokens in `sessionFacts.ts`
+   (`shortenByToken`), the context fact sits on a line of its own
+   (`.sess-meta--context`), and every cell that used to ellipsise wraps at a
+   space instead — never inside a token — so a fact is either whole or, in the
+   rare row that still does not fit, on two lines. The cross-project chip drops
+   under the name rather than squeezing it. The same cells in the session
+   header's details (`.chat-facts`, chat.css) wrap the same way. Layout only:
+   no colour declaration here, so the contrast gate's census is unchanged. */
+.sess-open { flex-wrap: wrap; row-gap: 2px; }
+.sess-label { white-space: normal; text-overflow: clip; overflow: visible; }
+.sess-workson { max-width: 100%; }
+.sess-meta > * { min-width: 0; }
+.sess-meta > .sess-held,
+.sess-meta > .sess-context,
+.sess-meta > .sess-marker,
+.sess-held:has(> .sess-pw),
+.sess-child:has(> .sess-pw) {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.sess-meta > .sess-marker { font-family: var(--family-mono); }
+.sess-meta .sess-pw { display: inline; }
+.sess-meta .sess-pw-prog { white-space: normal; overflow: visible; text-overflow: clip; }
+
+/* D-5545, verifier round 1: a FIXED character budget cut the name and the
+   programme to `…` at every width, desktop included. The card now draws both
+   forms (`Fit`, SessionMeta.tsx: the full text and the token-shortened one,
+   both aria-hidden, the full text spoken once) and the card's own column
+   picks: the shortened form only in a phone-narrow column (226px at 360,
+   256px at 390 — the widths the budget was measured at), the full text,
+   wrapping at a hyphen or a space, wherever the column is 320px or wider.
+   `.sess-body` already sits in a `minmax(0, 1fr)` track, so containing its
+   inline size changes nothing about its layout. Layout only: no colour. */
+.sess-body { container: sess-body / inline-size; }
+/* The long name's two forms sit in one flex item that takes `.sess-label`'s
+   place in the row (the TypedLabels inside keep `.sess-label` itself). */
+.sess-label-fit { display: block; flex: 1 1 auto; min-width: 0; }
+.fit-full { display: none; }
+@container sess-body (min-width: 320px) {
+  .fit-full { display: inline; }
+  .fit-short { display: none; }
 }

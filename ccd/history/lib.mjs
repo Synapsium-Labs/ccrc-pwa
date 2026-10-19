@@ -151,6 +151,13 @@ export const TMUX_DEADLINE_MS = 2000;               // `tmux display-message -p 
 export const REPARSE_MAX_TARGETS = 500;
 export const CARRIER_KILL_S = 600;                  // == the unit's TimeoutStartSec=10min (DM43)
 export const EXPORT_MARGIN_DAYS = 30;
+// W1-B4 (spec §9.15): the sole-copy export's directory under the root, its segment bound and cadence (both chosen),
+// and the one segment format this build writes and reads. Declared here, above MODE_CHECKED_FILE_ROOTS, which
+// names EXPORT_DIR: a const read before its declaration is a TDZ error at load.
+export const EXPORT_DIR = 'export';
+export const EXPORT_SEGMENT_MAX_BYTES = 256 * 1024 * 1024;
+export const EXPORT_PASS_INTERVAL_MS = 60 * 60 * 1000;
+export const EXPORT_SEGMENT_FORMAT = 1;
 export const LINE_MAX = 16 * 1024 * 1024;           // a longer transcript line is stored raw-only
 /** The largest decompressed size (raw_len) a reader that must hold a whole stored body will decode. A body stored
  *  from a row Claude Code wrote (JSON.stringify output) re-encodes at no more than its line's length, so it is within
@@ -2853,15 +2860,27 @@ function perCopyDueMs(c, homeRetentionDays) {
 export function planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.perCopy }) {
   const due = [];
   const overdue = [];
+  let oldestDueSinceMs = null;
   for (const blob of blobs) {
     if (blob.referrers.length === 0) continue;
     const isDue = blob.referrers.every((r) => reducer(r, homeRetentionDays) < nowMs);
     if (!isDue) continue;
     due.push(blob.key);
+    // W1-B4: when this blob fell due — when its LAST referrer fell due, by the reducer's own due time (B2's per-copy
+    // default, B2's D-4735 (history-export-due-per-copy)), a referrer due from the start dated by its recorded files — and the
+    // earliest over every DATED due blob, which doctor's wait rule reads from the census (§9.15 "The gap guard",
+    // "How long a due blob has waited"). A blob with an undated referrer dates by its dated ones (the early side);
+    // one with none stays due and counted, undated, and never stands in for the epoch.
+    let since = null;
+    for (const r of blob.referrers) {
+      const t = dueSinceMs(r, homeRetentionDays, reducer);
+      if (t !== null && (since === null || t > since)) since = t;
+    }
+    if (since !== null && (oldestDueSinceMs === null || since < oldestDueSinceMs)) oldestDueSinceMs = since;
     const gone = blob.referrers.every((r) => r.files.every((f) => !f.present || fileDeletionMs(f, homeRetentionDays) < nowMs));
     if (gone) overdue.push(blob.key);
   }
-  return { horizonDays: exportHorizonDays(shortestRetention(homeRetentionDays)), due, overdue };
+  return { horizonDays: exportHorizonDays(shortestRetention(homeRetentionDays)), due, overdue, oldestDueSinceMs };
 }
 
 /** The file clock (§9.15): when Claude Code's own cleanup deletes a holding file, its mtime plus ITS home's
@@ -3289,6 +3308,9 @@ export const HEALTH_META = Object.freeze({
   recoverUnmovedTicks: 'recover_unmoved_ticks',
   exportSegmentNewer: 'export_segment_newer',
   exportSegmentMissing: 'export_segment_missing',
+  exportPassMs: 'export_pass_ms',               // W1-B4: when the last export pass ran (doctor's last-pass rule)
+  exportDueOldestMs: 'export_due_oldest_ms',    // W1-B4: the census's oldest due-since (doctor's wait rule)
+  exportPaused: 'export_paused',                // W1-B4: the export's pause for room on the home filesystem
   // D-5027 (history-held-pass-is-fresh-for-tick-stale): the held arm of a scheduled pass stamps the time it ended (ms).
   heldPassMs: 'held_pass_ms',
 });
@@ -3309,7 +3331,7 @@ export const HEALTH_COUNTERS = Object.freeze({
  *  `retention.unmeasured`). Spelled once, here. */
 export const RETENTION_STATE_META = 'retention_state:';
 
-const MODE_CHECKED_FILE_ROOTS = Object.freeze(['db', 'card', 'steer', 'journal', 'export']);
+const MODE_CHECKED_FILE_ROOTS = Object.freeze(['db', 'card', 'steer', 'journal', EXPORT_DIR]);
 
 /** The mode §9.6 wants for one entry under ~/.ccrc/history, by its
  *  root-relative path (`.` is the root itself): every directory 0700; a file
@@ -3450,6 +3472,10 @@ function remedyFor(word, h) {
       return h.retentionLowered !== null
         ? `set cleanupPeriodDays in ${h.retentionLowered.home}/settings.json to at least ${h.retentionLowered.othersMin}`
         : HEALTH_REMEDIES['retention-lowered'];
+    case 'export-due':
+      return exportDueRemedy(h);
+    case 'export-overdue':
+      return exportOverdueRemedy(h);
     default:
       return HEALTH_REMEDIES[word] ?? '';
   }
@@ -3659,7 +3685,8 @@ export function deriveHealth(h) {
   if (h.breakerOpen) warn.push(item('breaker-open', 'a breaker is open'));
   if (h.rosterUnreadable) warn.push(item('roster-unreadable', '~/.ccrc/accounts.sh cannot be read, so no account home is discovered'));
   if (h.rootIsSymlink) warn.push(item('root-is-symlink', '~/.ccrc/history is itself a symlink'));
-  if (h.exportDue > 0 && !h.exportWriterLive) warn.push(item('export-due', `${h.exportDue} unexported blob(s) are due by the horizon, and this build has no export writer`));
+  const exportGap = exportGapArm(h);   // W1-B4 Task 9: the gap guard's arms (§9.15), decided at the end of this file
+  if (exportGap !== null) warn.push(item('export-due', exportDueDetail(exportGap, h)));
   if (h.exportPausedLowDisk) warn.push(item('export-paused-low-disk', 'the export is paused for room on the home filesystem'));
   if (h.retentionUnmeasured.length > 0) warn.push(item('retention-unmeasured', `the retention of ${h.retentionUnmeasured.join(', ')} could not be read; each keeps its last measured value`));
   if (h.retentionLowered !== null) {
@@ -5748,9 +5775,11 @@ export function decideReparse({ targets, prunedSpans }) {
 
 /** The recovery step's phases, in order (§9.14). `index` applies the redact records and indexes drain-time
  *  verdicts and drained files; `apply` replays the journal; `reindex` re-runs the FTS derivation when the index
- *  pass learned a pair the store lacked. B4 inserts its export phases between `apply` and `reindex` (§9.14
- *  "Export replay"): this list is that seam. D-4700 (history-b4-after-b2) */
-export const RECOVER_PHASES = Object.freeze(['index', 'apply', 'reindex']);
+ *  pass learned a pair the store lacked. `export-blobs`, `export-stubs` and `export-rows` (W1-B4) replay the export's
+ *  segments between `apply` and `reindex` (§9.14 "Export replay"): this list is that seam. `export-blobs` applies every
+ *  segment's blobs that carry bytes and `export-stubs` every segment's stubs (D-5397), both insert-or-ignore, so a stub an
+ *  earlier segment carries can never swallow bytes a later one carries. D-4700 (history-b4-after-b2) */
+export const RECOVER_PHASES = Object.freeze(['index', 'apply', 'export-blobs', 'export-stubs', 'export-rows', 'reindex']);
 
 /** The phases that read the journal, and so carry a journal file and position in their cursor: the first two of
  *  RECOVER_PHASES. The sweep's executor fails these while a journal file cannot be read (D-4592), and the cursor grammar
@@ -5760,23 +5789,39 @@ export const RECOVER_JOURNAL_PHASES = Object.freeze(['index', 'apply']);
 const RECOVER_JOURNAL_CURSOR_RE = new RegExp(
   `^(${RECOVER_JOURNAL_PHASES.join('|')})(?::([0-9]{4}-(?:0[1-9]|1[0-2])\\.[0-9a-f]{8}\\.jsonl):(0|[1-9][0-9]{0,15})(?:\\/([1-9][0-9]{0,15}))?)?(\\+pairs)?$`);
 const RECOVER_REINDEX_CURSOR_RE = /^reindex(?::(0|[1-9][0-9]{0,15}))?(\+pairs)?$/;
+// W1-B4: an export phase names a segment (lib parseSegmentName's grammar, checked apart so it is spelled once) and a
+// position in it: a blobs rowid in export-blobs and export-stubs, a row ord in export-rows (§9.14 "Recovery": "then an
+// export phase and segment"; D-5397 for export-stubs).
+const RECOVER_EXPORT_CURSOR_RE = /^(export-blobs|export-stubs|export-rows)(?::([^:+]+):(0|[1-9][0-9]{0,15}))?(\+pairs)?$/;
 
 /** The recovery step's cursor as derivation_state ('recover', <bind ms>) keeps it and status prints it (§9.14):
  *  `<phase>` at a phase's start, `index:<YYYY-MM>.<writer>.jsonl:<position>/<n>` or `apply:…` inside the journal,
- *  `reindex:<blob_id>` inside the FTS re-derivation, then `+pairs` once the index pass learned a pair the store
- *  lacked. It is advanced in the same transaction as the records it applies.
+ *  `export-blobs:<seq>.<writer>.db:<blobs rowid>`, `export-stubs:<seq>.<writer>.db:<blobs rowid>` or
+ *  `export-rows:<seq>.<writer>.db:<row ord>` inside the export's segments (W1-B4: `file` is the segment's name, `offset`
+ *  the last blobs rowid applied in export-blobs and export-stubs and the last row `ord` applied in export-rows, and there
+ *  is no `/<n>`), `reindex:<blob_id>` inside the FTS re-derivation, then
+ *  `+pairs` once the index pass learned a pair the store lacked. It is advanced in the same transaction as the records
+ *  it applies.
  *  D-4607 (history-recover-cursor-records-group-shape): the position is a byte offset into a group of one file and an
  *  ordinal into a merge group's merged list, so the cursor records the group's file count `n` beside it. The executor
  *  resumes only a group whose size still equals `n`; a cursor with no `/<n>` (written before the size was kept, or
  *  `groupSize` null or absent) restarts its group from its start. A `groupSize` that is none of null, absent or a positive safe
- *  integer throws a TypeError (H-182): parseRecoverCursor answers null to such a text, so it would stall the step for good. */
+ *  integer throws a TypeError (H-182): parseRecoverCursor answers null to such a text, so it would stall the step for good.
+ *  So does a `groupSize` set beside a phase outside RECOVER_JOURNAL_PHASES (W1-B4; D-5398
+ *  (history-recover-cursor-group-only-in-journal)): only the journal phases' grammar has a `/<n>`, and an export or reindex
+ *  cursor written with one would be a text parseRecoverCursor refuses, the same stall. */
 export function formatRecoverCursor(c) {
   if (!RECOVER_PHASES.includes(c.phase)) throw new TypeError(`formatRecoverCursor: phase outside RECOVER_PHASES: ${String(c.phase)}`);
   let s = c.phase;
-  // H-182 (D-4607): only a size parseRecoverCursor reads back is written, so a committed cursor is never one lib refuses.
+  // H-182 (D-4607): only a group size parseRecoverCursor reads back is written: a positive safe integer, and only beside
+  // a journal phase's position, the one grammar with a `/<n>` part. A size set beside an export or reindex phase would
+  // print a cursor the parser refuses, which the step then waits on for good.
   const g = c.groupSize;
   if (g !== undefined && g !== null && !(Number.isSafeInteger(g) && g >= 1)) {
     throw new TypeError(`formatRecoverCursor: groupSize is not a positive safe integer: ${String(g)}`);
+  }
+  if (g !== undefined && g !== null && !RECOVER_JOURNAL_PHASES.includes(c.phase)) {
+    throw new TypeError(`formatRecoverCursor: groupSize is set beside phase ${c.phase}, which has no group: ${String(g)}`);
   }
   if (c.phase === 'reindex') {
     if (c.blobId !== null) s += `:${c.blobId}`;
@@ -5805,6 +5850,13 @@ export function parseRecoverCursor(s) {
     const blobId = r[1] === undefined ? null : Number(r[1]);
     if (blobId !== null && !Number.isSafeInteger(blobId)) return null;
     return { phase: 'reindex', file: null, offset: 0, blobId, groupSize: null, pairsAdded: r[2] !== undefined };
+  }
+  const x = RECOVER_EXPORT_CURSOR_RE.exec(s);
+  if (x !== null) {
+    if (x[2] !== undefined && parseSegmentName(x[2]) === null) return null;
+    const offset = x[3] === undefined ? 0 : Number(x[3]);
+    if (!Number.isSafeInteger(offset)) return null;
+    return { phase: x[1], file: x[2] ?? null, offset, blobId: null, groupSize: null, pairsAdded: x[4] !== undefined };
   }
   return null;
 }
@@ -8064,4 +8116,485 @@ export function decideCardWithdraw(p) {
   if (!p.ingested) return withdrawFor('roster-unreadable');
   if (!p.budgetLeft) return withdrawFor('budget');
   return { act: 'keep' };
+}
+
+// ===========================================================================
+// The sole-copy export's decisions (spec §9.15 "The pass": Preflight, Write;
+// §9.3 the floor; §6.2 ingest_files.source_key; W1-B4 Task 1). Pure: the sweep
+// measures the export filesystem, lists export/<store_id>/ and reads meta, and
+// passes what it saw; every verdict on those facts is taken here.
+// D-4754 (history-sole-copy-export) D-4226
+// B2's D-4695 (history-backup-preflight-and-rename) D-4179
+// D-4755 (history-export-cadence-from-first-tick)
+// ===========================================================================
+
+/** A published segment's name (§9.15 "Write"): `<seq>.<writer>.db`, seq a positive decimal with no leading zero
+ *  and at most 16 digits (then a safe integer), writer the binding's 8-hex token (WRITER_RE's grammar). */
+const SEGMENT_NAME_RE = /^([1-9][0-9]{0,15})\.([0-9a-f]{8})\.db$/;
+
+/** The name segment `seq` of `writer` is published under. A part off its grammar is a caller's bug and throws: no
+ *  file name is ever formed from an unchecked part. */
+export function segmentName({ seq, writer }) {
+  if (!Number.isSafeInteger(seq) || seq < 1) throw new TypeError(`segmentName: seq must be a positive safe integer, got ${String(seq)}`);
+  if (typeof writer !== 'string' || !WRITER_RE.test(writer)) throw new TypeError(`segmentName: writer must be 8 lowercase hex, got ${JSON.stringify(writer)}`);
+  return `${seq}.${writer}.db`;
+}
+
+/** A segment name back to its parts, or null when it is not one: a temp, a stray file, a seq with a leading zero
+ *  or past the safe integers. */
+export function parseSegmentName(name) {
+  if (typeof name !== 'string') return null;
+  const m = SEGMENT_NAME_RE.exec(name);
+  if (m === null) return null;
+  const seq = Number(m[1]);
+  return Number.isSafeInteger(seq) ? { seq, writer: m[2] } : null;
+}
+
+/** The temp a segment is built in before its link (§9.15: `.<seq>.<writer>.db.tmp`), a dot-name beside it, so it is
+ *  never a published name. Only a segment name has one. */
+export function segmentTempName(name) {
+  if (parseSegmentName(name) === null) throw new TypeError(`segmentTempName: not a segment name: ${JSON.stringify(name)}`);
+  return `.${name}.tmp`;
+}
+
+/** Segment names in the order replay applies them (§9.14 "Export replay": `(seq, writer)`): seq numerically, then
+ *  the writer token in code-unit order, never the names' own lexical order (`10.…` before `9.…`). A name that is
+ *  not a segment's is dropped. */
+export function orderSegmentNames(names) {
+  const parsed = [];
+  for (const n of names) {
+    const p = parseSegmentName(n);
+    if (p !== null) parsed.push({ n, ...p });
+  }
+  parsed.sort((a, b) => a.seq - b.seq || (a.writer < b.writer ? -1 : a.writer > b.writer ? 1 : 0));
+  return parsed.map((p) => p.n);
+}
+
+/** The next segment number (§9.15 "Write"): one past the highest seq on disk under export/<store_id>/, of any
+ *  writer, and past the one meta last recorded, so a restored or rebuilt store whose counter is behind, or a
+ *  directory carried in from another box, never has a number reused. A recorded value that is not a positive safe
+ *  integer was not recorded. */
+export function nextSegmentSeq({ onDisk, recorded }) {
+  let top = Number.isSafeInteger(recorded) && recorded > 0 ? recorded : 0;
+  for (const s of onDisk) if (s > top) top = s;
+  return top + 1;
+}
+
+/** Whether this tick runs the export pass (§9.15 "The pass": at most once an hour, chosen). The clock runs from the
+ *  later of the last pass and the attempt clock (below) or, before either, from the store's first tick (D-4755
+ *  (history-export-cadence-from-first-tick)): a new store writes no segment in its first hour. This is the cadence's
+ *  clock alone: doctor's last-pass rule reads the last completed pass only (`lastPassMs`, which an attempt never moves),
+ *  and never the attempt clock or the first tick, so the two no longer read one clock. A clock that
+ *  went backwards (a last pass or first tick after now) runs the pass rather than wait for the clock to catch up:
+ *  an early segment costs nothing, a late one widens the window in which the store is the only copy
+ *  (D-4756 (history-export-cadence-clock-backwards)). No clock at all waits: the tick that asks has recorded its own
+ *  ticks row, so the next tick has one. `intervalMs` is exportPassIntervalMs' answer: an hour, or longer after
+ *  passes that published and could not mark (D-4757 (history-export-mark-failure-backs-off)).
+ *  `lastAttemptMs` is the clock of a pass that failed with a caught error, or that the run's budget held before it wrote
+ *  a segment (budgetHeldPass; D-5394 (history-export-select-due-transcripts)): it counts as a pass for the wait, so such a pass
+ *  retries hourly, never every tick, while `lastPassMs` (doctor's last-pass clock) does not move. A completed pass deletes it. Which of the two clocks governs
+ *  is this function's decision (RD2): the later one, a null being absent, so an attempt after the last pass keeps the wait
+ *  running from the attempt, and a pass after the last attempt from the pass. Omitted, it is null, and the answers are exactly
+ *  those of the pass clock alone. */
+export function decideExportPass({ nowMs, lastPassMs, firstTickMs, lastAttemptMs = null, intervalMs = EXPORT_PASS_INTERVAL_MS }) {
+  const last = lastPassMs === null ? lastAttemptMs : lastAttemptMs === null ? lastPassMs : Math.max(lastPassMs, lastAttemptMs);
+  const since = last ?? firstTickMs;
+  if (since === null) return 'wait';
+  const age = nowMs - since;
+  return age < 0 || age >= intervalMs ? 'run' : 'wait';
+}
+
+/** The longest the export waits between passes, however many passes in a row failed to mark (chosen: a day). */
+export const EXPORT_MARK_BACKOFF_MAX_MS = 24 * EXPORT_PASS_INTERVAL_MS;
+
+/** The export's interval after `markFails` passes in a row that published their segment and then failed to mark it
+ *  (§9.15 "Mark"; Task 7 counts them in meta). Such a pass leaves its rows unmarked, so the next one publishes them
+ *  again; while the store's own volume refuses the marks, an hourly retry would publish a copy every hour until the
+ *  home filesystem's floor. The interval doubles per failure (1 h, 2 h, 4 h, …), at most EXPORT_MARK_BACKOFF_MAX_MS,
+ *  and a count that is not a positive safe integer is no failure (D-4757 (history-export-mark-failure-backs-off)). */
+export function exportPassIntervalMs(markFails) {
+  const n = Number.isSafeInteger(markFails) && markFails > 0 ? Math.min(markFails, 5) : 0;
+  return Math.min(EXPORT_PASS_INTERVAL_MS * 2 ** n, EXPORT_MARK_BACKOFF_MAX_MS);
+}
+
+/** The export's room verdict (§9.15 "Preflight"; rev 3.1 review, RC9). `free` is the sweep's statfsWithDeadline
+ *  answer for ~/.ccrc/history/export, judged by planCopy with THAT filesystem's own threshold (§9.3's formula,
+ *  floorThreshold) and the segment bound as the copy's size, so one segment can never take the home filesystem
+ *  below its floor. A probe that threw is `low-disk`, as the store's own floor reads one (§9.10); a probe that never
+ *  answered is `unsettled`, kept apart so the pass can say which. */
+export function planExportRoom(free) {
+  if (free.state === 'unsettled') return { admit: false, word: 'unsettled', needBytes: null };
+  if (free.state !== 'ok') return { admit: false, word: 'low-disk', needBytes: null };
+  const r = planCopy({ freeBytes: free.bytes, thresholdBytes: floorThreshold(free.fsSize), sizeBytes: EXPORT_SEGMENT_MAX_BYTES });
+  return { admit: r.admit, word: r.admit ? 'ok' : 'low-disk', needBytes: r.needBytes };
+}
+
+const EXPORT_DECIMAL_RE = /^(0|[1-9][0-9]*)$/;
+
+/** dev or ino in decimal: a number, a BigInt (statSync's `bigint: true`, past 2^53) or the decimal text of one. */
+function exportDecimal(v, what) {
+  if (typeof v === 'bigint' && v >= 0n) return v.toString();
+  if (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) return String(v);
+  if (typeof v === 'string' && EXPORT_DECIMAL_RE.test(v)) return v;
+  throw new TypeError(`exportedSourceKey: ${what} must be a non-negative integer, got ${String(v)}`);
+}
+
+/** The source_key of the dead-file ingest_files row export replay puts a gone file's memberships on (§6.2; §9.15
+ *  "Memberships of a gone file"): `exported:` plus hex(sha256(path ∖0 dev ∖0 ino)). It never equals a live row's
+ *  key (''), so replay never lands on a live file, even one that now reuses that inode. dev and ino are rendered in
+ *  decimal, so a BigInt past 2^53 keys exactly as the store holds it. A path holding a NUL could forge a separator,
+ *  and no POSIX path holds one, so it throws. An empty path is a file the store knows no path for AND no source_key: it keys
+ *  by (dev, ino) alone, and is still never a live key. It is NOT unique per (dev, ino) once generations accumulate: B1 retires
+ *  a row exactly when a new file reuses its inode, so two retired generations of one inode would share this key. A file with
+ *  no path left therefore exports with its store source_key as its path (B1's 'retired:<hex>', unique per generation), and
+ *  '' is left to a row with neither (D-5393 (history-export-pathless-file-identity)). */
+export function exportedSourceKey(path, dev, ino) {
+  if (typeof path !== 'string' || path.includes('\0')) throw new TypeError(`exportedSourceKey: path must be a string without NUL, got ${JSON.stringify(path)}`);
+  return `exported:${sha256Hex(`${path}\0${exportDecimal(dev, 'dev')}\0${exportDecimal(ino, 'ino')}`)}`;
+}
+
+/** The exact form of a dead-file source_key: `exported:` and 64 lowercase hex digits. */
+const DEAD_FILE_KEY_RE = /^exported:[0-9a-f]{64}$/;
+
+/** The source_key replay gives the dead-file row of the file a segment names by (path, dev, ino), the ONE rule the
+ *  exporter's path and replay's key share (D-5393 (history-export-pathless-file-identity)). A carried path already of the
+ *  exact form `exported:<64 lowercase hex>` IS a dead-file key: a replayed row exported again travels under its own
+ *  source_key as its path, and keying that token through exportedSourceKey would give the one file a second row beside
+ *  the one its older segment made. Every real path starts with '/', so none can match it. Any other path keys through
+ *  exportedSourceKey, a near-miss included (63 digits, an uppercase digit, a trailing character). dev and ino are checked
+ *  either way, so a malformed pair throws the same TypeError on both arms. */
+export function deadFileSourceKey(path, dev, ino) {
+  if (typeof path === 'string' && DEAD_FILE_KEY_RE.test(path)) {
+    exportDecimal(dev, 'dev');
+    exportDecimal(ino, 'ino');
+    return path;
+  }
+  return exportedSourceKey(path, dev, ino);
+}
+
+// ── The marks' two decisions (§9.15 "Mark", "After a bind"; coordinator ruling RD2: L4 delivery is not allowed to
+// decide). The sweep measures meta, the directory listing and the marked names, calls these and acts on the answer.
+// D-4757 (history-export-mark-failure-backs-off) D-4226
+
+/** The text meta export_mark_fails holds when it is a count: a decimal with no sign and no leading zero. */
+const EXPORT_MARK_FAILS_RE = /^(0|[1-9][0-9]{0,15})$/;
+
+/** The count meta export_mark_fails holds (Task 7 writes it), as the backoff reads it. Absent, torn or hand-edited
+ *  text, or a number past the safe integers, is no failure: the export never waits longer on a value it cannot read. */
+export function exportMarkFailsOf(recorded) {
+  if (typeof recorded !== 'string' || !EXPORT_MARK_FAILS_RE.test(recorded)) return 0;
+  const n = Number(recorded);
+  return Number.isSafeInteger(n) ? n : 0;
+}
+
+/** What one pass's outcome does to the mark-failure backoff (D-4757 (history-export-mark-failure-backs-off)): whether the
+ *  pass backs off, and the next wait. `outcome` is what the sweep saw: 'mark-failed' (its segment was linked, then the
+ *  marks threw), 'marked' (the marks committed), 'mark-busy' (linked, then SQLITE_BUSY: the write lock's, not the
+ *  volume's, so no backoff; RD3) or 'write-failed' (a throw before any link: nothing was published). `recorded` is
+ *  meta export_mark_fails as read. Answers the count that stands, the meta text to write (null: leave meta as it is;
+ *  a marked pass writes '0' only over another value, so a store that never failed a mark gains no key) and the wait
+ *  the cadence then applies. Any other outcome is a caller's bug and throws. */
+export function decideMarkOutcome({ outcome, recorded }) {
+  const prev = exportMarkFailsOf(recorded);
+  let markFails;
+  let write = null;
+  switch (outcome) {
+    case 'mark-failed': markFails = prev + 1; write = String(markFails); break;
+    case 'marked': markFails = 0; if (recorded !== null && recorded !== '0') write = '0'; break;
+    case 'mark-busy':
+    case 'write-failed': markFails = prev; break;
+    default: throw new TypeError(`decideMarkOutcome: not an export outcome: ${JSON.stringify(outcome)}`);
+  }
+  return { markFails, write, intervalMs: exportPassIntervalMs(markFails) };
+}
+
+/** A bind fact's meta key: `bound:<ms>`, as B2's insertBindFacts writes one inside every adopt, restore and rebuild. */
+const BIND_FACT_RE = /^bound:[0-9]{1,16}$/;
+
+/** Whether this step checks the export's marks against the segments on this box (§9.15 "After a bind"), and what
+ *  that check records as covered. `metaKeys` are the store's meta keys that may be bind facts; `checkedRecord` is what
+ *  the last check recorded (a JSON list of keys) or null. A step checks when a bind fact exists that the record does
+ *  not hold: by KEY, never by comparing a bind's clock with the check's, because the two may be two boxes' clocks (an
+ *  adopt) or one clock either side of a step back. A record that does not parse, or is not a list, covers nothing, so
+ *  the check runs rather than miss a bind. `record` is every fact this check covers, sorted, as the check writes it. */
+export function decideMarkCheck({ metaKeys, checkedRecord }) {
+  const facts = metaKeys.filter((k) => typeof k === 'string' && BIND_FACT_RE.test(k)).sort();
+  let parsed;
+  try { parsed = JSON.parse(checkedRecord ?? '[]'); } catch { parsed = []; }
+  const have = new Set(Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : []);
+  return { check: facts.some((k) => !have.has(k)), facts, record: JSON.stringify(facts) };
+}
+
+/** The segment names the store's marks give that export/<store_id>/ on this box does not hold, once each, sorted:
+ *  their marks are cleared so their rows export again (§9.15 "After a bind"). `named` and `present` are the sweep's
+ *  measurements: the marks' DISTINCT exported_seg values and listSegments' names. */
+export function missingSegmentNames({ named, present }) {
+  const here = new Set(present);
+  return [...new Set(named)].filter((n) => !here.has(n)).sort();
+}
+
+/** Whether an entry may hold its export mark, from the states of the blobs it references as the store holds them now
+ *  (D-5395 (history-export-mark-needs-its-blobs)): an entry references its own blob, its variants' blobs, its linked
+ *  sidecars' blobs and its boundary's kept blob. It keeps its mark only while every one of them is `exported` (some
+ *  segment holds its bytes) or `pruned` (a tombstone: a stub is all there is to export). A referenced blob that is
+ *  neither is live and unmarked: its text is store-only, and a marked entry hides it from the pass, which offers only
+ *  unmarked entries, so the census counts the blob due for good. The ingest asks it where an entry that already exists
+ *  gains its boundary over a kept blob (no segment is in play there); replay asks segmentMayMarkEntry instead, which also
+ *  needs the segment it marks with to carry a pruned blob (D-5396). The sweep clears the marks of the referrers of a blob it
+ *  unmarks or revives (a bind check, a revived tombstone). No blob at all answers yes: nothing is owed, and it agrees with
+ *  planSegment, which takes such a row carrying nothing and whose pass marks it (the schema gives every entry its own blob,
+ *  so the sweep never asks it). */
+export function entryMayHoldMark({ blobs }) {
+  if (!Array.isArray(blobs)) throw new TypeError(`entryMayHoldMark: blobs must be a list, got ${typeof blobs}`);
+  return blobs.every((b) => b.exported === true || b.pruned === true);
+}
+
+/** Whether replay may mark an entry with the segment it is replaying (D-5396 (history-export-bind-clears-pruned-referrers),
+ *  refining D-5395), from the states of the blobs the entry references as the store holds them now, each with `carried`:
+ *  whether THAT segment's blobs hold the blob, as bytes or as a stub. entryMayHoldMark's rule, narrowed where a mark names a
+ *  segment. An `exported` blob has its bytes where its own mark names, so it licenses the mark whichever segment is replayed
+ *  (the entry is marked by the first segment that carries it), and the loss of that segment clears the blob's referrers with
+ *  it (a bind check). A `pruned` blob that is not exported has no mark of its own, and its stub is held only by the segments
+ *  that carry it: the entry's mark is the one thing that names a segment holding it, so the blob licenses the mark only when
+ *  this segment carries it, as the pass's does (planSegment stubs every pruned, unmarked blob the entry names in the segment
+ *  that marks the entry). Without that, a mark naming a segment that lacks the stub outlives the loss of the segment that
+ *  holds it, and a rebuild from the live segments cannot place the entry. A live, unmarked blob licenses nothing. `carried`
+ *  is read only of a pruned blob that is not exported: the caller measures it there and says false of any other, whose answer
+ *  does not depend on it, and a blob that does not say is refused rather than read as not carried. The segment is the one
+ *  the entry's mark names, or would name: replay's row arms ask of an entry already marked, and measure `carried` only where
+ *  that mark names the segment being replayed (the only one open); an entry marked by another segment gets `carried` false
+ *  for such a blob, so its mark goes and the next pass writes it with the stub (D-5396). No blob at all answers yes, as
+ *  entryMayHoldMark does. */
+export function segmentMayMarkEntry({ blobs }) {
+  if (!Array.isArray(blobs)) throw new TypeError(`segmentMayMarkEntry: blobs must be a list, got ${typeof blobs}`);
+  for (const b of blobs) {
+    if (typeof b?.carried !== 'boolean') throw new TypeError(`segmentMayMarkEntry: every blob says whether the segment carries it, got ${typeof b?.carried}`);
+  }
+  return blobs.every((b) => b.exported === true || (b.pruned === true && b.carried === true));
+}
+
+// ===========================================================================
+// What one export segment carries (spec §9.15 "What is due", "Write"; W1-B4
+// Task 2). Pure: the sweep pages its candidate rows, in the four runs its
+// exportSelect describes: the rows with no time, by entry id; the young rows of
+// each due transcript, by time; the older rows, by time; the unlinked sidecars,
+// by blob id. The first three offer only the rows of the due transcripts (that
+// still hold an unexported row), and the sidecar run is NOT filtered to them. It
+// is one order within a run and not across them. Each candidate carries its
+// time, its holding files and its blobs' export and prune state, and the sweep
+// writes what this answers. Due-ness is the reducer's, B2's per-copy one by
+// default (ruled Q15, rev 3.4), the census's own: one clock (RD1).
+// D-4758 (history-export-row-carries-blob) B2's D-4735 (history-export-due-per-copy)
+// D-4759 (history-export-pruned-row-stub) D-4760 (history-export-segment-bound-estimated)
+// ===========================================================================
+
+/** What one taken row is counted for in the segment bound, beside its new blob bytes: an estimate of its metadata in
+ *  the file (its entry's named columns, its memberships, its share of the family, transcript, epoch and file rows).
+ *  Chosen: a prototype of the format-1 tables measured 0.8–1.1 KiB per entry with one membership and about 0.2 KiB
+ *  per further membership, over a fixed 56 KiB of schema pages. Counting it keeps a segment near
+ *  EXPORT_SEGMENT_MAX_BYTES when rows are small beside their metadata, and bounds a segment's rows (at most about
+ *  EXPORT_SEGMENT_MAX_BYTES / EXPORT_ROW_META_BYTES, some 175,000), so rows that bring no new bytes cannot grow one,
+ *  or the pass's memory, without limit (D-4760 (history-export-segment-bound-estimated)). */
+export const EXPORT_ROW_META_BYTES = 1536;
+
+/** When a due candidate fell due, as a real clock, or null when it has none (W1-B4; §9.15 "How long a due blob has waited").
+ *  The reducer's due time when it names one, the one clock, so due-ness and due-since never disagree. A candidate the
+ *  reducer answers due from the start (-Infinity: under the per-copy rule, no holding file on disk) is dated by B2's
+ *  own W1-k rule, holderDueDateMs, never by a sentinel: the last write its RECORDED files saw (it cannot have fallen
+ *  due before that, so the date errs early, as the rule does), else its row's time. Null, undated, when it has
+ *  neither, or when the only clock is not after the epoch (B1's transcriptFiles reads a NULL mtime_ns as 0): the
+ *  candidate stays due and counted, and no 1970 due-since is ever answered for it (B2's D-4735 (history-export-due-per-copy)).
+ *  Called only for a due candidate. */
+function dueSinceMs(candidate, homeRetentionDays, reducer) {
+  const at = holderDueDateMs(candidate, homeRetentionDays, reducer);
+  return typeof at === 'number' && Number.isFinite(at) && at > 0 ? at : null;
+}
+
+/** One segment's contents (§9.15). A row is DUE when the reducer's due time for it is before nowMs: by default B2's
+ *  EXPORT_REDUCERS.perCopy, under which every file holding a copy of the row has passed its mtime plus its own home's
+ *  retention, minus 30 days (ruled Q15, rev 3.4; B2's D-4735 (history-export-due-per-copy)), whatever its blobs' other referrers
+ *  (rev 3.1 review, BK12; D-4758 (history-export-row-carries-blob)).
+ *  A due row is taken with:
+ *  - the bytes of every blob it references that is neither exported nor pruned (`carry`). A blob already exported
+ *    is never carried again, and one shared by several taken rows is carried once;
+ *  - a stub of every pruned blob it references that has no mark (`stubs`): its sha, codec and size with no bytes, so a
+ *    rebuild keeps the row's structure (entries.blob_id is NOT NULL). A stub is never marked, so every export of the
+ *    row carries its stubs again. A stub is never exported text and its size never counts toward the bound; its row's
+ *    metadata does (D-4759 (history-export-pruned-row-stub)).
+ *  Rows are taken in input order, until the next due row's counted bytes (its new blob bytes plus EXPORT_ROW_META_BYTES)
+ *  would pass `boundBytes`; from there no later row is taken. The sweep's input order is its candidates' runs, in this
+ *  order: the rows with no time by entry id, the young rows (at or past the cutoff) of each due transcript by time, the
+ *  older rows by time, then the unlinked sidecars by blob id; the first three offer only the rows of the transcripts
+ *  dueTranscriptKeys names that still hold an unexported row, the sidecars are not filtered to them (D-5394
+ *  (history-export-select-due-transcripts)). It is one time order within a run and not
+ *  across them, so a segment holds a prefix of the due rows in that offered order, not of the backlog by age: a due row
+ *  left behind may be older than one taken (`oldestLeftDueSinceMs` is measured over the rows left, never assumed from
+ *  the order). The first due row of the PASS is taken whatever its size, so every pass moves the export
+ *  forward: `takenBefore` says an earlier call of the same pass (an earlier page) already took one, and then this
+ *  call's first row must fit too. The due rows left behind are counted, with the earliest time any of them fell
+ *  due. planExport's per-BLOB rule stays the census's; both ask the same reducer with the same default, so the pass
+ *  and the census read one clock (RD1), and a rule is still one reducer and no signature (rev 3.2 review, FE13). */
+export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reducer = EXPORT_REDUCERS.perCopy, takenBefore = false }) {
+  const take = [];
+  const carry = [];
+  const stubs = [];
+  const carried = new Set();
+  const stubbed = new Set();
+  let bytes = 0;
+  let leftDue = 0;
+  let oldestLeftDueSinceMs = null;
+  let full = false;
+  for (const row of rows) {
+    const dueAt = reducer(row, homeRetentionDays);
+    if (!(dueAt < nowMs)) continue;
+    const fresh = new Map();
+    for (const b of row.blobs) if (!b.exported && !b.pruned && !carried.has(b.key)) fresh.set(b.key, b);
+    let add = EXPORT_ROW_META_BYTES;
+    for (const b of fresh.values()) add += b.zBytes;
+    if (full || ((take.length > 0 || takenBefore) && bytes + add > boundBytes)) {
+      full = true;
+      leftDue += 1;
+      const since = dueSinceMs(row, homeRetentionDays, reducer);
+      if (since !== null && (oldestLeftDueSinceMs === null || since < oldestLeftDueSinceMs)) oldestLeftDueSinceMs = since;
+      continue;
+    }
+    take.push(row.key);
+    for (const b of fresh.values()) {
+      carried.add(b.key);
+      carry.push(b.key);
+    }
+    bytes += add;
+    for (const b of row.blobs) {
+      if (b.pruned && !b.exported && !stubbed.has(b.key)) {
+        stubbed.add(b.key);
+        stubs.push(b.key);
+      }
+    }
+  }
+  return { take, carry, stubs, bytes, leftDue, oldestLeftDueSinceMs };
+}
+
+/** Whether a pass the run's budget cut short is recorded as an attempt and reported (D-5394
+ *  (history-export-select-due-transcripts)): the sweep writes the attempt clock and one stderr line, and the next step
+ *  waits its interval, not the next tick. Two shapes, both a pass that wrote no segment and so moved nothing:
+ *  - nothing taken and the selection did not run to its end (`taken` 0, `selectionComplete` false). The bound cannot end a
+ *    selection before its first row, since planSegment takes a pass's first row whatever its size, so the budget is all
+ *    that is left. A selection that never began, the budget already spent as the pass started (the export is the tick's
+ *    last step), is the same fact: it did not run to its end;
+ *  - rows taken and none written, the writer finding the budget spent before its first row (`written` 0, `writeStopped`
+ *    'budget'). The writer checks the budget before history-off, so a budget spent beside the operator's switch reads as
+ *    the budget.
+ *  Never history-off alone (`writeStopped` 'off': the operator's switch is not the budget's), never a selection that ran to
+ *  its end with nothing due (that pass completes: it is a pass), never a pass that wrote a row (its segment is published
+ *  and marked, whatever stopped the writer after that). Facts measured by the sweep, a decision made here (RD2). */
+export function budgetHeldPass({ taken, selectionComplete, written, writeStopped }) {
+  if (taken === 0) return selectionComplete === false;
+  return written === 0 && writeStopped === 'budget';
+}
+
+// ===========================================================================
+// Export replay's decisions (spec §9.14 "Export replay"; W1-B4 Task 3). Pure:
+// the recovery step reads each segment's meta through store.mjs and passes
+// what it saw; which segments replay, and in what order (lib
+// orderSegmentNames), is taken here.
+// B2's D-4699 (history-recovery-replay)
+// ===========================================================================
+
+/** What export replay does with one segment, from the two meta facts every format keeps (store.mjs segmentMeta):
+ *  - `foreign` when its store_id is not this store's, whatever its format: another store's text is skipped and
+ *    counted, never applied, and never a FAIL of this store's;
+ *  - `newer` when its format is past the one this build reads: refused loudly (export-segment-newer, doctor FAIL)
+ *    and skipped, never read through tables it may not have;
+ *  - `replay` otherwise. A build that bumps EXPORT_SEGMENT_FORMAT adds here the arm for each older format it still
+ *    reads. */
+export function decideSegmentReplay({ meta, storeId }) {
+  if (meta.storeId !== storeId) return 'foreign';
+  return meta.format > EXPORT_SEGMENT_FORMAT ? 'newer' : 'replay';
+}
+
+// ── W1-B4 Task 9: export-due on a build with the export writer (spec §9.6, §9.15 "The gap guard") ──────────────
+// B1 shipped the ruled arm for a build without the writer: WARN from the first due blob. With the writer (this
+// build), rows cross the horizon continuously and the pass runs at most hourly, so a due count alone is the pass's
+// ordinary cadence, not a gap. export-due then WARNs only when the last completed pass is older than two pass
+// intervals, or the oldest due blob the census counted has waited longer than that (chosen: 2 h). Both clocks are
+// the store's own (meta the pass and the census keep), never a calendar date (O41; D-4207).
+// The census's due-since is its own measure of the rows, read at most one census interval late, which keeps a
+// steady store under the threshold (§9.15 "How long a due blob has waited").
+// The four helpers (exportGapArm, exportDueDetail, exportDueRemedy and exportOverdueRemedy) are function declarations:
+// deriveHealth and remedyFor, above, call them at call time, and the constant they read (EXPORT_PASS_INTERVAL_MS, Task 1)
+// is initialised by then.
+
+/** Which arm of export-due fires, or null. `no-writer` is B1's ruled arm; `stale-pass` outranks `waited`. A clock
+ *  that is not a time fires neither writer arm by itself: a last pass of null (none since this build landed), and a
+ *  due-since of null (the census counted nothing due) or EXPORT_DUE_OLDEST_UNMEASURED (no census of this build has
+ *  recorded one, or it could date none of the due blobs). `over` reads only a number. */
+function exportGapArm(h) {
+  if (!(h.exportDue > 0)) return null;
+  if (!h.exportWriterLive) return 'no-writer';
+  const gapMs = 2 * EXPORT_PASS_INTERVAL_MS;
+  const over = (t) => typeof t === 'number' && h.nowMs - t > gapMs;
+  if (over(h.exportLastPassMs)) return 'stale-pass';
+  if (over(h.exportDueOldestMs)) return 'waited';
+  return null;
+}
+
+/** export-due's detail, one per arm. B1's arm keeps B1's text verbatim. */
+function exportDueDetail(arm, h) {
+  const gapMin = minutesOf(2 * EXPORT_PASS_INTERVAL_MS);
+  if (arm === 'stale-pass') {
+    return `${h.exportDue} unexported blob(s) are due, and the last export pass completed ${minutesOf(h.nowMs - h.exportLastPassMs)} min ago (over ${gapMin} min)`;
+  }
+  if (arm === 'waited') {
+    return `${h.exportDue} unexported blob(s) are due, the oldest for ${minutesOf(h.nowMs - h.exportDueOldestMs)} min (over ${gapMin} min, two export pass intervals)`;
+  }
+  return `${h.exportDue} unexported blob(s) are due by the horizon, and this build has no export writer`;
+}
+
+/** export-due's remedy, by arm: B1's for a build without the writer; the room first while the pass is paused for
+ *  it; the sweep's log for a pass that stopped completing; nothing to do while a backlog drains. */
+function exportDueRemedy(h) {
+  const arm = exportGapArm(h);
+  if (arm === null || arm === 'no-writer') return HEALTH_REMEDIES['export-due'];
+  if (h.exportPausedLowDisk) return 'free space on the home filesystem: the export pass is paused for room there, and the due text waits for it';
+  if (arm === 'stale-pass') return `read the sweep: ${SWEEP_LOG}; an export pass completes at least hourly, and none has for over two intervals`;
+  return `none needed while the backlog drains at one segment an hour; if the count does not fall, read the sweep: ${SWEEP_LOG}`;
+}
+
+/** export-overdue's remedy, by build: B1's, verbatim, for a build without the writer (which can only ask for a longer
+ *  retention); with the writer live, what an operator does now (W1-B4 review 614). The text is the store's only copy until a
+ *  segment holds it, so the store is kept first; the room first while the pass is paused for it, as exportDueRemedy
+ *  has it; otherwise the pass drains the backlog at its hourly rate, and the sweep's log is where a count that does not
+ *  fall is read. */
+function exportOverdueRemedy(h) {
+  if (!h.exportWriterLive) return HEALTH_REMEDIES['export-overdue'];
+  const keep = 'the store may be the only copy of this text: keep ~/.ccrc/history (never --purge-history)';
+  if (h.exportPausedLowDisk) return `${keep}, and free space on the home filesystem: the export pass is paused for room there, and this text waits for it`;
+  return `${keep}; the export pass copies it into ~/.ccrc/history/${EXPORT_DIR}/<store_id>/ at one segment an hour, and if the count does not fall, read the sweep: ${SWEEP_LOG}`;
+}
+
+// The census's oldest due-since in meta (HEALTH_META.exportDueOldestMs), written and read back here only, so the sweep
+// delivers and status relays, and neither decides (§9.15 "How long a due blob has waited"). Three values, never folded:
+//   ''                            the census counted nothing due (read back: null);
+//   a positive integer            when the oldest dated due blob fell due (read back: the number);
+//   EXPORT_DUE_OLDEST_UNMEASURED  blobs are due and the census could date none (no clock on record, or only the part a
+//                                 B1 pass started counted them); a key never written reads the same, never "nothing
+//                                 due". No value at or before the epoch is a time: it would render as 1970 and the
+//                                 wait arm would count some 29 million minutes from it.
+
+/** The word for a due-since the census has not measured (status --json's due_oldest_ms, HealthInputs). */
+export const EXPORT_DUE_OLDEST_UNMEASURED = 'unmeasured';
+
+/** What the census writes on completion, from its due count and its oldest dated due-since (planExport's
+ *  oldestDueSinceMs, min over chunks). A file clock's fraction of a ms is rounded. */
+export function exportDueOldestMeta(due, dueOldestMs) {
+  if (!(due > 0)) return '';
+  const ms = typeof dueOldestMs === 'number' && Number.isFinite(dueOldestMs) ? Math.round(dueOldestMs) : 0;
+  return ms > 0 ? String(ms) : EXPORT_DUE_OLDEST_UNMEASURED;
+}
+
+/** The census's due-since read back from meta: a time, null (nothing due), or EXPORT_DUE_OLDEST_UNMEASURED. */
+export function readExportDueOldest(v) {
+  if (v === undefined) return EXPORT_DUE_OLDEST_UNMEASURED;
+  if (v === '') return null;
+  return /^[1-9][0-9]*$/.test(v) ? Number(v) : EXPORT_DUE_OLDEST_UNMEASURED;
 }

@@ -210,6 +210,10 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   // history spec §9.5: the history sweep's shim, placed by `_inst_bins` off
   // server boxes — planted so `_uninst_tree_bins`' removal is measured.
   writeFileSync(join(bin, 'ccd-history-sweep'), '#!/bin/sh\n# history sweep\n', { mode: 0o755 });
+  // wave 17 (D-5313): the closed client the role skills call, placed by
+  // `_inst_bins` on both arms for every role but server — planted so
+  // `_uninst_tree_bins`' removal is measured.
+  writeFileSync(join(bin, 'ccrc-api'), '#!/usr/bin/env node\n// the closed client\n', { mode: 0o755 });
   // account-pool-membership wave 1, Task 4 fix round 1 (F1/F4): the leased-
   // projection puller. `_inst_bins` places it on the non-Darwin arm for every
   // role, so an installed Linux box has it and `_uninst_tree_bins` must take
@@ -806,7 +810,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // PATH for ever.
     for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
       'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-tool-adj', 'ccd-history-sweep',
-      'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'ccd-update-sync',
+      'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'ccd-update-sync', 'ccrc-api',
       ...GPT_LANE_BINS, 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }
@@ -831,6 +835,25 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt'))).toBe(true);
     expect(existsSync(join(home, 'ccrc-backups', '20250101-000000', 'ccd'))).toBe(true);
     expect(existsSync(join(home, '.tmux.conf'))).toBe(true);
+  });
+
+  it('ccrc-api planted as README\'s LINK into the tree goes, whatever the tree\'s fate (wave 17, D-5313)', () => {
+    // README links `~/.local/bin/ccrc-api` to the tree's file with `ln -sfn`.
+    // The verb removes `~/ccrc` first, so by the time the census `rm -f` runs
+    // the link dangles; it must still go (a dangling `ccrc-api` first on PATH
+    // is the orphan the census exists to prevent), and `rm -f` on the path
+    // never reads or writes through it.
+    const home = mkTmp('ccrc-uninst-api-link-');
+    plantInstalledBox(home);
+    const inTree = join(home, 'ccrc', 'ccd', 'ccrc-api');
+    writeFileSync(inTree, '#!/usr/bin/env node\n// the tree file\n', { mode: 0o755 });
+    const dest = join(home, '.local', 'bin', 'ccrc-api');
+    rmSync(dest);
+    symlinkSync(inTree, dest);
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(() => lstatSync(dest), 'the ccrc-api link survived').toThrow();
+    expect(r.stdout).toMatch(/ccrc-codex, ccrc-api and the ccrc launcher removed/);
   });
 
   it('ccd\'s BODY goes with its launcher, and ~/.local/libexec/ccrc only when that leaves it empty (D-3696)', () => {

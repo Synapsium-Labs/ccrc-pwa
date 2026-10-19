@@ -239,10 +239,10 @@ install_ccd_pair() {
 # this runs the deploy has verifiably succeeded, and a nonzero exit here
 # would report failure for services that are live and green.
 prune_backups() {   # keep the newest $CCRC_BACKUP_KEEP (default 10) timestamped backups
-  local keep="${CCRC_BACKUP_KEEP:-10}" v; [[ "$keep" =~ ^[0-9]{1,4}$ ]] || { v="${keep:0:32}"; [ "${#keep}" -le 32 ] || v="$v..."; echo "deploy: warning: CCRC_BACKUP_KEEP='${v//[![:print:]]/?}' is not a whole number from 0 to 9999 — nothing pruned" >&2; return 1; }; ! [[ "$keep" =~ ^0+$ ]] || { echo "deploy: warning: CCRC_BACKUP_KEEP='$keep' keeps no backup, so the prune would remove every one — nothing pruned" >&2; return 1; }   # D-5142: ccd/ccrc's _keep_ok and _keep_why, spelled again (this file never sources ccd/ccrc); D-5144: an all-zeros KEEP is refused too, a separate test on this same line (lines keep their places)
+  local keep="${CCRC_BACKUP_KEEP:-10}" v; [[ "$keep" =~ ^[0123456789]{1,4}$ ]] || { v="${keep:0:32}"; [ "${#keep}" -le 32 ] || v="$v..."; echo "deploy: warning: CCRC_BACKUP_KEEP='${v//[![:print:]]/?}' is not a whole number from 0 to 9999 — nothing pruned" >&2; return 1; }; ! [[ "$keep" =~ ^0+$ ]] || { echo "deploy: warning: CCRC_BACKUP_KEEP='$keep' keeps no backup, so the prune would remove every one — nothing pruned" >&2; return 1; }   # D-5142: ccd/ccrc's _keep_ok and _keep_why, spelled again (this file never sources ccd/ccrc); D-5144: an all-zeros KEEP is refused too, a separate test on this same line (lines keep their places)
   "${SSH[@]}" "$BOX" "cd ~/ccrc-backups 2>/dev/null || exit 0
-    ls -d [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9] 2>/dev/null \
-      | sort | head -n -$keep | xargs -r rm -rf --"
+    for d in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do [ -d \"\$d\" ] && [ ! -L \"\$d\" ] && printf '%s\n' \"\$d\"; done \
+      | sort | head -n -$keep | grep -vxF -- '$TS' | xargs -r rm -rf --"
 }
 
 # The build stamp: what a box is RUNNING, stated by the box itself. Computed
@@ -571,7 +571,7 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
-    && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } \
+    && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } && { [ ! -f ~/.cc-sessions/approval-verify.mjs ] || cp -a ~/.cc-sessions/approval-verify.mjs ~/ccrc-backups/$TS/approval-verify.mjs; } \
     && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
     && { [ ! -f ~/.config/systemd/user/claude-session@.service ] || cp -a ~/.config/systemd/user/claude-session@.service ~/ccrc-backups/$TS/claude-session@.service; }"
   # `--exclude 'ccrc-mail.token'`: a checkout may still hold a gitignored
@@ -636,7 +636,7 @@ if [ "$TARGET" = "agent" ]; then
   # whole program (pinned — `ccrc-api-ship.test.ts`, and the shim's own header
   # above for what changes the day that stops being true).
   install_atomic ccd/ccrc-api .local/bin/ccrc-api 755
-  install_atomic deploy/notify.sh .cc-sessions/notify.sh 755
+  install_atomic deploy/notify.sh .cc-sessions/notify.sh 755; install_atomic ccd/approval-verify.mjs .cc-sessions/approval-verify.mjs 644   # the approval wait's verifier (plan Task 14), on this line so no cited anchor below moves
   # The compaction card's helper (compaction-card spec §2): plain node, no npm,
   # read by the hook's PreCompact and PostCompact arms under `_hook_timeout`.
   # 644 — `node` runs it; nothing executes it directly.
@@ -765,7 +765,7 @@ if [ "$TARGET" = "agent" ]; then
   # condition on this box, which is why `ccd` carries CCD_DISK_FLOOR_GB) or an
   # ssh that drops — leaves a TRUNCATED unit at its live name. `set -euo
   # pipefail` then aborts the deploy before AGENT_CMD's `daemon-reload`, which
-  # sounds like containment and is not: `ccd`'s own `_svc_enable`/
+  # sounds like containment and is not: `ccd`'s own `_svc_enable_now`/
   # `_svc_disable_now` reload on the next session start or stop, and on a box
   # with ~20 live sessions that is minutes away.
   #

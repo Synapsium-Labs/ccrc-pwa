@@ -445,14 +445,16 @@ describe('Chip', () => {
 
   it('is a mono micro-label that sets no colour of its own', () => {
     expect(CHIP).toContain('font-mono');
-    expect(CHIP).toContain('text-xs');
+    // The meta role (D-5093): Refined 12px, the `text-xs` it replaced, and
+    // Instrument's 11 (D-5460: this pin follows the role).
+    expect(CHIP).toContain('text-meta');
     expect(CHIP).toContain('font-medium');
     expect(CHIP).toContain('leading-none');
     // THE POINT OF THE EXTRACTION. An account hue is ccrc routing vocabulary,
     // so it arrives from outside — inline style, or chat.css's three
     // colour-only modifiers. A `text-`/`bg-` here would be a second place
     // that decides what a chip means.
-    expect(CHIP).not.toMatch(/(^|\s)(text|bg)-(?!xs)[a-z]/);
+    expect(CHIP).not.toMatch(/(^|\s)(text|bg)-(?!meta(\s|$))[a-z]/);
   });
 
   it('restores what the `font` shorthand reset, so an ancestor cannot leak in', () => {
@@ -467,9 +469,20 @@ describe('Chip', () => {
     expect(CHIP_DOT).toContain('bg-current');
     expect(CHIP_DOT).toContain('size-[5px]');
     expect(CHIP_DOT).toContain('rounded-full');
-    // `.chip i` declared three things. `flex-none` would stop the dot
-    // shrinking under a long label, which the original allowed.
-    expect(CHIP_DOT).not.toContain('flex-none');
+  });
+
+  it('never lets a long label squeeze the dot (D-5578)', () => {
+    // `.chip i` allowed the dot to shrink, and a label of about 18 characters
+    // that wraps inside its pill at 360 or 390 drew it 2 to 3px wide. The
+    // coordinator's ruling: a chip's dot never squeezes. `shrink-0` keeps the
+    // flex basis (`size-[5px]`) and nothing else, so it is the whole fix;
+    // `flex-none` would also zero the grow factor, which the dot never had.
+    expect(CHIP_DOT.split(/\s+/)).toContain('shrink-0');
+    expect(CHIP_DOT).not.toMatch(/(^|\s)(shrink|flex-shrink)(-[1-9]\d*)?(\s|$)/);
+    // Nor by another route: a `flex-*`, `basis-*` or `grow*` utility would
+    // move the dot's size from `size-[5px]` to the flex basis or grow share
+    // (`flex-1` sets the basis to 0%), so the class carries none.
+    expect(CHIP_DOT).not.toMatch(/(^|\s)(flex|basis|grow)(-\S+)?(\s|$)/);
   });
 
   it('renders the dot only when asked, and always aria-hidden', () => {

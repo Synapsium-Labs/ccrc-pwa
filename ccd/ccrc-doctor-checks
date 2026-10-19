@@ -203,7 +203,7 @@ CCRC_DOCTOR_CHECKS=(
   pools
   pool-sync
   transcripts
-  update-sync server-caps   # one line, as `flock timeout`: _check_server-caps is APPENDED near the end of this file, just before _check_oom-policy
+  update-sync server-caps approval-verifier-runnable approval-key approval-key-colocated approval-digest-mismatch   # one line, as `flock timeout`: _check_server-caps is APPENDED near the end of this file, just before _check_oom-policy; the four approval checks are at the very END
   graphify
   graphify-path
   build
@@ -211,7 +211,7 @@ CCRC_DOCTOR_CHECKS=(
   fleet
   memory
   routing model-default   # one line, as `flock timeout` above; _check_model-default is at the END of this file
-  models codex docs history delegation-hooks docs-sw   # six entries on one line: every line below is cited by number elsewhere; docs-sw stays LAST (M7.6); _check_delegation-hooks is at the END of this file
+  models codex docs history delegation-hooks update-sweep docs-sw   # seven entries on one line: every line below is cited by number elsewhere; docs-sw stays LAST (M7.6); _check_delegation-hooks and then _check_update-sweep are at the END of this file
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -9158,4 +9158,310 @@ _fix_delegation-hooks() {
   fi
   echo "FIX delegation-hooks: re-ran the shipped tree's install-session-hooks.sh into $n home(s): $list"
   [ "$refused" -eq 0 ] || return 1
+}
+
+# ── update-sweep: the last update's supervisor sweep, as its report recorded it ──
+# Reading 9's doctor half (the operator, 2026-10-15: warn only) and R10k (wave 17,
+# D-5316). `ccrc update` and `ccrc rollback` record what their supervisor sweep did
+# as update.json's `sweep` key (D-5314, D-5315): `ok`, `down: <n>: <id> ...`,
+# `refused: <why>`, `unverified: <why>` or `died: <why>`; and the watchdog's close of an
+# abandoned `restarting` report records `died: abandoned` (D-5329). This check reads that
+# record and NEVER FAILS, by the operator's ruling (warn only): a FAIL would turn a
+# state the update already recorded and reported into exit 1 for every bare
+# `ccrc doctor` and `ccrc install`, and into exit 3 with a changed detail for every
+# later update. Inside an update's own install tail the report is that run's
+# in-flight one, so this check SKIPs there. An ABSENT key is NOT MEASURED (a build
+# before wave 17 wrote the report, a converged no-op wrote it, or the run stopped
+# before its sweep), never "nothing was down". Nothing here, or anywhere, re-sweeps:
+# a recorded refusal is reported until the next update or rollback writes a new report.
+# A server-role box hosts no supervisors (D-3111), so no sweep result is its concern: the
+# whole check SKIPs there (D-5330), the `restarting` dead-pid arm included. An absent or
+# unreadable role keeps the check as it is; it never folds into that skip.
+_check_update-sweep() {
+  if ! declare -F _upd_report_readable >/dev/null 2>&1 || ! declare -F _svc_is_active >/dev/null 2>&1 \
+     || [ -z "${BOX_UPDATE_JSON:-}" ]; then
+    _dr_skip update-sweep "ccrc's own report reader is not loaded, so the last update's sweep was not read (a bug in ccrc: this table was sourced by something that is not ccrc)"
+    return 3
+  fi
+  local rrc=0 line phase pid word rest n id ans cut="" fix clears nr msg sh l sw _srv_role=""
+  local -a words=()
+  local -a ids=() still=() unasked=() rst=()
+  # `-f` before `-r` (D-3025), and `${BOX_ENV_FILE:-}` for a caller that sources this file bare, as
+  # `_check_accounts` does (D-3111).
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip update-sweep "this box records CCRC_ROLE=server, so it hosts no supervisors and no update's supervisor sweep is its concern"
+    return 3
+  fi
+  clears="; this WARN clears at the next ccrc update or rollback, which writes a new report"
+  _upd_report_readable || rrc=$?
+  case "$rrc" in
+    0) ;;
+    1) _dr_skip update-sweep "no update report on this box (~/.ccrc/update.json is absent), so there is no sweep to read"; return 3 ;;
+    *) _dr_skip update-sweep "~/.ccrc/update.json is not a readable regular file under its size cap, so the last sweep was not read"; return 3 ;;
+  esac
+  if ! command -v jq >/dev/null 2>&1; then
+    _dr_skip update-sweep "jq is not on PATH, so ~/.ccrc/update.json was not read"; return 3
+  fi
+  line="$(jq -r 'if type != "object" then "?" else "\(.phase // "")\t\(.pid // "")\t\(.sweep // "")" end' "$BOX_UPDATE_JSON" 2>/dev/null)" || line="?"
+  if [[ "$line" != *$'\t'*$'\t'* ]]; then
+    _dr_skip update-sweep "~/.ccrc/update.json does not parse as one report, so the last sweep was not read"; return 3
+  fi
+  phase="${line%%$'\t'*}"; rest="${line#*$'\t'}"; pid="${rest%%$'\t'*}"; word="${rest#*$'\t'}"
+  case "$phase" in
+    done|failed|reverted) ;;
+    restarting)
+      # The one phase the sweep runs in. Its updater released the lock before it,
+      # so an updater killed here (OOM, SIGKILL) leaves `restarting` for good on a
+      # box with no watchdog. A live pid is a sweep in flight; a dead one is not.
+      if [[ "$pid" =~ ^[123456789][0123456789]{0,9}$ ]] && ! kill -0 "$pid" 2>/dev/null; then
+        _dr_warn update-sweep "the last update's report stopped at phase 'restarting' and its updater (pid $pid) is gone, so its supervisor sweep's outcome was never recorded: some supervisors may run the previous ccd" \
+          "ccrc status lists each session's state; restart any that is not running with ccd start <id>${clears}"
+        return 2
+      fi
+      _dr_skip update-sweep "the last update is restarting its supervisors now (updater pid ${pid//[![:print:]]/?}), so its sweep has not been recorded yet"; return 3 ;;
+    *) _dr_skip update-sweep "the last update's report is at phase '${phase//[![:print:]]/?}', not a final one, so no sweep has been recorded"; return 3 ;;
+  esac
+  if [ -z "$word" ]; then
+    _dr_skip update-sweep "the last update's report (phase $phase) records no sweep: an older build wrote it, it moved nothing, or it stopped before its sweep — not measured"
+    return 3
+  fi
+  # The word is same-user-writable text (the report is, spec §8): what is PRINTED of it is
+  # cut and scrubbed, as `phase` and `pid` are above; what is MATCHED is the raw word.
+  sw="${word:0:60}"; sw="${sw//[![:print:]]/?}"
+  case "$word" in
+    ok)
+      _dr_pass update-sweep "the last update's sweep found no supervisor already activating or failed before its restart"
+      return 0 ;;
+    'down: '*)
+      rest="${word#down: }"; n="${rest%%:*}"; rest="${rest#*:}"
+      [[ "$n" =~ ^[0123456789]{1,4}$ ]] || { _dr_skip update-sweep "the last report's sweep word does not parse ('$sw'), so it was not read"; return 3; }
+      # Split WITHOUT globbing: an unquoted `for id in $rest` expands a `*` in a hand-cut word
+      # against the cwd, and a file named like an id would then be read as one.
+      read -ra words <<<"$rest" || true
+      for id in ${words[@]+"${words[@]}"}; do
+        [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && ids+=("$id")
+      done
+      if [ "${#ids[@]}" -eq 0 ]; then
+        _dr_skip update-sweep "the last report's sweep word names no supervisor id this build can read ('$sw'), so it was not read"; return 3
+      fi
+      [ "${#ids[@]}" -ge "$((10#$n))" ] || cut=" (the report names ${#ids[@]} of $((10#$n)); the rest did not fit in it)"
+      # The bus defaults the `services` check sets, for the same reason: each check
+      # runs in its own `$( )`, so that check's exports never reach this one, and
+      # without them every unit answers EMPTY from a non-interactive context.
+      if [ "${CCD_OS:-linux}" != darwin ]; then
+        : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+        : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+      fi
+      # THREE answers, never two (`_svc_is_active`'s own header): `active`; EMPTY,
+      # the manager did not answer, which is NOT the unit is down; or the manager's
+      # own word, quoted back, because `failed` and `inactive` send an operator to
+      # two different places. On Linux a FOURTH fact rides the same read (the
+      # coordinator's ruling 12, D-5316): the operator's Reading 9 case is a unit
+      # that was crash-looping BEFORE the update, and one `active` read is what such
+      # a unit shows between its restarts, so `active` is back only with NRestarts 0.
+      # `show` WITHOUT `--value` (D-5328), the two values taken BY NAME: `--value`
+      # prints in the manager's property order, not the order of the `-p` flags, so
+      # a two-value `--value` read cannot say which line is which. No ActiveState
+      # line, an empty one, or `active` with no digits for NRestarts is the manager
+      # not answering.
+      # Darwin has no NRestarts: it keeps the one `_svc_is_active` read.
+      for id in ${ids[@]+"${ids[@]}"}; do
+        if [ "${CCD_OS:-linux}" = darwin ]; then
+          ans="$(_svc_is_active "claude-session@$id.service")"
+        else
+          sh="$(systemctl --user show -p ActiveState -p NRestarts "claude-session@$id.service" 2>/dev/null)" || sh=""
+          ans=""; nr=""
+          while IFS= read -r l; do
+            case "$l" in
+              ActiveState=*) ans="${l#ActiveState=}" ;;
+              NRestarts=*) nr="${l#NRestarts=}" ;;
+            esac
+          done <<<"$sh"
+          if [ "$ans" = active ]; then
+            if [[ "$nr" =~ ^[0123456789]{1,9}$ ]]; then
+              if [ "$((10#$nr))" -gt 0 ]; then
+                rst+=("$id (active at this read, but restarted $((10#$nr)) times by its manager since)"); continue
+              fi
+            else
+              ans=""
+            fi
+          fi
+        fi
+        case "$ans" in
+          active) ;;
+          '') unasked+=("$id") ;;
+          *) still+=("$id (${ans//[![:print:]]/?})") ;;
+        esac
+      done
+      if [ "${#still[@]}" -eq 0 ] && [ "${#rst[@]}" -eq 0 ] && [ "${#unasked[@]}" -gt 0 ]; then
+        _dr_skip update-sweep "the service manager did not answer for ${unasked[*]}, one of the ${#ids[@]} supervisor(s) the last update found already down before its restart${cut} — not measured"
+        return 3
+      fi
+      if [ "${#still[@]}" -eq 0 ] && [ "${#rst[@]}" -eq 0 ]; then
+        if [ "${CCD_OS:-linux}" = darwin ]; then
+          _dr_pass update-sweep "the ${#ids[@]} supervisor(s) the last update found already down before its restart read active at this read${cut} (one read: a unit that crash-loops can read active between its restarts)"
+        else
+          _dr_pass update-sweep "the ${#ids[@]} supervisor(s) the last update found already down before its restart each read active at this read, with no restart by their manager since${cut}"
+        fi
+        return 0
+      fi
+      if [ "${CCD_OS:-}" = darwin ]; then fix="ccd start <id> for each (it clears the start-limit stamp and re-bootstraps the job)"
+      else fix="systemctl --user reset-failed claude-session@<id>.service, then ccd start <id>; read: systemctl --user status claude-session@<id>.service"; fi
+      msg=""
+      [ "${#still[@]}" -eq 0 ] || msg="${#still[@]} supervisor(s) were already down before the last update's restart and are still not active: ${still[*]}${cut}"
+      if [ "${#rst[@]}" -gt 0 ]; then
+        msg="${msg:+$msg; }${#rst[@]} supervisor(s) the last update found already down before its restart read active, but their manager has restarted them since (a crash loop reads active between its restarts): ${rst[*]}"
+        [ "${#still[@]}" -gt 0 ] || msg="$msg${cut}"
+      fi
+      [ "${#unasked[@]}" -eq 0 ] || msg="$msg; not measured (the service manager did not answer): ${unasked[*]}"
+      _dr_warn update-sweep "$msg — the update did not verify them and did not fail for them" "$fix"
+      return 2 ;;
+    'refused: '*)
+      case "${word#refused: }" in
+        listing) fix="once systemctl --user list-units 'claude-session@*' answers, confirm KillMode=process on each unit, then: systemctl --user try-restart 'claude-session@*'" ;;
+        killmode) fix="set KillMode=process (a drop-in under the unit directory's claude-session@.service.d/ can), then: systemctl --user try-restart 'claude-session@*'" ;;
+        job-file) fix="ccd start <id> rewrites each session's job file; then restart each: launchctl kickstart -k <domain>/<label>" ;;
+        *) fix="read the update's own output for the refusal, fix what it names, then restart the supervisors" ;;
+      esac
+      _dr_warn update-sweep "the last update's supervisor sweep was REFUSED (${sw#refused: }), so every live claude-session@ supervisor still ran the ccd it ran before that update; nothing re-sweeps" "${fix}${clears}"
+      return 2 ;;
+    'unverified: '*)
+      _dr_warn update-sweep "the last update's post-restart listing was not read (${sw#unverified: }), so no supervisor's state after its restart is known" \
+        "ccrc status lists each session's state; restart any that is not running with ccd start <id>${clears}"
+      return 2 ;;
+    'died: abandoned')
+      # D-5329 (review 589 F1): `cmd_watchdog` closes a stale `restarting` report with this word.
+      _dr_warn update-sweep "the watchdog closed the last update's report, abandoned during or right after its supervisor sweep, so its outcome was never recorded and some supervisors may run the previous ccd" \
+        "ccrc status lists each session's state; restart any that is not running with ccd start <id>${clears}"
+      return 2 ;;
+    'died: '*)
+      _dr_warn update-sweep "the last update's supervisor sweep died partway (${sw#died: }; the report's detail says where), so some supervisors may run the previous ccd and the rest the new one" \
+        "read the detail in ~/.ccrc/update.json and follow its read: line; ccrc status lists each session's state${clears}"
+      return 2 ;;
+    *)
+      _dr_skip update-sweep "the last report's sweep word is not one this build knows ('$sw'), so it was not read"
+      return 3 ;;
+  esac
+}
+
+# ── the approval wait's two checks (coordinator-first routing, plan Task 14, spec §6.3 step 1 and §6.4, D-5297, D-5487) ──
+# A dispatched child's permission hook asks the server for a ruling only when it can VERIFY one: `node` on PATH, the
+# verifier installed beside the hook, and the server's public key pinned. `approval-verifier-runnable` names each
+# missing piece by name; any one missing means rulings never engage on this box (every prompt goes to the operator,
+# as before), which is a WARN and not a FAIL: nothing is broken that worked. A server-role box hosts no sessions.
+_dr_approval_role() {
+  local r=""
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && r="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  printf '%s' "$r"
+}
+_check_approval-verifier-runnable() {
+  local missing=""
+  if [ "$(_dr_approval_role)" = server ]; then
+    _dr_skip approval-verifier-runnable "this box records CCRC_ROLE=server, so it hosts no sessions and no permission hook runs on it"
+    return 3
+  fi
+  # No registry, no sessions: `ccd` creates `~/.cc-sessions` before it starts one, so a box without it has no child
+  # whose hook could wait.
+  if [ ! -d "$HOME/.cc-sessions" ]; then
+    _dr_skip approval-verifier-runnable "this box has no session registry (\$HOME/.cc-sessions), so no child's permission hook runs on it"
+    return 3
+  fi
+  # `node` is looked up on doctor's own PATH. A session runs under claude-session@'s environment, whose PATH holds the
+  # same install's bin directories, so a box where doctor finds node is one where the hook finds it; a hand-edited unit
+  # PATH is the case this cannot see (D-5487).
+  command -v node >/dev/null 2>&1 || missing="${missing:+$missing, }node (not on PATH)"
+  # The registry as the bare directory, never `.cc-sessions/<name>` on a code line: pool-name-parity.test.ts pins those.
+  local areg="$HOME/.cc-sessions"
+  [ -f "$areg/approval-verify.mjs" ] || missing="${missing:+$missing, }the verifier (approval-verify.mjs in \$HOME/.cc-sessions)"
+  # A key not pinned yet, with node and the verifier in place, is the rollout's expected state (D-5487 (1)): the server
+  # had not served one when this box last updated. Nothing is broken, so it SKIPs and a fresh install ends green (D-139).
+  if [ -z "$missing" ] && [ ! -f "$HOME/.ccrc/approval-signing.pub" ]; then
+    _dr_skip approval-verifier-runnable "no approval key is pinned yet (\$HOME/.ccrc/approval-signing.pub): the server had not served one when this box last updated, so every prompt goes to the operator, as today; the next ccrc update after the server serves one pins it"
+    return 3
+  fi
+  [ -f "$HOME/.ccrc/approval-signing.pub" ] || missing="${missing:+$missing, }the pinned key (\$HOME/.ccrc/approval-signing.pub)"
+  if [ -n "$missing" ]; then
+    _dr_warn approval-verifier-runnable "a child's permission hook cannot verify a ruling, so coordinator rulings never engage on this box and every prompt goes to the operator; missing: $missing" \
+      "run ccrc update (it installs the verifier and pins the server's key once the server serves one); install Node if the 'node' check names it"
+    return 2
+  fi
+  _dr_pass approval-verifier-runnable "node, the verifier and the pinned approval key are present"
+}
+# `approval-key-changed`: the install spine pins the server's key ONCE and never replaces it; a later run offered a
+# different key records the offer in `~/.ccrc/approval-key-offered`. That is a FAIL until the operator decides.
+_check_approval-key() {
+  local pinned="$HOME/.ccrc/approval-signing.pub" offered="$HOME/.ccrc/approval-key-offered"
+  if [ "$(_dr_approval_role)" = server ]; then
+    _dr_skip approval-key "this box records CCRC_ROLE=server; the key it serves is pinned on the fleet box"
+    return 3
+  fi
+  if [ ! -f "$pinned" ]; then
+    _dr_skip approval-key "no approval key is pinned yet (\$HOME/.ccrc/approval-signing.pub); the 'approval-verifier-runnable' check owns that"
+    return 3
+  fi
+  if [ -f "$offered" ] && [ "$(cat -- "$offered" 2>/dev/null)" != "$(cat -- "$pinned" 2>/dev/null)" ]; then
+    _dr_fail approval-key "approval-key-changed: the server offered a different approval key than the one pinned in \$HOME/.ccrc/approval-signing.pub; the pinned key stays, so rulings signed by the new key are ignored" \
+      "if the server's key was rotated on purpose, remove \$HOME/.ccrc/approval-signing.pub and \$HOME/.ccrc/approval-key-offered by hand and run ccrc update; otherwise find out why the server's key changed"
+    return 1
+  fi
+  _dr_pass approval-key "the pinned approval key is the one the server last offered"
+}
+# ── the approval rulings' two server-side checks (coordinator-first routing, plan Task 16, spec §6.1, §6.3, D-5298) ──
+# `approval-key-colocated`: the server's PRIVATE signing key sits on a box that also runs agent-lane sessions, so a
+# same-user child could read it and a signature no longer shows the server made a ruling (spec §6.1). Reported whether
+# or not the operator placed `~/.ccrc/approvals-single-box`: the opt-in decides whether rulings are minted, not whether
+# the key is reachable. A WARN, because the single-box install is documented and the opt-in is the operator's.
+_check_approval-key-colocated() {
+  local key="$HOME/.ccrc/approval-signing.key" n=0 f
+  if [ ! -f "$key" ]; then
+    _dr_skip approval-key-colocated "this box holds no approval signing key (\$HOME/.ccrc/approval-signing.key); only a server that has started with coordination writes one"
+    return 3
+  fi
+  if [ -d "$HOME/.cc-sessions" ]; then
+    for f in "$HOME/.cc-sessions"/*.uuid; do [ -e "$f" ] && n=$((n + 1)); done
+  fi
+  if [ "$n" -gt 0 ]; then
+    # The server's own gate (`rulingsAllowedHere`): a non-`both` role over CCRC_FLEET=remote mints without the opt-in;
+    # `both`, or a local fleet mode whatever the recorded role, only with it.
+    local opt="the operator has not opted in, so this server mints no rulings (409 single-box)" role="" mode=""
+    if [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ]; then
+      role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"; mode="$(_box_env_value "$BOX_ENV_FILE" CCRC_FLEET)"
+    fi
+    if [ "$mode" = remote ] && [ "$role" != both ]; then
+      opt="this box records CCRC_ROLE=${role:-(none: server, derived)} and CCRC_FLEET=remote, so this server mints and signs rulings here without the opt-in"
+    elif [ -f "$HOME/.ccrc/approvals-single-box" ]; then
+      opt="the operator opted in (\$HOME/.ccrc/approvals-single-box), so rulings are minted and signed here"
+    fi
+    _dr_warn approval-key-colocated "approval-key-colocated: the server's approval signing key sits beside $n session row(s) on this box, so a same-user session could read it; $opt" \
+      "run the server and the sessions on two boxes (ccrc install --role server / --role fleet) for a signature that separates them; on one box, keep \$HOME/.ccrc/approvals-single-box only if you accept that"
+    return 2
+  fi
+  _dr_pass approval-key-colocated "the approval signing key sits on a box with no session rows"
+}
+# `approval-digest-mismatch`: the server refuses a request whose digest it cannot recompute, or whose canonical string
+# does not re-canonicalise to itself (`409 digest-mismatch`), and journals each one in `~/.ccrc/approval-refusals.log`
+# (`<epoch ms> digest-mismatch <session id>`, D-5490). Any in the last seven days means the hook's jq form and the
+# server's TypeScript form disagree on some input: a WARN, with the count, so a divergence is never silent.
+_check_approval-digest-mismatch() {
+  local log="$HOME/.ccrc/approval-refusals.log" since n=0 at word rest
+  if [ "$(_dr_approval_role)" = fleet ]; then
+    _dr_skip approval-digest-mismatch "this box records CCRC_ROLE=fleet; the server box journals the approval refusals"
+    return 3
+  fi
+  if [ ! -f "$log" ]; then
+    _dr_pass approval-digest-mismatch "no approval request has been refused digest-mismatch on this server"
+    return 0
+  fi
+  since=$(( ($(date +%s) - 7 * 86400) * 1000 ))
+  while read -r at word rest; do
+    [[ "$at" =~ ^[0-9]+$ && "$word" == digest-mismatch ]] || continue
+    (( at >= since )) && n=$((n + 1))
+  done < "$log"
+  if [ "$n" -gt 0 ]; then
+    _dr_warn approval-digest-mismatch "approval-digest-mismatch: $n approval request(s) refused digest-mismatch in the last 7 days; the hook's canonical form and the server's disagree on some input, and those prompts went to the operator" \
+      "compare the hook's APPROVAL_DIGEST_JQ with approvalDigestBytes over the corpus (server/test/fixtures/approvals/digest-corpus.json) and check that the fleet box and the server run the same release"
+    return 2
+  fi
+  _dr_pass approval-digest-mismatch "no approval request was refused digest-mismatch in the last 7 days"
 }

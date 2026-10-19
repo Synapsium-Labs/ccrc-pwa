@@ -31,8 +31,12 @@
 // order, and one `apply {all: true, tag}` on confirm — a Sheet, because a
 // close-on-tap confirm cannot say a refusal (D-3389).
 // After a 2xx the sheet calls onMoved: the screen's re-poll when the view was
-// injected, this banner's own when it polls. "See what's new" opens /settings,
-// where the release list is.
+// injected, this banner's own when it polls. "See what's new" opens the
+// What's-new sheet IN PLACE (WhatsNewSheet, D-5549): every release the update
+// brings, with its notes. It used to open /settings, whose release list sits
+// far below the fold, so the tap read as doing nothing. That sheet's own
+// Update all closes it and opens the move sheet here, the same plan as this
+// banner's button.
 //
 // WHILE A NODE HALTS THE FLEET (programme wave 14, R15(b)), Update all is
 // disabled, and a second line says why and where the remedy is: the halt
@@ -45,14 +49,13 @@
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetHealth, UpdateChannel, UpdatesView } from '../../../shared/api';
-import { compareReleaseTags } from '../../../shared/semver';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../../shared/update-summary';
-import { navigate } from '../lib/router';
 import { planMove, type PlannedMove } from './movePlan';
 import { haltingNodes, updateAllHaltedText } from './updateHalt';
 import { UpdateMoveSheet } from './UpdateMoveSheet';
+import { WhatsNewSheet } from './WhatsNewSheet';
 import {
-  UPDATES_POLL_MS, UPDATES_STALE_TEXT, isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView,
+  UPDATES_POLL_MS, UPDATES_STALE_TEXT, isPlaceableInstant, newestPending, nodeVersion, useUpdatesView,
 } from './useUpdatesView';
 import './fleet.css';
 import { Button } from '@ccrc/ui';
@@ -70,19 +73,15 @@ export function bannerRelease(view: UpdatesView): { tag: string; channel: Update
   // answer differently about the same `lastOkAt`.
   if (typeof view.catalogue.lastOkAt !== 'number' || !isPlaceableInstant(view.catalogue.lastOkAt)) return null;
   if (!Array.isArray(view.nodes)) return null;
-  let best: { tag: string; channel: UpdateChannel } | null = null;
-  for (const n of view.nodes) {
-    const tag = pendingTag(n);
-    if (tag === null) continue;
-    // pendingTag answers a tag only for a node whose channel is an
-    // UpdateChannel (its contract). Restating that check here would be a
-    // SECOND arrow predicate — one that keeps this banner green over a
-    // pendingTag that lost its channel clause — so the type is asserted, not
-    // re-derived.
-    const channel = n.channel as UpdateChannel;
-    if (best === null || compareReleaseTags(tag, best.tag) === 1) best = { tag, channel };
-  }
-  return best;
+  // The newest arrow across the inventory, the same one the Settings release window puts first (D-5505).
+  const best = newestPending(view.nodes);
+  if (best === null) return null;
+  // pendingTag answers a tag only for a node whose channel is an
+  // UpdateChannel (its contract). Restating that check here would be a
+  // SECOND arrow predicate — one that keeps this banner green over a
+  // pendingTag that lost its channel clause — so the type is asserted, not
+  // re-derived.
+  return { tag: best.tag, channel: best.node.channel as UpdateChannel };
 }
 
 /** `${tag} is out on ${channel} — ${summary}.`, routed through the SAME L0
@@ -127,6 +126,8 @@ export function UpdateBanner({ updates: injected, health = null, onMoved, stale:
   // The move being confirmed — a plan taken at the tap, so a poll landing
   // while the sheet is open cannot change the list under a thumb.
   const [move, setMove] = useState<PlannedMove | null>(null);
+  // The What's-new sheet (D-5549). Its Update all hands over to the move sheet: one sheet at a time.
+  const [whatsNew, setWhatsNew] = useState(false);
   const haltedId = useId();
   // After a 2xx: the screen's re-poll when it handed one down, else this
   // banner's own (useUpdatesView(0)'s reload is a no-op, by its contract).
@@ -153,12 +154,24 @@ export function UpdateBanner({ updates: injected, health = null, onMoved, stale:
             >
               Update all
             </Button>
-            <Button variant="primary" size="fit" className="flex-none" onClick={() => navigate('/settings')}>
+            <Button variant="primary" size="fit" className="flex-none" onClick={() => setWhatsNew(true)}>
               {"See what's new"}
             </Button>
           </div>
         </div>
       )}
+      <WhatsNewSheet
+        open={whatsNew && view !== null && release !== null}
+        view={view}
+        tag={release?.tag ?? null}
+        halted={halted}
+        onClose={() => setWhatsNew(false)}
+        onUpdateAll={() => {
+          if (view === null || release === null) return;
+          setWhatsNew(false);
+          setMove(planMove(view, { scope: 'fleet', direction: 'update', tag: release.tag }));
+        }}
+      />
       <UpdateMoveSheet open={move !== null} plan={move} onClose={() => setMove(null)} onDone={moved} />
     </>
   );
