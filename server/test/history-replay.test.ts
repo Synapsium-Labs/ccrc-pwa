@@ -8,7 +8,7 @@
 // run time; no fixture names a real account, host or path.
 import { describe, it, expect, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -2319,9 +2319,9 @@ describe('W2-4 Task 8: step0a end to end', () => {
   }
 
   /** runDriver's contract, for the driver copy in `tree`. */
-  function t8Run(tree: string, home: string, args: string[], extraEnv: Record<string, string> = {}) {
+  function t8Run(tree: string, home: string, args: string[], extraEnv: Record<string, string> = {}, timeout = 120_000) {
     const r = spawnSync(process.execPath, [path.join(tree, 'deploy', 'history-replay.mjs'), ...args],
-      { env: { ...scrubbedEnv(process.env), HOME: home, ...extraEnv }, encoding: 'utf8', timeout: 120_000 });
+      { env: { ...scrubbedEnv(process.env), HOME: home, ...extraEnv }, encoding: 'utf8', timeout });
     return { code: r.status, stdout: r.stdout, stderr: r.stderr };
   }
 
@@ -2345,11 +2345,24 @@ describe('W2-4 Task 8: step0a end to end', () => {
 
   it('flagsAccepted: every flag the argvs carry, each true unless a run named it an unknown option', () => {
     const argvs = [['--restricted', '-p', '--tools', '', '--model', 'm1'], ['--restricted', '-p', '--tools', 'Bash,Agent', '--allowedTools', 'Bash(x:*)']];
-    const ok = { unknownOptions: [] as string[] };
+    const ok = { unknownOptions: [] as string[], facts: { init: {} as object | null } };
     expect(replay.flagsAccepted(argvs, [ok, ok])).toEqual({ '--restricted': true, '-p': true, '--tools': true, '--model': true, '--allowedTools': true });
-    const named: Record<string, boolean> = replay.flagsAccepted(argvs, [ok, { unknownOptions: ['--allowedTools'] }]);
+    const named: Record<string, boolean> = replay.flagsAccepted(argvs, [ok, { ...ok, unknownOptions: ['--allowedTools'] }]);
     expect(named['--allowedTools']).toBe(false);
     expect(Object.entries(named).filter(([, v]) => !v).map(([k]) => k)).toEqual(['--allowedTools']);
+  });
+
+  // D-5812: a flag is accepted only when a run that carried it reached its init event.
+  it('flagsAccepted: a flag whose every run emitted no init is false, a flag a run with an init also carried stays true', () => {
+    const argvs = [['--restricted', '-p', '--tools', '', '--model', 'm1'], ['--restricted', '-p', '--tools', 'Bash,Agent', '--allowedTools', 'Bash(x:*)']];
+    const reached = { unknownOptions: [] as string[], facts: { init: {} as object | null } };
+    const notReached = { unknownOptions: [] as string[], facts: { init: null as object | null } };
+    expect(replay.flagsAccepted(argvs, [reached, notReached]), 'the box-only flag was never reached').toEqual({
+      '--restricted': true, '-p': true, '--tools': true, '--model': true, '--allowedTools': false });
+    expect(replay.flagsAccepted(argvs, [notReached, reached]), 'the writer-only flag was never reached').toEqual({
+      '--restricted': true, '-p': true, '--tools': true, '--model': false, '--allowedTools': true });
+    expect(Object.values(replay.flagsAccepted(argvs, [notReached, notReached])).every((v) => v === false)).toBe(true);
+    expect(replay.flagsAccepted(argvs, [reached, { ...reached, unknownOptions: ['-p'] }])['-p'], 'a run that reached init but named the flag unknown').toBe(false);
   });
 
   it('records the step 0a facts in step0a json under --out and prints the sha256 of its bytes, RP1-contract through the subcommand', async () => {
@@ -2560,6 +2573,109 @@ describe('W2-4 Task 8: step0a end to end', () => {
     expect(rec).toMatchObject({ budget: 10 * T8_PER_RUN, spend: 3 * T8_PER_RUN });
     expect(rec.writer_init).toEqual(replay.readStreamJson(T8_STREAM).init);
   }, 120_000);
+
+  // D-5812: step 0a pins the launch it measured (account, Claude Code version, wrapper sha256) before its first run.
+  describe('the launch step 0a recorded is the launch a resume runs under (D-5812)', () => {
+    const FIRST_LINE = T8_STREAM.split('\n')[0]!;
+    const MOVED_STREAM = T8_STREAM.replace('fixture-model-writer', 'fixture-model-moved');
+    const MOVED_LINE = MOVED_STREAM.split('\n')[0]!;
+    const stoppedStep0a = (home: string, tree: string, out: string, account = 'up-a') => {
+      const stopped = t8Run(tree, home, t8Argv(out, { account, budget: String(T8_PER_RUN) }));
+      expect(stopped.code, stopped.stderr).toBe(2);
+      expect(stopped.stderr.startsWith('ccrc history-replay: budget-exhausted: ')).toBe(true);
+      expect(t8Runs(home).map(t8ModelOf)).toEqual([T8_MODELS.writer]);
+    };
+    const resume = (home: string, tree: string, out: string, account = 'up-a') => t8Run(tree, home, t8Argv(out, { account, budget: String(10 * T8_PER_RUN) }));
+
+    it('pins {kind, v, account, claude_code_version, wrapper_sha256} at 0600 before the first run', () => {
+      const home = t8Home('ccrc-w2-t8-launch-pin-');
+      const out = t8Out();
+      stoppedStep0a(home, t8Tree(), out);
+      const file = path.join(out, 'step0a', 'launch.json');
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
+        kind: 'ccrc-history-replay-step0a-launch', v: 1, account: 'up-a', claude_code_version: FIRST_LINE, wrapper_sha256: null });
+      expect(readdirSync(path.join(out, 'step0a')).sort()).toEqual(['launch.json', 'writer.jsonl', 'writer.run.json']);
+    }, 120_000);
+
+    it('a Claude Code version that moved between the stop and the resume refuses claude-version-moved with no new spawn; nothing moved resumes', () => {
+      const home = t8Home('ccrc-w2-t8-launch-version-');
+      const tree = t8Tree();
+      const out = t8Out();
+      stoppedStep0a(home, tree, out);
+      writeFileSync(path.join(home, STUB_STREAM), MOVED_STREAM);
+      const r = resume(home, tree, out);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toBe(`ccrc history-replay: claude-version-moved: step0a recorded ${JSON.stringify(FIRST_LINE)}, now ${JSON.stringify(MOVED_LINE)}\n`);
+      expect(t8Runs(home), 'no new spawn').toHaveLength(1);
+      expect(existsSync(path.join(out, replay.STEP0A_FILE))).toBe(false);
+      writeFileSync(path.join(home, STUB_STREAM), T8_STREAM);
+      const control = resume(home, tree, out);
+      expect(control.code, control.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(path.join(out, replay.STEP0A_FILE), 'utf8')).claude_code_version).toBe(FIRST_LINE);
+      const again = resume(home, tree, out);
+      expect(again.code, 'a complete step0a re-run with nothing moved still exits 0').toBe(0);
+    }, 180_000);
+
+    it('a wrapper that moved between the stop and the resume refuses wrapper-moved with no new spawn; the wrapper restored resumes', () => {
+      const home = t8Home('ccrc-w2-t8-launch-wrapper-');
+      const tree = t8Tree();
+      const out = t8Out();
+      stoppedStep0a(home, tree, out, 'gen-a');
+      const wrapper = path.join(home, '.local', 'bin', 'gen-a');
+      const was = readFileSync(wrapper);
+      writeFileSync(wrapper, Buffer.concat([was, Buffer.from('\n# moved\n')]), { mode: 0o755 });
+      const r = resume(home, tree, out, 'gen-a');
+      expect(r.code).toBe(2);
+      expect(r.stderr).toBe(`ccrc history-replay: wrapper-moved: step0a recorded ${JSON.stringify(sha256Hex(was))}, now ${JSON.stringify(sha256Hex(readFileSync(wrapper)))}\n`);
+      expect(t8Runs(home), 'no new spawn').toHaveLength(1);
+      writeFileSync(wrapper, was, { mode: 0o755 });
+      const control = resume(home, tree, out, 'gen-a');
+      expect(control.code, control.stderr).toBe(0);
+    }, 180_000);
+
+    it('a launch.json that is not a file, not JSON, of another kind or version, over its size, of the wrong types or for another account is refused before any new spawn', () => {
+      const home = t8Home('ccrc-w2-t8-launch-invalid-');
+      const tree = t8Tree();
+      const out = t8Out();
+      stoppedStep0a(home, tree, out);
+      const file = path.join(out, 'step0a', 'launch.json');
+      const good = readFileSync(file, 'utf8');
+      const rec = JSON.parse(good) as Record<string, unknown>;
+      const as = (v: unknown): (() => void) => () => writeFileSync(file, JSON.stringify(v) + '\n');
+      const invalid = 'ccrc history-replay: out-refused: step0a-launch-invalid\n';
+      const copy = path.join(home, 'launch-copy.json');
+      const rows: Array<[string, () => void, string, number?]> = [
+        ['a directory', () => { rmSync(file); mkdirSync(file); }, invalid],
+        ['a symlink to a good launch.json', () => { writeFileSync(copy, good); rmSync(file); symlinkSync(copy, file); }, invalid],
+        ['a FIFO (read with a deadline)', () => { rmSync(file); expect(spawnSync('mkfifo', [file]).status).toBe(0); }, invalid, 20_000],
+        ['not JSON', () => writeFileSync(file, 'not json'), invalid],
+        ['the JSON null', as(null), invalid],
+        ['an array', as([rec]), invalid],
+        ['another kind', as({ ...rec, kind: 'ccrc-history-replay-other' }), invalid],
+        ['another version', as({ ...rec, v: 2 }), invalid],
+        ['over its size bound', as({ ...rec, pad: 'x'.repeat(5000) }), invalid],
+        ['an account that is not a string', as({ ...rec, account: 7 }), invalid],
+        ['a version that is not a string', as({ ...rec, claude_code_version: 7 }), invalid],
+        ['a wrapper sha of the wrong type', as({ ...rec, wrapper_sha256: 7 }), invalid],
+        ['another account', as({ ...rec, account: 'other-a' }), 'ccrc history-replay: out-refused: step0a-launch-mismatch\n'],
+      ];
+      for (const [label, plant, line, deadline] of rows) {
+        rmSync(file, { recursive: true, force: true });
+        writeFileSync(file, good);
+        plant();
+        const r = deadline === undefined ? resume(home, tree, out)
+          : t8Run(tree, home, t8Argv(out, { budget: String(10 * T8_PER_RUN) }), {}, deadline);
+        expect(r.code, label).toBe(2);
+        expect(r.stderr, label).toBe(line);
+        expect(t8Runs(home), `${label}: no new spawn`).toHaveLength(1);
+      }
+      rmSync(file, { recursive: true, force: true });
+      writeFileSync(file, good);
+      const control = resume(home, tree, out);
+      expect(control.code, control.stderr).toBe(0);
+    }, 300_000);
+  });
 
   it('a limits row at the threshold stops before any spawn, the version spawn included', () => {
     const home = t8Home('ccrc-w2-t8-limits-');

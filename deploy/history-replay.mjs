@@ -1301,6 +1301,12 @@ export function refuseRecallOff(home, ids) {
 // and one box-mode run (--tools Bash,Agent and the three spellings), so every flag the contract uses reaches the
 // launcher once. A finished run is skipped on a re-run over the same --out (Task 5's run.json), and its facts are
 // re-read from its stream file. A run that fails or rejects a flag is a finding, recorded, not a refusal.
+// D-5812: the launch step 0a measured (account, Claude Code version, wrapper sha256) is pinned in
+// `<out>/step0a/launch.json` before the first run, and a resume compares what it measures now with it, so the
+// record never pairs one version's init events and flags with another version's name: a version that moved refuses
+// claude-version-moved, a wrapper that moved wrapper-moved (both measured mismatches only), another account
+// out-refused, and a launch.json that cannot be read as one out-refused. A flag is recorded accepted only when
+// no run named it unknown and a run that carried it reached its init event (flagsAccepted).
 // The record is canonicalJson + '\n' at <out>/step0a.json, written whole (tmp, then rename), and its sha256 is
 // printed over the bytes read back from that file, the bytes the operator hands pilot-source as --step0a-sha256.
 // STEP0A_KIND and STEP0A_FIELDS are Task 7's (loadStep0a reads them first); this section never declares them again.
@@ -1319,16 +1325,67 @@ function requireFlag(flags, name) {
   return flags[name];
 }
 
-/** Every flag the runs' argvs carry (a token that starts with '-'; no contract value does), each true unless a
- *  run reported it as an unknown option. Pure.
+/** Every flag the runs' argvs carry (a token that starts with '-'; no contract value does). A flag is true only when
+ *  no run reported it as an unknown option AND at least one run whose argv carries it emitted an init event
+ *  (`facts.init !== null`): a flag whose every run died before Claude Code reached its init was not measured, and
+ *  records false, never true (D-5812). The record's own `*_init` nulls tell "rejected" from "not reached". The
+ *  argvs and outcomes are parallel. Pure.
  *  @param {ReadonlyArray<readonly string[]>} argvs
- *  @param {ReadonlyArray<{ unknownOptions: readonly string[] }>} outcomes
+ *  @param {ReadonlyArray<{ unknownOptions: readonly string[], facts: { init: object | null } }>} outcomes
  *  @returns {Record<string, boolean>} */
 export function flagsAccepted(argvs, outcomes) {
   const unknown = new Set(outcomes.flatMap((o) => o.unknownOptions));
+  const reached = new Set();
+  argvs.forEach((argv, i) => {
+    if (outcomes[i].facts.init !== null) for (const t of argv) reached.add(t);
+  });
   const out = {};
-  for (const argv of argvs) for (const t of argv) if (t.startsWith('-')) out[t] = !unknown.has(t);
+  for (const argv of argvs) for (const t of argv) if (t.startsWith('-')) out[t] = !unknown.has(t) && reached.has(t);
   return out;
+}
+
+const STEP0A_LAUNCH_FILE = 'launch.json';
+const STEP0A_LAUNCH_KIND = 'ccrc-history-replay-step0a-launch';
+const STEP0A_LAUNCH_MAX_BYTES = 4096;
+
+/** D-5812: pin the launch step 0a measured in `<dir>/launch.json`, or compare it with the pinned one. Absent: written
+ *  whole (tmp, then rename, 0600). Present: a file that is not a regular file, does not parse or has the wrong kind,
+ *  version or shape refuses out-refused (step0a-launch-invalid); another account refuses out-refused
+ *  (step0a-launch-mismatch); another Claude Code version refuses claude-version-moved and another wrapper
+ *  wrapper-moved, each naming both values.
+ *  @param {string} dir  @param {{account: string, version: string, wrapper: string | null}} now */
+function pinStep0aLaunch(dir, now) {
+  const file = path.join(dir, STEP0A_LAUNCH_FILE);
+  let st = null;
+  try {
+    st = lstatSync(file);
+  } catch (e) {
+    if (e?.code !== 'ENOENT') refuse('out-refused', 'step0a-launch-invalid');
+  }
+  if (st === null) {
+    const tmp = `${file}.tmp-${process.pid}`;
+    const rec = { kind: STEP0A_LAUNCH_KIND, v: 1, account: now.account, claude_code_version: now.version, wrapper_sha256: now.wrapper };
+    writeFileSync(tmp, canonicalJson(rec) + '\n', { mode: 0o600 });
+    renameSync(tmp, file);
+    return;
+  }
+  if (!st.isFile() || st.size > STEP0A_LAUNCH_MAX_BYTES) refuse('out-refused', 'step0a-launch-invalid');
+  let rec;
+  try {
+    rec = JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    refuse('out-refused', 'step0a-launch-invalid');
+  }
+  if (rec === null || rec.kind !== STEP0A_LAUNCH_KIND || rec.v !== 1
+    || typeof rec.account !== 'string' || typeof rec.claude_code_version !== 'string'
+    || !(rec.wrapper_sha256 === null || typeof rec.wrapper_sha256 === 'string')) refuse('out-refused', 'step0a-launch-invalid');
+  if (rec.account !== now.account) refuse('out-refused', 'step0a-launch-mismatch');
+  if (rec.claude_code_version !== now.version) {
+    refuse('claude-version-moved', `step0a recorded ${JSON.stringify(rec.claude_code_version)}, now ${JSON.stringify(now.version)}`);
+  }
+  if (rec.wrapper_sha256 !== now.wrapper) {
+    refuse('wrapper-moved', `step0a recorded ${JSON.stringify(rec.wrapper_sha256)}, now ${JSON.stringify(now.wrapper)}`);
+  }
 }
 
 export async function step0aCommand(flags, env) {
@@ -1354,6 +1411,7 @@ export async function step0aCommand(flags, env) {
   if (version.state !== 'value') refuse('version-unmeasured', `${launch.launcher} --version failed (code ${version.code}, signal ${version.signal})`);
   const dir = path.join(out, 'step0a');
   if (!existsSync(dir)) mkdirSync(dir, { mode: 0o700 });
+  pinStep0aLaunch(dir, { account: launch.accountId, version: version.version, wrapper: wrapperSha256 });
   const jobs = STEP0A_RUNS.map((r) => ({
     launch, mode: r.mode, model: models[r.key], settingsMode, stdin: STEP0A_PROMPT, out, name: `step0a/${r.key}`, lang: env.LANG,
   }));
