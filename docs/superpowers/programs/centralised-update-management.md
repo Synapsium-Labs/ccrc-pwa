@@ -2054,6 +2054,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         blackout worse for hours. The fix is the broker's (mail 6593). For this programme: the gate rides even a 40 s
         block, but the rehearsal's server taps should wait for the fix release, so those restarts land on fixed
         code, and that release should be the stable promotion's target.
+      - 03:55: the probe read an empty `/health` again: the known minute blackout. Six probes 4 s apart right after
+        answered 200 in 1 to 6 ms; `ccrc.service` is still up since 21:00:42 with 0 restarts. v0.0.317 (#675)
+        followed, unapplied. STATUS: fleet and server v0.0.294, newest v0.0.317, intent dev/auto=off, backups fleet
+        173M/server 1878M, disk free fleet 209G/work volume 86G/server 31G.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
