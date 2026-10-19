@@ -52,6 +52,7 @@ import { projectReadiness } from './readiness.js';
 import { sessionCommands } from './commands.js';
 import { CLIP_MIME, CLIP_NAME_RE, clipPath, clipStem, isSafeSessionId, stageUpload } from './clip.js';
 import type { SpawnPty } from './pty.js';
+import { SHAPE_ONLY_MASKER, type SecretMasker } from './accounts/mask.js';
 import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
@@ -278,6 +279,9 @@ export interface Deps {
    *  type is the enforcement now — see task 13S and `CcdArgv`. */
   runCcd: (argv: CcdArgv) => Promise<CcdResult>;
   tmux: Tmux; io: FleetIO; spawnPty?: SpawnPty;
+  /** The egress mask (D-5513, accounts plan Task A10): every server egress of session-derived text passes it. Absent
+   *  (a test, mainly): `SHAPE_ONLY_MASKER`, so the shapes are masked even where nothing wires the table. */
+  masker?: SecretMasker;
   /** Remote-mode reachability, straight from `connectFleet().state` — its
    *  `connected`/`downSince` fields are ignored in local mode (the fleet is
    *  always "connected" there; every reader gates on `cfg.fleetMode ===
@@ -1430,7 +1434,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!deps.notifyLog) return reply.code(501).send({ error: 'not-configured' });
     const q = req.query as { epoch?: string; seq?: string };
     const seq = Number(q.seq);
-    return deps.notifyLog.catchUp(q.epoch ?? null, Number.isFinite(seq) ? seq : 0);
+    // Each event's `title` and `body` came off a session (a pane-parsed ask, a mail subject): masked before they leave
+    // (D-5513).
+    return (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(deps.notifyLog.catchUp(q.epoch ?? null, Number.isFinite(seq) ? seq : 0));
   });
 
   // Account usage read straight from telemetry (cc-limits), independent of which
@@ -1932,7 +1938,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // through that spec's guarded sizer (§6, stage 2).
     void deps.tmux.resizeWindow(id, PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS);
     const p = spawnPty(id, cols, rows);
-    const sub = p.onData((data) => socket.send(data));   // server->client: raw utf8 frames
+    // server->client: raw utf8 frames, each masked first (D-5513, accounts plan Task A10). HERE, not in `pty.ts`:
+    // this is the one point both drawer arms pass, the local `attachPty` and the remote `createSpawnPty`. A chunk that
+    // ends inside a candidate run is held back until the next chunk or 50 ms (`DrawerMask`).
+    const drawerMask = (deps.masker ?? SHAPE_ONLY_MASKER).drawer((text) => socket.send(text));
+    const sub = p.onData((data) => drawerMask.push(data));
     socket.on('message', (raw) => {
       try {
         const m = JSON.parse(String(raw)) as { type?: unknown; data?: unknown; cols?: unknown; rows?: unknown };
@@ -1947,6 +1957,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
     socket.on('close', () => {
       sub.dispose();
+      drawerMask.dispose();
       p.kill();
       // Restore the canonical size ccd spawned with — a phone-sized drawer must
       // not leave the session shrunken (wrapped panes break capture parsing).
@@ -2020,9 +2031,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // at the reader's width is at most ceil(paneWidth / readerCols) rows, and
     // the census holds a 302-column window, so the multiplier is measured
     // rather than assumed (spec §5.4).
+    // The text is masked before it leaves (D-5513), in rows mode: `-J` joins the pane's own wraps, and Claude Code's
+    // TUI hard-wraps a long line into indented rows of its own.
+    const text = (deps.masker ?? SHAPE_ONLY_MASKER).maskText(r.text, { rows: true });
     return probe.ok
-      ? { ok: true, text: r.text, lines: asked, scrollback: probe.history, alternate: probe.alternate, width: probe.width }
-      : { ok: true, text: r.text, lines: asked };
+      ? { ok: true, text, lines: asked, scrollback: probe.history, alternate: probe.alternate, width: probe.width }
+      : { ok: true, text, lines: asked };
   });
 
   // Write routes: serialized per session through one KeyedQueue; injection

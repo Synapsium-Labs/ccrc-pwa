@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { wireHookAsk } from './fleet.js';
 import type { Deps } from './server.js';
+import { SHAPE_ONLY_MASKER } from './accounts/mask.js';
 import type { Bus, Notice } from './bus.js';
 import { configDirFor, type CcrcConfig } from './config.js';
 import { measuredIdentity, readSessionRecord } from './registry.js';
@@ -180,6 +181,8 @@ export class SessionStream {
    *  memo's two-poll gate, never cause one. */
   private readonly notResumed = new WeakSet<TranscriptResolution>();
 
+  /** Every frame's one way out, masked (see the constructor's `sendRaw`). */
+  private readonly send: (m: SessionStreamMsg) => void;
   private readonly onNotice = (n: Notice): void => this.send({ type: 'notice', message: n.message });
   // This stream detects dialogs itself (start + every tick), so it always
   // delivers a dialog that is ALREADY pending when the client connects — the
@@ -223,7 +226,9 @@ export class SessionStream {
     private readonly deps: Deps,
     private readonly bus: Bus,
     private readonly id: string,
-    private readonly send: (m: SessionStreamMsg) => void,
+    /** The socket's raw sender. Every frame reaches it only through `this.send`, which masks each decoded string
+     *  field first (D-5513, accounts plan Task A10): the transcript rows, the ask and dialog frames, the mail. */
+    sendRaw: (m: SessionStreamMsg) => void,
     /** `file` is the transcript the client's `offset` was taken in (§5.3).
      *
      *  OPTIONAL, and the omission is a REAL exposure, not a shrug. A client
@@ -255,6 +260,8 @@ export class SessionStream {
      *  state, and it is a state with no offset to protect. */
     private readonly since?: { uuid: string; offset: number; file?: string | null },
   ) {
+    const masker = deps.masker ?? SHAPE_ONLY_MASKER;
+    this.send = (m) => sendRaw(masker.maskDeep(m));
     this.transcripts = new TranscriptResolver(deps.io);
   }
 

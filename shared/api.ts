@@ -11709,3 +11709,36 @@ export type AccountGateRefusal = (typeof ACCOUNT_GATE_REFUSALS)[number];
 /** The class of `cfg.origin` the gate decides on, and `GET /api/accounts`'s `connect.origin` (A12): https, plain HTTP
  *  on a loopback host, or anything else. */
 export type AccountOriginClass = 'https' | 'loopback' | 'insecure';
+
+/** One credential shape (D-5513, plan Task A10): a bare regular-expression source, with no flags and no boundary, so
+ *  each reader adds its own (`server/src/accounts/mask.ts` for every egress of session-derived text,
+ *  `server/src/coord/redact.ts` for approval rows). */
+export interface CredentialMask { readonly id: string; readonly source: string }
+
+/** THE credential shapes a lane's files can hold, whether or not ccrc wrote them (D-5513, plan Task A10): the whole
+ *  Anthropic `sk-ant-<kind><nn>-` family (the OAuth access token `oat`, the refresh token `ort` a login lane's
+ *  `.credentials.json` holds, and the API key `api`), OpenRouter keys, the Codex gateway key (`ccrc-codex` reads it
+ *  as `sk-` and 48 lowercase hex), the generic `sk-` rule and the JWT shape (so a Codex `auth.json`'s access, id and
+ *  refresh tokens are covered), and the Codex `auth.json` token fields by name. The one home: `redact.ts`'s
+ *  `KNOWN_TOKEN` and `JWT` read `genericSk` and `jwt` from here. Each specific family is its own entry, so it is
+ *  masked even if the generic rule were ever narrowed. */
+export const CREDENTIAL_MASKS = [
+  { id: 'anthropic', source: String.raw`sk-ant-[a-z]{3}[0-9]{2}-[A-Za-z0-9_-]{8,}` },
+  { id: 'openrouter', source: String.raw`sk-or-v1-[A-Za-z0-9]{8,}` },
+  { id: 'codexGateway', source: String.raw`sk-[0-9a-f]{48}` },
+  { id: 'genericSk', source: String.raw`sk-[A-Za-z0-9_-]{8,}` },
+  { id: 'jwt', source: String.raw`eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*` },
+  { id: 'codexTokenField', source: String.raw`(?<="(?:access_token|id_token|refresh_token|OPENAI_API_KEY)"\s*:\s*")(?:[^"\\\n]|\\.)+` },
+] as const satisfies readonly CredentialMask[];
+export type CredentialMaskId = (typeof CREDENTIAL_MASKS)[number]['id'];
+
+/** One credential shape's source, by id. */
+export function credentialMaskSource(id: CredentialMaskId): string {
+  return CREDENTIAL_MASKS.find((m) => m.id === id)!.source;
+}
+
+/** What a masked credential reads as, everywhere session-derived text leaves the server (D-5513). */
+export const SECRET_MASK = '‹secret masked›';
+/** What the rest of a text reads as once it holds more candidate runs than the exact-bytes check's hard ceiling: the
+ *  check fails closed, so no run is ever passed through unchecked (D-5513). */
+export const SECRET_MASK_TOO_LARGE = '‹output too large to check, masked›';

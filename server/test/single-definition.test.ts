@@ -7320,3 +7320,34 @@ describe("the lane's kind is derived in one place, shared/roster.ts (D-5517)", (
     expect(holders(/\brosterKindOf\(/)).toEqual(['server/src/server.ts', 'shared/roster.ts']);
   });
 });
+
+// D-5513 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A10). APPENDED. The credential shapes have
+// one home, `CREDENTIAL_MASKS` in `shared/api.ts`, beside the mask's two words; the egress mask has one home,
+// `server/src/accounts/mask.ts`; and `redact.ts`'s approval-row redactor reads its generic `sk-` and JWT shapes from
+// the registry rather than keeping a second copy that could drift from the egress mask's.
+describe('the credential shapes and the egress mask each have one home (D-5513)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('CREDENTIAL_MASKS').test('export const CREDENTIAL_MASKS = [')).toBe(true);
+    expect(decl('CREDENTIAL_MASKS').test("import { CREDENTIAL_MASKS } from '../../../shared/api.js';")).toBe(false);
+  });
+  it('the shapes and the mask words are declared once, in shared/api.ts', () => {
+    for (const c of ['CREDENTIAL_MASKS', 'CredentialMask', 'CredentialMaskId', 'credentialMaskSource', 'SECRET_MASK',
+      'SECRET_MASK_TOO_LARGE']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the mask lives in its one file', () => {
+    for (const c of ['SecretMasker', 'DrawerMask', 'SHAPE_ONLY_MASKER', 'fingerprintOf', 'fingerprintGeneration', 'shapeMatchers']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/mask.ts']);
+    }
+  });
+  it("maskSecretAssigns's file and mask.ts read the shapes from CREDENTIAL_MASKS, and no other file spells one", () => {
+    expect(holders(/\bcredentialMaskSource\('genericSk'\)/)).toEqual(['server/src/coord/redact.ts']);
+    expect(holders(/\bcredentialMaskSource\('jwt'\)/)).toEqual(['server/src/coord/redact.ts']);
+    expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/mask.ts']);
+    // A second copy of a shape's source: the Anthropic family's prefix, the generic rule, or the JWT header pair.
+    expect(holders(/sk-ant-\[|sk-\[A-Za-z0-9_-\]\{8,\}|eyJ\[A-Za-z0-9_-\]\+\\\.eyJ/)).toEqual(['shared/api.ts']);
+  });
+});
