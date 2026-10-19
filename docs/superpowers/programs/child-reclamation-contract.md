@@ -3815,6 +3815,11 @@ comments and test titles cite the spec, never this contract.
   seventeen PRs: code PRs #429, #438, #439, #443, #446, #447, #449, #450, #452, #483, #484, #485 (the supervisor
   tick diet's third wave), #487, #488 and #489, and docs PRs #440 and #451. Its one conflict was `ccd/ccd`'s
   generated stamp line, restamped; no function changed on both sides.
+  The third landing round absorbed `main` a sixth time, as `adca4a843`, of `main` at `19b0f00ce`. That brought 109
+  PRs, #425 to #696, among them `ccd hibernate` (#594), whose dash-id redirect the same round closed
+  (`hibernate-refuses-a-dash-leading-id`, below). Its one conflict was `ccd/ccd`'s generated stamp line, restamped.
+  Unlike the fifth, it changed three `ccd/ccd` functions on both sides: `cmd_start`, `cmd_stop` and `cmd_ws_archive`.
+  In each, `main`'s change is a single `.hibernated` line, placed after W1b's guard.
 - Workspace lifecycle's coordinator consented to its three `ws-expire` edits: the loop's identity pair and the verb's
   entry line, each with its short comment, and `_ws_expire_audit_contained`'s entry line. `_ws_expire_locked` and the
   EXPIRE-V1 note were not edited.
@@ -3827,10 +3832,14 @@ comments and test titles cite the spec, never this contract.
   (bisected to that boundary, then sampled every 500 lines to the end of the file). Every edit of this wave, the stamp
   line aside, lies below that line, so the line neutrality of the functions that start above `cmd_start()` was proven
   by start-line and line-count diffs, not by the census.
+  "This tip" is the tree after the second absorption of `main` (`65614d350`), where fix round 1 measured the
+  threshold. It was not re-measured after the third to sixth absorptions.
 
 **SEC1 and SEC3 (which verbs; predicates and loops).**
-- `surface-dash-rule-at-stop-and-ws-add-only`: a dash-leading `--surface` value is refused at stop and ws-add only,
-  the two positional-id verbs, where it closes a redirect. The eight `--session` verbs keep their surface grammar,
+- `surface-dash-rule-at-stop-and-ws-add-only`: a dash-leading `--surface` value is refused at stop and ws-add, the
+  two positional-id verbs W1b built, where it closes a redirect, and at hibernate, which the sixth absorption of `main`
+  brought (`hibernate-refuses-a-dash-leading-id`, below; recorded 2026-10-19). The eight `--session` verbs keep
+  their surface grammar,
   since the `--session` pair closes theirs. `stop --surface pwa --surface` is refused by the loop's arity check, not
   by the post-loop id check. Spec §2.9 corrects §2.4 on both points.
 - `reg-id-ok-under-lc-all-c`: `_reg_id_ok`, the one dash rule, reads the registry charset under `LC_ALL=C`, with a pin
@@ -3926,6 +3935,20 @@ comments and test titles cite the spec, never this contract.
 - `section-2-2-verdicts-measured-at-task-10`: the verdicts in spec §2.2 were measured by that file's matrix, run once
   against the pre-wave binary, not by the entry check, which writes nothing. Of 259 cases, 188 went red there and 71
   stayed green; all 259 are green at the tip. Spec §2.9 carries the measured tables.
+  As built at the landing (recorded 2026-10-19): those are Task 10's figures, from before hibernate existed. At #410's
+  final head the file has 275 cases, with hibernate's 16 rows. Against the pre-wave binary, which has no `hibernate`
+  verb, 188 go red and 87 stay green. Against `adca4a843`'s binary, the 16 hibernate rows go red and the other 259 stay
+  green. Run 640's prose cases bring the file to 285.
+
+**At the landing (the third landing round, after the sixth absorption of `main`).**
+- `hibernate-refuses-a-dash-leading-id`: `ccd hibernate` (#594), which the absorption brought, takes its id first in
+  the server's argv, so an id spelled `--actor` took `--surface` as its value and left the surface word as the id. It
+  now refuses a `--surface`, `--actor` or `--reason` value that begins with `-`, in either spelling, with its usage
+  line, and its id passes `_reg_id_ok`. Spec §2.9 says it in full. So hibernate is a third verb that refuses a
+  dash-leading `--surface` value: `surface-dash-rule-at-stop-and-ws-add-only`, above, speaks of the verbs W1b built.
+  It also narrows the actor and reason prose that spec §2.4 kept. Review 641 found that, and the operator accepted the
+  narrowing on 2026-10-19. The two-token checks close the redirect. The three `=`-form checks close none and only refuse
+  `--surface=-x`, `--actor=-x` and `--reason=-x`. `ccd-hibernate.test.ts` pins all six checks.
 
 **Stated residuals**, named with no number; spec §2.9 says each one in full.
 - `dot-rule-only-at-the-token-verbs`: release, archive, restore, hold, rename and stop still accept a dot-leading id.

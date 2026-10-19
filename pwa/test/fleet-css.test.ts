@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { BARE_ROW, CONTROL_ROW, SELECT, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
+import { BARE_ROW, CONTROL_ROW, PAGE_BODY, SELECT, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
 import { cn } from '../../ui/src/lib/cn';
 
 /** The quiet control's shipped class string. FOUR rules in this stylesheet
@@ -931,10 +931,11 @@ describe('the program-start door and sheet are not living panes, and every real 
 
   // Whole-branch review, M6: `.program-start-door` was copy-pasted from
   // `.coord-toggle`, which lives in a flex row (`.coord-banner`). The door's
-  // own parent is `.runs-screen`, `display: grid` — `flex: none` there is
-  // inert, a declaration that reads as load-bearing and does nothing.
-  it('.program-start-door declares no flex — its parent .runs-screen is a grid', () => {
-    expect(declValue(ruleFor('.runs-screen'), 'display')).toBe('grid');
+  // own parent is the run board's body, a grid — `flex: none` there is
+  // inert, a declaration that reads as load-bearing and does nothing. Since
+  // the page scaffold (D-5102) that body is PageScaffold's, not `.runs-screen`.
+  it('.program-start-door declares no flex — its parent, the scaffold body, is a grid', () => {
+    expect(PAGE_BODY.split(/\s+/)).toContain('grid');
     // The claim survived the move to `<Button variant="quiet">`, and it is why
     // the variant does NOT carry `flex-none`: the other three quiet controls
     // sit in flex rows and pass it at the call site, this one must not. Both
