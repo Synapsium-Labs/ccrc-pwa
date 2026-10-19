@@ -2233,6 +2233,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         journal only, counts and timings; mail 6833 to the broker's coordinator. STATUS: fleet and server v0.0.361,
         newest v0.0.361, stable v0.0.328, intent dev/auto=off, backups fleet 179M/server 3006M, disk free fleet
         207G/work volume 102G/server 30G, no anomalies.
+      - 21:55: a correction to the 21:00 entry. The broker's coordinator, reading the code at `main` against those
+        19 passes (mail 6843; a reading, not yet a measurement), finds the repair is not waiting: at 0 passes it is
+        one full synchronous projection of the checkpoint into coord.db, so its 0.65 to 0.92 s blocks the loop, and
+        `rewrites=2` is flush's projection plus the repair's. The per-event slope in flush is mostly the journal's
+        awaited write and fsync, which lengthens the pass, not the blackout; flush's own main-thread part is about
+        1.8 to 2 s a pass. I sent the four lines it asked for whole (mail 6844); the next step is its ruling to the
+        operator. v0.0.362 (#741) to v0.0.368 (#753) followed, unapplied. STATUS: fleet and server v0.0.361, newest
+        v0.0.368, stable v0.0.328, intent dev/auto=off, backups fleet 179M/server 3006M, disk free fleet 207G/work
+        volume 98G/server 30G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
