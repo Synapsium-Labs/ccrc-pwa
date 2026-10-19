@@ -3936,7 +3936,8 @@ comments and test titles cite the spec, never this contract.
 - `hibernate-refuses-a-dash-leading-id`: `ccd hibernate` (#594), which the absorption brought, takes its id first in
   the server's argv, so an id spelled `--actor` took `--surface` as its value and left the surface word as the id. It
   now refuses a `--surface`, `--actor` or `--reason` value that begins with `-`, in either spelling, with its usage
-  line, and its id passes `_reg_id_ok`. Spec §2.9 says it in full.
+  line, and its id passes `_reg_id_ok`. Spec §2.9 says it in full. So hibernate is a third verb that refuses a
+  dash-leading `--surface` value: `surface-dash-rule-at-stop-and-ws-add-only`, above, speaks of the verbs W1b built.
 
 **Stated residuals**, named with no number; spec §2.9 says each one in full.
 - `dot-rule-only-at-the-token-verbs`: release, archive, restore, hold, rename and stop still accept a dot-leading id.

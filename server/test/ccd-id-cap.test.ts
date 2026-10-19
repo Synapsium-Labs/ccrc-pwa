@@ -300,13 +300,15 @@ describe('a new id fits every name ccd derives from it (path-identity spec §2.6
     }
     // The field family is taken at the longest field literal in the tree, read through `_reg_set`, `_reg_get` and
     // `_reg_read`, and through the out-var readers `_reg_get_to <var> "$id" <field>` and `_reg_read_to <var> "$id" <field>`.
-    const calls = [...ccd.matchAll(
-      /\b_reg_(?:set|get|read|(?:get|read)_to\s+[A-Za-z_][A-Za-z_0-9]*)\s+"?\$\{?[A-Za-z_0-9]+\}?"?\s+([a-z][a-z0-9_-]*)/g)];
+    const FIELD_CALL =
+      /\b_reg_(?:set|get|read|(?:get|read)_to\s+[A-Za-z_][A-Za-z_0-9]*)\s+"?\$\{?[A-Za-z_0-9]+\}?"?\s+([a-z][a-z0-9_-]*)/g;
+    const calls = [...ccd.matchAll(FIELD_CALL)];
     const fields = calls.map((m) => m[1]);
     expect(fields.length, 'the field scan finds the registry writers and readers').toBeGreaterThan(40);
     const viaTo = calls.map((m) => m[0]).filter((c) => /^_reg_(?:get|read)_to\s/.test(c));
     expect(viaTo.length, 'the field scan reads the out-var readers too').toBeGreaterThanOrEqual(13);
-    expect(viaTo, "cmd_hibernate's read is one of them").toContain('_reg_get_to last "$id" lastswap');
+    expect([...bodyOf(ccd, 'cmd_hibernate').matchAll(FIELD_CALL)].map((m) => m[0]),
+      "the field scan reads cmd_hibernate's own out-var read").toContain('_reg_get_to last "$id" lastswap');
     expect(Math.max(...fields.map((f) => f.length)), 'FIELD_MAX is the longest registry field literal').toBe(FIELD_MAX);
   });
 

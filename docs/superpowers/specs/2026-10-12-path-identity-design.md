@@ -404,6 +404,8 @@ measured at the wave's tip unless it says otherwise.
   `--surface`, `--actor` or `--reason` value that begins with `-`, in either spelling, with its usage line, and its id
   passes `_reg_id_ok`. So at hibernate, unlike the eight `--session` verbs, actor and reason prose may not begin with
   `-`. `ccdargv-dash-id-parity.test.ts` covers it: its 16 hibernate rows went red against the binary before the fix.
+  Hibernate is a third verb that refuses a dash-leading `--surface` value, so the correction to §2.4 above, "except
+  at stop and ws-add", speaks of the verbs W1b built, not of hibernate, which came later.
 - The census gained rows for the absorption's new names, `<id>.deny-settings`, `<id>.no-hibernate` and
   `<id>.rescueprev.tmp.XXXXXX`, none wider than the widest row, so the cap is unchanged. Its row for
   `server/src/workflows/read.ts`'s `-<id>.js` is a workflow run id, not a session id: the row accounts for the scan's
