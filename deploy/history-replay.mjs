@@ -18,10 +18,12 @@
 // Its words: DRIVER_REASONS, frozen once here and nowhere else (W2-D59, W2-D12; D-5774). A refusal prints
 // `ccrc history-replay: <word>: <detail>` on stderr and exits EXIT.REFUSED (2); a defect exits EXIT.INTERNAL (1).
 // They are never lib REASONS: §8.7's table and SKILL.md do not list them. EXIT is imported, never declared (O14).
-import { accessSync, appendFileSync, constants, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, appendFileSync, chmodSync, closeSync, constants, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path, { join } from 'node:path';
+import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { EXIT, blobOverDecodeCap, canonicalJson, redactField } from '../ccd/history/lib.mjs';
+import { EXIT, blobOverDecodeCap, canonicalJson, redactField, sha256Hex } from '../ccd/history/lib.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -598,6 +600,298 @@ export function spentSoFar(out) {
     sum += row.tokens;
   }
   return sum;
+}
+
+// ── W2-4 Task 5: the spawn contract and the batch runner (W2-D50, W2-D51, W2-D53, W2-D55) ─────────────────────
+// The ONE way this driver runs Claude Code (spec §10.2 "Two arms": Launch, Environment, cwd, Flags, Tools; the
+// writer and the judge "go through the driver's spawn contract", SE10). Every spawn is `spawn(launcher, argv)`
+// with an argv array and no shell, a FRESH env built by spawnEnv from the allow-list (never a copy of the
+// driver's own), an empty 0700 cwd made per run outside any git tree and removed after it, and stdin as the only
+// input. Arm values arrive as parameters: this file never spells one (W2-5b's scan pins that).
+// A run's files land under --out in a fixed order: the stream `<name>.jsonl`, then its spend line in the ledger,
+// then `<name>.run.json` via tmp + rename. The run.json is the completion marker and comes LAST, so a run killed
+// before it is spawned again on resume; if its ledger line had landed, the summed ledger counts both spawns (an
+// over-count, the budget's safe direction). A run whose run.json exists is never spawned again (W2-D53, W2-D55).
+// The child's LANG arrives as RunJob.lang, threaded from main's env: this section never reads process.env.
+
+/** The four ways a run is spawned: an arm run (with the CCRC_RECALL_* values), the question writer, the judge,
+ *  and a box-verb run (an arm's tools, no arm values: step 0a's third spawn and the probe). */
+export const SPAWN_MODES = Object.freeze(['arm', 'writer', 'judge', 'box']);
+/** `--restricted`, or the fallback the pilot records if `--restricted` drops the skill (W2-D57, spec §10.2 Flags). */
+export const SETTINGS_MODES = Object.freeze(['restricted', 'fallback']);
+/** The turn bound, `--max-turns 12` (spec §10.2 Flags). */
+export const MAX_TURNS = 12;
+/** A batch is at most 10 spawns (W2-D55; part 1's `limits.batch_max` default). */
+export const BATCH_MAX = 10;
+/** At most 2 runs at once (W2-D51; part 1's `limits.concurrency` default). */
+export const CONCURRENCY_MAX = 2;
+/** The poisoned `gh` lives here under --out, first on every child's PATH (the ghContainedEnv shape). */
+export const POISON_BIN_DIR = 'poison-bin';
+
+const RUN_TIMEOUT_MS = 1_800_000;
+const KILL_GRACE_MS = 10_000;
+const STDERR_KEEP_BYTES = 65_536;
+const RUN_KIND = 'ccrc-history-replay-run';
+const RUN_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}(?:\/[a-z0-9][a-z0-9._-]{0,63}){0,3}$/;
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+const UNKNOWN_OPTION_RE = /unknown option ['"](-{1,2}[A-Za-z0-9][A-Za-z0-9-]*)['"]/g;
+const POISON_GH = '#!/bin/sh\necho "ccrc history-replay: a replay run must never reach gh" >&2\nexit 97\n';
+const SETTINGS_ARGV = Object.freeze({
+  restricted: Object.freeze(['--restricted']),
+  fallback: Object.freeze(['--setting-sources', 'project,local', '--settings', '{"disableAllHooks":true}']),
+});
+
+/** The three spellings the arms are taught, exactly (spec §10.2 Tools, SE9): the absolute path, the skill's and
+ *  the card's. */
+export function allowedToolSpellings(home) {
+  if (typeof home !== 'string' || !path.isAbsolute(home)) throw new TypeError(`allowedToolSpellings: home ${JSON.stringify(home)} is not absolute`);
+  return Object.freeze([
+    `Bash(${home}/.local/bin/ccrc history:*)`,
+    'Bash("$HOME/.local/bin/ccrc" history:*)',
+    'Bash(~/.local/bin/ccrc history:*)',
+  ]);
+}
+
+/** The argv of one spawn: the settings argv, the fixed flags, the model, then the tools by mode. Input is never
+ *  an argument: it goes on stdin. Pure.
+ *  @param {{mode: string, model: string, settingsMode: string, home: string}} spec
+ *  @returns {string[]} */
+export function spawnArgv({ mode, model, settingsMode, home }) {
+  if (!SPAWN_MODES.includes(mode)) throw new TypeError(`spawnArgv: mode ${JSON.stringify(mode)} is not one of ${SPAWN_MODES.join(', ')}`);
+  if (!SETTINGS_MODES.includes(settingsMode)) throw new TypeError(`spawnArgv: settings mode ${JSON.stringify(settingsMode)} is not one of ${SETTINGS_MODES.join(', ')}`);
+  if (typeof model !== 'string' || !MODEL_RE.test(model)) throw new TypeError(`spawnArgv: model ${JSON.stringify(model)} is not a model id`);
+  const argv = [...SETTINGS_ARGV[settingsMode], '-p', '--no-session-persistence', '--strict-mcp-config',
+    '--output-format', 'stream-json', '--verbose', '--max-turns', String(MAX_TURNS), '--model', model];
+  if (mode === 'arm' || mode === 'box') argv.push('--tools', 'Bash,Agent', '--allowedTools', ...allowedToolSpellings(home));
+  else argv.push('--tools', '');
+  return argv;
+}
+
+/** The child's whole environment, built fresh (the `env -i` equivalent, W2-D50): HOME, the explicit PATH, LANG,
+ *  the account's CLAUDE_CONFIG_DIR, and in arm mode only the three CCRC_RECALL_* values passed in. Pure.
+ *  @param {{mode: string, home: string, configDir: string, poisonBin: string, lang: string | undefined,
+ *    recall?: {session: string, arm: string, asof: string}}} spec
+ *  @returns {Record<string, string>} */
+export function spawnEnv({ mode, home, configDir, poisonBin, lang, recall }) {
+  if (!SPAWN_MODES.includes(mode)) throw new TypeError(`spawnEnv: mode ${JSON.stringify(mode)} is not one of ${SPAWN_MODES.join(', ')}`);
+  for (const [k, v] of [['home', home], ['configDir', configDir], ['poisonBin', poisonBin]]) {
+    if (typeof v !== 'string' || !path.isAbsolute(v) || v.includes(':')) throw new TypeError(`spawnEnv: ${k} ${JSON.stringify(v)} is not an absolute path without ':'`);
+  }
+  const child = {
+    HOME: home,
+    PATH: `${poisonBin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+    LANG: typeof lang === 'string' && lang !== '' ? lang : 'C.UTF-8',
+    CLAUDE_CONFIG_DIR: configDir,
+  };
+  if (mode !== 'arm') {
+    if (recall !== undefined) throw new TypeError(`spawnEnv: a ${mode} run carries no CCRC_RECALL_* values`);
+    return child;
+  }
+  const r = recall ?? {};
+  for (const k of ['session', 'arm', 'asof']) {
+    if (typeof r[k] !== 'string' || r[k] === '') throw new TypeError(`spawnEnv: an arm run needs recall.${k}, a non-empty string`);
+  }
+  child.CCRC_RECALL_SESSION = r.session;
+  child.CCRC_RECALL_ARM = r.arm;
+  child.CCRC_RECALL_ASOF = r.asof;
+  return child;
+}
+
+/** Plant (every call, as ghContainedEnv re-plants) the poisoned gh under --out and answer its directory. */
+export function ensurePoisonBin(out) {
+  const dir = path.join(out, POISON_BIN_DIR);
+  try {
+    mkdirSync(dir, { mode: 0o700 });
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+  }
+  const st = lstatSync(dir);
+  if (!st.isDirectory()) refuse('out-refused', `${POISON_BIN_DIR} is not a directory`);
+  const gh = path.join(dir, 'gh');
+  writeFileSync(gh, POISON_GH, { mode: 0o700 });
+  chmodSync(gh, 0o700);
+  return dir;
+}
+
+/** A fresh, empty 0700 directory under os.tmpdir(), outside any git tree: one run's cwd. */
+export function makeRunCwd() {
+  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'ccrc-history-replay-')));
+  const g = insideGitTree(dir);
+  const st = lstatSync(dir);
+  const bad = g.state === 'inside' ? `run-cwd-in-git-tree ${g.at}`
+    : g.state === 'unmeasured' ? `run-cwd-git-unmeasured ${g.at} ${g.code}`
+      : !st.isDirectory() || (st.mode & 0o777) !== 0o700 ? `run-cwd-mode ${(st.mode & 0o777).toString(8)}`
+        : readdirSync(dir).length !== 0 ? 'run-cwd-not-empty' : null;
+  if (bad !== null) {
+    rmSync(dir, { recursive: true, force: true });
+    refuse('out-refused', bad);
+  }
+  return dir;
+}
+
+/** HOME for a launch: the directory its config dir sits in. A roster configDirSuffix is one segment (shared/
+ *  roster-json.mjs refuses a '/'), so this is exact; the launcher must sit under the same home. */
+function runHomeOf(launch) {
+  const home = path.dirname(launch.configDir);
+  if (!launch.launcher.startsWith(path.join(home, '.local', 'bin') + path.sep)) {
+    throw new TypeError(`launchRun: launcher ${launch.launcher} is not under ${home}/.local/bin`);
+  }
+  return home;
+}
+
+function runPaths(out, name) {
+  if (typeof name !== 'string' || !RUN_NAME_RE.test(name)) throw new TypeError(`launchRun: run name ${JSON.stringify(name)} is not a run name`);
+  // D-5803: a name whose stream file would be the spend ledger is refused, or openSync(streamPath, 'w') truncates it and the budget fails open.
+  if (`${name}.jsonl` === SPEND_LEDGER) throw new TypeError(`launchRun: run name ${JSON.stringify(name)} would stream into the spend ledger ${SPEND_LEDGER}`);
+  return { streamPath: path.join(out, `${name}.jsonl`), runJsonPath: path.join(out, `${name}.run.json`) };
+}
+
+/** The outcome of a job whose run.json exists (resume), or null when it has none. A run.json that does not
+ *  parse, one recorded for another account, mode, model or settings mode, or a stream whose bytes changed since,
+ *  refuses: a resumed batch builds on what was recorded, and only for the job that recorded it. */
+function finishedOutcome(job) {
+  const { streamPath, runJsonPath } = runPaths(job.out, job.name);
+  let text;
+  try {
+    text = readFileSync(runJsonPath, 'utf8');
+  } catch (e) {
+    if (e.code === 'ENOENT') return null;
+    refuse('out-refused', `run-json-unreadable ${job.name} ${e.code}`);
+  }
+  let rec;
+  try {
+    rec = JSON.parse(text);
+  } catch {
+    refuse('out-refused', `run-json-invalid ${job.name}`);
+  }
+  if (rec === null || typeof rec !== 'object' || rec.kind !== RUN_KIND || rec.name !== job.name) refuse('out-refused', `run-json-invalid ${job.name}`);
+  // The recorded run must be this job's: another account, mode, model or settings mode on the same --out and name
+  // is never reused (a re-run under another --account would otherwise record that account over this run's facts).
+  if (rec.account !== job.launch.accountId || rec.mode !== job.mode || rec.model !== job.model || rec.settings_mode !== job.settingsMode) {
+    refuse('out-refused', `run-json-mismatch ${job.name}`);
+  }
+  const stream = readFileSync(streamPath);
+  if (sha256Hex(stream) !== rec.stream_sha256) refuse('out-refused', `run-stream-changed ${job.name}`);
+  return {
+    name: job.name, skipped: true, code: rec.code, signal: rec.signal, ms: rec.ms, cwd: rec.cwd, streamPath,
+    facts: readStreamJson(stream.toString('utf8')), tokens: rec.tokens, unknownOptions: rec.unknown_options,
+  };
+}
+
+/** One child, stdout straight into the stream file, stdin written whole, stderr kept to a bound; killed on its
+ *  own pid when it outlives `timeoutMs` (SIGTERM, then SIGKILL after a grace). */
+function runChild(launcher, argv, { cwd, childEnv, stdin, streamPath, timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    const fd = openSync(streamPath, 'w', 0o600);
+    let child;
+    try {
+      child = spawn(launcher, argv, { cwd, env: childEnv, stdio: ['pipe', fd, 'pipe'] });
+    } finally {
+      closeSync(fd);
+    }
+    const errs = [];
+    let kept = 0;
+    child.stderr.on('data', (b) => {
+      if (kept < STDERR_KEEP_BYTES) { errs.push(b.subarray(0, STDERR_KEEP_BYTES - kept)); kept += b.length; }
+    });
+    child.stdin.on('error', (e) => { if (e.code !== 'EPIPE') reject(e); });
+    let killer = null;
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      killer = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS);
+    }, timeoutMs);
+    child.on('error', (e) => { clearTimeout(timer); if (killer) clearTimeout(killer); reject(e); });
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      if (killer) clearTimeout(killer);
+      resolve({ code, signal, stderr: Buffer.concat(errs).toString('utf8') });
+    });
+    child.stdin.end(stdin);
+  });
+}
+
+/** The option names a run's stderr reports as unknown, in order, once each. Nothing else of stderr is kept. */
+function unknownOptionsIn(stderr) {
+  const seen = [];
+  for (const m of stderr.matchAll(UNKNOWN_OPTION_RE)) if (!seen.includes(m[1])) seen.push(m[1]);
+  return seen;
+}
+
+/** Run one job, or answer its recorded outcome when its run.json exists. The job's `name` is one to four `/`-separated
+ *  segments of `[a-z0-9][a-z0-9._-]*`; a name whose stream would be `<out>/SPEND_LEDGER` is refused (D-5803).
+ *  @param {{launch: object, mode: string, model: string, settingsMode: string, recall?: object, stdin: string,
+ *    out: string, name: string, lang: string | undefined, timeoutMs?: number}} job */
+export async function launchRun(job) {
+  if (job === null || typeof job !== 'object' || !Object.hasOwn(job, 'lang')) {
+    throw new TypeError("launchRun: a RunJob carries lang, the caller's LANG from main's env (undefined when unset)");
+  }
+  const done = finishedOutcome(job);
+  if (done !== null) return done;
+  const { launch, mode, model, settingsMode, recall, stdin, out, name, lang } = job;
+  const timeoutMs = job.timeoutMs ?? RUN_TIMEOUT_MS;
+  if (typeof stdin !== 'string') throw new TypeError('launchRun: stdin must be a string');
+  const { streamPath, runJsonPath } = runPaths(out, name);
+  const home = runHomeOf(launch);
+  const argv = spawnArgv({ mode, model, settingsMode, home });
+  const childEnv = spawnEnv({ mode, home, configDir: launch.configDir, poisonBin: ensurePoisonBin(out), lang, recall });
+  mkdirSync(path.dirname(streamPath), { recursive: true, mode: 0o700 });
+  const cwd = makeRunCwd();
+  const t0 = Date.now();
+  let res;
+  try {
+    res = await runChild(launch.launcher, argv, { cwd, childEnv, stdin, streamPath, timeoutMs });
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+  const ms = Date.now() - t0;
+  const stream = readFileSync(streamPath);
+  const facts = readStreamJson(stream.toString('utf8'));
+  const tokens = spendTokens(facts);
+  const unknownOptions = unknownOptionsIn(res.stderr);
+  recordSpend(out, name, tokens);
+  const rec = {
+    kind: RUN_KIND, v: 1, name, account: launch.accountId, mode, model, settings_mode: settingsMode,
+    code: res.code, signal: res.signal, ms, cwd, stream_sha256: sha256Hex(stream), tokens, unknown_options: unknownOptions,
+  };
+  const tmp = `${runJsonPath}.tmp-${process.pid}`;
+  writeFileSync(tmp, canonicalJson(rec) + '\n', { mode: 0o600 });
+  renameSync(tmp, runJsonPath);
+  return { name, skipped: false, code: res.code, signal: res.signal, ms, cwd, streamPath, facts, tokens, unknownOptions };
+}
+
+/** Run up to BATCH_MAX jobs, at most `concurrency` (<= CONCURRENCY_MAX) at once, calling `gate` before each spawn
+ *  (Task 6's limits and budget stop). The gate is required: a missing one is a TypeError before any spawn, so the
+ *  stop is never opt-in. A finished job is skipped without the gate. The first throw, the gate's
+ *  included, stops the batch: no further spawn starts, a run already started finishes and is recorded, and the
+ *  throw is rethrown, so a re-run resumes. */
+export async function runBatch(jobs, opts = {}) {
+  if (typeof opts.gate !== 'function') throw new TypeError('runBatch: opts.gate is required (Task 6\'s batchGate, or a test\'s explicit no-op): no batch spawns ungated');
+  if (!Array.isArray(jobs) || jobs.length > BATCH_MAX) throw new TypeError(`runBatch: a batch is at most ${BATCH_MAX} jobs`);
+  const concurrency = opts.concurrency ?? CONCURRENCY_MAX;
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > CONCURRENCY_MAX) throw new TypeError(`runBatch: concurrency must be 1 to ${CONCURRENCY_MAX}`);
+  const names = jobs.map((j) => path.join(j.out, j.name));
+  if (new Set(names).size !== names.length) throw new TypeError('runBatch: two jobs share one --out and name');
+  const gate = opts.gate;
+  const outcomes = new Array(jobs.length);
+  let next = 0;
+  let stop = null;
+  const lane = async () => {
+    while (stop === null && next < jobs.length) {
+      const i = next++;
+      try {
+        const done = finishedOutcome(jobs[i]);
+        if (done !== null) { outcomes[i] = done; continue; }
+        gate();
+        outcomes[i] = await launchRun(jobs[i]);
+      } catch (e) {
+        if (stop === null) stop = { e };
+        return;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, lane));
+  if (stop !== null) throw stop.e;
+  return outcomes;
 }
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised
