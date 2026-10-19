@@ -5,7 +5,8 @@
 //   - the non-shared journal, checkpoint and row types (the closed lists they use live in `shared/api.ts` and are only
 //     IMPORTED here; the types below name them and never re-spell them);
 //   - `canonicalDelegationJson`, the one JSON encoder every journal preimage goes through (RFC 8785 over a closed domain);
-//   - the activity natural key, the activity ID derived from it, and `restoreOrAllocateActivityId` (O1, O4);
+//   - the activity natural key, the activity ID derived from it, and `allocateDelegationActivityIdInto` with its pure form
+//     `restoreOrAllocateActivityId` (O1, O4, D-5833);
 //   - `assertWave3Lease`, the one statement of what wave 3 may write to `delegation_leases`;
 //   - the codecs between a checkpoint's row shapes and the six tables' columns, with typed readers that never cast text.
 //
@@ -598,7 +599,10 @@ export function allocateDelegationActivityIdInto(
  *
  * How a hit is told WITHOUT a second mapping-first read: the in-place function writes the copy only on a miss, so the
  * copy's own-key count is unchanged by a hit and one greater after a miss (a miss always adds exactly the one new key).
- * The count is a measure of the write, not a second read of the key. THE ID MUST NOT ESCAPE until durably replaced (O1).
+ * The count is a measure of the write, not a second read of the key. It tells a hit because an encoded key never names an
+ * inherited property, so a miss always adds one own key, and because a decoded mapping holds no `undefined` value (a hand-built
+ * mapping with an own `undefined` value would read as a miss, be overwritten in the copy, and then count as a hit).
+ * THE ID MUST NOT ESCAPE until durably replaced (O1).
  */
 export function restoreOrAllocateActivityId(
   key: DelegationActivityNaturalKey,
