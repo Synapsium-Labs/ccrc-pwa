@@ -39,7 +39,7 @@ describe('the journal clause — one reader, four answers', () => {
       .toEqual({ kind: 'quiet', started: true });
   });
 
-  it('a deliberate act since the last successful start is DELIBERATE — each of the eight, and a declared unsupervise', () => {
+  it('a deliberate act since the last successful start is DELIBERATE — each of the nine, and a declared unsupervise', () => {
     for (const act of DEAD_COORDINATOR_DELIBERATE_ACTS) {
       expect(deadCoordinatorJournal([spawned(0), row(act, { at: NOW + 1 })], true, T), act).toEqual({ kind: 'deliberate', act, at: NOW + 1 });
     }
@@ -80,6 +80,16 @@ describe('the journal clause — one reader, four answers', () => {
     // A newer generation's successful spawn bounds an older generation's stop, wherever it was ingested.
     expect(deadCoordinatorJournal([{ ...spawned(0), gen: NEWER_GEN }, row('stop', { gen: OLDER_GEN })], true, T))
       .toEqual({ kind: 'quiet', started: true });
+  });
+
+  it('a hibernation then its own unsupervise (surface none) is DELIBERATE, never a crash (D-5242)', () => {
+    // What `cmd_hibernate` journals, in its order: `hibernate`, then `_ws_unsupervise`'s row, whose surface reads
+    // `none` because ccd acts on its own account. Alone that row reads as a crash (the quiet case above).
+    const unsup = row('unsupervise', { at: NOW + 2, dec: { surface: 'none' } });
+    expect(deadCoordinatorJournal([spawned(0), row('hibernate', { at: NOW + 1 }), unsup], true, T))
+      .toEqual({ kind: 'deliberate', act: 'hibernate', at: NOW + 1 });
+    // An older server parses the act as `unknown`: doubt, also deliberate.
+    expect(deadCoordinatorJournal([spawned(0), row('unknown', { at: NOW + 1 }), unsup], true, T).kind).toBe('deliberate');
   });
 
   it('a row whose generation name cannot be placed makes the journal UNREADABLE — never a guessed order', () => {

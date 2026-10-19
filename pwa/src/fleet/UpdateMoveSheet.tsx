@@ -47,13 +47,21 @@
 // busy before the rest is reached (MOVE_REST_TEXT points at the release list).
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { MoveRequestAnswer } from '../../../shared/api';
-import { Button, QC_ACTIONS, QC_CONSEQUENCE, RESET_LIST, Sheet, toast } from '@ccrc/ui';
-import { ApiError, api, moveSkipText, updateErrorText } from '../lib/api';
-import { moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, rollbackHowText, type PlannedMove } from './movePlan';
+import type { MoveRequestAnswer, ReleaseWire } from '../../../shared/api';
+import { compareReleaseTags } from '../../../shared/semver';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, RESET_LIST, Sheet, toast, useCancelFirst } from '@ccrc/ui';
+import { ApiError, api, moveSkipText, noBundleRollbackText, updateErrorText } from '../lib/api';
+import {
+  moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, rollbackBlockers, rollbackHowText,
+  type MoveIntent, type PlannedMove, type RollbackBlocker,
+} from './movePlan';
+import { nodeVersion } from './useUpdatesView';
 import './fleet.css';
 
 export const MOVE_UNREADABLE_TEXT = "Requested — the server's answer could not be read; the screen will re-check.";
+/** A 202 that requested what the sheet named (settings spec §6.4): "Requested", never "done"; the node rows then say
+ *  what they measured. Said by a caller that passes `onAnswered` (D-5612). */
+export const MOVE_REQUESTED_TEXT = 'Requested. The nodes report back within a minute.';
 /** A readable 2xx that requested no node and skipped none this sheet named (one left the inventory between the
  *  tap and the send): nothing was written, so the sheet says so rather than closing on it. */
 export const MOVE_NOTHING_REQUESTED_TEXT = 'The server requested no node — reload the screen to see each row.';
@@ -162,8 +170,101 @@ function moveErrorText(err: unknown, plan: PlannedMove): string {
   return `${head} Already requested: ${requested.map((id) => moveLabel(plan, id)).join(', ')}. ${MOVE_REST_TEXT}`;
 }
 
-export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
+/** Wave 8 item C: the reason a Roll back to `tag` is not offered, grouped by word. `no-bundle` is said with the tag
+ *  (noBundleRollbackText); any other word through the route's own copy (`moveSkipText` reads `UPDATE_ERROR_TEXT`,
+ *  and has a fallback for a word it does not know). Defined here since D-5611, because the rollback sheet says it
+ *  too (settings spec §6.3, "today's blocked line"); `screens/updates.tsx` re-exports it for the release rows. */
+export function rollbackBlockedText(blockers: readonly RollbackBlocker[], tag: string): string | null {
+  if (blockers.length === 0) return null;
+  const words = [...new Set(blockers.map((b) => b.word))];
+  return words.map((w) => {
+    const who = blockers.filter((b) => b.word === w).map((b) => b.label).join(', ');
+    return `Roll back not offered for ${who}: ${w === 'no-bundle' ? noBundleRollbackText(tag) : moveSkipText(w)}`;
+  }).join(' ');
+}
+
+// ── The danger tone (D-5507, settings spec §6.3) ─────────────────────────────────────────────────────────────────
+// A rollback is a danger action. Under `tone="danger"` the sheet asks the question, commits in the filled red
+// `danger` variant labelled with the verb, gives Cancel the focus (`useCancelFirst`, QuickConfirm's own; D-5610), and says what
+// a rollback will not undo. The default tone, `move`, is every Install and Update and is unchanged.
+
+/** The question a danger rollback asks (spec §6.3's title). */
+export function rollbackQuestion(plan: PlannedMove): string {
+  const i = plan.intent;
+  if (i.direction !== 'rollback') return moveHeadline(i);
+  return i.scope === 'node' ? `Roll back ${moveLabel(plan, i.nodeId)} to ${i.to}?` : `Roll back the fleet to ${i.to}?`;
+}
+
+/** The danger commit's label: the verb, and who moves ("Roll back 2 nodes", "Roll back fleet"). */
+export function rollbackCommitLabel(plan: PlannedMove): string {
+  const i = plan.intent;
+  if (i.direction !== 'rollback') return moveHeadline(i);
+  if (i.scope === 'node') return `Roll back ${moveLabel(plan, i.nodeId)}`;
+  return `Roll back ${plan.nodes.length} ${plan.nodes.length === 1 ? 'node' : 'nodes'}`;
+}
+
+/** What a failed health check does NOT do: move the node back. A gate that fails is not restored on a rollback
+ *  (`_upd_rollback_no_restore`, the note on `rollbackHowText`), so the node stays on the target. */
+export function rollbackNotRestoredText(intent: Extract<MoveIntent, { direction: 'rollback' }>): string {
+  return intent.scope === 'node'
+    ? `Only this node moves. If its health check fails, it stays on ${intent.to}; it is not moved back.`
+    : `Each node installs ${intent.to} and runs its health check. If a node's health check fails, it stays on ${intent.to}; it is not moved back.`;
+}
+
+/** The floor: auto-install never goes back to what a rollback left (`highestVersion` is never lowered). `left` is
+ *  every version the plan's nodes run, newest first. */
+export function rollbackFloorText(intent: Extract<MoveIntent, { direction: 'rollback' }>, left: readonly string[]): string {
+  const what = left.length <= 1 ? (left[0] ?? 'the release it leaves') : `${left.slice(0, -1).join(', ')} or ${left[left.length - 1]}`;
+  return `Auto-install will not return ${intent.scope === 'node' ? 'it ' : ''}to ${what}. It waits for a newer release.`;
+}
+
+/** A withdrawn target (D-5505's measured wording: a complete kept copy flips with no download; any other node asks
+ *  for the release's checksums and refuses a withdrawn one). */
+export function withdrawnRollbackText(to: string): string {
+  return `${to} was withdrawn by its publisher. ${WITHDRAWN_KEPT_CLAUSE} it, and the reason is shown.`;
+}
+
+/** The one measured fact both withdrawn lines state (this sheet's and the release row's `WITHDRAWN_NOTE`), spelled
+ *  once so the two cannot drift (D-5611). Each line ends it in its own words. */
+export const WITHDRAWN_KEPT_CLAUSE = 'A node that still keeps it on disk rolls back to it with no download; '
+  + 'a node that does not will refuse';
+
+/** The danger lines, in spec §6.3's order: not restored, the floor, withdrawn, and today's blocked line. */
+function dangerLines(plan: PlannedMove, release: ReleaseWire | undefined): string[] {
+  const i = plan.intent;
+  if (i.direction !== 'rollback') return [];
+  const left = [...new Set(plan.nodes.map(nodeVersion).filter((v): v is string => v !== null))]
+    .sort((a, b) => compareReleaseTags(b, a));
+  const blocked = rollbackBlockedText(rollbackBlockers(plan.nodes, release, i.to), i.to);
+  return [
+    rollbackNotRestoredText(i),
+    rollbackFloorText(i, left),
+    ...(release?.yanked === true ? [withdrawnRollbackText(i.to)] : []),
+    ...(blocked !== null ? [blocked] : []),
+  ];
+}
+
+/** What a sheet dismissed in flight would have said for a 2xx (D-5612): its skip or nothing-requested sentence, the
+ *  unread sentence, or the request. */
+function supersededText(answers: ReadonlyArray<MoveRequestAnswer | 'unreadable'>, plan: PlannedMove): string {
+  const unread = answers.includes('unreadable');
+  const requested = answers.flatMap((a) => (a !== 'unreadable' && Array.isArray(a.requested) ? a.requested : []));
+  return moveSkippedText(answers, plan) ?? moveUnnamedText(requested, plan)
+    ?? (!unread && requested.length === 0 ? MOVE_NOTHING_REQUESTED_TEXT : unread ? MOVE_UNREADABLE_TEXT : MOVE_REQUESTED_TEXT);
+}
+
+export function UpdateMoveSheet({ open, plan, onClose, onDone, onAnswered, tone = 'move', release }: {
   open: boolean; plan: PlannedMove | null; onClose: () => void; onDone: () => void;
+  /** D-5612 (settings spec §6.4): the caller writes the 202's line under the control that opened the sheet, so the
+   *  sheet hands it the sentence when it closes on a request (MOVE_REQUESTED_TEXT, or MOVE_UNREADABLE_TEXT for a 2xx
+   *  it could not read) instead of toasting. With it, an answer that lands after the sheet was dismissed is toasted,
+   *  because the control that asked is gone. Without it (the update banner), the sheet behaves as before. */
+  onAnswered?: (text: string) => void;
+  /** `danger` for a rollback (D-5507); `move`, the default, for Install and Update. */
+  tone?: 'move' | 'danger';
+  /** The target's catalogue row, when the caller has it: the danger tone reads its withdrawn mark and its bundle
+   *  (D-5611). */
+  release?: ReleaseWire;
 }): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -179,9 +280,11 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
     setAnswered(false);
     return () => { gen.current += 1; };
   }, [open, plan]);
+  const danger = tone === 'danger';
+  useCancelFirst(open && plan !== null, danger);
 
   if (!open || plan === null) return null;
-  const headline = moveHeadline(plan.intent);
+  const headline = danger ? rollbackQuestion(plan) : moveHeadline(plan.intent);
   const lines = moveLines(plan);
 
   const confirm = (): void => {
@@ -199,6 +302,8 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
           // a mid-sequence stop's first — and the operator is now looking at something else, so the caller
           // re-polls. The reload is harmless when nothing new was written (review F5, IMPORTANT 1).
           if (answers.length > 0) onDone();
+          // D-5612: the sheet that asked is gone, so a caller that takes the answer as a line hears it as a toast.
+          if (answers.length > 0 && onAnswered !== undefined) toast(supersededText(answers, plan));
           return;
         }
         setBusy(false);
@@ -217,7 +322,8 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
           if (requested.length > 0 || unread) onDone();
           return;
         }
-        if (unread) toast(MOVE_UNREADABLE_TEXT);
+        if (onAnswered !== undefined) onAnswered(unread ? MOVE_UNREADABLE_TEXT : MOVE_REQUESTED_TEXT);
+        else if (unread) toast(MOVE_UNREADABLE_TEXT);
         onDone();
         onClose();
       },
@@ -227,6 +333,8 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
           // what already went out before the refusal, and a dismiss stopping the sequence never reaches this
           // branch with an empty one unless nothing was ever written.
           if (err instanceof MoveSendError && err.requested.length > 0) onDone();
+          // D-5612: the refusal still reaches the operator, as a toast, since the sheet that would say it is gone.
+          if (onAnswered !== undefined) toast(moveErrorText(err, plan), 'error');
           return;
         }
         setBusy(false);
@@ -254,13 +362,16 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
         {plan.intent.direction === 'rollback' && lines.length > 0 && (
           <p className={QC_CONSEQUENCE}>{rollbackHowText(plan.intent.to)}</p>
         )}
+        {danger && lines.length > 0 && dangerLines(plan, release).map((line) => (
+          <p key={line} className={QC_CONSEQUENCE}>{line}</p>
+        ))}
         <div className={QC_ACTIONS}>
           {lines.length > 0 && !answered && (
-            <Button variant="primary" disabled={busy} onClick={confirm}>
-              {busy ? 'Sending…' : headline}
+            <Button variant={danger ? 'danger' : 'primary'} disabled={busy} onClick={confirm}>
+              {busy ? 'Sending…' : danger ? rollbackCommitLabel(plan) : headline}
             </Button>
           )}
-          <Button variant="ghost" disabled={busy} onClick={onClose}>
+          <Button variant="ghost" autoFocus={danger} disabled={busy} onClick={onClose}>
             {answered ? 'Close' : 'Cancel'}
           </Button>
         </div>

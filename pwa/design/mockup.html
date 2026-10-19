@@ -64,8 +64,10 @@
   --diff-add: #57E08B;  /* 11.88:1 on well */
   --diff-del: #F08A78;  /*  8.22:1 on well */
 
-  --family-ui:   system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --family-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "Roboto Mono", "Liberation Mono", monospace;
+  /* The Geist pair leads, as in tokens.css (D-5095, D-5451); this page loads no
+     font file, so it renders the system faces behind it. */
+  --family-ui:   "Geist", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --family-mono: "Geist Mono", ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "Roboto Mono", "Liberation Mono", monospace;
 
   --fs-2xs:  11px;
   --fs-xs:   12px;

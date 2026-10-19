@@ -219,7 +219,7 @@ describeLinux('cmd_enable reconciles a session that is already alive', () => {
     h.sh(`${UNIT} : > "$HOME/pane-up"`);
     beat('claude-a-demo');
     const out = h.sh(`${UNIT} : > "$HOME/pane-up"; cmd_start claude-a demo`);
-    expect(sysCalls()).toEqual(['systemctl --user enable claude-session@claude-a-demo']);
+    expect(sysCalls()).toEqual(['systemctl --user enable --no-reload claude-session@claude-a-demo']);
     expect(out).toContain('already running: claude-a-demo');
     expect(out).not.toContain('re-supervised');
   });
@@ -354,7 +354,7 @@ describeLinux('the recursion guard is an in-process variable', () => {
     seed('myid');
     const r = shFail(`${NO_PANE} cmd_supervise myid`);
     expect(r.code).toBe(1);   // no session -> the watch loop exits for systemd
-    expect(sysCalls()).toEqual(['systemctl --user enable claude-session@myid']);
+    expect(sysCalls()).toEqual(['systemctl --user enable --no-reload claude-session@myid']);
   });
 });
 
@@ -554,6 +554,65 @@ describe('_supervised_start\'s fallbacks take the split form', () => {
     const body = h.sh('type _supervised_start');
     expect(body).not.toMatch(/\$\(\s*_spawn_start/);
     expect(body).toContain('SPAWN_FROMSWAP');
+  });
+});
+
+
+describeLinux('boot persistence never reloads the user manager (wave 15)', () => {
+  // THE RELOAD STORM. `systemctl --user enable` reloads the whole user manager
+  // after it links the unit, unless `--no-reload` says not to. `ccrc update`'s
+  // sweep try-restarts every supervisor, and each one runs `cmd_supervise`'s
+  // self-heal enable on entry, so a sweep of 71 units queued 71 reloads, one
+  // after another (about 27 s, wave 11's attack F3). Nothing on that path writes
+  // a unit file, and the install spine has already reloaded before the sweep,
+  // so the self-heal needs the symlink and nothing else.
+  //
+  // MODELLED FOR THE VERBS CCD ISSUES: this stub counts a reload for
+  // `daemon-reload`, and for an `enable`/`disable` without `--no-reload`, so the
+  // property holds whatever the argv's word order. systemctl reloads for other
+  // install verbs too (reenable, mask, link, preset, ...), which ccd never issues.
+  // The exact argv pins above hold the spelling. The third case is the other edge:
+  // `enable --now` (`_svc_enable_now`) keeps its reload, so the flag cannot leak onto it.
+  const RELOADS = `systemctl() {
+    echo "systemctl $*" >> "$HOME/ccd-calls"
+    case " $* " in
+      *" daemon-reload "*) echo reload >> "$HOME/reloads" ;;
+      *" enable "*|*" disable "*)
+        case " $* " in *" --no-reload "*) ;; *) echo reload >> "$HOME/reloads" ;; esac ;;
+    esac
+    case "$*" in
+      "--user enable --now "*)  : > "$HOME/pane-up" ;;
+      "--user disable --now "*) rm -f "$HOME/pane-up" ;;
+    esac
+    return 0
+  };`;
+  const reloads = (): number => {
+    const f = path.join(h.home, 'reloads');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).length : 0;
+  };
+
+  it('cmd_supervise\'s self-heal enable links the unit and asks for no reload', () => {
+    seed('myid');
+    const r = shFail(`${NO_PANE} ${RELOADS} cmd_supervise myid`);
+    expect(r.code).toBe(1);   // no session -> the watch loop exits for systemd
+    expect(sysCalls()).toHaveLength(1);
+    expect(reloads(), 'a restarted supervisor reloaded the user manager').toBe(0);
+  });
+
+  it('cmd_start on a live, watched row reconciles the symlink and asks for no reload', () => {
+    h.sh(`mkdir -p "$HOME/projects/demo"`);
+    h.sh(`_reg_claim claude-a-demo; _reg_set claude-a-demo supervised "$(date +%s)"`);
+    const out = h.sh(`${UNIT} ${RELOADS} : > "$HOME/pane-up"; cmd_start claude-a demo`);
+    expect(out).toContain('already running: claude-a-demo');
+    expect(sysCalls()).toHaveLength(1);
+    expect(reloads(), 'the already-alive branch reloaded the user manager').toBe(0);
+  });
+
+  it('a fresh start\'s enable --now keeps its one reload: the flag is _svc_enable\'s alone', () => {
+    h.sh(`mkdir -p "$HOME/projects/demo"`);
+    h.sh(`${UNIT} ${RELOADS} cmd_start claude-a demo`);
+    expect(sysCalls()).toContain('systemctl --user enable --now claude-session@claude-a-demo');
+    expect(reloads(), 'enable --now lost its reload').toBe(1);
   });
 });
 

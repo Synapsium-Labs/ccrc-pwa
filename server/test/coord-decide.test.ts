@@ -89,7 +89,7 @@ describe('dispatchRun, called directly with no CoordMutex in the loop (D-46, at 
       fleetState: undefined, tmux: base.tmux, queue: base.queue,
       // The one join `configDirFor` owns, supplied through dispatch's
       // consumer-declared port (wave 2, F2 — the skill preflight reads under it).
-      configDir: (w: string) => configDirFor(base.cfg, w), };
+      configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, };
 
     const first = await dispatchRun(deps, opened.id, 'do the thing', undefined);
     expect(first.ok).toBe(true);
@@ -162,7 +162,7 @@ describe('dispatchRun hold preflight', () => {
     const deps: DispatchRunDeps = {
       coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
       fleetState: undefined, tmux: base.tmux, queue: base.queue,
-      configDir: (w: string) => configDirFor(base.cfg, w),
+      configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
     };
 
     expect(await dispatchRun(deps, reconstructed.id, 'do the thing', undefined))
@@ -190,7 +190,7 @@ describe('dispatchRun hold preflight', () => {
     const deps: DispatchRunDeps = {
       coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
       fleetState: undefined, tmux: base.tmux, queue: base.queue,
-      configDir: (w: string) => configDirFor(base.cfg, w),
+      configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const,
     };
 
     expect(await dispatchRun(deps, reconstructed.id, 'do the thing', undefined))
@@ -215,7 +215,7 @@ describe('dispatchRun, called CONCURRENTLY with no CoordMutex in the loop (fix r
       fleetState: undefined, tmux: base.tmux, queue: base.queue,
       // The one join `configDirFor` owns, supplied through dispatch's
       // consumer-declared port (wave 2, F2 — the skill preflight reads under it).
-      configDir: (w: string) => configDirFor(base.cfg, w), };
+      configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, };
 
     // No `CoordMutex` anywhere in this call — exactly the shape a call site
     // outside routes.ts's two `coordMutex.run(...)` wrappers would produce.
@@ -288,7 +288,7 @@ describe('closeRun, called directly — a failing ws-release leaves the run retr
       fleetState: undefined, tmux: base.tmux, queue: base.queue,
       // The one join `configDirFor` owns, supplied through dispatch's
       // consumer-declared port (wave 2, F2 — the skill preflight reads under it).
-      configDir: (w: string) => configDirFor(base.cfg, w), };
+      configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, };
     const dispatched = await dispatchRun(dispatchDeps, opened.id, 'do the thing', undefined);
     expect(dispatched.ok).toBe(true);
     expect(okRun(coord.run(opened.id))!.state).toBe('dispatched');

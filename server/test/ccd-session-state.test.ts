@@ -316,7 +316,10 @@ describe('the supervisor heartbeat', () => {
       mkdir -p "$HOME/.claude-d/projects/$mdir"
       printf '{"type":"message"}\\n' > "$HOME/.claude-d/projects/$mdir/b7001948-0000-4c2f-9a1b-0cfc0dc3d199.jsonl"`);
     run(`CCD_SWAP_DETACHED=1
-      _alive() { return 1; }; tmux() { :; }; cmd_ensure() { :; }; sleep() { :; };
+      _alive() { return 1; }; cmd_ensure() { :; }; sleep() { :; };
+      # GONE on has-session (D-5350): D-5240's manual gate (it runs in the detached re-run
+      # too) reads \`_ws_status\`, and an alive pane with no pid is unreadable.
+      tmux() { case "\${1:-}" in has-session) echo "can't find session: x" >&2; return 1 ;; esac; };
       _swap_carry_jsonl() { echo "mid-carry:$(_session_state ${ID})" >> "$HOME/ccd-calls"; return 0; };
       systemctl() { [[ "$*" == *"start claude-session@"* ]] \
         && echo "start:$(_session_state ${ID})" >> "$HOME/ccd-calls"; return 0; };

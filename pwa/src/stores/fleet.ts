@@ -9,6 +9,7 @@ import { mergeBySeq, reviveNotifyEvents } from '../lib/feed';
 import { requestUpdate } from '../lib/swupdate';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 import { warnNonArrayRoster } from '../lib/accounts';
+import type { DivergenceCensus } from '../fleet/integrityWords';
 
 export interface FleetNotice {
   id: number;
@@ -142,6 +143,27 @@ export interface FleetState {
    *  when the value actually changes (`watch.ts`'s byte-equality guard), so
    *  holding the last value between emits is what makes it correct to read. */
   pools: ProjectPoolsWire | null;
+  /** The registry's integrity census (`server/src/divergence.ts`), off the
+   *  fleet-level `divergence` frame, with the time THIS page received it
+   *  (D-5104). `fleet/integrityWords.ts`'s `integrityView` is its reader.
+   *
+   *  `null` means ONE thing: no `divergence` frame since this page loaded. The
+   *  frame has NO COLD START — the server sends it only when the census changes
+   *  (`server.ts`, `onDivergence`) — so a page that connected after the last
+   *  change has received nothing, and an empty census here would be a
+   *  measurement nobody took. `{ items: [] }` is the other thing: measured, and
+   *  none found.
+   *
+   *  Sticky across a reconnect, like `coord`/`pools`: since the server never
+   *  re-sends on connect, the last census received is still the last
+   *  measurement, and `at` says how old it is. Clearing it on reconnect would
+   *  turn every network blip into "unmeasured" until the census next changed.
+   *  NOT hydrated from, or written to, the offline snapshot, for `pools`' own
+   *  reason: a census from an earlier page load is not a frame this page has
+   *  received. Frame-level validation only (`asFleetMsg`'s `Array.isArray`), the
+   *  depth `runs`/`fleet` take: a member this build cannot name is the model's
+   *  to count, never this boundary's to drop. */
+  divergenceCensus: DivergenceCensus | null;
   /** The LAST successful `/api/projects` read, as `FleetScreen` made it —
    *  lifted here so the session view can label a repo (R3) without a second
    *  agent round trip per project on every mount. `null` = no read yet on
@@ -185,6 +207,12 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
     return m as FleetMsg;
   }
   if (t === 'runs' && Array.isArray((m as { runs?: unknown }).runs)) {
+    return m as FleetMsg;
+  }
+  // D-5104. The envelope only, at `runs`' depth: a member whose `kind` this
+  // build cannot name is counted by `integrityView` (`fleet/integrityWords.ts`),
+  // never dropped here.
+  if (t === 'divergence' && Array.isArray((m as { divergences?: unknown }).divergences)) {
     return m as FleetMsg;
   }
   // Frame-level only, same depth as `fleet`/`runs` above — per-MEMBER
@@ -314,6 +342,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       // NOT `snapshot?.pools` — there is no such field, and there must not be
       // one. See the field's own docstring.
       pools: null,
+      // Not hydrated either, for the same reason — see the field's docstring.
+      divergenceCensus: null,
       projects: null,
       roster: snapshot?.roster ?? [],
 
@@ -468,6 +498,11 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               // already distinguishable, and `projectPoolOf` reads exactly
               // that distinction.
               set({ pools: msg.pools });
+            } else if (msg.type === 'divergence') {
+              // ONE `set`, so the members and their receive time can never
+              // disagree. The whole census replaces the last one: the server
+              // sends it entire on every change, never a delta.
+              set({ divergenceCensus: { items: msg.divergences, at: Date.now() } });
             }
           },
           onState: (conn) => set({ conn }),

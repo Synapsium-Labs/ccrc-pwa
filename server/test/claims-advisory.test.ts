@@ -48,6 +48,17 @@ describe('claims are advisory (D12)', () => {
                              // sweepDivergences feeds divergence.claim-orphan.
                              // Whole-file admission would blind the scan to a NEW
                              // call site, so the count pin below carries the load.
+      'stopDoneSweep.ts',    // D-5370: a live claim HOLDS the server's own unattended
+                             // stop of the claim's HOLDER, and nothing else. It never
+                             // refuses, delays or redirects another party's work, so it
+                             // cannot become enforcement: the only effect of a claim is
+                             // that its holder's process is left running (hibernation's
+                             // `claim` hold, spec §5.11, is the same shape). The count
+                             // pin below keeps a second, differently-shaped use out.
+      'hibernateSweep.ts',   // D-5242: the same shape, for hibernation's own verdict —
+                             // a live claim HOLDS its holder awake (`claim`) and does
+                             // nothing else. In Task 17a the sweep only logs, so the
+                             // claim reaches nobody's work at all. Count-pinned below.
     ]);
     const holders = walk(srcRoot)
       .filter((f) => f.endsWith('.ts'))
@@ -74,5 +85,18 @@ describe('claims are advisory (D12)', () => {
     expect(watchSrc.split('activeClaims').length - 1,
       'watch.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
       .toBe(4);
+    // The stop-done lane's exception, held by COUNT as watch.ts's is: the pass
+    // docstring naming the read, the store port's Pick, and the one batched read
+    // that feeds the `claim` hold.
+    const stopDoneSrc = readFileSync(path.join(srcRoot, 'stopDoneSweep.ts'), 'utf8');
+    expect(stopDoneSrc.split('activeClaims').length - 1,
+      'stopDoneSweep.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
+      .toBe(3);
+    // Hibernation's exception (D-5242), held by COUNT the same way: the store port's Pick and the one per-pass read
+    // that feeds the `claim` hold.
+    const hibernateSrc = readFileSync(path.join(srcRoot, 'hibernateSweep.ts'), 'utf8');
+    expect(hibernateSrc.split('activeClaims').length - 1,
+      'hibernateSweep.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
+      .toBe(2);
   });
 });

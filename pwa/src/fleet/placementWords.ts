@@ -13,7 +13,7 @@
 // on a control they are about to press. Keeping it beside the type it branches
 // on means a new `kind` and the sentence that must exist for it are one file
 // apart, not three hundred lines apart.
-import type { ProjectedHome, ProjectPlacement, ProjectPoolWire, RosterWire } from '../../../shared/api';
+import type { ProjectedHome, ProjectPlacement, ProjectPoolWire, ProjectRow, RosterWire } from '../../../shared/api';
 import { accountLabel } from '../lib/accounts';
 import { poolLabelList } from '../lib/pools';
 
@@ -27,6 +27,18 @@ export type ProjectPlacementRead =
   | { kind: 'missing' }
   | { kind: 'legacy' }
   | { kind: 'measured'; pool: ProjectPoolWire; placement: ProjectPlacement };
+
+/** One `/api/projects` row's placement read — `missing` when there is no row, `legacy` when an older server
+ *  sent neither key. ONE spelling for the fleet's cards (`useProjectRows`) and the session header (D-5545),
+ *  so a row's off-pool claim and its header's can never read two answers. `Object.hasOwn`: an ABSENT key is an
+ *  older server and reads as legacy, never as a measured value. */
+export const placementOfRow = (row: ProjectRow | undefined): ProjectPlacementRead => {
+  if (row === undefined) return { kind: 'missing' };
+  return Object.hasOwn(row, 'pool') && row.pool !== undefined
+    && Object.hasOwn(row, 'placement') && row.placement !== undefined
+    ? { kind: 'measured', pool: row.pool, placement: row.placement }
+    : { kind: 'legacy' };
+};
 
 /** A pool value exists only on a MEASURED read. The absence discipline is
  *  spelled once, here: a pending, failed, missing or legacy read makes no pool

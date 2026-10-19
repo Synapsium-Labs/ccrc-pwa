@@ -4,10 +4,11 @@
 // transcript), the chat list, and the optimistic composer. The fleet store
 // (connected app-wide in app.tsx) supplies the header's live identity.
 // DialogSheet and the TerminalDrawer mount at the bottom.
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
-import { repoLabel, substrateFault, type RouteField } from '../../../shared/api';
-import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, toast } from '@ccrc/ui';
+import { backgroundOnlyRefusal, repoLabel, sessionWithCoordinator, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
+import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, WorkflowStrip, toast, useNow } from '@ccrc/ui';
+import { staleFor } from '../session/taskStaleness';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
 import { accountHue, accountLabel } from '../lib/accounts';
@@ -26,10 +27,18 @@ import { useQueuedRoute } from '../session/useQueuedRoute';
 import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionHeader } from '../session/SessionHeader';
+import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
+import { sessionFacts } from '../fleet/sessionFacts';
+import { coordPresence } from '../fleet/coordWords';
+import { orphanGuidance } from '../fleet/orphanWords';
+import { placementOfRow, poolOfPlacement } from '../fleet/placementWords';
+import { isRunClosed } from '../fleet/runWords';
 import { HistoryTab } from '../session/HistoryTab';
 import { TerminalDrawer } from '../session/TerminalDrawer';
 import { modelOptions, effortOptions, type PickOption } from '../lib/models';
 import '../session/chat.css';
+import { answerControlLabel } from '../session/askLive';
+import { hibernatedSince, hibernatedWords } from '../fleet/hibernated';
 
 /** Keyboard discipline: the bottom inset the on-screen keyboard covers. The
  *  screen pads its shell by this much so the composer stays above the
@@ -38,6 +47,87 @@ import '../session/chat.css';
  *  named export — tests and later tasks import it from here). */
 export function useKeyboardInsets(): number {
   return useKeyboardInset({ pinTop: true });
+}
+
+/** `background-aware-working` (D-5231): does the chat wear its working pulse?
+ *  It reads the server's BUCKET once a snapshot row exists, and the live word
+ *  only before it, so card, header and chat cannot disagree: a wedged `busy`
+ *  that the ladder filed `done` stops pulsing, and delegated work after a Stop
+ *  keeps it. A dead session never pulses. */
+export function chatPulsing(
+  live: (Pick<FleetSession, 'bucket'> & { withCoordinator?: unknown }) | null, effectiveStatus: SessionStatus | null,
+): boolean {
+  if (effectiveStatus === 'dead') return false;
+  // D-5296: while the parent holds the question the ladder files the row
+  // `working`, but nothing runs; the header reads it in the calm tint, so the
+  // chat does not pulse either (D-5390).
+  if (live !== null && sessionWithCoordinator(live) !== null) return false;
+  return live !== null ? live.bucket === 'working' : effectiveStatus === 'busy';
+}
+
+/** The wake trigger's phase (D-5242). `armed`: an automatic wake may fire. `pending`: one `ensure` is in flight.
+ *  `sent`: it answered, and nothing fires again on its own until the row reads alive (then `armed`). A failure
+ *  re-arms: the operator's next return to the page, or Wake, tries again. */
+type WakePhase = 'armed' | 'pending' | 'sent';
+
+/**
+ * WAKE ON OPEN (D-5242, `hibernate-long-idle-sessions`, plan Task 18). A mounted session screen wakes its session once
+ * whenever its fleet row reads hibernated (`hibernatedSince`: `dead` with `hibernatedAt`) while the page is visible:
+ * at mount, when the page becomes visible again (a returning operator, a resumed phone), and when a frame turns the
+ * row hibernated while it is in view. At most one `POST /api/sessions/:id/ensure` is in flight per screen; once one
+ * answers, nothing fires on its own again until the row reads alive (or the call fails). The server counts each in the
+ * fleet-wide wake budget and never refuses it (the operator asked).
+ *
+ * It reads the ROW, never the session stream: the stream says `dead` for a crash too, and opening a crashed session
+ * must never restart it silently. And it never fires under a substrate fault (`fault`), the same gate the dead
+ * banner's Restart keeps: nobody can measure that pane (`wake-on-open-surfaces`, D-5430).
+ */
+export function useWakeOnOpen(
+  id: string, live: FleetSession | null, fault: unknown,
+): { asleepAt: number | null; waking: boolean; pending: boolean; wake: () => void } {
+  const asleepAt = live === null ? null : hibernatedSince(live);
+  const asleep = asleepAt !== null;
+  // The row as it reads NOW, for a call that returns after a frame: ccd's ensure starts the pane and then waits for
+  // it to settle, so the row usually reads alive before the call is back (D-5242).
+  const asleepRef = useRef(asleep);
+  asleepRef.current = asleep;
+  const blocked = fault !== null && fault !== undefined;
+  const [visible, setVisible] = useState(() => document.visibilityState === 'visible');
+  const phase = useRef<WakePhase>('armed');
+  const [shown, setShown] = useState<WakePhase>('armed');
+  const set = (p: WakePhase): void => { phase.current = p; setShown(p); };
+
+  useEffect(() => {
+    const onChange = (): void => { setVisible(document.visibilityState === 'visible'); };
+    document.addEventListener('visibilitychange', onChange);
+    return () => document.removeEventListener('visibilitychange', onChange);
+  }, []);
+
+  // One screen per id: a screen re-pointed at another session starts that session's wake from scratch.
+  useEffect(() => { set('armed'); }, [id]);
+
+  // Never re-entered while a call is out: the trigger below fires only from `armed`, Wake is disabled while
+  // `pending`, and a failure toast's Wake checks before it calls.
+  const wake = useCallback((): void => {
+    set('pending');
+    api.ensure(id).then(
+      // A row still asleep stays `sent` (nothing more until it reads alive); a row that already reads alive
+      // re-arms here, since the effect below skipped it while the call was out.
+      () => { if (phase.current === 'pending') set(asleepRef.current ? 'sent' : 'armed'); },
+      (err: unknown) => {
+        set('armed');
+        // The toast outlives this call: a later wake may be out by the time it is tapped.
+        toast(failedTo('wake', err), 'error', { label: 'Wake', onClick: () => { if (phase.current !== 'pending') wake(); } });
+      },
+    );
+  }, [id]);
+
+  useEffect(() => {
+    if (!asleep) { if (phase.current !== 'pending') set('armed'); return; }
+    if (visible && !blocked && phase.current === 'armed') wake();
+  }, [asleep, visible, blocked, wake]);
+
+  return { asleepAt, waking: asleep && shown !== 'armed', pending: shown === 'pending', wake };
 }
 
 export function SessionScreen({
@@ -63,7 +153,20 @@ export function SessionScreen({
   const fileMeasured = useStore((s) => s.fileMeasured);
   const file = useStore((s) => s.file);
   const tasks = useStore((s) => s.tasks);
+  // D-5372: read beside `tasks`, not through its own selector. The reducer sets
+  // `tasksTouchedAt` only together with `tasks`, and every tasks frame brings a
+  // new array, so the `tasks` selector above already re-renders on each change.
+  // (A further `useStore(…)` call site adds one more CodeQL
+  // unvalidated-dynamic-method-call false positive on the route-keyed store.)
+  const tasksTouchedAt = useStore.getState().tasksTouchedAt;
   const mail = useStore((s) => s.mail);
+  // D-5560: subscribed through the store's own `subscribe`/`getState` rather
+  // than one more `useStore(…)` call site (D-5372's CodeQL false positive
+  // above); the reducer replaces the array on every workflows frame, so the
+  // snapshot is stable between frames. The flag is read beside it for
+  // D-5372's reason — the reducer sets it only together with a new array.
+  const workflows = useSyncExternalStore(useStore.subscribe, () => useStore.getState().workflows);
+  const workflowsUnreadable = useStore.getState().workflowsUnreadable;
   // Build 4 Task 18, spec §2.3: the ask card's second derivation source. A
   // live `ask` (hook envelope) and a live `dialog` (scraped pane menu) are
   // hosted by the SAME sheet, so either one makes a resultless ask card
@@ -72,10 +175,18 @@ export function SessionScreen({
   const liveAsk = useStore((s) => s.ask);
   const liveDialog = useStore((s) => s.dialog);
   const askPending = liveAsk !== null || liveDialog !== null;
+  // Decision `ask-answer-control-says-submit`: while the pane is on an ask's review screen, the transcript's control
+  // says what the sheet it raises is waiting on, so a hidden sheet is one labelled click from Submit.
+  const answerLabel = answerControlLabel(liveDialog);
   // This session's fleet entry — live name, account, dialogPending badge.
   const live = useFleet((s) => s.sessions.find((x) => x.id === id) ?? null);
   const roster = useFleet((s) => s.roster);
   const projects = useFleet((s) => s.projects);
+  // D-5527: the fleet tree's facts about who this session works for, read off
+  // the same sessions and active runs the fleet's rows are drawn from.
+  const fleetSessions = useFleet((s) => s.sessions);
+  const fleetRuns = useFleet((s) => s.runs);
+  const fleetFrameSeen = useFleet((s) => s.fleetFrameSeen);
 
   const kbInset = useKeyboardInsets();
   const [restarting, setRestarting] = useState(false);
@@ -150,6 +261,24 @@ export function SessionScreen({
   // for this project in that read, or a row whose `repo` is not `named` —
   // all three collapse deliberately at `repoLabel`, the one reader.
   const repo = repoLabel(projects?.find((r) => r.name === project)?.repo);
+  const activeRuns = fleetRuns.filter((r) => !isRunClosed(r));
+  const coordination = live === null ? null : coordinationOf(live, fleetSessions, activeRuns);
+  // D-5545: the header's facts, from the model the fleet card reads, over the same inputs the card is given —
+  // the active run and coordinator (`childRunContext`), whose code (`coordinationOf`), the project's pool
+  // (`placementOfRow`, the cards' own spelling) and the coordinator's presence (`coordPresence`, the orphan
+  // marker's) — so the header can never know less than the card.
+  const lookup = (sid: string): FleetSession | null => fleetSessions.find((x) => x.id === sid) ?? null;
+  const parentId = live === null ? null : parentIdOf(live, activeRuns);
+  const factsNow = useNow(30_000);
+  const presence = parentId === null ? null : coordPresence(parentId, lookup(parentId), fleetFrameSeen);
+  const facts = live === null ? null : sessionFacts({
+    session: live, now: factsNow, roster,
+    projectPool: poolOfPlacement(placementOfRow(projects?.find((r) => r.name === live.project))),
+    childRun: childRunContext(live, activeRuns, lookup),
+    workingOn: coordination?.workingOn ?? null,
+    coordinator: presence,
+    coordinatorTitle: parentId === null || presence === null ? null : orphanGuidance(parentId, presence),
+  });
 
   // Routing slice 6, Task 4: once `live.route` rides the wire, the pickers'
   // active row and the header's queued badge are DERIVED from it instead of
@@ -197,6 +326,7 @@ export function SessionScreen({
   // dead session is read-only and a busy one wears the caret from first paint.
   const effectiveStatus = status ?? live?.status ?? null;
   const dead = effectiveStatus === 'dead';
+  const pulsing = chatPulsing(live, effectiveStatus);
   const loading = uuid === null && missingFile === null;
   // An UNMEASURED absence is not an empty chat. When the resolver could not
   // finish looking (§5.2's `searchComplete: false`, which §5.5 makes routine
@@ -220,6 +350,10 @@ export function SessionScreen({
   // now, which is what this comment claimed for seven copies of it.
   const fault = live === null ? null : substrateFault(live);
   const faultTitle = live === null ? undefined : substrateFaultTitle(live);
+  // D-5242: a sleeping session wakes when this screen shows it (`useWakeOnOpen`); until its row reads alive the
+  // screen says so, offers Wake, and keeps the composer shut, so nothing is typed toward a pane that does not exist.
+  const { asleepAt, waking, pending: wakePending, wake } = useWakeOnOpen(id, live, fault);
+  const asleep = asleepAt !== null;
 
   const restart = async (): Promise<void> => {
     if (restarting) return;
@@ -234,12 +368,21 @@ export function SessionScreen({
   };
 
   // Confirm-free: esc just sends. A 409 means the turn already ended — say so
-  // quietly; anything else is a real failure.
-  const interrupt = async (): Promise<void> => {
+  // quietly; anything else is a real failure. `background-only` (D-5236): the
+  // main turn ended over background work the server would not Escape, because
+  // Escape stops none of it — the toast says what still runs.
+  const interrupt = async (source: 'keycap' | 'escape-key'): Promise<void> => {
     try {
-      await api.interrupt(id);
+      await api.interrupt(id, source);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
+      const bg = err instanceof ApiError && err.status === 409 ? backgroundOnlyRefusal(err.body) : null;
+      if (bg !== null) {
+        toast(bg.count === null
+          ? 'The main turn has finished; a background shell or monitor is still running. Escape would not stop it.'
+          : `The main turn has finished; ${bg.count} background ${bg.count === 1 ? 'task' : 'tasks'}`
+            + `${bg.kinds.length > 0 ? ` (${bg.kinds.join(', ')})` : ''} ${bg.count === 1 ? 'is' : 'are'} still running.`
+            + ` Escape would not stop ${bg.count === 1 ? 'it' : 'them'}.`);
+      } else if (err instanceof ApiError && err.status === 409) {
         toast("Claude isn't working right now — nothing to stop");
       } else {
         toast(`Couldn't stop — ${err instanceof Error ? err.message : String(err)}`, 'error');
@@ -326,7 +469,9 @@ export function SessionScreen({
         statusUpdatedAt={statusUpdatedAt}
         roster={roster}
         repo={repo}
-        onInterrupt={() => void interrupt()}
+        coordination={coordination}
+        facts={facts}
+        onInterrupt={(source) => void interrupt(source)}
         onOpenTerminal={openTerminal}
         onBack={() => navigate('/')}
         onChangeModel={changeModel}
@@ -393,18 +538,24 @@ export function SessionScreen({
         </div>
       )}
 
-      {dead && (
-        <div className="chat-banner chat-banner--dead" role="status">
-          <span className="banner-copy">Not running — the chat is read-only.</span>
+      {/* ONE banner for a screen with no running pane. A dead row (no marker) is read-only and offers Restart; a
+          sleeping one (D-5242) reads "Waking…" while its wake is out, and offers Wake, in the calm banner. */}
+      {(dead || asleep) && (
+        <div className={asleep ? 'chat-banner chat-banner--asleep' : 'chat-banner chat-banner--dead'} role="status">
+          <span className="banner-copy">
+            {asleep
+              ? waking ? 'Waking…' : `${hibernatedWords(asleepAt, Date.now())} ago — the chat is read-only until it wakes.`
+              : 'Not running — the chat is read-only.'}
+          </span>
           <Button
             variant="ghost"
             size="fit"
             className="flex-none"
-            onClick={() => void restart()}
-            disabled={restarting || fault !== null}
+            onClick={asleep ? wake : () => void restart()}
+            disabled={(asleep ? wakePending : restarting) || fault !== null}
             title={faultTitle}
           >
-            {restarting ? 'Restarting…' : 'Restart session'}
+            {asleep ? 'Wake' : restarting ? 'Restarting…' : 'Restart session'}
           </Button>
         </div>
       )}
@@ -433,10 +584,11 @@ export function SessionScreen({
             id={id}
             events={events}
             pending={pending}
-            busy={effectiveStatus === 'busy'}
+            busy={pulsing}
             onRetry={(key) => useStore.getState().retry(key)}
             onDiscard={(key) => useStore.getState().discard(key)}
             askPending={askPending}
+            answerLabel={answerLabel}
             onAnswer={() => setRaise((n) => n + 1)}
           />
         )}
@@ -445,9 +597,14 @@ export function SessionScreen({
       {/* Above the plan, which stays the composer's neighbour. */}
       <MailStrip mail={mail} />
 
+      {/* D-5560: the workflows this session is running, between the mail and the
+          plan — one line each, the facts Claude Code's own row prints; the head
+          opens their phases and agents. Read-only. */}
+      <WorkflowStrip workflows={workflows} unreadable={workflowsUnreadable} />
+
       {/* Sits between the conversation and the composer — where the TUI puts it,
           directly above the prompt you're about to type into. */}
-      <TaskStrip tasks={tasks} />
+      <TaskStrip tasks={tasks} untouchedFor={staleFor(tasksTouchedAt, Date.now())} />
 
       {/* Plain measuring shell so ToastHost's --composer-h offset has something
           to observe — Composer.tsx itself carries no ref to forward. */}
@@ -458,8 +615,8 @@ export function SessionScreen({
           onSend={useStore.getState().send}
           pending={pending}
           id={id}
-          disabled={dead}
-          placeholder={dead ? 'Restart the session to send' : `Message ${project}`}
+          disabled={dead || asleep}
+          placeholder={asleep ? 'It is asleep — it can take a message once it wakes' : dead ? 'Restart the session to send' : `Message ${project}`}
           onResolve={useStore.getState().resolve}
         />
       </div>

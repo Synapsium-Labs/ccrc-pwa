@@ -41,13 +41,17 @@ export function LastSpawnChip({ chip }: { chip: SpawnChip | null }): ReactNode {
  *  parsed — the same small, honest register `.sess-held` keeps next door. It
  *  heals on its own the moment a later sweep measures clean. An empty list
  *  renders nothing: "nothing was unreadable" is not a fact worth a chip. */
+/** The unmeasured registry's sentence — ONE spelling for this chip and the row's `unreadable` marker (D-5545). */
+export const unmeasuredTitle = (fields: readonly string[]): string =>
+  `registry ${fields.join('/')} temporarily unreadable — retrying`;
+
 export function UnmeasuredChip({ fields }: { fields: readonly string[] }): ReactNode {
   if (fields.length === 0) return null;
   return (
     <span
       className="sess-unmeasured"
       data-unmeasured="true"
-      title={`registry ${fields.join('/')} temporarily unreadable — retrying`}
+      title={unmeasuredTitle(fields)}
     >
       unreadable
     </span>

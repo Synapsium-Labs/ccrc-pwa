@@ -84,9 +84,11 @@ const UI_SRC = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
  *  `completes every hook class @ccrc/ui emits` below reds until it is here. */
 export const OWNED = [
   'btn-primary', 'btn-ghost',                                    // Button / buttonVariants
+  'btn-danger', 'btn-danger-ghost',                              // Button's danger variants (D-5099)
   'dot', 'dot--busy', 'dot--attention', 'dot--idle',             // StatusDot / dotVariants
   'dot--done', 'dot--cleanup', 'dot--dead',
   'limits', 'limit-track', 'limit-fill',                         // LimitBar / fillVariants / LIMIT_TRACK
+  'meter', 'meter-fill',                                         // Meter (D-5098)
   'limit-fill--ok', 'limit-fill--warn', 'limit-fill--crit', 'limit-fill--off',
   'skel',                                                        // Skeleton
   'sheet-panel', 'sheet-panel--full', 'sheet-scrim', 'sheet-grabber', // Sheet
@@ -114,7 +116,7 @@ export const OWNED = [
   'attach-btn',                                                  // AttachButton
   'build-line-side--warn',                                       // BuildLine
   'task-card-status--ok', 'task-card-status--bad',               // TaskCard
-  'task-mark--running',                                          // TaskStrip
+  'task-mark--running', 'task-row--stale',                       // TaskStrip (D-5372)
   // QuickConfirm's QC_CONSEQUENCE / QC_ACTIONS. Their LOOK is utilities, not a
   // stylesheet rule, so an app call site that wrote the hook bare rendered
   // unstyled: ArchiveSheet and UpdateMoveSheet did, after the branch deleted
@@ -131,6 +133,9 @@ export const NOT_VOCABULARY: Record<string, string> = {
   class: 'the English word, in a sentence inside a comment or an aria string',
   fleet: 'the English word — BuildLine labels a box "fleet"; the app also has a `.fleet` screen class, which is how it reaches the intersection',
   'sr-only': "Tailwind's own utility, which a stylesheet in this tree also defines; emitted by Sheet and owned by the framework",
+  // D-5158: a merge-config name, registered here rather than OWNED, which
+  // would refuse the app's own `card` class.
+  card: "a spacing-theme NAME in cn.ts (the --pad-card role, D-5093), which tailwind-merge needs bare to place `p-card`; never emitted as a class — the app's own `.card` rule in fleet.css is how it reaches the intersection",
 };
 
 /** Every `className="..."` / `className={'...'}` string literal in a file. */
@@ -363,9 +368,10 @@ describe('the owned vocabulary keeps up with the package', () => {
  *  derivation is structural, so what it cannot tell apart is said out loud. */
 export const NOT_A_SKIN: Record<string, string> = {
   LIMIT_TRACK:
-    "AccountRow builds its gauge from the track plus `fillVariants` because the row must be "
-    + "SPANS ONLY — it sits inside the account button, and `<LimitBar>` renders a block. Both "
-    + "parts are the design system's; only the assembly is the app's.",
+    "the track `Meter` draws, exported beside `fillVariants` as one unit and re-exported "
+    + "through limit-bar.tsx. No app file assembles a meter from it any more — AccountRow's "
+    + "gauge is a `<Meter>` (D-5098), and meter.test.tsx's one-implementation scan reds on a "
+    + "file that reaches for either part.",
   DOOR_GLYPH: 'a glyph, not a class.',
   ASK_GLYPH: 'a glyph, not a class.',
   ASK_WORD: 'a word table, not a class.',
@@ -378,6 +384,11 @@ export const NOT_A_SKIN: Record<string, string> = {
     + 'confirm, and the three sheets that roll their own still want the same hooks for tests '
     + 'and for scoped rules (this file\'s own header says so).',
   QC_ACTIONS: 'the same hook, same reason as QC_CONSEQUENCE.',
+  PROSE:
+    "the prose hook class worn by the Docs reader's body, `<article className={cn('doc-body', PROSE)}>` "
+    + "(docs/DocMarkdown.tsx): the native Docs reader spec (2026-10-01, sections 4.4 and 4.12) makes a "
+    + "document body an <article>, a landmark `Prose`'s <div> cannot render, so the body wears prose's "
+    + "look through the hook class `Prose` itself exports it for; chat's MessageBubble uses <Prose>.",
 };
 
 /** `{CONSTANT: owning component}` for every class-string constant `@ccrc/ui`

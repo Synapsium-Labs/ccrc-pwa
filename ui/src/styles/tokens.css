@@ -29,6 +29,52 @@
    the gate measured 94, which is the same drift in miniature.
    ========================================================================== */
 
+/* ----------------------------------------------------------------------------
+   THE GEIST PAIR, SELF-HOSTED (D-5095). The two faces --family-ui and
+   --family-mono name, declared here beside them (D-5450: a stylesheet holding
+   only @font-face fails the contrast gate's every-sheet-has-rules walk, so the
+   plan's separate fonts.css would have needed a frozen file edited).
+   Top level, never inside :root or a palette block: a face nested in a style
+   rule is dropped.
+
+   Geist and Geist Mono are part of the identity core (D-5094): both skins draw
+   every glyph of UI and mono text in them. They are VENDORED, not installed
+   (spec §12 O5) and never fetched from a font host. Vite resolves each url()
+   below from this directory, in the app's build and in Storybook's, and emits
+   the file as a hashed, same-origin asset under /assets/.
+
+   Source:  the `geist` npm package, geist@1.8.1 (`npm pack`, never a dependency)
+     ui/src/fonts/Geist-Variable.woff2      sha256 9ce2d97863cab59a0c7522534112d6c42a4e25c0e6b2ab37766761b0f82cfbd6
+     ui/src/fonts/GeistMono-Variable.woff2  sha256 119f3e159fc15dd77311e929d3a657a193b57a3e625234666bc43c6e2b1127f7
+     ui/src/fonts/OFL.txt                   sha256 930853ee1daa68554d9e35c8a9175affb74f699fad9a5da6ee5ebe76379d9137
+   Licence: SIL Open Font License 1.1, Copyright (c) 2023 Vercel, in
+     collaboration with basement.studio. Shipped byte for byte at
+     /licenses/Geist-OFL.txt (pwa/public/licenses/). pwa/test/fonts.test.ts
+     holds every hash above, and the copy.
+
+   One variable file per family covers every weight (100 to 900). `swap`
+   paints today's system face first and swaps once the file arrives, so text
+   is never invisible while it loads. The stacks below keep the system
+   faces behind Geist, so a glyph Geist lacks (❯ ⑂ ✉ …) falls back per glyph
+   to a system face.
+   ------------------------------------------------------------------------- */
+
+@font-face {
+  font-family: 'Geist';
+  src: url('../fonts/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('../fonts/GeistMono-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   /* ------------------------------------------------------------------ *
    *  COLOR — dark theme (default)                                       *
@@ -49,14 +95,15 @@
   --edge-strong: #39403A;
 
   /* Text. "Ink" is warm off-white with the same green cast as the glass. */
-  /* --ink-primary is deliberately also a BACKGROUND: the selected fleet row reverses out
-     (.sess-line--active, fleet.css), filling with this and inking with --bg-page. Not a mistake. */
   --ink-primary:   #ECF0EC;  /* 15.68:1 on surface, 14.32:1 on raised — AAA */
   --ink-secondary: #ADB6AE;  /* 8.67:1 on surface, 7.91:1 on raised */
   --ink-tertiary:  #8B948C;  /* timestamps, meta: 5.77:1 surface, 5.27:1 raised */
   --ink-disabled:  #5C655D;  /* intentionally sub-AA; disabled only (WCAG-exempt) */
   --ink-on-well:   #DEE4DE;  /* terminal/code text: 15.52:1 on well */
   --ink-on-accent: #082312;  /* text on phosphor buttons: 8.87:1 on accent */
+  /* Text on the filled danger button (D-5099): --status-dead's fill, so its
+     ink is fitted to that hue, not to the phosphor's. Near-black in dark. */
+  --ink-on-danger: #1F0B07;  /* 5.74:1 on --status-dead */
 
   /* Interactive accent = the phosphor. Send button, links, focus ring,
      the ❯ preselect cursor. Same hue family as busy — intentionally:
@@ -87,6 +134,35 @@
      it against --status-dead-tint composited over --bg-surface, so retuning
      one and not the other fails the gate. */
   --status-dead-tint-solid: color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface));
+
+  /* HOVER AND PRESSED (D-5101): the ground an interactive row, door or ghost
+     button lifts to under the mouse, and the one it sinks to while held.
+     ink-primary at 5% and 9% over the card, so each stays OPAQUE (a token
+     pair is measured solid, design/contrast-check.mjs refuses a translucent
+     one) and moves with the palette's own ink. Declared once, in :root only,
+     the way --status-dead-tint-solid is: both inputs are re-declared per
+     theme, so var() resolves these per theme. The generated block also
+     emits each pre-composited (make-themes.mjs), so a palette's value can be
+     read without re-mixing. Pressed is the deeper of the two, so an ink that
+     clears pressed clears hover. */
+  --bg-hover:   color-mix(in srgb, var(--ink-primary) 5%, var(--bg-surface));
+  --bg-pressed: color-mix(in srgb, var(--ink-primary) 9%, var(--bg-surface));
+  /* THE SAME TWO ON THE DEAD BANNER (D-5574). The danger-ghost Reboot paints
+     these with `ground="dead"` (D-5688; until then the banner re-scoped
+     --bg-hover and --bg-pressed, D-5575), because the card's grounds barely
+     register on its tint: 1.00 for the press in light, 1.03 for the lift in
+     dark. Its own tint, mixed toward --ink-on-danger, which is the danger
+     fill's ink and so sits on the far side of the tint from
+     --status-dead-text in every palette (a red-black in the dark ones, white
+     in the light ones): the step moves away from the label and the hairline,
+     so both only gain. Measured in the eight dark palettes: the hover 1.08 or
+     more from the tint, the press 1.16 or more, the press 1.07 or more from
+     the hover. Declared here for every dark palette; both inputs are
+     re-declared per theme. A LIGHT palette re-declares the pair at 60% and
+     95% (D-5688): at 35% its hover sat under its own card hover step. Those
+     blocks say why. */
+  --bg-hover-on-dead:   color-mix(in srgb, var(--ink-on-danger) 35%, var(--status-dead-tint-solid));
+  --bg-pressed-on-dead: color-mix(in srgb, var(--ink-on-danger) 70%, var(--status-dead-tint-solid));
 
   /* PR keycap (Task 15). --pr-merged ALIASES --acct-violet rather than
      repeating its hex: a literal single hex here (#C7A7F4, dark-only) reads
@@ -121,6 +197,24 @@
   --status-done-text:      var(--ink-secondary);
   --status-cleanup:        var(--status-idle);
   --status-cleanup-text:   var(--ink-secondary);
+
+  /* The scrollbar thumb (base.css's `html` rule; D-5159). Its track is
+     `transparent`, so the thumb sits on whatever its scroll container paints:
+     the page, a surface, a raised field, a sheet, or a WELL — dark in every
+     palette, the light ones included. It owes 3:1 on all five (WCAG 1.4.11:
+     an author-set thumb is a graphical object), and --edge-strong, the
+     hairline the plan first named, owed nothing: it measured 1.03 (One Dark)
+     and 1.06 (Solarized Light), an invisible thumb. No ink clears both sides
+     of a light palette (white grounds AND a near-black well); the idle lamp's
+     matte grey does, because that is the contract the generator fits every
+     status dot to — 3:1 plus margin against surface, page, raised and the
+     well — and the gate holds Phosphor's two hand-tuned values to it. So the
+     thumb is DERIVED from it, declared once here and re-resolved by every
+     palette, never a hex tuned until the numbers pass. Matte, so it never
+     glows; grey in every palette, so it reads as chrome, not as a state.
+     Held at 3:1 on all five grounds by contrast-check.mjs's token pairs and
+     by base-defaults.test.ts. */
+  --scrollbar-thumb:       var(--status-idle);
 
   /* Account accents — chip text on chip tint. Six hues (shared/roster.ts's
      HUES): cyan/violet/blue/magenta live in the cool half of the wheel
@@ -204,13 +298,16 @@
      anything a human reads as prose (chat, buttons, dialog copy).
      Any mono value that updates in place (elapsed clocks, percentages,
      durations) also gets font-variant-numeric: tabular-nums — readouts
-     must never jitter sideways. */
-  --family-ui:   system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --family-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "Roboto Mono", "Liberation Mono", monospace;
+     must never jitter sideways.
+     The Geist pair leads both stacks (D-5095, the faces atop this file); today's system
+     stacks stay behind it, so a glyph Geist lacks falls back per glyph. */
+  --family-ui:   "Geist", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --family-mono: "Geist Mono", ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "Roboto Mono", "Liberation Mono", monospace;
 
   --fs-2xs:  11px;   /* eyebrows, limit labels, keycap legends */
   --fs-xs:   12px;   /* timestamps, tool-card meta */
   --fs-sm:   13px;   /* chips, tool summaries, mono code */
+  --fs-md:   14px;   /* the step between: Instrument's prose and page title (D-5093) */
   --fs-base: 15px;   /* chat body, buttons, dialog options */
   --fs-lg:   17px;   /* card titles (mono), sheet titles */
   --fs-xl:   20px;   /* screen titles */
@@ -235,6 +332,10 @@
      nothing moves; what changes is that the eighth consumer has somewhere to
      take it from. */
   --ls-caps-sm: 0.04em;
+  /* Slightly tight tracking for a sans heading set at body size — Refined's
+     section titles (D-5093). A scale step like the two above: shared, and not
+     a skin token, so a skin may point a role at it but never move it. */
+  --ls-tight: -0.011em;
 
   /* ------------------------------------------------------------------ *
    *  SPACE, RADIUS, TOUCH, SIZE                                         *
@@ -262,6 +363,44 @@
   --lamp-size: 18px;   /* status-dot lamp bezel: --bg-well floor + inset ring */
   --well-max:  240px;  /* tool-output wells cap here and scroll internally */
   --measure-prose: 72ch;   /* assistant prose caps here; pre/table/img opt out. Inert <640px. */
+
+  /* ------------------------------------------------------------------ *
+   *  ROLES — the skin axis (D-5093)                                     *
+   * ------------------------------------------------------------------ */
+  /* A ROLE names what a size is FOR; the scales above say how big a step
+     is. These are Refined's values — Refined IS :root — and skins.css
+     re-points them for Instrument. Each one CHOOSES a step from a scale (or
+     a length, for the measures), so no value below is new: that is what
+     keeps this pixel-neutral, and what lets Task 14 swap a primitive's scale
+     step for its role without moving a pixel in Refined. The closed list a
+     skin may override is SKIN_TOKENS in skins.ts. Two of these change with
+     the width; their wider values are in the ROLES BY WIDTH block at the end
+     of this file. The shared primitives read them (role-census.test.ts). */
+  --fs-ui:      var(--fs-base);   /* controls and rows */
+  --fs-prose:   var(--fs-base);   /* chat and Markdown */
+  --fs-meta:    var(--fs-xs);     /* timestamps, chips */
+  --fs-page:    var(--fs-xl);     /* a screen's title (24 at ≥900) */
+  --fs-section: var(--fs-base);   /* a section's heading, with the four below */
+  --weight-section: var(--weight-semibold);
+  --family-section: var(--family-ui);
+  --case-section:   none;         /* text-transform */
+  --ls-section:     var(--ls-tight);
+
+  --gutter:      var(--sp-4);     /* a screen's side gutter (24 at ≥900, 32 at ≥1600) */
+  --row-h:       52px;            /* a list row: ListRow's height today. Tap-bearing — see SKIN_TOKENS */
+  --pad-card:    var(--sp-4);     /* inside a card */
+  --gap-section: var(--sp-8);     /* between a page's sections */
+  --page-max:      760px;         /* a secondary screen's column */
+  --page-max-wide: 1120px;        /* a wide screen's column (Runs) */
+  --measure-chat:  780px;         /* the transcript's reading column (820 at ≥1600) */
+
+  /* The METER's shape (D-5098), read by @ccrc/ui's Meter (meter.css). One
+     segment with no gap is the continuous bar: Refined's, at 5px, which is
+     what the accounts strip and screen drew before. A skin may set all three
+     (SKIN_TOKENS' meter class): lengths and a count, never a colour. */
+  --meter-h:        5px;
+  --meter-segments: 1;
+  --meter-gap:      0px;
 
   /* ------------------------------------------------------------------ *
    *  ELEVATION & GLOW                                                   *
@@ -332,14 +471,13 @@
   --edge-subtle: #DDE2DC;
   --edge-strong: #C3CAC2;
 
-  /* Also a BACKGROUND here, same as in dark: .sess-line--active fills with it, inks with
-     --bg-page. The pair flips together, so the inversion is maximal in both themes. */
   --ink-primary:   #1A201B;  /* 16.58:1 on surface, 14.15:1 on raised */
   --ink-secondary: #4E5850;  /* 7.41:1 on surface, 6.32:1 on raised */
   --ink-tertiary:  #5F6962;  /* 5.70:1 on surface, 4.86:1 on raised */
   --ink-disabled:  #98A29A;  /* disabled only (WCAG-exempt) */
   --ink-on-well:   #DEE4DE;  /* 13.98:1 on the (still dark) well */
   --ink-on-accent: #FFFFFF;  /* 5.35:1 on light accent */
+  --ink-on-danger: #FFFFFF;  /* 5.73:1 on --status-dead */
 
   --accent:      #0E7B3F;   /* focus ring 4.92:1 vs page (needs 3:1) */
   --accent-tint: #DFF2E5;   /* primary ink on it: 14.19:1 */
@@ -353,6 +491,14 @@
   --status-dead:           #B2402C;  /* dot 5.73:1 vs surface, 3.15:1 vs lamp well */
   --status-dead-text:      #B2402C;  /* 5.73:1 vs surface */
   --status-dead-tint:      rgba(178, 64, 44, 0.12);  /* dead-text on it 4.81:1 over surface */
+  /* The dead banner's lift and press, mixed further than :root's 35/70
+     (D-5688): at 35% the hover measured 1.065 from the banner, under this
+     palette's own card hover step (1.102). At 60% it is 1.113; the press at
+     95% is 1.183 from the banner and 1.063 from the hover. 95%, not 100%:
+     the bare --ink-on-danger is white, a hole in the banner rather than a
+     ground on it. The generated light palettes carry the same two. */
+  --bg-hover-on-dead:   color-mix(in srgb, var(--ink-on-danger) 60%, var(--status-dead-tint-solid));
+  --bg-pressed-on-dead: color-mix(in srgb, var(--ink-on-danger) 95%, var(--status-dead-tint-solid));
 
   --acct-cyan:         #0A6377;  /* 5.80:1 on its tint */
   --acct-cyan-tint:    #DAF0F6;
@@ -417,14 +563,16 @@
   --edge-subtle:             #505A6C;
   --edge-strong:             #5F697C;
   --ink-primary:             #ECEFF4;
-  --ink-secondary:           #ECEFF4;
-  --ink-tertiary:            #ECEFF4;
-  --ink-disabled:            #BEC1C6;
+  --ink-secondary:           #D7DADE;
+  --ink-tertiary:            #C2C5C9;
+  --ink-disabled:            #96999D;
   --ink-on-well:             #ECEFF4;
   --accent:                  #92CADA;
   --ink-on-accent:           #07140C;
   --accent-tint:             #3E4D5D;
   --accent-on-well:          #88C0D0;
+  --bg-hover:                #444B5A;
+  --bg-pressed:              #4B5261;
   --status-busy:             #A3BE8C;
   --status-busy-text:        #AFCB98;
   --status-idle:             #95A0B6;
@@ -434,7 +582,8 @@
   --status-dead:             #E6848C;
   --status-dead-tint:        color-mix(in srgb, #BF616A 12%, transparent);
   --status-dead-tint-solid:  #4B4655;
-  --status-dead-text:        #FDABB0;
+  --status-dead-text:        #FFB8BC;
+  --ink-on-danger:           #1F0B07;
   --status-done:             #8FBCBB;
   --status-done-text:        #9DCAC9;
   --status-cleanup:          #95A0B6;
@@ -484,14 +633,16 @@
   --edge-subtle:             #353B50;
   --edge-strong:             #484D63;
   --ink-primary:             #C0CAF5;
-  --ink-secondary:           #C0CAF5;
-  --ink-tertiary:            #C0CAF5;
-  --ink-disabled:            #949EC7;
+  --ink-secondary:           #AAB4DE;
+  --ink-tertiary:            #959FC8;
+  --ink-disabled:            #6C759C;
   --ink-on-well:             #C0CAF5;
   --accent:                  #7AA2F7;
   --ink-on-accent:           #07140C;
   --accent-tint:             #2B3551;
   --accent-on-well:          #7AA2F7;
+  --bg-hover:                #2C3044;
+  --bg-pressed:              #32374C;
   --status-busy:             #9ECE6A;
   --status-busy-text:        #9ECE6A;
   --status-idle:             #7882AE;
@@ -501,11 +652,12 @@
   --status-dead:             #F7768E;
   --status-dead-tint:        color-mix(in srgb, #F7768E 12%, transparent);
   --status-dead-tint-solid:  #3D3145;
-  --status-dead-text:        #FB7A92;
+  --status-dead-text:        #F88196;
+  --ink-on-danger:           #1F0B07;
   --status-done:             #73DACA;
   --status-done-text:        #73DACA;
   --status-cleanup:          #7882AE;
-  --status-cleanup-text:     #959FCD;
+  --status-cleanup-text:     #97A2D0;
   --acct-cyan-tint:          #34465E;
   --acct-cyan:               #7DCFFF;
   --acct-violet-tint:        #3F3D5D;
@@ -551,14 +703,16 @@
   --edge-subtle:             #515568;
   --edge-strong:             #65687D;
   --ink-primary:             #F8F8F2;
-  --ink-secondary:           #F8F8F2;
-  --ink-tertiary:            #F8F8F2;
-  --ink-disabled:            #CACAC4;
+  --ink-secondary:           #DBDBD5;
+  --ink-tertiary:            #BFBFB9;
+  --ink-disabled:            #93938E;
   --ink-on-well:             #F8F8F2;
   --accent:                  #CDAEFD;
   --ink-on-accent:           #07140C;
   --accent-tint:             #48465E;
   --accent-on-well:          #BD93F9;
+  --bg-hover:                #3E414F;
+  --bg-pressed:              #464855;
   --status-busy:             #50FA7B;
   --status-busy-text:        #50FA7B;
   --status-idle:             #8596CB;
@@ -568,7 +722,8 @@
   --status-dead:             #FE6360;
   --status-dead-tint:        color-mix(in srgb, #FF5555 12%, transparent);
   --status-dead-tint-solid:  #4C3B48;
-  --status-dead-text:        #FE9790;
+  --status-dead-text:        #FFA59F;
+  --ink-on-danger:           #1F0B07;
   --status-done:             #8BE9FD;
   --status-done-text:        #8BE9FD;
   --status-cleanup:          #8596CB;
@@ -578,7 +733,7 @@
   --acct-violet-tint:        #4D4866;
   --acct-violet:             #D1B4FF;
   --acct-blue-tint:          #3C4257;
-  --acct-blue:               #A2B4EA;
+  --acct-blue:               #A9BCF2;
   --acct-magenta-tint:       #59435D;
   --acct-magenta:            #FDA5D4;
   --acct-amber-tint:         #594E4D;
@@ -616,16 +771,18 @@
   --bg-well:                 #181825;
   --scrim:                   rgba(4, 6, 5, 0.62);
   --edge-subtle:             #525568;
-  --edge-strong:             #57596E;
-  --ink-primary:             #D1DAF8;
-  --ink-secondary:           #CDD6F4;
-  --ink-tertiary:            #CDD6F4;
-  --ink-disabled:            #A1A9C6;
+  --edge-strong:             #5C5E72;
+  --ink-primary:             #D4DDFB;
+  --ink-secondary:           #C0C9E7;
+  --ink-tertiary:            #ADB6D3;
+  --ink-disabled:            #828BA6;
   --ink-on-well:             #CDD6F4;
   --accent:                  #96BEFF;
   --ink-on-accent:           #07140C;
   --accent-tint:             #404761;
   --accent-on-well:          #89B4FA;
+  --bg-hover:                #393B4D;
+  --bg-pressed:              #404154;
   --status-busy:             #A6E3A1;
   --status-busy-text:        #A6E3A1;
   --status-idle:             #9296AD;
@@ -635,7 +792,8 @@
   --status-dead:             #F38BA8;
   --status-dead-tint:        color-mix(in srgb, #F38BA8 12%, transparent);
   --status-dead-tint-solid:  #483D50;
-  --status-dead-text:        #FD94B1;
+  --status-dead-text:        #FFA2BA;
+  --ink-on-danger:           #1F0B07;
   --status-done:             #94E2D5;
   --status-done-text:        #94E2D5;
   --status-cleanup:          #9296AD;
@@ -683,18 +841,20 @@
   --bg-well:                 #1D2021;
   --scrim:                   rgba(4, 6, 5, 0.62);
   --edge-subtle:             #5E5753;
-  --edge-strong:             #645C59;
-  --ink-primary:             #ECDCB3;
-  --ink-secondary:           #EBDBB2;
-  --ink-tertiary:            #EBDBB2;
-  --ink-disabled:            #BEAE86;
+  --edge-strong:             #68605C;
+  --ink-primary:             #F1E1B7;
+  --ink-secondary:           #DDCDA4;
+  --ink-tertiary:            #C9BA91;
+  --ink-disabled:            #9D8F67;
   --ink-on-well:             #EBDBB2;
   --accent:                  #C3C737;
   --ink-on-accent:           #07140C;
   --accent-tint:             #4F4C33;
   --accent-on-well:          #B8BB26;
+  --bg-hover:                #45403C;
+  --bg-pressed:              #4C4742;
   --status-busy:             #B8BB26;
-  --status-busy-text:        #C3C737;
+  --status-busy-text:        #C5C839;
   --status-idle:             #A5978C;
   --status-attention:        #FABD2F;
   --status-attention-tint:   #5E5035;
@@ -702,21 +862,22 @@
   --status-dead:             #FE6C57;
   --status-dead-tint:        color-mix(in srgb, #FB4934 12%, transparent);
   --status-dead-tint-solid:  #533A36;
-  --status-dead-text:        #FD9A89;
+  --status-dead-text:        #FCAD9F;
+  --ink-on-danger:           #1F0B07;
   --status-done:             #8EC07C;
-  --status-done-text:        #9ACD88;
+  --status-done-text:        #9CCE8A;
   --status-cleanup:          #A5978C;
-  --status-cleanup-text:     #CBBDB1;
+  --status-cleanup-text:     #CDBEB2;
   --acct-cyan-tint:          #4B5043;
   --acct-cyan:               #A1D38E;
   --acct-violet-tint:        #574648;
-  --acct-violet:             #F9A9BE;
+  --acct-violet:             #FCABC1;
   --acct-blue-tint:          #494C48;
   --acct-blue:               #A5C8BB;
   --acct-magenta-tint:       #574648;
-  --acct-magenta:            #F9A9BE;
+  --acct-magenta:            #FCABC1;
   --acct-amber-tint:         #5F4531;
-  --acct-amber:              #FFAD7B;
+  --acct-amber:              #FDAF81;
   --acct-green-tint:         #525033;
   --acct-green:              #CACD40;
   --limit-track:             #58514D;
@@ -750,16 +911,18 @@
   --bg-well:                 #21252B;
   --scrim:                   rgba(4, 6, 5, 0.62);
   --edge-subtle:             #4B515F;
-  --edge-strong:             #3C424F;
-  --ink-primary:             #CCD3E1;
-  --ink-secondary:           #BFC6D4;
-  --ink-tertiary:            #B1B8C5;
-  --ink-disabled:            #868D99;
+  --edge-strong:             #555B69;
+  --ink-primary:             #D1D8E6;
+  --ink-secondary:           #BDC4D2;
+  --ink-tertiary:            #AAB1BE;
+  --ink-disabled:            #7F8692;
   --ink-on-well:             #ABB2BF;
   --accent:                  #6FBDFE;
   --ink-on-accent:           #07140C;
   --accent-tint:             #354557;
   --accent-on-well:          #61AFEF;
+  --bg-hover:                #393D47;
+  --bg-pressed:              #3F444E;
   --status-busy:             #98C379;
   --status-busy-text:        #98C379;
   --status-idle:             #8A92A0;
@@ -769,7 +932,8 @@
   --status-dead:             #E16D76;
   --status-dead-tint:        color-mix(in srgb, #E06C75 12%, transparent);
   --status-dead-tint-solid:  #463C45;
-  --status-dead-text:        #FF9197;
+  --status-dead-text:        #FF9A9F;
+  --ink-on-danger:           #1F0B07;
   --status-done:             #56B6C2;
   --status-done-text:        #65C4D0;
   --status-cleanup:          #8A92A0;
@@ -817,16 +981,18 @@
   --bg-well:                 #001F27;
   --scrim:                   rgba(4, 6, 5, 0.62);
   --edge-subtle:             #1F5461;
-  --edge-strong:             #000003;
-  --ink-primary:             #C1D0D0;
-  --ink-secondary:           #B4C3C3;
-  --ink-tertiary:            #A7B5B5;
-  --ink-disabled:            #7D8A8A;
+  --edge-strong:             #2A5F6C;
+  --ink-primary:             #C5D5D5;
+  --ink-secondary:           #B1C1C1;
+  --ink-tertiary:            #9EAEAE;
+  --ink-disabled:            #748383;
   --ink-on-well:             #94A2A2;
   --accent:                  #63B7FB;
   --ink-on-accent:           #07140C;
   --accent-tint:             #0D4459;
   --accent-on-well:          #3596DE;
+  --bg-hover:                #113E49;
+  --bg-pressed:              #18444F;
   --status-busy:             #859900;
   --status-busy-text:        #A6BB3D;
   --status-idle:             #799098;
@@ -836,7 +1002,8 @@
   --status-dead:             #FF564D;
   --status-dead-tint:        color-mix(in srgb, #DC322F 12%, transparent);
   --status-dead-tint-solid:  #213640;
-  --status-dead-text:        #FE8C80;
+  --status-dead-text:        #FD9286;
+  --ink-on-danger:           #1F0B07;
   --status-done:             #2AA198;
   --status-done-text:        #53C2B8;
   --status-cleanup:          #799098;
@@ -844,13 +1011,13 @@
   --acct-cyan-tint:          #0D4951;
   --acct-cyan:               #56C5BB;
   --acct-violet-tint:        #194159;
-  --acct-violet:             #9EA6FE;
+  --acct-violet:             #A2AAFB;
   --acct-blue-tint:          #0D455C;
   --acct-blue:               #63B7FB;
   --acct-magenta-tint:       #2C364E;
-  --acct-magenta:            #FF74AF;
+  --acct-magenta:            #FD8BB8;
   --acct-amber-tint:         #2A3A3A;
-  --acct-amber:              #FC8258;
+  --acct-amber:              #FE936F;
   --acct-green-tint:         #1E4836;
   --acct-green:              #A6BB3D;
   --limit-track:             #194E5B;
@@ -886,14 +1053,16 @@
   --edge-subtle:             #E5E7E9;
   --edge-strong:             #CFD0D2;
   --ink-primary:             #1F2328;
-  --ink-secondary:           #1F2328;
-  --ink-tertiary:            #1F2328;
-  --ink-disabled:            #42474C;
+  --ink-secondary:           #3F4348;
+  --ink-tertiary:            #61656B;
+  --ink-disabled:            #8A8E94;
   --ink-on-well:             #A8ADB4;
   --accent:                  #0969DA;
   --ink-on-accent:           #FFFFFF;
   --accent-tint:             #F2F8FF;
   --accent-on-well:          #589DFF;
+  --bg-hover:                #F4F4F4;
+  --bg-pressed:              #EBEBEC;
   --status-busy:             #23853D;
   --status-busy-text:        #136F2E;
   --status-idle:             #6D757E;
@@ -904,6 +1073,9 @@
   --status-dead-tint:        color-mix(in srgb, #CF222E 12%, transparent);
   --status-dead-tint-solid:  #F9E4E6;
   --status-dead-text:        #C61427;
+  --ink-on-danger:           #FFFFFF;
+  --bg-hover-on-dead:        color-mix(in srgb, var(--ink-on-danger) 60%, var(--status-dead-tint-solid));
+  --bg-pressed-on-dead:      color-mix(in srgb, var(--ink-on-danger) 95%, var(--status-dead-tint-solid));
   --status-done:             #23853D;
   --status-done-text:        #136F2E;
   --status-cleanup:          #6D757E;
@@ -951,16 +1123,18 @@
   --bg-well:                 #002B36;
   --scrim:                   rgba(20, 26, 22, 0.42);
   --edge-subtle:             #DED8C5;
-  --edge-strong:             #F6F0DD;
-  --ink-primary:             #3F545B;
-  --ink-secondary:           #465C63;
-  --ink-tertiary:            #51676E;
-  --ink-disabled:            #799098;
+  --edge-strong:             #C7C1AF;
+  --ink-primary:             #3A4F55;
+  --ink-secondary:           #475D63;
+  --ink-tertiary:            #556B72;
+  --ink-disabled:            #7D949C;
   --ink-on-well:             #98AFB7;
   --accent:                  #0768A3;
   --ink-on-accent:           #FFFFFF;
   --accent-tint:             #DFE9E8;
   --accent-on-well:          #40A0E9;
+  --bg-hover:                #F5F2E8;
+  --bg-pressed:              #EDECE2;
   --status-busy:             #708101;
   --status-busy-text:        #566305;
   --status-idle:             #6D7A7A;
@@ -971,6 +1145,9 @@
   --status-dead-tint:        color-mix(in srgb, #DC322F 12%, transparent);
   --status-dead-tint-solid:  #FBE3D9;
   --status-dead-text:        #C6131A;
+  --ink-on-danger:           #FFFFFF;
+  --bg-hover-on-dead:        color-mix(in srgb, var(--ink-on-danger) 60%, var(--status-dead-tint-solid));
+  --bg-pressed-on-dead:      color-mix(in srgb, var(--ink-on-danger) 95%, var(--status-dead-tint-solid));
   --status-done:             #1A8981;
   --status-done-text:        #000001;
   --status-cleanup:          #6D7A7A;
@@ -986,7 +1163,7 @@
   --acct-amber-tint:         #F7DFCD;
   --acct-amber:              #AD3A04;
   --acct-green-tint:         #EBEBCA;
-  --acct-green:              #5C6A04;
+  --acct-green:              #5B6902;
   --limit-track:             #E4DECB;
   --limit-ok:                #6F7F11;
   --limit-warn:              #967312;
@@ -1018,16 +1195,18 @@
   --bg-well:                 #1E1E2E;
   --scrim:                   rgba(20, 26, 22, 0.42);
   --edge-subtle:             #D6D9DE;
-  --edge-strong:             #C4C7CD;
-  --ink-primary:             #4C4F69;
-  --ink-secondary:           #4C4F69;
-  --ink-tertiary:            #4C4F69;
-  --ink-disabled:            #737793;
+  --edge-strong:             #BFC2C8;
+  --ink-primary:             #474A63;
+  --ink-secondary:           #555872;
+  --ink-tertiary:            #646782;
+  --ink-disabled:            #8D90AD;
   --ink-on-well:             #9EA2C0;
   --accent:                  #0F59E7;
   --ink-on-accent:           #FFFFFF;
   --accent-tint:             #E0EBFF;
   --accent-on-well:          #5890FC;
+  --bg-hover:                #F6F6F7;
+  --bg-pressed:              #EEEFF1;
   --status-busy:             #2E9014;
   --status-busy-text:        #20700B;
   --status-idle:             #777A8B;
@@ -1038,6 +1217,9 @@
   --status-dead-tint:        color-mix(in srgb, #D20F39 12%, transparent);
   --status-dead-tint-solid:  #FAE2E7;
   --status-dead-text:        #C31A38;
+  --ink-on-danger:           #FFFFFF;
+  --bg-hover-on-dead:        color-mix(in srgb, var(--ink-on-danger) 60%, var(--status-dead-tint-solid));
+  --bg-pressed-on-dead:      color-mix(in srgb, var(--ink-on-danger) 95%, var(--status-dead-tint-solid));
   --status-done:             #068C93;
   --status-done-text:        #000003;
   --status-cleanup:          #777A8B;
@@ -1049,11 +1231,11 @@
   --acct-blue-tint:          #DBE7FD;
   --acct-blue:               #0C56E4;
   --acct-magenta-tint:       #FCE9F7;
-  --acct-magenta:            #AA3B90;
+  --acct-magenta:            #A7388D;
   --acct-amber-tint:         #FFE6D8;
   --acct-amber:              #B04204;
   --acct-green-tint:         #E0F0DD;
-  --acct-green:              #22760B;
+  --acct-green:              #217508;
   --limit-track:             #DCDFE5;
   --limit-ok:                #288B09;
   --limit-warn:              #AB6A08;
@@ -1103,6 +1285,25 @@
    pair `.chip--archived` above and `accountColorVar`'s own hue-less fallback
    already use, both already gated at 4.5+ in both themes. */
 [data-acct='unknown'] { --acct-active: var(--ink-tertiary); --acct-active-tint: var(--bg-raised); }
+
+/* ==========================================================================
+   ROLES BY WIDTH — Refined's roles that grow with the screen (D-5093). The
+   roles themselves are declared in :root above. Instrument's values in
+   skins.css are (0,2,0) and outrank these (0,1,0) at every width, so a role
+   Instrument fixes stays fixed on a wide screen.
+   ========================================================================== */
+@media (min-width: 900px) {
+  :root {
+    --fs-page: var(--fs-2xl);
+    --gutter:  var(--sp-6);
+  }
+}
+@media (min-width: 1600px) {
+  :root {
+    --gutter:       var(--sp-8);
+    --measure-chat: 820px;
+  }
+}
 
 /* ==========================================================================
    REDUCED MOTION — glow freezes at mid-intensity, springs become fades,

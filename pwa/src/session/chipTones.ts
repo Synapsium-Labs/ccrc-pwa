@@ -26,7 +26,7 @@
 
 /** What a chip on the session header can be SAYING. Each one is a chat.css
  *  rule; the rule is where the colour argument lives. */
-export type ChipTone = 'active' | 'repo' | 'archived';
+export type ChipTone = 'active' | 'repo' | 'archived' | 'restart';
 
 /** The modifiers of the meta row's own pill. `model` and `ultra` are live
  *  choosers, `branch` is a label — which is the distinction `button.metachip`
@@ -37,6 +37,7 @@ const CHIP: Record<ChipTone, string> = {
   active: 'chip--active',
   repo: 'chip--repo',
   archived: 'chip--archived',
+  restart: 'chip--restart',   // D-5237: a recent process end, as quiet as `archived`
 };
 
 const METACHIP: Record<MetaChipTone, string> = {

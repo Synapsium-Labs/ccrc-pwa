@@ -79,8 +79,8 @@ export interface TasksRead {
    *  returned null, which folds two conditions this reader cannot part —
    *  "no such directory" (the ordinary shape: most sessions never make a task
    *  list) and "the directory is there and would not list" (EACCES; in remote
-   *  mode one dropped agent-WS round trip). `io.readdir` has no measured
-   *  variant, so the distinction is not available HERE — but the consumer
+   *  mode one dropped agent-WS round trip). `io.readdir`, which this calls, folds
+   *  them (its measured sibling `readdirMeasured` does not), so the distinction is not available HERE — but the consumer
    *  needs the fold flagged even so, because the two share the one recovery:
    *  do not overwrite a tally that was measured a moment ago with a zero
    *  nobody measured.
@@ -93,6 +93,19 @@ export interface TasksRead {
    *  measured `readdir` is a new wire op and a new frame — D-114's family,
    *  and not this branch's to open. */
   listed: boolean;
+  /** `stale-task-strip` (D-5372): the newest `mtimeMs` over the task files,
+   *  PRESENT ONLY when the caller asked (`{ touchedAt: true }`). Null when the
+   *  list has no open item (staleness only qualifies open work, so the stats
+   *  are not paid) or when no stat answered. Claude Code rewrites a task file
+   *  on every status change, so a live plan is seconds or minutes old and a
+   *  plan days old is one the model left open. */
+  touchedAt?: number | null;
+}
+
+export interface ReadTasksOptions {
+  /** Stat the task files for `touchedAt`. Only the session stream asks: the
+   *  fleet sweep and the PR route read every list and print no staleness. */
+  touchedAt?: boolean;
 }
 
 /**
@@ -127,10 +140,11 @@ export async function readTasks(
   io: FleetIO,
   configDir: string,
   uuid: string,
+  opts: ReadTasksOptions = {},
 ): Promise<TasksRead> {
   const dir = tasksDir(configDir, uuid);
   const names = await io.readdir(dir);
-  if (names === null) return { tasks: [], unmeasured: 0, listed: false };
+  if (names === null) return { tasks: [], unmeasured: 0, listed: false, ...(opts.touchedAt ? { touchedAt: null } : {}) };
   const files = names
     .filter((n) => TASK_FILE_RE.test(n))
     .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
@@ -145,7 +159,18 @@ export async function readTasks(
     const t = parseTask(read.content);
     if (t) tasks.push(t);
   }
-  return { tasks, unmeasured, listed: true };
+  if (!opts.touchedAt) return { tasks, unmeasured, listed: true };
+  return { tasks, unmeasured, listed: true, touchedAt: await newestMtime(io, dir, files, tasks) };
+}
+
+/** D-5372: the max `mtimeMs` over the task files; a stat that fails is left
+ *  out, none answering is null. A list with no open item is not stat-ed. */
+async function newestMtime(io: FleetIO, dir: string, files: string[], tasks: TaskItem[]): Promise<number | null> {
+  if (!tasks.some((t) => t.status !== 'completed')) return null;
+  const stats = await Promise.all(files.map((n) => io.statMeasured(path.join(dir, n))));
+  let max: number | null = null;
+  for (const st of stats) if (st.ok && (max === null || st.mtimeMs > max)) max = st.mtimeMs;
+  return max;
 }
 
 /**

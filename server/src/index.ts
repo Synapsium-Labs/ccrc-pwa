@@ -19,7 +19,8 @@ import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
-import { openCoordDb } from './coord/db.js';
+import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
+import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from './coord/updateintentlog.js';
@@ -28,6 +29,8 @@ import { readLocalCcdCaps } from './localcaps.js';
 import { localUpdateSpawnFor } from './update/converge.js';
 import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
+import { AccountAudit } from './accounts/audit.js';
+import { accountOpsFor } from './accounts/ops.js';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -63,6 +66,16 @@ const tokenBoot = await bootBoxToken({
 });
 for (const line of tokenBoot.warnings) console.warn(line);
 const mailToken = tokenBoot.holder;
+
+// R24 (delegation broker wave 3): an active coordination restore marker stops the process BEFORE coord.db is opened, and so does a
+// marker that cannot be measured (fail closed). `ccrc coordination-snapshot` publishes the marker while it replaces coord.db and the
+// delegation journal and checkpoint, so booting over it would open a half-replaced set. Refused the way the agent-link check below
+// refuses: one `ccrc-server:` line on stderr, then a nonzero exit.
+const restoreRefusal = coordinationRestoreRefusal(cfg.ccrcDir, COORDINATION_RESTORE_MARKER_FILE);
+if (restoreRefusal !== null) {
+  console.error(restoreRefusal);
+  process.exit(1);
+}
 
 // Opened at the root, before the watcher: a database that cannot be migrated
 // must stop the process, not be discovered by the first sweep that touches
@@ -252,6 +265,18 @@ const tokenDriver = new BoxTokenDriver({
   bothWriter: tokenBoot.bothWriterArmed ? fileBothRoleWriter(tokenStore.paths) : null,
 }, tokenBoot);
 deps.tokenDriver = tokenDriver;
+
+// The account audit (D-5516) over the one coord.db, and the ONE `AccountOps` arm (spec §13.2, G13), chosen by
+// `cfg.fleetMode` ONLY: in remote mode the local spawner is never constructed, so `ccrc account` can never run on
+// the controller. Built before `buildServer`, which hands the audit to the step-up lock and the arm to the account
+// routes (A14 onward).
+const accountAudit = new AccountAudit(coord.db);
+deps.accountAudit = accountAudit;
+deps.accountOps = accountOpsFor(cfg, { client: fleetClient });
+// The audit's 365-day retention, at boot and then daily on its own unref'd timer. Not a lane in `watch.ts`'s
+// coordination sweeps, which another branch holds (D-5620).
+accountAudit.sweep(Date.now());
+setInterval(() => accountAudit.sweep(Date.now()), 86_400_000).unref();
 
 const app = await buildServer(deps, bus, watcher);
 watcher.start();

@@ -91,6 +91,9 @@ interface HarnessCfg {
    *  `capSupported` always answers false — "no evidence"). Set to include
    *  `ROUTE_ARGV_CAP` for a case that seeds routing onto the `ws-add` argv. */
   ccdVerbs?: string[];
+  /** The child's name, forwarded as `dispatchRun`'s sixth argument. `undefined`
+   *  (the default) keeps every other case byte-identical. */
+  slug?: unknown;
 }
 
 const harness = async (cfg: HarnessCfg) => {
@@ -141,7 +144,7 @@ const harness = async (cfg: HarnessCfg) => {
     // consumer-declared port (wave 2, F2). NOTE: the `as` assertion below does
     // NOT make this optional — a missing property would pass the compiler here
     // and throw at the call, which is why it is written out.
-    configDir: (w: string) => configDirFor(base.cfg as CcrcConfig, w),
+    configDir: (w: string) => configDirFor(base.cfg as CcrcConfig, w), turnVerdict: async () => 'idle' as const,
   } as DispatchRunDeps;
 
   return {
@@ -156,12 +159,40 @@ const harness = async (cfg: HarnessCfg) => {
     // (`typeof brief !== 'string'` -> `bad-request`, before the pause check and
     // long before any registry read) — an object here refuses every case in this
     // file for a reason none of them are about.
-    dispatch: () => dispatchRun(deps, opened.id, 'go', undefined, cfg.route),
+    dispatch: () => dispatchRun(deps, opened.id, 'go', undefined, cfg.route, cfg.slug),
     cleanup: () => { rmSync(home, { recursive: true, force: true }); },
   };
 };
 
 describe('§1.5 — adoption, and everything that must NOT adopt', () => {
+  // A NAMED spawn has one acceptable identity. An unheld stranger appearing
+  // inside a cut-short window (an operator's racing ws-add) satisfies every
+  // other adoption gate — so without the name check it WOULD be adopted.
+  it('a NAMED killed ws-add never adopts an unheld stranger, only <project>-<slug>', async () => {
+    const h = await harness({ ccd: { ok: false, killed: true, stderr: '' }, slug: 'task-42',
+                              after: [{ id: 'demo-quiet-basin', held: null, spawnRc: 4 }] });
+    const out = await h.dispatch();
+    expect(out).toMatchObject({ ok: false, kind: 'fleetFailed' });
+    expect(okRun(h.coord.run(h.runId))).toMatchObject({ state: 'planned', sessionId: null });
+    expect(h.ccdCalls().some((c) => c[0] === 'ws-hold')).toBe(false);
+    expect(h.coord.runEvents(h.runId).map((e) => e.detail)).toContain('dispatch-refused:fleetFailed candidates=');
+  });
+
+  it('and ADOPTS the named one when that is what the killed ws-add left', async () => {
+    const h = await harness({ ccd: { ok: false, killed: true, stderr: '' }, slug: 'task-42',
+                              after: [{ id: 'demo-task-42', held: null, spawnRc: 4 }] });
+    expect(await h.dispatch()).toMatchObject({ ok: true, adopted: true, sessionId: 'demo-task-42' });
+  });
+
+  it('a named spawn ccd refuses fails with ccd\'s own words, binding nothing', async () => {
+    // The refusal TEXT is ccd's and is only carried, never parsed — the fixture's
+    // words are arbitrary on purpose (the real one is pinned in ccd's own suite).
+    const h = await harness({ ccd: { ok: false, killed: false, signal: null, stderr: 'ccd: refused (fixture words)' },
+                              slug: 'task-42' });
+    expect(await h.dispatch()).toMatchObject({ ok: false, kind: 'fleetFailed', stderr: 'ccd: refused (fixture words)' });
+    expect(okRun(h.coord.run(h.runId))).toMatchObject({ state: 'planned', sessionId: null });
+  });
+
   it('ADOPTS a killed ws-add that created exactly ONE UNHELD workspace', async () => {
     const h = await harness({ ccd: { ok: false, killed: true, stderr: '' },
                               after: [{ id: 'demo-quiet-basin', held: null, spawnRc: 4 }] });

@@ -1,0 +1,97 @@
+/* ============================================================================
+   ccrc — the skin axis (D-5093): Instrument's token values.
+
+   Refined is :root's own values in tokens.css, so it has NO block here. Every
+   other skin is one `:root[data-skin='<id>']` family of blocks, bound to the
+   catalogue in skins.ts by pwa/test/skin-catalogue.test.ts.
+
+   A SKIN OWNS NO COLOUR. This file declares only members of skins.ts's closed
+   SKIN_TOKENS list, and every value is a scale step, a length, a keyword, or
+   (for elevation) `none` or a hairline recipe on `var(--edge-*)`. Colour is
+   the palette's axis, and the contrast gate measures it once per palette; a
+   colour here would make that verdict false for one skin. The identity core —
+   the wordmark and caret, the phosphor, glow-means-life, lamps, wells, the
+   lane hues, the palettes themselves — is never touched (spec §3).
+
+   SPECIFICITY, NOT ORDER. `:root[data-skin='instrument']` is (0,2,0). It
+   outranks every `[data-theme='…']` palette block (0,1,0) and :root's own
+   width blocks, wherever either sits in the cascade. That is how
+   `--elev-card: none` wins in all twelve palettes even though each declares
+   its own `--elev-card`.
+
+   THE ONE HAZARD THIS ADDS: the same (0,2,0) also outranks tokens.css's
+   `@media (prefers-reduced-motion: reduce) { :root { … } }`. So every
+   duration below sits inside `prefers-reduced-motion: no-preference`; a
+   `--dur-*` outside it would silently re-animate the app for a reader who
+   asked for stillness.
+
+   WHAT READS THE TYPE AND DENSITY ROLES. The shared primitives (Task 14), the
+   sheet body, OptionRow and the app sheets' rows, chips and sheet copy (Task
+   14b); pwa/test/role-census.test.ts names every one. Beyond them Instrument
+   differs from Refined in radii, card elevation, motion and the meter's shape
+   (D-5098).
+   ========================================================================== */
+
+:root[data-skin='instrument'] {
+  /* type — a step on the scale, never a new size */
+  --fs-ui:      var(--fs-base);      /* 15 below 900 */
+  --fs-prose:   var(--fs-base);      /* 15 below 900 */
+  --fs-meta:    var(--fs-2xs);       /* 11, the type floor */
+  --fs-page:    var(--fs-md);        /* 14 at every width */
+  --fs-section: var(--fs-2xs);
+  --weight-section: var(--weight-medium);
+  --family-section: var(--family-mono);
+  --case-section:   uppercase;
+  --ls-section:     var(--ls-caps);
+
+  /* density */
+  --gutter:      var(--sp-3);        /* 12 below 900 */
+  --row-h:       44px;               /* the tap floor; 32 only under a fine pointer, below */
+  --pad-card:    var(--sp-3);
+  --gap-section: var(--sp-5);
+  --page-max:      960px;
+  --page-max-wide: none;
+  --measure-chat:  860px;            /* the log column */
+
+  /* radius — lamps and pills keep --r-full */
+  --r-sm: 3px;
+  --r-md: 5px;
+  --r-lg: 8px;
+  --r-xl: 12px;
+
+  /* elevation — depth from grounds and hairlines, not shadow */
+  --elev-card: none;
+
+  /* meter — ten LED segments with 2px gaps, 8px tall, on every meter
+     (D-5098). Unlit segments show the palette's track. */
+  --meter-h:        8px;
+  --meter-segments: 10;
+  --meter-gap:      2px;
+}
+
+@media (min-width: 900px) {
+  :root[data-skin='instrument'] {
+    --fs-ui:     var(--fs-sm);       /* 13 */
+    --fs-prose:  var(--fs-md);       /* 14 */
+    --gutter:    14px;
+  }
+}
+
+/* THE DENSE ROW IS FOR A MOUSE ONLY. A coarse pointer, or a device reporting
+   `pointer: none`, keeps the 44px above, so the dense value fails toward the
+   tap floor, never away from it. */
+@media (pointer: fine) {
+  :root[data-skin='instrument'] {
+    --row-h: 32px;
+  }
+}
+
+/* Motion only where motion is wanted — see the header's hazard. --dur-sheet
+   and --curve-spring are untouched, so phone sheets keep their spring. */
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-skin='instrument'] {
+    --dur-fast: 120ms;
+    --dur-base: 120ms;
+    --dur-slow: 120ms;
+  }
+}

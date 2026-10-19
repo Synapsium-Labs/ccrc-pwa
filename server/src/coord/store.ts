@@ -1,5 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './db.js';
+import { redactCommand } from './redact.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { decideAllocation } from './ledger.js';
@@ -29,6 +31,13 @@ import type { SendResult } from '../inject/send.js';
 import type { LedgerLog } from './ledgerlog.js';
 import type { PoolEdgeLog } from './pooledgelog.js';
 import type { UpdateIntentLog } from './updateintentlog.js';
+// Delegation broker wave 3, Task 7: the projection's row shapes, codecs and guards are the PURE `delegation-model.ts`;
+// this file runs the SQL and nothing else.
+import {
+  assertWave3Leases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
+  delegationLeaseCodec, delegationLineageCodec, delegationSessionCodec, DelegationModelError,
+  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationRowCodec, type DelegationSqlValue,
+} from './delegation-model.js';
 // Child reclamation wave 10 (path-identity spec 2026-10-12 §5.2): the collector switch's read vocabularies, its journal
 // port and its write decision are declared by their CONSUMER, the L1 `collectLane.ts`. This file implements the row read
 // and the one writer, and runs the decision inside its transaction.
@@ -43,6 +52,8 @@ import { bodyDigest } from '../../../shared/mark.mjs';
 // Fix round 1, item 5 (ruling A): the same tag comparator every other
 // ordering in this design uses — never `publishedAt` — for `newestUnyankedStable`.
 import { newestTag } from '../../../shared/semver.js';
+// Centralised-update wave 19 (R24(d)): `rowHalts` asks the dispatcher's own halt rule rather than restating it.
+import { isHaltingUpdate } from '../../../shared/update-move.js';
 import {
   CLEAR_REFUSED_STRANDS_TEXT,
   holdReasonVerdict,
@@ -55,7 +66,7 @@ import {
 } from '../deadCoordinator.js';
 import {
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
-  isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
+  isAskReleaseReason, isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
   isLifecycleOutcome,
   isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunKind, isRunState,
   isWorkItemState,
@@ -86,7 +97,10 @@ import {
   RUN_HOLD_NUMBER_MAX,
   IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS,
   WAVE_DONE_SUBJECT,
-  type AskState,
+  type AskMintReleaseReason, type AskReleaseReason, type AskState,
+  // plan Task 16 (D-5298): the approvals row's vocabularies.
+  APPROVAL_INPUT_RETENTION_DAYS, ASK_OPERATOR_PRINCIPAL, isApprovalReleaseReason, isApprovalState,
+  type ApprovalMintReleaseReason, type ApprovalReleaseReason, type ApprovalState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
   type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
@@ -141,6 +155,12 @@ export interface PrLineageEntry { pr: number; branch: string; phase: string; rec
 export interface RunRow extends RunSummary {
   prLineage: PrLineageEntry[]; coordProject: string | null;
   sessionBornAt: number | null; sessionBornFor: string | null;
+  /** Migration 23 (D-5298): the open was ACCEPTED with no `claimedByUuid`
+   *  (before the fleet carried the client) and journaled so — the claimant was
+   *  only shown to be listed, never attributed. Read through on
+   *  `coordProject`'s idiom and stripped off the wire by `toRunSummary`.
+   *  D-5531: the ask lane fails closed on it (`run-unattributed`). */
+  unattributed: boolean;
 }
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
@@ -176,10 +196,10 @@ export type { CoordPlacementStamp };
  *  and the `runs` WS frame's own emitter (`watch.ts`'s `emitRuns`, Task 10)
  *  rather than each holding its own copy of the strip. Strips `sessionBornAt`
  *  and `sessionBornFor` (migration 16) on the same idiom: server-only
- *  measurements, never sent. */
+ *  measurements, never sent. And `unattributed` (migration 23), the same. */
 export const toRunSummary = (row: RunRow): RunSummary => {
   const { prLineage: _prLineage, coordProject: _coordProject, sessionBornAt: _sessionBornAt,
-          sessionBornFor: _sessionBornFor, ...summary } = row;
+          sessionBornFor: _sessionBornFor, unattributed: _unattributed, ...summary } = row;
   return summary;
 };
 
@@ -698,6 +718,9 @@ export interface AskRow {
   state: AskState;
   answeredBy: string | null; answer: string | null;
   answeredAt: number | null; releasedAt: number | null;
+  /** D-5290: why the row was MINTED `released`; `null` for every row the hold
+   *  minted, whatever happened to it after. Read through `isAskReleaseReason`. */
+  releaseReason: AskReleaseReason | null;
 }
 
 /** `takeAskForAnswer`'s two refusals are DIFFERENT conditions a caller acts on
@@ -709,17 +732,27 @@ export interface AskRow {
  *  `not-held` is NOT "another principal already took this row" — this
  *  docstring said exactly that for a wave, and the gloss SPREAD from here
  *  into the shipped coordinator contract (whole-branch review M3, corrected
- *  in `ccd/coordinator-skill/references/wave-lifecycle.md` too). The CAS
- *  source is the single state `'held'`, so every other state answers it:
- *  `answering` (the lost race the old sentence described), and equally
- *  `released` (the grace window lapsed and the operator's push has already
- *  fired), `stale` (the dialog is gone) and `answered` (someone already
- *  ruled). Only the first of those four is a race, and only the first is
- *  worth a retry — which is precisely why the false gloss mattered on a
- *  surface a coordinator reads. */
+ *  in `ccd/coordinator-skill/references/wave-lifecycle.md` too). Since D-5289
+ *  (late answer wins) the CAS source is `'held'` OR `'released'` (a lapse
+ *  leaves the row answerable until a principal acts), and the two terminal
+ *  decisions are named apart: `declined` (the parent released the question
+ *  itself) and `already-answered` (someone already ruled). What still answers
+ *  `not-held` is `answering` (the lost race the old sentence described, the
+ *  one refusal a retry can win), `stale` (the dialog is gone) and `unknown`
+ *  — which is precisely why the false gloss mattered on a surface a
+ *  coordinator reads. */
 export type AskTakeResult =
-  | { ok: true; row: AskRow }
-  | { ok: false; why: 'unknown-ask' | 'not-held' | 'ask-moved' };
+  | { ok: true; row: AskRow; from: AskTakeSource }
+  | { ok: false; why: 'unknown-ask' | 'not-held' | 'ask-moved' | 'declined' | 'already-answered' };
+
+/** The two states a principal may take a row from (D-5289, late answer wins):
+ *  `held` inside the window, `released` once the lapse has fired the
+ *  operator's push but before either principal has acted. A take remembers
+ *  which, so `untakeAsk`'s rollback restores the row to where it was — a
+ *  refused press after the lapse must not put the row back in `held`, where
+ *  the chip would claim the parent may still pre-empt a push that already
+ *  fired. `declined` is NOT a source: the parent handed the question over. */
+export type AskTakeSource = 'held' | 'released';
 
 /**
  * D-2545 — THE FIVE READ ANSWERS, and the one rule that makes them worth
@@ -800,6 +833,17 @@ export type AskReadResult =
   | { ok: true; ask: AskRow | null }
   | { ok: false; kind: 'ask-unreadable'; detail: string };
 
+/** One `approvals` row (plan Task 16, D-5298), as `hydrateApproval` reads it back. */
+export interface ApprovalRow {
+  id: number; childId: string; parentId: string; runId: number | null; digest: string; nonce: string;
+  agentId: string; tool: string; inputRedacted: string | null; truncated: boolean; class: string;
+  state: ApprovalState; releaseReason: ApprovalReleaseReason | null; askAt: number; notifyAt: number;
+  ruledAt: number | null; verdict: 'allow' | 'deny' | null; reason: string | null; ruling: string | null;
+  answeredBy: string | null; toolUseId: string | null; corrected: boolean;
+}
+export type ApprovalReadResult = { ok: true; row: ApprovalRow | null } | { ok: false; detail: string };
+export type ApprovalsReadResult = { ok: true; rows: ApprovalRow[] } | { ok: false; detail: string };
+
 export type AsksReadResult =
   | { ok: true; asks: AskRow[] }
   | { ok: false; kind: 'ask-unreadable'; detail: string };
@@ -844,6 +888,7 @@ interface RunRowDb {
   coordProject: string | null;
   sessionBornAt: number | null;
   sessionBornFor: string | null;
+  unattributed: number;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -864,7 +909,7 @@ const RUN_ROW_COLUMNS =
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
-  'r.sessionBornFor';
+  'r.sessionBornFor, r.unattributed';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -1067,15 +1112,13 @@ const haltingRowSql = (t: string): string =>
   `substr(${t}.updateDetail, 1, ${PROVENANCE_DETAIL_PREFIX.length}) = '${PROVENANCE_DETAIL_PREFIX}'))`;
 /** The same notion over a read-back row (`handOffLease`'s `why`). A state this build cannot name reads `unknown`,
  *  which is busy and never halts. */
-const rowHalts = (state: UpdateState, detail: string | null): boolean =>
-  haltedOf(state) !== null && !(state === 'failed' && detail !== null && detail.startsWith(PROVENANCE_DETAIL_PREFIX));
+const rowHalts = (state: UpdateState, detail: string | null): boolean => isHaltingUpdate(state, detail);
 
-/** The shape of a node id: the lowercase uuid `_inst_node_id` mints
- *  (`ccd/ccrc:9494-9513`) and nothing else, so an uppercase, padded or
- *  CR-terminated `~/.ccrc/node-id` never becomes a row key. Declared ONCE,
- *  here, beside the one writer that re-keys by it; the inventory's validator
- *  (`update/inventory.ts`, Task 11) imports it. */
-export const NODE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** The shape of a node id: the lowercase uuid `_inst_node_id` mints and nothing else, so an uppercase, padded or
+ *  CR-terminated `~/.ccrc/node-id` never becomes a row key. Declared ONCE in `shared/agent-protocol.ts`, beside
+ *  `NODE_FILES`, so the agent's `account` op answers `fleetIdentity` with the same grammar (D-5622); re-exported
+ *  here for the one writer that re-keys by it and every reader that imported it from this file. */
+export { NODE_ID_RE };
 
 /** `rekeyNode`'s release of a revived busy row that another box's lease displaces (D-3412): the request stands, and
  *  the detail names the rekey — the reader learns why a row they saw busy reads idle. */
@@ -1637,6 +1680,10 @@ export class CoordStore {
      *  its absence is a real answer: an older row, or an open where the
      *  coordinator's registry record could not be read. */
     coordProject?: string;
+    /** D-5298: the open carried no `claimedByUuid` and the fleet did not yet
+     *  carry the client that sends it, so it was accepted unattributed and is
+     *  journaled here (migration 22). Absent is `false`. */
+    unattributed?: boolean;
   }): OpenRunResult {
     try {
       return tx(this.db, () => {
@@ -1714,15 +1761,15 @@ export class CoordStore {
           'ON CONFLICT(slug) DO UPDATE SET title = excluded.title',
         ).run(input.program, input.title, now, 'active', input.homeProject ?? null);
         const insertRun = this.db.prepare(
-          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject, unattributed) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         );
         // Keep SQLite's exact INTEGER result until the safe-integer check below;
         // converting first can round an out-of-domain id into another number.
         insertRun.setReadBigInts(true);
         const res = insertRun.run(
           input.program, input.wave, input.waveOf, input.project, 'planned', input.claimedBy, now,
-          input.kind ?? 'work', input.reviews ?? null, input.coordProject ?? null,
+          input.kind ?? 'work', input.reviews ?? null, input.coordProject ?? null, input.unattributed === true ? 1 : 0,
         );
         const exactId = res.lastInsertRowid;
         const id = Number(exactId);
@@ -4126,6 +4173,10 @@ export class CoordStore {
       // rebound (spec §5.3's recycled-slug hazard, extended across a
       // rollback).
       sessionBornFor: row.sessionBornFor,
+      // Migration 23's journal (D-5298), read through on the same idiom; 1 is
+      // "accepted unattributed", every other value (0, the column default every
+      // older row carries) is not. D-5531 reads it in the ask lane.
+      unattributed: row.unattributed === 1,
     };
   }
 
@@ -5577,7 +5628,9 @@ export class CoordStore {
       this.db.prepare(
         'INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body, runId) ' +
         'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      ).run(epoch, e.seq, e.at, e.kind, e.sessionId, e.title, e.body, e.runId);
+      // D-5298 (spec §6.7): every body is redacted before it is archived — a child's command or question can carry a
+      // token, and the feed outlives the push. The in-memory ring is the push's own copy; this is the durable one.
+      ).run(epoch, e.seq, e.at, e.kind, e.sessionId, e.title, redactCommand(e.body), e.runId);
       this.db.prepare(
         'DELETE FROM feed_events WHERE id NOT IN (SELECT id FROM feed_events ORDER BY id DESC LIMIT ?)',
       ).run(CoordStore.FEED_RETENTION);
@@ -5620,11 +5673,13 @@ export class CoordStore {
    *  with exactly this body — `sweepLanding`'s durable "already told" read for
    *  a removal no open run names (landing-order wave 2), whose body carries the
    *  removal time. Bounded by `FEED_RETENTION` like every feed read: a record
-   *  pruned out of the archive reads as never recorded, and is announced again. */
+   *  pruned out of the archive reads as never recorded, and is announced again.
+   *  The body is compared in the form `recordFeedEvent` stored it, redacted (D-5298): a body carrying a token-shaped
+   *  run (a compaction uuid, a commit SHA) is archived masked, and a raw comparison would never match it. */
   hasFeedEvent(kind: string, sessionId: string, body: string): boolean {
     const row = this.db.prepare(
       'SELECT 1 AS x FROM feed_events WHERE kind = ? AND sessionId = ? AND body = ? LIMIT 1',
-    ).get(kind, sessionId, body);
+    ).get(kind, sessionId, redactCommand(body));
     return row !== undefined;
   }
 
@@ -6948,13 +7003,13 @@ export class CoordStore {
   private static readonly ASK_COLS =
     'CAST(id AS TEXT) AS idText, at, childId, parentId, CAST(runId AS TEXT) AS runIdText, ' +
     'askKey, askAt, dialogId, question, options, ' +
-    'state, answeredBy, answer, answeredAt, releasedAt';
+    'state, answeredBy, answer, answeredAt, releasedAt, releaseReason';
 
   private hydrateAsk(r: {
     idText: string; at: number; childId: string; parentId: string; runIdText: string | null;
     askKey: string; askAt: number; dialogId: string; question: string; options: string;
     state: string; answeredBy: string | null; answer: string | null;
-    answeredAt: number | null; releasedAt: number | null;
+    answeredAt: number | null; releasedAt: number | null; releaseReason: string | null;
   }): { ok: true; ask: AskRow } | { ok: false; detail: string } {
     const id = persistedInt(r.idText, 'ask id');
     if (!id.ok) return id;
@@ -6979,6 +7034,10 @@ export class CoordStore {
         runId,
         options: JSON.parse(r.options) as string[],
         state: isAskState(r.state) ? r.state : 'unknown',
+        // D-5290, the same rule for the release reason: null stays null (the
+        // hold minted it), a word this build does not know reads `unknown`.
+        releaseReason: r.releaseReason === null ? null
+          : isAskReleaseReason(r.releaseReason) ? r.releaseReason : 'unknown',
       },
     };
   }
@@ -6999,7 +7058,10 @@ export class CoordStore {
     return this.readAsk(id);
   }
 
-  /** Minted at hold time (Task 6), state `'held'` — the only state an ask is
+  /** Minted at hold time (Task 6), state `'held'` — or, with a
+   *  `releaseReason` (D-5290), `'released'` at once, for a child the hold
+   *  fails closed on (D-5530: a parent not live or not measurable, a run with
+   *  no claimant or of another programme). Those are the only states an ask is
    *  ever inserted in; nothing else writes a fresh row.
    *
    *  THE `runId` GUARD IS DEFENSIVE (D-2545) and unreachable by construction
@@ -7017,6 +7079,10 @@ export class CoordStore {
   insertAsk(a: {
     childId: string; parentId: string; runId: number | null; askKey: string;
     askAt: number; dialogId: string; question: string; options: string[]; now: number;
+    /** D-5290: present, the row is minted `released` at `now` with this reason,
+     *  never `held`. D-5530: one of the fail-closed words (`AskMintReleaseReason`);
+     *  `parent-project-mismatch` is read-only and never written again. */
+    releaseReason?: AskMintReleaseReason;
   }): number {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       // The COLUMN and nothing else — the offending value never leaves here.
@@ -7024,14 +7090,16 @@ export class CoordStore {
     }
     const insertAsk = this.db.prepare(
       'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, ' +
-      "question, options, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'held')",
+      'question, options, state, releasedAt, releaseReason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     insertAsk.setReadBigInts(true);
+    const reason = a.releaseReason ?? null;
 
     return tx(this.db, () => {
       const exactId = insertAsk.run(
         a.now, a.childId, a.parentId, a.runId, a.askKey, a.askAt, a.dialogId,
         a.question, JSON.stringify(a.options),
+        reason === null ? 'held' : 'released', reason === null ? null : a.now, reason,
       ).lastInsertRowid;
       if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error('insertAsk: generated ask id is not a positive safe integer');
@@ -7041,14 +7109,22 @@ export class CoordStore {
   }
 
   /** The parent's cross-sibling read (Task 11's `GET /api/asks`) — every ask
-   *  addressed to this parent, or only those in one `state` when given. */
+   *  HELD for this parent, or only those in one `state` when given.
+   *
+   *  D-5530: `releaseReason IS NULL` is the "held for it" half. A row minted
+   *  `released` (any `releaseReason`, the legacy `parent-project-mismatch`
+   *  included) was never held for anyone: the operator owned it from its first
+   *  tick, the parent was never mailed it and may not answer it (D-5363), so
+   *  its question text is not the parent's to read. A row the LAPSE released
+   *  keeps a NULL reason and stays listed, because it was held for this parent
+   *  and is still its to answer (D-5289). */
   asksForParent(parentId: string, state?: AskState): AsksReadResult {
     const rows = (state === undefined
       ? this.db.prepare(
-          `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? ORDER BY id`,
+          `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? AND releaseReason IS NULL ORDER BY id`,
         ).all(parentId)
       : this.db.prepare(
-          `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? AND state = ? ORDER BY id`,
+          `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE parentId = ? AND state = ? AND releaseReason IS NULL ORDER BY id`,
         ).all(parentId, state)) as Parameters<CoordStore['hydrateAsk']>[0][];
     const asks: AskRow[] = [];
     for (const r of rows) {
@@ -7063,11 +7139,20 @@ export class CoordStore {
   /** Task 12's lookup when the operator answers: the row this child's live
    *  question is held under, if any. At most one `held` row per child is ever
    *  live at a time (a second mint only happens once the first has left
-   *  `held`), so the newest is the right — and normally only — answer. */
+   *  `held`), so the newest is the right — and normally only — answer.
+   *
+   *  `held` OR `released` (D-5289, late answer wins): a lapsed row is still
+   *  answerable until a principal acts, so the operator's answer after the
+   *  lapse must take and settle it too — otherwise the parent's later attempt
+   *  would find it still `released` and press into a dialog the operator
+   *  already answered (the instance guard and `answerAsk`'s own re-check stop
+   *  the key, but the row would not record who answered). An older released
+   *  row for a dialog that has since gone is harmless here: the take's
+   *  `askAt` guard refuses it, and this route never refuses the operator. */
   heldAskFor(childId: string): AskReadResult {
     const row = this.db.prepare(
       `SELECT ${CoordStore.ASK_COLS} FROM asks ` +
-      "WHERE childId = ? AND state = 'held' ORDER BY id DESC LIMIT 1",
+      "WHERE childId = ? AND state IN ('held','released') ORDER BY id DESC LIMIT 1",
     ).get(childId) as Parameters<CoordStore['hydrateAsk']>[0] | undefined;
     if (row === undefined) return { ok: true, ask: null };
     const h = this.hydrateAsk(row);
@@ -7077,7 +7162,7 @@ export class CoordStore {
   /** Task 19's fleet-chip lookup: the newest ask row for this child, in ANY
    *  state — unlike `heldAskFor` above, which is scoped to `'held'` for Task
    *  12's operator-answer lookup and would answer `null` through
-   *  `answering`/`answered`/`released`/`stale` alike. This method makes no
+   *  `answering`/`answered`/`declined`/`stale` alike. This method makes no
    *  judgement about which states are worth showing; `fleet.ts`'s `fleetAsk`
    *  does that folding on the row this returns, the same "hydrate raw, let
    *  the caller fold" split `asksForParent` already keeps. Keyed on
@@ -7146,12 +7231,13 @@ export class CoordStore {
    *  seam — one is about the row, the other is a near-miss wrong answer.
    *
    *  CORRECTED (whole-branch review M3): this said `not-held` means "another
-   *  principal already took this row", naming ONE of the four states that
-   *  answer it. The CAS source is `'held'` alone, so `answering` (the take
-   *  it described), `released`, `stale` and `answered` all land here — and
-   *  only the first is a lost race a retry could win. See `AskTakeResult`'s
-   *  own docstring above for the full list; the same false gloss had reached
-   *  `wave-lifecycle.md`, where a coordinator reads it. */
+   *  principal already took this row", naming ONE of the states that answer
+   *  it. Since D-5289 the CAS source is `'held'` or `'released'` (late answer
+   *  wins; the take returns which as `from`), `declined` and `answered` are
+   *  refused by name, and `answering` (the take it described), `stale` and
+   *  `unknown` land on `not-held` — only the first a lost race a retry could
+   *  win. See `AskTakeResult`'s own docstring above; the same false gloss had
+   *  reached `wave-lifecycle.md`, where a coordinator reads it. */
   takeAskForAnswer(id: number, askAt: number): AskTakeResult {
     return tx(this.db, () => {
       const read = this.readAsk(id);
@@ -7167,16 +7253,26 @@ export class CoordStore {
       if (!read.ok) throw new Error(`takeAskForAnswer: ${read.detail}`);
       const row = read.ask;
       if (row === null) return { ok: false as const, why: 'unknown-ask' as const };
+      // D-5289: the two terminal decisions a principal acted on are named, not
+      // folded onto `not-held` — `declined` (the parent handed this question
+      // over) and `already-answered` (somebody ruled). Both are facts about
+      // the ROW, so they answer before the instance guard does.
+      if (row.state === 'declined') return { ok: false as const, why: 'declined' as const };
+      if (row.state === 'answered') return { ok: false as const, why: 'already-answered' as const };
       if (row.askAt !== askAt) return { ok: false as const, why: 'ask-moved' as const };
+      if (row.state !== 'held' && row.state !== 'released') {
+        return { ok: false as const, why: 'not-held' as const };
+      }
+      const from: AskTakeSource = row.state;
       const res = this.db.prepare(
-        "UPDATE asks SET state = 'answering' WHERE id = ? AND state = 'held' AND askAt = ?",
-      ).run(id, askAt);
+        "UPDATE asks SET state = 'answering' WHERE id = ? AND state = ? AND askAt = ?",
+      ).run(id, from, askAt);
       if (Number(res.changes) === 0) return { ok: false as const, why: 'not-held' as const };
-      return { ok: true as const, row };
+      return { ok: true as const, row, from };
     });
   }
 
-  /** answering -> held, CAS (fix round 1, finding 3).
+  /** answering -> held, or -> released after a lapse (D-5289), CAS (fix round 1, finding 3).
    *  The rollback `takeAskForAnswer`'s caller reaches for when the take
    *  succeeded but the press itself was refused — a refusal there means no
    *  digit was pressed and the question is still live. CORRECTED (D-2177
@@ -7201,10 +7297,13 @@ export class CoordStore {
    *  this call finds, which sat in `'answering'`. Returns whether THIS call
    *  moved it, the same "I did it" vs. "someone else already did" shape as
    *  `releaseAsk`/`staleAsk`. */
-  untakeAsk(id: number): boolean {
+  untakeAsk(id: number, to: AskTakeSource): boolean {
+    // D-5289: back to where the take found it (`AskTakeResult.from`). `to` is
+    // required, with no `'held'` default: a caller that forgot it would send
+    // a lapsed row back to `'held'` with no `heldAsks` entry, silently.
     const res = this.db.prepare(
-      "UPDATE asks SET state = 'held' WHERE id = ? AND state = 'answering'",
-    ).run(id);
+      "UPDATE asks SET state = ? WHERE id = ? AND state = 'answering'",
+    ).run(to, id);
     return Number(res.changes) > 0;
   }
 
@@ -7235,6 +7334,20 @@ export class CoordStore {
   releaseAsk(id: number, now: number): boolean {
     const res = this.db.prepare(
       "UPDATE asks SET state = 'released', releasedAt = ? WHERE id = ? AND state = 'held'",
+    ).run(now, id);
+    return Number(res.changes) > 0;
+  }
+
+  /** held -> declined, CAS (D-5289). The parent's OWN release (`POST
+   *  /api/asks/:id/release`), and a different fact from the lapse
+   *  (`releaseAsk` above, the sweep's): the parent handed the question over,
+   *  so the row is terminal and its later answer is refused `declined`, where
+   *  a lapsed row stays answerable until a principal acts. Same "did THIS call
+   *  move it" return as `releaseAsk`, and the same `releasedAt` column: the
+   *  instant the operator's push was released. */
+  declineAsk(id: number, now: number): boolean {
+    const res = this.db.prepare(
+      "UPDATE asks SET state = 'declined', releasedAt = ? WHERE id = ? AND state = 'held'",
     ).run(now, id);
     return Number(res.changes) > 0;
   }
@@ -7292,7 +7405,11 @@ export class CoordStore {
    *  blocked at a dialog rewrote the identical envelope under a fresh number.
    *  Since D-4041 a MAIN-thread wait keeps its `updatedAt` and gains `aliveAt`,
    *  so that bump survives only for a wait a SUBAGENT raised (`waitBy:"subagent"`,
-   *  not carried) and for any other bump. Nothing re-stamped the row, so ONE
+   *  not carried) and for any other bump. Since D-5232, behind the server's word
+   *  `hook-main-state-v1`, `aliveAt` is no longer only a carried wait's: every
+   *  agent event keeps the main state's stamp and writes `aliveAt`, and a
+   *  subagent's own wait keeps its stamp across SubagentStart and SubagentStop
+   *  (its next tool event restores the `waitPrev` it stored). Nothing re-stamped the row, so ONE
    *  such bump refused every parent answer for the row's whole life and the lane
    *  degraded, silently and greenly, to the pre-feature behaviour. Measured in
    *  `server/test/ask-instance-guard.test.ts` (its last describe: the stamp that still moves).
@@ -7319,6 +7436,271 @@ export class CoordStore {
     const res = this.db.prepare(
       "UPDATE asks SET askAt = ? WHERE id = ? AND state = 'held' AND dialogId = ? AND askKey = ?",
     ).run(a.askAt, a.id, a.dialogId, a.askKey);
+    return Number(res.changes) > 0;
+  }
+
+  // ── approvals (coordinator-first routing plan Task 16, D-5298, D-5440, D-5441) ──────────────────────────────────
+  //
+  // One row per permission-prompt request a dispatched child's hook sent (`POST /api/approvals`). The row is the
+  // journal: who it was held for, what the classifier said, who ruled and what was signed. Every state change is one
+  // CAS'd UPDATE, so the row is its own mutex, as an ask row is.
+
+  private static readonly APPROVAL_COLS =
+    'CAST(id AS TEXT) AS idText, childId, parentId, CAST(runId AS TEXT) AS runIdText, digest, nonce, agentId, tool, ' +
+    'inputRedacted, truncated, class, state, releaseReason, askAt, notifyAt, ruledAt, verdict, reason, ruling, ' +
+    'answeredBy, toolUseId, corrected';
+
+  private hydrateApproval(r: {
+    idText: string; childId: string; parentId: string; runIdText: string | null; digest: string; nonce: string;
+    agentId: string; tool: string; inputRedacted: string | null; truncated: number; class: string; state: string;
+    releaseReason: string | null; askAt: number; notifyAt: number; ruledAt: number | null; verdict: string | null;
+    reason: string | null; ruling: string | null; answeredBy: string | null; toolUseId: string | null; corrected: number;
+  }): { ok: true; row: ApprovalRow } | { ok: false; detail: string } {
+    const id = persistedInt(r.idText, 'approval id');
+    if (!id.ok) return id;
+    let runId: number | null = null;
+    if (r.runIdText !== null) {
+      const measured = persistedInt(r.runIdText, 'approval runId');
+      if (!measured.ok) return measured;
+      runId = measured.value;
+    }
+    return {
+      ok: true,
+      row: {
+        id: id.value, childId: r.childId, parentId: r.parentId, runId, digest: r.digest, nonce: r.nonce,
+        agentId: r.agentId, tool: r.tool, inputRedacted: r.inputRedacted, truncated: r.truncated === 1,
+        class: r.class,
+        // Read back through the vocabularies, never a bare cast: a word a newer build wrote reads `unknown`.
+        state: isApprovalState(r.state) ? r.state : 'unknown',
+        releaseReason: r.releaseReason === null ? null
+          : isApprovalReleaseReason(r.releaseReason) ? r.releaseReason : 'unknown',
+        askAt: r.askAt, notifyAt: r.notifyAt, ruledAt: r.ruledAt,
+        verdict: r.verdict === 'allow' || r.verdict === 'deny' ? r.verdict : null,
+        reason: r.reason, ruling: r.ruling, answeredBy: r.answeredBy, toolUseId: r.toolUseId,
+        corrected: r.corrected === 1,
+      },
+    };
+  }
+
+  private approvalRows(sql: string, ...args: (string | number)[]): ApprovalsReadResult {
+    const rows = this.db.prepare(`SELECT ${CoordStore.APPROVAL_COLS} FROM approvals ${sql}`).all(...args) as
+      Parameters<CoordStore['hydrateApproval']>[0][];
+    const out: ApprovalRow[] = [];
+    for (const r of rows) {
+      const h = this.hydrateApproval(r);
+      // ALL-OR-FAILURE, like every other list read here: a partial list looks complete.
+      if (!h.ok) return { ok: false, detail: h.detail };
+      out.push(h.row);
+    }
+    return { ok: true, rows: out };
+  }
+
+  approvalById(id: number): ApprovalReadResult {
+    const row = this.db.prepare(`SELECT ${CoordStore.APPROVAL_COLS} FROM approvals WHERE id = ?`).get(id) as
+      Parameters<CoordStore['hydrateApproval']>[0] | undefined;
+    if (row === undefined) return { ok: true, row: null };
+    const h = this.hydrateApproval(row);
+    return h.ok ? { ok: true, row: h.row } : { ok: false, detail: h.detail };
+  }
+
+  /** A child's rows in the given states, oldest first. */
+  approvalsForChild(childId: string, states: readonly ApprovalState[]): ApprovalsReadResult {
+    if (states.length === 0) return { ok: true, rows: [] };
+    return this.approvalRows(`WHERE childId = ? AND state IN (${states.map(() => '?').join(',')}) ORDER BY id`,
+      childId, ...states);
+  }
+
+  /** The fleet assembly's one batched read (plan Task 16, D-5296): each child's NEWEST row that is `held` for a
+   *  claimant (`releaseReason IS NULL`), keyed by child. All-or-failure. */
+  heldApprovalsFor(childIds: readonly string[]): { ok: true; rows: Map<string, ApprovalRow> } | { ok: false; detail: string } {
+    const out = new Map<string, ApprovalRow>();
+    if (childIds.length === 0) return { ok: true, rows: out };
+    const read = this.approvalRows(
+      `WHERE state = 'held' AND releaseReason IS NULL AND childId IN (${childIds.map(() => '?').join(',')}) ORDER BY id`,
+      ...childIds);
+    if (!read.ok) return read;
+    for (const r of read.rows) out.set(r.childId, r);
+    return { ok: true, rows: out };
+  }
+
+  /** Every row in one state, oldest first (the sweep's reads). */
+  approvalsInState(state: ApprovalState): ApprovalsReadResult {
+    return this.approvalRows('WHERE state = ? ORDER BY id', state);
+  }
+
+  /** Minted by `POST /api/approvals`, `held` — or, with a `releaseReason`, `released` at once (forbidden, truncated,
+   *  unparseable, or held for nobody: D-5530, D-5531). Those are the only states a row is inserted in. */
+  insertApproval(a: {
+    childId: string; parentId: string; runId: number | null; digest: string; nonce: string; agentId: string;
+    tool: string; inputRedacted: string; truncated: boolean; class: string; askAt: number; notifyAt: number;
+    releaseReason?: ApprovalMintReleaseReason;
+  }): number {
+    if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
+      throw new Error('insertApproval: approval runId is not a positive safe integer');
+    }
+    const stmt = this.db.prepare(
+      'INSERT INTO approvals (childId, parentId, runId, digest, nonce, agentId, tool, inputRedacted, truncated, ' +
+      'class, state, releaseReason, askAt, notifyAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    );
+    stmt.setReadBigInts(true);
+    const reason = a.releaseReason ?? null;
+    return tx(this.db, () => {
+      const exactId = stmt.run(
+        a.childId, a.parentId, a.runId, a.digest, a.nonce, a.agentId, a.tool, a.inputRedacted, a.truncated ? 1 : 0,
+        a.class, reason === null ? 'held' : 'released', reason, a.askAt, a.notifyAt,
+      ).lastInsertRowid;
+      if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error('insertApproval: generated approval id is not a positive safe integer');
+      }
+      return Number(exactId);
+    });
+  }
+
+  /** The ruling, CAS'd from `held` or `released` (a lapse; the window check is the route's, before this) on a row
+   *  that was HELD for someone (`releaseReason IS NULL`): the signed record is stored with its verdict, reason and
+   *  principal in the same UPDATE, so a second principal finds the row moved. On a miss, `why` names the row's state:
+   *  `declined` (the claimant handed it over), `already-ruled` (a principal acted), `not-held` (anything else). */
+  takeApprovalForRule(id: number, r: { by: string; verdict: 'allow' | 'deny'; reason: string; ruling: string; now: number }):
+    { ok: true } | { ok: false; why: 'declined' | 'already-ruled' | 'not-held' | 'unknown-approval' } {
+    return tx(this.db, () => {
+      const res = this.db.prepare(
+        'UPDATE approvals SET state = ?, verdict = ?, reason = ?, ruling = ?, ruledAt = ?, answeredBy = ? ' +
+        "WHERE id = ? AND state IN ('held','released') AND releaseReason IS NULL",
+      ).run(r.verdict === 'allow' ? 'allowed' : 'denied', r.verdict, r.reason, r.ruling, r.now, r.by, id);
+      if (Number(res.changes) > 0) return { ok: true as const };
+      const read = this.approvalById(id);
+      if (!read.ok) throw new Error(`takeApprovalForRule: ${read.detail}`);
+      if (read.row === null) return { ok: false as const, why: 'unknown-approval' as const };
+      const s = read.row.state;
+      if (s === 'declined') return { ok: false as const, why: 'declined' as const };
+      if (s === 'allowed' || s === 'denied' || s === 'operator') return { ok: false as const, why: 'already-ruled' as const };
+      return { ok: false as const, why: 'not-held' as const };
+    });
+  }
+
+  /** The claimant's hand-over (`POST /api/approvals/:id/release`): `held` -> `declined` (D-5289's word, D-5440). */
+  declineApproval(id: number, by: string, now: number): boolean {
+    const res = this.db.prepare(
+      "UPDATE approvals SET state = 'declined', ruledAt = ?, answeredBy = ? WHERE id = ? AND state = 'held'",
+    ).run(now, by, id);
+    return Number(res.changes) > 0;
+  }
+
+  /** The window's end (`notifyAt`, D-5441): `held` -> `released`. A row a principal acted on is untouched. */
+  lapseApproval(id: number): boolean {
+    const res = this.db.prepare("UPDATE approvals SET state = 'released' WHERE id = ? AND state = 'held'").run(id);
+    return Number(res.changes) > 0;
+  }
+
+  /** The operator answered the dialog, or the painted dialog closed with no ruling taken: every open row (`held` or
+   *  `released`) of the child becomes `operator`, so a later ruling is `409 already-ruled`. Returns the count. */
+  markApprovalOperator(childId: string, now: number): number {
+    const res = this.db.prepare(
+      "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE childId = ? AND state IN ('held','released')",
+    ).run(now, ASK_OPERATOR_PRINCIPAL, childId);
+    return Number(res.changes);
+  }
+
+  /** A cleared painted dialog (`FleetWatcher`): of these rows, the ones no principal ruled become `operator`. */
+  markApprovalOperatorRows(ids: readonly number[], now: number): number {
+    let n = 0;
+    const stmt = this.db.prepare(
+      "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE id = ? AND state IN ('held','released')");
+    for (const id of ids) n += Number(stmt.run(now, ASK_OPERATOR_PRINCIPAL, id).changes);
+    return n;
+  }
+
+  /** The hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal: `held`/`released` -> `stale`. */
+  staleApproval(id: number): boolean {
+    const res = this.db.prepare("UPDATE approvals SET state = 'stale' WHERE id = ? AND state IN ('held','released')").run(id);
+    return Number(res.changes) > 0;
+  }
+
+  /** The retention (spec §6.7): every row minted before `now - APPROVAL_INPUT_RETENTION_DAYS` loses its redacted
+   *  input, and the row itself is kept as the journal. Returns the count cleared. */
+  pruneApprovalInputs(now: number): number {
+    const before = now - APPROVAL_INPUT_RETENTION_DAYS * 86_400_000;
+    const res = this.db.prepare(
+      'UPDATE approvals SET inputRedacted = NULL WHERE askAt < ? AND inputRedacted IS NOT NULL',
+    ).run(before);
+    return Number(res.changes);
+  }
+
+  /** The asks' question text follows the same retention (spec §6.7): a row older than it keeps its id, its parties,
+   *  its state and the label that was pressed, and loses the question and the option labels. Returns the count. */
+  pruneAskQuestions(now: number): number {
+    const before = now - APPROVAL_INPUT_RETENTION_DAYS * 86_400_000;
+    const res = this.db.prepare(
+      "UPDATE asks SET question = '', options = '[]' WHERE at < ? AND (question <> '' OR options <> '[]')",
+    ).run(before);
+    return Number(res.changes);
+  }
+
+  // ── the daily digest (coordinator-first routing plan Task 17, spec §10, D-5300) ────────────────────────────────
+  //
+  // The digest is built from the durable `asks` and `approvals` tables only (the feed ring is not a source). These
+  // reads hand back every row with an instant inside `[fromMs, toMs)`; `digest.ts`'s `buildDigest` decides which of
+  // them is a coordinator's decision. `digests` is the beat's once-a-day mark; `corrected` the correction's.
+
+  /** Every ask row answered or released inside `[fromMs, toMs)`, oldest first, each with its `corrected` mark.
+   *  All-or-failure, like every list read here. */
+  digestAsks(fromMs: number, toMs: number):
+    { ok: true; rows: { ask: AskRow; corrected: boolean }[] } | { ok: false; detail: string } {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.ASK_COLS}, corrected FROM asks ` +
+      'WHERE (answeredAt >= ? AND answeredAt < ?) OR (releasedAt >= ? AND releasedAt < ?) ORDER BY id',
+    ).all(fromMs, toMs, fromMs, toMs) as (Parameters<CoordStore['hydrateAsk']>[0] & { corrected: number })[];
+    const out: { ask: AskRow; corrected: boolean }[] = [];
+    for (const r of rows) {
+      const h = this.hydrateAsk(r);
+      if (!h.ok) return { ok: false, detail: h.detail };
+      out.push({ ask: h.ask, corrected: r.corrected === 1 });
+    }
+    return { ok: true, rows: out };
+  }
+
+  /** Every approval row minted, ruled or lapsed inside `[fromMs, toMs)`, oldest first. All-or-failure. */
+  digestApprovals(fromMs: number, toMs: number): ApprovalsReadResult {
+    return this.approvalRows(
+      'WHERE (askAt >= ? AND askAt < ?) OR (notifyAt >= ? AND notifyAt < ?) OR (ruledAt >= ? AND ruledAt < ?) ORDER BY id',
+      fromMs, toMs, fromMs, toMs, fromMs, toMs);
+  }
+
+  /** One ask row and its `corrected` mark, for the correction route. `null`: no such row. */
+  askForCorrection(id: number):
+    { ok: true; row: { ask: AskRow; corrected: boolean } | null } | { ok: false; detail: string } {
+    const r = this.db.prepare(`SELECT ${CoordStore.ASK_COLS}, corrected FROM asks WHERE id = ?`).get(id) as
+      (Parameters<CoordStore['hydrateAsk']>[0] & { corrected: number }) | undefined;
+    if (r === undefined) return { ok: true, row: null };
+    const h = this.hydrateAsk(r);
+    return h.ok ? { ok: true, row: { ask: h.ask, corrected: r.corrected === 1 } } : { ok: false, detail: h.detail };
+  }
+
+  /** The correction's mark (spec §10, §11), in ONE transaction with the mail that carries it: `queue` inserts the
+   *  system mail (`insertSystemMailTx`, which opens no transaction of its own), then the row is marked `corrected`,
+   *  kept, and counted as a wrong ruling. A throw in either rolls both back, so a marked row always has its mail. */
+  correctWithMail<T>(rowKind: 'ask' | 'approval', id: number, queue: () => T): T {
+    return tx(this.db, () => {
+      const queued = queue();
+      // Two literal statements, never a table named by interpolation (`delegation-wave3`'s closed scope census reads
+      // every UPDATE's table off its text).
+      if (rowKind === 'ask') this.db.prepare('UPDATE asks SET corrected = 1 WHERE id = ?').run(id);
+      else this.db.prepare('UPDATE approvals SET corrected = 1 WHERE id = ?').run(id);
+      return queued;
+    });
+  }
+
+  /** The beat's mark for one UTC day, or `null` when the beat has not run for it. */
+  digestDay(day: string): { day: string; sentAt: number; count: number } | null {
+    const r = this.db.prepare('SELECT day, sentAt, count FROM digests WHERE day = ?').get(day) as
+      { day: string; sentAt: number; count: number } | undefined;
+    return r ?? null;
+  }
+
+  /** The beat claims its day BEFORE it pushes: true only for the one call that inserted the row, so a restart, or a
+   *  second beat racing this one, finds the day taken and sends nothing (spec §10, "a restart never sends two"). */
+  claimDigestDay(day: string, sentAt: number, count: number): boolean {
+    const res = this.db.prepare('INSERT OR IGNORE INTO digests (day, sentAt, count) VALUES (?, ?, ?)').run(day, sentAt, count);
     return Number(res.changes) > 0;
   }
 
@@ -8183,6 +8565,178 @@ export class CoordStore {
       .get() as { epoch: number; issuedAt: number };
   }
 
+  // ── delegation broker wave 3, Task 7: the report-only coordination projection ────────────────────────────────────
+  // The six `delegation_*` tables (MIGRATIONS entry 22) are REPAIRABLE OUTPUT. The journal and the checkpoint are the
+  // authority (Task 8 owns both, and `delegation-model.ts` owns their shapes); these five methods (the projection, the event
+  // insert and its batch, the event stats and the read-back) only make SQLite say
+  // what they say. `CoordStore` stays synchronous and holds no health and no coordinator intent as an authority: the
+  // checkpoint's `observationIntervals` and `coordinatorIntentByParent` do, and the session rows below are DERIVED from that
+  // map before they reach this method.
+  //
+  // TWO KINDS OF TABLE. The checkpoint carries sessions, attempts, activities, leases and lineage, so projecting it rebuilds
+  // those five. It carries NO events: `delegation_events` is journal-derived, written only by `insertDelegationEvent` and its
+  // one-transaction batch `insertDelegationEvents` (one shared row writer), and a
+  // projection neither inserts nor rewrites one (ruling R20: a full delete and re-insert of the events table is O(events) on
+  // this synchronous loop, about 3 s per 100K rows). A lost or damaged events table is repaired by replaying the retained
+  // journal through those two, not by projecting.
+
+  /**
+   * Makes the five non-event tables say what `checkpoint` says, in ONE transaction, in this order (every step is a
+   * dependency edge of the foreign keys, which the connection must enforce):
+   *   1. read the current session keys; `leaving` = current minus the checkpoint's;
+   *   2. DELETE `delegation_lineage`, then `delegation_leases`;
+   *   3. DELETE the `delegation_events` of each LEAVING session only (`delegation_events_by_parent`, one statement each);
+   *   4. DELETE `delegation_attempts`, then `delegation_activities`;
+   *   5. DELETE each leaving `delegation_sessions` row;
+   *   6. UPSERT `delegation_sessions` (`INSERT ... ON CONFLICT (sessionId, parentIncarnation) DO UPDATE` of every other column,
+   *      so a staying session keeps its row and its events);
+   *   7. INSERT activities, attempts, leases, lineage.
+   * A fault at any statement rolls the whole replacement back; the previous projection survives intact. The cost is
+   * O(the five tables) plus O(the events of the sessions that leave), never O(all events).
+   *
+   * Everything refusable is refused BEFORE the transaction opens: the checkpoint's version and applied position, the wave-3
+   * lease invariants (`assertWave3Leases`), every row's encoding, a session key repeated inside the checkpoint, and a handle that
+   * does not enforce foreign keys. A row the
+   * schema itself refuses (a CHECK, a unique index, a foreign key) throws SQLite's error from inside the transaction.
+   */
+  projectDelegationCheckpoint(checkpoint: DelegationCheckpointV1): void {
+    if (checkpoint.v !== 1) throw new DelegationModelError('bad-checkpoint', `version ${String(checkpoint.v)} is not a version-1 checkpoint`);
+    const applied = checkpoint.appliedJournalSequence;
+    if (!Number.isSafeInteger(applied) || applied < 0) {
+      throw new DelegationModelError('bad-checkpoint', `appliedJournalSequence ${String(applied)} is not a non-negative integer`);
+    }
+    assertWave3Leases(checkpoint);
+    // Encoded now, outside the transaction: a malformed instant or list is a refusal, not a rollback.
+    const sessions = checkpoint.sessions.map((r) => delegationSessionCodec.toDb(r));
+    const activities = checkpoint.activities.map((r) => delegationActivityCodec.toDb(r));
+    const attempts = checkpoint.attempts.map((r) => delegationAttemptCodec.toDb(r));
+    const leases = checkpoint.leases.map((r) => delegationLeaseCodec.toDb(r));
+    const lineage = checkpoint.lineage.map((r) => delegationLineageCodec.toDb(r));
+    const sessionKey = (id: unknown, incarnation: unknown): string => JSON.stringify([id, incarnation]);
+    // A key repeated inside the checkpoint is refused HERE, before BEGIN. The plain INSERT used to refuse it with a UNIQUE
+    // error; the upsert would take it quietly (it updates the one row twice and the last wins), narrowing a distinction the
+    // checkpoint carried: two rows for one session is a corrupt checkpoint, not a session with a second opinion.
+    const staying = new Set<string>();
+    for (const r of sessions) {
+      const key = sessionKey(r.sessionId, r.parentIncarnation);
+      if (staying.has(key)) {
+        throw new DelegationModelError('bad-checkpoint', `session ${String(r.sessionId)} (incarnation ${String(r.parentIncarnation)}) appears more than once`);
+      }
+      staying.add(key);
+    }
+    // `PRAGMA foreign_keys` is a no-op inside a transaction, so it is read here, before BEGIN. The statement order below is
+    // a foreign-key order; on a handle that does not enforce them it would still "work" and prove nothing.
+    const fk = (this.db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number } | undefined)?.foreign_keys;
+    if (fk !== 1) {
+      throw new DelegationModelError('foreign-keys-off', `PRAGMA foreign_keys reads ${String(fk)}; the projection needs 1`);
+    }
+
+    tx(this.db, () => {
+      const leaving = (this.db.prepare('SELECT sessionId, parentIncarnation FROM delegation_sessions').all() as
+        Array<{ sessionId: string; parentIncarnation: string }>)
+        .filter((k) => !staying.has(sessionKey(k.sessionId, k.parentIncarnation)));
+      // Children before parents: lineage names leases and activities, leases name activities, and everything names sessions.
+      this.db.prepare('DELETE FROM delegation_lineage').run();
+      this.db.prepare('DELETE FROM delegation_leases').run();
+      const deleteEvents = this.db.prepare('DELETE FROM delegation_events WHERE sessionId = ? AND parentIncarnation = ?');
+      for (const k of leaving) deleteEvents.run(k.sessionId, k.parentIncarnation);
+      this.db.prepare('DELETE FROM delegation_attempts').run();
+      this.db.prepare('DELETE FROM delegation_activities').run();
+      const deleteSession = this.db.prepare('DELETE FROM delegation_sessions WHERE sessionId = ? AND parentIncarnation = ?');
+      for (const k of leaving) deleteSession.run(k.sessionId, k.parentIncarnation);
+      const run = <Row, Col extends string>(sql: string, codec: DelegationRowCodec<Row, Col>, rows: ReadonlyArray<Readonly<Record<string, DelegationSqlValue>>>): void => {
+        if (rows.length === 0) return;
+        const stmt = this.db.prepare(sql);
+        for (const row of rows) stmt.run(...codec.columns.map((c) => row[c]));
+      };
+      run(delegationUpsertSql(delegationSessionCodec, ['sessionId', 'parentIncarnation']), delegationSessionCodec, sessions);
+      run(delegationInsertSql(delegationActivityCodec), delegationActivityCodec, activities);
+      run(delegationInsertSql(delegationAttemptCodec), delegationAttemptCodec, attempts);
+      run(delegationInsertSql(delegationLeaseCodec), delegationLeaseCodec, leases);
+      run(delegationInsertSql(delegationLineageCodec), delegationLineageCodec, lineage);
+    });
+  }
+
+  /**
+   * Appends one accepted evidence event to `delegation_events`: the ONLY writer of that table (a projection deletes the events
+   * of a session that leaves and inserts none). `'duplicate'` means THIS SAME event is already there
+   * (the same `eventId` and an identical row): the idempotent replay a re-read of the same bytes produces. The same
+   * `eventId` with a DIFFERENT row is a conflict and throws; so does a second event on one `journalSequence`, and an event
+   * whose session is not in the projection (the foreign key). The row is validated before any statement runs.
+   */
+  insertDelegationEvent(row: DelegationEventRow): 'inserted' | 'duplicate' {
+    return writeDelegationEventRow(this.db, delegationEventCodec.toDb(row), row);
+  }
+
+  /**
+   * `insertDelegationEvent` over a list, in ONE transaction: the batch the applier's port drives once per tick. Every row is
+   * validated BEFORE `BEGIN` (a malformed row throws and nothing is written), then each goes through the same row writer as
+   * `insertDelegationEvent`. A CONFLICT is REPORTED, never thrown, and does not stop the rows after it: the same `eventId` with a
+   * different row, or another event on a `journalSequence` that a different `eventId` already holds. Anything else (an event
+   * whose session is not in the projection, a failed statement) rolls the whole batch back and rethrows. The conflicting rows
+   * come back in the order they were given.
+   */
+  insertDelegationEvents(rows: readonly DelegationEventRow[]): DelegationInsertEventsResult {
+    const encoded = rows.map((row) => ({ row, values: delegationEventCodec.toDb(row) }));
+    return tx(this.db, () => {
+      let inserted = 0;
+      let duplicate = 0;
+      const conflicts: DelegationEventRow[] = [];
+      const holder = this.db.prepare('SELECT eventId FROM delegation_events WHERE journalSequence = ?');
+      for (const { row, values } of encoded) {
+        // Another event on this sequence is a conflict SQLite would raise as a UNIQUE error mid-batch; asking first reports it
+        // without sniffing an error message.
+        const held = holder.get(values.journalSequence) as { eventId: string } | undefined;
+        if (held !== undefined && held.eventId !== values.eventId) { conflicts.push(row); continue; }
+        try {
+          if (writeDelegationEventRow(this.db, values, row) === 'inserted') inserted++; else duplicate++;
+        } catch (err) {
+          if (err instanceof DelegationModelError && err.code === 'event-conflict') { conflicts.push(row); continue; }
+          throw err;
+        }
+      }
+      return { inserted, duplicate, conflicts };
+    });
+  }
+
+  /**
+   * `COUNT(*)` of `delegation_events` and its highest `journalSequence` (null when there is none, never 0): what the applier's
+   * repair resumes from. SQLite's own answer about its own table, not an authority about the journal.
+   */
+  delegationEventStats(): { count: number; maxSequence: number | null } {
+    const r = this.db.prepare('SELECT COUNT(*) AS n, MAX(journalSequence) AS m FROM delegation_events').get() as
+      { n: unknown; m: unknown } | undefined;
+    if (r === undefined || typeof r.n !== 'number' || !Number.isSafeInteger(r.n)) {
+      throw new DelegationModelError('unreadable-row', 'delegation_events: COUNT(*) is not an integer');
+    }
+    if (r.m !== null && (typeof r.m !== 'number' || !Number.isSafeInteger(r.m))) {
+      throw new DelegationModelError('unreadable-row', 'delegation_events: MAX(journalSequence) is not an integer');
+    }
+    return { count: r.n, maxSequence: r.m };
+  }
+
+  /**
+   * The projection as a checkpoint, for a DRIFT CHECK: what SQLite says, in the shape the checkpoint has. Every table is
+   * read through its typed reader, so an unknown enum word, a malformed list or a wrong storage class throws an
+   * `unreadable-row` `DelegationModelError` and is never cast or defaulted. Rows come back in primary-key order.
+   *
+   * It is NOT a read path. `activityIdsByNaturalKey` and `coordinatorIntentByParent` are derived from the activity and
+   * session rows; the revision, the applied-journal anchor, the bucket cursors, the observation intervals and the pruning
+   * holds are not projected and come back empty, zero or null. No caller may treat any of it as authority, and no health
+   * is derived from it (Task 13 derives health from the checkpoint's `observationIntervals`).
+   */
+  readDelegationProjection(): DelegationCheckpointV1 {
+    const read = <Row, Col extends string>(codec: DelegationRowCodec<Row, Col>, orderBy: string): Row[] =>
+      this.db.prepare(delegationSelectSql(codec, orderBy)).all().map((r) => codec.fromDb(r));
+    return delegationCheckpointOfProjection({
+      sessions: read(delegationSessionCodec, 'sessionId, parentIncarnation'),
+      attempts: read(delegationAttemptCodec, 'attemptId'),
+      activities: read(delegationActivityCodec, 'activityId'),
+      leases: read(delegationLeaseCodec, 'leaseId'),
+      lineage: read(delegationLineageCodec, 'lineageId'),
+    });
+  }
+
   // ── the collector switch (path-identity spec 2026-10-12 §5.2, §5.3; child reclamation wave 10) ─────────────────
   //
   // `collect_lane_settings` has ONE reader, `collectLaneRow`, and ONE writer, `setCollectLane`, which only
@@ -8251,6 +8805,47 @@ export class CoordStore {
     return { kind: 'written', generation: done.generation, before: done.before, journalBefore: done.journalBefore,
       after: this.collectLaneRow(), journalAfter: journal.read() };
   }
+}
+
+// ── delegation broker wave 3, Task 7: the projection's two SQL spellings ─────────────────────────────────────────────
+// Both name their columns from the codec, which lists the DDL's columns in the DDL's order; no statement here is
+// `SELECT *`, and no position is hand-kept.
+
+/**
+ * One evidence row into `delegation_events`: the single path `insertDelegationEvent` and `insertDelegationEvents` share.
+ * `'duplicate'` only for an IDENTICAL stored row; the same `eventId` with another row throws `event-conflict`; another event on
+ * the row's `journalSequence` raises SQLite's own UNIQUE error (the batch asks first, so it never reaches it).
+ */
+function writeDelegationEventRow(
+  db: DatabaseSync, values: Readonly<Record<(typeof delegationEventCodec.columns)[number], DelegationSqlValue>>, row: DelegationEventRow,
+): 'inserted' | 'duplicate' {
+  const columns = delegationEventCodec.columns;
+  const res = db.prepare(`${delegationInsertSql(delegationEventCodec)} ON CONFLICT (eventId) DO NOTHING`)
+    .run(...columns.map((c) => values[c]));
+  if (Number(res.changes) === 1) return 'inserted';
+  const stored = db.prepare(`SELECT ${columns.join(', ')} FROM delegation_events WHERE eventId = ?`)
+    .get(values.eventId) as Record<string, unknown> | undefined;
+  const differs = stored === undefined ? 'eventId' : columns.find((c) => stored[c] !== values[c]);
+  if (differs !== undefined) {
+    throw new DelegationModelError('event-conflict', `evidence event ${row.eventId} is already recorded with a different ${differs}`);
+  }
+  return 'duplicate';
+}
+
+/** `INSERT INTO <table> (<columns>) VALUES (?, ...)` for a delegation table. */
+function delegationInsertSql<Row, Col extends string>(codec: DelegationRowCodec<Row, Col>): string {
+  return `INSERT INTO ${codec.table} (${codec.columns.join(', ')}) VALUES (${codec.columns.map(() => '?').join(', ')})`;
+}
+
+/** `INSERT ... ON CONFLICT (<keys>) DO UPDATE SET <every other column> = excluded.<column>` for a delegation table. */
+function delegationUpsertSql<Row, Col extends string>(codec: DelegationRowCodec<Row, Col>, keys: readonly Col[]): string {
+  const sets = codec.columns.filter((c) => !keys.includes(c)).map((c) => `${c} = excluded.${c}`);
+  return `${delegationInsertSql(codec)} ON CONFLICT (${keys.join(', ')}) DO UPDATE SET ${sets.join(', ')}`;
+}
+
+/** `SELECT <columns> FROM <table> ORDER BY <orderBy>` for a delegation table. */
+function delegationSelectSql<Row, Col extends string>(codec: DelegationRowCodec<Row, Col>, orderBy: string): string {
+  return `SELECT ${codec.columns.join(', ')} FROM ${codec.table} ORDER BY ${orderBy}`;
 }
 
 /** `setCollectLane`'s answer (path-identity spec 2026-10-12 §5.2). The caller binds it and discriminates every arm.

@@ -17,6 +17,12 @@
 // through the app's own `applyTheme`, so switching palettes re-renders this
 // page in that palette — the page IS the palette, rather than a picture of one.
 //
+// THE SKIN ROLES ARE A THIRD VIEW (D-5093): every token `skins.ts`'s closed
+// `SKIN_TOKENS` list lets a skin override, resolved in the skin the toolbar
+// stamped — so switching Refined and Instrument shows exactly what a skin
+// may move, and that no colour is among it. The list is the catalogue's own,
+// imported, not re-typed.
+//
 // THE TAILWIND BRIDGE IS SHOWN SEPARATELY and on purpose. `theme.css` maps
 // `--color-*`, `--spacing-*`, `--text-*` onto these tokens so a utility can
 // reach them, and those two layers answer different questions: "what colour is
@@ -24,6 +30,7 @@
 // guards the mapping; this only shows it.
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import type { ReactNode } from 'react';
+import { SKIN_TOKENS, type SkinTokenClass } from './skins';
 
 /** Every custom property declared on `:root` by a loaded stylesheet, in
  *  declaration order, deduplicated.
@@ -78,7 +85,13 @@ const FAMILIES: { title: string; note: string; match: RegExp }[] = [
   { title: 'Diff', note: 'Added and removed, in a patch.', match: /^--diff-/ },
   { title: 'Syntax', note: 'The highlighter’s palette, inside a well.', match: /^--syn-/ },
   { title: 'Spacing', note: 'The step scale. 9px and 10px exist as literals in two components; both say why.', match: /^--sp-/ },
-  { title: 'Type', note: 'Sizes, families, weights, leading, tracking.', match: /^--(fs|family|weight|lh|ls)-/ },
+  { title: 'Type', note: 'Sizes, families, weights, leading, tracking — the scales, and the type roles a skin re-points.', match: /^--(fs|family|weight|lh|ls|case)-/ },
+  {
+    title: 'Density',
+    note: 'The density roles a skin re-points: gutters, row height, card and section spacing, column measures.',
+    // From the catalogue, never re-typed: a role added there lands here.
+    match: new RegExp(`^(${SKIN_TOKENS.density.map((t) => t.name).join('|')})$`),
+  },
   { title: 'Radii', note: '', match: /^--r-/ },
   { title: 'Motion', note: 'Durations and curves. Every loop has a reduced-motion answer.', match: /^--(dur|curve|breathe)-/ },
   { title: 'Targets', note: 'The tap floor, and what a well may grow to.', match: /^--(tap|max)-/ },
@@ -150,6 +163,39 @@ function Reference({ bridge }: { bridge: boolean }): ReactNode {
   );
 }
 
+/** What each class of skin token is, in the order `SKIN_TOKENS` declares. */
+const SKIN_CLASS_NOTE: Record<SkinTokenClass, string> = {
+  type: 'Roles on the type scale: each one is a var(--fs-*) step, a weight, one of the two families, or a case.',
+  density: 'Lengths and spacing steps. --row-h is tap-bearing: 44px or more everywhere but under a fine pointer.',
+  radius: 'Corner radii. --r-full stays a pill in every skin, so lamps stay round.',
+  elevation: 'A palette value, which a skin may only replace with none or a hairline on --edge-*.',
+  meter: 'The usage meter’s shape.',
+  motion: 'Durations, overridden only where reduced motion was not asked for.',
+};
+
+function SkinRoles(): ReactNode {
+  const skin = document.documentElement.getAttribute('data-skin') ?? '(unstamped)';
+  const classes = Object.keys(SKIN_TOKENS) as SkinTokenClass[];
+  return (
+    <div className="grid gap-6 bg-page p-4 text-ink-primary">
+      <p className="m-0 max-w-[60ch] text-sm leading-normal text-ink-secondary">
+        {`Every token a skin may override (SKIN_TOKENS in skins.ts), resolved in the skin the `
+          + `toolbar selected: ${skin}. Switch skins to compare. A skin owns no colour, so no `
+          + `swatch appears here in any palette. Roles that change with the width resolve for `
+          + `this viewport.`}
+      </p>
+      {classes.map((c) => (
+        <Group
+          key={c}
+          title={c}
+          note={SKIN_CLASS_NOTE[c]}
+          names={SKIN_TOKENS[c].map((t) => t.name)}
+        />
+      ))}
+    </div>
+  );
+}
+
 const meta = {
   title: 'Foundations/Tokens',
   component: Reference,
@@ -175,3 +221,10 @@ export const Tokens: Story = { args: { bridge: false } };
 
 /** The `@theme` bridge — how a utility class reaches one of the above. */
 export const TailwindBridge: Story = { args: { bridge: true } };
+
+/** The skin roles — every `SKIN_TOKENS` member, as the selected skin resolves it. */
+export const SkinRolesTable: Story = {
+  name: 'Skin roles',
+  args: { bridge: false },
+  render: () => <SkinRoles />,
+};

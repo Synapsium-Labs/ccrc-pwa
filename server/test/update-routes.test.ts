@@ -146,6 +146,7 @@ const open = async (
     catalogueFactory?: (coord: CoordStore) => CataloguePoller;
     updateRunner?: LocalUpdateSpawn;
     tokenDriver?: TokenRouteDriver;
+    releaseSource?: ReleaseSourceRead;
   } = {},
 ): Promise<Opened> => {
   const home = mkTmp('ccrc-update-routes-');
@@ -157,6 +158,7 @@ const open = async (
   const cfg = {
     ...loaded, authEnabled: o.auth ?? false,
     ...(o.remote ? { fleetMode: 'remote' as const, role: 'server' as const } : {}),
+    ...(o.releaseSource ? { releaseSource: o.releaseSource } : {}),
   };
   if (o.auth) await writeSecret(home);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
@@ -215,6 +217,17 @@ const login = async (app: FastifyInstance): Promise<string> => {
 };
 
 describe('GET /api/updates', () => {
+  // D-5549: the release source the catalogue lists from, so the PWA links a
+  // note's `#NNN` from the number alone. Absent — never a guess — without one.
+  it('carries the release source as `source` when the server has one, and omits it when it does not', async () => {
+    const withSource = await open({ releaseSource: { ok: true, owner: 'owner-a', repo: 'repo-a', from: 'env' } });
+    const a = (await withSource.app.inject({ method: 'GET', url: '/api/updates' })).json() as UpdatesView;
+    expect(a.source).toEqual({ owner: 'owner-a', repo: 'repo-a' });
+    const without = await open({ releaseSource: { ok: false, why: 'tree-absent', path: '/nowhere/ccrc' } });
+    const b = (await without.app.inject({ method: 'GET', url: '/api/updates' })).json() as UpdatesView;
+    expect('source' in b).toBe(false);
+  });
+
   it('501 not-configured on a box with no coordination database', async () => {
     const app = await openBare(false);
     const r = await app.inject({ method: 'GET', url: '/api/updates' });

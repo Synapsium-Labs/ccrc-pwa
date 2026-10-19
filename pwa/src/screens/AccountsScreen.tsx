@@ -386,9 +386,13 @@ export function AccountsScreen(): ReactNode {
                 )}
               </div>
 
+              {/* `off` greys the meters' fills while each keeps its frozen
+                  classification on `data-band`: the colour and the reading
+                  stay separate facts (D-5098). It replaced a row-level
+                  fleet.css override. */}
               <div className="acct-rows">
-                <AccountMeterRow label="5h" pct={a?.five ?? null} resetAt={a?.fiveResetAt ?? null} nowSec={nowSec} rolledOver={a?.fiveRolledOver ?? false} />
-                <AccountMeterRow label="7d" pct={a?.seven ?? null} resetAt={a?.sevenResetAt ?? null} nowSec={nowSec} rolledOver={a?.sevenRolledOver ?? false} />
+                <AccountMeterRow label="5h" pct={a?.five ?? null} resetAt={a?.fiveResetAt ?? null} nowSec={nowSec} rolledOver={a?.fiveRolledOver ?? false} off={off} />
+                <AccountMeterRow label="7d" pct={a?.seven ?? null} resetAt={a?.sevenResetAt ?? null} nowSec={nowSec} rolledOver={a?.sevenRolledOver ?? false} off={off} />
               </div>
 
               {/* Telemetry is a byproduct of a session rendering its

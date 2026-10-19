@@ -15,18 +15,18 @@ import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
 import { brotliDecompressSync as rrUnbrotli } from 'node:zlib';
 import { DatabaseSync } from 'node:sqlite';
-import * as pty from 'node-pty';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession,
   plantTranscript, spoolLine, preloadOptions, PRELOADS, CLI, recoverRow, boundEmptyStore,
-  runCli, withPane, seedFamily, journalDirOf, REPO, rewindStoreToV1, type HistoryBox, type SpawnOpts,
+  runCli, withPane, seedFamily, journalDirOf, REPO, rewindStoreToV1, runOnPty, type HistoryBox, type SpawnOpts,
+  plantSegment, segmentSha, segmentsOf, segmentRows, exportDirOf, type PlantSegmentRow, type PlantSegmentBlob, strandedBlobs, strandedBlobsOn,
 } from './historyHelpers.js';
-import { userRow, assistantRow, boundaryRow, summaryRow } from './historyFixtures.js';
+import { userRow, assistantRow, boundaryRow, summaryRow, toolResultRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
 import {
   HEALTH_META, RECOVER_PHASES, RECOVERY_STALL_TICKS, SCHEMA_VERSION, WRITING_FORMS, floorThreshold, historyPaths, journalRecord, mergeJournalByTime,
   REDACTED_MARK, BELT_VERSION, parseBeltState, beltWidth, type BeltState, planReplay,
-  NODE_PARSER_VERSION, makePairIndex, secretPairs, parentRollup, nodeIndexTexts,
+  NODE_PARSER_VERSION, makePairIndex, secretPairs, parentRollup, nodeIndexTexts, exportedSourceKey,
 } from '../../ccd/history/lib.mjs';
 import { V2_INDEXES, StoreError, abortRestore, closeWriter, createFtsTables, createStore, getMeta, getStep, openWriter, setMeta, setStep, stageRestore } from '../../ccd/history/store.mjs';
 
@@ -174,34 +174,10 @@ function ccrcSnapshot(box: HistoryBox): string[] {
   return out.sort();
 }
 
-/** A command on a REAL terminal (node-pty), so stdin IS a TTY: the irreversible forms refuse without one (§8.4). A
- *  pty merges stdout and stderr. The timer is a safety net, never the assertion. A pty child leads its own process
- *  group, so the timer kills the whole group: the shim and the sweep under it die too, and none outlives its case
- *  holding the history lock. */
-function onPty(box: HistoryBox, argv: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> {
-  const full: Record<string, string> = {};
-  const merged: NodeJS.ProcessEnv = {
-    ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions([PRELOADS.statfs]), ...env,
-  };
-  for (const [k, v] of Object.entries(merged)) if (v !== undefined) full[k] = v;
-  return new Promise((resolve) => {
-    const p = pty.spawn(argv[0]!, argv.slice(1), { name: 'xterm-color', cols: 200, rows: 40, cwd: box.home, env: full });
-    let out = '';
-    let done = false;
-    const finish = (code: number): void => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve({ code, out });
-    };
-    const timer = setTimeout(() => {
-      try { process.kill(-p.pid, 'SIGKILL'); } catch { p.kill(); }
-      finish(-1);
-    }, HEAVY / 3);
-    p.onData((d) => { out += d; });
-    p.onExit(({ exitCode }) => finish(exitCode));
-  });
-}
+/** A command on a REAL terminal (historyHelpers' runOnPty), so stdin IS a TTY: the irreversible forms refuse without one
+ *  (§8.4). The timer is a safety net, never the assertion. */
+const onPty = (box: HistoryBox, argv: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> =>
+  runOnPty(box, argv, { env, timeoutMs: HEAVY / 3 });
 /** `ccrc history <args>` (the CLI door) and the shim's `--op` (the direct door), each on a terminal. */
 const cliOnPty = (box: HistoryBox, args: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string }> =>
   onPty(box, [process.execPath, '--no-warnings', CLI, ...args], env);
@@ -1432,10 +1408,11 @@ function rrTalk(sid: string, base: number, n: number): object[] {
 /** A transcript with one manual compaction (§7.4). It has a user and an assistant row, then the boundary, then the
  *  summary right after it (the manual +1 position, which the boundary's anchor names), then one more row. The
  *  first row and the summary's Current Work section both carry `work`. Row uuids are rrU(base)…rrU(base + 4).
- *  One native leaf derives from it. */
-function rrCompacted(sid: string, base: number, work: string): object[] {
+ *  One native leaf derives from it. `cwd` is where its rows say the session was launched (default WORK) and `tag`
+ *  is the word the other three texts begin with (default 'zqrecover'). */
+function rrCompacted(sid: string, base: number, work: string, cwd: string = WORK, tag = 'zqrecover'): object[] {
   const at = (k: number) => ({
-    uuid: rrU(base + k), ts: rrIso(10 - k), parentUuid: k === 0 ? null : rrU(base + k - 1), sessionId: sid, cwd: WORK,
+    uuid: rrU(base + k), ts: rrIso(10 - k), parentUuid: k === 0 ? null : rrU(base + k - 1), sessionId: sid, cwd,
   });
   const anchor = rrU(base + 3);
   const summary = [
@@ -1449,11 +1426,11 @@ function rrCompacted(sid: string, base: number, work: string): object[] {
     '</summary>',
   ].join('\n');
   return [
-    userRow({ ...at(0), text: `zqrecover ask about ${work}` }),
-    assistantRow({ ...at(1), text: 'zqrecover answer' }),
+    userRow({ ...at(0), text: `${tag} ask about ${work}` }),
+    assistantRow({ ...at(1), text: `${tag} answer` }),
     boundaryRow({ ...at(2), trigger: 'manual', headUuid: anchor, anchorUuid: anchor, tailUuid: anchor, allUuids: [] }),
     summaryRow({ ...at(3), text: summary }),
-    userRow({ ...at(4), text: 'zqrecover after the compaction' }),
+    userRow({ ...at(4), text: `${tag} after the compaction` }),
   ];
 }
 
@@ -3517,4 +3494,1666 @@ describe('F12: the node fast path is bounded by the slice and the budget, and wh
       expect(f12Belt(again.db), '(c) a complete pass leaves the belt as it found it, completed').toEqual({ cursor: '999', completedMs: 1_000 });
     } finally { closeWriter(again.db); }
   }, HEAVY);
+});
+
+// ===========================================================================
+// W1-B4 Task 3: the export phases in the recovery step (spec §9.14 "Recovery",
+// "Export replay"). In-process on a real store, through B2's recoveryStep and
+// its executors seam, with the SHIPPED export executors (Task 10's; a store
+// with no export directory ends each phase at once) wrapped so the test sees each call. The
+// import is namespaced, so this block binds no name the file already binds;
+// ESM hoists it.
+// ===========================================================================
+import * as recExport from '../../ccd/history/lib.mjs';
+
+describe('W1-B4: the export phases in the recovery step (spec §9.14)', () => {
+  type ExportChunkAnswer = { cursor: recExport.RecoverCursor; moved: boolean; phaseDone: boolean };
+  type ExportChunk = (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor) => ExportChunkAnswer | Promise<ExportChunkAnswer>;
+  /** An executor that records its cursor and ends the step for the pass. */
+  const stopHere = (seen: string[]): ExportChunk => (_db, _run, c) => {
+    seen.push(recExport.formatRecoverCursor(c));
+    return { cursor: c, moved: false, phaseDone: false };
+  };
+  /** An executor whose phase is already done. */
+  const finished: ExportChunk = (_db, _run, c) => ({ cursor: c, moved: false, phaseDone: true });
+  /** The shipped executor of `phase`, recording the cursor it is called with. */
+  const shipped = (phase: string, seen: string[]): ExportChunk => (db, run, c) => {
+    seen.push(recExport.formatRecoverCursor(c));
+    return (SW.RECOVER_EXECUTORS[phase] as ExportChunk)(db, run, c);
+  };
+  /** A fresh store with one recovery step registered at `cursor`, and the writer handle `body` runs on. */
+  const withStep = async (cursor: string,
+    body: (db: DatabaseSync, box: HistoryBox, ids: { storeId: string; writer: string }) => Promise<void>): Promise<void> => {
+    const box = makeHistoryBox('ccrc-history-recover-b4-phases-');
+    const ids = createStore(box.home);
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, ?, NULL)").run(Date.now(), cursor);
+      await body(db, box, ids);
+    } finally {
+      closeWriter(db);
+    }
+  };
+
+  it('a step stored at apply+pairs walks export-blobs, export-stubs then export-rows (D-5397), through the shipped executors, to reindex with +pairs kept', async () => {
+    await withStep('apply+pairs', async (db, box, ids) => {
+      const seen: string[] = [];
+      const executors = {
+        index: stopHere(seen), apply: finished, 'export-blobs': shipped('export-blobs', seen), 'export-stubs': shipped('export-stubs', seen),
+        'export-rows': shipped('export-rows', seen), reindex: stopHere(seen),
+      };
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), executors)).toEqual({ moved: true, done: false, held: false });
+      expect(seen).toEqual(['export-blobs+pairs', 'export-stubs+pairs', 'export-rows+pairs', 'reindex+pairs']);
+      expect(cursorOn(db)).toBe('reindex+pairs');
+    });
+  });
+
+  it('a step stored inside an export phase resumes there: its cursor parses, and no chunk is counted failed', async () => {
+    await withStep('export-rows:7.0a1b2c3d.db:12+pairs', async (db, box, ids) => {
+      const seen: string[] = [];
+      const executors = {
+        index: stopHere(seen), apply: stopHere(seen), 'export-blobs': stopHere(seen), 'export-stubs': stopHere(seen),
+        'export-rows': shipped('export-rows', seen), reindex: stopHere(seen),
+      };
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), executors)).toEqual({ moved: true, done: false, held: false });
+      expect(seen).toEqual(['export-rows:7.0a1b2c3d.db:12+pairs', 'reindex+pairs']);
+      expect(countersOn(db, 'recover_chunk_failed')).toEqual({ recover_chunk_failed: 0 });
+    });
+  });
+
+  it('a step stored inside the stubs phase resumes there, and goes on to the rows phase (D-5397): its cursor parses, and no chunk is counted failed', async () => {
+    await withStep('export-stubs:7.0a1b2c3d.db:12+pairs', async (db, box, ids) => {
+      const seen: string[] = [];
+      const executors = {
+        index: stopHere(seen), apply: stopHere(seen), 'export-blobs': stopHere(seen), 'export-stubs': shipped('export-stubs', seen),
+        'export-rows': stopHere(seen), reindex: stopHere(seen),
+      };
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), executors)).toEqual({ moved: true, done: false, held: false });
+      expect(seen).toEqual(['export-stubs:7.0a1b2c3d.db:12+pairs', 'export-rows+pairs']);
+      expect(countersOn(db, 'recover_chunk_failed')).toEqual({ recover_chunk_failed: 0 });
+    });
+  });
+});
+
+// ── W1-B4 Task 10: export replay, the recovery step's three export phases (spec §9.14 "Export replay", §9.15) ───
+// Segments are planted through store.mjs (historyHelpers' plantSegment), never by hand, and every HOME is a fixture.
+// In-process cases run sweep.mjs's recoveryStep on a store createStore made; the O44 and rollback cases spawn the
+// real pass. Every name here is prefixed x10/X10, so nothing collides with B2's cases above.
+const X10_ID = 'claude-a-segment';
+const X10_G = '0189abcd-1234-4678-9abc-0000000010a1';
+const X10_WRITER = '0a1b2c3d';
+const X10_DEV = 64769;
+const X10_DAY = 86_400_000;
+const x10U = (n: number): string => `10101010-0000-4000-8000-${String(n).padStart(12, '0')}`;
+interface X10Text { uuid: string; text: string; tsMs: number; line: number }
+interface X10Family {
+  uuid: string; path: string; ino: number; texts: X10Text[];
+  id?: string; generation?: string; project?: string; seq?: number; cwd?: string; eofMs?: number | null;
+}
+/** `n` row texts of one transcript, old enough to be due anywhere, at byte offsets 0, 4096, … */
+const x10Texts = (base: number, n: number, word: string, t0: number): X10Text[] =>
+  Array.from({ length: n }, (_, i) => ({ uuid: x10U(base + i), text: `${word} row ${i} ${'x'.repeat(40)}`, tsMs: t0 + i * 1000, line: i * 4096 }));
+/** One family's rows as a format-1 segment carries them (Task 10's contract table): the family, its transcript, one
+ *  confirmed startup epoch launched in `cwd`, the gone file (path, dev, ino), then per text its entry and its
+ *  membership. */
+function x10Rows(o: X10Family): PlantSegmentRow[] {
+  const id = o.id ?? X10_ID;
+  const generation = o.generation ?? X10_G;
+  const t0 = o.texts[0]?.tsMs ?? Date.now() - 400 * X10_DAY;
+  const cwd = o.cwd ?? WORK;
+  const out: PlantSegmentRow[] = [
+    { kind: 'family', row: { ccrc_id: id, generation, project: o.project ?? 'demo', first_seen_ms: t0 } },
+    { kind: 'transcript', row: { cc_session_uuid: o.uuid, agent_id: '', harness: 'claude-code', parent_tool_use_id: null, workflow_run_id: null, agent_type: null } },
+    { kind: 'epoch', row: {
+      ccrc_id: id, generation, seq: o.seq ?? 1, cc_session_uuid: o.uuid, cause: 'startup', declared_by: 'hook',
+      started_ms: t0, cwd, git_branch: 'main', cwd_real: cwd, confirmed_ms: t0,
+    } },
+    { kind: 'file', row: {
+      path: o.path, dev: X10_DEV, ino: o.ino, cc_session_uuid: o.uuid, agent_id: '', size: 4096 * o.texts.length,
+      mtime_ns: BigInt(t0) * 1_000_000n, eof_ms: o.eofMs === undefined ? t0 + 60_000 : o.eofMs,
+    } },
+  ];
+  for (const x of o.texts) {
+    out.push({ kind: 'entry', row: {
+      uuid: x.uuid, cc_session_uuid: o.uuid, agent_id: '', type: 'user', subtype: null, role: 'user', model: null,
+      parent_uuid: null, ts_ms: x.tsMs, request_id: null, api_block_index: null, msg_id: null, source_tool_use_id: null,
+      tool_name: null, is_compact_summary: 0, provenance: 'operator', prov_version: 1, parse_state: 'ok',
+      struct_rank_ns: BigInt(t0) * 1_000_000n, struct_path: o.path, struct_dev: X10_DEV, struct_ino: o.ino,
+      blob_sha256: segmentSha(x.text),
+    } });
+    out.push({ kind: 'membership', row: { path: o.path, dev: X10_DEV, ino: o.ino, uuid: x.uuid, line: x.line } });
+  }
+  return out;
+}
+/** A store createStore made, its recovery step registered at `cursor` (null: the step's start), opened for writing. */
+function x10Store(prefix: string, cursor: string | null = null): { box: ReturnType<typeof makeHistoryBox>; ids: { storeId: string; writer: string }; db: DatabaseSync } {
+  const box = makeHistoryBox(prefix);
+  const ids = createStore(box.home);
+  const db = openWriter(historyPaths(box.home).dbFile);
+  db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, ?, NULL)").run(Date.now(), cursor);
+  return { box, ids, db };
+}
+const x10Count = (db: DatabaseSync, table: string): number =>
+  Number((db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
+/** The shipped recovery executors, each recording the cursor it is called with, for recoveryStep's `executors` argument. */
+const x10Recording = (seen: string[]): Readonly<Record<string, unknown>> => Object.fromEntries(Object.entries(SW.RECOVER_EXECUTORS).map(([phase, fn]) =>
+  [phase, (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor): unknown => {
+    seen.push(recExport.formatRecoverCursor(c));
+    return (fn as (db: DatabaseSync, run: unknown, c: recExport.RecoverCursor) => unknown)(db, run, c);
+  }]));
+
+describe('W1-B4 Task 10: export replay in the recovery step (spec §9.14 "Export replay")', () => {
+  it('O44, the segment case: a format-2 segment beside a format-1 one, under a step larger than one pass\'s budget: the step completes, format 1 replays and is marked, format 2 is skipped and FAILs export-segment-newer naming it', () => {
+    const box = makeHistoryBox('ccrc-history-b4-o44seg-');
+    pass(box);
+    const storeId = fs.readFileSync(historyPaths(box.home).storeId, 'utf8').trim();
+    // 256 random hex characters each, so Brotli cannot shrink a blob below the chunk bound: the step spans passes.
+    const texts = x10Texts(0x100, 12, 'zqo44seg', Date.now() - 400 * X10_DAY).map((t) => ({ ...t, text: `${t.text} ${randomBytes(128).toString('hex')}` }));
+    const one = plantSegment(box, storeId, {
+      seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+      rows: x10Rows({ uuid: x10U(0x10), path: '/home/u/gone/o44.jsonl', ino: 9001, texts }),
+    });
+    const two = plantSegment(box, storeId, { seq: 2, writer: X10_WRITER, format: 2, blobs: [{ text: 'zqo44seg a newer build wrote this' }], rows: [] });
+    const kinds0 = rrJournalKinds(box);
+    const version = Date.now();
+    registerRecovery(box, version);
+    let passes = 0;
+    for (;;) {
+      const r = runDriver(box, { budgetBytes: 1200, chunkBytes: 400 });
+      expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+      passes += 1;
+      if (recoverRow(box)!.completed_ms !== null) break;
+      expect(passes, 'the step never completed').toBeLessThan(60);
+    }
+    expect(passes, 'the step spans several passes').toBeGreaterThanOrEqual(2);
+    expect(rows(box, 'SELECT exported_seg AS seg, count(*) AS n FROM entries GROUP BY exported_seg')).toEqual([{ seg: path.basename(one), n: 12 }]);
+    expect(countOf(box, 'memberships')).toBe(12);
+    expect(rows(box, 'SELECT count(*) AS n FROM blobs WHERE exported_seg = ?', path.basename(one))).toEqual([{ n: 12 }]);
+    expect(rows(box, 'SELECT count(*) AS n FROM blobs WHERE lower(hex(sha256)) = ?', segmentSha('zqo44seg a newer build wrote this').toString('hex')),
+      'the newer segment\'s blob was never inserted').toEqual([{ n: 0 }]);
+    expect(metaOf(box, HEALTH_META.exportSegmentNewer)).toBe(JSON.stringify([path.basename(two)]));
+    const newer = (status(box).health.fail as Array<{ word: string; detail?: string }>).find((f) => f.word === 'export-segment-newer');
+    expect(newer?.detail, 'doctor FAILs export-segment-newer, naming the segment').toContain(path.basename(two));
+    expect(counters(box)['recover_chunk_failed'] ?? 0).toBe(0);
+    // O36's replay half for segments: the step journaled nothing.
+    expect(rrJournalKinds(box)).toEqual(kinds0);
+  }, 2.5 * HEAVY);
+
+  it('BK21: a row whose blob sits only in a LATER segment replays, because every segment\'s blobs go in before any segment\'s rows; replayed blobs and rows are marked with their own segments', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-bk21-');
+    try {
+      const texts = x10Texts(0x200, 1, 'zqbk21', Date.now() - 400 * X10_DAY);
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [], rows: x10Rows({ uuid: x10U(0x20), path: '/home/u/gone/bk21.jsonl', ino: 9101, texts }) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: 'feedface', blobs: [{ text: texts[0]!.text }], rows: [] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT e.uuid AS uuid, b.exported_seg AS blobSeg, e.exported_seg AS rowSeg FROM entries e JOIN blobs b ON b.blob_id = e.blob_id')
+        .all().map((r) => ({ ...r }))).toEqual([{ uuid: texts[0]!.uuid, blobSeg: '2.feedface.db', rowSeg: `1.${X10_WRITER}.db` }]);
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a late-linked sidecar\'s second segment (the entry again, with its sidecar row and only the sidecar\'s bytes) replays beside the first with no duplicate row', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-latesc-');
+    try {
+      const texts = x10Texts(0xa00, 1, 'zqlatesc', Date.now() - 400 * X10_DAY);
+      const fam: X10Family = { uuid: x10U(0xa0), path: '/home/u/gone/latesc.jsonl', ino: 9951, texts };
+      const side = 'zqlatesc the tool output that landed after its row was exported';
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: side }], rows: [
+        ...x10Rows(fam),
+        { kind: 'sidecar', row: { cc_session_uuid: fam.uuid, agent_id: '', name: 'b4late01.txt', blob_sha256: segmentSha(side), uuid: texts[0]!.uuid, first_seen_ms: texts[0]!.tsMs + 60_000 } },
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(['entries', 'memberships', 'sidecars', 'blobs', 'epochs'].map((t) => x10Count(db, t))).toEqual([1, 1, 1, 2, 1]);
+      expect(db.prepare('SELECT s.name AS name, e.uuid AS uuid, b.exported_seg AS seg FROM sidecars s JOIN entries e ON e.entry_id = s.entry_id JOIN blobs b ON b.blob_id = s.blob_id')
+        .all().map((r) => ({ ...r }))).toEqual([{ name: 'b4late01.txt', uuid: texts[0]!.uuid, seg: `2.${X10_WRITER}.db` }]);
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced', 'export_epoch_conflict'))
+        .toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0, export_epoch_conflict: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('journal first: a segment\'s family and epoch rows fill only what the journal lacks, through merged_into; a seq the journal gave another uuid is skipped and counted export_epoch_conflict', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-jfirst-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const [U1, U2, U3] = [x10U(0x31), x10U(0x32), x10U(0x33)];
+      // The journal: (X10_ID, '') and (X10_ID, X10_G), both project demo, the '' family re-keyed into G, and an operator
+      // mapping that chains U1 into G at seq 1 with no launch facts.
+      plantJournalFile(box, ids.storeId, new Date(t0).toISOString().slice(0, 7), 'feedbeef', t0, [
+        journalRecord('verdict', t0 + 1, { event_key: 'none', kind: 'family', ccrc_id: X10_ID, generation: '', project: 'demo', first_seen_ms: t0 + 1 }),
+        journalRecord('verdict', t0 + 2, { event_key: 'none', kind: 'family', ccrc_id: X10_ID, generation: X10_G, project: 'demo', first_seen_ms: t0 + 2 }),
+        journalRecord('verdict', t0 + 3, { event_key: 'none', kind: 'rekeyed', ccrc_id: X10_ID, generation: X10_G }),
+        journalRecord('verdict', t0 + 4, {
+          event_key: 'none', kind: 'mapping', ccrc_id: X10_ID, generation: X10_G, cc_session_uuid: U1, declared_by: 'operator',
+          path: '/home/u/gone/j1.jsonl',
+        }),
+      ]);
+      const epoch = (generation: string, seq: number, uuid: string): PlantSegmentRow => ({ kind: 'epoch', row: {
+        ccrc_id: X10_ID, generation, seq, cc_session_uuid: uuid, cause: 'startup', declared_by: 'hook',
+        started_ms: t0, cwd: WORK, git_branch: 'main', cwd_real: WORK, confirmed_ms: t0,
+      } });
+      // The store's own launch facts for U1, as its transcript's first row gave them (the tick's epochFacts, or a restored
+      // backup's epoch): they differ from the segment's in all four columns, and the store's win. A journal record carries
+      // none (chainEpoch writes the uuid, cause and confirmation only), so the facts go in between the step's journal phases
+      // and its export phases, through the executors seam.
+      const own = { started: t0 + 77, cwd: '/home/u/launch/own', branch: 'own-branch', real: '/home/u/launch/own-real' };
+      const executors = {
+        ...SW.RECOVER_EXECUTORS,
+        'export-blobs': (d: DatabaseSync, run: unknown, c: unknown): unknown => {
+          d.prepare('UPDATE epochs SET started_ms = ?, cwd = ?, git_branch = ?, cwd_real = ? WHERE cc_session_uuid = ? AND started_ms IS NULL AND cwd IS NULL')
+            .run(own.started, own.cwd, own.branch, own.real, U1);
+          return (SW.RECOVER_EXECUTORS['export-blobs'] as (a: unknown, b: unknown, c: unknown) => unknown)(d, run, c);
+        },
+      };
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [], rows: [
+        // a family the journal merged: it lands in (X10_ID, X10_G), whose project the journal set
+        { kind: 'family', row: { ccrc_id: X10_ID, generation: '', project: 'elsewhere', first_seen_ms: t0 } },
+        epoch('', 1, U1),        // the journal's U1, named by its pre-merge family: launch facts filled, seq and cause kept
+        epoch(X10_G, 1, U2),     // seq 1 is U1's: skipped, counted
+        epoch(X10_G, 2, U3),     // the journal lacks it: inserted at its own seq
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), executors)).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT generation, project, merged_into IS NOT NULL AS merged FROM sessions WHERE ccrc_id = ? ORDER BY generation')
+        .all(X10_ID).map((r) => ({ ...r }))).toEqual([
+        { generation: '', project: 'demo', merged: 1 },
+        { generation: X10_G, project: 'demo', merged: 0 },
+      ]);
+      expect(db.prepare(`SELECT e.seq AS seq, e.cc_session_uuid AS uuid, e.cause AS cause, e.declared_by AS by, e.cwd AS cwd, e.git_branch AS branch,
+          e.cwd_real AS real, e.started_ms AS started, e.confirmed_ms AS confirmed FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk
+          WHERE s.ccrc_id = ? AND s.generation = ? ORDER BY e.seq`).all(X10_ID, X10_G).map((r) => ({ ...r }))).toEqual([
+        // the store's launch facts and the journal's seq, cause and confirmation all win over the segment's
+        { seq: 1, uuid: U1, cause: 'import', by: 'operator', cwd: own.cwd, branch: own.branch, real: own.real, started: own.started, confirmed: t0 + 4 },
+        { seq: 2, uuid: U3, cause: 'startup', by: 'hook', cwd: WORK, branch: 'main', real: WORK, started: t0, confirmed: t0 },
+      ]);
+      expect(countersOn(db, 'export_epoch_conflict')).toEqual({ export_epoch_conflict: 1 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a gone file\'s memberships land on its exported: row (status exported, eof carried, else the segment\'s cutoff), never on a live row that reuses its inode; a blob the store holds is kept and marked', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-dead-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const CUT = Date.now() - 200 * X10_DAY;
+      const [UA, UB] = [x10U(0x41), x10U(0x42)];
+      const [pa, pb] = ['/home/u/gone/a.jsonl', '/home/u/gone/b.jsonl'];
+      const a = x10Texts(0x410, 3, 'zqdeada', t0);
+      const b = x10Texts(0x420, 2, 'zqdeadb', t0);
+      // A live file of another transcript that now holds a's (dev, ino), and a's first blob already in the store.
+      const other = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)').run(x10U(0x4f)).lastInsertRowid);
+      const live = Number(db.prepare("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, 9401, '', ?, 'live', 1)")
+        .run(X10_DEV, other).lastInsertRowid);
+      const raw0 = Buffer.from(a[0]!.text, 'utf8');
+      db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?)').run(segmentSha(a[0]!.text), 'br5', segmentSha('a stored body'), raw0.length);
+      plantSegment(box, ids.storeId, {
+        seq: 1, writer: X10_WRITER, cutoffMs: CUT, blobs: [...a, ...b].map((x) => ({ text: x.text })),
+        rows: [
+          ...x10Rows({ uuid: UA, path: pa, ino: 9401, texts: a }),
+          ...x10Rows({ uuid: UB, path: pb, ino: 9402, texts: b, seq: 2, eofMs: null }),
+        ],
+      });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      const files = db.prepare('SELECT file_id, source_key, status, eof_ms FROM ingest_files WHERE file_id <> ? ORDER BY file_id').all(live)
+        .map((r) => ({ ...r })) as Array<{ file_id: number; source_key: string; status: string; eof_ms: number }>;
+      expect(files.map(({ source_key, status, eof_ms }) => ({ source_key, status, eof_ms }))).toEqual([
+        { source_key: exportedSourceKey(pa, X10_DEV, 9401), status: 'exported', eof_ms: a[0]!.tsMs + 60_000 },
+        { source_key: exportedSourceKey(pb, X10_DEV, 9402), status: 'exported', eof_ms: CUT },
+      ]);
+      const held = (fileId: number): string[] => db.prepare('SELECT e.uuid AS uuid FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? ORDER BY m.line')
+        .all(fileId).map((r) => String((r as { uuid: string }).uuid));
+      expect(held(live), 'the live row holds nothing of the gone file').toEqual([]);
+      expect(held(files[0]!.file_id)).toEqual(a.map((x) => x.uuid));
+      expect(held(files[1]!.file_id)).toEqual(b.map((x) => x.uuid));
+      expect(db.prepare('SELECT DISTINCT struct_file_id AS f FROM entries ORDER BY f').all().map((r) => Number((r as { f: number }).f)))
+        .toEqual(files.map((f) => f.file_id));
+      expect({ ...(db.prepare('SELECT count(*) AS n, max(exported_seg) AS seg FROM blobs WHERE sha256 = ?').get(segmentSha(a[0]!.text)) as object) },
+        'insert-or-ignore kept the store\'s blob, and marked it').toEqual({ n: 1, seg: `1.${X10_WRITER}.db` });
+      expect(x10Count(db, 'file_paths'), 'a gone file gets no path: the live ingest can never find it').toBe(0);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a blob the store holds as a prune tombstone stays one when a segment carries its bytes (operator ruling 2026-10-18); a stub replays as a tombstone dated by the replay and is never marked exported', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-prune-');
+    try {
+      const texts = x10Texts(0xc00, 2, 'zqprune', Date.now() - 400 * X10_DAY);
+      const rawLen = (text: string): number => Buffer.byteLength(text, 'utf8');
+      // The store pruned the first blob before the replay: a tombstone, with its date.
+      db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, ?, NULL, ?, 12345)').run(segmentSha(texts[0]!.text), 'br5', rawLen(texts[0]!.text));
+      plantSegment(box, ids.storeId, {
+        // the first blob's bytes travel (its exporter had not pruned it); the second is a stub (its exporter had)
+        seq: 1, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }, { text: null, sha256: segmentSha(texts[1]!.text), rawLen: rawLen(texts[1]!.text) }],
+        rows: x10Rows({ uuid: x10U(0xc0), path: '/home/u/gone/prune.jsonl', ino: 9811, texts }),
+      });
+      const before = Date.now();
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      const blob = (text: string): Record<string, unknown> => ({ ...(db.prepare(
+        'SELECT z IS NULL AS pruned, pruned_ms, exported_ms, exported_seg FROM blobs WHERE sha256 = ?').get(segmentSha(text)) as object) });
+      expect(blob(texts[0]!.text), 'insert-or-ignore: the tombstone keeps its date, gains no body and no mark')
+        .toEqual({ pruned: 1, pruned_ms: 12345, exported_ms: null, exported_seg: null });
+      const stub = blob(texts[1]!.text);
+      expect([stub['pruned'], stub['exported_ms'], stub['exported_seg']], 'a stub is a tombstone and never exported text').toEqual([1, null, null]);
+      expect(Number(stub['pruned_ms']), 'dated by the replay, the time this store learned it').toBeGreaterThanOrEqual(before);
+      expect(x10Count(db, 'entries'), 'both rows place on their blobs').toBe(2);
+      expect(db.prepare('SELECT count(*) AS n FROM entries WHERE exported_seg = ?').get(`1.${X10_WRITER}.db`)).toEqual({ n: 2 });
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a boundary replays once however many segments carry its entry, silently; a boundary whose (transcript, ord) another entry holds is counted export_row_unplaced and skipped, the chunk completing: one row never stalls the step', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-bound-');
+    try {
+      const texts = x10Texts(0xd00, 2, 'zqbound', Date.now() - 400 * X10_DAY);
+      const fam = (t: X10Text): X10Family => ({ uuid: x10U(0xd0), path: '/home/u/gone/bound.jsonl', ino: 9821, texts: [t] });
+      const boundary = (uuid: string): PlantSegmentRow => ({ kind: 'boundary', row: {
+        uuid, cc_session_uuid: x10U(0xd0), agent_id: '', boundary_ord: 1, trigger: 'manual', head_uuid: null, anchor_uuid: null,
+        tail_uuid: null, kept_sha256: null, pre_tokens: 10, post_tokens: 5, duration_ms: 3,
+      } });
+      // The first entry and its boundary travel in two segments (a repeat replay absorbs, uncounted); a second entry of the
+      // same transcript claims the same ord in a third (a row the store cannot place: counted, skipped).
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }], rows: [...x10Rows(fam(texts[0]!)), boundary(texts[0]!.uuid)] });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [], rows: [...x10Rows(fam(texts[0]!)), boundary(texts[0]!.uuid)] });
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [{ text: texts[1]!.text }], rows: [...x10Rows(fam(texts[1]!)), boundary(texts[1]!.uuid)] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(countersOn(db, 'export_row_unplaced', 'recover_chunk_failed'),
+        'only the collision is counted (the repeat in segment 2 is not), and no chunk failed').toEqual({ export_row_unplaced: 1, recover_chunk_failed: 0 });
+      expect([x10Count(db, 'boundaries'), x10Count(db, 'entries')], 'one boundary; the second entry is placed without its boundary').toEqual([1, 2]);
+      expect(db.prepare('SELECT e.uuid AS uuid FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id').all().map((r) => ({ ...r })),
+        'the first claim stands').toEqual([{ uuid: texts[0]!.uuid }]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a replayed variant\'s first file is the dead-file row of the identity the segment names for it, else its entry\'s own', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-variant-');
+    try {
+      const texts = x10Texts(0xe00, 1, 'zqvariant', Date.now() - 400 * X10_DAY);
+      const fam: X10Family = { uuid: x10U(0xe0), path: '/home/u/gone/v1.jsonl', ino: 9831, texts };
+      const [va, vb] = ['zqvariant a later copy rewrote this row', 'zqvariant another copy wrote it differently'];
+      const variant = (text: string, firstPath: string, firstIno: number): PlantSegmentRow => ({ kind: 'variant', row: {
+        uuid: texts[0]!.uuid, blob_sha256: segmentSha(text), first_path: firstPath, first_dev: X10_DEV, first_ino: firstIno,
+        first_seen_ms: texts[0]!.tsMs + 5000, cause: 'unknown',
+      } });
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }, { text: va }, { text: vb }], rows: [
+        ...x10Rows(fam),
+        // a second gone file of the transcript, which the first variant names as its first
+        { kind: 'file', row: { path: '/home/u/gone/v2.jsonl', dev: X10_DEV, ino: 9832, cc_session_uuid: fam.uuid, agent_id: '', size: 4096, mtime_ns: 1n, eof_ms: null } },
+        variant(va, '/home/u/gone/v2.jsonl', 9832),
+        // the second variant names a file the segment carries no row for
+        variant(vb, '/home/u/gone/none.jsonl', 9833),
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      const dead = (p: string, ino: number): number => Number((db.prepare('SELECT file_id FROM ingest_files WHERE source_key = ?').get(exportedSourceKey(p, X10_DEV, ino)) as { file_id: number }).file_id);
+      expect(db.prepare('SELECT v.blob_id AS blob, v.first_file_id AS first FROM entry_variants v JOIN blobs b ON b.blob_id = v.blob_id ORDER BY b.blob_id')
+        .all().map((r) => ({ ...r })).map((r) => (r as { first: number }).first)).toEqual([dead('/home/u/gone/v2.jsonl', 9832), dead(fam.path, 9831)]);
+      expect(x10Count(db, 'ingest_files'), 'the unnamed file got no row of its own').toBe(2);
+      expect(countersOn(db, 'export_row_unplaced', 'export_row_blob_missing')).toEqual({ export_row_unplaced: 0, export_row_blob_missing: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('two transcripts\' retired files that share one (dev, ino) and export under their own source_key each keep their own dead-file row, entries and memberships, so no leaf of one holds a row of the other', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-retired-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const [UA, UB] = [x10U(0xb1), x10U(0xb2)];
+      const a = x10Texts(0xb10, 3, 'zqretira', t0);
+      const b = x10Texts(0xb20, 2, 'zqretirb', t0);
+      // B1 retires a row when a NEW file reuses its (dev, ino) and re-points its paths. Two generations of one inode, each of
+      // a different transcript, have no path left; the export writes each under its own store source_key ('retired:<hex>', unique
+      // per generation) as its path identity (D-5393 (history-export-pathless-file-identity)), so their dead-file keys differ.
+      const [pathA, pathB] = [`retired:${'a1'.repeat(32)}`, `retired:${'b2'.repeat(32)}`];
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: a.map((x) => ({ text: x.text })),
+        rows: x10Rows({ uuid: UA, path: pathA, ino: 9701, texts: a, id: 'claude-a-retired', generation: '0189abcd-1234-4678-9abc-0000000010b1' }) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: b.map((x) => ({ text: x.text })),
+        rows: x10Rows({ uuid: UB, path: pathB, ino: 9701, texts: b, id: 'claude-b-retired', generation: '0189abcd-1234-4678-9abc-0000000010b2' }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entries'), 'every entry is placed').toBe(5);
+      expect(countersOn(db, 'export_row_unplaced', 'export_row_blob_missing')).toEqual({ export_row_unplaced: 0, export_row_blob_missing: 0 });
+      const ofTranscript = (uuid: string): string[] => db.prepare(`SELECT e.uuid AS uuid FROM entries e JOIN transcripts t ON t.transcript_pk = e.transcript_pk
+          WHERE t.cc_session_uuid = ? ORDER BY e.entry_id`).all(uuid).map((r) => String((r as { uuid: string }).uuid));
+      expect(ofTranscript(UA)).toEqual(a.map((x) => x.uuid));
+      expect(ofTranscript(UB)).toEqual(b.map((x) => x.uuid));
+      // The files a transcript holds are its own, and each holds only that transcript's rows.
+      const heldBy = (uuid: string): string[][] => db.prepare(`SELECT f.file_id AS file_id FROM ingest_files f JOIN transcripts t ON t.transcript_pk = f.transcript_pk
+          WHERE t.cc_session_uuid = ? ORDER BY f.file_id`).all(uuid).map((f) => db.prepare(`SELECT e.uuid AS uuid FROM memberships m JOIN entries e ON e.entry_id = m.entry_id
+          WHERE m.file_id = ? ORDER BY m.line`).all((f as { file_id: number }).file_id).map((r) => String((r as { uuid: string }).uuid)));
+      expect(heldBy(UA), 'transcript A has a dead-file row holding exactly its rows').toEqual([a.map((x) => x.uuid)]);
+      expect(heldBy(UB), 'transcript B has a dead-file row holding exactly its rows').toEqual([b.map((x) => x.uuid)]);
+      expect(db.prepare(`SELECT count(*) AS n FROM entries e JOIN ingest_files f ON f.file_id = e.struct_file_id WHERE f.transcript_pk <> e.transcript_pk`).get(),
+        'no entry\'s structural file belongs to another transcript').toEqual({ n: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a replayed dead-file row exported again (a bind cleared its marks) travels under its own exported: key as its path, and replaying both segments into a fresh store yields ONE dead-file row (D-5393)', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-reexport-');
+    try {
+      const texts = x10Texts(0xf00, 2, 'zqreexp', Date.now() - 400 * X10_DAY);
+      const gone = '/home/u/gone/reexp.jsonl';
+      const ino = 9841;
+      const own = exportedSourceKey(gone, X10_DEV, ino);
+      // Segment 1 names the gone file by its real path. A store that replayed it holds the file as the dead-file row `own`
+      // and has no file_paths row for it, so when a bind clears the marks and the rows are exported again, the exporter
+      // writes that row with its source_key as the path: segment 2.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows({ uuid: x10U(0xf0), path: gone, ino, texts }) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [], rows: x10Rows({ uuid: x10U(0xf0), path: own, ino, texts }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT source_key, status FROM ingest_files').all().map((r) => ({ ...r })),
+        'one dead-file row, under the key the real path gives').toEqual([{ source_key: own, status: 'exported' }]);
+      expect([x10Count(db, 'entries'), x10Count(db, 'memberships')], 'each row once, on that one row').toEqual([2, 2]);
+      expect(db.prepare('SELECT count(*) AS n FROM entries e JOIN ingest_files f ON f.file_id = e.struct_file_id').get()).toEqual({ n: 2 });
+      expect(countersOn(db, 'export_row_unplaced', 'export_row_blob_missing', 'recover_chunk_failed'))
+        .toEqual({ export_row_unplaced: 0, export_row_blob_missing: 0, recover_chunk_failed: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('the cursor: each chunk commits its segment and position with what it applied; a rows phase split over many small budgets re-applies nothing and keeps +pairs at each of its cursors', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-cursor-', 'index+pairs');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const [U1, U2] = [x10U(0x51), x10U(0x52)];
+      plantJournalFile(box, ids.storeId, new Date(t0).toISOString().slice(0, 7), 'feedbeef', t0, [
+        journalRecord('verdict', t0 + 1, { event_key: 'none', kind: 'family', ccrc_id: X10_ID, generation: X10_G, project: 'demo', first_seen_ms: t0 + 1 }),
+        journalRecord('verdict', t0 + 2, {
+          event_key: 'none', kind: 'mapping', ccrc_id: X10_ID, generation: X10_G, cc_session_uuid: U1, declared_by: 'operator',
+          path: '/home/u/gone/c1.jsonl',
+        }),
+      ]);
+      const texts = x10Texts(0x500, 8, 'zqcursor', t0);
+      // U2's epoch claims seq 1, which the journal gave U1: one conflict, which a re-applied chunk would count twice.
+      plantSegment(box, ids.storeId, {
+        seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: U2, path: '/home/u/gone/c2.jsonl', ino: 9501, texts }),
+      });
+      const seen: string[] = [];
+      let finished = false;
+      for (let i = 0; i < 200 && !finished; i += 1) {
+        const r = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 600, chunkBytes: 300 }));
+        const c = cursorOn(db);
+        if (c !== null) seen.push(c);
+        finished = r.done || (c !== null && c.startsWith('reindex'));
+      }
+      expect(finished, `the step reached reindex: ${seen.join(' | ')}`).toBe(true);
+      const exportCursors = seen.filter((c) => c.startsWith('export-'));
+      expect(exportCursors.some((c) => new RegExp(`^export-rows:1\\.${X10_WRITER}\\.db:[1-9][0-9]*\\+pairs$`).test(c)),
+        `a pass ended inside the rows of segment 1: ${seen.join(' | ')}`).toBe(true);
+      expect(exportCursors.filter((c) => !c.endsWith('+pairs')), '+pairs survives every export cursor').toEqual([]);
+      expect(countersOn(db, 'export_epoch_conflict')).toEqual({ export_epoch_conflict: 1 });
+      expect([x10Count(db, 'entries'), x10Count(db, 'memberships')]).toEqual([8, 8]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('the floor: a per-chunk probe below it pauses the export phases with capture_paused_low_disk, the cursor where it was', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-floor-');
+    try {
+      const texts = x10Texts(0x600, 6, 'zqfloor', Date.now() - 400 * X10_DAY);
+      plantSegment(box, ids.storeId, {
+        seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0x60), path: '/home/u/gone/floor.jsonl', ino: 9601, texts }),
+      });
+      let calls = 0;
+      const roomy = { bsize: 1, bavail: 4 * 2 ** 40, blocks: 8 * 2 ** 40 };
+      const low = { bsize: 1, bavail: 1024, blocks: 8 * 2 ** 40 };
+      // Probes 1-3 (index, apply, the first export-blobs chunk) have room; the fourth, before the next chunk, does not.
+      const ctx = { ...stepCtx(box, ids, { chunkBytes: 100 }), deps: { statfs: async () => (++calls <= 3 ? roomy : low) } };
+      expect(await SW.recoveryStep(db, ctx)).toEqual({ moved: true, done: false, held: true });
+      expect(countersOn(db, 'capture_paused_low_disk')).toEqual({ capture_paused_low_disk: 1 });
+      const at = cursorOn(db);
+      expect(at).toMatch(new RegExp(`^export-blobs:1\\.${X10_WRITER}\\.db:[1-9][0-9]*$`));
+      expect(x10Count(db, 'entries'), 'no row before every blob').toBe(0);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entries')).toBe(6);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a segment whose meta names another store is skipped and counted export_segment_foreign, its rows never replayed', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-foreign-');
+    try {
+      const mine = x10Texts(0x700, 2, 'zqmine', Date.now() - 400 * X10_DAY);
+      const theirs = x10Texts(0x710, 2, 'zqtheirs', Date.now() - 400 * X10_DAY);
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: mine.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0x70), path: '/home/u/gone/mine.jsonl', ino: 9701, texts: mine }) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, metaStoreId: '0189abcd-1234-4678-9abc-0000000010ff',
+        blobs: theirs.map((t) => ({ text: t.text })), rows: x10Rows({ uuid: x10U(0x71), path: '/home/u/gone/theirs.jsonl', ino: 9702, texts: theirs, seq: 2 }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(db.prepare('SELECT uuid FROM entries ORDER BY uuid').all().map((r) => String((r as { uuid: string }).uuid))).toEqual(mine.map((t) => t.uuid));
+      expect(countersOn(db, 'export_segment_foreign')).toEqual({ export_segment_foreign: 1 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a segment that cannot be read fails its chunk (recover_chunk_failed) and the step waits for it, never skipping it; removed, the step completes', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-unreadable-');
+    try {
+      const texts = x10Texts(0x800, 2, 'zqunread', Date.now() - 400 * X10_DAY);
+      const one = plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0x80), path: '/home/u/gone/unread.jsonl', ino: 9801, texts }) });
+      const broken = path.join(path.dirname(one), `3.${X10_WRITER}.db`);
+      fs.writeFileSync(broken, 'not a database, and not a newer format either\n', { mode: 0o600 });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: false, held: false });
+      expect(countersOn(db, 'recover_chunk_failed')).toEqual({ recover_chunk_failed: 1 });
+      expect(cursorOn(db), 'the step waits at the unreadable segment').toBe(`export-blobs:3.${X10_WRITER}.db:0`);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids)), 'still unreadable: still waiting').toEqual({ moved: false, done: false, held: false });
+      fs.rmSync(broken);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entries')).toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a segment whose meta reads but whose pages do not (a partial or damaged copy) fails its chunk like an unreadable one: counted recover_chunk_failed, the line names the segment and the way out, in the blobs pass and in the rows pass', () => {
+    for (const table of ['blobs', 'entries']) {
+      const box = makeHistoryBox(`ccrc-history-b4-pagefail-${table}-`);
+      pass(box);
+      const storeId = fs.readFileSync(historyPaths(box.home).storeId, 'utf8').trim();
+      const texts = x10Texts(0x1000, 2, 'zqpagefail', Date.now() - 400 * X10_DAY);
+      const seg = plantSegment(box, storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0x100), path: '/home/u/gone/pagefail.jsonl', ino: 9851, texts }) });
+      // Overwrite the table's root page with 0xFF bytes: meta (another page) still reads, the table's rows do not.
+      const sdb = new DatabaseSync(seg, { readOnly: true });
+      const root = Number((sdb.prepare('SELECT rootpage FROM sqlite_master WHERE name = ?').get(table) as { rootpage: number }).rootpage);
+      const size = Number((sdb.prepare('PRAGMA page_size').get() as { page_size: number }).page_size);
+      sdb.close();
+      const fd = fs.openSync(seg, 'r+');
+      try { fs.writeSync(fd, Buffer.alloc(size, 0xff), 0, size, (root - 1) * size); } finally { fs.closeSync(fd); }
+      registerRecovery(box, Date.now());
+      const r = runSweep(box, []);
+      expect(r.code, `${table}: ${r.stdout}\n${r.stderr}`).toBe(0);
+      expect(r.stderr, `${table}: the line names the segment`).toContain(`${path.basename(seg)} cannot be read`);
+      expect(r.stderr, `${table}: and the way out`).toContain('Move it aside under a non-segment name to skip it (its text is not replayed), or put a good copy back');
+      expect(counters(box)['recover_chunk_failed'], `${table}: counted`).toBe(1);
+      expect(countOf(box, 'entries'), `${table}: nothing replayed past the failure`).toBe(0);
+      expect(recoverRow(box)!.completed_ms, `${table}: the step waits`).toBeNull();
+    }
+  }, HEAVY);
+
+  it('a chunk that throws rolls back what it applied with its cursor; the next pass applies it once', () => {
+    const box = makeHistoryBox('ccrc-history-b4-rollback-');
+    pass(box);
+    const storeId = fs.readFileSync(historyPaths(box.home).storeId, 'utf8').trim();
+    const t0 = Date.now() - 400 * X10_DAY;
+    const [U1, U2] = [x10U(0x91), x10U(0x92)];
+    plantJournalFile(box, storeId, new Date(t0).toISOString().slice(0, 7), 'feedbeef', t0, [
+      journalRecord('verdict', t0 + 1, { event_key: 'none', kind: 'family', ccrc_id: X10_ID, generation: X10_G, project: 'demo', first_seen_ms: t0 + 1 }),
+      journalRecord('verdict', t0 + 2, {
+        event_key: 'none', kind: 'mapping', ccrc_id: X10_ID, generation: X10_G, cc_session_uuid: U1, declared_by: 'operator',
+        path: '/home/u/gone/r1.jsonl',
+      }),
+    ]);
+    const texts = x10Texts(0x900, 4, 'zqrollback', t0);
+    plantSegment(box, storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })),
+      rows: x10Rows({ uuid: U2, path: '/home/u/gone/r2.jsonl', ino: 9901, texts }) });
+    registerRecovery(box, Date.now());
+    // Every membership insert throws: the rows chunk (one chunk at the default budget) rolls back whole.
+    pass(box, { HISTORY_TEST_THROW_SQL: 'INTO memberships' }, [PRELOADS.faults]);
+    expect(counters(box)['recover_chunk_failed']).toBe(1);
+    expect([countOf(box, 'entries'), countOf(box, 'memberships'), counters(box)['export_epoch_conflict'] ?? 0], 'nothing of the failed chunk stayed').toEqual([0, 0, 0]);
+    expect(recoverRow(box)!.cursor).toBe('export-rows');
+    pass(box);
+    expect(recoverRow(box)!.completed_ms).not.toBeNull();
+    expect([countOf(box, 'entries'), countOf(box, 'memberships'), counters(box)['export_epoch_conflict']]).toEqual([4, 4, 1]);
+  }, HEAVY);
+});
+
+// ── W1-B4 Task 11: O43, the export survives source loss (spec §9.11 O43, §9.14, §9.15) ─────────────────────────────
+// The whole path through the real sweep, the real CLI and the real rebuild. A family is captured in a real workdir
+// and compacted; its leaf derives; the export pass, run two hours on (past its hourly clock; the fixture homes carry
+// no cleanupPeriodDays, so the transcript's home has horizon 0 and, under the per-copy rule, every row is due from the
+// file's last write, two hours before the pass's clock), writes one segment. Then the transcript and
+// history.db are lost, and `doctor --rebuild` replays the journal and the export. Only the export holds the text, the
+// gone file's memberships and the epoch's launch cwd, so each read verb that answers proves the segment came back.
+describe('O43: the export survives source loss (W1-B4 Task 11)', () => {
+  const O43_ID = 'claude-a-export';
+  const O43_G = '0189abcd-1234-4678-9abc-0000000043a1';
+  const O43_U = 'b43b43b4-0000-4000-8000-000000000431';
+  const O43_HOUR = 3_600_000;
+  const O43_WORK = 'Polishing the export fixture.';
+  const O43_TEXT = `zqb4export ask about ${O43_WORK}`;
+
+  interface O43Built { box: HistoryBox; transcript: string; workdir: string; leaf: string; segment: string; dev: bigint; ino: bigint }
+  /** A bound box whose store captured one compacted family launched in a real workdir, derived its leaf, and then
+   *  exported every row in one pass run two hours on. Nothing writes the transcript after it is planted, until a case
+   *  appends to it, so its mtime, the per-copy clock, is before every pass's. */
+  function o43Built(prefix: string): O43Built {
+    const box = makeHistoryBox(prefix, { role: 'fleet' });
+    const workdir = path.join(box.home, 'work', 'w');
+    fs.mkdirSync(workdir, { recursive: true });
+    plantSession(box, O43_ID, { uuid: O43_U, generation: O43_G, project: 'demo', workdir });
+    const transcript = plantTranscript(box, 'claude-a', SLUG, O43_U, rrCompacted(O43_U, 430, O43_WORK, workdir, 'zqb4export'));
+    spoolLine(box, O43_ID, rrStart(O43_ID, O43_U, 'startup', { reg: O43_U, gen: O43_G }));
+    rrTickUntil(box, () => countOf(box, 'entries') === 5 && rrLeafIds(box).length === 1, 10);
+    const leaf = rrLeafIds(box)[0]!;
+    const st = fs.statSync(transcript, { bigint: true });
+    const r = runDriver(box, { offsetMs: 2 * O43_HOUR });
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    const segs = segmentsOf(box).map((s) => path.basename(s));
+    expect(segs, 'one segment, written past the export\'s hourly clock').toHaveLength(1);
+    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', segs[0]!)[0]!.n, 'every row exported').toBe(5);
+    return { box, transcript, workdir, leaf, segment: segs[0]!, dev: st.dev, ino: st.ino };
+  }
+
+  const launch = (box: HistoryBox): unknown[] =>
+    rrQ(box, 'SELECT cc_session_uuid, cwd, cwd_real, started_ms, git_branch FROM epochs ORDER BY cc_session_uuid');
+
+  it('O43: exported, then the transcript and history.db lost: doctor --rebuild replays the segment, and expand, describe and --workspace answer from it; nothing is exported twice', async () => {
+    const b = o43Built('ccrc-hist-o43-');
+    const { box } = b;
+    const before = launch(box);
+    expect(before, 'CONTROL: the lost store knew the launch cwd').toEqual([expect.objectContaining({ cc_session_uuid: O43_U, cwd: b.workdir })]);
+    fs.rmSync(b.transcript);
+    rrLose(box, { binding: false, journal: false });
+    const r = await cliOnPty(box, ['doctor', '--rebuild']);
+    expect(r.code, r.out).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box) && rrLeafIds(box).length === 1, 12);
+    expect(rrLeafIds(box), 'the leaf re-derives from the exported copy, with the lost store\'s id').toEqual([b.leaf]);
+    expect(launch(box), 'the epoch\'s launch facts came back from the segment alone').toEqual(before);
+    expect(rrQ(box, 'SELECT source_key, status FROM ingest_files ORDER BY file_id'), 'one dead-file row, and no live one')
+      .toEqual([{ source_key: exportedSourceKey(b.transcript, b.dev, b.ino), status: 'exported' }]);
+    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', b.segment)[0]!.n, 'replayed rows are marked').toBe(5);
+    const pane = withPane(box, O43_ID);
+    const ex = runCli(box, ['expand', rrU(430)], { env: pane });
+    expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
+    expect(ex.stdout).toContain(O43_TEXT);
+    const d = runCli(box, ['describe', b.leaf, '--json'], { env: pane });
+    expect(d.code, `${d.stdout}\n${d.stderr}`).toBe(0);
+    expect((d.json?.['items'] as Array<{ node_id: string }>)[0]!.node_id).toBe(b.leaf);
+    const w = runCli(box, ['tree', '--workspace', '--json'], { env: pane });
+    expect(w.code, `${w.stdout}\n${w.stderr}`).toBe(0);
+    expect((w.json?.['scope'] as { families: Array<{ ccrc_id: string }> }).families.map((f) => f.ccrc_id)).toEqual([O43_ID]);
+    // The replay marked every row, so a pass past the rebuilt store's own hourly clock finds nothing due, though the
+    // per-copy rule makes every row of the gone transcript due at once: marked rows are never candidates.
+    const passBefore = Number(metaOf(box, HEALTH_META.exportPassMs) ?? 0);
+    const again = runDriver(box, { offsetMs: 2 * O43_HOUR });
+    expect(again.code, `${again.stdout}\n${again.stderr}`).toBe(0);
+    expect(Number(metaOf(box, HEALTH_META.exportPassMs)), 'the pass ran (it did not wait on its clock), and found nothing due').toBeGreaterThan(passBefore);
+    expect(segmentsOf(box).map((s) => path.basename(s))).toEqual([b.segment]);
+    expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
+  }, 2.5 * HEAVY);
+
+  it('O43, a reused inode: the gone file\'s exported memberships land on its exported: row, never on the live file that now has its inode, and ingesting that file moves nothing of them', async () => {
+    const b = o43Built('ccrc-hist-o43-inode-');
+    const { box } = b;
+    const B_ID = 'claude-a-inode';
+    const B_U = 'b43b43b4-0000-4000-8000-000000000432';
+    const B_G = '0189abcd-1234-4678-9abc-0000000043b1';
+    const aUuids = [0, 1, 2, 3, 4].map((k) => rrU(430 + k));
+    const bUuids = [rrU(440), rrU(441)];
+    // The reuse: A's file renamed onto B's canonical path keeps its inode, and rewriting it in place keeps it too.
+    const pB = path.join(path.dirname(b.transcript), `${B_U}.jsonl`);
+    fs.renameSync(b.transcript, pB);
+    fs.writeFileSync(pB, `${rrTalk(B_U, 440, 2).map((x) => JSON.stringify(x)).join('\n')}\n`);
+    expect(fs.statSync(pB, { bigint: true }).ino, 'CONTROL: B\'s file holds A\'s inode').toBe(b.ino);
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--rebuild'])).code).toBe(0);
+    plantSession(box, B_ID, { uuid: B_U, generation: B_G, project: 'demo' });
+    spoolLine(box, B_ID, rrStart(B_ID, B_U, 'startup', { reg: B_U, gen: B_G }));
+    const held = (fileId: number): string[] => rrQ<{ uuid: string }>(box,
+      'SELECT e.uuid AS uuid FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? ORDER BY m.line', fileId).map((x) => x.uuid);
+    const fileOf = (sourceKey: string): number | undefined => rrQ<{ file_id: number }>(box,
+      'SELECT file_id FROM ingest_files WHERE source_key = ? AND dev = ? AND ino = ?', sourceKey, Number(b.dev), Number(b.ino))[0]?.file_id;
+    rrTickUntil(box, () => rrRecovered(box) && fileOf('') !== undefined && held(fileOf('')!).length === 2, 12);
+    const dead = fileOf(exportedSourceKey(b.transcript, b.dev, b.ino));
+    const live = fileOf('')!;
+    expect(dead, 'A\'s dead-file row').toBeDefined();
+    expect(rrQ(box, 'SELECT status FROM ingest_files WHERE file_id = ?', dead!)).toEqual([{ status: 'exported' }]);
+    expect(held(dead!)).toEqual(aUuids);
+    expect(held(live)).toEqual(bUuids);
+    rrTickUntil(box, () => true, 1);   // one more tick over the live file
+    expect(held(dead!), 'nothing of A moved').toEqual(aUuids);
+    expect(held(live)).toEqual(bUuids);
+    expect(counters(box)['inode_recycled'] ?? 0, 'the dead row is never taken for the live file').toBe(0);
+    expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
+  }, 2.5 * HEAVY);
+
+  it('review focus: the same rebuild with the live transcript KEPT and still growing: expand prints each row once, the leaf keeps its id, the gone file\'s memberships stay on its exported: row, the replayed marks survive the re-ingest, and the next pass exports only the rows written since', async () => {
+    const b = o43Built('ccrc-hist-o43-kept-');
+    const { box } = b;
+    const aUuids = [0, 1, 2, 3, 4].map((k) => rrU(430 + k));
+    const grown = [rrU(435), rrU(436)];
+    // The session goes on after the export: two rows more land in the live transcript (same inode) and no tick reads them
+    // before history.db is lost, so the rebuilt store meets five replayed, marked rows and two fresh, unmarked ones.
+    const more = [
+      userRow({ uuid: grown[0]!, ts: rrIso(2), parentUuid: aUuids[4]!, sessionId: O43_U, cwd: b.workdir, text: 'zqb4export grew after the export' }),
+      assistantRow({ uuid: grown[1]!, ts: rrIso(1), parentUuid: grown[0]!, sessionId: O43_U, cwd: b.workdir, text: 'zqb4export grew, answered' }),
+    ];
+    fs.appendFileSync(b.transcript, more.map((r) => `${JSON.stringify(r)}\n`).join(''));
+    expect(fs.statSync(b.transcript, { bigint: true }).ino, 'CONTROL: the live file keeps its inode while it grows').toBe(b.ino);
+    expect(countOf(box, 'entries'), 'CONTROL: the lost store knew five rows, all exported').toBe(5);
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--rebuild'])).code).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box) && countOf(box, 'entries') === 7 && rrLeafIds(box).length === 1
+      && rrQ<{ n: number }>(box, "SELECT count(*) AS n FROM ingest_files WHERE source_key = '' AND eof_ms IS NOT NULL")[0]!.n === 1, 12);
+    expect(rrLeafIds(box), 'the leaf keeps the lost store\'s id').toEqual([b.leaf]);
+    const marks = (): Array<{ uuid: string; seg: string | null }> => rrQ(box, 'SELECT uuid, exported_seg AS seg FROM entries ORDER BY uuid');
+    expect(countOf(box, 'entries'), 'one row per uuid, whichever copy brought it').toBe(7);
+    const ex = runCli(box, ['expand', b.leaf], { env: withPane(box, O43_ID) });
+    expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
+    expect(ex.stdout.split(O43_TEXT).length - 1, 'each row once').toBe(1);
+    // Review Focus 5: an exported: dead-file row and the re-ingested live row coexist, and neither takes the other's memberships.
+    const fileOf = (sourceKey: string): number | undefined => rrQ<{ file_id: number }>(box,
+      'SELECT file_id FROM ingest_files WHERE source_key = ? AND dev = ? AND ino = ?', sourceKey, Number(b.dev), Number(b.ino))[0]?.file_id;
+    const held = (fileId: number): string[] => rrQ<{ uuid: string }>(box,
+      'SELECT e.uuid AS uuid FROM memberships m JOIN entries e ON e.entry_id = m.entry_id WHERE m.file_id = ? ORDER BY m.line', fileId).map((x) => x.uuid);
+    const dead = fileOf(exportedSourceKey(b.transcript, b.dev, b.ino));
+    const live = fileOf('');
+    expect(dead, 'the gone copy\'s dead-file row').toBeDefined();
+    expect(live, 'the live file\'s own row').toBeDefined();
+    expect(dead).not.toBe(live);
+    expect(rrQ(box, 'SELECT count(*) AS n FROM ingest_files'), 'two rows for the one inode, and no third').toEqual([{ n: 2 }]);
+    expect(rrQ(box, 'SELECT status FROM ingest_files WHERE file_id = ?', dead!), 'the gone copy\'s row stays exported').toEqual([{ status: 'exported' }]);
+    expect(rrQ(box, 'SELECT status FROM ingest_files WHERE file_id = ?', live!), 'and the file on disk is live').toEqual([{ status: 'live' }]);
+    expect(held(dead!), 'the dead row holds exactly what the segment exported').toEqual(aUuids);
+    expect(held(live!), 'the live row holds everything the file holds').toEqual([...aUuids, ...grown]);
+    expect(rrQ(box, 'SELECT DISTINCT struct_file_id AS f FROM entries'), 'the newest-rank rule puts every entry\'s structure on the live copy').toEqual([{ f: live }]);
+    expect(marks(), 'the re-ingest left the replayed marks and the owed rows unmarked')
+      .toEqual([...aUuids.map((uuid) => ({ uuid, seg: b.segment })), ...grown.map((uuid) => ({ uuid, seg: null }))]);
+    expect(segmentsOf(box).map((x) => path.basename(x)), 'no pass has exported since the rebuild').toEqual([b.segment]);
+    // The next pass past the rebuilt store's hourly clock exports the two rows written since, and only those.
+    const next = runDriver(box, { offsetMs: 2 * O43_HOUR });
+    expect(next.code, `${next.stdout}\n${next.stderr}`).toBe(0);
+    const names = segmentsOf(box).map((x) => path.basename(x));
+    expect(names, 'exactly one new segment').toHaveLength(2);
+    expect(names[0]).toBe(b.segment);
+    expect(segmentRows(path.join(exportDirOf(box), names[1]!), 'entries').map((r) => r['uuid']).sort(), 'it holds the two new rows and nothing else').toEqual(grown);
+    expect(marks(), 'the first five keep the original segment; the two new ones took the new one')
+      .toEqual([...aUuids.map((uuid) => ({ uuid, seg: b.segment })), ...grown.map((uuid) => ({ uuid, seg: names[1]! }))]);
+    expect([held(dead!), held(live!)], 'a pass moves no membership').toEqual([aUuids, [...aUuids, ...grown]]);
+    expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
+  }, 2.5 * HEAVY);
+});
+
+// ── W1-B4 fix round 1, F6 (review 614; D-5399 (history-export-late-unlinked-sidecar-clears-blob-mark)): an unlinked sidecar whose
+// blob another transcript already exported ────────────────────────────────────────────────────────────────────────────────
+// The fixture. Two sessions of one project in two workspaces (W1, W2), each with a transcript: T1 (session one) and T2
+// (session two). T1's own LINKED sidecar is the blob's earlier carrier: a tool_result row names the file, and the file is
+// the tool's saved output. A sidecar's blob is the file's own bytes, which no JSONL line is, so an entry body cannot share
+// it. (An unlinked first carrier would do as well: the pass offers it while its blob is unexported.) The later one is an
+// UNLINKED sidecar S of T2: the same bytes in a file no row names, written after the pass that exported T1's. Before D-5399
+// the pass never offered S (EXPORT_UNLINKED_SQL keeps only blobs with exported_ms NULL, and the census counts by the blob's
+// mark), so no segment held S's row; now S's ingest takes the blob's mark off, with its referrers' (T1's tool_result row), and
+// the next pass carries the blob once, S's row and T1's linked row with its entry. Everything is due and exported; then
+// both transcripts, both sidecar files and history.db are lost, `doctor --rebuild` replays the segments, and every read
+// scoped to T2 must still find S: the grep forms (FTS and --regex; tool provenance is searchable by default, so no flag
+// brings it in) by --workspace and by --session, each also in the family's own default scope. expand and describe answer
+// the same before and after: they list only a sidecar LINKED to an entry (recall.mjs expandItems skips entry_id NULL),
+// so S is not on them in the control either, and they are recorded, not asserted to show S.
+describe('F6 (D-5399): an unlinked sidecar whose blob another transcript exported is still found by scoped reads after a rebuild from the segments (W1-B4 fix round 1)', () => {
+  const F6_ID1 = 'claude-a-f6one';
+  const F6_ID2 = 'claude-a-f6two';
+  const F6_U1 = 'f6f6f6f6-0000-4000-8000-000000000611';
+  const F6_U2 = 'f6f6f6f6-0000-4000-8000-000000000612';
+  const F6_G1 = '0189abcd-1234-4678-9abc-0000000f6a01';
+  const F6_G2 = '0189abcd-1234-4678-9abc-0000000f6a02';
+  const F6_SLUG1 = '-home-u-tree-f6w1';
+  const F6_SLUG2 = '-home-u-tree-f6w2';
+  const F6_HOUR = 3_600_000;
+  const F6_WORD = 'zqf6sidecar';
+  const F6_SHARED = 'f6shared.txt';
+  const F6_ORPHAN = 'f6orphan.txt';
+  const F6_BODY = `${F6_WORD} the tool output two transcripts saved byte for byte\nthe second line of the shared output\n`;
+
+  interface F6Read { key: string; pane: string; args: string[]; asserted: boolean }
+  interface F6Answer { exit: number | null; sidecars: string[]; hasS: boolean; hasShared: boolean; sLine: string | null }
+  /** One read through the real CLI, in the JSON form (its items name the sidecars) and the human form (the line a session
+   *  sees). `hasS` is S's name or its text anywhere in the answer; `sLine` the human line that holds it. */
+  const f6Ask = (box: HistoryBox, r: F6Read): F6Answer => {
+    const env = withPane(box, r.pane);
+    const j = runCli(box, [...r.args, '--json'], { env });
+    const h = runCli(box, r.args, { env });
+    const items = ((j.json?.['items'] ?? []) as Array<Record<string, unknown>>);
+    const sidecars = items.map((i) => i['sidecar']).filter((x): x is string => typeof x === 'string');
+    const text = `${h.stdout}\n${j.stdout}`;
+    const sLine = h.stdout.split('\n').find((l) => l.includes(F6_ORPHAN) || l.includes('zqf6sidecar')) ?? null;
+    return {
+      exit: h.code, sidecars, hasS: sidecars.includes(F6_ORPHAN) || text.includes(F6_ORPHAN),
+      hasShared: sidecars.includes(F6_SHARED) || text.includes(F6_SHARED), sLine: sLine === null ? null : sLine.slice(0, 240),
+    };
+  };
+
+  for (const journal of [false, true]) {
+    it(`F6 (D-5399): ${journal ? 'the journal lost with history.db (the segments alone)' : 'history.db lost, the journal kept'}: grep (FTS and --regex) by --workspace and by --session finds the unlinked sidecar after doctor --rebuild, as it did before`, async () => {
+      const box = makeHistoryBox(`ccrc-hist-f6${journal ? 'j' : 'k'}-`, { role: 'fleet' });
+      const W1 = path.join(box.home, 'work', 'w1');
+      const W2 = path.join(box.home, 'work', 'w2');
+      fs.mkdirSync(W1, { recursive: true });
+      fs.mkdirSync(W2, { recursive: true });
+      const dirOf = (slug: string, uuid: string): string => path.join(box.accountHome['claude-a']!, 'projects', slug, uuid, 'tool-results');
+      plantSession(box, F6_ID1, { uuid: F6_U1, generation: F6_G1, project: 'demo', workdir: W1 });
+      plantSession(box, F6_ID2, { uuid: F6_U2, generation: F6_G2, project: 'demo', workdir: W2 });
+      const t1 = plantTranscript(box, 'claude-a', F6_SLUG1, F6_U1, [
+        userRow({ uuid: rrU(610), ts: rrIso(12), parentUuid: null, sessionId: F6_U1, cwd: W1, text: 'zqf6one ask for the output' }),
+        toolResultRow({
+          uuid: rrU(611), ts: rrIso(11), parentUuid: rrU(610), sessionId: F6_U1, cwd: W1, toolUseId: 'toolu_01F6ONE',
+          content: `Output too large. Full output saved to: /home/u/x/tool-results/${F6_SHARED}`,
+        }),
+        assistantRow({ uuid: rrU(612), ts: rrIso(10), parentUuid: rrU(611), sessionId: F6_U1, cwd: W1, text: 'zqf6one answer' }),
+      ]);
+      const t2 = plantTranscript(box, 'claude-a', F6_SLUG2, F6_U2, rrCompacted(F6_U2, 620, 'Polishing workspace two.', W2, 'zqf6two'));
+      fs.mkdirSync(dirOf(F6_SLUG1, F6_U1), { recursive: true });
+      fs.writeFileSync(path.join(dirOf(F6_SLUG1, F6_U1), F6_SHARED), F6_BODY);
+      spoolLine(box, F6_ID1, rrStart(F6_ID1, F6_U1, 'startup', { reg: F6_U1, gen: F6_G1 }));
+      spoolLine(box, F6_ID2, rrStart(F6_ID2, F6_U2, 'startup', { reg: F6_U2, gen: F6_G2 }));
+      const leafOf = (id: string): string[] => rrQ<{ node_id: string }>(box,
+        "SELECT n.node_id AS node_id FROM nodes n JOIN sessions s ON s.session_pk = n.session_pk WHERE s.ccrc_id = ? AND n.kind <> 'condensed' ORDER BY n.node_id", id).map((r) => r.node_id);
+      rrTickUntil(box, () => countOf(box, 'entries') === 8 && countOf(box, 'sidecars') === 1 && leafOf(F6_ID2).length === 1
+        && rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM epochs WHERE confirmed_ms IS NOT NULL')[0]!.n === 2, 12);
+
+      // The pass that exports T1's rows, T2's rows and the blob: every row is due (the files were last written before the clock).
+      const first = runDriver(box, { offsetMs: 2 * F6_HOUR });
+      expect(first.code, `${first.stdout}\n${first.stderr}`).toBe(0);
+      const names = segmentsOf(box).map((n) => path.basename(n));
+      expect(names, 'one segment').toHaveLength(1);
+      const seg1 = path.join(exportDirOf(box), names[0]!);
+      expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', names[0]!)[0]!.n, 'every row exported').toBe(8);
+      const blobSha = rrQ<{ sha: string }>(box, 'SELECT lower(hex(b.sha256)) AS sha FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id WHERE s.name = ?', F6_SHARED)[0]!.sha;
+      expect(rrQ(box, 'SELECT exported_seg AS seg FROM blobs WHERE lower(hex(sha256)) = ?', blobSha), 'CONTROL: T1\'s sidecar carried the blob').toEqual([{ seg: names[0]! }]);
+      expect(segmentRows(seg1, 'sidecars').map((x) => [x['name'], x['uuid']])).toEqual([[F6_SHARED, rrU(611)]]);
+
+      // S arrives after the blob was exported: a scan tick finds the file, an unlinked sidecar of T2 on the same blob.
+      fs.mkdirSync(dirOf(F6_SLUG2, F6_U2), { recursive: true });
+      fs.writeFileSync(path.join(dirOf(F6_SLUG2, F6_U2), F6_ORPHAN), F6_BODY);
+      for (let k = 1; k <= 3 && countOf(box, 'sidecars') < 2; k += 1) {
+        const tick = runDriver(box, { offsetMs: 2 * F6_HOUR + 35 * MIN * k });
+        expect(tick.code, `${tick.stdout}\n${tick.stderr}`).toBe(0);
+      }
+      expect(rrQ(box, `SELECT s.name AS name, s.entry_id IS NULL AS unlinked, t.cc_session_uuid AS uuid FROM sidecars s
+        JOIN transcripts t ON t.transcript_pk = s.transcript_pk ORDER BY s.name`), 'the fixture must store S unlinked, under T2')
+        .toEqual([{ name: F6_ORPHAN, unlinked: 1, uuid: F6_U2 }, { name: F6_SHARED, unlinked: 0, uuid: F6_U1 }]);
+      expect(rrQ<{ n: number }>(box, 'SELECT count(DISTINCT blob_id) AS n FROM sidecars')[0]!.n, 'the two sidecars share one blob').toBe(1);
+      // D-5399: S's ingest took the blob's mark off, and its referrers' (T1's tool_result row, which links the blob through its
+      // sidecar); every other row keeps segment 1.
+      expect(rrQ(box, 'SELECT exported_ms IS NULL AS unmarked, exported_seg AS seg FROM blobs WHERE lower(hex(sha256)) = ?', blobSha),
+        'S\'s ingest cleared the blob\'s mark').toEqual([{ unmarked: 1, seg: null }]);
+      expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries (the blob is unmarked, so every entry that references it is too)').toEqual([]);
+      expect(rrQ(box, 'SELECT uuid FROM entries WHERE exported_ms IS NULL ORDER BY uuid'), 'the mark of the one entry that references it (T1\'s tool_result row) is off with it')
+        .toEqual([{ uuid: rrU(611) }]);
+      expect(metaOf(box, 'export_due'), 'the census counts the blob due again, so doctor sees what the pass owes (before D-5399 it read 0 and nothing was owed)').toBe('1');
+
+      // The next pass past the hourly clock: the unlinked run offers the blob again, and the pass writes a second segment.
+      const last = runDriver(box, { offsetMs: 6 * F6_HOUR });
+      expect(last.code, `${last.stdout}\n${last.stderr}`).toBe(0);
+      const both = segmentsOf(box).map((n) => path.basename(n));
+      expect(both, 'S wrote a second segment').toHaveLength(2);
+      expect(both[0]).toBe(names[0]);
+      const seg2 = path.join(exportDirOf(box), both[1]!);
+      expect(segmentRows(seg2, 'blobs').map((b) => b['sha256']), 'it carries the blob\'s bytes once').toEqual([blobSha]);
+      expect(segmentRows(seg2, 'sidecars').map((x) => [x['name'], x['uuid']]).sort(), 'with BOTH sidecar rows: S\'s, unlinked, and T1\'s, linked, which travels with its re-exported entry')
+        .toEqual([[F6_ORPHAN, null], [F6_SHARED, rrU(611)]]);
+      expect(segmentRows(seg2, 'entries').map((e) => e['uuid']), 'the entry that references the blob is written again, the others stay in segment 1').toEqual([rrU(611)]);
+      expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', both[0]!)[0]!.n).toBe(7);
+      expect(rrQ(box, 'SELECT exported_seg AS seg FROM blobs WHERE lower(hex(sha256)) = ?', blobSha), 'the blob is marked by the second segment').toEqual([{ seg: both[1]! }]);
+      expect(metaOf(box, 'export_due'), 'nothing is left due').toBe('0');
+      expect(strandedBlobs(box)).toEqual([]);
+
+      const leaf = leafOf(F6_ID2)[0]!;
+      const reads: F6Read[] = [
+        { key: 'grep FTS --workspace (pane two)', pane: F6_ID2, args: ['grep', '--workspace', F6_WORD], asserted: true },
+        { key: 'grep FTS --session two (pane one)', pane: F6_ID1, args: ['grep', '--session', F6_ID2, F6_WORD], asserted: true },
+        { key: 'grep FTS own family (pane two)', pane: F6_ID2, args: ['grep', F6_WORD], asserted: true },
+        { key: 'grep --regex --workspace (pane two)', pane: F6_ID2, args: ['grep', '--workspace', '--regex', F6_WORD], asserted: true },
+        { key: 'grep --regex --session two (pane one)', pane: F6_ID1, args: ['grep', '--session', F6_ID2, '--regex', F6_WORD], asserted: true },
+        { key: 'grep --regex own family (pane two)', pane: F6_ID2, args: ['grep', '--regex', F6_WORD], asserted: true },
+        { key: 'expand T2 leaf (pane two)', pane: F6_ID2, args: ['expand', leaf], asserted: false },
+        { key: 'describe T2 leaf (pane two)', pane: F6_ID2, args: ['describe', leaf], asserted: false },
+        { key: 'expand T2 first row (pane two)', pane: F6_ID2, args: ['expand', rrU(620)], asserted: false },
+        // contrast: what the same segment still carries for T1, whose sidecar is linked
+        { key: 'grep FTS own family (pane one)', pane: F6_ID1, args: ['grep', F6_WORD], asserted: false },
+        { key: 'grep FTS --project (pane two)', pane: F6_ID2, args: ['grep', '--project', F6_WORD], asserted: false },
+        { key: 'expand T1 tool_result (pane one)', pane: F6_ID1, args: ['expand', rrU(611)], asserted: false },
+        // CONTROL of the scope: T2's own rows are found by --workspace on both sides of the rebuild
+        { key: 'grep FTS T2 row text --workspace (pane two)', pane: F6_ID2, args: ['grep', '--workspace', 'zqf6two'], asserted: false },
+      ];
+      const ask = (): Record<string, F6Answer> => Object.fromEntries(reads.map((r) => [r.key, f6Ask(box, r)]));
+      const before = ask();
+      for (const r of reads.filter((x) => x.asserted)) expect(before[r.key]!.hasS, `CONTROL: ${r.key} finds S before the loss: ${JSON.stringify(before[r.key])}`).toBe(true);
+      expect(before['expand T1 tool_result (pane one)']!.hasShared, 'CONTROL: expand shows a LINKED sidecar').toBe(true);
+
+      // The loss: every source of the text, then the rebuild from the segments.
+      fs.rmSync(t1);
+      fs.rmSync(t2);
+      fs.rmSync(dirOf(F6_SLUG1, F6_U1), { recursive: true });
+      fs.rmSync(dirOf(F6_SLUG2, F6_U2), { recursive: true });
+      rrLose(box, { binding: false, journal });
+      const rebuilt = await cliOnPty(box, ['doctor', '--rebuild']);
+      expect(rebuilt.code, rebuilt.out).toBe(0);
+      rrTickUntil(box, () => rrRecovered(box) && countOf(box, 'entries') === 8 && leafOf(F6_ID2).length === 1, 12);
+      expect(leafOf(F6_ID2), 'the leaf keeps its id').toEqual([leaf]);
+
+      const after = ask();
+      expect(after['grep FTS T2 row text --workspace (pane two)']!.exit, 'CONTROL: the rebuilt --workspace scope holds T2\'s rows').toBe(0);
+      const missing = reads.filter((r) => r.asserted && !after[r.key]!.hasS).map((r) => r.key);
+      const table = reads.map((r) => `${r.key}: before ${JSON.stringify(before[r.key])} / after ${JSON.stringify(after[r.key])}`).join('\n');
+      expect(missing, `scoped reads that no longer find S after the rebuild:\n${table}`).toEqual([]);
+      for (const r of reads.filter((x) => !x.asserted)) {
+        expect([after[r.key]!.exit, after[r.key]!.hasS, after[r.key]!.hasShared], `${r.key} answers as before`).toEqual([before[r.key]!.exit, before[r.key]!.hasS, before[r.key]!.hasShared]);
+      }
+    }, 4 * HEAVY);
+  }
+});
+
+// ── W1-B4 whole-branch review: replay marks an entry only while every blob it references is exported or pruned ──────
+// D-5395 (history-export-mark-needs-its-blobs). The real verbs, in fixture HOMEs: a late variant (or a late-linked
+// sidecar) clears its entry's mark; a backup taken then holds that entry unmarked over a live, unmarked blob; the loss
+// of history.db and `doctor --restore` replay the segment, which holds the entry without that blob. Replay used to
+// mark the entry unconditionally, so no pass ever offered it again and the census counted the blob due for good.
+describe('D-5395: a restore replays an exported entry without marking it over a blob its segment lacks (W1-B4 whole-branch review)', () => {
+  const D_HOUR = 3_600_000;
+  /** Three rows of session RR_U1 at fixed times (so a later line can repeat a uuid and its time), exported in one pass two
+   *  hours on. `extra` adds rows after the three. */
+  function d5395Built(prefix: string, extra: (at: (k: number) => Record<string, unknown>) => object[] = () => []):
+    { box: HistoryBox; transcript: string; segment: string; at: (k: number) => { uuid: string; ts: string; parentUuid: string | null; sessionId: string; cwd: string } } {
+    const box = makeHistoryBox(prefix, { role: 'fleet' });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    const times = [5, 4, 3, 2].map((m) => rrIso(m));
+    const at = (k: number) => ({ uuid: rrU(1 + k), ts: times[k]!, parentUuid: k === 0 ? null : rrU(k), sessionId: RR_U1, cwd: WORK });
+    const rows = [
+      userRow({ ...at(0), text: 'zqd5395 ask one' }),
+      assistantRow({ ...at(1), text: 'zqd5395 answer' }),
+      ...extra(at as never),
+    ];
+    const transcript = plantTranscript(box, 'claude-a', SLUG, RR_U1, rows);
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => countOf(box, 'entries') === rows.length);
+    const r = runDriver(box, { offsetMs: 2 * D_HOUR });
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    const names = segmentsOf(box).map((n) => path.basename(n));
+    expect(names, 'one segment, written past the export\'s hourly clock').toHaveLength(1);
+    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries WHERE exported_seg = ?', names[0]!)[0]!.n, 'every row exported').toBe(rows.length);
+    return { box, transcript, segment: names[0]!, at };
+  }
+  /** A scan tick 35 minutes after the export pass (which ran two hours on): it ingests what landed since, and the export,
+   *  an hour from its last pass, waits. A tick at the real time would run the export at once: the pass clock stands in
+   *  the future then, and a clock that went backwards runs the pass (D-4756). */
+  const lateTick = (box: HistoryBox): void => {
+    const r = runDriver(box, { offsetMs: 2 * D_HOUR + 35 * MIN });
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+  };
+  const markOf = (box: HistoryBox, n: number): string | null =>
+    rrQ<{ seg: string | null }>(box, 'SELECT exported_seg AS seg FROM entries WHERE uuid = ?', rrU(n))[0]!.seg;
+
+  it('a late variant, then doctor --backup, the loss of history.db and doctor --restore: replay leaves the entry unmarked, the next pass exports the late body, and the census reads 0', async () => {
+    const { box, transcript, segment, at } = d5395Built('ccrc-hist-d5395a-');
+    fs.appendFileSync(transcript, `${JSON.stringify(userRow({ ...at(0), text: 'zqd5395 ask one, revised' }))}\n`);   // the same uuid and time, another body
+    lateTick(box);
+    expect(countOf(box, 'entry_variants'), 'the fixture must make a variant').toBe(2);
+    expect([markOf(box, 1), markOf(box, 2)], 'CONTROL: the late variant cleared its entry\'s mark').toEqual([null, segment]);
+    const name = rrBackup(box);
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--restore', name])).code).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(markOf(box, 2), 'the other row\'s replayed mark stands').toBe(segment);
+    expect(markOf(box, 1), 'the entry holding the late body is not marked: that body is in no segment').toBeNull();
+    expect(strandedBlobs(box)).toEqual([]);
+    const next = runDriver(box, { offsetMs: 4 * D_HOUR });
+    expect(next.code, `${next.stdout}\n${next.stderr}`).toBe(0);
+    const names = segmentsOf(box).map((n) => path.basename(n));
+    expect(names, 'one new segment').toHaveLength(2);
+    const seg2 = path.join(exportDirOf(box), names[1]!);
+    expect(segmentRows(seg2, 'entries').map((e) => e['uuid'])).toEqual([rrU(1)]);
+    expect(segmentRows(seg2, 'blobs'), 'it carries the late body').toHaveLength(1);
+    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM blobs WHERE z IS NOT NULL AND exported_ms IS NULL')[0]!.n, 'no live blob is left unexported').toBe(0);
+    expect(metaOf(box, 'export_due'), 'the census reads nothing due').toBe('0');
+    expect(strandedBlobs(box)).toEqual([]);
+  }, 2.5 * HEAVY);
+
+  it('the same with a sidecar linked late: the backup holds the entry unmarked over the sidecar\'s unexported bytes, and the restore does not mark it', async () => {
+    const dir = (b: HistoryBox): string => path.join(b.accountHome['claude-a']!, 'projects', SLUG, RR_U1, 'tool-results');
+    const { box, segment } = d5395Built('ccrc-hist-d5395s-', (at) => [toolResultRow({
+      ...(at(2) as { uuid: string; ts: string; parentUuid: string | null; sessionId: string; cwd: string }), toolUseId: 'toolu_01D5395',
+      content: 'Output too large. Full output saved to: /home/u/x/tool-results/d5395late.txt',
+    })]);
+    fs.mkdirSync(dir(box), { recursive: true });
+    fs.writeFileSync(path.join(dir(box), 'd5395late.txt'), 'zqd5395 the tool output that landed after its row was exported\n');
+    lateTick(box);
+    expect(rrQ(box, 'SELECT s.name AS name, e.uuid AS uuid FROM sidecars s JOIN entries e ON e.entry_id = s.entry_id'), 'CONTROL: the sidecar is linked').toEqual([{ name: 'd5395late.txt', uuid: rrU(3) }]);
+    expect([markOf(box, 1), markOf(box, 3)], 'CONTROL: the late sidecar cleared its entry\'s mark').toEqual([segment, null]);
+    const name = rrBackup(box);
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--restore', name])).code).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(markOf(box, 3), 'the entry linked to bytes in no segment is not marked').toBeNull();
+    expect(markOf(box, 1)).toBe(segment);
+    expect(strandedBlobs(box)).toEqual([]);
+    const next = runDriver(box, { offsetMs: 4 * D_HOUR });
+    expect(next.code, `${next.stdout}\n${next.stderr}`).toBe(0);
+    const names = segmentsOf(box).map((n) => path.basename(n));
+    expect(names).toHaveLength(2);
+    const seg2 = path.join(exportDirOf(box), names[1]!);
+    expect(segmentRows(seg2, 'entries').map((e) => e['uuid'])).toEqual([rrU(3)]);
+    expect(segmentRows(seg2, 'sidecars').map((x) => x['name'])).toEqual(['d5395late.txt']);
+    expect(segmentRows(seg2, 'blobs'), 'it carries the sidecar\'s bytes').toHaveLength(1);
+    expect(metaOf(box, 'export_due'), 'the census reads nothing due').toBe('0');
+    expect(strandedBlobs(box)).toEqual([]);
+  }, 2.5 * HEAVY);
+  // D-5396 (history-export-bind-clears-pruned-referrers). The backup is taken AFTER prune took row 1's first body, so the
+  // restored store holds that body as a tombstone whose mark names a segment this box no longer has. The check after the
+  // restore's bind clears the tombstone's referrers too, and the pass writes row 1 again with a stub of the body; replay
+  // never gives a tombstone its bytes back, from the stub or from anything else, so the body stays body-less throughout.
+  it('D-5396: a late variant, prune, doctor --backup, segment 1 moved aside, the loss of history.db and doctor --restore: the first body stays a tombstone through the bind, the pass and a second replay, row 1 travels again with a stub of it, and expand says "content pruned"', async () => {
+    const { box, transcript, segment, at } = d5395Built('ccrc-hist-d5396-');
+    fs.appendFileSync(transcript, `${JSON.stringify(userRow({ ...at(0), text: 'zqd5395 ask one, revised' }))}\n`);   // the same uuid and time, another body
+    lateTick(box);
+    expect([markOf(box, 1), markOf(box, 2)], 'CONTROL: the late variant cleared its entry\'s mark').toEqual([null, segment]);
+    const re = runDriver(box, { offsetMs: 4 * D_HOUR });
+    expect(re.code, `${re.stdout}\n${re.stderr}`).toBe(0);
+    const names = segmentsOf(box).map((n) => path.basename(n));
+    expect(names, 'row 1 was written again, with the late body').toHaveLength(2);
+    expect(names[0], 'CONTROL: the first segment is the original one').toBe(segment);
+    const second = names[1]!;
+    expect([markOf(box, 1), markOf(box, 2)], 'CONTROL: row 1 is marked by segment 2, row 2 by segment 1').toEqual([second, segment]);
+    const firstBody = rrQ<{ sha: string }>(box, 'SELECT lower(hex(b.sha256)) AS sha FROM entries e JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?', rrU(1))[0]!.sha;
+    const bodyOf = (): Array<{ stub: number; pruned: number }> =>
+      rrQ(box, 'SELECT z IS NULL AS stub, pruned_ms IS NOT NULL AS pruned FROM blobs WHERE lower(hex(sha256)) = ?', firstBody);
+    expect(bodyOf(), 'CONTROL: the first body is live before prune').toEqual([{ stub: 0, pruned: 0 }]);
+    const w = openWriter(rrRoot(box).dbFile);
+    try {   // prune took row 1's first body after segment 1 carried it
+      w.prepare('UPDATE blobs SET z = NULL, pruned_ms = ?, fts_indexed = 0 WHERE lower(hex(sha256)) = ?').run(Date.now(), firstBody);
+    } finally { closeWriter(w); }
+    const name = rrBackup(box);   // taken after the prune
+    expect(rrFileDb(path.join(rrRoot(box).backups, name), (d) => d.prepare('SELECT z IS NULL AS stub FROM blobs WHERE lower(hex(sha256)) = ?').all(firstBody)),
+      'CONTROL: the backup holds the first body as a tombstone').toEqual([{ stub: 1 }]);
+    const aside = path.join(box.home, 'export-aside');   // D-4765's own way out, to a place outside the store's export directory
+    fs.mkdirSync(aside);
+    fs.renameSync(path.join(exportDirOf(box), segment), path.join(aside, segment));
+    const rebound = async (): Promise<void> => {
+      rrLose(box, { binding: false, journal: false });
+      expect((await cliOnPty(box, ['doctor', '--restore', name])).code).toBe(0);
+      rrTickUntil(box, () => rrRecovered(box));
+    };
+    await rebound();
+    expect(bodyOf(), 'the restore replayed segment 2 without giving the tombstone its bytes').toEqual([{ stub: 1, pruned: 1 }]);
+    // the first tick after the bind cleared the tombstone's mark and, with it, row 1's (D-5396), whatever the export clock did
+    for (const hours of [6, 8]) {
+      const r = runDriver(box, { offsetMs: hours * D_HOUR });
+      expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+      expect(bodyOf(), 'a pass never gives it bytes').toEqual([{ stub: 1, pruned: 1 }]);
+    }
+    const live = segmentsOf(box).map((n) => path.basename(n));
+    expect(live, 'the first segment is gone; the restore\'s pass wrote a later one').toHaveLength(2);
+    const last = live[live.length - 1]!;
+    expect(live).not.toContain(segment);
+    expect(markOf(box, 1), 'row 1 travels again').toBe(last);
+    const seg = path.join(exportDirOf(box), last);
+    expect(segmentRows(seg, 'entries').map((e) => e['uuid']).sort(), 'with both rows').toEqual([rrU(1), rrU(2)]);
+    expect(segmentRows(seg, 'blobs').filter((b) => b['z'] === null).map((b) => b['sha256']), 'and a stub of the first body, which holds no bytes').toEqual([firstBody]);
+    expect(strandedBlobs(box)).toEqual([]);
+    // a second replay of both live segments over the same backup
+    await rebound();
+    expect(bodyOf(), 'replay of the stub gives the tombstone nothing').toEqual([{ stub: 1, pruned: 1 }]);
+    const ex = runCli(box, ['expand', rrU(1)], { env: withPane(box, ID) });
+    expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
+    expect(ex.stdout, 'expand on the pruned first body still says so').toContain('content pruned on');
+    expect(rrQ<{ n: number }>(box, "SELECT count(*) AS n FROM counters WHERE name IN ('export_row_blob_missing', 'export_row_unplaced') AND n > 0")[0]!.n,
+      'replay counted no row missing a blob and none unplaced (the restored backup holds the first body as a tombstone, so replay finds it whatever the live segments carry; what this case pins is that row 1 travels again)').toBe(0);
+  }, 3 * HEAVY);
+});
+
+// ── W1-B4 whole-branch review: replay's mark decisions, in-process on planted segments (D-5395) ─────────────────────
+describe('D-5395: replay marks an entry only while every blob it references is exported or pruned, row by row (W1-B4 whole-branch review)', () => {
+  const D_SEG = `1.${X10_WRITER}.db`;
+  const sha = (text: string): string => segmentSha(text).toString('hex');
+  /** A blob in the store the way ingest or prune left it: live and unmarked, live and exported, or a tombstone. */
+  const put = (db: DatabaseSync, text: string, o: { state: 'live' | 'exported' | 'pruned' }): void => {
+    db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms, exported_ms, exported_seg) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(segmentSha(text), 'br5', o.state === 'pruned' ? null : Buffer.from('stored body'), text.length,
+        o.state === 'pruned' ? 1 : null, o.state === 'exported' ? 1 : null, o.state === 'exported' ? '9.0a1b2c3d.db' : null);
+  };
+  const marksOf = (db: DatabaseSync): Array<string | null> =>
+    db.prepare('SELECT exported_seg AS seg FROM entries ORDER BY ts_ms, entry_id').all().map((r) => (r as { seg: string | null }).seg);
+
+  it('a variant, a linked sidecar or a boundary row that names a live, unmarked blob clears its entry\'s mark; one that names an exported blob, or a pruned one its segment carries, does not; one that names a pruned, unmarked blob its segment does not carry clears it too, whichever of the three it is (D-5396)', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-linkmark-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0xc00, 9, 'zqlinkmark', t0);
+      const fam: X10Family = { uuid: x10U(0xc0), path: '/home/u/gone/linkmark.jsonl', ino: 9971, texts };
+      const [k1, k2, k3, k4, k5, k6, k7, k8] = ['zqlinkmark k1', 'zqlinkmark k2', 'zqlinkmark k3', 'zqlinkmark k4', 'zqlinkmark k5', 'zqlinkmark k6', 'zqlinkmark k7', 'zqlinkmark k8'];
+      put(db, k1!, { state: 'live' });
+      put(db, k2!, { state: 'live' });
+      put(db, k3!, { state: 'live' });
+      put(db, k4!, { state: 'pruned' });
+      put(db, k5!, { state: 'exported' });
+      put(db, k6!, { state: 'pruned' });
+      put(db, k7!, { state: 'pruned' });
+      put(db, k8!, { state: 'pruned' });
+      const variant = (i: number, text: string): PlantSegmentRow => ({ kind: 'variant', row: {
+        uuid: texts[i]!.uuid, blob_sha256: segmentSha(text), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown',
+      } });
+      const sidecar = (i: number, name: string, text: string): PlantSegmentRow => ({ kind: 'sidecar', row: {
+        cc_session_uuid: fam.uuid, agent_id: '', name, blob_sha256: segmentSha(text), uuid: texts[i]!.uuid, first_seen_ms: t0 + 5,
+      } });
+      // k4's stub rides in the segment, as a pass writes one for a pruned, unmarked blob its rows name; k6's, k7's and k8's do not:
+      // a variant, a linked sidecar and a kept blob on a pruned blob the segment does not carry, the shape of a row written when an
+      // earlier segment held the blob and read now, without that segment (D-5396)
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [...texts.map((t) => ({ text: t.text })), { text: null, sha256: segmentSha(k4!) }], rows: [
+        ...x10Rows(fam),
+        variant(0, k1!),
+        sidecar(1, 'k2.txt', k2!),
+        { kind: 'boundary', row: {
+          uuid: texts[2]!.uuid, cc_session_uuid: fam.uuid, agent_id: '', boundary_ord: 1, trigger: 'manual', head_uuid: null, anchor_uuid: null,
+          tail_uuid: null, kept_sha256: segmentSha(k3!), pre_tokens: null, post_tokens: null, duration_ms: null,
+        } },
+        variant(3, k4!),
+        sidecar(4, 'k5.txt', k5!),
+        variant(6, k6!),
+        sidecar(7, 'k7.txt', k7!),
+        { kind: 'boundary', row: {
+          uuid: texts[8]!.uuid, cc_session_uuid: fam.uuid, agent_id: '', boundary_ord: 2, trigger: 'manual', head_uuid: null, anchor_uuid: null,
+          tail_uuid: null, kept_sha256: segmentSha(k8!), pre_tokens: null, post_tokens: null, duration_ms: null,
+        } },
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entry_variants'), 'the rows linked the blobs').toBe(3);
+      expect(x10Count(db, 'sidecars')).toBe(3);
+      expect(x10Count(db, 'boundaries')).toBe(2);
+      expect(marksOf(db), 'a variant on a live blob, a sidecar on one, a kept blob on one: unmarked; a pruned blob the segment carries, an exported one and no extra row: marked; a variant, a sidecar and a kept blob on a pruned blob the segment does not carry: unmarked (D-5396)')
+        .toEqual([null, null, null, D_SEG, D_SEG, D_SEG, null, null, null]);
+      expect(strandedBlobsOn(db)).toEqual([]);
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('an entry the store already holds with a live, unmarked blob on any of its four references is not marked by its replayed row: its own blob, a variant\'s, a linked sidecar\'s, its boundary\'s kept blob', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-gather-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0xd00, 6, 'zqgather', t0);
+      const fam: X10Family = { uuid: x10U(0xd0), path: '/home/u/gone/gather.jsonl', ino: 9981, texts };
+      const [v, s, b] = ['zqgather variant', 'zqgather sidecar', 'zqgather kept'];
+      // Segment 1 builds the store as a backup would hold it: four entries each with one more reference, a plain one.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [...texts.map((t) => ({ text: t.text })), { text: v! }, { text: s! }, { text: b! }], rows: [
+        ...x10Rows(fam),
+        { kind: 'variant', row: { uuid: texts[0]!.uuid, blob_sha256: segmentSha(v!), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown' } },
+        { kind: 'sidecar', row: { cc_session_uuid: fam.uuid, agent_id: '', name: 's.txt', blob_sha256: segmentSha(s!), uuid: texts[1]!.uuid, first_seen_ms: t0 + 5 } },
+        { kind: 'boundary', row: {
+          uuid: texts[2]!.uuid, cc_session_uuid: fam.uuid, agent_id: '', boundary_ord: 1, trigger: 'manual', head_uuid: null, anchor_uuid: null,
+          tail_uuid: null, kept_sha256: segmentSha(b!), pre_tokens: null, post_tokens: null, duration_ms: null,
+        } },
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'CONTROL: every row of segment 1 is marked').toEqual(Array(6).fill(D_SEG));
+      // The state a restored backup holds after a late variant, a late sidecar, a late boundary and a revived blob: those
+      // entries unmarked over blobs no segment holds. Segment 1 is gone from the box; segment 2 holds the rows again.
+      fs.rmSync(path.join(exportDirOf(box), D_SEG));
+      db.exec('UPDATE entries SET exported_ms = NULL, exported_seg = NULL');
+      const unmark = db.prepare('UPDATE blobs SET exported_ms = NULL, exported_seg = NULL WHERE sha256 = ?');
+      for (const text of [v!, s!, b!, texts[3]!.text]) unmark.run(segmentSha(text));
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [], rows: x10Rows(fam) });
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now() + 5000);
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'a variant, a sidecar, a boundary and the entry\'s own blob each hold their entry unmarked; the two with exported blobs are marked')
+        .toEqual([null, null, null, null, `2.${X10_WRITER}.db`, `2.${X10_WRITER}.db`]);
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  // D-5396 (history-export-bind-clears-pruned-referrers), refined: replay marks an entry from a segment only when that segment
+  // carries each of the entry's pruned blobs that no mark names (its stub or its bytes), so a mark names a segment that holds
+  // what the entry needs, as the pass's does (planSegment stubs those blobs in the segment that marks the entry). First wins
+  // stays for what is exported: its bytes are where its own mark names, and losing that segment clears the entry with the blob.
+  it('D-5396, refined: an entry whose own blob is pruned and unmarked is marked by the first segment that carries that blob (its stub or its bytes), not by an earlier one that carries the row without it; one no segment carries stays unmarked; a pruned blob that was exported licenses the first segment whatever it carries', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5396-mark-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0xf00, 6, 'zqd5396mark', t0);
+      const fam: X10Family = { uuid: x10U(0xf0), path: '/home/u/gone/d5396mark.jsonl', ino: 9961, texts };
+      const stub = (text: string): PlantSegmentBlob => ({ text: null, sha256: segmentSha(text), rawLen: text.length });
+      const tombstone = (text: string, o: { exported: boolean }): void => {
+        db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms, exported_ms, exported_seg) VALUES (?, ?, NULL, ?, 1, ?, ?)')
+          .run(segmentSha(text), 'br5', text.length, o.exported ? 1 : null, o.exported ? '9.0a1b2c3d.db' : null);
+      };
+      // E0: its stub is in segment 2 alone, the rebuild's shape (segment 1 carries the row, not the blob). E1: a tombstone the
+      // store held before the replay (a restore's), carried by no segment. E2: the same, and segment 1 carries its BYTES. E3: the
+      // same but exported once (its mark names a segment this box lacks), carried by no segment. E4: its stub is in both
+      // segments (first wins among the carriers). E5: a live blob, carried by segment 1.
+      tombstone(texts[1]!.text, { exported: false });
+      tombstone(texts[2]!.text, { exported: false });
+      tombstone(texts[3]!.text, { exported: true });
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: texts[2]!.text }, stub(texts[4]!.text), { text: texts[5]!.text }], rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [stub(texts[0]!.text), stub(texts[4]!.text)], rows: x10Rows({ ...fam, texts: [texts[0]!, texts[4]!] }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entries')).toBe(6);
+      expect(marksOf(db), 'E0 is marked by segment 2, which carries its stub, not by segment 1; E1 stays unmarked: no segment carries its blob; E2 is marked by segment 1, which carries its bytes; E3 by segment 1 (exported); E4 by the first of the two that carry its stub; E5 by segment 1')
+        .toEqual([`2.${X10_WRITER}.db`, null, D_SEG, D_SEG, D_SEG, D_SEG]);
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced'), 'every blob is in the store, every row placed')
+        .toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+      expect(countersOn(db, 'export_blob_tombstone_kept'), 'segment 1\'s bytes of E2 met their tombstone').toEqual({ export_blob_tombstone_kept: 1 });
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  // D-5396, F1c. The row arms judged a pruned, unmarked blob a replayed row links against the segment being REPLAYED, not against
+  // the segment the entry's mark names: an entry segment 1 marked at its entry row kept that mark when segment 2's variant row
+  // linked a pruned late body that segment 2 carries as a stub and segment 1 does not. The shape is what a pass writes after a
+  // late variant and a prune: segment 1 holds the row and its first body's bytes; segment 2 holds the row again, both variants
+  // and the stub. Planted here for the three arms (a variant, a linked sidecar, a kept blob); the real flow is in
+  // history-export.test.ts.
+  it('D-5396, F1c: a row of a later segment that links a pruned, unmarked blob clears an entry an EARLIER segment marked, whichever of the three row kinds it is; one marked by that same segment keeps its mark when the segment carries the blob, and an exported blob clears nothing', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5396-f1c-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x1000, 5, 'zqf1c', t0);
+      const fam: X10Family = { uuid: x10U(0x10), path: '/home/u/gone/f1c.jsonl', ino: 9941, texts };
+      const stub = (text: string): PlantSegmentBlob => ({ text: null, sha256: segmentSha(text), rawLen: text.length });
+      const [x0, x1, x2, x3, z4] = ['zqf1c late body x0', 'zqf1c sidecar x1', 'zqf1c kept x2', 'zqf1c late body x3', 'zqf1c exported z4'];
+      const variant = (i: number, text: string): PlantSegmentRow => ({ kind: 'variant', row: {
+        uuid: texts[i]!.uuid, blob_sha256: segmentSha(text), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown',
+      } });
+      // Segment 1 holds rows E0, E1, E2 and E4 with their own bytes. Segment 2 holds E0..E4 again (E3 for the first time), the
+      // pruned bodies as stubs, the exported one (z4) as bytes, and the rows that link them.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [texts[0]!, texts[1]!, texts[2]!, texts[4]!].map((t) => ({ text: t.text })),
+        rows: x10Rows({ ...fam, texts: [texts[0]!, texts[1]!, texts[2]!, texts[4]!] }) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: texts[3]!.text }, { text: z4 }, stub(x0), stub(x1), stub(x2), stub(x3)], rows: [
+        ...x10Rows(fam),
+        variant(0, texts[0]!.text),   // the reviewer's shape: the first body's link (exported, bytes in segment 1) ...
+        variant(0, x0),               // ... and the late body's, pruned before the pass: its stub is in segment 2 alone
+        { kind: 'sidecar', row: { cc_session_uuid: fam.uuid, agent_id: '', name: 'x1.txt', blob_sha256: segmentSha(x1), uuid: texts[1]!.uuid, first_seen_ms: t0 + 5 } },
+        { kind: 'boundary', row: {
+          uuid: texts[2]!.uuid, cc_session_uuid: fam.uuid, agent_id: '', boundary_ord: 1, trigger: 'manual', head_uuid: null, anchor_uuid: null,
+          tail_uuid: null, kept_sha256: segmentSha(x2), pre_tokens: null, post_tokens: null, duration_ms: null,
+        } },
+        variant(3, x3),   // E3 is in segment 2 alone: marked by it at its entry row, and the stub it links is carried by it
+        variant(4, z4),   // E4 was marked by segment 1: an exported blob (segment 2 holds its bytes) clears nothing
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(x10Count(db, 'entries')).toBe(5);
+      expect([x10Count(db, 'entry_variants'), x10Count(db, 'sidecars'), x10Count(db, 'boundaries')], 'the rows linked the blobs: E0 two variants, E3 and E4 one each').toEqual([4, 1, 1]);
+      expect(marksOf(db), 'E0 (a variant), E1 (a sidecar) and E2 (a kept blob): unmarked, each over a pruned blob segment 1 does not carry; E3 is marked by segment 2, which carries its stub; E4 keeps segment 1 over an exported blob')
+        .toEqual([null, null, null, `2.${X10_WRITER}.db`, D_SEG]);
+      expect(db.prepare('SELECT count(*) AS n FROM blobs WHERE z IS NULL AND exported_ms IS NULL').get(), 'the four late bodies are tombstones no mark names').toEqual({ n: 4 });
+      expect(strandedBlobsOn(db)).toEqual([]);
+      expect(countersOn(db, 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  // Minor 6 of review 614 (an optimisation that must keep replay's answers): an entry an earlier segment marked already is not marked
+  // again (entryMark changes nothing on it), so the later segment's entry row asks that segment nothing; and a row that links a blob to
+  // an entry marked by ANOTHER segment measures nothing in this one (it cannot count as carried there).
+  it('D-5396, F1c: an entry an earlier segment marked is not looked up in a later segment: its entry row, and a row that links a pruned blob to it, cost no lookup in the later segment\'s blobs', async () => {
+    const proto = DatabaseSync.prototype;
+    const realPrepare = proto.prepare;
+    let lookups = 0;
+    const LOOKUP_SQL = 'SELECT 1 AS x FROM blobs WHERE sha256 = ?';   // store.mjs segmentHasBlob's statement
+    proto.prepare = function prepareCounting(this: DatabaseSync, sql: string) {
+      const st = realPrepare.call(this, sql);
+      if (sql !== LOOKUP_SQL) return st;
+      return new Proxy(st, {
+        get(t, k) {
+          const v: unknown = Reflect.get(t, k, t);
+          if (k === 'get') return (...a: unknown[]): unknown => { lookups += 1; return (v as (...x: unknown[]) => unknown).apply(t, a); };
+          return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+        },
+      });
+    } as typeof proto.prepare;
+    const { box, ids, db } = x10Store('ccrc-history-d5396-f1c-look-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x1100, 2, 'zqf1clook', t0);
+      const fam: X10Family = { uuid: x10U(0x11), path: '/home/u/gone/f1clook.jsonl', ino: 9942, texts };
+      const stub = (text: string): PlantSegmentBlob => ({ text: null, sha256: segmentSha(text), rawLen: text.length });
+      const late = 'zqf1clook late body';
+      // E0's own blob is pruned, its stub in BOTH segments (the one case a lookup is asked: pruned, and no mark names it); E1's is live
+      // and exported. Segment 2 repeats both rows, and links E0 to the pruned late body: a row of ANOTHER segment than E0's mark.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [stub(texts[0]!.text), { text: texts[1]!.text }], rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [stub(texts[0]!.text), stub(late)], rows: [
+        ...x10Rows(fam),
+        { kind: 'variant', row: { uuid: texts[0]!.uuid, blob_sha256: segmentSha(late), first_path: fam.path, first_dev: X10_DEV, first_ino: fam.ino, first_seen_ms: t0 + 5, cause: 'unknown' } },
+      ] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(lookups, 'one lookup in all: segment 1 is asked whether it carries E0\'s pruned own blob; segment 2\'s entry rows (both entries already marked) and its variant row (E0 is marked by segment 1) ask segment 2 nothing').toBe(1);
+      expect(marksOf(db), 'the answers are unchanged by that: E0 was marked by segment 1, then its variant row on a pruned blob segment 1 does not carry took the mark off (F1c); E1 keeps segment 1')
+        .toEqual([null, D_SEG]);
+    } finally {
+      proto.prepare = realPrepare;
+      closeWriter(db);
+    }
+  });
+});
+
+// ── W1-B4 whole-branch review: replay resumes after a segment the operator moved aside (D-4765's way out) ───────────
+describe('W1-B4 whole-branch review: export replay resumes after a segment moved aside, and walks no earlier segment again', () => {
+  const name = (seq: number): string => `${seq}.${X10_WRITER}.db`;
+  /** A published segment whose `entries` table can no longer be read, though its meta and its blobs read: a damaged copy. */
+  const breakEntries = (file: string): void => {
+    const sdb = new DatabaseSync(file, { readOnly: true });
+    const root = Number((sdb.prepare('SELECT rootpage FROM sqlite_master WHERE name = ?').get('entries') as { rootpage: number }).rootpage);
+    const size = Number((sdb.prepare('PRAGMA page_size').get() as { page_size: number }).page_size);
+    sdb.close();
+    const fd = fs.openSync(file, 'r+');
+    try { fs.writeSync(fd, Buffer.alloc(size, 0xff), 0, size, (root - 1) * size); } finally { fs.closeSync(fd); }
+  };
+
+  it('the blobs phase: a bad middle segment stalls the step at its name; moved aside, the step goes on at the next segment, counts the foreign segment once, and walks no earlier segment', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-aside-blobs-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const a = x10Texts(0xe00, 3, 'zqasideb', t0);
+      const b = x10Texts(0xe10, 3, 'zqasidec', t0);
+      // 1: another store's segment, which the blobs walk counts (export_segment_foreign) each time it reaches it
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, metaStoreId: '0189abcd-1234-4678-9abc-0000000010ff', blobs: [{ text: 'zqasideb theirs' }], rows: [] });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: a.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0xe0), path: '/home/u/gone/asideb.jsonl', ino: 9991, texts: a }) });
+      const mid = path.join(exportDirOf(box), name(3));
+      fs.writeFileSync(mid, 'not a database, and not a newer format either\n', { mode: 0o600 });
+      plantSegment(box, ids.storeId, { seq: 4, writer: X10_WRITER, blobs: b.map((t) => ({ text: t.text })),
+        rows: x10Rows({ uuid: x10U(0xe1), path: '/home/u/gone/asidec.jsonl', ino: 9995, texts: b, seq: 2 }) });
+      const seen: string[] = [];
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: false, held: false });
+      expect(cursorOn(db), 'CONTROL: the step waits at the segment that cannot be read').toBe(`export-blobs:${name(3)}:0`);
+      expect(countersOn(db, 'recover_chunk_failed', 'export_segment_foreign')).toEqual({ recover_chunk_failed: 1, export_segment_foreign: 1 });
+      fs.renameSync(mid, `${mid}.aside`);
+      const mark = seen.length;
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: true, held: false });
+      const after = seen.slice(mark).filter((c) => c.startsWith('export-blobs'));
+      expect(after[0], 'the first chunk after the move names the segment moved aside').toBe(`export-blobs:${name(3)}:0`);
+      expect(after.slice(1).every((c) => c.startsWith(`export-blobs:${name(4)}:`)), `then only the segment that orders after it: ${after.join(' | ')}`).toBe(true);
+      expect(after.filter((c) => c.includes(`:${name(1)}:`) || c.includes(`:${name(2)}:`)), 'no chunk walks an earlier segment again').toEqual([]);
+      expect(countersOn(db, 'export_segment_foreign', 'recover_chunk_failed'), 'the foreign segment was counted once, as in a single pass').toEqual({ export_segment_foreign: 1, recover_chunk_failed: 1 });
+      expect([x10Count(db, 'entries'), x10Count(db, 'memberships'), x10Count(db, 'blobs')]).toEqual([6, 6, 6]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('the rows phase: a middle segment whose rows cannot be read stalls the step; moved aside, the step goes on at the next segment, and the first segment\'s rows are applied and counted once', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-aside-rows-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const first = x10Texts(0xf10, 2, 'zqasider1', t0);
+      const last = x10Texts(0xf20, 2, 'zqasider3', t0);
+      // 1: its second row names a blob no segment holds, so every apply of this row counts export_row_blob_missing once
+      const rows1 = x10Rows({ uuid: x10U(0xf1), path: '/home/u/gone/asider1.jsonl', ino: 9992, texts: first });
+      const orphan = rows1.filter((r) => r.kind === 'entry').pop()!;
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: first[0]!.text }], rows: rows1 });
+      expect(orphan.row['blob_sha256']).toEqual(segmentSha(first[1]!.text));
+      const mid = plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: first.map((t) => ({ text: `${t.text} again` })),
+        rows: x10Rows({ uuid: x10U(0xf2), path: '/home/u/gone/asider2.jsonl', ino: 9993, texts: first.map((t) => ({ ...t, uuid: `${t.uuid.slice(0, -1)}9`, text: `${t.text} again` })) }) });
+      breakEntries(mid);
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: last.map((t) => ({ text: t.text })), rows: x10Rows({ uuid: x10U(0xf3), path: '/home/u/gone/asider3.jsonl', ino: 9994, texts: last }) });
+      const seen: string[] = [];
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: false, held: false });
+      expect(cursorOn(db), 'CONTROL: the step waits in the rows phase at the segment whose rows cannot be read').toBe(`export-rows:${name(2)}:0`);
+      expect(countersOn(db, 'recover_chunk_failed', 'export_row_blob_missing')).toEqual({ recover_chunk_failed: 1, export_row_blob_missing: 1 });
+      const entriesBefore = x10Count(db, 'entries');
+      fs.renameSync(mid, `${mid}.aside`);
+      const mark = seen.length;
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: true, held: false });
+      const after = seen.slice(mark).filter((c) => c.startsWith('export-rows'));
+      expect(after[0]).toBe(`export-rows:${name(2)}:0`);
+      expect(after.filter((c) => c.includes(`:${name(1)}:`)), 'no chunk walks segment 1 again').toEqual([]);
+      expect(countersOn(db, 'export_row_blob_missing', 'recover_chunk_failed'), 'segment 1\'s row is counted once, as in a single pass').toEqual({ export_row_blob_missing: 1, recover_chunk_failed: 1 });
+      expect(x10Count(db, 'entries') - entriesBefore, 'and the last segment\'s two rows were applied').toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  });
+});
+
+// ── W1-B4 review 614, F2: replay applies every segment's carried bytes before any segment's stubs (D-5397) ──────────
+// An exporter writes a stub (D-4759) in one segment and, once ingest's revival on recapture (B2's D-4589) has cleared the
+// entry's mark (D-5395), the same blob's bytes in a later one. Replay is insert-or-ignore by sha256, so the order decides
+// which of the two lands: bytes first means the stub an earlier segment carries can never swallow them. The cases are
+// in-process on planted segments (the real exporter flow, and `expand` after a rebuild, is history-export.test.ts's).
+describe('D-5397: export replay applies every segment\'s bytes before any segment\'s stubs, both insert-or-ignore, on the recovery cursor (W1-B4 review 614, F2)', () => {
+  const segName = (seq: number): string => `${seq}.${X10_WRITER}.db`;
+  const stubOf = (text: string): PlantSegmentBlob => ({ text: null, sha256: segmentSha(text), rawLen: Buffer.byteLength(text, 'utf8') });
+  /** The blob of `text` as the store holds it: body-less or not, dated or not, and the segment that marked it. */
+  const blobOf = (db: DatabaseSync, text: string): Record<string, unknown> => ({ ...(db.prepare(
+    'SELECT z IS NULL AS stub, pruned_ms IS NOT NULL AS pruned, exported_seg AS seg FROM blobs WHERE sha256 = ?').get(segmentSha(text)) as object) });
+  /** What a read of the blob answers: its text, decoded from the stored body, or null for a body-less blob. */
+  const bodyOf = (db: DatabaseSync, text: string): string | null => {
+    const r = db.prepare('SELECT z FROM blobs WHERE sha256 = ?').get(segmentSha(text)) as { z: Uint8Array | null } | undefined;
+    return r === undefined || r.z === null ? null : rrUnbrotli(Buffer.from(r.z)).toString('utf8');
+  };
+  const markOf = (db: DatabaseSync, uuid: string): string | null =>
+    (db.prepare('SELECT exported_seg AS seg FROM entries WHERE uuid = ?').get(uuid) as { seg: string | null }).seg;
+  /** What a reader gets from the replayed store: the real `expand` verb on one row, run as the family's session (a registry
+   *  entry and a pane for it, so the verb's scope reaches the family the segment placed). It answers the row's text, or
+   *  says its content was pruned: the read the rows and the stored bodies are for. */
+  const expandOf = (box: HistoryBox, fam: X10Family, uuid: string): ReturnType<typeof runCli> => {
+    plantSession(box, X10_ID, { uuid: fam.uuid, generation: X10_G, project: 'demo', workdir: WORK });
+    return runCli(box, ['expand', uuid], { env: withPane(box, X10_ID) });
+  };
+  /** A family of `n` rows, and the segment rows that place any subset of them. */
+  const family = (base: number, n: number, word: string): { fam: X10Family; texts: X10Text[] } => {
+    const texts = x10Texts(base, n, word, Date.now() - 400 * X10_DAY);
+    return { texts, fam: { uuid: x10U(base >> 4), path: `/home/u/gone/${word}.jsonl`, ino: 9000 + base, texts } };
+  };
+
+  it('a stub in an earlier segment and the same blob\'s bytes in a later one, the two in separate passes: the bytes land, marked by the later segment; the entry is marked by the first segment that carries it; the text reads', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397a-');
+    try {
+      const { fam, texts } = family(0x1100, 2, 'zqd5397a');
+      // The exporter's order: segment 1 carries row 0 with a stub of its pruned body and row 1 with its bytes; ingest's
+      // revival on recapture clears row 0's mark; segment 2 carries row 0 again, now with the bytes.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text), { text: texts[1]!.text }], rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }], rows: x10Rows({ ...fam, texts: [texts[0]!] }) });
+      // A budget of one byte ends a pass after the first chunk that carries any: the bytes of segment 1, then those of segment 2.
+      const seen: string[] = [];
+      const passOf: number[] = [];
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 40 && !r.done; i += 1) {
+        const before = seen.length;
+        r = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), x10Recording(seen));
+        for (let k = before; k < seen.length; k += 1) passOf.push(i);
+      }
+      expect(r.done, `the step completed: ${seen.join(' | ')}`).toBe(true);
+      expect(blobOf(db, texts[0]!.text), 'the bytes of segment 2 landed, and segment 2 marked them').toEqual({ stub: 0, pruned: 0, seg: segName(2) });
+      expect(bodyOf(db, texts[0]!.text), 'a read of the blob answers its text').toBe(texts[0]!.text);
+      expect(markOf(db, texts[0]!.uuid), 'replay\'s first-wins entry mark is unchanged: the first segment that carries the row').toBe(segName(1));
+      expect(markOf(db, texts[1]!.uuid)).toBe(segName(1));
+      const phases = seen.map((c) => c.replace(/[:+].*$/, ''));
+      const lastBytes = phases.lastIndexOf('export-blobs');
+      const firstStubs = phases.indexOf('export-stubs');
+      expect(lastBytes, `the bytes phase ran: ${seen.join(' | ')}`).toBeGreaterThanOrEqual(0);
+      expect(firstStubs, `and the stubs phase after its last chunk: ${seen.join(' | ')}`).toBeGreaterThan(lastBytes);
+      const bytesOfSeg2 = seen.indexOf(`export-blobs:${segName(2)}:0`);   // the chunk that applied segment 2's bytes, and ended its pass on the budget
+      expect(bytesOfSeg2, `segment 2's bytes page is its own chunk: ${seen.join(' | ')}`).toBeGreaterThan(0);
+      expect(passOf[firstStubs], `the stubs phase began in a later pass than that chunk's (${seen.join(' | ')})`).toBeGreaterThan(passOf[bytesOfSeg2]!);
+      expect(countersOn(db, 'export_blob_tombstone_kept', 'export_row_blob_missing', 'export_row_unplaced'), 'no tombstone was held, so none was kept')
+        .toEqual({ export_blob_tombstone_kept: 0, export_row_blob_missing: 0, export_row_unplaced: 0 });
+      expect(strandedBlobsOn(db)).toEqual([]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('the bytes in an earlier segment and a stub of the same blob in a later one: the bytes stay, and the stub changes nothing', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397b-');
+    try {
+      const { fam, texts } = family(0x1200, 2, 'zqd5397b');
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text)], rows: x10Rows({ ...fam, texts: [texts[0]!] }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(blobOf(db, texts[0]!.text), 'segment 1\'s bytes stay, marked by it').toEqual({ stub: 0, pruned: 0, seg: segName(1) });
+      expect(bodyOf(db, texts[0]!.text), 'a read of the blob answers its text').toBe(texts[0]!.text);
+      expect(markOf(db, texts[0]!.uuid)).toBe(segName(1));
+      expect(countersOn(db, 'export_blob_tombstone_kept', 'export_row_blob_missing')).toEqual({ export_blob_tombstone_kept: 0, export_row_blob_missing: 0 });
+      // the read itself, through the real verb: the stub of segment 2 hid nothing
+      const ex = expandOf(box, fam, texts[0]!.uuid);
+      expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
+      expect(ex.stdout, 'expand prints the text the later stub did not swallow').toContain(texts[0]!.text);
+      expect(ex.stdout).not.toContain('content pruned on');
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('CONTROL: a tombstone the store held before the replay stays one when a segment carries its bytes, and the body replay ignores over it is counted export_blob_tombstone_kept; a body ignored over a blob the replay itself stored is not', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397c-');
+    try {
+      const { fam, texts } = family(0x1300, 2, 'zqd5397c');
+      // The store pruned row 0's body before the replay: a tombstone, with its date.
+      db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, ?, NULL, ?, 12345)')
+        .run(segmentSha(texts[0]!.text), 'br5', Buffer.byteLength(texts[0]!.text, 'utf8'));
+      // Segment 1 carries both bodies; segment 2 carries row 1's again, over the live blob segment 1 just stored.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: texts[1]!.text }], rows: x10Rows({ ...fam, texts: [texts[1]!] }) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(blobOf(db, texts[0]!.text), 'the tombstone keeps its date, gains no body and no mark').toEqual({ stub: 1, pruned: 1, seg: null });
+      expect(db.prepare('SELECT pruned_ms FROM blobs WHERE sha256 = ?').get(segmentSha(texts[0]!.text))).toEqual({ pruned_ms: 12345 });
+      expect(bodyOf(db, texts[0]!.text), 'a read of it answers no text').toBeNull();
+      expect(blobOf(db, texts[1]!.text)).toEqual({ stub: 0, pruned: 0, seg: segName(1) });
+      expect(countersOn(db, 'export_blob_tombstone_kept'), 'one body met the tombstone; row 1\'s repeat met a blob the replay stored').toEqual({ export_blob_tombstone_kept: 1 });
+      // the reads, through the real verb: the tombstone answers that its content was pruned, the live blob its text
+      const pruned = expandOf(box, fam, texts[0]!.uuid);
+      expect(pruned.code, `${pruned.stdout}\n${pruned.stderr}`).toBe(0);
+      expect(pruned.stdout, 'expand on the tombstone says so').toContain('content pruned on');
+      expect(pruned.stdout, 'and prints none of the body replay ignored').not.toContain(texts[0]!.text);
+      const live = expandOf(box, fam, texts[1]!.uuid);
+      expect(live.code, `${live.stdout}\n${live.stderr}`).toBe(0);
+      expect(live.stdout, 'CONTROL: a live blob prints its text').toContain(texts[1]!.text);
+      expect(live.stdout).not.toContain('content pruned on');
+    } finally {
+      closeWriter(db);
+    }
+  });
+  it('a replay that resumes across chunks, passes and a kill applies all bytes before any stub: a cursor stored inside the bytes phase resumes there, and no stubs chunk runs before the last bytes chunk', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397d-');
+    let w = db;
+    try {
+      const { fam, texts } = family(0x1400, 3, 'zqd5397d');
+      // The stub of row 0 is in segment 1 and its bytes in segment 3; row 1 has its bytes in segment 1 and a stub after them in
+      // segment 2; row 2 has bytes in segment 2. The bytes phase spans three segments, and a stub is carried by two of them.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text), { text: texts[1]!.text }], rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: [{ text: texts[2]!.text }, stubOf(texts[1]!.text)], rows: x10Rows({ ...fam, texts: [texts[1]!, texts[2]!] }) });
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }], rows: x10Rows({ ...fam, texts: [texts[0]!] }) });
+      const first: string[] = [];
+      expect(await SW.recoveryStep(w, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), x10Recording(first))).toEqual({ moved: true, done: false, held: false });
+      const stored = cursorOn(w);
+      expect(stored, 'CONTROL: the pass ended inside the bytes phase, after segment 1\'s bytes').toMatch(new RegExp(`^export-blobs:${segName(1)}:[1-9][0-9]*$`));
+      closeWriter(w);   // the kill: nothing of the first pass but the committed rows and the cursor survives
+      w = openWriter(historyPaths(box.home).dbFile);
+      const rest: string[] = [];
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 60 && !r.done; i += 1) r = await SW.recoveryStep(w, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), x10Recording(rest));
+      expect(r.done, `the step completed: ${rest.join(' | ')}`).toBe(true);
+      expect(rest[0], 'the first chunk after the kill is the stored cursor\'s').toBe(stored);
+      const phases = [...first, ...rest].map((c) => c.replace(/[:+].*$/, ''));
+      const order = ['index', 'apply', 'export-blobs', 'export-stubs', 'export-rows', 'reindex'];
+      expect(phases.map((p) => order.indexOf(p)), `the phases never go back: ${[...first, ...rest].join(' | ')}`)
+        .toEqual([...phases.map((p) => order.indexOf(p))].sort((a, b) => a - b));
+      expect(rest.filter((c) => c.includes(`:${segName(1)}:`) && c.startsWith('export-blobs')), 'the bytes of segment 1 are not applied again').toEqual([stored]);
+      expect(phases.indexOf('export-stubs'), 'and the stubs phase runs').toBeGreaterThan(phases.lastIndexOf('export-blobs'));
+      expect(blobOf(w, texts[0]!.text), 'segment 3\'s bytes beat segment 1\'s stub').toEqual({ stub: 0, pruned: 0, seg: segName(3) });
+      expect(blobOf(w, texts[1]!.text), 'segment 1\'s bytes beat segment 2\'s stub').toEqual({ stub: 0, pruned: 0, seg: segName(1) });
+      expect(blobOf(w, texts[2]!.text)).toEqual({ stub: 0, pruned: 0, seg: segName(2) });
+      expect(countersOn(w, 'recover_chunk_failed', 'export_row_blob_missing', 'export_row_unplaced')).toEqual({ recover_chunk_failed: 0, export_row_blob_missing: 0, export_row_unplaced: 0 });
+    } finally {
+      closeWriter(w);
+    }
+  });
+
+  it('the stubs phase obeys the resume rule of the others: a cursor naming a segment moved aside goes on at the next segment that orders after it, and walks no earlier segment again; a newer-format segment\'s stub is never applied', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397e-', `export-stubs:${segName(2)}:0`);
+    try {
+      const { fam, texts } = family(0x1500, 3, 'zqd5397e');
+      // Segment 1's stub is behind the cursor and so is not applied; segment 2 is gone; segment 3's stub is applied; segment 4 is
+      // a newer format whose stub must not be.
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text)], rows: [] });
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [stubOf(texts[1]!.text)], rows: x10Rows({ ...fam, texts: [texts[1]!] }) });
+      plantSegment(box, ids.storeId, { seq: 4, writer: X10_WRITER, format: 2, blobs: [stubOf(texts[2]!.text)], rows: [] });
+      const seen: string[] = [];
+      expect(await SW.recoveryStep(db, stepCtx(box, ids), x10Recording(seen))).toEqual({ moved: true, done: true, held: false });
+      const stubs = seen.filter((c) => c.startsWith('export-stubs'));
+      expect(stubs[0], 'the first chunk is the stored cursor\'s').toBe(`export-stubs:${segName(2)}:0`);
+      expect(stubs.filter((c) => c.includes(`:${segName(1)}:`)), 'no chunk walks segment 1').toEqual([]);
+      expect(blobOf(db, texts[0]!.text), 'the stub behind the cursor was never applied').toEqual({});
+      expect(blobOf(db, texts[1]!.text), 'segment 3\'s was, dated by the replay and never marked').toEqual({ stub: 1, pruned: 1, seg: null });
+      expect(blobOf(db, texts[2]!.text), 'a newer-format segment\'s stub never').toEqual({});
+      expect(getMeta(db, HEALTH_META.exportSegmentNewer), 'the stubs walk does not note the newer segment (the bytes walk did not run in this step)').toBeNull();
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('a segment replay skips is noted once per replay, by the bytes walk alone: the stubs and rows walks reach it again and say nothing', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-b4-d5397f-');
+    try {
+      const { fam, texts } = family(0x1600, 1, 'zqd5397f');
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, metaStoreId: '0189abcd-1234-4678-9abc-0000000010ff', blobs: [stubOf('zqd5397f theirs')], rows: [] });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, format: 2, blobs: [stubOf('zqd5397f newer')], rows: [] });
+      plantSegment(box, ids.storeId, { seq: 3, writer: X10_WRITER, blobs: [stubOf(texts[0]!.text)], rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(countersOn(db, 'export_segment_foreign'), 'the foreign segment is counted by the bytes walk and by no other').toEqual({ export_segment_foreign: 1 });
+      expect(getMeta(db, HEALTH_META.exportSegmentNewer)).toBe(JSON.stringify([segName(2)]));
+      expect(blobOf(db, texts[0]!.text), 'and the stub of the segment that replays is applied').toEqual({ stub: 1, pruned: 1, seg: null });
+      expect([x10Count(db, 'entries'), countersOn(db, 'export_row_blob_missing')], 'before its row, which finds the blob').toEqual([1, { export_row_blob_missing: 0 }]);
+      expect([blobOf(db, 'zqd5397f theirs'), blobOf(db, 'zqd5397f newer')], 'neither skipped segment\'s stub').toEqual([{}, {}]);
+    } finally {
+      closeWriter(db);
+    }
+  });
+  it('the tombstone probe runs only where an insert was ignored: a fresh blob costs no statement more; a body over a live blob is probed and not counted; a body over a tombstone is probed and counted', async () => {
+    const probes = (ran: string[]): number => ran.filter((t) => /FROM blobs WHERE sha256 = \? AND z IS NULL/.test(t)).length;
+    /** `db` with the text of every statement it runs recorded (history-export.test.ts's counting idiom). */
+    const counting = (target: DatabaseSync, ran: string[]): DatabaseSync => {
+      const wrap = (text: string, st: object): object => new Proxy(st, {
+        get(t, k) {
+          const v: unknown = Reflect.get(t, k, t);
+          if (k === 'run' || k === 'get' || k === 'all' || k === 'iterate') return (...a: unknown[]): unknown => { ran.push(text); return (v as (...x: unknown[]) => unknown).apply(t, a); };
+          return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+        },
+      });
+      return new Proxy(target, {
+        get(t, k) {
+          if (k === 'prepare') return (text: string): object => wrap(text, t.prepare(text));
+          const v: unknown = Reflect.get(t, k, t);
+          return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+        },
+      });
+    };
+    const fresh = x10Store('ccrc-history-b4-d5397g-');
+    try {
+      const { fam, texts } = family(0x1700, 1, 'zqd5397g');
+      plantSegment(fresh.box, fresh.ids.storeId, { seq: 1, writer: X10_WRITER, blobs: [{ text: texts[0]!.text }], rows: x10Rows(fam) });
+      const ran: string[] = [];
+      expect(await SW.recoveryStep(counting(fresh.db, ran), stepCtx(fresh.box, fresh.ids))).toEqual({ moved: true, done: true, held: false });
+      expect(ran.filter((t) => /INSERT INTO blobs/.test(t)).length, 'CONTROL: the blob went in through the insert').toBeGreaterThan(0);
+      expect(probes(ran), 'a fresh blob is not probed').toBe(0);
+    } finally {
+      closeWriter(fresh.db);
+    }
+    const held = x10Store('ccrc-history-b4-d5397h-');
+    try {
+      const { fam, texts } = family(0x1800, 2, 'zqd5397h');
+      held.db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?)').run(segmentSha(texts[0]!.text), 'br5', Buffer.from('stored body'), 11);   // live
+      held.db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, ?, NULL, ?, 12345)').run(segmentSha(texts[1]!.text), 'br5', 11);   // a tombstone
+      plantSegment(held.box, held.ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      const ran: string[] = [];
+      expect(await SW.recoveryStep(counting(held.db, ran), stepCtx(held.box, held.ids))).toEqual({ moved: true, done: true, held: false });
+      expect(probes(ran), 'the two ignored bodies are probed, once each').toBe(2);
+      expect(countersOn(held.db, 'export_blob_tombstone_kept'), 'and only the one over the tombstone is counted').toEqual({ export_blob_tombstone_kept: 1 });
+    } finally {
+      closeWriter(held.db);
+    }
+  });
 });

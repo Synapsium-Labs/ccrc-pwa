@@ -24,7 +24,7 @@ export interface RolloverCase {
 const compact = (o: Record<string, number | null>): string => JSON.stringify(o);
 
 /** Spaced, the way Python's json.dump writes gpt.json (default separators are
- *  `', '` and `': '`) — infra/handoff/ccgpt-usage. */
+ *  `', '` and `': '`) — ccd/ccgpt-usage.py. */
 const spaced = (o: Record<string, number | null>): string =>
   `{${Object.entries(o).map(([k, v]) => `"${k}": ${v}`).join(', ')}}`;
 

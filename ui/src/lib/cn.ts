@@ -28,14 +28,34 @@ import { extendTailwindMerge } from 'tailwind-merge';
  *  family. Nothing caught it because every guard in the tree reads the class
  *  STRING, and the string was right; the loss happens inside this function.
  *
+ *  The skin axis's roles (D-5093) were the same failure waiting to ship, and
+ *  were measured before they could: untaught, `cn('text-ink-primary',
+ *  'text-meta')` returned "text-meta" — the ink deleted — and so did
+ *  `text-ui`, `text-prose`, the page title's role and `text-section`
+ *  (`text-md` alone survived, because twMerge reads `md` as a T-shirt size).
+ *  The page title's key is `title`, not `page`: `text-page` is a COLOUR in
+ *  this theme (`--color-page`, the page ground), and the merge is right to
+ *  read it as one (theme.css's type roles say why). The spacing roles
+ *  failed the other way round: `cn('p-4', 'p-gutter')` kept BOTH, so a
+ *  caller's role could never replace a component's step and Tailwind's emit
+ *  order picked. Both are taught below, in the change that introduced them.
+ *
  *  So the groups are declared. `ui/test`'s `cn` spec pins both directions:
  *  a size and an ink survive together, and a caller's override still wins. */
 const merge = extendTailwindMerge({
   extend: {
+    // The density roles (D-5093), as SPACING keys: one entry places
+    // `p-gutter`, `px-card`, `gap-section`, `m-*`, `h-row` and `min-h-row` in
+    // the same groups as their scale twins, so either replaces the other.
+    theme: {
+      spacing: ['gutter', 'row', 'card', 'section'],
+    },
     classGroups: {
-      // The two sizes Tailwind has no name for. The other six (`xs`…`2xl`) are
-      // its own spellings and were never misread.
-      'font-size': [{ text: ['2xs', 'input'] }],
+      // The sizes Tailwind has no name for: two scale steps and the type
+      // roles (D-5093). Tailwind's own six (`xs`…`2xl`) were never misread;
+      // `md` is listed although twMerge already reads it as a T-shirt size,
+      // so the whole new scale step is declared in one place.
+      'font-size': [{ text: ['2xs', 'input', 'md', 'ui', 'prose', 'meta', 'title', 'section'] }],
       // The weights. Tailwind's own are `font-normal`/`font-medium`/…; this
       // theme says `--font-weight-regular`, so `font-regular` is ours.
       'font-weight': [{ font: ['regular', 'medium', 'semibold'] }],

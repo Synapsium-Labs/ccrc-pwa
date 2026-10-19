@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { wireHookAsk } from './fleet.js';
 import type { Deps } from './server.js';
 import type { Bus, Notice } from './bus.js';
 import { configDirFor, type CcrcConfig } from './config.js';
@@ -11,11 +12,17 @@ import { readBacklog, TranscriptTailer } from './transcript/tail.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
 import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
+import { SessionWorkflows, sessionDirOf } from './workflows/read.js';
+import { workflowsFrame, type Proc } from './workflows/model.js';
 import { readHookState } from './hookstate.js';
 import { askKey } from './askkey.js';
 import type { Dialog, DialogAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
+import { reviewRows } from '../../shared/ask-menu.js';
 
 const POLL_MS = 2000;
+/** Failed captures in a row after which the menu the client holds is cleared (decision `ask-failed-capture-holds`):
+ *  three polls, at least 6 s of the pane unreadable. One or two are the blips a slow remote call produces. */
+const FAILED_CAPTURES_CLEAR = 3;
 const BACKLOG_N = 50;
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see checkDialog's own comment
 
@@ -29,6 +36,11 @@ interface Resolved {
   cfgDir: string;
   status: SessionStatus;
   statusUpdatedAt: number | null;
+  /** D-5561: the session's Claude Code process as this resolve measured it —
+   *  the workflow reader's orphan rule needs `gone` apart from `unknown` (a
+   *  substrate fault is not a dead process) and the live file's `startedAt`.
+   *  `status` above keeps its own deliberate fold (D-309). */
+  proc: Proc;
 }
 
 /**
@@ -62,15 +74,44 @@ export class SessionStream {
   private poll: NodeJS.Timeout | null = null;
   private stopped = false;
   private ticking = false;
+  /** When the running poll started (`tick`), for the frame log's `tick=`; null between polls. */
+  private tickStartedAt: number | null = null;
   private uuid: string | null = null;
   private status: SessionStatus | null = null;
   /** What the client last saw of the pane menu — see nextDialogFrame. */
   private seenDialog: DialogSeen = { id: null, ask: null, raw: null };
+  /** Failed captures in a row since the last reading of the pane (decision `ask-failed-capture-holds`). */
+  private failedCaptures = 0;
+  /** Bumped on every `answered:<id>` this stream handles; a poll reading taken under an older value read the pane
+   *  from before that answer and is dropped (decision `ask-stale-poll-dropped`). */
+  private answeredGen = 0;
   /** The transcript state that already failed to explain the menu on screen —
    *  see claimAskRead. */
   private askProbe: { file: string; id: string; size: number; mtimeMs: number } | null = null;
   /** Serialized last-sent task list — the change gate for the `tasks` frame. */
   private lastTasksJson: string | null = null;
+  /** D-5560: the workflow reader for the session dir now being tailed (a new
+   *  one when the transcript moves: /clear, compaction, an account swap), the
+   *  rows the client was last sent, and the change gate for the `workflows`
+   *  frame. `undefined` until the first read, for `lastMailJson`'s reason: a
+   *  `ReconnectingSocket` reconnect keeps the client's rows, so a workflow that
+   *  finished while it was away would stay on screen as running if an empty
+   *  first read were swallowed — so a session that HAS a workflow directory
+   *  states its first read, empty included. The one first read swallowed is
+   *  `absent` with no witness: this session dir never had a workflow, so a
+   *  client can hold no rows from it: the client drops its rows on every
+   *  `backlog` (`pwa/src/stores/session.ts`) — the frame that comes whenever the
+   *  session dir can have changed (a /clear, a swap, a reconnect onto another
+   *  file) — and `sendBacklogAndTail` resets this gate with it. */
+  private workflows: SessionWorkflows | null = null;
+  private shownWorkflows: SessionStreamMsg & { type: 'workflows' } = { type: 'workflows', workflows: [] };
+  private lastWorkflowsJson: string | undefined = undefined;
+  /** Whether this connection has sent a `workflows` frame yet (see above). */
+  private sentWorkflows = false;
+  /** The hook's last fresh Stop listed a `workflow` among its background kinds
+   *  (D-5231's pair, read by `checkHookAsk`). The one witness that a workflow
+   *  exists when its directory does not — see `checkWorkflows`. */
+  private hookWorkflowBackground = false;
   /** Serialized last-sent outstanding-mail list — the change gate for the
    *  `mail` frame. `undefined` (not `null`) until the first read, for the
    *  EXACT reason `lastAskJson` below is `undefined`: this instance is per
@@ -158,6 +199,25 @@ export class SessionStream {
     this.send(m);
   };
 
+  /** Decision `ask-answer-returns-next-screen`: an answer route saw the pane move to `next` (null: no menu). It goes
+   *  through the same gate as a poll's reading (`nextDialogFrame`), so this stream's record of what its client saw stays
+   *  true, and a later poll that finds the screen gone still says so. Every open stream of the session gets it, so a
+   *  second tab moves with the one that answered. */
+  private readonly onAnswered = (next: Dialog | null): void => {
+    if (this.stopped) return;
+    this.answeredGen += 1;
+    this.frame(next, 'answer');
+  };
+
+  /** Send what `dialog` (a reading of the pane, or null for no menu) changes for the client, if anything, and log it. */
+  private frame(dialog: Dialog | null, from: 'poll' | 'answer'): void {
+    const { seen, msg } = nextDialogFrame(this.seenDialog, dialog);
+    this.seenDialog = seen;
+    if (!msg) return;
+    console.log(dialogFrameLine(this.id, msg, from, this.tickStartedAt === null ? null : Date.now() - this.tickStartedAt));
+    this.send(msg);
+  }
+
   constructor(
     private readonly deps: Deps,
     private readonly bus: Bus,
@@ -200,6 +260,7 @@ export class SessionStream {
   async start(): Promise<void> {
     this.bus.on('notice', this.onNotice);
     this.bus.on(`session:${this.id}`, this.onSessionMsg);
+    this.bus.on(`answered:${this.id}`, this.onAnswered);
     const r = await this.resolve();
     if (this.stopped) return;
     if (r.ok) {
@@ -275,6 +336,8 @@ export class SessionStream {
     if (this.stopped) return;
     if (r.ok) await this.checkHookAsk(r.data.uuid); // and any hook ask already waiting
     if (this.stopped) return;
+    if (r.ok) await this.checkWorkflows(r.data.file, r.data.proc); // and the workflows running now
+    if (this.stopped) return;
     if (r.ok) await this.checkMail(); // and any outstanding mail addressed to this session
     if (this.stopped) return;
     // `absent` is terminal for this connection: a proven-gone session id
@@ -300,7 +363,27 @@ export class SessionStream {
    *  null (unresolvable session) → the menu still ships, unenriched. */
   private async checkDialog(file: string | null): Promise<void> {
     if (this.stopped) return;
+    // Decision `ask-stale-poll-dropped`: the generation this capture started under. An answer handled while it (or the
+    // transcript read below) was in flight already told the client where the pane went, from a later look than this
+    // one; framing this reading would send the answered screen back over it.
+    const gen = this.answeredGen;
     const pane = await this.deps.tmux.capture(this.id);
+    if (this.stopped || gen !== this.answeredGen) return;
+    // Decision `ask-failed-capture-holds`: a failed capture (tmux, or the remote call behind it, returned nothing) is
+    // NO READING, not "no menu". Clearing on it is what put the 2026-10-16 sheet on "Open terminal to answer" with the
+    // review still on the pane. Nothing is framed and `seenDialog` is kept, so the menu the client holds stays and a
+    // later reading of the same menu sends nothing. Only FAILED_CAPTURES_CLEAR failures in a row clear it: a pane tmux
+    // can no longer read at all is not offering a menu (an answer to it is refused `not-alive`), and the sheet must not
+    // hold one forever. A session the registry reports gone never reaches here (`tick` returns early).
+    if (pane === null) {
+      this.failedCaptures += 1;
+      if (this.failedCaptures >= FAILED_CAPTURES_CLEAR) {
+        this.askProbe = null;
+        this.frame(null, 'poll');
+      }
+      return;
+    }
+    this.failedCaptures = 0;
     // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the
     // WHOLE pane, and an RC-off pane renders the busy marker WHILE a dialog is
     // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
@@ -310,7 +393,7 @@ export class SessionStream {
     // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
     // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
     // captureAnsi().
-    let dialog = pane !== null && hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
+    let dialog = hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
     // Read the transcript only while this menu is still unexplained. Once its ask
     // is latched, re-reading costs a 256 KB tail every 2 s and can buy nothing:
     // nextDialogFrame would suppress the frame anyway. Menus that never latch are
@@ -318,10 +401,10 @@ export class SessionStream {
     const latched = dialog !== null && this.seenDialog.id === dialog.id && this.seenDialog.ask !== null;
     if (dialog?.parsed && file !== null && !latched) {
       const st = await this.deps.io.stat(file);
-      if (this.stopped) return;
+      if (this.stopped || gen !== this.answeredGen) return;
       if (this.claimAskRead(file, dialog.id, st)) {
         const questions = await readPendingAsk(this.deps.io, file);
-        if (this.stopped) return;
+        if (this.stopped || gen !== this.answeredGen) return;
         const ask = questions === null ? null : alignAsk(dialog.options, questions);
         // Enrichment rides ALONGSIDE the scraped options — it never rewrites them.
         // `id` stays a hash of the pane alone (answerDialog re-parses the pane to
@@ -330,7 +413,8 @@ export class SessionStream {
       }
     }
     // The probe is scoped to the PARSED menu on screen, so it dies with it. A
-    // capture can miss a menu that is still there: tmux returns null, one stray
+    // capture can miss a menu that is still there: tmux returns null (held above,
+    // so the probe survives it until FAILED_CAPTURES_CLEAR), one stray
     // 'esc to interrupt' anywhere in the pane flips it to busy, or the grab lands
     // mid-redraw and comes back `unparsed` (a menu footer with its option rows
     // half-erased — dialog.ts:94). That last one is still a dialog, so testing
@@ -341,9 +425,7 @@ export class SessionStream {
     // bare. Forgetting it costs nothing: the read above is gated on
     // `dialog?.parsed`, so an unparsed menu never spends one.
     if (dialog === null || !dialog.parsed) this.askProbe = null;
-    const { seen, msg } = nextDialogFrame(this.seenDialog, dialog);
-    this.seenDialog = seen;
-    if (msg) this.send(msg);
+    this.frame(dialog, 'poll');
   }
 
   /**
@@ -456,21 +538,52 @@ export class SessionStream {
    *  status and no activeForm, so there is no row to send and no honest count
    *  to fold into a summary built out of rows. The surface that DOES show a
    *  denominator is the fleet card's `done/total`, and that one comes from
-   *  `taskProgress` in `watch.ts`, where the count lands. The frame stays
-   *  exactly as wide as it was: additive-only means a new field is allowed,
-   *  not that an unrendered one earns its place. */
+   *  `taskProgress` in `watch.ts`, where the count lands. Additive-only means
+   *  a new field is allowed, not that an unrendered one earns its place: the
+   *  one field added since, `touchedAt` (D-5372), is rendered — it is how the
+   *  strip tells a live plan from one left open days ago. */
   private async checkTasks(cfgDir: string, uuid: string): Promise<void> {
     if (this.stopped) return;
-    const { tasks } = await readTasks(this.deps.io, cfgDir, uuid);
+    // D-5372: `touchedAt` rides the frame (optional) and joins the dedupe key,
+    // so a rewrite that leaves the rows equal still refreshes the strip's age.
+    const { tasks, touchedAt } = await readTasks(this.deps.io, cfgDir, uuid, { touchedAt: true });
     if (this.stopped) return;
-    const json = JSON.stringify(tasks);
+    const json = JSON.stringify([tasks, touchedAt ?? null]);
     if (json === this.lastTasksJson) return;
     if (this.lastTasksJson === null && tasks.length === 0) {
       this.lastTasksJson = json;
       return;
     }
     this.lastTasksJson = json;
-    this.send({ type: 'tasks', tasks });
+    this.send({ type: 'tasks', tasks, ...(typeof touchedAt === 'number' ? { touchedAt } : {}) });
+  }
+
+  /** D-5560/D-5561: read the session's workflows (`workflows/read.ts`) and
+   *  send them when they differ from what this client last saw. What a read
+   *  becomes is `workflowsFrame`'s decision (model.ts) — absent, unreadable and
+   *  read are three frames, never folded; this method only carries it.
+   *  Read-only: nothing here starts, stops or changes a workflow. */
+  private async checkWorkflows(file: string, proc: Proc): Promise<void> {
+    if (this.stopped) return;
+    const dir = sessionDirOf(file);
+    if (this.workflows?.sessionDir !== dir) {
+      this.workflows = new SessionWorkflows(this.deps.io, dir);
+      this.shownWorkflows = { type: 'workflows', workflows: [] };
+    }
+    const read = await this.workflows.read(proc, Date.now());
+    if (this.stopped) return;
+    const decided = workflowsFrame(read, this.hookWorkflowBackground, this.shownWorkflows.workflows);
+    const frame: SessionStreamMsg & { type: 'workflows' } = decided.unreadable
+      ? { type: 'workflows', workflows: decided.workflows, unreadable: true }
+      : { type: 'workflows', workflows: decided.workflows };
+    const json = JSON.stringify(frame);
+    if (json === this.lastWorkflowsJson) return;
+    const neverHad = read.kind === 'absent' && !decided.unreadable;
+    this.lastWorkflowsJson = json;
+    if (neverHad && this.sentWorkflows === false) return;
+    this.sentWorkflows = true;
+    if (frame.unreadable !== true) this.shownWorkflows = frame;
+    this.send(frame);
   }
 
   /**
@@ -535,17 +648,20 @@ export class SessionStream {
     if (this.stopped) return;
     const hs = await readHookState(this.deps.io, this.deps.cfg.registryDir, this.id, uuid, Date.now());
     if (this.stopped) return;
+    this.hookWorkflowBackground = hs?.background?.kinds.includes('workflow') === true;
     const ask = hs?.ask ?? null;
     const json = ask === null ? null : JSON.stringify(ask);
     if (json === this.lastAskJson) return;
     this.lastAskJson = json;
-    this.send(ask === null ? { type: 'ask_cleared' } : { type: 'ask', ask, key: askKey(ask) });
+    // D-5298 (spec §6.7): an approval's summary leaves redacted (`wireHookAsk`); the key is the envelope's own.
+    this.send(ask === null ? { type: 'ask_cleared' } : { type: 'ask', ask: wireHookAsk(ask), key: askKey(ask) });
   }
 
   stop(): void {
     this.stopped = true;
     this.bus.off('notice', this.onNotice);
     this.bus.off(`session:${this.id}`, this.onSessionMsg);
+    this.bus.off(`answered:${this.id}`, this.onAnswered);
     if (this.poll) clearInterval(this.poll);
     this.poll = null;
     this.tailer?.stop();
@@ -602,13 +718,24 @@ export class SessionStream {
     let cwd = identity.workdir;
     let status: SessionStatus = 'dead';
     let statusUpdatedAt: number | null = null;
+    // D-5561: one `has-session`, as before — its verdict kept, because the
+    // workflow reader must not read a substrate fault (`unknown`) as a process
+    // that died mid-run. `status` folds it exactly as `hasSession` did.
+    const verdict = (await this.deps.tmux.sessionVerdict(this.id)).verdict;
+    let proc: Proc = verdict === 'gone' ? { kind: 'gone' } : { kind: 'unmeasured' };
     // D-309 (was D-B8-13): `unknown` deliberately reads as not-alive here, so the chat
     // header shows 'dead' during a substrate fault — display-only, and the
     // same deferred product decision as assembleFleet's (see fleet.ts).
-    if (await this.deps.tmux.hasSession(this.id)) {
+    if (verdict === 'live') {
       status = 'idle';
       const pid = await this.deps.tmux.panePid(this.id);
-      if (pid) {
+      if (pid === null) {
+        // D-5275: mirror `assembleFleet` (D-5234). The pane is alive and its
+        // pid read FAILED, which measured nothing about the session; the card
+        // paints that `busy`, so the header does too — the D-115 mirror rule
+        // below. `statusUpdatedAt` stays null and `cwd` at the registry's.
+        status = 'busy';
+      } else {
         // D-115, the chat half of the same fix `assembleFleet` takes (see its
         // block in fleet.ts for the full argument). The folded read answered
         // ONE null for four conditions and this block spent it as "leave
@@ -626,13 +753,15 @@ export class SessionStream {
           if (read.state.cwd) cwd = read.state.cwd;
           status = liveSessionStatus(read.state.status);
           statusUpdatedAt = read.state.statusUpdatedAt;
+          proc = { kind: 'live', startedAt: read.state.startedAt };
         } else if (read.reason === 'unmeasured') {
           // `status` ALONE moves. `cwd` stays at the registry's `workdir` and
           // `statusUpdatedAt` stays null: an unmeasured read has no fields to
           // report, and `statusUpdatedAt` is what the header renders as the
           // `· 1m ago` beside the word — a fabricated one would put a fresh
-          // timestamp under a status nobody measured. `no-state` (absent,
-          // half-written, naming no session) still leaves this at `idle`,
+          // timestamp under a status nobody measured. `no-state` (absent, or a
+          // well-formed record naming no session — a torn body is unmeasured
+          // since D-5234) still leaves this at `idle`,
           // which is the ordinary shape for a pane that has published
           // nothing yet.
           status = 'busy';
@@ -650,7 +779,7 @@ export class SessionStream {
     });
     return {
       ok: true,
-      data: { uuid: identity.uuid, file: resolution.path, resolution, cfgDir, status, statusUpdatedAt },
+      data: { uuid: identity.uuid, file: resolution.path, resolution, cfgDir, status, statusUpdatedAt, proc },
     };
   }
 
@@ -667,6 +796,11 @@ export class SessionStream {
     const { events, offset, missing, measured } = await readBacklog(this.deps.io, r.file, BACKLOG_N);
     if (this.stopped) return;
     this.tailed = r.resolution;
+    // D-5560: the client drops its workflow rows on every backlog (a backlog is
+    // where the session dir can change under it), so the next workflows read
+    // is a FIRST read again and is stated — see `lastWorkflowsJson`.
+    this.lastWorkflowsJson = undefined;
+    this.sentWorkflows = false;
     this.send({
       type: 'backlog', uuid: r.uuid, events, offset, file: r.file, missing,
       fileMeasured: measured,
@@ -760,6 +894,7 @@ export class SessionStream {
   private async tick(): Promise<void> {
     if (this.stopped || this.ticking) return;
     this.ticking = true;
+    this.tickStartedAt = Date.now();
     try {
       const r = await this.resolve();
       // Registry ladder, Task 2: `unmeasurable` returns EARLY, touching
@@ -900,11 +1035,34 @@ export class SessionStream {
       if (this.stopped) return;
       await this.checkHookAsk(data.uuid);
       if (this.stopped) return;
+      await this.checkWorkflows(data.file, data.proc);
+      if (this.stopped) return;
       await this.checkMail();
     } finally {
       this.ticking = false;
+      this.tickStartedAt = null;
     }
   }
+}
+
+/**
+ * The journal line for one `dialog`/`dialog_cleared` frame a session stream sends (decision `dialog-frame-log`). Until
+ * it, nothing on either box recorded what the sheet was told, so the 2026-10-16 report could only be settled by asking
+ * the operator what the sheet showed. One line per frame actually sent, never per poll:
+ * `ccrc-server: dialog-frame <session> <kind> <id8> from=<poll|answer> tick=<ms|->`.
+ * - `kind`: `cleared`, `review` (`reviewRows`), `multi` (`Dialog.multi`), `unparsed`, or `question`;
+ * - `tick`: how far into its poll the stream was when it sent the frame (`-` for an answer's frame, sent between polls).
+ * Ids and kinds only: no pane text, no labels.
+ */
+export function dialogFrameLine(id: string, msg: SessionStreamMsg, from: 'poll' | 'answer', tickMs: number | null): string {
+  let kind = 'cleared';
+  let short = '-';
+  if (msg.type === 'dialog') {
+    const d = msg.dialog;
+    short = d.id.slice(0, 8);
+    kind = reviewRows(d) !== null ? 'review' : d.multi !== undefined ? 'multi' : d.parsed ? 'question' : 'unparsed';
+  }
+  return `ccrc-server: dialog-frame ${id} ${kind} ${short} from=${from} tick=${tickMs === null ? '-' : String(tickMs)}`;
 }
 
 /** What a client has already been told about the pane menu: the dialog id it

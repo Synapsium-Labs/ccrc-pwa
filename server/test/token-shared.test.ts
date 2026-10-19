@@ -381,11 +381,14 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(HOLDERS_MESSAGE, 'a missing holder').toMatch(/missing[^]*(moved|changed value)/);
   });
 
-  it('the holders across shared, server/src, pwa/src and agent/src are exactly the three separate seven-day quantities', () => {
-    // A weekly interval anywhere else must import the one in shared/box-token.ts. These three are separate
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the four separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These four are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
+    // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
+    // (R81), and it does not import the token interval.
     expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
+      'server/src/coord/delegation-model.ts:DELEGATION_HEALTH_WINDOW_MS',
       'shared/api.ts:LEDGER_STALE_MS',
       'shared/box-token.ts:TOKEN_ROTATION_INTERVAL_MS',
     ]);

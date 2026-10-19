@@ -5,11 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
-import { fleetSession as baseSession } from './fleetFixture';
-import { ToastHost } from '@ccrc/ui';
+import { fleetSession as baseSession, hibernatedSession } from './fleetFixture';
+import { Sheet, ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
-import { SessionScreen, useKeyboardInsets } from '../src/screens/SessionScreen';
+import { SessionScreen, chatPulsing, useKeyboardInsets } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';
 import { TEST_ROSTER } from './rosterFixture';
@@ -100,6 +100,8 @@ describe('SessionHeader', () => {
     expect(stop).toBeEnabled();
     fireEvent.click(stop);
     expect(props.onInterrupt).toHaveBeenCalledOnce();
+    // D-5237: the keycap names itself as the interrupt's source.
+    expect(props.onInterrupt).toHaveBeenCalledWith('keycap');
     expect(screen.getByText(/working/)).toBeInTheDocument();
   });
 
@@ -128,7 +130,8 @@ describe('SessionHeader', () => {
       status: 'dead',
       session: fleetSession({ status: 'busy', dialogPending: true, bucket: 'attention' }),
     });
-    expect(screen.getByText('not running')).toBeInTheDocument();
+    // D-5545: the word is the card's (`exited`, headerStatusWord); the lamp still speaks `not running`.
+    expect(screen.getByText('exited')).toBeInTheDocument();
     expect(screen.queryByText('waiting on you')).not.toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
   });
@@ -193,7 +196,8 @@ describe('SessionHeader', () => {
   it('still says not running for a dead session', () => {
     renderHeader({ status: 'dead', session: fleetSession({ status: 'dead', bucket: 'dead' }) });
     expect(screen.getByRole('img', { name: 'not running' })).toBeInTheDocument();
-    expect(screen.getByText('not running')).toBeInTheDocument();
+    // D-5545: the word is the card's (`exited`, headerStatusWord); the lamp still speaks `not running`.
+    expect(screen.getByText('exited')).toBeInTheDocument();
   });
 
   it('paints from the live status alone before the fleet snapshot lands', () => {
@@ -266,6 +270,8 @@ describe('interrupt control', () => {
     render(<SessionHeader {...props({ status: 'busy', onInterrupt })} />);
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onInterrupt).toHaveBeenCalled();
+    // D-5237: the physical key names itself as the interrupt's source.
+    expect(onInterrupt).toHaveBeenCalledWith('escape-key');
   });
 
   it('does not interrupt an idle session, matching the keycap\'s disabled state', () => {
@@ -302,7 +308,7 @@ describe('SessionScreen interrupt wiring', () => {
     return { store, fleet };
   };
 
-  it('the stop keycap calls api.interrupt with the session id', () => {
+  it('the stop keycap calls api.interrupt with the session id and its source (D-5237)', () => {
     const spy = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined);
     const { store, fleet } = makeStores();
     render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
@@ -310,7 +316,7 @@ describe('SessionScreen interrupt wiring', () => {
       store.setState({ uuid: 'u1', status: 'busy' });
     });
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
-    expect(spy).toHaveBeenCalledWith('claude:OpenClawHetzner');
+    expect(spy).toHaveBeenCalledWith('claude:OpenClawHetzner', 'keycap');
   });
 
   it('a 409 not-busy answer surfaces as a quiet toast', async () => {
@@ -639,8 +645,9 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
     // The sheet's own confirm button — by wrapper class, since the menu's
     // same-named opener may still be unmounting behind it (the actions-sheet
     // suite's Release idiom).
-    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-primary')).not.toBeNull());
-    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-primary')!);
+    // The archive confirm is the danger variant now (D-5099); its hook class follows (D-5449).
+    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-danger')).not.toBeNull());
+    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-danger')!);
     expect(spy).not.toHaveBeenCalled();
     expect(await screen.findByText(/tmux unreachable — x/)).toBeInTheDocument();
   });
@@ -983,5 +990,384 @@ describe('the Escape binding ignores every other key', () => {
     expect(p.onInterrupt, 'an ordinary keystroke interrupted the turn').not.toHaveBeenCalled();
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(p.onInterrupt, 'the control: Escape still interrupts').toHaveBeenCalledTimes(1);
+  });
+});
+
+// `background-aware-working` (D-5231; plan 2026-10-16-working-state-and-interruptions Task 1): the header says what
+// the card says about delegated work a main Stop left running, and the chat pulse follows the server's BUCKET, so a
+// wedged `busy` the ladder filed `done` stops pulsing and delegated work after a Stop keeps it.
+describe('delegated background work (D-5231)', () => {
+  const NEUTRAL = 'lane-a:project-a';
+  const row = (over: Partial<FleetSession> = {}): FleetSession => baseSession({
+    id: NEUTRAL, project: 'project-a', status: 'busy', bucket: 'working', hookState: 'done',
+    statusUpdatedAt: Date.now() - 95 * 60_000, background: { count: 2, kinds: ['workflow'] }, ...over,
+  });
+
+  it('a working row with background reads `working · 2 in background`, the kinds in the title', () => {
+    renderHeader({ status: 'busy', session: row() });
+    const line = screen.getByText('working · 2 in background');
+    expect(line.getAttribute('title')).toBe('in background: workflow');
+  });
+
+  it('the same row with no background keeps the elapsed clock', () => {
+    renderHeader({ status: 'busy', session: row({ background: null }) });
+    expect(screen.queryByText(/in background/)).not.toBeInTheDocument();
+    expect(screen.getByText(/^working · /)).toBeInTheDocument();
+  });
+
+  it('a row the ladder filed `done` never shows the background words', () => {
+    renderHeader({ status: 'busy', session: row({ bucket: 'done' }) });
+    expect(screen.queryByText(/in background/)).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'finished' })).toBeInTheDocument();
+    // Nor the kinds in a title: the row's `background` is still set (fleet.ts does not clear it once the live file
+    // goes idle after the Stop), so only the `bucket === 'working'` gate keeps a stale title off the done line.
+    const line = document.querySelector('.status-line');
+    expect(line).not.toBeNull();
+    expect(line!.textContent).toMatch(/^done/);
+    expect(line!.hasAttribute('title')).toBe(false);
+  });
+
+  // The pulse rule is tested directly: `ChatList` renders through Virtuoso, which cannot measure in jsdom, so a
+  // SessionScreen render never shows the trailing indicator whatever `busy` is (a vacuous assertion).
+  it('the chat does not pulse on a wedged busy row whose bucket is `done`', () => {
+    expect(chatPulsing(row({ bucket: 'done', background: null }), 'busy')).toBe(false);
+  });
+
+  it('the chat pulses on a busy row the ladder keeps `working` for its delegated work', () => {
+    expect(chatPulsing(row(), 'busy')).toBe(true);
+  });
+
+  it('the chat pulses on a `working` row while the live word already reads idle (the bucket decides)', () => {
+    expect(chatPulsing(row(), 'idle')).toBe(true);
+  });
+
+  it('before the snapshot row lands the live word decides, and a dead session never pulses', () => {
+    expect(chatPulsing(null, 'busy')).toBe(true);
+    expect(chatPulsing(null, 'idle')).toBe(false);
+    expect(chatPulsing(row(), 'dead')).toBe(false);
+  });
+});
+
+// D-5235 (spec 2026-10-16 §5.5; plan Task 5). The desktop Escape binding sits
+// on the window, in the bubble phase, so the same keystroke that dismisses a
+// sheet (Radix's dismiss, in its document capture listener, preventDefault()s
+// without stopping propagation) reached it and interrupted the running turn.
+// The operator closed a sheet and lost the turn.
+//
+// RED FIRST, measured 2026-10-16 against origin/main 0a06ebb9: the sheet case
+// and the already-handled case failed (onInterrupt called once each); the
+// nothing-open and textarea cases passed before and after, as they should.
+//
+// MUTATION TABLE (plan Task 5 Step 3; RUN 2026-10-16 on an isolated copy, each
+// mutant applied, header + drawer-view run, restored and compared byte for byte;
+// the open-dialog rows re-run 2026-10-17 with the window-dispatched case added):
+//   the defaultPrevented check removed ......... RED: the already-handled case
+//                                                (the sheet case stays green
+//                                                through the open-dialog check)
+//   the open-dialog check removed .............. RED: the open-sheet,
+//                                                window-dispatched case (Radix
+//                                                never sees that Escape, so only
+//                                                the open-dialog check holds it)
+//   both removed ............................... RED: the sheet case, the
+//                                                already-handled case, the
+//                                                window-dispatched case, and the
+//                                                drawer's focus-elsewhere case
+//   the textarea skip removed .................. RED: both textarea cases; the
+//                                                drawer's terminal-focused case
+//                                                stays GREEN (see drawer-view)
+//   the textarea skip and both checks removed .. the drawer's terminal-focused
+//                                                case is STILL green: xterm's
+//                                                `cancel(e, true)` stops the
+//                                                keydown's propagation, so it
+//                                                never reaches the window
+describe('Escape that closes a sheet never interrupts (D-5235)', () => {
+  const neutral = baseSession({ id: 'project-a-quiet-basin', project: 'project-a', workdir: '/w' });
+
+  it('a sheet is open with focus on a button inside it: Escape closes the sheet and interrupts nothing', () => {
+    stubPointer(true);
+    const onClose = vi.fn();
+    const p = props({ session: neutral, status: 'busy' });
+    render(
+      <>
+        <SessionHeader {...p} />
+        <Sheet open onClose={onClose} title="a sheet"><button type="button">inside</button></Sheet>
+      </>,
+    );
+    const inside = screen.getByRole('button', { name: 'inside' });
+    act(() => inside.focus());
+    fireEvent.keyDown(inside, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    expect(onClose, 'the control: Escape dismisses the sheet').toHaveBeenCalledTimes(1);
+    expect(p.onInterrupt, 'closing the sheet interrupted the turn').not.toHaveBeenCalled();
+  });
+
+  it('an Escape something earlier already handled (defaultPrevented) interrupts nothing', () => {
+    stubPointer(true);
+    const p = props({ session: neutral, status: 'busy' });
+    render(<SessionHeader {...p} />);
+    // What Radix's dismiss does: a document capture listener that prevents
+    // the default and lets the event go on bubbling.
+    const handled = (e: Event): void => { e.preventDefault(); };
+    document.addEventListener('keydown', handled, { capture: true });
+    try {
+      fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    } finally {
+      document.removeEventListener('keydown', handled, { capture: true });
+    }
+    expect(p.onInterrupt, 'an already-handled Escape interrupted the turn').not.toHaveBeenCalled();
+  });
+
+  it('a sheet is open and an Escape reaches the window without Radix preventing it: nothing is interrupted', () => {
+    stubPointer(true);
+    const p = props({ session: neutral, status: 'busy' });
+    render(
+      <>
+        <SessionHeader {...p} />
+        <Sheet open onClose={vi.fn()} title="a sheet"><button type="button">inside</button></Sheet>
+      </>,
+    );
+    // Dispatched straight on window: Radix's document listener never sees it,
+    // so its default is not prevented and only the open-dialog check holds it.
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(p.onInterrupt, 'an Escape with a sheet open interrupted the turn').not.toHaveBeenCalled();
+  });
+
+  it('with nothing open, Escape still interrupts, once', () => {
+    stubPointer(true);
+    const p = props({ session: neutral, status: 'busy' });
+    render(<SessionHeader {...p} />);
+    fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    expect(p.onInterrupt).toHaveBeenCalledTimes(1);
+  });
+
+  it('with focus in a textarea, Escape does not interrupt (unchanged)', () => {
+    stubPointer(true);
+    const p = props({ session: neutral, status: 'busy' });
+    render(<><textarea data-testid="box" /><SessionHeader {...p} /></>);
+    const box = screen.getByTestId('box');
+    act(() => box.focus());
+    fireEvent.keyDown(box, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    expect(p.onInterrupt).not.toHaveBeenCalled();
+  });
+});
+
+// `interrupt-and-restart-causes-recorded` (D-5237; plan 2026-10-16-working-state-and-interruptions Task 8): the
+// header names a recent process end as the card does, for an hour.
+describe('a recent restart is named (D-5237)', () => {
+  const row = (over: Partial<FleetSession> = {}): FleetSession => baseSession({
+    id: 'lane-a:project-a', project: 'project-a', ...over,
+  });
+  it('an oom end 3 minutes ago reads `restarted · out of memory · 3m ago`', () => {
+    renderHeader({ status: 'idle', session: row({ lastEnd: { at: Date.now() - 3 * 60_000 - 5_000, cause: 'oom' } }) });
+    const chip = screen.getByText('restarted · out of memory · 3m ago');
+    expect(chip.closest('[data-restart]')?.getAttribute('data-restart')).toBe('oom');
+  });
+  it('after an hour, or with no end, nothing', () => {
+    renderHeader({ status: 'idle', session: row({ lastEnd: { at: Date.now() - 61 * 60_000, cause: 'oom' } }) });
+    expect(screen.queryByText(/^restarted · /)).not.toBeInTheDocument();
+  });
+});
+
+// `with-coordinator-state` (D-5296; plan Task 7): the header reads the same
+// words as the card, in the calm (idle) tint, and the dialog stays answerable
+// from the session screen: the operator can still answer first.
+describe('the quiet "with coordinator" state (D-5296)', () => {
+  const WC = { kind: 'question' as const, parentId: 'project-a-calm-mesa', since: 4000, notifyAt: 184_000 };
+  const held = (over: Partial<FleetSession> = {}): FleetSession => baseSession({
+    id: 'project-a-quiet-basin', project: 'project-a', workspace: 'quiet-basin', workdir: '/data/projects/project-a/quiet-basin',
+    status: 'idle', hookState: 'waiting', bucket: 'working', bucketSince: 4000, withCoordinator: WC, ...over,
+  });
+
+  for (const width of [360, 390, 1280, 1920]) {
+    it(`reads "with coordinator · calm-mesa" in the calm tint at ${width} px`, () => {
+      window.innerWidth = width;
+      window.dispatchEvent(new Event('resize'));
+      renderHeader({ session: held(), status: 'idle' });
+      const line = document.querySelector('.status-line');
+      expect(line?.textContent).toBe('with coordinator · calm-mesa');
+      expect(line?.className).toContain('status-line--idle');
+      expect(line?.getAttribute('title')).toContain('You can still answer it yourself.');
+    });
+  }
+
+  // Layout is not measurable in jsdom: the widths above prove the words, and
+  // these rules are what the Playwright measurements (PR body) depend on. The
+  // name never breaks; the word sits beside the dot; the title column may
+  // shrink to the column instead of pushing the name under the keycaps.
+  it('the header rules: the name never breaks, the word stays beside the dot', async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { ruleIn, declValue, stripComments } = await import('./cssRule');
+    const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8'));
+    expect(declValue(ruleIn(css, '.chat-meta .status-line-name'), 'white-space')).toBe('nowrap');
+    expect(declValue(ruleIn(css, '.chat-meta .status-line--coordinator'), 'max-width')).toBe('calc(100% - 8px - var(--sp-2))');
+    expect(declValue(ruleIn(css, '.chat-meta:has(.status-line--coordinator)'), 'min-width')).toBe('0');
+    renderHeader({ session: held(), status: 'idle' });
+    expect(document.querySelector('.status-line--coordinator .status-line-name')?.textContent).toBe('· calm-mesa');
+  });
+
+  it('without the field the header reads the ordinary working word', () => {
+    renderHeader({ session: held({ withCoordinator: null }), status: 'idle' });
+    expect(document.querySelector('.status-line')?.textContent).not.toContain('with coordinator');
+  });
+
+  it('the DialogSheet still opens from the session screen while the parent holds the question', () => {
+    const store = createSessionStore('project-a-quiet-basin', {
+      makeSocket: fakeSocket,
+      api: { prompt: vi.fn().mockResolvedValue(undefined) },
+    });
+    const fleet = createFleetStore({ makeSocket: fakeSocket });
+    act(() => { fleet.setState({ sessions: [held()], conn: 'open' }); });
+    render(<SessionScreen id="project-a-quiet-basin" store={store} fleet={fleet} />);
+    act(() => {
+      store.setState({
+        uuid: 'u1', status: 'idle',
+        dialog: {
+          id: 'd-1', title: 'Which branch?',
+          options: [{ index: 1, label: 'main' }, { index: 2, label: 'release' }],
+          selectedIndex: 1, parsed: true, raw: '❯ 1. main\n  2. release',
+        },
+      });
+    });
+    expect(document.querySelector('.status-line')?.textContent).toBe('with coordinator · calm-mesa');
+    expect(screen.getByText('Which branch?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /release/ })).toBeInTheDocument();
+  });
+
+  // The guard that keeps the words off any bucket but `working`: the server
+  // keeps the field on a dead row, or an idle one whose asks row is still held.
+  it('a dead row with the field set reads its dead word, never the coordinator words', () => {
+    renderHeader({ session: held({ status: 'dead', bucket: 'dead' }), status: 'dead' });
+    const line = document.querySelector('.status-line');
+    expect(line?.textContent).not.toContain('with coordinator');
+    expect(line?.className).not.toContain('status-line--coordinator');
+    expect(line?.className).toContain('status-line--dead');
+  });
+
+  it('an idle row with the field set reads its idle word, never the coordinator words', () => {
+    renderHeader({ session: held({ bucket: 'idle' }), status: 'idle' });
+    const line = document.querySelector('.status-line');
+    expect(line?.textContent).toMatch(/^idle/);
+    expect(line?.className).not.toContain('status-line--coordinator');
+  });
+
+  // D-5390: a `<wrapper>-<project>` main-checkout parent keeps its whole id,
+  // which at 360 and 390 px is wider than the column. The name ellipsises
+  // inside the status line (Playwright-measured, PR body); the full id stays
+  // on `title`.
+  it('a long `<wrapper>-<project>` parent ellipsises inside the line, the full id on title', async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { ruleIn, declValue, stripComments } = await import('./cssRule');
+    const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8'));
+    const rule = ruleIn(css, '.chat-meta .status-line-name');
+    expect(declValue(rule, 'overflow')).toBe('hidden');
+    expect(declValue(rule, 'text-overflow')).toBe('ellipsis');
+    expect(declValue(rule, 'display')).toBe('inline-block');
+    expect(declValue(rule, 'max-width')).toBe('100%');
+    renderHeader({ session: held({ withCoordinator: { ...WC, parentId: 'wrapper-two-project-a' } }), status: 'idle' });
+    expect(document.querySelector('.status-line-name')?.textContent).toBe('· wrapper-two-project-a');
+    expect(document.querySelector('.status-line')?.getAttribute('title')).toContain('wrapper-two-project-a');
+  });
+
+  // The chat's working pulse stands down while the parent holds the question,
+  // so it agrees with the header's calm tint.
+  it('the chat does not pulse while the parent holds the question', () => {
+    expect(chatPulsing(held(), 'idle')).toBe(false);
+    expect(chatPulsing(held({ withCoordinator: null }), 'idle')).toBe(true);
+  });
+});
+
+// D-5242 (plan Task 18): the session's own screen never shows "not running" above "Waking…".
+describe('the header of a hibernated row (D-5242)', () => {
+  const AT = Date.now() - 6 * 3_600_000;
+  it('a dead row with hibernatedAt reads `hibernated` with the calm dot, never "not running"', () => {
+    renderHeader({ status: 'dead', session: hibernatedSession(AT, { id: 'project-a-quiet-basin', project: 'project-a' }) });
+    // D-5545: the card's own words, its age included (`hibernated · 6h`), so the header never says less.
+    expect(screen.getByText('hibernated · 6h')).toBeInTheDocument();
+    expect(screen.queryByText('not running')).toBeNull();
+    const dot = screen.getByRole('img', { name: 'hibernated' });
+    expect(dot.className).toMatch(/dot--idle/);
+    // The word wears the calm ink too, not the dead tone: colour must not contradict "Waking…" below.
+    const line = screen.getByText('hibernated · 6h').closest('.status-line');
+    expect(line?.className).toMatch(/status-line--idle/);
+    expect(line?.className).not.toMatch(/status-line--dead/);
+  });
+
+  it('the stream saying dead over a sleeping row still reads hibernated', () => {
+    renderHeader({ status: 'dead', session: hibernatedSession(AT, { id: 'project-a-quiet-basin', project: 'project-a' }) });
+    expect(screen.queryByRole('img', { name: 'not running' })).toBeNull();
+  });
+
+  it('a dead row without hibernatedAt still reads "exited" (the lamp: "not running")', () => {
+    renderHeader({ status: 'dead', session: fleetSession({ status: 'dead', bucket: 'dead' }) });
+    // D-5545: the word is the card's (`exited`, headerStatusWord); the lamp still speaks `not running`.
+    expect(screen.getByText('exited')).toBeInTheDocument();
+    expect(screen.queryByText('hibernated')).toBeNull();
+  });
+});
+
+// — D-5527: a coordinated workspace says, in words, whose code it works on and who coordinates it —
+
+describe('SessionScreen: the coordination line (D-5527)', () => {
+  const CHILD = 'lane-b-project-b-quiet-river';
+  const COORD = 'lane-a-project-a';
+  const run41 = {
+    id: 41, program: 'port-api', programTitle: 'Port the API', wave: 5, waveOf: 7,
+    project: 'project-b', homeProject: 'project-b', sessionId: CHILD, workspace: 'quiet-river', branch: null,
+    state: 'dispatched', kind: 'work', reviews: null, claimedBy: COORD, resumed: true, clearedAt: null,
+    openedAt: 1_800_000_000_000, dispatchStartedAt: null, dispatchedAt: null, closedAt: null, handoffCommit: null,
+    items: { done: 0, total: 0 }, unreadMail: 0,
+    health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
+              briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null,
+  } as const;
+  const mount = (sessions: FleetSession[], runs: readonly (typeof run41)[] = [run41]) => {
+    const store = createSessionStore(CHILD, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const fleet = createFleetStore({ makeSocket: fakeSocket });
+    act(() => {
+      fleet.setState({ sessions, runs: runs.map((r) => ({ ...r })), runsFrameSeen: true, conn: 'open' });
+    });
+    render(<SessionScreen id={CHILD} store={store} fleet={fleet} />);
+  };
+  const child = baseSession({
+    id: CHILD, project: 'project-b', workspace: 'quiet-river', role: 'child',
+    child: { kind: 'child', runId: 39 }, boardProject: 'project-a',
+  });
+
+  // D-5545: the coordination row is clause boxes with NO separator glyph (a wrapped line never starts with a lone
+  // `·`); the programme and the coordinator are links, the coordinator with its state; the run number is a detail.
+  const parts = (): string[] => [...document.querySelectorAll('.chat-coord > *')].map((e) => e.textContent ?? '');
+  const openDetails = (): void => { fireEvent.click(screen.getByRole('button', { name: 'Session details' })); };
+
+  it('a cross-project child: whose code, then its programme and its coordinator as links, the run in the details', () => {
+    mount([baseSession({ id: COORD, project: 'project-a', name: 'the coordinator', role: 'coordinator' }), child]);
+    expect(parts()).toEqual(['works on project-b', '≡port-api · wave 5 of 7', '⤴coordinator the coordinator · idle']);
+    for (const p of parts()) expect(p.trimStart().startsWith('·')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Open the run board — port-api · wave 5 of 7' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open the coordinator — the coordinator' })).toBeInTheDocument();
+    // ONE sentence with the fleet row's (`runSentence`): a work run "does one wave".
+    expect(document.querySelector('.chat-coord')).toHaveAttribute('title',
+      'this workspace does one wave of Port the API on project-b’s code for the coordinator; it is stopped or reclaimed when the wave is done');
+    openDetails();
+    expect(screen.getByText('run #41')).toBeInTheDocument();
+  });
+
+  it('a coordinator the fleet does not carry is named by the project it coordinates from, and is no link', () => {
+    mount([child]);
+    expect(parts()).toEqual(['works on project-b', '≡port-api · wave 5 of 7', 'coordinated from project-a']);
+    expect(screen.queryByRole('button', { name: /Open the coordinator/ })).toBeNull();
+  });
+
+  it('names the ACTIVE run, never a closed one the store still holds with a higher id', () => {
+    const closed = { ...run41, id: 45, wave: 6, state: 'done', closedAt: 1_800_000_100_000 } as unknown as typeof run41;
+    mount([baseSession({ id: COORD, project: 'project-a', name: 'the coordinator', role: 'coordinator' }), child], [run41, closed]);
+    expect(parts()).toContain('≡port-api · wave 5 of 7');
+    openDetails();
+    expect(screen.getByText('run #41')).toBeInTheDocument();
+    expect(screen.queryByText('run #45')).toBeNull();
+  });
+
+  it('a session nobody coordinates has no coordination line — the no-regression baseline', () => {
+    mount([baseSession({ id: CHILD, project: 'project-b' })], []);
+    expect(document.querySelector('.chat-coord')).toBeNull();
   });
 });
