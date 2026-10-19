@@ -1811,3 +1811,14 @@ describe('a row whose claimant or close time the board does not have', () => {
       .toBeLessThan(body.indexOf('undated-one'));
   });
 });
+
+// D-5102: the run board stands on the page scaffold, at the wide column.
+describe('the run board on the page scaffold (D-5102)', () => {
+  it('renders a PageScaffold with one h1, at --page-max-wide', () => {
+    const { container } = render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={() => new Promise(() => {})} />);
+    const h1 = screen.getAllByRole('heading', { level: 1 });
+    expect(h1).toHaveLength(1);
+    expect(h1[0]).toHaveAccessibleName('Runs');
+    expect(container.querySelector('[data-page-body]')?.className.split(/\s+/)).toContain('max-w-(--page-max-wide)');
+  });
+});

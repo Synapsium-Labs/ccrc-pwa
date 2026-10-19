@@ -991,6 +991,15 @@ describe('(f2) no tap-bearing density token below --tap-min outside (pointer: fi
     expect(tapFloor(REPO, REAL)).toEqual([]);
   });
 
+  // D-5667: the page header (D-5102) holds Back, so its height is tap-bearing
+  // too — Instrument's 40 is for a fine pointer, and a phone keeps 44.
+  it('the catalogue marks --head-h, and reds a dense page header in the bare block', () => {
+    expect(tapBearing(REAL)).toContain('--head-h');
+    const tree = replaceOnce(plantedTree(), SKINS_CSS, '--head-h:        44px;', '--head-h:        40px;');
+    expect(tapFloor(tree, REAL)).toEqual([
+      'skins.css: --head-h: 40px is below --tap-min (44px) outside @media (pointer: fine)']);
+  });
+
   it('reds the dense row in the bare block', () => {
     const tree = replaceOnce(plantedTree(), SKINS_CSS, '--row-h:       44px;', '--row-h:       32px;');
     expect(tapFloor(tree, REAL)).toEqual([
@@ -1000,16 +1009,22 @@ describe('(f2) no tap-bearing density token below --tap-min outside (pointer: fi
   it('reds the dense row under (pointer: coarse)', () => {
     const coarse = replaceOnce(plantedTree(), SKINS_CSS, '@media (pointer: fine) {', '@media (pointer: coarse) {');
     expect(tapFloor(coarse, REAL)).toEqual([
-      'skins.css: --row-h: 32px is below --tap-min (44px) outside @media (pointer: fine)']);
+      'skins.css: --row-h: 32px is below --tap-min (44px) outside @media (pointer: fine)',
+      // The page header's dense value sits in the same block (D-5102, D-5667).
+      'skins.css: --head-h: 40px is below --tap-min (44px) outside @media (pointer: fine)']);
   });
 
   it('reds the dense row under a query that names a fine pointer but applies without one: a list, and a not', () => {
     const list = replaceOnce(plantedTree(), SKINS_CSS, '@media (pointer: fine) {', '@media all, print and (pointer: fine) {');
     expect(tapFloor(list, REAL)).toEqual([
-      'skins.css: --row-h: 32px is below --tap-min (44px) outside @media (pointer: fine)']);
+      'skins.css: --row-h: 32px is below --tap-min (44px) outside @media (pointer: fine)',
+      // The page header's dense value sits in the same block (D-5102, D-5667).
+      'skins.css: --head-h: 40px is below --tap-min (44px) outside @media (pointer: fine)']);
     const negated = replaceOnce(plantedTree(), SKINS_CSS, '@media (pointer: fine) {', '@media not all and (pointer: fine) {');
     expect(tapFloor(negated, REAL)).toEqual([
-      'skins.css: --row-h: 32px is below --tap-min (44px) outside @media (pointer: fine)']);
+      'skins.css: --row-h: 32px is below --tap-min (44px) outside @media (pointer: fine)',
+      // The page header's dense value sits in the same block (D-5102, D-5667).
+      'skins.css: --head-h: 40px is below --tap-min (44px) outside @media (pointer: fine)']);
   });
 
   it("reds a short row in Refined's :root (D-5243), and a value it cannot measure", () => {

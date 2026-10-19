@@ -116,17 +116,17 @@ describe('ArchiveScreen', () => {
   // known: rows that read '—' cannot be silently worth 0 in the figure above
   // them.
   it('qualifies the total when a row was never measured, and refuses one entirely when none was', () => {
-    const { container, rerender } = render(<ArchiveScreen sessions={[
+    const { rerender } = render(<ArchiveScreen sessions={[
       s({ id: 'demo-quiet-basin' }),
       s({ id: 'demo-still-cove', workspace: 'still-cove', archivedBytes: null }),
     ]} onOpen={() => {}} />);
-    expect(container.querySelector('.archive-total')).toHaveTextContent('2 archived · 1.2 GB + 1 unmeasured');
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('2 archived · 1.2 GB + 1 unmeasured');
 
     rerender(<ArchiveScreen sessions={[
       s({ id: 'demo-quiet-basin', archivedBytes: null }),
       s({ id: 'demo-still-cove', workspace: 'still-cove', archivedBytes: null }),
     ]} onOpen={() => {}} />);
-    expect(container.querySelector('.archive-total')).toHaveTextContent('2 archived · size unknown');
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('2 archived · size unknown');
     expect(screen.queryByText('0 B')).not.toBeInTheDocument();
   });
 
@@ -159,5 +159,25 @@ describe('ArchiveScreen', () => {
     ]} onOpen={() => {}} />);
     expect(screen.getByText('0 B')).toBeInTheDocument();
     expect(screen.getByText('—')).toBeInTheDocument();
+  });
+});
+
+// D-5102: Archive stands on the page scaffold. It drew no header at all
+// before, so a phone had no way back but the browser's own.
+describe('ArchiveScreen on the page scaffold (D-5102)', () => {
+  it('renders a PageScaffold with one h1 and Back to the fleet, with rows and without', () => {
+    for (const sessions of [[s()], []]) {
+      const { unmount } = render(<ArchiveScreen sessions={sessions} onOpen={() => {}} />);
+      const h1 = screen.getAllByRole('heading', { level: 1 });
+      expect(h1).toHaveLength(1);
+      expect(h1[0]).toHaveAccessibleName('Archive');
+      expect(screen.getByRole('button', { name: 'Back to fleet' })).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('says "Nothing is archived." through EmptyState, on the scaffold', () => {
+    render(<ArchiveScreen sessions={[]} onOpen={() => {}} />);
+    expect(screen.getByText('Nothing is archived.')).toBeInTheDocument();
   });
 });

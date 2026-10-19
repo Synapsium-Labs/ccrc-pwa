@@ -4,7 +4,8 @@
 // number in this UI that argues for a cleanup, which is why it comes from the
 // manifest ws-archive measured on the box rather than from an estimate here.
 import type { ReactNode } from 'react';
-import { BareRow } from '@ccrc/ui';
+import { BareRow, EmptyState, PageScaffold, Section } from '@ccrc/ui';
+import { navigate } from '../lib/router';
 import type { FleetSession } from '../../../shared/api';
 import '../fleet/fleet.css';
 
@@ -66,9 +67,18 @@ export function ArchiveScreen({
     .slice().sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0));
   const summary = archivedSummary(sessions);
   const { count } = summary;
-  if (count === 0) return <p className="archive-empty">Nothing is archived.</p>;
+  // The page scaffold (D-5102). Archive drew no header before, so a phone had
+  // no way back but the browser's own; it has Back and a title now, empty or not.
+  const back = { label: 'Back to fleet', onClick: () => navigate('/') };
+  if (count === 0) {
+    return (
+      <PageScaffold title="Archive" back={back}>
+        <EmptyState data-state="ok">Nothing is archived.</EmptyState>
+      </PageScaffold>
+    );
+  }
   return (
-    <div className="archive-screen">
+    <PageScaffold title="Archive" back={back}>
       {/* The byte figure lives in its own text node, not folded into the
           template literal above it: DEVIATION from the plan's given markup —
           `getByText('2.3 GB')` (Step 5's test) needs an element whose OWN
@@ -80,35 +90,38 @@ export function ArchiveScreen({
           footer uses (fix round 3, P3): when a row was never measured this
           says so — "size unknown", or "1.2 GB + 1 unmeasured" — instead of
           printing a total that quietly counts an unread size as zero. */}
-      <p className="archive-total">{`${count} archived · `}<span className="archive-total-bytes">{archivedSizeText(summary)}</span></p>
-      {rows.map((s) => (
-        <BareRow key={s.id} className="archive-row"
-                aria-label={`workspace ${s.workspace ?? s.id} in ${s.project}`
-                  + (s.held !== null ? `, held: ${s.held}` : '')}
-                onClick={() => onOpen(s.id)}>
-          <span className="archive-project">{s.project}</span>
-          {/* THE ONE SURFACE THAT OFFERS CLEANUP MUST NOT HIDE THE HOLD.
-              `ws-hold` refuses an archived workspace, but the reverse order is
-              a supported flow — hold, then archive by hand from the PR sheet,
-              which `ccd ws-archive` allows on purpose — so archived-and-held is
-              reachable, and `ws-reap` refuses it. This screen rendered project,
-              slug and size only, so the row led straight to a cleanup that
-              cannot happen with nothing on screen to say why. Inside the slug
-              cell rather than a fourth column: the row is a three-column grid
-              and this needs no new CSS, no new token and no new tap target.
-              `.sess-held` is SessionLine's own chip class; `title` carries the
-              reason verbatim past the cell's ellipsis, exactly as it does
-              there, and the aria-label carries it for a reader who has no
-              hover at all. */}
-          <span className="archive-slug">
-            {s.workspace ?? s.id}
-            {s.held !== null && (
-              <span className="sess-held" data-held="true" title={s.held}>{' · held'}</span>
-            )}
-          </span>
-          <span className="archive-size">{s.archivedBytes === null ? '—' : humanBytes(s.archivedBytes)}</span>
-        </BareRow>
-      ))}
-    </div>
+      {/* The total is the Section's title (D-5102): the card it heads holds
+          exactly the rows it counts, on the card's own --bg-surface. */}
+      <Section title={<>{`${count} archived · `}<span className="archive-total-bytes">{archivedSizeText(summary)}</span></>}>
+        {rows.map((s) => (
+          <BareRow key={s.id} className="archive-row"
+                  aria-label={`workspace ${s.workspace ?? s.id} in ${s.project}`
+                    + (s.held !== null ? `, held: ${s.held}` : '')}
+                  onClick={() => onOpen(s.id)}>
+            <span className="archive-project">{s.project}</span>
+            {/* THE ONE SURFACE THAT OFFERS CLEANUP MUST NOT HIDE THE HOLD.
+                `ws-hold` refuses an archived workspace, but the reverse order is
+                a supported flow — hold, then archive by hand from the PR sheet,
+                which `ccd ws-archive` allows on purpose — so archived-and-held is
+                reachable, and `ws-reap` refuses it. This screen rendered project,
+                slug and size only, so the row led straight to a cleanup that
+                cannot happen with nothing on screen to say why. Inside the slug
+                cell rather than a fourth column: the row is a three-column grid
+                and this needs no new CSS, no new token and no new tap target.
+                `.sess-held` is SessionLine's own chip class; `title` carries the
+                reason verbatim past the cell's ellipsis, exactly as it does
+                there, and the aria-label carries it for a reader who has no
+                hover at all. */}
+            <span className="archive-slug">
+              {s.workspace ?? s.id}
+              {s.held !== null && (
+                <span className="sess-held" data-held="true" title={s.held}>{' · held'}</span>
+              )}
+            </span>
+            <span className="archive-size">{s.archivedBytes === null ? '—' : humanBytes(s.archivedBytes)}</span>
+          </BareRow>
+        ))}
+      </Section>
+    </PageScaffold>
   );
 }

@@ -644,3 +644,15 @@ describe('the feed, grouped by programme', () => {
     expect(await screen.findByText('Not part of a programme')).toBeInTheDocument();
   });
 });
+
+// D-5102: the screen stands on the page scaffold — one h1, led by the caret.
+describe('the mail screen on the page scaffold (D-5102)', () => {
+  it('renders a PageScaffold with one h1, its Digest door in the header, and its empty line through EmptyState', async () => {
+    render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [] })} />);
+    const h1 = screen.getAllByRole('heading', { level: 1 });
+    expect(h1).toHaveLength(1);
+    expect(h1[0]).toHaveAccessibleName('Mail');
+    expect(screen.getByRole('banner')).toContainElement(screen.getByRole('button', { name: 'Digest' }));
+    await waitFor(() => expect(screen.getByText('Nothing yet.').closest('[data-state]')?.getAttribute('data-state')).toBe('ok'));
+  });
+});

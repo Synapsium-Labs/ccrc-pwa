@@ -31,8 +31,8 @@
 // bracketed length or `tap`. Padding and gaps are a control's own rhythm and
 // are not scanned (the plan's mapping keeps `px-3`, `px-4`, `px-1 py-2 gap-3`
 // as steps by design). Role utilities (`text-ui`, `text-meta`, `text-prose`,
-// `text-title`, `text-section`, `h-row`, `min-h-row`, `px-card`) are never a
-// scale size.
+// `text-title`, `text-section`, `h-row`, `min-h-row`, `px-card`, and the page
+// scaffold's `min-h-head` and `px-gutter`, D-5102) are never a scale size.
 //
 // A PRIMITIVE DRESSED BY ITS OWN STYLESHEET (Task 14b). `OptionRow` carries no
 // size in its TSX: its `.opt-*` rules in `option-row.css` do. Its entry names
@@ -136,6 +136,19 @@ const ROLE_BEARING: Readonly<Record<string, RoleBearing>> = {
   // It wears TEXT_INPUT whole, so its 16px floor is text-input.tsx's entry;
   // a size spelled here directly would red below.
   'select.tsx': { roles: [], allow: [] },
+  // D-5102 (Task 11): the page scaffold. The header's height and the gutters
+  // are density roles, the title the page's type role; the caret shares the
+  // title's size, so it reads the same role.
+  'page-scaffold.tsx': { roles: ['text-title', 'px-gutter', 'min-h-head'], allow: [] },
+  // A section's title is the section role, and its card's padding the card
+  // role (D-5666: the scope tag and the purpose line ride the same census).
+  'section.tsx': {
+    roles: ['text-section', 'p-card', 'text-meta'],
+    allow: [
+      { cls: 'text-2xs', why: "the scope is the mono-caps eyebrow on the 11px floor, below meta's Refined 12, so no role equals it" },
+    ],
+  },
+  'empty-state.tsx': { roles: ['text-ui'], allow: [] },
   'back-button.tsx': {
     roles: [],
     allow: [
@@ -209,10 +222,8 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.pool-note': META,
     '.proj-pending': META,
     '.fleet-archived-row, .fleet-runs-row': META,
-    '.archive-total': META,
     '.archive-size': META,
     '.accounts-projection': META,
-    '.mail-note': META,
     '.mail-dropped': META,
     '.mail-row .mail-body': META,
     '.run-row .run-state': META,
@@ -284,7 +295,7 @@ const TYPE_ROLE_READ = /var\(--fs-(ui|meta)\)/g;
 
 const SCALE_SIZE =
   /(?<=^|[\s'"`:])((?:min-)?h-(?:tap|\d+(?:\.\d+)?|\[[^\]\s]+\])|text-(?:2xs|xs|sm|base|md|lg|xl|2xl|3xl|input|\[\d+(?:\.\d+)?(?:px|rem|em)\]))(?=$|[\s'"`])/g;
-const ROLE_UTILITY = /(?<=^|[\s'"`:])(text-(?:ui|meta|prose|title|section)|(?:min-)?h-row|p[xy]?-card)(?=$|[\s'"`])/g;
+const ROLE_UTILITY = /(?<=^|[\s'"`:])(text-(?:ui|meta|prose|title|section)|(?:min-)?h-(?:row|head)|p[xy]?-(?:card|gutter))(?=$|[\s'"`])/g;
 /** The same two scans in a stylesheet's spelling. `min-height: 52px` is
  *  normalised to `min-height:52px` so an allowlist entry has one spelling.
  *  A literal size inside `font:` or `font-size:` is a scale size too, held to
@@ -425,6 +436,15 @@ describe('the role census (D-5093)', () => {
       }
     }
     expect(unregistered, 'a rule reads a role this census does not know: register it').toEqual([]);
+  });
+
+  it('PageScaffold, Section and EmptyState are registered role-bearing, and carry no scale size (D-5102)', () => {
+    for (const f of ['page-scaffold.tsx', 'section.tsx', 'empty-state.tsx']) {
+      expect(ROLE_BEARING[f], `${f} is role-bearing`).toBeDefined();
+      expect(primitiveFiles()).toContain(f);
+    }
+    expect(ROLE_BEARING['page-scaffold.tsx']!.allow).toEqual([]);
+    expect(ROLE_BEARING['empty-state.tsx']!.allow).toEqual([]);
   });
 
   it("LIST_ROW's height is the row role", () => {

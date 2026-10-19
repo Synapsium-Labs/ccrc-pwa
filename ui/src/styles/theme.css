@@ -242,6 +242,7 @@
   --spacing-row:     var(--row-h);
   --spacing-card:    var(--pad-card);
   --spacing-section: var(--gap-section);
+  --spacing-head:    var(--head-h);   /* the page header's height (D-5102) */
 
   --radius-sm:   var(--r-sm);
   --radius-md:   var(--r-md);

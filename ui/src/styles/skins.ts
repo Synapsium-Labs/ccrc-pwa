@@ -133,6 +133,13 @@ export const SKIN_TOKENS: { readonly [C in SkinTokenClass]: readonly SkinToken[]
     { name: '--page-max' },
     { name: '--page-max-wide' },
     { name: '--measure-chat' },
+    // The page scaffold's (D-5102). `--head-h` is the sticky header's height,
+    // tap-bearing because Back sits in it (D-5667). `--section-flow` is a
+    // keyword, a Section head's flex-direction: it is how a skin draws the
+    // scope above the title or as a tag beside it without a `data-skin`
+    // selector outside skins.css (D-5666).
+    { name: '--head-h', tapBearing: true },
+    { name: '--section-flow' },
   ],
   // RADIUS. A length, with no `var()`. `--r-full` is not here: lamps and pills
   // stay round in every skin.

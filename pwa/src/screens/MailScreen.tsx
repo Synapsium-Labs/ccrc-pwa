@@ -18,7 +18,7 @@ import { eventRunId, interruptLine, raisesUnread, recordKey, reviveNotifyEvents 
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { ack, acksSnapshot, FEED_ACK_KEY, isUnseenAt, subscribeAcks } from '../lib/seen';
-import { BackButton, Button, MAIL_GLYPH, SETTINGS_GLYPH, useNow } from '@ccrc/ui';
+import { Button, EmptyState, MAIL_GLYPH, PageScaffold, SETTINGS_GLYPH, useNow } from '@ccrc/ui';
 import { formatAge } from '../fleet/formatReset';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -177,20 +177,20 @@ export function MailScreen({
   const shown = [...groups].filter(([key]) => activeFilter === null || key === activeFilter);
 
   return (
-    <div className="mail-screen">
-      <header className="mail-head">
-        <BackButton className="mail-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
-          ‹
-        </BackButton>
-        <h1 className="mail-title">Mail</h1>
-        {/* The digest's standing door (D-5300, D-5493 (5)): the daily push opens it too, but a missed push must lose nothing. */}
+    // The page scaffold (D-5102): Back, the caret and the title, the Digest door at the header's right.
+    <PageScaffold
+      title="Mail"
+      back={{ label: 'Back to fleet', onClick: () => navigate('/'), className: 'mail-back' }}
+      actions={
+        // The digest's standing door (D-5300, D-5493 (5)): the daily push opens it too, but a missed push must lose nothing.
         <Button variant="ghost" size="fit" className="mail-digest" onClick={() => navigate('/digest')}>Digest</Button>
-      </header>
-
+      }
+    >
       {/* The presence-gate asymmetry, said once and permanently. A record is
           written whatever the operator was looking at; only the phone ping is
-          held back for a session already on screen. Prose, so it is sans. */}
-      <p className="mail-note">
+          held back for a session already on screen. Prose, so it is sans; the
+          scaffold's lede type (D-5102), so it is no rule of this screen's. */}
+      <p className="m-0 font-ui text-meta leading-normal text-ink-secondary">
         Records land here whether or not you were watching — only the phone ping is held back for a
         session you already have open.
       </p>
@@ -232,11 +232,11 @@ export function MailScreen({
         // their own honest render — `readState === 'error'` only fires once
         // this screen's own read has actually failed, never merely because
         // it has not resolved yet.
-        <p className="mail-empty" data-state={readState === 'error' ? 'error' : 'loading'}>
+        <EmptyState data-state={readState === 'error' ? 'error' : 'loading'}>
           {readState === 'error' ? 'Could not reach the server — mail may exist that is not shown.' : 'Loading…'}
-        </p>
+        </EmptyState>
       ) : rows.length === 0 ? (
-        <p className="mail-empty" data-state="ok">Nothing yet.</p>
+        <EmptyState data-state="ok">Nothing yet.</EmptyState>
       ) : (
         <>
           {shown.map(([key, g]) => (
@@ -269,6 +269,6 @@ export function MailScreen({
           ))}
         </>
       )}
-    </div>
+    </PageScaffold>
   );
 }

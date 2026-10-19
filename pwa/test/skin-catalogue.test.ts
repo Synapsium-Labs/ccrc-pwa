@@ -261,6 +261,7 @@ const ROLE_KEYS: readonly (readonly [key: string, token: string])[] = [
   ['--spacing-row', '--row-h'],
   ['--spacing-card', '--pad-card'],
   ['--spacing-section', '--gap-section'],
+  ['--spacing-head', '--head-h'],
 ];
 
 /** Every namespace a key of this theme lives in — the bridge's, and the ones

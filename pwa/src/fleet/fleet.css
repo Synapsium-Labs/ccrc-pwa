@@ -2166,8 +2166,11 @@ button.proj-card-pool::before {
   font-size: var(--fs-meta);
   color: var(--ink-tertiary);
 }
-.archive-screen { display: grid; gap: var(--sp-1); padding: var(--sp-2); }
-.archive-total { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-secondary); }
+/* /archive stands on the page scaffold (D-5102): PageScaffold draws its head
+   and column, Section its total (the card's title) and EmptyState its empty
+   line, so `.archive-screen`, `.archive-total` and `.archive-empty` are gone.
+   The rows sit in the Section's card, on its --bg-surface (audit.mjs grounds
+   them there). */
 /* `.archive-row` is `<BareRow>` — five rules in this file declared the same six
    declarations. What stays is this row's own grid and ink — see `.fleet-archived-row`. */
 .archive-row {
@@ -2180,20 +2183,10 @@ button.proj-card-pool::before {
 .archive-project { font-size: var(--fs-sm); color: var(--ink-secondary); }
 .archive-slug { font-family: var(--family-mono); font-size: var(--fs-sm); }
 .archive-size { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-tertiary); }
-.archive-empty { padding: var(--sp-4); color: var(--ink-secondary); }
 
 /* — Task 6 (Build 3 PR G): AccountsScreen — */
-.accounts-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); }
-.accounts-head { display: flex; align-items: center; gap: var(--sp-2); }
-/* Same visual contract as chat.css's `.chat-back` (SessionScreen's own back
-   chevron) — a separate rule rather than sharing the class, since the two
-   screens keep their styles in different sheets (session/chat.css vs this
-   file) and .chat-back's own selectors (`.shell-detail .chat-back`) are
-   scoped to the chat surface specifically. */
-.accounts-title {
-  font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono);
-  color: var(--ink-primary);
-}
+/* The head and column are PageScaffold's (D-5102); `.accounts-screen`,
+   `.accounts-head` and `.accounts-title` are gone. */
 /* Prose in the UI face, by the rule of voice: "Next workspace lands on … —
    least-loaded" is a sentence. `.accounts-fresh` ("last reported 5m ago") is a
    readout beside a gauge and stays mono; so do the percentages. */
@@ -2334,13 +2327,9 @@ button.proj-card-pool::before {
    ink-secondary / page on a phone, ink-secondary / surface on the desktop
    sidebar's .shell-nav. */
 
-.mail-screen { display: grid; gap: var(--sp-2); padding: var(--sp-2); }
-.mail-head { display: flex; align-items: center; gap: var(--sp-2); }
-.mail-head .mail-digest { margin-left: auto; }
-.mail-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
-.mail-note { font-size: var(--fs-meta); color: var(--ink-secondary); }
+/* /mail stands on the page scaffold (D-5102): its head, title, note and empty
+   line are PageScaffold's and EmptyState's now, not rules of this sheet. */
 .mail-dropped { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-secondary); }
-.mail-empty { padding: var(--sp-4); color: var(--ink-secondary); }
 .mail-list { display: grid; gap: var(--sp-1); }
 .mail-row {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
@@ -2402,11 +2391,8 @@ button.proj-card-pool::before {
    tallies are all things the fleet says, not things a person wrote), and NO
    glow, no breathe, no box-shadow: a run is a record of a lifecycle position.
    The pane it names may well be alive — and the fleet line, which is where the
-   lamp lives, is one tap away. */
-.runs-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); }
-.runs-head { display: flex; align-items: center; gap: var(--sp-2); }
-.runs-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
-.runs-empty { padding: var(--sp-4); color: var(--ink-secondary); }
+   lamp lives, is one tap away. The head, the wide column and the empty lines
+   are PageScaffold's and EmptyState's (D-5102). */
 .runs-group { display: grid; gap: var(--sp-1); }
 .runs-group-head {
   display: flex; align-items: baseline; gap: var(--sp-2);
@@ -2791,7 +2777,8 @@ button.proj-card-pool::before {
    It was the fourth copy of those eleven declarations, differing only in font
    size, which the call site passes as `text-xs`.
    NO `flex: none` SURVIVES THE MOVE, and for the same reason review M6 took
-   it out: this door's parent is `.runs-screen` (`display: grid`), where a flex
+   it out: this door's parent is the run board's body, PageScaffold's
+   (`display: grid`, D-5102), where a flex
    shorthand decides nothing. The other three call sites DO pass `flex-none`,
    because their parents are flex rows — which is why the variant does not
    carry it. */

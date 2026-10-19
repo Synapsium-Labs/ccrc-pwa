@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AccountUsage, ProjectedHome, RosterWire } from '../../../shared/api';
 import type { AccountPoolWire } from '../../../shared/poolrule';
-import { BackButton, Skeleton, toast, useNow } from '@ccrc/ui';
+import { PageScaffold, Skeleton, toast, useNow } from '@ccrc/ui';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
 import { formatAge } from '../fleet/formatReset';
@@ -257,13 +257,8 @@ export function AccountsScreen(): ReactNode {
       : `Next workspace lands on ${accountLabel(roster, projected.wrapper)} — least-loaded`;
 
   return (
-    <div className="accounts-screen">
-      <header className="accounts-head">
-        <BackButton className="accounts-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
-          ‹
-        </BackButton>
-        <h1 className="accounts-title">Accounts</h1>
-      </header>
+    // The page scaffold (D-5102). The body's grid keeps the old screen's rhythm, --sp-3 between blocks.
+    <PageScaffold title="Accounts" back={{ label: 'Back to fleet', onClick: () => navigate('/'), className: 'accounts-back' }}>
 
       {projectionLine !== null && <p className="accounts-projection">{projectionLine}</p>}
 
@@ -428,6 +423,6 @@ export function AccountsScreen(): ReactNode {
         onClose={() => setPoolSheetOpen(false)}
         onSet={setAccountPool}
       />
-    </div>
+    </PageScaffold>
   );
 }

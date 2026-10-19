@@ -32,6 +32,14 @@ export { BackButton, BACK_BUTTON, type BackButtonProps } from './primitives/back
 export { Door, DOOR, DOOR_GLYPH, type DoorProps } from './primitives/door';
 export { Icon, type IconName, type IconProps, type IconSize } from './primitives/icon';
 export { Well, WELL, type WellProps } from './primitives/well';
+// The page scaffold (D-5102; the C3 slots D-5666).
+export {
+  PageScaffold, PAGE_HEAD, PAGE_HEAD_ROW, PAGE_CARET, PAGE_TITLE, PAGE_ACTIONS, PAGE_BODY, type PageScaffoldProps,
+} from './primitives/page-scaffold';
+export {
+  Section, SECTION, SECTION_HEAD, SECTION_TITLE, SECTION_SCOPE, SECTION_PURPOSE, SECTION_CARD, type SectionProps,
+} from './primitives/section';
+export { EmptyState, EMPTY_STATE, type EmptyStateProps } from './primitives/empty-state';
 export { Chip, CHIP, CHIP_DOT, type ChipProps } from './primitives/chip';
 export {
   ControlRow, CONTROL_ROW, CONTROL_ROW_NOTE, type ControlRowProps,

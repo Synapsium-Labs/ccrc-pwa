@@ -47,7 +47,7 @@ import { ResumeSheet } from '../fleet/ResumeSheet';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
-import { BackButton, Button, useNow } from '@ccrc/ui';
+import { Button, EmptyState, PageScaffold, useNow } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 
@@ -261,13 +261,13 @@ export function RunsScreen({
   );
 
   return (
-    <div className="runs-screen" data-conn={conn}>
-      <header className="runs-head">
-        <BackButton className="runs-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
-          ‹
-        </BackButton>
-        <h1 className="runs-title">Runs</h1>
-      </header>
+    // The page scaffold (D-5102), at the wide column: a board, not a reading column.
+    <PageScaffold
+      data-conn={conn}
+      wide
+      title="Runs"
+      back={{ label: 'Back to fleet', onClick: () => navigate('/'), className: 'runs-back' }}
+    >
 
       {/* Review finding 26: `runs`/`runsFrameSeen` are sticky across a socket
           loss (`stores/fleet.ts`, "sticky until replaced") — without this,
@@ -312,11 +312,11 @@ export function RunsScreen({
         // "no runs" — it is "no answer". `coldState === 'error'` only after
         // the cold read has actually failed; until then this is the ordinary
         // in-flight window every mount passes through.
-        <p className="runs-empty" data-state={coldState === 'error' ? 'error' : 'loading'}>
+        <EmptyState data-state={coldState === 'error' ? 'error' : 'loading'}>
           {coldState === 'error'
             ? 'Could not reach the server — runs may exist that are not shown.'
             : 'Loading…'}
-        </p>
+        </EmptyState>
       ) : !hasAny ? (
         // I6: `noSignalYet` above only covers the "nothing has answered at
         // all" window — once the live frame has said `runsFrameSeen`, this
@@ -326,11 +326,11 @@ export function RunsScreen({
         // read", which must say so rather than claim the program's whole
         // history is empty.
         coldFailed ? (
-          <p className="runs-empty" data-state="error">
+          <EmptyState data-state="error">
             Could not reach the server — runs may exist that are not shown.
-          </p>
+          </EmptyState>
         ) : (
-          <p className="runs-empty" data-state="ok">No runs. A program starts when a coordinator opens one.</p>
+          <EmptyState data-state="ok">No runs. A program starts when a coordinator opens one.</EmptyState>
         )
       ) : (
         <>
@@ -375,9 +375,9 @@ export function RunsScreen({
             // finished", which the board has no standing to claim.
             <div className="runs-group" role="group" aria-label="finished, unknown">
               <p className="runs-group-head"><span className="runs-program">Finished</span></p>
-              <p className="runs-empty" data-state="error">
+              <EmptyState data-state="error">
                 Could not reach the server — finished runs may exist that are not shown.
-              </p>
+              </EmptyState>
             </div>
           ) : null}
         </>
@@ -397,6 +397,6 @@ export function RunsScreen({
       <ResumeSheet run={resumeTarget} onClose={() => setResumeTarget(null)} onDone={() => { void loadCold(); }} />
       <StartProgramSheet open={startOpen} onClose={() => setStartOpen(false)} fleet={store}
         openRunProjects={openRunProjects} />
-    </div>
+    </PageScaffold>
   );
 }

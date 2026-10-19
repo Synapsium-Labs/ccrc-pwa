@@ -452,3 +452,15 @@ describe('AccountsScreen — a roster that comes back the wrong shape', () => {
     vi.useRealTimers();
   });
 });
+
+// D-5102: the accounts screen stands on the page scaffold.
+describe('AccountsScreen on the page scaffold (D-5102)', () => {
+  it('renders a PageScaffold with one h1, and Back to the fleet', () => {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    render(<AccountsScreen />);
+    const h1 = screen.getAllByRole('heading', { level: 1 });
+    expect(h1).toHaveLength(1);
+    expect(h1[0]).toHaveAccessibleName('Accounts');
+    expect(screen.getByRole('button', { name: 'Back to fleet' })).toBeInTheDocument();
+  });
+});

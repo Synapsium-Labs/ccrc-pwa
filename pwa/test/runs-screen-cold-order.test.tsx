@@ -93,10 +93,10 @@ describe('RunsScreen: the archive read is a high-water mark (spec §5.9)', () =>
   it('a stale REJECTION arriving after the newer success does not show the error state', async () => {
     const { older, newer } = await boardWithTwoReadsInFlight();
     await newer.resolve([]);                                   // an answered, empty archive
-    expect(document.querySelector('.runs-empty')?.getAttribute('data-state')).toBe('ok');
+    expect(document.querySelector('[data-empty-state]')?.getAttribute('data-state')).toBe('ok');
     await older.reject();
     expect(errorShown(), 'a read older than the applied one set the error state').toBe(false);
-    expect(document.querySelector('.runs-empty')?.getAttribute('data-state')).toBe('ok');
+    expect(document.querySelector('[data-empty-state]')?.getAttribute('data-state')).toBe('ok');
   });
 
   it('an OLDER rejection arriving first does not stop the newer success from landing', async () => {
@@ -104,7 +104,7 @@ describe('RunsScreen: the archive read is a high-water mark (spec §5.9)', () =>
     await older.reject();
     await newer.resolve([]);
     expect(errorShown()).toBe(false);
-    expect(document.querySelector('.runs-empty')?.getAttribute('data-state')).toBe('ok');
+    expect(document.querySelector('[data-empty-state]')?.getAttribute('data-state')).toBe('ok');
   });
 
   it('the chosen reading: a rejection advances nothing, so an older success after a newer failure still lands', async () => {
@@ -124,6 +124,6 @@ describe('RunsScreen: the archive read is a high-water mark (spec §5.9)', () =>
     const store = makeStore();
     const loadRuns = vi.fn(async () => null as unknown as { runs: RunSummary[] });
     render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
-    await waitFor(() => expect(document.querySelector('.runs-empty')?.getAttribute('data-state')).toBe('error'));
+    await waitFor(() => expect(document.querySelector('[data-empty-state]')?.getAttribute('data-state')).toBe('error'));
   });
 });

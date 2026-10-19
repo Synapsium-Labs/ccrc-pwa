@@ -835,6 +835,23 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the Released fold's programme headings and its children note, inside .proj-released-body on the same card ground as the toggle above, same register. A grouped selector names no painted ancestor, so it needs its own registration",
   },
+  // ── /archive on the page scaffold (D-5102) ───────────────────────────────
+  // The rows are <BareRow>s inside the archive's <Section>, whose card paints
+  // `bg-surface` (SECTION_CARD, @ccrc/ui primitives/section.tsx). They were in
+  // the uncovered census while the screen was an unpainted grid on the page;
+  // the card gives them one ground, so they are measured now.
+  '.archive-row': {
+    under: ['var(--bg-surface)'],
+    why: "an archived workspace's row, a <BareRow> inside ArchiveScreen's <Section>, whose card paints var(--bg-surface) (SECTION_CARD in @ccrc/ui's section.tsx: utilities, so no CSS selector names it). Its selector names no painted ancestor, so no route could ground it (D-5102)",
+  },
+  '.archive-project': {
+    under: ['var(--bg-surface)'],
+    why: "the row's project cell, inside .archive-row on the same Section card ground (D-5102)",
+  },
+  '.archive-size': {
+    under: ['var(--bg-surface)'],
+    why: "the row's measured size, inside .archive-row on the same Section card ground; the tertiary ink is the one the fleet footer's .fleet-archived-row shows on the desktop sidebar's --bg-surface (D-5102)",
+  },
   '.mail-chip': {
     under: ['var(--bg-page)'],
     why: "the OFF state of the programme filter chip (F4, cross-repo wave 2). `.mail-screen` sets no background of its own, so its real ground is body's --bg-page (styles/base.css). Its selector names no ancestor, so no route could ground it",
