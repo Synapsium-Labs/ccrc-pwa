@@ -216,6 +216,32 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   because the server reads what the hook writes and the agent caches `ccd caps` at boot — `--server-first` when a
   wave's server arm is a reader-widening.
 
+## Architecture direction — DDD, Clean Architecture, SOLID
+ccrc is moving, incrementally, to a DDD / Clean Architecture / SOLID shape (operator directive 2026-08-10). Every
+change moves toward it, never away:
+- **Rings, imports point inward:** L0 shared kernel (`shared/`, pure vocabulary) → L1 policy (pure deciders) → L2
+  ports → L3 adapters (IO) → L4 delivery (routes, sockets, timers, executors) → L5 composition root (`index.ts`).
+  **Decide in L1, act in L4**; an inner ring never imports an outer one. Ring rules in detail: the next section.
+- **Bounded contexts, one writer per invariant:** Fleet Registry & Accounts, Fleet Mutation, Session Conversation,
+  Workspace & PR Lifecycle, Coordination, Attention & Notification (the consolidation wave adds the update control
+  plane, auth & box token, docs, and context-free shared kernels: clock and schedule, switches, redaction, Claude
+  Code grammar). Every invariant and fact has ONE writer: a new fact gets an owner, never a second writer.
+- **Ports and adapters at the edges:** the agent link (FleetIO, the runner); `ccd`, the anti-corruption layer — the
+  only component that names tmux, systemd and Claude Code's on-disk layout, reached only through `CcdArgv`; Claude
+  Code panes and transcripts; `coord.db` (`CoordStore`, synchronous, no repository over it). The consumer declares
+  each port, and the port states its failure contract.
+- **SOLID in practice:** one reason to change per module; extend through tables and deciders (a row, an edge, a
+  case), never by growing a new parallel mechanism beside them.
+- **Consolidate, don't duplicate:** before adding a lane, poller, predicate, redactor, parser, notifier or switch,
+  find the existing owner in the target context and extend it. A second mechanism for the same job needs a recorded
+  "legitimately different" reason (a TOCTOU re-check, an opposite safety direction, a security boundary, another
+  host or process) in its spec or PR.
+- **Characterization tests first when moving code:** pin today's inputs → outputs, green on `main` against the old
+  code; a move commit changes only the test's imports, and an intended behaviour change is a commit of its own.
+- **Specs:** `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` (rings, contexts, cross-cutting
+  rules, and a Rejected list no PR relitigates). The consolidation wave's spec — one owner per job: the nine
+  contexts, the shared kernels, the "legitimately different" catalogue — is its follow-up and is not on `main` yet.
+
 ## Conventions that shape every change
 - **Rings / bounded contexts** (`docs/…-architecture-ddd-clean-solid.md`): ring membership is a property of a
   file's IMPORTS, not its path — check a file by reading its import block. L0 `shared/*.ts` imports NOTHING (not
