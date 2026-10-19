@@ -224,6 +224,15 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
             .toBe('${{ !cancelled() }}');
         }
         expect(st, `a test-storybook step ignores its own result:\n${st}`).not.toMatch(/\bcontinue-on-error\b|\|\|/);
+        // Exact-command anchor: a token blocklist misses `| tee`, `; exit 0`,
+        // `set +e`, and coverage cuts like `--shard` or `--excludeTags`. Every
+        // line of the step must be one of these three, whole, with nothing
+        // after the URL.
+        const odd = st.split('\n').filter((l) => l.trim() !== '' && !(
+          /^\s*-?\s*if: \$\{\{ !cancelled\(\) \}\}$/.test(l)
+          || /^\s*-?\s*working-directory: ui$/.test(l)
+          || /^\s*-?\s*run: npm run test-storybook -- --maxWorkers=2 --url http:\/\/127\.0\.0\.1:\d+$/.test(l)));
+        expect(odd, `a test-storybook step holds more than the exact run:\n${st}`).toEqual([]);
       }
       for (const line of st.split('\n')) {
         if (/\bbuild-storybook\b/.test(line)) {
