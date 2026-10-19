@@ -1103,7 +1103,7 @@ export const LABELLER = Object.freeze({
  * @returns {string}
  */
 export function collapseWs(s) {
-  return s.replace(/\s+/gu, ' ').trim();
+  return s.replace(/\p{White_Space}+/gu, ' ').trim();
 }
 
 /**
@@ -1243,8 +1243,11 @@ const cmdRightOk = (t, j) => j === t.length || !CMD_EDGE.test(t[j]) || (t[j] ===
  *   least `shaMinPrefix` (7 or 40, signed in the record).
  * - path: the absolute form or a repo-relative form occurs with token boundaries (left: the start or a character
  *   outside [A-Za-z0-9._/~-]; right: the end, a character outside [A-Za-z0-9._/-], or a `.` followed by the end
- *   or whitespace); and once every occurrence of every form is masked, no path-shaped token (a run of
- *   [A-Za-z0-9._/~-] holding a `/`) is left. A basename alone is not a form.
+ *   or whitespace); and once every BOUNDED occurrence of every form is masked, no path-shaped token (a run of
+ *   [A-Za-z0-9._/~-] holding a `/`) is left. A basename alone is not a form. Only bounded occurrences are masked
+ *   because W2-D63 refuses "a second path-shaped token that is not one of F's forms": an occurrence glued to more
+ *   path (`src/app.tsx`, `src/app.ts.bak`, `src/app.ts-old`, `x/r/src/app.ts`) is not F's form but a longer token,
+ *   so it must stay visible to the token rule instead of being hidden by its F-shaped prefix or suffix.
  * - command, error: collapseWs(F) occurs in collapseWs(value) with boundaries (left: the start or a character
  *   outside [A-Za-z0-9_./:=@+-]; right: the end, a character outside that set, or a final `.`), and neither the
  *   text before nor the text after that occurrence holds /\s(or|OR)\s/.
@@ -1274,8 +1277,9 @@ export function labelCorrect(kind, F, answerValue, opts) {
       for (const form of forms) {
         for (const i of occurrencesOf(answerValue, form)) {
           const j = i + form.length;
+          if (!pathLeftOk(answerValue, i) || !pathRightOk(answerValue, j)) continue;
+          bounded = true;
           for (let x = i; x < j; x += 1) covered[x] = true;
-          if (pathLeftOk(answerValue, i) && pathRightOk(answerValue, j)) bounded = true;
         }
       }
       let rest = '';
@@ -1361,10 +1365,11 @@ export const WRITER_PROMPT_SHA256 = 'c3c184145653f9d94a18fcc5b62a58ff3a93c04a30d
 /** The longest question parseQuestionLine accepts, in characters (code points). */
 export const WRITER_QUESTION_MAX = 600;
 
-const QUESTION_LINE = /^QUESTION:[ \t]*(.+)$/;
+const QUESTION_LINE = /^QUESTION:[ \t]*(.*)$/;
 
 /**
- * The writer's reply (W2-D72): the last `^QUESTION:[ \t]*(.+)$` line, trimmed. Empty after the trim, longer than
+ * The writer's reply (W2-D72): the last `^QUESTION:[ \t]*(.*)$` line, trimmed (a bare `QUESTION:` line is that line,
+ * as a spaced one is, so neither is skipped in favour of an earlier question). Empty after the trim, longer than
  * WRITER_QUESTION_MAX characters, or no such line: `writer-malformed`, discarded with no retry.
  * @param {string} reply
  * @returns {{ok: true, question: string} | {ok: false, word: 'writer-malformed'}}

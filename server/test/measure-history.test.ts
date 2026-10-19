@@ -3256,7 +3256,7 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
       expect(t7Gate.parseAnswerField('ANSWER: only')).toEqual({ state: 'value', value: 'only' });
     });
 
-    it('parseQuestionLine: 600 code points pass whatever their UTF-16 length, and a blank last line voids an earlier question', () => {
+    it('parseQuestionLine: 600 code points pass whatever their UTF-16 length, and a blank last line, bare or spaced, voids an earlier question', () => {
       const wide = String.fromCodePoint(0x1f600);
       expect(t7Gate.parseQuestionLine(`QUESTION: ${wide.repeat(600)}`)).toEqual({ ok: true, question: wide.repeat(600) });
       expect(t7Gate.parseQuestionLine(`QUESTION: ${wide.repeat(601)}`)).toEqual({ ok: false, word: 'writer-malformed' });
@@ -3274,6 +3274,50 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
     it('the exported tables are frozen', () => {
       expect(Object.isFrozen(t7Gate.RUBRICS)).toBe(true);
       expect(Object.isFrozen(t7Gate.RUBRIC_SHA256)).toBe(true);
+    });
+
+    // Fix round 1 (review of Task 7): W2-D63 "a second path-shaped token that is not one of F's forms", W2-D61, W2-D72.
+    it('labelCorrect path: a hedge whose second value is glued to one of F\'s forms is not correct (only bounded occurrences are masked)', () => {
+      const F = '/r/src/app.ts';
+      for (const hedge of ['src/app.ts or src/app.tsx', '/r/src/app.ts or /r/src/app.tsx', 'src/app.ts, src/app.ts.bak',
+        'src/app.ts or src/app.ts-old', '/r/src/app.ts or x/r/src/app.ts']) {
+        expect(t7Gate.labelCorrect('path', F, hedge, pathAt7), hedge).toBe(false);
+      }
+      expect(t7Gate.labelCorrect('path', F, 'src/app.ts or src/app.ts', pathAt7), 'CONTROL: two bounded occurrences of F\'s own forms').toBe(true);
+    });
+
+    it('labelCorrect command: every character of the boundary set glues, on either side', () => {
+      for (const c of ['_', '.', ':', '/', '=', '@', '+', '-', 'a', 'Z', '5']) {
+        expect(t7Gate.labelCorrect('command', 'npm run test', `npm run test${c}x`, at7), `right ${c}`).toBe(false);
+        expect(t7Gate.labelCorrect('command', 'npm run test', `${c}npm run test`, at7), `left ${c}`).toBe(false);
+      }
+      expect(t7Gate.labelCorrect('command', 'npm run test', '(npm run test), then', at7), 'CONTROL: brackets and commas are not edges').toBe(true);
+    });
+
+    it('labelCorrect path: every character of the path boundary sets glues, on either side', () => {
+      const F = '/r/src/app.ts';
+      for (const c of ['_', '-', 'a', 'Z', '5']) {
+        expect(t7Gate.labelCorrect('path', F, `src/app.ts${c}x`, pathAt7), `right ${c}`).toBe(false);
+      }
+      for (const c of ['_', '-', '.', 'a', 'Z', '5']) {
+        expect(t7Gate.labelCorrect('path', F, `${c}src/app.ts`, pathAt7), `left ${c}`).toBe(false);
+      }
+      expect(t7Gate.labelCorrect('path', F, '(src/app.ts)', pathAt7), 'CONTROL: brackets are not edges').toBe(true);
+    });
+
+    it('collapseWs: Unicode White_Space collapses (U+0085 included), and a byte-order mark is not whitespace', () => {
+      const [nel, bom] = [0x85, 0xfeff].map((c) => String.fromCodePoint(c));
+      expect(t7Gate.collapseWs(`a${nel}${nel}b`)).toBe('a b');
+      expect(t7Gate.collapseWs(`a${nel} ${nel}b`)).toBe('a b');
+      expect(t7Gate.collapseWs(`a${bom}b`)).toBe(`a${bom}b`);
+      expect(t7Gate.collapseWs(`a ${bom} b`)).toBe(`a ${bom} b`);
+    });
+
+    it('parseQuestionLine: a bare or spaced QUESTION: as the last line voids an earlier question', () => {
+      expect(t7Gate.parseQuestionLine('QUESTION: ok?\nQUESTION:')).toEqual({ ok: false, word: 'writer-malformed' });
+      expect(t7Gate.parseQuestionLine('QUESTION: ok?\nQUESTION: ')).toEqual({ ok: false, word: 'writer-malformed' });
+      expect(t7Gate.parseQuestionLine('QUESTION:')).toEqual({ ok: false, word: 'writer-malformed' });
+      expect(t7Gate.parseQuestionLine('QUESTION: ok?\nQUESTION:\n')).toEqual({ ok: false, word: 'writer-malformed' });
     });
   });
 });
