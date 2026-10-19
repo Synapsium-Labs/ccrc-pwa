@@ -472,20 +472,23 @@ function backfillOnce(id, registry) {
   return w === null ? { created: true } : { err: w };
 }
 
-/** `init codex`'s advance file (auto-advance spec §2.2). With none, `backfillOnce` creates it. One already there
- *  was LEFT by an earlier registry, because init creates a registry only where there is none: the
- *  `probe-declared` remedy (delete the registry by hand), a rollback to a build whose `rm` reaps five files, or an
- *  `rm` cut short before its last reap (D-5966). Adopted whole, its families would disagree
- *  with the new pins, so an advance could cross families, and its `pending` would be settled as a move that never
- *  happened. So it is REUSED: each class keeps its `hold` and its `history`, the operator's acts; `previous` is
+/** `init`'s advance file, for every probe (auto-advance spec §2.2). With none, `backfillOnce` creates it when
+ *  `createIfAbsent` (the codex probe: a fresh `init` of any other probe writes no advance file, and such a lane is
+ *  left as it is). One already there was LEFT by an earlier registry, because init creates a registry only where
+ *  there is none: the `probe-declared` remedy (delete the registry by hand), a rollback to a build whose `rm` reaps
+ *  five files, or an `rm` cut short before its last reap (D-5966). Adopted whole, its families
+ *  would disagree with the new pins, so an advance could cross families, and its `pending` would be settled as a
+ *  move that never happened, on any lane, because a hand act records into the file whatever the probe. So it is
+ *  REUSED, for every probe: each class keeps its `hold` and its `history`, the operator's acts; `previous` is
  *  cleared, because a revert to a pin of the registry that is gone would jump to an unrelated model; every family
- *  is written exactly as a fresh init writes it; `pending` is cleared; unknown keys are kept. `{created: true}`,
- *  `{reused: true}`, `{created: false, why}` for a file it cannot read (left as it is, as `backfillOnce` leaves
- *  one), or `{err, reusing}` when the write failed. */
-function seedForInit(id, registry) {
+ *  is written exactly as a fresh init of this probe writes it (its `SEED_FAMILIES` row, or no seed where it has
+ *  none); `pending` is cleared; unknown keys are kept. `{created: true}`, `{reused: true}`, `{created: false}`
+ *  (absent and not created), `{created: false, why}` for a file it cannot read (left as it is, as `backfillOnce`
+ *  leaves one), or `{err, reusing}` when the write failed. */
+function seedForInit(id, registry, createIfAbsent) {
   const cur = readAdvance(id);
   if (cur.err !== undefined) return { created: false, why: cur.err[0] };
-  if (cur.advance === null) return backfillOnce(id, registry);
+  if (cur.advance === null) return createIfAbsent ? backfillOnce(id, registry) : { created: false };
   const fresh = backfillAdvance({ registry, seedFamilies: SEED_FAMILIES[registry.probe] ?? null });
   const next = { ...cur.advance, classes: { ...cur.advance.classes }, pending: null };
   for (const c of CLASSES) next.classes[c] = { ...next.classes[c], family: fresh.classes[c].family, previous: null };
@@ -1437,10 +1440,10 @@ function main(argv) {
     const mat = materialise(account, registry, catalogue, windowsOf(win));
     if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
     // auto-advance spec §2.2: `init codex` seeds EVERY class's family as data, an empty class's included, so the
-    // automatic advance can later fill that class from its own family. An advance file already here was left by
-    // an earlier registry: it is reused, its holds and history kept and the rest re-seeded (`seedForInit`,
-    // D-5966). Other probes seed none and write none.
-    const seeded = a.probe === 'codex' ? seedForInit(a.id, registry) : { created: false };
+    // automatic advance can later fill that class from its own family; other probes seed none and create none.
+    // An advance file already here was left by an earlier registry: `init` of every probe reuses it, its holds
+    // and history kept and the rest set as a fresh init of this probe sets it (`seedForInit`, D-5966).
+    const seeded = seedForInit(a.id, registry, a.probe === 'codex');
     const answer = { ok: true, op: 'init', created: true, ...describe(account, registry, catalogue, win) };
     let advanceNote = null;
     if (seeded.err !== undefined) {
@@ -1450,8 +1453,8 @@ function main(argv) {
         : 'the lane has no advance file yet, and the next write of one creates it from the registry.'}`;
     } else if (seeded.reused === true) {
       advanceNote = 'the lane already had an advance file, left by an earlier class registry, and it was reused '
-        + '(D-5966): each class keeps its hold and history, its family is re-seeded from the new '
-        + 'registry, and the old pending move and previous pins are cleared.';
+        + '(D-5966): each class keeps its hold and history, takes its family as a fresh init of '
+        + 'this probe gives it, and loses the old pending move and previous pin.';
     }
     if (advanceNote !== null) {
       answer.advanceNote = advanceNote;

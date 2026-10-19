@@ -2333,6 +2333,43 @@ describe('the advance file through init, set-class, rm and advance-backfill (aut
     ]);
   });
 
+  it('init of a probe with no seeds over an advance file an earlier registry left resets it the same way: no family, pending and previous cleared, holds and history kept (D-5966)', () => {
+    const router = ROSTER.accounts[3]!.id;
+    fs.mkdirSync(path.dirname(advPath(router)), { recursive: true });
+    // Left by another registry: families, a previous, a hold and a history entry on one class, and a hand intent
+    // to none, the pin init's unseeded registry gives every class.
+    const left = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: ADV_SEEDS });
+    const hold = { at: NOW, by: 'hand' } as const;
+    const history: HistoryEntry[] = [
+      { at: NOW, how: 'hand', from: 'model-5.6-gamma', to: 'model-6.1-gamma', ok: true, canary: 'not-run' },
+    ];
+    left.classes.opus = { ...left.classes.opus, hold, previous: { model: 'model-5.6-gamma', effort: 'max' }, history };
+    left.pending = { how: 'hand', class: 'haiku', from: 'model-5.6-alpha', to: null, emptied: [], at: NOW };
+    plantAdvance(router, left);
+    const r = opAt('init', '--file', rosterPath(), '--id', router, '--probe', 'compatible',
+      '--base-url', 'https://compatible.example.invalid');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['created']).toBe(true);
+    // Soft, so a mutation that skips the reset is seen by the false-move assertion below as well.
+    const adv = advanceOf(router);
+    expect.soft(Object.values(adv.classes).map((x) => x.family), 'no family: the probe has no seeds')
+      .toEqual([null, null, null, null]);
+    expect.soft(adv.pending, 'the old intent is cleared').toBeNull();
+    expect.soft(Object.values(adv.classes).map((x) => x.previous), 'every previous cleared')
+      .toEqual([null, null, null, null]);
+    expect.soft(String(r.body['advanceNote']))
+      .toMatch(/^the lane already had an advance file, left by an earlier class registry, and it was reused \(D-5966\)/);
+    // The next set-class records its own move and nothing else, and the hold and history are still there.
+    const set = opAt('set-class', '--file', rosterPath(), '--id', router, '--class', 'sonnet', '--model', 'model-6.1-beta');
+    expect(set.code, set.stdout + set.stderr).toBe(0);
+    const after = advanceOf(router);
+    expect(after.classes.haiku.history, 'no false move').toEqual([]);
+    expect([after.classes.opus.hold, after.classes.opus.history], 'the hold and the history kept').toEqual([hold, history]);
+    expect(after.classes.sonnet.history).toEqual([
+      { at: NOW, how: 'hand', from: null, to: 'model-6.1-beta', ok: true, canary: 'not-run' },
+    ]);
+  });
+
   it('set-class records a hand entry and rewrites the family from a pin that parses', () => {
     plantAdv();
     const r = opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'model-6-delta');
