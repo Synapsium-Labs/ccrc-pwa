@@ -26,9 +26,9 @@ cluster K10), not standalone builds (decision D-5920).
 | 3 | D2 mail: surface pending mail inside a running turn (hook); the `busy` gate | #756 | D1; arming is OA-D2 | to spec |
 | 4 | D4 coordinator: re-inject its run roster on compaction, resume, clear and wake | #757 | none (ordered after D2) | to spec |
 | 5 | D5 worker restart: re-attach notice and a coordinator heads-up | #759 | none (ordered after D4) | to spec |
-| 6 | D7 drift reconciler, digest section, held questions across a restart | #760 | #821 for DT1; the consolidation's W1a C1c and W1b for DT2; skins P4a and P7 for DT4; DT5 none | specced and planned (tail spec rev 1, Tasks DT1 to DT5) |
+| 6 | D7 drift reconciler, digest section, held questions across a restart | #760 | #821 for DT1; the consolidation's W1a C1c and W1b for DT2; skins P7 for DT4 (P4a merged, #701); DT5 none | specced and planned (tail spec rev 2, Tasks DT1 to DT5) |
 | W6 input | D6 parent derivation checks the worker's birth; runs released when their coordinator is archived | #758 | the consolidation's W6 | input to W6's `bindingOf`; its listing half is D7's `claimant-gone` |
-| W6 input | D8 the coordinator's uuid on the claim; an attributed reclaim offered after an id-changing revive | #761 | the consolidation's W6 | specced and planned (Tasks DT6, DT7); DT7 conditional on the 30-day rule |
+| W6 input | D8 the coordinator's uuid on the claim; an attributed reclaim offered after an id-changing revive | #761 | the consolidation's W6 | specced and planned (Tasks DT6, DT7); DT7 (`openRun` only) conditional on the 30-day rule, which starts once 5 open programmes carry a stored uuid and is recorded with its denominator |
 
 ## Operator acts (later, never assumed by a task)
 
