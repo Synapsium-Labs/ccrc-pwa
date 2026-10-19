@@ -8950,8 +8950,8 @@ describe('W5h-1 Task 4: the listing record and decideMarkCheck\'s vanished input
     expect(libSeg.segmentListingRecord([])).toBe(`0 ${zero}`);
     expect(libSeg.segmentListingRecord([s(2), s(1), s(2)])).toBe(`2 ${libSeg.segmentListingDigest([s(1), s(2)])}`);
   });
-  it('addSegmentToListing: one more name, its digest XORed in, equal to the record of the whole set; no record starts one; a torn record is left for the check', () => {
-    expect(libSeg.addSegmentToListing(null, s(1))).toBe(libSeg.segmentListingRecord([s(1)]));
+  it('addSegmentToListing: one more name, its digest XORed in, equal to the record of the whole set; no record stays none (a pass never creates it, D-5725); a torn record is left for the check', () => {
+    expect(libSeg.addSegmentToListing(null, s(1)), 'a pass never creates the record (D-5725)').toBeNull();
     expect(libSeg.addSegmentToListing(libSeg.segmentListingRecord([s(1), s(1, T4C)]), s(2)), 'the pass never lists the directory')
       .toBe(libSeg.segmentListingRecord([s(1), s(1, T4C), s(2)]));
     expect(libSeg.addSegmentToListing(`0 ${zero}`, s(3))).toBe(libSeg.segmentListingRecord([s(3)]));
@@ -8966,8 +8966,9 @@ describe('W5h-1 Task 4: the listing record and decideMarkCheck\'s vanished input
     expect(libSeg.segmentListingVanished({ recorded: rec(s(1)), measured: rec(s(1), s(1, T4C)) }), 'one carried in').toBe(true);
     expect(libSeg.segmentListingVanished({ recorded: rec(s(1)), measured: rec(s(1, T4C)) }), 'one gone and one carried in, the count unchanged').toBe(true);
     expect(libSeg.segmentListingVanished({ recorded: rec(s(1)), measured: null }), 'a listing that could not be measured is never vanished').toBe(false);
-    expect(libSeg.segmentListingVanished({ recorded: null, measured: rec() }), 'no record and no segment').toBe(false);
+    expect(libSeg.segmentListingVanished({ recorded: null, measured: rec() }), 'no record and no segment: marks may name segments the listing has lost (D-5725)').toBe(true);
     expect(libSeg.segmentListingVanished({ recorded: null, measured: rec(s(1)) }), 'segments that predate the record: one check records them').toBe(true);
+    expect(libSeg.segmentListingVanished({ recorded: null, measured: null }), 'no record and an unmeasured listing: never vanished').toBe(false);
     for (const torn of ['', 'not a record', `2 ${zero.slice(2)}`]) {
       expect(libSeg.segmentListingVanished({ recorded: torn, measured: rec(s(1)) }), `a torn record ${JSON.stringify(torn)} fails toward a check`).toBe(true);
     }

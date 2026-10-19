@@ -8536,7 +8536,9 @@ function markExported(db, m) {
     setMeta(db, EXPORT_SEQ_META, String(m.seq));
     // W5h-1 Task 4 (D-5636 (history-export-vanished-rearm)): the published name joins the listing record in the same
     // transaction as its marks, so a crash never records a name whose marks did not commit, and the next step does not
-    // re-arm the check on this pass's own segment. lib adds the name; the directory is never re-measured here.
+    // re-arm the check on this pass's own segment. lib adds the name; the directory is never re-measured here. A pass
+    // never creates the record (D-5725 (history-export-listing-record-born-at-a-check)): with none, lib answers null and
+    // nothing is written, so the record is born only at a check's done stamp.
     const listed = addSegmentToListing(getMeta(db, EXPORT_MARKS_CHECKED_LISTING_META), m.name);
     if (listed !== null) setMeta(db, EXPORT_MARKS_CHECKED_LISTING_META, listed);
     // marked: lib decideMarkOutcome ends the backoff, writing '0' only over another value (RD2)
@@ -8771,9 +8773,10 @@ const EXPORT_MARKS_CHECKED_LISTING_META = 'export_marks_checked_listing';
 /** The listing record of export/<store_id>/ now: lib segmentListingRecord over EVERY name listSegments gives, damaged
  *  ones included. Whether a listed file is whole and this store's is the check's to judge (Task 3, D-5634); this record
  *  only notices that the listing changed, so moving a damaged file out re-arms the check and empties Task 3's record.
- *  One readdir: no header read, no open. Null when the directory cannot be listed for any reason but ENOENT
- *  (listSegments throws: ENOTDIR, EACCES), which lib never reads as a vanished segment; an absent directory lists none.
- *  W5h-1 Task 4 (D-5636). */
+ *  One readdir and one lstat per listed segment (listSegments' own), no header read and no open. Null when the directory
+ *  cannot be listed for any reason but ENOENT (listSegments throws: ENOTDIR, EACCES), which lib never reads as a vanished
+ *  segment; an absent directory lists none. A file that goes between the readdir and its lstat reads as unlistable for that
+ *  step, so the re-arm waits one step. W5h-1 Task 4 (D-5636). */
 function measureSegmentListing(ctx) {
   let segs;
   try { segs = listSegments(exportDirFor(ctx.paths, ctx.ids.storeId)); } catch { return null; }

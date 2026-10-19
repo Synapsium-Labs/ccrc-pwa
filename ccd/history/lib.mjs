@@ -8392,12 +8392,14 @@ function parseSegmentListing(v) {
   return m === null ? null : { count: Number(m[1]), digest: m[2] };
 }
 
-/** The record after a pass published `name`, written in its mark transaction: one more, its digest XORed in. Over no
- *  record it starts one at `name`; over a record that does not parse it answers null (write nothing): the next step
- *  re-arms on it anyway and the check writes a true one. Never a re-measurement of the directory: a segment gone
- *  before the pass stays in the record, so the next step still re-arms on it. */
+/** The record after a pass published `name`, written in its mark transaction: one more, its digest XORed in. A pass
+ *  never creates the record (D-5725 (history-export-listing-record-born-at-a-check)): over no record it answers null (write
+ *  nothing), so the record is born only at a check's done stamp, from the listing that check measured, and a store with no
+ *  record owes one check. Over a record that does not parse it answers null too: the next step re-arms on it anyway and the
+ *  check writes a true one. Never a re-measurement of the directory: a segment gone before the pass stays in the record, so
+ *  the next step still re-arms on it. */
 export function addSegmentToListing(recorded, name) {
-  if (recorded === null) return segmentListingRecord([name]);
+  if (recorded === null) return null;
   const r = parseSegmentListing(recorded);
   if (r === null) return null;
   const add = Buffer.from(segmentListingDigest([name]), 'hex');
@@ -8410,14 +8412,15 @@ export function addSegmentToListing(recorded, name) {
  *  segment name listed now, damaged ones included, or null when the directory could not be listed (an unreadable
  *  directory is never a vanished segment); `recorded` is meta's. The record holds a count and a digest, never the names,
  *  so it cannot tell a segment gone from one added: any difference answers true, and the check, keyed on the marks,
- *  clears only what a mark names and this box lacks (a segment carried in clears nothing). No record answers true when
- *  segments are listed (segments that predate the record: one check records them); a record that does not parse
- *  answers true. */
+ *  clears only what a mark names and this box lacks (a segment carried in clears nothing). No record answers true
+ *  whatever the listing holds, an empty one included (D-5725 (history-export-listing-record-born-at-a-check)): a store
+ *  with no record owes one check, which writes it at its done stamp, because marks may name segments the listing has lost;
+ *  a record that does not parse answers true. */
 export function segmentListingVanished({ recorded, measured }) {
   if (measured === null) return false;
   const now = parseSegmentListing(measured);
   if (now === null) throw new TypeError(`segmentListingVanished: not a listing record: ${JSON.stringify(measured)}`);
-  if (recorded === null) return now.count > 0;
+  if (recorded === null) return true;
   const was = parseSegmentListing(recorded);
   if (was === null) return true;
   return was.count !== now.count || was.digest !== now.digest;

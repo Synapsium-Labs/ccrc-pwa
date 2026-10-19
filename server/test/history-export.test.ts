@@ -1077,8 +1077,10 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
       expect(counters(box)['export_marks_check_failed']).toBe(1);
       expect(Object.values(marks(box)), 'a check that could not list cleared marks').toEqual([name, name]);
       expect(counters(box)['export_segment_missing'], 'an unreadable directory is not a missing segment').toBeUndefined();
-      expect(metaOf(box, 'export_marks_checked_ms'), 'a failed check is not a check').toBeNull();
-      expect(metaOf(box, 'export_marks_checked_binds'), 'a failed check covers no bind fact').toBeNull();
+      // D-5725: the fixture's own first step stamped an empty check (a store with no listing record owes one), so the stamp exists; this step's is what must be absent
+      expect(metaOf(box, 'export_marks_checked_ms'), 'a failed check is not a check').not.toBe(String(NOW + 2 * MIN));
+      // D-5725: the fixture's own first step stamped an empty check, which covers no bind fact, so the record is '[]', not absent
+      expect(metaOf(box, 'export_marks_checked_binds'), 'a failed check covers no bind fact').toBe('[]');
       expect(metaOf(box, HEALTH_META.exportMarksCheck), 'the stop is recorded unlistable, beside the count (D-5632)').toBe(`unlistable ${NOW + 2 * MIN} 0`);
       fs.rmSync(planted);
       fs.renameSync(`${planted}.kept`, planted);
@@ -1116,7 +1118,8 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expect(err?.message).toBe('database is locked (the check)');
     expect(counters(box)['export_marks_check_failed'], 'a busy is the lock\'s, not a failed listing').toBeUndefined();
     expect(Object.values(marks(box)), 'a check that met busy cleared marks').toEqual([name, name]);
-    expect(metaOf(box, 'export_marks_checked_ms'), 'a check that met busy is not a check').toBeNull();
+    // D-5725: the fixture's own first step stamped an empty check (a store with no listing record owes one), so the stamp exists; this step's is what must be absent
+    expect(metaOf(box, 'export_marks_checked_ms'), 'a check that met busy is not a check').not.toBe(String(NOW + 2 * MIN));
     await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(3 * MIN))));
     expect(Object.values(marks(box)), 'the next step checks again').toEqual([null, null]);
     expect(counters(box)['export_segment_missing']).toBe(1);
@@ -2815,8 +2818,10 @@ describe('the check after a bind runs in bounded, resumable batches (W5h-1 Task 
     await onStore(a.box, (db) => SW.exportStep(db, exportCtx(a.box, a.ids, at(2 * MIN), step)));
     expect(metaOf(a.box, HEALTH_META.exportMarksCheck), 'step 1: one batch (two blobs and their two referrers), then the budget').toBe(`budget ${NOW + 2 * MIN} 4`);
     expect(metaOf(a.box, HEALTH_META.exportSegmentMissing)).toBe('4');
-    expect(metaOf(a.box, 'export_marks_checked_binds'), 'the done stamp waits for the last batch').toBeNull();
-    expect(metaOf(a.box, 'export_marks_checked_ms')).toBeNull();
+    // D-5725: the fixture's own first step stamped an empty check, which covers no bind fact, so the record is '[]', not absent
+    expect(metaOf(a.box, 'export_marks_checked_binds'), 'the done stamp waits for the last batch').toBe('[]');
+    // D-5725: the fixture's own first step stamped an empty check, so the stamp exists; this step's is what must be absent
+    expect(metaOf(a.box, 'export_marks_checked_ms')).not.toBe(String(NOW + 2 * MIN));
     expect(counters(a.box)['export_segment_missing'], 'the first batch that clears counts the check').toBe(1);
     expect(strandedBlobs(a.box), 'D-5395 at the commit').toEqual([]);
     await onStore(a.box, (db) => SW.exportStep(db, exportCtx(a.box, a.ids, at(3 * MIN), step)));
@@ -2878,7 +2883,8 @@ describe('the check after a bind runs in bounded, resumable batches (W5h-1 Task 
       }) as { errcode?: number } | null;
       expect(err?.errcode, `busy at BEGIN ${nth} was not rethrown`).toBe(5);
       expect(strandedBlobs(x.box), `D-5395 at every commit point (busy at BEGIN ${nth})`).toEqual([]);
-      expect(metaOf(x.box, 'export_marks_checked_binds'), `a check that met busy at BEGIN ${nth} is not done`).toBeNull();
+      // D-5725: the fixture's own first step stamped an empty check, which covers no bind fact, so the record is '[]', not absent
+      expect(metaOf(x.box, 'export_marks_checked_binds'), `a check that met busy at BEGIN ${nth} is not done`).toBe('[]');
       await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 3 * MIN, { deps: { exportBindBytes: 2000 } })));
       expect(endState(x), `busy at BEGIN ${nth}, then the next step`).toEqual(endState(ctl));
     }
@@ -2893,7 +2899,8 @@ describe('the check after a bind runs in bounded, resumable batches (W5h-1 Task 
       const r = killAfterBatch(a.box, a.ids, NOW + 2 * MIN, 2000, killAt);
       expect(r.signal, `${r.stdout}\n${r.stderr}`).toBe('SIGKILL');
       expect(strandedBlobs(a.box), 'D-5395 at the kill').toEqual([]);
-      expect(metaOf(a.box, 'export_marks_checked_binds'), 'a killed check is not done').toBeNull();
+      // D-5725: the fixture's own first step stamped an empty check, which covers no bind fact, so the record is '[]', not absent
+      expect(metaOf(a.box, 'export_marks_checked_binds'), 'a killed check is not done').toBe('[]');
       expect(counters(a.box)['export_segment_missing'], 'the first batch that cleared counted the check before the kill').toBe(1);
       for (const x of [a, b]) await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 3 * MIN, { deps: { exportBindBytes: 2000 } })));
       expect(endState(a), 'killed, then resumed').toEqual(endState(b));
@@ -2997,7 +3004,8 @@ describe('the check after a bind runs in bounded, resumable batches (W5h-1 Task 
     const left = Number(q(x.box, 'SELECT count(*) AS n FROM blobs WHERE exported_seg = ?', x.S1)[0]!['n']);
     expect(left, 'some batches ran, and not all').toBeGreaterThan(0);
     expect(left).toBeLessThan(40);
-    expect(metaOf(x.box, 'export_marks_checked_binds')).toBeNull();
+    // D-5725: the fixture's own first step stamped an empty check, which covers no bind fact, so the record is '[]', not absent
+    expect(metaOf(x.box, 'export_marks_checked_binds')).toBe('[]');
     expect(strandedBlobs(x.box)).toEqual([]);
     await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 3 * MIN, { deps })));
     expect(metaOf(x.box, HEALTH_META.exportMarksCheck), 'with the reader gone the check ends').toBeNull();
@@ -3016,7 +3024,8 @@ describe('the check after a bind runs in bounded, resumable batches (W5h-1 Task 
       setMeta(db, 'export_marks_counted', '1');
     });
     await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => NOW + 2 * MIN)));
-    expect(metaOf(box, 'export_marks_checked_ms'), 'CONTROL: no check was owed, so none ran').toBeNull();
+    // D-5725: the fixture's own first step stamped an empty check (a store with no listing record owes one), so the stamp exists; this step's is what must be absent
+    expect(metaOf(box, 'export_marks_checked_ms'), 'CONTROL: no check was owed, so none ran').not.toBe(String(NOW + 2 * MIN));
     expect(metaOf(box, HEALTH_META.exportMarksCheck), 'a stop record no owed check stands behind is deleted').toBeNull();
     expect(metaOf(box, 'export_marks_counted'), 'and the once-a-check flag with it').toBeNull();
     const st = runCli(box, ['status', '--json']);
@@ -3040,7 +3049,8 @@ describe('the check after a bind runs in bounded, resumable batches (W5h-1 Task 
       setMeta(db, 'export_marks_counted', '1');
     });
     await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, () => NOW + 2 * MIN)));
-    expect(metaOf(box, 'export_marks_checked_ms'), 'CONTROL: no check was owed, so none ran').toBeNull();
+    // D-5725: the fixture's own first step stamped an empty check (a store with no listing record owes one), so the stamp exists; this step's is what must be absent
+    expect(metaOf(box, 'export_marks_checked_ms'), 'CONTROL: no check was owed, so none ran').not.toBe(String(NOW + 2 * MIN));
     expect(metaOf(box, 'export_marks_counted'), 'a once-a-check flag no owed check stands behind is deleted').toBeNull();
     // a later bind with the segment gone: its check clears the mark and counts itself
     fs.rmSync(path.join(exportDirOf(box), s1));
@@ -3057,7 +3067,8 @@ describe('the check after a bind runs in bounded, resumable batches (W5h-1 Task 
     const off = historyPaths(x.box.home).off;
     await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 2 * MIN, { deps: { exportBindBytes: 2000, afterMarkBatch: () => { fs.writeFileSync(off, ''); } } })));
     expect(metaOf(x.box, HEALTH_META.exportMarksCheck), 'history-off stopped the check after its first batch').toBe(`off ${NOW + 2 * MIN} 4`);
-    expect(metaOf(x.box, 'export_marks_checked_binds')).toBeNull();
+    // D-5725: the fixture's own first step stamped an empty check, which covers no bind fact, so the record is '[]', not absent
+    expect(metaOf(x.box, 'export_marks_checked_binds')).toBe('[]');
     expect(strandedBlobs(x.box)).toEqual([]);
     fs.rmSync(off);
     await onStore(x.box, (db) => SW.exportStep(db, exportCtx(x.box, x.ids, () => NOW + 3 * MIN, { deps: { exportBindBytes: 2000 } })));
@@ -3421,7 +3432,8 @@ describe('the check re-arms when a segment it saw is gone (W5h-1 Task 4; D-5636 
     await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(0))));
     expect(Object.values(marks(box))).toEqual([s1, s1]);
     await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(2 * MIN))));
-    expect(metaOf(box, 'export_marks_checked_ms'), 'the first tick after the pass: nothing gone, no check').toBeNull();
+    // D-5725: the fixture's own first step stamped an empty check, so its stamp is not null; the step after the pass must not have stamped
+    expect(metaOf(box, 'export_marks_checked_ms'), 'the first tick after the pass: nothing gone, no check').not.toBe(String(NOW + 2 * MIN));
     // moved aside, outside any bind (an operator's tidy-up, a disk move): no bind fact is written
     fs.renameSync(path.join(exportDirOf(box), s1), path.join(box.home, 'moved-aside.db'));
     await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(3 * MIN))));
@@ -3445,9 +3457,12 @@ describe('the check re-arms when a segment it saw is gone (W5h-1 Task 4; D-5636 
     const NOW = Date.now();
     const at = (ms: number) => (): number => NOW + ms;
     const s1 = `1.${ids.writer}.db`;
+    // D-5725: the fixture's own first step stamped an empty check and made the record, so a stamp exists; it must not move
+    const stamped = metaOf(box, 'export_marks_checked_ms');
+    expect(metaOf(box, LISTING), 'CONTROL: the fixture\'s empty check made the record').toBe(`0 ${'0'.repeat(32)}`);
     await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(0))));
     for (const m of [2, 3, 4]) await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(m * MIN))));
-    expect(metaOf(box, 'export_marks_checked_ms'), 'a step re-armed the check on the pass\'s own segment').toBeNull();
+    expect(metaOf(box, 'export_marks_checked_ms'), 'a step re-armed the check on the pass\'s own segment').toBe(stamped);
     expect(Object.values(marks(box))).toEqual([s1, s1]);
     expect(metaOf(box, LISTING), 'the pass started the record at its own segment').toBe(`1 ${x9Lib.segmentListingDigest([s1])}`);
   }, 120_000);
@@ -3507,8 +3522,17 @@ describe('the check re-arms when a segment it saw is gone (W5h-1 Task 4; D-5636 
     const p1 = path.join(exportDirOf(box), s1);
     await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(0))));
     fs.truncateSync(p1, fs.statSync(p1).size - 1);   // one byte short of its header's page_size x page_count
-    // a bind: the check reads segment 1 short (Task 3), clears its marks and records its name
-    await onStore(box, (db) => { setMeta(db, `bound:${NOW + MIN}`, 'restore'); return SW.exportStep(db, exportCtx(box, ids, at(2 * MIN))); });
+    // a bind: the check reads segment 1 short (Task 3), clears its marks and records its name; its one stderr line is
+    // spied, not printed (W5h-1 Task 4 fix round 1, F4)
+    const errDmg = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let shortLines: string[] = [];
+    try {
+      await onStore(box, (db) => { setMeta(db, `bound:${NOW + MIN}`, 'restore'); return SW.exportStep(db, exportCtx(box, ids, at(2 * MIN))); });
+      shortLines = errDmg.mock.calls.map((c) => String(c[0])).filter((l) => l.includes(` export segment ${s1} `) && l.includes(' is short:'));
+    } finally {
+      errDmg.mockRestore();
+    }
+    expect(shortLines, 'the check says once that the segment is short').toHaveLength(1);
     expect(metaOf(box, HEALTH_META.exportSegmentDamaged), 'CONTROL: the check recorded the damaged name').toBe(JSON.stringify([s1]));
     expect(metaOf(box, LISTING), 'the record counts the damaged name').toBe(`1 ${x9Lib.segmentListingDigest([s1])}`);
     await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(3 * MIN))));
@@ -3539,7 +3563,8 @@ describe('the check re-arms when a segment it saw is gone (W5h-1 Task 4; D-5636 
     }
     expect(counters(box)['export_marks_check_failed'], 'an unlistable directory was read as a segment gone').toBeUndefined();
     expect(lines).toEqual([]);
-    expect(metaOf(box, 'export_marks_checked_ms')).toBeNull();
+    // D-5725: the fixture's own first step stamped an empty check, so the stamp exists; this step's is what must be absent
+    expect(metaOf(box, 'export_marks_checked_ms')).not.toBe(String(NOW + 2 * MIN));
     expect(Object.values(marks(box))).toEqual([s1, s1]);
   }, 120_000);
 
@@ -3566,6 +3591,65 @@ describe('the check re-arms when a segment it saw is gone (W5h-1 Task 4; D-5636 
     await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(5 * MIN))));
     expect(metaOf(box, HEALTH_META.exportMarksCheck), 'listed again, the check finishes').toBeNull();
     expect(Object.values(marks(box))).toEqual([null, null]);
+    expect(strandedBlobs(box)).toEqual([]);
+  }, 120_000);
+
+  // ── W5h-1 Task 4 fix round 1 (D-5725 (history-export-listing-record-born-at-a-check)) ──────────────────────────────
+  it('a store with no listing record owes one check, whatever its listing holds: marks naming a segment, the export directory emptied, no bind: the next step clears them and the done stamp writes the record (D-5725)', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-norecord-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
+    const NOW = Date.now();
+    const at = (ms: number) => (): number => NOW + ms;
+    const s1 = `1.${ids.writer}.db`;
+    await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(0))));
+    expect(Object.values(marks(box))).toEqual([s1, s1]);
+    // a store upgraded from B4 has no listing record: the pass above may have made one, so it is removed
+    await onStore(box, (db) => { db.prepare('DELETE FROM meta WHERE k = ?').run(LISTING); });
+    fs.rmSync(exportDirOf(box), { recursive: true });   // the directory is absent (ENOENT): it lists as none, measured, not unlistable
+    await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(2 * MIN))));
+    expect(Object.values(marks(box)), 'no record and an empty listing: the marks naming the gone segment stood').toEqual([null, null]);
+    expect(counters(box)['export_segment_missing']).toBe(1);
+    expect(metaOf(box, LISTING), 'the check\'s done stamp writes the record').toBe(`0 ${'0'.repeat(32)}`);
+    expect(strandedBlobs(box)).toEqual([]);
+  }, 120_000);
+
+  it('a pass never creates the listing record, so a segment that goes after a pass seeded nothing still re-arms the check: the record is born at a check\'s done stamp (D-5725)', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-norecordpass-', [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
+    const NOW = Date.now();
+    const at = (ms: number) => (): number => NOW + ms;
+    const s1 = `1.${ids.writer}.db`;
+    const s2 = `2.${ids.writer}.db`;
+    const first = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(0), { limits: { maxBytes: 1 } })));
+    expect(first, 'the fixture must leave a row for a second pass').toMatchObject({ state: 'written', segment: s1, rows: 1, complete: false });
+    await onStore(box, (db) => { db.prepare('DELETE FROM meta WHERE k = ?').run(LISTING); });   // a store with no record yet
+    const second = await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(5 * MIN))));
+    expect(second).toMatchObject({ state: 'written', segment: s2 });
+    expect(metaOf(box, LISTING), 'a pass created the record from its own name').toBeNull();
+    fs.rmSync(path.join(exportDirOf(box), s1));
+    await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(6 * MIN))));
+    expect(marks(box), 'the record a pass seeded matched the listing, and the old segment\'s marks stood').toEqual({ [rid(1)]: null, [rid(2)]: s2 });
+    expect(metaOf(box, LISTING)).toBe(`1 ${x9Lib.segmentListingDigest([s2])}`);
+  }, 120_000);
+
+  it('the done stamp writes the listing measured at the START of its step: a segment that goes while the check runs re-arms the next step (D-5725\'s sibling: FR1-F3)', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-stampstart-', [row(1, 'one', 3 * DAY), row(2, 'two', 2 * DAY), row(3, 'three', DAY)]);
+    const NOW = Date.now();
+    const at = (ms: number) => (): number => NOW + ms;
+    const [s1, s2, s3] = [1, 2, 3].map((n) => `${n}.${ids.writer}.db`);
+    // a one-byte budget makes each pass take one row, so three passes leave one segment a row
+    for (const m of [0, 1, 2]) await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(m * 10), { limits: { maxBytes: 1 } })));
+    expect(Object.values(marks(box)).sort()).toEqual([s1, s2, s3]);
+    fs.rmSync(path.join(exportDirOf(box), s1));   // the missing set is {s1}; s2's marks are not in it
+    let seen = 0;
+    const gone = (): void => { if ((seen += 1) === 1) fs.rmSync(path.join(exportDirOf(box), s2)); };
+    await onStore(box, (db) => {
+      setMeta(db, `bound:${NOW + MIN}`, 'restore');
+      return SW.exportStep(db, exportCtx(box, ids, at(3 * MIN), { deps: { exportBindBatch: 1, afterMarkBatch: gone } }));
+    });
+    expect(seen, 'CONTROL: the hook ran between the check\'s batches').toBeGreaterThanOrEqual(1);
+    expect(Object.values(marks(box)).filter((v) => v === s1), 'CONTROL: the check cleared s1\'s marks').toEqual([]);
+    expect(Object.values(marks(box)).filter((v) => v === s2), 'CONTROL: s2 was not in this check\'s missing set').toHaveLength(1);
+    await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(4 * MIN))));
+    expect(Object.values(marks(box)).filter((v) => v === s2), 'the done stamp recorded a listing measured after s2 went: the next step stayed quiet').toEqual([]);
     expect(strandedBlobs(box)).toEqual([]);
   }, 120_000);
 });
