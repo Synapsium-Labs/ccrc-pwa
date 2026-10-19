@@ -1756,6 +1756,12 @@ Issued and unused (Task A5): 5619.
 
 Issued and unused (Task A8): none.
 
+### Issued 2026-10-19 and defined here (Task A6)
+
+- **D-5690** — `confirm-its-you-as-built` (Task A6): six decisions Task A6's Files list did not make. (1) **The ceremony's browser half is `assertStepUp` in `pwa/src/lib/passkey.ts`**, a file the Files list does not name, so that module stays the one that touches `navigator.credentials`. It takes `POST /api/auth/step-up/start`'s answer as a parameter and calls `credentials.get` before it returns; `assertPasskey` awaits its own start first, which spends iOS Safari's user activation, so it cannot serve. (2) **A held challenge is replaced** after `CHALLENGE_REFRESH_MS` (90 s, under the box's two-minute `CHALLENGE_TTL_MS`), and a new one is fetched after every attempt, because a challenge is single-use. A sheet left open therefore never spends the session's step-up budget on a stale challenge. A replacement is a new start, never a resent proof. (3) **The sheet owns the step.** `useStepUp(freshUntil, deps)` takes `connect.stepUpFreshUntil` as a parameter (A12 carries it; until then the caller passes it), and `runAct(act)` runs an act once and answers `'step-up'` on `step-up-required`, which is how a sheet feeds the refusal back. A stamp the step earns outranks the screen's read until it lapses, and a refused act outranks both until the next stamp. (4) **A browser without WebAuthn on a box with a passkey** shows `NO_PASSKEY_HERE_TEXT` and no button. The passphrase arm is never offered there, because the box would refuse it `passkey-enrolled`. A `passkey-enrolled` answer to the passphrase arm (a key enrolled since the step showed) re-reads start, which then offers the passkey arm. (5) **The passphrase is also cleared on `visibilitychange` to hidden**, spec §3.3's rule for a secret in a sheet, beside submit and hide. (6) **Sentences come from refusal words only.** `rate-limited`, `unmeasured` and an unreachable box offer Try again, which is a new start and never a resend; `auth-off` and `not-configured` offer nothing to press.
+
+Issued and unused (Task A6): 5691.
+
 ### Departures defined here by slug, awaiting numbers
 
 These are decisions with no number yet: the spec's N1 and N2, and five this plan found (N7 at rev 2). Each takes a number from `POST /api/ledger/deviations` before the task that implements it is dispatched, and the PR that implements it replaces the label with the number here and in the spec, in the same act.
