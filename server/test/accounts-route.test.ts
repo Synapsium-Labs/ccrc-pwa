@@ -196,20 +196,27 @@ describe('GET /api/accounts', () => {
     // to the declared field, adapted — `{ state: 'untagged', origin:
     // 'declared' }` for every one of these untagged accounts.
     const untaggedDeclared = { state: 'untagged' as const, origin: 'declared' as const };
+    // The lane kind (D-5517, D-5751): `rosterKindOf`'s answer per entry —
+    // upstream is anthropic by construction, a secrets file makes a token lane,
+    // and `gpt` (`external`, no provider) is undeclared, so it carries
+    // telemetry and nothing else.
+    const signIn = { provider: 'anthropic' as const, kind: 'sign-in' as const, telemetry: 'anthropic' as const };
+    const token = { provider: 'anthropic' as const, kind: 'token' as const, telemetry: 'anthropic' as const };
     expect(roster).toEqual([
-      { id: 'claude', label: 'claude', hue: 'cyan', homeAble: true, hidden: false, pool: null, resolvedPool: untaggedDeclared },
-      { id: 'claude-a', label: 'claude-a', hue: 'violet', homeAble: true, hidden: false, pool: null, resolvedPool: untaggedDeclared },
-      { id: 'claude-b', label: 'team·b', hue: 'blue', homeAble: true, hidden: false, pool: null, resolvedPool: untaggedDeclared },
-      { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false, pool: null, resolvedPool: untaggedDeclared },
-      { id: 'claude-d', label: 'claude-d', hue: 'green', homeAble: true, hidden: false, pool: null, resolvedPool: untaggedDeclared },
+      { id: 'claude', label: 'claude', hue: 'cyan', homeAble: true, hidden: false, pool: null, ...signIn, resolvedPool: untaggedDeclared },
+      { id: 'claude-a', label: 'claude-a', hue: 'violet', homeAble: true, hidden: false, pool: null, ...token, resolvedPool: untaggedDeclared },
+      { id: 'claude-b', label: 'team·b', hue: 'blue', homeAble: true, hidden: false, pool: null, ...signIn, resolvedPool: untaggedDeclared },
+      { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false, pool: null, telemetry: 'none', resolvedPool: untaggedDeclared },
+      { id: 'claude-d', label: 'claude-d', hue: 'green', homeAble: true, hidden: false, pool: null, ...token, resolvedPool: untaggedDeclared },
     ]);
   });
 
-  // The server's half of the roster's own secret-keeping: `configDirSuffix`,
-  // `exec` (which carries a `~/.cc-secrets` path for a generated account) and
-  // `telemetry` describe how the SERVER launches and measures an account. A
-  // browser has no use for any of them, and `RosterWire` is where that line is
-  // drawn — this asserts the line is real on the wire, not just in the type.
+  // The server's half of the roster's own secret-keeping: `configDirSuffix`
+  // and `exec` (which carries a `~/.cc-secrets` path for a generated account)
+  // describe how the SERVER launches an account. A browser has no use for
+  // either, and `RosterWire` is where that line is drawn — this asserts the
+  // line is real on the wire, not just in the type. `telemetry` crossed it on
+  // purpose with the lane kind (D-5517, D-5751): a closed union, no path.
   it('ships no launch or secrets detail to the browser', async () => {
     const { roster } = await getPayload(seedLimits({ claude: { five: 2, seven: 3 } }));
     // The loop below is the assertion, and a loop over an empty array runs no
@@ -218,9 +225,11 @@ describe('GET /api/accounts', () => {
     // seeds `DEFAULT_TEST_ROSTER`, which has five accounts, so the count is a
     // fact about the fixture and not a guess about the handler.
     expect(roster).toHaveLength(5);
+    const base = ['hidden', 'homeAble', 'hue', 'id', 'label', 'pool', 'resolvedPool', 'telemetry'];
     for (const entry of roster) {
-      expect(Object.keys(entry).sort()).toEqual(
-        ['hidden', 'homeAble', 'hue', 'id', 'label', 'pool', 'resolvedPool']);
+      // `gpt` is undeclared (`external`, no provider): no provider, no kind.
+      const kind = entry.id === 'gpt' ? [] : ['kind', 'provider'];
+      expect(Object.keys(entry).sort(), entry.id).toEqual([...base, ...kind].sort());
     }
   });
 

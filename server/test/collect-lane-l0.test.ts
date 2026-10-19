@@ -56,7 +56,7 @@ const DECLARATIONS: readonly string[] = [
 
 /** `peers-claims-l0.test.ts`'s six lines. The block adds none. */
 const IMPORTS = [
-  "import type { Hue } from './roster.js';",
+  "import type { Hue, RosterKindWire } from './roster.js';",
   "import type { AccountPoolWire } from './poolrule.js';",
   "import type { BuildInfo } from './buildinfo.js';",
   "import type { BoxTokenView } from './box-token.js';",
