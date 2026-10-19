@@ -57,6 +57,7 @@ interface SweepRecover {
   runOpPass(parsed: { op: string; opArgs: string[] }, deps: Record<string, unknown>, out: (line: string) => void): Promise<number>;
   recoverReindex(db: DatabaseSync, ctx: Record<string, unknown>, cur: { pairsAdded: boolean }, budget: Record<string, unknown>):
     Promise<{ done: boolean; moved: boolean }>;
+  writeChunk(db: DatabaseSync, chunk: Record<string, unknown>): { newEntries: number; minNewTsMs: number | null };
 }
 /** What batch HE calls of derive.mjs in-process. */
 interface DeriveNodes {
@@ -5322,6 +5323,116 @@ describe('D-5397: export replay applies every segment\'s bytes before any segmen
       expect(countersOn(held.db, 'export_blob_tombstone_kept'), 'and only the one over the tombstone is counted').toEqual({ export_blob_tombstone_kept: 1 });
     } finally {
       closeWriter(held.db);
+    }
+  });
+});
+
+// ── wave 5h-1 Task 6: a live copy keeps an entry's structure on a tie (D-5638 (history-ingest-live-beats-exported-tie);
+// review 614 F7; "Owed from B4" item 5) ─────────────────────────────────────────────────────────────────────────────────
+// A restore's backup holds an entry on its live file at struct rank R; a segment carries the same entry at R. Replay goes
+// through ingest's ENTRY_UPSERT with the exported: dead-file row, which is new and so has the larger file_id: under the
+// shipped "ties broken by the larger file_id" (RV15) the structure moved onto that row. Replay now never wins a tie, and
+// ingest's live copy beats an exported: holder at an equal rank whatever the file ids.
+describe('a live copy keeps an entry\'s structure on a tie (wave 5h-1 Task 6; D-5638 (history-ingest-live-beats-exported-tie))', () => {
+  /** The store a restore starts from: `fam`'s transcript, its LIVE file (an ingest_files row with its file_paths row) and
+   *  each text's blob and entry on that file at struct rank `rankOf(i)`. The live file_id. */
+  function x10LiveStore(db: DatabaseSync, fam: X10Family, rankOf: (i: number) => bigint): { live: number; transcriptPk: number } {
+    const transcriptPk = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)').run(fam.uuid).lastInsertRowid);
+    const live = Number(db.prepare("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, ?, '', ?, 'live', 1)")
+      .run(X10_DEV, fam.ino, transcriptPk).lastInsertRowid);
+    db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, ?, ?)').run(fam.path, live, Date.now());
+    fam.texts.forEach((x, i) => {
+      const blob = Number(db.prepare("INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, 'br5', ?, ?)")
+        .run(segmentSha(x.text), segmentSha(`a stored body ${i}`), Buffer.byteLength(x.text, 'utf8')).lastInsertRowid);
+      db.prepare("INSERT INTO entries (uuid, transcript_pk, type, role, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'user', 'operator', 1, ?, ?, ?, ?)")
+        .run(x.uuid, transcriptPk, rankOf(i), live, blob, x.tsMs);
+    });
+    return { live, transcriptPk };
+  }
+  /** Where an entry's structure sits: its struct_file_id, that row's status, and its rank as text (past 2^53). */
+  const structOf = (db: DatabaseSync, uuid: string): Record<string, unknown> => ({ ...(db.prepare(
+    'SELECT e.struct_file_id AS file, f.status AS status, CAST(e.struct_rank_ns AS TEXT) AS rank FROM entries e JOIN ingest_files f ON f.file_id = e.struct_file_id WHERE e.uuid = ?',
+  ).get(uuid) as object) });
+  const deadOf = (db: DatabaseSync, fam: X10Family): number =>
+    Number((db.prepare('SELECT file_id FROM ingest_files WHERE source_key = ?').get(exportedSourceKey(fam.path, X10_DEV, fam.ino)) as { file_id: number }).file_id);
+
+  it('replay: a segment carrying an entry at the rank the store holds it leaves the structure on the live file; a newer carried rank still takes it to the exported: row', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-5h-tie-replay-');
+    try {
+      const texts = x10Texts(0xd00, 2, 'zqtiereplay', Date.now() - 400 * X10_DAY);
+      const fam: X10Family = { uuid: x10U(0xd0), path: '/home/u/live/tie-replay.jsonl', ino: 9961, texts };
+      const R = BigInt(texts[0]!.tsMs) * 1_000_000n;   // x10Rows gives every entry of the family this struct_rank_ns
+      // texts[0] is held at R, the rank the segment carries (a tie); texts[1] at R - 1, older than the carried copy
+      const { live } = x10LiveStore(db, fam, (i) => (i === 0 ? R : R - 1n));
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      const dead = deadOf(db, fam);
+      expect(dead, 'CONTROL: the exported: row is new, so its file_id is the larger').toBeGreaterThan(live);
+      expect(structOf(db, texts[1]!.uuid), 'CONTROL: a newer carried rank takes the structure (the newest-rank rule is kept)')
+        .toEqual({ file: dead, status: 'exported', rank: String(R) });
+      expect(structOf(db, texts[0]!.uuid), 'a replayed copy never wins a tie: the structure stays on the live file')
+        .toEqual({ file: live, status: 'live', rank: String(R) });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('replay against replay: two segments carrying one entry at one rank, each through its own file, leave the structure on the first segment\'s exported: row', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-5h-tie-replay2-');
+    try {
+      const texts = x10Texts(0xd20, 1, 'zqtiereplaytwo', Date.now() - 400 * X10_DAY);
+      // one session's entry, carried by segment 1 through file A and by segment 2 through file B, at the same struct rank
+      const famA: X10Family = { uuid: x10U(0xd2), path: '/home/u/live/tie-replay-a.jsonl', ino: 9963, texts };
+      const famB: X10Family = { uuid: x10U(0xd2), path: '/home/u/live/tie-replay-b.jsonl', ino: 9964, texts };
+      const R = BigInt(texts[0]!.tsMs) * 1_000_000n;
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(famA) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(famB) });
+      let r = await SW.recoveryStep(db, stepCtx(box, ids));
+      for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+      expect(r, 'CONTROL: both segments replayed').toMatchObject({ done: true, held: false });
+      const first = deadOf(db, famA);
+      const second = deadOf(db, famB);
+      expect(second, 'CONTROL: the second segment\'s exported: row is the newer, so its file_id is the larger').toBeGreaterThan(first);
+      expect(structOf(db, texts[0]!.uuid), 'a replay-against-replay tie keeps the first segment\'s structure')
+        .toEqual({ file: first, status: 'exported', rank: String(R) });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('ingest: a live copy read at the rank an exported: row holds an entry\'s structure at takes it back though its file_id is the smaller; a live copy at an older rank does not', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-5h-tie-ingest-');
+    try {
+      const texts = x10Texts(0xd10, 2, 'zqtieingest', Date.now() - 400 * X10_DAY);
+      const fam: X10Family = { uuid: x10U(0xd1), path: '/home/u/live/tie-ingest.jsonl', ino: 9962, texts };
+      const R = BigInt(texts[0]!.tsMs) * 1_000_000n;
+      // the backup held both rows at R - 1; the segment carries them at R, newer, so replay moves both onto the exported: row
+      const { live, transcriptPk } = x10LiveStore(db, fam, () => R - 1n);
+      plantSegment(box, ids.storeId, { seq: 1, writer: X10_WRITER, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      const dead = deadOf(db, fam);
+      expect(texts.map((x) => structOf(db, x.uuid)['file']), 'CONTROL: replay moved both onto the exported: row').toEqual([dead, dead]);
+      // The live file is read again from the backup's cursor: texts[0] at R (its file now has the carried copy's mtime), and
+      // texts[1] at R - 1 (an older read). One chunk each, through ingest's own writeChunk, on the LIVE file_id.
+      const chunkOf = (x: X10Text, rankNs: bigint): Record<string, unknown> => ({
+        blobs: new Map([[segmentSha(x.text).toString('hex'), { sha: segmentSha(x.text), z: null, rawLen: 0 }]]), counts: new Map(),
+        rows: [{
+          kind: 'row', at: x.line, provenance: 'operator', sha: segmentSha(x.text), json: '{}', ftsText: null, ftsOverCap: false, boundary: null, kept: null,
+          entry: { uuid: x.uuid, type: 'user', subtype: null, role: 'user', model: null, parentUuid: null, tsMs: x.tsMs, requestId: null,
+            apiBlockIndex: null, msgId: null, sourceToolUseId: null, toolName: null, isCompactSummary: 0 },
+        }],
+        transcriptPk, fileId: live, rankNs, first: null, cursor: { offset: 0, tailSha: null }, size: 0, mtimeNs: 0n, rawError: null,
+        nowMs: Date.now(), pairIdx: null, ccUuid: fam.uuid,
+      });
+      SW.writeChunk(db, chunkOf(texts[0]!, R));
+      SW.writeChunk(db, chunkOf(texts[1]!, R - 1n));
+      expect(structOf(db, texts[0]!.uuid), 'a live copy beats an exported: holder at an equal rank')
+        .toEqual({ file: live, status: 'live', rank: String(R) });
+      expect(structOf(db, texts[1]!.uuid), 'CONTROL: an older live copy never takes the structure')
+        .toEqual({ file: dead, status: 'exported', rank: String(R) });
+      expect(x10Count(db, 'entry_variants'), 'CONTROL: the same bodies made no variant').toBe(0);
+    } finally {
+      closeWriter(db);
     }
   });
 });

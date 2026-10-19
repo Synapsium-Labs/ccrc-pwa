@@ -2812,7 +2812,7 @@ function replayEntryRow(db, seg, r) {
   const fileId = ensureDeadFile(db, seg, r.struct_path, r.struct_dev, r.struct_ino, t, null, null, null);
   stmts(db).entryUpsert.run(r.uuid, t, r.type, r.subtype, r.role, r.model, r.parent_uuid, r.ts_ms, r.request_id,
     r.api_block_index, r.msg_id, r.source_tool_use_id, r.tool_name, r.is_compact_summary, r.provenance, r.prov_version,
-    r.parse_state, r.struct_rank_ns, fileId, blobId);
+    r.parse_state, r.struct_rank_ns, fileId, blobId, 0);   // 0: a replayed copy never wins a tie (D-5638)
   const s = replayStmts(db);
   const e = s.entrySel.get(r.uuid);
   // D-5395: the segment holds this row's bytes, but the store may hold more of the entry than the segment did (a late
@@ -4272,6 +4272,11 @@ function findLineEnd(fd, start, size) {
   return null;
 }
 
+// D-5638 (history-ingest-live-beats-exported-tie): the tie arm is bound by ?21, 1 at ingest (writeChunk) and 0 at segment
+// replay (replayEntryRow). A replayed copy never wins a tie, so a restore's entry keeps its structure on the live file the
+// backup held rather than move onto the exported: row replay just made (whose file_id is always the larger); and at ingest
+// a live copy beats an exported: holder at an equal rank whatever the file ids, which brings back an entry a replay took at
+// a strictly newer rank once the live file is read at that rank. A strictly newer rank wins from either caller, as before.
 const ENTRY_UPSERT = `INSERT INTO entries (uuid, transcript_pk, type, subtype, role, model, parent_uuid,
     ts_ms, request_id, api_block_index, msg_id, source_tool_use_id, tool_name, is_compact_summary,
     provenance, prov_version, parse_state, struct_rank_ns, struct_file_id, blob_id)
@@ -4284,7 +4289,9 @@ const ENTRY_UPSERT = `INSERT INTO entries (uuid, transcript_pk, type, subtype, r
     prov_version = excluded.prov_version, parse_state = excluded.parse_state,
     struct_rank_ns = excluded.struct_rank_ns, struct_file_id = excluded.struct_file_id
   WHERE excluded.struct_rank_ns > entries.struct_rank_ns
-     OR (excluded.struct_rank_ns = entries.struct_rank_ns AND excluded.struct_file_id > entries.struct_file_id)`;
+     OR (?21 = 1 AND excluded.struct_rank_ns = entries.struct_rank_ns
+         AND (excluded.struct_file_id > entries.struct_file_id
+              OR (SELECT status FROM ingest_files WHERE file_id = entries.struct_file_id) = 'exported'))`;
 
 const INGEST_STMTS = new WeakMap();
 /** The ingest's prepared statements, one set per connection. Each names its columns. */
@@ -4577,7 +4584,7 @@ export function writeChunk(db, chunk) {
         e?.msgId ?? null, e?.sourceToolUseId ?? null, e?.toolName ?? null, e?.isCompactSummary ?? 0,
         e !== null ? r.provenance : RAW_ROW.provenance, PROV_VERSION,
         e !== null ? PARSE_STATE.ok : RAW_ROW.parseState,
-        chunk.rankNs, chunk.fileId, blobId);
+        chunk.rankNs, chunk.fileId, blobId, 1);   // 1: ingest's tie arm (D-5638)
       const entryId = before !== undefined ? before.entry_id : Number(info.lastInsertRowid);
       if (before === undefined) {
         newEntries += 1;
