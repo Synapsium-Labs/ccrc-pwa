@@ -1342,12 +1342,45 @@ describe('W2-4 Task 5: the batch runner, at most 2 at once, gated, resumable (W2
 
   it('the spend line lands before the rename of .part: a rename that fails leaves the spawn charged', async () => {
     const b = t5Box('ccrc-replay-t5-spendfirst-');
+    t5fs.writeFileSync(t5path.join(b.home, T5_STUB_SLEEP), '1500');
+    const flight = t5drv.launchRun(t5job(b, b.up, 'box', 'order-0'));
+    const settled = flight.then(() => null, (e: unknown) => e);
+    const part = t5path.join(b.out, 'order-0.jsonl.part');
+    for (let i = 0; i < 100 && !t5fs.existsSync(part); i++) await new Promise((r) => setTimeout(r, 50));
+    expect(t5fs.existsSync(part), 'the stream is open while the child runs').toBe(true);
+    // The rename fails DURING the run: the final path becomes a non-empty directory after the pre-spawn check passed.
     const finalDir = t5path.join(b.out, 'order-0.jsonl');
     t5fs.mkdirSync(finalDir);
     t5fs.writeFileSync(t5path.join(finalDir, 'blocker'), 'x');
-    await expect(t5drv.launchRun(t5job(b, b.up, 'box', 'order-0'))).rejects.toThrow();
+    expect(await settled, 'the rename failed').not.toBeNull();
     expect(t5drv.spentSoFar(b.out), 'charged although the rename failed').toBe(T5_TOKENS);
     expect(t5fs.existsSync(t5path.join(b.out, 'order-0.run.json'))).toBe(false);
+  }, 60_000);
+
+  // D-5811: a final stream path that is not a regular file refuses before the spawn, so no tokens are spent on a damaged --out.
+  it('a final stream path that is a directory or a symlink refuses out-refused run-stream-invalid before the spawn; a regular file there is replaced by the re-spawn', async () => {
+    for (const [label, plant] of [
+      ['directory', (p: string, b: { home: string }) => { void b; t5fs.mkdirSync(p); }],
+      ['symlink', (p: string, b: { home: string }) => { const t = t5path.join(b.home, 'final-target'); t5fs.writeFileSync(t, T5_LEFTOVER_STREAM); t5fs.symlinkSync(t, p); }],
+    ] as const) {
+      const b = t5Box(`ccrc-replay-t5-finalpath-${label}-`);
+      const final = t5path.join(b.out, 'fin-0.jsonl');
+      plant(final, b);
+      const job = t5job(b, b.up, 'box', 'fin-0');
+      await expect(t5drv.launchRun(job), `${label} through launchRun`).rejects.toMatchObject({ word: 'out-refused', detail: 'run-stream-invalid fin-0' });
+      await expect(t5drv.runBatch([job], { gate: T5_NO_GATE }), `${label} through the batch`).rejects.toMatchObject({ word: 'out-refused', detail: 'run-stream-invalid fin-0' });
+      expect(stubLog(b.home), `${label}: no spawn`).toBeNull();
+      expect(t5drv.spentSoFar(b.out), `${label}: nothing spent`).toBe(0);
+      expect(t5fs.existsSync(t5path.join(b.out, 'fin-0.jsonl.part')), `${label}: no .part`).toBe(false);
+      expect(t5fs.lstatSync(final).isFile(), `${label}: left untouched`).toBe(false);
+    }
+    // CONTROL: a finished spawn whose run.json was lost leaves a regular file there; the re-spawn replaces it.
+    const c = t5Box('ccrc-replay-t5-finalpath-file-');
+    t5fs.writeFileSync(t5path.join(c.out, 'fin-1.jsonl'), 'stale\n');
+    await t5drv.launchRun(t5job(c, c.up, 'box', 'fin-1'));
+    expect(stubLog(c.home)).toHaveLength(1);
+    expect(t5fs.readFileSync(t5path.join(c.out, 'fin-1.jsonl'), 'utf8')).toBe(T5_STREAM);
+    expect(t5drv.spentSoFar(c.out)).toBe(T5_TOKENS);
   }, 60_000);
 
   it('a .part leftover with no run.json is charged once before the re-spawn, its inode is never reused, and the spawn adds its own spend', async () => {
@@ -2800,6 +2833,21 @@ describe('W2-4 Task 8: step0a end to end', () => {
       writeFileSync(wrapper, was, { mode: 0o755 });
       const control = resume(home, tree, out, 'gen-a');
       expect(control.code, control.stderr).toBe(0);
+    }, 180_000);
+
+    it('a step0a that is a regular file in an otherwise valid --out refuses step0a-launch-invalid before any new spawn and spends nothing', () => {
+      const home = t8Home('ccrc-w2-t8-launch-dirfile-');
+      const tree = t8Tree();
+      const out = t8Out();
+      stoppedStep0a(home, tree, out);
+      const ledgerBefore = readFileSync(path.join(out, replay.SPEND_LEDGER), 'utf8');
+      rmSync(path.join(out, 'step0a'), { recursive: true });
+      writeFileSync(path.join(out, 'step0a'), 'not a directory');
+      const r = resume(home, tree, out);
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toBe('ccrc history-replay: out-refused: step0a-launch-invalid\n');
+      expect(t8Runs(home), 'no new print-mode run').toHaveLength(1);
+      expect(readFileSync(path.join(out, replay.SPEND_LEDGER), 'utf8'), 'no new spend line').toBe(ledgerBefore);
     }, 180_000);
 
     it('a launch.json that is not a file, not JSON, of another kind or version, over its size, of the wrong types or for another account is refused before any new spawn', () => {

@@ -767,7 +767,7 @@ function chargeLeftover(job) {
     st = lstatSync(partPath);
   } catch (e) {
     if (e?.code === 'ENOENT') return;
-    refuse('out-refused', `run-stream-unreadable ${job.name} ${e?.code ?? 'unknown'}`);
+    throw e;   // runs only after the job's run.json read answered ENOENT in this directory, so only a race reaches it
   }
   if (!st.isFile()) refuse('out-refused', `run-stream-invalid ${job.name}`);
   const text = readFileSync(partPath, 'utf8');
@@ -861,6 +861,16 @@ export async function launchRun(job) {
   if (done !== null) return done;
   chargeLeftover(job);   // finds nothing when runBatch has charged it already
   const { launch, mode, model, settingsMode, recall, stdin, out, name, lang } = job;
+  // D-5811: a final stream path that is not a regular file (a directory, a symlink) refuses before the spawn, or the
+  // rename after the spend line would fail and every resume would charge and spawn again. A regular file (a finished
+  // spawn whose run.json was lost) goes on: the re-spawn's rename replaces it.
+  let finalSt = null;
+  try {
+    finalSt = lstatSync(runPaths(out, name).streamPath);
+  } catch (e) {
+    if (e?.code !== 'ENOENT') throw e;
+  }
+  if (finalSt !== null && !finalSt.isFile()) refuse('out-refused', `run-stream-invalid ${name}`);
   const timeoutMs = job.timeoutMs ?? RUN_TIMEOUT_MS;
   if (typeof stdin !== 'string') throw new TypeError('launchRun: stdin must be a string');
   const { streamPath, partPath, runJsonPath } = runPaths(out, name);
