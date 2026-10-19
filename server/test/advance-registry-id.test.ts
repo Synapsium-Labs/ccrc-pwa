@@ -8,10 +8,16 @@
 // `working` composes no argv and is left alone, so such a row can still be
 // sent back.
 //
-// Every case plants `--actor`'s registry row, so that only the gate can
-// refuse. Every claim passes `verifyDone`'s two I/O-free checks. With the gate
-// deleted, the route therefore reaches the registry step and records its
-// refusal, which is the red this file exists to show.
+// Every case plants `--actor`'s registry row, and every claim passes
+// `verifyDone`'s two I/O-free checks. With the gate deleted, the route does
+// not reach the registry step: since Task 6, `verifyDone`'s
+// `resolveDoneBranch` refuses a non-registry id first
+// (`coord/fingerprint.ts`), `tip-unmeasurable`, before its registry read or
+// any `pr-state`. That refusal still records a rejection and queues mail to
+// the id, so each forward case reds on its reject code, the rejection and the
+// mail (measured), never on its argv line. Spec §7 item 23's seam, child-spent
+// never composing `pr-state` for a bad id, rests on the direct
+// `childGateAtClose(--actor)` case in single-read-bad-id.test.ts.
 import { describe, it, expect, afterEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { RunState } from '../../shared/api.js';

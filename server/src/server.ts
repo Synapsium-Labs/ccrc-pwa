@@ -2578,6 +2578,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // `liveStatus()` answered it (D-115); with an unmeasured identity no row is read, so any non-idle word sends Escape.
     const res = await interrupt(sendDeps, id, async (): Promise<InterruptVerdict> => {
       const read = await readSessionRecord(deps.io, deps.cfg, id);
+      // `bad-id` is masked here (spec §2.3): `knownId` above refuses a non-registry id before this read. Were it ever
+      // reached, it folds with `absent` and `unlistable` into `idle`, the safe word: `not-busy`, with zero keys sent.
       if (read.kind !== 'found') return { kind: 'idle' };
       const word = await liveWordFor(turnReads, read.record);
       const identity = measuredIdentity(read.record);

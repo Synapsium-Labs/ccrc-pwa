@@ -159,10 +159,15 @@ describe('closeRun refuses a stored bad id on every arm but abandon (spec §2.3)
   });
 
   it('a coordinator close of a --actor child run, its child row and minting row planted, composes no pr-state from child-spent', async () => {
-    // Spec §7 item 23. Built so that, were the gate gone, child-spent's own `pr-state` would be reached:
-    // - `verifyDone` passes, on a real ref and a full pr-state line;
+    // Spec §7 item 23. Built, before Task 6, so that with the close gate gone child-spent's own `pr-state` was reached:
+    // - `verifyDone` passed, on a real ref and a full pr-state line;
     // - but the line names ANOTHER session, so the child gate cannot reuse it and fetches afresh;
     // - and a wave-2 run keeps the programme open, so this non-final close is not finished without a spent verdict.
+    // Since Task 6 the close gate's mutant stops earlier: `verifyDone` runs before the child gate, and its
+    // `resolveDoneBranch` refuses a non-registry id first (`coord/fingerprint.ts`), `tip-unmeasurable`, before any
+    // `pr-state`. So with the close gate deleted this case reds on `out` (measured: a `doneVerdict`), and its `calls`
+    // line cannot red. Item 23's own seam, child-spent never composing `pr-state` for a bad id, rests on the direct
+    // `childGateAtClose(--actor)` case in single-read-bad-id.test.ts.
     const foreign = JSON.stringify({ id: 'demo-other', rows: [{ number: 42, state: 'OPEN', headRefName: `ws/${BAD}`,
       baseRefName: 'main', isCrossRepository: false, ours: true, isDraft: false }], baseShort: 'main',
       branch: `ws/${BAD}`, ahead: 1, tip: TIP, checkedAt: 1 });
