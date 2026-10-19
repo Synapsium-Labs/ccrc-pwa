@@ -5110,6 +5110,12 @@ export const shapeProgramSlug = (raw: string): ProgramSlugShape => {
   return { ok: true, slug };
 };
 
+/** The workspace slug grammar `ccd`'s `_ws_slug_valid` enforces (`ccd/ccd`), restated
+ *  for the one server ingress that forwards a caller's slug to `ws-add`: the
+ *  dispatch body's optional `slug`. Refused at that ingress so a bad name never
+ *  reaches the fleet; `workspace-slug-grammar.test.ts` holds the two spellings equal. */
+export const WORKSPACE_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
+
 /** The path a program's ledger is expected to live at. It NAMES the path the
  *  operator is expected to have committed and asserts nothing about it: the
  *  open route parses no ledger ("PARSED BY NOTHING", `coord/routes.ts`), and

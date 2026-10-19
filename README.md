@@ -1781,16 +1781,18 @@ Anthropic-compatible endpoint rostered that way by hand — carries a **class re
 `~/.ccrc/models/<id>.classes.json`, naming the concrete model each class means on that lane, which class
 subagents run as, and a default effort per class. Every accepted change is re-validated and then materialised
 into that lane's own `settings.json` `env` block — the four alias defaults, the primary and small models, the
-subagent model, and a context-window key that never exceeds the client's 200k default — plus
+subagent model, and a context-window key (below; set from `<id>.windows.json`) — plus
 `<id>.classes.tsv`, `<id>.effort.json` and, on a Codex lane, `~/.ccrc/codex/<id>/lane.json`, so nothing reads
 a registry the lane's settings disagree with.
 
 ```bash
 ccrc models <id> init <codex|openrouter|compatible> [--base-url <url>]   # seed a registry
-ccrc models <id> show [--json]             # classes, subagent class, catalogue, settings drift
+ccrc models <id> show [--json]             # classes, subagent class, catalogue, context window, settings drift
 ccrc models <id> set-class <haiku|sonnet|opus|fable> <modelId|none>
 ccrc models <id> set-subagent <haiku|sonnet>
 ccrc models <id> set-effort <class> <level|default>
+ccrc models <id> set-window <modelId> <tokens>   # record a measured context window, 1000 to 1000000
+ccrc models <id> clear-window <modelId>          # drop one
 ccrc models <id> discovery add <modelId> | rm <modelId> | catalogue
 ccrc models <id> rm                        # reap the lane's model files
 ccrc models refresh <id> | --all           # re-probe the provider catalogues
@@ -1817,6 +1819,26 @@ lane's launcher refuses to start on such a lane. Doctor's `models` check WARNs o
 unrewritten for three hours, or never probed. Every subcommand prints one JSON object on stdout; `show` adds a human summary on stderr unless `--json`. An
 account whose id is `refresh` or `litellm` cannot be addressed here — `ccrc models refresh …` refuses rather
 than guess which was meant. `ccrc models` needs `node` and `jq`, and has no PWA surface in this build.
+
+**The context window.** The eighth key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, follows one rule. A lane may record a
+measured window per model in `~/.ccrc/models/<id>.windows.json`, a sibling of the registry, never a key in it (an
+older ccrc refuses registry keys it does not know): `set-window` writes one, a whole number
+from 1,000 to 1,000,000 that you measured — a catalogue number never sets it — and `clear-window` drops one. When
+every model the lane's classes name has a measured window, the key is the smallest of them, rounded down to 1,000
+and capped at 1,000,000, because Claude Code applies one value to every model in the session, subagents included.
+When any of them has none, the key keeps the default rule, `min(catalogue context, 200000)` for the lane's default
+model, or is left out when the catalogue cannot say; so a class moved to a new model falls back to the default until
+the new model is measured. `set-window` refuses a model that is neither in the lane's catalogue nor one of its class
+models. A windows file that cannot be read counts as no measured windows: refresh, materialise and the drift check
+carry on under the default rule (a measured key left in `settings.json` shows as drift until the next materialise
+replaces or removes it), `show` names the reason, and both verbs refuse until the file is fixed or deleted.
+`show` reports each measured window, the effective window, the rule that chose it and the models still unmeasured;
+`rm` reaps the file with the rest. A running session keeps its window until it restarts or swaps.
+A rollback to a ccrc from before measured windows is safe on a lane whose catalogue is fresh: its next successful
+refresh materialises and writes the default. With a stale or absent catalogue a measured key stays until the next
+successful probe, so before rolling back across this change on a lane with windows set, run
+`ccrc models <id> clear-window <model>` for each measured model: each one re-materialises, and clearing the last
+puts the lane on the default rule.
 
 ### A ChatGPT/Codex lane: `exec.kind: "codex"` and `ccrc codex`
 
@@ -3470,6 +3492,15 @@ A PWA that ships before the verb renders a pause toggle that answers `501` for
 every tap. This is the standing "AGENT-FIRST" rule for anything touching `ccd/`,
 and `ccrc rollout`'s default order (fleet box first; `--server-first` inverts
 it).
+
+**A coordinator may name the child it dispatches.** The dispatch body's optional
+`slug` rides to `ws-add` as its `[slug]` positional, so the worktree, the `ws/<slug>`
+branch and the session id `<project>-<slug>` carry that name from birth — the only
+moment a name can be given: the path and the id never move, and the branch-only
+`ws-rename` refuses a held workspace. It is checked at
+the route against ccd's own slug grammar (`WORKSPACE_SLUG_RE`, held equal to
+`_ws_slug_valid` by `workspace-slug-grammar.test.ts`), refused on a run that resumes
+its bound session, and a named spawn binds only `<project>-<slug>`, never a stranger.
 
 **The work-item tally is the coordinator's write, and it is made after the
 server re-measured.** Items are declared once, at dispatch, on the dispatch
@@ -5248,8 +5279,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8355-8357`), each with an operator sentence of its own at `:8407`,
-`:8415` and `:8428`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8361-8363`), each with an operator sentence of its own at `:8413`,
+`:8421` and `:8434`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 

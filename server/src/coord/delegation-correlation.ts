@@ -6,7 +6,7 @@
 // operator resolves it), `unmeasured` (something needed was unreadable or is not yet durably applied, so it is retried).
 //
 // THIS MODULE IS L1. It imports types, the model's pure helpers and nothing else: no filesystem, no clock, no randomness, no store
-// (and no state that outlives its inputs: D-5604's memos are keyed weakly by the windows and window lists they describe).
+// (and no state that outlives its inputs: D-5604's and D-5642's memos are keyed weakly by the pass-wide arrays, windows and lists they describe).
 // Time comes only from the listing windows it is handed. It decides and emits NOTHING: no lease request, no journal entry, no effect.
 // Task 12's pure policy turns a `linked` verdict into a `DelegationLeaseCreationRequest` (and a `run-child-owned` one into a
 // `record-run-child-owned`, never a lease); Task 13 wires both to the watcher.
@@ -96,6 +96,11 @@ export interface DelegationListingWindow {
   after: readonly string[] | null;
 }
 
+/** One tree's question. Its four arrays (`activities`, `acceptedEvidence`, `pointMetas`, `listingWindows`) are the PASS's, shared by every tree,
+ *  and the module memoises what it derives from them by identity (D-5604, D-5642): a caller never changes one, or a row of one, after handing
+ *  it over. The lane freezes the windows, their listings and the window list (D-5643), the evidence array and its `{journalId, event}`
+ *  rows, both built afresh each pass (not each `event`), and the meta array, built afresh each pass, with its rows, frozen in place; the
+ *  checkpoint's activities are replaced, never written. */
 export interface DelegationCorrelationInput {
   record: DelegationCensusRecord;
   runChildAgreement: {
@@ -718,7 +723,7 @@ export function delegationMarkForced(input: DelegationCorrelationInput, verdict:
   if (!d.measured || verdict.kind !== 'unmeasured' || verdict.reason !== 'evidence-horizon') return null;
   const m = d.marks;
   if (!m.lossy && m.projects.size === 0 && m.prefixes.size === 0 && m.paths.every((s) => s.size === 0) && m.ids.size === 0) return null;
-  const held = { ...input, listingWindows: input.listingWindows.filter((w) => w.lost !== true) };
+  const held = { ...input, listingWindows: partitionOf(input.listingWindows).held };
   const withMarks = correlate(held, false);
   if (withMarks.kind !== 'unmeasured' || withMarks.reason !== 'evidence-horizon') return null;
   const without = correlate({ ...held, droppedEvidence: { ...d, marks: DELEGATION_NO_MARKS } }, false);
@@ -739,10 +744,10 @@ export function delegationUnknownWindowForced(input: DelegationCorrelationInput,
   if (verdict.kind === 'linked' || verdict.kind === 'run-child-owned') return false;
   // A LOST window is not counted here (2c): it is lost evidence, counted apart (`delegationLostEvidenceForced`), and asked after this
   // kind, so both sides of the question are read without the lost windows and without X1.
-  if (!input.listingWindows.some((w) => w.repository === null && w.lost !== true)) return false;
-  const held = input.listingWindows.filter((w) => w.lost !== true);
-  const base = correlate({ ...input, listingWindows: held }, false);
-  const without = correlate({ ...input, listingWindows: held.filter((w) => w.repository !== null) }, false);
+  const partition = partitionOf(input.listingWindows);
+  if (!partition.unknownHeld) return false;
+  const base = correlate({ ...input, listingWindows: partition.held }, false);
+  const without = correlate({ ...input, listingWindows: partition.known }, false);
   if (without.kind !== base.kind) return true;
   // R88: two LINKS to the same activity are the same answer. Lost evidence alone can hold such a verdict back (the latest ready instant,
   // after every restart, which is when an unknown window exists), and it is counted as lost evidence, never as this kind as well.
@@ -758,7 +763,7 @@ export function delegationUnknownWindowForced(input: DelegationCorrelationInput,
  */
 export function delegationLostEvidenceForced(input: DelegationCorrelationInput, verdict: DelegationCorrelationVerdict): boolean {
   if (verdict.kind !== 'unmeasured' || verdict.reason !== 'evidence-horizon') return false;
-  return correlate({ ...input, listingWindows: input.listingWindows.filter((w) => w.lost !== true) }, false).kind === 'linked';
+  return correlate({ ...input, listingWindows: partitionOf(input.listingWindows).held }, false).kind === 'linked';
 }
 
 // ── Small helpers ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -788,36 +793,153 @@ const WORKFLOW_PREFIX = 'wf_';
 /** A non-empty string is the only kind of ID or path there is; anything else names nothing. */
 const text = (v: unknown): v is string => typeof v === 'string' && v !== '';
 
-/** Does this event CLAIM the agent: a SubagentStart naming it, or an Agent/Task launch response that launched it. A SubagentStop
+/** The one agent id an event CLAIMS, or null: a SubagentStart naming it, or an Agent/Task launch response that launched it. A SubagentStop
  *  alone and a bare tool event do not (an unpaired stop is routine, and a bare `agent_id` is not placement). */
-function claimsAgent(event: DelegationEventEnvelopeV1, agentId: string): boolean {
-  if (event.eventKind === 'SubagentStart') return event.agentId === agentId;
+function claimedAgentOf(event: DelegationEventEnvelopeV1): string | null {
+  if (event.eventKind === 'SubagentStart') return typeof event.agentId === 'string' ? event.agentId : null;
   if (event.eventKind === 'PostToolUse' && (event.toolName === 'Agent' || event.toolName === 'Task')) {
     const launch = event.launch;
-    return typeof launch === 'object' && launch !== null && launch.agentId === agentId;
+    return typeof launch === 'object' && launch !== null && typeof launch.agentId === 'string' ? launch.agentId : null;
   }
-  return false;
+  return null;
+}
+
+// ── The pass-wide indexes (D-5642) ───────────────────────────────────────────────────────────────────────────────────
+
+/** D-5642: a memo keyed weakly by the array (or list) it describes, built the first time a tree asks. The lane hands every census tree,
+ *  and every ladder rerun, the SAME pass-wide arrays (`watch.ts`, reconcile), so what used to be a per-tree scan of one is built once per
+ *  pass and looked up. Nothing outlives the array it is keyed by (the L1 header holds). The lane freezes the window list and its windows,
+ *  the evidence array and its rows (not each row's `event`) and the meta array and its rows (D-5643): every array is built afresh per pass,
+ *  the meta rows are frozen in place, and the checkpoint's activities are replaced, never written. */
+function memoOf<K extends object, V>(memos: WeakMap<K, V>, key: K, build: (key: K) => V): V {
+  let value = memos.get(key);
+  if (value === undefined) { value = build(key); memos.set(key, value); }
+  return value;
+}
+
+/** Push onto the list a map holds for `key`, in input order. */
+function pushTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const list = map.get(key);
+  if (list === undefined) map.set(key, [value]); else list.push(value);
+}
+
+/** The fields of an activity row the ladder reads, copied once per pass (so a tree reads plain data, never the row again). */
+interface ActivityFacts {
+  readonly activityId: string; readonly parentId: string; readonly parentIncarnation: string;
+  readonly sourceKind: DelegationActivityRow['sourceKind']; readonly upstreamId: string; readonly identityJournalId: string;
+}
+/** D-5642: the activities, by (sourceKind, upstreamId) and by activityId. Each key keeps its rows in input order, so a duplicated key still
+ *  answers its FIRST row, as `find` and `filter(...)[0]` did. */
+interface ActivityIndex {
+  readonly bySource: ReadonlyMap<string, ReadonlyMap<string, readonly ActivityFacts[]>>;
+  readonly byId: ReadonlyMap<string, ActivityFacts>;
+}
+const activityIndexes = new WeakMap<readonly DelegationActivityRow[], ActivityIndex>();
+function activityIndexOf(activities: readonly DelegationActivityRow[]): ActivityIndex {
+  return memoOf(activityIndexes, activities, (rows) => {
+    const bySource = new Map<string, Map<string, ActivityFacts[]>>();
+    const byId = new Map<string, ActivityFacts>();
+    for (const a of rows) {
+      const facts: ActivityFacts = {
+        activityId: a.activityId, parentId: a.parentId, parentIncarnation: a.parentIncarnation, sourceKind: a.sourceKind,
+        upstreamId: a.upstreamId, identityJournalId: a.identityJournalId,
+      };
+      let kind = bySource.get(facts.sourceKind);
+      if (kind === undefined) { kind = new Map(); bySource.set(facts.sourceKind, kind); }
+      pushTo(kind, facts.upstreamId, facts);
+      if (!byId.has(facts.activityId)) byId.set(facts.activityId, facts);
+    }
+    return { bySource, byId };
+  });
+}
+const activitiesOf = (input: DelegationCorrelationInput, sourceKind: string, upstreamId: string): readonly ActivityFacts[] =>
+  activityIndexOf(input.activities).bySource.get(sourceKind)?.get(upstreamId) ?? [];
+
+/** The fields of a point meta the ladder reads. */
+interface MetaFacts { readonly parentId: string; readonly parentIncarnation: string; readonly worktreePath: string; readonly evidenceJournalId: string }
+/** D-5642: the point metas by (sourceKind, upstreamId), each key's metas in input order. */
+const metaIndexes = new WeakMap<DelegationCorrelationInput['pointMetas'], ReadonlyMap<string, ReadonlyMap<string, readonly MetaFacts[]>>>();
+function metasOf(input: DelegationCorrelationInput, sourceKind: string, upstreamId: string): readonly MetaFacts[] {
+  const index = memoOf(metaIndexes, input.pointMetas, (metas) => {
+    const bySource = new Map<string, Map<string, MetaFacts[]>>();
+    for (const m of metas) {
+      let kind = bySource.get(m.sourceKind);
+      if (kind === undefined) { kind = new Map(); bySource.set(m.sourceKind, kind); }
+      pushTo(kind, m.upstreamId, { parentId: m.parentId, parentIncarnation: m.parentIncarnation, worktreePath: m.worktreePath, evidenceJournalId: m.evidenceJournalId });
+    }
+    return bySource;
+  });
+  return index.get(sourceKind)?.get(upstreamId) ?? [];
+}
+
+/** One accepted event, reduced to what the ladder reads. `agentId` is the event's own agent id when it is a non-empty string, else null. */
+interface EventFacts {
+  readonly journalId: string; readonly sessionId: string; readonly parentIncarnation: string; readonly parent: string;
+  readonly agentId: string | null; readonly startStop: boolean;
+}
+/** D-5642: the accepted evidence, indexed once per pass. Each key keeps its events in input order.
+ *   - `atPath`: the events whose `cwd` is a non-empty string, by that `cwd` (rung 3);
+ *   - `claiming`: by agent id, the events that CLAIM it (`claimedAgentOf`: a SubagentStart by its `agentId`, an Agent or Task launch
+ *     response by its launch's `agentId`), for `claimsOf`;
+ *   - `startStop`: by agent id, the SubagentStart and SubagentStop events naming it (rung 2's spool).
+ *  Only string ids are keys: the ids asked about are always strings, and `===` never matched anything else. */
+interface EvidenceIndex {
+  readonly atPath: ReadonlyMap<string, readonly EventFacts[]>;
+  readonly claiming: ReadonlyMap<string, readonly EventFacts[]>;
+  readonly startStop: ReadonlyMap<string, readonly EventFacts[]>;
+}
+const evidenceIndexes = new WeakMap<DelegationCorrelationInput['acceptedEvidence'], EvidenceIndex>();
+function evidenceIndexOf(evidence: DelegationCorrelationInput['acceptedEvidence']): EvidenceIndex {
+  return memoOf(evidenceIndexes, evidence, (rows) => {
+    const atPath = new Map<string, EventFacts[]>();
+    const claiming = new Map<string, EventFacts[]>();
+    const startStop = new Map<string, EventFacts[]>();
+    for (const { journalId, event } of rows) {
+      const startOrStop = event.eventKind === 'SubagentStart' || event.eventKind === 'SubagentStop';
+      const facts: EventFacts = {
+        journalId, sessionId: event.sessionId, parentIncarnation: event.parentIncarnation, parent: parentKey(event.sessionId, event.parentIncarnation),
+        agentId: text(event.agentId) ? event.agentId : null, startStop: startOrStop,
+      };
+      if (text(event.cwd)) pushTo(atPath, event.cwd, facts);
+      if (startOrStop && typeof event.agentId === 'string') pushTo(startStop, event.agentId, facts);
+      const claimed = claimedAgentOf(event);
+      if (claimed !== null) pushTo(claiming, claimed, facts);
+    }
+    return { atPath, claiming, startStop };
+  });
 }
 
 interface Claims {
   /** The distinct parents that hold this upstream ID in any of their durable evidence. */
-  parents: Map<string, { parentId: string; parentIncarnation: string }>;
+  readonly parents: ReadonlyMap<string, { parentId: string; parentIncarnation: string }>;
   /** The journal records that show those claims. */
-  journalIds: string[];
+  readonly journalIds: readonly string[];
 }
 
-/** Every parent that claims the upstream ID: through an open activity, a point meta, or (for an agent) a claiming event. */
+/** D-5642: one pass's claims, by the three arrays they are read from, then by sourceKind and upstream id. */
+const claimMemos = new WeakMap<object, WeakMap<object, WeakMap<object, Map<string, Map<string, Claims>>>>>();
+
+/** Every parent that claims the upstream ID: through an open activity, a point meta, or (for an agent) a claiming event. Built once per
+ *  pass and id (D-5642), from the pass-wide indexes; the cached object is shared by every tree that asks, and no caller writes it. */
 function claimsOf(input: DelegationCorrelationInput, sourceKind: 'agent' | 'workflow', upstreamId: string): Claims {
-  const claims: Claims = { parents: new Map(), journalIds: [] };
+  const byMetas = memoOf(claimMemos, input.activities, () => new WeakMap<object, WeakMap<object, Map<string, Map<string, Claims>>>>());
+  const byEvidence = memoOf(byMetas, input.pointMetas, () => new WeakMap<object, Map<string, Map<string, Claims>>>());
+  const byKind = memoOf(byEvidence, input.acceptedEvidence, () => new Map<string, Map<string, Claims>>());
+  let byId = byKind.get(sourceKind);
+  if (byId === undefined) { byId = new Map(); byKind.set(sourceKind, byId); }
+  const known = byId.get(upstreamId);
+  if (known !== undefined) return known;
+  const parents = new Map<string, { parentId: string; parentIncarnation: string }>();
+  const journalIds: string[] = [];
   const claim = (parentId: string, parentIncarnation: string, journalId: string): void => {
-    claims.parents.set(parentKey(parentId, parentIncarnation), { parentId, parentIncarnation });
-    claims.journalIds.push(journalId);
+    parents.set(parentKey(parentId, parentIncarnation), { parentId, parentIncarnation });
+    journalIds.push(journalId);
   };
-  for (const a of input.activities) if (a.sourceKind === sourceKind && a.upstreamId === upstreamId) claim(a.parentId, a.parentIncarnation, a.identityJournalId);
-  for (const m of input.pointMetas) if (m.sourceKind === sourceKind && m.upstreamId === upstreamId) claim(m.parentId, m.parentIncarnation, m.evidenceJournalId);
-  if (sourceKind === 'agent') {
-    for (const { journalId, event } of input.acceptedEvidence) if (claimsAgent(event, upstreamId)) claim(event.sessionId, event.parentIncarnation, journalId);
-  }
+  for (const a of activitiesOf(input, sourceKind, upstreamId)) claim(a.parentId, a.parentIncarnation, a.identityJournalId);
+  for (const m of metasOf(input, sourceKind, upstreamId)) claim(m.parentId, m.parentIncarnation, m.evidenceJournalId);
+  if (sourceKind === 'agent') for (const e of evidenceIndexOf(input.acceptedEvidence).claiming.get(upstreamId) ?? []) claim(e.sessionId, e.parentIncarnation, e.journalId);
+  const claims: Claims = { parents, journalIds };
+  byId.set(upstreamId, claims);
   return claims;
 }
 
@@ -911,9 +1033,9 @@ function rung2(input: DelegationCorrelationInput, sourceKind: 'agent' | 'workflo
   if (parent === undefined) return unmeasured('rung-2-evidence-absent');
   const same = (parentId: string, parentIncarnation: string): boolean => parentId === parent.parentId && parentIncarnation === parent.parentIncarnation;
 
-  const activities = input.activities.filter((a) => a.sourceKind === sourceKind && a.upstreamId === upstreamId && same(a.parentId, a.parentIncarnation));
+  const activities = activitiesOf(input, sourceKind, upstreamId).filter((a) => same(a.parentId, a.parentIncarnation));
   if (new Set(activities.map((a) => a.activityId)).size > 1) return conflicting('duplicate-activity-rows', activities.map((a) => a.identityJournalId));
-  const metas = input.pointMetas.filter((m) => m.sourceKind === sourceKind && m.upstreamId === upstreamId && same(m.parentId, m.parentIncarnation));
+  const metas = metasOf(input, sourceKind, upstreamId).filter((m) => same(m.parentId, m.parentIncarnation));
   if (metas.length === 0) return unmeasured('rung-2-meta-absent', claims.journalIds);
   const metaIds = metas.map((m) => m.evidenceJournalId);
   if (new Set(metas.map((m) => m.worktreePath)).size > 1) return conflicting('meta-paths-disagree', [...metaIds, ...activities.map((a) => a.identityJournalId)]);
@@ -921,9 +1043,7 @@ function rung2(input: DelegationCorrelationInput, sourceKind: 'agent' | 'workflo
 
   const spool: string[] = [];
   if (sourceKind === 'agent') {
-    for (const { journalId, event } of input.acceptedEvidence) {
-      if ((event.eventKind === 'SubagentStart' || event.eventKind === 'SubagentStop') && event.agentId === upstreamId && same(event.sessionId, event.parentIncarnation)) spool.push(journalId);
-    }
+    for (const e of evidenceIndexOf(input.acceptedEvidence).startStop.get(upstreamId) ?? []) if (same(e.sessionId, e.parentIncarnation)) spool.push(e.journalId);
     if (spool.length === 0) return unmeasured('rung-2-subagent-event-absent', metaIds);
   }
   const activity = activities[0];
@@ -942,25 +1062,22 @@ function rung2(input: DelegationCorrelationInput, sourceKind: 'agent' | 'workflo
 // ── Rung 3: the subagent's own path ──────────────────────────────────────────────────────────────────────────────────
 
 function rung3(input: DelegationCorrelationInput, canonical: string): Answer | null {
-  const hits = new Map<string, { activity: DelegationActivityRow; journalIds: string[] }>();
+  const hits = new Map<string, { activity: ActivityFacts; journalIds: string[] }>();
   // Parents that THEMSELVES reported the path as a working directory (an event with no `agentId`). A non-isolated subagent inherits its
   // parent's cwd on every event it emits, so a cwd the parent reported can never place a subagent (ruling R42).
   const parentReported = new Map<string, string[]>();
-  for (const { journalId, event } of input.acceptedEvidence) {
-    if (!text(event.cwd) || event.cwd !== canonical) continue;
-    const agentId = event.agentId;
-    if (!text(agentId)) {
-      const key = parentKey(event.sessionId, event.parentIncarnation);
-      parentReported.set(key, [...(parentReported.get(key) ?? []), journalId]);
+  for (const e of evidenceIndexOf(input.acceptedEvidence).atPath.get(canonical) ?? []) {
+    if (e.agentId === null) {
+      pushTo(parentReported, e.parent, e.journalId);
       continue;
     }
     // SubagentStart and SubagentStop are the host's own events about the agent and carry the parent's context on a non-isolated one:
     // they are not "emitted from inside" it.
-    if (event.eventKind === 'SubagentStart' || event.eventKind === 'SubagentStop') continue;
-    const activity = input.activities.find((a) => a.sourceKind === 'agent' && a.upstreamId === agentId && a.parentId === event.sessionId && a.parentIncarnation === event.parentIncarnation);
+    if (e.startStop) continue;
+    const activity = activitiesOf(input, 'agent', e.agentId).find((a) => a.parentId === e.sessionId && a.parentIncarnation === e.parentIncarnation);
     if (activity === undefined) continue;                                        // an agent no qualifying join opened: evidence, not placement
     const hit = hits.get(activity.activityId) ?? { activity, journalIds: [activity.identityJournalId] };
-    hit.journalIds.push(journalId);
+    hit.journalIds.push(e.journalId);
     hits.set(activity.activityId, hit);
   }
   if (hits.size === 0) return null;
@@ -999,7 +1116,8 @@ function rung3(input: DelegationCorrelationInput, canonical: string): Answer | n
  * pass (`delegationListingWindowsOf`), so rebuilding two Sets per window per tree cost seconds a pass on a busy repository. `added` is the
  * distinct names the after-listing adds to the before-listing (compared as sets, as `new Set` does), `removes` whether it drops any. A window
  * with no after-listing measured no delta: null. Keyed weakly by the window, so nothing outlives the windows it describes (the L1 header holds:
- * no state that outlives its inputs); the window's parsed span sits beside it (`windowSpanOf`). It relies on a window never being mutated after it is built, which no caller does.
+ * no state that outlives its inputs); the window's parsed span sits beside it (`windowSpanOf`). It relies on a window never being mutated
+ * after it is built, which the lane enforces by freezing it (D-5643).
  */
 interface ListingDelta { readonly added: ReadonlySet<string>; readonly removes: boolean }
 const listingDeltas = new WeakMap<DelegationListingWindow, ListingDelta | null>();
@@ -1008,8 +1126,10 @@ function listingDeltaOf(window: DelegationListingWindow): ListingDelta | null {
   if (known !== undefined) return known;
   let delta: ListingDelta | null = null;
   if (window.after !== null) {
-    const before = new Set(window.before);
-    const after = new Set(window.after);
+    const before = new Set<string>();
+    for (const name of window.before) before.add(name);
+    const after = new Set<string>();
+    for (const name of window.after) after.add(name);
     const added = new Set<string>();
     for (const name of after) if (!before.has(name)) added.add(name);
     let removes = false;
@@ -1020,28 +1140,125 @@ function listingDeltaOf(window: DelegationListingWindow): ListingDelta | null {
   return delta;
 }
 
-/**
- * D-5604 (b): rung 4's candidates by lookup. An index, built once per window list rung 4 is handed, from a held window's SOLE added name (its delta adds
- * exactly one name and removes none: the window "added exactly" that record; a window with no after-listing measured no delta at all) to those windows,
- * in the list's order, which is the order `held` gives them, because the first overlap or unreadable instant decides a verdict. Keyed weakly by the
- * list, which no caller changes once it is handed over.
- */
-const soleAddedIndexes = new WeakMap<readonly DelegationListingWindow[], ReadonlyMap<string, readonly DelegationListingWindow[]>>();
-function soleAddedIndexOf(windows: readonly DelegationListingWindow[]): ReadonlyMap<string, readonly DelegationListingWindow[]> {
-  const known = soleAddedIndexes.get(windows);
-  if (known !== undefined) return known;
-  const index = new Map<string, DelegationListingWindow[]>();
+/** D-5642: the instants of a set of windows, ordered, for an order-free "does any begin in [lo, hi]" (a refused start answers yes). */
+interface StartIndex { readonly unreadable: boolean; readonly starts: Float64Array }
+/** D-5642: and for "does any overlap [lo, hi]": the windows by start, with the running maximum of their ends (a refused instant, start or
+ *  end, answers yes). */
+interface SpanIndex { readonly unreadable: boolean; readonly starts: Float64Array; readonly maxEnds: Float64Array }
+
+function startIndexOf(windows: readonly DelegationListingWindow[]): StartIndex {
+  const starts: number[] = [];
+  let unreadable = false;
+  for (const w of windows) { const s = windowSpanOf(w).start; if (typeof s === 'number') starts.push(s); else unreadable = true; }
+  return { unreadable, starts: Float64Array.from(starts).sort() };
+}
+function spanIndexOf(windows: readonly DelegationListingWindow[]): SpanIndex {
+  const spans: [number, number][] = [];
+  let unreadable = false;
   for (const w of windows) {
-    if (w.lost === true) continue;
-    const delta = listingDeltaOf(w);
-    if (delta === null || delta.removes || delta.added.size !== 1) continue;
-    const [name] = delta.added;
-    if (name === undefined) continue;
-    const list = index.get(name);
-    if (list === undefined) index.set(name, [w]); else list.push(w);
+    const { start, end } = windowSpanOf(w);
+    if (typeof start === 'number' && typeof end === 'number') spans.push([start, end]); else unreadable = true;
   }
-  soleAddedIndexes.set(windows, index);
-  return index;
+  spans.sort((a, b) => a[0] - b[0]);
+  const starts = new Float64Array(spans.length);
+  const maxEnds = new Float64Array(spans.length);
+  let max = Number.NEGATIVE_INFINITY;
+  spans.forEach(([s, e], i) => { starts[i] = s; max = Math.max(max, e); maxEnds[i] = max; });
+  return { unreadable, starts, maxEnds };
+}
+/** The count of `starts` at or below `x` (they are sorted). */
+function countAtOrBelow(starts: Float64Array, x: number): number {
+  let lo = 0;
+  let hi = starts.length;
+  while (lo < hi) { const mid = (lo + hi) >>> 1; if (starts[mid]! <= x) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+const anyStartIn = (ix: StartIndex, lo: number, hi: number): boolean => {
+  if (ix.unreadable) return true;
+  const below = countAtOrBelow(ix.starts, hi);
+  return below > 0 && ix.starts[below - 1]! >= lo;
+};
+const anyOverlap = (ix: SpanIndex, lo: number, hi: number): boolean => {
+  if (ix.unreadable) return true;
+  const below = countAtOrBelow(ix.starts, hi);
+  return below > 0 && ix.maxEnds[below - 1]! >= lo;
+};
+
+/** D-5642: one project's view of a window list (built once per pass per project): its lost windows that may be on the project, in list
+ *  order (the candidate's lost-window loop reads them in order: the first unreadable instant and the first overlap give different reasons),
+ *  their span index, and the start index of the held OPEN-ENDED windows that may be on it (R85's first `heldCreators` arm). */
+interface ProjectWindows { readonly lost: readonly DelegationListingWindow[]; readonly lostSpans: SpanIndex; readonly openStarts: StartIndex; readonly openCount: number }
+
+/**
+ * D-5642: what rung 4 and the forced reruns need of ONE window list, built once per list (`partitionOf`):
+ *   - `held`, its windows that are not lost, in list order (the list itself when none is lost, so a rerun handed `held` meets the same memos);
+ *   - `known`, the held windows whose repository is named, in list order (`delegationUnknownWindowForced`'s second list);
+ *   - `unknownHeld`, whether a held window's repository is null (I-1);
+ *   - `soleAdded` (D-5604 b), a held window's SOLE added name (its delta adds exactly one name and removes none) to those windows, in list order;
+ *   - `nullAdding`, by EVERY name a held null-repository window's delta adds, those windows (R85's second arm), each name's start index
+ *     built when first asked;
+ *   - per project (`projectWindowsOf`), built when first asked.
+ * Keyed weakly by the list, which the lane freezes (D-5643). Every exit of `creatorMayBeLost`'s loops answers true, so its two tests are
+ * order-free lookups; every other order is kept.
+ */
+interface WindowPartition {
+  readonly held: readonly DelegationListingWindow[];
+  readonly known: readonly DelegationListingWindow[];
+  readonly unknownHeld: boolean;
+  readonly soleAdded: ReadonlyMap<string, readonly DelegationListingWindow[]>;
+  readonly nullAdding: ReadonlyMap<string, readonly DelegationListingWindow[]>;
+  readonly nullAddingStarts: Map<string, StartIndex>;
+  readonly lost: readonly DelegationListingWindow[];
+  readonly openEnded: readonly DelegationListingWindow[];
+  readonly byProject: Map<string, ProjectWindows>;
+}
+const partitions = new WeakMap<readonly DelegationListingWindow[], WindowPartition>();
+function partitionOf(windows: readonly DelegationListingWindow[]): WindowPartition {
+  const known = partitions.get(windows);
+  if (known !== undefined) return known;
+  const held: DelegationListingWindow[] = [];
+  const named: DelegationListingWindow[] = [];
+  const lost: DelegationListingWindow[] = [];
+  const openEnded: DelegationListingWindow[] = [];
+  const soleAdded = new Map<string, DelegationListingWindow[]>();
+  const nullAdding = new Map<string, DelegationListingWindow[]>();
+  let unknownHeld = false;
+  for (const w of windows) {
+    if (w.lost === true) { lost.push(w); continue; }
+    held.push(w);
+    if (w.repository === null) unknownHeld = true; else named.push(w);
+    if (w.endedAt === null) openEnded.push(w);
+    const delta = listingDeltaOf(w);
+    if (delta === null) continue;
+    if (!delta.removes && delta.added.size === 1) { const [name] = delta.added; if (name !== undefined) pushTo(soleAdded, name, w); }
+    if (w.repository === null) for (const name of delta.added) pushTo(nullAdding, name, w);
+  }
+  const heldList = lost.length === 0 ? windows : held;
+  const knownList = named.length === held.length ? heldList : named;
+  const partition: WindowPartition = {
+    held: heldList, known: knownList, unknownHeld, soleAdded, nullAdding, nullAddingStarts: new Map(), lost, openEnded, byProject: new Map(),
+  };
+  partitions.set(windows, partition);
+  // The held list is a list of its own (the forced reruns hand it over): it shares everything but the lost windows, of which it has none.
+  if (heldList !== windows) partitions.set(heldList, { ...partition, lost: [], byProject: new Map() });
+  return partition;
+}
+function projectWindowsOf(p: WindowPartition, project: string): ProjectWindows {
+  let view = p.byProject.get(project);
+  if (view === undefined) {
+    const lost = p.lost.filter((w) => mayBeOn(w, project));
+    const open = p.openEnded.filter((w) => mayBeOn(w, project));
+    view = { lost, lostSpans: spanIndexOf(lost), openStarts: startIndexOf(open), openCount: open.length };
+    p.byProject.set(project, view);
+  }
+  return view;
+}
+function nullAddingStartsOf(p: WindowPartition, adminRecord: string): StartIndex | null {
+  const windows = p.nullAdding.get(adminRecord);
+  if (windows === undefined) return null;
+  let ix = p.nullAddingStarts.get(adminRecord);
+  if (ix === undefined) { ix = startIndexOf(windows); p.nullAddingStarts.set(adminRecord, ix); }
+  return ix;
 }
 
 /** Did this window's listings add the record (among others, or alone)? A window with no after-listing measured no delta. */
@@ -1090,10 +1307,15 @@ const spanOf = (w: DelegationListingWindow): [number, number] => { const s = win
  *     R85) BEGAN inside the bracket: a creator's call began there, and a call lasts at most the margin, so one begun before it cannot be
  *     the creator.
  * An instant that is not canonical fails SAFE: the bracket is then all of time. The census bracket only ever VETOES: it never links.
+ * D-5642: every exit of the two window loops answers true (a window that overlaps, begins inside, or has an instant the model refuses), so
+ * they are order-free lookups in indexes built once per pass (`projectWindowsOf`, `nullAddingStartsOf`), not scans per tree; a refused
+ * instant answers true from the index exactly as it threw to a catch arm before.
  */
-function creatorMayBeLost(input: DelegationCorrelationInput, lostWindows: readonly DelegationListingWindow[], heldCreators: readonly DelegationListingWindow[]): boolean {
+function creatorMayBeLost(
+  input: DelegationCorrelationInput, lostWindows: readonly DelegationListingWindow[], lostSpans: SpanIndex, heldCreators: readonly StartIndex[], heldCreatorCount: number,
+): boolean {
   const horizon = horizonMsOf(input);
-  if (horizon === null && lostWindows.length === 0 && heldCreators.length === 0) return false;
+  if (horizon === null && lostWindows.length === 0 && heldCreatorCount === 0) return false;
   let lo = Number.NEGATIVE_INFINITY;
   let hi = Number.POSITIVE_INFINITY;
   try {
@@ -1105,16 +1327,8 @@ function creatorMayBeLost(input: DelegationCorrelationInput, lostWindows: readon
     hi = Number.POSITIVE_INFINITY;
   }
   if (horizon !== null && (Number.isNaN(horizon) || lo <= horizon)) return true;
-  for (const w of lostWindows) {
-    let span: [number, number];
-    try { span = spanOf(w); } catch (err) { if (err instanceof DelegationModelError) return true; throw err; }
-    if (span[0] <= hi && lo <= span[1]) return true;
-  }
-  for (const w of heldCreators) {
-    let start: number;
-    try { start = startOf(w); } catch (err) { if (err instanceof DelegationModelError) return true; throw err; }
-    if (lo <= start && start <= hi) return true;
-  }
+  if (lostWindows.length > 0 && anyOverlap(lostSpans, lo, hi)) return true;
+  for (const ix of heldCreators) if (anyStartIn(ix, lo, hi)) return true;
   return false;
 }
 
@@ -1134,16 +1348,21 @@ function creatorMayBeLost(input: DelegationCorrelationInput, lostWindows: readon
  */
 function rung4(input: DelegationCorrelationInput, x1: boolean): Answer | null {
   const { record } = input;
-  const held = input.listingWindows.filter((w) => w.lost !== true);
-  const lostWindows = input.listingWindows.filter((w) => w.lost === true && mayBeOn(w, record.project));
-  const candidates = (soleAddedIndexOf(input.listingWindows).get(record.adminRecord) ?? []).filter((w) => w.repository !== null && w.repository === record.project);
+  const partition = partitionOf(input.listingWindows);
+  const held = partition.held;
+  const here = projectWindowsOf(partition, record.project);
+  const lostWindows = here.lost;
+  const candidates = (partition.soleAdded.get(record.adminRecord) ?? []).filter((w) => w.repository !== null && w.repository === record.project);
   if (candidates.length === 0) {
     // R85 (B-F1; spec §5.3: "a held Pre with no Post is a lost Post"): a HELD window that may be on this repository and may have been the
     // creator, but cannot be a candidate because part of its evidence is missing, is lost evidence for X1 too: one that is OPEN-ENDED (its
-    // PostToolUse never came), or one whose session's project was lost at a restart (a null repository) that ADDS the record. Exactly
-    // that narrow (it is liveness): a closed window that does not add the record is evidence of nothing here, and vetoes nothing.
-    const heldCreators = held.filter((w) => mayBeOn(w, record.project) && (w.endedAt === null || (w.repository === null && addedIncludes(w, record.adminRecord))));
-    return x1 && creatorMayBeLost(input, lostWindows, heldCreators) ? { ...unmeasured('evidence-horizon'), lostCreator: true } : null;
+    // PostToolUse never came), or one whose session's project was lost at a restart (a null repository) that ADDS the record (D-5642: two
+    // lookups, one per arm; a window in both is asked twice, which answers the same). Exactly that narrow (it is liveness): a closed window
+    // that does not add the record is evidence of nothing here, and vetoes nothing.
+    const nullCreators = nullAddingStartsOf(partition, record.adminRecord);
+    const creators = nullCreators === null ? [here.openStarts] : [here.openStarts, nullCreators];
+    const count = here.openCount + (partition.nullAdding.get(record.adminRecord)?.length ?? 0);
+    return x1 && creatorMayBeLost(input, lostWindows, here.lostSpans, creators, count) ? { ...unmeasured('evidence-horizon'), lostCreator: true } : null;
   }
   let ambiguous = false;
   try {
@@ -1225,7 +1444,7 @@ function combine(input: DelegationCorrelationInput, answers: readonly (Answer | 
   if (lowest !== undefined && present.some((a) => a.kind === 'unmeasured' && a.reason === 'evidence-horizon')) return unmeasured('evidence-horizon', everything);
   if (lowest !== undefined) {
     const parentOf = (v: DelegationLinkedVerdict): string => {
-      const a = input.activities.find((row) => row.activityId === v.activityId);
+      const a = activityIndexOf(input.activities).byId.get(v.activityId);
       return a === undefined ? JSON.stringify(['missing', v.activityId]) : parentKey(a.parentId, a.parentIncarnation);
     };
     if (new Set(links.map(parentOf)).size > 1) return conflicting('rungs-disagree', everything);

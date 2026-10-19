@@ -407,8 +407,8 @@ const mayBeOnHere = (w: DelegationListingWindow, project: string): boolean =>
 
 /**
  * The stream: first two hand-built passes (a lost creator that is only a held, closed window with no repository, and its twin), then
- * RANDOM_PASSES generated ones. A pass holds three to six census records (different admin records, some on another project), one windows
- * array shared by all of them, and the evidence, index and horizon the lane would hand them.
+ * RANDOM_PASSES generated ones. A generated pass holds three to six census records (different admin records, some on another project; a
+ * hand-built pass holds one), one windows array shared by all of them, and the evidence, index and horizon the lane would hand them.
  */
 function generate(): Pass[] {
   const w = buildWorld();
@@ -652,7 +652,7 @@ describe('D-5604 R2: the answers of the four public functions are the same befor
           // no horizon, no lost window on the project, no open-ended held window that may be on it.
           const nullWindows = held.filter((x) => x.repository === null && x.endedAt !== null && deltaOf(x)?.added.includes(name) === true);
           if (tree.evidenceHorizon === null && lostHere.length === 0 && !held.some((x) => mayBeOnHere(x, project) && x.endedAt === null)
-              && nullWindows.some((x) => deltaOf(x)!.added.length >= 2)) {
+              && nullWindows.length > 0 && nullWindows.every((x) => deltaOf(x)!.added.length >= 2)) {
             hist.lostCreatorOnlyFromNullWindow += 1;
             // Its twin: the same input whose null-repository windows do NOT add the record links at rung 3.
             const twin = correlateDelegation({ ...inputFor(pass, tree), listingWindows: pass.windows.map((x) => (nullWindows.includes(x) ? { ...x, after: [...x.before] } : x)) });
@@ -678,7 +678,7 @@ const EXPECTED_DIGEST = 'f3048fef6dd780fb6ca4293da685e698e4d47c22ef50cd33153f319
 const EXPECTED_HISTOGRAM = {
   passes: 562, inputs: 2537,
   linkedRung4: 44, overlapping: 99, ambiguous: 35, ambiguousFromSameSessionAddingMore: 16, unreadable: 122,
-  lostCreatorBesideRung3: 171, lostCreatorOnlyFromNullWindow: 8, twinLinksAtRung3: 8,
+  lostCreatorBesideRung3: 171, lostCreatorOnlyFromNullWindow: 7, twinLinksAtRung3: 7,
   markLossy: 67, markProject: 61, markPrefix: 43, markPath: 34, markId: 28, unknownWindowForced: 40, lostEvidenceForced: 190,
   refusedRemoved: 86, refusedAddedTwo: 88, linkedRung3: 601, conflicting: 17, unmeasuredHorizon: 590,
 };

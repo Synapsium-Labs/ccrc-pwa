@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
@@ -792,6 +792,22 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       postJson<PasskeyAssertStart>('/api/auth/passkey/assert/start'),
     passkeyAssertFinish: (b: PasskeyAssertFinish): Promise<void> =>
       post('/api/auth/passkey/assert/finish', b),
+
+    /**
+     * STEP-UP THAT KEEPS THE SESSION (D-5512, spec §3.2; accounts plan Tasks A5, A6). Wire shapes only: the
+     * ceremony's browser half is `lib/passkey.ts`'s `assertStepUp`, and the step's state is `accounts/useStepUp.ts`.
+     *
+     * Unlike the login doors these mint nothing: no cookie, no new session, the same `generation`. Each 200 is the
+     * requesting session's new `stepUpFreshUntil`. A refusal reaches the caller as an ordinary `ApiError` whose body
+     * names the word (`step-up-required`, with `verdict: 'wrong'` on a failed proof, at 403 and never 401, so the
+     * funnel above raises no login screen over a live session; `step-up-locked`; `passkey-enrolled`; `auth-off`).
+     * The passphrase travels in the BODY only, as `login`'s does.
+     */
+    stepUpStart: (): Promise<StepUpStart> => postJson<StepUpStart>('/api/auth/step-up/start'),
+    stepUpFinish: (b: PasskeyAssertFinish): Promise<StepUpAnswer> =>
+      postJson<StepUpAnswer>('/api/auth/step-up/finish', b),
+    stepUpPassphrase: (passphrase: string): Promise<StepUpAnswer> =>
+      postJson<StepUpAnswer>('/api/auth/step-up/passphrase', { passphrase }),
 
     /**
      * The enrolment screen's two gated calls (Task 8 review, MF-2).

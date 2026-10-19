@@ -545,7 +545,8 @@ jobs:
   # like the other advisory legs. Pinned by server/test/ci-pipeline.test.ts.
   storybook-a11y:
     runs-on: ubuntu-latest
-    # The browser download dominates; the run itself is ~40s for 152 stories.
+    # The browser download dominates; each skin's build and axe run is ~40s
+    # for 180 stories, and the job runs one per skin.
     timeout-minutes: 20
     if: github.event_name != 'merge_group' && !((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild')
     steps:
@@ -568,8 +569,14 @@ jobs:
       # newest that day and runs it.
       - working-directory: ui
         run: ./node_modules/.bin/playwright install --with-deps chromium
+      # ONE BUILD PER SKIN (D-5093, its verification clause): the default
+      # build is Refined (STORYBOOK_SKIN unset, `resolveSkin` of undefined) and
+      # the second opens every story in Instrument. The catalogue's ids and
+      # these runs are pinned equal by server/test/ci-pipeline.test.ts.
       - working-directory: ui
         run: npm run build-storybook -- --quiet
+      - working-directory: ui
+        run: STORYBOOK_SKIN=instrument npm run build-storybook -- --quiet -o storybook-static-instrument
       # Served as static files rather than `storybook dev`: the dev server
       # compiles on demand, so a slow first story reads as a timeout. `vite
       # preview` is the static server already in the lock (vite is how
@@ -580,9 +587,15 @@ jobs:
       - working-directory: ui
         run: |
           ./node_modules/.bin/vite preview --outDir storybook-static --host 127.0.0.1 --port 6006 --strictPort &
-          ./node_modules/.bin/wait-on tcp:127.0.0.1:6006 -t 60000
+          ./node_modules/.bin/vite preview --outDir storybook-static-instrument --host 127.0.0.1 --port 6007 --strictPort &
+          ./node_modules/.bin/wait-on tcp:127.0.0.1:6006 tcp:127.0.0.1:6007 -t 60000
+      # One axe run per skin. The second runs even when the first fails
+      # (`!cancelled()`), so a red Refined run never hides Instrument's result.
       - working-directory: ui
         run: npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6006
+      - if: ${{ !cancelled() }}
+        working-directory: ui
+        run: npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6007
 
   # The Darwin arms' standing mechanism (the macOS port's review, finding 3):
   # every `describe.skipIf(!IS_DARWIN)` block and `itDarwin` case in the

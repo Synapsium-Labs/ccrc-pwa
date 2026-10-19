@@ -11,28 +11,39 @@
 // replaces, with the press (1.08) landing lighter than the hover. The feedback
 // was a hue shift from red to grey and little else.
 //
-// THE GROUNDS. The banner re-scopes `--bg-hover` and `--bg-pressed` for what
-// it holds to two derivations of its own tint, mixed toward `--ink-on-danger`
-// (35% and 70%). That ink is the one the danger FILL carries, so it sits on
-// the far side of the banner from the label in every palette: a red-black
-// in the dark ones, white in the light ones. The step therefore
-// moves away from `--status-dead-text` and from the `--status-dead` hairline,
+// THE GROUNDS. On the dead banner the danger-ghost lifts and sinks to two
+// derivations of the banner's tint, mixed toward `--ink-on-danger` (35% and
+// 70% in :root, 60% and 95% in a light palette). That ink is the one the
+// danger FILL carries, so it sits on the far side of the banner from the
+// label in every palette: a red-black in the dark ones, white in the light
+// ones. The step therefore moves away from `--status-dead-text` and from the `--status-dead` hairline,
 // and both only gain contrast; a step toward `--ink-primary` (Task 9's recipe,
 // over the tint) cost the label its 4.5 in Phosphor Daylight (4.37 at 5%) and
 // the hairline its 3:1 in Nord, Dracula and One Dark. The dark palettes keep
 // the red; the light ones go paler, the only direction their label leaves room
 // for (4.81 at rest against a 4.5 floor).
 //
-// WHY ON THE BANNER, NOT ON THE VARIANT (D-5575). `hover-states.test.ts` pins
-// the danger-ghost's class tail to `enabled:hover:bg-hover
-// enabled:active:bg-pressed`, and #627 edits that file, so it is frozen here.
-// The utilities read `var(--bg-hover)` where they paint (`theme.css` bridges
-// them `@theme inline`), so the banner redefining the two names for its
-// subtree changes the ground and leaves the variant's classes as they were.
+// THE LIGHT PALETTES MIX FURTHER (D-5688). At 35% and 70% the light
+// palettes' hover sat under each palette's own card hover step (1.065 to
+// 1.076 against 1.080 to 1.102), fainter than the lift every other row and
+// button gives. A light palette re-declares the pair at 60% and 95%: the
+// hover 1.113 or more from the banner, at least that palette's card step, and
+// the press 1.063 or more from the hover. 95%, not 100%: a press of the bare
+// --ink-on-danger is the page's own white in GitHub Light, a hole in the
+// banner rather than a ground on it. The dark palettes keep :root's 35/70.
+//
+// ON THE VARIANT, NOT THE BANNER (D-5688, D-5689). D-5575 re-scoped the two
+// names on the banner because `hover-states.test.ts` was frozen for #627.
+// #627 has landed, so the grounds are the danger-ghost's own: `Button` takes
+// `ground="dead"`, and only then does the danger-ghost paint
+// `bg-hover-on-dead` and `bg-pressed-on-dead`. A `ground` axis rather than
+// the variant's only grounds (D-5689): the danger-ghost now also sits on the
+// halt banner's amber and on the Updates screen's card rows, where a red mix
+// would be a ground measured against nothing it sits on.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { bannerVariants } from '@ccrc/ui';
+import { bannerVariants, buttonVariants } from '@ccrc/ui';
 import { contrast, loadThemes, resolveColor } from '../design/audit.mjs';
 
 const ROOT = path.join(import.meta.dirname, '..');
@@ -54,24 +65,69 @@ const HOVER_FLOOR = 1.05;
 const PRESSED_FLOOR = 1.10;
 const STEP_FLOOR = 1.05;
 
-describe('the dead banner re-scopes the lift and press grounds (D-5574, D-5575)', () => {
-  it('its dead tone redefines --bg-hover and --bg-pressed for what it holds', () => {
-    const cls = bannerVariants({ tone: 'dead' });
-    expect(cls).toMatch(/(^|\s)\[--bg-hover:var\(--bg-hover-on-dead\)\](\s|$)/);
-    expect(cls).toMatch(/(^|\s)\[--bg-pressed:var\(--bg-pressed-on-dead\)\](\s|$)/);
+/** The mixes toward --ink-on-danger, per mode (D-5574, D-5688). */
+const MIX = (p: number): string =>
+  `color-mix(in srgb, var(--ink-on-danger) ${p}%, var(--status-dead-tint-solid))`;
+const squash = (s: string | undefined): string => (s ?? '').replace(/\s+/g, ' ').trim();
+
+describe('the danger-ghost carries the dead-banner grounds on the variant (D-5688, D-5689)', () => {
+  const dead = buttonVariants({ variant: 'danger-ghost', size: 'fit', ground: 'dead' });
+
+  it('with ground="dead" it lifts to --bg-hover-on-dead and sinks to --bg-pressed-on-dead, gated on enabled:', () => {
+    expect(dead).toMatch(/(^|\s)enabled:hover:bg-hover-on-dead(\s|$)/);
+    expect(dead).toMatch(/(^|\s)enabled:active:bg-pressed-on-dead(\s|$)/);
   });
 
-  it('the attention tone does not, since it holds no lifted control', () => {
+  it('and carries no card ground beside them, so nothing is left for the merge to pick between', () => {
+    expect(dead).not.toMatch(/(^|\s)(enabled:)?(hover:bg-hover|active:bg-pressed)(\s|$)/);
+  });
+
+  it('on its default ground it keeps the card grounds (the Updates rows, the halt banner)', () => {
+    const card = buttonVariants({ variant: 'danger-ghost', size: 'fit' });
+    expect(card).toMatch(/(^|\s)enabled:hover:bg-hover(\s|$)/);
+    expect(card).toMatch(/(^|\s)enabled:active:bg-pressed(\s|$)/);
+    expect(card).not.toMatch(/on-dead/);
+  });
+
+  it('the ground axis changes no other variant', () => {
+    for (const variant of ['primary', 'danger', 'ghost', 'quiet'] as const) {
+      expect(buttonVariants({ variant, ground: 'dead' }), variant).toBe(buttonVariants({ variant }));
+    }
+  });
+
+  it('theme.css bridges both grounds as colours, so the utilities exist', () => {
+    const theme = squash(read('ui/src/styles/theme.css'));
+    expect(theme).toContain('--color-hover-on-dead: var(--bg-hover-on-dead);');
+    expect(theme).toContain('--color-pressed-on-dead: var(--bg-pressed-on-dead);');
+  });
+
+  it('the dead banner no longer re-scopes --bg-hover or --bg-pressed, and neither tone does', () => {
+    expect(bannerVariants({ tone: 'dead' })).not.toMatch(/--bg-(hover|pressed)/);
     expect(bannerVariants({ tone: 'attention' })).not.toMatch(/--bg-(hover|pressed)/);
   });
+});
 
-  it('tokens.css derives both from the banner tint, toward the danger fill\'s ink', () => {
+describe('the mixes, per mode (D-5574, D-5688)', () => {
+  it(':root derives the pair at 35% and 70%', () => {
+    const tokens = squash(read('ui/src/styles/tokens.css'));
+    expect(tokens).toContain(`--bg-hover-on-dead: ${MIX(35)};`);
+    expect(tokens).toContain(`--bg-pressed-on-dead: ${MIX(70)};`);
+  });
+
+  it.each(all)('%s declares the pair for its mode', (name, theme) => {
+    const light = LIGHT_MODE.has(name);
+    expect(squash(theme['--bg-hover-on-dead'])).toBe(MIX(light ? 60 : 35));
+    expect(squash(theme['--bg-pressed-on-dead'])).toBe(MIX(light ? 95 : 70));
+  });
+
+  it('the light-mode list is every light palette tokens.css declares', () => {
     const tokens = read('ui/src/styles/tokens.css');
-    const squash = (s: string): string => s.replace(/\s+/g, ' ');
-    expect(squash(tokens)).toContain(
-      '--bg-hover-on-dead: color-mix(in srgb, var(--ink-on-danger) 35%, var(--status-dead-tint-solid));');
-    expect(squash(tokens)).toContain(
-      '--bg-pressed-on-dead: color-mix(in srgb, var(--ink-on-danger) 70%, var(--status-dead-tint-solid));');
+    const declared = Object.keys(byName).filter((n) => {
+      const open = new RegExp(`\\[data-theme='${n}'\\]\\s*\\{`).exec(tokens);
+      if (!open) throw new Error(`no block for ${n}`);
+      return /color-scheme:\s*light/.test(tokens.slice(open.index, tokens.indexOf('}', open.index)));
+    });
+    expect(declared.sort()).toEqual([...LIGHT_MODE].sort());
   });
 });
 
@@ -93,6 +149,13 @@ describe.each(all)('%s: the lift and press read as grounds, not as a hue shift',
     expect(contrast(hover, rest)).toBeGreaterThanOrEqual(HOVER_FLOOR);
     expect(contrast(pressed, rest)).toBeGreaterThanOrEqual(PRESSED_FLOOR);
     expect(contrast(pressed, hover)).toBeGreaterThanOrEqual(STEP_FLOOR);
+  });
+
+  it('in a light palette the hover is at least that palette\'s card hover step (D-5688)', () => {
+    if (!LIGHT_MODE.has(_name)) return;
+    const { rest, hover } = grounds();
+    const card = contrast(c('var(--bg-hover)'), c('var(--bg-surface)'));
+    expect(contrast(hover, rest)).toBeGreaterThanOrEqual(card);
   });
 
   it('both step away from the label, so the label and the hairline only gain', () => {

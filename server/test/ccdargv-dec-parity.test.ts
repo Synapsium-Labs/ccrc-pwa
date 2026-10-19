@@ -354,6 +354,26 @@ describe('the child the server composes is the child real ccd records (child-wor
     expect(fs.statSync(root).mode & 0o777).toBe(0o700);
   });
 
+  it('wsAddWorker with a slug: real ccd names the child <project>-<slug>, on ws/<slug>, beside the marker and the dec', () => {
+    // The slug is a POSITIONAL, the one token here that is not a flag — the
+    // shape D-410 broke one flag to the left. Real ccd must bind it as the
+    // slug, not as the project, and not lose the dec or the marker around it.
+    h.makeRepo(PROJECT);
+    runCcd(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, 7, 'task-42'));
+    expect(uuidRows(), 'the slug was not the workspace name ccd minted').toEqual([`${PROJECT}-task-42.uuid`]);
+    const reg = path.join(h.home, '.cc-sessions');
+    expect(fs.readFileSync(path.join(reg, `${PROJECT}-task-42.child`), 'utf8')).toBe('7');
+    expect(fs.readFileSync(path.join(reg, `${PROJECT}-task-42.branch`), 'utf8').trim()).toBe('ws/task-42');
+    const created = eventsOf(h.home, 'create');
+    expect(created).toHaveLength(1);
+    expect(decOf(created[0]!)).toEqual({ surface: 'agent', actor: 'probe:dec parity' });
+  });
+
+  it('and handed no slug the argv is byte for byte the four-argument one', () => {
+    expect(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, 7, null))
+      .toEqual(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, 7));
+  });
+
   it('and handed no child it writes no marker — absence permits, byte for byte the old argv', () => {
     h.makeRepo(PROJECT);
     expect(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, null))

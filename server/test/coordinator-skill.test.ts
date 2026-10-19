@@ -762,7 +762,11 @@ describe('the coordinator skill: linkage', () => {
     // coordinator copying the body omitted `compact` every time (slice 5's
     // deferred minor, closed by slice 6 Task 5).
     expect(lifecycle).toContain(
-      '{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…"}}');
+      '{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…"},"slug":"<child name>"}');
+    // The optional child name rides the same body, and its paragraph says what
+    // the coordinator must check after it (an older server ignores the field).
+    expect(lifecycle).toContain("**`slug` — the child's name, chosen at birth.**");
+    expect(lifecycle).toContain("**Check the answer's `sessionId` equals\n`<project>-<slug>`**");
     expect(skill).toContain('{"brief": "<prose>", "items":\n   ["<title>", …], "route": {…}}');
     // The routing clause is 13 on the merged tree (R1) — the review-run clause
     // is 12, and this sentence must not renumber that one.
