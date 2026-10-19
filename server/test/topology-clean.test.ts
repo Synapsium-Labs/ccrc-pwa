@@ -41,6 +41,8 @@
 // blindness, measured rather than argued); the guarded suite ran exactly 1 red,
 // `README.md:2250: 1.2.3.4` on the public-IPv4 RANGE row, with all 47 other
 // rows — every tip row included — still green; 48/48 on revert.
+// D-5878 2026-10-19: the private-tracker-id class landed red-first — exactly
+// 1 red (its tree row, listing 8 ids in 7 files), 60/61; 61/61 after the scrub.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, realpathSync } from 'node:fs';
@@ -309,6 +311,18 @@ const OPERATOR_RESIDUE: string[] = [
   'SENfVm9sdW1lXzEwNTc1MTQ3MA==', 'MGJMb00=', 'RXhwb1BsYXRmb3JtLUx0ZA==',
 ].map((b) => Buffer.from(b, 'base64').toString('utf8'));
 
+/** The private tracker keys whose ticket ids this public tree may not carry
+ *  (D-5878, CLAUDE.md's "This repository is public" rule): a reader cannot
+ *  open a private ticket, so its id is a dead pointer that also maps the
+ *  private workspace. The tracker syncs each ticket to a GitHub issue, and the
+ *  tree refers to ccrc work by that `#n`. A NAMED list, one key per entry, and
+ *  deliberately not the general `[A-Z]{2,10}-[0-9]+` shape: measured on
+ *  2026-10-19 that shape matched 2822 tokens in 409 tracked files that are no
+ *  tracker's (UTF-8, SHA-256, AGPL-3, ARCH-21, OA-2, D-numbers' cousins), so it
+ *  could only ship behind an allowlist, which this suite refuses. A key joins
+ *  here once the tree measures zero ids under it. */
+const PRIVATE_TRACKER_KEYS: string[] = ['CCRCP'];
+
 const FORBIDDEN: ForbiddenClass[] = [
   {
     name: 'public IPv4',
@@ -495,6 +509,26 @@ const FORBIDDEN: ForbiddenClass[] = [
     passes: ['you@<server-host>', '/home/you', '/srv/projects', '~/.ssh/<your-key>',
       'example-org/example-repo', 'Synapsium-Labs', 'openclaw'],
   },
+  {
+    name: 'private tracker id',
+    // D-5878. A ticket id under any PRIVATE_TRACKER_KEYS key, or a link into
+    // the tracker's workspace. Case-insensitive: the tracker's suggested
+    // branch names spell the id in lowercase, and a branch name pasted into a
+    // doc points at the same ticket. The bare key, a D-number, an ARCH-NN
+    // audit id and a GitHub `#n` stay legal, pinned in `passes`.
+    pattern: new RegExp(
+      `\\b(?:${PRIVATE_TRACKER_KEYS.join('|')})-[0-9]+\\b|\\blinear\\.app/[A-Za-z0-9._-]+`, 'gi'),
+    why: 'a private tracker ticket id or link is a pointer no reader of this public tree can open — refer to ccrc work by its GitHub #n, which the tracker syncs',
+    catches: [
+      ...PRIVATE_TRACKER_KEYS.map((k) => `${k}-1`),
+      `${PRIVATE_TRACKER_KEYS[0]!}-12345`,
+      `${PRIVATE_TRACKER_KEYS[0]!.toLowerCase()}-120`,
+      ['linear.app', 'some-workspace'].join('/'),
+    ],
+    passes: [...PRIVATE_TRACKER_KEYS, `${PRIVATE_TRACKER_KEYS[0]!}-`, `${PRIVATE_TRACKER_KEYS[0]!}-n`,
+      'D-5878', 'ARCH-21', 'OA-2', 'SHA-256', 'UTF-8', 'CVE-2024-3094', 'GitHub #548', 'linear.app',
+      'https://linear.app/'],
+  },
 ];
 
 /** The scan: every violation as `file:line: token` — when a sweep task lands
@@ -525,10 +559,12 @@ function scoresOn(cls: ForbiddenClass, token: string): number {
 }
 
 describe('the corpus this walks', () => {
-  it('registers exactly eight forbidden classes', () => {
+  it('registers exactly nine forbidden classes', () => {
     // A loop-generated describe disappears with a deleted row, so this is the
     // permanent registration pin for each class the ratchet claims to carry.
-    expect(FORBIDDEN).toHaveLength(8);
+    expect(FORBIDDEN).toHaveLength(9);
+    // D-5878: the newest class, pinned by name so a rename cannot drop it.
+    expect(FORBIDDEN.map((c) => c.name)).toContain('private tracker id');
   });
 
   it('actually walked the tree — a scan over an empty list passes everything', () => {
