@@ -772,6 +772,24 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     HOMEs for tests. No whole-run hold, redispatch, clear, routing change or terminal-item mutation was requested.
   - No operator answer to this question was observed. A corrected handoff still needs a NEW independent review;
     Tasks 1-4 remain unaccepted and Tasks 5 and 7 remain gated. No merge, rollout, restart, arming or settings act.
+- **2026-10-19 22:25 UTC - fix-round progress received; verification and contract provenance still owed.**
+  - The worker reports code final at `5a71ccf91`, unpushed, with sequential task reviews and scoped re-reviews.
+    This is progress, explicitly not a wave-done. The server still measures work 308 as `working`, four of four
+    items settled, and review 630 as done. No changed-tip fingerprint was submitted or implementation accepted.
+  - The worker now attributes Task 3's epoch merge and Task 4's parser widening to operator answers through the
+    structured asks. These are reported rulings, not coordinator selections. The reply requests exact ask ids,
+    selected answers and the scope/costs presented, without child reasoning, chat or transcript recovery.
+  - A newly disclosed cost can cause an already-pending model command to be typed once instead of read back.
+    That cost is not accepted by receiving this status. Identify its coverage in an existing operator ruling or
+    submit one structured question before treating it as an accepted tradeoff; independent verification may proceed.
+  - The worker reports one conflict-triggered merge of main, owning groups 1-8 green, and group 9 timed out under
+    high load. The timed-out attempt remains failed verification, not a pass or proved load flake. A 76-part serial
+    full pass is still owed. The tip's README-size guard is reported red; claimed merge-ref green is separate,
+    unverified provenance. No additional absorption or check weakening was requested by this coordinator.
+  - The status was acknowledged once and one response accepted. It preserves historical UNPROVEN task-review
+    evidence, the out-of-brief scan disclosure and fixture-HOME boundaries. Waiting for load must not end a worker
+    turn without a permitted wake. No whole-run hold, routing/run/item mutation, redispatch or clear was requested.
+    A final handoff needs NEW independent review; Tasks 1-4 remain unaccepted and Tasks 5 and 7 remain gated.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -840,9 +858,12 @@ committed evidence; they do not authorize the widened promotion contract. At 14:
 worker effort change to xhigh, work 308's retreat to working and one fix-round mail. At 15:05 UTC Task 3's new
 contract question was handed to the operator without a coordinator selection. At 17:29 UTC Task 4's parser-contract
 question was also handed over, with no option selected; its out-of-brief live-transcript count remains unverified.
-No fresh operator ruling was observed here. Independent authorized corrections may continue; await actual rulings
-and worker mail, without redispatch. Required server CI at the reviewed tip is red for an inherited README-size guard;
-its 714-file selection is established, not a full-suite waiver. Tasks 1-4 remain four settled items; Task 5 is pending.
+At 22:25 UTC the worker reported code final at `5a71ccf91`, unpushed, and attributed epoch merge and parser widening
+to operator answers. Exact ruling provenance and coverage of a newly disclosed pending-model typing cost are still
+owed; no coordinator selection or cost acceptance is implied. Owning groups 1-8 are reported green, group 9 timed
+out, and the serial full pass remains pending. Await its final handoff without redispatch. Required server CI at the
+old reviewed tip was red for an inherited README-size guard; its 714-file selection is not a changed-tip proof or
+full-suite waiver. Tasks 1-4 remain four settled, unaccepted items; Task 5 is pending.
 - **Its FIRST commit is wave 4's residue:** review 305 F1(a), the qualified doctor PASS line, I1, `s6_inert`'s
   staleness, the zombie child, the paused log line, baseline B's non-zero check and the per-task minors.
 - **Then it ships** `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment and 3925's `/clear`
