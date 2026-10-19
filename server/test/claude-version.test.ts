@@ -2,6 +2,7 @@
 // numeric comparator, the channel / mode / lane-kind vocabularies, the closed
 // `why` enum, the numbers of spec §12 and the one parser of the tenth node
 // file (spec §6.2). Pure functions; no fixture HOME, no process, no network.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   CLAUDE_CHANNEL_DEFAULT,
@@ -252,10 +253,11 @@ describe('parseClaudeNodeFile: the version-1 node file (spec §6.2)', () => {
       switches: { ...(doc.switches as object), other: true },
       memory: { ...(doc.memory as object), current: 1 },
       target: { ...(doc.target as object), other: '2.1.1' },
+      prevTarget: { ...(doc.prevTarget as object), other: 'x', stderr: 'curl: (22) TOKEN-LIKE' },
     };
     const out = parse(noisy);
     expect(out).toEqual(doc);
-    expect(JSON.stringify(out)).not.toMatch(/extra|example\.invalid|versions\/x|cmdline|detail|other|current/);
+    expect(JSON.stringify(out)).not.toMatch(/extra|example\.invalid|versions\/x|cmdline|detail|other|current|stderr|TOKEN-LIKE/);
   });
 
   it('never returns installer stderr (a stderr key is dropped)', () => {
@@ -268,5 +270,124 @@ describe('parseClaudeNodeFile: the version-1 node file (spec §6.2)', () => {
     });
     expect(out).toEqual(doc);
     expect(JSON.stringify(out)).not.toContain('TOKEN-LIKE');
+  });
+});
+
+/** A copy of the sample with the value at a dotted path (`builds.0.v`) replaced. */
+function withField(path: string, value: unknown): Record<string, unknown> {
+  const doc = sample();
+  const keys = path.split('.');
+  let at: Record<string, unknown> = doc;
+  for (const k of keys.slice(0, -1)) at = at[k] as Record<string, unknown>;
+  at[keys[keys.length - 1]!] = value;
+  return doc;
+}
+
+const STDERR = 'curl: (22) The requested URL returned error: 404';
+
+describe('parseClaudeNodeFile: every field validator refuses (the leak guards, spec §9 trap 9)', () => {
+  // Each version-typed string field: installer stderr never passes as a build.
+  it.each([
+    'candidate',
+    'pin',
+    'pointer.latest',
+    'pointer.stable',
+    'target.anthropic',
+    'target.codex',
+    'prevTarget.anthropic',
+    'prevTarget.codex',
+    'builds.0.v',
+    'running.0.build',
+  ])('a non-version string in %s is refused', (path) => {
+    expect(parse(withField(path, STDERR))).toBeNull();
+    expect(parse(withField(path, 2.1))).toBeNull();
+  });
+
+  it('a non-version string in localHalts[] is refused', () => {
+    expect(parse(withField('localHalts', [STDERR]))).toBeNull();
+    expect(parse(withField('localHalts', ['2.1.300', 7]))).toBeNull();
+    expect(parse(withField('localHalts', '2.1.300'))).toBeNull();
+  });
+
+  // Each closed enum field.
+  it.each([
+    ['builds.0.smoke', 'passed'],
+    ['last.result', 'error'],
+    ['last.why', STDERR],
+    ['mode', 'auto'],
+    ['channel', 'dev'],
+  ])('%s outside its set (%s) is refused', (path, value) => {
+    expect(parse(withField(path, value))).toBeNull();
+  });
+
+  // Each count field: negative, non-integer, string.
+  it.each([
+    'at',
+    'pointer.at',
+    'builds.0.bytes',
+    'builds.0.running',
+    'running.0.pid',
+    'placeholders',
+    'staging',
+    'intentAt',
+    'last.at',
+    'last.failures',
+    'switches.hibernateShadowAt',
+    'switches.hibernateLiveAt',
+    'rollAfterMinutes',
+    'memory.anonBytes',
+    'memory.ceilingBytes',
+    'memory.swapUsedBytes',
+    'memory.swapTotalBytes',
+  ])('%s refuses a negative, a non-integer and a string', (path) => {
+    expect(parse(withField(path, -1))).toBeNull();
+    expect(parse(withField(path, 1.5))).toBeNull();
+    expect(parse(withField(path, '100'))).toBeNull();
+  });
+
+  // Each boolean field: a string and a number never pass as a boolean.
+  it.each([
+    'builds.0.sha256ok',
+    'builds.0.sigok',
+    'builds.0.halted',
+    'selfUpdateOff',
+    'switches.installDisabled',
+    'switches.rollDisabled',
+    'switches.rollLive',
+    'switches.selfUpdateKept',
+    'switches.adopted',
+  ])('%s refuses a non-boolean', (path) => {
+    expect(parse(withField(path, 'true'))).toBeNull();
+    expect(parse(withField(path, 1))).toBeNull();
+  });
+
+  // A non-null field never takes null.
+  it.each(['builds.0.halted', 'selfUpdateOff', 'at', 'builds.0.v', 'last.why', 'switches.rollLive'])(
+    '%s refuses null',
+    (path) => {
+      expect(parse(withField(path, null))).toBeNull();
+    },
+  );
+
+  // Each nested object refuses a non-object.
+  it.each(['target', 'prevTarget', 'pointer', 'last', 'switches', 'memory', 'builds.0', 'running.0'])(
+    '%s refuses a non-object',
+    (path) => {
+      expect(parse(withField(path, STDERR))).toBeNull();
+      expect(parse(withField(path, []))).toBeNull();
+    },
+  );
+
+  it('the sample itself passes, so each refusal above is the field alone', () => {
+    expect(parse(sample())).not.toBeNull();
+  });
+});
+
+describe('shared/claudeVersion.ts is L0 and imports nothing (the PWA bundles it)', () => {
+  it('has no import line, static or dynamic, and no require', () => {
+    const src = readFileSync(new URL('../../shared/claudeVersion.ts', import.meta.url), 'utf8');
+    expect(src.split('\n').filter((l) => /^\s*import\b/.test(l))).toEqual([]);
+    expect(src).not.toMatch(/\bimport\s*\(/);
+    expect(src).not.toMatch(/\brequire\s*\(/);
   });
 });
