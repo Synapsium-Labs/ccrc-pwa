@@ -41,7 +41,7 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { ApprovalRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
+import type { AccountGateRefusal, ApprovalRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { SWAP_REFUSALS } from './api.js';
 
 /** The mail codes a route answers in `error`. The done-authority codes travel
@@ -72,7 +72,7 @@ export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
-  | ApprovalRefusal | DigestRefusal | StepUpRefusal;
+  | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -126,6 +126,10 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // for the passphrase arm on a box with a passkey, and 501 for a dark gate, the status the other auth routes
   // answer dark (`not-configured`), which keeps them in the gate sweep's `FLAG_AWARE` set (D-5618).
   'step-up-required': 403, 'step-up-locked': 429, 'passkey-enrolled': 409, 'auth-off': 501,
+  // The account gate (D-5511, D-5620, plan Task A7): CHOSEN, not measured — one new word. 403, the status `foreign-origin`
+  // answers, and never 401: the credential is fine, the box's own origin is not, and a 401 with a verdict would raise
+  // the PWA's login screen, which no passphrase could clear. Its other four words are defined above.
+  'insecure-origin': 403,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */

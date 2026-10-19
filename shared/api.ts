@@ -11613,3 +11613,67 @@ export interface StepUpAnswer {
   readonly ok: true;
   readonly stepUpFreshUntil: number;
 }
+
+// ── Accounts: the account gate, the audit and the AccountOps port (D-5511, D-5516; plan Task A7) ─────────────────
+
+/** The `ccrc account` subs the `AccountOps` port may run (spec §13.2), and so the closed `sub` of the agent's
+ *  `account` op (A8). There is deliberately NO sub that installs or replaces the OpenRouter management key and none
+ *  that raises its ceiling (D-5554: CLI-only), and no `seed` (`check` runs the seed in-verb, D-5518). */
+export const ACCOUNT_SUBS = [
+  'add', 'auth-start', 'auth-code', 'auth-cancel', 'set', 'check', 'enable', 'disable', 'credential', 'remove',
+  'roster', 'or-management-remove', 'or-management-lower',
+] as const;
+export type AccountSub = (typeof ACCOUNT_SUBS)[number];
+
+/** Each sub's bound, after which the child gets SIGTERM, then SIGKILL `ACCOUNT_OP_KILL_GRACE_MS` later (spec §3.9,
+ *  §13.2): `check` 90 s (its probe turn), `add` 180 s, the rest 120 s. One home for both arms (A7's local spawn,
+ *  A8's agent op). */
+export const ACCOUNT_SUB_TIMEOUT_MS: Readonly<Record<AccountSub, number>> = {
+  'add': 180_000, 'auth-start': 120_000, 'auth-code': 120_000, 'auth-cancel': 120_000, 'set': 120_000,
+  'check': 90_000, 'enable': 120_000, 'disable': 120_000, 'credential': 120_000, 'remove': 120_000,
+  'roster': 120_000, 'or-management-remove': 120_000, 'or-management-lower': 120_000,
+};
+export const ACCOUNT_OP_KILL_GRACE_MS = 5_000;
+/** The most a sub's stdout may carry before the answer is cut and refused (spec §13.2's 8 MiB cap). */
+export const ACCOUNT_OP_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
+
+/** The acts `account_events` records (D-5516; spec §3.6), closed. `step-up-locked` (D-5512), `management-remove` and
+ *  `ceiling-lower` (D-5554) name no lane; every other act names the lane it touched. */
+export const ACCOUNT_ACTS = [
+  'add', 'auth-start', 'auth-code', 'auth-cancel', 'auth-url-untrusted', 'set', 'check', 'enable', 'disable',
+  'credential', 'retire-key', 'remove', 'discard', 'reconcile', 'management-remove', 'ceiling-lower',
+  'revoke-acknowledged', 'step-up-locked',
+] as const;
+export type AccountAct = (typeof ACCOUNT_ACTS)[number];
+
+/** The acts that name no lane, so their row's `laneId` is NULL (and only theirs). */
+export const ACCOUNT_LANELESS_ACTS: readonly AccountAct[] = ['step-up-locked', 'management-remove', 'ceiling-lower'];
+
+/** How an act ended (D-5516): `unknown` is the outcome-unknown state of D-5518, never retried on its own. */
+export const ACCOUNT_OUTCOMES = ['ok', 'refused', 'failed', 'unknown'] as const;
+export type AccountOutcome = (typeof ACCOUNT_OUTCOMES)[number];
+
+/** OpenRouter's key-plane outcomes, which ride an audit row's `code` beside the route refusal words (spec §3.6). */
+export const ACCOUNT_KEY_PLANE_CODES = [
+  'minted-deleted', 'minted-not-installed', 'pkce-minted-deleted', 'pkce-minted-not-installed', 'provider-delete-failed',
+] as const;
+export type AccountKeyPlaneCode = (typeof ACCOUNT_KEY_PLANE_CODES)[number];
+
+/** How long an `account_events` row is kept (D-5516): a row older than this is swept. */
+export const ACCOUNT_AUDIT_RETENTION_DAYS = 365;
+
+/** Every word the account gate (`server/src/accounts/gate.ts`, D-5511) answers, in the order it refuses, each at its
+ *  one status in `REFUSAL_STATUS` (`shared/refusal.ts`):
+ *  `auth-off`          the gate is dark (501, D-5618's definition, reused): no loopback exception, because a dark
+ *                      loopback box is the default deployment.
+ *  `insecure-origin`   the gate is armed and `cfg.origin` is plain HTTP on a host that is not loopback (403): the
+ *                      session cookie and the bundle are open to a man in the middle. Read from `cfg.origin` only.
+ *  `unauthenticated`   any verdict but `session` (401). A box token is never one.
+ *  `unsupported`       the fleet does not advertise the route's cap word, or the fleet state is unmeasured (501).
+ *  `step-up-required`  the route asked for a step-up and this session has none from the last five minutes (403). */
+export const ACCOUNT_GATE_REFUSALS = ['auth-off', 'insecure-origin', 'unauthenticated', 'unsupported', 'step-up-required'] as const;
+export type AccountGateRefusal = (typeof ACCOUNT_GATE_REFUSALS)[number];
+
+/** The class of `cfg.origin` the gate decides on, and `GET /api/accounts`'s `connect.origin` (A12): https, plain HTTP
+ *  on a loopback host, or anything else. */
+export type AccountOriginClass = 'https' | 'loopback' | 'insecure';
