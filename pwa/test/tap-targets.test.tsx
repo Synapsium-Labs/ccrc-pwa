@@ -1053,12 +1053,16 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
     const session = sess({ project: 'demo', workspace: 'ws-old', branch: 'main' });
     it('ride the shared rules’ floors: .btn-ghost on the token, .menu-item at or above it', () => {
       expect(buttonVariants({ variant: 'ghost' })).toContain('min-h-tap'); // @ccrc/ui's ghost Button carries the floor
-      // `.menu-item` is the session menu's `MenuItem`, a @ccrc/ui `ListRow`, whose LIST_ROW floors at 52px, above the
-      // 44px token (W5 edits neither); the Docs item adds no rule that could lower it.
+      // `.menu-item` is the session menu's `MenuItem`, a @ccrc/ui `ListRow`, whose LIST_ROW floors at the `--row-h`
+      // density role (`min-h-row`): Refined's default 52px, above the 44px token, and held to the token everywhere but
+      // under a fine pointer by skin-identity.test.ts's floor case (f2). W5 edits neither; the Docs item adds no rule
+      // that could lower it.
       const token = Number.parseFloat(declValue(ruleIn(tokensCss, ':root'), '--tap-min') ?? 'NaN');
-      const menu = /(?:^|\s)min-h-(tap|\[(\d+)px\])(?:\s|$)/.exec(LIST_ROW);
+      const menu = /(?:^|\s)min-h-(tap|row|\[(\d+)px\])(?:\s|$)/.exec(LIST_ROW);
       expect(menu, LIST_ROW).not.toBeNull();
-      expect(menu?.[1] === 'tap' || Number(menu?.[2]) >= token, String(menu?.[0])).toBe(true);
+      const rowH = Number.parseFloat(declValue(ruleIn(tokensCss, ':root'), '--row-h') ?? 'NaN');
+      const floor = menu?.[1] === 'tap' ? token : menu?.[1] === 'row' ? rowH : Number(menu?.[2]);
+      expect(floor >= token, `${String(menu?.[0])}: ${floor}px against --tap-min ${token}px`).toBe(true);
       // docs.css may carry OVERFLOW rules for the two (a long branch must not push the word off the row), but no rule
       // whose selector list names either class may declare a min-height: the floor stays the shared class's.
       const naming = stripComments(docsCss).split('}')
