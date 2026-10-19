@@ -1349,7 +1349,7 @@ const boxText = (ansiPane: string): string =>
 
 /**
  * READ-ONLY box probe for the mail lane's PARKED deliveries (D-5838,
- * CCRCP-204): what the input box holds right now, or `null` when that cannot
+ * #754): what the input box holds right now, or `null` when that cannot
  * be said — the pane is gone, a menu owns the keyboard, or the capture holds
  * no box at all (`draftOfMeasured`'s `absent`). An empty box reads `''`.
  *

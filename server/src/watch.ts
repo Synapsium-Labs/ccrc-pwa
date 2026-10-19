@@ -599,7 +599,7 @@ const COORD_COOLDOWN_MS = 30_000;
  *  The PRE-DELIVERY attempt budget, and the spacing between attempts —
  *  applies ONLY while a delivery's own `deliveredAt` is still null (review
  *  finding 4). A row that has NEVER been delivered PARKS at the cap — since
- *  D-5838 (CCRCP-204) the durable, still-outstanding parked state, no longer
+ *  D-5838 (#754) the durable, still-outstanding parked state, no longer
  *  `rejected('undeliverable')` while its recipient lives (`MAIL_PARK_RETRY_MS`
  *  below) — and THE MAIL ROW IS UNTOUCHED (spec:170-172): the record of what
  *  was said survives the failure to say it. The instant `deliveredAt` is set, this budget stops applying: the
@@ -657,7 +657,7 @@ const MAIL_TURN_HOLD_MS = 60_000;
  *  life of the box. */
 const MAIL_REPLAY_MAX_ATTEMPTS = 20;
 
-/** THE PARKED STATE (D-5838, CCRCP-204). A mail is never rejected as
+/** THE PARKED STATE (D-5838, #754). A mail is never rejected as
  *  undeliverable while its recipient session is alive. Measured before this:
  *  in 21 days five wave briefs to new workers and two workers' done-mails to
  *  their coordinators were rejected — `enter-ignored` on the FIRST attempt (the
@@ -7879,7 +7879,7 @@ export class FleetWatcher {
         // makes `MAIL_BACKOFF_MAX_MS` reachable (review finding 9).
         if (d.deliveredAt === null
             && (res.error === 'enter-ignored' || attempts >= MAIL_MAX_ATTEMPTS || d.parkedAt !== null)) {
-          // D-5838 (CCRCP-204): PARK, never reject, a live recipient's mail. The
+          // D-5838 (#754): PARK, never reject, a live recipient's mail. The
           // recipient has passed every lifecycle rung above, so it is alive; the
           // reject this replaced lost five wave briefs and two done-mails in 21
           // days. `enter-ignored` parks at once — the nudge is sitting in a FRESH

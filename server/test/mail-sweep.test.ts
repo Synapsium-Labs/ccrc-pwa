@@ -3641,7 +3641,7 @@ describe('sweepMail: a hibernated recipient is woken, never parked (D-5242)', ()
   });
 });
 
-// D-5838 (CCRCP-204): a mail is never rejected `undeliverable` while its
+// D-5838 (#754): a mail is never rejected `undeliverable` while its
 // recipient session is alive. A send that cannot land on a LIVE recipient —
 // `enter-ignored` at once, any other refusal at `MAIL_MAX_ATTEMPTS` — PARKS
 // instead: it stays outstanding (`state` stays `queued`), wakes when the input

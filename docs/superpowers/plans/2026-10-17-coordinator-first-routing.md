@@ -1040,13 +1040,13 @@ Issued and unused (Task 16): none.
 
 Issued and unused (Task 17): none.
 
-### Durability (CCRCP-203) — issued 2026-10-19 and defined here (D1, CCRCP-204)
+### Durability (#752) — issued 2026-10-19 and defined here (D1, #754)
 
-The coordinator↔worker durability fixes (epic CCRCP-203) live here because coordinator-first routing is the plan that
+The coordinator↔worker durability fixes (epic #752) live here because coordinator-first routing is the plan that
 owns the coordinator↔worker channel, and that channel is ordinary mail; no plan owns the mail lane's delivery states
 as such.
 
-- **D-5838** — `mail-parked-never-rejected-while-alive` (D1, CCRCP-204): a mail is never rejected `undeliverable` while
+- **D-5838** — `mail-parked-never-rejected-while-alive` (D1, #754): a mail is never rejected `undeliverable` while
   its recipient session is alive. Measured on main before it: `sweepMail` rejected a never-delivered row on the FIRST
   `enter-ignored` (the nudge in a fresh box) and on any refusal reaching `MAIL_MAX_ATTEMPTS` (in practice
   `draft-present`, about 15 minutes of a human's unsent text), and told only the operator's feed, never the sending
@@ -1077,13 +1077,13 @@ as such.
   the run board a `waiting` warning. The coordinator skill's `mail-envelope.md` says a park is not a give-up. What
   holds it: `server/test/mail-sweep.test.ts`'s "a live recipient's mail PARKS, never rejects (D-5838)" block,
   `pwa/test/mail-strip.test.tsx` and `pwa/test/runs-health.test.tsx`.
-- **D-5839** — `parked-word-two-senses` (D1, CCRCP-204): `RunHealth.mailParked` and the run board's "N parked" already
+- **D-5839** — `parked-word-two-senses` (D1, #754): `RunHealth.mailParked` and the run board's "N parked" already
   meant a delivery the lane GAVE UP on (rejected, not a deliberate cancel), and that reader is unchanged. The new live
   count is therefore a separate field, `mailParkedLive`, rendered as "N waiting", not a second "parked" with the
   opposite meaning; the mail strip, which renders one delivery's state, says "parked". It departs from the brief's "expose
   'parked' wherever delivery states are listed" only in the run board's word, and `MailDeliveryState` gains no member, so
   every reader keyed on `state` (the stall watch's queued-mail verdict among them) is unchanged.
-- **D-5840** — `mail-gate-parked` (D1, CCRCP-204): the `enter-ignored` park's pre-send hold (a box holding text that is
+- **D-5840** — `mail-gate-parked` (D1, #754): the `enter-ignored` park's pre-send hold (a box holding text that is
   neither changed since the park nor our own nudge) is a refusal before the send,
   and the D-792 ladder rule is that every such `continue` names a gate. So `MailGate` gains one member, `parked`
   (additive on a closed union; `GATE_PHRASE` in the mail strip has its words), and the hold records it.

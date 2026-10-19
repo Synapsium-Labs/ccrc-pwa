@@ -1715,7 +1715,7 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX account_events_by_at ON account_events(at);
   `,
   // ── 27: user_version 26 -> 27 ─────────────────────────────────────────────
-  // D-5838 (durability CCRCP-203, CCRCP-204): the PARKED delivery state. A never-delivered row whose recipient
+  // D-5838 (durability #752, #754): the PARKED delivery state. A never-delivered row whose recipient
   // is alive but whose input box will not take the nudge (`enter-ignored` at once, any other send refusal at
   // `MAIL_MAX_ATTEMPTS`) is no longer rejected: it stays `queued` — so every outstanding-state reader keeps
   // counting it — and these columns say it is parked. `parkedAt` is when the park began (NULL: not parked);

@@ -2324,8 +2324,8 @@ export class CoordStore {
    *     waiting out a limit, which is the fact the stall lane's limit hold
    *     reads. A terminal row never counts, so an acked or parked refusal
    *     cannot keep a worker's limit hold alive.
-   *   `parkDelivery`, `holdParked`, `wakeParked`, `markParkEscalated` and
-   *     `parkedDeliveries` (D-5838, the PARKED state) — the mail sweep's
+   *   `parkDelivery`, `holdParked`, `wakeParked`, `markParkEscalated`,
+   *     `baselineParkBox` and `parkedDeliveries` (D-5838, the PARKED state) — the mail sweep's
    *     writers and read for a never-delivered row whose live recipient's box
    *     will not take the nudge. A re-queued row reaches them only by failing to
    *     land on its NEW recipient, and is parked there like any other row; the
@@ -5597,7 +5597,7 @@ export class CoordStore {
   }
 
   /**
-   * PARK a never-delivered row (D-5838, CCRCP-204): the recipient is alive but
+   * PARK a never-delivered row (D-5838, #754): the recipient is alive but
    * its input box would not take the nudge. The row stays `queued` — so every
    * outstanding-state reader still counts it, and an older build retries it as
    * an ordinary row — and gains the park columns. `parkedAt` keeps the FIRST

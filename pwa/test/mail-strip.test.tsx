@@ -230,7 +230,7 @@ describe('a blocked delivery is named before it is lost', () => {
   });
 });
 
-// D-5838 (CCRCP-204): a PARKED delivery — outstanding, recipient alive, waiting
+// D-5838 (#754): a PARKED delivery — outstanding, recipient alive, waiting
 // for this session's input box to change. Never "attempt N of 6": it is past
 // that budget and is not given up.
 describe('a parked delivery says so, and what lands it (D-5838)', () => {

@@ -6250,7 +6250,7 @@ export interface RunHealth {
    *  delivery the lane gave up on and rejected, and it stays exactly that. */
   readonly mailParked: number;
   /** Deliveries of this run's mail still OUTSTANDING and PARKED (D-5838,
-   *  CCRCP-204; a field of its own, not a second sense of `mailParked`, D-5839): the recipient is alive, its input box would not take the
+   *  #754; a field of its own, not a second sense of `mailParked`, D-5839): the recipient is alive, its input box would not take the
    *  nudge, and the lane is waiting for the box to change (or its retry timer)
    *  to deliver it — not lost, and not yet delivered. OPTIONAL because an older
    *  server omits it; absence means "nothing to say", never zero. */
@@ -7073,7 +7073,7 @@ export interface MailSummary {
   gateSince: number | null;
   gateAt: number | null;
   /**
-   * D-5838 (CCRCP-204): when this delivery was PARKED, or `null` when it is
+   * D-5838 (#754): when this delivery was PARKED, or `null` when it is
    * not. A parked delivery is still `state: 'queued'` — outstanding, not lost:
    * its recipient is alive, its input box would not take the nudge, and the lane
    * delivers it when the box changes (or on its retry timer), rejecting it only
