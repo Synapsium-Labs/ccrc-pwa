@@ -6603,4 +6603,8 @@ git commit -m "feat(history): W2-4 Task 9 — the probe and step 0b's mechanics"
 
 ## Deviations found
 
-None. This plan defines no D-number: no departure in the W2 decisions document names W2-4 in its "Defined in" entry. It cites D-5774 bare (W2-D12, `DRIVER_REASONS` local to the driver, defined in W2-3's plan). Every task stands on the W2 decisions in the Decisions table and on coordinator rulings recorded in the PR body, none of which is a departure; erratum E18 is additive and carries no number. A departure found during the build is written `D-TBD-<slug>` and reported (Global Constraints, D-numbers).
+As written, this plan defined no D-number: no departure in the W2 decisions document names W2-4 in its "Defined in" entry. It cites D-5774 bare (W2-D12, `DRIVER_REASONS` local to the driver, defined in W2-3's plan). Every task stands on the W2 decisions in the Decisions table and on coordinator rulings recorded in the PR body, none of which is a departure; erratum E18 is additive and carries no number.
+
+The entries below are departures found during the build (run 637), each defined here in the commit that lands it, with a number the coordinator issued to the run.
+
+- **D-5801** — `history-w2-4-admission-disagreement-pin` (Task 3): one case beyond Task 3's test block pins `admitAccount`'s json/roster disagreement guard. A parsed object whose row for the account carries another `exec.kind` than the roster's, or no row at all, throws a `TypeError` (a caller defect, which `main` answers with exit 1), never a `DriverRefusal`; a CONTROL shows the undamaged pair admits. Task 3's interface states the guard, but its test block had no case, so deleting the kind half left the suite green (the task review's finding I1). No shipped behaviour changes.

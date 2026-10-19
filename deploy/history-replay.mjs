@@ -18,10 +18,11 @@
 // Its words: DRIVER_REASONS, frozen once here and nowhere else (W2-D59, W2-D12; D-5774). A refusal prints
 // `ccrc history-replay: <word>: <detail>` on stderr and exits EXIT.REFUSED (2); a defect exits EXIT.INTERNAL (1).
 // They are never lib REASONS: §8.7's table and SKILL.md do not list them. EXIT is imported, never declared (O14).
-import { lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
+import { accessSync, constants, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import path, { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { EXIT } from '../ccd/history/lib.mjs';
+import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
 /** Every word the driver refuses with, in one frozen list. The first sixteen are W2-D59's, in its order (each owner
@@ -256,6 +257,108 @@ function checkOut(abs, uid) {
   try { text = readFileSync(marker, 'utf8'); } catch { text = null; }   // a marker the driver cannot read back is not one it wrote
   if (text !== OUT_KIND) refuse('out-refused', 'marker-mismatch');
   return realpathSync(abs);
+}
+
+// ── W2-4 Task 3: account admission from the roster, before any spawn (W2-D52; spec §10.2 "Account and budget"; RP3, RP9) ─
+// The driver reads $HOME/.ccrc/accounts.json ONCE, validates it with shared/roster-json.mjs's rosterFromJson, and reads
+// exec.kind, exec.provider and hidden from that same parsed object: rosterFromJson validates provider and hidden but
+// returns neither, and shared/ is not edited for this (W2-D52). Admission is an ALLOW-LIST: `upstream`, and `generated`
+// whose provider is 'anthropic'. The provider is the one the roster's own reader answers: a `generated` account with
+// no declared provider reads as 'anthropic', the default parseRoster and rosterFromJson apply (coordinator ruling).
+// Every other kind is refused whatever it declares (the gateway lanes are `external`, so a deny-list keyed on codex or
+// openai would fail open), and an `external` account with no declared provider stays refused by its kind.
+// A generated account's token comes only from its declared secretsFile, which its ccrc-generated wrapper sources
+// behind `[ -r "$HOME/<secretsFile>" ]`. This code stats that path as the test does (following a symlink), keeps a
+// directory apart, checks R_OK, and never opens it. A Claude Code config dir's own OAuth file is never named or read
+// here (RP9). The launch path and the config dir come from the roster: generated launches $HOME/.local/bin/<id>, its
+// own wrapper; upstream launches $HOME/.local/bin/<roster upstreamId>, and its config dir must be exactly
+// $HOME/.claude. Task 8's subcommands call both before any spawn, for the arms, the writer and the judge alike.
+
+/** Reads $HOME/.ccrc/accounts.json once and validates it. Answers the parsed object and its validation; throws
+ *  DriverRefusal('roster-invalid', …) with 'absent', 'unreadable <code>', 'not-json' or RosterInvalid's message. */
+export function readRoster(home) {
+  let text;
+  try {
+    text = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+  } catch (e) {
+    if (e?.code === 'ENOENT') refuse('roster-invalid', 'absent');
+    refuse('roster-invalid', `unreadable ${e?.code ?? 'unknown'}`);
+  }
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    refuse('roster-invalid', 'not-json');
+  }
+  try {
+    return { json, roster: rosterFromJson(json) };
+  } catch (e) {
+    if (e instanceof RosterInvalid) refuse('roster-invalid', e.message);
+    throw e;
+  }
+}
+
+/** The one account `id` admitted, as a LaunchSpec, or DriverRefusal('account-refused', <detail>). `json` and `roster`
+ *  are one readRoster result; an account the two disagree on is a caller defect (TypeError, exit 1). */
+export function admitAccount(json, roster, id, home) {
+  const acct = roster.accounts.find((a) => a.id === id);
+  if (acct === undefined) refuse('account-refused', 'unknown-id');
+  const raw = json.accounts.find((a) => a.id === id);
+  if (raw === undefined || raw.exec.kind !== acct.execKind) {
+    throw new TypeError(`admitAccount: the parsed roster and its validation disagree on account ${JSON.stringify(id)}`);
+  }
+  if (raw.hidden === true) refuse('account-refused', 'hidden');
+  const kind = raw.exec.kind;
+  if (kind === 'upstream') return admitUpstream(acct, roster, home);
+  if (kind === 'generated') return admitGenerated(raw, acct, home);
+  // The allow-list ends here: codex, external, and any kind a later roster adds, whatever provider they declare.
+  refuse('account-refused', `kind-${kind}`);
+}
+
+/** upstream: the Claude Code binary the roster names, on exactly $HOME/.claude; no wrapper and no secrets file. */
+function admitUpstream(acct, roster, home) {
+  if (acct.configDirSuffix !== '.claude') refuse('account-refused', 'upstream-config-dir');
+  return {
+    accountId: acct.id, kind: 'upstream', launcher: join(home, '.local', 'bin', roster.upstreamId),
+    configDir: join(home, acct.configDirSuffix), wrapperPath: null, secretsPath: null,
+  };
+}
+
+/** generated: provider anthropic (declared, or absent and read as the roster's default) and a secretsFile this user
+ *  can read; launched through its own wrapper. */
+function admitGenerated(raw, acct, home) {
+  // shared/roster.ts (parseRoster) and shared/roster-json.mjs (rosterFromJson) both read an absent provider on a
+  // generated account as anthropic; admission reads the same provider the roster's reader answers (coordinator ruling).
+  const provider = raw.exec.provider ?? 'anthropic';
+  if (provider !== 'anthropic') refuse('account-refused', `provider-${provider}`);
+  const secretsFile = raw.exec.secretsFile;
+  if (secretsFile === undefined) refuse('account-refused', 'secrets-undeclared');
+  const secretsPath = join(home, secretsFile);
+  const why = secretsRefusal(secretsPath);
+  if (why !== null) refuse('account-refused', why);
+  const launcher = join(home, '.local', 'bin', acct.id);
+  return {
+    accountId: acct.id, kind: 'generated', launcher,
+    configDir: join(home, acct.configDirSuffix), wrapperPath: launcher, secretsPath,
+  };
+}
+
+/** What the wrapper's `[ -r … ]` folds into one false, kept apart; null when the file is regular and readable. The
+ *  file is stat'ed and access-checked, never opened. */
+function secretsRefusal(p) {
+  let st;
+  try {
+    st = statSync(p);
+  } catch (e) {
+    return e?.code === 'ENOENT' || e?.code === 'ENOTDIR' ? 'secrets-absent' : 'secrets-unreadable';
+  }
+  if (!st.isFile()) return 'secrets-not-regular';
+  try {
+    accessSync(p, constants.R_OK);
+  } catch {
+    return 'secrets-unreadable';
+  }
+  return null;
 }
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised

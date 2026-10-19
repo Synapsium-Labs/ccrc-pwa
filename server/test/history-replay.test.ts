@@ -8,12 +8,14 @@
 // run time; no fixture names a real account, host or path.
 import { describe, it, expect, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync } from 'node:fs';
-import path from 'node:path';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import path, { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { REPO, scrubbedEnv } from './historyHelpers.js';
 import { EXIT, REASONS } from '../../ccd/history/lib.mjs';
 import * as replay from '../../deploy/history-replay.mjs';
+import { DriverRefusal, admitAccount, readRoster } from '../../deploy/history-replay.mjs';
 // W2-4 Task 2 (the --out rule, W2-D53, RP4): aliased, so no name here collides with an import above.
 import * as t2Fs from 'node:fs';
 import * as t2Path from 'node:path';
@@ -400,5 +402,231 @@ describe('W2-4 Task 2: the --out rule, created 0700 with its marker, reused only
     const src = t2Fs.readFileSync(T2_SCRIPT, 'utf8');
     expect(src.match(/process\.umask\(/g) ?? []).toHaveLength(1);
     expect(src).toContain('process.umask(0o077);');
+  });
+});
+
+// ── W2-4 Task 3: account admission from the roster, before any spawn (W2-D52; RP3-admission, RP9) ─────────────────
+// Function level, on fixture HOMEs only. The 'before any spawn' half of RP3 and RP9 (the stub's log absent, no stream
+// file under --out) is Task 8's, through the step0a subcommand. No fixture holds a key: admission never opens a
+// secrets file, so each one holds a comment line.
+// The three declarations below are MODULE-LEVEL: Tasks 5, 6, 8 and 9 call writeRoster, and Task 8 rosters
+// FIXTURE_ACCOUNTS, from their own describes.
+
+/** One roster account in rosterFromJson's grammar; `extra` overrides the defaults. */
+const fixtureAccount = (id: string, exec: Record<string, unknown>, extra: Record<string, unknown> = {}): Record<string, unknown> =>
+  ({ id, label: id, configDirSuffix: `.${id}`, exec, homeAble: false, telemetry: 'none', ...extra });
+/** The twelve fixture rows. gen-u declares no provider, so it reads as anthropic (the roster's default, ruled). */
+const FIXTURE_ACCOUNTS = [
+  fixtureAccount('up-a', { kind: 'upstream' }, { configDirSuffix: '.claude', homeAble: true, telemetry: 'anthropic' }),
+  fixtureAccount('gen-a', { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/gen-a.env' }),
+  fixtureAccount('gen-o', { kind: 'generated', provider: 'openai', secretsFile: '.cc-secrets/gen-o.env' }),
+  fixtureAccount('cx-a', { kind: 'codex', provider: 'openai', proxyPort: 41001, litellmPort: 41002, authDir: '.cx-a-auth' }),
+  fixtureAccount('ext-n', { kind: 'external' }),
+  fixtureAccount('ext-a', { kind: 'external', provider: 'anthropic', secretsFile: '.cc-secrets/ext-a.env' }),
+  fixtureAccount('gen-h', { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/gen-h.env' }, { hidden: true }),
+  fixtureAccount('gen-u', { kind: 'generated', secretsFile: '.cc-secrets/gen-u.env' }),
+  fixtureAccount('gen-s', { kind: 'generated', provider: 'anthropic' }),
+  fixtureAccount('gen-m', { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/gen-m.env' }),
+  fixtureAccount('gen-r', { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/gen-r.env' }),
+  fixtureAccount('gen-d', { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/gen-d.env' }),
+];
+/** `$HOME/.ccrc/accounts.json`, as the operator's roster. */
+function writeRoster(home: string, accounts: object[]): void {
+  mkdirSync(join(home, '.ccrc'), { recursive: true, mode: 0o700 });
+  writeFileSync(join(home, '.ccrc', 'accounts.json'), `${JSON.stringify({ version: 1, accounts }, null, 2)}\n`);
+}
+
+describe('W2-4 Task 3: account admission from the roster (W2-D52, RP3-admission, RP9)', () => {
+  const ADMIT_DRIVER = fileURLToPath(new URL('../../deploy/history-replay.mjs', import.meta.url));
+  const IS_ROOT = (process.getuid?.() ?? 1) === 0;
+  const SECRETS_TEXT = '# fixture secrets file: admission stats it and never opens it\n';
+  const acct = fixtureAccount;
+  const ACCOUNTS = FIXTURE_ACCOUNTS;
+  /** A fixture HOME with ACCOUNTS rostered. Every declared secrets file is a readable regular file except gen-m's
+   *  (never planted), gen-r's (mode 000) and gen-d's (a directory). A secrets file is planted even where the row is
+   *  refused for something else, so each refusal below is that row's own and never a missing file's. */
+  function admitHome(): string {
+    const home = mkTmp('ccrc-replay-admit-');
+    writeRoster(home, ACCOUNTS);
+    mkdirSync(join(home, '.cc-secrets'), { mode: 0o700 });
+    for (const id of ['gen-a', 'gen-o', 'ext-a', 'gen-h', 'gen-u', 'gen-r']) {
+      writeFileSync(join(home, '.cc-secrets', `${id}.env`), SECRETS_TEXT, { mode: 0o600 });
+    }
+    chmodSync(join(home, '.cc-secrets', 'gen-r.env'), 0o000);
+    mkdirSync(join(home, '.cc-secrets', 'gen-d.env'));
+    return home;
+  }
+  /** A DriverRefusal as {word, detail}, or 'passed'; anything else is rethrown. */
+  function refusalOf(f: () => unknown): { word: string; detail: string } | 'passed' {
+    try {
+      f();
+      return 'passed';
+    } catch (e) {
+      if (e instanceof DriverRefusal) return { word: e.word, detail: e.detail };
+      throw e;
+    }
+  }
+  /** admitAccount's verdict on `id` over one readRoster of `home`. */
+  function verdict(home: string, id: string): { word: string; detail: string } | 'passed' {
+    const { json, roster } = readRoster(home);
+    return refusalOf(() => admitAccount(json, roster, id, home));
+  }
+
+  it('readRoster parses the file once and answers the parsed object beside its validation', () => {
+    const home = admitHome();
+    const { json, roster } = readRoster(home);
+    expect((json as { accounts: Array<{ id: string }> }).accounts.map((a) => a.id)).toEqual(ACCOUNTS.map((a) => a['id']));
+    expect((json as { accounts: Array<{ hidden?: boolean }> }).accounts[6]!.hidden, 'hidden is read from the parsed object').toBe(true);
+    expect(roster.upstreamId).toBe('up-a');
+    expect(Object.keys(roster.accounts[6]!), 'rosterFromJson returns no hidden: why admission reads the parsed object').not.toContain('hidden');
+  });
+
+  it('readRoster refuses roster-invalid: absent, unreadable with its code, not JSON, and RosterInvalid with its message', () => {
+    const absent = mkTmp('ccrc-replay-roster-');
+    expect(refusalOf(() => readRoster(absent))).toEqual({ word: 'roster-invalid', detail: 'absent' });
+    const dir = mkTmp('ccrc-replay-roster-');
+    mkdirSync(join(dir, '.ccrc', 'accounts.json'), { recursive: true });
+    expect(refusalOf(() => readRoster(dir))).toEqual({ word: 'roster-invalid', detail: 'unreadable EISDIR' });
+    const garbled = mkTmp('ccrc-replay-roster-');
+    mkdirSync(join(garbled, '.ccrc'));
+    writeFileSync(join(garbled, '.ccrc', 'accounts.json'), '{"version": 1, "accounts": [');
+    expect(refusalOf(() => readRoster(garbled))).toEqual({ word: 'roster-invalid', detail: 'not-json' });
+    const twoUp = mkTmp('ccrc-replay-roster-');
+    writeRoster(twoUp, [ACCOUNTS[0]!, acct('up-b', { kind: 'upstream' })]);
+    expect(refusalOf(() => readRoster(twoUp))).toEqual({
+      word: 'roster-invalid',
+      detail: 'the roster has 2 upstream accounts: exactly one account must have exec.kind "upstream".',
+    });
+  });
+
+  it('admits upstream and generated/anthropic (RP3), each with its launch path and config dir from the roster; a generated account with no declared provider reads as anthropic', () => {
+    const home = admitHome();
+    const { json, roster } = readRoster(home);
+    expect(admitAccount(json, roster, 'up-a', home)).toEqual({
+      accountId: 'up-a', kind: 'upstream', launcher: join(home, '.local', 'bin', 'up-a'),
+      configDir: join(home, '.claude'), wrapperPath: null, secretsPath: null,
+    });
+    expect(admitAccount(json, roster, 'gen-a', home)).toEqual({
+      accountId: 'gen-a', kind: 'generated', launcher: join(home, '.local', 'bin', 'gen-a'),
+      configDir: join(home, '.gen-a'), wrapperPath: join(home, '.local', 'bin', 'gen-a'),
+      secretsPath: join(home, '.cc-secrets', 'gen-a.env'),
+    });
+    // gen-u declares no provider: the roster's own default reads it as anthropic (coordinator ruling), so it is admitted.
+    expect(admitAccount(json, roster, 'gen-u', home)).toEqual({
+      accountId: 'gen-u', kind: 'generated', launcher: join(home, '.local', 'bin', 'gen-u'),
+      configDir: join(home, '.gen-u'), wrapperPath: join(home, '.local', 'bin', 'gen-u'),
+      secretsPath: join(home, '.cc-secrets', 'gen-u.env'),
+    });
+  });
+
+  const REFUSED: Array<[string, string, string]> = [
+    ['cx-a', 'kind-codex', 'a codex account (RP3)'],
+    ['ext-n', 'kind-external', 'an external account with no declared provider (RP3)'],
+    ['ext-a', 'kind-external', 'an external account declaring anthropic, its secrets file readable (RP3)'],
+    ['gen-o', 'provider-openai', 'a generated account declaring openai, its secrets file readable (RP3)'],
+    ['gen-h', 'hidden', 'a hidden generated/anthropic account, its secrets file readable'],
+    ['gen-s', 'secrets-undeclared', 'a generated/anthropic account with no declared secretsFile'],
+    ['gen-m', 'secrets-absent', 'a declared secretsFile that is absent (RP9)'],
+    ['gen-d', 'secrets-not-regular', 'a declared secretsFile that is a directory (RP9)'],
+    ['nobody', 'unknown-id', 'an id the roster does not hold'],
+  ];
+  it.each(REFUSED)('%s is refused account-refused %s: %s', (id, detail) => {
+    expect(verdict(admitHome(), id)).toEqual({ word: 'account-refused', detail });
+  });
+
+  it.skipIf(IS_ROOT)('a declared secretsFile this user cannot read is refused secrets-unreadable (RP9; skipped as root)', () => {
+    expect(verdict(admitHome(), 'gen-r')).toEqual({ word: 'account-refused', detail: 'secrets-unreadable' });
+  });
+
+  it('the secretsFile is stat\'ed through a symlink, as the wrapper\'s [ -r ] reads it: to a readable file admitted, dangling absent', () => {
+    const home = admitHome();
+    const real = join(home, 'elsewhere.env');
+    writeFileSync(real, SECRETS_TEXT, { mode: 0o600 });
+    symlinkSync(real, join(home, '.cc-secrets', 'gen-m.env'));
+    expect(verdict(home, 'gen-m')).toBe('passed');
+    const dangling = admitHome();
+    symlinkSync(join(dangling, 'nowhere.env'), join(dangling, '.cc-secrets', 'gen-m.env'));
+    expect(verdict(dangling, 'gen-m')).toEqual({ word: 'account-refused', detail: 'secrets-absent' });
+  });
+
+  it('an upstream account whose config dir is not exactly $HOME/.claude is refused upstream-config-dir', () => {
+    const home = mkTmp('ccrc-replay-admit-');
+    writeRoster(home, [acct('up-b', { kind: 'upstream' }, { homeAble: true, telemetry: 'anthropic' })]);
+    expect(verdict(home, 'up-b')).toEqual({ word: 'account-refused', detail: 'upstream-config-dir' });
+  });
+
+  // The json/roster disagreement is the caller's defect, never an account's refusal: a TypeError (main answers exit 1),
+  // not a DriverRefusal (exit 2). Both halves: a row whose exec kind differs from the roster's, and a row that is gone
+  // (D-5801: the plan's interface states this guard, and its test block had no case for it).
+  it('a parsed json that disagrees with its roster about an account is a TypeError, never a refusal (caller defect)', () => {
+    const home = admitHome();
+    const { json, roster } = readRoster(home);
+    const kindSwapped = structuredClone(json);
+    kindSwapped.accounts.find((a: { id: string }) => a.id === 'up-a').exec.kind = 'generated';
+    const rowGone = structuredClone(json);
+    rowGone.accounts = rowGone.accounts.filter((a: { id: string }) => a.id !== 'up-a');
+    for (const bad of [kindSwapped, rowGone]) {
+      let thrown: unknown = null;
+      try {
+        admitAccount(bad, roster, 'up-a', home);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(TypeError);
+      expect(thrown).not.toBeInstanceOf(DriverRefusal);
+    }
+    // CONTROL: the undamaged pair admits the same account.
+    expect(admitAccount(json, roster, 'up-a', home).kind).toBe('upstream');
+  });
+
+  // RP9's "no credentials file is read", measured: a FIFO with no writer blocks whoever opens it, so admission run in
+  // a child with a deadline returns promptly only if it never opened one. CONTROL: a child that does open it is killed.
+  // The driver URL rides the env, never argv: with `-e`, process.argv[1] stays unset, so the entry guard never runs main.
+  const ADMIT_CHILD = [
+    'const d = await import(process.env.ADMIT_DRIVER_URL);',
+    'const home = process.env.HOME;',
+    'const { json, roster } = d.readRoster(home);',
+    'const out = {};',
+    "for (const id of ['gen-m', 'gen-a', 'up-a']) {",
+    '  try { out[id] = d.admitAccount(json, roster, id, home).kind; }',
+    '  catch (e) { if (!(e instanceof d.DriverRefusal)) throw e; out[id] = e.detail; }',
+    '}',
+    'process.stdout.write(JSON.stringify(out));',
+  ].join('\n');
+  /** A FIFO at `<configDir>/.credentials.json` for gen-m, gen-a and up-a; the name is assembled, never spelled. */
+  function plantCredentialFifos(home: string): string[] {
+    const fifos = ['.gen-m', '.gen-a', '.claude'].map((dir) => join(home, dir, ['.credentials', 'json'].join('.')));
+    for (const f of fifos) {
+      mkdirSync(join(f, '..'), { recursive: true, mode: 0o700 });
+      const r = spawnSync('mkfifo', [f], { encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(lstatSync(f).isFIFO()).toBe(true);
+    }
+    return fifos;
+  }
+
+  it('admission never opens a config dir\'s credentials file: planted as FIFOs, admission returns promptly (RP9)', () => {
+    const home = admitHome();
+    plantCredentialFifos(home);
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', ADMIT_CHILD], {
+      env: { ...scrubbedEnv(process.env), HOME: home, ADMIT_DRIVER_URL: pathToFileURL(ADMIT_DRIVER).href },
+      encoding: 'utf8', timeout: 15_000,
+    });
+    expect(r.signal, `admission blocked on a FIFO: ${r.stderr}`).toBeNull();
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ 'gen-m': 'secrets-absent', 'gen-a': 'generated', 'up-a': 'upstream' });
+  });
+
+  it('CONTROL: a child that opens one of those FIFOs is killed at its deadline, so the probe above can see a read', () => {
+    const home = admitHome();
+    const [fifo] = plantCredentialFifos(home);
+    const r = spawnSync(process.execPath, ['-e', 'require("node:fs").readFileSync(process.argv[1])', fifo!], {
+      env: { ...scrubbedEnv(process.env), HOME: home }, encoding: 'utf8', timeout: 2_000,
+    });
+    expect(r.signal).toBe('SIGTERM');
+  });
+
+  it('the driver never spells a credentials file name', () => {
+    expect(readFileSync(ADMIT_DRIVER, 'utf8')).not.toMatch(/credentials\.json/);
   });
 });
