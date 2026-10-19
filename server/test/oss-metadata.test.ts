@@ -85,19 +85,21 @@ describe('CONTRIBUTING.md', () => {
   });
 });
 
+// "README.md (~6702 lines)", "README is 6,300 lines": README named, then a
+// line count within the same clause.
+const README_SIZE = /README(?:\.md)?`?[^.;]{0,40}?\b\d[\d,]*\s+lines\b/i;
+
 describe('claims that go stale', () => {
-  it("CLAUDE.md's README size claim is still true", () => {
-    // It said "817 lines" while the file was 1,590 — a reader budgeting their
-    // attention was told the wrong thing by a factor of two. Pinned with a
-    // tolerance rather than exactly: the number should track the file, and a
-    // restructure that moves it 10% should update the sentence that describes
-    // it.
-    const claimed = /README\.md` \(~?([0-9,]+) lines\)/.exec(read('CLAUDE.md'));
-    expect(claimed, 'CLAUDE.md no longer states the README size').not.toBeNull();
-    const said = Number(claimed![1].replace(/,/g, ''));
-    const real = read('README.md').split('\n').length - 1;
-    expect(Math.abs(said - real) / real,
-      `CLAUDE.md says ${said} lines, README.md is ${real}`).toBeLessThan(0.1);
+  it('CLAUDE.md states no README size (D-5892, #558)', () => {
+    // It used to: "817 lines" while the file was 1,590, and this test pinned the
+    // figure to within 10%. The pin capped nothing — README grew from 743 lines
+    // to over 6,000 under it — and the sentence was re-measured in about twenty
+    // commits, one of which turned main red. A size is not a rule, so CLAUDE.md
+    // no longer states one, and this asserts that it stays that way: README can
+    // grow by any amount without a CLAUDE.md or test edit.
+    const flat = read('CLAUDE.md').replace(/\s+/g, ' ');
+    expect(flat, 'CLAUDE.md states a README line count again — drop the number')
+      .not.toMatch(README_SIZE);
   });
 });
 
