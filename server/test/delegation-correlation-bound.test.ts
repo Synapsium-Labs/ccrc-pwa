@@ -18,12 +18,14 @@
 //      trees even if it builds no index over the array. Shapes (i)-(iv) see a per-tree rebuild of the sole-added index (M15), or a per-tree
 //      scan of the held windows (M14), only when it reads a window field (`lost`, `after`, ...): then window reads grow with the trees. The
 //      field-free forms (the delta taken from `listingDeltaOf` alone) show only in shape (v): its list has no lost window, so the partition
-//      hands the counted array back as `held` and a per-tree scan of it counts as array reads. (v) is a list the lane never builds; it pins
-//      the partition's identity path.
+//      hands the counted array back as `held` and a per-tree scan of it counts as array reads. (v) is a list the lane never builds; it
+//      relies on the partition's identity path (limit 3).
 //
-//   Two limits. (1) Every shape stops short of a rung-4 candidate, so the candidate path (the overlap scan over `held`, per tree) is not
+//   Three limits. (1) Every shape stops short of a rung-4 candidate, so the candidate path (the overlap scan over `held`, per tree) is not
 //   measured here: a disclosed residual. (2) Read counting cannot see a per-tree rebuild of the span and start indexes (`spanIndexOf`,
 //   `startIndexOf`; for example `nullAddingStartsOf` without its cache), because they are built from data already parsed and memoised.
+//   (3) R1 sees the field-free M14 and M15 only while the partition hands back the input list itself as `held` when no window is lost
+//   (`partitionOf`'s `heldList`): a refactor that always copies `held` keeps every answer and every cost, and leaves them unseen.
 //
 // Fixtures only: names are `lane-a-demo`, `lane-b-demo`, `project-a`, `/fixture/...`. No file is read or written.
 import { describe, it, expect } from 'vitest';
@@ -244,8 +246,8 @@ const nameOf = (shape: Shape, i: number): string => (shape === 'mix' && i % 2 ==
  *   unknown   one closed window of lane-c-demo whose repository is null, adding nothing.
  * Shapes (i)-(iv) end the list with the lane's own two lost windows (the retention floor and the not-ready window, built by the lane's own
  * functions). Shape (v), `unlost`, is (i) WITHOUT them: a list the lane never builds, because the lane always has those two. With no lost
- * window the partition hands the counted list itself back as `held`, so (v) pins that identity path: a per-tree scan of `held` is a scan of
- * the counted array. No shape has a rung-4 candidate.
+ * window the partition hands the counted list itself back as `held`, so (v) relies on that identity path (limit 3 above): a per-tree scan of
+ * `held` is a scan of the counted array. No shape has a rung-4 candidate.
  */
 function boundRun(shape: Shape, trees: number) {
   const common = ['main-wt', 'old-wt'];

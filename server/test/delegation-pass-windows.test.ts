@@ -11,7 +11,8 @@
 //
 //   D-5643 R1, the call. The freeze above is of no use if reconcile builds its list some other way, so a source-text pin reads `watch.ts`
 //      (the one file this test reads; it writes nothing) and holds reconcile's window list to ONE `delegationPassWindowsOf(` call, never an
-//      inline spread of the builders (the list main built, which no one froze). The row anchors on that call alone.
+//      inline spread of the builders (the list main built, which no one froze), and its trees' input to `listingWindows: windows`, never a
+//      copy per tree (M28). The row anchors on those two texts, never on where the call's arguments are built or on any neighbour.
 //
 // Fixtures only: names are `lane-a-demo`, `project-a`, `/fixture/...`.
 import { readFileSync } from 'node:fs';
@@ -131,7 +132,7 @@ describe('D-5643 R1: the lane\'s windows, their listings and the pass\'s window 
     expect(() => (window.after as string[]).push('x'), 'a push to a listing window\'s after').toThrow(TypeError);
   });
 
-  it('D-5643 R1: reconcile hands its trees the list `delegationPassWindowsOf` builds, never an inline spread of the builders', () => {
+  it('D-5643 R1: reconcile\'s body makes one `delegationPassWindowsOf` call, spreads none of the builders, and hands its trees `listingWindows: windows`', () => {
     const src = readFileSync(path.resolve(__dirname, '../src/watch.ts'), 'utf8');
     const signature = 'private async reconcile(pass: LanePass, durable: DelegationDurability): Promise<void> {';
     const from = src.indexOf(signature);
@@ -141,10 +142,12 @@ describe('D-5643 R1: the lane\'s windows, their listings and the pass\'s window 
     const body = src.slice(from, end);
     expect(end, 'the method ends').toBeGreaterThan(from);
     expect(body).toContain(signature);
-    // The call alone: how its result is bound, and where its arguments are built, are reconcile's own business (a timer may wrap either).
+    // Two texts: the one call, and the one `listingWindows: windows` a tree's input carries. Where the call's arguments are built, and any
+    // neighbour, are reconcile's own business (a timer may wrap them).
     expect(body.split('delegationPassWindowsOf(').length - 1, 'the pass\'s window list comes from exactly one delegationPassWindowsOf call').toBe(1);
     for (const spread of ['...delegationListingWindowsOf(', '...delegationLostWindowsOf(', '...this.pendingWindows(']) {
       expect(body.includes(spread), `no inline spread of ${spread.slice(3, -1)}`).toBe(false);
     }
+    expect(body.match(/listingWindows: windows(?![\w$.[])/g)?.length ?? 0, 'every tree is handed the pass\'s list itself, never a copy (M28)').toBe(1);
   });
 });
