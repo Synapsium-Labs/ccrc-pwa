@@ -2044,6 +2044,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
           thread at about 100%; my "185%" had come from a sampling interval stretched to 1.8 s in a blackout;
         - no "outran its … budget" line in 24 h.
         Its coordinator is putting the cause and the choices to the operator (mail 6590 carries these results).
+      - **03:25: my own diagnosis agrees, and the rehearsal's order changes.** A workflow of 13 agents (three Opus
+        lenses, a Sonnet refuter per candidate, an Opus judge, on v0.0.294's source with synthetic benchmarks) reached
+        the same culprit: `addedExactly` rebuilds two sets and two arrays of a whole worktree listing per pair of
+        tree and window. Memoising each window's delta once per reconcile cut a synthetic 4.4 s to 0.34 s and 12.7 s
+        to 0.55 s, with identical verdicts. It also proposes a multiplier: `sessionProject` is never pruned, so after
+        a restart the reloaded slice's unknown windows arm two extra correlations per record for 7 to 9 h. That is
+        not confirmed; I re-measure the blackout after 06:00 to test it. If it holds, a server update makes the
+        blackout worse for hours. The fix is the broker's (mail 6593). For this programme: the gate rides even a 40 s
+        block, but the rehearsal's server taps should wait for the fix release, so those restarts land on fixed
+        code, and that release should be the stable promotion's target.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
