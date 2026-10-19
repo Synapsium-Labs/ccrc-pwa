@@ -963,8 +963,13 @@ export function deadFileSourceKey(path: string, dev: string | number | bigint, i
 export function exportMarkFailsOf(recorded: string | null): number;
 export type ExportMarkOutcome = 'marked' | 'mark-failed' | 'mark-busy' | 'write-failed';
 export function decideMarkOutcome(i: { outcome: ExportMarkOutcome; recorded: string | null }): { markFails: number; write: string | null; intervalMs: number };
-export function decideMarkCheck(i: { metaKeys: readonly string[]; checkedRecord: string | null }): { check: boolean; facts: string[]; record: string };
+export function decideMarkCheck(i: { metaKeys: readonly string[]; checkedRecord: string | null; vanished?: boolean }): { check: boolean; facts: string[]; record: string };
 export function missingSegmentNames(i: { named: Iterable<string>; present: Iterable<string> }): string[];
+// W5h-1 Task 4: the listing record (D-5636 (history-export-vanished-rearm))
+export function segmentListingDigest(names: Iterable<string>): string;
+export function segmentListingRecord(names: Iterable<string>): string;
+export function addSegmentToListing(recorded: string | null, name: string): string | null;
+export function segmentListingVanished(i: { recorded: string | null; measured: string | null }): boolean;
 export function entryMayHoldMark(i: { blobs: readonly { exported: boolean; pruned: boolean }[] }): boolean;
 export function segmentMayMarkEntry(i: { blobs: readonly { exported: boolean; pruned: boolean; carried: boolean }[] }): boolean;
 export function budgetHeldPass(i: { taken: number; selectionComplete: boolean; written: number; writeStopped: 'budget' | 'off' | null }): boolean;

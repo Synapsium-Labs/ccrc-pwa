@@ -8923,3 +8923,62 @@ describe('decideSegmentWhole, decideSegmentOwn and readSegmentNameList (W5h-1 Ta
     }
   });
 });
+
+// ===========================================================================
+// W5h-1 Task 4: the check re-arms when a segment it saw is gone (D-5636 (history-export-vanished-rearm)). Pure, on
+// lib.mjs alone: the compact listing record (a count and an order-independent digest of every listed segment's name,
+// damaged ones included, never the names), what a pass adds to it, whether a measured listing differs from it, and
+// decideMarkCheck's `vanished` input.
+// ===========================================================================
+describe('W5h-1 Task 4: the listing record and decideMarkCheck\'s vanished input (D-5636 (history-export-vanished-rearm))', () => {
+  const T4W = '0a1b2c3d';
+  const T4C = 'c0ffee00';
+  const s = (seq: number, w: string = T4W): string => `${seq}.${w}.db`;
+  const zero = '0'.repeat(32);
+  const head16 = (n: string): string => createHash('sha256').update(n, 'utf8').digest().subarray(0, 16).toString('hex');
+  it('segmentListingDigest: the XOR of each distinct name\'s first 16 sha256 bytes, so the same set in any order gives one digest', () => {
+    const fwd = libSeg.segmentListingDigest([s(1), s(2), s(1, T4C)]);
+    expect(libSeg.segmentListingDigest([s(1, T4C), s(2), s(1)]), 'the same set in another order').toBe(fwd);
+    expect(fwd).toMatch(/^[0-9a-f]{32}$/);
+    expect(libSeg.segmentListingDigest([])).toBe(zero);
+    expect(libSeg.segmentListingDigest([s(1)])).toBe(head16(s(1)));
+    expect(libSeg.segmentListingDigest(new Set([s(2), s(1, T4C), s(1)])), 'any iterable').toBe(fwd);
+    expect(libSeg.segmentListingDigest([s(1), s(1), s(2), s(1, T4C)]), 'a name twice counts once').toBe(fwd);
+    expect(libSeg.segmentListingDigest([s(1), s(2)]), 'another set').not.toBe(fwd);
+  });
+  it('segmentListingRecord: "<count> <digest>" over the distinct names', () => {
+    expect(libSeg.segmentListingRecord([])).toBe(`0 ${zero}`);
+    expect(libSeg.segmentListingRecord([s(2), s(1), s(2)])).toBe(`2 ${libSeg.segmentListingDigest([s(1), s(2)])}`);
+  });
+  it('addSegmentToListing: one more name, its digest XORed in, equal to the record of the whole set; no record starts one; a torn record is left for the check', () => {
+    expect(libSeg.addSegmentToListing(null, s(1))).toBe(libSeg.segmentListingRecord([s(1)]));
+    expect(libSeg.addSegmentToListing(libSeg.segmentListingRecord([s(1), s(1, T4C)]), s(2)), 'the pass never lists the directory')
+      .toBe(libSeg.segmentListingRecord([s(1), s(1, T4C), s(2)]));
+    expect(libSeg.addSegmentToListing(`0 ${zero}`, s(3))).toBe(libSeg.segmentListingRecord([s(3)]));
+    for (const torn of ['', 'x', `1 ${zero.slice(1)}`, `01 ${zero}`, `-1 ${zero}`, `1 ${'A'.repeat(32)}`, `1  ${zero}`]) {
+      expect(libSeg.addSegmentToListing(torn, s(2)), JSON.stringify(torn)).toBeNull();
+    }
+  });
+  it('segmentListingVanished: any difference from the record re-arms (a count and a digest cannot tell a segment gone from one added); an unmeasured listing never does', () => {
+    const rec = (...n: string[]): string => libSeg.segmentListingRecord(n);
+    expect(libSeg.segmentListingVanished({ recorded: rec(s(1), s(2)), measured: rec(s(2), s(1)) }), 'the same set').toBe(false);
+    expect(libSeg.segmentListingVanished({ recorded: rec(s(1), s(2)), measured: rec(s(2)) }), 'one gone').toBe(true);
+    expect(libSeg.segmentListingVanished({ recorded: rec(s(1)), measured: rec(s(1), s(1, T4C)) }), 'one carried in').toBe(true);
+    expect(libSeg.segmentListingVanished({ recorded: rec(s(1)), measured: rec(s(1, T4C)) }), 'one gone and one carried in, the count unchanged').toBe(true);
+    expect(libSeg.segmentListingVanished({ recorded: rec(s(1)), measured: null }), 'a listing that could not be measured is never vanished').toBe(false);
+    expect(libSeg.segmentListingVanished({ recorded: null, measured: rec() }), 'no record and no segment').toBe(false);
+    expect(libSeg.segmentListingVanished({ recorded: null, measured: rec(s(1)) }), 'segments that predate the record: one check records them').toBe(true);
+    for (const torn of ['', 'not a record', `2 ${zero.slice(2)}`]) {
+      expect(libSeg.segmentListingVanished({ recorded: torn, measured: rec(s(1)) }), `a torn record ${JSON.stringify(torn)} fails toward a check`).toBe(true);
+    }
+    expect(() => libSeg.segmentListingVanished({ recorded: null, measured: 'torn' }), 'a measured record is lib\'s own; a torn one is a caller\'s bug').toThrow(TypeError);
+  });
+  it('decideMarkCheck: vanished checks with no new bind fact, and records the facts it covers; absent or false leaves the bind rule as it was', () => {
+    expect(libSeg.decideMarkCheck({ metaKeys: [], checkedRecord: null, vanished: true })).toEqual({ check: true, facts: [], record: '[]' });
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: '["bound:5"]', vanished: true }), 'a covered fact and a segment gone')
+      .toEqual({ check: true, facts: ['bound:5'], record: '["bound:5"]' });
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: '["bound:5"]', vanished: false }).check, 'neither').toBe(false);
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: '["bound:5"]' }).check, 'no vanished input').toBe(false);
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: null, vanished: false }).check, 'a new fact still checks').toBe(true);
+  });
+});

@@ -65,6 +65,7 @@ import {
   decideMarkCheck, missingSegmentNames, deadFileSourceKey, decideSegmentReplay, orderSegmentNames, entryMayHoldMark, segmentMayMarkEntry,
   decideSegmentWhole, decideSegmentOwn, readSegmentNameList,
   BUSY_TIMEOUT_MS, EXPORT_BIND_BATCH, EXPORT_BIND_BYTES, EXPORT_BIND_WAL_CEILING, markCheckStop, planMarkCheckBatch, formatMarkCheckState, nextMarkCheckState,
+  segmentListingRecord, addSegmentToListing, segmentListingVanished,
 } from './lib.mjs';
 import {
   MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -8533,6 +8534,11 @@ function markExported(db, m) {
     for (const id of m.blobs) s.markBlob.run(m.nowMs, m.name, id);
     for (const id of m.entries) s.markEntry.run(m.nowMs, m.name, id);
     setMeta(db, EXPORT_SEQ_META, String(m.seq));
+    // W5h-1 Task 4 (D-5636 (history-export-vanished-rearm)): the published name joins the listing record in the same
+    // transaction as its marks, so a crash never records a name whose marks did not commit, and the next step does not
+    // re-arm the check on this pass's own segment. lib adds the name; the directory is never re-measured here.
+    const listed = addSegmentToListing(getMeta(db, EXPORT_MARKS_CHECKED_LISTING_META), m.name);
+    if (listed !== null) setMeta(db, EXPORT_MARKS_CHECKED_LISTING_META, listed);
     // marked: lib decideMarkOutcome ends the backoff, writing '0' only over another value (RD2)
     const ended = decideMarkOutcome({ outcome: 'marked', recorded: getMeta(db, EXPORT_MARK_FAILS_META) });
     if (ended.write !== null) setMeta(db, EXPORT_MARK_FAILS_META, ended.write);
@@ -8672,9 +8678,15 @@ export async function exportStep(db, ctx) {
   // §9.15 "After a bind": first, and outside the cadence, on the first step after an adopt, a restore or a rebuild. lib
   // decideMarkCheck decides it from WHICH bind facts the last check covered, never their clocks (RD2). A check that
   // cannot list the directory is counted and tried again next step, never thrown out of the tick.
-  const markCheck = decideMarkCheck({ metaKeys: bindFactKeys(db), checkedRecord: getMeta(db, EXPORT_MARKS_CHECKED_BINDS_META) });
+  // W5h-1 Task 4 (D-5636 (history-export-vanished-rearm)): and again, with no new bind fact, when the segment names
+  // listed now (damaged ones included) differ from the record the last check and every pass since left (lib
+  // segmentListingVanished): a segment moved aside or deleted after the first tick re-arms the check. A listing that
+  // cannot be measured is never vanished.
+  const listing = measureSegmentListing(ctx);
+  const vanished = segmentListingVanished({ recorded: getMeta(db, EXPORT_MARKS_CHECKED_LISTING_META), measured: listing });
+  const markCheck = decideMarkCheck({ metaKeys: bindFactKeys(db), checkedRecord: getMeta(db, EXPORT_MARKS_CHECKED_BINDS_META), vanished });
   if (markCheck.check) {
-    try { checkSegmentMarks(db, ctx, markCheck.record); } catch (e) {
+    try { checkSegmentMarks(db, ctx, markCheck.record, listing); } catch (e) {
       if (isBusy(e)) throw e;
       process.stderr.write(`history-sweep: the export marks could not be checked against ${exportDirFor(ctx.paths, ctx.ids.storeId)}: ${e && e.message ? e.message : String(e)}\n`);
       // D-5632 (history-export-bind-check-batched): counted, and the check's stop recorded beside the count (HEALTH_META.exportMarksCheck),
@@ -8691,7 +8703,9 @@ export async function exportStep(db, ctx) {
   // A build that finished the check without deleting them (B4, after a rollback and a roll-forward) leaves a record that
   // would age into doctor's export-marks-stalled, or, after a check killed between two batches, the flag alone; both are
   // deleted whichever of the two stands, so the next check counts once.
-  if (!markCheck.check && (getMeta(db, HEALTH_META.exportMarksCheck) !== null || getMeta(db, EXPORT_MARKS_COUNTED_META) !== null)) {
+  // W5h-1 Task 4 (D-5636): only on a measured listing. An unlistable directory (null) is never vanished, so a check
+  // owed through the listing alone would read as "no check owed" here; its stop record and the flag stay until a step can list.
+  if (!markCheck.check && listing !== null && (getMeta(db, HEALTH_META.exportMarksCheck) !== null || getMeta(db, EXPORT_MARKS_COUNTED_META) !== null)) {
     withTx(db, 'NORMAL', () => {
       const del = db.prepare('DELETE FROM meta WHERE k = ?');
       del.run(HEALTH_META.exportMarksCheck);
@@ -8749,6 +8763,22 @@ const EXPORT_MARKS_CHECKED_META = 'export_marks_checked_ms';
 /** meta: the bind facts the last check covered, as lib decideMarkCheck's `record` gives them (a JSON list of
  *  `bound:<ms>` keys). */
 const EXPORT_MARKS_CHECKED_BINDS_META = 'export_marks_checked_binds';
+/** meta: the compact record of every segment name the last check listed, damaged ones included, plus every segment a
+ *  pass published since (lib segmentListingRecord's `<count> <digest>`; W5h-1 Task 4, D-5636
+ *  (history-export-vanished-rearm)). Never the names. */
+const EXPORT_MARKS_CHECKED_LISTING_META = 'export_marks_checked_listing';
+
+/** The listing record of export/<store_id>/ now: lib segmentListingRecord over EVERY name listSegments gives, damaged
+ *  ones included. Whether a listed file is whole and this store's is the check's to judge (Task 3, D-5634); this record
+ *  only notices that the listing changed, so moving a damaged file out re-arms the check and empties Task 3's record.
+ *  One readdir: no header read, no open. Null when the directory cannot be listed for any reason but ENOENT
+ *  (listSegments throws: ENOTDIR, EACCES), which lib never reads as a vanished segment; an absent directory lists none.
+ *  W5h-1 Task 4 (D-5636). */
+function measureSegmentListing(ctx) {
+  let segs;
+  try { segs = listSegments(exportDirFor(ctx.paths, ctx.ids.storeId)); } catch { return null; }
+  return segmentListingRecord(segs.map((x) => x.name));
+}
 /** meta: set in the transaction of the first batch of a check after a bind that clears any mark, and deleted by the check's
  *  done stamp: export_segment_missing is bumped once per check, however many batches and steps it takes, a kill between two
  *  batches included (O39; D-5632 (history-export-bind-check-batched)). */
@@ -8910,7 +8940,7 @@ function remeasureDamagedSegments(db, ctx) {
  *  mark naming a segment is missing; one that cannot be listed for any other reason throws SegmentsUnlistable before
  *  anything is cleared or recorded. Answers what it cleared in this step, the missing names, and the word it stopped with
  *  (null when it ran to its done stamp). */
-export function checkSegmentMarks(db, ctx, record) {
+export function checkSegmentMarks(db, ctx, record, listing = null) {
   const dir = exportDirFor(ctx.paths, ctx.ids.storeId);
   let listed;
   try { listed = listSegments(dir).map((x) => x.name); } catch (e) { throw new SegmentsUnlistable(e); }   // [] only for ENOENT
@@ -8970,6 +9000,9 @@ export function checkSegmentMarks(db, ctx, record) {
   withTx(db, 'NORMAL', () => {
     setMeta(db, EXPORT_MARKS_CHECKED_META, String(ctx.now()));
     setMeta(db, EXPORT_MARKS_CHECKED_BINDS_META, record);
+    // W5h-1 Task 4 (D-5636): the listing measured at the start of this step, never re-measured here, so a segment that
+    // goes after that measurement differs from the record and re-arms the next step. Null (unmeasured): left as it is.
+    if (listing !== null) setMeta(db, EXPORT_MARKS_CHECKED_LISTING_META, listing);
     const del = db.prepare('DELETE FROM meta WHERE k = ?');
     del.run(HEALTH_META.exportMarksCheck);
     del.run(EXPORT_MARKS_COUNTED_META);

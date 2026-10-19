@@ -8339,13 +8339,15 @@ const BIND_FACT_RE = /^bound:[0-9]{1,16}$/;
  *  the last check recorded (a JSON list of keys) or null. A step checks when a bind fact exists that the record does
  *  not hold: by KEY, never by comparing a bind's clock with the check's, because the two may be two boxes' clocks (an
  *  adopt) or one clock either side of a step back. A record that does not parse, or is not a list, covers nothing, so
- *  the check runs rather than miss a bind. `record` is every fact this check covers, sorted, as the check writes it. */
-export function decideMarkCheck({ metaKeys, checkedRecord }) {
+ *  the check runs rather than miss a bind. `record` is every fact this check covers, sorted, as the check writes it.
+ *  `vanished` (W5h-1 Task 4, D-5636 (history-export-vanished-rearm)) is lib segmentListingVanished's answer for this step:
+ *  true checks whatever the bind facts say; absent or false leaves the bind rule as it was. */
+export function decideMarkCheck({ metaKeys, checkedRecord, vanished = false }) {
   const facts = metaKeys.filter((k) => typeof k === 'string' && BIND_FACT_RE.test(k)).sort();
   let parsed;
   try { parsed = JSON.parse(checkedRecord ?? '[]'); } catch { parsed = []; }
   const have = new Set(Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : []);
-  return { check: facts.some((k) => !have.has(k)), facts, record: JSON.stringify(facts) };
+  return { check: vanished === true || facts.some((k) => !have.has(k)), facts, record: JSON.stringify(facts) };
 }
 
 /** The segment names the store's marks give that export/<store_id>/ on this box does not hold, once each, sorted:
@@ -8354,6 +8356,71 @@ export function decideMarkCheck({ metaKeys, checkedRecord }) {
 export function missingSegmentNames({ named, present }) {
   const here = new Set(present);
   return [...new Set(named)].filter((n) => !here.has(n)).sort();
+}
+
+// ── W5h-1 Task 4 (D-5636 (history-export-vanished-rearm)): the listing record ─────────────────────────────────────
+// What the last check saw of export/<store_id>/, and every segment a pass published since, kept as meta
+// export_marks_checked_listing: `<count> <digest>`, never the names (coordinator ruling R7). A step re-arms the check when
+// the segment names it lists now, damaged ones included, differ from it, so a segment moved aside or deleted after the
+// first tick has its marks cleared and its rows export again, with no bind.
+
+/** The value grammar of the listing record: a count, one space, 32 lowercase hex digits. */
+const SEGMENT_LISTING_RE = /^(0|[1-9][0-9]{0,15}) ([0-9a-f]{32})$/;
+
+/** An order-independent digest of a set of segment names: the XOR of the first 16 bytes of each distinct name's
+ *  sha256, as 32 lowercase hex digits ('0' x 32 for none). Additive: a pass XORs its own name into the record without
+ *  listing the directory (addSegmentToListing). A name is never published twice (link() never replaces one, and the
+ *  sequence only grows), so the XOR never cancels a name it added. */
+export function segmentListingDigest(names) {
+  const acc = Buffer.alloc(16);
+  for (const n of new Set(names)) {
+    const h = createHash('sha256').update(String(n), 'utf8').digest();
+    for (let i = 0; i < 16; i += 1) acc[i] ^= h[i];
+  }
+  return acc.toString('hex');
+}
+
+/** The listing record of a set of names, `<count> <digest>`: the value the check's done stamp writes. */
+export function segmentListingRecord(names) {
+  const set = new Set(names);
+  return `${set.size} ${segmentListingDigest(set)}`;
+}
+
+/** A listing record's count and digest, or null when it does not parse. */
+function parseSegmentListing(v) {
+  const m = typeof v === 'string' ? SEGMENT_LISTING_RE.exec(v) : null;
+  return m === null ? null : { count: Number(m[1]), digest: m[2] };
+}
+
+/** The record after a pass published `name`, written in its mark transaction: one more, its digest XORed in. Over no
+ *  record it starts one at `name`; over a record that does not parse it answers null (write nothing): the next step
+ *  re-arms on it anyway and the check writes a true one. Never a re-measurement of the directory: a segment gone
+ *  before the pass stays in the record, so the next step still re-arms on it. */
+export function addSegmentToListing(recorded, name) {
+  if (recorded === null) return segmentListingRecord([name]);
+  const r = parseSegmentListing(recorded);
+  if (r === null) return null;
+  const add = Buffer.from(segmentListingDigest([name]), 'hex');
+  const acc = Buffer.from(r.digest, 'hex');
+  for (let i = 0; i < 16; i += 1) acc[i] ^= add[i];
+  return `${r.count + 1} ${acc.toString('hex')}`;
+}
+
+/** Whether a segment the last record saw may be gone (decideMarkCheck's `vanished`). `measured` is the record of every
+ *  segment name listed now, damaged ones included, or null when the directory could not be listed (an unreadable
+ *  directory is never a vanished segment); `recorded` is meta's. The record holds a count and a digest, never the names,
+ *  so it cannot tell a segment gone from one added: any difference answers true, and the check, keyed on the marks,
+ *  clears only what a mark names and this box lacks (a segment carried in clears nothing). No record answers true when
+ *  segments are listed (segments that predate the record: one check records them); a record that does not parse
+ *  answers true. */
+export function segmentListingVanished({ recorded, measured }) {
+  if (measured === null) return false;
+  const now = parseSegmentListing(measured);
+  if (now === null) throw new TypeError(`segmentListingVanished: not a listing record: ${JSON.stringify(measured)}`);
+  if (recorded === null) return now.count > 0;
+  const was = parseSegmentListing(recorded);
+  if (was === null) return true;
+  return was.count !== now.count || was.digest !== now.digest;
 }
 
 /** Whether an entry may hold its export mark, from the states of the blobs it references as the store holds them now
