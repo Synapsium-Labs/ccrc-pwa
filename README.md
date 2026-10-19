@@ -3095,7 +3095,7 @@ general remote-shell:
   exact bare command name (no path components) and an argv **prefix** — a
   handful of `ccd` verbs are still a bare first token (`start`, `enable`,
   `ensure`, `stop`, `swap`, `ws-add`, `forget`) — a bare-token grant leaves
-  everything after the verb unconstrained, which is what lets `ccd stop <id> --surface <word>`
+  everything after the verb unconstrained, which is what lets `ccd stop --surface <word> <id>`
   cross this seam with no widening: `stop`'s validated `--surface` flag is
   the single enrolment the swap-transcript design costs, and it rides as an
   argv flag rather than an env var because the exec seam is `Runner = (cmd,
@@ -3140,7 +3140,7 @@ general remote-shell:
   it — but where no evidence PERMITS an ordinary verb (guessing wrong there
   is loud: ccd's own usage refusal, a 502, never a lie), no evidence REFUSES
   `--surface`, because guessing wrong there is a *silent success*: an old
-  ccd parses `stop <id> --surface pwa` as a two-argument stop of a session
+  ccd parses the trailing order the server sent before path identity W1a, `stop <id> --surface pwa`, as a two-argument stop of a session
   literally named `<id>---surface`, exits 0, and the real session is never
   touched. Evidence comes from measuring the actual deployed ccd on
   whichever box runs it — the remote agent at handshake and every 60s
