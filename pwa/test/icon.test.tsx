@@ -23,8 +23,9 @@
 //   | a registry entry for a file with no emoji        | the census, stale  |
 //   | a node carrying `style`                          | the closed-set case|
 //   | U+FE0E dropped from WARN_GLYPH                   | the text-glyph case|
-//   | `shield` dropped from NAMES, lucide.ts regenerated | the Settings index case (R2a) |
-//   | a `stroke-width` attr hand-added to a new icon   | the closed-set case (R2a) |
+//   | R2a: `shield` dropped from NAMES, regenerated    | the Settings index |
+//   | R2a: `stroke-width` hand-added to `shield`       | the closed-set case|
+//   | R2a: a `<g>` wrapper added to `bot`              | the closed-set case|
 import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
@@ -88,6 +89,8 @@ describe('Icon', () => {
   it('the Settings index icons are vendored', () => {
     const GEOMETRIC = new Set(['path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'ellipse']);
     for (const name of ['bot', 'chevron-right', 'palette', 'refresh-cw', 'shield'] as const) {
+      // Named first, so a missing icon reds with its name, not a TypeError inside Icon.
+      expect(Object.keys(ICONS), name).toContain(name);
       const { container, unmount } = render(<Icon name={name} size={20} />);
       const svg = container.querySelector('svg');
       expect(svg, name).not.toBeNull();
