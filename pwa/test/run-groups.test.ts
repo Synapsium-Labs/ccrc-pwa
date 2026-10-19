@@ -68,6 +68,16 @@ describe('groupRuns (D-5587)', () => {
     // A programme whose only open run waits on review has no Running group of its own.
     expect(g.running.map((group) => group.program)).toEqual(['programme-a']);
     expect(g.running[0]!.runs.map((r) => r.id)).toEqual([2]);
+    // One id in both lists (a run that closed between the two reads) is listed
+    // once, under the group the board's `active` gives it.
+    const raced = groupRuns(
+      [run({ id: 8, state: 'awaiting-review' }), run({ id: 9, state: 'working' })],
+      [run({ id: 8, state: 'done', closedAt: 6 }), run({ id: 9, state: 'failed', closedAt: 7 })],
+    );
+    expect(ids(raced)).toEqual([8, 9]);
+    expect(raced.needs.map((row) => row.run.id)).toEqual([8]);
+    expect(raced.running.flatMap((group) => group.runs.map((r) => r.id))).toEqual([9]);
+    expect(raced.finished).toEqual([]);
   });
 
   it("Running groups by programme in runsByProgram's order, with programWave's wave", () => {
@@ -114,6 +124,21 @@ describe('groupRuns (D-5587)', () => {
       run({ id: 2, program: 'programme-a', programTitle: 'Programme A', state: 'working' }),
     ], []);
     expect(borrowed.needs[0]!.title).toBe('Programme A');
+    // A whitespace-only title is no title: the slug.
+    const blank = groupRuns([run({ id: 1, program: 'programme-a', programTitle: '   ', state: 'working' })], []);
+    expect(blank.running[0]!.title).toBe('programme-a');
+    // Two non-empty titles: the first run's wins.
+    const twoTitles = groupRuns([
+      run({ id: 1, program: 'programme-a', programTitle: 'First title', state: 'working' }),
+      run({ id: 2, program: 'programme-a', programTitle: 'Second title', state: 'planned' }),
+    ], []);
+    expect(twoTitles.running[0]!.title).toBe('First title');
+    // A programme titled only by a finished run still heads its Running group with that title.
+    const fromFinished = groupRuns(
+      [run({ id: 1, program: 'programme-a', programTitle: '', state: 'working' })],
+      [run({ id: 2, program: 'programme-a', programTitle: 'Programme A', state: 'done', closedAt: 5 })],
+    );
+    expect(fromFinished.running[0]!.title).toBe('Programme A');
   });
 
   it('every RunState has a group', () => {
