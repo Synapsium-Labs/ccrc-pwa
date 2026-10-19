@@ -15,7 +15,8 @@
 // that read, however late it lands or renders; the poll's issue number tells the two apart. A 4xx refusal re-arms it
 // at once.
 // The route stays the authority: a row
-// that went busy since the poll answers 409 `busy`, said as a toast, and the screen re-polls either way.
+// that went busy since the poll answers 409 `busy`, said in a line under that row's Ack (D-5507, settings spec §6.4;
+// a toast only when the banner has gone while the Ack was in flight), and the screen re-polls either way.
 //
 // Injected only: FleetScreen polls /api/updates once and hands the view down (`fleet-screen.test.tsx` pins one
 // poll). It renders nothing while there is no view, or no halting node. Its own class, `.halt-banner`: attention
@@ -27,6 +28,7 @@ import type { NodeWire, ReleaseWire, UpdatesView } from '../../../shared/api';
 import { Button } from '@ccrc/ui';
 import { AckConfirm, canAck, sendAck } from './updateAck';
 import type { AckOutcome } from './updateAck';
+import { ResultLine, useResultLine } from '../screens/settingsText';
 import { haltLine, haltingNodes } from './updateHalt';
 import { UPDATES_STALE_TEXT } from './useUpdatesView';
 import './fleet.css';
@@ -74,9 +76,12 @@ function HaltRow({ node: n, releases, seq, onAcked, listRef }: {
   // D-5507: the tap opens AckConfirm; only its commit sends. The confirm hands the focus to this row when the Ack it
   // disables was focused (wave 19, R26(a)).
   const [confirming, setConfirming] = useState(false);
+  // How the Ack ended, said under it (D-5507): `sendAck` toasts nothing of its own.
+  const line = useResultLine();
   const ack = (): void => {
     const sentAgainst = leaseKey(n);
     setAcking(true);
+    line.clear();
     const settle = (outcome: AckOutcome): void => {
       setAcking(false);
       const issued = onAcked();   // the re-poll, issued INSIDE the outcome callback: every read before it is older
@@ -89,7 +94,7 @@ function HaltRow({ node: n, releases, seq, onAcked, listRef }: {
         });
       }
     };
-    void sendAck(n.nodeId).then(settle, () => settle('unanswered'));   // sendAck never rejects; belt and braces
+    void sendAck(n.nodeId, line.say).then(settle, () => settle('unanswered'));   // sendAck never rejects; belt and braces
   };
   return (
     <li className="halt-banner-node" data-node-id={n.nodeId} ref={rowRef} tabIndex={-1}>
@@ -104,6 +109,8 @@ function HaltRow({ node: n, releases, seq, onAcked, listRef }: {
       >
         {label}
       </Button>
+      {/* The banner's own ink: the line sits on its attention ground, so it wears the banner's text, not the page's. */}
+      <ResultLine line={line.line} className="halt-banner-msg settings-result" />
       <AckConfirm node={n} releases={releases} open={confirming} onClose={() => setConfirming(false)} onConfirm={ack} rowRef={rowRef} />
     </li>
   );

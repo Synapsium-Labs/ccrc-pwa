@@ -2965,6 +2965,12 @@ button.proj-card-pool::before {
    the row carries is the component's rather than this file's. What stays
    below is the part that PAINTS: the theme picker's own rows. */
 .settings-note { font-size: var(--fs-meta); line-height: var(--lh-normal); color: var(--ink-secondary); }
+/* Settings Task R1c (D-5503, D-5507): spacing only, no colour; each line's ink is `.settings-note`'s or the amber
+   note's. An option's note sits under its option, its start aligned with the option's sentence (past the 18px radio
+   and the row's gap), pulled up into the tap row's slack. A result line sits directly under its control and takes a
+   line of its own inside a wrapping flex row (the halt banner's node row), wrapping at any width. */
+.settings-option-note { margin: calc(-1 * var(--sp-2)) 0 var(--sp-1); padding-inline-start: calc(18px + var(--sp-2)); }
+.settings-result { flex-basis: 100%; min-width: 0; margin: 0; overflow-wrap: anywhere; }
 /* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
    disabled ink; this only stops it filling the section's width. */
 .settings-section .settings-check { width: auto; justify-self: start; padding: 0 var(--sp-3); }

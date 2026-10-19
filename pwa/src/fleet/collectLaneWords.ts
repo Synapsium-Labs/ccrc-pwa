@@ -26,9 +26,17 @@ export const COLLECT_SECTION_TEXT = {
   notAvailable: 'Not available on this server.',
   unread: "The collector's state could not be read; the section will re-check.",
   stale: 'The latest read did not arrive; this is the last answer that did.',
-  legend: 'Choice',
+  // Settings Task R1c (D-5503; settings spec §5.4, §11.2): the legend "Choice" became "Collector", each choice carries
+  // a note, and the section opens with its purpose. Off's note is the `shadowed` state the server runs it as.
+  purpose: "Each session gets its own temporary directory. When the session's workspace is gone, the directory is left "
+    + 'behind. The collector finds these leftovers on the fleet box. Live lets it delete one, only after two audits, at '
+    + 'least an idle period apart, have found it unused.',
+  legend: 'Collector',
   off: 'Off',
+  offNote: 'Watches and reports what it would remove, and removes nothing.',
   live: 'Live',
+  liveNote: 'Removes a leftover temporary directory only after two idle audits have found it unused.',
+  when: 'Turn it Live once its reports look right. Turn it Off if a removal surprised you.',
   reconfirm: 'Confirm Live again',
   confirmTitle: 'Set the temp root collector to Live?',
   confirmLabel: 'Set Live',

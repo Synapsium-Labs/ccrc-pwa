@@ -187,7 +187,7 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
     expect(updates.ACK_UNREADABLE_TEXT).toBe(ACK_UNREADABLE_TEXT);
     expect(settingsSrc).not.toMatch(/function canAck\b/);
     expect(settingsSrc).not.toMatch(/api\.ackUpdateNode\(/);
-    expect(settingsSrc).toMatch(/void sendAck\(n\.nodeId\)/);
+    expect(settingsSrc).toMatch(/void sendAck\(n\.nodeId, ackLine\.say\)/);
     // + the one confirm (D-5507), which carries R26(a)'s focus hand-off (wave 19) since the tap only opens it.
     expect(bannerSrc).toMatch(/import \{ AckConfirm, canAck, sendAck \} from '\.\/updateAck';/);
     // No surface keeps a one-tap Ack: both open the one AckConfirm, and only its commit reaches sendAck.
@@ -198,28 +198,65 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
     }
     // The gate is canAck on every row, though a halting row passes it by construction: no behaviour can red for it.
     expect(bannerSrc).toContain('disabled={!canAck(n, releases) || acking || held}');
-    expect(bannerSrc).toContain('void sendAck(n.nodeId).then(');
+    expect(bannerSrc).toContain('void sendAck(n.nodeId, line.say).then(');
     expect(bannerSrc).not.toMatch(/SETTLED_UPDATE_STATES|ackUpdateNode/);
   });
 
-  it('sendAck never rejects, so a caller\'s finally always re-polls; it answers how the Ack ended', async () => {
+  it('sendAck never rejects, so a caller\'s finally always re-polls; it answers how the Ack ended, and says it only through its caller', async () => {
     render(<ToastHost />);
+    const said: Array<[string, string | undefined]> = [];
+    const say = (text: string, tone?: string): void => { said.push([text, tone]); };
     vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new Error('offline'));
-    await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('unanswered'); });
+    await act(async () => { await expect(sendAck(FLEET_ID, say)).resolves.toBe('unanswered'); });
     vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new TypeError('Failed to fetch'));
-    await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('unanswered'); });
+    await act(async () => { await expect(sendAck(FLEET_ID, say)).resolves.toBe('unanswered'); });
     vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(502, { ok: false, error: 'bad gateway' }));
-    await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('unanswered'); });
+    await act(async () => { await expect(sendAck(FLEET_ID, say)).resolves.toBe('unanswered'); });
     vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(500, { ok: false, error: 'internal' }));
-    await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('unanswered'); });
-    vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'busy' }));
-    await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('refused'); });
+    await act(async () => { await expect(sendAck(FLEET_ID, say)).resolves.toBe('unanswered'); });
+    const busy = new ApiError(409, { ok: false, error: 'busy' });
+    vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(busy);
+    await act(async () => { await expect(sendAck(FLEET_ID, say)).resolves.toBe('refused'); });
     vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(new ApiError(400, { ok: false, error: 'bad request' }));
-    await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('refused'); });
+    await act(async () => { await expect(sendAck(FLEET_ID, say)).resolves.toBe('refused'); });
     vi.spyOn(api, 'ackUpdateNode').mockResolvedValueOnce('unreadable');
-    await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('unreadable'); });
+    await act(async () => { await expect(sendAck(FLEET_ID, say)).resolves.toBe('unreadable'); });
     vi.spyOn(api, 'ackUpdateNode').mockResolvedValueOnce({ ok: true, node: node() });
-    await act(async () => { await expect(sendAck(FLEET_ID)).resolves.toBe('acked'); });
+    await act(async () => { await expect(sendAck(FLEET_ID, say)).resolves.toBe('acked'); });
+    // D-5507: every answer but a clean 200 is said once, through the caller, a rejection as a refusal; no toast.
+    expect(said).toHaveLength(7);
+    expect(said[4]).toEqual([updateErrorText(busy), 'refusal']);
+    expect(said[6]).toEqual([ACK_UNREADABLE_TEXT, undefined]);
+    expect(document.querySelector('.toast'), 'sendAck toasts nothing of its own').toBeNull();
+  });
+
+  it('the banner says how its Ack ended in a line under that Ack, not a toast', async () => {
+    const busy = new ApiError(409, { ok: false, error: 'busy', detail: 'applying' });
+    vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(busy);
+    mount(view([failed()]));
+    const ackButton = screen.getByRole('button', { name: 'Ack fleet' });
+    tapAck(ackButton);
+    const line = await waitFor(() => {
+      const next = screen.getByRole('button', { name: 'Ack fleet' }).nextElementSibling as HTMLElement | null;
+      expect(next).toHaveTextContent(updateErrorText(busy));
+      return next as HTMLElement;
+    });
+    expect(line).toHaveAttribute('role', 'status');
+    expect(line).toHaveAttribute('aria-live', 'polite');
+    expect(line).toHaveClass('halt-banner-msg', 'settings-result');
+    expect(document.querySelector('.toast')).toBeNull();
+  });
+
+  it('a confirm closed while the request was in flight still toasts: the banner left before the answer came', async () => {
+    let answer!: (v: 'unreadable') => void;
+    vi.spyOn(api, 'ackUpdateNode').mockReturnValueOnce(new Promise((r) => { answer = r; }));
+    render(<ToastHost />);
+    const banner = render(<HaltBanner updates={view([failed()])} seq={1} onAcked={() => 0} />);
+    tapAck(screen.getByRole('button', { name: 'Ack fleet' }));
+    // The halt cleared elsewhere: the banner, and the Ack that asked, are gone before the answer lands.
+    banner.unmount();
+    await act(async () => { answer('unreadable'); });
+    expect(await screen.findByText(ACK_UNREADABLE_TEXT, { selector: '.toast' })).toBeInTheDocument();
   });
 });
 
@@ -245,7 +282,7 @@ const NO_ANSWER: ReadonlyArray<readonly [string, () => unknown]> = [
 ];
 
 describe('HaltBanner — an Ack with no answer holds until a read issued after the outcome (D-4272, D-4273)', () => {
-  it.each(NO_ANSWER)('%s holds through a kept view and seq: Ack, disabled, one POST, today\'s toast', async (_n, make) => {
+  it.each(NO_ANSWER)('%s holds through a kept view and seq: Ack, disabled, one POST, today\'s sentence, in the line under the Ack', async (_n, make) => {
     const err = make();
     const ack = vi.spyOn(api, 'ackUpdateNode').mockRejectedValueOnce(err);
     const onAcked = vi.fn(() => 2);

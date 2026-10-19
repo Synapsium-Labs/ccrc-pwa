@@ -12,8 +12,9 @@ import type { ReactNode, RefObject } from 'react';
 import type { NodeWire, ReleaseWire } from '../../../shared/api';
 import { SETTLED_UPDATE_STATES } from '../../../shared/api';
 import { compareReleaseTags } from '../../../shared/semver';
-import { QuickConfirm, toast } from '@ccrc/ui';
+import { QuickConfirm } from '@ccrc/ui';
 import { ApiError, api, updateErrorText } from '../lib/api';
+import type { ResultTone } from '../screens/settingsText';
 
 export const ACK_UNREADABLE_TEXT = "Acknowledged — the server's answer could not be read; the screen will re-check.";
 
@@ -44,6 +45,22 @@ export function refusedTags(n: NodeWire, releases: readonly ReleaseWire[]): stri
       typeof x === 'object' && x !== null && (x as { by?: unknown }).by === n.nodeId))
     .map((r) => r.tag)
     .sort((a, b) => compareReleaseTags(b, a));
+}
+
+/** What a node row's Ack does, by its branch (settings spec §5.1), and when to use it; null for a node with no Ack.
+ *  Chosen by `ackBranch`, the one rule, so the note cannot describe an Ack the row does not offer. */
+export function ackNote(n: NodeWire, releases: readonly ReleaseWire[]): string | null {
+  const branch = ackBranch(n, releases);
+  if (branch === null) return null;
+  const when = ' Use it after you have fixed what made the move fail.';
+  if (branch === 'failed') return `Clears this node's failed move, so it returns to idle.${when}`;
+  if (branch === 'request') {
+    const q = n.request as { tag?: unknown; kind?: unknown };
+    const kind = typeof q.kind === 'string' && q.kind !== '' ? q.kind : 'move';
+    const tag = typeof q.tag === 'string' && q.tag !== '' ? q.tag : 'its release';
+    return `Withdraws the request standing on this node (${kind} to ${tag}).${when}`;
+  }
+  return `Makes this node forget the releases it refused (${listWords(refusedTags(n, releases))}).${when}`;
 }
 
 /** `a`, `a and b`, `a, b and c`. */
@@ -100,19 +117,20 @@ export function ackConfirmCopy(n: NodeWire, releases: readonly ReleaseWire[]): A
  *    an abort). The server gave no answer, so the Ack may have landed. */
 export type AckOutcome = 'acked' | 'unreadable' | 'refused' | 'unanswered';
 
-/** `POST /api/updates/ack` for one node, said as a toast: nothing on a clean 200, ACK_UNREADABLE_TEXT when the
- *  answer could not be read, and the error's sentence on a rejection. It never rejects, so the caller's `.finally`
- *  (clear its busy flag, re-poll) always runs; it answers the outcome, so a caller can hold its button down until
- *  a poll shows the row changed (ackNode acks ANY settled row, idle included, and clears its request). A rejection
- *  ends `refused` only for a 4xx `ApiError`; every other rejection ends `unanswered`. */
-export function sendAck(nodeId: string): Promise<AckOutcome> {
+/** `POST /api/updates/ack` for one node. It TOASTS NOTHING (D-5507, settings spec §6.4): the caller writes the line
+ *  under its Ack, through `say` — nothing on a clean 200, ACK_UNREADABLE_TEXT when the answer could not be read, and
+ *  the error's sentence, as a refusal, on a rejection. It never rejects, so the caller's `.finally` (clear its busy
+ *  flag, re-poll) always runs; it answers the outcome, so a caller can hold its button down until a poll shows the
+ *  row changed (ackNode acks ANY settled row, idle included, and clears its request). A rejection ends `refused` only
+ *  for a 4xx `ApiError`; every other rejection ends `unanswered`. */
+export function sendAck(nodeId: string, say: (text: string, tone?: ResultTone) => void = () => {}): Promise<AckOutcome> {
   return api.ackUpdateNode(nodeId).then(
     (answer): AckOutcome => {
-      if (answer === 'unreadable') { toast(ACK_UNREADABLE_TEXT); return 'unreadable'; }
+      if (answer === 'unreadable') { say(ACK_UNREADABLE_TEXT); return 'unreadable'; }
       return 'acked';
     },
     (err: unknown): AckOutcome => {
-      toast(updateErrorText(err), 'error');
+      say(updateErrorText(err), 'refusal');
       return err instanceof ApiError && err.status >= 400 && err.status < 500 ? 'refused' : 'unanswered';
     },
   );

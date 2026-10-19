@@ -59,6 +59,9 @@ import { nodeVersion } from './useUpdatesView';
 import './fleet.css';
 
 export const MOVE_UNREADABLE_TEXT = "Requested — the server's answer could not be read; the screen will re-check.";
+/** A 202 that requested what the sheet named (settings spec §6.4): "Requested", never "done"; the node rows then say
+ *  what they measured. Said by a caller that passes `onAnswered` (D-5612). */
+export const MOVE_REQUESTED_TEXT = 'Requested. The nodes report back within a minute.';
 /** A readable 2xx that requested no node and skipped none this sheet named (one left the inventory between the
  *  tap and the send): nothing was written, so the sheet says so rather than closing on it. */
 export const MOVE_NOTHING_REQUESTED_TEXT = 'The server requested no node — reload the screen to see each row.';
@@ -241,8 +244,22 @@ function dangerLines(plan: PlannedMove, release: ReleaseWire | undefined): strin
   ];
 }
 
-export function UpdateMoveSheet({ open, plan, onClose, onDone, tone = 'move', release }: {
+/** What a sheet dismissed in flight would have said for a 2xx (D-5612): its skip or nothing-requested sentence, the
+ *  unread sentence, or the request. */
+function supersededText(answers: ReadonlyArray<MoveRequestAnswer | 'unreadable'>, plan: PlannedMove): string {
+  const unread = answers.includes('unreadable');
+  const requested = answers.flatMap((a) => (a !== 'unreadable' && Array.isArray(a.requested) ? a.requested : []));
+  return moveSkippedText(answers, plan) ?? moveUnnamedText(requested, plan)
+    ?? (!unread && requested.length === 0 ? MOVE_NOTHING_REQUESTED_TEXT : unread ? MOVE_UNREADABLE_TEXT : MOVE_REQUESTED_TEXT);
+}
+
+export function UpdateMoveSheet({ open, plan, onClose, onDone, onAnswered, tone = 'move', release }: {
   open: boolean; plan: PlannedMove | null; onClose: () => void; onDone: () => void;
+  /** D-5612 (settings spec §6.4): the caller writes the 202's line under the control that opened the sheet, so the
+   *  sheet hands it the sentence when it closes on a request (MOVE_REQUESTED_TEXT, or MOVE_UNREADABLE_TEXT for a 2xx
+   *  it could not read) instead of toasting. With it, an answer that lands after the sheet was dismissed is toasted,
+   *  because the control that asked is gone. Without it (the update banner), the sheet behaves as before. */
+  onAnswered?: (text: string) => void;
   /** `danger` for a rollback (D-5507); `move`, the default, for Install and Update. */
   tone?: 'move' | 'danger';
   /** The target's catalogue row, when the caller has it: the danger tone reads its withdrawn mark and its bundle
@@ -285,6 +302,8 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone, tone = 'move', re
           // a mid-sequence stop's first — and the operator is now looking at something else, so the caller
           // re-polls. The reload is harmless when nothing new was written (review F5, IMPORTANT 1).
           if (answers.length > 0) onDone();
+          // D-5612: the sheet that asked is gone, so a caller that takes the answer as a line hears it as a toast.
+          if (answers.length > 0 && onAnswered !== undefined) toast(supersededText(answers, plan));
           return;
         }
         setBusy(false);
@@ -303,7 +322,8 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone, tone = 'move', re
           if (requested.length > 0 || unread) onDone();
           return;
         }
-        if (unread) toast(MOVE_UNREADABLE_TEXT);
+        if (onAnswered !== undefined) onAnswered(unread ? MOVE_UNREADABLE_TEXT : MOVE_REQUESTED_TEXT);
+        else if (unread) toast(MOVE_UNREADABLE_TEXT);
         onDone();
         onClose();
       },
@@ -313,6 +333,8 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone, tone = 'move', re
           // what already went out before the refusal, and a dismiss stopping the sequence never reaches this
           // branch with an empty one unless nothing was ever written.
           if (err instanceof MoveSendError && err.requested.length > 0) onDone();
+          // D-5612: the refusal still reaches the operator, as a toast, since the sheet that would say it is gone.
+          if (onAnswered !== undefined) toast(moveErrorText(err, plan), 'error');
           return;
         }
         setBusy(false);

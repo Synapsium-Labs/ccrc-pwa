@@ -29,9 +29,11 @@ import {
   COLLECT_LANE_CHOICES, type CollectLaneChoice, type CollectLaneConfirmRequired, type CollectLaneRequest,
   type CollectLaneView,
 } from '../../../shared/api';
-import { Button, QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Skeleton, toast, useNow } from '@ccrc/ui';
+import { Button, QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Skeleton, useNow } from '@ccrc/ui';
 import { api, apiErrorText } from '../lib/api';
-import { SETTINGS_AMBER_NOTE, SETTINGS_NOW_CLASS, UNCONFIRMED_TEXT } from '../screens/settingsText';
+import {
+  ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_NOW_CLASS, UNCONFIRMED_TEXT, optionNote, useResultLine,
+} from '../screens/settingsText';
 import { useFleetStore } from '../stores/fleet';
 import { childReclaimMarker } from './childReclaimWords';
 import { inlinePauseError } from './CoordBanner';
@@ -93,9 +95,14 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
 }): ReactNode {
   const { reload, settle } = poll;
   const offNoteId = useId();
+  const choiceNoteBase = useId();
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<CollectLaneConfirmRequired | null>(null);
   const [inline, setInline] = useState<string | null>(null);
+  // D-5507 (settings spec §6.4): a write's answer is a line under the control that asked, the choice or "Confirm Live
+  // again"; a toast only once the section has gone. The pre-latch refusal keeps its own inline line, as before.
+  const choiceLine = useResultLine();
+  const reconfirmLine = useResultLine();
   const now = useNow(30_000, pending !== null);   // the sheet's freshness, live only while it is open
   const locked = busy || pending !== null;
 
@@ -112,13 +119,16 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
   // - A 2xx the guard cannot read was answered and may have landed: UNCONFIRMED_TEXT, then a re-read.
   // - A 409 the reader takes as a confirm opens the sheet.
   // - Off refused before the latch is shown inline under the choice, until a newer view lands.
-  // - Any other refusal, one carrying a code this build knows, is toasted, its words with the server's detail beside
-  //   them, then re-read.
+  // - Any other refusal, one carrying a code this build knows, is said under the control, amber, its words with the
+  //   server's detail beside them, then re-read.
   // - A rejection that never reached an answer, or an answer with no code this build knows, may have stored the
   //   choice, so it gets its own line, with the answer's detail when there was one, then the same re-read.
-  const write = (request: CollectLaneRequest): void => {
+  const write = (request: CollectLaneRequest, from: 'choice' | 'reconfirm' = 'choice'): void => {
     setBusy(true);
     setInline(null);
+    const line = from === 'reconfirm' ? reconfirmLine : choiceLine;
+    choiceLine.clear();
+    reconfirmLine.clear();
     void api.setCollectLane(request)
       .then(
         (answer) => {
@@ -127,7 +137,7 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
             settle(reply);
             return;
           }
-          toast(UNCONFIRMED_TEXT);
+          line.say(UNCONFIRMED_TEXT);
           reload();
         },
         (err: unknown) => {
@@ -137,13 +147,13 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
             return;
           }
           if (refusal.kind === 'unconfirmed') {
-            toast(refusal.detail === null
+            line.say(refusal.detail === null
               ? COLLECT_SECTION_TEXT.unanswered
               : `${COLLECT_SECTION_TEXT.unanswered} (${refusal.detail})`);
           } else if (refusal.code === 'marker-still-controls') {
             setInline(COLLECT_REFUSAL_TEXT['marker-still-controls']);
           } else {
-            toast(`${COLLECT_REFUSAL_TEXT[refusal.code]} (${refusal.detail})`, 'error');
+            line.say(`${COLLECT_REFUSAL_TEXT[refusal.code]} (${refusal.detail})`, 'refusal');
           }
           reload();
         },
@@ -163,40 +173,50 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
 
   return (
     <>
+      <p className="settings-note">{COLLECT_SECTION_TEXT.purpose}</p>
       {stale && <p className={SETTINGS_AMBER_NOTE}>{COLLECT_SECTION_TEXT.stale}</p>}
       {collectNowLines(view).map((line, i) => <p key={i} className={NOW_CLASS[line.tone]}>{line.text}</p>)}
       {view.notice !== null && <p className="settings-note" role="status">{view.notice}</p>}
       <p className="settings-note">{collectCountLine(view.attention)}</p>
+      {/* Each choice with its note under it (settings spec §5.4, the shared `optionNote`); a held Off is described by
+          its reason too, after its note. */}
       <fieldset className={RADIO_FIELDSET} disabled={locked}>
         <legend className={RADIO_LEGEND}>{COLLECT_SECTION_TEXT.legend}</legend>
         {COLLECT_LANE_CHOICES.map((c) => {
           const held = c === 'off' && offHeld;
-          return (
+          const noteId = `${choiceNoteBase}-${c}`;
+          return [
             <Radio
               key={c}
               name="settings-collect-lane"
               value={c}
               checked={stored === c}
               disabled={held}
-              aria-describedby={held && offNote !== null ? offNoteId : undefined}
+              aria-describedby={held && offNote !== null ? `${noteId} ${offNoteId}` : noteId}
               onChange={() => choose(c)}
             >
               {COLLECT_SECTION_TEXT[c]}
-            </Radio>
-          );
+            </Radio>,
+            optionNote(noteId, c === 'off' ? COLLECT_SECTION_TEXT.offNote : COLLECT_SECTION_TEXT.liveNote),
+          ];
         })}
       </fieldset>
+      <ResultLine line={choiceLine.line} />
       {offHeld && offNote !== null && <p id={offNoteId} className="settings-note">{offNote}</p>}
       {inline !== null && <p className={SETTINGS_AMBER_NOTE} role="alert">{inline}</p>}
+      <p className="settings-note">{COLLECT_SECTION_TEXT.when}</p>
       {collectOffersReconfirm(view) && (
-        <Button
-          variant="ghost"
-          className="settings-check"
-          disabled={locked}
-          onClick={() => { if (!locked) write({ choice: 'live' }); }}
-        >
-          {COLLECT_SECTION_TEXT.reconfirm}
-        </Button>
+        <>
+          <Button
+            variant="ghost"
+            className="settings-check"
+            disabled={locked}
+            onClick={() => { if (!locked) write({ choice: 'live' }, 'reconfirm'); }}
+          >
+            {COLLECT_SECTION_TEXT.reconfirm}
+          </Button>
+          <ResultLine line={reconfirmLine.line} />
+        </>
       )}
       <PauseAllCleanup store={store} childReclaimPause={childReclaimPause} />
       <QuickConfirm
@@ -223,6 +243,8 @@ function PauseAllCleanup({ store, childReclaimPause }: { store: typeof useFleetS
   const marker = childReclaimMarker(coord);
   const [phase, setPhase] = useState<PausePhase>('idle');
   const [error, setError] = useState<string | null>(null);
+  // Any other failure is said under the button too (D-5507), and toasted only once the section has gone.
+  const failed = useResultLine();
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearTimer = (): void => {
@@ -251,6 +273,7 @@ function PauseAllCleanup({ store, childReclaimPause }: { store: typeof useFleetS
   const onPause = (): void => {
     if (phase === 'pausing') return;
     setError(null);
+    failed.clear();
     setPhase('pausing');
     clearTimer();
     timerRef.current = setTimeout(() => {
@@ -265,7 +288,7 @@ function PauseAllCleanup({ store, childReclaimPause }: { store: typeof useFleetS
         setError(shown);
         return;
       }
-      toast(apiErrorText(err), 'error');
+      failed.say(apiErrorText(err), 'refusal');
     });
   };
 
@@ -279,6 +302,7 @@ function PauseAllCleanup({ store, childReclaimPause }: { store: typeof useFleetS
       <Button variant="ghost" className="settings-check" disabled={phase === 'pausing'} onClick={onPause}>
         {label}
       </Button>
+      <ResultLine line={failed.line} />
       {error !== null && <p className={SETTINGS_AMBER_NOTE}>{error}</p>}
     </>
   );
