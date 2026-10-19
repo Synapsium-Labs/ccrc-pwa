@@ -18,7 +18,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as zc } from 'node:zlib';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
-import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, plantSession, counters, journalRecords, spoolLine, readTxlog, writes, recordOpenFlags, SWEEP, PRELOADS, type HistoryBox } from './historyHelpers.js';
+import { REPO, makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, plantSession, counters, journalRecords, spoolLine, readTxlog, writes, recordOpenFlags, SWEEP, PRELOADS, type HistoryBox } from './historyHelpers.js';
 import { boundaryRow } from './historyFixtures.js';
 import { createStore, openWriter, closeWriter } from '../../ccd/history/store.mjs';
 import { historyPaths, sha256Hex, HEALTH_COUNTERS } from '../../ccd/history/lib.mjs';
@@ -4407,4 +4407,36 @@ describe('W1-B2 Task 23: a rebuild spread over two passes replaces the row a tic
       expect(match(X), 'the second pass replaced the tick\'s row (deleted first): X is no term').toBe(0);
     } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
   }, 240_000);
+});
+
+// ── wave 5h-1 CI fix (D-5638): node:sqlite on Node 22 binds positional arguments to ANONYMOUS parameters only ──
+// A numbered parameter (`?21`) is named "?21" by SQLite, so Node 22 skips it and the last positional argument fails with
+// "column index out of range" (measured on the node-floor leg, 22.16.0); Node 24 binds it, so the suites pass locally.
+// This scan reds on any Node, so the floor leg is not the only net.
+describe('no numbered SQL parameter in ccd/history (node:sqlite on Node 22 binds positional arguments to anonymous parameters only)', () => {
+  /** The file's code lines: whole-line `//` comments and the lines inside a block comment dropped. */
+  function codeLines(src: string): Array<{ n: number; text: string }> {
+    const out: Array<{ n: number; text: string }> = [];
+    let inBlock = false;
+    src.split('\n').forEach((raw, i) => {
+      let t = raw.trim();
+      if (inBlock) { if (t.includes('*/')) { inBlock = false; t = t.slice(t.indexOf('*/') + 2).trim(); } else return; }
+      if (t.startsWith('//')) return;
+      if (t.startsWith('/*')) { if (!t.includes('*/')) { inBlock = true; return; } t = t.slice(t.indexOf('*/') + 2).trim(); }
+      out.push({ n: i + 1, text: t });
+    });
+    return out;
+  }
+  it('no ccd/history/*.mjs code line carries a ?NNN parameter', () => {
+    const dir = path.join(REPO, 'ccd', 'history');
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.mjs'));
+    expect(files, 'CONTROL: the scan reads the history modules, sweep.mjs among them').toContain('sweep.mjs');
+    const hits: string[] = [];
+    for (const f of files) {
+      for (const l of codeLines(fs.readFileSync(path.join(dir, f), 'utf8'))) {
+        if (/\?[0-9]+/.test(l.text)) hits.push(`${f}:${l.n}`);
+      }
+    }
+    expect(hits, 'write a plain ? and bind the arguments in text order').toEqual([]);
+  });
 });

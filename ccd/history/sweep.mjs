@@ -4321,7 +4321,9 @@ function findLineEnd(fd, start, size) {
   return null;
 }
 
-// D-5638 (history-ingest-live-beats-exported-tie): the tie arm is bound by ?21, 1 at ingest (writeChunk) and 0 at segment
+// D-5638 (history-ingest-live-beats-exported-tie): the tie flag is the statement's 21st parameter, written as a plain ? because
+// node:sqlite on Node 22 binds positional arguments only to anonymous parameters (a numbered ?NNN fails there with "column index
+// out of range"; measured on the node-floor leg, 22.16.0). It is 1 at ingest (writeChunk) and 0 at segment
 // replay (replayEntryRow). A replayed copy never wins a tie, so a restore's entry keeps its structure on the live file the
 // backup held rather than move onto the exported: row replay just made (whose file_id is always the larger); and at ingest
 // a live copy beats an exported: holder at an equal rank whatever the file ids, which brings back an entry a replay took at
@@ -4338,7 +4340,7 @@ const ENTRY_UPSERT = `INSERT INTO entries (uuid, transcript_pk, type, subtype, r
     prov_version = excluded.prov_version, parse_state = excluded.parse_state,
     struct_rank_ns = excluded.struct_rank_ns, struct_file_id = excluded.struct_file_id
   WHERE excluded.struct_rank_ns > entries.struct_rank_ns
-     OR (?21 = 1 AND excluded.struct_rank_ns = entries.struct_rank_ns
+     OR (? = 1 AND excluded.struct_rank_ns = entries.struct_rank_ns
          AND (excluded.struct_file_id > entries.struct_file_id
               OR (SELECT status FROM ingest_files WHERE file_id = entries.struct_file_id) = 'exported'))`;
 

@@ -2085,7 +2085,7 @@ Each tick runs with umask 077, under the shim's flock. `history-off` is checked 
    - **Every verdict commits first.** A registry or journal mapping, or a family creation, that this file needs commits in its own `FULL` transaction before the file's first chunk, never inside a `NORMAL` chunk, because SQLite cannot change `synchronous` inside a transaction (§6.2; rev 3.2 review, CT10).
 5. **Write in chunks** of ≤16 MiB of parsed lines (*chosen*; RV7). Each chunk is one `BEGIN IMMEDIATE` transaction. It carries:
    - its blobs (insert-or-ignore by sha);
-   - entries, with `ON CONFLICT(uuid) DO UPDATE SET` the structure columns `WHERE excluded.struct_rank_ns > entries.struct_rank_ns OR (?21 = 1 AND = AND (excluded.struct_file_id > entries.struct_file_id OR the holder's status is 'exported'))` (RV15; wave 5h-1, D-5638: the bound tie flag is 1 at ingest and 0 at segment replay);
+   - entries, with `ON CONFLICT(uuid) DO UPDATE SET` the structure columns `WHERE excluded.struct_rank_ns > entries.struct_rank_ns OR (? = 1 AND = AND (excluded.struct_file_id > entries.struct_file_id OR the holder's status is 'exported'))` (RV15; wave 5h-1, D-5638: the `?` is the 21st bound parameter, the tie flag, 1 at ingest and 0 at segment replay);
    - memberships, variants, boundaries, sidecars and FTS rows;
    - **and, together with all of these, the cursor**, advanced to the chunk's last complete line, with that line's sha256 as `tail_sha256`.
    - Any throw rolls the chunk back. A partially ingested file is a normal state.
