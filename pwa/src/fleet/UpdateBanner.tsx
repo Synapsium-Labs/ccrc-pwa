@@ -49,14 +49,13 @@
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetHealth, UpdateChannel, UpdatesView } from '../../../shared/api';
-import { compareReleaseTags } from '../../../shared/semver';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../../shared/update-summary';
 import { planMove, type PlannedMove } from './movePlan';
 import { haltingNodes, updateAllHaltedText } from './updateHalt';
 import { UpdateMoveSheet } from './UpdateMoveSheet';
 import { WhatsNewSheet } from './WhatsNewSheet';
 import {
-  UPDATES_POLL_MS, UPDATES_STALE_TEXT, isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView,
+  UPDATES_POLL_MS, UPDATES_STALE_TEXT, isPlaceableInstant, newestPending, nodeVersion, useUpdatesView,
 } from './useUpdatesView';
 import './fleet.css';
 import { Button } from '@ccrc/ui';
@@ -74,19 +73,15 @@ export function bannerRelease(view: UpdatesView): { tag: string; channel: Update
   // answer differently about the same `lastOkAt`.
   if (typeof view.catalogue.lastOkAt !== 'number' || !isPlaceableInstant(view.catalogue.lastOkAt)) return null;
   if (!Array.isArray(view.nodes)) return null;
-  let best: { tag: string; channel: UpdateChannel } | null = null;
-  for (const n of view.nodes) {
-    const tag = pendingTag(n);
-    if (tag === null) continue;
-    // pendingTag answers a tag only for a node whose channel is an
-    // UpdateChannel (its contract). Restating that check here would be a
-    // SECOND arrow predicate — one that keeps this banner green over a
-    // pendingTag that lost its channel clause — so the type is asserted, not
-    // re-derived.
-    const channel = n.channel as UpdateChannel;
-    if (best === null || compareReleaseTags(tag, best.tag) === 1) best = { tag, channel };
-  }
-  return best;
+  // The newest arrow across the inventory, the same one the Settings release window puts first (D-5505).
+  const best = newestPending(view.nodes);
+  if (best === null) return null;
+  // pendingTag answers a tag only for a node whose channel is an
+  // UpdateChannel (its contract). Restating that check here would be a
+  // SECOND arrow predicate — one that keeps this banner green over a
+  // pendingTag that lost its channel clause — so the type is asserted, not
+  // re-derived.
+  return { tag: best.tag, channel: best.node.channel as UpdateChannel };
 }
 
 /** `${tag} is out on ${channel} — ${summary}.`, routed through the SAME L0

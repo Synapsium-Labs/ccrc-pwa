@@ -748,11 +748,11 @@ describe('SettingsScreen — the release list: helpers', () => {
   it('refusedLine: distinct refusing nodes out of the live count; null with no refusal; a malformed element is ignored', () => {
     const two = [t8Node(), t8Server()];
     expect(refusedLine(t8Release('v0.0.9'), two)).toBeNull();
-    expect(refusedLine(t8Release('v0.0.9', { refused: [{ by: T8_NODE_A, at: T8_T0 }] }), two)).toBe('refused by 1 of 2 nodes');
+    expect(refusedLine(t8Release('v0.0.9', { refused: [{ by: T8_NODE_A, at: T8_T0 }] }), two)).toBe('Refused by 1 of 2 nodes');
     expect(refusedLine(t8Release('v0.0.9', {
       refused: [{ by: T8_NODE_A, at: T8_T0 }, { by: T8_NODE_A, at: T8_T0 + 1 }, { by: T8_NODE_B, at: T8_T0 + 2 }],
-    }), two)).toBe('refused by 2 of 2 nodes');
-    expect(refusedLine(t8Release('v0.0.9', { refused: [{ by: T8_NODE_A, at: T8_T0 }] }), [t8Node()])).toBe('refused by 1 of 1 node');
+    }), two)).toBe('Refused by 2 of 2 nodes');
+    expect(refusedLine(t8Release('v0.0.9', { refused: [{ by: T8_NODE_A, at: T8_T0 }] }), [t8Node()])).toBe('Refused by 1 of 1 node');
     expect(refusedLine(t8Release('v0.0.9', { refused: {} as unknown as ReleaseWire['refused'] }), two)).toBeNull();
     expect(refusedLine(t8Release('v0.0.9', { refused: [null, { at: 1 }] as unknown as ReleaseWire['refused'] }), two)).toBeNull();
   });
@@ -770,18 +770,19 @@ describe('SettingsScreen — the release list: helpers', () => {
 });
 
 describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13)', () => {
-  const view = (releases: ReleaseWire[], nodes: NodeWire[]): UpdatesView => ({
+  const view = (releases: ReleaseWire[], nodes: NodeWire[], channel: 'stable' | 'dev' = 'stable'): UpdatesView => ({
     catalogue: { lastOkAt: T8_T0, lastError: null },
     releases,
     nodes,
-    intent: [{ scope: FLEET_SCOPE, channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: T8_T0, setBy: 'test' }],
+    intent: [{ scope: FLEET_SCOPE, channel, pinnedTag: null, auto: 'off', notify: 'channel', setAt: T8_T0, setBy: 'test' }],
   });
   /** Render the screen over one answer and return the release list — every case reads INSIDE it, because the
    *  inventory (Task 9) renders the same tags as node versions on the same screen. */
-  const renderList = async (releases: ReleaseWire[], nodes: NodeWire[]): Promise<HTMLElement> => {
-    vi.spyOn(api, 'updates').mockResolvedValue(view(releases, nodes));
+  const renderList = async (releases: ReleaseWire[], nodes: NodeWire[], channel: 'stable' | 'dev' = 'stable'): Promise<HTMLElement> => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view(releases, nodes, channel));
     render(<SettingsScreen />);
-    return screen.findByRole('list', { name: 'Releases' });
+    // The release window (D-5505) is a region of groups, each its own list; every case reads INSIDE the region.
+    return screen.findByRole('region', { name: 'Releases' });
   };
   const rowOf = (list: HTMLElement, tag: string): HTMLElement => {
     const row = list.querySelector<HTMLElement>(`li[data-tag="${tag}"]`);
@@ -792,19 +793,19 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
   it('renders "verified" when a node is measured verified at that tag (§18 "bundleListed is never verified")', async () => {
     const list = await renderList([t8Release('v0.0.9')], [t8Node(), t8Server({ provenance: 'unverified' })]);
     const row = rowOf(list, 'v0.0.9');
-    expect(within(row).getByText('verified')).toHaveClass('settings-badge--verified');
-    expect(within(row).getByText('bundle listed')).toBeInTheDocument();
+    expect(within(row).getByText('Checked on a node')).toHaveAttribute('title', 'A node installed it and verified its signature.');
+    expect(within(row).getByText('Signed bundle')).toBeInTheDocument();
   });
 
-  it('bundle listed alone renders "bundle listed", never "verified"', async () => {
+  it('a signed bundle alone renders "Signed bundle", never "Checked on a node"', async () => {
     const list = await renderList(
       [t8Release('v0.0.9', { bundleListed: true })],
       [t8Node({ provenance: 'unverified' }), t8Server({ provenance: 'unknown' })],
     );
     const row = rowOf(list, 'v0.0.9');
-    expect(within(row).getByText('bundle listed')).toBeInTheDocument();
-    expect(within(row).queryByText('verified')).toBeNull();
-    expect(row.querySelector('.settings-badge--verified')).toBeNull();
+    expect(within(row).getByText('Signed bundle'))
+      .toHaveAttribute('title', 'The release publishes a signature file, so a node can check what it downloads.');
+    expect(within(row).queryByText('Checked on a node')).toBeNull();
   });
 
   it('a node verified on ANOTHER tag does not verify this one', async () => {
@@ -812,16 +813,16 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
       [t8Release('v0.0.9'), t8Release('v0.0.8')],
       [t8Node({ current: t8Stamp('v0.0.8') }), t8Server({ current: t8Stamp('v0.0.8'), provenance: 'unverified' })],
     );
-    expect(within(rowOf(list, 'v0.0.9')).queryByText('verified')).toBeNull();
-    expect(within(rowOf(list, 'v0.0.8')).getByText('verified')).toBeInTheDocument();
+    expect(within(rowOf(list, 'v0.0.9')).queryByText('Checked on a node')).toBeNull();
+    expect(within(rowOf(list, 'v0.0.8')).getByText('Checked on a node')).toBeInTheDocument();
   });
 
-  it('reads "refused by 1 of 2 nodes" off refused[]', async () => {
+  it('reads "Refused by 1 of 2 nodes" off refused[]', async () => {
     const list = await renderList(
       [t8Release('v0.0.9', { refused: [{ by: T8_NODE_B, at: T8_T0 }] })],
       [t8Node(), t8Server()],
     );
-    expect(within(rowOf(list, 'v0.0.9')).getByText('refused by 1 of 2 nodes')).toHaveClass('settings-release-refused');
+    expect(within(rowOf(list, 'v0.0.9')).getByText('Refused by 1 of 2 nodes')).toHaveClass('settings-release-refused');
   });
 
   it('renders notes as literal text — no markup, no image, no link (§18 "notes are capped and plain")', async () => {
@@ -841,7 +842,7 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
       [t8Release('v0.0.9', { publishedAt: T8_T0 + 5 }), t8Release('v0.0.10', { publishedAt: T8_T0 })],
       [t8Node()],
     );
-    expect(within(list).getAllByRole('listitem').map((li) => li.getAttribute('data-tag'))).toEqual(['v0.0.10', 'v0.0.9']);
+    expect([...list.querySelectorAll('li[data-tag]')].map((li) => li.getAttribute('data-tag'))).toEqual(['v0.0.10', 'v0.0.9']);
   });
 
   it('names the move by direction: Roll back when every node runs a newer tag, Install otherwise, Running when every node is already there (wave 8 item F2, D-3591)', async () => {
@@ -864,7 +865,9 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
 
   it('renders every move button ENABLED, with no note beside it (spec §13 "W4 adds" — W3 rendered them disabled)', async () => {
     const list = await renderList(
-      [t8Release('v0.0.10'), t8Release('v0.0.9'), t8Release('v0.0.8', { channel: 'dev' })],
+      // v0.0.8 is Stable: this fleet is on Stable, and the release window offers a Stable fleet Stable rollback
+      // targets only (D-5505), so a Dev v0.0.8 would be counted under the window rather than drawn.
+      [t8Release('v0.0.10'), t8Release('v0.0.9'), t8Release('v0.0.8')],
       [t8Node({ current: t8Stamp('v0.0.9') }), t8Server({ current: t8Stamp('v0.0.9') })],
     );
     // v0.0.9 is what both nodes run already: no button there, the running row instead (wave 8 item F2).
@@ -1001,22 +1004,27 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
     expect(within(row).getByText('Running on every managed node')).toHaveClass('settings-release-running');
   });
 
-  it('badges the channel (dev / stable, none for an unknown one) and marks a yanked release', async () => {
+  it('names the channel (dev / stable, none for an unknown one) and marks a withdrawn release with its words (D-5505)', async () => {
+    // A Dev fleet on v0.0.12: its window's Roll back to holds all three, a channel this build cannot name included.
     const list = await renderList(
       [
+        t8Release('v0.0.12', { channel: 'dev' }),
         t8Release('v0.0.11', { channel: 'dev' }),
         t8Release('v0.0.10', { channel: 'stable', yanked: true }),
         t8Release('v0.0.9', { channel: null }),
       ],
-      [t8Node({ provenance: 'unknown' })],
+      [t8Node({ provenance: 'unknown', current: t8Stamp('v0.0.12'), highestVersion: 'v0.0.12' })],
+      'dev',
     );
     expect(within(rowOf(list, 'v0.0.11')).getByText('dev')).toHaveClass('settings-badge', 'settings-badge--dev');
     expect(within(rowOf(list, 'v0.0.10')).getByText('stable')).toHaveClass('settings-badge', 'settings-badge--stable');
-    expect(within(rowOf(list, 'v0.0.10')).getByText('yanked')).toHaveClass('settings-badge');
+    expect(within(rowOf(list, 'v0.0.10')).getByText('Withdrawn')).toHaveClass('settings-release-refused');
+    expect(within(rowOf(list, 'v0.0.10')).getByText(/^Its publisher withdrew it from GitHub\./)).toHaveClass('settings-release-refused');
+    expect(within(rowOf(list, 'v0.0.11')).getByText('Signed bundle')).toBeInTheDocument();
     const unknown = rowOf(list, 'v0.0.9');
     expect(unknown.querySelector('.settings-badge--dev, .settings-badge--stable')).toBeNull();
-    expect(within(unknown).queryByText('yanked')).toBeNull();
-    expect(within(rowOf(list, 'v0.0.11')).getByText('2026-09-23')).toHaveClass('settings-release-date');
+    expect(within(unknown).queryByText('Withdrawn')).toBeNull();
+    expect(within(rowOf(list, 'v0.0.11')).getByText('Released 2026-09-23')).toHaveClass('settings-release-date');
   });
 
   it('renders no release list when the catalogue holds no release', async () => {
@@ -2718,5 +2726,164 @@ describe('SettingsScreen — stall watch: source scans (P6, P9)', () => {
   it('P9: the section spells no level id — every level reaches it from L0', () => {
     for (const level of STALL_LEVELS) expect(sectionSrc).not.toMatch(new RegExp(`['"\`]${level}['"\`]`));
     expect(sectionSrc).toMatch(/STALL_LEVELS\.map/);
+  });
+});
+
+// ── Settings R1a: the release window of three (D-5505; settings spec §7, §4.1, §5.1) ──
+// The window over the whole screen: 22 releases, the five fixture fleets, the one halt line, and Updates' own "See
+// what's new". The pure cases are release-window.test.ts's; these hold what the screen renders from them.
+describe('SettingsScreen — the release window (D-5505)', () => {
+  const W_TAG = (n: number): string => `v0.1.${n}`;
+  const w22 = (over: (n: number) => Partial<ReleaseWire> = () => ({})): ReleaseWire[] =>
+    Array.from({ length: 22 }, (_, i) => t8Release(W_TAG(i + 1), { publishedAt: T8_T0 + i * 86_400_000, ...over(i + 1) }));
+  const wView = (releases: ReleaseWire[], nodes: NodeWire[], channel: 'stable' | 'dev' = 'stable'): UpdatesView => ({
+    catalogue: { lastOkAt: T8_T0, lastError: null },
+    releases,
+    nodes,
+    intent: [{ scope: FLEET_SCOPE, channel, pinnedTag: null, auto: 'off', notify: 'channel', setAt: T8_T0, setBy: 'test' }],
+  });
+  const at = (v: string | undefined, over: Partial<NodeWire> = {}): NodeWire[] => [
+    t8Node({ current: t8Stamp(v), highestVersion: v ?? null, ...over }),
+    t8Server({ current: t8Stamp(v), highestVersion: v ?? null, ...over }),
+  ];
+  const mount = async (v: UpdatesView): Promise<HTMLElement> => {
+    vi.spyOn(api, 'updates').mockResolvedValue(v);
+    render(<SettingsScreen />);
+    return screen.findByRole('region', { name: 'Releases' });
+  };
+  const HALTED: Partial<NodeWire> = { update: { state: 'failed', target: 'v0.1.17', startedAt: T8_T0, detail: 'gate: unit not up' } };
+
+  it('no release group renders more than three rows, over all five fixture fleets', async () => {
+    const fleets: Array<[string, UpdatesView]> = [
+      ['uniform', wView(w22(), at(W_TAG(11)))],
+      ['mixed', wView(w22(), [t8Node({ current: t8Stamp(W_TAG(4)), highestVersion: W_TAG(4) }), t8Server({ current: t8Stamp(W_TAG(18)), highestVersion: W_TAG(18) })])],
+      ['unmeasured', wView(w22(), [t8Node({ current: t8Stamp(W_TAG(11)) }), t8Server({ measuredAt: null })])],
+      ['all macOS', wView(w22(), [t8Node({ os: 'darwin', role: null, label: 'mac', current: t8Stamp(W_TAG(3)) })])],
+      ['stable with newer dev', wView(w22((n) => (n > 2 ? { channel: 'dev' } : {})), at(W_TAG(2)))],
+    ];
+    for (const [name, v] of fleets) {
+      const region = await mount(v);
+      const groups = region.querySelectorAll('ul');
+      expect(groups.length, name).toBeGreaterThan(0);
+      for (const g of groups) expect(g.querySelectorAll('li[data-tag]').length, `${name}: ${g.getAttribute('aria-label')}`).toBeLessThanOrEqual(3);
+      expect(region.querySelectorAll('li[data-tag]').length, name).toBeLessThanOrEqual(7);
+      if (name === 'all macOS') {
+        expect(within(region).queryAllByRole('button'), 'an unmanaged fleet is moved on the Mac itself: no move button').toEqual([]);
+        expect(within(region).getByText('macOS nodes are updated on the Mac itself.')).toBeInTheDocument();
+      }
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('a withdrawn running release keeps its row and adds "Withdrawn by its publisher" in the withdrawn word\'s ink', async () => {
+    const region = await mount(wView(w22((n) => (n === 22 ? { yanked: true } : {})), at(W_TAG(22))));
+    const row = region.querySelector<HTMLElement>(`li[data-tag="${W_TAG(22)}"]`)!;
+    expect(within(row).getByText('Running on every managed node')).toBeInTheDocument();
+    expect(within(row).getByText('Withdrawn by its publisher')).toHaveClass('settings-release-refused');
+  });
+
+  it('the node-row Roll back is offered when its previousVersion is outside the window', async () => {
+    const region = await mount(wView(w22(), [
+      t8Node({ current: t8Stamp(W_TAG(22)), highestVersion: W_TAG(22), previousVersion: W_TAG(5) }),
+      t8Server({ current: t8Stamp(W_TAG(22)), highestVersion: W_TAG(22), previousVersion: W_TAG(6) }),
+    ]));
+    expect(region.querySelector(`li[data-tag="${W_TAG(5)}"]`), 'CONTROL: v0.1.5 is outside the window').toBeNull();
+    const nodes = screen.getByRole('list', { name: 'Nodes' });
+    const back = within(nodes.querySelector<HTMLElement>(`li[data-node-id="${T8_NODE_A}"]`)!).getByRole('button', { name: 'Roll back' });
+    expect(back).not.toBeDisabled();
+    fireEvent.click(back);
+    const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual([`1. fleet (fleet) ${W_TAG(22)} → ${W_TAG(5)}`]);
+  });
+
+  it('Refused by n of m nodes opens the refusals', async () => {
+    const region = await mount(wView(
+      w22((n) => (n === 21 ? { refused: [{ by: T8_NODE_B, at: T8_T0 }] } : {})), at(W_TAG(22)),
+    ));
+    const row = region.querySelector<HTMLElement>(`li[data-tag="${W_TAG(21)}"]`)!;
+    const said = within(row).getByText('Refused by 1 of 2 nodes');
+    const fold = said.closest('details');
+    expect(fold, 'the sentence is a disclosure').not.toBeNull();
+    expect(fold!.open).toBe(false);
+    fireEvent.click(said);
+    expect(fold!.open).toBe(true);
+    expect(fold!.textContent).toContain('server');
+  });
+
+  it('one halt line; every gated Install or Update names it in aria-describedby; absent when no gated control renders', async () => {
+    const [fleetRow, serverRow] = at(W_TAG(15), { desiredTag: W_TAG(17) });
+    const region = await mount(wView(w22(), [{ ...fleetRow!, ...HALTED }, serverRow!]));
+    const lines = screen.getAllByText(/^Update all waits:/);
+    expect(lines, 'one halt line on the page').toHaveLength(1);
+    const line = lines[0]!;
+    expect(line.textContent).toContain('Clear it with Ack on that node, under Nodes, after you have fixed what made it fail.');
+    const installs = within(region).getAllByRole('button', { name: 'Install' });
+    const updates = within(screen.getByRole('list', { name: 'Nodes' })).getAllByRole('button', { name: 'Update' });
+    expect(installs.length + updates.length).toBe(5);
+    for (const b of [...installs, ...updates]) {
+      expect(b).toBeDisabled();
+      expect(b.getAttribute('aria-describedby')).toBe(line.id);
+    }
+    // The halt line comes before every list it gates.
+    expect(line.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    cleanup();
+    vi.restoreAllMocks();
+    await mount(wView(w22(), at(W_TAG(22), { ...HALTED })));
+    expect(screen.queryByText(/^Update all waits:/), 'no Install and no pending Update on screen').toBeNull();
+  });
+
+  it("See what's new opens WhatsNewSheet with the waiting tag, and is absent when no tag is pending", async () => {
+    await mount(wView(w22(), at(W_TAG(20), { desiredTag: W_TAG(22) })));
+    expect(screen.getByText(`${W_TAG(22)} available`)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: "See what's new" }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(`What's new since ${W_TAG(20)}`)).toBeInTheDocument();
+    expect(within(dialog).getAllByRole('listitem').map((li) => li.getAttribute('data-tag')).filter(Boolean))
+      .toEqual([W_TAG(22), W_TAG(21)]);
+    cleanup();
+    vi.restoreAllMocks();
+    await mount(wView(w22(), at(W_TAG(20))));
+    expect(screen.queryByRole('button', { name: "See what's new" })).toBeNull();
+  });
+
+  it("the Newer count line's See every change opens the same sheet", async () => {
+    const region = await mount(wView(w22(), at(W_TAG(15), { desiredTag: W_TAG(22) })));
+    expect(within(region).getByText(/^4 more newer releases on this channel are not shown\./)).toBeInTheDocument();
+    fireEvent.click(within(region).getByRole('button', { name: `See every change since ${W_TAG(15)}` }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(`What's new since ${W_TAG(15)}`)).toBeInTheDocument();
+    expect(within(dialog).getByText('7 releases')).toBeInTheDocument();
+  });
+
+  it('the waiting release\'s Notes are open, the others folded', async () => {
+    const notes = 'Changes since v0.1.0\n\nNew\n- A thing #9\n';
+    const region = await mount(wView(w22(() => ({ notes })), at(W_TAG(18), { desiredTag: W_TAG(20) })));
+    const fold = (t: string): HTMLDetailsElement =>
+      region.querySelector<HTMLDetailsElement>(`li[data-tag="${t}"] details.settings-release-notes-fold`)!;
+    expect(fold(W_TAG(20)).open).toBe(true);
+    expect(fold(W_TAG(22)).open).toBe(false);
+    expect(fold(W_TAG(17)).open).toBe(false);
+  });
+
+  it('TEXT IS TEXT: the notes surfaces carry no raw-HTML path, no <pre> of their own in the rows, and exactly one link — the TextLink built by pullUrl', () => {
+    const src = (...p: string[]): string => readFileSync(path.join(import.meta.dirname, '..', 'src', ...p), 'utf8');
+    const files: Array<[string, string]> = [
+      ['updates.tsx', src('screens', 'updates.tsx')],
+      ['ReleaseNotes.tsx', src('fleet', 'ReleaseNotes.tsx')],
+      ['WhatsNewSheet.tsx', src('fleet', 'WhatsNewSheet.tsx')],
+    ];
+    let links = 0;
+    for (const [name, s] of files) {
+      expect(s, name).not.toMatch(/dangerouslySetInnerHTML/);
+      expect(s, name).not.toMatch(/\binnerHTML\b/);
+      expect(s, name).not.toMatch(/<a[\s>]/);
+      links += (s.match(/<TextLink\b/g) ?? []).length;
+    }
+    expect(links).toBe(1);
+    expect(src('fleet', 'ReleaseNotes.tsx')).toMatch(/const url = pullUrl\(source, p\.pr\);[\s\S]*<TextLink key=\{i\} href=\{url\}/);
+    // The rows render notes through ReleaseNotes, never a <pre> of their own.
+    expect(files[0]![1]).not.toMatch(/<pre[\s>]/);
+    expect(files[0]![1]).toMatch(/<ReleaseNotes notes=\{r\.notes\} source=\{source\} \/>/);
   });
 });
