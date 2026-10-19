@@ -23,7 +23,9 @@ import type { RunKind, RunRefuseCode, RunSummary } from '../../../shared/api.js'
  * order is pinned by `open-run-preconditions.test.ts`'s gate-order table: a row
  * per adjacent pair one body can trip together, each with a recorded reorder
  * mutant. A new gate (Task 11b's attribution, project-mismatch and
- * not-a-child) is a new entry here plus its rows there.
+ * not-a-child) is a new entry here plus its rows there. Since D-5523 the
+ * `claimantProject` gate measures and stamps the claimant's project but no
+ * longer compares it: a coordinator may sit in any project.
  *
  * PURE OVER ITS FACTS. The store reads are passed in as synchronous lookups and
  * called LAZILY, by the gate that needs each one, so a refusal still costs only
@@ -222,9 +224,6 @@ interface Ctx {
   verdict?: HomeProjectVerdict;
   unattributed?: boolean;
   coordProject?: string;
-  /** The programme's home after `homeVerdict`: the body's shaped home, else
-   *  (a legacy open) the stored one, else null. */
-  effectiveHome?: string | null;
   mark?: SessionMarkRead;
 }
 
@@ -338,7 +337,6 @@ const GATES = [
     c.verdict = v;
     if (v.kind === 'mismatch') return { refused: 'home-mismatch', by: v.by };
     if (v.kind === 'required') return bad('homeProject is required');
-    c.effectiveHome = c.home !== undefined ? c.home : known ? c.f.programHome(c.slug!) : null;
     return undefined;
   }],
   // §12: a dispatched worker may not coordinate. EVERY open claimant is read
@@ -348,30 +346,29 @@ const GATES = [
     const workerOf = c.f.openClaimantsOf(c.b.claimedBy as string).find((x) => x !== c.b.claimedBy);
     return workerOf !== undefined ? { refused: 'claimant-is-a-worker', by: workerOf } : undefined;
   }],
-  // D-5298 (spec §4, §6.4), D-5388: a session in another project cannot
-  // become a child's parent. The claimant's OWN registry project must equal
-  // the run's — not F1's weaker "the session's history agrees with the run" —
-  // OR the programme's home (`effectiveHome`), because a programme's waves may
-  // run in ANY project (the cross-repo ruling of 2026-08-11): a crossing's
-  // coordinator sits in the home. A crossing binds only a fresh spawn
-  // (`crossingSession` below). On every open, a `sessionId` or not: a
-  // fresh-spawn dispatch later makes a child of the run's project whose parent
-  // is this claimant. FAILS CLOSED: a row that records no project is refused
-  // (`by` absent, the sentence says why), an unreadable field is the transient
-  // 502. After the DB-only gates — a registry read is the dearer one — and
-  // before `notAChild`.
+  // D-5298 (spec §4, §6.4), D-5388, D-5523: the claimant's OWN registry
+  // project, MEASURED and stamped (`coordProject`) — never compared. Since the
+  // operator's ruling of 2026-10-18 (#601) a coordinator may sit in ANY project
+  // and run a programme whose home and runs are elsewhere, which supersedes
+  // D-5388's "the run's project or the programme's home". What stays project-
+  // checked is the BINDING: F1 above, and `crossingSession` below, which reads
+  // this stamp so a claimant outside the run's project binds only a fresh
+  // spawn. On every open, a `sessionId` or not. FAILS CLOSED, because both the
+  // stamp and `crossingSession` need a measurement: a row that records no
+  // project is refused (`by` absent, the sentence says why), an unreadable
+  // field is the transient 502. After the DB-only gates — a registry read is
+  // the dearer one — and before `notAChild`.
   ['claimantProject', async (c) => {
-    const project = c.target !== undefined ? c.target.project : c.b.project as string;
     const r = await c.f.claimantProject(c.b.claimedBy as string);
     if (r.kind === 'unreadable') {
       return { error: 'registry-unmeasurable',
         detail: "the claimant's registry project could not be read — transient, not a fact about the claimant" };
     }
     if (r.kind === 'none') {
-      return { refused: 'project-mismatch', detail: "the claimant's registry row records no project, so it cannot be the run's" };
+      return { refused: 'project-mismatch', detail: "the claimant's registry row records no project, so its project cannot be stamped" };
     }
     c.coordProject = r.project;
-    return r.project !== project && r.project !== c.effectiveHome ? { refused: 'project-mismatch', by: r.project } : undefined;
+    return undefined;
   }],
   // D-5298 (spec §4): a session the operator created cannot become a child. A
   // `sessionId` naming an existing registry row whose `ChildMark` is not
@@ -393,12 +390,15 @@ const GATES = [
     }
     return undefined;
   }],
-  // D-5388: a crossing (the claimant is of the home, not of the run) binds
-  // only a FRESH spawn. An existing child row of the run's project would
-  // otherwise be rebound to a parent outside its project — a child of any
-  // other programme whose home a confused session claims. A row-less id (the
+  // D-5388, D-5523: a crossing (the claimant is not of the run's project —
+  // of the home, or of any project since D-5523) binds only a FRESH spawn. An
+  // existing child row of the run's project would otherwise be rebound to a
+  // parent outside its project — a child of any other programme a confused
+  // session claims. A row-less id (the
   // dispatch before `ws-add`) is admitted, like `notAChild`'s; `deferred` is
   // left to rule 3's child gate. Reads `notAChild`'s mark, never a second one.
+  // Its `c.target` arm is defensive: `reviewSession` already refuses every
+  // review that names a `sessionId`, so today only a work run reaches here.
   ['crossingSession', (c) => {
     if (typeof c.b.sessionId !== 'string' || c.mark?.kind !== 'child') return undefined;
     const project = c.target !== undefined ? c.target.project : c.b.project as string;

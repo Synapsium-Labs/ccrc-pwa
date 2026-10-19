@@ -40,10 +40,11 @@ export const AMenu: Story = {
 };
 
 /** The account picker, which is where the other copy lived — the same twelve
- *  declarations with a different voice on top. CHECK that the row is 52px and
- *  not 44: the extra eight pixels are what separate neighbours under a thumb
- *  that is scrolling, which is why both rules spelled the literal rather than
- *  reaching for `--tap-min`. */
+ *  declarations with a different voice on top. CHECK, in Refined, that the
+ *  row is 52px and not 44: the extra eight pixels are what separate neighbours
+ *  under a thumb that is scrolling. `--row-h` (D-5093) is the row's
+ *  minimum height: Instrument's is 44px, or 32px under a fine pointer, and
+ *  `py-2` plus the content set the drawn height (D-5461). */
 export const AnAccountPicker: Story = {
   args: {
     className: '',

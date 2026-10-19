@@ -612,6 +612,7 @@ describe('every strip head keeps the height it had on main — the whole chrome,
     ['mail-strip.css', '.mail-strip .mail-strip-head', mailStripCss],
     ['task-strip.css', '.task-head', readUi('components', 'task-strip.css')],
     ['fleet.css', '.hotfiles-head', fleetCss],
+    ['workflow-strip.css', '.workflow-strip .workflow-head', readUi('components', 'workflow-strip.css')],
   ];
 
   // THE FLOOR IS CHOSEN IN ONE COMPONENT, PER STRIP. All three heads declared
@@ -687,7 +688,7 @@ describe('every strip head keeps the height it had on main — the whole chrome,
       .filter((f) => /<CollapsibleStrip\b/.test(readFileSync(f, 'utf8')))
       .map((f) => path.basename(f))
       .sort();
-    expect(consumers).toEqual(['HotFilesStrip.tsx', 'mail-strip.tsx', 'task-strip.tsx']);
+    expect(consumers).toEqual(['HotFilesStrip.tsx', 'mail-strip.tsx', 'task-strip.tsx', 'workflow-strip.tsx']);
     expect(consumers).toHaveLength(HEADS.length);
   });
 });

@@ -62,7 +62,7 @@ export const RADIO_FIELDSET = 'group grid min-w-0 m-0 p-0 border-0';
 
 /** Its name. The micro-label register — mono, `--fs-xs`, medium — which is
  *  `EYEBROW`'s family without its uppercase: a legend is a phrase, not a tag. */
-export const RADIO_LEGEND = 'p-0 mb-1 font-mono text-xs font-medium leading-tight';
+export const RADIO_LEGEND = 'p-0 mb-1 font-mono text-meta font-medium leading-tight';
 
 export interface RadioProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> {
   /** What the choice says. Wrapped in `RADIO_SENTENCE` unless `bare`. */

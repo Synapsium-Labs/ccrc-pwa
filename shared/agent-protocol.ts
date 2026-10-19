@@ -11,7 +11,11 @@
 // `shared/update-move.ts` (UPDATE_OP; D-4266), so the rule is now also a fact
 // about a bundled file — this repo reads its comments as history.
 import type { BuildInfo } from './buildinfo.js';
-import { isReleaseTag, isRequestKind, type InFlightReport, type RequestKind } from './api.js';
+import {
+  ACCOUNT_OP_KILL_GRACE_MS, ACCOUNT_SUB_TIMEOUT_MS, isReleaseTag, isRequestKind, type AccountSub, type InFlightReport,
+  type RequestKind,
+} from './api.js';
+import { ACCOUNT_ARGV_REFUSALS, type AccountArgvRefusal } from './account-argv.js';
 
 export interface AgentHello { t: 'hello'; token: string }
 /** `ccdVerbs` is what `ccd caps` printed on the AGENT's box at start —
@@ -172,6 +176,12 @@ export type NodeFileKey = keyof typeof NODE_FILES;
 /** The nine names as one list, DERIVED — the agent's admission set and every
  *  scan over it read this, never a restatement. */
 export const NODE_FILE_BASENAMES: readonly string[] = Object.values(NODE_FILES);
+
+/** The shape of a node id, `NODE_FILES.nodeId`'s one line: the lowercase uuid `_inst_node_id` mints and nothing else,
+ *  so an uppercase, padded or CR-terminated `~/.ccrc/node-id` never becomes a row key or a `fleetIdentity`. Declared
+ *  ONCE, here, beside the file it reads (moved from `server/src/coord/store.ts`, which re-exports it, so the agent's
+ *  `account` op can answer `fleetIdentity` with the same grammar, D-5622). */
+export const NODE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
  * The `$REG/pool-epoch` document's numeric sub-grammar — `_acct_pool_state`'s
@@ -347,7 +357,16 @@ export interface TokenSyncReq { t: 'req'; id: number; op: 'token-sync'; code: st
 export interface PtyInput    { t: 'pty'; ptyId: number; ev: 'input'; dataB64: string }
 export interface PtyResize   { t: 'pty'; ptyId: number; ev: 'resize'; cols: number; rows: number }
 export interface PtyClose    { t: 'pty'; ptyId: number; ev: 'close' }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq;
+/** Accounts plan Task A8 (spec §13.2, D-5513, D-5622): ONE member of the `req` envelope, the typed `ccrc account <sub>`
+ *  op. `laneId` names the lane (the envelope's `id` is the request number), `null` for the subs that name none.
+ *  `fields` are typed values the agent's builder (`shared/account-argv.ts`) turns into flags, never argv; `stdinB64`
+ *  is the secret or code, the child's stdin, never logged. Every argument failure is answered `ok: true` with
+ *  `kind: 'refused'` and the node's `fleetIdentity` (`AccountOpAnswer`), never `bad-request`, which from this op
+ *  means "the agent predates it". */
+export interface AccountOpReq {
+  t: 'req'; id: number; op: 'account'; sub: AccountSub; laneId: string | null; fields: Readonly<Record<string, string>>; stdinB64?: string;
+}
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 /** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
  *  agent can say beyond the word — the `--detach` parent's first stderr line,
@@ -369,6 +388,7 @@ export interface ResErr { t: 'res'; id: number; ok: false; err: string; detail?:
 //   `regular` is the only answer that lets a caller condemn anything.
 // writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}; update → {accepted: true, detail?: string} (D-3413: `detail` only from the bound's arms B and D)
 // token-sync → {synced: <16 hex>, transport?: 'http'|'https'} (transport ADDITIVE; its one reader is readTokenTransport)
+// account → AccountOpAnswer: {fleetIdentity, kind, …} for every outcome, a refusal included (its one reader is readAccountOpAnswer)
 
 // ── the `update` op (design 2026-09-20 §10) ─────────────────────────────────
 // Everything both ends of the op must agree on is declared here, once. The
@@ -772,3 +792,61 @@ export interface TailReset { t: 'tail'; tailId: number; reset: true; size: numbe
 export interface PtyData   { t: 'pty'; ptyId: number; ev: 'data'; dataB64: string }
 export interface PtyExit   { t: 'pty'; ptyId: number; ev: 'exit' }
 export interface Ping { t: 'ping' }  export interface Pong { t: 'pong' }
+
+// ── the `account` op (accounts spec §13.2; plan Task A8, D-5513, D-5622) ─────
+// Everything both ends agree on, declared once. The agent (`agent/src/accountop.ts`, `agent/src/server.ts`) builds
+// argv with `buildAccountArgv` and answers `AccountOpAnswer`; the server's remote arm (`server/src/accounts/ops.ts`)
+// sends `AccountOpReq` and reads the answer with `readAccountOpAnswer`. The sub union, its bounds, the kill grace and
+// the output cap live in `shared/api.ts` (A7) for both arms.
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const ACCOUNT_OP = 'account';
+
+/** After the SIGKILL, how long the agent waits for the child's pipes to close before it answers anyway. */
+export const ACCOUNT_OP_DRAIN_MS = 2_000;
+
+/** The server's `FleetClient.request` deadline for one sub: the sub's bound, the kill grace, the drain and a margin,
+ *  so the agent always answers first and a lost answer means the link, never the bound. */
+export function accountOpRequestTimeoutMs(sub: AccountSub): number {
+  return ACCOUNT_SUB_TIMEOUT_MS[sub] + ACCOUNT_OP_KILL_GRACE_MS + ACCOUNT_OP_DRAIN_MS + 5_000;
+}
+
+/** How one `account` op ended on the node, each arm kept apart:
+ *  `exited`      the verb ran and exited with `code`; `stdout` is its whole output (one JSON document).
+ *  `timeout`     the sub outran its bound: SIGTERM to its group, SIGKILL after the grace. Outcome UNKNOWN (D-5518).
+ *  `too-large`   stdout passed `ACCOUNT_OP_OUTPUT_MAX_BYTES`; the child was killed. Outcome unknown, as `timeout`.
+ *  `not-started` the launcher could not be started. Nothing ran.
+ *  `refused`     the builder refused before any spawn (`AccountArgvRefusal`). Nothing ran. */
+export type AccountOpOutcome =
+  | { kind: 'exited'; code: number; stdout: string }
+  | { kind: 'timeout' }
+  | { kind: 'too-large' }
+  | { kind: 'not-started' }
+  | { kind: 'refused'; why: AccountArgvRefusal };
+
+/** The op's `ok: true` payload. `fleetIdentity` is the node's `~/.ccrc/node-id` read through `NODE_ID_RE` when the
+ *  answer was built, `null` when absent, unreadable or malformed: every answer carries it (spec §13.2). */
+export type AccountOpAnswer = AccountOpOutcome & { fleetIdentity: string | null };
+
+/** THE ONE READER of an `account` op's answer. `null` is "no answer to trust" (a field off its grammar), never an
+ *  outcome: the caller reads it as unknown. */
+export function readAccountOpAnswer(raw: unknown): AccountOpAnswer | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const fid = r.fleetIdentity;
+  if (fid !== null && (typeof fid !== 'string' || !NODE_ID_RE.test(fid))) return null;
+  const fleetIdentity = fid as string | null;
+  switch (r.kind) {
+    case 'exited':
+      if (typeof r.code !== 'number' || !Number.isInteger(r.code) || r.code < 0 || r.code > 255) return null;
+      if (typeof r.stdout !== 'string') return null;
+      return { kind: 'exited', code: r.code, stdout: r.stdout, fleetIdentity };
+    case 'timeout': case 'too-large': case 'not-started':
+      return { kind: r.kind, fleetIdentity };
+    case 'refused':
+      if (typeof r.why !== 'string' || !(ACCOUNT_ARGV_REFUSALS as readonly string[]).includes(r.why)) return null;
+      return { kind: 'refused', why: r.why as AccountArgvRefusal, fleetIdentity };
+    default:
+      return null;
+  }
+}

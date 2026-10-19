@@ -49,7 +49,7 @@ import {
   type DelegationCheckpointV1,
   type DelegationLeaseRow,
 } from '../src/coord/delegation-model.js';
-import { FLEET_PROTO, FLEET_PROTO_MIN, type DelegationObservationHealth } from '../../shared/api.js';
+import { FLEET_PROTO, FLEET_PROTO_MIN, type DelegationObservationHealth, type FleetSession } from '../../shared/api.js';
 import { READ_FROM_MAX_BYTES } from '../../shared/agent-protocol.js';
 import { makeCcdHarness } from './ccdWsHelpers.js';
 import * as policy from '../src/coord/delegation-policy.js';
@@ -135,7 +135,10 @@ function world(opts: WorldOptions = {}): World {
   return made;
 }
 
-const sessionOf = (id: string, status: 'idle' | 'busy' | 'dead' = 'idle', project = 'demo') => ({ id, project, status });
+const sessionOf = (
+  id: string, status: 'idle' | 'busy' | 'dead' = 'idle', project = 'demo',
+  over: Partial<{ stoppedBy: FleetSession['stoppedBy']; archivedAt: FleetSession['archivedAt'] }> = {},
+) => ({ id, project, status, stoppedBy: null as FleetSession['stoppedBy'], archivedAt: null as FleetSession['archivedAt'], ...over });
 const recordOf = (id: string, project = 'demo', child: { kind: 'none' | 'child' | 'unreadable' } = { kind: 'none' }) => ({ id, project, child });
 type Sess = ReturnType<typeof sessionOf>;
 type Rec = ReturnType<typeof recordOf>;
@@ -1378,13 +1381,14 @@ describe('8. the closed scope census', () => {
   it('no new agent request operation, capability word or protocol bump: `readFrom` is the same op with one optional field', () => {
     expect([FLEET_PROTO, FLEET_PROTO_MIN]).toEqual([1, 1]);
     const proto = read('shared/agent-protocol.ts');
-    // the request ops are a small closed set: exactly main's fourteen, whatever form a new one is declared in (an interface, or a
-    // `type X = { ...; op: 'x' }` alias, which an interface-shaped parse cannot see), and exactly main's fourteen members of the union
+    // the request ops are a small closed set: exactly main's fifteen (the fifteenth, `account`, is the accounts plan's A8, not
+    // delegation's), whatever form a new one is declared in (an interface, or a `type X = { ...; op: 'x' }` alias, which an
+    // interface-shaped parse cannot see), and exactly main's fifteen members of the union
     const ops = [...proto.matchAll(/\bop:\s*'([\w-]+)'/g)].map((m) => m[1]!);
     expect(ops, 'every request op the protocol declares').toEqual(['exec', 'read', 'readFrom', 'readB64', 'readdir', 'stat', 'lstat', 'caps', 'writeB64', 'tailOpen',
-      'tailClose', 'ptyOpen', 'update', 'token-sync']);
+      'tailClose', 'ptyOpen', 'update', 'token-sync', 'account']);
     expect(/export type AgentReq = ([^;]+);/.exec(proto)![1]!.split('|').map((m) => m.trim()), 'the union of requests').toEqual(['ExecReq', 'ReadReq', 'ReadFromReq',
-      'ReadB64Req', 'ReaddirReq', 'StatReq', 'LstatReq', 'WriteB64Req', 'TailOpenReq', 'TailCloseReq', 'PtyOpenReq', 'CapsReq', 'UpdateReq', 'TokenSyncReq']);
+      'ReadB64Req', 'ReaddirReq', 'StatReq', 'LstatReq', 'WriteB64Req', 'TailOpenReq', 'TailCloseReq', 'PtyOpenReq', 'CapsReq', 'UpdateReq', 'TokenSyncReq', 'AccountOpReq']);
     expect(proto).toMatch(/export interface ReadFromReq \{ t: 'req'; id: number; op: 'readFrom'; path: string; offset: number; maxBytes\?: number \}/);
     expect(proto.match(/\bmaxBytes\b/g)!.length).toBeGreaterThan(0);
     // the ready frame, the advertised words and the agent's op switch carry nothing of the broker's

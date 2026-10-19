@@ -1160,6 +1160,7 @@ describe('every stylesheet under src/ is audited', () => {
     const APP_SHEETS = [
       'src/docs/docs.css',
       'src/fleet/fleet.css',
+      'src/screens/digest.css',   // the daily digest screen (D-5300)
       'src/session/chat.css',
       'src/styles/base.css',
       'src/styles/shell.css',

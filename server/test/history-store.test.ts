@@ -2350,3 +2350,469 @@ describe('schema v2: the owed-row index, its covering probe and the node indexes
     }
   });
 });
+
+// ===========================================================================
+// W1-B4 Task 4: export segments (spec 2026-10-05 §9.15 "Write", "Who reads
+// it"; §9.14 "Export replay"; O39's store half). In-process on real files in
+// mkTmp directories, and in a child that the fault preload kills or that runs
+// under umask 0002. The imports are namespaced, so this block binds no name the
+// file already binds; ESM hoists them.
+// ===========================================================================
+import * as segStore from '../../ccd/history/store.mjs';
+import * as segLib from '../../ccd/history/lib.mjs';
+
+describe('store.mjs: export segments (W1-B4; spec 9.15 "Write", "Who reads it"; O39 store half)', () => {
+  const SEG_STORE_MJS = path.resolve(__dirname, '../../ccd/history/store.mjs');
+  const SEG_FAULTS = path.resolve(__dirname, 'fixtures/history/preload-faults.mjs');
+  const SID = '0189abcd-1234-4678-9abc-0000000000f1';
+  const W = '0a1b2c3d';
+  const G = '0189abcd-1234-4678-9abc-0000000000f2';
+  const U1 = '0189abcd-1234-4678-9abc-0000000000a1';
+  const E1 = '0189abcd-1234-4678-9abc-0000000000b1';
+  const E2 = '0189abcd-1234-4678-9abc-0000000000b2';
+  const PATH = '/home/u/.claude-a/projects/-home-u-tree-demo/0189abcd-1234-4678-9abc-0000000000a1.jsonl';
+  const DEV = 2049n;
+  const INO = 2n ** 60n + 7n;                        // past 2^53: kept exact only as a BigInt
+  const NS = 1_764_000_000_123_456_789n;
+  const segMode = (p: string): number => fs.statSync(p).mode & 0o777;
+  const segWord = (fn: () => unknown): string => {
+    try { fn(); } catch (e) { return e instanceof StoreError ? e.word : `not a StoreError: ${String(e)}`; }
+    return 'no throw';
+  };
+  const sha = (n: number): Uint8Array => new Uint8Array(32).fill(n);
+  const meta = (seq: number, o: Partial<segStore.SegmentMeta> = {}): segStore.SegmentMeta =>
+    ({ storeId: SID, writer: W, seq, harnesses: ['claude-code'], cutoffMs: 1_764_000_000_000, format: segLib.EXPORT_SEGMENT_FORMAT, ...o });
+  const freshDir = (): string => segStore.ensureSegmentDir(path.join(mkTmp('ccrc-history-seg-'), segLib.EXPORT_DIR), SID);
+  const nameOf = (seq: number): string => segLib.segmentName({ seq, writer: W });
+  const entryRow = (uuid: string, blob: Uint8Array): segStore.SegmentRows['entry'] => ({
+    uuid, cc_session_uuid: U1, agent_id: '', type: 'user', subtype: null, role: 'user', model: null, parent_uuid: null,
+    ts_ms: 1_000_010, request_id: null, api_block_index: null, msg_id: null, source_tool_use_id: null, tool_name: null,
+    is_compact_summary: 0, provenance: 'operator', prov_version: 1, parse_state: 'ok', struct_rank_ns: NS, struct_path: PATH,
+    struct_dev: DEV, struct_ino: INO, blob_sha256: blob,
+  });
+  /** One row of every kind, in write order, plus a carried blob and a stub. */
+  const fillAll = (ins: segStore.SegmentInserts): number[] => {
+    ins.blob({ sha256: sha(1), codec: 'br5', raw_len: 11, z: new Uint8Array([1, 2, 3]), pruned: false });
+    ins.blob({ sha256: sha(2), codec: 'br5', raw_len: 40, z: null, pruned: true });
+    return [
+      ins.family({ ccrc_id: 'claude-a-demo', generation: G, project: 'demo', first_seen_ms: 1_000_000 }),
+      ins.transcript({ cc_session_uuid: U1, agent_id: '', harness: 'claude-code', parent_tool_use_id: null, workflow_run_id: null, agent_type: null }),
+      ins.epoch({ ccrc_id: 'claude-a-demo', generation: G, seq: 1, cc_session_uuid: U1, cause: 'startup', declared_by: 'hook',
+        started_ms: 1_000_000, cwd: '/home/u/tree/demo', cwd_real: '/home/u/tree/demo', git_branch: 'main', confirmed_ms: 1_000_001 }),
+      ins.file({ path: PATH, dev: DEV, ino: INO, cc_session_uuid: U1, agent_id: '', size: 512, mtime_ns: NS, eof_ms: 1_000_500 }),
+      ins.entry(entryRow(E1, sha(1))),
+      ins.variant({ uuid: E1, blob_sha256: sha(2), first_path: PATH, first_dev: DEV, first_ino: INO, first_seen_ms: 1_000_020, cause: 'unknown' }),
+      ins.boundary({ uuid: E1, cc_session_uuid: U1, agent_id: '', boundary_ord: 1, trigger: 'manual', head_uuid: null, anchor_uuid: null,
+        tail_uuid: null, kept_sha256: null, pre_tokens: 100, post_tokens: 10, duration_ms: 5 }),
+      ins.sidecar({ cc_session_uuid: U1, agent_id: '', name: 'tool-results/x.txt', blob_sha256: sha(1), uuid: E1, first_seen_ms: 1_000_030 }),
+      ins.membership({ path: PATH, dev: DEV, ino: INO, uuid: E1, line: 3 }),
+    ];
+  };
+  /** A segment built and published in `dir` by this process. */
+  const publishOne = (dir: string, seq: number, o: Partial<segStore.SegmentMeta> = {}): string => {
+    const name = nameOf(seq);
+    const seg = segStore.createSegment(dir, name, meta(seq, o));
+    fillAll(segStore.segmentInserts(seg));
+    expect(segStore.publishSegment(seg, dir, name)).toBe('linked');
+    return path.join(dir, name);
+  };
+  /** The same build and publish in a child node: under the fault preload with HISTORY_TEST_KILL when `kill` is
+   *  given, and under `umask` when it is given, which the child sets itself (process.umask, from its argv) before it
+   *  imports store.mjs or creates anything. No shell is in the path: a `sh -c` with paths in its argv is CodeQL's
+   *  js/shell-command-injection-from-environment. The `timeout` bounds a hang, ending it with SIGTERM so it is never
+   *  read as the preload's SIGKILL. */
+  const childPublish = (root: string, seq: number, o: { kill?: string; umask?: string } = {}): ReturnType<typeof spawnSync> => {
+    const script = [
+      'const [root, sid, writer, seq, umask] = process.argv.slice(1);',
+      "if (umask !== '') process.umask(parseInt(umask, 8));",
+      `const { ensureSegmentDir, createSegment, segmentInserts, publishSegment } = await import(${JSON.stringify(pathToFileURL(SEG_STORE_MJS).href)});`,
+      'const dir = ensureSegmentDir(root, sid);',
+      'const name = `${seq}.${writer}.db`;',
+      "const seg = createSegment(dir, name, { storeId: sid, writer, seq: Number(seq), harnesses: ['claude-code'], cutoffMs: 0, format: 1 });",
+      "segmentInserts(seg).blob({ sha256: new Uint8Array(32).fill(7), codec: 'br5', raw_len: 3, z: new Uint8Array([1, 2, 3]), pruned: false });",
+      'process.stdout.write(publishSegment(seg, dir, name));',
+    ].join('\n');
+    const node = [process.execPath, '--no-warnings', ...(o.kill ? ['--import', pathToFileURL(SEG_FAULTS).href] : []), '--input-type=module', '-e', script, root, SID, W, String(seq), o.umask ?? ''];
+    const env: Record<string, string> = { PATH: process.env['PATH'] ?? '', HOME: path.dirname(root), ...(o.kill ? { HISTORY_TEST_KILL: o.kill } : {}) };
+    return spawnSync(node[0]!, node.slice(1), { encoding: 'utf8', env, timeout: 60_000, killSignal: 'SIGTERM' });
+  };
+
+  it('O39: built in a dot-temp, published by link, and read back whole: meta, a blob and a stub, every row kind in write order, BigInts exact', () => {
+    const dir = freshDir();
+    const name = nameOf(1);
+    const seg = segStore.createSegment(dir, name, meta(1));
+    expect(fillAll(segStore.segmentInserts(seg))).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(fs.readdirSync(dir)).toEqual([segLib.segmentTempName(name)]);
+    expect(segStore.publishSegment(seg, dir, name)).toBe('linked');
+    expect(seg.db).toBeNull();
+    expect(fs.readdirSync(dir), 'the temp is gone and no -journal, -wal or -shm is left beside the segment').toEqual([name]);
+    expect(segStore.listSegments(dir)).toEqual([{ name, seq: 1, writer: W, bytes: fs.statSync(path.join(dir, name)).size }]);
+    const db = segStore.openSegment(path.join(dir, name));
+    try {
+      expect(segStore.segmentMeta(db)).toEqual(meta(1));
+      const blobs = segStore.segmentBlobsAfter(db, 0, 1 << 20, 'bytes');
+      expect(blobs.map((b) => [b.rowid, b.raw_len, b.pruned, b.z === null ? null : [...b.z]])).toEqual([[1, 11, false, [1, 2, 3]]]);
+      expect([...blobs[0]!.sha256]).toEqual([...sha(1)]);
+      const stubs = segStore.segmentBlobsAfter(db, 0, 1 << 20, 'stubs');
+      expect(stubs.map((b) => [b.rowid, b.raw_len, b.pruned, b.z === null ? null : [...b.z]]), 'the stub is the other kind\'s (D-5397)').toEqual([[2, 40, true, null]]);
+      const rows = segStore.segmentRowsAfter(db, 0, 100);
+      expect(rows.map((r) => [r.ord, r.kind])).toEqual([[1, 'family'], [2, 'transcript'], [3, 'epoch'], [4, 'file'], [5, 'entry'],
+        [6, 'variant'], [7, 'boundary'], [8, 'sidecar'], [9, 'membership']]);
+      const file = rows[3]!.row as segStore.SegmentRows['file'];
+      expect([file.dev, file.ino, file.mtime_ns]).toEqual([DEV, INO, NS]);
+      expect(typeof file.size).toBe('number');
+      expect(typeof file.eof_ms).toBe('number');
+      const entry = rows[4]!.row as segStore.SegmentRows['entry'];
+      expect([entry.struct_rank_ns, entry.struct_ino, entry.ts_ms, entry.is_compact_summary]).toEqual([NS, INO, 1_000_010, 0]);
+      expect([...entry.blob_sha256]).toEqual([...sha(1)]);
+      expect(rows[8]!.row).toEqual({ path: PATH, dev: DEV, ino: INO, uuid: E1, line: 3 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('pages: rows after an ord come back in write order across kinds, and a blob page stops before its bound but always takes one', () => {
+    const dir = freshDir();
+    const name = nameOf(1);
+    const seg = segStore.createSegment(dir, name, meta(1));
+    const ins = segStore.segmentInserts(seg);
+    for (const n of [1, 2, 3]) ins.blob({ sha256: sha(n), codec: 'br5', raw_len: 10, z: new Uint8Array(10).fill(n), pruned: false });
+    ins.entry(entryRow(E1, sha(1)));                                        // ord 1
+    ins.membership({ path: PATH, dev: DEV, ino: INO, uuid: E1, line: 1 }); // ord 2
+    ins.entry(entryRow(E2, sha(2)));                                        // ord 3
+    ins.membership({ path: PATH, dev: DEV, ino: INO, uuid: E2, line: 2 }); // ord 4
+    expect(segStore.publishSegment(seg, dir, name)).toBe('linked');
+    const db = segStore.openSegment(path.join(dir, name));
+    try {
+      expect(segStore.segmentRowsAfter(db, 0, 10).map((r) => [r.ord, r.kind])).toEqual([[1, 'entry'], [2, 'membership'], [3, 'entry'], [4, 'membership']]);
+      expect(segStore.segmentRowsAfter(db, 1, 2).map((r) => r.ord)).toEqual([2, 3]);
+      expect(segStore.segmentRowsAfter(db, 4, 10)).toEqual([]);
+      expect(segStore.segmentBlobsAfter(db, 0, 25, 'bytes').map((b) => b.rowid)).toEqual([1, 2]);
+      expect(segStore.segmentBlobsAfter(db, 2, 25, 'bytes').map((b) => b.rowid)).toEqual([3]);
+      expect(segStore.segmentBlobsAfter(db, 0, 1, 'bytes').map((b) => b.rowid), 'the first blob whatever its size').toEqual([1]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('D-5397: a blob page is one kind, bytes or stubs, in rowid order whatever sits between them; a stub counts no bytes against the bound; any other kind throws', () => {
+    const dir = freshDir();
+    const name = nameOf(1);
+    const seg = segStore.createSegment(dir, name, meta(1));
+    const ins = segStore.segmentInserts(seg);
+    // rowids: 1 bytes, 2 stub, 3 bytes, 4 stub, 5 stub, 6 bytes
+    ins.blob({ sha256: sha(1), codec: 'br5', raw_len: 10, z: new Uint8Array(10).fill(1), pruned: false });
+    ins.blob({ sha256: sha(2), codec: 'br5', raw_len: 10, z: null, pruned: true });
+    ins.blob({ sha256: sha(3), codec: 'br5', raw_len: 10, z: new Uint8Array(10).fill(3), pruned: false });
+    ins.blob({ sha256: sha(4), codec: 'br5', raw_len: 10, z: null, pruned: true });
+    ins.blob({ sha256: sha(5), codec: 'br5', raw_len: 10, z: null, pruned: true });
+    ins.blob({ sha256: sha(6), codec: 'br5', raw_len: 10, z: new Uint8Array(10).fill(6), pruned: false });
+    expect(segStore.publishSegment(seg, dir, name)).toBe('linked');
+    const db = segStore.openSegment(path.join(dir, name));
+    try {
+      expect(segStore.segmentBlobsAfter(db, 0, 1 << 20, 'bytes').map((b) => b.rowid)).toEqual([1, 3, 6]);
+      expect(segStore.segmentBlobsAfter(db, 0, 1 << 20, 'stubs').map((b) => b.rowid)).toEqual([2, 4, 5]);
+      expect(segStore.segmentBlobsAfter(db, 1, 1 << 20, 'bytes').map((b) => b.rowid), 'past a rowid, of its own kind').toEqual([3, 6]);
+      expect(segStore.segmentBlobsAfter(db, 2, 1 << 20, 'stubs').map((b) => b.rowid)).toEqual([4, 5]);
+      expect(segStore.segmentBlobsAfter(db, 0, 15, 'bytes').map((b) => b.rowid), 'bytes count against the bound: one more would pass it').toEqual([1]);
+      expect(segStore.segmentBlobsAfter(db, 0, 0, 'stubs').map((b) => b.rowid), 'a stub counts none: the bound never stops a page of stubs').toEqual([2, 4, 5]);
+      expect(segStore.segmentBlobsAfter(db, 6, 1 << 20, 'bytes')).toEqual([]);
+      expect(segStore.segmentBlobsAfter(db, 5, 1 << 20, 'stubs')).toEqual([]);
+      for (const kind of ['all', '', undefined, 'toString', 'constructor']) {
+        expect(() => (segStore.segmentBlobsAfter as (...a: unknown[]) => unknown)(db, 0, 1 << 20, kind), String(kind)).toThrow(/segmentBlobsAfter: kind is bytes or stubs/);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('D-5396: segmentHasBlob answers whether a segment\'s blobs table holds a sha256, as bytes or as a stub, and throws on anything but a byte array', () => {
+    const dir = freshDir();
+    const name = nameOf(1);
+    const seg = segStore.createSegment(dir, name, meta(1));
+    const ins = segStore.segmentInserts(seg);
+    ins.blob({ sha256: sha(1), codec: 'br5', raw_len: 10, z: new Uint8Array(10).fill(1), pruned: false });
+    ins.blob({ sha256: sha(2), codec: 'br5', raw_len: 10, z: null, pruned: true });
+    expect(segStore.publishSegment(seg, dir, name)).toBe('linked');
+    const db = segStore.openSegment(path.join(dir, name));
+    try {
+      expect(segStore.segmentHasBlob(db, sha(1)), 'bytes').toBe(true);
+      expect(segStore.segmentHasBlob(db, sha(2)), 'a stub').toBe(true);
+      expect(segStore.segmentHasBlob(db, sha(3)), 'a blob the segment lacks').toBe(false);
+      expect(segStore.segmentHasBlob(db, sha(1)), 'asked again on the same handle').toBe(true);
+      for (const bad of [null, undefined, 'ab', 7, [1, 2]]) {
+        expect(() => (segStore.segmentHasBlob as (...a: unknown[]) => unknown)(db, bad), String(bad)).toThrow(/segmentHasBlob: sha256 is a byte array/);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('O39: an existing name answers exists and stays byte-identical; the temp, renumbered, publishes under the next number; a name off its meta is refused', () => {
+    const dir = freshDir();
+    const name = nameOf(1);
+    fs.writeFileSync(path.join(dir, name), 'another writer\'s segment', { mode: 0o600 });
+    const seg = segStore.createSegment(dir, name, meta(1));
+    fillAll(segStore.segmentInserts(seg));
+    expect(segStore.publishSegment(seg, dir, name)).toBe('exists');
+    expect(fs.readFileSync(path.join(dir, name), 'utf8')).toBe('another writer\'s segment');
+    expect(fs.existsSync(seg.temp), 'the temp is kept for the retry').toBe(true);
+    expect(() => segStore.publishSegment(seg, dir, nameOf(2)), 'its meta still says seq 1').toThrow(TypeError);
+    segStore.setSegmentSeq(seg.temp, 2);
+    expect(segStore.publishSegment(seg, dir, nameOf(2))).toBe('linked');
+    expect(fs.readdirSync(dir).sort()).toEqual([name, nameOf(2)].sort());
+    const db = segStore.openSegment(path.join(dir, nameOf(2)));
+    try { expect(segStore.segmentMeta(db).seq).toBe(2); } finally { db.close(); }
+  });
+
+  it('O39: a kill at the link leaves only the temp, and removeStaleSegmentTemps removes it with its sidecars and nothing else', () => {
+    const root = path.join(mkTmp('ccrc-history-seg-kill-'), segLib.EXPORT_DIR);
+    const r = childPublish(root, 1, { kill: `linkSync:${nameOf(1)}:1` });
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    const dir = path.join(root, SID);
+    const temp = segLib.segmentTempName(nameOf(1));
+    expect(fs.readdirSync(dir)).toEqual([temp]);
+    for (const stray of [`${temp}-journal`, '.notes.tmp', 'notes.txt']) fs.writeFileSync(path.join(dir, stray), '');
+    expect(segStore.removeStaleSegmentTemps(dir)).toEqual([temp, `${temp}-journal`]);
+    expect(fs.readdirSync(dir).sort()).toEqual(['.notes.tmp', 'notes.txt']);
+    expect(segStore.removeStaleSegmentTemps(path.join(root, 'absent'))).toEqual([]);
+    expect(segStore.listSegments(path.join(root, 'absent'))).toEqual([]);
+  });
+
+  it('F22: a non-empty directory planted at a temp\'s name is kept and not listed, and the stale-temp removal never throws on it; an empty one is removed', () => {
+    const dir = freshDir();
+    const planted = path.join(dir, segLib.segmentTempName(nameOf(7)));
+    fs.mkdirSync(planted);
+    fs.writeFileSync(path.join(planted, 'not-ours.txt'), 'a same-user process put this here');
+    const empty = path.join(dir, segLib.segmentTempName(nameOf(8)));
+    fs.mkdirSync(empty);
+    const stale = segLib.segmentTempName(nameOf(9));
+    fs.writeFileSync(path.join(dir, stale), '');
+    let removed: string[] = [];
+    expect(() => { removed = segStore.removeStaleSegmentTemps(dir); }, 'a planted directory never wedges the pass').not.toThrow();
+    expect(removed, 'the kept directory is not listed').toEqual([segLib.segmentTempName(nameOf(8)), stale]);
+    expect(fs.readdirSync(planted), 'never recursed into').toEqual(['not-ours.txt']);
+    expect(fs.existsSync(empty)).toBe(false);
+    expect(segStore.removeStaleSegmentTemps(dir), 'the next pass meets it again and still does not throw').toEqual([]);
+  });
+
+  it('F23: ensureSegmentDir fsyncs every directory that gained an entry, up to and including export/, and nothing on a second call', () => {
+    const base = mkTmp('ccrc-history-seg-durable-');
+    const exportRoot = path.join(base, segLib.EXPORT_DIR);
+    const first = recordDirFsyncs(() => segStore.ensureSegmentDir(exportRoot, SID));
+    expect(first.out).toBe(path.join(exportRoot, SID));
+    expect(first.dirs, 'the history root gained export/, and export/ gained <store_id>/').toEqual([base, exportRoot]);
+    expect(recordDirFsyncs(() => segStore.ensureSegmentDir(exportRoot, SID)).dirs).toEqual([]);
+  });
+
+  it('modes: under an inherited umask 0002 the segment is 0600 and export/ and export/<store_id>/ are 0700; a hand-made export/ at 0755 is brought to 0700', () => {
+    const root = path.join(mkTmp('ccrc-history-seg-umask-'), segLib.EXPORT_DIR);
+    const r = childPublish(root, 1, { umask: '0002' });
+    expect(r.status, String(r.stderr)).toBe(0);
+    expect(r.stdout).toBe('linked');
+    expect(segMode(root)).toBe(0o700);
+    expect(segMode(path.join(root, SID))).toBe(0o700);
+    expect(segMode(path.join(root, SID, nameOf(1)))).toBe(0o600);
+    const hand = path.join(mkTmp('ccrc-history-seg-hand-'), segLib.EXPORT_DIR);
+    fs.mkdirSync(path.join(hand, SID), { recursive: true });
+    fs.chmodSync(hand, 0o755);
+    fs.chmodSync(path.join(hand, SID), 0o755);
+    expect(segStore.ensureSegmentDir(hand, SID)).toBe(path.join(hand, SID));
+    expect([segMode(hand), segMode(path.join(hand, SID))]).toEqual([0o700, 0o700]);
+    expect(() => segStore.ensureSegmentDir(hand, '../elsewhere')).toThrow(TypeError);
+  });
+
+  it('format guard: a built segment\'s schema is EXPORT_SEGMENT_FORMAT\'s literal; a blob row is bytes or a stub, never a mix', () => {
+    const FORMATS: Record<number, Record<string, string[]>> = {
+      1: {
+        meta: ['k TEXT pk', 'v TEXT nn'],
+        blobs: ['sha256 BLOB pk', 'codec TEXT nn', 'raw_len INTEGER nn', 'z BLOB', 'pruned INTEGER nn'],
+        families: ['ord INTEGER pk', 'ccrc_id TEXT nn', 'generation TEXT nn', 'project TEXT nn',
+          'first_seen_ms INTEGER nn'],
+        transcripts: ['ord INTEGER pk', 'cc_session_uuid TEXT nn', 'agent_id TEXT nn', 'harness TEXT nn',
+          'parent_tool_use_id TEXT', 'workflow_run_id TEXT', 'agent_type TEXT'],
+        epochs: ['ord INTEGER pk', 'ccrc_id TEXT nn', 'generation TEXT nn', 'seq INTEGER nn',
+          'cc_session_uuid TEXT nn', 'cause TEXT nn', 'declared_by TEXT nn', 'started_ms INTEGER', 'cwd TEXT',
+          'cwd_real TEXT', 'git_branch TEXT', 'confirmed_ms INTEGER'],
+        files: ['ord INTEGER pk', 'path TEXT nn', 'dev INTEGER nn', 'ino INTEGER nn', 'cc_session_uuid TEXT nn',
+          'agent_id TEXT nn', 'size INTEGER', 'mtime_ns INTEGER', 'eof_ms INTEGER'],
+        entries: ['ord INTEGER pk', 'uuid TEXT nn', 'cc_session_uuid TEXT nn', 'agent_id TEXT nn', 'type TEXT nn',
+          'subtype TEXT', 'role TEXT', 'model TEXT', 'parent_uuid TEXT', 'ts_ms INTEGER', 'request_id TEXT',
+          'api_block_index INTEGER', 'msg_id TEXT', 'source_tool_use_id TEXT', 'tool_name TEXT',
+          'is_compact_summary INTEGER nn', 'provenance TEXT nn', 'prov_version INTEGER nn', 'parse_state TEXT nn',
+          'struct_rank_ns INTEGER nn', 'struct_path TEXT nn', 'struct_dev INTEGER nn', 'struct_ino INTEGER nn',
+          'blob_sha256 BLOB nn'],
+        variants: ['ord INTEGER pk', 'uuid TEXT nn', 'blob_sha256 BLOB nn', 'first_path TEXT nn',
+          'first_dev INTEGER nn', 'first_ino INTEGER nn', 'first_seen_ms INTEGER nn', 'cause TEXT nn'],
+        boundaries: ['ord INTEGER pk', 'uuid TEXT nn', 'cc_session_uuid TEXT nn', 'agent_id TEXT nn',
+          'boundary_ord INTEGER nn', 'trigger TEXT', 'head_uuid TEXT', 'anchor_uuid TEXT', 'tail_uuid TEXT',
+          'kept_sha256 BLOB', 'pre_tokens INTEGER', 'post_tokens INTEGER', 'duration_ms INTEGER'],
+        sidecars: ['ord INTEGER pk', 'cc_session_uuid TEXT nn', 'agent_id TEXT nn', 'name TEXT nn',
+          'blob_sha256 BLOB nn', 'uuid TEXT', 'first_seen_ms INTEGER nn'],
+        memberships: ['ord INTEGER pk', 'path TEXT nn', 'dev INTEGER nn', 'ino INTEGER nn', 'uuid TEXT nn',
+          'line INTEGER nn'],
+      },
+    };
+    const dir = freshDir();
+    const p = publishOne(dir, 1);
+    const db = segStore.openSegment(p);
+    try {
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY rowid").all().map((t) => String(t['name']));
+      const schema = Object.fromEntries(tables.map((t) => [t, db.prepare('SELECT name, type, "notnull" AS nn, pk FROM pragma_table_info(?) ORDER BY cid').all(t)
+        .map((c) => `${String(c['name'])} ${String(c['type'])}${Number(c['nn']) ? ' nn' : ''}${Number(c['pk']) ? ' pk' : ''}`)]));
+      expect(schema, 'the segment DDL changed: bump EXPORT_SEGMENT_FORMAT and add its literal here').toEqual(FORMATS[segLib.EXPORT_SEGMENT_FORMAT]);
+    } finally {
+      db.close();
+    }
+    const seg = segStore.createSegment(dir, nameOf(2), meta(2));
+    const ins = segStore.segmentInserts(seg);
+    expect(() => ins.blob({ sha256: sha(5), codec: 'br5', raw_len: 1, z: null, pruned: false })).toThrow();
+    expect(() => ins.blob({ sha256: sha(6), codec: 'br5', raw_len: 1, z: new Uint8Array([1]), pruned: true })).toThrow();
+    seg.db!.close();
+  });
+
+  it('openSegment is read-only, and refuses a link, a directory, an empty file and a file that is not a segment', () => {
+    const dir = freshDir();
+    const p = publishOne(dir, 1);
+    const db = segStore.openSegment(p);
+    try {
+      expect(() => db.exec("INSERT INTO meta (k, v) VALUES ('x', 'y')")).toThrow();
+      expect(() => db.exec('CREATE TEMP TABLE t (a)'), 'query_only refuses what readOnly lets through').toThrow();
+    } finally {
+      db.close();
+    }
+    const link = path.join(dir, nameOf(2));
+    fs.symlinkSync(p, link);
+    fs.mkdirSync(path.join(dir, nameOf(3)));
+    fs.writeFileSync(path.join(dir, nameOf(4)), '');
+    fs.writeFileSync(path.join(dir, nameOf(5)), 'not a database at all, but long enough to be read as one');
+    expect(segWord(() => segStore.openSegment(link))).toBe('segment-unreadable');
+    expect(segWord(() => segStore.openSegment(path.join(dir, nameOf(3))))).toBe('segment-unreadable');
+    expect(segWord(() => segStore.openSegment(path.join(dir, nameOf(4))))).toBe('segment-unreadable');
+    expect(segWord(() => segStore.openSegment(path.join(dir, 'absent.db')))).toBe('segment-unreadable');
+    expect(segWord(() => {
+      const junk = segStore.openSegment(path.join(dir, nameOf(5)));
+      try { return segStore.segmentMeta(junk); } finally { junk.close(); }
+    })).toBe('segment-unreadable');
+    expect(segStore.listSegments(dir).map((s) => s.name), 'a link, a directory and a stray are not segments').toEqual([nameOf(1), nameOf(4), nameOf(5)]);
+  });
+
+  it('segmentMeta reads a newer format\'s meta by the same six keys, and a key off its grammar is segment-unreadable', () => {
+    const dir = freshDir();
+    const p2 = publishOne(dir, 2, { format: 2 });
+    const db2 = segStore.openSegment(p2);
+    try { expect(segStore.segmentMeta(db2)).toEqual(meta(2, { format: 2 })); } finally { db2.close(); }
+    const p1 = publishOne(dir, 1);
+    const w = new DatabaseSync(p1);
+    w.exec("UPDATE meta SET v = 'NOT-HEX!' WHERE k = 'writer'");
+    w.close();
+    const db1 = segStore.openSegment(p1);
+    try { expect(segWord(() => segStore.segmentMeta(db1))).toBe('segment-unreadable'); } finally { db1.close(); }
+    expect(segStore.listSegments(dir).map((s) => s.name), '(seq, writer) order').toEqual([nameOf(1), nameOf(2)]);
+    publishOne(dir, 10);
+    expect(segStore.listSegments(dir).map((s) => s.seq), 'seq numerically, never 10 before 2').toEqual([1, 2, 10]);
+  });
+
+  // Task 4 fix round 1 (review): checkSegmentMeta is the replay's only guard on a segment's format and store_id (lib's
+  // decideSegmentReplay answers 'replay' for any format <= 1, 0 and NaN included), and publishSegment's two fsyncs are
+  // what make a mark committed after the link safe. Each clause below is corrupted or removed ALONE in the mutants.
+  it('segmentMeta refuses a format and a store_id off their grammars, each corrupted alone in a published segment (the replay\'s only guard on both)', () => {
+    const dir = freshDir();
+    const corrupt: Array<[string, string]> = [
+      ['format', '0'], ['format', '-1'], ['format', '1.5'], ['format', 'one'], ['format', ''],
+      ['store_id', 'not-a-store-id'], ['store_id', ''], ['store_id', SID.toUpperCase()], ['store_id', `${SID}0`],
+    ];
+    corrupt.forEach(([key, value], i) => {
+      const p = publishOne(dir, i + 1);
+      const w = new DatabaseSync(p);
+      try { w.prepare('UPDATE meta SET v = ? WHERE k = ?').run(value, key); } finally { w.close(); }
+      const db = segStore.openSegment(p);
+      try {
+        expect(segWord(() => segStore.segmentMeta(db)), `${key} = ${JSON.stringify(value)}, every other key as written`).toBe('segment-unreadable');
+      } finally {
+        db.close();
+      }
+    });
+    const good = publishOne(dir, corrupt.length + 1);
+    const db = segStore.openSegment(good);
+    try { expect(segStore.segmentMeta(db), 'CONTROL: the same build untouched reads back whole').toEqual(meta(corrupt.length + 1)); } finally { db.close(); }
+    // The writer's side of the same grammar: createSegment refuses these before it creates a temp.
+    for (const bad of [{ format: 0 }, { format: 1.5 }, { format: Number.NaN }, { storeId: 'not-a-store-id' }]) {
+      expect(() => segStore.createSegment(dir, nameOf(99), meta(99, bad)), JSON.stringify(bad)).toThrow(TypeError);
+    }
+    expect(fs.existsSync(path.join(dir, segLib.segmentTempName(nameOf(99)))), 'and left no temp behind').toBe(false);
+  });
+
+  /** Every file or directory fsync, link and unlink `fn` makes in this process, in order, as `fsync-file <path>`,
+   *  `fsync-dir <path>`, `link <from> <to>` and `unlink <path>`. A minimal in-process patch of node:fs in
+   *  historyHelpers' recordDirFsyncs style (fd -> path from openSync), restored in `finally`;
+   *  syncBuiltinESMExports makes store.mjs's named imports see it. Plain node:fs, so it runs on macOS too. */
+  const recordPublishOps = <T>(fn: () => T): { out: T; ops: string[] } => {
+    const realOpen = fs.openSync; const realClose = fs.closeSync; const realFsync = fs.fsyncSync;
+    const realLink = fs.linkSync; const realUnlink = fs.unlinkSync;
+    const open = new Map<number, string>();
+    const ops: string[] = [];
+    fs.openSync = ((p: fs.PathLike, ...rest: unknown[]) => {
+      const fd = (realOpen as (...a: unknown[]) => number)(p, ...rest);
+      open.set(fd, String(p));
+      return fd;
+    }) as typeof fs.openSync;
+    fs.closeSync = ((fd: number) => { open.delete(fd); return realClose(fd); }) as typeof fs.closeSync;
+    fs.fsyncSync = ((fd: number) => {
+      const p = open.get(fd);
+      if (p !== undefined) ops.push(`${fs.fstatSync(fd).isDirectory() ? 'fsync-dir' : 'fsync-file'} ${p}`);
+      return realFsync(fd);
+    }) as typeof fs.fsyncSync;
+    fs.linkSync = ((from: fs.PathLike, to: fs.PathLike) => { ops.push(`link ${String(from)} ${String(to)}`); return realLink(from, to); }) as typeof fs.linkSync;
+    fs.unlinkSync = ((p: fs.PathLike) => { ops.push(`unlink ${String(p)}`); return realUnlink(p); }) as typeof fs.unlinkSync;
+    syncBuiltinESMExports();
+    try {
+      return { out: fn(), ops };
+    } finally {
+      fs.openSync = realOpen; fs.closeSync = realClose; fs.fsyncSync = realFsync; fs.linkSync = realLink; fs.unlinkSync = realUnlink;
+      syncBuiltinESMExports();
+    }
+  };
+
+  it('9.15 Write: publishSegment fsyncs the temp BEFORE it links it, then unlinks the temp and fsyncs the directory AFTER (what makes a mark after the link safe)', () => {
+    const dir = freshDir();
+    const name = nameOf(1);
+    const seg = segStore.createSegment(dir, name, meta(1));
+    fillAll(segStore.segmentInserts(seg));
+    const temp = seg.temp;
+    const r = recordPublishOps(() => segStore.publishSegment(seg, dir, name));
+    expect(r.out).toBe('linked');
+    expect(r.ops, 'the temp\'s bytes are durable before the name exists; the name\'s entry, and the temp\'s removal, are durable before the call answers').toEqual([
+      `fsync-file ${temp}`, `link ${temp} ${path.join(dir, name)}`, `unlink ${temp}`, `fsync-dir ${dir}`,
+    ]);
+    const db = segStore.openSegment(path.join(dir, name));
+    try { expect(segStore.segmentMeta(db), 'CONTROL: and what was published reads back').toEqual(meta(1)); } finally { db.close(); }
+  });
+
+  it('F23: a publish fsyncs the export store directory (recordDirFsyncs sees it) and no other, so the published name survives a power loss', () => {
+    const dir = freshDir();
+    const name = nameOf(1);
+    const seg = segStore.createSegment(dir, name, meta(1));
+    fillAll(segStore.segmentInserts(seg));
+    const r = recordDirFsyncs(() => segStore.publishSegment(seg, dir, name));
+    expect(r.out).toBe('linked');
+    expect(r.dirs).toEqual([dir]);
+  });
+
+  it('every insert takes exactly its columns: a missing or an unknown one throws and writes nothing; createSegment refuses a name off its meta, a bad meta and a temp that exists', () => {
+    const dir = freshDir();
+    const seg = segStore.createSegment(dir, nameOf(1), meta(1));
+    const ins = segStore.segmentInserts(seg);
+    const t = { cc_session_uuid: U1, agent_id: '', harness: 'claude-code', parent_tool_use_id: null, workflow_run_id: null, agent_type: null };
+    const { parent_tool_use_id: _gone, ...missing } = t;
+    expect(() => ins.transcript(missing as segStore.SegmentRows['transcript'])).toThrow(/missing column parent_tool_use_id/);
+    expect(() => ins.transcript({ ...t, bogus: 1 } as segStore.SegmentRows['transcript'])).toThrow(/unknown column\(s\) bogus/);
+    expect(() => ins.blob({ sha256: sha(1), codec: 'br5', raw_len: 1, z: null, pruned: 1 as unknown as boolean })).toThrow(TypeError);
+    expect(ins.transcript(t), 'the counter did not move').toBe(1);
+    seg.db!.close();
+    expect(() => segStore.createSegment(dir, nameOf(2), meta(3))).toThrow(TypeError);
+    expect(() => segStore.createSegment(dir, nameOf(4), meta(4, { writer: 'NOTHEX00' }))).toThrow(TypeError);
+    fs.writeFileSync(path.join(dir, segLib.segmentTempName(nameOf(5))), '');
+    expect(() => segStore.createSegment(dir, nameOf(5), meta(5))).toThrow(/EEXIST/);
+  });
+});

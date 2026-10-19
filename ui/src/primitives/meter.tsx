@@ -58,8 +58,14 @@ export const fillVariants = cva(
          *  longer true is the COLOUR: nothing runs there to refresh the
          *  statusline, so a frozen crit bar reads as live pressure on a row
          *  the same line calls expired or switched off. `limitBand` never
-         *  returns this; the caller that knows passes `off`. */
-        off: 'limit-fill--off bg-edge-subtle',
+         *  returns this; the caller that knows passes `off`.
+         *
+         *  The tertiary ink (D-5494): 3.99 to 5.04 on the track, so the frozen
+         *  extent stays visible, and grey and below the secondary tier, so it
+         *  reads as stopped and stays quiet. `--edge-subtle`, which it
+         *  replaced, measured 1.02 to 1.10 there: an absent bar. Held by
+         *  `pwa/test/limit-off-band.test.ts`. */
+        off: 'limit-fill--off bg-ink-tertiary',
       },
     },
     defaultVariants: { band: 'ok' },

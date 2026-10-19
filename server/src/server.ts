@@ -65,6 +65,7 @@ import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hook
 import { registerTokenRoutes, type TokenRouteDriver } from './token/routes.js';
 import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
+import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
 import { buildInfoOfRow } from './update/inventory.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
@@ -74,6 +75,9 @@ import type { CollectLaneJournal } from './collectLane.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
+import { createStepUp } from './auth/stepup.js';
+import { knownFleetIdentity, type AccountAudit } from './accounts/audit.js';
+import type { AccountOps } from './accounts/ops.js';
 import {
   SESSION_COOKIE, cookiePolicyProblem, expireCookie, parseCookies, serializeCookie,
 } from './auth/cookie.js';
@@ -98,7 +102,7 @@ import {
 import { ARCHIVE_REFUSALS, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
-import type { Dialog } from '../../shared/api.js';
+import type { Dialog, DigestAnswer, DigestCorrectAnswer } from '../../shared/api.js';
 import {
   archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, worktreeOf, type ArchiveMeasure,
   type TurnVerdict,
@@ -381,6 +385,12 @@ export interface Deps {
   /** Design 2026-09-20 §10 (wave 5): the fleet link's `request()` narrowed to the `update` op, with
    *  `UPDATE_OP_TIMEOUT_MS`. Remote mode only — in local mode no node is link-reached. */
   sendUpdateOp?: SendUpdateOp;
+  /** D-5516 (accounts plan Task A7): the account audit over this process's one coord.db, built in `index.ts`.
+   *  Absent → no row is written (a test, a script). */
+  accountAudit?: AccountAudit;
+  /** Spec §13.2, G13 (accounts plan Task A7): the ONE `AccountOps` arm, chosen in `index.ts` by `cfg.fleetMode` only
+   *  (`accountOpsFor`). The account routes (A14 onward) are its consumers. */
+  accountOps?: AccountOps;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
@@ -1106,6 +1116,29 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       slot.release();
     }
   });
+
+  // ── step-up that keeps the session (D-5512, plan Task A5) ─────────────
+  //
+  // THREE ROUTES, ALL GATED (none is in `EXEMPT`): only a live session can step
+  // up, so a box token, an anonymous caller and every session on the fleet box
+  // get the gate's 401 before a handler runs. They answer `auth-off` while the
+  // gate is dark. Finishing stamps `assertedAt` on THE REQUESTING SESSION ONLY:
+  // no session is minted, no cookie set, `generation` kept. Their own challenge
+  // store (purpose `step-up`, bound to the session's `idHash`) and their own
+  // per-session budget, never `loginLimiter`'s. The handlers and the reasons
+  // are `auth/stepup.ts`; the registrations stay HERE, by literal path, so
+  // `auth-gate.test.ts`'s sweep reads them.
+  const stepUp = createStepUp({
+    enabled: deps.cfg.authEnabled, store: authStore, passkeys, secretNow, rpProblem, rpId: deps.cfg.rpId,
+    device: (req) => sessionAuth(req).device,
+    audit: deps.accountAudit, fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity),
+  });
+  // `Cache-Control: no-store` on EVERY step-up answer, refusals included (spec
+  // §3.3) — an `onSend` hook, so the gate's own 401 carries it too.
+  app.addHook('onSend', stepUp.noStore);
+  app.post('/api/auth/step-up/start', stepUp.start);
+  app.post('/api/auth/step-up/finish', stepUp.finish);
+  app.post('/api/auth/step-up/passphrase', stepUp.passphrase);
 
   /**
    * `GET /api/auth/status` — the box's standing gate posture (`AuthStatus`).
@@ -2059,6 +2092,48 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
 
   /**
+   * `GET /api/digest?day=YYYY-MM-DD` (coordinator-first routing spec §10, plan Task 17, D-5300): the digest of what
+   * coordinators decided in the operator's name over the 24 hours before that day's digest hour, built from the
+   * durable `asks` and `approvals` tables, so any past day can be read and a missed push loses nothing. With no `day`,
+   * the newest day whose window has closed. Session-gated when armed (not EXEMPT); no box token. A read: it changes
+   * nothing, and it never sends the push (the beat in `watch.ts` does).
+   */
+  app.get('/api/digest', async (req, reply) => {
+    if (!deps.coord) return refuseRoute(reply, 'not-configured');
+    const q = (req.query ?? {}) as { day?: unknown };
+    const hourUtc = readDigestHour(deps.cfg.ccrcDir);
+    const day = q.day === undefined ? digestDayFor(Date.now(), hourUtc) : parseDigestDay(q.day);
+    if (day === null) return refuseRoute(reply, 'bad-request');
+    const { fromMs, toMs } = digestWindow(day, hourUtc);
+    const built = buildDigest(deps.coord, fromMs, toMs);
+    if (!built.ok) return refuseRoute(reply, 'digest-unreadable', { detail: built.detail });
+    const mark = deps.coord.digestDay(day);
+    const answer: DigestAnswer = {
+      v: 1, day, hourUtc, fromMs, toMs, ...built.digest,
+      sentAt: mark?.sentAt ?? null, pushed: mark !== null && mark.count > 0,
+    };
+    return answer;
+  });
+
+  /**
+   * `POST /api/digest/correct` (spec §10, D-5300): the operator's correction of one digest line, `{rowKind, id,
+   * text}`. Queues durable system mail from `operator` to the row's coordinator (kind `finding`, subject "Operator
+   * correction on ask N" or "... approval N", the text verbatim) and marks the row `corrected`, which spec §11 counts.
+   * Session-gated when armed (not EXEMPT); no box token: the operator's door, like the kickoff route below. A row that
+   * is no coordinator's decision is `409 not-coordinator`; a second correction while the first is undelivered is
+   * `409 duplicate`.
+   */
+  app.post('/api/digest/correct', async (req, reply) => {
+    if (!deps.coord) return refuseRoute(reply, 'not-configured');
+    const parsed = parseDigestCorrectBody(req.body);
+    if (!parsed.ok) return refuseRoute(reply, parsed.why);
+    const out = correctDigestRow(deps.coord, parsed.body);
+    if (!out.ok) return refuseRoute(reply, out.why);
+    const answer: DigestCorrectAnswer = { ok: true, mailId: out.mailId, deliveryId: out.deliveryId };
+    return answer;
+  });
+
+  /**
    * The program kickoff, as MAIL (program-leverage wave 4, F4). The sibling
    * above types into a pane, synchronously, with no idle gate — right for the
    * operator's own keystrokes, and until this wave it was also how a brand-new
@@ -2174,6 +2249,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const body = (req.body ?? {}) as { dialogId?: unknown; optionIndex?: unknown };
     if (typeof body.dialogId !== 'string' || typeof body.optionIndex !== 'number') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    // D-5298 (spec §6.3 server step 7): an approval dialog records the operator on the child's open approval rows
+    // BEFORE any key, so every approval has an answering principal and a claimant's later ruling is
+    // `409 already-ruled`. Read off the watcher's hookstate; with none to read, the rows are marked anyway — the
+    // operator answering is the one principal that always wins (D-5491).
+    const hs = watcher?.currentHookStates().get(id) ?? null;
+    if (hs === null || (hs.ask !== null && 'approval' in hs.ask)) {
+      try {
+        deps.coord?.markApprovalOperator(id, Date.now());
+      } catch (err) {
+        console.warn(`ccrc-server: recording the operator on ${id}'s approval rows failed (${err instanceof Error ? err.message : String(err)}) — answering anyway`);
+      }
     }
     const res = await answerDialog(sendDeps, id, body.dialogId, body.optionIndex);
     answeredFrame(id, 'dialog', res);

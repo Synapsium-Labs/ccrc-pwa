@@ -53,10 +53,14 @@
     font: var(--weight-medium) var(--fs-sm) / 1 var(--family-mono);
     color: var(--ink-primary);
   }
+  /* The row's summary, duration and chevron, and an answered ask's chip,
+     are the row's meta: they read the skin's --fs-meta (12px in Refined, the
+     step they used; 11px in Instrument). D-5093, D-5463; the role census's
+     app-sheet registry names each. */
   .tool-sum {
     flex: 1;
     min-width: 0;
-    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
     color: var(--ink-tertiary);
     white-space: nowrap;
     overflow: hidden;
@@ -64,13 +68,13 @@
   }
   .tool-dur {
     flex: none;
-    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
     font-variant-numeric: tabular-nums;
     color: var(--ink-tertiary);
   }
   .tool-chev {
     flex: none;
-    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
     color: var(--ink-tertiary);
     transition: transform var(--dur-base) var(--curve-swift);
   }
@@ -240,7 +244,7 @@
     border-radius: var(--r-full);
     background: var(--bg-raised);
     color: var(--ink-primary);
-    font: var(--weight-medium) var(--fs-xs) / 1 var(--family-ui);
+    font: var(--weight-medium) var(--fs-meta) / 1 var(--family-ui);
     letter-spacing: normal;
     text-transform: none;
     cursor: pointer;

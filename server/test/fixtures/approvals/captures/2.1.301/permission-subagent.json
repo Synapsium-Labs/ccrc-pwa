@@ -1,0 +1,1674 @@
+{
+ "v": 1,
+ "version": "2.1.301",
+ "scenario": "permission-subagent",
+ "labels": [
+  "sub-shell-home-probe",
+  "sub-cd-then-relative",
+  "sub-allow20-no-menu-during-wait",
+  "sub-nohook-menu-after-hook",
+  "sub-deny20-message"
+ ],
+ "notes": [
+  "2.1.301 subagents are BACKGROUND by default (Agent tool has no foreground option); --permission-mode default",
+  "background subagent: no menu painted while the hook waits; with no hook decision the menu paints on the main view after the hook returns",
+  "subagent cd did not persist between Bash calls; hook cwd equalled the later pwd (both the session root)",
+  "a background move at the agents dashboard forked the session (envSid 00000000-0000-4000-8000-000000000001) mid-run",
+  "Task 14 (public corpus): every id field re-minted neutral (session, prompt and message ids, agent ids, tool-use ids), one tmp-root spelling (/rig/tmp/claude-1000), every last_assistant_message and every task-notification result stubbed; three rig commands respelt bash-equivalently for the corpus scan (a dirname substitution read through a variable D, and one quoted variable joined to its suffix inside the quotes) and the paste wrapper reduced to a plain tag"
+ ],
+ "events": [
+  {
+   "seq": 1,
+   "dtMs": 0,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo/sub",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "First run: cd .. (as its own Bash call). Then use the Agent tool (general-purpose) with this prompt, verbatim: 'Make exactly these Bash calls, each a SEPARATE Bash call, verbatim, in order, and report every output verbatim: (1) echo \"SHELLCHK ${BASH_VERSION:-none} ${ZSH_VERSION:-none}\"; printf \"HOMECHK %s\\n\" \"$HOME\"; echo \"POSIXCHK ${POSIXLY_CORRECT-unset}\"; pwd   (2) cd sub   (3) touch rel-probe-sub.txt; pwd   . Also quote any rig codeword in your context, or say NO-CODEWORD.' Show me its report verbatim when it arrives."
+   }
+  },
+  {
+   "seq": 2,
+   "dtMs": 1836,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo/sub",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd ..",
+     "description": "Change directory to parent"
+    },
+    "tool_use_id": "toolu_000000000000000000000001"
+   }
+  },
+  {
+   "seq": 3,
+   "dtMs": 1876,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd ..",
+     "description": "Change directory to parent"
+    },
+    "tool_response": {
+     "stdout": "",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": true
+    },
+    "tool_use_id": "toolu_000000000000000000000001",
+    "duration_ms": 11
+   }
+  },
+  {
+   "seq": 4,
+   "dtMs": 3523,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run verbatim shell probe calls",
+     "prompt": "Make exactly these Bash calls, each a SEPARATE Bash call, verbatim, in order, and report every output verbatim: (1) echo \"SHELLCHK ${BASH_VERSION:-none} ${ZSH_VERSION:-none}\"; printf \"HOMECHK %s\\n\" \"$HOME\"; echo \"POSIXCHK ${POSIXLY_CORRECT-unset}\"; pwd   (2) cd sub   (3) touch rel-probe-sub.txt; pwd   . Also quote any rig codeword in your context, or say NO-CODEWORD.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000002"
+   }
+  },
+  {
+   "seq": 5,
+   "dtMs": 3554,
+   "event": "SubagentStart",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 6,
+   "dtMs": 3554,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run verbatim shell probe calls",
+     "prompt": "Make exactly these Bash calls, each a SEPARATE Bash call, verbatim, in order, and report every output verbatim: (1) echo \"SHELLCHK ${BASH_VERSION:-none} ${ZSH_VERSION:-none}\"; printf \"HOMECHK %s\\n\" \"$HOME\"; echo \"POSIXCHK ${POSIXLY_CORRECT-unset}\"; pwd   (2) cd sub   (3) touch rel-probe-sub.txt; pwd   . Also quote any rig codeword in your context, or say NO-CODEWORD.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "isAsync": true,
+     "status": "async_launched",
+     "agentId": "a0000000000000001",
+     "description": "Run verbatim shell probe calls",
+     "resolvedModel": "claude-haiku-5-5",
+     "prompt": "Make exactly these Bash calls, each a SEPARATE Bash call, verbatim, in order, and report every output verbatim: (1) echo \"SHELLCHK ${BASH_VERSION:-none} ${ZSH_VERSION:-none}\"; printf \"HOMECHK %s\\n\" \"$HOME\"; echo \"POSIXCHK ${POSIXLY_CORRECT-unset}\"; pwd   (2) cd sub   (3) touch rel-probe-sub.txt; pwd   . Also quote any rig codeword in your context, or say NO-CODEWORD.",
+     "outputFile": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/tasks/a0000000000000001.output",
+     "canReadOutputFile": true,
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000002",
+    "duration_ms": 4
+   }
+  },
+  {
+   "seq": 7,
+   "dtMs": 4955,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000001",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run verbatim shell probe calls",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 8,
+   "dtMs": 6066,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo \"SHELLCHK ${BASH_VERSION:-none} ${ZSH_VERSION:-none}\"; printf \"HOMECHK %s\\n\" \"$HOME\"; echo \"POSIXCHK ${POSIXLY_CORRECT-unset}\"; pwd",
+     "description": "Print shell, home, POSIX mode, and working directory"
+    },
+    "tool_use_id": "toolu_000000000000000000000003"
+   }
+  },
+  {
+   "seq": 9,
+   "dtMs": 6100,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo \"SHELLCHK ${BASH_VERSION:-none} ${ZSH_VERSION:-none}\"; printf \"HOMECHK %s\\n\" \"$HOME\"; echo \"POSIXCHK ${POSIXLY_CORRECT-unset}\"; pwd",
+     "description": "Print shell, home, POSIX mode, and working directory"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 10,
+   "dtMs": 6139,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo \"SHELLCHK ${BASH_VERSION:-none} ${ZSH_VERSION:-none}\"; printf \"HOMECHK %s\\n\" \"$HOME\"; echo \"POSIXCHK ${POSIXLY_CORRECT-unset}\"; pwd",
+     "description": "Print shell, home, POSIX mode, and working directory"
+    },
+    "tool_response": {
+     "stdout": "SHELLCHK 3.2.57(1)-release none\nHOMECHK /rig\nPOSIXCHK unset\n/rig/rig-home/v2.1.301/work/repo",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000003",
+    "duration_ms": 8
+   }
+  },
+  {
+   "seq": 11,
+   "dtMs": 6214,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd sub",
+     "description": "Change into sub directory"
+    },
+    "tool_use_id": "toolu_000000000000000000000004"
+   }
+  },
+  {
+   "seq": 12,
+   "dtMs": 6246,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd sub",
+     "description": "Change into sub directory"
+    },
+    "tool_response": {
+     "stdout": "",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": true
+    },
+    "tool_use_id": "toolu_000000000000000000000004",
+    "duration_ms": 6
+   }
+  },
+  {
+   "seq": 13,
+   "dtMs": 6685,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000002",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run verbatim shell probe calls",
+     "prompt": "Make exactly these Bash calls, each a SEPARATE Bash call, verbatim, in order, and report every output verbatim: (1) echo \"SHELLCHK ${BASH_VERSION:-none} ${ZSH_VERSION:-none}\"; printf \"HOMECHK %s\\n\" \"$HOME\"; echo \"POSIXCHK ${POSIXLY_CORRECT-unset}\"; pwd   (2) cd sub   (3) touch rel-probe-sub.txt; pwd   . Also quote any rig codeword in your context, or say NO-CODEWORD.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000005"
+   }
+  },
+  {
+   "seq": 14,
+   "dtMs": 7956,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "touch rel-probe-sub.txt; pwd",
+     "description": "Create probe file and print working directory"
+    },
+    "tool_use_id": "toolu_000000000000000000000006"
+   }
+  },
+  {
+   "seq": 15,
+   "dtMs": 7989,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "touch rel-probe-sub.txt; pwd",
+     "description": "Create probe file and print working directory"
+    },
+    "permission_suggestions": [
+     {
+      "type": "addDirectories",
+      "directories": [
+       "/rig/rig-home/v2.1.301/work/repo"
+      ],
+      "destination": "session"
+     },
+     {
+      "type": "setMode",
+      "mode": "acceptEdits",
+      "destination": "session"
+     }
+    ]
+   }
+  },
+  {
+   "seq": 16,
+   "dtMs": 8028,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "touch rel-probe-sub.txt; pwd",
+     "description": "Create probe file and print working directory"
+    },
+    "tool_response": {
+     "stdout": "/rig/rig-home/v2.1.301/work/repo",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000006",
+    "duration_ms": 9
+   }
+  },
+  {
+   "seq": 17,
+   "dtMs": 9211,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000002",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/subagents/agent-a0000000000000002.jsonl",
+    "background_tasks": [
+     {
+      "id": "a0000000000000001",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run verbatim shell probe calls",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 18,
+   "dtMs": 11006,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000001",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/subagents/agent-a0000000000000001.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000001",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run verbatim shell probe calls",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 19,
+   "dtMs": 11057,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000004",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "<task-notification>\n<task-id>a0000000000000001</task-id>\n<tool-use-id>toolu_000000000000000000000002</tool-use-id>\n<output-file>/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/tasks/a0000000000000001.output</output-file>\n<status>completed</status>\n<summary>Agent \"Run verbatim shell probe calls\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result><subagent prose, stubbed for the public corpus></result>\n<usage><subagent_tokens>30742</subagent_tokens><tool_uses>3</tool_uses><duration_ms>7497</duration_ms></usage>\n</task-notification>"
+   }
+  },
+  {
+   "seq": 20,
+   "dtMs": 14160,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000004",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 21,
+   "dtMs": 15471,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000004",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000003",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/subagents/agent-a0000000000000003.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 22,
+   "dtMs": 58692,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Use the Agent tool (general-purpose) with this prompt, verbatim: 'Run exactly this one Bash command verbatim and report the exact tool result text: touch probe-sa.txt; echo DONE-SA'. Show me its report verbatim when it arrives."
+   }
+  },
+  {
+   "seq": 23,
+   "dtMs": 60276,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run verbatim probe command",
+     "prompt": "Run exactly this one Bash command verbatim and report the exact tool result text: touch probe-sa.txt; echo DONE-SA",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000007"
+   }
+  },
+  {
+   "seq": 24,
+   "dtMs": 60313,
+   "event": "SubagentStart",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "agent_id": "a0000000000000004",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 25,
+   "dtMs": 60313,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run verbatim probe command",
+     "prompt": "Run exactly this one Bash command verbatim and report the exact tool result text: touch probe-sa.txt; echo DONE-SA",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "isAsync": true,
+     "status": "async_launched",
+     "agentId": "a0000000000000004",
+     "description": "Run verbatim probe command",
+     "resolvedModel": "claude-haiku-5-5",
+     "prompt": "Run exactly this one Bash command verbatim and report the exact tool result text: touch probe-sa.txt; echo DONE-SA",
+     "outputFile": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/tasks/a0000000000000004.output",
+     "canReadOutputFile": true,
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000007",
+    "duration_ms": 4
+   }
+  },
+  {
+   "seq": 26,
+   "dtMs": 61471,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000004",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run verbatim probe command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 27,
+   "dtMs": 62346,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000004",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "touch probe-sa.txt; echo DONE-SA",
+     "description": "Create probe-sa.txt and echo DONE-SA"
+    },
+    "tool_use_id": "toolu_000000000000000000000008"
+   }
+  },
+  {
+   "seq": 28,
+   "dtMs": 62375,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000004",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "touch probe-sa.txt; echo DONE-SA",
+     "description": "Create probe-sa.txt and echo DONE-SA"
+    },
+    "permission_suggestions": [
+     {
+      "type": "addDirectories",
+      "directories": [
+       "/rig/rig-home/v2.1.301/work/repo"
+      ],
+      "destination": "session"
+     },
+     {
+      "type": "setMode",
+      "mode": "acceptEdits",
+      "destination": "session"
+     }
+    ]
+   }
+  },
+  {
+   "seq": 29,
+   "dtMs": 62960,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000005",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/subagents/agent-a0000000000000005.jsonl",
+    "background_tasks": [
+     {
+      "id": "a0000000000000004",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run verbatim probe command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 30,
+   "dtMs": 82459,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000004",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "touch probe-sa.txt; echo DONE-SA",
+     "description": "Create probe-sa.txt and echo DONE-SA"
+    },
+    "tool_response": {
+     "stdout": "DONE-SA",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000008",
+    "duration_ms": 24
+   }
+  },
+  {
+   "seq": 31,
+   "dtMs": 83587,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000004",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/subagents/agent-a0000000000000004.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000004",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run verbatim probe command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 32,
+   "dtMs": 83625,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "<task-notification>\n<task-id>a0000000000000004</task-id>\n<tool-use-id>toolu_000000000000000000000007</tool-use-id>\n<output-file>/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/tasks/a0000000000000004.output</output-file>\n<status>completed</status>\n<summary>Agent \"Run verbatim probe command\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result><subagent prose, stubbed for the public corpus></result>\n<usage><subagent_tokens>29531</subagent_tokens><tool_uses>1</tool_uses><duration_ms>23311</duration_ms></usage>\n</task-notification>"
+   }
+  },
+  {
+   "seq": 33,
+   "dtMs": 84854,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 34,
+   "dtMs": 86446,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000002",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000002",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000006",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000002/subagents/agent-a0000000000000006.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 35,
+   "dtMs": 117623,
+   "event": "SessionStart",
+   "envSid": "00000000-0000-4000-8000-000000000007",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000007",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000007.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000007/scratchpad",
+    "agent_type": "claude",
+    "hook_event_name": "SessionStart",
+    "source": "startup",
+    "model": "claude-opus-5-5"
+   }
+  },
+  {
+   "seq": 36,
+   "dtMs": 117930,
+   "event": "SessionStart",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "hook_event_name": "SessionStart",
+    "source": "fork",
+    "seconds_since_last_response": 33,
+    "context_tokens": 47913,
+    "prompt_cache_likely_expired": false,
+    "estimated_cache_write_usd": 0.0096
+   }
+  },
+  {
+   "seq": 37,
+   "dtMs": 131594,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Use the Agent tool (general-purpose) with this prompt, verbatim: 'Run exactly this one Bash command verbatim and report the exact tool result text: touch probe-sn.txt; echo DONE-SN'. Show me its report verbatim when it arrives."
+   }
+  },
+  {
+   "seq": 38,
+   "dtMs": 134492,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run verbatim probe command",
+     "prompt": "Run exactly this one Bash command verbatim and report the exact tool result text: touch probe-sn.txt; echo DONE-SN",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000009"
+   }
+  },
+  {
+   "seq": 39,
+   "dtMs": 134529,
+   "event": "SubagentStart",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 40,
+   "dtMs": 134529,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run verbatim probe command",
+     "prompt": "Run exactly this one Bash command verbatim and report the exact tool result text: touch probe-sn.txt; echo DONE-SN",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "isAsync": true,
+     "status": "async_launched",
+     "agentId": "a0000000000000007",
+     "description": "Run verbatim probe command",
+     "resolvedModel": "claude-haiku-5-5",
+     "prompt": "Run exactly this one Bash command verbatim and report the exact tool result text: touch probe-sn.txt; echo DONE-SN",
+     "outputFile": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/tasks/a0000000000000007.output",
+     "canReadOutputFile": true,
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000009",
+    "duration_ms": 4
+   }
+  },
+  {
+   "seq": 41,
+   "dtMs": 138087,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000007",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run verbatim probe command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 42,
+   "dtMs": 138592,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "touch probe-sn.txt; echo DONE-SN",
+     "description": "Create probe-sn.txt and echo DONE-SN"
+    },
+    "tool_use_id": "toolu_000000000000000000000010"
+   }
+  },
+  {
+   "seq": 43,
+   "dtMs": 138626,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "touch probe-sn.txt; echo DONE-SN",
+     "description": "Create probe-sn.txt and echo DONE-SN"
+    },
+    "permission_suggestions": [
+     {
+      "type": "addDirectories",
+      "directories": [
+       "/rig/rig-home/v2.1.301/work/repo"
+      ],
+      "destination": "session"
+     },
+     {
+      "type": "setMode",
+      "mode": "acceptEdits",
+      "destination": "session"
+     }
+    ]
+   }
+  },
+  {
+   "seq": 44,
+   "dtMs": 139979,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000008",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000008.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000007",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run verbatim probe command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 45,
+   "dtMs": 144667,
+   "event": "Notification",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission",
+    "notification_type": "permission_prompt"
+   }
+  },
+  {
+   "seq": 46,
+   "dtMs": 152082,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "touch probe-sn.txt; echo DONE-SN",
+     "description": "Create probe-sn.txt and echo DONE-SN"
+    },
+    "tool_response": {
+     "stdout": "DONE-SN",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000010",
+    "duration_ms": 48
+   }
+  },
+  {
+   "seq": 47,
+   "dtMs": 153731,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000007",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000007.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000007",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run verbatim probe command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 48,
+   "dtMs": 153794,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000009",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "<task-notification>\n<task-id>a0000000000000007</task-id>\n<tool-use-id>toolu_000000000000000000000009</tool-use-id>\n<output-file>/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/tasks/a0000000000000007.output</output-file>\n<status>completed</status>\n<summary>Agent \"Run verbatim probe command\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result><subagent prose, stubbed for the public corpus></result>\n<usage><subagent_tokens>30935</subagent_tokens><tool_uses>1</tool_uses><duration_ms>19258</duration_ms></usage>\n</task-notification>"
+   }
+  },
+  {
+   "seq": 49,
+   "dtMs": 157530,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000009",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 50,
+   "dtMs": 158945,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000009",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000009",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000009.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 51,
+   "dtMs": 169703,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000010",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Use the Agent tool (general-purpose) with this prompt, verbatim: 'Run exactly this one Bash command verbatim and quote the exact tool result text you receive, character for character: touch probe-sd.txt; echo DONE-SD'. Show me its report verbatim when it arrives."
+   }
+  },
+  {
+   "seq": 52,
+   "dtMs": 171411,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000010",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run verbatim probe command",
+     "prompt": "Run exactly this one Bash command verbatim and quote the exact tool result text you receive, character for character: touch probe-sd.txt; echo DONE-SD",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000011"
+   }
+  },
+  {
+   "seq": 53,
+   "dtMs": 171449,
+   "event": "SubagentStart",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000010",
+    "agent_id": "a0000000000000010",
+    "agent_type": "general-purpose",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 54,
+   "dtMs": 171449,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000010",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run verbatim probe command",
+     "prompt": "Run exactly this one Bash command verbatim and quote the exact tool result text you receive, character for character: touch probe-sd.txt; echo DONE-SD",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "isAsync": true,
+     "status": "async_launched",
+     "agentId": "a0000000000000010",
+     "description": "Run verbatim probe command",
+     "resolvedModel": "claude-haiku-5-5",
+     "prompt": "Run exactly this one Bash command verbatim and quote the exact tool result text you receive, character for character: touch probe-sd.txt; echo DONE-SD",
+     "outputFile": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/tasks/a0000000000000010.output",
+     "canReadOutputFile": true,
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000011",
+    "duration_ms": 4
+   }
+  },
+  {
+   "seq": 55,
+   "dtMs": 174290,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000010",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000010",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "touch probe-sd.txt; echo DONE-SD",
+     "description": "Create probe-sd.txt and echo DONE-SD"
+    },
+    "tool_use_id": "toolu_000000000000000000000012"
+   }
+  },
+  {
+   "seq": 56,
+   "dtMs": 174323,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000010",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000010",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "touch probe-sd.txt; echo DONE-SD",
+     "description": "Create probe-sd.txt and echo DONE-SD"
+    },
+    "permission_suggestions": [
+     {
+      "type": "addDirectories",
+      "directories": [
+       "/rig/rig-home/v2.1.301/work/repo"
+      ],
+      "destination": "session"
+     },
+     {
+      "type": "setMode",
+      "mode": "acceptEdits",
+      "destination": "session"
+     }
+    ]
+   }
+  },
+  {
+   "seq": 57,
+   "dtMs": 175086,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000010",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000010",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run verbatim probe command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 58,
+   "dtMs": 176830,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000010",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000011",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000011.jsonl",
+    "background_tasks": [
+     {
+      "id": "a0000000000000010",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run verbatim probe command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 59,
+   "dtMs": 196770,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000010",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000010",
+    "agent_type": "general-purpose",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000010.jsonl",
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000010",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run verbatim probe command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 60,
+   "dtMs": 196807,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "<task-notification>\n<task-id>a0000000000000010</task-id>\n<tool-use-id>toolu_000000000000000000000011</tool-use-id>\n<output-file>/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/tasks/a0000000000000010.output</output-file>\n<status>completed</status>\n<summary>Agent \"Run verbatim probe command\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result><subagent prose, stubbed for the public corpus></result>\n<usage><subagent_tokens>31195</subagent_tokens><tool_uses>1</tool_uses><duration_ms>25356</duration_ms></usage>\n</task-notification>"
+   }
+  },
+  {
+   "seq": 61,
+   "dtMs": 202895,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 62,
+   "dtMs": 204564,
+   "event": "SubagentStop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/rig-home/v2.1.301/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000011",
+    "permission_mode": "default",
+    "agent_id": "a0000000000000012",
+    "agent_type": "",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/rig-cfg/projects/-rig-rig-home-v2-1-301-work-repo/00000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000012.jsonl",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  }
+ ],
+ "disk": {
+  "admin": {},
+  "worktreesLeft": [],
+  "branches": [],
+  "worktreeList": "",
+  "metas": {},
+  "snapshots": {}
+ }
+}

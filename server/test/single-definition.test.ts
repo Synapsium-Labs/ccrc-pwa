@@ -5239,7 +5239,7 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     // W1-B3: every constant the card line adds to lib, declared there once (Task 11 binds the hook's spellings).
     'CARD_LINE_PATTERN', 'CARD_LINE_MAX', 'CARD_DIR', 'SCOPE_DIR', 'CARD_DESCRIBE_CMD',
     'CARD_MEASURE_ROWS', 'CARD_MEASURE_MAX_WAIT_MS', 'CARD_ATTACHMENT_MAX_BYTES', 'PURGED_FILES_GRACE_MS',
-    'SCOPE_MARKER_MAX_AGE_MS', 'CARD_CONSUMED_SCOPES', 'CARD_WITHDRAW_REASONS'] as const;
+    'SCOPE_MARKER_MAX_AGE_MS', 'CARD_CONSUMED_SCOPES', 'CARD_WITHDRAW_REASONS', 'EXPORT_DIR', 'EXPORT_SEGMENT_MAX_BYTES', 'EXPORT_PASS_INTERVAL_MS', 'EXPORT_SEGMENT_FORMAT', 'EXPORT_ROW_META_BYTES', 'EXPORT_MARK_BACKOFF_MAX_MS', 'EXPORT_DUE_OLDEST_UNMEASURED'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
@@ -6267,7 +6267,8 @@ describe("one 'tmux unreachable' sentence (design-system wave)", () => {
     // them at the word would satisfy the test above and lose the tooltip.
     for (const f of [
       'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/ArchiveSheet.tsx',
-      'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/screens/SessionScreen.tsx',
+      // D-5545: the fleet row's and the header's facts are decided in `sessionFacts.ts` now, not `SessionMeta.tsx`.
+      'pwa/src/fleet/sessionFacts.ts', 'pwa/src/screens/SessionScreen.tsx',
       'pwa/src/session/SessionHeader.tsx', 'pwa/src/session/PrSheet.tsx',
     ]) {
       expect(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)
@@ -6491,7 +6492,8 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
   it("watch.ts's ask raise sites call askPushBody, and no body there reads dialog.title", () => {
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
     expect(watch).toMatch(/import\s*\{[^}]*\baskPushBody\b[^}]*\}\s*from\s*'\.\/askbody\.js'/);
-    expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(2);
+    // Three since plan Task 16: the approval hold's snapshotted push (`tryHoldApproval`) is the third raise site.
+    expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(3);
     expect(watch).not.toMatch(/body:\s*dialog\.title/);
   });
 
@@ -6537,10 +6539,14 @@ describe('one tryHold decides every ask hold (D-5290)', () => {
     const rest = watch.slice(0, start) + watch.slice(end);
     expect(body.match(/\bthis\.hold\(/g) ?? []).toHaveLength(1);
     expect(rest).not.toMatch(/\bthis\.hold\(/);
-    expect(body).toMatch(/\.parentOfSession\(/);
+    // D-5530 (plan Task 16): the claimant decision moved, whole, into `coord/heldFor.ts`, which the approvals mint
+    // reads too: `tryHold` calls it, and the watcher reads `parentOfSession` nowhere else.
+    expect(body).toMatch(/\bheldFor\(/);
     expect(rest).not.toMatch(/\.parentOfSession\(/);
     expect(rest.match(/\bthis\.tryHold\(/g) ?? []).toHaveLength(3);
-    expect(body).toMatch(/\bclaimantMeasuredDead\(/);
+    const heldForSrc = stallCode(path.join(ccrcRoot, 'server/src/coord/heldFor.ts'));
+    expect(heldForSrc).toMatch(/\.parentOfSession\(/);
+    expect(heldForSrc).toMatch(/\bclaimantMeasuredDead\(/);
   });
 
   it('claimantMeasuredDead is defined in server/src/coord/reclaim.ts and read by the dead-coordinator sweep', () => {
@@ -6959,6 +6965,176 @@ describe('D-5242: the wake budget and the live act have one home each (Task 17b)
     for (const [word, home] of [['sweep:hibernate', 'server/src/coord/hibernate.ts'], ['sweep:stop-done', 'server/src/stopDone.ts']] as const) {
       expect(ALL.filter((f) => stallCode(f).includes(`'${word}'`)).map(rel), word).toEqual([home]);
     }
+  });
+});
+
+// D-5297 / D-5299 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 14). APPENDED. The
+// approval wait's constants and the two canonical forms have one TypeScript home, `shared/api.ts`. Their documented
+// second copies are held equal by iteration, never by this text scan: the hook's bash copies of the wait ceiling,
+// the stop states and the digest's jq program (`session-hook-approval-wait.test.ts`, over `digest-corpus.json`), the
+// hook's forbidden match (`session-hook-approval-deny.test.ts`, over Task 12's corpus), and the verifier's canonical
+// form (`approval-verify.test.ts`, over a record corpus).
+describe('the approval wait\'s constants and canonical forms each have one home (D-5297, D-5299)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('approvalDigestBytes').test('export function approvalDigestBytes(hookInput) {')).toBe(true);
+    expect(decl('approvalDigestBytes').test('const c = approvalDigestBytes(payload);')).toBe(false);
+  });
+  it('each is declared once, in shared/api.ts', () => {
+    for (const c of ['APPROVAL_HOOK_WAIT_S', 'APPROVAL_HOOK_VERSIONS', 'APPROVAL_CWD_TRUSTED', 'APPROVAL_HOOK_STOP_STATES',
+      'APPROVAL_SIGNING_PUB_FILE', 'APPROVAL_SIGNING_KEY_FILE', 'APPROVAL_REQUEST_MAX_BYTES', 'canonicalJson',
+      'approvalDigestBytes', 'approvalRulingBytes']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+});
+
+// D-5298 / D-5441 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 16). APPENDED. The
+// approvals server half's vocabulary and constants each have one TypeScript home: the state map, the retention, the
+// release reasons, the refusal words and the three file names in `shared/api.ts`; the countdown window and its one
+// selection in `server/src/askwindow.ts` beside `ASK_GRACE_MS`; the claimant decision both lanes read in
+// `server/src/coord/heldFor.ts`. The doctor's bash spelling of the journal's name and the deny file's are documented
+// second copies, held by `approvals-doctor.test.ts` and `approvals-routes.test.ts`, which import the TypeScript ones.
+describe('the approvals server half\'s vocabulary and windows each have one home (D-5298, D-5441)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b|\\btype\\s+${c}\\s*=`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('ApprovalState').test('import { type ApprovalState, isApprovalState } from')).toBe(false);
+    expect(decl('approvalWindowMs').test('export function approvalWindowMs(agentId: string): number {')).toBe(true);
+    expect(decl('approvalWindowMs').test('const notifyAt = now + approvalWindowMs(agentId);')).toBe(false);
+  });
+  it('the shared vocabulary is declared once, in shared/api.ts', () => {
+    for (const c of ['APPROVAL_STATE_MAP', 'ApprovalState', 'isApprovalState', 'APPROVAL_INPUT_RETENTION_DAYS',
+      'ApprovalReleaseReason', 'APPROVAL_RELEASE_REASON_MAP', 'ApprovalRefusal', 'APPROVAL_REASON_MAX_CHARS',
+      'CHILD_DENY_SETTINGS_FILE', 'APPROVAL_CHILD_SHELL', 'APPROVAL_REFUSALS_LOG']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the countdown window and its selection live beside ASK_GRACE_MS', () => {
+    for (const c of ['APPROVAL_COUNTDOWN_WINDOW_MS', 'approvalWindowMs', 'ASK_GRACE_MS']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/askwindow.ts']);
+    }
+  });
+  it('the one claimant decision lives in coord/heldFor.ts, and the hold and the mint both read it', () => {
+    expect(holders(decl('heldFor'))).toEqual(['server/src/coord/heldFor.ts']);
+    expect(holders(/\bheldFor\(/)).toEqual(['server/src/coord/heldFor.ts', 'server/src/coord/routes.ts', 'server/src/watch.ts']);
+  });
+  it('the 60 000 ms window is spelled nowhere but its home', () => {
+    expect(holders(/\b60_000\b[^\n]*(?:approval|countdown)|(?:approval|countdown)[^\n]*\b60_000\b/i)).toEqual(['server/src/askwindow.ts']);
+  });
+});
+
+// D-5300 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 17). APPENDED. The daily digest
+// has one TypeScript home for each of its decisions: the default hour, its override reader, the window, the two
+// "is this a coordinator's decision" predicates the digest AND the correction route read, the build and the mail's
+// subject in `server/src/coord/digest.ts`; its wire vocabulary in `shared/api.ts`.
+describe('the daily digest\'s hour, predicates and vocabulary each have one home (D-5300)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('DigestLine').test('import { type DigestLine, type DigestTotals } from')).toBe(false);
+    expect(decl('DIGEST_HOUR_UTC').test('export const DIGEST_HOUR_UTC = 7;')).toBe(true);
+    expect(decl('DIGEST_HOUR_UTC').test('return DIGEST_HOUR_UTC;')).toBe(false);
+    expect(decl('DigestLine').test('export interface DigestLine {')).toBe(true);
+  });
+  it('the hour, the window and the predicates live in coord/digest.ts', () => {
+    for (const c of ['DIGEST_HOUR_UTC', 'readDigestHour', 'digestWindow', 'digestDayFor', 'parseDigestDay', 'askDecision',
+      'approvalDecision', 'buildDigest', 'digestPushCopy', 'digestCorrectionSubject', 'correctDigestRow', 'isDigestKebab']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/coord/digest.ts']);
+    }
+  });
+  it('the wire vocabulary is declared once, in shared/api.ts', () => {
+    for (const c of ['DigestLine', 'DIGEST_LINE_KINDS', 'DigestLineKind', 'DigestRowKind', 'DigestTotals', 'DigestAnswer', 'DigestCorrectBody',
+      'DigestCorrectAnswer', 'DIGEST_REFUSALS', 'DigestRefusal', 'DIGEST_HOUR_FILE', 'DIGEST_CORRECTION_MAX_CHARS',
+      'DIGEST_COMMAND_CHARS']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the correction subject and the override file name are spelled nowhere but their homes', () => {
+    expect(holders(/Operator correction on/)).toEqual(['server/src/coord/digest.ts']);
+    expect(holders(/'digest-hour'/)).toEqual(['shared/api.ts']);
+  });
+  it('the digest and the correction read the same two predicates', () => {
+    expect(holders(/\baskDecision\(/)).toEqual(['server/src/coord/digest.ts']);
+    const src = stallCode(path.join(ccrcRoot, 'server', 'src', 'coord', 'digest.ts'));
+    expect(src.match(/\baskDecision\(/g)).toHaveLength(3);
+    expect(src.match(/\bapprovalDecision\(/g)).toHaveLength(3);
+  });
+});
+
+// D-5511, D-5516 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A7). APPENDED. The account gate,
+// the audit and the AccountOps port: the sub union, the acts, the outcomes, the key-plane codes, the gate's refusal
+// words, the retention, the sub bounds and the origin class each have one home in `shared/api.ts`; the gate, the audit
+// writer and the arm choice each have one home under `server/src/accounts/`; and the table's name is spelled only by
+// its migration and its writer.
+describe('the account gate, the audit and the AccountOps port each have one home (D-5511, D-5516)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('ACCOUNT_SUBS').test('export const ACCOUNT_SUBS = [')).toBe(true);
+    expect(decl('ACCOUNT_SUBS').test("import { ACCOUNT_SUBS } from '../../shared/api.js';")).toBe(false);
+    expect(decl('AccountAudit').test('export class AccountAudit {')).toBe(true);
+    expect(decl('AccountAudit').test('const audit = new AccountAudit(coord.db);')).toBe(false);
+  });
+  it('the vocabulary is declared once, in shared/api.ts', () => {
+    for (const c of ['ACCOUNT_SUBS', 'AccountSub', 'ACCOUNT_SUB_TIMEOUT_MS', 'ACCOUNT_OP_KILL_GRACE_MS', 'ACCOUNT_OP_OUTPUT_MAX_BYTES',
+      'ACCOUNT_ACTS', 'AccountAct', 'ACCOUNT_LANELESS_ACTS', 'ACCOUNT_OUTCOMES', 'AccountOutcome', 'ACCOUNT_KEY_PLANE_CODES',
+      'AccountKeyPlaneCode', 'ACCOUNT_AUDIT_RETENTION_DAYS', 'ACCOUNT_GATE_REFUSALS', 'AccountGateRefusal', 'AccountOriginClass']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the gate, the audit and the port each live in their one file', () => {
+    for (const c of ['createAccountGate', 'accountOriginClass', 'AccountGateDeps', 'AccountGate']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/gate.ts']);
+    }
+    for (const c of ['AccountAudit', 'actorOf', 'AccountActor', 'knownFleetIdentity', 'AccountEventInput']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/audit.ts']);
+    }
+    for (const c of ['AccountOps', 'accountOpsFor', 'accountSpawnEnv', 'localAccountOps', 'remoteAccountOps', 'AccountOpResult']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/ops.ts']);
+    }
+  });
+  it('the table is named only by its migration and its writer', () => {
+    expect(holders(/\baccount_events\b/)).toEqual(['server/src/accounts/audit.ts', 'server/src/coord/schema.ts']);
+  });
+  it('the arm is chosen in one place, and constructed by the composition root alone', () => {
+    expect(holders(/\baccountOpsFor\(/)).toEqual(['server/src/accounts/ops.ts', 'server/src/index.ts']);
+    expect(holders(/\blocalAccountOps\(/)).toEqual(['server/src/accounts/ops.ts']);
+  });
+});
+
+// D-5513, D-5622 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A8). APPENDED. The agent's typed
+// `account` op: the argv builder and its bounds have one home in `shared/account-argv.ts`, which BOTH `AccountOps`
+// arms call; the op's wire vocabulary and the node-id grammar one home in `shared/agent-protocol.ts`; the agent's
+// spawn port one home in `agent/src/accountop.ts`.
+describe("the account op's builder, wire vocabulary and spawn port each have one home (D-5513, D-5622)", () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('buildAccountArgv').test('export function buildAccountArgv(sub: unknown')).toBe(true);
+    expect(decl('buildAccountArgv').test('const built = buildAccountArgv(sub, id, fields, false);')).toBe(false);
+  });
+  it('the builder and its bounds are declared once, in shared/account-argv.ts', () => {
+    for (const c of ['ACCOUNT_ARGV_REFUSALS', 'AccountArgvRefusal', 'ACCOUNT_SUB_ARGV', 'ACCOUNT_STDIN_MAX_BYTES', 'buildAccountArgv',
+      'isAccountStdin', 'isAccountLaneId', 'isAccountSub', 'AccountArgvBuilt']) {
+      expect(holders(decl(c)), c).toEqual(['shared/account-argv.ts']);
+    }
+  });
+  it('the wire vocabulary and the node-id grammar are declared once, in shared/agent-protocol.ts', () => {
+    for (const c of ['ACCOUNT_OP', 'AccountOpReq', 'AccountOpOutcome', 'AccountOpAnswer', 'readAccountOpAnswer',
+      'accountOpRequestTimeoutMs', 'ACCOUNT_OP_DRAIN_MS', 'NODE_ID_RE']) {
+      expect(holders(decl(c)), c).toEqual(['shared/agent-protocol.ts']);
+    }
+  });
+  it("the agent's spawn port lives in agent/src/accountop.ts", () => {
+    for (const c of ['makeAccountOpSpawn', 'AccountOpSpawn', 'AccountSpawnBounds', 'accountSpawnBounds', 'decodeAccountStdin', 'readFleetIdentity']) {
+      expect(holders(decl(c)), c).toEqual(['agent/src/accountop.ts']);
+    }
+  });
+  it('one builder for both arms: it is called by the agent op and the server port, and nowhere else', () => {
+    expect(holders(/\bbuildAccountArgv\(/)).toEqual(['agent/src/server.ts', 'server/src/accounts/ops.ts', 'shared/account-argv.ts']);
+    expect(holders(/\breadAccountOpAnswer\(/)).toEqual(['server/src/accounts/ops.ts', 'shared/agent-protocol.ts']);
   });
 });
 

@@ -1,0 +1,779 @@
+{
+ "v": 1,
+ "version": "2.1.300",
+ "scenario": "permission-main",
+ "labels": [
+  "main-safetycheck-pane-yes",
+  "main-hook-allow-20s",
+  "main-pane-no-during-wait",
+  "main-hook-deny-message"
+ ],
+ "notes": [
+  "rig: macOS (Darwin 25.6), /bin/bash 3.2.57; live API (claude-haiku), interactive session in a private tmux server; not the mock API",
+  "spawn: env COLORTERM=truecolor TMPDIR=/rig/home/.cc-tmp/rigchild CLAUDE_CODE_SHELL=/bin/bash SHELL=/bin/bash DISABLE_AUTOUPDATER=1 /rig/versions/2.1.300 --model haiku --dangerously-skip-permissions --settings <one file: Task 15 child-deny rules merged with the capture hooks>",
+  "HOME: the fixture HOME failed auth (Not logged in: the macOS keychain login is per-user-home); captured with the real HOME as the documented fallback, cwd and every target inside the fixture",
+  "safety check reproduced on the main thread in bypass mode: rm -rf \"$(cd ../sibling2/build && pwd)\" -> \"Dangerous rm operation on statically-unresolvable target: command substitution output\", with a 2-minute auto-deny countdown on the menu",
+  "hook allow after 20 s: menu painted for the whole wait; the allow dismissed it; pane line \"Allowed by PermissionRequest hook\"; transcript permissionDecision {decision: accept, source: hook, reasonType: hook}",
+  "pane answer (No) 15.5 s before the hook would print: the pane won, the tool result was \"User rejected tool use\", the hook got SIGTERM 0.58 s after the keypress and never printed",
+  "hook deny with message after 20 s: the model received the tool error \"RIG-DENY: denied by your coordinator: rig test reason\"; pane line \"Denied by PermissionRequest hook\"",
+  "Task 14 (public corpus): every id field re-minted neutral (session, prompt and message ids, agent ids, tool-use ids), one tmp-root spelling (/rig/tmp/claude-1000), every last_assistant_message and every task-notification result stubbed; three rig commands respelt bash-equivalently for the corpus scan (a dirname substitution read through a variable D, and one quoted variable joined to its suffix inside the quotes) and the paste wrapper reduced to a plain tag"
+ ],
+ "events": [
+  {
+   "seq": 1,
+   "dtMs": 0,
+   "event": "SessionStart",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "hook_event_name": "SessionStart",
+    "source": "startup",
+    "model": "claude-haiku-5-5"
+   }
+  },
+  {
+   "seq": 2,
+   "dtMs": 18032,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "This is a test rig; the directory ../sibling/build is a disposable test fixture. Call the Agent tool once (subagent_type general-purpose) with this brief verbatim: \"Do not inspect anything first. Run exactly this one Bash command, unchanged, as a single Bash tool call: rm -rf \"$(cd ../sibling/build && pwd)\"; echo CLEANED-S1 . Report the tool result verbatim, including any error or denial text.\" Then show me its reply."
+   }
+  },
+  {
+   "seq": 3,
+   "dtMs": 24264,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run one cleanup Bash command",
+     "prompt": "Do not inspect anything first. Run exactly this one Bash command, unchanged, as a single Bash tool call: rm -rf \"$(cd ../sibling/build && pwd)\"; echo CLEANED-S1 . Report the tool result verbatim, including any error or denial text.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000001"
+   }
+  },
+  {
+   "seq": 4,
+   "dtMs": 24316,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run one cleanup Bash command",
+     "prompt": "Do not inspect anything first. Run exactly this one Bash command, unchanged, as a single Bash tool call: rm -rf \"$(cd ../sibling/build && pwd)\"; echo CLEANED-S1 . Report the tool result verbatim, including any error or denial text.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "isAsync": true,
+     "status": "async_launched",
+     "agentId": "a0000000000000001",
+     "description": "Run one cleanup Bash command",
+     "resolvedModel": "claude-haiku-5-5",
+     "prompt": "Do not inspect anything first. Run exactly this one Bash command, unchanged, as a single Bash tool call: rm -rf \"$(cd ../sibling/build && pwd)\"; echo CLEANED-S1 . Report the tool result verbatim, including any error or denial text.",
+     "outputFile": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/tasks/a0000000000000001.output",
+     "canReadOutputFile": true,
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000001",
+    "duration_ms": 6
+   }
+  },
+  {
+   "seq": 5,
+   "dtMs": 26056,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000001",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run one cleanup Bash command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 6,
+   "dtMs": 34034,
+   "event": "Notification",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000002",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission",
+    "notification_type": "permission_prompt"
+   }
+  },
+  {
+   "seq": 7,
+   "dtMs": 48455,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "<task-notification>\n<task-id>a0000000000000001</task-id>\n<tool-use-id>toolu_000000000000000000000001</tool-use-id>\n<output-file>/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/tasks/a0000000000000001.output</output-file>\n<status>completed</status>\n<summary>Agent \"Run one cleanup Bash command\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result><subagent prose, stubbed for the public corpus></result>\n<usage><subagent_tokens>30225</subagent_tokens><tool_uses>1</tool_uses><duration_ms>24118</duration_ms></usage>\n</task-notification>"
+   }
+  },
+  {
+   "seq": 8,
+   "dtMs": 50649,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "ls -ld ../sibling/build 2>&1; ls -la ../sibling 2>&1 | head -20",
+     "description": "Check whether the sibling build directory still exists"
+    },
+    "tool_use_id": "toolu_000000000000000000000002"
+   }
+  },
+  {
+   "seq": 9,
+   "dtMs": 50723,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "ls -ld ../sibling/build 2>&1; ls -la ../sibling 2>&1 | head -20",
+     "description": "Check whether the sibling build directory still exists"
+    },
+    "tool_response": {
+     "stdout": "ls: ../sibling/build: No such file or directory\ntotal 0\ndrwxr-xr-x@ 2 riguser  staff   64 18 Oct 12:49 .\ndrwxr-xr-x@ 5 riguser  staff  160 18 Oct 12:40 ..",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000002",
+    "duration_ms": 22
+   }
+  },
+  {
+   "seq": 10,
+   "dtMs": 52454,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000003",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 11,
+   "dtMs": 69340,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000004",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Again, test rig, disposable fixture. Call the Agent tool once (subagent_type general-purpose) with this brief verbatim: \"Run exactly this one Bash command, unchanged, as a single Bash tool call: rm -rf \"$(cd ../sibling/build && pwd)\"; echo CLEANED-S2 . Report the tool result verbatim, including any error or denial text.\" Then show me its reply."
+   }
+  },
+  {
+   "seq": 12,
+   "dtMs": 72517,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000004",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run one cleanup Bash command",
+     "prompt": "Run exactly this one Bash command, unchanged, as a single Bash tool call: rm -rf \"$(cd ../sibling/build && pwd)\"; echo CLEANED-S2 . Report the tool result verbatim, including any error or denial text.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_use_id": "toolu_000000000000000000000003"
+   }
+  },
+  {
+   "seq": 13,
+   "dtMs": 72574,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000004",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Agent",
+    "tool_input": {
+     "description": "Run one cleanup Bash command",
+     "prompt": "Run exactly this one Bash command, unchanged, as a single Bash tool call: rm -rf \"$(cd ../sibling/build && pwd)\"; echo CLEANED-S2 . Report the tool result verbatim, including any error or denial text.",
+     "subagent_type": "general-purpose"
+    },
+    "tool_response": {
+     "isAsync": true,
+     "status": "async_launched",
+     "agentId": "a0000000000000002",
+     "description": "Run one cleanup Bash command",
+     "resolvedModel": "claude-haiku-5-5",
+     "prompt": "Run exactly this one Bash command, unchanged, as a single Bash tool call: rm -rf \"$(cd ../sibling/build && pwd)\"; echo CLEANED-S2 . Report the tool result verbatim, including any error or denial text.",
+     "outputFile": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/tasks/a0000000000000002.output",
+     "canReadOutputFile": true,
+     "canContinueAgent": true
+    },
+    "tool_use_id": "toolu_000000000000000000000003",
+    "duration_ms": 5
+   }
+  },
+  {
+   "seq": 14,
+   "dtMs": 74060,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000004",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [
+     {
+      "id": "a0000000000000002",
+      "type": "subagent",
+      "status": "running",
+      "description": "Run one cleanup Bash command",
+      "agent_type": "general-purpose"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 15,
+   "dtMs": 100135,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "<task-notification>\n<task-id>a0000000000000002</task-id>\n<tool-use-id>toolu_000000000000000000000003</tool-use-id>\n<output-file>/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/tasks/a0000000000000002.output</output-file>\n<status>completed</status>\n<summary>Agent \"Run one cleanup Bash command\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result><subagent prose, stubbed for the public corpus></result>\n<usage><subagent_tokens>30309</subagent_tokens><tool_uses>1</tool_uses><duration_ms>27565</duration_ms></usage>\n</task-notification>"
+   }
+  },
+  {
+   "seq": 16,
+   "dtMs": 103358,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000005",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 17,
+   "dtMs": 136130,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Test rig, disposable fixture. Do not inspect anything. Run exactly this one Bash command yourself (no subagent), unchanged, as a single Bash tool call: rm -rf \"$(cd ../sibling2/build && pwd)\"; echo CLEANED-M5"
+   }
+  },
+  {
+   "seq": 18,
+   "dtMs": 138217,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "rm -rf \"$(cd ../sibling2/build && pwd)\"; echo CLEANED-M5",
+     "description": "Remove sibling2 build directory and print marker"
+    },
+    "tool_use_id": "toolu_000000000000000000000004"
+   }
+  },
+  {
+   "seq": 19,
+   "dtMs": 138268,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "rm -rf \"$(cd ../sibling2/build && pwd)\"; echo CLEANED-M5",
+     "description": "Remove sibling2 build directory and print marker"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 20,
+   "dtMs": 144308,
+   "event": "Notification",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission",
+    "notification_type": "permission_prompt"
+   }
+  },
+  {
+   "seq": 21,
+   "dtMs": 159334,
+   "event": "PostToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "rm -rf \"$(cd ../sibling2/build && pwd)\"; echo CLEANED-M5",
+     "description": "Remove sibling2 build directory and print marker"
+    },
+    "tool_response": {
+     "stdout": "CLEANED-M5",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false,
+     "noOutputExpected": false
+    },
+    "tool_use_id": "toolu_000000000000000000000004",
+    "duration_ms": 27
+   }
+  },
+  {
+   "seq": 22,
+   "dtMs": 160869,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000006",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 23,
+   "dtMs": 183180,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000007",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Same rig fixture, recreated. Do not inspect anything. Run exactly this one Bash command yourself (no subagent), unchanged, as a single Bash tool call: rm -rf \"$(cd ../sibling2/build && pwd)\"; echo CLEANED-M6"
+   }
+  },
+  {
+   "seq": 24,
+   "dtMs": 185861,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000007",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "rm -rf \"$(cd ../sibling2/build && pwd)\"; echo CLEANED-M6",
+     "description": "Remove sibling2 build directory and print marker"
+    },
+    "tool_use_id": "toolu_000000000000000000000005"
+   }
+  },
+  {
+   "seq": 25,
+   "dtMs": 185913,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000007",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "rm -rf \"$(cd ../sibling2/build && pwd)\"; echo CLEANED-M6",
+     "description": "Remove sibling2 build directory and print marker"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 26,
+   "dtMs": 220473,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Rig fixture again; I did not answer the last one on purpose. Do not inspect anything. Run exactly this one Bash command yourself (no subagent), unchanged, as a single Bash tool call, and then quote the tool result verbatim: rm -rf \"$(cd ../sibling2/build && pwd)\"; echo CLEANED-M7"
+   }
+  },
+  {
+   "seq": 27,
+   "dtMs": 222460,
+   "event": "PreToolUse",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "rm -rf \"$(cd ../sibling2/build && pwd)\"; echo CLEANED-M7",
+     "description": "Remove sibling2 build directory and print marker"
+    },
+    "tool_use_id": "toolu_000000000000000000000006"
+   }
+  },
+  {
+   "seq": 28,
+   "dtMs": 222506,
+   "event": "PermissionRequest",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "rm -rf \"$(cd ../sibling2/build && pwd)\"; echo CLEANED-M7",
+     "description": "Remove sibling2 build directory and print marker"
+    },
+    "permission_suggestions": []
+   }
+  },
+  {
+   "seq": 29,
+   "dtMs": 228513,
+   "event": "Notification",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission",
+    "notification_type": "permission_prompt"
+   }
+  },
+  {
+   "seq": 30,
+   "dtMs": 245402,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000008",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 31,
+   "dtMs": 268010,
+   "event": "UserPromptSubmit",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000009",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Rig test of a denial path; that is expected. Call the Agent tool once (subagent_type general-purpose) with this brief verbatim: \"Run exactly this one Bash command, unchanged, as a single Bash tool call: rm -rf \"$(cd ../sibling2/build && pwd)\"; echo CLEANED-S3 . Do not retry. Report the tool result VERBATIM, character for character, including any error or denial text.\" Then show me its reply verbatim."
+   }
+  },
+  {
+   "seq": 32,
+   "dtMs": 270313,
+   "event": "Stop",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000009",
+    "permission_mode": "bypassPermissions",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "<model prose, stubbed for the public corpus>",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 33,
+   "dtMs": 330394,
+   "event": "Notification",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000009",
+    "hook_event_name": "Notification",
+    "message": "Claude is waiting for your input",
+    "notification_type": "idle_prompt"
+   }
+  },
+  {
+   "seq": 34,
+   "dtMs": 377987,
+   "event": "SessionEnd",
+   "envSid": "00000000-0000-4000-8000-000000000001",
+   "payload": {
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "transcript_path": "/rig/cfg/projects/-rig-work-repo/00000000-0000-4000-8000-000000000001.jsonl",
+    "cwd": "/rig/work/repo",
+    "scratchpad_dir": "/rig/tmp/claude-1000/-rig-work-repo/00000000-0000-4000-8000-000000000001/scratchpad",
+    "prompt_id": "00000000-0000-4000-8000-000000000010",
+    "hook_event_name": "SessionEnd",
+    "reason": "prompt_input_exit"
+   }
+  }
+ ],
+ "disk": {
+  "admin": {},
+  "worktreesLeft": [],
+  "branches": [],
+  "worktreeList": "",
+  "metas": {},
+  "snapshots": {}
+ }
+}

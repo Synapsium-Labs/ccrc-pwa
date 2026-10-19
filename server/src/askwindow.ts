@@ -40,7 +40,7 @@
  *  wins"): with D-5289 a parent's answer after the lapse still counts until the
  *  operator acts, so the window is no longer the parent's only chance, and the
  *  longer one lets a parent that is mid-turn finish before the phone buzzes.
- *  The approval lapse (plan Task 16) reads this same constant. */
+ *  The approval lapse reads it for a subagent's prompt only, through `approvalWindowMs` (D-5441). */
 export const ASK_GRACE_MS = 180_000;
 
 /** The moment the operator is notified of a held ask: its mint time plus
@@ -53,6 +53,22 @@ export const ASK_GRACE_MS = 180_000;
  *  plan's `askNotifyAt(askAt)` departs here (D-5364). */
 export function askNotifyAt(heldAt: number): number {
   return heldAt + ASK_GRACE_MS;
+}
+
+/** D-5441 (`approval-countdown-window-60s`, the operator's ruling of 2026-10-18): the coordinator's window on a
+ *  permission prompt that carries Claude Code's unattended auto-deny countdown (the main thread and foreground
+ *  subagents; the deny was measured at about 120 s on 2.1.300, after which a hook's allow was ignored). Then the hook
+ *  returns no decision and the prompt is the operator's until Claude Code's own deny. One home, beside
+ *  `ASK_GRACE_MS`; read only through `approvalWindowMs`. */
+export const APPROVAL_COUNTDOWN_WINDOW_MS = 60_000;
+
+/** D-5441: THE ONE selection of an approval row's window, from the request's `agent_id` as the canonical array
+ *  carries it. A main-thread request (`""`) gets `APPROVAL_COUNTDOWN_WINDOW_MS` on every version, the safe direction
+ *  where no countdown was observed; a subagent request gets `ASK_GRACE_MS`, because a fleet child's subagents run in
+ *  the background (its spawn sets no `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, D-5443) and carry no countdown. The
+ *  mint's `notifyAt`, the `201`'s `waitS` and the ruling's `expiresAt` all come from this. */
+export function approvalWindowMs(agentId: string): number {
+  return agentId === '' ? APPROVAL_COUNTDOWN_WINDOW_MS : ASK_GRACE_MS;
 }
 
 /** Ceiling on how long a row may sit `'answering'` before `sweepAsks` gives up

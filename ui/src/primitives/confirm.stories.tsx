@@ -62,6 +62,22 @@ export const Danger: Story = {
   ),
 };
 
+/** `defaultFocus="cancel"` (D-5507): a danger confirm whose Cancel holds the focus on open, so an Enter or a Space
+ *  pressed out of habit answers no; closing hands the focus back to the control that opened it. The default is
+ *  today's: the sheet moves no focus. */
+export const CancelFocused: Story = {
+  render: () => (
+    <Demo
+      title="Clear fleet's refusals?"
+      consequence="It forgets that it refused v0.4.21. With auto-install on, the server may try it again on its next check."
+      confirmLabel="Ack"
+      onConfirm={() => {}}
+      tone="danger"
+      defaultFocus="cancel"
+    />
+  ),
+};
+
 export const MoveAccount: Story = {
   render: () => (
     <Demo

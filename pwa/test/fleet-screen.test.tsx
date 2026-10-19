@@ -169,8 +169,7 @@ describe('FleetScreen', () => {
     // account label also appears once in the accounts strip, so allow multiples.
     expect(screen.getByText('OpenClawHetzner')).toBeInTheDocument();
     expect(screen.getByText('mekwarlive')).toBeInTheDocument();
-    expect(screen.getAllByText('team·max').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('team·alt').length).toBeGreaterThan(0);
+    // D-5545: the account lane left the card (a header fact now).
 
     // Status is dot + word, never dot alone. SessionLine (unlike the SessionCard
     // it replaces) carries no relative timestamp — that's cut, not moved.
@@ -249,7 +248,8 @@ describe('FleetScreen', () => {
       sessions: [session({ subagents: [{ name: 'reviewer', startedAt: 1 }] })],
     });
 
-    expect(screen.getByLabelText('1 subagent')).toHaveTextContent('⑂ 1');
+    // D-5545: the subagent disclosure is a header fact; the card is a glance.
+    expect(screen.queryByLabelText('1 subagent')).toBeNull();
   });
 
   it('shows the muted ask summary line under a waiting session', () => {
@@ -260,7 +260,8 @@ describe('FleetScreen', () => {
       sessions: [session({ hookState: 'waiting', askSummary: 'Deploy now?' })],
     });
 
-    expect(screen.getByText('Deploy now?')).toBeInTheDocument();
+    // D-5545: the question is the header's; the card's marker says `needs you` on an attention row.
+    expect(screen.queryByText('Deploy now?')).toBeNull();
   });
 
   it("shows a persistent offline banner when conn is 'down', keeping last-known cards", () => {
@@ -2175,8 +2176,9 @@ describe('a chip never names rows that are not on the screen', () => {
 
     // No fold expanded, and yet:
     expect(screen.getByText('merged')).toBeInTheDocument();
-    expect(screen.getByText('#157')).toBeInTheDocument();
-    expect(screen.getByText('1.2 GB')).toBeInTheDocument();
+    expect(screen.getByText('PR #157')).toBeInTheDocument(); // D-5545: the row's one context fact
+    // D-5545: the reclaimable size is a header fact; the row's one context fact is its PR.
+    expect(screen.queryByText('1.2 GB')).toBeNull();
     expect(screen.getByRole('img', { name: 'merged, ready to clean up' })).toBeInTheDocument();
   });
 
@@ -2531,9 +2533,9 @@ describe('the programme tree on the fleet screen', () => {
     // …and the WORKING card (beta) does not: its own row is where that wave is.
     const beta = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'beta');
     expect(beta!.querySelector('.proj-abroad')).toBeNull();
-    // And beta's own row carries the orphan marker (Task 6), because the
-    // coordinator is on alpha's card.
-    expect(beta!.querySelector('.proj-crossing')?.textContent).toContain('home alpha');
+    // D-5545: no second line under beta's row any more — the orphan marker rides the row, and only for a
+    // coordinator the frame has measured (the home clause is in its title; see the case below).
+    expect(beta!.querySelector('.proj-crossing')).toBeNull();
     // …and a card that is neither the home nor the work says nothing at all.
     const gamma = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'gamma');
     expect(gamma, 'no card for gamma').toBeTruthy();
@@ -2592,8 +2594,8 @@ describe('the programme tree on the fleet screen', () => {
     });
     const cards = [...document.querySelectorAll('.proj-card')];
     const beta = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'beta')!;
-    const marker = beta.querySelector('.proj-crossing')!;
-    expect(marker.getAttribute('data-presence')).toBe('dead');
+    // D-5545: the marker rides the row (`data-marker`), no longer a `.proj-crossing` line under it.
+    const marker = beta.querySelector('[data-marker="coordinator-gone"]')!;
     expect(marker.getAttribute('title')).toContain('reclaim');
     // …and in the TEXT, which is the half a phone can read (final fix round):
     // the wiring case owns this too, because `data-presence` reaching the
@@ -3011,6 +3013,7 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     expect(order).toEqual(['banner', 'halt-banner', 'update-banner']);
     expect(updates, 'one poll for the whole screen').toHaveBeenCalledTimes(1);
     fireEvent.click(ackButton);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));   // through AckConfirm (D-5507)
     await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
     expect(ack.mock.calls).toEqual([[FLEET]]);
   });
@@ -3047,6 +3050,7 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     const ack = vi.spyOn(api, 'ackUpdateNode').mockRejectedValue(new TypeError('Failed to fetch'));
     render(<FleetScreen store={makeStore()} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Ack fleet' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));   // through AckConfirm (D-5507)
     await until(() => expect(updates).toHaveBeenCalledTimes(2));
     await until(() => expect(screen.getByRole('button', { name: 'Ack fleet' })).toBeDisabled());
     expect(ack).toHaveBeenCalledTimes(1);
@@ -3102,6 +3106,65 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     render(<FleetScreen store={makeStore()} />);
     await until(() => expect(document.querySelector('.build-line')).not.toBeNull());
     expect(count(document.body), 'no answer ever landed: nothing to call the last one').toBe(0);
+  });
+});
+
+// — D-5527: a coordinator's dispatched child from ANOTHER project nests under it, on its card, and says whose code
+// it works on; its label names the programme and wave, never a bare run number. Neutral names (public repo). —
+
+describe('cross-project nesting on the fleet screen (D-5527)', () => {
+  const seedCross = (store: FleetStore): void => seed(store, {
+    conn: 'open',
+    sessions: [
+      session({ id: 'lane-a-project-a', project: 'project-a', workspace: null, name: 'the coordinator', role: 'coordinator' }),
+      session({ id: 'lane-a-project-a-still-pond', project: 'project-a', workspace: 'still-pond', role: 'child',
+                child: { kind: 'child', runId: 40 }, boardProject: 'project-a' }),
+      // Minted by run 39 (wave 4), resumed by run 41 for wave 5; the server placed it on its coordinator's card.
+      session({ id: 'lane-b-project-b-quiet-river', project: 'project-b', workspace: 'quiet-river', role: 'child',
+                child: { kind: 'child', runId: 39 }, boardProject: 'project-a' }),
+      session({ id: 'lane-b-project-b', project: 'project-b', workspace: null }),
+    ],
+    runs: [
+      runRow({ id: 40, program: 'tidy-docs', programTitle: 'Tidy the docs', wave: 1, waveOf: 2, project: 'project-a',
+               homeProject: 'project-a', sessionId: 'lane-a-project-a-still-pond', claimedBy: 'lane-a-project-a' }),
+      runRow({ id: 41, program: 'port-api', programTitle: 'Port the API', wave: 5, waveOf: 7, project: 'project-b',
+               homeProject: 'project-b', sessionId: 'lane-b-project-b-quiet-river', claimedBy: 'lane-a-project-a', resumed: true }),
+    ],
+    runsFrameSeen: true,
+  });
+  const card = (name: string): Element =>
+    [...document.querySelectorAll('.proj-card')].find((c) => c.querySelector('.proj-card-name')?.textContent === name)!;
+
+  it('nests the child under its coordinator inside the coordinator’s project card, beside a same-project child', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seedCross(store);
+    const nested = [...card('project-a').querySelectorAll('.proj-nest .sess-label')].map((e) => e.textContent);
+    expect(nested).toEqual(['still-pond', 'quiet-river']);
+    expect([...card('project-b').querySelectorAll('.sess-line .sess-label')].map((e) => e.textContent)).toEqual(['lane-b-project-b']);
+    expect(card('project-b').querySelector('.proj-elsewhere-line')?.textContent).toBe('1 workspace under project-a');
+  });
+
+  it('the cross-project child names its project, and only it does', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seedCross(store);
+    const chips = [...document.querySelectorAll('.sess-workson')];
+    expect(chips.map((c) => c.textContent)).toEqual(['works on project-b']);
+    expect(chips[0]!.closest('.sess-line')?.querySelector('.sess-label')?.textContent).toBe('quiet-river');
+    expect(chips[0]!.querySelector('svg')).not.toBeNull();
+    // Inside the row button, so it rides the accessible name.
+    expect(screen.getByRole('button', { name: /^quiet-river.*works on.*project-b$/ })).toBeInTheDocument();
+  });
+
+  it('each child names its programme and wave — the CURRENT wave of a resumed workspace — and no run number', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seedCross(store);
+    const labels = [...document.querySelectorAll('.sess-child')].map((e) => e.textContent);
+    expect(labels).toEqual(['tidy-docs · wave 1 of 2', 'port-api · wave 5 of 7']);
+    expect(document.querySelector('.sess-child')?.getAttribute('title'))
+      .toBe('this workspace does one wave of Tidy the docs for the coordinator; it is stopped or reclaimed when the wave is done');
   });
 });
 

@@ -51,3 +51,16 @@ export const ColouredFromOutside: Story = {
 export const LongLabel: Story = {
   args: { dot: true, children: 'a-rather-long-account-label-nobody-should-write' },
 };
+
+/** CHECK that a long label that WRAPS inside its pill keeps the dot whole
+ *  (D-5578). The account picker's name group is this shape: a narrow column
+ *  with `overflow-wrap: anywhere`, so at 360 and 390 the label breaks inside
+ *  the chip. The dot stays 5px by 5px; before D-5578 it drew 2 to 3px wide. */
+export const LongLabelWrapping: Story = {
+  args: { dot: true, children: 'a-rather-long-account-label' },
+  render: (args) => (
+    <div style={{ width: 120, overflowWrap: 'anywhere' }}>
+      <Chip {...args} />
+    </div>
+  ),
+};

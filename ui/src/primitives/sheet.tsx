@@ -116,7 +116,9 @@ export function Sheet({
                 // `.sheet-panel--full` only re-stated height, ground, padding
                 // and z-index over `.sheet-panel`, so it inherited both.
                 'sheet-panel--full z-drawer h-[calc(100dvh-var(--safe-top)-var(--sp-6))] rounded-t-xl bg-well shadow-sheet px-0 pt-2 pb-[calc(var(--sp-2)+var(--safe-bottom))]'
-              : 'z-sheet max-h-[calc(100dvh-var(--sp-12)-var(--safe-top))] rounded-t-xl bg-sheet shadow-sheet px-4 pt-2 pb-[calc(var(--sp-4)+var(--safe-bottom))]',
+              : // The sides pad with the card role (D-5093, Task 14b): 16px in
+                // Refined, the --sp-4 it used before, and 12px in Instrument.
+                'z-sheet max-h-[calc(100dvh-var(--sp-12)-var(--safe-top))] rounded-t-xl bg-sheet shadow-sheet px-card pt-2 pb-[calc(var(--sp-4)+var(--safe-bottom))]',
             className,
           )}
         >
@@ -157,10 +159,16 @@ export function Sheet({
             </p>
           ) : null}
           {inBody ? null : heading}
+          {/* A box that scrolls on one axis clips on both, so the scrolling
+              body is a clip edge at its sides, flush with every full-width
+              row, and `FOCUS_RING` draws 4px outside its control (2px outline,
+              2px offset). `px-1 -mx-1` moves the clip edge out by that reach
+              and leaves the content box where it was (D-5495,
+              `pwa/test/sheet-ring-room.test.tsx`). */}
           <div
             className={cn(
               'sheet-body min-h-0',
-              full ? 'flex flex-1 flex-col overflow-hidden' : 'overflow-y-auto overscroll-contain',
+              full ? 'flex flex-1 flex-col overflow-hidden' : '-mx-1 px-1 overflow-y-auto overscroll-contain',
             )}
           >
             {inBody ? heading : null}

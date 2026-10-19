@@ -99,9 +99,53 @@ and the contrast gate measures each palette once, for both skins.
   delete the ink beside `text-meta`. A role sets the font size only: Tailwind
   attaches no line height to a key it did not define. The page title's key is
   `title` because `page` is already a colour (see "Adding a token").
-- **Nothing reads the roles yet.** The shared primitives adopt them in a later
-  change. Until then, Instrument differs from Refined only in radii, card
-  elevation and motion.
+- **The shared primitives read the roles.** `Button`'s filled and ghost
+  variants say `text-ui`, `ListRow` says `min-h-row`, and `Chip`, `Keycap`,
+  `Door`'s glyph and `Radio`'s legend say `text-meta`. A role replaced a scale
+  step only where the role's Refined value is that step (`--fs-ui` is
+  `--fs-base`, `--fs-meta` is `--fs-xs`, `--row-h` is 52px), so Refined
+  renders as it did. In Instrument, buttons set at 13px from 900px wide,
+  meta at 11px. `--row-h` is a list row's minimum height (44px, or 32px
+  under a fine pointer), and the row's `py-2` plus its content set the drawn
+  height: 36px for a one-line row under a fine pointer (D-5461).
+- **So do the sheet body, `OptionRow` and the app sheets** (Task 14b).
+  `Sheet`'s panel pads its sides with `px-card` (`--pad-card`: 16px in
+  Refined, 12px in Instrument); the full drawer arm keeps `px-0`.
+  `OptionRow`'s label and cursor read `--fs-ui`, its index and enter hint
+  `--fs-meta`, and its minimum height `--row-h`. In the app sheets
+  (`fleet.css`, `shell.css`, `chat.css`) and the transcript's tool rows
+  (`tool-card.css`), a row's or a control's label and a sheet's copy read
+  `--fs-ui` where they said `--fs-base`, and timestamps, counts, chips and
+  meta lines read `--fs-meta` where they said `--fs-xs`. Page titles, prose,
+  screen statements, section heads and the fleet's session line stay on
+  their steps.
+
+### The role census
+
+`pwa/test/role-census.test.ts` (D-5093) classifies every non-story primitive
+in `src/primitives/`, so a new one reds until its author decides:
+
+- **Role-bearing:** its size is a control's, a row's or a label's. It must
+  read the roles it adopted, and any scale size it keeps (a type step, an
+  arbitrary font size, or a height that is a number, a bracketed length or
+  `tap`) is on its allowlist with the reason no role fits. Examples: the tap
+  floor `min-h-tap`, the 16px input floor `text-input`, the quiet button's
+  11px mono label. An allowlist entry whose class has gone reds too.
+- **Not role-bearing:** with the reason, such as `Well` (mono code in a dark
+  well, sized by its content) or `Wordmark` (the identity core).
+
+The census also resolves each adopted role and the step it replaced in
+`tokens.css`'s `:root` and requires them equal, at every width. Retuning a
+Refined role reds it, and the adoption has to be measured again. Padding and
+gaps are a control's own rhythm and are not scanned.
+
+A primitive dressed by its own stylesheet (`OptionRow`, through
+`option-row.css`) names that sheet in its entry, and the census reads its
+sizes in CSS spelling: a `var(--fs-<step>)` or a `min-height` in px is a scale
+size, and a `var(--<role>)` is a role. The app sheets have a registry of their
+own, `APP_ROLE_RULES`, checked in both directions: a registered rule back on
+its step reds, and so does a rule that reads a type role without being
+registered.
 
 Storybook's **Skin** toolbar applies the skin through the same `applySkin`
 the app calls, and the token reference has a **Skin roles** page that shows
@@ -134,8 +178,12 @@ servers when the runs finish.
 ### Reaching Instrument before there is a picker
 
 Instrument is a preview until its shell lands, and the Settings picker comes
-later. Until the command palette offers "Switch layout", select it from the
-browser console on the app's own page, then reload:
+later. Until then, the command palette selects it: ⌘K (Ctrl+K off a Mac), then
+"Switch layout →", then "Instrument (preview)". "Match this device" on the
+same page returns to the default. Both are remembered per device (D-5103).
+
+Without a keyboard, or before the bundle runs, the browser console on the
+app's own page does the same, followed by a reload:
 
     localStorage.setItem('ccrc-skin', 'instrument')
 
