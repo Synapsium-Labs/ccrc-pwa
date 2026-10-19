@@ -1056,10 +1056,20 @@ as such.
   probes its recipient's input box (`readBoxText`, read-only, through the session's queue, at most every 30 s) and wakes
   it when the box differs from what it held at the park; otherwise it is re-attempted every 10 minutes through every
   gate, so a recipient that has since died, stopped or been purged is rejected by the lifecycle rungs exactly as before,
-  and a closed run still cancels it. An `enter-ignored` park presses and types nothing while its box still holds the same
-  text (no blind third Enter, never the nudge under itself). The sending session gets one system mail from `operator`
+  and a closed run still cancels it. An `enter-ignored` park types nothing while its box still holds the same text
+  (never the nudge under itself); on its retry timer, a box that holds exactly OUR OWN nudge goes to `sendPrompt`'s
+  `resumeIfOwn` arm, which presses Enter only after its correspondence check (`pressEnterAndConfirm`) and never types,
+  so the stranded wave brief is submitted without a human, at most once per 10-minute retry; any other text is held
+  with nothing pressed. A `parkBox` the park could not read (the box absent, or a menu up) is UNKNOWN, not empty
+  (`parkBoxSeen`): it wakes only on a box seen empty, and any other reading becomes its baseline
+  (`CoordStore.baselineParkBox`) without a press. The probe is grouped per recipient and claims `mailInFlight` for that
+  recipient while it waits, so a probe stuck behind another caller's queue slot holds only its own recipient, never the
+  whole lane. A parked row does not veto hibernation or stop-done (`hibernateSweep.ts`, `stopDoneSweep.ts`): it would
+  otherwise keep its session resident for up to 24 h; a hibernated recipient is still reached through the ensure-wake
+  gate on the retry, and a stopped one is rejected by the lifecycle rung as before. The sending session gets one system mail from `operator`
   (`mail parked: <subject>`, saying why and what lands it; `tellSender`'s degrade rule holds: never a role, never a
-  session-less sender, never the recipient itself); the operator gets one push, tagged `mail-parked-<delivery id>`, at
+  session-less sender, never the recipient itself); the operator gets one push regardless of who sent it, tagged
+  `mail-parked-<delivery id>` and addressed to the sender's session or, for a role-sent mail, the recipient's, at
   15 minutes parked, or at once for a park that followed the attempts ceiling, recorded in `parkEscalatedAt` so a
   restart never repeats it. At 24 hours parked the row is rejected with `lastError` `parked 24 h, never delivered:
   <reason>`, and the sender is mailed `mail rejected: <subject>`. On the wire: `MailSummary.parkedAt` (optional, only on
@@ -1073,7 +1083,8 @@ as such.
   opposite meaning; the mail strip, which renders one delivery's state, says "parked". It departs from the brief's "expose
   'parked' wherever delivery states are listed" only in the run board's word, and `MailDeliveryState` gains no member, so
   every reader keyed on `state` (the stall watch's queued-mail verdict among them) is unchanged.
-- **D-5840** — `mail-gate-parked` (D1, CCRCP-204): the `enter-ignored` park's pre-send hold is a refusal before the send,
+- **D-5840** — `mail-gate-parked` (D1, CCRCP-204): the `enter-ignored` park's pre-send hold (a box holding text that is
+  neither changed since the park nor our own nudge) is a refusal before the send,
   and the D-792 ladder rule is that every such `continue` names a gate. So `MailGate` gains one member, `parked`
   (additive on a closed union; `GATE_PHRASE` in the mail strip has its words), and the hold records it.
 

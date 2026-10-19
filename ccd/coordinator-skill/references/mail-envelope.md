@@ -107,9 +107,10 @@ or it has sat parked for 24 hours.
 
 **One failure parks on the FIRST attempt, not the sixth:** `enter-ignored`,
 where the lane typed the nudge into a never-delivered row's box and the session
-swallowed both Enters. The nudge is sitting there whole, so the lane presses
-nothing and types nothing more while the box still holds it — it waits for the
-box to be submitted or cleared, then delivers.
+swallowed both Enters. The nudge is sitting there whole, so the lane never
+types it again. Every 10 minutes it presses Enter on that nudge once more, only
+after checking that the box still holds exactly its own text, and it delivers
+at once if the box is submitted or cleared in between.
 
 **You are told.** When a message YOU sent parks, you get a system mail from
 `operator` with the subject `mail parked: <your subject>`, saying why and what

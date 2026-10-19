@@ -5622,7 +5622,7 @@ export class CoordStore {
   holdParked(id: number, nextAttemptAt: number): boolean {
     return Number(this.db.prepare(
       'UPDATE mail_deliveries SET nextAttemptAt = ? ' +
-      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL`,
+      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL`,
     ).run(nextAttemptAt, id).changes) > 0;
   }
 
@@ -5630,7 +5630,7 @@ export class CoordStore {
   wakeParked(id: number, now: number): boolean {
     return Number(this.db.prepare(
       'UPDATE mail_deliveries SET nextAttemptAt = ? ' +
-      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND nextAttemptAt > ?`,
+      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL AND nextAttemptAt > ?`,
     ).run(now, id, now).changes) > 0;
   }
 
@@ -5640,18 +5640,32 @@ export class CoordStore {
   markParkEscalated(id: number, at: number): boolean {
     return Number(this.db.prepare(
       'UPDATE mail_deliveries SET parkEscalatedAt = ? ' +
-      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND parkEscalatedAt IS NULL`,
+      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL AND parkEscalatedAt IS NULL`,
     ).run(at, id).changes) > 0;
+  }
+
+  /** Set a parked row's box baseline when the park could not read it (D-5838,
+   *  verification round): `parkBox` NULL means UNKNOWN, and the first reading
+   *  after the park becomes what later readings are compared against. Writes
+   *  only while it is still NULL, so it never moves a known baseline. */
+  baselineParkBox(id: number, box: string): boolean {
+    return Number(this.db.prepare(
+      'UPDATE mail_deliveries SET parkBox = ? ' +
+      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL ` +
+      'AND parkBox IS NULL',
+    ).run(box, id).changes) > 0;
   }
 
   /** Every outstanding PARKED row, due or not (D-5838): the sweep probes their
    *  boxes, escalates and applies the ceiling on every pass, not only when a
-   *  row's own timer comes round. */
+   *  row's own timer comes round. Never-delivered rows only, like every park
+   *  writer here: a delivered row that still carries park columns (written by
+   *  an older build after a rollback) is not parked. */
   parkedDeliveries(): { id: number; mailId: number; toId: string; parkedAt: number; parkReason: string | null;
                         parkBox: string | null; parkEscalatedAt: number | null; nextAttemptAt: number }[] {
     return this.db.prepare(
       'SELECT id, mailId, toId, parkedAt, parkReason, parkBox, parkEscalatedAt, nextAttemptAt ' +
-      `FROM mail_deliveries WHERE state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL ORDER BY id`,
+      `FROM mail_deliveries WHERE state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL ORDER BY id`,
     ).all() as unknown as { id: number; mailId: number; toId: string; parkedAt: number; parkReason: string | null;
                             parkBox: string | null; parkEscalatedAt: number | null; nextAttemptAt: number }[];
   }

@@ -244,6 +244,15 @@ describe('stopDonePass (D-5370)', () => {
     expect(f.argv).toEqual([]);
   });
 
+  it('a worker whose only outstanding mail is PARKED is stopped (D-5838); a parked row beside an unparked one still holds', async () => {
+    const f = fake([ID]);
+    const mailOf = (rows: object[]) => ({ ...f.deps.coord, outstandingMailFor: () => rows as never });
+    await stopDonePass({ ...f.deps, coord: mailOf([{ parkedAt: NOW }, { parkedAt: null }]) }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+    await stopDonePass({ ...f.deps, coord: mailOf([{ parkedAt: NOW }]) }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).not.toEqual([]);
+  });
+
   it('a worker somebody has on screen is not stopped', async () => {
     const f = fake([ID]);
     await stopDonePass({ ...f.deps, presence: { isOpen: (id) => id === ID } }, mem(), [row(ID)], [rec(ID)], []);

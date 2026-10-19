@@ -671,11 +671,13 @@ const MAIL_REPLAY_MAX_ATTEMPTS = 20;
  *   - otherwise it is re-attempted every `MAIL_PARK_RETRY_MS`, through every
  *     gate, so a recipient that has since died or stopped is rejected exactly as
  *     before (the lifecycle rung) — the park keeps no dead recipient's mail;
- *   - an `enter-ignored` park presses and types NOTHING on its timer while its
- *     box still holds what it held at the park: our own nudge is sitting there,
- *     `submitEnter`'s doctrine forbids a blind third Enter, and typing again
- *     would put the nudge under itself. It re-attempts only once the box is seen
- *     different (empty, or our residue cleared);
+ *   - an `enter-ignored` park never TYPES while its box still holds what it
+ *     held at the park — that would put the nudge under itself. On its timer, a
+ *     box holding exactly our own nudge is resumed by `sendPrompt`'s
+ *     `resumeIfOwn` arm (a correspondence-checked Enter, never a blind one, never
+ *     a retype), at most once per retry; any other unchanged text is held with
+ *     nothing pressed. A box the park could not read is unknown, not empty
+ *     (`parkBoxSeen`);
  *   - its SENDING session is told once, by system mail; the operator is told
  *     once, at `MAIL_PARK_ESCALATE_MS` parked (`tellSender`'s push, its tag
  *     `mail-parked-<id>`);
@@ -700,6 +702,19 @@ function parkWords(reason: string | null): { why: string; when: string } {
   }
   return { why: `the send keeps failing (${reason ?? 'unknown'})`,
            when: 'a retry lands — every 10 minutes, or as soon as its input box changes' };
+}
+
+/** What a box reading says about a PARKED row (D-5838, verification round).
+ *  `parkBox` is what the box held when the row parked, or NULL when that could
+ *  not be read (the box absent, or a menu up). NULL is UNKNOWN, never an empty
+ *  box: a NULL park wakes only on a box seen EMPTY, and any other reading
+ *  becomes its baseline (`CoordStore.baselineParkBox`) without pressing or
+ *  typing anything. A non-NULL park wakes on any difference. A `null` reading
+ *  says nothing. */
+function parkBoxSeen(box: string | null, parkBox: string | null): 'changed' | 'same' | 'baseline' | 'unknown' {
+  if (box === null) return 'unknown';
+  if (parkBox === null) return box === '' ? 'changed' : 'baseline';
+  return box === parkBox ? 'same' : 'changed';
 }
 
 /** The fleet kill-switch, `$REG/mail-disabled` — ccd's `-disabled` family
@@ -3208,12 +3223,32 @@ export class FleetWatcher {
 
   /** The park's ONE operator escalation (D-5838): `MAIL_PARK_ESCALATE_MS` after an
    *  `enter-ignored` park, or at once for a park that already followed
-   *  `MAIL_MAX_ATTEMPTS` failures. The caller has won `markParkEscalated`. */
+   *  `MAIL_MAX_ATTEMPTS` failures. The caller has won `markParkEscalated`.
+   *
+   *  It is UNCONDITIONAL: `tellSender`'s degrade rule governs only who is
+   *  MAILED (`tellParkedSender`). A mail sent by a role with no session behind
+   *  it — the operator, a program kickoff, `coordinator` naming no run — is
+   *  still pushed, tagged with the RECIPIENT's session instead, since that is
+   *  the box the operator has to look at. */
   private escalatePark(store: CoordStore, p: { id: number; mailId: number; toId: string; parkReason: string | null },
                        sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): void {
-    this.pushSenderNotice(store, p.mailId, p.toId,
-      `parked — ${parkWords(p.parkReason).why}; it will be delivered when ${parkWords(p.parkReason).when}`,
-      `mail-parked-${p.id}`, sessionProjects, projects);
+    const words = parkWords(p.parkReason);
+    const why = `parked — ${words.why}; it will be delivered when ${words.when}`;
+    const tag = `mail-parked-${p.id}`;
+    if (this.mailSender(store, p.mailId) !== null) {
+      this.pushSenderNotice(store, p.mailId, p.toId, why, tag, sessionProjects, projects);
+      return;
+    }
+    const origin = store.mailOrigin(p.mailId);
+    this.pushOne({
+      kind: 'mail', sessionId: p.toId,
+      project: sessionProjects.get(p.toId) ?? '',
+      title: `✉ blocked › ${p.toId}`,
+      body: `${origin?.subject ?? 'mail'}: ${why}`,
+      runId: origin?.runId ?? null,
+      tag,
+      recordAlways: true,
+    }, projects);
   }
 
   /** Tell the SENDING session, by system mail (D-5838), that its mail parked —
@@ -7249,10 +7284,20 @@ export class FleetWatcher {
     // D-5838: the PARKED rows. The 24 h ceiling, the one operator escalation, and
     // the box probe that wakes a row whose box changed since it parked.
     let woke = false;
+    let ceilinged = false;
+    // D-5838 (verification round): the probe is grouped per RECIPIENT — one
+    // capture per box per sweep, its answer fanned out to every parked row for
+    // that box — and claims `mailInFlight` for that recipient while it waits, the
+    // same single-flight the due loop below keeps. A probe stuck behind another
+    // caller's `KeyedQueue` slot therefore holds only ITS recipient: the next
+    // sweep skips that box (here and in the due loop, `in-flight`) and still
+    // delivers to everyone else, exactly as an ordinary row's stuck send does.
+    const probeFor = new Map<string, (typeof parkedRows)[number][]>();
     for (const p of parkedRows) {
       if (now - p.parkedAt >= MAIL_PARK_CEILING_MS) {
         store.rejectDelivery(p.id, 'undeliverable', parkExpiredError(p.parkReason));
         this.tellParkedSender(store, p.mailId, p.toId, 'rejected', p.parkReason);
+        ceilinged = true;
         continue;
       }
       if (p.parkEscalatedAt === null && now - p.parkedAt >= MAIL_PARK_ESCALATE_MS
@@ -7262,11 +7307,29 @@ export class FleetWatcher {
       if (p.nextAttemptAt <= now || this.mailInFlight.has(p.toId)) continue;
       if (now - (this.parkProbeAt.get(p.id) ?? 0) < MAIL_PARK_PROBE_MS) continue;
       this.parkProbeAt.set(p.id, now);
-      const box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, p.toId);
-      if (box !== null && box !== (p.parkBox ?? '') && store.wakeParked(p.id, now)) woke = true;
+      const rows = probeFor.get(p.toId) ?? [];
+      rows.push(p);
+      probeFor.set(p.toId, rows);
+    }
+    for (const [toId, rows] of probeFor) {
+      if (this.mailInFlight.has(toId)) continue;
+      this.mailInFlight.add(toId);
+      let box: string | null;
+      try {
+        box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, toId).catch(() => null);
+      } finally {
+        this.mailInFlight.delete(toId);
+      }
+      if (box === null) continue;
+      for (const p of rows) {
+        const seen = parkBoxSeen(box, p.parkBox);
+        if (seen === 'baseline') store.baselineParkBox(p.id, box);
+        else if (seen === 'changed' && store.wakeParked(p.id, now)) woke = true;
+      }
     }
 
-    const due = unacked.length === 0 && !woke ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS);
+    // A row the ceiling rejected above may still sit in `dueBefore`: re-read.
+    const due = unacked.length === 0 && !woke && !ceilinged ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS);
     if (due.length === 0) return;
     // WHO IS COORDINATING SOMETHING LIVE — one read for the whole sweep, for
     // every row in it. The same bargain `hsCache` strikes one field over
@@ -7699,15 +7762,22 @@ export class FleetWatcher {
         // refuses `draft-present` exactly as it does today.
         const ownStrandedClear = store.strandedClear(d.toId);
         // D-5838: an `enter-ignored` PARK re-attempts only once its box is seen
-        // different from what it held at the park — empty, or our residue
-        // cleared. While it still holds the same text (our own nudge, sitting
-        // unsubmitted), nothing is pressed and nothing typed: no blind third
-        // Enter, and never the nudge typed under itself. The row has still come
-        // through every gate above, so a recipient that died is rejected there.
+        // different from what it held at the park (`parkBoxSeen`) — or, on this
+        // timer, when the box holds exactly OUR OWN nudge. That case goes to
+        // `sendPrompt`, whose `resumeIfOwn` arm presses Enter on our own text only
+        // after its correspondence check (`pressEnterAndConfirm`) and never
+        // types: our leftover nudge is submitted, never re-typed under itself.
+        // It runs at most once per `MAIL_PARK_RETRY_MS`, because the probe never
+        // wakes a box that still reads the same. Any other text — a human's, or
+        // a box that cannot be read — is held: nothing pressed, nothing typed.
+        // The row has still come through every gate above, so a recipient that
+        // died is rejected there.
         if (d.parkedAt !== null && d.parkReason === 'enter-ignored') {
-          const box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId);
+          const box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId).catch(() => null);
           this.parkProbeAt.set(d.id, now);
-          if (box === null || box === (d.parkBox ?? '')) {
+          const seen = parkBoxSeen(box, d.parkBox);
+          if (seen === 'baseline') store.baselineParkBox(d.id, box!);
+          if (seen !== 'changed' && box !== renderMailNudge(d.toId)) {
             gated(d, 'parked');   // D-5840
             store.holdParked(d.id, now + MAIL_PARK_RETRY_MS);
             continue;
@@ -7815,8 +7885,8 @@ export class FleetWatcher {
           // days. `enter-ignored` parks at once — the nudge is sitting in a FRESH
           // box, `submitEnter`'s doctrine forbids a blind third Enter, and typing
           // again would put the nudge under itself; its re-attempt waits for the
-          // box to change (the hold above). Any other refusal parks at the
-          // attempts ceiling, as the reject used to — and an already-parked row
+          // box to change, or resumes our own nudge on the timer (the hold
+          // above). Any other refusal parks at the attempts ceiling, as the reject used to — and an already-parked row
           // re-parks on every failure, keeping its first `parkedAt`.
           // `MAIL_PARK_RETRY_MS`'s docstring has the whole contract.
           if (d.parkedAt !== null && now - d.parkedAt >= MAIL_PARK_CEILING_MS) {
