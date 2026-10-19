@@ -383,3 +383,8 @@ Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here whe
   hyphen run. Decision 10's `/home/<x>` became `/home/u` in files with no list hit too, the producer and the expectation
   together. The 29-character id (Task 6 Step 2) is `project-h-id-pad-keen-prairie` on all four lines that state the
   length.
+- **D-5286** — `a-ledger-sweeps-itself` (Task 2, Task 7 Step 1): `docs/superpowers/programs/path-identity.md` is not
+  swept here. By ruling, its programme sweeps it on that programme's own ledger PR, which carries other edits not yet
+  published, so this PR carries its 12 hits and class 9's tree row stays red on that file alone until that PR merges.
+  The wave-done follows that merge and one merge of `main`. `ccd/ccd` was swept here with that programme's consent:
+  comment lines only, then re-stamped.
