@@ -11,6 +11,21 @@ spec → plan → subagent execution with per-PR review lenses + whole-branch pa
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
+## Architecture aim: DDD, Clean Architecture, SOLID
+ccrc aims to follow **Domain-Driven Design, Clean Architecture and SOLID** (operator directive 2026-08-10). Every
+change should leave the code closer to that aim, never further from it:
+- **DDD:** each concept lives in one bounded context, with one model and one vocabulary. Domain rules, such as
+  state transitions, refusal sets and derived lists, are written once, and every caller goes through them.
+- **Clean Architecture:** dependencies point inward through the rings (L0 shared up to L5 `index.ts`). Policy
+  makes no I/O, and delivery code makes no decisions.
+- **SOLID:** small modules with one reason to change. Ports are interfaces declared by the consumer, and an
+  adapter keeps every distinction it receives.
+
+Adoption is incremental: fix what you touch, and do not start a big-bang rewrite. The assessment and target design are
+in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`. The binding ring rules are the
+**Rings / bounded contexts** bullet under *Conventions that shape every change* below. When a change and the
+aim conflict, say so in the PR. Do not bend the rings without saying so.
+
 ## This repository is public — nothing private goes in it
 Everything here is public: code, test fixtures, docs, commit messages, branch names, issues, PRs and comments.
 Sessions working in other projects often file ccrc issues and PRs about what they saw on a fleet. Describe the
