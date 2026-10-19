@@ -4119,4 +4119,23 @@ describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', ()
     expect(deliveryRow(coord, d.id).state).toBe('rejected');
     expect(h.calls.filter((a) => a[0] === 'send-keys' && a[3] === 'Enter').length).toBe(enters);
   }, 10_000);
+
+  it('a DELIVERED row an older build left carrying park columns is never ceiling-rejected (rollback-safe)', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    await w.sweepMail();                          // parks
+    // An older build delivered it without clearing the park columns.
+    coord.db.prepare("UPDATE mail_deliveries SET state = 'delivered', deliveredAt = ?, parkedAt = ?, " +
+      'nextAttemptAt = ? WHERE id = ?')
+      .run(Date.now(), Date.now() - MAIL_PARK_CEILING_MS - 1_000, Date.now() + 3_600_000, d.id);
+    advance(MAIL_SWEEP_MS + 1_000);
+    await w.sweepMail();
+    expect(deliveryRow(coord, d.id).state).toBe('delivered');
+    expect(coord.db.prepare("SELECT COUNT(*) AS n FROM mail WHERE subject LIKE 'mail rejected%'").get())
+      .toEqual({ n: 0 });
+  }, 10_000);
 });
