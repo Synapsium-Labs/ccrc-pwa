@@ -406,6 +406,28 @@ describe('the box token card: definition, summary, Details, and a one-tap Rotate
     expect(summaryOf(card).textContent ?? '').not.toMatch(/Healthy/);
   });
 
+  // Review (R1d security lens): a tamper or leak signal folded behind a closed Details must never sit under a calm
+  // "Healthy" (D-5503: never optimistic). Each names its fact in the summary, in amber.
+  it.each([
+    ['the token file was changed outside the server', BT({ fileProblem: { at: Date.now() - 5 * MIN, file: 'current', word: 'changed' } }),
+      'Check: server token file current changed on re-read'],
+    ['a retired value was written back to disk', BT({ fileProblem: { at: Date.now() - 5 * MIN, file: 'previous', word: 'retired' } }),
+      'Check: server token file previous retired on re-read'],
+    ['the retired value was presented', BT({ retiredPresented: 5 }), 'Check: retired value presented 5 times'],
+    ['the retired value was presented once', BT({ retiredPresented: 1 }), 'Check: retired value presented 1 time'],
+    ['both', BT({ retiredPresented: 2, fileProblem: { at: Date.now() - 5 * MIN, file: 'current', word: 'changed' } }),
+      'Check: server token file current changed on re-read · retired value presented 2 times'],
+  ] as const)('the summary never reads Healthy, and names it in amber, when %s', async (_w, bt, said) => {
+    const card = await mount(view(bt));
+    expect(summaryOf(card).textContent).toBe(said);
+    expect(summaryOf(card)).toHaveClass('settings-catalogue--amber');
+  });
+
+  it('a Healthy summary over plain http says the key travels unencrypted', async () => {
+    const card = await mount(view(BT({ fleetTransport: 'http', lastRotationAt: Date.now() - (2 * DAY + 60 * MIN) })));
+    expect(summaryOf(card).textContent).toBe('Healthy · rotated 2 days ago · transport http (unencrypted)');
+  });
+
   it('Details holds every key/value line today\'s card shows, closed, and none of them sits outside it', async () => {
     const card = await mount(view(BT({
       rotationOwed: true, owedWhy: 'fleet-behind', previousPresented: 2, retiredPresented: 1,
@@ -493,6 +515,18 @@ describe('the box token card: definition, summary, Details, and a one-tap Rotate
     const card = await mount(view(BT()));
     fireEvent.click(within(card).getByRole('button', { name: 'Rotate now' }));
     await lineUnderRotate(card, said, tone);
+  });
+
+  it('Rotate\'s 401 leaves no line under it: the login screen is the answer', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view(BT()));
+    let fail!: (e: unknown) => void;
+    vi.spyOn(api, 'rotateBoxToken').mockReturnValue(new Promise((_r, rej) => { fail = rej; }));
+    const card = await mount(view(BT()));
+    const button = within(card).getByRole('button', { name: 'Rotate now' });
+    fireEvent.click(button);
+    await act(async () => { fail(new ApiError(401, { ok: false, error: 'unauthorized' })); });
+    await waitFor(() => expect(button).not.toBeDisabled());
+    expect(card.querySelector('.settings-result'), 'no stale line behind the login screen').toBeNull();
   });
 
   it('Rotate\'s failure is a line under it, not a toast', async () => {

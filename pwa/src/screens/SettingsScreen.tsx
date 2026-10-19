@@ -455,7 +455,7 @@ const sentenceCase = (t: string): string => t.charAt(0).toUpperCase() + t.slice(
 const SUMMARY_CLASS = { calm: 'settings-note', amber: SETTINGS_AMBER_NOTE, red: 'settings-unarmed' } as const;
 
 /** One sentence from the view. "Healthy" only in `idle` with the fleet confirmed (`current`, or `own-write`: this box
- *  writes the fleet copy itself) and nothing owed, stalled or failing. Amber for `held` or `behind`, red for `failed`,
+ *  writes the fleet copy itself) and nothing owed, stalled, failing, tampered with or leaked. Amber for `held` or `behind`, red for `failed`,
  *  each with its word, from today's state sentences. */
 export function boxTokenSummary(v: BoxTokenView, now: number): { text: string; tone: keyof typeof SUMMARY_CLASS } {
   if (v.phase === 'failed') return { text: sentenceCase(boxTokenStateText(v)), tone: 'red' };
@@ -463,6 +463,15 @@ export function boxTokenSummary(v: BoxTokenView, now: number): { text: string; t
   if (v.phase === 'handed-out') return { text: BOX_TOKEN_TEXT.handedOut, tone: 'calm' };
   if (v.phase !== 'idle') return { text: sentenceCase(boxTokenStateText(v)), tone: 'calm' };
   if (v.fleetConfirmed === 'behind') return { text: `Behind: fleet ${BOX_TOKEN_FLEET_TEXT.behind}`, tone: 'amber' };
+  // A tamper or leak signal is never folded under "Healthy" (D-5503: never optimistic; R1d review). The driver owes no
+  // rotation for a file problem and bounds a retired presentation's owed rotation to one an hour, so an idle,
+  // confirmed card can carry either; each names its fact here, in amber, as well as in Details.
+  const check: string[] = [];
+  if (v.fileProblem !== null) check.push(`server token file ${v.fileProblem.file} ${v.fileProblem.word} on re-read`);
+  if (v.retiredPresented > 0) {
+    check.push(`retired value presented ${v.retiredPresented} time${v.retiredPresented === 1 ? '' : 's'}`);
+  }
+  if (check.length > 0) return { text: `Check: ${check.join(' · ')}`, tone: 'amber' };
   const confirmed = v.fleetConfirmed === 'current' || v.fleetConfirmed === 'own-write';
   if (!confirmed || v.rotationOwed || v.stalled !== null || v.banner) {
     const parts = ['Idle'];
@@ -479,6 +488,8 @@ export function boxTokenSummary(v: BoxTokenView, now: number): { text: string; t
   if (typeof next === 'number' && isPlaceableInstant(next)) {
     parts.push(next > now ? `next in ${spanWords(next - now)}` : 'next due now');
   }
+  // Plain http still rotates (R2), but the key travels unencrypted: said beside the verdict, not only in Details.
+  if (v.fleetTransport === 'http') parts.push('transport http (unencrypted)');
   return { text: parts.join(' · '), tone: 'calm' };
 }
 
@@ -501,7 +512,8 @@ function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number
     void api.rotateBoxToken()
       .then(
         (a) => result.say(rotateAnswerText(a), a === 'unreadable' || a.ok ? 'answer' : 'refusal'),
-        (err: unknown) => result.say(apiErrorText(err), 'refusal'),
+        // A 401 brings up the login screen, which is the answer: no stale line waits behind it.
+        (err: unknown) => { if (!(err instanceof ApiError && err.status === 401)) result.say(apiErrorText(err), 'refusal'); },
       )
       .finally(() => { setBusy(false); reload(); });
   };
