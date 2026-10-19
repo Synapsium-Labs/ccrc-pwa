@@ -79,8 +79,11 @@ import {
   type DelegationDurabilityEdge,
   type DelegationDurableBatch,
   type DelegationProjectionPort,
+  type DelegationProjectionRepairReport,
 } from '../src/coord/delegation-checkpoint.js';
 import { unreadableDelegationBucketResult } from '../src/coord/delegation-ingest.js';
+import * as modelNs from '../src/coord/delegation-model.js';
+import * as checkpointNs from '../src/coord/delegation-checkpoint.js';
 
 // A pass-through of the journal's append planner that a test can switch to "skip everything". `createLease` calls the planner after its
 // own checks, so no real input makes the planner skip the entry it was handed; this is the only way to reach that branch (fix round 1, M6).
@@ -3789,5 +3792,303 @@ describe('D-4658: applyAcceptedBatch applies several buckets as ONE durable appl
     // and a deduped re-application that changes a cursor is written too
     const moved = passBatches().map((b, i) => (i === 0 ? { ...b, cursor: cursorOf(PARENT, '2026101400', 400) } : b));
     expect((await dur.applyAcceptedBatch(moved)).durable).toBe(true);
+  });
+});
+
+// ── D-5833 (run 645): the fold allocates an activity's id in place ───────────────────────────────────────────────────────
+
+describe('D-5833: the fold writes an opened activity\'s id into the builder\'s own mapping', () => {
+  const RUN = 'wf_run1';
+  const workflowLaunch = (n: number): DelegationEventEnvelopeV1 => ({
+    ...base(n), eventKind: 'PostToolUse', toolName: 'Workflow', toolUseId: `toolu_wf${n}`, outcome: 'async-launched',
+    launch: { status: 'async-launched', taskId: `task_${n}`, taskType: 'local_workflow', workflowName: 'review-pass', runId: RUN, transcriptDir: `/work/t/${RUN}`, scriptPath: '/work/s.js' },
+  });
+  const LATE = 'agent-late77';
+  const OTHER_LANE = { sessionId: 'lane-b-demo' };
+  /** A fixed journal: a join that opens at once (SubagentStart), an agent only a bare tool event names (opened later by a meta), an async
+   *  launch, a workflow run (and its two workers, opened by metas), a stop, and a second session's agent. */
+  const FIXTURE_EVENTS: DelegationEventEnvelopeV1[] = [
+    sessionStart(1), subagentStart(2, X), bareTool(3, Y), agentLaunch(4, 'agent-zzz999'), workflowLaunch(5), subagentStop(6, X),
+    sessionStart(7, OTHER_LANE), subagentStart(8, 'agent-b1', OTHER_LANE), bareTool(9, LATE), agentLaunch(10, 'agent-zzz999', 'completed'),
+  ];
+  const digestOf = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+
+  it('D-5833 R1: PARITY — the built checkpoint\'s canonical bytes and every activityId are what the fold produced before the change', () => {
+    const records = evidenceChain(FIXTURE_EVENTS);
+    const b = DelegationCheckpointBuilder.from(emptyDelegationCheckpoint());
+    for (const r of records) b.foldRecord(r);
+    expect(b.openFromMeta(PARENT, INC, Y).kind).toBe('opened');
+    expect(b.openFromMeta(PARENT, INC, LATE).kind).toBe('opened');
+    expect(b.openWorkflowWorkerFromMeta(PARENT, INC, RUN, 0).kind).toBe('opened');
+    expect(b.openWorkflowWorkerFromMeta(PARENT, INC, RUN, 1).kind).toBe('opened');
+    expect(b.openFromMeta(PARENT, INC, Y).kind, 'a second open of a mapped key is a hit').toBe('already-open');
+    const cp = b.build(1);
+    expect(cp.activities).toHaveLength(8);
+    expect(Object.keys(cp.activityIdsByNaturalKey)).toHaveLength(8);
+    // The digests were computed AT MAIN, before D-5833's change, by this very fold, and pinned here.
+    expect(digestOf(encodeDelegationCheckpoint(cp)), 'the checkpoint\'s canonical bytes').toBe('c777160bc4b603dc728bddea60600645c35e3a9d72094904577fb94070d40f81');
+    expect(sha(cp.activities.map((a) => a.activityId).join('\n')), 'every activityId, in checkpoint order').toBe('32d8c411a689772296f3508fed44bcae932f4d36fc9aae226fe5ff2906d26d68');
+  });
+
+  it('D-5833 R2: NO COPY PER OPEN — 1,000 opening records into a builder holding 40,000 mappings never re-copy the mapping', () => {
+    const mapping: Record<string, string> = {};
+    for (let i = 0; i < 40_000; i++) mapping[`synthetic-key-${i}`] = sha(`synthetic-activity-${i}`);
+    const b = DelegationCheckpointBuilder.from({ ...emptyDelegationCheckpoint(), activityIdsByNaturalKey: mapping });
+    const mappingOf = (x: DelegationCheckpointBuilder): Record<string, string> => (x as unknown as { mapping: Record<string, string> }).mapping;
+    const held = mappingOf(b);
+    expect(Object.keys(held)).toHaveLength(40_000);
+    const records = evidenceChain(Array.from({ length: 1000 }, (_, i) => subagentStart(i + 1, `agent-open-${i}`)));
+
+    // A counting call-through, not a bare `vi.spyOn`: a spy RETAINS every call's result, and each result of the old function carries
+    // its own 40,000-key copy of the mapping, so a bare spy would hold 1,000 copies and exhaust the worker's heap before it counted.
+    const counted = (name: 'restoreOrAllocateActivityId' | 'allocateDelegationActivityIdInto'): { calls: () => number; restore: () => void } | null => {
+      const ns = modelNs as unknown as Record<string, (...a: unknown[]) => unknown>;
+      const real = ns[name];
+      // `allocateDelegationActivityIdInto` does not exist before D-5833: spy only when it does, so this row fails on its own count
+      // assertion below and not on `spyOn` throwing.
+      if (typeof real !== 'function') return null;
+      let n = 0;
+      const spy = vi.spyOn(ns, name).mockImplementation((...a: unknown[]) => { spy.mockClear(); n++; return real(...a); });
+      return { calls: () => n, restore: () => spy.mockRestore() };
+    };
+    const oldFn = counted('restoreOrAllocateActivityId')!;
+    const inPlace = counted('allocateDelegationActivityIdInto');
+    try {
+      for (const r of records) b.foldRecord(r);
+      expect(oldFn.calls(), 'restoreOrAllocateActivityId calls (it copies the whole mapping)').toBe(0);
+      expect(inPlace?.calls() ?? 0, 'allocateDelegationActivityIdInto calls, one per opened activity').toBe(1000);
+      expect(mappingOf(b), 'the builder\'s mapping keeps its object identity across the fold').toBe(held);
+      expect(Object.keys(held)).toHaveLength(41_000);
+      for (const i of [0, 499, 999]) {
+        const id = modelNs.deriveDelegationActivityId(keyOf(`agent-open-${i}`), records[i]!.journalId);
+        expect(held[encodeDelegationNaturalKey(keyOf(`agent-open-${i}`))], `agent-open-${i}`).toBe(id);
+        expect(b.activityOf(id)?.upstreamId).toBe(`agent-open-${i}`);
+      }
+    } finally {
+      oldFn.restore();
+      inPlace?.restore();
+    }
+  }, 300_000);
+});
+
+// ── D-5836 (run 645): the lane's per-pass repair skips the rewrite when the projection is known current ───────────────────
+
+describe('D-5836 R2: every case where the per-pass repair must still take the FULL path', () => {
+  type PerPassReport = (DelegationProjectionRepairReport & { skipped?: boolean }) | null;
+  /** `repairProjection({ perPass: true })`, reached through a cast so this file is type-clean before the option exists. */
+  const perPassOf = (d: DelegationDurability): Promise<PerPassReport> =>
+    (d as unknown as { repairProjection(o?: { perPass?: boolean }): Promise<PerPassReport> }).repairProjection({ perPass: true });
+  /** The forced-full interval; the fallback keeps these rows running (and failing on their own assertions) before it is exported. */
+  const FULL_MS = ((checkpointNs as unknown as Record<string, unknown>)['DELEGATION_REPAIR_FULL_MS'] as number | undefined) ?? 3_600_000;
+
+  interface Lane {
+    h: Harness;
+    dur: DelegationDurability;
+    /** The virtual clock the lane hands the applier as `monotonicMs` (the forced-full clock). */
+    vclock: { ms: number };
+    ctl: { failProject: number; failStats: boolean; failEdge: string | null };
+  }
+
+  /** A lane over a fixture directory: an applier opened with a controllable projection port (the port's `project` can be made to throw
+   *  once, its `eventStats` to throw) and a virtual `monotonicMs`, and one batch applied (a session and an agent's activity). */
+  async function lane(): Promise<Lane> {
+    const h = harness();
+    const vclock = { ms: 1_000_000 };
+    const ctl = { failProject: 0, failStats: false, failEdge: null as string | null };
+    const real = delegationProjectionPortOfStore(h.store);
+    const projection: DelegationProjectionPort = {
+      project: (cp) => {
+        h.log.push('project');
+        if (ctl.failProject > 0) { ctl.failProject--; throw new Error('the projection port failed (fixture)'); }
+        real.project(cp);
+      },
+      insertEvents: (rows) => { h.log.push(`insertEvents:${rows.length}`); return real.insertEvents(rows); },
+      eventStats: () => { if (ctl.failStats) throw new Error('eventStats failed (fixture)'); return real.eventStats(); },
+    };
+    const over = {
+      projection, monotonicMs: () => vclock.ms,
+      onEdge: (e: DelegationDurabilityEdge, w: 'before' | 'after') => { if (ctl.failEdge === `${e}:${w}`) { ctl.failEdge = null; throw new SimulatedCrash(`${e}:${w}`); } },
+    } as unknown as Partial<DelegationDurabilityDeps>;
+    const dur = await h.open(over);
+    await dur.applyAccepted(batch([sessionStart(1), subagentStart(2, X)]));
+    return { h, dur, vclock, ctl };
+  }
+
+  /** One per-pass repair, with the port calls it made. */
+  async function pass(l: Lane): Promise<{ report: PerPassReport; projected: boolean }> {
+    l.h.log.length = 0;
+    const report = await perPassOf(l.dur);
+    return { report, projected: l.h.log.includes('project') };
+  }
+  /** The CONTROL: a per-pass repair that takes the short path. It runs immediately before each case's perturbation, so a case cannot
+   *  pass for the reason that the short path never exists. */
+  async function expectShort(l: Lane, label: string): Promise<void> {
+    const r = await pass(l);
+    expect(r.projected, `${label}: a short per-pass repair makes no port project call`).toBe(false);                                  // [dry-drop]
+    expect(r.report, `${label}: a short per-pass repair reports skipped`).toMatchObject({                                                // [dry-drop]
+      skipped: true, inserted: 0, duplicate: 0, healedSessions: 0, fullReplay: false, wipedAll: false, journalPasses: 0,                // [dry-drop]
+      resumedAfter: Number(l.h.store.delegationEventStats().maxSequence ?? 0),                                                          // [dry-drop]
+    });                                                                                                                                 // [dry-drop]
+  }
+  /** The FULL path: the port's `project` is called by the repair, and the report says it was not skipped. */
+  async function expectFull(l: Lane, label: string): Promise<PerPassReport> {
+    const r = await pass(l);
+    expect(r.projected, `${label}: the full path calls the port's project`).toBe(true);
+    expect(r.report, `${label}: the repair completed`).not.toBeNull();
+    expect(r.report?.skipped, `${label}: the full path reports skipped:false`).toBe(false);                                            // [dry-drop]
+    return r.report;
+  }
+  /** The lane's first per-pass repair after `open` is FULL; the second is the first control. */
+  async function settle(l: Lane): Promise<void> {
+    const first = await pass(l);
+    expect(first.projected, 'the lane\'s first per-pass repair after open takes the full path').toBe(true);
+    await expectShort(l, 'control (the second per-pass repair)');
+    expect(first.report?.skipped, 'the first per-pass repair reports skipped:false').toBe(false);                                      // [dry-drop]
+  }
+  const stray = (l: Lane): void => {
+    l.h.store.db.prepare(`INSERT INTO delegation_events (eventId, journalSequence, journalDigest, acceptedAt, sessionId, parentIncarnation, claudeSessionId, eventKind, observedAt, payloadJson)
+      VALUES ('stray', 2000, ?, 1, ?, ?, 'c', 'SessionStart', 1, '{}')`).run('0'.repeat(64), PARENT, INC);
+  };
+  const count = (l: Lane, table: string): number => Number(l.h.store.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.['n']);
+
+  it('D-5836 R2: the lane\'s first per-pass repair after open is full, and the second takes the short path', async () => {
+    const l = await lane();
+    await settle(l);
+  });
+
+  it('D-5836 R2: projectionStale with no revision change — a per-pass repair whose port project throws once returns null and marks the projection stale; the next takes the full path', async () => {
+    const l = await lane();
+    await settle(l);
+    const revision = l.dur.state().checkpoint.revision;
+    // the full path is reached by a count disagreement (a stray row); the port's project then throws once
+    stray(l);
+    l.ctl.failProject = 1;
+    const failed = await pass(l);
+    expect(failed.report, 'the failed repair returns null').toBeNull();
+    expect(l.dur.state().checkpoint.revision, 'the revision did not move').toBe(revision);
+    // the counts agree again, the revision is the projected one, nothing drifted and no clock is due: only the stale mark is left
+    l.h.store.db.prepare("DELETE FROM delegation_events WHERE eventId = 'stray'").run();
+    await expectFull(l, 'the next per-pass repair, port healthy');
+    await expectShort(l, 'after the full repair');
+  });
+
+  it('D-5836 R2: a failed application\'s projection — the next per-pass repair takes the full path', async () => {
+    const l = await lane();
+    await settle(l);
+    l.ctl.failEdge = 'project:before';
+    const out = await l.dur.applyAccepted(batch([sessionStart(3)]));
+    expect(out.durable).toBe(true);
+    expect(out.projection.status).toBe('failed');
+    await expectFull(l, 'after a failed application');
+    expect(count(l, 'delegation_events')).toBe(3);
+    await expectShort(l, 'after the full repair');
+  });
+
+  it('D-5836 R2: a conflicting application\'s projection — the next per-pass repair takes the full path and the journal wins', async () => {
+    const l = await lane();
+    await settle(l);
+    l.h.store.db.prepare(`INSERT INTO delegation_events (eventId, journalSequence, journalDigest, acceptedAt, sessionId, parentIncarnation, claudeSessionId, eventKind, observedAt, payloadJson)
+      VALUES (?, 3, ?, 1, ?, ?, 'c', 'SessionEnd', 1, '{}')`).run(eid(3), '0'.repeat(64), PARENT, INC);
+    const out = await l.dur.applyAccepted(batch([sessionStart(3)]));
+    expect(out.projection.status).toBe('failed');
+    const report = await expectFull(l, 'after a conflicting application');
+    expect(report?.healedSessions).toBe(1);
+    expect(l.h.store.db.prepare('SELECT eventKind FROM delegation_events WHERE eventId = ?').get(eid(3))?.['eventKind']).toBe('SessionStart');
+    await expectShort(l, 'after the full repair');
+  });
+
+  it('D-5836 R2: eventStats count disagreeing with the evidence index — the full path, which replays the missing row', async () => {
+    const l = await lane();
+    await settle(l);
+    l.h.store.db.prepare('DELETE FROM delegation_events WHERE journalSequence = 1').run();       // count 1, max 2: only the count disagrees
+    const report = await expectFull(l, 'count disagreeing');
+    expect(report?.fullReplay).toBe(true);
+    expect(count(l, 'delegation_events')).toBe(2);
+    await expectShort(l, 'after the full repair');
+  });
+
+  it('D-5836 R2: eventStats max disagreeing with an equal count — the full path', async () => {
+    const l = await lane();
+    await settle(l);
+    l.h.store.db.prepare('UPDATE delegation_events SET journalSequence = 102 WHERE journalSequence = 2').run();       // count 2 as before, max 102
+    expect(l.h.store.delegationEventStats()).toEqual({ count: 2, maxSequence: 102 });
+    await expectFull(l, 'max disagreeing with an equal count');
+  });
+
+  it('D-5836 R2: the lane\'s first per-pass repair after a recover() is full (recovery\'s own repair does not count), and the next takes the short path', async () => {
+    const l = await lane();
+    await settle(l);
+    const recovered = await l.dur.recover();
+    expect(recovered.failure).toBeNull();
+    await expectFull(l, 'the first per-pass repair after recover()');
+    await expectShort(l, 'the second per-pass repair after recover()');
+  });
+
+  it('D-5836 R2: a recover() after a failure before the first byte (journal-write before) — the first per-pass repair after it is full', async () => {
+    const l = await lane();
+    await settle(l);
+    l.ctl.failEdge = 'journal-write:before';
+    await expect(l.dur.applyAccepted(batch([sessionStart(3)]))).rejects.toThrow(SimulatedCrash);
+    expect(l.dur.state().phase).toBe('reconstructing');
+    const recovered = await l.dur.recover();
+    expect(recovered.failure).toBeNull();
+    expect(l.dur.state().checkpoint.appliedJournalSequence, 'nothing was journaled').toBe(2);
+    await expectFull(l, 'the first per-pass repair after the recover()');
+    await expectShort(l, 'the second per-pass repair after the recover()');
+  });
+
+  it('D-5836 R2: the forced full after DELEGATION_REPAIR_FULL_MS on the virtual clock, and a full repair restarts the clock', async () => {
+    const l = await lane();
+    await settle(l);
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'just inside the interval');
+    l.vclock.ms += 2000;
+    await expectFull(l, 'just past DELEGATION_REPAIR_FULL_MS');
+    await expectShort(l, 'right after the forced full');
+    l.vclock.ms += FULL_MS - 1000;
+    await expectShort(l, 'inside the interval, counted from the forced full');
+    l.vclock.ms += 2000;
+    await expectFull(l, 'past the interval again');
+  });
+
+  it('D-5836 R2: out-of-band deletion of delegation_activities rows stays until the forced full, which heals it', async () => {
+    const l = await lane();
+    await settle(l);
+    expect(count(l, 'delegation_activities')).toBe(1);
+    l.h.store.db.prepare('DELETE FROM delegation_activities').run();
+    // the residual: a pass before the forced full is short and does not heal it
+    await expectShort(l, 'a pass after the out-of-band deletion, before the forced full');
+    expect(count(l, 'delegation_activities')).toBe(0);
+    l.vclock.ms += FULL_MS + 1000;
+    await expectFull(l, 'the forced full');
+    expect(count(l, 'delegation_activities'), 'the forced full restored the rows').toBe(1);
+  });
+
+  it('D-5836 R2: after the lane\'s first per-pass repair, a bare repairProjection() after an out-of-band delete of delegation_sessions restores it', async () => {
+    const l = await lane();
+    await settle(l);
+    expect(count(l, 'delegation_sessions')).toBe(1);
+    const db = l.h.store.db;
+    db.exec('PRAGMA foreign_keys = OFF');                       // the activity and event rows name the session; the delete is the out-of-band damage
+    db.prepare('DELETE FROM delegation_sessions').run();
+    db.exec('PRAGMA foreign_keys = ON');
+    expect(count(l, 'delegation_sessions')).toBe(0);
+    l.h.log.length = 0;
+    const report = await l.dur.repairProjection();
+    expect(l.h.log.includes('project'), 'a bare repair is always the full path').toBe(true);
+    expect(report).not.toBeNull();
+    expect((report as PerPassReport)?.skipped, 'a bare repair reports skipped:false').toBe(false);                                     // [dry-drop]
+    expect(count(l, 'delegation_sessions'), 'the session row is back').toBe(1);
+  });
+
+  it('D-5836 R2: eventStats throwing on the per-pass call returns null and marks the projection stale', async () => {
+    const l = await lane();
+    await settle(l);
+    l.ctl.failStats = true;
+    const failed = await pass(l);
+    expect(failed.report, 'a throwing eventStats is a repair failure, never a rejection').toBeNull();
+    l.ctl.failStats = false;
+    await expectFull(l, 'the next per-pass repair, eventStats healthy');
+    await expectShort(l, 'after the full repair');
   });
 });
