@@ -41,7 +41,7 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { ApprovalRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, SwapRefusal, UpdateRouteError } from './api.js';
+import type { ApprovalRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { SWAP_REFUSALS } from './api.js';
 
 /** The mail codes a route answers in `error`. The done-authority codes travel
@@ -72,7 +72,7 @@ export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
-  | ApprovalRefusal | DigestRefusal;
+  | ApprovalRefusal | DigestRefusal | StepUpRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -121,6 +121,11 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'guard-escalate': 409, 'declined': 409, 'hook-gone': 409, 'already-ruled': 409,
   // The digest routes (plan Task 17, D-5300): CHOSEN, not measured — new words, the approval routes' statuses.
   'not-coordinator': 409, 'digest-unreadable': 503,
+  // The step-up routes (D-5512, plan Task A5): CHOSEN, not measured — new words. 403 for a session that is signed
+  // in and not fresh (never 401, which raises the login screen over a live session), 429 for a spent budget, 409
+  // for the passphrase arm on a box with a passkey, and 501 for a dark gate, the status the other auth routes
+  // answer dark (`not-configured`), which keeps them in the gate sweep's `FLAG_AWARE` set (D-5618).
+  'step-up-required': 403, 'step-up-locked': 429, 'passkey-enrolled': 409, 'auth-off': 501,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */
