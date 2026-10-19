@@ -9537,12 +9537,13 @@ export function delegationListingWindowsOf(
       const first = listedAt(start.cwd);
       listedRepository = end === undefined || (first !== null && listedAt(end.cwd) === first) ? first : null;
     }
-    out.push({
+    // D-5643: a window and its listings are frozen as they are built; the memos keyed by them (D-5604, D-5642) rely on it.
+    out.push(Object.freeze({
       sessionId: start.sessionId, parentIncarnation: start.parentIncarnation, toolUseId: start.toolUseId, repository,
       ...(listedRepository === undefined ? {} : { listedRepository }), ...(lost ? { lost: true as const } : {}),
-      startedAt: start.observedAt, endedAt: end === undefined ? null : end.observedAt, before: start.listing ?? [],
-      after: lost || end === undefined || end.listing === undefined ? null : end.listing,
-    });
+      startedAt: start.observedAt, endedAt: end === undefined ? null : end.observedAt, before: Object.freeze(start.listing ?? []),
+      after: lost || end === undefined || end.listing === undefined ? null : Object.freeze(end.listing),
+    }));
   }
   return out;
 }
@@ -9556,11 +9557,11 @@ const LANE_TORN_TAIL = 'torn-tail:';
  *  one margin later (a call that began in the hour may have ended up to the margin after it). An hour that cannot be placed (null) is a
  *  window over all of time: it fails SAFE. Pure. */
 function delegationLostHourWindow(sessionId: string, parentIncarnation: string, hourMs: number | null): DelegationListingWindow {
-  return {
-    sessionId, parentIncarnation, toolUseId: '', repository: null, lost: true,
+  return Object.freeze({
+    sessionId, parentIncarnation, toolUseId: '', repository: null, lost: true as const,
     startedAt: formatDelegationInstant(hourMs ?? 0),
-    endedAt: hourMs === null ? null : formatDelegationInstant(hourMs + DELEGATION_HOUR_MS + DELEGATION_EVIDENCE_MARGIN_MS), before: [], after: null,
-  };
+    endedAt: hourMs === null ? null : formatDelegationInstant(hourMs + DELEGATION_HOUR_MS + DELEGATION_EVIDENCE_MARGIN_MS), before: Object.freeze([]), after: null,
+  });
 }
 
 /**
@@ -9575,10 +9576,10 @@ function delegationLostHourWindow(sessionId: string, parentIncarnation: string, 
  * vetoes everything: it fails safe, and it is never reached, since the lane reconciles only after a pass has set the instant. Pure.
  */
 export function delegationNotReadyWindowOf(readyAtMs: number | null): DelegationListingWindow {
-  return {
-    sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true,
-    startedAt: formatDelegationInstant(0), endedAt: readyAtMs === null ? null : formatDelegationInstant(readyAtMs + DELEGATION_CLOCK_SKEW_MS), before: [], after: null,
-  };
+  return Object.freeze({
+    sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true as const,
+    startedAt: formatDelegationInstant(0), endedAt: readyAtMs === null ? null : formatDelegationInstant(readyAtMs + DELEGATION_CLOCK_SKEW_MS), before: Object.freeze([]), after: null,
+  });
 }
 
 /**
@@ -9622,11 +9623,20 @@ export function delegationLostWindowsOf(
   }
   for (const c of cursors) if ((c.detail ?? '').startsWith(LANE_TORN_TAIL)) add(c.sessionId, c.parentIncarnation, delegationBucketHourMs(c.bucket));
   const keepFrom = laneHourOf(nowMs) - DELEGATION_INTERVAL_RETENTION_HOURS * DELEGATION_HOUR_MS;
-  out.push({
-    sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true,
-    startedAt: formatDelegationInstant(0), endedAt: formatDelegationInstant(keepFrom + DELEGATION_EVIDENCE_MARGIN_MS), before: [], after: null,
-  });
+  out.push(Object.freeze({
+    sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true as const,
+    startedAt: formatDelegationInstant(0), endedAt: formatDelegationInstant(keepFrom + DELEGATION_EVIDENCE_MARGIN_MS), before: Object.freeze([]), after: null,
+  }));
   return out;
+}
+
+/** D-5643: the one list a pass hands every tree: the listing windows, the checkpoint's lost ones, the not-ready stretch and the pending
+ *  ones, in that order. Frozen, so a memo keyed by it (D-5604, D-5642) can never serve a list changed after it was handed over. Pure. */
+export function delegationPassWindowsOf(
+  listing: readonly DelegationListingWindow[], lost: readonly DelegationListingWindow[],
+  notReady: DelegationListingWindow, pending: readonly DelegationListingWindow[],
+): readonly DelegationListingWindow[] {
+  return Object.freeze([...listing, ...lost, notReady, ...pending]);
 }
 
 class DelegationLane {
@@ -10788,7 +10798,7 @@ class DelegationLane {
     if (this.droppedAdded >= (this.seams.droppedPruneEvery ?? DELEGATION_DROPPED_PRUNE_EVERY)) this.pruneDropped(pass.census, state.checkpoint.activities);
     const droppedEvidence = this.droppedIndex();
 
-    const evidence = [...this.evidence].map(([journalId, v]) => ({ journalId, event: v.event }));
+    const evidence = Object.freeze([...this.evidence].map(([journalId, v]) => Object.freeze({ journalId, event: v.event })));
     // 2c d (R84): a call's listing is the repository its cwd is attributed to, by the TREES (every census path and every remembered one; the
     // nearest wins, so a nested worktree is its own repository's), and by the projects root only when it is RESOLVED. Unattributed: null.
     const trees = new Map<string, string>();
@@ -10799,13 +10809,13 @@ class DelegationLane {
     // 2c (R84): the windows the slice holds, the shed ones lost, and the windows the checkpoint says were lost (hours, torn tails, the floor).
     // W1 (R88, R89): and the stretches the lane's own memory knows it did not read: everything up to the latest ready instant, and every
     // listed hour of an owner no completed observation has read.
-    const windows = [
-      ...delegationListingWindowsOf([...this.evidence.values()].map((v) => v.event), (sessionId) => this.sessionProject.get(sessionId), listedOf),
-      ...delegationLostWindowsOf(state.checkpoint.observationIntervals, state.checkpoint.bucketCursors, pass.now),
+    const windows = delegationPassWindowsOf(
+      delegationListingWindowsOf([...this.evidence.values()].map((v) => v.event), (sessionId) => this.sessionProject.get(sessionId), listedOf),
+      delegationLostWindowsOf(state.checkpoint.observationIntervals, state.checkpoint.bucketCursors, pass.now),
       delegationNotReadyWindowOf(this.readyAt),
-      ...this.pendingWindows(state),
-    ];
-    const pointMetas = [...this.pointMetas.values()];
+      this.pendingWindows(state),
+    );
+    const pointMetas = Object.freeze([...this.pointMetas.values()].map((m) => Object.freeze(m)));
     const inputFor = (record: DelegationCensusRecord): DelegationCorrelationInput => {
       const row = registryRowOf(record);
       return {

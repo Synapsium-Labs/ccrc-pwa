@@ -1188,6 +1188,19 @@ describe('the pairs and the census the policy is handed (hand-offs 12 and 14)', 
     expect(recovery.phase).toBe('ready');
   });
 
+  // D-5643 R2: the memos are keyed by the pass's window list (D-5604, D-5642), and D-5643 freezes it, so every census tree must be handed
+  // that ONE frozen list. A copy at its binding, a copy per tree, or a list built some other way reds here, however reconcile spells it.
+  // The spy sees reconcile's call for each census tree and nothing else: the forced helpers call the module's private `correlate`.
+  it('D-5643 R2: one census pass hands every tree the same window list, and that list is frozen', async () => {
+    const w = await rawTreeWorld();
+    const corr = vi.spyOn(correlation, 'correlateDelegation');
+    await censusPass(w, at(0), { demo: [OLD, RAW] });
+    expect(corr.mock.calls.map(([input]) => input.record.adminRecord), 'one call per census tree').toEqual(['old-tree', 'raw-tree']);
+    const [first, ...rest] = corr.mock.calls.map(([input]) => input.listingWindows);
+    for (const list of rest) expect(list, 'every tree is handed the same list').toBe(first);
+    expect(Object.isFrozen(first), 'the list is frozen').toBe(true);
+  });
+
   it('measured absence is recorded once per tree however often policy re-emits it, with the first instant', async () => {
     const w = await rawTreeWorld();
     for (let i = 0; i < 3; i++) await censusPass(w, at(i), { demo: [OLD, RAW] });
