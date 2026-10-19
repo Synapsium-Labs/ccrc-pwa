@@ -23704,10 +23704,11 @@ Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchore
 
 ### Merge gate
 
-- R1 (p95 under docs load minus p95 idle, at most 250 ms): not yet run (operator, after W3's dark rollout).
-- R2 (every remote class answers `fetch.state === 'ran'`): not yet run (operator, after W3's dark rollout).
+Measured 2026-10-19 09:22:47 UTC by the operator in their signed-in browser, server v0.0.331, after W3's rollout to the fleet and the server; the coordinator ran the measurement script (spec 7.8). Both pass, so part 1 may merge.
 
-The coordinator replaces these two lines with the measured results in a docs-only commit on this branch before the merge; part 1 does not merge until both pass.
+- R2 (fetch authentication per remote class: every class answers `fetch.state === 'ran'`): PASS. The fleet's projects fall in one class: 24 projects, https with a gh credential helper; 0 ssh, 0 insteadOf, 0 other (one global ssh-to-https insteadOf rule exists, and no origin uses it). One refresh: HTTP 200 in 1703 ms, `fetch.state` `ran`.
+- R1 (head-of-line blocking: p95 under docs load minus p95 idle, at most 250 ms): PASS. Pane history sampled every 200 ms on a live session. Idle, 30 s: 141 samples, all 200, p50 105.3 ms, p95 144.2 ms, max 675.1 ms. Under load, 30 s (the docs-hol-probe project's 20 distinct 2 MiB files through the file route with the marker header, 4 at a time, strictly cycled): 121 samples, all 200, p50 112 ms, p95 196.9 ms, max 4539.3 ms; 61 file answers, 53 from ccd over the agent link and 8 from the server's blob cache, 0 size mismatches, 0 failures. The p95 delta is 52.7 ms against the 250 ms bound.
+- The coordinator's ruling on R1: PASS. Spec 7.8's pass rule is the p95 delta alone. The script's own stricter validity check (zero cache answers) flagged the 8 answers from the server's blob cache, but 53 files of 2 MiB still crossed the agent link in 30 s, and even scaling the link load by 61/53 leaves the delta far under the bound. R1's failure path (`docs-chunked-reads`) does not fire.
 
 ### The W5 halves of W4's refinement (a)
 
@@ -23796,6 +23797,6 @@ M4.P12's mutation "count only after render" is row W5P1-T8-M8 (the parse's too-w
 
 ### After the merge, not this wave
 
-1. The coordinator fills `### Merge gate` (R1 and R2, after the operator's W3 dark rollout) in a docs-only commit on this branch; only then does part 1 merge. An R1 failure fires `docs-chunked-reads`.
+1. The coordinator fills `### Merge gate` (R1 and R2, after the operator's W3 dark rollout) in a docs-only commit on this branch; only then does part 1 merge. An R1 failure fires `docs-chunked-reads`. Done 2026-10-19: both pass (`### Merge gate` above).
 2. The merge becomes a prerelease (the `dev` channel). It rolls out normally, fleet box first: part 1's L0 change is additive (no wire field, route or argv), and the Docs screen goes live with no Share or Export.
 3. Part 2 (Share and Export) is planned after this review and dispatched from a `main` that holds this merge; W5b follows part 2, rolled `--server-first`; the standalone docs server retires after W7.
