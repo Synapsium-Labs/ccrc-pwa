@@ -218,9 +218,13 @@ export function rollbackFloorText(intent: Extract<MoveIntent, { direction: 'roll
 /** A withdrawn target (D-5505's measured wording: a complete kept copy flips with no download; any other node asks
  *  for the release's checksums and refuses a withdrawn one). */
 export function withdrawnRollbackText(to: string): string {
-  return `${to} was withdrawn by its publisher. A node that still keeps it on disk rolls back to it with no download; `
-    + 'a node that does not will refuse it, and the reason is shown.';
+  return `${to} was withdrawn by its publisher. ${WITHDRAWN_KEPT_CLAUSE} it, and the reason is shown.`;
 }
+
+/** The one measured fact both withdrawn lines state (this sheet's and the release row's `WITHDRAWN_NOTE`), spelled
+ *  once so the two cannot drift. Each line ends it in its own words. */
+export const WITHDRAWN_KEPT_CLAUSE = 'A node that still keeps it on disk rolls back to it with no download; '
+  + 'a node that does not will refuse';
 
 /** The danger lines, in spec §6.3's order: not restored, the floor, withdrawn, and today's blocked line. */
 function dangerLines(plan: PlannedMove, release: ReleaseWire | undefined): string[] {

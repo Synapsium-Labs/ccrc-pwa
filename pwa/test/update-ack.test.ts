@@ -89,6 +89,11 @@ describe("AckConfirm's copy comes from the branch (spec §6.3's three Ack rows)"
     expect(copy.lines).toEqual(['The request to update to v0.0.10 is cleared, and nothing moves.']);
   });
 
+  it("a standing rollback request reads the verb as two words: \"roll back\"", () => {
+    const copy = ackConfirmCopy(node({ request: { tag: 'v0.0.8', kind: 'rollback', at: 1 } }), [])!;
+    expect(copy.lines).toEqual(['The request to roll back to v0.0.8 is cleared, and nothing moves.']);
+  });
+
   it('request plus refusals names the refusals: never "nothing moves" alone', () => {
     const copy = ackConfirmCopy(node({ request: REQUEST }), REFUSED)!;
     expect(copy.confirmLabel).toBe('Withdraw the request');

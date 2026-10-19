@@ -5,7 +5,7 @@
 // is unchanged.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { QuickConfirm } from '@ccrc/ui';
 import { fleetSession } from './fleetFixture';
@@ -82,5 +82,48 @@ describe('QuickConfirm — defaultFocus', () => {
     await settle();
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
     expect(document.activeElement).toBe(opener);
+  });
+
+  // D-5610: `autoFocus` fires only when Cancel MOUNTS. In a browser the sheet keeps its closing content mounted for
+  // the close transition (Radix's Presence waits for the exit animation it reads from the computed style), so a
+  // confirm reopened inside that window reuses the same Cancel node and `autoFocus` never runs again: measured, the
+  // focus stayed on the opener behind an open modal on 10 of 12 reopens at 1280. jsdom has no animations, so this
+  // case gives the dialog a computed exit animation that never ends, which keeps the closed content mounted exactly
+  // as the browser's transition does.
+  it('defaultFocus="cancel": reopened while the closing content is still mounted, Cancel takes the focus again', async () => {
+    const real = window.getComputedStyle.bind(window);
+    const spy = vi.spyOn(window, 'getComputedStyle').mockImplementation((el: Element, pseudo?: string | null) => {
+      const style = real(el, pseudo);
+      if (el.getAttribute('role') !== 'dialog') return style;
+      return new Proxy(style, {
+        get(target, key) {
+          if (key === 'animationName') return el.getAttribute('data-state') === 'closed' ? 'sheet-out' : 'sheet-in';
+          const v: unknown = Reflect.get(target, key, target);
+          return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+        },
+      });
+    });
+    try {
+      render(<Host defaultFocus="cancel" />);
+      const opener = screen.getByRole('button', { name: 'Open it' });
+      opener.focus();
+      fireEvent.click(opener);
+      await settle();
+      const cancel = screen.getByRole('button', { name: 'Cancel' });
+      expect(document.activeElement).toBe(cancel);
+      fireEvent.click(cancel);
+      await settle();
+      expect(document.activeElement).toBe(opener);
+      // The closing content is still in the document: the reopen reuses this very Cancel.
+      expect(cancel.isConnected).toBe(true);
+      fireEvent.click(opener);
+      await settle();
+      const dialog = screen.getByRole('dialog');
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBe(cancel);
+      expect(document.activeElement).toBe(cancel);
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

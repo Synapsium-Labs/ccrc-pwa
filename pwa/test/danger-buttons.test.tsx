@@ -18,6 +18,7 @@ import type { FleetHealth, FleetSession, NodeWire, ReleaseWire, RunSummary, Upda
 import { FLEET_SCOPE } from '../../shared/api';
 import { SettingsScreen } from '../src/screens/SettingsScreen';
 import { HaltBanner } from '../src/fleet/HaltBanner';
+import { withdrawnRollbackText } from '../src/fleet/UpdateMoveSheet';
 import { fleetSession } from './fleetFixture';
 import { api } from '../src/lib/api';
 import { AbandonSheet } from '../src/fleet/AbandonSheet';
@@ -198,14 +199,14 @@ describe('the Updates danger actions (D-5507)', () => {
     tag, version: tag, channel: 'stable', publishedAt: T0, commitSha: 'd'.repeat(40),
     bundleListed: true, yanked: false, refused: [], notes: null,
   });
-  const view = (): UpdatesView => ({
+  const view = (over: Partial<ReleaseWire> = {}): UpdatesView => ({
     catalogue: { lastOkAt: T0, lastError: null },
-    releases: [release('v0.0.10'), release('v0.0.9'), release('v0.0.8')],
+    releases: [release('v0.0.10'), release('v0.0.9'), { ...release('v0.0.8'), ...over }],
     nodes: [node(), node({ nodeId: B, role: 'server', label: 'server', agentOps: null, update: { state: 'idle', target: null, startedAt: null, detail: null } })],
     intent: [{ scope: FLEET_SCOPE, channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: T0, setBy: 'test' }],
   });
-  const renderSettings = async () => {
-    vi.spyOn(api, 'updates').mockResolvedValue(view());
+  const renderSettings = async (over: Partial<ReleaseWire> = {}) => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view(over));
     render(<><ToastHost /><SettingsScreen /></>);
     const releases = await screen.findByRole('region', { name: 'Releases' });
     const nodes = await screen.findByRole('list', { name: 'Nodes' });
@@ -270,4 +271,32 @@ describe('the Updates danger actions (D-5507)', () => {
       for (const c of want) expect(cls, `${b.textContent}: ${c}`).toContain(c);
     }
   });
+
+  // D-5611: Settings hands the rollback sheet the target's catalogue row. Without it the sheet cannot say the target
+  // was withdrawn, and `rollbackTargetRefusal(undefined)` reads an unknown tag, so it would print a false
+  // "Roll back not offered" line for every node.
+  it("Settings passes the target's catalogue row: a withdrawn target reads withdrawn, with no false blocked line", async () => {
+    const { releaseRow } = await renderSettings({ yanked: true });
+    fireEvent.click(within(releaseRow).getByRole('button', { name: 'Roll back' }));
+    const sheet = await screen.findByRole('dialog');
+    expect(sheet).toHaveTextContent(withdrawnRollbackText('v0.0.8'));
+    expect(sheet).not.toHaveTextContent('Roll back not offered');
+  });
+
+  // D-5610: each Roll back sheet opens with Cancel focused, and closing it hands the focus back to its trigger.
+  for (const where of ['release', 'node'] as const) {
+    it(`the ${where} row's Roll back: Cancel has the focus, and Cancel gives it back to the trigger`, async () => {
+      const { releaseRow, nodeRow } = await renderSettings();
+      const trigger = within(where === 'release' ? releaseRow : nodeRow).getByRole('button', { name: 'Roll back' });
+      trigger.focus();
+      fireEvent.click(trigger);
+      const sheet = await screen.findByRole('dialog');
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      const cancel = within(sheet).getByRole('button', { name: 'Cancel' });
+      expect(document.activeElement).toBe(cancel);
+      fireEvent.click(cancel);
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      expect(document.activeElement).toBe(trigger);
+    });
+  }
 });

@@ -41,7 +41,7 @@ import {
   isManagedNode, rollbackBlockers, type MoveIntent,
 } from '../fleet/movePlan';
 import { ACK_UNREADABLE_TEXT, AckConfirm, canAck, sendAck } from '../fleet/updateAck';
-import { rollbackBlockedText } from '../fleet/UpdateMoveSheet';
+import { WITHDRAWN_KEPT_CLAUSE, rollbackBlockedText } from '../fleet/UpdateMoveSheet';
 import { haltingNodes, updateAllHaltedText } from '../fleet/updateHalt';
 import { isPlaceableInstant, newestPending, nodeVersion, pendingTag } from '../fleet/useUpdatesView';
 import { NO_NOTES_TEXT, NoteText, ReleaseNotes, hasReleaseNotes } from '../fleet/ReleaseNotes';
@@ -321,8 +321,7 @@ export function floorLine(label: string, tag: string): string {
 /** A withdrawn row's note (spec §7.3), its second clause as cmd_rollback was measured to behave (D-5505's "As
  *  planned"): a complete kept version flips with no release-host question (D-3442); any other tag asks for its
  *  SHA256SUMS first and refuses a withdrawn one. */
-export const WITHDRAWN_NOTE = 'Its publisher withdrew it from GitHub. A node that still keeps it on disk rolls back to '
-  + 'it with no download; a node that does not will refuse, and the sheet will say so.';
+export const WITHDRAWN_NOTE = `Its publisher withdrew it from GitHub. ${WITHDRAWN_KEPT_CLAUSE}, and the sheet will say so.`;
 /** The word a withdrawn running row adds (spec §7.2 item 2). */
 export const WITHDRAWN_RUNNING_TEXT = 'Withdrawn by its publisher';
 /** The role word on the fleet's shared previous version (spec §7.2 item 3). */

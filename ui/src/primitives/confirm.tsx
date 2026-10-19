@@ -14,8 +14,8 @@
 // button.tsx's note. Callers and tests reach the confirm button through
 // `.qc-actions .btn-primary` (`.btn-danger` under `tone="danger"`), because
 // the opener button behind the sheet matches the same role and name.
-import { useEffect } from 'react';
-import type { ReactNode } from 'react';
+import { useEffect, useRef } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { Button } from './button';
 import { Sheet } from './sheet';
 
@@ -56,16 +56,24 @@ export const QC_ACTIONS = 'qc-actions grid gap-2';
  *  (`quick-confirm-focus.test.tsx` pins it). It is given back in the effect's cleanup: by then the dialog's
  *  focus trap (`trapped={open}`) has released, and a focus moved outside a live trap would be pulled back in. An
  *  opener that has left the document is left alone; one that is disabled ignores the call (an Ack in flight), and its
- *  caller places the focus itself. */
-export function useCancelFirst(open: boolean, on: boolean): void {
+ *  caller places the focus itself.
+ *
+ *  A REOPEN REUSES CANCEL (`cancelRef`, D-5610). `autoFocus` runs only when Cancel mounts, and a sheet keeps its closing
+ *  content mounted through the close transition, so a confirm reopened inside it opens on the very same Cancel and
+ *  `autoFocus` never fires: measured in a browser, the focus stayed on the opener behind the open modal. When the
+ *  caller's Cancel is already in the document as the sheet opens, this effect focuses it itself (after reading the
+ *  opener); a first open, with the content not mounted yet, is still `autoFocus`'s. */
+export function useCancelFirst(open: boolean, on: boolean, cancelRef?: RefObject<HTMLElement | null>): void {
   useEffect(() => {
     if (!open || !on) return undefined;
     const active = document.activeElement;
     const opener = active instanceof HTMLElement && active !== document.body ? active : null;
+    const cancel = cancelRef?.current ?? null;
+    if (cancel !== null && cancel.isConnected && cancel !== active) cancel.focus();
     return () => {
       if (opener !== null && opener.isConnected) opener.focus();
     };
-  }, [open, on]);
+  }, [open, on, cancelRef]);
 }
 
 export interface QuickConfirmProps {
@@ -98,7 +106,8 @@ export function QuickConfirm({
   defaultFocus = 'confirm',
 }: QuickConfirmProps): ReactNode {
   const cancelFirst = defaultFocus === 'cancel';
-  useCancelFirst(open, cancelFirst);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useCancelFirst(open, cancelFirst, cancelRef);
   const lines = typeof consequence === 'string' ? [consequence] : consequence;
   return (
     <Sheet open={open} onClose={onClose} title={title}>
@@ -117,7 +126,7 @@ export function QuickConfirm({
         >
           {confirmLabel}
         </Button>
-        <Button variant="ghost" autoFocus={cancelFirst} onClick={onClose}>
+        <Button ref={cancelRef} variant="ghost" autoFocus={cancelFirst} onClick={onClose}>
           Cancel
         </Button>
       </div>
