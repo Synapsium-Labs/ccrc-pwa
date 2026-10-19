@@ -202,8 +202,8 @@ export function useStepUp(freshUntil: number | null, deps: StepUpDeps = {}): Ste
       if (word === 'not-configured') {
         // The box's passkey settings are broken, so no passkey can be verified: the passphrase is the door every box
         // has, and its route refuses `passkey-enrolled` itself, so this is never a step down (D-5690 (6)).
+        // The notice stands: after a wrong passphrase this start is the next try's, and the sentence is still true.
         notConfigured.current = true;
-        setNotice(null);
         setCanRetry(false);
         setArm('passphrase');
         return;

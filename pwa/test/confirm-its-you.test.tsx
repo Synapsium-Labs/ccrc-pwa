@@ -294,6 +294,21 @@ describe('Confirm it\'s you (D-5512, spec §3.2)', () => {
     await waitFor(() => expect(screen.queryByLabelText(/passphrase/i)).toBeNull());
   });
 
+  it('`not-configured` at start: a wrong passphrase says so, and the field stays for the next try', async () => {
+    const box = fakeBox({
+      start: () => json(501, { ok: false, error: 'not-configured' }),
+      answer: () => json(403, { ok: false, error: 'step-up-required', verdict: 'wrong' }),
+    });
+    render(<Sheet freshUntil={null} deps={{ client: createApi(box.fetch as unknown as typeof fetch), credentials: fakeAuthenticator() }} />);
+    const field = await screen.findByLabelText(/passphrase/i) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: 'pass-one' } });
+    fireEvent.submit(field.closest('form')!);
+    await waitFor(() => expect(box.calls().filter((p) => p === '/api/auth/step-up/start')).toHaveLength(2));
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(screen.getByRole('status').textContent).toMatch(/wrong passphrase/i);
+    expect(screen.getByLabelText(/passphrase/i)).toBeTruthy();
+  });
+
   it('`not-configured` at start and `passkey-enrolled` from the passphrase: the not-configured sentence, no loop', async () => {
     const box = fakeBox({
       start: () => json(501, { ok: false, error: 'not-configured' }),
