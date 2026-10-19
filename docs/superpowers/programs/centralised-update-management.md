@@ -2140,6 +2140,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         STATUS: fleet and server v0.0.331, newest v0.0.332, stable v0.0.328, intent dev/auto=off, backups fleet
         159M/server 2330M, disk free fleet 210G/work volume 94G/server 31G, no anomalies. The blackout on the fixed
         build is being measured.
+      - 10:05: the blackout on the fixed build, same method, 55 to 65 min after the 09:03:20 restart: 8 blackouts,
+        mean 5.6 s, max 6.5 s, period about 67 s. That is 2.6x shorter than 14 to 15 s, about 4 to 5 s of real
+        block, but not the bench's under 1 s. About 3 to 4 s remains unexplained. Mail 6628 gave the broker's
+        coordinator the numbers and offered a per-thread and checkpoint/WAL bracket to split the remainder. For
+        this programme the watchdog's margin is now comfortable (a 5 s block against its 25 s sampling span).
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
