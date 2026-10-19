@@ -8771,8 +8771,8 @@ export function checkSegmentMarks(db, ctx, record) {
       // marked with a segment that IS here, and its blob is exported no more, so the entries get their marks cleared with the
       // blobs'. A pruned blob is no exception: its bytes are gone, but a mark on it means its bytes were exported, and they are
       // held only by the segment the mark names (a stub is never marked), and an entry exported again later into another
-      // segment does not carry it again (planSegment carries only a blob no segment carried, and stubs only a pruned one no
-      // segment carried). With that segment gone no live segment would hold the blob, and a rebuild from the live segments could
+      // segment does not carry it again (planSegment carries only a blob no segment carried, and stubs every pruned blob with
+      // no mark, on every export of its entry, so a pruned blob with a mark gets neither). With that segment gone no live segment would hold the blob, and a rebuild from the live segments could
       // not place the entry (export_row_blob_missing) or its variants. Clearing the entry lets the next pass that finds it due
       // write it again, with a stub of the pruned blob (D-4759), in the segment that then marks it. Each entry is counted once,
       // here or in the clear of its own segment's marks below.

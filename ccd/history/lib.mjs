@@ -8417,9 +8417,10 @@ function dueSinceMs(candidate, homeRetentionDays, reducer) {
  *  A due row is taken with:
  *  - the bytes of every blob it references that is neither exported nor pruned (`carry`). A blob already exported
  *    is never carried again, and one shared by several taken rows is carried once;
- *  - a stub of every pruned blob it references that no segment carried before (`stubs`): its sha, codec and size
- *    with no bytes, so a rebuild keeps the row's structure (entries.blob_id is NOT NULL). A stub is never exported
- *    text and its size never counts toward the bound; its row's metadata does (D-4759 (history-export-pruned-row-stub)).
+ *  - a stub of every pruned blob it references that has no mark (`stubs`): its sha, codec and size with no bytes, so a
+ *    rebuild keeps the row's structure (entries.blob_id is NOT NULL). A stub is never marked, so every export of the
+ *    row carries its stubs again. A stub is never exported text and its size never counts toward the bound; its row's
+ *    metadata does (D-4759 (history-export-pruned-row-stub)).
  *  Rows are taken in input order, until the next due row's counted bytes (its new blob bytes plus EXPORT_ROW_META_BYTES)
  *  would pass `boundBytes`; from there no later row is taken. The sweep's input order is its candidates' runs, in this
  *  order: the rows with no time by entry id, the young rows (at or past the cutoff) of each due transcript by time, the
