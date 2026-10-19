@@ -2080,6 +2080,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         - Server backups 2059M (1878M): the new snapshot is 287M. v0.0.319 (#623) to v0.0.322 (#679) followed,
           unapplied. STATUS: fleet and server v0.0.318, newest v0.0.322, intent dev/auto=off, backups fleet
           158M/server 2059M, disk free fleet 209G/work volume 95G/server 31G, no anomalies.
+      - 05:55: the probe read an empty `/health` again, the known minute blackout; four probes right after answered
+        200 in 2 to 23 ms, `ccrc.service` up since 04:25:39 with 0 restarts. v0.0.323 (#682) to v0.0.325 (#686)
+        followed, unapplied. The broker's fix run 627 is at awaiting-review. STATUS: fleet and server v0.0.318,
+        newest v0.0.325, intent dev/auto=off, backups fleet 158M/server 2059M, disk free fleet 209G/work volume
+        94G/server 31G.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
