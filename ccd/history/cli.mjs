@@ -1159,7 +1159,7 @@ const listOf = (v) => {
  *  status never reads one fact twice or spells it two ways. A reading that
  *  throws is named in `unmeasured` (Task 28F: absent is not unreadable). */
 function readStoreExtras(p, nowMs) {
-  const x = { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null, heldPassMs: null, exportMarksCheck: null, unmeasured: [] };
+  const x = { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, exportSegmentDamaged: [], copyBps: null, heldPassMs: null, exportMarksCheck: null, unmeasured: [] };
   let db;
   try { db = healthStore.openReader(p.dbFile); } catch { x.unmeasured.push('store'); return x; }
   // Each reading is its own try: one that fails is named in `unmeasured` and keeps its default, which
@@ -1176,6 +1176,9 @@ function readStoreExtras(p, nowMs) {
     read(healthLib.HEALTH_META.recoverUnmovedTicks, () => { x.recoverUnmovedTicks = intOf(meta(healthLib.HEALTH_META.recoverUnmovedTicks)); });
     read(healthLib.HEALTH_META.exportSegmentNewer, () => { x.exportSegmentNewer = listOf(meta(healthLib.HEALTH_META.exportSegmentNewer)); });
     read(healthLib.HEALTH_META.exportSegmentMissing, () => { x.exportSegmentMissing = intOf(meta(healthLib.HEALTH_META.exportSegmentMissing)); });
+    // D-5634: the check's own record, never a live header read (segments are never opened here); a record that does not read
+    // back throws, so it is named unmeasured and never read as "nothing damaged".
+    read(healthLib.HEALTH_META.exportSegmentDamaged, () => { x.exportSegmentDamaged = healthLib.readSegmentNameList(meta(healthLib.HEALTH_META.exportSegmentDamaged)); });
     // D-5027: absent is no held pass; a value that is not a non-negative integer is unmeasured, never "no held pass" (read names it).
     read(healthLib.HEALTH_META.heldPassMs, () => {
       const v = meta(healthLib.HEALTH_META.heldPassMs);
@@ -1211,7 +1214,7 @@ async function readHealthExtras(home, env, nowMs) {
   } catch { dbPath = p.dbDir; }
   const store = env.exit === healthLib.EXIT.OK
     ? readStoreExtras(p, nowMs)
-    : { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null, heldPassMs: null, exportMarksCheck: null, unmeasured: [] };
+    : { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, exportSegmentDamaged: [], copyBps: null, heldPassMs: null, exportMarksCheck: null, unmeasured: [] };
   // FU8 (FP3): a link or a file at spool/ is measured by lstat, never followed, and no spool/.draining is read through it.
   let spoolNotDirectory = false;
   try { spoolNotDirectory = !healthFs.lstatSync(p.spool).isDirectory(); } catch { spoolNotDirectory = false; }
@@ -1301,6 +1304,7 @@ function healthInputsOf(env, x, nowMs) {
     spoolNodesRefused: x.spoolNodesRefused,
     exportSegmentNewer: x.exportSegmentNewer,
     exportSegmentMissing: x.exportSegmentMissing,
+    exportSegmentDamaged: x.exportSegmentDamaged,
     extrasUnmeasured: env.pass_died === 'unmeasured' ? [...x.unmeasured, 'pass-died'] : x.unmeasured,
     // Two measurements of one condition, either enough: the sweep's own record of a failed append on a
     // DB-open pass (Task 24's meta `journal_unwritable`, carried as `journal.unwritable` by Task 27), and

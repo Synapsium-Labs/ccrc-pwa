@@ -3672,7 +3672,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
     redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0,
     exportWriterLive: false, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
-    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
+    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0, exportSegmentNewer: [], exportSegmentMissing: 0, exportSegmentDamaged: [],
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
     thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [], exportLastPassMs: null, exportDueOldestMs: null,
     ...o,
@@ -3723,6 +3723,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     ['retention-unmeasured', 'warn', { retentionUnmeasured: ['/home/u/.claude-a'] }],
     ['retention-lowered', 'warn', { retentionLowered: { home: '/home/u/.claude-b', days: 30, othersMin: 180 } }],
     ['export-segment-missing', 'warn', { exportSegmentMissing: 2 }],
+    ['export-segment-damaged', 'warn', { exportSegmentDamaged: ['2.0a1b2c3d.db'] }],
     ['journal-record-skipped', 'warn', { journalSkipped: 4 }],
     ['journal-growth', 'warn', { journalGrowth30d: 41_943_041 }],
     ['blob-undecodable', 'warn', { blobUndecodable: 2 }],
@@ -8558,7 +8559,7 @@ describe('deriveHealth, W1-B4: with the export writer live, export-due waits for
     redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 5, exportOverdue: 0,
     exportWriterLive: true, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
     journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0,
-    exportSegmentNewer: [], exportSegmentMissing: 0,
+    exportSegmentNewer: [], exportSegmentMissing: 0, exportSegmentDamaged: [],
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
     thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
     exportLastPassMs: NOW - 10 * MIN, exportDueOldestMs: NOW - 90 * MIN,
@@ -8769,7 +8770,7 @@ describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)'
     bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
     redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0,
     exportWriterLive: true, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
-    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
+    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0, exportSegmentNewer: [], exportSegmentMissing: 0, exportSegmentDamaged: [],
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
     thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [], exportLastPassMs: null, exportDueOldestMs: null,
     ...o,
@@ -8871,5 +8872,54 @@ describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)'
     expect(words(r, 'fail')).toEqual([]);
     expect(words(r, 'warn')).toContain('off');
     expect(words(r, 'warn')).toContain('export-marks-unchecked');
+  });
+});
+
+// ── W5h-1 Task 3: the verdicts over a carried segment (D-5634 (history-export-segment-whole-check)) ──────────────
+describe('decideSegmentWhole, decideSegmentOwn and readSegmentNameList (W5h-1 Task 3; D-5634)', () => {
+  const SID = '0189abcd-1234-4678-9abc-0000000000f3';
+  const W = '0a1b2c3e';
+  /** A whole 4 KiB-page file of 12 pages; each case changes one fact. */
+  const whole = { size: 12 * 4096, magic: true, pageSize: 4096, pageCount: 12, headerValid: true } as const;
+  const WHOLE_CASES: Array<[string, libReplay.SegmentFileFacts, libReplay.SegmentWholeVerdict]> = [
+    ['whole', whole, 'whole'],
+    ['unreadable', { unreadable: 'ELOOP' }, 'unreadable'],
+    ['empty', { ...whole, size: 0, magic: false, pageSize: 0, pageCount: 0, headerValid: false }, 'short'],
+    ['under the header', { ...whole, size: 99, headerValid: false }, 'short'],
+    ['one page short', { ...whole, size: 11 * 4096 }, 'short'],
+    ['one byte short', { ...whole, size: 12 * 4096 - 1 }, 'short'],
+    ['one page long', { ...whole, size: 13 * 4096 }, 'long'],
+    ['one byte long', { ...whole, size: 12 * 4096 + 1 }, 'long'],
+    ['no magic', { ...whole, magic: false }, 'not-sqlite'],
+    ['valid-for off the counter', { ...whole, headerValid: false }, 'header-invalid'],
+    ['no pages', { ...whole, pageCount: 0, size: 4096 }, 'header-invalid'],
+    ['page size not a power of two', { ...whole, pageSize: 3000, size: 12 * 3000 }, 'header-invalid'],
+    ['page size under 512', { ...whole, pageSize: 256, size: 12 * 256 }, 'header-invalid'],
+    ['the largest page size', { ...whole, pageSize: 65536, size: 12 * 65536 }, 'whole'],
+  ];
+  it.each(WHOLE_CASES)('decideSegmentWhole: %s', (_what, facts, want) => {
+    expect(libReplay.decideSegmentWhole(facts)).toBe(want);
+  });
+
+  const meta = (o: Partial<{ storeId: string; seq: number; writer: string }> = {}) => ({ storeId: SID, seq: 3, writer: W, ...o });
+  const own = `3.${W}.db`;
+  const OWN_CASES: Array<[string, Parameters<typeof libReplay.decideSegmentOwn>[0], string]> = [
+    ['own', { meta: meta(), storeId: SID, name: own }, 'own'],
+    ['meta-unreadable', { meta: null, storeId: SID, name: own }, 'meta-unreadable'],
+    ['foreign', { meta: meta({ storeId: '0189abcd-1234-4678-9abc-0000000000f4' }), storeId: SID, name: own }, 'foreign'],
+    ['renamed: another seq\'s bytes under this name', { meta: meta({ seq: 2 }), storeId: SID, name: own }, 'renamed'],
+    ['renamed: another writer\'s bytes under this name', { meta: meta({ writer: '0a1b2c3f' }), storeId: SID, name: own }, 'renamed'],
+  ];
+  it.each(OWN_CASES)('decideSegmentOwn: %s', (_what, input, want) => {
+    expect(libReplay.decideSegmentOwn(input)).toBe(want);
+  });
+
+  it('readSegmentNameList: never written is []; a list of segment names reads back; anything else throws, never []', () => {
+    expect(libReplay.readSegmentNameList(null)).toEqual([]);
+    expect(libReplay.readSegmentNameList('[]')).toEqual([]);
+    expect(libReplay.readSegmentNameList(JSON.stringify([own, `10.${W}.db`]))).toEqual([own, `10.${W}.db`]);
+    for (const bad of ['', 'nope', '{}', '"3.0a1b2c3e.db"', '[3]', '["3.0a1b2c3e.db.tmp"]', '[null]']) {
+      expect(() => libReplay.readSegmentNameList(bad), bad).toThrow(TypeError);
+    }
   });
 });

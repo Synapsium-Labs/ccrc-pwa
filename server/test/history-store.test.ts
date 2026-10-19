@@ -2816,3 +2816,89 @@ describe('store.mjs: export segments (W1-B4; spec 9.15 "Write", "Who reads it"; 
     expect(() => segStore.createSegment(dir, nameOf(5), meta(5))).toThrow(/EEXIST/);
   });
 });
+
+// ── W5h-1 Task 3: a carried segment counts only when it is whole (D-5634 (history-export-segment-whole-check)) ─────
+describe('store.mjs segmentFileFacts and lib decideSegmentWhole: a segment file\'s length against its own SQLite header (W5h-1 Task 3; D-5634)', () => {
+  const SID = '0189abcd-1234-4678-9abc-0000000000f3';
+  const W = '0a1b2c3e';
+  /** One published segment of `blobs` random 3 KiB blobs (several pages), built through createSegment, segmentInserts and
+   *  publishSegment, as the export pass builds one. */
+  const wholeSegment = (blobs = 8): { dir: string; file: string } => {
+    const dir = segStore.ensureSegmentDir(path.join(mkTmp('ccrc-history-segwhole-'), segLib.EXPORT_DIR), SID);
+    const name = segLib.segmentName({ seq: 1, writer: W });
+    const seg = segStore.createSegment(dir, name, { storeId: SID, writer: W, seq: 1, harnesses: ['claude-code'], cutoffMs: 1_764_000_000_000, format: segLib.EXPORT_SEGMENT_FORMAT });
+    const ins = segStore.segmentInserts(seg);
+    for (let i = 0; i < blobs; i += 1) ins.blob({ sha256: new Uint8Array(32).fill(i + 1), codec: 'br5', raw_len: 3072, z: randomBytes(3072), pruned: false });
+    expect(segStore.publishSegment(seg, dir, name)).toBe('linked');
+    return { dir, file: path.join(dir, name) };
+  };
+  /** A copy of `file` beside it under `as`, cut or edited by `edit`. */
+  const copyAs = (file: string, as: string, edit: (b: Buffer) => Buffer): string => {
+    const out = path.join(path.dirname(file), as);
+    fs.writeFileSync(out, edit(fs.readFileSync(file)));
+    return out;
+  };
+  const verdictOf = (p: string): string => segLib.decideSegmentWhole(segStore.segmentFileFacts(p));
+
+  it('a whole published segment: SQLite\'s magic, a header SQLite trusts, and page size × page count equal to its length; whole', () => {
+    const { file } = wholeSegment();
+    const facts = segStore.segmentFileFacts(file);
+    if (facts.unreadable !== undefined) throw new Error(`the whole segment read unreadable: ${facts.unreadable}`);
+    const size = fs.statSync(file).size;
+    expect(facts.size).toBe(size);
+    expect(facts.magic).toBe(true);
+    expect(facts.headerValid).toBe(true);
+    expect(facts.pageSize * facts.pageCount, 'the header\'s pages are the file\'s length').toBe(size);
+    expect(facts.pageCount, 'CONTROL: the fixture spans several pages').toBeGreaterThan(4);
+    expect(verdictOf(file)).toBe('whole');
+  });
+
+  it('a truncated copy at every length tried is short: 0, 50 and 99 bytes, one page, half, one page short, 100 bytes short and 1 byte short', () => {
+    const { file } = wholeSegment();
+    const size = fs.statSync(file).size;
+    const page = fs.readFileSync(file).readUInt16BE(16);
+    for (const keep of [0, 50, 99, page, Math.floor(size / 2), size - page, size - 100, size - 1]) {
+      const cut = copyAs(file, `cut-${keep}`, (b) => b.subarray(0, keep));
+      expect(verdictOf(cut), `kept ${keep} of ${size} bytes`).toBe('short');
+    }
+  });
+
+  it('a page appended is long; all zeros at the same length and a file that is not SQLite are not-sqlite', () => {
+    const { file } = wholeSegment();
+    const page = fs.readFileSync(file).readUInt16BE(16);
+    expect(verdictOf(copyAs(file, 'appended', (b) => Buffer.concat([b, Buffer.alloc(page)])))).toBe('long');
+    expect(verdictOf(copyAs(file, 'zeros', (b) => Buffer.alloc(b.length)))).toBe('not-sqlite');
+    expect(verdictOf(copyAs(file, 'text', () => Buffer.from('not a database at all, '.repeat(20))))).toBe('not-sqlite');
+  });
+
+  it('a header SQLite would not trust is header-invalid: the version-valid-for number off the change counter, a page count of 0, a page size that is not a power of two', () => {
+    const { file } = wholeSegment();
+    const edited = (as: string, at: number, write: (b: Buffer) => void): string => copyAs(file, as, (b) => {
+      const c = Buffer.from(b);
+      write(c);
+      expect(c.equals(b), `CONTROL: ${as} changed a byte at ${at}`).toBe(false);
+      return c;
+    });
+    expect(verdictOf(edited('valid-for', 92, (c) => c.writeUInt32BE((c.readUInt32BE(92) + 1) >>> 0, 92)))).toBe('header-invalid');
+    expect(verdictOf(edited('no-pages', 28, (c) => c.writeUInt32BE(0, 28)))).toBe('header-invalid');
+    expect(verdictOf(edited('odd-page', 16, (c) => c.writeUInt16BE(3000, 16)))).toBe('header-invalid');
+  });
+
+  it('a link, a FIFO, a directory and an absent name are unreadable, never followed or waited on; the measured file is never written', () => {
+    const { dir, file } = wholeSegment();
+    const before = fs.statSync(file);
+    const link = path.join(dir, 'link');
+    fs.symlinkSync(file, link);
+    const fifo = path.join(dir, 'fifo');
+    spawnSync('mkfifo', [fifo]);
+    expect(fs.lstatSync(fifo).isFIFO(), 'CONTROL: the FIFO was made').toBe(true);
+    fs.mkdirSync(path.join(dir, 'sub'));
+    expect(segStore.segmentFileFacts(link)).toEqual({ unreadable: 'ELOOP' });
+    expect(segStore.segmentFileFacts(fifo)).toEqual({ unreadable: 'not-a-regular-file' });
+    expect(segStore.segmentFileFacts(path.join(dir, 'sub'))).toEqual({ unreadable: 'not-a-regular-file' });
+    expect(segStore.segmentFileFacts(path.join(dir, 'absent'))).toEqual({ unreadable: 'ENOENT' });
+    for (const p of [link, fifo, path.join(dir, 'sub'), path.join(dir, 'absent')]) expect(verdictOf(p), p).toBe('unreadable');
+    const after = fs.statSync(file);
+    expect([after.ino, after.size, after.mtimeMs]).toEqual([before.ino, before.size, before.mtimeMs]);
+  });
+});

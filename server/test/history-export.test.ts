@@ -3173,3 +3173,137 @@ describe('W5h-1 Task 2: status reads export_marks_check; a stopped check WARNs, 
     expect(w5Words(h)).not.toContain('export-marks-unchecked');
   }, 120_000);
 });
+
+// ── W5h-1 Task 3: a carried segment counts only when it is whole and this store's (D-5634 (history-export-segment-whole-check)) ──
+// An adopt carries export/<store_id>/ by hand, and the check after the bind used to compare NAMES only: a file cut short by a
+// copy, a file that is not SQLite, another store's segment or another segment's bytes under a marked name counted as present,
+// and its marks stood over text no segment on this box holds. Each case below exports two segments in-process, damages the
+// second, plants a bind fact and runs one step: the damaged one is treated as missing and left exactly where it is.
+describe('a carried segment counts only when it is whole and this store\'s (W5h-1 Task 3; spec §9.15 "After a bind"; D-5634)', () => {
+  const OTHER_STORE = '0189abcd-1234-4678-9abc-0000000000f9';
+  /** Rows 1 to 3 exported in two in-process passes: row 1 into segment 1 (a run budget of one byte bounds it), rows 2 and 3
+   *  into segment 2 an hour later. Answers the box, its ids, the two names, a clock and the export directory. */
+  async function twoSegments(prefix: string): Promise<{ box: HistoryBox; ids: { storeId: string; writer: string }; s1: string; s2: string; at: (ms: number) => () => number; dir: string }> {
+    const { box, ids } = ingestedBox(prefix, [row(1, 'oldest', 3 * DAY), row(2, 'middle', 2 * DAY), row(3, 'newest', DAY)]);
+    const NOW = Date.now();
+    const at = (ms: number) => (): number => NOW + ms;
+    const s1 = `1.${ids.writer}.db`;
+    const s2 = `2.${ids.writer}.db`;
+    await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(0), { limits: { maxBytes: 1 } })));
+    await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(HOUR))));
+    expect(marks(box), 'CONTROL: row 1 in segment 1, rows 2 and 3 in segment 2').toEqual({ [rid(1)]: s1, [rid(2)]: s2, [rid(3)]: s2 });
+    return { box, ids, s1, s2, at, dir: exportDirOf(box) };
+  }
+  /** Every name in the export directory with its inode, size and mtime: what the check must never change. */
+  const listing = (dir: string): Array<[string, number, number, number]> =>
+    fs.readdirSync(dir).sort().map((n) => { const st = fs.statSync(path.join(dir, n)); return [n, st.ino, st.size, st.mtimeMs]; });
+  /** One step with a new bind fact at `bindMs`, run at `stepMs`, with stderr captured: the lines the check printed about a damaged segment. */
+  async function bindStep(box: HistoryBox, ids: { storeId: string; writer: string }, at: (ms: number) => () => number, bindMs: number, stepMs: number): Promise<string[]> {
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await onStore(box, async (db) => {
+        setMeta(db, `bound:${at(bindMs)()}`, 'adopt');
+        await SW.exportStep(db, exportCtx(box, ids, at(stepMs)));
+      });
+      return err.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('history-sweep: export segment '));
+    } finally {
+      err.mockRestore();
+    }
+  }
+
+  const DAMAGE: Array<[string, string, (dir: string, s1: string, s2: string, box: HistoryBox, ids: { storeId: string; writer: string }) => void]> = [
+    ['cut to half its length (a copy still running, or one that stopped)', 'short', (dir, _s1, s2) => {
+      const p = path.join(dir, s2);
+      fs.truncateSync(p, Math.floor(fs.statSync(p).size / 2));
+    }],
+    ['cut to 0 bytes', 'short', (dir, _s1, s2) => { fs.truncateSync(path.join(dir, s2), 0); }],
+    ['a file that is not SQLite, at the same length', 'not-sqlite', (dir, _s1, s2) => {
+      const p = path.join(dir, s2);
+      fs.writeFileSync(p, Buffer.alloc(fs.statSync(p).size, 'x'));
+    }],
+    ['another store\'s segment under its name', 'foreign', (dir, _s1, s2, box, ids) => {
+      fs.rmSync(path.join(dir, s2));
+      plantSegment(box, ids.storeId, { seq: 2, writer: ids.writer, metaStoreId: OTHER_STORE, blobs: [{ text: 'another store\'s body' }], rows: [] });
+    }],
+    ['segment 1\'s bytes copied under segment 2\'s name (whole, this store\'s, but renamed)', 'renamed', (dir, s1, s2) => {
+      fs.copyFileSync(path.join(dir, s1), path.join(dir, s2));
+    }],
+  ];
+  for (const [what, verdict, damage] of DAMAGE) {
+    it(`segment 2 ${what}: the check after a bind reads it ${verdict}, clears only the marks naming it, counts export_segment_damaged once, records its name for doctor, and leaves export/ as it was; the next pass exports its rows again`, async () => {
+      const { box, ids, s1, s2, at, dir } = await twoSegments(`ccrc-history-export-segdmg-${verdict}-`);
+      damage(dir, s1, s2, box, ids);
+      const before = listing(dir);
+      const lines = await bindStep(box, ids, at, HOUR + MIN, HOUR + 2 * MIN);   // the cadence waits (last pass at +1 h): only the check runs
+      expect(marks(box), 'a mark still names a segment that is not whole or not this store\'s').toEqual({ [rid(1)]: s1, [rid(2)]: null, [rid(3)]: null });
+      expect(q(box, 'SELECT DISTINCT exported_seg AS seg FROM blobs WHERE exported_seg IS NOT NULL').map((r) => r['seg'])).toEqual([s1]);
+      expect(counters(box)['export_segment_damaged']).toBe(1);
+      expect(counters(box)['export_segment_missing'], 'its marks were cleared as a missing segment\'s are').toBe(1);
+      expect(metaOf(box, HEALTH_META.exportSegmentDamaged)).toBe(JSON.stringify([s2]));
+      expect(lines, 'one line, naming the segment, its directory and its verdict').toEqual([
+        `history-sweep: export segment ${s2} in ${dir} is ${verdict}: its marks are cleared and its rows export again; it is left in place\n`,
+      ]);
+      expect(listing(dir), 'the check renamed, removed or wrote something under export/').toEqual(before);
+      expect(strandedBlobs(box)).toEqual([]);
+      await onStore(box, (db) => SW.exportPass(db, exportCtx(box, ids, at(2 * HOUR + 3 * MIN))));
+      const s3 = `3.${ids.writer}.db`;
+      expect(marks(box), 'rows 2 and 3 export again, into the next number past the damaged name').toEqual({ [rid(1)]: s1, [rid(2)]: s3, [rid(3)]: s3 });
+      expect(strandedBlobs(box)).toEqual([]);
+    }, 120_000);
+  }
+
+  it('CONTROL: two whole segments of this store stay present: the check clears nothing, counts nothing and writes no record', async () => {
+    const { box, ids, s1, s2, at } = await twoSegments('ccrc-history-export-segwhole-');
+    const lines = await bindStep(box, ids, at, HOUR + MIN, HOUR + 2 * MIN);
+    expect(metaOf(box, 'export_marks_checked_ms'), 'CONTROL: the check ran').toBe(String(at(HOUR + 2 * MIN)()));
+    expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: s2, [rid(3)]: s2 });
+    expect(counters(box)['export_segment_damaged']).toBeUndefined();
+    expect(counters(box)['export_segment_missing']).toBeUndefined();
+    expect(metaOf(box, HEALTH_META.exportSegmentDamaged), 'a clean check writes no record').toBeNull();
+    expect(lines).toEqual([]);
+  }, 120_000);
+
+  it('the record follows the files: a later check counts and prints only a name it has not recorded; once the damaged files are moved out of export/<store_id>/, the next check empties the record', async () => {
+    const { box, ids, s1, s2, at, dir } = await twoSegments('ccrc-history-export-segrecord-');
+    fs.truncateSync(path.join(dir, s2), 0);
+    await bindStep(box, ids, at, HOUR + MIN, HOUR + 2 * MIN);
+    expect(metaOf(box, HEALTH_META.exportSegmentDamaged)).toBe(JSON.stringify([s2]));
+    // segment 1 is cut too; segment 2 is still in place, still damaged, and already recorded
+    fs.truncateSync(path.join(dir, s1), 0);
+    const again = await bindStep(box, ids, at, HOUR + 3 * MIN, HOUR + 4 * MIN);
+    expect(again, 'one line, for the name not yet recorded').toEqual([
+      `history-sweep: export segment ${s1} in ${dir} is short: its marks are cleared and its rows export again; it is left in place\n`,
+    ]);
+    expect(counters(box)['export_segment_damaged'], 'a name already recorded is not counted again').toBe(2);
+    expect(metaOf(box, HEALTH_META.exportSegmentDamaged), 'in (seq, writer) order').toBe(JSON.stringify([s1, s2]));
+    expect(marks(box)).toEqual({ [rid(1)]: null, [rid(2)]: null, [rid(3)]: null });
+    for (const s of [s1, s2]) fs.renameSync(path.join(dir, s), path.join(box.home, `${s}.aside`));   // the remedy: out of export/<store_id>/
+    await bindStep(box, ids, at, HOUR + 5 * MIN, HOUR + 6 * MIN);
+    expect(metaOf(box, HEALTH_META.exportSegmentDamaged), 'the WARN clears once the files are out and a check runs').toBe('[]');
+    expect(counters(box)['export_segment_damaged']).toBe(2);
+  }, 120_000);
+
+  it('status reads the check\'s record and never a segment: the WARN export-segment-damaged names it; a record that does not read back is status-unreadable, never "nothing damaged"', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-segstatus-', [row(1, 'one', DAY)]);
+    type Health = { health: { warn: Array<{ word: string; detail: string; remedy: string }>; fail: Array<{ word: string; detail: string }> } };
+    const status = (): Health => {
+      const r = runCli(box, ['status', '--json']);
+      expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+      return r.json as unknown as Health;
+    };
+    const name = `2.${ids.writer}.db`;
+    await onStore(box, (db) => setMeta(db, HEALTH_META.exportSegmentDamaged, JSON.stringify([name])));
+    const warned = status().health.warn.find((i) => i.word === 'export-segment-damaged');
+    expect(warned?.detail).toContain(name);
+    expect(warned?.remedy).toContain('move each named file out of');
+    await onStore(box, (db) => setMeta(db, HEALTH_META.exportSegmentDamaged, 'not a list'));
+    const h = status().health;
+    expect(h.warn.map((i) => i.word)).not.toContain('export-segment-damaged');
+    expect(h.fail.map((i) => i.word), 'a record that does not read back was read as "nothing damaged"').toContain('status-unreadable');
+    expect(h.fail.find((i) => i.word === 'status-unreadable')!.detail).toContain(HEALTH_META.exportSegmentDamaged);
+    await onStore(box, (db) => setMeta(db, HEALTH_META.exportSegmentDamaged, '[]'));
+    const clean = status().health;
+    expect(clean.warn.map((i) => i.word)).not.toContain('export-segment-damaged');
+    expect(clean.fail.map((i) => i.word)).not.toContain('status-unreadable');
+  }, 120_000);
+});

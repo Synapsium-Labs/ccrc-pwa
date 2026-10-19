@@ -63,6 +63,7 @@ import {
   EXPORT_DIR, EXPORT_SEGMENT_MAX_BYTES, EXPORT_SEGMENT_FORMAT, segmentName, nextSegmentSeq, planSegment, budgetHeldPass, CLAUDE_CODE_DEFAULT_RETENTION_DAYS,
   shortestRetention, exportHorizonDays, decideExportPass, planExportRoom, exportPassIntervalMs, exportMarkFailsOf, decideMarkOutcome,
   decideMarkCheck, missingSegmentNames, deadFileSourceKey, decideSegmentReplay, orderSegmentNames, entryMayHoldMark, segmentMayMarkEntry,
+  decideSegmentWhole, decideSegmentOwn, readSegmentNameList,
   BUSY_TIMEOUT_MS, EXPORT_BIND_BATCH, EXPORT_BIND_BYTES, EXPORT_BIND_WAL_CEILING, markCheckStop, planMarkCheckBatch, formatMarkCheckState, nextMarkCheckState,
 } from './lib.mjs';
 import {
@@ -74,7 +75,7 @@ import {
   integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, getStep, setStep, setCounter, adoptStore,
   peekStoreId, stageRestore, commitRestore, abortRestore,
   ensureSegmentDir, createSegment, segmentInserts, publishSegment, listSegments, removeStaleSegmentTemps, setSegmentSeq,
-  openSegment, segmentMeta, segmentBlobsAfter, segmentRowsAfter, segmentHasBlob,
+  openSegment, segmentMeta, segmentBlobsAfter, segmentRowsAfter, segmentHasBlob, segmentFileFacts,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 import {
@@ -8807,6 +8808,58 @@ function bindFactKeys(db) {
   return db.prepare("SELECT k FROM meta WHERE k LIKE 'bound:%'").all().map((r) => String(r.k));
 }
 
+/** W5h-1 Task 3 (D-5634 (history-export-segment-whole-check)): which of the listed segment names count as present. A name
+ *  counts only when lib decideSegmentWhole answers `whole` over store.mjs segmentFileFacts (its length agrees with its
+ *  SQLite header) and lib decideSegmentOwn answers `own` over the meta openSegment and segmentMeta read back (this store's
+ *  store_id, under the name its seq and writer give). Every other listed name is `damaged`, with the verdict that failed
+ *  it, and the caller treats it as missing. A header read and one read-only open per listed segment; no quick_check (its
+ *  cost grows with the whole export). Only a segment-unreadable StoreError is a verdict; any other throw is a bug and
+ *  propagates, so exportStep counts the check failed and it runs again. Nothing under export/ is written, renamed or
+ *  removed here. */
+function segmentsWholeAndOwn(dir, names, storeId) {
+  const present = [];
+  const damaged = [];
+  for (const name of names) {
+    const p = `${dir}/${name}`;
+    let verdict = decideSegmentWhole(segmentFileFacts(p));
+    if (verdict === 'whole') {
+      let meta = null;
+      try {
+        const h = openSegment(p);
+        try { meta = segmentMeta(h); } finally { h.close(); }
+      } catch (e) {
+        if (!(e instanceof StoreError && e.word === 'segment-unreadable')) throw e;
+      }
+      verdict = decideSegmentOwn({ meta, storeId, name });
+    }
+    if (verdict === 'own') present.push(name);
+    else damaged.push({ name, verdict });
+  }
+  return { present, damaged };
+}
+
+/** The damaged names this check found, recorded for doctor (HEALTH_META.exportSegmentDamaged, a JSON list in (seq, writer)
+ *  order; lib readSegmentNameList reads it back), in one NORMAL transaction of its own, and only when the record changes:
+ *  each name not already recorded counts export_segment_damaged once and prints one stderr line naming its verdict. A
+ *  check that finds none empties a record that held some, so doctor's WARN clears once the files are moved out and a
+ *  check runs. A record that does not read back is rewritten whole, every name in it counted as new. */
+function noteSegmentsDamaged(db, dir, damaged) {
+  const names = orderSegmentNames(damaged.map((d) => d.name));
+  const text = JSON.stringify(names);
+  const was = getMeta(db, HEALTH_META.exportSegmentDamaged);
+  if ((was ?? '[]') === text) return;
+  let before;
+  try { before = new Set(readSegmentNameList(was)); } catch { before = new Set(); }
+  const fresh = damaged.filter((d) => !before.has(d.name));
+  withTx(db, 'NORMAL', () => {
+    if (fresh.length > 0) bump(db, 'export_segment_damaged', fresh.length);
+    setMeta(db, HEALTH_META.exportSegmentDamaged, text);
+  });
+  for (const d of fresh) {
+    process.stderr.write(`history-sweep: export segment ${d.name} in ${dir} is ${d.verdict}: its marks are cleared and its rows export again; it is left in place\n`);
+  }
+}
+
 /** §9.15 "After a bind": every blob and entry mark whose segment is not in export/<store_id>/ on THIS box is cleared, so its
  *  rows export again. A directory left on the box the store came from is the usual cause; carrying it before the verb avoids
  *  the re-export (§8.4). Which names are missing is lib missingSegmentNames' answer over the marked names (two DISTINCT
@@ -8834,8 +8887,12 @@ function bindFactKeys(db) {
  *  (null when it ran to its done stamp). */
 export function checkSegmentMarks(db, ctx, record) {
   const dir = exportDirFor(ctx.paths, ctx.ids.storeId);
-  let present;
-  try { present = listSegments(dir).map((x) => x.name); } catch (e) { throw new SegmentsUnlistable(e); }   // [] only for ENOENT
+  let listed;
+  try { listed = listSegments(dir).map((x) => x.name); } catch (e) { throw new SegmentsUnlistable(e); }   // [] only for ENOENT
+  // D-5634 (history-export-segment-whole-check): a listed name is present only when whole and this store's; a damaged one is
+  // treated as missing (its marks clear, its rows export again) and recorded for doctor, and stays where it is.
+  const { present, damaged } = segmentsWholeAndOwn(dir, listed, ctx.ids.storeId);
+  noteSegmentsDamaged(db, dir, damaged);
   const named = new Set();
   for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM blobs WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
   for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM entries WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));

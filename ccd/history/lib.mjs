@@ -158,6 +158,9 @@ export const EXPORT_DIR = 'export';
 export const EXPORT_SEGMENT_MAX_BYTES = 256 * 1024 * 1024;
 export const EXPORT_PASS_INTERVAL_MS = 60 * 60 * 1000;
 export const EXPORT_SEGMENT_FORMAT = 1;
+/** SQLite's database header, the first 100 bytes of every database file: store.mjs segmentFileFacts reads this much of a
+ *  segment, and a shorter segment is short (decideSegmentWhole). D-5634 (history-export-segment-whole-check). */
+export const SEGMENT_HEADER_BYTES = 100;
 export const LINE_MAX = 16 * 1024 * 1024;           // a longer transcript line is stored raw-only
 /** The largest decompressed size (raw_len) a reader that must hold a whole stored body will decode. A body stored
  *  from a row Claude Code wrote (JSON.stringify output) re-encodes at no more than its line's length, so it is within
@@ -342,7 +345,7 @@ const healthEntries = [
     'off', 'recovering', 'op-running', 'catching-up', 'lag-unmeasured', 'fts-unavailable', 'cap-malformed',
     'redact-source-unreadable', 'cap-near', 'breaker-open', 'roster-unreadable', 'root-is-symlink',
     'export-due', 'export-paused-low-disk', 'retention-unmeasured', 'retention-lowered',
-    'export-segment-missing', 'journal-record-skipped', 'journal-growth', 'blob-undecodable',
+    'export-segment-missing', 'export-segment-damaged', 'journal-record-skipped', 'journal-growth', 'blob-undecodable',
     'drain-rejected', 'spool-planted', 'export-marks-unchecked',
   ]),
   ...healthRows('fail', [
@@ -3308,6 +3311,9 @@ export const HEALTH_META = Object.freeze({
   recoverUnmovedTicks: 'recover_unmoved_ticks',
   exportSegmentNewer: 'export_segment_newer',
   exportSegmentMissing: 'export_segment_missing',
+  // D-5634 (history-export-segment-whole-check): the listed segments the last check after a bind found not whole or not this
+  // store's (a JSON list of names, in (seq, writer) order), read back by readSegmentNameList.
+  exportSegmentDamaged: 'export_segment_damaged',
   exportPassMs: 'export_pass_ms',               // W1-B4: when the last export pass ran (doctor's last-pass rule)
   exportDueOldestMs: 'export_due_oldest_ms',    // W1-B4: the census's oldest due-since (doctor's wait rule)
   exportPaused: 'export_paused',                // W1-B4: the export's pause for room on the home filesystem
@@ -3421,6 +3427,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'retention-unmeasured': 'make cleanupPeriodDays readable in the named homes\' settings.json',
   'retention-lowered': 'set cleanupPeriodDays in the named home\'s settings.json to at least the others\' value',
   'export-segment-missing': 'carry the export directory from the box the store came from, or let the rows export again',
+  'export-segment-damaged': `put a whole copy of each named file back if one exists (the source box or a backup): text the store pruned that only that file held cannot be exported again; otherwise move each named file out of ~/.ccrc/history/${EXPORT_DIR}/<store_id>/ (its live rows export again by themselves); a later ccrc history doctor --restore or --rebuild stops at a segment it cannot read`,
   // D-5633 (history-export-bind-check-doctor): the fallback texts; remedyFor answers by the word the check stopped on.
   'export-marks-unchecked': `none needed while the check resumes each tick; otherwise act on the word it stopped on (history off, a long-running reader, an unreadable export directory), or read the sweep: ${SWEEP_LOG}`,
   'export-marks-stalled': `act on the word the check stopped on (history off, a long-running reader, an unreadable export directory), or read the sweep: ${SWEEP_LOG}`,
@@ -3706,6 +3713,8 @@ export function deriveHealth(h) {
     warn.push(item('retention-lowered', `${h.retentionLowered.home} keeps ${h.retentionLowered.days} days, under the others' ${h.retentionLowered.othersMin}; rows held only in its files fall due ${exportHorizonDays(h.retentionLowered.days)} days after their file's last write (a reminder: each row is measured against its own files' homes)`));
   }
   if (h.exportSegmentMissing > 0) warn.push(item('export-segment-missing', `${h.exportSegmentMissing} export mark(s) named a segment not on this box and were cleared`));
+  // D-5634 (history-export-segment-whole-check): a listed segment the check after a bind found not whole or not this store's.
+  if (h.exportSegmentDamaged.length > 0) warn.push(item('export-segment-damaged', `export segment(s) ${h.exportSegmentDamaged.join(', ')} are not whole or not this store's; the check after a bind treated them as missing, so their marks were cleared and their rows export again`));
   if (markCheck === 'unchecked') warn.push(item('export-marks-unchecked', markCheckDetail(markCheck, h)));   // D-5633: the stalled FAIL above replaces it
   if (h.journalSkipped > 0) warn.push(item('journal-record-skipped', `${h.journalSkipped} journal record(s) were skipped as malformed or of an unknown kind`));
   if (h.journalGrowth30d > JOURNAL_GROWTH_BYTES) {
@@ -8524,6 +8533,52 @@ export function budgetHeldPass({ taken, selectionComplete, written, writeStopped
 export function decideSegmentReplay({ meta, storeId }) {
   if (meta.storeId !== storeId) return 'foreign';
   return meta.format > EXPORT_SEGMENT_FORMAT ? 'newer' : 'replay';
+}
+
+// ── W5h-1 Task 3: a carried segment counts only when it is whole and this store's (§9.15 "After a bind"; D-5634
+// (history-export-segment-whole-check)). store.mjs segmentFileFacts measures a segment file's length and its SQLite
+// header without opening it; the two verdicts below judge those facts and the meta a whole file then gives. The check
+// after a bind (sweep.mjs checkSegmentMarks) counts a listed name present only when both answer whole and own; any
+// other name is treated as missing, so its marks clear and its rows export again. Nothing here renames or removes it.
+
+/** Whether a segment file is whole, from store.mjs segmentFileFacts: `unreadable` when it could not be measured;
+ *  `short` when it is shorter than SQLite's header, or than the page size times the in-header page count; `not-sqlite`
+ *  when it does not begin with SQLite's magic (a file of zeros, or another kind of file); `header-invalid` when the
+ *  header's page count is not one SQLite trusts (its version-valid-for number differs from its change counter, or it is
+ *  0) or its page size is not a power of two from 512 to 65536; `long` when it is longer than those pages; `whole`
+ *  otherwise. A length check only: damage inside a file of the right length is not seen here (only quick_check or
+ *  replay sees it, and neither runs in the tick). */
+export function decideSegmentWhole(facts) {
+  if (facts.unreadable !== undefined) return 'unreadable';
+  if (facts.size < SEGMENT_HEADER_BYTES) return 'short';
+  if (!facts.magic) return 'not-sqlite';
+  const ps = facts.pageSize;
+  if (!facts.headerValid || !(facts.pageCount > 0) || !(ps >= 512 && ps <= 65536 && (ps & (ps - 1)) === 0)) return 'header-invalid';
+  const expect = ps * facts.pageCount;
+  if (facts.size < expect) return 'short';
+  if (facts.size > expect) return 'long';
+  return 'whole';
+}
+
+/** Whether a whole segment file is this store's, under its own name, from the meta store.mjs segmentMeta read back
+ *  (`meta`), or null when that open or read failed: `meta-unreadable`; `foreign` when its store_id is not this store's
+ *  (decideSegmentReplay's rule); `renamed` when the name its seq and writer give is not the name it is listed under (a
+ *  copy of another segment, or a file moved between names); `own` otherwise. */
+export function decideSegmentOwn({ meta, storeId, name }) {
+  if (meta === null) return 'meta-unreadable';
+  if (meta.storeId !== storeId) return 'foreign';
+  return segmentName({ seq: meta.seq, writer: meta.writer }) === name ? 'own' : 'renamed';
+}
+
+/** HEALTH_META.exportSegmentDamaged read back: null (never written) is []; otherwise a JSON list of segment names
+ *  (parseSegmentName's grammar). Anything else throws, so status names the key unmeasured and never reads a damaged
+ *  record as "nothing damaged". */
+export function readSegmentNameList(v) {
+  if (v === null) return [];
+  let a;
+  try { a = JSON.parse(v); } catch { a = null; }
+  if (!Array.isArray(a) || !a.every((n) => parseSegmentName(n) !== null)) throw new TypeError(`not a list of segment names: ${JSON.stringify(v)}`);
+  return a;
 }
 
 // ── W1-B4 Task 9: export-due on a build with the export writer (spec §9.6, §9.15 "The gap guard") ──────────────

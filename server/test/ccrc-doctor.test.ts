@@ -14419,6 +14419,9 @@ describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, 
     { word: 'export-segment-missing', cls: 'WARN',
       plant: (home) => withStore(home, metaOnFreshTick(HEALTH_META.exportSegmentMissing, '2')),
       names: () => ['2'] },
+    { word: 'export-segment-damaged', cls: 'WARN',
+      plant: (home) => withStore(home, metaOnFreshTick(HEALTH_META.exportSegmentDamaged, JSON.stringify(['2.0a1b2c3d.db']))),
+      names: () => ['2.0a1b2c3d.db'], remedyNames: () => ['move each named file out of'] },
     // W5h-1 Task 2 (D-5633): the check after a bind's stop record, as Task 1's check writes it ('<word> <sinceMs> <cleared>').
     { name: 'D-5633: a check after a bind that stopped WARNs export-marks-unchecked, naming its word and the marks it cleared', word: 'export-marks-unchecked', cls: 'WARN',
       plant: (home) => withStore(home, metaOnFreshTick(HEALTH_META.exportMarksCheck, `budget ${Date.now() - 30 * 60_000} 4`)),
@@ -14635,7 +14638,7 @@ describe('ccrc doctor: history — the relay (O15: every word, and the one rule 
     bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false, redactUnreadable: [],
     breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0, exportWriterLive: false,
     exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [], journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0,
-    exportSegmentNewer: [], exportSegmentMissing: 0, journalUnwritable: false,
+    exportSegmentNewer: [], exportSegmentMissing: 0, exportSegmentDamaged: [], journalUnwritable: false,
     dbPath: '/home/u/.ccrc/history/db', freeBytes: null, thresholdBytes: null, copyBps: null, backupsDb: [],
     journalStoreDirs: [], extrasUnmeasured: [], exportLastPassMs: null, exportDueOldestMs: null,
   });

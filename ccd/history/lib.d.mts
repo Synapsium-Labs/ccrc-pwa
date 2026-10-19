@@ -434,6 +434,8 @@ export interface HealthInputs {
   readonly spoolNodesRefused: number;
   readonly exportSegmentNewer: readonly string[];
   readonly exportSegmentMissing: number;
+  /** D-5634: the listed segments the last check after a bind found not whole or not this store's (HEALTH_META.exportSegmentDamaged). */
+  readonly exportSegmentDamaged: readonly string[];
   readonly journalUnwritable: boolean;
   readonly dbPath: string;
   readonly freeBytes: number | null;
@@ -452,6 +454,7 @@ export const HEALTH_META: Readonly<{
   recoverUnmovedTicks: 'recover_unmoved_ticks';
   exportSegmentNewer: 'export_segment_newer';
   exportSegmentMissing: 'export_segment_missing';
+  exportSegmentDamaged: 'export_segment_damaged';
   exportPassMs: 'export_pass_ms';
   exportDueOldestMs: 'export_due_oldest_ms';
   exportPaused: 'export_paused';
@@ -941,6 +944,7 @@ export const EXPORT_DIR: 'export';
 export const EXPORT_SEGMENT_MAX_BYTES: number;
 export const EXPORT_PASS_INTERVAL_MS: number;
 export const EXPORT_SEGMENT_FORMAT: number;
+export const SEGMENT_HEADER_BYTES: 100;
 export function segmentName(i: { seq: number; writer: string }): string;
 export function parseSegmentName(name: string): { seq: number; writer: string } | null;
 export function segmentTempName(name: string): string;
@@ -976,6 +980,14 @@ export function planSegment(i: {
 
 // --- W1-B4 Task 3: export replay's decisions (spec §9.14 "Export replay")
 export function decideSegmentReplay(i: { meta: { storeId: string; format: number }; storeId: string }): 'replay' | 'newer' | 'foreign';
+/** W5h-1 Task 3 (D-5634): store.mjs segmentFileFacts' answer, and the two verdicts over it. */
+export type SegmentFileFacts =
+  | { readonly size: number; readonly magic: boolean; readonly pageSize: number; readonly pageCount: number; readonly headerValid: boolean; readonly unreadable?: undefined }
+  | { readonly unreadable: string };
+export type SegmentWholeVerdict = 'whole' | 'short' | 'long' | 'not-sqlite' | 'header-invalid' | 'unreadable';
+export function decideSegmentWhole(facts: SegmentFileFacts): SegmentWholeVerdict;
+export function decideSegmentOwn(i: { meta: { storeId: string; seq: number; writer: string } | null; storeId: string; name: string }): 'own' | 'foreign' | 'renamed' | 'meta-unreadable';
+export function readSegmentNameList(v: string | null): string[];
 
 // --- W1-B4 Task 9: the census's oldest due-since in meta, written and read back (no epoch, no overloaded null)
 export const EXPORT_DUE_OLDEST_UNMEASURED: 'unmeasured';

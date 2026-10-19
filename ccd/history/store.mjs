@@ -24,7 +24,7 @@ import {
 import { basename, dirname, resolve } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
-import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, RECOVER_PHASES, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, FTS_REBUILD_STEP, FTS_SHADOWS, FTS_STEP, formatRecoverCursor, ftsTextOf, historyPaths, journalRecord, jsonWithinStructureBound, newSha256, orderSegmentNames, parseSegmentName, restoreNameOk, segmentName, segmentTempName, sidecarIndexText } from './lib.mjs';
+import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, RECOVER_PHASES, SCHEMA_VERSION, SEGMENT_HEADER_BYTES, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, FTS_REBUILD_STEP, FTS_SHADOWS, FTS_STEP, formatRecoverCursor, ftsTextOf, historyPaths, journalRecord, jsonWithinStructureBound, newSha256, orderSegmentNames, parseSegmentName, restoreNameOk, segmentName, segmentTempName, sidecarIndexText } from './lib.mjs';
 
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
 export const CODEC = 'br5';
@@ -2097,6 +2097,51 @@ export function segmentRowsAfter(db, ord, limit) {
   }
   all.sort((a, b) => a.ord - b.ord);
   return all.slice(0, limit);
+}
+
+/** The 16 bytes every SQLite database file begins with: "SQLite format 3" and a NUL. */
+const SQLITE_MAGIC = Buffer.from('SQLite format 3\0', 'latin1');
+
+/** What a segment file says about its own length, read WITHOUT opening it as a database (§9.15 "After a bind"; D-5634
+ *  (history-export-segment-whole-check)): ONE open with O_RDONLY|O_NONBLOCK|O_NOCTTY|O_NOFOLLOW, the type and size taken
+ *  from the DESCRIPTOR (readBounded's rule: a link is refused, ELOOP, and a FIFO or a device is never waited on), then
+ *  the first SEGMENT_HEADER_BYTES bytes, SQLite's database header. `size` is the file's length; `magic` whether it
+ *  begins with SQLite's 16 magic bytes; `pageSize` the header's page size (offset 16, big-endian; the stored 1 means
+ *  65536); `pageCount` its in-header page count (offset 28); `headerValid` whether the whole header was read and its
+ *  version-valid-for number (offset 92) equals its change counter (offset 24), the condition under which SQLite itself
+ *  trusts that page count. A field past the bytes read is 0. Measurements only: lib decideSegmentWhole judges them.
+ *  `{ unreadable: <code> }` when the file cannot be opened or read, or is not a regular file; never a throw, and nothing
+ *  is ever written, renamed or removed. */
+export function segmentFileFacts(path) {
+  let fd;
+  try {
+    fd = openSync(path, FS.O_RDONLY | FS.O_NONBLOCK | FS.O_NOCTTY | FS.O_NOFOLLOW);
+  } catch (e) {
+    return { unreadable: e && e.code ? String(e.code) : String(e) };
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return { unreadable: 'not-a-regular-file' };
+    const head = Buffer.alloc(SEGMENT_HEADER_BYTES);
+    let n = 0;
+    while (n < SEGMENT_HEADER_BYTES) {
+      const r = readSync(fd, head, n, SEGMENT_HEADER_BYTES - n, n);
+      if (r === 0) break;
+      n += r;
+    }
+    const raw = n >= 18 ? head.readUInt16BE(16) : 0;
+    return {
+      size: st.size,
+      magic: n >= SQLITE_MAGIC.length && head.subarray(0, SQLITE_MAGIC.length).equals(SQLITE_MAGIC),
+      pageSize: raw === 1 ? 65536 : raw,
+      pageCount: n >= 32 ? head.readUInt32BE(28) : 0,
+      headerValid: n === SEGMENT_HEADER_BYTES && head.readUInt32BE(92) === head.readUInt32BE(24),
+    };
+  } catch (e) {
+    return { unreadable: e && e.code ? String(e.code) : String(e) };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** The published segments in `dir`, as regular files whose names parse, in lib orderSegmentNames' (seq, writer)
