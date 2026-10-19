@@ -8,7 +8,7 @@
 // `AccountPoolWire` and `BuildInfo` belong to their decision/parser files for
 // the parallel reason: this file carries their shapes but does not redefine
 // them.
-import type { Hue } from './roster.js';
+import type { Hue, RosterKindWire } from './roster.js';
 import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
@@ -3897,16 +3897,24 @@ export type ProjectPlacement =
 /**
  * One roster entry as the wire carries it — the PWA's entire view of an
  * account's identity, and deliberately NOT the parsed `AccountDef`
- * (`shared/roster.ts`). `configDirSuffix`, `exec` and `telemetry` describe how
- * the SERVER launches and measures an account; a browser has no use for them,
- * and `exec.secretsFile` in particular is a path into `~/.cc-secrets` with no
- * reader on the other end.
+ * (`shared/roster.ts`). `configDirSuffix` and `exec` describe how the SERVER
+ * launches an account; a browser has no use for them, and `exec.secretsFile` in
+ * particular is a path into `~/.cc-secrets` with no reader on the other end.
+ *
+ * The lane-kind fields — `provider`, `kind`, `telemetry` and `managed` — come
+ * from `RosterKindWire` (`shared/roster.ts`), derived once by `rosterKindOf`
+ * (D-5517, D-5751): ADDITIVE and OPTIONAL, `FLEET_PROTO` not bumped, on
+ * `hidden`'s terms. A server built before them omits all four, and an
+ * undeclared lane omits `provider` and `kind`, so a reader treats absence as
+ * "does not say" and shows no kind chip, never a defaulted one. Each is a
+ * closed union or a boolean, so none can carry free text, and no
+ * secret-bearing field rides this interface.
  *
  * `hue` is a colour NAME, never a colour value: `pwa/src/styles/tokens.css`
  * owns the actual colours and resolves each hue per theme, so shipping a hex
  * here would freeze one theme's palette into the wire.
  */
-export interface RosterWire {
+export interface RosterWire extends RosterKindWire {
   id: Wrapper;
   /** Jargon-free, for a human — the one place a wrapper name is translated
    *  (plan: "Move to another account", never "swap wrapper"). */

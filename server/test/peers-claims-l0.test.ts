@@ -162,7 +162,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
     const lines = readFileSync(apiPath, 'utf8').split('\n');
     const imports = lines.filter((l) => /^import\s/.test(l));
     expect(imports).toEqual([
-      "import type { Hue } from './roster.js';",
+      "import type { Hue, RosterKindWire } from './roster.js';",
       "import type { AccountPoolWire } from './poolrule.js';",
       "import type { BuildInfo } from './buildinfo.js';",
       "import type { BoxTokenView } from './box-token.js';",
