@@ -51,7 +51,7 @@ import { ApiError, api, apiErrorText, readBoxTokenView, updateErrorText } from '
 import type { BoxTokenView, RotateAnswer, TokenHold } from '../../../shared/box-token';
 import { readAuthStatus } from '../lib/auth';
 import { pushSupported } from '../lib/push';
-import { setTheme, storedTheme } from '../lib/theme';
+import { setTheme, useThemeChoice } from '../lib/theme';
 import { navigate } from '../lib/router';
 // The update plane's reading surface moved to a file of its own; this screen
 // composes it. `ACK_UNREADABLE_TEXT`/`canAck` come THROUGH it because
@@ -163,10 +163,11 @@ const FOLLOW_SYSTEM = {
  *  poll, and a test of a radio group should not need a control plane. */
 export function AppearanceSection(): ReactNode {
   const titleId = useId();
-  // Seeded from storage rather than defaulted, so the control opens showing
-  // what is actually applied — including on a reload into a pinned palette.
-  const [current, setCurrent] = useState(() => storedTheme());
-  const pick = (id: string): void => { setTheme(id); setCurrent(id); };
+  // The choice in force, as `initTheme` read it at boot or `setTheme` last
+  // made it — here or in the palette's "Switch theme…" — so the control opens
+  // on what is actually applied and never keeps a stale row (D-5572).
+  const current = useThemeChoice();
+  const pick = (id: string): void => { setTheme(id); };
 
   const dark = THEMES.filter((t) => t.mode === 'dark');
   const light = THEMES.filter((t) => t.mode === 'light');
