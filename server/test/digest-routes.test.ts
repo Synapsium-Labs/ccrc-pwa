@@ -25,11 +25,11 @@ function answer(fx: Approvals, id: number, by: string, t: number): void {
   if (!fx.coord.takeAskForAnswer(id, r.ask.askAt).ok) throw new Error('fixture: take refused');
   fx.coord.settleAsk(id, by, 'Red', t);
 }
-function approval(fx: Approvals, t: number): number {
+function approval(fx: Approvals, t: number, releaseReason?: 'forbidden'): number {
   seq += 1;
   return fx.coord.insertApproval({ childId: CHILD, parentId: PARENT, runId: null, digest: 'a'.repeat(64),
     nonce: String(seq).padStart(32, '0'), agentId: '', tool: 'Bash', inputRedacted: 'rm -rf build', truncated: false,
-    class: 'ordinary', askAt: t, notifyAt: t + 60_000 });
+    class: releaseReason ?? 'ordinary', askAt: t, notifyAt: t + 60_000, ...(releaseReason ? { releaseReason } : {}) });
 }
 
 const mails = (fx: Approvals): { fromId: string; toId: string; kind: string; subject: string; body: string }[] =>
@@ -113,6 +113,20 @@ describe('POST /api/digest/correct (spec §10)', () => {
     expect(res.json()).toEqual({ ok: false, error: 'not-coordinator' });
     expect(mails(f)).toEqual([]);
     expect(corrected(f, 'asks', q)).toBe(0);
+  });
+
+  it('an approval the operator answered inside its window, or one minted released, is 409 not-coordinator, unmailed and unmarked', async () => {
+    f = await approvalsFixture();
+    const mine = approval(f, at(0));
+    f.coord.markApprovalOperator(CHILD, at(0) + 30_000);
+    const guard = approval(f, at(5), 'forbidden');
+    for (const id of [mine, guard]) {
+      const res = await correct(f, { rowKind: 'approval', id, text: 'No.' });
+      expect(res.statusCode, String(id)).toBe(409);
+      expect(res.json()).toEqual({ ok: false, error: 'not-coordinator' });
+      expect(corrected(f, 'approvals', id)).toBe(0);
+    }
+    expect(mails(f)).toEqual([]);
   });
 
   it('a second correction while the first is undelivered is 409 duplicate', async () => {

@@ -63,8 +63,8 @@ function approval(coord: CoordStore, o: { parent?: string; t: number; input?: st
     askAt: o.t, notifyAt: o.t + 60_000, ...(o.releaseReason ? { releaseReason: o.releaseReason } : {}),
   });
 }
-function rule(coord: CoordStore, id: number, verdict: 'allow' | 'deny', t: number, by = PARENT): void {
-  const r = coord.takeApprovalForRule(id, { by, verdict, reason: `${verdict}: inside the worktree`, ruling: '{}', now: t });
+function rule(coord: CoordStore, id: number, verdict: 'allow' | 'deny', t: number, by = PARENT, reason = `${verdict}: inside the worktree`): void {
+  const r = coord.takeApprovalForRule(id, { by, verdict, reason, ruling: '{}', now: t });
   if (!r.ok) throw new Error(`fixture: the rule was refused (${r.why})`);
 }
 
@@ -162,6 +162,77 @@ describe('buildDigest (spec §10)', () => {
     const wire = JSON.stringify(built.digest);
     expect(wire).not.toContain(TOKEN_HEX);
     expect(built.digest.lines[0]!.text).toContain('Authorization');
+  });
+
+  it('the coordinator\'s free-text reason and the answer label are masked too: the fields a coordinator quotes the command in', () => {
+    const { coord } = store();
+    const q = ask(coord, { t: at(0) });
+    answerAsk(coord, q, PARENT, `Yes, run ${BEARER}`, at(1));
+    const a = approval(coord, { t: at(2) });
+    rule(coord, a, 'deny', at(3), PARENT, `deny: it would send ${BEARER}`);
+    const w = digestWindow(DAY, DIGEST_HOUR_UTC);
+    const built = buildDigest(coord, w.fromMs, w.toMs);
+    if (!built.ok) throw new Error(built.detail);
+    expect(built.digest.lines.map((l) => l.kind)).toEqual(['answer', 'deny']);
+    expect(built.digest.lines[0]!.answer).toContain('Yes, run');
+    expect(built.digest.lines[1]!.reason).toContain('deny: it would send');
+    expect(JSON.stringify(built.digest)).not.toContain(TOKEN_HEX);
+  });
+
+  it('a secret that straddles the 160th character leaves no head unmasked: the redaction runs before the cut', () => {
+    const { coord } = store();
+    const head = "curl -H 'Authorization: Bearer ";
+    // The token starts at character 150, so a cut first would keep its first ten characters bare.
+    const cmd = `${'x'.repeat(150 - 1 - head.length)} ${head}${TOKEN_HEX}' https://example.invalid/x`;
+    expect(cmd.indexOf(TOKEN_HEX)).toBe(150);
+    const a = approval(coord, { t: at(0), input: cmd });
+    rule(coord, a, 'allow', at(1));
+    const w = digestWindow(DAY, DIGEST_HOUR_UTC);
+    const built = buildDigest(coord, w.fromMs, w.toMs);
+    if (!built.ok) throw new Error(built.detail);
+    const text = built.digest.lines[0]!.text;
+    expect(text.length).toBeLessThanOrEqual(160);
+    for (let i = 0; i + 8 <= TOKEN_HEX.length; i += 1) expect(text, `token slice at ${i}`).not.toContain(TOKEN_HEX.slice(i, i + 8));
+  });
+
+  it('a stale approval is a lapse at its notifyAt; an operator answer at exactly notifyAt is a lapse too', () => {
+    const { coord } = store();
+    const s = approval(coord, { t: at(0) });
+    expect(coord.staleApproval(s)).toBe(true);
+    const edge = approval(coord, { t: at(5) });
+    coord.markApprovalOperator(CHILD, at(5) + 60_000);
+    const r = coord.approvalById(s);
+    const e = coord.approvalById(edge);
+    if (!r.ok || !r.row || !e.ok || !e.row) throw new Error('fixture');
+    expect(r.row.state).toBe('stale');
+    expect(approvalDecision(r.row)).toEqual({ kind: 'lapse', at: at(0) + 60_000 });
+    expect(e.row.ruledAt).toBe(e.row.notifyAt);
+    expect(approvalDecision(e.row)).toEqual({ kind: 'lapse', at: at(5) + 60_000 });
+    const w = digestWindow(DAY, DIGEST_HOUR_UTC);
+    const built = buildDigest(coord, w.fromMs, w.toMs);
+    if (!built.ok) throw new Error(built.detail);
+    expect(built.digest.lines.map((l) => [l.id, l.kind])).toEqual([[s, 'lapse'], [edge, 'lapse']]);
+  });
+
+  it('the window is half-open: a decision at its start is in, one at its end is the next day\'s, and a forbidden request minted before it is not counted', () => {
+    const { coord } = store();
+    const w = digestWindow(DAY, DIGEST_HOUR_UTC);
+    // A lapse whose notifyAt is exactly the window's end: fetched (its askAt is inside), but not this day's line.
+    const end = approval(coord, { t: w.toMs - 60_000 });
+    coord.lapseApproval(end);
+    // A lapse whose notifyAt is exactly the window's start: this day's line.
+    const start = approval(coord, { t: w.fromMs - 60_000 });
+    coord.lapseApproval(start);
+    // A forbidden request minted 30 s before the window: fetched through its notifyAt, but the guard's count is by askAt.
+    approval(coord, { t: w.fromMs - 30_000, releaseReason: 'forbidden', cls: 'forbidden' });
+    const built = buildDigest(coord, w.fromMs, w.toMs);
+    if (!built.ok) throw new Error(built.detail);
+    expect(built.digest.lines.map((l) => [l.id, l.kind, l.at])).toEqual([[start, 'lapse', w.fromMs]]);
+    expect(built.digest.totals.guardForbidden).toBe(0);
+    const next = digestWindow('2026-10-19', DIGEST_HOUR_UTC);
+    const nb = buildDigest(coord, next.fromMs, next.toMs);
+    if (!nb.ok) throw new Error(nb.detail);
+    expect(nb.digest.lines.map((l) => l.id)).toEqual([end]);
   });
 
   it('the command is cut to its first 160 characters, after the redaction', () => {
