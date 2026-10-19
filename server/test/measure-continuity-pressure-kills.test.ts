@@ -30,9 +30,10 @@ const note = (task: string, status = 'killed', reason = 'stopped because the sys
 // Event-style envelope: one task id, an event element, a summary and NO status element.
 const eventNote = (task: string, events: string[] = ['fixture stream line']): string =>
   `<task-notification>\n<task-id>${task}</task-id>\n<summary>${escapeText('Monitor "watch <x> & y" reported an event')}</summary>\n${events.map((e) => `<event>${escapeText(e)}</event>`).join('\n')}\n</task-notification>`;
-// Batched envelope: several task ids, ONE status.
+// The verified pressure reason, and a workflow's cutoff reason.
 const PRESSURE = 'Background command "watch <x> & y" was stopped because the system is running low on memory';
 const WORKFLOW = 'Background workflow "ship <it>" (run wf_abc123) didn\'t finish before the previous session ended';
+// Batched envelope: several task ids, ONE status.
 const batched = (status: string, tasks: string[], summary: string = WORKFLOW): string =>
   `<task-notification>\n${tasks.map((t) => `<task-id>${t}</task-id>`).join('\n')}\n<status>${status}</status>\n<summary>${escapeText(summary)}</summary>\n</task-notification>`;
 const reminder = (text = 'Fixture reminder; the scanner never reads it.'): string => `<system-reminder>\n${text}\n</system-reminder>`;
@@ -169,6 +170,11 @@ describe('well-formed notifications that are not pressure kills read as non-even
     expect(read()).toEqual(clean(0, 0, 1));
   });
 
+  it.each(['stopped', 'completed'])('a %s envelope with no task id at all is a known non-event, as ruled', (status) => {
+    transcript(U1, [row(batched(status, []))]);
+    expect(read()).toEqual(clean(0, 0, 1));
+  });
+
   it('the kill rule is unchanged: a verified single-task killed envelope with trailing reminders is exactly one kill', () => {
     transcript(U1, [row(`${note('k1')}\n\n${reminder()}\n${reminder('again')}`)]);
     expect(read()).toEqual(clean(1, 1, 1));
@@ -187,6 +193,16 @@ describe('well-formed notifications that are not pressure kills read as non-even
     ['an event element that is never closed', eventNote('ev1').replace('</event>', '')],
     ['no event element and no status', eventNote('ev1').replace(/<event>.*<\/event>\n/, '')],
     ['two statuses', batched('stopped', ['b1', 'b2']).replace('<summary>', '<status>completed</status>\n<summary>')],
+    // An element the scanner cannot read still counts: every arm counts element openers beside readable values.
+    ['an event element, one task id and a status element with an attribute', eventNote('ev1').replace('<summary>', '<status kind="bg">killed</status>\n<summary>')],
+    ['an event element, one task id and a killed status with markup in its value, under the verified summary',
+      eventNote('k1').replace(/<summary>.*<\/summary>/, `<summary>${escapeText(PRESSURE)}</summary>`).replace('<summary>', '<status>killed <b></status>\n<summary>')],
+    ['a batched stopped envelope and a second, unreadable status', batched('stopped', ['b1', 'b2']).replace('<summary>', '<status kind="bg">completed</status>\n<summary>')],
+    ['a single-task stopped envelope and a second, unreadable status', batched('stopped', ['s1']).replace('<summary>', '<status kind="bg">completed</status>\n<summary>')],
+    ['an event element and a second task id the scanner cannot read', eventNote('ev1').replace('<summary>', '<task-id>e.4</task-id>\n<summary>')],
+    ['a single-task killed envelope whose status carries an attribute', note('k1').replace('<status>killed</status>', '<status kind="bg">killed</status>')],
+    ['a single-task killed envelope and a second, unreadable task id', note('k1').replace('<tool-use-id>', '<task-id>e.4</task-id>\n<tool-use-id>')],
+    ['one plain event element and an unclosed event opener with an attribute', eventNote('ev1').replace('</event>', '</event>\n<event kind="x">')],
   ])('stays unmeasured: %s', (_name, text) => {
     transcript(U1, [row(text), row(note('real'))]);
     expect(read()).toEqual({ ...clean(1, 1, 1), reading: 'partial', unmeasured_notifications: 1 });

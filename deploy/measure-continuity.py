@@ -597,14 +597,20 @@ def stage4(ctx):
 # queued-command attachment row is never a user row, so it is not read (a kill
 # announced that way is outside this count). A KNOWN NON-EVENT is a well-formed
 # envelope read as not this event, adding no unmeasured count: exactly one status
-# that is a known non-killed one (`completed`, `failed`, `stopped`: a workflow that
-# did not finish before the previous session ended carries `stopped`), whatever its
-# task-id count (a batched envelope; the status is read BEFORE the id count); or no
-# status, exactly one task id and exactly one `<event>` element (an event-style
-# notification). An envelope is the whole `<task-notification>…</task-notification>`
-# text once trailing whitespace and whole trailing `<system-reminder>…</system-reminder>`
-# blocks are removed. Every other shape is unmeasured, a batched `killed` envelope
-# included.
+# element whose readable value is a known non-killed one (`completed`, `failed`,
+# `stopped`: a workflow that did not finish before the previous session ended
+# carries `stopped`), whatever its task-id count (a batched envelope; the status is
+# read BEFORE the id count); or no status element, exactly one readable task-id
+# element and exactly one plain `<event>` element (an event-style notification).
+# An envelope is the whole `<task-notification>…</task-notification>` text once
+# trailing whitespace and whole trailing `<system-reminder>…</system-reminder>`
+# blocks (optional whitespace between them) are removed. The kill rule has its own
+# non-pressure case: a single-task `killed` envelope (one readable status, one
+# readable task id) whose one summary is not the verified pressure reason is read
+# as not this event too. Every other shape is unmeasured: a status or task-id
+# element the scanner cannot read (an attribute, markup in the value, a second
+# unreadable one) counts against the envelope, and a batched `killed` envelope is
+# unmeasured, never a kill.
 # A partial read (an unreadable file, a malformed row, an envelope with an
 # unreadable stamp or ambiguous fields) and an absent roster are reported as such
 # and are never a clean zero; a row whose stamp is no string, or whose JSON nests
@@ -812,15 +818,20 @@ def s6_pressure_comparison(reading, baseline):
 
 # An ENVELOPE is the whole `<task-notification>…</task-notification>` text once its
 # trailing whitespace and any whole trailing `<system-reminder>…</system-reminder>`
-# blocks (each complete, whitespace between them, nothing else) are removed; any
-# other text after the closing tag leaves it no envelope.
+# blocks (each complete, optional whitespace between them, nothing else) are
+# removed; any other text after the closing tag leaves it no envelope. A status or
+# task-id element is counted by its OPENER (`<status\b`, `<task-id\b`, which also
+# counts an attribute and a longer name: the fail-safe direction) as well as by its
+# readable value, so an element the scanner cannot read is never a missing one.
 S6_NOTIFICATION = re.compile(
     r"<task-notification>\s*(.*?)\s*</task-notification>"
     r"(?:\s*<system-reminder>(?:(?!</system-reminder>).)*</system-reminder>)*", re.S
 )
 S6_TASK_ID = re.compile(r"<task-id>([A-Za-z0-9_-]+)</task-id>")
 S6_STATUS = re.compile(r"<status>([^<>]*)</status>")
-S6_EVENT_TAGS = re.compile(r"</?event>")
+S6_STATUS_OPEN = re.compile(r"<status\b")
+S6_TASK_ID_OPEN = re.compile(r"<task-id\b")
+S6_EVENT_TAGS = re.compile(r"</?event\b[^<>]*>?")
 S6_SUMMARY = re.compile(r"<summary>([^<>]*)</summary>", re.S)
 S6_PRESSURE_SUMMARY = re.compile(
     r'Background command ".*" was stopped because the system is running low on memory', re.S
@@ -882,24 +893,29 @@ def s6_pressure_kills(ctx):
                         body = envelope.group(1)
                         ids = S6_TASK_ID.findall(body)
                         statuses = S6_STATUS.findall(body)
+                        id_openers = len(S6_TASK_ID_OPEN.findall(body))
+                        status_openers = len(S6_STATUS_OPEN.findall(body))
                         if at is None:
                             file_unmeasured += 1
                             continue
-                        if not statuses:
-                            # Event-style: exactly one task id and exactly one event element.
-                            if len(ids) == 1 and S6_EVENT_TAGS.findall(body) == ["<event>", "</event>"]:
+                        if status_openers == 0:
+                            # Event-style: no status element, exactly one readable task id
+                            # and exactly one plain event element.
+                            if id_openers == 1 and len(ids) == 1 \
+                                    and S6_EVENT_TAGS.findall(body) == ["<event>", "</event>"]:
                                 continue
                             file_unmeasured += 1
                             continue
-                        status = statuses[0]
-                        if len(statuses) != 1 or status not in ("completed", "failed", "killed", "stopped"):
+                        status = statuses[0] if statuses else None
+                        if status_openers != 1 or len(statuses) != 1 \
+                                or status not in ("completed", "failed", "killed", "stopped"):
                             file_unmeasured += 1
                             continue
                         # A known non-killed status is read BEFORE the task-id count, so a
                         # batched envelope (several ids, one status) is a known non-event.
                         if status != "killed":
                             continue
-                        if len(ids) != 1:
+                        if id_openers != 1 or len(ids) != 1:
                             file_unmeasured += 1
                             continue
                         summaries = S6_SUMMARY.findall(body)
