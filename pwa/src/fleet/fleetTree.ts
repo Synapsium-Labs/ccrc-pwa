@@ -22,6 +22,9 @@
 //   1. PARENT. A session's parent is the `claimedBy` of the ACTIVE run bound to
 //      it (`runForSession`: the current wave, so a workspace resumed for wave 5
 //      answers wave 5's run, not the run its `.child` mark names). Never itself.
+//      Never a run OLDER than the one its `.child` mark names either (D-5828,
+//      `runBelongsTo`): that run was opened for an earlier workspace of the same
+//      name, and its claimant is not this workspace's coordinator.
 //   2. CARD. Every row renders where the SERVER placed it (`boardHome`): for a
 //      held child, its coordinator's project, durably across the wave boundary
 //      and whether or not the coordinator is still a live row; otherwise its own
@@ -47,7 +50,7 @@
 //   • missing from the fleet — the same: the coordinator's project while the
 //     stamp answers, top level, with the orphan marker; once nothing answers,
 //     the child's own project. It keeps its indicator wherever it lands.
-import { boardHome, type FleetSession, type RunSummary } from '../../../shared/api';
+import { boardHome, type ChildMark, type FleetSession, type RunSummary } from '../../../shared/api';
 import type { Acks } from '../lib/seen';
 import { groupFleet, type FleetGroup } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
@@ -58,8 +61,8 @@ import { sessionLabel } from './sessionLabel';
 
 /** Rule 1: the session id that coordinates this one, from the active run bound
  *  to it — `null` when no active run names it, or it names itself. */
-export function parentIdOf(s: { id: string }, runs: readonly RunSummary[]): string | null {
-  const by = runForSession(runs, s.id)?.claimedBy ?? null;
+export function parentIdOf(s: { id: string; child?: ChildMark }, runs: readonly RunSummary[]): string | null {
+  const by = runForSession(runs, s)?.claimedBy ?? null;
   return by === s.id ? null : by;
 }
 
@@ -87,18 +90,23 @@ export function workingOn(s: FleetSession, cards: ReadonlyMap<string, string>): 
  *  FLEET-WIDE (`lookup`), because the coordinator may sit on another card or in
  *  a fold. */
 export function childRunContext(
-  s: { id: string }, runs: readonly RunSummary[], lookup: (id: string) => FleetSession | null,
+  s: { id: string; child?: ChildMark }, runs: readonly RunSummary[], lookup: (id: string) => FleetSession | null,
 ): ChildRunContext {
   const pid = parentIdOf(s, runs);
   const parent = pid === null ? null : lookup(pid);
-  return { run: runForSession(runs, s.id), coordinator: parent === null ? null : sessionLabel(parent) };
+  return { run: runForSession(runs, s), coordinator: parent === null ? null : sessionLabel(parent) };
 }
 
 /** The runs `nestFleet` brackets by: a pending spawn (no session yet) and, per
  *  session, only the run `runForSession` answers — so the bracket's parent and
- *  `parentIdOf` are one rule, never two orders that disagree. */
-const latestPerSession = (runs: readonly RunSummary[]): RunSummary[] =>
-  runs.filter((r) => r.sessionId === null || runForSession(runs, r.sessionId) === r);
+ *  `parentIdOf` are one rule, never two orders that disagree. `byId` is the
+ *  WHOLE fleet, so the worker's child marker is read wherever its row is; a run
+ *  naming a session the fleet does not carry is asked by its id alone, today's
+ *  answer (D-5828). */
+const latestPerSession = (
+  runs: readonly RunSummary[], byId: ReadonlyMap<string, FleetSession>,
+): RunSummary[] =>
+  runs.filter((r) => r.sessionId === null || runForSession(runs, byId.get(r.sessionId) ?? { id: r.sessionId }) === r);
 
 /** A card of the tree: `groupFleet`'s group, plus the rows `nestFleet` draws
  *  from it, the runs that drew them, and the runs this project is the HOME of
@@ -114,6 +122,7 @@ export function fleetTree(
   sessions: FleetSession[], projects: readonly string[], runs: readonly RunSummary[], acks: Acks = {},
 ): FleetTreeGroup[] {
   const cards = cardsOf(sessions);
+  const byId = new Map(sessions.map((s) => [s.id, s] as const));
   return groupFleet(sessions, projects, acks).map((g) => {
     const mine = runs.filter((r) => runCard(r, cards) === g.project);
     return {
@@ -121,7 +130,7 @@ export function fleetTree(
       // Rule 1, ONE parent: the bracket reads only each session's LATEST active
       // run (`runForSession`, the run the label and header name), so a worker
       // two claimants' runs both name nests under the one its label says.
-      rows: nestFleet(g.sessions, latestPerSession(mine)),
+      rows: nestFleet(g.sessions, latestPerSession(mine, byId)),
       runs: mine,
       // A run homed here and working elsewhere, minus one whose worker renders
       // on this very card — that run is a bracketed row here already (spec §6).
@@ -165,7 +174,7 @@ export function coordinationOf(
     workingOn: on, coordinator: ctx.coordinator,
     coordinatorId: parent === null ? null : parent.id,
     coordinatorState: parent === null ? null : hibernatedSince(parent) !== null ? 'hibernated' : STATE_WORD[parent.bucket],
-    card: cards.get(s.id) ?? boardHome(s), run: runForSession(runs, s.id),
+    card: cards.get(s.id) ?? boardHome(s), run: runForSession(runs, s),
   };
 }
 

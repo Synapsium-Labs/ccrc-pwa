@@ -97,8 +97,8 @@ const HELPER_WORD = /\brefuseRoute\(\s*reply\s*,\s*'([^']+)'/g;
  *  literal-status refusal send, whatever its body's key order or headers. */
 const INLINE_SEND_PINS: Readonly<Record<string, number>> = {
   'auth/gate.ts': 2,
-  'coord/routes.ts': 148,  // D-5384: the open route's 24 precondition, child-gate, openRun-conflict and hold-verb sends answer through refuseRoute/refuseRun; D-5298: requireAttribution's 5 through refuseRoute
-  'server.ts': 127,       // D-5242: the swap route's three 409s (session-busy, status-unknown and the new hibernated) answer through refuseRoute
+  'coord/routes.ts': 149,  // D-5384: the open route's 24 precondition, child-gate, openRun-conflict and hold-verb sends answer through refuseRoute/refuseRun; D-5298: requireAttribution's 5 through refuseRoute; path identity W1a: the advance route's stored-id reject (`reject: { code: 'bad-session' }`, the advance route's own inline body, which no helper sends)
+  'server.ts': 131,       // D-5242: the swap route's three 409s (session-busy, status-unknown and the new hibernated) answer through refuseRoute; path identity W1a: its `readSessionRecord` `kind` switches send four literal 503s where four computed ternaries were
   'token/routes.ts': 2,   // the rotate route's 501, a `RotateAnswer`; the claim door's oversized-body 413
 };
 
@@ -106,7 +106,7 @@ const INLINE_SEND_PINS: Readonly<Record<string, number>> = {
  *  SHRINK, like the literal pins: a ternary status is no escape hatch. */
 const COMPUTED_SEND_PINS: Readonly<Record<string, number>> = {
   'coord/routes.ts': 2,
-  'server.ts': 6,
+  'server.ts': 2,         // path identity W1a: the four 503/404 ternaries became `kind` switches
 };
 
 /** The measured disagreements with the table, each counted (D-5381). The
@@ -114,15 +114,17 @@ const COMPUTED_SEND_PINS: Readonly<Record<string, number>> = {
  *  ternaries are counted on their own below. */
 const ALLOWED_SPLITS: readonly { file: string; word: string; status: number; count: number }[] = [
   // registry-unmeasurable: 502 in coord/routes.ts (the table), 503 in server.ts until #549 (ARCH-11b) unifies it.
-  { file: 'server.ts', word: 'registry-unmeasurable', status: 503, count: 4 },
+  { file: 'server.ts', word: 'registry-unmeasurable', status: 503, count: 8 },
   // The lockout: `unauthenticated` with verdict `locked-out` and a retry-after header.
   { file: 'server.ts', word: 'unauthenticated', status: 429, count: 3 },
   // Fastify's own oversized-body 413, reshaped into the small claim body (spec 4.6).
   { file: 'token/routes.ts', word: 'bad-request', status: 413, count: 1 },
 ];
 /** server.ts's `read.reason === 'unlistable' ? 503 : 404` sends, whose word is
- *  the matching `'registry-unmeasurable' : 'unknown-session'` ternary. */
-const COMPUTED_REGISTRY_UNMEASURABLE_503 = 4;
+ *  the matching `'registry-unmeasurable' : 'unknown-session'` ternary. None since
+ *  path identity W1a: `readSessionRecord` answers a `kind`, and each of the four
+ *  routes switches on it with a literal 503, so the eight 503s are all literal. */
+const COMPUTED_REGISTRY_UNMEASURABLE_503 = 0;
 
 describe('REFUSAL_STATUS (D-5381)', () => {
   it('maps every route refusal word to exactly one HTTP error status', () => {
@@ -161,7 +163,7 @@ describe('REFUSAL_STATUS (D-5381)', () => {
     expect(Object.fromEntries(splits)).toEqual(Object.fromEntries(ALLOWED_SPLITS.map((a) => [`${a.file}|${a.word}`, a.count])));
   });
 
-  it('server.ts\'s computed 503 registry-unmeasurable sends are counted — eight 503s in all with the literal four', () => {
+  it('server.ts\'s computed 503 registry-unmeasurable sends are counted — eight 503s in all, every one literal', () => {
     const text = sources().find((s) => s.rel === 'server.ts')!.text;
     const ternaries = refusalSends(text).filter((s) =>
       /^read\.reason === 'unlistable' \? 503 : 404$/.test(s.arg)

@@ -642,6 +642,12 @@ describe('the rejection table is total, in both directions', () => {
       'reclaim-paused',       // $REG marker filename, not a code (child-reclamation wave 4)
       'bad-request',          // the generic body-shape refusal server.ts
                                // already uses throughout; not a mail code
+      'bad-session-id',       // the request-id refusal server.ts's session routes
+                               // answer (400 in shared/refusal.ts's table); since
+                               // path identity's landing round 3, coord/routes.ts
+                               // and coord/openRun.ts answer it too, for a request
+                               // id that is not a registry id. Not a mail code,
+                               // and not a run refusal.
       'not-found',            // GET /api/mail/:id's generic 404 for an
                                // unknown delivery id; not a mail reject code
                                // (nothing was ever rejected — it never existed)
@@ -745,6 +751,14 @@ describe('the rejection table is total, in both directions', () => {
                                   // every sweep after the first. Nothing is declined,
                                   // nothing switches on it over the wire. Its siblings
                                   // `rekeyed` and `superseded` are one word each.
+      'bad-id',                  // path identity W1a (spec §2.3) — `SingleRead`'s
+                                  // word (registry.ts), switched on by the
+                                  // `readSessionRecord` callers in this directory.
+                                  // A READ RESULT, never a code: no refusal, no
+                                  // `error`/`refused`/`reject.code` and no wire
+                                  // field ever carries it. Each caller maps it to
+                                  // a word of its own (`bad-session`,
+                                  // `spent-unmeasured`, `marker-unreadable`).
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;

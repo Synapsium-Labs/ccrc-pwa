@@ -1388,7 +1388,7 @@ The LANE is the third suppressor (2026-09-07): a session spawns with
 (`CCRC_ANTHROPIC_BACKEND` in `accounts.sh`, read by ccd's `_is_anthropic_backend`).
 A lane on any other backend — a ChatGPT/Codex lane, which holds no claude.ai OAuth
 and runs Claude Code in token mode against a local proxy, or any lane declared
-`telemetry: "codex"` or `"none"` — spawns without it whatever the box flag and the
+`telemetry: "codex"`, `"openrouter"` or `"none"` — spawns without it whatever the box flag and the
 row say, because Remote Control needs a claude.ai token with the inference scope
 and that lane cannot present one. The backend decides, not placement: an Anthropic
 account held out of placement with `homeAble: false` keeps the flag, a home-able
@@ -1448,11 +1448,13 @@ scored better — for as long as it is installed and not kill-switched.
 `touch ~/.cc-sessions/<id>-disabled` is the per-lane brake, and a session that
 overflowed onto it returns home when home has headroom again *and* home is still
 servable for the project's pool;
-`telemetry` is `'anthropic'`, `'codex'` or `'none'`: `'anthropic'` means the statusline publishes this
+`telemetry` is `'anthropic'`, `'codex'`, `'openrouter'` or `'none'`: `'anthropic'` means the statusline publishes this
 account's 5h/7d windows and ccd treats the lane as speaking Claude Code's own protocol
 (`CCRC_ANTHROPIC_BACKEND` — `--remote-control`, the spawn-time effort, the 429 exclusion writer and Fable
 eligibility all key on it); `'codex'` means usage is published in Codex's weekly shape by the lane's own
-publisher, never the statusline; `'none'` says the account will never report rate limits,
+publisher, never the statusline; `'openrouter'` marks an OpenRouter key lane, which has no
+`~/.cc-limits` writer, is not an Anthropic backend and carries a class registry (D-5521);
+`'none'` says the account will never report rate limits,
 so its permanent unknown is not read as permanent emptiness; `hidden: true`
 declares the entry to be roster PLUMBING rather than one of your accounts — the
 `upstream` entry naming the binary every generated wrapper `exec`s — so no
@@ -1788,8 +1790,8 @@ may need the new id.
 `haiku`, `sonnet`, `opus`, `fable`. On a lane whose roster `telemetry` is `"anthropic"` those are Claude
 Code's own aliases and there is nothing to classify: `show` answers read-only and every change is refused.
 That includes every lane `ccrc account add` creates, whose key lanes route through their own `--models` map
-(`exec.models`) instead. A lane whose `telemetry` is `"codex"` or `"none"` — a Codex lane, or an OpenRouter or
-Anthropic-compatible endpoint rostered that way by hand — carries a **class registry**,
+(`exec.models`) instead. A lane whose `telemetry` is `"codex"`, `"openrouter"` or `"none"` — a Codex lane, an OpenRouter
+lane, or an Anthropic-compatible endpoint rostered that way by hand — carries a **class registry**,
 `~/.ccrc/models/<id>.classes.json`, naming the concrete model each class means on that lane, which class
 subagents run as, and a default effort per class. Every accepted change is re-validated and then materialised
 into that lane's own `settings.json` `env` block — the four alias defaults, the primary and small models, the
@@ -3107,7 +3109,7 @@ general remote-shell:
   exact bare command name (no path components) and an argv **prefix** — a
   handful of `ccd` verbs are still a bare first token (`start`, `enable`,
   `ensure`, `stop`, `swap`, `ws-add`, `forget`) — a bare-token grant leaves
-  everything after the verb unconstrained, which is what lets `ccd stop <id> --surface <word>`
+  everything after the verb unconstrained, which is what lets `ccd stop --surface <word> <id>`
   cross this seam with no widening: `stop`'s validated `--surface` flag is
   the single enrolment the swap-transcript design costs, and it rides as an
   argv flag rather than an env var because the exec seam is `Runner = (cmd,
@@ -3152,7 +3154,7 @@ general remote-shell:
   it — but where no evidence PERMITS an ordinary verb (guessing wrong there
   is loud: ccd's own usage refusal, a 502, never a lie), no evidence REFUSES
   `--surface`, because guessing wrong there is a *silent success*: an old
-  ccd parses `stop <id> --surface pwa` as a two-argument stop of a session
+  ccd parses the trailing order the server sent before path identity W1a, `stop <id> --surface pwa`, as a two-argument stop of a session
   literally named `<id>---surface`, exits 0, and the real session is never
   touched. Evidence comes from measuring the actual deployed ccd on
   whichever box runs it — the remote agent at handshake and every 60s

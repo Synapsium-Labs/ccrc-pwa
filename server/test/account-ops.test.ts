@@ -18,7 +18,7 @@ import vm from 'node:vm';
 import { ACCOUNT_SUBS } from '../../shared/api.js';
 import { accountOpsFor, accountSpawnEnv, localAccountOps, remoteAccountOps, type AccountOpsMakers } from '../src/accounts/ops.js';
 import { AgentOpError, LinkNotSentError, type FleetClient } from '../src/remote/client.js';
-import { accountOpRequestTimeoutMs } from '../../shared/agent-protocol.js';
+import { ACCOUNT_OP_DRAIN_MS, accountOpRequestTimeoutMs } from '../../shared/agent-protocol.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -288,6 +288,31 @@ describe('the local arm (D-5513: the account spawn\'s environment is explicit)',
     const survived = alive();
     if (survived) process.kill(pid, 'SIGKILL');
     expect(survived).toBe(false);
+  }, 20_000);
+
+  it('a member that leaves the group and holds stdout cannot hold the answer past the drain deadline (D-5622 (7))', async () => {
+    // The escapee calls setsid, so the group's TERM and KILL never reach it, and it keeps the stdout pipe open, so
+    // `close` never fires. The answer is still `timeout`, one ACCOUNT_OP_DRAIN_MS after the KILL, as on the agent.
+    const { home, rec } = fixtureHome([
+      'export rec',
+      'perl -MPOSIX -e \'POSIX::setsid(); open(F, ">", "$ENV{rec}/escapee.tmp"); print F $$; close F; rename("$ENV{rec}/escapee.tmp", "$ENV{rec}/escapee"); sleep 30\' &',
+      'while [ ! -s "$rec/escapee" ]; do sleep 0.02; done',
+      'while :; do sleep 0.05; done',
+    ].join('\n'));
+    const ops = localAccountOps({ home, timeoutMs: () => 2_000, killGraceMs: 300 });
+    const t0 = Date.now();
+    let ans: unknown;
+    try {
+      ans = await Promise.race([
+        ops.run('check', 'lane-a', {}),
+        new Promise((r) => setTimeout(() => r('still pending'), 2_000 + 300 + ACCOUNT_OP_DRAIN_MS + 3_000)),
+      ]);
+    } finally {
+      try { process.kill(Number(readFileSync(path.join(rec, 'escapee'), 'utf8').trim()), 'SIGKILL'); } catch { /* gone */ }
+    }
+    expect(existsSync(path.join(rec, 'escapee')), 'the escapee had not started when the bound ran out (load)').toBe(true);
+    expect(ans).toEqual({ kind: 'timeout' });
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(2_000 + 300 + ACCOUNT_OP_DRAIN_MS - 100);
   }, 20_000);
 
   it('a home the launcher path refuses answers not-started on the call, and never throws when the arm is built (D-5621)', async () => {

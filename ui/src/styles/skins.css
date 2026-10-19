@@ -27,7 +27,8 @@
 
    WHAT READS THE TYPE AND DENSITY ROLES. The shared primitives (Task 14), the
    sheet body, OptionRow and the app sheets' rows, chips and sheet copy (Task
-   14b); pwa/test/role-census.test.ts names every one. Beyond them Instrument
+   14b), and the page scaffold's PageScaffold, Section and EmptyState (Task
+   11, D-5102); pwa/test/role-census.test.ts names every one. Beyond them Instrument
    differs from Refined in radii, card elevation, motion and the meter's shape
    (D-5098).
    ========================================================================== */
@@ -51,6 +52,8 @@
   --gap-section: var(--sp-5);
   --page-max:      960px;
   --page-max-wide: none;
+  --head-h:        44px;             /* the tap floor; 40 only under a fine pointer, below (D-5667) */
+  --section-flow:  row;              /* the scope is a tag at the head's right (D-5666) */
   --measure-chat:  860px;            /* the log column */
 
   /* radius — lamps and pills keep --r-full */
@@ -83,6 +86,7 @@
 @media (pointer: fine) {
   :root[data-skin='instrument'] {
     --row-h: 32px;
+    --head-h: 40px;               /* the page header (D-5102, D-5667) */
   }
 }
 
