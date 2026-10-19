@@ -1737,6 +1737,12 @@ Mark it ✓, or write the defect and its fix.
 
 Issued and unused: 5559.
 
+### Issued 2026-10-19 and defined here (Task A5)
+
+- **D-5618** — `step-up-as-built` (Task A5): three decisions Task A5's Files list did not make. (1) **`auth-off` is defined by A5**, beside the three step-up codes in `STEP_UP_REFUSALS` (`shared/api.ts`), because the step-up routes answer it while the gate is dark and land before A7's account gate, which answers it too and reuses this definition rather than adding a second. Its status is **501**, the status the other auth routes answer dark (`not-configured`), so the three routes join `auth-gate.test.ts`'s `FLAG_AWARE` set (eleven since A5) and stay held to an exact dark answer; the other three statuses are chosen too: `step-up-required` 403, `step-up-locked` 429, `passkey-enrolled` 409 (`shared/refusal.ts`). (2) **A failed attempt answers `step-up-required` with `verdict: 'wrong'`, at 403**, never the login doors' 401: the caller's session is live, and a 401 with a verdict raises the PWA's login screen over it. One shape for every failed attempt, the reason in the journal only, as on the passkey door; a passkey store this process cannot read refuses the passphrase arm `unmeasured` rather than reading as "no passkey". (3) **A5 creates `shared/accounts.ts`** with the freshness window alone (`STEP_UP_FRESH_MS`, `stepUpFreshUntil`, `isStepUpFresh`), since its guard reads the window from there and A5 lands before A2, which the File structure table names as the file's creator; A2 and the later tasks extend it. The window is the last five minutes, so its edge is outside it: fresh at 4:59.999, refused at 5:00. The budget is five failures per session, a lock rather than a window, with one step-up in flight per session (`rate-limited` otherwise); a session holds at most one live step-up challenge.
+
+Issued and unused (Task A5): 5619.
+
 ### Departures defined here by slug, awaiting numbers
 
 These are decisions with no number yet: the spec's N1 and N2, and five this plan found (N7 at rev 2). Each takes a number from `POST /api/ledger/deviations` before the task that implements it is dispatched, and the PR that implements it replaces the label with the number here and in the spec, in the same act.

@@ -233,7 +233,9 @@ describe('the scanner is looking at something', () => {
     // 54 since decision `ask-dialog-tab-route`'s `POST /api/sessions/:id/dialog/tab`, an ask's tab move beside them.
     // 56 since the daily digest's `GET /api/digest` and `POST /api/digest/correct` (D-5300, plan Task 17): session-gated
     // when armed, NOT EXEMPT, no box token.
-    expect(scanRoutes('server.ts').length).toBe(56);
+    // 59 since step-up's three (D-5512, accounts plan Task A5): `POST /api/auth/step-up/start|finish|passphrase`,
+    // session-gated when armed, NOT EXEMPT, no box token, `auth-off` dark (so in `FLAG_AWARE`).
+    expect(scanRoutes('server.ts').length).toBe(59);
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
     // 23 since `POST /api/runs/:id/reclaim` — the fourth ungated operator door,
@@ -385,7 +387,9 @@ describe('the scanner is looking at something', () => {
     // 54 + 42 + 7 + 2 + 4 = 109, the HTTP half 106, the gated count stays 66, the exempt-HTTP count 34 -> 40.
     // 111 since the daily digest's two (plan Task 17, D-5300), session-gated and NOT EXEMPT:
     // 56 + 42 + 7 + 2 + 4 = 111, the HTTP half 108, the gated count 66 -> 68, the exempt-HTTP count stays 40.
-    expect(ROUTES.length).toBe(111);
+    // 114 since step-up's three (D-5512, accounts plan Task A5), session-gated and NOT EXEMPT:
+    // 59 + 42 + 7 + 2 + 4 = 114, the HTTP half 111, the gated count 68 -> 71, the exempt-HTTP count stays 40.
+    expect(ROUTES.length).toBe(114);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -531,7 +535,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 111 scanned + the static wildcard when the bundle is built.
+    // 114 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1018,9 +1022,12 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // The revocation pair, same reasoning: with no session gate there is nothing
     // to enrol into, so there is nothing to list or revoke either.
     'GET /api/auth/passkeys', 'DELETE /api/auth/passkey/:id',
+    // Step-up's three (D-5512, accounts plan Task A5): with no session gate there is
+    // no session to step up, so all three answer `501 auth-off` dark.
+    'POST /api/auth/step-up/start', 'POST /api/auth/step-up/finish', 'POST /api/auth/step-up/passphrase',
   ]);
 
-  it('FLAG_AWARE is exactly those eight — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those eleven — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -1043,6 +1050,9 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'POST /api/auth/passkey/assert/start',
       'POST /api/auth/passkey/register/finish',
       'POST /api/auth/passkey/register/start',
+      'POST /api/auth/step-up/finish',
+      'POST /api/auth/step-up/passphrase',
+      'POST /api/auth/step-up/start',
     ]);
     // …and both really are exempt-or-gated as the loop below assumes: login is
     // EXEMPT (the door), logout is GATED (only a logged-in caller can log out).
@@ -1051,7 +1061,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 108 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 111 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1115,7 +1125,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 108 HTTP routes, not the 40 exempt.
+          //    is not itself flag-aware — the assertion that covers all 111 HTTP routes, not the 40 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

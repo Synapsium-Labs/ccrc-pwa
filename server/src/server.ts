@@ -75,6 +75,7 @@ import type { CollectLaneJournal } from './collectLane.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
+import { createStepUp } from './auth/stepup.js';
 import {
   SESSION_COOKIE, cookiePolicyProblem, expireCookie, parseCookies, serializeCookie,
 } from './auth/cookie.js';
@@ -1107,6 +1108,28 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       slot.release();
     }
   });
+
+  // ── step-up that keeps the session (D-5512, plan Task A5) ─────────────
+  //
+  // THREE ROUTES, ALL GATED (none is in `EXEMPT`): only a live session can step
+  // up, so a box token, an anonymous caller and every session on the fleet box
+  // get the gate's 401 before a handler runs. They answer `auth-off` while the
+  // gate is dark. Finishing stamps `assertedAt` on THE REQUESTING SESSION ONLY:
+  // no session is minted, no cookie set, `generation` kept. Their own challenge
+  // store (purpose `step-up`, bound to the session's `idHash`) and their own
+  // per-session budget, never `loginLimiter`'s. The handlers and the reasons
+  // are `auth/stepup.ts`; the registrations stay HERE, by literal path, so
+  // `auth-gate.test.ts`'s sweep reads them.
+  const stepUp = createStepUp({
+    enabled: deps.cfg.authEnabled, store: authStore, passkeys, secretNow, rpProblem, rpId: deps.cfg.rpId,
+    device: (req) => sessionAuth(req).device,
+  });
+  // `Cache-Control: no-store` on EVERY step-up answer, refusals included (spec
+  // §3.3) — an `onSend` hook, so the gate's own 401 carries it too.
+  app.addHook('onSend', stepUp.noStore);
+  app.post('/api/auth/step-up/start', stepUp.start);
+  app.post('/api/auth/step-up/finish', stepUp.finish);
+  app.post('/api/auth/step-up/passphrase', stepUp.passphrase);
 
   /**
    * `GET /api/auth/status` — the box's standing gate posture (`AuthStatus`).
