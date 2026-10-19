@@ -289,7 +289,7 @@ The operator's working rulings from the W0 merge stand: TR1 A, TR2 A, TR3 A, TR4
   - The file is written early as a fence, and re-run after each drop and C5 task. Its generation-comparison mutation is measured once the drop helper stands.
 - **R31 — Item 36 is the set that Task 0 measures** by a long-TMPDIR run of the collector suites. It folds in W1b's `review-335-f9-needle-outgrows-the-cap-under-this-tmpdir`, and the plan records the measured count.
 - **R32 — The maker case goes beside `bsdOrderEnv` in `ccd-child-tmpdir.test.ts`.** Race-crash's header and its closed residual lines are reshaped in the TR4 commit.
-- **R33 — Items 38 and 40 were built by CCR-15 wave 10.** W2's docs task sets their §7 cells to `Built (CCR-15 wave 10)`.
+- **R33 — Items 38 and 40 were built by child-reclamation wave 10.** W2's docs task sets their §7 cells to `Built (child-reclamation wave 10)`.
 
 **The programme frame.**
 - **R34 — Task 0's live reads.**
@@ -446,7 +446,7 @@ Every file this wave touches. Each task's own **Files** block is the authority f
 | `server/test/collect-id-pins.test.ts` | 15 | its header line no longer says `learnCollect` asks no predicate (R42) |
 | `server/test/id-argv-census.test.ts` | 15 | the `collector-population` docstring; `GATES['collector-learn-gate']`; that name in the `collectAudit` row (R42) |
 | `server/test/path-identity-w2-prose.test.ts` (new) | 16 | the as-built pins |
-| `docs/superpowers/specs/2026-10-12-path-identity-design.md` | 16 | §3.10; 12 cells `Built (W2)`; 2 cells `Built (CCR-15 wave 10)` |
+| `docs/superpowers/specs/2026-10-12-path-identity-design.md` | 16 | §3.10; 12 cells `Built (W2)`; 2 cells `Built (child-reclamation wave 10)` |
 | `docs/superpowers/programs/child-reclamation-contract.md` | 16 | "§17 as built (path-identity W2, run <n>)" |
 | this plan | rides in the PR as the brief directs | |
 
@@ -13556,7 +13556,7 @@ EOF
 
 **Why:**
 - The spec gains "### 3.10 As built (W2)". It amends the spec and rewrites none of the text above it.
-- §7's twelve W2 rows read `Built (W2)`. Items 38 and 40 read `Built (CCR-15 wave 10)` (R33).
+- §7's twelve W2 rows read `Built (W2)`. Items 38 and 40 read `Built (child-reclamation wave 10)` (R33).
 - The contract gains "### §17 as built (path-identity W2, run <n>)".
 - Both records name every departure and every residual by slug. Neither carries a deviation number or a four-digit range, and neither cites a plan ruling by number (R23). They use the spec's decision IDs (TR1 to TR12) and slugs. §3.10 carries no task number. The contract note's "Found while building, per task" list uses task labels, as W1b's note does (see the drafter's corrections).
 
@@ -13564,7 +13564,7 @@ EOF
 - Modify `docs/superpowers/specs/2026-10-12-path-identity-design.md`:
   - Insert §3.10 directly above `## 4. Worktree path identity` (export line 591). It goes after §3.9's closing NOTE block (the `> [!NOTE]` at export line 588 and its one quoted line), with one blank line on each side.
   - In §7, change the Status cell of items 11, 12, 14, 16, 17, 18, 19, 32, 33, 34, 35 and 36 from `Proposed` to `Built (W2)`.
-  - Change the Status cell of items 38 and 40 from `Proposed` to `Built (CCR-15 wave 10)`.
+  - Change the Status cell of items 38 and 40 from `Proposed` to `Built (child-reclamation wave 10)`.
   - Nothing else in those rows changes.
 - Modify `docs/superpowers/programs/child-reclamation-contract.md`: append the note after the W1b note, which runs to the end of the file at the export (from line 3793). If a `## 18.` heading exists, the note goes before it.
 - Create `server/test/path-identity-w2-prose.test.ts`.
@@ -13599,7 +13599,7 @@ SPEC=docs/superpowers/specs/2026-10-12-path-identity-design.md; CON=docs/superpo
 grep -n '^### 3\.9 Proof$\|^> \[!NOTE\]$\|^### 3\.10\|^## 4\. Worktree path identity$' "$SPEC"   # (e2) three lines: 3.9, the NOTE, §4 (568, 588, 591 at the export); no 3.10
 grep -cE '^\| (11|12|14|16|17|18|19|3[2-6]) \|[^|]*\|[^|]*\|[^|]*\| Proposed \|' "$SPEC"   # (e3) 12
 grep -cE '^\| (38|40) \|[^|]*\|[^|]*\|[^|]*\| Proposed \|' "$SPEC"                    # (e4) 2
-grep -c '| Built (W2) |\|| Built (CCR-15 wave 10) |' "$SPEC"                          # (e5) 0
+grep -c '| Built (W2) |\|| Built (child-reclamation wave 10) |' "$SPEC"                          # (e5) 0
 grep -c '| Built (W1b) |' "$SPEC"                                                     # (e6) 8
 grep -n '^### §17 as built (path-identity W1b, run [0-9]*)$\|^### §17 as built (path-identity W2\|^## 18\. ' "$CON"   # (e7) one line, W1b's (3793 at the export); no W2 note, no §18
 awk '/^_ws_removal_mounts_clear\(\) \{/{f=1;next} f&&/^[[:space:]]*#/{next} f{print;exit}' ccd/ccd   # (e8) [[ "$CCD_OS" != darwin ]] || return 0
@@ -13884,14 +13884,14 @@ describe('the path-identity spec records W2 as built (path-identity spec §3.10,
     }
   });
 
-  it('marks items 11, 12, 14, 16 to 19 and 32 to 36 built in W2, and items 38 and 40 built by CCR-15 wave 10', () => {
+  it('marks items 11, 12, 14, 16 to 19 and 32 to 36 built in W2, and items 38 and 40 built by child-reclamation wave 10', () => {
     const w2 = [11, 12, 14, 16, 17, 18, 19, 32, 33, 34, 35, 36];
     for (const n of w2) expect(spec, `item ${n}`).toMatch(new RegExp(`^\\| ${n} \\|[^\\n]*\\| Built \\(W2\\) \\|`, 'm'));
     for (const n of [38, 40]) {
-      expect(spec, `item ${n}`).toMatch(new RegExp(`^\\| ${n} \\|[^\\n]*\\| Built \\(CCR-15 wave 10\\) \\|`, 'm'));
+      expect(spec, `item ${n}`).toMatch(new RegExp(`^\\| ${n} \\|[^\\n]*\\| Built \\(child-reclamation wave 10\\) \\|`, 'm'));
     }
     expect(spec.split('| Built (W2) |').length - 1).toBe(w2.length);
-    expect(spec.split('| Built (CCR-15 wave 10) |').length - 1).toBe(2);
+    expect(spec.split('| Built (child-reclamation wave 10) |').length - 1).toBe(2);
   });
 });
 
@@ -14257,9 +14257,9 @@ Then prove it: `grep -c 'and so do .ccd-reclaim-tail-mounts\.test\.ts. and$' doc
 ```bash
 SPEC=docs/superpowers/specs/2026-10-12-path-identity-design.md
 sed -i -E '/^\| (11|12|14|16|17|18|19|3[2-6]) \|/s/\| Proposed \|/| Built (W2) |/' "$SPEC"
-sed -i -E '/^\| (38|40) \|/s/\| Proposed \|/| Built (CCR-15 wave 10) |/' "$SPEC"
+sed -i -E '/^\| (38|40) \|/s/\| Proposed \|/| Built (child-reclamation wave 10) |/' "$SPEC"
 grep -c '| Built (W2) |' "$SPEC"                                                      # 12
-grep -c '| Built (CCR-15 wave 10) |' "$SPEC"                                          # 2
+grep -c '| Built (child-reclamation wave 10) |' "$SPEC"                                          # 2
 grep -c '| Built (W1b) |' "$SPEC"                                                     # 8: W1b's cells untouched
 git diff -U0 -- "$SPEC" | grep -c '^-[^-]'                                            # 14: only those rows lost a line
 ```
@@ -14513,7 +14513,7 @@ S=.superpowers/sdd/2026-10-15-path-identity-w2-absences-and-mounts/task16; F=doc
 S=.superpowers/sdd/2026-10-15-path-identity-w2-absences-and-mounts/task16; F=docs/superpowers/programs/child-reclamation-contract.md; ED='const fs=require("fs");const [f,re,to,fl]=process.argv.slice(1);const t=fs.readFileSync(f,"utf8");if(!new RegExp(re,fl||"").test(t)){console.log("anchor missing");process.exit(1)}fs.writeFileSync(f,t.replace(new RegExp(re,fl||""),to));console.log("mutated")'; mkdir -p "$S" && cp "$F" "$S/t16-14" && node -e "$ED" "$F" '(### §17 as built \(path-identity W2, run )\d+\)' '$1<n:run>)' && (cd server && ./node_modules/.bin/vitest run test/path-identity-w2-prose.test.ts); cp "$S/t16-14" "$F" && cmp "$F" "$S/t16-14" && echo restored
 ```
 ```bash
-S=.superpowers/sdd/2026-10-15-path-identity-w2-absences-and-mounts/task16; F=docs/superpowers/specs/2026-10-12-path-identity-design.md; ED='const fs=require("fs");const [f,re,to,fl]=process.argv.slice(1);const t=fs.readFileSync(f,"utf8");if(!new RegExp(re,fl||"").test(t)){console.log("anchor missing");process.exit(1)}fs.writeFileSync(f,t.replace(new RegExp(re,fl||""),to));console.log("mutated")'; mkdir -p "$S" && cp "$F" "$S/t16-15" && node -e "$ED" "$F" '(\n\| 40 \|[^\n]*?\| )Built \(CCR-15 wave 10\)( \|)' '$1Proposed$2' && (cd server && ./node_modules/.bin/vitest run test/path-identity-w2-prose.test.ts); cp "$S/t16-15" "$F" && cmp "$F" "$S/t16-15" && echo restored
+S=.superpowers/sdd/2026-10-15-path-identity-w2-absences-and-mounts/task16; F=docs/superpowers/specs/2026-10-12-path-identity-design.md; ED='const fs=require("fs");const [f,re,to,fl]=process.argv.slice(1);const t=fs.readFileSync(f,"utf8");if(!new RegExp(re,fl||"").test(t)){console.log("anchor missing");process.exit(1)}fs.writeFileSync(f,t.replace(new RegExp(re,fl||""),to));console.log("mutated")'; mkdir -p "$S" && cp "$F" "$S/t16-15" && node -e "$ED" "$F" '(\n\| 40 \|[^\n]*?\| )Built \(child-reclamation wave 10\)( \|)' '$1Proposed$2' && (cd server && ./node_modules/.bin/vitest run test/path-identity-w2-prose.test.ts); cp "$S/t16-15" "$F" && cmp "$F" "$S/t16-15" && echo restored
 ```
 ```bash
 S=.superpowers/sdd/2026-10-15-path-identity-w2-absences-and-mounts/task16; F=ccd/ccd; ED='const fs=require("fs");const [f,re,to,fl]=process.argv.slice(1);const t=fs.readFileSync(f,"utf8");if(!new RegExp(re,fl||"").test(t)){console.log("anchor missing");process.exit(1)}fs.writeFileSync(f,t.replace(new RegExp(re,fl||""),to));console.log("mutated")'; mkdir -p "$S" && cp "$F" "$S/t16-16" && node -e "$ED" "$F" '(# COMPARE-AND-DROP \(spec §5\.10\)):' '$1, never the tail'\''s plain unlink:' && (cd server && ./node_modules/.bin/vitest run test/path-identity-w2-prose.test.ts); cp "$S/t16-16" "$F" && cmp "$F" "$S/t16-16" && echo restored
@@ -14575,7 +14575,7 @@ lock; and the floor knob, NUL back-link and recycled-spawn pins. It
 names each departure and residual by slug, states the entry counts as
 numbers, and lists the carries this wave closed. Items 11, 12, 14, 16
 to 19 and 32 to 36 of §7 are marked built in W2, and items 38 and 40
-as built by CCR-15 wave 10.
+as built by child-reclamation wave 10.
 
 The rulings file gains its W2 as-built note at the end of §17. It
 records R95 as built, R89's kept-leaf residual cured and R83 changed,
@@ -15108,7 +15108,7 @@ Task 16's docs landed where it puts them, and the log holds one commit per task:
 L=.superpowers/sdd/2026-10-15-path-identity-w2-absences-and-mounts/task17; S=docs/superpowers/specs/2026-10-12-path-identity-design.md
 grep -c '^### 3\.10 As built (W2)' "$S"
 grep -c '| Built (W2) |' "$S"
-grep -c '| Built (CCR-15 wave 10) |' "$S"
+grep -c '| Built (child-reclamation wave 10) |' "$S"
 grep -c '^### §17 as built (path-identity W2, run [0-9]*)' docs/superpowers/programs/child-reclamation-contract.md
 git diff --numstat origin/main...HEAD -- "$S" docs/superpowers/programs/child-reclamation-contract.md
 cat > "$L/subjects.expected" <<'EOF'
