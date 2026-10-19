@@ -39,7 +39,7 @@ Sessions see no change. The rollout to each session-hosting node, and the operat
 - `exportStep` measures the listing, the stop inputs and the record, then calls lib and acts, and deletes a stop record no owed check stands behind;
 - `exportPass` keeps the listing record in its mark transaction;
 - replay's mark statements move to the last carrier;
-- `ENTRY_UPSERT` gains the bound tie flag `?21` (1 at ingest, 0 at replay);
+- `ENTRY_UPSERT` gains a bound tie flag, the 21st positional parameter (1 at ingest, 0 at replay);
 - adopt's carry line gains the history-off sentence.
 
 *L4 `ccd/history/cli.mjs`* reads the new meta records into `HealthInputs`. A missing record reads as `null`, and a malformed one throws, so status reports `status-unreadable` naming the key. Status still never opens a segment and never reads a segment's header. *L4 `ccd/history/recall.mjs`* changes only `expandEntryText` and its three non-text human blocks.
@@ -134,7 +134,7 @@ Before editing a B1, B2 or B4 function in place, re-read the merged code at the 
 | # | Decision | Status | Task(s) |
 |---|---|---|---|
 | R1 | **The check after a bind runs in bounded batches.** Each batch is one NORMAL transaction that clears its blobs' referrers before those blobs' marks (never the blobs first, so D-5395 and D-5396 hold at every commit). Batches page by a `blob_id` keyset, then an `entry_id` keyset. A batch is bounded by `EXPORT_BIND_BYTES` (16 MiB) and the existing row cap. After each batch, `PRAGMA busy_timeout = 0` then `PRAGMA wal_checkpoint(TRUNCATE)`, with `BUSY_TIMEOUT_MS` restored in a `finally`. A busy answer is tolerated; once its WAL passes `EXPORT_BIND_WAL_CEILING` (64 MiB), the check stops with the word `wal-held`. No batch starts once the run budget is spent. `HEALTH_META.exportSegmentMissing` accumulates per batch. The done stamp follows the last batch. No cursor is kept across steps: each step recomputes the missing set and restarts the keyset. | ruled by the coordinator | 1 |
-| R2 | **B4's D-4762 stands.** The check stays outside `db/`'s free-space floor, as the export pass does. One batch's WAL (about 42 MiB at most, truncated after each batch) sits under `journal_size_limit` (64 MiB) and below one segment mark's WAL, which D-4762 already accepts. There is no `low-disk` stop word. | ruled by the coordinator | 1 |
+| R2 | **B4's D-4762 stands.** The check stays outside `db/`'s free-space floor, as the export pass does. D-4762's ground holds: the WAL the check adds stays below one segment mark's WAL, which is 1 to 2 times a segment of up to 256 MiB. One batch's WAL is 17.4 to 23.2 MiB (measured), truncated after each batch when no reader holds the WAL. There is no `low-disk` stop word. | ruled by the coordinator | 1 |
 | R3 | **The export pass still runs while a check is unfinished,** in the same step. The cost is over-clearing only, never a loss: an entry the pass marks before a later batch clears its blob is exported once more. | ruled by the coordinator | 1 |
 | R4 | **Budget starvation behind ingest is accepted and made visible.** `exportStep` stays last in the tick, with no tick-order change (B1's D-4224). A starved check shows as Task 2's WARN with the word `budget`. | ruled by the coordinator | 2 |
 | R5 | **Doctor's rule** (amended by the coordinator). WARN `export-marks-unchecked` whenever the check stopped short. FAIL `export-marks-stalled`, which replaces that WARN, when an escalating word (`wal-held`, `unlistable`, `failed`) has stood longer than `EXPORT_MARKS_STALL_MS` = 24 h. A first stop recorded in the future never FAILs. A FAIL turns doctor red and makes `ccrc update` exit 3. `budget` and `off` never escalate: an ingest backlog that long already FAILs `lag-high`, and `off` holds back every other freshness FAIL (D-4314). The record's `sinceMs` restarts when the word moves between the escalating class and the other one, and is kept while it stays within one class (Task 1's `nextMarkCheckState`). | **provisional, for the operator at plan approval** | 1, 2 |
@@ -142,7 +142,7 @@ Before editing a B1, B2 or B4 function in place, re-read the merged code at the 
 | R7 | **A vanished segment re-arms the check, as code.** The trigger is a compact listing record, `export_marks_checked_listing` = `'<count> <digest>'` with an order-independent digest, not the list of names. It digests every listed name, damaged ones included, so moving a damaged file out of `export/<store_id>/` re-arms the check (the coordinator's reconciliation with Task 3). | ruled by the coordinator | 4 |
 | R8 | **Replay marks by the LAST carrier,** in `orderSegmentNames`' (seq, writer) order, closing review 621 F3. This reverses the coordinator's own convention from ask 58. | ruled by the coordinator | 5 |
 | R9 | **`expand` attaches variants to every non-bytes answer** (pruned, too large, undecodable), in `--json` and in the human form, restoring D-4596's true `variants_total`. | ruled by the coordinator | 6 |
-| R10 | **`ENTRY_UPSERT`'s tie, both arms.** A replayed copy never wins a tie: bound flag `?21`, 1 at ingest and 0 at replay. At ingest, a live copy beats an `exported:` holder at an equal rank. | ruled by the coordinator | 6 |
+| R10 | **`ENTRY_UPSERT`'s tie, both arms.** A replayed copy never wins a tie: a bound flag, the 21st positional parameter, 1 at ingest and 0 at replay. At ingest, a live copy beats an `exported:` holder at an equal rank. | ruled by the coordinator | 6 |
 | R11 | **The store-unbound remedy and adopt's carry line gain the history-off advice:** set `~/.ccrc/history-off` before the adopt when a carry will follow, and remove it once both directories are complete. This reverses RB11's note that the remedy text stays unchanged. | ruled by the coordinator | 7 |
 | R12 | **The operator's open restore question stays open.** No code in this plan: replay keeps a segment's bytes out over a held tombstone (`export_blob_tombstone_kept`), as now. | ruled by the coordinator (the question itself stays the operator's) | — |
 | R13 | **The check charges the stored bytes it rewrites to the run's byte budget** (`ctx.budget.bytes`), as the export pass charges what it writes. The export pass still runs in the same step whenever budget remains (R3); a check that spends the budget holds the pass, which records its attempt and says so (D-5394). | ruled by the coordinator | 1 |
@@ -155,7 +155,7 @@ These five inputs follow from the spec and would bite an operator, and no case t
 2. **A stale `export_marks_check` key that no check will ever delete.** The shape: a node runs this build, stops a check, is rolled back to B4 (which finishes the check in one transaction and never deletes the key), then rolled forward. `decideMarkCheck` now answers no check, the key ages, and after 24 h on an escalating word `export-marks-stalled` FAILs, so the roll-forward's own `ccrc update` exits 3. Expected: a step on which `decideMarkCheck` answers that no check is owed deletes a standing key and the once-a-check flag, whichever stands, and doctor reads PASS; a step whose listing cannot be measured deletes neither (Task 4). **Task 1**, through its planted-key case (`standing when no check is owed`), whose status half bites once Task 2 lands, and its flag-alone case (`a once-a-check flag standing alone`); Task 4's `a listing that fails never deletes the stop record`.
 3. **A listing that changes and stays changed.** For example, a damaged segment the operator moves aside for good, or a segment carried in from another box. Expected: one re-armed check, not one per step, because the done stamp records the listing it measured. A damaged name (Task 3) counts in the record like any listed name, so a damaged file left in place re-arms nothing after the check that recorded it, and moving it out re-arms one check, which empties the damaged record. A listing that fails (`ENOTDIR`, `EACCES`) re-arms nothing and deletes no stop record a check left standing; only a check that then runs records it `unlistable`. **Task 4.**
 4. **Two writers' segments at the same seq** (a directory carried in after an adopt), **and a restore whose backup's mark names a segment that orders AFTER the one being replayed.** Expected: a mark only moves forward in (seq, writer) order, never back. `segmentOrdersAfter` breaks an equal seq by writer, and a restore keeps the later mark. Losing the last carrier clears the mark, so the rows export again. **Task 5** (the scope's case 3, never built).
-5. **After a restore, ingest re-reads the unchanged live file from the backup's cursor** at an equal rank, with a smaller `file_id` than the replayed `exported:` row that took the structure through a strictly newer rank. Expected: the live-over-exported arm moves the structure back onto the live row with status `live`. A replay-against-replay tie keeps the first segment's structure. **Task 6**, in process: its `ingest:` case replays a segment through `recoveryStep` and then feeds the live file's re-read through ingest's own `writeChunk` at the equal rank (the scope's end-to-end case (2), a real `doctor --restore` and a scheduled tick, stays unbuilt), and its `replay against replay` case pins the first segment's structure with a `?21` = 1 mutant.
+5. **After a restore, ingest re-reads the unchanged live file from the backup's cursor** at an equal rank, with a smaller `file_id` than the replayed `exported:` row that took the structure through a strictly newer rank. Expected: the live-over-exported arm moves the structure back onto the live row with status `live`. A replay-against-replay tie keeps the first segment's structure. **Task 6**, in process: its `ingest:` case replays a segment through `recoveryStep` and then feeds the live file's re-read through ingest's own `writeChunk` at the equal rank (the scope's end-to-end case (2), a real `doctor --restore` and a scheduled tick, stays unbuilt), and its `replay against replay` case pins the first segment's structure with a tie-flag = 1 mutant.
 
 ## File Structure
 
@@ -165,7 +165,7 @@ These five inputs follow from the spec and would bite an operator, and no case t
 | `ccd/history/lib.d.mts` | modify | One declaration per new lib export and type: the mark-check state type, the facts and verdict types, the listing functions, `segmentOrdersAfter`, the two advice functions, and `HealthInputs`' `exportMarksCheck` and damaged-segment fields. | types | 1, 2, 3, 4, 5, 7 |
 | `ccd/history/store.mjs` | modify | `segmentFileFacts(path)`: one open `O_RDONLY \| O_NONBLOCK \| O_NOCTTY \| O_NOFOLLOW` (a link refused), an fstat on the descriptor and a 100-byte header read, answering `{size, magic, pageSize, pageCount, headerValid}` or `{unreadable}`. No SQLite open; inserted directly above `listSegments`. | L3 | 3 |
 | `ccd/history/store.d.mts` | modify | `segmentFileFacts` and its answer type, declared once. | types | 3 |
-| `ccd/history/sweep.mjs` | modify | **Task 1:** `checkSegmentMarks` as bounded batches (keyset paging, one NORMAL transaction per batch, the short-timeout TRUNCATE checkpoint, stop words, the done stamp), with `exportStep` acting on lib's answers; `exportStep`'s catch records `unlistable` or `failed`; a step that owes no check deletes a standing stop record and the once-a-check flag. **Task 3:** present means whole and own; `export_segment_damaged` and its record. **Task 4:** the listing record over every listed name, kept by `markExported`'s mark transaction and by the done stamp, and the measured `vanished` input. **Task 5:** replay's `blobMark` and `entryMark` by the last carrier. **Task 6:** `ENTRY_UPSERT`'s `?21`, passed by ingest and by `replayEntryRow`. **Task 7:** adopt's carry line. All above the R1 guard. | L4 | 1, 3, 4, 5, 6, 7 |
+| `ccd/history/sweep.mjs` | modify | **Task 1:** `checkSegmentMarks` as bounded batches (keyset paging, one NORMAL transaction per batch, the short-timeout TRUNCATE checkpoint, stop words, the done stamp), with `exportStep` acting on lib's answers; `exportStep`'s catch records `unlistable` or `failed`; a step that owes no check deletes a standing stop record and the once-a-check flag. **Task 3:** present means whole and own; `export_segment_damaged` and its record. **Task 4:** the listing record over every listed name, kept by `markExported`'s mark transaction and by the done stamp, and the measured `vanished` input. **Task 5:** replay's `blobMark` and `entryMark` by the last carrier. **Task 6:** `ENTRY_UPSERT`'s bound tie flag, passed by ingest and by `replayEntryRow`. **Task 7:** adopt's carry line. All above the R1 guard. | L4 | 1, 3, 4, 5, 6, 7 |
 | `ccd/history/cli.mjs` | modify | `readStoreExtras` reads `HEALTH_META.exportMarksCheck` (Task 2) and the damaged-segment record (Task 3): a missing record is `null`, and a malformed one is named in `unmeasured`, giving `status-unreadable`. `healthInputsOf` maps both. Status never opens or header-reads a segment. In place, above the R1 guard. | L4 | 2, 3 |
 | `ccd/history/recall.mjs` | modify | `expandEntryText` reads the variant rows before `expandBlob`, and attaches their causes to every non-bytes answer. The variant tail is printed on the pruned, too-large and undecodable human blocks. | L4 | 6 |
 | `server/test/history-lib.test.ts` | modify | Pure cases: the stop word, the batch cut, the record's round trip and its malformed inputs, `WORD_CASES` rows and the stall threshold, the whole verdict, the listing digest and the vanished trigger, segment order, and the store-unbound remedy. The `base()` fixture gains the new `HealthInputs` fields. | test | 1, 2, 3, 4, 5, 7 |
@@ -347,7 +347,7 @@ Expected (measured at `e4936efab` with this step's tests applied): `6 failed`, `
 
 ```js
   // W5h-1 Task 1 (D-5632 (history-export-bind-check-batched)): why the check after a bind stopped short, since when, and the
-  // marks it has cleared so far ('<word> <sinceMs> <cleared>', lib formatMarkCheckState); deleted by its done stamp.
+  // marks it has cleared so far, at least ('<word> <sinceMs> <cleared>', lib formatMarkCheckState; display only, and a thrown failure records 0); deleted by its done stamp.
   exportMarksCheck: 'export_marks_check',
 ```
 
@@ -361,8 +361,8 @@ Append to the end of `ccd/history/lib.mjs`:
 // decides when a batch may start, what a batch takes and what a stop records (RD2); sweep.mjs measures and acts.
 
 /** The stored bytes (length(z)) one batch of the check clears the marks of, at most. A cleared mark rewrites its whole row
- *  and z's overflow pages, so a batch's WAL is about 2.1 times this plus about 160 B a row (measured), which keeps one
- *  batch under the writer's journal_size_limit of 64 MiB. A batch still takes its first row whatever its size. */
+ *  and z's overflow pages, so a batch's WAL is about 2.1 times this plus about 160 B a row (measured), well under
+ *  EXPORT_BIND_WAL_CEILING. A batch still takes its first row whatever its size. */
 export const EXPORT_BIND_BYTES = 16 * 1024 * 1024;
 /** The WAL left after a batch's checkpoint answered busy (bytes) past which the check stops, worded `wal-held`: a reader on
  *  an older snapshot keeps every frame, so batching alone bounds nothing while it stays (measured: the WAL grew to the
@@ -1182,7 +1182,9 @@ function noteMarkCheckStop(db, ctx, word, cleared) {
  *  decideMarkCheck says this check covers) and deletes the stop record and the once-a-check flag.
  *
  *  Outside db/'s free-space floor, as the export pass is (D-4762 (history-export-outside-capture-pause)): one batch's WAL is
- *  about 42 MiB at most, under the writer's journal_size_limit. A directory that is absent (ENOENT) lists as none, so every
+ *  17.4 MiB for a full 16 MiB batch of 8 KiB blobs and 23.2 MiB for a batch of 50,000 blobs of 300 B with their referrers (both
+ *  measured), truncated after each batch when no reader holds the WAL. While a reader does, the WAL can reach about
+ *  EXPORT_BIND_WAL_CEILING plus one batch (64 MiB plus the 17-23 MiB measured) before the check stops on `wal-held`. A directory that is absent (ENOENT) lists as none, so every
  *  mark naming a segment is missing; one that cannot be listed for any other reason throws SegmentsUnlistable before
  *  anything is cleared or recorded. Answers what it cleared in this step, the missing names, and the word it stopped with
  *  (null when it ran to its done stamp). */
@@ -1528,7 +1530,7 @@ describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)'
   /** One fragment of each word's own remedy. */
   const REMEDY: Record<Check['word'], string> = {
     budget: 'once ingest leaves it room',
-    off: `remove ~/${healthLib.SWITCHES.off} when capture should resume`,
+    off: `remove ~/${healthLib.SWITCHES.off} when capture should resume, once any carry is whole`,
     'wal-held': 'so a checkpoint can truncate the WAL',
     unlistable: `make ~/.ccrc/history/${healthLib.EXPORT_DIR}/${STORE} a directory this user can read`,
     failed: 'the check\'s error is logged there each tick it fails',
@@ -1544,7 +1546,7 @@ describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)'
     expect(words(r, 'warn')).toEqual(['export-marks-unchecked']);
     expect(words(r, 'fail')).toEqual([]);
     expect(r.warn[0]!.detail).toBe(`store ${STORE}: the check of the export marks after a bind has not finished: it last stopped on budget `
-      + `(the run budget was spent before its next batch, ingest first), has stopped on budget or off for 30 min, and has cleared 4 mark(s) so far; ${TAIL}`);
+      + `(the run budget was spent before its next batch, ingest first), has stopped on budget or off for 30 min, and has cleared at least 4 mark(s) so far; ${TAIL}`);
   });
 
   it.each(ALL)('stopped on %s: the detail names the word, and the remedy is that word\'s own, then the prune hold', (word) => {
@@ -1574,7 +1576,7 @@ describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)'
     expect(words(r, 'fail')).toEqual(['export-marks-stalled']);
     expect(words(r, 'warn')).toEqual([]);
     expect(r.fail[0]!.detail).toContain(`has not finished: it last stopped on ${word} (`);
-    expect(r.fail[0]!.detail).toContain(`has stopped on wal-held, unlistable or failed for ${Math.round(STALL / MIN) + 60} min (over ${Math.round(STALL / MIN)} min), words no tick moves past by itself, and has cleared 7 mark(s) so far; ${TAIL}`);
+    expect(r.fail[0]!.detail).toContain(`has stopped on wal-held, unlistable or failed for ${Math.round(STALL / MIN) + 60} min (over ${Math.round(STALL / MIN)} min), words no tick moves past by itself, and has cleared at least 7 mark(s) so far; ${TAIL}`);
     expect(r.fail[0]!.remedy).toContain(REMEDY[word]);
   });
 
@@ -1751,7 +1753,7 @@ function markCheckDetail(arm, h) {
   const age = Math.max(0, minutesOf(h.nowMs - s.sinceMs));
   const why = `${s.word} (${MARK_CHECK_GLOSS[s.word] ?? 'a word this build does not know'})`;
   const since = `has stopped on ${markCheckClassWords(s.word)} for ${age} min`;
-  const tail = `has cleared ${s.cleared} mark(s) so far; until it finishes, a mark may still name a segment that is not on this box, and the gap guard cannot see those rows`;
+  const tail = `has cleared at least ${s.cleared} mark(s) so far; until it finishes, a mark may still name a segment that is not on this box, and the gap guard cannot see those rows`;
   if (arm === 'stalled') {
     return `the check of the export marks after a bind has not finished: it last stopped on ${why}, ${since} (over ${minutesOf(EXPORT_MARKS_STALL_MS)} min), words no tick moves past by itself, and ${tail}`;
   }
@@ -1769,6 +1771,9 @@ function markCheckRemedy(word, h) {
   return (h.exportMarksCheck ?? null) === null ? own : `${own}; ${MARK_CHECK_PRUNE_HOLD}`;
 }
 
+/** The clause the stop remedies of `off`, `wal-held` and `unlistable` share: no scheduled tick runs while the switch stands. */
+const MARK_CHECK_RESUMES = `the check resumes at the next tick that runs it, and none runs while ~/${SWITCHES.off} stands`;
+
 /** The remedy of the word the check last stopped on alone. */
 function markCheckOwnRemedy(word, h) {
   const s = h.exportMarksCheck ?? null;
@@ -1776,11 +1781,11 @@ function markCheckOwnRemedy(word, h) {
     case 'budget':
       return `none needed: the check resumes within each tick's budget once ingest leaves it room; if it stands for days, read the sweep: ${SWEEP_LOG}`;
     case 'off':
-      return `remove ~/${SWITCHES.off} when capture should resume: the check resumes with the next tick`;
+      return `remove ~/${SWITCHES.off} when capture should resume, once any carry is whole: ${MARK_CHECK_RESUMES}`;
     case 'wal-held':
-      return 'end the long-running read of the store (a ccrc history verb or another reader left open), so a checkpoint can truncate the WAL: the check resumes with the next tick';
+      return 'end the long-running read of the store (a ccrc history verb or another reader left open), so a checkpoint can truncate the WAL: ' + MARK_CHECK_RESUMES;
     case 'unlistable':
-      return `make ~/.ccrc/history/${EXPORT_DIR}/${h.storeId ?? '<store_id>'} a directory this user can read: the check resumes with the next tick`;
+      return `make ~/.ccrc/history/${EXPORT_DIR}/${h.storeId ?? '<store_id>'} a directory this user can read: ${MARK_CHECK_RESUMES}`;
     case 'failed':
       return `read the sweep: ${SWEEP_LOG}; the check's error is logged there each tick it fails`;
     default:
@@ -1852,7 +1857,7 @@ describe('W5h-1 Task 2: status reads export_marks_check; a stopped check WARNs, 
     const item = warned.warn.find((i) => i.word === 'export-marks-unchecked');
     expect(item, JSON.stringify(warned)).toBeDefined();
     expect(item!.detail).toContain('it last stopped on budget (');
-    expect(item!.detail).toContain('has cleared 4 mark(s) so far');
+    expect(item!.detail).toContain('has cleared at least 4 mark(s) so far');
     expect(warned.fail.map((i) => i.word)).not.toContain('status-unreadable');
     w5Plant(box, `wal-held ${Date.now() - x9Lib.EXPORT_MARKS_STALL_MS - X9_HOUR} 4`);
     const failed = w5Health(box);
@@ -4214,14 +4219,14 @@ Two read-side residuals from "Owed from B4" (scope `b4-read-residuals`, items 4 
   - Test side: the HA1 describe's `writer(box)`, `cli(args)`, `h(i)`, `t16items`, `T0`, `HEAVY` and `libRead.SIDECAR_WHOLE_MAX`; `history-export.test.ts`'s `runCli`, `withPane`, `ID`, `rid`; `history-recover.test.ts`'s x10 helpers at module scope (`X10Family`, `X10Text`, `x10Texts`, `x10Rows`, `x10Store`, `x10U`, `x10Count`, `X10_DEV`, `X10_DAY`, `X10_WRITER`), `plantSegment`, `segmentSha`, `exportedSourceKey`, `stepCtx`, `closeWriter` and `SW`.
 - Produces:
   - `recall.mjs`: every answer from `expandEntryText` carries `causes: string[]`, the entry's variant causes other than its primary blob's, whatever the primary's state. `expandRenderItem` reads `const causes = t.causes ?? [];`, where a sidecar's non-text answer carries none. The pruned, too-large and undecodable human blocks end with `tail`, as the bytes path's blocks already do. `--json` and human now agree.
-  - `sweep.mjs`: `ENTRY_UPSERT` takes a 21st bound parameter, `?21`, the tie flag: `1` at ingest (`writeChunk`) and `0` at replay (`replayEntryRow`). Its update condition is `excluded.struct_rank_ns > entries.struct_rank_ns OR (?21 = 1 AND excluded.struct_rank_ns = entries.struct_rank_ns AND (excluded.struct_file_id > entries.struct_file_id OR (SELECT status FROM ingest_files WHERE file_id = entries.struct_file_id) = 'exported'))`.
+  - `sweep.mjs`: `ENTRY_UPSERT` takes a bound flag, the 21st positional parameter, the tie flag: `1` at ingest (`writeChunk`) and `0` at replay (`replayEntryRow`). Its update condition is `excluded.struct_rank_ns > entries.struct_rank_ns OR (? = 1 AND excluded.struct_rank_ns = entries.struct_rank_ns AND (excluded.struct_file_id > entries.struct_file_id OR (SELECT status FROM ingest_files WHERE file_id = entries.struct_file_id) = 'exported'))`.
   - Test side: `SweepRecover.writeChunk(db, chunk): { newEntries: number; minNewTsMs: number | null }`.
 
 **Spec:**
 - §6.1 "Structure fields come from the newest copy: the copy whose file has the larger `mtime_ns` at read time, ties broken by the larger `file_id`"; §9.2 step 5 (RV15, the `ON CONFLICT(uuid) DO UPDATE SET … WHERE` rule); §9.14 "Export replay" ("through the same named-column inserts as ingest, entries by the newest-rank rule (§9.2)"). The spec text is Task 7's: its Step 7 amends all three in place, citing D-5638; this task edits no spec.
 - Departures: item 4 departs from nothing. It restores B2's D-4596 (`history-read-fixed-fields-fit-the-cap`), whose totals are the true counts. Item 5 is NEW **D-5638** (`history-ingest-live-beats-exported-tie`), the replay tie and the ingest tie both, as ruled by R10.
 - Pins: `expand --json` and the human form on a pruned primary with a placed variant, in both the HA1 store and B4's D-5396 end-to-end rebuild. The too-large and undecodable arms come in the same case. The restore-order case of review 614 F7, where `struct_file_id` stays on the live row. The ingest arm: a live copy beats an `exported:` holder at an equal rank. Each guard has its own mutant.
-- Plan choices (no departure): a replay-versus-replay tie keeps the first segment's structure (pinned by the `replay against replay` case and its `?21` = 1 mutant). A live-versus-live tie at ingest still goes to the larger `file_id`. A strictly newer rank still wins from either caller. Only ties change.
+- Plan choices (no departure): a replay-versus-replay tie keeps the first segment's structure (pinned by the `replay against replay` case and its tie-flag = 1 mutant). A live-versus-live tie at ingest still goes to the larger `file_id`. A strictly newer rank still wins from either caller. Only ties change.
 
 - [ ] **Step 1: Write the failing tests for item 4.** In `server/test/history-recall.test.ts`, inside the HA1 describe, insert directly above `  it('H-10 and H-19: a stored uuid or type that forges a line or a tag, or runs 300,000 characters, prints as one bounded quoted token in describe and in expand', () => {`:
 
@@ -4499,7 +4504,7 @@ Expected red, all three cases, with every CONTROL passing first (measured at `e4
 - [ ] **Step 9: Bind the tie arm.** In `ccd/history/sweep.mjs`, insert directly above `const ENTRY_UPSERT = \`INSERT INTO entries (uuid, transcript_pk, type, subtype, role, model, parent_uuid,`:
 
 ```js
-// D-5638 (history-ingest-live-beats-exported-tie): the tie arm is bound by ?21, 1 at ingest (writeChunk) and 0 at segment
+// D-5638 (history-ingest-live-beats-exported-tie): the tie arm is a bound flag, the 21st positional parameter, 1 at ingest (writeChunk) and 0 at segment
 // replay (replayEntryRow). A replayed copy never wins a tie, so a restore's entry keeps its structure on the live file the
 // backup held rather than move onto the exported: row replay just made (whose file_id is always the larger); and at ingest
 // a live copy beats an exported: holder at an equal rank whatever the file ids, which brings back an entry a replay took at
@@ -4517,12 +4522,12 @@ with:
 
 ```js
   WHERE excluded.struct_rank_ns > entries.struct_rank_ns
-     OR (?21 = 1 AND excluded.struct_rank_ns = entries.struct_rank_ns
+     OR (? = 1 AND excluded.struct_rank_ns = entries.struct_rank_ns
          AND (excluded.struct_file_id > entries.struct_file_id
               OR (SELECT status FROM ingest_files WHERE file_id = entries.struct_file_id) = 'exported'))`;
 ```
 
-The VALUES list keeps its twenty plain `?`. SQLite numbers them 1 to 20, so `?21` is the 21st argument (measured on `node:sqlite`).
+The VALUES list keeps its twenty plain `?`, and the tie flag is a twenty-first plain `?`, so it is the 21st positional parameter. A numbered `?21` is named "?21" by SQLite, and `node:sqlite` on Node 22 binds positional arguments to anonymous parameters only, so it fails on the floor (D-5638; the node-floor run measured it).
 
 In `replayEntryRow`, replace `    r.parse_state, r.struct_rank_ns, fileId, blobId);` with:
 
@@ -4550,11 +4555,11 @@ node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit
 
 Expected: every case is green, and tsc is silent (predicted for a worktree whose packages are all installed). Measured at `e4936efab` with Steps 3 and 9 alone, before the replay-against-replay case was added: history-recover 141 passed (142 with it, predicted), history-ingest 163 passed (O20's RSS bound included), history-export 84 passed. The O43 reused-inode case (`the newest-rank rule puts every entry's structure on the live copy`) stays green: there the live row is the newer row and wins by the larger `file_id` at ingest. A red in history-ingest that is not a structure or variant case gets re-run alone before it is called a break.
 
-- [ ] **Step 11: Mutations, each guard reds its case.** From the repository root, run `cp ccd/history/sweep.mjs "$SCRATCH/sweep.mjs.t6b"`, after `SCRATCH="$PWD/.superpowers/sdd/history-w5h1/scratch"; mkdir -p "$SCRATCH"` (the same directory as Step 5's). Apply each mutation by hand, run it from inside `server/`, see it red, then `cp "$SCRATCH/sweep.mjs.t6b" ccd/history/sweep.mjs` before the next one. Keep `?21` in the SQL in every mutant. Deleting `?21 = 1 AND ` outright leaves the 21st argument out of range, and the step then fails its chunk (`expected { moved: true, done: false, … }`, measured) before it reaches the guard's assertion.
+- [ ] **Step 11: Mutations, each guard reds its case.** From the repository root, run `cp ccd/history/sweep.mjs "$SCRATCH/sweep.mjs.t6b"`, after `SCRATCH="$PWD/.superpowers/sdd/history-w5h1/scratch"; mkdir -p "$SCRATCH"` (the same directory as Step 5's). Apply each mutation by hand, run it from inside `server/`, see it red, then `cp "$SCRATCH/sweep.mjs.t6b" ccd/history/sweep.mjs` before the next one. Keep the plain `?` in the SQL in every mutant. Deleting `? = 1 AND ` outright leaves the 21st argument out of range, and the step then fails its chunk (`expected { moved: true, done: false, … }`, measured) before it reaches the guard's assertion.
 
 | Mutation | `-t` filter (`test/history-recover.test.ts`) | Expected red (measured) |
 |---|---|---|
-| Restore the shipped tie for replay: replace `     OR (?21 = 1 AND excluded.struct_rank_ns = entries.struct_rank_ns` with `     OR (?21 IN (0, 1) AND excluded.struct_rank_ns = entries.struct_rank_ns` | `replay: a segment carrying an entry at the rank` | `a replayed copy never wins a tie: the structure stays on the live file: expected { file: 2, status: 'exported', …(1) } to deeply equal { file: 1, status: 'live', …(1) }` |
+| Restore the shipped tie for replay: replace `     OR (? = 1 AND excluded.struct_rank_ns = entries.struct_rank_ns` with `     OR (? IN (0, 1) AND excluded.struct_rank_ns = entries.struct_rank_ns` | `replay: a segment carrying an entry at the rank` | `a replayed copy never wins a tie: the structure stays on the live file: expected { file: 2, status: 'exported', …(1) } to deeply equal { file: 1, status: 'live', …(1) }` |
 | In `replayEntryRow`, bind `1` instead of `0` (`fileId, blobId, 0);` becomes `fileId, blobId, 1);`) | `replay: a segment carrying an entry at the rank` | the same red as the row above |
 | The same mutation | `replay against replay` | `a replay-against-replay tie keeps the first segment's structure: expected { file: <second>, status: 'exported', …(1) } to deeply equal { file: <first>, status: 'exported', …(1) }` (predicted) |
 | Drop the ingest arm: replace the two lines `         AND (excluded.struct_file_id > entries.struct_file_id` / `              OR (SELECT status FROM ingest_files WHERE file_id = entries.struct_file_id) = 'exported'))\`;` with the one line `         AND (excluded.struct_file_id > entries.struct_file_id))\`;` | `ingest: a live copy read at the rank` | `a live copy beats an exported: holder at an equal rank: expected { file: 2, status: 'exported', …(1) } to deeply equal { file: 1, status: 'live', …(1) }` |
@@ -4587,9 +4592,9 @@ git commit -m "fix(history): a replayed copy never wins an entry's structure on 
 Every anchor was measured at e4936efab. Tasks 1–6 edit the same files first, so re-anchor each edit by its content. Each script below asserts that its anchor occurs exactly once.
 
 **Interfaces:**
-- Consumes: lib's `SWITCHES.off` (`'.ccrc/history-off'`, the switch's one spelling, O13), `HISTORY_ROOT_REL` (`'.ccrc/history'`), `EXPORT_DIR` (`'export'`); `HEALTH_REMEDIES` and `remedyFor`'s `store-unbound` arm; sweep's `adoptArm` and `scheduledPass` (whose `if (existsSync(P.off)) { out('history-sweep: off'); return EXIT.OK; }` is this task's CONTROL guard and is unchanged); the export test helpers `ingestedBox`, `passAt`, `adoptOnPty`, `marks`, `metaOf`, `counters`, `exportDirOf`, `segmentsOf`. From Task 1: `HEALTH_META.exportMarksCheck`, `EXPORT_BIND_BYTES`, `EXPORT_BIND_WAL_CEILING`, `EXPORT_MARKS_STALL_MS`, `MARK_CHECK_STALL_WORDS` (the escalating class). From Task 2: the words `export-marks-unchecked` and `export-marks-stalled`. From Task 3: the counter `export_segment_damaged` and the word `export-segment-damaged`. From Task 4: the meta key `export_marks_checked_listing` (every listed name, damaged ones included). From Task 5: `segmentOrdersAfter`. From Task 6: `ENTRY_UPSERT`'s `?21` and `expandEntryText`'s `causes`.
+- Consumes: lib's `SWITCHES.off` (`'.ccrc/history-off'`, the switch's one spelling, O13), `HISTORY_ROOT_REL` (`'.ccrc/history'`), `EXPORT_DIR` (`'export'`); `HEALTH_REMEDIES` and `remedyFor`'s `store-unbound` arm; sweep's `adoptArm` and `scheduledPass` (whose `if (existsSync(P.off)) { out('history-sweep: off'); return EXIT.OK; }` is this task's CONTROL guard and is unchanged); the export test helpers `ingestedBox`, `passAt`, `adoptOnPty`, `marks`, `metaOf`, `counters`, `exportDirOf`, `segmentsOf`. From Task 1: `HEALTH_META.exportMarksCheck`, `EXPORT_BIND_BYTES`, `EXPORT_BIND_WAL_CEILING`, `EXPORT_MARKS_STALL_MS`, `MARK_CHECK_STALL_WORDS` (the escalating class). From Task 2: the words `export-marks-unchecked` and `export-marks-stalled`. From Task 3: the counter `export_segment_damaged` and the word `export-segment-damaged`. From Task 4: the meta key `export_marks_checked_listing` (every listed name, damaged ones included). From Task 5: `segmentOrdersAfter`. From Task 6: `ENTRY_UPSERT`'s bound tie flag and `expandEntryText`'s `causes`.
 - Produces:
-  - `lib.mjs`: `export function carryHoldAdvice(when: 'before the adopt' | 'before you copy'): string` returns `` `touch ~/${SWITCHES.off} ${when} and remove it only once both directories are here, complete and matching their source: a tick before then clears the export mark of every segment not here whole, and its rows export again` ``.
+  - `lib.mjs`: `export function carryHoldAdvice(when: 'before the adopt' | 'before you copy'): string` returns `` `touch ~/${SWITCHES.off} ${when} and remove it only once both directories hold every source file at the same size: a tick before then clears the export mark of every segment not here whole, and its rows export again` ``.
   - `lib.mjs`: `export function adoptCarryAdvice(storeId: string | null): string` returns `` `when ~/${HISTORY_ROOT_REL}/journal/${id}/ and ~/${HISTORY_ROOT_REL}/${EXPORT_DIR}/${id}/ are to come from the box the store left, copy them here before the adopt, or ${carryHoldAdvice('before the adopt')}` ``, where `id` is `storeId ?? '<store_id>'`.
   - The `store-unbound` remedy, both its fallback and its dynamic form, ends with `` `; ${adoptCarryAdvice(…)}` ``.
   - The adopt's carry line ends with `` `; if you copy them after this adopt, ${carryHoldAdvice('before you copy')}` ``.
@@ -4627,7 +4632,7 @@ sub('server/test/history-lib.test.ts',
 """    expect(r.fail[0]!.remedy).toContain('ccrc history doctor --adopt');
   });
   it('store-unbound\\'s remedy says to carry before the adopt or to hold the ticks with history-off until the carry is whole (D-5635)', () => {
-    const hold = 'touch ~/.ccrc/history-off before the adopt and remove it only once both directories are here, complete and matching their source';
+    const hold = 'touch ~/.ccrc/history-off before the adopt and remove it only once both directories hold every source file at the same size';
     const loss = 'a tick before then clears the export mark of every segment not here whole, and its rows export again';
     const fallback = healthLib.HEALTH_REMEDIES['store-unbound']!;
     expect(fallback).toContain('; when ~/.ccrc/history/journal/<store_id>/ and ~/.ccrc/history/export/<store_id>/ are to come from the box the store left, copy them here before the adopt, or ');
@@ -4639,7 +4644,7 @@ sub('server/test/history-lib.test.ts',
     expect(r).toContain(loss);
     expect(r, 'the bind half is unchanged').toContain(`if store ${STORE} is another box's, remove the ~/.ccrc/history/db link or move the DB aside`);
     expect(healthLib.carryHoldAdvice('before you copy')).toBe(
-      `touch ~/.ccrc/history-off before you copy and remove it only once both directories are here, complete and matching their source: ${loss}`);
+      `touch ~/.ccrc/history-off before you copy and remove it only once both directories hold every source file at the same size: ${loss}`);
   });
 """)
 
@@ -4650,7 +4655,7 @@ sub('server/test/history-recover.test.ts',
 """      `the operator, from a terminal outside any session: if the box this store left still has ~/.ccrc/history/journal/${storeId}/`);
     // D-5635: a carry after the bind holds the ticks with history-off until it is whole, said where the operator reads it.
     expect(r.out.replace(/\\r/g, '')).toContain(
-      "their file names never collide with this box's; if you copy them after this adopt, touch ~/.ccrc/history-off before you copy and remove it only once both directories are here, complete and matching their source");
+      "their file names never collide with this box's; if you copy them after this adopt, touch ~/.ccrc/history-off before you copy and remove it only once both directories hold every source file at the same size");
 """)
 
 # history-export.test.ts: in 'marks that move', after the O39 adopt case
@@ -4751,7 +4756,7 @@ append('ccd/history/lib.mjs', """
  *  which calls it while the module loads: a function declaration is hoisted whole, and every const it reads
  *  (SWITCHES, HISTORY_ROOT_REL, EXPORT_DIR) is initialised above HEALTH_REMEDIES. */
 export function carryHoldAdvice(when) {
-  return `touch ~/${SWITCHES.off} ${when} and remove it only once both directories are here, complete and matching their source: a tick before then clears the export mark of every segment not here whole, and its rows export again`;
+  return `touch ~/${SWITCHES.off} ${when} and remove it only once both directories hold every source file at the same size: a tick before then clears the export mark of every segment not here whole, and its rows export again`;
 }
 
 /** The store-unbound remedy's carry half (D-5635): the two directories a store's id keys (`<store_id>` when the id is
@@ -4928,7 +4933,7 @@ sub(SPEC,
 # §9.2 step 5, RV15's statement of the rule (Task 6)
 sub(SPEC,
 """the structure columns `WHERE excluded.struct_rank_ns > entries.struct_rank_ns OR (= AND excluded.struct_file_id > entries.struct_file_id)` (RV15);""",
-"""the structure columns `WHERE excluded.struct_rank_ns > entries.struct_rank_ns OR (?21 = 1 AND = AND (excluded.struct_file_id > entries.struct_file_id OR the holder's status is 'exported'))` (RV15; wave 5h-1, D-5638: the bound tie flag is 1 at ingest and 0 at segment replay);""")
+"""the structure columns `WHERE excluded.struct_rank_ns > entries.struct_rank_ns OR (? = 1 AND = AND (excluded.struct_file_id > entries.struct_file_id OR the holder's status is 'exported'))` (RV15; wave 5h-1, D-5638: the bound tie flag is 1 at ingest and 0 at segment replay);""")
 # §9.6, doctor's FAIL on (Task 2)
 sub(SPEC,
 """only through the default reducer that decides due-ness.
@@ -4961,12 +4966,12 @@ grep -nE "^const MARK_CHECK_STALL_WORDS = " ccd/history/lib.mjs
 grep -c 'export_marks_checked_listing' ccd/history/lib.mjs ccd/history/sweep.mjs
 grep -c "'export-segment-damaged'\|'export-marks-unchecked'\|'export-marks-stalled'" ccd/history/lib.mjs
 grep -n 'export function segmentOrdersAfter' ccd/history/lib.mjs
-grep -n '?21 = 1' ccd/history/sweep.mjs
+(cd server && ./node_modules/.bin/vitest run test/history-ingest.test.ts -t 'no numbered SQL parameter')
 for d in D-5632 D-5633 D-5634 D-5635 D-5636 D-5637 D-5638; do printf '%s %s\n' "$d" "$(grep -c "$d" docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md)"; done
 grep -c 'R5_RULED\|D-5633, provisional\|provisional for the operator' docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md
 ```
 
-Expected: ten `edited` lines. Then the three constants read 16 MiB, 64 MiB and 24 h (`16 * 2 ** 20` or its equal, `64 * 2 ** 20`, `24 * 60 * 60 * 1000`); `MARK_CHECK_STALL_WORDS` lists `wal-held`, `unlistable` and `failed` and nothing else; the listing key is counted at least once; the three words at least three times; `segmentOrdersAfter` once; the tie flag once; and each of the seven numbers is counted at least once in the spec; the last grep prints `0` (R5's ruling is in, no placeholder or provisional left). Each new sentence states shipped behaviour. Where a measurement disagrees with one (another constant, another key name), correct the sentence to the shipped value, never the code, and name the correction in the PR body's "Choices".
+Expected: ten `edited` lines. Then the three constants read 16 MiB, 64 MiB and 24 h (`16 * 2 ** 20` or its equal, `64 * 2 ** 20`, `24 * 60 * 60 * 1000`); `MARK_CHECK_STALL_WORDS` lists `wal-held`, `unlistable` and `failed` and nothing else; the listing key is counted at least once; the three words at least three times; `segmentOrdersAfter` once; the numbered-parameter scan in `history-ingest.test.ts` (titled `no numbered SQL parameter in ccd/history …`) passing, which holds the tie flag a plain `?`; and each of the seven numbers is counted at least once in the spec; the last grep prints `0` (R5's ruling is in, no placeholder or provisional left). Each new sentence states shipped behaviour. Where a measurement disagrees with one (another constant, another key name), correct the sentence to the shipped value, never the code, and name the correction in the PR body's "Choices".
 - The spec edits add no `file.ext:N` token. No test reads the spec by line: the tests name it only in header comments, by section.
 - The spec's §9.15 bold labels ("After a bind", "Mark") are kept, so the `§9.15 "After a bind"` citations in test headers still resolve.
 
@@ -5129,10 +5134,10 @@ Fleet-side only: `ccd/history/*` and its tests. No schema migration (still v2), 
    clears nothing, and `ccrc history status --json`'s counters gain neither `export_segment_missing` nor
    `export_segment_damaged`. The new words, and what each asks:
    - WARN `export-marks-unchecked`: a check of the export marks stopped short. By its word: `budget`, none, it
-     resumes each tick (a long ingest backlog spends the budget first); `off`, remove `~/.ccrc/history-off` once any
-     carry is whole; `wal-held`, end the long-running `ccrc history` read another terminal holds; `unlistable`, make
+     resumes each tick (a long ingest backlog spends the budget first); `off`, remove `~/.ccrc/history-off` when capture
+     should resume, once any carry is whole; `wal-held`, end the long-running `ccrc history` read another terminal holds; `unlistable`, make
      `~/.ccrc/history/export/<store_id>` a readable directory; `failed`, read the sweep's log
-     (`journalctl --user -u ccd-history-sweep -n 50`). Whatever the word, hold any `ccrc history prune --apply` until
+     (`journalctl --user -u ccd-history-sweep -n 50`). After `off`, `wal-held` or `unlistable`, the check resumes at the next tick that runs it, and none runs while `~/.ccrc/history-off` stands. Whatever the word, hold any `ccrc history prune --apply` until
      the check finishes: prune is not gated on the marks.
    - FAIL `export-marks-stalled`: the check has stopped on `wal-held`, `unlistable` or `failed` for more than 24 h.
      Doctor reads red and `ccrc update` on that node exits 3: the node IS on the new build, and the FAIL is its health;
@@ -5150,9 +5155,10 @@ Fleet-side only: `ccd/history/*` and its tests. No schema migration (still v2), 
    2. `ccrc history doctor --adopt`. It prints the carry line, which now repeats this hold.
    3. Copy `~/.ccrc/history/journal/<store_id>/` and `~/.ccrc/history/export/<store_id>/` from the box the store
       left to the same paths here.
-   4. Compare each directory with its source, file by file (`ls -l` on both sides): the same names, the same sizes.
-   5. `rm ~/.ccrc/history-off`. The next tick checks the marks. `status --json` should show neither
-      `export_segment_missing` nor `export_segment_damaged`, and doctor no `export-segment-damaged`.
+   4. Compare each directory with its source, file by file (`ls -l` on both sides): every source file is here with the same size. The journal directory also holds this box's own bind file, under the new writer: keep it.
+   5. `rm ~/.ccrc/history-off`. The next tick checks the marks. The two counters `export_segment_missing` and
+      `export_segment_damaged` gain nothing, as step 3 says; they are cumulative, and an adopted store carries its
+      origin's counts, so read them before and after rather than for zero. Doctor shows no `export-segment-damaged`.
 
    Without a carry, skip steps 1, 3, 4 and 5: the first tick clears the marks and the rows export again at one
    segment an hour, so check the home filesystem's headroom first (`df -h ~`). A restore or a rebuild that carries
@@ -5169,7 +5175,7 @@ Fleet-side only: `ccd/history/*` and its tests. No schema migration (still v2), 
   stalls on it (D-4765).
 - The check runs last in the tick and may start no batch while ingest spends the run budget (R4): visible as
   `export-marks-unchecked` (`budget`), which never escalates; a backlog that long already FAILs `lag-high`.
-- The check runs outside `db/`'s free-space floor (R2, D-4762): one batch's WAL at a time, truncated after each batch.
+- The check runs outside `db/`'s free-space floor (R2, D-4762): one batch's WAL is 17-23 MiB measured, truncated after each batch. While a reader holds the WAL, it can reach about `EXPORT_BIND_WAL_CEILING` plus one batch (64 MiB plus the 17-23 MiB measured) before the check stops on `wal-held`.
 - The export pass runs while a check is unfinished (R3): an entry the pass marks before a later batch clears its
   blob is exported once more, never lost.
 - `prune --apply` is not gated on the marks. While a check stands unfinished (`budget` and `off` for as long as they
@@ -5241,7 +5247,7 @@ This plan's own departures, issued to it on 2026-10-19 and defined here in the p
   - **Measured** on the same 406.3 MiB: a WAL peak of 17.4 MiB at a commit, and 0 bytes after each of 26 checkpoints.
 - **D-5633** — `history-export-bind-check-doctor` (Task 2): NEW departure (no spec §16 row).
   - **The gap.** §9.6 and §9.15 "After a bind" name no doctor rule for the check after a bind, and B4's residual left that rule owed ("doctor has no rule for it yet"). Since Task 1, the check runs in bounded batches over as many ticks as it needs. A check that stops short leaves marks that may name a segment that is not on this box, and the gap guard cannot see those rows.
-  - **The WARN.** Doctor now WARNs `export-marks-unchecked` while the check's stop record stands (meta `export_marks_check`, `'<word> <sinceMs> <cleared>'`). The detail names the word it last stopped on, how long it has stopped on words of that class and the marks cleared so far, and the remedy is that word's own (every MARK_CHECK_WORDS member has its own, bound by a test), followed by one shared sentence: hold any `prune --apply` until the check finishes, because prune is not gated on the marks and a blob it tombstones while its mark names a segment not on this box whole keeps its bytes in no segment here. The detail stays distinct from `export-segment-missing`'s.
+  - **The WARN.** Doctor now WARNs `export-marks-unchecked` while the check's stop record stands (meta `export_marks_check`, `'<word> <sinceMs> <cleared>'`). The detail names the word it last stopped on, how long it has stopped on words of that class and the marks cleared so far (at least; display only), and the remedy is that word's own (every MARK_CHECK_WORDS member has its own, bound by a test), followed by one shared sentence: hold any `prune --apply` until the check finishes, because prune is not gated on the marks and a blob it tombstones while its mark names a segment not on this box whole keeps its bytes in no segment here. The detail stays distinct from `export-segment-missing`'s.
   - **The FAIL.** Doctor FAILs `export-marks-stalled` in place of the WARN when two things hold: the word is an escalating one, which no tick moves past by itself (`wal-held`, `unlistable`, `failed`), and the record's `sinceMs` is more than `EXPORT_MARKS_STALL_MS` ago (24 h, *chosen*). Doctor then turns red and `ccrc update` exits 3.
   - **`budget` and `off` never escalate** (coordinator rulings R4 and R5 as amended): an ingest backlog that long already FAILs `lag-high`, and the off switch holds back every other freshness FAIL (D-4314), so it holds this one too.
   - **The age.** It counts from `sinceMs`, which Task 1 restarts when the word crosses between the escalating class and `budget`/`off`, so a check starved for a day that then stops on `wal-held` is a fresh WARN. A `sinceMs` recorded in the future reads as 0 min and never FAILs.
@@ -5299,7 +5305,7 @@ This plan's own departures, issued to it on 2026-10-19 and defined here in the p
 - **D-5638** — `history-ingest-live-beats-exported-tie` (Task 6): NEW departure (no spec §16 row).
   - **What the spec says.** §6.1 says structure fields come from the newest copy, "ties broken by the larger `file_id`". §9.2 step 5 writes that rule as ENTRY_UPSERT's `WHERE excluded.struct_rank_ns > entries.struct_rank_ns OR (= AND excluded.struct_file_id > entries.struct_file_id)` (RV15). §9.14's export replay sends entries "by the newest-rank rule (§9.2)" through the same inserts as ingest. Task 7's spec step amends all three in place.
   - **The defect.** On a restore, that rule moved an entry's structure off the live file the backup held and onto the `exported:` dead-file row that replay had just made. That row is new, so its `file_id` is always the larger, and the segment carries the store's own rank, so the two copies tie (review 614 F7; measured: `struct_file_id` on the `exported:` row, status `exported`). No read verb reads `struct_file_id`, but the export writer does. Until a copy with a strictly newer rank arrived, the entry's next export wrote the `exported:` key as its struct path, and replay's first-file fallback for a variant inherited it.
-  - **The change.** The tie arm is now bound by `?21`. Replay binds 0, so a replayed copy never wins a tie, and a replay-versus-replay tie keeps the first segment's structure. Ingest binds 1: at an equal rank, a live copy wins by the larger `file_id` as before, and it also wins over any holder whose `ingest_files.status` is `exported`, whatever the ids. That brings back an entry a replay took at a strictly newer rank once the live file is read at that rank. Both arms follow coordinator ruling R10. A strictly newer rank wins from either caller, as before.
+  - **The change.** The tie arm is now bound by a flag, the 21st positional parameter (written `?21` when this entry was first made, a plain `?` since the node-floor run: see Cost). Replay binds 0, so a replayed copy never wins a tie, and a replay-versus-replay tie keeps the first segment's structure. Ingest binds 1: at an equal rank, a live copy wins by the larger `file_id` as before, and it also wins over any holder whose `ingest_files.status` is `exported`, whatever the ids. That brings back an entry a replay took at a strictly newer rank once the live file is read at that rank. Both arms follow coordinator ruling R10. A strictly newer rank wins from either caller, as before.
   - **Cost.** The subquery runs only on an equal rank and is a primary-key lookup. Ingest's hot path is otherwise unchanged (history-ingest stays green, O20 included). No schema change and no meta key. The tie flag is the statement's 21st parameter, written as a plain `?` since the node-floor run, because node:sqlite on Node 22 binds positional arguments only to anonymous parameters.
 - **D-5639** — `history-export-bind-check-wal-first` (Task 1): found while executing (run 626's pre-flight).
   - **The gap.** The plan's batched check measured the WAL only after each batch's checkpoint and began every step at 0. So while a reader held its snapshot across ticks, each step wrote one more batch into a WAL that no checkpoint could truncate. The ceiling then bounded one step, not the check, against R1 ("once its WAL passes EXPORT_BIND_WAL_CEILING, the check stops with the word wal-held").
@@ -5309,7 +5315,7 @@ This plan's own departures, issued to it on 2026-10-19 and defined here in the p
 - **D-5640** — `history-export-bind-check-doctor-off-holds` (Task 2): found while executing (run 626's pre-flight).
   - **The gap.** The plan's stalled arm read only the record's word and age. No scheduled pass runs under `~/.ccrc/history-off`, so nothing rewrites or deletes a record that stood on an escalating word (`wal-held`, `unlistable`, `failed`) when the switch was set. It kept ageing, and after EXPORT_MARKS_STALL_MS doctor FAILed `export-marks-stalled` and the update exited 3. That is against R5's own reason ("`off` holds back every other freshness FAIL (D-4314)") and Task 2's Choice that a node kept off for days stays a WARN.
   - **The change.** `markCheckArm` answers `unchecked`, never `stalled`, while `historyOff` stands, so the switch holds this FAIL back as it holds every freshness FAIL. The WARN stays, beside deriveHealth's own `off` WARN, which names the switch.
-  - **Cost.** Once the switch is removed, a record that aged past the stall threshold under it FAILs at the next doctor run unless a tick finishes the check first. Its `sinceMs` is not reset by the switch.
+  - **Cost.** Once the switch is removed, a record that aged past the stall threshold under it FAILs at the next doctor run unless a tick finishes the check first. Its `sinceMs` is not reset by the switch. The window lasts until the first tick that actually runs the check, which can be later than the next tick: busy ingest and the recover, hold and migrate arms never reach `exportStep`. It has three outcomes: the check finishes; it stops on an escalating word with the old `sinceMs`; or it stops on `budget`, which restarts `sinceMs` and reads a WARN.
   - **Pinned** by a pure case (a `failed` record past the stall threshold with history-off set is a WARN with no FAIL) and by a mutant that drops the switch's guard.
 - **D-5641** — `history-export-damaged-record-remeasured` (Task 3): found while executing (Task 3's review).
   - **The gap.** Task 3's damaged-segment record was rewritten only by a check after a bind. When the operator followed the WARN's first remedy and put a whole copy of a named file back under the same name, or a late carry finished after a tick read the half-copied file, nothing rewrote the record: Task 4's listing digest covers names only (R7), so an in-place repair re-arms nothing. The WARN then stood, naming a file that is whole, until the next bind.
@@ -5321,7 +5327,7 @@ This plan's own departures, issued to it on 2026-10-19 and defined here in the p
   - **The change.** The listing record is born only at a check's done stamp: a pass updates an existing record and never creates one. A store with no record owes one check, whatever its listing holds.
   - **Cost.** One check on a store that has no record yet. On a fresh store that check is empty (no marks, two empty scans, the done stamp).
   - **Pinned** by a case (marks naming a segment, no record, the export directory emptied: the next step clears the marks) and by mutants that restore the count test and the seed from null.
-- **D-5726** — `history-export-replay-mark-one-writer` (whole-branch review; coordinator ruling): NEW departure (no spec §16 row).
+- **D-5726** — `history-export-replay-mark-one-writer` (Task 5; whole-branch review; coordinator ruling): NEW departure (no spec §16 row).
   - **The defect.** D-5637 marks a row by its last carrier in `orderSegmentNames`' (seq, writer) order. That rests on "a later carrier holds all an earlier one did", which is true within one writer: every export writes everything the store held of a row at the time, and nothing deletes those rows. Between two writers whose seqs interleave or touch (a FORK: a directory carried in from another box, two segments at an equal seq, or a split brain with a later seq from writer 1 after writer 2's) the content order is unknown in either direction. A mark moved to the other writer's segment can then name one that lacks a row only the earlier carrier holds. Two shapes:
     - an unlinked sidecar row that only the earlier writer's segment carries: its blob's mark moves to the other writer's segment, and the take-off arm guarded entry marks only;
     - an entry variant the other writer never held: the entry's mark moves when `segmentMayMarkEntry` says the other segment may take it.
@@ -5349,6 +5355,6 @@ This plan's own departures, issued to it on 2026-10-19 and defined here in the p
     - the changed listing re-arms the check, which clears the marks still naming the moved segments (rows only one of those writers carried), and the pass writes those rows into this writer's segments;
     - the directory is then fork-free (this writer is a successor of nothing it holds, and later rebinds' writers are successors of it), so later rebuilds over-export nothing. Pinned by case (g).
   - **Residuals** (named, not closed; no code in this PR):
-    - *The successor premise.* A successor's store held everything its predecessors' segments carried only for those that were in `export/<store_id>/` when its bind replayed the directory. A segment ABSENT at that bind and put back afterwards (for example one moved aside as unreadable during a recovery and returned once the recovery finished) has a seq below the successor's range, so the layout reads it as a predecessor although the successor's store never replayed it. A mark can then move onto the successor's segment, which may lack a row only the returned segment carries. Losing that row takes further faults (the returned segment lost again, then another rebuild), so it is a residual and not an over-export. **The operator's rule:** a segment moved out of `export/<store_id>/` during a recovery goes back only while that recovery still waits on it (the sweep's own unreadable-segment message offers that). After the recovery has finished, keep it outside the directory as a copy and do not put it back.
+    - *The successor premise.* A successor's store held everything its predecessors' segments carried only for the segments its bind replayed WHOLE. The premise fails for three kinds of segment: one ABSENT at that bind and put back afterwards (for example one moved aside as unreadable during a recovery and returned once the recovery finished), which has a seq below the successor's range; one moved aside part-way through a replay, after some of its rows were applied; and one listed but skipped as newer than the build (`export-segment-newer`), which the layout still ranges, because it ranges every listed name. In each case the layout reads the segment's writer as a predecessor although the successor's store never held all its rows. A mark can then move onto the successor's segment, which may lack a row only that segment carries. Losing that row takes further faults (the segment lost again, then another rebuild), so it is a residual and not an over-export. **The operator's rule:** a segment moved out of `export/<store_id>/` during a recovery goes back only while that recovery still waits on it (the sweep's own unreadable-segment message offers that). After the recovery has finished, keep it outside the directory as a copy and do not put it back. For the newer-than-the-build case, in three parts: (1) while a node runs a build older than a segment format its directory holds, run no bind (rebuild, restore or adopt) except the spec's own rollback restore (§6.11); (2) if a bind did run on the older build (doctor's `export-segment-newer` after it), never move the newer-format segments out of `export/<store_id>/`; (3) after rolling forward and recovering, either keep them for good, or move the segments the older build's writer wrote out of `export/<store_id>/` and keep them as a copy. The check then clears their marks, and the pass rewrites those rows under the current writer. This is latent while `EXPORT_SEGMENT_FORMAT` is 1: the release that first bumps the format must carry the rule. The spec's §9.14 and §6.11 say the same.
     - *A mid-replay move.* The layout is re-measured at each step of a replay that spans steps, so a segment moved into or out of `export/<store_id>/` between two steps can change it mid-replay. In the narrow unsafe case a fork's segment is moved aside after its rows were applied, so a later carrier can mark a row only that segment carried. The same rule covers it: during a recovery, move a segment only as the replay's own message asks.
   - **Pinned** by lib cases for every arm of the decision and for the layout (each answer named, successor, reverse successor, absent writer); by history-recover cases for the unlinked row (a), the entry variant over bytes in an earlier segment (b, entry arm only), split brain (c), the one-writer control (d), the referrers' marks (e), a pruned body (f), the remedy (g), a successor control (h: rebuild, pass, rebuild, nothing taken off) and interleaved ranges (i). Red-first: (a), (c), (e) and (f) were red on the tree before the fix; (b) (re-shaped to reach the entry arm alone) and (i) were not run on a pre-fix tree and are measured red under the mutants below (a fork answered `'mark'`, and for (b) the entry arm disabled); (g) pins the remedy and was not measured red before the fix; (d) and (h) are controls, and (h) is measured red under the "successor never recognised" mutant. (a), (b) and (c) are followed through a pass, the loss of the earlier segment, the check and a second rebuild; and by mutants (a successor never recognised, a fork answered `'mark'`, the sticky `'keep'` dropped, the blob take-off without its referrers, the same-writer move becoming a take-off, a fork never detected, the entry take-off arm removed or answered `'mark'`). D-5396's and its F1c end-to-end cases pass unchanged: their second rebuild holds a successor writer. The D-5637 `a later carrier that lacks` case (two writers at an equal seq: a fork) is re-expected to the take-off.
