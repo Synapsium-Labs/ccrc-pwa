@@ -2180,6 +2180,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 12:45: path identity's coordinator reports #410 merged at 10:51:53 as `a38fed503` (mail 6657, informational).
         That closes the #441-then-#410 order the operator ruled on 2026-10-18 for this programme; #397 is still open
         and is that programme's.
+      - **12:55 UTC: both boxes moved to v0.0.340 (#705) by the operator's console tap**, fleet first (12:03:43 to
+        12:05:04), then the server (12:05:18 to 12:06:06); both reports `done`, `from: pwa`, sweep recorded on both;
+        the server gate answered v0.0.340. Fleet doctor 38 passed, 7 warned, 0 failed; server 28 passed, 1 warned.
+        `ccrc.service` restarted at 12:05:42, so the 13:35 sample measures v0.0.340 1.5 h after a restart. Server
+        backups 2578M, the new snapshot 312M. v0.0.341 (#709) to v0.0.345 (#713) followed, unapplied. STATUS: fleet
+        and server v0.0.340, newest v0.0.345, stable v0.0.328, intent dev/auto=off, backups fleet 161M/server 2578M,
+        disk free fleet 210G/work volume 88G/server 30G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
