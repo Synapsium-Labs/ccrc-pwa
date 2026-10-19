@@ -393,7 +393,7 @@ measured at the wave's tip unless it says otherwise.
 | ws-collect | all eight | `--actor`, `--surface` and `--reason` bound `agent`, took its reap lock because a witness stood for it, and journaled a line; the other five answered `not-witnessed` and journaled a line | Refused before any lock |
 | ws-add | `--actor`, `--surface` as the project | Bound project `agent`, which is a create: a worktree, rows, a unit and a pane | Refused before any worktree |
 | stop | all eight in the builder's order, and all but `--surface` in the order W1a composes | The builder's order stopped the literal id, and an id of `--surface` stopped `pwa`; the other order stopped the literal id | Refused before any unit call |
-| hibernate (the sixth absorption's; measured on `adca4a843`'s binary) | all eight | `--actor`, `--surface` and `--reason` bound the surface word `agent` and re-measured it, so only its hold refused the act; the other five bound the literal id and re-measured it | Refused before any act, on the usage line |
+| hibernate (the sixth absorption's; measured on `adca4a843`'s binary) | all eight | `--actor`, `--surface` and `--reason` bound the surface word `agent` and re-measured it, so only its hold refused the act; the other five bound the literal id, re-measured it and were refused `session-busy: marker` | Refused before any act, on the usage line |
 | Ids that arity already refused: ws-hold's `--actor` and `--surface`; ws-rename's `--actor`, `--surface` and `--reason`; ws-reclaim's `--defer-expired`; stop's `--surface` in the order W1a composes | None | Refused | Refused, as before |
 
 *Table 1. The decision-carrying verbs, under a decision with and without a reason (ws-add without only).*

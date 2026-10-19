@@ -352,8 +352,8 @@ describe('no dash-leading id redirects a verb the server composes, on the real b
 
   // ONE PROSE CASE PER DEC-APPENDING VERB (review 641 F3; the operator's ruling of 2026-10-19). Each verb runs its own
   // builder twice, each time in a fresh fixture HOME: once with a dec in plain words, once with the same dec led by a
-  // dash. A verb that keeps the prose answers both alike, wherever its answer lands, and journals the dash-led pairs
-  // as given. hibernate is the recorded exception (`hibernate-refuses-a-dash-leading-id`): its id comes first in the
+  // dash. A verb that keeps the prose answers both alike, wherever its answer lands, and where it journals the pairs,
+  // journals the dash-led ones as given. hibernate is the recorded exception (`hibernate-refuses-a-dash-leading-id`): its id comes first in the
   // server's argv, so its loop refuses a dash-leading value with its usage line, where the plain dec reaches the row.
   const PROSE_ID = 'demo-quiet-basin';
   const PLAIN_WORDS = { actor: 'probe:prose', reason: 'probe reason' } as const;
@@ -389,6 +389,10 @@ describe('no dash-leading id redirects a verb the server composes, on the real b
   };
   const decWords = (d: ActorFlags): Record<string, string> =>
     ({ surface: d.surface, actor: d.actor, ...(d.reason === null ? {} : { reason: d.reason }) });
+  /** In this fixture these three answer before any line carries the pairs (ws-archive `status-unknown`, ws-rename
+   *  `worktree-unregistered`, ws-restore `not-archived` under its own `surface: none`), so their cases prove the loop
+   *  keeps the prose; `ccd-session-verbs-dash-id.test.ts` takes each to its act. Every other verb must journal them. */
+  const ANSWERS_BEFORE_THE_PAIRS: readonly string[] = ['ws-archive', 'ws-rename', 'ws-restore'];
   const sameDec = (a: unknown, b: unknown): boolean =>
     JSON.stringify(Object.entries(a ?? {}).sort()) === JSON.stringify(Object.entries(b ?? {}).sort());
 
@@ -417,6 +421,8 @@ describe('no dash-leading id redirects a verb the server composes, on the real b
         .toEqual({ code: plain.code, out: plain.out, rows: plain.rows });
       // The journal is the plain run's, line for line, with each line that carried the plain pairs carrying the
       // dash-led ones instead. A line the verb writes with pairs of its own (`surface: none`) stays as it was.
+      expect(plain.journal.some((e) => sameDec(e.dec, decWords(proseDec(verb, false)))), 'the plain pairs reached the journal')
+        .toBe(!ANSWERS_BEFORE_THE_PAIRS.includes(verb));
       const expected = plain.journal.map((e) =>
         (sameDec(e.dec, decWords(proseDec(verb, false))) ? { ...e, dec: decWords(proseDec(verb, true)) } : e));
       expect(dashed.journal, 'the dash-led dec changed the journal').toEqual(expected);

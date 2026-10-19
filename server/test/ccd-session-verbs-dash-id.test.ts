@@ -258,7 +258,8 @@ describe('the identity arms narrow nothing else (path-identity spec §2.4)', () 
     expect(decOf(eventsOf(h.home, 'archive')[0] ?? {})).toEqual(DASH_DEC);
     // ws-restore reaches its act: it removes the archive stamps and journals its row. The fixture's spawn never
     // settles, so the row's outcome is `spawn-failed` (rc 3); a refusal at the parse would remove nothing.
-    run(`${RESTORE_STUBS} cmd_ws_restore --session ${REAL} ${DASH_TAIL}`);
+    const res = run(`${RESTORE_STUBS} cmd_ws_restore --session ${REAL} ${DASH_TAIL}`);
+    expect(res.code, res.stderr).toBe(3);
     expect(h.reg(REAL, 'archived'), 'ws-restore did not reach its act').toBeNull();
     expect(decOf(eventsOf(h.home, 'restore')[0] ?? {})).toEqual(DASH_DEC);
   });
