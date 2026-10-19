@@ -58,8 +58,8 @@ describe('the scan itself (CONTROL)', () => {
   it('finds the screens importing the features — an empty walk would pass the pins below', () => {
     expect(sources(path.join(SRC, 'fleet')).length).toBeGreaterThan(20);
     expect(sources(path.join(SRC, 'session')).length).toBeGreaterThan(20);
-    // `App.tsx` imports screens, so a scan over `src/` root files finds real edges with this same resolver.
-    const app = specifiers(readFileSync(path.join(SRC, 'App.tsx'), 'utf8'))
+    // `app.tsx` imports screens, so a scan over `src/` root files finds real edges with this same resolver.
+    const app = specifiers(readFileSync(path.join(SRC, 'app.tsx'), 'utf8'))
       .filter((s) => s.startsWith('./screens/'));
     expect(app.length).toBeGreaterThan(0);
   });
