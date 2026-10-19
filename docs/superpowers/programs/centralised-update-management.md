@@ -2085,6 +2085,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         followed, unapplied. The broker's fix run 627 is at awaiting-review. STATUS: fleet and server v0.0.318,
         newest v0.0.325, intent dev/auto=off, backups fleet 158M/server 2059M, disk free fleet 209G/work volume
         94G/server 31G.
+      - 06:25: the blackout 1.7 h after the 04:25:39 restart, by the same method: 19 blackouts from 06:05 to
+        06:25, mean 14.7 s, max 16.3 s, period about 64 s. That is level with the 14.3 s measured 8 to 20 min after
+        the restart. All the samples so far sit inside the proposed 7-to-9-h window, so the multiplier's test is
+        the 13:35 sample, unless another restart moves it. Mail 6613 to the broker's coordinator.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
