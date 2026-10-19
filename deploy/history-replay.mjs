@@ -18,10 +18,10 @@
 // Its words: DRIVER_REASONS, frozen once here and nowhere else (W2-D59, W2-D12; D-5774). A refusal prints
 // `ccrc history-replay: <word>: <detail>` on stderr and exits EXIT.REFUSED (2); a defect exits EXIT.INTERNAL (1).
 // They are never lib REASONS: §8.7's table and SKILL.md do not list them. EXIT is imported, never declared (O14).
-import { accessSync, constants, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, appendFileSync, constants, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { EXIT } from '../ccd/history/lib.mjs';
+import { EXIT, blobOverDecodeCap, canonicalJson, redactField } from '../ccd/history/lib.mjs';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
@@ -359,6 +359,245 @@ function secretsRefusal(p) {
     return 'secrets-unreadable';
   }
   return null;
+}
+
+// ── W2-4 Task 4: spawned text, the stream-json reader and the spend ledger (W2-D54, W2-D51, W2-D55) ─────────────
+// Three small pieces the spawns (Task 5) and the reconstruction (W2-5a) need.
+// (a) Spawned text (W2-D54). A field whose stored raw_len is over lib's decode cap is DISCARDED: never truncated and
+//     never decoded; the caller drops its boundary or candidate. Every other field passes WHOLE through lib's
+//     redactField, over the pair index the caller builds once per run (W2-5a passes the CLI's index), and only the
+//     redacted text is cut to TOOL_RESULT_CUT code points. A cut first would leave a secret's head, which no
+//     (length, sha256) pair matches. Lib's display-window redaction is never called here, and a scan pins that this
+//     file never names it.
+// (b) The stream-json reader (W2-D51). One pass over the lines of `--output-format stream-json --verbose`, and never a
+//     throw: a line that is not a JSON object is counted in malformedLines. An init field the stream did not carry reads
+//     null, never [], because absent and empty are two facts. Usage is the result event's when it carries one; otherwise
+//     it is the assistant messages' usage, taken once per message.id, because Claude Code repeats a message's id and
+//     usage on each content-block event.
+// (c) The spend ledger (W2-D55). One canonical-JSON line per finished spawn, appended under --out. It is append-only
+//     and summed over EVERY line, never de-duplicated by name: a re-run's spend adds to the total, because both
+//     spawns spent. A finished job is never re-spawned, so the only double count is a run killed between its ledger
+//     line and its run.json, and over-counting is the safe direction for a budget. A ledger that cannot be read
+//     whole fails closed as budget-exhausted 'ledger-unreadable', never as 0.
+
+/** The most code points of a tool_result a spawn's input carries (spec §10.2, reconstruction item 2). */
+export const TOOL_RESULT_CUT = 4000;
+
+/** One stored field for a spawn's input (W2-D54): discarded over the decode cap, otherwise redacted whole.
+ *  @param {{ text: string, rawLen: number }} field the field's text and its stored raw_len
+ *  @param {import('../ccd/history/lib.mjs').PairIndex} idx the run's pair index, built once by the caller
+ *  @returns {{ state: 'text', text: string } | { state: 'discard', why: 'over-decode-cap' }} */
+export function redactForSpawn(field, idx) {
+  if (blobOverDecodeCap(field.rawLen)) return { state: 'discard', why: 'over-decode-cap' };
+  return { state: 'text', text: redactField(field.text, idx) };
+}
+
+/** The first TOOL_RESULT_CUT code points of text that redactForSpawn has already redacted. A surrogate pair is
+ *  never split.
+ *  @param {string} redacted
+ *  @returns {string} */
+export function cutToolResult(redacted) {
+  let count = 0;
+  let end = 0;
+  for (const ch of redacted) {
+    if (count === TOOL_RESULT_CUT) return redacted.slice(0, end);
+    count += 1;
+    end += ch.length;
+  }
+  return redacted;
+}
+
+/** A tool_result for a spawn's input, in W2-D54's order: redacted whole first, then cut.
+ *  @param {{ text: string, rawLen: number }} field
+ *  @param {import('../ccd/history/lib.mjs').PairIndex} idx
+ *  @returns {{ state: 'text', text: string } | { state: 'discard', why: 'over-decode-cap' }} */
+export function toolResultText(field, idx) {
+  const r = redactForSpawn(field, idx);
+  return r.state === 'text' ? { state: 'text', text: cutToolResult(r.text) } : r;
+}
+
+const sjObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const sjList = (v) => (Array.isArray(v) ? [...v] : null);
+const sjString = (v) => (typeof v === 'string' ? v : null);
+const sjBool = (v) => (typeof v === 'boolean' ? v : null);
+const sjCount = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : 0);
+
+/** A stream usage object as the four counts spend sums; a count that is not a non-negative integer reads 0. */
+function sjUsage(u) {
+  return {
+    input: sjCount(u.input_tokens),
+    cacheCreation: sjCount(u.cache_creation_input_tokens),
+    cacheRead: sjCount(u.cache_read_input_tokens),
+    output: sjCount(u.output_tokens),
+  };
+}
+
+/** A tool_result's content as text: a string as it is, a block list as its text blocks joined by newlines, and
+ *  null when it holds no text. */
+function sjResultText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return null;
+  const texts = content.filter((b) => sjObject(b) && b.type === 'text' && typeof b.text === 'string').map((b) => b.text);
+  return texts.length === 0 ? null : texts.join('\n');
+}
+
+/** @typedef {{ sessionId: string|null, model: string|null, tools: string[]|null, mcpServers: unknown[]|null,
+ *    plugins: unknown[]|null, skills: unknown[]|null, slashCommands: string[]|null }} StreamInit */
+/** @typedef {{ input: number, cacheCreation: number, cacheRead: number, output: number }} StreamUsage */
+/** @typedef {{ id: string, name: string, input: unknown, result: string|null, isError: boolean|null }} ToolPair */
+/** @typedef {{ init: StreamInit|null, usage: StreamUsage, usageSource: 'result'|'assistant'|'none', toolPairs: ToolPair[],
+ *    permissionDenials: unknown[]|null, result: { subtype: string|null, isError: boolean|null, numTurns: number|null,
+ *    text: string|null }|null, assistantMessages: number, malformedLines: number }} StreamFacts */
+
+/** What one spawn's stream-json says (W2-D51). Never throws.
+ *  @param {string} text the whole stream
+ *  @returns {StreamFacts} */
+export function readStreamJson(text) {
+  let init = null;
+  let result = null;
+  let resultUsage = null;
+  let permissionDenials = null;
+  let malformedLines = 0;
+  const messages = new Map();   // message.id, or a fresh Symbol for a message with none -> its usage, or null
+  const pairs = new Map();      // tool_use id -> its pair, in first-seen order
+  for (const line of String(text).split('\n')) {
+    if (line.trim() === '') continue;
+    let ev;
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      malformedLines += 1;
+      continue;
+    }
+    if (!sjObject(ev)) {
+      malformedLines += 1;
+      continue;
+    }
+    if (ev.type === 'system' && ev.subtype === 'init') {
+      if (init === null) {
+        init = {
+          sessionId: sjString(ev.session_id), model: sjString(ev.model), tools: sjList(ev.tools),
+          mcpServers: sjList(ev.mcp_servers), plugins: sjList(ev.plugins), skills: sjList(ev.skills),
+          slashCommands: sjList(ev.slash_commands),
+        };
+      }
+    } else if (ev.type === 'assistant' && sjObject(ev.message)) {
+      const msg = ev.message;
+      const key = typeof msg.id === 'string' ? msg.id : Symbol('a message without an id');
+      if (sjObject(msg.usage)) messages.set(key, sjUsage(msg.usage));
+      else if (!messages.has(key)) messages.set(key, null);
+      for (const b of Array.isArray(msg.content) ? msg.content : []) {
+        if (sjObject(b) && b.type === 'tool_use' && typeof b.id === 'string' && typeof b.name === 'string' && !pairs.has(b.id)) {
+          pairs.set(b.id, { id: b.id, name: b.name, input: b.input ?? null, result: null, isError: null });
+        }
+      }
+    } else if (ev.type === 'user' && sjObject(ev.message) && Array.isArray(ev.message.content)) {
+      for (const b of ev.message.content) {
+        if (!sjObject(b) || b.type !== 'tool_result') continue;
+        const pair = pairs.get(b.tool_use_id);
+        if (pair === undefined) continue;   // a result with no tool_use in this stream pairs nothing
+        pair.result = sjResultText(b.content);
+        pair.isError = sjBool(b.is_error);
+      }
+    } else if (ev.type === 'result') {
+      result = {
+        subtype: sjString(ev.subtype), isError: sjBool(ev.is_error),
+        numTurns: Number.isSafeInteger(ev.num_turns) ? ev.num_turns : null, text: sjString(ev.result),
+      };
+      resultUsage = sjObject(ev.usage) ? sjUsage(ev.usage) : null;
+      permissionDenials = sjList(ev.permission_denials);
+    }
+  }
+  let usage = { input: 0, cacheCreation: 0, cacheRead: 0, output: 0 };
+  let usageSource = 'none';
+  if (resultUsage !== null) {
+    usage = resultUsage;
+    usageSource = 'result';
+  } else {
+    for (const u of messages.values()) {
+      if (u === null) continue;
+      usageSource = 'assistant';
+      usage = {
+        input: usage.input + u.input, cacheCreation: usage.cacheCreation + u.cacheCreation,
+        cacheRead: usage.cacheRead + u.cacheRead, output: usage.output + u.output,
+      };
+    }
+  }
+  return {
+    init, usage, usageSource, toolPairs: [...pairs.values()], permissionDenials, result,
+    assistantMessages: messages.size, malformedLines,
+  };
+}
+
+/** One spawn's spend in token-equivalents (W2-D55): input + cache_creation + cache_read + output.
+ *  @param {StreamFacts} facts
+ *  @returns {number} */
+export function spendTokens(facts) {
+  const u = facts.usage;
+  return u.input + u.cacheCreation + u.cacheRead + u.output;
+}
+
+/** The spend ledger's file name under --out. */
+export const SPEND_LEDGER = 'spend.jsonl';
+/** A ledger line's keys, sorted as canonicalJson writes them. */
+const SPEND_KEYS = 'name,tokens,ts_ms';
+
+/** Append one finished spawn's spend to the ledger under `out`: one canonical-JSON line, in one write. A name or a
+ *  count that spentSoFar could not read back is a defect, so it throws TypeError and writes nothing.
+ *  @param {string} out the --out directory (prepareOut's realpath)
+ *  @param {string} name the job's name, unique within --out
+ *  @param {number} tokens spendTokens of its stream */
+export function recordSpend(out, name, tokens) {
+  if (typeof name !== 'string' || name === '') throw new TypeError(`recordSpend: a job name is a non-empty string, not ${JSON.stringify(name)}`);
+  if (!Number.isSafeInteger(tokens) || tokens < 0) throw new TypeError(`recordSpend: a spend is a non-negative integer, not ${String(tokens)}`);
+  appendFileSync(`${out}/${SPEND_LEDGER}`, `${canonicalJson({ name, tokens, ts_ms: Date.now() })}\n`, { mode: 0o600 });
+}
+
+/** One ledger line as {name, tokens}, or null when it is not one recordSpend writes. */
+function spendRow(line) {
+  let v;
+  try {
+    v = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!sjObject(v) || Object.keys(v).sort().join(',') !== SPEND_KEYS) return null;
+  if (typeof v.name !== 'string' || v.name === '') return null;
+  if (!Number.isSafeInteger(v.tokens) || v.tokens < 0 || !Number.isSafeInteger(v.ts_ms) || v.ts_ms < 0) return null;
+  return { name: v.name, tokens: v.tokens };
+}
+
+/** The cumulative spend under `out` (W2-D55): every line summed, a repeated name included (never de-duplicated:
+ *  over-counting is the budget's safe direction). 0 when no ledger exists yet. A ledger
+ *  that is not a regular file, cannot be read, or holds a line recordSpend would not write (a torn last line
+ *  included) throws DriverRefusal('budget-exhausted', 'ledger-unreadable').
+ *  @param {string} out
+ *  @returns {number} */
+export function spentSoFar(out) {
+  const file = `${out}/${SPEND_LEDGER}`;
+  let st;
+  try {
+    st = lstatSync(file);
+  } catch (e) {
+    if (e?.code === 'ENOENT') return 0;
+    refuse('budget-exhausted', 'ledger-unreadable');
+  }
+  if (!st.isFile()) refuse('budget-exhausted', 'ledger-unreadable');
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    refuse('budget-exhausted', 'ledger-unreadable');
+  }
+  const rows = text.split('\n');
+  if (rows.pop() !== '') refuse('budget-exhausted', 'ledger-unreadable');   // the last line was torn
+  let sum = 0;
+  for (const line of rows) {
+    const row = spendRow(line);
+    if (row === null) refuse('budget-exhausted', 'ledger-unreadable');
+    sum += row.tokens;
+  }
+  return sum;
 }
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised

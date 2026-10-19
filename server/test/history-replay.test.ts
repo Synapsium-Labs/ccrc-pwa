@@ -24,6 +24,11 @@ import { pathToFileURL as t2FileUrl } from 'node:url';
 import * as t2Drv from '../../deploy/history-replay.mjs';
 import { mkTmp as t2MkTmp } from './tmpHelpers.js';
 import { scrubbedEnv as t2Scrubbed } from './historyHelpers.js';
+// ── W2-4 Task 4: imports under t4 aliases, so no binding collides with Tasks 1–3 above ───────────────────────────
+import * as t4Fs from 'node:fs';
+import * as t4Lib from '../../ccd/history/lib.mjs';
+import * as t4Replay from '../../deploy/history-replay.mjs';
+import { mkTmp as t4MkTmp } from './tmpHelpers.js';
 
 const SCRIPT = path.join(REPO, 'deploy', 'history-replay.mjs');
 
@@ -628,5 +633,235 @@ describe('W2-4 Task 3: account admission from the roster (W2-D52, RP3-admission,
 
   it('the driver never spells a credentials file name', () => {
     expect(readFileSync(ADMIT_DRIVER, 'utf8')).not.toMatch(/credentials\.json/);
+  });
+});
+
+// ── W2-4 Task 4: spawned text, the stream-json reader and the spend ledger (W2-D54, W2-D51, W2-D55) ─────────────
+// Pure or small: no spawn and no HOME. Redaction runs over a pair index the test builds with makePairIndex, standing
+// in for the index W2-5a passes once per run. The secret is assembled at runtime from parts and never written whole.
+// A mkTmp directory stands in for --out.
+describe('W2-4 Task 4: spawned text, the stream-json reader and the spend ledger', () => {
+  const SECRET = ['q7v', 'k2m9', 'x4p8', 'w3n6', 'z5r1', 'h8t2', 'j6y4', 'c9d3', 'b1f7', 'g5s'].join('');
+  const IDX = t4Lib.makePairIndex([{ len: SECRET.length, sha256: t4Lib.sha256Hex(SECRET) }]);
+  /** A tool_result whose secret starts 20 code points before the cut and ends 18 after it, with text after it, so the
+   *  cut bites after redaction too. */
+  const STRADDLE = `${'a '.repeat(1990)}${SECRET} ${'b '.repeat(100)}`;
+  const field = (text: string, rawLen: number = Buffer.byteLength(text)) => ({ text, rawLen });
+  const points = (s: string): number => Array.from(s).length;
+  /** The text of a 'text' answer; any other answer fails the case. */
+  const textOf = (r: { state: string }): string => {
+    expect(r.state).toBe('text');
+    return (r as unknown as { text: string }).text;
+  };
+
+  it('the fixture straddles the cut: the secret starts before code point 4,000 and ends after it', () => {
+    expect(t4Replay.TOOL_RESULT_CUT).toBe(4000);
+    const at = STRADDLE.indexOf(SECRET);
+    expect(at).toBeLessThan(t4Replay.TOOL_RESULT_CUT);
+    expect(at + SECRET.length).toBeGreaterThan(t4Replay.TOOL_RESULT_CUT);
+  });
+
+  it('W2-D54 order: a secret straddling code point 4,000 is redacted whole before the cut, and no prefix of it survives', () => {
+    const text = textOf(t4Replay.toolResultText(field(STRADDLE), IDX));
+    expect(text, "the secret's head survived the cut").not.toContain(SECRET.slice(0, 6));
+    expect(text).toContain(t4Lib.REDACTED_MARK);
+    expect(points(text)).toBe(t4Replay.TOOL_RESULT_CUT);
+    // CONTROL: cut first and redact afterwards, and the head the cut leaves matches no (length, sha256) pair.
+    expect(t4Lib.redactField(t4Replay.cutToolResult(STRADDLE), IDX)).toContain(SECRET.slice(0, 20));
+  });
+
+  it('redactForSpawn passes the WHOLE field through redactField and never cuts it', () => {
+    const long = `${'c '.repeat(4000)}${SECRET} end`;
+    const r = t4Replay.redactForSpawn(field(long), IDX);
+    expect(r).toEqual({ state: 'text', text: t4Lib.redactField(long, IDX) });
+    expect(textOf(r)).not.toContain(SECRET);
+    expect(points(textOf(r))).toBeGreaterThan(t4Replay.TOOL_RESULT_CUT);
+  });
+
+  it('a field over blobOverDecodeCap is discarded, never truncated or decoded; at the cap it is redacted', () => {
+    const over = t4Lib.BLOB_DECODE_MAX + 1;
+    const discard = { state: 'discard', why: 'over-decode-cap' };
+    expect(t4Replay.redactForSpawn(field(STRADDLE, over), IDX)).toEqual(discard);
+    expect(t4Replay.toolResultText(field(STRADDLE, over), IDX)).toEqual(discard);
+    expect(t4Replay.redactForSpawn({ text: STRADDLE, rawLen: '12' as unknown as number }, IDX), "a non-numeric raw_len is over the cap, as lib's reader holds")
+      .toEqual(discard);
+    expect(t4Replay.redactForSpawn(field('ok', t4Lib.BLOB_DECODE_MAX), IDX)).toEqual({ state: 'text', text: 'ok' });
+  });
+
+  it('cutToolResult keeps the first 4,000 code points and never splits a surrogate pair', () => {
+    const astral = String.fromCodePoint(0x1f600);
+    const cut = t4Replay.cutToolResult(astral.repeat(4001));
+    expect(points(cut)).toBe(4000);
+    expect(cut.length).toBe(8000);
+    expect(t4Replay.cutToolResult(`${'a'.repeat(3999)}${astral}tail`)).toBe(`${'a'.repeat(3999)}${astral}`);
+    expect(t4Replay.cutToolResult('short')).toBe('short');
+  });
+
+  it("the driver never names lib's display-window redaction (CONTROL: the pattern sees a planted line)", () => {
+    const NAME = /\bredactDisplayWindow\b/;
+    expect(NAME.test("import { redactDisplayWindow } from '../ccd/history/lib.mjs';")).toBe(true);
+    expect(t4Fs.readFileSync(new URL('../../deploy/history-replay.mjs', import.meta.url), 'utf8')).not.toMatch(NAME);
+  });
+
+  // ── the stream-json reader ──
+  const SID = '4d1c9e2a-7b3f-4a6c-9d8e-1f2a3b4c5d6e';
+  /** Stream lines: an object is one JSON line, a string is written as it is. */
+  const lines = (...events: unknown[]): string => `${events.map((e) => (typeof e === 'string' ? e : JSON.stringify(e))).join('\n')}\n`;
+  const usage = (input: number, cacheCreation: number, cacheRead: number, output: number) =>
+    ({ input_tokens: input, cache_creation_input_tokens: cacheCreation, cache_read_input_tokens: cacheRead, output_tokens: output });
+  /** An init event with no `plugins` field: absent, so it must read null. `mcp_servers` is present and empty. */
+  const INIT = { type: 'system', subtype: 'init', session_id: SID, model: 'model-a', tools: ['Bash', 'Agent'], mcp_servers: [], skills: ['ccrc-history'], slash_commands: ['compact'] };
+  /** One assistant message written as two content-block events, each repeating the message's id and usage. */
+  const A1_TEXT = { type: 'assistant', message: { id: 'msg_1', role: 'assistant', content: [{ type: 'text', text: 'running it' }], usage: usage(10, 20, 30, 4) } };
+  const A1_TOOL = { type: 'assistant', message: { id: 'msg_1', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'true' } }], usage: usage(10, 20, 30, 4) } };
+  const U1 = { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok', is_error: false }] } };
+  const A2 = { type: 'assistant', message: { id: 'msg_2', role: 'assistant', content: [{ type: 'text', text: 'done' }], usage: usage(1, 2, 3, 5) } };
+  const DENIAL = { tool_name: 'Bash', tool_use_id: 'toolu_9', tool_input: { command: 'cat x' } };
+  const RESULT = { type: 'result', subtype: 'success', is_error: false, num_turns: 2, result: 'done', usage: usage(100, 200, 300, 40), permission_denials: [DENIAL] };
+  const STREAM = lines(INIT, A1_TEXT, A1_TOOL, U1, 'not json {', A2, RESULT);
+
+  it('the init event: each field as the stream carried it, and a field it did not carry reads null', () => {
+    expect(t4Replay.readStreamJson(STREAM).init).toEqual({
+      sessionId: SID, model: 'model-a', tools: ['Bash', 'Agent'], mcpServers: [], plugins: null, skills: ['ccrc-history'], slashCommands: ['compact'],
+    });
+    expect(t4Replay.readStreamJson(lines({ type: 'system', subtype: 'init' })).init)
+      .toEqual({ sessionId: null, model: null, tools: null, mcpServers: null, plugins: null, skills: null, slashCommands: null });
+  });
+
+  it('the rest of the stream: one tool pair by id, the result event, its permission denial, its usage, the message count and the malformed line', () => {
+    const f = t4Replay.readStreamJson(STREAM);
+    expect(f.toolPairs).toEqual([{ id: 'toolu_1', name: 'Bash', input: { command: 'true' }, result: 'ok', isError: false }]);
+    expect(f.result).toEqual({ subtype: 'success', isError: false, numTurns: 2, text: 'done' });
+    expect(f.permissionDenials).toEqual([DENIAL]);
+    expect(f.usageSource).toBe('result');
+    expect(f.usage).toEqual({ input: 100, cacheCreation: 200, cacheRead: 300, output: 40 });
+    expect(f.assistantMessages).toBe(2);
+    expect(f.malformedLines).toBe(1);
+    expect(t4Replay.spendTokens(f)).toBe(640);
+  });
+
+  it("with no result event, usage is the assistant messages' summed once per message.id, and there is no result or denial list", () => {
+    const f = t4Replay.readStreamJson(lines(INIT, A1_TEXT, A1_TOOL, U1, A2));
+    expect(f.usageSource).toBe('assistant');
+    expect(f.usage).toEqual({ input: 11, cacheCreation: 22, cacheRead: 33, output: 9 });
+    expect(f.assistantMessages).toBe(2);
+    expect(f.result).toBeNull();
+    expect(f.permissionDenials).toBeNull();
+    expect(t4Replay.spendTokens(f)).toBe(75);
+  });
+
+  it('an empty stream is no init, no result and no usage: zeros with usageSource none', () => {
+    expect(t4Replay.readStreamJson('')).toEqual({
+      init: null, usage: { input: 0, cacheCreation: 0, cacheRead: 0, output: 0 }, usageSource: 'none', toolPairs: [],
+      permissionDenials: null, result: null, assistantMessages: 0, malformedLines: 0,
+    });
+  });
+
+  it('a line that is not a JSON object is counted, and odd shapes never throw', () => {
+    const f = t4Replay.readStreamJson(lines('42', 'null', '[1]', '{"type":',
+      { type: 'assistant' }, { type: 'assistant', message: { content: 'text' } },
+      { type: 'user', message: { content: [null, 5, { type: 'tool_result' }] } },
+      { type: 'system', subtype: 'init', tools: 'Bash' }, { type: 'result', num_turns: '3', usage: null }));
+    expect(f.malformedLines).toBe(4);
+    expect(f.init?.tools).toBeNull();
+    expect(f.result).toEqual({ subtype: null, isError: null, numTurns: null, text: null });
+    expect(f.usageSource).toBe('none');
+    expect(f.toolPairs).toEqual([]);
+  });
+
+  // D-5802: the brief's odd-shapes list states sjCount's fold to 0, and its test block had no case that reds without it.
+  it('a usage count that is not a non-negative integer reads 0, and an absent cache key reads 0, so spend stays a finite sum', () => {
+    const odd = t4Replay.readStreamJson(lines(
+      { type: 'result', usage: { input_tokens: '7', cache_creation_input_tokens: -3, cache_read_input_tokens: 1.5, output_tokens: 2 } }));
+    expect(odd.usageSource).toBe('result');
+    expect(odd.usage).toEqual({ input: 0, cacheCreation: 0, cacheRead: 0, output: 2 });
+    expect(t4Replay.spendTokens(odd)).toBe(2);
+    const bare = t4Replay.readStreamJson(lines(
+      { type: 'assistant', message: { id: 'msg_4', usage: { input_tokens: 5, output_tokens: 2 } } }));
+    expect(bare.usageSource).toBe('assistant');
+    expect(bare.usage).toEqual({ input: 5, cacheCreation: 0, cacheRead: 0, output: 2 });
+    expect(t4Replay.spendTokens(bare)).toBe(7);
+  });
+
+  it('a tool_result in content blocks joins its text blocks, an absent is_error reads null, and a result with no tool_use pairs nothing', () => {
+    const f = t4Replay.readStreamJson(lines(
+      { type: 'assistant', message: { id: 'msg_3', content: [{ type: 'tool_use', id: 'toolu_3', name: 'Agent', input: { prompt: 'look' } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_3', content: [{ type: 'text', text: 'one' }, { type: 'image' }, { type: 'text', text: 'two' }] }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_stray', content: 'stray' }] } },
+    ));
+    expect(f.toolPairs).toEqual([{ id: 'toolu_3', name: 'Agent', input: { prompt: 'look' }, result: 'one\ntwo', isError: null }]);
+    expect(f.assistantMessages).toBe(1);
+    expect(f.usageSource).toBe('none');
+  });
+
+  // ── the spend ledger ──
+  const ledger = (out: string): string => `${out}/${t4Replay.SPEND_LEDGER}`;
+  /** The word and detail of the DriverRefusal `f` throws, or null when it returns. */
+  const refusalOf = (f: () => unknown): { word: string; detail: string } | null => {
+    try { f(); } catch (e) {
+      expect(e).toBeInstanceOf(t4Replay.DriverRefusal);
+      const r = e as { word: string; detail: string };
+      return { word: r.word, detail: r.detail };
+    }
+    return null;
+  };
+  const CLOSED = { word: 'budget-exhausted', detail: 'ledger-unreadable' };
+  const GOOD = '{"name":"a","tokens":1,"ts_ms":1}\n';
+
+  it('the ledger: absent is 0; one canonical line per finished spawn, mode 0600; summed over every line, a repeated name included', () => {
+    const out = t4MkTmp('ccrc-replay-t4-ledger-');
+    expect(t4Fs.existsSync(ledger(out))).toBe(false);
+    expect(t4Replay.spentSoFar(out)).toBe(0);
+    t4Replay.recordSpend(out, 'step0a/writer', 100);
+    t4Replay.recordSpend(out, 'step0a/judge', 50);
+    t4Replay.recordSpend(out, 'step0a/writer', 120);   // a resumed batch re-ran this job: both spawns spent
+    expect(t4Replay.spentSoFar(out), 'a re-run adds to the total, never replaces it').toBe(270);
+    const rows = t4Fs.readFileSync(ledger(out), 'utf8').split('\n');
+    expect(rows).toHaveLength(4);
+    expect(rows[3]).toBe('');
+    expect(rows[0]).toMatch(/^\{"name":"step0a\/writer","tokens":100,"ts_ms":[0-9]+\}$/);
+    expect(t4Fs.statSync(ledger(out)).mode & 0o777).toBe(0o600);
+  });
+
+  it('recordSpend refuses a name or a count it could not read back, and writes nothing', () => {
+    const out = t4MkTmp('ccrc-replay-t4-record-');
+    expect(() => t4Replay.recordSpend(out, '', 1)).toThrow(/^recordSpend: /);
+    expect(() => t4Replay.recordSpend(out, 'x', -1)).toThrow(/^recordSpend: /);
+    expect(() => t4Replay.recordSpend(out, 'x', 1.5)).toThrow(/^recordSpend: /);
+    expect(() => t4Replay.recordSpend(out, 'x', Number.NaN)).toThrow(/^recordSpend: /);
+    expect(t4Fs.existsSync(ledger(out))).toBe(false);
+  });
+
+  it.each([
+    ['a torn last line', `${GOOD}{"name":"b","tok`],
+    ['a line that is not JSON', `${GOOD}not json\n`],
+    ['a blank line', `${GOOD}\n${GOOD}`],
+    ['a JSON array', `${GOOD}[1]\n`],
+    ['a negative count', `${GOOD}{"name":"b","tokens":-1,"ts_ms":1}\n`],
+    ['a fractional count', `${GOOD}{"name":"b","tokens":1.5,"ts_ms":1}\n`],
+    ['an extra key', `${GOOD}{"name":"b","tokens":1,"ts_ms":1,"x":0}\n`],
+    ['a missing key', `${GOOD}{"name":"b","tokens":1}\n`],
+    ['an empty name', `${GOOD}{"name":"","tokens":1,"ts_ms":1}\n`],
+  ])('a malformed ledger (%s) fails closed as budget-exhausted, never a count', (_why, body) => {
+    const out = t4MkTmp('ccrc-replay-t4-malformed-');
+    t4Fs.writeFileSync(ledger(out), body);
+    expect(refusalOf(() => t4Replay.spentSoFar(out))).toEqual(CLOSED);
+  });
+
+  it('a ledger that is a directory, or a symlink to a readable ledger, fails closed too', () => {
+    const dir = t4MkTmp('ccrc-replay-t4-dir-');
+    t4Fs.mkdirSync(ledger(dir));
+    expect(refusalOf(() => t4Replay.spentSoFar(dir))).toEqual(CLOSED);
+    const link = t4MkTmp('ccrc-replay-t4-link-');
+    t4Fs.writeFileSync(`${link}/elsewhere`, GOOD);
+    t4Fs.symlinkSync(`${link}/elsewhere`, ledger(link));
+    expect(refusalOf(() => t4Replay.spentSoFar(link))).toEqual(CLOSED);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('an unreadable ledger fails closed (skipped as root, which reads it anyway)', () => {
+    const out = t4MkTmp('ccrc-replay-t4-unreadable-');
+    t4Fs.writeFileSync(ledger(out), GOOD);
+    t4Fs.chmodSync(ledger(out), 0o000);
+    expect(refusalOf(() => t4Replay.spentSoFar(out))).toEqual(CLOSED);
   });
 });
