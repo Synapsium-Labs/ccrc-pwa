@@ -1079,11 +1079,12 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     B2: ['history-backups'],
     B3: ['history-scope-markers', 'history-card-files'],
     B4: ['history-export'],
-    W2: ['history-recall-off', 'history-replay-out'],
+    'W2-1': ['history-recall-off'],
+    'W2-4': ['history-replay-out'],
     W3: ['history-steer-files'],
   } as const;
   type HistoryPr = keyof typeof HISTORY_ROWS_BY_PR;
-  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3', 'B4'];
+  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3', 'B4', 'W2-4'];
 
   it('the history classes are §9.4\'s thirteen, each declared by the PR its Lands-in column names, and none before it (O17)', () => {
     const all: string[] = Object.values(HISTORY_ROWS_BY_PR).flat();
@@ -1277,6 +1278,24 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
         .toContain(`the files of purged sessions after ${days} days`);
     }
     expect(LIFECYCLE.find((x) => x.name === 'history-card-files')!.tier).toBe(`<=${CARD_LINE_MAX} B per session`);
+  });
+
+  // ── ccrc history W2-4 (spec 2026-10-05 §9.4, O17's W2-4 half; W2-D9, W2-D53) ──────────────────────────────────────
+  // The replay driver's --out. Operator-made: the operator names the directory and removes it by hand once the W2
+  // decision is recorded, so the class has no collector and carries the ruling instead. The marker's name in the
+  // row is the code's own: the manifest is L0 and imports nothing, so it is bound here, as the B3 numbers are above.
+  it('declares history-replay-out: the W2 driver\'s --out, an O class it creates, with no collector, removed by hand once the W2 decision is recorded', async () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-replay-out');
+    expect(c, 'shared/lifecycle.ts declares no history-replay-out class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['deploy/history-replay.mjs']);
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('removed by hand once the W2 decision is recorded');
+    expect(c!.bound).toBe('one W2 run, until the W2 decision is recorded');
+    expect(c!.root).toContain('outside any git tree');
+    expect(c!.root).toContain('mode 0700');
+    const { OUT_MARKER } = await import('../../deploy/history-replay.mjs');
+    expect(c!.root, 'the row names another marker than the driver writes').toContain(`marked by ${OUT_MARKER}`);
   });
 });
 

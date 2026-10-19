@@ -18,7 +18,8 @@
 // Its words: DRIVER_REASONS, frozen once here and nowhere else (W2-D59, W2-D12; D-5774). A refusal prints
 // `ccrc history-replay: <word>: <detail>` on stderr and exits EXIT.REFUSED (2); a defect exits EXIT.INTERNAL (1).
 // They are never lib REASONS: §8.7's table and SKILL.md do not list them. EXIT is imported, never declared (O14).
-import { realpathSync } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { EXIT } from '../ccd/history/lib.mjs';
 
@@ -145,6 +146,7 @@ export async function main(argv, env) {
   try {
     const pane = paneRefusal(env);
     if (pane !== null) throw pane;
+    process.umask(0o077);   // W2-D53: before any filesystem act, so every file and directory under --out is the operator's alone
     const { sub, flags } = parseArgs(argv);
     const handler = /** @type {(flags: Flags, env: DriverEnv) => Promise<number>} */ (HANDLERS.get(sub));
     return await handler(flags, env);
@@ -156,6 +158,104 @@ export async function main(argv, env) {
     process.stderr.write(`ccrc history-replay: internal error: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`);
     return EXIT.INTERNAL;
   }
+}
+
+// ── W2-4 Task 2: the --out directory (W2-D53; spec §10.2 "It writes only under --out, which it creates 0700 under
+// umask 077" and "It refuses an --out inside a git tree"; pin RP4) ───────────────────────────────────────────────
+// Every file the driver writes lands under --out, and --out holds one W2 run's transcripts and scores, which are
+// private (§4 of the W2 decisions: only hashes and counts go public). So the directory is the operator's and the
+// driver's alone: created 0700 under main's umask 077, marked with OUT_MARKER holding exactly OUT_KIND, and reused
+// only when it is still exactly that. Reuse is what lets a stopped batch resume (W2-D53, W2-D55): finished runs are
+// skipped. Nothing in the tree removes it; it is shared/lifecycle.ts's history-replay-out row (O, collector null):
+// removed by hand once the W2 decision is recorded (W2-D9).
+//   - A git tree is refused wherever it is found, at any depth above --out: a `.git` entry of ANY type, so a
+//     worktree's `.git` file counts as a repository's directory does. The walk starts from the realpath of the
+//     nearest ancestor that exists, because --out may not exist yet.
+//   - An lstat that fails with anything but ENOENT is UNMEASURED, and unmeasured refuses: it is never read as
+//     "outside" (an unreadable ancestor may hold the `.git` the walk cannot see).
+//   - Never a recursive create: the parent is the operator's to make, so a typo cannot grow a tree.
+export const OUT_MARKER = '.ccrc-history-replay';
+export const OUT_KIND = 'ccrc-history-replay-out';
+/** A marker longer than this is not one the driver wrote: the bound on the one read of it. */
+const OUT_MARKER_MAX_BYTES = 64;
+
+const errCode = (e) => String(e?.code ?? 'unknown');
+
+/** Whether `p`, or the nearest of its ancestors that exists, sits inside a git tree. */
+export function insideGitTree(p) {
+  let cur = path.resolve(p);
+  for (;;) {
+    try { lstatSync(cur); break; } catch (e) {
+      if (e?.code !== 'ENOENT') return { state: 'unmeasured', at: cur, code: errCode(e) };
+    }
+    const up = path.dirname(cur);
+    if (up === cur) return { state: 'unmeasured', at: cur, code: 'ENOENT' };
+    cur = up;
+  }
+  let dir;
+  try {
+    const real = realpathSync(cur);
+    dir = lstatSync(real).isDirectory() ? real : path.dirname(real);   // an existing file: its own directory
+  } catch (e) {
+    return { state: 'unmeasured', at: cur, code: errCode(e) };
+  }
+  for (;;) {
+    const dotGit = path.join(dir, '.git');
+    try { lstatSync(dotGit); return { state: 'inside', at: dir }; } catch (e) {
+      if (e?.code !== 'ENOENT') return { state: 'unmeasured', at: dotGit, code: errCode(e) };
+    }
+    const up = path.dirname(dir);
+    if (up === dir) return { state: 'outside' };
+    dir = up;
+  }
+}
+
+/** Make or reuse --out, and answer its realpath; refuse out-refused with a detail naming the one rule it broke. */
+export function prepareOut(out, uid = process.getuid()) {
+  if (typeof out !== 'string' || !path.isAbsolute(out)) refuse('out-refused', 'relative');
+  const abs = path.resolve(out);   // no trailing slash, so lstat never follows a symlink named `link/`
+  let pre;
+  try { pre = lstatSync(abs).isSymbolicLink() ? 'symlink' : 'present'; } catch (e) {
+    pre = e?.code === 'ENOENT' ? 'absent' : 'unmeasured';   // unmeasured: insideGitTree answers it below, at abs
+  }
+  if (pre === 'symlink') refuse('out-refused', 'symlink');
+  const git = insideGitTree(abs);
+  if (git.state === 'inside') refuse('out-refused', `in-git-tree ${git.at}`);
+  if (git.state === 'unmeasured') refuse('out-refused', `git-unmeasured ${git.at} ${git.code}`);
+  if (pre === 'absent') createOut(abs);
+  return checkOut(abs, uid);
+}
+
+/** A missing --out: its parent must already be a directory. 0700 under main's umask 077, then the marker. */
+function createOut(abs) {
+  // insideGitTree has measured every ancestor: one it could not lstat refused above, so a failure here is absence.
+  let parentIsDir = false;
+  try { parentIsDir = statSync(path.dirname(abs)).isDirectory(); } catch { parentIsDir = false; }
+  if (!parentIsDir) refuse('out-refused', 'parent-absent');
+  mkdirSync(abs, { mode: 0o700 });
+  writeFileSync(path.join(abs, OUT_MARKER), OUT_KIND, { mode: 0o600, flag: 'wx' });
+}
+
+/** The reuse rule, which a directory just created passes through too: a real directory, the caller's, mode exactly
+ *  0700, holding the marker with exactly OUT_KIND. */
+function checkOut(abs, uid) {
+  const st = lstatSync(abs);
+  if (st.isSymbolicLink()) refuse('out-refused', 'symlink');
+  if (!st.isDirectory()) refuse('out-refused', 'not-directory');
+  if (st.uid !== uid) refuse('out-refused', 'foreign-owner');
+  const mode = st.mode & 0o7777;
+  if (mode !== 0o700) refuse('out-refused', `mode ${mode.toString(8).padStart(4, '0')}`);
+  const marker = path.join(abs, OUT_MARKER);
+  let ms;
+  try { ms = lstatSync(marker); } catch (e) {
+    if (e?.code === 'ENOENT') refuse('out-refused', 'marker-absent');
+    throw e;
+  }
+  if (!ms.isFile() || ms.size > OUT_MARKER_MAX_BYTES) refuse('out-refused', 'marker-mismatch');
+  let text = null;
+  try { text = readFileSync(marker, 'utf8'); } catch { text = null; }   // a marker the driver cannot read back is not one it wrote
+  if (text !== OUT_KIND) refuse('out-refused', 'marker-mismatch');
+  return realpathSync(abs);
 }
 
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised

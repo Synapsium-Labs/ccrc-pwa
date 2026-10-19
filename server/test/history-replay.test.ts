@@ -14,6 +14,14 @@ import { mkTmp } from './tmpHelpers.js';
 import { REPO, scrubbedEnv } from './historyHelpers.js';
 import { EXIT, REASONS } from '../../ccd/history/lib.mjs';
 import * as replay from '../../deploy/history-replay.mjs';
+// W2-4 Task 2 (the --out rule, W2-D53, RP4): aliased, so no name here collides with an import above.
+import * as t2Fs from 'node:fs';
+import * as t2Path from 'node:path';
+import { spawnSync as t2SpawnSync } from 'node:child_process';
+import { pathToFileURL as t2FileUrl } from 'node:url';
+import * as t2Drv from '../../deploy/history-replay.mjs';
+import { mkTmp as t2MkTmp } from './tmpHelpers.js';
+import { scrubbedEnv as t2Scrubbed } from './historyHelpers.js';
 
 const SCRIPT = path.join(REPO, 'deploy', 'history-replay.mjs');
 
@@ -247,5 +255,150 @@ describe('history-replay W2-4 Task 1: no deploy/history-*.mjs loads node:sqlite 
   it('no deploy/history-*.mjs spells a node:sqlite load: every store read opens through store.mjs openReader', () => {
     const loaders = historyMjs().filter((f) => readFileSync(path.join(DEPLOY, f), 'utf8').split('\n').some((l) => SQLITE_LOAD.test(l)));
     expect(loaders).toEqual([]);
+  });
+});
+
+
+// ── W2-4 Task 2: the --out rule (W2-D53; spec §10.2 "creates 0700 under umask 077", "refuses an --out inside a git
+// tree"; pin RP4) ──────────────────────────────────────────────────────────────────────────────────────────────────
+// prepareOut is called in-process: it reads only the paths it is handed and the uid parameter. main's umask is
+// measured in a child process, because process.umask would otherwise change this test worker's own.
+describe('W2-4 Task 2: the --out rule, created 0700 with its marker, reused only when it is still exactly that (W2-D53, RP4)', () => {
+  const T2_SCRIPT = t2Path.resolve(__dirname, '../../deploy/history-replay.mjs');
+  const asRoot = process.getuid?.() === 0;
+  /** A fresh fixture directory, by its realpath (a darwin TMPDIR is a symlink). */
+  const base = (): string => t2Fs.realpathSync(t2MkTmp('ccrc-replay-out-'));
+  /** The refusal a call throws, or null when it returns; any other throw fails the case. */
+  const refusalOf = (fn: () => unknown): { word: string; detail: string } | null => {
+    try { fn(); return null; } catch (e) {
+      if (e instanceof t2Drv.DriverRefusal) return { word: e.word, detail: e.detail };
+      throw e;
+    }
+  };
+  const out = (word: string): { word: string; detail: string } => ({ word: 'out-refused', detail: word });
+  const modeOf = (p: string): string => (t2Fs.lstatSync(p).mode & 0o7777).toString(8).padStart(4, '0');
+  /** A valid --out, made by prepareOut itself. */
+  const made = (b: string): string => t2Drv.prepareOut(t2Path.join(b, 'out'));
+
+  it('CONTROL: a fresh fixture is outside any git tree, and the walk sees a planted .git directory and a planted .git file above a path that does not exist yet', () => {
+    const b = base();
+    expect(t2Drv.insideGitTree(b), 'the run temp dir sits inside a git tree: every --out case below would refuse').toEqual({ state: 'outside' });
+    t2Fs.mkdirSync(t2Path.join(b, 'repo', '.git'), { recursive: true });
+    expect(t2Drv.insideGitTree(t2Path.join(b, 'repo', 'a', 'b'))).toEqual({ state: 'inside', at: t2Path.join(b, 'repo') });
+    t2Fs.mkdirSync(t2Path.join(b, 'wt'));
+    t2Fs.writeFileSync(t2Path.join(b, 'wt', '.git'), 'gitdir: /nowhere/.git/worktrees/wt\n');
+    expect(t2Drv.insideGitTree(t2Path.join(b, 'wt', 'out'))).toEqual({ state: 'inside', at: t2Path.join(b, 'wt') });
+  });
+
+  it.each([
+    ['a .git directory', (r: string) => t2Fs.mkdirSync(t2Path.join(r, '.git'))],
+    ['a .git file (a worktree)', (r: string) => t2Fs.writeFileSync(t2Path.join(r, '.git'), 'gitdir: /nowhere/.git/worktrees/r\n')],
+  ])('RP4: an --out under %s is refused in-git-tree and never created', (_what, plant) => {
+    const b = base();
+    const repo = t2Path.join(b, 'repo');
+    t2Fs.mkdirSync(repo);
+    plant(repo);
+    const o = t2Path.join(repo, 'out');
+    expect(refusalOf(() => t2Drv.prepareOut(o))).toEqual(out(`in-git-tree ${repo}`));
+    expect(t2Fs.existsSync(o), 'the refused --out was created').toBe(false);
+  });
+
+  it('RP4: a created --out is mode 0700 and holds the marker with OUT_KIND, and prepareOut answers its realpath', () => {
+    expect(t2Drv.OUT_MARKER).toBe('.ccrc-history-replay');
+    expect(t2Drv.OUT_KIND).toBe('ccrc-history-replay-out');
+    const b = base();
+    const o = t2Path.join(b, 'out');
+    expect(t2Drv.prepareOut(o)).toBe(t2Fs.realpathSync(o));
+    expect(modeOf(o)).toBe('0700');
+    const marker = t2Path.join(o, t2Drv.OUT_MARKER);
+    expect(t2Fs.lstatSync(marker).isFile()).toBe(true);
+    expect(modeOf(marker)).toBe('0600');
+    expect(t2Fs.readFileSync(marker, 'utf8')).toBe(t2Drv.OUT_KIND);
+    expect(t2Fs.readdirSync(o)).toEqual([t2Drv.OUT_MARKER]);
+  });
+
+  it('a clean reuse is accepted and keeps what is there: an interrupted batch resumes (W2-D53)', () => {
+    const b = base();
+    const o = made(b);
+    t2Fs.writeFileSync(t2Path.join(o, 'finished.run.json'), '{}\n');
+    expect(t2Drv.prepareOut(o)).toBe(o);
+    expect(t2Drv.prepareOut(`${o}/`), 'a trailing slash names the same directory').toBe(o);
+    expect(t2Fs.readdirSync(o).sort()).toEqual([t2Drv.OUT_MARKER, 'finished.run.json'].sort());
+  });
+
+  /** Each reuse that W2-D53 refuses, planted beside a fresh base: [what, plant -> the --out to pass, the detail]. */
+  const REUSE: ReadonlyArray<readonly [string, (b: string) => string, string]> = [
+    ['a symlink to a valid --out', (b) => { const l = t2Path.join(b, 'link'); t2Fs.symlinkSync(made(b), l); return l; }, 'symlink'],
+    ['the same symlink named with a trailing slash', (b) => { const l = t2Path.join(b, 'link'); t2Fs.symlinkSync(made(b), l); return `${l}/`; }, 'symlink'],
+    ['a dangling symlink', (b) => { const l = t2Path.join(b, 'link'); t2Fs.symlinkSync(t2Path.join(b, 'target'), l); return l; }, 'symlink'],
+    ['a regular file', (b) => { const f = t2Path.join(b, 'out'); t2Fs.writeFileSync(f, ''); return f; }, 'not-directory'],
+    ['mode 0750', (b) => { const o = made(b); t2Fs.chmodSync(o, 0o750); return o; }, 'mode 0750'],
+    ['mode 0700 with the sticky bit', (b) => { const o = made(b); t2Fs.chmodSync(o, 0o1700); return o; }, 'mode 1700'],
+    ['an empty 0700 directory with no marker', (b) => { const o = t2Path.join(b, 'out'); t2Fs.mkdirSync(o, { mode: 0o700 }); t2Fs.chmodSync(o, 0o700); return o; }, 'marker-absent'],
+    ['a marker holding another word', (b) => { const o = made(b); t2Fs.writeFileSync(t2Path.join(o, t2Drv.OUT_MARKER), 'something-else'); return o; }, 'marker-mismatch'],
+    ['a marker holding OUT_KIND and a newline', (b) => { const o = made(b); t2Fs.writeFileSync(t2Path.join(o, t2Drv.OUT_MARKER), `${t2Drv.OUT_KIND}\n`); return o; }, 'marker-mismatch'],
+    ['a marker that is a directory', (b) => { const o = made(b); const m = t2Path.join(o, t2Drv.OUT_MARKER); t2Fs.rmSync(m); t2Fs.mkdirSync(m); return o; }, 'marker-mismatch'],
+  ];
+
+  it.each(REUSE)('W2-D53: %s is refused, and nothing is created in its place', (_what, plant, detail) => {
+    const b = base();
+    const o = plant(b);
+    const before = t2Fs.readdirSync(b).sort();
+    expect(refusalOf(() => t2Drv.prepareOut(o))).toEqual(out(detail));
+    expect(t2Fs.readdirSync(b).sort(), 'the refusal created something').toEqual(before);
+  });
+
+  it('W2-D53: an --out another uid owns is refused foreign-owner (the uid is a parameter, so no second account is needed)', () => {
+    const o = made(base());
+    expect(refusalOf(() => t2Drv.prepareOut(o, process.getuid!() + 1))).toEqual(out('foreign-owner'));
+    expect(t2Drv.prepareOut(o, process.getuid!()), 'CONTROL: the caller\'s own uid is accepted').toBe(o);
+  });
+
+  it('a relative --out is refused, and a missing parent is never created: no recursive create', () => {
+    expect(refusalOf(() => t2Drv.prepareOut('rel/out'))).toEqual(out('relative'));
+    expect(refusalOf(() => t2Drv.prepareOut(''))).toEqual(out('relative'));
+    const b = base();
+    expect(refusalOf(() => t2Drv.prepareOut(t2Path.join(b, 'no', 'such', 'out')))).toEqual(out('parent-absent'));
+    expect(t2Fs.existsSync(t2Path.join(b, 'no')), 'a missing parent was created').toBe(false);
+  });
+
+  it.skipIf(asRoot)('an ancestor the walk cannot lstat is unmeasured, and unmeasured refuses: never read as outside', () => {
+    const b = base();
+    const locked = t2Path.join(b, 'locked');
+    t2Fs.mkdirSync(locked);
+    t2Fs.chmodSync(locked, 0o000);
+    try {
+      const o = t2Path.join(locked, 'out');
+      expect(t2Drv.insideGitTree(o)).toEqual({ state: 'unmeasured', at: o, code: 'EACCES' });
+      expect(refusalOf(() => t2Drv.prepareOut(o))).toEqual(out(`git-unmeasured ${o} EACCES`));
+    } finally {
+      t2Fs.chmodSync(locked, 0o700);
+    }
+    expect(t2Fs.readdirSync(locked), 'the refused --out was created').toEqual([]);
+  });
+
+  it('main sets umask 077 before any file act: a file the handler writes with the default mode lands 0600 (child process)', () => {
+    const b = base();
+    const o = t2Path.join(b, 'out');
+    // A handler registered for this case only, in a child that starts under umask 022: only main's own umask can
+    // make the probe 0600. Argv arrays, never a shell.
+    const code = [
+      `const d = await import(${JSON.stringify(t2FileUrl(T2_SCRIPT).href)});`,
+      'const fs = await import(\'node:fs\');',
+      'process.umask(0o022);',
+      'd.HANDLERS.set(\'t2-umask\', async (flags) => { const real = d.prepareOut(flags.out); fs.writeFileSync(real + \'/probe\', \'x\'); return 0; });',
+      `process.exitCode = await d.main(['t2-umask', '--out', ${JSON.stringify(o)}], { HOME: ${JSON.stringify(b)} });`,
+    ].join('\n');
+    const r = t2SpawnSync(process.execPath, ['--input-type=module', '-e', code],
+      { encoding: 'utf8', env: { ...t2Scrubbed(process.env), HOME: b }, timeout: 60_000 });
+    expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(modeOf(t2Path.join(o, 'probe')), 'main set no umask 077 before the handler').toBe('0600');
+    expect(modeOf(o)).toBe('0700');
+  });
+
+  it('the driver sets its umask once, to 077', () => {
+    const src = t2Fs.readFileSync(T2_SCRIPT, 'utf8');
+    expect(src.match(/process\.umask\(/g) ?? []).toHaveLength(1);
+    expect(src).toContain('process.umask(0o077);');
   });
 });

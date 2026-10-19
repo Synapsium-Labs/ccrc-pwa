@@ -98,6 +98,13 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd/history/sweep.mjs (through card.mjs)'],
     collector: 'ccd-history-sweep (deleted on consumption: when the boundary that consumed the prediction is ingested, or when the id\'s next prediction names another uuid; withdrawn by a pass that runs no card step; the files of purged sessions after 7 days, the record included)',
     bound: 'one prediction per session id, until consumed or withdrawn, or 7 days after its session is purged', tier: '<=512 B per session', ruling: null },
+  // ccrc history, W2-4 (spec 2026-10-05 §9.4, §10.2; W2-D9, W2-D53): the replay driver's --out. The operator names it;
+  // the driver creates it 0700 under umask 077 with its marker, or reuses one that still passes every check, so a
+  // stopped batch resumes. Nothing in the tree removes it: it holds one W2 run's evidence until the decision is recorded.
+  { name: 'history-replay-out', root: 'the W2 driver\'s --out directory, operator-chosen outside any git tree, mode 0700, marked by .ccrc-history-replay', pattern: 'O',
+    creators: ['deploy/history-replay.mjs'], collector: null,
+    bound: 'one W2 run, until the W2 decision is recorded', tier: 'one W2 run\'s transcripts and scores',
+    ruling: 'operator-made; removed by hand once the W2 decision is recorded' },
   // #316: the server suite's one temp parent per vitest run, every fixture inside it. Ephemeral (E): its creator
   // collects it, and a later run collects one whose owner was SIGKILLed, once its socket refuses and it is quiet.
   // The window is named, not numbered: RUN_QUIET_S lives once, in the .mjs, which L0 cannot import.
