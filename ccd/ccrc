@@ -876,7 +876,7 @@ _svc_write_session_plist() {   # <unit> -> 0 iff its plist is on disk
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>3</integer>
   <key>AbandonProcessGroup</key><true/>
-  <key>ProcessType</key><string>$(if declare -F _launchd_class >/dev/null; then _launchd_class; else printf Background; fi)</string>
+  <key>ProcessType</key><string>Background</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>$(_svc_job_path)</string>
@@ -24287,7 +24287,7 @@ console.log("restamped");
   esac
 }
 
-# THE LAUNCHD CLASS the server, agent and session jobs carry (macOS): the
+# THE LAUNCHD CLASS the server (or agent) job carries (macOS): the
 # first word of ~/.ccrc/launchd-class. `Background` — the default, and what
 # every box ran before this file — is launchd's lowest CPU and I/O class. On a
 # box saturated by other work it starves rather than slows: measured on a busy
@@ -24299,11 +24299,11 @@ console.log("restamped");
 # only isolation boundary, ccrc.env carries tokens and a fleet box may have
 # none. OPERATOR-OWNED: nothing writes it. Absent or empty is Background; any
 # other word is named on stderr and reads as Background — each arm prints its
-# own literal, so nothing from the file can reach a plist. Held byte-identical
-# between ccd and ccrc by darwin-process-type.test.ts. Deliberately OUTSIDE the
+# own literal, so nothing from the file can reach a plist. Only the server job
+# reads it so far; the session plist writers (inside the platform block, in ccd
+# and here) adopt it together in a follow-up change. Deliberately OUTSIDE the
 # platform block (no _svc_/_plat_ prefix) so the block's line citations stay
-# put; its plist writers call it behind `declare -F`, so a harness that sources
-# only the block still writes Background.
+# put; the writer calls it behind `declare -F`.
 _launchd_class() {
   local f="$HOME/.ccrc/launchd-class" v=""
   if [ -r "$f" ]; then { IFS= read -r v || true; } < "$f"; fi

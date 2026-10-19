@@ -1,5 +1,4 @@
-// macOS: the launchd class (`ProcessType`) the server job and every session job
-// carry — the first word of ~/.ccrc/launchd-class, Background by default.
+// macOS: the launchd class (`ProcessType`) the server job carries — the first word of ~/.ccrc/launchd-class, Background by default.
 //
 // Background is launchd's lowest CPU and I/O class, and on a box busy with other
 // work it starves rather than slows: measured on a busy fleet box, the server's
@@ -12,7 +11,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CCD, ghContainedEnv, seedAccountsSh } from './ccdWsHelpers.js';
+import { ghContainedEnv, seedAccountsSh } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -38,7 +37,7 @@ const run = (file: string, home: string, expr: string) => {
   return { code: r.status, stdout: r.stdout.trim(), stderr: r.stderr };
 };
 
-describe.each([['ccd', CCD], ['ccrc', CCRC]])('_launchd_class in %s', (_name, file) => {
+describe.each([['ccrc', CCRC]])('_launchd_class in %s', (_name, file) => {
   it.each([
     ['no file', null, 'Background'],
     ['an empty file', '', 'Background'],
@@ -62,34 +61,12 @@ describe.each([['ccd', CCD], ['ccrc', CCRC]])('_launchd_class in %s', (_name, fi
   });
 });
 
-describe('_launchd_class is ONE rule in two files', () => {
-  it('ccd and ccrc carry byte-identical bodies', () => {
-    const body = (f: string): string => {
-      const m = /^_launchd_class\(\) \{\n[\s\S]*?\n\}\n/m.exec(readFileSync(f, 'utf8'));
-      expect(m, `${f} has no _launchd_class in its one-function form`).not.toBeNull();
-      return m![0];
-    };
-    expect(body(CCD)).toBe(body(CCRC));
-  });
-});
-
 describe('the jobs carry the chosen class', () => {
   const procType = (plist: string): string | null =>
     /<key>ProcessType<\/key><string>([A-Za-z]+)<\/string>/.exec(plist)?.[1] ?? null;
   const lint = (p: string): void => {
     if (IS_DARWIN) expect(spawnSync('plutil', ['-lint', p]).status, `plutil rejects ${p}`).toBe(0);
   };
-
-  it.each([['ccd', CCD], ['ccrc', CCRC]])('%s\'s session plist', (_n, file) => {
-    for (const [cls, want] of [[null, 'Background'], ['Standard\n', 'Standard']] as const) {
-      const home = box(cls);
-      const r = run(file, home, 'CCD_OS=darwin; _svc_write_session_plist claude-session@demo.service');
-      expect(r.code, r.stderr).toBe(0);
-      const p = join(home, 'Library/LaunchAgents/app.ccrc.session.demo.plist');
-      lint(p);
-      expect(procType(readFileSync(p, 'utf8'))).toBe(want);
-    }
-  });
 
   it('the server plist', () => {
     for (const [cls, want] of [[null, 'Background'], ['Standard\n', 'Standard']] as const) {
@@ -98,12 +75,5 @@ describe('the jobs carry the chosen class', () => {
       expect(r.code, r.stderr).toBe(0);
       expect(procType(r.stdout)).toBe(want);
     }
-  });
-
-  it('a caller holding only the platform block (no helper defined) still writes Background', () => {
-    const home = box('Standard\n');
-    const r = run(CCD, home, 'unset -f _launchd_class; CCD_OS=darwin; _svc_write_session_plist claude-session@demo.service');
-    expect(r.code, r.stderr).toBe(0);
-    expect(procType(readFileSync(join(home, 'Library/LaunchAgents/app.ccrc.session.demo.plist'), 'utf8'))).toBe('Background');
   });
 });
