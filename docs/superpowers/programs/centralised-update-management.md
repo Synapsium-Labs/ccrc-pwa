@@ -2089,6 +2089,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         06:25, mean 14.7 s, max 16.3 s, period about 64 s. That is level with the 14.3 s measured 8 to 20 min after
         the restart. All the samples so far sit inside the proposed 7-to-9-h window, so the multiplier's test is
         the 13:35 sample, unless another restart moves it. Mail 6613 to the broker's coordinator.
+      - **06:40: the blackout's fix merged: #681 as `c44bea401`, prerelease v0.0.328** (mail 6615; release run
+        39211148030). Rung 4 computes each window's delta and parsed span once per pass, in WeakMaps, and looks its
+        candidates up. A seeded digest over 2,537 inputs is equal at `main` and at the tip. Its bench: the steady
+        shapes go from 9.9-41.7 s to 0.34-1.04 s; the restart shape at 300 trees from 3.1-3.6 s to about 1.2 s.
+        Review 628's F9: a restart's cost stays linear in census trees, about 4 ms each (about 1.5 s at 367).
+        That follow-up goes to the operator.
+        - v0.0.328 is `main`'s head, so it is the new stable target. Full run 39211404441 is dispatched on it. On a
+          green `full-suite` I fast-forward `stable` to `c44bea401`.
+        - The rehearsal moves to v0.0.328. If the server moves to it before 13:35, the 13:35 sample measures the
+          fixed code, and I report it that way.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
