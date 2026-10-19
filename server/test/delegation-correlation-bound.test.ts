@@ -1150,3 +1150,52 @@ const EXPECTED_HISTOGRAM_R2 = {
   r4Linked: 33, r34Agree: 23, r34Disagree: 37, sameActivityIdRowsRung2: 123, otherKindMetaOfClaimant: 83, parentCwdFromSiblingIncarnation: 43, doubleClaimParent: 105,
   markLossy: 47, markProject: 31, markPrefix: 31, markPath: 14, markId: 19, unknownWindowForced: 7, lostEvidenceForced: 13, lostEvidenceAsked: 841,
 };
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// D-5642 R3: the order of a candidate's lost windows
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+//
+//   D-5642 R3, the order. Rung 4 meets a candidate's lost windows (those that may be on its project, in the list's order) and answers at the
+//      FIRST one that has an instant the model refuses (`listing-window-instant-unreadable`) or overlaps the candidate (`evidence-horizon`).
+//      A per-project view of the lost windows built once per pass must therefore keep the list's order, whichever of the windows are named for
+//      the project and whichever are on every repository: nothing else in this file or in the cost file sees a view that regroups them.
+
+describe('D-5642 R3: a candidate meets its project\'s lost windows in list order', () => {
+  const NAME = 'wt-raw-0';
+  const CALL = 'toolu_candidate';
+  /** One plain tree with exactly ONE rung-4 candidate on project-a (a held, closed window of lane-a-demo that adds exactly that name and
+   *  removes none, with its Pre and Post in the evidence so its activity opens), no horizon, a measured empty dropped index, and the given
+   *  lost windows after it, in the given order. */
+  function candidateAnswer(lost: readonly DelegationListingWindow[]): DelegationCorrelationVerdict {
+    const common = ['main-wt', 'old-wt'];
+    const candidate: DelegationListingWindow = {
+      sessionId: PARENT, parentIncarnation: INC, toolUseId: CALL, repository: REPO,
+      startedAt: T(100), endedAt: T(110), before: [...common], after: [...common, NAME],
+    };
+    const w = world([bashPre(100, CALL, common), bashPost(110, CALL, [...common, NAME])]);
+    return correlateDelegation(input({
+      record: rawRecord(NAME), activities: w.activities, acceptedEvidence: w.acceptedEvidence, listingWindows: [candidate, ...lost],
+      droppedEvidence: indexDelegationDropped([]), firstSighting: { after: T(0), at: T(5003) },
+    }));
+  }
+  /** On every repository, from an instant the model refuses (no milliseconds), over the candidate. */
+  const unreadable: DelegationListingWindow = {
+    sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true,
+    startedAt: '2026-10-14T00:00:00Z', endedAt: T(200), before: [], after: null,
+  };
+  /** Named for project-a, closed, readable, and overlapping the candidate. */
+  const overlapping: DelegationListingWindow = {
+    sessionId: OTHER, parentIncarnation: INC, toolUseId: '', repository: REPO, lost: true,
+    startedAt: T(105), endedAt: T(120), before: [], after: null,
+  };
+
+  it('control: the candidate alone links at rung 4', () => {
+    expect(summary(candidateAnswer([]))).toBe('linked:4');
+  });
+  it('the unreadable every-repository window first: unmeasured(listing-window-instant-unreadable)', () => {
+    expect(summary(candidateAnswer([unreadable, overlapping]))).toBe('unmeasured:listing-window-instant-unreadable');
+  });
+  it('the named overlapping window first: unmeasured(evidence-horizon)', () => {
+    expect(summary(candidateAnswer([overlapping, unreadable]))).toBe('unmeasured:evidence-horizon');
+  });
+});
