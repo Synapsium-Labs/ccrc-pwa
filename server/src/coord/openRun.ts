@@ -3,7 +3,7 @@ import type { RunKind, RunRefuseCode, RunSummary } from '../../../shared/api.js'
 
 /**
  * `POST /api/runs`' synchronous preconditions, decided (D-5384, audit ticket
- * ARCH-21, CCRCP-120 — the prerequisite of coordinator-first Task 11b). L1:
+ * ARCH-21, GitHub #548 — the prerequisite of coordinator-first Task 11b). L1:
  * no `fs`, no fastify, no `reply`, no clock; its one value import is L0,
  * `shared/api.ts`. The route (`coord/routes.ts`, L4) gathers the facts, calls
  * `openRunPreconditions` inside `coordMutex`, and answers a refusal through the
