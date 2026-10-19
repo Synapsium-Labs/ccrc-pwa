@@ -2196,6 +2196,17 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 13:55: v0.0.346 (#692) to v0.0.352 (#721) followed, unapplied. STATUS: fleet and server v0.0.340, newest
         v0.0.352, stable v0.0.328, intent dev/auto=off, backups fleet 161M/server 2578M, disk free fleet 210G/work
         volume 86G/server 30G, no anomalies.
+      - **15:00 UTC: both boxes moved to v0.0.353 (#726) by the operator's console tap**, requested for both nodes at
+        14:55:59: fleet 14:55:59 to 14:58:12, then the server 14:58:57 to 14:59:47. Both reports `done`, `from: pwa`.
+        Fleet gate 14:58:02 (agent up and staying up), doctor 38 passed, 7 warned, 0 failed; its sweep names three
+        supervisors down, failed since 2026-10-12 and skipped by try-restart as designed. Server gate 14:59:36
+        answered v0.0.353, doctor 28 passed, 1 warned; `ccrc.service` restarted 14:59:23. The 14:58 probe caught the
+        move in flight (boxes differ, standing requests) and the 15:00 probe the server row's first measurement
+        after its restart (pending, install incomplete); the 15:01:02 measurement read both rows complete and idle,
+        requests cleared. Expected states, no fault. Server backups 2714M, the set full at 10 (newest 333M), so the
+        probe's 3G flag is about three taps away. v0.0.354 (#716) and v0.0.355 (#727) followed, unapplied. STATUS:
+        fleet and server v0.0.353, newest v0.0.355, stable v0.0.328, intent dev/auto=off, backups fleet 161M/server
+        2714M, disk free fleet 210G/work volume 84G/server 30G. Soak day 1 to the broker's coordinator, mail 6717.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
