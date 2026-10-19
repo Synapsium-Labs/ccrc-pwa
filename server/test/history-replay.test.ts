@@ -1277,6 +1277,97 @@ describe('W2-4 Task 5: the batch runner, at most 2 at once, gated, resumable (W2
     expect(t5drv.spentSoFar(b.out), 'the re-spawned job spent twice, and both count').toBe(3 * T5_TOKENS);
   }, 60_000);
 
+  // D-5811 (history-w2-4-interrupted-spawn-spend): a spawn streams into `<name>.jsonl.part`; its spend line, then the
+  // rename to `<name>.jsonl`, then run.json. A `.part` with no run.json is a spawn whose driver died, charged once.
+  const T5_LEFTOVER_STREAM = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'x', permission_denials: [],
+    usage: { input_tokens: 3, cache_creation_input_tokens: 4, cache_read_input_tokens: 5, output_tokens: 6 } }) + '\n';
+  const T5_LEFTOVER_TOKENS = 18;
+  const ledgerRows = (out: string): Array<{ name: string; tokens: number }> =>
+    t5fs.readFileSync(t5path.join(out, t5drv.SPEND_LEDGER), 'utf8').split('\n').filter((l) => l !== '').map((l) => { const r = JSON.parse(l); return { name: r.name, tokens: r.tokens }; });
+
+  it('a spawn streams into .jsonl.part and renames it after its spend line: the final stream and run.json appear only when it closes', async () => {
+    const b = t5Box('ccrc-replay-t5-partflow-');
+    t5fs.writeFileSync(t5path.join(b.home, T5_STUB_SLEEP), '1500');
+    const flight = t5drv.launchRun(t5job(b, b.up, 'box', 'flow-0'));
+    const part = t5path.join(b.out, 'flow-0.jsonl.part');
+    for (let i = 0; i < 100 && !t5fs.existsSync(part); i++) await new Promise((r) => setTimeout(r, 50));
+    expect(t5fs.existsSync(part), 'the stream is opened as .part').toBe(true);
+    expect(t5fs.existsSync(t5path.join(b.out, 'flow-0.jsonl')), 'no final stream while the child runs').toBe(false);
+    expect(t5fs.existsSync(t5path.join(b.out, 'flow-0.run.json'))).toBe(false);
+    await flight;
+    expect(t5fs.existsSync(part), 'renamed away').toBe(false);
+    expect(t5fs.readFileSync(t5path.join(b.out, 'flow-0.jsonl'), 'utf8')).toBe(T5_STREAM);
+    expect(t5fs.existsSync(t5path.join(b.out, 'flow-0.run.json'))).toBe(true);
+  }, 60_000);
+
+  it('the spend line lands before the rename of .part: a rename that fails leaves the spawn charged', async () => {
+    const b = t5Box('ccrc-replay-t5-spendfirst-');
+    const finalDir = t5path.join(b.out, 'order-0.jsonl');
+    t5fs.mkdirSync(finalDir);
+    t5fs.writeFileSync(t5path.join(finalDir, 'blocker'), 'x');
+    await expect(t5drv.launchRun(t5job(b, b.up, 'box', 'order-0'))).rejects.toThrow();
+    expect(t5drv.spentSoFar(b.out), 'charged although the rename failed').toBe(T5_TOKENS);
+    expect(t5fs.existsSync(t5path.join(b.out, 'order-0.run.json'))).toBe(false);
+  }, 60_000);
+
+  it('a .part leftover with no run.json is charged once before the re-spawn, its inode is never reused, and the spawn adds its own spend', async () => {
+    const b = t5Box('ccrc-replay-t5-leftover-');
+    const job = t5job(b, b.up, 'box', 'left-0');
+    const part = t5path.join(b.out, 'left-0.jsonl.part');
+    t5fs.writeFileSync(part, T5_LEFTOVER_STREAM);
+    const held = t5path.join(b.home, 'held-part');
+    t5fs.linkSync(part, held);
+    const heldIno = t5fs.statSync(held).ino;
+    const outs = await t5drv.runBatch([job], { gate: T5_NO_GATE });
+    expect(outs.map((o) => o.skipped)).toEqual([false]);
+    expect(ledgerRows(b.out), 'the leftover is charged first, once').toEqual([{ name: 'left-0', tokens: T5_LEFTOVER_TOKENS }, { name: 'left-0', tokens: T5_TOKENS }]);
+    expect(t5drv.spentSoFar(b.out)).toBe(T5_LEFTOVER_TOKENS + T5_TOKENS);
+    expect(t5fs.existsSync(part)).toBe(false);
+    expect(t5fs.readFileSync(held, 'utf8'), 'the dead driver\'s stream was removed, not truncated in place').toBe(T5_LEFTOVER_STREAM);
+    expect(t5fs.statSync(t5path.join(b.out, 'left-0.jsonl')).ino, 'the new stream is a new inode').not.toBe(heldIno);
+    expect(stubLog(b.home)).toHaveLength(1);
+    // Resumed again: nothing is charged twice.
+    await t5drv.runBatch([job], { gate: T5_NO_GATE });
+    expect(t5drv.spentSoFar(b.out)).toBe(T5_LEFTOVER_TOKENS + T5_TOKENS);
+  }, 60_000);
+
+  it('launchRun charges the leftover itself, for a caller that bypasses the batch', async () => {
+    const b = t5Box('ccrc-replay-t5-leftover-direct-');
+    t5fs.writeFileSync(t5path.join(b.out, 'left-1.jsonl.part'), T5_LEFTOVER_STREAM);
+    await t5drv.launchRun(t5job(b, b.up, 'box', 'left-1'));
+    expect(ledgerRows(b.out)).toEqual([{ name: 'left-1', tokens: T5_LEFTOVER_TOKENS }, { name: 'left-1', tokens: T5_TOKENS }]);
+  }, 60_000);
+
+  it('a gate sees a leftover\'s charge: a budget the leftover alone exhausts refuses budget-exhausted with no spawn', async () => {
+    const b = t5Box('ccrc-replay-t5-leftover-gate-');
+    t5fs.writeFileSync(t5path.join(b.out, 'left-2.jsonl.part'), T5_LEFTOVER_STREAM);
+    const gate = (): void => {
+      const stop = t5drv.decideBudget(t5drv.spentSoFar(b.out), T5_LEFTOVER_TOKENS);
+      if (stop !== null) throw new t5drv.DriverRefusal(stop.word, stop.detail);
+    };
+    await expect(t5drv.runBatch([t5job(b, b.up, 'box', 'left-2')], { concurrency: 1, gate }))
+      .rejects.toMatchObject({ word: 'budget-exhausted', detail: `spent ${T5_LEFTOVER_TOKENS} of ${T5_LEFTOVER_TOKENS}` });
+    expect(stubLog(b.home), 'nothing spawned').toBeNull();
+    expect(t5drv.spentSoFar(b.out)).toBe(T5_LEFTOVER_TOKENS);
+    expect(t5fs.existsSync(t5path.join(b.out, 'left-2.jsonl.part'))).toBe(false);
+  }, 60_000);
+
+  it('a leftover that is a directory or a symlink refuses out-refused run-stream-invalid with no spawn and no charge, through the batch and through launchRun', async () => {
+    for (const [label, plant] of [
+      ['directory', (p: string, b: { home: string }) => { void b; t5fs.mkdirSync(p); }],
+      ['symlink', (p: string, b: { home: string }) => { const t = t5path.join(b.home, 'link-target'); t5fs.writeFileSync(t, T5_LEFTOVER_STREAM); t5fs.symlinkSync(t, p); }],
+    ] as const) {
+      const b = t5Box(`ccrc-replay-t5-leftover-${label}-`);
+      plant(t5path.join(b.out, 'left-3.jsonl.part'), b);
+      const job = t5job(b, b.up, 'box', 'left-3');
+      await expect(t5drv.runBatch([job], { gate: T5_NO_GATE }), `${label} through the batch`).rejects.toMatchObject({ word: 'out-refused', detail: 'run-stream-invalid left-3' });
+      await expect(t5drv.launchRun(job), `${label} through launchRun`).rejects.toMatchObject({ word: 'out-refused', detail: 'run-stream-invalid left-3' });
+      expect(stubLog(b.home), label).toBeNull();
+      expect(t5drv.spentSoFar(b.out), label).toBe(0);
+      expect(t5fs.lstatSync(t5path.join(b.out, 'left-3.jsonl.part')).isFile(), `${label} left untouched`).toBe(false);
+    }
+  }, 60_000);
+
   it('resume refuses a stream changed after its run.json, a run.json that does not parse, and one recorded for another account, mode, model or settings mode', async () => {
     const b = t5Box('ccrc-replay-t5-tamper-');
     const job = t5job(b, b.up, 'box', 'tamper-0');

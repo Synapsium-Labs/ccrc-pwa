@@ -608,10 +608,16 @@ export function spentSoFar(out) {
 // with an argv array and no shell, a FRESH env built by spawnEnv from the allow-list (never a copy of the
 // driver's own), an empty 0700 cwd made per run outside any git tree and removed after it, and stdin as the only
 // input. Arm values arrive as parameters: this file never spells one (W2-5b's scan pins that).
-// A run's files land under --out in a fixed order: the stream `<name>.jsonl`, then its spend line in the ledger,
-// then `<name>.run.json` via tmp + rename. The run.json is the completion marker and comes LAST, so a run killed
-// before it is spawned again on resume; if its ledger line had landed, the summed ledger counts both spawns (an
-// over-count, the budget's safe direction). A run whose run.json exists is never spawned again (W2-D53, W2-D55).
+// A run's files land under --out in a fixed order: the stream `<name>.jsonl.part` while the child runs, then the
+// spend line in the ledger, then the rename to `<name>.jsonl`, then `<name>.run.json` via tmp + rename (D-5811). The
+// run.json is the completion marker and comes LAST, so a run killed before it is spawned again on resume. Three
+// shapes of kill, three answers: a driver that died while its child ran leaves a `.part` and no run.json, a LEFTOVER
+// that the next batch (or launchRun) charges to the ledger once, before any gate reads it, and removes, so the new
+// spawn streams into a new file; a driver that died between the spend line and the rename leaves a `.part` that is
+// charged again (an over-count); one that died between the rename and the run.json leaves a `.jsonl` and its ledger
+// line, and the re-spawn's spend adds to it (an over-count). Over-counting is the budget's safe direction; a spawn
+// the ledger never saw is the unsafe one, and the leftover rule closes it. A run whose run.json exists is never
+// spawned again (W2-D53, W2-D55).
 // The child's LANG arrives as RunJob.lang, threaded from main's env: this section never reads process.env.
 
 /** The four ways a run is spawned: an arm run (with the CCRC_RECALL_* values), the question writer, the judge,
@@ -741,9 +747,30 @@ function runHomeOf(launch) {
 
 function runPaths(out, name) {
   if (typeof name !== 'string' || !RUN_NAME_RE.test(name)) throw new TypeError(`launchRun: run name ${JSON.stringify(name)} is not a run name`);
-  // D-5803: a name whose stream file would be the spend ledger is refused, or openSync(streamPath, 'w') truncates it and the budget fails open.
+  // D-5803: a name whose stream file would be the spend ledger is refused, or the rename of the finished `.part` onto streamPath replaces it and the budget fails open.
   if (`${name}.jsonl` === SPEND_LEDGER) throw new TypeError(`launchRun: run name ${JSON.stringify(name)} would stream into the spend ledger ${SPEND_LEDGER}`);
-  return { streamPath: path.join(out, `${name}.jsonl`), runJsonPath: path.join(out, `${name}.run.json`) };
+  const streamPath = path.join(out, `${name}.jsonl`);
+  return { streamPath, partPath: `${streamPath}.part`, runJsonPath: path.join(out, `${name}.run.json`) };
+}
+
+/** D-5811: a spawn whose driver died before its spend line leaves `<name>.jsonl.part` and no run.json. Charge it to
+ *  the ledger once and remove it, so the budget never under-counts and the next spawn opens a new file (a child the
+ *  dead driver orphaned cannot write into it). Nothing happens when there is no `.part`; one that is not a regular
+ *  file refuses out-refused. The caller has established that the job has no run.json.
+ *  @param {{out: string, name: string}} job */
+function chargeLeftover(job) {
+  const { partPath } = runPaths(job.out, job.name);
+  let st;
+  try {
+    st = lstatSync(partPath);
+  } catch (e) {
+    if (e?.code === 'ENOENT') return;
+    refuse('out-refused', `run-stream-unreadable ${job.name} ${e?.code ?? 'unknown'}`);
+  }
+  if (!st.isFile()) refuse('out-refused', `run-stream-invalid ${job.name}`);
+  const text = readFileSync(partPath, 'utf8');
+  recordSpend(job.out, job.name, spendTokens(readStreamJson(text)));
+  rmSync(partPath);
 }
 
 /** The outcome of a job whose run.json exists (resume), or null when it has none. A run.json that does not
@@ -778,11 +805,12 @@ function finishedOutcome(job) {
   };
 }
 
-/** One child, stdout straight into the stream file, stdin written whole, stderr kept to a bound; killed on its
- *  own pid when it outlives `timeoutMs` (SIGTERM, then SIGKILL after a grace). */
-function runChild(launcher, argv, { cwd, childEnv, stdin, streamPath, timeoutMs }) {
+/** One child, stdout straight into the `.part` stream file (D-5811: launchRun renames it once the spawn is charged),
+ *  stdin written whole, stderr kept to a bound; killed on its own pid when it outlives `timeoutMs` (SIGTERM, then
+ *  SIGKILL after a grace). */
+function runChild(launcher, argv, { cwd, childEnv, stdin, partPath, timeoutMs }) {
   return new Promise((resolve, reject) => {
-    const fd = openSync(streamPath, 'w', 0o600);
+    const fd = openSync(partPath, 'w', 0o600);
     let child;
     try {
       child = spawn(launcher, argv, { cwd, env: childEnv, stdio: ['pipe', fd, 'pipe'] });
@@ -818,7 +846,9 @@ function unknownOptionsIn(stderr) {
 }
 
 /** Run one job, or answer its recorded outcome when its run.json exists. The job's `name` is one to four `/`-separated
- *  segments of `[a-z0-9][a-z0-9._-]*`; a name whose stream would be `<out>/SPEND_LEDGER` is refused (D-5803).
+ *  segments of `[a-z0-9][a-z0-9._-]*`; a name whose stream would be `<out>/SPEND_LEDGER` is refused (D-5803). The
+ *  order of a spawn's files is: the stream into `<name>.jsonl.part`, the child's close, its spend line, the rename
+ *  to `<name>.jsonl`, then run.json (D-5811). A `.part` left by a driver that died is charged first (chargeLeftover).
  *  @param {{launch: object, mode: string, model: string, settingsMode: string, recall?: object, stdin: string,
  *    out: string, name: string, lang: string | undefined, timeoutMs?: number}} job */
 export async function launchRun(job) {
@@ -827,10 +857,11 @@ export async function launchRun(job) {
   }
   const done = finishedOutcome(job);
   if (done !== null) return done;
+  chargeLeftover(job);   // finds nothing when runBatch has charged it already
   const { launch, mode, model, settingsMode, recall, stdin, out, name, lang } = job;
   const timeoutMs = job.timeoutMs ?? RUN_TIMEOUT_MS;
   if (typeof stdin !== 'string') throw new TypeError('launchRun: stdin must be a string');
-  const { streamPath, runJsonPath } = runPaths(out, name);
+  const { streamPath, partPath, runJsonPath } = runPaths(out, name);
   const home = runHomeOf(launch);
   const argv = spawnArgv({ mode, model, settingsMode, home });
   const childEnv = spawnEnv({ mode, home, configDir: launch.configDir, poisonBin: ensurePoisonBin(out), lang, recall });
@@ -839,16 +870,17 @@ export async function launchRun(job) {
   const t0 = Date.now();
   let res;
   try {
-    res = await runChild(launch.launcher, argv, { cwd, childEnv, stdin, streamPath, timeoutMs });
+    res = await runChild(launch.launcher, argv, { cwd, childEnv, stdin, partPath, timeoutMs });
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
   const ms = Date.now() - t0;
-  const stream = readFileSync(streamPath);
+  const stream = readFileSync(partPath);
   const facts = readStreamJson(stream.toString('utf8'));
   const tokens = spendTokens(facts);
   const unknownOptions = unknownOptionsIn(res.stderr);
   recordSpend(out, name, tokens);
+  renameSync(partPath, streamPath);
   const rec = {
     kind: RUN_KIND, v: 1, name, account: launch.accountId, mode, model, settings_mode: settingsMode,
     code: res.code, signal: res.signal, ms, cwd, stream_sha256: sha256Hex(stream), tokens, unknown_options: unknownOptions,
@@ -861,7 +893,9 @@ export async function launchRun(job) {
 
 /** Run up to BATCH_MAX jobs, at most `concurrency` (<= CONCURRENCY_MAX) at once, calling `gate` before each spawn
  *  (Task 6's limits and budget stop). The gate is required: a missing one is a TypeError before any spawn, so the
- *  stop is never opt-in. A finished job is skipped without the gate. The first throw, the gate's
+ *  stop is never opt-in. A finished job is skipped without the gate. Before any lane starts, every job that has
+ *  no run.json and a `.part` leftover is charged to the ledger (D-5811), so the first gate reads that spend; a
+ *  `.part` that is not a regular file refuses out-refused before any spawn. The first throw, the gate's
  *  included, stops the batch: no further spawn starts, a run already started finishes and is recorded, and the
  *  throw is rethrown, so a re-run resumes. */
 export async function runBatch(jobs, opts = {}) {
@@ -872,6 +906,12 @@ export async function runBatch(jobs, opts = {}) {
   const names = jobs.map((j) => path.join(j.out, j.name));
   if (new Set(names).size !== names.length) throw new TypeError('runBatch: two jobs share one --out and name');
   const gate = opts.gate;
+  for (const job of jobs) {
+    const { runJsonPath } = runPaths(job.out, job.name);
+    let hasRunJson = true;
+    try { lstatSync(runJsonPath); } catch (e) { hasRunJson = e?.code !== 'ENOENT'; }
+    if (!hasRunJson) chargeLeftover(job);
+  }
   const outcomes = new Array(jobs.length);
   let next = 0;
   let stop = null;
