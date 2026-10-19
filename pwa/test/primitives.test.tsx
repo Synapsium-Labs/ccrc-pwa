@@ -479,6 +479,10 @@ describe('Chip', () => {
     // `flex-none` would also zero the grow factor, which the dot never had.
     expect(CHIP_DOT.split(/\s+/)).toContain('shrink-0');
     expect(CHIP_DOT).not.toMatch(/(^|\s)(shrink|flex-shrink)(-[1-9]\d*)?(\s|$)/);
+    // Nor by another route: a `flex-*`, `basis-*` or `grow*` utility would
+    // move the dot's size from `size-[5px]` to the flex basis or grow share
+    // (`flex-1` sets the basis to 0%), so the class carries none.
+    expect(CHIP_DOT).not.toMatch(/(^|\s)(flex|basis|grow)(-\S+)?(\s|$)/);
   });
 
   it('renders the dot only when asked, and always aria-hidden', () => {

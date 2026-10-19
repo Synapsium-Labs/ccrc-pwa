@@ -15,7 +15,8 @@
 // shape in two tones. The declarations are reproduced here token for token.
 // The old rules are gone, so nothing measures them against this cva (D-5578);
 // what pins the banner now is `pwa/test/fleet-host-banner.test.tsx` (the
-// rendered banner, its tones and its action) and
+// rendered banner, its tones and its action),
+// `pwa/test/substrate-banner.test.tsx` (the amber tone with no action) and
 // `pwa/test/dead-banner-grounds.test.ts` (the dead tone's grounds, D-5574).
 //
 // NO STYLESHEET, deliberately. Every tone sets both its ground and its ink, so
