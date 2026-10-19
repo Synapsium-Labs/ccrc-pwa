@@ -899,6 +899,15 @@ describe('D-5692 R5: the line is numbers only, in a fixed grammar, and bounded',
     expect(rule(MAX), 'the largest itself is written whole').toBe(`${PREFIX} block=${MAX}`);
     expect(rule(0), 'zero is written, not left out').toBe(`${PREFIX} block=0`);
   });
+
+  // M12's pass-site arm: no lane pass builds a line near the bound (its values are small), so the rows above, which hold the formatter
+  // to it, cannot see the lane hand the formatter a bound of its own. Pinned at the source, as delegation-watch.test.ts pins the dispatch.
+  it('D-5692 R5 (iii): the lane writes its line through the formatter ONCE, at the formatter\'s own bound (no bound of the call site)', () => {
+    const src = readFileSync(path.resolve(__dirname, '../src/watch.ts'), 'utf8');
+    const calls = src.split('\n').filter((l) => l.includes('delegationPassSlowLine(') && !/^\s*export function delegationPassSlowLine\(/.test(l));
+    expect(calls, 'one call site').toHaveLength(1);
+    expect(calls[0]!, 'the call passes the fields alone, so the default bound holds').toMatch(/console\.warn\(delegationPassSlowLine\(f\)\);/);
+  });
 });
 
 // ── R6 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
