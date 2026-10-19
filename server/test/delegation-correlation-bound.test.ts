@@ -9,13 +9,21 @@
 //      counts the reads of its own properties. A run builds ONE world of forty census records (the arrays always hold the evidence, the
 //      windows and the metas of all forty) and runs the lane's calls over the first n of them, in the order and under the conditions
 //      `watch.ts` makes them (`correlateDelegation` for every tree around a FRESH input object per call, then `delegationMarkForced` and
-//      `delegationUnknownWindowForced`, then `delegationLostEvidenceForced`), the lane's two lost windows included. A pass over 20 trees
-//      and one over 40 must read each array the same number of times, and the busiest element of each family the same number of times.
+//      `delegationUnknownWindowForced`, then `delegationLostEvidenceForced`), the lane's two lost windows included in shapes (i)-(iv). A pass
+//      over 20 trees and one over 40 must read each array the same number of times, and the busiest element of each family the same number
+//      of times.
 //      No clock. The floor keeps the row from passing for the wrong reason: the arrays a shape does traverse at main are still traversed.
 //      The element count means a per-pass index answers from data copied ONCE per pass, never by re-reading a shared row per tree: every
 //      rung-3 hit resolves to the same agent activity row, so a pass that asks that row a question per tree reads it in proportion to the
-//      trees even if it builds no index over the array. The pin also sees the sole-added index being rebuilt per call (M15): the builder reads
-//      each window's fields (`lost`, `after`, ...) on every build, so a rebuild per tree shows as window reads that grow with the trees.
+//      trees even if it builds no index over the array. Shapes (i)-(iv) see a per-tree rebuild of the sole-added index (M15), or a per-tree
+//      scan of the held windows (M14), only when it reads a window field (`lost`, `after`, ...): then window reads grow with the trees. The
+//      field-free forms (the delta taken from `listingDeltaOf` alone) show only in shape (v): its list has no lost window, so the partition
+//      hands the counted array back as `held` and a per-tree scan of it counts as array reads. (v) is a list the lane never builds; it pins
+//      the partition's identity path.
+//
+//   Two limits. (1) Every shape stops short of a rung-4 candidate, so the candidate path (the overlap scan over `held`, per tree) is not
+//   measured here: a disclosed residual. (2) Read counting cannot see a per-tree rebuild of the span and start indexes (`spanIndexOf`,
+//   `startIndexOf`; for example `nullAddingStartsOf` without its cache), because they are built from data already parsed and memoised.
 //
 // Fixtures only: names are `lane-a-demo`, `lane-b-demo`, `project-a`, `/fixture/...`. No file is read or written.
 import { describe, it, expect } from 'vitest';
@@ -209,13 +217,14 @@ function countedElement<X extends object>(target: X, gate: Gate, family: Tally[]
 
 // ── the worlds ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-type Shape = 'unresolved' | 'horizon' | 'restart' | 'mix';
-const SHAPES: readonly Shape[] = ['unresolved', 'horizon', 'restart', 'mix'];
+type Shape = 'unresolved' | 'horizon' | 'restart' | 'mix' | 'unlost';
+const SHAPES: readonly Shape[] = ['unresolved', 'horizon', 'restart', 'mix', 'unlost'];
 const SHAPE_NOTE: Record<Shape, string> = {
   unresolved: '(i) no window adds a tree\'s record, no horizon: unresolved',
   horizon: '(ii) the same windows, a rung-3 hit at every tree and every tree under an evidence horizon, odd trees path-marked',
   restart: '(iii) every window\'s repository is lost, as after a restart',
   mix: '(iv) even trees are agent records that link at rung 2, odd trees link at rung 3',
+  unlost: '(v) (i)\'s records and windows without the lane\'s two lost windows: the partition hands the counted list back as held',
 };
 const RECORDS = 40;
 const READY_AT = Date.UTC(2026, 9, 14) - 3600_000;        // the lane's latest ready instant: before every fixture window
@@ -233,8 +242,10 @@ const nameOf = (shape: Shape, i: number): string => (shape === 'mix' && i % 2 ==
  *   twos      two windows of lane-b-demo adding TWO names;
  *   none      one window of lane-b-demo that adds nothing;
  *   unknown   one closed window of lane-c-demo whose repository is null, adding nothing.
- * The lane's own two lost windows (the retention floor and the not-ready window, built by the lane's own functions) close the list. No shape
- * has a rung-4 candidate.
+ * Shapes (i)-(iv) end the list with the lane's own two lost windows (the retention floor and the not-ready window, built by the lane's own
+ * functions). Shape (v), `unlost`, is (i) WITHOUT them: a list the lane never builds, because the lane always has those two. With no lost
+ * window the partition hands the counted list itself back as `held`, so (v) pins that identity path: a per-tree scan of `held` is a scan of
+ * the counted array. No shape has a rung-4 candidate.
  */
 function boundRun(shape: Shape, trees: number) {
   const common = ['main-wt', 'old-wt'];
@@ -249,7 +260,7 @@ function boundRun(shape: Shape, trees: number) {
     sessionId: d.sessionId, parentIncarnation: INC, toolUseId: `toolu_${d.label}`, repository: d.repository,
     startedAt: T(1000 * k + 101), endedAt: T(1000 * k + 101 + 7 + k), before: [...common], after: [...common, ...d.add],
   }));
-  const plainWindows = [...held, ...delegationLostWindowsOf([], [], LANE_NOW), delegationNotReadyWindowOf(READY_AT)];
+  const plainWindows = shape === 'unlost' ? held : [...held, ...delegationLostWindowsOf([], [], LANE_NOW), delegationNotReadyWindowOf(READY_AT)];
 
   // `kind` of tree i: 0 plain, 1 horizon only, 2 rung-3 hit and horizon, 3 rung-3 hit, horizon and a path mark
   const kindOf = (i: number): number => (shape === 'horizon' ? 2 + (i % 2) : shape === 'restart' ? i % 4 : 0);
@@ -289,7 +300,7 @@ function boundRun(shape: Shape, trees: number) {
     evidenceHorizon: shape === 'mix' ? null : kindOf(i) >= 1 ? horizon : null,
   }));
   // The index covers all forty records, whatever number the lane correlates, so the 20- and the 40-tree worlds differ only in their trees.
-  const dropped = shape === 'unresolved' ? marksFor([])
+  const dropped = shape === 'unresolved' || shape === 'unlost' ? marksFor([])
     : shape === 'mix' ? indexDelegationDropped([])
       : marksFor(Array.from({ length: RECORDS }, (_, i) => i).filter((i) => kindOf(i) === 3).map((i) => WTP(REPO, nameOf(shape, i))));
   // The lane computes this once per pass, over its own windows: counting is off.
@@ -315,9 +326,11 @@ const FLOOR: Record<Shape, readonly ArrayName[]> = {
   restart: ['listingWindows', 'activities', 'acceptedEvidence', 'pointMetas'],
   // (iv) rung 2 reads the activity rows, the metas and the evidence of the even trees, rung 3 those of the odd ones.
   mix: ['listingWindows', 'activities', 'acceptedEvidence', 'pointMetas'],
+  // (v) the same reads as (i).
+  unlost: ['listingWindows', 'acceptedEvidence'],
 };
 
-describe('D-5642 R1: a pass reads each pass-wide array, and each of its elements, a constant number of times however many trees it correlates', () => {
+describe('D-5642 R1: a pass reads each pass-wide array, and each of its elements, a constant number of times however many trees it correlates, over shapes with no rung-4 candidate', () => {
   for (const shape of SHAPES) {
     describe(SHAPE_NOTE[shape], () => {
       it('the scenario answers as intended (a verdict list that drifts reds here, not in the pin)', () => {
@@ -352,6 +365,7 @@ const EXPECTED_ROWS: Record<Shape, readonly Row[]> = {
   // by i % 4: plain, horizon only (a lost creator alone decides nothing, and tree 1 has no rung-3 hit), a rung-3 hit and horizon, that and a path mark
   restart: Array.from({ length: 20 }, (_, i) => [PLAIN, PLAIN, HELD_BY_LOST_EVIDENCE, HELD_BY_PATH_MARK][i % 4]!),
   mix: Array.from({ length: 20 }, (_, i): Row => [i % 2 === 0 ? 'linked:2' : 'linked:3', null, null]),
+  unlost: Array.from({ length: 20 }, () => PLAIN),
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
