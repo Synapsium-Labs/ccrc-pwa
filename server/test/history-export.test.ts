@@ -1334,6 +1334,11 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     const ex = runCli(box, ['expand', rid(1)], { env: withPane(box, ID) });
     expect(ex.code, `${ex.stdout}\n${ex.stderr}`).toBe(0);
     expect(ex.stdout, 'expand on the pruned first body still says so').toContain('content pruned on');
+    expect(ex.stdout, 'and names the placed late variant (D-4596)').toContain('variant cause=');
+    const exj = runCli(box, ['expand', rid(1), '--json'], { env: withPane(box, ID) });
+    expect(exj.code, `${exj.stdout}\n${exj.stderr}`).toBe(0);
+    const item1 = ((exj.json?.['items'] ?? []) as Array<Record<string, unknown>>).find((i) => i['uuid'] === rid(1));
+    expect(item1?.['variants_total'], 'expand --json counts the placed late variant over the pruned first body (D-4596)').toBe(1);
     expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
     // D-5396 (refined): the rebuild marks row 1 with the segment that carries what it needs. Segment 2 holds row 1 but not the
     // pruned first body (its stub is in segment 3 alone), so a mark naming segment 2 would outlive the loss of segment 3.
