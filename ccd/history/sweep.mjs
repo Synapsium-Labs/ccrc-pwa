@@ -8745,7 +8745,16 @@ export async function exportStep(db, ctx) {
     });
   }
   // D-5641 (history-export-damaged-record-remeasured): no check is owed, so a name the damaged record holds is re-measured.
-  if (!markCheck.check) remeasureDamagedSegments(db, ctx);
+  // A busy answer ends the tick, as everywhere; any other throw is a bug in the re-measure, and it is counted
+  // (export_marks_check_failed, as a throw inside the check is) and reported, so it fails no scheduled pass: the step goes
+  // on to the export pass, and the next step re-measures again. ctx.deps.remeasureDamaged is an in-process test's seam (D-4247).
+  if (!markCheck.check) {
+    try { (ctx.deps?.remeasureDamaged ?? remeasureDamagedSegments)(db, ctx); } catch (e) {
+      if (isBusy(e)) throw e;
+      process.stderr.write(`history-sweep: the damaged-segment re-measure failed: ${e && e.message ? e.message : String(e)}\n`);
+      countOutside(db, 'export_marks_check_failed');
+    }
+  }
   const nowMs = ctx.now();
   const msOf = (k) => {
     const v = getMeta(db, k);
@@ -8879,8 +8888,11 @@ function bindFactKeys(db) {
  *  store_id, under the name its seq and writer give). Every other listed name is `damaged`, with the verdict that failed
  *  it, and the caller treats it as missing. A header read and one read-only open per listed segment; no quick_check (its
  *  cost grows with the whole export). Only a segment-unreadable StoreError is a verdict; any other throw is a bug and
- *  propagates, so exportStep counts the check failed and it runs again. Nothing under export/ is written, renamed or
- *  removed here. */
+ *  propagates to the caller. From checkSegmentMarks it reaches exportStep's catch, which counts the check failed
+ *  (export_marks_check_failed), records the stop `failed` and leaves the done stamp unwritten, so the check runs again. From
+ *  remeasureDamagedSegments it reaches the catch around that call in exportStep (D-5641), which counts
+ *  export_marks_check_failed, prints one stderr line and lets the step go on to the export pass; the next step re-measures
+ *  again. A busy answer is rethrown by both, and ends the tick. Nothing under export/ is written, renamed or removed here. */
 function segmentsWholeAndOwn(dir, names, storeId) {
   const present = [];
   const damaged = [];

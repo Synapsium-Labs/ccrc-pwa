@@ -8954,11 +8954,14 @@ function markCheckOwnRemedy(word, h) {
  *  history-off holds that tick (sweep's scheduledPass ends before it opens the store) while the three binding verbs
  *  still run under it (§8.4), so the operator holds the ticks until the copy is whole. One text, two readers: the
  *  store-unbound remedy, read before the adopt (`'before the adopt'`), and the adopt's carry line, printed after its
- *  bind (`'before you copy'`). SWITCHES.off is the switch's one spelling (O13). Declared below HEALTH_REMEDIES,
+ *  bind (`'before you copy'`, which adds that the next tick comes within minutes, the bind having armed the check). SWITCHES.off is the switch's one spelling (O13). Declared below HEALTH_REMEDIES,
  *  which calls it while the module loads: a function declaration is hoisted whole, and every const it reads
  *  (SWITCHES, HISTORY_ROOT_REL, EXPORT_DIR) is initialised above HEALTH_REMEDIES. */
 export function carryHoldAdvice(when) {
-  return `touch ~/${SWITCHES.off} ${when} and remove it only once both directories are here, complete and matching their source: a tick before then clears the export mark of every segment not here whole, and its rows export again`;
+  // After the bind (`'before you copy'`) the check is already armed, and the timer's next tick, within minutes, clears the
+  // marks of every segment not here whole: the hold is needed NOW, so the line says so. Before the adopt nothing is armed yet.
+  const timing = when === 'before you copy' ? `${when} and before the next tick, which comes within minutes (the bind has armed the check)` : when;
+  return `touch ~/${SWITCHES.off} ${timing} and remove it only once both directories are here, complete and matching their source: a tick before then clears the export mark of every segment not here whole, and its rows export again`;
 }
 
 /** The store-unbound remedy's carry half (D-5635): the two directories a store's id keys (`<store_id>` when the id is

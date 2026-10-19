@@ -1991,7 +1991,8 @@ export function setSegmentSeq(temp, seq) {
   }
 }
 
-/** The read-only handle on a published segment (§9.15 "Who reads it": the recovery step only). A path that is not a
+/** The read-only handle on a published segment (§9.15 "Who reads it": the recovery step, and, as the second reader, the
+ *  check after a bind: read-only, and only a whole segment's meta). A path that is not a
  *  non-empty regular file (a link, a directory, a truncated file) is refused, never followed or adopted. */
 export function openSegment(path) {
   let st;

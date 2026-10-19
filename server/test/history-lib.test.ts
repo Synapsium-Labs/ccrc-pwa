@@ -4306,7 +4306,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     expect(r).toContain(loss);
     expect(r, 'the bind half is unchanged').toContain(`if store ${STORE} is another box's, remove the ~/.ccrc/history/db link or move the DB aside`);
     expect(healthLib.carryHoldAdvice('before you copy')).toBe(
-      `touch ~/.ccrc/history-off before you copy and remove it only once both directories are here, complete and matching their source: ${loss}`);
+      `touch ~/.ccrc/history-off before you copy and before the next tick, which comes within minutes (the bind has armed the check) and remove it only once both directories are here, complete and matching their source: ${loss}`);
   });
   it('store-missing names --restore with the backup db/backups holds, and --rebuild', () => {
     const r = healthLib.deriveHealth(base({ exit: 5, reason: 'store-missing', backupsDb: ['20261001T000000Z.db'] }));

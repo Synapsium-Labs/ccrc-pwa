@@ -1201,7 +1201,7 @@ describe('C55: doctor --adopt (W1-B2 Task 26; spec §8.4)', () => {
       `the operator, from a terminal outside any session: if the box this store left still has ~/.ccrc/history/journal/${storeId}/`);
     // D-5635: a carry after the bind holds the ticks with history-off until it is whole, said where the operator reads it.
     expect(r.out.replace(/\r/g, '')).toContain(
-      "their file names never collide with this box's; if you copy them after this adopt, touch ~/.ccrc/history-off before you copy and remove it only once both directories are here, complete and matching their source");
+      "their file names never collide with this box's; if you copy them after this adopt, touch ~/.ccrc/history-off before you copy and before the next tick, which comes within minutes (the bind has armed the check) and remove it only once both directories are here, complete and matching their source");
     expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
     const writer = fs.readFileSync(P.writer, 'utf8').trim();
     expect(writer).toMatch(/^[0-9a-f]{8}$/);
@@ -5358,6 +5358,17 @@ describe('a live copy keeps an entry\'s structure on a tie (wave 5h-1 Task 6; D-
   ).get(uuid) as object) });
   const deadOf = (db: DatabaseSync, fam: X10Family): number =>
     Number((db.prepare('SELECT file_id FROM ingest_files WHERE source_key = ?').get(exportedSourceKey(fam.path, X10_DEV, fam.ino)) as { file_id: number }).file_id);
+  /** One ingest chunk (for writeChunk) carrying `x` as a single row of `fam`'s transcript, read from live file `fileId` at struct rank `rankNs`. */
+  const liveChunkOf = (fam: X10Family, transcriptPk: number, fileId: number, x: X10Text, rankNs: bigint): Record<string, unknown> => ({
+    blobs: new Map([[segmentSha(x.text).toString('hex'), { sha: segmentSha(x.text), z: null, rawLen: 0 }]]), counts: new Map(),
+    rows: [{
+      kind: 'row', at: x.line, provenance: 'operator', sha: segmentSha(x.text), json: '{}', ftsText: null, ftsOverCap: false, boundary: null, kept: null,
+      entry: { uuid: x.uuid, type: 'user', subtype: null, role: 'user', model: null, parentUuid: null, tsMs: x.tsMs, requestId: null,
+        apiBlockIndex: null, msgId: null, sourceToolUseId: null, toolName: null, isCompactSummary: 0 },
+    }],
+    transcriptPk, fileId, rankNs, first: null, cursor: { offset: 0, tailSha: null }, size: 0, mtimeNs: 0n, rawError: null,
+    nowMs: Date.now(), pairIdx: null, ccUuid: fam.uuid,
+  });
 
   it('replay: a segment carrying an entry at the rank the store holds it leaves the structure on the live file; a newer carried rank still takes it to the exported: row', async () => {
     const { box, ids, db } = x10Store('ccrc-history-5h-tie-replay-');
@@ -5417,16 +5428,7 @@ describe('a live copy keeps an entry\'s structure on a tie (wave 5h-1 Task 6; D-
       expect(texts.map((x) => structOf(db, x.uuid)['file']), 'CONTROL: replay moved both onto the exported: row').toEqual([dead, dead]);
       // The live file is read again from the backup's cursor: texts[0] at R (its file now has the carried copy's mtime), and
       // texts[1] at R - 1 (an older read). One chunk each, through ingest's own writeChunk, on the LIVE file_id.
-      const chunkOf = (x: X10Text, rankNs: bigint): Record<string, unknown> => ({
-        blobs: new Map([[segmentSha(x.text).toString('hex'), { sha: segmentSha(x.text), z: null, rawLen: 0 }]]), counts: new Map(),
-        rows: [{
-          kind: 'row', at: x.line, provenance: 'operator', sha: segmentSha(x.text), json: '{}', ftsText: null, ftsOverCap: false, boundary: null, kept: null,
-          entry: { uuid: x.uuid, type: 'user', subtype: null, role: 'user', model: null, parentUuid: null, tsMs: x.tsMs, requestId: null,
-            apiBlockIndex: null, msgId: null, sourceToolUseId: null, toolName: null, isCompactSummary: 0 },
-        }],
-        transcriptPk, fileId: live, rankNs, first: null, cursor: { offset: 0, tailSha: null }, size: 0, mtimeNs: 0n, rawError: null,
-        nowMs: Date.now(), pairIdx: null, ccUuid: fam.uuid,
-      });
+      const chunkOf = (x: X10Text, rankNs: bigint): Record<string, unknown> => liveChunkOf(fam, transcriptPk, live, x, rankNs);
       SW.writeChunk(db, chunkOf(texts[0]!, R));
       SW.writeChunk(db, chunkOf(texts[1]!, R - 1n));
       expect(structOf(db, texts[0]!.uuid), 'a live copy beats an exported: holder at an equal rank')
@@ -5434,6 +5436,32 @@ describe('a live copy keeps an entry\'s structure on a tie (wave 5h-1 Task 6; D-
       expect(structOf(db, texts[1]!.uuid), 'CONTROL: an older live copy never takes the structure')
         .toEqual({ file: dead, status: 'exported', rank: String(R) });
       expect(x10Count(db, 'entry_variants'), 'CONTROL: the same bodies made no variant').toBe(0);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  // RV15's surviving arm (final fix FX1): between two LIVE copies an equal rank goes to the larger file_id. Deleting
+  // `excluded.struct_file_id > entries.struct_file_id OR` from ENTRY_UPSERT's ?21 arm left every suite green until this case.
+  it('ingest: between two live copies at one rank the larger file_id takes the structure; a smaller one does not take it back', () => {
+    const { db } = x10Store('ccrc-history-5h-tie-live-');
+    try {
+      const texts = x10Texts(0xd30, 1, 'zqtielive', Date.now() - 400 * X10_DAY);
+      const fam: X10Family = { uuid: x10U(0xd3), path: '/home/u/live/tie-live-a.jsonl', ino: 9965, texts };
+      const R = BigInt(texts[0]!.tsMs) * 1_000_000n;
+      const { live: low, transcriptPk } = x10LiveStore(db, fam, () => R);
+      // a second LIVE file of the same transcript, created after the first, so its file_id is the larger
+      const high = Number(db.prepare("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, ?, '', ?, 'live', 1)")
+        .run(X10_DEV, 9966, transcriptPk).lastInsertRowid);
+      db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, ?, ?)').run('/home/u/live/tie-live-b.jsonl', high, Date.now());
+      expect(high, 'CONTROL: the second live row has the larger file_id').toBeGreaterThan(low);
+      expect(structOf(db, texts[0]!.uuid), 'CONTROL: the entry starts on the first live file at R').toEqual({ file: low, status: 'live', rank: String(R) });
+      SW.writeChunk(db, liveChunkOf(fam, transcriptPk, high, texts[0]!, R));
+      expect(structOf(db, texts[0]!.uuid), 'a live copy with the larger file_id takes the structure at an equal rank')
+        .toEqual({ file: high, status: 'live', rank: String(R) });
+      SW.writeChunk(db, liveChunkOf(fam, transcriptPk, low, texts[0]!, R));
+      expect(structOf(db, texts[0]!.uuid), 'CONTROL: a live copy with the smaller file_id does not take it back')
+        .toEqual({ file: high, status: 'live', rank: String(R) });
     } finally {
       closeWriter(db);
     }
