@@ -258,6 +258,18 @@ be discovered:
   any kind. `ccd-cap-scopes` is not installed there either — it caps cgroup scopes, and
   there are none.
 
+**The launchd class of the jobs.** The server's (or agent's) job and every session's job carry
+`ProcessType`, `Background` by default — launchd's lowest CPU and I/O class. On a box busy with
+other work a Background job is starved, not merely slowed: the server can take minutes to reach
+`listen`, every `ccrc update` health gate then fails and restores, and the sessions run behind
+everything else. The first word of `~/.ccrc/launchd-class` — `Standard`, `Adaptive` or
+`Interactive` — changes the class (an operator-owned file, like `~/.ccrc/remote-control`; nothing
+writes it). It is read when `ccrc install` (and so every `ccrc update`) writes the server's (or agent's) job;
+session jobs still carry `Background` until their writers adopt the same helper. launchd keeps a loaded job's old
+definition until that job is reloaded, so a running session takes the new class when its job is
+next loaded. An unknown word reads as `Background`; `ccrc install` names it on stderr, while
+session callers discard stderr, so check the file itself when a session's class surprises you.
+
 `ccrc doctor` checks all of this and tells you which one is missing, rather than failing
 somewhere further in.
 
