@@ -33,7 +33,8 @@ const SHELLS = ['sh', 'bash', 'zsh'].filter((s) => spawnSync('sh', ['-c', `comma
 function runBlock(shell: string, block: string): { dir: string; argv: string; stdin: string } {
   const dir = mkTmp('ccrc-apr-brief-');
   writeFileSync(path.join(dir, 'api'), '#!/bin/sh\nprintf \'%s\\n\' "$*" > "$OUT/argv"\ncat > "$OUT/stdin"\n', { mode: 0o755 });
-  const script = `cd '${dir}' || exit 9\nid=project-a-wide-meadow\nuuid=00000000-0000-4000-8000-000000000001\nAPI=./api\n${block}`;
+  // The scratch dir reaches the shell through $OUT, never spliced into the script's text.
+  const script = `cd "$OUT" || exit 9\nid=project-a-wide-meadow\nuuid=00000000-0000-4000-8000-000000000001\nAPI=./api\n${block}`;
   const r = spawnSync(shell, ['-c', script], { encoding: 'utf8', env: { ...process.env, OUT: dir } });
   expect(r.status, `${shell}: ${r.stderr}`).toBe(0);
   return { dir, argv: readFileSync(path.join(dir, 'argv'), 'utf8'), stdin: readFileSync(path.join(dir, 'stdin'), 'utf8') };
