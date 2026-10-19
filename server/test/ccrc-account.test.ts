@@ -36,6 +36,7 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { PROVIDERS, PROVIDER_IDS } from '../../shared/providers.js';
 import { markGenerated } from '../../shared/mark.mjs';
@@ -3928,7 +3929,7 @@ if [ "$1" = -p ] && [ "$2" = "$HOME/.cc-sessions" ]; then
 fi
 exec /bin/mkdir "$@"
 `, { mode: 0o755 });
-    const pair = spawnSync(BASH, ['-c',
+    const pair = spawnSyncGroup(BASH, ['-c',
       '"$1" account disable --id claude >"$HOME/claude.out" 2>"$HOME/claude.err" & p1=$!\n'
       + '"$1" account disable --id alt-max >"$HOME/alt-max.out" 2>"$HOME/alt-max.err" & p2=$!\n'
       + 'wait "$p1" || :\nwait "$p2" || :\n', '_', ccrcIn(home)],
@@ -6772,7 +6773,7 @@ describe('ccrc account remove', () => {
     const fifo = make('ccrc-account-remove-registry-fifo-');
     const made = spawnSync('mkfifo', [field(fifo)], { encoding: 'utf8' });
     expect(made.status, made.stderr).toBe(0);
-    const fr = spawnSync(BASH, [ccrcIn(fifo), 'account', 'remove', '--id', 'alt-max'],
+    const fr = spawnSyncGroup(BASH, [ccrcIn(fifo), 'account', 'remove', '--id', 'alt-max'],
       { env: env(fifo), encoding: 'utf8', timeout: 2_000 });
     expect(fr.error, 'remove blocked while reading a FIFO registry field').toBeUndefined();
     expect(fr.status).toBe(1);
@@ -6955,7 +6956,7 @@ describe('ccrc account remove', () => {
       + 'printf %s alt-max > "$HOME/.cc-sessions/orchard-api.wrapper"\n'
       + 'flock -u 9\n'
       + 'wait "$p"; printf \'%s\' "$?" > "$HOME/remove.status"\n';
-    const pair = spawnSync(BASH, ['-c', script, '_', ccrcIn(home)],
+    const pair = spawnSyncGroup(BASH, ['-c', script, '_', ccrcIn(home)],
       { env: env(home), encoding: 'utf8', timeout: 10_000 });
     expect(pair.error, pair.stderr).toBeUndefined();
     expect(readFileSync(join(home, 'remove.status'), 'utf8')).toBe('1');
@@ -7011,7 +7012,7 @@ describe('ccrc account remove', () => {
         + ': > "$HOME/drop-release"\n'
         + 'wait "$p1"; printf \'%s\' "$?" > "$HOME/remove.status"\n'
         + 'wait "$p2"; printf \'%s\' "$?" > "$HOME/marker.status"\n';
-      const pair = spawnSync(BASH, ['-c', script, '_', ccrcIn(home)],
+      const pair = spawnSyncGroup(BASH, ['-c', script, '_', ccrcIn(home)],
         { env: env(home), encoding: 'utf8', timeout: 10_000 });
       expect(pair.error, pair.stderr).toBeUndefined();
       expect(readFileSync(join(home, 'remove.status'), 'utf8')).toBe('0');
@@ -7069,7 +7070,7 @@ describe('ccrc account remove', () => {
       + ': > "$HOME/drop-release"\n'
       + 'wait "$p1"; printf \'%s\' "$?" > "$HOME/remove.status"\n'
       + 'wait "$p2"; printf \'%s\' "$?" > "$HOME/disable.status"\n';
-    const pair = spawnSync(BASH, ['-c', script, '_', ccrcIn(home)],
+    const pair = spawnSyncGroup(BASH, ['-c', script, '_', ccrcIn(home)],
       { env: env(home), encoding: 'utf8', timeout: 10_000 });
     expect(pair.error, pair.stderr).toBeUndefined();
     expect(readFileSync(join(home, 'remove.status'), 'utf8')).toBe('0');
@@ -7118,7 +7119,7 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
       'cp "$HOME/.ccrc/accounts.json" "$HOME/roster-during.json"',
       'flock -u 9',
     ].join('\n');
-    const r = spawnSync(BASH, ['-c', script, '_', ccrcIn(home), BASH],
+    const r = spawnSyncGroup(BASH, ['-c', script, '_', ccrcIn(home), BASH],
       { env: env(home), encoding: 'utf8', input: stdin, timeout: 20_000 });
     expect(r.error, r.stderr).toBeUndefined();
     return {
@@ -7216,7 +7217,7 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
     const home = box('ccrc-account-lock-reentrant-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     mkdirSync(join(home, '.cc-sessions'), { recursive: true });
-    const r = spawnSync(BASH, ['-c',
+    const r = spawnSyncGroup(BASH, ['-c',
       `. ${JSON.stringify(ccrcIn(home))}\n`
       + '_acct_marker_lock "Nothing was written."\n'
       + 'first="$ACCT_MARKER_LOCK_FD"\n'
@@ -7229,6 +7230,43 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
     const [first, second] = (r.stdout ?? '').trim().split(' ');
     expect(first, 'no descriptor was opened at all').toBeTruthy();
     expect(second, 'the second call opened a second descriptor').toBe(first);
+  });
+
+  it('a wedged second acquisition is killed WITH its flock: no lock holder outlives the timeout (#172, D-5894)', () => {
+    // The case above exists for the run where the guard is gone, and on that run
+    // `spawnSync`'s timeout killed only `bash`: the `flock` it had started waited
+    // on, reparented, holding the fixture's lock after the fixture was deleted.
+    // Measured: seven such `flock`s, about eleven days old, one per red run. This
+    // case FORCES that wedge (the guard's variable is emptied between the two calls,
+    // which is exactly what deleting the guard does) and asserts the run left no
+    // process holding the lock. It reds if the runner above stops killing the
+    // child's whole process group.
+    const lsof = spawnSync('sh', ['-c', 'command -v lsof'], { encoding: 'utf8' });
+    expect(lsof.status, 'lsof is needed to see who holds the lock').toBe(0);
+    const home = box('ccrc-account-lock-wedge-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    const r = spawnSyncGroup(BASH, ['-c',
+      `. ${JSON.stringify(ccrcIn(home))}\n`
+      + '_acct_marker_lock "Nothing was written."\n'
+      + 'ACCT_MARKER_LOCK_FD=\n'
+      + '_acct_marker_lock "Nothing was written."\n'],
+    { env: env(home), encoding: 'utf8', timeout: 2_000 });
+    expect((r.error as NodeJS.ErrnoException | undefined)?.code,
+      `the forced wedge did not wedge, so this case measured nothing: ${r.status} ${r.stderr}`).toBe('ETIMEDOUT');
+    const lock = join(home, '.cc-sessions', '.account-placement.lock');
+    expect(existsSync(lock), 'the lock file was never made').toBe(true);
+    // SIGKILL is delivered, not awaited: give the kernel a moment to finish.
+    let holders = '';
+    for (let i = 0; i < 40; i++) {
+      holders = spawnSync('lsof', ['-t', '--', lock], { encoding: 'utf8' }).stdout.trim();
+      if (holders === '') break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+    for (const pid of holders.split('\n').filter(Boolean)) {
+      try { process.kill(Number(pid), 'SIGKILL'); } catch { /* gone */ }
+    }
+    expect(holders, 'a process still holds the lock after the timeout: the flock outlived its bash').toBe('');
   });
 
   it('every caller of the shared lock names what still stands', () => {
@@ -10594,38 +10632,55 @@ describe('ccrc account check: the probe', () => {
       const real = spawnSync(BASH, ['-c', `command -v ${name}`], { encoding: 'utf8' })
         .stdout.trim();
       expect(real, `this box has no ${name} to link`).toBeTruthy();
-      symlinkSync(real, join(bin, name));
+      if (name !== 'sleep') { symlinkSync(real, join(bin, name)); continue; }
+      // THE SLEEPER THIS CASE ORPHANS ON PURPOSE outlives it by up to its bound
+      // (10 s below), and the suite's leak check (#172, D-5894) rightly fails a
+      // run it outlives. So `sleep` here is the real one behind a wrapper that
+      // records its pid first (`exec`, so the pid is the sleeper's), and the
+      // `finally` below collects what this case started. Still a real `sleep` on
+      // PATH, which is all the guards ask.
+      writeFileSync(join(bin, 'sleep'),
+        `#!/bin/sh\necho $$ >> ${JSON.stringify(join(home, 'sleepers'))}\nexec ${JSON.stringify(real)} "$@"\n`,
+        { mode: 0o755 });
     }
-    // THE GUARDS ARE THE HALF THAT KEEPS THIS FROM PASSING VACUOUSLY: with a
-    // coreutils deadline binary still reachable the shim never reaches its
-    // fallback at all, and with no `sleep` the watcher exits before it can
-    // orphan anything. Either way the case would be green about nothing.
-    const guards = [
-      `export PATH=${JSON.stringify(bin)}`,
-      'if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then',
-      '  echo "a coreutils deadline binary is still reachable: the fallback never ran" >&2; exit 90',
-      'fi',
-      'command -v sleep >/dev/null 2>&1 || { echo "no sleep: the arm under test never runs" >&2; exit 91; }',
-    ];
-    const t0 = Date.now();
-    const r = sourceRun(home, [...guards,
-      'out="$(_plat_timeout 10 echo hi)"; rc=$?',
-      'printf \'%s|%s\' "$out" "$rc"'].join('\n'));
-    const ms = Date.now() - t0;
-    expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout, 'the command\'s own answer did not survive the redirection').toBe('hi|0');
-    expect(ms, `the substitution blocked for ${ms}ms after the command had answered`)
-      .toBeLessThan(5000);
+    try {
+      // THE GUARDS ARE THE HALF THAT KEEPS THIS FROM PASSING VACUOUSLY: with a
+      // coreutils deadline binary still reachable the shim never reaches its
+      // fallback at all, and with no `sleep` the watcher exits before it can
+      // orphan anything. Either way the case would be green about nothing.
+      const guards = [
+        `export PATH=${JSON.stringify(bin)}`,
+        'if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then',
+        '  echo "a coreutils deadline binary is still reachable: the fallback never ran" >&2; exit 90',
+        'fi',
+        'command -v sleep >/dev/null 2>&1 || { echo "no sleep: the arm under test never runs" >&2; exit 91; }',
+      ];
+      const t0 = Date.now();
+      const r = sourceRun(home, [...guards,
+        'out="$(_plat_timeout 10 echo hi)"; rc=$?',
+        'printf \'%s|%s\' "$out" "$rc"'].join('\n'));
+      const ms = Date.now() - t0;
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout, 'the command\'s own answer did not survive the redirection').toBe('hi|0');
+      expect(ms, `the substitution blocked for ${ms}ms after the command had answered`)
+        .toBeLessThan(5000);
 
-    // …AND THE DEADLINE STILL BITES. Closing the watcher's streams must not
-    // close the watcher: the same arm, on a command that never answers, still
-    // stamps, still signals, and still reports the code every call site here
-    // branches on.
-    const slow = sourceRun(home, [...guards,
-      'out="$(_plat_timeout 1 sleep 30)"; rc=$?',
-      'printf \'%s|%s\' "$out" "$rc"'].join('\n'));
-    expect(slow.code, slow.stderr).toBe(0);
-    expect(slow.stdout, 'the bounded call no longer reports expiry').toBe('|124');
+      // …AND THE DEADLINE STILL BITES. Closing the watcher's streams must not
+      // close the watcher: the same arm, on a command that never answers, still
+      // stamps, still signals, and still reports the code every call site here
+      // branches on.
+      const slow = sourceRun(home, [...guards,
+        'out="$(_plat_timeout 1 sleep 30)"; rc=$?',
+        'printf \'%s|%s\' "$out" "$rc"'].join('\n'));
+      expect(slow.code, slow.stderr).toBe(0);
+      expect(slow.stdout, 'the bounded call no longer reports expiry').toBe('|124');
+    } finally {
+      const sleepers = join(home, 'sleepers');
+      const pids = existsSync(sleepers) ? readFileSync(sleepers, 'utf8').split('\n').filter(Boolean) : [];
+      for (const pid of pids) {
+        try { process.kill(Number(pid), 'SIGKILL'); } catch { /* it ran out its bound already */ }
+      }
+    }
 
     // ── THE POPULATION, MEASURED (D-2332) ──────────────────────────────────
     // A FLOOR AND NOT AN EXACT COUNT, deliberately: a new bounded call inside
