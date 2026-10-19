@@ -23,8 +23,8 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 | 2 | W1-B1 "capture": `lib.mjs`, `store.mjs`, `sweep.mjs`, the shim, the hook's spool line, journal + pre-migration snapshot + purge carve-out, `status`, install/uninstall/deploy, doctor `history`, lifecycle rows, `measure-history.py` (plan Tasks 3–36). Sessions see no change | fleet (shim + timer); full suite (ci.yml) | #315 | **merged** 2026-10-09 02:12Z as `69ef7102b` at head `561609adc` (run 302, after reviews 316, 344, 351 and 353 and fix rounds 1–3) |
 | 3 | W1-B2 "recall": read verbs, parser, native leaves, the skill, operator verbs (`prune`, `doctor --repair/--backup/--adopt/--restore/--rebuild/--migrate`, `reparse`), recovery step; from its reviews, schema v2 (heavy) and doctor's pass-aware freshness | fleet + skills | #404 | **merged** 2026-10-15 06:15Z as `de0ab03e1` at head `15af45165` (run 354, after reviews 441, 462, 466 and 467 and fix rounds 1–3) |
 | 4 | W1-B3 "card line": scope marker, `_hook_history_card`, the S6-R11 census re-measure | fleet (hook) | #425 | **merged** 2026-10-18 05:52Z as `7284c8501` (run 468; reviews 476, 479, 495, 503 and 586; four fix rounds and a landing round) |
-| 5 | W1-B4 "sole-copy export" (ruled Q6, e) | fleet | — | run 587 open (planned); plan re-measured on `7284c8501` (2026-10-18: 61 anchors amended in place, design unchanged); dispatched once this ledger's docs PR merges; **live on every session-hosting node before the earliest W1-k date, at the latest 2026-12-19** |
-| 5h | B2's owed hardening (below, "Owed from B2"): value-class widening with a reindex plan, the relay's multi-line stdout, the op marker's identity, lag-high's remedy, the record errata | fleet | — | its own plan, to be written; after wave 4, and after wave 5 if B4's date needs the slot |
+| 5 | W1-B4 "sole-copy export" (ruled Q6, e) | fleet | #623 | **merged** 2026-10-19 04:14Z as `ad65fb394` at head `2eca753d7` (run 587; reviews 614, 621, 623, 624 and 625; four fix rounds); **live on every session-hosting node before the earliest W1-k date, at the latest 2026-12-19** |
+| 5h | The owed hardening (below, "Owed from B2", "Owed from B3" and "Owed from B4"): B2's value-class widening with a reindex plan, the relay's multi-line stdout, the op marker's identity and lag-high's remedy; B4's bounded check after a bind with its doctor rule, and an adopt that checks its carried segments; the errata | fleet | — | run 626 (planned); its own plan, to be written |
 | 6 | W2: the headless seam, the replay driver, the quiz and the live A/B; the gate (ruled Q7, Q14) | fleet | — | after waves 3 and the backfill |
 | 7 | W3: steering (session-written leaves) | fleet (hook) | — | only if the W2 gate passes |
 | 8 | W4: subagents and `touched` | fleet | — | only if the W2 gate passes, and never before wave 5 is live |
@@ -193,34 +193,95 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 - **Operator ruling 2026-10-18: segment replay keeps the prune.** A blob the store holds as a prune tombstone stays
   body-less when a segment carries its bytes: replay inserts blobs insert-or-ignore, as B4's plan and the spec read,
   so a recovery never undoes an operator's prune. Ingest's revival on recapture (D-4589) is unchanged.
+  **Its scope, as the coordinator read it (2026-10-18, D-5397; put to the operator):** the ruling covers a tombstone
+  the store holds before a replay begins. Replay applies every segment's bytes before any segment's stubs, both
+  insert-or-ignore, so a stub from an older segment never hides the bytes a later segment carries: those bytes are a
+  revival's record (D-4589), or the pruned text §6.6 says a rebuild replays. A held tombstone still takes no bytes,
+  and `export_blob_tombstone_kept` counts each body that replay keeps out over one.
 - **Owed from B3** (wave 5h, errata only, from review 586):
   1. `single-definition.test.ts`'s comment over the set-aside token says "512-character path bound". It is 512
      bytes (`pathBytes`, pinned by `delegation-spool.test.ts`).
   2. "Drop either and only a FIFO changes the verdict" (B3's plan at its line 4934 and in D-5063, and
      `session-hook.test.ts`'s FIFO rows' comment) becomes "only a FIFO (or a device node, which only root can
      plant) changes the verdict". Ruled 2026-10-18.
+- **Wave 5 (B4), 2026-10-18 to 10-19.** Five reviews, each the held-out panel. The first two added sole-copy,
+  recovery and fleet lenses, and the last three an operator lens.
+  - **Review 614** (at `20c3375d1`): 3 important and 11 minor.
+    - F1: a pruned lost blob stranded its referrers (D-5396).
+    - F2: replay let an older segment's stub hide a later segment's bytes (D-5397).
+    - F3: an export step that started on a spent budget held silently.
+    - F6: an unlinked sidecar row naming an already-exported blob was never exported again. A grep test scoped to the
+      row's own transcript decided it: the reads missed, so it was fixed (D-5399).
+    - F4 took D-5398.
+  - **Review 621** (at `62fd2b68f`): all 14 closed; 1 important. The check after a bind writes WAL of about 1-2 times
+    the cleared blobs' stored bytes, in one transaction, outside the budget. The fix round's 78 B a mark held only
+    for narrow rows. **Ruling: restate it; do not bound it in this wave.** A correct bound is a redesign of the
+    D-5395/D-5396 path ("Owed from B4", below). The PR body's step 9 asks the operator to check for room first.
+  - **Review 623** (at `d5bbfb22c`): 2 minor. Step 8 overstated what catches a bad segment copy on an adopt. An adopt
+    registers no recovery step, so the operator's size comparison is the only guard. Fixed in text.
+  - **Review 624** (at `c18d60ab3`): no findings. CodeQL alert 135 (`js/shell-command-injection-from-environment`,
+    on a test's `sh -c` umask wrapper) then held an open review thread, and the ruleset refuses an admin merge past
+    one. Fixed in code: the child sets its own umask.
+  - **Review 625** (at `2eca753d7`): 2 wording items, carried below.
+  - Departures D-5393, D-5394, D-5395, D-5396, D-5397, D-5398 and D-5399, each defined in the plan. The rest of the
+    block is unused.
+  - Lesson: read the PR's review threads before the final review, not only at the merge. The CodeQL check read
+    green on every run while its thread stayed open.
+- **Owed from B4** (wave 5h):
+  1. Bound the check after a bind:
+     - each batch is one transaction that clears its blobs' referrers before those blobs' marks, never the blobs
+       first;
+     - batches page by a `blob_id` keyset, because `exported_seg` has no index;
+     - a batch is bounded by stored bytes and by the existing row cap, which is a memory bound;
+     - the WAL is truncated after each batch, and a checkpoint that a reader's snapshot leaves busy is not an error;
+     - no batch starts once the run budget is spent;
+     - the cleared total accumulates in each batch's transaction, and the done stamp follows the last batch.
+     Decide it against D-4762, which keeps the export outside db/'s floor.
+  2. A doctor rule for a check that cannot finish. It needs one meta word, saying why the check stopped and since
+     when, written by the check and cleared by its done stamp.
+  3. An adopt that opens or sizes each carried segment against what it should hold (review 623 F2). Until then, the
+     operator's size comparison is the only guard.
+  4. `expand --json` reports `variants: []` over a pruned primary body, though a later variant is placed. Recall's
+     `expandEntryText` returns before it reads variants, against D-4596's `variants_total`.
+  5. On a restore, an entry's structure can move onto its `exported:` dead-file row (review 614 F7, RV15's
+     tie-break).
+  6. After a rebuild, an earlier segment's mark covers the rows a later segment adds for a blob the earlier one holds,
+     D-5399's unlinked rows included. Lose the later segment and rebuild again, and those rows are gone (review 621
+     F3; named in the plan's residuals).
+  7. Review 624's advice: history-off holds ticks during a late carry, and a move-aside after the first tick clears
+     nothing until the next bind.
+  8. Errata (review 625): the plan's Global Constraints at its line 118 and Task 4's code block still show the
+     `/bin/sh` umask wrapper. `history-store.test.ts`'s modes case title says "inherited umask".
 - **Later, for the operator.**
   - A way to forget a mislearned secret pair. None exists: pairs are permanent by design (D-4587). My
     recommendation is to keep it that way.
   - Feeding retired box-token digests into redaction. It matters only for a store bound after a value retired;
     measured on 2026-10-10, the live store already redacts the retired values.
   - `--regex` reach without a literal (spec §8.4, rev 3.6).
+  - **Asked 2026-10-18:** is the coordinator's scope reading of the 2026-10-18 ruling (above) what was meant?
+  - **Asked 2026-10-18:** a restore whose backup holds a tombstone keeps that text body-less even when ingest revived
+    it after the backup and a later segment carries it. Should replay keep such bytes out, as now (counted by
+    `export_blob_tombstone_kept`), or take them?
 
 ## Carried constraints
 
-- **Order.** Part A merged first (#300), then B1 (#315), then B2 (#404), then B3 (#425). B4 builds on B2's and
-  B3's merged code.
-- **Peers.** The worker reads `GET /api/claims?project=ccrc-pwa` before each first edit of an existing file. B4 edits no
-  hook. Its hot files are `ccd/history/*.mjs`, the history tests, `shared/lifecycle.ts`, README and CLAUDE.md;
-  whichever PR lands second merges main and keeps both sides.
+- **Order.** Part A merged first (#300), then B1 (#315), then B2 (#404), then B3 (#425), then B4 (#623). Wave 5h
+  builds on all of them.
+- **Peers.** The worker reads `GET /api/claims?project=ccrc-pwa` before each first edit of an existing file. Wave 5h's
+  hot files are `ccd/history/*.mjs`, `ccd/history/recall.mjs` and the history tests; whichever PR lands second merges
+  main and keeps both sides.
 - **Operator acts, still owed, in this order on each session-hosting node:**
   1. If the node keeps its store on a volume, link `~/.ccrc/history/db` onto it (spec §9.3: a 0700 root and target).
   2. **Done on both nodes (measured 2026-10-15).** Once the node runs B2 (v0.0.195 or later), run `ccrc history
      doctor --migrate` from a terminal outside any session. B2's schema v2 is heavy, so a store over about 1.5 GB waits at `snapshot-needs-op`: capture pauses,
      doctor FAILs `history: migration-needs-op` (and `lag-high` after 30 min), and an update that ends there exits 3.
      The fleet box's store measured 1.54 GB on 2026-10-14. B2's PR body, "After deploy", has the measured detail.
-  3. **Still owed:** the backfill B1 left: the import's `--apply` form (B1's shim `--op import --apply`; B2's
-     `ccrc history import --apply` runs the same pass).
+  3. **Partly done:** the backfill B1 left. `ccrc history import --apply` ran on the fleet box from 2026-10-18
+     08:17Z and was stopped at 11:31Z by the operator's choice, with the transcripts imported and the sidecars only in
+     part. A re-run finishes the sidecars. Pause the sweep timer around it, because back-to-back passes take the lock.
+  4. **B4's rollout** (#623's body, "After merge"). Before an adopt or a restore whose export directory does not come
+     with it, check for room first (step 9). On an adopt, compare every carried segment's size with its source before
+     the first tick (step 8).
   A rollback to B1 after the migrate reads the store as `schema-newer` and captures nothing until the node is
   updated forward again; B1 has no restore verb.
 - **Operator acts Part A names:** a read-only `node --version` on every node before Part A merges; optionally making
@@ -231,83 +292,10 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 - **The volume.** `~/.cc-tmp` leaks ccrc test fixtures (2,327 dirs older than 60 min on 2026-10-06); every wave's
   suites add to it until disk-hygiene wave 1 lands. Workers clean up the fixtures their own runs create.
 - **Merge conflicts to expect** (spec §10.6): disk-hygiene W2 and GPT-lane Part 3a/3b edit `ccd/ccrc-doctor-checks`;
-  landing-order and continuity edit `ccd/session-hook.sh`. B4's anchors were re-measured at `7284c8501`; a worker
-  re-anchors by content on its own base.
+  landing-order and continuity edit `ccd/session-hook.sh`. A worker re-anchors by content on its own base.
 
 ## Next-wave brief
 
-Wave 5 (W1-B4 "sole-copy export") is run 587, and its brief is below as it will be dispatched once this ledger's docs
-PR merges (route: opus, ultracode, subagent sonnet, workflow on, compact 40). Wave 4's brief is in this file's history.
-
-```text
-Run 587 - programme ccrc-history, wave 5: W1-B4 "sole-copy export". Coordinator: ccrc-pwa-quiet-ridge.
-
-Ledger: docs/superpowers/programs/ccrc-history.md (on main).
-Plan: docs/superpowers/plans/2026-10-07-ccrc-history-w1-b4-export.md. Read its header first: Goal, Architecture, Global Constraints, Review Focus, File Structure. Then do Tasks 1-12 in order.
-Spec: docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md (rev 3.6). §9.15 is the export; the plan cites the sections each task needs.
-B2 (#404) and B3 (#425, 7284c8501) are MERGED. Their code on main is your base. Do not redo or rewrite it, except where a task edits it in place.
-
-Execution skill: superpowers:subagent-driven-development.
-Commit on this workspace's own branch. Do not create or switch to a separate feature branch.
-
-What the wave ships (one PR, "B4"):
-- before Claude Code deletes a transcript, the sweep copies its due rows and their unexported blobs into immutable SQLite segments beside the store, one per pass at most hourly, published by link() and marked after;
-- B2's recovery step gains export-blobs and export-rows, so a store rebuilt after its transcripts and history.db are both gone can expand, describe and scope the exported text;
-- the history-export lifecycle row, and doctor's export-due rule for a build with the writer live;
-- pins O39, O40, O43 and O44's segment case.
-
-Base: main at the commit that merges this ledger, or later.
-- The plan was written on B1's code, and re-measured on 7284c8501 (B2 and B3 merged) on 2026-10-18: 61 anchors and premises were amended in place, and the design is unchanged. The record says so above "### Pins". Re-anchor every Modify by its content; line numbers are hints.
-- The base is schema v2 (B2's index-only migration). B4 adds no migration.
-- B4 changes no hook, ccd/ccd, ccd/ccrc or deploy file. If a task seems to need one, stop and mail me.
-
-Not in this wave: wave 5h (the ledger's "Owed from B2" and "Owed from B3" lists). The open question in the ledger's "Later, for the operator" (replay and prune tombstones) stays as the plan has it: insert-or-ignore.
-
-Measuring:
-- Reds and counts marked "predicted" were written before the code existed. Run each step and record what it prints.
-- A red at a CONTROL is the fixture's to fix, never the guard's to weaken.
-- Every mutant must red when its guard is removed. If one cannot, that is a finding: report it.
-- Every vitest -t filter is a regex. Keep each regex-safe, each selecting at least one test.
-- Key-shaped fixtures are assembled at runtime.
-
-Public repo: no private name in any file, commit message, PR title or body. The public-tree clean-up (run 561) is adding a hashed ratchet class to topology-clean.test.ts. Before each push, run `grep -i -w -F -f <(cut -f2 "$(git rev-parse --path-format=absolute --git-common-dir)/info/ccrc-private-names" | grep -v '^#')` over your added lines and commit messages. It must print nothing. Without -w, a short entry also matches inside ordinary words, so judge such a hit by its line. Never print a matched token.
-
-Peers: read GET /api/claims?project=ccrc-pwa before your first edit to any existing file. README.md, CLAUDE.md, shared/lifecycle.ts, single-definition.test.ts and the history tests are often claimed; the clean-up holds several. Never edit a contested path: agree a scope by the peer protocol, or do other tasks first and mail me if nothing else is left. Whichever PR lands second merges main (never a rebase) and keeps both sides.
-
-Live safety (on top of your skill and CLAUDE.md):
-- Never run the shim, sweep.mjs, cli.mjs, any ccrc history verb, any --op, or the ccd-history-sweep unit against the live $HOME.
-- Never create or touch ~/.ccrc/history. Never enable a timer. Never run ccrc update, deploy or rollout.
-- Fixture HOMEs only (historyHelpers.ts). Remove every fixture directory and Python bytecode file your runs create.
-- Never kill processes by pattern (pkill -f, killall). Kill only PIDs or process groups you started.
-
-Suites:
-- From inside server/: ./node_modules/.bin/vitest run test/<file>.test.ts, in the foreground, with a Bash timeout of at least 600000.
-- Re-run the CLAUDE.md load flakes in isolation before calling a red real.
-- ccrc-install.test.ts takes about 790 s here: run it in -t slices.
-
-Departures:
-- The plan defines its own (D-4754 onward), in its Deviations found. Cite them by number.
-- For a departure you find while executing, take the next unused number from this run's block: 5393, 5394, 5395, 5396, 5397, 5398, 5399, 5400, 5401, 5402, 5403, 5404, 5405, 5406, 5407, 5408, 5409, 5410, 5411, 5412, 5413, 5414, 5415, 5416, 5417, 5418, 5419, 5420, 5421, 5422.
-- Define it in the plan's "## Deviations found" in the same commit that first cites it, as "- **D-<n>** — `<slug>` (Task N): <why>".
-- Never call the allocator, and never write a range.
-- Run deviation-refs after `git fetch origin main` before each push. Name every number you used in your wave-done.
-
-Not yours: merging, every rollout, B4's live-by date (on every session-hosting node before the earliest W1-k date, at the latest 2026-12-19), the operator's acts (the import's --apply), and wave 5h.
-
-Before wave-done:
-- Run a whole-branch review of your own: three Opus · high lenses (correctness, spec conformance, does-it-reproduce) with refuters. Fix what it confirms.
-- Then run every touched suite once, alone.
-Wave-done when PR B4 is open, its required checks are green (build-pwa, test (agent), test (pwa), test (server), node floor, typecheck), and your branch tip is the PR head. Your fingerprint is the workspace branch tip.
-
-Routing (clause 13; routing-matrix row "bulk work larger than one context", as waves 2 to 4):
-- main loop: Opus, ultracode, orchestrating;
-- implementer subagents: Sonnet at effort high (never below);
-- per-task reviewer: Opus at effort high;
-- scouts: Haiku; workflows on, compact threshold 40.
-- Name the model and effort explicitly on every Agent and agent() call.
-- Every subagent and workflow prompt opens with: "You are a subagent of the run 587 worker, not the worker. Do not invoke ccrc-worker. Never run ccrc-api, mail or claims. Return your report."
-- If your session is moved to a GPT lane, mail me at once.
-- Commit after each task. If the session dies, the branch is the resume point.
-
-Questions go through the AskUserQuestion rule in your skill. I answer what the spec, the plan and the ledger already decide. Anything new goes to the operator.
-```
+Wave 5h is run 626 (planned). It needs its own plan first: B2's owed hardening and the lists above ("Owed from B3"
+and "Owed from B4"). Its brief will be written here once the operator approves that plan. Wave 5's brief (run 587) is
+in this file's history.

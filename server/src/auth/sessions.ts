@@ -97,10 +97,24 @@ export interface SessionRecord {
   generation: number;
   /** A human-facing note (the device that logged in). Not used in any decision. */
   label: string;
+  /** Epoch ms of this session's last step-up (D-5512): a passkey assertion or the passphrase, proven again on
+   *  THIS session through `POST /api/auth/step-up/*`. Absent until the first one. Stamped only by
+   *  {@link SessionStore.stampAsserted}, on the requesting session only; it mints nothing, rotates nothing and
+   *  leaves `generation` alone. The only change step-up makes to the record. */
+  assertedAt?: number;
 }
 
 function sha256hex(token: string): string {
   return createHash('sha256').update(token).digest('hex');
+}
+
+/**
+ * The id a session is known by on the server: `sha256(token)` in hex, the value the store keeps in place of
+ * the token. Exported for step-up (D-5512), which binds a challenge to the session that started it and stamps
+ * that session alone; the one derivation, so the binding and the store cannot disagree.
+ */
+export function sessionIdHash(token: string): string {
+  return sha256hex(token);
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -286,6 +300,40 @@ export class SessionStore {
     return this.verifyMeasured(token, currentGeneration, now).verdict;
   }
 
+  /** The live row whose `idHash` this is, compared as `verifyMeasured` compares (length first, then
+   *  `timingSafeEqual`). Liveness (generation, TTLs) is the gate's question and is not asked again here. */
+  private rowOf(idHash: string): SessionRecord | undefined {
+    const presented = Buffer.from(idHash, 'hex');
+    if (presented.length * 2 !== idHash.length || idHash.length !== SHA256_HEX_LEN) return undefined;
+    for (const rec of this.records) {
+      const stored = Buffer.from(rec.idHash, 'hex');
+      if (stored.length === presented.length && timingSafeEqual(stored, presented)) return rec;
+    }
+    return undefined;
+  }
+
+  /**
+   * STEP-UP'S ONE WRITE (D-5512): stamp `assertedAt = now` on the session `idHash` names, and on no other.
+   * Mints nothing, rotates nothing, keeps `generation` and the row's place. `false` when no row has that id
+   * (the session ended between the gate and here), and nothing is written then.
+   */
+  async stampAsserted(idHash: string, now: number): Promise<boolean> {
+    await this.ensureLoaded();
+    const rec = this.rowOf(idHash);
+    if (rec === undefined) return false;
+    rec.assertedAt = now;
+    this.dirty = true;
+    await this.flush();
+    return true;
+  }
+
+  /** When the session `idHash` names last stepped up; `undefined` when it never has, or no row has that id.
+   *  Both mean "not fresh" to the one reader (`stepup.ts`), which refuses either the same way. SYNCHRONOUS,
+   *  like `verify`: the step-up guard sits on request paths. */
+  assertedAtOf(idHash: string): number | undefined {
+    return this.rowOf(idHash)?.assertedAt;
+  }
+
   /** Log out ONE session — the ordinary logout. A no-op (and no write) if the token
    *  matches nothing. */
   async revokeThis(token: string): Promise<void> {
@@ -393,13 +441,16 @@ function parseRecords(raw: unknown): SessionRecord[] {
   const out: SessionRecord[] = [];
   for (const entry of raw) {
     if (!isRecord(entry)) continue;
-    const { idHash, createdAt, lastSeenAt, generation, label } = entry;
+    const { idHash, createdAt, lastSeenAt, generation, label, assertedAt } = entry;
     if (typeof idHash !== 'string' || !/^[0-9a-f]+$/.test(idHash) || idHash.length !== SHA256_HEX_LEN) continue;
     if (typeof createdAt !== 'number' || !Number.isFinite(createdAt)) continue;
     if (typeof lastSeenAt !== 'number' || !Number.isFinite(lastSeenAt)) continue;
     if (typeof generation !== 'number' || !Number.isInteger(generation)) continue;
     if (typeof label !== 'string') continue;
-    out.push({ idHash, createdAt, lastSeenAt, generation, label });
+    // A garbled `assertedAt` drops the STAMP, not the row: the session is still good, and a missing stamp is
+    // "not fresh", which fails shut (D-5512).
+    const stamp = typeof assertedAt === 'number' && Number.isFinite(assertedAt) ? { assertedAt } : {};
+    out.push({ idHash, createdAt, lastSeenAt, generation, label, ...stamp });
   }
   return out;
 }

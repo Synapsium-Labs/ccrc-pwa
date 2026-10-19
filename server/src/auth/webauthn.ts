@@ -437,24 +437,43 @@ export const MAX_LIVE_CHALLENGES = 64;
  * passkey state that SHOULD be lost on restart.
  */
 export class ChallengeStore {
-  /** challenge (base64url) → the epoch-ms it was issued. Insertion-ordered, which
-   *  is what makes "evict the oldest" a `keys().next()` rather than a scan. */
-  private readonly live = new Map<string, number>();
+  /** challenge (base64url) → the epoch-ms it was issued, and the session it is
+   *  bound to (D-5512; `undefined` for the login and enrolment stores, which bind
+   *  none). Insertion-ordered, which is what makes "evict the oldest" a
+   *  `keys().next()` rather than a scan. */
+  private readonly live = new Map<string, { issuedAt: number; boundTo: string | undefined }>();
 
-  constructor(readonly purpose: 'register' | 'assert') {}
+  /**
+   * THREE PURPOSES SINCE D-5512: `step-up` is the third store (`stepup.ts`), so a
+   * step-up challenge can never satisfy a login and a login challenge can never
+   * satisfy a step-up. Its challenges are BOUND to the `idHash` of the session
+   * that started them ({@link issue}'s `boundTo`): a challenge started by one
+   * session is refused when another session finishes it.
+   */
+  constructor(readonly purpose: 'register' | 'assert' | 'step-up') {}
 
   /** Mint one. Sweeps expired entries first, then evicts the oldest if the cap
    *  is still reached — so the map is bounded by {@link MAX_LIVE_CHALLENGES} at
-   *  every moment, not merely on average. */
-  issue(now: number): string {
+   *  every moment, not merely on average.
+   *
+   *  `boundTo` (the step-up store only) names the session the challenge belongs
+   *  to, and a session holds at most ONE live challenge: a new start replaces the
+   *  session's previous one, so a session looping `start` churns its own slot and
+   *  nobody else's. */
+  issue(now: number, boundTo?: string): string {
     this.sweep(now);
+    if (boundTo !== undefined) {
+      for (const [challenge, entry] of this.live) {
+        if (entry.boundTo === boundTo) this.live.delete(challenge);
+      }
+    }
     while (this.live.size >= MAX_LIVE_CHALLENGES) {
       const oldest = this.live.keys().next();
       if (oldest.done === true) break;
       this.live.delete(oldest.value);
     }
     const challenge = randomBytes(CHALLENGE_BYTES).toString('base64url');
-    this.live.set(challenge, now);
+    this.live.set(challenge, { issuedAt: now, boundTo });
     return challenge;
   }
 
@@ -468,18 +487,23 @@ export class ChallengeStore {
    * shot at the rest of the checks rather than an unlimited grind against a
    * challenge that stays valid for two minutes.
    */
-  consume(challenge: string, now: number): boolean {
-    const issued = this.live.get(challenge);
-    if (issued === undefined) return false;
+  consume(challenge: string, now: number, boundTo?: string): boolean {
+    const entry = this.live.get(challenge);
+    if (entry === undefined) return false;
     this.live.delete(challenge);
-    return now - issued <= CHALLENGE_TTL_MS;
+    // THE SESSION BINDING (D-5512). Exact equality, `undefined` included: an
+    // unbound challenge satisfies only an unbound consume, and a bound one only
+    // the session that started it. A mismatch still SPENDS the challenge, the
+    // single-use rule above: whoever presented it got their one shot.
+    if (entry.boundTo !== boundTo) return false;
+    return now - entry.issuedAt <= CHALLENGE_TTL_MS;
   }
 
   /** Drop everything past its TTL. Called on every issue; nothing else needs a
    *  timer, because an expired entry is already refused by {@link consume}. */
   private sweep(now: number): void {
-    for (const [challenge, issued] of this.live) {
-      if (now - issued > CHALLENGE_TTL_MS) this.live.delete(challenge);
+    for (const [challenge, entry] of this.live) {
+      if (now - entry.issuedAt > CHALLENGE_TTL_MS) this.live.delete(challenge);
     }
   }
 
@@ -661,6 +685,7 @@ function checkClientData(
   wantOrigin: string,
   challenges: ChallengeStore,
   now: number,
+  boundTo?: string,
 ): Refused | null {
   if (cd.type !== wantType) {
     return no('wrong-type', `clientDataJSON.type is ${safe(cd.type)}, want ${JSON.stringify(wantType)}`);
@@ -677,8 +702,9 @@ function checkClientData(
     return no('wrong-origin', `clientDataJSON.origin is ${safe(cd.origin)}, want ${JSON.stringify(wantOrigin)}`);
   }
   // SPENT BEFORE THE SIGNATURE IS EXAMINED. See ChallengeStore.consume.
-  if (!challenges.consume(cd.challenge, now)) {
-    return no('stale-challenge', `the ${challenges.purpose} challenge is unknown, already spent, or expired`);
+  if (!challenges.consume(cd.challenge, now, boundTo)) {
+    return no('stale-challenge',
+      `the ${challenges.purpose} challenge is unknown, already spent, expired, or another session's`);
   }
   return null;
 }
@@ -984,6 +1010,10 @@ export function verifyAssertion(
   cred: StoredCredential,
   challenges: ChallengeStore,
   now: number,
+  /** The step-up store's session binding (D-5512): the `idHash` of the session
+   *  finishing the ceremony, which must be the one that started it. Absent for
+   *  the login door, whose challenges bind no session. */
+  boundTo?: string,
 ): AssertionOk | Refused {
   // The algorithm is re-checked on every assertion, not trusted from enrolment:
   // `credentials.ts` reads rows off disk, and a hand-edited `algorithm` must not
@@ -1013,7 +1043,7 @@ export function verifyAssertion(
   if ('ok' in cd) return cd;
   // `cred.origin`, NOT the box's current config — the origin RECORDED on this
   // credential. See StoredCredential's docstring.
-  const cdProblem = checkClientData(cd, 'webauthn.get', cred.origin, challenges, now);
+  const cdProblem = checkClientData(cd, 'webauthn.get', cred.origin, challenges, now, boundTo);
   if (cdProblem !== null) return cdProblem;
 
   const ad = readAuthData(authBuf);

@@ -11585,3 +11585,31 @@ export type DigestRefusal = (typeof DIGEST_REFUSALS)[number];
 
 /** The server box's override of the digest hour, under its `~/.ccrc`: one integer, 0 to 23 (UTC). */
 export const DIGEST_HOUR_FILE = 'digest-hour';
+
+/** The step-up routes' refusal words (D-5512, spec §3.2; plan Task A5), each answered at its one status by
+ *  `REFUSAL_STATUS` (`shared/refusal.ts`):
+ *  `step-up-required`  no step-up from the last five minutes on this session, or this attempt did not prove one
+ *                      (the body then carries `verdict: 'wrong'`); the sheet shows Confirm it's you again.
+ *  `step-up-locked`    this session spent its step-up budget; it stays locked until it ends or the operator
+ *                      signs in again. Another session keeps its own budget.
+ *  `passkey-enrolled`  the passphrase arm, refused because a passkey is enrolled: a stolen session may not step
+ *                      down to the weaker factor.
+ *  `auth-off`          the gate is dark, so there is no session to step up (D-5618: defined here, before the
+ *                      account gate that also answers it, A7). */
+export const STEP_UP_REFUSALS = ['step-up-required', 'step-up-locked', 'passkey-enrolled', 'auth-off'] as const;
+export type StepUpRefusal = (typeof STEP_UP_REFUSALS)[number];
+
+/** `POST /api/auth/step-up/start`'s 200: the passkey ceremony's challenge, bound to the requesting session,
+ *  with the configured `rpId` and the enrolled credential ids (the `PasskeyAssertStart` fields). */
+export interface StepUpStart {
+  readonly challengeB64url: string;
+  readonly rpId: string;
+  readonly allowCredentialIdsB64url: readonly string[];
+}
+
+/** `POST /api/auth/step-up/finish`'s and `/passphrase`'s 200: the requesting session's stamp, as the first
+ *  instant it is no longer fresh. No cookie, no new session, the same `generation` (D-5512). */
+export interface StepUpAnswer {
+  readonly ok: true;
+  readonly stepUpFreshUntil: number;
+}
