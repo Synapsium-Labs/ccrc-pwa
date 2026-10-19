@@ -1604,15 +1604,15 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
 
 // — The model-class registry (spec §4.1, §4.2, §6.1, §6.4, §7) —
 describe('the model files, and who reads each one', () => {
-  // FIVE paths — measured 2026-09-08 by counting this describe's own
+  // SIX paths — five measured 2026-09-08 by counting this describe's own
   // writer/reader rows below (the models directory, the catalogue, the
-  // registry, the LiteLLM config, the ownership whitelist) — each with a
-  // writer and a set of readers, and the whole reason to register them here
-  // is that they cross LANGUAGES: the catalogue is written by bash-and-python
-  // and read by TypeScript; the TSV is written by node and read (from Plan 2)
-  // by bash; the effort map is written by node and read by python in another
-  // repository. None of those pairs can share a constant, so agreement has to
-  // be a red suite instead.
+  // registry, the LiteLLM config, the ownership whitelist), and the sixth, the
+  // lane's `<id>.windows.json` — each with a writer and a set of readers, and
+  // the whole reason to register them here is that most cross LANGUAGES: the
+  // catalogue is written by bash-and-python and read by TypeScript; the TSV is
+  // written by node and read (from Plan 2) by bash; the effort map is written
+  // by node and read by python in another repository. None of those pairs can
+  // share a constant, so agreement has to be a red suite instead.
   //
   // THIS DESCRIBE BUILDS ITS OWN CORPUS, and that is load-bearing. `ALL` comes
   // from `sources()`, which filters `/\.tsx?$/` — so `shared/models.mjs` and

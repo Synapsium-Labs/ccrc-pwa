@@ -2003,7 +2003,7 @@ INST_DEGRADED=()
 # The per-lane subcommands this build implements, spelled ONCE at file scope:
 # the dispatcher and the refusal that lists what exists must read one string,
 # or a subcommand can dispatch while the refusal claims it does not exist.
-MODELS_SUBS="discovery init rm set-class set-effort set-subagent show"
+MODELS_SUBS="clear-window discovery init rm set-class set-effort set-subagent set-window show"
 
 # The BOX-WIDE subcommands this build implements — a different question from a
 # lane's own classes, on a different cadence (§5).
@@ -2072,6 +2072,9 @@ already running).
             class subagents run as. "ccrc models <id> show" reports it,
             "init" seeds it, and set-class/set-subagent/set-effort/discovery
             change it — each re-writing that lane's own settings.json.
+            set-window/clear-window record or drop a measured context
+            window per model; once every class model has one, the lane's
+            window is the smallest of them.
             "ccrc models refresh <id>|--all" probes the provider catalogues
             those classes are classified against
             . "ccrc models litellm <id>" regenerates the Codex lane's
@@ -8840,9 +8843,9 @@ _acct_remove() {
   # Two
   # reasons, and the second is the load-bearing one:
   #
-  #   * there are FOUR of them, not one — `<id>.json`, `<id>.classes.json`,
-  #     `<id>.classes.tsv` and `<id>.effort.json` — so naming the registry alone
-  #     told an operator about a quarter of what this removal left behind;
+  #   * there are FIVE of them, not one — `<id>.json`, `<id>.classes.json`,
+  #     `<id>.classes.tsv`, `<id>.effort.json` and `<id>.windows.json` — so naming
+  #     the registry alone told an operator about a fifth of what this removal left;
   #   * those names are `deploy/models-op.mjs`'s to spell.
   #     `single-definition.test.ts` holds `classes.json` to three files, none of
   #     them bash, because "a bash holder would be a second, unvalidated editor
@@ -9828,6 +9831,17 @@ _models_summary() {   # <json body> — the human sentences, on STDERR
      end),
     (if .catalogue == null then "  catalogue: never probed — run: ccrc models refresh \(.id)"
      else "  catalogue: \(.catalogue.count) models\(if .catalogue.stale then " (STALE)" else "" end)" end),
+    (if .contextWindow == null then empty
+     elif .contextWindow.rule == "measured" then
+       "  context window: \(.contextWindow.tokens) tokens, measured (the smallest across the class models)"
+     else
+       "  context window: \(if .contextWindow.rule == "default" then "\(.contextWindow.tokens) tokens, from the catalogue" else "not set, the client default applies" end)\(if (.contextWindow.unmeasured | length) > 0 then "; not measured: \(.contextWindow.unmeasured | join(", "))" else "" end)"
+     end),
+    (if .windows.state == "ok" then
+       (.windows.byModel | to_entries[] | "  measured window: \(.key) \(.value.tokens) tokens\(if .value.setAt == null then "" else " (set \(.value.setAt))" end)")
+     elif .windows.state == "unreadable" then
+       "  the windows file cannot be read, so the default rule applies: \(.windows.reason)"
+     else empty end),
     (if (.derived.unclassified | length) > 0 then
        "  unclassified (\(.derived.unclassified | length)): \(.derived.unclassified | join(", "))" else empty end),
     (if (.derived.retired | length) > 0 then
@@ -10081,6 +10095,28 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
       [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-effort takes a class and a level, and got \"$1\""
       _models_class_ok "$cls"
       _models_answer set-effort --file "$file" --id "$id" --class "$cls" --level "$level" || exit $?
+      return 0
+      ;;
+    set-window)
+      # Codex-bridge spec §2.7: a measured context window for one MODEL (not a
+      # class), in the lane's sibling windows file. The count and its range are
+      # node's to check (`deploy/models-op.mjs`, against shared/models.mjs's
+      # bounds); this arm checks only that both words are there.
+      local model="${1:-}" tokens="${2:-}"
+      [ -n "$model" ] && [ -n "$tokens" ] \
+        || _models_refuse missing-argument 2 "ccrc models $id set-window needs a model and a token count: ccrc models $id set-window <modelId> <tokens>"
+      shift 2
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-window takes a model and a token count, and got \"$1\""
+      _models_answer set-window --file "$file" --id "$id" --model "$model" --tokens "$tokens" || exit $?
+      return 0
+      ;;
+    clear-window)
+      local model="${1:-}"
+      [ -n "$model" ] \
+        || _models_refuse missing-argument 2 "ccrc models $id clear-window needs a model: ccrc models $id clear-window <modelId>"
+      shift
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id clear-window takes one model, and got \"$1\""
+      _models_answer clear-window --file "$file" --id "$id" --model "$model" || exit $?
       return 0
       ;;
     discovery)
