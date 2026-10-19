@@ -1098,12 +1098,13 @@ export const LABELLER = Object.freeze({
 });
 
 /**
- * Every run of Unicode whitespace becomes one space, and the ends are trimmed (W2-D61).
+ * Every run of Unicode White_Space becomes one space, and the one space left at each end is removed (W2-D61). The
+ * ends are not trimmed with the language's own trim, which would also strip a byte-order mark that is not White_Space.
  * @param {string} s
  * @returns {string}
  */
 export function collapseWs(s) {
-  return s.replace(/\p{White_Space}+/gu, ' ').trim();
+  return s.replace(/\p{White_Space}+/gu, ' ').replace(/^ | $/g, '');
 }
 
 /**
@@ -1365,11 +1366,12 @@ export const WRITER_PROMPT_SHA256 = 'c3c184145653f9d94a18fcc5b62a58ff3a93c04a30d
 /** The longest question parseQuestionLine accepts, in characters (code points). */
 export const WRITER_QUESTION_MAX = 600;
 
-const QUESTION_LINE = /^QUESTION:[ \t]*(.*)$/;
+const QUESTION_LINE = /^QUESTION:[ \t]*(.+)$/;
 
 /**
- * The writer's reply (W2-D72): the last `^QUESTION:[ \t]*(.*)$` line, trimmed (a bare `QUESTION:` line is that line,
- * as a spaced one is, so neither is skipped in favour of an earlier question). Empty after the trim, longer than
+ * The writer's reply (W2-D72): the last `^QUESTION:[ \t]*(.+)$` line, trimmed (the decision's own regex: a bare
+ * `QUESTION:` line is not a QUESTION line, so an earlier one stands; a last line of only blanks is one, and is empty
+ * after the trim). Empty after the trim, longer than
  * WRITER_QUESTION_MAX characters, or no such line: `writer-malformed`, discarded with no retry.
  * @param {string} reply
  * @returns {{ok: true, question: string} | {ok: false, word: 'writer-malformed'}}

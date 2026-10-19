@@ -3256,7 +3256,7 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
       expect(t7Gate.parseAnswerField('ANSWER: only')).toEqual({ state: 'value', value: 'only' });
     });
 
-    it('parseQuestionLine: 600 code points pass whatever their UTF-16 length, and a blank last line, bare or spaced, voids an earlier question', () => {
+    it('parseQuestionLine: 600 code points pass whatever their UTF-16 length, and a last QUESTION: line holding only blanks voids an earlier question', () => {
       const wide = String.fromCodePoint(0x1f600);
       expect(t7Gate.parseQuestionLine(`QUESTION: ${wide.repeat(600)}`)).toEqual({ ok: true, question: wide.repeat(600) });
       expect(t7Gate.parseQuestionLine(`QUESTION: ${wide.repeat(601)}`)).toEqual({ ok: false, word: 'writer-malformed' });
@@ -3305,19 +3305,25 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
       expect(t7Gate.labelCorrect('path', F, '(src/app.ts)', pathAt7), 'CONTROL: brackets are not edges').toBe(true);
     });
 
-    it('collapseWs: Unicode White_Space collapses (U+0085 included), and a byte-order mark is not whitespace', () => {
+    it('collapseWs: Unicode White_Space collapses and trims (U+0085 included), and a byte-order mark is not whitespace, at the ends too', () => {
       const [nel, bom] = [0x85, 0xfeff].map((c) => String.fromCodePoint(c));
       expect(t7Gate.collapseWs(`a${nel}${nel}b`)).toBe('a b');
       expect(t7Gate.collapseWs(`a${nel} ${nel}b`)).toBe('a b');
       expect(t7Gate.collapseWs(`a${bom}b`)).toBe(`a${bom}b`);
       expect(t7Gate.collapseWs(`a ${bom} b`)).toBe(`a ${bom} b`);
+      expect(t7Gate.collapseWs(`${bom}a`)).toBe(`${bom}a`);
+      expect(t7Gate.collapseWs(`a${bom}`)).toBe(`a${bom}`);
+      expect(t7Gate.collapseWs(`${nel}a${String.fromCodePoint(0x3000)}`)).toBe('a');
+      expect(t7Gate.collapseWs(` ${nel}\t a \n${nel} `)).toBe('a');
+      expect(t7Gate.collapseWs(`${nel}`)).toBe('');
     });
 
-    it('parseQuestionLine: a bare or spaced QUESTION: as the last line voids an earlier question', () => {
-      expect(t7Gate.parseQuestionLine('QUESTION: ok?\nQUESTION:')).toEqual({ ok: false, word: 'writer-malformed' });
+    it('parseQuestionLine (W2-D72\'s regex, literally): a bare QUESTION: line is not a QUESTION line, and one holding only blanks is writer-malformed', () => {
+      expect(t7Gate.parseQuestionLine('QUESTION: ok?\nQUESTION:')).toEqual({ ok: true, question: 'ok?' });
+      expect(t7Gate.parseQuestionLine('QUESTION: ok?\nQUESTION:\n')).toEqual({ ok: true, question: 'ok?' });
       expect(t7Gate.parseQuestionLine('QUESTION: ok?\nQUESTION: ')).toEqual({ ok: false, word: 'writer-malformed' });
+      expect(t7Gate.parseQuestionLine('QUESTION: ok?\nQUESTION:\t ')).toEqual({ ok: false, word: 'writer-malformed' });
       expect(t7Gate.parseQuestionLine('QUESTION:')).toEqual({ ok: false, word: 'writer-malformed' });
-      expect(t7Gate.parseQuestionLine('QUESTION: ok?\nQUESTION:\n')).toEqual({ ok: false, word: 'writer-malformed' });
     });
   });
 });
