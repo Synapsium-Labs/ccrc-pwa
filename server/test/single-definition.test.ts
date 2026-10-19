@@ -1799,24 +1799,22 @@ describe('the model files, and who reads each one', () => {
     expect(code.filter((l) => REGISTRY_FILENAME.test(l)).length).toBe(2);
   });
 
-  it('the LiteLLM config path is spelled once, in one tool, through one helper', () => {
-    // `ccgpt` (another repository) reads the same path from its own
-    // `${CCGPT_CONFIG:-…}` default, which is why the helper here honours the
-    // same override rather than hardcoding the default: two tools, one file,
-    // and only one of them is in this repo to be pinned.
-    expect(holdersOf('.handoff/litellm-config.yaml')).toEqual(['ccd/ccrc']);
+  it('no bash code line spells the retired box-global LiteLLM config path or its override (Plan 4)', () => {
+    // Plan 4 Task C1: the external LiteLLM arm rendered the other repository's
+    // box-global config, honouring that repository's own `CCGPT_CONFIG`
+    // override, and it left with that repository's lane. A lane's config is
+    // its own `~/.ccrc/codex/<id>/litellm.yaml` (`_codex_litellm_yaml`), so no
+    // line of shell in any tool here reads or writes the old path again.
+    expect(holdersOf('.handoff/litellm-config.yaml')).toEqual([]);
+    expect(holdersOf('CCGPT_CONFIG')).toEqual([]);
+  });
+
+  it('ccrc never runs the other repository\'s launcher (Plan 4)', () => {
+    // A bare `ccgpt stop` stops units by name, and those names are ccrc's own
+    // tiers (`ccgpt-<id>-{litellm,shim}.service`). The external arm was the
+    // last code line that ran it, or sent an operator to it.
     const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
-    // D-3482: the helper grew a codex-lane arm (an id argument),
-    // so the one spelling is now its no-argument line — still one line, and
-    // still inside `_models_litellm_path`, which the second pin binds.
-    expect(code.filter((l) => l.includes('.handoff/litellm-config.yaml'))).toEqual([
-      '  printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"',
-    ]);
-    const helper = /^_models_litellm_path\(\) \{[^\n]*\n([\s\S]*?)\n\}$/m
-      .exec(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8'));
-    expect(helper, 'ccd/ccrc still defines _models_litellm_path as a block').toBeTruthy();
-    expect(helper![1]!.split('\n'))
-      .toContain('  printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"');
+    expect(code.filter((l) => /\bccgpt (stop|start|login)\b|command -v ccgpt\b/.test(l))).toEqual([]);
   });
 
   it('the ownership whitelist is read by exactly one thing in this repo', () => {
@@ -4359,7 +4357,7 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   //     in `cmd_ws_archive` (`session-busy`, `status-unknown`) — the audit's seam, not the door's;
   //   - the temp-root collector's open-run hold word `run-open` (`server/src/collectLane.ts`,
   //     `server/src/coord/collectTempRoot.ts`) — the collector's seam, not the door's;
-  //   - the docs reader's `worktree-gone` (`server/src/docs/policy.ts`, `shared/docs.ts`) — the reader's own word;
+  //   - the docs reader's `worktree-gone` (`server/src/docs/policy.ts`, `shared/docs.ts`, `pwa/src/docs/docsText.ts`) — the reader's own word;
   //   - `className="run-open"` is the runs board's row button (D-287), a CSS identity — excluded by the pattern.
   // The collector's and the docs reader's excusals are by FILE (the `want` line below), a known width: a door code
   // spelled in one of those files is not seen.
@@ -4385,7 +4383,7 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   });
 
   it.each(CODES)("'%s' is a code-line literal in shared/api.ts alone", (code) => {
-    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'run-open' ? ['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['server/src/docs/policy.ts', 'shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
+    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'run-open' ? ['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['pwa/src/docs/docsText.ts', 'server/src/docs/policy.ts', 'shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
     expect(ALL.filter((f) => literal(code).test(stallCode(f))).map(rel).sort(), `a second '${code}'`).toEqual(want);
   });
 });
@@ -5239,7 +5237,7 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     // W1-B3: every constant the card line adds to lib, declared there once (Task 11 binds the hook's spellings).
     'CARD_LINE_PATTERN', 'CARD_LINE_MAX', 'CARD_DIR', 'SCOPE_DIR', 'CARD_DESCRIBE_CMD',
     'CARD_MEASURE_ROWS', 'CARD_MEASURE_MAX_WAIT_MS', 'CARD_ATTACHMENT_MAX_BYTES', 'PURGED_FILES_GRACE_MS',
-    'SCOPE_MARKER_MAX_AGE_MS', 'CARD_CONSUMED_SCOPES', 'CARD_WITHDRAW_REASONS'] as const;
+    'SCOPE_MARKER_MAX_AGE_MS', 'CARD_CONSUMED_SCOPES', 'CARD_WITHDRAW_REASONS', 'EXPORT_DIR', 'EXPORT_SEGMENT_MAX_BYTES', 'EXPORT_PASS_INTERVAL_MS', 'EXPORT_SEGMENT_FORMAT', 'EXPORT_ROW_META_BYTES', 'EXPORT_MARK_BACKOFF_MAX_MS', 'EXPORT_DUE_OLDEST_UNMEASURED'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
@@ -6267,7 +6265,8 @@ describe("one 'tmux unreachable' sentence (design-system wave)", () => {
     // them at the word would satisfy the test above and lose the tooltip.
     for (const f of [
       'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/ArchiveSheet.tsx',
-      'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/screens/SessionScreen.tsx',
+      // D-5545: the fleet row's and the header's facts are decided in `sessionFacts.ts` now, not `SessionMeta.tsx`.
+      'pwa/src/fleet/sessionFacts.ts', 'pwa/src/screens/SessionScreen.tsx',
       'pwa/src/session/SessionHeader.tsx', 'pwa/src/session/PrSheet.tsx',
     ]) {
       expect(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)
@@ -6491,7 +6490,8 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
   it("watch.ts's ask raise sites call askPushBody, and no body there reads dialog.title", () => {
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
     expect(watch).toMatch(/import\s*\{[^}]*\baskPushBody\b[^}]*\}\s*from\s*'\.\/askbody\.js'/);
-    expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(2);
+    // Three since plan Task 16: the approval hold's snapshotted push (`tryHoldApproval`) is the third raise site.
+    expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(3);
     expect(watch).not.toMatch(/body:\s*dialog\.title/);
   });
 
@@ -6537,10 +6537,14 @@ describe('one tryHold decides every ask hold (D-5290)', () => {
     const rest = watch.slice(0, start) + watch.slice(end);
     expect(body.match(/\bthis\.hold\(/g) ?? []).toHaveLength(1);
     expect(rest).not.toMatch(/\bthis\.hold\(/);
-    expect(body).toMatch(/\.parentOfSession\(/);
+    // D-5530 (plan Task 16): the claimant decision moved, whole, into `coord/heldFor.ts`, which the approvals mint
+    // reads too: `tryHold` calls it, and the watcher reads `parentOfSession` nowhere else.
+    expect(body).toMatch(/\bheldFor\(/);
     expect(rest).not.toMatch(/\.parentOfSession\(/);
     expect(rest.match(/\bthis\.tryHold\(/g) ?? []).toHaveLength(3);
-    expect(body).toMatch(/\bclaimantMeasuredDead\(/);
+    const heldForSrc = stallCode(path.join(ccrcRoot, 'server/src/coord/heldFor.ts'));
+    expect(heldForSrc).toMatch(/\.parentOfSession\(/);
+    expect(heldForSrc).toMatch(/\bclaimantMeasuredDead\(/);
   });
 
   it('claimantMeasuredDead is defined in server/src/coord/reclaim.ts and read by the dead-coordinator sweep', () => {
@@ -6960,4 +6964,257 @@ describe('D-5242: the wake budget and the live act have one home each (Task 17b)
       expect(ALL.filter((f) => stallCode(f).includes(`'${word}'`)).map(rel), word).toEqual([home]);
     }
   });
+});
+
+// D-5297 / D-5299 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 14). APPENDED. The
+// approval wait's constants and the two canonical forms have one TypeScript home, `shared/api.ts`. Their documented
+// second copies are held equal by iteration, never by this text scan: the hook's bash copies of the wait ceiling,
+// the stop states and the digest's jq program (`session-hook-approval-wait.test.ts`, over `digest-corpus.json`), the
+// hook's forbidden match (`session-hook-approval-deny.test.ts`, over Task 12's corpus), and the verifier's canonical
+// form (`approval-verify.test.ts`, over a record corpus).
+describe('the approval wait\'s constants and canonical forms each have one home (D-5297, D-5299)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('approvalDigestBytes').test('export function approvalDigestBytes(hookInput) {')).toBe(true);
+    expect(decl('approvalDigestBytes').test('const c = approvalDigestBytes(payload);')).toBe(false);
+  });
+  it('each is declared once, in shared/api.ts', () => {
+    for (const c of ['APPROVAL_HOOK_WAIT_S', 'APPROVAL_HOOK_VERSIONS', 'APPROVAL_CWD_TRUSTED', 'APPROVAL_HOOK_STOP_STATES',
+      'APPROVAL_SIGNING_PUB_FILE', 'APPROVAL_SIGNING_KEY_FILE', 'APPROVAL_REQUEST_MAX_BYTES', 'canonicalJson',
+      'approvalDigestBytes', 'approvalRulingBytes']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+});
+
+// D-5298 / D-5441 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 16). APPENDED. The
+// approvals server half's vocabulary and constants each have one TypeScript home: the state map, the retention, the
+// release reasons, the refusal words and the three file names in `shared/api.ts`; the countdown window and its one
+// selection in `server/src/askwindow.ts` beside `ASK_GRACE_MS`; the claimant decision both lanes read in
+// `server/src/coord/heldFor.ts`. The doctor's bash spelling of the journal's name and the deny file's are documented
+// second copies, held by `approvals-doctor.test.ts` and `approvals-routes.test.ts`, which import the TypeScript ones.
+describe('the approvals server half\'s vocabulary and windows each have one home (D-5298, D-5441)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b|\\btype\\s+${c}\\s*=`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('ApprovalState').test('import { type ApprovalState, isApprovalState } from')).toBe(false);
+    expect(decl('approvalWindowMs').test('export function approvalWindowMs(agentId: string): number {')).toBe(true);
+    expect(decl('approvalWindowMs').test('const notifyAt = now + approvalWindowMs(agentId);')).toBe(false);
+  });
+  it('the shared vocabulary is declared once, in shared/api.ts', () => {
+    for (const c of ['APPROVAL_STATE_MAP', 'ApprovalState', 'isApprovalState', 'APPROVAL_INPUT_RETENTION_DAYS',
+      'ApprovalReleaseReason', 'APPROVAL_RELEASE_REASON_MAP', 'ApprovalRefusal', 'APPROVAL_REASON_MAX_CHARS',
+      'CHILD_DENY_SETTINGS_FILE', 'APPROVAL_CHILD_SHELL', 'APPROVAL_REFUSALS_LOG']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the countdown window and its selection live beside ASK_GRACE_MS', () => {
+    for (const c of ['APPROVAL_COUNTDOWN_WINDOW_MS', 'approvalWindowMs', 'ASK_GRACE_MS']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/askwindow.ts']);
+    }
+  });
+  it('the one claimant decision lives in coord/heldFor.ts, and the hold and the mint both read it', () => {
+    expect(holders(decl('heldFor'))).toEqual(['server/src/coord/heldFor.ts']);
+    expect(holders(/\bheldFor\(/)).toEqual(['server/src/coord/heldFor.ts', 'server/src/coord/routes.ts', 'server/src/watch.ts']);
+  });
+  it('the 60 000 ms window is spelled nowhere but its home', () => {
+    expect(holders(/\b60_000\b[^\n]*(?:approval|countdown)|(?:approval|countdown)[^\n]*\b60_000\b/i)).toEqual(['server/src/askwindow.ts']);
+  });
+});
+
+// D-5300 (plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Task 17). APPENDED. The daily digest
+// has one TypeScript home for each of its decisions: the default hour, its override reader, the window, the two
+// "is this a coordinator's decision" predicates the digest AND the correction route read, the build and the mail's
+// subject in `server/src/coord/digest.ts`; its wire vocabulary in `shared/api.ts`.
+describe('the daily digest\'s hour, predicates and vocabulary each have one home (D-5300)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('DigestLine').test('import { type DigestLine, type DigestTotals } from')).toBe(false);
+    expect(decl('DIGEST_HOUR_UTC').test('export const DIGEST_HOUR_UTC = 7;')).toBe(true);
+    expect(decl('DIGEST_HOUR_UTC').test('return DIGEST_HOUR_UTC;')).toBe(false);
+    expect(decl('DigestLine').test('export interface DigestLine {')).toBe(true);
+  });
+  it('the hour, the window and the predicates live in coord/digest.ts', () => {
+    for (const c of ['DIGEST_HOUR_UTC', 'readDigestHour', 'digestWindow', 'digestDayFor', 'parseDigestDay', 'askDecision',
+      'approvalDecision', 'buildDigest', 'digestPushCopy', 'digestCorrectionSubject', 'correctDigestRow', 'isDigestKebab']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/coord/digest.ts']);
+    }
+  });
+  it('the wire vocabulary is declared once, in shared/api.ts', () => {
+    for (const c of ['DigestLine', 'DIGEST_LINE_KINDS', 'DigestLineKind', 'DigestRowKind', 'DigestTotals', 'DigestAnswer', 'DigestCorrectBody',
+      'DigestCorrectAnswer', 'DIGEST_REFUSALS', 'DigestRefusal', 'DIGEST_HOUR_FILE', 'DIGEST_CORRECTION_MAX_CHARS',
+      'DIGEST_COMMAND_CHARS']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the correction subject and the override file name are spelled nowhere but their homes', () => {
+    expect(holders(/Operator correction on/)).toEqual(['server/src/coord/digest.ts']);
+    expect(holders(/'digest-hour'/)).toEqual(['shared/api.ts']);
+  });
+  it('the digest and the correction read the same two predicates', () => {
+    expect(holders(/\baskDecision\(/)).toEqual(['server/src/coord/digest.ts']);
+    const src = stallCode(path.join(ccrcRoot, 'server', 'src', 'coord', 'digest.ts'));
+    expect(src.match(/\baskDecision\(/g)).toHaveLength(3);
+    expect(src.match(/\bapprovalDecision\(/g)).toHaveLength(3);
+  });
+});
+
+// D-5511, D-5516 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A7). APPENDED. The account gate,
+// the audit and the AccountOps port: the sub union, the acts, the outcomes, the key-plane codes, the gate's refusal
+// words, the retention, the sub bounds and the origin class each have one home in `shared/api.ts`; the gate, the audit
+// writer and the arm choice each have one home under `server/src/accounts/`; and the table's name is spelled only by
+// its migration and its writer.
+describe('the account gate, the audit and the AccountOps port each have one home (D-5511, D-5516)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('ACCOUNT_SUBS').test('export const ACCOUNT_SUBS = [')).toBe(true);
+    expect(decl('ACCOUNT_SUBS').test("import { ACCOUNT_SUBS } from '../../shared/api.js';")).toBe(false);
+    expect(decl('AccountAudit').test('export class AccountAudit {')).toBe(true);
+    expect(decl('AccountAudit').test('const audit = new AccountAudit(coord.db);')).toBe(false);
+  });
+  it('the vocabulary is declared once, in shared/api.ts', () => {
+    for (const c of ['ACCOUNT_SUBS', 'AccountSub', 'ACCOUNT_SUB_TIMEOUT_MS', 'ACCOUNT_OP_KILL_GRACE_MS', 'ACCOUNT_OP_OUTPUT_MAX_BYTES',
+      'ACCOUNT_ACTS', 'AccountAct', 'ACCOUNT_LANELESS_ACTS', 'ACCOUNT_OUTCOMES', 'AccountOutcome', 'ACCOUNT_KEY_PLANE_CODES',
+      'AccountKeyPlaneCode', 'ACCOUNT_AUDIT_RETENTION_DAYS', 'ACCOUNT_GATE_REFUSALS', 'AccountGateRefusal', 'AccountOriginClass']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the gate, the audit and the port each live in their one file', () => {
+    for (const c of ['createAccountGate', 'accountOriginClass', 'AccountGateDeps', 'AccountGate']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/gate.ts']);
+    }
+    for (const c of ['AccountAudit', 'actorOf', 'AccountActor', 'knownFleetIdentity', 'AccountEventInput']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/audit.ts']);
+    }
+    for (const c of ['AccountOps', 'accountOpsFor', 'accountSpawnEnv', 'localAccountOps', 'remoteAccountOps', 'AccountOpResult']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/ops.ts']);
+    }
+  });
+  it('the table is named only by its migration and its writer', () => {
+    expect(holders(/\baccount_events\b/)).toEqual(['server/src/accounts/audit.ts', 'server/src/coord/schema.ts']);
+  });
+  it('the arm is chosen in one place, and constructed by the composition root alone', () => {
+    expect(holders(/\baccountOpsFor\(/)).toEqual(['server/src/accounts/ops.ts', 'server/src/index.ts']);
+    expect(holders(/\blocalAccountOps\(/)).toEqual(['server/src/accounts/ops.ts']);
+  });
+});
+
+// D-5513, D-5622 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A8). APPENDED. The agent's typed
+// `account` op: the argv builder and its bounds have one home in `shared/account-argv.ts`, which BOTH `AccountOps`
+// arms call; the op's wire vocabulary and the node-id grammar one home in `shared/agent-protocol.ts`; the agent's
+// spawn port one home in `agent/src/accountop.ts`.
+describe("the account op's builder, wire vocabulary and spawn port each have one home (D-5513, D-5622)", () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('buildAccountArgv').test('export function buildAccountArgv(sub: unknown')).toBe(true);
+    expect(decl('buildAccountArgv').test('const built = buildAccountArgv(sub, id, fields, false);')).toBe(false);
+  });
+  it('the builder and its bounds are declared once, in shared/account-argv.ts', () => {
+    for (const c of ['ACCOUNT_ARGV_REFUSALS', 'AccountArgvRefusal', 'ACCOUNT_SUB_ARGV', 'ACCOUNT_STDIN_MAX_BYTES', 'buildAccountArgv',
+      'isAccountStdin', 'isAccountLaneId', 'isAccountSub', 'AccountArgvBuilt']) {
+      expect(holders(decl(c)), c).toEqual(['shared/account-argv.ts']);
+    }
+  });
+  it('the wire vocabulary and the node-id grammar are declared once, in shared/agent-protocol.ts', () => {
+    for (const c of ['ACCOUNT_OP', 'AccountOpReq', 'AccountOpOutcome', 'AccountOpAnswer', 'readAccountOpAnswer',
+      'accountOpRequestTimeoutMs', 'ACCOUNT_OP_DRAIN_MS', 'NODE_ID_RE']) {
+      expect(holders(decl(c)), c).toEqual(['shared/agent-protocol.ts']);
+    }
+  });
+  it("the agent's spawn port lives in agent/src/accountop.ts", () => {
+    for (const c of ['makeAccountOpSpawn', 'AccountOpSpawn', 'AccountSpawnBounds', 'accountSpawnBounds', 'decodeAccountStdin', 'readFleetIdentity']) {
+      expect(holders(decl(c)), c).toEqual(['agent/src/accountop.ts']);
+    }
+  });
+  it('one builder for both arms: it is called by the agent op and the server port, and nowhere else', () => {
+    expect(holders(/\bbuildAccountArgv\(/)).toEqual(['agent/src/server.ts', 'server/src/accounts/ops.ts', 'shared/account-argv.ts']);
+    expect(holders(/\breadAccountOpAnswer\(/)).toEqual(['server/src/accounts/ops.ts', 'shared/agent-protocol.ts']);
+  });
+});
+
+// Docs W5 part 1, Task 1 (spec 2026-10-01 3.11, amended 2026-10-13): the permalink builder, its answer type and the
+// one private URL assembler are declared once, in shared/docs.ts. A second `githubUrlAt` anywhere in the four roots
+// is a second assembler (M3.17's drift), and a second `githubPermalink` is a second Share link rule. APPENDED after
+// the file's last line, as its own describe: `session-hook.test.ts`'s citation audit cites this file by line, so the
+// docs section H block's TYPES and FUNCTIONS lists above are never edited. The same two declaration patterns as that
+// block, with a planted CONTROL: a third file holding a copy makes the holder list two long.
+// The function pattern accepts `async`, `default` and `declare` (and a generator star) before `function`, with a
+// planted control for each. It is a line-anchored regex, NOT EXHAUSTIVE, and not a parser: the evasions it still
+// misses are listed in the second CONTROL below (a method, a re-export, a CommonJS assignment, a copy in a comment or
+// string, a function expression bound by none of `const`, `let` or `var`).
+describe('docs section H, W5: GithubPermalink, githubPermalink and githubUrlAt are declared once, in shared/docs.ts', () => {
+  const TYPES = ['GithubPermalink'] as const;
+  const FUNCTIONS = ['githubPermalink', 'githubUrlAt'] as const;
+  const TYPE_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  // Any run of `export`, `default`, `declare` and `async` before `function [*] NAME` or `const|let|var NAME`.
+  const FN_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:(?:export|default|declare|async)\\s+)*(?:function(?:\\s*\\*\\s*|\\s+)${name}\\b|(?:const|let|var)\\s+${name}\\b)`, 'm');
+  // The holders of a declaration over the four roots, plus any planted [path, text] pairs, sorted.
+  const holders = (def: RegExp, planted: readonly (readonly [string, string])[] = []): string[] =>
+    [...ALL.map((f) => [rel(f), readFileSync(f, 'utf8')] as const), ...planted]
+      .filter(([, text]) => def.test(text)).map(([p]) => p).sort();
+
+  it('CONTROL: the patterns see a declaration, a local copy and an arrow copy, and not an import, a call or another name', () => {
+    expect(TYPE_DEF('GithubPermalink').test('export type GithubPermalink =')).toBe(true);
+    expect(TYPE_DEF('GithubPermalink').test("type GithubPermalink = { ok: true; url: string };"), 'a local copy').toBe(true);
+    expect(TYPE_DEF('GithubPermalink').test('export type GithubPermalinkRow = {'), 'another name').toBe(false);
+    expect(FN_DEF('githubPermalink').test('export function githubPermalink(github: DocsGithub, ref: Ref,')).toBe(true);
+    expect(FN_DEF('githubUrlAt').test('function githubUrlAt(slug: string, at: string, target: GithubTarget):')).toBe(true);
+    expect(FN_DEF('githubUrlAt').test('const githubUrlAt = (slug: string): string => slug;'), 'an arrow copy').toBe(true);
+    expect(FN_DEF('githubPermalink').test("import { githubPermalink } from '../../../shared/docs.js';"), 'an import').toBe(false);
+    expect(FN_DEF('githubPermalink').test('  const link = githubPermalink(github, ref, commit, target);'), 'a call').toBe(false);
+    expect(FN_DEF('githubUrlAt').test('function githubUrlAtCommit('), 'another name').toBe(false);
+  });
+
+  it('CONTROL: the function pattern sees an async, a default, a declare-d and a generator copy', () => {
+    for (const text of [
+      'export async function githubPermalink(',
+      'async function githubPermalink(',
+      'export default function githubUrlAt(',
+      'export default async function githubUrlAt(',
+      'export declare function githubPermalink(',
+      'declare function githubPermalink(',
+      'export function* githubPermalink(',
+      'export declare const githubUrlAt:',
+      'export const githubUrlAt = async (slug: string) => slug;',
+    ]) {
+      const name = text.includes('githubUrlAt') ? 'githubUrlAt' : 'githubPermalink';
+      expect(FN_DEF(name).test(text), text).toBe(true);
+    }
+    expect(FN_DEF('githubPermalink').test('export async function githubPermalinks('), 'another name').toBe(false);
+    expect(FN_DEF('githubPermalink').test('  await githubPermalink(github, ref);'), 'an awaited call').toBe(false);
+  });
+
+  it('CONTROL: what the function pattern still misses is named here, and a miss is not a pass', () => {
+    // NOT EXHAUSTIVE. These evasions are known and stay unseen: an object or class method (`githubPermalink(x) {`),
+    // a re-export under the name (`export { other as githubPermalink }`), a CommonJS assignment
+    // (`exports.githubPermalink = `), a copy inside a block comment or string, and a
+    // function expression that no `const`, `let` or `var` binds.
+    for (const text of [
+      '  githubPermalink(github: DocsGithub) {',
+      'export { other as githubPermalink };',
+      'exports.githubPermalink = function () {};',
+    ]) expect(FN_DEF('githubPermalink').test(text), text).toBe(false);
+  });
+
+  it('CONTROL: a third file holding a copy is seen beside shared/docs.ts', () => {
+    expect(holders(FN_DEF('githubPermalink'), [['pwa/src/docs/planted.ts', 'function githubPermalink(x: string) {}']]))
+      .toEqual(['pwa/src/docs/planted.ts', 'shared/docs.ts']);
+  });
+
+  for (const name of TYPES) {
+    it(`declares ${name} exactly once, in shared/docs.ts`, () => {
+      expect(holders(TYPE_DEF(name))).toEqual(['shared/docs.ts']);
+    });
+  }
+  for (const name of FUNCTIONS) {
+    it(`defines ${name} exactly once, in shared/docs.ts`, () => {
+      expect(holders(FN_DEF(name))).toEqual(['shared/docs.ts']);
+    });
+  }
 });

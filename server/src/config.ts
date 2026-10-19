@@ -6,6 +6,7 @@ import { defaultSessionsPath } from './auth/sessions.js';
 import { defaultPasskeysPath } from './auth/credentials.js';
 import { parseRoster, RosterError, type Roster } from '../../shared/roster.js';
 import { isNodeRole } from '../../shared/node-role.js';
+import { isReleaseSourceName } from '../../shared/release-notes.js';
 import type { NodeRole } from '../../shared/api.js';
 
 export type FleetMode = 'local' | 'remote';
@@ -50,10 +51,9 @@ export const DEFAULT_RELEASE_API_URL = 'https://api.github.com';
  *  from W2; nothing reads it until W4's dispatcher. */
 export const DEFAULT_UPDATE_DEADLINE_MS = 15 * 60_000;
 
-/** One owner or repo name: GitHub's own character set, at most 100, and never
- *  a name made only of dots — `..` matches the character class and would walk
- *  `/repos/{owner}/{repo}/releases` up a segment (D-3196). */
-const RELEASE_SOURCE_VALUE = /^(?!\.+$)[A-Za-z0-9._-]{1,100}$/;
+// One owner or repo name is `isReleaseSourceName` (`shared/release-notes.ts`): GitHub's own
+// character set, at most 100, never only dots (D-3196). It moved to L0 so the PWA's
+// pull-request links ask the same question of the pair this server sends (D-5549).
 
 /**
  * This box's role: the recorded `CCRC_ROLE` when it is a `NodeRole`, else
@@ -101,7 +101,7 @@ export function parseReleaseSource(ccrcText: string): ReleaseSource | null {
   if (owners.length !== 1 || repos.length !== 1) return null;
   const owner = owners[0]![1]!;
   const repo = repos[0]![1]!;
-  return RELEASE_SOURCE_VALUE.test(owner) && RELEASE_SOURCE_VALUE.test(repo) ? { owner, repo } : null;
+  return isReleaseSourceName(owner) && isReleaseSourceName(repo) ? { owner, repo } : null;
 }
 
 /**
@@ -114,7 +114,7 @@ export function readReleaseSource(env: NodeJS.ProcessEnv, installedCcrcPath: str
   const envOwner = env.CCRC_RELEASE_OWNER;
   const envRepo = env.CCRC_RELEASE_REPO;
   if (envOwner && envRepo) {
-    return RELEASE_SOURCE_VALUE.test(envOwner) && RELEASE_SOURCE_VALUE.test(envRepo)
+    return isReleaseSourceName(envOwner) && isReleaseSourceName(envRepo)
       ? { ok: true, owner: envOwner, repo: envRepo, from: 'env' }
       : { ok: false, why: 'env-malformed', path: null };
   }

@@ -21,7 +21,7 @@ import {
   BACK_BUTTON, BARE_ROW, DOOR, KEYCAP, LIST_ROW, buttonVariants,
 } from '@ccrc/ui';
 import { cn } from '../../ui/src/lib/cn';
-import { declValue, ruleIn, stripComments } from './cssRule';
+import { atBlock, declValue, ruleIn, selectorsOf, stripComments } from './cssRule';
 
 const ROOT = path.join(import.meta.dirname, '..', '..');
 const read = (rel: string): string => readFileSync(path.join(ROOT, rel), 'utf8');
@@ -39,10 +39,34 @@ describe('every interactive primitive carries a hover and a pressed state', () =
     BareRow: BARE_ROW,
     'Button ghost': buttonVariants({ variant: 'ghost' }),
     'Button quiet': buttonVariants({ variant: 'quiet', size: 'fit' }),
+    // `ghost`'s twin on the dead hue (D-5099) takes its lift and its press
+    // too (D-5495): it was the one hairline button that did neither.
+    'Button danger-ghost': buttonVariants({ variant: 'danger-ghost', size: 'fit' }),
   };
   it.each(Object.entries(grounded))('%s lifts to --bg-hover and sinks to --bg-pressed', (_name, cls) => {
     expect(has(cls, 'hover:bg-hover'), `${_name}: no hover ground`).toBe(true);
     expect(has(cls, 'active:bg-pressed'), `${_name}: no pressed ground`).toBe(true);
+  });
+
+  // A disabled hairline button stands down (D-5448): its lift and press are
+  // gated on `enabled:`, so a disabled one neither lifts nor sinks (D-5495).
+  const hairline: Record<string, string> = {
+    'Button ghost': buttonVariants({ variant: 'ghost' }),
+    'Button danger-ghost': buttonVariants({ variant: 'danger-ghost', size: 'fit' }),
+  };
+  it.each(Object.entries(hairline))('%s gates its lift and press on enabled:', (_name, cls) => {
+    expect(cls, `${_name}: a disabled one lifts`).toMatch(/(^|\s)enabled:hover:bg-hover(\s|$)/);
+    expect(cls, `${_name}: a disabled one sinks`).toMatch(/(^|\s)enabled:active:bg-pressed(\s|$)/);
+    expect(cls, `${_name}: an ungated lift`).not.toMatch(/(^|\s)(hover:bg-hover|active:bg-pressed)(\s|$)/);
+  });
+
+  // The same gate on the dead banner's grounds (D-5688): the Reboot is
+  // disabled while a reboot is in flight, and must not lift then either.
+  it('Button danger-ghost, ground dead, gates its lift and press on enabled:', () => {
+    const cls = buttonVariants({ variant: 'danger-ghost', size: 'fit', ground: 'dead' });
+    expect(cls).toMatch(/(^|\s)enabled:hover:bg-hover-on-dead(\s|$)/);
+    expect(cls).toMatch(/(^|\s)enabled:active:bg-pressed-on-dead(\s|$)/);
+    expect(cls).not.toMatch(/(^|\s)(hover:bg-hover-on-dead|active:bg-pressed-on-dead)(\s|$)/);
   });
 
   // A door, the back chevron and a keycap are INK on chrome, not a ground: they
@@ -68,6 +92,55 @@ describe('every interactive primitive carries a hover and a pressed state', () =
     const merged = cn(buttonVariants({ variant: 'ghost' }), at![1]);
     expect(has(merged, 'hover:bg-transparent')).toBe(true);
     expect(has(merged, 'hover:bg-hover')).toBe(false);
+  });
+
+  // D-5462 (Task 14b): KEYCAP's hover is a utility, and an UNLAYERED app rule
+  // beats every layered rule whatever its specificity. The header's rule sat
+  // unlayered on the primary ink, so the lift was dead twice over: outranked,
+  // and onto the ink it already wore. The secondary rest is scoped to a
+  // pointer that can hover: on touch the hover never fires, so the cap keeps
+  // the primary ink it always had (Refined stays pixel-identical on a phone).
+  it("the header's keycaps rest below the hover ink only where hover exists, in a layer the hover outranks (D-5462)", () => {
+    const chat = read('pwa/src/session/chat.css');
+    const layered = atBlock(chat, '@layer components');
+    const rest = declValue(ruleIn(layered, '.chat-head .keycap'), 'color');
+    expect(rest, 'without hover the header cap keeps the primary ink').toBe('var(--ink-primary)');
+    const hover = atBlock(layered, '@media (hover: hover)');
+    expect(declValue(ruleIn(hover, '.chat-head .keycap'), 'color'),
+      'under a hovering pointer the cap rests on the secondary ink, one tier under the lift')
+      .toBe('var(--ink-secondary)');
+    expect(has(KEYCAP, 'hover:text-ink-primary')).toBe(true);
+  });
+
+  it('no unlayered rule in chat.css re-declares the header keycap colour (D-5462)', () => {
+    // Structural, not one spelling: `.chat-head > .keycap`, a grouped list or
+    // a compound selector outranks the hover just as `.chat-head .keycap`
+    // would. Only the stand-down (`:disabled`) may stay unlayered, because the
+    // hover is `enabled:`-gated and nothing contests it there.
+    const chat = stripComments(read('pwa/src/session/chat.css'));
+    const unlayered = chat.replace(stripComments(atBlock(chat, '@layer components')), '');
+    const offenders: string[] = [];
+    const re = /([^{}]+)\{([^{}]*)\}/g;
+    for (let m = re.exec(unlayered); m !== null; m = re.exec(unlayered)) {
+      const body = m[2] ?? '';
+      if (!/(^|[;\s])color\s*:/.test(body)) continue;
+      for (const sel of (m[1] ?? '').split(',')) {
+        if (/\.chat-head\b/.test(sel) && /\.keycap\b/.test(sel) && !/:disabled\b/.test(sel)) {
+          offenders.push(sel.trim());
+        }
+      }
+    }
+    expect(offenders, 'an unlayered header keycap colour outranks the hover again').toEqual([]);
+  });
+
+  it('the terminal keys hold the well ink under the mouse (D-5462)', () => {
+    // On the well the primitive's primary ink is dark glass on dark glass in
+    // the light theme. Unlayered, `.term-keys .keycap` outranks the hover, so
+    // the cap keeps --ink-on-well; layering it would let the hover through.
+    const chat = read('pwa/src/session/chat.css');
+    expect(declValue(ruleIn(chat, '.term-keys .keycap'), 'color')).toBe('var(--ink-on-well)');
+    expect(atBlock(chat, '@layer components'), 'the terminal cap moved into the layer')
+      .not.toMatch(/\.term-keys \.keycap\s*\{/);
   });
 
   it('the theme bridge maps both grounds, so the utilities resolve to the tokens', () => {
@@ -105,6 +178,12 @@ describe('a lifted ground fades in at --dur-fast, the per-skin duration', () => 
     BareRow: BARE_ROW,
     'Button ghost': buttonVariants({ variant: 'ghost' }),
     'Button quiet': buttonVariants({ variant: 'quiet', size: 'fit' }),
+    // `ghost`'s twin on the dead hue (D-5099) takes its lift and its press
+    // too (D-5495): it was the one hairline button that did neither.
+    'Button danger-ghost': buttonVariants({ variant: 'danger-ghost', size: 'fit' }),
+    // On the dead banner it lifts to that banner's own grounds (D-5688), and
+    // fades to them the same way.
+    'Button danger-ghost, ground dead': buttonVariants({ variant: 'danger-ghost', size: 'fit', ground: 'dead' }),
   };
   it.each(Object.entries(grounded))('%s transitions background-color at var(--dur-fast), and nothing races it', (_name, cls) => {
     expect(cls, `${_name}: the hover ground snaps`).toMatch(FADES_GROUND);
@@ -227,6 +306,22 @@ describe('the selected row is tint plus rail, not reverse video', () => {
     expect(declValue(rule, 'color')).toBeNull();
   });
 
+  it("a folded card's name says it holds the selection in the row's own idiom, not an inverted chip (D-5495)", () => {
+    // The fold hides the selected row, so the card name stands in for it. It
+    // was the retired slab at chip scale; it now wears the row's tint and rail.
+    // Both also carry a forced-colours outline; this is about the normal-colour
+    // rules, so read them with that block taken out.
+    const normal = fleet.replace(atBlock(fleet, '@media (forced-colors: active)'), '');
+    const chip = ruleIn(normal, '.proj-card[data-holds-selection] .proj-card-name');
+    const row = ruleIn(normal, '.sess-line--active');
+    expect(declValue(chip, 'background')).toBe(declValue(row, 'background'));
+    expect(declValue(chip, 'box-shadow')).toBe(declValue(row, 'box-shadow'));
+    expect(chip).not.toMatch(/var\(--ink-primary\)|var\(--bg-page\)/);
+    expect(declValue(chip, 'color')).toBeNull();
+    // The rail is 2px inside the chip's left edge, so the name starts past it.
+    expect(declValue(chip, 'padding')).toMatch(/^0 var\(--sp-1\)\s*0 calc\(var\(--sp-1\)\s*\+\s*2px\)$/);
+  });
+
   it('keeps the label semibold, the non-colour channel', () => {
     expect(declValue(ruleIn(fleet, '.sess-line--active .sess-label'), 'font-weight'))
       .toBe('var(--weight-semibold)');
@@ -270,7 +365,80 @@ describe('the gate measures each new ground with exactly the inks drawn on it', 
     expect(gateList('PRESSED_INKS').sort()).toEqual([...NEUTRAL, '--status-dead-text'].sort());
   });
 
+  it("the danger-ghost's hairline is gated on the grounds it lifts and sinks to (D-5495)", () => {
+    // Its label, --status-dead-text, is already in HOVER_INKS and PRESSED_INKS;
+    // the hairline is a non-text boundary, so it gets its own 3:1 pairs.
+    expect(gate).toMatch(/danger hairline \/ hover \(UI 3:1\)`, T\.dead, T\.hover, 3\]/);
+    expect(gate).toMatch(/danger hairline \/ pressed \(UI 3:1\)`, T\.dead, T\.pressed, 3\]/);
+  });
+
   it('the slab pair is retired with the slab', () => {
     expect(gate).not.toMatch(/selected-row meta ink \/ slab/);
+  });
+});
+
+// ── the Docs chrome's hand-drawn twins (D-5501) ──────────────────────────────
+//
+// docs.css draws its own door, back chevron and listing rows (a plain <button>
+// each, not `Door`, `BackButton` or `ListRow`), so the primitives' hover and
+// pressed classes never reach them. These pin the restatement: the same grounds
+// and inks, the same guard, the press winning over the hover while held, and
+// each moving rule stilled by a reduced-motion block placed after it.
+describe('the Docs chrome lifts, sinks and brightens as the primitives do (D-5501)', () => {
+  const docsCss = stripComments(read('pwa/src/docs/docs.css'));
+  const squash = (v: string | null): string => (v ?? '').replace(/\s+/g, '');
+  const BORDERED = ['.docs-copy', '.docs-fresh', '.docs-leaf-action', '.doc-img-load', '.doc-img-action', '.doc-plain-action', '.doc-gate-btn'];
+
+  it('a link row lifts to --bg-hover and a door or chevron brightens, inside (hover: hover) only', () => {
+    const rules = hoverRules(docsCss);
+    expect(rules.map((r) => r.selector).sort())
+      .toEqual([
+        '.docs-door:hover, .docs-back:hover, .docs-crumb:hover, .docs-crumbs-more:hover',
+        '.docs-row:not(.docs-row-off):hover',
+        BORDERED.map((c) => `${c}:enabled:hover`).join(', '),
+      ].sort());
+    expect(rules.every((r) => r.guarded)).toBe(true);
+    expect(docsCss).toMatch(/\.docs-row:not\(\.docs-row-off\):hover\s*\{\s*background:\s*var\(--bg-hover\);\s*color:\s*var\(--ink-primary\);/);
+    expect(docsCss).toMatch(/\.docs-door:hover,\s*\.docs-back:hover,\s*\.docs-crumb:hover,\s*\.docs-crumbs-more:hover\s*\{\s*color:\s*var\(--ink-primary\);/);
+  });
+
+  // D-5502: the bordered controls (twins of the ghost Button) and the freshness chip lift and sink as the ghost
+  // Button does; a disabled one (the chip while fetching) and the no-origin span do neither.
+  it('the bordered controls and the chip lift to --bg-hover and sink to --bg-pressed, the press after the hover (D-5502)', () => {
+    const hoverSel = BORDERED.map((c) => `${c}:enabled:hover`).join(', ');
+    const pressSel = BORDERED.map((c) => `${c}:enabled:active`).join(', ');
+    for (const c of BORDERED) {
+      expect(declValue(ruleIn(docsCss, `${c}:enabled:hover`), 'background'), c).toBe('var(--bg-hover)');
+      expect(declValue(ruleIn(docsCss, `${c}:enabled:active`), 'background'), c).toBe('var(--bg-pressed)');
+    }
+    expect(selectorsOf(docsCss, '.docs-copy:enabled:hover')).toEqual(BORDERED.map((c) => `${c}:enabled:hover`));
+    expect(selectorsOf(docsCss, '.docs-copy:enabled:active')).toEqual(BORDERED.map((c) => `${c}:enabled:active`));
+    const hover = docsCss.indexOf(hoverSel + ' {');
+    const press = docsCss.indexOf(pressSel + ' {');
+    expect(hover, 'the hover rule').toBeGreaterThan(-1);
+    expect(press, 'the press must come after the hover').toBeGreaterThan(hover);
+    expect(hoverRules(docsCss).find((r) => r.selector === hoverSel)?.guarded).toBe(true);
+    for (const sel of ['.docs-copy', '.docs-fresh']) {
+      expect(squash(declValue(ruleIn(docsCss, sel), 'transition')), sel)
+        .toBe('background-colorvar(--dur-fast)var(--ease-swift)');
+    }
+  });
+
+  it('a held link row sinks to --bg-pressed, declared after the hover at the same specificity', () => {
+    const press = docsCss.search(/\.docs-row:not\(\.docs-row-off\):active\s*\{\s*background:\s*var\(--bg-pressed\);/);
+    const hover = docsCss.search(/\.docs-row:not\(\.docs-row-off\):hover\s*\{/);
+    expect(press, 'the pressed rule').toBeGreaterThan(-1);
+    expect(hover, 'the hover rule').toBeGreaterThan(-1);
+    expect(press, 'the press must come after the hover, or a held row shows the hover ground').toBeGreaterThan(hover);
+    // The old press to --bg-surface is gone: one pressed ground across the app.
+    expect(docsCss).not.toMatch(/\.docs-row:active\s*\{/);
+  });
+
+  it('the row fades its ground at --dur-fast, and reduced motion stills the row, the door and the chevron', () => {
+    expect(squash(declValue(ruleIn(docsCss, '.docs-row'), 'transition')))
+      .toBe('background-colorvar(--dur-fast)var(--ease-swift)');
+    const block = docsCss.match(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([^@]*)\}\s*$/);
+    expect(block, 'a reduced-motion block at the end of docs.css').not.toBeNull();
+    expect(block![1]).toMatch(/\.docs-door,\s*\.docs-back,\s*\.docs-row,\s*\.docs-fresh,\s*\.docs-copy,\s*\.docs-leaf-action,\s*\.doc-img-load,\s*\.doc-img-action,\s*\.doc-plain-action,\s*\.doc-gate-btn\s*\{\s*transition:\s*none;/);
   });
 });

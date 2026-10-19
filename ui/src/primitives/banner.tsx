@@ -12,9 +12,12 @@
 // fleet.css: `.fleet-host-banner` (dead red, carries a destructive action),
 // `.fleet-host-banner--warn` (attention amber, roster divergence) and
 // `.substrate-banner` (attention amber, no action). 77 lines of CSS for one
-// shape in two tones. The declarations are reproduced here token for token —
-// see banner.test.tsx, which measures the old rules against this cva rather
-// than trusting that claim.
+// shape in two tones. The declarations are reproduced here token for token.
+// The old rules are gone, so nothing measures them against this cva (D-5578);
+// what pins the banner now is `pwa/test/fleet-host-banner.test.tsx` (the
+// rendered banner, its tones and its action),
+// `pwa/test/substrate-banner.test.tsx` (the amber tone with no action) and
+// `pwa/test/dead-banner-grounds.test.ts` (the dead tone's grounds, D-5574).
 //
 // NO STYLESHEET, deliberately. Every tone sets both its ground and its ink, so
 // each pair is self-grounded and `pwa/test/utility-pairs.test.ts` derives and
@@ -51,6 +54,13 @@ export const bannerVariants = cva(
         // tint lets a darker ground through and the text pair falls to 4.44 in
         // light — under the floor. The -tint-solid token IS that wash
         // pre-composited on --bg-surface, which buys the measured ground back.
+        //
+        // The lift and press on this tint are the danger-ghost's, not the
+        // banner's: the card's `--bg-hover` and `--bg-pressed` measure 1.03
+        // and 1.00 against it (D-5574), so its trigger passes `ground="dead"`
+        // and paints `--bg-hover-on-dead` and `--bg-pressed-on-dead` (D-5688).
+        // Until then the banner re-scoped the two names for its subtree
+        // (D-5575). pwa/test/dead-banner-grounds.test.ts holds both halves.
         dead: 'border-status-dead bg-status-dead-tint-solid text-status-dead-text',
         // The host is UP, so this is not the dead language — it is the amber
         // the fleet already uses for "waiting on you". Both tokens are solid in

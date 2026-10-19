@@ -25,7 +25,7 @@ import type {
 } from '../../../shared/api';
 import type { ModelClass } from '../../../shared/models';
 import { api, failedTo } from '../lib/api';
-import { poolOfPlacement, type ProjectPlacementRead } from './placementWords';
+import { placementOfRow, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
 
 /** The pools frame reduced to one comparable string. Key ORDER is not
  *  significance: the wire is rebuilt per frame, so an object that re-serialises
@@ -220,12 +220,7 @@ export function useProjectRows(
   // every render it caused.
   const placementFor = useCallback((project: string): ProjectPlacementRead => {
     if (projectRows.kind !== 'ready') return projectRows;
-    const row = projectRows.rows.find((candidate) => candidate.name === project);
-    if (row === undefined) return { kind: 'missing' };
-    return Object.hasOwn(row, 'pool') && row.pool !== undefined
-      && Object.hasOwn(row, 'placement') && row.placement !== undefined
-      ? { kind: 'measured', pool: row.pool, placement: row.placement }
-      : { kind: 'legacy' };
+    return placementOfRow(projectRows.rows.find((candidate) => candidate.name === project));
   }, [projectRows]);
 
   // Task 4 fix round 1: a card's own `placement`/`pool` names ONE project —

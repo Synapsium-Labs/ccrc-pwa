@@ -11,10 +11,12 @@ export default meta;
 
 type Story = StoryObj<typeof meta>;
 
-/** The bare row: one label, nothing else. CHECK that it is at least 52px tall
- *  — the row is a phone tap target before it is a line of text — and that it
- *  carries its own bottom rule, which is what separates it from its sibling
- *  in a list. */
+/** The bare row: one label, nothing else. CHECK, in Refined, that it is at
+ *  least 52px tall — the row is a phone tap target before it is a line of
+ *  text — and that it carries its own bottom rule, which is what separates it
+ *  from its sibling in a list. `--row-h` (D-5093) is the row's minimum
+ *  height: Instrument's is 44px, or 32px under a fine pointer, where the
+ *  row's padding and rule set the drawn height (33.3px, D-5463). */
 export const Plain: Story = {};
 
 /** A list, which is the only honest way to look at this row: alignment

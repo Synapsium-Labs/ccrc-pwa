@@ -311,3 +311,25 @@ describe('tick() runs the lane on its own clock, through the production fleet ro
     expect(nudgeRows(r.coord)).toHaveLength(1);
   });
 });
+
+// The feed writer redacts every body before it is archived (spec §6.7, D-5298), and Claude Code's compaction uuid is
+// 36 characters of letters, digits and hyphens: a token-shaped run the redactor masks. The "already nudged" read must
+// compare in the form the writer stored, or the record never reads as landed and the nudge is never typed.
+describe('sweepIdleCompactNudge: a real-shaped compaction uuid survives the feed\'s redaction (D-5298)', () => {
+  const UUID = '3f1c2a7e-9b4d-4e21-8c6a-1d2e3f4a5b6c';
+  const tail = (): object[] => IDLE_TAIL.map((r) => (r === ROW.boundary ? { ...ROW.boundary, uuid: UUID } : r));
+  it('types once, and a second sweep and a restarted watcher type nothing more', async () => {
+    const first = await rig();
+    seedTranscript(first.h.home, tail());
+    await first.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(literalSends(first.h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
+    expect(warned(`compaction ${UUID}: typed`)).toBe(1);
+    at(NOW + IDLE_NUDGE_SWEEP_MS);
+    await first.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    const second = await rig({ home: first.h, coord: first.coord });
+    seedTranscript(first.h.home, tail());
+    await second.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(literalSends(first.h.calls)).toHaveLength(1);
+    expect(nudgeRows(first.coord)).toHaveLength(1);
+  });
+});

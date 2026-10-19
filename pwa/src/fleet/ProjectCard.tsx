@@ -15,8 +15,7 @@
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 import { BareRow, Button } from '@ccrc/ui';
-import type { FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, ProjectRepoWire, RosterWire, RunSummary } from '../../../shared/api';
-import { repoLabel } from '../../../shared/api';
+import type { FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
 import { navigate } from '../lib/router';
 import { orphanNote, type OrphanNote } from './orphanWords';
 import { addWorkspaceLabel, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
@@ -24,6 +23,7 @@ import { formatElapsed } from './formatReset';
 import { releasedByProgramme, type FleetGroup } from './groupFleet';
 import { archivableReleased } from './archiveReleased';
 import { nestFleet, type FleetRow } from './nestFleet';
+import { childRunContext, workingOnCard, type FleetTreeGroup } from './fleetTree';
 import { ProjectCardHead } from './ProjectCardHead';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, dispatchWindow, runForSession, waveLabel } from './runWords';
 import { SessionLine } from './SessionLine';
@@ -101,7 +101,6 @@ export function ProjectCard({
   runs = [],
   abroad = [],
   poolFor = () => null,
-  repoFor = () => undefined,
   nowMs = Date.now(),
   coordOf = () => null,
   frameSeen = false,
@@ -192,13 +191,6 @@ export function ProjectCard({
    *  passes this, or a test that predates the fix, keeps every row on the
    *  card's own project (the common case) rendering exactly as before. */
   poolFor?: (project: string) => ProjectPoolWire | null;
-  /** The repository a project's main checkout was last measured to be, by
-   *  name — `FleetScreen`'s lookup over the same `/api/projects` rows that
-   *  feed `placement`, absent-key-aware (an older server yields `undefined`).
-   *  A displaced row needs ITS OWN project's repo, which is by construction a
-   *  different project from this card's, so a one-project `placement` read is
-   *  the wrong shape and this is a lookup. Defaults to "nothing measured". */
-  repoFor?: (project: string) => ProjectRepoWire | undefined;
   /** The shared tick, in MILLISECONDS, for the pending child's elapsed clock.
    *  This card is pure and controlled (fold state, roster and projection all
    *  arrive the same way), so the CADENCE belongs to `FleetScreen`, which runs
@@ -255,7 +247,10 @@ export function ProjectCard({
   // depth as a bracket plus an indent. Top-level order is `group.sessions`
   // verbatim — a child is lifted out of it and put back under its parent, and
   // nothing else moves.
-  const rows = nestFleet(group.sessions, runs);
+  // D-5527: the fleet tree's rows when the caller built them (`fleetTree`, the
+  // one model both skins read); a caller that hands a bare group still gets
+  // `nestFleet` over the same two inputs, which is the identical answer.
+  const rows = 'rows' in group ? (group as FleetTreeGroup).rows : nestFleet(group.sessions, runs);
   const rowKey = (row: FleetRow): string =>
     row.kind === 'session' ? row.session.id : `spawn:${row.run.id}`;
   // Task 5: the hold reason's door, decided HERE because this is the level that
@@ -279,19 +274,9 @@ export function ProjectCard({
   const noteFor = (row: FleetRow): OrphanNote | null =>
     orphanNote(row, runs, group.project, group.sessions, coordOf, frameSeen);
 
-  // Spec §6: the repo label appears where the card stops implying it — on a
-  // row whose repo DIFFERS from this card's, both measured, and nowhere else.
-  // At the REPO grain, not the project name: two projects can resolve to one
-  // repo (a worktree-shaped project beside its parent), and a label there is
-  // noise. Decided HERE, the one level that holds both the card's project and
-  // the lookup; `SessionLine` composes it into the row's name and knows no card.
-  // THE RESIDUAL, NAMED RATHER THAN CLAIMED OVER: when either side's repo is
-  // unmeasured — this card's or the row's — `repoLabel` answers null and no
-  // label is composed, so two same-slug rows on one card keep IDENTICAL
-  // accessible names until the read lands. That is spec §6's own residual, and
-  // it is kept: a label spun out of an unmeasured read would be a claim, and
-  // waiting on a timeout would make the name depend on when it is asked.
-  const cardRepo = repoLabel(repoFor(group.project));
+  // Spec §6's repo label left the row in D-5545: a row whose project differs from this card's carries the
+  // cross-project chip (D-5527), which keeps two same-slug rows' accessible names apart, and the session header
+  // names the repository (`SessionScreen`'s `repo`). The card is a glance; the header holds the rest.
   // "Archive all" sends only folded rows that are not children (`archiveReleased.ts`); the rest are named.
   const releasedArchivable = group.released.filter(archivableReleased).length;
   const releasedChildren = group.released.length - releasedArchivable;
@@ -300,17 +285,12 @@ export function ProjectCard({
   // is disabled — a tap could not collapse it, only silently invert the stored `<project>::released` key.
   const selectionInReleased = selectedId !== null && group.released.some((s) => s.id === selectedId);
   const releasedShown = releasedOpen || selectionInReleased;
-  const repoOf = (s: FleetSession): string | null => {
-    if (s.project === group.project) return null;
-    const own = repoLabel(repoFor(s.project));
-    return own !== null && cardRepo !== null && own !== cardRepo ? own : null;
-  };
 
   /** ONE spelling of this card's eight-prop `SessionLine` call. It was
    *  written out three times — here, in the released fold and in the archived
    *  fold — which is three places that have to agree about what a row on THIS
    *  card knows: its pool, its run door and whether its repo needs saying. */
-  const line = (s: FleetSession): ReactNode => (
+  const line = (s: FleetSession, note: OrphanNote | null = null): ReactNode => (
     <SessionLine
       key={s.id}
       session={s}
@@ -320,12 +300,15 @@ export function ProjectCard({
       roster={roster}
       projectPool={poolOf(s)}
       onOpenRun={openRunFor(s)}
-      repo={repoOf(s)}
+      workingOn={workingOnCard(s, group.project)}
+      childRun={childRunContext(s, runs, coordOf)}
+      coordinator={note?.presence ?? null}
+      {...(note === null ? {} : { coordinatorTitle: note.title })}
     />
   );
 
   const rowBody = (row: FleetRow): ReactNode =>
-    row.kind === 'session' ? line(row.session) : <PendingSpawn run={row.run} nowMs={nowMs} />;
+    row.kind === 'session' ? line(row.session, noteFor(row)) : <PendingSpawn run={row.run} nowMs={nowMs} />;
 
   return (
     <section
@@ -354,30 +337,21 @@ export function ProjectCard({
               nothing, which is the whole reason the card can afford one at
               all. `aria-hidden` on the glyph because it is the picture of an
               edge, not a fact the row does not already carry. */}
-          {rows.map((row) => {
-            const note = noteFor(row);
-            return row.depth === 0 ? (
-              // A Fragment, never a wrapper element: the top-level row's DOM
-              // has to stay byte-identical to the one that shipped before the
-              // tree existed, and `.proj-card-body`'s column flex lays out its
-              // children directly. The marker is a SIBLING line for the same
-              // reason — a wrapper would change the row it explains.
-              <Fragment key={rowKey(row)}>
-                {rowBody(row)}
-                {note !== null && (
-                  <div className="proj-crossing" title={note.title} data-presence={note.presence}>
-                    <span className="proj-crossing-glyph" aria-hidden="true">{CROSSING_GLYPH}</span>
-                    {note.text}
-                  </div>
-                )}
-              </Fragment>
+          {/* D-5545: an orphaned worker's marker rides ITS ROW now — "coordinator gone" as the row's one
+              attention marker (`orphanNote`'s presence, `SessionLine`'s `coordinator`) — instead of a second
+              line under it that repeated the row's programme and wave. */}
+          {rows.map((row) => (
+            row.depth === 0 ? (
+              // A Fragment, never a wrapper element: the top-level row's DOM stays byte-identical to the one that
+              // shipped before the tree existed, and `.proj-card-body`'s column flex lays out its children directly.
+              <Fragment key={rowKey(row)}>{rowBody(row)}</Fragment>
             ) : (
               <div key={rowKey(row)} className="proj-nest" data-depth={row.depth}>
                 <span className="proj-nest-bracket" aria-hidden="true">{NEST_BRACKET}</span>
                 {rowBody(row)}
               </div>
-            );
-          })}
+            )
+          ))}
           {abroad.length > 0 && (
             <div className="proj-abroad">
               {abroad.map((r) => (
@@ -424,7 +398,7 @@ export function ProjectCard({
                   <div className="proj-released-heading">
                     {p.title !== null && p.title !== p.program ? `${p.program} · ${p.title}` : p.program}
                   </div>
-                  {p.sessions.map(line)}
+                  {p.sessions.map((s) => line(s))}
                 </div>
               ))}
               {onArchiveReleased !== undefined && releasedArchivable > 0 && (
@@ -467,7 +441,7 @@ export function ProjectCard({
           </BareRow>
           {archivedOpen && (
             <div className="proj-archived-body">
-              {group.archived.map(line)}
+              {group.archived.map((s) => line(s))}
             </div>
           )}
         </div>

@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type {
+  AccountOpAnswer,
+  AccountOpReq,
   AgentReady,
   AgentReq,
   CapsReq,
@@ -32,7 +34,7 @@ import type {
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
 import {
-  CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP,
+  ACCOUNT_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP,
   TOKEN_SYNC_SPAWN_TIMEOUT_MS, UPDATE_OP, UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine,
   inFlightBusyDetail, isClaimCode, isReadFromRange, isUpdateLockHeldLine, lockHeldBusyDetail, tokenSyncSpawnArgv, updateLauncherPath,
   updateSpawnArgv, updateWriterMayLive,
@@ -59,6 +61,10 @@ import {
 import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
 import { openTail, type TailHandle } from './tail.js';
 import { makeTokenSyncSpawn, tokenSyncAnswer, tokenSyncEnv, type TokenSyncSpawn } from './tokensync.js';
+import {
+  accountSpawnBounds, buildAccountArgv, decodeAccountStdin, makeAccountOpSpawn, readFleetIdentity, type AccountOpSpawn,
+} from './accountop.js';
+import type { AccountArgvRefusal } from '../../shared/account-argv.js';
 import { canonicalize, checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
 
 /**
@@ -78,6 +84,7 @@ export interface AgentOpts {
   spawnPty?: PtySpawn;      // default spawnFleetPty (real node-pty) — tests inject a fake spawn
   spawnUpdate?: UpdateSpawn; // default realUpdateSpawn (a process-group spawn) — tests inject a recorder; the `update` op's ONLY spawn
   spawnTokenSync?: TokenSyncSpawn; // default makeTokenSyncSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `token-sync` op's ONLY spawn
+  spawnAccount?: AccountOpSpawn; // default makeAccountOpSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `account` op's ONLY spawn
 }
 
 export interface RunningAgent {
@@ -515,6 +522,7 @@ interface ConnCtx {
   updateGate: UpdateGate;
   spawnTokenSync: TokenSyncSpawn;
   tokenSyncGate: TokenSyncGate;
+  spawnAccount: AccountOpSpawn;
 }
 
 async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: VerbCache): Promise<void> {
@@ -668,8 +676,8 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       return;
     }
     case 'update': {
-      // Design 2026-09-20 §10. One of the TWO wire-triggered spawns outside the
-      // exec whitelist (agent/CLAUDE.md; the other is `token-sync`'s). `validateReq` has already refused a tag
+      // Design 2026-09-20 §10. One of the THREE wire-triggered spawns outside the
+      // exec whitelist (agent/CLAUDE.md; the others are `token-sync`'s and `account`'s). `validateReq` has already refused a tag
       // that fails `isReleaseTag` and a kind outside `RequestKind`, so this body
       // never sees an unvalidated argument. `updateSpawnArgv` checks both AGAIN
       // and throws on a caller bug, so an edit that lets one through reaches
@@ -769,6 +777,27 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
         : failTokenSync(req.id, answer.err, answer.detail));
       return;
     }
+    case 'account': {
+      // Accounts spec §13.2 (plan Task A8, D-5513). The THIRD wire-triggered spawn outside the exec whitelist
+      // (agent/CLAUDE.md). `validateReq` has already built the argv and decoded the stdin once; both are built AGAIN
+      // here from the typed frame, and a caller bug that lets a bad one through answers the builder's refusal, never a
+      // spawn. The launcher is absolute, argv comes only from `buildAccountArgv` (no free argv), the secret rides
+      // stdin only, and the port hands the child an explicit {HOME, PATH, LANG}. Nothing here consults the exec
+      // whitelist, and nothing may. The log line names the op, the sub and the lane, never `stdinB64` or a field.
+      const stdin = decodeAccountStdin(req.stdinB64);
+      const built = buildAccountArgv(req.sub, req.laneId, req.fields, stdin.ok && stdin.bytes !== null);
+      let outcome: AccountOpAnswer;
+      if (!stdin.ok) outcome = accountRefusal(ctx.cfg.home, 'key-charset');
+      else if (!built.ok) outcome = accountRefusal(ctx.cfg.home, built.why);
+      else {
+        const file = updateLauncherPath(ctx.cfg.home);
+        const spawned = await ctx.spawnAccount(file, built.argv, stdin.bytes, accountSpawnBounds(req.sub));
+        outcome = { ...spawned, fleetIdentity: readFleetIdentity(ctx.cfg.home) };
+      }
+      console.warn(`ccrc-agent: account ${req.sub} ${req.laneId ?? '-'} -> ${outcome.kind}`);
+      send(ws, ok(req.id, outcome));
+      return;
+    }
     default: {
       // Exhaustive today (every `AgentReq` op above), but kept as a
       // defensive fallback rather than removed — a future protocol variant
@@ -805,6 +834,17 @@ export interface ReqRefusal {
   id: number;
 }
 
+/** `validateReq`'s answer for an `account` frame whose arguments failed the builder or whose stdin failed its bytes
+ *  check (accounts spec §13.2). Unlike `ReqRefusal` it is answered `ok: true` with `kind: 'refused'` and the node's
+ *  `fleetIdentity`, because every answer of this op carries the identity; `bad-request` keeps meaning "this agent
+ *  predates the op". Nothing was spawned. */
+export interface AccountReqRefusal { accountRefused: AccountArgvRefusal; id: number }
+
+/** An `account` refusal's payload, with the node's identity read at answer time. */
+function accountRefusal(home: string, why: AccountArgvRefusal): AccountOpAnswer {
+  return { kind: 'refused', why, fleetIdentity: readFleetIdentity(home) };
+}
+
 /**
  * Runtime shape/type validation for an already-JSON-parsed `req` frame.
  * `msg as AgentReq` (the old dispatch site) is a *compile-time-only*
@@ -817,7 +857,7 @@ export interface ReqRefusal {
  * the actual gate: every op's required fields are checked here, by type,
  * before the frame is ever allowed to reach a handler.
  */
-function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | null {
+function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | AccountReqRefusal | null {
   if (typeof msg.id !== 'number') return null;
   const id = msg.id;
   switch (msg.op) {
@@ -900,6 +940,25 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | null
       // `ReqRefusal` carrying `bad-code`; `bad-request` from this op keeps meaning "this agent predates it".
       if (!isClaimCode(msg.code)) return { refuse: 'bad-code', id };
       return { t: 'req', id, op: 'token-sync', code: msg.code } satisfies TokenSyncReq;
+    }
+    case 'account': {
+      // The ONE builder (`buildAccountArgv`, spec §13.2's bounds, never a regex here) and the ONE stdin check
+      // (`decodeAccountStdin`). Every failure is an `AccountReqRefusal` carrying the builder's word; a frame that
+      // passes is retyped field by field, so nothing past this point sees an unvalidated value.
+      const stdin = decodeAccountStdin(msg.stdinB64);
+      if (!stdin.ok) {
+        // The sub is judged first, so a frame off the union says `bad-sub` whatever its stdin.
+        const first = buildAccountArgv(msg.sub, msg.laneId, msg.fields, false);
+        return { accountRefused: !first.ok && first.why === 'bad-sub' ? 'bad-sub' : 'key-charset', id };
+      }
+      const built = buildAccountArgv(msg.sub, msg.laneId, msg.fields, stdin.bytes !== null);
+      if (!built.ok) return { accountRefused: built.why, id };
+      const req: AccountOpReq = {
+        t: 'req', id, op: 'account', sub: msg.sub as AccountOpReq['sub'], laneId: msg.laneId as string | null,
+        fields: { ...(msg.fields as Record<string, string>) },
+      };
+      if (typeof msg.stdinB64 === 'string') req.stdinB64 = msg.stdinB64;
+      return req;
     }
     default:
       return null;
@@ -1200,6 +1259,7 @@ function handleConnection(
     updateGate,
     spawnTokenSync: opts.spawnTokenSync,
     tokenSyncGate,
+    spawnAccount: opts.spawnAccount,
   };
 
   const helloTimer = setTimeout(() => {
@@ -1241,11 +1301,12 @@ function handleConnection(
       // contract is unchanged — a key is written only when there is
       // something to write.
       // `ops` (design 2026-09-20 §10): the request ops this agent answers beyond
-      // the closed set every agent has always had: `update`, and `token-sync`
-      // (box-token lifecycle spec 4.4). It is required in `ReadyFrame`, so it
-      // cannot be dropped silently.
+      // the closed set every agent has always had: `update`, `token-sync`
+      // (box-token lifecycle spec 4.4) and `account` (accounts spec §13.2, whose
+      // remote arm sends a secret only to an agent that names it here). It is
+      // required in `ReadyFrame`, so it cannot be dropped silently.
       const frame: ReadyFrame = {
-        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP],
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP],
       };
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
@@ -1274,6 +1335,12 @@ function handleConnection(
       // A well-shaped op whose ARGUMENT failed its guard (design 2026-09-20
       // §10) is answered with the op's own word, never `bad-request`.
       if ('refuse' in req) { send(ws, fail(req.id, req.refuse)); return; }
+      // An `account` frame the builder refused (accounts spec §13.2): answered with the identity, nothing spawned.
+      if ('accountRefused' in req) {
+        console.warn(`ccrc-agent: account refused -> ${req.accountRefused}`);
+        send(ws, ok(req.id, accountRefusal(opts.home, req.accountRefused)));
+        return;
+      }
       // Defense in depth: even a validated request could hit an unforeseen
       // rejection downstream — this `.catch` guarantees no rejection from
       // the fire-and-forget dispatch is ever left unhandled.
@@ -1333,6 +1400,8 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     // The child's environment is built from the agent's CONFIGURED home, not `process.env.HOME`, so the verb's
     // `~/.cc-secrets` and `~/.ccrc` are the ones the launcher path (`updateLauncherPath(home)`) belongs to.
     spawnTokenSync: rawOpts.spawnTokenSync ?? makeTokenSyncSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
+    // The `account` op's port gets the same explicit environment, from the same configured home (spec §13.2).
+    spawnAccount: rawOpts.spawnAccount ?? makeAccountOpSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const verbCache: VerbCache = {

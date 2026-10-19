@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, twenty-five rows, and nothing else.
+#   * The route comes from ROUTES below, thirty-one rows, and nothing else.
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
@@ -73,7 +73,7 @@ REG="$HOME/.cc-sessions"
 SAFE_RE='^[A-Za-z0-9_-]+$'
 
 # METHOD|path|needs-id|comma-separated query keys this row accepts (or `-`).
-# Twenty-five rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Thirty-one rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -148,6 +148,22 @@ declare -A ROUTES=(
   # assertion that must equal the derived id, so it can never select another session. The row declares an id because the route
   # template has one, not because a caller supplies it.
   [coordinators.intent]='POST|/api/coordinators/{id}/intent|yes|-'
+  # The child's PermissionRequest hook (coordinator-first routing, plan Task 14, spec §6.3, D-5297). `request` sends
+  # the canonical request on `--json -` and is answered `201 {id, waitS}`; `ruling` polls one row with the hook's
+  # per-request nonce (`SAFE_RE`, like every id); `key` reads the server's public key, which the install spine pins
+  # once into `~/.ccrc/approval-signing.pub`. A child's own TOOL CALL to any of them is refused by its PreToolUse
+  # deny (`approvals` as this client's first argument); the hook's calls are not tool calls.
+  [approvals.request]='POST|/api/approvals|no|-'
+  [approvals.ruling]='GET|/api/approvals/{id}/ruling|yes|nonce'
+  [approvals.key]='GET|/api/approvals/key|no|-'
+  # The CLAIMANT's three rows (plan Task 16, D-5298): rule, hand over, and read one row it holds. `rule` and `release`
+  # take the attribution pair in the `--json` body, as `asks answer`/`asks release` do, and the verdict and reason ride
+  # there too: this grammar takes no positional word after the id (D-5489). `show` derives identity from the pane, as
+  # `asks list` does, so a session reads only a row held for it. A CHILD's own tool call to any `approvals` row is
+  # refused by its PreToolUse deny (plan Task 14), before this client runs.
+  [approvals.rule]='POST|/api/approvals/{id}/rule|yes|-'
+  [approvals.release]='POST|/api/approvals/{id}/release|yes|-'
+  [approvals.show]='GET|/api/approvals/{id}|yes|-'
 )
 
 # Every refusal leaves by this door, in the SAME JSON envelope the routes
@@ -507,6 +523,13 @@ main() {
         splice_body_field 'claimedByUuid' "$DERIVED_UUID" \
           'the runs open body is not a JSON object; claimedByUuid cannot be added' ;;
     esac
+  fi
+
+  # `approvals show` reads one row as the claimant it was held for (plan Task 16): the identity pair is the pane's,
+  # never the caller's, exactly as `asks list` below derives its own.
+  if [[ "$key" == 'approvals.show' ]]; then
+    derive_identity
+    query="fromId=$DERIVED_ID&fromUuid=$DERIVED_UUID"
   fi
 
   if [[ "$key" == 'asks.list' ]]; then

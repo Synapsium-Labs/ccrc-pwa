@@ -3,8 +3,10 @@
 // only door out, Ack, sat on the node's row in Settings, and nothing on the home screen named the halt. This banner
 // names each halting node, its state, its target and its detail, and offers that node's Ack IN PLACE.
 //
-// ONE Ack: the gate is `canAck` and the tap is `sendAck` (updateAck.ts), the very pair the Settings row calls, so
-// the two buttons cannot disagree about one row. A halting row is settled `failed`/`reverted`, so `canAck` is true
+// ONE Ack: the gate is `canAck`, the confirm is `AckConfirm` and the send is `sendAck` (updateAck.ts), the very three
+// the Settings row uses, so the two buttons cannot disagree about one row. The Ack is a danger action (D-5507): a red
+// hairline (`danger-ghost`, the fleet-host banner's Reboot's treatment on a tinted banner) that opens the confirm.
+// A halting row is settled `failed`/`reverted`, so `canAck` is true
 // for it (halt-banner.test.tsx pins that over every state the halt rule names). It is still the one gate, never a
 // halt-only copy. What the row does after a tap follows how the Ack ended (D-4272, D-4273): a clean 200 holds it
 // until a poll shows a different lease (`leaseKey`); an unreadable answer, or no answer at all (a rejection, a 5xx,
@@ -13,7 +15,8 @@
 // that read, however late it lands or renders; the poll's issue number tells the two apart. A 4xx refusal re-arms it
 // at once.
 // The route stays the authority: a row
-// that went busy since the poll answers 409 `busy`, said as a toast, and the screen re-polls either way.
+// that went busy since the poll answers 409 `busy`, said in a line under that row's Ack (D-5507, settings spec §6.4;
+// a toast only when the banner has gone while the Ack was in flight), and the screen re-polls either way.
 //
 // Injected only: FleetScreen polls /api/updates once and hands the view down (`fleet-screen.test.tsx` pins one
 // poll). It renders nothing while there is no view, or no halting node. Its own class, `.halt-banner`: attention
@@ -23,8 +26,9 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import type { NodeWire, ReleaseWire, UpdatesView } from '../../../shared/api';
 import { Button } from '@ccrc/ui';
-import { canAck, keepFocusInRow, sendAck } from './updateAck';
+import { AckConfirm, canAck, sendAck } from './updateAck';
 import type { AckOutcome } from './updateAck';
+import { ResultLine, useResultLine } from '../screens/settingsText';
 import { haltLine, haltingNodes } from './updateHalt';
 import { UPDATES_STALE_TEXT } from './useUpdatesView';
 import './fleet.css';
@@ -69,10 +73,15 @@ function HaltRow({ node: n, releases, seq, onAcked, listRef }: {
     && (hold.kind === 'acked' || hold.after === null ? hold.lease === leaseKey(n) : seq < hold.after);
   const shownAcked = held && (hold.kind === 'acked' || hold.said === 'unreadable');
   const label = shownAcked ? 'Acked' : 'Ack';
+  // D-5507: the tap opens AckConfirm; only its commit sends. The confirm hands the focus to this row when the Ack it
+  // disables was focused (wave 19, R26(a)).
+  const [confirming, setConfirming] = useState(false);
+  // How the Ack ended, said under it (D-5507): `sendAck` toasts nothing of its own.
+  const line = useResultLine();
   const ack = (): void => {
     const sentAgainst = leaseKey(n);
-    keepFocusInRow(rowRef.current);   // the tap disables this Ack, in flight and then held (wave 19, R26(a))
     setAcking(true);
+    line.clear();
     const settle = (outcome: AckOutcome): void => {
       setAcking(false);
       const issued = onAcked();   // the re-poll, issued INSIDE the outcome callback: every read before it is older
@@ -85,21 +94,24 @@ function HaltRow({ node: n, releases, seq, onAcked, listRef }: {
         });
       }
     };
-    void sendAck(n.nodeId).then(settle, () => settle('unanswered'));   // sendAck never rejects; belt and braces
+    void sendAck(n.nodeId, line.say).then(settle, () => settle('unanswered'));   // sendAck never rejects; belt and braces
   };
   return (
     <li className="halt-banner-node" data-node-id={n.nodeId} ref={rowRef} tabIndex={-1}>
       <span className="halt-banner-node-text">{haltLine(n)}</span>
       <Button
-        variant="primary"
+        variant="danger-ghost"
         size="fit"
         className="flex-none"
         aria-label={`${label} ${n.label}`}
         disabled={!canAck(n, releases) || acking || held}
-        onClick={ack}
+        onClick={() => setConfirming(true)}
       >
         {label}
       </Button>
+      {/* The banner's own ink: the line sits on its attention ground, so it wears the banner's text, not the page's. */}
+      <ResultLine line={line.line} className="halt-banner-msg settings-result" />
+      <AckConfirm node={n} releases={releases} open={confirming} onClose={() => setConfirming(false)} onConfirm={ack} rowRef={rowRef} />
     </li>
   );
 }

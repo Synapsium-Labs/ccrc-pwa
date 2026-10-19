@@ -22,7 +22,7 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
 | refused | what it means | what you do |
 |---|---|---|
 | `claimed-by-another` | another coordinator holds this program; `by` names it | stop (clause 8) |
-| `project-mismatch` | the `sessionId` you passed belongs to a workspace in ANOTHER project; `by` names that project | do not retry with the same id. A wave that changes project opens WITHOUT `sessionId` and spawns fresh in the target repo. Nothing was opened and nothing was held |
+| `project-mismatch` | the `sessionId` you passed belongs to a workspace in ANOTHER project; `by` names that project. Or it names an EXISTING session of the run's project and you sit outside that project; `by` names YOUR project and a `detail` says a crossing spawns fresh. Or your own registry row records no project; a `detail` says so and there is no `by`. Where you sit never refuses an open by itself; it only stops you rebinding an existing session: a coordinator may sit in ANY project and run a programme whose home and runs are elsewhere (the operator's ruling of 2026-10-18) | do not retry with the same id. A wave that changes project, or any wave into a project you do not sit in, opens WITHOUT `sessionId` and spawns fresh in the target repo. The no-project case: stop and report. Nothing was opened and nothing was held |
 | `home-mismatch` | this programme already stores a DIFFERENT home project; `by` names the stored one | stop and report. A programme has one home — the repo holding its ledger, spec and plan — and it does not move. Either you are addressing the wrong programme or the `homeProject` you sent is wrong. Nothing was opened |
 | `claimant-is-a-worker` | the `claimedBy` you sent is itself the WORKER of an open run; `by` names that worker's coordinator | stop and report. A dispatched worker never opens a run — the board brackets one level and a chain would render its middle detached. This session is a worker until its own run is closed; nothing was opened and nothing was held |
 | `workspace-spent` | the `sessionId` you passed is a CHILD workspace — one carrying the `$REG/<id>.child` marker, ordinarily minted for a run — whose branch has already had a PR (open, draft, merged or closed); `pr` names it. A child carries at most one PR | open the wave again WITHOUT `sessionId`; its dispatch mints a fresh child (§5, "One PR per child"). Nothing was opened and nothing was held |
@@ -96,9 +96,10 @@ run row's own `wave`.
 ## 2 — Dispatch a wave
 
 `POST /api/runs/:id/dispatch`
-`{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…"}}`
+`{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…"},"slug":"<child name>"}`
 → `{"ok":true,"id":<run id>,"sessionId":…,"resumed":…,"clearedAt":…,"briefQueued":…}`
 with the run now `dispatched`, or a refusal:
+
 
 | refused | what it means | what you do |
 |---|---|---|
@@ -183,6 +184,23 @@ arrives within the wave's ordinary window, read the session's own screen before 
 provenance of the workspace survives the conversation. Every dispatch also writes its preflight
 there as `skill-preflight:<skillState>` — on all three answers, so a trail with no such line means
 an older build, never a healthy home.
+
+**`slug` — the child's name, chosen at birth.** `"slug"` is an optional
+WORKSPACE slug — not the programme slug of §1, which has its own grammar — for a
+fresh spawn only. It rides to `ws-add`, so the worktree, its `ws/<slug>` branch and
+the session id `<project>-<slug>` carry it from the first second; use it when the
+work keys on the workspace name (a ticket id, say). Nothing renames a child later:
+the path and the session id never move, and the branch-only `ws-rename` refuses a
+held workspace. It follows ccd's own slug grammar (`_ws_slug_valid`); a malformed one
+answers `error:'bad-request'` (400) with a `detail` reading `slug: must match …`, and
+a slug on a run that resumes its bound session answers 400 with `slug: this run
+resumes …` — drop it there, it names nothing. A named spawn binds ONLY
+`<project>-<slug>`: any other new workspace is never adopted in its place. A slug
+already in use — or one whose id outruns ccd's length cap with a long project
+name — fails the spawn with a 502 whose `stderr` carries ccd's own words: choose
+another name, never retry the same one. **Check the answer's `sessionId` equals
+`<project>-<slug>`**; an older server ignores the field and mints a random name, and
+that mismatch is a stop-and-report, not a retry.
 
 **`items` — the wave's declared ledger.** `"items"` is the machine-readable
 half of the wave plan whose other half is the brief: one title per unit of
@@ -1044,6 +1062,18 @@ a child's pane, and this session never does it by any other means. All three rou
 lane are named here — a coordinator IS a parent and calls all three, so this is the truthful
 entry, not an invitation like the operator-only doors above.
 
+**A cross-project coordinator receives its children's questions** (the operator's ruling of
+2026-10-18, D-5530). A child's question is held for the recorded claimant of the child's run
+wherever that claimant sits — no project is compared — so if you coordinate a programme whose
+runs are in another project, its children's questions are mailed to you and are yours to
+answer. The answer route admits exactly the session a row is held for: any other caller,
+whatever its project, is `403 not-parent`. A question the server could not hold for anyone (a
+run with no claimant, a run of another programme, or a parent it could not measure) goes to the
+operator at once, is never mailed to you, and is not in your `asks list`; an answer to one is
+refused (`not-held`, or `403 not-parent` when it was held for nobody). So does one whose run was
+opened without your attribution (D-5531): a run opened with no claimant uuid before the fleet
+carried `ccrc-api`, or before the attributed binding, holds nothing, wherever you sit.
+
 ```bash
 : "${ask_id:?set ask_id to the held ask row positive decimal id}"
 "$API" asks answer "$ask_id" --json - <<JSON
@@ -1134,3 +1164,24 @@ entire evidentiary surface — no rationale, no chat history, no transcript of t
 reasoning is readable through any route in this tree. Rule only from what you can already read
 elsewhere: the spec, the plan, the ledger, the branch, and your own prior rulings on this
 program. If answering would require guessing rather than reading, decline it.
+
+## The approval lane — a child's permission prompt (plan Task 16)
+
+Clause 11 licenses this too. A child's permission prompt reaches you as mail (subject
+`approval:<id>`), held for you as the recorded claimant of the child's run wherever you sit
+(D-5530), with the command fenced as untrusted data, the server's class, the window's end in
+UTC and the ready-to-run commands. Three routes are yours, each through the client:
+
+- `POST /api/approvals/:id/rule` — allow once (an `ordinary` row only) or deny, with a reason
+  the child reads. The mailed command reads your reason through a quoted heredoc and builds the
+  body with jq, so type the reason on its own line and nothing in it is run (D-5489).
+- `POST /api/approvals/:id/release` — hand it over: the operator is notified at once, and it is
+  final.
+- `GET /api/approvals/:id` (`"$API" approvals show <id>`) — the row, redacted, for the claimant
+  it was held for; anyone else is `403`.
+
+A ruling after the window is refused `hook-gone`: the child's hook has returned and the
+operator has the prompt. Any other caller is `403 not-parent`, wherever it sits. The other
+three routes of the lane are the child's hook's and the install's, never yours:
+`POST /api/approvals` (the hook's request), `GET /api/approvals/:id/ruling` (the hook's wait,
+by its nonce) and `GET /api/approvals/key` (the public key a fleet box pins).

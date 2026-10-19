@@ -371,7 +371,7 @@ describe('a partially purged registry never frees the slug', () => {
     fs.writeFileSync(path.join(REG, 'demo-quiet-basin-mesa.uuid'), 'x');
     // POSITIONAL, because `--slug` is not a flag `cmd_ws_add` has: its arg
     // loop's catch-all would bind `project` to the literal `--slug`, which
-    // `_ws_project_valid` accepts, so the verb would die at the not-a-git-repo
+    // `_ws_project_valid` refuses (a leading dash), so the verb would die at its
     // check long before the slug gate and this test would pass for the wrong
     // reason.
     const out = sh(`${WS_ADD} ( cmd_ws_add demo quiet-basin ) 2>&1 || echo REFUSED`);

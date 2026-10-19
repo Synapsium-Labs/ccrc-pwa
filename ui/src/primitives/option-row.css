@@ -18,13 +18,16 @@
     align-items: center;
     gap: var(--sp-3);
     width: 100%;
-    min-height: 52px; /* DIRECTION: dialog option rows run 52+ */
+    /* DIRECTION: dialog option rows run 52+. That is the row role's Refined
+       value (role-census.test.ts holds it); Instrument's is 44px, or 32px
+       under a fine pointer (D-5093, Task 14b). */
+    min-height: var(--row-h);
     padding: var(--sp-2) var(--sp-2);
     border: none;
     border-bottom: 1px solid var(--edge-subtle);
     background: none;
     text-align: left;
-    font: var(--weight-regular) var(--fs-base) / var(--lh-tight) var(--family-ui);
+    font: var(--weight-regular) var(--fs-ui) / var(--lh-tight) var(--family-ui);
     color: var(--ink-primary);
     cursor: pointer;
     transition: transform var(--dur-press) var(--curve-swift);
@@ -63,7 +66,7 @@
   }
   .opt-glyph {
     width: 14px;
-    font: var(--weight-semibold) var(--fs-base) / 1 var(--family-mono);
+    font: var(--weight-semibold) var(--fs-ui) / 1 var(--family-mono);
     color: var(--accent);
     flex: none;
   }
@@ -114,7 +117,7 @@
   .opt-idx {
     width: 14px;
     text-align: center;
-    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
     color: var(--ink-tertiary);
     flex: none;
   }
@@ -141,7 +144,7 @@
     overflow-wrap: anywhere;
   }
   .opt-enter {
-    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
     color: var(--accent);
     flex: none;
   }

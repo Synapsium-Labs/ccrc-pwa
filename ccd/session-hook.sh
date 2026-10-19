@@ -2875,7 +2875,7 @@ fi
 [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || exit 0
 [[ -d "$REG" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
-DSP_DEFS='def maxline: 4096; def maxlabel: 128; def maxpath: 512; def isid: type == "string" and length >= 1 and length <= idmax and (explode | all(idch)); def nbytes: explode | map(if . < 128 then 1 elif . < 2048 then 2 elif . < 65536 then 3 else 4 end) | add // 0; def fits($m): type == "string" and length <= $m and nbytes <= $m; def chk($m): if type != "string" then [null, false] elif fits($m) then [., false] else [null, true] end; def req($m): if type == "string" and . != "" and fits($m) then . else null end; def over($m): type == "string" and (fits($m) | not); def obj: if type == "object" then . else {} end; def outcome: if . == "async_launched" then "async-launched" elif . == "completed" then "completed" elif . == "failed" or . == "error" then "failed" else "unknown" end; def word: type == "string" and length >= 1 and length <= 32 and (explode | all((. >= 97 and . <= 122) or . == 95 or . == 45)); def tagv($o; $c): if type == "string" and startswith($o) and endswith($c) then .[($o | length):(length - ($c | length))] else null end; def note: if type == "string" and startswith("<task-notification>\n") and contains("</task-notification>") then (ltrimstr("<task-notification>\n") | split("\n")) as $l | ($l[0] | tagv("<task-id>"; "</task-id>")) as $a | ($l[1] | tagv("<tool-use-id>"; "</tool-use-id>")) as $b | ($l[if ($l[2] | type) == "string" and ($l[2] | startswith("<output-file>")) then 3 else 2 end] | tagv("<status>"; "</status>")) as $d | if ($a | isid) and ($b | isid) and ($d | word) then {taskId: $a, toolUseId: $b, status: (if $d == "completed" then "completed" elif $d == "failed" then "failed" elif $d == "killed" or $d == "cancelled" or $d == "canceled" or $d == "stopped" then "cancelled" else "unknown" end)} else null end else null end; def spool: . as $p | ($p.hook_event_name // "" | tostring | keep(alpha)) as $ev | ($p.tool_name | if type == "string" then . else "" end) as $tn | ($p.tool_use_id | if isid then . else null end) as $tu | ($p.session_id | if isid then . else null end) as $cs | (($p.agent_id // "") | tostring | length > 0) as $hasa | ($p.agent_id | if isid then . else "" end) as $aid | ($p.agent_type | chk(maxlabel)) as [$at, $ato] | ($p.cwd | chk(maxpath)) as [$cwd, $cwdo] | ($p.transcript_path | chk(maxpath)) as [$tp, $tpo] | ($p.tool_input | obj) as $ti | ($p.tool_response) as $r | ($r | obj) as $o | ($o.status | outcome) as $oc | ($ti.command | type == "string" and contains("worktree")) as $wt | (if $ev == "SessionStart" then ($p.source | if req(maxlabel) != null then {b: {source: .}} else null end) elif $ev == "SessionEnd" then ($p.reason | if req(maxlabel) != null then {b: {reason: .}} else null end) elif $ev == "SubagentStart" then (if $aid != "" then {b: {}} else null end) elif $ev == "SubagentStop" then (if $aid != "" then ($p.agent_transcript_path | chk(maxpath)) as [$ap, $apo] | {b: {agentTranscriptPath: $ap}, o: $apo} else null end) elif $ev == "UserPromptSubmit" then ($p.prompt | note | if . != null then {b: {notification: .}} else null end) elif $ev == "PreToolUse" and $tu != null then (if $tn == "Agent" or $tn == "Task" or $tn == "Workflow" then ($ti.isolation | chk(maxlabel)) as [$iso, $isoo] | {b: {toolName: $tn, toolUseId: $tu, isolation: $iso}, o: $isoo} elif $tn == "Bash" then {b: {toolName: "Bash", toolUseId: $tu}, w: $wt} else null end) elif $ev == "PostToolUse" and $tu != null then (if $tn == "Agent" or $tn == "Task" then {b: {toolName: $tn, toolUseId: $tu, outcome: $oc, launch: (if ($oc == "async-launched" or $oc == "completed") and ($o.agentId | isid) then {status: $oc, agentId: $o.agentId, isAsync: (if ($o.isAsync | type) == "boolean" then $o.isAsync else $oc == "async-launched" end)} else null end)}} elif $tn == "Workflow" then ($o.taskType | req(maxlabel)) as $tt | ($o.workflowName | req(maxlabel)) as $wn | ($o.transcriptDir | req(maxpath)) as $td | ($o.scriptPath | req(maxpath)) as $sp | {b: {toolName: "Workflow", toolUseId: $tu, outcome: $oc, launch: (if ($oc == "async-launched" or $oc == "completed") and ($o.taskId | isid) and ($o.runId | isid) and $tt != null and $wn != null and $td != null and $sp != null then {status: $oc, taskId: $o.taskId, taskType: $tt, workflowName: $wn, runId: $o.runId, transcriptDir: $td, scriptPath: $sp} else null end)}, o: (($o.taskType | over(maxlabel)) or ($o.workflowName | over(maxlabel)) or ($o.transcriptDir | over(maxpath)) or ($o.scriptPath | over(maxpath)))} elif $tn == "Bash" then {b: {toolName: "Bash", toolUseId: $tu, outcome: (if ($r | type) == "object" and $r.interrupted == true then "failed" elif ($r | type) == "object" and ($r.stdout | type) == "string" then "completed" else "unknown" end)}, w: $wt} else null end) else null end) as $v | if $cs != null and ($hasa | not or $aid != "") and $v != null then (($cwdo or $tpo or $ato or ($v.o // false))) as $ov | (($v.w // false) and $cwd != null and ($cwd | startswith("/")) and ($cwd | explode | all(. >= 32 and . != 127))) as $trig | (if $trig then 17 else 0 end) as $rs | (now * 1000 | floor) as $ms | ($ms / 1000 | floor) as $s | (($s | strftime("%Y-%m-%dT%H:%M:%S")) + "." + (($ms % 1000) | tostring | ("00" + .) | .[-3:]) + "Z") as $t | def L($n): {v: 1, eventKind: $ev, observedAt: $t, sessionId: $sid, parentIncarnation: $gen, claudeSessionId: $cs} + (if $ver != "" and $n < 1 then {claudeVersion: $ver} else {} end) + (if $cwd != null and $n < 2 then {cwd: $cwd} else {} end) + (if $aid != "" then {agentId: $aid} else {} end) + (if $ev == "SubagentStart" or $ev == "SubagentStop" then {agentType: (if $n < 3 then $at else null end)} elif $aid != "" and $at != null and $n < 3 then {agentType: $at} else {} end) + (if $tp != null and $n < 4 then {transcriptPath: $tp} else {} end) + $v.b + (if $n > 0 or $ov then {truncated: true} else {} end); (first(range(0; 5) | L(.) | select(((tojson | nbytes) + 1 + $rs) < maxline)) // null) as $line | if $line == null then ["", "", "", ""] else [($s | strftime("%Y%m%d%H")), (($s - 86400) | strftime("%Y%m%d%H")), (if $trig then $cwd else "" end), ($line | tojson)] end else ["", "", "", ""] end;'; dsp_dir="$REG/delegation/spool/$id" dsp_gen="" dsp_ver="" dsp_defs="" dsp_out=', "", "", "", ""'; [[ "$id" != .* && ${#id} -le CCRC_ID_MAX && -d "$dsp_dir" && ! -L "$dsp_dir" && ! -L "${dsp_dir%/*}" && ! -L "${dsp_dir%/*/*}" && -f "$REG/$id.generation" && ! -L "$REG/$id.generation" ]] && { IFS= read -r -N 37 dsp_gen < "$REG/$id.generation"; } 2>/dev/null; if [[ "$dsp_gen" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ && ( -z "${CCRC_SESSION_GENERATION:-}" || "${CCRC_SESSION_GENERATION:-}" == "$dsp_gen" ) ]]; then case "$payload" in *'"Bash"'*|*'"Agent"'*|*'"Task"'*|*'"Workflow"'*|*'"SessionStart"'*|*'"SessionEnd"'*|*'"SubagentStart"'*|*'"SubagentStop"'*|*'task-notification>'*) dsp_ver="${CLAUDE_CODE_EXECPATH:-}"; dsp_ver="${dsp_ver##*/}"; [[ "$dsp_ver" =~ ^[0-9][0-9A-Za-z.+-]{0,31}$ ]] || dsp_ver=""; dsp_defs="$DSP_DEFS"; dsp_out=', ((try spool catch ["", "", "", ""]) | .[])' ;; esac; else dsp_gen=""; fi   # THE DELEGATION SPOOL's gate, builtins only (see the block after the history spool): the owner's directory and a sound, unchanged-so-far incarnation must exist, else the parse below builds no line; the spool's jq text is added only for a payload that carries the QUOTED name of a delegation tool or event or the notification tag, so every other event compiles the parse alone
+DSP_DEFS='def maxline: dspcap; def maxlabel: 128; def maxpath: 512; def isid: type == "string" and length >= 1 and length <= idmax and (explode | all(idch)); def nbytes: explode | map(if . < 128 then 1 elif . < 2048 then 2 elif . < 65536 then 3 else 4 end) | add // 0; def fits($m): type == "string" and length <= $m and nbytes <= $m; def chk($m): if type != "string" then [null, false] elif fits($m) then [., false] else [null, true] end; def req($m): if type == "string" and . != "" and fits($m) then . else null end; def over($m): type == "string" and (fits($m) | not); def obj: if type == "object" then . else {} end; def outcome: if . == "async_launched" then "async-launched" elif . == "completed" then "completed" elif . == "failed" or . == "error" then "failed" else "unknown" end; def word: type == "string" and length >= 1 and length <= 32 and (explode | all((. >= 97 and . <= 122) or . == 95 or . == 45)); def tagv($o; $c): if type == "string" and startswith($o) and endswith($c) then .[($o | length):(length - ($c | length))] else null end; def note: if type == "string" and startswith("<task-notification>\n") and contains("</task-notification>") then (ltrimstr("<task-notification>\n") | split("\n")) as $l | ($l[0] | tagv("<task-id>"; "</task-id>")) as $a | ($l[1] | tagv("<tool-use-id>"; "</tool-use-id>")) as $b | ($l[if ($l[2] | type) == "string" and ($l[2] | startswith("<output-file>")) then 3 else 2 end] | tagv("<status>"; "</status>")) as $d | if ($a | isid) and ($b | isid) and ($d | word) then {taskId: $a, toolUseId: $b, status: (if $d == "completed" then "completed" elif $d == "failed" then "failed" elif $d == "killed" or $d == "cancelled" or $d == "canceled" or $d == "stopped" then "cancelled" else "unknown" end)} else null end else null end; def spool: . as $p | ($p.hook_event_name // "" | tostring | keep(alpha)) as $ev | ($p.tool_name | if type == "string" then . else "" end) as $tn | ($p.tool_use_id | if isid then . else null end) as $tu | ($p.session_id | if isid then . else null end) as $cs | (($p.agent_id // "") | tostring | length > 0) as $hasa | ($p.agent_id | if isid then . else "" end) as $aid | ($p.agent_type | chk(maxlabel)) as [$at, $ato] | ($p.cwd | chk(maxpath)) as [$cwd, $cwdo] | ($p.transcript_path | chk(maxpath)) as [$tp, $tpo] | ($p.tool_input | obj) as $ti | ($p.tool_response) as $r | ($r | obj) as $o | ($o.status | outcome) as $oc | ($ti.command | type == "string" and contains("worktree")) as $wt | (if $ev == "SessionStart" then ($p.source | if req(maxlabel) != null then {b: {source: .}} else null end) elif $ev == "SessionEnd" then ($p.reason | if req(maxlabel) != null then {b: {reason: .}} else null end) elif $ev == "SubagentStart" then (if $aid != "" then {b: {}} else null end) elif $ev == "SubagentStop" then (if $aid != "" then ($p.agent_transcript_path | chk(maxpath)) as [$ap, $apo] | {b: {agentTranscriptPath: $ap}, o: $apo} else null end) elif $ev == "UserPromptSubmit" then ($p.prompt | note | if . != null then {b: {notification: .}} else null end) elif $ev == "PreToolUse" and $tu != null then (if $tn == "Agent" or $tn == "Task" or $tn == "Workflow" then ($ti.isolation | chk(maxlabel)) as [$iso, $isoo] | {b: {toolName: $tn, toolUseId: $tu, isolation: $iso}, o: $isoo} elif $tn == "Bash" then {b: {toolName: "Bash", toolUseId: $tu}, w: $wt} else null end) elif $ev == "PostToolUse" and $tu != null then (if $tn == "Agent" or $tn == "Task" then {b: {toolName: $tn, toolUseId: $tu, outcome: $oc, launch: (if ($oc == "async-launched" or $oc == "completed") and ($o.agentId | isid) then {status: $oc, agentId: $o.agentId, isAsync: (if ($o.isAsync | type) == "boolean" then $o.isAsync else $oc == "async-launched" end)} else null end)}} elif $tn == "Workflow" then ($o.taskType | req(maxlabel)) as $tt | ($o.workflowName | req(maxlabel)) as $wn | ($o.transcriptDir | req(maxpath)) as $td | ($o.scriptPath | req(maxpath)) as $sp | {b: {toolName: "Workflow", toolUseId: $tu, outcome: $oc, launch: (if ($oc == "async-launched" or $oc == "completed") and ($o.taskId | isid) and ($o.runId | isid) and $tt != null and $wn != null and $td != null and $sp != null then {status: $oc, taskId: $o.taskId, taskType: $tt, workflowName: $wn, runId: $o.runId, transcriptDir: $td, scriptPath: $sp} else null end)}, o: (($o.taskType | over(maxlabel)) or ($o.workflowName | over(maxlabel)) or ($o.transcriptDir | over(maxpath)) or ($o.scriptPath | over(maxpath)))} elif $tn == "Bash" then {b: {toolName: "Bash", toolUseId: $tu, outcome: (if ($r | type) == "object" and $r.interrupted == true then "failed" elif ($r | type) == "object" and ($r.stdout | type) == "string" then "completed" else "unknown" end)}, w: $wt} else null end) else null end) as $v | if $cs != null and ($hasa | not or $aid != "") and $v != null then (($cwdo or $tpo or $ato or ($v.o // false))) as $ov | (($v.w // false) and $cwd != null and ($cwd | startswith("/")) and ($cwd | explode | all(. >= 32 and . != 127))) as $trig | (if $trig then 17 else 0 end) as $rs | (now * 1000 | floor) as $ms | ($ms / 1000 | floor) as $s | (($s | strftime("%Y-%m-%dT%H:%M:%S")) + "." + (($ms % 1000) | tostring | ("00" + .) | .[-3:]) + "Z") as $t | def L($n): {v: 1, eventKind: $ev, observedAt: $t, sessionId: $sid, parentIncarnation: $gen, claudeSessionId: $cs} + (if $ver != "" and $n < 1 then {claudeVersion: $ver} else {} end) + (if $cwd != null and $n < 2 then {cwd: $cwd} else {} end) + (if $aid != "" then {agentId: $aid} else {} end) + (if $ev == "SubagentStart" or $ev == "SubagentStop" then {agentType: (if $n < 3 then $at else null end)} elif $aid != "" and $at != null and $n < 3 then {agentType: $at} else {} end) + (if $tp != null and $n < 4 then {transcriptPath: $tp} else {} end) + $v.b + (if $n > 0 or $ov then {truncated: true} else {} end); (first(range(0; 5) | L(.) | select(((tojson | nbytes) + 1 + $rs) < maxline)) // null) as $line | if $line == null then ["", "", "", ""] else [($s | strftime("%Y%m%d%H")), (($s - 86400) | strftime("%Y%m%d%H")), (if $trig then $cwd else "" end), ($line | tojson)] end else ["", "", "", ""] end;'; dsp_dir="$REG/delegation/spool/$id" dsp_gen="" dsp_ver="" dsp_defs="" dsp_out=', "", "", "", ""'; DSP_LINE_BELOW=4096 DSP_LINE_SMALL=1008; [[ "${OSTYPE:-}" == linux-gnu* && "${BASH_VERSINFO[5]-}" == *-linux-gnu* ]] || DSP_LINE_BELOW=$DSP_LINE_SMALL; [[ "$id" != .* && ${#id} -le CCRC_ID_MAX && -d "$dsp_dir" && ! -L "$dsp_dir" && ! -L "${dsp_dir%/*}" && ! -L "${dsp_dir%/*/*}" && -f "$REG/$id.generation" && ! -L "$REG/$id.generation" ]] && { IFS= read -r -N 37 dsp_gen < "$REG/$id.generation"; } 2>/dev/null; if [[ "$dsp_gen" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ && ( -z "${CCRC_SESSION_GENERATION:-}" || "${CCRC_SESSION_GENERATION:-}" == "$dsp_gen" ) ]]; then case "$payload" in *'"Bash"'*|*'"Agent"'*|*'"Task"'*|*'"Workflow"'*|*'"SessionStart"'*|*'"SessionEnd"'*|*'"SubagentStart"'*|*'"SubagentStop"'*|*'task-notification>'*) dsp_ver="${CLAUDE_CODE_EXECPATH:-}"; dsp_ver="${dsp_ver##*/}"; [[ "$dsp_ver" =~ ^[0-9][0-9A-Za-z.+-]{0,31}$ ]] || dsp_ver=""; dsp_defs="def dspcap: $DSP_LINE_BELOW; $DSP_DEFS"; dsp_out=', ((try spool catch ["", "", "", ""]) | .[])' ;; esac; else dsp_gen=""; fi   # THE DELEGATION SPOOL's gate, builtins only (see the block after the history spool): the owner's directory and a sound, unchanged-so-far incarnation must exist, else the parse below builds no line; the spool's jq text is added only for a payload that carries the QUOTED name of a delegation tool or event or the notification tag, so every other event compiles the parse alone
 { read -r event; read -r psid; read -r paid; read -r aid; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); def idch: alpha or (. >= 48 and . <= 57) or . == 95 or . == 45; def idmax: 64; '"$dsp_defs"'(.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(idch)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end), (.agent_id | if type == "string" and length >= 1 and length <= idmax and (explode | all(idch)) then . else "" end)'"$dsp_out" <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write. The first four lines are the cleaned event, session id, any-agent-id flag and raw agent id; the last four are the delegation spool's bucket, prune cutoff, listing cwd and line, all empty when no line is due
 [[ -n "$event" ]] || exit 0
 
@@ -3002,7 +3002,7 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
   return 0
 }
 
-state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" crons="-1" bgk="" bgi="" err="" hts="" msid="" sessend=""
+state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" crons="-1" bgk="" bgi="" err="" hts="" msid="" sessend="" apr=""
 case "$event" in
   UserPromptSubmit) state="working" ;;
   PostToolUse)
@@ -3055,7 +3055,7 @@ case "$event" in
       # questions/options while the pane showed an actual 3-option menu. Both
       # paths must keep producing the same {questions:…} envelope shape.
       ask_json=$(jq -c '{questions: (.tool_input.questions // [])}' <<<"$payload" 2>/dev/null) || ask_json="null"
-    else
+    else apr=1   # the flag the tail's approval wait reads (plan Task 14, D-5297); on this line so no anchor below moves
       ask_json=$(jq -c '{approval: {tool: (.tool_name // "unknown"),
         summary: ((.tool_input.command // .tool_input.file_path // .tool_input.path
                    // .tool_input.url // .tool_input.pattern // "") | tostring | .[0:200])}}' \
@@ -3329,7 +3329,8 @@ msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
 # A REGULAR FILE OR NOTHING, as the history spool's append: a symlink, directory or FIFO at either path is neither read nor
 # written (builtin tests; a FIFO read would block the hook), and a `joinedprev` that is not one stops the rotation.
 # BOUNDED, BY RENAME: past JOIN_ROTATE_AT lines the Start that notices opens the file on its own fd, takes `flock -n` on it,
-# confirms the path still names that inode (`-ef /dev/fd/N`) and still holds more than the cap, then `mv -f`s it whole to
+# confirms the path still names that inode (a second descriptor of it, `-ef` the locked one, both through `/dev/fd`) and still
+# holds more than the cap, then `mv -f`s it whole to
 # `<id>.joinedprev` (dot-free too), replacing the last one. Nothing is rewritten, so NO APPEND IS LOST: a writer whose
 # descriptor opened the old inode writes into joinedprev, a later one creates a fresh `joined`, and a second rotator fails
 # `flock -n`, finds the path renamed or finds a short new file, and skips. Membership is the union: the last
@@ -3339,8 +3340,11 @@ msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
 # The file is written only by this block, one id per line, and read back whole-line only (below).
 JOIN_ROTATE_AT=128 JOIN_READ_MAX=16384
 _hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller says `|| true`)
-  local jf="$REG/$id.joined" jp="$REG/$id.joinedprev" cur="" nl="" fd=""
-  [[ ! -L "$jf" && ( -f "$jf" || ! -e "$jf" ) ]] || return 1
+  local jf="$REG/$id.joined" jp="$REG/$id.joinedprev" cur="" nl="" fd="" fd2="" same=0
+  # The entry guard refuses only a POSITIVE non-regular type (D-5434). "Absent or regular" is two reads, and a sibling's first `>>`
+  # (creation) or a rotator's `mv -f` (removal) lands between them in either order, so that form refused a plain append and the
+  # caller's `|| true` hid the lost line. No move between absent and regular makes any of these tests true.
+  if [[ -L "$jf" || -d "$jf" || -p "$jf" || -S "$jf" || -b "$jf" || -c "$jf" ]]; then return 1; fi
   if ! { printf '%s\n' "$aid" >> "$jf"; } 2>/dev/null; then
     # A FAILED WRITE STILL CREATED THE FILE (ENOSPC after O_CREAT leaves an empty `joined`), so it gets the same look at the row
     # as a landed one: a row purged under it must not keep an orphan, and an empty file is an orphan like any other.
@@ -3351,7 +3355,16 @@ _hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller
   nl="${cur//[!$'\n']/}"
   if (( ${#nl} > JOIN_ROTATE_AT )) && command -v flock >/dev/null 2>&1 \
      && [[ ! -L "$jp" && ( -f "$jp" || ! -e "$jp" ) ]] && { exec {fd}<"$jf"; } 2>/dev/null; then
-    if flock -n "$fd" 2>/dev/null && [[ ! -L "$jf" && "$jf" -ef "/dev/fd/$fd" ]]; then   # `-ef` follows a symlink to the same inode, so the link test is its own conjunct
+    # TWO DESCRIPTORS ARE COMPARED, not the path and one of them: `-ef` follows a symlink to the same inode, so the link test is its
+    # own conjunct; and on macOS `stat` of `/dev/fd/N` reports the real inode but the fdesc mount's device, so `"$jf" -ef /dev/fd/N`
+    # is never true there and the rotation never ran (measured, D-5435). Both sides through `/dev/fd` carry the same device on either
+    # platform, so the inode decides. A failed open (the path was renamed away) skips; fd2 is closed on every path.
+    same=0
+    if flock -n "$fd" 2>/dev/null && [[ ! -L "$jf" && -f "$jf" ]] && { exec {fd2}<"$jf"; } 2>/dev/null; then
+      [[ "/dev/fd/$fd2" -ef "/dev/fd/$fd" ]] && same=1
+      { exec {fd2}<&-; } 2>/dev/null
+    fi
+    if (( same )); then
       cur=""; { IFS= read -r -N "$JOIN_READ_MAX" cur <&"$fd"; } 2>/dev/null
       nl="${cur//[!$'\n']/}"
       # BOTH PATHS ARE LOOKED AT AGAIN IMMEDIATELY BEFORE THE RENAME: GNU `mv -f` onto a DIRECTORY moves the file INTO it and
@@ -3495,11 +3508,11 @@ fi
 # `[A-Za-z0-9_-]{1,64}` is never cleaned into one: a SubagentStart/Stop with such an agent id, and any event whose agent id is such,
 # writes NO line (a line without the id would read as the main thread's). A required field that is missing or over its bound writes
 # no line; an optional one that is over its bound is dropped, never cut, and marks the line `truncated`.
-# THE CAP: a line plus its LF is under DSP_LINE_BELOW bytes, measured on the serialized text (escapes count). When it is not, optional
-# fields go in this order until it is: `listing`, `claudeVersion`, `cwd`, `agentType`, `transcriptPath`; `truncated: true` is set. A
-# line that cannot fit with only its required fields is not written. One `printf` of a line under 4 KiB to an O_APPEND descriptor is
-# one write(2), so hooks racing on one bucket never interleave; no fence is written before it, because an empty line would be an
-# unparseable complete line to the reader (a torn tail after a full disk is the reader's `unmeasured`, spec §5.3).
+# THE CAP: a line plus its LF is under DSP_LINE_BELOW bytes, counted serialized (escapes count): 4096 where OSTYPE and BASH_VERSINFO both say
+# glibc Linux, else 1008 (D-5436), and the jq sheds to the same value. Over it, `listing`, `claudeVersion`, `cwd`, `agentType`, `transcriptPath`
+# go in that order and `truncated: true` is set; a line its required fields alone pass is not written. One builtin `printf` is one write(2), and
+# racing hooks never interleave, only while the line fits bash's stdout buffer: st_blksize (4096 on the usual filesystems) on glibc, 1008 or 2016 with bash's
+# own malloc, 1024 on BSD, macOS or musl libc. No fence goes first (an empty line is unparseable); a full disk's torn tail, or bytes a failed builtin write left in stdout, is the reader's `unmeasured` (spec §5.3).
 #
 # GATES, all builtins and all before the jq (the statement on the line above the parse): the owner's directory exists and is not a
 # link (ccd makes it at spawn; THE HOOK NEVER MAKES IT, so a missing directory is a skip), neither are its two parents, the id is
@@ -3526,7 +3539,7 @@ fi
 # no server delete); the plan's "hooks retain only their own 24-hour buckets" holds for an owner that keeps writing.
 #
 # SessionStart `compact` is recorded here, before the hook's one early exit below (it used to exit in its arm; `sessend` carries it).
-DSP_LINE_BELOW=4096 DSP_LIST_NAMES=256 DSP_NAME_BYTES=64
+DSP_LIST_NAMES=256 DSP_NAME_BYTES=64
 _hook_spool_listing() {   # <cwd> -> DSP_LIST ('["a","b"]'; empty = unmeasured) and DSP_DROP (1 = a listing exists but cannot be kept)
   local LC_ALL=C d="${1-}" line="" g="" common="" w="" p="" name="" out="" n=0 cnt=0 dg=0 ng=0
   DSP_LIST="" DSP_DROP=""
@@ -4352,6 +4365,121 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
   done
 fi
 
+# ── THE CHILD'S APPROVAL-SURFACE AND FORBIDDEN-VERB DENY (plan Task 14, spec §6.6, D-5297, D-5299) ──────
+# A dispatched child (its row carries `$REG/<id>.child`), on the main thread AND in a subagent, never reaches the
+# approval surface and never runs a SAFETY `ccd` verb or `ccrc update` / `ccrc rollback`, in any invocation form:
+# bare, through a path ending `/ccd` or `/ccrc`, env-prefixed, anywhere in an `&&`, `;`, `||` or `|` chain, or inside
+# a `bash -c` / `sh -c` string. In this arm the command is read twice, as written and as bash runs it (`norm`: quotes,
+# backslashes and line continuations removed, which only ever denies more), and a verb or `approvals` after a `$VAR`,
+# `${...}`, `$(...)` or backtick program is refused too (`xmatch`; `update`/`rollback` only when the command also names
+# `ccrc`): the security review of Task 14 ran `ccd 'ws-rm' x`, `ccd ws\-rm x`, `C=ccd; $C ws-rm x` and `"${API:?}"
+# approvals` past the plain match. A verb run from a script file, stdin or another interpreter is past any lexical
+# match, an accepted limit (spec §6.1); the classifier escalates it. Children run with permissions bypassed, so no prompt and no classifier sees these
+# calls; this deny does, before the tool runs, and invariant 10 rests on it (spec §6.6), whatever Claude Code's deny
+# matcher takes (Task 15's file names the bare forms only; Task 13 measured that no leading wildcard matched). The
+# approval surface is `approvals` as `ccrc-api`'s FIRST argument (bare, a path, or `"$API"`/`$API`), `/api/approvals`,
+# any `approval-signing` path (the pinned public key's, and the server's private key's on `--role both`) and the
+# verifier; for Write, Edit, MultiEdit and NotebookEdit, a key's or the verifier's path; for Read, Grep and Glob, a
+# signing key's path (a Glob's pattern included). A child never rules on,
+# fetches or forges its own approvals (spec §6.1). A top-level session is untouched: it may still run these verbs
+# after asking the operator.
+#
+# `APPROVAL_FORBIDDEN_JQ` IS THE HOOK'S STATIC COPY of the classifier's `forbidden` match
+# (`FORBIDDEN_PATTERNS` and `nonBashClass` in server/src/coord/approvalguard.ts), the documented second copy that
+# `session-hook-approval-deny.test.ts` holds equal to `approvalClass` over Task 12's corpus,
+# `server/test/fixtures/approvals/guard-corpus.json`. It answers one line: `<category>\t<why>`, or empty. In mode
+# `class` (the PermissionRequest arm below) any category counts; in mode `deny` (this arm) only `verb` (a SAFETY `ccd`
+# verb, `ccrc update` or `ccrc rollback`) and `surface` (the approval surface) do. JavaScript's regexes are ASCII
+# where Oniguruma's are Unicode, so `\w` and `\b` are spelled as ASCII classes and `\s` as JavaScript's own set
+# (`WS`, built by `implode` so this file stays ASCII). `hbt` is the classifier's `headBeforeTail`: in one segment, the
+# head matches wholly inside the text before the LAST start of the tail (found by a greedy prefix and a lookahead,
+# which sees every start, overlapping ones included). Single quotes are `$q`, so the program is one single-quoted
+# bash word.
+#
+# ORDER IS BUDGET, as in the denies above: the event, the `.child` test and a substring prefilter are builtins, so a
+# top-level session, and a child's call whose payload names none of `ccd`, `ccrc` and `approval`, pay no fork. Every
+# pattern needs one of the three words literally (JSON escaping never touches ASCII letters). A deny already set is
+# never replaced. FAIL-OPEN as every gate here: a jq that cannot run (no Oniguruma, say) denies nothing, and
+# `ccrc doctor`'s `jq_regex` check names that box.
+APPROVAL_FORBIDDEN_JQ='def WS: "\t\n\u000b\f\r " + ([160, 5760, 8192, 45, 8202, 8232, 8233, 8239, 8287, 12288, 65279] | implode);
+def SP: "[" + WS + "]"; def NS: "[^" + WS + "]";
+def WB: "(?:^|" + SP + "|[;&|()`" + $q + "\"=/])";
+def NW: "(?![A-Za-z0-9_-])";
+def NB: "(?<![A-Za-z0-9_])";
+def NA: "(?![A-Za-z0-9_])";
+def FLAGS: "(?:-" + NS + "+" + SP + "+)*";
+def CCD: WB + "ccd[" + $q + "\"]?" + SP + "+" + FLAGS;
+def SENS: "(?:CLAUDE\\.md|settings(?:\\.local)?\\.json|session-hook\\.sh|/hooks/)";
+def CRED: "(?:\\.ssh(?![A-Za-z0-9_-])|\\.cc-secrets|\\.token(?![A-Za-z0-9_-])|\\.env(?:rc|\\.[A-Za-z0-9_.-]+)?(?![A-Za-z0-9_-])|credentials|auth\\.json|\\.netrc|\\.pem(?![A-Za-z0-9_-])|\\.key(?![A-Za-z0-9_.-])|agent\\.env|gh/(?:hosts|config)\\.yml|\\.docker/config\\.json|\\.kube/config(?![A-Za-z0-9_-])|\\.npmrc|\\.pypirc|\\.git-credentials|(?<![A-Za-z0-9_-])\\.aws(?![A-Za-z0-9_-])|(?<![A-Za-z0-9_-])\\.gnupg(?![A-Za-z0-9_-])|\\.config/gcloud(?![A-Za-z0-9_-])|_(?:rsa|dsa|ecdsa|ed25519)(?![A-Za-z0-9_-])|deploy_key|(?<![A-Za-z0-9_.-])identity(?![A-Za-z0-9_.-])|ssh_host_|\\.pgpass|\\.vault-token|rclone\\.conf|\\.s3cfg|(?<![A-Za-z0-9_-])\\.azure(?![A-Za-z0-9_-])|\\.git/config(?![A-Za-z0-9_-])|\\.claude\\.json|(?<![A-Za-z0-9_-])secrets?\\.(?:ya?ml|json|toml)(?![A-Za-z0-9_-])|_(?:ecdsa|ed25519)_sk(?![A-Za-z0-9_-])|\\.(?:p12|pfx|jks|keystore)(?![A-Za-z0-9_-])|\\.htpasswd|\\.my\\.cnf|kubeconfig|\\.tfstate|(?<![A-Za-z0-9_-])\\.boto(?![A-Za-z0-9_-])|service[-_]account[A-Za-z0-9_-]*\\.json|token\\.json(?![A-Za-z0-9_-])|\\.yarnrc\\.yml)";
+def PATHF: "/\\.(?:cc-sessions|cc-limits|ccrc)(?![A-Za-z0-9_.-])|approval-signing|approval-verify\\.mjs";
+def hbt($sep; $head; $tail): any(split($sep; null)[];
+  ([match("^[\\s\\S]*(?=" + $tail + ")")] | if length == 0 then -1 else .[0].length end) as $last
+  | $last >= 0 and (.[0:$last] | test($head)));
+def fmatch:
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect") as $v
+     | select(test(CCD + $v + NW)) | "verb\tccd \($v)"),
+  (select(hbt("[;&|]"; CCD + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
+  (select(test(WB + "tmux(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\ttmux"),
+  (select(test("/\\.(?:cc-sessions|cc-limits|ccrc)(?![A-Za-z0-9_.-])")) | "other\ta registry path"),
+  (select(test(WB + "(?:reboot|shutdown|poweroff|halt)(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\treboot or shutdown"),
+  (select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
+  (select(test("(?:ccrc-api|\\$\\{?API\\}?)[" + $q + "\"]?" + SP + "+" + FLAGS + "approvals" + NW + "|/api/approvals" + NW + "|approval-signing|approval-verify\\.mjs")) | "surface\tthe approval surface"),
+  (select(hbt("\n"; WB + "(?:systemctl|systemd-run|kill|pkill|killall)" + NW; "claude-session@|ccrc|tmux")) | "other\ta session unit or the tmux scope"),
+  (select(hbt("[\n;&|]"; ">|" + NB + "tee" + NA + "|" + NB + "sed" + SP + "+" + FLAGS + "-i|" + NB + "perl" + SP + "+-" + NS + "*i|" + NB + "mv" + NA + "|" + NB + "cp" + NA + "|" + NB + "ln" + NA + "|" + NB + "truncate" + NA + "|" + NB + "rm" + NA; SENS)) | "other\tan edit to a settings file, a hook or a CLAUDE.md"),
+  (select(hbt("[\n;&|]"; WB + "(?:cat|head|tail|less|more|base64|xxd|strings|od|nl|bat)" + NW; CRED)) | "other\tprinting a secret");
+def norm: gsub("\\\\\n"; "") | gsub("\\$(?=[" + $q + "\"])"; "") | gsub("\\\\(?<c>[\\s\\S])"; .c) | gsub("[" + $q + "\"]"; "");
+def EXP: "(?:\\$\\{[^}]*\\}|\\$\\([^)]*\\)|\\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`)";
+def EXPV: WB + EXP + SP + "+" + FLAGS;
+def xmatch:
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect") as $v
+     | select(test(EXPV + $v + NW)) | "verb\tccd \($v)"),
+  (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
+  (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
+  (select(test(EXPV + "approvals" + NW)) | "surface\tthe approval surface");
+def edittool: . == "Write" or . == "Edit" or . == "MultiEdit" or . == "NotebookEdit";
+def pathwhy($t):
+  first((.file_path, .path, .notebook_path) | select(type == "string")
+    | if test(PATHF) then "other\ta forbidden path"
+      elif ($t | edittool) and test("(?:^|/)" + SENS) then "other\tan edit to a settings file, a hook or a CLAUDE.md"
+      elif $t == "Read" and test(CRED) then "other\treading a secret"
+      else empty end);
+(.tool_name | if type == "string" then . else "" end) as $t
+| (.tool_input | if type == "object" then . else {} end) as $i
+| if $mode == "deny" then
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t"))) // "" else "" end)
+     elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // "")
+     elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // "")
+     else "" end)
+  elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch) // "" else "" end)
+  elif ($t | startswith("mcp__")) and any($i | .. | strings; first(fmatch) != null) then "other\tan MCP call naming a forbidden act"
+  else ($i | pathwhy($t)) // ""
+  end'
+# The prefilter reads a Bash payload with its quotes and backslashes removed (`apf`), and a JSON-escaped backslash-newline
+# first, as `norm` does in the program: `c''cd ws-rm` and `c\cd ws-rm` name `ccd` only once bash has removed them.
+apf=""
+if [[ "$event" == PreToolUse && -n "$id" && -e "$REG/$id.child" \
+      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  apf=$payload
+  if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]]; then apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}; fi
+  [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* ]] || apf=""
+fi
+if [[ -n "$apf" ]]; then
+  case "${tool:-}" in
+    Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob)
+      afw=$(jq -r --arg q "'" --arg mode deny "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || afw=""
+      areason=""
+      case "$afw" in
+        verb$'\t'*)
+          areason="ccrc: this call runs \`${afw#*$'\t'}\`, which a dispatched child never runs in any form (CLAUDE.md's SAFETY section; spec 2026-10-17 §6.6). It is the operator's act, and a top-level session's only after asking the operator."
+          areason+=" Report what you need to your coordinator instead." ;;
+        surface$'\t'*)
+          areason="ccrc: this call reaches the approval surface (\`ccrc-api approvals\`, \`/api/approvals\`, a signing key or the verifier), which a dispatched child never calls, reads or writes: your coordinator rules on your permission prompts, and the operator on the rest."
+          areason+=" Carry on with your task; a prompt you raise reaches them by itself." ;;
+      esac
+      if [[ -n "$areason" ]] && ajson=$(_hook_deny_json "$areason"); then pre_json=$ajson; fi ;;
+  esac
+fi
+
 # `carry-only-a-main-thread-wait` (D-4039, task review): who raised the wait. `waitby` is "subagent" only when THIS event
 # freshly set `waiting` and carries an `agent_id` (`$paid`); it is stored as the additive key `waitBy`, preserved with
 # the carried state below, and absent everywhere else, so every other write keeps today's shape byte for byte.
@@ -4640,6 +4768,204 @@ fi   # hs_skip
 # will see it (D-1689). The nudge counts nothing, but it shares this site so
 # that neither branch can ever print from inside the arm.
 [ -z "$pre_json" ] || printf '%s\n' "$pre_json"
+# ── THE APPROVAL WAIT (plan Task 14, spec §6.3 hook steps 1 to 7; D-5297, D-5439, D-5440, D-5441) ────────
+# A dispatched child's PermissionRequest (any tool but AskUserQuestion: the arm above set `apr`) may be ruled by its
+# coordinator, and this hook prints that ruling ONLY when the server signed it for this exact request. Here, after
+# the hookstate write and the one PreToolUse print site, so the `waiting` state and the approval envelope are on disk
+# before the wait begins, and nothing above changes for any other event. It is the one declared WAIT in this file
+# (the header's "no network, and on the hot path no waiting" contract is the hot path's; a PermissionRequest is not
+# on it): bounded by the request's window, never past `APPROVAL_HOOK_WAIT_S`, under the managed hook timeout.
+#   1. It engages only for a `.child` row, with `$REG/approvals-disabled` absent (the operator's kill switch), with
+#      `$REG/<id>.deny-settings` equal to the sha256 of the managed deny file (spec §6.6: a child spawned without the
+#      deny rules never gets rulings), and only when it can VERIFY a ruling: `node` on PATH, the verifier beside this
+#      hook and the pinned key present. Every check runs BEFORE anything is sent, so no coordinator effort is spent on
+#      a ruling this hook could not act on (doctor's `approval-verifier-runnable` names the same three).
+#   2. The static forbidden match (`APPROVAL_FORBIDDEN_JQ`, mode `class`): a forbidden request is never sent.
+#   3. The canonical array (`APPROVAL_DIGEST_JQ`, the jq spelling of `approvalDigestBytes`: `jq -cSa` over the
+#      integer-only `walk`, then `[session_id, agent_id, tool_name, cwd, tool_input]`), its sha256, a 128-bit nonce from
+#      /dev/urandom, and `ccrc-api approvals request`. A canonical string over 64 KiB is sent `truncated` (never
+#      allowable). Anything but a `201 {id, waitS}`: print nothing (an older server's `404` is the capability gate).
+#   4. It waits for at most the `201`'s `waitS` (the request's window, D-5441), never past the ceiling, polling the
+#      ruling every `apr_poll` ticks (2 s) and watching the transcript every tick (0.5 s). It STOPS, printing nothing:
+#      when the window ends; when the ruling route answers the row `declined`, `released`, `operator` or `stale`
+#      (D-5440); and when it sees for itself that the prompt was answered in the pane (D-5439), because Claude Code
+#      does not end a waiting hook (Task 13 measured one SIGTERM, after a main-thread pane No; every other answer left
+#      the hook running and its late output ignored).
+#   5. A ruling is verified by `approval-verify.mjs`: the Ed25519 signature against the pinned key, this session,
+#      agent, digest, nonce and row, not expired, and for an allow class `ordinary`.
+#   6. A verified allow prints the allow decision, with no `updatedInput` and no `updatedPermissions`, ever; a
+#      verified deny prints the deny with "denied by your coordinator: <reason>".
+#   7. Every other path prints NOTHING and the menu stays with the operator. It never prints two envelopes.
+# THE RESOLUTION SIGNAL (D-5439; Task 13's Linux re-check record, "The resolution signal"): no PermissionRequest
+# carries `tool_use_id`, so the request is tied to the LAST open assistant `tool_use` row of its transcript with the
+# same input (for Bash, the same `command`): the main thread's `transcript_path`, or a subagent's
+# `<dirname(transcript_path)>/<session_id>/subagents/agent-<agent_id>.jsonl`. No match yet: re-scanned every tick,
+# because the row can land after the hook starts on a starved box. More than one open match (identical parallel
+# calls): no tie, and the window bound alone ends the wait. Once tied, only the bytes appended since the last read are
+# scanned, at line boundaries, for a `tool_result` naming that id: a pane Yes, a pane No, the auto-deny and a hook
+# decision all write one. A pane Yes on a long-running command writes it only when the command ends; the cost is a
+# server row that stays pending, because this hook's late output is ignored.
+# A TERM (a main-thread pane No SIGTERMs the hook's whole tree, Task 13) exits 0 at once, printing nothing; so do INT
+# and HUP. The sleep runs in the background under `wait`, so the trap is not held behind it.
+# TEST KNOBS, each only able to SHORTEN or speed up the wait: `CCRC_APPROVAL_TICK_S` (0.5, at least 0.05),
+# `CCRC_APPROVAL_POLL_TICKS` (4) and `CCRC_APPROVAL_CEILING_S` (at most `APPROVAL_HOOK_WAIT_S`).
+# THE BASH COPIES: `APPROVAL_HOOK_WAIT_S` and `APPROVAL_HOOK_STOP_STATES` are `shared/api.ts`'s, held equal by
+# `session-hook-approval-wait.test.ts`, which also holds `APPROVAL_DIGEST_JQ` equal to `approvalDigestBytes` over
+# `server/test/fixtures/approvals/digest-corpus.json`.
+APPROVAL_HOOK_WAIT_S=540
+APPROVAL_HOOK_STOP_STATES="declined released operator stale"
+APPROVAL_REQUEST_MAX_BYTES=65536
+APPROVAL_DIGEST_JQ='walk(if type == "number" then (if . == floor and fabs <= 9007199254740991 then (if . == 0 then 0 else floor end) else error("non-integer") end) else . end) | [.session_id, (.agent_id // ""), .tool_name, .cwd, .tool_input]'
+# The hook is installed alone, with no platform block to source, so it spells no GNU-only tool (macos-platform.test.ts):
+# `shasum -a 256` ships on macOS and with perl on Linux, and node, which the wait needs anyway, is the fallback.
+_apr_sha256() {   # stdin -> 64 lowercase hex on stdout; rc 1 with no tool
+  local s=""
+  if command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256 2>/dev/null)
+  elif command -v node >/dev/null 2>&1; then
+    s=$(node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(0)).digest("hex"))' 2>/dev/null)
+  else return 1; fi
+  s="${s%% *}"; [[ "$s" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s' "$s"
+}
+_apr_call() {   # <args...> -> APR_BODY, APR_CODE from ccrc-api (body on stdout, `http <code>` last on stderr); rc 1 no answer
+  local out
+  APR_BODY="" APR_CODE=""
+  out=$("$apr_api" "$@" 2>&1) || return 1
+  APR_CODE="${out##*http }"
+  [[ "$APR_CODE" =~ ^[0-9]{3}$ ]] || { APR_CODE=""; return 1; }
+  APR_BODY="${out%http *}"
+  return 0
+}
+# THE TIE AND THE WATCH. `apr_tie` is "" until tied, `-` once given up (ambiguous or unreadable), else the tool_use id.
+# A known limit: a pane answer whose tool_result is written BEFORE the first look (a fast command answered during the
+# request's round trip) leaves no OPEN match, so the hook never ties and runs to its window; its late output is ignored,
+# and the cost is a stale held row and one coordinator mail. Counting an already-resolved match would end the wait on
+# an earlier identical command (a repeated `npm test`), so it is not done.
+_apr_scan() {   # -> rc 0 when the transcript shows this request resolved
+  local size chunk rest n last ids line uids="" rids=" " u
+  [[ "$apr_tie" == - || -z "$apr_tp" ]] && return 1
+  [[ -f "$apr_tp" && ! -L "$apr_tp" ]] || return 1
+  size=$(wc -c < "$apr_tp" 2>/dev/null) || return 1
+  size="${size//[^0-9]/}"; [[ -n "$size" ]] || return 1
+  if [[ -z "$apr_tie" ]]; then
+    (( size > 0 && size != apr_seen )) || return 1
+    apr_seen=$size
+    # Only a file that ends at a line boundary is read for the tie, so the offset the watch starts from is one.
+    last=$(tail -c 1 "$apr_tp" 2>/dev/null; printf .); [[ "$last" == $'\n.' ]] || { apr_seen=-1; return 1; }
+    ids=$(head -c "$size" "$apr_tp" 2>/dev/null | jq -Rr --argjson ti "$apr_ti" '
+      (fromjson? // empty) | select(type == "object") | (.message.content? // empty) | arrays | .[] | select(type == "object")
+      | if .type == "tool_use" and (if ($ti | type) == "object" and ($ti | has("command")) then (.input | type) == "object" and .input.command == $ti.command else .input == $ti end)
+        then "U \(.id)" elif .type == "tool_result" then "R \(.tool_use_id)" else empty end' 2>/dev/null) || return 1
+    while IFS= read -r line; do
+      case "$line" in
+        'U '*) uids+="${line#U } " ;;
+        'R '*) rids+="${line#R } " ;;
+      esac
+    done <<<"$ids"
+    n=0
+    for u in $uids; do [[ "$rids" == *" $u "* ]] || { n=$((n + 1)); apr_tie="$u"; }; done
+    if (( n == 0 )); then apr_tie=""; return 1; fi
+    if (( n > 1 )); then apr_tie=-; return 1; fi
+    [[ "$apr_tie" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || { apr_tie=-; return 1; }
+    apr_off=$size
+    return 1
+  fi
+  (( size > apr_off )) || return 1
+  { chunk=$(tail -c +"$(( apr_off + 1 ))" "$apr_tp" 2>/dev/null | head -c "$(( size - apr_off ))" 2>/dev/null; printf .); } 2>/dev/null
+  chunk="${chunk%.}"
+  rest="${chunk##*$'\n'}"
+  n=$(( $(LC_ALL=C; printf '%s' "${#chunk}") - $(LC_ALL=C; printf '%s' "${#rest}") ))
+  (( n > 0 )) || return 1
+  apr_off=$(( apr_off + n ))
+  [[ "$chunk" == *"$apr_tie"* ]] || return 1
+  ids=$(printf '%s' "${chunk%"$rest"}" | jq -Rr --arg id "$apr_tie" '
+    (fromjson? // empty) | select(type == "object") | (.message.content? // empty) | arrays | .[]
+    | select(type == "object" and .type == "tool_result" and .tool_use_id == $id) | "R"' 2>/dev/null) || return 1
+  [[ "$ids" == *R* ]]
+}
+_apr_sleep() { sleep "$apr_tick" & wait $! 2>/dev/null; }
+_hook_approval_wait() {
+  local sum managed uuid fb canon digest nonce body rid waits ceil deadline now tick=0 st verdict reason state j t
+  [[ -n "$id" && -e "$REG/$id.child" && ! -e "$REG/approvals-disabled" ]] || return 0
+  _ct_read "$REG/$id.deny-settings" || return 0
+  sum="$CT_V"; [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || return 0
+  [[ -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]] || return 0
+  managed=$(_apr_sha256 < "$REG/child-deny.settings.json") || return 0
+  [[ "$managed" == "$sum" ]] || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  [[ -f "$REG/approval-verify.mjs" && -f "$HOME/.ccrc/approval-signing.pub" ]] || return 0
+  apr_api="$HOME/.local/bin/ccrc-api"
+  [[ -x "$apr_api" ]] || return 0
+  _ct_read "$REG/$id.uuid" || return 0
+  uuid="$CT_V"; [[ "$uuid" =~ ^[A-Za-z0-9_-]+$ ]] || return 0
+  fb=$(jq -r --arg q "'" --arg mode class "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || return 0
+  [[ -z "$fb" ]] || return 0
+  canon=$(jq -cSa "$APPROVAL_DIGEST_JQ" <<<"$payload" 2>/dev/null) || return 0
+  [[ "$canon" == '['* ]] || return 0
+  digest=$(printf '%s' "$canon" | _apr_sha256) || return 0
+  nonce=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null) || return 0
+  nonce="${nonce//[^0-9a-f]/}"; [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] || return 0
+  if (( ${#canon} > APPROVAL_REQUEST_MAX_BYTES )); then
+    body=$(jq -cn --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" \
+      '{v: 1, sessionId: $s, sessionUuid: $u, truncated: true, digest: $d, nonce: $n}' 2>/dev/null) || return 0
+  else
+    body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" \
+      '{v: 1, sessionId: $s, sessionUuid: $u, canonical: ., digest: $d, nonce: $n}' 2>/dev/null) || return 0
+  fi
+  apr_ti=$(jq -c '.tool_input // null' <<<"$payload" 2>/dev/null) || return 0
+  # The knobs: a value that is not the shape reads as the default; none can lengthen the wait.
+  apr_tick=0.5; [[ "${CCRC_APPROVAL_TICK_S:-}" =~ ^(0\.[0-9]{1,3}|[1-9])$ ]] && apr_tick="$CCRC_APPROVAL_TICK_S"
+  [[ "$apr_tick" =~ ^0\.0[0-4] ]] && apr_tick=0.05
+  apr_poll=4; [[ "${CCRC_APPROVAL_POLL_TICKS:-}" =~ ^[1-9]$ ]] && apr_poll="$CCRC_APPROVAL_POLL_TICKS"
+  ceil=$APPROVAL_HOOK_WAIT_S
+  [[ "${CCRC_APPROVAL_CEILING_S:-}" =~ ^[0-9]{1,3}$ ]] && (( CCRC_APPROVAL_CEILING_S < ceil )) && ceil=$CCRC_APPROVAL_CEILING_S
+  trap 'exit 0' TERM INT HUP
+  _apr_call approvals request --json - <<<"$body" || return 0
+  [[ "$APR_CODE" == 201 ]] || return 0
+  { read -r rid; read -r waits; } < <(jq -r '(.id | if type == "number" and . == floor and . > 0 then tostring else "" end), (.waitS | if type == "number" and . == floor and . > 0 then tostring else "" end)' <<<"$APR_BODY" 2>/dev/null)
+  [[ "${rid:-}" =~ ^[0-9]{1,15}$ && "${waits:-}" =~ ^[0-9]{1,6}$ ]] || return 0
+  (( waits < ceil )) && ceil=$waits
+  deadline=$(( $(_hook_epoch_ms) + ceil * 1000 ))
+  # The transcript this request lives in (main thread, or the subagent's own file).
+  apr_tp=$(jq -r '.transcript_path // "" | tostring' <<<"$payload" 2>/dev/null) || apr_tp=""
+  [[ "$apr_tp" == /* && "$apr_tp" != *$'\n'* ]] || apr_tp=""
+  if [[ -n "$apr_tp" && -n "$paid" ]]; then
+    if [[ -n "$aid" && "$psid" =~ ^[A-Za-z0-9-]{1,64}$ ]]; then apr_tp="${apr_tp%/*}/$psid/subagents/agent-$aid.jsonl"; else apr_tp=""; fi
+  fi
+  apr_tie="" apr_off=0 apr_seen=-1
+  while :; do
+    now=$(_hook_epoch_ms)
+    (( now < deadline )) || return 0
+    if _apr_scan; then return 0; fi
+    if (( tick % apr_poll == 0 )); then
+      if _apr_call approvals ruling "$rid" --nonce "$nonce"; then
+        case "$APR_CODE" in
+          200)
+            state=$(jq -r '.state // "" | tostring' <<<"$APR_BODY" 2>/dev/null) || state=""
+            for st in $APPROVAL_HOOK_STOP_STATES; do [[ "$state" == "$st" ]] && return 0; done
+            j=$(jq -c '.ruling // empty' <<<"$APR_BODY" 2>/dev/null) || j=""
+            if [[ -n "$j" ]]; then
+              verdict=$(node "$REG/approval-verify.mjs" "$id" "$aid" "$digest" "$nonce" "$rid" "$(_hook_epoch_ms)" <<<"$j" 2>/dev/null) || verdict=""
+              reason="${verdict#* }"
+              case "$verdict" in
+                'allow '*)
+                  t=$(jq -cn '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "allow"}}}' 2>/dev/null) && printf '%s\n' "$t"
+                  return 0 ;;
+                'deny '*)
+                  t=$(jq -cn --arg m "denied by your coordinator: $reason" \
+                    '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "deny", message: $m}}}' 2>/dev/null) && printf '%s\n' "$t"
+                  return 0 ;;
+              esac
+            fi ;;
+          404|410) return 0 ;;
+        esac
+      fi
+    fi
+    tick=$(( tick + 1 ))
+    _apr_sleep
+  done
+}
+if [[ "$event" == PermissionRequest && -n "$apr" ]]; then _hook_approval_wait || true; fi
 # The two compaction arms run LAST, after the `working`/`done` stamp is on
 # disk: each calls the helper under one locally resolved deadline, and the
 # state write must never wait on either. Nothing below prints — PostCompact's

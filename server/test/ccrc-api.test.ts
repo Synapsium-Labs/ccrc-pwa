@@ -229,10 +229,19 @@ describe('the closed route table', () => {
     // The coordinator's explicit intent declaration (delegation broker wave 3, Task 15). The one row with a grammar of its
     // own, `coordinators intent <set|clear> --session <id>`; the id in the path is derived from the pane, never from the flag.
     [['coordinators', 'intent', 'set', '--session', 'demo-ws'], 'POST', '/api/coordinators/demo-ws/intent'],
+    // The child's PermissionRequest hook's three rows (coordinator-first routing, plan Task 14, D-5297).
+    [['approvals', 'request'], 'POST', '/api/approvals'],
+    [['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], 'GET', '/api/approvals/41/ruling'],
+    [['approvals', 'key'], 'GET', '/api/approvals/key'],
+    // The claimant's three rows (coordinator-first routing, plan Task 16, D-5298).
+    [['approvals', 'rule', '41'], 'POST', '/api/approvals/41/rule'],
+    [['approvals', 'release', '41'], 'POST', '/api/approvals/41/release'],
+    [['approvals', 'show', '41'], 'GET', '/api/approvals/41'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url) => {
-    const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators';
+    const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
+      || (args[0] === 'approvals' && args[1] === 'show');
     if (paned) plantPane('demo-ws');
     await run(args as string[], undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
@@ -258,7 +267,9 @@ describe('the closed route table', () => {
     // Twenty-four since `runs.route` (routing slice 5, Task 4's escalation
     // door) landed.
     // Twenty-five since `coordinators.intent` (delegation broker wave 3, Task 15).
-    expect(keys).toHaveLength(25);
+    // Twenty-eight since the approvals rows (coordinator-first routing, plan Task 14).
+    // Thirty-one since the claimant's approvals rows (plan Task 16).
+    expect(keys).toHaveLength(31);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -266,7 +277,8 @@ describe('the closed route table', () => {
     const WORDS: Record<number, string> = {
       15: 'fifteen', 16: 'sixteen', 17: 'seventeen', 18: 'eighteen',
       19: 'nineteen', 20: 'twenty', 21: 'twenty-one', 22: 'twenty-two',
-      23: 'twenty-three', 24: 'twenty-four', 25: 'twenty-five',
+      23: 'twenty-three', 24: 'twenty-four', 25: 'twenty-five', 26: 'twenty-six',
+      27: 'twenty-seven', 28: 'twenty-eight', 29: 'twenty-nine', 30: 'thirty', 31: 'thirty-one',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -652,6 +664,19 @@ describe('an id reaches a path template only if the table declared one', () => {
       expect(r.status, `id ${JSON.stringify(bad)} must be refused`).not.toBe(0);
       expect(seen, `id ${JSON.stringify(bad)} must not reach the wire`).toHaveLength(0);
     }
+  });
+
+  it('refuses an approvals ruling id or nonce that is not SAFE_RE-plain, and sends nothing (plan Task 14)', async () => {
+    for (const [id, nonce] of [['../key', 'abc'], ['41', '../x'], ['41', 'a b'], ['41', 'ab?c=1'], ['41', '']]) {
+      seen = [];
+      const r = await runBoth(['approvals', 'ruling', id as string, '--nonce', nonce as string]);
+      expect(r.status, `${id} --nonce ${JSON.stringify(nonce)} must be refused`).not.toBe(0);
+      expect(seen, `${id} --nonce ${JSON.stringify(nonce)} must not reach the wire`).toHaveLength(0);
+    }
+    seen = [];
+    await runBoth(['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef']);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toBe('/api/approvals/41/ruling?nonce=0123456789abcdef0123456789abcdef');
   });
 
   it('refuses an id on a verb that declares none, rather than ignoring it', async () => {

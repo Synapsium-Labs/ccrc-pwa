@@ -23,7 +23,7 @@ never links work by a name, a path, a time or a working directory.
 |---|---|---|---|---|---|---|
 | 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
 | 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **merged** 2026-10-13 as `4967dc495`, a plain merge of exact head `823efd3eb` (fix round 5, which absorbed `main`), adding history only; its content first reached `main` inside #340's squash `081636389` on 2026-10-10, byte-identical to `e183237e5`, the tip review 334 accepted; run 306 closed `done` |
-| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664 |
+| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448, #597 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664; pre-soak follow-up #597 merged 2026-10-18 as `c1453e422` (22:04:47Z), a squash of head `7cb2ccda5`, after reviews 610, 615 and 617; run 600 closed `done`; D-5433..D-5436 used from block D-5433..D-5438; prerelease `v0.0.299` |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | — | to plan |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
@@ -968,12 +968,12 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     two such stops within 10 minutes as a mass death. While suspended, `planRecord` withholds rung-2, rung-3 and rung-4
     lease requests and unowned records, and the soak (Rollout step 8) reads circuit-breaker periods.
   - Ruled: recorded in D-4659 as a limit, with no code change in wave 3. The coordinator's first reading, that wave 3
-    acts on nothing here, was corrected before the fix round went out. The operator's question is open: fix it before
-    the soak, in a follow-up PR, or keep it as a known limitation.
+    acts on nothing here, was corrected before the fix round went out. The operator's question was open: fix it before
+    the soak, in a follow-up PR, or keep it as a known limitation (ruled 2026-10-18, "Fix before soak": D-5433, below).
 - **2026-10-18 — review 583 (`ccrc-pwa-soft-summit`, at `1ee3c784a`).** Two panels, both complete, at K2 and at
   `4464fd452`: each 15 agents, 1 confirmed, 3 refuted, 0 unexamined. CI run 39089647516 was green.
   - F1 (minor): the F4 bullet names Rollout step 7 as the gate, and step 7 does not say so. Ruled no change: the D-4659
-    bullet is the record until the operator rules on F4.
+    bullet is the record until the operator rules on F4 (since ruled: D-5433, below).
   - F2 (minor): `COORDINATOR_INTENT_REFUSALS`'s docstring is stale after F7. Ruled to wave 4's list, as a line-neutral
     comment edit.
 - **2026-10-18 — lesson: `shared/api.ts` citations in prose are test-pinned.** README's and the child-reclamation
@@ -987,6 +987,101 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
 - **2026-10-18 — wave 3's deviation block.** The merged plan defines D-4633 through D-4663, 31 entries. D-4655
   supersedes D-4642, by the operator's ruling of 2026-10-15. 4664 is unused, as the plan's "Unused" line states.
   #448's squash title names "D-4633..D-4659" only; the plan is the record.
+- **2026-10-18 — the operator's rulings for a pre-soak follow-up (run 600).** Three rulings put one follow-up PR before
+  the soak.
+  - On review 578 F4, "Fix before soak": the lane's circuit breaker must not count a deliberate stop or archive as a
+    fresh death. This became D-5433. The coordinator dropped the restarting skip it first drafted: that skip was unsafe,
+    because tmux `unknown` collapses to `alive=false`, and nobody had ruled on it. It goes to wave 4's list.
+  - On a new Linux red, "Bounded diagnosis": `session-hook-turnmark`'s eight-way fan-out lost a join (CI run
+    39103454968, `expected [ 'w0-1' ] to deeply equal []`). A lost update is fixed red-first; D-4662's silent drop is
+    recorded only. This became D-5434. Outcome: a lost update in `_hook_join_record`'s two-read entry guard, which
+    refused a first writer whose sibling had just created the file. The guard now refuses only a positive non-regular
+    type, pinned by a source row. D-4662's silent exits are unchanged.
+  - On wave 3's macOS reds, "Add to the follow-up": 7 `session-hook-turnmark` rotation cases and 3 `ccrc-doctor`
+    spool cases. `full-suite` needs `test-macos`, so they block every stable promotion. Code that macOS gets wrong is
+    fixed, and a case that is Linux-only by design skips on darwin with its reason. This is an exception to the
+    2026-09-28 ruling that macOS legs gate nothing, for wave 3's own files only. This became D-5435. Outcome: the
+    rotation's `-ef` re-check was wrong on darwin, whose `/dev/fd` carries the fdesc device, and now compares two
+    descriptors. Two doctor cases skip on darwin by design, and one is fixed with a launchctl stub. The descriptor
+    compare is pinned by `test-macos` alone, so a regression shows only in a daily or full run.
+  - Run 600 opened as a wave-3 work run with a fresh block, D-5433..D-5438. D-4664 stays unused, because the plan's
+    block rule repurposes no number. Run 600 was dispatched to a fresh child, `ccrc-pwa-swift-mesa` (`ws/swift-mesa`),
+    whose PR is #597.
+- **2026-10-18 — claims settled by consent with run 561 (the public-tree scrub).** Run 561 held `server/src/watch.ts`,
+  `ccd/session-hook.sh`, README, the delegation spec and this ledger (claim 1644, renewed as 1690).
+  - Its coordinator consented (6342) to run 600 editing all four unclaimed, off its lines. It carried that consent to
+    561's renewed claims (6491), and consented to run 600 editing `shared/api.ts`'s `DELEGATION_SPOOL_BOUNDS` block and
+    its comment only (6491). The same consent lets this ledger PR edit this file unclaimed, off run 561's lines.
+  - In return, this coordinator consented to run 561 editing `ccd/ccrc-doctor-checks` comments (6479) and three lines
+    of `server/test/ccrc-doctor.test.ts` (6506), beside run 600's claim. Each PR lands on its own.
+- **2026-10-18 — run 600's absorb (6407).** The worker measured a conflict with `main` in `server/src/watch.ts` only:
+  #595 (D-5242) had changed the same `LaneSession` Pick and the same `noteSessions` record line.
+  - Ruled: take the union. `stoppedBy` and `archivedAt` are optional beside `hibernatedAt`, and an absent field reads
+    as no stop evidence. #595's census lane row hands rows without either field, and the first draft would have thrown
+    on them.
+  - The status is tested once per row, so the hibernation census stays at `hits: 5`.
+  - `cmd_hibernate` writes its marker, then `_ws_unsupervise`, then kills the pane. So a torn tick can record a
+    hibernation as a death that #595's conjunct never erases; D-5433's stamp erasure clears it.
+- **2026-10-18 — journal growth and the soak (operator ruling "Soak, watch disk").** The centralised-update
+  coordinator measured the server box (mails 6418, 6420, 6421, 6452).
+  - `delegation_events` grows about 6 MB an hour, roughly 150 MB a day. The journal (`delegation-events.log`) and the
+    checkpoint grow beside it. Each of the 10 kept update backups holds a full copy of all three, so the backups carry
+    about ten times the delegation data.
+  - The rate is the design: the hook spools a PreToolUse and a PostToolUse line for every Bash call, and wave 3 keeps
+    the whole journal (plan "Wave 3 performs no physical journal compaction").
+  - Ruled: the soak runs as planned, and journal compaction goes first in wave 4's plan. If the server box's free disk
+    falls below 15 GB during the soak, the operator decides again.
+  - The centralised-update coordinator mails a daily read-only measurement, and its hourly probe flags a breach
+    within the hour. Day 0, 16:15Z: 32 GB free; `coord.db` 146.8 MB; `delegation_events` 56.8 MB in 21,758 rows; the
+    journal 42.4 MB; the checkpoint 4.8 MB; `~/ccrc-backups` 1,217 MB.
+- **2026-10-18 — the darwin spool interleave (operator ruling "macOS cap, record losses").** `delegation-spool.test.ts`
+  "lines near the cap do not interleave" red once on darwin (job 117716174716) with a 4,947-byte line, which is
+  1,024 + 3,923.
+  - The coordinator folded it into item 3 as an eleventh, flaky red, in a third wave-3 file. That is an extension of
+    the macOS ruling's own shape, and run 600 was sent back for it whatever its review found.
+  - The worker's diagnosis: bash writes a builtin `printf` through stdio. BSD and macOS libc (and musl) buffer stdout
+    at 1,024 bytes, while glibc sizes the buffer from `st_blksize` (4096). So on darwin a long spool line is several
+    writes, and a sibling hook's line can land between them.
+  - Spec §5.3 refuses the external writer and the lock ("no locks, no waiting, no extra forks on the probe path").
+  - Ruled by the operator: the cap is 4096 only where bash is built for glibc Linux and `OSTYPE` reads `linux-gnu*`,
+    and 1008 everywhere else: 1008, not 1024, because a bash 4.4-5.1 built with bash malloc has a 1008-byte buffer.
+    One value drives the jq's shedding and the shell's checks. This became D-5436.
+  - The losses on the small cap are recorded in D-5436: listing room of about 15 to 20 names, so rung 4 is lost for a
+    busy repository; and deep-path Workflow launches go unwritten. So are its residuals: a glibc bash built with bash
+    malloc, an exported non-`linux-gnu` OSTYPE, and an `st_blksize` under 4096. `history -a` goes to wave 4's list as
+    the lossless route.
+- **2026-10-18 — review 610 (`ccrc-pwa-swift-river`, at `380ee56fa`).** The panel was complete: 5 confirmed findings,
+  all minor, plus F6.
+  - Every mutant reproduced, and the fan-out race reproduced: 486 refusals with `main`'s guard, 0 at the tip.
+  - Ruled into fix round 1 (6496): F1 (the outlived-stamp residual in `noteSessions`' comment); F2 and F3 (the D-5434
+    pin reads all six types and every line up to the append); F4 (R9 in the mutation table); and F6 (the spec's three
+    stale `shared/api.ts` citations, inherited from `main`). F5, a commit message, is recorded only.
+  - The spool fix rode the same round (6499).
+  - Ruled on fix round 1's wave-done (6540), to wave 4's list: delegation-watch R111 (review 533's row). It was red
+    once on darwin and 1 in 36 at CPUQuota=25% on Linux, and the follow-up does not touch it.
+- **2026-10-18 — review 615 (`ccrc-pwa-clear-ridge`, at `410265acb`).** The panel was complete, found nothing in the
+  code, and every mutant table reproduced exactly. 5 minor findings.
+  - Ruled into fix round 2 (6553), docs and one test title only: commit lists; both tests of the cap in spec §5.3 and
+    README; three more stale citations in the spec's facts table; and the darwin-only row verified. F5 (the full-disk
+    sentence's home) needed no change.
+- **2026-10-18 — review 617 (`ccrc-pwa-quiet-prairie`, at `7cb2ccda5`).** The panel was complete, with 3 minor
+  findings. Ruled: no further round.
+  - F1: more stale rows in the spec's facts table (:88-99), pre-existing on `main`. They go to a docs sweep on wave 4's
+    list.
+  - F2: a commit message. Recorded only.
+  - F3: test titles and comments in `delegation-spool.test.ts`, and `shared/api.ts`'s bounds bullet, state the cap by
+    half its condition. To wave 4's list.
+- **2026-10-18 — #597 merged.** The pre-merge probe merged the head onto `main` `62db8d3b5`.
+  - Green on that merge: oss-metadata, pools-prose, single-definition, deviation-refs, hibernate-census,
+    delegation-watch and delegation-wave3.integration, and server `tsc`. typecheck-tests was not run there, for want of
+    `ui` modules; #597 touches no PWA or UI code.
+  - `gh pr merge 597 --squash --admin --match-head-commit 7cb2ccda5…` merged it at 22:04:47Z as `c1453e422`. The
+    prerelease `v0.0.299` carries it.
+  - Run 600 closed `final:true`, `done`, `released:true`, with its child reclaim queued.
+  - The block: D-5433..D-5436 are defined in the plan. D-5437 and D-5438 are unused.
+  - Its last full run (39156998467) is red only on ccd-docs-tree "row 64" on its latest attempt, a main-red (main's
+    daily 39093762060). ccd-docs-index was red on attempt 1 and passed on re-run. `main`'s macOS reds and the flaky
+    R111 can still fail a stable promotion's `full-suite`.
 
 ## Carried constraints
 
@@ -1116,38 +1211,54 @@ change the spec or convert O1–O5 into prior requirements.
 **Wave 3 merged on 2026-10-18.** #448 landed at 03:04:32Z as `46c50a9a4`, after reviews 518, 533, 544, 556, 563, 578
 and 583 (decisions above). Run 360 closed `done`, and the prerelease `v0.0.258` carries the wave.
 
+**Its pre-soak follow-up merged the same day.** #597 landed at 22:04:47Z as `c1453e422`, after reviews 610, 615 and
+617 (decisions above). Run 600 closed `done`, and the prerelease `v0.0.299` carries it.
+
 **Wave 4 — project** inputs:
 - Run 584 is open, `wave:4`, state `planned`, with no session. Its plan is not written.
 - The operator's wave-4 list, collected from wave 3's rulings and reviews:
   - rung 4: how soak-era and later rung-4 links are treated, ruled before wave 4 displays anything (2026-10-16), with
     the four identification gaps beside it, and Q-W4, attributing main checkouts without the symlinked spelling;
-  - journal compaction, which is the operator's, with the checkpoint-size bound that rides it;
+  - journal compaction, first in wave 4's plan (operator ruling 2026-10-18, "Soak, watch disk"), with the
+    checkpoint-size bound that rides it;
   - mark liveness: what clears each lane mark, and counting mark-forced unmeasured links apart;
   - W1's never-listed part: list the spool root;
   - `prune_backups`' full keep sets (D-4663; D-5144 only blocks KEEP=0);
   - the conditional late-return arm that review 544 left for the operator to place;
   - the hook's silent whole-event drops (D-4662);
-  - the unexplained intermittent red in `session-hook-turnmark`;
+  - `session-hook-turnmark`'s concurrent-rotators red: likely D-5434's lost update, which D-5434's guard should close,
+    but never reproduced separately; and the same two-read guard shape in `_hook_spool_append` and
+    `_hook_history_scope` (D-5434);
   - a doctor WARN when `BASH_MAX_TIMEOUT_MS` or `BASH_DEFAULT_TIMEOUT_MS` is set;
   - hook presence as a measured input (a home with no hook reads measured-empty), with incarnation-absent owners
     beside it;
   - the absent-owner spool prune (operator ruling 2026-10-14);
   - the installer's `JQ_UNMANAGED` fix (operator ruling 2026-10-15), and registering `PostToolUseFailure`;
   - B-F3: the X2 and X4 lane rows carry no count assertion;
-  - listing shed for large repositories: this repository's 124 linked names (about 2,082 B) do not shed today, and
-    roughly 155 to 200 names would; the live shed rate is unmeasured;
+  - listing shed for large repositories: on the 4096 cap, this repository's 124 linked names (about 2,082 B) do not
+    shed today, and roughly 155 to 200 names would; the live shed rate is unmeasured;
   - lease release for a reused raw worktree path, which stays conflicting until release exists (release itself is
     wave 5's);
   - an agent-side realpath resolver for the projects root, which a remote-mode server cannot resolve;
-  - from review 578: F4's ruling (fix before the soak, or a known limitation); R111's fixed 20 ms real-time wait, which
-    reds under load; `ccd/session-hook.sh`'s stale "exits in its arm" comments for a compact SessionStart; and a
-    development `coord.db` at `user_version` 21, from an earlier branch build, meeting the renumbered migration (no
-    known box);
+  - from review 578 (F4 itself is fixed by D-5433): R111's fixed 20 ms real-time wait, which reds under load (once
+    on darwin, and 1 in 36 at CPUQuota=25% on Linux); `ccd/session-hook.sh`'s stale "exits in its arm" comments
+    for a compact SessionStart; and a development `coord.db` at `user_version` 21, from an earlier branch build,
+    meeting the renumbered migration (no known box);
   - from the M6 absorb's check: #575's hookstate carry keys on `$paid` (any `agent_id`), while wave 3's turn marker
     keys on the join, so an unjoined `agent_id` keeps a stored `done` while the marker reads `working`;
-  - from review 583: the stale `COORDINATOR_INTENT_REFUSALS` docstring.
+  - from review 583: the stale `COORDINATOR_INTENT_REFUSALS` docstring;
+  - from the follow-up (run 600):
+    - a swap or `restarting` row in the breaker, dropped from the F4 ruling;
+    - `history -a` as the spool's lossless route on the small cap, unmeasured on darwin (D-5436);
+    - the small cap's losses off glibc Linux (darwin, musl): about 15 to 20 listing names, beside the listing-shed
+      item above (D-5436);
+    - the spec facts table's other stale rows (review 617 F1);
+    - the cap's half-stated condition in `delegation-spool.test.ts`'s titles and comments and in `shared/api.ts`'s
+      bounds bullet (review 617 F3).
 
-Rollout and the seven-day soak are the operator's acts, by the plan's "Rollout and Verification" steps 1–9.
+Rollout and the seven-day soak are the operator's acts, by the plan's "Rollout and Verification" steps 1–9. They run
+on `v0.0.299` or later, which carries #597, under the disk watch the decisions above record. `v0.0.299` is a
+prerelease, so the rollout is `ccrc rollout --to v0.0.299` unless it is promoted to stable first.
 
 **Review 334 accepted wave 2 at its exact tip; wave 2 merged on 2026-10-13** (the decisions above record how). Reviewer `ccrc-pwa-keen-summit` accepted
 `e183237e59f481ac85730bc06ca5cef29dea1d15` in immutable report

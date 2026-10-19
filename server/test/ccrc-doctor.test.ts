@@ -1172,6 +1172,12 @@ function healthy(prefix: string): string {
   containedPath(home);   // plant the poisoned gh FIRST; ghStub overwrites it below
   writePkg(home, '>=1.0.0');
   stubNode(home, 'v22.20.0');
+  // The approval wait's two checks (coordinator-first routing, plan Task 14): the server's key is pinned, so
+  // `approval-key` PASSes. `healthy()` never creates `~/.cc-sessions` (the no-registry box the pools and transcripts
+  // describes rely on), so `approval-verifier-runnable` SKIPs, counted in `HEALTHY_SKIPS`. `ccrc-approval-key.test.ts`
+  // plants the registry and breaks each piece.
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'approval-signing.pub'), '-----BEGIN PUBLIC KEY-----\nfixture\n-----END PUBLIC KEY-----\n');
   stub(home, 'flock', 'exit 0');
   // `python3` is a presence stub, except for the box-token check's two JSON readers, which go to the real interpreter
   // by EXACT program text (read from the shipped checks file): a stub that prints nothing makes them read `state-unreadable`
@@ -1661,8 +1667,18 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  RAISED BY ONE AGAIN, on every platform (wave 17, D-5316): `update-sweep`
  *  SKIPs - `healthy()` writes no `~/.ccrc/update.json`, so there is no last
  *  update to read a sweep from. The `update-sweep` describe at the end of this
- *  file plants one where it answers. */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 8;   // +1 server-caps (no role): its block at the end; +1 update-sweep (no update.json on a healthy box)
+ *  file plants one where it answers.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (coordinator-first routing, plan Task 14):
+ *  `approval-verifier-runnable` SKIPs - `healthy()` creates no `~/.cc-sessions`, so
+ *  the box hosts no session whose hook could wait.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (coordinator-first routing, plan Task 16):
+ *  `approval-key-colocated` SKIPs - `healthy()` writes no server signing key
+ *  (`~/.ccrc/approval-signing.key`), which only a server that started with
+ *  coordination creates. Its sibling `approval-digest-mismatch` PASSes there (no
+ *  refusals journal), so it moves no count. */
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 10;   // +1 server-caps (no role): its block at the end; +1 update-sweep (no update.json on a healthy box); +1 approval-verifier-runnable (no registry); +1 approval-key-colocated (no server key)
 
 // ── the table itself ──────────────────────────────────────────────────────
 
@@ -11124,10 +11140,12 @@ describe('ccrc doctor: accounts', () => {
   });
 
   it('an external row in the live Codex lanes\' shape is judged exactly as before: the arm keys on exec.kind, never provider or telemetry', () => {
-    // `ext-a` is a fixture id in the live shape (external, provider openai,
-    // telemetry codex) — plus a hand-edited proxyPort the parser would refuse
-    // on this kind, so an arm keyed on anything but `exec.kind` WOULD build a
-    // loopback URL here and this case would see it.
+    // `ext-a` is a fixture id in the shape the live lanes had before the
+    // cutover (external, provider openai, telemetry codex; retired by Plan 4;
+    // the title keeps the words spec §20.10 quotes) — plus a hand-edited
+    // proxyPort the parser would refuse on this kind, so an arm keyed on
+    // anything but `exec.kind` WOULD build a loopback URL here and this case
+    // would see it.
     const home = healthy('ccrc-doctor-accounts-codex-external-');
     writeRoster(home, [{
       id: 'ext-a', configDirSuffix: '.claude-ext-a',
@@ -14311,11 +14329,26 @@ describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, 
       names: (home) => [join(home, '.ccrc', 'history-max-gb')] },
     { word: 'schema-newer', cls: 'FAIL', plant: (home) => withStore(home, (db) => { freshTick(db); db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`); }) },
     // O41, the doctor half: the gap guard fires on the census's counts, never on a date
-    { name: 'O41: a due blob WARNs export-due, naming the count, and FAILs nothing while none is overdue', word: 'export-due', cls: 'WARN',
-      plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 0); }),
+    // O41's B4 cases: this build has the export writer, so a due count alone is the pass's cadence; the WARN needs
+    // a gap — the last pass over two intervals old, or the oldest due blob waiting longer than that.
+    { name: 'O41 (B4): a due blob with the last export pass over 2 h old WARNs export-due, naming the count, and FAILs nothing while none is overdue', word: 'export-due', cls: 'WARN',
+      plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 0); setHistoryMeta(db, HEALTH_META.exportPassMs, String(Date.now() - 3 * 3_600_000)); }),
       names: () => ['3'], absent: ['FAIL history: export-overdue'] },
+    // The writer is live in this build, so the remedy is the writer's (W1-B4 review 614), not B1's wait for a writer to ship.
     { name: 'O41: an overdue blob FAILs export-overdue', word: 'export-overdue', cls: 'FAIL',
-      plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 2); }) },
+      plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 2); }),
+      remedyNames: () => ['never --purge-history', 'one segment an hour'] },
+    { name: 'O41 (B4): a due blob that has waited over two pass intervals WARNs export-due, though the last pass is fresh', word: 'export-due', cls: 'WARN',
+      plant: (home) => withStore(home, (db) => {
+        freshTick(db);
+        setExport(db, 3, 0);
+        setHistoryMeta(db, HEALTH_META.exportPassMs, String(Date.now() - 10 * 60_000));
+        setHistoryMeta(db, HEALTH_META.exportDueOldestMs, String(Date.now() - 3 * 3_600_000));
+      }),
+      names: () => ['3'], absent: ['FAIL history: '] },
+    { name: 'O40 (B4): an export paused for room on the home filesystem WARNs export-paused-low-disk, and FAILs nothing', word: 'export-paused-low-disk', cls: 'WARN',
+      plant: (home) => withStore(home, metaOnFreshTick(HEALTH_META.exportPaused, 'low-disk')),   // Task 6 writes planExportRoom's word
+      absent: ['FAIL history: '] },
     { word: 'retention-lowered', cls: 'WARN',
       plant: (home) => withStore(home, (db) => {
         freshTick(db);
@@ -14424,6 +14457,20 @@ describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, 
     withStore(home, (db) => { freshTick(db); setExport(db, 0, 0); });
     const r = runHistoryCheck(home);
     expect(r.stdout).not.toMatch(/^(WARN|FAIL) history: export-(due|overdue): /m);
+    expect(r.code).toBe(0);
+  });
+
+  it('O41 (B4): steady state — three blobs due, an hourly pass 10 min ago, the oldest due 90 min ago — PASSes ok', () => {
+    const { home, storeId } = historyBox('ccrc-doctor-history-export-steady-');
+    withStore(home, (db) => {
+      freshTick(db);
+      setExport(db, 3, 0);
+      setHistoryMeta(db, HEALTH_META.exportPassMs, String(Date.now() - 10 * 60_000));
+      setHistoryMeta(db, HEALTH_META.exportDueOldestMs, String(Date.now() - 90 * 60_000));
+    });
+    const r = runHistoryCheck(home);
+    expect(historyLines(r.stdout), r.stdout).toHaveLength(1);
+    expect(historyLines(r.stdout)[0]).toMatch(new RegExp(`^PASS history: ok: store ${storeId}: `));
     expect(r.code).toBe(0);
   });
 });
@@ -14583,7 +14630,7 @@ describe('ccrc doctor: history — the relay (O15: every word, and the one rule 
     exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [], journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0,
     exportSegmentNewer: [], exportSegmentMissing: 0, journalUnwritable: false,
     dbPath: '/home/u/.ccrc/history/db', freeBytes: null, thresholdBytes: null, copyBps: null, backupsDb: [],
-    journalStoreDirs: [], extrasUnmeasured: [],
+    journalStoreDirs: [], extrasUnmeasured: [], exportLastPassMs: null, exportDueOldestMs: null,
   });
 
   it('CONTROL: deriveHealth answers the clean inputs with PASS ok and nothing to report', () => {
@@ -15025,7 +15072,8 @@ describe('ccrc doctor: delegation-hooks', () => {
       expect(r.code).toBe(1);
     });
 
-    it('asks the service manager ONCE for all its pending units, in one is-active call', () => {
+    // Linux only: launchd has no batched is-active, so the darwin arm asks `launchctl print` once per unit.
+    it.skipIf(process.platform === 'darwin')('asks the service manager ONCE for all its pending units, in one is-active call', () => {
       const home = dhBox('ccrc-doctor-dh-spool-batch-');
       for (let i = 1; i <= 4; i++) plantSession(home, `lane-a-s${i}`, { live: true, recorded: true });
       plantSpoolDir(home, 'lane-a-s2');   // standing: not pending, so not asked about
@@ -15036,7 +15084,8 @@ describe('ccrc doctor: delegation-hooks', () => {
       expect(verdicts(r)).toEqual([expect.stringMatching(/^WARN delegation-hooks: 3 running sessions have no delegation spool directory yet.*: lane-a-s1 lane-a-s3 lane-a-s4$/)]);
     });
 
-    it('a short answer from the manager (fewer words than units) is never read as "not running"', () => {
+    // Linux only: the word count is the batched is-active reply, which launchd never gives (one `launchctl print` per unit).
+    it.skipIf(process.platform === 'darwin')('a short answer from the manager (fewer words than units) is never read as "not running"', () => {
       const home = dhBox('ccrc-doctor-dh-spool-short-');
       plantSession(home, 'lane-a-s1', { live: false, recorded: true });
       plantSession(home, 'lane-a-s2', { live: false, recorded: true });
@@ -15152,11 +15201,15 @@ describe('ccrc doctor: delegation-hooks', () => {
     it('a session the manager could not be asked about is a WARN, never a pass and never a missing directory', () => {
       const home = dhBox('ccrc-doctor-dh-unasked-');
       plantSession(home, 'lane-a-demo', { live: false, recorded: true });
-      stub(home, 'systemctl', 'exit 0');   // prints no word: the question was not answered
+      // The question goes unanswered per platform: systemctl printing no word, or launchctl failing for a reason other than 113 (an EMPTY fixture file).
+      if (process.platform === 'darwin') writeFileSync(join(home, 'fixture-unit-claude-session@lane-a-demo.service'), '');
+      else stub(home, 'systemctl', 'exit 0');   // prints no word: the question was not answered
       const r = runDh(home);
       expect(verdicts(r)).toEqual([
         'WARN delegation-hooks: the service manager gave no answer for 1 session, so whether it owes a delegation spool directory was not measured: lane-a-demo']);
-      expect(remedyOf(r, /^WARN /)).toMatch(/^ {2}remedy: ask the manager by hand \(systemctl --user status claude-session@lane-a-demo\.service\)/);
+      expect(remedyOf(r, /^WARN /)).toMatch(process.platform === 'darwin'
+        ? /^ {2}remedy: ask the manager by hand \(launchctl print gui\/\d+\/app\.ccrc\.session\.lane-a-demo\)/
+        : /^ {2}remedy: ask the manager by hand \(systemctl --user status claude-session@lane-a-demo\.service\)/);
       expect(r.code).toBe(2);
     });
   });

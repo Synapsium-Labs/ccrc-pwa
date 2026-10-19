@@ -83,6 +83,11 @@ const palette = (theme) => {
     // The interactive grounds (D-5101), opaque derivations of the ink over
     // the card. `of` refuses a translucent one, which is the point.
     hover: of('--bg-hover'), pressed: of('--bg-pressed'),
+    // The same two on the dead banner (D-5574), painted by the danger-ghost
+    // with `ground="dead"` (D-5688): the banner's tint mixed toward
+    // --ink-on-danger, 35/70 in :root and 60/95 in a light palette, so they
+    // are opaque here too.
+    hoverOnDead: of('--bg-hover-on-dead'), pressedOnDead: of('--bg-pressed-on-dead'),
     // Any token by name, for the ground lists below.
     of,
   };
@@ -115,9 +120,10 @@ const HOVER_INKS = [
   '--acct-cyan', '--acct-violet', '--acct-blue', '--acct-magenta', '--acct-amber', '--acct-green',
 ];
 // A pressed primitive sinks to `--bg-pressed`. Only `ListRow`, `BareRow` and
-// the ghost and quiet buttons press to a ground, and what they draw is the
-// neutral tiers plus one coloured ink: the session menu's danger row
-// (`.menu-item--danger .menu-label`, --status-dead-text). The fleet row never
+// the ghost, danger-ghost (D-5495) and quiet buttons press to a ground, and
+// what they draw is the neutral tiers plus one coloured ink: the session
+// menu's danger row (`.menu-item--danger .menu-label`) and the danger-ghost's
+// label, both --status-dead-text. The fleet row never
 // presses to a ground, and a chip inside a pressed row paints its own. The
 // danger row is the one ink beyond the plan's neutral list (D-5454).
 const PRESSED_INKS = ['--ink-primary', '--ink-secondary', '--ink-tertiary', '--status-dead-text'];
@@ -316,6 +322,27 @@ const pairs = (T, name) => [
   [`${name} dead-text / page`, T.deadText, T.page, 4.5],
   [`${name} danger hairline / sheet (UI 3:1)`, T.dead, T.sheet, 3],
   [`${name} danger hairline / dead banner tint (UI 3:1)`, T.dead, T.deadTintSolid, 3],
+  // The danger-ghost lifts and sinks as `ghost` does (D-5495) on its default
+  // ground, a card (the Updates rows; the halt banner draws it too). Its label
+  // is in HOVER_INKS and PRESSED_INKS; its hairline is gated here. Nord's
+  // pressed pair is the thinnest, at 3.00.
+  [`${name} danger hairline / hover (UI 3:1)`, T.dead, T.hover, 3],
+  [`${name} danger hairline / pressed (UI 3:1)`, T.dead, T.pressed, 3],
+  // On the dead banner the two grounds are its own (D-5574): the danger-ghost
+  // paints them with `ground="dead"` (D-5688). Its label and hairline are
+  // gated on them, and so are the steps themselves, which are not text pairs:
+  // the lift must read as a ground against the tint, the press as a deeper
+  // one, and the press against the lift (the card's grounds measured 1.00 and
+  // 1.03 here). The light palettes mix further (60/95, D-5688), so the
+  // thinnest are now Phosphor & Ink's lift (1.08) and press (1.16), and
+  // Phosphor Daylight's press against the lift (1.06).
+  [`${name} dead-text / dead banner hover`, T.deadText, T.hoverOnDead, 4.5],
+  [`${name} dead-text / dead banner pressed`, T.deadText, T.pressedOnDead, 4.5],
+  [`${name} danger hairline / dead banner hover (UI 3:1)`, T.dead, T.hoverOnDead, 3],
+  [`${name} danger hairline / dead banner pressed (UI 3:1)`, T.dead, T.pressedOnDead, 3],
+  [`${name} dead banner hover / tint (a ground step)`, T.hoverOnDead, T.deadTintSolid, 1.05],
+  [`${name} dead banner pressed / tint (a ground step)`, T.pressedOnDead, T.deadTintSolid, 1.1],
+  [`${name} dead banner pressed / hover (a ground step)`, T.pressedOnDead, T.hoverOnDead, 1.05],
 ];
 
 let fail = 0, n = 0;

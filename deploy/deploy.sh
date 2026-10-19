@@ -571,7 +571,7 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
-    && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } \
+    && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } && { [ ! -f ~/.cc-sessions/approval-verify.mjs ] || cp -a ~/.cc-sessions/approval-verify.mjs ~/ccrc-backups/$TS/approval-verify.mjs; } \
     && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
     && { [ ! -f ~/.config/systemd/user/claude-session@.service ] || cp -a ~/.config/systemd/user/claude-session@.service ~/ccrc-backups/$TS/claude-session@.service; }"
   # `--exclude 'ccrc-mail.token'`: a checkout may still hold a gitignored
@@ -636,7 +636,7 @@ if [ "$TARGET" = "agent" ]; then
   # whole program (pinned — `ccrc-api-ship.test.ts`, and the shim's own header
   # above for what changes the day that stops being true).
   install_atomic ccd/ccrc-api .local/bin/ccrc-api 755
-  install_atomic deploy/notify.sh .cc-sessions/notify.sh 755
+  install_atomic deploy/notify.sh .cc-sessions/notify.sh 755; install_atomic ccd/approval-verify.mjs .cc-sessions/approval-verify.mjs 644   # the approval wait's verifier (plan Task 14), on this line so no cited anchor below moves
   # The compaction card's helper (compaction-card spec §2): plain node, no npm,
   # read by the hook's PreCompact and PostCompact arms under `_hook_timeout`.
   # 644 — `node` runs it; nothing executes it directly.
@@ -674,7 +674,7 @@ if [ "$TARGET" = "agent" ]; then
   # ruling R-C11). ccrc runs its own tree's copy, which the rsync of `ccd/`
   # above lands at ~/ccrc/ccd/. `ccrc update` never refreshes a PATH copy, and
   # a stale one reads lane one's OAuth directory for a codex lane too. An old
-  # copy is removed by hand at the box cleanup (Plan 4). This note is as long
+  # copy was removed by hand at the box cleanup (Plan 4). This note is as long
   # as the lines it replaced, so no line this file's readers cite moves.
   # D-1160: the sweep's DEFAULT noise list — ccrc's own footprint, kept out of
   # every corpus. Shipped on this lane and not only by `ccrc install`, because a
@@ -861,9 +861,9 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # missing source aborts the lane mid-chain; the runtime builder and the
   # launcher joined in the commit that placed them in `_inst_bins`.
   # Dependencies first and the launcher last, as `_inst_bins` orders them. The
-  # launcher is `ccrc-codex`, never `ccgpt`: on a live fleet box
-  # `.local/bin/ccgpt` is another repository's launcher, and this helper
-  # replaces whatever sits at its destination (D-3478).
+  # launcher is `ccrc-codex`, never `ccgpt`: a box may still carry another
+  # repository's `.local/bin/ccgpt` (the fleet box's copy was removed by
+  # Plan 4), and this helper replaces whatever sits at its destination (D-3478).
   #
   # `server/test/install-census.test.ts` reds when a binary or unit file
   # `ccrc install` places is placed by NEITHER lane of this file (it reads the

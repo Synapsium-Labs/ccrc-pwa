@@ -290,7 +290,9 @@ export function RunsScreen({
       {/* Child-reclamation wave 4 (spec §5.8, §5.9): the reclaim switch and the
           attention list, one row under the pause banner — `/runs` and nowhere
           else, rendering nothing until a coord frame that carries the field. */}
-      <ChildReclaimBanner store={store} />
+      {/* D-5527: the banner names a reclaim target by its programme and wave, and a
+          reclaim follows a run's CLOSE, so it is handed the finished runs too. */}
+      <ChildReclaimBanner store={store} runs={[...live, ...(cold ?? [])]} />
 
       {/* Wave 6, spec §8: the operator's dial on the two coordination caps,
           beside the pause control and on `/runs` alone. Renders nothing until

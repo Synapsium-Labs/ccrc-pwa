@@ -253,21 +253,22 @@ describe('POST /api/runs', () => {
     expect(okRun(w.coord.run(id))?.state).toBe('planned');
   });
 
-  it('stamps the coordinator project read from the registry — and since D-5298 refuses one that is not the run\'s', async () => {
+  it('stamps the coordinator project read from the registry — of any project since D-5523', async () => {
     // `claimedBy`'s registry record names a DIFFERENT project than the run's
-    // own `project` field, deliberately: before D-5298 the stamp proved the
-    // route read the registry, not the run's column. Since coordinator-first
-    // Task 11b the same open is refused, and `by` names the REGISTRY value —
-    // the same proof. An admitted open's stamp is the MEASURED (trimmed)
-    // registry value.
+    // own `project` field and its home, deliberately: the stamp proves the
+    // route read the registry, not the run's column. D-5298 refused this open;
+    // since D-5523 (the operator's ruling of 2026-10-18, #601) a coordinator
+    // may sit in any project, so it is admitted and stamped with the REGISTRY
+    // value. An admitted open's stamp is the MEASURED (trimmed) registry value.
     const home = mkTmp('ccrc-runs-');
     seed(home, CLAIMED_BY, { project: 'project-n' });
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY });
-    expect([res.statusCode, res.json()]).toEqual([409, { ok: false, refused: 'project-mismatch', by: 'project-n' }]);
+    expect(res.statusCode).toBe(200);
+    expect(okRun(w.coord.run((res.json() as { id: number }).id))?.coordProject).toBe('project-n');
     seed(home, CLAIMED_BY, { project: `${PROJECT}\n` });
-    const ok = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY });
+    const ok = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: CLAIMED_BY });
     expect(ok.statusCode).toBe(200);
     expect(okRun(w.coord.run((ok.json() as { id: number }).id))?.coordProject).toBe(PROJECT);
   });
@@ -327,7 +328,7 @@ describe('POST /api/runs', () => {
     const emptyRes = await postOpen(
       app, { ...OPEN_BODY, program: 'empty-project', claimedBy: EMPTY_PROJECT_COORD });
     expect([emptyRes.statusCode, emptyRes.json()]).toEqual([409, { ok: false, refused: 'project-mismatch',
-      detail: "the claimant's registry row records no project, so it cannot be the run's" }]);
+      detail: "the claimant's registry row records no project, so its project cannot be stamped" }]);
     expect(okRuns(w.coord.runs())).toHaveLength(0);
   });
 
@@ -1145,6 +1146,60 @@ describe('POST /api/runs/:id/dispatch', () => {
     const res = await postDispatch(app, opened.id);
     expect(res.statusCode).toBe(200);
     expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT]]);
+  });
+
+  // A coordinator may NAME the child it dispatches. `cmd_ws_add` already binds
+  // `<project> [slug]`, so the slug rides as the positional straight after the
+  // project — the worktree, branch and session id then carry the name the
+  // coordinator chose (tooling that keys work on the workspace name, e.g. a
+  // ticket id, reads it from the start; a held child can never be renamed).
+  describe('slug — the coordinator names the child', () => {
+    it('rides as the positional after the project, and binds exactly <project>-<slug>', async () => {
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-task-42-login'] });
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id, { brief: 'do the thing', slug: 'task-42-login' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, sessionId: 'demo-task-42-login' });
+      expect(calls.filter((c) => c[0] === 'ws-add')).toEqual([['ws-add', '--no-rc', PROJECT, 'task-42-login']]);
+      expect(okRun(w.coord.run(opened.id))).toMatchObject({ sessionId: 'demo-task-42-login', state: 'dispatched' });
+    });
+
+    it.each([
+      ['uppercase', 'Task-42'],
+      ['leading dash', '-task-42'],
+      ['too long', 'a'.repeat(32)],
+      ['one character', 'a'],
+      ['a dot', 'task.42'],
+      ['empty', ''],
+      ['not a string', 42],
+      ['null', null],
+    ] as const)('refuses a %s slug with 400 before any fleet work', async (_label, slug) => {
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh1'] });
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id, { brief: 'do the thing', slug });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'bad-request', detail: expect.stringMatching(/^slug: must match /) });
+      expect(calls.some((c) => c[0] === 'ws-add')).toBe(false);
+      expect(okRun(w.coord.run(opened.id))).toMatchObject({ state: 'planned', sessionId: null });
+    });
+
+    it('binds nothing when the new workspace is not <project>-<slug>', async () => {
+      // ws-add answered 0 but the only new row carries another name: the slug is
+      // the identity the coordinator asked for, so a stranger is never bound.
+      const home = mkTmp('ccrc-runs-');
+      const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-someone-else'] });
+      const w = await openApp(home, run); app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      const res = await postDispatch(app, opened.id, { brief: 'do the thing', slug: 'task-42-login' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, refused: 'ambiguous-dispatch', candidates: 0 });
+      expect(calls.some((c) => c[0] === 'ws-hold')).toBe(false);
+      expect(okRun(w.coord.run(opened.id))).toMatchObject({ state: 'planned', sessionId: null });
+    });
   });
 
   // T2's attribution half, inverted by its review round (D-410) and RE-LANDED

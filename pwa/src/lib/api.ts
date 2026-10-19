@@ -2,11 +2,11 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
-import type { Dialog, DialogAnswered, DialogTabRequest, InterruptRouteSource } from '../../../shared/api';
+import type { Dialog, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource } from '../../../shared/api';
 
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
@@ -14,6 +14,13 @@ import {
   BOX_TOKEN_PHASES, OWED_REASONS, TOKEN_FILE_PROBLEMS, TOKEN_HOLDS, TOKEN_ORIGINS, TOKEN_ROTATE_PATH, type BoxTokenView,
   type RotateAnswer,
 } from '../../../shared/box-token';
+import {
+  DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, contentClass, docsApi, type DocsFileResponse, type DocsProjectsResponse,
+  type DocsRefreshResponse, type DocsTreeResponse,
+} from '../../../shared/docs';
+import {
+  declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
+} from '../docs/failures';
 
 /** An answer route's 200 that could not be read: the answer landed, and the next screen is unknown (`next` absent). */
 const ANSWERED: DialogAnswered = { ok: true };
@@ -35,8 +42,12 @@ function answered(body: unknown): DialogAnswered {
 export class ApiError extends Error {
   readonly status: number;
   readonly body: unknown;
+  /** The response's `content-type` header; `null` has one meaning: the response carried none (Docs W5, spec 4.3:
+   *  the docs client's `unexpected-response` names it). A header that is present but empty is `''`, which the docs
+   *  client folds with `null` as "absent or empty". Absent from the constructor's arguments, also `null`. */
+  readonly contentType: string | null;
 
-  constructor(status: number, body: unknown) {
+  constructor(status: number, body: unknown, contentType: string | null = null) {
     const serverError =
       typeof body === 'object' && body !== null && 'error' in body
         && typeof (body as { error: unknown }).error === 'string'
@@ -46,6 +57,7 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.status = status;
     this.body = body;
+    this.contentType = contentType;
   }
 }
 
@@ -639,7 +651,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       // committed behind the login screen. What is suppressed is the NOISE, not
       // the failure: `toast()` drops anything fired while the screen is up.
       if (res.status === 401) raiseAuthLostFrom(body);
-      throw new ApiError(res.status, body);
+      throw new ApiError(res.status, body, res.headers.get('content-type'));
     }
     return res;
   };
@@ -780,6 +792,22 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       postJson<PasskeyAssertStart>('/api/auth/passkey/assert/start'),
     passkeyAssertFinish: (b: PasskeyAssertFinish): Promise<void> =>
       post('/api/auth/passkey/assert/finish', b),
+
+    /**
+     * STEP-UP THAT KEEPS THE SESSION (D-5512, spec §3.2; accounts plan Tasks A5, A6). Wire shapes only: the
+     * ceremony's browser half is `lib/passkey.ts`'s `assertStepUp`, and the step's state is `accounts/useStepUp.ts`.
+     *
+     * Unlike the login doors these mint nothing: no cookie, no new session, the same `generation`. Each 200 is the
+     * requesting session's new `stepUpFreshUntil`. A refusal reaches the caller as an ordinary `ApiError` whose body
+     * names the word (`step-up-required`, with `verdict: 'wrong'` on a failed proof, at 403 and never 401, so the
+     * funnel above raises no login screen over a live session; `step-up-locked`; `passkey-enrolled`; `auth-off`).
+     * The passphrase travels in the BODY only, as `login`'s does.
+     */
+    stepUpStart: (): Promise<StepUpStart> => postJson<StepUpStart>('/api/auth/step-up/start'),
+    stepUpFinish: (b: PasskeyAssertFinish): Promise<StepUpAnswer> =>
+      postJson<StepUpAnswer>('/api/auth/step-up/finish', b),
+    stepUpPassphrase: (passphrase: string): Promise<StepUpAnswer> =>
+      postJson<StepUpAnswer>('/api/auth/step-up/passphrase', { passphrase }),
 
     /**
      * The enrolment screen's two gated calls (Task 8 review, MF-2).
@@ -1278,6 +1306,16 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  happened". */
     setCollectLane: (body: CollectLaneRequest) =>
       postJsonOr<CollectLaneView | 'unreadable'>('/api/coord/collect-lane', 'unreadable', body),
+    /** `GET /api/digest?day=` (coordinator-first routing spec §10, D-5300): the digest of what coordinators decided
+     *  in the operator's name for one UTC day, or, with no day, the newest whose window has closed. The digest screen
+     *  reads it through `asDigestAnswer`, the wire guard. Session-gated when armed; no box token. */
+    digest: (day?: string) =>
+      getJson<DigestAnswer>(day === undefined ? '/api/digest' : `/api/digest?day=${encodeURIComponent(day)}`),
+    /** `POST /api/digest/correct` (D-5300): one line's correction, mailed verbatim to that line's coordinator. A 409
+     *  (`not-coordinator`, `duplicate`) rejects with `ApiError` like every non-2xx. `postJson`, not `postJsonOr`: the
+     *  screen reads nothing off the answer but its arrival, and a write whose answer was unreadable is shown as sent
+     *  only after the next read of the digest says `corrected`. */
+    correctDigest: (body: DigestCorrectBody) => postJson<DigestCorrectAnswer>('/api/digest/correct', body),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {
@@ -1286,6 +1324,51 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       const res = await request(`${sid(id)}/upload`, { method: 'POST', body: form });
       return ((await res.json()) as { clip: StagedClip }).clip;
     },
+    /**
+     * The Docs reader's loaders (spec 2026-10-01 4.3, 5.4): `DocsScreen`'s default `DocsLoaders`. Every call goes
+     * through `request`, so a 401 still raises the one login overlay, and carries the marker header through
+     * `DOCS_REQUEST_HEADER`/`DOCS_REQUEST_HEADER_VALUE` to the URL L0's `docsApi` builds. Each resolves a union and
+     * never rejects for a server answer (`docs/failures.ts`): it rejects only when the caller's signal aborts, or for
+     * a defect. `file` and `raster` refuse each other's paths by throwing `wrong-representation` before any request.
+     */
+    docs: ((): DocsLoaders => {
+      const marker = { [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE };
+      const read = async <T>(path: string, fields: readonly string[], init: RequestInit): Promise<DocsAnswer<T>> => {
+        try {
+          return await readDocsEnvelope<T>(await request(path, init), fields);
+        } catch (err) {
+          // `request` folds an unreadable error body to '' and throws ApiError, so an abort mid-body arrives as one.
+          if (init.signal?.aborted) throw init.signal.reason;
+          return docsAnswerFromError(err);
+        }
+      };
+      return {
+        projects: () => read<DocsProjectsResponse>(docsApi.projects(), ['index'], { headers: marker }),
+        tree: (project, ref) =>
+          read<DocsTreeResponse>(docsApi.tree(project, ref), ['tree', 'refreshDue'], { headers: marker }),
+        file: (project, pin, signal) => {
+          if (contentClass(pin.path) === 'raster') throw new Error('wrong-representation');
+          return read<DocsFileResponse>(docsApi.file(project, pin), ['contentClass', 'show'], { headers: marker, signal });
+        },
+        raster: (project, pin, signal) => {
+          const declared = declaredRaster(pin.path);
+          if (declared === null) throw new Error('wrong-representation');
+          return (async () => {
+            try {
+              return await readDocsRaster(await request(docsApi.file(project, pin), { headers: marker, signal }), declared);
+            } catch (err) {
+              if (signal?.aborted) throw signal.reason;
+              return docsAnswerFromError(err);
+            }
+          })();
+        },
+        refresh: (project, body) => read<DocsRefreshResponse>(docsApi.refresh(project), ['fetch', 'tree'], {
+          method: 'POST',
+          headers: { ...marker, 'content-type': 'application/json' },
+          body: JSON.stringify({ ref: body.ref, reason: body.reason }),
+        }),
+      };
+    })(),
   };
 }
 

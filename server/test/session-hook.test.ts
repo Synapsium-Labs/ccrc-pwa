@@ -8673,6 +8673,19 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // that file are appended below every frozen anchor, and this branch's
       // block stays last.
       'server/test/single-definition.test.ts': 13,
+      // RE-MEASURED on the session-workflows view (D-5560; base = origin/main,
+      // tip = this branch merged onto it): `shared/api.ts` 0 -> 1, nothing
+      // else moved. This branch adds 11 lines to the cited file (one type
+      // import, one wire frame), every anchor below them shifts by exactly 11.
+      // README's four (`:8344-8346`, `:8396`, `:8404`, `:8417`) were
+      // re-pointed to the tip's lines (README is not a frozen document); the
+      // one ENTERED site is the frozen plan's `plan:3396 shared/api.ts:5644`,
+      // which quotes `return isLcRefusalToken(token) ? …` and was already off
+      // its quote on main (main's `:5644` is a doc comment that passes only
+      // on the word `null`; the quoted line is main's `:8523`). A coincidental
+      // pass lost, not a new debt; Task 11 still owns it. No rule changed, so
+      // no D-number.
+      'shared/api.ts': 1,
     });
     // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
     // number of its own, and it went stale against this very map. Now the
@@ -8825,7 +8838,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 202 -> 201 at hibernation's server half (D-5242, plan Task 17a): the one `shared/api.ts` site (`plan:3396
     // :5644`) passes coincidentally on that file's +20 inserted lines, argued beside the map; no other key moves and
     // neither frozen corpus document changed. S6-R11, no new D-number.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(201);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(202); // 201 -> 202: `shared/api.ts` 0 -> 1, the session-workflows view's shift (above)
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a

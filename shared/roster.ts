@@ -415,7 +415,7 @@ const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
 
 const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external', 'codex']);
 /** Dotless GPT-lane names fit the account-id grammar, so refuse them before wrapper convergence reaches its
- *  self-exec lock: ccrc's `ccrc-codex` and `ccgpt-runtime`, and `ccgpt`, another repository's launcher. */
+ *  self-exec lock: ccrc's `ccrc-codex` and `ccgpt-runtime`, and `ccgpt` (a box may still carry another repository's). */
 const GPT_TOOLCHAIN_ACCOUNT_IDS: ReadonlySet<string> = new Set(['ccrc-codex', 'ccgpt-runtime', 'ccgpt']);
 const ROOT_KEYS: ReadonlySet<string> = new Set(['version', 'accounts']);
 const ACCOUNT_KEYS: ReadonlySet<string> = new Set(

@@ -208,7 +208,7 @@ describe('canonical positive-safe decimal parser', () => {
 });
 
 describe('canonical coordination id route census', () => {
-  it('keeps all fifteen textual resource-id seams on the shared parser', () => {
+  it('keeps all nineteen textual resource-id seams on the shared parser', () => {
     expect(canonicalCoordIdRoutes()).toEqual([
       { method: 'POST', routePath: '/api/mail/:id/ack' },
       { method: 'GET', routePath: '/api/mail/:id' },
@@ -227,6 +227,11 @@ describe('canonical coordination id route census', () => {
       { method: 'POST', routePath: '/api/claims/:id/break' },
       { method: 'POST', routePath: '/api/asks/:id/answer' },
       { method: 'POST', routePath: '/api/asks/:id/release' },
+      // coordinator-first routing, plan Task 16 (D-5298): the approvals lane's four id routes.
+      { method: 'GET', routePath: '/api/approvals/:id/ruling' },
+      { method: 'POST', routePath: '/api/approvals/:id/rule' },
+      { method: 'POST', routePath: '/api/approvals/:id/release' },
+      { method: 'GET', routePath: '/api/approvals/:id' },
     ]);
   });
 

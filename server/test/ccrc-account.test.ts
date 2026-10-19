@@ -5349,7 +5349,7 @@ const usageCtlCalls = (home: string): string[] =>
 /** Plan 3b Task A3: every argv `plantUsageCtl` saw naming ccrc's usage service, in order. */
 const usageSvcCalls = (home: string): string[] =>
   (existsSync(join(home, 'usage-svc-calls')) ? readFileSync(join(home, 'usage-svc-calls'), 'utf8').split('\n').filter(Boolean) : []);
-/** The live lanes' shape (exec.kind external, telemetry codex), as C4, C14 and C15 spell it. */
+/** The live lanes' shape before the cutover (exec.kind external, telemetry codex; retired by Plan 4), as C4, C14 and C15 spell it. */
 const USAGE_EXT_A = {
   id: 'ext-a', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-ext-a', homeAble: false,
   telemetry: 'codex', exec: { kind: 'external', provider: 'openai' },
@@ -5810,9 +5810,9 @@ describe('ccrc account remove', () => {
       } finally { await killLaneProcesses(home); }
     });
 
-  it('C4: never reaps, stops or asks a service manager about an EXTERNAL lane — the live lanes are external', () => {
-    // `ext-a`: a fixture id (ruling R40), in the live Codex lanes' shape —
-    // exec.kind external, telemetry codex.
+  it('C4: never reaps, stops or asks a service manager about an EXTERNAL lane — the live lanes\' shape before the cutover', () => {
+    // `ext-a`: a fixture id (ruling R40), in the live Codex lanes' shape before
+    // the cutover (retired by Plan 4) — exec.kind external, telemetry codex.
     const home = box('ccrc-account-remove-external-lane-state-');
     seedRosterJson(home, [UPSTREAM,
       { id: 'ext-a', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-ext-a', homeAble: false,

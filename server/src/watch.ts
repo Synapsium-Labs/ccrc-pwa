@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
-import { answeredByBody, askPushBody, withCoordinatorBody } from './askbody.js';
+import { answeredByBody, approvalRuledBody, askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
@@ -41,11 +41,12 @@ import type {
   LifecycleHealth, MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
   SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
-import type { DelegationEventEnvelopeV1, DelegationHealthInput, DelegationObservationHealth } from '../../shared/api.js';
+import { APPROVAL_HOOK_WAIT_S } from '../../shared/api.js';
+import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthInput, DelegationObservationHealth } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -53,7 +54,7 @@ import { JournalMirror } from './coord/mirror.js';
 // a redeclaration (TS2451), and `rundefs.ts` explains on purpose why the two
 // literals exist. `single-definition.test.ts` pins both halves of that split.
 import {
-  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, askNudgeSubject, isAskNudgeMail,
+  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, askNudgeSubject, isApprovalNudgeMail, isAskNudgeMail,
   queueStallNotice, queueSystemMail, survivorOf,
 } from './coord/rundefs.js';
 import { landingAsk, landingVerdict, type LandingFacts } from './coord/landing.js';
@@ -96,6 +97,9 @@ import {
 } from './coord/delegation-model.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 import { claimantMeasuredDead, measureClaimant } from './coord/reclaim.js';
+import { heldFor } from './coord/heldFor.js';
+import { buildDigest, digestDayFor, digestPushCopy, digestWindow, readDigestHour } from './coord/digest.js';
+import { redactCommand } from './coord/redact.js';
 import {
   BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
@@ -682,6 +686,11 @@ const MAIL_DISABLED_MARKER = 'mail-disabled';
  *  resume. */
 const ASKS_DISABLED_MARKER = 'asks-disabled';
 
+/** D-5298 (plan Task 16): how long a deferred approval push waits after every row it covers was ruled, for the hook
+ *  to print the ruling and the dialog to clear, before `sweepApprovals` pushes anyway. Two hook polls (2 s each) and
+ *  a sweep's slack. */
+const APPROVAL_RULED_GRACE_MS = 10_000;
+
 // `UNCHECKED_PR` was a local copy of the literal `PrKeycap.tsx` and
 // `prstate.ts` each also held — integration finding 6. One definition now, in
 // `shared/api.ts`, which is the only module all three sides can import.
@@ -786,6 +795,19 @@ export class FleetWatcher {
    *  sitting on a lapsed question. Its loss on a restart is free: the operator
    *  keeps the lapse's notification, today's behaviour. */
   private lapsedAsks = new Map<string, { askId: number; ev: Parameters<FleetWatcher['pushOne']>[0] }>();
+  /** D-5298 (plan Task 16): the operator's deferred push for a child whose painted permission prompt has an
+   *  approvals row held for its claimant (`tryHold`'s approval arm). `until` is the latest `notifyAt` of the rows it
+   *  covers; `rowIds` are those rows (the main thread's only, D-5491), so a cleared dialog marks only them `operator`. `sweepApprovals` pushes `ev` once
+   *  no covered row is held any more and the dialog is still painted. In memory only, as `heldAsks` is: a restart
+   *  loses the deferral, and the dialog then raises on its next sighting. */
+  private heldApprovals = new Map<string, { until: number; dialogId: string; rowIds: number[];
+    ev: Parameters<FleetWatcher['pushOne']>[0] }>();
+  /** The day the approval inputs and the asks' question text were last pruned (`sweepApprovals`). */
+  private lastApprovalPrune = 0;
+  /** The digest beat's memory (D-5300): the last day it settled (sent, skipped at zero, or found already claimed),
+   *  and when it last looked. The `digests` row, not this, is what keeps a restart from sending twice. */
+  private lastDigestDay: string | null = null;
+  private lastDigestBeat = -Infinity;
   /** D-5290: dialogs whose FIRST raise is deferred, per child — the dialog id
    *  and how many ticks it has been seen while the child's hookstate was not
    *  yet `waiting` and no envelope made it answerable. Bounded by
@@ -2471,6 +2493,10 @@ export class FleetWatcher {
       // release CAS and its own registry listing must not sit in front of the
       // dialog detector either. Own clock (`ASK_SWEEP_MS`).
       void this.sweepAsks().catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-5298 (plan Task 16): the approvals lane's lapse, ceiling and retention, never awaited for the same reason.
+      void this.sweepApprovals().catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-5300 (plan Task 17): the daily digest's beat. Synchronous, guarded inside, and throttled to once a minute.
+      this.sweepDigest();
       // NEVER awaited, same reasoning as `sweepDivergences` above: in remote
       // mode this is one agent-WS `readdir` plus one `readFileFrom` per live
       // generation per sweep. Awaiting it would put the dialog detector and
@@ -2988,7 +3014,7 @@ export class FleetWatcher {
         runId: m.runId,
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
-        ...(isAskNudgeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -3110,6 +3136,9 @@ export class FleetWatcher {
      *  ever exempted the RECORD from the presence gate above, never the push
      *  from firing at all. */
     recordOnly?: boolean;
+    /** A same-origin path the service worker opens on tap, ahead of `/s/<sessionId>` (`PushPayload.url`): the digest
+     *  push's deep link to its day's screen (D-5300). */
+    url?: string;
   }, projects: Set<string>): void {
     const visible = this.deps.presence?.isVisible(e.sessionId) === true;
     if (visible && !e.recordAlways) return;
@@ -3151,6 +3180,7 @@ export class FleetWatcher {
       title, body: e.body, sessionId: e.sessionId,
       tag: e.tag ?? `${e.kind}-${e.sessionId}`,
       ...(e.actions ? { actions: e.actions } : {}),
+      ...(e.url !== undefined ? { url: e.url } : {}),
     });
   }
 
@@ -8299,6 +8329,7 @@ export class FleetWatcher {
           // D-5289: a lapsed question this child replaced is no longer one a
           // late parent answer could land in, so its notification is final.
           this.lapsedAsks.delete(r.id);
+          if (last !== undefined) this.settleClearedApproval(r.id, last);
           const orphaned = this.heldAsks.get(r.id);
           if (orphaned !== undefined && last !== undefined) {
             // The map entry is dropped unconditionally, BEFORE the guarded
@@ -8414,6 +8445,7 @@ export class FleetWatcher {
         // D-5289: a lapsed question whose dialog cleared was acted on (or went
         // away); no late parent answer can land in it, so its notification is final.
         this.lapsedAsks.delete(r.id);
+        this.settleClearedApproval(r.id, last);
         const held = this.heldAsks.get(r.id);
         if (held !== undefined) {
           // Dropped unconditionally, BEFORE the guarded write below — same
@@ -8690,6 +8722,160 @@ export class FleetWatcher {
   }
 
   /**
+   * `tryHold`'s approval arm (plan Task 16, D-5298): the child's rows that are `held` and still inside their window.
+   * With one or more, the operator's push is snapshotted and recorded (D-2172: the record is the operator's durable
+   * trace) but not sent, and `sweepApprovals` sends it when the window ends, the claimant hands the prompt over, or
+   * the hook has not resolved a ruled prompt. Any failure answers `none`: the prompt raises as today.
+   */
+  private tryHoldApproval(
+    r: SessionRecord, dialog: Dialog, hs: HookState,
+  ): { kind: 'none' } | { kind: 'held'; parent: string } {
+    const coord = this.deps.coord;
+    if (!coord) return { kind: 'none' };
+    try {
+      const now = Date.now();
+      const read = coord.approvalsForChild(r.id, ['held']);
+      if (!read.ok) return { kind: 'none' };
+      // Only the main thread's rows (D-5491): the painted menu is the main thread's, because a background subagent's
+      // is painted only after its hook returns (D-5440; a fleet child's subagents are background ones, D-5443). A
+      // subagent's held row neither withholds this push nor is marked `operator` when this dialog clears.
+      const open = read.rows.filter((x) => x.agentId === '' && now < x.notifyAt && x.releaseReason === null);
+      if (open.length === 0) return { kind: 'none' };
+      const ev: Parameters<FleetWatcher['pushOne']>[0] = {
+        kind: 'ask', sessionId: r.id, project: r.project, title: '❓ Question', body: askPushBody(hs, dialog),
+      };
+      this.pushOne({ ...ev, recordAlways: true, recordOnly: true }, this.activeProjects);
+      this.heldApprovals.set(r.id, {
+        until: Math.max(...open.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: open.map((x) => x.id), ev,
+      });
+      return { kind: 'held', parent: open[open.length - 1]!.parentId };
+    } catch (err) {
+      console.warn(`ccrc-server: approval hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — falling back to an immediate push`);
+      return { kind: 'none' };
+    }
+  }
+
+  /**
+   * The approvals lane's clock (plan Task 16, D-5298, D-5441), on the asks sweep's cadence:
+   *  - a `held` row at or past its `notifyAt` lapses to `released` (the hook has stopped, or stops on its next poll);
+   *  - a `held` or `released` row past `askAt + APPROVAL_HOOK_WAIT_S` is `stale` (the hook's ceiling);
+   *  - a deferred push whose rows are none of them `held` any more is sent while its dialog is still painted — unless
+   *    every one of them was ruled within the last `APPROVAL_RULED_GRACE_MS`, where the hook is printing the ruling and
+   *    the dialog is about to clear;
+   *  - once a day, `pruneApprovalInputs` and the asks' question-text retention (spec §6.7).
+   * Every store call is guarded: one bad read must not kill the poll.
+   */
+  async sweepApprovals(): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    const now = Date.now();
+    try {
+      const held = coord.approvalsInState('held');
+      if (held.ok) for (const row of held.rows) if (now >= row.notifyAt) coord.lapseApproval(row.id);
+      for (const st of ['held', 'released'] as const) {
+        const rows = coord.approvalsInState(st);
+        if (rows.ok) for (const row of rows.rows) if (now >= row.askAt + APPROVAL_HOOK_WAIT_S * 1000) coord.staleApproval(row.id);
+      }
+      for (const [childId, entry] of this.heldApprovals) {
+        const read = coord.approvalsForChild(childId, ['held', 'allowed', 'denied']);
+        if (!read.ok) continue;
+        const mine = read.rows.filter((x) => entry.rowIds.includes(x.id));
+        if (mine.some((x) => x.state === 'held' && now < x.notifyAt)) continue;
+        const ruledRecently = mine.length === entry.rowIds.length && mine.length > 0
+          && mine.every((x) => x.state !== 'held' && x.ruledAt !== null && now < x.ruledAt + APPROVAL_RULED_GRACE_MS);
+        if (ruledRecently) continue;
+        this.heldApprovals.delete(childId);
+        if (this.dialogIds.get(childId) === entry.dialogId) this.pushOne(entry.ev, this.activeProjects);
+      }
+      if (now - this.lastApprovalPrune >= 86_400_000) {
+        this.lastApprovalPrune = now;
+        coord.pruneApprovalInputs(now);
+        coord.pruneAskQuestions(now);
+      }
+    } catch (err) {
+      console.warn(`ccrc-server: sweepApprovals failed (${err instanceof Error ? err.message : String(err)}) — the next sweep retries`);
+    }
+  }
+
+  /**
+   * The daily digest's beat (coordinator-first routing spec §10, plan Task 17, D-5300). Once a minute at most, it
+   * names the newest day whose window has closed (`digestDayFor`, at the hour `~/.ccrc/digest-hour` or
+   * `DIGEST_HOUR_UTC` gives) and, unless this beat already settled that day: builds the digest from the `asks` and `approvals`
+   * tables, CLAIMS the day in `digests` (inserted before the push, so a restart, or a second beat, finds it and sends
+   * nothing), and sends one `coord` push recorded in the feed, deep-linked to the day's screen. A day with no
+   * decisions is claimed with count 0 and sends no push (D-5493 (2)). A digest that cannot be built claims nothing and is retried
+   * at the next beat. Never throws: one bad read must not kill the poll.
+   */
+  sweepDigest(now: number = Date.now()): void {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    if (now - this.lastDigestBeat < 60_000) return;
+    this.lastDigestBeat = now;
+    try {
+      const hour = readDigestHour(this.deps.cfg.ccrcDir);
+      const day = digestDayFor(now, hour);
+      if (this.lastDigestDay === day) return;
+      // D-5493 (3): no pre-read of the `digests` row: the claim below is the one check, so it cannot be skipped by a reader that
+      // agrees with it. After a restart the day is built once more and the claim refuses it.
+      const w = digestWindow(day, hour);
+      const built = buildDigest(coord, w.fromMs, w.toMs);
+      if (!built.ok) {
+        console.warn(`ccrc-server: digest for ${day} not built (${built.detail}) — the next beat retries`);
+        return;
+      }
+      const n = built.digest.totals.decisions;
+      const claimed = coord.claimDigestDay(day, now, n);
+      this.lastDigestDay = day;
+      if (!claimed || n === 0) return;
+      const copy = digestPushCopy(day, built.digest.totals);
+      this.pushOne({ kind: 'coord', sessionId: '', project: '', title: copy.title, body: copy.body, tag: copy.tag,
+        url: copy.url, recordAlways: true }, this.activeProjects);
+    } catch (err) {
+      console.warn(`ccrc-server: sweepDigest failed (${err instanceof Error ? err.message : String(err)}) — the next beat retries`);
+    }
+  }
+
+  /** `POST /api/approvals/:id/release`'s door in (D-5440): the claimant handed the prompt over, so the deferred push
+   *  fires now, while the dialog is painted. A child with no deferred push (a background subagent's prompt, whose menu
+   *  paints only after its hook returns) raises on its first sighting instead. */
+  releaseHeldApproval(childId: string): void {
+    const entry = this.heldApprovals.get(childId);
+    if (entry === undefined) return;
+    const coord = this.deps.coord;
+    try {
+      const read = coord?.approvalsForChild(childId, ['held']);
+      if (read?.ok && read.rows.some((x) => entry.rowIds.includes(x.id) && Date.now() < x.notifyAt)) return;
+    } catch { /* unread: push, the operator's direction */ }
+    this.heldApprovals.delete(childId);
+    if (this.dialogIds.get(childId) === entry.dialogId) this.pushOne(entry.ev, this.activeProjects);
+  }
+
+  /** `POST /api/approvals/:id/rule`'s door in: a deferred push stays deferred (the hook prints the ruling and the
+   *  dialog clears; `sweepApprovals` pushes if it does not). A prompt the operator was already pushed about (its menu
+   *  was sighted before the row was minted) has that notification replaced, same tag, by who ruled. */
+  approvalRuled(childId: string, agentId: string, parent: string, verdict: 'allow' | 'deny'): void {
+    // A subagent's ruling is not the painted prompt's (D-5491): the operator's notification for that prompt stays.
+    if (agentId !== '' || this.heldApprovals.has(childId) || !this.dialogIds.has(childId)) return;
+    const project = this.lastFleet?.find((f) => f.id === childId)?.project ?? '';
+    this.pushOne({ kind: 'ask', sessionId: childId, project, title: '❓ Question', body: approvalRuledBody(parent, verdict) },
+      this.activeProjects);
+  }
+
+  /** A painted approval dialog went away (`detectDialogs`' clear branch): its deferred push is dropped, and its rows
+   *  that no principal ruled become `operator` — the prompt was answered in the pane (spec §6.3 server step 5). Only the
+   *  rows its deferred push covered, so a background subagent's hidden wait (D-5440) is not ended by it (D-5491). */
+  private settleClearedApproval(childId: string, dialogId: string): void {
+    const entry = this.heldApprovals.get(childId);
+    if (entry === undefined || entry.dialogId !== dialogId) return;
+    this.heldApprovals.delete(childId);
+    try {
+      this.deps.coord?.markApprovalOperatorRows(entry.rowIds, Date.now());
+    } catch (err) {
+      console.warn(`ccrc-server: settling a cleared approval hold failed for ${childId} (${err instanceof Error ? err.message : String(err)})`);
+    }
+  }
+
+  /**
    * D-5290 (coordinator-first routing spec §5.2): THE ONE DECISION every hold
    * goes through — `detectDialogs`' first sighting, its deferred first raise
    * and its amendment branch alike, so the envelope that arrives a tick after
@@ -8711,18 +8897,34 @@ export class FleetWatcher {
    *    `{kind: 'child'}`. `none` and `unreadable` never hold: a run can name
    *    any session (`POST /api/runs`, until Task 11b), so `parentOfSession`
    *    alone does not make an operator-created session a child.
-   *  - `parentOfSession` answers, the self-claim guard (`parent !== r.id`),
-   *    and the parent it answers is the claimant of the run the mark names —
-   *    the minting run. Compared by claimant, not by run id: a wave N >= 2 run
-   *    resumes the SAME workspace (`dispatch.ts`'s resume arm), whose marker
-   *    still names wave 1, and `reclaimProgram` moves every run of a programme
-   *    to its heir together, so the claimant is the one fact the binding run
-   *    and the minting run share.
-   *  Then, past those, the row is minted either way:
-   *  - the parent's registry row exists (else `parent-not-live`), is of the
-   *    child's project (else `parent-project-mismatch`), is neither archived
-   *    nor stopped, and is not measured dead by `claimantMeasuredDead`, the
-   *    predicate `sweepDeadCoordinators` reads (else `parent-not-live`).
+   *  - the self-claim guard (`parentOfSession` answering `r.id` itself), the
+   *    run the mark names exists, and some open run names the child at all
+   *    (none is not a child, spec §4).
+   *  Then, past those, the row is minted either way (D-5530,
+   *  cross-project-claimant-holds-asks, the operator's ruling of 2026-10-18:
+   *  the ask is held for the child's run's recorded claimant WHEREVER that
+   *  claimant sits — no project is compared — and everything else fails
+   *  CLOSED, released to the operator with a reason that says why):
+   *  - the run has a claimant: `parentOfSession` answers one and the run the
+   *    mark names records one (else `run-unclaimed`, held for nobody, so the
+   *    row's parent is `ASK_OPERATOR_PRINCIPAL`);
+   *  - the parent is the claimant of the run the mark names — the minting
+   *    run (else `run-other-programme`, the same). Compared by claimant, not by
+   *    run id: a wave N >= 2 run resumes the SAME workspace (`dispatch.ts`'s
+   *    resume arm), whose marker still names wave 1, and `reclaimProgram`
+   *    moves every run of a programme to its heir together, so the claimant
+   *    is the one fact the binding run and the minting run share;
+   *  - the minting run's claimant was ATTRIBUTED (D-5531, the ruling's
+   *    "correctly attributed"): the run is not journaled `unattributed` and
+   *    carries its `coordProject` stamp (else `run-unattributed`, the same —
+   *    held for nobody). A run opened with no `claimedByUuid` before the fleet
+   *    carried the client, or before the attributed binding, records a
+   *    `claimedBy` nobody proved, and a recorded name alone is not a parent;
+   *  - the parent's registry row exists, is neither archived nor stopped, and
+   *    is not measured dead by `claimantMeasuredDead`, the predicate
+   *    `sweepDeadCoordinators` reads (else `parent-not-live`);
+   *  - the claimant ladder could measure it (else `parent-unmeasured`: doubt
+   *    is not a hold).
    *
    * Fix round 1, item 2 (Important): `parentOfSession` and everything `hold`
    * does (`openRunsForSession`, the WRITE `insertAsk`, `queueSystemMail`'s own
@@ -8740,29 +8942,23 @@ export class FleetWatcher {
     const none = { kind: 'none' } as const;
     const hs = this.hookStates.get(r.id) ?? null;
     const ask = hs?.ask ?? null;
+    // D-5298 (plan Task 16): a permission prompt is held when its child's hook already asked and the server minted a
+    // row HELD for the claimant (`POST /api/approvals` decided the claimant rule, the kill switches and the gates); the
+    // push waits for that row's window. No row, or none still inside its window: the prompt raises as today.
+    if (hs !== null && ask !== null && 'approval' in ask) return this.tryHoldApproval(r, dialog, hs);
     if (actions === null || hs === null || ask === null || !('questions' in ask)) return none;
     const coord = this.deps.coord;
     if (!coord || this.asksDisabled) return none;
     const mark = r.child;
     if (mark.kind !== 'child') return none;
     try {
-      const parent = coord.parentOfSession(r.id);
-      if (parent === null || parent === r.id) return none;
-      // D-5362: the binding is "the parent is the claimant of the run the
-      // mark names", not "the mark names the newest open run": a wave N>=2
-      // run resumes the same workspace, whose `.child` still names wave 1.
-      const minting = coord.run(mark.runId);
-      if (!minting.ok || minting.run === null || minting.run.claimedBy !== parent) return none;
-      const row = recs.find((x) => x.id === parent) ?? null;
-      let reason: 'parent-not-live' | 'parent-project-mismatch' | null = null;
-      if (row === null) reason = 'parent-not-live';
-      else if (row.project !== r.project) reason = 'parent-project-mismatch';
-      else if (row.archivedAt !== null || row.stopped !== null) reason = 'parent-not-live';
-      else if (claimantMeasuredDead(await measureClaimant(
-        { coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux }, parent, Date.now()))) {
-        reason = 'parent-not-live';
-      }
-      const mint = this.hold(r, dialog, actions, hs, ask, parent, reason);
+      // D-5530, D-5531: the one claimant decision, shared with the approvals lane (`coord/heldFor.ts`).
+      const verdict = await heldFor(
+        { coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux }, r.id, mark, recs, Date.now());
+      if (verdict.kind === 'not-a-child') return none;
+      const held = { parent: verdict.parent, reason: verdict.kind === 'released' ? verdict.reason : null };
+      const reason = held.reason;
+      const mint = this.hold(r, dialog, actions, hs, ask, held.parent, reason);
       if (reason !== null) {
         // Released at once: the operator's answerable push fires on THIS
         // tick, never after the window, and no hold is kept for the sweep.
@@ -8775,7 +8971,7 @@ export class FleetWatcher {
       // trace of a question their parent then answered in their name.
       this.pushOne({ ...mint.ev, recordAlways: true, recordOnly: true }, this.activeProjects);
       this.heldAsks.set(r.id, mint);
-      return { kind: 'held', parent };
+      return { kind: 'held', parent: held.parent };
     } catch (err) {
       console.warn(`ccrc-server: ask hold failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — falling back to an immediate push`);
       // Fix round 2, item 2: `insertAsk` and `queueSystemMail` are SEPARATE
@@ -8815,7 +9011,7 @@ export class FleetWatcher {
   private hold(
     r: SessionRecord, dialog: Dialog, actions: PushPayload['actions'],
     hs: HookState, ask: Extract<HookAsk, { questions: HookAskQuestion[] }>, parent: string,
-    releaseReason: 'parent-not-live' | 'parent-project-mismatch' | null,
+    releaseReason: AskMintReleaseReason | null,
   ): { until: number; askId: number; ev: Parameters<FleetWatcher['pushOne']>[0]; answeringSince: number | null } {
     const q = ask.questions[0]!;
     const key = askKey(ask);
@@ -8824,7 +9020,11 @@ export class FleetWatcher {
     // drift between `askActions` and `askKey` fails loudly instead of
     // minting a row with a null key.
     if (key === null) throw new Error(`hold: eligible ask on ${r.id} produced no askKey`);
-    const options = q.options.map((o) => o.label);
+    // D-5298 (spec §5.4, §6.7; D-5366 closed): the question and its option labels are a child's text, so they are
+    // redacted before the row stores them and before the brief carries them. The pane is answered by index, never by
+    // label, so a masked label presses the same option.
+    const question = redactCommand(q.question);
+    const options = q.options.map((o) => redactCommand(o.label));
     const now = Date.now();
     // D-5294: the one deadline, read by the sweep (`until`) and stated in the brief.
     const until = askNotifyAt(now);
@@ -8846,7 +9046,7 @@ export class FleetWatcher {
     const runId = openRuns.length > 0 ? openRuns[openRuns.length - 1]!.id : null;
     const askId = this.deps.coord!.insertAsk({
       childId: r.id, parentId: parent, runId, askKey: key, askAt: hs.updatedAt,
-      dialogId: dialog.id, question: q.question, options, now,
+      dialogId: dialog.id, question, options, now,
       ...(releaseReason === null ? {} : { releaseReason }),
     });
     const ev: Parameters<FleetWatcher['pushOne']>[0] = {
@@ -8869,12 +9069,12 @@ export class FleetWatcher {
     // literal: `isAskNudgeMail` in the same module must recognise exactly
     // this shape, and a queue/reader pair spelling one convention twice is
     // the kind of thing that drifts.
-    // D-5290: a row minted released mails nobody — its parent is not live, or
-    // is not this child's project's, and the operator already has the push.
+    // D-5290: a row minted released mails nobody — nobody is held for it
+    // (D-5530's fail-closed reasons), and the operator already has the push.
     if (releaseReason === null) {
       queueSystemMail(this.deps.coord!, null, {
         fromId: 'operator', toId: parent, runId: null, kind: 'question',
-        subject: askNudgeSubject(askId), body: renderAskBrief(askId, r.id, q.question, options, until),
+        subject: askNudgeSubject(askId), body: renderAskBrief(askId, r.id, question, options, until),
       });
     }
     return { until, askId, ev, answeringSince: null };
@@ -8905,9 +9105,9 @@ export class FleetWatcher {
  *   expands them into the attribution the route requires. Nothing the child
  *   wrote is inside a heredoc: the ask id and the index are integers this
  *   server minted;
- * - the question is fenced but not yet redacted (D-5366): `redactCommand`
- *   comes from Task 12, and plan Task 16 applies it to the question before
- *   the row stores it and before this brief carries it.
+ * - the question and its labels arrive already redacted (`redactCommand`,
+ *   applied by `hold` before the row stores them; plan Task 16 closed
+ *   D-5366), and are fenced here.
  */
 function renderAskBrief(
   askId: number, childId: string, question: string, options: string[], notifyAt: number,
@@ -9187,8 +9387,9 @@ export interface DelegationLaneSeams {
 }
 
 /** `hibernatedAt` optional (D-5242): absent reads as not asleep, the old behaviour, so a caller that never knew the field
- *  is unchanged; the tick hands the assembled rows, which always carry it. */
-type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt'>>;
+ *  is unchanged; the tick hands the assembled rows, which always carry it. `stoppedBy` and `archivedAt` are optional for the same
+ *  reason: absent reads as no stop evidence (D-5433). */
+type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt' | 'stoppedBy' | 'archivedAt'>>;
 type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'>;
 type DelegationVerdictCounts = { unresolved: number; conflicting: number; unmeasured: number };
 
@@ -10022,18 +10223,38 @@ class DelegationLane {
     }
   }
 
-  /** Who died since the last pass, by what this process watched: a parent first seen DEAD is not a fresh death (a restart is not a
-   *  mass-death event), one seen alive and then dead is, and one seen alive again is not dead. */
+  /** Who died since the last pass, by what this process watched: a parent first seen DEAD is not a fresh death (a restart is not a mass-death
+   *  event), one seen alive and then dead is, and one seen alive again is not dead. D-5433: a deliberate stop or archive is not a fresh death
+   *  either. A dead row carrying stop evidence (`stoppedBy`, epoch ms, or `archivedAt`, epoch SECONDS, read when there is no stamp) is not counted,
+   *  and a death already recorded for it is erased, when that instant is no later than the recorded death plus `DELEGATION_CLOCK_SKEW_MS` (this
+   *  pass's instant plus the skew when none is recorded): the stamp is the fleet box's clock, and the torn tick (`assembleFleet` reads the registry
+   *  before it probes tmux) lets a stop read as a crash for one pass and show its stamp on the next. A stop stamped later than that leaves the
+   *  death counted (an operator cleaning up after a crash). Residual: a crash followed by a stop or an archive within one pass, or within the skew
+   *  of its recorded death, is not counted; the 60 s cadence and the clocks' sync bound it. The bound is from above only, so a stop stamp or an
+   *  archive marker that outlived its pane (a kill that failed after `_ws_unsupervise`) also hides that pane's later crash; a lower bound would be
+   *  a new ruling, and is not taken here. A hibernated row (D-5242) is excluded at any instant by its own conjunct; `ccd hibernate` writes
+   *  `.hibernated`, then `_ws_unsupervise` (the stop stamp), then kills the pane, so a torn tick can record a hibernation as a death with neither
+   *  field set, and the erasure above clears it on the next pass. Every other dead row (`restarting`, unmeasurable) counts as before. */
   private noteSessions(pass: LanePass): void {
     for (const r of pass.records) this.sessionProject.set(r.id, r.project);
     for (const s of pass.sessions) this.sessionProject.set(s.id, s.project);
     const alive = new Set(pass.sessions.filter((s) => s.status !== 'dead').map((s) => s.id));
     if (this.aliveSeen) {
       for (const s of pass.sessions) {
+        if (s.status !== 'dead') continue;
+        const stoppedBy = s.stoppedBy ?? null;
+        const archivedAt = s.archivedAt ?? null;
+        const stopAt = stoppedBy !== null ? stoppedBy.at : archivedAt !== null ? archivedAt * 1000 : null;
+        const recorded = this.firstDead.get(s.id);
+        if (stopAt !== null && recorded !== undefined) {
+          if (stopAt <= recorded + DELEGATION_CLOCK_SKEW_MS) { this.firstDead.delete(s.id); continue; }
+        } else if (stopAt !== null) {
+          if (stopAt <= pass.now + DELEGATION_CLOCK_SKEW_MS) continue;
+        }
         // D-5242: a HIBERNATED row went down on purpose (`ccd hibernate`, journalled as deliberate) — it is asleep, not a
         // death, so it never feeds the delegation breaker, which suspends at two fresh parent deaths in its window and
         // would otherwise trip on every burst of sleeps (the sweeps put up to six down in one window).
-        if (s.status === 'dead' && (s.hibernatedAt ?? null) === null && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) this.firstDead.set(s.id, pass.now);
+        if ((s.hibernatedAt ?? null) === null && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) this.firstDead.set(s.id, pass.now);
       }
     }
     for (const id of alive) this.firstDead.delete(id);
