@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './db.js';
 import { redactCommand } from './redact.js';
 import { renderEnvelope } from './envelope.js';
@@ -1113,12 +1114,11 @@ const haltingRowSql = (t: string): string =>
  *  which is busy and never halts. */
 const rowHalts = (state: UpdateState, detail: string | null): boolean => isHaltingUpdate(state, detail);
 
-/** The shape of a node id: the lowercase uuid `_inst_node_id` mints
- *  (`ccd/ccrc:9494-9513`) and nothing else, so an uppercase, padded or
- *  CR-terminated `~/.ccrc/node-id` never becomes a row key. Declared ONCE,
- *  here, beside the one writer that re-keys by it; the inventory's validator
- *  (`update/inventory.ts`, Task 11) imports it. */
-export const NODE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** The shape of a node id: the lowercase uuid `_inst_node_id` mints and nothing else, so an uppercase, padded or
+ *  CR-terminated `~/.ccrc/node-id` never becomes a row key. Declared ONCE in `shared/agent-protocol.ts`, beside
+ *  `NODE_FILES`, so the agent's `account` op answers `fleetIdentity` with the same grammar (D-5622); re-exported
+ *  here for the one writer that re-keys by it and every reader that imported it from this file. */
+export { NODE_ID_RE };
 
 /** `rekeyNode`'s release of a revived busy row that another box's lease displaces (D-3412): the request stands, and
  *  the detail names the rekey — the reader learns why a row they saw busy reads idle. */

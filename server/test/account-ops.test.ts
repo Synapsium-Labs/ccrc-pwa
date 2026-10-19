@@ -13,9 +13,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import v8 from 'node:v8';
+import vm from 'node:vm';
 import { ACCOUNT_SUBS } from '../../shared/api.js';
 import { accountOpsFor, accountSpawnEnv, localAccountOps, remoteAccountOps, type AccountOpsMakers } from '../src/accounts/ops.js';
-import type { FleetClient } from '../src/remote/client.js';
+import { AgentOpError, LinkNotSentError, type FleetClient } from '../src/remote/client.js';
+import { accountOpRequestTimeoutMs } from '../../shared/agent-protocol.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -42,7 +45,20 @@ const fixtureHome = (body = 'printf \'{"ok":true}\\n\''): { home: string; rec: s
   return { home, rec };
 };
 
-const fakeClient = (): Pick<FleetClient, 'request'> => ({ request: vi.fn(async () => ({ t: 'res' as const, id: 1, ok: true as const })) });
+const NODE_ID = '0123abcd-4567-89ab-cdef-0123456789ab';
+type FakeClient = Pick<FleetClient, 'request' | 'state'> & { request: ReturnType<typeof vi.fn> };
+/** A client whose ready frame named `ops`, answering every request with `answer` (or throwing it). */
+const ALL_OPS = ['update', 'token-sync', 'account'];
+const fakeClient = (
+  ops: string[] | undefined = ALL_OPS,
+  answer: Record<string, unknown> | Error = { kind: 'exited', code: 0, stdout: '{"ok":true}\n', fleetIdentity: NODE_ID },
+): FakeClient => ({
+  state: { agentOps: ops } as unknown as FleetClient['state'],
+  request: vi.fn(async () => {
+    if (answer instanceof Error) throw answer;
+    return { t: 'res' as const, id: 1, ok: true as const, ...answer };
+  }),
+});
 
 describe('the AccountOps arm (G13)', () => {
   it('remote mode constructs the agent arm and never the local spawner', () => {
@@ -76,11 +92,96 @@ describe('the AccountOps arm (G13)', () => {
     expect(makers.local).not.toHaveBeenCalled();
   });
 
-  it('the remote arm answers unsupported until the agent carries the account op, and sends nothing', async () => {
+  it('the remote arm answers unsupported, and sends nothing, to an agent whose ready frame does not name the op', async () => {
+    for (const ops of [undefined, [], ['update', 'token-sync']]) {
+      const client: FakeClient = { ...fakeClient(), state: { agentOps: ops } as FleetClient['state'] };
+      expect(await remoteAccountOps({ client }).run('credential', 'lane-a', {}, Buffer.from('CANARY-remote')), String(ops))
+        .toEqual({ kind: 'unsupported' });
+      expect(client.request, 'a secret travelled to an agent that cannot spawn it').not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe('the remote arm (A8: the agent\'s typed account op)', () => {
+  it('sends ONE typed frame: the sub, the lane as laneId, the typed fields, the secret as stdinB64, under the sub\'s deadline', async () => {
+    const client = fakeClient();
+    const secret = Buffer.from(`CANARY-${process.pid}`);
+    const ans = await remoteAccountOps({ client }).run('add', 'lane-a', { provider: 'anthropic', method: 'paste', label: 'Lane A' }, secret);
+    expect(ans).toEqual({ kind: 'exited', code: 0, stdout: '{"ok":true}\n', fleetIdentity: NODE_ID });
+    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(client.request.mock.calls[0]).toEqual([
+      { t: 'req', op: 'account', sub: 'add', laneId: 'lane-a', fields: { provider: 'anthropic', method: 'paste', label: 'Lane A' },
+        stdinB64: secret.toString('base64') },
+      accountOpRequestTimeoutMs('add'),
+    ]);
+    expect(accountOpRequestTimeoutMs('add')).toBeGreaterThan(180_000 + 5_000);
+  });
+
+  it('a sub with no stdin sends no stdinB64 field at all', async () => {
+    const client = fakeClient();
+    await remoteAccountOps({ client }).run('roster', null, {});
+    expect(client.request.mock.calls[0]![0]).toEqual({ t: 'req', op: 'account', sub: 'roster', laneId: null, fields: {} });
+  });
+
+  it('refuses with the same builder before the wire: nothing is sent', async () => {
     const client = fakeClient();
     const ops = remoteAccountOps({ client });
-    expect(await ops.run('check', 'lane-a', {})).toEqual({ kind: 'unsupported' });
+    expect(await ops.run('enable', 'lane-a', { force: 'true' })).toEqual({ kind: 'refused', why: 'bad-field' });
+    expect(await ops.run('check', '--force', {})).toEqual({ kind: 'refused', why: 'bad-id' });
+    expect(await ops.run('auth-code', 'lane-a', { attemptId: 'f'.repeat(32) }, Buffer.from('a\nb'))).toEqual({ kind: 'refused', why: 'key-charset' });
     expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("maps the agent's answers: each outcome, its refusal, and an answer off its grammar as lost", async () => {
+    for (const [answer, want] of [
+      [{ kind: 'timeout', fleetIdentity: NODE_ID }, { kind: 'timeout', fleetIdentity: NODE_ID }],
+      [{ kind: 'too-large', fleetIdentity: null }, { kind: 'too-large', fleetIdentity: null }],
+      [{ kind: 'not-started', fleetIdentity: null }, { kind: 'not-started', fleetIdentity: null }],
+      [{ kind: 'refused', why: 'bad-field', fleetIdentity: NODE_ID }, { kind: 'refused', why: 'bad-field', fleetIdentity: NODE_ID }],
+      [{ kind: 'refused', why: 'made-up', fleetIdentity: NODE_ID }, { kind: 'lost' }],
+      [{ kind: 'exited', code: 0, stdout: '{}', fleetIdentity: 'NOT-A-NODE-ID' }, { kind: 'lost' }],
+      [{ kind: 'exited', code: 0, stdout: '{}' }, { kind: 'lost' }],
+      [{ kind: 'unsupported', fleetIdentity: null }, { kind: 'lost' }],
+    ] as const) {
+      expect(await remoteAccountOps({ client: fakeClient(ALL_OPS, { ...answer }) }).run('check', 'lane-a', {}), JSON.stringify(answer))
+        .toEqual(want);
+    }
+  });
+
+  it('keeps nothing of the frame alive across the wait: only the client could hold it, and it does not (D-5513, D-5623)', async () => {
+    // A client that keeps only a WeakRef to the frame it is handed and answers when told. With the arm's own scope
+    // the one other place the frame could live, a collector run while the answer is outstanding decides.
+    v8.setFlagsFromString('--expose-gc');
+    const gc = vm.runInNewContext('gc') as () => void;
+    let ref: WeakRef<object> | undefined;
+    let answer!: () => void;
+    const client: Pick<FleetClient, 'request' | 'state'> = {
+      state: { agentOps: ALL_OPS } as unknown as FleetClient['state'],
+      request: (frame) => {
+        ref = new WeakRef(frame);
+        return new Promise((resolve) => {
+          answer = () => resolve({ t: 'res', id: 1, ok: true, kind: 'not-started', fleetIdentity: null });
+        });
+      },
+    };
+    const pending = remoteAccountOps({ client }).run('credential', 'lane-a', {}, Buffer.from(`CANARY-${process.pid}`));
+    expect(ref, 'the frame went to the client').toBeDefined();
+    for (let i = 0; i < 5 && ref!.deref() !== undefined; i++) {
+      await new Promise((r) => setImmediate(r));
+      gc();
+    }
+    expect(ref!.deref(), 'the arm keeps the frame alive across its await').toBeUndefined();
+    answer();
+    expect(await pending).toEqual({ kind: 'not-started', fleetIdentity: null });
+  });
+
+  it("an older agent's bad-request is unsupported; a frame that never left is not-started; a loss after the send is lost", async () => {
+    const run = (e: Error) => remoteAccountOps({ client: fakeClient(ALL_OPS, e) }).run('check', 'lane-a', {});
+    expect(await run(new AgentOpError('bad-request', null))).toEqual({ kind: 'unsupported' });
+    expect(await run(new LinkNotSentError('disconnected'))).toEqual({ kind: 'not-started' });
+    expect(await run(new Error('timeout'))).toEqual({ kind: 'lost' });
+    expect(await run(new Error('disconnected'))).toEqual({ kind: 'lost' });
+    expect(await run(new AgentOpError('some thrown sentence', null))).toEqual({ kind: 'lost' });
   });
 });
 
@@ -129,7 +230,7 @@ describe('the local arm (D-5513: the account spawn\'s environment is explicit)',
     expect(accountSpawnEnv('/fixture/home', {})).toEqual({ HOME: '/fixture/home', PATH: '/usr/bin:/bin', LANG: 'C' });
   });
 
-  it('refuses before any spawn: a bad id, a sub outside the union, or fields before the argv builder exists', async () => {
+  it('refuses before any spawn with the one builder (A8): a bad id, a sub outside the union, a field off its bounds', async () => {
     const { home, rec } = fixtureHome();
     const ops = localAccountOps({ home });
     expect(await ops.run('check', '../lane-a', {})).toEqual({ kind: 'refused', why: 'bad-id' });
@@ -137,22 +238,35 @@ describe('the local arm (D-5513: the account spawn\'s environment is explicit)',
     expect(await ops.run('check', 'lane-a\n--force', {})).toEqual({ kind: 'refused', why: 'bad-id' });
     // @ts-expect-error the sub union is closed
     expect(await ops.run('or-management-install', null, {})).toEqual({ kind: 'refused', why: 'bad-sub' });
-    expect(await ops.run('set', 'lane-a', { label: 'Lane A' })).toEqual({ kind: 'refused', why: 'fields-unbuilt' });
+    expect(await ops.run('set', 'lane-a', { label: 'Lane A' })).toEqual({ kind: 'refused', why: 'bad-field' });
+    expect(await ops.run('enable', 'lane-a', { force: 'true' })).toEqual({ kind: 'refused', why: 'bad-field' });
+    expect(await ops.run('credential', 'lane-a', {}, Buffer.from('a\u0000b'))).toEqual({ kind: 'refused', why: 'key-charset' });
     expect(existsSync(path.join(rec, 'argv0'))).toBe(false);
     expect(ACCOUNT_SUBS).not.toContain('or-management-install');
   });
 
+  it('builds typed fields into one argv word each, from the same builder as the agent (A8)', async () => {
+    const { home, rec } = fixtureHome();
+    expect(await localAccountOps({ home }).run('set', 'lane-a', { placement: 'full', stated: 'Max plan, work' }))
+      .toMatchObject({ kind: 'exited', code: 0 });
+    expect(readFileSync(path.join(rec, 'argv'), 'utf8')).toBe('account\nset\n--id=lane-a\n--stated=Max plan, work\n--placement=full\n');
+  });
+
   it('a sub past its bound gets TERM, then KILL after the grace, and answers timeout', async () => {
+    // The bound is 2 s, far past a loaded shell's start-up, and `ready` says the trap is in place, so a TERM that
+    // beats the trap is named as load rather than read as a SIGKILL-first port (D-5623).
     const { home, rec } = fixtureHome([
       'trap \'echo term >> "$rec/signals"\' TERM',
+      'touch "$rec/ready"',
       'while :; do sleep 0.05; done',
     ].join('\n'));
-    const ops = localAccountOps({ home, timeoutMs: () => 400, killGraceMs: 400 });
+    const ops = localAccountOps({ home, timeoutMs: () => 2_000, killGraceMs: 400 });
     const t0 = Date.now();
     expect(await ops.run('check', 'lane-a', {})).toEqual({ kind: 'timeout' });
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(700);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(2_300);
+    expect(existsSync(path.join(rec, 'ready')), 'the stub had not installed its trap when the bound ran out (load)').toBe(true);
     expect(readFileSync(path.join(rec, 'signals'), 'utf8')).toContain('term');
-  });
+  }, 20_000);
 
   it('a group member that ignores TERM after closing its stdio still gets KILL after the grace (D-5621)', async () => {
     // The leader exits on TERM; its backgrounded child traps TERM, closes its stdio and keeps running. The `close`
@@ -163,8 +277,9 @@ describe('the local arm (D-5513: the account spawn\'s environment is explicit)',
       'while [ ! -s "$rec/grandchild" ]; do sleep 0.02; done',
       'while :; do sleep 0.05; done',
     ].join('\n'));
-    const ops = localAccountOps({ home, timeoutMs: () => 800, killGraceMs: 300 });
+    const ops = localAccountOps({ home, timeoutMs: () => 2_000, killGraceMs: 300 });
     expect(await ops.run('check', 'lane-a', {})).toEqual({ kind: 'timeout' });
+    expect(existsSync(path.join(rec, 'grandchild')), 'the member had not started when the bound ran out (load)').toBe(true);
     const pid = Number(readFileSync(path.join(rec, 'grandchild'), 'utf8').trim());
     expect(pid).toBeGreaterThan(1);
     const alive = (): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -173,7 +288,7 @@ describe('the local arm (D-5513: the account spawn\'s environment is explicit)',
     const survived = alive();
     if (survived) process.kill(pid, 'SIGKILL');
     expect(survived).toBe(false);
-  });
+  }, 20_000);
 
   it('a home the launcher path refuses answers not-started on the call, and never throws when the arm is built (D-5621)', async () => {
     for (const home of ['/fixture/home/', '', 'relative/home']) {

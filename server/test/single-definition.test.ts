@@ -7103,3 +7103,37 @@ describe('the account gate, the audit and the AccountOps port each have one home
     expect(holders(/\blocalAccountOps\(/)).toEqual(['server/src/accounts/ops.ts']);
   });
 });
+
+// D-5513, D-5622 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A8). APPENDED. The agent's typed
+// `account` op: the argv builder and its bounds have one home in `shared/account-argv.ts`, which BOTH `AccountOps`
+// arms call; the op's wire vocabulary and the node-id grammar one home in `shared/agent-protocol.ts`; the agent's
+// spawn port one home in `agent/src/accountop.ts`.
+describe("the account op's builder, wire vocabulary and spawn port each have one home (D-5513, D-5622)", () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('buildAccountArgv').test('export function buildAccountArgv(sub: unknown')).toBe(true);
+    expect(decl('buildAccountArgv').test('const built = buildAccountArgv(sub, id, fields, false);')).toBe(false);
+  });
+  it('the builder and its bounds are declared once, in shared/account-argv.ts', () => {
+    for (const c of ['ACCOUNT_ARGV_REFUSALS', 'AccountArgvRefusal', 'ACCOUNT_SUB_ARGV', 'ACCOUNT_STDIN_MAX_BYTES', 'buildAccountArgv',
+      'isAccountStdin', 'isAccountLaneId', 'isAccountSub', 'AccountArgvBuilt']) {
+      expect(holders(decl(c)), c).toEqual(['shared/account-argv.ts']);
+    }
+  });
+  it('the wire vocabulary and the node-id grammar are declared once, in shared/agent-protocol.ts', () => {
+    for (const c of ['ACCOUNT_OP', 'AccountOpReq', 'AccountOpOutcome', 'AccountOpAnswer', 'readAccountOpAnswer',
+      'accountOpRequestTimeoutMs', 'ACCOUNT_OP_DRAIN_MS', 'NODE_ID_RE']) {
+      expect(holders(decl(c)), c).toEqual(['shared/agent-protocol.ts']);
+    }
+  });
+  it("the agent's spawn port lives in agent/src/accountop.ts", () => {
+    for (const c of ['makeAccountOpSpawn', 'AccountOpSpawn', 'AccountSpawnBounds', 'accountSpawnBounds', 'decodeAccountStdin', 'readFleetIdentity']) {
+      expect(holders(decl(c)), c).toEqual(['agent/src/accountop.ts']);
+    }
+  });
+  it('one builder for both arms: it is called by the agent op and the server port, and nowhere else', () => {
+    expect(holders(/\bbuildAccountArgv\(/)).toEqual(['agent/src/server.ts', 'server/src/accounts/ops.ts', 'shared/account-argv.ts']);
+    expect(holders(/\breadAccountOpAnswer\(/)).toEqual(['server/src/accounts/ops.ts', 'shared/agent-protocol.ts']);
+  });
+});
