@@ -446,7 +446,7 @@ describe('measure-history.py: W1-e, the card line served and its id mismatches (
 
   it('W1-e sits between W1-c and W1-f in the report, which stays headed by its store id', () => {
     expect(Object.keys(report(['--db', cardStore({}), '--now', String(NOW)]))).toEqual(['store_id', 'user_version', 'script_sha256', 'counters',
-      'w1b_lag_p95_ms', 'w1c_duplicate_entries', 'w1e', 'w1f_grep_p95_ms', 'w2']);
+      'w1b_lag_p95_ms', 'w1c_duplicate_entries', 'w1e', 'w1f_grep_p95_ms', 'w2', 'census']);   // W2-3 Task 4: census follows w2, null without --census
   });
 });
 
@@ -1327,5 +1327,485 @@ describe('W2-3 Task 3: windows over assistant turns', () => {
     expect(g.producerCopyOf(p3.copies)?.source_key, 'the live copy').toBe('');
     expect(W([g.windowOf(p3, [])])).toEqual([['measured', 1000, 1200, true, 2, 0]]);
     expect(g.producerOfBoundary(p3.copies)).toBe('unknown');
+  });
+});
+
+// ── W2-3 Task 4: the census and the active rule (W2-D13 census mode, W2-D20; D-5773 (history-w2-legacy-families-excluded)) ──
+// measure-history.py --census emits every sessions row of one store, merged ones included, with its sessions columns,
+// its last main entry before --as-of and Task 1's raw rows over [--since, --as-of); it decides nothing.
+// history-gate.mjs's activeFamilies applies W2-D20: (a) unmerged with a UUID generation (legacy '' excluded, fixed:
+// D-5773); (b) the id's newest unmerged family in recall.mjs's NEWEST_FAMILY_SQL order, spelled in the gate as
+// newestFamilyCompare and held equal to recall's by the parity case below; (c) a main entry in
+// [as_of - look-back, as_of). Fixture HOMEs only; every id, generation and session uuid is synthetic.
+describe('W2-3 Task 4: the census and the active rule', () => {
+  const C_AS_OF = 1_800_000_000_000;
+  const C_LOOK = 604_800_000;
+  const C_SINCE = C_AS_OF - 2 * C_LOOK;
+  const C_HOUR = 3_600_000;
+  const STORE = '5f0c2d3e-8a1b-4c2d-9e3f-0a1b2c3d4e5f';
+  const CG = (n: string): string => `0189abcd-1234-5678-9abc-0123456789${n}`;
+  type CallRow = [number, number, string];
+  interface CensusFamily {
+    ccrc_id: string; generation: string; session_pk: number; merged_into: number | null; first_seen_ms: number;
+    last_main_ts_ms: number | null; merged_generations: string[]; calls: CallRow[]; boundaries: unknown[];
+  }
+  interface Census {
+    as_of_ms: number; since_ms: number; row_cap: number;
+    ticks: { n: number; first_ts_ms: number | null; last_ts_ms: number | null }; families: CensusFamily[];
+  }
+  type ReportC = Report & { census: Census | null };
+  interface FamilyRef { store_id: string; ccrc_id: string; generation: string }
+  interface GateT4 {
+    ACTIVE_LOOKBACK_MS: number;
+    ACTIVE_EXCLUSIONS: readonly string[];
+    newestFamilyCompare(a: CensusFamily, b: CensusFamily): number;
+    newestFamilyOf(families: CensusFamily[], ccrcId: string): CensusFamily | null;
+    activeFamilies(storeId: string, census: Census, opts?: { lookbackMs?: number }):
+      { active: FamilyRef[]; excluded: Array<FamilyRef & { reason: string }> };
+  }
+  const gateT4 = async (): Promise<GateT4> => (await import('../../deploy/history-gate.mjs')) as unknown as GateT4;
+  type Pk = 'tieA' | 'tieB' | 'rekey' | 'rekeyLegacy' | 'legacy' | 'legacyOld' | 'stale' | 'edgeIn' | 'edgeOut' | 'empty';
+  interface CensusPlanted { db: string; storeId: string; pk: Record<Pk, number> }
+
+  /** A store createStore made, holding ten sessions rows whose census rows and verdicts are worked out by hand below. */
+  function censusStore(): CensusPlanted {
+    const home = mkTmp('ccrc-measure-history-census-');
+    const { storeId } = createStore(home);
+    const dbPath = path.join(home, '.ccrc', 'history', 'db', 'history.db');
+    const db = new DatabaseSync(dbPath);
+    const pk = {} as Record<Pk, number>;
+    try {
+      for (const t of ['counters', 'ticks', 'recall_calls']) db.exec(`DELETE FROM ${t}`);
+      const ins = (sql: string, ...p: Array<string | number | null | Uint8Array>): number => Number(db.prepare(sql).run(...p).lastInsertRowid);
+      const blob = ins("INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, 'br5', NULL, 0)",
+        createHash('sha256').update('measure-history census fixture').digest());
+      const family = (id: string, gen: string, firstSeen: number, merged: number | null = null): number =>
+        ins('INSERT INTO sessions (ccrc_id, generation, project, first_seen_ms, merged_into) VALUES (?, ?, ?, ?, ?)', id, gen, 'demo', firstSeen, merged);
+      let u = 0;
+      /** An epoch of `sessionPk`, confirmed unless `confirmed` is null; answers its cc_session_uuid. */
+      const epoch = (sessionPk: number, seq: number, confirmed: number | null = 1): string => {
+        u += 1;
+        const uuid = `11111111-2222-4333-8444-${String(u).padStart(12, '0')}`;
+        ins("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, ?, ?, 'startup', 'hook', ?)",
+          sessionPk, seq, uuid, confirmed);
+        return uuid;
+      };
+      const transcript = (uuid: string, agent = ''): number => ins('INSERT INTO transcripts (cc_session_uuid, agent_id) VALUES (?, ?)', uuid, agent);
+      let n = 0;
+      const entry = (tpk: number, ts: number): void => {
+        n += 1;
+        ins('INSERT INTO entries (uuid, transcript_pk, type, ts_ms, is_compact_summary, provenance, prov_version, '
+          + "struct_rank_ns, struct_file_id, blob_id) VALUES (?, ?, 'assistant', ?, 0, 'harness', 1, 1, 1, ?)", `c-${n}`, tpk, ts, blob);
+      };
+      /** A confirmed epoch of `sessionPk` whose main transcript holds entries at `ts`; answers its cc_session_uuid. */
+      const main = (sessionPk: number, ...ts: number[]): string => {
+        const uuid = epoch(sessionPk, 1);
+        const t = transcript(uuid);
+        for (const x of ts) entry(t, x);
+        return uuid;
+      };
+
+      // demo-tie: two unmerged UUID families tied on first_seen_ms; NEWEST_FAMILY_SQL answers the greater session_pk.
+      pk.tieA = family('demo-tie', CG('b1'), 5000); main(pk.tieA, C_AS_OF - C_HOUR);
+      pk.tieB = family('demo-tie', CG('b2'), 5000); main(pk.tieB, C_AS_OF - C_HOUR);
+      // demo-rekey: a UUID family and the '' row a re-key merged into it. The merged row is NEWER by first_seen_ms,
+      // so an order that let merged rows take part would answer it (recall's merged_into IS NULL keeps it out).
+      pk.rekey = family('demo-rekey', CG('b3'), 6000); main(pk.rekey, C_AS_OF - 2 * C_HOUR);
+      pk.rekeyLegacy = family('demo-rekey', '', 7000, pk.rekey);
+      // demo-legacy: an unmerged legacy '' family, newest of its id and recent, beside an older recent UUID family.
+      pk.legacy = family('demo-legacy', '', 9000); main(pk.legacy, C_AS_OF - C_HOUR);
+      pk.legacyOld = family('demo-legacy', CG('b4'), 4000); main(pk.legacyOld, C_AS_OF - C_HOUR);
+      // demo-stale: its one confirmed main entry is 1 ms before the look-back. A subagent transcript of that epoch
+      // and the main transcript of an UNCONFIRMED epoch each hold an entry an hour before as_of; neither counts.
+      pk.stale = family('demo-stale', CG('b5'), 1000);
+      const staleUuid = main(pk.stale, C_AS_OF - C_LOOK - 1);
+      entry(transcript(staleUuid, 'agent-1'), C_AS_OF - C_HOUR);
+      entry(transcript(epoch(pk.stale, 2, null)), C_AS_OF - C_HOUR);
+      // The look-back's edges: an entry at exactly as_of - look-back is in; one at exactly as_of is not read at all.
+      pk.edgeIn = family('demo-edge-in', CG('b6'), 1000); main(pk.edgeIn, C_AS_OF - C_LOOK);
+      pk.edgeOut = family('demo-edge-out', CG('b7'), 1000); main(pk.edgeOut, C_AS_OF - C_LOOK - 10, C_AS_OF);
+      // demo-empty: no epoch at all.
+      pk.empty = family('demo-empty', CG('b8'), 1000);
+
+      const call = (key: string, gen: string, ts: number, verb: string, rc: number, arm: string | null): void => {
+        ins('INSERT INTO recall_calls (event_key, ccrc_id, generation, ts_ms, verb, rc, ms, arm) VALUES (?, ?, ?, ?, ?, ?, 40, ?)',
+          key, 'demo-tie', gen, ts, verb, rc, arm);
+      };
+      call('c1', CG('b2'), C_SINCE - 1, 'expand', 0, null);   // before --since
+      call('c2', CG('b2'), C_SINCE, 'expand', 0, null);       // at --since: in
+      call('c3', CG('b2'), C_AS_OF - 2, 'grep', 0, 'quiz');   // a replay arm's: never a live row
+      call('c4', CG('b2'), C_AS_OF - 1, 'grep', 8, null);     // in, rc as recorded
+      call('c5', CG('b2'), C_AS_OF, 'expand', 0, null);       // at --as-of: out
+      for (const ts of [C_SINCE - 1, C_SINCE, C_AS_OF - 60_000, C_AS_OF]) {
+        ins('INSERT INTO ticks (ts_ms, lag_ms, bytes, files_behind, bytes_behind) VALUES (?, 5, 0, 0, 0)', ts);
+      }
+    } finally {
+      db.close();
+    }
+    return { db: dbPath, storeId, pk };
+  }
+
+  const censusArgs = (db: string, asOf = C_AS_OF, since = C_SINCE): string[] =>
+    ['--db', db, '--now', String(NOW), '--census', '--as-of', String(asOf), '--since', String(since), '--row-cap', '400'];
+  const censusOf = (db: string, asOf = C_AS_OF, since = C_SINCE): Census => {
+    const rep = report(censusArgs(db, asOf, since)) as unknown as ReportC;
+    expect(rep.census, 'census mode reported no census').not.toBeNull();
+    return rep.census!;
+  };
+
+  /** A census row for the pure cases: a recent, unmerged UUID family unless `o` says otherwise. */
+  const fam = (o: Partial<CensusFamily> & Pick<CensusFamily, 'ccrc_id' | 'session_pk'>): CensusFamily => ({
+    generation: CG('c1'), merged_into: null, first_seen_ms: 1000, last_main_ts_ms: C_AS_OF - C_HOUR,
+    merged_generations: [], calls: [], boundaries: [], ...o,
+  });
+  const pure = (families: CensusFamily[]): Census => ({
+    as_of_ms: C_AS_OF, since_ms: C_SINCE, row_cap: 400, ticks: { n: 0, first_ts_ms: null, last_ts_ms: null }, families,
+  });
+  /** The one reason (id, gen) is excluded for, or null when it is active; it is never in both lists, nor twice. */
+  const reasonOf = (g: GateT4, c: Census, id: string, gen: string): string | null => {
+    const r = g.activeFamilies(STORE, c);
+    const on = r.active.filter((f) => f.ccrc_id === id && f.generation === gen);
+    const off = r.excluded.filter((f) => f.ccrc_id === id && f.generation === gen);
+    expect(on.length + off.length, `${id}/${gen} is reported exactly once`).toBe(1);
+    return off.length === 1 ? off[0]!.reason : null;
+  };
+
+  it('census: every sessions row, merged ones included, with its sessions columns and its last main entry before as_of', () => {
+    const s = censusStore();
+    const c = censusOf(s.db);
+    expect(c.families.map((f) => [f.ccrc_id, f.generation, f.session_pk, f.merged_into, f.first_seen_ms, f.last_main_ts_ms])).toEqual([
+      ['demo-tie', CG('b1'), s.pk.tieA, null, 5000, C_AS_OF - C_HOUR],
+      ['demo-tie', CG('b2'), s.pk.tieB, null, 5000, C_AS_OF - C_HOUR],
+      ['demo-rekey', CG('b3'), s.pk.rekey, null, 6000, C_AS_OF - 2 * C_HOUR],
+      ['demo-rekey', '', s.pk.rekeyLegacy, s.pk.rekey, 7000, null],
+      ['demo-legacy', '', s.pk.legacy, null, 9000, C_AS_OF - C_HOUR],
+      ['demo-legacy', CG('b4'), s.pk.legacyOld, null, 4000, C_AS_OF - C_HOUR],
+      ['demo-stale', CG('b5'), s.pk.stale, null, 1000, C_AS_OF - C_LOOK - 1],   // not the subagent's, not the unconfirmed epoch's
+      ['demo-edge-in', CG('b6'), s.pk.edgeIn, null, 1000, C_AS_OF - C_LOOK],
+      ['demo-edge-out', CG('b7'), s.pk.edgeOut, null, 1000, C_AS_OF - C_LOOK - 10],   // the entry at as_of is not read
+      ['demo-empty', CG('b8'), s.pk.empty, null, 1000, null],
+    ]);
+    expect(Object.keys(c.families[0]!)).toEqual(['ccrc_id', 'generation', 'session_pk', 'merged_into', 'first_seen_ms',
+      'last_main_ts_ms', 'merged_generations', 'calls', 'boundaries']);
+    expect(c.families.map((f) => f.merged_generations)).toEqual([[], [], [''], [], [], [], [], [], [], []]);
+    expect(c.families.flatMap((f) => f.boundaries), 'the fixture plants no boundary').toEqual([]);
+  });
+
+  it('census: calls are the raw rows from since to before as_of, the arm row absent', () => {
+    const s = censusStore();
+    const c = censusOf(s.db);
+    // c1 (since - 1) and c5 (as_of) lie outside; c3 is a replay arm's (arm 'quiz'); c2 and c4 stand, rc as recorded.
+    expect(c.families.find((f) => f.session_pk === s.pk.tieB)!.calls).toEqual([[C_SINCE, 0, 'expand'], [C_AS_OF - 1, 8, 'grep']]);
+    expect(c.families.filter((f) => f.session_pk !== s.pk.tieB).flatMap((f) => f.calls)).toEqual([]);
+  });
+
+  it('census: the ticks summary counts ticks from since to before as_of', () => {
+    const c = censusOf(censusStore().db);
+    expect({ as_of_ms: c.as_of_ms, since_ms: c.since_ms, row_cap: c.row_cap }).toEqual({ as_of_ms: C_AS_OF, since_ms: C_SINCE, row_cap: 400 });
+    expect(c.ticks).toEqual({ n: 2, first_ts_ms: C_SINCE, last_ts_ms: C_AS_OF - 60_000 });
+    // The O52 store's ticks all lie near NOW, far outside [1500, 6000): n 0 with null ends.
+    expect(censusOf(plantedStore().db, 6000, 1500).ticks).toEqual({ n: 0, first_ts_ms: null, last_ts_ms: null });
+  });
+
+  it('census over the O52 store: each family carries the families mode raw rows, calls cut at as_of', () => {
+    const f = plantedStore();
+    const rep = report(censusArgs(f.db, 6000, 1500)) as unknown as ReportC;
+    expect(rep.w2, 'census mode leaves w2 null').toBeNull();
+    const c = rep.census!;
+    // Every sessions row of THIS store, whatever the families file says: demo-b is listed there under another store.
+    expect(c.families.map((x) => [x.ccrc_id, x.generation, x.merged_into === null ? 'live' : 'merged'])).toEqual([
+      ['demo-a', G1, 'live'], ['demo-a', '', 'merged'], ['demo-b', G2, 'live']]);
+    const g1 = c.families.find((x) => x.ccrc_id === 'demo-a' && x.generation === G1)!;
+    expect(c.families.find((x) => x.generation === '')!.merged_into).toBe(g1.session_pk);
+    interface W2Family { ccrc_id: string; generation: string; merged_generations: string[]; calls: CallRow[]; boundaries: unknown[] }
+    const w2 = (report(['--db', f.db, '--now', String(NOW), '--families', f.families, '--window-start', '1500', '--window-end', '6000',
+      '--row-cap', '400']).w2 as unknown as { families: W2Family[] }).families.find((x) => x.ccrc_id === 'demo-a' && x.generation === G1)!;
+    expect(g1.boundaries, 'B1 (2000) and B2 (5000) lie in [1500, 6000); B3 (7000) does not').toHaveLength(2);
+    expect(g1.boundaries).toEqual(w2.boundaries);
+    expect(g1.merged_generations).toEqual(w2.merged_generations);
+    expect(g1.calls).toEqual(w2.calls.filter((r) => r[0] < 6000));
+    expect(g1.calls.length).toBeGreaterThan(0);
+    expect(g1.calls.map((r) => r[0]), "k5 (2600) is a replay arm's call").not.toContain(2600);
+  });
+
+  it('census: null without the census flag, and its key follows w2', () => {
+    const f = plantedStore();
+    expect((report(['--db', f.db, '--now', String(NOW)]) as unknown as ReportC).census).toBeNull();
+    expect((report(['--db', f.db, '--now', String(NOW), '--families', f.families, '--window-start', '1500', '--window-end', '6000',
+      '--row-cap', '400']) as unknown as ReportC).census).toBeNull();
+    expect(Object.keys(report(censusArgs(f.db, 6000, 1500)))).toEqual(['store_id', 'user_version', 'script_sha256', 'counters',
+      'w1b_lag_p95_ms', 'w1c_duplicate_entries', 'w1e', 'w1f_grep_p95_ms', 'w2', 'census']);
+  });
+
+  it.each(['--as-of', '--since', '--row-cap'])('census refusals: each required flag missing exits 2, here %s', (flag) => {
+    const f = plantedStore();
+    const args = censusArgs(f.db, 6000, 1500);
+    args.splice(args.indexOf(flag), 2);
+    const r = measure(args);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('--census needs --as-of, --since and --row-cap');
+    expect(r.stdout).toBe('');
+  });
+
+  it('census refusals: census mode beside families mode exits 2', () => {
+    const f = plantedStore();
+    const r = measure([...censusArgs(f.db, 6000, 1500), '--families', f.families, '--window-start', '1500', '--window-end', '6000']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('--census and --families are exclusive');
+    expect(r.stdout).toBe('');
+  });
+
+  it('census: the store bytes are unchanged by a census run', () => {
+    for (const [db, asOf, since] of [[plantedStore().db, 6000, 1500], [censusStore().db, C_AS_OF, C_SINCE]] as const) {
+      const sha = (): string => createHash('sha256').update(readFileSync(db)).digest('hex');
+      const before = sha();
+      censusOf(db, asOf, since);
+      expect(sha(), db).toBe(before);
+    }
+  });
+
+  it('census: one read snapshot, a sessions row a writer commits mid-census is not in it', () => {
+    const s = censusStore();
+    // census_report over the real read-only connection, wrapped so that a second connection commits a new sessions
+    // row right after the census's FIRST read (the ticks summary). The census must not see it.
+    const RACE = [
+      'import importlib.util, json, sqlite3, sys',
+      "spec = importlib.util.spec_from_file_location('mh', sys.argv[1]); mh = importlib.util.module_from_spec(spec); spec.loader.exec_module(mh)",
+      'ro = mh.open_db(sys.argv[2])',
+      'rw = sqlite3.connect(sys.argv[2])',
+      'class Racing:',
+      '    def __init__(self, c):',
+      '        self.c, self.reads = c, 0',
+      '    def __getattr__(self, k):',
+      '        return getattr(self.c, k)',
+      '    def execute(self, sql, *a):',
+      '        cur = self.c.execute(sql, *a)',
+      "        if sql.lstrip()[:6].upper() == 'SELECT':",
+      '            self.reads += 1',
+      '            if self.reads == 1:',
+      "                rw.execute(\"INSERT INTO sessions (ccrc_id, generation, project, first_seen_ms) VALUES ('demo-late', '', 'demo', 1)\")",
+      '                rw.commit()',
+      '        return cur',
+      'r = mh.census_report(Racing(ro), int(sys.argv[3]), int(sys.argv[4]), 400)',
+      "print(json.dumps([f['ccrc_id'] for f in r['families']]))",
+    ].join('\n');
+    const r = spawnSync('python3', [...PY_ISOLATED, '-c', RACE, SCRIPT, s.db, String(C_AS_OF), String(C_SINCE)],
+      { encoding: 'utf8', env: { ...scrubbedEnv(process.env), PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const ids = JSON.parse(r.stdout) as string[];
+    expect(ids).toHaveLength(10);
+    expect(ids).not.toContain('demo-late');
+    expect(censusOf(s.db).families.map((f) => f.ccrc_id), 'CONTROL: the writer committed, and the next census sees it').toContain('demo-late');
+  });
+
+  it('active rule: three active families, every other one excluded with exactly one reason', async () => {
+    const g = await gateT4();
+    const s = censusStore();
+    const r = g.activeFamilies(s.storeId, censusOf(s.db));
+    const ref = (ccrc_id: string, generation: string): FamilyRef => ({ store_id: s.storeId, ccrc_id, generation });
+    // Sorted by familyKey: one store, so by ccrc_id, then generation ('' first).
+    expect(r.active).toEqual([ref('demo-edge-in', CG('b6')), ref('demo-rekey', CG('b3')), ref('demo-tie', CG('b2'))]);
+    expect(r.excluded).toEqual([
+      { ...ref('demo-edge-out', CG('b7')), reason: 'no-recent-entry' },
+      { ...ref('demo-empty', CG('b8')), reason: 'no-recent-entry' },
+      { ...ref('demo-legacy', ''), reason: 'legacy' },
+      { ...ref('demo-legacy', CG('b4')), reason: 'not-newest' },
+      { ...ref('demo-rekey', ''), reason: 'merged' },
+      { ...ref('demo-stale', CG('b5')), reason: 'no-recent-entry' },
+      { ...ref('demo-tie', CG('b1')), reason: 'not-newest' },
+    ]);
+    expect(new Set(r.excluded.map((x) => x.reason)), 'every reason is an ACTIVE_EXCLUSIONS word, and every word is reached')
+      .toEqual(new Set(g.ACTIVE_EXCLUSIONS));
+  });
+
+  it('active rule: newest-family parity with recall familiesOf on a first_seen_ms tie', async () => {
+    const g = await gateT4();
+    const recall = (await import('../../ccd/history/recall.mjs')) as unknown as {
+      familiesOf(db: unknown, sel: object): ReadonlyArray<{ sessionPk: number; generation: string }>;
+    };
+    const s = censusStore();
+    const c = censusOf(s.db);
+    expect(c.families.filter((f) => f.ccrc_id === 'demo-tie').map((f) => f.first_seen_ms), 'CONTROL: a tie on first_seen_ms')
+      .toEqual([5000, 5000]);
+    expect(c.families.filter((f) => f.ccrc_id === 'demo-rekey').map((f) => [f.first_seen_ms, f.merged_into === null]),
+      'CONTROL: the merged row is the newer by first_seen_ms').toEqual([[6000, true], [7000, false]]);
+    const db = new DatabaseSync(s.db, { readOnly: true });
+    try {
+      for (const id of [...new Set(c.families.map((f) => f.ccrc_id))]) {
+        const own = recall.familiesOf(db, { kind: 'family', id, generation: null, project: null, workdir: null, workdirReal: null });
+        expect(own, id).toHaveLength(1);
+        const mine = g.newestFamilyOf(c.families, id);
+        expect(mine === null ? null : [mine.session_pk, mine.generation], id).toEqual([own[0]!.sessionPk, own[0]!.generation]);
+      }
+    } finally {
+      db.close();
+    }
+    expect(g.newestFamilyOf(c.families, 'demo-tie')!.session_pk, 'the tie goes to the greater session_pk').toBe(s.pk.tieB);
+  });
+
+  it('active rule: the look-back edges, an entry at as_of minus the look-back counts and one at as_of does not', async () => {
+    const g = await gateT4();
+    const at = (last: number | null): string | null =>
+      reasonOf(g, pure([fam({ ccrc_id: 'demo-x', session_pk: 1, last_main_ts_ms: last })]), 'demo-x', CG('c1'));
+    expect(at(C_AS_OF - C_LOOK)).toBeNull();
+    expect(at(C_AS_OF - 1)).toBeNull();
+    expect(at(C_AS_OF)).toBe('no-recent-entry');
+    expect(at(C_AS_OF - C_LOOK - 1)).toBe('no-recent-entry');
+    expect(at(null)).toBe('no-recent-entry');
+    expect(g.ACTIVE_LOOKBACK_MS).toBe(7 * 86_400_000);
+    const c = pure([fam({ ccrc_id: 'demo-x', session_pk: 1, last_main_ts_ms: C_AS_OF - 1000 })]);
+    expect(g.activeFamilies(STORE, c, { lookbackMs: 1000 }).active).toHaveLength(1);
+    expect(g.activeFamilies(STORE, c, { lookbackMs: 999 }).excluded.map((x) => x.reason)).toEqual(['no-recent-entry']);
+  });
+
+  it('active rule: legacy families are excluded legacy whatever their recency', async () => {
+    const g = await gateT4();
+    // The id's only row, so its newest, with an entry an hour before as_of: still legacy.
+    expect(reasonOf(g, pure([fam({ ccrc_id: 'demo-x', session_pk: 1, generation: '' })]), 'demo-x', '')).toBe('legacy');
+    expect(reasonOf(g, pure([fam({ ccrc_id: 'demo-x', session_pk: 1, generation: '', last_main_ts_ms: null })]), 'demo-x', '')).toBe('legacy');
+    // A legacy row newer than its id's UUID row: recall answers the legacy row, so the UUID row is not the newest, and
+    // the id has no active family.
+    const both = pure([fam({ ccrc_id: 'demo-x', session_pk: 1, first_seen_ms: 1000 }), fam({ ccrc_id: 'demo-x', session_pk: 2, generation: '', first_seen_ms: 2000 })]);
+    expect(reasonOf(g, both, 'demo-x', CG('c1'))).toBe('not-newest');
+    expect(g.activeFamilies(STORE, both).active).toEqual([]);
+  });
+
+  it('active rule: one reason per family, in the order merged, legacy, not-newest, no-recent-entry', async () => {
+    const g = await gateT4();
+    const c = pure([
+      fam({ ccrc_id: 'demo-x', session_pk: 1, generation: '', merged_into: 2, first_seen_ms: 9000, last_main_ts_ms: null }),
+      fam({ ccrc_id: 'demo-x', session_pk: 2, first_seen_ms: 5000 }),
+      fam({ ccrc_id: 'demo-y', session_pk: 3, generation: CG('c2'), merged_into: 4, last_main_ts_ms: null }),
+      fam({ ccrc_id: 'demo-y', session_pk: 4, generation: CG('c3') }),
+      fam({ ccrc_id: 'demo-z', session_pk: 5, generation: CG('c4'), first_seen_ms: 1000, last_main_ts_ms: null }),
+      fam({ ccrc_id: 'demo-z', session_pk: 6, generation: CG('c5'), first_seen_ms: 2000, last_main_ts_ms: null }),
+    ]);
+    const r = g.activeFamilies(STORE, c);
+    expect(r.active.length + r.excluded.length, 'each family is reported once').toBe(6);
+    expect(reasonOf(g, c, 'demo-x', '')).toBe('merged');               // merged, legacy and without an entry: merged
+    expect(reasonOf(g, c, 'demo-y', CG('c2'))).toBe('merged');         // a merged UUID row
+    expect(reasonOf(g, c, 'demo-z', CG('c4'))).toBe('not-newest');     // not the newest and without an entry: not-newest
+    expect(reasonOf(g, c, 'demo-z', CG('c5'))).toBe('no-recent-entry');
+    expect(reasonOf(g, c, 'demo-x', CG('c1'))).toBeNull();
+    expect(reasonOf(g, c, 'demo-y', CG('c3'))).toBeNull();
+  });
+
+  it('active rule: newestFamilyCompare orders by first_seen_ms then session_pk, both descending', async () => {
+    const g = await gateT4();
+    const a = fam({ ccrc_id: 'demo-x', session_pk: 1, first_seen_ms: 2000 });
+    const b = fam({ ccrc_id: 'demo-x', session_pk: 2, first_seen_ms: 1000 });
+    const c = fam({ ccrc_id: 'demo-x', session_pk: 3, first_seen_ms: 2000 });
+    expect(g.newestFamilyCompare(a, b)).toBeLessThan(0);
+    expect(g.newestFamilyCompare(b, a)).toBeGreaterThan(0);
+    expect(g.newestFamilyCompare(c, a), 'a tie on first_seen_ms goes to the greater session_pk').toBeLessThan(0);
+    expect(g.newestFamilyOf([a, b, c], 'demo-x')!.session_pk).toBe(3);
+    expect(g.newestFamilyOf([c, a, b], 'demo-x')!.session_pk, 'whatever the input order').toBe(3);
+    expect(g.newestFamilyOf([a, b], 'demo-y')).toBeNull();
+    expect(g.newestFamilyOf([fam({ ccrc_id: 'demo-x', session_pk: 4, first_seen_ms: 9000, merged_into: 3 }), a], 'demo-x')!.session_pk).toBe(1);
+    expect(g.newestFamilyOf([fam({ ccrc_id: 'demo-x', session_pk: 4, merged_into: 3 })], 'demo-x')).toBeNull();
+  });
+
+  it('active rule: refuses a census it cannot read rather than answering every family active', async () => {
+    const g = await gateT4();
+    const c = pure([fam({ ccrc_id: 'demo-x', session_pk: 1 })]);
+    expect(() => g.activeFamilies(null as unknown as string, c)).toThrow(TypeError);
+    expect(() => g.activeFamilies('', c)).toThrow(TypeError);
+    const noAsOf: Partial<Census> = { ...c };
+    delete noAsOf.as_of_ms;
+    expect(() => g.activeFamilies(STORE, noAsOf as Census)).toThrow(TypeError);
+    expect(() => g.activeFamilies(STORE, { ...c, families: undefined } as unknown as Census)).toThrow(TypeError);
+    expect(() => g.activeFamilies(STORE, c, { lookbackMs: -1 })).toThrow(TypeError);
+    expect(() => g.activeFamilies(STORE, c, { lookbackMs: 1.5 })).toThrow(TypeError);
+    expect(g.activeFamilies(STORE, c).active, 'CONTROL: the same census, read whole, answers').toHaveLength(1);
+  });
+
+  // ── Edge pins (W2-3 Task 4 implementer): guards the cases above leave to a one-step move ──
+  it('census edge: a row merged into a family counts toward the family\'s last main entry', () => {
+    const s = censusStore();
+    const db = new DatabaseSync(s.db);
+    try {
+      const uuid = '11111111-2222-4333-8444-99999999aa01';
+      db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, 1, ?, 'startup', 'hook', 1)")
+        .run(s.pk.rekeyLegacy, uuid);
+      const tpk = Number(db.prepare("INSERT INTO transcripts (cc_session_uuid, agent_id) VALUES (?, '')").run(uuid).lastInsertRowid);
+      const blob = Number((db.prepare('SELECT blob_id AS b FROM entries LIMIT 1').get() as { b: number }).b);
+      db.prepare('INSERT INTO entries (uuid, transcript_pk, type, ts_ms, is_compact_summary, provenance, prov_version, '
+        + "struct_rank_ns, struct_file_id, blob_id) VALUES ('c-edge-merged', ?, 'assistant', ?, 0, 'harness', 1, 1, 1, ?)").run(tpk, C_AS_OF - 1000, blob);
+    } finally {
+      db.close();
+    }
+    const c = censusOf(s.db);
+    const last = (pk: number): number | null => c.families.find((f) => f.session_pk === pk)!.last_main_ts_ms;
+    // The target's own entry is two hours old; the merged row's, planted above, is 1 s old: the target reads the later.
+    expect(last(s.pk.rekey)).toBe(C_AS_OF - 1000);
+    expect(last(s.pk.rekeyLegacy), 'the merged row reads its own epochs only').toBe(C_AS_OF - 1000);
+    expect(last(s.pk.tieA), 'a family unrelated to the merge is unmoved').toBe(C_AS_OF - C_HOUR);
+  });
+
+  it('census edge: a connection already holding a read transaction is reused, not restarted', () => {
+    const s = censusStore();
+    const CALL = [
+      'import importlib.util, json, sys',
+      "spec = importlib.util.spec_from_file_location('mh', sys.argv[1]); mh = importlib.util.module_from_spec(spec); spec.loader.exec_module(mh)",
+      'ro = mh.open_db(sys.argv[2])',
+      "ro.execute('BEGIN')",
+      'r = mh.census_report(ro, int(sys.argv[3]), int(sys.argv[4]), 400)',
+      "print(json.dumps(len(r['families'])))",
+    ].join('\n');
+    const r = spawnSync('python3', [...PY_ISOLATED, '-c', CALL, SCRIPT, s.db, String(C_AS_OF), String(C_SINCE)],
+      { encoding: 'utf8', env: { ...scrubbedEnv(process.env), PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout)).toBe(10);
+  });
+
+  it('census edge: --since after --as-of is not refused, it answers no ticks and no raw rows', () => {
+    const c = censusOf(censusStore().db, C_SINCE, C_AS_OF);
+    expect(c.ticks).toEqual({ n: 0, first_ts_ms: null, last_ts_ms: null });
+    expect(c.families.flatMap((f) => f.calls)).toEqual([]);
+    expect(c.families, 'every sessions row is still listed').toHaveLength(10);
+  });
+
+  it('census edge: --as-of and --since are read only with --census', () => {
+    const f = plantedStore();
+    const r = measure(['--db', f.db, '--now', String(NOW), '--as-of', '6000', '--since', '1500']);
+    expect(r.code).toBe(0);
+    expect((JSON.parse(r.stdout) as ReportC).census).toBeNull();
+  });
+
+  it('active rule edge: a look-back of 0 is whole, and excludes every family', async () => {
+    const g = await gateT4();
+    const c = pure([fam({ ccrc_id: 'demo-x', session_pk: 1, last_main_ts_ms: C_AS_OF - 1 })]);
+    const r = g.activeFamilies(STORE, c, { lookbackMs: 0 });   // the default (7 days) would take it active
+    expect(r.active).toEqual([]);
+    expect(r.excluded.map((x) => x.reason)).toEqual(['no-recent-entry']);
+  });
+
+  it('active rule edge: refuses a store id that is not a UUID and an as_of_ms that is not an integer', async () => {
+    const g = await gateT4();
+    const c = pure([fam({ ccrc_id: 'demo-x', session_pk: 1 })]);
+    expect(() => g.activeFamilies('not-a-store-id', c)).toThrow(TypeError);
+    expect(() => g.activeFamilies(STORE, { ...c, as_of_ms: 1.5 })).toThrow(TypeError);
+    expect(() => g.activeFamilies(STORE, { ...c, as_of_ms: String(C_AS_OF) as unknown as number })).toThrow(TypeError);
+  });
+
+  // P-5 (the run's worker): a malformed census row is refused, never folded into an exclusion or a tie-break.
+  const MALFORMED: Array<[string, Partial<Record<keyof CensusFamily, unknown>>]> = [
+    ['merged_into is a string', { merged_into: '2' }],
+    ['merged_into is missing', { merged_into: undefined }],
+    ['generation is not a string', { generation: 5 }],
+    ['generation is missing', { generation: undefined }],
+    ['ccrc_id is not a string', { ccrc_id: 5 }],
+    ['session_pk is not an integer', { session_pk: '1' }],
+    ['first_seen_ms is missing', { first_seen_ms: undefined }],
+    ['last_main_ts_ms is a string', { last_main_ts_ms: '1799999999000' }],
+    ['last_main_ts_ms is missing', { last_main_ts_ms: undefined }],
+    ['last_main_ts_ms is a float', { last_main_ts_ms: 1.5 }],
+  ];
+  it.each(MALFORMED)('malformed census row: activeFamilies refuses a row whose %s', async (_name, bad) => {
+    const g = await gateT4();
+    const good = fam({ ccrc_id: 'demo-y', session_pk: 9 });
+    const row = { ...fam({ ccrc_id: 'demo-x', session_pk: 1 }), ...bad } as unknown as CensusFamily;
+    expect(() => g.activeFamilies(STORE, pure([good, row]))).toThrow(TypeError);
+    expect(g.activeFamilies(STORE, pure([good])).active, 'CONTROL: the well-formed row alone answers').toHaveLength(1);
   });
 });

@@ -327,3 +327,141 @@ export function splitAtFirstExit8(calls) {
   const i = calls.findIndex((c) => c[1] === EXIT.RECALL_OFF);
   return i < 0 ? { upTo: [...calls], after: [] } : { upTo: calls.slice(0, i + 1), after: calls.slice(i + 1) };
 }
+
+// ── W2-3 Task 4: the families active at W2 open (W2-D20; D-5773 (history-w2-legacy-families-excluded)) ──────────
+// measure-history.py --census reads every sessions row of one store as of W2 open (the census instant T0, recorded
+// per node in part 2) and decides nothing; these functions decide. A family (store_id, ccrc_id, generation) is active
+// iff:
+//   (a) merged_into is null and its generation matches lib's UUID_RE. A legacy '' family is excluded, and that is
+//       fixed (D-5773): a re-key mid-window would leave its control file stale with no change row, and the W2 flow
+//       cannot write a legacy control file (W2-D27, W2-D84);
+//   (b) it is its id's newest unmerged family, in recall.mjs's NEWEST_FAMILY_SQL order (first_seen_ms DESC, then
+//       session_pk DESC). This module reads lib alone, so that order is spelled a second time here, as
+//       newestFamilyCompare, and held equal to recall's by the parity case in measure-history.test.ts. A legacy ''
+//       row takes part in the order, as it does in recall's, so an id whose newest unmerged row is legacy has no
+//       active family;
+//   (c) its last main entry before as_of (the census's last_main_ts_ms) lies in [as_of - look-back, as_of).
+// Every excluded family carries exactly one ACTIVE_EXCLUSIONS reason, the first clause it fails, in the order merged,
+// legacy, not-newest, no-recent-entry. The registry check that follows is W2-5a's verify --registry.
+
+/**
+ * One census row (measure-history.py --census): one per sessions row of the store, merged ones included. `calls`
+ * are [ts_ms, rc, verb] and `boundaries` family_report's boundary reports, both over [since, as_of).
+ * @typedef {{ccrc_id: string, generation: string, session_pk: number, merged_into: number|null,
+ *   first_seen_ms: number, last_main_ts_ms: number|null, merged_generations: string[],
+ *   calls: Array<[number, number, string]>, boundaries: object[]}} CensusFamily
+ */
+/**
+ * measure-history.py's `census` key.
+ * @typedef {{as_of_ms: number, since_ms: number, row_cap: number,
+ *   ticks: {n: number, first_ts_ms: number|null, last_ts_ms: number|null}, families: CensusFamily[]}} CensusReport
+ */
+/**
+ * A family, keyed as the assignment (W2-D19) and assembleReports (W2-D22) key it.
+ * @typedef {{store_id: string, ccrc_id: string, generation: string}} FamilyRef
+ */
+
+/** The open record's default look-back, `active_rule.lookback_ms`: 7 days. */
+export const ACTIVE_LOOKBACK_MS = 604_800_000;
+
+/**
+ * recall.mjs's NEWEST_FAMILY_SQL order as a comparator: negative when `a` is the newer family. first_seen_ms DESC,
+ * then session_pk DESC. A second spelling of that order, held equal to it by the parity pin (W2-D20).
+ * @param {CensusFamily} a
+ * @param {CensusFamily} b
+ * @returns {number}
+ */
+export function newestFamilyCompare(a, b) {
+  if (a.first_seen_ms !== b.first_seen_ms) return b.first_seen_ms - a.first_seen_ms;
+  return b.session_pk - a.session_pk;
+}
+
+/**
+ * The id's newest unmerged family, or null when the census holds no unmerged row of that id. Merged rows never take
+ * part, as NEWEST_FAMILY_SQL's `merged_into IS NULL` keeps them out.
+ * @param {CensusFamily[]} families
+ * @param {string} ccrcId
+ * @returns {CensusFamily|null}
+ */
+export function newestFamilyOf(families, ccrcId) {
+  let best = null;
+  for (const f of families) {
+    if (f.ccrc_id !== ccrcId || f.merged_into !== null) continue;
+    if (best === null || newestFamilyCompare(f, best) < 0) best = f;
+  }
+  return best;
+}
+
+/**
+ * Refuses a census row that cannot be read as the shape measure-history.py prints, with a TypeError. A row whose
+ * merged_into is not null or an integer would read as merged, one whose generation is not a string as legacy, and one
+ * whose ids, first_seen_ms or last_main_ts_ms are not what they should be would shift the newest order or read as
+ * having no recent entry: each would change the answer silently, so none is read.
+ * @param {CensusFamily} f
+ * @returns {void}
+ */
+function assertCensusRow(f) {
+  const where = JSON.stringify([f?.ccrc_id, f?.generation, f?.session_pk]);
+  if (typeof f?.ccrc_id !== 'string') throw new TypeError(`activeFamilies: census row ${where} has no string ccrc_id`);
+  if (typeof f.generation !== 'string') throw new TypeError(`activeFamilies: census row ${where} has no string generation`);
+  if (!Number.isSafeInteger(f.session_pk)) throw new TypeError(`activeFamilies: census row ${where} has no integer session_pk`);
+  if (f.merged_into !== null && !Number.isSafeInteger(f.merged_into)) throw new TypeError(`activeFamilies: census row ${where} has a merged_into that is neither null nor an integer`);
+  if (!Number.isSafeInteger(f.first_seen_ms)) throw new TypeError(`activeFamilies: census row ${where} has no integer first_seen_ms`);
+  if (f.last_main_ts_ms !== null && !Number.isSafeInteger(f.last_main_ts_ms)) throw new TypeError(`activeFamilies: census row ${where} has a last_main_ts_ms that is neither null nor an integer`);
+}
+
+/**
+ * The first W2-D20 clause `f` fails, as its ACTIVE_EXCLUSIONS word, or null when it is active.
+ * @param {CensusFamily} f
+ * @param {Map<string, CensusFamily|null>} newest
+ * @param {number} from
+ * @param {number} asOf
+ * @returns {'merged'|'legacy'|'not-newest'|'no-recent-entry'|null}
+ */
+function exclusionOf(f, newest, from, asOf) {
+  if (f.merged_into !== null) return 'merged';
+  if (!UUID_RE.test(f.generation)) return 'legacy';
+  if (newest.get(f.ccrc_id)?.session_pk !== f.session_pk) return 'not-newest';
+  const last = f.last_main_ts_ms;
+  if (!Number.isSafeInteger(last) || last < from || last >= asOf) return 'no-recent-entry';
+  return null;
+}
+
+/**
+ * W2-D20's rule over one store's census: the families active at W2 open, and every other family with the one reason
+ * it is not. Both lists are sorted by familyKey. It throws a TypeError, and never answers, on a store_id that is not a
+ * UUID, a census with no integer as_of_ms or no families list, or a look-back that is not a whole, non-negative number
+ * of ms, or on a census row of a malformed shape (assertCensusRow): a census read in part would answer families active that
+ * are not.
+ * @param {string} storeId
+ * @param {CensusReport} census
+ * @param {{lookbackMs?: number}} [opts]
+ * @returns {{active: FamilyRef[], excluded: Array<FamilyRef & {reason: 'merged'|'legacy'|'not-newest'|'no-recent-entry'}>}}
+ */
+export function activeFamilies(storeId, census, opts = {}) {
+  if (typeof storeId !== 'string' || !UUID_RE.test(storeId)) throw new TypeError(`activeFamilies: ${JSON.stringify(storeId)} is not a store id`);
+  if (!Number.isSafeInteger(census?.as_of_ms)) throw new TypeError('activeFamilies: the census carries no integer as_of_ms');
+  if (!Array.isArray(census.families)) throw new TypeError('activeFamilies: the census carries no families list');
+  const lookbackMs = opts.lookbackMs ?? ACTIVE_LOOKBACK_MS;
+  if (!Number.isSafeInteger(lookbackMs) || lookbackMs < 0) throw new TypeError(`activeFamilies: look-back ${JSON.stringify(lookbackMs)} is not a whole, non-negative number of ms`);
+  for (const f of census.families) assertCensusRow(f);
+  const asOf = census.as_of_ms;
+  const from = asOf - lookbackMs;
+  /** @type {Map<string, CensusFamily|null>} */
+  const newest = new Map();
+  for (const f of census.families) if (!newest.has(f.ccrc_id)) newest.set(f.ccrc_id, newestFamilyOf(census.families, f.ccrc_id));
+  const active = [];
+  const excluded = [];
+  for (const f of census.families) {
+    const ref = { store_id: storeId, ccrc_id: f.ccrc_id, generation: f.generation };
+    const reason = exclusionOf(f, newest, from, asOf);
+    if (reason === null) active.push(ref);
+    else excluded.push({ ...ref, reason });
+  }
+  const byKey = (a, b) => {
+    const x = familyKey(a.store_id, a.ccrc_id, a.generation);
+    const y = familyKey(b.store_id, b.ccrc_id, b.generation);
+    return x < y ? -1 : x > y ? 1 : 0;
+  };
+  return { active: active.sort(byKey), excluded: excluded.sort(byKey) };
+}

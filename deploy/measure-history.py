@@ -8,6 +8,7 @@ SQLite's, not this script's: opening a WAL database that no process holds open m
 
     python3 deploy/measure-history.py [--db PATH] [--now MS]
                                       [--families FILE --window-start MS --window-end MS --row-cap N]
+                                      [--census --as-of MS --since MS --row-cap N]
 
 It prints ONE JSON object, headed by the store's own id. Outputs of several nodes are concatenated, never
 merged: two nodes' families with one ccrc id are two families (spec §6.9).
@@ -39,6 +40,7 @@ merged: two nodes' families with one ccrc id are two families (spec §6.9).
   w1f_grep_p95_ms         W1-f: the p95 of recall_calls.ms over verb = 'grep' rows with arm IS NULL; null if none
   w2                      null without --families; else {row_cap, window_start_ms, window_end_ms, families},
                           the W2 raw rows, below; the two window fields echo --window-start and --window-end
+  census                  null without --census; else the census, below
 p95 is NEAREST-RANK: the value at 1-based rank ceil(95n/100) of the sorted sample, in integer arithmetic.
 
 THE W2 RAW ROWS (§10.2; W2-D13, D-5770). This file emits rows and decides nothing about a window: the turn
@@ -75,6 +77,19 @@ probes (the transcript's ingest_files, then memberships by (file_id, entry_id)),
                        (or the boundary) to the end of the file, uncapped and not stopped at the next
                        boundary, ordered by first appearance: the witnesses lib.mjs's producerOfCopy reads
 The model text is printed raw: this file never tests, compares or classifies it (O32 narrowed, D-5772).
+
+CENSUS MODE (W2-D13, W2-D20). --census --as-of MS --since MS --row-cap N, all three required, never beside
+--families. It reads this store as of --as-of (W2 open: the census instant T0, one per node) and adds `census`:
+  as_of_ms, since_ms, row_cap   the arguments
+  ticks                         {n, first_ts_ms, last_ts_ms} over ticks with since <= ts_ms < as_of; n 0 with null
+                                ends when there are none
+  families                      one row per sessions row, merged ones included, in session_pk order: ccrc_id,
+                                generation, session_pk, merged_into, first_seen_ms; last_main_ts_ms, the greatest
+                                ts_ms before as_of of an entry of a main transcript (agent_id '') of a confirmed
+                                epoch of the row or of a row merged into it (null when none); and family_report's
+                                merged_generations, calls and boundaries over [since, as_of), calls cut at as_of
+It reads one snapshot and decides nothing: which families are active at W2 open is history-gate.mjs's
+activeFamilies (legacy '' families excluded, fixed: D-5773).
 
 Exit 0 measured; 2 an input missing or unreadable, or a usage error.
 """
@@ -257,6 +272,45 @@ def w1e_statistic(counters):
             'mismatch_share': mismatch / (served + mismatch) if served + mismatch else None}
 
 
+# W2-3 Task 4 (W2-D13 census mode, W2-D20; D-5773 (history-w2-legacy-families-excluded)): the census at W2 open.
+LAST_MAIN_SQL = (
+    'SELECT max(e.ts_ms) FROM epochs p '
+    "JOIN transcripts t ON t.cc_session_uuid = p.cc_session_uuid AND t.agent_id = '' "
+    'JOIN entries e ON e.transcript_pk = t.transcript_pk '
+    'WHERE p.session_pk IN (SELECT s.session_pk FROM sessions s WHERE s.session_pk = ? OR s.merged_into = ?) '
+    'AND p.confirmed_ms IS NOT NULL AND e.ts_ms < ?')
+
+
+def census_report(db, as_of_ms, since_ms, row_cap):
+    """W2 open on this node: every sessions row, merged ones included, in session_pk order, with its sessions
+    columns, its last main entry before as_of, and family_report's raw rows over [since, as_of). It decides
+    nothing: history-gate.mjs's activeFamilies applies W2-D20's rule to this output.
+
+    One read snapshot: a live store ticks while this runs, so every query below reads one transaction, opened here
+    and ended by main's db.close(). last_main_ts_ms reads the family's own row and the rows merged into it, the
+    scope family_report reads; a re-key moves a merged row's epochs to its target (the sweep's merge), so a merged
+    row reads null. family_report's calls have no upper bound, so they are cut at as_of here; a copy's rows keep
+    family_report's line bounds (the next main boundary and --row-cap)."""
+    if not db.in_transaction:
+        db.execute('BEGIN')   # one read snapshot: see the docstring
+    n, first, last = db.execute(
+        'SELECT count(*), min(ts_ms), max(ts_ms) FROM ticks WHERE ts_ms >= ? AND ts_ms < ?', (since_ms, as_of_ms)).fetchone()
+    families = []
+    for pk, ccrc_id, generation, first_seen_ms, merged_into in db.execute(
+            'SELECT session_pk, ccrc_id, generation, first_seen_ms, merged_into FROM sessions ORDER BY session_pk').fetchall():
+        fam = family_report(db, ccrc_id, generation, since_ms, as_of_ms, row_cap)
+        families.append({
+            'ccrc_id': ccrc_id, 'generation': generation, 'session_pk': pk, 'merged_into': merged_into,
+            'first_seen_ms': first_seen_ms,
+            'last_main_ts_ms': db.execute(LAST_MAIN_SQL, (pk, pk, as_of_ms)).fetchone()[0],
+            'merged_generations': fam['merged_generations'],
+            'calls': [c for c in fam['calls'] if c[0] < as_of_ms],
+            'boundaries': fam['boundaries'],
+        })
+    return {'as_of_ms': as_of_ms, 'since_ms': since_ms, 'row_cap': row_cap,
+            'ticks': {'n': n, 'first_ts_ms': first, 'last_ts_ms': last}, 'families': families}
+
+
 def main():
     home = os.path.expanduser('~')
     ap = argparse.ArgumentParser(description='the ccrc history census, read-only')
@@ -266,7 +320,14 @@ def main():
     ap.add_argument('--window-start', type=int, default=None)
     ap.add_argument('--window-end', type=int, default=None)
     ap.add_argument('--row-cap', type=int, default=None, help='the most assistant rows printed per copy; required with --families')
+    ap.add_argument('--census', action='store_true', help='W2 open: every family of this store as of --as-of')
+    ap.add_argument('--as-of', type=int, default=None, help='epoch ms: the census instant (W2 open, T0)')
+    ap.add_argument('--since', type=int, default=None, help='epoch ms: where the census raw rows start')
     a = ap.parse_args()
+    if a.census and a.families is not None:
+        fail('--census and --families are exclusive')
+    if a.census and (a.as_of is None or a.since is None or a.row_cap is None):
+        fail('--census needs --as-of, --since and --row-cap')
     if a.families is not None and (a.window_start is None or a.window_end is None):
         fail('--families needs --window-start and --window-end (epoch ms)')
     if a.families is not None and a.row_cap is None:
@@ -293,12 +354,15 @@ def main():
             'w1f_grep_p95_ms': p95([r[0] for r in db.execute(
                 "SELECT ms FROM recall_calls WHERE verb = 'grep' AND arm IS NULL").fetchall()]),
             'w2': None,
+            'census': None,   # W2-3 Task 4: filled below with --census
         }
         report['w1e'] = w1e_statistic(report['counters'])
         if a.families is not None:
             report['w2'] = {'row_cap': a.row_cap, 'window_start_ms': a.window_start, 'window_end_ms': a.window_end, 'families': [
                 family_report(db, ccrc_id, generation, a.window_start, a.window_end, a.row_cap)
                 for ccrc_id, generation in load_families(a.families, store_id)]}
+        if a.census:
+            report['census'] = census_report(db, a.as_of, a.since, a.row_cap)
     except sqlite3.Error as e:
         fail(f'cannot read {a.db}: {e}')
     finally:
