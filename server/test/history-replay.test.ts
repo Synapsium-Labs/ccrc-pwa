@@ -37,6 +37,16 @@ import { afterEach as t5afterEach, vi as t5vi } from 'vitest';
 import * as t5drv from '../../deploy/history-replay.mjs';
 import { generateWrapperBody as t5WrapperBody } from '../../shared/wrapper.mjs';
 import { mkTmp as t5MkTmp } from './tmpHelpers.js';
+// W2-4 Task 6 (W2-D55): t6-prefixed bindings, so none collides with a named import Tasks 1–5 put in this block.
+import * as t6Driver from '../../deploy/history-replay.mjs';
+import * as t6Fs from 'node:fs';
+import t6Path from 'node:path';
+import { execFileSync as t6ExecFile } from 'node:child_process';
+import { readLimits as t6ReadLimits } from '../src/limits.js';
+import { loadConfig as t6LoadConfig } from '../src/config.js';
+import { localIO as t6LocalIO } from '../src/io.js';
+import { rolloverCases as t6RolloverCases } from './fixtures/rollover.js';
+import { DEFAULT_TEST_ROSTER as T6_ROSTER } from './helpers/roster.js';
 
 const SCRIPT = path.join(REPO, 'deploy', 'history-replay.mjs');
 
@@ -1380,4 +1390,323 @@ describe('W2-4 Task 5: the driver passes no env whole and reads only HOME, TMUX_
     expect(code.filter((l) => /dangerously-skip-permissions|bypassPermissions/.test(l))).toEqual([]);
     expect(code.filter((l) => /\bshell\s*:|\b(?:exec|execSync|execFile|execFileSync)\s*\(/.test(l))).toEqual([]);
   });
+});
+
+// ── W2-4 Task 6: the limits stop and the spend budget (W2-D55; spec §10.2:2697, erratum E18) ─────────────────────
+// The driver reads one limits row, read-only, by readLimits' rules, and keeps the provenance readLimits folds: a 0 from
+// a lapsed resetAt is a measured reset, a 0 inferred from age measured nothing and stops as stale. The parity case holds
+// the driver's reading to readLimits' over rolloverCases' bytes, the fixture limits.test.ts and ccd-limits.test.ts share.
+// Fixture HOMEs only; the clock is a parameter.
+describe('W2-4 Task 6: the limits row is read by readLimits\' rules, keeping its provenance (W2-D55 parity)', () => {
+  const NOW_S = 1_785_231_736;
+  const PICK = (r: { five: number | null; seven: number | null; ts: number | null; fiveResetAt: number | null; sevenResetAt: number | null; fiveRolledOver: boolean; sevenRolledOver: boolean }) =>
+    ({ five: r.five, seven: r.seven, ts: r.ts, fiveResetAt: r.fiveResetAt, sevenResetAt: r.sevenResetAt, fiveRolledOver: r.fiveRolledOver, sevenRolledOver: r.sevenRolledOver });
+
+  it('over every rolloverCases row, parseLimitsRow and readLimitsRow answer exactly what readLimits answers over the same bytes', async () => {
+    const home = mkTmp('ccrc-replay-t6-parity-');
+    t6Fs.mkdirSync(t6Path.join(home, '.ccrc'), { recursive: true });
+    t6Fs.writeFileSync(t6Path.join(home, '.ccrc', 'accounts.json'), JSON.stringify(T6_ROSTER));
+    const dir = t6Path.join(home, '.cc-limits');
+    t6Fs.mkdirSync(dir, { recursive: true });
+    const cases = t6RolloverCases(NOW_S);
+    for (const c of cases) t6Fs.writeFileSync(t6Path.join(dir, c.file), c.content);
+    const theirs = await t6ReadLimits(t6LocalIO, t6LoadConfig({ CCRC_HOME: home }), NOW_S);
+    expect(cases.length, 'CONTROL: the shared fixture is not empty').toBeGreaterThan(10);
+    for (const c of cases) {
+      const id = c.file.slice(0, -'.json'.length);
+      const want = PICK(theirs[id]!);
+      expect(PICK(t6Driver.parseLimitsRow(c.content, NOW_S)), `${c.file}: ${c.why}`).toEqual(want);
+      expect(want, `${c.file}: the fixture's own expectation`).toMatchObject(c.expect);
+      const read = t6Driver.readLimitsRow(home, id, NOW_S);
+      expect(read.state, c.file).toBe('row');
+      if (read.state === 'row') expect(PICK(read.row!), c.file).toEqual(want);
+    }
+  });
+
+  // D-5805: the window constants (18000, 604800) are held equal to readLimits' by this case, not by an import. rolloverCases has
+  // no non-fact row aged in [3601, 20000) s for five or [20000, 700000) s for seven, so without these rows changing either
+  // constant over that range reds nothing. Rows carry NO resetAt fields (no fact), aged window-1, window and window+1 seconds.
+  it('the window boundaries agree with readLimits: a row with no resetAt aged window-1, window and window+1 seconds (D-5805)', async () => {
+    const FIVE_W = 18000;
+    const SEVEN_W = 604800;
+    const home = mkTmp('ccrc-replay-t6-window-');
+    t6Fs.mkdirSync(t6Path.join(home, '.ccrc'), { recursive: true });
+    t6Fs.writeFileSync(t6Path.join(home, '.ccrc', 'accounts.json'), JSON.stringify(T6_ROSTER));
+    const dir = t6Path.join(home, '.cc-limits');
+    t6Fs.mkdirSync(dir, { recursive: true });
+    // The five rows keep seven well inside its window; the seven rows carry a five value too (its age passes the five window).
+    const rows: { id: string; ageS: number }[] = [];
+    for (const d of [-1, 0, 1]) { rows.push({ id: `win-five-${d + 1}`, ageS: FIVE_W + d }); rows.push({ id: `win-seven-${d + 1}`, ageS: SEVEN_W + d }); }
+    for (const r of rows) t6Fs.writeFileSync(t6Path.join(dir, `${r.id}.json`), JSON.stringify({ five: 50, seven: 60, ts: NOW_S - r.ageS }));
+    const theirs = await t6ReadLimits(t6LocalIO, t6LoadConfig({ CCRC_HOME: home }), NOW_S);
+    const inferredOf = (id: string) => {
+      const read = t6Driver.readLimitsRow(home, id, NOW_S);
+      expect(read.state, id).toBe('row');
+      const row = (read as { row: ReturnType<typeof t6Driver.parseLimitsRow> }).row;
+      expect(PICK(row), `${id}: the parity with readLimits`).toEqual(PICK(theirs[id]!));
+      // No resetAt, so no fact: every rolled-over flag here is the age inference's, in readLimits and in the driver.
+      expect(row.fiveInferred, `${id}: five provenance is readLimits' flag`).toBe(theirs[id]!.fiveRolledOver);
+      expect(row.sevenInferred, `${id}: seven provenance is readLimits' flag`).toBe(theirs[id]!.sevenRolledOver);
+      return row;
+    };
+    expect(inferredOf('win-five-0').fiveInferred, 'five at 17999 s is inside its window').toBe(false);
+    expect(inferredOf('win-five-2').fiveInferred, 'five at 18001 s is past its window').toBe(true);
+    inferredOf('win-five-1');   // exactly the window: whatever it answers equals readLimits' (asserted above)
+    expect(inferredOf('win-seven-0').sevenInferred, 'seven at 604799 s is inside its window').toBe(false);
+    expect(inferredOf('win-seven-2').sevenInferred, 'seven at 604801 s is past its window').toBe(true);
+    inferredOf('win-seven-1');
+  });
+
+  it('only the age path sets *Inferred: a lapsed resetAt is a measured reset, an age-inferred 0 is not', () => {
+    const inferred: Record<string, { fiveInferred: boolean; sevenInferred: boolean }> = {
+      'no-reset-fields-old.json': { fiveInferred: true, sevenInferred: false },
+    };
+    for (const c of t6RolloverCases(NOW_S)) {
+      const r = t6Driver.parseLimitsRow(c.content, NOW_S);
+      expect({ fiveInferred: r.fiveInferred, sevenInferred: r.sevenInferred }, c.file)
+        .toEqual(inferred[c.file] ?? { fiveInferred: false, sevenInferred: false });
+    }
+    const both = t6Driver.parseLimitsRow(JSON.stringify({ five: 5, seven: 50, ts: NOW_S - 700_000 }), NOW_S);
+    expect(both).toMatchObject({ five: 0, seven: 0, fiveRolledOver: true, sevenRolledOver: true, fiveInferred: true, sevenInferred: true });
+  });
+
+  it('parseLimitsRow throws on text that is not JSON, and on JSON that is not one object', () => {
+    expect(() => t6Driver.parseLimitsRow('not json', NOW_S)).toThrow(SyntaxError);
+    for (const text of ['null', '[1, 2]', '42', '"row"']) {
+      expect(() => t6Driver.parseLimitsRow(text, NOW_S), text).toThrow('a limits row is one JSON object');
+    }
+  });
+
+  // D-5807: the account-id guard is the only thing between an id and a path. Decoy rows are planted where each bad id
+  // would resolve if the guard were gone ('../up-a' reads <home>/up-a.json, 'a/b' reads <home>/.cc-limits/a/b.json), so
+  // without the guard readLimitsRow answers a row instead of throwing.
+  it('readLimitsRow and batchGate refuse an id that is not one path segment, and read the plain id (D-5807)', () => {
+    const home = mkTmp('ccrc-replay-t6-id-');
+    const dir = t6Path.join(home, '.cc-limits');
+    t6Fs.mkdirSync(t6Path.join(dir, 'a'), { recursive: true });
+    const row = JSON.stringify({ five: 1, seven: 1, ts: NOW_S - 60, fiveResetAt: NOW_S + 3600, sevenResetAt: NOW_S + 86_400 });
+    for (const f of [t6Path.join(home, 'up-a.json'), t6Path.join(dir, 'a', 'b.json'), t6Path.join(dir, '.hidden.json'), t6Path.join(dir, '.json'), t6Path.join(dir, 'up-a.json')]) {
+      t6Fs.writeFileSync(f, row);
+    }
+    expect(t6Driver.readLimitsRow(home, 'up-a', NOW_S).state, 'CONTROL: a plain id is read').toBe('row');
+    const out = t6Path.join(home, 'out');
+    t6Fs.mkdirSync(out, { mode: 0o700 });
+    for (const bad of ['../up-a', '.hidden', 'a/b', '', 42, null, undefined]) {
+      expect(() => t6Driver.readLimitsRow(home, bad as string, NOW_S), JSON.stringify(bad)).toThrow('not an account id');
+      const gate = t6Driver.batchGate({ out, home, accountId: bad as string, budget: 1000, limits: { threshold_pct: 70, max_age_ms: 3_600_000 }, now: () => NOW_S * 1000 });
+      expect(() => gate(), `batchGate ${JSON.stringify(bad)}`).toThrow('not an account id');
+    }
+    const okGate = t6Driver.batchGate({ out, home, accountId: 'up-a', budget: 1000, limits: { threshold_pct: 70, max_age_ms: 3_600_000 }, now: () => NOW_S * 1000 });
+    expect(() => okGate(), 'CONTROL: the plain id passes the gate').not.toThrow();
+  });
+});
+
+describe('W2-4 Task 6: the gate stops on every limits and budget condition (W2-D55)', () => {
+  const NOW_S = 1_800_000_000;
+  const NOW_MS = NOW_S * 1000;
+  type Stop = { word: string; detail: string } | null;
+  function t6Box(prefix: string): { home: string; out: string; row: string } {
+    const base = mkTmp(prefix);
+    const home = t6Path.join(base, 'home');
+    t6Fs.mkdirSync(t6Path.join(home, '.cc-limits'), { recursive: true });
+    const out = t6Path.join(base, 'out');
+    t6Fs.mkdirSync(out, { mode: 0o700 });
+    return { home, out, row: t6Path.join(home, '.cc-limits', 'up-a.json') };
+  }
+  const fresh = (five: number | null, seven: number | null, o: Record<string, number> = {}) => JSON.stringify(
+    { five, seven, ts: NOW_S - 60, fiveResetAt: NOW_S + 3600, sevenResetAt: NOW_S + 86_400, ...o });
+  function stopOf(b: { home: string; out: string }, o: { budget?: number; threshold?: number; maxAge?: number } = {}): Stop {
+    const gate = t6Driver.batchGate({
+      out: b.out, home: b.home, accountId: 'up-a', budget: o.budget ?? 1_000_000,
+      limits: { threshold_pct: o.threshold ?? t6Driver.LIMITS_DEFAULTS.threshold_pct, max_age_ms: o.maxAge ?? t6Driver.LIMITS_DEFAULTS.max_age_ms },
+      now: () => NOW_MS,
+    });
+    try { gate(); return null; } catch (e) {
+      expect(e).toBeInstanceOf(t6Driver.DriverRefusal);
+      return { word: (e as InstanceType<typeof t6Driver.DriverRefusal>).word, detail: (e as InstanceType<typeof t6Driver.DriverRefusal>).detail };
+    }
+  }
+
+  it('LIMITS_DEFAULTS is frozen and exactly the open record\'s defaults, its batch fields Task 5\'s constants', () => {
+    expect(Object.isFrozen(t6Driver.LIMITS_DEFAULTS)).toBe(true);
+    expect(t6Driver.LIMITS_DEFAULTS).toEqual({ threshold_pct: 70, max_age_ms: 3_600_000, batch_max: 10, concurrency: 2 });
+    expect(t6Driver.LIMITS_DEFAULTS.batch_max).toBe(t6Driver.BATCH_MAX);
+    expect(t6Driver.LIMITS_DEFAULTS.concurrency).toBe(t6Driver.CONCURRENCY_MAX);
+  });
+
+  it('CONTROL: a fresh row under the threshold with an empty ledger admits the batch', () => {
+    const b = t6Box('ccrc-replay-t6-pass-');
+    t6Fs.writeFileSync(b.row, fresh(42, 61));
+    expect(stopOf(b)).toBeNull();
+  });
+
+  it('absent: limits-stale absent', () => {
+    expect(stopOf(t6Box('ccrc-replay-t6-absent-'))).toEqual({ word: 'limits-stale', detail: 'absent' });
+  });
+
+  it('a directory, a symlink to a fresh row and a FIFO: limits-stale not-regular, and the FIFO is never opened', () => {
+    const b = t6Box('ccrc-replay-t6-notreg-');
+    t6Fs.mkdirSync(b.row);
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'not-regular' });
+    t6Fs.rmdirSync(b.row);
+    const real = t6Path.join(b.home, 'elsewhere.json');
+    t6Fs.writeFileSync(real, fresh(1, 1));
+    t6Fs.symlinkSync(real, b.row);
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'not-regular' });
+    t6Fs.unlinkSync(b.row);
+    t6ExecFile('mkfifo', [b.row]);
+    const t0 = Date.now();
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'not-regular' });
+    expect(Date.now() - t0, 'a FIFO opened for read would block').toBeLessThan(5000);
+  });
+
+  it('unreadable (mode 000): limits-stale unreadable EACCES', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const b = t6Box('ccrc-replay-t6-unread-');
+    t6Fs.writeFileSync(b.row, fresh(1, 1));
+    t6Fs.chmodSync(b.row, 0o000);
+    try { expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'unreadable EACCES' }); }
+    finally { t6Fs.chmodSync(b.row, 0o600); }
+  });
+
+  it.each([
+    ['not json', 'not json'],
+    ['a JSON array', '[1, 2]'],
+    // D-5806: a VALID object whose file is past the cap, so only LIMITS_ROW_CAP can answer malformed (padding inside the
+    // object would leave a truncated prefix that fails JSON.parse by itself, and the row would stay green without the cap).
+    ['past the 64 KiB read bound', fresh(1, 1) + ' '.repeat(65_536)],
+  ])('malformed (%s): limits-stale malformed', (_label, text) => {
+    const b = t6Box('ccrc-replay-t6-malformed-');
+    t6Fs.writeFileSync(b.row, text);
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'malformed' });
+  });
+
+  it('five null, seven null, a percent outside 0 to 100, a row with no ts and a ts ahead of the clock: each limits-stale with its own detail', () => {
+    const b = t6Box('ccrc-replay-t6-null-');
+    t6Fs.writeFileSync(b.row, fresh(null, 10));
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'five-null' });
+    t6Fs.writeFileSync(b.row, fresh(10, null));
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'seven-null' });
+    t6Fs.writeFileSync(b.row, fresh(101, 10));
+    expect(stopOf(b), 'over 100 is not a percent').toEqual({ word: 'limits-stale', detail: 'percent-out-of-range' });
+    t6Fs.writeFileSync(b.row, fresh(10, -1));
+    expect(stopOf(b), 'a negative value never passes the threshold').toEqual({ word: 'limits-stale', detail: 'percent-out-of-range' });
+    t6Fs.writeFileSync(b.row, JSON.stringify({ five: 10, seven: 10 }));
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'ts-null' });
+    t6Fs.writeFileSync(b.row, fresh(10, 10, { ts: NOW_S + 60 }));
+    expect(stopOf(b), 'a minute ahead is clock skew: admitted').toBeNull();
+    t6Fs.writeFileSync(b.row, fresh(10, 10, { ts: NOW_S + 3600 }));
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'ts-future 3600000' });
+  });
+
+  it('an age-inferred 0 stops as stale even when max_age_ms is raised past its age, so the inference is what stops', () => {
+    const b = t6Box('ccrc-replay-t6-inferred-');
+    t6Fs.writeFileSync(b.row, JSON.stringify({ five: 99, seven: 20, ts: NOW_S - 20_000 }));
+    expect(stopOf(b, { maxAge: 30_000_000 })).toEqual({ word: 'limits-stale', detail: 'inferred-by-age' });
+  });
+
+  it('a resetAt-fact 0 beside a fresh seven is a measured reset: admitted', () => {
+    const b = t6Box('ccrc-replay-t6-fact-');
+    t6Fs.writeFileSync(b.row, JSON.stringify({ five: 87, seven: 40, ts: NOW_S - 600, fiveResetAt: NOW_S - 60, sevenResetAt: NOW_S + 200_000 }));
+    expect(stopOf(b)).toBeNull();
+  });
+
+  it('older than max_age_ms: limits-stale old <age_ms>; exactly max_age_ms old still passes', () => {
+    const b = t6Box('ccrc-replay-t6-old-');
+    t6Fs.writeFileSync(b.row, fresh(10, 10, { ts: NOW_S - 3600 }));
+    expect(stopOf(b)).toBeNull();
+    t6Fs.writeFileSync(b.row, fresh(10, 10, { ts: NOW_S - 3601 }));
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'old 3601000' });
+  });
+
+  it('the threshold is inclusive: max(five, seven) 69 passes, 70 stops on either window', () => {
+    const b = t6Box('ccrc-replay-t6-threshold-');
+    t6Fs.writeFileSync(b.row, fresh(69, 12));
+    expect(stopOf(b)).toBeNull();
+    t6Fs.writeFileSync(b.row, fresh(70, 12));
+    expect(stopOf(b)).toEqual({ word: 'limits-threshold', detail: 'five 70 seven 12 at or over 70' });
+    t6Fs.writeFileSync(b.row, fresh(12, 70));
+    expect(stopOf(b)).toEqual({ word: 'limits-threshold', detail: 'five 12 seven 70 at or over 70' });
+  });
+
+  it('the budget is inclusive: a ledger at budget-1 passes, at budget stops with budget-exhausted', () => {
+    const b = t6Box('ccrc-replay-t6-budget-');
+    t6Fs.writeFileSync(b.row, fresh(10, 10));
+    t6Driver.recordSpend(b.out, 'run-a', 999);
+    expect(stopOf(b, { budget: 1000 })).toBeNull();
+    t6Driver.recordSpend(b.out, 'run-b', 1);
+    expect(stopOf(b, { budget: 1000 })).toEqual({ word: 'budget-exhausted', detail: 'spent 1000 of 1000' });
+  });
+
+  it('batchGate refuses a malformed budget or limits at construction, before any read', () => {
+    const b = t6Box('ccrc-replay-t6-shape-');
+    const mk = (budget: number, limits: { threshold_pct: number; max_age_ms: number }) => () =>
+      t6Driver.batchGate({ out: b.out, home: b.home, accountId: 'up-a', budget, limits });
+    expect(mk(0, { threshold_pct: 70, max_age_ms: 1 })).toThrow('a budget is a positive integer');
+    expect(mk(1.5, { threshold_pct: 70, max_age_ms: 1 })).toThrow('a budget is a positive integer');
+    expect(mk(10, { threshold_pct: 0, max_age_ms: 1 })).toThrow('limits.threshold_pct');
+    expect(mk(10, { threshold_pct: 101, max_age_ms: 1 })).toThrow('limits.threshold_pct');
+    expect(mk(10, { threshold_pct: 70, max_age_ms: 0 })).toThrow('limits.max_age_ms');
+    expect(mk(10, { threshold_pct: 70, max_age_ms: 1 })).not.toThrow();
+  });
+});
+
+describe('W2-4 Task 6: a stop is resumable (W2-D55: a stopped batch spawns nothing more, and a re-run resumes)', () => {
+  const NOW_S = 1_800_000_000;
+  const LIMITS = { threshold_pct: 70, max_age_ms: 3_600_000 };
+  /** One upstream account on the stub (Task 5's plantStub), with a canned stream whose result usage is 150 tokens. */
+  const T6_UP_A = { id: 'up-a', label: 'up-a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' };
+  const T6_STREAM = [
+    { type: 'system', subtype: 'init', session_id: 'sess-t6', model: 'model-w', tools: [], mcp_servers: [], plugins: [], skills: [], slash_commands: [] },
+    { type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'ok',
+      usage: { input_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 50 } },
+  ].map((e) => JSON.stringify(e)).join('\n') + '\n';
+  const rowAt = (tsS: number): string => JSON.stringify({ five: 10, seven: 20, ts: tsS, fiveResetAt: tsS + 7200, sevenResetAt: tsS + 86_400 });
+  function t6Rig(prefix: string) {
+    const base = mkTmp(prefix);
+    const home = t6Path.join(base, 'home');
+    t6Fs.mkdirSync(t6Path.join(home, '.claude'), { recursive: true });
+    t6Fs.mkdirSync(t6Path.join(home, '.cc-limits'), { recursive: true });
+    writeRoster(home, [T6_UP_A]);
+    plantStub(home, 'up-a');
+    t6Fs.writeFileSync(t6Path.join(home, 'stub-stream.jsonl'), T6_STREAM);
+    const { json, roster } = t6Driver.readRoster(home);
+    const launch = t6Driver.admitAccount(json, roster, 'up-a', home);
+    const out = t6Driver.prepareOut(t6Path.join(base, 'out'));
+    const jobs = ['t6-j1', 't6-j2', 't6-j3'].map((name) =>
+      ({ launch, mode: 'writer', model: 'model-w', settingsMode: 'restricted', stdin: 'q', out, name, lang: undefined }));
+    return { home, out, jobs, row: t6Path.join(home, '.cc-limits', 'up-a.json') };
+  }
+
+  it('a limits stop mid-batch spawns nothing more; refreshed, the re-run spawns only the unfinished jobs and counts spend once', async () => {
+    const r = t6Rig('ccrc-replay-t6-resume-');
+    t6Fs.writeFileSync(r.row, rowAt(NOW_S));
+    const late = (NOW_S + 3601) * 1000;
+    let calls = 0;
+    // The batch's gate and the first spawn's gate see a fresh row; the clock then passes max_age_ms, so the second stops.
+    const gate = t6Driver.batchGate({ out: r.out, home: r.home, accountId: 'up-a', budget: 1_000_000, limits: LIMITS,
+      now: () => (++calls <= 2 ? NOW_S * 1000 : late) });
+    gate();
+    await expect(t6Driver.runBatch(r.jobs, { concurrency: 1, gate })).rejects.toMatchObject({ word: 'limits-stale', detail: 'old 3601000' });
+    expect(stubLog(r.home)?.length, 'the first job spawned and nothing after the stop').toBe(1);
+    expect(t6Fs.existsSync(t6Path.join(r.out, 't6-j1.run.json'))).toBe(true);
+    expect(t6Fs.existsSync(t6Path.join(r.out, 't6-j2.run.json'))).toBe(false);
+    // The operator refreshes the row (one interactive statusline render on the account); the same batch runs again.
+    t6Fs.writeFileSync(r.row, rowAt(NOW_S + 3601));
+    const again = t6Driver.batchGate({ out: r.out, home: r.home, accountId: 'up-a', budget: 1_000_000, limits: LIMITS, now: () => late });
+    again();
+    const outcomes = await t6Driver.runBatch(r.jobs, { concurrency: 1, gate: again });
+    expect(outcomes.map((o) => [o.name, o.skipped]).sort()).toEqual([['t6-j1', true], ['t6-j2', false], ['t6-j3', false]]);
+    expect(stubLog(r.home)?.length, 'the finished job is never re-spawned').toBe(3);
+    expect(t6Driver.spentSoFar(r.out), 'three spawns of 150 tokens, each counted once: the finished job was never re-spawned').toBe(450);
+  }, 60_000);
+
+  it('a budget the first spawn exhausts stops the batch before the second spawn', async () => {
+    const r = t6Rig('ccrc-replay-t6-spend-');
+    t6Fs.writeFileSync(r.row, rowAt(NOW_S));
+    const gate = t6Driver.batchGate({ out: r.out, home: r.home, accountId: 'up-a', budget: 150, limits: LIMITS, now: () => NOW_S * 1000 });
+    gate();
+    await expect(t6Driver.runBatch(r.jobs, { concurrency: 1, gate })).rejects.toMatchObject({ word: 'budget-exhausted', detail: 'spent 150 of 150' });
+    expect(stubLog(r.home)?.length, 'one spawn, then the stop').toBe(1);
+  }, 60_000);
 });
