@@ -135,8 +135,12 @@ interface RowFit {
   readonly rows: number;
   readonly pools: number;
   readonly suggested: number;
-  /** Per row: how far its right edge, and its keyboard ring's, run past the sheet body's right edge (<= 0 fits). */
-  readonly over: readonly { readonly label: string; readonly row: number; readonly ring: number }[];
+  /** Per row: how far its right edge, and its keyboard ring's, run past the sheet body's right edge (<= 0 fits);
+   *  how far the furthest item of its identity group (the name, the pill, the pool tag) runs past the group, into
+   *  the gauges (<= 0 fits); and whether the name chip draws all of its text. */
+  readonly over: readonly {
+    readonly label: string; readonly row: number; readonly ring: number; readonly ident: number; readonly nameWhole: boolean;
+  }[];
 }
 
 /** Measure every row of every `.acct-list` in the topmost sheet body. The ring is measured, not assumed: each row is
@@ -152,7 +156,16 @@ function measureRows(page: Page): Promise<RowFit> {
       const cs = getComputedStyle(row);
       const reach = row.matches(':focus-visible') ? parseFloat(cs.outlineWidth) + parseFloat(cs.outlineOffset) : NaN;
       const right = row.getBoundingClientRect().right;
-      return { label: row.querySelector('.chip')?.textContent ?? '', row: right - edge, ring: right + reach - edge };
+      const group = row.querySelector<HTMLElement>('.acct-ident');
+      const chip = row.querySelector<HTMLElement>('.chip');
+      const items = group === null ? [] : [...group.children].map((k) => k.getBoundingClientRect().right);
+      return {
+        label: chip?.textContent ?? '',
+        row: right - edge,
+        ring: right + reach - edge,
+        ident: group === null ? NaN : Math.max(...items) - group.getBoundingClientRect().right,
+        nameWhole: chip !== null && chip.scrollWidth <= chip.clientWidth + 0.5,
+      };
     });
     (document.activeElement as HTMLElement | null)?.blur();
     return {
@@ -169,6 +182,8 @@ function expectFits(fit: RowFit, where: string): void {
   for (const r of fit.over) {
     expect.soft(r.row, `${where}: ${r.label}'s row runs past the sheet body`).toBeLessThanOrEqual(0.5);
     expect.soft(r.ring, `${where}: ${r.label}'s keyboard ring is cut by the sheet body (or was not drawn)`).toBeLessThanOrEqual(0.5);
+    expect.soft(r.ident, `${where}: ${r.label}'s name or tags run out of their group into the gauges`).toBeLessThanOrEqual(0.5);
+    expect.soft(r.nameWhole, `${where}: ${r.label}'s name is cut`).toBe(true);
   }
 }
 
