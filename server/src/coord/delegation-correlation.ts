@@ -96,6 +96,10 @@ export interface DelegationListingWindow {
   after: readonly string[] | null;
 }
 
+/** One tree's question. Its four arrays (`activities`, `acceptedEvidence`, `pointMetas`, `listingWindows`) are the PASS's, shared by every tree,
+ *  and the module memoises what it derives from them by identity (D-5604, D-5642): a caller never changes one, or a row of one, after handing
+ *  it over. The lane freezes the windows, their listings, the evidence and the metas it builds each pass (D-5643), and the checkpoint's
+ *  activities are replaced, never written. */
 export interface DelegationCorrelationInput {
   record: DelegationCensusRecord;
   runChildAgreement: {
@@ -1110,7 +1114,8 @@ function rung3(input: DelegationCorrelationInput, canonical: string): Answer | n
  * pass (`delegationListingWindowsOf`), so rebuilding two Sets per window per tree cost seconds a pass on a busy repository. `added` is the
  * distinct names the after-listing adds to the before-listing (compared as sets, as `new Set` does), `removes` whether it drops any. A window
  * with no after-listing measured no delta: null. Keyed weakly by the window, so nothing outlives the windows it describes (the L1 header holds:
- * no state that outlives its inputs); the window's parsed span sits beside it (`windowSpanOf`). It relies on a window never being mutated after it is built, which the lane enforces by freezing it (D-5643).
+ * no state that outlives its inputs); the window's parsed span sits beside it (`windowSpanOf`). It relies on a window never being mutated
+ * after it is built, which the lane enforces by freezing it (D-5643).
  */
 interface ListingDelta { readonly added: ReadonlySet<string>; readonly removes: boolean }
 const listingDeltas = new WeakMap<DelegationListingWindow, ListingDelta | null>();
@@ -1350,7 +1355,8 @@ function rung4(input: DelegationCorrelationInput, x1: boolean): Answer | null {
     // R85 (B-F1; spec §5.3: "a held Pre with no Post is a lost Post"): a HELD window that may be on this repository and may have been the
     // creator, but cannot be a candidate because part of its evidence is missing, is lost evidence for X1 too: one that is OPEN-ENDED (its
     // PostToolUse never came), or one whose session's project was lost at a restart (a null repository) that ADDS the record (D-5642: two
-    // lookups, one per arm; a window in both is asked twice, which answers the same). Exactly that narrow (it is liveness): a closed window that does not add the record is evidence of nothing here, and vetoes nothing.
+    // lookups, one per arm; a window in both is asked twice, which answers the same). Exactly that narrow (it is liveness): a closed window
+    // that does not add the record is evidence of nothing here, and vetoes nothing.
     const nullCreators = nullAddingStartsOf(partition, record.adminRecord);
     const creators = nullCreators === null ? [here.openStarts] : [here.openStarts, nullCreators];
     const count = here.openCount + (partition.nullAdding.get(record.adminRecord)?.length ?? 0);

@@ -407,8 +407,8 @@ const mayBeOnHere = (w: DelegationListingWindow, project: string): boolean =>
 
 /**
  * The stream: first two hand-built passes (a lost creator that is only a held, closed window with no repository, and its twin), then
- * RANDOM_PASSES generated ones. A pass holds three to six census records (different admin records, some on another project), one windows
- * array shared by all of them, and the evidence, index and horizon the lane would hand them.
+ * RANDOM_PASSES generated ones. A generated pass holds three to six census records (different admin records, some on another project; a
+ * hand-built pass holds one), one windows array shared by all of them, and the evidence, index and horizon the lane would hand them.
  */
 function generate(): Pass[] {
   const w = buildWorld();
