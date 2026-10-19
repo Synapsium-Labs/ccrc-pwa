@@ -2058,6 +2058,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         answered 200 in 1 to 6 ms; `ccrc.service` is still up since 21:00:42 with 0 restarts. v0.0.317 (#675)
         followed, unapplied. STATUS: fleet and server v0.0.294, newest v0.0.317, intent dev/auto=off, backups fleet
         173M/server 1878M, disk free fleet 209G/work volume 86G/server 31G.
+      - **04:30: the operator ruled "Fix first, then soak"** (relayed in mail 6604). The delegation broker dispatched
+        run 627 for it: rung 4 computes each window's delta once per pass and finds candidates by lookup, with
+        verdicts unchanged. Its rows are a read-count cost pin, red at `main`, and a seeded equivalence digest. Its
+        bench runs a steady shape and the restart shape (every window's repository null); both must stay well under
+        1 s. Its coordinator tells me when it merges and which prerelease carries it. My part: the restart
+        multiplier's test, measured by one method twice: a baseline now and a repeat after 06:05, once the slice
+        has turned over since the 21:00:42 restart. Then the fix release becomes the rehearsal's target and
+        stable's.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
