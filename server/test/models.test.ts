@@ -436,6 +436,8 @@ describe('parseWindows (codex-bridge spec §2.7)', () => {
     ['a key that is not a model id', { windows: { 'bad id': { tokens: 5000 } } }, 'windows.bad id'],
     ['a __proto__ key', JSON.parse('{"windows":{"__proto__":{"tokens":5000}}}'), 'windows.__proto__'],
     ['an entry that is a bare number', { windows: { [A]: 400000 } }, `windows.${A}`],
+    ['an entry that is null', { windows: { [A]: null } }, `windows.${A}`],
+    ['an entry that is an array', { windows: { [A]: [{ tokens: 400000 }] } }, `windows.${A}`],
     ['tokens as a string', { windows: { [A]: { tokens: '400000' } } }, `windows.${A}.tokens`],
     ['tokens missing', { windows: { [A]: { setAt: '2026-10-15T00:00:00.000Z' } } }, `windows.${A}.tokens`],
     ['a fractional tokens', { windows: { [A]: { tokens: 400000.5 } } }, `windows.${A}.tokens`],

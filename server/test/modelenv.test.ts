@@ -382,6 +382,13 @@ describe('contextWindowFor — the measured-window rule (codex-bridge spec §2.7
     expect(contextWindowFor(NEUTRAL, cat, w)).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
   });
 
+  // The declared third parameter is `ModelWindows | null | undefined`
+  // (`shared/modelenv.d.mts`): undefined is no reading, exactly as null is.
+  it('windows undefined is no reading at all: the default rule, every class model unmeasured', () => {
+    expect(contextWindowFor(NEUTRAL, NEUTRAL_CAT, undefined))
+      .toEqual({ tokens: 200000, rule: 'default', unmeasured: [GAMMA, BETA, ALPHA] });
+  });
+
   it('no windows and no catalogue: no key, rule none, every class model unmeasured in CLASSES order', () => {
     expect(contextWindowFor(NEUTRAL, null, null)).toEqual({ tokens: null, rule: 'none', unmeasured: [GAMMA, BETA, ALPHA] });
     expect(Object.keys(modelEnvBlock(NEUTRAL, null, null))).toHaveLength(7);

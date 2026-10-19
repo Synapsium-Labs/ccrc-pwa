@@ -1805,6 +1805,30 @@ describe('the measured windows file — read, applied, reported, reaped (codex-b
     expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default', unmeasured: [next] });
   });
 
+  // The mutation tail and init's create each pass the windows reading to
+  // `materialise` (Task 3: the same reading to every caller). A tail or a
+  // create that passed null would write the default rule's 200000 over a
+  // lane every one of whose class models is measured.
+  it('a mutation that leaves the classes alone still writes the measured window (the tail passes the reading)', () => {
+    plantWindows(ID, all(400000));
+    expect(eighthKey()).toBe('200000');
+    const r = op('set-effort', '--file', rosterPath(), '--id', ID, '--class', 'sonnet', '--level', 'xhigh');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(eighthKey()).toBe('400000');
+    expect(r.body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+  });
+
+  it('init applies a windows file already on disk: the lane it creates is materialised with the measured window', () => {
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+    writeCatalogue(CODEX_ROW.id);
+    plantWindows(CODEX_ROW.id, all(400000));
+    const r = op('init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['created']).toBe(true);
+    expect(settingsOf(CODEX_ROW.configDirSuffix).env['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('400000');
+    expect(r.body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+  });
+
   it('rm reaps the windows file with the lane\'s other model files, last', () => {
     plantWindows(ID, all(400000));
     const r = op('rm', '--file', rosterPath(), '--id', ID);
@@ -1993,6 +2017,16 @@ describe('set-window and clear-window (codex-bridge spec §2.7)', () => {
     expect(r.body['error']).toBe('bad-model-id');
   });
 
+  // clear-window has no typo guard, so this test is the only thing between
+  // it and answering `ok, removed: false` for a string that is no model id.
+  it('clear-window refuses an id that is not a model id too, and writes nothing', () => {
+    const r = clearWindow('../escape');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('bad-model-id');
+    expect(r.body['field']).toBe('model');
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
   it('never rewrites the class registry — bytes and mtime unchanged, the rollback property', () => {
     const before = fs.readFileSync(regPath(ID), 'utf8');
     const mtime = fs.statSync(regPath(ID)).mtimeMs;
@@ -2019,6 +2053,23 @@ describe('set-window and clear-window (codex-bridge spec §2.7)', () => {
     expect(r.code).toBe(0);
     expect(r.body).toMatchObject({ ok: true, op: 'clear-window', model: OPUS, removed: false });
     expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
+  // The write gate: clear-window writes only when it removed an entry. The
+  // file is planted COMPACT and dated in the past, so a rewrite of the very
+  // same object (the writer's two-space form, a fresh mtime) would show.
+  it('clear-window of an absent entry leaves a file holding another entry as it was: bytes and mtime', () => {
+    const other = CLASS_MODELS.find((m) => m !== OPUS)!;
+    plantWindows(ID, JSON.stringify(windowsFor({ [other]: 400000 })));
+    const past = new Date('2026-01-01T00:00:00Z');
+    fs.utimesSync(winPath(ID), past, past);
+    const before = fs.readFileSync(winPath(ID), 'utf8');
+    const mtime = fs.statSync(winPath(ID)).mtimeMs;
+    const r = clearWindow(OPUS);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'clear-window', model: OPUS, removed: false });
+    expect(fs.readFileSync(winPath(ID), 'utf8')).toBe(before);
+    expect(fs.statSync(winPath(ID)).mtimeMs).toBe(mtime);
   });
 
   it('clear-window drops one entry and re-materialises: one class model unmeasured is the default rule again', () => {
