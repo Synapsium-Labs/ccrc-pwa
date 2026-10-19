@@ -283,6 +283,16 @@ function withField(path: string, value: unknown): Record<string, unknown> {
   return doc;
 }
 
+/** A copy of the sample with the key at a dotted path removed. */
+function withoutField(path: string): Record<string, unknown> {
+  const doc = sample();
+  const keys = path.split('.');
+  let at: Record<string, unknown> = doc;
+  for (const k of keys.slice(0, -1)) at = at[k] as Record<string, unknown>;
+  delete at[keys[keys.length - 1]!];
+  return doc;
+}
+
 const STDERR = 'curl: (22) The requested URL returned error: 404';
 
 describe('parseClaudeNodeFile: every field validator refuses (the leak guards, spec §9 trap 9)', () => {
@@ -377,6 +387,48 @@ describe('parseClaudeNodeFile: every field validator refuses (the leak guards, s
       expect(parse(withField(path, []))).toBeNull();
     },
   );
+
+  // A nullable key that is absent is refused, never read as null: only an
+  // explicit null means "unknown" (verification follow-up to D-5695).
+  it.each([
+    'memory',
+    'pointer',
+    'pin',
+    'candidate',
+    'intentAt',
+    'target.anthropic',
+    'target.codex',
+    'prevTarget.anthropic',
+    'prevTarget.codex',
+    'builds.0.sha256ok',
+    'builds.0.sigok',
+    'builds.0.smoke',
+    'switches.hibernateShadowAt',
+    'switches.hibernateLiveAt',
+    'memory.swapUsedBytes',
+    'memory.swapTotalBytes',
+  ])('a missing %s is refused, not read as null', (path) => {
+    expect(parse(withField(path, null))).not.toBeNull();
+    expect(parse(withoutField(path))).toBeNull();
+  });
+
+  it('memory.ceiling must be a string within 1 to 128 characters', () => {
+    expect(parse(withField('memory.ceiling', 123))).toBeNull();
+    expect(parse(withField('memory.ceiling', 'u'.repeat(128)))).not.toBeNull();
+    expect(parse(withField('memory.ceiling', 'u'.repeat(129)))).toBeNull();
+    expect(parse(withField('memory.ceiling', ''))).toBeNull();
+  });
+
+  it('a count past the safe-integer range is refused', () => {
+    expect(parse(withField('placeholders', 2 ** 53 - 1))).not.toBeNull();
+    expect(parse(withField('placeholders', 2 ** 53))).toBeNull();
+    expect(parse(withField('memory.anonBytes', 1e300))).toBeNull();
+  });
+
+  it.each(['builds', 'running', 'localHalts'])('%s refuses a non-array', (path) => {
+    expect(parse(withField(path, {}))).toBeNull();
+    expect(parse(withField(path, { 0: '2.1.300' }))).toBeNull();
+  });
 
   it('the sample itself passes, so each refusal above is the field alone', () => {
     expect(parse(sample())).not.toBeNull();
