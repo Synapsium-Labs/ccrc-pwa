@@ -73,11 +73,11 @@ describe('runForSession — the current wave during a boundary overlap (D-2616)'
     const outgoing = r({ id: 41, wave: 1, sessionId: 'shared-worker' });
     const incoming = r({ id: 44, wave: 2, sessionId: 'shared-worker', state: 'planned' });
 
-    expect(runForSession([outgoing, incoming], 'shared-worker')).toBe(incoming);
+    expect(runForSession([outgoing, incoming], { id: 'shared-worker' })).toBe(incoming);
   });
 
   it('returns null when no active row names the session', () => {
-    expect(runForSession([r({ sessionId: 'someone-else' })], 'shared-worker')).toBeNull();
+    expect(runForSession([r({ sessionId: 'someone-else' })], { id: 'shared-worker' })).toBeNull();
   });
 });
 
