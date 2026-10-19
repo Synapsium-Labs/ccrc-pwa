@@ -1,12 +1,14 @@
 import { spawn } from 'node:child_process';
 import { constants as osConstants } from 'node:os';
 import {
-  ACCOUNT_OP_KILL_GRACE_MS, ACCOUNT_OP_OUTPUT_MAX_BYTES, ACCOUNT_SUBS, ACCOUNT_SUB_TIMEOUT_MS, type AccountSub,
+  ACCOUNT_OP_KILL_GRACE_MS, ACCOUNT_OP_OUTPUT_MAX_BYTES, ACCOUNT_SUB_TIMEOUT_MS, type AccountSub,
 } from '../../../shared/api.js';
-import { updateLauncherPath } from '../../../shared/agent-protocol.js';
-import { ACCOUNT_ID_RE } from '../../../shared/roster.js';
+import {
+  ACCOUNT_OP, accountOpRequestTimeoutMs, readAccountOpAnswer, updateLauncherPath, type AccountOpReq,
+} from '../../../shared/agent-protocol.js';
+import { buildAccountArgv, isAccountStdin, type AccountArgvRefusal } from '../../../shared/account-argv.js';
 import type { CcrcConfig } from '../config.js';
-import type { FleetClient } from '../remote/client.js';
+import { AgentOpError, LinkNotSentError, type FleetClient } from '../remote/client.js';
 
 /**
  * THE `AccountOps` PORT (spec §13.2, G13; plan Task A7): how an account route runs `ccrc account <sub>` on the fleet
@@ -27,11 +29,16 @@ import type { FleetClient } from '../remote/client.js';
  * reaches the browser and the caller builds refusal text from codes.
  */
 
-/** The typed fields a sub takes. A8's argv builder turns them into flags with spec §13.2's bounds. */
+/** The typed fields a sub takes. `buildAccountArgv` (`shared/account-argv.ts`, A8) turns them into flags with spec
+ *  §13.2's bounds, for both arms. */
 export type AccountOpFields = Readonly<Record<string, string>>;
 
-/** What one run answered. Every arm keeps these apart; none folds into another. */
-export type AccountOpResult =
+/** What one run answered. Every arm keeps these apart; none folds into another. The remote arm adds the node's
+ *  `fleetIdentity` from the agent's answer (spec §13.2, "every answer carries `fleetIdentity`"); the local arm, whose
+ *  node is this box, sends none, and the verbs' own JSON carries theirs (§3.9). */
+export type AccountOpResult = AccountOpOutcomeKinds & { readonly fleetIdentity?: string | null };
+
+type AccountOpOutcomeKinds =
   /** The verb ran and exited with `code`. `stdout` is its whole output (the verbs answer one JSON document). */
   | { kind: 'exited'; code: number; stdout: string }
   /** The sub outran its bound: SIGTERM to its process group, then SIGKILL after the grace. The outcome is UNKNOWN:
@@ -41,19 +48,24 @@ export type AccountOpResult =
   | { kind: 'too-large' }
   /** The launcher could not be started (absent, not executable). Nothing ran. */
   | { kind: 'not-started' }
-  /** Refused before any spawn: an id off the roster grammar, a sub outside the union, or typed fields while no argv
-   *  builder exists yet (`fields-unbuilt`, D-5620). Nothing ran. */
-  | { kind: 'refused'; why: 'bad-id' | 'bad-sub' | 'fields-unbuilt' }
-  /** This arm cannot run the sub: the remote arm until the agent carries the `account` op (A8), or an older agent
-   *  answering `bad-request`. Nothing ran. */
-  | { kind: 'unsupported' };
+  /** Refused before any spawn by the builder (`AccountArgvRefusal`: a sub outside the union, an id off the roster
+   *  grammar, a field off its bound, stdin off its bytes rule), by this arm or by the agent. Nothing ran. */
+  | { kind: 'refused'; why: AccountArgvRefusal }
+  /** This arm cannot run the sub: an agent that does not name the `account` op in its ready frame (nothing is
+   *  sent), or an older agent answering `bad-request`. Nothing ran. */
+  | { kind: 'unsupported' }
+  /** Remote arm only: the frame left and no answer came back (the link's deadline, a disconnect, an agent error
+   *  after the send, or an answer off its grammar). The outcome is UNKNOWN, as `timeout`: the caller reconciles and
+   *  never retries on its own (D-5518). */
+  | { kind: 'lost' };
 
 /** The port. */
 export interface AccountOps {
   /** Which arm this is, for the composition root's own check and the tests. Never a decision input for a route. */
   readonly arm: 'local' | 'remote';
   /** Runs `ccrc account <sub>` for lane `id` (`null` for the subs that name none: `roster`, the management subs),
-   *  with `fields` as typed flags and `stdin` (a secret or a code) as the child's stdin. Never throws. */
+   *  with `fields` as typed flags and `stdin` (a secret or a code, 1 to 8 KiB, no C0 or DEL) as the child's stdin.
+   *  Never throws. */
   run(sub: AccountSub, id: string | null, fields: AccountOpFields, stdin?: Buffer): Promise<AccountOpResult>;
 }
 
@@ -65,8 +77,6 @@ export interface AccountSpawnEnv { HOME: string; PATH: string; LANG: string }
 export function accountSpawnEnv(home: string, from: NodeJS.ProcessEnv = process.env): AccountSpawnEnv {
   return { HOME: home, PATH: from.PATH ?? '/usr/bin:/bin', LANG: from.LANG ?? 'C' };
 }
-
-const SUBS: ReadonlySet<string> = new Set(ACCOUNT_SUBS);
 
 export interface LocalAccountOpsOpts {
   /** `cfg.home`: the launcher is `<home>/.local/bin/ccrc`, the unit's PATH lacking `~/.local/bin`. */
@@ -87,14 +97,12 @@ export function localAccountOps(opts: LocalAccountOpsOpts): AccountOps {
   const cap = opts.maxOutputBytes ?? ACCOUNT_OP_OUTPUT_MAX_BYTES;
 
   const run: AccountOps['run'] = async (sub, id, fields, stdin) => {
-    if (typeof sub !== 'string' || !SUBS.has(sub)) return { kind: 'refused', why: 'bad-sub' };
-    if (id !== null && (typeof id !== 'string' || !ACCOUNT_ID_RE.test(id) || id.startsWith('-'))) {
-      return { kind: 'refused', why: 'bad-id' };
-    }
-    // NO FREE ARGV. The bounded builder that turns typed fields into flags is the agent's op's (A8), and both arms
-    // will call that one builder; until it exists a sub with fields is refused rather than spelled twice (D-5620).
-    if (Object.keys(fields).length > 0) return { kind: 'refused', why: 'fields-unbuilt' };
-    const argv = id === null ? ['account', sub] : ['account', sub, `--id=${id}`];
+    // NO FREE ARGV. The ONE bounded builder both arms call (`shared/account-argv.ts`, A8, D-5622), and the one
+    // stdin bytes rule; a refusal spawns nothing.
+    if (stdin !== undefined && !isAccountStdin(stdin)) return { kind: 'refused', why: 'key-charset' };
+    const built = buildAccountArgv(sub, id, fields, stdin !== undefined);
+    if (!built.ok) return { kind: 'refused', why: built.why };
+    const argv = [...built.argv];
     // The same absolute shim the update op and the token sync spawn: the one spelling of the launcher's path.
     // Resolved per call, as `localUpdateSpawnFor` does, so a home it refuses (relative, or ending in `/`) answers
     // `not-started` here and never crashes the boot that builds this arm (D-5621).
@@ -154,18 +162,52 @@ export function localAccountOps(opts: LocalAccountOpsOpts): AccountOps {
 }
 
 export interface RemoteAccountOpsOpts {
-  /** The one agent connection (`index.ts`). A8 sends the typed `account` op through it. */
-  client: Pick<FleetClient, 'request'>;
+  /** The one agent connection (`index.ts`): its `request`, and its `state.agentOps` (the ready frame's `ops`). */
+  client: Pick<FleetClient, 'request' | 'state'>;
 }
 
 /**
- * The remote arm: the agent's typed `account` op (A8). Until the agent carries it, every sub answers `unsupported`
- * and nothing is sent, which is exactly what an older agent's `bad-request` maps to (spec §13.2), so a route over
- * this arm narrows in place rather than reaching the controller's own `ccrc` (D-5620).
+ * The remote arm: the agent's typed `account` op (spec §13.2; A8). The frame is built here from the SAME builder the
+ * agent runs (so a refusal never reaches the wire), and sent only to an agent whose ready frame names the op: an
+ * agent that does not is answered `unsupported` with nothing sent, so a secret never travels to a peer that cannot
+ * spawn it. An older agent that answers `bad-request` anyway maps to `unsupported` too (D-5620 (5)).
+ *
+ * The secret is `stdinB64` on the one frame: the frame is built in `sendAccountFrame` and kept by neither this arm
+ * across its await nor the client while the answer is pending (`remote/client.ts`; both proved by a WeakRef and a
+ * collector run, D-5623), and nothing here logs a frame, a field or an answer's stdout. The caller's `stdin`
+ * buffer is the caller's: it lives as long as the route holds it.
  */
+/** Builds the one `account` frame and hands it to the client; the frame is this call's alone and dies with it. */
+function sendAccountFrame(
+  client: Pick<FleetClient, 'request'>, sub: AccountSub, id: string | null, fields: AccountOpFields, stdin: Buffer | undefined,
+): ReturnType<FleetClient['request']> {
+  const frame: Omit<AccountOpReq, 'id'> = { t: 'req', op: ACCOUNT_OP, sub, laneId: id, fields: { ...fields } };
+  if (stdin !== undefined) frame.stdinB64 = stdin.toString('base64');
+  return client.request(frame, accountOpRequestTimeoutMs(sub));
+}
+
 export function remoteAccountOps(opts: RemoteAccountOpsOpts): AccountOps {
-  void opts.client;
-  return { arm: 'remote', run: async () => ({ kind: 'unsupported' }) };
+  const { client } = opts;
+  const run: AccountOps['run'] = async (sub, id, fields, stdin) => {
+    if (stdin !== undefined && !isAccountStdin(stdin)) return { kind: 'refused', why: 'key-charset' };
+    const built = buildAccountArgv(sub, id, fields, stdin !== undefined);
+    if (!built.ok) return { kind: 'refused', why: built.why };
+    if (!(client.state.agentOps ?? []).includes(ACCOUNT_OP)) return { kind: 'unsupported' };
+    try {
+      // D-5623: the frame is built and handed over inside `sendAccountFrame`, so this async frame never names it and
+      // nothing here keeps it (or its `stdinB64`) alive across the await. `stdin` itself is the caller's buffer and
+      // lives as long as the caller (the route) keeps it.
+      const res = await sendAccountFrame(client, sub, id, fields, stdin);
+      const answer = readAccountOpAnswer(res);
+      return answer ?? { kind: 'lost' };
+    } catch (e) {
+      if (e instanceof AgentOpError && e.code === 'bad-request') return { kind: 'unsupported' };
+      // The frame never left: nothing ran.
+      if (e instanceof LinkNotSentError) return { kind: 'not-started' };
+      return { kind: 'lost' };
+    }
+  };
+  return { arm: 'remote', run };
 }
 
 /** The arm constructors, a parameter so a test can prove which one ran. */
@@ -182,7 +224,7 @@ const MAKERS: AccountOpsMakers = { local: localAccountOps, remote: remoteAccount
  */
 export function accountOpsFor(
   cfg: Pick<CcrcConfig, 'fleetMode' | 'home'>,
-  link: { client: Pick<FleetClient, 'request'> | null },
+  link: { client: Pick<FleetClient, 'request' | 'state'> | null },
   makers: AccountOpsMakers = MAKERS,
 ): AccountOps {
   if (cfg.fleetMode === 'remote') {
