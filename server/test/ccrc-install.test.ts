@@ -4423,8 +4423,8 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
   });
 
   itLinux('a FOREIGN ccgpt-usage@ unit pair and its enabled instance survive install --role fleet and uninstall, byte for byte', () => {
-    // The fleet box's shape before Plan 4 removed that repository's copy (F-1),
-    // in a fixture HOME: another repository's template pair at the two names, and an ENABLED instance of
+    // The fleet box's shape before Plan 4 removed another repository's copy (F-1), in a
+    // fixture HOME: that repository's template pair at the two names, and an ENABLED instance of
     // it (the `timers.target.wants/` link `systemctl enable` makes). Every
     // fixture HOME before this case was empty there, so nothing could see an
     // install overwrite that pair or an uninstall delete it.
