@@ -2177,7 +2177,7 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         is a later run, which is the operator's to rule on. At 13:35, beside the blackout sample, I read the
         checkpoint's two counters per pass, `revision` and `appliedJournalSequence`: node parses the file on the
         box and prints only the two numbers. At 12:05 they read 1302 and 43538.
-      - 12:30: path identity's coordinator reports #410 merged at 10:51:53 as `a38fed503` (mail 6657, informational).
+      - 12:45: path identity's coordinator reports #410 merged at 10:51:53 as `a38fed503` (mail 6657, informational).
         That closes the #441-then-#410 order the operator ruled on 2026-10-18 for this programme; #397 is still open
         and is that programme's.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
