@@ -56,11 +56,12 @@ export const DangerSheetActions: Story = {
 
 /** The fleet host's banner: the trigger is `danger-ghost`, because the banner
  *  is already the dead tint and a red fill on it would be red on red. Its
- *  confirm is the filled `danger`. */
+ *  confirm is the filled `danger`. `ground="dead"` gives it the banner's own
+ *  lift and press (D-5688). */
 export const DangerGhostInADeadBanner: Story = {
   render: () => (
     <div className="w-full max-w-[360px]">
-      <Banner tone="dead" action={<Button variant="danger-ghost" size="fit" className="flex-none">Reboot</Button>}>
+      <Banner tone="dead" action={<Button variant="danger-ghost" ground="dead" size="fit" className="flex-none">Reboot</Button>}>
         Fleet host unreachable since 5m
       </Banner>
     </div>

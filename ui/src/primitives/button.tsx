@@ -48,11 +48,12 @@ export const buttonVariants = cva(
          *  too (D-5448), and `ghost`'s lift and press (D-5495): `bg-hover`
          *  under the mouse and `bg-pressed` while held, the grounds Task 9
          *  gave every hairline button (D-5101). Both are gated per palette in
-         *  `pwa/design/contrast-check.mjs`, the hairline on both grounds too. */
+         *  `pwa/design/contrast-check.mjs`, the hairline on both grounds too.
+         *  Its grounds come from the `ground` axis below, not this string. */
         danger:
           'btn-danger border-0 bg-status-dead text-ink-on-danger text-ui leading-none font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
         'danger-ghost':
-          'btn-danger-ghost border border-status-dead bg-transparent text-status-dead-text text-ui leading-none font-medium enabled:hover:bg-hover enabled:active:bg-pressed disabled:text-ink-disabled disabled:border-edge-subtle',
+          'btn-danger-ghost border border-status-dead bg-transparent text-status-dead-text text-ui leading-none font-medium disabled:text-ink-disabled disabled:border-edge-subtle',
         ghost:
           'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-ui leading-none font-medium enabled:hover:bg-hover enabled:active:bg-pressed disabled:text-ink-disabled disabled:border-edge-subtle',
         /** `quiet` — the raised mono control. FOUR app rules declared the same
@@ -91,8 +92,26 @@ export const buttonVariants = cva(
         full: 'w-full px-4',
         fit: 'w-auto px-3',
       },
+      /** What the button sits on, for the one variant whose lift and press
+       *  depend on it (D-5688, D-5689). `card`, the default, is every neutral
+       *  ground; `dead` is the fleet host's dead banner, whose tint the
+       *  card's `--bg-hover` and `--bg-pressed` barely register on (1.03 and
+       *  1.00, D-5574). Only the danger-ghost reads it: it is the one button
+       *  drawn on that banner, and it also sits on cards (the Updates rows)
+       *  and on the halt banner, so the dead grounds are an axis rather than
+       *  the variant's only grounds. Every other variant ignores it. The
+       *  grounds and their measurements are in tokens.css;
+       *  `pwa/test/dead-banner-grounds.test.ts` holds them. */
+      ground: {
+        card: '',
+        dead: '',
+      },
     },
-    defaultVariants: { variant: 'primary', size: 'full' },
+    compoundVariants: [
+      { variant: 'danger-ghost', ground: 'card', class: 'enabled:hover:bg-hover enabled:active:bg-pressed' },
+      { variant: 'danger-ghost', ground: 'dead', class: 'enabled:hover:bg-hover-on-dead enabled:active:bg-pressed-on-dead' },
+    ],
+    defaultVariants: { variant: 'primary', size: 'full', ground: 'card' },
   },
 );
 
@@ -103,6 +122,6 @@ export interface ButtonProps
   ref?: Ref<HTMLButtonElement>;
 }
 
-export function Button({ className, variant, size, type = 'button', ...props }: ButtonProps): ReactNode {
-  return <button type={type} className={cn(buttonVariants({ variant, size }), className)} {...props} />;
+export function Button({ className, variant, size, ground, type = 'button', ...props }: ButtonProps): ReactNode {
+  return <button type={type} className={cn(buttonVariants({ variant, size, ground }), className)} {...props} />;
 }

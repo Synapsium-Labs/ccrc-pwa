@@ -60,6 +60,15 @@ describe('every interactive primitive carries a hover and a pressed state', () =
     expect(cls, `${_name}: an ungated lift`).not.toMatch(/(^|\s)(hover:bg-hover|active:bg-pressed)(\s|$)/);
   });
 
+  // The same gate on the dead banner's grounds (D-5688): the Reboot is
+  // disabled while a reboot is in flight, and must not lift then either.
+  it('Button danger-ghost, ground dead, gates its lift and press on enabled:', () => {
+    const cls = buttonVariants({ variant: 'danger-ghost', size: 'fit', ground: 'dead' });
+    expect(cls).toMatch(/(^|\s)enabled:hover:bg-hover-on-dead(\s|$)/);
+    expect(cls).toMatch(/(^|\s)enabled:active:bg-pressed-on-dead(\s|$)/);
+    expect(cls).not.toMatch(/(^|\s)(hover:bg-hover-on-dead|active:bg-pressed-on-dead)(\s|$)/);
+  });
+
   // A door, the back chevron and a keycap are INK on chrome, not a ground: they
   // brighten to the primary ink under the mouse and keep the press they had.
   const inked: Record<string, [string, RegExp]> = {
@@ -172,6 +181,9 @@ describe('a lifted ground fades in at --dur-fast, the per-skin duration', () => 
     // `ghost`'s twin on the dead hue (D-5099) takes its lift and its press
     // too (D-5495): it was the one hairline button that did neither.
     'Button danger-ghost': buttonVariants({ variant: 'danger-ghost', size: 'fit' }),
+    // On the dead banner it lifts to that banner's own grounds (D-5688), and
+    // fades to them the same way.
+    'Button danger-ghost, ground dead': buttonVariants({ variant: 'danger-ghost', size: 'fit', ground: 'dead' }),
   };
   it.each(Object.entries(grounded))('%s transitions background-color at var(--dur-fast), and nothing races it', (_name, cls) => {
     expect(cls, `${_name}: the hover ground snaps`).toMatch(FADES_GROUND);
