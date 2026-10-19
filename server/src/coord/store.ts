@@ -1106,8 +1106,9 @@ const HALTED_UPDATE_SQL = `('${HALTED_UPDATE_STATES.join("','")}')`;
  *  not a fault of the node). `HALTED_UPDATE_SQL` above is the STATE list only and is wider: `settleNode` refuses
  *  every `failed` row whatever its detail, which is its own rule. The prefix is compared by `substr`, byte for byte
  *  like `startsWith` — `LIKE` folds ASCII case. A NULL detail makes the comparison NULL, so the whole halting test is
- *  NULL and the guard `AND NOT` it refuses: a `failed` row with no detail halts, as `isHalting` says. */
-const haltingRowSql = (t: string): string =>
+ *  NULL and the guard `AND NOT` it refuses: a `failed` row with no detail halts, as `isHalting` says. Exported only so
+ *  `halting-parity.test.ts` runs it beside `isHaltingUpdate` on the same rows (D-5890). */
+export const haltingRowSql = (t: string): string =>
   `(${t}.updateState IN ${HALTED_UPDATE_SQL} AND NOT (${t}.updateState = 'failed' AND ` +
   `substr(${t}.updateDetail, 1, ${PROVENANCE_DETAIL_PREFIX.length}) = '${PROVENANCE_DETAIL_PREFIX}'))`;
 /** The same notion over a read-back row (`handOffLease`'s `why`). A state this build cannot name reads `unknown`,
