@@ -1722,6 +1722,11 @@ import { describe as t7describe, expect as t7expect, it as t7it } from 'vitest';
 import * as t7drv from '../../deploy/history-replay.mjs';
 import { sha256Hex as t7Sha, canonicalJson as t7Canon } from '../../ccd/history/lib.mjs';
 import { mkTmp as t7MkTmp } from './tmpHelpers.js';
+// ── W2-4 Task 9 imports ──
+import * as t9Driver from '../../deploy/history-replay.mjs';
+import * as t9Fs from 'node:fs';
+import t9Path from 'node:path';
+import { createHash as t9CreateHash } from 'node:crypto';
 
 t7describe('W2-4 Task 7: preflights, codeShas, the release stamp and recall-off presence', () => {
   const REPO = t7path.resolve(t7path.dirname(t7FileURLToPath(import.meta.url)), '..', '..');
@@ -2487,4 +2492,345 @@ describe('W2-4 Task 8: step0a end to end', () => {
     expect(existsSync(path.join(out, replay.STEP0A_FILE))).toBe(false);
     expect(stubLog(home)).toBeNull();
   }, 60_000);
+});
+
+// ── W2-4 Task 9: the probe and step 0b's mechanics (W2-D58, W2-D57, W2-D55) ─────────────────────────────────────
+// The probe drives the real subcommand through runDriver against Task 5's recording stub at $HOME/.local/bin/up-a.
+// Step 0b's mechanics are exports W2-5b wires; they are pinned here at function level and, for the two halves of
+// the persistence check, through step0bMechanics on a stub (Task 5's, and a Task 9 stub that writes the transcript
+// a --no-session-persistence run must not leave).
+
+/** One stream-json line per event, as `claude -p --output-format stream-json --verbose` prints them: the init
+ *  event, an assistant message per tool call (each followed by its tool_result) and per extra text turn, and a
+ *  result event unless `result` is null, its subtype `success` unless one is given. Every message id is distinct. */
+function t9Stream(o: {
+  sessionId: string | null;
+  assistants: number;
+  result: null | { numTurns: number | null; subtype?: string; denials?: unknown[] };
+  calls?: Array<{ id: string; command: string; isError: boolean }>;
+}): string {
+  const usage = { input_tokens: 3, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 2 };
+  const lines: unknown[] = [{
+    type: 'system', subtype: 'init', ...(o.sessionId === null ? {} : { session_id: o.sessionId }), model: 'fixture-model-arm',
+    tools: ['Bash', 'Agent'], mcp_servers: [], plugins: [], skills: [], slash_commands: [],
+  }];
+  let n = 0;
+  for (const c of o.calls ?? []) {
+    n += 1;
+    lines.push({ type: 'assistant', message: { id: `msg-${n}`, role: 'assistant', content: [{ type: 'tool_use', id: c.id, name: 'Bash', input: { command: c.command } }], usage } });
+    lines.push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: c.id, content: c.isError ? 'permission denied' : '{}', is_error: c.isError }] } });
+  }
+  while (n < o.assistants) {
+    n += 1;
+    lines.push({ type: 'assistant', message: { id: `msg-${n}`, role: 'assistant', content: [{ type: 'text', text: 'DONE' }], usage } });
+  }
+  if (o.result !== null) {
+    lines.push({
+      type: 'result', subtype: o.result.subtype ?? 'success', is_error: (o.result.subtype ?? 'success') !== 'success',
+      ...(o.result.numTurns === null ? {} : { num_turns: o.result.numTurns }),
+      result: 'DONE', usage, permission_denials: o.result.denials ?? [],
+    });
+  }
+  return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
+/** The LaunchSpec Task 3's admitAccount answers for the upstream fixture up-a. */
+function t9Launch(home: string): { accountId: string; kind: 'upstream'; launcher: string; configDir: string; wrapperPath: null; secretsPath: null } {
+  return { accountId: 'up-a', kind: 'upstream', launcher: t9Path.join(home, '.local', 'bin', 'up-a'), configDir: t9Path.join(home, '.claude'), wrapperPath: null, secretsPath: null };
+}
+
+/** A stub that prints $HOME/<STUB_STREAM> and then does what --no-session-persistence forbids: it writes
+ *  `<CLAUDE_CONFIG_DIR>/projects/<slug of its cwd>/<the init session_id>.jsonl`. */
+function t9PlantPersistingStub(home: string, id: string): void {
+  const bin = t9Path.join(home, '.local', 'bin');
+  t9Fs.mkdirSync(bin, { recursive: true });
+  t9Fs.writeFileSync(t9Path.join(bin, id), [
+    '#!/usr/bin/env node',
+    "const fs = require('node:fs');",
+    "const path = require('node:path');",
+    'fs.readFileSync(0);',
+    `const text = fs.readFileSync(path.join(process.env.HOME, ${JSON.stringify(STUB_STREAM)}), 'utf8');`,
+    'process.stdout.write(text);',
+    "const sid = JSON.parse(text.split('\\n')[0]).session_id;",
+    "const dir = path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', process.cwd().replace(/[^A-Za-z0-9]/g, '-'));",
+    'fs.mkdirSync(dir, { recursive: true });',
+    "fs.writeFileSync(path.join(dir, sid + '.jsonl'), text);",
+    '',
+  ].join('\n'), { mode: 0o700 });
+}
+
+describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', () => {
+  type T9Entry = { argv: string[]; envKeys: string[]; stdin: string };
+  const T9_MODEL = 'fixture-model-arm';
+  const t9Account = (id: string, configDirSuffix: string, exec: Record<string, unknown>) =>
+    ({ id, label: id, configDirSuffix, exec, homeAble: true, hue: 'cyan', telemetry: 'anthropic' });
+  /** The command each taught spelling admits, in allowedToolSpellings' order, spelled here independently. */
+  const t9Commands = (home: string): string[] => [
+    `${home}/.local/bin/ccrc history status --json`,
+    '"$HOME/.local/bin/ccrc" history status --json',
+    '~/.local/bin/ccrc history status --json',
+  ];
+  /** A fixture HOME: up-a (upstream, Task 5's recording stub) and ext-n (external, refused), and up-a's limits row
+   *  fresh at `pct` percent. --out is a sibling of HOME, not yet created. */
+  function t9Box(prefix: string, pct = 10): { home: string; out: string } {
+    const base = mkTmp(prefix);
+    const home = t9Path.join(base, 'home');
+    t9Fs.mkdirSync(home, { mode: 0o700 });
+    writeRoster(home, [t9Account('up-a', '.claude', { kind: 'upstream' }), t9Account('ext-n', '.ext-n', { kind: 'external' })]);
+    plantStub(home, 'up-a');
+    const now = Math.floor(Date.now() / 1000);
+    t9Fs.mkdirSync(t9Path.join(home, '.cc-limits'), { recursive: true });
+    t9Fs.writeFileSync(t9Path.join(home, '.cc-limits', 'up-a.json'),
+      JSON.stringify({ five: pct, seven: pct, ts: now, fiveResetAt: now + 3600, sevenResetAt: now + 86_400 }));
+    return { home, out: t9Path.join(base, 'out') };
+  }
+  const t9Args = (out: string, account = 'up-a'): string[] =>
+    ['probe', '--out', out, '--account', account, '--budget', '1000000', '--arm-model', T9_MODEL];
+
+  it('three box-mode spawns, one per taught spelling, and a denial for one spelling is recorded for that one only; exit 0', () => {
+    const { home, out } = t9Box('ccrc-replay-t9-probe-');
+    const cmds = t9Commands(home);
+    t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({
+      sessionId: 'sess-probe', assistants: 4,
+      result: { numTurns: 4, denials: [{ tool_name: 'Bash', tool_use_id: 'tu-2', tool_input: { command: cmds[1] } }] },
+      calls: [{ id: 'tu-1', command: cmds[0]!, isError: false }, { id: 'tu-2', command: cmds[1]!, isError: true }, { id: 'tu-3', command: cmds[2]!, isError: false }],
+    }));
+    const r = runDriver(home, t9Args(out));
+    expect(r.code, r.stderr).toBe(0);
+
+    const log = stubLog(home) as T9Entry[] | null;
+    expect(log, 'the stub ran').not.toBeNull();
+    expect(log!.length, 'one spawn per taught spelling').toBe(3);
+    const boxArgv = t9Driver.spawnArgv({ mode: 'box', model: T9_MODEL, settingsMode: 'restricted', home });
+    for (const e of log!) {
+      expect(e.argv, 'box mode: the arm tools and the three spellings, no arm values').toEqual(boxArgv);
+      expect([...e.envKeys].sort(), 'the box env: no CCRC_RECALL_*').toEqual(['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
+    }
+    expect(cmds.map((c) => log!.filter((e) => e.stdin.includes(c)).length), 'each spelling reaches the stub once').toEqual([1, 1, 1]);
+
+    const bytes = t9Fs.readFileSync(t9Path.join(out, 'probe.json'));
+    expect(r.stdout).toBe(`sha256 ${t9CreateHash('sha256').update(bytes).digest('hex')}\n`);
+    const doc = JSON.parse(bytes.toString('utf8'));
+    expect(Object.keys(doc).sort()).toEqual(['account', 'budget', 'kind', 'measured_ms', 'model', 'settings_mode', 'spellings', 'spend', 'v']);
+    expect(doc).toMatchObject({ kind: t9Driver.PROBE_KIND, v: 1, account: 'up-a', settings_mode: 'restricted', model: T9_MODEL, budget: 1_000_000 });
+    expect(doc.spend, 'the ledger under --out counts the three runs').toBe(3 * 5);
+    expect(doc.spellings).toEqual([
+      { spelling: t9Driver.allowedToolSpellings(home)[0], denied: false, tool_error: false, ran: true, result_seen: true },
+      { spelling: t9Driver.allowedToolSpellings(home)[1], denied: true, tool_error: true, ran: true, result_seen: true },
+      { spelling: t9Driver.allowedToolSpellings(home)[2], denied: false, tool_error: false, ran: true, result_seen: true },
+    ]);
+    expect(t9Fs.readdirSync(t9Path.join(out, 'probe')).sort(), 'the streams live under out/probe').toEqual([
+      'spelling-1.jsonl', 'spelling-1.run.json', 'spelling-2.jsonl', 'spelling-2.run.json', 'spelling-3.jsonl', 'spelling-3.run.json',
+    ]);
+    // This PR's whole subcommand set, in registration order (Task 1's grammar cases use an unregistered name).
+    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe']);
+  });
+
+  it('a stream with no result event records ran but result_seen false, so its denied false measured nothing', () => {
+    const { home, out } = t9Box('ccrc-replay-t9-noresult-');
+    const cmds = t9Commands(home);
+    t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({
+      sessionId: 'sess-probe', assistants: 1, result: null, calls: [{ id: 'tu-1', command: cmds[0]!, isError: false }],
+    }));
+    const r = runDriver(home, t9Args(out));
+    expect(r.code, r.stderr).toBe(0);
+    const doc = JSON.parse(t9Fs.readFileSync(t9Path.join(out, 'probe.json'), 'utf8'));
+    expect(doc.spellings.map((s: { ran: boolean; denied: boolean; tool_error: boolean | null; result_seen: boolean }) => [s.ran, s.denied, s.tool_error, s.result_seen]))
+      .toEqual([[true, false, false, false], [false, false, null, false], [false, false, null, false]]);
+  });
+
+  // D-5810: a result event with no permission_denials array measured nothing about denial, so result_seen is false for it.
+  it('a result event carrying no permission_denials array records result_seen false', () => {
+    const { home, out } = t9Box('ccrc-replay-t9-nodenials-');
+    const cmds = t9Commands(home);
+    const stream = t9Stream({
+      sessionId: 'sess-probe', assistants: 1, result: { numTurns: 1 }, calls: [{ id: 'tu-1', command: cmds[0]!, isError: false }],
+    });
+    const stripped = stream.replace(',"permission_denials":[]', '');
+    expect(stripped, 'CONTROL: the result line lost its permission_denials key').not.toBe(stream);
+    expect(stripped).not.toContain('permission_denials');
+    t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), stripped);
+    const r = runDriver(home, t9Args(out));
+    expect(r.code, r.stderr).toBe(0);
+    const doc = JSON.parse(t9Fs.readFileSync(t9Path.join(out, 'probe.json'), 'utf8'));
+    expect(doc.spellings.map((s: { ran: boolean; denied: boolean; result_seen: boolean }) => [s.ran, s.denied, s.result_seen]))
+      .toEqual([[true, false, false], [false, false, false], [false, false, false]]);
+  });
+
+  it('refused before any spawn: an external account, a missing budget, a flag the probe never reads, a limits row at the threshold', () => {
+    // D-5810: the last five rows pin each PROBE_REQUIRED entry, the SETTINGS_MODES refusal and the probe's own HOME refusal,
+    // each of which reds when its line is deleted; `env` is runDriver's extraEnv.
+    const cases: Array<{ name: string; pct?: number; args: (out: string) => string[]; line: string; env?: Record<string, string> }> = [
+      { name: 'external', args: (out) => t9Args(out, 'ext-n'), line: 'ccrc history-replay: account-refused: ' },
+      { name: 'no budget', args: (out) => t9Args(out).filter((_, i, a) => a[i] !== '--budget' && a[i - 1] !== '--budget'), line: 'ccrc history-replay: args-invalid: budget-required\n' },
+      { name: 'writer flag', args: (out) => [...t9Args(out), '--writer-model', 'fixture-model-writer'], line: 'ccrc history-replay: args-invalid: --writer-model is not a probe flag\n' },
+      { name: 'threshold', pct: 70, args: (out) => t9Args(out), line: 'ccrc history-replay: limits-threshold: ' },
+      { name: 'no arm model', args: (out) => t9Args(out).filter((_, i, a) => a[i] !== '--arm-model' && a[i - 1] !== '--arm-model'), line: 'ccrc history-replay: args-invalid: arm-model-required\n' },
+      { name: 'no out', args: (out) => t9Args(out).filter((_, i, a) => a[i] !== '--out' && a[i - 1] !== '--out'), line: 'ccrc history-replay: args-invalid: out-required\n' },
+      { name: 'no account', args: (out) => t9Args(out).filter((_, i, a) => a[i] !== '--account' && a[i - 1] !== '--account'), line: 'ccrc history-replay: args-invalid: account-required\n' },
+      { name: 'bogus settings mode', args: (out) => [...t9Args(out), '--settings-mode', 'bogus'], line: 'ccrc history-replay: args-invalid: settings-mode bogus\n' },
+      { name: 'empty HOME', args: (out) => t9Args(out), env: { HOME: '' }, line: 'ccrc history-replay: args-invalid: HOME is unset or not absolute\n' },
+    ];
+    for (const c of cases) {
+      const { home, out } = t9Box(`ccrc-replay-t9-refuse-${c.name.replace(/ /g, '-')}-`, c.pct);
+      t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({ sessionId: 'sess-probe', assistants: 1, result: { numTurns: 1 } }));
+      const r = runDriver(home, c.args(out), c.env);
+      expect(r.code, `${c.name}: ${r.stderr}`).toBe(2);
+      expect(r.stderr.startsWith(c.line), `${c.name}: ${r.stderr}`).toBe(true);
+      expect(stubLog(home), `${c.name}: nothing was spawned`).toBeNull();
+      expect(t9Fs.existsSync(t9Path.join(out, 'probe.json')), c.name).toBe(false);
+      expect(t9Fs.existsSync(t9Path.join(out, 'probe')), `${c.name}: no stream file`).toBe(false);
+    }
+  });
+});
+
+describe('W2-4 Task 9: step 0b mechanics without the seam, W2-D57', () => {
+  const T9_MODEL_0B = 'fixture-model-arm';
+  const t9Facts = (o: Parameters<typeof t9Stream>[0]) => t9Driver.readStreamJson(t9Stream(o));
+  const T9_ALLOWED = '~/.local/bin/ccrc history status --json';
+  const T9_STOP = 'error_max_turns';
+
+  it('the turn probe prompt asks for twenty separate Bash calls of an allowed spelling, MAX_TURNS is 12, and the stop it reads is error_max_turns', () => {
+    expect(t9Driver.MAX_TURNS).toBe(12);
+    expect(t9Driver.TURN_PROBE_PROMPT).toContain('twenty separate Bash tool calls');
+    expect(t9Driver.TURN_PROBE_PROMPT).toContain(`exactly the command \`${T9_ALLOWED}\``);
+    expect(t9Driver.allowedToolSpellings('/h')[2], 'CONTROL: the third taught spelling admits that command').toBe('Bash(~/.local/bin/ccrc history:*)');
+    expect(t9Driver.MAX_TURNS_STOP_SUBTYPE).toBe(T9_STOP);
+  });
+
+  it('the bound holds only when the result event shows the max-turns stop within 12 assistant turns; 13 turns does not hold', () => {
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 12, result: { numTurns: 12, subtype: T9_STOP } })))
+      .toEqual({ held: true, turns: 12, num_turns: 12, subtype: T9_STOP });
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 13, result: { numTurns: 13, subtype: T9_STOP } })))
+      .toEqual({ held: false, turns: 13, num_turns: 13, subtype: T9_STOP });
+  });
+
+  // D-5810: a maxTurns that is no positive integer throws; compared with `>` it would read a bound that never trips as held.
+  it('turnBoundHeld refuses a maxTurns that is not a positive integer', () => {
+    const facts = t9Facts({ sessionId: 's', assistants: 12, result: { numTurns: 12, subtype: T9_STOP } });
+    for (const maxTurns of [0, -1, 1.5, Number.NaN, 'x' as never, null as never]) {
+      expect(() => t9Driver.turnBoundHeld(facts, maxTurns), `maxTurns ${String(maxTurns)}`).toThrow(TypeError);
+    }
+    expect(t9Driver.turnBoundHeld(facts, 12), 'CONTROL: 12 is accepted').toEqual({ held: true, turns: 12, num_turns: 12, subtype: T9_STOP });
+  });
+
+  it('a run that ended for any other reason within the bound is unmeasured, never held', () => {
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 12, result: { numTurns: 12 } })))
+      .toEqual({ held: 'unmeasured', turns: 12, num_turns: 12, subtype: 'success' });
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 3, result: { numTurns: 3, subtype: 'error_during_execution' } })))
+      .toEqual({ held: 'unmeasured', turns: 3, num_turns: 3, subtype: 'error_during_execution' });
+  });
+
+  it('no result event is unmeasured within the bound and false past it, its subtype and num_turns null', () => {
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 5, result: null })))
+      .toEqual({ held: 'unmeasured', turns: 5, num_turns: null, subtype: null });
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 13, result: null })))
+      .toEqual({ held: false, turns: 13, num_turns: null, subtype: null });
+  });
+
+  it('a max-turns result without num_turns still holds: num_turns is recorded, the assistant turn count decides', () => {
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 12, result: { numTurns: null, subtype: T9_STOP } })))
+      .toEqual({ held: true, turns: 12, num_turns: null, subtype: T9_STOP });
+  });
+
+  it('num_turns within the bound beside more assistant messages than the bound does not hold', () => {
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 14, result: { numTurns: 12, subtype: T9_STOP } })))
+      .toEqual({ held: false, turns: 14, num_turns: 12, subtype: T9_STOP });
+  });
+
+  it('the project slug replaces every non-alphanumeric character with a dash', () => {
+    expect(t9Driver.projectSlugOf('/tmp/ccrc-history-replay-Ab9_x.y')).toBe('-tmp-ccrc-history-replay-Ab9-x-y');
+    expect(() => t9Driver.projectSlugOf('relative/dir')).toThrow(TypeError);
+  });
+
+  it('persistenceLeft over a config dir: nothing under projects is nothing left', () => {
+    const configDir = t9Path.join(mkTmp('ccrc-replay-t9-pl-none-'), '.claude');
+    expect(t9Driver.persistenceLeft({ configDir, sessionId: 'sess-a', cwd: '/tmp/run-a' })).toEqual({ left: false, transcripts: [], projectDir: false });
+    t9Fs.mkdirSync(t9Path.join(configDir, 'projects', '-tmp-other'), { recursive: true });
+    t9Fs.writeFileSync(t9Path.join(configDir, 'projects', '-tmp-other', 'sess-b.jsonl'), '{}\n');
+    expect(t9Driver.persistenceLeft({ configDir, sessionId: 'sess-a', cwd: '/tmp/run-a' }), 'another session under another project is not this run')
+      .toEqual({ left: false, transcripts: [], projectDir: false });
+  });
+
+  it('persistenceLeft: a transcript named by the session id under another project dir is caught by the session id half alone', () => {
+    const configDir = t9Path.join(mkTmp('ccrc-replay-t9-pl-sid-'), '.claude');
+    t9Fs.mkdirSync(t9Path.join(configDir, 'projects', '-tmp-elsewhere'), { recursive: true });
+    t9Fs.writeFileSync(t9Path.join(configDir, 'projects', '-tmp-elsewhere', 'sess-a.jsonl'), '{}\n');
+    expect(t9Driver.persistenceLeft({ configDir, sessionId: 'sess-a', cwd: '/tmp/run-a' }))
+      .toEqual({ left: true, transcripts: ['-tmp-elsewhere/sess-a.jsonl'], projectDir: false });
+  });
+
+  it('persistenceLeft: a project dir keyed by the run cwd is caught by the slug half alone', () => {
+    const configDir = t9Path.join(mkTmp('ccrc-replay-t9-pl-slug-'), '.claude');
+    t9Fs.mkdirSync(t9Path.join(configDir, 'projects', '-tmp-run-a'), { recursive: true });
+    expect(t9Driver.persistenceLeft({ configDir, sessionId: 'sess-a', cwd: '/tmp/run-a' })).toEqual({ left: true, transcripts: [], projectDir: true });
+  });
+
+  // D-5810: a non-ENOENT failure on the projects directory is thrown, never answered as clean. Mode 000 is the named
+  // case; it trips the lstat of the cwd slug first, so the two other modes isolate each rethrow: 0o400 lets the listing
+  // succeed but refuses the lstat (search denied), and 0o100 lets the lstat answer ENOENT but refuses the listing.
+  // The skip is for root, for whom a mode does not refuse a read.
+  it.skipIf(process.getuid?.() === 0)('persistenceLeft: an unreadable projects directory throws, never reads as clean', () => {
+    for (const mode of [0o000, 0o400, 0o100]) {
+      const configDir = t9Path.join(mkTmp(`ccrc-replay-t9-pl-eacces-${mode.toString(8)}-`), '.claude');
+      const projects = t9Path.join(configDir, 'projects');
+      t9Fs.mkdirSync(projects, { recursive: true });
+      t9Fs.chmodSync(projects, mode);
+      try {
+        expect(() => t9Driver.persistenceLeft({ configDir, sessionId: 'sess-a', cwd: '/tmp/run-a' }), `mode ${mode.toString(8)}`).toThrow(/EACCES/);
+      } finally {
+        t9Fs.chmodSync(projects, 0o700);
+      }
+    }
+  });
+
+  // D-5810: the input guards refuse a shape rather than reading it as clean or held.
+  it('persistenceLeft: a relative configDir and a sessionId that is no session id throw TypeError', () => {
+    const configDir = t9Path.join(mkTmp('ccrc-replay-t9-pl-input-'), '.claude');
+    expect(() => t9Driver.persistenceLeft({ configDir: 'rel/.claude', sessionId: 'sess-a', cwd: '/tmp/run-a' }), 'relative configDir').toThrow(TypeError);
+    expect(() => t9Driver.persistenceLeft({ configDir: undefined as never, sessionId: 'sess-a', cwd: '/tmp/run-a' }), 'configDir not a string').toThrow(TypeError);
+    for (const sessionId of ['', 'a/b', '.hidden', 42 as never, undefined as never]) {
+      expect(() => t9Driver.persistenceLeft({ configDir, sessionId, cwd: '/tmp/run-a' }), `sessionId ${JSON.stringify(sessionId)}`).toThrow(TypeError);
+    }
+    expect(t9Driver.persistenceLeft({ configDir, sessionId: 'sess-a', cwd: '/tmp/run-a' }), 'CONTROL: a plain id on an absolute configDir answers').toEqual({ left: false, transcripts: [], projectDir: false });
+  });
+
+  it('persistenceLeft: a null session id never reads as clean', () => {
+    const configDir = t9Path.join(mkTmp('ccrc-replay-t9-pl-null-'), '.claude');
+    expect(t9Driver.persistenceLeft({ configDir, sessionId: null, cwd: '/tmp/run-a' })).toEqual({ left: true, transcripts: [], projectDir: false });
+  });
+
+  it('step0bMechanics on the stub: a stub that writes its transcript is caught by both halves', async () => {
+    const base = mkTmp('ccrc-replay-t9-0b-left-');
+    const home = t9Path.join(base, 'home');
+    t9Fs.mkdirSync(home, { mode: 0o700 });
+    t9PlantPersistingStub(home, 'up-a');
+    t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({ sessionId: 'sess-left', assistants: 13, result: { numTurns: 13 } }));
+    const out = t9Driver.prepareOut(t9Path.join(base, 'out'));
+    const got = await t9Driver.step0bMechanics({ launch: t9Launch(home), out, model: T9_MODEL_0B, settingsMode: 'restricted', lang: undefined, gate: () => {} });
+    const projects = t9Fs.readdirSync(t9Path.join(home, '.claude', 'projects'));
+    expect(projects.length, 'CONTROL: the stub wrote one project dir').toBe(1);
+    expect(got).toEqual({
+      turn_bound: { held: false, turns: 13, num_turns: 13, subtype: 'success' },
+      persistence: { left: true, transcripts: [`${projects[0]}/sess-left.jsonl`], project_dir: true },
+    });
+    expect(t9Fs.existsSync(t9Path.join(out, 'step0b', 'turn-bound.run.json')), 'one box-mode run named step0b/turn-bound').toBe(true);
+  });
+
+  it('step0bMechanics on the stub: a clean run leaves nothing, and a run that ended without the max-turns stop is unmeasured, never held', async () => {
+    const base = mkTmp('ccrc-replay-t9-0b-clean-');
+    const home = t9Path.join(base, 'home');
+    t9Fs.mkdirSync(home, { mode: 0o700 });
+    plantStub(home, 'up-a');
+    t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({ sessionId: 'sess-clean', assistants: 12, result: { numTurns: 12 } }));
+    const out = t9Driver.prepareOut(t9Path.join(base, 'out'));
+    await expect(t9Driver.step0bMechanics({ launch: t9Launch(home), out, model: T9_MODEL_0B, settingsMode: 'restricted', lang: undefined } as never),
+      'no gate: a TypeError before any spawn (the stub log below still counts one run)').rejects.toThrow(TypeError);
+    const got = await t9Driver.step0bMechanics({ launch: t9Launch(home), out, model: T9_MODEL_0B, settingsMode: 'restricted', lang: undefined, gate: () => {} });
+    expect(got).toEqual({ turn_bound: { held: 'unmeasured', turns: 12, num_turns: 12, subtype: 'success' }, persistence: { left: false, transcripts: [], project_dir: false } });
+    const log = stubLog(home) as Array<{ argv: string[]; stdin: string }> | null;
+    expect(log?.length).toBe(1);
+    expect(log![0]!.argv).toEqual(t9Driver.spawnArgv({ mode: 'box', model: T9_MODEL_0B, settingsMode: 'restricted', home }));
+    expect(log![0]!.stdin).toBe(t9Driver.TURN_PROBE_PROMPT);
+  });
 });

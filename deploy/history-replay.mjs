@@ -1336,6 +1336,217 @@ export async function step0aCommand(flags, env) {
 }
 HANDLERS.set('step0a', step0aCommand);
 
+// ── W2-4 Task 9: the probe, and step 0b's seam-free mechanics (W2-D58, W2-D57, W2-D55) ─────────────────────────
+// The probe is a box verb, an EARLY CHECK only (W2-D58): it asks a box-mode run (an arm's tools and argv, no
+// CCRC_RECALL_* value) to call each taught spelling once with `history status --json`, the one verb that needs
+// no identity, and records what the stream shows. A finding is data: the probe exits 0 whatever it found, and
+// only a driver word (a refusal before or between spawns) is non-zero. The spec's treatment-arm pilot
+// assertions are W2-5b's, at step 0b.
+// Step 0b's two mechanics that need no seam (W2-D57) ship here as exports; W2-5b wires them into its `step0b`
+// subcommand after part 1, behind its own gate (every spawn is gated, W2-D55):
+//   - the turn bound: a twenty-call request (repeated calls of an allowed spelling) must be stopped by the max-turns
+//     limit within MAX_TURNS assistant turns. It is held only when the result event's subtype shows that stop AND the
+//     assistant turn count is within MAX_TURNS (coordinator ruling); past MAX_TURNS it is false; a run that ended
+//     within the bound for any other reason, or with no result event, is 'unmeasured', never held;
+//   - the persistence check: no transcript named by the init event's session_id anywhere under
+//     `<configDir>/projects/`, and no `<configDir>/projects/<slug of the run's cwd>` entry. A run whose init
+//     event carried no session_id cannot be cleared, so it reads as left, never as clean.
+
+/** The kind word of `<out>/probe.json`. */
+export const PROBE_KIND = 'ccrc-history-w2-probe';
+/** The flags the probe takes. parseArgs knows every driver flag; a flag the probe never reads is refused, not ignored. */
+const PROBE_FLAGS = Object.freeze(['out', 'account', 'budget', 'arm-model', 'settings-mode']);
+const PROBE_REQUIRED = Object.freeze(['out', 'account', 'arm-model']);
+/** The probe's runs and streams live under `<out>/probe/`. */
+const PROBE_RUN_DIR = 'probe';
+const PROBE_OUTPUT = 'probe.json';
+/** The step 0b turn-bound run's name under --out. */
+const STEP0B_TURN_RUN = 'step0b/turn-bound';
+const TAUGHT_SPELLING = /^Bash\((.+) history:\*\)$/;
+/** The result event's `subtype` when the --max-turns limit stopped the run. The field is the one readStreamJson reads
+ *  (`result.subtype`; step 0a's and the probe's streams show it as `success`). The value is Claude Code's headless
+ *  spelling for this stop, unmeasured on this fleet until step 0b's turn-bound run first reaches the bound; that
+ *  run's turn_bound records the subtype it read, and any other spelling reads 'unmeasured', never held. */
+export const MAX_TURNS_STOP_SUBTYPE = 'error_max_turns';
+
+/** The step 0b turn-bound request: twenty separate Bash calls of `~/.local/bin/ccrc history status --json`, which the
+ *  third taught spelling admits (`Bash(~/.local/bin/ccrc history:*)`), so the model is driven through repeated ALLOWED
+ *  calls rather than stopped by denials. Under --max-turns 12 the run must end within 12 turns whatever the model would
+ *  have done; turnBoundHeld reads it as held only when the result event shows the max-turns stop within 12 assistant
+ *  turns. */
+export const TURN_PROBE_PROMPT = [
+  'This is a turn-limit check. Make twenty separate Bash tool calls, one after another.',
+  'Each call runs exactly the command `~/.local/bin/ccrc history status --json` and nothing else.',
+  'Do not combine calls, do not use a loop, and wait for each call\'s result before making the next.',
+  'If a call is refused or fails, make the next call anyway. After the twentieth call, reply with the single word DONE.',
+].join('\n') + '\n';
+
+/** The command line a taught spelling admits for the probe: the spelling's prefix plus `history status --json`. */
+function probeCommandOf(spelling) {
+  // String#match, not the RegExp method: Task 5's no-shell scan reds on any non-comment call spelled exec.
+  const m = spelling.match(TAUGHT_SPELLING);
+  if (m === null) throw new TypeError(`probe: ${JSON.stringify(spelling)} is not a taught spelling`);
+  return `${m[1]} history status --json`;
+}
+
+/** The probe's prompt for one spelling: run exactly that command once, then stop. */
+function probePromptOf(command) {
+  return [
+    'This is a permission check. Use the Bash tool exactly once, to run exactly this command, with nothing added before or after it:',
+    '',
+    command,
+    '',
+    'Do not run any other command. After the one call, reply with the single word DONE.',
+  ].join('\n') + '\n';
+}
+
+const bashCommandOf = (input) => (input !== null && typeof input === 'object' && typeof input.command === 'string' ? input.command : null);
+
+/** What one probe run's stream shows for its command: the Bash calls asking for exactly it (`ran`), whether a
+ *  permission denial names one of them, by tool_use_id or by its input (`denied`), and whether any of their
+ *  tool_results is an error (`tool_error`, null when none came back). `result_seen` says whether the stream
+ *  holds a result event carrying `permission_denials` at all: without one, `denied: false` measured nothing. */
+function probeFindingOf(facts, command) {
+  const calls = facts.toolPairs.filter((p) => p.name === 'Bash' && bashCommandOf(p.input) === command);
+  const ids = new Set(calls.map((p) => p.id));
+  const denials = Array.isArray(facts.permissionDenials) ? facts.permissionDenials : [];
+  const denied = denials.some((d) => d !== null && typeof d === 'object'
+    && ((typeof d.tool_use_id === 'string' && ids.has(d.tool_use_id)) || bashCommandOf(d.tool_input) === command));
+  const errors = calls.map((p) => p.isError).filter((e) => typeof e === 'boolean');
+  return {
+    denied,
+    tool_error: errors.length === 0 ? null : errors.includes(true),
+    ran: calls.length > 0,
+    result_seen: facts.result !== null && Array.isArray(facts.permissionDenials),
+  };
+}
+
+/** Write `<out>/probe.json` as canonical JSON plus a newline, through a temp and a rename, and answer the sha256
+ *  of the bytes on disk. */
+function writeProbeJson(out, value) {
+  const bytes = Buffer.from(canonicalJson(value) + '\n', 'utf8');
+  const final = path.join(out, PROBE_OUTPUT);
+  const tmp = `${final}.tmp-${process.pid}`;
+  writeFileSync(tmp, bytes, { mode: 0o600 });
+  renameSync(tmp, final);
+  return sha256Hex(readFileSync(final));
+}
+
+/** `probe`: pane and args (main), then --out, admission, the required --budget, and the gate before every spawn,
+ *  so every refusal lands before the first spawn. Then one box-mode run per taught spelling (at most two at once),
+ *  `<out>/probe.json`, and `sha256 <hex>` on stdout. Exit 0 whatever the runs showed. */
+export async function probeCommand(flags, env) {
+  for (const k of Object.keys(flags)) if (!PROBE_FLAGS.includes(k)) refuse('args-invalid', `--${k} is not a probe flag`);
+  for (const k of PROBE_REQUIRED) if (flags[k] === undefined) refuse('args-invalid', `${k}-required`);
+  const settingsMode = flags['settings-mode'] ?? 'restricted';
+  if (!SETTINGS_MODES.includes(settingsMode)) refuse('args-invalid', `settings-mode ${settingsMode}`);
+  const home = env.HOME;
+  if (typeof home !== 'string' || !path.isAbsolute(home)) refuse('args-invalid', 'HOME is unset or not absolute');
+  const out = prepareOut(flags.out);
+  const { json, roster } = readRoster(home);
+  const launch = admitAccount(json, roster, flags.account, home);
+  if (flags.budget === undefined) refuse('args-invalid', 'budget-required');
+  const gate = batchGate({ out, home, accountId: launch.accountId, budget: flags.budget, limits: LIMITS_DEFAULTS });
+  const spellings = allowedToolSpellings(home);
+  const jobs = spellings.map((spelling, i) => ({
+    launch, mode: 'box', model: flags['arm-model'], settingsMode,
+    stdin: probePromptOf(probeCommandOf(spelling)), out, name: `${PROBE_RUN_DIR}/spelling-${i + 1}`, lang: env.LANG,
+  }));
+  const outcomes = await runBatch(jobs, { concurrency: CONCURRENCY_MAX, gate });
+  const output = {
+    kind: PROBE_KIND, v: 1, measured_ms: Date.now(), account: launch.accountId, settings_mode: settingsMode,
+    model: flags['arm-model'],
+    spellings: spellings.map((spelling, i) => ({ spelling, ...probeFindingOf(outcomes[i].facts, probeCommandOf(spelling)) })),
+    budget: flags.budget, spend: spentSoFar(out),
+  };
+  const sha = writeProbeJson(out, output);
+  process.stdout.write(`sha256 ${sha}\n`);
+  return EXIT.OK;
+}
+HANDLERS.set('probe', probeCommand);
+
+/** Step 0b's turn bound (W2-D57; coordinator ruling, as revised). `held` is true ONLY when the result event shows that
+ *  the max-turns limit stopped the run (its subtype is MAX_TURNS_STOP_SUBTYPE) AND the run made at most maxTurns
+ *  assistant turns (readStreamJson's assistantMessages). More than maxTurns assistant turns is false: the bound did
+ *  not hold, whatever the result event says. A run that ended within the bound for any other reason (another subtype,
+ *  or no result event) is 'unmeasured', never true. `turns` is the assistant turn count the verdict read; the result
+ *  event's num_turns and subtype (null without one) are recorded beside it, so a reader sees why. No tool-call count
+ *  enters the verdict. Pure. */
+export function turnBoundHeld(facts, maxTurns = MAX_TURNS) {
+  if (!Number.isInteger(maxTurns) || maxTurns < 1) throw new TypeError(`turnBoundHeld: maxTurns ${String(maxTurns)} is not a positive integer`);
+  const turns = facts.assistantMessages;
+  const numTurns = facts.result === null ? null : facts.result.numTurns;
+  const subtype = facts.result === null ? null : facts.result.subtype;
+  if (turns > maxTurns) return { held: false, turns, num_turns: numTurns, subtype };
+  if (subtype !== MAX_TURNS_STOP_SUBTYPE) return { held: 'unmeasured', turns, num_turns: numTurns, subtype };
+  return { held: true, turns, num_turns: numTurns, subtype };
+}
+
+/** Claude Code's project directory name for a cwd: every non-alphanumeric character becomes '-'. Pure. */
+export function projectSlugOf(cwd) {
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw new TypeError(`projectSlugOf: cwd ${JSON.stringify(cwd)} is not absolute`);
+  return cwd.replace(/[^A-Za-z0-9]/g, '-');
+}
+
+/** Every entry under `root` (real directories walked, links never followed) whose name is the session id or starts
+ *  with it and a dot, as paths relative to `root`, sorted. An absent root is none; any other read failure throws. */
+function entriesNamedBy(root, sessionId) {
+  const found = [];
+  const walk = (rel) => {
+    let ents;
+    try {
+      ents = readdirSync(path.join(root, rel), { withFileTypes: true });
+    } catch (e) {
+      if (rel === '' && e.code === 'ENOENT') return;
+      throw e;
+    }
+    for (const d of ents) {
+      const r = rel === '' ? d.name : `${rel}/${d.name}`;
+      if (d.name === sessionId || d.name.startsWith(`${sessionId}.`)) found.push(r);
+      else if (d.isDirectory()) walk(r);
+    }
+  };
+  walk('');
+  return found.sort();
+}
+
+/** Step 0b's persistence check (W2-D57): what a `--no-session-persistence` run left under `<configDir>/projects/`.
+ *  `transcripts`: entries named by the init event's session_id anywhere under it; `projectDir`: whether
+ *  `projects/<slug of the run's cwd>` exists, whatever its type. A null session id leaves the transcript half
+ *  unmeasured, so `left` is true. An lstat or readdir failure other than ENOENT throws, never reads as clean. */
+export function persistenceLeft({ configDir, sessionId, cwd }) {
+  if (typeof configDir !== 'string' || !path.isAbsolute(configDir)) throw new TypeError(`persistenceLeft: configDir ${JSON.stringify(configDir)} is not absolute`);
+  if (sessionId !== null && (typeof sessionId !== 'string' || sessionId === '' || sessionId.includes('/') || sessionId.startsWith('.'))) {
+    throw new TypeError(`persistenceLeft: sessionId ${JSON.stringify(sessionId)} is not a session id`);
+  }
+  const projects = path.join(configDir, 'projects');
+  let projectDir = true;
+  try {
+    lstatSync(path.join(projects, projectSlugOf(cwd)));
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    projectDir = false;
+  }
+  const transcripts = sessionId === null ? [] : entriesNamedBy(projects, sessionId);
+  return { left: sessionId === null || projectDir || transcripts.length > 0, transcripts, projectDir };
+}
+
+/** Step 0b's mechanics without the seam (W2-D57): one box-mode run of TURN_PROBE_PROMPT named 'step0b/turn-bound'
+ *  (resumed from its run.json when it finished before), then the turn bound over its stream and the persistence
+ *  check over the account's config dir, keyed by that run's init session_id and its cwd. The run goes through runBatch
+ *  with the caller's required `gate` (W2-5b passes its batchGate), so it is gated like every spawn; the caller also
+ *  passes `lang`, its LANG from main's env (undefined when unset), into the run's RunJob. */
+export async function step0bMechanics({ launch, out, model, settingsMode, lang, gate }) {
+  const [run] = await runBatch([{ launch, mode: 'box', model, settingsMode, stdin: TURN_PROBE_PROMPT, out, name: STEP0B_TURN_RUN, lang }], { concurrency: 1, gate });
+  const left = persistenceLeft({
+    configDir: launch.configDir, sessionId: run.facts.init === null ? null : run.facts.init.sessionId, cwd: run.cwd,
+  });
+  return {
+    turn_bound: turnBoundHeld(run.facts),
+    persistence: { left: left.left, transcripts: left.transcripts, project_dir: left.projectDir },
+  };
+}
+
 // The entry guard stays the LAST block of this file: a module-level declaration below it would still be uninitialised
 // when main runs. Importing the module (the tests do) runs nothing. The exit code is set, never forced, so stderr drains.
 // main gets a by-name projection of the environment, never process.env whole; an unset name stays undefined (W2-D45).
