@@ -144,6 +144,21 @@ const endpoints = (names: string[]): string => {
   return p;
 };
 
+// Codex-bridge spec §2.7: the lane's measured windows, a SIBLING of the
+// registry. Model ids are read off the fixtures and roster ids by position,
+// never spelled: this repository is public.
+const winPath = (id: string): string => path.join(home, '.ccrc', 'models', `${id}.windows.json`);
+/** The planted registry's class models, distinct and in CLASSES order: what the rule measures. */
+const CLASS_MODELS: string[] = [...new Set(Object.values(SEEDED.classes).filter((v): v is string => v !== null))];
+const windowsFor = (byModel: Record<string, number>): unknown =>
+  ({ windows: Object.fromEntries(Object.entries(byModel).map(([m, tokens]) => [m, { tokens }])) });
+const plantWindows = (id: string, body: unknown): void => {
+  fs.mkdirSync(path.dirname(winPath(id)), { recursive: true });
+  fs.writeFileSync(winPath(id), typeof body === 'string' ? body : `${JSON.stringify(body, null, 2)}\n`);
+};
+const LEGACY_SUFFIX = ROSTER.accounts[2]!.configDirSuffix;
+const eighthKey = (): string | undefined => settingsOf(LEGACY_SUFFIX).env['CLAUDE_CODE_MAX_CONTEXT_TOKENS'];
+
 beforeEach(() => { home = mkTmp('ccrc-models-op-'); seed(); });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
@@ -1631,6 +1646,157 @@ describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
   });
 });
 
+describe('the measured windows file — read, applied, reported, reaped (codex-bridge spec §2.7)', () => {
+  const ID = LEGACY_EXTERNAL_ID;
+  const all = (tokens: number): unknown => windowsFor(Object.fromEntries(CLASS_MODELS.map((m) => [m, tokens])));
+  const mat = (): Result => op('materialise', '--file', rosterPath(), '--id', ID);
+  const show = (): Result => op('show', '--file', rosterPath(), '--id', ID);
+
+  beforeEach(() => {
+    writeCatalogue(ID);
+    plantCodex(ID);
+  });
+
+  it('every class model measured: materialise writes the SMALLEST window — above 200000 when measured so', () => {
+    const [m0, m1, m2] = CLASS_MODELS as [string, string, string];
+    plantWindows(ID, windowsFor({ [m0]: 511000, [m1]: 450000, [m2]: 400000 }));
+    const r = mat();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(eighthKey()).toBe('400000');
+  });
+
+  it('one class model unmeasured: the key stays today\'s 200000', () => {
+    const [m0, m1] = CLASS_MODELS as [string, string];
+    plantWindows(ID, windowsFor({ [m0]: 511000, [m1]: 511000 }));
+    expect(mat().code).toBe(0);
+    expect(eighthKey()).toBe('200000');
+  });
+
+  it('with no windows file the env block is today\'s, every key', () => {
+    const { haiku, sonnet, opus } = SEEDED.classes;
+    expect(mat().code).toBe(0);
+    expect(settingsOf(LEGACY_SUFFIX).env).toEqual({
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: haiku, ANTHROPIC_DEFAULT_SONNET_MODEL: sonnet,
+      ANTHROPIC_DEFAULT_OPUS_MODEL: opus, ANTHROPIC_DEFAULT_FABLE_MODEL: 'ccrc-unavailable-fable',
+      ANTHROPIC_MODEL: opus, ANTHROPIC_SMALL_FAST_MODEL: haiku, CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '200000',
+    });
+  });
+
+  it.each([
+    ['not JSON', '{ this is not json'],
+    ['an array', '[]'],
+    ['a windows that is not an object', '{"windows": 7}'],
+    ['a window below the minimum', JSON.stringify({ windows: { [SEEDED.classes.opus!]: { tokens: 5 } } })],
+  ])('an unreadable windows file (%s) never blocks materialise: the default rule applies', (_why, body) => {
+    plantWindows(ID, all(400000));
+    expect(mat().code).toBe(0);
+    expect(eighthKey()).toBe('400000');
+    plantWindows(ID, body);
+    const r = mat();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(eighthKey()).toBe('200000');
+  });
+
+  it('show reports each measured window, the effective window, its rule and the unmeasured models', () => {
+    const [m0, m1, m2] = CLASS_MODELS as [string, string, string];
+    plantWindows(ID, { windows: { [m0]: { tokens: 511000, setAt: '2026-10-15T12:00:00.000Z' }, [m1]: { tokens: 450000 } } });
+    const r = show();
+    expect(r.code).toBe(0);
+    expect(r.body['windows']).toEqual({ state: 'ok', byModel: {
+      [m0]: { tokens: 511000, setAt: '2026-10-15T12:00:00.000Z' }, [m1]: { tokens: 450000, setAt: null } } });
+    expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default', unmeasured: [m2] });
+  });
+
+  it('show with every class model measured reports rule measured', () => {
+    plantWindows(ID, all(400000));
+    expect(show().body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+  });
+
+  it('show with no windows file: state absent, every class model unmeasured', () => {
+    const r = show();
+    expect(r.body['windows']).toEqual({ state: 'absent' });
+    expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default', unmeasured: CLASS_MODELS });
+  });
+
+  it('show on an unreadable windows file answers ok, names the file and the reason, and reports the default rule', () => {
+    plantWindows(ID, '{ this is not json');
+    const r = show();
+    expect(r.code).toBe(0);
+    const w = r.body['windows'] as { state: string; reason: string };
+    expect(w.state).toBe('unreadable');
+    expect(w.reason).toContain(winPath(ID));
+    expect(w.reason).toMatch(/is not valid JSON/);
+    expect((r.body['contextWindow'] as { rule: string }).rule).toBe('default');
+  });
+
+  it('settingsDrift names the eighth key once the windows moved past the last materialise', () => {
+    plantWindows(ID, all(400000));
+    expect(show().body['settingsDrift']).toEqual(['CLAUDE_CODE_MAX_CONTEXT_TOKENS']);
+    expect(mat().code).toBe(0);
+    expect(show().body['settingsDrift']).toEqual([]);
+  });
+
+  it('an unreadable windows file adds no drift: the drift check reads it as the default rule', () => {
+    plantWindows(ID, '[]');
+    expect(show().body['settingsDrift']).toEqual([]);
+  });
+
+  it('a DIRECTORY at the windows path: show reports it unreadable, materialise carries on, rm stops at it', () => {
+    fs.mkdirSync(winPath(ID), { recursive: true });
+    const s = show();
+    expect(s.code, s.stdout + s.stderr).toBe(0);
+    expect(s.body['windows']).toMatchObject({ state: 'unreadable' });
+    expect((s.body['windows'] as { reason: string }).reason).toMatch(/not a regular file/);
+    const m = mat();
+    expect(m.code, m.stdout + m.stderr).toBe(0);
+    expect(eighthKey()).toBe('200000');
+    // `rm -f` semantics per file, as for the other four: a directory is not a
+    // file `rm` may unlink, so it reaps the four before it and stops there,
+    // the answer a directory at any of those four paths already gets.
+    const r = op('rm', '--file', rosterPath(), '--id', ID);
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('unwritable');
+    expect(String(r.body['detail'])).toContain(`${winPath(ID)} could not be removed`);
+    expect(fs.existsSync(regPath(ID))).toBe(false);
+  });
+
+  it('a class that moves to an unmeasured model drops the lane back to the default rule (spec §5)', () => {
+    plantWindows(ID, all(400000));
+    expect(mat().code).toBe(0);
+    expect(eighthKey()).toBe('400000');
+    const next = CODEX.models.find((m) => !m.hidden && !CLASS_MODELS.includes(m.id) && m.context === 272000)!.id;
+    const r = op('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', next);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(eighthKey()).toBe('200000');
+    expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default', unmeasured: [next] });
+  });
+
+  it('rm reaps the windows file with the lane\'s other model files, last', () => {
+    plantWindows(ID, all(400000));
+    const r = op('rm', '--file', rosterPath(), '--id', ID);
+    expect(r.code).toBe(0);
+    expect(r.body['removed'] as string[]).toHaveLength(5);
+    expect((r.body['removed'] as string[]).slice(-1)).toEqual([winPath(ID)]);
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
+  it('rm reaps an unreadable windows file too — rm -f semantics, not a validated read', () => {
+    plantWindows(ID, '{ this is not json');
+    expect(op('rm', '--file', rosterPath(), '--id', ID).code).toBe(0);
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
+  it('an ORPHAN show reports its windows too', () => {
+    fs.writeFileSync(regPath('ghost'), fs.readFileSync(regPath(ID), 'utf8'));
+    plantWindows('ghost', all(400000));
+    const r = op('show', '--file', rosterPath(), '--id', 'ghost');
+    expect(r.body['orphan']).toBe(true);
+    expect((r.body['windows'] as { state: string }).state).toBe('ok');
+    expect((r.body['contextWindow'] as { rule: string }).rule).toBe('measured');
+  });
+});
+
 // C6: the guard is at OP ENTRY, so every op that takes an `--id` refuses a
 // bad one before touching the roster or any path — not just `rm`, which is
 // the one the finding's own repro happened to exploit.
@@ -1711,6 +1877,22 @@ describe('a FIFO at a lane file\'s path is that read\'s unreadable answer, never
     expect(r.code, r.stdout).toBe(1);
     expect(r.body['error']).toBe('registry-unreadable');
     expect(r.body['detail']).toMatch(/not a regular file/);
+  }, 20_000);
+
+  it('show with a FIFO windows file answers ok: the windows unreadable, never a block (codex-bridge spec §2.7)', () => {
+    init();
+    fifo(path.join(home, '.ccrc', 'models', `${CODEX_ROW.id}.windows.json`));
+    const r = bounded('show', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.body['windows']).toMatchObject({ state: 'unreadable' });
+    expect((r.body['windows'] as { reason: string }).reason).toMatch(/not a regular file/);
+  }, 20_000);
+
+  it('materialise with a FIFO windows file answers ok under the default rule — never a block (codex-bridge spec §2.7)', () => {
+    init();
+    fifo(path.join(home, '.ccrc', 'models', `${CODEX_ROW.id}.windows.json`));
+    const r = bounded('materialise', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(0);
   }, 20_000);
 
   it('show with a FIFO settings.json keeps today\'s answer for an unreadable one: every key missing', () => {

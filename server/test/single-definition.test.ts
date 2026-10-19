@@ -1752,6 +1752,15 @@ describe('the model files, and who reads each one', () => {
     ]);
   });
 
+  it('the WINDOWS file is named by exactly two files, and only models-op can write it (codex-bridge spec §2.7)', () => {
+    // `<id>.windows.json`, the lane's measured context windows.
+    // `deploy/models-op.mjs` builds its path (`windowsPath`) and is its one
+    // writer; `shared/models.mjs` names it in `parseWindows`' docstring and
+    // holds no fs call (it imports nothing). A bash tool or a server module
+    // spelling it would be a second, unvalidated reader or editor.
+    expect(spell('.windows.json')).toEqual(['deploy/models-op.mjs', 'shared/models.mjs']);
+  });
+
   it('the doctor\'s models check reads the registry file but never writes it', () => {
     // The other half of the ruling just above: admitting a reader is only
     // honest if that reader really never edits the same bytes. Same shape as
