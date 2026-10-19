@@ -38,14 +38,13 @@
 // registry it is about to delete would be pointless — worse, it would refuse to
 // reap a registry that no longer parses, which is exactly the file this verb
 // exists to clean up. It still obeys rule 1. It reaps the five MODEL files —
-// registry, catalogue, TSV, effort map, measured windows — and DELIBERATELY
-// not `lane.json`,
-// though this file generates that too: the manifest carries the roster's lane
-// topology (auth dir, ports), which belongs to the ACCOUNT, not the registry.
-// Its owner is the codex arm of account removal (`_acct_remove`, spec §9,
-// Plan 2b-2) — and that owner must reap it, because an id removed and later
-// re-added would otherwise inherit the old lane's authDir and ports until its
-// next mutation: one lane spending another account's OAuth.
+// registry, catalogue, TSV, effort map, measured windows — and DELIBERATELY not
+// `lane.json`, though this file generates that too: the manifest carries the
+// roster's lane topology (auth dir, ports), which belongs to the ACCOUNT, not
+// the registry. Its owner is the codex arm of account removal (`_acct_remove`,
+// spec §9, Plan 2b-2) — and that owner must reap it, because an id removed and
+// later re-added would otherwise inherit the old lane's authDir and ports until
+// its next mutation: one lane spending another account's OAuth.
 //
 // It borrows two idioms `main` already uses for a node helper `ccrc` shells out
 // to, and cites them: `deploy/gen-accounts.mjs`'s "the remedy reaches stderr
@@ -74,10 +73,9 @@ const SELF = 'models-op';
  *  `ccd/ccrc`'s `WRAPPER_ID_RE` (`shared/roster.ts`'s ID_RE, in bash). An
  *  account id becomes a path segment below, in SIX places (`registryPath`,
  *  `cataloguePath`, `classesTsvPath`, `effortPath`, `laneJsonPath`,
- *  `windowsPath`), so this
- *  file validates its own `--id` at op entry rather than depending on `ccd/ccrc`'s
- *  `_models_id_ok` — a usage-level gate one layer up, not this file's own —
- *  to have run first. */
+ *  `windowsPath`), so this file validates its own `--id` at op entry rather
+ *  than depending on `ccd/ccrc`'s `_models_id_ok` — a usage-level gate one
+ *  layer up, not this file's own — to have run first. */
 export const ACCOUNT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 /** What `init` plants per probe kind.
@@ -568,8 +566,11 @@ function renderRefusal(registry, catalogue, windows) {
 /** The `show` answer, which every mutation also returns so a caller sees the
  *  state it produced without a second call. `windows` is the measured-windows
  *  reading as `windowsReport` puts it, and `contextWindow` is the eighth key's
- *  decision (`contextWindowFor`: tokens, rule, unmeasured), null with no
- *  registry — an Anthropic lane, or one nobody has seeded. */
+ *  decision (`contextWindowFor`: tokens, rule, unmeasured). It is null only
+ *  when there is no registry file: an Anthropic lane, or one `init` never ran
+ *  on. An unseeded registry (deviation B-1, every class null) still gets the
+ *  decision, `{ tokens: null, rule: 'none', unmeasured: [] }`: no key, as
+ *  `materialise` writes no env block for it. */
 function describe(account, registry, catalogue, reading) {
   const anthropic = isAnthropicLane(account);
   const derived = deriveModels(registry, catalogue);

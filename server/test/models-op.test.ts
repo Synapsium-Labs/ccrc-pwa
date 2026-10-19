@@ -1719,6 +1719,25 @@ describe('the measured windows file — read, applied, reported, reaped (codex-b
     expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default', unmeasured: CLASS_MODELS });
   });
 
+  // `contextWindow` is null ONLY with no registry file, and a caller tells
+  // that lane apart by the null; an unseeded registry still gets the decision.
+  it('an Anthropic lane, with no registry file, answers contextWindow null and windows absent', () => {
+    const r = op('show', '--file', rosterPath(), '--id', ROSTER.accounts[1]!.id);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['registry']).toBeNull();
+    expect(r.body['contextWindow']).toBeNull();
+    expect(r.body['windows']).toEqual({ state: 'absent' });
+  });
+
+  it('an UNSEEDED registry still gets the decision: no key, rule none (deviation B-1)', () => {
+    const id = ROSTER.accounts[3]!.id;
+    const i = op('init', '--file', rosterPath(), '--id', id, '--probe', 'openrouter');
+    expect(i.code, i.stdout + i.stderr).toBe(0);
+    const r = op('show', '--file', rosterPath(), '--id', id);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['contextWindow']).toEqual({ tokens: null, rule: 'none', unmeasured: [] });
+  });
+
   it('show on an unreadable windows file answers ok, names the file and the reason, and reports the default rule', () => {
     plantWindows(ID, '{ this is not json');
     const r = show();
