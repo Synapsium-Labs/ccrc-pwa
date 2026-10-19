@@ -5258,10 +5258,11 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
         // on a blob that is not fresh (a fresh blob has no mark): a linked row, a row already stored (a swap copy of the same
         // transcript adds none: the key is the transcript, the name and the blob) and a fresh blob cost nothing new; and the
         // referrers are cleared only when the mark was there, so several new rows for one blob before the next pass cost one
-        // re-export. A row naming a PRUNED blob clears nothing (z is NULL: its text is gone, and only its name and transcript
-        // would travel): the remaining residual. Here the probe above has stored or revived the bytes in hand, so the guard is
-        // for a blob pruned between that probe and this insert, which the lock rules out. Replay's replaySidecarRow does not do
-        // this: a replayed row travelled already.
+        // re-export. A row naming a PRUNED blob clears nothing (z is NULL: its text is gone). Here the probe above has stored
+        // or revived the bytes in hand, so the guard is for a blob pruned between that probe and this insert, which the lock
+        // rules out, and prune never takes a blob an unlinked row names: D-5399's residual is a row replay places against a
+        // restore-held tombstone, never one stored here. Replay's replaySidecarRow does not do this: a replayed row travelled
+        // already.
         if (!fresh && Number(q.blobUnmark.run(blobId).changes) === 1) clearReferrerMarks(db, [Number(blobId)]);
       }
       // W1-B4 Task 8 (D-4763 (history-export-late-sidecar-clears-marks), NEW): a sidecar row first linked after its entry was
@@ -8130,12 +8131,12 @@ const EXPORT_TRANSCRIPT_ENTRIES_SQL = 'SELECT entry_id, ts_ms, transcript_pk FRO
  *  through entries_ts reads every exported row of a transcript that has none left to find. INDEXED BY because the planner
  *  otherwise scans entries_ts, 2.5 to 190 times slower on the shapes measured. */
 const EXPORT_UNEXPORTED_TRANSCRIPTS_SQL = 'SELECT DISTINCT transcript_pk FROM entries INDEXED BY entries_unexported WHERE exported_ms IS NULL';
-/** Blobs only an unlinked sidecar names, unexported and unpruned: schema v1 has no mark on a sidecar row, so the blob's
+/** Blobs an unlinked sidecar row names, unexported and unpruned: schema v1 has no mark on a sidecar row, so the blob's
  *  mark is the row's (D-4761 (history-export-unlinked-sidecar-with-blob)). A NEW unlinked row naming a blob that is live and
  *  already exported takes the blob's mark off when it is stored (ingestSidecar, D-5399
  *  (history-export-late-unlinked-sidecar-clears-blob-mark)), so this offers the blob again and the pass carries its bytes with
- *  every unlinked row that names it. A row naming a pruned blob is never offered: its text is gone, and only its name and
- *  transcript would travel (the residual D-5399 names). */
+ *  every unlinked row that names it. A row naming a pruned blob is never offered: only replay places one, against a tombstone
+ *  a restore's backup held, and its text is gone (the residual D-5399 names). */
 const EXPORT_UNLINKED_SQL = 'SELECT DISTINCT s.blob_id AS blob_id FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id '
   + 'WHERE s.entry_id IS NULL AND b.exported_ms IS NULL AND b.z IS NOT NULL AND s.blob_id > ? ORDER BY s.blob_id LIMIT ?';
 
@@ -8416,8 +8417,9 @@ function writeSegmentRows(db, ctx, seg, sel) {
   };
   // A carried blob's bytes as stored, with EVERY unlinked sidecar row naming it, the older ones too (D-4761); a pruned blob as a
   // stub. A blob already exported is in its own segment, which replay applies first (every segment's blobs before any rows,
-  // §9.14); it is carried again only when a new unlinked row cleared its mark (ingestSidecar, D-5399
-  // (history-export-late-unlinked-sidecar-clears-blob-mark)), and then its bytes and rows repeat, which replay absorbs.
+  // §9.14); it is carried again when its mark was cleared, by a new unlinked row (ingestSidecar, D-5399
+  // (history-export-late-unlinked-sidecar-clears-blob-mark)) or by the check after a bind, and then its bytes and rows
+  // repeat, which replay absorbs.
   const ensureBlob = (id) => {
     if (done.blobs.has(id)) return;
     done.blobs.add(id);
