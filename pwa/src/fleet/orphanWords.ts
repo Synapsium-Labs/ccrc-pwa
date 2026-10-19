@@ -91,7 +91,9 @@ export function orphanNote(
   frameSeen: boolean,
 ): OrphanNote | null {
   if (row.kind !== 'session' || row.depth !== 0) return null;
-  const run = runForSession(runs, row.session.id);
+  // D-5828: the SESSION, not its id — a run opened for an earlier workspace of the same name (its id below this
+  // row's child-marker run) is not this worker's, and its claimant being gone says nothing about this row.
+  const run = runForSession(runs, row.session);
   if (run === null) return null;
   const parent = run.claimedBy;
   if (parent === null || parent === row.session.id) return null;
