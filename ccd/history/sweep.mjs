@@ -5262,7 +5262,8 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
         // or revived the bytes in hand, so the guard is for a blob pruned between that probe and this insert, which the lock
         // rules out, and prune never takes a blob an unlinked row names: D-5399's residual is a row replay places against a
         // restore-held tombstone, never one stored here. Replay's replaySidecarRow does not do this: a replayed row travelled
-        // already.
+        // already. Replay marks the blob and its referrers by the first segment that carries them, so after a rebuild no mark
+        // names the later segment that carried the new rows again, and its loss then drops them (the plan's first-wins residual).
         if (!fresh && Number(q.blobUnmark.run(blobId).changes) === 1) clearReferrerMarks(db, [Number(blobId)]);
       }
       // W1-B4 Task 8 (D-4763 (history-export-late-sidecar-clears-marks), NEW): a sidecar row first linked after its entry was
