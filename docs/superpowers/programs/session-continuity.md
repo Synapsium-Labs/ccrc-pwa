@@ -790,6 +790,18 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     evidence, the out-of-brief scan disclosure and fixture-HOME boundaries. Waiting for load must not end a worker
     turn without a permitted wake. No whole-run hold, routing/run/item mutation, redispatch or clear was requested.
     A final handoff needs NEW independent review; Tasks 1-4 remain unaccepted and Tasks 5 and 7 remain gated.
+- **2026-10-19 22:31 UTC - pending-model read-back tradeoff handed to the operator.**
+  - The worker's structured question describes promotion rewriting the applied-record timestamp, preventing
+    same-tick read-back of an already-pending class that the pane already runs. It reports one redundant model
+    command instead of a read-back, and offers accepting that cost or retaining the old timestamp.
+  - Those behavior and safety claims remain unverified here. The question identifies the lost read-back as not
+    expressly covered by the cited approved control. Accepting the cost or changing the timestamp contract is a new
+    tradeoff, not a choice this coordinator can infer from earlier approval of the epoch merge.
+  - The notification was acknowledged once; the held question was released to the operator without selecting
+    either option. No operator answer was observed. The existing response already permits independent verification;
+    no duplicate notice, whole-run hold, route/run/item mutation, redispatch or clear was requested.
+  - The final handoff still owes ruling provenance and actual verification, followed by NEW independent review.
+    Tasks 1-4 remain unaccepted; Tasks 5 and 7 remain gated. No merge, rollout, restart, arming or settings act.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -860,9 +872,11 @@ contract question was handed to the operator without a coordinator selection. At
 question was also handed over, with no option selected; its out-of-brief live-transcript count remains unverified.
 At 22:25 UTC the worker reported code final at `5a71ccf91`, unpushed, and attributed epoch merge and parser widening
 to operator answers. Exact ruling provenance and coverage of a newly disclosed pending-model typing cost are still
-owed; no coordinator selection or cost acceptance is implied. Owning groups 1-8 are reported green, group 9 timed
-out, and the serial full pass remains pending. Await its final handoff without redispatch. Required server CI at the
-old reviewed tip was red for an inherited README-size guard; its 714-file selection is not a changed-tip proof or
+owed; no coordinator selection or cost acceptance is implied. At 22:31 UTC the pending-model read-back cost was
+asked explicitly and handed to the operator without a selection; no answer was observed. Owning groups 1-8 are
+reported green, group 9 timed out, and the serial full pass remains pending. Await its final handoff without redispatch.
+Required server CI at the old reviewed tip was red for an inherited README-size guard; its 714-file selection is
+not a changed-tip proof or
 full-suite waiver. Tasks 1-4 remain four settled, unaccepted items; Task 5 is pending.
 - **Its FIRST commit is wave 4's residue:** review 305 F1(a), the qualified doctor PASS line, I1, `s6_inert`'s
   staleness, the zombie child, the paused log line, baseline B's non-zero check and the per-task minors.
