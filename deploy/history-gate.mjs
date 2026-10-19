@@ -442,7 +442,8 @@ export function activeFamilies(storeId, census, opts = {}) {
   if (typeof storeId !== 'string' || !UUID_RE.test(storeId)) throw new TypeError(`activeFamilies: ${JSON.stringify(storeId)} is not a store id`);
   if (!Number.isSafeInteger(census?.as_of_ms)) throw new TypeError('activeFamilies: the census carries no integer as_of_ms');
   if (!Array.isArray(census.families)) throw new TypeError('activeFamilies: the census carries no families list');
-  const lookbackMs = opts.lookbackMs ?? ACTIVE_LOOKBACK_MS;
+  // Only an absent or undefined look-back means the default; an explicit null is refused below, never read as 7 days.
+  const lookbackMs = opts.lookbackMs === undefined ? ACTIVE_LOOKBACK_MS : opts.lookbackMs;
   if (!Number.isSafeInteger(lookbackMs) || lookbackMs < 0) throw new TypeError(`activeFamilies: look-back ${JSON.stringify(lookbackMs)} is not a whole, non-negative number of ms`);
   for (const f of census.families) assertCensusRow(f);
   const asOf = census.as_of_ms;

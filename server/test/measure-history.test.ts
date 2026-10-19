@@ -1790,6 +1790,26 @@ describe('W2-3 Task 4: the census and the active rule', () => {
     expect(() => g.activeFamilies(STORE, { ...c, as_of_ms: String(C_AS_OF) as unknown as number })).toThrow(TypeError);
   });
 
+  // Fix round 1 (Task 4 review).
+  it('active rule edge: a store id that is not a string is refused, though it reads as a UUID', async () => {
+    const g = await gateT4();
+    const c = pure([fam({ ccrc_id: 'demo-x', session_pk: 1 })]);
+    // An array of one UUID string coerces to that string under a regex test: only a type check refuses it.
+    expect(() => g.activeFamilies([STORE] as unknown as string, c)).toThrow(/is not a store id/);
+    expect(() => g.activeFamilies({ toString: () => STORE } as unknown as string, c)).toThrow(TypeError);
+    expect(g.activeFamilies(STORE, c).active[0]!.store_id, 'CONTROL: the string itself answers').toBe(STORE);
+  });
+
+  it('active rule edge: an explicit null look-back is refused, and only an absent or undefined one means the default', async () => {
+    const g = await gateT4();
+    const c = pure([fam({ ccrc_id: 'demo-x', session_pk: 1, last_main_ts_ms: C_AS_OF - C_LOOK })]);   // exactly the default's lower edge
+    expect(() => g.activeFamilies(STORE, c, { lookbackMs: null as unknown as number })).toThrow(TypeError);
+    expect(g.activeFamilies(STORE, c).active, 'no opts: the 7-day default').toHaveLength(1);
+    expect(g.activeFamilies(STORE, c, {}).active, 'no key: the 7-day default').toHaveLength(1);
+    expect(g.activeFamilies(STORE, c, { lookbackMs: undefined }).active, 'undefined: the 7-day default').toHaveLength(1);
+    expect(g.activeFamilies(STORE, c, { lookbackMs: C_LOOK - 1 }).active, 'CONTROL: a shorter look-back does exclude it').toEqual([]);
+  });
+
   // P-5 (the run's worker): a malformed census row is refused, never folded into an exclusion or a tie-break.
   const MALFORMED: Array<[string, Partial<Record<keyof CensusFamily, unknown>>]> = [
     ['merged_into is a string', { merged_into: '2' }],
@@ -1802,6 +1822,14 @@ describe('W2-3 Task 4: the census and the active rule', () => {
     ['last_main_ts_ms is a string', { last_main_ts_ms: '1799999999000' }],
     ['last_main_ts_ms is missing', { last_main_ts_ms: undefined }],
     ['last_main_ts_ms is a float', { last_main_ts_ms: 1.5 }],
+    // Fix round 1: a number is not an integer. NaN and 1.5 pass a typeof test and fail Number.isSafeInteger.
+    ['session_pk is NaN', { session_pk: NaN }],
+    ['session_pk is a float', { session_pk: 1.5 }],
+    ['first_seen_ms is NaN', { first_seen_ms: NaN }],
+    ['first_seen_ms is a float', { first_seen_ms: 1000.5 }],
+    ['merged_into is NaN', { merged_into: NaN }],
+    ['merged_into is a float', { merged_into: 1.5 }],
+    ['last_main_ts_ms is NaN', { last_main_ts_ms: NaN }],
   ];
   it.each(MALFORMED)('malformed census row: activeFamilies refuses a row whose %s', async (_name, bad) => {
     const g = await gateT4();
