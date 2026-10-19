@@ -6,7 +6,7 @@
 // operator resolves it), `unmeasured` (something needed was unreadable or is not yet durably applied, so it is retried).
 //
 // THIS MODULE IS L1. It imports types, the model's pure helpers and nothing else: no filesystem, no clock, no randomness, no store
-// (and no state that outlives its inputs: D-5604's delta memo is keyed weakly by the window it describes).
+// (and no state that outlives its inputs: D-5604's memos are keyed weakly by the windows and window lists they describe).
 // Time comes only from the listing windows it is handed. It decides and emits NOTHING: no lease request, no journal entry, no effect.
 // Task 12's pure policy turns a `linked` verdict into a `DelegationLeaseCreationRequest` (and a `run-child-owned` one into a
 // `record-run-child-owned`, never a lease); Task 13 wires both to the watcher.
@@ -999,7 +999,7 @@ function rung3(input: DelegationCorrelationInput, canonical: string): Answer | n
  * pass (`delegationListingWindowsOf`), so rebuilding two Sets per window per tree cost seconds a pass on a busy repository. `added` is the
  * distinct names the after-listing adds to the before-listing (compared as sets, as `new Set` does), `removes` whether it drops any. A window
  * with no after-listing measured no delta: null. Keyed weakly by the window, so nothing outlives the windows it describes (the L1 header holds:
- * no state that outlives its inputs). It relies on a window never being mutated after it is built, which no caller does.
+ * no state that outlives its inputs); the window's parsed span sits beside it (`windowSpanOf`). It relies on a window never being mutated after it is built, which no caller does.
  */
 interface ListingDelta { readonly added: ReadonlySet<string>; readonly removes: boolean }
 const listingDeltas = new WeakMap<DelegationListingWindow, ListingDelta | null>();
@@ -1020,10 +1020,28 @@ function listingDeltaOf(window: DelegationListingWindow): ListingDelta | null {
   return delta;
 }
 
-/** Did this window add exactly the one record, and remove none? A window with no after-listing measured no delta at all. */
-function addedExactly(window: DelegationListingWindow, adminRecord: string): boolean {
-  const delta = listingDeltaOf(window);
-  return delta !== null && delta.added.size === 1 && delta.added.has(adminRecord) && !delta.removes;
+/**
+ * D-5604 (b): rung 4's candidates by lookup. An index, built once per window list rung 4 is handed, from a held window's SOLE added name (its delta adds
+ * exactly one name and removes none: the window "added exactly" that record; a window with no after-listing measured no delta at all) to those windows,
+ * in the list's order, which is the order `held` gives them, because the first overlap or unreadable instant decides a verdict. Keyed weakly by the
+ * list, which no caller changes once it is handed over.
+ */
+const soleAddedIndexes = new WeakMap<readonly DelegationListingWindow[], ReadonlyMap<string, readonly DelegationListingWindow[]>>();
+function soleAddedIndexOf(windows: readonly DelegationListingWindow[]): ReadonlyMap<string, readonly DelegationListingWindow[]> {
+  const known = soleAddedIndexes.get(windows);
+  if (known !== undefined) return known;
+  const index = new Map<string, DelegationListingWindow[]>();
+  for (const w of windows) {
+    if (w.lost === true) continue;
+    const delta = listingDeltaOf(w);
+    if (delta === null || delta.removes || delta.added.size !== 1) continue;
+    const [name] = delta.added;
+    if (name === undefined) continue;
+    const list = index.get(name);
+    if (list === undefined) index.set(name, [w]); else list.push(w);
+  }
+  soleAddedIndexes.set(windows, index);
+  return index;
 }
 
 /** Did this window's listings add the record (among others, or alone)? A window with no after-listing measured no delta. */
@@ -1037,9 +1055,27 @@ const mayBeOn = (w: DelegationListingWindow, repository: string): boolean =>
   w.repository === null || w.repository === repository
   || (w.listedRepository !== undefined && (w.listedRepository === null || w.listedRepository === repository));
 
+/** D-5604 (e): a window's instants as epoch ms, parsed ONCE per window object beside its delta. A refused instant is kept as the model's error it
+ *  threw, and rethrown where the code reads it, exactly where `parseDelegationInstant` threw before, so every catch arm answers as it did. */
+type ParsedInstant = number | DelegationModelError;
+interface WindowSpan { readonly start: ParsedInstant; readonly end: ParsedInstant }
+const windowSpans = new WeakMap<DelegationListingWindow, WindowSpan>();
+function parsedInstant(iso: string): ParsedInstant {
+  try { return parseDelegationInstant(iso); } catch (err) { if (err instanceof DelegationModelError) return err; throw err; }
+}
+function windowSpanOf(w: DelegationListingWindow): WindowSpan {
+  let span = windowSpans.get(w);
+  if (span === undefined) {
+    span = { start: parsedInstant(w.startedAt), end: w.endedAt === null ? Number.POSITIVE_INFINITY : parsedInstant(w.endedAt) };
+    windowSpans.set(w, span);
+  }
+  return span;
+}
+const instantOf = (p: ParsedInstant): number => { if (typeof p === 'number') return p; throw p; };
+/** A window's start as epoch milliseconds. Throws the model's error for an instant that is not canonical. */
+const startOf = (w: DelegationListingWindow): number => instantOf(windowSpanOf(w).start);
 /** A window as epoch milliseconds; an open-ended one runs for ever. Throws the model's error for an instant that is not canonical. */
-const spanOf = (w: DelegationListingWindow): [number, number] =>
-  [parseDelegationInstant(w.startedAt), w.endedAt === null ? Number.POSITIVE_INFINITY : parseDelegationInstant(w.endedAt)];
+const spanOf = (w: DelegationListingWindow): [number, number] => { const s = windowSpanOf(w); return [instantOf(s.start), instantOf(s.end)]; };
 
 /**
  * X1 (R84; coordinator 5477, 5484): could evidence the caller LOST have held the Bash call that created this tree? Rung 4 found no
@@ -1076,7 +1112,7 @@ function creatorMayBeLost(input: DelegationCorrelationInput, lostWindows: readon
   }
   for (const w of heldCreators) {
     let start: number;
-    try { start = parseDelegationInstant(w.startedAt); } catch (err) { if (err instanceof DelegationModelError) return true; throw err; }
+    try { start = startOf(w); } catch (err) { if (err instanceof DelegationModelError) return true; throw err; }
     if (lo <= start && start <= hi) return true;
   }
   return false;
@@ -1100,7 +1136,7 @@ function rung4(input: DelegationCorrelationInput, x1: boolean): Answer | null {
   const { record } = input;
   const held = input.listingWindows.filter((w) => w.lost !== true);
   const lostWindows = input.listingWindows.filter((w) => w.lost === true && mayBeOn(w, record.project));
-  const candidates = held.filter((w) => w.repository !== null && w.repository === record.project && addedExactly(w, record.adminRecord));
+  const candidates = (soleAddedIndexOf(input.listingWindows).get(record.adminRecord) ?? []).filter((w) => w.repository !== null && w.repository === record.project);
   if (candidates.length === 0) {
     // R85 (B-F1; spec §5.3: "a held Pre with no Post is a lost Post"): a HELD window that may be on this repository and may have been the
     // creator, but cannot be a candidate because part of its evidence is missing, is lost evidence for X1 too: one that is OPEN-ENDED (its
@@ -1161,8 +1197,8 @@ function rung4(input: DelegationCorrelationInput, x1: boolean): Answer | null {
     let reaches: boolean;
     try {
       reaches = horizon === null || Number.isNaN(horizon)
-        || held.some((w) => mayBeOn(w, record.project) && (w.endedAt === null || parseDelegationInstant(w.startedAt) <= horizon))
-        || parseDelegationInstant(mine.startedAt) <= horizon + DELEGATION_EVIDENCE_MARGIN_MS;
+        || held.some((w) => mayBeOn(w, record.project) && (w.endedAt === null || startOf(w) <= horizon))
+        || startOf(mine) <= horizon + DELEGATION_EVIDENCE_MARGIN_MS;
     } catch (err) {
       if (!(err instanceof DelegationModelError)) throw err;
       reaches = true;
