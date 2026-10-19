@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a8862748bbf9b0e8f1fc5a2215d62006db3d4565e1ef018193e8549585fea48c
+# ccrc:generated 1 sha256=4f0f04fe36ec5ce1bd09903230b75ccc872f68a86cb898e890f0e3f8528bf2bc
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
