@@ -3306,4 +3306,89 @@ describe('a carried segment counts only when it is whole and this store\'s (W5h-
     expect(clean.warn.map((i) => i.word)).not.toContain('export-segment-damaged');
     expect(clean.fail.map((i) => i.word)).not.toContain('status-unreadable');
   }, 120_000);
+
+  // ── W5h-1 Task 3 fix round 1 (FR1-F2): the two catches in the check that keep one bad file or one bad meta value from
+  // failing every step (the check would never finish, and doctor would FAIL export-marks-stalled after 24 h). ──────────
+  it('a file of the right length that is SQLite but holds no segment meta reads meta-unreadable: treated as missing, recorded, and the check still finishes (no failed stop record)', async () => {
+    const { box, ids, s1, s2, at, dir } = await twoSegments('ccrc-history-export-segmeta-');
+    // a plain SQLite database with one table: whole by its header, but segmentMeta cannot read a segment's meta from it
+    const plain = path.join(box.home, 'plain.db');
+    const db = new MemDb(plain);
+    db.exec('CREATE TABLE t (a INTEGER); INSERT INTO t VALUES (1);');
+    db.close();
+    fs.copyFileSync(plain, path.join(dir, s2));
+    const facts = x9Store.segmentFileFacts(path.join(dir, s2));
+    expect(x9Lib.decideSegmentWhole(facts), 'CONTROL: the file passes the length test, so the case reaches the meta read').toBe('whole');
+    const lines = await bindStep(box, ids, at, HOUR + MIN, HOUR + 2 * MIN);
+    expect(lines).toEqual([
+      `history-sweep: export segment ${s2} in ${dir} is meta-unreadable: its marks are cleared and its rows export again; it is left in place\n`,
+    ]);
+    expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: null, [rid(3)]: null });
+    expect(metaOf(box, HEALTH_META.exportSegmentDamaged)).toBe(JSON.stringify([s2]));
+    expect(counters(box)['export_segment_damaged']).toBe(1);
+    expect(counters(box)['export_marks_check_failed'], 'the throw reached exportStep\'s catch').toBeUndefined();
+    expect(metaOf(box, HEALTH_META.exportMarksCheck), 'a failed stop record stands').toBeNull();
+    expect(metaOf(box, 'export_marks_checked_ms'), 'the done stamp was not written').toBe(String(at(HOUR + 2 * MIN)()));
+  }, 120_000);
+
+  it('a damaged record that does not read back, standing when the check runs, is rewritten whole from this check\'s names (each counts as new); the check still finishes', async () => {
+    const { box, ids, s1, s2, at, dir } = await twoSegments('ccrc-history-export-segbadrec-');
+    await onStore(box, (db) => setMeta(db, HEALTH_META.exportSegmentDamaged, 'not a list'));
+    fs.truncateSync(path.join(dir, s2), 0);
+    const lines = await bindStep(box, ids, at, HOUR + MIN, HOUR + 2 * MIN);
+    expect(lines).toHaveLength(1);
+    expect(metaOf(box, HEALTH_META.exportSegmentDamaged)).toBe(JSON.stringify([s2]));
+    expect(counters(box)['export_segment_damaged']).toBe(1);
+    expect(counters(box)['export_marks_check_failed'], 'the throw reached exportStep\'s catch').toBeUndefined();
+    expect(metaOf(box, HEALTH_META.exportMarksCheck), 'a failed stop record stands').toBeNull();
+    expect(metaOf(box, 'export_marks_checked_ms'), 'the done stamp was not written').toBe(String(at(HOUR + 2 * MIN)()));
+    expect(marks(box)).toEqual({ [rid(1)]: s1, [rid(2)]: null, [rid(3)]: null });
+  }, 120_000);
+
+  // ── FR1-F1 (D-5641 (history-export-damaged-record-remeasured)): a repair in place clears the record without a bind ──
+  /** One step with NO new bind fact (so no check is owed), at `stepMs`, with stderr captured. */
+  async function plainStep(box: HistoryBox, ids: { storeId: string; writer: string }, at: (ms: number) => () => number, stepMs: number): Promise<string[]> {
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await onStore(box, (db) => SW.exportStep(db, exportCtx(box, ids, at(stepMs))));
+      return err.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('history-sweep: export segment '));
+    } finally {
+      err.mockRestore();
+    }
+  }
+  const warnWords = (box: HistoryBox): string[] => {
+    const r = runCli(box, ['status', '--json']);
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    return (r.json as unknown as { health: { warn: Array<{ word: string }> } }).health.warn.map((i) => i.word);
+  };
+
+  it('a recorded segment put back whole under its name leaves the record on the next step with no bind: doctor\'s WARN goes, nothing is counted, cleared or marked, and a segment still short stays recorded', async () => {
+    const { box, ids, s1, s2, at, dir } = await twoSegments('ccrc-history-export-segrepair-');
+    const good = fs.readFileSync(path.join(dir, s2));
+    fs.truncateSync(path.join(dir, s2), Math.floor(good.length / 2));
+    await bindStep(box, ids, at, HOUR + MIN, HOUR + 2 * MIN);
+    expect(metaOf(box, HEALTH_META.exportSegmentDamaged)).toBe(JSON.stringify([s2]));
+    expect(warnWords(box), 'CONTROL: the WARN stands while the file is short').toContain('export-segment-damaged');
+    const marksBefore = marks(box);
+    const still = await plainStep(box, ids, at, HOUR + 3 * MIN);
+    expect(still, 'a name that still fails stays, silently').toEqual([]);
+    expect(metaOf(box, HEALTH_META.exportSegmentDamaged)).toBe(JSON.stringify([s2]));
+    fs.writeFileSync(path.join(dir, s2), good);   // the WARN's first remedy: a whole copy back, under the same name
+    const lines = await plainStep(box, ids, at, HOUR + 4 * MIN);
+    expect(lines).toEqual([`history-sweep: export segment ${s2} in ${dir} is whole again; it leaves the damaged record\n`]);
+    expect(metaOf(box, HEALTH_META.exportSegmentDamaged)).toBe('[]');
+    expect(warnWords(box)).not.toContain('export-segment-damaged');
+    expect(counters(box)['export_segment_damaged'], 'not counted again').toBe(1);
+    expect(marks(box), 'nothing cleared or marked').toEqual(marksBefore);
+    expect(await plainStep(box, ids, at, HOUR + 5 * MIN), 'an empty record is left alone').toEqual([]);
+    expect(metaOf(box, HEALTH_META.exportSegmentDamaged)).toBe('[]');
+    void s1;
+  }, 120_000);
+
+  it('a damaged record that does not read back is left alone by a step that owes no check: no throw, the pass still runs, status names it unmeasured', async () => {
+    const { box, ids, at } = await twoSegments('ccrc-history-export-segbadrec2-');
+    await onStore(box, (db) => setMeta(db, HEALTH_META.exportSegmentDamaged, 'not a list'));
+    await plainStep(box, ids, at, HOUR + 3 * MIN);
+    expect(metaOf(box, HEALTH_META.exportSegmentDamaged)).toBe('not a list');
+  }, 120_000);
 });

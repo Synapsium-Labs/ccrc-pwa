@@ -8698,6 +8698,8 @@ export async function exportStep(db, ctx) {
       del.run(EXPORT_MARKS_COUNTED_META);
     });
   }
+  // D-5641 (history-export-damaged-record-remeasured): no check is owed, so a name the damaged record holds is re-measured.
+  if (!markCheck.check) remeasureDamagedSegments(db, ctx);
   const nowMs = ctx.now();
   const msOf = (k) => {
     const v = getMeta(db, k);
@@ -8857,6 +8859,29 @@ function noteSegmentsDamaged(db, dir, damaged) {
   });
   for (const d of fresh) {
     process.stderr.write(`history-sweep: export segment ${d.name} in ${dir} is ${d.verdict}: its marks are cleared and its rows export again; it is left in place\n`);
+  }
+}
+
+/** D-5641 (history-export-damaged-record-remeasured): a step that owes no check re-measures the names the damaged record
+ *  holds, and only those, with the check's own measurement and lib's verdicts (segmentsWholeAndOwn). A name that now reads
+ *  whole and this store's leaves the record, so a repair in place (a whole copy put back under the name, or a late carry
+ *  that finished) clears doctor's WARN without waiting for the next bind. The record is rewritten only when it changes;
+ *  nothing is counted, cleared or marked (the name's marks were cleared when it was recorded). A name that still fails, or is
+ *  now absent, stays until a check rewrites the record. An absent or empty record costs nothing; one that does not read
+ *  back is left alone (the next check rewrites it whole, and status names it unmeasured). Nothing under export/ is written
+ *  and no file is opened read-write. */
+function remeasureDamagedSegments(db, ctx) {
+  const was = getMeta(db, HEALTH_META.exportSegmentDamaged);
+  if (was === null) return;
+  let names;
+  try { names = readSegmentNameList(was); } catch { return; }
+  if (names.length === 0) return;
+  const dir = exportDirFor(ctx.paths, ctx.ids.storeId);
+  const { present, damaged } = segmentsWholeAndOwn(dir, names, ctx.ids.storeId);
+  if (present.length === 0) return;
+  setMeta(db, HEALTH_META.exportSegmentDamaged, JSON.stringify(damaged.map((d) => d.name)));
+  for (const name of present) {
+    process.stderr.write(`history-sweep: export segment ${name} in ${dir} is whole again; it leaves the damaged record\n`);
   }
 }
 
