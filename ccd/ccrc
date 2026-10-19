@@ -1466,7 +1466,9 @@ _models_answer_locked() {   # <id> <op> [--k v…]
 # - THE FD STAYS IN THIS SHELL: node runs in a subshell that first closes MODELS_LOCK_FD, so neither node nor the
 #   bound's watcher holds the lock. On a box with no coreutils `timeout`, `_plat_timeout`'s watcher is a subshell
 #   whose orphaned `sleep` outlives node by up to the whole bound, and with the fd it would keep the lane locked
-#   that long after node had answered. The lock is held by this shell, which waits for node.
+#   that long after node had answered. The lock is held by this shell, which waits for node. The price: a SIGKILL
+#   to this shell ALONE frees the lane while node may still be writing; a SIGINT to the process group (Ctrl-C) and a
+#   systemd stop of the unit's control group signal node too, so neither leaves a writer running unlocked.
 MODELS_NODE_BOUND_S=10
 _models_node_locked() {   # <id> <op> [--k v…]
   local id="$1" rc=0 took=1; shift
@@ -10174,6 +10176,9 @@ _models_endpoints() {   # <accountId> <modelId> -> sets MODELS_ENDPOINTS_TMP
     || _models_refuse install-incomplete 1 "the model probe is missing or not executable: $probe — is this a complete ccrc install? Nothing was written."
   local tmp
   tmp="$(_plat_mktemp)" || _models_refuse unwritable 1 "could not create a temp file for the OpenRouter endpoints answer. Nothing was written."
+  # Removed on EVERY exit of this run, not only by the caller's `rm`: the locked write that reads it can refuse (the
+  # lane-files lock, or `_models_answer`'s no-answer), and a refusal exits before that `rm` is reached.
+  _tmp_guard "$tmp"
   local msg rc
   msg="$(_models_run_probe "$1" "$probe" "$1" openrouter --endpoints "$2" --out "$tmp" 2>&1 1>/dev/null)"
   rc=$?

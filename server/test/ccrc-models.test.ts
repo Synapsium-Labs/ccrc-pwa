@@ -1335,6 +1335,28 @@ describe('ccrc models <id> discovery', () => {
       expect(fs.readdirSync(tmpdir)).toEqual([]);
     });
 
+    // Auto-advance Task 4 fix round 1, a bug fix: the endpoints temp file is made BEFORE the locked write, and a
+    // refusal of that write (the lane-files lock's, or `_models_answer`'s no-answer) exits before the arm's own rm.
+    // A FIFO at the lane's lock path is refused `lock-unwritable` at once, with no holder to manage. It replaces the
+    // lock file `beforeEach`'s `init` made.
+    it.skipIf(spawnSync('bash', ['-c', 'command -v flock'], { encoding: 'utf8' }).status !== 0)(
+      'leaves no endpoints temp file behind when the lane-files lock refuses the write', () => {
+        whitelist(['provider-a']);
+        const tmpdir = join(home, 'tmpdir-for-endpoints');
+        fs.mkdirSync(tmpdir);
+        const lock = join(home, '.ccrc', 'locks', 'models-router.lock');
+        fs.mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
+        fs.rmSync(lock, { force: true });
+        const fifo = spawnSync('mkfifo', [lock], { encoding: 'utf8' });
+        expect(fifo.status, fifo.stderr).toBe(0);
+        const r = run(['models', 'router', 'discovery', 'add', 'vendor-a/model-6-alpha'],
+          { CCRC_MODELS_PROBE_FIXTURE: endpointsFixture(['Provider-A']), TMPDIR: tmpdir });
+        expect(r.code, r.stdout + r.stderr).toBe(1);
+        expect(oneObject(r)['error']).toBe('lock-unwritable');
+        expect(registryOf('router')['discovery']).toEqual([]);
+        expect(fs.readdirSync(tmpdir)).toEqual([]);
+      });
+
     // Controller ruling on `_models_endpoints` (Task 8, predates the brief):
     // the probe has no lane context, so a lane with no `exec.secretsFile` and
     // no ambient key gets the probe's OWN refusal, surfaced unchanged.

@@ -248,6 +248,19 @@ describe.skipIf(!HAVE_FLOCK)('the lane-files lock itself: _codex_lock\'s contrac
     expect(fs.existsSync(join(h, '.ccrc', 'locks'))).toBe(false);
   });
 
+  it('_models_node_locked answers a malformed id rc 2 with one bad-account-id object, and never reaches node', () => {
+    const h = box();
+    // A node that leaves a mark, at the head of PATH: the refusal must come before it.
+    fs.writeFileSync(join(h, '.local', 'bin', 'node'), '#!/bin/sh\necho ran >> "$HOME/node-ran"\nexit 0\n', { mode: 0o755 });
+    const r = lib(h, '_models_node_locked ../x materialise --file "$(_models_roster_path)" --id ../x; echo "rc=$?"');
+    const [body, rc, end] = r.stdout.split('\n');
+    expect(rc, r.stdout + r.stderr).toBe('rc=2');
+    expect(end).toBe('');
+    expect(JSON.parse(body!)).toMatchObject({ ok: false, error: 'bad-account-id' });
+    expect(fs.existsSync(join(h, 'node-ran')), 'node ran for a malformed id').toBe(false);
+    expect(fs.existsSync(join(h, '.ccrc', 'locks'))).toBe(false);
+  });
+
   it('a missing wrapper-shape contract is install-incomplete, never bad-account-id (D-5204)', () => {
     const h = box();
     fs.rmSync(join(h, 'ccrc', 'ccd', 'ccrc-wrapper-shape'));
@@ -362,6 +375,41 @@ describe.skipIf(!HAVE_FLOCK)('the lane-files lock itself: _codex_lock\'s contrac
     ].join('\n'), { CCRC_MODELS_LOCK_S: '1', CCRC_CODEX_READY_S: '1' });
     expect(r.stdout, r.stderr).toBe(['tier rc=0', 'files rc=0 id=lane-b', 'tier held', 'files held', 'files free',
       'tier held', 'tier free', 'at-once=1', ''].join('\n'));
+  });
+});
+
+// The wait's value, measured: "falls back to 20 s" above proves only a wait of at least 2 s.
+describe('the wait: CCRC_MODELS_LOCK_S whole seconds from 1 to 300, else 20 (D21)', () => {
+  it('flock is asked to wait the value when it is 1 to 300 whole seconds, and 20 s otherwise', () => {
+    const h = box();
+    // A recording flock at the head of PATH: it notes the -w it was given and answers as if it took the lock, so
+    // each value is measured at once, with no holder and no wait.
+    fs.writeFileSync(join(h, '.local', 'bin', 'flock'),
+      '#!/bin/sh\n[ "$1" = -w ] && printf \'%s\\n\' "$2" >> "$HOME/flock-w"\nexit 0\n', { mode: 0o755 });
+    const r = lib(h, [
+      'for v in unset 0 08 300 301 1000 abc; do',
+      '  if [ "$v" = unset ]; then unset CCRC_MODELS_LOCK_S; else CCRC_MODELS_LOCK_S="$v"; fi',
+      '  : > "$HOME/flock-w"',
+      '  _models_lock lane-a; rc=$?',
+      '  echo "$v rc=$rc w=$(cat "$HOME/flock-w")"',
+      '  _models_unlock',
+      'done',
+    ].join('\n'));
+    expect(r.stdout, r.stderr).toBe(['unset rc=0 w=20', '0 rc=0 w=20', '08 rc=0 w=8', '300 rc=0 w=300',
+      '301 rc=0 w=20', '1000 rc=0 w=20', 'abc rc=0 w=20', ''].join('\n'));
+    expect(r.stderr).toBe('');
+  });
+
+  it("a capture site's bound plus its kill grace ends inside the default wait, so a waiter outlasts a holder whose node hung", () => {
+    const src = fs.readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const bound = /^MODELS_NODE_BOUND_S=(\d+)$/m.exec(src);
+    const grace = /^ {2}\[ "\$grace" -gt (\d+) \] && grace=\1$/m.exec(src);   // _plat_timeout's kill-grace ceiling
+    const wait = /^ {2}bound="\$\{CCRC_MODELS_LOCK_S:-(\d+)\}"$/m.exec(src);   // _models_lock's default wait
+    expect(bound, 'ccd/ccrc has no file-scope MODELS_NODE_BOUND_S').not.toBeNull();
+    expect(grace, "_plat_timeout has no kill-grace ceiling").not.toBeNull();
+    expect(wait, "_models_lock has no default wait").not.toBeNull();
+    expect(Number(bound![1]) + Number(grace![1]), `${bound![1]} s + ${grace![1]} s against ${wait![1]} s`)
+      .toBeLessThan(Number(wait![1]));
   });
 });
 
@@ -575,12 +623,35 @@ describe('no writing models-op call runs outside the lane lock (D21)', () => {
           if (m[1] === 'materialise' && /--check true\b/.test(l)) continue;
           offenders.push(`${f}: ${l.trim()}`);
         }
-        // An op held in a variable cannot be proved read-only, so it is locked too. `"$@"` is the two wrappers'
-        // own pass-through, which is what holds the lock.
-        if (/\b_models_(?:answer|node)\s+"\$(?!@")[A-Za-z_]+"/.test(l)) offenders.push(`${f}: ${l.trim()}`);
+        // An op held in a variable cannot be proved read-only, so it is locked too, however it is spelled ("$op",
+        // "${op}", $op). `"$@"` is the two wrappers' own pass-through, which is what holds the lock. A call whose op
+        // is continued onto the next line cannot be read here, so it is flagged too.
+        if (/\b_models_(?:answer|node)\s+(?!"\$@")"?\$\{?[A-Za-z_]/.test(l)) offenders.push(`${f}: ${l.trim()}`);
+        if (/\b_models_(?:answer|node)\s*\\\s*$/.test(l)) offenders.push(`${f}: ${l.trim()}`);
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('no line runs deploy/models-op.mjs itself but the two the wrappers are built on', () => {
+    const DEFS = [
+      '_models_node() { node "$CCRC_HERE/../deploy/models-op.mjs" "$@"; }',
+      '_plat_timeout "$MODELS_NODE_BOUND_S" node "$CCRC_HERE/../deploy/models-op.mjs" "$@"',
+    ];
+    // An invocation: `node` with the program as its next word, or the program followed by an argument (a variable,
+    // an op word and its first flag, or a line continuation). A sentence that names the file is neither.
+    const RUNS = /\bnode\s+["']?[^"'\s]*models-op\.mjs|models-op\.mjs["']?\s+(?:["']?\$|[a-z][a-z-]*\s+--|\\\s*$)/;
+    const seen: string[] = [];
+    const offenders: string[] = [];
+    for (const f of ['ccrc', 'ccrc-doctor-checks']) {
+      for (const l of code(f)) {
+        if (!RUNS.test(l)) continue;
+        if (f === 'ccrc' && DEFS.includes(l.trim())) { seen.push(l.trim()); continue; }
+        offenders.push(`${f}: ${l.trim()}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+    expect(seen.sort(), 'the scan no longer sees the two definitions').toEqual([...DEFS].sort());
   });
 
   it('and it is looking at something: the locked sites are there, each locking the lane it names in --id', () => {
