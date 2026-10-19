@@ -2895,3 +2895,385 @@ describe('W2-3 Task 6: the bootstrap, the assignment and Q18', () => {
     expect(uniformIs([0x00000040, 0x00000000], 134217728.5 / 9007199254740992)).toBe(true);   // a = 2
   });
 });
+
+// ── W2-3 Task 7: the quiz labeller and its texts (W2-D60 to W2-D64, W2-D72, W2-D79) ─────────────────────────────
+// Pure: every case calls deploy/history-gate.mjs with literals and reads no store. Departures: D-5776 (the single
+// ANSWER field), D-5777 (a 7-character SHA prefix is correct by default), D-5778 (both rubrics widen `uncertain`),
+// D-5779 (the writer sees an excerpt by default). The SHA fixtures are built at runtime from a repeated chunk, so no
+// 40-character hex literal sits in this file.
+import * as t7Gate from '../../deploy/history-gate.mjs';
+import { sha256Hex as t7Sha256Hex } from '../../ccd/history/lib.mjs';
+
+describe('W2-3 Task 7: the quiz labeller and its texts', () => {
+  const ROOT_R = { repoRoots: ['/r'] };
+  const NO_ROOTS = { repoRoots: [] as string[] };
+  const SHA40 = '3f9a1c7e2b'.repeat(4);
+  const F9 = SHA40.slice(0, 9);
+  const at7 = { repoRoots: [] as string[], shaMinPrefix: 7 as const };
+  const at40 = { repoRoots: [] as string[], shaMinPrefix: 40 as const };
+  const pathAt7 = { repoRoots: ['/r'], shaMinPrefix: 7 as const };
+  const CMD39 = 'npm run build -- --filter=pkg-a --watch';
+  const CMD50 = 'git push --force-with-lease origin topic-branch-a1';
+
+  it('CONTROL: the fixtures have the lengths the cases below rely on, and Task 2 declared the words this task reads', () => {
+    expect([SHA40.length, F9.length, CMD39.length, CMD50.length]).toEqual([40, 9, 39, 50]);
+    expect(t7Gate.FACT_KINDS).toEqual(['sha', 'path', 'command', 'error']);
+    expect(t7Gate.SHA_MIN_PREFIXES).toEqual([7, 40]);
+    expect([...t7Gate.RUBRIC_IDS].sort()).toEqual(['v1', 'v1-strict']);
+    expect([...t7Gate.ANSWER_STATES].sort()).toEqual(['absent', 'unknown', 'value']);
+    expect(t7Gate.GATE_REASONS).toEqual(expect.arrayContaining(['writer-malformed', 'writer-leak']));
+    expect(t7Gate.LABELLER).toEqual({ sha_admit_prefix: 7, path_min: 8, window: 40,
+      path_forms: ['absolute', 'repo-relative', 'tail', 'basename'], boundaries: 'v1' });
+    expect(Object.isFrozen(t7Gate.LABELLER) && Object.isFrozen(t7Gate.LABELLER.path_forms)).toBe(true);
+  });
+
+  it('collapseWs turns every run of Unicode whitespace into one space and trims', () => {
+    const [nbsp, em, ls] = [0xa0, 0x2003, 0x2028].map((c) => String.fromCodePoint(c));
+    expect(t7Gate.collapseWs(`${nbsp} git\t\tstatus\n${em} --short ${ls}`)).toBe('git status --short');
+  });
+
+  describe('admitFact (W2-D62): a plain substring test, no token boundaries', () => {
+    it('sha: a 6-character prefix in B admits, and a 7-character one rejects', () => {
+      expect(t7Gate.admitFact('sha', F9, `checked out ${F9.slice(0, 6)} earlier`, 'q', NO_ROOTS))
+        .toEqual({ admitted: true, hit: null });
+      expect(t7Gate.admitFact('sha', F9, `checked out ${F9.slice(0, 7)} earlier`, 'q', NO_ROOTS))
+        .toEqual({ admitted: false, hit: { where: 'baseline', variant: F9.slice(0, 7) } });
+    });
+
+    it('sha: a 40-character SHA in B rejects a 9-character F, in either case', () => {
+      expect(t7Gate.admitFact('sha', F9, `merged ${SHA40}`, 'q', NO_ROOTS).admitted).toBe(false);
+      expect(t7Gate.admitFact('sha', F9, `MERGED ${SHA40.toUpperCase()}`, 'q', NO_ROOTS).admitted).toBe(false);
+    });
+
+    it('path: a repo-relative tail rejects; the 6-character basename alone does not', () => {
+      const F = '/w/proj/src/deep/mod.ts';
+      expect(t7Gate.admitFact('path', F, 'opened deep/mod.ts', 'q', { repoRoots: ['/w/proj'] }))
+        .toEqual({ admitted: false, hit: { where: 'baseline', variant: 'deep/mod.ts' } });
+      expect(t7Gate.admitFact('path', F, 'opened mod.ts', 'q', { repoRoots: ['/w/proj'] }).admitted).toBe(true);
+    });
+
+    it('path: F=/r/lib/x.c with lib/x.c in B rejects (a tail has no length floor)', () => {
+      expect(t7Gate.admitFact('path', '/r/lib/x.c', 'see lib/x.c', 'q', NO_ROOTS))
+        .toEqual({ admitted: false, hit: { where: 'baseline', variant: 'lib/x.c' } });
+    });
+
+    it('path: F=/r/go.mod with go.mod in B and root /r rejects (a repo-relative form has no length floor)', () => {
+      expect(t7Gate.admitFact('path', '/r/go.mod', 'edit go.mod', 'q', ROOT_R))
+        .toEqual({ admitted: false, hit: { where: 'baseline', variant: 'go.mod' } });
+      expect(t7Gate.admitFact('path', '/r/go.mod', 'edit go.mod', 'q', NO_ROOTS).admitted, 'CONTROL: without the root, go.mod is only a short basename').toBe(true);
+    });
+
+    it('path: a 7-character basename alone admits, and an 8-character one rejects', () => {
+      expect(t7Gate.admitFact('path', '/r/src/util.ts', 'edit util.ts', 'q', ROOT_R).admitted).toBe(true);
+      expect(t7Gate.admitFact('path', '/r/src/utils.ts', 'edit utils.ts', 'q', ROOT_R))
+        .toEqual({ admitted: false, hit: { where: 'baseline', variant: 'utils.ts' } });
+    });
+
+    it('path: matching is case-sensitive', () => {
+      expect(t7Gate.admitFact('path', '/r/src/config.json', 'read src/Config.json', 'q', ROOT_R).admitted).toBe(true);
+    });
+
+    it('command: a 39-character command is matched whole', () => {
+      expect(t7Gate.factVariants('command', CMD39, NO_ROOTS)).toEqual([CMD39]);
+      expect(t7Gate.admitFact('command', CMD39, `ran ${CMD39.slice(0, 38)}`, 'q', NO_ROOTS).admitted).toBe(true);
+      expect(t7Gate.admitFact('command', CMD39, `ran ${CMD39}`, 'q', NO_ROOTS))
+        .toEqual({ admitted: false, hit: { where: 'baseline', variant: CMD39 } });
+    });
+
+    it('command: at 40 characters or more every 40-character window is a variant, and 39 characters of one admit', () => {
+      expect(t7Gate.factVariants('command', CMD50, NO_ROOTS)).toHaveLength(11);
+      expect(t7Gate.admitFact('command', CMD50, `x ${CMD50.slice(5, 45)} y`, 'q', NO_ROOTS).admitted).toBe(false);
+      expect(t7Gate.admitFact('command', CMD50, `x ${CMD50.slice(5, 44)} y`, 'q', NO_ROOTS).admitted).toBe(true);
+    });
+
+    it('command and error: B is collapsed too, so a multi-line rendering still rejects', () => {
+      const F = 'git rebase --onto main topic-branch';
+      expect(t7Gate.admitFact('command', F, 'ran git rebase\n    --onto main   topic-branch', 'q', NO_ROOTS).admitted).toBe(false);
+      expect(t7Gate.admitFact('error', 'fatal: bad object HEAD~3', 'fatal:  bad\nobject HEAD~3', 'q', NO_ROOTS).admitted).toBe(false);
+    });
+
+    it('W2-D72: a stub question holding a 7-character SHA prefix fails admission at the question (writer-leak)', () => {
+      expect(t7Gate.admitFact('sha', F9, 'nothing of it here', `Which commit begins ${F9.slice(0, 7)}?`, NO_ROOTS))
+        .toEqual({ admitted: false, hit: { where: 'question', variant: F9.slice(0, 7) } });
+    });
+
+    it('a kind outside FACT_KINDS throws: decisions are not sourced (W2-D60)', () => {
+      expect(() => t7Gate.factVariants('decision', 'use the queue', NO_ROOTS)).toThrow(/FACT_KINDS|not one of/);
+      expect(() => t7Gate.admitFact('decision', 'use the queue', '', '', NO_ROOTS)).toThrow(/not one of/);
+    });
+  });
+
+  describe('labelCorrect (W2-D63): only the ANSWER value, with boundaries', () => {
+    it('sha: a 40-character SHA for a 9-character F is correct, in either case', () => {
+      expect(t7Gate.labelCorrect('sha', F9, `It is ${SHA40}.`, at7)).toBe(true);
+      expect(t7Gate.labelCorrect('sha', F9, SHA40.toUpperCase(), at7)).toBe(true);
+    });
+
+    it('sha: a 9-character run that diverges after 7 shared characters is not correct', () => {
+      expect(t7Gate.labelCorrect('sha', F9, `${F9.slice(0, 7)}00`, at7)).toBe(false);
+    });
+
+    it('sha: two SHAs are not correct, and a hedged abc1234 or def5678 is not', () => {
+      expect(t7Gate.labelCorrect('sha', F9, `${F9} ${'abcdef1'}`, at7)).toBe(false);
+      expect(t7Gate.labelCorrect('sha', 'abc1234ffff', 'abc1234 or def5678', at7)).toBe(false);
+    });
+
+    it('sha: a hex run joined to a non-hex letter is no run', () => {
+      expect(t7Gate.labelCorrect('sha', F9, `${F9}x`, at7)).toBe(false);
+    });
+
+    it('sha: each shaMinPrefix value is pinned, and any other throws', () => {
+      expect(t7Gate.labelCorrect('sha', SHA40, SHA40.slice(0, 7), at7)).toBe(true);
+      expect(t7Gate.labelCorrect('sha', SHA40, SHA40.slice(0, 7), at40)).toBe(false);
+      expect(t7Gate.labelCorrect('sha', SHA40, SHA40.slice(0, 39), at40)).toBe(false);
+      expect(t7Gate.labelCorrect('sha', SHA40, SHA40, at40)).toBe(true);
+      expect(() => t7Gate.labelCorrect('sha', SHA40, SHA40, { repoRoots: [], shaMinPrefix: 12 as unknown as 7 })).toThrow(/shaMinPrefix/);
+    });
+
+    it('path: src/app.tsx for src/app.ts is not correct; src/app.ts and a final period are', () => {
+      const F = '/r/src/app.ts';
+      expect(t7Gate.labelCorrect('path', F, 'src/app.tsx', pathAt7)).toBe(false);
+      expect(t7Gate.labelCorrect('path', F, 'src/app.ts', pathAt7)).toBe(true);
+      expect(t7Gate.labelCorrect('path', F, 'It is /r/src/app.ts.', pathAt7)).toBe(true);
+    });
+
+    it('path: the left boundary refuses a form glued to a path character', () => {
+      expect(t7Gate.labelCorrect('path', '/r/src/app.ts', '~/r/src/app.ts', { repoRoots: [], shaMinPrefix: 7 })).toBe(false);
+    });
+
+    it('path: a short repo-relative form needs its right boundary too', () => {
+      expect(t7Gate.labelCorrect('path', '/r/go.mod', 'go.mod', pathAt7)).toBe(true);
+      expect(t7Gate.labelCorrect('path', '/r/go.mod', 'go.mod5', pathAt7)).toBe(false);
+    });
+
+    it('path: a basename alone is not correct', () => {
+      expect(t7Gate.labelCorrect('path', '/r/src/app.ts', 'app.ts', pathAt7)).toBe(false);
+    });
+
+    it('path: a second path-shaped token that is not one of F\'s forms makes the answer not correct', () => {
+      expect(t7Gate.labelCorrect('path', '/r/src/app.ts', '/r/src/app.ts or /r/src/other.ts', pathAt7)).toBe(false);
+      expect(t7Gate.labelCorrect('path', '/r/src/app.ts', '/r/src/app.ts (src/app.ts)', pathAt7), 'CONTROL: two of F\'s own forms').toBe(true);
+    });
+
+    it('command: npm run test:e2e for npm run test is not correct', () => {
+      expect(t7Gate.labelCorrect('command', 'npm run test', 'npm run test:e2e', at7)).toBe(false);
+      expect(t7Gate.labelCorrect('command', 'npm run test', '`npm run test`', at7), 'CONTROL: a backtick is a boundary').toBe(true);
+    });
+
+    it('command: the left boundary refuses a glued prefix, and a final period is allowed', () => {
+      expect(t7Gate.labelCorrect('command', 'npm run test', 'xnpm run test', at7)).toBe(false);
+      expect(t7Gate.labelCorrect('command', 'npm run test', 'Run npm run test.', at7)).toBe(true);
+    });
+
+    it('command: the value is collapsed before the match', () => {
+      expect(t7Gate.labelCorrect('command', 'npm run test', 'npm  run\ttest', at7)).toBe(true);
+    });
+
+    it('command and error: "X or Y" is not correct', () => {
+      expect(t7Gate.labelCorrect('command', 'npm run test', 'npm run test or npm run lint', at7)).toBe(false);
+      expect(t7Gate.labelCorrect('error', 'fatal: bad object HEAD~3', 'either x OR fatal: bad object HEAD~3', at7)).toBe(false);
+      expect(t7Gate.labelCorrect('error', 'fatal: a or b', 'fatal: a or b', at7), 'CONTROL: an "or" inside F is F\'s own').toBe(true);
+    });
+  });
+
+  describe('the answer protocol and its parser (W2-D64, D-5776)', () => {
+    it('the last of two ANSWER lines wins', () => {
+      expect(t7Gate.parseAnswerField('ANSWER: abc1234\nthinking again\nANSWER: def5678')).toEqual({ state: 'value', value: 'def5678' });
+    });
+
+    it('no ANSWER line is absent, even with F in the reply', () => {
+      expect(t7Gate.parseAnswerField(`The commit is ${F9}.`)).toEqual({ state: 'absent' });
+      expect(t7Gate.parseAnswerField('answer: x\n  ANSWER: y')).toEqual({ state: 'absent' });
+    });
+
+    it('UNKNOWN in any case, quoted or bare, is unknown', () => {
+      expect(t7Gate.parseAnswerField('ANSWER: unknown')).toEqual({ state: 'unknown' });
+      expect(t7Gate.parseAnswerField('ANSWER: "UNKNOWN"')).toEqual({ state: 'unknown' });
+    });
+
+    it('one layer of matching quotes or backticks is stripped, and only one', () => {
+      expect(t7Gate.parseAnswerField('ANSWER: `npm run test`')).toEqual({ state: 'value', value: 'npm run test' });
+      expect(t7Gate.parseAnswerField('ANSWER: "\'x\'"')).toEqual({ state: 'value', value: "'x'" });
+      expect(t7Gate.parseAnswerField('ANSWER: "x`')).toEqual({ state: 'value', value: '"x`' });
+    });
+
+    it('a hedged abc1234 or def5678 is a value, and not correct', () => {
+      const a = t7Gate.parseAnswerField('ANSWER: abc1234 or def5678');
+      expect(a).toEqual({ state: 'value', value: 'abc1234 or def5678' });
+      expect(t7Gate.labelCorrect('sha', 'abc1234ffff', (a as { value: string }).value, at7)).toBe(false);
+    });
+
+    it('every state it answers is an ANSWER_STATES member, and the protocol never parses as an answer', () => {
+      for (const t of ['ANSWER: x', 'ANSWER: UNKNOWN', 'none']) expect(t7Gate.ANSWER_STATES).toContain(t7Gate.parseAnswerField(t).state);
+      expect(t7Gate.parseAnswerField(t7Gate.ANSWER_PROTOCOL)).toEqual({ state: 'absent' });
+      expect(t7Gate.ANSWER_PROTOCOL).toContain('`ANSWER: <single exact value>`');
+      expect(t7Gate.ANSWER_PROTOCOL).toContain('`ANSWER: UNKNOWN`');
+    });
+  });
+
+  describe('the writer prompt and its reply (W2-D72, D-5779)', () => {
+    it('the last QUESTION line is the question, trimmed', () => {
+      expect(t7Gate.parseQuestionLine('QUESTION: first?\nQUESTION:  Which command rebuilt the cache?  '))
+        .toEqual({ ok: true, question: 'Which command rebuilt the cache?' });
+    });
+
+    it('600 characters pass and 601 are writer-malformed', () => {
+      expect(t7Gate.WRITER_QUESTION_MAX).toBe(600);
+      expect(t7Gate.parseQuestionLine(`QUESTION: ${'q'.repeat(600)}`)).toEqual({ ok: true, question: 'q'.repeat(600) });
+      expect(t7Gate.parseQuestionLine(`QUESTION: ${'q'.repeat(601)}`)).toEqual({ ok: false, word: 'writer-malformed' });
+    });
+
+    it('no QUESTION line, or one with only whitespace, is writer-malformed; so is the prompt itself', () => {
+      expect(t7Gate.parseQuestionLine('Which command rebuilt the cache?')).toEqual({ ok: false, word: 'writer-malformed' });
+      expect(t7Gate.parseQuestionLine('QUESTION:    ')).toEqual({ ok: false, word: 'writer-malformed' });
+      expect(t7Gate.parseQuestionLine(t7Gate.WRITER_PROMPT)).toEqual({ ok: false, word: 'writer-malformed' });
+    });
+  });
+
+  describe('the rubrics and the label line (W2-D79, D-5778)', () => {
+    it('RUBRICS holds exactly the RUBRIC_IDS, and both texts place several candidates and no answer in uncertain', () => {
+      expect(Object.keys(t7Gate.RUBRICS).sort()).toEqual([...t7Gate.RUBRIC_IDS].sort());
+      for (const id of t7Gate.RUBRIC_IDS) {
+        const r = t7Gate.RUBRICS[id as 'v1' | 'v1-strict'];
+        expect(r).toContain('several candidate values');
+        expect(r).toContain('gives no answer at all');
+        expect(r).toContain('of any kind');
+        expect(t7Gate.parseLabelLine(r), 'the rubric never parses as a label').toEqual({ ok: false });
+      }
+      expect(t7Gate.RUBRICS.v1).toContain('without hedging');
+      expect(t7Gate.RUBRICS['v1-strict']).toContain('with or without hedging');
+    });
+
+    it('the last LABEL line wins, and its label is a LABELS member', () => {
+      const r = t7Gate.parseLabelLine('LABEL: uncertain\nOn reflection:\nLABEL: fabricated  ');
+      expect(r).toEqual({ ok: true, label: 'fabricated' });
+      expect(t7Gate.LABELS).toContain((r as { label: string }).label);
+    });
+
+    it('any other word, another case or no line is malformed', () => {
+      expect(t7Gate.parseLabelLine('LABEL: correct')).toEqual({ ok: false });
+      expect(t7Gate.parseLabelLine('LABEL: Fabricated')).toEqual({ ok: false });
+      expect(t7Gate.parseLabelLine('LABEL: fabricated, probably')).toEqual({ ok: false });
+      expect(t7Gate.parseLabelLine('fabricated')).toEqual({ ok: false });
+    });
+  });
+
+  describe('the signed texts (W2-D64, W2-D72, W2-D79)', () => {
+    it('each sha constant is lib\'s sha256Hex of its text, over its UTF-8 bytes', () => {
+      expect(t7Sha256Hex(String.fromCodePoint(0xe9))).toBe(createHash('sha256').update(Buffer.from([0xc3, 0xa9])).digest('hex'));
+      expect(t7Gate.ANSWER_PROTOCOL_SHA256).toBe(t7Sha256Hex(t7Gate.ANSWER_PROTOCOL));
+      expect(t7Gate.WRITER_PROMPT_SHA256).toBe(t7Sha256Hex(t7Gate.WRITER_PROMPT));
+      expect(t7Gate.RUBRIC_SHA256.v1).toBe(t7Sha256Hex(t7Gate.RUBRICS.v1));
+      expect(t7Gate.RUBRIC_SHA256['v1-strict']).toBe(t7Sha256Hex(t7Gate.RUBRICS['v1-strict']));
+      expect(new Set([t7Gate.ANSWER_PROTOCOL_SHA256, t7Gate.WRITER_PROMPT_SHA256, t7Gate.RUBRIC_SHA256.v1,
+        t7Gate.RUBRIC_SHA256['v1-strict']]).size).toBe(4);
+    });
+
+    it('no signed text names a model class, and each is plain ASCII', () => {
+      const texts = [t7Gate.ANSWER_PROTOCOL, t7Gate.WRITER_PROMPT, t7Gate.RUBRICS.v1, t7Gate.RUBRICS['v1-strict']];
+      const classWord = new RegExp(['hai', 'ku|son', 'net'].join(''), 'i');
+      for (const t of texts) {
+        expect(t).not.toMatch(classWord);
+        expect(t).toMatch(/^[\x20-\x7e\n]+$/);
+      }
+    });
+  });
+
+  describe('edge pins (every guard, one step either side)', () => {
+    const [LS, PS] = [0x2028, 0x2029].map((c) => String.fromCodePoint(c));
+
+    it('factVariants: a root with a trailing slash still yields the repo-relative form, and every root counts', () => {
+      expect(t7Gate.factVariants('path', '/r/go.mod', { repoRoots: ['/r/'] })).toContain('go.mod');
+      expect(t7Gate.factVariants('path', '/r/go.mod', { repoRoots: ['/a', '/r'] })).toContain('go.mod');
+      expect(t7Gate.factVariants('path', '/r/go.mod', { repoRoots: ['/r', '/a'] })).toContain('go.mod');
+    });
+
+    it('factVariants: a root must end at a slash, and F equal to root plus a slash yields no empty variant', () => {
+      expect(t7Gate.factVariants('path', '/rx/y.c', { repoRoots: ['/r'] })).not.toContain('/y.c');
+      expect(t7Gate.factVariants('path', '/r/', { repoRoots: ['/r'] })).not.toContain('');
+      expect(t7Gate.admitFact('path', '/r/', 'nothing of it', 'q', { repoRoots: ['/r'] }).admitted).toBe(true);
+    });
+
+    it('factVariants: no variant is listed twice', () => {
+      const v = t7Gate.factVariants('path', '/r/lib/x.c', { repoRoots: ['/r'] });
+      expect(new Set(v).size).toBe(v.length);
+      expect(v).toContain('lib/x.c');
+      expect(t7Gate.factVariants('command', 'a'.repeat(45), NO_ROOTS)).toEqual(['a'.repeat(40)]);
+    });
+
+    it('factVariants: sha is lower-cased from F, whatever its case', () => {
+      expect(t7Gate.factVariants('sha', 'ABCDEF1234', NO_ROOTS)).toEqual(['abcdef1']);
+      expect(t7Gate.admitFact('sha', F9.toUpperCase(), `seen ${F9.slice(0, 7)}`, 'q', NO_ROOTS).admitted).toBe(false);
+    });
+
+    it('admitFact: the baseline is tested first, and the first variant in order is the one named', () => {
+      const p = F9.slice(0, 7);
+      expect(t7Gate.admitFact('sha', F9, `has ${p}`, `q ${p}`, NO_ROOTS).hit).toEqual({ where: 'baseline', variant: p });
+      expect(t7Gate.admitFact('path', '/w/proj/src/deep/mod.ts', 'at /w/proj/src/deep/mod.ts', 'q', { repoRoots: ['/w/proj'] }).hit)
+        .toEqual({ where: 'baseline', variant: '/w/proj/src/deep/mod.ts' });
+    });
+
+    it('labelCorrect: a kind outside FACT_KINDS throws, and so does a bad shaMinPrefix under any kind', () => {
+      expect(() => t7Gate.labelCorrect('decision', 'x', 'x', at7)).toThrow(/not one of/);
+      expect(() => t7Gate.labelCorrect('path', '/r/a.ts', '/r/a.ts', { repoRoots: [], shaMinPrefix: 12 as unknown as 7 })).toThrow(/shaMinPrefix/);
+    });
+
+    it('labelCorrect sha: F is lower-cased too, and a hex run shorter than 7 is not a run', () => {
+      expect(t7Gate.labelCorrect('sha', F9.toUpperCase(), SHA40, at7)).toBe(true);
+      expect(t7Gate.labelCorrect('sha', F9, `${F9} abcdef`, at7)).toBe(true);
+      expect(t7Gate.labelCorrect('sha', F9, F9.slice(0, 6), at7)).toBe(false);
+      expect(t7Gate.labelCorrect('sha', F9, 'no hash given', at7)).toBe(false);
+    });
+
+    it('labelCorrect path: a final period before whitespace is allowed, a period joined to more is not, and nothing is not', () => {
+      const F = '/r/src/app.ts';
+      expect(t7Gate.labelCorrect('path', F, 'It is /r/src/app.ts. Thanks', pathAt7)).toBe(true);
+      expect(t7Gate.labelCorrect('path', F, 'src/app.ts.bak', pathAt7)).toBe(false);
+      expect(t7Gate.labelCorrect('path', F, 'src/app.ts,', pathAt7)).toBe(true);
+      expect(t7Gate.labelCorrect('path', F, 'I do not know', pathAt7)).toBe(false);
+    });
+
+    it('labelCorrect command: overlapping occurrences are all tried, and only a final period is allowed', () => {
+      expect(t7Gate.labelCorrect('command', 'a a', 'xa a a', at7)).toBe(true);
+      expect(t7Gate.labelCorrect('command', 'npm run test', 'npm run test. Then lint', at7)).toBe(false);
+    });
+
+    it('parseAnswerField: every JavaScript line terminator splits lines, and the value stops at one', () => {
+      expect(t7Gate.parseAnswerField('thinking\rANSWER: y')).toEqual({ state: 'value', value: 'y' });
+      expect(t7Gate.parseAnswerField(`thinking${LS}ANSWER: y`)).toEqual({ state: 'value', value: 'y' });
+      expect(t7Gate.parseAnswerField(`thinking${PS}ANSWER: y`)).toEqual({ state: 'value', value: 'y' });
+      expect(t7Gate.parseAnswerField('thinking\r\nANSWER: y\r\ntail')).toEqual({ state: 'value', value: 'y' });
+      expect(t7Gate.parseAnswerField(`ANSWER: y${LS}more`)).toEqual({ state: 'value', value: 'y' });
+      expect(t7Gate.parseAnswerField('ANSWER: y\r\n')).toEqual({ state: 'value', value: 'y' });
+    });
+
+    it('parseAnswerField: a lone quote stays, the value is trimmed before the quotes go, an empty value is a value, UNKNOWN is the whole value', () => {
+      expect(t7Gate.parseAnswerField('ANSWER: "')).toEqual({ state: 'value', value: '"' });
+      expect(t7Gate.parseAnswerField('ANSWER:   "x"  ')).toEqual({ state: 'value', value: 'x' });
+      expect(t7Gate.parseAnswerField('ANSWER:')).toEqual({ state: 'value', value: '' });
+      expect(t7Gate.parseAnswerField('ANSWER: unknown device')).toEqual({ state: 'value', value: 'unknown device' });
+      expect(t7Gate.parseAnswerField('ANSWER: not unknown')).toEqual({ state: 'value', value: 'not unknown' });
+      expect(t7Gate.parseAnswerField('ANSWER: only')).toEqual({ state: 'value', value: 'only' });
+    });
+
+    it('parseQuestionLine: 600 code points pass whatever their UTF-16 length, and a blank last line voids an earlier question', () => {
+      const wide = String.fromCodePoint(0x1f600);
+      expect(t7Gate.parseQuestionLine(`QUESTION: ${wide.repeat(600)}`)).toEqual({ ok: true, question: wide.repeat(600) });
+      expect(t7Gate.parseQuestionLine(`QUESTION: ${wide.repeat(601)}`)).toEqual({ ok: false, word: 'writer-malformed' });
+      expect(t7Gate.parseQuestionLine('QUESTION: ok?\nQUESTION:   ')).toEqual({ ok: false, word: 'writer-malformed' });
+      expect(t7Gate.parseQuestionLine('QUESTION: only?')).toEqual({ ok: true, question: 'only?' });
+    });
+
+    it('parseLabelLine: the last LABEL line that matches wins, a later bad one does not void it, and a line start is required', () => {
+      expect(t7Gate.parseLabelLine('LABEL: fabricated\nLABEL: correct')).toEqual({ ok: true, label: 'fabricated' });
+      expect(t7Gate.parseLabelLine('LABEL:uncertain')).toEqual({ ok: true, label: 'uncertain' });
+      expect(t7Gate.parseLabelLine('  LABEL: uncertain')).toEqual({ ok: false });
+      expect(t7Gate.parseLabelLine('LABEL: only')).toEqual({ ok: false });
+    });
+
+    it('the exported tables are frozen', () => {
+      expect(Object.isFrozen(t7Gate.RUBRICS)).toBe(true);
+      expect(Object.isFrozen(t7Gate.RUBRIC_SHA256)).toBe(true);
+    });
+  });
+});
