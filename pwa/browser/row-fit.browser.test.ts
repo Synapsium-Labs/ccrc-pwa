@@ -31,18 +31,22 @@ const VIEWS: AppView[] = SKINS.flatMap((skin) => THEMES.flatMap((theme) => WIDTH
 const named = (v: AppView): string => `${v.skin}, ${v.theme}, ${v.width}px`;
 
 // ---- the fixture ---------------------------------------------------------------------------------------------------
-// Neutral names only. The labels and the pool names are as long as real ones get (19 to 29 characters), because
-// D-5570's overflow came from the widest row's one-line min-content: short fixture strings fit on any build.
+// Neutral names only. Two kinds of row, because they fail differently. Long labels and pool names, as long as real
+// ones get (19 to 29 characters): D-5570's overflow came from the widest row's one-line min-content, which short
+// strings never reach, and a label wider than the group is the extreme case where the name wraps inside its pill.
+// Short ones: a name and a tag that each fit the group but not side by side, so the tag or the pill has to drop
+// under the name rather than squeeze it or be cut.
 
 const NOW = 1_792_362_479;
 const LONG_PROJECT = 'project-c-with-a-name-longer-than-any-card-is-wide';
 const POOL_HOME = 'pool-a-for-the-project';
-const POOL_OTHER = 'pool-b-with-a-longer-name';
+const POOL_SHORT = 'pool-b';
+const POOL_LONG = 'pool-c-with-a-longer-name';
 const ROSTER = [
   { id: 'lane-a', label: 'lane-a-with-a-long-label', hue: 'cyan', pool: POOL_HOME },
-  { id: 'lane-b', label: 'lane-b-with-a-longer-label', hue: 'violet', pool: POOL_HOME },
-  { id: 'lane-c', label: 'lane-c-with-a-long-label', hue: 'blue', pool: POOL_OTHER },
-  { id: 'lane-d', label: 'lane-d-with-a-longest-label', hue: 'amber', pool: POOL_OTHER },
+  { id: 'lane-b', label: 'lane-b', hue: 'violet', pool: POOL_HOME },
+  { id: 'lane-c', label: 'lane-c-label', hue: 'blue', pool: POOL_SHORT },
+  { id: 'lane-d', label: 'lane-d-with-a-longest-label', hue: 'amber', pool: POOL_LONG },
 ].map((r) => ({ ...r, homeAble: true, hidden: false }));
 
 const usage = (wrapper: string, five: number, seven: number): object => ({
