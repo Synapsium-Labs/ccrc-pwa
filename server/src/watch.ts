@@ -9297,6 +9297,57 @@ function renderAskBrief(
 export const DELEGATION_SWEEP_MS = DIVERGENCE_SWEEP_MS;
 /** What a pass may spend: under the cadence, so a stuck pass ends before the next is due. */
 export const DELEGATION_PASS_BUDGET_MS = 45_000;
+/** D-5692: a pass whose BLOCKING phases (`block`) sum to MORE than this writes one timing line (exactly this writes none). */
+export const DELEGATION_PASS_SLOW_MS = 1000;
+/** D-5692: the most bytes the whole timing line may take, prefix included. */
+export const DELEGATION_PASS_SLOW_LINE_BYTES = 2048;
+export const DELEGATION_PASS_SLOW_PREFIX = 'ccrc-server: delegation pass slow:';
+/** D-5692: every key the line may carry, in the one order it is written. Phases and parts are elapsed ms (an awaited one holds its waits,
+ *  it is never CPU time); everything after the times is a size or a count, measured where the pass held it. `ownerCount` is D-5693: the
+ *  size of the owner list, `owners` being the phase that reads them. `dropped` is the formatter's own and is never an input. */
+export const DELEGATION_PASS_SLOW_KEYS = [
+  'block', 'cut', 'total', 'other',
+  'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile',
+  'pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
+  'attempts', 'leases', 'intervals', 'absence', 'repair',
+  'rewrite', 'rewrites', 'rewriteEvents',
+  'trees', 'treesPastWait', 'win', 'winLost', 'winHeld', 'winHeldNull', 'evidence', 'activities', 'pointMetas',
+  'cpSessions', 'cpAttempts', 'cpLeases', 'openLeases', 'cpLineage', 'cpIntervals', 'cpCursors',
+  'ownerCount', 'pendingOwners', 'staged', 'appended',
+  'claimants', 'launches', 'pathMap', 'droppedKeys',
+  'markPaths', 'markIds', 'lostProjects', 'lostPrefixes', 'lossy', 'droppedMeasured',
+  'ladder', 'markCalls', 'windowCalls', 'lostCalls',
+  'vLinked', 'vRunChild', 'vUnresolved', 'vConflicting', 'vUnmeasured',
+  'eLease', 'eRunChild', 'eUnowned', 'eAbsence', 'eRepair', 'eInterval',
+  'repairPasses', 'repairInserted', 'repairFull', 'repairWiped', 'repairHealed',
+  'censusAge',
+  'dropped',
+] as const;
+export type DelegationPassSlowKey = (typeof DELEGATION_PASS_SLOW_KEYS)[number];
+/** D-5692: the timing line, pure: the prefix, then ` key=value` for each key of `DELEGATION_PASS_SLOW_KEYS` the caller gave, in list order.
+ *  A value is a whole non-negative safe integer (`+Infinity` is the largest, any other non-finite one 0), so no string ever enters the
+ *  line. Bounded to `bound` bytes, never by cutting a pair: a pair that does not fit is dropped whole, the next key is still tried, and
+ *  ` dropped=<n>` closes the line when any were (its room is reserved first, at the digits of the key count). A caller's `dropped` is ignored. */
+export function delegationPassSlowLine(fields: Readonly<Partial<Record<DelegationPassSlowKey, number>>>, bound: number = DELEGATION_PASS_SLOW_LINE_BYTES): string {
+  const reserve = ` dropped=${DELEGATION_PASS_SLOW_KEYS.length}`.length;
+  let line = DELEGATION_PASS_SLOW_PREFIX;
+  let dropped = 0;
+  for (const key of DELEGATION_PASS_SLOW_KEYS) {
+    if (key === 'dropped') continue;
+    const v = fields[key];
+    if (v === undefined) continue;
+    const n = v === Number.POSITIVE_INFINITY ? Number.MAX_SAFE_INTEGER : !Number.isFinite(v) ? 0 : Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.round(v)));
+    const pair = ` ${key}=${String(n)}`;
+    if (line.length + pair.length <= bound - reserve) line += pair; else dropped += 1;
+  }
+  return dropped > 0 ? `${line} dropped=${dropped}` : line;
+}
+/** D-5692: what one pass records for its timing line: summed elapsed ms per phase (present iff the phase ran, even at 0) and the sizes it
+ *  measured, read only at the pass's settle. `step` ends the open phase of `reconcile`'s consecutive stretch. */
+interface LanePassTiming {
+  ms: Map<string, number>; sizes: Map<string, number>; startedAt: number; durable: DelegationDurability | null;
+  rewrites: number; rewriteEvents: number; step: (() => void) | null;
+}
 /** What one read of the lane may take (the stat fallback after a failed range read included: it is bounded by the pass signal). */
 const DELEGATION_READ_TIMEOUT_MS = 10_000;
 /** A recovery that failed is tried again no more often than this: it reads the whole journal. */
@@ -9384,6 +9435,9 @@ export interface DelegationLaneSeams {
   projectHoldCap?: number; markCap?: number;
   /** D-4658: apply each bucket result at once, as before the batching (the reference an "equal to an unbatched run" row compares with). */
   unbatched?: boolean;
+  /** D-5692: called synchronously right after the lane reads its clock at the START of each timed phase and part (and of each rewrite
+   *  the coordination store's port makes), with that phase's key: a row advances a virtual `monotonicMs` from here. */
+  onPassPhase?: (phase: string) => void;
 }
 
 /** `hibernatedAt` optional (D-5242): absent reads as not asleep, the old behaviour, so a caller that never knew the field
@@ -9758,6 +9812,82 @@ class DelegationLane {
    *  not journal evidence, so it is never durable and is read again after a restart. */
   private readonly pointMetas = new Map<string, LanePointMeta>();
   private readonly metaMiss = new Map<string, number>();
+  /** D-5692: each pass's timing record, and the one a rewrite lands in: the latest pass STARTED (after a cut two passes can overlap, and the
+   *  port's rewrite then lands in the later one's record; with none set it is dropped). Diagnostics only: nothing here is ever read to decide. */
+  private readonly timings = new WeakMap<LanePass, LanePassTiming>();
+  private passTiming: LanePassTiming | null = null;
+
+  /** D-5692: the ONE clock read for timing: the watcher's own monotonic clock (`Deps.monotonicMs`), else `performance.now()`. */
+  private mono(): number { return this.deps.monotonicMs?.() ?? performance.now(); }
+  /** D-5692: begins a timed phase or part: reads the clock, tells `onPassPhase`, and answers the call that ends it. Times are ELAPSED ms, so an
+   *  awaited phase holds its waits; a phase that ran is on the line even at 0, and one that did not run is absent. Summed over repeats. */
+  private phase(pass: LanePass, key: string): () => void {
+    const at = this.mono();
+    this.seams.onPassPhase?.(key);
+    return () => { const ms = this.timings.get(pass)?.ms; if (ms !== undefined) ms.set(key, (ms.get(key) ?? 0) + (this.mono() - at)); };
+  }
+  /** (A step or a size of a pass that has no record, as when a row calls `applyEffects` or `reconcile` alone, is dropped.) */
+  private size(pass: LanePass, key: string, n: number): void { this.timings.get(pass)?.sizes.set(key, n); }
+  /** D-5692: `reconcile`'s consecutive phases: ends the open one and begins `key`. `reconcile`'s caller ends the last with `stepEnd`. */
+  private stepTo(pass: LanePass, key: string): void { this.stepEnd(pass); const t = this.timings.get(pass); if (t !== undefined) t.step = this.phase(pass, key); }
+  private stepEnd(pass: LanePass): void { const t = this.timings.get(pass); if (t === undefined) return; const end = t.step; t.step = null; end?.(); }
+  /** D-5692: opens a pass's record at `run`'s entry; it is also where the port's rewrites land until a later pass starts. */
+  private startTiming(pass: LanePass): LanePassTiming {
+    const t: LanePassTiming = { ms: new Map(), sizes: new Map(), startedAt: this.mono(), durable: null, rewrites: 0, rewriteEvents: 0, step: null };
+    this.timings.set(pass, t);
+    this.passTiming = t;
+    return t;
+  }
+  /** D-5692: the applier's open options with the projection port's three calls timed (`rewritten`); the port itself is called as before. The
+   *  port is wrapped here, not where the lane names the store, because the lane's contact with the store is pinned to those lines. */
+  private timedPort(deps: Parameters<typeof DelegationDurability.open>[0]): Parameters<typeof DelegationDurability.open>[0] {
+    const port = deps.projection;
+    if (port === null) return deps;
+    return { ...deps, projection: {
+      project: (cp) => this.rewritten(() => port.project(cp), 1, 0),
+      insertEvents: (rows) => this.rewritten(() => port.insertEvents(rows), 0, rows.length),
+      eventStats: () => this.rewritten(() => port.eventStats(), 0, 0),
+    } };
+  }
+  /** D-5692: times one call of the coordination store's port (`project`, `insertEvents`, `eventStats`) as `rewrite`, in the CURRENT pass's
+   *  record, and returns or throws exactly what `fn` does. `rewrite` OVERLAPS the phase that made the call (flush, repair, a lease, ...),
+   *  which holds it too, so it is never summed into `block`. */
+  private rewritten<T>(fn: () => T, projects: number, events: number): T {
+    const at = this.mono();
+    this.seams.onPassPhase?.('rewrite');
+    try { return fn(); } finally {
+      const t = this.passTiming;
+      if (t !== null) { t.ms.set('rewrite', (t.ms.get('rewrite') ?? 0) + (this.mono() - at)); t.rewrites += projects; t.rewriteEvents += events; }
+    }
+  }
+  /** D-5692: the pass's ONE timing line, decided here, in `run`'s finally, on every path (normal end, an early return, a throw, a cut pass's
+   *  late settle, which is why `cut` is read now). `block` sums the lane's own work and writes, and leaves out the read phases (`open
+   *  recover root load owners readMetas`), `rewrite` (it overlaps its callers), `reconcile` (its stretches are summed instead) and the
+   *  effect parts (inside `effects`). `pre` and the stretch from `prep` to `policy` hold no await, so their elapsed time is the lane's
+   *  own and a slow read is never taken for a block. Written iff `block` is MORE than `DELEGATION_PASS_SLOW_MS`; never throws out of `run`. */
+  private passLine(pass: LanePass, t: LanePassTiming): void {
+    try {
+      const sum = (keys: readonly string[]): number => keys.reduce((n, k) => n + (t.ms.get(k) ?? 0), 0);
+      const block = sum(['noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects']);
+      if (!(block > DELEGATION_PASS_SLOW_MS)) return;
+      const total = this.mono() - t.startedAt;
+      const f: Partial<Record<DelegationPassSlowKey, number>> = {};
+      for (const [k, v] of t.ms) f[k as DelegationPassSlowKey] = v;
+      for (const [k, v] of t.sizes) f[k as DelegationPassSlowKey] = v;
+      f.block = block; f.cut = pass.signal.aborted ? 1 : 0; f.total = total;
+      f.other = Math.max(0, total - sum(['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile']));
+      if (t.ms.has('rewrite')) { f.rewrites = t.rewrites; f.rewriteEvents = t.rewriteEvents; }
+      if (t.durable !== null) {
+        const cp = t.durable.state().checkpoint;
+        f.cpSessions = cp.sessions.length; f.cpAttempts = cp.attempts.length; f.cpLeases = cp.leases.length; f.openLeases = cp.leases.filter((l) => l.releasedAt === null).length;
+        f.cpLineage = cp.lineage.length; f.cpIntervals = cp.observationIntervals.length; f.cpCursors = cp.bucketCursors.length;
+      }
+      f.pendingOwners = this.pendingOwners.size; f.markPaths = this.pathMarkCount(); f.markIds = this.markIds.size; f.lostProjects = this.lostProjects.size;
+      f.lostPrefixes = this.lostPrefixes().size; f.lossy = this.lossy ? 1 : 0; f.droppedMeasured = this.evidenceLoaded ? 1 : 0;
+      f.censusAge = Math.max(0, pass.now - pass.census.measuredAt);
+      console.warn(delegationPassSlowLine(f));
+    } catch { /* diagnostics only: a line that cannot be built is not written, and `run` settles as it would have */ }
+  }
 
   constructor(private readonly deps: Deps, private readonly census: () => DelegationCensusPass | null) {}
 
@@ -9981,7 +10111,7 @@ class DelegationLane {
       const coord = this.deps.coord;
       this.opening = (async (): Promise<DelegationDurability | null> => {
         try {
-          const d = await DelegationDurability.open({
+          const d = await DelegationDurability.open(this.timedPort({                  // D-5692: the port's calls are timed as `rewrite`
             dir: this.deps.cfg.ccrcDir,
             projection: coord === undefined ? null : {
               project: (cp) => coord.projectDelegationCheckpoint(cp),
@@ -9989,7 +10119,7 @@ class DelegationLane {
               eventStats: () => coord.delegationEventStats(),
             },
             now: () => Date.now(), randomUUID: () => randomUUID(), warn: (m) => console.warn(m),
-          });
+          }));
           this.durable = d;
           this.lastRecoverAt = Date.now();                                // open() has just recovered: a retry waits its interval
           return d;
@@ -10092,92 +10222,120 @@ class DelegationLane {
   }
 
   private async run(pass: LanePass): Promise<void> {
-    this.noteSessions(pass);
-    const durable = await this.applier();
-    /** R113 (review 544 P2): when the applier answered, so the boot recovery `open()` makes is covered like an in-process one (R112): for
-     *  the pass that started the open, and for a later pass awaiting the cached applier after the first was cut (R117), because the
-     *  cached promise resolves only after `open()` recovered. Measured after the await for the reason on `recoveredAt`. The wall clock
-     *  can step back during the await, so this can be earlier than `pass.now`: the instant below clamps it (R115). */
-    const appliedAt = Date.now();
-    if (durable === null) {
-      this.notReady = true;                                            // R88: no applier, nothing is read
-      return;
-    }
-    if (this.recovering) { this.notReady = true; return; }             // R116 (W1): a recovery the lane started has not settled: not ready
-    if (pass.signal.aborted) return;
-    if (durable.state().phase !== 'ready' || durable.failure() !== null) {
-      this.notReady = true;                                            // R88: in recovery, or failed: what happens now is not read
-      this.unreconcile();                                              // M-1: what was counted is not this state's
-      // A recovery that failed applies NOTHING and reads nothing: the files are left exactly as they are. It is tried again, rarely.
-      if (pass.now - this.lastRecoverAt < DELEGATION_RECOVERY_RETRY_MS) return;
-      this.lastRecoverAt = pass.now;
-      this.recovering = true;                                          // R116: until it settles, every pass is not ready
-      try {
-        await durable.recover();
-      } finally {
-        this.recovering = false;                                       // R116: settled, returned or thrown
-        this.recoveredAt = Date.now();                                 // R112, R116: the settle, for whichever pass sets the next instant
+    const t: LanePassTiming = this.startTiming(pass);
+    try {
+      const endNote = this.phase(pass, 'noteSessions');
+      try { this.noteSessions(pass); } finally { endNote(); }
+      const endOpen = this.phase(pass, 'open');
+      let durable: DelegationDurability | null;
+      try { durable = await this.applier(); } finally { endOpen(); }
+      t.durable = durable;
+      /** R113 (review 544 P2): when the applier answered, so the boot recovery `open()` makes is covered like an in-process one (R112): for
+       *  the pass that started the open, and for a later pass awaiting the cached applier after the first was cut (R117), because the
+       *  cached promise resolves only after `open()` recovered. Measured after the await for the reason on `recoveredAt`. The wall clock
+       *  can step back during the await, so this can be earlier than `pass.now`: the instant below clamps it (R115). */
+      const appliedAt = Date.now();
+      if (durable === null) {
+        this.notReady = true;                                            // R88: no applier, nothing is read
+        return;
       }
-      // On a return these run in the same synchronous continuation as the `finally`, so no pass sees the recovery settled with the old
-      // slice still marked loaded. (A throw skips them, as before: `recover()` throws only before it clears its failure, since its
-      // projection repair never throws, so the next pass finds the applier failed and is not ready, by R88's arm above.)
-      this.evidenceLoaded = false;                                     // the slice and the dropped-evidence index are measured again by the next load
-      this.dropped.clear();
-      this.tupleLatest.clear();
-      this.droppedIndexCache = null;
-      if (durable.state().phase !== 'ready' || durable.failure() !== null || pass.signal.aborted) return;
-    }
-    await this.resolveProjectsRoot(pass);
-    if (pass.signal.aborted) { this.notReady = true; return; }        // R109: cut before the owners, so nothing was listed
-    this.passes += 1;
-    await this.loadEvidence(durable, pass);
-    if (pass.signal.aborted) { this.notReady = true; return; }        // R109: the same
-    pass.reachedOwners = true;                                         // R109: synchronously after the last check, before any await
+      if (this.recovering) { this.notReady = true; return; }             // R116 (W1): a recovery the lane started has not settled: not ready
+      if (pass.signal.aborted) return;
+      if (durable.state().phase !== 'ready' || durable.failure() !== null) {
+        this.notReady = true;                                            // R88: in recovery, or failed: what happens now is not read
+        this.unreconcile();                                              // M-1: what was counted is not this state's
+        // A recovery that failed applies NOTHING and reads nothing: the files are left exactly as they are. It is tried again, rarely.
+        if (pass.now - this.lastRecoverAt < DELEGATION_RECOVERY_RETRY_MS) return;
+        this.lastRecoverAt = pass.now;
+        this.recovering = true;                                          // R116: until it settles, every pass is not ready
+        const endRecover = this.phase(pass, 'recover');
+        try {
+          await durable.recover();
+        } finally {
+          endRecover();
+          this.recovering = false;                                       // R116: settled, returned or thrown
+          this.recoveredAt = Date.now();                                 // R112, R116: the settle, for whichever pass sets the next instant
+        }
+        // On a return these run in the same synchronous continuation as the `finally`, so no pass sees the recovery settled with the old
+        // slice still marked loaded. (A throw skips them, as before: `recover()` throws only before it clears its failure, since its
+        // projection repair never throws, so the next pass finds the applier failed and is not ready, by R88's arm above.)
+        this.evidenceLoaded = false;                                     // the slice and the dropped-evidence index are measured again by the next load
+        this.dropped.clear();
+        this.tupleLatest.clear();
+        this.droppedIndexCache = null;
+        if (durable.state().phase !== 'ready' || durable.failure() !== null || pass.signal.aborted) return;
+      }
+      const endRoot = this.phase(pass, 'root');
+      try { await this.resolveProjectsRoot(pass); } finally { endRoot(); }
+      if (pass.signal.aborted) { this.notReady = true; return; }        // R109: cut before the owners, so nothing was listed
+      this.passes += 1;
+      const endLoad = this.phase(pass, 'load');
+      try { await this.loadEvidence(durable, pass); } finally { endLoad(); }
+      if (pass.signal.aborted) { this.notReady = true; return; }        // R109: the same
+      pass.reachedOwners = true;                                         // R109: synchronously after the last check, before any await
 
-    // R88: the first pass to reach the owners after a not-ready mark (and the first of a process) is the latest ready instant: the
-    // settle of the last recovery the lane started (`recoveredAt`, R112, R116), whichever pass started it, else the instant this pass's
-    // applier answered, after the boot recovery `open()` makes (R113, R117); and never earlier than this pass's own clock, whatever the
-    // wall clock did during the awaits (one clamp for both arms: R115 for the appliedAt arm, R120 for the recoveredAt arm). Measured
-    // after the awaits, so the skew allowance runs from the settle (the reason on `recoveredAt`). The settle is consumed here. Everything
-    // at or before the instant may hold a session nothing listed.
-    if (this.notReady) {
-      this.readyAt = Math.max(pass.now, this.recoveredAt ?? appliedAt);
-      this.recoveredAt = null;
-      this.notReady = false;
-    }
-    await this.expirePendingOwners(pass, durable);
-    for (const owner of this.ownersOf(pass, durable.state())) {
-      if (pass.signal.aborted) break;
+      // R88: the first pass to reach the owners after a not-ready mark (and the first of a process) is the latest ready instant: the
+      // settle of the last recovery the lane started (`recoveredAt`, R112, R116), whichever pass started it, else the instant this pass's
+      // applier answered, after the boot recovery `open()` makes (R113, R117); and never earlier than this pass's own clock, whatever the
+      // wall clock did during the awaits (one clamp for both arms: R115 for the appliedAt arm, R120 for the recoveredAt arm). Measured
+      // after the awaits, so the skew allowance runs from the settle (the reason on `recoveredAt`). The settle is consumed here. Everything
+      // at or before the instant may hold a session nothing listed.
+      if (this.notReady) {
+        this.readyAt = Math.max(pass.now, this.recoveredAt ?? appliedAt);
+        this.recoveredAt = null;
+        this.notReady = false;
+      }
+      const endExpire = this.phase(pass, 'expire');
+      try { await this.expirePendingOwners(pass, durable); } finally { endExpire(); }
+      const endOwners = this.phase(pass, 'owners');
       try {
-        await this.observeOwner(pass, durable, owner);
-        // R89: one observation COMPLETED, in a pass that was not cut. R101: it is forgotten only once what it staged is durable.
-        if (!pass.signal.aborted) pass.completed.push(owner);
-      } catch (err) { console.warn(`ccrc-server: delegation owner ${owner.id} could not be observed: ${err instanceof Error ? err.message : String(err)}`); }
-    }
-    // D-4658: what the owners staged, as ONE durable application. Also after a cut: everything staged came from a read that answered
-    // before the cut (an abort check follows every read), and a fleet whose passes are always cut must still make progress. Its FIRST
-    // application is enqueued at once; its standing refusals go one by one, and a bisection's halves only after the attempt before them
-    // settles, so after a cut a later pass's flush CAN land between them (R85, A-F5), and apply a bucket from a newer cursor before this
-    // pass applies it from an older one. Nothing applies twice (events dedupe by `eventId`), intervals never regress (their merge is
-    // order-independent and `unmeasured` is sticky), `replaced` stays sticky, and a cursor that steps back once is re-read and deduped by
-    // the next pass.
-    // R101: the owners this pass read are forgotten only now, and only for what the flush made durable (a cut pass's late flush too).
-    this.forgetRead(pass, await this.flushPass(pass, durable));
-    if (pass.signal.aborted) return;
+        const owners = this.ownersOf(pass, durable.state());
+        this.size(pass, 'ownerCount', owners.length);                  // D-5693: the key is `ownerCount`, `owners` being the phase
+        for (const owner of owners) {
+          if (pass.signal.aborted) break;
+          try {
+            await this.observeOwner(pass, durable, owner);
+            // R89: one observation COMPLETED, in a pass that was not cut. R101: it is forgotten only once what it staged is durable.
+            if (!pass.signal.aborted) pass.completed.push(owner);
+          } catch (err) { console.warn(`ccrc-server: delegation owner ${owner.id} could not be observed: ${err instanceof Error ? err.message : String(err)}`); }
+        }
+      } finally { endOwners(); }
+      // D-4658: what the owners staged, as ONE durable application. Also after a cut: everything staged came from a read that answered
+      // before the cut (an abort check follows every read), and a fleet whose passes are always cut must still make progress. Its FIRST
+      // application is enqueued at once; its standing refusals go one by one, and a bisection's halves only after the attempt before them
+      // settles, so after a cut a later pass's flush CAN land between them (R85, A-F5), and apply a bucket from a newer cursor before this
+      // pass applies it from an older one. Nothing applies twice (events dedupe by `eventId`), intervals never regress (their merge is
+      // order-independent and `unmeasured` is sticky), `replaced` stays sticky, and a cursor that steps back once is re-read and deduped by
+      // the next pass.
+      // R101: the owners this pass read are forgotten only now, and only for what the flush made durable (a cut pass's late flush too).
+      const endFlush = this.phase(pass, 'flush');
+      try { this.forgetRead(pass, await this.flushPass(pass, durable)); } finally { endFlush(); }
+      if (pass.signal.aborted) return;
 
-    // The upkeep: retention, and the hour that was never closed. One checkpoint-only change over the INTERVALS, and only when there is
-    // something to do (the same array comes back otherwise). Cursors are never in it.
-    if (upkeepDelegationIntervals(durable.state().checkpoint.observationIntervals, pass.now).changed) {
+      // The upkeep: retention, and the hour that was never closed. One checkpoint-only change over the INTERVALS, and only when there is
+      // something to do (the same array comes back otherwise). Cursors are never in it.
+      const endUpkeep = this.phase(pass, 'upkeep');
       try {
-        await durable.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: upkeepDelegationIntervals(cp.observationIntervals, pass.now).intervals }));
-      } catch (err) { console.warn(`ccrc-server: delegation interval upkeep failed: ${err instanceof Error ? err.message : String(err)}`); }
-    }
-    if (pass.signal.aborted) return;
-    await this.pruneCursors(pass, durable);
-    if (pass.signal.aborted) return;
+        if (upkeepDelegationIntervals(durable.state().checkpoint.observationIntervals, pass.now).changed) {
+          try {
+            await durable.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: upkeepDelegationIntervals(cp.observationIntervals, pass.now).intervals }));
+          } catch (err) { console.warn(`ccrc-server: delegation interval upkeep failed: ${err instanceof Error ? err.message : String(err)}`); }
+        }
+      } finally { endUpkeep(); }
+      if (pass.signal.aborted) return;
+      const endPrune = this.phase(pass, 'prune');
+      try { await this.pruneCursors(pass, durable); } finally { endPrune(); }
+      if (pass.signal.aborted) return;
 
-    // A census this lane has not reconciled yet; an older or equal one is left alone.
-    if (pass.census.measuredAt > this.reconciledAt && (this.evidenceLoaded || this.seams.reconcileBeforeLoad === true)) await this.reconcile(pass, durable);
+      // A census this lane has not reconciled yet; an older or equal one is left alone.
+      if (pass.census.measuredAt > this.reconciledAt && (this.evidenceLoaded || this.seams.reconcileBeforeLoad === true)) {
+        const endReconcile = this.phase(pass, 'reconcile');
+        try { await this.reconcile(pass, durable); } finally { this.stepEnd(pass); endReconcile(); }
+      }
+    } finally {
+      if (this.passTiming === t) this.passTiming = null;
+      this.passLine(pass, t);
+    }
   }
 
   /** M-1: the lane no longer vouches for its last counts: the breaker reads unmeasured and the counts read 0 until a reconcile. */
@@ -10467,6 +10625,8 @@ class DelegationLane {
    */
   private async flushPass(pass: LanePass, durable: DelegationDurability): Promise<{ failed: boolean; refused: ReadonlySet<string> }> {
     const staged = pass.pending.splice(0);
+    this.size(pass, 'staged', staged.length);
+    const tally = { appended: 0 };                                       // D-5692: what the applier's batches journaled, for the line
     const refused = new Set<string>();
     // R85 (A-F4): a refusal whose bucket is past the read horizon is never staged again, so remembering it would only grow the set.
     for (const k of [...this.refusedBuckets]) {
@@ -10476,14 +10636,16 @@ class DelegationLane {
     try {
       // a standing refusal goes first, alone (it may apply now, and then leaves the set); every other result goes as one application
       const standing = new Set(staged.filter((x) => this.refusedBuckets.has(x.key)).map((x) => x.key));
-      for (const e of staged.filter((x) => standing.has(x.key))) await this.applyIsolating(durable, [e], refused);
-      await this.applyIsolating(durable, staged.filter((x) => !standing.has(x.key)), refused);
+      for (const e of staged.filter((x) => standing.has(x.key))) await this.applyIsolating(durable, [e], refused, tally);
+      await this.applyIsolating(durable, staged.filter((x) => !standing.has(x.key)), refused, tally);
     } catch (err) {
       console.warn(`ccrc-server: the delegation pass's durable application of ${staged.length} bucket result(s) failed after it began writing; the applier recovers and the next pass reads them again: ${err instanceof Error ? err.message : String(err)}`);
       pass.settle.length = 0;
+      this.size(pass, 'appended', tally.appended);
       return { failed: true, refused };
     }
     for (const k of pass.settle.splice(0)) if (!refused.has(k)) this.settled.add(k);
+    this.size(pass, 'appended', tally.appended);
     return { failed: false, refused };
   }
 
@@ -10513,7 +10675,7 @@ class DelegationLane {
 
   /** R82: applies `entries` as one application; on a PRE-WRITE refusal, bisects until each refusing result stands alone, and refuses it
    *  (its warn line, remembered in `refusedBuckets`); a failure after the first byte (the applier failed) is rethrown, whole. */
-  private async applyIsolating(durable: DelegationDurability, entries: readonly LaneStaged[], refused: Set<string>): Promise<void> {
+  private async applyIsolating(durable: DelegationDurability, entries: readonly LaneStaged[], refused: Set<string>, tally: { appended: number }): Promise<void> {
     if (entries.length === 0) return;
     let out: Awaited<ReturnType<DelegationDurability['applyAcceptedBatch']>>;
     try {
@@ -10528,12 +10690,13 @@ class DelegationLane {
         return;
       }
       const mid = entries.length >> 1;
-      await this.applyIsolating(durable, entries.slice(0, mid), refused);
-      await this.applyIsolating(durable, entries.slice(mid), refused);
+      await this.applyIsolating(durable, entries.slice(0, mid), refused, tally);
+      await this.applyIsolating(durable, entries.slice(mid), refused, tally);
       return;
     }
     // R85 (A-F6): the bookkeeping after a DURABLE application stays outside the try that reads every throw as a pre-write refusal: a
     // throw here must never re-apply what was written, nor leave its records out of the evidence slice unnoticed.
+    tally.appended += out.appended.length;                               // D-5692
     for (const r of out.appended) if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event);
     for (const e of entries) this.refusedBuckets.delete(e.key);
   }
@@ -10718,6 +10881,7 @@ class DelegationLane {
   // ── reconciliation ────────────────────────────────────────────────────────────────────────────────────────────────────
 
   private async reconcile(pass: LanePass, durable: DelegationDurability): Promise<void> {
+    this.stepTo(pass, 'pre');                                            // D-5692: the stretches below (the last ended by `run`'s `stepEnd`)
     this.reconciledAt = pass.census.measuredAt;
     if (durable.state().phase !== 'ready') return;
     const now = formatDelegationInstant(pass.now);
@@ -10743,6 +10907,7 @@ class DelegationLane {
     };
     const waitRemaining = (record: DelegationCensusRecord): number =>
       DELEGATION_BIRTH_PASSES - (this.reconciliations - (nextFirstSeen.get(laneTreeKey(record.project, record.adminRecord)) ?? this.reconciliations));
+    this.size(pass, 'trees', flat.length); this.size(pass, 'treesPastWait', flat.filter((r) => waitRemaining(r) <= 0).length);
 
     // M6: the lane's memory is bounded by the census. A miss and a positive meta leave with their tree; a measured absence leaves when
     // its tree is back in the census. N4: only against projects that were CENSUSED in this pass. A project whose view was null
@@ -10775,7 +10940,10 @@ class DelegationLane {
 
     // Rung 2's point lookups come BEFORE the snapshot: a meta that opens an activity changes the checkpoint, and correlation and policy
     // must both read the one state that includes it.
+    this.size(pass, 'claimants', index.claimants.size); this.size(pass, 'launches', index.launches.size);
+    this.stepTo(pass, 'readMetas');
     await this.readMetas(pass, durable, flat, index, (r) => registryRowOf(r) === undefined && waitRemaining(r) <= 0);
+    this.stepTo(pass, 'prep');
     if (pass.signal.aborted) return;
     const state = durable.state();                                       // ONE snapshot: correlation and policy both read it
     if (state.phase !== 'ready') return;
@@ -10787,7 +10955,9 @@ class DelegationLane {
     // every project was measured (a project with no view contributes no paths, and would read as "nothing needs this").
     if (this.droppedAdded >= (this.seams.droppedPruneEvery ?? DELEGATION_DROPPED_PRUNE_EVERY)) this.pruneDropped(pass.census, state.checkpoint.activities);
     const droppedEvidence = this.droppedIndex();
+    this.size(pass, 'droppedKeys', this.dropped.size);
 
+    this.stepTo(pass, 'build');
     const evidence = [...this.evidence].map(([journalId, v]) => ({ journalId, event: v.event }));
     // 2c d (R84): a call's listing is the repository its cwd is attributed to, by the TREES (every census path and every remembered one; the
     // nearest wins, so a nested worktree is its own repository's), and by the projects root only when it is RESOLVED. Unattributed: null.
@@ -10806,6 +10976,10 @@ class DelegationLane {
       ...this.pendingWindows(state),
     ];
     const pointMetas = [...this.pointMetas.values()];
+    this.size(pass, 'evidence', evidence.length); this.size(pass, 'activities', state.checkpoint.activities.length);
+    this.size(pass, 'pointMetas', pointMetas.length); this.size(pass, 'pathMap', trees.size);
+    this.size(pass, 'win', windows.length); this.size(pass, 'winLost', windows.filter((w) => w.lost === true).length);
+    this.size(pass, 'winHeld', windows.filter((w) => w.lost !== true).length); this.size(pass, 'winHeldNull', windows.filter((w) => w.lost !== true && w.repository === null).length);
     const inputFor = (record: DelegationCensusRecord): DelegationCorrelationInput => {
       const row = registryRowOf(record);
       return {
@@ -10821,7 +10995,15 @@ class DelegationLane {
       };
     };
     // ONE expression: each pair is a census record and the verdict about it, never sorted or filtered apart.
-    const pairs = flat.map((record) => ({ record, verdict: correlateDelegation(inputFor(record)) }));
+    this.stepTo(pass, 'pairs');
+    let ladder = 0;                                                      // D-5692: the calls correlation received
+    const pairs = flat.map((record) => { ladder += 1; return { record, verdict: correlateDelegation(inputFor(record)) }; });
+    this.size(pass, 'ladder', ladder);
+    for (const [key, kind] of [['vLinked', 'linked'], ['vRunChild', 'run-child-owned'], ['vUnresolved', 'unresolved'], ['vConflicting', 'conflicting'], ['vUnmeasured', 'unmeasured']] as const) {
+      this.size(pass, key, pairs.filter((x) => x.verdict.kind === kind).length);
+    }
+    this.stepTo(pass, 'forced');
+    let markCalls = 0; let windowCalls = 0;                              // D-5692: the calls made, which the gates and the `??` decide
     // R73, N16: which verdicts each kind of mark changed (a verdict two marks cover goes to the first of flag, project, path, id), counted
     // apart from every other `unmeasured` reason: a gauge of this reconcile, and the trees, cumulatively until the next hourly line.
     const forced: Record<DelegationMarkKind, number> = { path: 0, id: 0, project: 0, lossy: 0, prefix: 0, window: 0 };
@@ -10830,31 +11012,40 @@ class DelegationLane {
     if (droppedEvidence.measured || unknownWindows) {
       for (const { record, verdict } of pairs) {
         const input = inputFor(record);
-        const kind = (droppedEvidence.measured ? delegationMarkForced(input, verdict) : null)
-          ?? (unknownWindows && delegationUnknownWindowForced(input, verdict) ? 'window' : null);
+        const kind = (droppedEvidence.measured ? (markCalls += 1, delegationMarkForced(input, verdict)) : null)
+          ?? (unknownWindows && (windowCalls += 1, delegationUnknownWindowForced(input, verdict)) ? 'window' : null);
         if (kind === null) continue;
         forced[kind] += 1;
         this.forcedSinceLine[kind].add(laneTreeKey(record.project, record.adminRecord));
       }
     }
     this.markForced = forced;
+    this.size(pass, 'markCalls', markCalls); this.size(pass, 'windowCalls', windowCalls);
+    this.stepTo(pass, 'lostForced');
+    let lostCalls = 0;                                                   // D-5692
     // 2c (R84): the links lost evidence held back, counted apart from the marks. A tree an unreleased lease holds is owned already (N5).
     const leasedNow = new Set(state.checkpoint.leases.filter((l) => l.releasedAt === null).map((l) => laneTreeKey(l.project, l.adminRecord)));
     let lostForced = 0;
     for (const { record, verdict } of pairs) {
       if (verdict.kind !== 'unmeasured' || leasedNow.has(laneTreeKey(record.project, record.adminRecord))) continue;   // the reason is correlation's to read
+      lostCalls += 1;
       if (!delegationLostEvidenceForced(inputFor(record), verdict)) continue;
       lostForced += 1;
       this.lostSinceLine.add(laneTreeKey(record.project, record.adminRecord));
     }
     this.lostForced = lostForced;
+    this.size(pass, 'lostCalls', lostCalls);
 
+    this.stepTo(pass, 'policy');
     const deaths = this.firstDeadParents();
     const effects = planDelegationReconciliation({
       now, recovery: state, census: flat, correlations: pairs, registryReadable: this.registryListed, firstDeadParents: deaths,
       previousSuccessfulCensus: this.previous === null ? null : this.previous.flat,
       censusedProjects: censused, previousCensusedProjects: this.previous === null ? null : this.previous.projects,
     });
+    for (const [key, kind] of [['eLease', 'request-linked-lease-identity'], ['eRunChild', 'record-run-child-owned'], ['eUnowned', 'record-unowned-worktree'], ['eAbsence', 'record-measured-absence'], ['eRepair', 'repair-report-projection'], ['eInterval', 'record-observation-interval']] as const) {
+      this.size(pass, key, effects.filter((x) => x.kind === kind).length);
+    }
 
     // The counts are the pass's VERDICTS, one per census record that is a tree or could not be read; an `absent` record is a tree
     // being removed. Never attempt rows: policy files none for work no parent is named for.
@@ -10879,6 +11070,7 @@ class DelegationLane {
     this.reconciledWallMs = pass.now;
     this.warnMarks(pass.now);
     if (pass.signal.aborted) return;
+    this.stepTo(pass, 'effects');
     await this.applyEffects(pass, durable, effects);
   }
 
@@ -11007,40 +11199,60 @@ class DelegationLane {
     for (const e of effects) {
       if (e.kind === 'request-linked-lease-identity' || e.kind === 'record-run-child-owned' || e.kind === 'record-unowned-worktree') attempts.push(e.attempt);
     }
-    const filed = attempts.length === 0 ? new Set<string>() : await this.fileAttempts(durable, attempts);
+    let filed = new Set<string>();
+    if (attempts.length > 0) {                                           // D-5692: the part is timed only when it runs
+      const endAttempts = this.phase(pass, 'attempts');
+      try { filed = await this.fileAttempts(durable, attempts); } finally { endAttempts(); }
+    }
     let repair = false;
     for (const e of effects) {
       if (pass.signal.aborted) return;
       switch (e.kind) {
-        case 'request-linked-lease-identity':
+        case 'request-linked-lease-identity': {
           // The attempt is on file before the lease is journaled; `createLease` deduplicates on the identity key, so a request re-emitted
           // after a crash between the two is a no-op.
           if (!filed.has(e.attempt.attemptId)) break;
+          const endLease = this.phase(pass, 'leases');                   // D-5692: the parts (`leases`, `intervals`, `absence`) are summed over the pass
           try { await durable.createLease(e.request); }
           catch (err) { console.warn(`ccrc-server: a delegation lease identity could not be journaled: ${err instanceof Error ? err.message : String(err)}`); }
+          finally { endLease(); }
           break;
+        }
         case 'record-run-child-owned':
         case 'record-unowned-worktree':
           break;                                                         // the attempt row is the whole record
         case 'record-measured-absence': {
-          const k = laneTreeKey(e.project, e.adminRecord);
-          if (!this.absences.has(k)) this.absences.set(k, { project: e.project, adminRecord: e.adminRecord, observedAt: e.observedAt });
+          const endAbsence = this.phase(pass, 'absence');
+          try {
+            const k = laneTreeKey(e.project, e.adminRecord);
+            if (!this.absences.has(k)) this.absences.set(k, { project: e.project, adminRecord: e.adminRecord, observedAt: e.observedAt });
+          } finally { endAbsence(); }
           break;
         }
         case 'repair-report-projection':
           repair = true;
           break;
-        case 'record-observation-interval':
+        case 'record-observation-interval': {
+          const endInterval = this.phase(pass, 'intervals');
           try { await durable.applyAccepted({ accepted: [], cursor: null, interval: e.interval }); }
           catch (err) { console.warn(`ccrc-server: a delegation interval could not be recorded: ${err instanceof Error ? err.message : String(err)}`); }
+          finally { endInterval(); }
           break;
+        }
         default:
           e satisfies never;
       }
     }
     if (repair && !pass.signal.aborted) {
-      try { await durable.repairProjection(); }
+      const endRepair = this.phase(pass, 'repair');
+      let report: Awaited<ReturnType<DelegationDurability['repairProjection']>> = null;
+      try { report = await durable.repairProjection(); }
       catch (err) { console.warn(`ccrc-server: the delegation projection could not be repaired: ${err instanceof Error ? err.message : String(err)}`); }
+      finally { endRepair(); }
+      if (report !== null) {                                             // D-5692: read only; a throw or no report leaves these off the line
+        this.size(pass, 'repairPasses', report.journalPasses); this.size(pass, 'repairInserted', report.inserted); this.size(pass, 'repairFull', report.fullReplay ? 1 : 0);
+        this.size(pass, 'repairWiped', report.wipedAll ? 1 : 0); this.size(pass, 'repairHealed', report.healedSessions);
+      }
     }
   }
 
