@@ -1,24 +1,25 @@
 # ccrc consolidation wave: one owner per job (design)
 
-**Status:** DRAFT rev 1, for the operator's review. Rev 1 applies two reviews (log in §8). Nothing here is approved. No D-numbers yet: the plans allocate them. Every decision in §6 takes its recommendation only if the operator rules so.
+**Status:** rev 2, **approved by the operator 2026-10-19**, in their words: "answers locked". They answered §6's twelve decisions through the visual companion, each at its recommended option (O1 clicked explicitly), and asked for the work to proceed. Rev 2 folds the rulings in (§6, and the body where they change it) and corrects what writing the first two plans measured (log in §8). The spec defines no D-numbers; the W0 and W1a plans define theirs.
 
 **The request (operator, 2026-10-19):** "I also feel like we have a lot of separate mechanisms that try to do similar stuff, and we should do a consolidation and refactoring wave that also gets us to DDD/CLEAN/SOLID state plus consolidation of similar functionality."
 
-- **Citations** are to `origin/main` `c7fe20a22` (rev 0 cited `d532903d2`; every [M] count was re-run on `c7fe20a22` for rev 1). Line numbers are hints, written `≈:`, and every citation also names its function, constant or file.
+- **Citations** are to `origin/main` `c7fe20a22` (rev 0 cited `d532903d2`; every [M] count was re-run on `c7fe20a22` for rev 1). Rev 2's new figures (§8) were measured on `f64c27b65`. Line numbers are hints, written `≈:`, and every citation also names its function, constant or file.
 - **Measurements** come from five read-only inventories of `origin/main`: ccd and the box, the coordination server, the fleet watcher, the PWA, and the cross-cutting kernels. Each was re-counted by `git grep`/`wc` for this draft. **[M]** marks a measured figure and **[I]** an inferred one.
-- **This spec extends `2026-08-10-architecture-ddd-clean-solid.md` and contradicts nothing in it.** The rings (L0–L5), the six contexts, the cross-cutting rules (a)–(e), the enforcement list and the Rejected list all stand. Where this wave touches a Rejected item (the FleetWatcher lane interface, a domain-event bus, a `FleetGateway` port over ccd, splitting `shared/api.ts`, a `MAIL_DELIVERY_TRANSITIONS`-style table, splitting `coord/routes.ts` per resource), §2.5 says how it stays on the right side of it, and §6 asks for a ruling wherever it would not.
+- **This spec extends `2026-08-10-architecture-ddd-clean-solid.md` and contradicts nothing in it.** The rings (L0–L5), the six contexts, the cross-cutting rules (a)–(e), the enforcement list and the Rejected list all stand. Where this wave touches a Rejected item (the FleetWatcher lane interface, a domain-event bus, a `FleetGateway` port over ccd, splitting `shared/api.ts`, a `MAIL_DELIVERY_TRANSITIONS`-style table, splitting `coord/routes.ts` per resource), §2.5 says how it stays on the right side of it, and §6 records the operator's rulings where it touches one.
 
-**Date:** 2026-10-19 · **Branch:** `docs/consolidation-wave-spec` (rebased onto `origin/main` `c7fe20a22`)
+**Date:** 2026-10-19 · **Branch:** `docs/consolidation-wave-spec` (rev 1 on `origin/main` `c7fe20a22`; rev 2 merged `origin/main` at `f64c27b65`)
 
 **Related:**
 - `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`, the architecture spec. This document is its consolidation chapter.
-- The Linear project "ccrc architecture remediation" and its eight epics: ENF (CCRCP-88), TEST (CCRCP-89), SEAM (CCRCP-90), REF (CCRCP-91), STORE (CCRCP-92), DECIDE (CCRCP-93), CCD (CCRCP-94) and PWA (CCRCP-95). It holds 36 ARCH tickets; ARCH-11a is done. ARCH-02a (#528) adds contexts 7–9 and the PWA ring map. ARCH-02b (#537) asks for the ruling on the Rejected list and the standalone-PR allowance that §6 O1 and O9 depend on.
+- **Plans:** `docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md` (W0 now) and `docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md` (W1a). Later waves get their plans when their gates open.
+- The Linear project "ccrc architecture remediation" and its eight epics: ENF (CCRCP-88), TEST (CCRCP-89), SEAM (CCRCP-90), REF (CCRCP-91), STORE (CCRCP-92), DECIDE (CCRCP-93), CCD (CCRCP-94) and PWA (CCRCP-95). It holds 36 ARCH tickets; ARCH-11a is done. ARCH-02a (#528) adds contexts 7–9 and the PWA ring map. ARCH-02b (#537) asks for the ruling on the Rejected list and the standalone-PR allowance; for this wave, the operator's O4 (a) and O9 (a) answer both (§6).
 - `2026-10-13-supervisor-tick-diet-design.md` and `2026-10-13-event-gated-fleet-observer-design.md`. These are the budget for anything on ccd's 5 s tick.
 - `2026-10-16-working-state-and-interruptions-design.md` and its plan. Hibernation is Task 17a/18, and Task 19 (shadow week, then arming) is pending.
 - `2026-10-17-coordinator-first-routing-design.md`, which is live and holds the asks and approvals hold rule.
 - `2026-09-23-session-continuity-design.md`. Wave 4b is open as #435, with its plan as #409.
 - `2026-10-12-path-identity-design.md`. W1a is open as #397, the W1b correction as #735 and the W2 plan as #436.
-- `2026-10-15-ccrc-two-skins-design.md` with the W2 shells and W3 screens plans; `2026-10-18-settings-redesign-design.md`; `2026-10-18-accounts-connect-design.md` (#745 is open); `2026-10-18-claude-binary-lifecycle-design.md` with plans W1–W5 (#744 is open).
+- `2026-10-15-ccrc-two-skins-design.md` with the W2 shells and W3 screens plans; `2026-10-18-settings-redesign-design.md`; `2026-10-18-accounts-connect-design.md` (#745 merged as `12b2da26a`); `2026-10-18-claude-binary-lifecycle-design.md` with plans W1–W5 (#744 merged as `c7fe20a22`).
 - `2026-07-21-ccrc-attention-feed-design.md` and `2026-08-06-attention-ux-design.md`, the attention surfaces this wave routes into.
 - CCRCP-198: run↔session matching by id string, the bug class §3 K10 closes. Its immediate PWA fix is open as #762 (`runWords.ts`, D-5828), outside this wave.
 - The ccrc history programme: #737 (5h-1 export hardening) and the W2-3, W2-4 and W2-decisions plans dated 2026-10-19. They own the history redactor (W2-D54) and edit `ccd/history/lib.mjs`, `shared/roster-json.mjs`, `shared/lifecycle.ts` and `single-definition.test.ts`.
@@ -40,10 +41,10 @@
 - **The clusters map onto the remediation programme (§4).** Of the 35 open ARCH tickets, eleven are prerequisites, eleven are absorbed unchanged as a cluster's first step, two are re-scoped (ARCH-24, ARCH-29), eleven proceed independently, and none is cancelled. Six new epics add 38 tickets, ARCH-40 to ARCH-77.
 - **Migration is ten strangler waves, W0, W1a, W1b, W2–W8 (§5).**
   - Every wave lands its characterization pins first and gates on counted ratchets (writers per fact, readers per switch, shared helpers, parity pins removed). Line counts are recorded as observations, not gates. Intended behaviour changes go in separate, ruled "behaviour commits". Rollback is a plain revert, with a stated horizon for each wire change.
-  - The first wave is a sliced W0 plus W1a (switches and the feed funnel, without stop-done), after #397 merges. Scheduling (W1b) comes later.
+  - The first wave is a sliced W0 plus W1a (switches and the feed funnel, without stop-done), after #397 merges. Scheduling (W1b) comes later. The operator ruled this (O1 (d), 2026-10-19).
   - **No wave before W7 edits any `pwa/` file**, and a CI path guard enforces it. The workspace-lifecycle wave waits for hibernation's shadow week, and the ccd waves wait for #435, #722, #740 and path-identity W1b.
   - Nothing blocks the skins chain, the Settings redesign, Accounts connect, the binary lifecycle, the history programme, or the auto-swap.
-- **ccd stays bash at its OS edge.** That covers the supervisor tick, swap and carry (including the pool grammar the auto-swap reads), registry writes, locks, and the act-time re-check. Its destructive verbs share helpers *in bash* where the steps really match; they do not become one skeleton. The only bash-to-node move proposed is ccd's docs python redactor, at verb cadence. The cost argument is in §5.13, and the operator rules in §6 O2.
+- **ccd stays bash at its OS edge.** That covers the supervisor tick, swap and carry (including the pool grammar the auto-swap reads), registry writes, locks, and the act-time re-check. Its destructive verbs share helpers *in bash* where the steps really match; they do not become one skeleton. The only bash-to-node move proposed is ccd's docs python redactor, at verb cadence. The cost argument is in §5.13, and the operator ruled it in §6 O2 (b).
 
 ## 1. The problem in numbers
 
@@ -104,7 +105,7 @@ A pin like this is the right answer when the two copies have to live in two lang
 - **CCRCP-198.** The header names one run and the PR sheet names another. Part of that is two *different* queries with no names: `runForSession` (`runWords.ts` ≈:258) asks for the newest run naming the session, while `PrSheet.tsx` ≈:118 asks for the **open** run naming it (gated on `runsFrameSeen`). The other part is matching on the bare id string. The immediate fix is #762; K10 removes the class.
 - **The account enumeration** (08-10 §"Bounded contexts" 1) was written eight times in three languages. A missing entry in one of them silently killed chat for six of 24 sessions. That is the same failure shape as this wave's clusters, at a smaller size.
 - **`stopDoneVerdict`** (`stopDone.ts` ≈:160–215) is a near line-for-line copy of `hibernateVerdict` (`coord/hibernate.ts` ≈:180–221). They run on two clocks (60 s and 5 min), read `hibernate-after-hours` separately, and restate the same hold sentences. The lanes themselves are **not** duplicates: stop-done is live under its own switches by operator ruling (D-5370, D-5427), with a hand-only kill switch (`stop-done-disabled`), a 60 s cadence, at most 3 acts and 6 measures per pass, and a 1 h retry memory, while hibernation is shadow-only until `hibernate-live` (Task 19). Only the verdict is shared work.
-- **"Someone is looking"** has two meanings, **on purpose**: D-5242's presence contract (`presence.ts` ≈:28) defines an *open* claim that holds sleep (hibernation and stop-done, D-5370) and a *visible* claim that gates pushes and the destructive lanes (child reclaim, expiry, collect). The duplication is that each lane restates which claim it reads. Expiry's deferral has "No ceiling" by explicit choice (`expireArchived.ts` ≈:81), and child reclaim has one; §6 O6 asks only whether that difference should stay.
+- **"Someone is looking"** has two meanings, **on purpose**: D-5242's presence contract (`presence.ts` ≈:28) defines an *open* claim that holds sleep (hibernation and stop-done, D-5370) and a *visible* claim that gates pushes and the destructive lanes (child reclaim, expiry, collect). The duplication is that each lane restates which claim it reads. Expiry's deferral has "No ceiling" by explicit choice (`expireArchived.ts` ≈:81), and child reclaim has one; the operator ruled that this difference stays (§6 O6 (a)).
 - **The busy grammar disagrees across the seam.** ccd's grep is unanchored, so scrollback reads busy, while the TS `BUSY_RE` is anchored. ARCH-24 records that this split is intended, but nothing tells a reader which copy is authoritative for which decision.
 
 ## 2. The target: contexts, kernels, writers, ports
@@ -250,11 +251,11 @@ These are not contexts, because they hold no aggregate. Each is one implementati
 
 | 08-10 Rejected item | How the wave stays clear of it |
 |---|---|
-| Decomposing `FleetWatcher` into a lane interface | `LANE_SCHEDULE` is a data table and `runLane` a helper on the same class. Lanes stay methods; the deciders leave for L1 (DECIDE), which is ARCH-02b's own prescription. A per-context scheduler class would reopen this item, so §6 O4 asks for a ruling instead of assuming one. |
+| Decomposing `FleetWatcher` into a lane interface | `LANE_SCHEDULE` is a data table and `runLane` a helper on the same class. Lanes stay methods; the deciders leave for L1 (DECIDE), which is ARCH-02b's own prescription. A per-context scheduler class would reopen this item; the operator ruled for one table and helper (§6 O4 (a)). |
 | A domain-event bus | "Facts recorded" are rows with one writer each. The funnel is a function, not a bus. |
 | A `FleetGateway` port over ccd | ccd stays reached only through `CcdArgv`. The ACL is ccd itself plus typed envelopes. |
 | Splitting `shared/api.ts` | It is not split. `WORKSPACE_TRANSITIONS`, `SWITCHES` and `LANE_SCHEDULE` go in the existing one-concern-per-module files (`shared/workspace.ts`, `shared/switches.ts`); the wire types stay in `api.ts`. |
-| A repository over `CoordStore` | Not proposed. `store.ts` may be split into files per context **inside one class** (partial-class mixins, or `store/*.ts` functions bound to the one `DatabaseSync`), and only if §6 O1 wants it. |
+| A repository over `CoordStore` | Not proposed. `store.ts` may be split into files per context **inside one class** (partial-class mixins, or `store/*.ts` functions bound to the one `DatabaseSync`). No wave planned so far does it; O1 (d) does not ask for it. |
 | Branded value objects for every id | Only one new value is proposed: the `Incarnation` key for `RunBinding`, where CCRCP-198 is the recorded bypass. That is the 08-10 test for a brand. |
 | Use-case classes, a DI container, ISP over `Deps` | Not proposed. Deciders are functions and deps stay consumer-declared. |
 | Splitting `CCD_ARGV` per context | Not proposed. One flat table gains a `default` column for `ccdCan`. |
@@ -264,7 +265,7 @@ These are not contexts, because they hold no aggregate. Each is one implementati
 ARCH-02b's three proposed **new** Rejected entries:
 - **runtime-sourced ccd siblings:** respected. The wave does not split `ccd/ccd` at runtime.
 - **moving ccd rotation and reap decisions server-side:** respected. The retire decision stays in ccd at act time.
-- **compiling policy across languages:** respected. A single `.mjs` that bash executes is one implementation, not a compiled one. §6 O2 asks the operator to confirm that reading.
+- **compiling policy across languages:** respected. A single `.mjs` that bash executes is one implementation, not a compiled one. The operator confirmed that reading by ruling §6 O2 (b).
 
 ## 3. The consolidation catalogue
 
@@ -298,7 +299,7 @@ Each cluster gets the same five lines:
   - **Legitimately different:** each retire reason's **evidence**, the PR ledger for a spent child, the 7-day epoch, witnesses for a temp root. These stay as per-reason policy rows and are not merged.
   - **Legitimately different:** the dead-coordinator lane acts on runs, so it moves to C5's decider set and shares only `SessionReading` and the funnel.
   - **Legitimately different and kept:** the act-time re-measure on the server (D-5428, expiry step 6, the generation check). The tick snapshot is a pass old by the time the serialiser runs, and `reclaim-paused` is the fleet's emergency stop. The characterization pins include "a pause raised between the pass and the act holds".
-  - The viewer rule is stated **once per transition**, as D-5242 already defines it: sleep defers on `open`, retire defers on `visible`. Whether expiry keeps its deliberate "No ceiling" is the only open question (§6 O6).
+  - The viewer rule is stated **once per transition**, as D-5242 already defines it: sleep defers on `open`, retire defers on `visible`. Expiry keeps its deliberate "No ceiling" (§6 O6 (a), ruled 2026-10-19).
 
 ### K2. A workspace's end of life, ccd side → shared helpers where the steps match; each verb keeps its tail
 
@@ -385,8 +386,9 @@ Each cluster gets the same five lines:
   - `push`: presence-gated record and push (today's default);
   - `record-always`: recorded whatever the presence (`recordAlways`);
   - `record-only`: recorded, never pushed (`recordOnly`), which carries the operator's ruling "every reclaim lands in the feed; no push per reap" (`childReclaim.ts` ≈:1679). Each writer's mode is pinned per writer.
-- **The ring stays the catch-up authority.** `{epoch, seq}` is the cursor `pwa/src/lib/api.ts` consumes, and `feed_events` stays its archive. coord.db stays an independently optional third sink: "a box with no coordination database still gets a working ring and catch-up" (`watch.ts` ≈:3103). The catch-up wire is **byte-compatible**, so W1a touches no PWA file. Inverting the authority is put to the operator as §6 O11 and is not assumed.
-- **Deleted:** 16 hand-rolled `log.record(…); coord.recordFeedEvent(…)` pairs [M] (15 in W1a; `stopDoneSweep.ts`'s waits for W4); `pushRelease`'s direct `sender.notify`; and the use of `hasFeedEvent`/`hasMailWithSubject` as idempotency keys. Each lane that needs once-only gets a `dedupeKey` column on the notice, which ends a SEAM overload. Replacing those keys is a **behaviour commit** (§5.1 rule 1b), because a dedupe key and a subject match can disagree on a re-sent row.
+  - `pushOne`'s two flags are independent, so the record gate (`unless-visible` or `always`) and the push (`unless-visible` or `never`) make four combinations, not three. Every hand-written pair measured for rev 2 records ungated and never pushes (`recordAlways` with `recordOnly`), but they differ in where they flush the ring (most in a `finally`) and in whether a failed ring record is caught. The W0 pin records all four facts per writer, and the funnel's modes are named from what it finds.
+- **The ring stays the catch-up authority.** `{epoch, seq}` is the cursor `pwa/src/lib/api.ts` consumes, and `feed_events` stays its archive. coord.db stays an independently optional third sink: "a box with no coordination database still gets a working ring and catch-up" (`watch.ts` ≈:3103). The catch-up wire is **byte-compatible**, so W1a touches no PWA file. The operator ruled that the authority is not inverted (§6 O11 (a)).
+- **Deleted:** the hand-rolled `log.record(…); coord.recordFeedEvent(…)` pairs [M]. There are 16 `recordFeedEvent` call lines outside the store: `pushOne`'s own, which becomes the funnel's, and 15 hand-written pairs. 14 pairs move in W1a, and `stopDoneSweep.ts`'s waits for W4 (rev 2 count, §8); `pushRelease`'s direct `sender.notify`; and the use of `hasFeedEvent`/`hasMailWithSubject` as idempotency keys. Each lane that needs once-only gets a `dedupeKey` column on the notice, which ends a SEAM overload. Replacing those keys is a **behaviour commit** (§5.1 rule 1b), because a dedupe key and a subject match can disagree on a re-sent row.
 - **Overlap:** 16 writers, 2 read routes, and 2 sources of "run" feed rows (the `pushNewRuns` watermark and the executors).
 - **Verdict:**
   - **Real** for the pairs' shape and ordering (ring, then db, then flush), which moves into the funnel once.
@@ -504,7 +506,7 @@ Each cluster gets the same five lines:
 ### K15. Placement → the server's projected home for new-session suggestions; swap suggestions stay their own question
 
 - **One owner:** for *new-session* suggestions, `limits.ts projectHome`, which mirrors ccd's `_ws_least_loaded`. Any PWA copy that answers "where would a new session in this project land" is deleted. For *acts*, ccd's `_ws_least_loaded`/`_swap_target` remain.
-- **Not merged:** the PWA's `accountPicker.leastLoaded`, whose only caller is `SwapSheet.tsx` ≈:169 over `split.eligible`. It suggests a swap target for one existing session, which is `_swap_target`'s question, not `_ws_least_loaded`'s. It stays as it is. A server-computed swap suggestion that mirrors `_swap_target` is a possible later step, offered under §6 O12, and is not part of the wave.
+- **Not merged:** the PWA's `accountPicker.leastLoaded`, whose only caller is `SwapSheet.tsx` ≈:169 over `split.eligible`. It suggests a swap target for one existing session, which is `_swap_target`'s question, not `_ws_least_loaded`'s. It stays as it is. A server-computed swap suggestion that mirrors `_swap_target` is not part of this wave (§6 O12 (a), ruled 2026-10-19); it belongs to the Accounts programme if it is ever wanted.
 - **Verdict:**
   - **Real** for any PWA new-session placement copy.
   - **Legitimately different:** swap-target suggestion vs project placement, in the PWA exactly as in ccd. Changing it would change what the account-switching UI suggests.
@@ -584,7 +586,7 @@ The programme's 36 tickets: one is done (ARCH-11a), and 35 are in backlog. The w
 
 | Fate | Tickets | Meaning |
 |---|---|---|
-| **Prerequisite** (lands before the wave that needs it, unchanged) | ARCH-00 (parser), ARCH-01 (god-file growth vs merge-base), ARCH-02a (spec v2: contexts 7–9, timer rule, PWA rings), ARCH-02b (the ruling, §6 O4/O9), ARCH-03 (consumer-side ports), ARCH-04 stage 1–2 (ring scanner), ARCH-06 (symbol-keyed pins: every cluster moves code that literal pins read), ARCH-08b (`readdirMeasured`), ARCH-10 (runner says whether ccd ran: the retire executor must tell transport failure from refusal), ARCH-23 (ccd harness integrity: K2 needs honest stubs), ARCH-34 (ccd function-to-context manifest: K2/K18 need the map) | 11 |
+| **Prerequisite** (lands before the wave that needs it, unchanged) | ARCH-00 (parser), ARCH-01 (god-file growth vs merge-base), ARCH-02a (spec v2: contexts 7–9, timer rule, PWA rings), ARCH-02b (the ruling; for this wave §6 O4 (a) and O9 (a) answer it, and the issue stays open for the programme's own re-affirmation), ARCH-03 (consumer-side ports), ARCH-04 stage 1–2 (ring scanner), ARCH-06 (symbol-keyed pins: every cluster moves code that literal pins read), ARCH-08b (`readdirMeasured`), ARCH-10 (runner says whether ccd ran: the retire executor must tell transport failure from refusal), ARCH-23 (ccd harness integrity: K2 needs honest stubs), ARCH-34 (ccd function-to-context manifest: K2/K18 need the map) | 11 |
 | **Absorbed** (becomes the first ticket of a cluster, scope unchanged) | ARCH-36 → K1 (the archive decider is C4's first decider); ARCH-35 → K1 (`decideClose` queues the retire); ARCH-25 → K2 (the reaping breadcrumb is the shared tail step's tombstone grammar); ARCH-14 → K2 (refusal-v1 lands in the one shared refusal helper); ARCH-09 → K13 (mail ingress reads the registry once); ARCH-19 → K5 (mail policy into `coord/` before questions move); ARCH-13a → K5; ARCH-26 → K9 (jq held to TS by set equality, the same shape); ARCH-28 → K14; ARCH-30 → K14; ARCH-13b → K14 | 11 |
 | **Re-scoped** (grows; the original acceptance criteria stay and more are added) | **ARCH-24** → K8: the corpus also owns the module exports (one SGR stripper, one prompt glyph) and the PWA's move to parsed facts. **ARCH-29** → K5: the reducer serves all three answer paths, including `push-sw.js`, and the server-side pairing | 2 |
 | **Independent** (no cluster depends on it; it proceeds on its own schedule) | ARCH-05, ARCH-07, ARCH-08, ARCH-11b, ARCH-12, ARCH-15, ARCH-16, ARCH-20, ARCH-21, ARCH-22, ARCH-33 | 11 |
@@ -648,13 +650,14 @@ That is 38 new tickets (ARCH-40 to ARCH-77) in six new epics plus two existing o
    - A series' first commit adds a test that is green on `main` against the **old** code. The test pins inputs to outputs: verdicts, refusal words and statuses, composed `CcdArgv`, feed rows and their record mode, wire frames.
    - The test records one mutant: deleting or reordering a guard turns it red, which is 08-10's mutant duty.
    - **Move commits** change the test only in its imports. They can do that because ARCH-06's symbol-keyed pins replace literal source-text pins. A move commit that edits a characterization assertion is refused in review.
-   - **1b. Behaviour commits.** An intended output change is its own commit class: never squashed with a move, it changes the characterization assertions in that commit only, lists the before/after rows in the PR body and cites the operator's ruling. The wave's known behaviour commits are K6's `dedupeKey` replacing `hasFeedEvent`/`hasMailWithSubject`, K11's monotonic throttle where expiry and dead-coordinator throttle on wall-clock today, anything §6 O6 or O11 rules, and any K3 truth-table row that a ruling changes.
+   - **1b. Behaviour commits.** An intended output change is its own commit class: never squashed with a move, it changes the characterization assertions in that commit only, lists the before/after rows in the PR body and cites the operator's ruling. The wave's known behaviour commits are K6's `dedupeKey` replacing `hasFeedEvent`/`hasMailWithSubject`, K11's monotonic throttle where expiry and dead-coordinator throttle on wall-clock today, and any K3 truth-table row that a ruling changes. O6 and O11 were ruled to keep today's behaviour, so neither adds one.
    - **1c. Skew tests.** A pin in one process cannot see cross-process ordering or deploy skew. Every wire change carries a skew test: the old client against the new server, and the new client against the old server.
 2. **Strangler order.** The new owner lands beside the old one. Consumers move one per commit, and the old owner is deleted last, in its own commit. During a wave, wire changes are **additive**.
 3. **Exits are GATES or OBSERVATIONS.**
    - A **GATE** is a ratchet count from a committed census script landed in W0 (ARCH-40), which may only shrink: writers per fact, readers per switch, call lines, named clocks, shared helpers, parity pins, PWA match sites. A wave is done when its GATEs are met **and** its old owner is gone.
    - An **OBSERVATION** is a number recorded at exit that gates nothing: lines out of a god file, lines in a region.
    - Every census names its query, so "~50 sites" becomes a defined count before the wave that moves them starts.
+   - **When a ratchet starts biting (rev 2, from O3 (a)).** Nothing in flight pauses, so a census reports and never reds before its series starts: another programme may add a feed pair or a switch reader meanwhile, and the series that moves them counts it. The may-only-shrink pin lands in the commit that reaches the series' target, and from then on a new hand-written copy is a red suite. A writers pin lands in W0 only for a fact whose writer set is already at its target.
 4. **Rollback is a revert, with a stated horizon.** No wave needs a data migration that cannot be reversed. The one schema change, the `dedupeKey` column (W1a), is additive: a revert leaves an unused column. ccd changes roll back through `ccrc rollback` to the previous release. **Each wire change states its rollback horizon.** A door or field that goes away is removed only after the new one has been the only reader for at least two releases, or after the client gates its use on a server cap token. Until then, a server rollback past the release that introduced it leaves the PWA working.
 5. **Deploys.**
    - Agent-first, from a fresh `origin/main` worktree, as the operator's runbook says.
@@ -672,28 +675,31 @@ That is 38 new tickets (ARCH-40 to ARCH-77) in six new epics plus two existing o
 ### 5.2 W0: the pins the next wave needs (docs and tests only)
 
 - **W0 is sliced.** It lands only what W1a needs, then grows a slice ahead of each later wave.
-  - **W0 now:** ARCH-01 (growth check), ARCH-06 for the files W1a touches, ARCH-40 (writers, extending `single-definition.test.ts`, plus the census scripts), and two characterization pins: each feed writer's mode, order and presence gate, and each `reclaim-paused` reader's verdict including "pause raised between pass and act holds".
-  - **W0 later slices**, each before the wave that needs it: ARCH-00, -02a, -02b (ruling), -04 stages 1–2, -23, -34; the pane corpus (ARCH-24) before W2; the liveness truth table (ARCH-47's first commit, with D-1144's row) before W2; the retire-verdict table over ccd's evals before W5.
+  - **W0 now:** ARCH-01 (growth check), ARCH-00 and ARCH-06 for the files W1a touches, ARCH-40 (writers, extending `single-definition.test.ts`, plus the census scripts), and two characterization pins, which are the first halves of ARCH-54 and ARCH-70: each feed writer's mode, order and presence gate, and each `reclaim-paused` reader's verdict including "pause raised between pass and act holds".
+  - **Rev 2 correction:** ARCH-06's symbol helper is built on ARCH-00's parser (CCRCP-126: "Depends on: ARCH-00"), so ARCH-00 moves from the later slices into W0 now. Its ticket leaves the parser option to the operator. That choice is the one operator act W0 waits for, and only ARCH-00 and ARCH-06 wait for it.
+  - **Rev 2 correction:** the growth check lands reporting, not red, because a red check on the day it lands would stop PRs already in flight that grow a listed file (#397 grows `watch.ts`), and O3 (a) ruled that nothing pauses. Arming it red is an operator act, taken when the PRs open at its landing have merged or been named exempt.
+  - **W0 later slices**, each before the wave that needs it: ARCH-02a, -02b (the programme's ruling), -04 stages 1–2, -23, -34; the pane corpus (ARCH-24) before W2; the liveness truth table (ARCH-47's first commit, with D-1144's row) before W2; the retire-verdict table over ccd's evals before W5.
 - **Exit (GATES):**
   - every pin is green on `main`;
-  - the growth check is active for `ccd/ccd`, `ccd/ccrc`, `watch.ts`, `coord/store.ts`, `coord/routes.ts`, `server.ts`, `sessionws.ts` and `pwa/src/lib/api.ts`;
-  - ARCH-34's manifest maps **every function defined in `ccd/ccd` at its series' merge-base**, checked by a test (not a fixed number; #435 and #740 add functions);
+  - the growth check runs on every PR (a test that reads `.git` is always selected) for `ccd/ccd`, `ccd/ccrc`, `ccd/session-hook.sh`, `watch.ts`, `coord/store.ts`, `coord/routes.ts`, `server.ts`, `sessionws.ts` and `pwa/src/lib/api.ts`, reporting until the operator arms it;
+  - ARCH-34's manifest (a later slice, before W5) maps **every function defined in `ccd/ccd` at its series' merge-base**, checked by a test (not a fixed number; #435 and #740 add functions);
   - zero production bytes change, and the ccd launcher SHA-256 is unchanged.
-- **Waits for:** nothing for W0 now. The fixture corpora (later slices) adopt #722's neutral vocabulary after it merges. ARCH-02a's CLAUDE.md edit rides #434 if that PR is still open.
+- **Waits for:** nothing for W0 now, except that ARCH-00 and ARCH-06 wait for the operator's parser choice. The fixture corpora (later slices) adopt #722's neutral vocabulary after it merges. ARCH-02a's CLAUDE.md edit rides #434 if that PR is still open.
 
 ### 5.3 W1a: switches and the feed funnel (K12, K6)
 
-- **Tickets:** ARCH-70, -54, -55.
+- **Tickets:** ARCH-70, -54, -55. The plan splits them into six PRs (ARCH-70 in two, ARCH-54 in three, ARCH-55 in one).
 - **Exit (GATES):**
   - `recordFeedEvent` call lines outside the store: 16 → 2 (the funnel, and `stopDoneSweep.ts`'s, which moves in W4);
-  - private `reclaim-paused` parsers: 10 → 1 (`stopDoneSweep.ts`, which moves in W4);
+  - private `reclaim-paused` parsers: 10 → 1 (`stopDoneSweep.ts`, which moves in W4). The census counts `includes(RECLAIM_PAUSE_MARKER)` expressions outside `readSwitches`: 10 sites in 6 files on `f64c27b65` (`watch.ts` 4, `endDeadCoordinator.ts` 2, and one each in `childReclaim.ts`, `collectTempRoot.ts`, `expireArchived.ts` and `stopDoneSweep.ts`). The "12 files" of §1.1 counts files that name the marker, mostly in comments;
   - `MAIL_DISABLED_MARKER` definitions: 2 → 1;
   - each writer's record mode unchanged (the W0 pin);
   - catch-up wire bytes unchanged (no `pwa/` file touched).
 - **Waits for:**
   - #397 (path identity W1a) to merge. It edits `watch.ts`, `childReclaim.ts`, `expireArchived.ts`, `coord/routes.ts`, `server.ts`, `stall.ts` and `coord/reclaim.ts`, which are exactly W1a's feed and switch sites;
   - the Settings redesign's server tasks (`coord/routes.ts`, `server.ts`), merged or line-disjoint per rule 6;
-  - coordinator-first's remaining server tasks and CB W1 observe's server half, for any shared lane.
+  - coordinator-first's remaining server tasks and CB W1 observe's server half, for any shared lane;
+  - ARCH-06's slice for the literal source pins that read W1a's files (W0), and the W0 pins themselves.
 - **Does not wait for** hibernation Task 19. `stopDoneSweep.ts` and `hibernateSweep.ts` are not touched, so the shadow measurement runs on unchanged code, and W1a's exit does not depend on an undated operator act.
 
 ### 5.4 W1b: schedule, latches, one listing, `ccdCan`, the TS redactor (K11, K13's listing, K12's `ccdCan`, K7's TS half)
@@ -711,7 +717,7 @@ That is 38 new tickets (ARCH-40 to ARCH-77) in six new epics plus two existing o
 
 ### 5.5 W2: one reading of a session (K3, K4 server half, K13)
 
-- **Tickets:** ARCH-47 (widening `SingleRead` first), -48, -50 (server), -52, -53.
+- **Tickets:** ARCH-47 (widening `SingleRead` first), -48, -50 (server), -52, -53, and ARCH-63 (the one SGR stripper, prompt glyph and guard export, over ARCH-24's corpus, which lands in W0's slice before W2).
 - **Exit (GATES):**
   - server status-derivation ladders: 7 → 1 function (`readSession`), with display readers on the tick's reading and destructive readers on a fresh one;
   - `SessionStream` polls: 4 → 0;
@@ -868,63 +874,63 @@ The cost of this move:
 
 **Splitting the `ccd/ccd` file** is not in this wave. ARCH-34's manifest comes first, runtime-sourced siblings are proposed for rejection (ARCH-02b), and build-time assembly is a later operator decision.
 
-## 6. Decisions for the operator
+## 6. Decisions, ruled by the operator 2026-10-19
 
-Each decision lists its options and marks one **recommended**. Nothing here is decided until the operator rules.
+The operator answered all twelve on 2026-10-19 through the visual companion, in their words: "answers locked". Every decision stands at its recommended option, and O1 was clicked explicitly. Each decision keeps its options: the ruled one is marked **ruled 2026-10-19**, and the others are marked *not taken*.
 
 **O1. The scope of the first wave.**
-- (a) Rev 0's W0 + W1: every prerequisite pin, then all the server funnels (switches, funnel, schedule, listing, redactor) as one wave. W0 alone is 9 tickets plus a whole-file manifest and three corpora, and W1 is 8 tickets in the busiest file, blocked behind #397. Its largest count (the cadence clocks) removes the least risk.
-- (b) W0 + W4 first, because the workspace end of life is the overlap the operator has felt most. It has to wait for hibernation Task 19 anyway, and without W1a's funnel and switches it would build a fifth executor shape first.
-- (c) Start every wave whose wait-list is empty, in parallel. This is the fastest calendar, but it puts several series in `watch.ts` at once, against §5.1 rule 6.
-- (d) **A sliced W0 (only the pins W1a needs), then W1a: `SWITCHES` and the `notify` funnel, without stop-done, after #397 merges.** Scheduling, latches, the one listing, `ccdCan` and the TS redactor follow as W1b. It removes the duplicates that have caused incidents (a pause read ten ways; sixteen hand-written feed writes) soonest, touches no PWA file and no ccd byte, does not depend on Task 19, and is about four PRs. The CCRCP-198 PWA disagreement is already being fixed on its own (#762), so it does not need to wait for W6. **Recommended.**
+- (a) *Not taken.* Rev 0's W0 + W1: every prerequisite pin, then all the server funnels (switches, funnel, schedule, listing, redactor) as one wave. W0 alone is 9 tickets plus a whole-file manifest and three corpora, and W1 is 8 tickets in the busiest file, blocked behind #397. Its largest count (the cadence clocks) removes the least risk.
+- (b) *Not taken.* W0 + W4 first, because the workspace end of life is the overlap the operator has felt most. It has to wait for hibernation Task 19 anyway, and without W1a's funnel and switches it would build a fifth executor shape first.
+- (c) *Not taken.* Start every wave whose wait-list is empty, in parallel. This is the fastest calendar, but it puts several series in `watch.ts` at once, against §5.1 rule 6.
+- (d) **Ruled 2026-10-19 ("answers locked", clicked explicitly).** A sliced W0 (only the pins W1a needs), then W1a: `SWITCHES` and the `notify` funnel, without stop-done, after #397 merges. Scheduling, latches, the one listing, `ccdCan` and the TS redactor follow as W1b. It removes the duplicates that have caused incidents (a pause read ten ways; sixteen hand-written feed writes) soonest, touches no PWA file and no ccd byte, does not depend on Task 19, and is about four PRs (the W1a plan cuts it into six reviewable ones). The CCRCP-198 PWA disagreement is already being fixed on its own (#762), so it does not need to wait for W6.
 
 **O2. Does ccd logic move to TS?**
-- (a) No. Consolidate everything in bash and keep every cross-language twin pinned.
-- (b) **One bash-to-node move only: ccd's docs python redactor becomes `node redact.mjs --profile docs`, at docs-verb cadence.** Everything on the tick, swap, carry and destructive paths stays bash, including the pool grammar, which the auto-swap reads up to four times a tick (§5.13). **Recommended.** It removes one three-language rule set (and `docs-parity`'s python leg) at about 0.05 s per docs verb. It also needs the operator to confirm that "a single `.mjs` called from bash" is *not* the "compiling policy across languages" that ARCH-02b proposes to reject. (The base-url and roster consolidations are TS ↔ mjs, not ccd logic, and are not part of this question.)
-- (c) Move the retire and placement deciders to the server and keep ccd as a pure actuator. This contradicts ARCH-02b's proposed rejection, would make retire and auto-swap depend on the server being up, and would rewrite about 10k lines of incident-hardened bash. **Not recommended.**
+- (a) *Not taken.* No. Consolidate everything in bash and keep every cross-language twin pinned.
+- (b) **Ruled 2026-10-19 ("answers locked").** One bash-to-node move only: ccd's docs python redactor becomes `node redact.mjs --profile docs`, at docs-verb cadence. Everything on the tick, swap, carry and destructive paths stays bash, including the pool grammar, which the auto-swap reads up to four times a tick (§5.13). It removes one three-language rule set (and `docs-parity`'s python leg) at about 0.05 s per docs verb. The ruling also confirms that "a single `.mjs` called from bash" is *not* the "compiling policy across languages" that ARCH-02b proposes to reject. (The base-url and roster consolidations are TS ↔ mjs, not ccd logic, and are not part of this question.)
+- (c) *Not taken.* Move the retire and placement deciders to the server and keep ccd as a pure actuator. This contradicts ARCH-02b's proposed rejection, would make retire and auto-swap depend on the server being up, and would rewrite about 10k lines of incident-hardened bash. It was not recommended.
 
 **O3. How much in-flight work pauses?**
-- (a) **Nothing pauses.** Every wave waits behind the programmes it would collide with (§5.12), and the only cost is calendar time. **Recommended.**
-- (b) Freeze new lanes in `watch.ts` (any PR adding a `last*` field or a feed pair) from the day W1a starts until it ends, so the counts stop growing. This is cheap and could be combined with (a) as an amendment.
-- (c) Pause hibernation's arming until W4 lands, so the armed lane is the consolidated one. This delays a measured memory win, so it is not recommended.
+- (a) **Ruled 2026-10-19 ("answers locked").** Nothing pauses. Every wave waits behind the programmes it would collide with (§5.12), and the only cost is calendar time.
+- (b) *Not taken.* Freeze new lanes in `watch.ts` (any PR adding a `last*` field or a feed pair) from the day W1a starts until it ends, so the counts stop growing. This is cheap and could be combined with (a) as an amendment.
+- (c) *Not taken.* Pause hibernation's arming until W4 lands, so the armed lane is the consolidated one. This delays a measured memory win, so it is not recommended.
 
 **O4. One scheduler, or a scheduler per context?**
-- (a) **One `LANE_SCHEDULE` table and `runLane` helper inside `FleetWatcher`**, with the deciders in per-context L1 modules. This keeps 08-10's "no lane interface" and ARCH-02b's proposed re-affirmation. **Recommended.**
-- (b) One scheduler class per context (Workspace, Coordination, Attention, …), each owning its lanes. This reads well, but it reopens the rejected lane interface, and ARCH-02b says DECIDE would then be re-planned.
-- (c) Leave scheduling as it is and do only the deciders. This leaves the about 25 hand-kept cadence clocks and the restated timer cadences.
+- (a) **Ruled 2026-10-19 ("answers locked").** One `LANE_SCHEDULE` table and `runLane` helper inside `FleetWatcher`, with the deciders in per-context L1 modules. This keeps 08-10's "no lane interface" and ARCH-02b's proposed re-affirmation.
+- (b) *Not taken.* One scheduler class per context (Workspace, Coordination, Attention, …), each owning its lanes. This reads well, but it reopens the rejected lane interface, and ARCH-02b says DECIDE would then be re-planned.
+- (c) *Not taken.* Leave scheduling as it is and do only the deciders. This leaves the about 25 hand-kept cadence clocks and the restated timer cadences.
 
 **O5. Asks and approvals: one table or two?**
-- (a) **One module and one aggregate type over the two existing tables.** No coord.db migration while coordinator-first is live. **Recommended.**
-- (b) Merge them into one `questions` table with a `kind` column. This is cleaner, but it needs a data migration and a rollback story for a live feature.
-- (c) Leave them as two lanes. This leaves the 6 doors and the retention-in-the-wrong-sweep.
+- (a) **Ruled 2026-10-19 ("answers locked").** One module and one aggregate type over the two existing tables. No coord.db migration while coordinator-first is live.
+- (b) *Not taken.* Merge them into one `questions` table with a `kind` column. This is cleaner, but it needs a data migration and a rollback story for a live feature.
+- (c) *Not taken.* Leave them as two lanes. This leaves the 6 doors and the retention-in-the-wrong-sweep.
 
 **O6. Expiry's viewer ceiling.** Sleep defers on *open* and retire on *visible*, as D-5242 already defines; that is not in question. Stop-done becomes the `run-done` row of the sleep lane with its own arming, kill switch, cadence, caps and retry (K1), so it stays live and hibernation stays shadow; that is not in question either. The one open point: expiry defers on a visible viewer with "No ceiling" (`expireArchived.ts` ≈:81), while child reclaim has a ceiling.
-- (a) **Keep expiry's unbounded deferral.** It was an explicit choice, an archived workspace someone is looking at costs only disk, and changing it is a behaviour commit with no incident behind it. **Recommended.**
-- (b) Give every retire reason one bounded ceiling. This is uniform, but it is a behaviour change to a deliberate choice.
+- (a) **Ruled 2026-10-19 ("answers locked").** Keep expiry's unbounded deferral. It was an explicit choice, an archived workspace someone is looking at costs only disk, and changing it is a behaviour commit with no incident behind it.
+- (b) *Not taken.* Give every retire reason one bounded ceiling. This is uniform, but it is a behaviour change to a deliberate choice.
 
 **O7. Where is "alive / asleep / dead" decided for the PWA?**
-- (a) **The server computes it once (`presence` on the wire) and the PWA renders it.** **Recommended.**
-- (b) A shared L0 function runs on both sides. This is fewer wire fields, but two processes still decide, and they can drift through deploy skew.
+- (a) **Ruled 2026-10-19 ("answers locked").** The server computes it once (`presence` on the wire) and the PWA renders it.
+- (b) *Not taken.* A shared L0 function runs on both sides. This is fewer wire fields, but two processes still decide, and they can drift through deploy skew.
 
 **O8. Where do the tickets live?**
-- (a) **Six new epics inside the existing "ccrc architecture remediation" project, numbered from ARCH-40.** **Recommended.**
-- (b) A separate "consolidation wave" project linked to it.
+- (a) **Ruled 2026-10-19 ("answers locked").** Six new epics inside the existing "ccrc architecture remediation" project, numbered from ARCH-40.
+- (b) *Not taken.* A separate "consolidation wave" project linked to it.
 
 **O9. May consolidation PRs land standalone?** The 08-10 spec says increments "each ride queued work, none is a standalone refactor PR".
-- (a) **Standalone is allowed for any series whose first commit is a characterization pin and whose exit criteria are counted (§5.1).** Everything else still rides. This extends ARCH-02b's proposed allowance for enforcement-only PRs. **Recommended.**
-- (b) Every series rides a feature. This is safer by the old rule, but most clusters have no feature to ride, so the wave would not happen.
+- (a) **Ruled 2026-10-19 ("answers locked").** Standalone is allowed for any series whose first commit is a characterization pin and whose exit criteria are counted (§5.1). Everything else still rides. This extends ARCH-02b's proposed allowance for enforcement-only PRs.
+- (b) *Not taken.* Every series rides a feature. This is safer by the old rule, but most clusters have no feature to ride, so the wave would not happen.
 
 **O10. Renames.**
-- (a) **Rename in TS words only:** "path claim" → "lease", child "reclaim" → "retire", viewer "presence" → "viewer". ccd verb names (`ws-reclaim` …) keep their public spelling. **Recommended.**
-- (b) Rename ccd verbs too, with aliases. This is a churn cost across `CCD_ARGV`, the whitelist and the agent, for a word.
+- (a) **Ruled 2026-10-19 ("answers locked").** Rename in TS words only: "path claim" → "lease", child "reclaim" → "retire", viewer "presence" → "viewer". ccd verb names (`ws-reclaim` …) keep their public spelling.
+- (b) *Not taken.* Rename ccd verbs too, with aliases. This is a churn cost across `CCD_ARGV`, the whitelist and the agent, for a word.
 
 **O11. The catch-up authority.**
-- (a) **The ring stays the `{epoch, seq}` authority and `feed_events` its archive.** Catch-up keeps working on a box with no coord.db, and the wire is unchanged. **Recommended.**
-- (b) Invert it: catch-up reads `feed_events` and the ring becomes its cache. This gives one store, but it breaks catch-up on a box without coord.db unless a resync story is built, and it changes a PWA-facing contract, which would move the change into W7.
+- (a) **Ruled 2026-10-19 ("answers locked").** The ring stays the `{epoch, seq}` authority and `feed_events` its archive. Catch-up keeps working on a box with no coord.db, and the wire is unchanged.
+- (b) *Not taken.* Invert it: catch-up reads `feed_events` and the ring becomes its cache. This gives one store, but it breaks catch-up on a box without coord.db unless a resync story is built, and it changes a PWA-facing contract, which would move the change into W7.
 
 **O12. A server-computed swap suggestion.**
-- (a) **Not in this wave.** SwapSheet keeps `leastLoaded` as its own question (K15). **Recommended.**
-- (b) Add a server field that mirrors ccd's `_swap_target` for one session, so the PWA's swap suggestion and ccd's act agree by construction. That is new behaviour on the account-switching UI and belongs to the Accounts programme, not here.
+- (a) **Ruled 2026-10-19 ("answers locked").** Not in this wave. SwapSheet keeps `leastLoaded` as its own question (K15).
+- (b) *Not taken.* Add a server field that mirrors ccd's `_swap_target` for one session, so the PWA's swap suggestion and ccd's act agree by construction. That is new behaviour on the account-switching UI and belongs to the Accounts programme, not here.
 
 ## 7. Risks, and what must not break
 
@@ -936,7 +942,7 @@ Each decision lists its options and marks one **recommended**. Nothing here is d
   - The per-account `<w>-disabled` switch keeps its meaning as an operator switch; no wave re-projects it from the roster. The PWA's swap suggestion (SwapSheet) is unchanged.
 - **No herd restarts.** No wave requires a supervisor restart or its own roll; ccd changes ride ordinary releases. The existing `try-restart claude-session@*` sweep in `ccrc update` (≈:21424) is a herd risk this wave neither fixes nor worsens. It deserves its own ticket.
 - **Agent-first deploys.** The only agent-touching change (`shared/spawn.mjs`, K17) deploys agent lane first, like every release.
-- **Recorded rulings this wave keeps:** stop-done live under its own switches (D-5370, D-5427); hibernation shadow until Task 19; "every reclaim lands in the feed; no push per reap"; D-5242's open/visible presence contract; expiry's "No ceiling" unless §6 O6 rules otherwise; the history redactor's W2-D54 order.
+- **Recorded rulings this wave keeps:** stop-done live under its own switches (D-5370, D-5427); hibernation shadow until Task 19; "every reclaim lands in the feed; no push per reap"; D-5242's open/visible presence contract; expiry's "No ceiling" (§6 O6 (a)); the history redactor's W2-D54 order.
 - **ccrc SAFETY rules.** No wave runs `ws-*`, `ws-expire`, `ws-reclaim` or `ws-reap`, or touches units or tmux, on a fleet box as part of its testing. Characterization runs against fixture registries, the source seam and containers. Arming any changed lane stays an operator act, named under the SAFETY rule in the ask.
 - **Improve what exists before inventing.** Every owner in §3 grows out of an existing mechanism: `pushOne` → `notify`, `heldFor` → questions, `_ws_reclaim_ladder`/`_ws_reclaim_tail` → the shared ccd helpers, `RUN_TRANSITIONS` and `shared/lifecycle.ts` → `WORKSPACE_TRANSITIONS`, `models.mjs` → `redact.mjs`, `ccrc:generated`/`ccrc restamp` → the hook's generated helpers, `single-definition.test.ts` → the writers pin. None is a new subsystem.
 - **Public repo.** Nothing committed by any wave names a host, an IP, an account or lane name, or a private id. The fixture registries use neutral ids (the vocabulary of #722).
@@ -969,7 +975,9 @@ Each decision lists its options and marks one **recommended**. Nothing here is d
 - **The wave stalls halfway, leaving two owners.** Mitigation: each cluster's old owner is deleted inside its own series. The ratchets make a half-done state visible and stop it growing. Pausing between clusters is safe; pausing *inside* a series is not, so series are kept short (one consumer per commit, at most about 8 commits).
 - **Cheap-worker routing stalls on deep ccd edits** (recorded `/handoff` quirk). Mitigation: only literal one-consumer moves and characterization rows go to workers. The skeleton, deciders and swap- or approval-adjacent edits are native.
 
-## 8. Review log (rev 0 → rev 1)
+## 8. Review log
+
+### rev 0 → rev 1
 
 Two reviews of rev 0. Each finding was checked against `origin/main` `c7fe20a22` before it was applied. "Applied" means the correction is in rev 1, and the "Where" column says where. The [M] census was re-run on `c7fe20a22`: `recordFeedEvent` call lines 16, files naming `reclaim-paused` 12, `ccd/ccd` 40,671 lines and 644 functions, `watch.ts` 11,298 lines and `single-definition.test.ts` 7,250 lines are unchanged. The `last*` count was wrong in rev 0 (56 distinct names, not 24).
 
@@ -1007,3 +1015,19 @@ Two reviews of rev 0. Each finding was checked against `origin/main` `c7fe20a22`
 | R2-13 | low | W0 + W1 is not the smallest high-value first wave; fix CCRCP-198 now | §6 O1 | Applied: O1(d) sliced W0 + W1a is recommended. **Rejected in part:** the standalone CCRCP-198 fix is already open as #762, so the wave adds nothing for it | §6 O1, W0, W1a, W6 |
 
 Found while checking and also corrected: rev 0 called `collect-lane-live` "legacy, ignored". It is the legacy arm of the collect switch, and it still arms the lane (`collectLane.ts` ≈:32). It is kept as a `SWITCHES` row (K12).
+
+### rev 1 → rev 2 (2026-10-19): the operator's rulings, and what planning W0 and W1a measured
+
+The operator ruled all twelve decisions on 2026-10-19 ("answers locked"), each at its recommended option, O1 clicked explicitly. §6 now records each ruling with the options not taken, and the body carries them where they change it. Writing the W0 and W1a plans re-measured the first wave's sites on `origin/main` `f64c27b65`; the rows below are what that changed.
+
+| # | Finding (short) | Checked against | Outcome | Where |
+|---|---|---|---|---|
+| R3-1 | the twelve rulings | the operator's answers, 2026-10-19 | Applied: Status approved; §6 marks each ruling and keeps its alternatives as not taken; the body's "asks for a ruling" sentences now cite the ruling | Status, header, In short, §1.4, §2.5, K1, K6, K15, §4.1, §5.1 rule 1b, §6, §7 |
+| R3-2 | ARCH-06 cannot land before ARCH-00 | CCRCP-126 ("Depends on: ARCH-00"); CCRCP-97 leaves the parser option to the operator | Applied: ARCH-00 moves into W0 now; it and ARCH-06 wait for the operator's parser choice; W1a waits for ARCH-06's slice | §5.2, §5.3 |
+| R3-3 | a growth check that lands red would stop in-flight PRs | #397 grows `watch.ts`; O3 (a) | Applied: it lands reporting; arming it red is an operator act | §5.2 |
+| R3-4 | a ratchet that lands in W0 is the freeze O3 (b) did not take | O3 (a) | Applied: a census reports until its series reaches the target, and the pin lands in that commit | §5.1 rule 3 |
+| R3-5 | 16 call lines are `pushOne`'s own plus 15 pairs, so W1a moves 14, not 15 | `git grep recordFeedEvent` on `f64c27b65` | Applied: K6 states the split; the 16 → 2 exit is unchanged | K6 |
+| R3-6 | `pushOne`'s flags make four modes; the hand pairs differ in where they flush and in catching a failed ring record | `watch.ts` `pushOne` ≈:3106; the 15 pairs | Applied: the W0 pin records record gate, push, flush and failure isolation per writer | K6 |
+| R3-7 | "10 → 1 of 12 files" mixed two counts | `includes(RECLAIM_PAUSE_MARKER)`: 10 sites in 6 files; 12 files name the marker, mostly in comments | Applied: the census is defined by its query | §5.3 |
+| R3-8 | the open-PR set moved | `gh pr list` on 2026-10-19: #744 and #745 merged; of 26 open PRs, only #397 and #737 hold a W0 or W1a file (`single-definition.test.ts`, at ≈:5917 and ≈:5237; W0 appends at its tail) | Applied: Related updated; the plans carry the per-file disjointness | Related, the plans |
+| R3-9 | ARCH-63 sat in no wave | §4.2 lists it under GRAM; no §5 wave named it | Applied: it rides W2, after the pane corpus (ARCH-24) that W0's later slice lands before W2 | §5.5 |
