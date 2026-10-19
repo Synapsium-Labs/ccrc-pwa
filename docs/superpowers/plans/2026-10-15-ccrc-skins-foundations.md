@@ -1669,3 +1669,25 @@ Issued and unused (post-#627, F-c): none.
   - **Pixels:** none move. Only tests, test headers and this record change.
 
 Issued and unused (post-#627, F-e): none.
+
+### Found while executing Task 11
+
+Task 11 was issued two spares, 2026-10-19; both are defined here.
+
+- **D-5666** — `section-c3-slots-and-page-nav` (Task 11): the scaffold takes the Settings spec's §15.3 C3 slots, so Settings R2 does not have to reopen the primitives.
+  - **`Section({ scope, title, purpose, children })`**, not Task 11's `Section({ eyebrow, title, children })`. `scope` says whose setting the card is ("This device", "Whole fleet"); `purpose` is one sentence under the head; `title` is the h2. Refined draws the scope as the eyebrow above the title; Instrument as a mono tag at the head's right, because its section titles are already mono caps.
+  - **The scope's place is one token, `--section-flow`.** Only `skins.css` may select on `data-skin` (`skin-identity.test.ts`), so the head reads `flex-direction: var(--section-flow)`: `column-reverse` in Refined (`tokens.css`) lifts the scope, second in the DOM, above the title; `row` in Instrument (`skins.css`) puts it beside the title. The DOM order, title then scope, is the reading order in both. The token joins `SKIN_TOKENS`' density class.
+  - **`PageScaffold` gains a `nav` slot** (§15.3 C3, for Settings' section nav): below a 60rem pane it stacks above the body; from 60rem it is a 13rem sticky column beside a body that keeps its `--page-max` cap. A container query, since the pane's width is what the sidebar leaves, not the window's. No screen in this task passes it.
+  - **Held by** `pwa/test/page-scaffold.test.tsx` ("the scope's place is the skin's", "the nav slot renders beside the body"), and `pwa/test/role-census.test.ts` (`section.tsx` reads `text-section`, `p-card` and `text-meta`; its one allowance is the scope's `text-2xs`, the 11px eyebrow floor below meta's 12).
+
+- **D-5667** — `page-head-tap-floor` (Task 11): the header's height, `--head-h`, is tap-bearing, so Instrument's 40px header holds only under a fine pointer.
+  - **Departs** Step 4's "Instrument phone: a 40px header". The header holds Back, and `skin-identity.test.ts`'s tap census refuses a tap-bearing token under 44px outside a `(pointer: fine)` block. So Instrument's bare block declares `--head-h: 44px`, and its `@media (pointer: fine)` block 40px, beside `--row-h`'s 32. On a phone Instrument's header is 44px; with a mouse at 1280 and 1920, 40px. Refined's is 56px everywhere (`tokens.css`).
+  - **The bridge.** `theme.css` maps `--spacing-head` to `--head-h`, so the header reads `min-h-head` and the body's sticky nav `top-head`; `cn.ts` merges `head` with the spacing scale; `skin-catalogue.test.ts` pins the bridge key.
+  - **Held by** `skin-identity.test.ts` ("the catalogue marks --head-h, and reds a dense page header in the bare block") and `page-scaffold.test.tsx` ("the scaffold's gutters, title size and header height read tokens in SKIN_TOKENS").
+
+Within D-5102's shape, and outside Task 11's file list:
+- **Archive gains a header.** It drew none before, so on a phone its only way back was the browser's. It now stands on the scaffold like the other three: Back to the fleet and the title, rows or none. Its total is the `Section`'s title, and its rows sit in that section's card.
+- **`pwa/design/audit.mjs`** registers `.archive-row`, `.archive-project` and `.archive-size` in `INHERITED_GROUNDS` on `--bg-surface`, the card they now sit on. They were grandfathered as uncovered while the screen was an unpainted grid; now the gate measures them. So `contrast.test.ts`'s `GRANDFATHERED_UNCOVERED` loses those three keys as well as the retired ones (`.archive-total`, `.archive-empty`, `.accounts-title`, `.mail-title`, `.mail-note`, `.mail-empty`, `.runs-title`, `.runs-empty`).
+- **Pins that followed the move:** `fleet-css.test.ts`'s Program-start door case reads the grid from `PAGE_BODY`, not `.runs-screen`; `runs-screen-cold-order.test.tsx` finds the empty line by `[data-empty-state]`; `role-census.test.ts` drops `.archive-total` and `.mail-note` from the app rules and counts `min-h-head` and `px-gutter` as role utilities; `pwa/design/mockup.html` mirrors the new radii (14 and 20).
+
+Issued and unused (Task 11): none.
