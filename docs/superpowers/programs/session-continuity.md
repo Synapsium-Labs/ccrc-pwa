@@ -802,6 +802,23 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     no duplicate notice, whole-run hold, route/run/item mutation, redispatch or clear was requested.
   - The final handoff still owes ruling provenance and actual verification, followed by NEW independent review.
     Tasks 1-4 remain unaccepted; Tasks 5 and 7 remain gated. No merge, rollout, restart, arming or settings act.
+- **2026-10-19 22:48 UTC - W2 coexistence reconfirmed with expanded protected regions.**
+  - The merged cross-wave plan differs from the version covered by the earlier consent only by vocabulary
+    substitutions, not tasks, functions or files. Its blob on the measured main is identical to the merged plan.
+    A read-only documentation scout checked that comparison; this is not independent implementation review.
+  - Run 308's local branch was measured at `5a71ccf91` against main `397be1ec5`, with merge base `d7a4c9408`.
+    Function boundaries and diff-hunk coordinates, not product diff-body acceptance, now add `_route_note_clear`,
+    `_route_type_model` and `_route_readback` to the existing off-limits list. The changed `_spawn_start`
+    admission/suppression region and original launch lines are protected too; named functions outlive coordinates.
+  - The two W2-only source consents remain separately fenced: lifecycle-reachable helper changes retain their
+    full prior scope, expiry exclusions and five unclosed residuals; continuity coexistence permits only disjoint
+    edits. The plan authorizes no edits to the protected routing, choice, UUID, resume or spawn functions.
+  - The current `ccd/ccd` claim belongs to a separate file holder. Programme consent neither supplies that
+    holder's concurrence nor releases unmerged code; ownership must be refreshed before editing. New overlaps
+    require scoped agreement. Citation/census/restamp duties remain, without creating an absorption trigger.
+  - One scoped reply was accepted. Lifecycle remains complete; this does not reopen it or authorize cleanup,
+    W3, acceptance, landing, deployment, restart, arming or settings. Work 308 remains working, four items settled
+    but unaccepted; its final handoff needs NEW independent review. Tasks 5 and 7 remain gated.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
