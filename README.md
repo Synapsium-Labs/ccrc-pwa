@@ -1831,7 +1831,7 @@ model, or is left out when the catalogue cannot say; so a class moved to a new m
 the new model is measured. `set-window` refuses a model that is neither in the lane's catalogue nor one of its class
 models. A windows file that cannot be read counts as no measured windows: refresh, materialise and the drift check
 carry on under the default rule (a measured key left in `settings.json` shows as drift until the next materialise
-removes it), `show` names the reason, and both verbs refuse until the file is fixed or deleted.
+replaces or removes it), `show` names the reason, and both verbs refuse until the file is fixed or deleted.
 `show` reports each measured window, the effective window, the rule that chose it and the models still unmeasured;
 `rm` reaps the file with the rest. A running session keeps its window until it restarts or swaps.
 A rollback to a ccrc from before measured windows is safe on a lane whose catalogue is fresh: its next successful
