@@ -2417,23 +2417,24 @@ describe('store.mjs: export segments (W1-B4; spec 9.15 "Write", "Who reads it"; 
     return path.join(dir, name);
   };
   /** The same build and publish in a child node: under the fault preload with HISTORY_TEST_KILL when `kill` is
-   *  given, and under `umask` through /bin/sh. The `timeout` bounds a hang, ending it with SIGTERM so it is never
+   *  given, and under `umask` when it is given, which the child sets itself (process.umask, from its argv) before it
+   *  imports store.mjs or creates anything. No shell is in the path: a `sh -c` with paths in its argv is CodeQL's
+   *  js/shell-command-injection-from-environment. The `timeout` bounds a hang, ending it with SIGTERM so it is never
    *  read as the preload's SIGKILL. */
   const childPublish = (root: string, seq: number, o: { kill?: string; umask?: string } = {}): ReturnType<typeof spawnSync> => {
     const script = [
-      `import { ensureSegmentDir, createSegment, segmentInserts, publishSegment } from ${JSON.stringify(pathToFileURL(SEG_STORE_MJS).href)};`,
-      'const [root, sid, writer, seq] = process.argv.slice(1);',
+      'const [root, sid, writer, seq, umask] = process.argv.slice(1);',
+      "if (umask !== '') process.umask(parseInt(umask, 8));",
+      `const { ensureSegmentDir, createSegment, segmentInserts, publishSegment } = await import(${JSON.stringify(pathToFileURL(SEG_STORE_MJS).href)});`,
       'const dir = ensureSegmentDir(root, sid);',
       'const name = `${seq}.${writer}.db`;',
       "const seg = createSegment(dir, name, { storeId: sid, writer, seq: Number(seq), harnesses: ['claude-code'], cutoffMs: 0, format: 1 });",
       "segmentInserts(seg).blob({ sha256: new Uint8Array(32).fill(7), codec: 'br5', raw_len: 3, z: new Uint8Array([1, 2, 3]), pruned: false });",
       'process.stdout.write(publishSegment(seg, dir, name));',
     ].join('\n');
-    const node = [process.execPath, '--no-warnings', ...(o.kill ? ['--import', pathToFileURL(SEG_FAULTS).href] : []), '--input-type=module', '-e', script, root, SID, W, String(seq)];
+    const node = [process.execPath, '--no-warnings', ...(o.kill ? ['--import', pathToFileURL(SEG_FAULTS).href] : []), '--input-type=module', '-e', script, root, SID, W, String(seq), o.umask ?? ''];
     const env: Record<string, string> = { PATH: process.env['PATH'] ?? '', HOME: path.dirname(root), ...(o.kill ? { HISTORY_TEST_KILL: o.kill } : {}) };
-    return o.umask
-      ? spawnSync('/bin/sh', ['-c', `umask ${o.umask}; exec "$@"`, 'sh', ...node], { encoding: 'utf8', env, timeout: 60_000, killSignal: 'SIGTERM' })
-      : spawnSync(node[0]!, node.slice(1), { encoding: 'utf8', env, timeout: 60_000, killSignal: 'SIGTERM' });
+    return spawnSync(node[0]!, node.slice(1), { encoding: 'utf8', env, timeout: 60_000, killSignal: 'SIGTERM' });
   };
 
   it('O39: built in a dot-temp, published by link, and read back whole: meta, a blob and a stub, every row kind in write order, BigInts exact', () => {
