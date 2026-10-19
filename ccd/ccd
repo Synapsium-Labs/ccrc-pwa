@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a2217493a6754d328ac8780969a54d71721831c3df145525aa25a3cafa8e5939
+# ccrc:generated 1 sha256=a8862748bbf9b0e8f1fc5a2215d62006db3d4565e1ef018193e8549585fea48c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28202,22 +28202,22 @@ _hib_wake_clear() {   # id — a start or an ensure ends a hibernation: `.hibern
 }
 
 cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id> — stop a long-idle session cleanly; `ccd ensure` wakes it.
-  # ONE POSITIONAL, AND THAT IS `cmd_ensure`'s SECURITY BOUNDARY: the agent
-  # grants the bare `['hibernate']` prefix, after which tokens are
-  # unconstrained, so the arity rule below is the only bound on what a caller
-  # can put here. The dec flags are stripped BEFORE it, exactly as
-  # `cmd_ws_archive`'s are (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`),
-  # and land on the `hibernate` row (`hibernate-verb-dec-and-idempotence` (D-5424)).
+  # ONE POSITIONAL, AND THAT IS `cmd_ensure`'s SECURITY BOUNDARY: the agent grants the bare `['hibernate']` prefix, after
+  # which tokens are unconstrained, so the arity rule below is the only bound on what a caller can put here. The dec flags
+  # are stripped BEFORE it, as `cmd_stop`'s are (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`), and land on the
+  # `hibernate` row (`hibernate-verb-dec-and-idempotence` (D-5424)). NO VALUE AND NO POSITIONAL MAY BEGIN WITH `-`
+  # (path-identity spec §2.4): the server composes the id FIRST, so an id of `--actor` would take `--surface` as its value
+  # and leave the surface word as the id. A dash-leading value is refused with the usage line; the id passes `_reg_id_ok`.
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
   while (( $# )); do
     case "$1" in
-      --surface)   [[ $# -ge 2 ]] || die "$usage"; lc_gs=1; lc_surface="$2"; shift 2 ;;
-      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
-      --actor)     [[ $# -ge 2 ]] || die "$usage"; lc_ga=1; lc_actor="$2"; shift 2 ;;
-      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
-      --reason)    [[ $# -ge 2 ]] || die "$usage"; lc_gr=1; lc_reason="$2"; shift 2 ;;
-      --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      --surface)   [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_gs=1; lc_surface="$2"; shift 2 ;;
+      --surface=*) [[ ${1#--surface=} != -* ]] || die "$usage"; lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_ga=1; lc_actor="$2"; shift 2 ;;
+      --actor=*)   [[ ${1#--actor=} != -* ]] || die "$usage"; lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --reason)    [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_gr=1; lc_reason="$2"; shift 2 ;;
+      --reason=*)  [[ ${1#--reason=} != -* ]] || die "$usage"; lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
       *)           lc_args+=("$1"); shift ;;
     esac
   done
@@ -28233,7 +28233,7 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
   fi
   [[ $# -eq 1 ]] || die "$usage"
   local id="$1"
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  _reg_id_ok "$id" || die "bad session id"
   [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
   # Idempotent on a row already asleep: no pane, the marker standing (D-5424: a sweep may retry a lost answer).
   if [[ -e "$REG/$id.hibernated" && "$(_session_verdict "$id")" == gone ]]; then echo "already hibernated $id"; return 0; fi

@@ -109,8 +109,9 @@ const JUNK_WITNESS = 'this is no witness\n';
 const PAIR_WRAPPER = 'claude-a';
 const POSITIONAL_DECOYS: readonly string[] = [...DECOY_IDS, ...DECOY_IDS.map((d) => `${PAIR_WRAPPER}-${d}`)];
 /** Answers that only a verb which BOUND the id and looked it up as a row can give. §2.2 tells a redirect, a literal
- *  id and a refusal apart, so a refusal by lookup is not a refusal of the shape. */
-const LOOKUP_WORDS = /no such session|no-such-session|not a workspace|not-a-workspace|not-witnessed|not held|no registry|"refused":"held"/;
+ *  id and a refusal apart, so a refusal by lookup is not a refusal of the shape. hibernate's `session-busy` is one: it
+ *  answers it only after it found the row and re-measured it. */
+const LOOKUP_WORDS = /no such session|no-such-session|not a workspace|not-a-workspace|not-witnessed|not held|no registry|"refused":"held"|session-busy/;
 /** A systemctl call that changes a unit. A read (`is-active`, `show`, `is-enabled`) does not match. */
 const UNIT_CHANGE = /\b(?:enable|disable|start|stop|restart|try-restart|reset-failed|kill|mask)\b/;
 /** A tmux call that kills, makes or types into a pane. `has-session` and `list-panes` reads do not match. */
@@ -218,6 +219,10 @@ const DASH_PROBES: Record<string, DashProbe> = {
       }
     },
   },
+  // hibernate's id is POSITIONAL and composed first (`hibernate <id> --surface … --actor …`), and its loop strips the dec
+  // pairs before the arity rule. So an id of `--actor` used to take `--surface` as its value and leave the surface word
+  // as the id. The held decoy makes that redirect answer `session-busy`, which LOOKUP_WORDS names.
+  hibernate: { argv: (id, d) => [CCD_ARGV.hibernate(id, d)], decoy: plantSessionDecoys, untouched: () => holdsIntact() },
   stop: {
     argv: (id) => [CCD_ARGV.stopId(id, 'pwa'), stopOtherOrder(id)],
     decoy: plantSessionDecoys,
@@ -255,7 +260,8 @@ const decsFor = (verb: string): readonly DecRow[] =>
 describe('no dash-leading id redirects a verb the server composes, on the real binary (path-identity spec §2.8)', () => {
   it('every dec-appending verb has a dash probe, and stop has two orders', () => {
     expect(decAppendingVerbs())
-      .toEqual(['ws-add', 'ws-archive', 'ws-collect', 'ws-expire', 'ws-hold', 'ws-reclaim', 'ws-release', 'ws-rename', 'ws-restore']);
+      .toEqual(['hibernate', 'ws-add', 'ws-archive', 'ws-collect', 'ws-expire', 'ws-hold', 'ws-reclaim', 'ws-release', 'ws-rename',
+        'ws-restore']);
     expect(decAppendingVerbs().filter((v) => !(v in DASH_PROBES)), 'a dec-appending verb has no dash probe').toEqual([]);
     expect(Object.keys(DASH_PROBES).sort()).toEqual([...decAppendingVerbs(), 'stop'].sort());
     for (const v of decAppendingVerbs()) expect(DASH_PROBES[v]!.argv('probe-id', PROBE_DEC), v).toHaveLength(1);

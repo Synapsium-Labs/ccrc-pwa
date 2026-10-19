@@ -68,7 +68,14 @@ const ID_NAME_TEMPLATES: readonly IdNameTemplate[] = [
   { file: 'ccd/ccd', template: '<id>.hookstate.json', overhead: 15 },
   { file: 'ccd/ccd', template: '<id>.turn.json', overhead: 10 },
   { file: 'ccd/ccd', template: '<id>.supervise.log', overhead: 14 },
+  // Two `$REG/<id>.<name>` files whose names carry a dash, which the `<field>` family's a-z spelling does not take.
+  { file: 'ccd/ccd', template: '<id>.deny-settings', overhead: 14 },
+  { file: 'ccd/ccd', template: '<id>.no-hibernate', overhead: 13 },
+  { file: 'ccd/ccd', template: '<id>.rescueprev.tmp.XXXXXX', overhead: 22 },
   { file: 'server/src/usage.ts', template: '<id>.json', overhead: 5 },
+  // NOT a session id: `scriptNameFor`'s `<name>-<runId>.js`, a workflow run's script. It is a row so the scan's hit is
+  // accounted for, and it bounds nothing, because a run id is never a registry id.
+  { file: 'server/src/workflows/read.ts', template: '-<id>.js', overhead: 4 },
   { file: 'ccd/history/sweep.mjs', template: '<id>.<ms>.<pid>.jsonl', overhead: 28 },
   { file: 'ccd/ccd', template: '.<id>.<field>.<pid>.<seq>.tmp', overhead: 40 },
   { file: 'ccd/ccd', template: '.<id>.<pid>.hookstate.tmp', overhead: 23 },
@@ -134,8 +141,9 @@ function shapeOf(token: string, after: string): string | null {
   if (/^"?[.*[]/.test(after) || token.endsWith('.')) return null;
   let s = token;
   if (s.startsWith('claude-session@')) {
-    // The instance is the id. systemd appends `.service` when the spelling omits it.
-    const inst = /^claude-session@(\$\{?[A-Za-z0-9_]+\}?|%s)/.exec(s);
+    // The instance is the id, spelled as a variable or as one element of an array (`${ids[0]}`). systemd appends
+    // `.service` when the spelling omits it.
+    const inst = /^claude-session@(\$\{?[A-Za-z0-9_]+(?:\[[0-9]+\])?\}?|%s)/.exec(s);
     if (inst === null) return null;   // `@*`, `@.service`, `@}` or a fixed instance: no id in it
     const rest = s.slice(inst[0].length);
     s = `claude-session@<id>${rest.startsWith('.service') ? rest : `.service${rest}`}`;
