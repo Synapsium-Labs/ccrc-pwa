@@ -153,6 +153,12 @@ export interface DerivedModels {
   available: ModelClass[];
 }
 
+/** A lane's MEASURED context windows (codex-bridge spec §2.7): model id →
+ *  tokens, as `parseWindows` reads them from the lane's sibling windows file.
+ *  Frozen and null-prototype at runtime. Never a field of `Registry`: see
+ *  `shared/models.mjs`'s `parseWindows` for why. */
+export type ModelWindows = Readonly<Record<string, number>>;
+
 // ── EVERYTHING BELOW IS THE SINGLE IMPLEMENTATION IN `shared/models.mjs` ──
 // `MODEL_ID_RE`, the two error classes, and every function are defined
 // exactly once, over there — see that file for their behaviour, their
@@ -176,4 +182,7 @@ export {
   FAMILY_TOKENS,
   UNAVAILABLE_PREFIX,
   SUBAGENT_CLASSES,
+  parseWindows,
+  WINDOW_MIN,
+  WINDOW_MAX,
 } from './models.mjs';

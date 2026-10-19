@@ -275,7 +275,7 @@ ANTHROPIC_DEFAULT_FABLE_MODEL  = classes.fable  ?? "ccrc-unavailable-fable"
 ANTHROPIC_MODEL                = classes.opus ?? classes.sonnet ?? classes.haiku   (the lane's default; refused if all null)
 ANTHROPIC_SMALL_FAST_MODEL     = classes.haiku ?? classes.sonnet
 CLAUDE_CODE_SUBAGENT_MODEL     = subagent                            (the class ALIAS, haiku|sonnet; opus and fable refused at write and at render, never at read; refused if that class's slot is null)
-CLAUDE_CODE_MAX_CONTEXT_TOKENS = min(catalogue.context, 200000) of ANTHROPIC_MODEL's model   (only when a non-stale catalogue names it; otherwise the key is left unset)
+CLAUDE_CODE_MAX_CONTEXT_TOKENS = min(catalogue.context, 200000) of ANTHROPIC_MODEL's model   (only when a non-stale catalogue names it; otherwise the key is left unset) (the default rule; see the amendment note below)
 ```
 
 **Amendment, 2026-09-09:** `CLAUDE_CODE_SUBAGENT_MODEL` is materialised as the
@@ -378,6 +378,14 @@ field above, not a probe-kind exception.
 proactive compaction is the behaviour that keeps an unexpectedly large lane
 from hitting the provider's 400 ("input exceeds the context window"). (amended
 2026-09-08, fleet-host measurement; Task 16c)
+
+> **Amended by `2026-10-15-codex-bridge-design.md` §2.7 (2026-10-15).** The 196k premise above is withdrawn: it was
+> the maximum of one July sample from one home, and a whole-fleet scan found prompts of 548,799 and 584,415 tokens
+> accepted (that spec's §1.2). The "measured ceiling" this paragraph defers to now exists, as a sibling file of
+> per-model windows, `~/.ccrc/models/<id>.windows.json`, never a registry key (an older ccrc would refuse one after a
+> rollback). `ccrc models <id> set-window` and `clear-window` edit it. When every model the lane's classes name has a
+> window, the key is the smallest, rounded down to 1,000 and capped at 1,000,000; when any lacks one,
+> `min(catalogue.context, 200000)` above applies unchanged.
 
 A `null` slot is written as a **sentinel**, never left unset: unset, the alias
 falls through to Anthropic's own id and the proxied backend answers with an

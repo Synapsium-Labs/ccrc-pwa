@@ -56,6 +56,21 @@ describe('groupRuns (D-5587)', () => {
     expect(leaked.finished.map((r) => r.id)).toEqual([7]);
   });
 
+  it("Finished keeps the board's order, never re-sorted", () => {
+    // The board's own `finished` order (newest closed first), out of id order:
+    // groupRuns hands it back as given.
+    const finished = [
+      run({ id: 6, state: 'done', closedAt: 2_000 }),
+      run({ id: 5, state: 'failed', closedAt: 1_900 }),
+      run({ id: 9, state: 'done', closedAt: 1_800 }),
+    ];
+    const g = groupRuns([run({ id: 1 })], finished);
+    expect(g.finished.map((r) => r.id)).toEqual([6, 5, 9]);
+    // A closed run that leaked into `active` follows the board's list, never leads it.
+    const leaked = groupRuns([run({ id: 7, state: 'failed', closedAt: 2_100 })], finished);
+    expect(leaked.finished.map((r) => r.id)).toEqual([6, 5, 9, 7]);
+  });
+
   it('a run is listed once', () => {
     const active = [
       run({ id: 1, program: 'programme-a', wave: 1, state: 'awaiting-review' }),
@@ -148,6 +163,11 @@ describe('groupRuns (D-5587)', () => {
       expect(RUN_GROUP[state] === 'finished').toBe(isRunClosed({ state }));
     }
     expect(RUN_GROUP['awaiting-review']).toBe('needs');
+    // awaiting-review alone is Needs you; every other open state (merging and closing included) is Running (D-5650).
+    for (const state of RUN_STATES) {
+      expect(RUN_GROUP[state] === 'needs').toBe(state === 'awaiting-review');
+      if (!isRunClosed({ state })) expect(RUN_GROUP[state]).toBe(state === 'awaiting-review' ? 'needs' : 'running');
+    }
   });
 
   it('unknown sits under Running, never Needs you', () => {

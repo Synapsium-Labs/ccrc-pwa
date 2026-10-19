@@ -122,7 +122,7 @@ const regRow = (): SessionRecord => ({
   substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, stranded: null, spawn: null, lastEnd: null, lifecycleUnmeasured: [],
   unmeasured: [], route: null, child: { kind: 'none' },
 });
-const TICK: StallTick = { panePids: new Map([[ID, PID]]), records: [regRow()] };
+const TICK: StallTick = { panePids: new Map([[ID, PID]]), records: [regRow()], refused: new Set() };
 
 interface Rig { h: Harness; coord: CoordStore; w: FleetWatcher; deps: Deps; log: NotifyLog }
 

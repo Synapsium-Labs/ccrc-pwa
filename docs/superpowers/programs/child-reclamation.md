@@ -48,6 +48,258 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-15 23:30 — #384's merge tipped `main` red on one prose ratchet. The fix is PR #434, and its merge waits on the operator.**
+  - **The red:** `pools-prose.test.ts`'s "README size claim within 100 lines". The README is 6315 lines on `main`, while `CLAUDE.md` says ~6200.
+  - **Why no earlier check caught it:** main before #384 was 6238 lines and #384 alone was 6284, each inside the bound. #427 and #428 landed between my combined-tree check (onto `b5317b1e1`) and the squash.
+  - **On main's head, the rest of the check is green:** the PWA's census and cross-PR files, 29 files and 1233 tests, and `single-definition`.
+  - **The fix:** `CLAUDE.md`'s `~6200` becomes `~6300`, line-neutral. All 15 server tests that read `CLAUDE.md` pass.
+  - **The landing workers are told** it is main-red (5283, 5284).
+
+- **2026-10-15 23:23 — #384 IS MERGED, AND RUN 400 IS CLOSED: the programme's tenth and final wave is done.**
+  - **Before the merge, on a scratch tree of #384 merged onto `b5317b1e1`:**
+    - the PWA's censuses and cross-PR files passed: 21 files, with one load red that is green alone;
+    - the server's `single-definition` (585) and the 41 README readers passed, with one load red, `ccrc-update`'s `_ver_kept` row, which is green alone (32 of 32).
+  - **The merge:**
+    - The one unresolved conversation was CodeQL's comment for alert #113. I replied, saying the alert stays open in code scanning beside main's 17 of the same rule, and resolved the conversation only.
+    - Admin-merged as `0b3ff2f62` at 23:20:58Z, with `--match-head-commit` on the reviewed tip `4ecd856ed`. By then main also carried #428 and #431; GitHub merged the three cleanly.
+  - **Run 400:** advanced to `merging` before the merge, then closed `final` after it: `done`, `released:true`, `childReclaim: queued`.
+  - **Review run 475:** closed `done`.
+  - **The programme's last open items:**
+    - PR #429 (the macOS lock probe, test-only), whose merge waits on the operator;
+    - CodeQL's missing-rate-limiting class (18 alerts), which is the operator's call;
+    - this ledger's unpushed commits, which go up in my next docs PR.
+
+- **2026-10-15 22:55 — FINAL REVIEW 475 IS CLOSED AND ACCEPTED (5261): run 400's fix round 3 at `4ecd856ed`. No class (a) finding.**
+  - **The panel:** six lenses, 33 agents, none died. Three minor findings were confirmed and six refuted.
+  - **F1 (b)** says D-5092's slug is missing from the contract's §17 and the spec's §5 as-built lists. The brief's item-3 ruling already answers it: the port changes no behaviour the spec or contract states, so its slug lives in the plan entry and the PR body, and §17's scope sentence excludes it. No change.
+  - **F2 and F3 (c)** are plan lines D-5092 does not name: `:15705` and `:14961` for the port, `:15593` and Step 4(a)'s second edit for the merge. They are record-only and are left as they are.
+  - **Runs:**
+    - required CI is green, 517 files in the selection;
+    - the local reds are `boot`, `tmp-sweep` and `update-store-nodes`, all red on `origin/main`;
+    - no real break.
+  - **Ruled: CodeQL alert #113** (`js/missing-rate-limiting`) on the new `POST /api/coord/collect-lane`. It stays open beside the 17 alerts of the same rule on main's other session-gated routes. Dismissing a whole class is the operator's call, and the check is not required. Reported to the operator.
+  - **Incident, contained:** a review lens's environment let one fixture's `git init` write `core.worktree` into the shared `.git/config` from 16:52:33Z to 16:53:52Z. The lens removed it. No ref moved and no reflog entry falls in the window. Any peer that ran git in those 80 seconds saw a foreign work tree.
+  - **Main moved** to `b5317b1e1` (#426 docs, #427 PWA). #384 merges onto it cleanly. Before the merge I check the combined tree, scratch only: the PWA's census and cross-PR files pass (21 files, 593 tests, one load red green alone), and the server's `single-definition` and README readers are running.
+
+- **2026-10-15 22:22 — A STABLE BLOCKER ON macOS IS FIXED BY PR #429, test-only (5253, 5259).** The centralised-update coordinator reported `ccd-child-reclaim-row-generation.test.ts` red on `test-macos 4/4` on every daily run since 10-13, in two cases. Stable promotion needs a green full suite.
+  - **The cause, measured:**
+    - Both cases probe the compaction lock's release with `_compact_lock_acquire <id> 0`, which runs `flock -w 0`.
+    - util-linux reads that as one non-blocking try. The Homebrew `flock` the macOS legs install (0.4.0) refuses a timeout of 0 as a usage error, before it tries the lock. So the probe answered "held" over a lock nobody held.
+    - Nothing leaks, and production never passes 0.
+  - **The fix:** the probe waits one second.
+    - Under a shim that refuses `-w 0`, the old file reproduced the macOS message exactly, and the new one passes.
+    - With the release deleted from `_ws_reclaim_generation`, both cases red.
+    - The file is 14 of 14.
+  - **No ccd change.** Merging #429 needs the operator's authorisation: my standing authority covers #384 only.
+
+- **2026-10-15 16:36 — RUN 400's FIX ROUND 3 IS VERIFIED (5196): run 400 → `awaiting-review` at `4ecd856ed`, PR #384. Review run 475, the final wave's last review, is opened.**
+  - **Re-measured:**
+    - the PR head and the remote branch both read `4ecd856ed`;
+    - `git merge-tree` against `origin/main` `a3cebde1b` is clean;
+    - the merge's tree and the port's tree equal the scratch trees the port ruling named (`54de961d3`, `a391f277d`).
+  - **The round:**
+    - the first part (5018): the README count merge, the L0 imports pin, the CONTROL comments and the as-built sentences;
+    - the resume (5148): the merge of `cb72ca064`, and the route counts re-derived;
+    - the port (5182): the merge of `a3cebde1b`, the port, D-5092 defined singly after D-4905, and D-4955's sentence.
+    - The worker's own reviews of the resume and the port records approved them, and their minors are fixed in `4ecd856ed`.
+  - **Signals:** `suite: red`, `failure: unclear`, and 0 real breaks in R3, R4 and R5:
+    - R4, the first full run after a merge: `boot` and `tmp-sweep` are main-red, and `ccrc-doctor` is green alone;
+    - R5, the port's delta run: pwa 5055 green, the build green, and `ccrc-install` green alone.
+  - **The worker's corrections to the port ruling, accepted:** row 17 is at `:16060`, not `:16057`. The merge also made the heading lists at `:15590`, `:15601` and `:15659-15660` false, so D-5092 corrects them. Three older cites the merges moved are re-pointed in place.
+  - **Ruled (the worker's item 3):** D-5092 is a design-system adaptation that changes no behaviour the spec or contract states. It lives in the plan entry and the PR body's fix round 3 section, not in the contract's §17 or the spec's §5 as-built lists. The review confirms no spec or contract sentence names what the port changed.
+  - **Review run 475:** scoped to `5ca5f04ed..4ecd856ed`, with three lenses: the port (opus, xhigh), the merges and counts, and words and deviations. On a clean review, run 400 closes (the final wave) and #384 merges.
+
+- **2026-10-15 15:30 — RUN 400's PORT RULING (5182): main moved again, to `a3cebde1b`. #419 (the `@ccrc/ui` design system) moves the collector section onto the design system; D-5092 is issued for it.**
+  - **The hold:** found after the first resume's merge. The worker held its push (5174), and R4, its full run on the `cb72ca064` merge, finished with no real break (5181). R4 stands for the server half and for agent, because main's new code is disjoint from run 400's.
+  - **What #419 changed under the branch:**
+    - Two textual conflicts: the Settings screen's header comment and its heading-order cases.
+    - Five modules the collector section imports moved into `@ccrc/ui`.
+    - The radio skin's classes left `fleet.css`.
+    - Four new guards red on the section: the raw `btn-ghost` buttons, a hand-drawn radio `<input>`, and three copied strings.
+  - **Measured on a scratch port:**
+    - imports from `@ccrc/ui`, `Button` and `Radio` rows, the held Off radio keeping its own description;
+    - the copied strings folded into `SETTINGS_NOW_CLASS`, `SETTINGS_AMBER_NOTE` and `COORD_UNCONFIRMED_TEXT`;
+    - the radio block registered with both halves argued.
+    - The pwa suite (5055) and its build are green, as are every server guard and the 29 README and CLAUDE.md readers. The worker has the port as a patch that reproduces that tree.
+  - **Licence:** the four shared files the fold touches (Stall watch's section, the marker toggle, the coord words, the settings text) and the census are licensed as ownership consent for exactly these edits.
+  - **Record:** D-5092 (Task 12) is defined singly and corrects the Task 12 plan lines the port made false. D-4955 gains a sentence for Task 11's.
+  - **Grounding:** two checkers and ten refuters raised ten objections, and all stood: the patch's merge orientation (regenerated as port-only), the buttons' precedent, the boundary wording, two census reasons, the falsified plan lines, and the README and CLAUDE.md readers.
+
+- **2026-10-15 11:52 — RUN 400 RESUMES (5148): its worker is back on an Anthropic lane, and main now conflicts, so the resume merges it first.**
+  - **The lane:** at 11:06 the worker's session measured on an Anthropic lane again. Fix round 3 stays as built at `4db1eb54d`, unpushed.
+  - **Main moved:** `origin/main` is `cb72ca064`, seven commits past the branch's merge base `c7776b080`: #342, #412, #413, #404, #414, #417 and #416. `git merge-tree` exits 1 on three paths, which is clause 16's first trigger.
+  - **Measured on a scratch merge:**
+    - `shared/api.ts` and `single-definition.test.ts` are foot appends on both sides, and keep-both is mechanical. In `single-definition`, git leaves the two shared closing lines outside the conflict, so they are restored once between the blocks; 579 pass.
+    - `auth-gate.test.ts` conflicts only in its count comment. Both sides' `toBe(99)` auto-merges, and the merged tree derives 101 routes (53 + 35 + 7 + 2 + 4), 98 HTTP and 65 gated. So five count assertions are red on the merge alone, green on main and on the tip.
+    - Thirteen other suites and the server type check are green.
+  - **Ruled:**
+    - the merge keeps both sides unchanged;
+    - the counts get their own commit, with `gate.ts`'s numeral 96 to 98 (run 400's fenced line);
+    - one sentence is appended to D-4914's entry, and D-4906's `shared/api.ts` cite is re-pointed to the merged line;
+    - `CLAUDE.md` is not touched: README's 6273 lines are within the plan's 100-line rule;
+    - the full suite is re-run, with the pwa build in an export so `server/dist-pwa` stays absent;
+    - then push and the wave-done, in one turn.
+  - **Grounding:** two checkers and eight refuters raised eight objections, and all stood: the block counts, the append wording, the claims, the re-probe rules, the pwa build, the commit split, the D-4906 cite, and the CLAUDE.md edit (dropped).
+  - **Claims:** run 360's claim 1368 holds `shared/api.ts` and `single-definition.test.ts`. The keep-both merge sits inside R56 (4690), and run 360's coordinator has a notice (5149).
+
+- **2026-10-14 20:48 — RUN 400's WORKER STOPPED: ITS SESSION RESTARTED ON A NON-ANTHROPIC LANE (mail 5036). It holds; resuming waits on the operator (reply 5037).**
+  - **What was finished before the swap.** Fix round 3's four commits (the merge of main, the L0 imports pin, the two CONTROL comments and the as-built sentences) landed between 17:20 and 17:26, on an Anthropic lane. The first full run finished at 20:37:
+    - server: 699 files, 15 red on the first run; 14 green alone, and `tmp-sweep` red on main;
+    - agent: 494 tests green;
+    - pwa: 4505 tests green, with its build.
+    The session was swapped to a GPT lane at 20:39. Nothing is pushed: the local tip is `4db1eb54d`, and the remote is still `5ca5f04ed`.
+  - **The ruling.** The worker stops, as its brief requires, and publishes nothing from a non-Anthropic lane, the PR body of this public repo included. Moving a session between accounts is not a coordinator act, so the operator is asked to move it back. Once its lane measures Anthropic, the coordinator mails RESUME. Then the worker:
+    - re-checks the branch, main and the PR;
+    - re-runs the three changed files alone;
+    - writes the scanned PR body;
+    - pushes and sends the wave-done in the same turn.
+- **2026-10-14 17:18 — REVIEW 444 IS CLOSED (done, mail 5016). Run 400's FIX ROUND 3 IS SENT (mail 5018), and run 400 is back at working.**
+  - **The review.** It read `5ca5f04ed`, which equals the live tip, and is accepted. It found no class (a) and no class (b) finding. SAFETY answered no: the dropped directory-close error arms nothing that the stored choice did not. M10 and X6 red as ruled. M1 to M9 and the `vi.mock` control reproduce, none weakened. The HARD BOUNDARY and the four held properties stand. The panel ran 59 agents: 18 findings raised, 5 confirmed, 13 refuted, none unverified.
+  - **What stops the landing.** Main moved to `c7776b080` during the review. Measured here:
+    - `git merge-tree` now conflicts at `CLAUDE.md:10`, the README line count (main says ~6100, the branch says ~6200, and the merged README is 6186 lines);
+    - the merged tree reds `collect-lane-l0.test.ts:136`, because #406 added a fifth `shared/api.ts` type import that the branch's pin does not list.
+    That is a clause 16 trigger, so the fix is to merge main, never to land as is.
+  - **The rulings** (`wave10-fr3/fix-round-3-rulings.md` in the archive):
+    - F1: merge main, resolve the figure to the measured size, and add the one import line in its own commit. If #397 has merged by then, re-point `collect-id-pins.test.ts`'s two executor calls to `r.job(id)`; path identity consents.
+    - F2: fix round 2's words-first commit order is recorded as process, accepted as disclosed.
+    - F3: two test comments named the wrong misarm, and are reworded to what is measured.
+    - F4: one attribution in an as-built sentence is corrected in place.
+    - No new number. D-4906 and D-4911 each gain a fix round 3 sentence.
+  - **Recorded:** CI's one red at `5ca5f04ed` is an intermittent session-hook strace fork tally, also seen on main, in a file the PR does not touch. The merge's push re-runs CI.
+  - **Next:** verify fix round 3's wave-done, then a short scoped review. Then close run 400, the final wave, and merge #384.
+- **2026-10-14 11:12 — REVIEW RUN 444 IS DISPATCHED → `ccrc-pwa-bright-basin`, on an Anthropic lane** (`skillState: present`; route opus, xhigh, sonnet subagents, workflows on, compact 40). It went out at 11:11, the waiter's first try. The dispatch body is `disp444.json` in the archive.
+- **2026-10-14 11:11 — RUN 400's FIX ROUND 2 IS VERIFIED, AND REVIEW RUN 444 IS OPEN, ITS DISPATCH WAITING ON A SLOT.**
+  - **The wave-done (mail 4843) claims `5ca5f04ed`, and the measurements match.** The branch tip and PR #384's head are both `5ca5f04ed`. The PR is open and mergeable, and merge-tree against main `e66ca6acd` is clean. The round is five commits over `e434608ef` (five files).
+  - **The changes:**
+    - The directory close is wrapped. Cases (xi) and (xii) are added, and M10 reds both.
+    - Case (xiii) pins the success path's order, and X6 reds only it. A follow-up commit makes the first control discriminating.
+    - README's residual 3 is reworded, and so is box-token-card :52-54.
+    - The four "as built from fix round 2" sentences are in.
+  - **The suite line is red, with no real break.** boot, tmp-sweep and ccrc-install are red on main too. ccrc-update, session-hook and ccrc-account were green alone.
+  - **Run 400 is advanced to awaiting-review.** Review run 444 opened under the programme's own title. Its brief, `review-444-brief.md` in the archive, is scoped to `e434608ef..5ca5f04ed`, with the SAFETY lens on the wrapped close.
+- **2026-10-14 07:11 — REVIEW 430 IS CLOSED AT `e434608ef` (mail 4803), AND RUN 400 GOES TO FIX ROUND 2 (mail 4804).** The live tip matched the reviewed tip. The review run was advanced to working and closed `done` on the reviewer's own `{reviewedTip, report}`.
+  - **The review:** 96 agents, no class (a) finding, three minor findings. SAFETY re-derived ruling T and found that no outcome arms anything the stored choice did not arm before the failed write. All nine mutation rows reproduce, and the `vi.mock` control holds. The merge's resolution held 4461's terms. The HARD BOUNDARY and the four held properties stand. CI's selection (609 server files) is green.
+  - **F1 (b), ruled (i): wrap the created arm's directory-descriptor close,** as the journal's close is wrapped, so a failing directory fsync's error is never replaced. This is ruling T's own item 3, "while failing, drop a close error". The consequence is now stated in the header: a directory close that throws after both fsyncs is dropped, the record is durable, and the row commits. The old outcome (undo, then `write-failed`) was coherent too. The header's parenthetical exception goes. Two cases and a mutation row.
+  - **F2 (b):** README's residual 3 gains "; the same hand repair applies" (consent 4644).
+  - **F3 (c), fixed:** one order pin for `directory-fsync-before-file-close`; mutation X6 must red.
+  - **The box-token-card note (c), fixed by #384:** #384 rewords its own lines :52-54 only, because its Task 12 extended that sentence. Stall-watch settings is told it no longer carries it (4805).
+  - **D-4911's "left verbatim" (c):** its entry gains a sentence saying what the merge changed.
+  - **Numbers:** no new number. D-4893, D-4911, D-4956 and D-4958 gain "as built from fix round 2" sentences.
+  - **The rulings:** `wave10-fr2/fix-round-2-rulings.md` in the archive.
+- **2026-10-14 04:01 — STALL-WATCH SETTINGS WAVE 4 MERGED AS `b953aefa4` (mail 4786, answer 4788), SO #384 LANDS SECOND.** A merge-tree probe of `e434608ef` against `b953aefa4` is clean (rc 0). Clause 16 has no trigger, so the branch does not merge main again, and review 430 stays on `e434608ef`. #384 lands through a clean merge that keeps wave 4's lines; a fix round that moves the branch probes again first. Review 438's F1 (`box-token-card.test.tsx:52-54`, "no mount here issues a live fetch") is the note review 430's brief already carries. If #384 lands without the fix, stall-watch settings carries it as residue.
+- **2026-10-14 03:47 — RUN 400's MERGE OF MAIN IS VERIFIED, AND REVIEW RUN 430 IS DISPATCHED → `ccrc-pwa-still-river`, on an Anthropic lane.** The wave-done (mail 4780) claims `e434608ef`, and the measurements match: the branch tip and PR #384's head are both `e434608ef`, the PR is open and mergeable, and merge-tree against main `162c91491` is clean. The first-parent range from `6c325584a` is fix round 1's 10 commits, then merge `15bdf0b3f` (main at `ac60e373f`, by `git merge`), then `e434608ef`, which edits CLAUDE.md line 10 only. The merge resolves three files on 4720's terms: #351's entry 19 is untouched, `collect_lane_settings` moves up to entry 20, and coord-db and asks-store pin 20. The suite line is red, with no real break: boot and tmp-sweep are red on main too; ccrc-update, ccd-ws-collect-resume and mail-sweep were green alone. Claims 1260 to 1262 reached their 8-hour cap and were re-declared, with the same paths, as 1282 to 1284. Review 430's brief now names `e434608ef`. It adds the merge's resolution, read with `--remerge-diff`, and asks whether D-4911's "left verbatim" schema comment now reads false. The whole-branch boundary is the PR's net diff, `ac60e373f..e434608ef`.
+- **2026-10-14 00:35 — OK GIVEN TO STALL-WATCH SETTINGS WAVE 4's ONE MORE LINE IN `shared/api.ts` (proposal 4745, answer 4747, consent 4468's terms).** It adds `STALL_CONFIRM_TEXT.unconfirmed` in place of a comment line, with the line count unchanged. Measured at main 162c91491: the region runs from :9597 to :9629. #384's only hunk there is the foot append at :9756, and path-identity W1a's (#397) three hunks start at :9684. Nothing overlaps, so nothing needs re-pointing.
+- **2026-10-14 00:10 — #351 MERGED (23:22Z), and #384 NOW CONFLICTS with main on the migration slot** (`schema.ts`, `coord-db.test.ts`, `asks-store.test.ts`). Clause 16 trigger: the worker is told to merge main (4720), move run 400's migration up one slot, keep both version-pin blocks, re-run the named suites, push, and send a new wave-done.
+  - **Review 430's waiter is stopped.** 430 stays `planned` and will be briefed with the post-merge tip; its close re-measures the LIVE tip.
+  - **Why run 400 stays at `awaiting-review` for the merge:** a run with an open review cannot go back to `working` (`review-in-flight`), and a review run that was never dispatched cannot be closed (`not-dispatched`).
+
+- **2026-10-14 00:08 — OK GIVEN TO STALL-WATCH SETTINGS WAVE 4 (proposal 4715, answer 4717, consent 4468's terms) in seven files under claims 1260 to 1262.** Measured: none of its lines overlaps a #384 hunk. Its coordinator flagged that `box-token-card.test.tsx:52-54` (pre-existing wording, which #384 extended) says no mount issues a live fetch, while UnarmedExposureBanner reads `/api/auth/status`. That note is added to review 430's brief to judge.
+
+- **2026-10-13 23:49 — NO OBJECTION TO NATIVE-DOCS-READER W5 PART 1 (run 413; proposal 4703, "reply only on a conflict") editing `single-definition.test.ts` and `pwa/src/lib/api.ts` under claim 1261.** Measured, nothing conflicts:
+  - run 400 appends one describe at the end of `single-definition.test.ts`, and W5's goes after it, LAST;
+  - in `api.ts`, run 400 changes line 5's import and appends its collect-lane block near the end of `createApi`. W5's import block and docs block sit beside those, and the second lander keeps both;
+  - W5's in-place edits to the archive-door describe and to `request`'s `throw new ApiError` line are not run 400's lines.
+
+- **2026-10-13 23:38 — 4690'S CONSENT EXTENDED (4699): `server/src/coord/db.ts` and `server/test/asks-store.test.ts` for run 360's migration task.** Off-limits in `db.ts`: run 400's journal-basename import, the `JOURNAL_RESTORE_CLAUSE` block, and its two refusal-message lines.
+
+- **2026-10-13 23:24 — CONSENT GIVEN TO DELEGATION-BROKER WAVE 3 (run 360; ask 4688, answer 4690, R56), to edit paths under run 400's claims concurrently.**
+  - **Run 400's regions are fenced, by content:**
+    - `shared/api.ts`: the foot block;
+    - `schema.ts`: the collect-lane migration entry. Three branches now append one (with #351), and the slot is found by DDL;
+    - `store.ts`: the appended class-end section;
+    - `routes.ts`: the collect-lane GET and POST block and its imports;
+    - `server.ts`: run 400's Deps fields;
+    - `gate.ts`: line 8's numeral;
+    - `watch.ts`: the collector region.
+  - **The shared pins** (the schema-version pins, `single-definition`, the session-only census, and `ccrc-update`'s journal cases) are kept on both sides by the second lander.
+  - **The 23:09 slot:** another dispatch took it; review 430's waiter still retries.
+
+- **2026-10-13 22:21 — REVIEW RUN 430's DISPATCH WAITS ON `cap-daily` (24 of 24, fleet-wide, rolling).** The oldest dispatch in the window ages out at 23:09:50. A waiter retries every two minutes and stops on ok or on any other answer. Brief: `review-430-brief.md` in the archive. It is scoped to `6c325584a..84472404b`, with SAFETY at `xhigh` on ruling T's self-undo, a PWA lens on F3 and F1, and a words-and-deviations lens with a public scan.
+
+- **2026-10-13 22:19 — FIX ROUND 1'S WAVE-DONE IS VERIFIED (4681): run 400 → `awaiting-review` at `84472404b0ef5ba7ad18b5360af11131569e01d6`, PR #384. Review run 430 is opened, and its open restores the programme's title.**
+  - **Re-measured:** ten commits on `6c325584a`, no merge of main; `git merge-tree` against `origin/main` `300aedf88` is clean.
+  - **Ruling T as built:** a file the call created is unlinked on any throw, and its directory fsynced. A file that stood is cut back to the length the `fstat` measured, and nothing is truncated if the `fstat` itself fails. The undo runs before the close, and the original error is rethrown. A `vi.mock('node:fs')` suite covers cases (i) to (x), with nine mutation rows.
+  - **F3, F1, F2, F4, F5 and F6** are done. The README hand repair is in, inside 4644's terms. The plan defines all 37 numbers singly.
+  - **Signals:** `suite: red`, `failure: unclear`. Of 689 server files, four were red: boot and tmp-sweep (main-red), ccrc-account (green alone) and docs-routes (a local build artifact; green in a fresh worktree). Agent and pwa were green.
+  - **The new slug `directory-fsync-before-file-close`:** on the created arm's success path, the directory fsync now runs before the file close, inside the undo's reach. RULED: entailed by ruling T, items 1 and 3; durability is unchanged. No number; D-4893's entry states it.
+  - **Ruling F3's citations `:14122`/`:14612` were off by one** (`:14123`/`:14613`); D-4955 names all four.
+
+- **2026-10-13 19:04 — RUN 400 IS BACK AT `working`, and fix round 1 is under way (GO mail 4651, sent by the waiter when a slot freed).** The worker had acted on 4646 for about seven minutes before 4647's nudge reached it, and stopped at the hold. Its early local commits are kept as they are: F6, the as-built words for F2, F4, F5 and ruling T, and F3. Its claims are re-taken as 1260, 1261 and 1262, and the plan file is added.
+
+- **2026-10-13 18:54 — THE README CONSENT IS IN: run 354's coordinator said yes (4644, R56) to run 400's landed README hunks and fix round 1's sentences.** No two hunks are within 15 lines; the closest pair is run 400's ws-collect verb-table row and B2's account config-dir paragraph, about 40 lines apart. Relayed to the worker (4648); the README hold is lifted, and the general hold waits on the slot.
+
+- **2026-10-13 18:53 — FIX ROUND 1 OF WAVE 10 IS RULED, and its mail is sent (4646, corrected by 4647). The run waits on a slot to go back to `working`.**
+  - **How the rulings were checked:** 5 Opus grounders and 5 Opus attackers, ruling T's at `xhigh`, with 3 Sonnet refuters per objection: 100 agents. 20 objections survived and are folded in.
+  - **Ruling T, the torn tail:** the journal adapter undoes its own failed append, before the close, and rethrows the original error.
+    - A file the call created is unlinked, its directory fsync included.
+    - An existing file is truncated to the size measured at the `fstat`, then fsynced.
+    - Three residuals are stated. A kill or power loss mid-write leaves a torn tail; a kill before COMMIT, a failed undo of a full write, a close throw after a durable record, or an update or commit failure leaves the journal one ahead; a failed undo after a short write leaves a torn or empty file.
+    - Reasons: plan `:7476`'s contract ("At `append` nothing changed"), and the operator's standing preference to survive in code rather than leave a hand step.
+    - The cost, stated: a failed Off over a stored Live leaves the lane armed, as any refused write does.
+    - A hand repair (raise the pause first, cut after the last complete record) goes into the README and both notes.
+  - **F3:** only a known refusal code reads `refused`. Any other `ApiError` reads `unconfirmed`, with the server's detail.
+  - **F1** is pinned where the section's header says; **F2, F4, F5 and F6** are wording.
+  - **Final #4** (an inline refusal cleared by a newer view) is ruled a substantive departure.
+  - **Numbers:** 37, each written singly. 22 are substantive, plus one corrections number per task for Tasks 1 to 15. The 32 of the first block are joined by 4955, 4956, 4957, 4958 and 4959, issued at fix round 1. The stated residuals and the retired torn-tail slug take none.
+  - **A README consent gap, mine:** consent 4459 never covered README.md, which run 354 holds (claim 1251), so Task 14's README hunks landed without consent. Consent was asked in 4641, and the worker makes no README edit until it is relayed.
+  - **The advance back to `working` was refused `cap-concurrency` (7 of 7).** The worker is told to HOLD (4647). A waiter retries every two minutes and mails "go" when the advance answers ok.
+
+- **2026-10-13 18:24 — REVIEW 415 IS ACCEPTED AS WAVE 10'S REVIEW, and closed `done` with its own fingerprint (`reviewedTip` `6c325584a`). It found no class (a) finding and nothing critical or important.**
+  - **The review's numbers:** 104 agents, with no lens unverified and no finding unexamined. 32 findings were raised, 9 confirmed (6 after de-duplication) and 23 refuted.
+  - **SAFETY:** it constructed every lens-0 input, and `ws-collect` composed only for the marker before its latch, a Settings Live on the current node and epoch, local mode, and the two stated residuals. 13 mutation rows were each red, then green.
+  - **CI on #384:** green on Linux (607 of 688 server files selected). macOS is red on ccd-side files only, which is advisory.
+  - **Findings:**
+    - class (b): F1, the section's attention-word rule is pinned nowhere; F2, an as-built sentence over-claims a between-passes epoch move; F3, an unknown POST failure is toasted "Nothing was changed"; F4, CLAUDE.md omits "unpaused";
+    - class (c): F5, Task 12 also built before Task 9; F6, a census message's wording.
+  - **The torn-tail question it raised:** ruled in fix round 1 (the adapter undoes its own failed append), after a grounding and attack pass.
+  - **The programme's title:** the review open's title renamed it to "Review wave 10". The next run open restores it.
+  - **Final #7** (`stall-settings-route.test.ts`'s wide POST slice) is the stall-watch settings programme's. Its coordinator was told (4635).
+
+- **2026-10-13 12:16 — REVIEW RUN 415 IS DISPATCHED → `ccrc-pwa-keen-prairie`, on an Anthropic lane** (`skillState: present`; route opus/xhigh/sonnet/workflow on/compact 40). It runs the held-out panel plus the plan's four lenses, SAFETY at xhigh and SECURITY both mandatory, and four mutation rows. It also judges every worker residual, departure and controller ruling against the consent regions (4458, 4459, 4461, 4489, 4529). It measures the 18 first-run reds against `origin/main` under a short TMPDIR, and reads PR #384's CI before it reports. Brief: `review-415-brief.md` in the archive.
+
+- **2026-10-13 12:14 — WAVE 10'S WAVE-DONE IS VERIFIED (4566): run 400 → `awaiting-review` at `6c325584a7ce24ef54b2ada21d700a1a68a1a8bb`, PR #384 open; all 16 items settled done. Review run 415 is opened.**
+  - **Re-measured:** `ws/clear-meadow` is at `6c325584a`, PR #384's head is the same sha (MERGEABLE), there are 19 commits over `05df8c4e0`, and no merge of main. `git merge-tree` against `origin/main` `28cb18d53` is clean (rc 0).
+  - **Signals: `suite: red`, `failure: unclear`.** The worker classes the 18 red files on its first full run (48 shards at load ~35) as:
+    - main-red: boot, tmp-sweep, update-store-nodes, ccrc-doctor, ccrc-install;
+    - load flakes, green when run alone;
+    - seven that a 184-character runner TMPDIR broke, green under a short one.
+    It edits none of them. The review measures each against `origin/main`.
+  - **CI at dispatch:** `select tests`, `typecheck (server)`, `test (agent)` and `build-pwa` passed; the server shards, `test (pwa)` and the node floor were still running.
+  - **Departures:** 54 slugs, plus residuals left for my ruling: a-failed-journal-append-can-leave-a-torn-tail, latch-warn-key-outlives-an-executor-retire, the failed-retire safety stop, the route's await window, two wording nits, and a follow-up on `stall-settings-route.test.ts`'s wide POST slice. Numbers from the block are assigned at the fix round, singly.
+  - The evidence is copied to the archive (`wave10-done/`).
+
+- **2026-10-13 07:04 — #376 MERGED (`e4405056e`, 07:01). Run 400 now lands second on README.md (4458), but `git merge-tree` of its tip `8dc9632cc` against `origin/main` is clean.** Clause 16 gives no trigger, so it does not merge main for this alone; the worker was told (4529). Run 400's branch reached its docs task (`8dc9632cc`), its last commit at the time of measuring. Path-identity's run 399 dispatched at 07:04 to `ccrc-pwa-swift-canyon`.
+
+- **2026-10-13 02:46 — A REVERSE CONSENT, GIVEN: #351 may add one SIGTERM/SIGINT handler block to `server/src/index.ts` under run 400's claim 1218** (quiet-river's ask 4485, my answer 4489, R56). The operator ruled at 01:50 that the dead-coordinator breaker's state is sealed on a clean shutdown, and today the server has no signal handler.
+  - **The region:** one block at the end of the file, after `await app.listen(...)` and the boot log lines, plus at most one import on a line of its own.
+  - **Off-limits to #351:** the two deps literals, the journal and boot-nonce lines, and the `FleetIdentityCell` / `makeRefreshCaps` / `onConnected` lines.
+  - **Run 400 has no shutdown path.** No `process.on`, and no `app.close()` on a signal. `FleetClient.close()` invalidating the identity cell is outside `index.ts` and compatible.
+  - **The pins #351 must not trip:** `randomUUID()` appears once in `index.ts`. `.publish(` appears only in `update/inventory.ts` and `.invalidate(` only in `remote/client.ts`, across all of `server/src`. #351's head `6f1942bbc` is clean against all three. Whoever lands second re-runs `collect-lane-composition`, `fleet-identity-composition` and `single-definition`.
+  - Run 400's worker was told (4490). Run 399's dispatch was refused `cap-concurrency` 7/7 again at 02:46.
+
+- **2026-10-13 02:30 — WAVE 10 IS DISPATCHED: run 400 → `ccrc-pwa-clear-meadow`** (02:30:33; `skillState: present`, brief queued and delivered; route opus/xhigh/sonnet/workflow on/compact 40). The brief carries all three overlap consents and the measured live facts.
+  - Path-identity's run 399 still waits on `cap-concurrency` (7 of 7). Claude Code stopped the background waiter at 02:40 for low box memory, not for anything in the waiter; it is not restarted. I try run 399's dispatch once each time I wake.
+
+- **2026-10-13 01:30 — THE THIRD CONSENT IS IN: workspace-lifecycle (quiet-river, 4461), yes on R56, folded into both briefs.**
+  - **Off-limits in `watch.ts`:** #351's import statements for `./deadCoordinator.js` and `./archivedExpiry.js`, `mergeBreakerMembers`, the field block from `expiryAttentionList` through the dead-coordinator breaker fields, and the archived-expiry and dead-coordinator passes.
+  - **Off-limits in `store.ts`:** its import block, `parseBreakerHeld` and its helpers, and the dead-claimant and breaker-state methods; wave 10 appends at the class end.
+  - **The migration:** #351 appends migration 19. Whichever lands second moves its own entry up one slot with its pins, never edits the other's, and finds the slot by its DDL in tests. The `coord-db.test.ts` and `asks-store.test.ts` version pins conflict by design: the second lander takes the higher number and keeps both describes.
+  - **`expireArchived.ts` (W1a):** #351's hunks are its import statement, the `stuck` case, `FEED_TITLE`, `expireFeedBody` and `recordExpireFeed`; W1a's step-0 checks are disjoint.
+  - #351 is under its final scoped review (run 401) and is expected to land first. W1b asks for its `ccd/ccd` consent when it is ready.
+  - Every overlap is now agreed, so both briefs carry no file hold. The waiter still waits on `cap-concurrency`.
+
+- **2026-10-13 01:27 — TWO OVERLAP CONSENTS IN, folded into the still-undispatched briefs (no relay needed).**
+  - **Box-token row 2c (bright-river, 4458): yes, on R56.** Off-limits: README's `box-token` row in the doctor checks table. #376 is in review and likely lands first, so wave 10 is README's second lander.
+  - **ccrc history B2 (quiet-ridge, 4459): yes, on R56.** Off-limits in `ccd/ccrc`: four skill-name spots (`_acct_provision`'s installer list, `_acct_unprovision`'s sweep, the `_inst_skills` heading and loop, three lines of `_uninst_cc_sessions`). CLAUDE.md line 10's README count: the second lander re-measures after merging main and never adds two deltas. Its `lifecycle.test.ts` edit is clear of W1a's stop rows.
+  - **Still awaited:** workspace-lifecycle (4454). Both briefs keep the worker off `watch.ts` (and wave 10 off `store.ts`, `schema.ts`, `coord-db.test.ts`) until I relay it.
+
+- **2026-10-13 01:24 — WAVE 10'S PLAN IS ON MAIN: #377 = `24c9da9fc` (planSha `24c9da9fcda263444191cc8d607e0e3330619dd5`), merged 01:22 at the tested head `c4baa0bbb`.**
+  - CI: every required check green after one re-run of server shard 3, whose only red was a 20 s hook timeout in `ccrc-install.test.ts` (load, unrelated to a docs change).
+  - The plan, the contract and both ledgers at the merge equal the tested head byte for byte.
+  - **Live facts for the brief, measured 2026-10-13 by existence only:** the marker stands on the fleet box; its node-id file is present; no shipped build names or writes the generation journal.
+  - **Overlaps.** Consent asked of workspace-lifecycle (mail 4454: claim 1197, `watch.ts`, `store.ts`, `schema.ts`, `coord-db.test.ts`), ccrc history (4455: claims 1211 and 1213, `CLAUDE.md` and `ccd/ccrc`) and box-token (4456: claim 1204, `README.md`). The brief tells the worker not to edit those files until I relay each answer.
+  - **Dispatch** is refused `cap-concurrency` (7 of 7). A waiter retries every two minutes, run 400 first, then path-identity's run 399.
+
 - **2026-10-12 23:40 — WAVE 10'S PLAN IS WRITTEN: `docs/superpowers/plans/2026-10-12-child-reclamation-wave10-collector-settings-switch.md`.**
   - **How it was made.** Nine Opus readers grounded it at `837a099c0`. An Opus architect wrote its frame, an Opus critic attacked the frame and a reviser applied the critique. Fifteen Opus drafters wrote the tasks. A sliced two-lens review (consistency and executability; SAFETY, SECURITY and spec coverage) read every task, with two Sonnet refuters for each critical or important finding, and every fix came back as an exact edit. A convergence review then re-read the changed tasks and checked every name a task consumes against an earlier task's products. The same process wrote the path-identity programme's W1a and W1b plans at the same time.
   - **Shape.** Sixteen tasks: L0; three L1 tasks (control state, the resolver, the route's decisions); the connection-bound identity; persistence; the executor's final re-read and the one latch helper; the lane wiring; the route with its censuses; the pins; two PWA tasks; the `ccd/ccrc` and `db.ts` wording; the docs; verification. No `ccd/ccd` and no agent edit.

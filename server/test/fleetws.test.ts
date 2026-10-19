@@ -997,7 +997,8 @@ describe('fleet REST + WS', () => {
       const unlistable: FleetIO = { ...localIO, readdir: async () => null };
       const { ws, next, watcher } = await connect({ io: unlistable }, { tick: false });
       expect((await next()).type).toBe('hello');
-      expect((await next()).type).toBe('fleet');
+      // No cold `fleet` frame: on an unlistable registry the cold start sends none rather than an empty fleet
+      // (spec §2.3, path identity W1a). The tick's `coord` frame is the next one.
       await watcher.tick();
       const frame = await next();
       expect(frame.type).toBe('coord');

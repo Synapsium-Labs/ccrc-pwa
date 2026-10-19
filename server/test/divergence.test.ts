@@ -36,6 +36,7 @@ const input = (over: Partial<DivergenceInput> = {}): DivergenceInput => ({
   provenance: [],
   liveClaims: [],
   openRunIds: new Set<number>(),
+  refusedIds: new Set<string>(),
   ...over,
 });
 
@@ -271,6 +272,17 @@ describe('divergences — the original three kinds, individually', () => {
     }))).toEqual([]);
   });
 
+  it('an open run naming a LISTED-but-refused id is no claim-divergence: no row was built for it, so no hold was measured (tick-lanes-hold-a-refused-id)', () => {
+    expect(divergences(input({ openRunSessionIds: new Set(['--actor']), refusedIds: new Set(['--actor']) }))).toEqual([]);
+    // CONTROL, unchanged (`unlisted-non-registry-id-reads-absent-on-the-tick`): the same id with no listed row is not
+    // refused, and still reads as carrying no hold.
+    expect(divergences(input({ openRunSessionIds: new Set(['--actor']) }))).toEqual([{ kind: 'claim-divergence', id: '--actor',
+      path: null, detail: expect.any(String) }]);
+    // A refused id leaves only the open-run side: a held row with no open run is still named.
+    expect(divergences(input({ records: [rec({ held: 'program:x wave:1/2' })], refusedIds: new Set(['--actor']) })).map((d) => d.kind))
+      .toEqual(['claim-divergence']);
+  });
+
   it('an open run naming a session with no registry row at all is a claim-divergence', () => {
     const out = divergences(input({ records: [], worktrees: [],
       openRunSessionIds: new Set(['demo-gone']) }));
@@ -307,6 +319,7 @@ describe('divergences — the original three kinds, individually', () => {
       provenance: [],
       liveClaims: [],
       openRunIds: new Set<number>(),
+      refusedIds: new Set<string>(),
     });
     expect(out.map((d) => d.kind).sort()).toEqual(
       ['branch-drift', 'claim-divergence', 'unregistered-worktree']);

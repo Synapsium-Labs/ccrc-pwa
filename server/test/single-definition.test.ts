@@ -1604,15 +1604,15 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
 
 // — The model-class registry (spec §4.1, §4.2, §6.1, §6.4, §7) —
 describe('the model files, and who reads each one', () => {
-  // FIVE paths — measured 2026-09-08 by counting this describe's own
+  // SIX paths — five measured 2026-09-08 by counting this describe's own
   // writer/reader rows below (the models directory, the catalogue, the
-  // registry, the LiteLLM config, the ownership whitelist) — each with a
-  // writer and a set of readers, and the whole reason to register them here
-  // is that they cross LANGUAGES: the catalogue is written by bash-and-python
-  // and read by TypeScript; the TSV is written by node and read (from Plan 2)
-  // by bash; the effort map is written by node and read by python in another
-  // repository. None of those pairs can share a constant, so agreement has to
-  // be a red suite instead.
+  // registry, the LiteLLM config, the ownership whitelist), and the sixth, the
+  // lane's `<id>.windows.json` — each with a writer and a set of readers, and
+  // the whole reason to register them here is that most cross LANGUAGES: the
+  // catalogue is written by bash-and-python and read by TypeScript; the TSV is
+  // written by node and read (from Plan 2) by bash; the effort map is written
+  // by node and read by python in another repository. None of those pairs can
+  // share a constant, so agreement has to be a red suite instead.
   //
   // THIS DESCRIBE BUILDS ITS OWN CORPUS, and that is load-bearing. `ALL` comes
   // from `sources()`, which filters `/\.tsx?$/` — so `shared/models.mjs` and
@@ -1750,6 +1750,15 @@ describe('the model files, and who reads each one', () => {
     expect(spell('classes.json')).toEqual([
       'ccd/ccrc-doctor-checks', 'deploy/models-op.mjs', 'shared/models.mjs', 'shared/models.ts',
     ]);
+  });
+
+  it('the WINDOWS file is named by exactly two files, and only models-op can write it (codex-bridge spec §2.7)', () => {
+    // `<id>.windows.json`, the lane's measured context windows.
+    // `deploy/models-op.mjs` builds its path (`windowsPath`) and is its one
+    // writer; `shared/models.mjs` names it in `parseWindows`' docstring and
+    // holds no fs call (it imports nothing). A bash tool or a server module
+    // spelling it would be a second, unvalidated reader or editor.
+    expect(spell('.windows.json')).toEqual(['deploy/models-op.mjs', 'shared/models.mjs']);
   });
 
   it('the doctor\'s models check reads the registry file but never writes it', () => {
@@ -5908,6 +5917,78 @@ describe('child reclamation wave 9: the collector’s lane and executor call the
   });
 });
 
+// PATH IDENTITY W1a (spec 2026-10-12 §2.3): the registry id predicate and its cap are ONE L0 function and ONE L0
+// constant, and the collector's temp-root names derive from them, so the dash, dot and length clauses are written
+// once. APPENDED after the last describe, for the reason the blocks above state: `session-hook.test.ts`'s citation
+// audit cites this file by line. The wave 9 describe above still holds `isTmpRootId`'s one function definer and the
+// store's use of `TMPROOT_ID_MAX_CHARS`. Its three pattern helpers are block-local there, and hoisting them would move
+// this file's cited lines, so this block keeps its own copies under the same names.
+describe('path identity W1a: the registry id predicate is defined once, and isTmpRootId derives from it', () => {
+  const DEF_FN = (n: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?function\\s+${n}\\b`, 'm');
+  const DEF_VAL = (n: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${n}\\b`, 'm');
+  const definers = (re: RegExp): string[] => ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel).sort();
+  const API = (): string => readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+  const TMP_DECL = 'export function isTmpRootId(id: unknown): id is string {';
+  /** `isTmpRootId`'s body: from the end of its declaration line to the first bare closing brace, or null. */
+  const tmpBody = (t: string): string | null => {
+    const at = t.indexOf(TMP_DECL);
+    if (at === -1) return null;
+    const end = t.indexOf('\n}', at);
+    return end === -1 ? null : t.slice(at + TMP_DECL.length, end);
+  };
+  /** The right-hand side of `TMPROOT_ID_MAX_CHARS`'s declaration, or null. */
+  const aliasRhs = (t: string): string | null => /^export const TMPROOT_ID_MAX_CHARS = (.*)$/m.exec(t)?.[1] ?? null;
+
+  it('CONTROL: the body slice sees a re-derived body and a derived one, and the alias reader sees a literal', () => {
+    const old = `${TMP_DECL}\n  return typeof id === 'string' && id.length <= TMPROOT_ID_MAX_CHARS && isSessionIdShape(id)\n`
+      + `    && !id.startsWith('.') && !id.startsWith('-');\n}\n`;
+    expect(tmpBody(old)).toMatch(/startsWith/);
+    expect(tmpBody(old)).not.toMatch(/\bisRegistryId\s*\(/);
+    const derived = `${TMP_DECL}\n  return isRegistryId(id);\n}\n`;
+    expect(tmpBody(derived)).toMatch(/\bisRegistryId\s*\(/);
+    expect(tmpBody(derived)).not.toMatch(/startsWith/);
+    expect(tmpBody('export const isTmpRootId = isRegistryId;\n')).toBeNull();
+    expect(aliasRhs('export const TMPROOT_ID_MAX_CHARS = 255;\n')).toBe('255;');
+    expect(DEF_VAL('REGISTRY_ID_MAX_CHARS').test('export const TMPROOT_ID_MAX_CHARS = REGISTRY_ID_MAX_CHARS;')).toBe(false);
+  });
+
+  it('isRegistryId and REGISTRY_ID_MAX_CHARS are declared in shared/api.ts and nowhere else', () => {
+    expect(definers(DEF_FN('isRegistryId'))).toEqual(['shared/api.ts']);
+    expect(definers(DEF_VAL('isRegistryId'))).toEqual([]);
+    expect(definers(DEF_VAL('REGISTRY_ID_MAX_CHARS'))).toEqual(['shared/api.ts']);
+  });
+
+  it('isTmpRootId calls isRegistryId and tests no prefix itself', () => {
+    const body = tmpBody(API());
+    expect(body, 'isTmpRootId is not declared as a function in shared/api.ts').not.toBeNull();
+    expect(body).toMatch(/\bisRegistryId\s*\(/);
+    expect(body).not.toMatch(/startsWith/);
+    expect(body).not.toMatch(/\bisSessionIdShape\b/);
+  });
+
+  it('TMPROOT_ID_MAX_CHARS is the alias, never a second literal', () => {
+    expect(aliasRhs(API())).toBe('REGISTRY_ID_MAX_CHARS;');
+  });
+
+  // Wave 9's REDERIVED scan reads one code line at a time, so a copy of the old two-line body under a new name (the
+  // shape call on one line, the prefix tests on the next) passes it. This scan reads each file's whole code text, and
+  // `[^;{}]` keeps a match inside one statement, so a shape check and a prefix test in two statements are not a copy.
+  it('no file outside shared/api.ts re-derives it from the shape and a prefix test, even across lines', () => {
+    const REDERIVED_STMT = new RegExp(
+      String.raw`\bisSessionIdShape\s*\([^;{}]*?startsWith\(\s*['"][.-]['"]\s*\)`
+      + String.raw`|startsWith\(\s*['"][.-]['"]\s*\)[^;{}]*?\bisSessionIdShape\s*\(`);
+    expect(REDERIVED_STMT.test("const ok = (id: string): boolean => isSessionIdShape(id)\n  && !id.startsWith('-');\n"),
+      'CONTROL: a two-line copy').toBe(true);
+    expect(REDERIVED_STMT.test("const ok = (id: string): boolean => !id.startsWith('.')\n  && isSessionIdShape(id);\n"),
+      'CONTROL: a two-line copy, prefix first').toBe(true);
+    expect(REDERIVED_STMT.test("if (!isSessionIdShape(sid)) {\n  return null;\n}\nif (sid.startsWith('-')) {\n"),
+      'CONTROL: two statements are not a copy').toBe(false);
+    expect(REDERIVED_STMT.test(stallCodeText("  // isSessionIdShape(id) && !id.startsWith('-')\n")),
+      'CONTROL: a comment line is not code').toBe(false);
+    expect(ALL.filter((f) => rel(f) !== 'shared/api.ts' && REDERIVED_STMT.test(stallCode(f))).map(rel)).toEqual([]);
+  });
+});
+
 // CHILD RECLAMATION WAVE 10 (path-identity spec 2026-10-12 §5.9: "Exactly one database writer and one journal append
 // adapter exist; only POST and automatic latch call the writer"). APPENDED, for the reason the blocks above state:
 // `session-hook.test.ts`'s citation audit cites this file by line. Settings now arms the temp-root collector beside the
@@ -7217,4 +7298,25 @@ describe('docs section H, W5: GithubPermalink, githubPermalink and githubUrlAt a
       expect(holders(FN_DEF(name))).toEqual(['shared/docs.ts']);
     });
   }
+});
+
+// D-5517, D-5751 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A1). APPENDED. The lane's kind on
+// the wire has one reader: `rosterKindOf` derives `provider`, `kind`, `telemetry` and `managed` from a parsed roster
+// entry, and its vocabulary (`RosterKind`, `RosterKindWire`) is declared beside it. A second derivation in the server's
+// handler or the PWA would be a second answer to "what kind of lane is this", free to disagree with the first.
+describe("the lane's kind is derived in one place, shared/roster.ts (D-5517)", () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('rosterKindOf').test('export function rosterKindOf(entry: AccountDef)')).toBe(true);
+    expect(decl('rosterKindOf').test('...rosterKindOf(a),')).toBe(false);
+  });
+  it('rosterKindOf and its vocabulary are declared once, in shared/roster.ts', () => {
+    for (const c of ['rosterKindOf', 'RosterKind', 'RosterKindWire']) {
+      expect(holders(decl(c)), c).toEqual(['shared/roster.ts']);
+    }
+  });
+  it("it is called by the accounts handler alone, which is the RosterWire builder", () => {
+    expect(holders(/\brosterKindOf\(/)).toEqual(['server/src/server.ts', 'shared/roster.ts']);
+  });
 });

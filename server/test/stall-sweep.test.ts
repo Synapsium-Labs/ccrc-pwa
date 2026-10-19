@@ -140,10 +140,11 @@ const regRow = (id: string, uuid: string = UUID, over: Partial<SessionRecord> = 
 });
 
 /** What `tick()` hands the lane (`StallTick`), built from this file's own fixtures: the scripted tmux pid for every
- *  row, and the seeded registry uuid. `null` models tmux answering none. The wiring describe runs the production
- *  path, where `tick()` builds the same two from `assembleFleet` and its registry read. */
+ *  row, the seeded registry uuid, and no refused id (`tick-refused-lanes.test.ts` hands one). `null` models tmux
+ *  answering none. The wiring describe runs the production path, where `tick()` builds the same three from
+ *  `assembleFleet` and its registry read. */
 const tickOf = (pid: number | null = PID, rows: readonly SessionRecord[] = [regRow(WORKER)]): StallTick => ({
-  panePids: new Map(rows.map((r): [string, number | null] => [r.id, pid])), records: rows,
+  panePids: new Map(rows.map((r): [string, number | null] => [r.id, pid])), records: rows, refused: new Set(),
 });
 
 /** Sweeps at the lane's own cadence: once every STALL_SWEEP_MS from `from` through `to`. A first-seen clock lives only
@@ -796,7 +797,7 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf(null));
     nothingWritten(coord, runId, sent);
     at(R1_AT + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED, { panePids: new Map(), records: [regRow(WORKER)] });
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, { panePids: new Map(), records: [regRow(WORKER)], refused: new Set() });
     nothingWritten(coord, runId, sent);
     at(R1_AT + 2 * STALL_SWEEP_MS);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
@@ -920,8 +921,8 @@ describe('sweepStalls: wiring', () => {
 
   it('rides tick(): dispatched right after the claim lanes, before primed is set, with no timer of its own', () => {
     const src = readFileSync(path.join(here, '../src/watch.ts'), 'utf8');
-    const claims = src.indexOf('this.lapseClaims(sessions);');
-    const lane = src.indexOf('void this.sweepStalls(sessions, registryRead.names, { panePids, records }).catch(');
+    const claims = src.indexOf('this.lapseClaims(sessions, registryRead.refused);');
+    const lane = src.indexOf('void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(');
     expect(src).toContain('this.usage, this.currentHeadBranches(), panePids);');   // the pids are assembleFleet's own
     const primed = src.indexOf('this.primed = true;');
     expect(claims).toBeGreaterThan(-1);
@@ -1145,7 +1146,7 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     const rows = [regRow(ORPHAN, ORPHAN_UUID)];
     at(D_AT);
     reads.length = 0;
-    await w.sweepStalls([fleetRow(ORPHAN)], W2, { panePids: new Map(), records: rows });
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, { panePids: new Map(), records: rows, refused: new Set() });
     expect(orphanReads(), 'no pid entry: a pane that was not alive').toEqual([]);
     at(D_AT + STALL_SWEEP_MS);
     await w.sweepStalls([fleetRow(ORPHAN)], W2, tickOf(null, rows));
@@ -1700,7 +1701,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     seedHookState(h.home, WORKER, { updatedAt: IDLE_AT - 5_000, ask: { questions: [{ question: 'Which lane?', options: [{ label: 'a' }] }] } });
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED, { panePids: new Map([[WORKER, PID]]), records: [] });
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, { panePids: new Map([[WORKER, PID]]), records: [], refused: new Set() });
     expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${DIALOG_KEY}`]);
   });
 

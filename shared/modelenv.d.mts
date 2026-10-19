@@ -1,6 +1,6 @@
 // shared/modelenv.d.mts — hand-written, `shared/wrapper.d.mts`'s shape and job.
 // The `.mjs` beside it is what runs.
-import type { Catalogue, Registry } from './models.js';
+import type { Catalogue, ModelWindows, Registry } from './models.js';
 
 // A `type` alias, not an `interface`: fix round 1, finding 1. An `interface`
 // carries no implicit index signature, so the module's own canonical
@@ -31,12 +31,12 @@ export type ModelEnv = {
   // narrowing, still parses (fix round 2A, N1), it just cannot reach this
   // type.
   CLAUDE_CODE_SUBAGENT_MODEL: string;
-  // §6.1, amended 2026-09-08: present only when `catalogue` is non-null, not
-  // stale, and names ANTHROPIC_MODEL's resolved model with a POSITIVE
-  // INTEGER context (modelenv.mjs: `typeof row.context === 'number' &&
-  // Number.isInteger(row.context) && row.context > 0`, pinned by
-  // modelenv.test.ts over 0, -1 and a fraction) — not merely "a numeric
-  // context", which admits all three.
+  // The eighth key (§6.1, amended 2026-09-08; amended again by the
+  // codex-bridge spec §2.7): `contextWindowFor(...).tokens` as a string — the
+  // smallest measured window across the lane's class models when every one is
+  // measured, else `min(catalogue context, 200000)` for ANTHROPIC_MODEL's
+  // model when the catalogue is non-null, not stale and names it with a
+  // POSITIVE INTEGER context; absent otherwise.
   CLAUDE_CODE_MAX_CONTEXT_TOKENS?: string;
 };
 export declare class ModelEnvInvalid extends Error {}
@@ -45,9 +45,22 @@ export declare class ModelEnvInvalid extends Error {}
 export declare function readRegular(p: string): string;
 export declare const MODEL_ENV_KEYS: readonly string[];
 /** The client's default window for a model id it does not know (spec §6.1).
- *  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` never exceeds this. */
+ *  The DEFAULT window rule never writes more than this; a measured window may. */
 export declare const CLIENT_DEFAULT_CONTEXT_TOKENS: number;
-export declare function modelEnvBlock(registry: Registry, catalogue: Catalogue | null): ModelEnv;
+/** What decided the eighth key (codex-bridge spec §2.7): `tokens` is what
+ *  `modelEnvBlock` writes (null: omitted); `unmeasured` is the class models with
+ *  no measured window, in CLASSES order. */
+export type ContextWindow = {
+  tokens: number | null;
+  rule: 'measured' | 'default' | 'none';
+  unmeasured: string[];
+};
+export declare function contextWindowFor(
+  registry: Registry, catalogue: Catalogue | null, windows: ModelWindows | null | undefined,
+): ContextWindow;
+export declare function modelEnvBlock(
+  registry: Registry, catalogue: Catalogue | null, windows?: ModelWindows | null,
+): ModelEnv;
 export declare function mergeSettingsEnv(
   settingsPath: string, block: Record<string, string>,
 ): { changed: boolean };

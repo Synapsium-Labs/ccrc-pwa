@@ -258,6 +258,18 @@ be discovered:
   any kind. `ccd-cap-scopes` is not installed there either — it caps cgroup scopes, and
   there are none.
 
+**The launchd class of the jobs.** The server's (or agent's) job and every session's job carry
+`ProcessType`, `Background` by default — launchd's lowest CPU and I/O class. On a box busy with
+other work a Background job is starved, not merely slowed: the server can take minutes to reach
+`listen`, every `ccrc update` health gate then fails and restores, and the sessions run behind
+everything else. The first word of `~/.ccrc/launchd-class` — `Standard`, `Adaptive` or
+`Interactive` — changes the class (an operator-owned file, like `~/.ccrc/remote-control`; nothing
+writes it). It is read when `ccrc install` (and so every `ccrc update`) writes the server's (or agent's) job;
+session jobs still carry `Background` until their writers adopt the same helper. launchd keeps a loaded job's old
+definition until that job is reloaded, so a running session takes the new class when its job is
+next loaded. An unknown word reads as `Background`; `ccrc install` names it on stderr, while
+session callers discard stderr, so check the file itself when a session's class surprises you.
+
 `ccrc doctor` checks all of this and tells you which one is missing, rather than failing
 somewhere further in.
 
@@ -1376,7 +1388,7 @@ The LANE is the third suppressor (2026-09-07): a session spawns with
 (`CCRC_ANTHROPIC_BACKEND` in `accounts.sh`, read by ccd's `_is_anthropic_backend`).
 A lane on any other backend — a ChatGPT/Codex lane, which holds no claude.ai OAuth
 and runs Claude Code in token mode against a local proxy, or any lane declared
-`telemetry: "codex"` or `"none"` — spawns without it whatever the box flag and the
+`telemetry: "codex"`, `"openrouter"` or `"none"` — spawns without it whatever the box flag and the
 row say, because Remote Control needs a claude.ai token with the inference scope
 and that lane cannot present one. The backend decides, not placement: an Anthropic
 account held out of placement with `homeAble: false` keeps the flag, a home-able
@@ -1436,11 +1448,13 @@ scored better — for as long as it is installed and not kill-switched.
 `touch ~/.cc-sessions/<id>-disabled` is the per-lane brake, and a session that
 overflowed onto it returns home when home has headroom again *and* home is still
 servable for the project's pool;
-`telemetry` is `'anthropic'`, `'codex'` or `'none'`: `'anthropic'` means the statusline publishes this
+`telemetry` is `'anthropic'`, `'codex'`, `'openrouter'` or `'none'`: `'anthropic'` means the statusline publishes this
 account's 5h/7d windows and ccd treats the lane as speaking Claude Code's own protocol
 (`CCRC_ANTHROPIC_BACKEND` — `--remote-control`, the spawn-time effort, the 429 exclusion writer and Fable
 eligibility all key on it); `'codex'` means usage is published in Codex's weekly shape by the lane's own
-publisher, never the statusline; `'none'` says the account will never report rate limits,
+publisher, never the statusline; `'openrouter'` marks an OpenRouter key lane, which has no
+`~/.cc-limits` writer, is not an Anthropic backend and carries a class registry (D-5521);
+`'none'` says the account will never report rate limits,
 so its permanent unknown is not read as permanent emptiness; `hidden: true`
 declares the entry to be roster PLUMBING rather than one of your accounts — the
 `upstream` entry naming the binary every generated wrapper `exec`s — so no
@@ -1776,21 +1790,23 @@ may need the new id.
 `haiku`, `sonnet`, `opus`, `fable`. On a lane whose roster `telemetry` is `"anthropic"` those are Claude
 Code's own aliases and there is nothing to classify: `show` answers read-only and every change is refused.
 That includes every lane `ccrc account add` creates, whose key lanes route through their own `--models` map
-(`exec.models`) instead. A lane whose `telemetry` is `"codex"` or `"none"` — a Codex lane, or an OpenRouter or
-Anthropic-compatible endpoint rostered that way by hand — carries a **class registry**,
+(`exec.models`) instead. A lane whose `telemetry` is `"codex"`, `"openrouter"` or `"none"` — a Codex lane, an OpenRouter
+lane, or an Anthropic-compatible endpoint rostered that way by hand — carries a **class registry**,
 `~/.ccrc/models/<id>.classes.json`, naming the concrete model each class means on that lane, which class
 subagents run as, and a default effort per class. Every accepted change is re-validated and then materialised
 into that lane's own `settings.json` `env` block — the four alias defaults, the primary and small models, the
-subagent model, and a context-window key that never exceeds the client's 200k default — plus
+subagent model, and a context-window key (below; set from `<id>.windows.json`) — plus
 `<id>.classes.tsv`, `<id>.effort.json` and, on a Codex lane, `~/.ccrc/codex/<id>/lane.json`, so nothing reads
 a registry the lane's settings disagree with.
 
 ```bash
 ccrc models <id> init <codex|openrouter|compatible> [--base-url <url>]   # seed a registry
-ccrc models <id> show [--json]             # classes, subagent class, catalogue, settings drift
+ccrc models <id> show [--json]             # classes, subagent class, catalogue, context window, settings drift
 ccrc models <id> set-class <haiku|sonnet|opus|fable> <modelId|none>
 ccrc models <id> set-subagent <haiku|sonnet>
 ccrc models <id> set-effort <class> <level|default>
+ccrc models <id> set-window <modelId> <tokens>   # record a measured context window, 1000 to 1000000
+ccrc models <id> clear-window <modelId>          # drop one
 ccrc models <id> discovery add <modelId> | rm <modelId> | catalogue
 ccrc models <id> rm                        # reap the lane's model files
 ccrc models refresh <id> | --all           # re-probe the provider catalogues
@@ -1817,6 +1833,26 @@ lane's launcher refuses to start on such a lane. Doctor's `models` check WARNs o
 unrewritten for three hours, or never probed. Every subcommand prints one JSON object on stdout; `show` adds a human summary on stderr unless `--json`. An
 account whose id is `refresh` or `litellm` cannot be addressed here — `ccrc models refresh …` refuses rather
 than guess which was meant. `ccrc models` needs `node` and `jq`, and has no PWA surface in this build.
+
+**The context window.** The eighth key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, follows one rule. A lane may record a
+measured window per model in `~/.ccrc/models/<id>.windows.json`, a sibling of the registry, never a key in it (an
+older ccrc refuses registry keys it does not know): `set-window` writes one, a whole number
+from 1,000 to 1,000,000 that you measured — a catalogue number never sets it — and `clear-window` drops one. When
+every model the lane's classes name has a measured window, the key is the smallest of them, rounded down to 1,000
+and capped at 1,000,000, because Claude Code applies one value to every model in the session, subagents included.
+When any of them has none, the key keeps the default rule, `min(catalogue context, 200000)` for the lane's default
+model, or is left out when the catalogue cannot say; so a class moved to a new model falls back to the default until
+the new model is measured. `set-window` refuses a model that is neither in the lane's catalogue nor one of its class
+models. A windows file that cannot be read counts as no measured windows: refresh, materialise and the drift check
+carry on under the default rule (a measured key left in `settings.json` shows as drift until the next materialise
+replaces or removes it), `show` names the reason, and both verbs refuse until the file is fixed or deleted.
+`show` reports each measured window, the effective window, the rule that chose it and the models still unmeasured;
+`rm` reaps the file with the rest. A running session keeps its window until it restarts or swaps.
+A rollback to a ccrc from before measured windows is safe on a lane whose catalogue is fresh: its next successful
+refresh materialises and writes the default. With a stale or absent catalogue a measured key stays until the next
+successful probe, so before rolling back across this change on a lane with windows set, run
+`ccrc models <id> clear-window <model>` for each measured model: each one re-materialises, and clearing the last
+puts the lane on the default rule.
 
 ### A ChatGPT/Codex lane: `exec.kind: "codex"` and `ccrc codex`
 
@@ -3073,7 +3109,7 @@ general remote-shell:
   exact bare command name (no path components) and an argv **prefix** — a
   handful of `ccd` verbs are still a bare first token (`start`, `enable`,
   `ensure`, `stop`, `swap`, `ws-add`, `forget`) — a bare-token grant leaves
-  everything after the verb unconstrained, which is what lets `ccd stop <id> --surface <word>`
+  everything after the verb unconstrained, which is what lets `ccd stop --surface <word> <id>`
   cross this seam with no widening: `stop`'s validated `--surface` flag is
   the single enrolment the swap-transcript design costs, and it rides as an
   argv flag rather than an env var because the exec seam is `Runner = (cmd,
@@ -3118,7 +3154,7 @@ general remote-shell:
   it — but where no evidence PERMITS an ordinary verb (guessing wrong there
   is loud: ccd's own usage refusal, a 502, never a lie), no evidence REFUSES
   `--surface`, because guessing wrong there is a *silent success*: an old
-  ccd parses `stop <id> --surface pwa` as a two-argument stop of a session
+  ccd parses the trailing order the server sent before path identity W1a, `stop <id> --surface pwa`, as a two-argument stop of a session
   literally named `<id>---surface`, exits 0, and the real session is never
   touched. Evidence comes from measuring the actual deployed ccd on
   whichever box runs it — the remote agent at handshake and every 60s
@@ -5257,8 +5293,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8361-8363`), each with an operator sentence of its own at `:8413`,
-`:8421` and `:8434`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8369-8371`), each with an operator sentence of its own at `:8421`,
+`:8429` and `:8442`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 

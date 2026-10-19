@@ -71,6 +71,14 @@ describe('shared/modelenv.d.mts — measured, not merely believed clean (fix rou
     expect(src).not.toContain(' as ');
   });
 
+  it('the probe drives the measured-window surface: modelEnvBlock\'s third argument and contextWindowFor', () => {
+    // Codex-bridge spec §2.7. Without these two lines in a compiled program,
+    // a `.d.mts` that drifted from the `.mjs` would be invisible to tsc.
+    const src = readFileSync(probePath, 'utf8');
+    expect(src).toContain('mergeSettingsEnv(settingsPath, modelEnvBlock(reg, cat, win))');
+    expect(src).toContain('contextWindowFor(reg, cat, win)');
+  });
+
   it('the CLIENT_DEFAULT_CONTEXT_TOKENS probe really does import and use it', () => {
     // Without this, emptying the probe file would make the check above pass
     // trivially while removing the only evidence this declaration is in a

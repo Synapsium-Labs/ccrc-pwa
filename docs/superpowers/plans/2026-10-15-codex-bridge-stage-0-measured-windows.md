@@ -2590,9 +2590,11 @@ own: with no windows file, every lane's env block is the one it has today.
 
 ## Deviations found
 
-Two deviations are defined here, issued by the allocator on 2026-10-15 and defined in the same act. D-5160 is cited
-by the codex-bridge spec's §2.7 and by `shared/models.mjs`; D-5161 by `deploy/models-op.mjs`. A further departure found
-while executing is written `D-TBD-<slug>` and named in the task's report, never numbered by a worker.
+Six deviations are defined here, each issued by the allocator and defined in the same act: D-5160 and D-5161 on
+2026-10-15, when this plan was written, and D-5782 to D-5785 on 2026-10-19, for the departures the coordinator ruled
+while executing it. D-5160 is cited by the codex-bridge spec's §2.7 and by `shared/models.mjs`; D-5161 and D-5782 to
+D-5785 by `deploy/models-op.mjs`. A further departure found while executing is written `D-TBD-<slug>` and named in
+the task's report, never numbered by a worker.
 
 ### D-5160 — the measured windows live in a sibling file, not in the class registry
 
@@ -2633,3 +2635,51 @@ while executing is written `D-TBD-<slug>` and named in the task's report, never 
   `{state: "absent"}`, and the file stays until `rm` reaps it or the operator deletes it. If the ruling is that the
   delete wins, it is a one-line change in `windowOp` (drop `&& Object.keys(raw).length === 1`) plus that test's
   expectation, and the unknown keys are lost on the last clear.
+
+### D-5782 — `windowOp` has no `windows-invalid` re-validation
+
+- **Departs from:** Task 4, whose `windowOp` re-validates the next windows object with `parseWindows` and answers
+  `windows-invalid` when that fails, and whose Step 6 names that word with no red row.
+- **What changed:** the branch and its word are not shipped. `windowOp` builds the next object only from a reading
+  `parseWindows` already accepted, plus one entry whose key passed `MODEL_ID_RE` and whose `tokens` passed the
+  `WINDOW_MIN`..`WINDOW_MAX` check, so the re-validation could never fire. Rows V1 and V2 still go red when an
+  earlier guard is removed, through `parseWindows` throwing before the write.
+- **Why:** a guard ships with a row that goes red when it is removed. This one could not have one, because the guards
+  before it make it unreachable.
+- **Cost if wrong:** a later change that drops an earlier guard fails closed, by crashing before the write instead of
+  answering a refusal. The earlier guards' own rows still go red.
+
+### D-5783 — one atomic JSON writer, `writeJsonFile`, serves the registry and the windows file
+
+- **Departs from:** Task 4, whose `writeWindows` copies `writeRegistry`'s shape line for line, and whose C7 count of
+  tmp-name sites in `deploy/models-op.mjs` goes from 3 to 4.
+- **What changed:** both writers call one private `writeJsonFile(path, value, word)`: tmp file and rename, mode 0600,
+  two-space JSON and a newline, and the tmp file unlinked on failure. Each keeps its own error word. `writeRegistry`'s
+  bytes, mode, tmp name and refusal are unchanged, and C7 stays at 3.
+- **Why:** a verbatim copy of a logic block is a review defect, and two copies of an atomic write drift.
+- **Cost if wrong:** one touched existing function. The auto-advance plan's C7 edit, which expects one more site for
+  `writeWindows`, must be re-measured when that plan runs.
+
+### D-5784 — `renderRefusal` is the one render-before-write check
+
+- **Departs from:** Task 4, whose `windowOp` carries its own copy of the mutation tail's render-before-write block.
+- **What changed:** `windowOp` and the mutation tail both call the existing `renderRefusal`, which `show` already used.
+  Each call site spells `unroutable-lane`, as the file already did. A new case pins the tail's call: no test went red
+  at the base when the tail's render check alone was removed.
+- **Why:** the same reason as D-5783.
+- **Cost if wrong:** none in behaviour. The tail's refusal word and message are byte-identical to before.
+
+### D-5785 — the drift check names a stale context-window key that the block omits
+
+- **Departs from:** `settingsDrift` as it stood. It compared only the keys the env block writes, so a
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` left on disk when the block omits it was never reported.
+- **What changed:** `settingsDrift` also reports that key when it is on disk and the block omits it. So `show`, and
+  every reader of its `settingsDrift`, sees a measured window that outlived its windows file, and the next
+  materialise removes it, as `mergeSettingsEnv` already does.
+- **Why:** before this plan the key could only hold `min(catalogue context, 200000)`, so a stale copy was harmless.
+  A measured window can be up to 1000000. The hourly refresh materialises only after a successful probe, and a failed
+  probe is what makes a catalogue stale. So with a stale or absent catalogue, a windows file removed or broken
+  outside the two verbs left a measured window in place, unreported. A rollback to a build from before this plan
+  has the same gap, and the README says so.
+- **Cost if wrong:** an extra drift line on a lane whose settings carry the key by hand. That is what `mergeSettingsEnv`
+  already treats as not ccrc's to keep.

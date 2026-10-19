@@ -12,6 +12,7 @@ import {
   parseExpireResult, reviewKeeps,
   type ArchivedExpiryOutcome, type ExpireAuditRead, type ExpiryStoreRead,
 } from '../archivedExpiry.js';
+import { isRegistryId } from '../../../shared/api.js';
 
 /**
  * THE EXPIRY LANE'S ONE EXECUTOR (workspace lifecycle spec 2026-09-24 §5.3, wave 3b): `ws-audit --expire`, then
@@ -62,10 +63,18 @@ export type ExpireArchivedResult = ArchivedExpiryOutcome & {
   readonly wip?: string | null | 'unreadable'; readonly secretsDropped?: number | 'unreadable';
 };
 
+/** What both executor entries answer for a session id that is not a registry id (spec §2.3): refused here, before
+ *  either builder, so no call is composed. The lane's population is registry-derived and omits such a row; this is the
+ *  executor boundary's own re-check. */
+const EXPIRE_ID_REFUSED = 'the server refused this session id: it is not a registry id, so no call was composed';
+
 export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchivedRequest): Promise<ExpireArchivedResult> {
   const { sessionId, archivedAt, expiresAt } = req;
   const answer = (o: ArchivedExpiryOutcome, extra: Partial<ExpireArchivedResult> = {}): ExpireArchivedResult =>
     ({ ...o, sessionId, archivedAt, expiresAt, ...extra } as ExpireArchivedResult);
+  // 0 — the id, before any read (spec §2.3): one that is not a registry id reaches neither builder. A pure check, so it
+  //     stands ahead of the capability; `composition` is the answer the lane never asks again.
+  if (!isRegistryId(sessionId)) return answer({ kind: 'composition', detail: EXPIRE_ID_REFUSED });
   // 1 — the capability, refusing on no evidence.
   if (!capSupported(deps.fleetState, EXPIRE_CAP)) {
     return answer({ kind: 'deferred', why: 'unsupported', detail: `the fleet host does not advertise ${EXPIRE_CAP}` });
@@ -187,6 +196,8 @@ export function readExpiryStore(coord: CoordStore, id: string): ExpiryStoreRead 
  *  the server never types the threshold. Read-only on the box (`ws-audit` journals a terminal refusal and nothing
  *  else); behind the capability, as the act is. */
 export async function learnExpiry(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fleetState'>, sessionId: string): Promise<ExpireAuditRead> {
+  // The id first, as the act's step 0 (spec §2.3): the learning audit is the other `wsExpireAudit` builder.
+  if (!isRegistryId(sessionId)) return { kind: 'unreadable', detail: EXPIRE_ID_REFUSED };
   if (!capSupported(deps.fleetState, EXPIRE_CAP)) return { kind: 'unreadable', detail: `the fleet host does not advertise ${EXPIRE_CAP}` };
   return expireAudit(deps, sessionId);
 }

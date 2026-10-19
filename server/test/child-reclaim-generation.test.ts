@@ -176,7 +176,7 @@ describe('one implementation each', () => {
       'step 2a and the release job\'s step 5 each pass the row they read').toBe(2);
     const closeTs = src.find(([f]) => f === 'server/src/coord/close.ts')![1];
     expect(count(closeTs, 'childReclaimHasCoordinated(deps.coord, sessionId, Date.now(), '
-      + 'read.found ? childReclaimRowUuid(read.record) : null)'), 'close passes the row its mark read read').toBe(1);
+      + "read.kind === 'found' ? childReclaimRowUuid(read.record) : null)"), 'close passes the row its mark read read').toBe(1);
     // The reader this fence replaced is gone from every file under server/ —
     // the needle is built in two halves so this file does not name it either.
     const retired = 'childReclaim' + 'CoordinatorIds';
