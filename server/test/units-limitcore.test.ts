@@ -7,10 +7,8 @@
 // is every `deploy/<unit>` that `ccrc install` (`_inst_units`) or `deploy/deploy.sh` copies onto a box. A third unit
 // that starts either process is in this sweep the day it lands.
 //
-// macOS (D-5622): `ccrc install`'s launchd job (`_inst_plist_server`, `ccd/ccrc`) is generated in a file a gating PR
-// still holds, so it gains no explicit `Core` limit here. launchd starts a job with a soft core limit of 0, and the
-// last case pins that the generated job raises no resource limit, so the platform's 0 stands until the plist carries
-// its own.
+// macOS (D-5622 (5)): `ccrc install`'s launchd job (`_inst_plist_server`, `ccd/ccrc`) carries `Core` 0 in both
+// `SoftResourceLimits` and `HardResourceLimits`, so the server cannot raise launchd's default soft limit of 0 back.
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -81,11 +79,16 @@ describe('LimitCORE=0 on every server and agent unit (spec §13.2, G22)', () => 
     }
   });
 
-  it("macOS: the launchd job `ccrc install` writes raises no resource limit, so launchd's soft core limit of 0 stands (D-5622)", () => {
+  it('macOS: the launchd job `ccrc install` writes holds Core at 0, soft and hard (D-5622 (5))', () => {
     const at = ccrc.indexOf('_inst_plist_server() {');
     expect(at, '_inst_plist_server not found').toBeGreaterThanOrEqual(0);
     const body = ccrc.slice(at, ccrc.indexOf('\n}\n', at));
     expect(body, 'the cut is the plist generator').toMatch(/<key>ProgramArguments<\/key>/);
-    expect(body).not.toMatch(/ResourceLimits/);
+    for (const k of ['SoftResourceLimits', 'HardResourceLimits']) {
+      const m = body.match(new RegExp(`<key>${k}</key>\\s*<dict>([\\s\\S]*?)</dict>`));
+      expect(m, `${k} not found`).not.toBeNull();
+      expect(m![1].replace(/\s+/g, ''), k).toBe('<key>Core</key><integer>0</integer>');
+    }
+    expect(body.match(/ResourceLimits/g), 'exactly the two limit dicts').toHaveLength(2);
   });
 });
