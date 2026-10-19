@@ -37,7 +37,8 @@ import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type Sw
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
-import { MAIL_DISABLED_MARKER, queueSystemMail } from './rundefs.js';
+import { MAIL_DISABLED_MARKER } from './rundefs.js';
+import { queueSystemMail } from './rundefsTx.js';
 import { STALL_QUIET_MS } from './stall.js';
 import {
   STALL_NOTICE_WINDOW_MS, STALL_QUIET_MAX_MS, STALL_QUIET_MIN_MS, STALL_QUIET_STEP_MS, decideStallSettings,

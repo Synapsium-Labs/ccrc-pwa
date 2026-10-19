@@ -739,9 +739,10 @@ describe('Build 7 nouns', () => {
   // with "no `node:sqlite`" — so every multi-row all-or-nothing commit in this
   // build (`dispatchRun`, `settleItems`, `closeRun`) lands as a `CoordStore`
   // method, and this is the scanner that says so.
-  describe('the coord ring — only store.ts, rundefs.ts and routes.ts hold the handle', () => {
+  describe('the coord ring — only store.ts, rundefsTx.ts and routes.ts hold the handle', () => {
     const coordDir = path.join(ccrcRoot, 'server/src/coord');
-    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefs.ts', 'routes.ts', 'db.ts', 'schema.ts']);
+    // D-5896: `rundefs.ts` left this set when its mail writes moved to `rundefsTx.ts`; `tx.ts` is `tx` itself.
+    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {

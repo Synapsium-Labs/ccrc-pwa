@@ -5,7 +5,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { insertSystemMailTx, queueStallNotice, queueSystemMail } from '../src/coord/rundefs.js';
+import { insertSystemMailTx, queueStallNotice, queueSystemMail } from '../src/coord/rundefsTx.js';
 import { STALL_CHECK_PREFIX, STALL_ORPHANED_PREFIX, STALL_REPLY_PREFIX, STALL_REPORT_PREFIX, stallDetail, stallRunMail } from '../src/coord/stall.js';
 import { WAVE_DONE_SUBJECT, type MailKind, type RunState } from '../../shared/api.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';

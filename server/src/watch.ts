@@ -55,8 +55,9 @@ import { JournalMirror } from './coord/mirror.js';
 // literals exist. `single-definition.test.ts` pins both halves of that split.
 import {
   COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, askNudgeSubject, isApprovalNudgeMail, isAskNudgeMail,
-  queueStallNotice, queueSystemMail, survivorOf,
+  survivorOf,
 } from './coord/rundefs.js';
+import { queueStallNotice, queueSystemMail } from './coord/rundefsTx.js';
 import { landingAsk, landingVerdict, type LandingFacts } from './coord/landing.js';
 import {
   readParentGenerations, readWorktreeCensus, settleParentIncarnations, type DelegationCensusPass, type WorktreeCensus,

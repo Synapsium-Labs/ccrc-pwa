@@ -1,7 +1,9 @@
 import path from 'node:path';
 import type { CcdArgv } from './ccdargv.js';
 import type { CcrcConfig } from './config.js';
-import { UNMEASURED, type Runner, type Unmeasured } from './exec.js';
+import type { Runner } from './exec.js';
+// D-5896: the word from its pure leaf; through `exec.ts` this file loaded `node:child_process`.
+import { UNMEASURED, type Unmeasured } from './unmeasured.js';
 import type { FleetIO } from './io.js';
 import type { ProjectRow } from '../../shared/api.js';
 import { readRegistryMeasured } from './registry.js';
