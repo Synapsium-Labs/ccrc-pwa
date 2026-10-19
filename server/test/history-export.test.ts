@@ -978,6 +978,40 @@ describe('marks that move (W1-B4 Task 8; spec §9.15 "Mark", "After a bind")', (
     expect(strandedBlobs(box), 'D-5395: no live blob is held only by marked entries').toEqual([]);
   }, 300_000);
 
+  it('D-5635: history-off touched before an adopt holds the check while a late carry runs, and a carry whole by the time the switch goes clears nothing', async () => {
+    const { box, ids } = ingestedBox('ccrc-history-export-carryoff-', [row(1, 'one', 2 * DAY), row(2, 'two', DAY)]);
+    const P = historyPaths(box.home);
+    passAt(box, 65);
+    const s1 = `1.${ids.writer}.db`;
+    expect(Object.values(marks(box))).toEqual([s1, s1]);
+    // D-5725: a store with no listing record owes one check, so the first pass above ran and stamped its done record
+    const stamped = metaOf(box, 'export_marks_checked_binds');
+    expect(stamped, 'the first pass\'s check stamped the bind facts it saw (none yet)').toBe('[]');
+    // the store comes to "this box"; its export directory is still on the one it came from, and the operator holds the ticks first
+    const away = path.join(box.home, 'export-still-on-the-old-box');
+    const here = exportDirOf(box);
+    fs.renameSync(here, away);
+    fs.rmSync(P.storeId);
+    fs.rmSync(P.writer);
+    fs.writeFileSync(P.off, '');
+    const adopt = await adoptOnPty(box);
+    expect(adopt.code, adopt.out).toBe(0);
+    passAt(box, 70);   // a timer tick while the copy runs
+    expect(metaOf(box, HEALTH_META.exportMarksCheck), 'no step ran under history-off').toBeNull();
+    expect(Object.values(marks(box)), 'a tick under history-off checked the marks').toEqual([s1, s1]);
+    expect(metaOf(box, 'export_marks_checked_binds'), 'no check ran under history-off: the done stamp is the first pass\'s').toBe(stamped);
+    // the copy is whole, then the switch goes: the next tick checks, and every marked segment is here
+    fs.renameSync(away, here);
+    fs.rmSync(P.off);
+    passAt(box, 72);
+    expect(metaOf(box, 'export_marks_checked_binds'), 'the check ran once the switch went: its done stamp covers the adopt\'s bind fact').not.toBe(stamped);
+    expect(metaOf(box, HEALTH_META.exportMarksCheck), 'the check finished: no stop word stands').toBeNull();
+    expect(Object.values(marks(box)), 'a carried segment, whole, keeps its marks').toEqual([s1, s1]);
+    expect(counters(box)['export_segment_missing']).toBeUndefined();
+    expect(counters(box)['export_segment_damaged'], 'the carried segment reads whole and this store\'s').toBeUndefined();
+    expect(segmentsOf(box), 'nothing was exported again').toEqual([s1]);
+  }, 300_000);
+
   it('the check runs on the first step after a bind, and again on a step that finds a segment it saw gone, never otherwise: marks naming a present segment stay; a segment gone after the check has its marks cleared with no bind (D-5636 (history-export-vanished-rearm)); a restore\'s bind after that finds nothing left to clear', async () => {
     const { box, ids } = ingestedBox('ccrc-history-export-bindcheck-', [row(1, 'one', DAY), row(2, 'two', DAY)]);
     const NOW = Date.now();

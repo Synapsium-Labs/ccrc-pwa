@@ -1199,6 +1199,9 @@ describe('C55: doctor --adopt (W1-B2 Task 26; spec §8.4)', () => {
     // H-100 (R-T26-7): the line is the operator's act, said from the start of the sentence, never an instruction to a session.
     expect(r.out.replace(/\r/g, '')).toContain(
       `the operator, from a terminal outside any session: if the box this store left still has ~/.ccrc/history/journal/${storeId}/`);
+    // D-5635: a carry after the bind holds the ticks with history-off until it is whole, said where the operator reads it.
+    expect(r.out.replace(/\r/g, '')).toContain(
+      "their file names never collide with this box's; if you copy them after this adopt, touch ~/.ccrc/history-off before you copy and remove it only once both directories are here, complete and matching their source");
     expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
     const writer = fs.readFileSync(P.writer, 'utf8').trim();
     expect(writer).toMatch(/^[0-9a-f]{8}$/);

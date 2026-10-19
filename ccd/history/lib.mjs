@@ -3403,7 +3403,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'store-root-dangling': `mount the volume behind ~/${STORE_DB_REL}, or remove the dangling link so the next tick stores on the home filesystem`,
   'store-missing': `the operator runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild, from a terminal outside any session (a leftover history.db-wal or history.db-shm is moved aside first); capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`,
   'store-mismatch': 'this DB belongs to another store (its meta.store_id is not store.id): put the right DB back, or move this one aside',
-  'store-unbound': `if the store is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place and the operator runs ccrc history doctor --adopt, which binds it, from a terminal outside any session (capture stays held until then)`,
+  'store-unbound': `if the store is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place and the operator runs ccrc history doctor --adopt, which binds it, from a terminal outside any session (capture stays held until then); ${adoptCarryAdvice(null)}`,
   'store-unreachable': `the store's filesystem did not answer: check the mount behind ~/${STORE_DB_REL}`,
   'store-recoverable': 'the operator runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild, which recover from what was found, from a terminal outside any session; or moves that evidence aside to start a new store',
   'store-wal-orphaned': 'move history.db-wal and history.db-shm (and any history.db) aside together; then let the next tick create a store, or restore one',
@@ -3470,7 +3470,7 @@ function remedyFor(word, h) {
         ? `the operator runs ccrc history doctor --restore ${h.backupsDb[0]} (db/backups holds ${h.backupsDb.join(', ')}; keep them) or ccrc history doctor --rebuild, from a terminal outside any session (a leftover history.db-wal or history.db-shm is moved aside first); capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`
         : 'the operator runs ccrc history doctor --rebuild, which rebuilds from the journal, from a terminal outside any session (a leftover history.db-wal or history.db-shm is moved aside first); capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)';
     case 'store-unbound':
-      return `if store ${h.storeId ?? '(unknown)'} is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place and the operator runs ccrc history doctor --adopt, which binds it, from a terminal outside any session (capture stays held until then)`;
+      return `if store ${h.storeId ?? '(unknown)'} is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place and the operator runs ccrc history doctor --adopt, which binds it, from a terminal outside any session (capture stays held until then); ${adoptCarryAdvice(h.storeId ?? null)}`;
     case 'store-recoverable':
       return `the operator runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild, which recover from ${evidenceOf(h)}, from a terminal outside any session; or moves that evidence aside to start a new store`;
     case 'migration-refused':
@@ -8946,4 +8946,24 @@ function markCheckOwnRemedy(word, h) {
     default:
       return HEALTH_REMEDIES[word];
   }
+}
+
+// ── D-5635 (history-export-adopt-carry-remedy): the hold a carry after an adopt needs ─────────────────────────────
+/** The first tick after a bind clears the export mark of every segment that is not on this box whole (§9.15
+ *  "After a bind"), so a carry still running at that tick costs a re-export of every row the missing segments held.
+ *  history-off holds that tick (sweep's scheduledPass ends before it opens the store) while the three binding verbs
+ *  still run under it (§8.4), so the operator holds the ticks until the copy is whole. One text, two readers: the
+ *  store-unbound remedy, read before the adopt (`'before the adopt'`), and the adopt's carry line, printed after its
+ *  bind (`'before you copy'`). SWITCHES.off is the switch's one spelling (O13). Declared below HEALTH_REMEDIES,
+ *  which calls it while the module loads: a function declaration is hoisted whole, and every const it reads
+ *  (SWITCHES, HISTORY_ROOT_REL, EXPORT_DIR) is initialised above HEALTH_REMEDIES. */
+export function carryHoldAdvice(when) {
+  return `touch ~/${SWITCHES.off} ${when} and remove it only once both directories are here, complete and matching their source: a tick before then clears the export mark of every segment not here whole, and its rows export again`;
+}
+
+/** The store-unbound remedy's carry half (D-5635): the two directories a store's id keys (`<store_id>` when the id is
+ *  not known), copied here before the adopt, or held behind history-off from before it. */
+export function adoptCarryAdvice(storeId) {
+  const id = storeId ?? '<store_id>';
+  return `when ~/${HISTORY_ROOT_REL}/journal/${id}/ and ~/${HISTORY_ROOT_REL}/${EXPORT_DIR}/${id}/ are to come from the box the store left, copy them here before the adopt, or ${carryHoldAdvice('before the adopt')}`;
 }

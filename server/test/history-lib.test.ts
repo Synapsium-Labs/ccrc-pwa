@@ -4293,6 +4293,21 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     expect(r.fail[0]!.detail).toContain(STORE);
     expect(r.fail[0]!.remedy).toContain('ccrc history doctor --adopt');
   });
+  it('store-unbound\'s remedy says to carry before the adopt or to hold the ticks with history-off until the carry is whole (D-5635)', () => {
+    const hold = 'touch ~/.ccrc/history-off before the adopt and remove it only once both directories are here, complete and matching their source';
+    const loss = 'a tick before then clears the export mark of every segment not here whole, and its rows export again';
+    const fallback = healthLib.HEALTH_REMEDIES['store-unbound']!;
+    expect(fallback).toContain('; when ~/.ccrc/history/journal/<store_id>/ and ~/.ccrc/history/export/<store_id>/ are to come from the box the store left, copy them here before the adopt, or ');
+    expect(fallback).toContain(hold);
+    expect(fallback).toContain(loss);
+    const r = healthLib.deriveHealth(base({ exit: 5, reason: 'store-unbound', storeId: STORE })).fail[0]!.remedy;
+    expect(r).toContain(`; when ~/.ccrc/history/journal/${STORE}/ and ~/.ccrc/history/export/${STORE}/ are to come from the box the store left`);
+    expect(r).toContain(hold);
+    expect(r).toContain(loss);
+    expect(r, 'the bind half is unchanged').toContain(`if store ${STORE} is another box's, remove the ~/.ccrc/history/db link or move the DB aside`);
+    expect(healthLib.carryHoldAdvice('before you copy')).toBe(
+      `touch ~/.ccrc/history-off before you copy and remove it only once both directories are here, complete and matching their source: ${loss}`);
+  });
   it('store-missing names --restore with the backup db/backups holds, and --rebuild', () => {
     const r = healthLib.deriveHealth(base({ exit: 5, reason: 'store-missing', backupsDb: ['20261001T000000Z.db'] }));
     expect(r.fail[0]!.remedy).toContain('ccrc history doctor --restore 20261001T000000Z.db');

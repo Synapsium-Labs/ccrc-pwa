@@ -67,6 +67,7 @@ import {
   BUSY_TIMEOUT_MS, EXPORT_BIND_BATCH, EXPORT_BIND_BYTES, EXPORT_BIND_WAL_CEILING, markCheckStop, planMarkCheckBatch, formatMarkCheckState, nextMarkCheckState,
   segmentListingRecord, addSegmentToListing, segmentListingVanished,
   segmentOrdersAfter,
+  carryHoldAdvice,
 } from './lib.mjs';
 import {
   MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -3436,7 +3437,9 @@ function finishBind(home, P, role, deps, out, now) {
  *  On success, store.mjs's adoptStore commits `bound:<ms>` = adopt, a new writer token and the `bind` row, then
  *  writes store.writer, then store.id (D-4220). Adopt registers no recovery step: the store
  *  is whole, it only moved (RC16). The carry line repeats §8.4's remedy, because the journal and the export are
- *  keyed by the store's id, not by this box; adopt prints it itself (RB11), and HEALTH_REMEDIES is unchanged. */
+ *  keyed by the store's id, not by this box; adopt prints it itself (RB11). D-5635 reverses RB11's "HEALTH_REMEDIES is
+ *  unchanged": the store-unbound remedy, read before the verb, and this line, printed after it, both say lib's
+ *  carryHoldAdvice, because a carry still running at the first tick after the bind clears its segments' marks. */
 export async function adoptArm(home, P, args, deps, out) {
   const now = deps.now ?? Date.now;
   const role = readRole(P);
@@ -3452,7 +3455,7 @@ export async function adoptArm(home, P, args, deps, out) {
     const bound = adoptStore(home, { nowMs: now() });
     const id = bound.storeId;
     out(`history-sweep: adopt: store ${id} is this box's now, under writer ${bound.writer}`);
-    out(`history-sweep: the operator, from a terminal outside any session: if the box this store left still has ~/.ccrc/history/journal/${id}/ or ~/.ccrc/history/export/${id}/, copy each to the same path here (~/.ccrc/history/journal/${id}/, ~/.ccrc/history/export/${id}/); their file names never collide with this box's`);
+    out(`history-sweep: the operator, from a terminal outside any session: if the box this store left still has ~/.ccrc/history/journal/${id}/ or ~/.ccrc/history/export/${id}/, copy each to the same path here (~/.ccrc/history/journal/${id}/, ~/.ccrc/history/export/${id}/); their file names never collide with this box's; if you copy them after this adopt, ${carryHoldAdvice('before you copy')}`);
     return finishBind(home, P, role, deps, out, now);
   } catch (e) {
     if (!(e instanceof StoreError)) throw e;

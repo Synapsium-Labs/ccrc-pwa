@@ -1013,3 +1013,7 @@ export function planMarkCheckBatch(i: { rows: readonly { id: number; bytes: numb
 export function formatMarkCheckState(s: MarkCheckState): string;
 export function parseMarkCheckState(v: string | null): MarkCheckState | null;
 export function nextMarkCheckState(i: { recorded: string | null; word: MarkCheckWord; nowMs: number; cleared: number }): MarkCheckState;
+/** D-5635: the hold a carry after an adopt needs; the store-unbound remedy and the adopt's carry line both say it. */
+export function carryHoldAdvice(when: 'before the adopt' | 'before you copy'): string;
+/** D-5635: the store-unbound remedy's carry half, for a store id (or null when it is not known). */
+export function adoptCarryAdvice(storeId: string | null): string;
