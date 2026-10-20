@@ -2,7 +2,7 @@
 // theme, and the shortcut sheet. W2 Task S2b adds "New session" (the fleet
 // flows' own door, D-5468), "Go to Docs" (from the route table) and "Open the
 // command palette" (D-5469: a door runs a command, so the search door needs
-// one); the per-session actions join in S2d.
+// one); S2d adds the session's (`SESSION_COMMANDS`, D-5466).
 import { AUTO, SKINS, SYSTEM, THEMES } from '@ccrc/ui';
 import { boardHome, type FleetSession, type RunSummary } from '../../../shared/api';
 import { groupFleet } from '../fleet/groupFleet';
@@ -70,6 +70,22 @@ export function stepSession(ctx: CommandContext, step: 1 | -1): void {
   ctx.navigate(`/s/${encodeURIComponent(list[next]!.id)}`);
 }
 
+/** The session's commands (W2 Task S2d, D-5466): the ⋯ menu's items on the base, plus the two header doors that
+ *  open a session flow (the terminal and the PR sheet). Each menu item is built with `commandDoor(id)`, so the menu,
+ *  the palette and any door run one command. Offered only while a session screen's flows are mounted, and only
+ *  where the menu itself would offer the item enabled: the gate is `SessionFlows`', asked through `offers`. */
+export const SESSION_COMMANDS: readonly { id: string; title: string }[] = [
+  { id: 'session-model', title: 'Change model' },
+  { id: 'session-effort', title: 'Change effort' },
+  { id: 'open-history', title: 'Show history' },
+  { id: 'session-docs', title: "Open this session's docs" },
+  { id: 'session-swap', title: 'Move to another account' },
+  { id: 'session-archive', title: 'Archive this session' },
+  { id: 'session-restore', title: 'Restore this session' },
+  { id: 'open-terminal', title: 'Open the terminal' },
+  { id: 'session-pr', title: 'Open the pull request' },
+];
+
 export function baseCommands(): Command[] {
   return [
     ...GO_TO.map((g): Command => ({
@@ -114,6 +130,13 @@ export function baseCommands(): Command[] {
       keys: ['['],
       run: (ctx) => stepSession(ctx, -1),
     },
+    ...SESSION_COMMANDS.map((c): Command => ({
+      id: c.id,
+      title: c.title,
+      group: 'Session',
+      when: (ctx) => ctx.session !== null && ctx.session.offers(c.id),
+      run: (ctx) => ctx.session?.run(c.id),
+    })),
     {
       id: 'switch-layout',
       title: 'Switch layout →',

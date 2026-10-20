@@ -12,6 +12,7 @@ import { setSkin } from '../lib/skin';
 import { setTheme } from '../lib/theme';
 import { CONTENT_ID } from '../skins/frame';
 import { useFleetStore } from '../stores/fleet';
+import { useSessionCommandTarget } from '../session/SessionFlows';
 import { baseCommands, fleetOrder } from './commands';
 import { available, rankCommands, type CommandContext, type CommandPage } from './registry';
 import { DOOR_EVENT } from './door';
@@ -108,6 +109,8 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   }, [open]);
 
   const ordered = useMemo(() => fleetOrder(sessions, runs), [sessions, runs]);
+  // The open session's flows (W2 Task S2d): its commands are offered only while a session screen hosts them.
+  const session = useSessionCommandTarget();
   const ctx = useMemo<CommandContext>(() => ({
     path,
     sessions: ordered,
@@ -118,7 +121,8 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
     openNewSession,
     openPalette,
     paletteOpen: open,
-  }), [path, ordered, openNewSession, openPalette, open]);
+    session,
+  }), [path, ordered, openNewSession, openPalette, open, session]);
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 

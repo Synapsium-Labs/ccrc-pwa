@@ -11,7 +11,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
 import { sessionDocsHref } from '../src/docs/docsLinks';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
-import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
+import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import { fleetSession } from './fleetFixture';
 
 const s = (over: Partial<FleetSession> = {}): FleetSession => fleetSession({
@@ -19,7 +19,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => fleetSession({
   workdir: '/repo/wt/ws-old', workspace: 'ws-old', branch: 'feat/renamed', ...over,
 });
 
-const headerProps = (session: FleetSession): SessionHeaderProps => ({
+const headerProps = (session: FleetSession): HeaderHostProps => ({
   session, status: 'idle', statusUpdatedAt: null,
   onInterrupt: vi.fn(), onOpenTerminal: vi.fn(), onBack: vi.fn(), onChangeModel: vi.fn(), onChangeEffort: vi.fn(),
   onMoveAccount: vi.fn(), onArchive: vi.fn(), onRestore: vi.fn(), onOpenHistory: vi.fn(), onReapWorkspace: vi.fn(),
@@ -58,7 +58,7 @@ function viaSheet(session: FleetSession): { href: string; closedAt: string | nul
 
 /** The session menu's Docs item for `session`, clicked; answers where it navigated. */
 function viaMenu(session: FleetSession): string {
-  render(<SessionHeader {...headerProps(session)} />);
+  render(<SessionHeaderHost {...headerProps(session)} />);
   fireEvent.click(screen.getByRole('button', { name: 'More' }));
   fireEvent.click(screen.getByRole('button', { name: 'Docs' }));
   const href = here();
@@ -132,19 +132,19 @@ describe('the actions sheet’s Docs row (spec 4.8, M4.L2)', () => {
 
 describe('the session menu’s Docs item (spec 4.8, M4.L2)', () => {
   it('is a menu-item named Docs whose hint is the branch, or default', () => {
-    render(<SessionHeader {...headerProps(s())} />);
+    render(<SessionHeaderHost {...headerProps(s())} />);
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     const item = screen.getByRole('button', { name: 'Docs' });
     expect(item).toHaveClass('menu-item', 'docs-menu-item');
     expect(item.querySelector('.menu-hint')?.textContent).toBe('feat/renamed');
     cleanup();
-    render(<SessionHeader {...headerProps(s({ branch: null }))} />);
+    render(<SessionHeaderHost {...headerProps(s({ branch: null }))} />);
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     expect(screen.getByRole('button', { name: 'Docs' }).querySelector('.menu-hint')?.textContent).toBe('default');
   });
 
   it('closes the menu and navigates to exactly the href the builder made', () => {
-    render(<SessionHeader {...headerProps(s())} />);
+    render(<SessionHeaderHost {...headerProps(s())} />);
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(screen.getByRole('button', { name: 'Docs' }));
     expect(here()).toBe('/docs/demo?ref=feat/renamed');
@@ -152,7 +152,7 @@ describe('the session menu’s Docs item (spec 4.8, M4.L2)', () => {
   });
 
   it('renders no item for a project outside the project grammar', () => {
-    render(<SessionHeader {...headerProps(s({ project: '.hidden' }))} />);
+    render(<SessionHeaderHost {...headerProps(s({ project: '.hidden' }))} />);
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     expect(screen.getByRole('button', { name: 'History' })).toBeInTheDocument();
     expect(document.querySelector('.docs-menu-item')).toBeNull();
@@ -175,7 +175,8 @@ describe('one builder for both surfaces (spec 4.8, M4.L2)', () => {
   // template, a `?ref=`, a call to `docsPageUrl` or `docsLocation`). It does not see a builder imported from a third
   // module under another name, or a URL assembled from pieces that never spell those; the behaviour cases above are
   // what pin the hrefs themselves.
-  it.each(['src/fleet/SessionActionsSheet.tsx', 'src/session/SessionHeader.tsx'])(
+  // The menu's caller moved with the menu (W2 Task S2d): `SessionFlows` builds the ⋯ menu now.
+  it.each(['src/fleet/SessionActionsSheet.tsx', 'src/session/SessionFlows.tsx'])(
     '%s calls sessionDocsHref and builds no Docs URL of its own', (rel) => {
       const text = readFileSync(path.join(import.meta.dirname, '..', rel), 'utf8');
       expect(text).toContain('sessionDocsHref(session)');
@@ -185,7 +186,7 @@ describe('one builder for both surfaces (spec 4.8, M4.L2)', () => {
 
 describe('T13 review 5-3: the session menu lists Docs directly after History', () => {
   it('the Docs item is History’s next sibling in the menu, and nothing sits between them', () => {
-    render(<SessionHeader {...headerProps(s())} />);
+    render(<SessionHeaderHost {...headerProps(s())} />);
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     const history = screen.getByRole('button', { name: 'History' });
     const docs = screen.getByRole('button', { name: 'Docs' });
