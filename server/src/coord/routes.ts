@@ -3986,32 +3986,17 @@ export function registerCoordRoutes(
     // over a question that never reached their phone. Ordered first so that
     // if `settleAsk` below then throws, at least ONE durable trace of the
     // answer survives — the feed record names who chose what even when the
-    // `asks` row's own `answeredBy`/`answer` never gets written. Same
-    // pattern `POST /api/coord/caps` uses just above: `deps.notifyLog` and
-    // `coord.recordFeedEvent` are independently optional (a box with neither
-    // configured still answers the request), `recordFeedEvent` throws
-    // SYNCHRONOUSLY (`node:sqlite`) so it is caught rather than allowed to
-    // turn a successful press into a 500, and the flush is unconditional in
-    // a `finally` for the reason `POST /api/coord/caps`'s own comment gives:
-    // `record()` mints the seq before this route can fail, so its
-    // persistence must follow regardless.
-    const log = deps.notifyLog;
-    if (log) {
-      try {
-        const ev = log.record({
-          kind: 'ask', sessionId: ask.childId, runId: null,
-          title: 'question answered',
-          body: `${fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
-                `${ask.options[optionIndexes[0]!] ?? '?'}`,
-        });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — ask answered, feed archive degraded`);
-      } finally {
-        void log.flush();
-      }
-    }
+    // `asks` row's own `answeredBy`/`answer` never gets written. Through the
+    // notice sink (D-5858), `'record-only'`, as `POST /api/coord/caps` above:
+    // the archive's synchronous throw is caught inside `notify` rather than
+    // allowed to turn a successful press into a 500, and the seq `record()`
+    // minted is flushed whatever the archive does.
+    notice({
+      kind: 'ask', sessionId: ask.childId, runId: null,
+      title: 'question answered',
+      body: `${fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
+            `${ask.options[optionIndexes[0]!] ?? '?'}`,
+    }, 'record-only', { degraded: 'ask answered, feed archive degraded' });
 
     // GUARDED (fix round 1, item 3): the digit has ALREADY landed by this
     // point — `answerAsk` returned `ok:true` above — so `settleAsk` failing
