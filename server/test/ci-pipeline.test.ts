@@ -190,8 +190,9 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
   // "Unset" is checked, not assumed: STORYBOOK_SKIN may appear in ci.yml only
   // as an inline prefix on a build line, and the job never writes GITHUB_ENV,
   // so no job- or step-level `env:` (nor an env-file write) can turn the
-  // default build into another skin. Each run must also come after the step
-  // that serves its port, and may be neither switched off nor told to ignore
+  // default build into another skin. Each build names at most one output dir
+  // and comes before the step that serves it; each run must also come after
+  // the step that serves its port, and may be neither switched off nor told to ignore
   // its result (`if:` other than `!cancelled()`, `continue-on-error`, `||`).
   it('storybook-a11y builds and tests once per skin in the catalogue', () => {
     const src = read('ui/src/styles/skins.ts');
@@ -211,6 +212,7 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
     const code = (st: string): string => st.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     const s = steps(job('storybook-a11y')).map(code);
     const builds = new Map<string, string>(); // outDir -> skin id
+    const builtAt = new Map<string, number>(); // outDir -> index of the step building it
     const served = new Map<string, string>(); // port -> outDir
     const waited = new Set<string>();
     const runs: string[] = []; // the port each test-storybook run reads
@@ -237,12 +239,28 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
       for (const line of st.split('\n')) {
         if (/\bbuild-storybook\b/.test(line)) {
           const skin = /\bSTORYBOOK_SKIN=([\w-]+)/.exec(line)?.[1] ?? unset!;
+          // One output flag per build: with two, the parser would read the
+          // first while Storybook writes the last (F3b review, round 2).
+          const outs = [...line.matchAll(/\s(?:-o|--output-dir)(?=[ =])/g)];
+          expect(outs.length, `a build-storybook line names more than one output dir:\n${line}`).toBeLessThanOrEqual(1);
           const out = /\s(?:-o|--output-dir)[ =](\S+)/.exec(line)?.[1] ?? 'storybook-static';
           expect(builds.has(out), `two builds write ${out}`).toBe(false);
           builds.set(out, skin);
+          builtAt.set(out, i);
         }
-        const pv = /vite preview --outDir (\S+) .*--port (\d+)/.exec(line);
-        if (pv) { served.set(pv[2], pv[1]); servedAt.set(pv[2], i); }
+        // Each port is served once and locked: a second preview on the same
+        // port, or one without --strictPort, lets one build answer for both
+        // skins while the other server fails unseen in the background (F3b
+        // follow-up, D-5093).
+        if (/\bvite preview\b/.test(line)) {
+          const pvOut = /\s--outDir[ =](\S+)/.exec(line)?.[1];
+          const pvPort = /\s--port[ =](\d+)/.exec(line)?.[1];
+          expect(pvOut !== undefined && pvPort !== undefined, `a vite preview line names no --outDir or no --port:\n${line}`)
+            .toBe(true);
+          expect(line, `a vite preview line does not pass --strictPort:\n${line}`).toMatch(/\s--strictPort\b/);
+          expect(served.has(pvPort!), `port ${pvPort} is served twice`).toBe(false);
+          served.set(pvPort!, pvOut!); servedAt.set(pvPort!, i);
+        }
         if (/\bwait-on\b/.test(line)) for (const w of line.matchAll(/\btcp:127\.0\.0\.1:(\d+)/g)) waited.add(w[1]);
         const t = /\btest-storybook\b.*--url http:\/\/127\.0\.0\.1:(\d+)/.exec(line);
         if (t) { runs.push(t[1]); runAt.set(t[1], i); }
@@ -261,6 +279,8 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
       expect(out, `test-storybook reads port ${port}, which no vite preview serves`).toBeDefined();
       const skin = builds.get(out!);
       expect(skin, `port ${port} serves ${out}, which no build-storybook step writes`).toBeDefined();
+      expect(builtAt.get(out!)! < servedAt.get(port)!, `${out} is built after the step that serves it on port ${port}`)
+        .toBe(true);
       return skin!;
     });
     expect([...tested].sort(), 'the axe runs are not each pointed at a build made with that id')

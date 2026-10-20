@@ -355,8 +355,8 @@
 
   --r-sm:   6px;    /* inline code, keycaps, badges */
   --r-md:   10px;   /* tool cards, buttons, wells */
-  --r-lg:   16px;   /* session cards, chat bubbles */
-  --r-xl:   22px;   /* sheet & drawer top corners */
+  --r-lg:   14px;   /* session cards, chat bubbles, a Section's card (16 until the page scaffold, D-5102) */
+  --r-xl:   20px;   /* sheet & drawer top corners (22 until the page scaffold, D-5102) */
   --r-full: 999px;  /* dots, pills, grabber */
 
   --tap-min:   44px;   /* minimum touch target (spec acceptance criterion) */
@@ -392,6 +392,8 @@
   --gap-section: var(--sp-8);     /* between a page's sections */
   --page-max:      760px;         /* a secondary screen's column */
   --page-max-wide: 1120px;        /* a wide screen's column (Runs) */
+  --head-h:       56px;          /* a page's sticky header (PageScaffold, D-5102). Tap-bearing (D-5667) */
+  --section-flow:  column-reverse; /* a Section head's flex-direction: the scope ABOVE the title (D-5666) */
   --measure-chat:  780px;         /* the transcript's reading column (820 at ≥1600) */
 
   /* The METER's shape (D-5098), read by @ccrc/ui's Meter (meter.css). One

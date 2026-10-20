@@ -49,9 +49,11 @@ const MINTED_ACTORS = new WeakSet<AccountActor>();
 /** The longest device label a row carries. The session row keeps up to 120 characters of a user-agent. */
 const ACTOR_LABEL_MAX = 64;
 const ACTOR_UNKNOWN = 'unknown device';
-/** C0, DEL and C1 controls (the 8-bit CSI among them), and the Unicode format characters a terminal or a viewer
- *  would act on: zero-width and directional marks, bidi embeddings, overrides and isolates, and the BOM (D-5621). */
-const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]+/g;
+/** C0, DEL and C1 controls (the 8-bit CSI among them), line and paragraph separators, the combining grapheme
+ *  joiner, and every Unicode format character (\p{Cf}) a terminal or a viewer would act on or hide: zero-width and
+ *  directional marks (the Arabic letter mark among them), bidi embeddings, overrides and isolates, the soft hyphen,
+ *  the interlinear annotation marks, the tag block and the BOM (D-5621). */
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u034f\u2028\u2029\u2060-\u206f\p{Cf}]+/gu;
 
 /**
  * The actor of a gated request: the device label of the session the gate verified (`GateDecision.device`) and the

@@ -4,7 +4,7 @@ import type { CcrcConfig } from './config.js';
 import { UNMEASURED, type Runner, type Unmeasured } from './exec.js';
 import type { FleetIO } from './io.js';
 import type { ProjectRow } from '../../shared/api.js';
-import { readRegistry } from './registry.js';
+import { readRegistryMeasured } from './registry.js';
 
 /** `killed` and `signal` are REQUIRED here, unlike their `ExecResult`
  *  counterparts: no test anywhere builds a `CcdResult` literal, and only a
@@ -116,11 +116,16 @@ export const ccdRunner = (run: Runner, cfg: CcrcConfig): CcdRunner =>
   (argv) => ccd(run, cfg, argv);
 
 /** A linked worktree (or submodule) masquerading as a project: `.git` exists
- *  but is a FILE. readdir-null is the only file-vs-dir probe FleetIO affords —
- *  it succeeds for a directory and answers null for a plain file. A dir with
- *  NO .git at all is a legitimate non-git project (four exist on the fleet)
- *  and must never be skipped; an UNREADABLE workdir stays listed, same as
- *  today — this probe only ever removes what it positively identified.
+ *  but is a FILE. D-5967: the file-vs-dir answer is `lstatMeasured` on
+ *  `<workdir>/.git`, and ONLY a measured `regular` file condemns — a directory
+ *  (`other`) is a main checkout, a symlink is kept as it always was, and a
+ *  probe that could not answer (a remote timeout, an agent too old for the
+ *  `lstat` op, a permission error) keeps the project. Before this, a null
+ *  `readdir` of `.git` was read as "it is a file", so a transient failure
+ *  dropped a real project. A dir with NO .git at all is a legitimate non-git
+ *  project (four exist on the fleet) and must never be skipped; an UNREADABLE
+ *  workdir stays listed — this probe only ever removes what it positively
+ *  identified.
  *  `names`, when given, is a `readdir(workdir)` result the caller already
  *  holds (the root loop's directory-ness probe) — reused here so that door
  *  doesn't readdir the same directory twice; the union loop has no such
@@ -132,7 +137,8 @@ const isLinkedWorktree = async (
 ): Promise<boolean> => {
   const entries = names === undefined ? await io.readdir(workdir) : names;
   if (entries === null || !entries.includes('.git')) return false;
-  return (await io.readdir(path.join(workdir, '.git'))) === null;
+  const kind = await io.lstatMeasured(path.join(workdir, '.git'));
+  return kind.ok && kind.kind === 'regular'; // D-5967: unmeasured keeps
 };
 
 /**
@@ -143,11 +149,18 @@ const isLinkedWorktree = async (
  * plain file or anything unreadable. A linked worktree cannot masquerade as a
  * project through either door: `isLinkedWorktree` skips it whether it turned
  * up under the projects root or only in the registry.
+ *
+ * `registry` (spec §2.3; additive on `GET /api/projects`, which spreads this
+ * result) says whether the registry half of the union was MEASURED.
+ * `'unlistable'` means the registry directory could not be listed, so
+ * `projects` holds the root walk alone: a registry-only project is then
+ * missing because nothing was read, not because it is gone. A refused row
+ * (`RegistryRead.refused`) is never read, so its workdir never joins the union.
  */
 export async function listProjects(
   io: FleetIO,
   cfg: CcrcConfig,
-): Promise<{ roots: string[]; projects: ProjectRow[] }> {
+): Promise<{ roots: string[]; projects: ProjectRow[]; registry: 'listed' | 'unlistable' }> {
   const byWorkdir = new Map<string, ProjectRow>();
   const names = await io.readdir(cfg.projectsRoot);
   if (names !== null) {
@@ -160,7 +173,9 @@ export async function listProjects(
       byWorkdir.set(workdir, { name, workdir });
     }
   }
-  for (const rec of await readRegistry(io, cfg)) {
+  // [registry-refused:reports] one read; `registry` below reports whether it listed.
+  const reg = await readRegistryMeasured(io, cfg);
+  for (const rec of reg.listed ? reg.records : []) {
     if (!byWorkdir.has(rec.workdir) && !(await isLinkedWorktree(io, rec.workdir))) {
       byWorkdir.set(rec.workdir, { name: rec.project, workdir: rec.workdir });
     }
@@ -168,5 +183,5 @@ export async function listProjects(
   const projects = [...byWorkdir.values()].sort((a, b) =>
     a.name < b.name ? -1 : a.name > b.name ? 1 : a.workdir < b.workdir ? -1 : 1,
   );
-  return { roots: [cfg.projectsRoot], projects };
+  return { roots: [cfg.projectsRoot], projects, registry: reg.listed ? 'listed' : 'unlistable' };
 }

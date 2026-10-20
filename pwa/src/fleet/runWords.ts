@@ -254,15 +254,46 @@ export function anyDispatchPending(
  *
  *  During the required open-successor-before-close-producer boundary, two rows
  *  can name the same session. The API orders rows oldest-first, so the last
- *  matching id is the current wave; first-match would render the outgoing one. */
+ *  matching id is the current wave; first-match would render the outgoing one.
+ *
+ *  It takes the SESSION, not its id, because a matching id is not enough
+ *  (D-5828): see `runBelongsTo`, the one rule every caller goes through. */
 export function runForSession(
-  runs: readonly RunSummary[], sessionId: string,
+  runs: readonly RunSummary[], session: { id: string; child?: ChildMark },
 ): RunSummary | null {
   let current: RunSummary | null = null;
   for (const run of runs) {
-    if (run.sessionId === sessionId && (current === null || run.id > current.id)) current = run;
+    if (runBelongsTo(run, session) && (current === null || run.id > current.id)) current = run;
   }
   return current;
+}
+
+/** D-5828: whether this run is THIS session's — the one rule the fleet card and
+ *  the session header apply (through `runForSession`), so the two can never
+ *  attribute a run differently (card ⊆ header, D-5545). The PR sheet's open-run
+ *  note deliberately does not: it predicts the archive door, which matches by id
+ *  (D-5830).
+ *
+ *  A run names its worker by id, and an id outlives its workspace: once a
+ *  workspace is archived and reaped, ccd's slug picker may give the same name to
+ *  a new workspace. A run opened for the old one and never closed then names the
+ *  new one too, and the card read that stale run's claimant — an archived
+ *  coordinator — and said "coordinator gone" about a worker whose coordinator is
+ *  alive. Run ids only increase, so a run whose id is LOWER than the run that
+ *  minted this workspace (its `.child` marker, read through `childMarkOf`) was
+ *  opened before this workspace existed and is never its run. The marker's own
+ *  run (an equal id) and a later wave bound to the same child (a higher id) still
+ *  match.
+ *
+ *  KNOWN LIMIT: a row whose marker names no run — `none`, `unreadable`,
+ *  `unrecognised` — keeps the id-only answer, since there is nothing to order the
+ *  run against. Binding runs to the worker's generation is the structural fix. */
+export function runBelongsTo(
+  run: { id: number; sessionId: string | null }, session: { id: string; child?: ChildMark },
+): boolean {
+  if (run.sessionId !== session.id) return false;
+  const mark = childMarkOf(session);
+  return mark.kind !== 'child' || run.id >= mark.runId;
 }
 
 /**
@@ -757,12 +788,14 @@ export type ChildMarkRead =
   | { readonly kind: 'unrecognised' };
 
 /** THE ONE READER of `FleetSession.child` in `pwa/src`. Optional here although the
- *  wire type requires it: the live `fleet` frame is cast, never revived. Three
+ *  wire type requires it: the live `fleet` frame is cast, never revived. Four
  *  callers: `childOfRunLabel` (the fleet line), `abandonChildOf` (the abandon
- *  sheet) and `childRunsSeen` (the board's memory of which runs had a child).
+ *  sheet), `childRunsSeen` (the board's memory of which runs had a child) and
+ *  `runBelongsTo` (which runs can be this workspace's, D-5828).
  *  The label says nothing for `none` OR `unrecognised`; the sheet must hedge on
- *  `unrecognised` and not on `none`; the board's memory keeps `child` alone. So
- *  this answers four ways, and the label's `null` is never reused as a mark. */
+ *  `unrecognised` and not on `none`; the board's memory and `runBelongsTo` keep
+ *  `child` alone. So this answers four ways, and the label's `null` is never
+ *  reused as a mark. */
 export const childMarkOf = (session: { child?: ChildMark }): ChildMarkRead => {
   const c: unknown = session.child;
   if (c === undefined) return { kind: 'none' };
