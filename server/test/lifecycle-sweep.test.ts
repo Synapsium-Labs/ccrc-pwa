@@ -103,7 +103,9 @@ describe('the tick itself', () => {
     // close. FIX ROUND 1, F8: two independent claims, softened (lower stakes
     // than the health split above — neither dereferences the other's result —
     // but both should get to report rather than the first hiding the second).
-    expect.soft(src.match(/setInterval\(/g) ?? []).toHaveLength(1);
+    // D-5832: the one other interval is the delegation lane's stall sampler, a measurement clock (not a sweep) that the lane's close() clears.
+    expect.soft(src.match(/setInterval\(/g) ?? []).toHaveLength(2);
+    expect.soft(src.match(/LANE_TIMERS\.setInterval\(/g) ?? [], 'the second is the lane sampler, by name').toHaveLength(1);
     expect.soft(src).not.toContain('lifecycleTimer');
   });
 
