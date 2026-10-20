@@ -170,8 +170,9 @@ describe('runCcdOldFoldSites: runCcd( call sites under server/src not yet narrow
   afterAll(() => { if (tree) rmSync(tree, { recursive: true, force: true }); });
 
   it('FIXTURE: a comment, a type, a pass-through and a narrowed call are not sites; an un-narrowed call is, and so is one narrowed past the window', () => {
-    expect(runCcdOldFoldSites(tree).map((s) => `${s.file}:${s.line}`))
-      .toEqual(['server/src/coord/lane.ts:3', 'server/src/coord/lane.ts:17']);
+    // [file, line] pairs, not `file:line` strings: the citations ratchet counts the latter (D-5893).
+    expect(runCcdOldFoldSites(tree).map((s) => [s.file, s.line]))
+      .toEqual([['server/src/coord/lane.ts', 3], ['server/src/coord/lane.ts', 17]]);
   });
 
   it('REAL: the four sites step 1 migrated are off the old fold, and the rest still on it are listed for step 2', () => {
