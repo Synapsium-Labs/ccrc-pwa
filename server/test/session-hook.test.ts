@@ -8691,7 +8691,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // above README's anchors), and every anchor below them shifts by exactly
       // 35. README's four were re-pointed to the tip's lines (`:8427-8429`,
       // `:8479`, `:8487`, `:8500`). The one site that LEFT is the frozen plan's
-      // `plan:3396 shared/api.ts:5644` above, whose quote now lands by
+      // `plan:3396` site named above (its `:5644`), whose quote now lands by
       // coincidence on the shifted line: a coincidental pass gained, not a
       // repair, and Task 11 still owns that anchor. No rule changed, so no
       // D-number.
@@ -9717,7 +9717,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // RE-MEASURED on the ws-rm shared-branch guard (#138, D-5880), 55 -> 54,
         // FROM THE SAME RUN as the site-level set below (35 -> 34, its
         // `spec:2125 ccd/ccd:13560-13562` leaving for the same reason). ONE cause:
-        // the guard's 7 net lines in `cmd_ws_rm` (`ccd/ccd:7942`) slid every
+        // the guard's 7 net lines in `cmd_ws_rm` slid every
         // `ccd/ccd` line below it down 7. ONE LEAVES (`ccd/ccd:13560-13562`)
         // and none enter: those lines now hold a comment reading "destroyed",
         // which the row's own quoted `destroy` matches — a coincidence, not a
