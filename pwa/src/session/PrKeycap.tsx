@@ -24,6 +24,12 @@ import './chat.css';
  *  one object; `server/test/single-definition.test.ts` fails on a fourth. */
 export { UNCHECKED_PR };
 
+/** A workspace session has a PR cap; a main checkout has none. ONE predicate: the header's cap renders where it holds
+ *  and the palette offers `session-pr` where it holds, so neither offers a PR the other hides (W2 Task S2d). */
+export function hasPrCap<S extends { workspace: string | null }>(session: S | null): session is S {
+  return session !== null && session.workspace !== null;
+}
+
 /** '2m' | '3h' | '5d', or null under a minute — `elapsedShort`'s own answer
  *  there, which is why this cap needs nothing of its own for that case. */
 function rel(then: number | null): string | null {
@@ -220,7 +226,14 @@ function checkText(pr: PrState): string {
   return ` ${CHECK_PHRASE[pr.checks ?? 'none']}${names}.`;
 }
 
-export function PrKeycap({ pr, onOpen }: { pr: PrState | null; onOpen: () => void }): ReactNode {
+export function PrKeycap(
+  { pr, onOpen, 'data-command': command }: {
+    pr: PrState | null;
+    onOpen: () => void;
+    /** The registry command this cap is the door of (`session-pr`, W2 Task S2d), carried for the parity test. */
+    'data-command'?: string;
+  },
+): ReactNode {
   // MUTATION SURVIVOR, disclosed: `??` here is swappable for `||` with the
   // suite green, and no test can ever distinguish them. `pr` is
   // `PrState | null`, and a `PrState` is an object — so the only falsy values
@@ -238,6 +251,7 @@ export function PrKeycap({ pr, onOpen }: { pr: PrState | null; onOpen: () => voi
       data-phase={state.phase}
       data-checks={state.checks ?? undefined}
       aria-label={prSentence(state)}
+      data-command={command}
       onClick={onOpen}
     >
       <span className="pr-dot" aria-hidden="true" />

@@ -1,4 +1,5 @@
-import { configDirFor, type CcrcConfig } from './config.js';
+import type { CcrcConfig } from './config.js';
+import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { readRegistryMeasured, readSessionRecord } from './registry.js';

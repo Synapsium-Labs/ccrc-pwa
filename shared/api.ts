@@ -3995,11 +3995,11 @@ export interface AccountsResponse {
    *  lane declared off — NOT one row per rostered account. */
   accounts: AccountUsage[];
   projected: ProjectedHome | null;
-  /** Every account this box knows, in roster declaration order — including
-   *  accounts nothing has measured yet, which `accounts` has no row for at
-   *  all. This is what lets the PWA label and colour an account before any
-   *  telemetry for it exists. */
+  /** Every account this box knows, in roster declaration order — including accounts nothing has measured yet, which
+   *  `accounts` has no row for at all. This lets the PWA label and colour an account before any telemetry for it. */
   roster: RosterWire[];
+  lanes?: Record<string, LaneWire>; // keyed by lane id, session verdict only (see `LaneWire`; D-5511, D-5517)
+  connect?: AccountsConnect; // session verdict only, as `lanes` (see `AccountsConnect`)
 }
 
 /** Wire shape of `/ws/fleet`, the single source of truth for both ends — it
@@ -11805,6 +11805,49 @@ export const ACCOUNT_OP_KILL_GRACE_MS = 5_000;
 /** The most a sub's stdout may carry before the answer is cut and refused (spec §13.2's 8 MiB cap). */
 export const ACCOUNT_OP_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
 
+import type { AccountStateAnswer, LaneState } from './accounts.js';
+/** One lane on `GET /api/accounts`'s `lanes` (spec §3.4, §13.1; D-5517; accounts plan Task A12), keyed by lane id and
+ *  read from `~/.cc-sessions/.accounts/<id>.json`. ONLY for a reader with the session verdict (D-5511): a dark gate's
+ *  reader gets today's three fields and nothing else, and an armed gate refuses a box token before the handler. Never
+ *  persisted by `offline.ts` (G15). Declared here, below every line the docs cite in this file (D-6058 (6)). `state` is `stateWordFor`'s answer
+ *  (`shared/accounts.ts`); every other field is the lane-state file's, held to its grammar (`laneStateOf`) and masked
+ *  on the server, its times in epoch ms. Absent fields were absent or off their grammar in the file. `ready` is the
+ *  file's own account of A13's three conditions (a credential recorded, a seed verified after the last run, a last
+ *  check of `ok`): display only, never `enable`'s authority, which reads the file on the box (D-5518). */
+export interface LaneWire {
+  state: AccountStateAnswer;
+  check?: { verdict: string; at: number };
+  identity?: string;
+  identitySource?: LaneState['identitySource'];
+  keyHint?: string;
+  validatedAt?: number;
+  credit?: { limit: number | null; remaining: number | null };
+  mintedAt?: number;
+  ready: boolean;
+  notReadyReason?: LaneNotReadyReason;
+}
+
+/** Why `LaneWire.ready` is false, the first that applies: the lane state is absent or unreadable, no last check of
+ *  `ok`, or no seed verified after the last run. */
+export const LANE_NOT_READY_REASONS = ['no-lane-state', 'not-checked', 'seed-unverified'] as const;
+export type LaneNotReadyReason = (typeof LANE_NOT_READY_REASONS)[number];
+
+/** The cap words `ccd caps` advertises for the account subs (N4; spec §13): `account-v2` is the first wave's write
+ *  subs, advertised by the box task that ships them (A16); each later wave appends its own word. Accounts plan Task
+ *  A12 reads `account-v2` for `connect.accountOps`. */
+export const ACCOUNT_CAPS = ['account-v2'] as const;
+export type AccountCap = (typeof ACCOUNT_CAPS)[number];
+
+/** `GET /api/accounts`'s `connect` (spec §12.6, §13.1; D-5511), what the screen needs to offer an act and why it cannot: whether the fleet can run the account subs
+ *  (`account-v2` in its measured caps, the refusing no-evidence polarity), the gate's posture, `cfg.origin`'s class,
+ *  and the first instant this session's step-up is no longer fresh (absent: none). */
+export interface AccountsConnect {
+  accountOps: 'available' | 'unsupported';
+  gate: 'armed' | 'dark';
+  origin: AccountOriginClass;
+  stepUpFreshUntil?: number;
+}
+
 /** The acts `account_events` records (D-5516; spec §3.6), closed. `step-up-locked` (D-5512), `management-remove` and
  *  `ceiling-lower` (D-5554) name no lane; every other act names the lane it touched. */
 export const ACCOUNT_ACTS = [
@@ -11814,8 +11857,9 @@ export const ACCOUNT_ACTS = [
 ] as const;
 export type AccountAct = (typeof ACCOUNT_ACTS)[number];
 
-/** The acts that name no lane, so their row's `laneId` is NULL (and only theirs). */
-export const ACCOUNT_LANELESS_ACTS: readonly AccountAct[] = ['step-up-locked', 'management-remove', 'ceiling-lower'];
+/** The acts that may name no lane, so their row's `laneId` is NULL (and only theirs). `reconcile` names its lane after
+ *  a failed op and none after a roster disagreement (D-6057). */
+export const ACCOUNT_LANELESS_ACTS: readonly AccountAct[] = ['step-up-locked', 'management-remove', 'ceiling-lower', 'reconcile'];
 
 /** How an act ended (D-5516): `unknown` is the outcome-unknown state of D-5518, never retried on its own. */
 export const ACCOUNT_OUTCOMES = ['ok', 'refused', 'failed', 'unknown'] as const;
@@ -11878,3 +11922,28 @@ export const SECRET_MASK = '‹secret masked›';
 /** What the rest of a text reads as once it holds more candidate runs than the exact-bytes check's hard ceiling: the
  *  check fails closed, so no run is ever passed through unchecked (D-5513). */
 export const SECRET_MASK_TOO_LARGE = '‹output too large to check, masked›';
+
+/* D-6048 (ARCH-12): the derived runtime lists, kept at the end of the file so adding them moves no line that other
+ * files cite by number. */
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom): a member added
+ *  to the union with no key here fails to compile. `server/test/rings/wire-totality.test.ts` holds every exported
+ *  literal union in `shared/` to that. */
+const SESSION_STATUS_MAP: Record<SessionStatus, true> = { busy: true, idle: true, dead: true };
+export const SESSION_STATUSES: readonly SessionStatus[] = Object.keys(SESSION_STATUS_MAP) as SessionStatus[];
+
+/** D-6048 (ARCH-12): the runtime list, in the union's declaration order (not the fleet screen's section order,
+ *  which `pwa/src/fleet/sortFleet.ts` owns). */
+const SESSION_BUCKET_MAP: Record<SessionBucket, true> = {
+  attention: true, working: true, done: true, idle: true, cleanup: true, archived: true, dead: true,
+};
+export const SESSION_BUCKETS: readonly SessionBucket[] = Object.keys(SESSION_BUCKET_MAP) as SessionBucket[];
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type, and the one way to narrow an untrusted value to a
+ *  `PoolsEnforcement` (the fleet store's `pools` frame gate reads it for `enforcement` and `accountPools`). The
+ *  CONSTANT is cast, never the input (`isSessionRole`'s rule). */
+const POOLS_ENFORCEMENT_MAP: Record<PoolsEnforcement, true> = { enforced: true, unavailable: true, unknown: true };
+export const POOLS_ENFORCEMENTS: readonly PoolsEnforcement[] =
+  Object.keys(POOLS_ENFORCEMENT_MAP) as PoolsEnforcement[];
+export function isPoolsEnforcement(v: unknown): v is PoolsEnforcement {
+  return typeof v === 'string' && (POOLS_ENFORCEMENTS as readonly string[]).includes(v);
+}

@@ -27,6 +27,9 @@ import { useQueuedRoute } from '../session/useQueuedRoute';
 import { routeView } from '../session/routeView';
 import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionHeader } from '../session/SessionHeader';
+import { SessionFlows, type SessionActions } from '../session/SessionFlows';
+import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
+import { liveStatus } from '../session/liveStatus';
 import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
 import { sessionFacts } from '../fleet/sessionFacts';
 import { coordPresence } from '../fleet/coordWords';
@@ -324,7 +327,7 @@ export function SessionScreen({
   // The stream sends status only on change — until its first frame the fleet
   // snapshot speaks for the session (same fallback the header does), so a
   // dead session is read-only and a busy one wears the caret from first paint.
-  const effectiveStatus = status ?? live?.status ?? null;
+  const effectiveStatus = liveStatus(status, live);
   const dead = effectiveStatus === 'dead';
   const pulsing = chatPulsing(live, effectiveStatus);
   const loading = uuid === null && missingFile === null;
@@ -456,7 +459,28 @@ export function SessionScreen({
     }
   };
 
+  // The session's flows (W2 Task S2d, D-5466): the ⋯ menu's and the PR sheet's doors run these, whichever skin's
+  // chrome is mounted.
+  const actions: SessionActions = {
+    changeModel,
+    changeEffort,
+    openHistory: () => setHistoryOpen(true),
+    moveAccount: () => setSwapOpen(true),
+    archive: () => setArchiveOpen(true),
+    restore: () => void restoreNow(),
+    openTerminal,
+    reapWorkspace: () => setReapOpen(true),
+  };
+
+  // The desktop Escape interrupt, once, here: neither skin's chrome holds it (W2 Task S2d). `busy` is `liveStatus`,
+  // the one derivation the header's chip reads too.
+  useEscapeInterrupt({
+    busy: effectiveStatus === 'busy',
+    onInterrupt: () => void interrupt('escape-key'),
+  });
+
   return (
+    <SessionFlows key="session-flows" session={live} title={live?.project ?? project} actions={actions}>
     <div
       className="chat"
       data-acct={acct}
@@ -472,16 +496,8 @@ export function SessionScreen({
         coordination={coordination}
         facts={facts}
         onInterrupt={(source) => void interrupt(source)}
-        onOpenTerminal={openTerminal}
         onBack={() => navigate('/')}
-        onChangeModel={changeModel}
-        onChangeEffort={changeEffort}
         queuedField={queuedField}
-        onMoveAccount={() => setSwapOpen(true)}
-        onArchive={() => setArchiveOpen(true)}
-        onRestore={() => void restoreNow()}
-        onOpenHistory={() => setHistoryOpen(true)}
-        onReapWorkspace={() => setReapOpen(true)}
         fallback={{ title: project, wrapper }}
       />
 
@@ -679,5 +695,6 @@ export function SessionScreen({
         onReaped={() => { setReapOpen(false); navigate('/'); }}
       />
     </div>
+    </SessionFlows>
   );
 }

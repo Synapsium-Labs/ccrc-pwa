@@ -298,7 +298,7 @@ The allocator issued the consolidation wave a block of 30 numbers, 5848 to 5877.
 - **D-5860** — `notice-dedupe-key` (Task C1f; ARCH-55): a notice that must happen once carries a `dedupeKey`, stored in an additive `feed_events.dedupe_key` column; the two read-before-write dedupe checks (`alreadyNudged`, the landing step's feed-only `told`) read the key through `hasNotice` instead of matching the body. The archive refuses nothing and never suppresses the ring or the push (O11 (a)). The idle nudge's landing gate (a row that did not land types nothing) stays a `hasFeedEvent` re-read. The behaviour commit changes only the rows the operator ruled (OA-C3).
   - **Departs from the spec's K6 as rev 2 wrote it:** `hasMailWithSubject` keeps its two callers (they dedupe mail to the operator, not a notice), and of `hasFeedEvent`'s three callers only the two dedupe reads change. Spec rev 2.1 records both.
 
-Issued and unused: 5861, 5862, 5863, 5864, 5866, 5867, 5868, 5869, 5870, 5871, 5872, 5873, 5874, 5875, 5876, 5877. They are held for the wave's later plans (W1b onward) and are never defined outside this programme's plans. D-5865 is defined in the W0 plan (C0e's departure, entered by the coordinator).
+Issued and unused: 5868, 5869, 5870, 5871, 5872, 5873, 5874, 5875, 5876, 5877. They are held for the wave's later plans (W2 onward) and are never defined outside this programme's plans. D-5865 is defined in the W0 plan (C0e's departure, entered by the coordinator); D-5861 to D-5864, D-5866 and D-5867 are defined in the W1b plan (`2026-10-20-consolidation-w1b-schedule-listing-redactor.md`).
 
 ## Out of scope
 

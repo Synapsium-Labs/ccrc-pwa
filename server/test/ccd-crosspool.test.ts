@@ -2033,8 +2033,8 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
       tmux() { ${WIDE_PANE} case "\${1:-}" in
                  capture-pane) cat "$HOME/pane.txt" ;;
                  list-panes)   echo ${PANE_PID} ;;
-               esac; return 0; };
-      _dispatch_compact() { echo "compact $1" >> "$HOME/ccd-calls"; };`;
+                 send-keys)    echo "tmux $*" >> "$HOME/ccd-calls" ;;
+               esac; return 0; };`;
     const sfDir = h.sh(`printf '%s' "$(_cfg_dir claude)/sessions"`);
     fs.mkdirSync(sfDir, { recursive: true });
     const sf = path.join(sfDir, `${PANE_PID}.json`);
@@ -2044,7 +2044,9 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
       `timeout 5 bash -c 'source "${CCD}"; ${stubs} _auto_compact_check ${ID}'; echo "rc=$?"`);
     expect(out, 'a FIFO status file: the lane returns, and rc 124 would mean it hung')
       .toContain('rc=0');
-    expect(calls(), 'and it compacts nothing off a file it could not read').not.toContain('compact');
+    // The compaction is `_auto_compact_check`'s own `tmux send-keys -t <pane> -l "/compact"` (D-6051): the
+    // `_dispatch_compact` stub this case asserted on named a function ccd never had, so it could not go red.
+    expect(calls(), 'and it compacts nothing off a file it could not read').not.toContain('/compact');
     // …and it got THERE: a pane with no ctx reading returns long before the
     // status file, which would make both lines above pass having read nothing.
     expect(String(h.reg(ID, 'compactskip') ?? ''), 'the tick never reached the status-file read')
@@ -2074,8 +2076,8 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
       tmux() { ${WIDE_PANE} case "\${1:-}" in
                  capture-pane) cat "$HOME/pane.txt" ;;
                  list-panes)   echo ${PANE_PID} ;;
-               esac; return 0; };
-      _dispatch_compact() { echo "compact $1" >> "$HOME/ccd-calls"; };`;
+                 send-keys)    echo "tmux $*" >> "$HOME/ccd-calls" ;;
+               esac; return 0; };`;
     const sfDir = h.sh(`printf '%s' "$(_cfg_dir claude)/sessions"`);
     fs.mkdirSync(sfDir, { recursive: true });
     const sf = path.join(sfDir, `${PANE_PID}.json`);
@@ -2118,6 +2120,7 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
       .toContain('status-unreadable');
     expect(lastSkipLine(), 'and the sentence names what was actually measured')
       .toContain('not a regular file');
+    expect(calls(), 'and neither unreadable status file compacts the session').not.toContain('/compact');
     fs.rmSync(sf);
   });
 });

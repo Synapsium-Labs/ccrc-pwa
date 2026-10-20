@@ -65,7 +65,7 @@ import {
   accountSpawnBounds, buildAccountArgv, decodeAccountStdin, makeAccountOpSpawn, readFleetIdentity, type AccountOpSpawn,
 } from './accountop.js';
 import type { AccountArgvRefusal } from '../../shared/account-argv.js';
-import { canonicalize, checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
+import { canonicalize, checkPath, checkReadTarget, isExecAllowed, type WhitelistConfig } from './whitelist.js';
 
 /**
  * ccrc-agent: a small authenticated WS service exposing a whitelisted
@@ -538,22 +538,26 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       send(ws, ok(req.id, result));
       return;
     }
+    // The three reads open a regular file only, never blocking on a FIFO, and a lane-state name with `O_NOFOLLOW`
+    // (`checkReadTarget`, `openRegular`; accounts plan Task A12). `unreadable` answers each op's own unreadable shape.
     case 'read': {
-      const p = await checkPath(req.path, ctx.cfg, 'read');
-      if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      send(ws, ok(req.id, readPayload(await readWhole(p))));
+      const t = await checkReadTarget(req.path, ctx.cfg);
+      if (t.kind === 'forbidden') { send(ws, fail(req.id, 'forbidden')); return; }
+      send(ws, ok(req.id, readPayload(t.kind === 'open' ? await readWhole(t.path, t.noFollow) : { data: null, absent: false })));
       return;
     }
     case 'readFrom': {
-      const p = await checkPath(req.path, ctx.cfg, 'read');
-      if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      send(ws, ok(req.id, readFromPayload(await readFromMeasured(p, req.offset, req.maxBytes))));
+      const t = await checkReadTarget(req.path, ctx.cfg);
+      if (t.kind === 'forbidden') { send(ws, fail(req.id, 'forbidden')); return; }
+      send(ws, ok(req.id, readFromPayload(t.kind === 'open'
+        ? await readFromMeasured(t.path, req.offset, req.maxBytes, t.noFollow) : { ok: false, reason: 'unreadable' })));
       return;
     }
     case 'readB64': {
-      const p = await checkPath(req.path, ctx.cfg, 'read');
-      if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      send(ws, ok(req.id, readB64Payload(await readB64Measured(p))));
+      const t = await checkReadTarget(req.path, ctx.cfg);
+      if (t.kind === 'forbidden') { send(ws, fail(req.id, 'forbidden')); return; }
+      send(ws, ok(req.id, readB64Payload(t.kind === 'open'
+        ? await readB64Measured(t.path, t.noFollow) : { ok: false, reason: 'unreadable' })));
       return;
     }
     case 'readdir': {

@@ -11,6 +11,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CCD } from './ccdWsHelpers.js';
 
 /** The repository root: every query's default tree. A fixture tree passes its own root in its place. */
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -80,6 +81,124 @@ export function reclaimPauseParseSites(root: string = REPO): CensusSite[] {
 export function markerDefinitions(name: string, root: string = REPO): CensusSite[] {
   const re = new RegExp(`\\bconst\\s+[A-Za-z_$][\\w$]*\\s*(?::[^=]+)?=\\s*(['"])${esc(name)}\\1`, 'g');
   return sitesOf(root, ['server/src', 'shared'], re);
+}
+
+// ── ccd's function-to-context manifest (D-6054; ARCH-34 (#536)) ──────────────────────────────────────────────────
+// `ccd/contexts.tsv` maps every function `ccd/ccd` defines to one context of the 08-10 spec (C1 to C9, or K). These
+// queries read the launcher and the manifest; `ccd-contexts.test.ts` holds coverage and ratchets the cross-context
+// count. KNOWN WIDTH, the call graph: a function's REGION runs from its definition to its first column-0 `}`, or to
+// the next definition when it closes on an indented line (a one-liner, or a `{ …; }` continued below it). A REFERENCE
+// is a defined name as a whole word on a code line of a region other than its own: a `#` comment line is dropped and
+// a trailing ` # …` is cut, a `$name`/`${name` expansion and a `name=` assignment are variables, and a name inside a
+// quoted message counts. One edge per (caller, callee) pair, at the caller's first reference.
+// A column-0 `}` inside a heredoc body would end a region early and hide the calls after it: `ccdHeredocBraces`
+// lists any such line, and the test's CONTROL holds that list empty.
+
+/** The contexts a manifest row may name: the 08-10 spec's nine and K (kernels and platform, no aggregate). */
+export const CCD_CONTEXTS = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'K'] as const;
+export type CcdContext = (typeof CCD_CONTEXTS)[number];
+
+/** The launcher under `root`: `ccdWsHelpers.ts`'s `CCD`, the one spelling of its path, re-rooted for a fixture tree. */
+export function ccdLauncherIn(root: string = REPO): string {
+  return path.join(root, path.relative(REPO, CCD));
+}
+
+/** A definition `ccd/ccd` writes: a function name at column 0, `()`, optional spaces, `{`. */
+export const CCD_FUNCTION_DEF = /^([A-Za-z_][A-Za-z0-9_]*)\(\) *\{/;
+
+/** ccd's function definitions, one site per `name() {` line of `ccd/ccd` (the site's `text` is the line). */
+export function ccdFunctionDefinitions(root: string = REPO): CensusSite[] {
+  const out: CensusSite[] = [];
+  readFileSync(ccdLauncherIn(root), 'utf8').split('\n').forEach((text, i) => {
+    if (CCD_FUNCTION_DEF.test(text)) out.push({ file: 'ccd/ccd', line: i + 1, text });
+  });
+  return out;
+}
+
+/** The manifest's rows, one site per non-comment, non-blank line of `ccd/contexts.tsv` (`text` is the line). No
+ *  manifest is no rows, so coverage lists every function rather than throwing. */
+export function ccdContextRows(root: string = REPO): CensusSite[] {
+  const out: CensusSite[] = [];
+  const file = path.join(root, 'ccd', 'contexts.tsv');
+  if (!existsSync(file)) return out;
+  readFileSync(file, 'utf8').split('\n').forEach((text, i) => {
+    if (text.trim() !== '' && !text.startsWith('#')) out.push({ file: 'ccd/contexts.tsv', line: i + 1, text });
+  });
+  return out;
+}
+
+/** A bash line as code: `''` for a comment line; a trailing ` # …` (a `#` after whitespace) cut. */
+export function bashCodeOf(line: string): string {
+  if (/^\s*#/.test(line)) return '';
+  return line.replace(/\s#(?:\s.*)?$/, '');
+}
+
+/** One edge of ccd's call graph: `caller`'s region names `callee` first at `line` (1-based, in `ccd/ccd`). */
+export interface CcdCallEdge { readonly caller: string; readonly callee: string; readonly line: number }
+
+/** ccd's call graph: one edge per (caller, callee) pair, in definition order, then by first reference. */
+export function ccdCallGraph(root: string = REPO): CcdCallEdge[] {
+  const lines = readFileSync(ccdLauncherIn(root), 'utf8').split('\n');
+  const defs: { name: string; at: number }[] = [];
+  lines.forEach((l, i) => { const m = CCD_FUNCTION_DEF.exec(l); if (m) defs.push({ name: m[1]!, at: i }); });
+  const names = new Set(defs.map((d) => d.name));
+  const word = /(?<![A-Za-z0-9_$])(\$\{?)?([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_])(\+?=|\[)?/g;
+  const out: CcdCallEdge[] = [];
+  defs.forEach((d, k) => {
+    const next = k + 1 < defs.length ? defs[k + 1]!.at : lines.length;
+    let end = next;
+    for (let j = d.at + 1; j < next; j++) if (lines[j]!.startsWith('}')) { end = j; break; }
+    const seen = new Set<string>();
+    for (let j = d.at; j < end; j++) {
+      const code = j === d.at ? bashCodeOf(lines[j]!).replace(CCD_FUNCTION_DEF, '') : bashCodeOf(lines[j]!);
+      for (const m of code.matchAll(word)) {
+        const callee = m[2]!;
+        if (m[1] !== undefined || m[3] !== undefined || callee === d.name || !names.has(callee) || seen.has(callee)) continue;
+        seen.add(callee);
+        out.push({ caller: d.name, callee, line: j + 1 });
+      }
+    }
+  });
+  return out;
+}
+
+/** The region rule's blind spot, made visible: a column-0 `}` inside a heredoc body opened in a function's region
+ *  would end that region early, and every call after it would leave the graph (and the ratchet). One site per such
+ *  line. A heredoc opens at `<<WORD`, `<<-WORD` or a quoted WORD on a code line (`<<<` is a here-string, not one) and
+ *  closes at the line that is WORD (after leading tabs for `<<-`); one that never closes is a site too. */
+export function ccdHeredocBraces(root: string = REPO): CensusSite[] {
+  const lines = readFileSync(ccdLauncherIn(root), 'utf8').split('\n');
+  const open = /(?<!<)<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g;
+  const out: CensusSite[] = [];
+  let inFn = false;
+  const pending: { word: string; tabs: boolean; at: number }[] = [];
+  lines.forEach((text, i) => {
+    if (pending.length > 0) {
+      const h = pending[0]!;
+      if ((h.tabs ? text.replace(/^\t+/, '') : text) === h.word) pending.shift();
+      else if (inFn && text.startsWith('}')) out.push({ file: 'ccd/ccd', line: i + 1, text });
+      return;
+    }
+    if (CCD_FUNCTION_DEF.test(text)) inFn = true;
+    else if (text.startsWith('}')) inFn = false;
+    if (!inFn) return;
+    for (const m of bashCodeOf(text).matchAll(open)) pending.push({ word: m[3]!, tabs: m[1] === '-', at: i + 1 });
+  });
+  // A heredoc that never closes means this reader misparsed one; say so rather than read nothing after it.
+  for (const h of pending) out.push({ file: 'ccd/ccd', line: h.at, text: `<<${h.word} never closes` });
+  return out;
+}
+
+/** Cross-context references: edges whose two ends sit in different contexts by `ccd/contexts.tsv`, a call INTO K
+ *  excepted (a kernel serves every context; a call OUT of K counts). One site per edge, at the reference's line,
+ *  `text` = `caller (Cx) -> callee (Cy)`. An edge whose end has no row is skipped: coverage is the test's job. */
+export function ccdCrossContextCalls(root: string = REPO): CensusSite[] {
+  const ctx = new Map(ccdContextRows(root).map((r) => { const [n, c] = r.text.split('\t'); return [n!, c!] as const; }));
+  return ccdCallGraph(root).flatMap((e) => {
+    const a = ctx.get(e.caller); const b = ctx.get(e.callee);
+    if (a === undefined || b === undefined || a === b || b === 'K') return [];
+    return [{ file: 'ccd/ccd', line: e.line, text: `${e.caller} (${a}) -> ${e.callee} (${b})` }];
+  });
 }
 
 /** The `$REG` marker vocabulary: the kebab-case values of every `const <X>_MARKER = '<name>'` on a code line under

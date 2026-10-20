@@ -137,3 +137,29 @@ describe('the identity cell (path-identity spec §5.2)', () => {
     expect(code, 'fleetidentity.ts reads a clock: measuredAt arrives in the measurement').not.toMatch(CLOCK);
   });
 });
+
+// D-6057 (6): the divergence reconcile waits for the identity a ready frame invalidated, so the cell tells a listener
+// when a publish makes it known, and only then.
+describe('the identity cell tells its listeners when the node becomes known (D-6057)', () => {
+  it('a known publish calls each listener once, after the answer is readable; an unmeasured, stale or collision publish calls none', () => {
+    const cell = new FleetIdentityCell();
+    const seen: (string | null)[] = [];
+    cell.onKnown(() => { const now = cell.current(); seen.push(now.kind === 'known' ? now.nodeId : null); });
+    const e = cell.invalidate('awaiting-inventory');
+    cell.publish(e, { kind: 'unmeasured', why: 'node-id-absent' });
+    cell.publish(e - 1, KNOWN_U2);
+    cell.publish(e, { kind: 'collision', why: 'node-id-keys-another-live-row' });
+    expect(seen).toEqual([]);
+    cell.publish(e, KNOWN_U1);
+    expect(seen).toEqual([U1]);
+  });
+
+  it('a listener that throws neither stops the publish nor the next listener', () => {
+    const cell = new FleetIdentityCell();
+    let called = 0;
+    cell.onKnown(() => { throw new Error('boom'); });
+    cell.onKnown(() => { called++; });
+    expect(cell.publish(cell.epochNow(), KNOWN_U1)).toEqual({ kind: 'published' });
+    expect(called).toBe(1);
+  });
+});

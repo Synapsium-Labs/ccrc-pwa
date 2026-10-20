@@ -11,6 +11,9 @@ import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession as baseSession } from './fleetFixture';
 import { SessionScreen } from '../src/screens/SessionScreen';
+// W2 Task S2d: the session menu's items and the model/effort chips are command doors, run by the one layer
+// `app.tsx` mounts above the screen; a case that drives them mounts it beside, as the app does.
+import { CommandLayer } from '../src/command/CommandLayer';
 import { ToastHost } from '@ccrc/ui';
 import { createSessionStore } from '../src/stores/session';
 import * as apiModule from '../src/lib/api';
@@ -62,7 +65,7 @@ const renderScreen = (patch: Partial<FleetSession> = {}, status: 'idle' | 'dead'
   stores.store = store;
   const fleet = createFleetStore();
   act(() => { fleet.setState({ roster: TEST_ROSTER, conn: 'open', sessions: [fleetSession(patch)] }); });
-  render(<><SessionScreen id={ID} store={store} fleet={fleet} /><ToastHost /></>);
+  render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={ID} store={store} fleet={fleet} /><ToastHost /></>);
   act(() => { store.setState({ uuid: 'u1', status }); });
   return { store, fleet };
 };
@@ -371,7 +374,7 @@ describe('a deep link whose session the fleet has not reported yet', () => {
     const store = createSessionStore(id, { makeSocket: fakeSocket, api: { prompt } });
     const fleet = createFleetStore();
     act(() => { fleet.setState({ roster: TEST_ROSTER, conn: 'open', sessions: [] }); });
-    render(<><SessionScreen id={id} store={store} fleet={fleet} /><ToastHost /></>);
+    render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={id} store={store} fleet={fleet} /><ToastHost /></>);
     act(() => { store.setState({ uuid: 'u1', status: 'idle' }); });
     return { store, fleet };
   };
@@ -470,7 +473,7 @@ describe('the session header knows what the card knows (D-5545)', () => {
         runs: [run],
       } as never);
     });
-    render(<><SessionScreen id={ID} store={store} fleet={fleet} /><ToastHost /></>);
+    render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={ID} store={store} fleet={fleet} /><ToastHost /></>);
     act(() => { store.setState({ uuid: 'u1', status: 'idle' }); });
     const toggle = screen.queryByRole('button', { name: /details/i });
     if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
