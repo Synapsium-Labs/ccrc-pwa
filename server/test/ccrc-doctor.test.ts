@@ -13028,8 +13028,9 @@ interface FixCodexCase {
   /** the check-only materialise per id: its `changed`, `refused`, or models-op's
    *  `roster-invalid` refusal of a roster two lanes share a port in; default false */
   registryChanged?: Record<string, boolean | 'refused' | 'roster-invalid'>;
-  /** the committing materialise per id; default `wrote` */
-  commit?: Record<string, 'wrote' | 'no-registry' | 'refused' | 'roster-invalid'>;
+  /** the committing materialise per id; default `wrote`. `lock-busy` and `lock-unwritable` are the lane-files
+   *  lock's own refusal, which `_models_node_locked` prints in models-op's refusal shape without running node. */
+  commit?: Record<string, 'wrote' | 'no-registry' | 'refused' | 'roster-invalid' | 'lock-busy' | 'lock-unwritable'>;
   /** `_models_litellm_lane_held` per id; default `same` (changed:false) */
   litellm?: Record<string, 'same' | 'rendered' | 'restarted' | 'foreign' | 'roster-invalid'>;
   /** `ccgpt-runtime check` before a build, `build`, and `check` after one; default 0 */
@@ -13181,7 +13182,9 @@ function runFixCodex(c: FixCodexCase = {}): {
           ? `    ${id}) echo '{"ok":false,"error":"settings-unwritable","detail":"fixture: the env block cannot be rendered"}'; return 1 ;;`
           : v === 'roster-invalid'
             ? `    ${id}) echo '${SHARED_PORT_REFUSAL}'; return 1 ;;`
-            : `    ${id}) ${MAT(id, `,"wrote":{"lane":"lane.json of ${id}"}`)}; return 0 ;;`)),
+            : v === 'lock-busy' || v === 'lock-unwritable'
+              ? `    ${id}) echo '{"ok":false,"error":"${v}","detail":"fixture: the lane-files lock of ${id} was not taken. Fix it, then re-run. Nothing was written."}'; return 1 ;;`
+              : `    ${id}) ${MAT(id, `,"wrote":{"lane":"lane.json of ${id}"}`)}; return 0 ;;`)),
       '  esac',
       '  echo "{\\"ok\\":true,\\"op\\":\\"materialise\\",\\"id\\":\\"$id\\",\\"wrote\\":{\\"lane\\":\\"lane.json of $id\\"}}"',
       '}',
@@ -13460,6 +13463,14 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
     expect(none.fix).toContain('FIX codex: codex-a: lane.json NOT rendered — this lane has no class registry, and lane.json is rendered from it; run: ccrc models codex-a init codex');
     const refused = runFixCodex({ laneState: { 'codex-a': 'stale' }, commit: { 'codex-a': 'refused' } });
     expect(refused.fix).toContain('FIX codex: codex-a: lane.json NOT rendered — deploy/models-op.mjs answered settings-unwritable: fixture: the env block cannot be rendered');
+  });
+
+  it("a lane-files lock that refuses is said as the lock's, never as models-op's answer: node never ran, and no lane file was written", () => {
+    for (const [word, why] of [['lock-busy', 'another writer holds'], ['lock-unwritable', 'ccrc refuses the lock path of']] as const) {
+      const r = runFixCodex({ laneState: { 'codex-a': 'stale' }, commit: { 'codex-a': word } });
+      expect(r.fix, word).toContain(`FIX codex: codex-a: lane.json NOT rendered, and no lane file written — ${why} this lane's model files (${word}), so deploy/models-op.mjs never ran: fixture: the lane-files lock of codex-a was not taken. Fix it, then re-run.`);
+      expect(r.fix.join('\n'), word).not.toMatch(/answered lock-|Nothing was written/);
+    }
   });
 
   it('litellm.yaml goes through the codex arm\'s body, holding the lane lock, and what it did is said', () => {

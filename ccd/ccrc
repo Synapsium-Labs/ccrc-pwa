@@ -1310,15 +1310,15 @@ _models_answer() {
 
 # ── the lane-files lock (auto-advance spec D21) ─────────────────────────────────────────────────────────────
 # `_models_lock <id>` — ONE exclusive `flock` per lane on `_models_lock_path <id>`, held by THIS shell until
-# `_models_unlock` or exit. EVERY write of a lane's model files takes it: the class registry, the advance file, the
-# windows file and every file `materialise` renders. Each writer reads, decides and writes, and two interleaved
-# would lose one's change; the automatic advance re-checks the hold and the pin under it, which is how a Hold
-# tapped during its canary wins. Reached only through `_models_answer_locked` (a verb arm) and
-# `_models_node_locked` (a `$( … )` capture site); `ccrc-models-lock.test.ts` forbids a bare `_models_answer` or
-# `_models_node` call of any op in MODELS_WRITE_OPS.
-# - WHAT IT DOES NOT COVER: the catalogue (`<id>.json`). `ccrc-models-probe` replaces it whole, by a rename,
-#   outside this lock, so a writer under the lock reads one complete catalogue, old or new, never a torn one; and
-#   a decision the automatic advance takes from it is taken again under the lock (its commit re-reads it, W2).
+# `_models_unlock` or exit. EVERY write models-op makes to a lane's model files takes it, whichever caller ran it:
+# the class registry, the advance file, the windows file and every file `materialise` renders. A writer reads,
+# decides and writes, and two interleaved would lose one's change; the automatic advance re-checks the hold and the
+# pin under it, so a Hold tapped during its canary wins. Reached only through `_models_answer_locked` (a verb arm)
+# and `_models_node_locked` (a `$( … )` capture site); `ccrc-models-lock.test.ts` forbids a bare write-op call.
+# - WHAT IT DOES NOT COVER: the catalogue (`<id>.json`), renamed whole by `ccrc-models-probe` outside it, so a
+#   locked writer reads one whole catalogue (and W2's commit re-reads it under the lock); and the lane home's
+#   settings.json: `materialise` merges its env block, but `install-session-hooks.sh` (hooks) and `ccrc account`
+#   (its settings merge) also rewrite that file outside this lock, an older race that the lock does not close.
 # - WHERE (D-5187): `~/.ccrc/locks/models-<id>.lock`, never under `~/.ccrc/models/`: account
 #   removal lists `~/.ccrc/models/<id>.*` as leftovers, `rm` could not unlink a lock another writer may hold, and
 #   tests pin that directory's listing. The file is made 0600 and NEVER unlinked; `ccrc uninstall --purge` takes
@@ -11237,7 +11237,7 @@ _codex_lane_json_ensure() {   # <id>
   if [ "$rc" -ne 0 ] || ! printf '%s' "$ans" | jq -e '.ok == true' >/dev/null 2>&1; then
     err="$(printf '%s' "$ans" | jq -r '.error // empty' 2>/dev/null)"
     detail="$(printf '%s' "$ans" | jq -r '.detail // empty' 2>/dev/null)"
-    _codex_say lane-unwritable "'ccrc models' could not render $(_codex_lane_dir "$CX_ID")/lane.json (models-op exited $rc${err:+: $err}${detail:+ — $detail}). lane.json was not written; models-op renders the lane's other model files first, so those may already be new."
+    case "$err" in lock-busy|lock-unwritable) _codex_say "$err" "$(_codex_lane_dir "$CX_ID")/lane.json was not rendered, and no lane file was written: $([ "$err" = lock-busy ] && printf 'another writer holds' || printf 'ccrc refuses the lock path of') lane $CX_ID's model files, so models-op never ran. ${detail% Nothing was written.}" ;; *) _codex_say lane-unwritable "'ccrc models' could not render $(_codex_lane_dir "$CX_ID")/lane.json (models-op exited $rc${err:+: $err}${detail:+ — $detail}). lane.json was not written; models-op renders the lane's other model files first, so those may already be new." ;; esac   # a lane-files lock refusal is the lock's: node never ran
     return 1
   fi
   if printf '%s' "$ans" | jq -e '.wrote == null' >/dev/null 2>&1; then

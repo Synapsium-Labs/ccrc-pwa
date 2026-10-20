@@ -7330,6 +7330,10 @@ describe('the lane-files lock: one path outside ~/.ccrc/models, and one list of 
     const rows = [...block.matchAll(/^ {2}'?([a-z][a-z-]*)'?: \{([^\n]*)\},$/gm)]
       .map((m) => ({ op: m[1]!, writes: /\bwrites: (true|false)\b/.exec(m[2]!)?.[1] ?? null }));
     expect(rows.length, 'the OPS scan found too few rows to be reading the table').toBeGreaterThanOrEqual(12);
+    // Every row is ONE line, so the scan above sees it: a row written over several lines would be invisible to it in
+    // both directions, and a new writing op left out of MODELS_WRITE_OPS would run unlocked with this case green.
+    const starts = [...block.matchAll(/^ {2}'?([a-z][a-z-]*)'?: \{/gm)].map((m) => m[1]!);
+    expect(starts, 'an OPS row written over several lines: write each row on one line').toEqual(rows.map((r) => r.op));
     expect(rows.filter((r) => r.writes === null).map((r) => r.op), 'an OPS row with no writes flag').toEqual([]);
     expect(bash![1]!.split(' ').filter(Boolean).sort())
       .toEqual(rows.filter((r) => r.writes === 'true').map((r) => r.op).sort());

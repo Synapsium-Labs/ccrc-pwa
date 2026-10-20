@@ -6930,7 +6930,7 @@ _fix_codex() {
           else
             err="$(printf '%s' "$ans" | jq -r '.error // empty' 2>/dev/null)"
             detail="$(printf '%s' "$ans" | jq -r '.detail // empty' 2>/dev/null)"
-            echo "FIX codex: $id: lane.json NOT rendered — deploy/models-op.mjs answered ${err:-exit $rc}${detail:+: $detail}"
+            case "$err" in lock-busy|lock-unwritable) echo "FIX codex: $id: lane.json NOT rendered, and no lane file written — $([ "$err" = lock-busy ] && printf 'another writer holds' || printf 'ccrc refuses the lock path of') this lane's model files ($err), so deploy/models-op.mjs never ran: ${detail% Nothing was written.}" ;; *) echo "FIX codex: $id: lane.json NOT rendered — deploy/models-op.mjs answered ${err:-exit $rc}${detail:+: $detail}" ;; esac
           fi
         fi
         # Its own subshell: the codex arm's body ends a refusal with

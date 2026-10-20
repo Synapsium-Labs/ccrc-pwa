@@ -407,7 +407,9 @@ describe('the wait: CCRC_MODELS_LOCK_S whole seconds from 1 to 300, else 20 (D21
     const src = fs.readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
     const bound = /^MODELS_NODE_BOUND_S=(\d+)$/m.exec(src);
     const grace = /^ {2}\[ "\$grace" -gt (\d+) \] && grace=\1$/m.exec(src);   // _plat_timeout's kill-grace ceiling
-    const wait = /^ {2}bound="\$\{CCRC_MODELS_LOCK_S:-(\d+)\}"$/m.exec(src);   // _models_lock's default wait
+    // _models_lock's default wait, in either spelling: W1's `bound=` in `_models_lock`, or W2 Task 11's `local s=`
+    // in the `_models_lock_secs` it moves the clamp into.
+    const wait = /^ {2}(?:bound|local s)="\$\{CCRC_MODELS_LOCK_S:-(\d+)\}"$/m.exec(src);
     expect(bound, 'ccd/ccrc has no file-scope MODELS_NODE_BOUND_S').not.toBeNull();
     expect(grace, "_plat_timeout has no kill-grace ceiling").not.toBeNull();
     expect(wait, "_models_lock has no default wait").not.toBeNull();
@@ -554,22 +556,44 @@ describe.skipIf(!HAVE_FLOCK)('the capture sites take it too (D21)', () => {
     expect((oneObject(free)['refreshed'] as Record<string, unknown>[])[0]!['ok']).toBe(true);
   }, 60_000);
 
-  it('_codex_lane_json_ensure: held, it is lane-unwritable naming lock-busy and writes no lane.json', async () => {
+  it("_codex_lane_json_ensure: held, it refuses lock-busy as the lock's, never as a models-op failure, and writes no lane.json", async () => {
     const h = box();
     plantLane(h, 'lane-b');
     const laneJson = join(h, '.ccrc', 'codex', 'lane-b', 'lane.json');
     fs.rmSync(laneJson);
+    const before = modelsState(h);
     const holder = await holdLock(h, 'lane-b');
     const busy = lib(h, '_codex_lane_json_ensure lane-b; echo "rc=$?"', { CCRC_MODELS_LOCK_S: '1' });
     await release(holder);
     expect(busy.stdout, busy.stderr).toBe('rc=1\n');
-    expect(busy.stderr).toMatch(/^ccrc codex: lane-unwritable: .*lock-busy/m);
+    // Node never ran: no "models-op exited", and no "those may already be new" beside the lock's "Nothing was written".
+    expect(busy.stderr).toMatch(/^ccrc codex: lock-busy: \S*\/lane\.json was not rendered, and no lane file was written: another writer holds lane lane-b's model files, so models-op never ran\. another writer has held lane lane-b's model files /m);
+    expect(busy.stderr).not.toMatch(/models-op exited|may already be new|Nothing was written/);
     expect(fs.existsSync(laneJson)).toBe(false);
+    expect(modelsState(h)).toEqual(before);
     // CONTROL: free, it renders lane.json.
     const free = lib(h, '_codex_lane_json_ensure lane-b; echo "rc=$?"');
     expect(free.stdout, free.stderr).toBe('rc=0\n');
     expect(fs.existsSync(laneJson)).toBe(true);
   }, 60_000);
+
+  it("_codex_lane_json_ensure: a lock path it refuses is lock-unwritable, said as the lock's, and writes no lane.json", () => {
+    const h = box();
+    plantLane(h, 'lane-b');
+    const laneJson = join(h, '.ccrc', 'codex', 'lane-b', 'lane.json');
+    fs.rmSync(laneJson);
+    const locks = join(h, '.ccrc', 'locks');
+    fs.rmSync(locks, { recursive: true, force: true });
+    fs.writeFileSync(locks, 'not a directory\n');   // ~/.ccrc/locks as a regular file: no lock path can be made
+    const before = modelsState(h);
+    const r = lib(h, '_codex_lane_json_ensure lane-b; echo "rc=$?"');
+    expect(r.stdout, r.stderr).toBe('rc=1\n');
+    expect(r.stderr).toMatch(/^ccrc codex: lock-unwritable: \S*\/lane\.json was not rendered, and no lane file was written: ccrc refuses the lock path of lane lane-b's model files, so models-op never ran\. /m);
+    expect(r.stderr).not.toMatch(/models-op exited|may already be new|Nothing was written/);
+    expect(fs.existsSync(laneJson)).toBe(false);
+    expect(modelsState(h)).toEqual(before);
+    expect(fs.readFileSync(locks, 'utf8')).toBe('not a directory\n');
+  });
 });
 
 // The capture sites run unattended (the hourly refresh, `ccrc codex start`, `ccrc doctor --fix`), so their node is

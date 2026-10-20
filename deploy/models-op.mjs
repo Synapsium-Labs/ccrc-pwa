@@ -568,8 +568,12 @@ function settleHandMove(id, after) {
 }
 
 /** `advance-backfill` (auto-advance spec §2.1): give a codex-kind lane whose registry probe is `codex` its advance
- *  file when it has none (`backfillOnce`), and never rewrite one that exists. Any other lane answers `created:
- *  false` with why, never a refusal, because the hourly refresh asks every lane (D-5198). */
+ *  file when it has none (`backfillOnce`), and never rewrite one that exists. A lane with a class registry that is
+ *  not codex-kind, or whose registry probe is not `codex`, answers `created: false` with why (`lane-not-codex-kind`,
+ *  `probe-not-codex`), never a refusal (D-5198); so does a file it cannot read, with the read's word. An Anthropic
+ *  lane and a lane with no class registry never reach here: `main`'s gates refuse them first (`anthropic-lane`,
+ *  `no-registry`), and the hourly step (W2) asks neither: only a lane whose probe is `codex` and whose probe,
+ *  materialise and LiteLLM render all succeeded. */
 function backfillOp(a, account, registry) {
   let why = null;
   if (!(isObj(account.exec) && account.exec.kind === 'codex')) why = 'lane-not-codex-kind';
