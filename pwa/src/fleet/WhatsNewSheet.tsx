@@ -19,7 +19,8 @@
 // THE FOOTER is the banner's own two moves: Update all — the same move sheet,
 // opened by the banner once this sheet has closed, and disabled with the same
 // reason line while a node halts the fleet — and Close. It is the Sheet's
-// pinned footer (D-5932): however many releases scroll, both stay in reach.
+// pinned footer (D-5932): however many releases scroll, both stay in reach,
+// and the reason line sits in it, straight above Update all (D-6031).
 //
 // ≥900 IT IS A CENTRED DIALOG (the skins rules' desktop arm for a sheet):
 // `.whats-new-panel` in fleet.css re-places the shared Sheet's panel — layout
@@ -82,7 +83,9 @@ export function WhatsNewSheet({ open, view, tag, halted, onClose, onUpdateAll }:
       eyebrow={count}
       className="whats-new-panel"
       // Pinned (D-5932): with several releases the notes scroll and Update all stays in reach.
-      footer={
+      // The halted reason rides above the button it explains (D-6031): in the body it scrolled away from it.
+      footer={<>
+        {halted !== null && <p className={`${SHEET_LINE} mb-3`} id={haltedId}>{halted}</p>}
         <div className={QC_ACTIONS}>
           <Button
             variant="primary"
@@ -94,13 +97,12 @@ export function WhatsNewSheet({ open, view, tag, halted, onClose, onUpdateAll }:
           </Button>
           <Button variant="ghost" onClick={onClose}>Close</Button>
         </div>
-      }
+      </>}
     >
       <div className="whats-new-sheet grid gap-4">
         <ol className={`${RESET_LIST} gap-5`} aria-label="Releases, newest first">
           {releases.map((r) => <ReleaseBlock key={r.tag} release={r} view={view} />)}
         </ol>
-        {halted !== null && <p className={SHEET_LINE} id={haltedId}>{halted}</p>}
       </div>
     </Sheet>
   );
