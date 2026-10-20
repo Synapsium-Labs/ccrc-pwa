@@ -3645,6 +3645,25 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
       expect(rec.draft.labeller!.fields!.boundaries!.value).toBe('v2');
       expect(rec.final.labeller!.fields!.boundaries!.value).toBe('v2');
     });
+
+    it('each side of the or test is pinned alone: a digit or _ before it, _ or a non-ASCII letter after it, is not an or (TRUE)', () => {
+      // The orçamento case writes U+00E7 (c with cedilla) as the single literal character (checked with od).
+      expect(cmd(F, `${F} 2or x`), 'a digit before it').toBe(true);
+      expect(cmd(F, `${F} x_or y`), 'an underscore before it').toBe(true);
+      expect(cmd(F, `${F} or_x`), 'an underscore after it').toBe(true);
+      expect(cmd(F, `${F} orçamento`), 'a non-ASCII letter after it').toBe(true);
+    });
+
+    it('CONTROLS for the spaced slash: a slash with no space before and after it stays correct (TRUE)', () => {
+      expect(cmd(F, `${F} in server/`), 'a trailing slash').toBe(true);
+      expect(cmd(F, `${F} from /r`), 'a leading slash, a space before it only').toBe(true);
+    });
+
+    it('any Unicode dash glued to a letter is an extra flag, the en dash and U+2010 among them (FALSE)', () => {
+      // U+2013 en dash and U+2010 hyphen, each written as the single literal character (checked with od).
+      expect(cmd(F, `${F} –watch`), 'U+2013 en dash').toBe(false);
+      expect(cmd(F, `${F} ‐v`), 'U+2010 hyphen').toBe(false);
+    });
   });
 });
 

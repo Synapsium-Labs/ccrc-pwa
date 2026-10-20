@@ -1322,7 +1322,8 @@ const cmdRightOk = (t, j) => j === t.length || !CMD_EDGE.test(t[j]) || (t[j] ===
  *   command. Costs, as they now stand. Too strict for prose holding a comma, `;`, `|`, `>`, `<`, `&`, a second
  *   code span (`npm run test` (in `server/`)), a negative number or a typographic minus before one,
  *   `or` as a hyphenated word or path segment (`or-tools`, `/or/`, `either/or`, `and/or`), a dash glued to the
- *   next word right after F (unspaced em-dash prose), or a spaced slash (`1 / 2`). Too lenient for an extra
+ *   next word right after F (unspaced em-dash prose), a spaced slash (`1 / 2`), or a letter written with a combining
+ *   mark (decomposed, NFD) beside `or`, since labelCorrect does not normalise to NFC. Too lenient for an extra
  *   operand, a `sudo` or `VAR=` prefix, and a second command before F separated only by a space, which cannot be
  *   told from an extra operand. The error kind keeps W2-D63's test, ` or `/` OR ` alone, so `(or`, `or:` and a
  *   dash before `or` stay lenient there.
