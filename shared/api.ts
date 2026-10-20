@@ -8289,17 +8289,17 @@ export interface LifecycleMeas {
    *  `meas.bytes` precedent) — never a fabricated 0. A `null` VALUE here means
    *  the key was absent: an act that is not a reclaim. */
   readonly residueBytes: string | null;
-  /** The per-session temp root (`$HOME/.cc-tmp/<id>`) a `reclaim` or `expire`
-   *  tail did not prove gone (child reclamation wave 6, spec §5.6): `in-use`
-   *  (a process of this uid still used it after the tail's bounded wait),
-   *  `unmeasured` (whether one did could not be measured, or a removal failed
-   *  part-way or was undone: kept means NOT PROVEN GONE, not untouched) or
-   *  `refused` (the helper refused it). The act COMPLETED, so this rides the
-   *  `done` row and a purge failure's; `detail` says why. Null: it went, or another act. */
+  /** The per-session temp root (`$HOME/.cc-tmp/<id>`) a `reclaim` or `expire` tail did not
+   *  prove gone (child reclamation wave 6, spec §5.6): `in-use` (a process of this uid still used
+   *  it after the tail's bounded wait), `unmeasured` (whether one did could not be measured, or a
+   *  removal failed part-way or was undone: kept means NOT PROVEN GONE, not untouched) or `refused`
+   *  (the helper refused it). The act COMPLETED, so this rides the `done` row and a purge failure's;
+   *  `detail` says why. Null: it went, or another act. */
   readonly tmpRootKept: string | null;
   /** The same for the session's clips directory (`$HOME/.cc-clips/<id>`):
    *  `refused` or `unmeasured` only — nothing waits on a clips directory's users. */
   readonly clipsKept: string | null;
+  /** A `collect` `done`'s leaf (path-identity spec §3.4): see `COLLECT_LEAF_END_WORDS`, at the foot. */ readonly leaf: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -8321,7 +8321,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
   from: true, dropped: true, registered: true, state: true, bytes: true,
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
-  unremoved: true, childOf: true, wip: true, residueBytes: true, tmpRootKept: true, clipsKept: true,
+  unremoved: true, childOf: true, wip: true, residueBytes: true, tmpRootKept: true, clipsKept: true, leaf: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -10390,9 +10390,9 @@ export function leafKeptWord(v: unknown): LeafKeptWord {
 export const REGISTRY_ID_MAX_CHARS = 255;
 
 /** THE ONE PREDICATE of a registry id (spec 2026-10-12 §2.3): length first, then the session-id shape, then no leading `.` or `-`.
- *  - The leading `-` is a SAFETY rule, not defence in depth (spec 2026-10-12 §2.1). ccd's verbs read their decision flags from any
- *    position, `--session`'s value included, and every such flag begins `--`. An id of `--actor` is read as a flag,
- *    and the verb binds another token as its id. The shape refuses `=`, so no `--flag=value` can be an id either.
+ *  - The leading `-` is a SAFETY rule (spec 2026-10-12 §2.1). A ccd older than path-identity W1b read its decision flags from any
+ *    position, `--session`'s value included, and every such flag begins `--`; since W1b each identity key takes its value whole,
+ *    so this rule is the server's half of the same refusal and closes the redirect on an older ccd too. The shape refuses `=`.
  *  - The leading `.` keeps `.`, `..` and a hidden name out, as ccd's own `_ws_tmproot_id_ok` does.
  *  - It is the rule for an id the server composes into an id-taking argv, whether the id came from a request, a
  *    stored run row, a registry file name or an executor's job.
@@ -11946,4 +11946,16 @@ export const POOLS_ENFORCEMENTS: readonly PoolsEnforcement[] =
   Object.keys(POOLS_ENFORCEMENT_MAP) as PoolsEnforcement[];
 export function isPoolsEnforcement(v: unknown): v is PoolsEnforcement {
   return typeof v === 'string' && (POOLS_ENFORCEMENTS as readonly string[]).includes(v);
+}
+
+/** What a `collect` `done` journals of the leaf it acted on (path-identity spec §3.4, TR1 A): `removed` on
+ *  `_ws_collect_finish`'s line (the slot's leaf proven gone after this collection removed it), `absent` on the
+ *  witness-only arm's (no leaf stood at the witness's path). Spelled ONCE, as a total table's keys. Not the audit
+ *  document's `collect.leaf` (`present`/`absent`), which is another wire. APPENDED at the foot, never inserted above:
+ *  README and the frozen spec and plan corpus cite this file by line. */
+export type CollectLeafEndWord = 'removed' | 'absent';
+const COLLECT_LEAF_END_TABLE: Readonly<Record<CollectLeafEndWord, true>> = { removed: true, absent: true };
+export const COLLECT_LEAF_END_WORDS: readonly CollectLeafEndWord[] = Object.keys(COLLECT_LEAF_END_TABLE) as CollectLeafEndWord[];
+export function isCollectLeafEndWord(v: unknown): v is CollectLeafEndWord {
+  return typeof v === 'string' && (COLLECT_LEAF_END_WORDS as readonly string[]).includes(v);
 }

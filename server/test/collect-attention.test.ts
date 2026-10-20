@@ -403,7 +403,7 @@ describe('the merge: reclaim over collector over leaf-kept, with second clauses 
   const col = (sessionId: string, word: string, runId: number | null = 41): ChildReclaimCollectAttention =>
     ({ kind: 'collect', sessionId, runId, word, sentence: `c ${sessionId}.` });
   const leaf = (sessionId: string, clipsClause: string | null): ChildReclaimLeafKept => ({
-    item: { kind: 'leaf-kept', sessionId, runId: 41, sentence: `s ${sessionId}`, at: 1 }, source: 1, detail: null, clipsClause });
+    item: { kind: 'leaf-kept', sessionId, runId: 41, sentence: `s ${sessionId}`, at: 1 }, source: 1, detail: null, clipsClause, foundNothing: false });
   const input = (perId: readonly ChildReclaimCollectAttention[], box: readonly ChildReclaimCollectAttention[] = []): ChildReclaimCollectInput =>
     ({ perId, manyLead: Object.fromEntries(perId.map((c) => [c.word, `lead ${c.word}`])), box });
   const term: ChildReclaimAttention = { kind: 'terminal', sessionId: 'demo-c', runId: 1, token: 'tree-unreadable', sentence: 't.', at: 1 };

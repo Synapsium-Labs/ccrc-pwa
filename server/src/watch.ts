@@ -5054,6 +5054,7 @@ export class FleetWatcher {
       runCcd: this.collectRunCcd(id), fleetState: this.deps.fleetState, lane: this.collectPortFor(coord, id),
     }, id))
       .then((answer) => {
+        if (answer.kind === 'id-refused') return;
         if (answer.kind === 'not-asked') { this.collectClearPairs(); return; }
         this.collectFoldAudit(coord, id, pass, answer.audit.value, answer.audit.arrived, answer.audit.composed);
       }, (err: unknown) => {
