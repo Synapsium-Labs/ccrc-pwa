@@ -380,6 +380,9 @@ describe('build guard D-6064: a write to the build directory or the launcher, in
     'chmod +x ~/.local/bin/claude', 'touch ~/.local/share/claude/versions/2.1.400',
     'mkdir -p ~/.local/share/claude/versions/2.1.400', 'unlink ~/.local/bin/claude',
     'echo x 2> ~/.local/bin/claude', 'echo x >| ~/.local/bin/claude',
+    // A redirection whose target IS the tail: the head is tested on the text before the target, where `>` ends it.
+    'echo x > .local/bin/claude', 'cd ~/.local/bin && echo x > claude', 'cd ~ && echo x > .local/bin/claude',
+    'D=~/.local/share/claude/versions; echo x > $D/2.1.400',
     'find ~/.local/share/claude/versions -mtime +7 -delete', 'ls -d ~/.local/share/claude/versions/2.1.2* | xargs rm -rf',
     'python3 -c "import shutil; shutil.rmtree(\'/home/u/.local/share/claude/versions/2.1.2\')"',
     'node -e "require(\'fs\').writeFileSync(\'/home/u/.local/share/claude/versions/x\',\'\')"',

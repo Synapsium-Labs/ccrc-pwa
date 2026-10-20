@@ -4481,7 +4481,7 @@ def BUILDX: "(?:" + LOC + "share" + SEPP + "claude" + SEPP + "versions" + BT
   + "|" + LOC + "share" + SEPP + "claude(?:" + SEPP + GLOBW + "[*?\\[{]" + GLOBW + ")?/{0,8}(?=$|[" + WS + META + "])"
   + "|" + LOC + "bin" + SEPP + "claude" + BT + ")";
 def SEG: "\n|;|(?<!>)&(?!>)|(?<!>)\\|";
-def RDR: "(?>&>>?|>(?!&[0-9-])(?:>|\\||&)?)(?!" + SP + "{0,8}(?:$|/dev/null" + NW + "))";
+def RDR: "(?>&>>?|>(?!&[0-9-])(?:>|\\||&)?)(?!" + SP + "{0,8}/dev/null" + NW + ")";
 def BWR: "(?:" + RDR + "|" + NB + "tee" + NA + "|" + NB + "sed" + SP + "+" + FLAGS + "-i|" + NB + "perl" + SP + "+-" + NS + "*i|" + NB
   + "(?:mv|cp|ln|truncate|rm|install|dd|rsync|tar|unzip|chmod|chown|touch|mkdir|curl|wget|unlink|shred|patch)" + NA + ")";
 def hb1($head; $tail): ([match("^[\\s\\S]*(?=" + $tail + ")")] | if length == 0 then -1 else .[0].length end) as $last
