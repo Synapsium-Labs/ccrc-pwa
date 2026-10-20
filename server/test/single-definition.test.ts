@@ -4434,13 +4434,14 @@ describe('worker stall watch wave 2: the three new operator-switch markers have 
   // Wave 1's describe above, for the three markers wave 2 adds. It is appended, never merged into that one, because
   // this file is cited by line. SUBSTRING CAVEAT: both halves match with `includes`, and `mail-gate-busy` is a
   // substring of `mail-gate-busy-shadow`, so the `mail-gate-busy` row counts every holder of EITHER spelling: a
-  // superset. That is sound only while both are spelled in `turnidle.ts` alone (planning departure
-  // `gate-markers-spelled-in-turnidle-only` (D-3607)), and the CONTROL row states the superset so nobody reads the row as more.
+  // superset. That is sound only while both are spelled in ONE file (planning departure
+  // `gate-markers-spelled-in-turnidle-only` (D-3607); that file is `shared/switches.ts` since D-5855, which
+  // `turnidle.ts` re-exports), and the CONTROL row states the superset so nobody reads the row as more.
   // `stall-watch-live` is not a substring of `stall-watch-w2-live`, so wave 1's row is untouched by this one.
   const MARKERS: [string, string][] = [
     ['stall-watch-w2-live', 'server/src/coord/stall.ts'],
-    ['mail-gate-busy-shadow', 'server/src/turnidle.ts'],
-    ['mail-gate-busy', 'server/src/turnidle.ts'],
+    ['mail-gate-busy-shadow', 'shared/switches.ts'],
+    ['mail-gate-busy', 'shared/switches.ts'],
   ];
 
   it('CONTROL: the match is a substring — a line spelling mail-gate-busy-shadow also holds mail-gate-busy, never the reverse', async () => {
