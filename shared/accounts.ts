@@ -175,7 +175,7 @@ export function stateWordFor(i: StateWordInput): AccountStateAnswer {
     const left = st.mintedAt + MINTED_TOKEN_LIFETIME_MS - now;
     if (left < MINTED_TOKEN_EXPIRING_MS) {
       const months = Math.floor((now - st.mintedAt) / (DAY_MS * 365.25 / 12));
-      const weeks = Math.round(left / (7 * DAY_MS));
+      const weeks = Math.round(left / DAY_MS / 7); // a unit (days to weeks), not a seven-day quantity
       const leftLine = left <= 0 ? 'past its estimated year'
         : weeks >= 1 ? `about ${plural(weeks, 'week')} left` : `about ${plural(Math.ceil(left / DAY_MS), 'day')} left`;
       return { word: 'expiring', source: `token minted ${plural(months, 'month')} ago · ${leftLine} · estimated`, at: st.mintedAt };

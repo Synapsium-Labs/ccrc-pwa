@@ -381,16 +381,19 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(HOLDERS_MESSAGE, 'a missing holder').toMatch(/missing[^]*(moved|changed value)/);
   });
 
-  it('the holders across shared, server/src, pwa/src and agent/src are exactly the five separate seven-day quantities', () => {
-    // A weekly interval anywhere else must import the one in shared/box-token.ts. These five are separate
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the six separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These six are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
     // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
     // (R81), and it does not import the token interval. The review-child ceiling (D-5942) is the separate quantity
-    // spec 2026-10-20-workspace-disk-and-registry-truth §2.6 chose: seven days, matching expiry's horizon.
+    // spec 2026-10-20-workspace-disk-and-registry-truth §2.6 chose: seven days, matching expiry's horizon. The
+    // accounts word's signed-in window (D-6058 (3)) is the accounts spec's own seven days since the last good check,
+    // a separate quantity that does not import the token interval.
     expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
       'server/src/childReclaimSweep.ts:REVIEW_CHILD_CEILING_MS',
       'server/src/coord/delegation-model.ts:DELEGATION_HEALTH_WINDOW_MS',
+      'shared/accounts.ts:SIGNED_IN_WITHIN_MS',
       'shared/api.ts:LEDGER_STALE_MS',
       'shared/box-token.ts:TOKEN_ROTATION_INTERVAL_MS',
     ]);
