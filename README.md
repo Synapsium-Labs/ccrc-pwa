@@ -3896,6 +3896,19 @@ finished runs wrote, once that run's programme has no open run and the child is
 otherwise eligible; and every place the PWA renders the reason.
 Every ccd reader tests `-e`, so an *unreadable* hold counts as held.
 
+**The affinity arm also waits for background work.** A session idle at its prompt can still have
+subagents or shells running in the background, and the restart a move makes kills them, so
+`_swap_idle_gate` (the tick's decision and `cmd_swap`'s re-run at the act, one gate) declines while the
+session's turn marker (`$REG/<id>.turn.json`) reads `done` with `bg` above 0 (`-1`, a Stop that listed
+nothing or a `/clear`, counts as unknown and waits too) and its last Stop is under `SWAP_BG_HOLD_MAX`
+(7200 s) old; past it, today's behaviour returns, so a count that never clears cannot keep a session off
+its home account for ever. A marker for another conversation's id, a `working` or `failed` marker, and no
+marker at all (an older hook) do not wait; a marker that is present and cannot be read, or is not the
+hook's line, waits the same bounded time counted from the file's mtime. `swap.log` says it once per
+episode, `swap-defer <id>: background work (bg=N kinds=…)`, and once more as `swap-defer-end` if the
+bound ran out. A limit, spend banner or lost sign-in is not an affinity move and still evacuates at once,
+and a manual swap is never held.
+
 `sweepMerged`, the lane that watches for a merged PR, ANNOUNCES and never acts:
 nothing in this server archives a workspace unasked. The hold therefore no
 longer gates a destruction — it picks the SENTENCE. A workspace that is
