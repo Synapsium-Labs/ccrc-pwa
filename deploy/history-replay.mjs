@@ -41,7 +41,8 @@ import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
  *  `wrapper-moved` stays for a measured mismatch). The last three are fix round 1's (D-5984, D-5985): `run-live` (a
  *  leftover `.part` whose writer is alive or unmeasured, or a `.pid` record that is not one), `out-in-use` (another
  *  driver holds the --out lock, or the lock file is not one) and `interrupted` (a SIGINT, SIGTERM or SIGHUP stopped
- *  the driver: no further spawn starts and no output file is written). */
+ *  the driver: no further spawn starts, and no run.json, step0a.json or probe.json is written; a run stopped in flight
+ *  is charged once, by its spend line). */
 export const DRIVER_REASONS = Object.freeze([
   'family-unlisted', 'family-recall-off',
   'quiz-unanswerable', 'quiz-sha-mismatch',
@@ -153,8 +154,10 @@ export function paneRefusal(env) {
 // registry holds and, after STOP_GRACE_MS, SIGKILL to whatever it STILL holds. The handler never exits the driver: the
 // interrupt surfaces as the `interrupted` refusal, through main's one stderr line and EXIT.REFUSED. A driver killed alone
 // (SIGKILL, the OOM killer) cannot run any of this; the `.pid` record each run leaves is what the next driver reads
-// (settleLeftover). Residuals, named: a grandchild that calls setsid itself escapes the group kill (and writes no `.part`),
-// and a driver killed between spawn() and its `.pid` record leaves a `.part` with no record, charged as D-5811 says.
+// (settleLeftover). Residuals, named: a grandchild that calls setsid itself escapes the group kill (and writes no `.part`);
+// a driver killed between spawn() and its `.pid` record leaves a `.part` with no record, charged as D-5811 says; and a
+// process in the run's group that ignores SIGTERM and holds no pipe to the driver can outlive its leader (no SIGKILL
+// follows the leader's close; it writes no `.part`, so no spend goes unseen).
 /** Every live child, keyed by its pid (which is its process-group id). A Map, not a Set of pids, so 'close' can tell its
  *  own entry from a newer child's: the kernel may hand a reaped child's pid to a sibling spawned before the old child's
  *  'close' fires, and the old 'close' must not drop that newer entry (D-5984). No test reaches this: the reuse window
@@ -185,10 +188,11 @@ function onStopSignal(sig) {
   setTimeout(() => { for (const pid of liveChildren.keys()) signalGroup(pid, 'SIGKILL'); }, STOP_GRACE_MS).unref();
 }
 
-/** Refuse `interrupted` while the stopping flag is set. Called before every spawn and before every output file a
- *  stopped subcommand would write, so nothing starts and nothing is recorded after a signal. */
+/** Refuse `interrupted` while the stopping flag is set. Called before every spawn and before every run.json, step0a.json
+ *  and probe.json a stopped subcommand would write, so nothing starts and no result is recorded after a signal (a run
+ *  stopped in flight is still charged once, by its spend line). */
 function refuseIfStopping() {
-  if (stopping !== null) refuse('interrupted', `${stopping} received; no further child starts and no output file is written`);
+  if (stopping !== null) refuse('interrupted', `${stopping} received; no further child starts, and no run.json, step0a.json or probe.json is written`);
 }
 
 /** `spawn` as a registered group leader: not unref'd, the caller's stdio. The registry drops the entry at 'close', and only
@@ -445,8 +449,9 @@ function secretsRefusal(p) {
 //     usage on each content-block event.
 // (c) The spend ledger (W2-D55). One canonical-JSON line per finished spawn, appended under --out. It is append-only
 //     and summed over EVERY line, never de-duplicated by name: a re-run's spend adds to the total, because both
-//     spawns spent. A finished job is never re-spawned, so the only double count is a run killed between its ledger
-//     line and its run.json, and over-counting is the safe direction for a budget. A ledger that cannot be read
+//     spawns spent. A finished job is never re-spawned, so a double count needs a kill inside one of three windows
+//     (the spend line to the rename; the rename to the run.json; a leftover's charge to its `.part`'s removal; D-5811,
+//     D-5984), and over-counting is the safe direction for a budget. A ledger that cannot be read
 //     whole fails closed as budget-exhausted 'ledger-unreadable', never as 0.
 
 /** The most code points of a tool_result a spawn's input carries (spec §10.2, reconstruction item 2). */
@@ -610,8 +615,8 @@ export function spendTokens(facts) {
 // The paths the driver reads or writes under a (reused) --out go through these, so a symlink, a FIFO or a directory
 // planted there refuses `out-refused` (or is read as the caller's own bad state) and never follows a link or blocks.
 // Reads: lstat, then open O_RDONLY|O_NOFOLLOW|O_NONBLOCK, fstat isFile, then a bounded read. Appends open
-// O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW. Every other write is a tmp file created exclusively (O_EXCL|O_NOFOLLOW) and a
-// rename. A failure to read, list, create or write at the sites below refuses `out-refused` with the path relative to
+// O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW. Every other write is an exclusive create (O_EXCL|O_NOFOLLOW): a tmp file and then a
+// rename or a link, or the `.part`, which the child writes in place. A failure to read, list, create or write at the sites below refuses `out-refused` with the path relative to
 // --out and a cause (`<rel> unreadable <code>`, `<rel> unwritable <code>`, or the type refusals): an --out holder can make
 // each happen, and a raw errno is not a W2 stop word. Covered: the reads and the claim walk (readPlain, lstatOrNull,
 // refuseLinkedDirs, leftoverNames); the appends (appendPlain); the creates and writes (createPlain, writePlain,
@@ -619,9 +624,9 @@ export function spendTokens(facts) {
 // launchRun; the lock's link, rename and put-back in takeLock; launchRun's `.part` rename). A removal that fails AFTER the
 // spend line leaves the `.part`, which the next driver charges again (an over-count). Not covered, each for a stated
 // reason: runChild's stop-path `.part` removal and its child-error removals (only a signal or a spawn failure reaches
-// them, and a refusal there would hide the error that got it there); the cleanups that run while a refusal is already in
-// flight, which use `dropQuietly` so a failed cleanup cannot replace that refusal (writePlain's tmp cleanups; takeLock's
-// stale and tmp removals; the claim's release). Kept as they are: prepareOut's marker WRITE (into the directory it just
+// them, and a refusal there would hide the error that got it there); the best-effort removals, which use `dropQuietly` so
+// that a failed removal never becomes the answer, either on a path that is already refusing or after the work is done
+// (writePlain's tmp cleanups; takeLock's stale and tmp removals; the claim's release). Kept as they are: prepareOut's marker WRITE (into the directory it just
 // made, 'wx' = O_EXCL), and the reads outside --out (/proc, the roster, the release stamp, the wrapper). The marker's
 // read, and HOME's limits row, go through readPlain.
 
@@ -696,12 +701,18 @@ function removePlain(out, rel) {
   }
 }
 
-/** Best-effort removal of a tmp file on a path that is already refusing: a failure here must not replace that refusal. */
-function dropQuietly(p) {
+/** Best-effort removal, for a removal whose failure must never become the answer: a tmp or stale file on a path that is
+ *  already refusing (writePlain's tmp cleanups, takeLock's refusals), and a file whose work is done (the released lock,
+ *  the tmp file in takeLock's `finally`, the stale file after a successful takeover). `tree` also removes a directory
+ *  with its contents (the run's cwd, D-5984).
+ *  @param {string} p  @param {boolean} [tree] */
+function dropQuietly(p, tree = false) {
   try {
-    rmSync(p, { force: true });
+    rmSync(p, { force: true, recursive: tree });
   } catch {
-    // the refusal in flight is the answer; a tmp left behind is replaced by the next create (createPlain replaceStale)
+    // the answer in flight (a refusal, or the finished work's result) stands. A tmp left behind is replaced by the next
+    // create (createPlain replaceStale); a stale file or a released lock left behind names a driver that is dead by the
+    // next start and is taken over; a cwd left behind is a directory under the temp directory, outside --out.
   }
 }
 
@@ -758,6 +769,21 @@ function createPlain(out, rel, mode, replaceStale) {
   }
 }
 
+/** Write `bytes` to the descriptor of an exclusively created tmp file and close it. A failed write (a full disk) closes the
+ *  descriptor, removes the tmp file quietly and refuses `out-refused` `<rel> unwritable <code>`, never a raw errno
+ *  (D-5986). `rel` is the name the refusal gives: the target's, or for the lock the tmp file's own.
+ *  @param {number} fd  @param {Buffer} bytes  @param {string} tmp the tmp file's path  @param {string} rel */
+function writeWhole(fd, bytes, tmp, rel) {
+  try {
+    writeAll(fd, bytes);
+  } catch (e) {
+    dropQuietly(tmp);
+    refuse('out-refused', `${rel} unwritable ${errCode(e)}`);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** Write `bytes` to `<out>/<rel>` whole: a target that exists and is not a regular file refuses `out-refused`; the bytes
  *  go to a tmp file `<rel>.tmp-<pid>` created exclusively, mode `mode`, then a rename, so no write follows a link.
  *  @param {string} out  @param {string} rel  @param {string | Buffer} bytes  @param {number} [mode] */
@@ -768,14 +794,7 @@ function writePlain(out, rel, bytes, mode = 0o600) {
   const tmpRel = `${rel}.tmp-${process.pid}`;
   const tmp = path.join(out, tmpRel);
   const fd = createPlain(out, tmpRel, mode, true);
-  try {
-    writeAll(fd, typeof bytes === 'string' ? Buffer.from(bytes, 'utf8') : bytes);
-  } catch (e) {
-    closeSync(fd);
-    dropQuietly(tmp);
-    refuse('out-refused', `${rel} unwritable ${errCode(e)}`);   // D-5986: a failed write (a full disk) is a refusal too
-  }
-  closeSync(fd);
+  writeWhole(fd, typeof bytes === 'string' ? Buffer.from(bytes, 'utf8') : bytes, tmp, rel);
   try {
     renameSync(tmp, p);
   } catch (e) {
@@ -900,8 +919,8 @@ export function spentSoFar(out) {
 // is never charged, removed or spawned again; a dead writer's `.part` is charged once and removed. The named residual
 // windows are a driver killed between spawn() and its `.pid` record (the `.part` has no record and is charged as D-5811
 // says, even if the child lives on), and a grandchild that calls setsid itself (it escapes the group kill and writes no
-// `.part`). The over-count windows are spend line to rename, rename to run.json, and a dead leftover's `.pid` removed
-// before its `.part`. A run whose run.json exists is never spawned again (W2-D53, W2-D55).
+// `.part`). The over-count windows are spend line to rename, rename to run.json, and a leftover's charge to its `.part`'s
+// removal (the `.pid` goes first, then the `.part`). A run whose run.json exists is never spawned again (W2-D53, W2-D55).
 // The child's LANG arrives as RunJob.lang, threaded from main's env: this section never reads process.env.
 
 /** The four ways a run is spawned: an arm run (with the CCRC_RECALL_* values), the question writer, the judge,
@@ -1030,7 +1049,9 @@ function runPaths(out, name) {
 
 // ── D-5984, D-5985: liveness, the pid record, the leftover rules, the --out lock and the claim ──────────────
 /** The start time of `pid` (field 22 of /proc/<pid>/stat, the decimal text after the last ')'), or null where it cannot
- *  be read (no /proc, a vanished pid, an unparsable line). */
+ *  be read (no /proc, a vanished pid, an unparsable line, or any read failure at the moment, which is not told apart
+ *  from a missing /proc). A record's null start therefore means 'not measured when it was written', and liveness then
+ *  falls back to kill(pid, 0). */
 function procStart(pid) {
   let text;
   try {
@@ -1050,21 +1071,33 @@ function startOfStat(text) {
 }
 
 /** Whether the process a record names is still running: 'alive', 'dead' or 'unmeasured' (D-5984). With a recorded
- *  start, /proc/<pid>/stat answers: ENOENT is dead, the same start is alive, another start (a reused pid) is dead, and any
- *  other read failure or an unparsable line is unmeasured. Without one (no /proc when the record was written),
- *  `kill(pid, 0)` answers: ESRCH is dead, success or EPERM is alive (a reused pid then reads alive, which errs toward
- *  refusing), anything else unmeasured. A pid that is no positive integer is unmeasured: callers refuse malformed
- *  records before they ask.
- *  @param {number} pid  @param {string | null} start  @returns {'alive' | 'dead' | 'unmeasured'} */
-export function liveness(pid, start) {
+ *  start, /proc/<pid>/stat answers: ENOENT is dead only where /proc itself answers (this process's own
+ *  /proc/self/stat reads; where it does not, there is no /proc to tell dead from missing, and the answer is unmeasured), the
+ *  same start is alive, another start (a reused pid) is dead, and any other read failure or an unparsable line is
+ *  unmeasured. Without a start (the record's was not measured when it was written: no /proc, or a read that failed
+ *  then), `kill(pid, 0)` answers: ESRCH is dead, success or EPERM is alive (a reused pid then reads alive, which errs
+ *  toward refusing), anything else unmeasured. A pid that is no positive integer is unmeasured: callers refuse malformed
+ *  records before they ask. Only the leader is asked: a process left in a dead leader's group is not seen (a named
+ *  residual, D-5984). `procDir` is the test seam for /proc.
+ *  @param {number} pid  @param {string | null} start  @param {string} [procDir]
+ *  @returns {'alive' | 'dead' | 'unmeasured'} */
+export function liveness(pid, start, procDir = '/proc') {
   if (!Number.isSafeInteger(pid) || pid < 1) return 'unmeasured';
   if (start !== null) {
     if (typeof start !== 'string') return 'unmeasured';
     let text;
     try {
-      text = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      text = readFileSync(`${procDir}/${pid}/stat`, 'utf8');
     } catch (e) {
-      return e?.code === 'ENOENT' ? 'dead' : 'unmeasured';
+      if (e?.code !== 'ENOENT') return 'unmeasured';
+      // D-5984: a missing /proc reads every pid as ENOENT, which is not 'dead'. Only a /proc that answers for this
+      // very process can say a pid is gone.
+      try {
+        readFileSync(`${procDir}/self/stat`, 'utf8');
+      } catch {
+        return 'unmeasured';
+      }
+      return 'dead';
     }
     const now = startOfStat(text);
     if (now === null) return 'unmeasured';
@@ -1135,7 +1168,9 @@ function lstatOrNull(out, rel) {
   }
 }
 
-/** D-5811, D-5984: settle the leftovers of one run name, whose run.json the caller has established absent. A `.part` is a
+/** D-5811, D-5984: settle the leftovers of one run name. The caller's walk does not look at the name's run.json
+ *  (claimOut's walk settles every name that has a `.part` or a `.pid`, whatever its job, and a driver's own run leaves
+ *  no `.part` beside a run.json; runBatch and launchRun call it only for a name whose run.json is absent). A `.part` is a
  *  spawn whose driver did not finish; its `<name>.pid` says whether its writer is still running. The cases:
  *   - `.part` and `.pid`, the writer alive or unmeasured: refuse `run-live`, charging, removing and spawning nothing;
  *   - `.part` and `.pid`, the writer dead: charge the `.part` once, remove the `.pid`, THEN the `.part` (a crash between
@@ -1143,7 +1178,9 @@ function lstatOrNull(out, rel) {
  *   - `.part` with no `.pid`: charge and remove it (D-5811; the named residual window of a driver killed before its record);
  *   - a lone `.pid`: remove it;
  *   - a `.pid` that is not a regular file or not a record: refuse `run-live` naming it (records are written whole);
- *   - a `.part` that is not a regular file: refuse `out-refused` (`run-stream-invalid <name>`).
+ *   - a `.part` that is not a regular file, or one over OUT_STREAM_CAP (never read, so never charged): refuse `out-refused`
+ *     (`run-stream-invalid <name>`). The over-cap case wedges the --out until the file is removed by hand, and its spend is
+ *     then lost: a named residual (D-5811), not a distinct word.
  *  @param {string} out  @param {string} name  @param {typeof liveness} live */
 function settleLeftover(out, name, live) {
   const { partPath, pidPath } = runPaths(out, name);
@@ -1190,19 +1227,19 @@ const liveClaims = new WeakSet();
  *  is no record refuse `out-in-use`. If the holder releases the lock between the failed link and the read (the read finds
  *  nothing), the link is tried ONCE more before the driver refuses. A dead holder's lock is
  *  renamed to `<lock>.stale-<pid>`, re-read, and taken over only if it still names the same dead holder; if it names
- *  anyone else it is put back and the driver refuses. Every removal here (the stale file, the tmp file in the `finally`) is
- *  `dropQuietly` (D-5986): a raw error there would replace the refusal being raised, and a stale or tmp file left behind
- *  is harmless, because the claim walk reads only `.jsonl.part` and `.pid` names. */
+ *  anyone else it is put back and the driver refuses. The lock's tmp file is written through writeWhole (a failed write
+ *  refuses `.driver.lock.tmp-<pid> unwritable <code>` and drops the tmp file). Every removal here (the stale file, the tmp
+ *  file in the `finally`) is `dropQuietly` (D-5986): best-effort, on a path that is refusing or after the lock is taken,
+ *  where a raw error would replace the answer; a stale or tmp file left behind is harmless, because the claim walk reads
+ *  only `.jsonl.part` and `.pid` names. Residual: a put-back link that fails for a reason other than EEXIST refuses
+ *  `out-refused` with the holder's lock still renamed away to the stale file (a live holder then no longer has its lock
+ *  at `.driver.lock`; D-5985). */
 function takeLock(out, live, afterHeld) {
   const lock = path.join(out, LOCK_NAME);
   const tmpRel = `${LOCK_NAME}.tmp-${process.pid}`;
   const tmp = path.join(out, tmpRel);
   const fd = createPlain(out, tmpRel, 0o600, true);   // D-5986: exclusive, no-follow, like every write under --out
-  try {
-    writeAll(fd, Buffer.from(pidRecordText(process.pid), 'utf8'));
-  } finally {
-    closeSync(fd);
-  }
+  writeWhole(fd, Buffer.from(pidRecordText(process.pid), 'utf8'), tmp, tmpRel);   // D-5986: a failed write refuses `<tmp> unwritable <code>` and drops the tmp
   const link = () => {
     try {
       linkSync(tmp, lock);
@@ -1386,7 +1423,13 @@ function runChild(launcher, argv, { cwd, childEnv, stdin, out, name, partPath, p
     child.stderr.on('data', (b) => {
       if (kept < STDERR_KEEP_BYTES) { errs.push(b.subarray(0, STDERR_KEEP_BYTES - kept)); kept += b.length; }
     });
-    child.stdin.on('error', (e) => { if (e.code !== 'EPIPE') reject(e); });
+    // D-5984: a rejected run must not leave its child running unseen: any error other than EPIPE (the child closed its stdin
+    // early) kills the child's group. The `.part` and `.pid` stay, and the next driver settles them (settleLeftover).
+    child.stdin.on('error', (e) => {
+      if (e.code === 'EPIPE') return;
+      if (typeof pid === 'number') signalGroup(pid, 'SIGKILL');
+      reject(e);
+    });
     let killer = null;
     const timer = setTimeout(() => {
       if (typeof pid === 'number') signalGroup(pid, 'SIGTERM');
@@ -1395,8 +1438,14 @@ function runChild(launcher, argv, { cwd, childEnv, stdin, out, name, partPath, p
     child.on('error', (e) => {
       clearTimeout(timer);
       if (killer) clearTimeout(killer);
-      rmSync(partPath, { force: true });
-      rmSync(pidPath, { force: true });
+      if (typeof pid === 'number') {
+        // D-5984: a child with a pid may be running (a failed kill, say): kill its group and leave the `.part` and `.pid`
+        // for the next driver, as for any killed driver. Only a spawn that never produced a child leaves nothing to keep.
+        signalGroup(pid, 'SIGKILL');
+      } else {
+        rmSync(partPath, { force: true });
+        rmSync(pidPath, { force: true });
+      }
       reject(e);
     });
     child.on('close', (code, signal) => {
@@ -1464,7 +1513,7 @@ export async function launchRun(job, opts = {}) {
     refuseIfStopping();
     res = await runChild(launch.launcher, argv, { cwd, childEnv, stdin, out, name, partPath, pidPath, timeoutMs });
   } finally {
-    rmSync(cwd, { recursive: true, force: true });
+    dropQuietly(cwd, true);   // D-5984: best-effort. A child-made entry nobody may remove (mode 000) must not turn the finished run into a raw error before its spend line
   }
   const ms = Date.now() - t0;
   const partRead = readPlain(partPath, OUT_STREAM_CAP);
@@ -1745,7 +1794,9 @@ export function wrapperSha(launch) {
 /** `<launcher> --version` under launchRun's rules: writer-mode env (no CCRC_RECALL_*), the poisoned PATH, a fresh
  *  empty 0700 cwd removed afterwards, no shell, a process-group leader of its own (D-5984) killed, group and all, past
  *  VERSION_TIMEOUT_MS. It spends nothing and
- *  records nothing in the ledger. The version is the first stdout line, trimmed. `lang` is the caller's LANG from
+ *  records nothing in the ledger. It is the one exported spawn that takes no claim (D-5985's stated exception): it is
+ *  a `--version` call that writes nothing under --out but the poison-bin `gh` (written whole, by writePlain), and
+ *  step 0a calls it only after claimOut. The version is the first stdout line, trimmed. `lang` is the caller's LANG from
  *  main's env (undefined when unset), threaded as RunJob.lang is: this function reads no environment itself. The
  *  child env is named childEnv and passed as `env: childEnv`, as launchRun's is: Task 5's env scan reds on the
  *  shorthand `{ cwd, env }`.
@@ -1769,7 +1820,7 @@ export async function measureClaudeVersion(launch, out, lang) {
       child.on('close', (code, signal) => { clearTimeout(timer); resolve({ code, signal, stdout: Buffer.concat(chunks).toString('utf8') }); });
     });
   } finally {
-    rmSync(cwd, { recursive: true, force: true });
+    dropQuietly(cwd, true);   // D-5984: best-effort, as launchRun's
   }
   const version = r.stdout.split('\n')[0].trim();
   if (r.code !== 0 || r.signal !== null || version === '') return { state: 'failed', code: r.code, signal: r.signal };

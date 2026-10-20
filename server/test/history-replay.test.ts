@@ -1014,6 +1014,8 @@ const T5_STUB_SLEEP = 'stub-sleep-ms';
 const T5_STUB_STDERR = 'stub-stderr.txt';
 const T5_STUB_EXIT = 'stub-exit';
 const T5_STUB_SWAP = 'stub-swap-path';
+/** When present, the stub leaves a mode-000 directory with a file in it in its cwd (D-5984: nobody may remove it). */
+const T5_STUB_LOCK = 'stub-lock-cwd';
 const T5_STUB_SOURCE = `#!/usr/bin/env node
 (async () => {
   const fs = await import('node:fs');
@@ -1035,6 +1037,11 @@ const T5_STUB_SOURCE = `#!/usr/bin/env node
   // D-5986: replace the named path by a directory while the run is open, as a same-user process could.
   const swap = opt(${JSON.stringify(T5_STUB_SWAP)});
   if (swap !== null) { fs.rmSync(swap, { force: true }); fs.mkdirSync(swap); }
+  if (opt(${JSON.stringify(T5_STUB_LOCK)}) !== null) {
+    fs.mkdirSync(path.join(cwd, 'locked'), { mode: 0o700 });
+    fs.writeFileSync(path.join(cwd, 'locked', 'f'), 'x');
+    fs.chmodSync(path.join(cwd, 'locked'), 0o000);
+  }
   fs.appendFileSync(at(${JSON.stringify(T5_STUB_LOG)}), JSON.stringify({ argv: process.argv.slice(2),
     envKeys: Object.keys(process.env).sort(), env, cwd, cwdMode, cwdEntries, stdin, start, end: Date.now() }) + '\\n');
   process.stdout.write(opt(${JSON.stringify(STUB_STREAM)}) ?? '');
@@ -1631,6 +1638,27 @@ describe('fix round 1 (D-5984): liveness answers alive, dead or unmeasured', () 
     for (const pid of [0, -1, 1.5, Number.NaN, '12' as never, null as never]) expect(replay.liveness(pid, null), String(pid)).toBe('unmeasured');
     expect(replay.liveness(process.pid, 7 as never)).toBe('unmeasured');
   });
+
+  // kill(pid, 0) answers EPERM for a process of another user: it exists, so the answer is alive. Pid 1 is the one process
+  // that is always there and, run as a user, never ours. As root kill succeeds and the answer is alive either way, so the
+  // case measures nothing there.
+  it.skipIf(process.getuid?.() === 0)('with no recorded start, a process another user owns (EPERM) reads alive', () => {
+    expect(replay.liveness(1, null)).toBe('alive');
+  });
+
+  // A /proc that does not answer for this very process cannot say a pid is gone: its ENOENT is "no /proc", not "no process".
+  it('a pid file that is missing reads dead only where /proc answers for this process, and unmeasured where it does not', () => {
+    const proc = mkTmp('ccrc-replay-proc-');
+    const stat = (start: string): string => `777 (a b) S ${'0 '.repeat(18)}${start} 0\n`;
+    mkdirSync(path.join(proc, '777'), { recursive: true });
+    writeFileSync(path.join(proc, '777', 'stat'), stat('12345'));
+    expect(replay.liveness(777, '12345', proc), 'CONTROL: the fixture /proc has the pid with its start').toBe('alive');
+    expect(replay.liveness(777, '999', proc), 'CONTROL: another start is a reused pid').toBe('dead');
+    expect(replay.liveness(778, '12345', proc), 'no /proc/self/stat: a missing pid file proves nothing').toBe('unmeasured');
+    mkdirSync(path.join(proc, 'self'), { recursive: true });
+    writeFileSync(path.join(proc, 'self', 'stat'), stat('1'));
+    expect(replay.liveness(778, '12345', proc), 'a /proc that answers for itself: the pid is gone').toBe('dead');
+  });
 });
 
 describe('fix round 1 (D-5984): a leftover whose writer is alive is never charged, removed or spawned again; a dead one is charged once', () => {
@@ -1792,6 +1820,24 @@ describe('fix round 1 (D-5984): each child leads its own process group, with a p
     await expect(claimedRun(t5job(b, b.up, 'box', 'fail-0'))).rejects.toThrow(/EACCES/);
     expect(existsSync(t5path.join(b.out, 'fail-0.jsonl.part')), 'no part left').toBe(false);
     expect(existsSync(t5path.join(b.out, 'fail-0.pid')), 'no record left').toBe(false);
+  }, 60_000);
+
+  // D-5984: the run's cwd is removed best-effort. A child that leaves an entry nobody may remove in it (a mode-000 directory)
+  // must not turn a finished run into a raw EACCES before its spend line: the run is charged once and its run.json written.
+  // Skipped as root, which removes it anyway. The case restores the modes and removes the leftover cwd itself.
+  it.skipIf(process.getuid?.() === 0)('a child-made entry nobody may remove in the run cwd does not fail the finished run: it is charged and recorded', async () => {
+    const b = t5Box('ccrc-replay-d5984-cwdlock-');
+    t5fs.writeFileSync(t5path.join(b.home, T5_STUB_LOCK), '1');
+    const outcome = await claimedRun(t5job(b, b.up, 'box', 'cwd-0'));
+    try {
+      expect(outcome.skipped).toBe(false);
+      expect(replay.spentSoFar(b.out), 'charged once').toBe(T5_TOKENS);
+      expect(existsSync(t5path.join(b.out, 'cwd-0.run.json')), 'recorded').toBe(true);
+      expect(existsSync(t5path.join(outcome.cwd, 'locked')), 'CONTROL: the entry the child made is the one left behind').toBe(true);
+    } finally {
+      chmodSync(t5path.join(outcome.cwd, 'locked'), 0o700);
+      rmSync(outcome.cwd, { recursive: true, force: true });
+    }
   }, 60_000);
 
   // D-5984: a child no record names must not run on. Whatever stops the `.pid` record being written whole, the child's
@@ -2088,7 +2134,8 @@ process.stdin.on('data', (d) => {
 
 // ── fix round 1 (D-5986): no-follow, type-checked I/O under --out ───────────────────────────────────────────
 // Every path the driver reads or writes under a reused --out, and the --step0a input, is read with lstat, a no-follow
-// non-blocking open and an fstat, and written through an exclusive tmp file and a rename (or opened O_APPEND|O_NOFOLLOW).
+// non-blocking open and an fstat, and written through an exclusive create (a tmp file and then a rename or a link, or the
+// `.part` the child writes in place), or opened O_APPEND|O_NOFOLLOW.
 // A link or a FIFO planted there refuses out-refused (input-invalid for --step0a) and nothing is followed or waited on.
 // A case that could block runs the call in a child with a deadline, so a regression times out instead of hanging the suite.
 describe('fix round 1 (D-5986): no-follow, type-checked I/O under --out', () => {
