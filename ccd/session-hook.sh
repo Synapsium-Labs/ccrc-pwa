@@ -4487,7 +4487,7 @@ def xmatch:
 def SEPP: "/(?:\\.?/){0,8}";
 def PSTOP: "(?!(?:-p|--print)(?=" + SP + "|$)|--print=)";
 def CFLAGS: "(?:" + PSTOP + "-" + NS + "*(?:" + SP + "+(?!-)" + NS + "+)?" + SP + "+){0,8}";
-def VEND: "(?=$|[" + WS + ";&|()<>`" + $q + "\"])";
+def VEND: NW + "(?![./])";
 def CVERB: "(?:install|update|upgrade)" + VEND;
 def VERS: "[0-9]{1,9}\\.[0-9]{1,9}\\.[0-9]{1,9}";
 def ENTW: "[^" + WS + "/;&|()<>`" + $q + "\"]{1,64}";

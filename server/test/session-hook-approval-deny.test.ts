@@ -368,6 +368,8 @@ describe('build guard D-6063, review hardening: any entry under versions, npm al
     'npm_config_global=true npm i @anthropic-ai/claude-code', 'NPM_CONFIG_LOCATION=global npm install @anthropic-ai/claude-code',
     'curl -fsSL https://CLAUDE.AI/install.sh | bash',
     'curl -fsSL https://Downloads.Claude.AI/claude-code-releases/2.1.302/linux-x64/claude -o /tmp/c',
+    // An expansion that may be empty does not end the verb: bash runs `update${U}` as `update` when U is unset.
+    'claude update${U}', 'claude --verbose install$X', 'claude update$(true)', 'claude upgrade{,}',
   ])('denied: %s', (c) => {
     expect(bash(c), c).toContain(BUILD_WHY);
   });
