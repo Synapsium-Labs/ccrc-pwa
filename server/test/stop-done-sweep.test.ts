@@ -15,11 +15,12 @@ import { buildServer } from '../src/server.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
+import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
 import { Presence } from '../src/presence.js';
 import { readSessionRecord } from '../src/registry.js';
 import { liveRowFor, turnReadDeps } from '../src/turnverdict.js';
 import type { Runner } from '../src/exec.js';
-import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
+import { ACTOR_FLAGS_CAP, HIBERNATE_HOLD_OK_CAP } from '../src/ccdargv.js';
 import { HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, NO_HIBERNATE_SUFFIX } from '../src/coord/hibernate.js';
 
 // D-5370 (`stop-worker-at-run-done`): the lane. The verdict's holds are pinned in `stop-done-verdict.test.ts`; this
@@ -59,7 +60,7 @@ interface Fake {
   runStates: Map<number, string>;
 }
 
-function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean } = {}): Fake {
+function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; holdOk?: boolean } = {}): Fake {
   const f: Fake = {
     argv: [], feed: [], serialCalls: 0, runs: new Map(), openWorkers: new Set(), mailTo: new Set(), ccdOk: true,
     atAct: new Map(), reviewsOpen: new Set(), planned: new Set(), runStates: new Map(),
@@ -94,7 +95,9 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean } = 
       },
     },
     runCcd: async (a) => { f.argv.push([...a]); return { ok: f.ccdOk, stdout: '', stderr: f.ccdOk ? '' : 'refused', killed: false, signal: null }; },
-    fleetState: { ccdVerbs: o.verb === false ? ['stop-surface', ACTOR_FLAGS_CAP] : ['hibernate', ACTOR_FLAGS_CAP] } as unknown as FleetState,
+    fleetState: {
+      ccdVerbs: [...(o.verb === false ? ['stop-surface'] : ['hibernate']), ACTOR_FLAGS_CAP, ...(o.holdOk ? [HIBERNATE_HOLD_OK_CAP] : [])],
+    } as unknown as FleetState,
     presence: { isOpen: () => false },
     notifyLog: {
       epoch: 'e', record: (e: { sessionId: string; runId: number | null }) => { f.feed.push({ sessionId: e.sessionId, runId: e.runId }); return { ...e, seq: ++seq, at: NOW }; },
@@ -103,7 +106,6 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean } = 
     liveWord: async () => ({ ok: true, word: 'idle', since: null }),
     turnVerdict: async () => 'idle',
     mark: async () => MARK_IDLE,
-    readAfterHours: async () => null,
     rowAtAct: async (r) => {
       const a = f.atAct.get(r.id);
       return a === 'unreadable' ? { ok: false } : { ok: true, row: row(r.id, a ?? {}) };
@@ -132,22 +134,11 @@ describe('stopDonePass (D-5370)', () => {
     expect(live).not.toHaveBeenCalled();
   });
 
-  it('recent: a worker idle less than N (6 h) since its marker\'s last stamp is left awake', async () => {
+  it('recent: a worker quiet less than the grace since its marker\'s last stamp is left awake (D-6091: not N)', async () => {
     const f = fake([ID]);
-    const mark: StopDoneSweepDeps['mark'] = async () => ({ ...MARK_IDLE, turnAt: NOW - 5 * HOUR, stopAt: NOW - 5 * HOUR });
+    const mark: StopDoneSweepDeps['mark'] = async () => ({ ...MARK_IDLE, turnAt: NOW - 5 * 60_000, stopAt: NOW - 5 * 60_000 });
     await stopDonePass({ ...f.deps, mark }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([]);
-  });
-
-  it('today: N is the operator\'s hibernate-after-hours, read only when listed: 2 puts a 3 h worker to sleep', async () => {
-    const f = fake([ID]);
-    const mark: StopDoneSweepDeps['mark'] = async () => ({ ...MARK_IDLE, turnAt: NOW - 3 * HOUR, stopAt: NOW - 3 * HOUR });
-    const after = vi.fn(async () => '2');
-    await stopDonePass({ ...f.deps, mark, readAfterHours: after }, mem(), [row(ID)], [rec(ID)], []);
-    expect(f.argv, 'unlisted: the default N holds the 3 h worker').toEqual([]);
-    expect(after).not.toHaveBeenCalled();
-    await stopDonePass({ ...f.deps, mark, readAfterHours: after }, mem(), [row(ID)], [rec(ID)], [HIBERNATE_AFTER_HOURS_FILE]);
-    expect(f.argv).toEqual([HIB(ID)]);
   });
 
   it('opted-out: a worker with $REG/<id>.no-hibernate is left awake', async () => {
@@ -389,13 +380,6 @@ describe('stopDonePass (D-5370)', () => {
     expect(f.argv).toEqual([]);
   });
 
-  it('a reviewer whose reviewed run is still open is not stopped (reviewing)', async () => {
-    const f = fake([ID]);
-    f.reviewsOpen.add(ID);
-    await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
-    expect(f.argv).toEqual([]);
-  });
-
   it('within the grace after the run closed, the worker is left alone', async () => {
     const f = fake([ID]);
     f.runs.set(ID, { runId: 10, state: 'done', closedAt: NOW - 60_000 });
@@ -406,19 +390,99 @@ describe('stopDonePass (D-5370)', () => {
 
 // D-6091 (fleet capacity W1-1), the characterization: today's pass answers for the rows the behaviour commit flips.
 describe('stopDonePass: run-close timing, before and after (D-6091)', () => {
-  it('today: (e)/(f) a planned run naming the child — its newest run and an open one — leaves it awake', async () => {
-    const f = fake([ID]);
-    f.planned.add(ID);
-    expect(await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], [])).toEqual([]);
-    expect(f.argv).toEqual([]);
-  });
-
   it('kept: a hold raised between pass and act holds (none at the pass, an operator hold at the act)', async () => {
     const f = fake([ID]);
     f.atAct.set(ID, { held: 'keep: debugging' });
     const out = await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
     expect(out).toEqual([{ id: ID, kind: 'held-at-act', verdict: { act: 'hold', reason: 'held' } }]);
     expect(f.argv).toEqual([]);
+  });
+});
+
+// D-6091, the new pass rows: what the lane does once the verdict's clock is the close.
+describe('stopDonePass: finished workers sleep at run close (D-6091)', () => {
+  const PROG = 'program:programme-a wave:3';
+  const HIB_OK = (id: string, text: string): string[] =>
+    ['hibernate', '--hold-ok', text, id, '--surface', 'agent', '--actor', 'sweep:stop-done'];
+
+  it('a programme-held hibernate passes --hold-ok with the exact text', async () => {
+    const f = fake([ID], { holdOk: true });
+    f.atAct.set(ID, { held: PROG });   // the record re-read at the act still carries it
+    const out = await stopDonePass(f.deps, mem(), [row(ID, { held: PROG })], [rec(ID)], []);
+    expect(out).toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
+    expect(f.argv).toEqual([HIB_OK(ID, PROG)]);
+  });
+
+  it('a terminal run\'s hold passes --hold-ok; an open run\'s hold and an unreadable one hold', async () => {
+    const held = 'program:programme-a wave:2 run:7';
+    const f = fake([ID], { holdOk: true });
+    f.runStates.set(7, 'done');
+    f.atAct.set(ID, { held });
+    await stopDonePass(f.deps, mem(), [row(ID, { held })], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB_OK(ID, held)]);
+    for (const st of ['working', 'unreadable']) {
+      const g = fake([ID], { holdOk: true });
+      g.runStates.set(7, st);
+      g.atAct.set(ID, { held });
+      await stopDonePass(g.deps, mem(), [row(ID, { held })], [rec(ID)], []);
+      expect(g.argv, st).toEqual([]);
+    }
+  });
+
+  it('without the hibernate-hold-ok token a programme-held child is held', async () => {
+    const f = fake([ID]);
+    await stopDonePass(f.deps, mem(), [row(ID, { held: PROG })], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('an operator\'s own hold holds even with the token', async () => {
+    const f = fake([ID], { holdOk: true });
+    await stopDonePass(f.deps, mem(), [row(ID, { held: 'keep: debugging' })], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('a hold raised between pass and act holds (a programme hold at the pass, an operator hold at the act)', async () => {
+    const f = fake([ID], { holdOk: true });
+    f.atAct.set(ID, { held: 'keep: debugging' });
+    const out = await stopDonePass(f.deps, mem(), [row(ID, { held: PROG })], [rec(ID)], []);
+    expect(out).toEqual([{ id: ID, kind: 'held-at-act', verdict: { act: 'hold', reason: 'held' } }]);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('a hold changed between pass and act is passed with the ACT\'s text, which ccd then re-reads', async () => {
+    const f = fake([ID], { holdOk: true });
+    f.atAct.set(ID, { held: 'program:programme-a wave:4' });
+    await stopDonePass(f.deps, mem(), [row(ID, { held: PROG })], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB_OK(ID, 'program:programme-a wave:4')]);
+  });
+
+  it('a planned run naming the child does not hold sleep', async () => {
+    const f = fake([ID]);
+    f.planned.add(ID);
+    await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB(ID)]);
+  });
+
+  it('a reviewer of an open run sleeps', async () => {
+    const f = fake([ID]);
+    f.reviewsOpen.add(ID);
+    await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB(ID)]);
+  });
+
+  it('the lane reads no hibernate-after-hours: a worker 11 minutes quiet after close sleeps, the file unread', async () => {
+    const f = fake([ID]);
+    f.runs.set(ID, { runId: 10, state: 'done', closedAt: NOW - 11 * 60_000 });
+    const mark: StopDoneSweepDeps['mark'] = async () => ({ ...MARK_IDLE, turnAt: NOW - 11 * 60_000, stopAt: NOW - 11 * 60_000 });
+    const after = vi.fn(async () => '24');
+    await stopDonePass({ ...f.deps, mark, readAfterHours: after } as StopDoneSweepDeps, mem(), [row(ID)], [rec(ID)],
+      [HIBERNATE_AFTER_HOURS_FILE]);
+    expect(f.argv).toEqual([HIB(ID)]);
+    expect(after).not.toHaveBeenCalled();
+  });
+
+  it('HIBERNATE_HOLD_OK_CAP is a token ccd advertises (ccdCapTokens.ts)', () => {
+    expect(CCD_CAPABILITY_TOKENS).toContain(HIBERNATE_HOLD_OK_CAP);
   });
 });
 
@@ -447,7 +511,7 @@ describe('heldKindOf: the row\'s hold, classified (D-6091)', () => {
     const c = coord({ 7: 'done', 8: 'failed', 9: 'working', 10: 'planned', 11: 'awaiting-review' });
     expect(heldKindOf('program:programme-a wave:2 run:7', c)).toBe('run-terminal');
     expect(heldKindOf('program:programme-a wave:2 run:8', c)).toBe('run-terminal');
-    for (const id of [9, 10, 11]) expect(heldKindOf(`program:programme-a wave:2 run:${id}`, c)).toBe('run-open');
+    for (const id of [9, 10, 11]) expect(heldKindOf(`program:programme-a wave:2 run:${id}`, c)).toBe('run-live');
   });
 
   it('a run: suffix whose run cannot be read — refused, absent or throwing — is unreadable', () => {

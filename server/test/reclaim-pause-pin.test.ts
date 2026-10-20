@@ -567,7 +567,6 @@ describe('stopDoneSweep.ts — stopDonePass reads reclaim-paused off the tick\'s
       liveWord: async () => ({ ok: true, word: 'idle', since: null }),
       turnVerdict: async () => 'idle',
       mark: async () => ({ ok: true, state: 'done', bg: 0, crons: 0, turnAt: NOW - 7 * HOUR - 60_000, stopAt: NOW - 7 * HOUR, restartAt: null }) as const,
-      readAfterHours: async () => null,
       rowAtAct: async (r) => ({ ok: true, row: { ...row, id: r.id } }),
       serial: async (fn) => fn(),
       queueRun: async (_id, fn) => fn(),
