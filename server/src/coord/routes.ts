@@ -2717,19 +2717,12 @@ export function registerCoordRoutes(
     }
     if (written === null) throw new Error('stall settings changed outside the server twice during one write; nothing written');
     const change = stallSettingsChange(written.before, written.after);
-    const log = deps.notifyLog;
-    if (change !== null && log) {
+    // Through the notice sink (D-5858), `'record-only'`, as the caps door's row. The ring check stays here so that the
+    // actor is read only when there is a ring to record it in, as before.
+    if (change !== null && deps.notifyLog) {
       const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
-      try {
-        const ev = log.record({ kind: 'coord', sessionId: '', title: 'stall watch changed', body: `${change}; by ${actor}`, runId: null });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — stall watch settings written, feed archive degraded`);
-      } finally {
-        // The caps door's reason (D-1213): `record()` minted the seq, so its persistence follows `record()`.
-        void log.flush();
-      }
+      notice({ kind: 'coord', sessionId: '', title: 'stall watch changed', body: `${change}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'stall watch settings written, feed archive degraded' });
     }
     return reply.code(200).send({ ok: true, ...stallWatchView(coord, names, Date.now(), watcher?.stallFallback() ?? null) });
   });
