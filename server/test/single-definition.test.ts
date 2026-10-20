@@ -7436,8 +7436,12 @@ describe('the advance file and its clock, each spelled once (auto-advance spec Â
   });
 
   it("REASON_MAX is assigned once, in shared/model-advance.mjs: every other source that caps a reason imports it", () => {
+    // The advance reason's cappers live in deploy/, shared/, the models server code, the PWA and the bash tools.
+    // server/src/coord/briefwatch.ts holds its own, unrelated REASON_MAX (a wave brief's word cap), so the
+    // coordination code is outside this census rather than a second spelling of this one.
     const ASSIGN = /\bREASON_MAX\s*=(?!=)/;
-    expect(SHIPPED.filter((f) => ASSIGN.test(textOf(f))).map(rel)).toEqual(['shared/model-advance.mjs']);
+    const inScope = (f: string): boolean => BASH.includes(f) || /^(?:deploy|shared|server\/src\/models|pwa\/src)\//.test(rel(f));
+    expect(SHIPPED.filter((f) => inScope(f) && ASSIGN.test(textOf(f))).map(rel)).toEqual(['shared/model-advance.mjs']);
     expect(readFileSync(path.join(ccrcRoot, 'shared', 'model-advance.mjs'), 'utf8')).toContain('export const REASON_MAX = 200;');
   });
 });
