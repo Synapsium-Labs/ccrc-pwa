@@ -20,7 +20,7 @@
 // Its words: DRIVER_REASONS, frozen once here and nowhere else (W2-D59, W2-D12; D-5774). A refusal prints
 // `ccrc history-replay: <word>: <detail>` on stderr and exits EXIT.REFUSED (2); a defect exits EXIT.INTERNAL (1).
 // They are never lib REASONS: §8.7's table and SKILL.md do not list them. EXIT is imported, never declared (O14).
-import { accessSync, appendFileSync, chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, appendFileSync, chmodSync, closeSync, constants, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path, { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -30,7 +30,7 @@ import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 
 // ── the driver's words (W2-D59) ───────────────────────────────────────────
 /** Every word the driver refuses with, in one frozen list. The first sixteen are W2-D59's, in its order (each owner
- *  PR raises its own). The last nine are W2-4's nine words (five plan-chosen, four by coordinator ruling), each kept apart from a lib REASONS word by design
+ *  PR raises its own). The next nine are W2-4's nine words (five plan-chosen, four by coordinator ruling), each kept apart from a lib REASONS word by design
  *  (C-J): `args-invalid` (an argv the grammar refuses; lib's is `bad-args`), `in-pane` (TMUX_PANE is set; lib's is
  *  `headless-in-pane`), `roster-invalid` (accounts.json absent, unreadable or refused by rosterFromJson; lib's is
  *  `roster-unreadable`), `account-refused` (W2-D52's admission), `input-invalid` (an input whose shape is wrong: a
@@ -38,7 +38,10 @@ import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
  *  (a gate_code file that cannot be read; --allow-code-change never stamps it), `version-unmeasured` (a Claude Code
  *  --version that cannot be measured), `tree-unmeasured` (a release stamp that cannot be read; `tree-moved` stays
  *  for a measured mismatch) and `wrapper-unmeasured` (a generated account's wrapper that cannot be read;
- *  `wrapper-moved` stays for a measured mismatch). */
+ *  `wrapper-moved` stays for a measured mismatch). The last three are fix round 1's (D-5984, D-5985): `run-live` (a
+ *  leftover `.part` whose writer is alive or unmeasured, or a `.pid` record that is not one), `out-in-use` (another
+ *  driver holds the --out lock, or the lock file is not one) and `interrupted` (a SIGINT, SIGTERM or SIGHUP stopped
+ *  the driver: no further spawn starts and no output file is written). */
 export const DRIVER_REASONS = Object.freeze([
   'family-unlisted', 'family-recall-off',
   'quiz-unanswerable', 'quiz-sha-mismatch',
@@ -49,6 +52,7 @@ export const DRIVER_REASONS = Object.freeze([
   'out-refused',
   'args-invalid', 'in-pane', 'roster-invalid', 'account-refused', 'input-invalid',
   'code-unmeasured', 'version-unmeasured', 'tree-unmeasured', 'wrapper-unmeasured',
+  'run-live', 'out-in-use', 'interrupted',
 ]);
 
 /** A refusal: one DRIVER_REASONS word and its detail. Any other throw is a defect (EXIT.INTERNAL). */
@@ -143,17 +147,72 @@ export function paneRefusal(env) {
   return env.TMUX_PANE !== undefined ? new DriverRefusal('in-pane', PANE_DETAIL) : null;
 }
 
+// ── D-5984: no unseen child (the registry, the stopping flag, the signal handler) ─────────────────────────────
+// Every child is spawned as its own process-group leader (`detached: true`, so pid === pgid) and registered the moment
+// spawn() returns. A SIGINT, SIGTERM or SIGHUP makes main's handler set the stopping flag, send SIGTERM to every group the
+// registry holds and, after STOP_GRACE_MS, SIGKILL to whatever it STILL holds. The handler never exits the driver: the
+// interrupt surfaces as the `interrupted` refusal, through main's one stderr line and EXIT.REFUSED. A driver killed alone
+// (SIGKILL, the OOM killer) cannot run any of this; the `.pid` record each run leaves is what the next driver reads
+// (settleLeftover). Residuals, named: a grandchild that calls setsid itself escapes the group kill (and writes no `.part`),
+// and a driver killed between spawn() and its `.pid` record leaves a `.part` with no record, charged as D-5811 says.
+/** Every live child's pid (and process-group id). */
+const liveChildren = new Set();
+/** The signal that stopped the driver (its name), or null. main resets it at entry. */
+let stopping = null;
+const STOP_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
+const STOP_GRACE_MS = 5_000;
+
+/** Signal a child's whole group. ESRCH (already gone) is the expected answer and any other failure leaves nothing more
+ *  this process can do, so none is thrown: this runs from signal handlers and timers, where a throw would crash the
+ *  driver with its children still running. */
+function signalGroup(pid, sig) {
+  try {
+    process.kill(-pid, sig);
+  } catch {
+    // gone, or not ours to signal
+  }
+}
+
+/** main's handler for SIGINT, SIGTERM and SIGHUP: the first signal names the stop; every group gets SIGTERM; the groups
+ *  still registered after the grace get SIGKILL (read at that moment, not a snapshot). */
+function onStopSignal(sig) {
+  if (stopping === null) stopping = sig;
+  for (const pid of liveChildren) signalGroup(pid, 'SIGTERM');
+  setTimeout(() => { for (const pid of liveChildren) signalGroup(pid, 'SIGKILL'); }, STOP_GRACE_MS).unref();
+}
+
+/** Refuse `interrupted` while the stopping flag is set. Called before every spawn and before every output file a
+ *  stopped subcommand would write, so nothing starts and nothing is recorded after a signal. */
+function refuseIfStopping() {
+  if (stopping !== null) refuse('interrupted', `${stopping} received; no further child starts and no output file is written`);
+}
+
+/** `spawn` as a registered group leader: not unref'd, the caller's stdio. The registry drops the pid at 'close'. */
+function spawnGroup(launcher, argv, options) {
+  const child = spawn(launcher, argv, { ...options, detached: true });
+  const pid = child.pid;
+  if (typeof pid === 'number') {
+    liveChildren.add(pid);
+    child.once('close', () => { liveChildren.delete(pid); });
+  }
+  return child;
+}
+
 // ── main ──────────────────────────────────────────────────────────────────
 /** The pane first, then the grammar, then the handler. A refusal is one stderr line and EXIT.REFUSED; anything else
  *  thrown is a defect, one stderr line and EXIT.INTERNAL. Nothing is written to stdout here.
  *  @param {string[]} argv  @param {DriverEnv} env  @returns {Promise<number>} */
 export async function main(argv, env) {
+  stopping = null;   // D-5984: in-process callers (the tests) run main many times
+  /** @type {Array<[string, () => void]>} */
+  const installed = STOP_SIGNALS.map((sig) => [sig, () => onStopSignal(sig)]);
   try {
     const pane = paneRefusal(env);
     if (pane !== null) throw pane;
     process.umask(0o077);   // W2-D53: before any filesystem act, so every file and directory under --out is the operator's alone
     const { sub, flags } = parseArgs(argv);
     const handler = /** @type {(flags: Flags, env: DriverEnv) => Promise<number>} */ (HANDLERS.get(sub));
+    for (const [sig, fn] of installed) process.on(sig, fn);   // D-5984: a signal stops the children's groups; it never exits the driver
     return await handler(flags, env);
   } catch (e) {
     if (e instanceof DriverRefusal) {
@@ -162,6 +221,8 @@ export async function main(argv, env) {
     }
     process.stderr.write(`ccrc history-replay: internal error: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`);
     return EXIT.INTERNAL;
+  } finally {
+    for (const [sig, fn] of installed) process.off(sig, fn);
   }
 }
 
@@ -612,14 +673,20 @@ export function spentSoFar(out) {
 // input. Arm values arrive as parameters: this file never spells one (W2-5b's scan pins that).
 // A run's files land under --out in a fixed order: the stream `<name>.jsonl.part` while the child runs, then the
 // spend line in the ledger, then the rename to `<name>.jsonl`, then `<name>.run.json` via tmp + rename (D-5811). The
-// run.json is the completion marker and comes LAST, so a run killed before it is spawned again on resume. Three
+// run.json is the completion marker and comes LAST, so a run killed before it is spawned again on resume. Beside the
+// `.part` the driver keeps `<name>.pid` while the child runs (D-5984): written right after spawn, removed right after the
+// spend line. Three
 // shapes of kill, three answers: a driver that died while its child ran leaves a `.part` and no run.json, a LEFTOVER
-// that the next batch (or launchRun) charges to the ledger once, before any gate reads it, and removes, so the new
-// spawn streams into a new file; a driver that died between the spend line and the rename leaves a `.part` that is
-// charged again (an over-count); one that died between the rename and the run.json leaves a `.jsonl` and its ledger
-// line, and the re-spawn's spend adds to it (an over-count). Over-counting is the budget's safe direction; a spawn
-// the ledger never saw is the unsafe one, and the leftover rule closes it. A run whose run.json exists is never
-// spawned again (W2-D53, W2-D55).
+// that the next batch (or launchRun) settles before any gate reads it (settleLeftover, D-5984); a driver that died
+// between the spend line and the rename leaves a `.part` that is charged again (an over-count); one that died between the
+// rename and the run.json leaves a `.jsonl` and its ledger line, and the re-spawn's spend adds to it (an over-count).
+// Over-counting is the budget's safe direction; a spawn the ledger never saw is the unsafe one. What the code now says is
+// true, and no more: a leftover whose writer is alive (its `.pid` record reads alive or unmeasured) refuses `run-live` and
+// is never charged, removed or spawned again; a dead writer's `.part` is charged once and removed. The named residual
+// windows are a driver killed between spawn() and its `.pid` record (the `.part` has no record and is charged as D-5811
+// says, even if the child lives on), and a grandchild that calls setsid itself (it escapes the group kill and writes no
+// `.part`). The over-count windows are spend line to rename, rename to run.json, and a dead leftover's `.pid` removed
+// before its `.part`. A run whose run.json exists is never spawned again (W2-D53, W2-D55).
 // The child's LANG arrives as RunJob.lang, threaded from main's env: this section never reads process.env.
 
 /** The four ways a run is spawned: an arm run (with the CCRC_RECALL_* values), the question writer, the judge,
@@ -752,27 +819,276 @@ function runPaths(out, name) {
   // D-5803: a name whose stream file would be the spend ledger is refused, or the rename of the finished `.part` onto streamPath replaces it and the budget fails open.
   if (`${name}.jsonl` === SPEND_LEDGER) throw new TypeError(`launchRun: run name ${JSON.stringify(name)} would stream into the spend ledger ${SPEND_LEDGER}`);
   const streamPath = path.join(out, `${name}.jsonl`);
-  return { streamPath, partPath: `${streamPath}.part`, runJsonPath: path.join(out, `${name}.run.json`) };
+  return { streamPath, partPath: `${streamPath}.part`, pidPath: path.join(out, `${name}.pid`), runJsonPath: path.join(out, `${name}.run.json`) };
 }
 
-/** D-5811: a spawn whose driver died before its spend line leaves `<name>.jsonl.part` and no run.json. Charge it to
- *  the ledger once and remove it, so the budget never under-counts and the next spawn opens a new file (a child the
- *  dead driver orphaned cannot write into it). Nothing happens when there is no `.part`; one that is not a regular
- *  file refuses out-refused. The caller has established that the job has no run.json.
- *  @param {{out: string, name: string}} job */
-function chargeLeftover(job) {
-  const { partPath } = runPaths(job.out, job.name);
-  let st;
+// ── D-5984, D-5985: liveness, the pid record, the leftover rules, the --out lock and the claim ──────────────
+/** The start time of `pid` (field 22 of /proc/<pid>/stat, the decimal text after the last ')'), or null where it cannot
+ *  be read (no /proc, a vanished pid, an unparsable line). */
+function procStart(pid) {
+  let text;
   try {
-    st = lstatSync(partPath);
-  } catch (e) {
-    if (e?.code === 'ENOENT') return;
-    throw e;   // runs only after the job's run.json read answered ENOENT in this directory, so only a race reaches it
+    text = readFileSync(`/proc/${pid}/stat`, 'utf8');
+  } catch {
+    return null;
   }
-  if (!st.isFile()) refuse('out-refused', `run-stream-invalid ${job.name}`);
+  return startOfStat(text);
+}
+
+/** Field 22 of a /proc/<pid>/stat line: the line's text after its LAST ')' starts at field 3, so it is token 19. */
+function startOfStat(text) {
+  const close = text.lastIndexOf(')');
+  if (close < 0) return null;
+  const field = text.slice(close + 1).trim().split(/\s+/)[19];
+  return typeof field === 'string' && /^[0-9]+$/.test(field) ? field : null;
+}
+
+/** Whether the process a record names is still running: 'alive', 'dead' or 'unmeasured' (D-5984). With a recorded
+ *  start, /proc/<pid>/stat answers: ENOENT is dead, the same start is alive, another start (a reused pid) is dead, and any
+ *  other read failure or an unparsable line is unmeasured. Without one (no /proc when the record was written),
+ *  `kill(pid, 0)` answers: ESRCH is dead, success or EPERM is alive (a reused pid then reads alive, which errs toward
+ *  refusing), anything else unmeasured. A pid that is no positive integer is unmeasured: callers refuse malformed
+ *  records before they ask.
+ *  @param {number} pid  @param {string | null} start  @returns {'alive' | 'dead' | 'unmeasured'} */
+export function liveness(pid, start) {
+  if (!Number.isSafeInteger(pid) || pid < 1) return 'unmeasured';
+  if (start !== null) {
+    if (typeof start !== 'string') return 'unmeasured';
+    let text;
+    try {
+      text = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    } catch (e) {
+      return e?.code === 'ENOENT' ? 'dead' : 'unmeasured';
+    }
+    const now = startOfStat(text);
+    if (now === null) return 'unmeasured';
+    return now === start ? 'alive' : 'dead';
+  }
+  try {
+    process.kill(pid, 0);
+    return 'alive';
+  } catch (e) {
+    if (e?.code === 'ESRCH') return 'dead';
+    return e?.code === 'EPERM' ? 'alive' : 'unmeasured';
+  }
+}
+
+const PID_RECORD_MAX_BYTES = 4096;
+
+/** A `{pid, start}` record's text, canonical JSON plus a newline: the shape of a run's `.pid` file and of the lock. */
+function pidRecordText(pid) {
+  return canonicalJson({ pid, start: procStart(pid) }) + '\n';
+}
+
+/** Parse a pid record file: exactly `{pid: positive integer, start: digit string | null}`, whole. Null when the file cannot
+ *  be read, is over PID_RECORD_MAX_BYTES, or is anything else (records are written whole, so a malformed one is tampering).
+ *  @returns {{pid: number, start: string | null} | null} */
+function readPidRecord(file) {
+  let text;
+  try {
+    const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      if (!fstatSync(fd).isFile()) return null;
+      const buf = Buffer.alloc(PID_RECORD_MAX_BYTES + 1);
+      const n = readSync(fd, buf, 0, buf.length, 0);
+      if (n > PID_RECORD_MAX_BYTES) return null;
+      text = buf.subarray(0, n).toString('utf8');
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+  if (!text.endsWith('\n')) return null;
+  let v;
+  try {
+    v = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (v === null || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).sort().join(',') !== 'pid,start') return null;
+  if (!Number.isSafeInteger(v.pid) || v.pid < 1) return null;
+  if (!(v.start === null || (typeof v.start === 'string' && /^[0-9]+$/.test(v.start)))) return null;
+  return { pid: v.pid, start: v.start };
+}
+
+/** Write a run's `<name>.pid` whole: a tmp file created exclusively, mode 0600, then a rename. */
+function writePidRecord(pidPath, pid) {
+  const tmp = `${pidPath}.tmp-${process.pid}`;
+  rmSync(tmp, { force: true });
+  writeFileSync(tmp, pidRecordText(pid), { mode: 0o600, flag: 'wx' });
+  renameSync(tmp, pidPath);
+}
+
+/** lstat, answering null for ENOENT; any other failure is thrown (unmeasured never reads as absent). */
+function lstatOrNull(p) {
+  try {
+    return lstatSync(p);
+  } catch (e) {
+    if (e?.code === 'ENOENT') return null;
+    throw e;
+  }
+}
+
+/** D-5811, D-5984: settle the leftovers of one run name, whose run.json the caller has established absent. A `.part` is a
+ *  spawn whose driver did not finish; its `<name>.pid` says whether its writer is still running. The cases:
+ *   - `.part` and `.pid`, the writer alive or unmeasured: refuse `run-live`, charging, removing and spawning nothing;
+ *   - `.part` and `.pid`, the writer dead: charge the `.part` once, remove the `.pid`, THEN the `.part` (a crash between
+ *     leaves a `.part` with no `.pid`, charged again: an over-count, never a lone record);
+ *   - `.part` with no `.pid`: charge and remove it (D-5811; the named residual window of a driver killed before its record);
+ *   - a lone `.pid`: remove it;
+ *   - a `.pid` that is not a regular file or not a record: refuse `run-live` naming it (records are written whole);
+ *   - a `.part` that is not a regular file: refuse `out-refused` (`run-stream-invalid <name>`).
+ *  @param {string} out  @param {string} name  @param {typeof liveness} live */
+function settleLeftover(out, name, live) {
+  const { partPath, pidPath } = runPaths(out, name);
+  const part = lstatOrNull(partPath);
+  const pid = lstatOrNull(pidPath);
+  if (part !== null && !part.isFile()) refuse('out-refused', `run-stream-invalid ${name}`);
+  let rec = null;
+  if (pid !== null) {
+    rec = pid.isFile() ? readPidRecord(pidPath) : null;
+    if (rec === null) refuse('run-live', `${name}.pid is not a pid record; remove it only after confirming no Claude Code from this --out is running`);
+  }
+  if (part === null) {
+    if (pid !== null) rmSync(pidPath);
+    return;
+  }
+  if (rec !== null) {
+    const state = live(rec.pid, rec.start);
+    if (state !== 'dead') {
+      refuse('run-live', `pid ${rec.pid} (process group ${rec.pid}) is ${state}; ${name}.jsonl.part and ${name}.pid are its`);
+    }
+  }
   const text = readFileSync(partPath, 'utf8');
-  recordSpend(job.out, job.name, spendTokens(readStreamJson(text)));
+  recordSpend(out, name, spendTokens(readStreamJson(text)));
+  if (rec !== null) rmSync(pidPath);
   rmSync(partPath);
+}
+
+const LOCK_NAME = '.driver.lock';
+/** The live claims claimOut has handed out. */
+const liveClaims = new WeakSet();
+
+/** D-5985: take the --out lock. `<out>/.driver.lock` holds `{pid, start}` of its driver; it is created whole through an
+ *  exclusive tmp file and `linkSync` (EEXIST means held), so a lock is never empty or torn. A holder that reads alive or
+ *  unmeasured, a lock that is no regular file and one that is no record refuse `out-in-use`. A dead holder's lock is
+ *  renamed to `<lock>.stale-<pid>`, re-read, and taken over only if it still names the same dead holder; if it names
+ *  anyone else it is put back and the driver refuses. */
+function takeLock(out, live) {
+  const lock = path.join(out, LOCK_NAME);
+  const tmp = `${lock}.tmp-${process.pid}`;
+  rmSync(tmp, { force: true });
+  writeFileSync(tmp, pidRecordText(process.pid), { mode: 0o600, flag: 'wx' });
+  const link = () => {
+    try {
+      linkSync(tmp, lock);
+      return true;
+    } catch (e) {
+      if (e?.code === 'EEXIST') return false;
+      throw e;
+    }
+  };
+  try {
+    if (link()) return;
+    const st = lstatOrNull(lock);
+    if (st === null) refuse('out-in-use', `${LOCK_NAME} was held and released while this driver started; run it again`);
+    if (!st.isFile()) refuse('out-in-use', `${LOCK_NAME} is not a regular file; remove it only after confirming no driver runs on this --out`);
+    const holder = readPidRecord(lock);
+    if (holder === null) refuse('out-in-use', `${LOCK_NAME} is not a lock record; remove it only after confirming no driver runs on this --out`);
+    const state = live(holder.pid, holder.start);
+    if (state !== 'dead') refuse('out-in-use', `pid ${holder.pid} holds ${LOCK_NAME} (${state})`);
+    const stale = `${lock}.stale-${process.pid}`;
+    try {
+      renameSync(lock, stale);
+    } catch (e) {
+      if (e?.code === 'ENOENT') refuse('out-in-use', `${LOCK_NAME} was taken over by another driver`);
+      throw e;
+    }
+    const again = readPidRecord(stale);
+    if (again === null || again.pid !== holder.pid || again.start !== holder.start) {
+      try {
+        linkSync(stale, lock);   // not the dead holder's: put it back
+      } catch (e) {
+        if (e?.code !== 'EEXIST') throw e;
+      }
+      rmSync(stale, { force: true });
+      refuse('out-in-use', `${LOCK_NAME} changed hands while this driver started`);
+    }
+    if (!link()) {
+      rmSync(stale, { force: true });
+      refuse('out-in-use', `${LOCK_NAME} was taken over by another driver`);
+    }
+    rmSync(stale, { force: true });
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
+/** Every run name with a `*.jsonl.part` or a `*.pid` under `out`, sorted: directories walked by Dirent type (a link is
+ *  never followed), at most four levels. A name that is no RUN_NAME_RE name refuses `out-refused`. */
+function leftoverNames(out) {
+  const names = new Set();
+  const walk = (dir, rel, depth) => {
+    for (const d of readdirSync(dir, { withFileTypes: true })) {
+      const r = rel === '' ? d.name : `${rel}/${d.name}`;
+      if (d.isDirectory()) {
+        if (depth < 3) walk(path.join(dir, d.name), r, depth + 1);
+        continue;
+      }
+      const suffix = d.name.endsWith('.jsonl.part') ? '.jsonl.part' : d.name.endsWith('.pid') ? '.pid' : null;
+      if (suffix === null) continue;
+      const name = r.slice(0, -suffix.length);
+      if (!RUN_NAME_RE.test(name) || `${name}.jsonl` === SPEND_LEDGER) refuse('out-refused', `run-name-invalid ${r}`);
+      names.add(name);
+    }
+  };
+  walk(out, '', 0);
+  return [...names].sort();
+}
+
+/** D-5985: claim `out` for this driver: take the --out lock (one driver per --out), then settle the leftovers of every run
+ *  name under it (settleLeftover), whatever job they were for. The claim is what runBatch and launchRun require, as they
+ *  require a gate, so no subcommand spawns unlocked or skips the walk. Call it right after prepareOut; `release()` (in a
+ *  finally) removes the lock if it still names this driver, and is harmless twice.
+ *  @param {string} out prepareOut's answer
+ *  @param {{liveness?: typeof liveness}} [opts]
+ *  @returns {Readonly<{out: string, liveness: typeof liveness, release: () => void}>} */
+export function claimOut(out, opts = {}) {
+  const live = opts.liveness ?? liveness;
+  takeLock(out, live);
+  let released = false;
+  const claim = Object.freeze({
+    out, liveness: live,
+    release() {
+      if (released) return;
+      released = true;
+      liveClaims.delete(claim);
+      const lock = path.join(out, LOCK_NAME);
+      const mine = readPidRecord(lock);
+      if (mine !== null && mine.pid === process.pid && mine.start === procStart(process.pid)) rmSync(lock, { force: true });
+    },
+  });
+  liveClaims.add(claim);
+  try {
+    for (const name of leftoverNames(out)) settleLeftover(out, name, live);
+  } catch (e) {
+    claim.release();
+    throw e;
+  }
+  return claim;
+}
+
+/** runBatch and launchRun require a live claim over the --out of every job, as they require a gate (TypeError before any spawn). */
+function requireClaim(who, opts, outs) {
+  const claim = opts.claim;
+  if (claim === null || typeof claim !== 'object' || !liveClaims.has(claim)) {
+    throw new TypeError(`${who}: opts.claim is required (claimOut's live claim): no run spawns on an unclaimed --out`);
+  }
+  for (const o of outs) {
+    if (o !== claim.out) throw new TypeError(`${who}: a job's --out ${JSON.stringify(o)} is not the claimed --out ${JSON.stringify(claim.out)}`);
+  }
+  return claim;
 }
 
 /** The outcome of a job whose run.json exists (resume), or null when it has none. A run.json that does not
@@ -808,17 +1124,22 @@ function finishedOutcome(job) {
 }
 
 /** One child, stdout straight into the `.part` stream file (D-5811: launchRun renames it once the spawn is charged),
- *  stdin written whole, stderr kept to a bound; killed on its own pid when it outlives `timeoutMs` (SIGTERM, then
- *  SIGKILL after a grace). */
-function runChild(launcher, argv, { cwd, childEnv, stdin, partPath, timeoutMs }) {
+ *  stdin written whole, stderr kept to a bound. The child leads its own process group and is registered (D-5984); a
+ *  `<name>.pid` record is written right after spawn() when it has a pid. It is killed, group and all, when it outlives
+ *  `timeoutMs` (SIGTERM, then SIGKILL after a grace). A spawn that fails removes the `.part` and the `.pid`; a stopped
+ *  driver refuses `interrupted` before the spawn, removing the `.part` first. */
+function runChild(launcher, argv, { cwd, childEnv, stdin, partPath, pidPath, timeoutMs }) {
   return new Promise((resolve, reject) => {
     const fd = openSync(partPath, 'w', 0o600);
     let child;
     try {
-      child = spawn(launcher, argv, { cwd, env: childEnv, stdio: ['pipe', fd, 'pipe'] });
+      if (stopping !== null) rmSync(partPath, { force: true });
+      refuseIfStopping();
+      child = spawnGroup(launcher, argv, { cwd, env: childEnv, stdio: ['pipe', fd, 'pipe'] });
     } finally {
       closeSync(fd);
     }
+    const pid = child.pid;
     const errs = [];
     let kept = 0;
     child.stderr.on('data', (b) => {
@@ -827,15 +1148,31 @@ function runChild(launcher, argv, { cwd, childEnv, stdin, partPath, timeoutMs })
     child.stdin.on('error', (e) => { if (e.code !== 'EPIPE') reject(e); });
     let killer = null;
     const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      killer = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS);
+      if (typeof pid === 'number') signalGroup(pid, 'SIGTERM');
+      killer = setTimeout(() => { if (typeof pid === 'number') signalGroup(pid, 'SIGKILL'); }, KILL_GRACE_MS);
     }, timeoutMs);
-    child.on('error', (e) => { clearTimeout(timer); if (killer) clearTimeout(killer); reject(e); });
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      if (killer) clearTimeout(killer);
+      rmSync(partPath, { force: true });
+      rmSync(pidPath, { force: true });
+      reject(e);
+    });
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       if (killer) clearTimeout(killer);
       resolve({ code, signal, stderr: Buffer.concat(errs).toString('utf8') });
     });
+    if (typeof pid === 'number') {
+      try {
+        writePidRecord(pidPath, pid);
+      } catch (e) {
+        signalGroup(pid, 'SIGKILL');   // a child no record names must not run on
+        clearTimeout(timer);
+        reject(e);
+        return;
+      }
+    }
     child.stdin.end(stdin);
   });
 }
@@ -849,17 +1186,22 @@ function unknownOptionsIn(stderr) {
 
 /** Run one job, or answer its recorded outcome when its run.json exists. The job's `name` is one to four `/`-separated
  *  segments of `[a-z0-9][a-z0-9._-]*`; a name whose stream would be `<out>/SPEND_LEDGER` is refused (D-5803). The
- *  order of a spawn's files is: the stream into `<name>.jsonl.part`, the child's close, its spend line, the rename
- *  to `<name>.jsonl`, then run.json (D-5811). A `.part` left by a driver that died is charged first (chargeLeftover).
+ *  order of a spawn's files is: the stream into `<name>.jsonl.part` and the child's `<name>.pid`, the child's close, its
+ *  spend line, the removal of the `.pid`, the rename to `<name>.jsonl`, then run.json (D-5811, D-5984). A leftover of
+ *  this name is settled first (settleLeftover). `opts.claim` is claimOut's live claim over the job's --out, required
+ *  as runBatch's gate is (D-5985); `opts.liveness` defaults to the claim's. A child that closes while the driver is
+ *  stopping is charged, its `.pid` and `.part` are removed, no run.json is written and the run refuses `interrupted`.
  *  @param {{launch: object, mode: string, model: string, settingsMode: string, recall?: object, stdin: string,
- *    out: string, name: string, lang: string | undefined, timeoutMs?: number}} job */
-export async function launchRun(job) {
+ *    out: string, name: string, lang: string | undefined, timeoutMs?: number}} job
+ *  @param {{claim: object, liveness?: typeof liveness}} opts */
+export async function launchRun(job, opts = {}) {
   if (job === null || typeof job !== 'object' || !Object.hasOwn(job, 'lang')) {
     throw new TypeError("launchRun: a RunJob carries lang, the caller's LANG from main's env (undefined when unset)");
   }
+  const claim = requireClaim('launchRun', opts, [job.out]);
   const done = finishedOutcome(job);
   if (done !== null) return done;
-  chargeLeftover(job);   // finds nothing when runBatch has charged it already
+  settleLeftover(job.out, job.name, opts.liveness ?? claim.liveness);   // finds nothing when claimOut or runBatch has settled it already
   const { launch, mode, model, settingsMode, recall, stdin, out, name, lang } = job;
   // D-5811: a final stream path that is not a regular file (a directory, a symlink) refuses before the spawn, or the
   // rename after the spend line would fail and every resume would charge and spawn again. A regular file (a finished
@@ -873,7 +1215,7 @@ export async function launchRun(job) {
   if (finalSt !== null && !finalSt.isFile()) refuse('out-refused', `run-stream-invalid ${name}`);
   const timeoutMs = job.timeoutMs ?? RUN_TIMEOUT_MS;
   if (typeof stdin !== 'string') throw new TypeError('launchRun: stdin must be a string');
-  const { streamPath, partPath, runJsonPath } = runPaths(out, name);
+  const { streamPath, partPath, pidPath, runJsonPath } = runPaths(out, name);
   const home = runHomeOf(launch);
   const argv = spawnArgv({ mode, model, settingsMode, home });
   const childEnv = spawnEnv({ mode, home, configDir: launch.configDir, poisonBin: ensurePoisonBin(out), lang, recall });
@@ -882,7 +1224,8 @@ export async function launchRun(job) {
   const t0 = Date.now();
   let res;
   try {
-    res = await runChild(launch.launcher, argv, { cwd, childEnv, stdin, partPath, timeoutMs });
+    refuseIfStopping();
+    res = await runChild(launch.launcher, argv, { cwd, childEnv, stdin, partPath, pidPath, timeoutMs });
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
@@ -892,6 +1235,11 @@ export async function launchRun(job) {
   const tokens = spendTokens(facts);
   const unknownOptions = unknownOptionsIn(res.stderr);
   recordSpend(out, name, tokens);
+  rmSync(pidPath, { force: true });
+  if (stopping !== null) {
+    rmSync(partPath, { force: true });   // D-5984: charged above, so a resume spawns the job again and its spend is counted once
+    refuseIfStopping();
+  }
   renameSync(partPath, streamPath);
   const rec = {
     kind: RUN_KIND, v: 1, name, account: launch.accountId, mode, model, settings_mode: settingsMode,
@@ -908,14 +1256,19 @@ export async function launchRun(job) {
  *  stop is never opt-in. A finished job is skipped without the gate. A gate reads the ledger BEFORE its own spawn and
  *  cannot see the runs in flight, so at concurrency c the ledger can pass the budget by up to c-1 runs' spend (the
  *  first gate of each lane runs before any of them has recorded); step 0a runs at concurrency 1 for this reason, and a
- *  caller that cannot tolerate that overshoot passes concurrency 1. Before any lane starts, every job that has
- *  no run.json and a `.part` leftover is charged to the ledger (D-5811), so the first gate reads that spend; a
- *  `.part` that is not a regular file refuses out-refused before any spawn. The first throw, the gate's
- *  included, stops the batch: no further spawn starts, a run already started finishes and is recorded, and the
- *  throw is rethrown, so a re-run resumes. */
+ *  caller that cannot tolerate that overshoot passes concurrency 1. `opts.claim` is claimOut's live claim over every
+ *  job's --out, required as the gate is (D-5985; the gate is checked first); `opts.liveness` defaults to the claim's.
+ *  Before any lane starts, every job that has no run.json has its leftovers settled (settleLeftover, D-5984), so the
+ *  first gate reads a dead writer's charge; a live writer refuses `run-live` and a `.part` that is not a regular
+ *  file refuses out-refused, before any spawn. A stop signal makes the lane check refuse `interrupted` before the
+ *  gate, so no spawn starts after it. The first throw, the gate's included, stops the batch: no further spawn
+ *  starts, a run already started finishes and is recorded (a stopped one is not), and the throw is rethrown, so a
+ *  re-run resumes. */
 export async function runBatch(jobs, opts = {}) {
   if (typeof opts.gate !== 'function') throw new TypeError('runBatch: opts.gate is required (Task 6\'s batchGate, or a test\'s explicit no-op): no batch spawns ungated');
   if (!Array.isArray(jobs) || jobs.length > BATCH_MAX) throw new TypeError(`runBatch: a batch is at most ${BATCH_MAX} jobs`);
+  const claim = requireClaim('runBatch', opts, jobs.map((j) => j.out));
+  const liveNow = opts.liveness ?? claim.liveness;
   const concurrency = opts.concurrency ?? CONCURRENCY_MAX;
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > CONCURRENCY_MAX) throw new TypeError(`runBatch: concurrency must be 1 to ${CONCURRENCY_MAX}`);
   const names = jobs.map((j) => path.join(j.out, j.name));
@@ -925,7 +1278,7 @@ export async function runBatch(jobs, opts = {}) {
     const { runJsonPath } = runPaths(job.out, job.name);
     let hasRunJson = true;
     try { lstatSync(runJsonPath); } catch (e) { hasRunJson = e?.code !== 'ENOENT'; }
-    if (!hasRunJson) chargeLeftover(job);
+    if (!hasRunJson) settleLeftover(job.out, job.name, liveNow);
   }
   const outcomes = new Array(jobs.length);
   let next = 0;
@@ -936,8 +1289,9 @@ export async function runBatch(jobs, opts = {}) {
       try {
         const done = finishedOutcome(jobs[i]);
         if (done !== null) { outcomes[i] = done; continue; }
+        refuseIfStopping();   // D-5984: no spawn starts after a signal
         gate();
-        outcomes[i] = await launchRun(jobs[i]);
+        outcomes[i] = await launchRun(jobs[i], { claim, liveness: liveNow });
       } catch (e) {
         if (stop === null) stop = { e };
         return;
@@ -1166,7 +1520,8 @@ export function wrapperSha(launch) {
 }
 
 /** `<launcher> --version` under launchRun's rules: writer-mode env (no CCRC_RECALL_*), the poisoned PATH, a fresh
- *  empty 0700 cwd removed afterwards, no shell, killed on its own pid past VERSION_TIMEOUT_MS. It spends nothing and
+ *  empty 0700 cwd removed afterwards, no shell, a process-group leader of its own (D-5984) killed, group and all, past
+ *  VERSION_TIMEOUT_MS. It spends nothing and
  *  records nothing in the ledger. The version is the first stdout line, trimmed. `lang` is the caller's LANG from
  *  main's env (undefined when unset), threaded as RunJob.lang is: this function reads no environment itself. The
  *  child env is named childEnv and passed as `env: childEnv`, as launchRun's is: Task 5's env scan reds on the
@@ -1174,18 +1529,19 @@ export function wrapperSha(launch) {
  *  @param {object} launch  @param {string} out  @param {string | undefined} lang */
 export async function measureClaudeVersion(launch, out, lang) {
   const home = runHomeOf(launch);
+  refuseIfStopping();   // D-5984: no spawn starts after a signal
   const childEnv = spawnEnv({ mode: 'writer', home, configDir: launch.configDir, poisonBin: ensurePoisonBin(out), lang });
   const cwd = makeRunCwd();
   let r;
   try {
     r = await new Promise((resolve) => {
-      const child = spawn(launch.launcher, ['--version'], { cwd, env: childEnv, stdio: ['ignore', 'pipe', 'ignore'] });
+      const child = spawnGroup(launch.launcher, ['--version'], { cwd, env: childEnv, stdio: ['ignore', 'pipe', 'ignore'] });
       const chunks = [];
       let kept = 0;
       child.stdout.on('data', (b) => {
         if (kept < VERSION_STDOUT_MAX) { chunks.push(b.subarray(0, VERSION_STDOUT_MAX - kept)); kept += b.length; }
       });
-      const timer = setTimeout(() => child.kill('SIGKILL'), VERSION_TIMEOUT_MS);
+      const timer = setTimeout(() => { if (typeof child.pid === 'number') signalGroup(child.pid, 'SIGKILL'); }, VERSION_TIMEOUT_MS);
       child.on('error', () => { clearTimeout(timer); resolve({ code: null, signal: null, stdout: '' }); });
       child.on('close', (code, signal) => { clearTimeout(timer); resolve({ code, signal, stdout: Buffer.concat(chunks).toString('utf8') }); });
     });
@@ -1441,45 +1797,52 @@ export async function step0aCommand(flags, env) {
   refuseUnusableInputs(home, outArg, STEP0A_RUNS.map((r) => [r.modelFlag, flags[r.modelFlag]]));
   const out = prepareOut(outArg);
   refuseColonInRealOut(out);
-  const { json, roster } = readRoster(home);
-  const launch = admitAccount(json, roster, flags.account, home);
-  const budget = flags.budget;
-  const models = Object.fromEntries(STEP0A_RUNS.map((r) => [r.key, flags[r.modelFlag]]));
-  const settingsMode = flags['settings-mode'] ?? 'restricted';
-  if (!SETTINGS_MODES.includes(settingsMode)) refuse('args-invalid', `settings-mode ${settingsMode}`);
-  const shas = codeShas();
-  if (shas.state !== 'measured') refuse('code-unmeasured', `${shas.path} is ${shas.cause}`);
-  const stamp = readReleaseStamp(home);
-  if (stamp.state !== 'value') refuse('tree-unmeasured', `stamp ${stamp.state}${stamp.code === undefined ? '' : ` ${stamp.code}`}`);
-  // Before any spawn or spend: an unreadable wrapper refuses wrapper-unmeasured here, never after the batch has spent.
-  const wrapperSha256 = wrapperSha(launch);
-  const gate = batchGate({ out, home, accountId: launch.accountId, budget, limits: LIMITS_DEFAULTS });
-  gate();
-  const version = await measureClaudeVersion(launch, out, env.LANG);
-  // A --version that cannot be measured is a refusal (coordinator ruling), never a guessed or recorded version.
-  if (version.state !== 'value') refuse('version-unmeasured', `${launch.launcher} --version failed (code ${version.code}, signal ${version.signal})`);
-  const dir = path.join(out, 'step0a');
-  if (!existsSync(dir)) mkdirSync(dir, { mode: 0o700 });
-  pinStep0aLaunch(dir, { account: launch.accountId, version: version.version, wrapper: wrapperSha256 });
-  const jobs = STEP0A_RUNS.map((r) => ({
-    launch, mode: r.mode, model: models[r.key], settingsMode, stdin: STEP0A_PROMPT, out, name: `step0a/${r.key}`, lang: env.LANG,
-  }));
-  const outcomes = await runBatch(jobs, { concurrency: 1, gate });
-  const init = Object.fromEntries(jobs.map((j, i) => [
-    STEP0A_RUNS[i].key, readStreamJson(readFileSync(path.join(out, `${j.name}.jsonl`), 'utf8')).init,
-  ]));
-  const output = {
-    kind: STEP0A_KIND, v: 1, measured_ms: Date.now(), account: launch.accountId, settings_mode: settingsMode,
-    claude_code_version: version.version, wrapper_sha256: wrapperSha256,
-    flags_accepted: flagsAccepted(jobs.map((j) => spawnArgv({ mode: j.mode, model: j.model, settingsMode, home })), outcomes),
-    writer_init: init.writer, judge_init: init.judge, box_init: init.box,
-    code_shas: shas.files, release_stamp: stamp.tag, budget, spend: spentSoFar(out),
-  };
-  const file = path.join(out, STEP0A_FILE);
-  writeFileSync(`${file}.tmp`, canonicalJson(output) + '\n', { mode: 0o600 });
-  renameSync(`${file}.tmp`, file);
-  process.stderr.write(`sha256 ${sha256Hex(readFileSync(file))}\n`);   // D-5983: stderr, as open and freeze print it; stdout stays empty
-  return EXIT.OK;
+  const claim = claimOut(out);   // D-5985: one driver per --out, every leftover settled, before the roster read
+  try {
+    const { json, roster } = readRoster(home);
+    const launch = admitAccount(json, roster, flags.account, home);
+    const budget = flags.budget;
+    const models = Object.fromEntries(STEP0A_RUNS.map((r) => [r.key, flags[r.modelFlag]]));
+    const settingsMode = flags['settings-mode'] ?? 'restricted';
+    if (!SETTINGS_MODES.includes(settingsMode)) refuse('args-invalid', `settings-mode ${settingsMode}`);
+    const shas = codeShas();
+    if (shas.state !== 'measured') refuse('code-unmeasured', `${shas.path} is ${shas.cause}`);
+    const stamp = readReleaseStamp(home);
+    if (stamp.state !== 'value') refuse('tree-unmeasured', `stamp ${stamp.state}${stamp.code === undefined ? '' : ` ${stamp.code}`}`);
+    // Before any spawn or spend: an unreadable wrapper refuses wrapper-unmeasured here, never after the batch has spent.
+    const wrapperSha256 = wrapperSha(launch);
+    const gate = batchGate({ out, home, accountId: launch.accountId, budget, limits: LIMITS_DEFAULTS });
+    gate();
+    const version = await measureClaudeVersion(launch, out, env.LANG);
+    refuseIfStopping();   // D-5984: before the version's state is read, so a killed --version reports `interrupted`
+    // A --version that cannot be measured is a refusal (coordinator ruling), never a guessed or recorded version.
+    if (version.state !== 'value') refuse('version-unmeasured', `${launch.launcher} --version failed (code ${version.code}, signal ${version.signal})`);
+    const dir = path.join(out, 'step0a');
+    if (!existsSync(dir)) mkdirSync(dir, { mode: 0o700 });
+    pinStep0aLaunch(dir, { account: launch.accountId, version: version.version, wrapper: wrapperSha256 });
+    const jobs = STEP0A_RUNS.map((r) => ({
+      launch, mode: r.mode, model: models[r.key], settingsMode, stdin: STEP0A_PROMPT, out, name: `step0a/${r.key}`, lang: env.LANG,
+    }));
+    const outcomes = await runBatch(jobs, { concurrency: 1, gate, claim });
+    const init = Object.fromEntries(jobs.map((j, i) => [
+      STEP0A_RUNS[i].key, readStreamJson(readFileSync(path.join(out, `${j.name}.jsonl`), 'utf8')).init,
+    ]));
+    const output = {
+      kind: STEP0A_KIND, v: 1, measured_ms: Date.now(), account: launch.accountId, settings_mode: settingsMode,
+      claude_code_version: version.version, wrapper_sha256: wrapperSha256,
+      flags_accepted: flagsAccepted(jobs.map((j) => spawnArgv({ mode: j.mode, model: j.model, settingsMode, home })), outcomes),
+      writer_init: init.writer, judge_init: init.judge, box_init: init.box,
+      code_shas: shas.files, release_stamp: stamp.tag, budget, spend: spentSoFar(out),
+    };
+    const file = path.join(out, STEP0A_FILE);
+    refuseIfStopping();   // D-5984: a stopped step 0a writes no step0a.json
+    writeFileSync(`${file}.tmp`, canonicalJson(output) + '\n', { mode: 0o600 });
+    renameSync(`${file}.tmp`, file);
+    process.stderr.write(`sha256 ${sha256Hex(readFileSync(file))}\n`);   // D-5983: stderr, as open and freeze print it; stdout stays empty
+    return EXIT.OK;
+  } finally {
+    claim.release();
+  }
 }
 HANDLERS.set('step0a', step0aCommand);
 
@@ -1592,30 +1955,36 @@ export async function probeCommand(flags, env) {
   refuseUnusableInputs(home, flags.out, [['arm-model', flags['arm-model']]]);
   const out = prepareOut(flags.out);
   refuseColonInRealOut(out);
-  const { json, roster } = readRoster(home);
-  const launch = admitAccount(json, roster, flags.account, home);
-  // D-5813: an absent or non-executable launcher is an account that cannot be launched, a driver refusal, not a raw spawn error.
+  const claim = claimOut(out);   // D-5985: one driver per --out, every leftover settled, before the roster read
   try {
-    accessSync(launch.launcher, constants.X_OK);
-  } catch (e) {
-    refuse('account-refused', `launcher-${e?.code ?? 'unknown'}`);
+    const { json, roster } = readRoster(home);
+    const launch = admitAccount(json, roster, flags.account, home);
+    // D-5813: an absent or non-executable launcher is an account that cannot be launched, a driver refusal, not a raw spawn error.
+    try {
+      accessSync(launch.launcher, constants.X_OK);
+    } catch (e) {
+      refuse('account-refused', `launcher-${e?.code ?? 'unknown'}`);
+    }
+    const gate = batchGate({ out, home, accountId: launch.accountId, budget: flags.budget, limits: LIMITS_DEFAULTS });
+    const spellings = allowedToolSpellings(home);
+    const jobs = spellings.map((spelling, i) => ({
+      launch, mode: 'box', model: flags['arm-model'], settingsMode,
+      stdin: probePromptOf(probeCommandOf(spelling)), out, name: `${PROBE_RUN_DIR}/spelling-${i + 1}`, lang: env.LANG,
+    }));
+    const outcomes = await runBatch(jobs, { concurrency: CONCURRENCY_MAX, gate, claim });
+    const output = {
+      kind: PROBE_KIND, v: 1, measured_ms: Date.now(), account: launch.accountId, settings_mode: settingsMode,
+      model: flags['arm-model'],
+      spellings: spellings.map((spelling, i) => ({ spelling, ...probeFindingOf(outcomes[i].facts, probeCommandOf(spelling)) })),
+      budget: flags.budget, spend: spentSoFar(out),
+    };
+    refuseIfStopping();   // D-5984: a stopped probe writes no probe.json
+    const sha = writeProbeJson(out, output);
+    process.stderr.write(`sha256 ${sha}\n`);   // D-5983: stderr, as open and freeze print it; stdout stays empty
+    return EXIT.OK;
+  } finally {
+    claim.release();
   }
-  const gate = batchGate({ out, home, accountId: launch.accountId, budget: flags.budget, limits: LIMITS_DEFAULTS });
-  const spellings = allowedToolSpellings(home);
-  const jobs = spellings.map((spelling, i) => ({
-    launch, mode: 'box', model: flags['arm-model'], settingsMode,
-    stdin: probePromptOf(probeCommandOf(spelling)), out, name: `${PROBE_RUN_DIR}/spelling-${i + 1}`, lang: env.LANG,
-  }));
-  const outcomes = await runBatch(jobs, { concurrency: CONCURRENCY_MAX, gate });
-  const output = {
-    kind: PROBE_KIND, v: 1, measured_ms: Date.now(), account: launch.accountId, settings_mode: settingsMode,
-    model: flags['arm-model'],
-    spellings: spellings.map((spelling, i) => ({ spelling, ...probeFindingOf(outcomes[i].facts, probeCommandOf(spelling)) })),
-    budget: flags.budget, spend: spentSoFar(out),
-  };
-  const sha = writeProbeJson(out, output);
-  process.stderr.write(`sha256 ${sha}\n`);   // D-5983: stderr, as open and freeze print it; stdout stays empty
-  return EXIT.OK;
 }
 HANDLERS.set('probe', probeCommand);
 
@@ -1688,10 +2057,11 @@ export function persistenceLeft({ configDir, sessionId, cwd }) {
 /** Step 0b's mechanics without the seam (W2-D57): one box-mode run of TURN_PROBE_PROMPT named 'step0b/turn-bound'
  *  (resumed from its run.json when it finished before), then the turn bound over its stream and the persistence
  *  check over the account's config dir, keyed by that run's init session_id and its cwd. The run goes through runBatch
- *  with the caller's required `gate` (W2-5b passes its batchGate), so it is gated like every spawn; the caller also
+ *  with the caller's required `gate` (W2-5b passes its batchGate) and `claim` (claimOut's, D-5985), so it is gated and
+ *  claimed like every spawn; the caller also
  *  passes `lang`, its LANG from main's env (undefined when unset), into the run's RunJob. */
-export async function step0bMechanics({ launch, out, model, settingsMode, lang, gate }) {
-  const [run] = await runBatch([{ launch, mode: 'box', model, settingsMode, stdin: TURN_PROBE_PROMPT, out, name: STEP0B_TURN_RUN, lang }], { concurrency: 1, gate });
+export async function step0bMechanics({ launch, out, model, settingsMode, lang, gate, claim }) {
+  const [run] = await runBatch([{ launch, mode: 'box', model, settingsMode, stdin: TURN_PROBE_PROMPT, out, name: STEP0B_TURN_RUN, lang }], { concurrency: 1, gate, claim });
   const left = persistenceLeft({
     configDir: launch.configDir, sessionId: run.facts.init === null ? null : run.facts.init.sessionId, cwd: run.cwd,
   });
