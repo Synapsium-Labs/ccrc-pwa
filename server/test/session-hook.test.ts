@@ -9542,6 +9542,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // two trees, never retyped. No D-number.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
+        // RE-MEASURED on fleet capacity W1-1 (D-6091), dumped from the tree and never retyped: `cmd_caps`' +4 lines (`hibernate-hold-ok`) at `:8578` slid every anchor below them; `ccd/ccd:11665-11670` left and `ccd/ccd:13573-13575` entered, 53 -> 53. A coincidence of the shift, not rot or a repair. S6-R11, no D-number.
         // RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
         // RE-MEASURED on the forked-session-transcript review round (2026-10-13), dumped from the merged
         // tree and never retyped: the review fixes' ccd/ccd insertions moved which rows fail. S6-R11.
@@ -9805,7 +9806,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
-        'ccd/ccd:11665-11670',
+        'ccd/ccd:13573-13575',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         'ccd/ccd:2874',
@@ -9880,6 +9881,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // above. Measured by diffing the dumped failure sets of the three trees, never retyped. No D-number.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
+        // RE-MEASURED on fleet capacity W1-1 (D-6091), from the same run as the row-pass set above, never retyped: `cmd_caps`' +4 lines at `:8578` moved the bytes under `spec:2210 ccd/ccd:13573-13575`, which enters (a coincidence of the shift). S6-R11, no D-number.
         // RE-MEASURED on the forked-session-transcript review round 2 + tick diet W1 merge (2026-10-14), dumped from the merged tree and never retyped. S6-R11, no D-number.
         // RE-MEASURED on the forked-session-transcript review round (2026-10-13), from the same run as the
         // row-pass set above, dumped and never retyped. S6-R11, no D-number.
@@ -10026,6 +10028,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
+        'spec:2210 ccd/ccd:13573-13575',
         // RE-MEASURED for `ccd ws-gc --fast` (D-5886, #123), 35 -> 34: the same second site leaves
         // as in the row-level set above, from the same run. S6-R11, no D-number.
         'spec:2220 ccd/ccd:2874',

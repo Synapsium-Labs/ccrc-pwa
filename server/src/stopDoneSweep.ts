@@ -37,7 +37,7 @@ import {
  *  2. the population is the rows the frame shows as dispatched children that are neither stopped nor archived (a
  *     sleeping row carries the stop stamp `ccd hibernate` writes, so it is never asked twice), and the store is asked
  *     ONCE for all of them (`lastRunBySession`'s placed reads, `activeClaims`, and `outstandingMailFor` per candidate),
- *     and each row's `.hold` is classified (`heldKindOf`: `programmeHoldOf`, and the store's `run` read for a `run:`);
+ *     and each row's `.hold` is classified (`heldKindOf`: `programmeHoldOf`, and the store's `run` read for a run suffix);
  *  3. the verdict runs on what is known; a row it answers `measure` for has its live word, its turn verdict and its turn
  *     marker read (at most `STOP_DONE_MEASURES_PER_PASS`), and the verdict runs again;
  *  4. at most `STOP_DONE_PER_PASS` acts, each ON THE COORDINATION SERIALISER and then the session's own queue, so a
@@ -147,7 +147,7 @@ function storeReads(coord: StopDoneSweepDeps['coord'], ids: readonly string[]): 
 }
 
 /** The row's `.hold`, classified (D-6091): the grammar through `programmeHoldOf`, the one reader of
- *  `HOLD_REASON_PATTERN`, and a `run:` suffix's state through the store's `run` read. Any read that cannot be made, or
+ *  `HOLD_REASON_PATTERN`, and a run suffix's state through the store's `run` read. Any read that cannot be made, or
  *  a run the store does not have, answers `unreadable`, which holds. */
 export function heldKindOf(held: string | null, coord: Pick<StopDoneSweepDeps['coord'], 'run'>): StopDoneHeldKind {
   if (held === null) return 'none';

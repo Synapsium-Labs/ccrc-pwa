@@ -87,11 +87,10 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
       activeClaims: () => [],
       outstandingMailFor: (toId: string) => (f.mailTo.has(toId) ? [{}] : []) as never,
       recordFeedEvent: () => undefined,
-      runsNamingSession: (id: string) => ({ ok: true as const, runs: f.reviewsOpen.has(id) ? [{ id: 900 }] : [] }) as never,
       run: (runId: number) => {
         const st = f.runStates.get(runId);
         if (st === 'unreadable') return { ok: false as const, kind: 'run-unreadable' as const, detail: 'locked' };
-        return { ok: true as const, run: runId === 900 ? { reviews: 901 } : { id: runId, state: st ?? 'working', reviews: null } };
+        return { ok: true as const, run: (runId === 900 ? { reviews: 901 } : { id: runId, state: st ?? 'working', reviews: null }) as never };
       },
     },
     runCcd: async (a) => { f.argv.push([...a]); return { ok: f.ccdOk, stdout: '', stderr: f.ccdOk ? '' : 'refused', killed: false, signal: null }; },
