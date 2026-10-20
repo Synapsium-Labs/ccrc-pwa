@@ -2266,6 +2266,17 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 01:55: v0.0.387 (#838) to v0.0.389 (#859) followed, unapplied. STATUS: fleet and server v0.0.368, newest
         v0.0.389, stable v0.0.328, intent dev/auto=off, backups fleet 196M/server 3203M, disk free fleet 206G/work
         volume 95G/server 29G, no anomalies.
+      - **03:55 UTC: two operator taps, both clean.** v0.0.368 to v0.0.389 (#859), fleet 03:05 to 03:07, server
+        03:07 to 03:08; then to v0.0.395 (#836), fleet 03:27:00 to 03:28:35, server 03:28:43 to 03:29:59. All
+        four reports `done`, `from: pwa`, gates passed, doctor 0 failed on both boxes; `ccrc.service` restarted
+        03:29:23. Server backups 3203M to 3847M: the two new backups are 578M and 586M, replacing 233M and 287M,
+        because coord.db grew from 297M at 22:58 to 391M. The broker's own rates moved, and I mailed its coordinator
+        early (mail 7041). Since 15:01, delegation_events gained about 4,330 rows/h, 3.7 times day 0 to day 1, and the
+        checkpoint is 23.2 MB. On v0.0.395 the slow-pass lines read a block mean of 8.3 s (max 13.9 s) over 24
+        passes, against 4.3 s at 20:37 on a 13.5 MB checkpoint; rewrite and repair both about doubled. The probe's 5G
+        line is about four taps away, and free disk is 29G. v0.0.396 to v0.0.398 followed, unapplied. STATUS: fleet
+        and server v0.0.395, newest v0.0.398, stable v0.0.328, intent dev/auto=off, backups fleet 181M/server
+        3847M, disk free fleet 208G/work volume 90G/server 29G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
