@@ -613,7 +613,12 @@ export function spendTokens(facts) {
 // O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW. Every other write is a tmp file created exclusively (O_EXCL|O_NOFOLLOW) and a
 // rename. Every failure to read, list, create or write a path under --out refuses `out-refused` with the path relative
 // to --out and a cause (`<rel> unreadable <code>`, `<rel> unwritable <code>`, or the type refusals): an --out holder can
-// make each happen, and a raw errno is not a W2 stop word. Kept as they are: prepareOut's marker WRITE (into the
+// make each happen, and a raw errno is not a W2 stop word. That covers the removals and renames of the run's own
+// bookkeeping too (removePlain; the lock's link, rename and put-back; launchRun's `.pid` and `.part` removal and its
+// rename). A removal that fails AFTER the spend line leaves the `.part`, which the next driver charges again (an
+// over-count). Not covered, because only a signal or a race reaches them: the child's own error handler and the stop
+// path's `.part` removal in runChild, and the best-effort cleanup of a tmp file on a path that is already refusing
+// (dropQuietly). Kept as they are: prepareOut's marker WRITE (into the
 // directory it just made, 'wx' = O_EXCL), and the reads outside --out (/proc, the roster, the release stamp, the
 // wrapper). The marker's read, and HOME's limits row, go through readPlain.
 
@@ -676,6 +681,27 @@ function writeAll(fd, bytes) {
   while (at < bytes.length) at += writeSync(fd, bytes, at, bytes.length - at);
 }
 
+/** Remove `<out>/<rel>` (D-5986). A file already gone is fine; any other failure (a directory nobody may write into: EACCES)
+ *  refuses `out-refused` `<rel> unwritable <code>`, never a raw errno. Use it where the removal is part of the run's own
+ *  bookkeeping; a cleanup that must not mask the refusal in flight uses `dropQuietly`.
+ *  @param {string} out  @param {string} rel */
+function removePlain(out, rel) {
+  try {
+    rmSync(path.join(out, rel), { force: true });
+  } catch (e) {
+    refuse('out-refused', `${rel} unwritable ${errCode(e)}`);
+  }
+}
+
+/** Best-effort removal of a tmp file on a path that is already refusing: a failure here must not replace that refusal. */
+function dropQuietly(p) {
+  try {
+    rmSync(p, { force: true });
+  } catch {
+    // the refusal in flight is the answer; a tmp left behind is replaced by the next create (createPlain replaceStale)
+  }
+}
+
 /** Append one line to `<out>/<rel>`: the file is opened O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW|O_NONBLOCK (a FIFO with no
  *  reader fails ENXIO instead of blocking) and must still be a regular file by fstat; one write. A link, a FIFO or any
  *  other type there refuses `out-refused` `<rel> is not a regular file` and nothing is written; an open, fstat or write
@@ -718,7 +744,7 @@ function createPlain(out, rel, mode, replaceStale) {
     } catch (e) {
       if (e?.code !== 'EEXIST' && e?.code !== 'ELOOP') refuse('out-refused', `${rel} unwritable ${errCode(e)}`);
       const st = lstatOrNull(out, rel);
-      if (replaceStale && attempt === 0 && st !== null && st.isFile()) { rmSync(p, { force: true }); continue; }
+      if (replaceStale && attempt === 0 && st !== null && st.isFile()) { removePlain(out, rel); continue; }   // D-5986: a stale tmp nobody may remove refuses
       refuse('out-refused', `${rel} already exists${replaceStale && attempt === 0 ? ' and is not a regular file' : ''}`);
     }
     fchmodSync(fd, mode);
@@ -740,14 +766,14 @@ function writePlain(out, rel, bytes, mode = 0o600) {
     writeAll(fd, typeof bytes === 'string' ? Buffer.from(bytes, 'utf8') : bytes);
   } catch (e) {
     closeSync(fd);
-    rmSync(tmp, { force: true });
+    dropQuietly(tmp);
     refuse('out-refused', `${rel} unwritable ${errCode(e)}`);   // D-5986: a failed write (a full disk) is a refusal too
   }
   closeSync(fd);
   try {
     renameSync(tmp, p);
   } catch (e) {
-    rmSync(tmp, { force: true });
+    dropQuietly(tmp);
     refuse('out-refused', `${rel} unwritable ${errCode(e)}`);
   }
 }
@@ -1130,7 +1156,7 @@ function settleLeftover(out, name, live) {
     rec = read;
   }
   if (part === null) {
-    if (pid !== null) rmSync(pidPath);
+    if (pid !== null) removePlain(out, `${name}.pid`);   // D-5986: a removal that fails refuses out-refused
     return;
   }
   if (rec !== null) {
@@ -1142,8 +1168,10 @@ function settleLeftover(out, name, live) {
   const partRead = readPlain(partPath, OUT_STREAM_CAP);
   if (partRead.state !== 'bytes') refuse('out-refused', `run-stream-invalid ${name}`);
   recordSpend(out, name, spendTokens(readStreamJson(partRead.bytes.toString('utf8'))));
-  if (rec !== null) rmSync(pidPath);
-  rmSync(partPath);
+  // D-5986: the spend line is written, so a removal that fails below leaves the `.part` (and the `.pid`) for the next
+  // driver to charge again: an over-count, never a lost charge.
+  if (rec !== null) removePlain(out, `${name}.pid`);
+  removePlain(out, `${name}.jsonl.part`);
 }
 
 const LOCK_NAME = '.driver.lock';
@@ -1173,7 +1201,7 @@ function takeLock(out, live, afterHeld) {
       return true;
     } catch (e) {
       if (e?.code === 'EEXIST') return false;
-      throw e;
+      refuse('out-refused', `${LOCK_NAME} unwritable ${errCode(e)}`);   // D-5986: a link that cannot be made is a refusal
     }
   };
   try {
@@ -1195,14 +1223,14 @@ function takeLock(out, live, afterHeld) {
       renameSync(lock, stale);
     } catch (e) {
       if (e?.code === 'ENOENT') refuse('out-in-use', `${LOCK_NAME} was taken over by another driver`);
-      throw e;
+      refuse('out-refused', `${LOCK_NAME} unwritable ${errCode(e)}`);   // D-5986
     }
     const again = readPidRecord(stale);
     if (again.state !== 'record' || again.pid !== holder.pid || again.start !== holder.start) {
       try {
         linkSync(stale, lock);   // not the dead holder's: put it back
       } catch (e) {
-        if (e?.code !== 'EEXIST' && !(again.state === 'absent' && e?.code === 'ENOENT')) throw e;
+        if (e?.code !== 'EEXIST' && !(again.state === 'absent' && e?.code === 'ENOENT')) refuse('out-refused', `${LOCK_NAME} unwritable ${errCode(e)}`);   // D-5986
       }
       rmSync(stale, { force: true });
       refuse('out-in-use', `${LOCK_NAME} changed hands while this driver started`);
@@ -1435,12 +1463,18 @@ export async function launchRun(job, opts = {}) {
   const tokens = spendTokens(facts);
   const unknownOptions = unknownOptionsIn(res.stderr);
   recordSpend(out, name, tokens);
-  rmSync(pidPath, { force: true });
+  // D-5986: the spend line is written. A removal or the rename below that fails refuses out-refused and leaves the `.part`
+  // (with the `.pid` when that is what failed), which the next driver charges again: an over-count, never a lost charge.
+  removePlain(out, `${name}.pid`);
   if (stopping !== null) {
-    rmSync(partPath, { force: true });   // D-5984: charged above, so a resume spawns the job again and its spend is counted once
+    removePlain(out, `${name}.jsonl.part`);   // D-5984: charged above, so a resume spawns the job again and its spend is counted once
     refuseIfStopping();
   }
-  renameSync(partPath, streamPath);
+  try {
+    renameSync(partPath, streamPath);
+  } catch (e) {
+    refuse('out-refused', `${name}.jsonl unwritable ${errCode(e)}`);
+  }
   const rec = {
     kind: RUN_KIND, v: 1, name, account: launch.accountId, mode, model, settings_mode: settingsMode,
     code: res.code, signal: res.signal, ms, cwd, stream_sha256: sha256Hex(stream), tokens, unknown_options: unknownOptions,

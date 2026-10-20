@@ -2300,6 +2300,51 @@ describe('fix round 1 (D-5986): no-follow, type-checked I/O under --out', () => 
     }
   }, 60_000);
 
+  it('a run subdirectory nobody may write into (mode 0500) holding a leftover .part, a lone .pid, or a stale tmp of the lock: the removal that fails refuses out-refused <rel> unwritable EACCES, never a raw errno, and the lock is released', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const ledgerLines = (out: string): number =>
+      existsSync(path.join(out, replay.SPEND_LEDGER)) ? readFileSync(path.join(out, replay.SPEND_LEDGER), 'utf8').split('\n').filter((l) => l !== '').length : 0;
+    // (1) a leftover .part (no .pid): the charge lands, the removal fails, the .part stays and is charged again by the next driver (an over-count)
+    const a = freshOut();
+    const asub = path.join(a, 'sub');
+    mkdirSync(asub);
+    writeFileSync(path.join(asub, 'lo-0.jsonl.part'), D6_STREAM);
+    chmodSync(asub, 0o500);
+    try {
+      expect(thrown(() => replay.claimOut(a))).toMatchObject({ word: 'out-refused', detail: 'sub/lo-0.jsonl.part unwritable EACCES' });
+      expect(existsSync(path.join(asub, 'lo-0.jsonl.part')), 'the .part stays').toBe(true);
+      expect(ledgerLines(a), 'charged once').toBe(1);
+      expect(existsSync(path.join(a, '.driver.lock')), 'the lock was released').toBe(false);
+      expect(thrown(() => replay.claimOut(a))).toMatchObject({ word: 'out-refused', detail: 'sub/lo-0.jsonl.part unwritable EACCES' });
+      expect(ledgerLines(a), 'the left .part is charged again: an over-count, never a lost charge').toBe(2);
+    } finally {
+      chmodSync(asub, 0o700);
+    }
+    // (2) a lone .pid
+    const b = freshOut();
+    const bsub = path.join(b, 'sub');
+    mkdirSync(bsub);
+    writeFileSync(path.join(bsub, 'lo-1.pid'), recText(424242, null));
+    chmodSync(bsub, 0o500);
+    try {
+      expect(thrown(() => replay.claimOut(b))).toMatchObject({ word: 'out-refused', detail: 'sub/lo-1.pid unwritable EACCES' });
+      expect(existsSync(path.join(bsub, 'lo-1.pid')), 'the .pid stays').toBe(true);
+      expect(existsSync(path.join(b, '.driver.lock')), 'the lock was released').toBe(false);
+    } finally {
+      chmodSync(bsub, 0o700);
+    }
+    // (3) a stale regular tmp of the lock, in a --out nobody may write into: the replace-stale removal refuses
+    const c = freshOut();
+    const tmpName = `.driver.lock.tmp-${process.pid}`;
+    writeFileSync(path.join(c, tmpName), 'stale');
+    chmodSync(c, 0o500);
+    try {
+      expect(thrown(() => replay.claimOut(c))).toMatchObject({ word: 'out-refused', detail: `${tmpName} unwritable EACCES` });
+    } finally {
+      chmodSync(c, 0o700);
+    }
+  });
+
   /** Run `body` (ESM, top-level await) in a child with a deadline; the driver is `D`, a scratch directory is `base`. */
   function inChild(body: string, ms: number): { out: string; err: string; signal: NodeJS.Signals | null; status: number | null } {
     const dir = mkTmp('ccrc-replay-d5986-child-');
