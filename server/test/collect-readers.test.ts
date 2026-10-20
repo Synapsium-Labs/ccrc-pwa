@@ -436,7 +436,9 @@ describe('the collect readers are their own (spec §5.10)', () => {
     // Task 4 adds `./childReclaimSweep.js` (L1 to L1, one way), and its pacing suite pins the exact pair. This case
     // refuses only a third specifier, so it stays green at Task 4's commit (no commit is red).
     expect(specs).toContain('../../shared/api.js');
-    expect(specs.filter((s) => s !== '../../shared/api.js' && s !== './childReclaimSweep.js'), 'a specifier outside that pair')
+    // `shared/switches.js` is L0 too: the lane's live marker is spelled once there (D-5855).
+    const ALLOWED = new Set(['../../shared/api.js', '../../shared/switches.js', './childReclaimSweep.js']);
+    expect(specs.filter((s) => !ALLOWED.has(s)), 'a specifier outside that pair')
       .toEqual([]);
     expect(code).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);
   });

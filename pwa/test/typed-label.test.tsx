@@ -4,7 +4,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { SessionLine } from '../src/fleet/SessionLine';
-import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
+import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import { TYPE_MS, TypedLabel } from '@ccrc/ui';
 
 // THE PREFERENCE IS STEERED THROUGH THE GLOBAL, NOT THROUGH A MODULE MOCK.
@@ -193,7 +193,7 @@ describe('the fleet line', () => {
 // `getAllByText`), which is identical whether the crumb is a plain span or a
 // wrapped one. This is the header's half of the fleet-line case above.
 describe('the session header crumb', () => {
-  const headerProps = (session: FleetSession): SessionHeaderProps => ({
+  const headerProps = (session: FleetSession): HeaderHostProps => ({
     session, status: 'idle', statusUpdatedAt: null,
     onInterrupt: () => {}, onOpenTerminal: () => {}, onBack: () => {},
     onChangeModel: () => {}, onChangeEffort: () => {}, onMoveAccount: () => {},
@@ -204,10 +204,10 @@ describe('the session header crumb', () => {
     // workspace non-null, so the crumb renders at all (SessionHeader.tsx:191).
     vi.useFakeTimers();
     const { rerender, container } = render(
-      <SessionHeader {...headerProps(s({ workspace: 'quiet-mesa', branch: 'ws/quiet-mesa' }))} />);
+      <SessionHeaderHost {...headerProps(s({ workspace: 'quiet-mesa', branch: 'ws/quiet-mesa' }))} />);
     expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-mesa');
 
-    rerender(<SessionHeader {...headerProps(s({ workspace: 'quiet-mesa', branch: 'ws/fix-the-pr-sheet' }))} />);
+    rerender(<SessionHeaderHost {...headerProps(s({ workspace: 'quiet-mesa', branch: 'ws/fix-the-pr-sheet' }))} />);
     // Mid-flight: a plain span would already show the whole new value and
     // would never grow a caret — both false here, exactly as on the fleet line.
     expect(container.querySelector('.chat-crumb')).not.toHaveTextContent('ws/fix-the-pr-sheet');

@@ -15,6 +15,9 @@ import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession as baseSession } from './fleetFixture';
 import { SessionScreen } from '../src/screens/SessionScreen';
+// W2 Task S2d: the session menu's items and the model/effort chips are command doors, run by the one layer
+// `app.tsx` mounts above the screen; a case that drives them mounts it beside, as the app does.
+import { CommandLayer } from '../src/command/CommandLayer';
 import { ToastHost } from '@ccrc/ui';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -98,6 +101,7 @@ const renderScreen = (patch: Partial<FleetSession> = {}): { store: SessionStore;
   const fleet = makeFleet(patch);
   render(
     <>
+      <CommandLayer openNewSession={() => {}} />
       <SessionScreen id={ID} store={store} fleet={fleet} />
       <ToastHost />
     </>,

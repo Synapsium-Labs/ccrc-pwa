@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=fcda38a5c959d44698c0bd3e83a1e4eb0a41288d82ff2d613656ba29c5f68a92
+# ccrc:generated 1 sha256=2c3b776052acc7c9dc732c67b5d4000d09c0e05af3622ba090a73f8b97c4c3f6
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -10160,14 +10160,18 @@ _ws_archive_manifest() {   # id -> one JSON object on stdout
   # asserted two mechanisms this file disproves — that the manifest is "the one
   # record ws-reap later reads", and that the lineage therefore survives the
   # worktree. Neither is true, and the correction is the contract:
-  #   - NOTHING IN ccd READS THIS MANIFEST BACK. `grep -n archivemanifest ccd`
-  #     is four sites: the field-name list, this write, `ws-restore`'s own
+  #   - ONE FIELD IS READ BACK, AND NOTHING ELSE. `grep -n archivemanifest ccd`
+  #     is five sites: the field-name list, this write, `ws-restore`'s own
   #     `stat -c %s` of the file (for `meas.manifestBytes`, byte count only,
-  #     never the content), and its `rm -f`. `_ws_reap_eval` re-measures every
-  #     fact it needs itself. The only reader anywhere is
-  #     `server/src/registry.ts`'s `manifestBytes`,
-  #     which extracts `worktreeBytes` and nothing else. This field's audience
-  #     is a HUMAN reading an archived workspace's record.
+  #     never the content), its `rm -f`, and `_ws_gc_manifest_bytes` (D-5886),
+  #     which gives `ws-gc --fast` an archived row's size from `.worktreeBytes`
+  #     and takes it only as a whole number (anything else shows `-`).
+  #     `_ws_reap_eval` re-measures every fact it needs itself. The two readers
+  #     anywhere are that one and `server/src/registry.ts`'s `manifestBytes`,
+  #     and both extract `worktreeBytes` and nothing else — so `worktreeBytes`
+  #     keeps its meaning (the tree's bytes at archive time, `null` when
+  #     unmeasured) or both readers move with it. The rest of this field's
+  #     audience is a HUMAN reading an archived workspace's record.
   #   - IT DOES NOT SURVIVE A REAP. `_reg_purge` (ccd:100) unlinks every
   #     dot-free `$REG/<id>.<suffix>` except `archived`/`reaping`, so ws-reap
   #     step (i) takes this manifest AND the raw `.prhistory` together. The one
@@ -15330,7 +15334,13 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
     return 0
   fi
 
-  local bytes age; bytes=$(_ws_gc_bytes "$wt"); age=$(_ws_gc_age "$wt")
+  # `--fast` (D-5886, #123): no per-row `du`. Every row reads `-`, which
+  # `_ws_gc_human` already renders as unmeasured; the archived rung below takes
+  # its archive manifest's figure instead. Membership is decided by the rungs
+  # below, none of which reads `bytes`, so the rows are the full run's rows.
+  local bytes age
+  if (( ${GC_FAST:-0} )); then bytes='-'; else bytes=$(_ws_gc_bytes "$wt"); fi
+  age=$(_ws_gc_age "$wt")
 
   # Anything ccd did not create is FOREIGN: reported so it is visible, never
   # pruned. Guessing at another tool's lifecycle is how a reclaimer destroys
@@ -15365,7 +15375,28 @@ _ws_gc_row() {   # project mainreal wsroot wt prunable
   elif _ws_gc_dirty "$wt";                       then state=$GC_DIRTY_STATE
   else                                                state=tracked
   fi
+  if (( ${GC_FAST:-0} )) && [[ "$state" == archived ]]; then
+    bytes=$(_ws_gc_manifest_bytes "$project-$slug")   # D-5886
+  fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$project" "$slug" "$bytes" "$age" "$wt"
+}
+
+# D-5886 (#123): an archived workspace's size under `ws-gc --fast`, read from
+# the `worktreeBytes` its archive manifest recorded when `ws-archive` measured
+# the tree, rather than a fresh `du`. A figure from archive time, not from now.
+# `-` (unmeasured) for anything that is not a whole number there: no manifest,
+# a manifest that is not JSON, a `null` (the archive's own unmeasured value),
+# or no `jq` on the box. Never 0 in place of a reading, the rule
+# `_ws_gc_bytes` keeps. The file is read in place, the way the rungs of
+# `_ws_gc_row` test `$REG/<id>.archived` and the rest, with `_reg_get`'s own
+# guard (a regular file, never a symlink) but not through `_reg_get`: a call
+# from this context into the registry's would be one more cross-context
+# reference, which the `ccd/contexts.tsv` ratchet forbids (D-5886).
+_ws_gc_manifest_bytes() {   # id -> bytes, or '-'
+  local f="$REG/$1.archivemanifest" b
+  [[ -f "$f" && ! -L "$f" ]] || { echo '-'; return 0; }
+  b=$(jq -r '.worktreeBytes | numbers' < "$f" 2>/dev/null) || b=''
+  if [[ "$b" =~ ^[0-9]+$ ]]; then echo "$b"; else echo '-'; fi
 }
 
 _ws_gc_scan() {
@@ -15862,13 +15893,23 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
   esac
 }
 
-cmd_ws_gc() {   # [--prune]
-  local prune=0
-  case "${1:-}" in
-    '')       ;;
-    --prune)  prune=1 ;;
-    *)        die "usage: ccd ws-gc [--prune]" ;;
-  esac
+cmd_ws_gc() {   # [--prune | --fast]
+  local prune=0 a
+  # `GC_FAST` is read by `_ws_gc_row` through bash's dynamic scope, so it is
+  # declared here and always set: an exported `GC_FAST` cannot reach a run.
+  local GC_FAST=0
+  for a in "$@"; do
+    case "$a" in
+      --prune) (( ! prune )) || die "usage: ccd ws-gc [--prune | --fast]"; prune=1 ;;
+      --fast)  (( ! GC_FAST )) || die "usage: ccd ws-gc [--prune | --fast]"; GC_FAST=1 ;;
+      *)       die "usage: ccd ws-gc [--prune | --fast]" ;;
+    esac
+  done
+  # D-5887: `--fast` is a read and only a read. A prune decides each row by
+  # its own checks, never by the size column, but refusing the pair keeps
+  # that true by construction: the flag cannot change what a prune removes.
+  (( ! (prune && GC_FAST) )) \
+    || die "ws-gc --fast is read-only and never combines with --prune; run ccd ws-gc --prune on its own"
 
   local rows; rows=$(_ws_gc_scan)
   [[ -n "$rows" ]] || { echo "nothing to report — no worktrees found under $PROJECTS_ROOT"; return 0; }
@@ -15904,7 +15945,14 @@ cmd_ws_gc() {   # [--prune]
   # partial sum rendered as a figure under a sentence that says "what removing
   # all of them would free" — an affirmative total over a read that did not
   # finish, which is the class this branch has closed eleven times.
+  # `--fast` (D-5886) skips this aggregate `du` as well: on large trees it is
+  # the slowest read in the command, and the footer below says so instead.
   local total='-' tf terr trc
+  if (( GC_FAST )); then
+    echo
+    echo "no total across $n worktree$( (( n == 1 )) || echo s ) — --fast skips sizing. Archived rows show the size their archive manifest recorded; every other size is unmeasured. Run ccd ws-gc without --fast for the figures."
+    return 0
+  fi
   if (( ${#paths[@]} > 0 )); then
     tf=$(_plat_mktemp) || tf=''
     if [[ -n "$tf" ]]; then
@@ -31854,10 +31902,13 @@ _ws_reclaim_residue() {   # workdir -> bytes under the harness's path-keyed temp
   # root for the test harness only.
   #
   # THE DEFAULT ROOT IS THE BOX'S OWN, not the child's: `${TMPDIR:-/tmp}/claude-<uid>`,
-  # the exact derivation `ccd-tmp-sweep`'s own `ROOT=` line uses (`ccd/ccd-tmp-sweep`),
-  # because that is where Claude Code actually lands this scratch — under whatever
-  # TMPDIR the ccd PROCESS runs under, never the child's own `$HOME/.cc-tmp/<id>`
-  # (`_child_tmpdir`'s TMPDIR, a different variable in a different process). A bare
+  # the exact derivation `ccd-tmp-sweep`'s own `ROOT=` line uses (`ccd/ccd-tmp-sweep`).
+  # Claude Code's scratch FOLLOWS the session's TMPDIR (child-reclamation ledger,
+  # Measurement (a)): a child spawned with `_child_tmpdir`'s TMPDIR keeps it under its
+  # own `$HOME/.cc-tmp/<id>/claude-<uid>/`, which dies with that root. What lands here
+  # is the scratch of a child spawned WITHOUT that TMPDIR (`_child_tmpdir`'s rc 2), under
+  # whatever TMPDIR the ccd process runs under, so this is the root to measure (D-5888).
+  # Non-child sessions (rc 1) land here too, but ws-reclaim never measures them. A bare
   # `/tmp/claude-$(id -u)` measured nothing on a box whose TMPDIR points elsewhere —
   # macOS scan, mail 2375.
   local root="${CCD_RECLAIM_RESIDUE_ROOT:-${TMPDIR:-/tmp}/claude-$(id -u)}" d b
