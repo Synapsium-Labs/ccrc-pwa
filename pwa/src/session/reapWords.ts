@@ -10,9 +10,9 @@
 import type { WsAuditChild } from '../../../shared/api';
 // Pre-merge fix round, finding 6: byte-for-byte identical to the local
 // `bytes()` the sheet used to define — one shared formatter, imported,
-// rather than two copies that could drift. `ArchiveScreen.tsx` is the
-// existing home (`FleetScreen.tsx` already imports it from there).
-import { humanBytes } from '../screens/ArchiveScreen';
+// rather than two copies that could drift. Its home is `lib/format.ts`
+// (D-5897), not `ArchiveScreen.tsx`, so this word module imports no screen.
+import { humanBytes } from '../lib/format';
 
 export const days = (epochSeconds: number): string => {
   const d = Math.floor((Date.now() / 1000 - epochSeconds) / 86_400);

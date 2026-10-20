@@ -7,24 +7,40 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~6702 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
 ## Architecture aim: DDD, Clean Architecture, SOLID
 ccrc aims to follow **Domain-Driven Design, Clean Architecture and SOLID** (operator directive 2026-08-10). Every
 change should leave the code closer to that aim, never further from it:
-- **DDD:** each concept lives in one bounded context, with one model and one vocabulary. Domain rules, such as
-  state transitions, refusal sets and derived lists, are written once, and every caller goes through them.
-- **Clean Architecture:** dependencies point inward through the rings (L0 shared up to L5 `index.ts`). Policy
-  makes no I/O, and delivery code makes no decisions.
-- **SOLID:** small modules with one reason to change. Ports are interfaces declared by the consumer, and an
-  adapter keeps every distinction it receives.
+- **DDD:** each concept lives in one bounded context, with one model and one vocabulary: Fleet Registry & Accounts,
+  Fleet Mutation, Session Conversation, Workspace & PR Lifecycle, Coordination, Attention & Notification (the
+  consolidation wave adds the update control plane, auth & box token, docs, and context-free shared kernels: clock
+  and schedule, switches, redaction, Claude Code grammar). Domain rules, such as state transitions, refusal sets and
+  derived lists, are written once, and every caller goes through them. Every invariant and fact has ONE writer: a
+  new fact gets an owner, never a second writer.
+- **Clean Architecture:** imports point inward: L0 shared kernel (`shared/`, pure vocabulary) → L1 policy (pure
+  deciders) → L2 ports → L3 adapters (IO) → L4 delivery (routes, sockets, timers, executors) → L5 composition root
+  (`index.ts`). **Decide in L1, act in L4**: policy makes no I/O, and delivery code makes no decisions.
+- **Ports and adapters at the edges:** the agent link (FleetIO, the runner); `ccd`, the anti-corruption layer — the
+  only component that names tmux, systemd and Claude Code's on-disk layout, reached only through `CcdArgv`; Claude
+  Code panes and transcripts; `coord.db` (`CoordStore`, synchronous, no repository over it). The consumer declares
+  each port, the port states its failure contract, and an adapter keeps every distinction it receives.
+- **SOLID:** small modules with one reason to change; extend through tables and deciders (a row, an edge, a case),
+  never by growing a parallel mechanism beside them.
+- **Consolidate, don't duplicate:** before adding a lane, poller, predicate, redactor, parser, notifier or switch,
+  find the existing owner in the target context and extend it. A second mechanism for the same job needs a recorded
+  "legitimately different" reason (a TOCTOU re-check, an opposite safety direction, a security boundary, another
+  host or process) in its spec or PR.
+- **Characterization tests first when moving code:** pin today's inputs → outputs, green on `main` against the old
+  code; a move commit changes only the test's imports, and an intended behaviour change is a commit of its own.
 
-Adoption is incremental: fix what you touch, and do not start a big-bang rewrite. The assessment and target design are
-in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`. The binding ring rules are the
-**Rings / bounded contexts** bullet under *Conventions that shape every change* below. When a change and the
-aim conflict, say so in the PR. Do not bend the rings without saying so.
+Adoption is incremental: fix what you touch, never a big-bang rewrite. The assessment, target design and a Rejected
+list no PR relitigates are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`; its follow-up is
+`docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md` (the "legitimately different" catalogue). The
+binding ring rules are the **Rings / bounded contexts** bullet under *Conventions that shape every change* below.
+When a change and the aim conflict, or a change bends the rings, say so in the PR.
 
 ## This repository is public — nothing private goes in it
 Everything here is public: code, test fixtures, docs, commit messages, branch names, issues, PRs and comments.
@@ -231,40 +247,20 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   because the server reads what the hook writes and the agent caches `ccd caps` at boot — `--server-first` when a
   wave's server arm is a reader-widening.
 
-## Architecture direction — DDD, Clean Architecture, SOLID
-ccrc is moving, incrementally, to a DDD / Clean Architecture / SOLID shape (operator directive 2026-08-10). Every
-change moves toward it, never away:
-- **Rings, imports point inward:** L0 shared kernel (`shared/`, pure vocabulary) → L1 policy (pure deciders) → L2
-  ports → L3 adapters (IO) → L4 delivery (routes, sockets, timers, executors) → L5 composition root (`index.ts`).
-  **Decide in L1, act in L4**; an inner ring never imports an outer one. Ring rules in detail: the next section.
-- **Bounded contexts, one writer per invariant:** Fleet Registry & Accounts, Fleet Mutation, Session Conversation,
-  Workspace & PR Lifecycle, Coordination, Attention & Notification (the consolidation wave adds the update control
-  plane, auth & box token, docs, and context-free shared kernels: clock and schedule, switches, redaction, Claude
-  Code grammar). Every invariant and fact has ONE writer: a new fact gets an owner, never a second writer.
-- **Ports and adapters at the edges:** the agent link (FleetIO, the runner); `ccd`, the anti-corruption layer — the
-  only component that names tmux, systemd and Claude Code's on-disk layout, reached only through `CcdArgv`; Claude
-  Code panes and transcripts; `coord.db` (`CoordStore`, synchronous, no repository over it). The consumer declares
-  each port, and the port states its failure contract.
-- **SOLID in practice:** one reason to change per module; extend through tables and deciders (a row, an edge, a
-  case), never by growing a new parallel mechanism beside them.
-- **Consolidate, don't duplicate:** before adding a lane, poller, predicate, redactor, parser, notifier or switch,
-  find the existing owner in the target context and extend it. A second mechanism for the same job needs a recorded
-  "legitimately different" reason (a TOCTOU re-check, an opposite safety direction, a security boundary, another
-  host or process) in its spec or PR.
-- **Characterization tests first when moving code:** pin today's inputs → outputs, green on `main` against the old
-  code; a move commit changes only the test's imports, and an intended behaviour change is a commit of its own.
-- **Specs:** `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` (rings, contexts, cross-cutting
-  rules, and a Rejected list no PR relitigates). The consolidation wave's spec — one owner per job: the nine
-  contexts, the shared kernels, the "legitimately different" catalogue — is its follow-up and is not on `main` yet.
-
 ## Conventions that shape every change
 - **Rings / bounded contexts** (`docs/…-architecture-ddd-clean-solid.md`): ring membership is a property of a
   file's IMPORTS, not its path — check a file by reading its import block. L0 `shared/*.ts` imports NOTHING (not
-  even `node:*`) — the reason is that the PWA bundles those files, so deploy-side `shared/*.mjs`, which it never
-  imports, may use `node:*` (`shared/mark.mjs`'s `node:crypto` import); L1 policy = pure decisions, no `fs`/fastify/`reply`; L2 ports
+  even `node:*`) because the PWA bundles those files. The `.mjs` carve-out: a `shared/*.mjs` file, which the PWA
+  never imports, may import `node:crypto`, `node:fs` and `node:url` and no other `node:*` module; a
+  `shared/*.ts` file imports no `node:*` module at all. L1 policy = pure decisions, no `fs`/fastify/`reply`; L2 ports
   = interfaces + failure contracts, declared BY THE CONSUMER; L3 adapters — **an adapter may not narrow a
-  distinction it received** (highest-yield rule); L4 delivery owns fastify/sockets/timers but is NOT allowed to
-  DECIDE; L5 = `index.ts` only. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
+  distinction it received** (highest-yield rule); L4 delivery owns fastify/sockets/schedulers but is NOT allowed to
+  DECIDE; L5 = `index.ts` only. A deadline timer inside one adapter call is L3; schedulers and pollers are L4. A
+  timer is a deadline inside one adapter call when its handle is a local of that call or is not kept at all; a
+  timer whose handle is stored on an object field or at module scope is a scheduler or poller. PWA: `*Words.ts`, policy and pure lib
+  modules are L1; `lib/api.ts` is L3; stores, hooks, components and screens are L4. Every `server/src` and
+  `pwa/src` file has one ring and one of contexts C1–C9 or K, decided by the spec's "Deciding a file's ring and
+  context" rules and table. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
   collapse to the same value; that's a defect, not style. The server runs `Fastify({ logger: false })`, so `req.log.*` is a silent no-op — a server log line is `console.warn('ccrc-server: …')`, never `req.log`.
 - **Single-source-of-truth values are enumerated once and derived:** runtime lists come from the type
   (`PR_REASONS = Object.keys(PR_REASON_MAP)`), not hand-maintained. `server/test/single-definition.test.ts`

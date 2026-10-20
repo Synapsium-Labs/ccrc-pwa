@@ -46,7 +46,7 @@ import { api } from '../lib/api';
 import {
   ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_NOW_CLASS, STALL_LEVEL_NOTE, STALL_WORDS, UNCONFIRMED_TEXT, focusLeaves,
   optionNote, setLead, stallQuietBoundsText, useResultLine,
-} from './settingsText';
+} from '../fleet/settingsText';
 
 /** Fill each `{name}` slot of an L0 text from `slots`. A slot it was not given stays as written; a value is
  *  inserted literally (a replacer function, so a `$` in a server's detail is never a replacement pattern). */

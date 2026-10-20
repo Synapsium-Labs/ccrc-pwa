@@ -61,7 +61,7 @@ W2 edits files that #402 (the Docs reader) edits: `pwa/src/app.tsx`, `pwa/src/fl
 
 Measured 2026-10-18 on `origin/main` `bd10981d`: of the foundations plan, **F1 to F4, F12a, F13, F15 and F16 have merged** (with F0, the docs). **F5 to F11, F12b, F14, F14b and F17 have not.** The ask sheet half (#427), terminal drawer stage 1 (#428) and the collector switch (#384) have merged, so F11, F12b and F14b are gated now only on #402 (F11) or on nothing in flight (F12b, F14b). F17 is in flight as #604 (§In flight).
 
-The spec's W1 row also lists items that **no plan yet covers**: `Sheet`'s desktop arm (centred dialogs at ≥900 on `--elev-pop`, with a `Popover` primitive), toast and `QuickConfirm` polish, the meter's band carried on its number, danger on the hand-drawn Abandon and Revoke controls, the browser matrix (`pwa/browser/skins.browser.test.ts`), and `Wordmark` as a primitive. This plan takes `Wordmark` (S1, D-5470), Stop as a danger control (S7b, inside D-5099's "Later"), the 🤖 swap (S7c, inside D-5100) and the per-tool summariser (S13a, which spec §6 places in W2). The rest stays W1, unplanned, and gates exactly one task here: S18, the default flip (below).
+The spec's W1 row also lists items that **no plan yet covers**: `Sheet`'s desktop arm (centred dialogs at ≥900 on `--elev-pop`, with a `Popover` primitive), toast and `QuickConfirm` polish, the meter's band carried on its number, danger on the hand-drawn Abandon and Revoke controls, the browser matrix (`pwa/browser/skins.browser.test.ts`), and `Wordmark` as a primitive. This plan takes `Wordmark` (S1, D-5470), Stop as a danger control (S7b, inside D-5099's "Later"), the 🤖 swap (S7c, inside D-5100) and the per-tool summariser (S13a, which spec §6 places in W2). The rest stays W1 and gates exactly one task here: S18, the default flip (below). `Sheet`'s desktop arm and the `Popover` are now planned in `2026-10-20-sheet-desktop-arm-and-session-workflow-controls-.md`, whose Task P3-4 alone meets S18's gate.
 
 | Task | #402 merged | Foundations tasks merged | Earlier S tasks | Other |
 |---|---|---|---|---|
@@ -91,7 +91,7 @@ The spec's W1 row also lists items that **no plan yet covers**: `Sheet`'s deskto
 | S15 ⌘J and the `n` key | **yes** | **F10**, **F17** (#604, `ChatList.tsx`) | S2b, S4b, S5, S9, S11 | — |
 | S16 integrity and session-facts views | **yes** | F15 ✓, F16 ✓ | S6, S8, S9, S12 | — |
 | S17 the parity test | **yes** | F10, **F12b** (Switch layout's door in Settings) | S2c to S16 | #402's real-browser leg (`pwa/browser/`) for (a), (b), (d) |
-| S18 Instrument `preview: false` | **yes** | **F12b** (the picker must exist before a default changes anyone's screen), F3b (axe in CI in both skins) | S17 | **`Sheet`'s desktop arm** (W1, unplanned). The coordinator may rule the flip lands without it; until then it waits. |
+| S18 Instrument `preview: false` | **yes** | **F12b** (the picker must exist before a default changes anyone's screen), F3b (axe in CI in both skins) | S17 | **`Sheet`'s desktop arm**, which the 2026-10-20 sheet desktop-arm plan's **Task P3-4** (D-5933, the centred dialog) meets alone; that plan's footer and Popover tasks do not gate this. The coordinator may rule the flip lands without it; until then it waits. |
 
 The same gates, read from the foundations side: **F8** gates S4b, S5, S7b, S7c, S9 and S11; **F9** gates S3, S4b, S6, S9 and S10; **F10** gates S2b, S2d, S4b, S9, S12, S15 and S17; **F11** gates S4b, S6 and S9; **F14** gates S4b, S5, S7c, S9, S10 and S11 (and classifies S1's primitive if S1 lands first); **F12b** gates S17 and S18. W2 also needs **F5** (S2c, S4b, S5, S8, S9), **F6** (S7b, S12), **F14b** (S6, S7c, S13b, S14) and **F17** (S7c, S13b, S14, S15).
 
@@ -130,7 +130,7 @@ S2a (lift) ── S2b (the seam; after F10) ─┬─ S2c (shared fleet pieces)
 
 S15 (⌘J, the n key; after S4b, S5, S9, S11, #604)
 S16 (integrity and facts views; after S6, S8, S9, S12)
-S17 (parity; after S2c to S16, F12b and #402's browser leg) ── S18 (preview: false; after F12b, F3b, and the W1 dialog arm or a ruling)
+S17 (parity; after S2c to S16, F12b and #402's browser leg) ── S18 (preview: false; after F12b, F3b, and the W1 dialog arm (sheet plan P3-4) or a ruling)
 ```
 
 The Refined lane (S4b → S5 → S6, S7a → S7b → S7c → S8) and the Instrument lane (S9 → S10 → S11) can run in parallel worktrees once S2c and S4a have merged: their stylesheets are separate files and their parts live in separate directories, and every piece both lanes place (`BannerStack`, the banner predicates, `fleetSummary`, the compact gauges) is S2c's, so no two lanes create one file. They meet in `shell.css` (S4b only), `FleetScreen.tsx` (S4b, S5, S6, S10), `SessionScreen.tsx` (S7c, S12) and `ChatList.tsx` (S13b, S15). Those hunks are disjoint by construction (each skin's parts are passed in, not branched on), so the later PR absorbs `main` with `git merge` and re-runs its suites.
@@ -1315,7 +1315,7 @@ This task lands before S9 so those tasks add rules, not palette values.
 
 **Why last, and alone.** D-5096: "The W2 PR that lands Instrument's shell sets it false, and that flip is what turns the desktop default on." Instrument's shell lands across S9 to S16, and S17 proves it complete. Flipping in any one of those PRs would make a partial shell every desktop's default for the time between merges. So the flip is its own PR, after the parity test (D-5479).
 
-**Routing:** band 2. **Needs:** S17; F12b (the picker, so anyone the default moves can move back in Settings), F3b (axe over every story in both skins, in CI); **`Sheet`'s desktop arm** (W1, not yet planned), because the default would put every desktop on a shell whose sheets are still bottom drawers at 1920. The coordinator may rule that the flip lands before the arm; this plan does not assume that ruling.
+**Routing:** band 2. **Needs:** S17; F12b (the picker, so anyone the default moves can move back in Settings), F3b (axe over every story in both skins, in CI); **`Sheet`'s desktop arm**, met by Task P3-4 (D-5933) of `2026-10-20-sheet-desktop-arm-and-session-workflow-controls-.md` alone, because the default would put every desktop on a shell whose sheets are still bottom drawers at 1920; that plan's footer (P3-3) and Popover (P3-5) do not gate the flip. The coordinator may rule that the flip lands before the arm; this plan does not assume that ruling.
 
 **Files:** Modify `ui/src/styles/skins.ts` (Instrument's `preview: false`; its label loses "(preview)"), `pwa/index.html` (`AUTO_DESK = true`), `pwa/test/skin-boot.test.tsx` and `pwa/test/skin-catalogue.test.ts` (their preview cases follow the catalogue, as F12a designed them to), `pwa/test/command-layer.test.tsx` (the "Switch layout" labels), `ui/README.md` (the preview paragraphs) and, if F12b's fieldset prints the flag, `pwa/test/skin-picker.test.tsx`.
 

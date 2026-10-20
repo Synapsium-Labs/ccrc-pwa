@@ -127,3 +127,74 @@ describe('ws-rm pins the workspace into the attic before it destroys it', () => 
     expect.soft(refusalsOf(h.home), 'a missing directory is not a refusal').toEqual([]);
   });
 });
+
+// GitHub #138. `git branch -d` asks "is it merged?", which protects unfinished
+// work and nothing else: a workspace that had the repo's shared `main` checked
+// out at an ancestor of origin/main lost the repo's local `main` at teardown.
+// D-5880: ws-rm never deletes main, master, develop or origin/HEAD's target,
+// whatever the registry or git's record names, and says so LOUDLY. D-5881: no
+// `ws/` shape test, because ws-rename gives a workspace's own branch any free
+// name (`ccd-workspaces.test.ts` pins that teardown).
+describe('ws-rm never deletes a shared branch (#138, D-5880)', () => {
+  /** The repo's own checkout moves off `main`, so nothing but the workspace
+   *  holds it — the state in which `branch -d` used to take it. */
+  const sharedFixture = (): { main: string; wt: string } => {
+    const r = fixture();
+    // origin/main carries `main`'s tip, so `branch -d` calls `main` merged —
+    // the exact state the issue measured (an ancestor of origin/main).
+    h.git(r.main, 'push', '-q', 'origin', 'main');
+    h.git(r.main, 'checkout', '-q', '-b', 'side');
+    return r;
+  };
+  const rm = (): string => h.sh(`${STUB} cmd_ws_rm demo-still-river 2>&1 || true`);
+  const has = (main: string, b: string): boolean => {
+    try { h.git(main, 'show-ref', '--verify', '--quiet', `refs/heads/${b}`); return true; } catch { return false; }
+  };
+
+  it('keeps a merged main that the registry AND git both name, and says so', () => {
+    // The issue's own state. Mutant: drop the whole guard -> `main` is merged,
+    // so `branch -d` deletes it and refs/heads/main is gone.
+    const { main, wt } = sharedFixture();
+    h.git(wt, 'checkout', '-q', '--detach');
+    h.git(main, 'branch', '-q', '-D', 'ws/still-river');
+    h.git(wt, 'checkout', '-q', 'main');
+    h.sh(`_reg_set demo-still-river branch main`);
+    const out = rm();
+    expect.soft(has(main, 'main'), 'refs/heads/main survives').toBe(true);
+    expect.soft(out).toContain("kept branch main (shared, not this workspace's own)");
+    expect.soft(out).not.toContain('Deleted branch main');
+  });
+
+  it('keeps main when a ws/ workspace switched its worktree onto it', () => {
+    // origin/HEAD is gone, so ONLY the fixed list protects `main` here.
+    // Mutant: drop main/master/develop from the list -> `main` goes.
+    const { main, wt } = sharedFixture();
+    h.git(main, 'remote', 'set-head', 'origin', '-d');
+    h.git(wt, 'checkout', '-q', 'main');
+    const out = rm();
+    expect.soft(has(main, 'main'), 'refs/heads/main survives').toBe(true);
+    expect.soft(out).toContain("kept branch main (shared, not this workspace's own)");
+  });
+
+  it("keeps origin/HEAD's target even when its name is not on the fixed list", () => {
+    // Mutant: drop the origin/HEAD comparison -> `trunk` is merged and goes.
+    const { main, wt } = sharedFixture();
+    h.git(main, 'branch', '-q', 'trunk', 'main');
+    h.git(main, 'push', '-q', 'origin', 'trunk');
+    h.git(main, 'remote', 'set-head', 'origin', 'trunk');
+    h.git(wt, 'checkout', '-q', 'trunk');
+    const out = rm();
+    expect.soft(has(main, 'trunk'), 'refs/heads/trunk survives').toBe(true);
+    expect.soft(out).toContain("kept branch trunk (shared, not this workspace's own)");
+  });
+
+  it('still deletes the workspace\'s own merged ws/ branch', () => {
+    // The guard narrows, it does not freeze: the ordinary teardown still runs.
+    const { main, wt } = sharedFixture();
+    h.git(main, 'merge', '-q', '--ff-only', 'ws/still-river');
+    void wt;
+    const out = rm();
+    expect.soft(has(main, 'ws/still-river'), 'the own branch is gone').toBe(false);
+    expect.soft(out).not.toContain('kept branch');
+  });
+});
