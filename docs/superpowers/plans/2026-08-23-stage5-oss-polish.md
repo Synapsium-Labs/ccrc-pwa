@@ -264,7 +264,7 @@ follow-up, deliberately not papered over.
   mutation-measured 1 red — D-196; four suites' migration-roster fixtures re-root on
   `DEFAULT_TEST_ROSTER`, and gen-accounts' D-69 pin retired with its subject.)
 - [x] **Step 3: Ratchet** — add class: the four real account labels (now `team·max`,
-  `team·alt`, `team·b`, `team·d` in fixtures) and the old employer token, all
+  `team·alt`, `team·b`, `team·d` in fixtures) and the old owner token, all
   base64-ridden (scoped: non-docs) → sweep fixture/demo
   names in `fleetws.test.ts`, `registry.test.ts`, `pwa/design/mockup.html` → green.
 - [ ] **Step 4: Commit** `feat(debrand): the roster is fixtures' own, not this fleet's
@@ -452,7 +452,7 @@ list. **No transfer, no flip, no tag happens from this session.**
   details"), not this plan's Step 3 "maintainer contact". Forced: the shipped fallback
   ("commit-author address on any recent commit", `git log -1 --format='%ae'`) resolves
   to a GitHub noreply address that cannot receive mail — all 40 most-recent commits are
-  authored under it — and the only real addresses deeper in history are the OLD employer
+  authored under it — and the only real addresses deeper in history are the OLD owner
   identity Stage 5 exists to retire and a personal address never sanctioned for the repo.
   No committable monitored mailbox exists in-tree, so the email half of the private path
   was non-functional as written; the handshake keeps disclosure private without minting
@@ -523,7 +523,7 @@ list. **No transfer, no flip, no tag happens from this session.**
   rather than substituted — their sentences NAME the banned tokens as subject matter, so
   they now say the tokens' roles; the old monorepo's project spellings become
   `acme-platform-ts` (spec §1's neutral-name class) and the clip-fixture dirs
-  `claude2-demo-app-ts`; the employer-email transcript author becomes
+  `claude9-demo-app-ts`; the old-owner-email transcript author becomes
   `you@example.com`; the old monorepo name itself is deliberately NOT in the residue
   class (argued in the suite at the class comment: it names a repository, not a
   reachable box, and carries hundreds of load-bearing historical anchors).
@@ -540,8 +540,8 @@ list. **No transfer, no flip, no tag happens from this session.**
   `session_01[A-Za-z0-9]{10,}`, not `{22,}`. A TRUNCATED id — half pasted out of a log or
   an error message — still names the account it came from. D-190's greedy-plus-equality
   shape, which is what keeps the committed example green, is unchanged.
-- **D-202** (Task 5): the wrapper IDS are NOT renamed, only the labels and the employer
-  name. `claude2`/`claude-corp`/`claude-dev0` name a Claude wrapper rather than a person
+- **D-202** (Task 5): the wrapper IDS are NOT renamed, only the labels and the old owner
+  name. `claude9`/`claude-acme`/`claude-lab0` name a Claude wrapper rather than a person
   or a company, they are 1,867 occurrences outside docs, and the fixtures mirror the ids
   the live boxes really use — which is what makes them catch shape bugs. Also forced:
   `deploy/accounts.migration.json` MOVES to `server/test/fixtures/roster-five.json`

@@ -1,6 +1,6 @@
 # Child-workspace reclamation — the fleet closes the loop it has never closed
 
-**Status:** design approved by the operator 2026-09-22; written spec accepted the same day. Ticket CCR-15 ("Reclamation policy: the fleet can act on
+**Status:** design approved by the operator 2026-09-22; written spec accepted the same day. Ticket #166 ("Reclamation policy: the fleet can act on
 idle and finished workspaces"). Supersedes nothing; **narrows** two standing rulings and **satisfies** a
 third that has been open since 2026-08-11. Implementation rides nine waves (§8), agent-first; wave 7 is the temp-root collector.
 

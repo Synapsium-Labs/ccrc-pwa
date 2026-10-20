@@ -14,7 +14,7 @@
 
 - Working dir for all tasks: `infra/ccrc/server` (paths below relative to repo root).
 - Node ≥22, `"type": "module"`, TypeScript `strict: true`. Tests: vitest.
-- Wrapper → config dir map (from `ccd _cfg_dir`): `claude`→`~/.claude`, `claude2`→`~/.claude-personal`, `claude-corp`→`~/.claude-corp`, `gpt`→`~/.claude-gpt`.
+- Wrapper → config dir map (from `ccd _cfg_dir`): `claude`→`~/.claude`, `claude9`→`~/.claude-home`, `claude-acme`→`~/.claude-acme`, `gpt`→`~/.claude-gpt`.
 - Munge rule (from `ccd cmd_swap`): replace every `/`, `.`, `_` in a path with `-`.
 - Registry: flat files `~/.cc-sessions/<id>.<field>`; sessions enumerated via `*.uuid`; known fields `wrapper project workdir uuid started home pool lastswap`.
 - Limits files `~/.cc-limits/<wrapper>.json`: `{"five":INT,"seven":INT,"ts":EPOCH_SECONDS}`. Decay (from `ccd _limit_field`): `five`→0 when `now-ts > 18000`; `seven`→0 when `now-ts > 604800`.
@@ -203,7 +203,7 @@ describe('loadConfig', () => {
     expect(cfg.registryDir).toBe('/fake/home/.cc-sessions');
     expect(cfg.limitsDir).toBe('/fake/home/.cc-limits');
     expect(cfg.ccdBin).toBe('/fake/home/.local/bin/ccd');
-    expect(cfg.wrappers['claude2']).toBe('/fake/home/.claude-personal');
+    expect(cfg.wrappers['claude9']).toBe('/fake/home/.claude-home');
     expect(cfg.wrappers['gpt']).toBe('/fake/home/.claude-gpt');
     expect(cfg.host).toBe('127.0.0.1');
     expect(cfg.port).toBe(7788);
@@ -270,8 +270,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     projectsRoot: env.CCRC_PROJECTS_ROOT ?? '/data/projects',
     wrappers: {
       claude: path.join(home, '.claude'),
-      claude2: path.join(home, '.claude-personal'),
-      'claude-corp': path.join(home, '.claude-corp'),
+      claude9: path.join(home, '.claude-home'),
+      'claude-acme': path.join(home, '.claude-acme'),
       gpt: path.join(home, '.claude-gpt'),
     },
   };
@@ -323,9 +323,9 @@ const fake = (responses: Record<string, ExecResult>): { run: Runner; calls: stri
 describe('Tmux', () => {
   it('hasSession true on code 0, false otherwise', async () => {
     const ok = new Tmux(fake({ 'has-session': { code: 0, stdout: '', stderr: '' } }).run);
-    expect(await ok.hasSession('claude2-MekWarLive')).toBe(true);
+    expect(await ok.hasSession('claude9-project-f')).toBe(true);
     const no = new Tmux(fake({ 'has-session': { code: 1, stdout: '', stderr: '' } }).run);
-    expect(await no.hasSession('claude2-MekWarLive')).toBe(false);
+    expect(await no.hasSession('claude9-project-f')).toBe(false);
   });
   it('panePid parses first pane pid', async () => {
     const t = new Tmux(fake({ 'list-panes': { code: 0, stdout: '40613\n', stderr: '' } }).run);
@@ -435,22 +435,22 @@ describe('readRegistry', () => {
 
   it('reads sessions enumerated by *.uuid with optional fields', async () => {
     const reg = path.join(home, '.cc-sessions');
-    seed(reg, 'claude2-MekWarLive', {
-      wrapper: 'claude2', project: 'MekWarLive', workdir: '/data/projects/MekWarLive',
+    seed(reg, 'claude9-project-f', {
+      wrapper: 'claude9', project: 'project-f', workdir: '/data/projects/project-f',
       uuid: 'a0b5791d-0000-0000-0000-000000000001', started: '1',
-      pool: 'claude claude2', lastswap: '1784500000',
+      pool: 'claude claude9', lastswap: '1784500000',
     });
-    seed(reg, 'claude-corp-acme-platform-ts', {
-      wrapper: 'claude-corp', project: 'acme-platform-ts',
+    seed(reg, 'claude-acme-acme-platform-ts', {
+      wrapper: 'claude-acme', project: 'acme-platform-ts',
       workdir: '/data/projects/acme-platform-ts', uuid: 'b'.repeat(36), started: '1',
     });
     writeFileSync(path.join(reg, 'gpt-disabled'), '');   // noise: not a session file
     writeFileSync(path.join(reg, 'swap.log'), 'x');      // noise
 
     const out = await readRegistry(loadConfig({ CCRC_HOME: home }));
-    expect(out.map((s) => s.id)).toEqual(['claude-corp-acme-platform-ts', 'claude2-MekWarLive']);
+    expect(out.map((s) => s.id)).toEqual(['claude-acme-acme-platform-ts', 'claude9-project-f']);
     const mek = out[1];
-    expect(mek.pool).toEqual(['claude', 'claude2']);
+    expect(mek.pool).toEqual(['claude', 'claude9']);
     expect(mek.lastswap).toBe(1784500000);
     expect(out[0].pool).toBeNull();
     expect(out[0].home).toBeNull();
@@ -552,15 +552,15 @@ describe('readLimits', () => {
     mkdirSync(dir, { recursive: true });
     const now = 1784600000;
     writeFileSync(path.join(dir, 'claude.json'), JSON.stringify({ five: 42, seven: 61, ts: now - 60 }));
-    writeFileSync(path.join(dir, 'claude2.json'), JSON.stringify({ five: 99, seven: 80, ts: now - 20000 }));  // 5h window rolled
-    writeFileSync(path.join(dir, 'claude-corp.json'), JSON.stringify({ five: 94, seven: 94, ts: now - 700000 })); // both rolled
+    writeFileSync(path.join(dir, 'claude9.json'), JSON.stringify({ five: 99, seven: 80, ts: now - 20000 }));  // 5h window rolled
+    writeFileSync(path.join(dir, 'claude-acme.json'), JSON.stringify({ five: 94, seven: 94, ts: now - 700000 })); // both rolled
     writeFileSync(path.join(dir, 'gpt.json'), 'not json');
 
     const l = await readLimits(loadConfig({ CCRC_HOME: home }), now);
     expect(l['claude']).toEqual({ five: 42, seven: 61, ts: now - 60 });
-    expect(l['claude2'].five).toBe(0);
-    expect(l['claude2'].seven).toBe(80);
-    expect(l['claude-corp']).toMatchObject({ five: 0, seven: 0 });
+    expect(l['claude9'].five).toBe(0);
+    expect(l['claude9'].seven).toBe(80);
+    expect(l['claude-acme']).toMatchObject({ five: 0, seven: 0 });
     expect(l['gpt']).toEqual({ five: null, seven: null, ts: null });
   });
 });
@@ -644,7 +644,7 @@ export interface FleetSession {
 ```
 
 - Produces (in `src/livestate.ts`): `interface LiveState { pid: number; sessionId: string; cwd: string; name: string | null; status: string; statusUpdatedAt: number | null; version: string | null }`, `readLiveState(configDir: string, pid: number): Promise<LiveState | null>`.
-- Produces (in `src/fleet.ts`): `assembleFleet(cfg: CcrcConfig, tmux: Tmux, now?: number): Promise<FleetSession[]>`. Home fallback when no `home` field: longest-prefix of id among `claude-corp- claude2- claude- gpt-` (ccd `_id_wrapper`).
+- Produces (in `src/fleet.ts`): `assembleFleet(cfg: CcrcConfig, tmux: Tmux, now?: number): Promise<FleetSession[]>`. Home fallback when no `home` field: longest-prefix of id among `claude-acme- claude9- claude- gpt-` (ccd `_id_wrapper`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -668,9 +668,9 @@ const seedSession = (home: string, id: string, wrapper: string, extra: Record<st
 
 describe('idHomeWrapper', () => {
   it('longest prefix wins', () => {
-    expect(idHomeWrapper('claude-corp-acme-platform-ts')).toBe('claude-corp');
-    expect(idHomeWrapper('claude2-MekWarLive')).toBe('claude2');
-    expect(idHomeWrapper('claude-synapsium-platform')).toBe('claude');
+    expect(idHomeWrapper('claude-acme-acme-platform-ts')).toBe('claude-acme');
+    expect(idHomeWrapper('claude9-project-f')).toBe('claude9');
+    expect(idHomeWrapper('claude-project-k')).toBe('claude');
     expect(idHomeWrapper('gpt-foo')).toBe('gpt');
   });
 });
@@ -678,29 +678,29 @@ describe('idHomeWrapper', () => {
 describe('assembleFleet', () => {
   it('joins registry, live state, limits, and tmux aliveness', async () => {
     const home = mkdtempSync(path.join(tmpdir(), 'ccrc-'));
-    seedSession(home, 'claude2-MekWarLive', 'claude2');
+    seedSession(home, 'claude9-project-f', 'claude9');
     seedSession(home, 'claude-dead-proj', 'claude');
-    mkdirSync(path.join(home, '.claude-personal', 'sessions'), { recursive: true });
-    writeFileSync(path.join(home, '.claude-personal', 'sessions', '40613.json'), JSON.stringify({
-      pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/MekWarLive',
-      name: 'mekwar-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
+    mkdirSync(path.join(home, '.claude-home', 'sessions'), { recursive: true });
+    writeFileSync(path.join(home, '.claude-home', 'sessions', '40613.json'), JSON.stringify({
+      pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/project-f',
+      name: 'project-f-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
     const now = 1784600000;
-    writeFileSync(path.join(home, '.cc-limits', 'claude2.json'), JSON.stringify({ five: 55, seven: 70, ts: now - 60 }));
+    writeFileSync(path.join(home, '.cc-limits', 'claude9.json'), JSON.stringify({ five: 55, seven: 70, ts: now - 60 }));
 
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('cc-claude2-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('cc-claude9-project-f') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
 
     const fleet = await assembleFleet(loadConfig({ CCRC_HOME: home }), new Tmux(run), now);
-    const mek = fleet.find((s) => s.id === 'claude2-MekWarLive')!;
+    const mek = fleet.find((s) => s.id === 'claude9-project-f')!;
     expect(mek.status).toBe('busy');
-    expect(mek.name).toBe('mekwar-a1');
+    expect(mek.name).toBe('project-f-a1');
     expect(mek.limits).toEqual({ five: 55, seven: 70 });
-    expect(mek.home).toBe('claude2');
+    expect(mek.home).toBe('claude9');
     const dead = fleet.find((s) => s.id === 'claude-dead-proj')!;
     expect(dead.status).toBe('dead');
     expect(dead.name).toBeNull();
@@ -753,7 +753,7 @@ import { readLiveState } from './livestate.js';
 import type { FleetSession, SessionStatus } from '../../shared/api.js';
 
 export function idHomeWrapper(id: string): string {
-  for (const w of ['claude-corp', 'claude2', 'claude', 'gpt']) if (id.startsWith(`${w}-`)) return w;
+  for (const w of ['claude-acme', 'claude9', 'claude', 'gpt']) if (id.startsWith(`${w}-`)) return w;
   return 'claude';
 }
 
@@ -1075,7 +1075,7 @@ Enter to confirm · Esc to cancel
   - `POST /api/sessions/:id/swap` `{ wrapper }` → `ccd ['swap', id, wrapper]`
   - Failure mapping: `ok:false` ⇒ HTTP `502` with `{ ok: false, stderr }`.
 
-- [ ] **Step 1: Write the failing test** — fake runner asserts exact argv for each route (e.g. swap POST → `[ccdBin, 'swap', 'claude2-MekWarLive', 'claude']`); stop resolves wrapper/project from a seeded registry; failing runner (`code:1, stderr:'boom'`) ⇒ 502 with `stderr:'boom'`; listProjects merges a temp projects root + registry entries without duplicates.
+- [ ] **Step 1: Write the failing test** — fake runner asserts exact argv for each route (e.g. swap POST → `[ccdBin, 'swap', 'claude9-project-f', 'claude']`); stop resolves wrapper/project from a seeded registry; failing runner (`code:1, stderr:'boom'`) ⇒ 502 with `stderr:'boom'`; listProjects merges a temp projects root + registry entries without duplicates.
 - [ ] **Step 2: Run** — Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** — Expected: PASS.
@@ -1121,7 +1121,7 @@ curl -fsS -m 5 -X POST "http://${CCRC_ADDR:-203.0.113.7:7788}/api/notify" \
   -d "$(jq -cn --arg m "$1" '{message:$m}')" >/dev/null 2>&1 || true
 ```
 
-- [ ] **Step 1: Write the failing test** — POST /api/notify with a swap message ⇒ 200, bus received both `notice` and `session:claude2-MekWarLive` events (subscribe in test); non-swap message ⇒ only `notice`.
+- [ ] **Step 1: Write the failing test** — POST /api/notify with a swap message ⇒ 200, bus received both `notice` and `session:claude9-project-f` events (subscribe in test); non-swap message ⇒ only `notice`.
 - [ ] **Step 2: Run** — Expected: FAIL.
 - [ ] **Step 3: Implement** route + commit the shell hook file (`chmod +x`).
 - [ ] **Step 4: Run** — Expected: PASS.

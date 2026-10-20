@@ -33,10 +33,10 @@ only two places parse the id itself:
 
 `cmd_start` never writes `home`; it is written later by `ccd prefer` (`ccd:582`).
 Measured on the live registry, **2 of 9 sessions have no `.home` file at all**
-(`claude-corp-data-internal`, `claude-corp-intake-platform`), so the prefix
+(`claude-acme-project-e`, `claude-acme-project-n`), so the prefix
 fallback is not theoretical — it is load-bearing for those two today, and any
 session created and never `prefer`-ed joins them. Set `home` at creation and
-**every currently running session keeps working unchanged** — `claude2-MekWarLive`
+**every currently running session keeps working unchanged** — `claude9-project-f`
 still resolves through the fallback it always used. There is no migration step,
 no downtime, and no flag day.
 
@@ -46,9 +46,9 @@ Because the id encodes the account, it asserts something that swapping routinely
 falsifies. Measured on the live registry:
 
 ```
-claude-rp-llm                    prefix says claude       actually on claude2
-claude-corp-acme-platform-ts  prefix says claude-corp  actually on gpt
-claude2-expoAI-assistant         prefix says claude2      actually on claude
+claude-project-j                    prefix says claude       actually on claude9
+claude-acme-acme-platform-ts  prefix says claude-acme  actually on gpt
+claude9-project-h         prefix says claude9      actually on claude
 ```
 
 Three of nine ids are lying right now. **The PWA is already immune** —
@@ -75,13 +75,13 @@ Ruled during design; recorded so the plan does not relitigate them.
 ## Identity and grouping
 
 ```
-project   OpenClawHetzner              registry field, exists today
+project   project-c              registry field, exists today
  └ workspace  quiet-mesa               new field; the id suffix
-    id        OpenClawHetzner-quiet-mesa
-    workdir   ~/worktrees/OpenClawHetzner/quiet-mesa
+    id        project-c-quiet-mesa
+    workdir   ~/worktrees/project-c/quiet-mesa
     branch    quiet-mesa                renamed at PR time
-    home      claude-corp               explicit from creation
-    wrapper   claude2                   where it is now, after swaps
+    home      claude-acme               explicit from creation
+    wrapper   claude9                   where it is now, after swaps
 ```
 
 - **New registry fields:** `workspace` (the slug) and `base` (the ref it forked
@@ -124,15 +124,15 @@ the account it is about to assign and its current headroom.
 ## The visual model
 
 ```
-▾ OpenClawHetzner                                    3  +
+▾ project-c                                    3  +
   │  main                    idle   claude
-  │  fix-c-u-under-press   ● busy   claude-corp   4/7
-  │  attachment-tray         idle   claude2   #41 ✓ ready
+  │  fix-c-u-under-press   ● busy   claude-acme   4/7
+  │  attachment-tray         idle   claude9   #41 ✓ ready
 
-▾ expoAI-assistant                                   1  +
+▾ project-h                                   1  +
   │  main                  ● busy   claude       2/9
 
-▸ synapsium-platform                                 2  +
+▸ project-k                                 2  +
 ```
 
 Projects are collapsible; the count is live sessions; `+` adds a workspace.
@@ -194,7 +194,7 @@ atomic and does not pretend to be; it reports which step failed.
 A fresh worktree is git-complete and **useless** — no `node_modules`, no `.env`,
 no local config. Measured on this repo: the tracked checkout is 3.3M; the
 `node_modules` needed to run the suites is **704M**. Across the fleet the gap is
-starker still — MekWarLive's working directory is 39G but its tracked checkout is
+starker still — project-f's working directory is 39G but its tracked checkout is
 only 228M, so worktrees are cheap in git terms and the entire cost is
 scaffolding.
 

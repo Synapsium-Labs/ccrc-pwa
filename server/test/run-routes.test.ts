@@ -261,12 +261,12 @@ describe('POST /api/runs', () => {
     // may sit in any project, so it is admitted and stamped with the REGISTRY
     // value. An admitted open's stamp is the MEASURED (trimmed) registry value.
     const home = mkTmp('ccrc-runs-');
-    seed(home, CLAIMED_BY, { project: 'intake-platform' });
+    seed(home, CLAIMED_BY, { project: 'project-n' });
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
     const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY });
     expect(res.statusCode).toBe(200);
-    expect(okRun(w.coord.run((res.json() as { id: number }).id))?.coordProject).toBe('intake-platform');
+    expect(okRun(w.coord.run((res.json() as { id: number }).id))?.coordProject).toBe('project-n');
     seed(home, CLAIMED_BY, { project: `${PROJECT}\n` });
     const ok = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: CLAIMED_BY });
     expect(ok.statusCode).toBe(200);
@@ -280,19 +280,19 @@ describe('POST /api/runs', () => {
     // crossing marking reads. Binding an EXISTING child of the run's project
     // from outside it is refused: a crossing spawns fresh.
     const home = mkTmp('ccrc-runs-');
-    seed(home, CLAIMED_BY, { project: 'intake-platform' });
+    seed(home, CLAIMED_BY, { project: 'project-n' });
     seed(home, 'demo-existing-child');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY, homeProject: 'intake-platform' });
+    const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY, homeProject: 'project-n' });
     expect(res.statusCode).toBe(200);
     const id = (res.json() as { id: number }).id;
-    expect(okRun(w.coord.run(id))?.coordProject).toBe('intake-platform');
+    expect(okRun(w.coord.run(id))?.coordProject).toBe('project-n');
     expect(okRun(w.coord.run(id))?.project).toBe(PROJECT);
-    const bound = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: CLAIMED_BY, homeProject: 'intake-platform',
+    const bound = await postOpen(app, { ...OPEN_BODY, wave: 2, claimedBy: CLAIMED_BY, homeProject: 'project-n',
       sessionId: 'demo-existing-child' });
-    expect([bound.statusCode, bound.json()]).toEqual([409, { ok: false, refused: 'project-mismatch', by: 'intake-platform',
-      detail: `demo-existing-child is an existing session of ${PROJECT} and the claimant is of intake-platform — a crossing wave opens without sessionId and spawns fresh` }]);
+    expect([bound.statusCode, bound.json()]).toEqual([409, { ok: false, refused: 'project-mismatch', by: 'project-n',
+      detail: `demo-existing-child is an existing session of ${PROJECT} and the claimant is of project-n — a crossing wave opens without sessionId and spawns fresh` }]);
   });
 
   it('refuses a coordinator with no registry record — 403 unknown-sender, where the stamp once read "absence permits" (D-5298)', async () => {
@@ -315,7 +315,7 @@ describe('POST /api/runs', () => {
     // is the transient 502 and an empty one is `project-mismatch`.
     const home = mkTmp('ccrc-runs-');
     const EMPTY_PROJECT_COORD = 'ccrc-pwa-coordinator-empty';
-    seed(home, CLAIMED_BY, { project: 'intake-platform' });   // present, but reads UNREADABLE below
+    seed(home, CLAIMED_BY, { project: 'project-n' });   // present, but reads UNREADABLE below
     seed(home, EMPTY_PROJECT_COORD, { project: '', child: '' });   // present, zero bytes
     const io = unreadableField(CLAIMED_BY, 'project');
     const { run } = makeRunner(home);

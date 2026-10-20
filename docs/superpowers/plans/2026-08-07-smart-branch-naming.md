@@ -194,11 +194,11 @@ describe('ws-rename', () => {
   });
 
   it('refuses a session that is not a workspace', () => {
-    h.sh(`_reg_set claude2-demo wrapper claude2
-          _reg_set claude2-demo project demo
-          _reg_set claude2-demo workdir ${path.join(h.home, 'projects', 'demo')}
-          _reg_set claude2-demo uuid abc`);
-    expect(refusal('claude2-demo', 'feat/real-name')).toBe('not-a-workspace');
+    h.sh(`_reg_set claude9-demo wrapper claude9
+          _reg_set claude9-demo project demo
+          _reg_set claude9-demo workdir ${path.join(h.home, 'projects', 'demo')}
+          _reg_set claude9-demo uuid abc`);
+    expect(refusal('claude9-demo', 'feat/real-name')).toBe('not-a-workspace');
   });
 
   it('refuses a registry row with no project or workdir', () => {
@@ -298,9 +298,9 @@ describe('ws-rename', () => {
   // any PR, so it must leave that file absent.
   it('renames a HELD workspace, and leaves the hold and the prhistory alone', () => {
     addOne();
-    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:agent-evals wave:1/4"`);
+    h.sh(`cmd_ws_hold --session demo-quiet-mesa --reason "program:prog-j wave:1/4"`);
     expect(rename('demo-quiet-mesa', 'feat/real-name').new).toBe('feat/real-name');
-    expect(h.reg('demo-quiet-mesa', 'hold')).toBe('program:agent-evals wave:1/4');
+    expect(h.reg('demo-quiet-mesa', 'hold')).toBe('program:prog-j wave:1/4');
     expect(h.reg('demo-quiet-mesa', 'prhistory')).toBeNull();
     expect(h.reg('demo-quiet-mesa', 'prnumber')).toBeNull();
   });
@@ -1694,14 +1694,14 @@ describe('the naming sweep', () => {
   // moves except `branch` (which ccd writes, not the sweep).
   it('is indifferent to a hold, and touches no PR lineage', async () => {
     const h = harness();
-    seed(h.home, { hold: 'program:agent-evals wave:1/4' });
+    seed(h.home, { hold: 'program:prog-j wave:1/4' });
     transcript(h.home, [TITLE('Fix the PR sheet')]);
     const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual(['ws/fix-the-pr-sheet']);
     expect(readFileSync(path.join(h.home, '.cc-sessions', `${ID}.hold`), 'utf8'))
-      .toBe('program:agent-evals wave:1/4');
+      .toBe('program:prog-j wave:1/4');
     expect(h.calls.every((a) => a[0] === 'ws-rename'),
       'the naming lane emits exactly one verb and it is not pr-state').toBe(true);
   });
@@ -2633,4 +2633,4 @@ The definition of done is behavioural and must be demonstrated, not inferred.
 - **The PWA fixture shape was checked:** `FleetSession` has gained `held`, `hookState`, `askSummary`, `subagents`, `bucket`, `bucketSince` since the superseded plan was written, so the plan points at `session-line.test.tsx:15-23` as the live fixture rather than freezing a stale literal.
 - **The `sessionLabel` duplication was confirmed to be exactly two files** (`sessionLabel.ts:15`, `SessionActionsSheet.tsx:203`), which is what makes the structural guard in Task 7 a two-line assertion rather than an allowlist.
 - **`verb-gate.test.ts` was read to confirm the ordering claim**: `wsRename` may land in `CCD_ARGV` (Task 3) before it has a call site, because `ALL_SITES` is discovered by scanning `server/src` and the exemption list is checked only against sites that exist.
-- **Not verified, and stated as such:** the "600 transcripts / 45,996 bytes / nine with no title / 91 MB, 1,809 lines" measurements are carried forward from the approved spec. They are load-bearing for `TITLE_TAIL_BYTES` and for the stat gate's justification; they were taken on the fleet host on 2026-08-03 and are not re-measurable from this checkout. If the implementer can re-run them cheaply on openclaw, do — and if the worst case has grown past ~256 KB, that is a finding, not a licence to widen the tail silently.
+- **Not verified, and stated as such:** the "600 transcripts / 45,996 bytes / nine with no title / 91 MB, 1,809 lines" measurements are carried forward from the approved spec. They are load-bearing for `TITLE_TAIL_BYTES` and for the stat gate's justification; they were taken on the fleet host on 2026-08-03 and are not re-measurable from this checkout. If the implementer can re-run them cheaply on the fleet box, do — and if the worst case has grown past ~256 KB, that is a finding, not a licence to widen the tail silently.

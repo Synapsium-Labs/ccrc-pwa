@@ -1,6 +1,6 @@
 # Conductor prior art — operator-measured on-Mac snapshot, 2026-08-04
 
-Source: the operator's own inspection of `~/conductor/` + `~/projects/custom-tools`
+Source: the operator's own inspection of `~/conductor/` + `~/projects/project-d`
 on their Mac (git plumbing, settings files, `du`). Not docs. Facts below are
 design inputs for the ccd worktree-ownership spec; each carries the design
 consequence it forces.

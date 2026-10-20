@@ -5,7 +5,7 @@ import { groupFleet, inReleasedFold, releasedByProgramme } from '../src/fleet/gr
 import type { FleetSession, ReleasedFrom } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 
-const s = (over: Partial<FleetSession>): FleetSession => (fleetSession({ id: 'x', wrapper: 'claude2', home: 'claude2', project: 'p', workdir: '/p', statusUpdatedAt: 0, ...over }));
+const s = (over: Partial<FleetSession>): FleetSession => (fleetSession({ id: 'x', wrapper: 'claude9', home: 'claude9', project: 'p', workdir: '/p', statusUpdatedAt: 0, ...over }));
 
 describe('groupFleet', () => {
   it('orders groups by their most urgent member, not alphabetically', () => {
@@ -152,7 +152,7 @@ describe('groupFleet', () => {
     const g = groupFleet([
       s({ id: 'idle', status: 'idle', bucket: 'idle', stranded: marker }),
       s({ id: 'working', status: 'busy', bucket: 'working', stranded: marker }),
-      s({ id: 'away', status: 'idle', bucket: 'idle', wrapper: 'claude2', home: 'claude', stranded: marker }),
+      s({ id: 'away', status: 'idle', bucket: 'idle', wrapper: 'claude9', home: 'claude', stranded: marker }),
       s({ id: 'dead', status: 'dead', bucket: 'dead', stranded: marker }),
       s({ id: 'archived', status: 'dead', bucket: 'archived', stranded: marker }),
     ], [])[0]!;
@@ -197,13 +197,13 @@ describe('pin', () => {
   });
 
   it('is mixed when they disagree — the card must not claim one of them', () => {
-    const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude2')], []);
+    const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude9')], []);
     expect(g!.pin).toEqual({ state: 'mixed' });
   });
 
   it('is the lone session\'s home for a single-session project', () => {
-    const [g] = groupFleet([at('demo-a', 'claude-corp')], []);
-    expect(g!.pin).toEqual({ state: 'shared', home: 'claude-corp' });
+    const [g] = groupFleet([at('demo-a', 'claude-acme')], []);
+    expect(g!.pin).toEqual({ state: 'shared', home: 'claude-acme' });
   });
 });
 
@@ -260,7 +260,7 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
     // excluded from both by the bucket test alone, whatever the scoping.
     const [g] = groupFleet([
       s({ id: 'demo-a', project: 'demo', home: 'claude' }),
-      arch('demo-b', { home: 'claude2' }),
+      arch('demo-b', { home: 'claude9' }),
     ], []);
     expect(g!.busy).toBe(0);
     expect(g!.attention).toBe(false);
@@ -272,10 +272,10 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
     // groupFleet.ts) exists so this branch never indexes an empty array —
     // dropping the `: members` half would now yield `{ state: 'empty' }` for
     // this all-archived project, which this assertion rejects (the pin here
-    // must be 'claude-corp', not empty). The empty-membership guard itself is
+    // must be 'claude-acme', not empty). The empty-membership guard itself is
     // `first === undefined` in groupFleet.ts.
-    const [g] = groupFleet([arch('demo-b', { home: 'claude-corp' })], []);
-    expect(g!.pin).toEqual({ state: 'shared', home: 'claude-corp' });
+    const [g] = groupFleet([arch('demo-b', { home: 'claude-acme' })], []);
+    expect(g!.pin).toEqual({ state: 'shared', home: 'claude-acme' });
   });
 
   it('counts an unseen cleanup member in `unseen`, since it is a live row now', () => {
@@ -298,14 +298,14 @@ describe('the Archived fold takes stopped main checkouts (workspace lifecycle sp
     s({ id, project: 'demo', workspace: id, ...over });
 
   it('folds a STOPPED main checkout into Archived, out of the live list', () => {
-    const [g] = groupFleet([ws('demo-a'), main('claude2-demo', { stoppedBy: STOP(5) })], []);
+    const [g] = groupFleet([ws('demo-a'), main('claude9-demo', { stoppedBy: STOP(5) })], []);
     expect(g!.sessions.map((x) => x.id)).toEqual(['demo-a']);
-    expect(g!.archived.map((x) => x.id)).toEqual(['claude2-demo']);
+    expect(g!.archived.map((x) => x.id)).toEqual(['claude9-demo']);
   });
 
   it.each([
-    ['a main checkout started again — the stop stamp is gone', main('claude2-demo', { status: 'idle', bucket: 'idle' })],
-    ['a crashed main checkout — dead, never stopped', main('claude2-demo')],
+    ['a main checkout started again — the stop stamp is gone', main('claude9-demo', { status: 'idle', bucket: 'idle' })],
+    ['a crashed main checkout — dead, never stopped', main('claude9-demo')],
     ['a stopped workspace that is not archived — it offers Archive again', ws('demo-b', {
       status: 'dead', bucket: 'dead', stoppedBy: STOP(5) })],
     ['a merged-and-archived workspace — `cleanup` stays in its chip\'s list',
@@ -319,10 +319,10 @@ describe('the Archived fold takes stopped main checkouts (workspace lifecycle sp
   it('runs newest first — a workspace by its archive time, a main checkout by its stop', () => {
     const [g] = groupFleet([
       ws('demo-old', { status: 'dead', archivedAt: 1, bucket: 'archived', bucketSince: 100 }),
-      main('claude2-demo', { stoppedBy: STOP(300) }),
+      main('claude9-demo', { stoppedBy: STOP(300) }),
       ws('demo-mid', { status: 'dead', archivedAt: 2, bucket: 'archived', bucketSince: 200 }),
     ], []);
-    expect(g!.archived.map((x) => x.id)).toEqual(['claude2-demo', 'demo-mid', 'demo-old']);
+    expect(g!.archived.map((x) => x.id)).toEqual(['claude9-demo', 'demo-mid', 'demo-old']);
   });
 
   it('a released workspace once archived is in Archived, never in both folds', () => {
@@ -339,22 +339,22 @@ describe('the Archived fold takes stopped main checkouts (workspace lifecycle sp
   // alone: `inReleasedFold` excludes `inArchivedFold`, the one predicate, never the bucket by hand.
   it('a stopped main checkout the wire calls released is in Archived alone — the folds never share a row (FM7)', () => {
     const released = { runId: 4, program: 'lifecycle', programTitle: null, claimedBy: 'demo-c', closedAt: 9, child: false };
-    const row = main('claude2-demo', { stoppedBy: STOP(5), releasedFrom: released });
+    const row = main('claude9-demo', { stoppedBy: STOP(5), releasedFrom: released });
     expect(inReleasedFold(row)).toBe(false);
     const [g] = groupFleet([row], []);
-    expect(g!.archived.map((x) => x.id)).toEqual(['claude2-demo']);
+    expect(g!.archived.map((x) => x.id)).toEqual(['claude9-demo']);
     expect(g!.released).toEqual([]);
   });
 
   it('a stopped main checkout placed on another card is not "where its work went" — that list is live rows only', () => {
-    const g = groupFleet([ws('demo-live', { boardProject: 'intake' }),
-      main('claude2-demo', { boardProject: 'intake', stoppedBy: STOP(5) })], []);
-    expect(g.find((x) => x.project === 'demo')!.elsewhere).toEqual([{ project: 'intake', count: 1 }]);
-    expect(g.find((x) => x.project === 'intake')!.archived.map((x) => x.id)).toEqual(['claude2-demo']);
+    const g = groupFleet([ws('demo-live', { boardProject: 'project-n' }),
+      main('claude9-demo', { boardProject: 'project-n', stoppedBy: STOP(5) })], []);
+    expect(g.find((x) => x.project === 'demo')!.elsewhere).toEqual([{ project: 'project-n', count: 1 }]);
+    expect(g.find((x) => x.project === 'project-n')!.archived.map((x) => x.id)).toEqual(['claude9-demo']);
   });
 
   it('the fold may hold a row the Dead chip counts — stated, not changed', () => {
-    const fleet = [ws('demo-b', { status: 'dead', archivedAt: 1, bucket: 'archived' }), main('claude2-demo', { stoppedBy: STOP(5) })];
+    const fleet = [ws('demo-b', { status: 'dead', archivedAt: 1, bucket: 'archived' }), main('claude9-demo', { stoppedBy: STOP(5) })];
     const [g] = groupFleet(fleet, []);
     expect(g!.archived).toHaveLength(2);
     // What the chips count is the fleet screen's to pin, not this fixture's: `fleet-screen.test.tsx`'s
@@ -367,24 +367,24 @@ describe('the Archived fold takes stopped main checkouts (workspace lifecycle sp
   it('keeps a stopped main checkout at dead\'s rank in the card order, though the fold holds it', () => {
     const fleet = [
       // oldest by `statusUpdatedAt`: were the order keyed on the fold, it would join part 3 and lead the crashed one.
-      main('claude2-stopped', { project: 'stopped', stoppedBy: STOP(5), statusUpdatedAt: 10 }),
-      main('claude2-crashed', { project: 'crashed', statusUpdatedAt: 99 }),
+      main('claude9-stopped', { project: 'stopped', stoppedBy: STOP(5), statusUpdatedAt: 10 }),
+      main('claude9-crashed', { project: 'crashed', statusUpdatedAt: 99 }),
       ws('demo-arch', { project: 'arch', status: 'dead', archivedAt: 1, bucket: 'archived', bucketSince: 3, statusUpdatedAt: 1 }),
     ];
     const g = groupFleet(fleet, []);
     expect(g.map((x) => x.project)).toEqual(['arch', 'crashed', 'stopped']);
-    expect(g.find((x) => x.project === 'stopped')!.archived.map((x) => x.id)).toEqual(['claude2-stopped']);
+    expect(g.find((x) => x.project === 'stopped')!.archived.map((x) => x.id)).toEqual(['claude9-stopped']);
   });
 
   it('splits one card three ways — live row on top, the stopped main checkout and the archived workspace in the fold', () => {
     const [g] = groupFleet([
-      main('claude2-demo', { stoppedBy: STOP(5), statusUpdatedAt: 500 }),
+      main('claude9-demo', { stoppedBy: STOP(5), statusUpdatedAt: 500 }),
       ws('demo-arch', { status: 'dead', archivedAt: 1, bucket: 'archived', bucketSince: 3, statusUpdatedAt: 1 }),
       ws('demo-live', { bucket: 'working', status: 'idle', statusUpdatedAt: 2 }),
     ], []);
     expect(g!.sessions.map((x) => x.id)).toEqual(['demo-live']);
     // Newest first inside the fold (the stop at 5 beats the archive at 3); the card order above is a separate key.
-    expect(g!.archived.map((x) => x.id)).toEqual(['claude2-demo', 'demo-arch']);
+    expect(g!.archived.map((x) => x.id)).toEqual(['claude9-demo', 'demo-arch']);
   });
 });
 
@@ -484,45 +484,45 @@ describe('durable cards (R5, D-3010)', () => {
 describe('the grouping key is boardHome (spec §6, Task 4)', () => {
   it('places a session on its boardProject card, not its own project\'s', () => {
     const g = groupFleet([
-      s({ id: 'coord', project: 'intake' }),
-      s({ id: 'w', project: 'custom-tools', boardProject: 'intake' }),
+      s({ id: 'coord', project: 'project-n' }),
+      s({ id: 'w', project: 'project-d', boardProject: 'project-n' }),
     ], []);
-    expect(g.map((x) => x.project)).toEqual(['intake', 'custom-tools']);
+    expect(g.map((x) => x.project)).toEqual(['project-n', 'project-d']);
     expect(g[0]!.sessions.map((x) => x.id)).toEqual(['coord', 'w']);
     expect(g[1]!.sessions).toEqual([]);                          // the own-project card survives, empty
   });
 
   it('counts on the DESTINATION card — attention, busy, unseen, stranded and the archived split follow the row', () => {
     const g = groupFleet([
-      s({ id: 'coord', project: 'intake' }),
-      s({ id: 'w', project: 'custom-tools', boardProject: 'intake', bucket: 'attention', bucketSince: 10 }),
-      s({ id: 'a', project: 'custom-tools', boardProject: 'intake', bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'coord', project: 'project-n' }),
+      s({ id: 'w', project: 'project-d', boardProject: 'project-n', bucket: 'attention', bucketSince: 10 }),
+      s({ id: 'a', project: 'project-d', boardProject: 'project-n', bucket: 'archived', archivedAt: 5 }),
     ], []);
-    const intake = g.find((x) => x.project === 'intake')!;
-    expect(intake.attention).toBe(true);
-    expect(intake.unseen).toBe(1);
-    expect(intake.archived.map((x) => x.id)).toEqual(['a']);
-    const own = g.find((x) => x.project === 'custom-tools')!;
+    const projectN = g.find((x) => x.project === 'project-n')!;
+    expect(projectN.attention).toBe(true);
+    expect(projectN.unseen).toBe(1);
+    expect(projectN.archived.map((x) => x.id)).toEqual(['a']);
+    const own = g.find((x) => x.project === 'project-d')!;
     expect(own.attention).toBe(false);
     expect(own.archived).toEqual([]);
   });
 
   it('a placement naming a project nobody knows still renders — on a card of that name', () => {
-    const g = groupFleet([s({ id: 'w', project: 'custom-tools', boardProject: 'nowhere' })], ['custom-tools']);
-    expect(g.map((x) => x.project)).toEqual(['nowhere', 'custom-tools']);
+    const g = groupFleet([s({ id: 'w', project: 'project-d', boardProject: 'nowhere' })], ['project-d']);
+    expect(g.map((x) => x.project)).toEqual(['nowhere', 'project-d']);
   });
 
   it('the emptied card says where its work went, per destination, live rows only', () => {
     const g = groupFleet([
-      s({ id: 'w1', project: 'custom-tools', boardProject: 'intake' }),
-      s({ id: 'w2', project: 'custom-tools', boardProject: 'intake' }),
-      s({ id: 'w3', project: 'custom-tools', boardProject: 'data' }),
-      s({ id: 'a', project: 'custom-tools', boardProject: 'intake', bucket: 'archived', archivedAt: 5 }),
-      s({ id: 'home', project: 'custom-tools' }),
+      s({ id: 'w1', project: 'project-d', boardProject: 'project-n' }),
+      s({ id: 'w2', project: 'project-d', boardProject: 'project-n' }),
+      s({ id: 'w3', project: 'project-d', boardProject: 'data' }),
+      s({ id: 'a', project: 'project-d', boardProject: 'project-n', bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'home', project: 'project-d' }),
     ], []);
-    const own = g.find((x) => x.project === 'custom-tools')!;
-    expect(own.elsewhere).toEqual([{ project: 'intake', count: 2 }, { project: 'data', count: 1 }]);
-    expect(g.find((x) => x.project === 'intake')!.elsewhere).toEqual([]);
+    const own = g.find((x) => x.project === 'project-d')!;
+    expect(own.elsewhere).toEqual([{ project: 'project-n', count: 2 }, { project: 'data', count: 1 }]);
+    expect(g.find((x) => x.project === 'project-n')!.elsewhere).toEqual([]);
   });
 });
 
@@ -625,12 +625,12 @@ describe('the Released sub-fold (workspace lifecycle spec §5.1)', () => {
 
   it('released rows count toward unseen, and toward neither busy nor pin while a live row exists', () => {
     const g = groupFleet([
-      s({ id: 'live', home: 'claude2', bucket: 'idle' }),
+      s({ id: 'live', home: 'claude9', bucket: 'idle' }),
       s({ id: 'r', home: 'claude-b', bucket: 'done', bucketSince: 50, releasedFrom: rel(1, 100) }),
     ], [])[0]!;
     expect(g.unseen).toBe(1);                                           // the `done` released row
     expect(g.busy).toBe(0);
-    expect(g.pin).toEqual({ state: 'shared', home: 'claude2' });
+    expect(g.pin).toEqual({ state: 'shared', home: 'claude9' });
   });
 });
 
