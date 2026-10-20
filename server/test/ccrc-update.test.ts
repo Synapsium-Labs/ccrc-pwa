@@ -7465,7 +7465,7 @@ function plantRole(home: string, role: 'fleet' | 'server' | 'both'): void {
 
 /** "Configured" on a fleet node: the puller's timer unit FILE is installed —
  *  `_pool_sync_installed`'s rule, and `plantPoolSyncTimer`'s zero-byte idiom
- *  (`ccdWsHelpers.ts:136-139`): nothing reads the unit's content. */
+ *  (in `ccdWsHelpers.ts`): nothing reads the unit's content. */
 function plantSyncTimer(home: string): void {
   const units = join(home, '.config', 'systemd', 'user');
   mkdirSync(units, { recursive: true });

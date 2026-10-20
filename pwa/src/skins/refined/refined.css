@@ -1,0 +1,5 @@
+/* Refined's own rules (W2, D-5469): `ref-*` classes only, never a `data-skin` selector (skins.css is the one sheet
+   that may select on the attribute, skin-identity (k)). Structure channel: layout, grid placement and spacing on
+   tokens. Colour comes from the identity core's tokens and nothing here defines one (D-5094); every colour-bearing
+   rule added later is a `contrast.test.ts` identity. Empty in S2b: the frame's grid is still `shell.css`'s; S4b moves
+   Refined's desktop grid and the accounts top strip here. */

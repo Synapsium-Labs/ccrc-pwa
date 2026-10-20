@@ -755,6 +755,7 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   | the shape boundary without `\uXXXX` and `\xXX` (D-5995) | secret-mask | "a shape right after a \uXXXX or a \xXX escape is masked" |
   | a shape continued into the next row only after it matched on its first row (D-5995) | secret-mask | "a shape wrapped onto an indented next row before it can match on its first row…" |
   | a join continued past the row the value ends on (D-5995) | secret-mask | "a key wrapped early at 80 columns is masked through its last row…" |
+  | a row measured in UTF-16 units, not columns (D-5995) | secret-mask | "a key wrapped two or more times after such text leaves no byte of it, at every cut, in rows mode"; "the same wrap written one row per drawer push…" (the final audit: an emoji sequence or a combining mark before the key) |
   | a run that ends its chunk at a row end is never held (D-5995) | secret-mask | "the same wrap split at the row break across two drawer pushes…"; "with fingerprint rows held, a chunk that ends a compatible key's first row…" |
   | a run held at its row end never settles, or is held again once settled (D-5995) | secret-mask | "a row that ends in an ordinary word goes at once in the shape-only mode…" |
   | a pending prompt cleared by an exact echo only, or its masks matched across blanks (D-5995) | stores | "a prompt holding a credential shape is cleared by its masked echo…" |
