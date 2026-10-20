@@ -125,7 +125,7 @@ const PINNED_SITES: Readonly<Record<string, number>> = {
   'server/src/coord/endDeadCoordinator.ts': 2,  // stillCrashed (the late read), endDeadCoordinator step 1
   'server/src/coord/expireArchived.ts': 1,      // expirySwitches: step 2 and step 6
   'server/src/stopDoneSweep.ts': 1,             // stopDonePass's switches
-  'server/src/watch.ts': 4,                     // emitCoord, sweepChildReclaim, archivedExpiryPass, deadCoordinatorPass
+  'server/src/watch.ts': 0,                     // folded onto readSwitches (D-5856)
 };
 
 describe('every includes(RECLAIM_PAUSE_MARKER) site has a verdict row in this suite', () => {
