@@ -964,6 +964,7 @@ describe('W2-4 Task 4: spawned text, the stream-json reader and the spend ledger
     ['an extra key', `${GOOD}{"name":"b","tokens":1,"ts_ms":1,"x":0}\n`],
     ['a missing key', `${GOOD}{"name":"b","tokens":1}\n`],
     ['an empty name', `${GOOD}{"name":"","tokens":1,"ts_ms":1}\n`],
+    ['lines that each read but sum past the safe-integer range', `{"name":"a","tokens":${Number.MAX_SAFE_INTEGER},"ts_ms":1}\n{"name":"b","tokens":${Number.MAX_SAFE_INTEGER},"ts_ms":1}\n`],
   ])('a malformed ledger (%s) fails closed as out-refused spend.jsonl malformed, never a count', (_why, body) => {
     const out = t4MkTmp('ccrc-replay-t4-malformed-');
     t4Fs.writeFileSync(ledger(out), body);
@@ -1018,8 +1019,9 @@ const T5_STUB_STDERR = 'stub-stderr.txt';
 const T5_STUB_EXIT = 'stub-exit';
 const T5_STUB_SWAP = 'stub-swap-path';
 /** Optional stub acts (D-5986), each a file under $HOME holding a path, taken just before the stub exits: remove the path;
- *  chmod the directory to 0500 (a run subdirectory nobody may then change); and, only in a box-mode run (the argv carries
- *  the arms' `--tools Bash,Agent`), replace the path by a directory, as a same-user process could. */
+ *  chmod the directory to 0500 (a run subdirectory nobody may then change); and, only in a run whose argv carries
+ *  `--tools Bash,Agent` (an arm or a box run; in step 0a, the box run), replace the path by a directory, as a same-user
+ *  process could. */
 const T5_STUB_RM = 'stub-rm-path';
 const T5_STUB_CHMOD = 'stub-chmod-path';
 const T5_STUB_BOX_SWAP = 'stub-box-swap-path';
@@ -2680,19 +2682,37 @@ describe('fix round 1 (D-5986): no-follow, type-checked I/O under --out', () => 
     expect(ledgerLines(b.out), 'nothing spent').toEqual([]);
   }, 60_000);
 
-  it('prepareOut under a parent nobody may write into: the mkdir fails with its own EACCES (exit 1, a raw error, nothing created); an --out that cannot be made is not yet a claimed path', (ctx) => {
+  it('prepareOut under a parent nobody may write into: the mkdir fails with its own EACCES and --out is refused out-refused create-failed EACCES, nothing created', (ctx) => {
     if (process.getuid?.() === 0) ctx.skip();
     const parent = outsideDir();
     chmodSync(parent, 0o500);
     try {
       const err = thrown(() => replay.prepareOut(path.join(parent, 'out')));
-      expect(err).toMatchObject({ code: 'EACCES' });
-      expect(err).not.toBeInstanceOf(replay.DriverRefusal);
+      expect(err).toBeInstanceOf(replay.DriverRefusal);
+      expect(err).toMatchObject({ word: 'out-refused', detail: 'create-failed EACCES' });
     } finally {
       chmodSync(parent, 0o700);
     }
     expect(readdirSync(parent), 'nothing was created').toEqual([]);
     expect(replay.prepareOut(path.join(parent, 'out')), 'CONTROL: the mode restored, the same --out is made').toBe(path.join(realpathSync(parent), 'out'));
+  });
+
+  // D-5986: the marker write refuses out-refused marker-unwritable <errno>. A file-size limit of 0 (prlimit, an argv, no shell)
+  // makes the write of the marker's bytes fail EFBIG after mkdir and the exclusive create succeeded: node ignores SIGXFSZ.
+  it.skipIf(!existsSync('/usr/bin/prlimit'))('prepareOut whose marker cannot be written (a file-size limit of 0): out-refused marker-unwritable EFBIG, the directory made and the marker left empty', () => {
+    const dir = mkTmp('ccrc-replay-d5986-marker-');
+    const script = path.join(dir, 'child.mjs');
+    writeFileSync(script, `import * as D from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
+import { join } from 'node:path';
+let said;
+try { D.prepareOut(join(process.argv[2], 'out')); said = 'no refusal'; } catch (e) { said = e.word + ': ' + e.detail; }
+process.stdout.write(said);
+`);
+    const r = spawnSync('/usr/bin/prlimit', ['--fsize=0', process.execPath, script, dir], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    expect(r.signal, r.stderr).toBeNull();
+    expect(r.stdout).toBe('out-refused: marker-unwritable EFBIG');
+    expect(readdirSync(path.join(dir, 'out')), 'the directory was made; the marker was created empty').toEqual([replay.OUT_MARKER]);
+    expect(readFileSync(path.join(dir, 'out', replay.OUT_MARKER), 'utf8'), 'its bytes were not written').toBe('');
   });
 
   /** Run `body` (ESM, top-level await) in a child with a deadline; the driver is `D`, a scratch directory is `base`. */
@@ -2738,17 +2758,22 @@ process.stdout.write(JSON.stringify(results));
     });
   });
 
-  // D-5986: a ledger past the read bound (256 MiB) is out-refused spend.jsonl over-cap, never read whole and never summed. The
-  // file is sparse (no disk), and the read runs in a child, so its transient buffers cannot take the test runner with them.
-  it('a ledger past the read bound refuses out-refused spend.jsonl over-cap, in a child with a deadline', () => {
+  // D-5986: a ledger past the read bound (256 MiB) is out-refused spend.jsonl over-cap, never read and never summed. The file is
+  // sparse (no disk), and the call runs in a child, so a read that did happen could not take the test runner with it.
+  it('a ledger past the read bound refuses out-refused spend.jsonl over-cap from its size, before any read: the child\'s peak memory stays small', () => {
     const r = inChild(`
 { const out = fresh('cap');
   const fd = openSync(join(out, D.SPEND_LEDGER), 'w'); ftruncateSync(fd, 256 * 1024 * 1024 + 1); closeSync(fd);
   results.read = said(() => D.spentSoFar(out)); }
+results.peakMiB = Math.round(process.resourceUsage().maxRSS / 1024);
 `, 60_000);
     expect(r.signal, `the read did not finish: ${r.err}`).toBeNull();
     expect(r.status, r.err).toBe(0);
-    expect(JSON.parse(r.out)).toEqual({ read: 'out-refused: spend.jsonl over-cap' });
+    const got = JSON.parse(r.out);
+    expect(got.read).toBe('out-refused: spend.jsonl over-cap');
+    // The refusal is the same whether the size or the read loop finds the excess, so the up-front answer shows only as memory:
+    // a loop that reads up to the cap holds 256 MiB of chunks.
+    expect(got.peakMiB, `the child held ${got.peakMiB} MiB at its peak: the file was read into memory`).toBeLessThan(160);
   }, 90_000);
 
   it('a --step0a input that is a FIFO, a symlink or a directory refuses input-invalid not-regular and is never opened or waited on', () => {
@@ -5083,7 +5108,7 @@ describe('fix round 2 (D-5984): signals are yielded to before every spawn, and e
     expect(stubLog(b.home)).toBeNull();
   }, 60_000);
 
-  it('a fully resumed probe with a SIGTERM pending refuses interrupted and writes no probe.json (the stop check comes before finishedOutcome)', async () => {
+  it('a fully resumed probe with a SIGTERM pending refuses interrupted and writes no probe.json (the lane check or the batch\'s last check)', async () => {
     const { home, out } = probeBox('ccrc-replay-fr2-resumed-');
     const first = runDriver(home, probeArgs(out));
     expect(first.code, first.stderr).toBe(0);
@@ -5213,6 +5238,40 @@ process.stdout.write(stream());`), { mode: 0o700 });
       expect(stderr).toMatch(/^ccrc history-replay: interrupted: SIGTERM received; [^\n]*\n$/);
       expect(answered, `answered at ${answered} ms, not when the ${SLEEP_S} s grandchild ended`).toBeLessThan(9_000);
       expect(recorded(gcFile).some(alive), 'the setsid grandchild escaped the group kill and is still running: the residual, no longer holding the driver').toBe(true);
+    } finally {
+      killAll(allOf(home));
+      driver.kill('SIGKILL');
+    }
+  }, 120_000);
+
+  it('the bound\'s timer is cleared at close: a real probe whose stubs exit at once ends within STOP_GRACE_MS - 1 s of its last child\'s exit, not a grace later', async () => {
+    const base = mkTmp('ccrc-replay-fr2-timer-cleared-');
+    const home = join(base, 'home');
+    mkdirSync(home, { mode: 0o700 });
+    writeRoster(home, [{ id: 'up-a', label: 'up-a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' }]);
+    plantStub(home, 'up-a');
+    // Each stub notes the time just before it writes its stream and exits; the driver's own exit is measured against the last.
+    writeFileSync(join(home, '.local', 'bin', 'up-a'), stubSource(`fs.readFileSync(0);
+fs.appendFileSync(path.join(home, 'exits.ms'), Date.now() + '\\n');
+process.stdout.write(stream());`), { mode: 0o700 });
+    const now = Math.floor(Date.now() / 1000);
+    mkdirSync(join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five: 10, seven: 10, ts: now, fiveResetAt: now + 3600, sevenResetAt: now + 86_400 }));
+    const out = join(base, 'out');
+    const driver = spawn(process.execPath, [SCRIPT, 'probe', '--out', out, '--account', 'up-a', '--budget', '1000000', '--arm-model', 'fixture-model-arm'],
+      { env: { ...scrubbedEnv(process.env), HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
+    startedChildren.push(driver);
+    let stderr = '';
+    driver.stderr.on('data', (d) => { stderr += String(d); });
+    const exited = new Promise<{ code: number | null; signal: string | null }>((r) => driver.once('close', (code, signal) => r({ code, signal })));
+    try {
+      const r = await bounded(exited, 60_000, 'the driver exiting');
+      const closedAt = Date.now();
+      expect(r, stderr).toEqual({ code: 0, signal: null });
+      const exits = recorded(join(home, 'exits.ms'));
+      expect(exits.length, 'the stubs ran').toBeGreaterThanOrEqual(1);
+      const lag = closedAt - Math.max(...exits);
+      expect(lag, `the driver ended ${lag} ms after its last child's exit (an uncleared bound timer holds it a whole grace)`).toBeLessThan(STOP_GRACE_MS - 1_000);
     } finally {
       killAll(allOf(home));
       driver.kill('SIGKILL');

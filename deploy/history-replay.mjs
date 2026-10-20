@@ -42,9 +42,11 @@ import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
  *  leftover `.part` whose writer is alive or unmeasured, or a regular `.pid` whose content is not a record), `out-in-use` (another
  *  driver holds the --out lock, or the lock file is not one) and `interrupted` (a SIGINT, SIGTERM or SIGHUP stopped
  *  the driver: a signal that has arrived by a yield is handled there, and the stop check after it refuses, so no spawn
- *  starts after the handler has run; no run.json, step0a.json or probe.json is written; a run stopped in flight
- *  is charged once, by its spend line, and so is a child spawned in the window between a yield and its spawn, which
- *  the next turn stops: D-5984). */
+ *  starts after the handler has run; after the handler has run, no run.json, step0a.json or probe.json is written, but a
+ *  run whose post-close stretch is under way when a signal arrives is recorded, and the subcommand then refuses; a run
+ *  stopped in flight is charged once, by its spend line; a signal that arrives in the synchronous stretch between a yield
+ *  and a spawn is handled at the next turn, and that child is stopped and charged; a signal that arrives after the batch's
+ *  last check, when every child has closed, is not handled: the result is written and the driver exits 0: D-5984). */
 export const DRIVER_REASONS = Object.freeze([
   'family-unlisted', 'family-recall-off',
   'quiz-unanswerable', 'quiz-sha-mismatch',
@@ -162,12 +164,17 @@ export function paneRefusal(env) {
 // The wait after a leader's exit is bounded (spawnGroup): a STOP_GRACE_MS timer from the leader's 'exit', cleared at
 // 'close', SIGKILLs the leader's group and destroys the streams, so a process that outlives the leader and holds a pipe
 // cannot hold the driver, its lock or a signal's answer.
-// Residuals, named: that yield-to-spawn window; a driver killed between spawn() and its `.pid` record leaves a `.part` with
-// no record, charged as D-5811 says; a grandchild that calls setsid escapes every group kill and keeps running, and it no
-// longer holds the driver (if it inherited the run's stdout, it can still write into the stream after the charge, and a
-// resume then refuses the changed stream); and a process in the run's group that ignores SIGTERM and holds NO pipe to the
-// driver: the run's 'close' fires at once, the timer is cleared, so the bounded wait never fires and that process can
-// outlive its leader (it writes no `.part`, so no spend goes unseen).
+// Residuals, named: that yield-to-spawn window; the post-last-check window (a signal that arrives after runBatch's last
+// check, when every child has closed, is not handled: main removes its listeners before the loop polls, the result is
+// written and the driver exits 0); a driver killed between spawn() and its `.pid` record leaves a `.part` with no record,
+// charged as D-5811 says; a grandchild that calls setsid escapes every group kill and keeps running, and it no longer holds
+// the driver (if it inherited the run's stdout, it can still write into the stream after the charge, and a resume then
+// refuses the changed stream); a process in the run's group that holds no pipe to the driver, whether or not it ignores
+// SIGTERM: close fires at once, the timer is cleared, and it can outlive its leader; if it kept the run's stdout it can
+// still write into the stream after the charge, and a resume then refuses the changed stream; and a group id reused by an
+// unrelated process after the run's group emptied (the setsid case leaves it empty), which the bound's, the stop's and the
+// timeout's group SIGKILL would then reach: it needs a pid wrap within the grace, and only the registry check, which
+// catches a reuse by our own sibling, stands in the way.
 /** Every live child, keyed by its pid (which is its process-group id). A Map, not a Set of pids, so 'close' can tell its
  *  own entry from a newer child's: the kernel may hand a reaped child's pid to a sibling spawned before the old child's
  *  'close' fires, and the old 'close' must not drop that newer entry (D-5984). No test reaches this: the reuse window
@@ -210,9 +217,13 @@ async function yieldToSignals() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
-/** Refuse `interrupted` while the stopping flag is set. Called before every spawn (after a yield, where there is one) and
- *  after every batch, so no spawn starts after the handler has run and no run.json, step0a.json or probe.json is written
- *  after a signal (a run stopped in flight is still charged once, by its spend line). */
+/** Refuse `interrupted` while the stopping flag is set. Six call sites: each runBatch lane iteration (after a yield and the
+ *  re-read), runBatch's last act (after its lanes), launchRun before runChild, launchRun's post-close branch,
+ *  measureClaudeVersion (after a yield), and step 0a right after its `--version` returns. So no spawn starts after the
+ *  handler has run, and after the handler has run no run.json, step0a.json or probe.json is written. A run whose
+ *  post-close stretch is under way when a signal arrives is recorded (its run.json is written), and the subcommand then
+ *  refuses at its next check. A signal that arrives after runBatch's last check is not answered (the post-last-check
+ *  window, named in the header above). A run stopped in flight is still charged once, by its spend line. */
 function refuseIfStopping() {
   if (stopping !== null) refuse('interrupted', `${stopping} received; no spawn starts after this, and no run.json, step0a.json or probe.json is written`);
 }
@@ -227,14 +238,18 @@ function refuseIfStopping() {
  *  leader's 'exit' fires, a STOP_GRACE_MS timer starts and 'close' clears it. If it fires it SIGKILLs the leader's group
  *  (only processes still in the run's group: a live member keeps the group allocated) and destroys the child's stdin,
  *  stdout and stderr streams that exist (runChild's stdout is the `.part`'s descriptor, so `child.stdout` is null there).
- *  Node then emits 'close' with the exit's code and signal and the run finishes as on close. What is cut is whatever a
- *  process writes to a pipe after the leader's exit. For runChild that is stderr only: its stdout is the `.part`'s
- *  descriptor, and the leader's own stderr is in the pipe at its exit and read well before the timer fires. For
- *  measureClaudeVersion, whose stdout is a pipe too, stdout written after the leader's exit (by a grandchild) is cut as
- *  well; the version line the leader wrote before its exit is read. The SIGKILL is skipped when the registry no longer
- *  holds this child (a reaped child's pid may have been reused by a sibling group leader within the grace). The timer
- *  is NOT unref'd: when a grandchild holds a pipe the pipe's handle keeps the loop alive anyway, and a ref'd timer is
- *  what guarantees it fires; it is cleared at 'close', so it never holds a finished run. */
+ *  Node then emits 'close' with the exit's code and signal and the run finishes as on close. What can be cut is what a
+ *  process writes to a pipe after the leader's exit and is still unread when the timer fires. For runChild that is
+ *  stderr only: its stdout is the `.part`'s descriptor, and the leader's own stderr is in the pipe at its exit and read
+ *  well before the timer fires. For measureClaudeVersion, whose stdout is a pipe too, stdout still unread when the timer
+ *  fires (written by a grandchild after the leader's exit) is cut as well; the version line the leader wrote before its
+ *  exit is read. The SIGKILL is skipped when the registry no longer holds this child (a reaped child's pid may have been
+ *  reused by a sibling group leader within the grace). A residual, named: when the run's group has emptied (a setsid
+ *  grandchild left it) and the leader's pid was reused by an unrelated process that leads a group, the SIGKILL reaches
+ *  that group, here and in the stop's and the timeout's kills; it needs a pid wrap within the grace, and the registry
+ *  check catches a reuse only by our own sibling. The timer is NOT unref'd: when a grandchild holds a pipe the pipe's
+ *  handle keeps the loop alive anyway, and a ref'd timer is what guarantees it fires; it is cleared at 'close', so it
+ *  never holds a finished run. */
 function spawnGroup(launcher, argv, options) {
   const child = spawn(launcher, argv, { ...options, detached: true });
   const pid = child.pid;
@@ -364,8 +379,18 @@ function createOut(abs) {
   let parentIsDir = false;
   try { parentIsDir = statSync(path.dirname(abs)).isDirectory(); } catch { parentIsDir = false; }
   if (!parentIsDir) refuse('out-refused', 'parent-absent');
-  mkdirSync(abs, { mode: 0o700 });
-  writeFileSync(path.join(abs, OUT_MARKER), OUT_KIND, { mode: 0o600, flag: 'wx' });
+  // D-5986: a failure to make --out, or to write its marker, refuses `out-refused` with the errno, never a raw exit 1: a parent
+  // nobody may write into reaches the mkdir's EACCES every time, and two drivers making the same fresh --out meet EEXIST.
+  try {
+    mkdirSync(abs, { mode: 0o700 });
+  } catch (e) {
+    refuse('out-refused', `create-failed ${errCode(e)}`);
+  }
+  try {
+    writeFileSync(path.join(abs, OUT_MARKER), OUT_KIND, { mode: 0o600, flag: 'wx' });
+  } catch (e) {
+    refuse('out-refused', `marker-unwritable ${errCode(e)}`);
+  }
 }
 
 /** The reuse rule, which a directory just created passes through too: a real directory, the caller's, mode exactly
@@ -674,16 +699,16 @@ export function spendTokens(facts) {
 // each happen, and a raw errno is not a W2 stop word. Covered: the reads and the claim walk (readPlain, lstatOrNull,
 // refuseLinkedDirs, leftoverNames); the appends (appendPlain); the creates and writes (createPlain, writePlain,
 // ensurePlainDir); the removals and renames of the run's own bookkeeping (removePlain in settleLeftover, createPlain and
-// launchRun; the lock's link, rename and put-back in takeLock; launchRun's `.part` rename). A removal that fails AFTER the
+// launchRun; the lock's link, rename and put-back in takeLock; launchRun's `.part` rename); and prepareOut's creation of
+// --out (its mkdir `create-failed <code>`, its marker write `marker-unwritable <code>`). A removal that fails AFTER the
 // spend line leaves the `.part`, which the next driver charges again (an over-count). Not covered, each for a stated
 // reason: runChild's child-error removals (a spawn that produced no child; a refusal there would hide the spawn error
 // that got it there); the best-effort removals, which use `dropQuietly` so that a failed removal never becomes the
 // answer, either on a path that is already refusing or after the work is done (writePlain's tmp cleanups; takeLock's
-// stale and tmp removals; the claim's release). Kept as they are: prepareOut's creation of --out, its mkdir and its marker
-// WRITE (into the directory it just made, 'wx' = O_EXCL), whose failure is a raw error and exit 1 (a parent nobody may
-// write into, a full disk, or two drivers making the same fresh --out at once): an --out that cannot be made is not yet
-// a claimed path; and the reads outside --out (/proc, the roster, the release stamp, the wrapper). The marker's
-// read, and HOME's limits row, go through readPlain.
+// stale and tmp removals; the claim's release). Still a raw error and exit 1, each only through a race: prepareOut's
+// checkOut lstat (--out removed between prepareOut's lstat and checkOut's) and its realpath (the same removal, a step
+// later); readPlain's O_NONBLOCK (a regular file swapped for a FIFO between the lstat and the open); and the reads outside
+// --out (/proc, the roster, the release stamp, the wrapper). The marker's read, and HOME's limits row, go through readPlain.
 
 /** The largest ledger or stream the driver reads back. */
 const OUT_STREAM_CAP = 256 * 1024 * 1024;
@@ -694,7 +719,8 @@ const OUT_JSON_CAP = 16 * 1024 * 1024;
  *  - `{state: 'absent'}` when nothing is there (ENOENT at the lstat, or at the open if it went in between);
  *  - `{state: 'bytes', bytes}`;
  *  - `{state: 'bad', why}` with `why` `not-regular` (a directory, a link, a FIFO, a device, or a file that changed type
- *    between the lstat and the open), `over-cap`, or `unreadable` with the errno in `code`.
+ *    between the lstat and the open), `over-cap` (answered from the descriptor's size before any read; the read loop's own
+ *    bound stays for a file that grew after the fstat), or `unreadable` with the errno in `code`.
  *  Nothing but a regular file is ever opened for read.
  *  @param {string} p  @param {number} cap
  *  @returns {{state: 'absent'} | {state: 'bytes', bytes: Buffer} | {state: 'bad', why: 'not-regular' | 'over-cap' | 'unreadable', code?: string}} */
@@ -716,7 +742,11 @@ function readPlain(p, cap) {
     return unreadable(e);
   }
   try {
-    if (!fstatSync(fd).isFile()) return { state: 'bad', why: 'not-regular' };   // replaced between the lstat and the open
+    const fst = fstatSync(fd);
+    if (!fst.isFile()) return { state: 'bad', why: 'not-regular' };   // replaced between the lstat and the open
+    // D-5986: a file already past the cap is answered from the descriptor's size, before anything is read, so it is never
+    // held in memory. The up-front answer and the loop's give the same outcome, so this half is observable only as memory.
+    if (fst.size > cap) return { state: 'bad', why: 'over-cap' };
     const chunks = [];
     const buf = Buffer.alloc(Math.min(cap + 1, 1 << 20));
     let total = 0;
@@ -724,7 +754,7 @@ function readPlain(p, cap) {
       const got = readSync(fd, buf, 0, buf.length, null);
       if (got === 0) break;
       total += got;
-      if (total > cap) return { state: 'bad', why: 'over-cap' };
+      if (total > cap) return { state: 'bad', why: 'over-cap' };   // for a file that grew after the fstat
       chunks.push(Buffer.from(buf.subarray(0, got)));
     }
     return { state: 'bytes', bytes: Buffer.concat(chunks) };
@@ -935,7 +965,8 @@ function spendRow(line) {
 /** The cumulative spend under `out` (W2-D55): every line summed, a repeated name included (never de-duplicated:
  *  over-counting is the budget's safe direction). 0 when no ledger exists yet. A ledger the driver cannot read whole
  *  refuses `out-refused` (D-5986), with exactly one of `spend.jsonl is not a regular file`, `spend.jsonl unreadable <code>`,
- *  `spend.jsonl over-cap` and `spend.jsonl malformed` (a torn or foreign line, one recordSpend would not write): raising
+ *  `spend.jsonl over-cap` and `spend.jsonl malformed` (a torn or foreign line, one recordSpend would not write, or lines that
+ *  each read but sum past the safe-integer range): raising
  *  --budget clears none of these states, so `budget-exhausted` means only that spend has reached the budget. (Task 4
  *  answered all of them `budget-exhausted` `ledger-unreadable`.)
  *  @param {string} out
@@ -956,6 +987,7 @@ export function spentSoFar(out) {
     const row = spendRow(line);
     if (row === null) refuse('out-refused', `${SPEND_LEDGER} malformed`);
     sum += row.tokens;
+    if (!Number.isSafeInteger(sum)) refuse('out-refused', `${SPEND_LEDGER} malformed`);   // D-5986: lines that each read but sum past the safe range
   }
   return sum;
 }
@@ -1640,8 +1672,9 @@ export async function launchRun(job, opts = {}) {
  *  signal that has arrived by a yield is handled there and the stop check after it refuses, so no spawn starts after the
  *  handler has run. A signal that arrives in the synchronous stretch between a yield and a spawn is handled at the next
  *  turn, and that child is stopped and charged. The batch's last check, after its lanes, refuses `interrupted` too: a
- *  lane whose final iteration found no job to take has made no stop check of its own. The first throw, the gate's included, stops the batch: no further spawn
- *  starts, a run already started finishes and is recorded (a stopped one is not), and the throw is rethrown, so a
+ *  lane whose final iteration found no job to take has made no stop check of its own. A signal that arrives after that
+ *  check, when every child has closed, is not handled. The first throw, the gate's included, stops the batch: no further
+ *  spawn starts, a run already started finishes and is recorded (a stopped one is not), and the throw is rethrown, so a
  *  re-run resumes. */
 export async function runBatch(jobs, opts = {}) {
   if (typeof opts.gate !== 'function') throw new TypeError('runBatch: opts.gate is required (Task 6\'s batchGate, or a test\'s explicit no-op): no batch spawns ungated');
@@ -1682,7 +1715,8 @@ export async function runBatch(jobs, opts = {}) {
   if (stop !== null) throw stop.e;
   // D-5984: the batch's last check. A lane's final iteration returns at the re-read with no stop check of its own, so a
   // signal handled at that last yield is caught here. Nothing awaits between this return and the subcommand's
-  // step0a.json or probe.json write, so no handler can run in between: this check covers those writes.
+  // step0a.json or probe.json write, so no handler can run in between: this check covers those writes. A signal that arrives
+  // after it, when every child has closed, is not handled (the post-last-check window): the result is written, exit 0.
   refuseIfStopping();
   return outcomes;
 }
@@ -2312,10 +2346,13 @@ function shaOfPlain(out, rel) {
  *  (--budget included, D-5815), the settings mode, HOME, the unusable inputs (D-5813), `prepareOut`, the realpath ':'
  *  check (D-5813), `claimOut` (D-5985), the roster and admission, the launcher's X_OK, and the gate before every spawn,
  *  so every one of those refusals lands before the first spawn. A refusal can also land after one: the gate's stops before
- *  a later spawn (`budget-exhausted`, the limits words), `interrupted`, and every `out-refused` a run's files raise after
- *  its spawn (the `.pid` write, the stream read, the spend line, the removals, the rename, run.json). Then one box-mode run
- *  per taught spelling (at most two at once), `<out>/probe.json`, and `sha256 <hex>` on stderr (D-5983), stdout empty.
- *  Exit 0 whatever the runs showed; only a refusal is non-zero. */
+ *  a later spawn (`budget-exhausted`, the limits words, and `out-refused` `spend.jsonl …` when the ledger cannot be read
+ *  whole), `interrupted`, every `out-refused` a run's files raise after its spawn (the `.pid` write, the stream read, the
+ *  spend line, the removals, the rename, run.json), and the post-batch ones that are not a run's files: the final
+ *  `spentSoFar` read into the output (`out-refused` on a torn ledger, after every spawn) and the write of `probe.json` and
+ *  its sha read-back. Then one box-mode run per taught spelling (at most two at once), `<out>/probe.json`, and
+ *  `sha256 <hex>` on stderr (D-5983), stdout empty. Exit 0 whatever the runs showed; a refusal exits 2, and a defect or a
+ *  race-only raw error exits 1. */
 export async function probeCommand(flags, env) {
   for (const k of Object.keys(flags)) if (!PROBE_FLAGS.includes(k)) refuse('args-invalid', `--${k} is not a probe flag`);
   for (const k of PROBE_REQUIRED) if (flags[k] === undefined) refuse('args-invalid', `${k}-required`);
