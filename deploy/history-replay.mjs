@@ -20,7 +20,7 @@
 // Its words: DRIVER_REASONS, frozen once here and nowhere else (W2-D59, W2-D12; D-5774). A refusal prints
 // `ccrc history-replay: <word>: <detail>` on stderr and exits EXIT.REFUSED (2); a defect exits EXIT.INTERNAL (1).
 // They are never lib REASONS: §8.7's table and SKILL.md do not list them. EXIT is imported, never declared (O14).
-import { accessSync, appendFileSync, chmodSync, closeSync, constants, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, closeSync, constants, fchmodSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import os from 'node:os';
 import path, { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -602,6 +602,165 @@ export function spendTokens(facts) {
   return u.input + u.cacheCreation + u.cacheRead + u.output;
 }
 
+// ── D-5986: no-follow, type-checked I/O under --out ────────────────────────────────────────────────────────
+// Every path the driver reads or writes under a (reused) --out goes through these, so a symlink, a FIFO or a
+// directory planted there refuses `out-refused` (or is read as the caller's own bad state) and never follows a link
+// or blocks. Reads: lstat, then open O_RDONLY|O_NOFOLLOW|O_NONBLOCK, fstat isFile, then a bounded read. Appends open
+// O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW. Every other write is a tmp file created exclusively (O_EXCL|O_NOFOLLOW) and a
+// rename. Deliberately kept as they are, because they are not a write or read of a path an --out holder could have
+// planted: prepareOut's marker (written into the directory it just made, 'wx' = O_EXCL, and type-checked before it
+// is read back), and the reads of /proc, the roster, the release stamp, the wrapper and HOME's limits row.
+
+/** The largest ledger or stream the driver reads back. */
+const OUT_STREAM_CAP = 256 * 1024 * 1024;
+/** The largest run.json, or --step0a input, the driver reads. */
+const OUT_JSON_CAP = 16 * 1024 * 1024;
+
+/** Read the regular file at `p`, whole and no larger than `cap` bytes.
+ *  - `{state: 'absent'}` when nothing is there (ENOENT at the lstat, or at the open if it went in between);
+ *  - `{state: 'bytes', bytes}`;
+ *  - `{state: 'bad', why}` with `why` `not-regular` (a directory, a link, a FIFO, a device, or a file that changed type
+ *    between the lstat and the open), `over-cap`, or `unreadable` with the errno in `code`.
+ *  Nothing but a regular file is ever opened for read.
+ *  @param {string} p  @param {number} cap
+ *  @returns {{state: 'absent'} | {state: 'bytes', bytes: Buffer} | {state: 'bad', why: 'not-regular' | 'over-cap' | 'unreadable', code?: string}} */
+function readPlain(p, cap) {
+  const unreadable = (e) => ({ state: 'bad', why: 'unreadable', code: String(e?.code ?? 'EUNKNOWN') });
+  let st;
+  try {
+    st = lstatSync(p);
+  } catch (e) {
+    return e?.code === 'ENOENT' ? { state: 'absent' } : unreadable(e);
+  }
+  if (!st.isFile()) return { state: 'bad', why: 'not-regular' };
+  let fd;
+  try {
+    fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (e) {
+    if (e?.code === 'ENOENT') return { state: 'absent' };
+    if (e?.code === 'ELOOP') return { state: 'bad', why: 'not-regular' };
+    return unreadable(e);
+  }
+  try {
+    if (!fstatSync(fd).isFile()) return { state: 'bad', why: 'not-regular' };   // replaced between the lstat and the open
+    const chunks = [];
+    const buf = Buffer.alloc(Math.min(cap + 1, 1 << 20));
+    let total = 0;
+    for (;;) {
+      const got = readSync(fd, buf, 0, buf.length, null);
+      if (got === 0) break;
+      total += got;
+      if (total > cap) return { state: 'bad', why: 'over-cap' };
+      chunks.push(Buffer.from(buf.subarray(0, got)));
+    }
+    return { state: 'bytes', bytes: Buffer.concat(chunks) };
+  } catch (e) {
+    return unreadable(e);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** The word a `bad` read carries in a refusal detail: the errno for an unreadable one, else its `why`. */
+const badWord = (bad) => (bad.why === 'unreadable' ? bad.code : bad.why);
+
+/** Write every byte of `bytes` to `fd`. */
+function writeAll(fd, bytes) {
+  let at = 0;
+  while (at < bytes.length) at += writeSync(fd, bytes, at, bytes.length - at);
+}
+
+/** Append one line to `<out>/<rel>`: the file is opened O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW|O_NONBLOCK (a FIFO with no
+ *  reader fails ENXIO instead of blocking) and must still be a regular file by fstat; one write. A link, a FIFO or any
+ *  other type there refuses `out-refused` and nothing is written.
+ *  @param {string} out  @param {string} rel  @param {string} text */
+function appendPlain(out, rel, text) {
+  let fd;
+  try {
+    fd = openSync(path.join(out, rel), constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
+  } catch (e) {
+    if (e?.code === 'ELOOP' || e?.code === 'ENXIO' || e?.code === 'EISDIR') refuse('out-refused', `${rel} is not a regular file`);
+    throw e;
+  }
+  try {
+    if (!fstatSync(fd).isFile()) refuse('out-refused', `${rel} is not a regular file`);
+    writeAll(fd, Buffer.from(text, 'utf8'));
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Create `<out>/<rel>` exclusively (O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, mode set exactly by fchmod on the descriptor) and
+ *  answer the open descriptor. An existing entry refuses `out-refused`, with one exception when `replaceStale` is set: a
+ *  REGULAR file there (a temp file an earlier driver of this pid left) is removed once and the create retried.
+ *  @returns {number} */
+function createPlain(out, rel, mode, replaceStale) {
+  const p = path.join(out, rel);
+  for (let attempt = 0; ; attempt++) {
+    let fd;
+    try {
+      fd = openSync(p, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode);
+    } catch (e) {
+      if (e?.code !== 'EEXIST' && e?.code !== 'ELOOP') throw e;
+      const st = lstatOrNull(p);
+      if (replaceStale && attempt === 0 && st !== null && st.isFile()) { rmSync(p, { force: true }); continue; }
+      refuse('out-refused', `${rel} already exists${replaceStale ? ' and is not a regular file' : ''}`);
+    }
+    fchmodSync(fd, mode);
+    return fd;
+  }
+}
+
+/** Write `bytes` to `<out>/<rel>` whole: a target that exists and is not a regular file refuses `out-refused`; the bytes
+ *  go to a tmp file `<rel>.tmp-<pid>` created exclusively, mode `mode`, then a rename, so no write follows a link.
+ *  @param {string} out  @param {string} rel  @param {string | Buffer} bytes  @param {number} [mode] */
+function writePlain(out, rel, bytes, mode = 0o600) {
+  const p = path.join(out, rel);
+  const have = lstatOrNull(p);
+  if (have !== null && !have.isFile()) refuse('out-refused', `${rel} is not a regular file`);
+  const tmpRel = `${rel}.tmp-${process.pid}`;
+  const tmp = path.join(out, tmpRel);
+  const fd = createPlain(out, tmpRel, mode, true);
+  try {
+    writeAll(fd, typeof bytes === 'string' ? Buffer.from(bytes, 'utf8') : bytes);
+  } catch (e) {
+    closeSync(fd);
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+  closeSync(fd);
+  try {
+    renameSync(tmp, p);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+}
+
+/** Make sure every segment of `rel` under `out` is a real directory: an existing one must lstat as a directory (a link,
+ *  dangling or not, or any other type refuses `out-refused` `<path so far> is not a directory`), a missing one is made
+ *  0700, non-recursively.
+ *  @param {string} out  @param {string} rel */
+function ensurePlainDir(out, rel) {
+  let cur = out;
+  let sofar = '';
+  for (const seg of rel.split('/')) {
+    cur = path.join(cur, seg);
+    sofar = sofar === '' ? seg : `${sofar}/${seg}`;
+    let st = lstatOrNull(cur);
+    if (st === null) {
+      try {
+        mkdirSync(cur, { mode: 0o700 });
+        continue;
+      } catch (e) {
+        if (e?.code !== 'EEXIST') throw e;
+        st = lstatSync(cur);
+      }
+    }
+    if (!st.isDirectory()) refuse('out-refused', `${sofar} is not a directory`);
+  }
+}
+
 /** The spend ledger's file name under --out. */
 export const SPEND_LEDGER = 'spend.jsonl';
 /** A ledger line's keys, sorted as canonicalJson writes them. */
@@ -615,7 +774,7 @@ const SPEND_KEYS = 'name,tokens,ts_ms';
 export function recordSpend(out, name, tokens) {
   if (typeof name !== 'string' || name === '') throw new TypeError(`recordSpend: a job name is a non-empty string, not ${JSON.stringify(name)}`);
   if (!Number.isSafeInteger(tokens) || tokens < 0) throw new TypeError(`recordSpend: a spend is a non-negative integer, not ${String(tokens)}`);
-  appendFileSync(`${out}/${SPEND_LEDGER}`, `${canonicalJson({ name, tokens, ts_ms: Date.now() })}\n`, { mode: 0o600 });
+  appendPlain(out, SPEND_LEDGER, `${canonicalJson({ name, tokens, ts_ms: Date.now() })}\n`);   // D-5986: a link or a FIFO there refuses out-refused, nothing written
 }
 
 /** One ledger line as {name, tokens}, or null when it is not one recordSpend writes. */
@@ -639,21 +798,10 @@ function spendRow(line) {
  *  @param {string} out
  *  @returns {number} */
 export function spentSoFar(out) {
-  const file = `${out}/${SPEND_LEDGER}`;
-  let st;
-  try {
-    st = lstatSync(file);
-  } catch (e) {
-    if (e?.code === 'ENOENT') return 0;
-    refuse('budget-exhausted', 'ledger-unreadable');
-  }
-  if (!st.isFile()) refuse('budget-exhausted', 'ledger-unreadable');
-  let text;
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch {
-    refuse('budget-exhausted', 'ledger-unreadable');
-  }
+  const read = readPlain(`${out}/${SPEND_LEDGER}`, OUT_STREAM_CAP);   // D-5986: lstat, no-follow open, fstat, bounded read
+  if (read.state === 'absent') return 0;
+  if (read.state !== 'bytes') refuse('budget-exhausted', 'ledger-unreadable');
+  const text = read.bytes.toString('utf8');
   const rows = text.split('\n');
   if (rows.pop() !== '') refuse('budget-exhausted', 'ledger-unreadable');   // the last line was torn
   let sum = 0;
@@ -774,18 +922,9 @@ export function spawnEnv({ mode, home, configDir, poisonBin, lang, recall }) {
 
 /** Plant (every call, as ghContainedEnv re-plants) the poisoned gh under --out and answer its directory. */
 export function ensurePoisonBin(out) {
-  const dir = path.join(out, POISON_BIN_DIR);
-  try {
-    mkdirSync(dir, { mode: 0o700 });
-  } catch (e) {
-    if (e.code !== 'EEXIST') throw e;
-  }
-  const st = lstatSync(dir);
-  if (!st.isDirectory()) refuse('out-refused', `${POISON_BIN_DIR} is not a directory`);
-  const gh = path.join(dir, 'gh');
-  writeFileSync(gh, POISON_GH, { mode: 0o700 });
-  chmodSync(gh, 0o700);
-  return dir;
+  ensurePlainDir(out, POISON_BIN_DIR);
+  writePlain(out, `${POISON_BIN_DIR}/gh`, POISON_GH, 0o700);   // D-5986: a tmp file at 0700, then a rename: no write follows a planted link
+  return path.join(out, POISON_BIN_DIR);
 }
 
 /** A fresh, empty 0700 directory under os.tmpdir(), outside any git tree: one run's cwd. */
@@ -880,44 +1019,41 @@ function pidRecordText(pid) {
   return canonicalJson({ pid, start: procStart(pid) }) + '\n';
 }
 
-/** Parse a pid record file: exactly `{pid: positive integer, start: digit string | null}`, whole. Null when the file cannot
- *  be read, is over PID_RECORD_MAX_BYTES, or is anything else (records are written whole, so a malformed one is tampering).
- *  @returns {{pid: number, start: string | null} | null} */
+/** Parse a pid record file: exactly `{pid: positive integer, start: digit string | null}`, whole (records are written
+ *  whole, so a malformed one is tampering). Read through readPlain (D-5986), so the answer tells the causes apart:
+ *  `{state: 'record', pid, start}`; `{state: 'absent'}`; or `{state: 'bad', why}` with `why` `not-regular`, `unreadable`
+ *  (with `code`) or `malformed` (over PID_RECORD_MAX_BYTES included).
+ *  @returns {{state: 'record', pid: number, start: string | null} | {state: 'absent'} | {state: 'bad', why: 'not-regular' | 'unreadable' | 'malformed', code?: string}} */
 function readPidRecord(file) {
-  let text;
-  try {
-    const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    try {
-      if (!fstatSync(fd).isFile()) return null;
-      const buf = Buffer.alloc(PID_RECORD_MAX_BYTES + 1);
-      const n = readSync(fd, buf, 0, buf.length, 0);
-      if (n > PID_RECORD_MAX_BYTES) return null;
-      text = buf.subarray(0, n).toString('utf8');
-    } finally {
-      closeSync(fd);
-    }
-  } catch {
-    return null;
-  }
-  if (!text.endsWith('\n')) return null;
+  const read = readPlain(file, PID_RECORD_MAX_BYTES);
+  if (read.state === 'absent') return read;
+  if (read.state === 'bad') return read.why === 'over-cap' ? { state: 'bad', why: 'malformed' } : read;
+  const malformed = { state: 'bad', why: 'malformed' };
+  const text = read.bytes.toString('utf8');
+  if (!text.endsWith('\n')) return malformed;
   let v;
   try {
     v = JSON.parse(text);
   } catch {
-    return null;
+    return malformed;
   }
-  if (v === null || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).sort().join(',') !== 'pid,start') return null;
-  if (!Number.isSafeInteger(v.pid) || v.pid < 1) return null;
-  if (!(v.start === null || (typeof v.start === 'string' && /^[0-9]+$/.test(v.start)))) return null;
-  return { pid: v.pid, start: v.start };
+  if (v === null || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).sort().join(',') !== 'pid,start') return malformed;
+  if (!Number.isSafeInteger(v.pid) || v.pid < 1) return malformed;
+  if (!(v.start === null || (typeof v.start === 'string' && /^[0-9]+$/.test(v.start)))) return malformed;
+  return { state: 'record', pid: v.pid, start: v.start };
 }
 
-/** Write a run's `<name>.pid` whole: a tmp file created exclusively, mode 0600, then a rename. */
-function writePidRecord(pidPath, pid) {
-  const tmp = `${pidPath}.tmp-${process.pid}`;
-  rmSync(tmp, { force: true });
-  writeFileSync(tmp, pidRecordText(pid), { mode: 0o600, flag: 'wx' });
-  renameSync(tmp, pidPath);
+/** What a refusal says of a pid-record file that readPidRecord could not give: its type, its errno or its content.
+ *  @param {string} label  @param {string} noun  @param {{why: string, code?: string}} bad */
+function recordBadDetail(label, noun, bad) {
+  if (bad.why === 'not-regular') return `${label} is not a regular file`;
+  if (bad.why === 'unreadable') return `${label} is unreadable (${bad.code})`;
+  return `${label} is not a ${noun}`;
+}
+
+/** Write a run's `<name>.pid` whole: a tmp file created exclusively, mode 0600, then a rename (writePlain, D-5986). */
+function writePidRecord(out, name, pid) {
+  writePlain(out, `${name}.pid`, pidRecordText(pid));
 }
 
 /** lstat, answering null for ENOENT; any other failure is thrown (unmeasured never reads as absent). */
@@ -947,8 +1083,13 @@ function settleLeftover(out, name, live) {
   if (part !== null && !part.isFile()) refuse('out-refused', `run-stream-invalid ${name}`);
   let rec = null;
   if (pid !== null) {
-    rec = pid.isFile() ? readPidRecord(pidPath) : null;
-    if (rec === null) refuse('run-live', `${name}.pid is not a pid record; remove it only after confirming no Claude Code from this --out is running`);
+    const read = readPidRecord(pidPath);
+    if (read.state !== 'record') {
+      // D-5986: the word stays run-live; the detail tells a type, an unreadable file (an ENOENT here: it went between the lstat and the read) and a malformed one apart.
+      const bad = read.state === 'absent' ? { why: 'unreadable', code: 'ENOENT' } : read;
+      refuse('run-live', `${recordBadDetail(`${name}.pid`, 'pid record', bad)}; remove it only after confirming no Claude Code from this --out is running`);
+    }
+    rec = read;
   }
   if (part === null) {
     if (pid !== null) rmSync(pidPath);
@@ -960,8 +1101,9 @@ function settleLeftover(out, name, live) {
       refuse('run-live', `pid ${rec.pid} (process group ${rec.pid}) is ${state}; ${name}.jsonl.part and ${name}.pid are its`);
     }
   }
-  const text = readFileSync(partPath, 'utf8');
-  recordSpend(out, name, spendTokens(readStreamJson(text)));
+  const partRead = readPlain(partPath, OUT_STREAM_CAP);
+  if (partRead.state !== 'bytes') refuse('out-refused', `run-stream-invalid ${name}`);
+  recordSpend(out, name, spendTokens(readStreamJson(partRead.bytes.toString('utf8'))));
   if (rec !== null) rmSync(pidPath);
   rmSync(partPath);
 }
@@ -975,11 +1117,16 @@ const liveClaims = new WeakSet();
  *  unmeasured, a lock that is no regular file and one that is no record refuse `out-in-use`. A dead holder's lock is
  *  renamed to `<lock>.stale-<pid>`, re-read, and taken over only if it still names the same dead holder; if it names
  *  anyone else it is put back and the driver refuses. */
-function takeLock(out, live) {
+function takeLock(out, live, afterHeld) {
   const lock = path.join(out, LOCK_NAME);
-  const tmp = `${lock}.tmp-${process.pid}`;
-  rmSync(tmp, { force: true });
-  writeFileSync(tmp, pidRecordText(process.pid), { mode: 0o600, flag: 'wx' });
+  const tmpRel = `${LOCK_NAME}.tmp-${process.pid}`;
+  const tmp = path.join(out, tmpRel);
+  const fd = createPlain(out, tmpRel, 0o600, true);   // D-5986: exclusive, no-follow, like every write under --out
+  try {
+    writeAll(fd, Buffer.from(pidRecordText(process.pid), 'utf8'));
+  } finally {
+    closeSync(fd);
+  }
   const link = () => {
     try {
       linkSync(tmp, lock);
@@ -991,11 +1138,16 @@ function takeLock(out, live) {
   };
   try {
     if (link()) return;
-    const st = lstatOrNull(lock);
-    if (st === null) refuse('out-in-use', `${LOCK_NAME} was held and released while this driver started; run it again`);
-    if (!st.isFile()) refuse('out-in-use', `${LOCK_NAME} is not a regular file; remove it only after confirming no driver runs on this --out`);
-    const holder = readPidRecord(lock);
-    if (holder === null) refuse('out-in-use', `${LOCK_NAME} is not a lock record; remove it only after confirming no driver runs on this --out`);
+    if (afterHeld !== undefined) afterHeld();
+    let read = readPidRecord(lock);
+    if (read.state === 'absent') {
+      // D-5986: the holder released the lock between the failed link and the read: take it once more before refusing.
+      if (link()) return;
+      read = readPidRecord(lock);
+      if (read.state === 'absent') refuse('out-in-use', `${LOCK_NAME} was held and released while this driver started; run it again`);
+    }
+    if (read.state === 'bad') refuse('out-in-use', `${recordBadDetail(LOCK_NAME, 'lock record', read)}; remove it only after confirming no driver runs on this --out`);
+    const holder = read;
     const state = live(holder.pid, holder.start);
     if (state !== 'dead') refuse('out-in-use', `pid ${holder.pid} holds ${LOCK_NAME} (${state})`);
     const stale = `${lock}.stale-${process.pid}`;
@@ -1006,11 +1158,11 @@ function takeLock(out, live) {
       throw e;
     }
     const again = readPidRecord(stale);
-    if (again === null || again.pid !== holder.pid || again.start !== holder.start) {
+    if (again.state !== 'record' || again.pid !== holder.pid || again.start !== holder.start) {
       try {
         linkSync(stale, lock);   // not the dead holder's: put it back
       } catch (e) {
-        if (e?.code !== 'EEXIST') throw e;
+        if (e?.code !== 'EEXIST' && !(again.state === 'absent' && e?.code === 'ENOENT')) throw e;
       }
       rmSync(stale, { force: true });
       refuse('out-in-use', `${LOCK_NAME} changed hands while this driver started`);
@@ -1052,11 +1204,13 @@ function leftoverNames(out) {
  *  require a gate, so no subcommand spawns unlocked or skips the walk. Call it right after prepareOut; `release()` (in a
  *  finally) removes the lock if it still names this driver, and is harmless twice.
  *  @param {string} out prepareOut's answer
- *  @param {{liveness?: typeof liveness}} [opts]
+ *  `opts.afterHeld` is a test seam, as `liveness` is: called once when the lock's link found it held, before the lock is
+ *  read, so a case can release it in that window (D-5986: the claim then takes it, instead of refusing).
+ *  @param {{liveness?: typeof liveness, afterHeld?: () => void}} [opts]
  *  @returns {Readonly<{out: string, liveness: typeof liveness, release: () => void}>} */
 export function claimOut(out, opts = {}) {
   const live = opts.liveness ?? liveness;
-  takeLock(out, live);
+  takeLock(out, live, opts.afterHeld);
   let released = false;
   const claim = Object.freeze({
     out, liveness: live,
@@ -1066,7 +1220,7 @@ export function claimOut(out, opts = {}) {
       liveClaims.delete(claim);
       const lock = path.join(out, LOCK_NAME);
       const mine = readPidRecord(lock);
-      if (mine !== null && mine.pid === process.pid && mine.start === procStart(process.pid)) rmSync(lock, { force: true });
+      if (mine.state === 'record' && mine.pid === process.pid && mine.start === procStart(process.pid)) rmSync(lock, { force: true });
     },
   });
   liveClaims.add(claim);
@@ -1096,13 +1250,10 @@ function requireClaim(who, opts, outs) {
  *  refuses: a resumed batch builds on what was recorded, and only for the job that recorded it. */
 function finishedOutcome(job) {
   const { streamPath, runJsonPath } = runPaths(job.out, job.name);
-  let text;
-  try {
-    text = readFileSync(runJsonPath, 'utf8');
-  } catch (e) {
-    if (e.code === 'ENOENT') return null;
-    refuse('out-refused', `run-json-unreadable ${job.name} ${e.code}`);
-  }
+  const runJson = readPlain(runJsonPath, OUT_JSON_CAP);   // D-5986: a FIFO or a link there refuses, never blocks or follows
+  if (runJson.state === 'absent') return null;
+  if (runJson.state === 'bad') refuse('out-refused', `run-json-unreadable ${job.name} ${badWord(runJson)}`);
+  const text = runJson.bytes.toString('utf8');
   let rec;
   try {
     rec = JSON.parse(text);
@@ -1115,7 +1266,9 @@ function finishedOutcome(job) {
   if (rec.account !== job.launch.accountId || rec.mode !== job.mode || rec.model !== job.model || rec.settings_mode !== job.settingsMode) {
     refuse('out-refused', `run-json-mismatch ${job.name}`);
   }
-  const stream = readFileSync(streamPath);
+  const streamRead = readPlain(streamPath, OUT_STREAM_CAP);
+  if (streamRead.state !== 'bytes') refuse('out-refused', `run-stream-changed ${job.name}`);   // D-5986: absent, a directory or a FIFO: the recorded stream is not there
+  const stream = streamRead.bytes;
   if (sha256Hex(stream) !== rec.stream_sha256) refuse('out-refused', `run-stream-changed ${job.name}`);
   return {
     name: job.name, skipped: true, code: rec.code, signal: rec.signal, ms: rec.ms, cwd: rec.cwd, streamPath,
@@ -1128,9 +1281,11 @@ function finishedOutcome(job) {
  *  `<name>.pid` record is written right after spawn() when it has a pid. It is killed, group and all, when it outlives
  *  `timeoutMs` (SIGTERM, then SIGKILL after a grace). A spawn that fails removes the `.part` and the `.pid`; a stopped
  *  driver refuses `interrupted` before the spawn, removing the `.part` first. */
-function runChild(launcher, argv, { cwd, childEnv, stdin, partPath, pidPath, timeoutMs }) {
+function runChild(launcher, argv, { cwd, childEnv, stdin, out, name, partPath, pidPath, timeoutMs }) {
   return new Promise((resolve, reject) => {
-    const fd = openSync(partPath, 'w', 0o600);
+    // D-5986: created exclusively and without following a link. claimOut and launchRun have settled every leftover, so a
+    // `.part` that exists now was planted: out-refused.
+    const fd = createPlain(out, `${name}.jsonl.part`, 0o600, false);
     let child;
     try {
       if (stopping !== null) rmSync(partPath, { force: true });
@@ -1165,7 +1320,7 @@ function runChild(launcher, argv, { cwd, childEnv, stdin, partPath, pidPath, tim
     });
     if (typeof pid === 'number') {
       try {
-        writePidRecord(pidPath, pid);
+        writePidRecord(out, name, pid);
       } catch (e) {
         signalGroup(pid, 'SIGKILL');   // a child no record names must not run on
         clearTimeout(timer);
@@ -1215,22 +1370,24 @@ export async function launchRun(job, opts = {}) {
   if (finalSt !== null && !finalSt.isFile()) refuse('out-refused', `run-stream-invalid ${name}`);
   const timeoutMs = job.timeoutMs ?? RUN_TIMEOUT_MS;
   if (typeof stdin !== 'string') throw new TypeError('launchRun: stdin must be a string');
-  const { streamPath, partPath, pidPath, runJsonPath } = runPaths(out, name);
+  const { streamPath, partPath, pidPath } = runPaths(out, name);
   const home = runHomeOf(launch);
   const argv = spawnArgv({ mode, model, settingsMode, home });
   const childEnv = spawnEnv({ mode, home, configDir: launch.configDir, poisonBin: ensurePoisonBin(out), lang, recall });
-  mkdirSync(path.dirname(streamPath), { recursive: true, mode: 0o700 });
+  if (path.dirname(name) !== '.') ensurePlainDir(out, path.dirname(name));   // D-5986: a run subdirectory is a real directory, never a link
   const cwd = makeRunCwd();
   const t0 = Date.now();
   let res;
   try {
     refuseIfStopping();
-    res = await runChild(launch.launcher, argv, { cwd, childEnv, stdin, partPath, pidPath, timeoutMs });
+    res = await runChild(launch.launcher, argv, { cwd, childEnv, stdin, out, name, partPath, pidPath, timeoutMs });
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
   const ms = Date.now() - t0;
-  const stream = readFileSync(partPath);
+  const partRead = readPlain(partPath, OUT_STREAM_CAP);
+  if (partRead.state !== 'bytes') refuse('out-refused', `run-stream-invalid ${name}`);
+  const stream = partRead.bytes;
   const facts = readStreamJson(stream.toString('utf8'));
   const tokens = spendTokens(facts);
   const unknownOptions = unknownOptionsIn(res.stderr);
@@ -1245,9 +1402,7 @@ export async function launchRun(job, opts = {}) {
     kind: RUN_KIND, v: 1, name, account: launch.accountId, mode, model, settings_mode: settingsMode,
     code: res.code, signal: res.signal, ms, cwd, stream_sha256: sha256Hex(stream), tokens, unknown_options: unknownOptions,
   };
-  const tmp = `${runJsonPath}.tmp-${process.pid}`;
-  writeFileSync(tmp, canonicalJson(rec) + '\n', { mode: 0o600 });
-  renameSync(tmp, runJsonPath);
+  writePlain(out, `${name}.run.json`, canonicalJson(rec) + '\n');
   return { name, skipped: false, code: res.code, signal: res.signal, ms, cwd, streamPath, facts, tokens, unknownOptions };
 }
 
@@ -1610,12 +1765,11 @@ export function loadStep0a(p, sha256) {
   const g = insideGitTree(path.dirname(abs));
   if (g.state === 'inside') refuse('input-invalid', `step0a in-git-tree ${g.at}`);
   if (g.state === 'unmeasured') refuse('input-invalid', `step0a git-unmeasured ${g.at} ${g.code}`);
-  let bytes;
-  try {
-    bytes = readFileSync(abs);
-  } catch (e) {
-    refuse('input-invalid', `step0a unreadable ${e.code}`);
-  }
+  // D-5986: the input is read as every --out file is (lstat, no-follow non-blocking open, fstat), so a FIFO is refused, never waited on.
+  const read = readPlain(abs, OUT_JSON_CAP);
+  if (read.state === 'absent') refuse('input-invalid', 'step0a unreadable ENOENT');
+  if (read.state === 'bad') refuse('input-invalid', read.why === 'unreadable' ? `step0a unreadable ${read.code}` : `step0a ${read.why}`);
+  const bytes = read.bytes;
   const got = sha256Hex(bytes);
   if (got !== sha256) refuse('input-sha-mismatch', `step0a: expected ${sha256}, measured ${got}`);
   let o;
@@ -1743,6 +1897,7 @@ export function flagsAccepted(argvs, outcomes) {
   return out;
 }
 
+const STEP0A_DIR = 'step0a';
 const STEP0A_LAUNCH_FILE = 'launch.json';
 const STEP0A_LAUNCH_KIND = 'ccrc-history-replay-step0a-launch';
 const STEP0A_LAUNCH_MAX_BYTES = 4096;
@@ -1752,26 +1907,19 @@ const STEP0A_LAUNCH_MAX_BYTES = 4096;
  *  version or shape refuses out-refused (step0a-launch-invalid); another account refuses out-refused
  *  (step0a-launch-mismatch); another Claude Code version refuses claude-version-moved and another wrapper
  *  wrapper-moved, each naming both values.
- *  @param {string} dir  @param {{account: string, version: string, wrapper: string | null}} now */
-function pinStep0aLaunch(dir, now) {
-  const file = path.join(dir, STEP0A_LAUNCH_FILE);
-  let st = null;
-  try {
-    st = lstatSync(file);
-  } catch (e) {
-    if (e?.code !== 'ENOENT') refuse('out-refused', 'step0a-launch-invalid');
-  }
-  if (st === null) {
-    const tmp = `${file}.tmp-${process.pid}`;
+ *  @param {string} out  @param {{account: string, version: string, wrapper: string | null}} now */
+function pinStep0aLaunch(out, now) {
+  const rel = `${STEP0A_DIR}/${STEP0A_LAUNCH_FILE}`;
+  const read = readPlain(path.join(out, rel), STEP0A_LAUNCH_MAX_BYTES);   // D-5986: type-checked, bounded, no-follow
+  if (read.state === 'absent') {
     const rec = { kind: STEP0A_LAUNCH_KIND, v: 1, account: now.account, claude_code_version: now.version, wrapper_sha256: now.wrapper };
-    writeFileSync(tmp, canonicalJson(rec) + '\n', { mode: 0o600 });
-    renameSync(tmp, file);
+    writePlain(out, rel, canonicalJson(rec) + '\n');
     return;
   }
-  if (!st.isFile() || st.size > STEP0A_LAUNCH_MAX_BYTES) refuse('out-refused', 'step0a-launch-invalid');
+  if (read.state === 'bad') refuse('out-refused', 'step0a-launch-invalid');
   let rec;
   try {
-    rec = JSON.parse(readFileSync(file, 'utf8'));
+    rec = JSON.parse(read.bytes.toString('utf8'));
   } catch {
     refuse('out-refused', 'step0a-launch-invalid');
   }
@@ -1817,16 +1965,17 @@ export async function step0aCommand(flags, env) {
     refuseIfStopping();   // D-5984: before the version's state is read, so a killed --version reports `interrupted`
     // A --version that cannot be measured is a refusal (coordinator ruling), never a guessed or recorded version.
     if (version.state !== 'value') refuse('version-unmeasured', `${launch.launcher} --version failed (code ${version.code}, signal ${version.signal})`);
-    const dir = path.join(out, 'step0a');
-    if (!existsSync(dir)) mkdirSync(dir, { mode: 0o700 });
-    pinStep0aLaunch(dir, { account: launch.accountId, version: version.version, wrapper: wrapperSha256 });
+    ensurePlainDir(out, STEP0A_DIR);   // D-5986: a link or a file there refuses out-refused
+    pinStep0aLaunch(out, { account: launch.accountId, version: version.version, wrapper: wrapperSha256 });
     const jobs = STEP0A_RUNS.map((r) => ({
-      launch, mode: r.mode, model: models[r.key], settingsMode, stdin: STEP0A_PROMPT, out, name: `step0a/${r.key}`, lang: env.LANG,
+      launch, mode: r.mode, model: models[r.key], settingsMode, stdin: STEP0A_PROMPT, out, name: `${STEP0A_DIR}/${r.key}`, lang: env.LANG,
     }));
     const outcomes = await runBatch(jobs, { concurrency: 1, gate, claim });
-    const init = Object.fromEntries(jobs.map((j, i) => [
-      STEP0A_RUNS[i].key, readStreamJson(readFileSync(path.join(out, `${j.name}.jsonl`), 'utf8')).init,
-    ]));
+    const init = Object.fromEntries(jobs.map((j, i) => {
+      const stream = readPlain(path.join(out, `${j.name}.jsonl`), OUT_STREAM_CAP);
+      if (stream.state !== 'bytes') refuse('out-refused', `run-stream-invalid ${j.name}`);
+      return [STEP0A_RUNS[i].key, readStreamJson(stream.bytes.toString('utf8')).init];
+    }));
     const output = {
       kind: STEP0A_KIND, v: 1, measured_ms: Date.now(), account: launch.accountId, settings_mode: settingsMode,
       claude_code_version: version.version, wrapper_sha256: wrapperSha256,
@@ -1834,11 +1983,9 @@ export async function step0aCommand(flags, env) {
       writer_init: init.writer, judge_init: init.judge, box_init: init.box,
       code_shas: shas.files, release_stamp: stamp.tag, budget, spend: spentSoFar(out),
     };
-    const file = path.join(out, STEP0A_FILE);
     refuseIfStopping();   // D-5984: a stopped step 0a writes no step0a.json
-    writeFileSync(`${file}.tmp`, canonicalJson(output) + '\n', { mode: 0o600 });
-    renameSync(`${file}.tmp`, file);
-    process.stderr.write(`sha256 ${sha256Hex(readFileSync(file))}\n`);   // D-5983: stderr, as open and freeze print it; stdout stays empty
+    writePlain(out, STEP0A_FILE, canonicalJson(output) + '\n');
+    process.stderr.write(`sha256 ${shaOfPlain(out, STEP0A_FILE)}\n`);   // D-5983: stderr, as open and freeze print it; stdout stays empty
     return EXIT.OK;
   } finally {
     claim.release();
@@ -1934,12 +2081,15 @@ function probeFindingOf(facts, command) {
 /** Write `<out>/probe.json` as canonical JSON plus a newline, through a temp and a rename, and answer the sha256
  *  of the bytes on disk. */
 function writeProbeJson(out, value) {
-  const bytes = Buffer.from(canonicalJson(value) + '\n', 'utf8');
-  const final = path.join(out, PROBE_OUTPUT);
-  const tmp = `${final}.tmp-${process.pid}`;
-  writeFileSync(tmp, bytes, { mode: 0o600 });
-  renameSync(tmp, final);
-  return sha256Hex(readFileSync(final));
+  writePlain(out, PROBE_OUTPUT, canonicalJson(value) + '\n');
+  return shaOfPlain(out, PROBE_OUTPUT);
+}
+
+/** The sha256 of the bytes `<out>/<rel>` holds now, read back through readPlain (D-5986). */
+function shaOfPlain(out, rel) {
+  const read = readPlain(path.join(out, rel), OUT_JSON_CAP);
+  if (read.state !== 'bytes') refuse('out-refused', `${rel} is not a regular file`);
+  return sha256Hex(read.bytes);
 }
 
 /** `probe`: pane and args (main), then every required flag (--budget included, D-5815), HOME, --out, admission and the
