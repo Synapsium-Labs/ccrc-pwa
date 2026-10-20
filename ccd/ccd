@@ -6963,6 +6963,117 @@ _ws_disk_free_gb() {   # dir -> whole GiB available on the filesystem holding it
   echo $(( kb / 1024 / 1024 ))
 }
 
+# ── THE PER-LANE REASON CHAIN, ONE COPY (named workspaces S1) ─────────────────────────────────────────────────
+# `cmd_ws_add`'s no-placement refusal used to walk the accounts with this chain written inline. `--wrapper` needs the
+# SAME words for ONE named account, and a second copy of a refusal vocabulary is the drift this file keeps naming, so
+# the chain lives here and both callers use it. The no-placement message is byte-identical to what it was before the
+# move (`ccd-workspaces.test.ts`'s characterisation block pinned it green on the old code first).
+#
+# THE ANSWER IS A GLOBAL, NOT STDOUT, as `PLACE_DEGRADED_TO` and `POOL_OK_STATE` are: the chain reads `POOL_OK_STATE`
+# right after `_pool_ok` sets it, and a `$( )` would put that in a subshell for no gain.
+_ws_pool_read() {   # project -> WS_PPS (the state word), WS_PPN (the pool name, "" unless tagged), WS_TAG_WHY ("tag:<state> <file>" when the tag is undecidable, else "")
+  WS_PPS=$(_project_pool_state "$1"); WS_PPN=""; WS_TAG_WHY=""
+  case "$WS_PPS" in "named "*) WS_PPN=${WS_PPS#named } ;; esac
+  if [[ "$WS_PPS" != untagged && -z "$WS_PPN" ]]; then WS_TAG_WHY="tag:$WS_PPS $POOLS_DIR/$1"; fi
+  return 0
+}
+
+_ws_lane_why() {   # wrapper pool-state class -> WS_LANE_WHY = "<w>:<first failing predicate>", or "" when the lane passes all four. Always rc 0.
+  local w="$1" pps="$2" cls="${3:-}" prc
+  WS_LANE_WHY=""
+  # FIRST FAILING PREDICATE IN LOOP ORDER — `_ws_least_loaded`'s own
+  # order, so the reason names the check that actually stopped this
+  # account rather than the last one that would have.
+  if   [[ ! -x "$WRAPPER_DIR/$w" ]]; then WS_LANE_WHY="$w:missing"
+  elif ! _lane_enabled "$w";       then WS_LANE_WHY="$w:disabled"
+  # BOTH NON-SERVE CODES REACH THIS ARM NOW, AND IT TELLS THEM APART
+  # (fix round 1, I1/I2). What stood here read: "`pps` is `untagged` or
+  # `named …` in this branch, so [the rule] can only answer 0 or 1 here,
+  # and an account reported with `pool=` is always a TAGGED one — the
+  # empty answer never reaches this string." BOTH HALVES ARE FALSE since
+  # the account side started reading `_acct_pool_state`, and both were
+  # measured false, not reasoned about: rc 2 arrives here with a
+  # perfectly readable project tag whenever the projection is absent
+  # (a node that never synced), past its lease, or off the grammar; and
+  # the name this arm printed came from `_acct_pool`, the DECLARED
+  # roster, while the PROJECTION is what decided — a skew printed
+  # `claude:pool=pool-a` as the reason `claude` cannot serve a `pool-a`
+  # project. The rc test (rather than `!`) is what buys the split, the
+  # same idiom and the same reason as the `_class_gate` arm below.
+  #
+  # THE UNDECIDABLE TOKEN NAMES THE DOCUMENT, NOT THE LANE. All three of
+  # the account side's undecidable words are properties of the one shared
+  # `pool-epoch` file, so `projection=<word>` is the SAME fact for every
+  # lane in this loop and its remedy is that file, never this lane —
+  # unlike `pool=`, which really is per-lane. It is still emitted
+  # per-lane here, deliberately: this loop's contract is one token per
+  # account naming its own first failing predicate, and hoisting a
+  # single token out of it would be a second shape for callers to parse.
+  # `_strand_why`, whose contract is the opposite, hoists.
+  #
+  # THE QUOTING HERE IS NO LONGER UNREACHABLE-EQUIVALENT — corrected in
+  # the same round, because the paragraph that stood here told a future
+  # author not to expect a mutation kill. Unquoting `$pps` word-splits
+  # `named pool-b` so that `$2` is the bare word `named`, which is
+  # neither `untagged` nor `named `* and so takes the PROJECT arm's
+  # `*)` — rc 2, and now a visibly different token
+  # (`projection=named`) rather than the same mismatch string the two
+  # codes used to share. Measured, not argued: unquoting both arguments
+  # at this one call site is 3 failed / 44 passed in
+  # `ccd-pool-ok.test.ts`, the three being "names the pool, each
+  # accounts own first failing predicate, and the remedies" and the two
+  # projection cases beside it.
+  elif _pool_ok "$w" "$pps"; prc=$?; [[ "$prc" -ne 0 ]]; then
+    if [[ "$prc" -eq 2 ]]; then WS_LANE_WHY="$w:projection=$POOL_OK_STATE"
+    else                        WS_LANE_WHY="$w:pool=${POOL_OK_STATE#named }"
+    fi
+  # RC 1 ONLY, and the `$?` test rather than `!` is what makes that true.
+  # `_class_gate` answers 1 for a lane MEASURED unable to serve the class
+  # and 2 for one nobody measured — and an unmeasured lane is PLACEABLE,
+  # so `! _class_gate` would name it as the reason placement failed while
+  # `_ws_least_loaded` was perfectly willing to place there. That is a
+  # fabricated fact in a refusal message, which is exactly what spec §5.4
+  # forbids. With no class this arm cannot fire at all: `_class_gate`
+  # returns 0 for an empty class.
+  #
+  # THE `$?` TEST IS UNREACHABLE-EQUIVALENT TODAY, NOT UNTESTED — the same
+  # standing as the quoting on the `_pool_ok` arm above, and measured the
+  # same way rather than assumed. Rewriting it as `! _class_gate …` leaves
+  # `ccd-place-class.test.ts` 10/10 GREEN, and DELETING the arm reds its
+  # case (e), so the arm is exercised and it is the POLARITY that nothing
+  # can red. The reason is this loop's own `elif` order: a lane reaching
+  # here has already passed `_account_ok` and `_pool_ok`, and
+  # `_ws_least_loaded` applies the class filter after exactly those two —
+  # so a lane answering rc 2 here would have been PLACED and this builder
+  # would never have run. Keep the rc test anyway: it stops being
+  # equivalent the day either walk reorders its predicates, and the
+  # obligation it discharges (D-2854) is about the message, not about
+  # today's reachability.
+  elif _class_gate "$w" "$cls"; [[ $? -eq 1 ]]; then WS_LANE_WHY="$w:class=$cls-unservable"
+  fi
+  return 0
+}
+
+_ws_wrapper_why() {   # project wrapper class -> WS_LANE_WHY = why the NAMED lane may not take a workspace of this project, or "" when it may. Always rc 0.
+  # `ws-add --wrapper`'s whole decision, asked twice: once at the pre-flight and once more after the worktree exists
+  # (the re-take, where it is RE-VALIDATED against the fresh roster instead of re-picked). In this order, each arm
+  # naming the lane's own condition:
+  #   - not home-able: a workspace never STARTS on an overflow lane, the set `_ws_least_loaded` walks. A lane the roster
+  #     has never heard of is the same answer, and its name was bounded and control-free before it got here.
+  #   - auth-dead: the health probe condemned it. Placement keeps a condemned lane as its LAST resort, but the operator
+  #     picked this one by name, and quietly placing on a lane that cannot authenticate is the fallback they ruled out.
+  #   - an undecidable PROJECT pool tag: named by `tag:`, as the placement refusal names it, never by the lane.
+  #   - then `_ws_lane_why`'s chain (missing, disabled, pool, and the class — which the caller passes ONLY for an
+  #     explicit `--route class=`, so an empty class gates nothing).
+  local project="$1" w="$2" cls="${3:-}"
+  WS_LANE_WHY=""
+  _is_home_able "$w" || { WS_LANE_WHY="$w:not-home-able"; return 0; }
+  _authdead "$w" && { WS_LANE_WHY="$w:auth-dead"; return 0; }
+  _ws_pool_read "$project"
+  [[ -z "$WS_TAG_WHY" ]] || { WS_LANE_WHY="$WS_TAG_WHY"; return 0; }
+  _ws_lane_why "$w" "$WS_PPS" "$cls"
+}
+
 cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] project [slug] — new worktree + session for an existing project
   # PER-WORKER RC and the DECLARED ACTOR, both stripped before any positional
   # binds — `cmd_ws_hold`'s shape (ccd:3891) and its reason: a run like
@@ -6994,6 +7105,10 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # ccd:4801-4807, for the same reason — never put a second string on a verb
   # with nothing to say which one a reader is looking at.
   local norc=0 lc_child='' lc_gc=0 lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=() lc_route=()
+  # TWO FLAGS FOR A NAMED WORKSPACE (design 2026-10-20 §4.1), each parsed the way `--actor` is — at most once,
+  # non-blank, no control character, `_lc_dec_ok` — and for the same reasons. `lc_gt`/`lc_gw` are GIVENNESS, as
+  # `lc_gs`/`lc_ga` are: `--title ''` is a declared blank, and refusing it is not the same act as never being asked.
+  local lc_title='' lc_gt=0 lc_wrapper='' lc_gw=0
   while (( $# )); do
     case "$1" in
       --no-rc)     norc=1; shift ;;
@@ -7007,20 +7122,31 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
       # So what the check buys HERE is the honest usage line; the
       # never-terminating loop is what it buys the day an arm is reordered
       # to shift before it reads its value.
-      --surface)   [[ $# -ge 2 && $2 != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
+      --surface)   [[ $# -ge 2 && $2 != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
-      --surface=*) [[ ${1#--surface=} != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"; lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
-      --actor)     [[ $# -ge 2 ]] && (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
+      --surface=*) [[ ${1#--surface=} != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] && (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_ga=1; lc_actor="$2"; shift 2 ;;
-      --actor=*)   (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"; lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --actor=*)   (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      # `--title` is the display title an operator gave the workspace; `--wrapper` is the account they chose for it.
+      # BOTH BEFORE THE PROJECT, AT THE CALLER: an older ccd binds an unknown `--` token as a POSITIONAL (D-6113), so
+      # a flag it does not know leads into the project or slug slot and is refused there — and one placed AFTER
+      # `project slug` would be dropped unread and the workspace created on the least-loaded lane with exit 0. The
+      # caller gates each on `ccd caps` (`ws-title-v1`, `ws-wrapper-v1`); this loop parses either position.
+      --title)     [[ $# -ge 2 ]] && (( ! lc_gt )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
+                   lc_gt=1; lc_title="$2"; shift 2 ;;
+      --title=*)   (( ! lc_gt )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gt=1; lc_title="${1#--title=}"; shift ;;
+      --wrapper)   [[ $# -ge 2 ]] && (( ! lc_gw )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
+                   lc_gw=1; lc_wrapper="$2"; shift 2 ;;
+      --wrapper=*) (( ! lc_gw )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gw=1; lc_wrapper="${1#--wrapper=}"; shift ;;
       # REPEATABLE, one field per flag — the shape `cmd_route --set` already
       # has, so a dispatcher composing one argv for both verbs writes the same
       # pairs. Validated below, before anything on disk is touched.
-      --route)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
+      --route)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_route+=("$2"); shift 2 ;;
       --route=*)   lc_route+=("${1#--route=}"); shift ;;
       # The minting run (spec §5.1) — what makes this workspace a CHILD; see `_child_runid_valid`.
-      --child)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
+      --child)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_gc=1; lc_child="$2"; shift 2 ;;
       --child=*)   lc_gc=1; lc_child="${1#--child=}"; shift ;;
       *)           lc_args+=("$1"); shift ;;
@@ -7054,6 +7180,25 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
     esac
     _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
   fi
+  # `--title` AND `--wrapper`, REFUSED THE WAY `--actor` IS, and in the same place — above the project positional, the
+  # disk floor, the placement read, the lock, the worktree and the row. A title reaches the registry verbatim and is read
+  # back by the server, so a control character in it is refused here (a newline would split a one-line field) and the
+  # length is bytes (`_lc_dec_ok` runs under `LC_ALL=C`), the one cap the lifecycle journal already uses. A wrapper is
+  # only ever COMPARED against the roster, but it is echoed in the refusal sentence, so it gets the same bound.
+  if (( lc_gt )); then
+    [[ -n "${lc_title//[[:space:]]/}" ]] || die "--title must be non-blank"
+    case "$lc_title" in
+      *[[:cntrl:]]*) die "--title must not contain control characters" ;;
+    esac
+    _lc_dec_ok "$lc_title" || die "--title is longer than $_LC_DEC_MAX bytes"
+  fi
+  if (( lc_gw )); then
+    [[ -n "${lc_wrapper//[[:space:]]/}" ]] || die "--wrapper must be non-blank"
+    case "$lc_wrapper" in
+      *[[:cntrl:]]*) die "--wrapper must not contain control characters" ;;
+    esac
+    _lc_dec_ok "$lc_wrapper" || die "--wrapper is longer than $_LC_DEC_MAX bytes"
+  fi
   # ABOVE THE PROJECT POSITIONAL, AND THAT IS THE POINT — earlier than the disk
   # floor, the placement read, the lock, the worktree and the row. A bad
   # `--route` value is an argv a coordinator composed; this verb refuses it with
@@ -7064,7 +7209,7 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # first cut of this task and `ws-add --no-rc <project>` bound `project` to
   # `--no-rc`, reproducing D-410 one flag to the left. `ccd-spawn-split.test.ts`
   # caught it, unedited, which is what that gate is for.
-  local project="${1:?usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]}" slug="${2:-}"
+  local project="${1:?usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]}" slug="${2:-}"
   _ws_project_valid "$project" \
     || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash (a dot-leading id aliases ccd's own hidden registry files, a dash-leading one spells a flag — see _ws_project_valid)"
   local main="$PROJECTS_ROOT/$project"
@@ -7099,7 +7244,24 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   if [[ -z "$cls" ]] && (( ! norc )); then
     cls="${ROUTE_COORDINATOR_ROW%% *}"; cls="${cls#class=}"; strict=0
   fi
-  local hw; hw=$(_place_for_class "$project" "$cls" "$strict")
+  # THE OPERATOR'S ACCOUNT (`--wrapper`, design 2026-10-20 §4.1) SKIPS PLACEMENT AND IS CHECKED INSTEAD, by
+  # `_ws_wrapper_why`, which asks the lane the questions placement asks every lane and refuses with the same per-lane
+  # words (`_ws_lane_why`). It never falls back to another account: the operator named this one, and placing the
+  # workspace elsewhere is the choice they just made being quietly overruled. THE CLASS GATE IS APPLIED ONLY FOR AN
+  # EXPLICIT `--route class=` (`strict` is 1 exactly then, or for a dispatched worker that named none, whose class is
+  # empty and gates nothing), and with no rung below: the coordinator row's default class is one nobody typed, and a
+  # lane at its ceiling for it is still the lane the operator picked.
+  local wcls=""
+  (( strict )) && wcls="$cls"
+  local hw
+  if (( lc_gw )); then
+    _ws_wrapper_why "$project" "$lc_wrapper" "$wcls"
+    [[ -z "$WS_LANE_WHY" ]] \
+      || die "--wrapper refused — $WS_LANE_WHY; the account was named, so ccd will not place this workspace on another — pick a different account, or leave --wrapper off to let ccd place it — nothing was touched"
+    hw="$lc_wrapper"
+  else
+    hw=$(_place_for_class "$project" "$cls" "$strict")
+  fi
   if [[ -z "$hw" ]]; then
     # TWO EMPTIES, TOLD APART HERE (spec §6). `_ws_least_loaded` answers "" for
     # "every in-pool lane is unusable" AND for "the tag is undecidable", and
@@ -7118,83 +7280,14 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
     # an EMPTY reason list. Both are harmless because this path is already
     # refusing either way — the second read only picks the WORDING of a
     # refusal that has already happened, never whether one happens.
-    local w why="" pps ppn="" prc
-    pps=$(_project_pool_state "$project")
-    case "$pps" in "named "*) ppn=${pps#named } ;; esac
-    if [[ "$pps" != untagged && -z "$ppn" ]]; then
-      why=" tag:$pps $POOLS_DIR/$project"
+    local w why="" pps ppn=""
+    _ws_pool_read "$project"; pps=$WS_PPS; ppn=$WS_PPN
+    if [[ -n "$WS_TAG_WHY" ]]; then
+      why=" $WS_TAG_WHY"
     else
       for w in "${CCRC_HOME_ABLE[@]}"; do
-        # FIRST FAILING PREDICATE IN LOOP ORDER — `_ws_least_loaded`'s own
-        # order, so the reason names the check that actually stopped this
-        # account rather than the last one that would have.
-        if   [[ ! -x "$WRAPPER_DIR/$w" ]]; then why+=" $w:missing"
-        elif ! _lane_enabled "$w";       then why+=" $w:disabled"
-        # BOTH NON-SERVE CODES REACH THIS ARM NOW, AND IT TELLS THEM APART
-        # (fix round 1, I1/I2). What stood here read: "`pps` is `untagged` or
-        # `named …` in this branch, so [the rule] can only answer 0 or 1 here,
-        # and an account reported with `pool=` is always a TAGGED one — the
-        # empty answer never reaches this string." BOTH HALVES ARE FALSE since
-        # the account side started reading `_acct_pool_state`, and both were
-        # measured false, not reasoned about: rc 2 arrives here with a
-        # perfectly readable project tag whenever the projection is absent
-        # (a node that never synced), past its lease, or off the grammar; and
-        # the name this arm printed came from `_acct_pool`, the DECLARED
-        # roster, while the PROJECTION is what decided — a skew printed
-        # `claude:pool=pool-a` as the reason `claude` cannot serve a `pool-a`
-        # project. The rc test (rather than `!`) is what buys the split, the
-        # same idiom and the same reason as the `_class_gate` arm below.
-        #
-        # THE UNDECIDABLE TOKEN NAMES THE DOCUMENT, NOT THE LANE. All three of
-        # the account side's undecidable words are properties of the one shared
-        # `pool-epoch` file, so `projection=<word>` is the SAME fact for every
-        # lane in this loop and its remedy is that file, never this lane —
-        # unlike `pool=`, which really is per-lane. It is still emitted
-        # per-lane here, deliberately: this loop's contract is one token per
-        # account naming its own first failing predicate, and hoisting a
-        # single token out of it would be a second shape for callers to parse.
-        # `_strand_why`, whose contract is the opposite, hoists.
-        #
-        # THE QUOTING HERE IS NO LONGER UNREACHABLE-EQUIVALENT — corrected in
-        # the same round, because the paragraph that stood here told a future
-        # author not to expect a mutation kill. Unquoting `$pps` word-splits
-        # `named pool-b` so that `$2` is the bare word `named`, which is
-        # neither `untagged` nor `named `* and so takes the PROJECT arm's
-        # `*)` — rc 2, and now a visibly different token
-        # (`projection=named`) rather than the same mismatch string the two
-        # codes used to share. Measured, not argued: unquoting both arguments
-        # at this one call site is 3 failed / 44 passed in
-        # `ccd-pool-ok.test.ts`, the three being "names the pool, each
-        # accounts own first failing predicate, and the remedies" and the two
-        # projection cases beside it.
-        elif _pool_ok "$w" "$pps"; prc=$?; [[ "$prc" -ne 0 ]]; then
-          if [[ "$prc" -eq 2 ]]; then why+=" $w:projection=$POOL_OK_STATE"
-          else                        why+=" $w:pool=${POOL_OK_STATE#named }"
-          fi
-        # RC 1 ONLY, and the `$?` test rather than `!` is what makes that true.
-        # `_class_gate` answers 1 for a lane MEASURED unable to serve the class
-        # and 2 for one nobody measured — and an unmeasured lane is PLACEABLE,
-        # so `! _class_gate` would name it as the reason placement failed while
-        # `_ws_least_loaded` was perfectly willing to place there. That is a
-        # fabricated fact in a refusal message, which is exactly what spec §5.4
-        # forbids. With no class this arm cannot fire at all: `_class_gate`
-        # returns 0 for an empty class.
-        #
-        # THE `$?` TEST IS UNREACHABLE-EQUIVALENT TODAY, NOT UNTESTED — the same
-        # standing as the quoting on the `_pool_ok` arm above, and measured the
-        # same way rather than assumed. Rewriting it as `! _class_gate …` leaves
-        # `ccd-place-class.test.ts` 10/10 GREEN, and DELETING the arm reds its
-        # case (e), so the arm is exercised and it is the POLARITY that nothing
-        # can red. The reason is this loop's own `elif` order: a lane reaching
-        # here has already passed `_account_ok` and `_pool_ok`, and
-        # `_ws_least_loaded` applies the class filter after exactly those two —
-        # so a lane answering rc 2 here would have been PLACED and this builder
-        # would never have run. Keep the rc test anyway: it stops being
-        # equivalent the day either walk reorders its predicates, and the
-        # obligation it discharges (D-2854) is about the message, not about
-        # today's reachability.
-        elif _class_gate "$w" "$cls"; [[ $? -eq 1 ]]; then why+=" $w:class=$cls-unservable"
-        fi
+        _ws_lane_why "$w" "$pps" "$cls"
+        [[ -n "$WS_LANE_WHY" ]] && why+=" $WS_LANE_WHY"
       done
     fi
     # THE POOL REMEDY NAMES BOTH CARRIERS (fix round 1, I2). It used to name
@@ -7399,17 +7492,37 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
     # choose. TWO LINES, because the rung taken is a SECOND fact and a
     # subshell's variable is lost: the lane, then `PLACE_DEGRADED_TO`. The
     # parent splits them below.
-    _place_for_class "$project" "$cls" "$strict" || true
-    printf '\n%s' "$PLACE_DEGRADED_TO"
+    # THE OPERATOR'S ACCOUNT IS NOT RE-PICKED, IT IS RE-VALIDATED (`--wrapper`, design §4.1). A re-pick here would
+    # overwrite the named lane with the least-loaded one — the exact answer the operator chose against. The named lane is
+    # asked the same questions as at the pre-flight, over the fresh roster this subshell just sourced (and filtered by the
+    # snapshot above, so a lane that LEFT the roster fails `_is_home_able`); it answers itself when it still qualifies and
+    # nothing when it does not. THREE LINES, because the reason is a third fact a subshell's variable would lose: the
+    # lane, the (empty) rung, then why the lane no longer qualifies.
+    if (( lc_gw )); then
+      _ws_wrapper_why "$project" "$lc_wrapper" "$wcls"
+      [[ -z "$WS_LANE_WHY" ]] && printf '%s' "$lc_wrapper"
+      printf '\n\n%s' "$WS_LANE_WHY"
+    else
+      _place_for_class "$project" "$cls" "$strict" || true
+      printf '\n%s' "$PLACE_DEGRADED_TO"
+    fi
   ) || fresh_rc=$?
   # `$( )` strips trailing newlines, so a re-pick that took no rung leaves ONE
-  # line and this is a no-op; one that did leaves two and both are read.
-  local fresh_deg=""
-  [[ "$fresh" == *$'\n'* ]] && { fresh_deg="${fresh#*$'\n'}"; fresh="${fresh%%$'\n'*}"; }
+  # line and this is a no-op; one that did leaves two and both are read. The
+  # `--wrapper` form can leave a third line (why the lane no longer qualifies).
+  local fresh_deg="" fresh_why=""
+  if [[ "$fresh" == *$'\n'* ]]; then
+    fresh_deg="${fresh#*$'\n'}"; fresh="${fresh%%$'\n'*}"
+    if [[ "$fresh_deg" == *$'\n'* ]]; then fresh_why="${fresh_deg#*$'\n'}"; fresh_deg="${fresh_deg%%$'\n'*}"; fi
+  fi
   (( fresh_rc != 9 )) \
     || die "$CCRC_ACCOUNTS_SH could not be re-read as an account projection, so this workspace cannot be placed on an account this box can still prove exists — regenerate it: ccrc install. The worktree $wt and the branch $branch EXIST and no registry row names them; adopt them once it is fixed with: ccd start <wrapper> $project $wt"
   # NAMES WHAT IS ALREADY ON DISK. Unlike the pre-flight refusal, this one
   # cannot leave the box as it found it: the worktree and the branch exist.
+  # THE NAMED LANE'S OWN SENTENCE: the generic one below talks about "every lane this box knew", which is not what
+  # happened to a lane the operator picked. Same EXISTS clause, same adoption remedy; no other account is offered.
+  (( lc_gw )) && [[ -z "$fresh" ]] \
+    && die "--wrapper refused — ${fresh_why:-$lc_wrapper:no-longer-qualifies}; the account was named, so ccd will not place this workspace on another. The worktree $wt and the branch $branch EXIST and no registry row names them: fix the account or choose another, then adopt them with: ccd start <wrapper> $project $wt"
   [[ -n "$fresh" ]] \
     || die "no account is available for placement any more${cls:+ for class $cls} — every lane this box knew at startup is now disabled, missing or gone from the roster${cls:+, or none of them still measures able to serve $cls and nor does the rung below it}. The worktree $wt and the branch $branch EXIST and no registry row names them: enable an account (rm $REG/<w>-disabled)${cls:+ or re-run without --route class=$cls}, then adopt them with: ccd start <wrapper> $project $wt"
   hw="$fresh"
@@ -7424,6 +7537,14 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # fail-safe direction, per session).
   (( norc )) && _reg_set "$id" rc off
   (( lc_gc )) && { _reg_set "$id" child "$lc_child" || echo "ccd: warn: could not write $REG/$id.child — $id is NOT a child of run $lc_child and nothing will ever reclaim it as one" >&2; }
+  # THE DISPLAY TITLE AND THE MARKER THAT A HUMAN CHOSE THE NAME (design 2026-10-20 §4.1), written ONLY when `--title`
+  # was given — never on a bare slug. Coordinator dispatch passes a slug too, and keying `named` on the slug would
+  # exempt every dispatched worker from the ai-title sweep for life. Each write WARNS on failure the way `--child`'s
+  # does: a silent failure leaves a human-named workspace open to the sweep, which would rename its branch under them.
+  if (( lc_gt )); then
+    _reg_set "$id" title "$lc_title" || echo "ccd: warn: could not write $REG/$id.title — $id has no display title" >&2
+    _reg_set "$id" named 1 || echo "ccd: warn: could not write $REG/$id.named — $id is NOT marked as named by a person, so the ai-title sweep may rename its branch" >&2
+  fi
   # ── THE ROUTING RECORD (routing spec §5.3 for the argv, §4 for the default) ──
   # Here rather than at the pre-flight because every one of these is a WRITE
   # against `$id`, and `$id` does not exist until the lines above. The argv wins
@@ -8698,7 +8819,13 @@ EOF
   echo docs-fetch
   echo docs-index
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
-  echo swap-busy-v1; echo hibernate   # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word; `hibernate` (D-5242) is a verb, sent only behind `verbSupported`
+  # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
+  # design 2026-10-20 §4.1). Two tokens, because the two flags are separable: the server sends each only behind its own
+  # word, and PLACES IT BEFORE THE PROJECT. An older ccd binds an unknown `--` token as a positional (D-6113): leading,
+  # it lands in the project or slug slot and is refused there; trailing, it would be dropped unread and the workspace
+  # created on the least-loaded lane with exit 0 — so the caps gate is the control and the leading position the defence.
+  echo ws-title-v1; echo ws-wrapper-v1
+  echo swap-busy-v1; echo hibernate  # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word; `hibernate` (D-5242) is a verb, sent only behind `verbSupported`
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
