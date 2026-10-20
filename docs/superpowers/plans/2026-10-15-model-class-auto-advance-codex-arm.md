@@ -18293,3 +18293,17 @@ Where: Task 2 (`chooseCandidate`), issued by the coordinator on 2026-10-19 while
 ### D-5966 — `init` over an advance file left behind keeps holds and history and re-seeds the rest
 
 Where: Task 5 (the create path of `init`, for every probe). The coordinator issued it on 2026-10-19 while executing W1. Task 5's text says `init codex` "never overwrites" an advance file it finds. But an advance file with no registry beside it is left over. Three routes make one: the `probe-declared` refusal's remedy (delete the registry by hand), a rollback to a build whose `rm` reaps five files, and an `rm` cut short before its last reap. Adopting it whole stores families that disagree with the new pins, so W2 could advance a class across families. It also keeps a `pending` intent, which the next writer would settle as a move that never happened. A hand act records into the advance file on any lane, so the same false move can follow an `init` for any probe. So on that path, `init` for every probe does three things. It keeps each class's `hold` and the `history`, which record the operator's acts. It clears `pending` and `previous`, because the registry they described is gone, and a revert to that old pin would jump to an unrelated model. It writes each class's family exactly as a fresh `init` of that probe would: the seeds' families for `codex`, and no family for a probe with no seeds. Its answer carries an `advanceNote` saying the file was reused. It relaxes Review Focus 4 on this one path: a class a person emptied by hand gets its seed family back after its registry is lost, unless it carries a hold, which is kept. Cost if wrong: an old `previous` is lost, so `revert` refuses `no-previous` until W2 next advances that class.
+
+### D-5991 — revert keeps the effort level it restores, and a re-run on a reverted pin records no move
+
+Where: Task 6 (`revertOp`). Issued by the coordinator on 2026-10-19, while executing W1.
+
+Task 6's text has two gaps that this entry closes:
+- **The effort level.** The text ranks the class's stored effort against the current model's row. In the case D-5189 exists for, that row no longer lists the stored level, so `resolveEffort` falls back to the model's lowest. Measured: `opus` advanced from `max` to `xhigh`, and the old model then stopped offering `max`. The revert set `low` where `xhigh` was right, which leaves the class "at a level it never had" (D-5189).
+- **The re-run.** A revert cut short after its registry write records no history entry; D-5206 and Task 17 accept that state. A second revert then recorded a self-move (`from` equal to `to`) and cleared `previous`.
+
+What changes:
+- `revertOp` ranks the stored level against a catalogue row that lists it (the first one), and falls back as before only when no row lists it.
+- When the class's pin already equals `previous.model`, `revertOp` clears `previous` and keeps the hold, but writes no history entry.
+
+Cost if wrong: a revert restores a higher level than the old model's own row would rank. The level is still one the catalogue offers.
