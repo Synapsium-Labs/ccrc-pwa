@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0872392d09231ff9574866a3fe89b308aa59c9a35ed2ed3aa78acc154eafac08
+# ccrc:generated 1 sha256=31a929c65c4192157bff45d04f11dba1050218dab19bb0bb2c780995d3ea5a23
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -7186,11 +7186,11 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # length is bytes (`_lc_dec_ok` runs under `LC_ALL=C`), the one cap the lifecycle journal already uses. A wrapper is
   # only ever COMPARED against the roster, but it is echoed in the refusal sentence, so it gets the same bound.
   if (( lc_gt )); then
-    [[ -n "${lc_title//[[:space:]]/}" ]] || die "--title must be non-blank"
-    case "$lc_title" in
-      *[[:cntrl:]]*) die "--title must not contain control characters" ;;
-    esac
-    _lc_dec_ok "$lc_title" || die "--title is longer than $_LC_DEC_MAX bytes"
+    # The text rules are `_ws_title_check`'s, shared with `ws-title` (named workspaces S9): one sanitiser, so the two
+    # verbs refuse a bad title in the same words. It sits above the project positional, the disk floor, the placement
+    # read, the lock, the worktree and the row, as the refusals above it do, so a refused title leaves nothing behind.
+    # The words are the ones this verb has always said — `--title` names the flag in both.
+    _ws_title_check "$lc_title"
   fi
   if (( lc_gw )); then
     [[ -n "${lc_wrapper//[[:space:]]/}" ]] || die "--wrapper must be non-blank"
@@ -7542,8 +7542,8 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # exempt every dispatched worker from the ai-title sweep for life. Each write WARNS on failure the way `--child`'s
   # does: a silent failure leaves a human-named workspace open to the sweep, which would rename its branch under them.
   if (( lc_gt )); then
-    _reg_set "$id" title "$lc_title" || echo "ccd: warn: could not write $REG/$id.title — $id has no display title" >&2
-    _reg_set "$id" named 1 || echo "ccd: warn: could not write $REG/$id.named — $id is NOT marked as named by a person, so the ai-title sweep may rename its branch" >&2
+    # `_ws_title_set` is the writer `ws-title` uses too; it warns per field itself, and the workspace exists either way.
+    _ws_title_set "$id" "$lc_title"
   fi
   # ── THE ROUTING RECORD (routing spec §5.3 for the argv, §4 for the default) ──
   # Here rather than at the pre-flight because every one of these is a WRITE
@@ -8824,7 +8824,7 @@ EOF
   # word, and PLACES IT BEFORE THE PROJECT. An older ccd binds an unknown `--` token as a positional (D-6113): leading,
   # it lands in the project or slug slot and is refused there; trailing, it would be dropped unread and the workspace
   # created on the least-loaded lane with exit 0 — so the caps gate is the control and the leading position the defence.
-  echo ws-title-v1; echo ws-wrapper-v1
+  echo ws-title-v1; echo ws-wrapper-v1; echo ws-title   # the verb itself (S9), which the server offers Rename on; it rides here, not in the list above
   echo swap-busy-v1; echo hibernate  # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word; `hibernate` (D-5242) is a verb, sent only behind `verbSupported`
 }
 
@@ -40869,6 +40869,86 @@ _launchd_class() {
   esac
 }
 
+# ── THE OPERATOR TITLE, ONE SANITISER AND ONE WRITER (named workspaces S1 + S9) ───────────────────────────────
+# A workspace's display title and the marker that a PERSON chose it are written by two verbs: `ws-add --title` at birth
+# and `ws-title` afterwards. A second copy of either rule is the drift this file keeps naming, so each lives here once
+# and both verbs call it.
+#
+# `_ws_title_check <text>` — dies unless the text may be a title: non-blank, no control character (a newline would split
+# the one-line field the server reads back), and within `_LC_DEC_MAX` BYTES (`_lc_dec_ok` runs under `LC_ALL=C`, the one
+# cap the lifecycle journal already uses). The words are the ones `cmd_ws_add` has always said, flag name included, because
+# `--title` is the flag in both verbs. Callers run it BEFORE anything on disk is touched.
+_ws_title_check() {   # text -> 0, or dies naming the first rule it breaks
+  [[ -n "${1//[[:space:]]/}" ]] || die "--title must be non-blank"
+  case "$1" in
+    *[[:cntrl:]]*) die "--title must not contain control characters" ;;
+  esac
+  _lc_dec_ok "$1" || die "--title is longer than $_LC_DEC_MAX bytes"
+}
+# `_ws_title_set <id> <text>` — the two registry fields: `title` (the display sentence) and `named` (a human chose the
+# name, which keeps the ai-title sweep off this row's branch). Each failed write WARNS on stderr, naming the field and
+# what its absence costs, and the function answers 1 if either failed: `cmd_ws_add` has already made a workspace and
+# can only warn, `cmd_ws_title` has nothing else to do and refuses. Written title first, then marker, as `ws-add` always
+# did; the registry has no transaction, so a caller that must know both landed reads this answer, not the disk.
+_ws_title_set() {   # id text -> 0 iff BOTH fields are on disk; 1 and a warning per field that is not
+  local rc=0
+  _reg_set "$1" title "$2" || { echo "ccd: warn: could not write $REG/$1.title — $1 has no display title" >&2; rc=1; }
+  _reg_set "$1" named 1 || { echo "ccd: warn: could not write $REG/$1.named — $1 is NOT marked as named by a person, so the ai-title sweep may rename its branch" >&2; rc=1; }
+  return $rc
+}
+# `_ws_title_clear <id>` — both fields gone, which returns the row to the ai-title sweep. Answers 0 only when neither
+# is on disk afterwards: `rm -f` (never `-r`, so a directory stood where a field belongs is REPORTED, not deleted)
+# is checked by the disk, not by its own status. Idempotent: a row with neither field answers 0.
+_ws_title_clear() {   # id -> 0 iff neither `title` nor `named` is on disk afterwards
+  rm -f -- "$REG/$1.title" "$REG/$1.named" 2>/dev/null
+  [[ ! -e "$REG/$1.title" && ! -L "$REG/$1.title" && ! -e "$REG/$1.named" && ! -L "$REG/$1.named" ]]
+}
+
+cmd_ws_title() {   # ccd ws-title --session <id> (--title <text> | --clear) — set or clear a workspace's operator title
+  # The Rename action (named workspaces S9, design 2026-10-20 §6). The slug is immutable for life — directory, branch,
+  # session id, unit and tmux name all derive from it — so what an operator means by "rename" is the LABEL, and this
+  # verb writes exactly two registry fields and nothing else: `title` and `named`, through `_ws_title_set`, the writer
+  # `ws-add --title` uses. `--clear` removes both (`_ws_title_clear`), which gives the row back to the ai-title sweep.
+  # It is a workspace-lifecycle mutation, not coordination, so "zero new ccd verbs for coordination" does not bind it.
+  #
+  # NO `--surface`/`--actor`, AND NO JOURNAL ENTRY: it moves no workspace, branch, pane or claim, and the two fields it
+  # writes are display state. A caller that sent either flag meets the usage line, which is the honest answer.
+  #
+  # THE PARSE IS STRICT: `--session` consumes its value whole (so an id spelled `--title` stays the id and `_reg_id_ok`
+  # refuses it), `--title` takes the next word VERBATIM (a title may begin with dashes), each flag at most once,
+  # `--title` and `--clear` never together and never neither, and any other word is a usage error. An explicit arity
+  # check on every value-taking arm, never a bare `shift 2`: ccd runs under `set -uo pipefail` with NO `-e`, so a shift
+  # past the end of argv shifts nothing and a loop that never reaches its end hangs.
+  local usage="usage: ccd ws-title --session <id> (--title <text> | --clear)"
+  local id='' title='' gs=0 gt=0 gc=0
+  while (( $# )); do
+    case "$1" in
+      --session)   [[ $# -ge 2 ]] && (( ! gs )) || die "$usage"; gs=1; id="$2"; shift 2 ;;
+      --session=*) (( ! gs )) || die "$usage"; gs=1; id="${1#--session=}"; shift ;;
+      --title)     [[ $# -ge 2 ]] && (( ! gt )) || die "$usage"; gt=1; title="$2"; shift 2 ;;
+      --title=*)   (( ! gt )) || die "$usage"; gt=1; title="${1#--title=}"; shift ;;
+      --clear)     (( ! gc )) || die "$usage"; gc=1; shift ;;
+      *)           die "$usage" ;;
+    esac
+  done
+  (( gs && (gt + gc == 1) )) || die "$usage"
+  # The text rules run FIRST, over the text alone, so a refused title names the title and leaves the box as it found it.
+  (( gt )) && _ws_title_check "$title"
+  _reg_id_ok "$id" || die "bad session id"
+  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+  [[ -n "$(_reg_get "$id" workspace)" ]] \
+    || die "$id is not a workspace — a main checkout's name is its project, so there is no workspace title to set or clear"
+  if (( gt )); then
+    # CHECKED, as `cmd_ws_hold`'s write is: a verb whose whole job is two fields must not announce a title it did not
+    # record. `_ws_title_set` has already warned per field; this is the refusal the caller reads the exit code of.
+    _ws_title_set "$id" "$title" || die "could not record the title for $id — see the warning above; the row may carry only part of it"
+    echo "titled $id: $title"
+  else
+    _ws_title_clear "$id" || die "could not clear the title for $id — a title or named field STANDS under $REG and the ai-title sweep stays off this row"
+    echo "untitled $id"
+  fi
+}
+
 # Guard so the script can be `source`d by tests without running a command.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 case "${1:-}" in
@@ -40901,6 +40981,7 @@ case "${1:-}" in
   ws-collect) shift; cmd_ws_collect "$@" ;;
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
+  ws-title)   shift; cmd_ws_title "$@" ;;
   coord-pause) shift; cmd_coord_pause "$@" ;;
   reclaim-pause) shift; cmd_reclaim_pause "$@" ;;
   win-size)  shift; cmd_win_size "$@" ;;
@@ -40914,6 +40995,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-hold|ws-release|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi
