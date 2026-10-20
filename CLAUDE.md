@@ -104,10 +104,20 @@ real values: `deploy/reference-fleet.md` (gitignored).
   `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
   or onto the launcher (`~/.local/bin/claude`) are forbidden on a session's prompt (`FORBIDDEN_CCD_VERBS` and
   `FORBIDDEN_PATTERNS`, `server/src/coord/approvalguard.ts`). `claude install` and `claude update` (under the roster's
-  upstream id too) are child deny rules (`childDenyRules`, `shared/api.ts`); a top-level session's prompt for them
-  escalates to the operator. A child runs with permissions bypassed, so the session hook's PreToolUse deny is what
-  stops it: the verbs, the writes, and `install`/`update` under any path head, a `claude…` wrapper name or a
-  `~/.local/bin/<id>` launcher (D-5994). The `ccd claude …` switch verbs are the operator's, by hand; rolls and installs are ccrc's own
+  upstream id too) are child deny rules (`childDenyRules`, `shared/api.ts`). A `ccd`-spawned top-level session runs
+  with permissions bypassed too (both spawn lines in `ccd/ccd` pass the bypass flag), so these raise no permission
+  prompt there and nothing denies them: "forbidden on a session's prompt" never fires for it, and the deny file and
+  the hook's deny arm are children's only. A child runs with permissions bypassed, so the session hook's PreToolUse
+  deny (`APPROVAL_FORBIDDEN_JQ`'s `build` category) is what stops it: Claude Code's `install`, `update`, `upgrade`
+  and `respawn` under a `claude…` name, the upstream id read from the deny file, a `~/.local/bin/<id>` launcher, a
+  `$VAR` or the build's own path, after flags but not after a print-mode `-p`/`--print`; package runners, the official
+  installer and a global package install of `@anthropic-ai/claude-code`; and writes to the build directory, the
+  launcher and the files the launcher, the roll and the guard trust (`~/.ccrc/claude-*`, the roll's registry files, the
+  deny file), in any separator spelling, by redirection and the usual writers, through `find`, `xargs`, an interpreter
+  naming the path, a `cd` and a variable, and by the edit tools (D-5994, D-6063, D-6064, D-6065, D-6066). Still open
+  (D-6064's residuals): a symlink into the build directory, a `$VAR` fragment of the path, case variants, `..` in Bash
+  text, nine or more separators or flags, and a script file, `eval`, stdin or an interpreter that does not name the
+  path. The `ccd claude …` switch verbs are the operator's, by hand; rolls and installs are ccrc's own
   automatic acts. Account switching and the auto-swap are not touched: `ccd swap` is never blocked.
 - **NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly.** Each unit is a
   long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet. ONE scoped exception
