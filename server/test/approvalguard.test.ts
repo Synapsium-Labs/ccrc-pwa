@@ -282,6 +282,11 @@ describe('who may roll, install or select a build (D-5696)', () => {
     }
     expect(approvalClass('Write', { file_path: `${HOME}/.local/bin/ccd`, content: 'x' }, ctxFor({ cwd: WT }))).not.toBe('forbidden');
   });
+  it('a sibling of the build directory (versions-old) is not newly forbidden: the directory name ends where it ends', () => {
+    expect(bash('cp /tmp/x ~/.local/share/claude/versions-old/2.1.302')).not.toBe('forbidden');
+    expect(bash('cp /tmp/x ~/.local/share/claude/versions.bak')).not.toBe('forbidden');
+    expect(approvalClass('Write', { file_path: `${HOME}/.local/share/claude/versions-old/x`, content: 'x' }, ctxFor({ cwd: WT }))).not.toBe('forbidden');
+  });
   it('~/.ccrc/claude-intent and $REG/claude-roll-live writes are already forbidden by the registry-path pattern', () => {
     for (const c of ['echo x > ~/.ccrc/claude-intent', 'touch ~/.cc-sessions/claude-roll-live']) {
       expect(bash(c), c).toBe('forbidden');

@@ -4389,7 +4389,11 @@ fi
 # `session-hook-approval-deny.test.ts` holds equal to `approvalClass` over Task 12's corpus,
 # `server/test/fixtures/approvals/guard-corpus.json`. It answers one line: `<category>\t<why>`, or empty. In mode
 # `class` (the PermissionRequest arm below) any category counts; in mode `deny` (this arm) only `verb` (a SAFETY `ccd`
-# verb, `ccrc update` or `ccrc rollback`) and `surface` (the approval surface) do. JavaScript's regexes are ASCII
+# verb, `ccrc update` or `ccrc rollback`), `surface` (the approval surface) and `build` do. `build` (D-5696, spec
+# 2026-10-18 §7.6) is deny mode's alone (`bmatch`, never read in `class` mode, so the classifier parity is untouched): a
+# write into `~/.local/share/claude/versions/` or onto the launcher, by Bash or an edit tool, and Claude Code's `install`
+# or `update` under any path head, a `claude…` wrapper name or a `~/.local/bin/<id>` launcher, with no flag between
+# (so `claude -p "update …"` is not one). A bypassed child raises no prompt, so this arm is its only enforcement. JavaScript's regexes are ASCII
 # where Oniguruma's are Unicode, so `\w` and `\b` are spelled as ASCII classes and `\s` as JavaScript's own set
 # (`WS`, built by `implode` so this file stays ASCII). `hbt` is the classifier's `headBeforeTail`: in one segment, the
 # head matches wholly inside the text before the LAST start of the tail (found by a greedy prefix and a lookahead,
@@ -4397,8 +4401,9 @@ fi
 # bash word.
 #
 # ORDER IS BUDGET, as in the denies above: the event, the `.child` test and a substring prefilter are builtins, so a
-# top-level session, and a child's call whose payload names none of `ccd`, `ccrc` and `approval`, pay no fork. Every
-# pattern needs one of the three words literally (JSON escaping never touches ASCII letters). A deny already set is
+# top-level session, and a child's call whose payload names none of `ccd`, `ccrc` and `approval`, nor `claude` or
+# `/.local/bin/` together with `install`, `update` or `/.local/`, pay no fork. Every pattern needs one of those words
+# literally (JSON escaping never touches ASCII letters). A deny already set is
 # never replaced. FAIL-OPEN as every gate here: a jq that cannot run (no Oniguruma, say) denies nothing, and
 # `ccrc doctor`'s `jq_regex` check names that box.
 APPROVAL_FORBIDDEN_JQ='def WS: "\t\n\u000b\f\r " + ([160, 5760, 8192, 45, 8202, 8232, 8233, 8239, 8287, 12288, 65279] | implode);
@@ -4439,6 +4444,11 @@ def xmatch:
   (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
   (select(test(EXPV + "approvals" + NW)) | "surface\tthe approval surface");
+def CLI: "(?:" + WB + "claude[A-Za-z0-9-]*|/\\.local/bin/[a-z][a-z0-9-]{0,31})";
+def bmatch:
+  (select(hbt("[\n;&|]"; WR; BUILD)) | "build\ta write to a Claude Code build or its launcher"),
+  (select(test(CLI + SP + "+(?:install|update)" + NW)) | "build\tinstalling or updating a Claude Code build"),
+  (select(test(WB + "claude" + NW) and test(EXPV + "(?:install|update)" + NW)) | "build\tinstalling or updating a Claude Code build");
 def edittool: . == "Write" or . == "Edit" or . == "MultiEdit" or . == "NotebookEdit";
 def pathwhy($t):
   first((.file_path, .path, .notebook_path) | select(type == "string")
@@ -4450,8 +4460,8 @@ def pathwhy($t):
 (.tool_name | if type == "string" then . else "" end) as $t
 | (.tool_input | if type == "object" then . else {} end) as $i
 | if $mode == "deny" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t"))) // "" else "" end)
-     elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // "")
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t"))) // first((., norm) | bmatch) // "" else "" end)
+     elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // first(($i.file_path, $i.notebook_path) | select(type == "string" and test(BUILD)) | "build\ta write to a Claude Code build or its launcher") // "")
      elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // "")
      else "" end)
   elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch) // "" else "" end)
@@ -4465,7 +4475,9 @@ if [[ "$event" == PreToolUse && -n "$id" && -e "$REG/$id.child" \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
   apf=$payload
   if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]]; then apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}; fi
-  [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* ]] || apf=""
+  [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* \
+     || ( ( "$apf" == *claude* || "$apf" == */.local/bin/* ) \
+          && ( "$apf" == *install* || "$apf" == *update* || "$apf" == */.local/* ) ) ]] || apf=""
 fi
 if [[ -n "$apf" ]]; then
   case "${tool:-}" in
@@ -4479,6 +4491,9 @@ if [[ -n "$apf" ]]; then
         surface$'\t'*)
           areason="ccrc: this call reaches the approval surface (\`ccrc-api approvals\`, \`/api/approvals\`, a signing key or the verifier), which a dispatched child never calls, reads or writes: your coordinator rules on your permission prompts, and the operator on the rest."
           areason+=" Carry on with your task; a prompt you raise reaches them by itself." ;;
+        build$'\t'*)
+          areason="ccrc: this call is ${afw#*$'\t'}, which a dispatched child never does: rolling, installing and selecting a Claude Code build are the operator's acts and ccrc's own (CLAUDE.md's SAFETY section; spec 2026-10-18 §7.6; D-5696)."
+          areason+=" Report what you need to your coordinator instead." ;;
       esac
       if [[ -n "$areason" ]] && ajson=$(_hook_deny_json "$areason"); then pre_json=$ajson; fi ;;
   esac

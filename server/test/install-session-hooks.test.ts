@@ -393,6 +393,14 @@ describe('the children\'s deny file (spec §6.6, plan Task 15, D-5299)', () => {
     expect(doc.permissions.deny).toHaveLength(want.length);
     want.forEach((rule, i) => expect(doc.permissions.deny[i], `rule ${i}`).toBe(rule));
   });
+  it('an upstream id not in the roster id\'s shape is never written into a rule: the file is CHILD_DENY_RULES', () => {
+    for (const bad of ['Upstream_A', 'up a', 'x:*) Bash(true', '../up']) {
+      seedAccountsSh(home);
+      fs.appendFileSync(path.join(home, '.ccrc', 'accounts.sh'), `CCRC_UPSTREAM=${JSON.stringify(bad)}\n`);
+      run();
+      expect(JSON.parse(fs.readFileSync(denyFile(), 'utf8')).permissions.deny, bad).toEqual([...CHILD_DENY_RULES]);
+    }
+  });
   it('with the default roster (upstream id claude), holds exactly CHILD_DENY_RULES', () => {
     seedAccountsSh(home);
     run();
