@@ -420,9 +420,12 @@ describe('the swap heartbeats WHILE it carries, not just around the carry', () =
     //
     // The killer subshell is what keeps `while :` from hanging the suite
     // instead of failing it: a beat that had to be killed comes back 137.
+    // Killed itself once the beat ends, it takes its own sleep with it (the
+    // TERM trap): a bare `( command sleep 20; … )` left the sleep running past
+    // the suite, and the run's orphan check (D-3533) fails on it.
     const out = h.sh(`sleep() { :; }; _reg_set() { echo tick >> "$HOME/beats"; }
       _swap_beat ${ID} $$ & beat=$!
-      ( command sleep 20; kill -9 "$beat" ) >/dev/null 2>&1 & killer=$!
+      ( command sleep 20 & s=$!; trap 'kill "$s"; exit 0' TERM; wait "$s"; kill -9 "$beat" ) >/dev/null 2>&1 & killer=$!
       wait "$beat"; rc=$?
       kill "$killer" 2>/dev/null; wait "$killer" 2>/dev/null
       echo "rc=$rc ticks=$(wc -l < "$HOME/beats" | tr -d ' ') max=$SWAP_BEAT_MAX window=$(( SWAP_BEAT_INTERVAL * SWAP_BEAT_MAX ))"`);
