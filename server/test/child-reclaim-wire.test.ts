@@ -35,9 +35,11 @@ describe('the child-reclaim word vocabulary (wave 5, spec §5.9)', () => {
 
 describe('the kept words (wave 5, spec §5.9)', () => {
   // An unplaced birth is not among them: it is a doubt word, which the sweep reads again on its own.
-  it('are the five the sweep keeps for a person, derived from one table', () => {
+  // `review-report-stale` (D-5942) is the sixth: a review child past its ceiling while the run it reviewed is open.
+  it('are the six the sweep keeps for a person, derived from one table', () => {
     expect([...CHILD_RECLAIM_KEPT_WORDS].sort()).toEqual([
-      'coordinating', 'minting-run-absent', 'minting-run-postdates-child', 'not-a-workspace', 'reviewed-run-absent',
+      'coordinating', 'minting-run-absent', 'minting-run-postdates-child', 'not-a-workspace', 'review-report-stale',
+      'reviewed-run-absent',
     ]);
     expect(isChildReclaimKeptWord('coordinating')).toBe(true);
     expect(isChildReclaimKeptWord('held')).toBe(false);

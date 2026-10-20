@@ -4406,7 +4406,9 @@ export class FleetWatcher {
           mintingRunFull = run.ok ? run.run : null;
           mintingRun = run.ok
             ? { ok: true, run: run.run === null ? null : { state: run.run.state, sessionId: run.run.sessionId,
-                dispatchStartedAt: run.run.dispatchStartedAt, openedAt: run.run.openedAt } }
+                dispatchStartedAt: run.run.dispatchStartedAt, openedAt: run.run.openedAt,
+                // D-5942: a review run's close starts the review child's ceiling.
+                closedAt: run.run.closedAt } }
             : { ok: false, detail: run.detail };
           // THE HOLD READ (spec §5.7's "no hold" conjunct): built from the
           // row's own trimmed `held` text, the candidate runs a match might be
