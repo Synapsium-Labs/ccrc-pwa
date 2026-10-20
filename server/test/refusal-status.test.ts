@@ -170,7 +170,12 @@ describe('REFUSAL_STATUS (D-5381)', () => {
  *  reader could not branch on the status. Every send of the word, in any file
  *  and in any shape, now answers the table's status: a literal-status send
  *  answers `REFUSAL_STATUS['registry-unmeasurable']`, a computed one IS the
- *  table, and no route passes the word with a status of its own. */
+ *  table, and no route passes the word with a status of its own.
+ *
+ *  LIMIT: the scan spots the word only as a quoted literal in the send body. A
+ *  literal-status send whose word arrives through an identifier (say
+ *  `error: r.kind` at 503) would slip past it; none exists today, and such a
+ *  send belongs in refuseRoute, which the table governs. */
 describe('registry-unmeasurable has one status (D-5971)', () => {
   const WORD = 'registry-unmeasurable';
   /** Every send whose body names the word, literal or computed. */

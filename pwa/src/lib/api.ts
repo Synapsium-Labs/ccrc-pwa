@@ -352,12 +352,6 @@ const API_ERROR_TEXT: Record<string, string> = {
   'bad-pool-name': 'A pool name starts with a lowercase letter and holds only lowercase letters, digits and hyphens.',
 };
 
-/** Human-readable failure text for a caught error.
- *
- *  Lifecycle send sites answer `{ ok:false, stderr }`; coded send sites answer
- *  `{ ok:false, error, ...fields }`. Those server shapes are disjoint, so these
- *  branches do not express precedence between two fields on one response. The
- *  bare message stays the floor. */
 /** `registry-unmeasurable`, read off the WORD (D-5971, #549, ARCH-11b). The
  *  server answers it at the table's 502 everywhere (`shared/refusal.ts`), and
  *  until then `server.ts` answered 503, so a reader that branched on the
@@ -367,6 +361,12 @@ export const isRegistryUnmeasurable = (err: unknown): boolean =>
   err instanceof ApiError && typeof err.body === 'object' && err.body !== null
   && (err.body as { error?: unknown }).error === 'registry-unmeasurable';
 
+/** Human-readable failure text for a caught error.
+ *
+ *  Lifecycle send sites answer `{ ok:false, stderr }`; coded send sites answer
+ *  `{ ok:false, error, ...fields }`. Those server shapes are disjoint, so these
+ *  branches do not express precedence between two fields on one response. The
+ *  bare message stays the floor. */
 export function apiErrorText(err: unknown): string {
   if (err instanceof ApiError && typeof err.body === 'object' && err.body !== null) {
     const stderr = (err.body as { stderr?: unknown }).stderr;
