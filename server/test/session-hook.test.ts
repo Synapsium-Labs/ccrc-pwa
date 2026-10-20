@@ -9759,6 +9759,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // Measured by running this test with `origin/main`'s `ccd/ccd` and with
         // this branch's, everything else the same tree. Neither corpus document
         // changed, so nothing was re-pointed. S6-R11 covers it, so no D-number.
+        // RE-MEASURED for `ccd ws-gc --fast` (D-5886, #123), 55 -> 54: ONE LEAVES (`:13573-13575`,
+        // its second site) and none enters, dumped from the merged tree and never retyped. The
+        // branch's `cmd_ws_gc` lines above this anchor slide a different `ccd/ccd` line under it,
+        // one that happens to carry a token of its row: a coincidental pass, not a repair. Neither
+        // corpus document changed, so nothing was re-pointed. S6-R11 covers it, so no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9800,7 +9805,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
-        'ccd/ccd:13573-13575',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
@@ -10022,7 +10026,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
-        'spec:2210 ccd/ccd:13573-13575',
+        // RE-MEASURED for `ccd ws-gc --fast` (D-5886, #123), 35 -> 34: the same second site leaves
+        // as in the row-level set above, from the same run. S6-R11, no D-number.
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',

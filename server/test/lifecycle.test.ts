@@ -1040,6 +1040,21 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.collector).toContain('ccd-tmp-sweep');
     expect(c!.root).toContain('claude-<uid>');
   });
+  it('declares a child\'s temp root ~/.cc-tmp/<id>, session-bound and collected by the reclaim tail and ws-collect (D-5888, #298)', () => {
+    // The policy's ruling 4 first described this root: a `--child` workspace spawns with TMPDIR at
+    // `$HOME/.cc-tmp/<id>` (`_child_tmpdir`), the reclaim tail removes it (`_ws_tmproot_remove`), and
+    // `ws-collect` takes one that outlived its row. Only the per-id leaf is declared: loose top-level
+    // entries in `~/.cc-tmp` have no owner yet, and this row must not claim them.
+    const c = LIFECYCLE.find((x) => x.name === 'child-tmp-roots');
+    expect(c, 'shared/lifecycle.ts declares no child-tmp-roots class').toBeTruthy();
+    expect(c!.pattern).toBe('S');
+    expect(c!.root).toBe('~/.cc-tmp/<id>/');
+    expect(c!.creators.join(' ')).toContain('_child_tmpdir');
+    expect(c!.collector).toContain('_ws_tmproot_remove');
+    expect(c!.collector).toContain('ws-collect');
+    expect(c!.bound).toContain('child');
+    expect(c!.ruling).toBeNull();
+  });
   it('declares the pane-scope sweep\'s verdict record, a rolling class its own writer rewrites', () => {
     // Session-continuity wave 4: `ccd-scope-sweep` keeps one record in the
     // runtime dir, and `ccrc doctor` reads it. An unassigned artifact class is a
