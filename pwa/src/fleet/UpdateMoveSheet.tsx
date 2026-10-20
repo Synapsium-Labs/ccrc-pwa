@@ -350,7 +350,25 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone, onAnswered, tone 
   };
 
   return (
-    <Sheet open onClose={onClose} title={headline} initialFocus={cancelRef}>
+    <Sheet
+      open
+      onClose={onClose}
+      title={headline}
+      initialFocus={cancelRef}
+      // The answers are pinned in the Sheet's footer (D-5932): a long node list scrolls, they stay.
+      footer={
+        <div className={QC_ACTIONS}>
+          {lines.length > 0 && !answered && (
+            <Button variant={danger ? 'danger' : 'primary'} disabled={busy} onClick={confirm}>
+              {busy ? 'Sending…' : danger ? rollbackCommitLabel(plan) : headline}
+            </Button>
+          )}
+          <Button ref={cancelRef} variant="ghost" disabled={busy} onClick={onClose}>
+            {answered ? 'Close' : 'Cancel'}
+          </Button>
+        </div>
+      }
+    >
       <div className="update-move-sheet">
         {lines.length === 0 ? (
           <p className={QC_CONSEQUENCE}>{moveEmptyText(plan.intent)}</p>
@@ -365,16 +383,6 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone, onAnswered, tone 
         {danger && lines.length > 0 && dangerLines(plan, release).map((line) => (
           <p key={line} className={QC_CONSEQUENCE}>{line}</p>
         ))}
-        <div className={QC_ACTIONS}>
-          {lines.length > 0 && !answered && (
-            <Button variant={danger ? 'danger' : 'primary'} disabled={busy} onClick={confirm}>
-              {busy ? 'Sending…' : danger ? rollbackCommitLabel(plan) : headline}
-            </Button>
-          )}
-          <Button ref={cancelRef} variant="ghost" disabled={busy} onClick={onClose}>
-            {answered ? 'Close' : 'Cancel'}
-          </Button>
-        </div>
         {error !== null && <p className="update-move-error" role="alert">{error}</p>}
       </div>
     </Sheet>
