@@ -123,6 +123,14 @@ export const OWNED = [
   // main's `.qc-consequence`/`.qc-actions` rules (the takeover's visual check
   // caught it; no test had).
   'qc-consequence', 'qc-actions',
+  // The workbench shell. Each is a focusable control's hook, written in
+  // `cn('<hook>', FOCUS_RING)` and selected by the component's own sheet; a
+  // static hook is a double-quoted JSX attribute and needs no entry here.
+  'wb-side-mode', 'wb-side-head', 'wb-side-new', 'wb-side-row', 'wb-side-ctag', 'wb-side-agent',   // WorkbenchSidebar
+  'wb-tabs-tab', 'wb-tabs-close', 'wb-tabs-all', 'wb-tabs-switch',                                // WorkbenchTabs
+  'wb-term-view', 'wb-term-pane', 'wb-term-latch', 'wb-term-short', 'wb-term-input', 'wb-term-send', // WorkbenchTerminal
+  'wb-acct-head', 'wb-acct-row', 'wb-acct-eyebrow',                                               // WorkbenchAccountRow
+  'wb-status-item',                                                                                // WorkbenchStatusBar
 ];
 
 /** Tokens the derivation finds that are NOT vocabulary, each with the reason.
@@ -136,6 +144,7 @@ export const NOT_VOCABULARY: Record<string, string> = {
   // D-5158: a merge-config name, registered here rather than OWNED, which
   // would refuse the app's own `card` class.
   card: "a spacing-theme NAME in cn.ts (the --pad-card role, D-5093), which tailwind-merge needs bare to place `p-card`; never emitted as a class — the app's own `.card` rule in fleet.css is how it reaches the intersection",
+  chat: "the WorkbenchTerminal view id (`'terminal' | 'chat' | 'split'`), a word, not a class it emits; the app's `.chat` screen rule is how it reaches the intersection",
 };
 
 /** Every `className="..."` / `className={'...'}` string literal in a file. */
