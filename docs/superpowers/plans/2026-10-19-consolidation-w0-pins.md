@@ -327,12 +327,12 @@ A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** na
   | delete the `fleet/**` row from the table | map-check | the `fleet/` files no file row names are listed with zero contexts |
   | add `watch.ts` to C3's file rows as well as K's | map-check | `server/src/watch.ts` listed with two contexts |
   | duplicate the `session/**` directory row under C6 | map-check | every `session/` file no file row names listed with two contexts |
-  | drop the scheduler/poller clause from the server L4 predicate | map-check | the ring counts change: `auth/sessions.ts` and `token/driver.ts` leave L4 |
+  | drop the scheduler/poller clause from the server L4 predicate | map-check | the ring counts change: `auth/sessions.ts`, `remote/client.ts`, `sessionws.ts` and `watch.ts` leave L4 (`token/driver.ts` stays, by its header) |
   | drop the deadline-timer clause from the server L3 predicate | map-check | the ring counts change: `inject/send.ts`, `livestate.ts` and `shutdownseal.ts` fall to L1 |
   | the header grammar loses the `— ` and `ring ` prefixes | map-check | `update/converge.ts` and `token/link.ts` fall to L1 and are listed as undeclared ring tokens |
   | CLAUDE.md's timer sentence loses "inside one adapter call" | word-check | red, naming the timer sentence |
   | the spec's carve-out drops `node:url` | word-check | red, naming the `.mjs` sentence |
-  | D-6000 defined a second time with another subject | `deviation-refs.test.ts` | red (one number, two subjects) |
+  | D-6000 defined a second time, with another subject, in another plan | `deviation-refs.test.ts` | red (one number, two subjects) |
   | a concrete `D-TBD-<slug>` placeholder (a real slug) in the task section | `dtbd.test.ts` | red |
 
 - [ ] **Step 4: Verify.** From `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean`, `single-definition`, `docs-grammar`, one at a time with `--maxWorkers=2`. No `tsc` is needed (no TypeScript changes).
