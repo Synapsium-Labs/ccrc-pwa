@@ -185,4 +185,6 @@ export {
   parseWindows,
   WINDOW_MIN,
   WINDOW_MAX,
+  MODELS_LANE_ID_RE,
+  MODELS_RESERVED_IDS,
 } from './models.mjs';

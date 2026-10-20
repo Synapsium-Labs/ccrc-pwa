@@ -68,8 +68,8 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from '
 import path from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 import {
-  CLASSES, CatalogueInvalid, MODEL_ID_RE, PROBE_KINDS, RegistryInvalid, SUBAGENT_CLASSES, WINDOW_MAX, WINDOW_MIN,
-  availableFor, deriveModels, parseCatalogue, parseRegistry, parseWindows,
+  CLASSES, CatalogueInvalid, MODEL_ID_RE, MODELS_LANE_ID_RE, PROBE_KINDS, RegistryInvalid, SUBAGENT_CLASSES,
+  WINDOW_MAX, WINDOW_MIN, availableFor, deriveModels, parseCatalogue, parseRegistry, parseWindows,
 } from '../shared/models.mjs';
 import {
   MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor, effortFile, mergeSettingsEnv,
@@ -82,14 +82,16 @@ import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.m
 
 const SELF = 'models-op';
 
-/** The account-id shape (C6), spelled once, here — the same shape as
- *  `ccd/ccrc`'s `WRAPPER_ID_RE` (`shared/roster.ts`'s ID_RE, in bash). An
+/** The account-id shape (C6). DEFINED ONCE as `shared/models.mjs`'s
+ *  `MODELS_LANE_ID_RE` (auto-advance plan W2 Task 7) and re-exported here under
+ *  the name this file has always used; the same shape as `ccd/ccrc`'s
+ *  `WRAPPER_ID_RE` (`shared/roster.ts`'s ID_RE, in bash). An
  *  account id becomes a path segment below, in SEVEN places (`registryPath`,
  *  `cataloguePath`, `classesTsvPath`, `effortPath`, `laneJsonPath`,
  *  `windowsPath`, `advancePath`), so this file validates its own `--id` at op
  *  entry rather than depending on `ccd/ccrc`'s `_models_id_ok` — a usage-level
  *  gate one layer up, not this file's own — to have run first. */
-export const ACCOUNT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+export const ACCOUNT_ID_RE = MODELS_LANE_ID_RE;
 
 /** What `init` plants per probe kind.
  *

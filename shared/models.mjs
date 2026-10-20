@@ -86,6 +86,23 @@ export const PROBE_KINDS = ['codex', 'openrouter', 'compatible'];
  *  shipped as raw control bytes with every suite green. */
 export const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
 
+/** The lane-id shape `ccrc models` and `deploy/models-op.mjs` accept (C6),
+ *  DEFINED ONCE, here (auto-advance plan W2 Task 7). The same shape as
+ *  `shared/roster.ts`'s module-private ID_RE and the bash shape contract's
+ *  WRAPPER_ID_RE: a lane id becomes a file name under ~/.ccrc/models and a
+ *  directory under ~/.ccrc/codex, so it is lowercase letters, digits and "-"
+ *  only, a letter first, 32 characters at most. `deploy/models-op.mjs`
+ *  re-exports it as ACCOUNT_ID_RE; `deploy/models-canary.mjs` and the agent's
+ *  `models` op validate against it before any path is built.
+ *  `server/test/models-lane-id-parity.test.ts` holds the four spellings equal. */
+export const MODELS_LANE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+
+/** The two words `ccrc models <here> …` reads as box-wide subcommands, never as
+ *  a lane id (deviation B-4): `ccd/ccrc`'s MODELS_RESERVED in bash, here for
+ *  every node and TypeScript caller (the agent's `models` op refuses them as a
+ *  lane). Pinned equal to the bash list by the same test. */
+export const MODELS_RESERVED_IDS = Object.freeze(['refresh', 'litellm']);
+
 const REGISTRY_KEYS = ['probe', 'classes', 'subagent', 'discovery', 'effort', 'baseUrl'];
 
 /** The hostnames `parseRegistry`'s `baseUrl` scheme gate (C13) treats as a

@@ -23,6 +23,10 @@ export declare const CLASSES: readonly ModelClass[];
 export declare const SUBAGENT_CLASSES: readonly ModelClass[];
 export declare const PROBE_KINDS: readonly ProbeKind[];
 export declare const MODEL_ID_RE: RegExp;
+// Auto-advance plan W2 Task 7: the lane-id pattern and the two reserved first
+// words of `ccrc models`, each defined once in `shared/models.mjs`.
+export declare const MODELS_LANE_ID_RE: RegExp;
+export declare const MODELS_RESERVED_IDS: readonly string[];
 export declare class RegistryInvalid extends Error { readonly field: string }
 export declare class CatalogueInvalid extends Error {}
 export declare function parseCatalogue(json: unknown): Catalogue;
