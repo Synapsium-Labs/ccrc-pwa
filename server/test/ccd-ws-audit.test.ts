@@ -551,7 +551,7 @@ describe('local-loss refusals', () => {
     const LOCK = `flock() { printf '%s\\n' "$*" >> "$HOME/flock-calls"; return 0; };`;
     const a = audit(`${ONCE} ${LOCK}`);
     expect(fs.existsSync(path.join(h.home, 'scan-failed-once')), 'the stub never failed the read').toBe(true);
-    expect(fs.readFileSync(path.join(h.home, 'flock-calls'), 'utf8'), 'the retry was not serialised').toMatch(/^-w 30 \d+$/m);
+    expect(fs.readFileSync(path.join(h.home, 'flock-calls'), 'utf8'), 'the retry was not serialised').toMatch(/^-w 5 \d+$/m);
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.ignored-scan.lock'))).toBe(true);
     // And the lock is LET GO: the rest of the audit (the fetch, the PR read)
     // must not run holding it, or the lock serialises far more than the scan.
@@ -581,7 +581,40 @@ describe('local-loss refusals', () => {
     expect(a.detail, a.detail).toContain('did not finish within');
     expect(a.detail, a.detail).toContain('remove or move the largest ignored directory');
     expect(a.detail, a.detail).not.toContain('could not read');
+    expect(a.detail, a.detail).toContain('both times');
     expect(fs.readFileSync(path.join(h.home, 'find-timeouts'), 'utf8').trim().split('\n')).toHaveLength(2);
+  }, 30000);
+
+  it('says only the RETRY ran out of time when the first read failed another way (D-5884, #128)', () => {
+    // `_ws_collect_ignored` clears its timeout flag on every attempt, so the
+    // detail must not claim "both times" from the second attempt alone.
+    const { wt } = squashMovedBase(['build/']);
+    fs.mkdirSync(path.join(wt, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', 'out.o'), 'ordinary rubbish\n');
+    const FIRST128 = `git() { if [[ "$*" == *"--ignored=matching -z"* && ! -e "$HOME/scan-failed-once" ]]; then `
+      + `: > "$HOME/scan-failed-once"; return 128; fi; command git "$@"; };`;
+    const SLOW = `timeout() { case "$1" in -*) return 125 ;; esac; `
+      + `[[ "$*" == *" find "*"-mindepth 1 ("* ]] && return 124; shift; "$@"; };`;
+    const a = refusal(wt, `${FIRST128} ${SLOW}`);
+    expect(fs.existsSync(path.join(h.home, 'scan-failed-once')), 'the stub never failed the read').toBe(true);
+    expect(a.verdict).toBe('tree-unreadable');
+    expect(a.detail, a.detail).toContain('scan-timeout');
+    expect(a.detail, a.detail).toContain('on the retry');
+    expect(a.detail, a.detail).not.toContain('both times');
+  }, 30000);
+
+  it('retries even when the lock wait runs out — the lock is never a gate (D-5884, #128)', () => {
+    // A contended lock whose wait expires must still retry, unlocked: a
+    // `flock` failure that skipped the retry would bring back the false
+    // `tree-unreadable` under load that the retry exists to remove.
+    const { wt } = squashMovedBase();
+    const ONCE = `git() { if [[ "$*" == *"--ignored=matching -z"* ]]; then echo x >> "$HOME/ign-reads"; `
+      + `[[ -e "$HOME/scan-failed-once" ]] || { : > "$HOME/scan-failed-once"; return 128; }; fi; command git "$@"; };`;
+    const BUSY = `flock() { printf '%s\\n' "$*" >> "$HOME/flock-calls"; return 1; };`;
+    const a = audit(`${ONCE} ${BUSY}`);
+    expect(fs.readFileSync(path.join(h.home, 'flock-calls'), 'utf8'), 'the lock was never tried').toMatch(/^-w 5 \d+$/m);
+    expect(a.verdict, a.detail).toBe('reapable');
+    expect(fs.readFileSync(path.join(h.home, 'ign-reads'), 'utf8').trim().split('\n').length).toBeGreaterThanOrEqual(2);
   }, 30000);
 
   it('calls a spent scan budget a timeout too, not an unreadable tree (D-5884, #128)', () => {

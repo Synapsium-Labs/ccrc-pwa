@@ -11522,6 +11522,7 @@ _ws_child_manifest() {   # main workdir -> JSON array on stdout; non-zero and NO
 }
 
 REAP_SCAN_SECONDS=30      # the whole-workspace bound on the inside-of-ignored scan
+REAP_IGNLOCK_WAIT=5       # D-5884: the most a retry waits on `.ignored-scan.lock` before it retries unlocked
 
 _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSIDE_HITS, 1 = the scan did not complete
   # THE §0 GUARD, ONE DIRECTORY DOWN. `--ignored=matching` collapses a wholly
@@ -11879,10 +11880,16 @@ _ws_collect_ignored_settled() {   # workdir — `_ws_collect_ignored`, asked ONC
   # unlocked — and the retry is the same `_ws_collect_ignored`, with every one
   # of its refusals intact, so a second attempt can turn a failure into a pass
   # only by actually reading the whole set. Nothing here widens what is deleted.
+  # The wait is short (REAP_IGNLOCK_WAIT, not the scan budget): the audit and
+  # reap runner budgets were sized for one scan, and a holder the lock outlives
+  # — a `timeout find` child of a killed ccd inherits the fd — is bounded by
+  # its own REAP_SCAN_SECONDS anyway.
+  _WS_IGNTIMEOUT_FIRST=0
   _ws_collect_ignored "$1" && return 0
+  _WS_IGNTIMEOUT_FIRST=$REAP_IGNTIMEOUT   # D-5884: whether the FIRST attempt ran out of time — the retry resets the flag
   local lfd="" rc
   if command -v flock >/dev/null 2>&1 && { exec {lfd}>>"$REG/.ignored-scan.lock"; } 2>/dev/null; then
-    flock -w "$REAP_SCAN_SECONDS" "$lfd" 2>/dev/null || true
+    flock -w "$REAP_IGNLOCK_WAIT" "$lfd" 2>/dev/null || true
   else
     lfd=""
   fi
@@ -12304,8 +12311,10 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # tree that could not be read. Same verdict, same refusal: a slow tree is
     # still not one ccd has described.
     _ws_collect_ignored_settled "$workdir" || {
-      if (( REAP_IGNTIMEOUT )); then
+      if (( REAP_IGNTIMEOUT && _WS_IGNTIMEOUT_FIRST )); then
         _reap_refuse tree-unreadable "scan-timeout: the ignored set at $workdir was scanned twice and ran out of time both times — $REAP_IGNREASON"
+      elif (( REAP_IGNTIMEOUT )); then
+        _reap_refuse tree-unreadable "scan-timeout: the ignored set at $workdir ran out of time on the retry — $REAP_IGNREASON"
       else
         _reap_refuse tree-unreadable "could not read the ignored set at $workdir${REAP_IGNREASON:+ — $REAP_IGNREASON}"
       fi
