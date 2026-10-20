@@ -533,14 +533,18 @@ Claude Code session you start there, while the hook entries act only inside a `c
 `cc-<id>` tmux session and exit at once anywhere else.
 
 **What the install does not place.** Coordination — runs, mail, claims, asks, and a fleet box's pool
-and update pulls — needs two things the install leaves to you, once per box; without them the
+and update pulls — needs one thing the install leaves to you, once per box; without it the
 console still drives sessions, but the clients refuse before they call:
 
 - **`CCRC_SERVER_URL`** in `~/.ccrc/agent.env` — the server's address, which the skills' client,
   `ccd-pool-sync` and `ccd-update-sync` read and never guess. `ccrc install --role fleet` prompts
   for it; a single (`both`) box gets no `agent.env` at all.
-- **`~/.local/bin/ccrc-api`**, the closed client every skill calls instead of `curl` ("Programs,
-  runs and mail"). `deploy.sh agent` installs it; `ccrc install` and `ccrc update` do not.
+
+`~/.local/bin/ccrc-api`, the closed client every skill calls instead of `curl` ("Programs, runs and
+mail"), is not on this list: `ccrc install` and `ccrc update` place it, a byte copy out of the placed
+tree, on every role except `server`, whose box hosts no sessions, and `ccrc uninstall` removes it. A box
+that already carries the old link into the tree keeps it, and `deploy.sh agent` still places it too, as
+the fallback.
 
 **The box token needs nothing from you.** The server mints `~/.ccrc/mail.token` (mode `0600`;
 `CCRC_MAIL_TOKEN_PATH` moves it) at its first boot and rotates it. On two boxes it hands the fleet
@@ -558,12 +562,11 @@ A `deploy.sh` box re-ships a local `deploy/ccrc.env` over that file, so record t
 A two-box fleet placed by `deploy.sh` alone has no `~/.ccrc/node-id` on the fleet box, so the rotation gate holds
 `node-id-unmeasured` and no rotation runs; `ccrc install` (or `ccrc update`) on that fleet box mints it.
 
-The block below is the single-box form of the two steps:
+The block below is the single-box form of that step:
 
 ```bash
 # single box only (a fleet box's install wrote its agent.env):
 ( umask 077; [ -e ~/.ccrc/agent.env ] || echo 'CCRC_SERVER_URL=http://127.0.0.1:7788' > ~/.ccrc/agent.env )
-ln -sfn ~/ccrc/ccd/ccrc-api ~/.local/bin/ccrc-api        # on the box the sessions run on; a link follows every update
 ```
 
 `~/.cc-secrets` has one side effect on `ccrc doctor`: its `credentials` check SKIPs while that
@@ -792,9 +795,9 @@ by hand (below). The role is recorded only on that first write, so re-running `c
 server's exposed origin ("Exposure", above), or a private address once the server box's `CCRC_HOST` names it
 (`ccrc.service` binds loopback by default, and doctor's `update-exposure` check then wants the session gate
 armed) — and a fresh agent token (`openssl rand -hex 32`). Then set `CCRC_AGENT_HOST` in the fleet box's
-`~/.ccrc/agent.env` and restart `ccrc-agent.service` ("Config", under "Remote fleet mode", below), and place
-`ccrc-api` by hand as "What the install does not place" (under "Install", above) shows; the box token
-needs no hand step, because the server hands the fleet box its copy over the agent link once the link is up.
+`~/.ccrc/agent.env` and restart `ccrc-agent.service` ("Config", under "Remote fleet mode", below);
+`ccrc-api` needs no hand step, because the install placed it on the fleet box, and the box token needs
+none, because the server hands the fleet box its copy over the agent link once the link is up.
 Finally set `CCRC_FLEET=remote`,
 `CCRC_AGENT_URL=ws://<fleet address>:7789/agent` and the same `CCRC_AGENT_TOKEN` in the server box's
 `~/.ccrc/ccrc.env`, restart `ccrc.service`, and check the link as "Verifying a remote-mode deploy" (below)
@@ -822,7 +825,13 @@ the supervisor sweep behind its mandatory `KillMode=process` preflight, each res
 stay-up check (`deploy/verify-service.sh` on Linux), all of them in one shared window (on Linux: for up to
 `CCRC_SWEEP_VERIFY_JOBS` units, default 128, given a scratch directory; more take one window per chunk, and with no
 scratch directory each unit is verified alone, in turn) — a unit that was active before the restart and that the
-post-restart listing shows `activating` or `failed` is verified too — and a crash-like first failure gets ONE
+post-restart listing shows `activating` or `failed` is verified too, while one already `activating` or `failed` BEFORE
+the restart (crash-looping or failed before the update; on macOS, a job carrying its start-limit stamp) is never
+verified and never fails the run, whatever it reads after: a `failed` one is skipped by the restart, the run names
+each on stderr with its remedy (an `activating` one only when the post-restart listing was read), a sweep that is
+neither refused nor dies, and that re-lists what it restarted, records them in `~/.ccrc/update.json`'s `sweep` key as
+`down: <n>: <ids>` (`ok` when there are none), and doctor's `update-sweep` check WARNs, never FAILs, while one is
+still not active or (on Linux) has been restarted by its manager since — and a crash-like first failure gets ONE
 re-check, alone: it fails the
 run (exit 1, reported `failed` unless a newer update owns the report) only if that fails too, and the re-checks stop at
 the first that fails; macOS runs the same window and re-check in-process, with no stop-on-purpose classifier. On Linux a
@@ -901,7 +910,9 @@ other than `off` is refused (`409`) until every node the intent covers lists `up
 (`flock`; macOS needs `brew install flock`) from just after its arguments are checked until just before the supervisor
 sweep, so a second run is refused and told the holder's pid and target (only `flock`'s own contention, rc 1, reads as a live
 holder; any other `flock` failure refuses as unmeasured, never as busy). Every phase is reported to
-`~/.ccrc/update.json` — one line of JSON (`target`, `phase`, `startedAt`, `updatedAt`, `detail`, `from`, `pid`; the
+`~/.ccrc/update.json` — one line of JSON (`target`, `phase`, `startedAt`, `updatedAt`, `detail`, `from`, `pid`, and,
+once the supervisor sweep has run, `sweep`: `ok`, `down: <n>: <ids>`, `refused: <why>`, `unverified: relist` or
+`died: sweep`, or the watchdog's `died: abandoned`; absent, it was not measured; the
 two times in unix seconds), placed by rename; a write that fails is a WARN, never a failed update — from `queued` or
 `resolving` through `done`, or `failed`, `restoring` and `reverted`, and it is what the console reads. `--from` names
 who asked: one of `cli` (the default), `pwa`, `restore`, `rollback`, `watchdog` or `rollout` — `restore` is the automatic
@@ -1207,7 +1218,7 @@ a session's prose is not configuration) unless `--purge-memory` is also given, w
 to remove it too; it likewise preserves `~/.ccrc/history` (the session-history store: verbatim session text, which Claude Code's retention may already have deleted elsewhere) and the `~/.ccrc/history-*` operator files, which only `--purge-history` (refused without `--purge`) removes, and `--purge-memory` never reaches them; never worktrees, never tmux state. It also removes graphify's skill from every rostered home,
 ccrc's `~/.local/bin/graphify` link and the Codex runtime under `~/.ccrc/runtime/codex`, and stops any Codex lane
 tier it can prove is that lane's own. It leaves, for you to remove by hand, the four ccrc skills — `skills/ccrc-coordinator`,
-`skills/ccrc-worker`, `skills/ccrc-reviewer`, `skills/ccrc-history` — in each account home, a hand-placed `~/.local/bin/ccrc-api`, and
+`skills/ccrc-worker`, `skills/ccrc-reviewer`, `skills/ccrc-history` — in each account home, and
 the `ccrc-ddns` units `ccrc expose duckdns` installed, whose timer keeps re-pointing the DNS record (after
 `--purge` removes `~/.ccrc/exposure.env` it fails every five minutes instead —
 `systemctl --user disable --now ccrc-ddns.timer` first).
@@ -3404,12 +3415,12 @@ tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
 `POST /api/runs/:id/abandon`, `POST /api/claims/:id/break`,
 `POST /api/runs/:id/reclaim`) have no verb in it, by decision.
-`deploy/deploy.sh`'s agent arm installs it beside `ccd`; `ccrc install` and
-`ccrc update` do not, so on a box placed by the release lane it is not there
-until you place it ("What the install does not place", under Install). The
-token it reads is the server's to place: minted at boot, handed to the fleet
-box over the agent link (or written by the server itself on a box recorded as
-`CCRC_ROLE=both`), never shipped by `deploy.sh`.
+`ccrc install` and `ccrc update` place it on every role except `server`,
+whose box hosts no sessions, and `deploy/deploy.sh`'s agent arm installs it
+beside `ccd`, as the fallback. The token it reads is the server's to place:
+minted at boot, handed to the fleet box over the agent link (or written by
+the server itself on a box recorded as `CCRC_ROLE=both`), never shipped by
+`deploy.sh`.
 
 **Three surfaces.** `/runs` is the board — runs grouped by program, with their
 own status words (a run is a lifecycle position, not an attention state, so it
@@ -3585,9 +3596,9 @@ program's first run:
    coordinator, a worker or a reviewer on a home without its protocol. Doctor's
    `skills` check measures every home against the shipped tree, and
    `ccrc doctor --fix` cures one that drifted. Check `~/.local/bin/ccrc-api`, the
-   client every skill calls (above), separately: only `deploy.sh agent` places
-   it, so a release-lane box needs it put there by hand ("What the install does
-   not place", under Install).
+   client every skill calls (above), separately: no doctor check reads it.
+   `ccrc install` and `ccrc update` place it on every role except `server`, and
+   `deploy.sh agent` places it too.
 3. `~/.cc-sessions/coordinator-paused` does **not** exist, on the **fleet
    host** — a dispatch reads it there and refuses `409 {refused:'paused'}`.
    The `/runs` banner reads the same fleet-host file; checking the server box's
@@ -5809,7 +5820,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-audit --session <id>` · `ws-reap --expect <token> --session <id>` | the read-only reap preview, which mints a token; the human-confirmed removal, every guard re-proved on the box |
 | `ws-reclaim …` | the server's removal of a CHILD workspace a run minted — never run by hand or by a session |
 | `ws-collect --expect <token> --session <id>` | the server's removal of an orphaned, witnessed child TEMP ROOT, by quarantine rename — never run by hand or by a session; its audit is `ws-audit --session <id> --collect`, and the server's collector lane composes it only once the operator has armed it: in Settings (Temp root collector) for the connected fleet node, or by `$REG/collect-lane-live` until that file's retirement is recorded |
-| `ws-rm [--reason <text>] <id>` · `ws-gc [--prune]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it) |
+| `ws-rm [--reason <text>] <id>` · `ws-gc [--prune | --fast]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it; `--fast` lists the same rows without measuring sizes, archived rows showing their archive manifest's size, and never combines with `--prune`) |
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
 | `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
 | `pr-open --session <id> …` · `pr-state --session <id>\|--project <p>` | open the workspace's PR — the one PR write; read PR state |

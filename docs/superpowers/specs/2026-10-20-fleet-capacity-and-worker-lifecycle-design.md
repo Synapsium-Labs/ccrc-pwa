@@ -1,6 +1,6 @@
 # Fleet capacity and the worker lifecycle (design)
 
-**Status:** rev 1 (2026-10-20), a draft for the operator's review, revised after three reviews (fidelity, correctness, architecture; the Review log at the end). It defines no D-numbers; the plan that follows it allocates them. Every operator choice it needs is in §6, each with a recommended option.
+**Status:** rev 1.1 (2026-10-20). Rev 1 was revised after three reviews (fidelity, correctness, architecture; the Review log at the end). **The operator ruled every decision in §6 on 2026-10-20, accepting each recommended option** (§6.1, the decision log). It defines no D-numbers; the W1 plan (`docs/superpowers/plans/2026-10-20-fleet-capacity-w1.md`) defines D-6091 to D-6097.
 
 **The request (operator, 2026-10-20, verbatim):**
 
@@ -407,41 +407,61 @@ Task 19 (operator arms hibernation) runs beside all of this; F1 and F6 tune it
 
 ## 6. Operator decisions
 
-Each decision has options with a recommended one and its trade-off. None is ruled yet.
+Each decision has options with a recommended one and its trade-off. **All seven were ruled on 2026-10-20; each took its recommended option** (§6.1). The options are kept as written, so the trade-off each ruling accepted stays on the record.
 
-**F1. N for general hibernation (any idle session).**
+**F1. N for general hibernation (any idle session).** *Decided 2026-10-20: (b), N = 2 h.*
 - (a) 6 h, as built (D-5242). Least change; leaves 26 sessions [M] idle for a working day before sleep.
 - (b) **Recommended.** 2 h. Past the one-hour prompt-cache lifetime D-5242 reasons from, so a wake costs nothing idling would have kept. Under today's holds it frees idle unbound sessions and coordinators with no open run; coordinators with an open run sleep only if F6 is (i). Trade-off: more wakes, each a cold `--resume` (seconds) inside the wake budget.
 - (c) 1 h. Most memory back; a coordinator that checks in hourly would wake every time.
 
-**F2. Rule 3, one PR per child.**
+**F2. Rule 3, one PR per child.** *Decided 2026-10-20: (b), one open PR per child at a time.*
 - (a) Keep rule 3 as written. Reuse (§3.3) then covers only producers that opened no PR, through step 6 as today. Trade-off: almost every wave still mints a workspace (disk, a cold start, the brake).
 - (b) **Recommended.** One *open* PR per child at a time. A child whose PR has merged or closed may take its own programme's next wave in the same project, only after the `ccd` act-time check proves nothing would be lost and on a new branch from `origin/main`, with its context cleared; otherwise it is retired as today. Keeps rule 3's purpose (a child never carries two PRs at once; finished children are cleaned up) and its letter for children not reused. Trade-off: it changes the operator's own rule; retirement of such a child is deferred (a retire claim with a ceiling), so it holds disk longer; and a reused tree carries build caches from the previous wave (cheaper, and occasionally stale).
 - (c) Drop rule 3. A child serves its programme until the programme ends. Most reuse; workspaces live as long as programmes, which is what rule 1 was written against.
 
-**F3. The daily brake.**
+**F3. The daily brake.** *Decided 2026-10-20: (a), it counts only fresh workspaces; default 64, `CAP_MAX` 256.*
 - (a) **Recommended.** Keep it, counting only fresh workspaces; default 64, `CAP_MAX` raised to 256. Keeps a runaway-coordinator brake that memory admission does not provide (a coordinator could spawn and finish workers all day within memory). Trade-off: one more dial to explain.
 - (b) Remove it; memory admission and the accounts' own limits bound the fleet. Simplest; nothing bounds a coordinator that loops on cheap waves.
 - (c) Keep it counting every dispatch, raise `CAP_MAX`. Smallest change; still charges reviews and resumes.
 
-**F4. The admission thresholds.**
+**F4. The admission thresholds.** *Decided 2026-10-20: (a), H = 3 GiB, P = 20%, floor H/2, a shadow week before arming.*
 - (a) **Recommended.** H = 3 GiB (derived from `CLAUDE_HEADROOM_GATE_BYTES`, the roll gate's figure; the marker overrides), P = 20% PSI `some avg10` of the slice, floor H/2. Trade-off: chosen from one day's census, whose PSI source is not recorded; W3-2's shadow week checks them on the slice's own `memory.pressure` before arming.
 - (b) H = 4 GiB, P = 10%. More conservative; more coordinators do their own work.
 - (c) Headroom only, no pressure. Simpler; misses the swap-absorbed stall the census measured.
 
-**F5. When a finished worker sleeps.**
+**F5. When a finished worker sleeps.** *Decided 2026-10-20: (0) confirmed and (b).*
 - (0) **Confirm the restoration.** W1-1 restores D-5370's run-close timing (10 minutes after `done`), overriding the 6 h `recent` hold D-5427 added, which consolidation §7 lists among the rulings it keeps. **Recommended: confirm.**
 - (a) `done` only, as D-5370. Leaves `failed` runs' workers and producers at `awaiting-review` awake (10 measured, the oldest dispatched 114 h earlier [M]).
 - (b) **Recommended.** (a), plus `failed` (a change from D-5370), plus a producer parked at `awaiting-review`, `merging` or `closing` after 30 minutes idle (W1-1b). A send-back or a merge step wakes it through `ensure` or mail. Trade-off: a send-back costs a cold resume instead of landing in a live process.
 - (c) At release: when the workspace loses its last binding (no open run, no hold). Waits for the coordinator to close the work run, which is unbounded today (R11); recommended against.
 
-**F6. One use-hold set for every sleep policy.**
+**F6. One use-hold set for every sleep policy.** *Decided 2026-10-20: (i).*
 - (i) **Recommended.** One use-hold set inside `decideSleep`, shared by `run-done`, `idle-hours` and `pressure`: `run-claimant`, `run-worker` in idle run states (`planned`, `awaiting-review`, …) and programme or terminal-run holds become retire claims; policies differ only in clock and population. Coordinators idle between waves then sleep and wake on mail, and K1's merge gets one hold set. Trade-off: it changes D-5242's hold set; a coordinator's next wave after a long gap starts from a cold resume.
 - (ii) Keep `idle-hours`' holds as built. A coordinator with any open run never sleeps (38 open runs, 18 of them planned, at the census [M]); the `pressure` policy's population is then mostly unbound sessions.
 
-**F7. Admission is not the rejected resident-session cap.**
+**F7. Admission is not the rejected resident-session cap.** *Decided 2026-10-20: (a).*
 - (a) **Recommended.** Confirm that §3.4 is outside the review-runs §3 rejection of `maxResidentSessions`: it counts nothing in the server, never caps a cgroup, refuses only dispatched children, never refuses the operator, a resume or a swap, and sends refused work to a live coordinator. W3-2's shadow week is the evidence before arming. (#456's live-session cap stays unbuilt.)
 - (b) Treat it as the rejected cap; keep the run-row caps with W1's fixes only, and rely on sleep (W1-1, F1, F6) to free memory.
+
+### 6.1 Decision log
+
+**2026-10-20, the operator's ruling.** Asked "accept all seven recommended options (F1..F7)?", the operator answered, verbatim:
+
+> "Accept all recommended (Recommended)"
+
+| Decision | Status | Option chosen | What it binds |
+|---|---|---|---|
+| F1 | decided 2026-10-20 | (b) N = 2 h | general hibernation's N; already set on the fleet box (below) |
+| F2 | decided 2026-10-20 | (b) one open PR per child at a time | W4 (§3.3, §5.4) |
+| F3 | decided 2026-10-20 | (a) the daily brake counts only fresh workspaces; default 64, `CAP_MAX` 256 | W3-5; W1 does not change what the brake counts |
+| F4 | decided 2026-10-20 | (a) H = 3 GiB headroom, P = 20% PSI `some avg10`, floor H/2, a shadow week before arming | W3-2, W3-3 |
+| F5 | decided 2026-10-20 | (0) the D-5370 restoration confirmed, and (b): `failed` runs, and producers parked at `awaiting-review`, `merging` or `closing` after 30 minutes idle | W1-1 (the confirmation), W1-1b (the extension) |
+| F6 | decided 2026-10-20 | (i) one use-hold set inside `decideSleep` | the sleep-decider merge (consolidation K1); W1-1 and W1-1b write the `run-done` split in that shape |
+| F7 | decided 2026-10-20 | (a) admission is not the rejected `maxResidentSessions` cap | W3; #456's live-session cap stays unbuilt |
+
+**Operator acts recorded on 2026-10-20.** Both were done on the fleet box at the operator's request; neither is a code change.
+- **N = 2 h** (F1) was set through `$REG/hibernate-after-hours`.
+- **Hibernation was armed** at 13:49 UTC (working-state plan Task 19), through `$REG/hibernate-live`. From that moment the `idle-hours` policy acts rather than writing shadow lines, under D-5242's holds as built (F6 (i) reaches them only through the sleep-decider merge). §3.1's "It is armed" paragraph now describes the fleet's state, and the arming gate of W1-2 and W1-3 (§5.1, §5.7) is met.
 
 ## 7. Risks and rollback
 
