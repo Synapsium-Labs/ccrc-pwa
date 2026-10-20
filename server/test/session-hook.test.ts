@@ -9706,7 +9706,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // RE-MEASURED on the ws-rm shared-branch guard (#138, D-5880), 55 -> 54,
         // FROM THE SAME RUN as the site-level set below (35 -> 34, its
         // `spec:2125 ccd/ccd:13560-13562` leaving for the same reason). ONE cause:
-        // the guard's 7 net lines in `cmd_ws_rm` (`ccd/ccd:7942`) slid every
+        // the guard's 7 net lines in `cmd_ws_rm` slid every
         // `ccd/ccd` line below it down 7. ONE LEAVES (`ccd/ccd:13560-13562`)
         // and none enter: those lines now hold a comment reading "destroyed",
         // which the row's own quoted `destroy` matches — a coincidence, not a
