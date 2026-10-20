@@ -819,13 +819,14 @@ made them, and W2 touched neither.
 - `drop-device-asked-once`: the witness drop asks the device once, before the slot listing and the leaf's second
   proof. An unmount after that ask lets both read an empty mount point as an absence. The collector's witness-only arm
   has the same window.
-- `audit-normalise-has-no-mount-ask`: the ladder's audit-time normalise asks no mount question. Forwarded to workspace
-  lifecycle.
+- `audit-normalise-has-no-mount-ask`: the ladder's audit-time normalise asks no mount question, including same-device
+  source chmod. Forwarded to workspace lifecycle.
 - `mount-found-after-the-kill-repeats`: a mount found at step 3 or step 4 fails `worktree-remove-failed` after the
   pane kill. It fails again on every retry until the mount is gone. Forwarded to workspace lifecycle.
-- `human-gated-removals-ask-no-mounts`: these removals ask no mount question: ws-reap's bare `rm -rf` of the clips
-  leaf, and the non-forced `git worktree remove` in `cmd_ws_rm`, `_ws_reap_tail` and `_ws_gc_prune_row`. These verbs
-  are human-gated, so they were forwarded to workspace lifecycle with the consent request, not built.
+- `human-gated-removals-ask-no-mounts`: these removals ask no mount question, including ignored-file and
+  ignored-directory crossing: ws-reap's bare `rm -rf` of the clips leaf, and the non-forced `git worktree remove` in
+  `cmd_ws_rm`, `_ws_reap_tail` and `_ws_gc_prune_row`. These verbs are human-gated, so they were forwarded to
+  workspace lifecycle with the consent request, not built.
 - `no-whole-child-mount-ask-before-step-3`: no ask covers the whole child before step 3's loop. Each standing
   checkout is asked on its own.
 - `vanished-checkout-arms-ask-no-mounts`: the arms that remove the record of a checkout that is already gone ask
