@@ -7,7 +7,8 @@
 // keeps its Retry/Discard).
 import { useEffect, useRef, useState } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
-import { AttachButton, AttachTray, Button, Icon, Sheet, Well } from '@ccrc/ui';
+import { AttachButton, AttachTray, Button, Icon, KeyHint, Sheet, Well } from '@ccrc/ui';
+import { PALETTE_KEYS } from '../command/CommandLayer';
 import type { PendingAttachment, PendingSend } from '../stores/session';
 import { ATTACH_ACCEPT, clipboardFiles, isAttachable, useStagedImages } from './useAttachImage';
 import { api } from '../lib/api';
@@ -46,6 +47,21 @@ interface DraftConflict {
   text: string;
   draft: string;
 }
+
+/** Where the key hints show: a desk-width pane with a physical keyboard. */
+const KEY_HINTS_QUERY = '(min-width: 900px) and (pointer: fine)';
+
+/** The hints, in the order a reader reaches for them. Esc is the session screen's interrupt (`useEscapeInterrupt`);
+ *  ⌘K the command palette's. */
+const KEY_HINTS: readonly { keys: readonly string[]; word: string }[] = [
+  { keys: ['⏎'], word: 'send' },
+  { keys: ['⇧', '⏎'], word: 'newline' },
+  { keys: ['Esc'], word: 'stop' },
+  { keys: PALETTE_KEYS, word: 'commands' },
+];
+
+/** The hints line in words, for a screen reader. */
+const KEY_HINTS_SPOKEN = 'Keys: Enter sends, Shift Enter adds a newline, Escape stops the turn, Command K opens commands.';
 
 export function Composer({
   onSend,
@@ -159,6 +175,9 @@ export function Composer({
   // built for. Shift+Enter is a newline in BOTH modes — near-universal, present
   // on on-screen keyboards, and free to honour where Enter already means newline.
   const finePointer = useMediaQuery('(pointer: fine)');
+  // W2 Task S7c (D-5471; spec §6): one quiet line of keys under the composer, where a keyboard exists and the pane
+  // is wide enough for it. Refined shows key hints here only.
+  const keyHints = useMediaQuery(KEY_HINTS_QUERY);
 
   // Opening a session should put the cursor here, not leave the user to
   // click again — the exact friction reported: tapping a fleet row (or
@@ -333,6 +352,22 @@ export function Composer({
           </>
         )}
       </div>
+
+      {keyHints && (
+        <>
+          {/* The glyphs read badly aloud (⏎ as "return symbol"), so the line is for the eye and one plain sentence
+              says the same to a screen reader. */}
+          <p className="composer-hints" aria-hidden="true">
+            {KEY_HINTS.map(({ keys, word }) => (
+              <span key={word} className="composer-hint">
+                <KeyHint keys={keys} />
+                {word}
+              </span>
+            ))}
+          </p>
+          <p className="sr-only">{KEY_HINTS_SPOKEN}</p>
+        </>
+      )}
 
       <Sheet
         open={conflict !== null}
