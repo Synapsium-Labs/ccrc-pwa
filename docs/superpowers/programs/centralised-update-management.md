@@ -2447,6 +2447,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         `c44bea401`) is an ancestor, so the promotion is a fast-forward, and no before-stable item is open. Dispatched:
         full run 39506481859 on `main` at `47f95987c`. On a green `full-suite` I fast-forward `stable` to it; a red
         that is a recorded or timing flake gets one job re-run, and any other red is reported first.
+      - 22:55: run 39506481859 has no red job yet; test-macos 2/4 to 4/4 are still running. STATUS: fleet and server
+        v0.0.493, newest v0.0.504, stable v0.0.328, intent dev/auto=off, backups fleet 185M/server 8951M, disk free
+        fleet 188G/work volume 59G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
