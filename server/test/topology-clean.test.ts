@@ -238,8 +238,8 @@ function dstPath(raw: string): string | null {
  *  intermediate commits still carry an old name would be red for blobs its tip
  *  no longer has, and could never clear by editing — the sweep's own branch
  *  first. So an open branch answers for what its tip adds, and clears by
- *  editing its tip. Commit messages and branch names are not read here; the
- *  pre-push check covers them.
+ *  editing its tip. Commit messages and branch names are not read here: the
+ *  plan's pre-push grep covers them, and the hook will after this PR merges.
  *
  *  Diff configuration is pinned on the command line (no colour, no external
  *  diff or textconv, `a/`/`b/` prefixes, unquoted paths, no renames), so a
@@ -533,8 +533,8 @@ const FORBIDDEN: ForbiddenClass[] = [
     // of base64 literals (the fleet account labels and the operator residue),
     // whose literals decoded to the names themselves. A name that was never
     // published is not here at all — it lives in the operator's local list,
-    // read by the local scan and the pre-push hook. Its exemptions are argued
-    // once, in private-names.mjs, because the local scan applies them too.
+    // read by the local scan, and by the pre-push hook once this PR merges.
+    // Its exemptions are argued once, in private-names.mjs: the scan applies them too.
     match: (line, file) => hitsIn(line, file, PRIVATE_NAMES),
     matchPair: (prev, line, file) => pairHits(prev, line, file, PRIVATE_NAMES),
     printPath: (file) => maskText(file, PRIVATE_NAMES),

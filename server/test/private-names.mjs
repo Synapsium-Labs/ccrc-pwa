@@ -8,11 +8,12 @@
 // secret — the salt is committed, so anyone can confirm a guess. Only names
 // already public in this repository's history are committed as entries; a name
 // that was never published stays in the operator's local list alone, read by
-// the `scan` below and by the pre-push hook, never by a committed file.
+// the `scan` below, never by a committed file. The pre-push hook does not read
+// it yet: its next version will, after this PR merges.
 //
 // WHAT A TOKEN IS. A line is folded one code point at a time — NFKC (so a
 // fullwidth or ligature form becomes its plain letters), Unicode hyphens to `-`,
-// soft hyphens and zero-width characters dropped — then split at every camelCase
+// default-ignorable and format characters dropped — then split at every camelCase
 // boundary (`aB`, `9B`, and `ABc` before the `B`) and lower-cased; its tokens are
 // the maximal `[a-z0-9]+` pieces. Each token records the JOINER before it: `-`,
 // `.`, `_`, `·` or `case` (a camelCase boundary) join a run; `space` is
@@ -48,9 +49,9 @@
 // per-test timeout here is 20 s.
 //
 // CLI (local, run from anywhere inside the clone):
-//   node server/test/private-names.mjs hash --list <path>   the committed entries literal, `pub` rows only
+//   node server/test/private-names.mjs hash --list <path>   the committed entries literal, `pub` rows only, and its digest
 //   node server/test/private-names.mjs scan --list <path>   every hit of every row, tracked text files and paths
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -103,14 +104,17 @@ const NON_ASCII = /[^\x00-\x7f]/;
  *  U+2013 en dash, U+2212 minus, U+FE63 small hyphen-minus): each joins a name
  *  as `-` would. The em dash stays punctuation. */
 const HYPHENS = /^[‐-–−﹣]$/;
-/** Invisible characters that split a name without showing: soft hyphen,
- *  zero-width space/non-joiner/joiner, word joiner, BOM. Dropped. */
-const INVISIBLE = /^[­​-‍⁠﻿]$/;
+/** Invisible characters that split a name without showing: every code point
+ *  Unicode marks Default_Ignorable_Code_Point (soft hyphen, zero-width
+ *  characters, word joiner, BOM, bidi marks and isolates, CGJ, variation
+ *  selectors, tags) or format (Cf, the Mongolian vowel separator included).
+ *  Dropped (D-5287). */
+const INVISIBLE = /^[\p{Default_Ignorable_Code_Point}\p{Cf}]$/u;
 
 /** The folded line, and for a non-ASCII line the original offset of every
  *  folded character (`map[k]`, with `map[length]` the line's length), so a hit
  *  can be located — and masked — in the text as written. */
-const RETYPED = /[\u00ad\u200b-\u200d\u2060\ufeff\u2010-\u2013\u2212\ufe63]/;
+const RETYPED = /[\p{Default_Ignorable_Code_Point}\p{Cf}\u2010-\u2013\u2212\ufe63]/u;
 function foldMapped(line) {
   if (!NON_ASCII.test(line)) return { s: line, map: null };
   // Most non-ASCII lines (an em dash, an arrow, a middle dot) fold to themselves.
@@ -512,8 +516,9 @@ export function maskText(text, entries) {
 
 /** The committed entries: the canary first, then every entry of every list row
  *  measured `pub` (present in this repository's public history, so its hash
- *  reveals nothing new), sorted. Regenerate with `hash --list <path>` and paste;
- *  never edit a row by hand. A `local` row never appears here.
+ *  reveals nothing new), sorted. Regenerate with `hash --list <path>` and paste,
+ *  with the digest line it prints; never edit a row by hand. A `local` row never
+ *  appears here.
  *  @type {Entry[]} */
 export const PRIVATE_NAMES = [
   { h: '66b0e293ddb1c22e53d2a326842aeea7', f: '23d2560aa6396e4e500363a1d62da163', n: 3, mode: 'part' }, // CANARY
@@ -658,6 +663,12 @@ export const PRIVATE_NAMES = [
   { h: 'ff84f23ffa68705da04b64ce5da6e179', f: 'ff84f23ffa68705da04b64ce5da6e179', n: 1, mode: 'run' },
 ];
 
+/** A digest of `PRIVATE_NAMES`, every entry's four fields in order, printed by
+ *  `hash --list` beside the literal it regenerates. A unit pin compares the two,
+ *  so an entry deleted, reordered or weakened by hand reds the suite, where the
+ *  shape checks alone would pass (D-5288). */
+export const PRIVATE_NAMES_DIGEST = 'ebfc36e51ca156f9c5dde591e2fcf235';
+
 // ─── the local CLI ──────────────────────────────────────────────────────────
 
 /** The operator's local list: `mode \t token \t stand-in \t class \t visibility`,
@@ -678,6 +689,11 @@ function readList(file) {
 /** The order and identity of a committed entry: all four fields. */
 export const entryKey = (en) => `${en.h} ${en.f} ${en.n} ${en.mode}`;
 
+/** The digest `PRIVATE_NAMES_DIGEST` records. @param {Entry[]} entries @returns {string} 32 lower-case hex */
+export function entriesDigest(entries) {
+  return createHash('sha256').update(entries.map(entryKey).join('\n')).digest('hex').slice(0, 32);
+}
+
 function cli(argv) {
   const [verb, ...rest] = argv;
   const at = rest.indexOf('--list');
@@ -687,8 +703,10 @@ function cli(argv) {
     const pub = new Map();
     for (const r of rows) if (r.visibility === 'pub') pub.set(entryKey(r.entry), r.entry);
     const lit = (en) => `  { h: '${en.h}', f: '${en.f}', n: ${en.n}, mode: '${en.mode}' },`;
-    const out = [lit(entryOf(CANARY, 'part')).replace(/,$/, ', // CANARY')];
-    for (const key of [...pub.keys()].sort()) out.push(lit(pub.get(key)));
+    const entries = [entryOf(CANARY, 'part'), ...[...pub.keys()].sort().map((key) => pub.get(key))];
+    const out = entries.map(lit);
+    out[0] = out[0].replace(/,$/, ', // CANARY');
+    out.push(`export const PRIVATE_NAMES_DIGEST = '${entriesDigest(entries)}';`);
     process.stdout.write(`${out.join('\n')}\n`);
     return;
   }

@@ -8,7 +8,10 @@
 // `-`, plus the first token's own hash and the token count — so a pin that
 // passes here passes for the committed entries too.
 import { describe, it, expect } from 'vitest';
-import { EXEMPTIONS, hashEntry, matchLine, tokens, entryOf, entriesOf, hitsIn, maskText, pairHits } from './private-names.mjs';
+import {
+  EXEMPTIONS, PRIVATE_NAMES, PRIVATE_NAMES_DIGEST, entriesDigest, hashEntry, matchLine, tokens, entryOf, entriesOf,
+  hitsIn, maskText, pairHits,
+} from './private-names.mjs';
 
 const e = (text: string, mode: 'part' | 'exact' | 'run' | 'words') => {
   const ts = tokens(text).map((x) => x.t);
@@ -87,6 +90,15 @@ describe('matchLine', () => {
     const rows = entriesOf('zz-alpha', 'part');
     for (const s of ['zz‐alpha', 'zz‑alpha', 'zz–alpha', 'zz−alpha', 'zz​-alpha', 'zz-⁠alpha', 'zz­alpha'])
       expect(matchLine(s, rows), JSON.stringify(s)).not.toEqual([]);
+  });
+
+  it('every default-ignorable or format character splits nothing, wherever it falls (D-5287)', () => {
+    // One case per class the fold once missed (LRM, RLM, LRI, CGJ, MVS) and the
+    // ones it always dropped (ZWSP, SHY, WJ), each inside ONE token: a name
+    // split by any of them must still match whole.
+    const rows = entriesOf('zzomega', 'part');
+    for (const c of ['\u200e', '\u200f', '\u2066', '\u034f', '\u180e', '\u200b', '\u00ad', '\u2060'])
+      expect(matchLine(`x zz${c}omega y`, rows), `U+${c.codePointAt(0)!.toString(16)}`).toEqual([h8(rows[0]!)]);
   });
 
   it('a row spelled in camelCase finds its lower-case spelling, and a lower-case row its camelCase one', () => {
@@ -204,5 +216,34 @@ describe('tokens and hashEntry', () => {
 
   it('entryOf builds the entry hash --list would commit for a row', () => {
     expect(entryOf('ZZ-Alpha', 'part')).toEqual(e('zz-alpha', 'part'));
+  });
+});
+
+describe('the committed entries and the exemptions are pinned (D-5288)', () => {
+  it('PRIVATE_NAMES is exactly what `hash --list` printed beside its digest', () => {
+    expect(entriesDigest(PRIVATE_NAMES), `${PRIVATE_NAMES.length} entries`).toBe(PRIVATE_NAMES_DIGEST);
+  });
+
+  it('the digest moves when one entry is deleted or weakened', () => {
+    expect(entriesDigest(PRIVATE_NAMES.slice(1))).not.toBe(PRIVATE_NAMES_DIGEST);
+    const weakened = PRIVATE_NAMES.map((x, i) => (i === 1 ? { ...x, mode: 'words' as const } : x));
+    expect(entriesDigest(weakened)).not.toBe(PRIVATE_NAMES_DIGEST);
+  });
+
+  it('the plugin-phrase exemption holds only in a history-programme document', () => {
+    const plugin = EXEMPTIONS.find((x) => x.name === 'upstream plugin phrase')!;
+    const hit = { h8: '4dda1e70', start: 18, end: 22, folded: 'lossless-claw, an xxxx plugin', origStart: 18, origEnd: 22 };
+    expect(plugin.applies('docs/superpowers/specs/x-ccrc-history-y.md', hit)).toBe(true);
+    for (const f of ['docs/superpowers/specs/x-design.md', 'server/src/ccrc-history.ts'])
+      expect(plugin.applies(f, hit), f).toBe(false);
+  });
+
+  it('the revision-citation exemption needs seven or more hex digits after the @', () => {
+    const rev = EXEMPTIONS.find((x) => x.name === 'upstream revision citation')!;
+    const at = (tail: string) => ({ h8: '4dda1e70', start: 0, end: 4, folded: `xxxx${tail}`, origStart: 0, origEnd: 4 });
+    const doc = 'docs/superpowers/specs/x-ccrc-history-y.md';
+    expect(rev.applies(doc, at('@abcdef0'))).toBe(true);
+    for (const tail of ['@abcdef', '@abcdefg', '@abc', '@'])
+      expect(rev.applies(doc, at(tail)), tail).toBe(false);
   });
 });
