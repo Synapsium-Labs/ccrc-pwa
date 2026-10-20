@@ -556,7 +556,7 @@ export const CHILD_RECLAIM_SKIP = {
   // common phrase. It names the reviewed run by its relation, the way every table sentence speaks (D-6024).
   'review-report-stale': { class: 'kept', sentence:
     'This review’s workspace holds a report the coordinator may still cite: the run it reviewed is still open, though this review’s own run closed more than seven days ago. '
-    + 'ccrc never reclaims it while the run it reviewed stays open; closing or abandoning that run releases this workspace, and the sweep reclaims it then.' },
+    + 'ccrc never reclaims it while the run it reviewed stays open; closing or abandoning that run releases this workspace, and the sweep can reclaim it then.' },
   // The one kept sentence that does not end with the common phrase: that phrase would tell a person
   // to remove a main checkout, so this one tells them to remove the marker, never the checkout.
   'not-a-workspace': { class: 'kept', sentence:
