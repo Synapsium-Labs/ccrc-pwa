@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1e86f5f397eb0932c5470e95310d01ff1ff4457e7a28ef41856217fccaeeac69
+# ccrc:generated 1 sha256=b1446ab2516508fb4e6bbf783fe5c48e5144341f64d8141e2c613e2c3eef21da
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -8575,10 +8575,7 @@ EOF
   # three numbers this comment carried before — 153, 175, 180 — had all
   # rotted, and nothing reds when they do.)
   echo stop-surface
-  # `hibernate-hold-ok` says THIS copy of `cmd_hibernate` takes `--hold-ok <text>` (D-6091): a programme hold the
-  # server names verbatim no longer refuses `held`. The server passes the flag only when it reads this token
-  # (`capSupported`, false on no evidence), so a box without it keeps today's `held`. Same channel, same obligation.
-  echo hibernate-hold-ok
+  echo hibernate-hold-ok   # D-6091: `cmd_hibernate --hold-ok <text>`; the server passes it only on this token (`capSupported`)
   # `lifecycle-v1` says THIS copy of ccd writes `$REG/.lifecycle/`. It gates a
   # SERVER DECISION — sweep at all — not a file: absent means the mirror never
   # sweeps and every surface says "this box's ccd does not write the lifecycle
