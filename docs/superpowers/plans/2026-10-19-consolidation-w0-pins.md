@@ -339,6 +339,47 @@ A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** na
 
 **Exit (GATES):** every non-test `server/src` and `pwa/src` file has exactly one ring and one context under the written rules (counts in the PR body); CLAUDE.md's restatement matches the spec word for word; the doc suites are green; zero production bytes. **Not in this task:** the committed scanner (ARCH-04), draining outward edges (ARCH-05), and `markDelivered`'s result (ARCH-15).
 
+### Task C0k: ccd harness integrity — dead stubs fixed, stubs that fail when their seam is gone, one verb set, every python heredoc parsed, one install path set (D-6051; ARCH-23 (#527)) — lands now
+
+A later W0 slice (spec §5.2; the §4.1 mapping table: "K2 needs honest stubs"), planned here so it has a section. **Routing:** native (band 2: test-only, but the scanner's allow-list and the never-sent list are judgment). **Lane:** server tests only. The one non-new edit outside a test's own assertions is the fix of two dead stubs, which are test text. **Needs:** nothing; no operator ruling. **Gates:** none (ARCH-23 depends on nothing); ARCH-00 (#915) is on `main`, and the scanner reads string text through `server/test/scan/parse.ts`. **Not touched:** `ccd/ccd`, `ccd/ccrc` and `deploy/deploy.sh` (no byte, so no restamp, and no overlap with #435, #722 or #740).
+
+**Files:**
+- Modify `server/test/ccd-crosspool.test.ts`: the two compaction cases' `_dispatch_compact` stub goes; their `tmux` stub records `send-keys`, and the cases assert no `/compact` keystroke, which is what `_auto_compact_check` sends.
+- Modify `server/test/ccd-actor-flags.test.ts` and `server/test/ccd-session-verbs-dash-id.test.ts`: `ARCHIVE_STUBS` loses `_ws_idle_ok`, and its three ccd stubs go through `stubFn`.
+- Create `server/test/ccdStub.ts`: `stubFn(name, body)` emits `declare -F name >/dev/null || exit 97` (with a sentence on stderr) before the override.
+- Modify `server/test/scan/parse.ts`: `stringPieces(text)`, every string literal and template piece with its line.
+- Modify `server/test/docsHelperPy.ts`: `pythonHeredocs(text)`, whose opener (a `<<TAG` whose tag ends in `PY`, not on a comment line) defines the count.
+- Create `server/test/ccd-harness-integrity.test.ts`: `stubFn`'s rows; the scanner (every `_x() {` in a test's string text names a function a shipped shell script defines or the roster generator emits, or a test-local helper allow-listed by file, exact both ways); every python heredoc in a shipped shell script passes `ast.parse` and `compile` under the host's python3, and the count is pinned.
+- Create `server/test/ccd-verb-sets.test.ts`: the dispatcher's `case … esac` evaluated once per word in a fixture HOME with every `cmd_*` recording; `cmd_caps` called; ccd run with no argv for its usage line; `CCD_ARGV` called with its samples. Arms == caps verbs == usage (first label per arm) == the verbs `CCD_ARGV` sends plus a pinned never-sent set (D-6052).
+- Create `server/test/ccdArgvSamples.ts` and `server/test/ccdCapTokens.ts`: `whitelist-subset.test.ts`'s samples and `ccd-archive.test.ts`'s capability tokens, moved unchanged so the new suite reads the same lists.
+- Modify `server/test/install-census.test.ts`: a tail describe holds every destination either installer places outside `.local/bin` and the unit directory equal, as home-relative paths, and requires every `_inst_atomic` call in `ccd/ccrc` to sit in a function it reads or names.
+
+- [ ] **Step 0: Re-ground.** The dead stubs are absent from `ccd/`, `shared/` and `server/src`. List every `_x() {` in a test's string text and resolve it against the shipped shell scripts and `shared/generate.mjs`; every name that resolves nowhere is a dead stub or a test-local helper (measured: 1,248 overrides, 2 dead names at 4 sites, 63 helper names). Count the python heredocs (13). Run `gh pr list --state open` and keep every edit line-disjoint from each open PR's hunks.
+- [ ] **Step 1: Red.** The scanner, run on `origin/main`'s tests, lists exactly the four dead-stub sites. With `_auto_compact_check`'s `status-unreadable` return deleted, `origin/main`'s `not.toContain('compact')` stays green and only the later field assertion reds.
+- [ ] **Step 2: Green.** Fix the stubs, add the harness and the suites.
+- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | `_nope() { :; }` planted in `ccd-actor-flags.test.ts`'s `ARCHIVE_STUBS` | the scanner | red, naming the file, line and `_nope` |
+  | the `status-unreadable` return deleted in `_auto_compact_check` | `ccd-crosspool` | red at "compacts nothing", on a `/compact` send-keys |
+  | `stubFn`'s `declare -F` guard removed | `ccd-harness-integrity` | red: exit 0, not 97 |
+  | a `ws-frob` arm added to the dispatcher, with no caps entry | `ccd-verb-sets` | red: caps, usage and never-sent |
+  | `ws-hold` removed from `cmd_caps` | `ccd-verb-sets` | red: caps vs arms |
+  | `ws-hold` removed from the usage line | `ccd-verb-sets` | red: usage vs arms |
+  | the `ws-hold` arm calls `cmd_ws_release` | `ccd-verb-sets` | red: the arm-to-command row |
+  | `ws-hold` added to the never-sent set | `ccd-verb-sets` | red |
+  | a syntax error inside a ccd python heredoc | `ccd-harness-integrity` | red: the parse row names it |
+  | a fourteenth python heredoc added | `ccd-harness-integrity` | red: the pinned count |
+  | a stale `TEST_LOCAL_HELPERS` entry | `ccd-harness-integrity` | red |
+  | deploy.sh stops placing `.tmux.conf` | `install-census` | red: placed by `ccrc install` only |
+  | `_inst_files` places the statusline under another name | `install-census` | red |
+  | an `_inst_atomic` call in an unlisted function | `install-census` | red: the completeness row |
+
+- [ ] **Step 4: Verify.** One at a time with `--maxWorkers=2`: `ccd-harness-integrity`, `ccd-verb-sets`, `install-census`, `ccd-crosspool`, `ccd-actor-flags`, `ccd-session-verbs-dash-id`, `whitelist-subset`, `ccd-archive`, `docs-parity`. Then `tsc -p server` and the doc suites from `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean`, `single-definition` and `docs-grammar`.
+
+**Exit (GATES):** overrides naming no shipped function: 4 → 0, and a planted one is red; the four verb lists are one set, executed; 13 python heredocs parse and compile; the two installers place one path set. No shipped byte changes. **Not in this task:** moving the 1,248 existing overrides onto `stubFn` (they are checked by the scanner instead), and running ccd's `--json` envelopes through `shared/` decoders (spec §8, a later slice).
+
 ### Task C0i: consumer-side ports for the coordination lanes and the turn reads (D-6003; ARCH-03 (#541), first half) — lands now
 
 A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (band 1, literal moves, but every line sits in a file another open PR edits, so the line-disjointness check is the judgment). **Lane:** server types only; zero emitted bytes change. **Needs:** nothing; no operator ruling (the spec is approved at rev 2.1, and ARCH-03 says none is needed). **Gates:** ARCH-05 (#846) and ARCH-02a (Task C0h, #874) merged; both are. **Not yet:** the `Deps` move, which #850 blocks (D-6004). #434 is not ridden.
@@ -421,6 +462,17 @@ Task C0h was issued three numbers, 6000 to 6002.
   - **Departs from** the spec's §5.2 ("ARCH-02a's CLAUDE.md edit rides #434 if that PR is still open") and ARCH-02a's routing line. #434 is still open, but it is superseded and belongs to another session, so riding it would tie this work to a PR nobody is landing. This task's CLAUDE.md hunk is line-disjoint from #434's, #842's and #851's.
 
 Issued and unused (Task C0h): 6002.
+
+### Issued for Task C0k and defined here
+
+Task C0k was issued three numbers, 6051 to 6053.
+
+- **D-6051** — `ccd-harness-integrity` (Task C0k; ARCH-23): a test's stub of a shipped shell function must name one that exists. `stubFn` exits 97 before overriding a function the sourced ccd does not define, and a scanner over every test's string text holds each `_x() {` to a function some shipped shell script defines (or `shared/generate.mjs` emits into the roster), or to a test-local helper allow-listed under its file. ccd's four verb lists are held equal by running each one. Every python heredoc in a shipped shell script (`pythonHeredocs`, whose opener defines the count) parses and compiles, and the count is pinned. `deploy/deploy.sh` and `ccrc install` place one set of paths. The dead `_dispatch_compact` and `_ws_idle_ok` stubs are gone, and the compaction cases assert on the `/compact` keystroke `_auto_compact_check` sends.
+  - **Width:** a name counts as shipped when any shipped shell script defines it, not only the script a test sources: `ccrc` and hook tests override their own scripts' functions, and per-test source tracking would need a shell parser.
+- **D-6052** — `ccd-argv-heads-are-a-pinned-subset` (Task C0k): `CCD_ARGV` sends a strict subset of ccd's verbs by design, so "arms == CCD_ARGV verb heads" is held as "every verb sent is dispatched, and the rest are exactly a pinned never-sent set, each with its reason" (terminal verbs, the agent's own `caps`, the systemd entry point, and the two ungrantable deletes). The usage line names each arm by its first label, so the aliases `list` and `pick` are compared through their arms.
+  - **Departs from ARCH-23 as written**, which states the four lists equal outright.
+
+Issued and unused (Task C0k): 6053.
 
 ### Issued for Task C0i and defined here
 

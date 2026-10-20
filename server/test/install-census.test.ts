@@ -2082,3 +2082,117 @@ describe('the box token\'s files: uninstall removes the two node records and nam
     expect(calls(planted, 'rm').flat().filter((w) => FORBIDDEN.test(w))).toEqual(['$HOME/.cc-secrets/ccrc-mail.token']);
   });
 });
+
+// ── D-6051 (ARCH-23 (#527), plan 2026-10-19-consolidation-w0-pins.md Task C0k): the files outside PATH and the unit
+// directory. The two describes above hold the `.local/bin` names and the unit files equal between the two
+// installers; this one holds EVERY OTHER destination either places, as a home-relative path, so together the
+// three cover every `install_atomic` destination in deploy.sh and every `_inst_atomic` one in the install spine.
+
+/** The spine's functions that place files outside `.local/bin` and the unit directory, and how each is read. */
+const FILE_FNS = ['_inst_files', '_inst_skills', '_inst_graphify_skill', '_inst_graph_noise', '_inst_stamp_shipped'];
+/** The one placement in the spine that is not an `_inst_atomic`: the roster's generated `accounts.sh`, written to a
+ *  `$$` staging name and moved onto its name with `mv -f`. */
+const MV_FNS = ['_inst_accounts_sh'];
+/** Every other function in `ccd/ccrc` that calls `_inst_atomic`, and why it is not an install lane's placement. */
+const OTHER_INST_ATOMIC_FNS: Readonly<Record<string, string>> = {
+  _inst_bins: 'its `.local/bin` names are the bins describe\'s',
+  _inst_units: 'its unit files are the units describe\'s',
+  _inst_units_darwin: 'launchd plists, macOS only; deploy.sh deploys only to the Linux fleet box',
+  _exp_ddns_units: 'the opt-in public endpoint\'s DNS units, placed by its own verb, never by install',
+};
+
+/** `for NAME in a b c; do` loops in a body, as more values of NAME. */
+function loopBindings(body: string, local: Local): Local {
+  const out: Local = new Map([...local].map(([k, v]) => [k, new Set(v)]));
+  for (const m of body.matchAll(/(?:^|[\s;])for[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]+in[ \t]+([^;\n]+);[ \t]*do\b/g)) {
+    const set = out.get(m[1]!) ?? new Set<string>();
+    for (const w of shellWords(m[2]!)) set.add(w);
+    out.set(m[1]!, set);
+  }
+  return out;
+}
+
+/** A file-scope `NAME="value"` of ccd/ccrc, exactly once, for a name a function body uses without binding it. */
+function fileScope(name: string): string | undefined {
+  const all = [...CCRC.matchAll(new RegExp(`^${name}="([^"]*)"$`, 'gm'))];
+  return all.length === 1 ? all[0]![1]! : undefined;
+}
+
+/** A placement word as a home-relative path; throws when it does not resolve to one. */
+function homeRelative(fn: string, word: string, local: Local): string[] {
+  const withGlobals: Local = new Map(local);
+  for (const m of word.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) {
+    const v = m[1] === 'HOME' || withGlobals.has(m[1]!) ? undefined : fileScope(m[1]!);
+    if (v !== undefined) withGlobals.set(m[1]!, new Set([v]));
+  }
+  return [...resolveWord(word, withGlobals)].map((raw) => {
+    const p = path.posix.normalize(raw);
+    const rel = p.startsWith('$HOME/') ? p.slice('$HOME/'.length) : p.startsWith('~/') ? p.slice(2) : null;
+    if (rel === null || rel.includes('$')) {
+      throw new Error(`install-census.test.ts: the placement "${word}" in ${fn} resolves to "${p}", not a path under $HOME`);
+    }
+    return rel;
+  });
+}
+
+/** What the install spine places outside `.local/bin` and the unit directory, home-relative. */
+function spineFilePaths(): Set<string> {
+  const out = new Set<string>();
+  for (const fn of FILE_FNS) {
+    const body = fnBody(fn);
+    const local = loopBindings(body, assignments(body));
+    for (const w of argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 1)) {
+      for (const p of homeRelative(fn, w, local)) out.add(p);
+    }
+  }
+  for (const fn of MV_FNS) {
+    const body = fnBody(fn);
+    const moves = calls(body, 'mv').map(operands);
+    if (moves.length !== 1 || moves[0]!.length !== 2) {
+      throw new Error(`install-census.test.ts: ${fn} must place with one two-operand \`mv -f\`; it has ${JSON.stringify(moves)}`);
+    }
+    for (const p of homeRelative(fn, moves[0]![1]!, assignments(body))) out.add(p);
+  }
+  return out;
+}
+
+/** What deploy.sh's `install_atomic` places outside `.local/bin`, home-relative. */
+function deployFilePaths(): Set<string> {
+  const all = calls(deployCode(), 'install_atomic');
+  everyMentionRead('install_atomic', (g) => calls(g, 'install_atomic').length, 'call(s) of it');
+  const out = new Set<string>();
+  for (const d of argAt(DEPLOY_WHERE, 'install_atomic', all, 1)) {
+    const p = path.posix.normalize(d.replace(/^(?:~|\$HOME)\//, ''));
+    if (p.includes('$') || p.startsWith('/')) {
+      throw new Error(`install-census.test.ts: deploy.sh's install_atomic destination "${d}" is not a literal home-relative path`);
+    }
+    if (DEPLOY_BIN_DIRS.some((b) => p.startsWith(`${b.replace(/^~\//, '')}/`))) continue;
+    out.add(p);
+  }
+  return out;
+}
+
+describe('deploy/deploy.sh and `ccrc install` place the same files outside PATH and the unit directory (D-6051)', () => {
+  it('every `_inst_atomic` call in ccd/ccrc sits in a function this file reads or names', () => {
+    const whole = CCRC.split('\n').map((l) => scanLine(l).code).join('\n');
+    const total = calls(whole, '_inst_atomic').length;
+    const read = [...FILE_FNS, ...Object.keys(OTHER_INST_ATOMIC_FNS)]
+      .reduce((n, fn) => n + calls(fnBody(fn), '_inst_atomic').length, 0);
+    expect(read, 'an `_inst_atomic` call outside every listed function: list its function in FILE_FNS or '
+      + 'OTHER_INST_ATOMIC_FNS').toBe(total);
+  });
+
+  it('the two installers place one set of paths', () => {
+    const spine = spineFilePaths();
+    const deploy = deployFilePaths();
+    expect(spine.size, 'the spine reader found too few files: it has gone stale').toBeGreaterThan(10);
+    expect(deploy.size, 'the deploy.sh reader found too few files: it has gone stale').toBeGreaterThan(10);
+    expect([...spine].filter((p) => !deploy.has(p)).sort(), '`ccrc install` places these and deploy.sh does not')
+      .toEqual([]);
+    expect([...deploy].filter((p) => !spine.has(p)).sort(), 'deploy.sh places these and `ccrc install` does not')
+      .toEqual([]);
+    expect(spine, 'the loop-bound skill installers are read').toContain('.cc-sessions/install-worker-skill.sh');
+    expect(spine, 'the file-scope stamp path is read').toContain('.ccrc/build.json');
+    expect(spine, 'the generated roster is read').toContain('.ccrc/accounts.sh');
+  });
+});

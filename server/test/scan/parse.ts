@@ -12,7 +12,8 @@
  * Syntax only, no type checker: import-edge and symbol rules do not need one.
  * KNOWN WIDTH: a file that does not parse yields what the parser recovered (no throw); a computed member name, an
  * object-literal method and a function bound through `as`, a call or parentheses are not symbols; an alias exported
- * by a later `export { X }` is not an exported type alias; `require(…)` calls are not import edges.
+ * by a later `export { X }` is not an exported type alias; `require(…)` calls are not import edges. String
+ * pieces (`stringPieces`) are cooked text, and a template nested inside a `${…}` yields pieces of its own.
  */
 import { readFileSync } from 'node:fs';
 import ts from 'typescript-api';
@@ -188,4 +189,31 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
 /** Read and parse one file. */
 export function parseFile(file: string): ParsedFile {
   return parseSource(readFileSync(file, 'utf8'), file);
+}
+
+/** One piece of string text in the source: a string literal, a no-substitution template, or one literal part of a
+ *  template (its head or the text after a `${…}`). Pieces split at every `${…}`, so a word built across one is not
+ *  in any piece. `text` is the cooked value; `line` is 1-based, where the piece starts. */
+export interface StringPiece {
+  text: string;
+  line: number;
+}
+
+/** Every string piece in a source text, in source order (D-6051: the ccd stub scanner reads the bash a test holds). */
+export function stringPieces(text: string, fileName = 'source.ts'): StringPiece[] {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
+  const out: StringPiece[] = [];
+  const add = (t: string, node: ts.Node): void => {
+    out.push({ text: t, line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1 });
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) add(node.text, node);
+    else if (ts.isTemplateExpression(node)) {
+      add(node.head.text, node.head);
+      for (const s of node.templateSpans) add(s.literal.text, s.literal);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
 }

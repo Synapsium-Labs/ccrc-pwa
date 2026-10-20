@@ -19,6 +19,7 @@ import path from 'node:path';
 import { WS_ADD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { decOf, eventsOf, readJournal, refusalsOf } from './lifecycleHelpers.js';
 import { DECOY_IDS, plantRow, reapLocks, regListing, type DashId } from './dashIdFixture.js';
+import { stubFn } from './ccdStub.js';
 
 let h: CcdHarness;
 
@@ -40,8 +41,10 @@ const docOf = (stdout: string): unknown => {
 // would reach if a mutant let it past the id check is stubbed, and tmux is stubbed for the journal's `_lc_obs`.
 const REL_STUBS = 'tmux() { return 1; };';
 const HOLD_STUBS = 'tmux() { return 1; };';
-const ARCHIVE_STUBS = `tmux() { return 1; }; _ws_unsupervise() { :; };
-  _ws_idle_ok() { return 0; }; _ws_status() { echo idle; }; _ws_archive_manifest() { echo '{}'; };`;
+// Through `stubFn` (D-6051): each override exits 97 if ccd no longer defines the function it replaces. The
+// `_ws_idle_ok` stub that stood here named a function ccd never had, so it stubbed nothing.
+const ARCHIVE_STUBS = `tmux() { return 1; }; ${stubFn('_ws_unsupervise', ':')}
+  ${stubFn('_ws_status', 'echo idle')} ${stubFn('_ws_archive_manifest', "echo '{}'")}`;
 const RESTORE_STUBS = `tmux() { return 1; }; flock() { return 0; };
   _ws_supervise() { :; }; _spawn() { :; };`;
 const RENAME_STUBS = `tmux() { return 1; }; _ws_branch_valid() { return 0; };
