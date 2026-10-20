@@ -8187,9 +8187,13 @@ describe('W1-B4: segment names, their order and the next number (spec 9.15 "Writ
       expect(libSeg.replayWriterLayout(['3.0000000a.db', '4.0000000a.db'], [], libSeg.widestReplayRanges(['3.0000000a.db', '4.0000000a.db'])).forked, 'one writer alone is no fork').toBe(false);
       expect(libSeg.widestReplayRanges([]).size).toBe(0);
     });
-    it('planReplayLayout: the first export-blobs chunk measures; a later chunk widens a key of its own version; a key that is missing, malformed or of another version takes the widest', () => {
+    it('planReplayLayout: the first export-blobs chunk measures, unless the key already carries its version (a re-entry widens); a later chunk widens a key of its own version; a key that is missing, malformed or of another version takes the widest', () => {
       const kept = libSeg.formatReplayLayout({ version: 42, ranges: rs({ '0000000a': [2, 5] }) });
-      expect(libSeg.planReplayLayout({ text: kept, version: 42, measuring: true }), 'at the measuring point the key is overwritten, whatever it holds').toEqual({ word: 'measure' });
+      expect(libSeg.planReplayLayout({ text: libSeg.formatReplayLayout({ version: 41, ranges: rs({ '0000000a': [2, 5] }) }), version: 42, measuring: true }), 'at the measuring point a key of another replay is overwritten').toEqual({ word: 'measure' });
+      expect(libSeg.planReplayLayout({ text: 'torn{', version: 42, measuring: true }), 'and so is one that is not a layout').toEqual({ word: 'measure' });
+      const reentry = libSeg.planReplayLayout({ text: kept, version: 42, measuring: true });
+      expect(reentry.word, 'a key of this replay\'s version at a measuring chunk is a re-entry: it widens, and is never re-measured (a re-measure would read the marks after this replay\'s take-offs)').toBe('widen');
+      expect(reentry.word === 'widen' ? plain(reentry.ranges) : null).toEqual({ '0000000a': [2, 5] });
       expect(libSeg.planReplayLayout({ text: null, version: 42, measuring: true })).toEqual({ word: 'measure' });
       const widen = libSeg.planReplayLayout({ text: kept, version: 42, measuring: false });
       expect(widen.word).toBe('widen');

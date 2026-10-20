@@ -8316,7 +8316,8 @@ export function parseReplayLayout(text) {
 /** What a replay does about its writer layout at one export chunk (D-5727 (history-export-replay-layout-once)). `measuring` is the
  *  replay's first export-blobs chunk, the one measuring point; `text` is the kept layout's meta value or null; `version` is this
  *  replay's (the recover row's).
- *  - `measure`: at the measuring point the layout is measured from the listing and the store's marks, and kept whatever the key held;
+ *  - `measure`: at the measuring point the layout is measured from the listing and the store's marks, unless the key already carries
+ *    this replay's version (a re-entry at the measuring point: that key is widened, as at any later chunk, and never re-measured);
  *  - `widen`: past it, a key that parses and carries this replay's version is the layout so far (`ranges`), and the chunk's listing
  *    widens it;
  *  - `widest`: past it, a key that is missing, malformed or of another version means this replay passed its measuring point under a
@@ -8324,9 +8325,13 @@ export function parseReplayLayout(text) {
  *    layout is the widest, never a fresh measure, which would be narrower than the truth. Widening a range can only turn a 'mark'
  *    into a 'keep' or a 'take-off', or a 'keep' into a 'take-off' (decideReplayMark), so a layout too wide costs re-exports only. */
 export function planReplayLayout({ text, version, measuring }) {
-  if (measuring) return { word: 'measure' };
   const kept = parseReplayLayout(text);
-  if (kept !== null && kept.version === version) return { word: 'widen', ranges: kept.ranges };
+  const mine = kept !== null && kept.version === version;
+  // A key of this replay's version at a measuring chunk is a RE-ENTRY, not the first measure: the export-blobs cursor can be stored with
+  // no file (a stalled last segment moved aside, the null-name arm of exportPhaseChunk) and a kill or a busy before the stubs move
+  // leaves it there. Re-measuring would read the marks after this replay's take-offs consumed them, narrower than the first measure.
+  if (measuring && !mine) return { word: 'measure' };
+  if (mine) return { word: 'widen', ranges: kept.ranges };
   return { word: 'widest' };
 }
 
