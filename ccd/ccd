@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e2be8810f34fe31f0d4348738c53c970ea4b4cf1953b6b6182567b560a303f01
+# ccrc:generated 1 sha256=7b84a72101f7864a548d7ed8c1f30c148f8061285ceef3569888f4b0d64b53b7
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32867,6 +32867,101 @@ _ws_tmproot_witness_drop() {   # id -> 0 complete (_WS_WDROP dropped or absent);
   _ws_reclaim_absent "$w" || { _WS_WDROP_WHY="its witness was kept: its unlink could not be proven ($w${_WS_ABSENT_WHY:+: $_WS_ABSENT_WHY})"; return 2; }
   _WS_WDROP=dropped; return 0
 }
+# THE COMPARE-AND-DROP ASIDE, SETTLED (path-identity spec §3.6, TR6 A). The
+# collector's compare-and-drop (`_ws_collect_witness_cad`), which the tail's
+# drop reuses, moves a witness aside to `.<id>.drop.<pid>`
+# (`_ws_tmproot_aside_path`) by one NOREPLACE rename, reads it there, then
+# unlinks it or moves it back. A SIGKILL between the rename and the unlink, or
+# a move back that fails, leaves that aside and no witness: no collector could
+# finish the id, and no tail would drop it. This settles every aside of one id
+# under the reap lock THE CALLER HOLDS (`$REG/.reap-<id>.lock`): ws-collect
+# after its pause and before its evaluation, the reclaim and expiry tail before
+# its step (6).
+# - NO WITNESS STANDS: a SOLE aside that reads as the id's witness
+#   (`_ws_tmproot_witness_parse`, the reader's own rules) is RESTORED by `link`,
+#   then a dev:ino proof, then `rm` of the aside; never by a rename. `link` is
+#   portable (the tail runs on Darwin, where `_ws_collect_mv` refuses), and it
+#   refuses a name that exists, so a witness a spawn wrote meanwhile (its
+#   writer takes no lock) is never replaced. Two or more asides, or one that
+#   does not read as the witness, are never chosen between: unmeasured.
+# - THE CRASH STATE IS SAFE: a death between the `link` and the `rm` leaves
+#   one inode under two names, an aside EQUAL to the witness, which the next
+#   settle unlinks.
+# - A WITNESS STANDS (from the start, or a writer's that won the name, or one
+#   that replaced the name after the link, which the dev:ino proof catches):
+#   an aside that IS it (one inode) or reads as it field for field (the
+#   grammar is canonical, so that is byte for byte) is redundant and goes; any
+#   other is LEFT and named, never restored over the witness and never
+#   unlinked, since it may be the generation a collector acted on.
+# It PRINTS NOTHING: it answers by rc and by _WS_ASIDE_DID and _WS_ASIDE_WHY,
+# and each caller says what a person reads. It never sets REAP_*.
+_WS_ASIDE_DID=''; _WS_ASIDE_WHY=''
+_ws_tmproot_aside_settle() {   # id -> 0 with _WS_ASIDE_DID = none | restored | unlinked | left (_WS_ASIDE_WHY names
+  #                                each aside left, and why); 2 unmeasured (_WS_ASIDE_WHY). The CALLER HOLDS the lock
+  local LC_ALL=C id="${1-}" w a rc wdi adi wf eq left=''
+  local _WS_WIT_DEV _WS_WIT_INO _WS_WIT_BTIME _WS_WIT_RUN _WS_WIT_UID _WS_WIT_AT
+  local -a _WS_ASIDES=()
+  _WS_ASIDE_DID=''; _WS_ASIDE_WHY=''
+  _ws_tmproot_id_ok "$id" \
+    || { _WS_ASIDE_WHY="'$id' is not an id a witness is named for, so no aside of it was looked at"; return 2; }
+  _ws_collect_asides_of "$id" >/dev/null \
+    || { _WS_ASIDE_WHY="the compare-and-drop asides of $id could not be listed ($_WS_ASIDES_WHY), so none was settled"; return 2; }
+  (( ${#_WS_ASIDES[@]} )) || { _WS_ASIDE_DID=none; return 0; }
+  w=$(_ws_tmproot_witness_file "$id")
+  _ws_reclaim_absent "$w"; rc=$?
+  (( rc != 2 )) \
+    || { _WS_ASIDE_WHY="whether a witness of $id stands could not be asked ($_WS_ABSENT_WHY), so no aside of it was settled"; return 2; }
+  if (( rc == 0 )); then
+    (( ${#_WS_ASIDES[@]} == 1 )) \
+      || { _WS_ASIDE_WHY="${#_WS_ASIDES[@]} compare-and-drop asides of $id stand and no witness does, so which is its witness is never chosen: ${_WS_ASIDES[*]}"; return 2; }
+    a="${_WS_ASIDES[0]}"
+    _ws_tmproot_witness_parse "$a" "$id" \
+      || { _WS_ASIDE_WHY="the one compare-and-drop aside of $id does not read as its witness, so it is never restored: $a"; return 2; }
+    if link "$a" "$w" 2>/dev/null; then
+      adi=$(_plat_devino "$a" 2>/dev/null) || adi=''
+      wdi=$(_plat_devino "$w" 2>/dev/null) || wdi=''
+      if [[ "$adi" =~ ^[0-9]+:[0-9]+$ && "$adi" == "$wdi" ]]; then
+        rm -f -- "$a" 2>/dev/null || :
+        _ws_reclaim_absent "$a" \
+          || { _WS_ASIDE_WHY="the compare-and-drop aside of $id was restored as its witness, but it could not be unlinked after, so one witness stands under two names until the next settle: $a"; return 2; }
+        _WS_ASIDE_DID=restored; return 0
+      fi
+    fi
+    # THE RESTORE DID NOT TAKE: `link` refused a name a writer took first, or
+    # the name was replaced after the link. What stands there now is asked
+    # once more, and the witness-stands arm below runs ONCE.
+    _ws_reclaim_absent "$w"; rc=$?
+    (( rc == 1 )) \
+      || { _WS_ASIDE_WHY="the compare-and-drop aside of $id was not restored, and no witness is proven to stand at $w after${_WS_ABSENT_WHY:+ ($_WS_ABSENT_WHY)}: $a"; return 2; }
+  fi
+  wdi=$(_plat_devino "$w" 2>/dev/null) || wdi=''
+  [[ "$wdi" =~ ^[0-9]+:[0-9]+$ ]] || wdi=''
+  wf=''
+  if _ws_tmproot_witness_parse "$w" "$id"; then
+    wf="$_WS_WIT_RUN $_WS_WIT_DEV $_WS_WIT_INO $_WS_WIT_BTIME $_WS_WIT_UID $_WS_WIT_AT"
+  fi
+  for a in "${_WS_ASIDES[@]}"; do
+    adi=$(_plat_devino "$a" 2>/dev/null) || adi=''
+    eq=0
+    if [[ -n "$wdi" && "$adi" == "$wdi" ]]; then
+      eq=1
+    elif [[ -n "$wf" ]] && _ws_tmproot_witness_parse "$a" "$id" \
+         && [[ "$_WS_WIT_RUN $_WS_WIT_DEV $_WS_WIT_INO $_WS_WIT_BTIME $_WS_WIT_UID $_WS_WIT_AT" == "$wf" ]]; then
+      eq=1
+    fi
+    if (( eq )); then
+      rm -f -- "$a" 2>/dev/null || :
+      _ws_reclaim_absent "$a" && continue
+      left+="${left:+; }$a (the witness itself, but it could not be unlinked)"
+    else
+      left+="${left:+; }$a (not the witness that stands at $w)"
+    fi
+  done
+  [[ -n "$left" ]] || { _WS_ASIDE_DID=unlinked; return 0; }
+  _WS_ASIDE_DID=left
+  _WS_ASIDE_WHY="a compare-and-drop aside of $id was left beside its witness, never restored over it: $left"
+  return 0
+}
 _ws_leaf_why_line() {   # text -> ONE short line a journal row can carry: printable ASCII only (every
   #                          other byte reads "?", ccd's own "—" reads "-"), cut at 300 bytes, the cut marked "…"
   # `_WS_LEAF_WHY` can carry a name the session chose (the permission pass's
@@ -33461,6 +33556,21 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     fi
     _reg_set "$id" reaping "$_WS_RCL_ACT:artifacts"
     phase=artifacts
+  fi
+  # THE COMPARE-AND-DROP ASIDES, SETTLED BEFORE STEP (6) (path-identity spec
+  # §3.6): a collector that died inside its compare-and-drop, or whose move
+  # back failed, left the witness at `.<id>.drop.<pid>`, where the drop below
+  # never looks. `_ws_tmproot_aside_settle` restores a sole aside that reads as
+  # the witness, so step (6) drops it with its leaf; unlinks one that is the
+  # witness; and leaves any other. Under this verb's reap lock, and on every
+  # resume (each one reaches this line). An aside keeps no leaf, so a settle
+  # that is unmeasured, or that leaves an aside, only WARNS: it never sets
+  # `tmpRootKept`, and the collector's audit lists the aside as `aside`
+  # (`tail-aside-warns-without-keeping`).
+  if ! _ws_tmproot_aside_settle "$id"; then
+    echo "ccd: warn: $id's compare-and-drop asides were not settled: $_WS_ASIDE_WHY — the collector's audit lists them" >&2
+  elif [[ "$_WS_ASIDE_DID" == left ]]; then
+    echo "ccd: warn: $_WS_ASIDE_WHY" >&2
   fi
   # (6) The artifacts (rule 2), each through `_ws_leaf_remove`, the ONE
   # removal helper (spec §5.6): the clips directory, then the per-session
@@ -36449,13 +36559,19 @@ _ws_collect_putback() {   # id slot rec orig lctx why surface actor reason -> 0 
 _WS_CAD=''; _WS_CAD_WHY=''
 _ws_collect_witness_cad() {   # id dev ino btime run at -> 0 with _WS_CAD = dropped (it was the collected one), kept
   #                                (it is not, and is back) or absent; 2 unmeasured (_WS_CAD_WHY)
-  # COMPARE-AND-DROP (spec §5.10), never `_ws_tmproot_witness_drop`, the
-  # tail's plain unlink (spec §5.6). The witness writer replaces the file with
-  # an unlocked temp-file-then-`mv -f`, so a read-then-`rm -f` of the live name
-  # can delete a recycled spawn's FRESH witness. So the live name is moved
-  # aside by one NOREPLACE rename to a dot-leading name no reader takes for an
-  # id, the moved copy is read, and it is unlinked only when it is, field for
+  # COMPARE-AND-DROP (spec §5.10): the collector's, and since path-identity W2
+  # the reclaim and expiry tail's too where a NOREPLACE move exists
+  # (`_ws_tmproot_witness_drop` calls it with its warning silenced). The
+  # witness writer replaces the file with an unlocked temp-file-then-`mv -f`,
+  # so a read-then-`rm -f` of the live name can delete a recycled spawn's
+  # FRESH witness. So the live name is moved aside by one NOREPLACE rename to
+  # its compare-and-drop aside, `.<id>.drop.<pid>` (`_ws_tmproot_aside_path`),
+  # the moved copy is read, and it is unlinked only when it is, field for
   # field, the witness this collection acted on. Anything else is moved back.
+  # An aside that a crash, or a move back that fails, leaves behind is never
+  # invisible: the collector's population admits its id, and
+  # `_ws_tmproot_aside_settle` settles it under the next reap lock
+  # (path-identity spec §3.6).
   local id="$1" dev="$2" ino="$3" bt="$4" run="$5" at="$6" w aside line='' mid pre suf rc me="$BASHPID"
   _WS_CAD=''; _WS_CAD_WHY=''
   w=$(_ws_tmproot_witness_file "$id")
@@ -36480,8 +36596,13 @@ _ws_collect_witness_cad() {   # id dev ino btime run at -> 0 with _WS_CAD = drop
     _WS_CAD=dropped; return 0
   fi
   _ws_collect_mv "$aside" "$w" 2>/dev/null || :
-  _ws_reclaim_absent "$aside" \
-    || echo "ccd: warn: $id's witness $w is not the one this collection acted on, and a newer one stands — the older is left at $aside, inert (no reader takes a dot-leading name for an id)" >&2
+  if ! _ws_reclaim_absent "$aside"; then
+    if [[ -e "$w" || -L "$w" ]]; then
+      echo "ccd: warn: $id's witness $w is not the one this collection acted on, and a newer one stands — the older is left at $aside, and the next settle under the reap lock leaves it beside the newer witness, warned" >&2
+    else
+      echo "ccd: warn: $id's witness $w is not the one this collection acted on, and it could not be moved back to $w — it is left at $aside, and the next settle under the reap lock restores it" >&2
+    fi
+  fi
   _WS_CAD=kept; return 0
 }
 
@@ -37014,7 +37135,7 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
 }
 
 _ws_collect_locked() {   # token id surface actor reason — everything the reap lock serialises, for a collection
-  local token="$1" id="$2" surface="$3" actor="$4" reason="$5" q rroot orig lctx rec
+  local token="$1" id="$2" surface="$3" actor="$4" reason="$5" q rroot orig lctx rec arc=0
   _ws_collect_gap locked "$id"
   # THE PAUSE, inside the lock and before the evaluation: a fresh collection,
   # a resume and a witness-only drop alike stop on it. `_ws_collect_paused` is
@@ -37023,6 +37144,14 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
     _ws_collect_refused "$id" "" paused "nothing was moved or removed: ${REAP_DETAIL-}" "$surface" "$actor" "$reason"
     return 0
   fi
+  # THE COMPARE-AND-DROP ASIDES, SETTLED HERE (path-identity spec §3.6):
+  # after the pause, so nothing moves while it stands, and before the
+  # evaluation, so the fork reads a restored witness under its own name and
+  # the token the audit minted from the aside matches (the token binds the
+  # witness's fields, never its file name). An aside left beside a witness is
+  # warned here; the settle's doubt is weighed after the fork, below.
+  _ws_tmproot_aside_settle "$id" || arc=$?
+  [[ "$arc" != 0 || "${_WS_ASIDE_DID-}" != left ]] || echo "ccd: warn: $_WS_ASIDE_WHY" >&2
   # 1 — THE CONSENT IS THE TOKEN, recomputed HERE by the one evaluation
   # `ws-audit --collect` runs (`_ws_collect_fork`): where a record stands, the
   # record, its slot's leaf and the phase read off the disk; else the registry
@@ -37034,6 +37163,17 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
   # before anything moves.
   _ws_collect_fork "$id"
   [[ -n "${REAP_VERDICT-}" ]] || { REAP_VERDICT=unmeasured; REAP_DETAIL="the collection evaluation answered no verdict for $id"; }
+  # THE SETTLE'S DOUBT BLOCKS ONLY AN ACT (path-identity spec §3.6): where the
+  # evaluation would act, it is this verb's unmeasured answer, printed by the
+  # one statement below; where the evaluation refused, its refusal keeps its
+  # place and the doubt is warned.
+  if (( arc == 2 )); then
+    if [[ "${REAP_VERDICT-}" == collectable ]]; then
+      REAP_VERDICT=unmeasured; REAP_DETAIL="nothing was moved or removed: $_WS_ASIDE_WHY"
+    else
+      echo "ccd: warn: $_WS_ASIDE_WHY" >&2
+    fi
+  fi
   if [[ "${REAP_VERDICT-}" == collectable && "$token" != "${REAP_TOKEN-}" ]]; then
     REAP_VERDICT=state-changed
     REAP_DETAIL="nothing was moved: $id changed since the audit that minted the token (expected ${REAP_TOKEN-}, was given $token)"
