@@ -512,6 +512,23 @@ describe("onDraft: 'stash' (D-5911)", () => {
       expect(typed(f.keys)).toEqual([]);
     });
 
+    it('no stash held at the give-back: nothing is pressed, even over a box that reads like a prefix of ours', async () => {
+      // The human popped their own stash (ctrl+s) while our echo never rendered: the box holds their draft, which is a
+      // prefix of what we typed. With no stash held the box cannot be ours over a stash, so it is never cleared.
+      const f = fakeCc({ box: ['hello world'], dropLiterals: true });
+      const tmux = f.tmux;
+      const capture = tmux.captureAnsi.bind(tmux);
+      tmux.captureAnsi = async (id: string) => {
+        if (typed(f.keys).length > 0 && f.state.stash !== null) { f.state.box = f.state.stash; f.state.stash = null; }
+        return capture(id);
+      };
+      const res = await send(f, 'hello world, said the lane');
+      expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
+      expect(f.keys).not.toContain('C-u');
+      expect(pops(f.keys), 'only the stash itself').toBe(1);
+      expect(f.state.box).toEqual(['hello world']);
+    });
+
     it('text in the box this send cannot prove its own is left alone, with a warn line', async () => {
       // Both Enters swallowed, and the human typed over our text meanwhile: not a prefix of ours, never cleared.
       const f = fakeCc({
