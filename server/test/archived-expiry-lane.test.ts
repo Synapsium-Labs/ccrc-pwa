@@ -758,4 +758,14 @@ describe('the ranked held bytes ride the pass (D-5943)', () => {
     expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
     expect(f.watcher.archivedHeld()?.rows.map((r) => r.sessionId), 'the expired row holds nothing').toEqual(['demo-b']);
   });
+
+  it('armed, a row the act finds GONE leaves the block at once — never listed as `not-yet-audited` on its way out', async () => {
+    const f = await fixture({ expire: (id) => ({ code: 1, stdout: JSON.stringify({ refused: 'no-such-session', detail: id }), stderr: '' }) });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    f.plant('demo-b', OLD + 1);
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    expect(f.watcher.archivedHeld()?.rows.map((r) => r.sessionId), 'the gone row holds nothing').toEqual(['demo-b']);
+  });
 });

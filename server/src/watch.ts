@@ -1526,9 +1526,10 @@ export class FleetWatcher {
    *  own memory — never child reclamation's list, so nothing that reads that one sees an expiry. `[]` until the lane's
    *  first pass. */
   private expiryAttentionList: readonly ExpiryAttention[] = [];
-  /** The ranked total of bytes archived workspaces hold (D-5943), as the expiry lane's last COMPLETED pass composed it
-   *  beside the attention list — shadow and armed alike. `null` until that first pass, which the wire renders as an
-   *  ABSENT block (unknown); a pass the cleanup switch or a missing capability stops composes nothing. */
+  /** The ranked total of bytes archived workspaces hold (D-5943), as the expiry lane's last pass composed it beside the
+   *  attention list — shadow and armed alike. `null` until that first pass, which the wire renders as an ABSENT block
+   *  (unknown). A pass the cleanup switch or a missing capability stops still composes it, from that pass's registry
+   *  and the lane's standing memory (D-6027), so it never freezes at the last acting pass. */
   private archivedHeldBlock: ArchivedHeld | null = null;
   /** The expiry lane's clock and memory (wave 3b): its OWN — never the child lane's map, which wave 5's chip reads.
    *  Per archived workspace, `ArchivedExpiryEntry` (L1): the instant ccd gave for THIS archive, the twice-observed
@@ -2126,7 +2127,7 @@ export class FleetWatcher {
   }
 
   /** The ranked total of bytes archived workspaces hold, each with the expiry lane's latest verdict (D-5943), as the
-   *  lane's last completed pass composed it. `null` before that pass: absence on the wire reads as UNKNOWN. */
+   *  lane's last pass composed it, stopped or not (D-6027). `null` before that pass: absence on the wire reads as UNKNOWN. */
   archivedHeld(): ArchivedHeld | null {
     return this.archivedHeldBlock;
   }
@@ -5540,15 +5541,18 @@ export class FleetWatcher {
         if (e.eligibleSince !== null) this.archivedExpiryState.set(id, { ...e, eligibleSince: null });
       }
     };
+    const archived = records.filter((r) => r.workspace !== null && r.archivedAt !== null);
     // ONE — the switch and the capability. Either way the twice-observed sightings are dropped: a row needs two
     // FRESH passes once the switch is lowered or the box proves the verb. What was learned and reported stands.
+    // The ranked held bytes are still composed (D-6027): they need neither the store nor the capability, and the
+    // operator needs them exactly while the lane is not acting — a block left from the last acting pass would freeze.
     if (names.includes(RECLAIM_PAUSE_MARKER) || !capSupported(this.deps.fleetState, EXPIRE_CAP)) {
       forgetSightings();
+      this.archivedHeldBlock = rankArchivedHeld(archived, this.archivedExpiryState);
       return;
     }
     // TWO — the population, and the store's answers for it, read ONCE (`lastRunBySession`). A read that fails makes
     // every row ineligible this pass. (The executor re-reads them for its one row at the act.)
-    const archived = records.filter((r) => r.workspace !== null && r.archivedAt !== null);
     let store: { ok: true; workers: ReadonlySet<string>; claimants: ReadonlySet<string> } | { ok: false; detail: string };
     try {
       const last = coord.lastRunBySession(archived.map((r) => r.id));

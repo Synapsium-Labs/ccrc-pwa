@@ -655,13 +655,39 @@ describe('/api/fleet/health: the archived-held block (D-5943)', () => {
     });
   }
 
-  it('the cleanup switch stops the pass, so no block is composed — absent, never `{}`', async () => {
+  // D-6027: the switch (or a box without the capability) stops the lane's ACTS, never its read model — the operator needs
+  // the held bytes exactly while nothing is being reclaimed. The block is composed from this pass's registry and the
+  // lane's standing memory; it never freezes at the last acting pass.
+  it('the cleanup switch stops the acts, not the block: composed from the registry and the lane\'s memory alone (D-6027)', async () => {
     const { app, watcher, health } = await lane();
     try {
       await watcher.sweepArchivedExpiry(ARCHIVED as never, [RECLAIM_PAUSE_MARKER]);
-      expect('archivedHeld' in (await health())).toBe(false);
+      expect((await health())['archivedHeld'], 'a switch raised before any pass still reports, every row unaudited').toEqual({
+        totalBytes: 2_048, unmeasured: 1, rows: [
+          { sessionId: 'project-a-quiet', bytes: 2_048, verdict: 'not-yet-audited', kind: 'not-yet-audited' },
+          { sessionId: 'project-a-brisk', bytes: null, verdict: 'not-yet-audited', kind: 'not-yet-audited' },
+        ] });
     } finally { await app.close(); }
   });
+
+  for (const [why, names, verbs] of [
+    ['the cleanup switch is raised', [RECLAIM_PAUSE_MARKER], ['ws-audit', 'ws-expire', EXPIRE_CAP]],
+    ['the box loses the capability', [], ['ws-audit']],
+  ] as const) {
+    it(`after an acting pass, ${why}: the block follows the registry and keeps the lane's verdicts — never the last snapshot (D-6027)`, async () => {
+      const { app, watcher, health } = await lane();
+      try {
+        await watcher.sweepArchivedExpiry(ARCHIVED as never, []);
+        expect(((await health())['archivedHeld'] as { rows: unknown[] }).rows).toHaveLength(2);
+        (watcher as unknown as { lastArchivedExpirySweep: number }).lastArchivedExpirySweep = 0;
+        (watcher as unknown as { deps: { fleetState: { ccdVerbs: readonly string[] } } }).deps.fleetState.ccdVerbs = [...verbs];
+        await watcher.sweepArchivedExpiry([ARCHIVED[1]] as never, [...names]);
+        expect((await health())['archivedHeld']).toEqual({ totalBytes: 0, unmeasured: 1, rows: [
+          { sessionId: 'project-a-brisk', bytes: null, verdict: 'failing', kind: 'failing' },
+        ] });
+      } finally { await app.close(); }
+    });
+  }
 
   it('a server with no watcher never emits it', async () => {
     const app = await buildServer(testDeps(mkTmp('ccrc-fh-ah-')));
@@ -678,6 +704,10 @@ describe('/api/fleet/health: the archived-held block (D-5943)', () => {
       expect(readArchivedHeld(body)).toEqual(body['archivedHeld']);
       expect(readArchivedHeld({ ...body, archivedHeld: undefined })).toBeNull();
       expect(readArchivedHeld({ archivedHeld: {} })).toBeNull();
+      expect(readArchivedHeld({ archivedHeld: { unmeasured: 0, rows: [] } }), 'a missing total').toBeNull();
+      expect(readArchivedHeld({ archivedHeld: { totalBytes: '1', unmeasured: 0, rows: [] } }), 'a non-numeric total').toBeNull();
+      expect(readArchivedHeld({ archivedHeld: { totalBytes: 1, rows: [] } }), 'a missing unmeasured count').toBeNull();
+      expect(readArchivedHeld({ archivedHeld: { totalBytes: 1, unmeasured: '0', rows: [] } }), 'a non-numeric unmeasured count').toBeNull();
       expect(readArchivedHeld({ archivedHeld: { totalBytes: 1, unmeasured: 0, rows: [{ sessionId: 'a', bytes: 'x', verdict: 'v', kind: 'k' }] } })).toBeNull();
       // An older PWA reads `FleetHealth` field by field: every field it knows is byte-identical with the block present.
       const older = (h: Record<string, unknown>) => ({ mode: h['mode'], connected: h['connected'], downSince: h['downSince'],
