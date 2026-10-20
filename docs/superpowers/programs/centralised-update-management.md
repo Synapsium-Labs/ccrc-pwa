@@ -2373,6 +2373,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
           slice case read 290 ms on CI and 177 ms here, against 50 ms (#850's timing bound). #989 waits on #988.
         - STATUS: fleet and server v0.0.470, newest v0.0.471, stable v0.0.328, intent dev/auto=off, backups fleet
           221M/server 7545M, disk free fleet 205G/work volume 91G/server 25G, no anomalies.
+      - **17:00 UTC: both boxes on v0.0.472 (#950) by the operator's tap, clean; #988 landed, #989 re-run on it.**
+        - Fleet 16:10:58 to 16:12:39, server 16:12:44 to 16:14:34 (`ccrc.service` restarted 16:13:43). Both `done`,
+          `from: pwa`, gates passed, doctor 0 failed on both. Server backups 7978M, 10 kept, the newest 892M.
+        - #988 merged at 16:57 (`1128d3ab6`), and `citations` passes on `main` and on #989's merge with it. `main` was
+          merged into #989's branch (`374bfc395`) for a fresh run, as the landing advisory's second trigger allows.
+        - `secret-mask`'s 50 ms slice case is a timing flake, not #989. It passed once and failed once (54 ms) on the
+          same merge tree here, and it passed on `main`. Shard 11's `session-hook` p95 (167 against 150) is a known one.
+        - STATUS: fleet and server v0.0.472, newest v0.0.472, stable v0.0.328, intent dev/auto=off, backups fleet
+          222M/server 7978M, disk free fleet 198G/work volume 77G/server 24G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
