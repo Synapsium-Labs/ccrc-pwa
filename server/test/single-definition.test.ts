@@ -6966,12 +6966,38 @@ describe('the children\'s deny list, its switch and the spawn record\'s readers 
     expect(decl('CHILD_DENY_RULES').test('expect(CHILD_DENY_RULES).toEqual(x);')).toBe(false);
   });
   it('each constant is declared once, in shared/api.ts', () => {
-    for (const c of ['CHILD_DENY_RULES', 'CHILD_DENY_PATH_QUALIFIED', 'DENY_SETTINGS_DIGEST', 'CHILD_SHELL_PATH']) {
+    for (const c of ['CHILD_DENY_RULES', 'childDenyRules', 'CHILD_DENY_PATH_QUALIFIED', 'DENY_SETTINGS_DIGEST', 'CHILD_SHELL_PATH']) {
       expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
     }
   });
   it('each reader is declared once, in server/src/registry.ts', () => {
     for (const c of ['denySettingsOf', 'childShellOf']) expect(holders(decl(c)), c).toEqual(['server/src/registry.ts']);
+  });
+});
+
+// D-5695 / D-5696 (plan docs/superpowers/plans/2026-10-19-claude-binary-lifecycle-w1-observe.md, CB1a's Frozen clause,
+// carried into CB1b). The Claude Code build grammar and the version-untrusted floor are defined once, in
+// `shared/claudeVersion.ts`. Comment lines are skipped (`stallCodeText`): a sentence ABOUT the floor is not a copy of
+// it. `liveStatusCoversDelegation` (`server/src/livestate.ts`) asks the lexicon rather than parsing and comparing on
+// its own.
+describe('the Claude Code version grammar and its floor are defined once, in shared/claudeVersion.ts (D-5695, D-5696)', () => {
+  const FLOOR = /(?<![\d.])2\.1\.277(?![\d.])/;
+  const BODY = String.raw`(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)`;
+  it('CONTROL: the scan sees a code line and passes over a comment line', () => {
+    expect(FLOOR.test(stallCodeText("const F = '2.1.277';"))).toBe(true);
+    expect(FLOOR.test(stallCodeText(' * below 2.1.277 (unmeasured)'))).toBe(false);
+    expect(FLOOR.test('2.1.2770')).toBe(false);
+  });
+  it('the floor is defined once: one code line in the four roots spells 2.1.277', () => {
+    const holders = ALL.filter((f) => FLOOR.test(stallCode(f))).map(rel).sort();
+    expect(holders).toEqual(['shared/claudeVersion.ts']);
+  });
+  it('the grammar\'s body is spelled once, and livestate parses no version of its own', () => {
+    const holders = ALL.filter((f) => stallCode(f).includes(BODY)).map(rel).sort();
+    expect(holders).toEqual(['shared/claudeVersion.ts']);
+    const live = stallCode(path.join(ccrcRoot, 'server', 'src', 'livestate.ts'));
+    expect(live).not.toMatch(/\(\\d\+\)\\\.\(\\d\+\)/);
+    expect(live).toMatch(/from '\.\.\/\.\.\/shared\/claudeVersion\.js'/);
   });
 });
 
@@ -7215,6 +7241,36 @@ describe("the account op's builder, wire vocabulary and spawn port each have one
   it('one builder for both arms: it is called by the agent op and the server port, and nowhere else', () => {
     expect(holders(/\bbuildAccountArgv\(/)).toEqual(['agent/src/server.ts', 'server/src/accounts/ops.ts', 'shared/account-argv.ts']);
     expect(holders(/\breadAccountOpAnswer\(/)).toEqual(['server/src/accounts/ops.ts', 'shared/agent-protocol.ts']);
+  });
+});
+
+// D-5935 (plan docs/superpowers/plans/2026-10-20-sheet-desktop-arm-and-session-workflow-controls-.md, Task P3-6a).
+// Inserted here, above every open PR's hunk and below every line cited by number. Which workflow controls a Claude
+// Code version has is server-only knowledge: `WORKFLOW_CONTROLS`, its recipe and drive types and its slot list are
+// declared once, in server/src/workflows/controls.ts, so the table never reaches `shared/` (the PWA bundle) or the PWA
+// itself, where the PWA would start deciding what a version can do. The act names are the wire's, declared once in
+// shared/workflows.ts.
+describe('the workflow-control table is defined once, in server/src (D-5935)', () => {
+  const holders = (re: RegExp, planted: readonly (readonly [string, string])[] = []): string[] =>
+    [...ALL.map((f) => [rel(f), stallCode(f)] as const), ...planted].filter(([, t]) => re.test(t)).map(([p]) => p).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  const SERVER_ONLY = ['WORKFLOW_CONTROLS', 'WORKFLOW_CONTROL_SLOTS', 'WorkflowControlSlot', 'WorkflowControlDrive',
+    'WorkflowControlRecipe', 'WorkflowControlTable'] as const;
+  it('CONTROL: the pattern sees a declaration and passes over a use; a copy in shared/ is seen beside the original', () => {
+    expect(decl('WORKFLOW_CONTROLS').test('export const WORKFLOW_CONTROLS: WorkflowControlTable = {};')).toBe(true);
+    expect(decl('WorkflowControlDrive').test('export type WorkflowControlDrive =')).toBe(true);
+    expect(decl('WORKFLOW_CONTROLS').test('const recipe = WORKFLOW_CONTROLS[version];')).toBe(false);
+    expect(holders(decl('WORKFLOW_CONTROLS'), [['shared/workflows.ts', 'export const WORKFLOW_CONTROLS = {};']]))
+      .toEqual(['server/src/workflows/controls.ts', 'shared/workflows.ts']);
+  });
+  it('the table and its types are declared once, in server/src/workflows/controls.ts', () => {
+    for (const c of SERVER_ONLY) expect(holders(decl(c)), c).toEqual(['server/src/workflows/controls.ts']);
+  });
+  it('WorkflowControlAct is declared once, in shared/workflows.ts', () => {
+    expect(holders(decl('WorkflowControlAct'))).toEqual(['shared/workflows.ts']);
+  });
+  it('nothing under shared/ or pwa/ names the table', () => {
+    expect(holders(/\bWORKFLOW_CONTROLS\b/).filter((p) => !p.startsWith('server/src/'))).toEqual([]);
   });
 });
 
