@@ -821,7 +821,7 @@ const keptDeps = async (fail: boolean) => {
 const KEPT: ChildReclaimKeptAttention = { kind: 'kept', sessionId: A, runId: CLAIM_RUN, word: 'coordinating',
   sentence: 'kept: it has coordinated a run of its own.' };
 const LEAF: ChildReclaimLeafKept = { item: { kind: 'leaf-kept', sessionId: A, runId: CLAIM_RUN,
-  sentence: 'its leaf was kept.', at: null }, source: 1, detail: null, clipsClause: null };
+  sentence: 'its leaf was kept.', at: null }, source: 1, detail: null, clipsClause: null, foundNothing: false };
 
 describe("coord/childReclaim.ts's kept row (recordChildReclaimKeptFeed): recorded always, never pushed (D-5851)", () => {
   it('every reclaim lands in the feed: the kept row is recorded and archived whatever the presence, never pushed', async () => {
