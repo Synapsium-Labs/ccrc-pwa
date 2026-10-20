@@ -317,3 +317,34 @@ describe('mailOnly (D-6091)', () => {
   });
 });
 
+
+// D-6092 (fleet capacity W1-1b), the characterization: "finished" per F5 (b) (2026-10-20). The "today:" rows are the
+// answers the behaviour commit flips; the "kept:" rows must not flip. Neutral fixtures: run 7.
+describe('stopDoneVerdict: "finished" per F5 (b), before and after (D-6092)', () => {
+  const MIN = 60_000;
+  const runAt = (state: string, closedAt: number | null) => okStore({ last: { runId: 7, state, closedAt } });
+  const quiet = (ms: number) => readLive({ mark: markAt({ turnAt: NOW - ms, stopAt: NOW - ms }) });
+
+  it('today: a failed newest run, closed 11 minutes ago, its marker quiet 11 minutes, holds not-done', () => {
+    expect(stopDoneVerdict(base({ store: runAt('failed', NOW - 11 * MIN), live: quiet(11 * MIN) })))
+      .toEqual({ act: 'hold', reason: 'not-done' });
+  });
+
+  for (const state of ['awaiting-review', 'merging', 'closing']) {
+    it(`today: a producer parked at ${state}, its marker quiet 31 minutes, holds not-done`, () => {
+      expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(31 * MIN) })))
+        .toEqual({ act: 'hold', reason: 'not-done' });
+    });
+  }
+
+  it('kept: a producer parked at awaiting-review, its marker quiet 29 minutes, holds', () => {
+    expect(stopDoneVerdict(base({ store: runAt('awaiting-review', null), live: quiet(29 * MIN) })).act).toBe('hold');
+  });
+
+  for (const state of ['working', 'dispatched', 'unknown']) {
+    it(`kept: an ${state === 'unknown' ? 'unknown' : 'active'} run (${state}) holds not-done, however quiet`, () => {
+      expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(7 * 60 * MIN) })))
+        .toEqual({ act: 'hold', reason: 'not-done' });
+    });
+  }
+});

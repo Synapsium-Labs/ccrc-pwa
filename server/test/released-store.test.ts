@@ -148,3 +148,38 @@ describe('CoordStore.lastRunBySession: the placed fields (D-6091)', () => {
     expect(read.lastPlaced.map((l) => l.runId)).toEqual([r]);
   });
 });
+
+// D-6092 (fleet capacity W1-1b), the characterization: `openPlacedWorkers` is the run-done policy's "another run still
+// uses it" read. F5 (b) narrows it to the ACTIVE runs, so a producer parked at review, merge or close is not held by its
+// own parked run. The "today:" row is the one the behaviour commit flips; the "kept:" rows must not flip.
+describe('CoordStore.lastRunBySession: openPlacedWorkers per F5 (b) (D-6092)', () => {
+  const at = (state: string): string[] => {
+    const s = store();
+    const r = open(s, 'lifecycle', 1);
+    s.bindSession(r, 'demo-worker');
+    s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run(state, r);
+    const read = s.lastRunBySession(['demo-worker']);
+    if (!read.ok) throw new Error(read.detail);
+    return read.openPlacedWorkers;
+  };
+
+  for (const state of ['awaiting-review', 'merging', 'closing']) {
+    it(`today: a run parked at ${state} names the session in openPlacedWorkers`, () => {
+      expect(at(state)).toEqual(['demo-worker']);
+    });
+  }
+
+  for (const state of ['dispatched', 'working', 'unknown']) {
+    it(`kept: an active run (${state}) names the session in openPlacedWorkers`, () => {
+      expect(at(state)).toEqual(['demo-worker']);
+    });
+  }
+
+  it('kept: a state this build cannot name counts as active (the safe direction, as the caps read it)', () => {
+    expect(at('some-future-state')).toEqual(['demo-worker']);
+  });
+
+  it('kept: a terminal or planned run names no one', () => {
+    for (const state of ['done', 'failed', 'planned']) expect(at(state), state).toEqual([]);
+  });
+});

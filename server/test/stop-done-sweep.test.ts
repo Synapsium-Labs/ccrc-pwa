@@ -756,4 +756,43 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       h.coord.db.close();
     }
   });
+
+  // D-6092 (fleet capacity W1-1b), the characterization over the real store: a `failed` run's worker, and a producer
+  // parked at `awaiting-review` (its marker quiet 7 hours), are held today: the first `not-done`, the second by its own
+  // parked run (`run-worker` before `not-done` is even asked).
+  it('today: a failed run\'s worker, closed past the grace and quiet, is held', async () => {
+    const h = await harness();
+    try {
+      h.coord.db.prepare("UPDATE runs SET state = 'failed'").run();
+      const t = await h.tick();
+      await h.w.sweepStopDone(t.rows, t.records, []);
+      expect(h.stops()).toEqual([]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  it('today: a producer parked at awaiting-review, quiet 7 hours, is held', async () => {
+    const h = await harness();
+    try {
+      h.coord.db.prepare("UPDATE runs SET state = 'awaiting-review', closedAt = NULL").run();
+      const t = await h.tick();
+      await h.w.sweepStopDone(t.rows, t.records, []);
+      expect(h.stops()).toEqual([]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  it('kept: a working run\'s worker, quiet 7 hours, is held', async () => {
+    const h = await harness();
+    try {
+      h.coord.db.prepare("UPDATE runs SET state = 'working', closedAt = NULL").run();
+      const t = await h.tick();
+      await h.w.sweepStopDone(t.rows, t.records, []);
+      expect(h.stops()).toEqual([]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
 });
