@@ -2364,6 +2364,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         README-reading suites and two filtered cases are green locally. `citations.test.ts` is red on `main` itself at
         `3cc6e5fce`: its ratchet became exact at 4b9a6aa5c, and the tree reads 1584 against 1587. That is not this PR,
         which changes README only, a file the test does not count.
+      - **16:00 UTC: both boxes on v0.0.470 (#949) by the operator's tap, clean; #989's CI red on two `main` reds.**
+        - Fleet 15:51:26 to 15:53:11, server 15:53:13 to 15:54:58 (`ccrc.service` restarted 15:54:10). Both `done`,
+          `from: pwa`, gates passed, doctor 0 failed on both (7 and 1 warned). The fleet's sweep recorded three units
+          already down, Reading 9's warn. Server backups 7545M, 10 kept, the newest 879M. v0.0.471 (#962) followed.
+        - #989's shards 10 and 12 failed, and both fail on `main` alone. `citations` reads 1584 against `main`'s new
+          BASELINE 1585 (#962), and #988 (another owner, in CI) makes the ratchet a ceiling. `secret-mask`'s 2 MB
+          slice case read 290 ms on CI and 177 ms here, against 50 ms (#850's timing bound). #989 waits on #988.
+        - STATUS: fleet and server v0.0.470, newest v0.0.471, stable v0.0.328, intent dev/auto=off, backups fleet
+          221M/server 7545M, disk free fleet 205G/work volume 91G/server 25G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
