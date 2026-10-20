@@ -1,6 +1,6 @@
 import { buildServer, type CollectLaneDeps, type Deps } from './server.js';
 import { derivedRoleNote, loadConfig } from './config.js';
-import { reloadRoster } from './config.js';
+import { reloadRoster, rosterAnswerOf } from './config.js';
 import { reconcilingAccountOps } from './accounts/reconcile.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import { generateAccountsSh } from '../../shared/generate.mjs';
@@ -33,7 +33,7 @@ import { readLocalCcdCaps } from './localcaps.js';
 import { localUpdateSpawnFor } from './update/converge.js';
 import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
-import { AccountAudit, knownFleetIdentity } from './accounts/audit.js';
+import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { SecretMasker, fingerprintAnswerOf } from './accounts/mask.js';
 import { randomUUID } from 'node:crypto';
@@ -281,12 +281,16 @@ deps.accountAudit = accountAudit;
 // roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown
 // runs the `roster` sub and writes a `reconcile` row. `masker` is read only when an answer lands, after it exists.
 const accountOps = reconcilingAccountOps(accountOpsFor(cfg, { client: fleetClient }), {
-  reload: (a) => reloadRoster(cfg, a, {
-    fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity),
-    fingerprints: { offer: (f, keep) => masker.offer(f, keep) },
-  }),
+  reload: (stdout) => {
+    const a = rosterAnswerOf(stdout, fingerprintAnswerOf);
+    return a === null ? null : reloadRoster(cfg, a, {
+      fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity),
+      fingerprints: { offer: (f, keep) => masker.offer(f, keep) },
+    });
+  },
   audit: accountAudit,
   fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity),
+  actor: actorOf('ccrc server', ''),
 });
 deps.accountOps = accountOps;
 // A roster the fleet holds that is not this server's (its `ready` frame's fingerprint) is reconciled once per

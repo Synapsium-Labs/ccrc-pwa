@@ -12,10 +12,10 @@ import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
 import { loadConfig, reloadRoster, rosterAnswerOf, type CcrcConfig, type RosterAnswer } from '../src/config.js';
-import { SecretMasker, fingerprintGeneration, fingerprintRow, type FingerprintAnswer } from '../src/accounts/mask.js';
+import { SecretMasker, fingerprintAnswerOf, fingerprintGeneration, fingerprintRow, type FingerprintAnswer } from '../src/accounts/mask.js';
 import { reconcilingAccountOps } from '../src/accounts/reconcile.js';
 import type { AccountOpResult, AccountOps } from '../src/accounts/ops.js';
-import { AccountAudit } from '../src/accounts/audit.js';
+import { AccountAudit, actorOf } from '../src/accounts/audit.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { buildServer } from '../src/server.js';
 import type { FleetState } from '../src/fleetstate.js';
@@ -129,12 +129,12 @@ describe('reloadRoster (D-5518)', () => {
 
   it('`rosterAnswerOf` reads a verb\'s answer, and refuses one with no roster', () => {
     const fp = fps(TOKEN, [['claude-a', KEY_A]]);
-    expect(rosterAnswerOf(JSON.stringify({ ok: true, roster: GROWN, fleetIdentity: NODE, fingerprints: fp })))
+    expect(rosterAnswerOf(JSON.stringify({ ok: true, roster: GROWN, fleetIdentity: NODE, fingerprints: fp }), fingerprintAnswerOf))
       .toEqual({ roster: GROWN, fleetIdentity: NODE, fingerprints: fp });
-    expect(rosterAnswerOf(JSON.stringify({ ok: true, roster: GROWN, fleetIdentity: NODE })))
+    expect(rosterAnswerOf(JSON.stringify({ ok: true, roster: GROWN, fleetIdentity: NODE }), fingerprintAnswerOf))
       .toEqual({ roster: GROWN, fleetIdentity: NODE, fingerprints: null });
-    expect(rosterAnswerOf(JSON.stringify({ ok: true, lane: 'claude-a' }))).toBeNull();
-    expect(rosterAnswerOf('not json')).toBeNull();
+    expect(rosterAnswerOf(JSON.stringify({ ok: true, lane: 'claude-a' }), fingerprintAnswerOf)).toBeNull();
+    expect(rosterAnswerOf('not json', fingerprintAnswerOf)).toBeNull();
   });
 });
 
@@ -232,12 +232,17 @@ describe('reconcile (D-5518)', () => {
     const calls: string[] = [];
     const inner: AccountOps = { arm: 'remote', run: async (sub) => { calls.push(sub); return answer(sub); } };
     const ops = reconcilingAccountOps(inner, {
-      reload: (a) => reloadRoster(cfg, a, { fleetIdentity: identity }),
-      audit: new AccountAudit(db), fleetIdentity: identity,
+      reload: (stdout) => {
+        const a = rosterAnswerOf(stdout, fingerprintAnswerOf);
+        return a === null ? null : reloadRoster(cfg, a, { fleetIdentity: identity });
+      },
+      audit: new AccountAudit(db), fleetIdentity: identity, actor: actorOf('ccrc server', ''),
     });
     const events = (): { act: string; laneId: string | null; outcome: string }[] =>
       db.prepare('SELECT act, laneId, outcome FROM account_events ORDER BY id').all() as never;
-    return { cfg, calls, ops, events };
+    const actors = (): string[] =>
+      (db.prepare('SELECT actor FROM account_events ORDER BY id').all() as { actor: string }[]).map((r) => r.actor);
+    return { cfg, calls, ops, events, actors };
   };
   const rosterAnswer = (roster: unknown, node: string = NODE): AccountOpResult =>
     ({ kind: 'exited', code: 0, stdout: JSON.stringify({ ok: true, roster, fleetIdentity: node }) });
@@ -251,6 +256,8 @@ describe('reconcile (D-5518)', () => {
       expect(s.calls, failed.kind).toEqual(['check', 'roster']);
       expect(s.events(), failed.kind).toEqual([{ act: 'reconcile', laneId: 'claude-a', outcome: 'ok' }]);
       expect(s.cfg.roster.byId.has('claude-e'), failed.kind).toBe(true);
+      // The row's actor is the one the composition root hands in (D-6058 (7)): the server's own, no session's.
+      expect(s.actors(), failed.kind).toEqual(['ccrc server 00000000']);
     }
   });
 

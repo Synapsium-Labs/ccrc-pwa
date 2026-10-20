@@ -8,7 +8,7 @@ import { parseRoster, RosterError, type Roster } from '../../shared/roster.js';
 import { isNodeRole } from '../../shared/node-role.js';
 import { isReleaseSourceName } from '../../shared/release-notes.js';
 import type { NodeRole } from '../../shared/api.js';
-import { fingerprintAnswerOf, type FingerprintAnswer } from './accounts/mask.js';
+import type { FingerprintAnswer } from './accounts/mask.js';
 
 export type FleetMode = 'local' | 'remote';
 
@@ -526,8 +526,12 @@ export interface RosterAnswer {
 }
 
 /** A verb's stdout read as a `RosterAnswer` (`{roster, fleetIdentity, fingerprints?}`, spec §3.9), or `null` for an
- *  answer that carries no roster (the subs that answer one lane, a refusal, anything that is not JSON). */
-export function rosterAnswerOf(stdout: string): RosterAnswer | null {
+ *  answer that carries no roster (the subs that answer one lane, a refusal, anything that is not JSON). The
+ *  fingerprints' grammar is the masker's (`fingerprintAnswerOf`), taken as a port so this file loads nothing from an
+ *  outer ring (D-6058 (7); ARCH-04 stage 2, D-6045). */
+export function rosterAnswerOf(
+  stdout: string, fingerprintsOf: (stdout: string) => FingerprintAnswer | null,
+): RosterAnswer | null {
   let o: { roster?: unknown; fleetIdentity?: unknown } | null;
   try { o = JSON.parse(stdout) as typeof o; } catch { return null; }
   if (o === null || typeof o !== 'object' || o.roster === undefined || o.roster === null || typeof o.roster !== 'object') {
@@ -536,7 +540,7 @@ export function rosterAnswerOf(stdout: string): RosterAnswer | null {
   return {
     roster: o.roster,
     fleetIdentity: typeof o.fleetIdentity === 'string' ? o.fleetIdentity : null,
-    fingerprints: fingerprintAnswerOf(stdout),
+    fingerprints: fingerprintsOf(stdout),
   };
 }
 

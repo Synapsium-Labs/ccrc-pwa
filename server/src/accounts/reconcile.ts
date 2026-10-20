@@ -1,7 +1,7 @@
-import { actorOf, type AccountAudit } from './audit.js';
+import type { AccountActor, AccountAudit } from './audit.js';
 import type { AccountOpFields, AccountOpResult, AccountOps } from './ops.js';
 import type { AccountSub } from '../../../shared/api.js';
-import { rosterAnswerOf, type RosterAnswer, type RosterReload } from '../config.js';
+import type { RosterReload } from '../config.js';
 
 /**
  * RECONCILE (D-5518; spec §3.9, G6, G18; accounts plan Task A12): the server never guesses what a verb did. This wraps
@@ -19,19 +19,21 @@ import { rosterAnswerOf, type RosterAnswer, type RosterReload } from '../config.
  *  - concurrent reconciles share one `roster` sub (D-6057 (8)).
  * A reconcile never blocks an account switch or the auto-swap: it runs only the read-only `roster` sub.
  */
+/** The ports a reconcile takes (D-6058 (7)): it reads no roster file, parses no answer and mints no actor itself, so it
+ *  imports no value from an outer ring (ARCH-04 stage 2, D-6045); the composition root wires them. */
 export interface ReconcileDeps {
-  reload: (answer: RosterAnswer) => RosterReload;
+  /** An answer's stdout to `reloadRoster`: its verdict, or null when the answer carried no roster. */
+  reload: (stdout: string) => RosterReload | null;
   audit?: AccountAudit;
   fleetIdentity: () => string | null;
+  /** The audit row's actor for an act the server takes on its own (no session asked for it): `ccrc server`. */
+  actor: AccountActor;
 }
 
 export interface ReconcilingAccountOps extends AccountOps {
   /** Runs the `roster` sub and reloads when `fleetFp` is a disagreement this server has not reconciled yet. */
   reconcileDivergence(fleetFp: string): Promise<void>;
 }
-
-/** The audit row's actor for an act the server takes on its own: no session asked for it. */
-const SERVER_ACTOR = actorOf('ccrc server', '');
 
 /** An outcome the box may have acted on without saying so. */
 const unknownOrFailed = (r: AccountOpResult): boolean =>
@@ -40,9 +42,7 @@ const unknownOrFailed = (r: AccountOpResult): boolean =>
 export function reconcilingAccountOps(inner: AccountOps, deps: ReconcileDeps): ReconcilingAccountOps {
   /** Feeds a successful answer's roster to `reloadRoster`: its verdict, or null when the answer carried none. */
   const take = (r: AccountOpResult): RosterReload | null => {
-    if (r.kind !== 'exited' || r.code !== 0) return null;
-    const answer = rosterAnswerOf(r.stdout);
-    return answer === null ? null : deps.reload(answer);
+    return r.kind !== 'exited' || r.code !== 0 ? null : deps.reload(r.stdout);
   };
   // Concurrent reconciles share ONE `roster` sub (D-6057 (8)): N ops failing at once on a busy fleet box start one
   // read-only run, not N; each caller still writes its own row.
@@ -60,7 +60,7 @@ export function reconcilingAccountOps(inner: AccountOps, deps: ReconcileDeps): R
     const verdict = await rosterOnce();
     deps.audit?.write({
       act: 'reconcile', laneId, provider: null, outcome: verdict?.ok === true ? 'ok' : 'failed',
-      fleetIdentity: deps.fleetIdentity(), actor: SERVER_ACTOR,
+      fleetIdentity: deps.fleetIdentity(), actor: deps.actor,
     });
     return verdict;
   };
