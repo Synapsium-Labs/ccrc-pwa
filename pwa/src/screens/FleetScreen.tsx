@@ -394,7 +394,7 @@ export function FleetScreen({
                 group={g}
                 onOpen={open}
                 selectedId={selectedId}
-                onAddWorkspace={(p) => void projects.addWorkspace(p)}
+                onAddWorkspace={flows.openAddWorkspace}
                 projected={projected}
                 placement={projects.placementFor(g.project)}
                 poolFor={projects.poolFor}
