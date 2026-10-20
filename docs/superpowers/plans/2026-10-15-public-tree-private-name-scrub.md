@@ -390,7 +390,8 @@ Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here whe
   published. Until #436 merged, this PR carried the file's 12 hits and class 9's tree row was red on that file alone.
   #436 has merged and this branch has merged `main` since, so nothing is carried. `ccd/ccd` was swept here with that
   programme's consent: comment lines only, then re-stamped.
-- **D-5287** — `every-ignorable-character-folds` (Task 1, Review Focus 4; review 662 F6, review 673 F2 and F3): the
+- **D-5287** — `every-ignorable-character-folds` (Task 1, Review Focus 4; review 662 F6, review 673 F2 and F3, review
+  684 F1 and F2): the
   tokenizer drops every code point Unicode marks `Default_Ignorable_Code_Point`, not only the six it first listed, and
   nothing else. A name split by a bidi mark or isolate, a combining grapheme joiner or a Mongolian vowel separator read
   as two tokens, so class 9 and the scan both missed it. One unit pin per character class (LRM, RLM, LRI, CGJ, MVS,
@@ -398,10 +399,15 @@ Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here whe
   it: the in-line fold, the trailing blanks a phrase broken across a line break ends on, and both sides of the marker
   a wrapped comment repeats on the next line. One pair pin for each of those three reds when it is narrowed back
   (measured). Format characters (`Cf`) outside the set are not added: those 32 points are mostly visible, and dropping
-  a visible mark joins the tokens either side of it and loses a hit. A pin on U+0600 reds when `Cf` is restored
+  a visible mark joins the tokens either side of it and loses a hit. A pin on U+0600 reds when `Cf` is restored to
+  `INVISIBLE` alone, through a second line the fold's slow path reads, and when it is restored to both regexes
   (measured). Measured on Node v24.14.1 (Unicode 17.0, ICU 78.2) and on the floor, Node v22.16.0 (Unicode 16.0, ICU
   77.1), the latter in a throwaway `node:22.16.0` container with no network: every pinned point is default-ignorable
-  in both, U+0600 is not, and the pins hold in both.
+  in both, U+0600 is not, and the pins hold in both. The pair check's letter-or-digit gate reads the facing ends
+  folded, as `hitsIn` reads them, so a character NFKC folds to a letter counts on either side of a line break, with or
+  without a default-ignorable letter beside it. Seven positive pins red when the gate reads the raw ends (measured). A
+  known limit, older than this PR and not fixed here: the pair check misses a phrase whose first word ends in a
+  camelCase break, because its early exit reads only the split token stream.
 - **D-5288** — `the-guard-pins-itself` (Task 1 Steps 7-8, Review Focus 3 and 4; review 662 F7 and F8): the shape
   checks passed with an entry deleted. `PRIVATE_NAMES` is now pinned by `PRIVATE_NAMES_DIGEST`, a digest of every
   entry's four fields that `hash --list` prints beside the literal it regenerates, so a deleted, reordered or weakened

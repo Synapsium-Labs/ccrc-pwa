@@ -112,6 +112,8 @@ describe('matchLine', () => {
     // `x` after it, and the hit would be lost.
     const rows = entriesOf('zzomega', 'part');
     expect(matchLine('zzomega\u0600x', rows)).toEqual([h8(rows[0]!)]);
+    // The U+200B sends this line down the fold's slow path, where INVISIBLE is read.
+    expect(matchLine('zzomega\u0600x\u200b', rows)).toEqual([h8(rows[0]!)]);
   });
 
   it('a row spelled in camelCase finds its lower-case spelling, and a lower-case row its camelCase one', () => {
@@ -206,6 +208,23 @@ describe('the class and scan helpers', () => {
   it('pairHits reads through an invisible character after the next line\'s marker (D-5287)', () => {
     const rows = entriesOf('zed quux', 'words');
     expect(pairHits('// written by Zed', '// \u200bQuux on Monday', 'x.md', rows)).toEqual([h8(rows[0]!)]);
+  });
+
+  // A facing character that NFKC folds to a letter (circled U+24D0, U+24E0) ends or
+  // starts a word, as it does on one line: the gate reads the facing ends folded,
+  // with or without a default-ignorable letter beside it (D-5287).
+  it.each([
+    ['ends on a folded letter, then U+3164', 'x zzomeg\u24d0\u3164', 'qqalpha y'],
+    ['ends on a folded letter, then U+115F', 'x zzomeg\u24d0\u115f', 'qqalpha y'],
+    ['ends on a folded letter, then U+1160', 'x zzomeg\u24d0\u1160', 'qqalpha y'],
+    ['ends on a folded letter, then U+FFA0', 'x zzomeg\u24d0\uffa0', 'qqalpha y'],
+    ['starts with U+3164, then a folded letter', 'x zzomega', '\u3164\u24e0qalpha y'],
+    ['ends on a folded letter', 'x zzomeg\u24d0', 'qqalpha y'],
+    ['starts with a folded letter', 'x zzomega', '\u24e0qalpha y'],
+  ])('pairHits reads the facing ends folded: %s (D-5287)', (_name, prev, line) => {
+    const rows = entriesOf('zzomega qqalpha', 'words');
+    expect(pairHits(prev, line, 'x.md', rows)).toEqual([h8(rows[0]!)]);
+    expect(hitsIn(`${prev} ${line}`, 'x.md', rows)).toEqual([h8(rows[0]!)]);
   });
 
   it('the exemptions hold only in a history-programme document under docs/', () => {

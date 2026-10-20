@@ -492,11 +492,11 @@ export function pairHits(prev, line, file, entries) {
   // Only whitespace may sit between a phrase's words, so the previous line must
   // end on a letter or digit (trailing blanks and invisibles aside) and this one
   // start on one, once the marker a wrapped comment or quote repeats (`//`, ` * `,
-  // `#`, `>`, `--`, `;`) is set aside.
-  const before = prev.replace(TRAILING_BLANKS, '');
-  const after = line.replace(CONTINUATION, '');
-  if (!/[\p{L}\p{N}]$/u.test(before) || !/^[\p{L}\p{N}]/u.test(after)) return [];
-  const tail = before.slice(-80), head = after.slice(0, 80);
+  // `#`, `>`, `--`, `;`) is set aside. The gate reads the facing ends FOLDED, as
+  // hitsIn does, so a character NFKC folds to a letter counts as one (D-5287).
+  const tail = prev.replace(TRAILING_BLANKS, '').slice(-80);
+  const head = line.replace(CONTINUATION, '').slice(0, 80);
+  if (!/[\p{L}\p{N}]$/u.test(foldMapped(tail).s) || !/^[\p{L}\p{N}]/u.test(foldMapped(head).s)) return [];
   const alone = new Set([...hitsIn(tail, file, words), ...hitsIn(head, file, words)]);
   return hitsIn(`${tail}\n${head}`, file, words).filter((h) => !alone.has(h));
 }
