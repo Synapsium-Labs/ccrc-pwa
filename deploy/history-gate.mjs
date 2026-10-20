@@ -1437,8 +1437,9 @@ export function parseLabelLine(reply) {
 //     never spawned, or cut off with a stop, is not-run and never consumes the re-run. The driver says which by
 //     ctx.stopped; its stop words are its own (W2-D59) and this module never spells them, save code-changed and
 //     code-unmeasured, which are GATE_REASONS words too.
-//   handcheckSample / applyHandcheck / handcheckAgreement (W2-D81): a seeded ceil(n/5) of the judged answers per arm
-//     from the 'handcheck' substream, plus every judge-failed item; the operator's label replaces the judge's on the
+//   handcheckSample / applyHandcheck / handcheckAgreement (W2-D81): a seeded ceil(share * n) of the judged answers per
+//     arm from the 'handcheck' substream, the share being the record's signed handcheck.share (a required argument,
+//     read as an exact decimal; HANDCHECK_SHARE, 1/5, is only the default part 1 offers; D-5788), plus every judge-failed item; the operator's label replaces the judge's on the
 //     items the operator labelled; agreement is an exact fraction, per arm and over both.
 //   decideGate (W2-D89) restates spec §10.2:2713-2718 with every operator exact (cross-multiplied fractions, never a
 //     float): three criteria, their denominators, four halts and one hold. The fourth halt, empty-arm, is the
@@ -1453,9 +1454,10 @@ export function parseLabelLine(reply) {
  *  It is the stream format's word, not a driver word (W2-D80's "an authentication error"). */
 const AUTH_FAILED = 'authentication_failed';
 
-/** W2-D81's share of the judged answers per arm, 20%, as an exact fraction: ceil(n * 1/5) in integers. */
+/** W2-D81's default share of the judged answers per arm, 20%, as an exact fraction. It is the value part 1 offers
+ *  (OPEN_RECORD_V1's handcheck.share), no longer what handcheckSample draws with: that takes the signed share (D-5788). */
 const HANDCHECK_SHARE = Object.freeze({ num: 1, den: 5 });
-/** W2-D81's other three terms, which handcheckSample implements and nothing else: the share is of the judged answers,
+/** W2-D81's other three terms, which handcheckSample implements and nothing else: the share is of the judged answers (`of`),
  *  drawn per arm, and every judge-failed item is checked outside it. validateOpenRecord refuses a record signing others. */
 const HANDCHECK_RULE = Object.freeze({ of: 'judged', per_arm: true, judge_failed: 'always' });
 
@@ -1517,15 +1519,20 @@ export function questionOutcome(attempts) {
 }
 
 /**
- * W2-D81: the hand-check sample. Per arm, in ASSIGNMENT_ARMS order, ceil(n/5) of that arm's judged items, drawn
+ * W2-D81: the hand-check sample. Per arm, in ASSIGNMENT_ARMS order, ceil(share * n) of that arm's judged items (the
+ * signed share, read as an exact decimal and computed in integers, never in floats: D-5788), drawn
  * without replacement from the seed's 'handcheck' substream over the items sorted by id (so input order never moves
- * it); then every judge-failed item, outside the 20%. `judged` (the judge returned a label) and `judgeFailed` (it
+ * it); then every judge-failed item, outside the share. `judged` (the judge returned a label) and `judgeFailed` (it
  * was malformed twice) are exclusive. Answers the sampled ids, sorted.
  * @param {string} seedHex the open record's bootstrap seed, 64 lowercase hex characters
  * @param {ReadonlyArray<{id: string, arm: 'treatment'|'control', judged: boolean, judgeFailed: boolean}>} items
+ * @param {number} share the open record's handcheck.share: a decimal in (0, 1] of at most six places
  * @returns {string[]}
  */
-export function handcheckSample(seedHex, items) {
+export function handcheckSample(seedHex, items, share) {
+  const sd = decimalFrac(share, false);
+  if (!sd.ok || sd.frac.num === 0) throw new TypeError('handcheckSample: share must be a decimal in (0, 1] of at most six places');
+  const shareFrac = sd.frac;
   if (!Array.isArray(items)) throw new TypeError('handcheckSample: items must be an array');
   const seen = new Set();
   for (const i of items) {
@@ -1540,7 +1547,7 @@ export function handcheckSample(seedHex, items) {
   const picked = [];
   for (const arm of ASSIGNMENT_ARMS) {
     const pool = items.filter((i) => i.arm === arm && i.judged).map((i) => i.id).sort(cmpId);
-    const k = Math.floor((pool.length * HANDCHECK_SHARE.num + HANDCHECK_SHARE.den - 1) / HANDCHECK_SHARE.den);
+    const k = Math.floor((pool.length * shareFrac.num + shareFrac.den - 1) / shareFrac.den);
     for (let s = 0; s < k; s += 1) {
       const j = s + randInt(rng, pool.length - s);
       [pool[s], pool[j]] = [pool[j], pool[s]];
@@ -2038,7 +2045,7 @@ const REC_DRAFT = recFields({
     lookback_days: recField('integer', 'default', { value: Q18_DEFAULTS.lookback_days }),
     sims: recField('integer', 'default', { value: Q18_DEFAULTS.sims }),
     grid_step: recField('number', 'default', { value: Q18_DEFAULTS.grid_step }),
-    procedure: recField('string', 'default', { value: Q18_DEFAULTS.procedure }),
+    procedure: recField('string', 'fixed', { value: Q18_DEFAULTS.procedure }),
   }) }),
   pilot: recField('object', 'measured', { fields: recFields({
     seed: recField('hex64', 'measured'),
@@ -2075,9 +2082,9 @@ const REC_DRAFT = recFields({
   }) }),
   handcheck: recField('object', 'default', { fields: recFields({
     share: recField('number', 'default', { value: HANDCHECK_SHARE.num / HANDCHECK_SHARE.den }),
-    of: recField('string', 'default', { value: HANDCHECK_RULE.of }),
-    per_arm: recField('boolean', 'default', { value: HANDCHECK_RULE.per_arm }),
-    judge_failed: recField('string', 'default', { value: HANDCHECK_RULE.judge_failed }),
+    of: recField('string', 'fixed', { value: HANDCHECK_RULE.of }),
+    per_arm: recField('boolean', 'fixed', { value: HANDCHECK_RULE.per_arm }),
+    judge_failed: recField('string', 'fixed', { value: HANDCHECK_RULE.judge_failed }),
   }) }),
   freezes: recField('object', 'default', { fields: recFields({
     maintenance_from: recField('string', 'default', { value: 'pilot-sourcing' }),
@@ -2283,13 +2290,17 @@ function recValidate(record, ctx, checkLink) {
     ...Object.keys(LABELLER).map((l) => [`labeller.${l}`, r.labeller[l], LABELLER[l]]),
     ['quiz.kinds', r.quiz.kinds, FACT_KINDS],
     ['active_rule.legacy_excluded', r.active_rule.legacy_excluded, true],
-    // Defaults the gate implements one way only (W2-D81, W2-D21): a signed different value would be validated, then ignored.
-    ['handcheck.share', r.handcheck.share, HANDCHECK_SHARE.num / HANDCHECK_SHARE.den],
+    // Four fixed values (W2-D81, W2-D21): the decisions define no alternative and the code implements only these, so a
+    // signed different value would be validated, then ignored. The share is not among them: it is a signed default the
+    // validator bounds below (D-5788).
     ['handcheck.of', r.handcheck.of, HANDCHECK_RULE.of], ['handcheck.per_arm', r.handcheck.per_arm, HANDCHECK_RULE.per_arm],
     ['handcheck.judge_failed', r.handcheck.judge_failed, HANDCHECK_RULE.judge_failed],
     ['q18_settings.procedure', r.q18_settings.procedure, Q18_DEFAULTS.procedure],
   ];
   for (const [p, got, want] of fixed) if (!recSame(got, want)) refuse(p, 'constant-mismatch');
+
+  // The hand-check share is a signed default handcheckSample reads exactly: 0 would draw nothing (D-5788).
+  if (r.handcheck.share === 0 || !decimalFrac(r.handcheck.share, false).ok) refuse('handcheck.share', 'value-outside-set');
 
   // Closed sets (W2-D63, W2-D79, W2-D72, W2-D87).
   if (!SHA_MIN_PREFIXES.includes(r.labeller.sha_min_prefix)) refuse('labeller.sha_min_prefix', 'value-outside-set');

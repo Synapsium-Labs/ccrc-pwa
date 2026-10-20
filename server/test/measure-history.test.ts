@@ -3514,24 +3514,24 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
 
   it('handcheckSample: ceil(n/5) of the judged answers per arm, and every judge-failed item outside the 20%', () => {
     const all = [...items('treatment', 11, 1, 4), ...items('control', 10, 2, 5)];
-    const ids = gateT8.handcheckSample(SEED, all);
+    const ids = gateT8.handcheckSample(SEED, all, 0.2);
     const judgedIn = (arm: string) => ids.filter((id) => id.startsWith(`${arm}-j`)).length;
     expect(judgedIn('treatment'), 'ceil(11/5)').toBe(3);
     expect(judgedIn('control'), 'ceil(10/5)').toBe(2);
     for (const f of all.filter((i) => i.judgeFailed)) expect(ids).toContain(f.id);
     expect(ids.filter((id) => id.includes('-c')), 'an unjudged (correct) answer is never sampled').toEqual([]);
     expect(ids.length).toBe(3 + 2 + 3);
-    expect(gateT8.handcheckSample(SEED, items('treatment', 1, 0)).length, 'ceil(1/5)').toBe(1);
-    expect(gateT8.handcheckSample(SEED, items('control', 0, 0, 3)), 'nothing judged, nothing sampled').toEqual([]);
-    expect(() => gateT8.handcheckSample(SEED, [{ id: 'x', arm: 'treatment', judged: true, judgeFailed: true }])).toThrow(/both judged and judge-failed/);
+    expect(gateT8.handcheckSample(SEED, items('treatment', 1, 0), 0.2).length, 'ceil(1/5)').toBe(1);
+    expect(gateT8.handcheckSample(SEED, items('control', 0, 0, 3), 0.2), 'nothing judged, nothing sampled').toEqual([]);
+    expect(() => gateT8.handcheckSample(SEED, [{ id: 'x', arm: 'treatment', judged: true, judgeFailed: true }], 0.2)).toThrow(/both judged and judge-failed/);
   });
 
   it('handcheckSample: seeded, independent of input order, and another seed draws another sample', () => {
     const all = [...items('treatment', 50, 0), ...items('control', 50, 0)];
-    const a = gateT8.handcheckSample(SEED, all);
-    expect(gateT8.handcheckSample(SEED, all)).toEqual(a);
-    expect(gateT8.handcheckSample(SEED, [...all].reverse()), 'input order').toEqual(a);
-    expect(gateT8.handcheckSample(SEED2, all)).not.toEqual(a);
+    const a = gateT8.handcheckSample(SEED, all, 0.2);
+    expect(gateT8.handcheckSample(SEED, all, 0.2)).toEqual(a);
+    expect(gateT8.handcheckSample(SEED, [...all].reverse(), 0.2), 'input order').toEqual(a);
+    expect(gateT8.handcheckSample(SEED2, all, 0.2)).not.toEqual(a);
     expect(a.length).toBe(20);
   });
 
@@ -3862,17 +3862,17 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
 
   it('edge: handcheckSample refuses a malformed item, sorts by code unit and draws without replacement from the handcheck stream', () => {
     const it0 = { id: 'x', arm: 'treatment' as const, judged: true, judgeFailed: false };
-    expect(() => gateT8.handcheckSample(SEED, 'x' as never)).toThrow(/items must be an array/);
-    expect(() => gateT8.handcheckSample(SEED, [null as never])).toThrow(/non-empty string id/);
-    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, id: '' }])).toThrow(/non-empty string id/);
-    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, id: 7 as never }])).toThrow(/non-empty string id/);
-    expect(() => gateT8.handcheckSample(SEED, [it0, { ...it0 }])).toThrow(/duplicate id x/);
-    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, arm: 'both' as never }])).toThrow(/has arm both/);
-    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, judged: 1 as never }])).toThrow(/boolean judged and judgeFailed/);
-    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, judgeFailed: 'no' as never }])).toThrow(/boolean judged and judgeFailed/);
+    expect(() => gateT8.handcheckSample(SEED, 'x' as never, 0.2)).toThrow(/items must be an array/);
+    expect(() => gateT8.handcheckSample(SEED, [null as never], 0.2)).toThrow(/non-empty string id/);
+    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, id: '' }], 0.2)).toThrow(/non-empty string id/);
+    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, id: 7 as never }], 0.2)).toThrow(/non-empty string id/);
+    expect(() => gateT8.handcheckSample(SEED, [it0, { ...it0 }], 0.2)).toThrow(/duplicate id x/);
+    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, arm: 'both' as never }], 0.2)).toThrow(/has arm both/);
+    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, judged: 1 as never }], 0.2)).toThrow(/boolean judged and judgeFailed/);
+    expect(() => gateT8.handcheckSample(SEED, [{ ...it0, judgeFailed: 'no' as never }], 0.2)).toThrow(/boolean judged and judgeFailed/);
     // The answer is sorted by code unit ('A' < 'a' < 'b'), whatever order the judge-failed items arrive in.
     const failed = (id: string) => ({ id, arm: 'control' as const, judged: false, judgeFailed: true });
-    expect(gateT8.handcheckSample(SEED, [failed('b'), failed('a'), failed('A')])).toEqual(['A', 'a', 'b']);
+    expect(gateT8.handcheckSample(SEED, [failed('b'), failed('a'), failed('A')], 0.2)).toEqual(['A', 'a', 'b']);
     // An independent reading of W2-D81: per arm in ASSIGNMENT_ARMS order, a partial Fisher-Yates over the sorted judged
     // ids from the 'handcheck' stream, then the judge-failed ids; ids of mixed case, so a locale sort would move it.
     const ref = (seed: string, its: Item[]): string[] => {
@@ -3894,7 +3894,7 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
       Array.from({ length: 100 }, (_, i) => ({ id: `${i % 2 === 0 ? 'a' : 'B'}-${arm}-${i}`, arm: arm as Item['arm'], judged: true, judgeFailed: false })));
     mixed.push({ id: 'z-failed', arm: 'control', judged: false, judgeFailed: true });
     for (const seed of [SEED, SEED2, 'ef'.repeat(32)]) {
-      const got = gateT8.handcheckSample(seed, mixed);
+      const got = gateT8.handcheckSample(seed, mixed, 0.2);
       expect(got, seed).toEqual(ref(seed, mixed));
       expect(new Set(got).size, 'no id is drawn twice').toBe(got.length);
       expect(got.length).toBe(20 + 20 + 1);
@@ -4308,6 +4308,42 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
           expect(got.upper, `${sc.name}, ${name}`).toEqual(want.upper);
         }
       }
+    });
+  });
+
+  describe('review fix round 1: the hand-check share is the signed one (D-5788)', () => {
+    const judgedIn = (ids: string[], arm: string) => ids.filter((id) => id.startsWith(`${arm}-j`)).length;
+
+    it('0.3 with 10 judged items in an arm draws exactly 3 of that arm, and every judge-failed item besides', () => {
+      const all = [...items('treatment', 10, 2), ...items('control', 0, 0, 3)];
+      const ids = gateT8.handcheckSample(SEED, all, 0.3);
+      expect(judgedIn(ids, 'treatment')).toBe(3);
+      for (const f of all.filter((i) => i.judgeFailed)) expect(ids).toContain(f.id);
+      expect(ids.length).toBe(3 + 2);
+    });
+
+    it('0.07 with 100 judged items draws exactly 7, in integers (the float path would draw 8)', () => {
+      expect(Math.ceil(0.07 * 100), 'CONTROL: floats put 0.07 * 100 above 7').toBe(8);
+      const ids = gateT8.handcheckSample(SEED, items('control', 100, 0), 0.07);
+      expect(judgedIn(ids, 'control')).toBe(7);
+    });
+
+    it('0.2 reproduces ceil(n/5) on n = 1, 5, 6 and 11, and 1 draws every judged item', () => {
+      for (const [n, want] of [[1, 1], [5, 1], [6, 2], [11, 3]] as const) {
+        expect(judgedIn(gateT8.handcheckSample(SEED, items('treatment', n, 0), 0.2), 'treatment'), `n = ${n}`).toBe(want);
+      }
+      const ids = gateT8.handcheckSample(SEED, [...items('treatment', 7, 0), ...items('control', 4, 0)], 1);
+      expect(judgedIn(ids, 'treatment')).toBe(7);
+      expect(judgedIn(ids, 'control')).toBe(4);
+    });
+
+    it('a share that is not a decimal in (0, 1] of at most six places throws, before any draw', () => {
+      const one = items('treatment', 5, 0);
+      for (const bad of [0, 1.5, -0.1, 1 / 3, 0.1234567, NaN, Infinity, '0.2', null]) {
+        expect(() => gateT8.handcheckSample(SEED, one, bad as never), String(bad)).toThrow(/share must be a decimal in \(0, 1\] of at most six places/);
+      }
+      expect(() => (gateT8.handcheckSample as unknown as (s: string, i: unknown[]) => string[])(SEED, one), 'a missing third argument').toThrow(/share must be/);
+      expect(() => gateT8.handcheckSample(SEED, one, 0.2), 'CONTROL: 0.2 does not throw').not.toThrow();
     });
   });
 });
@@ -5123,15 +5159,55 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
     });
 
     it('final H: a handcheck value other than the one handcheckSample implements is constant-mismatch at its path', () => {
-      for (const [key, bad] of [['share', 0.25], ['of', 'all'], ['per_arm', false], ['judge_failed', 'sampled']] as const) {
+      for (const [key, bad] of [['of', 'all'], ['per_arm', false], ['judge_failed', 'sampled']] as const) {
         expect(verdict(set(draft(), `handcheck.${key}`, bad)), key).toEqual([{ path: `handcheck.${key}`, word: 'constant-mismatch' }]);
       }
+      // The share is a signed default (D-5788): 0.3 validates, and a share handcheckSample cannot read is value-outside-set.
+      expect(verdict(set(draft(), 'handcheck.share', 0.3)), 'share 0.3 validates').toEqual([]);
+      expect(verdict(set(draft(), 'handcheck.share', 0)), 'share 0 is refused').toEqual([{ path: 'handcheck.share', word: 'value-outside-set' }]);
       expect(verdict(set(draft(), 'handcheck.share', 0.2)), 'CONTROL: one fifth').toEqual([]);
     });
 
     it('final H: a q18_settings.procedure other than the one q18Power implements is constant-mismatch', () => {
       expect(verdict(set(draft(), 'q18_settings.procedure', 'grid-scan'))).toEqual([{ path: 'q18_settings.procedure', word: 'constant-mismatch' }]);
       expect(verdict(set(draft(), 'q18_settings.procedure', gate9.Q18_DEFAULTS.procedure)), 'CONTROL').toEqual([]);
+    });
+  });
+
+  describe('review fix round 1: the hand-check share and the four fixed values (D-5788)', () => {
+    it('a signed share of 0.3 or 1 validates; 0, 1.5 and 1/3 are each value-outside-set at handcheck.share and nothing else', () => {
+      expect(verdict(set(draft(), 'handcheck.share', 0.2)), 'CONTROL: the default').toEqual([]);
+      expect(verdict(set(draft(), 'handcheck.share', 0.3))).toEqual([]);
+      expect(verdict(set(draft(), 'handcheck.share', 1))).toEqual([]);
+      for (const bad of [0, 1.5, 1 / 3]) {
+        expect(verdict(set(draft(), 'handcheck.share', bad)), String(bad)).toEqual([{ path: 'handcheck.share', word: 'value-outside-set' }]);
+      }
+    });
+
+    it('within handcheck and q18_settings exactly of, per_arm, judge_failed and procedure are fixed; the rest are defaults, in both parts', () => {
+      const spec = gate9.OPEN_RECORD_V1 as unknown as { draft: Record<string, Spec>; final: Record<string, Spec> };
+      for (const part of ['draft', 'final'] as const) {
+        const status = (obj: string, key: string): string => spec[part][obj]!.fields![key]!.status;
+        for (const key of ['of', 'per_arm', 'judge_failed']) expect(status('handcheck', key), `${part} handcheck.${key}`).toBe('fixed');
+        expect(status('handcheck', 'share'), `${part} handcheck.share`).toBe('default');
+        expect(Object.keys(spec[part].handcheck!.fields!).sort(), `${part} handcheck members`).toEqual(['judge_failed', 'of', 'per_arm', 'share']);
+        expect(status('q18_settings', 'procedure'), `${part} q18_settings.procedure`).toBe('fixed');
+        for (const key of ['rho_headline', 'power', 'lookback_days', 'sims', 'grid_step']) expect(status('q18_settings', key), `${part} q18_settings.${key}`).toBe('default');
+        expect(Object.keys(spec[part].q18_settings!.fields!).sort(), `${part} q18_settings members`)
+          .toEqual(['grid_step', 'lookback_days', 'power', 'procedure', 'rho_headline', 'sims']);
+        expect(spec[part].handcheck!.status, `${part} handcheck`).toBe('default');
+        expect(spec[part].q18_settings!.status, `${part} q18_settings`).toBe('default');
+      }
+    });
+
+    it('q18Power takes rho, power, sims, gridStep and B as required parameters and never falls back to Q18_DEFAULTS for them', () => {
+      const full = { families: [], plannedDays: 14, seedHex: SEED, rho: 0.3, power: 0.5, sims: 24, gridStep: 0.05, B: 200 };
+      const q18 = gate9.q18Power as unknown as (i: Record<string, unknown>) => unknown;
+      expect(() => q18(full), 'CONTROL: the smallest valid call').not.toThrow();
+      for (const key of ['rho', 'power', 'sims', 'gridStep', 'B']) {
+        const { [key]: _omitted, ...rest } = full as Record<string, unknown>;
+        expect(() => q18(rest), `${key} omitted`).toThrow();
+      }
     });
   });
 });
