@@ -7859,8 +7859,17 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     });
   };
   interface SourcePin { line: number; target: string; method: string; literal: string }
+  /** How many texts `literalSourcePins` has parsed (D-6111's guard reads it). */
+  let pinParses = 0;
   /** ARCH-06's counting rule over one test file's text (D-5854). */
   const literalSourcePins = (text: string, file = 'probe.ts'): SourcePin[] => {
+    // D-6111: every target below comes from `namesW1aFile` over a substring of `text`, and it answers nothing unless
+    // that substring spells a W1a basename, so a text that spells none has no pin and is not parsed. Parsing all of
+    // server/test took 9.9 s of the 20 s Linux budget untraced, and timed out under the map's trace. KNOWN WIDTH: a
+    // template that splits a basename across lines is joined by `flat` before `namesW1aFile` reads it, so this raw-text
+    // check would miss it; no such pin exists (the counts with and without this check were measured equal).
+    if (!W1A_FILES.some((f) => text.includes(path.basename(f)))) return [];
+    pinParses += 1;
     const p = parseSource(text, file);
     const raw = (c: { start: number; end: number }): string => text.slice(c.start, c.end);
     const resolve = (name: string, at: number): number => {
@@ -7932,17 +7941,33 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     }
     return out;
   };
-  /** Every tracked or new untracked .ts file under server/test, and its pins' count per W1a file. */
-  const literalSourcePinCounts = (): Record<string, number> => {
+  /** Every tracked or new untracked .ts file under server/test, its pins' count per W1a file, and how many files were
+   *  listed and parsed. Scanned once and shared by the ratchet and D-6111's guard. */
+  let pinScan: { counts: Record<string, number>; listed: number; parsed: number } | undefined;
+  const literalSourcePinScan = (): NonNullable<typeof pinScan> => {
+    if (pinScan) return pinScan;
     const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'server/test/*.ts'],
       { cwd: ccrcRoot, encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
     const counts: Record<string, number> = Object.fromEntries(W1A_FILES.map((f) => [f, 0]));
-    for (const f of new Set(r.stdout.split('\0').filter((x) => x && existsSync(path.join(ccrcRoot, x))))) {
+    const files = new Set(r.stdout.split('\0').filter((x) => x && existsSync(path.join(ccrcRoot, x))));
+    const before = pinParses;
+    for (const f of files) {
       for (const pin of literalSourcePins(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)) counts[pin.target]! += 1;
     }
-    return counts;
+    pinScan = { counts, listed: files.size, parsed: pinParses - before };
+    return pinScan;
   };
+  const literalSourcePinCounts = (): Record<string, number> => literalSourcePinScan().counts;
+
+  // D-6111. The ratchet's scan parses only the files that spell a W1a basename, so it fits a traced run's budget; a
+  // scan that parsed every listed file again would put main's map-build red whenever tracing slowed it past 20 s.
+  it('the pin scan parses only the test files that spell a W1a basename (D-6111)', () => {
+    const { listed, parsed } = literalSourcePinScan();
+    expect(listed, 'git listed too few server/test files: the scan saw nothing').toBeGreaterThan(500);
+    expect(parsed, 'no file was parsed: the ratchet would count nothing').toBeGreaterThan(0);
+    expect(parsed, 'the scan parsed most of server/test again').toBeLessThan(listed / 3);
+  });
 
   it('CONTROL (fixture): the counting rule sees a read, a reader, a slice and an inline read, and keeps scopes apart', () => {
     const pins = (code: string): string[] =>
