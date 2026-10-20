@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=069445e8c5812c12690d75c38f2b52f92ef63d897649c9f85fc7d31e1d074431
+# ccrc:generated 1 sha256=e2be8810f34fe31f0d4348738c53c970ea4b4cf1953b6b6182567b560a303f01
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -35435,9 +35435,16 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # `$REG/tmproots/<id>` (never read through a `tmproots/` that is itself a
 # link), or with at least one quarantine record of it under
 # `$REG/tmpquarantine/`, found by `_ws_collect_records_of`'s exact parse and
-# never by an `<id>.*` prefix (ids admit dots). Anything else answers
-# `not-witnessed` and takes NO lock: the audit never makes `.reap-<name>.lock`
-# for a name ccd never handed a temp root.
+# never by an `<id>.*` prefix (ids admit dots), or, with neither standing,
+# with a compare-and-drop aside `$REG/tmproots/.<id>.drop.<pid>`, found by
+# `_ws_collect_asides_of`'s exact parse (path-identity spec §3.6: a crash
+# inside the compare-and-drop leaves one and no witness). Asides that cannot
+# be listed prove no absence: unmeasured `witness`. A SOLE aside that reads
+# as the id's witness is judged AS the witness, read-only
+# (`_ws_collect_aside_judge`); two or more, or one that does not read so,
+# answer unmeasured `aside`, and only after the registry peek. Anything else
+# answers `not-witnessed` and takes NO lock: the audit never makes
+# `.reap-<name>.lock` for a name ccd never handed a temp root.
 #
 # THE LOCK. Inside the population, and only once `_ws_collect_prelock`'s
 # advisory parse lets it (path-identity spec §2.5: a reap lock is never
@@ -35537,7 +35544,7 @@ _ws_collect_reset() {   # -> every answer the collector's evaluation sets, clear
   REAP_VERDICT=''; REAP_DETAIL=''; REAP_TOKEN=''
   _WS_COLLECT_PROBE=''; _WS_COLLECT_REG_WHY=''; _WS_COLLECT_PHASE=''; _WS_COLLECT_LEAF=''
   _WS_COLLECT_RECORD=''; _WS_COLLECT_SLOT=''; _WS_COLLECT_NEWEST_NS=''; _WS_COLLECT_ENTRIES=''
-  _WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''
+  _WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''; _WS_COLLECT_ASIDE=''
   _WS_COLLECT_RECORDS=()
   _WS_WIT_DEV=''; _WS_WIT_INO=''; _WS_WIT_BTIME=''; _WS_WIT_RUN=''; _WS_WIT_UID=''; _WS_WIT_AT=''
 }
@@ -35679,8 +35686,17 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   (( rc != 2 )) || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
   (( rc != 1 )) || { _ws_collect_refuse registered "$_WS_COLLECT_REG_WHY"; return 1; }
   _ws_collect_witness_judge "$id" || return 1
+  # THE WITNESS'S NAME IN A DETAIL (path-identity spec §3.6): when the judge
+  # read a compare-and-drop aside as the witness (`_ws_collect_aside_judge`,
+  # no witness standing), each `witness-mismatch` detail below that speaks of
+  # the witness names the aside's path in its place, the one file that stands.
+  local wof="the witness of $id" wits="its witness"
+  if [[ -n "$_WS_COLLECT_ASIDE" ]]; then
+    wof="the compare-and-drop aside $_WS_COLLECT_ASIDE, read as the witness of $id,"
+    wits="the compare-and-drop aside $_WS_COLLECT_ASIDE (read as its witness)"
+  fi
   [[ "$_WS_WIT_BTIME" != - ]] \
-    || { _ws_collect_refuse witness-mismatch "the witness of $id records no birth time, so device and inode alone would vouch for $leaf — it is offered to the operator, never taken"; return 1; }
+    || { _ws_collect_refuse witness-mismatch "$wof records no birth time, so device and inode alone would vouch for $leaf — it is offered to the operator, never taken"; return 1; }
   _ws_reclaim_absent "$leaf"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured leaf "$_WS_ABSENT_WHY"; return 1; }
   if (( rc == 0 )); then
@@ -35729,7 +35745,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   (( ${#_WS_QSLOTS[@]} == 0 )) \
     || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and the witness of $id stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it, and the leaf at $leaf is not collected beside it"; return 1; }
   [[ -d "$leaf" && ! -L "$leaf" ]] \
-    || { _ws_collect_refuse witness-mismatch "$leaf is a link or not a directory — the collector takes only the directory its witness names; it is offered to the operator"; return 1; }
+    || { _ws_collect_refuse witness-mismatch "$leaf is a link or not a directory — the collector takes only the directory $wits names; it is offered to the operator"; return 1; }
   _ws_collect_ident "$leaf" "$_WS_WIT_DEV:$_WS_WIT_INO" "$_WS_WIT_BTIME"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured identity "the device, inode or birth time of $leaf could not be read"; return 1; }
   if (( rc != 0 )); then
@@ -35739,7 +35755,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     _ws_reclaim_absent "$leaf"; rc=$?
     (( rc != 0 )) || { _ws_collect_unmeasured leaf "$leaf vanished while its identity was read — the next pass asks again"; return 1; }
     (( rc != 2 )) || { _ws_collect_unmeasured leaf "$_WS_ABSENT_WHY"; return 1; }
-    _ws_collect_refuse witness-mismatch "$leaf is $(_plat_devino "$leaf" 2>/dev/null) born $(_plat_btime "$leaf" 2>/dev/null), not the $_WS_WIT_DEV:$_WS_WIT_INO born $_WS_WIT_BTIME its witness names — it is offered to the operator, never taken"
+    _ws_collect_refuse witness-mismatch "$leaf is $(_plat_devino "$leaf" 2>/dev/null) born $(_plat_btime "$leaf" 2>/dev/null), not the $_WS_WIT_DEV:$_WS_WIT_INO born $_WS_WIT_BTIME $wits names — it is offered to the operator, never taken"
     return 1
   fi
   # OWNER WRITE, read off the leaf whose identity was just proven (spec
@@ -35911,14 +35927,58 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   REAP_VERDICT=collectable
 }
 
-_ws_collect_witness_judge() {   # id -> 0 the witness parsed (_WS_WIT_* set); 1 with `not-witnessed` (none stands)
-  #                                  or `witness-mismatch` (it is not as ccd writes it) set. Reads only; takes no lock
+_WS_COLLECT_ASIDE=''   # the aside a judge read as the witness; cleared by `_ws_collect_reset`
+_ws_collect_aside_judge() {   # id -> 0 the id's ONE aside parses as its witness (_WS_WIT_* set from it; _WS_COLLECT_ASIDE =
+  #                                its path); 1 none stands (nothing set); 2 the answer is set: unmeasured `witness` (the
+  #                                asides could not be listed) or unmeasured `aside` (two or more stand, or the one does
+  #                                not parse as a witness of the id). Reads only; takes no lock; prints nothing
+  # OPTION X (path-identity spec §3.6). A crash inside the compare-and-drop
+  # (`_ws_collect_witness_cad`) can leave the witness at its aside,
+  # `$REG/tmproots/.<id>.drop.<pid>`, with no witness standing. The server
+  # composes `ws-collect` only after two `collectable` audits with one token,
+  # so unless the audit judges such an id, nothing ever restores the aside.
+  # The token binds the witness's fields, never its file name, so a SOLE
+  # aside that parses as the id's witness (`_ws_tmproot_witness_parse`: it
+  # would read sound at the witness's own path) is judged as the witness,
+  # here, read-only. Two or more, or one that does not parse, are never
+  # chosen between: unmeasured `aside`, a per-leaf word the lane lists at
+  # once. Asides that cannot be listed prove nothing: unmeasured `witness`,
+  # as a `tmproots/` that cannot be searched is. Its callers ask it only once
+  # they have found no witness.
+  local id="$1" a
+  _WS_COLLECT_ASIDE=''
+  _ws_collect_asides_of "$id" \
+    || { _ws_collect_unmeasured witness "the compare-and-drop asides of $id could not be listed ($_WS_ASIDES_WHY), and no witness stands, so whether one of them is its witness was never asked"; return 2; }
+  (( ${#_WS_ASIDES[@]} )) || return 1
+  if (( ${#_WS_ASIDES[@]} != 1 )); then
+    _ws_collect_unmeasured aside "${#_WS_ASIDES[@]} compare-and-drop asides of $id stand and no witness does — which of them was its witness is never chosen, so none is read as it; they are listed for the operator: ${_WS_ASIDES[*]}"
+    return 2
+  fi
+  a="${_WS_ASIDES[0]}"
+  _ws_tmproot_witness_parse "$a" "$id" && { _WS_COLLECT_ASIDE="$a"; return 0; }
+  _ws_collect_unmeasured aside "the one compare-and-drop aside of $id does not read as its witness, and no witness stands — it is not read as one, and is listed for the operator: $a"
+  return 2
+}
+
+_ws_collect_witness_judge() {   # id -> 0 the witness parsed (_WS_WIT_* set) or, none standing, its sole compare-and-drop
+  #                                  aside parsed as it (_WS_COLLECT_ASIDE set too); 1 with `not-witnessed` (none stands),
+  #                                  `witness-mismatch` (it is not as ccd writes it), or the aside judge's unmeasured
+  #                                  `aside` or `witness` set. Reads only; takes no lock
   # THE FRESH RUNGS' WITNESS READ, moved here whole: `_ws_collect_eval` calls
   # it in their place, and `_ws_collect_prelock` calls it before any lock, so a
   # junk witness is answered in one set of words (path-identity spec §2.5). The
   # birth-time rung stays in the fresh rungs, under the lock.
-  local id="$1" rc
+  # OPTION X (path-identity spec §3.6): with no witness standing, the id's sole
+  # compare-and-drop aside that parses as its witness IS the witness for every
+  # rung after this one (`_ws_collect_aside_judge`), and the token those rungs
+  # mint from its fields is the one the witness itself would mint.
+  local id="$1" rc arc
   _ws_tmproot_witness_read "$id"; rc=$?
+  if (( rc == 1 )); then
+    _ws_collect_aside_judge "$id"; arc=$?
+    (( arc != 0 )) || return 0
+    (( arc != 2 )) || return 1
+  fi
   (( rc != 1 )) || { _ws_collect_refuse not-witnessed "no witness stands for $id at $(_ws_tmproot_witness_file "$id") and no quarantine record names it — there is nothing to collect"; return 1; }
   (( rc != 2 )) || { _ws_collect_refuse witness-mismatch "the witness $(_ws_tmproot_witness_file "$id") cannot be read as ccd writes it — a temp root nothing vouches for is offered to the operator, never taken"; return 1; }
 }
@@ -35949,7 +36009,9 @@ _ws_collect_records_judge() {   # id record... -> 0 the ONE record parsed and na
 _ws_collect_prelock() {   # id -> 0 the reap lock may be opened; 1 an answer is set (REAP_VERDICT and REAP_DETAIL;
   #                            _WS_COLLECT_PROBE when unmeasured; _WS_COLLECT_RECORDS once the records were listed)
   #                            and no lock may be opened. ADVISORY: it grants nothing, prints nothing, and writes no
-  #                            registry, lock, journal or quarantine state (it makes and removes two scratch files)
+  #                            registry, lock, journal or quarantine state (it makes and removes up to six scratch
+  #                            files: the records listing's two, the aside judge's two before the registry peek, and
+  #                            its two again inside the witness judgement when the peek proves no row)
   # A REAP LOCK IS NEVER UNLINKED, so the first open of `$REG/.reap-<id>.lock`
   # makes a name for good (path-identity spec §2.5). The collect audit
   # (`_ws_collect_audit_contained`) and `cmd_ws_collect` ask this first, so a
@@ -35969,7 +36031,14 @@ _ws_collect_prelock() {   # id -> 0 the reap lock may be opened; 1 an answer is 
   #     fork's resume arm reads it;
   #   no record: a witness that parses opens the lock, with a birth time or
   #     none (one with none is `witness-mismatch` under the lock, as before);
-  #   a witness that does not parse: THE REGISTRY PEEK. Under the lock the
+  #   no record and NO witness: a SOLE compare-and-drop aside that parses as
+  #     the id's witness opens the lock (`_ws_collect_aside_judge`, path-identity
+  #     spec §3.6), and the locked evaluation judges it as the witness. Any
+  #     other answer of that judge is cleared (`_ws_collect_reset`) and given
+  #     again only after the peek below, so a row keeps `registered` ahead of
+  #     `aside` as it keeps it ahead of `witness-mismatch`;
+  #   a witness that does not parse, or none and no sole aside that parses:
+  #     THE REGISTRY PEEK. Under the lock the
   #     fresh rungs ask `registered` before the witness, and a row's retryable,
   #     unjournaled `registered` must not become a terminal, journaled
   #     `witness-mismatch` here. So the lock opens unless `$REG/<id>.child` and
@@ -35980,10 +36049,12 @@ _ws_collect_prelock() {   # id -> 0 the reap lock may be opened; 1 an answer is 
   #     over every field and dot family `_ws_collect_registered` reads. A lock
   #     opened there is a row's;
   #   otherwise the witness judgement answers: `not-witnessed` or
-  #     `witness-mismatch`.
+  #     `witness-mismatch`, or, with no witness standing, the aside judge's
+  #     unmeasured `aside` (two or more, or one that does not parse) or
+  #     `witness` (the asides could not be listed).
   # A judgement that reads sound on its second look met a writer between the
   # two reads: unmeasured, and the next pass asks again.
-  local id="$1" out r rc
+  local id="$1" out r rc wrc
   local -a recs=() ctl=()
   _ws_collect_reset
   _ws_collect_slug_askable "$id" || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
@@ -36000,7 +36071,15 @@ _ws_collect_prelock() {   # id -> 0 the reap lock may be opened; 1 an answer is 
     _ws_collect_unmeasured records "the quarantine record of $id read as ccd writes it only on a second look, so it changed while it was read — the next pass asks again"
     return 1
   fi
-  _ws_tmproot_witness_read "$id" && return 0
+  _ws_tmproot_witness_read "$id"; wrc=$?
+  (( wrc != 0 )) || return 0
+  if (( wrc == 1 )); then
+    _ws_collect_aside_judge "$id" && return 0
+    # Its other answers wait for the peek: the witness judgement below asks
+    # it again, and an answer left set here would outlive a lock the peek
+    # opens (the audit's `in-progress` document prints the probe word).
+    _ws_collect_reset
+  fi
   # THE LISTING CONTROL, as `_ws_collect_registered` keeps one: the one name a
   # wildcard of `$REG` must find is the directory the witness was read from.
   ctl=("$REG"/tmproot[s])
@@ -36062,6 +36141,15 @@ _ws_collect_audit_contained() {   # `_ws_collect_audit`'s body, run under `_ws_r
     out=$(_ws_collect_records_of "$id"); rc=$?
     (( rc == 0 )) || { _ws_collect_unmeasured records "the quarantine records of $id could not be listed"; _ws_collect_audit_doc "$id"; return; }
     [[ -z "$out" ]] || inpop=1
+  fi
+  # A COMPARE-AND-DROP ASIDE puts the id in the population too (path-identity
+  # spec §3.6): a crash inside the compare-and-drop can leave one and no
+  # witness, and the pass and the fork judge a sole one that parses as the
+  # witness (`_ws_collect_aside_judge`). Asides that cannot be listed prove no
+  # absence: unmeasured, never not-witnessed.
+  if (( ! inpop )); then
+    _ws_collect_asides_of "$id" || { _ws_collect_unmeasured witness "$_WS_ASIDES_WHY — whether a compare-and-drop aside of $id stands was never asked"; _ws_collect_audit_doc "$id"; return; }
+    (( ${#_WS_ASIDES[@]} == 0 )) || inpop=1
   fi
   if (( ! inpop )); then
     _ws_collect_refuse not-witnessed "no witness stands for $id and no quarantine record names it — ccd never handed out a temp root under this id that is still to be collected" || :
@@ -36143,7 +36231,9 @@ _ws_collect_audit_doc() {   # id -> THE document on stdout, and the journal line
 # gone (a human verb, or a reclaim tail that KEPT it) — is collected by this
 # verb and by nothing else, and the verb is composed by the server alone
 # (CLAUDE.md SAFETY). Its population is a WITNESSED id or a QUARANTINE RECORD
-# (spec §5.2). Its consent is `ws-audit --collect`'s token, recomputed inside
+# (spec §5.2), or, with neither standing, an id a COMPARE-AND-DROP ASIDE is
+# for, a sole one read as the witness (path-identity spec §3.6). Its consent
+# is `ws-audit --collect`'s token, recomputed inside
 # the reap lock by the same evaluation (`_ws_collect_fork`) — the witness, the
 # registry, the in-use probe, the row rule and the idle floor, or a record and
 # the phase it stands at — BEFORE anything moves. Then (spec §5.10):
@@ -36842,10 +36932,12 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
   local _WS_RCL_ACT=collect _WS_RCL_CRUMB=''
   # NEVER A LOCK FOR A FOREIGN NAME: the reap lock is taken only for an id in
   # the collector's population — a witness stands for it, or a record names it
-  # (spec §5.2). A `tmproots/` that is itself a link is never followed, so it
-  # puts no id in the population, and whether this one is in it was never
-  # asked: unmeasured, before the lock, as `ws-audit --collect` answers it.
-  local wf rrc=0 wrc=0
+  # (spec §5.2), or, with neither standing, a compare-and-drop aside is for it
+  # (path-identity spec §3.6). A `tmproots/` that is itself a link is never
+  # followed, so it puts no id in the population, and whether this one is in
+  # it was never asked: unmeasured, before the lock, as `ws-audit --collect`
+  # answers it.
+  local wf rrc=0 wrc=0 arc=0 why
   if [[ -L "$REG/tmproots" ]]; then
     _ws_reclaim_fail "$id" "" probe-unmeasured \
       "no lock was taken, and nothing was moved or removed: $REG/tmproots is a link, which ccd never follows, so whether $id is witnessed was never asked"
@@ -36862,19 +36954,29 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
     return 1
   fi
   _ws_collect_records_of "$id" >/dev/null || rrc=$?
-  if (( wrc == 0 && rrc == 0 && ${#_WS_QRECS[@]} == 0 )); then
+  # A COMPARE-AND-DROP ASIDE puts the id in the population when neither a
+  # witness nor a record does (path-identity spec §3.6): a crash inside the
+  # compare-and-drop leaves one and no witness, and `_ws_collect_prelock` and
+  # the locked evaluation judge a sole one that parses as the witness.
+  if (( wrc == 0 && rrc == 0 && ${#_WS_QRECS[@]} == 0 )); then _ws_collect_asides_of "$id" || arc=$?; fi
+  if (( wrc == 0 && rrc == 0 && ${#_WS_QRECS[@]} == 0 && arc == 0 && ${#_WS_ASIDES[@]} == 0 )); then
     _ws_collect_refused "$id" "" not-witnessed \
       "no lock was taken, and there is nothing to collect: no witness ($wf) and no quarantine record names $id" \
       "$lc_surface" "$lc_actor" "$lc_reason"
     return 0
   fi
-  # ...and records that could not be listed, with no witness standing, never
-  # prove the id the collector's: unmeasured, BEFORE the lock, which is never
-  # opened (and so never made) for a name that may be foreign. A witness that
-  # stands puts the id in the population whatever the listing said.
-  if (( wrc == 0 && rrc != 0 )); then
-    _ws_reclaim_fail "$id" "" probe-unmeasured \
-      "$(_ws_leaf_why_line "no lock was taken, and nothing was moved or removed: no witness stands for $id ($wf) and its quarantine records could not be listed (${_WS_QRECS_WHY:-the listing failed}), so whether the collector may lock $id was never asked")"
+  # ...and records or asides that could not be listed, with no witness
+  # standing, never prove the id the collector's: unmeasured, BEFORE the
+  # lock, which is never opened (and so never made) for a name that may be
+  # foreign. A witness that stands puts the id in the population whatever the
+  # listing said. ONE statement, its text chosen before it.
+  if (( wrc == 0 && (rrc != 0 || arc != 0) )); then
+    if (( rrc != 0 )); then
+      why="no lock was taken, and nothing was moved or removed: no witness stands for $id ($wf) and its quarantine records could not be listed (${_WS_QRECS_WHY:-the listing failed}), so whether the collector may lock $id was never asked"
+    else
+      why="no lock was taken, and nothing was moved or removed: no witness stands for $id, and its compare-and-drop asides could not be listed ($_WS_ASIDES_WHY) — the witness's path is $wf"
+    fi
+    _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "$why")"
     return 1
   fi
   # THE ADVISORY PARSE (path-identity spec §2.5): a reap lock is never

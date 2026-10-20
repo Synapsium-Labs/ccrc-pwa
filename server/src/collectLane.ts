@@ -45,12 +45,12 @@ export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';
  *  A word this table does not know is `load-sensitive`. */
 export type CollectProbeClass = 'box-wide' | 'per-leaf' | 'load-sensitive';
 
-/** ccd's probe words, each spelled once as a key: the twenty first arguments of `_ws_collect_unmeasured`, and the
+/** ccd's probe words, each spelled once as a key: the twenty-one first arguments of `_ws_collect_unmeasured`, and the
  *  four walk words `_ws_collect_eval` admits. `collect-readers.test.ts` holds the keys equal to ccd's text, both ways. */
 const COLLECT_PROBE_CLASS_TABLE = {
   platform: 'box-wide', mv: 'box-wide', flock: 'box-wide', witness: 'box-wide', floor: 'box-wide', clock: 'box-wide',
   eval: 'box-wide', quarantine: 'box-wide',
-  'idle:cap': 'per-leaf', 'idle:unreadable': 'per-leaf', mode: 'per-leaf', device: 'per-leaf',
+  aside: 'per-leaf', 'idle:cap': 'per-leaf', 'idle:unreadable': 'per-leaf', mode: 'per-leaf', device: 'per-leaf',
   'idle:timeout': 'load-sensitive', 'idle:walk-failed': 'load-sensitive', 'in-use': 'load-sensitive',
   checkouts: 'load-sensitive', rows: 'load-sensitive', registry: 'load-sensitive', identity: 'load-sensitive',
   leaf: 'load-sensitive', slot: 'load-sensitive', records: 'load-sensitive', token: 'load-sensitive',
