@@ -49,8 +49,10 @@
 #   5. no process in it is the parent of a process in another cgroup — read
 #      over every process on the box, so one whose stat cannot be read while it
 #      still exists makes this predicate unmeasurable. A ZOMBIE outside the
-#      scope (state Z) is no live child: it holds nothing and only awaits its
-#      parent's wait, so it does not block; every other outside child does;
+#      scope (state Z, at most one thread) has exited and only awaits its
+#      parent's wait, so it does not block; a Z thread-group leader whose other
+#      threads still run (num_threads above one) is alive and blocks, as does
+#      every other outside child;
 #   6. no live handoff record names one of its processes — Claude Code's native
 #      adopt record, if the stage-2 spike makes native handoff primary. None
 #      exists before stage 3 (the stage-3 launch record carries run and agent
@@ -209,8 +211,8 @@ if [ -r "$STATE" ]; then
 fi
 
 # ── /proc readers: a process's start (ticks since boot), its age, its parent ──
-declare -A TICKS=() PARENT=() PSTATE=()
-# pid -> TICKS[pid], PARENT[pid], PSTATE[pid]; rc 1 means unreadable, or a state letter outside [A-Z] (Linux's `t`, a tracing
+declare -A TICKS=() PARENT=() PSTATE=() NTHR=()
+# pid -> TICKS[pid], PARENT[pid], PSTATE[pid], NTHR[pid] (stat field 20, num_threads); rc 1 means unreadable, or a state letter outside [A-Z] (Linux's `t`, a tracing
 # stop, included, though its stat reads fine). Callers differ on rc 1: the box and server checks read it as unmeasurable and so
 # fail safe (a `carry` row, never a stop); the dead scope's own process loop skips the process (the box check then covers it);
 # the live pane read and the live `old` listing skip it (a traced process in a live scope is left out of the `old` lines), but the
@@ -225,7 +227,7 @@ _ss_stat() {
   read -r -a f <<<"$rest"
   [[ "${f[1]:-}" =~ ^[0-9]+$ && "${f[19]:-}" =~ ^[0-9]+$ ]] || return 1
   [[ "${f[0]:-}" =~ ^[A-Z]$ ]] || return 1
-  PSTATE[$1]=${f[0]}; PARENT[$1]=${f[1]}; TICKS[$1]=${f[19]}
+  PSTATE[$1]=${f[0]}; PARENT[$1]=${f[1]}; NTHR[$1]=${f[17]:-}; TICKS[$1]=${f[19]}
   return 0
 }
 _ss_age() {                                              # seconds; the caller ran _ss_stat. A process forked after this tick's
@@ -388,7 +390,9 @@ while read -r u _; do
   MINE=(); for p in "${procs[@]}"; do MINE[$p]=1; done
   elsewhere=0
   for q in "${!PARENT[@]}"; do   # a child of one of its processes that its cgroup.procs does not hold lives in another cgroup
-    [[ "${PSTATE[$q]:-}" == Z ]] && continue   # a zombie is no live outside child: it holds nothing and only awaits its parent's wait
+    # a zombie of at most one thread is no live outside child: it has exited and only awaits its parent's wait; a Z leader whose other
+    # threads still run (num_threads above one) is alive, and a missing or non-numeric count is not exempt either (the fail-safe direction)
+    [[ "${PSTATE[$q]:-}" == Z && "${NTHR[$q]:-}" =~ ^0*[01]$ ]] && continue   # ^0*[01]$: a decimal of at most 1, read as text so no digit string can overflow arithmetic
     [[ -n "${MINE[${PARENT[$q]}]+x}" && -z "${MINE[$q]+x}" ]] && elsewhere=1
   done
   born=$(( mono / 1000000 ))     # the scope's own start, seconds on the MONOTONIC clock (see WHOSE SERVER above); UP is BOOTTIME, so after a suspend born/sage skew, failing safe

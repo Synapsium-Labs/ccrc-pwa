@@ -626,6 +626,8 @@ S6_STALE_S = 300
 S6_NUM = r"(?:0|[1-9][0-9]{0,15})"
 S6_POS = r"(?:[1-9][0-9]{0,15})"
 S6_CPU = r"(?:0|[1-9][0-9]{0,19})"
+# `\S` below is ASCII whitespace only (the three record patterns compile with re.ASCII): the sweep folds exactly the six ASCII
+# whitespace characters out of a comm, and Python's Unicode `\s` would also split on \x1c-\x1f, \x85 and \xa0 that the fold leaves in.
 S6_UNIT = r"tmux-spawn-\S+\.scope"
 S6_HDR = re.compile(rf"# ccd-scope-sweep v1 tick=({S6_NUM}) up=({S6_NUM}) mode=(shadow|live)")
 S6_DEAD = re.compile(
@@ -634,13 +636,15 @@ S6_DEAD = re.compile(
     rf"why=[a-z0-9-]+(?:,[a-z0-9-]+)* server=(?:gone|ccd|reused) "
     rf"procs={S6_POS} mem=(?:{S6_NUM}|\?) sockets={S6_NUM} "
     rf"youngest=(?:-1|{S6_NUM}) oldest=(?:-1|{S6_NUM}) age={S6_NUM} "
-    rf"pids=[1-9][0-9]*(?:,[1-9][0-9]*)*"
+    rf"pids=[1-9][0-9]*(?:,[1-9][0-9]*)*",
+    re.ASCII,
 )
-S6_OLD = re.compile(rf"old {S6_UNIT} pid={S6_POS} age={S6_NUM} comm=\S*")
+S6_OLD = re.compile(rf"old {S6_UNIT} pid={S6_POS} age={S6_NUM} comm=\S*", re.ASCII)
 S6_CARRY = re.compile(
     rf"carry {S6_UNIT} state=(?P<state>dead|live|unknown) "
     rf"first=(?P<first>none|{S6_POS}) cpu0=(?P<cpu0>none|{S6_CPU}) "
-    r"why=(?P<why>unit-show|description|control-group|cpu|scope-start|procs|cgroup-dir|child-cgroup|server-stat|server-comm|tmux-unknown|parent-hop-cap|socket-tables|socket-fd|box-stat)"
+    r"why=(?P<why>unit-show|description|control-group|cpu|scope-start|procs|cgroup-dir|child-cgroup|server-stat|server-comm|tmux-unknown|parent-hop-cap|socket-tables|socket-fd|box-stat)",
+    re.ASCII,
 )
 S6_UNKNOWN_REASONS = frozenset(("unit-show", "description", "control-group", "cpu", "scope-start", "procs", "cgroup-dir", "child-cgroup", "server-stat", "server-comm", "tmux-unknown"))
 

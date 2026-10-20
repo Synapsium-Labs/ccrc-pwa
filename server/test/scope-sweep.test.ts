@@ -58,17 +58,18 @@ beforeEach(() => {
 afterEach(() => { removeTmpFixtures(); });
 
 /** A process in the fixture /proc: started `age` seconds ago, in cgroup `cg`, holding `sockets` (inode numbers). */
-function proc(pid: number, o: { age: number; comm?: string; ppid?: number; cg?: string; sockets?: number[]; fdUnreadable?: boolean; netns?: string; statUnreadable?: boolean; state?: string }): void {
+function proc(pid: number, o: { age: number; comm?: string; ppid?: number; cg?: string; sockets?: number[]; fdUnreadable?: boolean; netns?: string; statUnreadable?: boolean; state?: string; threads?: number }): void {
   const d = path.join(fx.proc, String(pid));
   fs.mkdirSync(path.join(d, 'fd'), { recursive: true });
   fs.mkdirSync(path.join(d, 'ns'));
   const comm = o.comm ?? 'node';
   const ticks = (UP - o.age) * 100;
   const state = o.state ?? 'S';
+  const threads = o.threads ?? 1;   // stat field 20, `num_threads`: a `Z` thread-group leader whose other threads still run reads more than 1
   // `t` is Linux's tracing stop (a process under ptrace): readable, yet outside the sweep's `[A-Z]` states.
   if (!/^[A-Z]$/.test(state) && state !== 't') throw new Error(`invalid fixture process state ${state}`);
   // `pid (comm) state ppid …` with the start time as field 22 — the comm carries a space and a paren, as real ones can
-  fs.writeFileSync(path.join(d, 'stat'), `${pid} (${comm}) ${state} ${o.ppid ?? 1} ${pid} ${pid} 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 ${ticks} 1000 10 0\n`);
+  fs.writeFileSync(path.join(d, 'stat'), `${pid} (${comm}) ${state} ${o.ppid ?? 1} ${pid} ${pid} 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 ${threads} 0 ${ticks} 1000 10 0\n`);
   fs.writeFileSync(path.join(d, 'comm'), `${comm}\n`);
   fs.writeFileSync(path.join(d, 'cgroup'), `0::${o.cg ?? '/elsewhere.scope'}\n`);
   fs.symlinkSync(o.netns ?? NETNS, path.join(d, 'ns', 'net'));
@@ -902,6 +903,15 @@ describe('wave 4b residue: carries, zombies and complete record writes', () => {
     expect(stops()).toEqual(state === 'Z' ? [`--user stop --no-block ${u}`] : []);
   });
 
+  it('an outside child in state Z with live threads is a live child (a thread-group leader that has exited, its other threads running)', () => {
+    const u = inert(1);
+    proc(3500, { age: 2 * 86400, ppid: 3001, state: 'Z', threads: 2, cg: '/elsewhere.scope' });
+    arm();
+    expect(run().code).toBe(0);
+    expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'parent-of-a-process-elsewhere' });
+    expect(stops()).toEqual([]);
+  });
+
   it('a valid empty replacement succeeds and removes an obsolete prior row', () => {
     fs.writeFileSync(STATE(), '# old complete record\n');
     const r = run();
@@ -996,23 +1006,30 @@ describe('the real sweep\'s record is readable by the doctor and the stage-6 ins
 
   // D-4320: both readers take an `old` row's comm as one run of non-whitespace, so the writer
   // must fold EVERY whitespace character, not only a space — a process name carrying a TAB
-  // otherwise makes the whole record unreadable to both.
-  /** A live pane scope whose one long-lived process has a TAB (and a space) in its comm. */
-  const tabRecord = (): string => {
+  // otherwise makes the whole record unreadable to both. "Whitespace" is ASCII whitespace: the six
+  // characters (space, \t, \n, \v, \f, \r) the `C`-locale fold replaces, which is also all the doctor's
+  // `[^[:space:]]` and the instrument's `re.ASCII` `\S` treat as a separator. Python's Unicode `\s`
+  // would also split on \x1c-\x1f, \x85 and \xa0, which the fold leaves alone (fix round 2, F1).
+  /** A live pane scope whose one long-lived process has `comm`; the sweep's `old` row for it is returned with the record's path. */
+  const commRecord = (comm: string): { rec: string; row: Record<string, string> } => {
     const u = unitName(1); const cg = cgOf(u);
     proc(3001, { age: 3 * 86400, comm: 'claude', cg });
-    proc(3004, { age: 3 * 86400 - 2 * HOUR, ppid: 3001, comm: 'bash\tjob x', cg });
+    proc(3004, { age: 3 * 86400 - 2 * HOUR, ppid: 3001, comm, cg });
     scope(1, { pane: 3001, procs: [3001, 3004] });
     livePanes(3001);
     const r = run();
     expect(r.code, r.err).toBe(0);
-    expect(rows('old')[`${u} pid=3004`]).toMatchObject({ comm: 'bash_job_x' });
-    expect(fs.readFileSync(STATE(), 'utf8')).not.toContain('\t');
-    return STATE();
+    return { rec: STATE(), row: rows('old')[`${u} pid=3004`]! };
   };
-
-  it('a comm with a TAB is written with `_`, and the doctor reads that row as one long-lived process', () => {
-    const rec = tabRecord();
+  /** A live pane scope whose one long-lived process has a TAB (and a space) in its comm. */
+  const tabRecord = (): string => {
+    const { rec, row } = commRecord('bash\tjob x');
+    expect(row).toMatchObject({ comm: 'bash_job_x' });
+    expect(fs.readFileSync(rec, 'utf8')).not.toContain('\t');
+    return rec;
+  };
+  /** The real `_check_scope-sweep`, cut out of the shipped file, run over `rec` with the verdict printers stubbed. */
+  const doctorReads = (rec: string): { stdout: string; stderr: string } => {
     const src = fs.readFileSync(DOCTOR, 'utf8').split('\n');
     const from = src.findIndex((l) => l.startsWith('_check_scope-sweep() {'));
     const to = src.findIndex((l, i) => i > from && l === '}');
@@ -1026,6 +1043,19 @@ describe('the real sweep\'s record is readable by the doctor and the stage-6 ins
     ].join('\n');
     const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 30000,
       env: { PATH: process.env['PATH'] ?? '', HOME: fx.home, LC_ALL: 'C', CCRC_SCOPE_SWEEP_STATE: rec } });
+    return { stdout: r.stdout, stderr: r.stderr };
+  };
+  /** The stage-6 instrument's published `inert_scopes` for the record the fixture XDG_RUNTIME_DIR holds. */
+  const instrumentPublishes = (): unknown => {
+    const r = spawnSync('python3', ['-I', TOOL, '--home', fx.home, '--stage', '6', '--journal', path.join(fx.base, 'no-journal.json'), '--json'],
+      { encoding: 'utf8', timeout: 30000, env: { PATH: process.env['PATH'] ?? '', TZ: 'UTC', XDG_RUNTIME_DIR: fx.xdg } });
+    expect(r.status, r.stderr).toBe(0);
+    return (JSON.parse(r.stdout) as { stage6: { inert_scopes: unknown } }).stage6.inert_scopes;
+  };
+  const oneOldCounts = { mode: 'shadow', dead: 0, inert: 0, inert_dead_a_day_or_more: 0, carried_scopes: { dead: 0, live: 0, unknown: 0 } };
+
+  it('a comm with a TAB is written with `_`, and the doctor reads that row as one long-lived process', () => {
+    const r = doctorReads(tabRecord());
     expect(r.stderr).toBe('');
     expect(r.stdout).toMatch(/^WARN scope-sweep: 0 dead pane scope\(s\) and 1 long-lived process\(es\)/);
     expect(r.stdout).not.toContain('cannot read');
@@ -1034,10 +1064,32 @@ describe('the real sweep\'s record is readable by the doctor and the stage-6 ins
 
   it('a comm with a TAB is written with `_`, and the instrument publishes counts rather than `unreadable`', () => {
     tabRecord();
-    const r = spawnSync('python3', ['-I', TOOL, '--home', fx.home, '--stage', '6', '--journal', path.join(fx.base, 'no-journal.json'), '--json'],
-      { encoding: 'utf8', timeout: 30000, env: { PATH: process.env['PATH'] ?? '', TZ: 'UTC', XDG_RUNTIME_DIR: fx.xdg } });
-    expect(r.status, r.stderr).toBe(0);
-    expect((JSON.parse(r.stdout) as { stage6: { inert_scopes: unknown } }).stage6.inert_scopes)
-      .toEqual({ mode: 'shadow', dead: 0, inert: 0, inert_dead_a_day_or_more: 0, carried_scopes: { dead: 0, live: 0, unknown: 0 } });
+    expect(instrumentPublishes()).toEqual(oneOldCounts);
+  });
+
+  // Characters Python's Unicode `\s` calls whitespace but the `C`-locale fold, the doctor and the instrument's ASCII `\S` do not.
+  const UNICODE_ONLY_SPACE = [
+    { name: 'U+001C (file separator)', ch: '\x1c' },
+    { name: 'U+0085 (next line)', ch: '\u0085' },
+    { name: 'U+00A0 (no-break space)', ch: '\u00a0' },
+  ];
+  describe.each(UNICODE_ONLY_SPACE)('a comm with $name', ({ ch }) => {
+    const comm = `bash${ch}job`;
+
+    it('is kept as written by the `C`-locale fold, and the doctor reads that row as one long-lived process', () => {
+      const { rec, row } = commRecord(comm);
+      expect(row).toMatchObject({ comm });
+      const r = doctorReads(rec);
+      expect(r.stderr).toBe('');
+      expect(r.stdout).toMatch(/^WARN scope-sweep: 0 dead pane scope\(s\) and 1 long-lived process\(es\)/);
+      expect(r.stdout).not.toContain('cannot read');
+      expect(r.stdout).toContain(comm);
+    });
+
+    it('is kept as written, and the instrument publishes counts rather than `unreadable`', () => {
+      const { row } = commRecord(comm);
+      expect(row).toMatchObject({ comm });
+      expect(instrumentPublishes()).toEqual(oneOldCounts);
+    });
   });
 });
