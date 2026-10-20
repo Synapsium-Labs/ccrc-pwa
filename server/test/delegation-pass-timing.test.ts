@@ -1236,6 +1236,55 @@ describe('D-5832 R5: the real loop: a 50 ms synchronous stall inside the store\'
   });
 });
 
+describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s thread clock where it has one, else the real process clock (green by design at main)', () => {
+  /** The production-clock pass: no CPU seam (the world's virtual one is taken off), a line written by the 1,001 ms in `noteSessions`. */
+  const productionPass = (setup?: ScenarioX['setup']) =>
+    scenario('std', { noteSessions: 1001 }, undefined, { seams: { cpuMicros: undefined }, setup });
+
+  it('D-5832 R6 (i) (M-CPUsrc): with no CPU seam the line\'s cpuThread is 1 when the runtime has process.threadCpuUsage and 0 when it has not, and the production CPU keys are whole non-negative numbers', async () => {
+    const hasThread = typeof (process as unknown as { threadCpuUsage?: unknown }).threadCpuUsage === 'function';
+    const sc = await productionPass();
+    const m = theLine(sc.lines);
+    expect(m.get('cpuThread'), `cpuThread follows the runtime's feature (threadCpuUsage is ${hasThread ? 'present' : 'absent'})`).toBe(hasThread ? 1 : 0);
+    for (const k of ['blockCpu', 'effectsCpu', 'reconcileCpu']) {
+      expect(m.has(k), `${k} is on the line`).toBe(true);
+      const v = m.get(k)!;
+      expect(Number.isInteger(v) && v >= 0, `${k} is a whole non-negative number (read ${v})`).toBe(true);
+    }
+  });
+
+  it('D-5832 R6 (ii) (M-CPUthread): with process.threadCpuUsage absent the lane reads the real process.cpuUsage and the line says cpuThread=0; the property is restored exactly', async () => {
+    const holder = process as unknown as { threadCpuUsage?: unknown };
+    const had = Object.prototype.hasOwnProperty.call(process, 'threadCpuUsage');
+    const desc = Object.getOwnPropertyDescriptor(process, 'threadCpuUsage');
+    const typeBefore = typeof holder.threadCpuUsage;
+    const usage: { spy: { mock: { calls: unknown[] }; mockRestore(): void } | null } = { spy: null };
+    let calls = 0;
+    let sc: Awaited<ReturnType<typeof scenario>>;
+    try {
+      sc = await productionPass(() => {
+        delete holder.threadCpuUsage;
+        if (typeof holder.threadCpuUsage === 'function') throw new Error('process.threadCpuUsage is still a function after the delete (a copy on the prototype?): the fallback cannot be reached, so this row cannot pin it');
+        usage.spy = vi.spyOn(process, 'cpuUsage');                        // calls through; the scenario's own mock restore ran before this setup
+        calls = usage.spy!.mock.calls.length;
+      });
+      calls = usage.spy!.mock.calls.length - calls;
+    } finally {
+      usage.spy?.mockRestore();
+      if (had) Object.defineProperty(process, 'threadCpuUsage', desc!);
+      else delete holder.threadCpuUsage;
+    }
+    expect(typeof holder.threadCpuUsage, 'process.threadCpuUsage is back as it was').toBe(typeBefore);
+    expect(Object.prototype.hasOwnProperty.call(process, 'threadCpuUsage'), 'and is an own property exactly when it was').toBe(had);
+    expect(Object.getOwnPropertyDescriptor(process, 'threadCpuUsage'), 'with the same descriptor').toEqual(desc);
+    expect(calls, 'the pass read process.cpuUsage (the fallback ran): at least one read to open a phase and one to close it').toBeGreaterThanOrEqual(2);
+    const m = theLine(sc.lines);
+    expect(m.get('cpuThread'), 'the process clock is not a thread clock').toBe(0);
+    expect(m.has('blockCpu'), 'blockCpu is on the line').toBe(true);
+    expect(Number.isInteger(m.get('blockCpu')) && m.get('blockCpu')! >= 0, 'and is a whole non-negative number').toBe(true);
+  });
+});
+
 describe('D-5832 (the bound): the new keys sit where the line\'s bound drops them last', () => {
   it('D-5832: at realistic values (7 digits each) the whole line is 1,817 bytes and drops nothing; at the largest values the keys that drop are a suffix of the list and the first four new keys stay', () => {
     const format = surface['delegationPassSlowLine'] as SlowLine | undefined;
@@ -1492,6 +1541,39 @@ describe('D-5835 R4: a turn\'s time is in yields and in total, and in no other t
     expect(m.get('yields'), 'the turns\' time').toBe(total);
     expect(m.get('total'), 'total is the pass\'s span: it keeps the turns').toBe(1001 + total);
     expect(m.get('block'), 'block excludes the turns').toBe(1001);
+    expect(m.get('other'), 'nothing is unaccounted for').toBe(0);
+  });
+});
+
+describe('D-5835 R5 (review 677 F3): the turn before the repair keeps its CPU in the phases that enclose it, and its elapsed time leaves them', () => {
+  it('D-5835 R5: pins the approved "CPU while open" reading: 61 ms of CPU and 97 ms of elapsed time in turn 3 are in effectsCpu, reconcileCpu and blockCpu, and the 97 ms is in yields and total and not in effects, reconcile or block (green by design at main)', async () => {
+    let active = false;
+    let turns = 0;
+    let w!: World;
+    // Only the third turn of the armed pass (the one before the repair, inside `effects` and `reconcile`) spends CPU and time; the line's own turn is the fourth.
+    const loopTurn = async (): Promise<void> => {
+      if (!active) return;
+      turns += 1;
+      if (turns === 3) { w.cpu.us += 61_000; w.clock.t += 97; }
+    };
+    const sc = await scenario('std', { noteSessions: 1001 }, undefined, {
+      full: true, seams: { loopTurn },
+      setup: (ctx) => { w = ctx.w; active = true; },
+    });
+    expectReached('repair', sc);
+    expect(YIELDS_OF(sc.armed()), 'the pass took its three turns').toBe(3);
+    expect(turns, 'and the line took its own (the fourth), which spends nothing').toBe(4);
+    const m = theLine(sc.lines);
+    expect(m.get('effectsCpu'), 'effectsCpu holds the CPU spent in turn 3, which `effects` encloses').toBe(61);
+    expect(m.get('reconcileCpu'), 'reconcileCpu holds it too').toBe(61);
+    expect(m.get('blockCpu'), 'blockCpu sums effects\' CPU, so it holds it').toBe(61);
+    expect(m.get('repairCpu'), 'the repair part opens after the turn: none of the 61 ms is its own').toBe(0);
+    expect(m.get('flushCpu'), 'nor the flush\'s').toBe(0);
+    expect(m.get('effects'), 'effects (elapsed) excludes the 97 ms').toBe(0);
+    expect(m.get('reconcile'), 'reconcile (elapsed) excludes it').toBe(0);
+    expect(m.get('block'), 'block excludes it: the 1,001 ms of noteSessions only').toBe(1001);
+    expect(m.get('yields'), 'yields holds it').toBe(97);
+    expect(m.get('total'), 'total keeps it').toBe(1001 + 97);
     expect(m.get('other'), 'nothing is unaccounted for').toBe(0);
   });
 });
