@@ -640,7 +640,10 @@ function sayWhatChanged(detail, rest) {
  *    from (spec §2.2 Seeding).
  *  - A RE-RUN ON A REVERTED PIN (D-5991): a revert cut short after its registry write left the class on
  *    `previous.model` with no history entry. Run again, it renders the lane, clears `previous` and keeps the hold,
- *    and records no move: an entry from that model to itself would be a move that never happened.
+ *    and records no move: an entry from that model to itself, at the level it already has, would be a move that
+ *    never happened. A pin already on `previous.model` at ANOTHER level (a hand set-class back to it keeps the
+ *    class's level) has the level put back, and that change is recorded: a `revert` entry whose `from` and `to` are
+ *    that one model, with the `effort` pair. The final write's note says, for each shape, what is not recorded.
  */
 function revertOp(a, account, registry, catalogue, win) {
   const loaded = advanceForWrite(a.id, registry);
@@ -732,17 +735,27 @@ function revertOp(a, account, registry, catalogue, win) {
   // D-5992: the restored pin's family, so the file stays true for every reader. A revert to none keeps the stored
   // family: an empty class is filled from it, and a held one is reported behind it.
   if (to !== null) c.family = familyOf(to);
-  // D-5991: a re-run on a reverted pin records no move (from and to are one model).
-  const done = from === to ? adv : recordMove(adv, a.class, {
+  // D-5991: a re-run on a reverted pin records no move, its pin and its level both unchanged. A pin already on
+  // previous.model at another level (a hand set-class back to it) has its level put back, and that is recorded: one
+  // model as from and to, and the effort pair, which an entry's rules allow (nothing ties its from to its to).
+  const moved = from !== to || effortFrom !== effortTo;
+  const done = !moved ? adv : recordMove(adv, a.class, {
     at: now(), how: 'revert', from, to, ok: true, canary: 'not-run',
     ...(effortFrom !== effortTo ? { effort: { from: effortFrom, to: effortTo } } : {}),
   });
   const w2 = writeAdvance(a.id, done);
   const answer = { ok: true, op: 'revert', class: a.class, from, to, ...describe(account, validated, catalogue, win) };
   if (w2 !== null) {
-    answer.advanceNote = `${w2[0]}: ${sayWhatChanged(w2[1], 'The class was reverted and is held, but this move is not in '
-      + 'its history and its previous model is still on record: a second revert finds the class already on that '
-      + 'model, so it clears that record and records no move.')}`;
+    // What the file still says, true for each shape: previous is on record, the hold is on disk, and the history
+    // lacks the move or the level's change this run made, if it made one.
+    const rest = !moved
+      ? 'The class is on its previous model and held, but that previous model is still on record: run the revert '
+        + 'again to clear it; it records no move.'
+      : `${from !== to ? 'The class was reverted and is held, but this move'
+        : "The class's effort level was put back and the class is held, but this change"} is not in its history and `
+        + 'its previous model is still on record: a second revert finds the class already on that model at that '
+        + 'level, so it clears that record and records no move.';
+    answer.advanceNote = `${w2[0]}: ${sayWhatChanged(w2[1], rest)}`;
     process.stderr.write(`${SELF}: ${answer.advanceNote}\n`);
   }
   out(answer);

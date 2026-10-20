@@ -2741,6 +2741,28 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
     expect(advanceOf(ID).classes.opus.family).toBe(familyOf('model-6-delta'));
   });
 
+  it('a revert to a previous with no effort level removes the class\'s level and keeps the others, and records the pair (D-5189)', () => {
+    advanced({ model: 'model-5.6-gamma', effort: null });
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const reg = registryOf(ID) as unknown as Registry;
+    expect(reg.classes.opus).toBe('model-5.6-gamma');
+    expect(reg.effort, 'opus has no level now; the other classes keep theirs')
+      .toEqual({ haiku: 'high', sonnet: 'high', fable: 'max' });
+    const opus = advanceOf(ID).classes.opus;
+    expect(opus.history[opus.history.length - 1]).toEqual({ at: NOW, how: 'revert', from: 'model-6.1-gamma',
+      to: 'model-5.6-gamma', ok: true, canary: 'not-run', effort: { from: 'xhigh', to: null } });
+  });
+
+  it('a revert to a previous with no effort level drops the effort map when that level was its only entry (D-5189)', () => {
+    advanced({ model: 'model-5.6-gamma', effort: null }, { ...ADVANCED, effort: { opus: 'xhigh' } });
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const reg = registryOf(ID);
+    expect(reg['classes']).toMatchObject({ opus: 'model-5.6-gamma' });
+    expect(Object.keys(reg), 'no empty effort map is left behind').not.toContain('effort');
+  });
+
   it('a revert to none keeps the stored family: an empty class is filled from it, and a held one is reported behind it (D-5992)', () => {
     // fable filled from empty by an advance, then reverted to empty: the plan's example file's fable.
     advanced({ model: null, effort: null }, { ...ADV_REGISTRY, classes: { ...ADV_REGISTRY.classes, fable: 'model-6-delta' } },
@@ -3027,6 +3049,64 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
     expect(opus.history, 'no entry from a model to itself').toEqual(adv.classes.opus.history);
   });
 
+  /** opus advanced from model-5.6-gamma at max to model-6.1-gamma at xhigh, then set back to model-5.6-gamma BY HAND:
+   *  set-class keeps the class's level (xhigh) and leaves previous alone, so a revert finds the pin already on
+   *  previous.model at another level. */
+  const handBackAtAnotherLevel = (): void => {
+    advanced();
+    const s = opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'model-5.6-gamma');
+    expect(s.code, s.stdout + s.stderr).toBe(0);
+    const reg = registryOf(ID) as unknown as Registry;
+    expect([reg.classes.opus, reg.effort?.opus], 'CONTROL: the pin is previous.model, at another level')
+      .toEqual(['model-5.6-gamma', 'xhigh']);
+    expect(advanceOf(ID).classes.opus.previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
+  };
+  const handEntry: HistoryEntry = { at: NOW, how: 'hand', from: 'model-6.1-gamma', to: 'model-5.6-gamma', ok: true,
+    canary: 'not-run' };
+
+  it('a revert on a pin already on previous.model at another effort level puts the level back and records that change: one model, the effort pair', () => {
+    handBackAtAnotherLevel();
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((registryOf(ID) as unknown as Registry).effort?.opus).toBe('max');
+    const opus = advanceOf(ID).classes.opus;
+    expect([opus.previous, opus.hold]).toEqual([null, { at: NOW, by: 'revert' }]);
+    expect(opus.history.slice(-2)).toEqual([handEntry, { at: NOW, how: 'revert', from: 'model-5.6-gamma',
+      to: 'model-5.6-gamma', ok: true, canary: 'not-run', effort: { from: 'xhigh', to: 'max' } }]);
+  });
+
+  it("a revert of only the effort level whose last advance-file write fails says that change is not recorded, and a second revert does what that says", () => {
+    handBackAtAnotherLevel();
+    const opus0 = advanceOf(ID).classes.opus;
+    const r = revertThrough(copyOp('  const w2 = writeAdvance(a.id, done);',
+      '  const w2 = writeAdvance(`${a.id}.classes.json/x`, done);'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const note = String(r.body['advanceNote']);
+    expect(note).toMatch(/^advance-unwritable: .*could not be written: .*\. The class's effort level was put back and the class is held, but this change is not in its history and its previous model is still on record: a second revert finds the class already on that model at that level, so it clears that record and records no move\.$/);
+    expect((registryOf(ID) as unknown as Registry).effort?.opus).toBe('max');
+    const again = verb('revert');
+    expect(again.code, again.stdout + again.stderr).toBe(0);
+    const opus = advanceOf(ID).classes.opus;
+    expect([opus.previous, opus.history], 'cleared, and no move recorded').toEqual([null, opus0.history]);
+  });
+
+  it('a re-run on a reverted pin whose last advance-file write fails says the previous model is still on record, never that a move went unrecorded', () => {
+    advanced();
+    const adv = advanceOf(ID);
+    adv.classes.opus.hold = { at: '2026-10-14T12:00:00Z', by: 'revert' };
+    plantAdvance(ID, adv);
+    fs.writeFileSync(regPath(ID), `${JSON.stringify(ADV_REGISTRY, null, 2)}\n`, { mode: 0o600 });
+    const r = revertThrough(copyOp('  const w2 = writeAdvance(a.id, done);',
+      '  const w2 = writeAdvance(`${a.id}.classes.json/x`, done);'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const note = String(r.body['advanceNote']);
+    expect(note).toMatch(/^advance-unwritable: .*could not be written: .*\. The class is on its previous model and held, but that previous model is still on record: run the revert again to clear it; it records no move\.$/);
+    expect(note).not.toMatch(/not in its history/);
+    const again = verb('revert');
+    expect(again.code, again.stdout + again.stderr).toBe(0);
+    expect([advanceOf(ID).classes.opus.previous, advanceOf(ID).classes.opus.history]).toEqual([null, adv.classes.opus.history]);
+  });
+
   it("revert ranks a stored level the old model no longer offers by a row that lists it, so it lands on the next level down, not the model's lowest (D-5991)", () => {
     advanced();   // opus advanced from model-5.6-gamma at max to model-6.1-gamma at xhigh
     // Since then the old model has stopped offering max: four levels, as the newer model offers.
@@ -3043,6 +3123,28 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
     const r = verb('revert');
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect((registryOf(ID) as unknown as Registry).discovery).toEqual([...list, 'model-5.6-gamma']);
+  });
+
+  it("revert never grows an openrouter lane's discovery list: a previous model the list lacks is refused, and nothing is written", () => {
+    // No writer sets previous on an openrouter lane today, so it is planted: the guard is the whitelist's, and a list
+    // that grew here would skip `discovery add`'s check.
+    const router = ROSTER.accounts[3]!.id;
+    const list = ['model-6.1-alpha', 'model-6.1-beta', 'model-6.1-gamma'];
+    const registry: Registry = { probe: 'openrouter', classes: { haiku: 'model-6.1-alpha', sonnet: 'model-6.1-beta',
+      opus: 'model-6.1-gamma', fable: null }, subagent: 'sonnet', discovery: list };
+    writeCatalogue(router, { ...ADV_CATALOGUE, probe: 'openrouter' });
+    fs.writeFileSync(regPath(router), `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o600 });
+    const m = op('materialise', '--file', rosterPath(), '--id', router);
+    expect(m.code, m.stdout + m.stderr).toBe(0);
+    const adv = backfillAdvance({ registry, seedFamilies: null });
+    adv.classes.opus.previous = { model: 'model-5.6-gamma', effort: null };
+    plantAdvance(router, adv);
+    const before = modelFiles();
+    const r = opEnv({ CCRC_MODELS_NOW: NOW }, 'revert', '--file', rosterPath(), '--id', router, '--class', 'opus');
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'registry-invalid']);
+    expect(String(r.body['detail'])).toMatch(/discovery list does not offer/);
+    expect(modelFiles()).toEqual(before);
+    expect((registryOf(router) as unknown as Registry).discovery).toEqual(list);
   });
 
   it.each([['hold'], ['release'], ['revert']])('%s refuses a lane with no class registry, naming init, and writes no advance file', (v) => {
