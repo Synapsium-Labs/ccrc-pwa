@@ -1794,6 +1794,44 @@ describe('fix round 1 (D-5984): each child leads its own process group, with a p
     expect(existsSync(t5path.join(b.out, 'fail-0.pid')), 'no record left').toBe(false);
   }, 60_000);
 
+  // D-5984: a child no record names must not run on. Whatever stops the `.pid` record being written whole, the child's
+  // group is SIGKILLed and the run rejects. The record's tmp file is `<name>.pid.tmp-<this pid>` (the run is in-process, so
+  // process.pid is the writer's); a DIRECTORY planted there (settleLeftover and the claim walk look at `.pid` and
+  // `.jsonl.part` names only, so they let it through) makes the exclusive create refuse.
+  it('when the .pid record cannot be written, the child\'s whole group is killed, the run rejects and no run.json is written', async () => {
+    const b = t5Box('ccrc-replay-d5984-pidfail-');
+    writeFileSync(t5path.join(b.home, '.local', 'bin', 'up-a'), `#!/usr/bin/env node
+(async () => {
+  const fs = await import('node:fs');
+  const cp = await import('node:child_process');
+  const path = await import('node:path');
+  const home = path.resolve(path.dirname(process.argv[1]), '..', '..');
+  fs.writeFileSync(path.join(home, 'stub.pid'), String(process.pid));
+  const g = cp.spawn(process.execPath, ['-e', 'setTimeout(() => {}, 25000)'], { stdio: 'ignore' });
+  fs.writeFileSync(path.join(home, 'grandchild.pid'), String(g.pid));
+  setTimeout(() => {}, 25000);
+})();
+`, { mode: 0o700 });
+    mkdirSync(t5path.join(b.out, `pf-0.pid.tmp-${process.pid}`));
+    const files = ['stub.pid', 'grandchild.pid'].map((f) => t5path.join(b.home, f));
+    const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    try {
+      const failure = await bounded(claimedRun(t5job(b, b.up, 'box', 'pf-0')).then(() => null, (e: unknown) => e), 30_000, 'the run rejecting');
+      expect(failure, 'the run rejects').toBeInstanceOf(DriverRefusal);
+      expect((failure as DriverRefusal).word).toBe('out-refused');
+      expect((failure as DriverRefusal).detail).toMatch(/^pf-0\.pid\.tmp-\d+ already exists/);
+      await pause(2000);   // a child left running would have written its pid files by now
+      const stubPid = existsSync(files[0]!) ? Number(readFileSync(files[0]!, 'utf8')) : null;
+      if (stubPid !== null) expect(await until(() => groupGone(stubPid), 10_000), 'no process is left in the stub\'s group').toBe(true);
+      const grandchild = existsSync(files[1]!) ? Number(readFileSync(files[1]!, 'utf8')) : null;
+      if (grandchild !== null) expect(await until(() => !alive(grandchild), 10_000), 'the grandchild died with the group').toBe(true);
+      expect(existsSync(t5path.join(b.out, 'pf-0.run.json')), 'no run.json').toBe(false);
+      expect(existsSync(t5path.join(b.out, 'pf-0.pid')), 'no record').toBe(false);
+    } finally {
+      for (const f of files) { try { process.kill(Number(readFileSync(f, 'utf8')), 'SIGKILL'); } catch { /* gone, or never written */ } }
+    }
+  }, 60_000);
+
   it('a run that outlives its timeout is killed with its whole group, and still records its run.json', async () => {
     const b = t5Box('ccrc-replay-d5984-timeout-');
     writeFileSync(t5path.join(b.home, '.local', 'bin', 'up-a'), `#!/usr/bin/env node
@@ -1880,6 +1918,18 @@ describe('fix round 1 (D-5985): one driver per --out, and the claim every runner
     expect(readFileSync(lockPath(out), 'utf8'), 'another driver\'s lock is left alone').toBe(recText(424250, '4'));
   });
 
+  // D-5985: the start half of the identity. A lock that names THIS pid with ANOTHER start is a reused pid's, not this
+  // driver's, and release leaves it alone.
+  it('release leaves a lock that names this pid with another start', () => {
+    const out = freshOut();
+    const c = claimNow(out);
+    const reused = recText(process.pid, '1');
+    expect(reused, 'the planted start differs from this process\'s').not.toBe(recText(process.pid, myStart()));
+    writeFileSync(lockPath(out), reused);
+    c.release();
+    expect(readFileSync(lockPath(out), 'utf8'), 'a reused pid\'s lock is left alone').toBe(reused);
+  });
+
   it('a lock held by a live driver refuses out-in-use naming the pid, and leaves the lock as it was: this process, another process, an unmeasured holder', async () => {
     const out = freshOut();
     claimNow(out);
@@ -1916,6 +1966,18 @@ describe('fix round 1 (D-5985): one driver per --out, and the claim every runner
     expect(() => replay.claimOut(out, { liveness: swap })).toThrow(/out-in-use: .driver.lock changed hands/);
     expect(readFileSync(lockPath(out), 'utf8'), 'the live driver\'s lock is back').toBe(theirs);
     expect(readdirSync(out).sort()).toEqual([replay.OUT_MARKER, LOCK].sort());
+  });
+
+  // D-5985: the start half of the takeover's re-read. The stale file names the SAME dead pid but ANOTHER start (the pid was
+  // reused by a new driver that took the lock in the window), so it is not the holder read as dead: put back, refuse.
+  it('a stale lock that names the same pid with another start is put back, and the claim refuses out-in-use', () => {
+    const out = freshOut();
+    writeFileSync(lockPath(out), recText(424254, '2'));
+    const theirs = recText(424254, '3');
+    const swap = (): 'dead' => { writeFileSync(lockPath(out), theirs); return 'dead'; };   // read as dead, then the pid's new owner takes the lock
+    expect(() => replay.claimOut(out, { liveness: swap })).toThrow(/out-in-use: .driver.lock changed hands/);
+    expect(readFileSync(lockPath(out), 'utf8'), 'the other start\'s lock is back').toBe(theirs);
+    expect(readdirSync(out).sort(), 'no stale or temp file remains').toEqual([replay.OUT_MARKER, LOCK].sort());
   });
 
   it('a lock that is empty, torn, not a record, a directory or a symlink refuses out-in-use naming the file, and is left as it was', () => {
@@ -3505,7 +3567,9 @@ describe('W2-4 Task 8: step0a end to end', () => {
   }, 60_000);
 
   // D-5813: the ':' check also runs on the realpath prepareOut answers, so an --out under an ancestor symlink to a
-  // directory whose name holds ':' is a driver word, not spawnEnv's TypeError (exit 1) after the first spawn.
+  // directory whose name holds ':' is a driver word, not spawnEnv's TypeError (exit 1). Without the check that TypeError
+  // is thrown BEFORE any spawn (in measureClaudeVersion's env build for step 0a, in launchRun for the probe), so the empty
+  // stub log does not tell the mutant from the guard: the exit code does.
   it("an --out under an ancestor symlink to a path holding ':' is refused args-invalid before any spawn", () => {
     const home = t8Home('ccrc-w2-t8-colonlink-');
     const base = mkTmp('ccrc-w2-t8-colonlink-base-');
@@ -3522,6 +3586,18 @@ describe('W2-4 Task 8: step0a end to end', () => {
     const r = t8Run(t8Tree(), home, t8Argv(t8Out(), { 'settings-mode': 'open' }));
     expect(r.code).toBe(2);
     expect(r.stderr).toBe('ccrc history-replay: args-invalid: settings-mode open\n');
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
+
+  // D-5815: --settings-mode is checked before --out is made, as the probe checks it, so a bogus value is a usage mistake
+  // that leaves nothing behind.
+  it('--settings-mode bogus is refused args-invalid and no --out is made', () => {
+    const home = t8Home('ccrc-w2-t8-settings-first-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { 'settings-mode': 'bogus' }));
+    expect(r.code).toBe(2);
+    expect(r.stderr).toBe('ccrc history-replay: args-invalid: settings-mode bogus\n');
+    expect(existsSync(out), 'a bogus --settings-mode left --out behind').toBe(false);
     expect(stubLog(home)).toBeNull();
   }, 60_000);
 
@@ -4155,16 +4231,20 @@ describe('W2-4 Task 9: the probe checks every required flag before --out is made
     expect(existsSync(out), `a missing --${flag} left --out behind`).toBe(false);
     expect(stubLog(home)).toBeNull();
   });
-  // D-5813: as step0a, the ':' check also runs on prepareOut's realpath (an ancestor symlink to a path holding ':').
-  it("an --out under an ancestor symlink to a path holding ':' is refused args-invalid before any spawn", () => {
-    const { home } = box('ccrc-replay-t9-colonlink-');
-    const base = mkTmp('ccrc-replay-t9-colonlink-base-');
-    mkdirSync(path.join(base, 'a:b'));
-    symlinkSync(path.join(base, 'a:b'), path.join(base, 'link'));
-    const r = runDriver(home, argvOf(path.join(base, 'link', 'out'), 'up-a', null));
-    expect(r.code, r.stderr).toBe(2);
-    expect(r.stderr).toBe("ccrc history-replay: args-invalid: out contains ':'\n");
-    expect(stubLog(home)).toBeNull();
+  describe("the realpath ':' check (D-5813)", () => {
+    // D-5813: as step0a, the ':' check also runs on prepareOut's realpath (an ancestor symlink to a path holding ':').
+    // Without the check the TypeError (exit 1) is thrown in launchRun, before its spawn; the exit code tells the mutant
+    // from the guard.
+    it("an --out under an ancestor symlink to a path holding ':' is refused args-invalid before any spawn", () => {
+      const { home } = box('ccrc-replay-t9-colonlink-');
+      const base = mkTmp('ccrc-replay-t9-colonlink-base-');
+      mkdirSync(path.join(base, 'a:b'));
+      symlinkSync(path.join(base, 'a:b'), path.join(base, 'link'));
+      const r = runDriver(home, argvOf(path.join(base, 'link', 'out'), 'up-a', null));
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toBe("ccrc history-replay: args-invalid: out contains ':'\n");
+      expect(stubLog(home)).toBeNull();
+    });
   });
   it('a missing --budget with an unadmissible account answers budget-required, not account-refused, and makes no --out', () => {
     const { home, out } = box('ccrc-replay-t9-reqfirst-');

@@ -155,8 +155,12 @@ export function paneRefusal(env) {
 // (SIGKILL, the OOM killer) cannot run any of this; the `.pid` record each run leaves is what the next driver reads
 // (settleLeftover). Residuals, named: a grandchild that calls setsid itself escapes the group kill (and writes no `.part`),
 // and a driver killed between spawn() and its `.pid` record leaves a `.part` with no record, charged as D-5811 says.
-/** Every live child's pid (and process-group id). */
-const liveChildren = new Set();
+/** Every live child, keyed by its pid (which is its process-group id). A Map, not a Set of pids, so 'close' can tell its
+ *  own entry from a newer child's: the kernel may hand a reaped child's pid to a sibling spawned before the old child's
+ *  'close' fires, and the old 'close' must not drop that newer entry (D-5984). No test reaches this: the reuse window
+ *  is the kernel's, a test cannot make a pid recur between a child's exit and its 'close', and the registry is
+ *  module-private with no hook (none is added for this). */
+const liveChildren = new Map();
 /** The signal that stopped the driver (its name), or null. main resets it at entry. */
 let stopping = null;
 const STOP_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
@@ -177,8 +181,8 @@ function signalGroup(pid, sig) {
  *  still registered after the grace get SIGKILL (read at that moment, not a snapshot). */
 function onStopSignal(sig) {
   if (stopping === null) stopping = sig;
-  for (const pid of liveChildren) signalGroup(pid, 'SIGTERM');
-  setTimeout(() => { for (const pid of liveChildren) signalGroup(pid, 'SIGKILL'); }, STOP_GRACE_MS).unref();
+  for (const pid of liveChildren.keys()) signalGroup(pid, 'SIGTERM');
+  setTimeout(() => { for (const pid of liveChildren.keys()) signalGroup(pid, 'SIGKILL'); }, STOP_GRACE_MS).unref();
 }
 
 /** Refuse `interrupted` while the stopping flag is set. Called before every spawn and before every output file a
@@ -187,13 +191,16 @@ function refuseIfStopping() {
   if (stopping !== null) refuse('interrupted', `${stopping} received; no further child starts and no output file is written`);
 }
 
-/** `spawn` as a registered group leader: not unref'd, the caller's stdio. The registry drops the pid at 'close'. */
+/** `spawn` as a registered group leader: not unref'd, the caller's stdio. The registry drops the entry at 'close', and only
+ *  when it is still THIS child's (see liveChildren). It does not drop it on 'error': a child with a pid that reports an
+ *  error (a failed kill, say) may still be running, and a stop must still signal its group. A child with no pid (the
+ *  spawn failed) is never registered. */
 function spawnGroup(launcher, argv, options) {
   const child = spawn(launcher, argv, { ...options, detached: true });
   const pid = child.pid;
   if (typeof pid === 'number') {
-    liveChildren.add(pid);
-    child.once('close', () => { liveChildren.delete(pid); });
+    liveChildren.set(pid, child);
+    child.once('close', () => { if (liveChildren.get(pid) === child) liveChildren.delete(pid); });
   }
   return child;
 }
@@ -1847,8 +1854,8 @@ export function refuseRecallOff(home, ids) {
 // `step0a` runs once per named node before pilot sourcing (W2 decisions §5, act 7). It spends, so it takes every
 // refusal before its first spawn: the pane and the arguments (main), HOME, every required flag (D-5815: --out,
 // --account, --budget, --writer-model, --judge-model and --arm-model, so a missing one never leaves a fresh --out
-// behind; W2-D55: no budget default before part 1), the unusable inputs (D-5813), --out (Task 2), the account
-// (Task 3), and the settings mode. It then
+// behind; W2-D55: no budget default before part 1), the settings mode (D-5815, so a bogus one leaves no --out
+// either), the unusable inputs (D-5813), --out (Task 2), the claim (D-5985) and the account (Task 3). It then
 // measures what it records but never compares: codeShas() over the tree it runs from and the installed release
 // stamp (W2-D24; part 1's validator compares them with gate_code). Neither has an "unmeasured" spelling in the
 // record, so an unmeasured one refuses here, with the preflight's own word (Task 7's rule): code-unmeasured
@@ -1893,8 +1900,9 @@ function refuseColonInRealOut(out) {
 
 /** D-5813: the operator inputs that would otherwise surface as a TypeError (exit 1) from spawnArgv or spawnEnv after
  *  --out is made, or after step 0a's writer run has spent. HOME and the resolved --out must not hold ':' (PATH's
- *  separator), and every model flag given must be a model id (MODEL_RE). A model flag that is absent is left to its
- *  own `<flag>-required` refusal (D-5815: both handlers have already checked their required flags). The TypeErrors stay as defence.
+ *  separator), and every model flag given must be a model id (MODEL_RE). An absent model flag passes here: that branch is
+ *  defence only, since both handlers check their required flags first (D-5815) and refuse `<flag>-required` before this
+ *  runs. The TypeErrors stay as defence.
  *  @param {string} home  @param {string} outArg
  *  @param {ReadonlyArray<readonly [string, unknown]>} models flag name and value */
 function refuseUnusableInputs(home, outArg, models) {
@@ -1971,6 +1979,9 @@ export async function step0aCommand(flags, env) {
   // D-5815: every required flag first, before --out is made and before admission (a missing --budget answers
   // args-invalid even for an account admission would refuse).
   for (const k of STEP0A_REQUIRED) if (flags[k] === undefined) refuse('args-invalid', `${k}-required`);
+  // D-5815: the settings mode is a usage check too, as the probe's: a bogus value leaves no fresh --out behind.
+  const settingsMode = flags['settings-mode'] ?? 'restricted';
+  if (!SETTINGS_MODES.includes(settingsMode)) refuse('args-invalid', `settings-mode ${settingsMode}`);
   const outArg = flags.out;
   refuseUnusableInputs(home, outArg, STEP0A_RUNS.map((r) => [r.modelFlag, flags[r.modelFlag]]));
   const out = prepareOut(outArg);
@@ -1981,8 +1992,6 @@ export async function step0aCommand(flags, env) {
     const launch = admitAccount(json, roster, flags.account, home);
     const budget = flags.budget;
     const models = Object.fromEntries(STEP0A_RUNS.map((r) => [r.key, flags[r.modelFlag]]));
-    const settingsMode = flags['settings-mode'] ?? 'restricted';
-    if (!SETTINGS_MODES.includes(settingsMode)) refuse('args-invalid', `settings-mode ${settingsMode}`);
     const shas = codeShas();
     if (shas.state !== 'measured') refuse('code-unmeasured', `${shas.path} is ${shas.cause}`);
     const stamp = readReleaseStamp(home);
@@ -2122,8 +2131,10 @@ function shaOfPlain(out, rel) {
   return sha256Hex(read.bytes);
 }
 
-/** `probe`: pane and args (main), then every required flag (--budget included, D-5815), HOME, --out, admission and the
- *  gate before every spawn, so every refusal lands before the first spawn. Then one box-mode run per taught spelling (at most two at once),
+/** `probe`: pane and args (main), then, in the code's order: unknown flags (a flag the probe never reads), required flags
+ *  (--budget included, D-5815), the settings mode, HOME, the unusable inputs (D-5813), `prepareOut`, the realpath ':'
+ *  check (D-5813), `claimOut` (D-5985), the roster and admission, the launcher's X_OK, and the gate before every spawn,
+ *  so every refusal lands before the first spawn. Then one box-mode run per taught spelling (at most two at once),
  *  `<out>/probe.json`, and `sha256 <hex>` on stderr (D-5983), stdout empty. Exit 0 whatever the runs showed. */
 export async function probeCommand(flags, env) {
   for (const k of Object.keys(flags)) if (!PROBE_FLAGS.includes(k)) refuse('args-invalid', `--${k} is not a probe flag`);
