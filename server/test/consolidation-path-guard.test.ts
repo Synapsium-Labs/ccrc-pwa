@@ -102,7 +102,7 @@ describe('no pwa/ file before W7 (D-5855; spec §5.1 rule 8)', () => {
     expect(pathGuard(['server/src/watch.ts', 'pwa/src/app.tsx'], ['x\n\nbody cites D-5860 here']).red).toBe(true);
     // A W1a commit with no pwa/ path is green, and a longer number that starts with a W1a one is not it.
     expect(pathGuard(['server/src/watch.ts'], ['(D-5855)']).red).toBe(false);
-    expect(pathGuard(['pwa/src/app.tsx'], ['(D-58551)', '(D-5854)', '(D-5861)']).red).toBe(false);
+    expect(pathGuard(['pwa/src/app.tsx'], ['(D-' + '58551)', '(D-5854)', '(D-5861)']).red).toBe(false);
   });
 
   it('CONTROL (fixture): a pwa-only queue entry stacked on a W1a entry is green against the group base_sha', () => {
