@@ -60,6 +60,29 @@ describe('scan/parse.ts lists a type query as a type-only edge (D-6045)', () => 
   });
 });
 
+// D-6045, stage 2 (ARCH-04 (#545)): a per-name `type` is reported per name, so the outward-edges rule can tell an
+// import that binds a value from one whose every name is a type.
+describe('scan/parse.ts lists the names bound with a per-name type (D-6045, stage 2)', () => {
+  it('for an import and an export … from; none for a whole-statement type, absent on the other kinds', () => {
+    const t = parseSource([
+      "import { type A, b, type C as D } from './x.js';",
+      "import type { E } from './e.js';",
+      "export { type F, g } from './f.js';",
+      "export * from './all.js';",
+      "import './side.js';",
+      "const h = await import('./h.js');",
+    ].join('\n'));
+    expect(t.imports.map(({ specifier, typeNames }) => ({ specifier, typeNames }))).toEqual([
+      { specifier: './x.js', typeNames: ['A', 'C'] },
+      { specifier: './e.js', typeNames: [] },
+      { specifier: './f.js', typeNames: ['F'] },
+      { specifier: './all.js', typeNames: [] },
+      { specifier: './side.js', typeNames: [] },
+      { specifier: './h.js', typeNames: undefined },
+    ]);
+  });
+});
+
 describe('scan/parse.ts parses a fixture file (D-5853)', () => {
   let dir = '';
   let parsed: ParsedFile;
