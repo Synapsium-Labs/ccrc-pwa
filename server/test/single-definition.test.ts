@@ -2290,25 +2290,23 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
   });
 
   it("'coordinator-paused' is a literal in exactly one source file", () => {
-    // `COORDINATOR_PAUSE_MARKER` (`server/src/coord/rundefs.ts`) is the ONE
-    // definition; `dispatch.ts` and `watch.ts` both import it. A second literal
-    // is how the pause banner and the dispatch gate would come to disagree
-    // about what "paused" means — one of them reading a name the other never
-    // writes.
+    // `COORDINATOR_PAUSE_MARKER` (its `shared/switches.ts` row, D-5855,
+    // re-exported by `server/src/coord/rundefs.ts`) is the ONE definition;
+    // `dispatch.ts` and `watch.ts` both import it. A second literal is how the
+    // pause banner and the dispatch gate would come to disagree about what
+    // "paused" means — one of them reading a name the other never writes.
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'coordinator-paused'")).map(rel);
-    expect(holders).toEqual(['server/src/coord/rundefs.ts']);
+    expect(holders).toEqual(['shared/switches.ts']);
   });
 
-  it("'mail-disabled' is deliberately NOT held to one literal, and this says so BY NAME", () => {
-    // THE EXCLUSION IS WRITTEN DOWN, not a scanner quietly narrowed — the
-    // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. `watch.ts:194` holds
-    // a second literal ON PURPOSE (`sweepMail` uses it; importing the
-    // `rundefs.ts` copy into that scope as well would be a redeclaration,
-    // TS2451), and `rundefs.ts`'s own docstring carries the argument for the
-    // split. So the expected shape here is a NAMED LIST rather than one file —
-    // and any new holder still fails.
+  it("'mail-disabled' is held by a NAMED list: one marker literal, the rest other words that spell it", () => {
+    // THE LIST IS WRITTEN DOWN, not a scanner quietly narrowed — the
+    // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. The marker literal is
+    // defined ONCE, in its `shared/switches.ts` row (D-5855); `watch.ts`'s
+    // module-local copy is gone, and `rundefs.ts` re-exports the row. Any new
+    // holder still fails.
     //
-    // Two of the five are refusal codes, not marker literals: `'mail-disabled'` is also
+    // Two of the four are refusal codes, not marker literals: `'mail-disabled'` is also
     // a `RunRefuseCode` member, so `shared/api.ts` (the vocabulary) and
     // `coord/dispatch.ts` (the refusal that uses it) spell the same characters
     // for a different reason. Listing them here is the honest shape — a scan
@@ -2316,9 +2314,9 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'mail-disabled'")).map(rel).sort();
     expect(holders).toEqual([
       'server/src/coord/dispatch.ts',   // the refusal CODE
-      'server/src/coord/rundefs.ts', 'server/src/coord/stall.ts', // the marker literal (definition); stall.ts: the hold named for the marker it honours
-      'server/src/watch.ts',            // the marker literal (module-local, on purpose)
+      'server/src/coord/stall.ts',      // the hold named for the marker it honours
       'shared/api.ts',                  // the refusal-code vocabulary
+      'shared/switches.ts',             // the marker literal (its one definition, D-5855)
     ]);
   });
 
