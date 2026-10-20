@@ -9714,6 +9714,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // and with this branch's, everything else the same tree. Neither corpus
         // document changed, so nothing was re-pointed and no rule changed.
         // S6-R11 covers it, so no D-number.
+        // RE-MEASURED on the ws-reap C1 live-upstream fix (#126, D-5882), 54 -> 55.
+        // ONE cause: C1's move and its live-head probe in `_ws_reap_eval` add 20
+        // net lines, sliding every `ccd/ccd` line below it down 20. ONE ENTERS
+        // (`ccd/ccd:13560-13562`) and none leave: those lines no longer hold the
+        // "destroyed" comment the D-5880 re-measure found there, and now hold
+        // `_reap_paths_json`'s header, which offers no token of its row — the
+        // reverse coincidence, not rot. The site-level set below mirrors it, 34 -> 35
+        // (`spec:2125 ccd/ccd:13560-13562` enters), from the same run.
+        // Measured by running this test with `origin/main`'s `ccd/ccd` and with
+        // this branch's, everything else the same tree. Neither corpus document
+        // changed, so nothing was re-pointed. S6-R11 covers it, so no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9728,6 +9739,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:13561',
         'ccd/ccd:13567',
         'ccd/ccd:13673',
+        'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
         'ccd/ccd:19098',
         'ccd/ccd:19120',
@@ -9955,6 +9967,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2125 ccd/ccd:13561',
         'spec:2125 ccd/ccd:13567',
         'spec:2125 ccd/ccd:13673',
+        'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',
         'spec:2125 ccd/ccd:19098',
         'spec:2125 ccd/ccd:19120',
