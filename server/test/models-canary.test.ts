@@ -38,9 +38,13 @@ interface Canary { code: number | null; body: Record<string, unknown>; out: stri
 /** The canary for `model-6.1-gamma` at effort `low`, 2 s deadline; `args`
  *  override (the last value of a key wins). Exactly one line on stdout, always. */
 function canary(args: string[] = [], extraEnv: NodeJS.ProcessEnv = {}): Canary {
+  return runCanary(args, extraEnv);
+}
+
+function runCanary(args: string[] = [], extraEnv: NodeJS.ProcessEnv = {}, nodeArgs: string[] = []): Canary {
   const t0 = Date.now();
   const r = spawnSync(process.execPath,
-    [CANARY, '--id', 'lane-a', '--model', 'model-6.1-gamma', '--effort', 'low', '--timeout-s', '2', ...args],
+    [...nodeArgs, CANARY, '--id', 'lane-a', '--model', 'model-6.1-gamma', '--effort', 'low', '--timeout-s', '2', ...args],
     { env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home, ...extraEnv }, encoding: 'utf8', timeout: 20_000 });
   const stdout = r.stdout ?? '';
   expect(r.signal, `the canary was killed at the test's own bound: ${stdout}${r.stderr ?? ''}`).toBeNull();
@@ -48,6 +52,92 @@ function canary(args: string[] = [], extraEnv: NodeJS.ProcessEnv = {}): Canary {
   expect(lines.length, `stdout carried ${lines.length - 1} lines, not one: ${stdout}`).toBe(2);
   expect(r.stderr ?? '', 'the canary writes nothing on stderr').toBe('');
   return { code: r.status, body: JSON.parse(lines[0]!) as Record<string, unknown>, out: stdout, ms: Date.now() - t0 };
+}
+
+function allHeaderValues(gets: ReturnType<typeof laneProxyGets>): string[] {
+  return gets.flatMap((get) => Object.values(get.headers).flat());
+}
+
+function expectCleanProbe(gets: ReturnType<typeof laneProxyGets>): void {
+  expect(gets).toHaveLength(1);
+  const accept = gets[0]!.headers['accept'] ?? [];
+  expect(accept.length === 1 && accept[0] === 'application/json').toBe(true);
+  expect(allHeaderValues(gets).every((value) => !value.includes(key) && !value.includes(key.slice(3)))).toBe(true);
+}
+
+type ReadStage = 'ok' | 'open' | 'fstat' | 'read' | 'type' | 'initial-size' | 'growth';
+
+function readStage(stage: ReadStage): { canary: Canary; evidence: { opens: number; closes: number; stage: ReadStage } } {
+  const hook = path.join(home, 'canary-read-hook.cjs');
+  const evidencePath = path.join(home, 'canary-read-evidence.json');
+  const max = 64 * 1024;
+  const base = JSON.stringify({ id: 'lane-a', proxyPort: proxy.port, pad: '' });
+  const growthText = JSON.stringify({ id: 'lane-a', proxyPort: proxy.port, pad: 'x'.repeat(max + 1 - Buffer.byteLength(base)) });
+  expect(Buffer.byteLength(growthText)).toBe(max + 1);
+  fs.writeFileSync(hook, `
+const fs = require('node:fs');
+const { syncBuiltinESMExports } = require('node:module');
+const target = process.env.CANARY_READ_TARGET;
+const stage = process.env.CANARY_READ_STAGE;
+const evidence = process.env.CANARY_READ_EVIDENCE;
+const growthText = ${JSON.stringify(growthText)};
+const original = {
+  openSync: fs.openSync, fstatSync: fs.fstatSync, readSync: fs.readSync, closeSync: fs.closeSync,
+  writeFileSync: fs.writeFileSync,
+};
+const tracked = new Set();
+let opens = 0;
+let closes = 0;
+let grew = false;
+const failure = (code) => Object.assign(new Error(code), { code });
+fs.openSync = function(p, ...args) {
+  if (p === target && stage === 'open') throw failure('EACCES');
+  const fd = original.openSync.call(this, p, ...args);
+  if (p === target) { tracked.add(fd); opens += 1; }
+  return fd;
+};
+fs.fstatSync = function(fd, ...args) {
+  if (!tracked.has(fd)) return original.fstatSync.call(this, fd, ...args);
+  if (stage === 'fstat') throw failure('EIO');
+  const stat = original.fstatSync.call(this, fd, ...args);
+  if (stage === 'type') return { isFile: () => false, size: stat.size };
+  if (stage === 'initial-size') return { isFile: () => true, size: 65537 };
+  if (stage === 'growth' && !grew) {
+    grew = true;
+    original.writeFileSync(target, growthText);
+  }
+  return stat;
+};
+fs.readSync = function(fd, ...args) {
+  if (tracked.has(fd) && stage === 'read') throw failure('EIO');
+  return original.readSync.call(this, fd, ...args);
+};
+fs.closeSync = function(fd, ...args) {
+  if (tracked.delete(fd)) closes += 1;
+  return original.closeSync.call(this, fd, ...args);
+};
+syncBuiltinESMExports();
+process.on('exit', () => fs.writeFileSync(evidence, JSON.stringify({ opens, closes, stage }) + '\\n'));
+`);
+  const c = runCanary([], {
+    CANARY_READ_STAGE: stage,
+    CANARY_READ_TARGET: lanePath(),
+    CANARY_READ_EVIDENCE: evidencePath,
+  }, ['--require', hook]);
+  return { canary: c, evidence: JSON.parse(fs.readFileSync(evidencePath, 'utf8')) as { opens: number; closes: number; stage: ReadStage } };
+}
+
+function globalAgentPoison(method: 'GET' | 'POST'): string {
+  const hook = path.join(home, `global-agent-${method.toLowerCase()}.cjs`);
+  fs.writeFileSync(hook, `
+const http = require('node:http');
+const original = http.globalAgent.addRequest;
+http.globalAgent.addRequest = function(req, options) {
+  if (options.method === ${JSON.stringify(method)}) throw new Error('fixture global agent used');
+  return original.call(this, req, options);
+};
+`);
+  return hook;
 }
 
 describe.skipIf(PY === null)('deploy/models-canary.mjs (auto-advance spec §2.3 step 3; plan W2 Task 10)', () => {
@@ -66,10 +156,12 @@ describe.skipIf(PY === null)('deploy/models-canary.mjs (auto-advance spec §2.3 
     const c = canary();
     expect(c.code).toBe(0);
     expect(c.body).toEqual({ ok: true, op: 'canary', result: 'passed', status: 200, reason: null });
-    // The lane probe came first, and carried no key.
+    // The lane probe came first, carried no key, and uses only its expected headers.
     expect(laneProxyGets(proxy)).toEqual([{
       n: 1, path: '/ccgpt/lane', authorization: null, headerNames: ['accept', 'connection', 'host'],
+      headers: { accept: ['application/json'], connection: ['keep-alive'], host: [`127.0.0.1:${proxy.port}`] },
     }]);
+    expectCleanProbe(laneProxyGets(proxy));
     const [q] = laneProxyRequests(proxy);
     expect(q!.path).toBe('/v1/messages');
     // The vacuity control for every "the key never leaves" case below: it was read, and it went out here.
@@ -90,6 +182,14 @@ describe.skipIf(PY === null)('deploy/models-canary.mjs (auto-advance spec §2.3 
       reason: `127.0.0.1:${proxy.port} does not answer as lane-a's shim, so the key was not sent` });
     expect(laneProxyRequests(proxy)).toEqual([]);
     expect(laneProxyGets(proxy).map((g) => g.authorization)).toEqual([null]);
+    expectCleanProbe(laneProxyGets(proxy));
+  });
+
+  it.each(['GET', 'POST'] as const)('uses no global agent for the %s request', (method) => {
+    const c = runCanary([], {}, ['--require', globalAgentPoison(method)]);
+    expect(c.body['result']).toBe('passed');
+    expect(laneProxyGets(proxy)).toHaveLength(1);
+    expect(laneProxyRequests(proxy)).toHaveLength(1);
   });
 
   it('a listener that does not answer the lane probe (404) is unavailable, and nothing is sent', () => {
@@ -294,6 +394,28 @@ describe.skipIf(PY === null)('deploy/models-canary.mjs (auto-advance spec §2.3 
   });
 
   it.each([
+    ['ok', null],
+    ['open', 'EACCES'],
+    ['fstat', 'EIO'],
+    ['read', 'EIO'],
+    ['type', 'ENOTREG'],
+    ['initial-size', 'ETOOBIG'],
+    ['growth', 'ETOOBIG'],
+  ] as [ReadStage, string | null][])('closes the bounded descriptor on %s', (stage, code) => {
+    const { canary: c, evidence } = readStage(stage);
+    expect(evidence).toEqual({ opens: stage === 'open' ? 0 : 1, closes: stage === 'open' ? 0 : 1, stage });
+    if (code === null) {
+      expect(c.body['result']).toBe('passed');
+      expect(laneProxyRequests(proxy)).toHaveLength(1);
+      return;
+    }
+    expect(c.body).toEqual({ ok: true, op: 'canary', result: 'unavailable', status: null,
+      reason: `lane.json could not be read (${code})` });
+    expect(laneProxyGets(proxy)).toEqual([]);
+    expect(laneProxyRequests(proxy)).toEqual([]);
+  });
+
+  it.each([
     ['an id that is not a lane id', ['--id', '../x']],
     ['a model that is not a model id', ['--model', 'not an id']],
     ['an effort longer than 64 characters', ['--effort', 'x'.repeat(65)]],
@@ -333,13 +455,10 @@ describe('deploy/models-canary.mjs in source (plan W2 Task 10)', () => {
     expect(s).toMatch(/new Agent\(/);
   });
 
-  it('pins every request to its fresh agent and the loopback host', () => {
+  it('pins every request to the loopback host', () => {
     const calls = [...src().matchAll(/request\(\{([\s\S]*?)\n\s*\}\);/g)].map((m) => m[1]!);
     expect(calls).toHaveLength(2);
-    for (const call of calls) {
-      expect(call).toMatch(/\bagent\b/);
-      expect(call).toContain("host: '127.0.0.1'");
-    }
+    for (const call of calls) expect(call).toContain("host: '127.0.0.1'");
   });
 
   it('reads each lane file through one bounded descriptor', () => {

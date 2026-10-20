@@ -2193,9 +2193,13 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             GETS[0] += 1
             n = GETS[0]
+        headers = {}
+        for name, value in self.headers.items():
+            headers.setdefault(name.lower(), []).append(value)
         with open(os.path.join(REC, "get.%d.json" % n), "w") as f:
             json.dump({"n": n, "path": self.path,
                        "headerNames": sorted(k.lower() for k in self.headers.keys()),
+                       "headers": headers,
                        "authorization": self.headers.get("Authorization")}, f)
         mode = lane_mode() if self.path == "/ccgpt/lane" else ""
         lane = lane_answer() if self.path == "/ccgpt/lane" else None
@@ -2294,7 +2298,9 @@ export interface FakeLaneProxy { port: number; rec: string; child: ChildProcess 
 export interface LaneProxyRequest {
   n: number; path: string; model: string | null; headerNames: string[]; authorization: string | null; body: unknown;
 }
-export interface LaneProxyGet { n: number; path: string; headerNames: string[]; authorization: string | null }
+export interface LaneProxyGet {
+  n: number; path: string; headerNames: string[]; headers: Record<string, string[]>; authorization: string | null;
+}
 
 /** The fake lane proxy, a tracked python child of this process on a port the
  *  kernel chose (held from the moment this resolves), answering the lane probe
