@@ -32,6 +32,13 @@
       },
       "_pane_box_draft": ""
     },
+    "placeholder-dim-mid-reset.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": ""
+    },
     "draft-one-line.ansi": {
       "draftOfMeasured": {
         "box": "present",

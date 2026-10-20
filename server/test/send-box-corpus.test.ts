@@ -18,6 +18,9 @@
  *    another attribute start on one cell (measured: `printf '\e[2;3m…'` captures back unchanged).
  *  - `placeholder-dim-after-reset` (D-6006): the open as `\e[0;2m` after a bold marker. tmux 3.7c writes ANY
  *    attribute removal as a reset, so dim following a bold cell captures as `\e[1m…\e[0;2m` (measured).
+ *  - `placeholder-dim-mid-reset` (D-6006): italic drops partway through the dim run, `\e[2;3mTry\e[0;2m …`. The
+ *    same reset-for-any-removal rule writes that drop as a reset that turns dim straight back on (measured:
+ *    `printf '\e[2;3mTry\e[23m …'` captures as `\e[2;3mTry\e[0;2m …`), so it continues the run, never closes it.
  *  - `placeholder-dim22`: the close as `\e[22m`. tmux 3.7c never emits it (it normalises a dim-off to `\e[0m`,
  *    measured), so this pins the spec's named encoding for any reader handed raw terminal output.
  * D-6007: `box-taller-than-capture` is the fleet's measured 2026-09-18 shape (`send.test.ts`'s
@@ -50,12 +53,13 @@ describe('the box reader corpus (D-5910)', () => {
 
   describe("each placeholder capture reads `{box:'present', draft:''}`", () => {
     it('the corpus holds every placeholder encoding', () => {
-      expect(names('placeholder-').length).toBeGreaterThanOrEqual(4);
+      expect(names('placeholder-').length).toBeGreaterThanOrEqual(5);
     });
     for (const n of names('placeholder-')) {
       it(n, () => {
-        // The capture really does show the hint, so an empty read is the strip at work, not an empty row.
-        expect(capture(n)).toContain('Try "edit <filepath> to..."');
+        // The capture really does show the hint (its visible text, SGR removed: a mid-run reset splits the raw
+        // bytes), so an empty read is the strip at work, not an empty row.
+        expect(capture(n).replace(/\x1b\[[0-9;]*m/g, '')).toContain('Try "edit <filepath> to..."');
         expect(draftOfMeasured(capture(n))).toEqual({ box: 'present', draft: '' });
       });
     }
@@ -92,6 +96,18 @@ describe('the box reader corpus (D-5910)', () => {
     const row = (open: string, close: string): string => `\x1b[39m❯ ${open}ghost${close}REAL\x1b[0m\n`;
     for (const [open, close] of [['\x1b[2;3m', '\x1b[0;1m'], ['\x1b[0;2m', '\x1b[22m'], ['\x1b[2m', '\x1b[22;1m']])
       expect(draftOfMeasured(row(open!, close!)), JSON.stringify([open, close])).toEqual({ box: 'present', draft: 'REAL' });
+    // D-6006: a reset that turns dim straight back on continues the run (tmux writes any attribute drop as a
+    // reset): an italic, inverse-cursor or bold drop mid-hint leaves nothing behind.
+    for (const r of [
+      '\x1b[2;3mTry\x1b[0;2m "edit"\x1b[0m', '\x1b[2;7mT\x1b[0;2mry "edit"\x1b[0m', '\x1b[1;2mB\x1b[0;2mD\x1b[0m',
+      '\x1b[2mT\x1b[0;1;2mry\x1b[0m', '\x1b[1m\x1b[0;2mT\x1b[0;1;2;3mry\x1b[0m',
+    ])
+      expect(draftOfMeasured(`\x1b[39m❯ ${r}\n`), JSON.stringify(r)).toEqual({ box: 'present', draft: '' });
+    // ...and real text after the run's true close still survives, as does text after a parameterless reset.
+    expect(draftOfMeasured('❯ \x1b[2;3mghost\x1b[0;2mmore\x1b[0mREAL\x1b[0m\n')).toEqual({ box: 'present', draft: 'REAL' });
+    expect(draftOfMeasured('❯ \x1b[2mghost\x1b[mREAL\x1b[0m\n')).toEqual({ box: 'present', draft: 'REAL' });
+    // A reset that keeps dim off is not mistaken for one that turns it back on.
+    expect(draftOfMeasured('❯ \x1b[2mghost\x1b[0;22mREAL\x1b[0m\n')).toEqual({ box: 'present', draft: 'REAL' });
     // A truecolour code whose parameters contain a 2 is not a dim open.
     expect(draftOfMeasured('❯ \x1b[38;2;10;20;30mreal colour\x1b[0m\n')).toEqual({ box: 'present', draft: 'real colour' });
   });
