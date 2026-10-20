@@ -2627,6 +2627,10 @@ describe('ccrc install: the order is stated in one place', () => {
       // the brief's own placement rather than a measured dependency.
       '_inst_graph_hooks_off',
       '_inst_wrappers',
+      // Accounts plan Task A11 (D-5518, G35). The lane-state backfill: after
+      // the wrappers, so every lane it writes for is a converged one, and
+      // before the completed-install record, which must stay last.
+      '_inst_lane_state',
       // Release/rollout design §5, Task 3. LAST, deliberately: this is the
       // completed-install record, so it must run only once every step above
       // has already converged or died.
