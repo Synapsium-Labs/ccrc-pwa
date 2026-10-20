@@ -16,7 +16,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { Button, QuickConfirm, ToastHost, buttonVariants } from '@ccrc/ui';
 import type { FleetHealth, FleetSession, NodeWire, ReleaseWire, RunSummary, UpdatesView, WsAudit } from '../../shared/api';
 import { FLEET_SCOPE } from '../../shared/api';
-import { SettingsScreen } from '../src/screens/SettingsScreen';
+import { renderSettings as mountSettings } from './settingsHost';
 import { HaltBanner } from '../src/fleet/HaltBanner';
 import { withdrawnRollbackText } from '../src/fleet/UpdateMoveSheet';
 import { fleetSession } from './fleetFixture';
@@ -207,7 +207,7 @@ describe('the Updates danger actions (D-5507)', () => {
   });
   const renderSettings = async (over: Partial<ReleaseWire> = {}) => {
     vi.spyOn(api, 'updates').mockResolvedValue(view(over));
-    render(<><ToastHost /><SettingsScreen /></>);
+    mountSettings('updates', { toasts: true });
     const releases = await screen.findByRole('region', { name: 'Releases' });
     const nodes = await screen.findByRole('list', { name: 'Nodes' });
     const nodeRow = nodes.querySelector<HTMLElement>(`li[data-node-id="${A}"]`)!;

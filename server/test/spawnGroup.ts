@@ -67,5 +67,8 @@ export function spawnSyncGroup(command: string, args: readonly string[],
   if (!groupAlive(pgid)) return r;
   killGroup(pgid);
   if (strays === 'end') return r;
-  throw new Error(`spawnSyncGroup: ${command} returned but left processes in its group ${pgid}; they were killed`);
+  // The child's status and output ride along (D-6112): a nested vitest's own leak report, naming the test that
+  // leaked, is on its stderr, and without it the failure says only that something was left.
+  throw new Error(`spawnSyncGroup: ${command} returned but left processes in its group ${pgid}; they were killed`
+    + ` (status ${r.status}):\n${r.stdout ?? ''}${r.stderr ?? ''}`);
 }

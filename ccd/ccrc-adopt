@@ -15,7 +15,7 @@
 # ── WHAT IT LOOKS AT ─────────────────────────────────────────────────────
 # Every entry directly under $HOME/.local/bin whose name is a legal account id
 # (shared/roster.ts's ID_RE: ^[a-z][a-z0-9-]{0,31}$ — this alone drops the
-# ccd.bak-<date> / claude2.bak-<date> backups this box accumulates, since a
+# ccd.bak-<date> / claude9.bak-<date> backups this box accumulates, since a
 # dot never appears in a real id).
 #
 #   - A file that some OTHER candidate `exec`s and that does NOT set its own
@@ -64,7 +64,7 @@
 set -euo pipefail
 # Locale-independent byte ordering for glob expansion, `sort` and regex
 # matching: en_US.UTF-8's collation (measured on this box) sorts
-# "claude-corp" AFTER "claude2" — punctuation is collated differently from
+# "claude-acme" AFTER "claude9" — punctuation is collated differently from
 # digits — so without this, the declaration order of the accounts below (and
 # therefore their hue assignment, which is positional) would silently depend
 # on the operator's locale rather than on the bytes in $HOME/.local/bin.
@@ -182,7 +182,7 @@ GEN_ACCOUNTS="$HERE/../deploy/gen-accounts.mjs"
 
 # ── pass 0: candidate names — regular files (symlinks OK), executable, and
 #    shaped like a legal account id. This one filter is what drops every
-#    ccd.bak-<date>, ccd.pre-flip and claude2.bak-<date> this box has lying
+#    ccd.bak-<date>, ccd.pre-flip and claude9.bak-<date> this box has lying
 #    around: a real id never contains ".", and none of those do without one. ─
 declare -a CAND=()
 shopt -s nullglob

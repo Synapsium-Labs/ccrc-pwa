@@ -1,8 +1,8 @@
 // The command registry (D-5103): pure ranking, and the base commands' own
 // invariants. `command-layer.test.tsx` drives the palette and the keys.
 import { describe, expect, it } from 'vitest';
-import { rankCommands, type Command } from '../src/command/registry';
-import { baseCommands, fleetOrder, GO_TO } from '../src/command/commands';
+import { available, rankCommands, type Command, type CommandContext } from '../src/command/registry';
+import { baseCommands, fleetOrder, GO_TO, SESSION_COMMANDS } from '../src/command/commands';
 import { matchRoute, ROUTES } from '../src/lib/routes';
 import { fleetSession } from './fleetFixture';
 
@@ -44,9 +44,12 @@ describe('the base commands', () => {
     // `app.tsx`'s ladder matches against ROUTES and nothing else (D-5466;
     // `app.test.tsx` holds the two to each other both ways), so a Go to whose
     // path no row matches would open the placeholder.
-    expect(GO_TO.length, 'one Go to per top route').toBe(ROUTES.filter((r) => r.top).length);
+    // One Go to per top route, and one per page under a top route with a path of its own (Settings' five
+    // sections, D-5504); each targets the row it is named for. A row with no path (`settings-section`) has none.
+    const offered = ROUTES.filter((r) => r.path !== null && (r.top || r.id.startsWith('settings-')));
+    expect(GO_TO.map((g) => g.id), 'one Go to per offered route').toEqual(offered.map((r) => `go-${r.id}`));
     for (const go of GO_TO) {
-      expect(matchRoute(go.path)?.route.top, `${go.title} → ${go.path}`).toBe(true);
+      expect(`go-${matchRoute(go.path)?.route.id}`, `${go.title} → ${go.path}`).toBe(go.id);
     }
     expect(GO_TO.map((g) => g.path)).toContain('/');
     expect(GO_TO.map((g) => g.id)).toContain('go-docs');
@@ -70,6 +73,34 @@ describe("the ids are W2's door table's", () => {
       'switch-layout', 'switch-theme', 'show-shortcuts',
       // W2 Task S2b registers these three (§The door table's last column).
       'go-docs', 'new-session', 'open-palette',
+      // Settings Task R2b1 (D-5504): one per section, its door the section's index row.
+      'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation',
+      'go-settings-security',
+      // W2 Task S2d: the ⋯ menu's items on the base, and the terminal and PR caps (D-5466).
+      'session-model', 'session-effort', 'open-history', 'session-docs', 'session-swap', 'session-archive',
+      'session-restore', 'open-terminal', 'session-pr',
     ].sort());
+  });
+});
+
+describe('the session commands (W2 Task S2d)', () => {
+  const ctx = (session: CommandContext['session']): CommandContext => ({
+    path: '/s/project-a-one', sessions: [], navigate: () => {}, setSkin: () => {}, setTheme: () => {},
+    openShortcuts: () => {}, openNewSession: () => {}, openPalette: () => {}, paletteOpen: false, session,
+  });
+
+  it('are offered only while a session screen hosts its flows, and only where the flows offer the item', () => {
+    const ids = SESSION_COMMANDS.map((c) => c.id);
+    expect(available(baseCommands(), ctx(null)).filter((c) => ids.includes(c.id))).toEqual([]);
+    const offered = available(baseCommands(), ctx({ offers: (id) => id !== 'session-archive', run: () => {} }))
+      .map((c) => c.id).filter((id) => ids.includes(id));
+    expect(offered).toEqual(ids.filter((id) => id !== 'session-archive'));
+  });
+
+  it('run through the session target, by their own id', () => {
+    const ran: string[] = [];
+    const c = ctx({ offers: () => true, run: (id) => { ran.push(id); } });
+    for (const cmd of baseCommands().filter((x) => x.id.startsWith('session-') || x.id === 'open-history')) cmd.run(c);
+    expect(ran).toEqual(SESSION_COMMANDS.map((x) => x.id).filter((id) => id !== 'open-terminal'));
   });
 });

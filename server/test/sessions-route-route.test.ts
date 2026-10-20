@@ -19,7 +19,7 @@ import { EXEMPT } from '../src/auth/gate.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
-const ID = 'claude-a-MekWarLive';
+const ID = 'claude-a-project-f';
 
 const seedSession = (home: string, id: string, wrapper: string): void => {
   const reg = path.join(home, '.cc-sessions');

@@ -15,9 +15,10 @@ export interface SetStamp {
 }
 
 export const EXEMPTION_SET_STAMPS: Readonly<Record<string, SetStamp>> = {
-  'server/test/rings/outward-edges.data.ts#OUTWARD_EDGE_EXEMPTIONS': { size: 16, reason: 'the outward runtime edges on the tree when stage 2 landed; ARCH-05 (#551) drains them', since: '2026-10-20' },
+  'server/test/rings/outward-edges.data.ts#OUTWARD_EDGE_EXEMPTIONS': { size: 13, reason: 'the outward runtime edges left after ARCH-05 (#551) moved configDirFor and tx inward (D-5896); ARCH-05 drains the rest', since: '2026-10-20' },
   'server/test/rings/host-imports.data.ts#HOST_IMPORT_EXEMPTIONS': { size: 0, reason: 'empty since ARCH-03 (#541)', since: '2026-10-20' },
   'server/test/rings/shared-imports.data.ts#SHARED_IMPORT_EXEMPTIONS': { size: 0, reason: 'empty since stage 1 landed', since: '2026-10-20' },
   'server/test/rings/mjs-node.data.ts#REACHABLE_MJS_EXEMPTIONS': { size: 0, reason: 'empty since stage 1 landed', since: '2026-10-20' },
+  'server/test/rings/wire-totality.data.ts#WIRE_TOTALITY_EXEMPTIONS': { size: 28, reason: 'merge-day listless literal unions in shared/; ARCH-12 follow-ups drain them', since: '2026-10-20' },
   'server/test/deviation-refs.test.ts#GRANDFATHERED': { size: 16, reason: "re-reviewed 2026-10-20: the 16 pre-allocator D-number collisions all still collide (deviation-refs pins each member); wave 10's reconciliation drains them", since: '2026-10-20' },
 };

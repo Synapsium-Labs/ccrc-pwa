@@ -65,7 +65,7 @@ backup directory).
    > collaborators. In practice (2026-10-12) the maintainers merge their own PRs
    > through the ruleset's admin bypass.
    > `require_code_owner_reviews` stays **off** — see `.github/CODEOWNERS` for why turning
-   > it on would quietly make Maksym's approval unable to satisfy the requirement.
+   > it on would quietly make a maintainer's approval unable to satisfy the requirement.
    >
    > Landed alongside: `.github/CODEOWNERS` (auto-assignment only), `.github/dependabot.yml`
    > (npm × three packages + github-actions). DCO sign-off was drafted and dropped (2026-10-12):

@@ -47,6 +47,9 @@ interface Cc {
   above: string;
   /** Other text on the notification row, left of the update notice. */
   notice: string;
+  /** D-6011: how many coming captures draw no held-stash indicator although a stash is held (a frame that does
+   *  not parse: a transient redraw, a notification taking the row). */
+  hideIndicator: number;
 }
 
 interface FakeOpts {
@@ -75,6 +78,8 @@ interface FakeOpts {
   /** D-6010: after the first typed literal, the next `blind` captures come back with no box (`no-box`) or fail
    *  (`dead`), then the pane reads normally again. */
   blindAfterType?: { kind: 'no-box' | 'dead'; captures: number };
+  /** D-6011: each swallowed Enter hides the held-stash indicator from this many following captures. */
+  hideAfterSwallow?: number;
 }
 
 const nonBlank = (rows: string[]): boolean => rows.some((r) => r.trim() !== '');
@@ -86,7 +91,8 @@ function render(s: Cc): string {
     return lines.join('\n') + '\n';
   }
   lines.push(s.running ? '✳ Working… (3s · esc to interrupt)' : s.above);
-  lines.push(`\x1b[38;5;246m${s.notice}${s.stash !== null ? ' › stashed ·' : ''}\x1b[39m \x1b[38;5;114m✔ Update installed\x1b[39m`);
+  const shown = s.stash !== null && !(s.hideIndicator > 0 && s.hideIndicator--);
+  lines.push(`\x1b[38;5;246m${s.notice}${shown ? ' › stashed ·' : ''}\x1b[39m \x1b[38;5;114m✔ Update installed\x1b[39m`);
   lines.push(RULE);
   if (!nonBlank(s.box)) lines.push(`❯ ${PLACEHOLDER}`);
   else s.box.forEach((r, i) => lines.push((i === 0 ? '❯ ' : '  ') + r));
@@ -101,6 +107,7 @@ function fakeCc(o: FakeOpts = {}) {
   const s: Cc = {
     box: [...(o.box ?? [])], stash: o.stash === undefined ? null : o.stash, history: [],
     menu: o.menu ?? false, running: o.running ?? false, armed: o.armed ?? false, above: o.above ?? '', notice: '',
+    hideIndicator: 0,
   };
   const keys: string[] = [];
   let swallow = o.swallowEnters ?? 0;
@@ -141,7 +148,7 @@ function fakeCc(o: FakeOpts = {}) {
         if (nonBlank(s.box)) { s.stash = s.box; s.box = []; }
         else if (s.stash !== null && (o.popWorks ?? true)) { s.box = s.stash; s.stash = null; }
       } else if (key === 'Enter') {
-        if (swallow > 0) { swallow--; return { code: 0, stdout: '', stderr: '' }; }
+        if (swallow > 0) { swallow--; s.hideIndicator = o.hideAfterSwallow ?? 0; return { code: 0, stdout: '', stderr: '' }; }
         if (!nonBlank(s.box)) return { code: 0, stdout: '', stderr: '' };
         const sent = s.box.join('\n');
         s.history.push(sent);
@@ -566,17 +573,29 @@ describe("onDraft: 'stash' (D-5911)", () => {
   });
 
   describe('D-6011: `resumeIfOwn` with a stash held', () => {
-    it('a restored human draft that begins with the needle never takes the retry Enter', async () => {
+    it('a restored human draft that begins with the needle never takes the retry Enter (a turn started: `ok`)', async () => {
       // An earlier stash-path send left our nudge in the box over a held stash. The resume's Enter submits it and
       // Claude Code restores the stash: a human draft that starts with the same 24 characters.
       const nudge = 'you have mail waiting for you, fetch it';
       const human = `${nudge.slice(0, 30)} and then the human kept typing`;
-      const f = fakeCc({ box: [nudge], stash: [human] });
+      const f = fakeCc({ box: [nudge], stash: [human], runOnSubmit: true });
       const res = await send(f, nudge, { ...STASH, resumeIfOwn: true });
       expect(f.keys).toEqual(['Enter']);
       expect(f.state.history).toEqual([nudge]);
       expect(f.state.box).toEqual([human]);
       expect(res).toEqual({ ok: true });
+    });
+
+    it('…and with no turn to prove the submit, `enter-ignored` with no rescue claim, still one Enter', async () => {
+      const nudge = 'you have mail waiting for you, fetch it';
+      const human = `${nudge.slice(0, 30)} and then the human kept typing`;
+      const f = fakeCc({ box: [nudge], stash: [human] });
+      const res = await send(f, nudge, { ...STASH, resumeIfOwn: true });
+      expect(f.keys).toEqual(['Enter']);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+      expect(res).not.toHaveProperty('draft');
+      expect(res).not.toHaveProperty('submittable');
     });
 
     it('…and while the stash still shows, our unsent text still gets the retry Enter', async () => {
@@ -587,25 +606,40 @@ describe("onDraft: 'stash' (D-5911)", () => {
       expect(f.state.history).toEqual([nudge]);
       expect(res).toEqual({ ok: true });
     });
+
+    it('post-merge review: a capture missing the indicator after a swallowed Enter is not a delivery', async () => {
+      const nudge = 'you have mail waiting for you, fetch it';
+      const f = fakeCc({ box: [nudge], stash: ['an earlier human note'], swallowEnters: 1, hideAfterSwallow: 1 });
+      const res = await send(f, nudge, { ...STASH, resumeIfOwn: true });
+      expect(f.state.history).toEqual([]);
+      expect(res).not.toEqual({ ok: true });
+      expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+      expect(res).not.toHaveProperty('submittable');
+      expect(f.keys).toEqual(['Enter']);
+    });
   });
 
   describe('D-6011: the ordinary submit on an empty box with a stash already held', () => {
     // The precondition is reachable from D-6010's own failure arm (a pop that does not land leaves the box empty and
     // the stash held) as well as from a human's own ctrl+s. Claude Code restores the held stash at OUR submit.
     it("dispatch's `/clear` over a held `/clear …` stash: one Enter, the human's draft back in the box, unsent", async () => {
+      // A slash command starts no turn, so nothing proves the submit: refused without a rescue claim, never a
+      // retry Enter onto the human's restored draft.
       const human = '/clear and also my note';
       const f = fakeCc({ box: [], stash: [human] });
       const res = await send(f, '/clear');
       expect(f.keys).toEqual(['lit:/clear', 'Enter']);
       expect(f.state.history).toEqual(['/clear']);
       expect(f.state.box).toEqual([human]);
-      expect(res).toEqual({ ok: true });
+      expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+      expect(res).not.toHaveProperty('draft');
+      expect(res).not.toHaveProperty('submittable');
     });
 
     it('a mail nudge over a held stash that begins with the needle: one Enter, the human draft unsent', async () => {
       const nudge = 'you have mail waiting for you, fetch it';
       const human = `${nudge.slice(0, 30)} and then the human kept typing`;
-      const f = fakeCc({ box: [], stash: [human] });
+      const f = fakeCc({ box: [], stash: [human], runOnSubmit: true });
       const res = await send(f, nudge, { ...STASH, resumeIfOwn: true });
       expect(f.keys).toEqual([`lit:${nudge}`, 'Enter']);
       expect(f.state.history).toEqual([nudge]);
@@ -613,11 +647,43 @@ describe("onDraft: 'stash' (D-5911)", () => {
       expect(res).toEqual({ ok: true });
     });
 
+    it('…a turn already running before the call proves nothing: `enter-ignored`, one Enter', async () => {
+      const nudge = 'you have mail waiting for you, fetch it';
+      const human = `${nudge.slice(0, 30)} and then the human kept typing`;
+      const f = fakeCc({ box: [], stash: [human], running: true });
+      const res = await send(f, nudge, { ...STASH, resumeIfOwn: true });
+      expect(f.keys).toEqual([`lit:${nudge}`, 'Enter']);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+      expect(res).not.toHaveProperty('draft');
+    });
+
     it('…and while the stash still shows, our swallowed text still gets the retry Enter', async () => {
       const f = fakeCc({ box: [], stash: ['an earlier human note'], swallowEnters: 1 });
       const res = await send(f, 'hello from the lane');
       expect(f.keys).toEqual(['lit:hello from the lane', 'Enter', 'Enter']);
       expect(f.state.history).toEqual(['hello from the lane']);
+      expect(res).toEqual({ ok: true });
+    });
+
+    it('post-merge review: a capture missing the indicator after a swallowed Enter is not a delivery', async () => {
+      // The review's probe: one post-Enter frame where the indicator does not parse, our text still in the box.
+      const f = fakeCc({ box: [], stash: ['an earlier human note'], swallowEnters: 1, hideAfterSwallow: 1 });
+      const res = await send(f, 'hello from the lane');
+      expect(f.state.history).toEqual([]);
+      expect(f.state.box).toEqual(['hello from the lane']);
+      expect(res).not.toEqual({ ok: true });
+      expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+      expect(res).not.toHaveProperty('draft');
+      expect(res).not.toHaveProperty('submittable');
+      expect(f.keys).toEqual(['lit:hello from the lane', 'Enter']);
+    });
+
+    it('…and a box that no longer starts with our needle is still a delivery, indicator or not', async () => {
+      const f = fakeCc({ box: [], stash: ['an earlier human note'] });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys).toEqual(['lit:hello from the lane', 'Enter']);
+      expect(f.state.box).toEqual(['an earlier human note']);
       expect(res).toEqual({ ok: true });
     });
   });

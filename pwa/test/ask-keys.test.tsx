@@ -11,7 +11,7 @@ import type { Dialog } from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { DialogSheet } from '../src/session/DialogSheet';
-import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
+import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import { TABS_HELD } from '../src/session/AskParts';
 import {
   askKeyAction, keyTabs, multiKeys, questionKeys, reviewKeys, type KeyPress, type KeyScreen,
@@ -322,7 +322,7 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
 });
 
 describe('Escape hides the sheet and never interrupts (decision ask-sheet-escape-never-interrupts)', () => {
-  const headerProps = (onInterrupt: () => void): SessionHeaderProps => ({
+  const headerProps = (onInterrupt: () => void): HeaderHostProps => ({
     session: fleetSession({ id: 'project-a-quiet-basin', project: 'project-a', status: 'busy', bucket: 'working' }),
     status: 'busy', statusUpdatedAt: null,
     onInterrupt, onOpenTerminal: vi.fn(), onBack: vi.fn(), onChangeModel: vi.fn(),
@@ -333,7 +333,7 @@ describe('Escape hides the sheet and never interrupts (decision ask-sheet-escape
   it('busy session, fine pointer: Escape on a focused row hides the sheet, and the header does not interrupt', async () => {
     pointer('fine');
     const onInterrupt = vi.fn();
-    renderAsk(q1(), CC296_LONG, <SessionHeader {...headerProps(onInterrupt)} />);
+    renderAsk(q1(), CC296_LONG, <SessionHeaderHost {...headerProps(onInterrupt)} />);
     await frame();
     const r = row(/^Split shifts/);
     r.focus();

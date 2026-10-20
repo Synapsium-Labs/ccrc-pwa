@@ -32,6 +32,15 @@
 //   ChatList never re-settles on a switch ............... the following reader
 //   the palette's close leaves focus where it fell ...... the palette's focus
 //   the frame drops focus when a replaced part held it .. the frame focus case
+//
+// W2 Task S2d adds "a switch keeps the ⋯ menu open", "a switch keeps the PR
+// sheet open" and "Escape interrupts a busy turn in both skins". MEASURED:
+// all three are green on the task's base too, and the "menuOpen moved back
+// into SessionHeader" mutant leaves them green, because today both sets place
+// the one shared SessionHeader, so a switch replaces no session chrome. They
+// hold the contract for S7c and S12, whose chrome differs per skin;
+// `session-flows.test.tsx` is the suite that reds the lift's mutants now, by
+// unmounting the header under a mounted SessionScreen.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -133,12 +142,17 @@ function stubPointer(fine: boolean): void {
   }));
 }
 
-function openSession(): void {
-  act(() => useFleetStore.setState({ conn: 'open', sessions: [S] }));
-  navigate(`/s/${S.id}`);
+function openSession(session: FleetSession = S, status: 'idle' | 'busy' = 'idle'): void {
+  act(() => useFleetStore.setState({ conn: 'open', sessions: [{ ...session, status }] }));
+  navigate(`/s/${session.id}`);
   render(<App />);
-  act(() => getSessionStore(S.id).setState({ uuid: 'u1', status: 'idle', events: EVENTS }));
+  act(() => getSessionStore(session.id).setState({ uuid: 'u1', status, events: EVENTS }));
 }
+
+/** A workspace session, so its header carries the PR cap. */
+const WS: FleetSession = fleetSession({
+  id: 'project-a-quiet-basin', wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workspace: 'quiet-basin',
+});
 
 /** The session header's ⋯ menu, then one of its items. */
 function menu(item: string): void {
@@ -274,12 +288,51 @@ describe('a skin switch keeps', () => {
     root.removeAttribute('data-theme');
   });
 
+  // W2 Task S2d (D-5466): the session's flows are `SessionFlows`', hosted by `SessionScreen`, never its chrome's.
+  it('a switch keeps the ⋯ menu open', () => {
+    openSession();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const sheet = screen.getAllByRole('dialog').at(-1)!;
+    expect(within(sheet).getByRole('button', { name: /^Change model/ })).toBeTruthy();
+    toInstrument();
+    expect(sheet.isConnected).toBe(true);
+    expect(sheet).toHaveAttribute('data-state', 'open');
+  });
+
+  it('a switch keeps the PR sheet open', () => {
+    openSession(WS);
+    fireEvent.click(document.querySelector<HTMLButtonElement>('.keycap--pr')!);
+    const sheet = screen.getByRole('dialog', { name: /quiet-basin/ });
+    toInstrument();
+    expect(sheet.isConnected).toBe(true);
+    expect(sheet).toHaveAttribute('data-state', 'open');
+  });
+
   it('the detail section: the same DOM node before and after', () => {
     openSession();
     const before = detail();
     expect(before.tagName).toBe('MAIN');
     toInstrument();
     expect(detail()).toBe(before);
+  });
+});
+
+describe('the Escape interrupt (W2 Task S2d)', () => {
+  it('Escape interrupts a busy turn in both skins', async () => {
+    stubPointer(true);
+    const { api } = await import('../src/lib/api');
+    const spy = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined);
+    try {
+      openSession(S, 'busy');
+      fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape', keyCode: 27 });
+      expect(spy, 'Refined').toHaveBeenCalledTimes(1);
+      toInstrument();
+      fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape', keyCode: 27 });
+      expect(spy, 'Instrument').toHaveBeenCalledTimes(2);
+      expect(spy).toHaveBeenLastCalledWith(S.id, 'escape-key');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -303,7 +356,7 @@ describe('focus after a switch is never on <body>', () => {
   });
 
   it("the Layout radio that ran the switch keeps focus", () => {
-    navigate('/settings');
+    navigate('/settings/appearance');   // the Layout fieldset's page since the Settings sections (D-5504)
     render(<App />);
     const radio = screen.getByRole('radio', { name: /^Instrument/ });
     act(() => radio.focus());

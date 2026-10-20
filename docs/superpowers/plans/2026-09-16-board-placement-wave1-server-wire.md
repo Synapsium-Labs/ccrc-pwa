@@ -150,7 +150,7 @@ In `server/test/coord-store.test.ts` (fixture `openRun` at `:30-34` already spre
 ```ts
 it('openRun stamps the coordinator project it is given', () => {
   const s = store();
-  const opened = openRun(s, { coordProject: 'intake-platform' });
+  const opened = openRun(s, { coordProject: 'project-n' });
   expect('id' in opened).toBe(true);
   const row = s.runs({ includeClosed: true }).runs.find((r) => r.id === (opened as { id: number }).id);
   expect(row).toBeDefined();
@@ -269,8 +269,8 @@ import { describe, it, expect } from 'vitest';
 import { boardPlacement } from '../src/coord/placement.js';
 
 const base = {
-  sessionId: 'custom-tools-amber-delta',
-  ownProject: 'custom-tools',
+  sessionId: 'project-d-amber-delta',
+  ownProject: 'project-d',
   held: true,
   stamped: null as string | null,
   coordOf: (_p: string): string | null => null,
@@ -278,20 +278,20 @@ const base = {
 
 describe('boardPlacement', () => {
   it('places a held worker on its run\u2019s stamped coordinator project', () => {
-    expect(boardPlacement({ ...base, stamped: 'intake-platform' })).toBe('intake-platform');
+    expect(boardPlacement({ ...base, stamped: 'project-n' })).toBe('project-n');
   });
 
   it('falls back to its own project when the run carries no stamp', () => {
-    expect(boardPlacement({ ...base, stamped: null })).toBe('custom-tools');
+    expect(boardPlacement({ ...base, stamped: null })).toBe('project-d');
   });
 
   it('falls back to its own project when the workspace is NOT held', () => {
-    expect(boardPlacement({ ...base, held: false, stamped: 'intake-platform' }))
-      .toBe('custom-tools');
+    expect(boardPlacement({ ...base, held: false, stamped: 'project-n' }))
+      .toBe('project-d');
   });
 
   it('never places a session under its own project', () => {
-    expect(boardPlacement({ ...base, stamped: 'custom-tools' })).toBe('custom-tools');
+    expect(boardPlacement({ ...base, stamped: 'project-d' })).toBe('project-d');
   });
 
   it('walks a chain to the ROOT coordinator', () => {
@@ -305,13 +305,13 @@ describe('boardPlacement', () => {
     const cycle: Record<string, string> = { a: 'b', b: 'a' };
     expect(boardPlacement({
       ...base, stamped: 'a', coordOf: (p) => cycle[p] ?? null,
-    })).toBe('custom-tools');
+    })).toBe('project-d');
   });
 
   it('a chain longer than the hop cap falls back rather than walking forever', () => {
     expect(boardPlacement({
       ...base, stamped: 'a', coordOf: (p) => `${p}+`,
-    })).toBe('custom-tools');
+    })).toBe('project-d');
   });
 });
 ```
@@ -466,8 +466,8 @@ it('a revived session with no boardProject reads null — absence permits', () =
 
 it('a revived session WITH a boardProject keeps it', () => {
   const raw = JSON.parse(JSON.stringify(RAW)) as Record<string, unknown>;
-  raw.boardProject = 'intake-platform';
-  expect(reviveFleetSession(raw)!.boardProject).toBe('intake-platform');
+  raw.boardProject = 'project-n';
+  expect(reviveFleetSession(raw)!.boardProject).toBe('project-n');
 });
 ```
 

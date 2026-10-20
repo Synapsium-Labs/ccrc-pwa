@@ -728,7 +728,7 @@ This step is the census procedure contract §7 R10 names: every task, in any wav
 # and the reason is a count rather than a preference: this file makes 155
 # invocations across 131 non-comment lines.
 #
-# THE LAST MOVE WAS `_spawn_start`'s archive check (CCR-10): two reads of the
+# THE LAST MOVE WAS `_spawn_start`'s archive check (#127): two reads of the
 # archive fields, so the next reader is not hunting a refactor for the +2.
 ```
 
@@ -738,8 +738,8 @@ with these five:
 # and the reason is a count rather than a preference: this file makes 156
 # invocations across 132 non-comment lines.
 #
-# THE LAST MOVE WAS `_child_tmpdir`'s `.child` read (CCR-15), the +1; before it
-# `_spawn_start`'s archive check (CCR-10), two archive-field reads, the +2.
+# THE LAST MOVE WAS `_child_tmpdir`'s `.child` read (#166), the +1; before it
+# `_spawn_start`'s archive check (#127), two archive-field reads, the +2.
 ```
 
 Confirm the numbers with the header's own commands rather than trusting this plan:
@@ -749,7 +749,7 @@ grep -v '^[[:space:]]*#' ccd/ccd | grep -o '_reg_get "' | wc -l    # expect 156
 grep -v '^[[:space:]]*#' ccd/ccd | grep -c '_reg_get "'             # expect 132
 ```
 
-If your base already moved the census (the first command answers other than 156), write what the two commands print, and name the other mover in the commit. The block's dated history list ("It has moved six times…") is NOT extended: `ccd-reg-get-census.test.ts` locates it by that literal, and CCR-10's move is not in it either — it is a record of the pin's own era.
+If your base already moved the census (the first command answers other than 156), write what the two commands print, and name the other mover in the commit. The block's dated history list ("It has moved six times…") is NOT extended: `ccd-reg-get-census.test.ts` locates it by that literal, and #127's move is not in it either — it is a record of the pin's own era.
 
 The guard this step answers, measured on the prototype with Steps 3–4 in and this sentence untouched: `./node_modules/.bin/vitest run test/ccd-reg-get-census.test.ts` reds "ccd/ccd now makes 156 … calls, but the census still claims 155. Re-measure the sentence, do not re-measure this test." (`1 failed | 2 passed (3)`). Step 7 runs it green.
 
@@ -1149,7 +1149,7 @@ Every argument for these lines lives in `_child_runid_valid`'s header (Step 5), 
 with
 
 ```bash
-  # floors): 38; CCR-15's `child` made 39 — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
 ```
 
@@ -2008,7 +2008,7 @@ Expected: exactly one line, the identity this workspace is configured to commit 
 ```bash
 git push -u origin "$(git rev-parse --abbrev-ref HEAD)"
 gh pr create --base main --title "Child reclamation wave 1: the --child marker and a child's own TMPDIR (AGENT-FIRST)" --body-file - <<'EOF'
-Wave 1 of the child-reclamation programme (CCR-15; spec `docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md` §5.1, §5.2, §6). **AGENT-FIRST.** Nothing here destroys anything.
+Wave 1 of the child-reclamation programme (#166; spec `docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md` §5.1, §5.2, §6). **AGENT-FIRST.** Nothing here destroys anything.
 
 What it does:
 

@@ -1,6 +1,6 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { CCRC_DIR_NAME, NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
+import { CCRC_DIR_NAME, LANE_STATE_DIR_NAME, NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
 
 /**
  * Everything a connection needs to evaluate the path/exec whitelists — the
@@ -148,6 +148,32 @@ export async function checkPath(
     isCcrcNodeFile(canonicalCcrc, targetPath, canonicalTarget);
 
   return readAllowed ? canonicalTarget : null;
+}
+
+/** What a read op opens: a path and whether its last component may be a symlink, or `forbidden` (outside every read
+ *  root), or `unreadable` (a lane-state name whose directory is not the real lane-state directory). */
+export type ReadTarget = { kind: 'open'; path: string; noFollow: boolean } | { kind: 'forbidden' } | { kind: 'unreadable' };
+
+/**
+ * The read ops' target (`read`, `readFrom`, `readB64`; accounts plan Task A12, D-5755 (13d)). Every path goes through
+ * {@link checkPath}, which follows symlinks to the canonical target and checks THAT against the read roots, except a
+ * file named directly in `~/.cc-sessions/.accounts` (`LANE_STATE_DIR_NAME`), the lane-state files: any fleet-user
+ * process can plant a symlink at a lane's name (spec §3.4), and following it would answer its target's bytes, a
+ * `~/.claude*` credential among the things a read root admits. So for that name the DIRECTORY is canonicalized and
+ * must be the real `<home>/.cc-sessions/.accounts` (a symlinked `.accounts` is `unreadable`), and the file is opened
+ * by its own name in it with `O_NOFOLLOW`: a symlink there is `unreadable`, never followed (D-6058 (2)).
+ */
+export async function checkReadTarget(targetPath: string, cfg: WhitelistConfig): Promise<ReadTarget> {
+  if (typeof targetPath !== 'string' || targetPath.length === 0) return { kind: 'forbidden' };
+  const literal = path.resolve(targetPath);
+  const laneStateDir = path.join(path.resolve(cfg.home), '.cc-sessions', LANE_STATE_DIR_NAME);
+  if (path.dirname(literal) === laneStateDir) {
+    const [canonicalDir, canonicalHome] = await Promise.all([canonicalize(laneStateDir), canonicalize(cfg.home)]);
+    if (canonicalDir !== path.join(canonicalHome, '.cc-sessions', LANE_STATE_DIR_NAME)) return { kind: 'unreadable' };
+    return { kind: 'open', path: path.join(canonicalDir, path.basename(literal)), noFollow: true };
+  }
+  const p = await checkPath(targetPath, cfg, 'read');
+  return p === null ? { kind: 'forbidden' } : { kind: 'open', path: p, noFollow: false };
 }
 
 /**

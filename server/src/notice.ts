@@ -25,7 +25,12 @@ import type { Presence } from './presence.js';
  *  - `'record-always'`: record whatever the presence (a message the operator watching must not erase); push only when
  *    no one is looking.
  *  - `'record-only'`: record whatever the presence; never push. */
-export type NoticeMode = 'push' | 'record-always' | 'record-only';
+export const NOTICE_MODES = ['push', 'record-always', 'record-only'] as const;
+export type NoticeMode = typeof NOTICE_MODES[number];
+
+/** D-5858: the modes are spelled as literals by every writer that calls the sink, `coord/routes.ts`'s five among them,
+ *  so the coord kebab scan (`mail-routes.test.ts`) admits them through this guard, derived from the table above. */
+export const isNoticeMode = (tok: string): tok is NoticeMode => (NOTICE_MODES as readonly string[]).includes(tok);
 
 /** The ring record as the caller builds it. */
 export type NoticeRecord = Omit<NotifyEvent, 'seq' | 'at'>;

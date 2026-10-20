@@ -4,7 +4,7 @@
 
 **Goal:** A program stops being a discipline held in one orchestrator's head. A coordinator session, running a skill that ships to all four account homes, opens a run through the server API, dispatches wave 1, ends its turn, is woken by mail, re-measures the done fingerprint, reviews the handoff commit and dispatches wave 2 — while the operator watches `/runs`, reads `/mail`, and sees this session's outstanding mail above the composer.
 
-**Architecture:** Four artifacts and three screens. On the fleet host: `ccd/coordinator-skill/` (SKILL.md + references) becomes the **fourth** thing ccrc ships to the box, installed into `~/.claude`, `~/.claude-personal`, `~/.claude-corp` and `~/.claude-gpt` by an idempotent installer built to `install-session-hooks.sh`'s exact shape, and `~/.cc-secrets/ccrc-mail.token` becomes the box's credential, shipped only when the operator has minted one and never in git. In the PWA: `/runs` copies `/accounts`'s five-part screen anatomy and is fed by the additive `{type:'runs'}` fleet frame; `/mail` is the first renderer of the durable feed, reading `GET /api/feed` for scrollback and the catch-up tail on receipt; `MailStrip` is `TaskStrip`'s idiom one row higher. Everything server-side is PR I's and is consumed here through the contract in **Interfaces assumed from PR I**.
+**Architecture:** Four artifacts and three screens. On the fleet host: `ccd/coordinator-skill/` (SKILL.md + references) becomes the **fourth** thing ccrc ships to the box, installed into `~/.claude`, `~/.claude-home`, `~/.claude-acme` and `~/.claude-gpt` by an idempotent installer built to `install-session-hooks.sh`'s exact shape, and `~/.cc-secrets/ccrc-mail.token` becomes the box's credential, shipped only when the operator has minted one and never in git. In the PWA: `/runs` copies `/accounts`'s five-part screen anatomy and is fed by the additive `{type:'runs'}` fleet frame; `/mail` is the first renderer of the durable feed, reading `GET /api/feed` for scrollback and the catch-up tail on receipt; `MailStrip` is `TaskStrip`'s idiom one row higher. Everything server-side is PR I's and is consumed here through the contract in **Interfaces assumed from PR I**.
 
 **Tech Stack:** bash (the skill installer, one `deploy.sh` lane), markdown-as-code (SKILL.md, pinned by a suite), TypeScript ESM (Node ≥22), vitest, React 19. **No new dependencies.** The skill and the installer are tested from `server/test` against fixture HOMEs, the way every other ccd-side artifact in this repo is.
 
@@ -197,7 +197,7 @@ The brief for this PR named *"the box token `~/.cc-secrets/ccrc-mail.token` ship
 - **The feed:** *"a client-side unknown-kind degradation branch (today's closed 3-union has none), tags that do **not** collapse per session (two messages must not replace each other), and a **presence-gate exemption**: agent-to-agent mail is a record, not a 'needs your eyes' ping — it lands in the feed regardless of watching, and only its *push* is presence-gated."*
 - **The strip:** *"outstanding mail for *this* session, collapsed to a headline, nothing when empty. (A full in-transcript mail `ChatItem` is deferred to Build 4's transcript surface — one build owns the conversation model.)"* **No `ChatItem` arm, no `ChatList` change, in this PR.**
 - **Design gates, both halves.** Tap targets: scrape the rule off the stylesheet **and** render the component to prove the class is on a real element (`pwa/test/tap-targets.test.tsx:13-17`); vitest runs with `css: false`, so no test may assert a computed 44px, and every floored rule uses `var(--tap-min)` — a bare `44px` literal fails (`:193-206`). Contrast: `pwa/design/audit.mjs` walks **every** `.css` under `src/` automatically (`:129-143`), so new rules are measured the moment they exist; the cheapest path is what the bucket chips took — **self-grounded** rules (background + colour on one rule, `fleet.css:66-80`) so nothing is hand-registered.
-- **Rollout: agent first**, then server, then PWA — *"agent-first is trivially satisfied (no ccd changes; the skill + token ship via the install lane)"*. **Corrected (Task 8 fix round 1, 2026-08-11): false for this PR.** `ccd/install-session-hooks.sh` gains a fifth default home (`.claude-dev0`), and `server/src/sessionws.ts` + `server/src/coord/store.ts` carry production `server/src` changes (Task 6) — agent-first ordering (deploy Step 6.1 before 6.2) is load-bearing here, not a formality, because the fifth home's first-ever `settings.json` rewrite has to be verified and rolled back cleanly on the agent host before the server, which reads that same box's mail token, ever ships.
+- **Rollout: agent first**, then server, then PWA — *"agent-first is trivially satisfied (no ccd changes; the skill + token ship via the install lane)"*. **Corrected (Task 8 fix round 1, 2026-08-11): false for this PR.** `ccd/install-session-hooks.sh` gains a fifth default home (`.claude-lab0`), and `server/src/sessionws.ts` + `server/src/coord/store.ts` carry production `server/src` changes (Task 6) — agent-first ordering (deploy Step 6.1 before 6.2) is load-bearing here, not a formality, because the fifth home's first-ever `settings.json` rewrite has to be verified and rolled back cleanly on the agent host before the server, which reads that same box's mail token, ever ships.
 - Run ALL verification **FOREGROUND** in single blocking calls (the server suite is ~200 s; the ccd files alone are ~90 s — use `timeout ≥ 600000` ms). Report REAL printed counts. **Never background a suite.**
 - **Never run `ccd` against the live HOME. Never touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `~/.cc-secrets` outside a fixture HOME.** Every shell test below builds its own HOME with `mkTmp`.
 - **Mutation sweep the whole diff** — one literal mutant per added construct, full suite per mutant, sha256-verified restore between (Task 8).
@@ -691,7 +691,7 @@ git commit -m "feat(ccd): the coordinator skill, with its contract pinned by a s
 - Consumes: `install-session-hooks.sh`'s shape (`:23-25` the four homes and the `--homes` override, `:42-65` the per-home loop with backup + converged-skip); `mkTmp` (`server/test/tmpHelpers.ts`); PR I's `ship_secret` and rewritten `notify.sh` (interface 10) — **depended on and verified, never re-implemented**.
 - Produces: `bash install-coordinator-skill.sh [--homes <dir>…]`, exit 0 on success, exit 1 with a message on stderr for any home it refused; three lines in `deploy.sh`'s agent arm.
 
-**Why the installer copies `install-session-hooks.sh` rather than being clever:** skills resolve per `CLAUDE_CONFIG_DIR` (`~/.local/bin/claude2:2`, `claude-corp:2`, `gpt:129`), and a session's account **drifts on swap** — the registry's `wrapper` field changes while the id does not. Operator ruling 2 places the coordinator with `_ws_least_loaded` and no pinned account precisely *because* the four-homes lane makes that safe. An installer that converged three homes and failed the fourth silently would restore the exact hazard the ruling relies on this lane to remove, which is why the loop's `rc=1` is per-home and the exit status is checked by the deploy.
+**Why the installer copies `install-session-hooks.sh` rather than being clever:** skills resolve per `CLAUDE_CONFIG_DIR` (`~/.local/bin/claude9:2`, `claude-acme:2`, `gpt:129`), and a session's account **drifts on swap** — the registry's `wrapper` field changes while the id does not. Operator ruling 2 places the coordinator with `_ws_least_loaded` and no pinned account precisely *because* the four-homes lane makes that safe. An installer that converged three homes and failed the fourth silently would restore the exact hazard the ruling relies on this lane to remove, which is why the loop's `rc=1` is per-home and the exit status is checked by the deploy.
 
 **What this task deliberately does NOT do (D-8):** it does not touch `deploy/notify.sh`, does not add `ship_secret`, does not add the `.gitignore` line and does not create `deploy/ccrc-mail.token.example`. All four are PR I's, already written there. Step 5 asserts they arrived — existence and shape only, never a token's contents — because the skill is useless without them and a silent absence surfaces as a coordinator that cannot authenticate.
 
@@ -711,7 +711,7 @@ import { mkTmp } from './tmpHelpers.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-coordinator-skill.sh');
 const SRC = path.resolve(__dirname, '../../ccd/coordinator-skill');
-const HOMES = ['.claude', '.claude-personal', '.claude-corp', '.claude-gpt'];
+const HOMES = ['.claude', '.claude-home', '.claude-acme', '.claude-gpt'];
 
 let home: string;
 const skill = (d: string, ...rest: string[]): string =>
@@ -779,7 +779,7 @@ describe('install-coordinator-skill', () => {
   it('reports a failed home in the exit status but still processes the others', () => {
     // Same rule as the hook installer: one bad home must not silently strand
     // the account a swap could move the coordinator onto.
-    const blocked = path.join(home, '.claude-corp', 'skills');
+    const blocked = path.join(home, '.claude-acme', 'skills');
     fs.mkdirSync(blocked, { recursive: true });
     fs.chmodSync(blocked, 0o500);
     let threw = false;
@@ -787,12 +787,12 @@ describe('install-coordinator-skill', () => {
     fs.chmodSync(blocked, 0o700);
     expect(threw).toBe(true);
     expect(fs.existsSync(skill('.claude', 'SKILL.md'))).toBe(true);
-    expect(fs.existsSync(skill('.claude-personal', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(skill('.claude-home', 'SKILL.md'))).toBe(true);
   });
 
   it('never writes outside the homes it was given', () => {
     run(path.join(home, '.claude'));
-    for (const d of ['.claude-personal', '.claude-corp', '.claude-gpt']) {
+    for (const d of ['.claude-home', '.claude-acme', '.claude-gpt']) {
       expect(fs.existsSync(path.join(home, d, 'skills'))).toBe(false);
     }
   });
@@ -832,7 +832,7 @@ BACKUPS="$HOME/ccrc-backups/$TS"
 
 homes=()
 if [[ "${1:-}" == --homes ]]; then shift; homes=("$@")
-else homes=("$HOME/.claude" "$HOME/.claude-personal" "$HOME/.claude-corp" "$HOME/.claude-gpt"); fi
+else homes=("$HOME/.claude" "$HOME/.claude-home" "$HOME/.claude-acme" "$HOME/.claude-gpt"); fi
 
 # Refuse rather than degrade — ccd's own rule for a missing tool
 # (`ccd:2135-2139`: "refusing to run the destructive verb unserialised"). A
@@ -2748,8 +2748,8 @@ a banner, and the coordinator has no route, verb or instruction that would let
 it remove the file itself.
 
 **The skill ships to every `hooksAble` account home** — five today
-(`~/.claude`, `~/.claude-personal`, `~/.claude-corp`, `~/.claude-gpt`,
-`~/.claude-dev0`), roster-derived rather than a hardcoded count. Skills resolve
+(`~/.claude`, `~/.claude-home`, `~/.claude-acme`, `~/.claude-gpt`,
+`~/.claude-lab0`), roster-derived rather than a hardcoded count. Skills resolve
 per `CLAUDE_CONFIG_DIR`, and a session's account drifts on swap — so
 `ccd/install-coordinator-skill.sh` installs into each one on every agent
 deploy, idempotently, backing up anything it replaces. That lane is what makes
@@ -2932,9 +2932,9 @@ genuine survivors, closed rather than left as gaps:
 
 - The table's clause-3/route/home-count rows were written against the plan's pre-reconciliation shapes (8 clauses,
   `claimed`, four homes). The tree today carries Task 7's nine clauses (`claimed-by-another`, clause 9's `/clear`
-  rule) and the roster-derived five-entry default `homes` fallback (`.claude-dev0` now `hooksAble:true`). Each
+  rule) and the roster-derived five-entry default `homes` fallback (`.claude-lab0` now `hooksAble:true`). Each
   mutant was re-aimed at the real construct — soften clause 3, mis-route `/api/runs/:id/advnace`, drop
-  `.claude-dev0` from the default array — and killed by the CURRENT test with the CURRENT wording
+  `.claude-lab0` from the default array — and killed by the CURRENT test with the CURRENT wording
   (`coordinator-skill.test.ts`'s nine-clause array; `wrapper-roster-fixture.test.ts` and
   `install-coordinator-skill.test.ts`'s "touches exactly the roster's hooksAble config dirs" case).
 - `feed.ts: unknown kind → 'mail'`: `feed.ts` has no kind-mapping logic of its own — it delegates to the
@@ -3032,7 +3032,7 @@ bracket around the insert) — both literal mutants confirmed newly RED individu
   calls `hydrateMail`. Both were genuine survivors — confirmed by mutating each guard away and watching the full
   relevant suite stay green — closed with two new cases mirroring the established
   "reads a token this build does not know as `unknown`" idiom. `server/test/coord-store.test.ts`.
-- **`ccd/install-session-hooks.sh:25`'s fifth default home** (`.claude-dev0`) — already covered, twice over:
+- **`ccd/install-session-hooks.sh:25`'s fifth default home** (`.claude-lab0`) — already covered, twice over:
   `wrapper-roster-fixture.test.ts`'s source-text pin against `ACCOUNTS.hooksAble` and
   `install-session-hooks.test.ts`'s behavioural "touches exactly the roster's hooksAble config dirs" case. Dropping
   it from the default array fails both, confirmed.
@@ -3058,18 +3058,18 @@ This ships fleet-host artifacts, so the order is not optional — and this time 
 
 Behavioural, demonstrated rather than inferred. **No destructive verbs, and no touching live sessions, during any of it.**
 
-1. **The hook lane's new fifth home — first-ever install into `~/.claude-dev0`:** this branch adds `.claude-dev0` to `ccd/install-session-hooks.sh`'s default `homes=(...)`, and the agent arm scps that installer and runs it (`deploy/deploy.sh` Step 6.1), so this deploy rewrites `~/.claude-dev0/settings.json` on the live fleet host for the first time ever. The installer's own header: *"A settings.json this script broke would break every future session of that home — hence the paranoia."* Verify all four, before touching anything else:
-   - `python3 -m json.tool ~/.claude-dev0/settings.json >/dev/null` — valid JSON.
+1. **The hook lane's new fifth home — first-ever install into `~/.claude-lab0`:** this branch adds `.claude-lab0` to `ccd/install-session-hooks.sh`'s default `homes=(...)`, and the agent arm scps that installer and runs it (`deploy/deploy.sh` Step 6.1), so this deploy rewrites `~/.claude-lab0/settings.json` on the live fleet host for the first time ever. The installer's own header: *"A settings.json this script broke would break every future session of that home — hence the paranoia."* Verify all four, before touching anything else:
+   - `python3 -m json.tool ~/.claude-lab0/settings.json >/dev/null` — valid JSON.
    - The managed session-hook entry appears **exactly once** per event array (the installer's own sweep-then-insert `JQ_PROGRAM`; a stale or duplicated entry means the sweep regex missed a prior install's path).
    - The backup check is CONDITIONAL, not automatic: the installer only backs one up when a `settings.json` already
      existed for that home (`if [[ -f "$f" ]]; then mkdir -p "$BACKUPS"; cp -a ...`, `install-session-hooks.sh:63`)
      — on a genuine first-ever install into a home with no prior `settings.json`, correct behaviour writes NO backup
-     at all. Confirm which case this is (did `~/.claude-dev0/settings.json` exist before Step 6.1 ran?) before
+     at all. Confirm which case this is (did `~/.claude-lab0/settings.json` exist before Step 6.1 ran?) before
      reading an absent backup as a fault. If one did exist, it lands under `~/ccrc-backups/<TS>/` named
-     `.claude-dev0.settings.json` — a **dotfile** (`$(basename "$dir")` on `$HOME/.claude-dev0`, `:63`), invisible to
+     `.claude-lab0.settings.json` — a **dotfile** (`$(basename "$dir")` on `$HOME/.claude-lab0`, `:63`), invisible to
      a bare `ls`; use `ls -a ~/ccrc-backups/<TS>/`.
-   - A re-run (`bash ~/.cc-sessions/install-session-hooks.sh`) changes nothing (`ls -i ~/.claude-dev0/settings.json` before/after — same idiom item 2 below uses for the skill installer).
-2. **The skill landed in every `hooksAble` home (five today — `~/.claude`, `~/.claude-personal`, `~/.claude-corp`, `~/.claude-gpt`, `~/.claude-dev0`; count derived from `ACCOUNTS.hooksAble`, not hardcoded, so this item does not go stale the next time the roster grows):** `ls ~/.claude*/skills/ccrc-coordinator/SKILL.md` → five paths, and `bash ~/.cc-sessions/install-coordinator-skill.sh` a second time changes nothing (`ls -i` before/after).
+   - A re-run (`bash ~/.cc-sessions/install-session-hooks.sh`) changes nothing (`ls -i ~/.claude-lab0/settings.json` before/after — same idiom item 2 below uses for the skill installer).
+2. **The skill landed in every `hooksAble` home (five today — `~/.claude`, `~/.claude-home`, `~/.claude-acme`, `~/.claude-gpt`, `~/.claude-lab0`; count derived from `ACCOUNTS.hooksAble`, not hardcoded, so this item does not go stale the next time the roster grows):** `ls ~/.claude*/skills/ccrc-coordinator/SKILL.md` → five paths, and `bash ~/.cc-sessions/install-coordinator-skill.sh` a second time changes nothing (`ls -i` before/after).
 3. **The token landed with the right mode:** `ls -l ~/.cc-secrets/ccrc-mail.token` → `-rw-------`. **Do not `cat` it.**
 4. **PR I's token lane really works end to end:** trigger an ordinary swap notice and confirm the server does **not** log the legacy-tolerance warning — i.e. `notify.sh` presented the header and the server accepted it. (PR I's work; verified here because this is the first deploy that has both halves on the box.)
 5. **A run appears on the board:** open a run for a throwaway program in a scratch workspace, and confirm `/runs` shows it — from the socket frame, with the network tab showing no `GET /api/runs` after the first paint.

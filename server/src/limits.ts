@@ -8,6 +8,8 @@ import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
 import { serviceability, type ShareReading } from '../../shared/serviceability.js';
 import type { ModelClass } from '../../shared/models.js';
 import { shareFor, type SharesRead } from './shares.js';
+import { LANE_STATE_DIR_NAME } from '../../shared/agent-protocol.js';
+import { laneStateOf, type LaneStateRead } from '../../shared/accounts.js';
 
 export interface AccountLimits {
   five: number | null; seven: number | null; ts: number | null;
@@ -192,9 +194,9 @@ function reportsLimits(t: AccountDef['telemetry']): boolean {
  * UNKNOWN IS NOT ZERO, and that is this function's one real defect fixed
  * (Stage 2a, Task 6). It used to score `max(five ?? 0, seven ?? 0)`, so an
  * account no telemetry had ever mentioned scored 0 and beat every measured
- * account on the box: against the live tree, `{claude: 5, claude2: 6,
- * 'claude-corp': 7}` projected onto `claude-dev0` at score 0 — the emptiest
- * account was simply the one nobody could see. Latent only because dev0
+ * account on the box: against the live tree, `{claude: 5, claude9: 6,
+ * 'claude-acme': 7}` projected onto `claude-lab0` at score 0 — the emptiest
+ * account was simply the one nobody could see. Latent only because lab0
  * reports honestly and gpt is held out by `homeAble`. An unmeasured account now
  * ranks BELOW every measured one instead of above them.
  *
@@ -411,6 +413,39 @@ export function projectPlacement(
     return notPlaceable;
   }
   return { kind: 'projected', wrapper: home.wrapper, score: home.score };
+}
+
+/** Each lane's state file as read, and the lanes the registry marks off, for `GET /api/accounts`'s `lanes`. */
+export interface LaneStatesRead {
+  readonly lanes: Readonly<Record<string, LaneStateRead>>;
+  /** `<id>-disabled` in the registry: the kill switch, for a lane that has no telemetry row to carry it. */
+  readonly disabled: ReadonlySet<string>;
+}
+
+/**
+ * The lane-state files (`~/.cc-sessions/.accounts/<id>.json`, spec §3.4; D-5517), one per rostered lane, read over the
+ * fleet's own `read` op (accounts plan Task A12), which opens a file there with `O_NOFOLLOW` and takes it only when it
+ * is a regular file (D-5755 (13d); the agent's `checkReadTarget`, and `localIO` on a one-box fleet, D-6058). The two
+ * non-readings stay two: an absent file is `absent`; a file that exists and cannot be read (a symlink, a FIFO, bytes
+ * that are not a JSON object) is `unreadable`. Its own read, called only for a session reader (D-6057 (4)). Every field is held to its grammar by `laneStateOf` (D-5755 (11)); the
+ * route masks what it shows. Never rejects.
+ */
+export async function readLaneStates(io: FleetIO, cfg: CcrcConfig): Promise<LaneStatesRead> {
+  const dir = path.join(cfg.registryDir, LANE_STATE_DIR_NAME);
+  // Measured (the plain `readdir` ratchet, D-5969): a listing that fails marks no lane off here; the telemetry row's
+  // own `disabled` still does.
+  const reg = await io.readdirMeasured(cfg.registryDir);
+  const regNames = reg.ok ? reg.entries : [];
+  const disabled = new Set(regNames.filter((n) => n.endsWith('-disabled')).map((n) => n.slice(0, -'-disabled'.length)));
+  const lanes: Record<string, LaneStateRead> = {};
+  await Promise.all(cfg.roster.accounts.map(async ({ id }) => {
+    const r = await io.readFileMeasured(path.join(dir, `${id}.json`));
+    if (!r.ok) { lanes[id] = { kind: r.reason === 'absent' ? 'absent' : 'unreadable' }; return; }
+    let state: ReturnType<typeof laneStateOf> = null;
+    try { state = laneStateOf(JSON.parse(r.content)); } catch { state = null; }
+    lanes[id] = state === null ? { kind: 'unreadable' } : { kind: 'read', state };
+  }));
+  return { lanes, disabled };
 }
 
 export async function readLimits(

@@ -595,7 +595,7 @@ describe('the population — what the lane never touches', () => {
     expect(f.entry(id)?.eligibleSince ?? null, `${id}: never eligible`).toBeNull();
   };
 
-  it('a child (CCR-15’s) is never even audited here', async () => {
+  it('a child (#166’s) is never even audited here', async () => {
     const f = await fixture();
     f.touch(EXPIRE_LANE_LIVE_MARKER);
     f.plant('demo-child', OLD, { child: '7' });

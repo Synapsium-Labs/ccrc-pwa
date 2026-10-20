@@ -587,7 +587,7 @@ describe('the fleet gate and failure polarity', () => {
   // arm together: a slow moment makes the cheap arm slow too, so the ratio
   // between them stays put while either arm's raw ms does not.
   //
-  // WHY NOT AN ABSOLUTE MS NUMBER (measured on `openclaw`, the fleet box, under
+  // WHY NOT AN ABSOLUTE MS NUMBER (measured on the fleet box, under
   // concurrent-session load ~2.1-4.3): two 15-run samples of the shipped `case`
   // gates gave a SessionStart p95 of 136.9-164.5 ms (means 149.1 and 153.1)
   // against the 150 ms budget inherited from the PostToolUse test below, a near
@@ -3268,7 +3268,7 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     // WHY p95 WAS THE WRONG ESTIMATOR: p95 of n=20 is `s[18]`, the
     // SECOND-LARGEST of only 20 samples — one noisy outlier (iteration 0 is a
     // cold-start outlier: 258 ms vs ~90 ms typical) owns the statistic. On
-    // this loaded box (`openclaw`, 16 cores, load average ~34 — this box runs
+    // this loaded box (`<fleet-host>`, 16 cores, load average ~34 — this box runs
     // the live fleet at the same time, unlike D-1898's quieter sample) that
     // made the RATIO OF p95s noisy. RE-MEASURED 2026-09-11 with warm-up added
     // and the estimator switched to median: 15 isolated shipped runs gave
@@ -3349,7 +3349,7 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
       compactTimes.push(Number(process.hrtime.bigint() - t1) / 1e6);
     }
     // MEDIAN, not p95 (I3): p95 of n=20 is `s[18]`, the SECOND-LARGEST value —
-    // one noisy outlier owns it, and on this loaded box (openclaw, load ~34)
+    // one noisy outlier owns it, and on this loaded box (<fleet-host>, load ~34)
     // that made the ratio itself noisy: run-to-run spread of the p95/p95
     // ratio was far wider than median/median's (measured below). This row's
     // own power to catch a REGRESSION was unaffected by the swap (see the
@@ -9550,7 +9550,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // Each entry/exit is a coincidence of the shift, not a repair; Task 11 still owns the debt. S6-R11.
         // RE-DERIVED on the merge with `f06abdce` (round 7). Both sides of that
         // merge carried a set measured on a tree that no longer exists — this
-        // branch's, and main's own CCR-10/D-2994 re-measure — so NEITHER was taken
+        // branch's, and main's own #127/D-2994 re-measure — so NEITHER was taken
         // and the conflict was resolved structurally, leaving every value here to
         // the instrument. The citation RE-POINT LEFT THIS WAVE: both corpus
         // documents are byte-identical to `origin/main`, so no anchor of this
@@ -9759,6 +9759,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // Measured by running this test with `origin/main`'s `ccd/ccd` and with
         // this branch's, everything else the same tree. Neither corpus document
         // changed, so nothing was re-pointed. S6-R11 covers it, so no D-number.
+        // RE-MEASURED for `ccd ws-gc --fast` (D-5886, #123), 55 -> 54: ONE LEAVES (`:13573-13575`,
+        // its second site) and none enters, dumped from the merged tree and never retyped. The
+        // branch's `cmd_ws_gc` lines above this anchor slide a different `ccd/ccd` line under it,
+        // one that happens to carry a token of its row: a coincidental pass, not a repair. Neither
+        // corpus document changed, so nothing was re-pointed. S6-R11 covers it, so no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9800,7 +9805,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
-        'ccd/ccd:13573-13575',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
@@ -10022,7 +10026,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
-        'spec:2210 ccd/ccd:13573-13575',
+        // RE-MEASURED for `ccd ws-gc --fast` (D-5886, #123), 35 -> 34: the same second site leaves
+        // as in the row-level set above, from the same run. S6-R11, no D-number.
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',

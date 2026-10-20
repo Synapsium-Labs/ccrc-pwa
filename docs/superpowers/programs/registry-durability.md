@@ -3,7 +3,7 @@
 Spec: none — two carried Build-8 tickets (`docs/superpowers/plans/2026-08-15-fleet-robustness-build8.md`,
 "Carried"); scope is stated per wave in this ledger, and each wave's worker commits its own plan.
 Plan: per-wave, committed by the worker on the workspace branch (wave 1: `docs/superpowers/plans/2026-08-20-fleetio-measured-read.md`)
-Workspace: `ccrc-pwa-plain-ridge` (wrapper `claude2`, branch `ws/plain-ridge`) — spawned by wave-1 dispatch, run 6
+Workspace: `ccrc-pwa-plain-ridge` (wrapper `claude9`, branch `ws/plain-ridge`) — spawned by wave-1 dispatch, run 6
 Coordinator: claude-ccrc-pwa (Fable tier — operator-set for this session)
 
 **The first program driven through the `ccrc-worker` skill** (build4 predates it; its briefs

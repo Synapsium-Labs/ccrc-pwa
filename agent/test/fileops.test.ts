@@ -38,9 +38,9 @@ describe('ccrc-agent file ops', () => {
   it('read returns content for whitelisted files, null for missing ones', async () => {
     await open();
     const file = path.join(fixture!.home, '.cc-sessions', 'a.wrapper');
-    writeFileSync(file, 'claude2');
+    writeFileSync(file, 'claude9');
     const res1 = await client!.req<Res>(nextId(), { op: 'read', path: file });
-    expect(res1).toMatchObject({ ok: true, data: 'claude2' });
+    expect(res1).toMatchObject({ ok: true, data: 'claude9' });
     const res2 = await client!.req<Res>(nextId(), { op: 'read', path: path.join(fixture!.home, '.cc-sessions', 'nope') });
     expect(res2).toMatchObject({ ok: true, data: null });
   });
@@ -76,9 +76,9 @@ describe('ccrc-agent file ops', () => {
     expect(res).toMatchObject({ ok: false, err: 'forbidden' });
   });
 
-  it('read allows the .claude* glob roots (e.g. .claude-personal)', async () => {
+  it('read allows the .claude* glob roots (e.g. .claude-home)', async () => {
     await open();
-    const file = path.join(fixture!.home, '.claude-personal', 'settings.json');
+    const file = path.join(fixture!.home, '.claude-home', 'settings.json');
     writeFileSync(file, '{}');
     const res = await client!.req<Res>(nextId(), { op: 'read', path: file });
     expect(res).toMatchObject({ ok: true, data: '{}' });
@@ -544,7 +544,7 @@ describe('ccrc-agent file ops', () => {
     it('same for a target under a .claude* dir', async () => {
       await open();
       mkdirSync(path.join(fixture!.home, '.ccrc'), { recursive: true });
-      const target = path.join(fixture!.home, '.claude-personal', 'x');
+      const target = path.join(fixture!.home, '.claude-home', 'x');
       const link = path.join(fixture!.home, '.ccrc', 'node-id');
       writeFileSync(target, 'regular\n');
       symlinkSync(target, link);

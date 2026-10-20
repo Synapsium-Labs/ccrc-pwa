@@ -34,7 +34,8 @@ import { DocsScreen } from './screens/DocsScreen';
 import { MailScreen } from './screens/MailScreen';
 import { RunsScreen } from './screens/RunsScreen';
 import { SessionScreen } from './screens/SessionScreen';
-import { SettingsScreen } from './screens/SettingsScreen';
+import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
+import { SettingsScreen } from './screens/settings/SettingsFrame';
 import { ShellFrame } from './skins/frame';
 import { SKIN_SETS } from './skins';
 import { useFleetStore } from './stores/fleet';
@@ -78,6 +79,8 @@ export function App(): ReactNode {
   const at = matchRoute(path);
   const route = at?.route.id ?? null;
   const sessionId = route === 'session' ? at!.param : null;
+  // `/settings`, a section page, or an id that names none (D-5504): every one is Settings, never the fallback.
+  const settings = route === 'settings' || (route?.startsWith('settings-') ?? false);
   // `/digest?day=YYYY-MM-DD` (D-5300): the screen validates nothing about
   // `day` itself: the server answers 400 for a day that is not a UTC date.
   const digestDay = route === 'digest' ? new URLSearchParams(search).get('day') : null;
@@ -140,7 +143,7 @@ export function App(): ReactNode {
     <MailScreen />
   ) : route === 'runs' ? (
     <RunsScreen />
-  ) : route === 'settings' ? (
+  ) : settings ? (
     <SettingsScreen />
   ) : route === 'digest' ? (
     <DigestScreen day={digestDay} />
@@ -159,8 +162,12 @@ export function App(): ReactNode {
   // The fleet's polls and sheets sit ABOVE the shell (D-5468): one health, updates and projects poll for every
   // reader, and the five fleet sheets rendered by `FleetFlows` beside `.app-shell`, so a fleet list that remounts
   // never closes a sheet it opened.
+  // SETTINGS' READS, MADE ONCE (D-5504): the provider wraps the whole shell on EVERY route and reads only while
+  // `active`. Mounted only on Settings routes it would change the tree above `.app-shell`, so the frame would
+  // remount on each entry and exit, losing the sidebar's scroll (D-161) and the detail node (D-5466).
   return (
     <FleetChromeProvider store={useFleetStore}>
+      <SettingsDataProvider active={settings}>
       {authLost && <LoginScreen />}
       {blocked && <BlockScreen />}
       <ShellFrame set={set} view={route === null || route === 'fleet' ? 'fleet' : 'session'} detailRef={detail}>
@@ -171,6 +178,7 @@ export function App(): ReactNode {
           above the frame so a skin switch keeps an open palette (D-5467). */}
       <ShellCommands />
       <ToastHost />
+      </SettingsDataProvider>
     </FleetChromeProvider>
   );
 }
