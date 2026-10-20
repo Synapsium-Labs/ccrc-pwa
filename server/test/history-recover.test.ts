@@ -5850,6 +5850,50 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
     }
   }, 2 * HEAVY);
 
+  it('D-5727 unlistable at the advance (a listing that throws fails the advance) export/<store_id>/ cannot be listed when the apply phase ends: the advance into export-blobs, whose measure lists it, rolls back, so the cursor stays at apply\'s end, no layout key is written and recover_chunk_failed counts it once; listable again, the next call advances and measures', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root lists a 0000 directory
+    const { box, ids, db } = x10Store('ccrc-history-d5727-unlistable-');
+    const dir = exportDirOf(box);
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x4800, 1, 'zqd5727unl', t0);
+      const fam: X10Family = { uuid: x10U(0x48), path: '/home/u/gone/d5727unl.jsonl', ino: 9408, texts };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      const failedBefore = countersOn(db, 'recover_chunk_failed')['recover_chunk_failed']!;
+      let applyEnd: string | null = null;
+      const executors = Object.fromEntries(Object.entries(SW.RECOVER_EXECUTORS).map(([phase, fn]) =>
+        [phase, async (d: DatabaseSync, run: unknown, c: recExport.RecoverCursor): Promise<{ phaseDone: boolean }> => {
+          const r = await (fn as (d: DatabaseSync, run: unknown, c: recExport.RecoverCursor) => Promise<{ phaseDone: boolean }>)(d, run, c);
+          if (phase === 'apply' && r.phaseDone) {
+            applyEnd = cursorOn(d);
+            fs.chmodSync(dir, 0o000);                               // unlistable exactly at the apply -> export-blobs advance
+          }
+          return r;
+        }]));
+      let r: unknown;
+      try {
+        r = await SW.recoveryStep(db, stepCtx(box, ids), executors);
+      } finally {
+        fs.chmodSync(dir, 0o700);
+      }
+      expect.soft(applyEnd, 'CONTROL: the apply phase ended in this call').not.toBeNull();
+      expect.soft(cursorOn(db), 'the cursor stays at apply\'s end').toBe(applyEnd);
+      expect.soft(getMeta(db, LAYOUT_KEY), 'no layout key: the advance that measures rolled back').toBeNull();
+      expect.soft(countersOn(db, 'recover_chunk_failed')['recover_chunk_failed'], 'the failed advance is counted once').toBe(failedBefore + 1);
+      expect(r, 'the step neither finished nor held').toEqual({ moved: true, done: false, held: false });
+      const seen: string[] = [];
+      const next = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), x10Recording(seen)) as { done: boolean };
+      expect.soft(next.done, 'CONTROL: the smallest budget leaves the replay open, so the key is still kept').toBe(false);
+      expect.soft((cursorOn(db) ?? '').startsWith('apply'), `listable again, the next call advances (${cursorOn(db)})`).toBe(false);
+      expect.soft(rangesOf(db), 'and measures the listing').toEqual({ [W1]: [1, 1] });
+      const rest = await drive(box, ids, db);
+      expect(rest.done, 'and the replay completes').toBe(true);
+    } finally {
+      try { fs.chmodSync(dir, 0o700); } catch { /* removed with the fixture */ }
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
   it('JA (FR2, R-2\'s residue, arm A end to end) a held writer with NO listed name: writer 0 carries the bodies, writer 1\'s seq 2 carries E0 and its variants and is moved aside, and writer 2\'s seq 3 carries E0 without them; the held mark is ranged by its marked name alone, so the mark stays for the check and the rebuild holds E0\'s two variants', async () => {
     const { box, ids, db } = x10Store('ccrc-history-d5726-ja-');
     let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;

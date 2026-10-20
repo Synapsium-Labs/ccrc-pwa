@@ -3359,7 +3359,7 @@ export async function recoveryStep(db, ctx, executors = RECOVER_EXECUTORS) {
       }
       const next = { phase: RECOVER_PHASES[at + 1], file: null, offset: 0, blobId: null, groupSize: null, pairsAdded: run.pairsAdded };
       // history-off is otherwise read only at the top of this loop, so a chunk in flight when it is touched still commits and
-      // the advance after it would too. No phase advances under it (D-5727, FR2): an advance under off waits one more tick.
+      // the advance after it would too. No phase advance starts under it (D-5727, FR2): an advance under off waits one more tick. One already past this check, waiting on the write lock or inside its transaction, may still commit; the procedure touches off before the verb.
       if (existsSync(ctx.paths.off)) return { moved, done: false, held: true };
       withTx(db, 'NORMAL', () => {
         if (at === 0 && run.foreign.length > 0) bump(db, 'journal_head_mismatch', run.foreign.length);
