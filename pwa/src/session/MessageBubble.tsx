@@ -8,6 +8,7 @@ import type { ChatEvent } from '../../../shared/api';
 import { isImageClip, splitClipPaths } from '../../../shared/api';
 import { clipUrl } from '../lib/api';
 import { resetClock } from '../lib/clock';
+import { timeOf } from '../lib/format';
 import { ChatMarkdown, openExternal } from '../lib/markdown';
 import './chat.css';
 
@@ -27,13 +28,6 @@ export function linkify(text: string): ReactNode[] {
       part
     ),
   );
-}
-
-/** 'HH:MM' from an ISO ts; '' when unparsable (receipts degrade quietly). */
-export function timeOf(ts: string): string {
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return '';
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 // A /compact turn injects a long "This session is being continued …/Summary:"

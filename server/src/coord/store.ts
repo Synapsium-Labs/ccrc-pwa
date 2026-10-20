@@ -1106,8 +1106,9 @@ const HALTED_UPDATE_SQL = `('${HALTED_UPDATE_STATES.join("','")}')`;
  *  not a fault of the node). `HALTED_UPDATE_SQL` above is the STATE list only and is wider: `settleNode` refuses
  *  every `failed` row whatever its detail, which is its own rule. The prefix is compared by `substr`, byte for byte
  *  like `startsWith` — `LIKE` folds ASCII case. A NULL detail makes the comparison NULL, so the whole halting test is
- *  NULL and the guard `AND NOT` it refuses: a `failed` row with no detail halts, as `isHalting` says. */
-const haltingRowSql = (t: string): string =>
+ *  NULL and the guard `AND NOT` it refuses: a `failed` row with no detail halts, as `isHalting` says. Exported only so
+ *  `halting-parity.test.ts` runs it beside `isHaltingUpdate` on the same rows (D-5890). */
+export const haltingRowSql = (t: string): string =>
   `(${t}.updateState IN ${HALTED_UPDATE_SQL} AND NOT (${t}.updateState = 'failed' AND ` +
   `substr(${t}.updateDetail, 1, ${PROVENANCE_DETAIL_PREFIX.length}) = '${PROVENANCE_DETAIL_PREFIX}'))`;
 /** The same notion over a read-back row (`handOffLease`'s `why`). A state this build cannot name reads `unknown`,
@@ -1415,13 +1416,16 @@ const MAIL_ROW_COLUMNS =
   // one list, so the gate reaches every consumer through a single reader
   // (`hydrateMail`) rather than being added to each query in turn.
   'd.lastGate AS lastGate, d.gateCount AS gateCount, ' +
-  'd.gateSince AS gateSince, d.gateAt AS gateAt';
+  'd.gateSince AS gateSince, d.gateAt AS gateAt, ' +
+  // D-5838: when the park began, for the strip's `parked` line.
+  'd.parkedAt AS parkedAt';
 
 interface MailRowDb {
   id: number; deliveryId: number; at: number; fromId: string; toId: string; runId: number | null;
   kind: string; subject: string; artifacts: string; state: string;
   attempts: number; lastError: string | null;
   lastGate: string | null; gateCount: number; gateSince: number | null; gateAt: number | null;
+  parkedAt: number | null;
 }
 
 /** A route argument can never ask either mail read to walk more history (or
@@ -2172,7 +2176,7 @@ export class CoordStore {
    * this is a second delivery, so it renders its own envelope, naming the heir
    * in `to:` and its own id in `ack:` — the `queueDelivery(…, '') ->
    * renderEnvelope(delivery.id) -> setDeliveryEnvelope` pair `routes.ts` and
-   * `rundefs.ts` already use, for the same reason (the delivery id does not
+   * `rundefsTx.ts` already use, for the same reason (the delivery id does not
    * exist until the row does).
    *
    * THE PREDICATE IS NOT HAND-WRITTEN. `ABANDONED_PARK_SQL` is the mailbox's own
@@ -2242,7 +2246,8 @@ export class CoordStore {
    *     non-NULL state on every row it can select. It is `GET
    *     /api/mail?program=`'s default, non-`all`, arm.
    *
-   * On the narrower `OUTSTANDING_STATES_SQL` — twelve holders, in file order:
+   * On the narrower `OUTSTANDING_STATES_SQL` — the holders below, in file order
+   * (the count is the scan's, not this list's):
    *   `OUTSTANDING_OR_ABANDONED_SQL`'s own definition — the composed constant,
    *     no reader of its own.
    *   `cancelKickoffsTo` and `repointCoordinatorMail` — both run BEFORE this
@@ -2320,6 +2325,14 @@ export class CoordStore {
    *     waiting out a limit, which is the fact the stall lane's limit hold
    *     reads. A terminal row never counts, so an acked or parked refusal
    *     cannot keep a worker's limit hold alive.
+   *   `parkDelivery`, `holdParked`, `wakeParked`, `markParkEscalated`,
+   *     `baselineParkBox` and `parkedDeliveries` (D-5838, the PARKED state) — the mail sweep's
+   *     writers and read for a never-delivered row whose live recipient's box
+   *     will not take the nudge. A re-queued row reaches them only by failing to
+   *     land on its NEW recipient, and is parked there like any other row; the
+   *     park keeps it outstanding, so nothing this arm counts moves. `runHealth`
+   *     gains a second narrow-predicate count beside the one above,
+   *     `mailParkedLive`, which a re-queued row joins only while parked.
    *
    * BOUNDED by the role-addressed reports of ONE program that parked while its
    * coordinator was dead, at most one new row per `mail` row, and deliberately
@@ -2557,7 +2570,7 @@ export class CoordStore {
    * comment in the body), so a close that landed after the lane's candidate read
    * is never given a row or a mail.
    *
-   * OPENS NO TRANSACTION, so `queueStallNotice` (`rundefs.ts`) can hold this
+   * OPENS NO TRANSACTION, so `queueStallNotice` (`rundefsTx.ts`) can hold this
    * row and its mail in ONE. `tx` is not re-entrant. A caller with no
    * transaction of its own uses `recordStallObservation` below, so the check and
    * the insert are never split by another writer.
@@ -4274,7 +4287,7 @@ export class CoordStore {
   runHealth(runIds: readonly number[], coordIds: readonly string[]): Map<number, RunHealth> {
     const out = new Map<number, RunHealth>();
     for (const id of runIds) {
-      out.set(id, { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
+      out.set(id, { mailOutstanding: 0, mailParked: 0, mailParkedLive: 0, mailReplayMax: 0, doneRejects: 0,
                     lastRejectCode: null, briefQueued: null, clearError: null,
                     coordKickoffPendingSince: null });
     }
@@ -4303,14 +4316,17 @@ export class CoordStore {
       "SUM(CASE WHEN d.state = 'rejected' AND " +
       `COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
       'THEN 1 ELSE 0 END) AS parked, ' +
+      // D-5838: outstanding AND parked — alive, waiting on its recipient's box.
+      `SUM(CASE WHEN d.state IN ${OUTSTANDING_STATES_SQL} AND d.parkedAt IS NOT NULL THEN 1 ELSE 0 END) AS parkedLive, ` +
       'MAX(d.replayCount) AS replayMax ' +
       'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       `WHERE m.runId IN (${ph}) GROUP BY m.runId`,
     ).all(...runIds) as unknown as
-      { runId: number; outstanding: number; parked: number; replayMax: number | null }[]) {
+      { runId: number; outstanding: number; parked: number; parkedLive: number; replayMax: number | null }[]) {
       const h = out.get(row.runId);
       if (h === undefined) continue;
       out.set(row.runId, { ...h, mailOutstanding: row.outstanding, mailParked: row.parked,
+                           mailParkedLive: row.parkedLive,
                            mailReplayMax: row.replayMax ?? 0 });
     }
 
@@ -5038,6 +5054,9 @@ export class CoordStore {
       // thing absence means on the wire.
       lastGate: isMailGate(r.lastGate) ? r.lastGate : null,
       gateCount: r.gateCount, gateSince: r.gateSince, gateAt: r.gateAt,
+      // D-5838: a park is a fact about an OUTSTANDING row only. A rejected row
+      // keeps its park columns as history, and the wire must not call it parked.
+      parkedAt: r.state === 'queued' ? r.parkedAt : null,
     }));
   }
 
@@ -5161,7 +5180,7 @@ export class CoordStore {
    * Overwrites a delivery's stored `envelope`, once, immediately after
    * `queueDelivery`. THREE direct callers, each doing exactly that and none of
    * them a re-render: the ingress route in `routes.ts`, the system-mail queue
-   * in `rundefs.ts` (which has called it since Build 7 — this sentence said
+   * in `rundefsTx.ts` (which has called it since Build 7 — this sentence said
    * "the ingress route ONLY" for two builds while it did: D-1426), and
    * `requeueAbandonedMail` in this file, which renders the heir's own envelope
    * for a second delivery of one mail. Pinned by `single-definition.test.ts`'s
@@ -5183,7 +5202,7 @@ export class CoordStore {
    * GUARDED. The three direct callers expand to SIX reachable paths, all in
    * the same transaction as their `queueDelivery`: the mail route's send `tx`,
    * the system-mail queue's own `tx` and the stall watch's (`queueSystemMail`
-   * and `queueStallNotice`, each around `rundefs.ts`'s `insertSystemMailTx`),
+   * and `queueStallNotice`, each around `rundefsTx.ts`'s `insertSystemMailTx`),
    * `dispatchRun`'s dispatch `tx` through
    * `markDispatched` -> `bindSession` -> `requeueAbandonedMail`,
    * `reclaimProgram`'s `tx`, and the open route's post-hold `tx` through
@@ -5263,7 +5282,8 @@ export class CoordStore {
   dueDeliveries(now: number, replayMs: number): { id: number; mailId: number; toId: string;
                                 attempts: number; lastError: string | null; envelope: string;
                                 deliveredAt: number | null; ingestedAt: number | null;
-                                lastGate: string | null; gateSince: number | null }[] {
+                                lastGate: string | null; gateSince: number | null;
+                                parkedAt: number | null; parkReason: string | null; parkBox: string | null }[] {
     return this.db.prepare(
       // `lastError` (Task 409) is the row's INCOMING failure — what it already
       // carried before this sweep touched it — which is how `sweepMail` tells
@@ -5274,7 +5294,7 @@ export class CoordStore {
       // of gate, and reading the row again at write time would race the sweep
       // against itself on exactly the rows it is deciding about.
       'SELECT id, mailId, toId, attempts, lastError, envelope, deliveredAt, ingestedAt, ' +
-      'lastGate, gateSince FROM mail_deliveries ' +
+      'lastGate, gateSince, parkedAt, parkReason, parkBox FROM mail_deliveries ' +
       "WHERE (state = 'queued' AND nextAttemptAt <= ?) " +
       "OR (state = 'delivered' AND MAX(COALESCE(ingestedAt, 0), COALESCE(deliveredAt, 0)) + ? <= ? " +
       'AND nextAttemptAt <= ?) ' +
@@ -5282,7 +5302,8 @@ export class CoordStore {
     ).all(now, replayMs, now, now) as { id: number; mailId: number; toId: string; attempts: number;
                     lastError: string | null; envelope: string;
                     deliveredAt: number | null; ingestedAt: number | null;
-                    lastGate: string | null; gateSince: number | null }[];
+                    lastGate: string | null; gateSince: number | null;
+                    parkedAt: number | null; parkReason: string | null; parkBox: string | null }[];
   }
 
   /**
@@ -5335,8 +5356,13 @@ export class CoordStore {
       // the existing `state NOT IN (...)` guard covers them too and a row the
       // guard skips keeps its gate. A second UPDATE could clear a gate off a
       // row this one declined to touch.
+      // The park columns (D-5838) clear in the same statement for the same
+      // reason: a delivered row is not parked, and the park's own probe and
+      // escalation read `parkedAt` alone.
       "UPDATE mail_deliveries SET state = 'delivered', deliveredAt = ?, " +
-      `lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
+      'lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL, ' +
+      'parkedAt = NULL, parkReason = NULL, parkBox = NULL, parkEscalatedAt = NULL ' +
+      `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(at, id);
   }
 
@@ -5569,6 +5595,80 @@ export class CoordStore {
       "lastGate = NULL, gateCount = 0, gateSince = NULL, gateAt = NULL " +
       `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(code, lastError, id);
+  }
+
+  /**
+   * PARK a never-delivered row (D-5838, #754): the recipient is alive but
+   * its input box would not take the nudge. The row stays `queued` — so every
+   * outstanding-state reader still counts it, and an older build retries it as
+   * an ordinary row — and gains the park columns. `parkedAt` keeps the FIRST
+   * park's time across re-parks (`COALESCE`), which is what the escalation and
+   * the 24 h ceiling are measured from; `parkReason` and `parkBox` are always the
+   * latest. `attempts` advances like a `backOff` that counts. Guarded to an
+   * outstanding row never delivered: a delivered row never parks (its replay
+   * backs off unbounded, `MAIL_MAX_ATTEMPTS`'s own docstring). Answers whether
+   * the row was written.
+   */
+  parkDelivery(id: number, reason: string, box: string | null, now: number, nextAttemptAt: number): boolean {
+    return Number(this.db.prepare(
+      'UPDATE mail_deliveries SET attempts = attempts + 1, lastError = ?, nextAttemptAt = ?, ' +
+      'parkedAt = COALESCE(parkedAt, ?), parkReason = ?, parkBox = ? ' +
+      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND deliveredAt IS NULL`,
+    ).run(reason, nextAttemptAt, now, reason, box, id).changes) > 0;
+  }
+
+  /** Hold a parked row to its timer WITHOUT an attempt (D-5838): an
+   *  `enter-ignored` park whose box still holds what it held when it parked is
+   *  re-examined by every gate on the timer, but nothing is pressed or typed. */
+  holdParked(id: number, nextAttemptAt: number): boolean {
+    return Number(this.db.prepare(
+      'UPDATE mail_deliveries SET nextAttemptAt = ? ' +
+      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL`,
+    ).run(nextAttemptAt, id).changes) > 0;
+  }
+
+  /** Wake a parked row now (D-5838): the sweep's box probe saw the box change. */
+  wakeParked(id: number, now: number): boolean {
+    return Number(this.db.prepare(
+      'UPDATE mail_deliveries SET nextAttemptAt = ? ' +
+      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL AND nextAttemptAt > ?`,
+    ).run(now, id, now).changes) > 0;
+  }
+
+  /** Record the park's ONE operator escalation (D-5838). Answers true only for
+   *  the call that wrote it, so a second sweep — or a restart — never pushes a
+   *  second time. */
+  markParkEscalated(id: number, at: number): boolean {
+    return Number(this.db.prepare(
+      'UPDATE mail_deliveries SET parkEscalatedAt = ? ' +
+      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL AND parkEscalatedAt IS NULL`,
+    ).run(at, id).changes) > 0;
+  }
+
+  /** Set a parked row's box baseline when the park could not read it (D-5838,
+   *  verification round): `parkBox` NULL means UNKNOWN, and the first reading
+   *  after the park becomes what later readings are compared against. Writes
+   *  only while it is still NULL, so it never moves a known baseline. */
+  baselineParkBox(id: number, box: string): boolean {
+    return Number(this.db.prepare(
+      'UPDATE mail_deliveries SET parkBox = ? ' +
+      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL ` +
+      'AND parkBox IS NULL',
+    ).run(box, id).changes) > 0;
+  }
+
+  /** Every outstanding PARKED row, due or not (D-5838): the sweep probes their
+   *  boxes, escalates and applies the ceiling on every pass, not only when a
+   *  row's own timer comes round. Never-delivered rows only, like every park
+   *  writer here: a delivered row that still carries park columns (written by
+   *  an older build after a rollback) is not parked. */
+  parkedDeliveries(): { id: number; mailId: number; toId: string; parkedAt: number; parkReason: string | null;
+                        parkBox: string | null; parkEscalatedAt: number | null; nextAttemptAt: number }[] {
+    return this.db.prepare(
+      'SELECT id, mailId, toId, parkedAt, parkReason, parkBox, parkEscalatedAt, nextAttemptAt ' +
+      `FROM mail_deliveries WHERE state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL ORDER BY id`,
+    ).all() as unknown as { id: number; mailId: number; toId: string; parkedAt: number; parkReason: string | null;
+                            parkBox: string | null; parkEscalatedAt: number | null; nextAttemptAt: number }[];
   }
 
   recordRejection(r: { code: MailRejectCode; fromId?: string; fromUuid?: string; toId?: string;

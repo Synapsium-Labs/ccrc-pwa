@@ -29,7 +29,7 @@ import type { ReleaseWire, UpdatesView } from '../../../shared/api';
 import { isReleaseTag } from '../../../shared/api';
 import { compareReleaseTags } from '../../../shared/semver';
 import { Button, QC_ACTIONS, RESET_LIST, Sheet } from '@ccrc/ui';
-import { releaseDate } from '../screens/updates';
+import { releaseDate } from '../lib/format';
 import { NO_NOTES_TEXT, ReleaseNotes, hasReleaseNotes } from './ReleaseNotes';
 import { behindSince } from './useUpdatesView';
 import './fleet.css';

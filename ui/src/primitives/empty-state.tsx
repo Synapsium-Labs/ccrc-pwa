@@ -8,6 +8,10 @@
 // A screen says WHICH emptiness it is (loading, an error, an honest nothing)
 // through its own `data-state`, passed straight through; `data-empty-state`
 // marks the component itself, so a test can find it without a hook class.
+//
+// The state is also announced: `loading` is a polite status and `error` an
+// alert, so a screen-reader user hears the page arrive at either; an honest
+// nothing (`ok`) stays silent. A screen's own `role` wins.
 import type { HTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 import { Icon, type IconName } from './icon';
@@ -24,9 +28,14 @@ export interface EmptyStateProps extends HTMLAttributes<HTMLDivElement> {
   className?: string;
 }
 
+/** The live role each named state carries; any other state has none. */
+const STATE_ROLE: Readonly<Record<string, 'status' | 'alert'>> = { loading: 'status', error: 'alert' };
+
 export function EmptyState({ icon, children, action, className, ...props }: EmptyStateProps): ReactNode {
+  const state = (props as { 'data-state'?: unknown })['data-state'];
+  const role = props.role ?? (typeof state === 'string' ? STATE_ROLE[state] : undefined);
   return (
-    <div data-empty-state="" className={cn(EMPTY_STATE, className)} {...props}>
+    <div data-empty-state="" className={cn(EMPTY_STATE, className)} {...props} role={role}>
       {icon !== undefined && <Icon name={icon} size={20} className="text-ink-tertiary" />}
       <p className="m-0">{children}</p>
       {action}

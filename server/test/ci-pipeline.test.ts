@@ -200,8 +200,11 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
       .map((m) => [m[1], m[2]] as const));
     const cat = /^export const SKINS\b[^=]*= \[([\s\S]*?)^\];/m.exec(src);
     expect(cat, 'skins.ts no longer spells `export const SKINS … = [ … ];`').not.toBeNull();
-    const ids = [...cat![1].matchAll(/\bid: (\w+)/g)].map((m) => {
-      const id = consts.get(m[1]);
+    // Every `id:` in the body counts, whatever follows it: a quoted literal
+    // (`id: 'nord'`) or any other spelling that is not an exported constant
+    // fails here rather than being skipped (D-5093).
+    const ids = [...cat![1].matchAll(/\bid:\s*([^,\s}]+)/g)].map((m) => {
+      const id = /^\w+$/.test(m[1]) ? consts.get(m[1]) : undefined;
       expect(id, `SKINS names ${m[1]}, which is no string constant in skins.ts`).toBeDefined();
       return id!;
     });
@@ -248,8 +251,19 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
           builds.set(out, skin);
           builtAt.set(out, i);
         }
-        const pv = /vite preview --outDir (\S+) .*--port (\d+)/.exec(line);
-        if (pv) { served.set(pv[2], pv[1]); servedAt.set(pv[2], i); }
+        // Each port is served once and locked: a second preview on the same
+        // port, or one without --strictPort, lets one build answer for both
+        // skins while the other server fails unseen in the background (F3b
+        // follow-up, D-5093).
+        if (/\bvite preview\b/.test(line)) {
+          const pvOut = /\s--outDir[ =](\S+)/.exec(line)?.[1];
+          const pvPort = /\s--port[ =](\d+)/.exec(line)?.[1];
+          expect(pvOut !== undefined && pvPort !== undefined, `a vite preview line names no --outDir or no --port:\n${line}`)
+            .toBe(true);
+          expect(line, `a vite preview line does not pass --strictPort:\n${line}`).toMatch(/\s--strictPort\b/);
+          expect(served.has(pvPort!), `port ${pvPort} is served twice`).toBe(false);
+          served.set(pvPort!, pvOut!); servedAt.set(pvPort!, i);
+        }
         if (/\bwait-on\b/.test(line)) for (const w of line.matchAll(/\btcp:127\.0\.0\.1:(\d+)/g)) waited.add(w[1]);
         const t = /\btest-storybook\b.*--url http:\/\/127\.0\.0\.1:(\d+)/.exec(line);
         if (t) { runs.push(t[1]); runAt.set(t[1], i); }

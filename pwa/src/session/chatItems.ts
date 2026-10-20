@@ -11,7 +11,8 @@ import type { ChatEvent, MailEnvelope, TaskNotification } from '../../../shared/
 import { parseFetchedMailEnvelope, parseMailEnvelope, parseTaskNotification } from '../../../shared/api';
 import type { ToolResultEvent, ToolUseEvent } from '@ccrc/ui';
 import { isLocalDivider, type PendingSend } from '../stores/session';
-import { timeOf, type MessageEvent } from './MessageBubble';
+import type { MessageEvent } from './MessageBubble';
+import { timeOf } from '../lib/format';
 
 const DIVIDER_GAP_MS = 10 * 60_000; // a new mono timestamp after 10 quiet minutes
 

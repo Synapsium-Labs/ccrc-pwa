@@ -175,7 +175,8 @@ function idArray(ids) {
  *
  * `CCRC_ANTHROPIC_BACKEND` and `CCRC_CODEX_BACKEND` are the two POSITIVE
  * backend memberships, and they are deliberately not each other's complement:
- * `telemetry` has a third value (`none`), so a lane can be in neither. ccd
+ * `telemetry` has four values, and a lane whose telemetry is `openrouter` or
+ * `none` is in neither (D-5521). ccd
  * reads the first for the four things that only work against Claude Code's own
  * protocol (`--remote-control`, spawn-effort injection, the cross-backend
  * sanitiser, the 429 exclusion writer) and the second for the one thing that

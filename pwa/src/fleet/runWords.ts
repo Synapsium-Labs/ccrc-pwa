@@ -592,6 +592,15 @@ export function runWarnings(
         `and parked unread (${h.mailOutstanding} still outstanding) — a run-closed or reclaimed ` +
         'cancel is not counted here, so these are messages nobody received' });
   }
+  // D-5838/D-5839: PARKED and alive — not the "parked" above, which is the older word
+  // for a delivery the lane gave up on. `?? 0`: an older server omits it.
+  const parkedLive = h.mailParkedLive ?? 0;
+  if (parkedLive > 0) {
+    out.push({ glyph: '⏸', word: `${parkedLive} waiting`,
+      title: `${parkedLive} mail deliver${parkedLive === 1 ? 'y' : 'ies'} to this run ` +
+        `${parkedLive === 1 ? 'is' : 'are'} parked: the recipient is alive but its input box would not take ` +
+        'the message. It is delivered the moment that box is submitted or cleared, and rejected only after 24 h' });
+  }
   if (h.mailReplayMax >= MAIL_REPLAY_WARN_COUNT) {
     out.push({ glyph: '↻', word: `replayed ${h.mailReplayMax}×`,
       title: `a delivery to this run has been replayed ${h.mailReplayMax} times without an ack. ` +

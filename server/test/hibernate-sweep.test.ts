@@ -234,6 +234,20 @@ describe('hibernatePass: the store reads, on a real store', () => {
       mem(), [row(ID)], [rec(ID)], []);
     expect(mail[0]!.verdict).toEqual({ act: 'hold', reason: 'mail' });
   });
+
+  it('a PARKED delivery does not hold (D-5838); an unparked one beside it still does', async () => {
+    const f = fake();
+    const send = (): number => {
+      const m = f.coord.insertMail({ fromId: 'demo-boss', fromUuid: 'u', toId: ID, runId: null,
+        kind: 'status', subject: 's', body: 'b', artifacts: [] });
+      return f.coord.queueDelivery(m.id, ID, 'env').id;
+    };
+    const parked = send();
+    expect(f.coord.parkDelivery(parked, 'draft-present', 'a human line', NOW, NOW + 600_000)).toBe(true);
+    expect((await pass(f))[0]!.verdict).not.toEqual({ act: 'hold', reason: 'mail' });
+    send();
+    expect((await pass(f))[0]!.verdict).toEqual({ act: 'hold', reason: 'mail' });
+  });
 });
 
 describe('hibernatePass: the viewer is Presence.isOpen', () => {
