@@ -12,11 +12,11 @@ import {
 import {
   HANDOFF_SHA,
   holdReasonVerdict,
-  queueSystemMail,
   releaseIsSafe,
   survivorOf,
   type HoldReasonVerdict,
 } from './rundefs.js';
+import { queueSystemMail } from './rundefsTx.js';
 import { readSessionRecord } from '../registry.js';
 import { childBirthOf, childSpent, childSpentLive, childSpentLiveFrom } from './childSpent.js';
 import type { CcdPrLine } from '../prstate.js';

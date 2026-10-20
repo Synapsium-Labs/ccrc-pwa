@@ -98,7 +98,7 @@ const HELPER_WORD = /\brefuseRoute\(\s*reply\s*,\s*'([^']+)'/g;
 const INLINE_SEND_PINS: Readonly<Record<string, number>> = {
   'auth/gate.ts': 2,
   'coord/routes.ts': 149,  // D-5384: the open route's 24 precondition, child-gate, openRun-conflict and hold-verb sends answer through refuseRoute/refuseRun; D-5298: requireAttribution's 5 through refuseRoute; path identity W1a: the advance route's stored-id reject (`reject: { code: 'bad-session' }`, the advance route's own inline body, which no helper sends)
-  'server.ts': 131,       // D-5242: the swap route's three 409s (session-busy, status-unknown and the new hibernated) answer through refuseRoute; path identity W1a: its `readSessionRecord` `kind` switches send four literal 503s where four computed ternaries were
+  'server.ts': 123,       // D-5971 (#549, ARCH-11b): the eight 503 `registry-unmeasurable` sends answer through refuseRoute; D-5242: the swap route's three 409s (session-busy, status-unknown and the new hibernated) answer through refuseRoute; path identity W1a: its `readSessionRecord` `kind` switches' four literal 503s are refuseRoute calls since D-5971
   'token/routes.ts': 2,   // the rotate route's 501, a `RotateAnswer`; the claim door's oversized-body 413
 };
 
@@ -109,23 +109,15 @@ const COMPUTED_SEND_PINS: Readonly<Record<string, number>> = {
   'server.ts': 2,         // path identity W1a: the four 503/404 ternaries became `kind` switches
 };
 
-/** The measured disagreements with the table, each counted (D-5381). The
- *  computed sends' words are not literal, so the 503 `registry-unmeasurable`
- *  ternaries are counted on their own below. */
+/** The measured disagreements with the table, each counted (D-5381).
+ *  `registry-unmeasurable` left this list with D-5971 (#549, ARCH-11b): it has
+ *  one status everywhere, the table's, held by its own scan below. */
 const ALLOWED_SPLITS: readonly { file: string; word: string; status: number; count: number }[] = [
-  // registry-unmeasurable: 502 in coord/routes.ts (the table), 503 in server.ts until #549 (ARCH-11b) unifies it.
-  { file: 'server.ts', word: 'registry-unmeasurable', status: 503, count: 8 },
   // The lockout: `unauthenticated` with verdict `locked-out` and a retry-after header.
   { file: 'server.ts', word: 'unauthenticated', status: 429, count: 3 },
   // Fastify's own oversized-body 413, reshaped into the small claim body (spec 4.6).
   { file: 'token/routes.ts', word: 'bad-request', status: 413, count: 1 },
 ];
-/** server.ts's `read.reason === 'unlistable' ? 503 : 404` sends, whose word is
- *  the matching `'registry-unmeasurable' : 'unknown-session'` ternary. None since
- *  path identity W1a: `readSessionRecord` answers a `kind`, and each of the four
- *  routes switches on it with a literal 503, so the eight 503s are all literal. */
-const COMPUTED_REGISTRY_UNMEASURABLE_503 = 0;
-
 describe('REFUSAL_STATUS (D-5381)', () => {
   it('maps every route refusal word to exactly one HTTP error status', () => {
     expect(new Set(ROUTE_REFUSALS).size).toBe(ROUTE_REFUSALS.length);
@@ -146,7 +138,7 @@ describe('REFUSAL_STATUS (D-5381)', () => {
     for (const w of CLAIM_REFUSALS) expect(ROUTE_REFUSALS).toContain(w);
   });
 
-  it('every literal inline refusal still answers its word\'s status — the three measured splits excepted, counted', () => {
+  it('every literal inline refusal still answers its word\'s status — the two measured splits excepted, counted', () => {
     const splits = new Map<string, number>();
     const wrong: string[] = [];
     for (const { rel, text } of sources()) {
@@ -163,14 +155,6 @@ describe('REFUSAL_STATUS (D-5381)', () => {
     expect(Object.fromEntries(splits)).toEqual(Object.fromEntries(ALLOWED_SPLITS.map((a) => [`${a.file}|${a.word}`, a.count])));
   });
 
-  it('server.ts\'s computed 503 registry-unmeasurable sends are counted — eight 503s in all, every one literal', () => {
-    const text = sources().find((s) => s.rel === 'server.ts')!.text;
-    const ternaries = refusalSends(text).filter((s) =>
-      /^read\.reason === 'unlistable' \? 503 : 404$/.test(s.arg)
-      && /error:\s*read\.reason === 'unlistable' \? 'registry-unmeasurable' : 'unknown-session'/.test(s.body));
-    expect(ternaries.length).toBe(COMPUTED_REGISTRY_UNMEASURABLE_503);
-  });
-
   it('every GenericRefusal is still sent by some route — a dead word leaves the list', () => {
     const sent = new Set<string>();
     for (const { text } of sources()) {
@@ -178,6 +162,56 @@ describe('REFUSAL_STATUS (D-5381)', () => {
       for (const m of text.matchAll(HELPER_WORD)) sent.add(m[1]);
     }
     expect(GENERIC_REFUSALS.filter((w) => !sent.has(w))).toEqual([]);
+  });
+});
+
+/** ONE STATUS FOR `registry-unmeasurable` (D-5971, #549, ARCH-11b): server.ts
+ *  answered it 503 while `coord/routes.ts` and the table answered 502, so a
+ *  reader could not branch on the status. Every send of the word, in any file
+ *  and in any shape, now answers the table's status: a literal-status send
+ *  answers `REFUSAL_STATUS['registry-unmeasurable']`, a computed one IS the
+ *  table, and no route passes the word with a status of its own.
+ *
+ *  LIMIT: the scan spots the word only as a quoted literal in the send body. A
+ *  literal-status send whose word arrives through an identifier (say
+ *  `error: r.kind` at 503) would slip past it; none exists today, and such a
+ *  send belongs in refuseRoute, which the table governs. */
+describe('registry-unmeasurable has one status (D-5971)', () => {
+  const WORD = 'registry-unmeasurable';
+  /** Every send whose body names the word, literal or computed. */
+  const sendsOfWord = (text: string): Send[] =>
+    refusalSends(text).filter((s) => s.word === WORD || new RegExp(`['"\`]${WORD}['"\`]`).test(s.body));
+  /** THE PREDICATE: a send of the word whose status is neither the table's
+   *  literal value nor the table itself. The live case below runs it too. */
+  const offTable = (text: string): Send[] =>
+    sendsOfWord(text).filter((s) => s.status !== REFUSAL_STATUS[WORD] && !(s.status === null && TABLE_STATUS.test(s.arg)));
+
+  it('the table says 502', () => {
+    expect(REFUSAL_STATUS[WORD]).toBe(502);
+  });
+
+  it('no send of registry-unmeasurable, in any file, answers a status other than the table\'s', () => {
+    const wrong = sources().flatMap(({ rel, text }) => offTable(text).map((s) => `${rel}:${s.line}: .code(${s.arg})`));
+    expect(wrong).toEqual([]);
+  });
+
+  it('server.ts answers it through refuseRoute, never inline', () => {
+    const text = sources().find((s) => s.rel === 'server.ts')!.text;
+    expect(sendsOfWord(text).map((s) => s.line)).toEqual([]);
+    expect([...text.matchAll(/\brefuseRoute\(\s*reply\s*,\s*'registry-unmeasurable'/g)].length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('the scan is live — it catches a 503 send, a ternary, a header chain and any quote style of the word', () => {
+    const sample = [
+      "reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });",
+      "reply.code(x ? 503 : 404).send({ ok: false, error: x ? 'registry-unmeasurable' : 'unknown-session' });",
+      "reply.code(503).header('retry-after', '1').send({ ok: false, error: 'registry-unmeasurable' });",
+      "reply.code(502).send({ ok: false, error: 'registry-unmeasurable' });",
+      "reply.code(REFUSAL_STATUS[code]).send({ ok: false, error: code, detail: 'registry-unmeasurable' });",
+      'reply.code(503).send({ ok: false, error: "registry-unmeasurable" });',
+      'reply.code(504).send({ ok: false, error: `registry-unmeasurable` });',
+    ].join('\n');
+    expect(offTable(sample).map((s) => s.line)).toEqual([1, 2, 3, 6, 7]);
   });
 });
 

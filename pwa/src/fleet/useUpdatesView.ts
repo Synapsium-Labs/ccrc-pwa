@@ -17,18 +17,9 @@ import { compareReleaseTags } from '../../../shared/semver';
 import { nodeVersion, pendingTag } from '../../../shared/update-arrow';
 import { ApiError, api } from '../lib/api';
 
-/** THE ONE invalid-Date predicate (fix round 1, F13/item 8): a `lastOkAt`/
- *  `lastError.at`/`publishedAt`/`unreachableSince`/a request's `at` magnitude
- *  this build's `Date` cannot place — a caller's own `typeof x === 'number'`
- *  guard only rules out a non-number; 1e20 is finite but `new Date(1e20)` is
- *  Invalid Date. Moved here (from SettingsScreen.tsx, which had it
- *  module-private) so the banner's `bannerRelease` can share it: the two
- *  surfaces disagreeing about what "the catalogue was reached" means was
- *  itself a defect (F13) — the settings screen routed `catalogue.lastOkAt`
- *  through this, the banner did not, and `lastOkAt: 1e20` had one saying
- *  "checked" while the other stayed silent. One predicate, one import, both
- *  surfaces read the same answer. */
-export const isPlaceableInstant = (ms: number): boolean => !Number.isNaN(new Date(ms).getTime());
+/** `isPlaceableInstant` lives in `lib/format.ts` with `releaseDate`, its date reader (D-5897); re-exported for its
+ *  readers here. */
+export { isPlaceableInstant } from '../lib/format';
 
 /** The read's cadence. The spec names none for the PWA; 60 s is the server's
  *  own fastest cadence over these rows — the inventory sweep

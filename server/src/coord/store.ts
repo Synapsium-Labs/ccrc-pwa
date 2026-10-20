@@ -2176,7 +2176,7 @@ export class CoordStore {
    * this is a second delivery, so it renders its own envelope, naming the heir
    * in `to:` and its own id in `ack:` — the `queueDelivery(…, '') ->
    * renderEnvelope(delivery.id) -> setDeliveryEnvelope` pair `routes.ts` and
-   * `rundefs.ts` already use, for the same reason (the delivery id does not
+   * `rundefsTx.ts` already use, for the same reason (the delivery id does not
    * exist until the row does).
    *
    * THE PREDICATE IS NOT HAND-WRITTEN. `ABANDONED_PARK_SQL` is the mailbox's own
@@ -2570,7 +2570,7 @@ export class CoordStore {
    * comment in the body), so a close that landed after the lane's candidate read
    * is never given a row or a mail.
    *
-   * OPENS NO TRANSACTION, so `queueStallNotice` (`rundefs.ts`) can hold this
+   * OPENS NO TRANSACTION, so `queueStallNotice` (`rundefsTx.ts`) can hold this
    * row and its mail in ONE. `tx` is not re-entrant. A caller with no
    * transaction of its own uses `recordStallObservation` below, so the check and
    * the insert are never split by another writer.
@@ -5180,7 +5180,7 @@ export class CoordStore {
    * Overwrites a delivery's stored `envelope`, once, immediately after
    * `queueDelivery`. THREE direct callers, each doing exactly that and none of
    * them a re-render: the ingress route in `routes.ts`, the system-mail queue
-   * in `rundefs.ts` (which has called it since Build 7 — this sentence said
+   * in `rundefsTx.ts` (which has called it since Build 7 — this sentence said
    * "the ingress route ONLY" for two builds while it did: D-1426), and
    * `requeueAbandonedMail` in this file, which renders the heir's own envelope
    * for a second delivery of one mail. Pinned by `single-definition.test.ts`'s
@@ -5202,7 +5202,7 @@ export class CoordStore {
    * GUARDED. The three direct callers expand to SIX reachable paths, all in
    * the same transaction as their `queueDelivery`: the mail route's send `tx`,
    * the system-mail queue's own `tx` and the stall watch's (`queueSystemMail`
-   * and `queueStallNotice`, each around `rundefs.ts`'s `insertSystemMailTx`),
+   * and `queueStallNotice`, each around `rundefsTx.ts`'s `insertSystemMailTx`),
    * `dispatchRun`'s dispatch `tx` through
    * `markDispatched` -> `bindSession` -> `requeueAbandonedMail`,
    * `reclaimProgram`'s `tx`, and the open route's post-hold `tx` through

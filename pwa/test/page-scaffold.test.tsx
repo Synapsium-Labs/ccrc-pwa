@@ -121,18 +121,34 @@ describe('PageScaffold (D-5102)', () => {
   });
 
   it("the body's max-width is var(--page-max) or var(--page-max-wide), never a literal", () => {
-    const literal = /\bmax-w-\[[^\]]*\d[^\]]*\]|max-width:\s*\d/;
+    // A literal as a class, as CSS, or as a JSX style object's `maxWidth`.
+    const literal = /\bmax-w-\[[^\]]*\d[^\]]*\]|max-width:\s*\d|\bmaxWidth\b/;
     const src = stripTs(read('ui/src/primitives/page-scaffold.tsx'));
     expect(src, 'a literal column width in the scaffold').not.toMatch(literal);
     for (const wide of [false, true]) {
       const { container, unmount } = scaffold({ wide });
-      const body = container.querySelector('[data-page-body]');
+      const body = container.querySelector<HTMLElement>('[data-page-body]');
       expect(body, 'the scaffold names its body').not.toBeNull();
       const classes = body!.className.split(/\s+/);
       expect(classes).toContain(wide ? 'max-w-(--page-max-wide)' : 'max-w-(--page-max)');
       expect(classes.filter((c) => /^max-w-/.test(c))).toHaveLength(1);
+      expect(body!.style.maxWidth, 'an inline max-width on the body').toBe('');
       unmount();
     }
+  });
+
+  it("the header's row is as wide as the body's column, so the title and actions sit over it", () => {
+    const cap = (el: Element): string[] => el.className.split(/\s+/).filter((c) => /^max-w-/.test(c));
+    for (const wide of [false, true]) {
+      const { container, unmount } = scaffold({ wide });
+      const row = container.querySelector('header')!.firstElementChild!;
+      const body = container.querySelector('[data-page-body]')!;
+      expect(cap(row), `the header row's cap (wide=${wide})`).toEqual(cap(body));
+      expect(cap(row)).toHaveLength(1);
+      unmount();
+    }
+    // With a nav the row's cap is the nav slot's to set (D-5666; the Settings
+    // tasks own it), so it is held there, not here.
   });
 
   it("the scaffold's gutters, title size and header height read tokens in SKIN_TOKENS", () => {
@@ -244,6 +260,23 @@ describe('EmptyState (D-5102)', () => {
     const p = screen.getByText('Nothing yet.');
     expect(p.closest('[data-state]')?.getAttribute('data-state')).toBe('error');
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
+  it('announces a loading state politely and an error assertively; an honest nothing is silent', () => {
+    const { unmount } = render(<EmptyState data-state="loading">Loading…</EmptyState>);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading…');
+    unmount();
+    const err = render(<EmptyState data-state="error">Could not reach the server.</EmptyState>);
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not reach the server.');
+    err.unmount();
+    const { container } = render(<EmptyState data-state="ok">Nothing yet.</EmptyState>);
+    expect(container.querySelector('[data-empty-state]')!.hasAttribute('role')).toBe(false);
+  });
+
+  it("a screen's own role wins over the state's", () => {
+    render(<EmptyState data-state="error" role="status">Retrying…</EmptyState>);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('Retrying…');
   });
 });
 

@@ -290,6 +290,13 @@ describe('ResumeSheet — the reclaim refusals, each with its own sentence', () 
     expect(await screen.findByText(/the registry directory could not be listed/i)).toBeInTheDocument();
   });
 
+  // D-5971 (#549, ARCH-11b): the sentence is the WORD's, not the status's — an older server's 503 says it too.
+  it.each([502, 503])('registry-unmeasurable at %i with no detail still says the registry could not be read', async (status) => {
+    reclaimFailing(new ApiError(status, { ok: false, error: 'registry-unmeasurable' }));
+    expect(await screen.findByText(/the registry could not be read, so this box cannot say who is alive/i)).toBeInTheDocument();
+    expect(screen.queryByText(/does not recognise/i)).toBeNull();
+  });
+
   it('501 not-configured — this box runs no coordination at all', async () => {
     reclaimFailing(new ApiError(501, { ok: false, error: 'not-configured' }));
     expect(await screen.findByText(/does not run coordination/i)).toBeInTheDocument();

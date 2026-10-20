@@ -42,7 +42,7 @@ import { CollectLaneSection } from '../fleet/CollectLaneSection';
 import {
   CATALOGUE_EXPLAIN_TEXT, NOTIFICATIONS_TEXT, NotedRadioSet, ResultLine, SETTINGS_AMBER_NOTE, UNCONFIRMED_TEXT, UPDATES_TEXT,
   autoGateNoteText, useResultLine,
-} from './settingsText';
+} from '../fleet/settingsText';
 import { planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
 import { UPDATES_STALE_TEXT, isPlaceableInstant, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
@@ -118,7 +118,7 @@ export const AUTO_NOTES: Record<AutoMode, string> = {
   stable: 'Installs each new stable release by itself. While the channel is Dev, nothing installs by itself.',
   channel: 'Installs each new release on the chosen channel by itself, Dev included.',
 };
-// UNCONFIRMED_TEXT is defined in ./settingsText so the Stall watch section can import it without a cycle back to this
+// UNCONFIRMED_TEXT is defined in ../fleet/settingsText so the Stall watch section can import it without a cycle back to this
 // screen; re-exported here so this screen's callers and tests keep their import, and so the spec's citation of this
 // file (§13 step 3) still resolves to the re-export here.
 export { UNCONFIRMED_TEXT };

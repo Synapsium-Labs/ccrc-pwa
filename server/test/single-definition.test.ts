@@ -739,9 +739,10 @@ describe('Build 7 nouns', () => {
   // with "no `node:sqlite`" — so every multi-row all-or-nothing commit in this
   // build (`dispatchRun`, `settleItems`, `closeRun`) lands as a `CoordStore`
   // method, and this is the scanner that says so.
-  describe('the coord ring — only store.ts, rundefs.ts and routes.ts hold the handle', () => {
+  describe('the coord ring — only store.ts, rundefsTx.ts and routes.ts hold the handle', () => {
     const coordDir = path.join(ccrcRoot, 'server/src/coord');
-    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefs.ts', 'routes.ts', 'db.ts', 'schema.ts']);
+    // D-5896: `rundefs.ts` left this set when its mail writes moved to `rundefsTx.ts`; `tx.ts` is `tx` itself.
+    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {
@@ -7371,8 +7372,8 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       if (open) { fn = open[1]!; vars = []; }
       if (isBashComment(raw)) continue;
       const l = raw.replace(/\d?>\s*\/dev\/null|>&\d/g, '');
-      for (const m of l.matchAll(new RegExp(`\\b([A-Za-z_]\\w*)=["']?[^\\s"';]*${esc(name)}\\b`, 'g'))) vars.push(m[1]!);
-      const target = [`[^\\s"'<>|;&]*${esc(name)}\\b`, ...vars.map((v) => `\\$\\{?${v}\\}?(?![\\w])`)].join('|');
+      for (const m of l.matchAll(new RegExp(`\\b([A-Za-z_]\\w*)=[^\\s;]*${esc(name)}\\b`, 'g'))) vars.push(m[1]!);
+      const target = [`[^\\s<>|;&]*${esc(name)}\\b`, ...vars.map((v) => `\\$\\{?${v}\\}?(?![\\w])`)].join('|');
       if (new RegExp(`>{1,2}\\s*["']?(?:${target})`).test(l)
         || new RegExp(`(?:^|[\\s;&|({])${WRITE_VERB}\\s[^;&|]*?["']?(?:${target})`).test(l)) out.add(fn);
       if (/^}\s*$/.test(raw)) { fn = '(top level)'; vars = []; }
@@ -7385,7 +7386,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   /** A TS or .mjs code line that writes `name`'s path: a file-changing fs call, or a spawn/exec of a write verb, naming
    *  the literal or one of `consts`. */
   const tsWrites = (line: string, name: string, consts: readonly string[]): boolean =>
-    new RegExp(`\\b(?:writeFile|appendFile|rename|copyFile|symlink|link|truncate|open|mkdir|rm|unlink|cp)(?:Sync)?\\s*\\([^;]*(?:${
+    new RegExp(`\\b(?:writeFile|appendFile|createWriteStream|rename|copyFile|symlink|link|truncate|utimes|lutimes|open|mkdir|rm|unlink|cp)(?:Sync)?\\s*\\([^;]*(?:${
       naming(name, consts)})`).test(line)
     || new RegExp(`\\b(?:execFile|spawn|exec)(?:Sync)?\\s*\\(\\s*[\`'"]${WRITE_VERB}\\b[^;]*(?:${naming(name, consts)})`).test(line);
   /** The ids a text binds to `name`'s PATH, followed to a fixed point (`const m = join(reg, X)`, then `const q = m`).
@@ -7430,9 +7431,13 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     ].join('|'));
     return lines.some((l) => target.test(l) && write.test(l));
   };
-  /** Every tracked Python file (none is a bash, TS or .mjs corpus member). */
-  const PY = spawnSync('git', ['ls-files', '-z', '*.py'], { cwd: ccrcRoot, encoding: 'utf8' }).stdout
-    .split('\0').filter(Boolean).map((f) => path.join(ccrcRoot, f));
+  /** Every tracked Python file (none is a bash, TS or .mjs corpus member). A failed `git ls-files` (no checkout) throws
+   *  rather than scanning nothing, and the CONTROL row holds the corpus non-empty. */
+  const pyFiles = (): string[] => {
+    const r = spawnSync('git', ['ls-files', '-z', '*.py'], { cwd: ccrcRoot, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ls-files *.py exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    return r.stdout.split('\0').filter(Boolean).map((f) => path.join(ccrcRoot, f));
+  };
   /** The constants that hold `name` (`const X = 'name'`), from the census module's own query. */
   const constsOf = (name: string): string[] =>
     markerDefinitions(name).map((s) => /\bconst\s+([A-Za-z_$][\w$]*)/.exec(s.text)![1]!);
@@ -7441,7 +7446,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     for (const f of BASH) for (const fn of bashWriters(readFileSync(f, 'utf8'), name)) out.push(`${rel(f)}:${fn}`);
     const consts = constsOf(name);
     for (const f of [...ALL, ...ALL_MJS]) if (tsFileWrites(stallCode(f), name, consts)) out.push(rel(f));
-    for (const f of PY) if (pyFileWrites(readFileSync(f, 'utf8'), name)) out.push(rel(f));
+    for (const f of pyFiles()) if (pyFileWrites(readFileSync(f, 'utf8'), name)) out.push(rel(f));
     return out.sort();
   };
 
@@ -7463,6 +7468,10 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(bashWriters('cmd_x() {\n  local m="$REG/reclaim-paused"\n  rm -f -- "$m"\n}', 'reclaim-paused')).toEqual(['cmd_x']);
     expect(bashWriters('cmd_y() {\n  touch "$REG/mail-disabled"\n}', 'mail-disabled')).toEqual(['cmd_y']);
     expect(bashWriters('cmd_z() {\n  [[ -e "$REG/mail-disabled" ]] && return 0\n}', 'mail-disabled')).toEqual([]);
+    expect(bashWriters('cmd_q() {\n  : > "$REG"/reclaim-paused\n}', 'reclaim-paused')).toEqual(['cmd_q']);
+    expect(bashWriters('cmd_r() {\n  : >> "${REG}"/mail-disabled\n}', 'mail-disabled')).toEqual(['cmd_r']);
+    expect(bashWriters('cmd_t() {\n  local m="$REG"/reclaim-paused\n  rm -f -- "$m"\n}', 'reclaim-paused')).toEqual(['cmd_t']);
+    expect(bashWriters('cmd_s() {\n  [[ -e "$REG"/mail-disabled ]] && return 0\n}', 'mail-disabled')).toEqual([]);
     expect(tsWrites("writeFileSync(join(reg, 'reclaim-paused'), '');", 'reclaim-paused', ['RECLAIM_PAUSE_MARKER'])).toBe(true);
     expect(tsWrites('await writeFile(path.join(reg, RECLAIM_PAUSE_MARKER), "");', 'reclaim-paused', ['RECLAIM_PAUSE_MARKER'])).toBe(true);
     expect(tsWrites('if (names.includes(RECLAIM_PAUSE_MARKER)) return;', 'reclaim-paused', ['RECLAIM_PAUSE_MARKER'])).toBe(false);
@@ -7476,6 +7485,9 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(tsFileWrites("const p = join(reg, RECLAIM_PAUSE_MARKER);\nif (existsSync(p)) return;\nwriteFileSync(other, '');",
       'reclaim-paused', C)).toBe(false);
     expect(tsFileWrites("execFileSync('ls', [join(reg, RECLAIM_PAUSE_MARKER)]);", 'reclaim-paused', C)).toBe(false);
+    expect(tsFileWrites('createWriteStream(join(reg, RECLAIM_PAUSE_MARKER)).end();', 'reclaim-paused', C)).toBe(true);
+    expect(tsFileWrites("const m = join(reg, RECLAIM_PAUSE_MARKER);\nawait utimes(m, now, now);", 'reclaim-paused', C)).toBe(true);
+    expect(pyFiles().length, 'the Python corpus is empty: git ls-files found no .py').toBeGreaterThan(0);
     expect(pyFileWrites("with open(os.path.join(reg, 'mail-disabled'), 'w') as f:\n    pass", 'mail-disabled')).toBe(true);
     expect(pyFileWrites("m = os.path.join(reg, 'mail-disabled')\nos.remove(m)", 'mail-disabled')).toBe(true);
     expect(pyFileWrites("(Path(reg) / 'mail-disabled').touch()", 'mail-disabled')).toBe(true);
