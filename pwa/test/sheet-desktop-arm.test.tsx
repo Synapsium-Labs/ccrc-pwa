@@ -166,9 +166,12 @@ describe('nothing remounts on a crossing', () => {
 
 describe('`full` is identical at both widths', () => {
   it('the terminal drawer keeps its handle, its classes and no ✕ at 1280', () => {
-    const shot = (): { cls: string; handle: boolean; close: boolean } => {
-      const view = render(<Sheet open full onClose={() => {}} title="Terminal"><div /></Sheet>);
-      const out = { cls: panel().className, handle: document.querySelector('[data-vaul-handle]') !== null, close: closeButton() !== null };
+    const shot = (): { cls: string; eyebrow: string; handle: boolean; close: boolean } => {
+      const view = render(<Sheet open full onClose={() => {}} title="Terminal" eyebrow="project-a"><div /></Sheet>);
+      const out = {
+        cls: panel().className, eyebrow: document.querySelector('.sheet-eyebrow')!.className,
+        handle: document.querySelector('[data-vaul-handle]') !== null, close: closeButton() !== null,
+      };
       view.unmount();
       return out;
     };
