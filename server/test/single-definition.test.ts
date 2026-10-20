@@ -2303,8 +2303,9 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     // THE LIST IS WRITTEN DOWN, not a scanner quietly narrowed — the
     // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. The marker literal is
     // defined ONCE, in its `shared/switches.ts` row (D-5855); `watch.ts`'s
-    // module-local copy is gone, and `rundefs.ts` re-exports the row. Any new
-    // holder still fails.
+    // module-local copy is gone (it held a second literal on purpose until
+    // then), and `rundefs.ts` re-exports the row. Any new holder still
+    // fails.
     //
     // Two of the four are refusal codes, not marker literals: `'mail-disabled'` is also
     // a `RunRefuseCode` member, so `shared/api.ts` (the vocabulary) and
@@ -4434,9 +4435,8 @@ describe('worker stall watch wave 2: the three new operator-switch markers have 
   // Wave 1's describe above, for the three markers wave 2 adds. It is appended, never merged into that one, because
   // this file is cited by line. SUBSTRING CAVEAT: both halves match with `includes`, and `mail-gate-busy` is a
   // substring of `mail-gate-busy-shadow`, so the `mail-gate-busy` row counts every holder of EITHER spelling: a
-  // superset. That is sound only while both are spelled in ONE file (planning departure
-  // `gate-markers-spelled-in-turnidle-only` (D-3607); that file is `shared/switches.ts` since D-5855, which
-  // `turnidle.ts` re-exports), and the CONTROL row states the superset so nobody reads the row as more.
+  // superset. That is sound only while both are spelled in ONE file (D-3607, `gate-markers-spelled-in-turnidle-only`;
+  // `shared/switches.ts` since D-5855), and the CONTROL row states the superset so nobody reads the row as more.
   // `stall-watch-live` is not a substring of `stall-watch-w2-live`, so wave 1's row is untouched by this one.
   const MARKERS: [string, string][] = [
     ['stall-watch-w2-live', 'server/src/coord/stall.ts'],
