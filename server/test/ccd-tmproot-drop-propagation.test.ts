@@ -49,6 +49,21 @@ const PROC_SPY = '_ws_path_users_proc_root() { echo walk >> "$HOME/proc-walks"; 
 const DROP_STUB = (rc: 1 | 2): string =>
   `_ws_tmproot_witness_drop() { _WS_WDROP=''; _WS_WDROP_WHY='stub: kept'; return ${rc}; };`;
 
+/** Search permission is never asked of root, so a `~/.cc-tmp` made unsearchable is no fixture there. */
+const ROOT_USER = process.getuid?.() === 0;
+/** `_ws_reclaim_absent`, wrapped: when the DROP asks it of the leaf (its absence, proven again, the last ask before it
+ *  drops), `~/.cc-tmp` is made mode 0600, the real function answers (its parent cannot be searched, so 2), and the mode
+ *  it had is put back before the drop goes on. The tail's own ask of the leaf, a step earlier, is the real one, and so is
+ *  every other. Logged to `$HOME/root-locked`. (`ccd-tmproot-drop-exact.test.ts` has the same seam for the helper.) */
+const ROOT_LOCK_AT_REPROVE = (): string => {
+  const mode = (fs.statSync(tmpRoot()).mode & 0o7777).toString(8);
+  return 'eval "_t_absent_real()$(declare -f _ws_reclaim_absent | tail -n +2)";'
+    + ' _ws_reclaim_absent() { local _t_rc; if [[ "${FUNCNAME[1]}" == _ws_tmproot_witness_drop && "$1" == "$HOME/.cc-tmp/' + CHILD_ID + '" ]]; then'
+    + ' chmod 0600 "$HOME/.cc-tmp" && echo locked >> "$HOME/root-locked"; _t_absent_real "$@"; _t_rc=$?;'
+    + ' chmod ' + mode + ' "$HOME/.cc-tmp"; return "$_t_rc"; fi;'
+    + ' _t_absent_real "$@"; };';
+};
+
 /** A real child whose temp root the REAL writer made and witnessed (`_child_tmpdir`); the witness's bytes. */
 const witnessed = (): string => {
   makeChild(h);
@@ -150,6 +165,18 @@ describe('D2, step (6)’s in-use arm: over a leaf proven absent, a drop that is
     expect(fs.lstatSync(quarantine()).isSymbolicLink(), 'the link stands').toBe(true);
     expect(fs.readdirSync(elsewhere), 'nothing was written through the link').toEqual([]);
     recorded(r, 'reclaim', CHILD_ID, 'no leaf stands, but its witness was kept: ');
+  }, 90_000);
+
+  it.skipIf(ROOT_USER)('D2 real, ~/.cc-tmp unsearchable only at the drop’s re-proof: the witness kept byte for byte, `unmeasured`', () => {
+    const before = witnessed();
+    leafGone();
+    const mode = fs.statSync(tmpRoot()).mode & 0o7777;
+    let r: Run;
+    try { r = reclaim(`${IN_USE} ${ROOT_LOCK_AT_REPROVE()}`); } finally { fs.chmodSync(tmpRoot(), mode); }
+    expect(fs.readFileSync(path.join(h.home, 'root-locked'), 'utf8'), 'the CONTROL: ~/.cc-tmp was made unsearchable at the re-proof, once').toBe('locked\n');
+    expect(fs.existsSync(witnessOf()), 'the witness stands: never dropped over an absence that was not proven').toBe(true);
+    expect(fs.readFileSync(witnessOf(), 'utf8'), 'the witness is kept, byte for byte').toBe(before);
+    recorded(r, 'reclaim', CHILD_ID, 'no leaf stands, but its witness was kept: the absence of the leaf could not be proven again');
   }, 90_000);
 });
 

@@ -103,6 +103,25 @@ const restoringMode = <T>(fn: () => T): T => {
   const mode = fs.statSync(wdir()).mode & 0o7777;
   try { return fn(); } finally { fs.chmodSync(wdir(), mode); }
 };
+/** `_ws_reclaim_absent`, wrapped as `LOCK_AT_REPROVE` wraps it, but the directory made unsearchable is `~/.cc-tmp`,
+ *  the leaf's own parent, and only for the drop's one ask of the leaf (its absence, proven again): `~/.cc-tmp` goes to
+ *  mode 0600, the real function answers (its parent cannot be searched, so 2), and the mode it had is put back before
+ *  the drop goes on. Every read before that ask (the device, the slots of the id) finds `~/.cc-tmp` searchable, and a
+ *  drop that went past the ask would find it searchable again. Logged to `$HOME/root-locked`. */
+const ROOT_LOCK_AT_REPROVE = (): string => {
+  const mode = (fs.statSync(root()).mode & 0o7777).toString(8);
+  return 'eval "_t_absent_real()$(declare -f _ws_reclaim_absent | tail -n +2)";'
+    + ' _ws_reclaim_absent() { local _t_rc; if [[ "${FUNCNAME[1]}" == _ws_tmproot_witness_drop && "$1" == "$HOME/.cc-tmp/' + ID + '" ]]; then'
+    + ' chmod 0600 "$HOME/.cc-tmp" && echo locked >> "$HOME/root-locked"; _t_absent_real "$@"; _t_rc=$?;'
+    + ' chmod ' + mode + ' "$HOME/.cc-tmp"; return "$_t_rc"; fi;'
+    + ' _t_absent_real "$@"; };';
+};
+/** `fn`, with `~/.cc-tmp`'s mode as it stood before restored after it whatever it answered, so the harness can remove
+ *  the fixture even when the wrapper above never ran to its end. */
+const restoringRoot = <T>(fn: () => T): T => {
+  const mode = fs.statSync(root()).mode & 0o7777;
+  try { return fn(); } finally { fs.chmodSync(root(), mode); }
+};
 
 describe('the drop’s three answers, in its fixed order (path-identity spec §3.2 and §3.3)', () => {
   it('no witness stands: complete, absent, nothing touched', () => {
@@ -138,6 +157,17 @@ describe('the drop’s three answers, in its fixed order (path-identity spec §3
     expect(r.err).toBe('');
     expect(fs.readFileSync(witness(), 'utf8')).toBe(bytes);
     expect(fs.readFileSync(path.join(leaf(), 'scratch'), 'utf8'), 'the leaf is never touched').toBe('the leaf’s own');
+  });
+
+  it.skipIf(ROOT_USER)('~/.cc-tmp that cannot be SEARCHED only when the drop proves the leaf’s absence again: unmeasured, the witness byte-identical', () => {
+    const bytes = orphaned();
+    const r = restoringRoot(() => drop(ID, ROOT_LOCK_AT_REPROVE()));
+    expect(linesOf('root-locked'), 'the CONTROL: ~/.cc-tmp was made unsearchable at the re-proof, once').toEqual(['locked']);
+    expect(r.out).toMatch(/^\[rc=2\] \|its witness was kept: the absence of the leaf could not be proven again \(/);
+    expect(r.out).toContain('cannot be searched');
+    expect(r.err).toBe('');
+    expect(fs.readFileSync(witness(), 'utf8'), 'the witness stands, byte-identical').toBe(bytes);
+    expect(fs.readdirSync(wdir()), 'and nothing is left beside it').toEqual([ID]);
   });
 
   it.each([
