@@ -962,8 +962,8 @@ describe('W2-3 Task 2: the gate module is pure and its words are its own', () =>
    *  spells a declaration of either one itself. */
   const declares = (name: string): RegExp => new RegExp(`(?:^|[\\s;])(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`);
   const OWN_WORDS = ['FACT' + '_KINDS', 'LAB' + 'ELS'] as const;
-  /** A different vocabulary that happens to share the name, measured at 7d01973a2: collectLaneFixture.ts:58
-   *  declares a `LABELS` Set of collect-lane box labels from COLLECT_BOX_LABELS. Named, and checked live below. */
+  /** A different vocabulary that happens to share the name, measured at 7d01973a2: collectLaneFixture.ts#LABELS
+   *  is a Set of collect-lane box labels from COLLECT_BOX_LABELS. Named, and checked live below. */
   const NAMED_OTHERS: Record<string, { name: string; needle: string }> = {
     'server/test/collectLaneFixture.ts': { name: 'LAB' + 'ELS', needle: 'COLLECT_BOX_LABELS' },
   };
@@ -1242,7 +1242,7 @@ function t3Planted(f: Planted, rowCap: number): T3Family {
   return fams[0]!;
 }
 
-/** derive.mjs:313-316's producer for one boundary, composed as derive composes it: holdingCopyOf's copy, its rows in file
+/** derive.mjs#leafFields' producer for one boundary, composed as derive composes it: holdingCopyOf's copy, its rows in file
  *  order, lib.summaryRowFor's pick (else the boundary row) and lib.producerOfCopy. Opens the store read-only. */
 async function t3DeriveProducer(dbPath: string, uuid: string): Promise<{ fileId: number | null; producer: string }> {
   const D = (await import('../../ccd/history/derive.mjs')) as unknown as {

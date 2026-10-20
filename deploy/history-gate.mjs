@@ -190,7 +190,7 @@ export function familyKey(storeId, ccrcId, generation) {
 //              whether or not a next boundary exists (the true turn K+1 may lie between the cap and that boundary);
 //              and, chosen by W2-3's plan, when a row that would end the window has a null ts_ms.
 // The two copy rules (W2-D15, D-5771): the window reads W1's longest copy (the greatest after_count, ties by lib's
-// rule); the producer reads lib.pickHoldingCopy's copy, the one derive.mjs:316 reads, and folds that copy's `models`
+// rule); the producer reads lib.pickHoldingCopy's copy, the one derive.mjs#leafFields reads, and folds that copy's `models`
 // (every assistant row after the summary to the end of the copy, uncapped) through lib.producerOf (W2-D16).
 // W2-6 imports turnsOf for its re-discovery unit.
 
@@ -254,7 +254,7 @@ export function windowCopyOf(copies) {
   return holdingCopyAmong(copies.filter((c) => c.after_count === most));
 }
 
-/** The PRODUCER's copy (W2-D15, D-5771): lib.pickHoldingCopy over every copy, the copy derive.mjs:316 reads, so
+/** The PRODUCER's copy (W2-D15, D-5771): lib.pickHoldingCopy over every copy, the copy derive.mjs#leafFields reads, so
  *  a window's stratum equals its leaf's producer. @param {Copy[]} copies @returns {Copy|null} */
 export function producerCopyOf(copies) {
   return holdingCopyAmong(copies);
