@@ -95,6 +95,15 @@ describe('parseAdvance and serializeAdvance', () => {
     ['tries on an entry that is not a failed advance', (a) => { a.classes.opus.history[0].tries = 2; }, 'classes.opus.history[0].tries'],
     ['lastAt on an entry that is not a failed advance', (a) => { a.classes.opus.history[0].lastAt = '2026-10-22T12:05:09Z'; }, 'classes.opus.history[0].lastAt'],
     ['a recovered that is not a boolean', (a) => { a.classes.opus.history[0].recovered = 'yes'; }, 'classes.opus.history[0].recovered'],
+    // The final fix wave's M3: each guard below survived its own weakening until a row named it.
+    ['tries 0 on a failed advance', (a) => { a.classes.sonnet.history[0].tries = 0; }, 'classes.sonnet.history[0].tries'],
+    ["tries 'x' on a failed advance", (a) => { a.classes.sonnet.history[0].tries = 'x'; }, 'classes.sonnet.history[0].tries'],
+    ['tries 1.5 on a failed advance', (a) => { a.classes.sonnet.history[0].tries = 1.5; }, 'classes.sonnet.history[0].tries'],
+    ['a lastAt with no Z on a failed advance', (a) => { a.classes.sonnet.history[0].lastAt = '2026-10-22 12:05:09'; }, 'classes.sonnet.history[0].lastAt'],
+    ["a previous.effort that is ''", (a) => { a.classes.opus.previous.effort = ''; }, 'classes.opus.previous.effort'],
+    ["an effort whose from is ''", (a) => { a.classes.opus.history[0].effort = { from: '', to: 'xhigh' }; }, 'classes.opus.history[0].effort'],
+    ["a pending effortFrom that is ''", (a) => { a.pending = { ...PENDING, effortFrom: '' }; }, 'pending.effortFrom'],
+    ["a pending effortTo that is ''", (a) => { a.pending = { ...PENDING, effortTo: '' }; }, 'pending.effortTo'],
     ['no pending key at all', (a) => { delete a.pending; }, 'pending'],
     ['a pending class it does not know', (a) => { a.pending = { ...PENDING, class: 'turbo' }; }, 'pending.class'],
     ['a pending from that is not an id', (a) => { a.pending = { ...PENDING, from: 'not an id' }; }, 'pending.from'],
@@ -217,6 +226,14 @@ describe('reconcilePending — the crash gap (D-5188; Review Focus: the crash ga
     expect(r.advance.classes.opus.previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
     expect(r.advance.classes.opus.history).toEqual([{ at: PENDING.at, how: 'advance', from: 'model-5.6-gamma',
       to: 'model-6.1-gamma', ok: true, canary: 'passed', effort: { from: 'max', to: 'xhigh' }, recovered: true }]);
+  });
+
+  it('a move that landed at an unchanged level records no effort pair: the entry carries one only for a level that moved', () => {
+    const same = { ...fresh(), pending: { ...PENDING, effortFrom: 'max', effortTo: 'max' } };
+    const r = reconcilePending(same, reg({ ...ADV_REGISTRY.classes, opus: 'model-6.1-gamma' }));
+    expect(r.advance.classes.opus.history).toEqual([{ at: PENDING.at, how: 'advance', from: 'model-5.6-gamma',
+      to: 'model-6.1-gamma', ok: true, canary: 'passed', recovered: true }]);
+    expect(r.advance.classes.opus.previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
   });
 
   it('a move that never landed (the pin is still `from`) is dropped: no entry, and previous untouched', () => {
