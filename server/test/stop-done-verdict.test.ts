@@ -202,7 +202,7 @@ describe('stopDoneVerdict: run-close timing, before and after (D-6091)', () => {
   });
 
   it('kept: an operator .hold holds', () => {
-    expect(stopDoneVerdict(base({ row: row({ held: 'keep: debugging' }) }))).toEqual({ act: 'hold', reason: 'held' });
+    expect(stopDoneVerdict(base({ row: row({ held: 'keep: debugging' }), heldKind: 'operator' }))).toEqual({ act: 'hold', reason: 'held' });
   });
 
   it('kept: outstanding mail holds', () => {
