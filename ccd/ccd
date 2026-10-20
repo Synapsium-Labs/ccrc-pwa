@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a3d88bf799b38b8c2df39f3b002f3c88605969ebcc46f6c2b27797d572aa61b4
+# ccrc:generated 1 sha256=b3f20dcfe617096f24dbb27ac0ea12b3b9d3000db588e2bbac2710f9eb1132a0
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -282,13 +282,8 @@ _plat_devino() {  # <file> -> "<device>:<inode>", the identity of a lock
 # false on macOS — the total EQUALLED the row sum and overstated the
 # reclaim. `-type l` rides along because `du -sb` counts a symlink's own
 # st_size too (directories need nothing: GNU du charges a directory 0 in
-# byte totals — measured, coreutils 9.4). `find -ls` hands awk the inode
-# (field 1) and the size (field 7) of every entry from find's OWN lstat, with
-# no process per batch: `-exec stat -f '%d %i %z' {} +` cost ~6 ms per file
-# (macOS 26, a loaded box), so a 210 000-file worktree took over ten minutes
-# to size and the PWA's archive sat on it; `-ls` reads the same tree in ~8 s
-# and the same total to the byte. The dedup key is the inode alone: `-ls`
-# carries no device, and a workspace is one filesystem.
+# byte totals — measured, coreutils 9.4). `find -ls` hands awk inode ($1) and size ($7) from find's own lstat;
+# `-exec stat` cost ~6 ms a file on macOS, minutes per worktree. Dedup by inode: one workspace, one filesystem.
 #
 # `awk` PRINTS `s+0`, so an empty walk answers `0` rather than the empty
 # string — every caller validates the result with `^[0-9]+$` and would read a

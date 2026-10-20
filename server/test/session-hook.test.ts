@@ -8438,10 +8438,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // moved. README's own anchor moved with the block, and README is repaired, never counted: its quoted
       // emitter call was re-pointed by content before this map was measured. Every other hook edit is in
       // place or in the tail. Both corpus documents are byte-identical to `origin/main`. S6-R11, no D-number.
-      // 147 -> 145 at the darwin sizing fix (`_plat_bytes` finds with `-ls`): its header comment grew by five lines
-      // in the platform block, which slid ccd's lines back under two anchors that had drifted past them. Measured
-      // by this test against the tree, never retyped. S6-R11, no D-number.
-      'ccd/ccd': 145,
+      'ccd/ccd': 147,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8875,9 +8872,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // neither frozen corpus document changed. S6-R11, no new D-number.
     // 202 -> 201 at the drift decider (D-5921): `shared/api.ts` 1 -> 0, the +35 shift argued beside the map; no other
     // key moves and neither frozen corpus document changed. S6-R11, no new D-number.
-    // 200 -> 198 at the darwin sizing fix: `ccd/ccd` 147 -> 145, argued beside the map; no other key moves and
-    // neither frozen corpus document changed. S6-R11, no new D-number.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(198);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(200);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
