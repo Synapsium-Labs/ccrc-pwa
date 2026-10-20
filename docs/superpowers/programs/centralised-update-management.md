@@ -2294,6 +2294,21 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         is about three taps away. v0.0.415 (#870) to v0.0.428 (#910) followed, unapplied. STATUS: fleet and server
         v0.0.414, newest v0.0.428, stable v0.0.328, intent dev/auto=off, backups fleet 182M/server 4197M, disk free
         fleet 208G/work volume 85G/server 28G, no anomalies.
+      - **08:10 UTC: three more operator taps, each a clean move of both nodes.**
+        - v0.0.428 (#910) at about 07:20: gates passed, doctor 0 failed on both boxes.
+        - v0.0.435 (#915): fleet 08:00:51 to 08:03:55, server 08:04:34 to 08:06:19. The fleet doctor read 1 failed,
+          the history check's `tick-stale` again: one sweep pass hit its start timeout at 08:00:29, with the fleet box
+          at 5 GB of 30 available. The record names "doctor exited 1 - the box moved", and the server step went ahead.
+        - v0.0.436 (#924): fleet 08:07:39 to 08:10:39, server 08:10:40 to 08:12:03; doctor 0 failed on both boxes,
+          so the history check had cleared.
+        - The 08:01 probe caught the v0.0.435 move in flight, and the 08:06 and 08:12 probes each caught the server
+          row's first measurement after its restart (`pending`, install incomplete). The next measurement settled
+          it both times (08:06:58, 08:12:42). Expected states, no fault.
+        - Server backups 5318M, 10 kept, the newest 684M, coord.db 442M. The probe's size line stopped being a fault
+          signal under the ruled growth, so the probe now flags more than 10 timestamped backups (the pruner not
+          pruning), with size only as a 10G backstop. The free-disk line (server under 15G) stands; 27G free.
+        - STATUS: fleet and server v0.0.436, newest v0.0.436, stable v0.0.328, intent dev/auto=off, backups fleet
+          200M/server 5318M, disk free fleet 208G/work volume 86G/server 27G.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
