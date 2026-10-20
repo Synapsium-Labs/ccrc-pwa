@@ -1005,9 +1005,9 @@ In `pwa/test/session-line.test.tsx`, add:
 ```tsx
 describe('the repo label (board-placement wave 2, Task 6)', () => {
   it('sits INSIDE the row button\'s accessible name, so two same-slug rows are two names', () => {
-    render(<SessionLine session={s()} repo="Synapsium-Labs/project-d" onOpen={() => {}} onActions={() => {}} />);
+    render(<SessionLine session={s()} repo="example-org/project-d" onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByRole('button', { name: /quiet-mesa.*Synapsium-Labs\/project-d/ })).toBeInTheDocument();
-    expect(document.querySelector('.sess-repo')?.textContent).toBe('Synapsium-Labs/project-d');
+    expect(document.querySelector('.sess-repo')?.textContent).toBe('example-org/project-d');
   });
   it('renders nothing when the card already implies the repo', () => {
     render(<SessionLine session={s()} onOpen={() => {}} onActions={() => {}} />);
@@ -1172,8 +1172,8 @@ In `pwa/test/header.test.tsx` (use the file's own render helper for `SessionHead
 ```tsx
 describe('the repo label in the session view (board-placement wave 2, Task 7, R3)', () => {
   it('renders the repo unconditionally when it is known', () => {
-    renderHeader({ repo: 'Synapsium-Labs/project-d' });
-    expect(screen.getByText('Synapsium-Labs/project-d')).toBeInTheDocument();
+    renderHeader({ repo: 'example-org/project-d' });
+    expect(screen.getByText('example-org/project-d')).toBeInTheDocument();
     expect(document.querySelector('.chip--repo')).not.toBeNull();
   });
   it('renders nothing when it is not — an older server, or a deep link before any fleet read (D-3013)', () => {

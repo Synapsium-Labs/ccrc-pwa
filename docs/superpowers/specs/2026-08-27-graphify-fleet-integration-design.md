@@ -715,7 +715,7 @@ and **47 of 5,087 edges (0.92%)**, ~40 of those from five PNG screenshots. **262
 have degree 0** — unreachable by `explain`, `path`, `affected`. project-h: **1,244/1,264 orphaned (98%)**.
 
 **What AST gives free:** markdown extracted deterministically into a heading tree
-(`extract.py:12848`); 951 of synapsium's 979 document nodes are AST-origin. `affected "FleetSession"`
+(`extract.py:12848`); 951 of project-k's 979 document nodes are AST-origin. `affected "FleetSession"`
 returns 27+ rows with `file:line`. Those are the SKILL's two **highest-precision** commands, at full
 fidelity, no LLM. Community labels are a red herring: the good conceptual ones come from the host
 agent's Step 5 over AST communities.
