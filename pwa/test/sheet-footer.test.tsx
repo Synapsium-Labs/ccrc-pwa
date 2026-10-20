@@ -16,7 +16,7 @@ import { cleanup, render } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { NodeWire, ReleaseWire, RunSummary, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
-import { Button, QuickConfirm, Sheet } from '@ccrc/ui';
+import { Button, QC_CONSEQUENCE, QuickConfirm, Sheet } from '@ccrc/ui';
 import { AbandonSheet } from '../src/fleet/AbandonSheet';
 import { ArchiveConflictSheet } from '../src/fleet/ArchiveConflictSheet';
 import { ArchiveSheet } from '../src/fleet/ArchiveSheet';
@@ -142,4 +142,12 @@ describe('each of the seven renders its actions in .sheet-footer', () => {
       expect(row!.querySelectorAll('button').length).toBeGreaterThan(0);
     });
   }
+});
+
+describe('a consequence that ends its body spends no margin there', () => {
+  // The answers used to follow the last consequence inside the body (or a sheet's card); now nothing does, and its
+  // `mb-5` would only pad the card's foot. Between lines, and above an error line, the margin stays.
+  it('QC_CONSEQUENCE drops its bottom margin when it is the last child', () => {
+    expect(QC_CONSEQUENCE.split(' ')).toEqual(expect.arrayContaining(['mb-5', 'last:mb-0']));
+  });
 });

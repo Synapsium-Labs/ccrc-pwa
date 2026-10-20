@@ -39,7 +39,9 @@ import { Sheet } from './sheet';
  *  package deleted, so bare hooks rendered unstyled (ink colour, no margin,
  *  buttons touching), caught by the takeover's per-width visual check. Both
  *  hooks are in `design-system-boundary`'s OWNED list now. */
-export const QC_CONSEQUENCE = 'qc-consequence mb-5 text-base leading-normal text-ink-secondary';
+/** `last:mb-0` (D-5932): the answers left the body for the Sheet's footer, so a consequence that ends its body or
+ *  its card is followed by nothing, and its margin would only pad the card's foot (the footer parts itself). */
+export const QC_CONSEQUENCE = 'qc-consequence mb-5 last:mb-0 text-base leading-normal text-ink-secondary';
 /** The row of answers goes in the `Sheet`'s `footer`, never in its children, so it is pinned (D-5932). */
 export const QC_ACTIONS = 'qc-actions grid gap-2';
 
