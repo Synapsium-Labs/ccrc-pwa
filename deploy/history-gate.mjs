@@ -1280,8 +1280,10 @@ const cmdRightOk = (t, j) => j === t.length || !CMD_EDGE.test(t[j]) || (t[j] ===
  *   after it counting as part of it (as a pair only), and then neither the text before nor the text after that
  *   widened occurrence holds /\s(or|OR)\s/, a flag token /(^|\s)--?[A-Za-z0-9]/, any of `; | & > < ,` or a
  *   backtick, or `$(` (D-5789, amending W2-D63): W2-D64 asks for one exact value, so an answer that carries a
- *   further command-shaped piece is not that command. Too strict for prose holding a comma, `>`, `<`, `&` or a
- *   negative number; too lenient for an extra operand or a `sudo` or `VAR=` prefix.
+ *   further command-shaped piece is not that command. Too strict for prose holding a comma, `;`, `|`, `>`, `<`,
+ *   `&`, a second code span or a negative number; too lenient for an extra operand (a second command before F with
+ *   only a space between), a `sudo` or `VAR=` prefix, and an alternative the `or` test misses (`(or`, `or:`, or a
+ *   dash before `or`, which the error kind's test misses too).
  * @param {string} kind
  * @param {string} F
  * @param {string} answerValue

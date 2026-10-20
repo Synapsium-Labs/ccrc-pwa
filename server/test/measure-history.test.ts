@@ -3561,6 +3561,8 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
       expect(cmd('npm run test', 'Run `npm run test` from the root')).toBe(true);
       expect(cmd('npm run test', 'npm run test (from the repo root)')).toBe(true);
       expect(cmd('npm run test', 'npm run test in the dry-run mode')).toBe(true);
+      expect(cmd('npm run test', 'npm run test with $HOME set'), 'a $ with no ( is not a substitution').toBe(true);
+      expect(cmd('npm run test', 'npm run test - the whole suite'), 'a dash with no letter or digit is not a flag').toBe(true);
     });
 
     it('command: the hugging backticks count as a pair or not at all', () => {
@@ -5422,6 +5424,7 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
         const status = (obj: string, key: string): string => spec[part][obj]!.fields![key]!.status;
         for (const key of ['of', 'per_arm', 'judge_failed']) expect(status('handcheck', key), `${part} handcheck.${key}`).toBe('fixed');
         expect(status('handcheck', 'share'), `${part} handcheck.share`).toBe('default');
+        expect(spec[part].handcheck!.fields!.share!.value, `${part} handcheck.share offers W2-D81's 20%`).toBe(0.2);
         expect(Object.keys(spec[part].handcheck!.fields!).sort(), `${part} handcheck members`).toEqual(['judge_failed', 'of', 'per_arm', 'share']);
         expect(status('q18_settings', 'procedure'), `${part} q18_settings.procedure`).toBe('fixed');
         for (const key of ['rho_headline', 'power', 'lookback_days', 'sims', 'grid_step']) expect(status('q18_settings', key), `${part} q18_settings.${key}`).toBe('default');
