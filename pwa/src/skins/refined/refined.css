@@ -56,6 +56,12 @@
    paints no ground and declares no colour, so its sentence and count take the chat column's own ink and nothing here
    is a new contrast identity. The line is cut, never wrapped, so the row is one fixed height (`itemHeight.ts`'s
    `group` bucket); opened, it shows today's tool cards, spaced as the list spaces its rows. */
+.ref-tool-group {
+  /* The sentence never wraps, so its min-content is the whole sentence: without this the row grows past a phone's
+     column and its count is cut off the edge (measured at 360 and 390). */
+  min-width: 0;
+  max-width: 100%;
+}
 .ref-tool-group-row {
   display: flex;
   align-items: center;
