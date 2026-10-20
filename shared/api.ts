@@ -4060,10 +4060,10 @@ export function isMarkerState(v: unknown): v is MarkerState {
  *  says what ends each). The PWA renders sentences and never switches on a word. */
 export type ChildReclaimKeptWord =
   | 'coordinating' | 'minting-run-absent' | 'minting-run-postdates-child'
-  | 'reviewed-run-absent' | 'not-a-workspace';
+  | 'reviewed-run-absent' | 'not-a-workspace' | 'review-report-stale';
 const CHILD_RECLAIM_KEPT_WORD_TABLE: Readonly<Record<ChildReclaimKeptWord, true>> = {
   coordinating: true, 'minting-run-absent': true, 'minting-run-postdates-child': true,
-  'reviewed-run-absent': true, 'not-a-workspace': true,
+  'reviewed-run-absent': true, 'not-a-workspace': true, 'review-report-stale': true,  // D-5942
 };
 export const CHILD_RECLAIM_KEPT_WORDS: readonly ChildReclaimKeptWord[] =
   Object.keys(CHILD_RECLAIM_KEPT_WORD_TABLE) as ChildReclaimKeptWord[];

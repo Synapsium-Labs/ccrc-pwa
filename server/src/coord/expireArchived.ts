@@ -1,7 +1,7 @@
 import type { FleetIO, MeasuredDirectoryRead } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { Deps } from '../server.js';
+import type { RunCcd } from './ports.js';
 import type { Presence } from '../presence.js';
 import type { NotifyLog } from '../notifylog.js';
 import { CCD_ARGV, EXPIRE_CAP, capSupported, sweepDec, verbSupported } from '../ccdargv.js';
@@ -45,7 +45,7 @@ import { isRegistryId } from '../../../shared/api.js';
 /** The executor's ports (L2, declared by this consumer) — `ChildReclaimDeps`'s shape. */
 export interface ExpireArchivedDeps {
   coord: CoordStore;
-  io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState;
+  io: FleetIO; cfg: CcrcConfig; runCcd: RunCcd; fleetState?: FleetState;
   presence?: Pick<Presence, 'isVisible'>;
   notifyLog?: NotifyLog;
 }

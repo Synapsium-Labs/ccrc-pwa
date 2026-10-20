@@ -6,25 +6,12 @@ import type { Runner } from './exec.js';
 import { UNMEASURED, type Unmeasured } from './unmeasured.js';
 import type { FleetIO } from './io.js';
 import type { ProjectRow } from '../../shared/api.js';
+import type { CcdResult, RunCcd } from './coord/ports.js';
 import { readRegistryMeasured } from './registry.js';
 
-/** `killed` and `signal` are REQUIRED here, unlike their `ExecResult`
- *  counterparts: no test anywhere builds a `CcdResult` literal, and only a
- *  handful of whole-object `toEqual`s in `lifecycle.test.ts` observe them — so
- *  requiring them costs nothing and forces every producer to answer.
- *
- *  REQUIRED, so they carry the TOKEN rather than an absence (`exec.ts`'s
- *  vocabulary paragraph). §1.7: `killed: boolean` USED to be the answer and was
- *  wrong in one direction only — `r.killed === true` collapsed an ABSENT
- *  optional into `false`, telling every caller "this child was not killed" when
- *  the truth was "nobody measured whether it was". The adoption gate handles
- *  those two differently on purpose, and an older agent, the transport catch
- *  path and `local` mode all land in the second. */
-export interface CcdResult {
-  ok: boolean; stdout: string; stderr: string;
-  killed: boolean | Unmeasured;
-  signal: string | null | Unmeasured;
-}
+// D-6003: `CcdResult` and its runner's type are L2 ports in `coord/ports.ts`, beside their consumers; re-exported
+// here so every importer of this file still compiles.
+export type { CcdResult } from './coord/ports.js';
 
 /** Run `ccd <args...>` through the injected Runner; ok = exit code 0. The argv
  *  is a `CcdArgv`, so it can only have been built by `ccdargv.ts` — there is no
@@ -108,7 +95,7 @@ export function cutShort(r: CcdResult): boolean | Unmeasured {
 }
 
 /** The single ccd capability `Deps` carries in place of a raw `Runner`. */
-export type CcdRunner = (argv: CcdArgv) => Promise<CcdResult>;
+export type CcdRunner = RunCcd;
 
 /** Composition-root factory: binds a `Runner` and a config into the one
  *  capability every downstream module gets. Holding only the result, a route

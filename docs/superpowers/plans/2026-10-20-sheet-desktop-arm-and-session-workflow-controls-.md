@@ -541,6 +541,10 @@ The block 5930 to 5939 was issued to this programme. This plan defines all ten, 
 - **D-5938** — `workflow-controls-ui` (Task P3-9): the session page's workflow strip offers only the server's `controls`: Stop workflow and a per-agent menu (a popover at ≥900, a sheet below), each behind a danger confirm that names what is lost from recorded outcomes, with words for every refusal. Fleet cards are unchanged.
 
 
+### Departures made while landing
+
+- **D-6022** — `workflow-control-census-whole-ccd` (Task P3-7, extends D-5936): the no-composer census scans every tracked file under `ccd/`, not only the four surfaces P3-7 names, so the worker, reviewer and history skills and every script are covered as spec §4.5 states; the four named surfaces must each stay tracked. Its coverage row pins only that every composing verb has a child deny rule and a classifier row, so a defensive workflow deny rule added with no composer stays green.
+
 ## Review log
 
 ### Rev 0 review (applied in rev 1)
