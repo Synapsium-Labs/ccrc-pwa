@@ -464,3 +464,37 @@ describe('build guard D-6064: a write to the build directory or the launcher, in
     expect(denyJqMs(cmd)).toBeLessThan(3 * classMs);
   }, 180_000);
 });
+
+
+describe('build guard D-6065: a write to a file the launcher, the roll or the guard trusts', () => {
+  const TRUST_WHY = 'launcher, roll or guard trusts';
+  const denied = [
+    'echo 2.1.999 >> ~/.ccrc/claude-smoked', 'echo "anthropic 2.1.999" > ~/.ccrc/claude-target', 'rm ~/.ccrc/claude-halted',
+    'touch ~/.cc-sessions/claude-roll-live', 'cp /tmp/x ~/.ccrc//claude-target', 'cd ~/.ccrc && echo x > claude-smoked',
+    'echo pass > ~/.cc-sessions/lane-a-project-a.claude-canary', 'echo 2.1.302 > ~/.cc-sessions/lane-a-project-a.claude-build',
+    'touch ~/.cc-sessions/.claude-roll.lock', 'cp /tmp/x ~/.cc-sessions/child-deny.settings.json',
+    'echo 0 > ~/.cc-sessions/lane-a-project-a.deny-settings', 'cd ~/.cc-sessions && cp /tmp/x child-deny.settings.json',
+  ];
+  it.each(denied)('denied: %s', (c) => {
+    expect(bash(c), c).toContain(TRUST_WHY);
+  });
+  const editDenied: ReadonlyArray<[string, Record<string, unknown>]> = [
+    ['Write', { file_path: '/home/u/.ccrc/claude-target', content: 'x' }],
+    ['Edit', { file_path: '/home/u/.cc-sessions/child-deny.settings.json', old_string: 'a', new_string: 'b' }],
+    ['Write', { file_path: '/home/u/.cc-sessions//x/../claude-roll-live', content: 'x' }],
+  ];
+  it.each(editDenied)('denied: %s %j', (tool, input) => {
+    expect(fire(tool, input), `${tool} ${JSON.stringify(input)}`).toContain(TRUST_WHY);
+  });
+  it.each([
+    'cat ~/.ccrc/claude-target', 'ls ~/.cc-sessions/', 'sha256sum ~/.ccrc/claude-smoked',
+    'cat ~/.cc-sessions/child-deny.settings.json', 'cp /tmp/x ~/.ccrc/other-file', 'cd ~/.ccrc && cat claude-target',
+  ])('allowed: %s', (c) => {
+    expect(bash(c), c).toBeNull();
+  });
+  it('a subagent thread is denied the same; a top-level session is not', () => {
+    expect(bash('echo 2.1.999 >> ~/.ccrc/claude-smoked', SUB)).toContain(TRUST_WHY);
+    fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));
+    for (const c of denied) expect(bash(c), c).toBeNull();
+  }, 60_000);
+});

@@ -4409,6 +4409,10 @@ fi
 # `..` there, a symlink, a `$VAR` fragment of the path and case variants stay open (D-6064's residuals). Every
 # repetition is bounded, since an unbounded one made jq abort, which here is FAIL-OPEN, and every segment-scanning arm
 # first tests its anchor (and a `cd` row its tail) on the whole command, since jq compiles a regex on each call.
+# A write (D-6065) to a file the launcher, the roll or this guard trusts (`TRUST`: `~/.ccrc/claude-*`,
+# `$REG/claude-roll-*`, `$REG/<id>.claude-canary`, `.claude-build`, `.deny-settings`, `$REG/.claude-roll.lock` and the
+# deny file `$REG/child-deny.settings.json`, which the arm below reads) is denied by the same writers, after a `cd` into
+# `.ccrc` or `.cc-sessions`, and by an edit tool. So spec §7.6's registry sentence holds for a child here too.
 # A bypassed child raises no prompt, so this arm is its only enforcement. JavaScript's regexes are ASCII
 # where Oniguruma's are Unicode, so `\w` and `\b` are spelled as ASCII classes and `\s` as JavaScript's own set
 # (`WS`, built by `implode` so this file stays ASCII). `hbt` is the classifier's `headBeforeTail`: in one segment, the
@@ -4420,7 +4424,8 @@ fi
 # top-level session, and a child's call whose payload names none of these, pay no fork: `ccd`, `ccrc` and `approval`
 # (the verbs and the surface); `install`, `update`, `upgrade` and `respawn`, each on its own (a Claude Code verb under
 # any head, `$CLAUDE_CODE_EXECPATH` and a runner included); `anthropic-ai/claude-code` (a global install by `add`);
-# `downloads.claude.ai`; and `.local` (a write, in any spelling, after a `cd` too). Every pattern needs one
+# `downloads.claude.ai`; `.local` (a write, in any spelling, after a `cd` too); and `.cc-sessions` (a trusted file;
+# `~/.ccrc`'s are admitted by `ccrc`). Every pattern needs one
 # of those words literally (JSON escaping never touches ASCII letters). A real payload's `transcript_path` names
 # `.claude…`, so every child call naming `install` or `update` already forked one jq. A deny already set is
 # never replaced. FAIL-OPEN as every gate here: a jq that cannot run (no Oniguruma, say) denies nothing, and
@@ -4497,6 +4502,10 @@ def cdthen($cd; $gate; f): test($cd) and test($gate) and (split(SEG; null) as $s
   | $k != null and any($s[$k + 1:][]; f));
 def BI: "build\tinstalling or updating a Claude Code build";
 def BW: "build\ta write to a Claude Code build or its launcher";
+def BTR: "build\ta write to a file the Claude Code launcher, roll or guard trusts";
+def TNC: "claude-[A-Za-z0-9_.-]{1,64}";
+def TNS: "(?:claude-roll-[A-Za-z0-9_.-]{1,64}|[A-Za-z0-9_.-]{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|child-deny\\.settings\\.json)" + BT;
+def TRUST: "(?:" + SEPP + "\\.ccrc" + SEPP + TNC + "|" + SEPP + "\\.cc-sessions" + SEPP + TNS + ")";
 def VERW: "(?:^|[" + WS + "(])(?:\\./{1,8})?" + VERS + CRUN;
 def CLOP: "claude(?=$|[" + WS + "/;&|)])";
 def LBOP: "bin" + SEPP + "claude(?=$|[" + WS + ";&|)])";
@@ -4518,6 +4527,9 @@ def bmatch:
   (select(test(BUILDX) and test("=") and (. as $c | [match("(?:^|[" + WS + ";&|(])(?<n>[A-Za-z_][A-Za-z0-9_]{0,63})=(?<v>[^" + WS + ";&|()]{0,512})"; "g")
      | select(.captures[1].string | test(BUILDX)) | .captures[0].string] | unique
      | any(.[]; . as $n | $c | hbt(SEG; BWR; "\\$\\{?" + $n + NA)))) | BW),
+  (select(test(TRUST) and hbt(SEG; BWR; TRUST)) | BTR),
+  (select(cdthen(CDT("\\.ccrc"); OPW + TNC; hb1(BWR; OPW + TNC))) | BTR),
+  (select(cdthen(CDT("\\.cc-sessions"); OPW + TNS; hb1(BWR; OPW + TNS))) | BTR),
   (select(test(CLI + CRUN)) | BI),
   (select(test(WB + "claude" + NW) and test(WB + EXP + SP + "+(?:" + FLAGS + "(?:install|update)" + NW + "|" + CFLAGS + CVERB + "|respawn" + NW + ")")) | BI),
   (select(cdthen(VERSD; VERW; test(VERW))) | BI),
@@ -4540,7 +4552,7 @@ def pathwhy($t):
 | (.tool_input | if type == "object" then . else {} end) as $i
 | if $mode == "deny" then
     (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t"))) // first((., norm) | bmatch) // "" else "" end)
-     elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(BUILDX)) | BW) // "")
+     elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(BUILDX)) | BW) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(TRUST)) | BTR) // "")
      elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // "")
      else "" end)
   elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch) // "" else "" end)
@@ -4556,7 +4568,8 @@ if [[ "$event" == PreToolUse && -n "$id" && -e "$REG/$id.child" \
   if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]]; then apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}; fi
   [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* \
      || "$apf" == *install* || "$apf" == *update* || "$apf" == *upgrade* || "$apf" == *respawn* \
-     || "$apf" == *anthropic-ai/claude-code* || "$apf" == *downloads.claude.ai* || "$apf" == *.local* ]] || apf=""
+     || "$apf" == *anthropic-ai/claude-code* || "$apf" == *downloads.claude.ai* || "$apf" == *.local* \
+     || "$apf" == *.cc-sessions* ]] || apf=""
 fi
 if [[ -n "$apf" ]]; then
   case "${tool:-}" in
