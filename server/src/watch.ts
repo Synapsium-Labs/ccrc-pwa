@@ -5247,22 +5247,14 @@ export class FleetWatcher {
   }
 
   /** The collector's feed rows (spec §5.10): written HERE, never by the definer (`collectLane.ts`) or the executor
-   *  (`coord/collectTempRoot.ts`), in `recordExpireFeed`'s idiom — a `run` row, recorded and archived, never pushed; a
-   *  failed archive write is said and never stops the lane; the log is flushed whatever happened. */
+   *  (`coord/collectTempRoot.ts`) — a `run` row, recorded and archived, never pushed (`notify`'s `'record-only'`, D-5857);
+   *  a failed archive write is said in the collector's own sentence and never stops the lane. */
   private collectRecordFeed(coord: CoordStore, row: {
     readonly sessionId: string; readonly runId: number | null; readonly title: string; readonly body: string;
   }): void {
-    const log = this.deps.notifyLog;
-    if (!log) return;
-    try {
-      const ev = log.record({ kind: 'run', sessionId: row.sessionId, runId: row.runId, title: row.title, body: row.body });
-      coord.recordFeedEvent(log.epoch, ev);
-    } catch (err) {
-      console.warn('ccrc-server: recordFeedEvent failed '
-        + `(${err instanceof Error ? err.message : String(err)}) — temp-root collector ${row.title}, feed archive degraded`);
-    } finally {
-      void log.flush();
-    }
+    notify({ notifyLog: this.deps.notifyLog, coord },
+      { kind: 'run', sessionId: row.sessionId, runId: row.runId, title: row.title, body: row.body },
+      'record-only', { degraded: `temp-root collector ${row.title}, feed archive degraded` });
   }
 
   /** The collector's `coord` feed row (path-identity spec 2026-10-12 §5.4). It records the marker latch's retirement,
