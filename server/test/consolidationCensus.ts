@@ -95,8 +95,10 @@ function markerVocabulary(root: string): string[] {
 }
 
 /** Quoted marker-name literals (`'<name>'`, `"<name>"` or `` `<name>` ``, the whole name) on code lines under
- *  `server/src`, one site per literal (the spec's "marker-name literals in server/src"). Recorded; it gates nothing
- *  yet. */
+ *  `server/src`, ONE SITE PER LITERAL (not per file, despite the name; group by `file` for files). Recorded; it gates
+ *  nothing yet. NARROWER than the spec's "46 marker-name literals in server/src": the vocabulary is only the names a
+ *  `const *_MARKER = '…'` defines (`markerVocabulary`), not the wider `$REG` vocabulary the spec counted (swap, usage,
+ *  pool-epoch, tmproots and the other switches), so whoever first quotes this census records that gap (D-5849). */
 export function markerLiteralFiles(root: string = REPO): CensusSite[] {
   const vocab = markerVocabulary(root);
   if (vocab.length === 0) return [];
