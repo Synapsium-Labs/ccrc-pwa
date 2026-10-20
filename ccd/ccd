@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ee7ccaefdf66397894d4bf5d8720add3e0362c45896b3cddd85fb99b1a785de8
+# ccrc:generated 1 sha256=f0ec1fb83790a7f73b146004dc2f8b5cffa45edc8adf2f022bd201a23288d4f6
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -33097,6 +33097,20 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # path the lines name, and a record line can name a path outside the tree
   # altogether — `git worktree remove` without a force flag on a clean tree
   # that stands removes the TREE, not only its record (measured, both).
+  # NO FORCED REMOVAL CROSSES A MOUNT (path-identity spec §3.5). A checkout
+  # that STANDS is asked `_ws_removal_mounts_clear` directly before its
+  # `_ws_reclaim_keep_of`, and again directly before its forced removal:
+  # nothing measured says git's forced recursive delete stops at a mount,
+  # and a FUSE daemon outlives the pane kill. The helper answers a mount at
+  # or under the checkout and a table it could not read whole alike, and
+  # both fail `worktree-remove-failed` here, with the breadcrumb and the
+  # checkout standing; the pane is already down, so a mount that stays
+  # fails every retry until it is gone. `cpath` is physical by then
+  # (`_ws_reclaim_nested_proven` resolved it in this iteration), so the ask
+  # enters nothing. A checkout PROVEN gone is not asked: its arm clears a
+  # record, with no force flag, over nothing that stands. And the child's
+  # whole tree is not asked before this loop: a mount outside every nested
+  # checkout is step (4)'s to find.
   if [[ "$phase" == children ]]; then
     childlines=$(_ws_tomb_children "$tomb") || {
       _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not read the nested checkouts from $tomb"; return 1
@@ -33152,8 +33166,12 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
             "git's record of the checkout at $cpath is $( (( rec == 0 )) && printf "on '%s', not '%s'" "$_WS_NREC_BRANCH" "$cbr" || printf 'missing') — ccd cannot prove it is the checkout this $noun pinned, so nothing further was deleted"
           return 1
         fi
+        _ws_removal_mounts_clear "$cpath" \
+          || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
         _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$cpath" \
           || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
+        _ws_removal_mounts_clear "$cpath" \
+          || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
         wtout=$(_ws_reclaim_contained git -C "$main" worktree remove --force "$cpath" 2>&1) \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
       elif (( rec == 0 )); then
@@ -33223,6 +33241,16 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # workdir also pruned, the reclaim removed the other worktree and reported
   # success; with the record standing, git's own validation refused). This is
   # the rung for that window.
+  # AND THE TREE IS ASKED THE MOUNT QUESTION (path-identity spec §3.5), as
+  # step (3) asks each standing checkout: `_ws_removal_mounts_clear` directly
+  # before its `_ws_reclaim_keep_of`, and again directly before the forced
+  # removal. Either of its answers fails `worktree-remove-failed`, with the
+  # breadcrumb and the tree standing. `$workdir` is the record's spelling,
+  # and a symlinked ancestor of it stays legal (`_ws_reclaim_owned`), while
+  # the kernel's table names the physical mount point, so the helper
+  # resolves it first (`resolve`): a standing tree that cannot be resolved
+  # is not asked, and so fails here too, before its keep. A tree PROVEN gone
+  # is not asked: step (5) clears its record with no force flag.
   if [[ "$phase" == worktree ]]; then
     if [[ -L "$workdir" ]]; then
       _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
@@ -33230,8 +33258,12 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       return 1
     fi
     if [[ -d "$workdir" ]]; then
+      _ws_removal_mounts_clear "$workdir" resolve \
+        || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the tree at $workdir stands, and nothing further was deleted"; return 1; }
       _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$workdir" \
         || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — the tree at $workdir stands, and nothing further was deleted"; return 1; }
+      _ws_removal_mounts_clear "$workdir" resolve \
+        || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$_WS_MOUNTS_WHY — the tree at $workdir stands, and nothing further was deleted"; return 1; }
       wtout=$(_ws_reclaim_contained git -C "$main" worktree remove --force "$workdir" 2>&1) \
         || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
     elif ! _ws_reclaim_absent "$workdir"; then
