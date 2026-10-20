@@ -4205,7 +4205,7 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
       step0a: [STORE_A, STORE_B].map((s, i) => ({
         label: `node-${'ab'[i]}`, store_id: s, kind: 'ccrc-history-w2-step0a', v: 1, measured_ms: T0 - 32 * DAY, account: 'account-a',
         settings_mode: 'restricted', claude_code_version: '9.1.0', wrapper_sha256: null,
-        flags_accepted: { '--output-format': true, '--verbose': true }, writer_init: { tools: [] }, judge_init: { tools: [] }, box_init: null,
+        flags_accepted: { '--output-format': true, '--verbose': true }, writer_init: { tools: [] }, judge_init: { tools: [] }, box_init: { tools: [] },
         code_shas: { ...CODE }, release_stamp: TAG, budget: 100_000, spend: 1_200,
       })),
       settings_mode: 'restricted', window_plan: { planned_days: 14 },
@@ -4564,10 +4564,11 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
     expect(verdict(set(draft(), 'step0a[0].writer_init.extra', 1)), 'CONTROL: a producer\'s measured object stays open').toEqual([]);
   });
 
-  it("the step 0a entry is W2-4's producer shape: flags_accepted a map of booleans, writer_init and judge_init non-null, box_init nullable (W2-D25, amended)", () => {
+  it("the step 0a entry is W2-4's producer shape: flags_accepted a map of booleans, writer_init, judge_init and box_init non-null (W2-D25, amended; D-5786)", () => {
     expect(verdict(set(draft(), 'step0a[0].writer_init', null))).toEqual([{ path: 'step0a[0].writer_init', word: 'field-missing' }]);
     expect(verdict(set(draft(), 'step0a[1].judge_init', null))).toEqual([{ path: 'step0a[1].judge_init', word: 'field-missing' }]);
-    expect(verdict(set(draft(), 'step0a[0].box_init', { tools: [] })), 'box_init is an object or null').toEqual([]);
+    expect(verdict(set(draft(), 'step0a[0].box_init', null)), 'box_init is required, like writer_init and judge_init').toEqual([{ path: 'step0a[0].box_init', word: 'field-missing' }]);
+    expect(verdict(set(draft(), 'step0a[0].box_init', { tools: [] })), 'CONTROL: an object').toEqual([]);
     expect(verdict(set(draft(), 'step0a[0].flags_accepted', true))).toEqual([{ path: 'step0a[0].flags_accepted', word: 'field-malformed' }]);
     expect(verdict(set(draft(), 'step0a[0].flags_accepted', { '--verbose': 'yes' })))
       .toEqual([{ path: 'step0a[0].flags_accepted.--verbose', word: 'field-malformed' }]);
@@ -4939,6 +4940,15 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
         const f2 = { ...structuredClone(f1), supersedes: gate9.recordSha256(pred) };
         expect(verdict(f2, { draft: d, predecessor: pred, frozen: FROZEN }), name).toEqual([{ path: 'supersedes', word: 'chain-mismatch' }]);
       }
+    });
+
+    it('ruling box_init: a null box_init with a false box-only flag is field-missing at box_init alone, never flag-rejected (D-5786)', () => {
+      const r = set(draft(), 'step0a[0].box_init', null);
+      r.step0a[0].flags_accepted = { '--output-format': true, '--box-only-flag': false };
+      expect(verdict(r)).toEqual([{ path: 'step0a[0].box_init', word: 'field-missing' }]);
+      const withInit = set(draft(), 'step0a[0].flags_accepted', { '--output-format': true, '--box-only-flag': false });
+      expect(verdict(withInit), 'CONTROL: with a box_init the false flag is flag-rejected as before')
+        .toEqual([{ path: 'step0a[0].flags_accepted.--box-only-flag', word: 'flag-rejected' }]);
     });
 
     it('final H: a handcheck value other than the one handcheckSample implements is constant-mismatch at its path', () => {

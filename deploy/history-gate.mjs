@@ -1949,8 +1949,9 @@ const REC_DRAFT = recFields({
   judge_model: recField('string', 'operator'),
   // Each entry is W2-4's step 0a output (W2-4 Task 8's fifteen Step0aOutput keys), field for field, plus the label and
   // store_id `open --draft` binds it to (W2-D25, amended 2026-10-19). kind and v are typed only: W2-4's loadStep0a
-  // checked both, and this module does not spell the driver's kind again. writer_init and judge_init are not
-  // nullable here: the writer and the judge are probed before part 1, so a null is field-missing.
+  // checked both, and this module does not spell the driver's kind again. writer_init, judge_init and box_init are
+  // not nullable here: the writer, the judge and the box are probed before part 1, so a null is field-missing, in the
+  // shape pass and so before any flag-rejected (a box-only flag reads true only when a box run reached init: D-5786).
   step0a: recField('array', 'measured', { items: recField('object', 'measured', { fields: recFields({
     label: recField('string', 'operator'),
     store_id: recField('string', 'operator'),
@@ -1964,7 +1965,7 @@ const REC_DRAFT = recFields({
     flags_accepted: recField('object', 'measured', { values: recField('boolean', 'measured') }),
     writer_init: recField('object', 'measured'),
     judge_init: recField('object', 'measured'),
-    box_init: recField('object', 'measured', { nullable: true }),
+    box_init: recField('object', 'measured'),
     code_shas: recField('object', 'measured', { fields: REC_CODE_SHAS }),
     release_stamp: recField('string', 'measured'),
     budget: recField('integer', 'measured'),
@@ -2193,7 +2194,7 @@ function recShapeErrors(value, spec, path, refuse) {
 }
 function recFieldErrors(v, f, p, refuse) {
   if (v === null && f.nullable) return;
-  if (v === null) { refuse(p, 'field-missing'); return; }   // null carries no value: a part 1 writer_init among them
+  if (v === null) { refuse(p, 'field-missing'); return; }   // null carries no value: a part 1 writer_init, judge_init or box_init among them
   if (!REC_TYPE_OK[f.type](v)) { refuse(p, 'field-malformed'); return; }
   if (f.fields) recShapeErrors(v, f.fields, p, refuse);
   if (f.values) for (const [k, x] of Object.entries(v)) recFieldErrors(x, f.values, `${p}.${k}`, refuse);
