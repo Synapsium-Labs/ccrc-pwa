@@ -4657,3 +4657,205 @@ describe('W2-4 Task 9: step 0b mechanics without the seam, W2-D57', () => {
     expect(log![0]!.stdin).toBe(t9Driver.TURN_PROBE_PROMPT);
   });
 });
+
+// ── fix round 2 (D-5984): the driver yields to signals before every spawn, and every stop check is pinned or removed ──────
+// A Node signal handler runs only when the loop reaches its poll phase. These cases run main in-process, hold a no-op
+// SIGTERM listener (without one the vitest fork dies), and send this process a real SIGTERM where the point is the
+// yield, or call main's installed listener directly where the point is the check after it. An in-process stop leaves
+// the driver's flag set until the next main entry, and its unref'd SIGKILL timer fires STOP_GRACE_MS later over
+// whatever the registry holds then: endStop resets the flag through one more main call and waits the grace out, so
+// nothing spawns inside it.
+describe('fix round 2 (D-5984): signals are yielded to before every spawn, and every stop check is pinned or removed', () => {
+  const STOP_GRACE_MS = 5_000;   // the driver's own, module-private
+  const hold = (): void => {};
+  const probeArgs = (out: string): string[] => ['probe', '--out', out, '--account', 'up-a', '--budget', '1000000', '--arm-model', 'fixture-model-arm'];
+  const LEFTOVER = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'x', permission_denials: [],
+    usage: { input_tokens: 3, cache_creation_input_tokens: 4, cache_read_input_tokens: 5, output_tokens: 6 } }) + '\n';
+
+  /** A fixture HOME for a probe run by main: up-a (the recording stub), a fresh limits row, an --out that is not made yet. */
+  function probeBox(prefix: string): { home: string; out: string } {
+    const base = mkTmp(prefix);
+    const home = join(base, 'home');
+    mkdirSync(home, { mode: 0o700 });
+    writeRoster(home, [{ id: 'up-a', label: 'up-a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' }]);
+    plantStub(home, 'up-a');
+    const now = Math.floor(Date.now() / 1000);
+    mkdirSync(join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five: 10, seven: 10, ts: now, fiveResetAt: now + 3600, sevenResetAt: now + 86_400 }));
+    return { home, out: join(base, 'out') };
+  }
+  const spendNames = (out: string): string[] => {
+    const p = join(out, replay.SPEND_LEDGER);
+    return existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l).name) : [];
+  };
+  /** Run `fn` with a no-op SIGTERM listener held, and main's stderr captured; answers what stderr got. */
+  async function holdingTerm(fn: () => Promise<void>): Promise<string> {
+    let err = '';
+    const quiet = vi.spyOn(process.stderr, 'write').mockImplementation((c: unknown) => { err += String(c); return true; });
+    const umask = process.umask(0o022);
+    process.umask(umask);
+    process.on('SIGTERM', hold);
+    try { await fn(); } finally { process.off('SIGTERM', hold); quiet.mockRestore(); process.umask(umask); }
+    return err;
+  }
+  /** Reset the stopping flag with one more main call (a no-op handler), then wait out the SIGKILL timer a stop armed. */
+  async function endStop(): Promise<void> {
+    const umask = process.umask(0o022);
+    process.umask(umask);
+    replay.HANDLERS.set('fr2-reset', async () => 0);
+    try { await replay.main(['fr2-reset'], {}); } finally { replay.HANDLERS.delete('fr2-reset'); process.umask(umask); }
+    await pause(STOP_GRACE_MS + 400);
+  }
+  /** Run `fn` as a subcommand of main, so main's SIGINT, SIGTERM and SIGHUP listeners are installed while it runs. */
+  async function underMain(fn: () => Promise<void>): Promise<void> {
+    let failure: unknown = null;
+    replay.HANDLERS.set('fr2-fixture', async () => { try { await fn(); } catch (e) { failure = e; } return 0; });
+    const umask = process.umask(0o022);
+    process.umask(umask);
+    try { await replay.main(['fr2-fixture'], {}); } finally { replay.HANDLERS.delete('fr2-fixture'); process.umask(umask); }
+    if (failure !== null) throw failure;
+  }
+  /** main's own SIGTERM listener, called as the signal would: the stopping flag is set at once, with no loop turn. */
+  const raiseStop = (): void => { (process.listeners('SIGTERM').at(-1) as () => void)(); };
+  const noProbeResult = (out: string): void => {
+    expect(existsSync(join(out, 'probe.json')), 'no probe.json').toBe(false);
+  };
+
+  it('a SIGTERM pending across main\'s whole stretch, claimOut\'s walk included, is handled at the first yield: exit 2 interrupted, no spawn, no spawn charge, no probe.json', async () => {
+    const { home, out } = probeBox('ccrc-replay-fr2-pending-');
+    replay.prepareOut(out);
+    writeFileSync(join(out, 'old-run.jsonl.part'), LEFTOVER);   // a leftover with no record: claimOut charges and removes it before any yield
+    let code = -1;
+    let err = '';
+    try {
+      err = await holdingTerm(async () => {
+        process.kill(process.pid, 'SIGTERM');
+        code = await replay.main(probeArgs(out), { HOME: home });
+      });
+    } finally { await endStop(); }
+    expect(code, err).toBe(EXIT.REFUSED);
+    expect(err).toMatch(/^ccrc history-replay: interrupted: SIGTERM received; [^\n]*\n$/);
+    expect(stubLog(home), 'no probe spawn').toBeNull();
+    expect(spendNames(out), 'only the leftover was charged: no spawn charge').toEqual(['old-run']);
+    expect(existsSync(join(out, 'old-run.jsonl.part')), 'CONTROL: claimOut did walk').toBe(false);
+    noProbeResult(out);
+    expect(existsSync(join(out, 'probe')) ? readdirSync(join(out, 'probe')) : [], 'no run under probe').toEqual([]);
+  }, 60_000);
+
+  it('a signal that arrives in a job\'s post-close stretch is handled by the yield before the next job: that job never spawns, and the first one is recorded', async () => {
+    const b = t5Box('ccrc-replay-fr2-yield-');
+    let gates = 0;
+    let sent = false;
+    const armed = { ...b.up, get accountId(): string {
+      // launchRun reads launch.accountId when it builds run.json, after the child's close and the rename.
+      if (!sent && existsSync(join(b.out, 'y-0.jsonl'))) { sent = true; process.kill(process.pid, 'SIGTERM'); }
+      return 'up-a';
+    } } as T5Launch;
+    const jobs = [t5job(b, armed, 'box', 'y-0'), t5job(b, b.up, 'box', 'y-1')];
+    try {
+      await holdingTerm(async () => {
+        await underMain(async () => {
+          await expect(claimedBatch(jobs, { concurrency: 1, gate: () => { gates += 1; } })).rejects.toMatchObject({ word: 'interrupted' });
+        });
+      });
+    } finally { await endStop(); }
+    expect(sent, 'CONTROL: the signal was sent in the first job\'s post-close stretch').toBe(true);
+    expect(gates, 'the second job never reached the gate').toBe(1);
+    expect(stubLog(b.home), 'one spawn only').toHaveLength(1);
+    expect(existsSync(join(b.out, 'y-0.run.json')), 'the first job is recorded').toBe(true);
+    expect(readdirSync(b.out).filter((n) => n.startsWith('y-1')), 'nothing of the second job').toEqual([]);
+  }, 60_000);
+
+  it('the batch\'s last check: a signal pending after the LAST job refuses interrupted, because that lane\'s final iteration takes no job and checks nothing itself', async () => {
+    const b = t5Box('ccrc-replay-fr2-last-');
+    let sent = false;
+    const armed = { ...b.up, get accountId(): string {
+      if (!sent && existsSync(join(b.out, 'l-0.jsonl'))) { sent = true; process.kill(process.pid, 'SIGTERM'); }
+      return 'up-a';
+    } } as T5Launch;
+    try {
+      await holdingTerm(async () => {
+        await underMain(async () => {
+          await expect(claimedBatch([t5job(b, armed, 'box', 'l-0')], { concurrency: 1, gate: T5_NO_GATE })).rejects.toMatchObject({ word: 'interrupted' });
+        });
+      });
+    } finally { await endStop(); }
+    expect(sent, 'CONTROL: the signal was sent in the last job\'s post-close stretch').toBe(true);
+    expect(existsSync(join(b.out, 'l-0.run.json')), 'the job itself was recorded').toBe(true);
+  }, 60_000);
+
+  it('the lane check: with the stop set, runBatch refuses interrupted before its gate, and nothing spawns', async () => {
+    const b = t5Box('ccrc-replay-fr2-lane-');
+    let gates = 0;
+    try {
+      await holdingTerm(async () => {
+        await underMain(async () => {
+          raiseStop();
+          await expect(claimedBatch([t5job(b, b.up, 'box', 'k-0'), t5job(b, b.up, 'box', 'k-1')], { gate: () => { gates += 1; } })).rejects.toMatchObject({ word: 'interrupted' });
+        });
+      });
+    } finally { await endStop(); }
+    expect(gates, 'the gate was never called').toBe(0);
+    expect(stubLog(b.home)).toBeNull();
+  }, 60_000);
+
+  it('a fully resumed probe with a SIGTERM pending refuses interrupted and writes no probe.json (the stop check comes before finishedOutcome)', async () => {
+    const { home, out } = probeBox('ccrc-replay-fr2-resumed-');
+    const first = runDriver(home, probeArgs(out));
+    expect(first.code, first.stderr).toBe(0);
+    expect(stubLog(home), 'CONTROL: the first run spawned the three spellings').toHaveLength(3);
+    rmSync(join(out, 'probe.json'));
+    let code = -1;
+    let err = '';
+    try {
+      err = await holdingTerm(async () => {
+        process.kill(process.pid, 'SIGTERM');
+        code = await replay.main(probeArgs(out), { HOME: home });
+      });
+    } finally { await endStop(); }
+    expect(code, err).toBe(EXIT.REFUSED);
+    expect(err).toMatch(/^ccrc history-replay: interrupted: SIGTERM received; [^\n]*\n$/);
+    expect(stubLog(home), 'nothing spawned again').toHaveLength(3);
+    noProbeResult(out);
+  }, 120_000);
+
+  it('launchRun\'s pre-spawn check: with the stop set it refuses interrupted, the stub never runs, and no .part or .pid is made', async () => {
+    const b = t5Box('ccrc-replay-fr2-launch-');
+    try {
+      await holdingTerm(async () => {
+        await underMain(async () => {
+          raiseStop();
+          await expect(claimedRun(t5job(b, b.up, 'box', 'p-0'))).rejects.toMatchObject({ word: 'interrupted' });
+        });
+      });
+    } finally { await endStop(); }
+    expect(stubLog(b.home), 'the stub never ran').toBeNull();
+    expect(readdirSync(b.out).filter((n) => n.startsWith('p-0')), 'no .part, .pid or stream').toEqual([]);
+  }, 60_000);
+
+  it('measureClaudeVersion\'s check: with the stop set it refuses interrupted and --version never spawns', async () => {
+    const b = t5Box('ccrc-replay-fr2-version-');
+    try {
+      await holdingTerm(async () => {
+        await underMain(async () => {
+          raiseStop();
+          await expect(replay.measureClaudeVersion(b.up, b.out, undefined)).rejects.toMatchObject({ word: 'interrupted' });
+        });
+      });
+    } finally { await endStop(); }
+    expect(stubLog(b.home), '--version never spawned').toBeNull();
+  }, 60_000);
+
+  it('measureClaudeVersion yields first: a SIGTERM pending when it is called is handled before its check, so --version never spawns', async () => {
+    const b = t5Box('ccrc-replay-fr2-version-yield-');
+    try {
+      await holdingTerm(async () => {
+        await underMain(async () => {
+          process.kill(process.pid, 'SIGTERM');
+          await expect(replay.measureClaudeVersion(b.up, b.out, undefined)).rejects.toMatchObject({ word: 'interrupted' });
+        });
+      });
+    } finally { await endStop(); }
+    expect(stubLog(b.home), '--version never spawned').toBeNull();
+  }, 60_000);
+});

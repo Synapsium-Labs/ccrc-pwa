@@ -41,8 +41,10 @@ import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
  *  `wrapper-moved` stays for a measured mismatch). The last three are fix round 1's (D-5984, D-5985): `run-live` (a
  *  leftover `.part` whose writer is alive or unmeasured, or a regular `.pid` whose content is not a record), `out-in-use` (another
  *  driver holds the --out lock, or the lock file is not one) and `interrupted` (a SIGINT, SIGTERM or SIGHUP stopped
- *  the driver: no further spawn starts, and no run.json, step0a.json or probe.json is written; a run stopped in flight
- *  is charged once, by its spend line). */
+ *  the driver: a signal that has arrived by a yield is handled there, and the stop check after it refuses, so no spawn
+ *  starts after the handler has run; no run.json, step0a.json or probe.json is written; a run stopped in flight
+ *  is charged once, by its spend line, and so is a child spawned in the window between a yield and its spawn, which
+ *  the next turn stops: D-5984). */
 export const DRIVER_REASONS = Object.freeze([
   'family-unlisted', 'family-recall-off',
   'quiz-unanswerable', 'quiz-sha-mismatch',
@@ -154,9 +156,12 @@ export function paneRefusal(env) {
 // registry holds and, after STOP_GRACE_MS, SIGKILL to whatever it STILL holds. The handler never exits the driver: the
 // interrupt surfaces as the `interrupted` refusal, through main's one stderr line and EXIT.REFUSED. A driver killed alone
 // (SIGKILL, the OOM killer) cannot run any of this; the `.pid` record each run leaves is what the next driver reads
-// (settleLeftover). Residuals, named: a grandchild that calls setsid itself escapes the group kill (and writes no `.part`);
-// a driver killed between spawn() and its `.pid` record leaves a `.part` with no record, charged as D-5811 says; and a
-// process in the run's group that ignores SIGTERM and holds no pipe to the driver can outlive its leader (no SIGKILL
+// (settleLeftover). What a stop guarantees: a signal that has arrived by a yield (yieldToSignals) is handled there, and the
+// stop check after it refuses `interrupted`, so no spawn starts after the handler has run. A signal that arrives in the
+// synchronous stretch between a yield and a spawn is handled at the next turn, and that child is stopped and charged.
+// Residuals, named: that yield-to-spawn window; a grandchild that calls setsid itself escapes the group kill (and writes no
+// `.part`); a driver killed between spawn() and its `.pid` record leaves a `.part` with no record, charged as D-5811 says;
+// and a process in the run's group that ignores SIGTERM and holds no pipe to the driver can outlive its leader (no SIGKILL
 // follows the leader's close; it writes no `.part`, so no spend goes unseen).
 /** Every live child, keyed by its pid (which is its process-group id). A Map, not a Set of pids, so 'close' can tell its
  *  own entry from a newer child's: the kernel may hand a reaped child's pid to a sibling spawned before the old child's
@@ -188,11 +193,21 @@ function onStopSignal(sig) {
   setTimeout(() => { for (const pid of liveChildren.keys()) signalGroup(pid, 'SIGKILL'); }, STOP_GRACE_MS).unref();
 }
 
-/** Refuse `interrupted` while the stopping flag is set. Called before every spawn and before every run.json, step0a.json
- *  and probe.json a stopped subcommand would write, so nothing starts and no result is recorded after a signal (a run
- *  stopped in flight is still charged once, by its spend line). */
+/** Two turns of the event loop, in sequence: the point at which a signal that has already arrived is handled. A Node signal
+ *  handler runs only when the loop reaches its poll phase, and a lane resumes in a poll-phase callback (a child's 'exit' or
+ *  'close'). From there one setImmediate runs in the same iteration's check phase, before the next poll, so a single turn
+ *  can resume the lane ahead of a pending signal's handler. Two turns always have a poll phase between them. setTimeout 0
+ *  is no substitute. Every stop check that guards a spawn follows one (D-5984). */
+async function yieldToSignals() {
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+/** Refuse `interrupted` while the stopping flag is set. Called before every spawn (after a yield, where there is one) and
+ *  after every batch, so no spawn starts after the handler has run and no run.json, step0a.json or probe.json is written
+ *  after a signal (a run stopped in flight is still charged once, by its spend line). */
 function refuseIfStopping() {
-  if (stopping !== null) refuse('interrupted', `${stopping} received; no further child starts, and no run.json, step0a.json or probe.json is written`);
+  if (stopping !== null) refuse('interrupted', `${stopping} received; no spawn starts after this, and no run.json, step0a.json or probe.json is written`);
 }
 
 /** `spawn` as a registered group leader: not unref'd, the caller's stdio. The registry drops the entry at 'close', and only
@@ -1410,8 +1425,8 @@ function finishedOutcome(job) {
 /** One child, stdout straight into the `.part` stream file (D-5811: launchRun renames it once the spawn is charged),
  *  stdin written whole, stderr kept to a bound. The child leads its own process group and is registered (D-5984); a
  *  `<name>.pid` record is written right after spawn() when it has a pid. It is killed, group and all, when it outlives
- *  `timeoutMs` (SIGTERM, then SIGKILL after a grace). A spawn that fails removes the `.part` and the `.pid`; a stopped
- *  driver refuses `interrupted` before the spawn, removing the `.part` first. */
+ *  `timeoutMs` (SIGTERM, then SIGKILL after a grace). A spawn that fails removes the `.part` and the `.pid`. It checks
+ *  nothing about a stop itself: launchRun's check runs in the same synchronous stretch, before this is called (D-5984). */
 function runChild(launcher, argv, { cwd, childEnv, stdin, out, name, partPath, pidPath, timeoutMs }) {
   return new Promise((resolve, reject) => {
     // D-5986: created exclusively and without following a link. claimOut and launchRun have settled every leftover, so a
@@ -1419,8 +1434,6 @@ function runChild(launcher, argv, { cwd, childEnv, stdin, out, name, partPath, p
     const fd = createPlain(out, `${name}.jsonl.part`, 0o600, false);
     let child;
     try {
-      if (stopping !== null) rmSync(partPath, { force: true });
-      refuseIfStopping();
       child = spawnGroup(launcher, argv, { cwd, env: childEnv, stdio: ['pipe', fd, 'pipe'] });
     } finally {
       closeSync(fd);
@@ -1488,7 +1501,8 @@ function unknownOptionsIn(stderr) {
  *  order of a spawn's files is: the stream into `<name>.jsonl.part` and the child's `<name>.pid`, the child's close, its
  *  spend line, the removal of the `.pid`, the rename to `<name>.jsonl`, then run.json (D-5811, D-5984). A leftover of
  *  this name is settled first (settleLeftover). `opts.claim` is claimOut's live claim over the job's --out, required
- *  as runBatch's gate is (D-5985); `opts.liveness` defaults to the claim's. A child that closes while the driver is
+ *  as runBatch's gate is (D-5985); `opts.liveness` defaults to the claim's. A stopped driver refuses `interrupted`
+ *  before the spawn (the check is kept because launchRun is exported). A child that closes while the driver is
  *  stopping is charged, its `.pid` and `.part` are removed, no run.json is written and the run refuses `interrupted`.
  *  @param {{launch: object, mode: string, model: string, settingsMode: string, recall?: object, stdin: string,
  *    out: string, name: string, lang: string | undefined, timeoutMs?: number}} job
@@ -1561,8 +1575,12 @@ export async function launchRun(job, opts = {}) {
  *  job's --out, required as the gate is (D-5985; the gate is checked first); `opts.liveness` defaults to the claim's.
  *  Before any lane starts, every job that has no run.json has its leftovers settled (settleLeftover, D-5984), so the
  *  first gate reads a dead writer's charge; a live writer refuses `run-live` and a `.part` that is not a regular
- *  file refuses out-refused, before any spawn. A stop signal makes the lane check refuse `interrupted` before the
- *  gate, so no spawn starts after it. The first throw, the gate's included, stops the batch: no further spawn
+ *  file refuses out-refused, before any spawn. Each lane iteration yields to signals first (yieldToSignals), re-reads
+ *  whether it may take a job, and then refuses `interrupted` if a stop is set, before finishedOutcome and the gate: a
+ *  signal that has arrived by a yield is handled there and the stop check after it refuses, so no spawn starts after the
+ *  handler has run. A signal that arrives in the synchronous stretch between a yield and a spawn is handled at the next
+ *  turn, and that child is stopped and charged. The batch's last check, after its lanes, refuses `interrupted` too: a
+ *  lane whose final iteration found no job to take has made no stop check of its own. The first throw, the gate's included, stops the batch: no further spawn
  *  starts, a run already started finishes and is recorded (a stopped one is not), and the throw is rethrown, so a
  *  re-run resumes. */
 export async function runBatch(jobs, opts = {}) {
@@ -1584,12 +1602,14 @@ export async function runBatch(jobs, opts = {}) {
   let next = 0;
   let stop = null;
   const lane = async () => {
-    while (stop === null && next < jobs.length) {
+    for (;;) {
+      await yieldToSignals();   // D-5984: a signal that has arrived is handled here, so the checks below see it
+      if (stop !== null || next >= jobs.length) return;   // re-read after the yield: a sibling may have failed meanwhile
       const i = next++;
       try {
+        refuseIfStopping();   // D-5984: no spawn starts after the handler has run; before finishedOutcome, so a resume of finished jobs refuses too
         const done = finishedOutcome(jobs[i]);
         if (done !== null) { outcomes[i] = done; continue; }
-        refuseIfStopping();   // D-5984: no spawn starts after a signal
         gate();
         outcomes[i] = await launchRun(jobs[i], { claim, liveness: liveNow });
       } catch (e) {
@@ -1600,6 +1620,10 @@ export async function runBatch(jobs, opts = {}) {
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, lane));
   if (stop !== null) throw stop.e;
+  // D-5984: the batch's last check. A lane's final iteration returns at the re-read with no stop check of its own, so a
+  // signal handled at that last yield is caught here. Nothing awaits between this return and the subcommand's
+  // step0a.json or probe.json write, so no handler can run in between: this check covers those writes.
+  refuseIfStopping();
   return outcomes;
 }
 
@@ -1811,7 +1835,8 @@ export function wrapperSha(launch) {
  *  @param {object} launch  @param {string} out  @param {string | undefined} lang */
 export async function measureClaudeVersion(launch, out, lang) {
   const home = runHomeOf(launch);
-  refuseIfStopping();   // D-5984: no spawn starts after a signal
+  await yieldToSignals();   // D-5984: a signal that has arrived is handled here, so the check below sees it
+  refuseIfStopping();   // D-5984: no spawn starts after the handler has run
   const childEnv = spawnEnv({ mode: 'writer', home, configDir: launch.configDir, poisonBin: ensurePoisonBin(out), lang });
   const cwd = makeRunCwd();
   let r;
@@ -2115,7 +2140,6 @@ export async function step0aCommand(flags, env) {
       writer_init: init.writer, judge_init: init.judge, box_init: init.box,
       code_shas: shas.files, release_stamp: stamp.tag, budget, spend: spentSoFar(out),
     };
-    refuseIfStopping();   // D-5984: a stopped step 0a writes no step0a.json
     writePlain(out, STEP0A_FILE, canonicalJson(output) + '\n');
     process.stderr.write(`sha256 ${shaOfPlain(out, STEP0A_FILE)}\n`);   // D-5983: stderr, as open and freeze print it; stdout stays empty
     return EXIT.OK;
@@ -2262,7 +2286,6 @@ export async function probeCommand(flags, env) {
       spellings: spellings.map((spelling, i) => ({ spelling, ...probeFindingOf(outcomes[i].facts, probeCommandOf(spelling)) })),
       budget: flags.budget, spend: spentSoFar(out),
     };
-    refuseIfStopping();   // D-5984: a stopped probe writes no probe.json
     const sha = writeProbeJson(out, output);
     process.stderr.write(`sha256 ${sha}\n`);   // D-5983: stderr, as open and freeze print it; stdout stays empty
     return EXIT.OK;
