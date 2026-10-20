@@ -58,7 +58,7 @@ const CONTRACT = [
   // D-105: this clause used to name the 6 for BOTH lanes. It is the
   // PRE-DELIVERY budget only; a delivered-but-unacked nudge has its own.
   "Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.",
-  "A draft in your input box never stops mail. The delivery lane stashes it with Claude Code's own prompt stash (ctrl+s), delivers, and Claude Code restores it after the delivery; if you see `Draft restored`, that is why. Keep using your box normally. Only a draft typed over a stash you already hold yourself makes the lane refuse (`stash-occupied`), so send or pop your own stash rather than leaving it held.",
+  "A draft in your input box never stops mail. The delivery lane stashes it with Claude Code's own prompt stash (ctrl+s), delivers, and Claude Code restores it after the delivery; if you see `Draft restored`, that is why. Keep using your box normally. The one draft case you can cause is a draft typed over a stash you already hold yourself, which makes the lane refuse (`stash-occupied`), so send or pop your own stash rather than leaving it held.",
   "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may. In a shell script, never delete through a variable (`rm -rf \"$X\"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.",
   "Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.",
   "Large payloads travel as files: write the file, then name its ABSOLUTE path in the mail's `artifacts` (a relative entry is refused `bad-kind`). Never ask for content to be pasted into your pane (F7).",
@@ -309,6 +309,15 @@ describe('the worker skill: the facts it states about the wire', () => {
       expect(skill, `the skill never spells the \`${phase}\` phase`).toContain(`\`${phase}\``);
     }
     expect(skill, 'the skill should say the vocabulary is closed at eight').toContain('eight');
+  });
+
+  it('never tells an idle worker a draft blocked its brief (D-5913)', () => {
+    const start = skill.indexOf('## When something is wrong');
+    expect(start).toBeGreaterThan(-1);
+    const rest = skill.slice(start + 1);
+    const next = rest.indexOf('\n## ');
+    const section = next === -1 ? rest : rest.slice(0, next);
+    expect(section, 'the retired draft-present refusal is named again').not.toContain('draft-present');
   });
 
   it('states the delivery budget as the number the lane actually enforces', () => {

@@ -983,6 +983,7 @@ describe('the skill on `final:true` — a release is now conditional', () => {
 });
 
 /** D-5913: mail-envelope.md's draft contract, verbatim (whitespace-collapsed). */
+const DRAFT_STASH_REFUSALS_ROUTE = "Either one backs off and retries, as `dialog-open` (a menu on the pane) does; it does **not** give up immediately.";
 const DRAFT_NEVER_BLOCKS = "A draft never stops mail. When the recipient has unsent text in its Claude Code input box, the lane saves it with Claude Code's own prompt stash (ctrl+s), types and submits the delivery, and checks that Claude Code restored the draft afterwards; the recipient sees `Draft restored`, and that is why.";
 
 describe('the skill tells a SENDER what a blocked delivery obliges them to do', () => {
@@ -1006,6 +1007,12 @@ describe('the skill tells a SENDER what a blocked delivery obliges them to do', 
     expect(env).toContain('`lastError: "stash-occupied"`');
     expect(env).toContain('`lastError: "stash-failed"`');
     expect(env, 'the old contract (the lane refuses a draft) is back').not.toMatch(/refuses to type over it/);
+    // Both refusals take `dialog-open`'s path in watch.ts (`gated(...)`): back
+    // off, then park at the ceiling — never an immediate rejection.
+    expect(env).toContain(flat(DRAFT_STASH_REFUSALS_ROUTE));
+    expect(env, 'the removed first-back-off notice is claimed again').not.toMatch(/first `draft-present` back-off/);
+    expect(env, 'the old "ask them to discard their draft" step is back').not.toMatch(/half-typed message/);
+    expect(env, 'an unproven /clear is stashed, never refused').not.toMatch(/refused like any\s+other draft/);
   });
 
   it('names the attempt ceiling, so a first block reads differently from the last', () => {

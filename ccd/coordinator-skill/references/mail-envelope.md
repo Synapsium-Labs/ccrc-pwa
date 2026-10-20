@@ -96,8 +96,10 @@ A draft never stops mail. When the recipient has unsent text in its Claude
 Code input box, the lane saves it with Claude Code's own prompt stash
 (ctrl+s), types and submits the delivery, and checks that Claude Code restored
 the draft afterwards; the recipient sees `Draft restored`, and that is why.
-Nothing is typed over the draft and nothing clears it, and a send that fails
-after the stash gives the draft back before it lets go of the box. There is no
+Nothing is typed over the draft and nothing clears it. A send that fails
+after the stash gives the draft back where it safely can; if a menu or an
+unreadable pane stops it, the stash stays held (the pane shows `stashed`) and
+Claude Code restores it at the next submit. There is no
 back-off for a draft: a row still carrying `lastError: "draft-present"` was
 refused before the lane stashed drafts.
 
@@ -177,8 +179,9 @@ What to do, in order:
    read. The door itself is the operator's, and this corpus does not name it.
 
 You do not have to poll for any of this. The park raises **one** notification
-addressed to you, the sender, and a back-off before it raises none, because the
-tray is not a ticker. What stays live across every back-off is `attempts` on
+addressed to you, the sender, and a draft or stash back-off before it raises
+none, because the tray is not a ticker. (A nudge held while the recipient waits
+out a usage limit, `auto-continue-armed`, tells you once per hold.) What stays live across every back-off is `attempts` on
 the delivery row.
 
 ### A queued brief is not a delivered brief
