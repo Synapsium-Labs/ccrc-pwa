@@ -20,7 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { CODEX, CODEX_STALE, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
 import { codexAuthDir } from './codexLaneFixture.js';
-import { ADVANCE_EXAMPLE, ADV_CATALOGUE, ADV_DEEP_TEXT, ADV_REGISTRY, ADV_SEEDS } from './fixtures/advanceCases.js';
+import { ADVANCE_EXAMPLE, ADV_CATALOGUE, ADV_DEEP_TEXT, ADV_REGISTRY, ADV_SEEDS, EFFORTS4 } from './fixtures/advanceCases.js';
 import { backfillAdvance, chooseCandidate, familyOf, recordMove, serializeAdvance } from '../../shared/model-advance.mjs';
 import type { Advance, HistoryEntry } from '../../shared/model-advance.mjs';
 import type { ModelClass, Registry } from '../../shared/models.js';
@@ -2852,6 +2852,131 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
     plantAdvance(id, adv);
     expect(opAt('revert', '--file', rosterPath(), '--id', id, '--class', 'opus').code).toBe(0);
     compatible('revert');
+  });
+
+  // ── Fix round 1: revert's write-failure guards, D-5991, and the rest of its arms ──────────────────────────────
+  /** The op copied with one line changed so that a real write fails, the idiom of the set-class registry-write case
+   *  above: `line` is that line as it is, `instead` its replacement, and every other byte is the op as it is. */
+  const copyOp = (line: string, instead: string): string => {
+    const src = fs.readFileSync(OP, 'utf8');
+    expect(src.split(line), `the op has the line ${line}`).toHaveLength(2);
+    const copy = path.join(home, 'models-op-copy.mjs');
+    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+      .replace(line, instead));
+    return copy;
+  };
+  /** `verb('revert')`, through a copy of the op. */
+  const revertThrough = (copy: string): Result => {
+    const r = spawnSync(process.execPath, [copy, 'revert', '--file', rosterPath(), '--id', ID, '--class', 'opus'],
+      { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: NOW }, encoding: 'utf8' });
+    const stdout = r.stdout ?? '';
+    expect(stdout.split('\n'), `stdout is not one JSON line: ${JSON.stringify(stdout)}`).toHaveLength(2);
+    return { code: r.status ?? -1, body: JSON.parse(stdout.split('\n')[0]!), stderr: r.stderr ?? '', stdout };
+  };
+  const opusEnv = (): string | undefined => settingsOf(LEGACY_SUFFIX).env['ANTHROPIC_DEFAULT_OPUS_MODEL'];
+
+  it("a revert whose hold cannot be written refuses before the registry moves: with a clock not of the file's form, every lane file keeps its bytes (D-5206)", () => {
+    advanced();
+    const before = modelFiles();
+    const settings = fs.readFileSync(path.join(home, LEGACY_SUFFIX, 'settings.json'), 'utf8');
+    const r = verb('revert', 'opus', { CCRC_MODELS_NOW: 'yesterday' });
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'advance-invalid']);
+    expect(modelFiles()).toEqual(before);
+    expect(fs.readFileSync(path.join(home, LEGACY_SUFFIX, 'settings.json'), 'utf8')).toBe(settings);
+  });
+
+  it("a revert whose registry write fails leaves the class held, previous kept and the lane as it was, and never says 'Nothing was changed' (D-5206)", () => {
+    advanced();
+    const reg0 = fs.readFileSync(regPath(ID), 'utf8');
+    const opus0 = advanceOf(ID).classes.opus;
+    // `writeRegistry` aims under the registry FILE, so its mkdir fails after the hold is written.
+    const r = revertThrough(copyOp("return writeJsonFile(registryPath(id), registry, 'registry-unwritable');",
+      "return writeJsonFile(path.join(registryPath(id), 'x'), registry, 'registry-unwritable');"));
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(r.body['error']).toBe('registry-unwritable');
+    expect(String(r.body['detail']))
+      .toMatch(/could not be written: .*\. The registry was not changed\. The hold this revert wrote to the lane's advance file stays, so opus is held now, on model-6\.1-gamma/);
+    expect(String(r.body['detail'])).not.toContain('Nothing was changed');
+    expect(fs.readFileSync(regPath(ID), 'utf8')).toBe(reg0);
+    expect(opusEnv(), 'the lane still renders the pin it had').toBe('model-6.1-gamma');
+    const opus = advanceOf(ID).classes.opus;
+    expect(opus.hold).toEqual({ at: NOW, by: 'revert' });
+    expect([opus.previous, opus.history]).toEqual([opus0.previous, opus0.history]);
+  });
+
+  it('a revert whose last advance-file write fails answers ok and says what is not recorded, and a second revert does what that says (D-5991)', () => {
+    advanced();
+    const opus0 = advanceOf(ID).classes.opus;
+    // The commit's write aims under the registry FILE: the hold's write before it is the op's own.
+    const r = revertThrough(copyOp('  const w2 = writeAdvance(a.id, done);',
+      '  const w2 = writeAdvance(`${a.id}.classes.json/x`, done);'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'revert', class: 'opus', from: 'model-6.1-gamma', to: 'model-5.6-gamma' });
+    const note = String(r.body['advanceNote']);
+    expect(note).toMatch(/^advance-unwritable: .*could not be written: .*\. The class was reverted and is held, but this move is not in its history and its previous model is still on record/);
+    expect(note).not.toContain('Nothing was changed');
+    expect(r.stderr).toContain(`models-op: ${note}`);
+    expect([classesOf(ID)['opus'], opusEnv()]).toEqual(['model-5.6-gamma', 'model-5.6-gamma']);
+    const cut = advanceOf(ID).classes.opus;
+    expect([cut.hold, cut.previous, cut.history]).toEqual([{ at: NOW, by: 'revert' }, opus0.previous, opus0.history]);
+    // What the note says, measured: the real op's second revert clears the record and records no move.
+    const again = verb('revert');
+    expect(again.code, again.stdout + again.stderr).toBe(0);
+    const opus = advanceOf(ID).classes.opus;
+    expect([opus.hold, opus.previous, opus.history]).toEqual([{ at: NOW, by: 'revert' }, null, opus0.history]);
+  });
+
+  it('a revert run again on a pin already reverted, its first run cut short after the registry write, renders the lane, clears previous, keeps the hold and records no self-move (D-5991)', () => {
+    // A revert killed after its registry rename: the pin and its effort already put back, the hold on disk, and
+    // previous and the history as they were.
+    advanced();
+    const adv = advanceOf(ID);
+    adv.classes.opus.hold = { at: '2026-10-14T12:00:00Z', by: 'revert' };
+    plantAdvance(ID, adv);
+    fs.writeFileSync(regPath(ID), `${JSON.stringify(ADV_REGISTRY, null, 2)}\n`, { mode: 0o600 });
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'revert', from: 'model-5.6-gamma', to: 'model-5.6-gamma' });
+    expect(opusEnv()).toBe('model-5.6-gamma');
+    const opus = advanceOf(ID).classes.opus;
+    expect([opus.previous, opus.hold]).toEqual([null, { at: NOW, by: 'revert' }]);
+    expect(opus.history, 'no entry from a model to itself').toEqual(adv.classes.opus.history);
+  });
+
+  it("revert ranks a stored level the old model no longer offers by a row that lists it, so it lands on the next level down, not the model's lowest (D-5991)", () => {
+    advanced();   // opus advanced from model-5.6-gamma at max to model-6.1-gamma at xhigh
+    // Since then the old model has stopped offering max: four levels, as the newer model offers.
+    writeCatalogue(ID, { ...ADV_CATALOGUE, models: ADV_CATALOGUE.models
+      .map((m) => (m.id === 'model-5.6-gamma' ? { ...m, efforts: [...EFFORTS4] } : m)) });
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((registryOf(ID) as unknown as Registry).effort?.opus).toBe('xhigh');
+  });
+
+  it('revert adds the model it puts back to an explicit discovery list, as set-class does', () => {
+    const list = ['model-5.6-alpha', 'model-6-beta', 'model-6.1-gamma'];
+    advanced(undefined, { ...ADVANCED, discovery: list });
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((registryOf(ID) as unknown as Registry).discovery).toEqual([...list, 'model-5.6-gamma']);
+  });
+
+  it.each([['hold'], ['release'], ['revert']])('%s refuses a lane with no class registry, naming init, and writes no advance file', (v) => {
+    const bare = ROSTER.accounts[3]!.id;
+    const r = opEnv({ CCRC_MODELS_NOW: NOW }, v, '--file', rosterPath(), '--id', bare, '--class', 'opus');
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'no-registry']);
+    expect(fs.existsSync(advPath(bare))).toBe(false);
+  });
+
+  it("an orphan's show carries its advance state too (W4's Models view reads it)", () => {
+    writeCatalogue('ghost', ADV_CATALOGUE);
+    fs.writeFileSync(regPath('ghost'), `${JSON.stringify(ADV_REGISTRY, null, 2)}\n`, { mode: 0o600 });
+    const adv = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS });
+    plantAdvance('ghost', adv);
+    const r = op('show', '--file', rosterPath(), '--id', 'ghost');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['orphan']).toBe(true);
+    expect(r.body['advance']).toEqual({ state: 'ok', classes: adv.classes });
   });
 });
 

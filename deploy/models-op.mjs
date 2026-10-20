@@ -397,8 +397,9 @@ function advanceReport(id) {
   return r.advance === null ? { state: 'absent' } : { state: 'ok', classes: r.advance.classes };
 }
 
-/** The sentence every `writeJsonFile` refusal ends with, named because one caller rewords it: a set-class whose
- *  hand intent is already on disk when its registry write fails (`handIntentLeft`), where it would be false. */
+/** The sentence every `writeJsonFile` refusal ends with, named because two callers reword it where it would be
+ *  false: a set-class whose hand intent is already on disk when its registry write fails (`handIntentLeft`), and a
+ *  revert whose hold is already on disk when a later write fails (`revertLeft`). */
 const NOTHING_CHANGED = 'Nothing was changed.';
 
 /** The ONE write of a hand-editable JSON file here — the class registry
@@ -609,10 +610,18 @@ function holdOp(opName, a, account, registry, catalogue, win) {
   return 0;
 }
 
+/** A revert's refusal or note once its hold is on disk (D-5206): `writeJsonFile`'s closing `Nothing was changed.`
+ *  is false by then, so it is replaced by `rest`, which says what did and did not change. */
+function revertLeft(detail, rest) {
+  return `${detail.endsWith(NOTHING_CHANGED) ? detail.slice(0, -NOTHING_CHANGED.length) : `${detail} `}${rest}`;
+}
+
 /**
  * `revert <class>` (auto-advance spec §2.7): put back the model the class had before its last automatic advance
  * (`previous`, with its effort level — D-5189 — through `resolveEffort` when that model no longer offers it), and
  * hold the class there so the next hour cannot move it again. One act.
+ *  - THE EFFORT LEVEL (D-5991): a stored level the model no longer offers is ranked against a catalogue row that
+ *    still lists it, never only against the current model's row, which may not list it either.
  *  - REFUSED, writing nothing: no advance on record (`no-previous`); a previous model the catalogue no longer lists
  *    (`previous-not-in-catalogue`); one another class pins now (`previous-taken`: a revert never empties another
  *    class); a registry the validator or the renderer refuses (`registry-invalid`, `unroutable-lane`).
@@ -623,6 +632,9 @@ function holdOp(opName, a, account, registry, catalogue, win) {
  *  - COMMIT AFTER MATERIALISE, as an advance commits (D21): `previous` is cleared and the move recorded only once the
  *    lane's files are rendered. A materialise that fails puts the old registry back and renders it again, and the
  *    refusal says the class is held.
+ *  - A RE-RUN ON A REVERTED PIN (D-5991): a revert cut short after its registry write left the class on
+ *    `previous.model` with no history entry. Run again, it renders the lane, clears `previous` and keeps the hold,
+ *    and records no move: an entry from that model to itself would be a move that never happened.
  */
 function revertOp(a, account, registry, catalogue, win) {
   const loaded = advanceForWrite(a.id, registry);
@@ -655,7 +667,10 @@ function revertOp(a, account, registry, catalogue, win) {
   let effortTo = c.previous.effort;
   const toRow = rowOf(to);
   if (effortTo !== null && toRow !== undefined && toRow.efforts.length > 0 && !toRow.efforts.includes(effortTo)) {
-    effortTo = resolveEffort({ stored: effortTo, oldEfforts: rowOf(from)?.efforts ?? null, newEfforts: toRow.efforts })
+    // D-5991: ranked by a row that lists the stored level (the first), because the class's current model may have
+    // dropped it too; with no row listing it, `resolveEffort` falls back to the model's lowest.
+    const ranker = catalogue.models.find((m) => m.efforts.includes(effortTo));
+    effortTo = resolveEffort({ stored: effortTo, oldEfforts: ranker?.efforts ?? null, newEfforts: toRow.efforts })
       ?? null;
   }
   if (effortTo === null) {
@@ -692,7 +707,11 @@ function revertOp(a, account, registry, catalogue, win) {
   const w0 = writeAdvance(a.id, adv);
   if (w0 !== null) return refuse(1, w0[0], w0[1]);
   const w1 = writeRegistry(a.id, validated);
-  if (w1 !== null) return refuse(1, w1[0], `${w1[1]} ${a.class} is held now, and stays on ${from ?? 'none'}.`);
+  if (w1 !== null) {
+    return refuse(1, w1[0], revertLeft(w1[1], `The registry was not changed. The hold this revert wrote to the lane's `
+      + `advance file stays, so ${a.class} is held now, on ${from ?? 'none'}, and its previous model is still on `
+      + 'record, so the revert can be run again.'));
+  }
   const mat = materialise(account, validated, catalogue, windowsOf(win));
   if (mat.err !== undefined) {
     const back = writeRegistry(a.id, registry);
@@ -704,15 +723,17 @@ function revertOp(a, account, registry, catalogue, win) {
       + 'its previous model is still on record, so the revert can be run again.');
   }
   c.previous = null;
-  const done = recordMove(adv, a.class, {
+  // D-5991: a re-run on a reverted pin records no move (from and to are one model).
+  const done = from === to ? adv : recordMove(adv, a.class, {
     at: now(), how: 'revert', from, to, ok: true, canary: 'not-run',
     ...(effortFrom !== effortTo ? { effort: { from: effortFrom, to: effortTo } } : {}),
   });
   const w2 = writeAdvance(a.id, done);
   const answer = { ok: true, op: 'revert', class: a.class, from, to, ...describe(account, validated, catalogue, win) };
   if (w2 !== null) {
-    answer.advanceNote = `${w2[0]}: ${w2[1]} The class was reverted and is held; its previous model is still on `
-      + 'record, so a second revert changes nothing.';
+    answer.advanceNote = `${w2[0]}: ${revertLeft(w2[1], 'The class was reverted and is held, but this move is not in '
+      + 'its history and its previous model is still on record: a second revert finds the class already on that '
+      + 'model, so it clears that record and records no move.')}`;
     process.stderr.write(`${SELF}: ${answer.advanceNote}\n`);
   }
   out(answer);
