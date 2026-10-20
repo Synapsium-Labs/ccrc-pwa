@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import fs from 'node:fs';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -1020,10 +1019,7 @@ describe('GET /api/projects — the program-ready readiness', () => {
 });
 
 describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
-  it('is L0: imports nothing at all', () => {
-    const src = fs.readFileSync(path.resolve(__dirname, '../../shared/lifecycle.ts'), 'utf8');
-    expect(src).not.toMatch(/^\s*import /m);
-  });
+  // Its L0 ring is held by server/test/rings/shared-imports.test.ts (D-6045).
   it('declares the five graphify classes', () => {
     const names = LIFECYCLE.map((c) => c.name).sort();
     for (const n of ['workspace-graph-store', 'project-graph-store', 'graph-corpus-filter',

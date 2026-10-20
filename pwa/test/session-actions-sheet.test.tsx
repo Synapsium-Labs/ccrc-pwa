@@ -185,8 +185,8 @@ describe('archive and restore (workspace lifecycle §5.2: one Archive, Restore o
   /** The archive sheet's own confirm — its primary button, beside the actions sheet's same-named opener. */
   const confirmArchive = async (): Promise<void> => {
     // The archive confirm is the danger variant now (D-5099); its hook class follows (D-5449).
-    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-danger')).not.toBeNull());
-    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-danger')!);
+    await waitFor(() => expect(document.querySelector('.sheet-footer .btn-danger')).not.toBeNull());
+    fireEvent.click(document.querySelector('.sheet-footer .btn-danger')!);
   };
   const posted = (suffix: string) => vi.mocked(fetch).mock.calls.some((c) => String(c[0]).endsWith(suffix));
 
@@ -626,8 +626,8 @@ describe('the substrate gate — destructive affordances refuse a session nobody
     const session = s({ workspace: 'quiet-basin', archivedAt: null });
     renderSheet(session, { archive });
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
-    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-danger')).not.toBeNull());
-    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-danger')!);
+    await waitFor(() => expect(document.querySelector('.sheet-footer .btn-danger')).not.toBeNull());
+    fireEvent.click(document.querySelector('.sheet-footer .btn-danger')!);
     const stop = await screen.findByRole('button', { name: 'Stop only' });
     expect(stop).toBeEnabled();
     (session as { substrate: FleetSession['substrate'] }).substrate = { at: 1, text: 'x' };
@@ -824,8 +824,8 @@ describe('a door that fails still says so, in ccd’s own words', () => {
     const archive = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'worktree-gone' }));
     renderSheet(workspaceSession(), { archive: archive as unknown as typeof api.archive });
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
-    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-danger')).not.toBeNull());
-    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-danger')!);
+    await waitFor(() => expect(document.querySelector('.sheet-footer .btn-danger')).not.toBeNull());
+    fireEvent.click(document.querySelector('.sheet-footer .btn-danger')!);
     const stopOnly = await screen.findByRole('button', { name: 'Stop only' });
 
     // Only now make the box refuse, so the archive path above is unaffected.
