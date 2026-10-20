@@ -3641,7 +3641,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return rec && cfgDir ? (await readTasks(deps.io, cfgDir, rec.uuid)).tasks : null;
   };
 
-  app.get('/api/sessions/:id/pr', async (req, reply) => {
+  app.get('/api/sessions/:id/pr', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995: session-written text
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
@@ -3930,7 +3930,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return runCcdOr502(reply, argv);
   });
 
-  app.get('/api/sessions/:id/workspace/audit', async (req, reply) => {
+  app.get('/api/sessions/:id/workspace/audit', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995: session-written text
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });

@@ -69,6 +69,27 @@ const CMP_OTHER = `cmp-${fill(20, 'x1', 'hex')}-${fill(20, 'x2', 'hex')}`;
 const TOKEN_1 = 'a1'.repeat(32);
 const TOKEN_2 = 'b2'.repeat(32);
 
+/** What a terminal shows for a drawer stream: printable text, CR, LF, and the two moves the provisional mask's erase
+ *  uses (CUB `ESC[nD`, ECH `ESC[nX`); every other escape draws nothing. Rows joined by `\n`, trailing blanks cut. */
+const screen = (stream: string): string => {
+  const rows: string[][] = [[]];
+  let row = 0; let col = 0;
+  for (let i = 0; i < stream.length;) {
+    const esc = /^\x1b(?:\[([0-9;]*)([@-~])|[^[])/.exec(stream.slice(i, i + 32));
+    if (esc !== null) {
+      const n = Number(esc[1] || '1');
+      if (esc[2] === 'D') col = Math.max(0, col - n);
+      if (esc[2] === 'X') for (let k = 0; k < n; k++) rows[row]![col + k] = ' ';
+      i += esc[0].length; continue;
+    }
+    const c = stream[i++]!;
+    if (c === '\r') { col = 0; continue; }
+    if (c === '\n') { row++; rows[row] ??= []; continue; }
+    rows[row]![col++] = c;
+  }
+  return rows.map((r) => Array.from(r, (c) => c ?? ' ').join('').trimEnd()).join('\n').replace(/\n+$/, '');
+};
+
 /** No 8-character slice of `secret` appears in `text`. */
 const leaksNone = (text: string, secret: string): boolean => {
   for (let i = 0; i + 8 <= secret.length; i++) if (text.includes(secret.slice(i, i + 8))) return false;
@@ -324,7 +345,9 @@ describe('the drawer stream (D-5513)', () => {
     d.push('sk-pa');                             // an open run that could start a shape is held, at most 50 ms (D-5995)
     expect(out).toEqual(['prompt> ']);
     vi.advanceTimersByTime(50);
-    expect(out).toEqual(['prompt> ', 'sk-pa']);
+    expect(out).toEqual(['prompt> ', SECRET_MASK]);   // the expired hold draws a provisional mask (D-5995)
+    d.push('ss x');                               // the run ends as no shape: the mask is erased and the text drawn
+    expect(screen(out.join(''))).toBe('prompt> sk-pass x');
     d.dispose();
   });
 
@@ -473,10 +496,8 @@ describe('secret_fingerprints never leaves the server (D-5513)', () => {
 // APPENDED. Each case is a probe a reviewer ran against the first build: a credential that still reached a client,
 // or a mask that stalled or delayed the stream.
 /** A fingerprint row as the box answers it (D-5996): the secret's trailing `=` stripped, its byte length beside it. */
-const rowOf = (token: string, laneId: string, secret: string): { laneId: string; fp: string; len: number } => {
-  const bare = secret.replace(/=+$/, '');
-  return { laneId, fp: fingerprintOf(token, bare), len: Buffer.byteLength(bare, 'utf8') };
-};
+const rowOf = (token: string, laneId: string, secret: string): { laneId: string; fp: string; len: number } =>
+  fingerprintRow(token, laneId, secret);
 const ingestAs = (m: SecretMasker, token: string, secrets: string[]): unknown =>
   (m.ingest as unknown as (a: unknown) => unknown)({
     gen: fingerprintGeneration(token), rows: secrets.map((x, i) => rowOf(token, `lane${i}`, x)),
@@ -552,6 +573,24 @@ describe('the review findings: shapes reach every client masked (D-5995)', () =>
       expect(leaksNone(out.join(''), OAT), `gap after ${k}: ${out.join('|')}`).toBe(true);
       d.dispose();
     }
+    // a JWT begun before the gap matches no shape on its own, so only the fail-closed tail masks its head
+    const out: string[] = [];
+    const d = new SecretMasker().drawer((t) => out.push(t));
+    d.push(`jwt: ${JWT.slice(0, 20)}`);
+    vi.advanceTimersByTime(80);
+    d.push(`${JWT.slice(20)}\r\n`);
+    expect(leaksNone(out.join(''), JWT), out.join('|')).toBe(true);
+    d.dispose();
+    // and with fingerprint rows held, a compatible key's head of 20 bytes or more
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    const o2: string[] = [];
+    const d2 = m.drawer((t) => o2.push(t));
+    d2.push(`k ${CMP.slice(0, 25)}`);
+    vi.advanceTimersByTime(80);
+    d2.push(`${CMP.slice(25)}\r\n`);
+    expect(leaksNone(o2.join(''), CMP), o2.join('|')).toBe(true);
+    d2.dispose();
+    m.close();
   });
 
   it('a maskDeep over a class instance masks its string fields', () => {
@@ -590,8 +629,8 @@ describe('the review findings: a compatible key is matched where it actually app
     const { m } = maskerOver(() => TOKEN_1, [CMP]);
     const plain = Array.from({ length: 40_000 }, (_, i) => `run${String(i).padStart(22, '0')}`).join(' ');
     expect(m.maskText(plain).endsWith(SECRET_MASK_TOO_LARGE)).toBe(false);
-    // runs of CMP's own length are candidates: two strings of 9,000 each pass the 16,384-candidate frame ceiling
-    const same = (salt: string): string => Array.from({ length: 9_000 },
+    // runs of CMP's own length are candidates: two strings of 4,500 each pass the 8,192-run frame ceiling
+    const same = (salt: string): string => Array.from({ length: 4_500 },
       (_, i) => `${salt}${String(i).padStart(CMP.length - salt.length, '0')}`).join(' ');
     const frame = m.maskDeep({ a: same('p'), b: `${same('q')} ${CMP}` });
     expect(frame.a.endsWith(SECRET_MASK_TOO_LARGE)).toBe(false);
@@ -651,6 +690,34 @@ describe('the review findings: rotation and re-key (D-5995)', () => {
   });
 });
 
+describe('the rulings: a restart after a rotation re-keys with backoff until it lands (D-5995)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('a restart under a rotated token asks for the re-key at once, retries with growing gaps through failures, and masks the key once it lands', async () => {
+    vi.useFakeTimers();
+    const { db } = maskerOver(() => TOKEN_1, [CMP]);   // rows of the old generation, then the process restarts
+    const at: number[] = [];
+    let failures = 3;
+    const m = new SecretMasker({ db, token: () => TOKEN_2, log: () => {}, requestRekey: () => {
+      at.push(Date.now());
+      if (failures-- > 0) return Promise.reject(new Error('link down'));
+      return Promise.resolve({ gen: fingerprintGeneration(TOKEN_2), rows: [fingerprintRow(TOKEN_2, 'lane0', CMP)] });
+    } });
+    // the accepted window (ruling e): the previous token is gone with the old process, so only the shapes apply
+    expect(m.maskText(`k=${CMP}`)).toBe(`k=${CMP}`);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(at).toHaveLength(1);                         // asked at boot
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(at).toHaveLength(4);                         // three failures, then the answer
+    const gaps = at.slice(1).map((t, i) => t - at[i]!);
+    expect(gaps[1]!).toBeGreaterThan(gaps[0]!);         // the gap grows
+    expect(m.maskText(`k=${CMP}`)).toBe(`k=${SECRET_MASK}`);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(at).toHaveLength(4);                         // landed: no further request
+    m.close();
+  });
+});
+
 describe('the review findings: the mask stays cheap and the drawer stays live (D-5995)', () => {
   afterEach(() => { vi.useRealTimers(); });
 
@@ -671,6 +738,7 @@ describe('the review findings: the mask stays cheap and the drawer stays live (D
     const chunk = 'A'.repeat(4096);
     const t0 = performance.now();
     let maxHeld = 0;
+    d.push('key sk-');   // a run that could start a shape: held, and it never ends
     for (let i = 0; i < 512; i++) {
       d.push(chunk);
       maxHeld = Math.max(maxHeld, (d as unknown as { held: string }).held.length);
@@ -764,5 +832,237 @@ describe('the review findings: every egress of session text is masked (D-5995)',
     const src = (...p: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...p), 'utf8');
     expect(src('coord', 'routes.ts')).toMatch(/app\.get\('\/api\/ledger', \{ preSerialization: maskAnswer \}/);
     expect(src('server.ts')).toMatch(/app\.get\('\/api\/digest', \{ preSerialization: maskAnswer \}/);
+  });
+});
+
+// ── the orchestrator's rulings on the drawer and the mask's cost (D-5995) ──
+// APPENDED. (a) an ordinary keystroke's echo is never delayed in the shape-only mode, and at most the 8 ms hold while
+// fingerprint rows are held; (b) failing closed never masks ordinary text for good; (d) one frame never blocks the
+// event loop for more than 25 ms on the round-1 reviewer's worst cases.
+describe('the rulings: the drawer echoes at once and never masks ordinary text for good (D-5995)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  /** Ten keystrokes 30 ms apart, each echoed by tmux as its own chunk: the added latency of each, in ms. */
+  const echoBench = (m: SecretMasker, keys: string): number[] => {
+    vi.useFakeTimers();
+    const out: { at: number; text: string }[] = [];
+    const d = m.drawer((t) => out.push({ at: Date.now(), text: t }));
+    const sent: number[] = [];
+    for (const k of keys) {
+      sent.push(Date.now());
+      d.push(k);
+      vi.advanceTimersByTime(30);
+    }
+    d.dispose();
+    // the moment each key's character first reached the socket
+    let seen = '';
+    const lat: number[] = [];
+    for (const o of out) {
+      for (const ch of o.text) { if (seen.length < keys.length && ch === keys[seen.length]) { lat.push(o.at - sent[seen.length]!); seen += ch; } }
+    }
+    expect(seen).toBe(keys);
+    return lat;
+  };
+
+  it('ten keystrokes 30 ms apart are echoed with no added latency in the shape-only mode, and within 8 ms with fingerprint rows held', () => {
+    for (const keys of ['git status', 'echo hello', 'ssh-keygen']) {
+      expect(echoBench(new SecretMasker(), keys), keys).toEqual(Array(keys.length).fill(0));
+      const { m } = maskerOver(() => TOKEN_1, [CMP]);
+      const lat = echoBench(m, keys);
+      expect(Math.max(...lat), `${keys}: ${lat.join(',')}`).toBeLessThanOrEqual(8);
+      m.close();
+    }
+  });
+
+  /** `text` typed one character per 30 ms, then a space and Enter, through a drawer: the terminal's final screen. */
+  const typeSlowly = (m: SecretMasker, text: string): { shown: string; raw: string } => {
+    vi.useFakeTimers();
+    const out: string[] = [];
+    const d = m.drawer((t) => out.push(t));
+    d.push('$ ');
+    for (const ch of text) { d.push(ch); vi.advanceTimersByTime(30); }
+    d.push(' ');
+    d.push('\r\n');
+    vi.advanceTimersByTime(30);
+    d.push('$ ');                                 // the shell's next prompt
+    vi.advanceTimersByTime(30);
+    d.dispose();
+    return { shown: screen(out.join('')), raw: out.join('') };
+  };
+  const ORDINARY = {
+    path: '/data/projects/demo/server/src/accounts/mask.ts',
+    url: 'https://example.com/docs/guide/getting-started?tab=install#node',
+    sha: fill(40, 'sha', 'hex'),
+    blob: `${fill(42, 'blob')}==`,
+    word: 'pneumonoultramicroscopicsilicovolcanoconiosis',
+  };
+
+  it('a long path, a URL, a git sha, a base64 blob and a long word typed slowly reach the screen unmasked, in both modes', () => {
+    // every ordinary string's own length (and its runs' lengths) is a fingerprinted length: each could still be a key
+    const lengths = Object.values(ORDINARY).flatMap((x) => x.split(/[/?#=:.&-]/).concat(x)).map((x) => x.length).filter((n) => n >= 20);
+    const secrets = [...new Set(lengths)].map((n, i) => fill(n, `s${i}`, 'hex'));
+    for (const [name, text] of Object.entries(ORDINARY)) {
+      expect(typeSlowly(new SecretMasker(), text).shown, `shape-only ${name}`).toBe(`$ ${text}\n$`);
+      const { m } = maskerOver(() => TOKEN_1, secrets);
+      const r = typeSlowly(m, text);
+      expect(r.shown, `fingerprints held, ${name}`).toBe(`$ ${text}\n$`);
+      m.close();
+    }
+  });
+
+  it('a compatible key typed slowly stays masked past its first 19 bytes, and a shape typed slowly past its sk', () => {
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    const k = typeSlowly(m, CMP);
+    // the accepted gap (D-5995): a key's first 19 bytes, typed slower than the hold, leave before it could be one
+    expect(k.shown).toBe(`$ ${CMP.slice(0, 19)}${SECRET_MASK}\n$`);
+    expect(leaksNone(k.raw, CMP.slice(19)), k.raw).toBe(true);
+    m.close();
+    const s = typeSlowly(new SecretMasker(), OAT);
+    expect(s.shown).toBe(`$ sk${SECRET_MASK}\n$`);
+    expect(leaksNone(s.raw, OAT.slice(2)), s.raw).toBe(true);
+  });
+
+  it('an expired hold on a run that cannot be a key goes unmasked: a run longer than every fingerprinted length is drawn as typed', () => {
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    const long = 'x'.repeat(CMP.length + 40);
+    expect(typeSlowly(m, long).shown).toBe(`$ ${long}\n$`);
+    m.close();
+  });
+});
+
+describe('the rulings: the provisional mask waits for the run to end, and no longer (D-5995)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('a run that ends in blanks with nothing after them is drawn as typed within the hold', () => {
+    vi.useFakeTimers();
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    const out: string[] = [];
+    const d = m.drawer((t) => out.push(t));
+    const word = 'a-fairly-long-ordinary-identifier-name';
+    for (const ch of word) { d.push(ch); vi.advanceTimersByTime(30); }
+    d.push(' ');
+    vi.advanceTimersByTime(8);
+    expect(screen(out.join(''))).toBe(word);
+    d.dispose();
+    m.close();
+  });
+
+  it('a compatible key wrapped onto an indented next row that arrives after the hold leaks nothing past its first 19 bytes', () => {
+    vi.useFakeTimers();
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    for (const cut of [20, 30, CMP.length - 3]) {
+      const out: string[] = [];
+      const d = m.drawer((t) => out.push(t));
+      d.push(`key ${CMP.slice(0, cut)}`);
+      vi.advanceTimersByTime(80);
+      d.push('\r\n');
+      vi.advanceTimersByTime(80);
+      d.push(`    ${CMP.slice(cut)}\r\n$ `);
+      vi.advanceTimersByTime(80);
+      expect(leaksNone(out.join(''), CMP.slice(19)), `cut ${cut}: ${JSON.stringify(out)}`).toBe(true);
+      d.dispose();
+    }
+    m.close();
+  });
+});
+
+describe('the rulings: one frame never blocks the event loop past 25 ms (D-5995)', () => {
+  // The round-1 performance reviewer's worst cases, with one fingerprint row held. Generous CI bound: a timing test
+  // pins the ORDER of the cost (a quadratic or per-string regression is seconds), the PR body gives the measured ms.
+  const BOUND = 250;
+  it('4 MB of undelimited drawer output in 4 KB chunks: no push blocks, and nothing is held past the bound', () => {
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    const d = m.drawer(() => {});
+    const chunk = 'A'.repeat(4096);
+    let worst = 0;
+    d.push('key sk-');
+    for (let i = 0; i < 1024; i++) {
+      const t0 = performance.now();
+      d.push(chunk);
+      worst = Math.max(worst, performance.now() - t0);
+      expect((d as unknown as { held: string }).held.length + ((d as unknown as { pending: string | null }).pending?.length ?? 0))
+        .toBeLessThanOrEqual(8192 + 1024 + 4096);
+    }
+    d.dispose();
+    expect(worst).toBeLessThan(BOUND);
+    m.close();
+  });
+
+  it('20,000 shape matches, and a frame of 50 strings each at the run ceiling, mask within the bound', () => {
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    const sk = Array.from({ length: 20_000 }, (_, i) => `sk-${String(i).padStart(12, '0')}`).join(' ');
+    let t0 = performance.now();
+    m.maskText(sk, { rows: true });
+    expect(performance.now() - t0).toBeLessThan(BOUND);
+    const atCap = Array.from({ length: RUNS_PER_CHUNK * MAX_CHUNKS + 16 }, (_, i) => `cmp-${fill(CMP.length - 4, `u${i}`, 'hex')}`).join(' ');
+    t0 = performance.now();
+    const frame = m.maskDeep(Array.from({ length: 50 }, () => atCap));
+    expect(performance.now() - t0).toBeLessThan(BOUND);
+    expect(frame.every((x) => x.endsWith(SECRET_MASK_TOO_LARGE))).toBe(true);
+    m.close();
+  });
+
+  it('the frame ceiling counts runs, not distinct texts: a few runs repeated past it still cut the frame', () => {
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    const few = Array.from({ length: 8 }, (_, i) => `cmp-${fill(CMP.length - 4, `f${i}`, 'hex')}`);
+    const text = Array.from({ length: RUNS_PER_CHUNK * MAX_CHUNKS + 8 }, (_, i) => few[i % 8]).join(' ');
+    expect(m.maskText(`${text} ${CMP}`).endsWith(SECRET_MASK_TOO_LARGE)).toBe(true);
+    m.close();
+  });
+});
+
+describe('the rulings: every egress of session-derived text goes through the masker (D-5995)', () => {
+  const src = (...p: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...p), 'utf8');
+  /** Masked inside the handler (a `maskDeep`/`maskText` call, a masked stream or a drawer): path → what masks it. */
+  const INLINE: Record<string, RegExp> = {
+    '/ws/fleet': /mk\.maskDeep\(\{ type: 'fleet'/,
+    '/ws/session/:id': /new SessionStream\(/,   // SessionStream's one `send` masks every frame
+    '/ws/pty/:id': /\.drawer\(\(text\) => socket\.send\(text\)\)/,
+    '/api/notifications/catchup': /maskDeep\(deps\.notifyLog\.catchUp/,
+    '/api/sessions/:id/pane/history': /maskText\(r\.text, \{ rows: true \}\)/,
+    '/api/mail': /mail: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(mail\)/,
+    '/api/mail/:id': /envelope: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(row\.envelope\)/,
+    '/api/runs/:id/items': /items: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
+    '/api/feed': /events: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
+  };
+  /** Carries no session-derived text: path → why. */
+  const EXEMPT: Record<string, string> = {
+    '/api/auth/passkeys': 'passkey ids and labels the operator set',
+    '/api/auth/status': 'the auth state',
+    '/api/fleet/health': "the mirror's counters",
+    '/api/push/key': 'the VAPID public key',
+    '/api/accounts': 'the account roster (lane names and states the operator set; no secret)',
+    '/api/sessions/:id/commands': "the session's command files' names",
+    '/api/projects': 'project names and paths',
+    '/api/pools/epoch': 'a counter',
+    '/api/sessions/:id/clip/:name': 'a file the operator uploaded, served back as it was',
+    '/api/coord/caps': 'capacity settings',
+    '/api/coord/collect-lane': "the collector's settings and counters",
+    '/api/approvals/:id/ruling': 'a signed ruling read by the fleet box (a mask would break the signature); its input is shape-redacted at write',
+    '/api/approvals/key': 'a public key',
+    '/api/updates': 'release metadata',
+    '/api/updates/intent/:nodeId': 'an update intent',
+    '/api/docs/projects': 'repository content, not session text',
+    '/api/docs/:project/tree': 'repository content, not session text',
+    '/api/docs/:project/file': 'repository content, not session text',
+  };
+
+  it('every GET route and websocket is masked by the hook, masked inline, or exempt with a reason', () => {
+    const files = [['server.ts'], ['coord', 'routes.ts'], ['update', 'routes.ts'], ['docs', 'routes.ts']];
+    const seen: string[] = [];
+    for (const f of files) {
+      const text = src(...f);
+      for (const m of text.matchAll(/app\.get\('(\/(?:api|ws)[^']*)'(, \{[^}]*\})?/g)) {
+        const p = m[1]!;
+        seen.push(p);
+        if ((m[2] ?? '').includes('preSerialization: maskAnswer')) continue;
+        if (INLINE[p] !== undefined) {
+          expect(text.slice(m.index!, m.index! + 6000), `${p} masks inline`).toMatch(INLINE[p]!);
+          continue;
+        }
+        expect(EXEMPT[p], `${p} is neither masked nor exempt`).toBeDefined();
+      }
+    }
+    for (const p of [...Object.keys(INLINE), ...Object.keys(EXEMPT)]) expect(seen, `${p} is still registered`).toContain(p);
   });
 });
