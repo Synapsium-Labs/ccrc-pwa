@@ -789,7 +789,8 @@ describe('W2-3 Task 1: raw window rows', () => {
     /** families_report over the real read-only connection, wrapped so that a second connection runs `writeSql` and
      *  commits right after the first SELECT whose text holds `needle` (the empty needle: the report's FIRST SELECT).
      *  Prints [[boundary_uuid, [file_id, …]], …] for demo-a. Census mode's racing wrapper, for families mode. */
-    const race = (f: Planted, needle: string, writeSql: string[]): { status: number | null; stderr: string; seen: Array<[string, number[]]> } => {
+    const race = (f: Planted, needle: string, writeSql: string[], fams: Array<[string, string]> = [['demo-a', G1]]):
+      { status: number | null; stderr: string; seen: Array<[string, number[]]>; byFamily: Record<string, string[]> } => {
       const RACE = [
         'import importlib.util, json, sqlite3, sys',
         "spec = importlib.util.spec_from_file_location('mh', sys.argv[1]); mh = importlib.util.module_from_spec(spec); spec.loader.exec_module(mh)",
@@ -809,12 +810,16 @@ describe('W2-3 Task 1: raw window rows', () => {
         '                rw.execute(w)',
         '            rw.commit()',
         '        return cur',
-        "r = mh.families_report(Racing(ro), [('demo-a', sys.argv[5])], 1500, 6000, 400)",
-        "print(json.dumps([[b['boundary_uuid'], [c['file_id'] for c in b['copies']]] for b in r[0]['boundaries']]))",
+        "r = mh.families_report(Racing(ro), [tuple(x) for x in json.loads(sys.argv[5])], 1500, 6000, 400)",
+        "print(json.dumps([[[b['boundary_uuid'], [c['file_id'] for c in b['copies']]] for b in x['boundaries']] for x in r]))",
       ].join('\n');
-      const r = spawnSync('python3', [...PY_ISOLATED, '-c', RACE, SCRIPT, f.db, needle, JSON.stringify(writeSql), G1],
+      const r = spawnSync('python3', [...PY_ISOLATED, '-c', RACE, SCRIPT, f.db, needle, JSON.stringify(writeSql), JSON.stringify(fams)],
         { encoding: 'utf8', env: { ...scrubbedEnv(process.env), PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
-      return { status: r.status, stderr: r.stderr ?? '', seen: r.status === 0 ? (JSON.parse(r.stdout) as Array<[string, number[]]>) : [] };
+      const all = r.status === 0 ? (JSON.parse(r.stdout) as Array<Array<[string, number[]]>>) : [];
+      return {
+        status: r.status, stderr: r.stderr ?? '', seen: all[0] ?? [],
+        byFamily: Object.fromEntries(all.map((x, i) => [fams[i]![0], x.map((b) => b[0])])),
+      };
     };
     /** A new MAIN boundary of demo-a at ts 5500 (inside [1500, 6000)), held by f1 (ino 101) at line 30. */
     const NEW_BOUNDARY = [
@@ -831,6 +836,27 @@ describe('W2-3 Task 1: raw window rows', () => {
       expect(r.seen.map((b) => b[0])).toEqual([f.b1, f.b2]);
       const fresh = demoA(report(W2_ARGS(f, '400')));
       expect(fresh.boundaries.map((b) => b.boundary_uuid), 'CONTROL: the writer committed, and the next run sees it').toEqual([f.b1, f.b2, 'e-race']);
+    });
+
+    /** A new MAIN boundary of demo-b (the store's second family) at ts 5500, held by demo-b's own file at line 30. */
+    const NEW_BOUNDARY_B = [
+      "INSERT INTO entries (uuid, transcript_pk, type, ts_ms, is_compact_summary, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id) "
+      + `SELECT 'e-race-b', transcript_pk, 'system', 5500, 0, 'harness', 1, 1, 1, (SELECT blob_id FROM blobs LIMIT 1) FROM transcripts WHERE cc_session_uuid = '${U2}' AND agent_id = ''`,
+      "INSERT INTO boundaries (entry_id, transcript_pk, ord) SELECT entry_id, transcript_pk, 9 FROM entries WHERE uuid = 'e-race-b'",
+      "INSERT INTO memberships (file_id, entry_id, line) SELECT (SELECT file_id FROM ingest_files WHERE transcript_pk = entries.transcript_pk), entry_id, 30 FROM entries WHERE uuid = 'e-race-b'",
+    ];
+
+    it('two families, one snapshot: a boundary a writer commits to the SECOND family after the first read is not in the report (a per-family snapshot would show it)', () => {
+      const f = plantedStore();
+      const fams: Array<[string, string]> = [['demo-a', G1], ['demo-b', G2]];
+      const r = race(f, '', NEW_BOUNDARY_B, fams);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.byFamily['demo-a']).toEqual([f.b1, f.b2]);
+      expect(r.byFamily['demo-b'], 'the second family reads the first read\'s snapshot').toHaveLength(1);
+      expect(r.byFamily['demo-b']).not.toContain('e-race-b');
+      const fresh = race(f, '', [], fams);
+      expect(fresh.status, fresh.stderr).toBe(0);
+      expect(fresh.byFamily['demo-b'], 'CONTROL: the writer committed, and a fresh run of the same two families sees it').toContain('e-race-b');
     });
 
     it('main() reads --families through families_report: the real entry point, raced after the family lookup, holds the snapshot too', () => {
