@@ -1238,6 +1238,12 @@ describe('wave 2 texts: every remaining branch and sanitising call site has a ro
         expect(push(coordSession({ mail: [q2620], deliveries: [queued({ lastGate: 'registry-unmeasurable' })] }), 902))
           .toBe('coordinator demo-coordinator: delivery #902 (mail #2620 question from demo-worker, queued at 2026-09-29T07:00Z, 1h 13m ago) is still undelivered. Its last gate: registry-unmeasurable.');
       });
+      it('D-5912: a delivery whose last gate is a stash refusal is named through the same sentence (no body change)', () => {
+        for (const gate of ['stash-failed', 'stash-occupied']) {
+          expect(push(coordSession({ mail: [q2620], deliveries: [queued({ lastGate: gate })] }), 902), gate)
+            .toBe(`coordinator demo-coordinator: delivery #902 (mail #2620 question from demo-worker, queued at 2026-09-29T07:00Z, 1h 13m ago) is still undelivered. Its last gate: ${gate}.`);
+        }
+      });
       it('a hostile mail kind is replaced', () => {
         const body = push(coordSession({ mail: [runLess(mail(2620, MS_AT, WORKER, COORD, 'x y', 'x'))], deliveries: [queued()] }), 902);
         expect(body).toContain('(mail #2620 (unprintable) from demo-worker, queued at');
