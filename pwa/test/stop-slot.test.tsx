@@ -10,7 +10,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { Composer } from '../src/session/Composer';
+import { Composer, STOP_SETTLE_MS } from '../src/session/Composer';
+import { api } from '../src/lib/api';
 import { useEscapeInterrupt } from '../src/session/useEscapeInterrupt';
 
 afterEach(() => {
@@ -68,6 +69,49 @@ describe('Stop in the send slot', () => {
     // The draft is empty again, so the slot is Stop again.
     expect(screen.queryByRole('button', { name: 'Send' })).toBeNull();
     expect(stops()[0]).toHaveClass('btn-danger');
+  });
+
+  it('a second tap right after Send during a busy turn does not interrupt: the Stop that replaces Send settles first', () => {
+    // A double-tap on Send used to send the prompt and then stop the turn, because the danger Stop takes Send's spot
+    // the moment the draft empties. The Stop ignores taps for STOP_SETTLE_MS after a send, then works as before.
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const onInterrupt = vi.fn();
+    const onSend = vi.fn();
+    render(<Composer onSend={onSend} pending={[]} busy onInterrupt={onInterrupt} />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'quick one' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(onSend).toHaveBeenCalledWith('quick one');
+    now += 120;
+    fireEvent.click(stops()[0]!);
+    expect(onInterrupt).not.toHaveBeenCalled();
+    now += STOP_SETTLE_MS;
+    fireEvent.click(stops()[0]!);
+    expect(onInterrupt).toHaveBeenCalledTimes(1);
+    expect(onInterrupt).toHaveBeenCalledWith('keycap');
+  });
+
+  it('a staged image alone counts as drafted: Send stays in the slot, with the danger-ghost Stop beside it', async () => {
+    vi.spyOn(api, 'upload').mockResolvedValue({ path: '/p/shot-1.png', name: 'shot-1.png', bytes: 9 });
+    render(<Composer id="claude:ProjectC" onSend={vi.fn()} pending={[]} busy onInterrupt={vi.fn()} />);
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        items: [{ kind: 'file', type: 'image/png', getAsFile: () => new File([new Uint8Array(64)], 'shot.png', { type: 'image/png' }) }],
+        getData: () => '',
+      },
+    });
+    fireEvent(screen.getByRole('textbox', { name: 'Message' }), event);
+    await screen.findByAltText('shot.png');
+    expect(await screen.findByRole('button', { name: 'Send' })).toBeEnabled();
+    expect(stops()).toHaveLength(1);
+    expect(stops()[0]).toHaveClass('btn-danger-ghost');
+  });
+
+  it('the danger-ghost Stop keeps the 44px tap floor', () => {
+    render(<Composer onSend={vi.fn()} pending={[]} busy onInterrupt={vi.fn()} />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'x' } });
+    expect(stops()[0]).toHaveClass('min-w-tap');
   });
 
   it('an idle session keeps Send in the slot and draws no Stop', () => {

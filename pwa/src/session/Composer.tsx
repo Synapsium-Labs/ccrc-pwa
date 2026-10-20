@@ -37,6 +37,10 @@ export interface ComposerProps {
   onInterrupt?: (source: 'keycap') => void;
 }
 
+/** After a send empties the draft during a busy turn, the danger Stop takes Send's spot at once; it ignores taps for
+ *  this long so an impatient double-tap on Send never stops the turn it just added to (W2 Task S7b, D-5471). */
+export const STOP_SETTLE_MS = 600;
+
 interface DraftConflict {
   key: string;
   text: string;
@@ -131,7 +135,11 @@ export function Composer({
   // this composer, so both get it; the Escape key's interrupt stays `useEscapeInterrupt`'s.
   const stopping = busy && onInterrupt !== undefined;
   const drafted = value.trim() !== '' || staged.images.length > 0;
-  const stop = (): void => onInterrupt?.('keycap');
+  const sentAt = useRef(-Infinity);
+  const stop = (): void => {
+    if (Date.now() - sentAt.current < STOP_SETTLE_MS) return;
+    onInterrupt?.('keycap');
+  };
 
   const send = (): void => {
     if (!canSend) return;
@@ -140,6 +148,7 @@ export function Composer({
     // a caller matching on arity — only pass opts when there is one.
     if (attachments.length > 0) onSend(text, { attachments });
     else onSend(text);
+    sentAt.current = Date.now();
     setValue('');
     staged.release();
   };
