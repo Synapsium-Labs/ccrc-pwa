@@ -9,9 +9,11 @@
 // must be in the SAME file (that is what "sibling" means), and the map must type a variable or a `satisfies`.
 // Only forms that exist at runtime count: a `declare` map, an `asserts v is X` predicate and a type-only guard
 // signature do not. Stated limits: the map alone satisfies the rule (a list derived from it is the convention, not
-// checked); a literal union with a `null` member (today `api.ts:PrChecks`) is not scanned.
+// checked); a literal union with a `null` member (today `api.ts:PrChecks`) is not scanned; a guard's body is not
+// checked, so a hand-written `is X` guard satisfies the rule without being total (prefer the map).
 //
-// EXEMPT is the merge-day debt. It started at the merge-day count (31) minus this PR's three lists, it may only
+// EXEMPT (`wire-totality.data.ts#WIRE_TOTALITY_EXEMPTIONS`, D-6045's entry shape, stamped in
+// `exemption-age.data.ts`) is the merge-day debt. It started at the merge-day count (31) minus this PR's three lists, it may only
 // shrink, and every entry carries its reason. Adding a list to an exempt union makes the stale-entry row red until its
 // entry goes and `EXEMPT_PINNED` drops with it; adding a new listless union is red until it gets a list.
 import { describe, it, expect } from 'vitest';
@@ -19,6 +21,8 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFile, parseSource, wireFacts, type ParsedFile } from '../scan/parse.js';
+import { malformedEntries } from './exemptions.js';
+import { WIRE_TOTALITY_EXEMPTIONS as EXEMPT } from './wire-totality.data.js';
 import {
   POOLS_ENFORCEMENTS, SESSION_BUCKETS, SESSION_STATUSES, isPoolsEnforcement,
 } from '../../../shared/api.js';
@@ -30,37 +34,6 @@ const SHARED = path.join(ROOT, 'shared');
  *  NEVER RAISE IT: a new listless union gets a list, not an entry. */
 const EXEMPT_PINNED = 28;
 
-/** `file:Name` → why the union has no list yet. One reason per entry. */
-const EXEMPT: Record<string, string> = {
-  'agent-protocol.ts:ReadFailure': 'merge-day debt: the agent read verbs\' failure word, built by the agent and read by the server; no list yet',
-  'api.ts:IdentityField': 'merge-day debt: the registry identity triple, carried as `unmeasured`; read back only through `unmeasuredFields`; no list yet',
-  'api.ts:TaskStatus': 'merge-day debt: Claude Code\'s own task-list status word, relayed as it reads; no list yet',
-  'api.ts:PreconditionCell': 'merge-day debt: one precondition\'s cell in a server-built aggregate; no list yet',
-  'api.ts:UnnamedSpawnWord': 'merge-day debt: the snapshot reviver\'s fold word for an unnamed spawn; no list yet',
-  'api.ts:BuildAgreement': 'merge-day debt: the build-skew word of the divergence census; no list yet',
-  'api.ts:SystemOrigin': 'merge-day debt: which system prompt started a turn, shown as a pill; no list yet',
-  'api.ts:ProgramKickoffField': 'merge-day debt: the field a programme kickoff refusal names; no list yet',
-  'api.ts:CollectArmedBy': 'merge-day debt: what armed the temp-root collector lane, as the resolver measured it; no list yet',
-  'api.ts:DigestRowKind': 'merge-day debt: which table a digest line came from (its sibling `DigestLineKind` is derived from a tuple); no list yet',
-  'api.ts:AccountOriginClass': 'merge-day debt: the origin class the accounts gate decides on; no list yet',
-  'base-url.ts:BaseUrlRefusal': 'merge-day debt: why an endpoint was refused, one sentence each on the add sheet; no list yet',
-  'docs.ts:DocsRetryClass': 'merge-day debt: the docs reader\'s retry class per failure; no list yet',
-  'docs.ts:DocsFetchFailure': 'merge-day debt: the docs fetch failure words from ccd; no list yet',
-  'docs.ts:DocsNotAFileKind': 'merge-day debt: why a docs path is not a regular file; no list yet',
-  'docs.ts:DocsVerb': 'merge-day debt: the four docs verbs\' names on a ccd answer; no list yet',
-  'docs.ts:DocContentClass': 'merge-day debt: how a docs leaf renders; no list yet',
-  'docs.ts:EntryMode': 'merge-day debt: whether a docs page carries a ref; no list yet',
-  'docs.ts:EntryBadge': 'merge-day debt: a docs tree row\'s draft badge; no list yet',
-  'docs.ts:WithheldReason': 'merge-day debt: why a docs leaf body is withheld; no list yet',
-  'docs.ts:DocsPageParseFailure': 'merge-day debt: why a docs page URL did not parse; no list yet',
-  'poolrule.ts:PoolOrigin': 'merge-day debt: which source a pool answer measured; no list yet',
-  'providers.ts:ConnectMethod': 'merge-day debt: a provider\'s connect methods, branched on only by the auth helper; no list yet',
-  'providers.ts:ProbeKind': 'merge-day debt: what an account check asks of a lane; a hand array (`PROBE_KINDS`) lives in models.mjs, not a derived map',
-  'roster.ts:RosterKind': 'merge-day debt: the roster lane kind; no list yet',
-  'workflows.ts:WorkflowState': 'merge-day debt: where a workflow row stands; no list yet',
-  'workflows.ts:WorkflowAgentState': 'merge-day debt: where a workflow agent stands; no list yet',
-  'workflows.ts:WorkflowControlAct': 'merge-day debt: the workflow control acts; the server holds the measured table; no list yet',
-};
 
 interface Union { key: string; name: string; literals: string[]; line: number }
 
@@ -117,9 +90,10 @@ describe('wire totality: every exported literal union in shared/*.ts has a deriv
     expect(Object.keys(EXEMPT)).toHaveLength(EXEMPT_PINNED);
   });
 
-  it('every exemption carries its own reason', () => {
-    for (const [k, why] of Object.entries(EXEMPT)) expect(why.trim().length, k).toBeGreaterThan(20);
-    expect(new Set(Object.values(EXEMPT)).size).toBe(EXEMPT_PINNED);
+  it('every exemption carries its own one-line reason and a real date (D-6045\'s entry shape)', () => {
+    expect(malformedEntries(EXEMPT)).toEqual([]);
+    for (const [k, e] of Object.entries(EXEMPT)) expect(e.reason.trim().length, k).toBeGreaterThan(20);
+    expect(new Set(Object.values(EXEMPT).map((e) => e.reason)).size).toBe(EXEMPT_PINNED);
   });
 
   it('the three lists this slice adds carry exactly their unions\' members, in declaration order', () => {
@@ -137,12 +111,14 @@ describe('wire totality: every exported literal union in shared/*.ts has a deriv
     }
   });
 
-  // Any hand comparison in fleet.ts against a member word fails this row, even an unrelated `=== 'unknown'`: the
-  // acceptance is that the store spells none of them, so such a comparison reads its word from a list too.
+  // Any member word quoted in fleet.ts fails this row, in a comparison or not, even an unrelated `=== 'unknown'`: the
+  // acceptance is that the store spells none of them, so such a use reads its word from a list too.
   it('pwa/src/stores/fleet.ts no longer spells the PoolsEnforcement members: it reads the shared guard', () => {
     const fleet = parseFile(path.join(ROOT, 'pwa', 'src', 'stores', 'fleet.ts'));
     const members = PARSED.get('api.ts')!.exportedTypeAliases.find((a) => a.name === 'PoolsEnforcement')!.literals!;
     expect(wireFacts(fleet).comparedLiterals.filter((l) => members.includes(l))).toEqual([]);
+    // Not only comparisons: no quoted member word anywhere in the file (a hand array passed to `.includes` too).
+    expect(members.filter((m) => new RegExp(`(['"\`])${m}\\1`).test(fleet.text))).toEqual([]);
     const shared = fleet.imports.filter((i) => /shared\/api$/.test(i.specifier)).flatMap((i) => i.names);
     expect(shared).toContain('isPoolsEnforcement');
   });
