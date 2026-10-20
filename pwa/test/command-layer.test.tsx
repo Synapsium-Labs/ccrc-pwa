@@ -511,3 +511,40 @@ describe('a door runs its command, through this layer', () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('the palette hands focus back where it came from (D-5679)', () => {
+  const wait = (ms: number): Promise<void> => act(async () => { await new Promise((r) => setTimeout(r, ms)); });
+
+  it('to the field that opened it, once a closing layer has let go, even though that layer took focus and dropped it', async () => {
+    render(<><input aria-label="Search" /><CommandLayer openNewSession={vi.fn()} /></>);
+    const field = screen.getByRole('textbox', { name: 'Search' });
+    act(() => field.focus());
+    fireEvent.keyDown(field, { key: 'k', metaKey: true });
+    const input = screen.getByRole('combobox');
+    // A browser keeps the palette mounted while it animates out, its focus
+    // trap holding focus, and drops focus on the body as it unmounts. jsdom
+    // animates nothing, so that layer is planted by hand.
+    const closing = document.createElement('div');
+    closing.setAttribute('role', 'dialog');
+    closing.setAttribute('data-state', 'closed');
+    const trap = document.createElement('button');
+    closing.append(trap);
+    document.body.append(closing);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await wait(5);
+    act(() => trap.focus());
+    await wait(60);
+    act(() => closing.remove());
+    expect(document.activeElement).toBe(document.body);
+    await wait(120);
+    expect(document.activeElement).toBe(field);
+  });
+
+  it('to the main landmark when the element that opened it is gone', async () => {
+    render(<><main id="content" tabIndex={-1} /><CommandLayer openNewSession={vi.fn()} /></>);
+    fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
+    await wait(30);
+    expect(document.activeElement).toBe(document.getElementById('content'));
+  });
+});
