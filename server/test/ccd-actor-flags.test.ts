@@ -59,6 +59,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
 import { readJournal } from './lifecycleHelpers.js';
+import { stubFn } from './ccdStub.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-actorflags-'); });
@@ -204,8 +205,10 @@ describe('the closed set is spelled exactly twice in ccd', () => {
  *  (HEAD AUDIT w23 M-A) — without it these snippets shell the live tmux.
  *  `seedWorkspace` itself now creates `workdir` on disk (fix-round-1 finding
  *  1), so no task-local `mkdir -p` belongs here any more. */
-const ARCHIVE_STUBS = `tmux() { return 1; }; _ws_unsupervise() { :; };
-  _ws_idle_ok() { return 0; }; _ws_status() { echo idle; }; _ws_archive_manifest() { echo '{}'; };`;
+// Through `stubFn` (D-6051): each override exits 97 if ccd no longer defines the function it replaces. The
+// `_ws_idle_ok` stub that stood here named a function ccd never had, so it stubbed nothing.
+const ARCHIVE_STUBS = `tmux() { return 1; }; ${stubFn('_ws_unsupervise', ':')}
+  ${stubFn('_ws_status', 'echo idle')} ${stubFn('_ws_archive_manifest', "echo '{}'")}`;
 
 describe('ws-archive accepts the dec flags in any position', () => {
   it.each([
