@@ -74,11 +74,13 @@ describe('feedRecordCallSites: recordFeedEvent( call expressions under server/sr
     expect(sites[0]!.text).toContain('deps.coord.recordFeedEvent(log.epoch, ev);');
   });
 
-  it("REAL: it finds pushOne's archive write in watch.ts, and every site is a call", () => {
+  // D-5857 (Task C1c): pushOne's archive write moved into the funnel (`notice.ts` `notify`), so the real-tree anchor
+  // follows it there; the row's other halves are unchanged.
+  it("REAL: it finds the funnel's archive write in notice.ts, and every site is a call", () => {
     const sites = feedRecordCallSites();
     show('feedRecordCallSites', sites);
-    expect(sites.some((s) => s.file === 'server/src/watch.ts' && /\bcoord\?\.recordFeedEvent\(log\.epoch, recorded\)/.test(s.text)),
-      "pushOne's archive write is not among the sites").toBe(true);
+    expect(sites.some((s) => s.file === 'server/src/notice.ts' && /\bdeps\.coord\.recordFeedEvent\(log\.epoch, ev\)/.test(s.text)),
+      "the funnel's archive write is not among the sites").toBe(true);
     for (const s of sites) expect(s.text, `${s.file}:${s.line}`).toMatch(/\brecordFeedEvent\s*\(/);
     expect(files(sites)).not.toContain('server/src/coord/store.ts');
   });

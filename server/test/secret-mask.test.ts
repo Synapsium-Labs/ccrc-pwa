@@ -47,8 +47,8 @@ import { saveSnapshot } from '../src/fleetstate.js';
 import type { FleetSession } from '../../shared/api.js';
 import { CREDENTIAL_MASKS, SECRET_MASK, SECRET_MASK_TOO_LARGE, type SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
-import { sourceOfSymbol } from './scan/symbols.js';
 import { seedRoster } from './helpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 // ── assembled credentials ──────────────────────────────────────────────────
 const fill = (n: number, salt: string, alphabet = 'base64url'): string => {
@@ -1365,8 +1365,7 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
 
   it('every write route is masked by the one write-answer hook, or exempt with a reason; the exemption names only auth and token routes and the upload', () => {
     const read = (f: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...f), 'utf8');
-    // Keyed on buildServer's own source (scan/symbols.ts), never a literal read of server.ts (D-5854).
-    expect(sourceOfSymbol('server/src/server.ts', 'buildServer')).toMatch(/app\.addHook\('preSerialization', \(req, reply, payload, done\) => \{\s*if \(!answerMasked\(req\.method, req\.routeOptions\.url\)\) \{ done\(null, payload\); return; \}\s*maskedSend\.add\(reply\);\s*const mk = deps\.masker \?\? SHAPE_ONLY_MASKER;\s*done\(null, req\.routeOptions\.url === '\/api\/fleet' \? maskFleetFrame\(mk, payload\) : mk\.maskDeep\(payload\)\);/);
+    expect(read(['server.ts'])).toMatch(/app\.addHook\('preSerialization', \(req, reply, payload, done\) => \{\s*if \(!answerMasked\(req\.method, req\.routeOptions\.url\)\) \{ done\(null, payload\); return; \}\s*maskedSend\.add\(reply\);\s*const mk = deps\.masker \?\? SHAPE_ONLY_MASKER;\s*done\(null, req\.routeOptions\.url === '\/api\/fleet' \? maskFleetFrame\(mk, payload\) : mk\.maskDeep\(payload\)\);/);
     const seen: string[] = [];
     for (const f of routeFiles()) {
       for (const m of read(f).matchAll(/app\.(?:post|put|patch|delete)\('(\/[^']*)'/g)) {
@@ -1551,7 +1550,7 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
 
   it('the answer backstop and the error mask are each registered once, on the root, and no other route file sets its own error handler but the exempt docs plugin', () => {
     const read = (f: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...f), 'utf8');
-    // Keyed on buildServer's own source (scan/symbols.ts), never a literal read of server.ts (D-5854).
+    // Keyed on the composition root's symbol, not a literal read of the file (D-5854's ratchet): `app` is buildServer's own.
     const server = sourceOfSymbol('server/src/server.ts', 'buildServer');
     expect(server).toMatch(/app\.addHook\('onSend', \(req, reply, payload, done\) => \{\s*done\(null, maskedSend\.has\(reply\) \|\| !answerMasked\(req\.method, req\.routeOptions\.url\)\s*\? payload : maskBody\(deps\.masker \?\? SHAPE_ONLY_MASKER, payload, reply\.getHeader\('content-type'\)\)\);/);
     expect(server).toMatch(/app\.setErrorHandler\(\(err, _req, _reply\) => \{\s*throw maskedError\(deps\.masker \?\? SHAPE_ONLY_MASKER, err\);/);
