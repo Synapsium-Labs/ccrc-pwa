@@ -834,10 +834,13 @@ export class FleetWatcher {
   /** Asks whose operator push is DEFERRED, keyed by session id. IN MEMORY BY
    *  DESIGN and not in coord.db (D-2169): this map is the only carrier of the
    *  deferred push, so a lost database must not be able to swallow it. A server
-   *  restart drops the hold and the push is lost — which is PRE-EXISTING, not a
-   *  regression: `this.primed` is false on the first tick after boot and
-   *  `dialogIds` suppresses the second, so a restart during any live dialog
-   *  re-pushes nothing today either.
+   *  restart empties the map; since D-5925 the boot re-seeds it FROM THE ROWS
+   *  (`pendingReseed`): a `held` or `answering` row whose dialog the pane is
+   *  measured still painting, with the same `askKey`, is held again until
+   *  `askNotifyAt(at)`, so the deferred push still fires (late if the deadline
+   *  passed while the server was down). A lost `coord.db` has no rows, and the
+   *  restart then re-pushes nothing, as before D-5925: `this.primed` is false
+   *  on the first tick after boot and `dialogIds` suppresses the second.
    *
    *  Cleared in TWO places, both keyed off the dialog leaving the pane: the
    *  orphan-settle in the `last !== dialog.id` branch above, when a NEW
@@ -870,9 +873,21 @@ export class FleetWatcher {
    *  approvals row held for its claimant (`tryHold`'s approval arm). `until` is the latest `notifyAt` of the rows it
    *  covers; `rowIds` are those rows (the main thread's only, D-5491), so a cleared dialog marks only them `operator`. `sweepApprovals` pushes `ev` once
    *  no covered row is held any more and the dialog is still painted. In memory only, as `heldAsks` is: a restart
-   *  loses the deferral, and the dialog then raises on its next sighting. */
+   *  empties it, and since D-5925 the boot re-seeds it (`pendingReseed`) from a snapshot of the child's main-thread
+   *  rows still `held` at boot, once the pane is measured painting a permission prompt; a row already `released` at
+   *  boot is never re-seeded (its lapse may have pushed before the restart). Before D-5925 a restart lost the
+   *  deferral and the dialog never raised: `dialogIds` suppresses every sighting after the unprimed boot tick. */
   private heldApprovals = new Map<string, { until: number; dialogId: string; rowIds: number[];
     ev: Parameters<FleetWatcher['pushOne']>[0] }>();
+  /** D-5925 (held questions survive a restart): what the boot found held in `coord.db`, per child, still to be
+   *  matched against a MEASURED pane. Filled once, on the first unprimed `detectDialogs` (before that tick's
+   *  `sweepApprovals`), and consumed by every tick before `tryHold` can run for the child (`reseedFromRows`), so a
+   *  pane the boot tick could not measure is decided by a later tick and never mints a second row. Bounded by the
+   *  number of children with a held row: at most one ask row per child (the newest) and that child's held
+   *  main-thread approval rows (`id`, `notifyAt`). An entry leaves when both halves are decided. */
+  private pendingReseed = new Map<string, { ask: AskRow | null; approvals: { id: number; notifyAt: number }[] }>();
+  /** Set once the boot snapshot behind `pendingReseed` has been read (or there was no store to read). */
+  private reseedLoaded = false;
   /** The day the approval inputs and the asks' question text were last pruned (`sweepApprovals`). */
   private lastApprovalPrune = 0;
   /** The digest beat's memory (D-5300): the last day it settled (sent, skipped at zero, or found already claimed),
@@ -2509,7 +2524,7 @@ export class FleetWatcher {
       // the latch remembers that push and amends it when the envelope turns up.
       await this.sweepHookStates(records);
       await this.sweepUsage(records);
-      const pending = await this.detectDialogs(this.primed, records);
+      const pending = await this.detectDialogs(this.primed, registryRead.names, records);
       await this.sweepTasks();
       // NEVER awaited: it shells out over the network and `gh` has no
       // --timeout, so awaiting it would stall the dialog detector and the
@@ -8487,10 +8502,12 @@ export class FleetWatcher {
    * always has, needing no retain-don't-erase logic of its own — the code
    * makes that visible by NOT mentioning `measuredIdentity` anywhere below.
    */
-  private async detectDialogs(notify: boolean, records?: SessionRecord[]): Promise<Set<string>> {
+  private async detectDialogs(notify: boolean, listing?: readonly string[], records?: SessionRecord[]): Promise<Set<string>> {
     const pending = new Set<string>();
     // [registry-refused:tests-only] tick() passes its records; only tests reach this read, which omits refused rows.
     const recs = records ?? await readRegistry(this.deps.io, this.deps.cfg);
+    // D-5925: the boot's snapshot of held rows, read before this tick's `sweepApprovals` can lapse any of them.
+    if (!this.primed && !this.reseedLoaded) this.loadReseed();
     for (const r of recs) {
       const pane = await this.deps.tmux.capture(r.id);
       // Same capture feeds the statusline read — no extra tmux call. FOUR
@@ -8581,6 +8598,10 @@ export class FleetWatcher {
       // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
       // captureAnsi().
       const dialog = pane !== null && hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
+      // D-5925: a child the boot found holding a question or a prompt is decided from the rows first. Re-seeded, or
+      // still in doubt, nothing below may hold or raise it on this tick: the hold already exists in `coord.db`.
+      const reseed = this.reseedFromRows(r, pane, dialog);
+      const mayRaise = notify && reseed === 'none';
       const last = this.dialogIds.get(r.id);
       if (dialog) {
         pending.add(r.id);
@@ -8661,7 +8682,7 @@ export class FleetWatcher {
           this.dialogIds.set(r.id, dialog.id);
           this.bus.emit(`session:${r.id}`, { type: 'dialog', dialog });
           this.settlingAsks.delete(r.id);
-          if (notify) {
+          if (mayRaise) {
             // D-5290: the FIRST raise waits while the child's hookstate is not
             // yet `waiting` and nothing made the dialog answerable — the menu
             // painted after this tick's hookstate read (`tick()`'s ordering
@@ -8697,9 +8718,9 @@ export class FleetWatcher {
               settling.ticks += 1;
             } else {
               this.settlingAsks.delete(r.id);
-              if (notify && (await this.tryHold(r, dialog, actions, recs)).kind === 'none') raise();
+              if (mayRaise && (await this.tryHold(r, dialog, actions, recs)).kind === 'none') raise();
             }
-          } else if (notify && actions && this.actionlessAsks.get(r.id) === dialog.id) {
+          } else if (mayRaise && actions && this.actionlessAsks.get(r.id) === dialog.id) {
             // The amendment. Same question, same tag — `push-sw.js` sets
             // `renotify` from the tag, so a raise here REPLACES the
             // un-answerable notification in its slot rather than stacking a
@@ -8776,7 +8797,127 @@ export class FleetWatcher {
         this.bus.emit(`session:${r.id}`, { type: 'dialog_cleared' });
       }
     }
+    // D-5925, spec §5.2 step 3: a child measured ABSENT from the listing (its `.uuid` gone, not a refused or
+    // unreadable row, and never on an unlistable tick, which returns before this) holds no question any more.
+    if (listing !== undefined && this.pendingReseed.size > 0) {
+      const listed = new Set(recs.map((x) => x.id));
+      for (const [id, entry] of [...this.pendingReseed]) {
+        if (listed.has(id) || listing.includes(`${id}.uuid`)) continue;
+        this.pendingReseed.delete(id);
+        if (entry.ask !== null) this.staleReseedRow(id, entry.ask);
+      }
+    }
     return pending;
+  }
+
+  /** D-5925: the boot's one read of the held rows into `pendingReseed` (spec §5.2 step 1, §5.3). At most one ask
+   *  row per child, the newest by `id`: a child paints one question at a time, so an older held row of the same
+   *  child is settled `stale` at once (when it names the same dialog, `staleAsk`'s `dialogId` key settles it with
+   *  the newest instead). The approvals half is the main thread's `held` rows only, never `released` ones. A read
+   *  that fails re-seeds that half from nothing: the restart behaves as it did before D-5925. */
+  private loadReseed(): void {
+    this.reseedLoaded = true;
+    const coord = this.deps.coord;
+    if (!coord) return;
+    const entryOf = (id: string) => {
+      let e = this.pendingReseed.get(id);
+      if (e === undefined) { e = { ask: null, approvals: [] }; this.pendingReseed.set(id, e); }
+      return e;
+    };
+    try {
+      const asks = coord.heldQuestionRows();
+      if (!asks.ok) console.warn(`ccrc-server: held asks unreadable at boot (${asks.detail}) — none re-seeded`);
+      else for (const row of asks.asks) {
+        const e = entryOf(row.childId);
+        if (e.ask !== null && e.ask.dialogId !== row.dialogId) this.staleReseedRow(row.childId, e.ask);
+        e.ask = row;
+      }
+      const approvals = coord.heldApprovalRowsByChild();
+      if (!approvals.ok) console.warn(`ccrc-server: held approvals unreadable at boot (${approvals.detail}) — none re-seeded`);
+      else for (const [child, rows] of approvals.rows) entryOf(child).approvals = rows.map((x) => ({ id: x.id, notifyAt: x.notifyAt }));
+    } catch (err) {
+      console.warn(`ccrc-server: reading held rows at boot failed (${err instanceof Error ? err.message : String(err)}) — none re-seeded`);
+    }
+  }
+
+  /** A re-seed candidate the pane disproved, settled `stale` through the existing CAS; guarded, as its neighbours in
+   *  `detectDialogs` are (a synchronous `node:sqlite` UPDATE on the 2 s poll). */
+  private staleReseedRow(childId: string, row: AskRow): void {
+    try {
+      this.deps.coord?.staleAsk(row.dialogId, childId, Date.now());
+    } catch (err) {
+      console.warn(`ccrc-server: settling a held ask at boot failed for ${childId} (${err instanceof Error ? err.message : String(err)}) — a held row may remain in coord.db`);
+    }
+  }
+
+  /**
+   * D-5925 (spec §5.2 step 2, §5.3): decide a child the boot found holding a question or a permission prompt, from
+   * THIS tick's pane and hookstate. Answers `reseeded` (a carrier was re-seeded this tick), `waiting` (doubt: left for
+   * a later tick) or `none` (nothing pending, or the pane disproved it and today's path takes over). Never settles on
+   * doubt: an unmeasured pane, or a matching dialog whose hookstate is unreadable, leaves the row and the entry.
+   *
+   * The ask: a painted dialog with the row's `dialogId` and a hookstate ask hashing to its `askKey` re-seeds
+   * `heldAsks` (`until = askNotifyAt(at)`, `answeringSince` null, the payload `hold()` builds) after re-stamping
+   * `askAt` through `restampAsk`'s CAS. `askAt` is deliberately not matched: it is the field that moves while the
+   * question does not (D-2403). No `insertAsk`, no parent mail: the parent already has its brief. No dialog, or
+   * another one, settles the row `stale`.
+   *
+   * The prompt: a painted permission prompt re-seeds `heldApprovals` from the snapshot's rows, whatever state a later
+   * tick finds them in (`sweepApprovals` pushes once none is held). A pane with no prompt drops the snapshot and
+   * leaves the rows (their cleared-dialog path needs a dialog the server never saw).
+   */
+  private reseedFromRows(r: SessionRecord, pane: string | null, dialog: Dialog | null): 'none' | 'reseeded' | 'waiting' {
+    const entry = this.pendingReseed.get(r.id);
+    if (entry === undefined) return 'none';
+    if (pane === null) return 'waiting';
+    const hs = this.hookStates.get(r.id) ?? null;
+    let waiting = false;
+    let reseeded = false;
+    const row = entry.ask;
+    if (row !== null) {
+      if (dialog === null || dialog.id !== row.dialogId) {
+        entry.ask = null;
+        this.staleReseedRow(r.id, row);
+      } else if (hs === null) {
+        waiting = true;
+      } else {
+        const key = hs.ask === null ? null : askKey(hs.ask);
+        entry.ask = null;
+        if (key !== row.askKey) {
+          this.staleReseedRow(r.id, row);
+        } else {
+          try {
+            this.deps.coord?.restampAsk({ id: row.id, dialogId: dialog.id, askKey: key, askAt: hs.updatedAt });
+          } catch (err) {
+            console.warn(`ccrc-server: re-stamping a re-seeded ask failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — a parent answer may refuse ask-moved until the next tick`);
+          }
+          this.heldAsks.set(r.id, {
+            until: askNotifyAt(row.at), askId: row.id, answeringSince: null,
+            ev: askHoldPayload(r, hs, dialog, askActions(hs)),
+          });
+          reseeded = true;
+        }
+      }
+    }
+    if (entry.approvals.length > 0) {
+      if (dialog === null) {
+        entry.approvals = [];
+      } else if (hs === null) {
+        waiting = true;
+      } else {
+        const rows = entry.approvals;
+        entry.approvals = [];
+        if (hs.ask !== null && 'approval' in hs.ask) {
+          this.heldApprovals.set(r.id, {
+            until: Math.max(...rows.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: rows.map((x) => x.id),
+            ev: askHoldPayload(r, hs, dialog, null),
+          });
+          reseeded = true;
+        }
+      }
+    }
+    if (entry.ask === null && entry.approvals.length === 0) this.pendingReseed.delete(r.id);
+    return waiting ? 'waiting' : reseeded ? 'reseeded' : 'none';
   }
 
   /** Advance a held ask's `askAt` to the child's CURRENT hookstate, but only
@@ -9048,9 +9189,7 @@ export class FleetWatcher {
       // subagent's held row neither withholds this push nor is marked `operator` when this dialog clears.
       const open = read.rows.filter((x) => x.agentId === '' && now < x.notifyAt && x.releaseReason === null);
       if (open.length === 0) return { kind: 'none' };
-      const ev: Parameters<FleetWatcher['pushOne']>[0] = {
-        kind: 'ask', sessionId: r.id, project: r.project, title: '❓ Question', body: askPushBody(hs, dialog),
-      };
+      const ev = askHoldPayload(r, hs, dialog, null); // the builder the restart re-seed shares (D-5925)
       this.pushOne({ ...ev, recordAlways: true, recordOnly: true }, this.activeProjects);
       this.heldApprovals.set(r.id, {
         until: Math.max(...open.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: open.map((x) => x.id), ev,
@@ -9356,11 +9495,7 @@ export class FleetWatcher {
       dialogId: dialog.id, question, options, now,
       ...(releaseReason === null ? {} : { releaseReason }),
     });
-    const ev: Parameters<FleetWatcher['pushOne']>[0] = {
-      kind: 'ask', sessionId: r.id, project: r.project,
-      title: '❓ Question', body: askPushBody(hs, dialog),
-      actions,
-    };
+    const ev = askHoldPayload(r, hs, dialog, actions);
     // The parent is asleep and nothing else will wake it. Ordinary mail, so
     // the existing idle gating applies unchanged — and the latency does not
     // gate the operator, because the operator's own push is racing this hold
@@ -9386,6 +9521,22 @@ export class FleetWatcher {
     }
     return { until, askId, ev, answeringSince: null };
   }
+}
+
+/**
+ * The push a held question defers (D-5925): what `hold()` snapshots at the mint and what the restart re-seed in
+ * `detectDialogs` rebuilds from the dialog's current sighting, so the two can never drift apart. Pure: built from the
+ * record, this tick's hookstate, the painted dialog and the actions `askActions` derived, and nothing else. `actions`
+ * `null` (an approval's deferred push, which offers no answer buttons) omits the field.
+ */
+export function askHoldPayload(
+  r: Pick<SessionRecord, 'id' | 'project'>, hs: HookState | null, dialog: Dialog, actions: PushPayload['actions'] | null,
+): { kind: 'ask'; sessionId: string; project: string; title: string; body: string; actions?: PushPayload['actions'] } {
+  return {
+    kind: 'ask', sessionId: r.id, project: r.project,
+    title: '❓ Question', body: askPushBody(hs, dialog),
+    ...(actions === null ? {} : { actions }),
+  };
 }
 
 /**
