@@ -1484,10 +1484,12 @@ function expandParse(bytes) {
 /** An entry's RAW text (lib's renderEntryText; every shown window of it is redacted by expandRenderItem): the
  *  unsanitised variant when the pair is ccd's own (DM2b), a tombstone as `pruned`. */
 function expandEntryText(rc, s, e) {
-  const p = expandBlob(s, e.blob_id, false);
-  if (p.state !== 'bytes') return p;
-  const primary = expandParse(p.bytes);
+  // The variant rows are read before the primary's bytes, so every answer names them: a pruned, too-large or undecodable
+  // primary still lists its entry's variants and their true count (D-4596 (history-read-fixed-fields-fit-the-cap)).
   const rows = s.variants.all(e.entry_id).filter((v) => v.blob_id !== e.blob_id);
+  const p = expandBlob(s, e.blob_id, false);
+  if (p.state !== 'bytes') return { ...p, causes: rows.map((v) => v.cause) };
+  const primary = expandParse(p.bytes);
   const others = [];
   for (const v of rows.filter((x) => x.cause === 'ccd-sanitize')) {
     const vb = expandBlob(s, v.blob_id, false);
@@ -1581,7 +1583,7 @@ function expandRenderItem(rc, s, it, pos, total, o) {
   const lead = isEntry
     ? `── ${pos}/${total} ${e.type === '' ? 'raw' : tx(e.type)}${e.role ? `/${tx(e.role)}` : ''} ${tx(src)} ${asText(uuidShown)} ${ts}`
     : `── ${pos}/${total} sidecar ${asText(nameTok)} of ${asText(uuidShown)}`;
-  const causes = t.state === 'text' ? t.causes : [];
+  const causes = t.causes ?? [];   // every entry answer carries its variant causes (expandEntryText); a sidecar's non-text answer carries none
   const shownCauses = causes.slice(0, listPrefix(causes.length, (i) => Math.max(`variant cause=${tx(causes[i])}`.length, JSON.stringify({ cause: tok(causes[i]) }).length) + 1)).map(tok);
   const tail = [
     ...shownCauses.map((c) => `variant cause=${asText(c)}`),
@@ -1609,7 +1611,7 @@ function expandRenderItem(rc, s, it, pos, total, o) {
 
   if (t.state === 'pruned') {
     const when = t.prunedMs === null ? 'on an unrecorded date' : `on ${new Date(t.prunedMs).toISOString().slice(0, 10)}`;
-    const block = [lead, `content pruned ${when}`].join('\n');
+    const block = [lead, `content pruned ${when}`, ...tail].join('\n');
     const json = { ...base, text: '', from: 0, to: 0, of: 0, cut: false, outline: null, outline_kind: null, pruned_ms: t.prunedMs, ...extra };
     const cost = measure(block, json);
     return cost <= o.budget || o.first ? { block, json, cost, partial: false, to: 0 } : null;
@@ -1618,7 +1620,7 @@ function expandRenderItem(rc, s, it, pos, total, o) {
   if (t.state === 'too-large') {
     // lib's expandBlobFits said no (or, for a message body, B1's blobOverDecodeCap: `bound` names BLOB_DECODE_MAX):
     // one fixed line, nothing decompressed. `of` is the recorded size, in bytes.
-    const block = [lead, `content too large to expand here: ${t.rawLen} bytes, over the ${t.bound ?? xlib.SIDECAR_WHOLE_MAX}-byte bound one call decompresses`].join('\n');
+    const block = [lead, `content too large to expand here: ${t.rawLen} bytes, over the ${t.bound ?? xlib.SIDECAR_WHOLE_MAX}-byte bound one call decompresses`, ...tail].join('\n');
     const json = { ...base, text: '', from: 0, to: 0, of: t.rawLen, cut: true, outline: null, outline_kind: null, pruned_ms: null, ...extra };
     const cost = measure(block, json);
     return cost <= o.budget || o.first ? { block, json, cost, partial: false, to: 0 } : null;
@@ -1627,7 +1629,7 @@ function expandRenderItem(rc, s, it, pos, total, o) {
   if (t.state === 'undecodable') {
     // The stored bytes do not decode within their recorded raw_len (B1's blob-undecodable; doctor counts it). Not a
     // pruned blob, and never a throw: one fixed line, with `undecodable: true` on the --json item.
-    const block = [lead, `content does not decode: the stored blob is damaged (recorded ${t.rawLen} bytes)`].join('\n');
+    const block = [lead, `content does not decode: the stored blob is damaged (recorded ${t.rawLen} bytes)`, ...tail].join('\n');
     const json = { ...base, text: '', from: 0, to: 0, of: 0, cut: false, outline: null, outline_kind: null, pruned_ms: null, undecodable: true, ...extra };
     const cost = measure(block, json);
     return cost <= o.budget || o.first ? { block, json, cost, partial: false, to: 0 } : null;

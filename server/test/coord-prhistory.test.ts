@@ -38,8 +38,8 @@ describe('readPrHistory', () => {
 
   it('skips a torn last line rather than rejecting the whole ledger', async () => {
     // ccd appends with O_APPEND from python; a record larger than the buffer
-    // can split (`ccd/ccd:881-884` and the scout's own caveat). A half-line is
-    // one lost record, not a lost history.
+    // can split (`_pr_py`'s `open(hist_p, 'a')` in `ccd/ccd`, and the scout's
+    // own caveat). A half-line is one lost record, not a lost history.
     const d = reg();
     writeFileSync(path.join(d, 'demo-quiet-mesa.prhistory'), `${LINE(1)}\n{"pr":2,"bra`);
     expect(await readPrHistory(localIO, d, 'demo-quiet-mesa'))

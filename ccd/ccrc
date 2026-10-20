@@ -311,8 +311,8 @@ _plat_devino() {  # <file> -> "<device>:<inode>", the identity of a lock
 # false on macOS — the total EQUALLED the row sum and overstated the
 # reclaim. `-type l` rides along because `du -sb` counts a symlink's own
 # st_size too (directories need nothing: GNU du charges a directory 0 in
-# byte totals — measured, coreutils 9.4). `stat -f '%d %i %z'` hands awk the
-# identity to dedup on (device:inode) and the size in one exec batch.
+# byte totals — measured, coreutils 9.4). `find -ls` hands awk inode ($1) and size ($7) from find's own lstat;
+# `-exec stat` cost ~6 ms a file on macOS, minutes per worktree. Dedup by inode: one workspace, one filesystem.
 #
 # `awk` PRINTS `s+0`, so an empty walk answers `0` rather than the empty
 # string — every caller validates the result with `^[0-9]+$` and would read a
@@ -359,8 +359,8 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
   local p errf err out rc
   for p in "$@"; do [ -e "$p" ] || return 1; done
   errf=$(_plat_mktemp) || return 1
-  out=$(find "$@" \( -type f -o -type l \) -exec stat -f '%d %i %z' {} + 2>"$errf" \
-        | awk '{ if (!seen[$1":"$2]++) s+=$3 } END{print s+0}'); rc=$?
+  out=$(find "$@" \( -type f -o -type l \) -ls 2>"$errf" \
+        | awk '{ if (!seen[$1]++) s+=$7 } END{print s+0}'); rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   # THE DIAGNOSTIC IS RELAYED, not swallowed. GNU `du` writes "cannot read
   # directory …" to stderr and the callers CAPTURE it — `_ws_gc_bytes` puts it
@@ -876,7 +876,7 @@ _svc_write_session_plist() {   # <unit> -> 0 iff its plist is on disk
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>3</integer>
   <key>AbandonProcessGroup</key><true/>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>$(if declare -F _launchd_class >/dev/null; then _launchd_class; else printf Background; fi)</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>$(_svc_job_path)</string>
@@ -24771,11 +24771,11 @@ console.log("restamped");
 # only isolation boundary, ccrc.env carries tokens and a fleet box may have
 # none. OPERATOR-OWNED: nothing writes it. Absent or empty is Background; any
 # other word is named on stderr and reads as Background — each arm prints its
-# own literal, so nothing from the file can reach a plist. Only the server job
-# reads it so far; the session plist writers (inside the platform block, in ccd
-# and here) adopt it together in a follow-up change. Deliberately OUTSIDE the
-# platform block (no _svc_/_plat_ prefix) so the block's line citations stay
-# put; the writer calls it behind `declare -F`.
+# own literal, so nothing from the file can reach a plist. The server job and
+# the session plist writer (`_svc_write_session_plist`, inside the platform
+# block, in ccd and here) read it; ccd carries the same helper, byte for byte.
+# Deliberately OUTSIDE the platform block (no _svc_/_plat_ prefix) so the
+# block's line citations stay put; the writers call it behind `declare -F`.
 _launchd_class() {
   local f="$HOME/.ccrc/launchd-class" v=""
   if [ -r "$f" ]; then { IFS= read -r v || true; } < "$f"; fi
