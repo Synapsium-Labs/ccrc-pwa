@@ -4138,4 +4138,128 @@ describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', ()
     expect(coord.db.prepare("SELECT COUNT(*) AS n FROM mail WHERE subject LIKE 'mail rejected%'").get())
       .toEqual({ n: 0 });
   }, 10_000);
+
+  // D-5997 (ARCH-15, #532): the sweep CONSUMES each writer's {changed, state}. A
+  // write the guard refused — an ack landed while the send was in flight — is
+  // logged and skipped, never assumed: no park notice, no back-off.
+  const ackOnFirst = (h: Harness, when: (args: string[]) => boolean) => {
+    const inner = h.run;
+    const arm: { coord: CoordStore | null; id: number } = { coord: null, id: 0 };
+    h.run = async (cmd, args) => {
+      if (arm.coord !== null && when(args)) {
+        expect(arm.coord.markAcked(arm.id, Date.now())).toEqual({ ok: true, state: 'acked' });
+        arm.coord = null;
+      }
+      return inner(cmd, args);
+    };
+    return arm;
+  };
+
+  it('an ack landing mid-send refuses the enter-ignored park — the sender is told nothing, the refusal is logged (D-5997)', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const arm = ackOnFirst(h, (a) => a[0] === 'send-keys' && a[3] === '-l');
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    arm.coord = coord; arm.id = d.id;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await w.sweepMail();
+      expect(deliveryRow(coord, d.id).state).toBe('acked');
+      expect(parkCols(coord, d.id)).toEqual({ parkedAt: null, parkReason: null });
+      expect(noticesTo(coord, SENDER)).toEqual([]);
+      expect(warn.mock.calls.map((c) => String(c[0])).join('\n'))
+        .toMatch(new RegExp(`parkDelivery refused on delivery ${d.id} \\(row is acked\\)`));
+    } finally { warn.mockRestore(); }
+  }, 10_000);
+
+  it('an ack landing before a draft-present back-off: backOff answers changed:false and the sweep records no back-off and tells no sender (D-5997)', async () => {
+    const st = { box: 'a human draft', enterWorks: true };
+    const h = liveHarness(st);
+    const arm = ackOnFirst(h, (a) => a[0] === 'capture-pane');
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    arm.coord = coord; arm.id = d.id;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await w.sweepMail();
+      const row = deliveryRow(coord, d.id);
+      expect(row.state).toBe('acked');
+      expect(row.attempts).toBe(0);
+      expect(row.lastError).toBeNull();
+      expect(sent.filter((p) => p.tag === `mail-blocked-${d.id}`)).toEqual([]);
+      expect(warn.mock.calls.map((c) => String(c[0])).join('\n'))
+        .toMatch(new RegExp(`backOff refused on delivery ${d.id} \\(row is acked\\)`));
+    } finally { warn.mockRestore(); }
+  }, 10_000);
+
+  // The park ceiling's reject (D-5997): a row acked after the sweep read it is
+  // refused, and its sender is never mailed 'rejected' for a message that landed.
+  const rejectedTo = (coord: CoordStore, toId: string): number =>
+    (coord.db.prepare("SELECT COUNT(*) AS n FROM mail WHERE toId = ? AND subject LIKE 'mail rejected%'")
+      .get(toId) as { n: number }).n;
+
+  it('an ack landing after the parked pass read its rows: the ceiling reject is refused, the sender is not told rejected (D-5997)', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    await w.sweepMail();                          // parks enter-ignored
+    coord.db.prepare('UPDATE mail_deliveries SET parkedAt = ?, nextAttemptAt = ? WHERE id = ?')
+      .run(Date.now() - MAIL_PARK_CEILING_MS - 1_000, Date.now() + 3_600_000, d.id);
+    // The ack lands between the parked-pass snapshot and its ceiling write —
+    // the awaited registry and hook-state reads sit in that window.
+    const read = coord.parkedDeliveries.bind(coord);
+    coord.parkedDeliveries = () => {
+      const rows = read();
+      coord.parkedDeliveries = read;
+      expect(coord.markAcked(d.id, Date.now())).toEqual({ ok: true, state: 'acked' });
+      return rows;
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      advance(MAIL_SWEEP_MS + 1_000);
+      await w.sweepMail();
+      expect(deliveryRow(coord, d.id).state).toBe('acked');
+      expect(rejectedTo(coord, SENDER)).toBe(0);
+      expect(warn.mock.calls.map((c) => String(c[0])).join('\n'))
+        .toMatch(new RegExp(`rejectDelivery refused on delivery ${d.id} \\(row is acked\\)`));
+    } finally { warn.mockRestore(); }
+  }, 10_000);
+
+  it('an ack landing during the in-flight send of a row past the ceiling: the reject is refused, the sender is not told rejected (D-5997)', async () => {
+    const st = { box: '', enterWorks: false };
+    const h = liveHarness(st);
+    const arm = ackOnFirst(h, (a) => a[0] === 'send-keys');
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRecipient(h);
+    const d = queueFromSender(coord);
+    await w.sweepMail();                          // parks enter-ignored, our nudge in the box
+    // Due and past the ceiling. The parked pass's snapshot misses the row (a
+    // lane parked it after that read), so the due loop's own ceiling reject
+    // is the one that runs — after the awaited send.
+    coord.db.prepare('UPDATE mail_deliveries SET parkedAt = ?, nextAttemptAt = ? WHERE id = ?')
+      .run(Date.now() - MAIL_PARK_CEILING_MS - 1_000, Date.now() - 1, d.id);
+    const read = coord.parkedDeliveries.bind(coord);
+    coord.parkedDeliveries = () => read().filter((p) => p.id !== d.id);
+    arm.coord = coord; arm.id = d.id;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      advance(MAIL_SWEEP_MS + 1_000);
+      await w.sweepMail();
+      expect(arm.coord).toBeNull();               // the ack did land mid-send
+      expect(deliveryRow(coord, d.id).state).toBe('acked');
+      expect(rejectedTo(coord, SENDER)).toBe(0);
+      expect(warn.mock.calls.map((c) => String(c[0])).join('\n'))
+        .toMatch(new RegExp(`rejectDelivery refused on delivery ${d.id} \\(row is acked\\)`));
+    } finally { warn.mockRestore(); coord.parkedDeliveries = read; }
+  }, 10_000);
 });
