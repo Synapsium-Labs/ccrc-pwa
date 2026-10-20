@@ -1135,7 +1135,7 @@ export const LABELLER = Object.freeze({
   path_min: 8,
   window: 40,
   path_forms: Object.freeze(['absolute', 'repo-relative', 'tail', 'basename']),
-  boundaries: 'v1',
+  boundaries: 'v2',
 });
 
 /**
@@ -1253,10 +1253,15 @@ const PATH_RIGHT = /[A-Za-z0-9._/-]/;
 const PATH_TOKEN = /[A-Za-z0-9._/~-]+/g;
 const CMD_EDGE = /[A-Za-z0-9_./:=@+-]/;
 const CMD_ALTERNATIVE = /\s(or|OR)\s/;
-/** The four tests a COMMAND answer may not pass outside F's own occurrence (D-5789), as one list: the alternative
- *  (` or `/` OR `), a flag token, a command separator or redirect, a comma or backtick, and a command substitution.
- *  The regex for the alternative is defined once, above; the error kind uses CMD_ALTERNATIVE alone. */
-const CMD_EXTRA = Object.freeze([CMD_ALTERNATIVE, /(^|\s)--?[A-Za-z0-9]/, /[;|&><,`]/, /\$\(/]);
+/** An `or` standing as a word in any case (D-5789): beside the start, the end or any character that is not a letter,
+ *  a digit or `_`. It covers ` or `, `(or`, `or:`, `[or`, `{or`, a quoted "or", `OR:`, `Or`, `oR` and a dash glued to
+ *  `or`, and leaves "for", "color", "ORM" and "se\u00f1or" alone. Only the command kind reads it. */
+const CMD_OR = /(^|[^\p{L}\p{N}_])or(?=[^\p{L}\p{N}_]|$)/iu;
+/** The five tests a COMMAND answer may not pass outside F's own occurrence (D-5789), as one list: an `or` as a word
+ *  in any case, a flag token (one or two of any Unicode dash or U+2212 at a word start, then a letter or digit), a
+ *  spaced slash, a command separator, redirect, comma or backtick, and a command substitution. The error kind reads
+ *  CMD_ALTERNATIVE (W2-D63's ` or `/` OR `) alone, so every entry of this list has a mutant that reds. */
+const CMD_EXTRA = Object.freeze([CMD_OR, /(^|\s)[\p{Pd}\u2212]{1,2}[A-Za-z0-9]/u, /\s\/\s/, /[;|&><,`]/, /\$\(/]);
 /** @param {string} text */
 const cmdCarriesMore = (text) => CMD_EXTRA.some((re) => re.test(text));
 
@@ -1303,12 +1308,18 @@ const cmdRightOk = (t, j) => j === t.length || !CMD_EDGE.test(t[j]) || (t[j] ===
  *   text before nor the text after that occurrence holds /\s(or|OR)\s/. An error answer may carry trailing context.
  * - command: the same occurrence and boundaries, with one backtick immediately before it and one immediately
  *   after it counting as part of it (as a pair only), and then neither the text before nor the text after that
- *   widened occurrence holds /\s(or|OR)\s/, a flag token /(^|\s)--?[A-Za-z0-9]/, any of `; | & > < ,` or a
- *   backtick, or `$(` (D-5789, amending W2-D63): W2-D64 asks for one exact value, so an answer that carries a
- *   further command-shaped piece is not that command. Too strict for prose holding a comma, `;`, `|`, `>`, `<`,
- *   `&`, a second code span or a negative number; too lenient for an extra operand (a second command before F with
- *   only a space between), a `sudo` or `VAR=` prefix, and an alternative the `or` test misses (`(or`, `or:`, or a
- *   dash before `or`, which the error kind's test misses too).
+ *   widened occurrence holds: an `or` standing as a word in any case beside any character that is not a letter, a
+ *   digit or `_` (CMD_OR: ` or `, `(or`, `or:`, `[or`, a quoted "or", `Or`, `OR:`, a dash glued to `or`); a flag
+ *   token, one or two of any Unicode dash or U+2212 at a word start followed by a letter or digit (`-x`, `--x`,
+ *   an em-dash then `x`); a spaced slash /\s\/\s/; any of `; | & > < ,` or a backtick; or `$(` (D-5789, amending
+ *   W2-D63): W2-D64 asks for one exact value, so an answer that carries a further command-shaped piece is not that
+ *   command. Costs, as they now stand. Too strict for prose holding a comma, `;`, `|`, `>`, `<`, `&`, a second
+ *   code span (`npm run test` followed by (in `server/`)), a negative number or a typographic minus before one,
+ *   `or` as a hyphenated word or path segment (`or-tools`, `/or/`, `either/or`, `and/or`), a dash glued to the
+ *   next word right after F (unspaced em-dash prose), or a spaced slash (`1 / 2`). Too lenient for an extra
+ *   operand, a `sudo` or `VAR=` prefix, and a second command before F separated only by a space, which cannot be
+ *   told from an extra operand. The error kind keeps W2-D63's test, ` or `/` OR ` alone, so `(or`, `or:` and a
+ *   dash before `or` stay lenient there.
  * @param {string} kind
  * @param {string} F
  * @param {string} answerValue

@@ -3104,7 +3104,7 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
     expect([...t7Gate.ANSWER_STATES].sort()).toEqual(['absent', 'unknown', 'value']);
     expect(t7Gate.GATE_REASONS).toEqual(expect.arrayContaining(['writer-malformed', 'writer-leak']));
     expect(t7Gate.LABELLER).toEqual({ sha_admit_prefix: 7, path_min: 8, window: 40,
-      path_forms: ['absolute', 'repo-relative', 'tail', 'basename'], boundaries: 'v1' });
+      path_forms: ['absolute', 'repo-relative', 'tail', 'basename'], boundaries: 'v2' });
     expect(Object.isFrozen(t7Gate.LABELLER) && Object.isFrozen(t7Gate.LABELLER.path_forms)).toBe(true);
   });
 
@@ -3596,6 +3596,46 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
     it('path admission is unchanged: ./R in a baseline rejects through the repo-relative variant', () => {
       expect(t7Gate.admitFact('path', PF, 'saw ./src/app.ts', 'q', ROOT_R))
         .toEqual({ admitted: false, hit: { where: 'baseline', variant: 'src/app.ts' } });
+    });
+  });
+
+  describe('review fix round 2: the command rule closes its lenient shapes (D-5789)', () => {
+    const cmd = (F: string, a: string) => t7Gate.labelCorrect('command', F, a, pathAt7);
+    const F = 'npm run test';
+    // U+2014 em dash, U+FF0D fullwidth hyphen-minus, U+2E3A two-em dash, U+2212 minus sign: written as escapes.
+    const EM = '—';
+    const FULL = '－';
+    const TWO_EM = '⸺';
+    const MINUS = '−';
+
+    it('an alternative or a flag the first rule missed is refused: an or in any case or bracket, a Unicode-dash flag, a spaced slash', () => {
+      const lenient = [
+        `${F} / npm test`, `npm test / ${F}`, `${F} Or npm test`, `${F} oR npm test`, `${F} [or npm test]`,
+        `${F} {or npm test}`, `${F} (or npm test)`, `${F} or: npm test`, `${F} OR: npm test`, `${F} "or" npm test`,
+        `${F} ${EM}or npm test`, `${F} ${EM}watch`, `${F} ${FULL}watch`, `${F} ${TWO_EM}watch`, `${F} ${MINUS}v`,
+      ];
+      for (const a of lenient) expect(cmd(F, a), a).toBe(false);
+    });
+
+    it('CONTROLS: for/ORM/color/señor, a dash with no letter after it, dry-run and a spaced em dash stay correct', () => {
+      expect(cmd(F, `${F} for the ORM color señor`)).toBe(true);
+      expect(cmd(F, `${F} - the whole suite`)).toBe(true);
+      expect(cmd(F, `${F} in the dry-run mode`)).toBe(true);
+      expect(cmd(F, `${F} ${EM} runs vitest`)).toBe(true);
+    });
+
+    it('error kind: the split is still pinned, W2-D63 reads only " or " and " OR " there', () => {
+      const E = 'TypeError: x is undefined';
+      expect(t7Gate.labelCorrect('error', E, `${E} (Or so the log says)`, pathAt7)).toBe(true);
+      expect(t7Gate.labelCorrect('error', E, `${E} or TypeError: y`, pathAt7)).toBe(false);
+    });
+
+    it('LABELLER.boundaries is v2 and the open record offers v2, in the draft and in the final', () => {
+      expect(t7Gate.LABELLER.boundaries).toBe('v2');
+      type Spec = { fields?: Record<string, { value?: unknown }> };
+      const rec = t7Gate.OPEN_RECORD_V1 as unknown as { draft: Record<string, Spec>; final: Record<string, Spec> };
+      expect(rec.draft.labeller!.fields!.boundaries!.value).toBe('v2');
+      expect(rec.final.labeller!.fields!.boundaries!.value).toBe('v2');
     });
   });
 });
@@ -4799,7 +4839,7 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
   it.each([
     ['k', 11], ['k_unit', 'assistant-entries'], ['x', { num: 1, den: 20 }], ['metric', 'another metric'], ['row_cap', 401],
     ['bootstrap.B', 1000], ['bootstrap.method', 'bca'], ['bootstrap.substreams', ['quiz-ci']], ['quiz.kinds', ['sha', 'path', 'command', 'error', 'decision']],
-    ['labeller.path_min', 9], ['labeller.window', 41], ['labeller.boundaries', 'v2'], ['version', 2], ['kind', 'another-record'],
+    ['labeller.path_min', 9], ['labeller.window', 41], ['labeller.boundaries', 'v3'], ['version', 2], ['kind', 'another-record'],
   ])('a fixed field moved off its module constant is refused: %s', (p, value) => {
     const r = set(draft(), p, value);
     if (p.startsWith('labeller.')) set(r, `pilot.used.${p}`, value);   // the pilot signed under the same labeller
