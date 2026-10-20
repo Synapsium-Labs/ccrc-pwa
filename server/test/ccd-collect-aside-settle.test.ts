@@ -348,6 +348,21 @@ describe.skipIf(!LINUX)('the reclaim and expiry tail settles an aside before ste
     expect(measOf(reclaimDone())['tmpRootKept'], 'an aside keeps no leaf: what it would be without them').toBeUndefined();
   }, 90_000);
 
+  it('#15b: a sole aside that does not read as the witness, and no witness: never restored, the reclaim completes, warns, and the aside stands', () => {
+    witnessedChild();
+    const aside = asideOf(CHILD_ID);
+    fs.renameSync(childWitness(), aside);
+    fs.writeFileSync(aside, 'x\n');
+    reclaimed(childReclaimVerb(h, evalOf(h).token, { pre: NOBODY, extra: ERR }));
+    expect(fs.existsSync(childLeaf()), 'the leaf is removed').toBe(false);
+    expect(fs.existsSync(aside), 'the aside stands: it was never linked to the witness’s name').toBe(true);
+    expect(fs.readFileSync(aside, 'utf8'), 'the aside stands as it was').toBe('x\n');
+    expect(namesIn(), 'only the aside stands: nothing was linked to the witness’s name').toEqual([path.basename(aside)]);
+    expect(errOf()).toContain(`ccd: warn: ${CHILD_ID}'s compare-and-drop asides were not settled: the one compare-and-drop aside of ${CHILD_ID}`
+      + ` does not read as its witness, so it is never restored: ${aside}`);
+    expect(measOf(reclaimDone())['tmpRootKept'], 'an aside keeps no leaf: what it would be without it').toBeUndefined();
+  }, 90_000);
+
   it('#17: ws-expire takes the same tail: an aside alone is restored, then dropped with its absent leaf, and tmproots/ ends empty', () => {
     makeArchived(h);
     plantWitness(EXP_ID);
@@ -491,5 +506,16 @@ describe('the settle alone: its answers, and it prints nothing (path-identity sp
       + ` and no witness is proven to stand at ${w()} after: ${aside}`);
     expect(fs.readFileSync(aside, 'utf8'), 'the aside stands as it was').toBe(body);
     expect(fs.existsSync(w()), 'nothing was restored').toBe(false);
+  }, 30_000);
+
+  it('#18k: the one aside does not read as a witness (a body of x), no witness, the leaf standing: unmeasured, the aside untouched and nothing at the witness’s name', () => {
+    plantWitness(ID);
+    fs.rmSync(w());
+    const aside = asideOf(ID);
+    fs.writeFileSync(aside, 'x\n');
+    expect(h.run(SETTLE(ID)).stdout).toBe(`[rc=2] |the one compare-and-drop aside of ${ID} does not read as its witness, so it is never restored: ${aside}`);
+    expect(fs.readFileSync(aside, 'utf8'), 'the aside stands as it was').toBe('x\n');
+    expect(fs.existsSync(w()), 'nothing stands at the witness’s name').toBe(false);
+    expect(namesIn(), 'and nothing else was made').toEqual([path.basename(aside)]);
   }, 30_000);
 });
