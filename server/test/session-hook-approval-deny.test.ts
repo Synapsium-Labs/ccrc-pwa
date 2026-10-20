@@ -619,13 +619,21 @@ describe('build guard D-6066: the upstream id, read from the deny file the insta
     ] } });
     expect(big.length).toBeGreaterThan(190_000);
     const asRoot = process.getuid?.() === 0;
-    // The cap counts BYTES only because `_hook_deny_text` reads under `LC_ALL=C`: under a UTF-8 locale, 65536 two-byte
-    // characters are 131072 bytes, past the cap and past what one `--arg` may hold, but only 65536 characters. Held only
-    // where bash, under that locale, counts one such character as length 1; elsewhere the setup is skipped, by name.
+    // The cap counts BYTES only because `_hook_deny_text` reads under `LC_ALL=C`. This file is a valid deny file that
+    // pairs upstream-a, padded with two-byte characters: over the cap in bytes, within it in characters, and well under
+    // the 128 KiB one `--arg` may hold. Counted in bytes it passes nothing, so `upstream-a update` stays allowed, as on
+    // main; counted in characters, under a UTF-8 locale, it passes, jq parses it, and `upstream-a update` is denied.
+    // Held only where bash, under that locale, counts one such character as length 1; elsewhere the setup is skipped,
+    // by name.
     const UTF8 = { LC_ALL: 'C.UTF-8' };
     const utf8Counts = spawnSync('bash', ['-c', 'x=$(printf "\\303\\251"); printf %s "${#x}"'], { env: { ...process.env, ...UTF8 }, encoding: 'utf8' }).stdout === '1';
-    const wide = 'é'.repeat(65_536);
-    expect(Buffer.byteLength(wide)).toBe(131_072);
+    const wide = JSON.stringify({ permissions: { deny: [
+      ...(JSON.parse(denyFileText('upstream-a')) as { permissions: { deny: string[] } }).permissions.deny,
+      `Bash(padding ${String.fromCharCode(0xe9).repeat(49_000)}:*)`,
+    ] } });
+    expect(Buffer.byteLength(wide)).toBeGreaterThan(65_536);
+    expect(Buffer.byteLength(wide)).toBeLessThan(110_000);
+    expect([...wide].length).toBeLessThanOrEqual(65_536);
     for (const setup of ['none', 'symlink', 'unparsable', 'mode 000', 'over the cap', 'over the cap in two-byte characters'] as const) {
       if (setup === 'mode 000' && asRoot) continue;
       if (setup === 'over the cap in two-byte characters' && !utf8Counts) {
