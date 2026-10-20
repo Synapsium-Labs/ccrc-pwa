@@ -3494,11 +3494,40 @@ export function ftsPhrase(value) {
   return `"${String(value).replace(/"/g, '""')}"`;
 }
 
-/** The op marker's one grammar (§9.6 op-running; Task 25): `~/.ccrc/history/op` holds `<verb> <pid> <start_ms>`.
- *  Anything else is null, which a pass treats as stale (it names no live pid) and status reports as no op. */
+/** The op marker's one grammar (§9.6 op-running; Task 25): `~/.ccrc/history/op` holds `<verb> <pid> <start_ms>
+ *  <proc_start> <boot_id>` since D-5748 (history-op-marker-identity), the pass marker's identity (D-5016) after the verb, pid
+ *  and start, so a reused pid or another boot never reads as the pass that wrote it. The three-field form `<verb> <pid>
+ *  <start_ms>` is a LEGACY marker, left by an operator pass of the older build that is still running across `ccrc update`:
+ *  it parses with `procStart` and `bootId` null, and decideOpLive reads it by the kill probe. At most 119 B (32 + 10 + 16 +
+ *  20 + 36, four spaces and a newline). Anything else is null, which a pass treats as stale (it names no live pid) and status
+ *  reports as no op. */
 export function parseOpMarker(text) {
-  const m = /^([a-z-]{1,32}) ([1-9][0-9]{0,9}) ([0-9]{1,16})\s*$/.exec(text);
-  return m === null ? null : { verb: m[1], pid: Number(m[2]), startMs: Number(m[3]) };
+  const m = /^([a-z-]{1,32}) ([1-9][0-9]{0,9}) ([0-9]{1,16})(?: ([0-9]{1,20}) ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))?\s*$/.exec(text);
+  return m === null ? null : { verb: m[1], pid: Number(m[2]), startMs: Number(m[3]), procStart: m[4] ?? null, bootId: m[5] ?? null };
+}
+
+/** The op marker's text (D-5748): the grammar above, newline-ended. Five fields when the writer measured its identity, the
+ *  legacy three when it could not (no /proc: the shim is Linux-only, so this is a Darwin test box); half an identity is a
+ *  writer's bug and throws. */
+export function formatOpMarker({ verb, pid, startMs, procStart, bootId }) {
+  const start = procStart ?? null;
+  const boot = bootId ?? null;
+  if ((start === null) !== (boot === null)) throw new TypeError('formatOpMarker: procStart and bootId are both measured or both null');
+  return start === null ? `${verb} ${pid} ${startMs}\n` : `${verb} ${pid} ${startMs} ${start} ${boot}\n`;
+}
+
+/** Whether an op marker names an operator pass that is running now (D-5748): the one rule status's `op.alive` and the
+ *  stale-marker removal both read. `measured` is what the caller measured of the marker's pid just now: its identity
+ *  (`procStart` and `bootId`, both null when it cannot be measured) and `kill`, the answer of `kill(pid, 0)` as a word
+ *  ('ok', 'esrch' or 'eperm'). An identity-bearing marker is live ONLY when the identity measured now equals it in both
+ *  fields (decidePassLive), and a mismatch or an unmeasurable identity is never retried by the kill probe, which a reused
+ *  pid answers. A legacy marker is live only when the kill probe answers 'ok': EPERM is another user's process, and the
+ *  fleet runs as one UNIX user, so it is not ours. No marker is no live pass. */
+export function decideOpLive(marker, measured) {
+  if (marker === null || measured === null || measured === undefined) return false;
+  if (marker.procStart === null || marker.bootId === null) return measured.kill === 'ok';
+  const identityNow = measured.procStart === null || measured.bootId === null ? null : { procStart: measured.procStart, bootId: measured.bootId };
+  return decidePassLive(marker, identityNow);
 }
 
 /** The pass marker's one grammar (D-5016 `history-doctor-reads-a-live-pass`): `~/.ccrc/history/pass` holds

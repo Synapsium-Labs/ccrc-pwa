@@ -36,7 +36,7 @@ import { pathToFileURL } from 'node:url';
 import {
   EXIT, COVERAGE, SCHEMA_VERSION, UUID_RE, HARNESSES, CLI_STAT_DEADLINE_MS,
   historyPaths, readBoxEnvValue, decideCliStore, CONTROL_FILE_MAX, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
-  decideStatusReadFailure, RETENTION_STATE_META, decideGrepIndex, parsePassMarker, decidePassLive, parsePassDied,
+  decideStatusReadFailure, RETENTION_STATE_META, decideGrepIndex, parsePassMarker, decidePassLive, parsePassDied, decideOpLive,
 } from './lib.mjs';
 import { StoreError, measureStoreFacts, openReader, userVersion, measuredSize, readBounded, FTS_GATE_SQL, ftsGateFactsOn } from './store.mjs';
 // The health block's own imports (task 28). Namespace imports, so this block
@@ -60,7 +60,7 @@ import {
   decideRecallOff, recallOffPath, parseSpoolLine, SCOPE_FAMILIES_JSON_MAX,
   readEnvelope, shownLine, nextLine,
 } from './lib.mjs';
-import { loadSecrets, procIdentityOf } from './sweep.mjs';
+import { loadSecrets, procIdentityOf, measureOpProcess } from './sweep.mjs';
 import { runTree, grepVerb, describeVerb, expandVerb, familiesOf, transcriptsOf, scopeHeader } from './recall.mjs';
 import { spawn as spawnOp } from 'node:child_process';
 import { isatty as isattyOp } from 'node:tty';
@@ -144,15 +144,6 @@ function settleWithin(promise, ms) {
   });
 }
 
-function pidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return e !== null && typeof e === 'object' && e.code === 'EPERM';
-  }
-}
-
 function parseJsonOr(text, fallback) {
   if (text === undefined || text === null || text === '') return fallback;
   try { return JSON.parse(text); } catch { return fallback; }
@@ -203,7 +194,10 @@ function boxFacts(env, P) {
   env.cap_malformed = cap.malformed;
   const text = readTrimmed(P.op);
   const m = text === null ? null : parseOpMarker(text);
-  env.op = m === null ? null : { verb: m.verb, pid: m.pid, alive: pidAlive(m.pid), start_ms: m.startMs };
+  // D-5748 (history-op-marker-identity): `alive` is lib's decideOpLive over what is measured of the pid now, the rule the stale-marker
+  // removal reads too: a marker that names its process is alive only when its identity measures equal (a reused pid is not), and
+  // a legacy three-field one only when kill(pid, 0) answers ok (EPERM is another user's process: the fleet is one UNIX user).
+  env.op = m === null ? null : { verb: m.verb, pid: m.pid, alive: decideOpLive(m, measureOpProcess(m.pid)), start_ms: m.startMs };
   // D-5016 (history-doctor-reads-a-live-pass): the scheduled pass's marker. `live` is the IDENTITY test (the pid's start
   // time and the boot id measured now equal the marker's), never `kill(pid, 0)`, which a reused pid answers; anything
   // unmeasurable (no /proc, a dead pid, an unreadable or malformed marker) is not live, and a malformed one is no marker.

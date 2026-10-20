@@ -365,7 +365,13 @@ export const SIDECAR_MAX_BYTES: 134217728;
 export function linkSidecar(name: string, candidates: ReadonlyArray<{ entryId: number; text: string; toolUseIds: readonly string[] }>): number | null;
 export function secretKindOf(source: object | null, path: string): 'sessions' | 'env-identifier' | 'env' | 'token' | 'json';
 export function ftsPhrase(value: string): string;
-export function parseOpMarker(text: string): { verb: string; pid: number; startMs: number } | null;
+/** D-5748: the op marker, `<verb> <pid> <start_ms> <proc_start> <boot_id>`; a legacy three-field marker has procStart and bootId null. */
+export interface OpMarker { readonly verb: string; readonly pid: number; readonly startMs: number; readonly procStart: string | null; readonly bootId: string | null }
+export function parseOpMarker(text: string): OpMarker | null;
+export function formatOpMarker(marker: OpMarker): string;
+/** D-5748: what the caller measured of an op marker's pid just now: its identity (both null when unmeasurable) and kill(pid, 0) as a word. */
+export interface OpMeasure { readonly procStart: string | null; readonly bootId: string | null; readonly kill: 'ok' | 'esrch' | 'eperm' }
+export function decideOpLive(marker: OpMarker | null, measured: OpMeasure | null): boolean;
 export interface ProcIdentity { readonly procStart: string; readonly bootId: string }
 export function parsePassMarker(text: string): { pid: number; startMs: number; procStart: string; bootId: string } | null;
 export function formatPassMarker(pid: number, startMs: number, identity: ProcIdentity): string;

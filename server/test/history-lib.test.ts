@@ -3947,8 +3947,9 @@ describe('redactField: a mark that ends a fragment before a sequence is carried 
 describe('lib: parseOpMarker (plan task 25)', () => {
   it('accepts <verb> <pid> <start_ms>, with or without the trailing newline the writer adds', async () => {
     const lib = await import('../../ccd/history/lib.mjs');
-    expect(lib.parseOpMarker('import 4242 1700000000000\n')).toEqual({ verb: 'import', pid: 4242, startMs: 1700000000000 });
-    expect(lib.parseOpMarker('migrate 1 0')).toEqual({ verb: 'migrate', pid: 1, startMs: 0 });
+    // D-5748 (W5h-2 Task 4): the start keeps its name, startMs, and a three-field marker is a LEGACY one, with no identity.
+    expect(lib.parseOpMarker('import 4242 1700000000000\n')).toEqual({ verb: 'import', pid: 4242, startMs: 1700000000000, procStart: null, bootId: null });
+    expect(lib.parseOpMarker('migrate 1 0')).toEqual({ verb: 'migrate', pid: 1, startMs: 0, procStart: null, bootId: null });
   });
 
   it('rejects every other shape as null: a stale marker names no live pid', async () => {
@@ -9914,4 +9915,77 @@ describe('redactAfter: a relayed batch is read with its stream\'s look-behind (D
     expect(masked, 'CONTROL: thousands of values each line alone masks').toBeGreaterThan(10_000);
     expect(violations.slice(0, 5), `${violations.length} of ${masked}`).toEqual([]);
   }, 120_000);
+});
+
+// ── W5h-2 Task 4: the op marker names its process (D-5748 (history-op-marker-identity)) ─────────────────────────
+// The op marker gains D-5016's identity: `<verb> <pid> <start_ms> <proc_start> <boot_id>`, written by formatOpMarker and read
+// by parseOpMarker, whose three-field form is a LEGACY marker (an operator pass of the older build, still running across
+// an update). decideOpLive is the one liveness rule: an identity-bearing marker is live only when the identity measured now
+// equals it in both fields, with NO fallback to the kill probe; a legacy one is live only when `kill(pid, 0)` answers ok, EPERM
+// reading as NOT live because the fleet is one UNIX user.
+describe('lib: the op marker names its process (D-5748)', () => {
+  const BOOT = '0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e';
+  const OTHER_BOOT = '99999999-4f5a-4b6c-8d7e-9f0a1b2c3d4e';
+
+  it('formatOpMarker writes `<verb> <pid> <start_ms> <proc_start> <boot_id>` and parseOpMarker reads it back', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const text = lib.formatOpMarker({ verb: 'import', pid: 4242, startMs: 1700000000000, procStart: '987654', bootId: BOOT });
+    expect(text).toBe(`import 4242 1700000000000 987654 ${BOOT}\n`);
+    expect(lib.parseOpMarker(text)).toEqual({ verb: 'import', pid: 4242, startMs: 1700000000000, procStart: '987654', bootId: BOOT });
+    expect(lib.parseOpMarker(`restore 7 0 0 ${BOOT}`)).toEqual({ verb: 'restore', pid: 7, startMs: 0, procStart: '0', bootId: BOOT });
+  });
+
+  it('a legacy three-field marker parses with procStart and bootId null; formatOpMarker writes one only when no identity was measured, and refuses half of one', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.parseOpMarker('prune 4242 1700000000000\n')).toEqual({ verb: 'prune', pid: 4242, startMs: 1700000000000, procStart: null, bootId: null });
+    expect(lib.formatOpMarker({ verb: 'migrate', pid: 7, startMs: 0, procStart: null, bootId: null })).toBe('migrate 7 0\n');
+    expect(() => lib.formatOpMarker({ verb: 'migrate', pid: 7, startMs: 0, procStart: '5', bootId: null })).toThrow(/both/);
+    expect(() => lib.formatOpMarker({ verb: 'migrate', pid: 7, startMs: 0, procStart: null, bootId: BOOT })).toThrow(/both/);
+  });
+
+  it('parseOpMarker answers null for every other shape: four fields, a malformed or upper-case boot id, a long or signed proc_start, a sixth field, a second line', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    for (const bad of ['import 4242 1700000000000 987654', 'import 4242 1700000000000 987654 nope',
+      `import 4242 1700000000000 ${'9'.repeat(21)} ${BOOT}`, `import 4242 1700000000000 -1 ${BOOT}`,
+      `import 4242 1700000000000 987654 ${BOOT.toUpperCase()}`, `import 4242 1700000000000  987654 ${BOOT}`,
+      `import 4242 1700000000000 987654 ${BOOT} extra`, `import 4242 1700000000000 987654 ${BOOT}\nimport 4243 1`,
+      `4242 1700000000000 987654 ${BOOT}`]) {
+      expect(lib.parseOpMarker(bad), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  it('the longest marker the grammar takes is 119 B, and one more character in any field is refused', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const field = ['a'.repeat(32), '9'.repeat(10), '9'.repeat(16), '9'.repeat(20)];
+    const line = (f: string[]): string => `${f.join(' ')} ${BOOT}\n`;
+    expect(lib.parseOpMarker(line(field))).not.toBeNull();
+    expect(Buffer.byteLength(line(field))).toBe(119);
+    for (let i = 0; i < field.length; i += 1) {
+      const longer = field.map((v, j) => (j === i ? `${v}${v[0]}` : v));
+      expect(lib.parseOpMarker(line(longer)), `field ${i} one longer`).toBeNull();
+    }
+  });
+
+  // decideOpLive's table: [what, marker procStart, marker bootId, measured procStart, measured bootId, kill, live]
+  const ROWS: Array<[string, string | null, string | null, string | null, string | null, 'ok' | 'esrch' | 'eperm', boolean]> = [
+    ['identity measured equal', '55555', BOOT, '55555', BOOT, 'ok', true],
+    ['identity measured equal, whatever kill says', '55555', BOOT, '55555', BOOT, 'eperm', true],
+    ['a reused pid: another start time, though kill answers ok', '55555', BOOT, '55556', BOOT, 'ok', false],
+    ['another boot, though kill answers ok', '55555', BOOT, '55555', OTHER_BOOT, 'ok', false],
+    ['an identity that cannot be measured now (no /proc, a dead pid, a zombie), though kill answers ok', '55555', BOOT, null, null, 'ok', false],
+    ['legacy, kill answers ok', null, null, '55555', BOOT, 'ok', true],
+    ['legacy, kill answers ok and no identity measures', null, null, null, null, 'ok', true],
+    ['legacy, kill answers EPERM (another user\'s process; the fleet is one UNIX user)', null, null, null, null, 'eperm', false],
+    ['legacy, kill answers ESRCH', null, null, null, null, 'esrch', false],
+  ];
+  it.each(ROWS)('decideOpLive: %s', async (_what, mStart, mBoot, nStart, nBoot, kill, live) => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const marker = { verb: 'import', pid: 4242, startMs: 1700000000000, procStart: mStart, bootId: mBoot };
+    expect(lib.decideOpLive(marker, { procStart: nStart, bootId: nBoot, kill })).toBe(live);
+  });
+
+  it('decideOpLive: no marker is no live pass, whatever is measured', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.decideOpLive(null, { procStart: '55555', bootId: BOOT, kill: 'ok' })).toBe(false);
+  });
 });
