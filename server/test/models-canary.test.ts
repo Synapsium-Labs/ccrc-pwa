@@ -182,8 +182,9 @@ describe.skipIf(PY === null)('deploy/models-canary.mjs (auto-advance spec §2.3 
     expect(c.body).toEqual({ ok: true, op: 'canary', result: 'unavailable', status: null,
       reason: `127.0.0.1:${proxy.port} does not answer as lane-a's shim, so the key was not sent` });
     expect(laneProxyRequests(proxy)).toEqual([]);
-    expect(laneProxyGets(proxy).map((g) => g.authorization)).toEqual([null]);
-    expectCleanProbe(laneProxyGets(proxy));
+    const gets = laneProxyGets(proxy);
+    expectCleanProbe(gets);
+    expect(gets.map((g) => g.authorization)).toEqual([null]);
   });
 
   it.each(['GET', 'POST'] as const)('uses no global agent for the %s request', (method) => {
