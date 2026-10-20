@@ -5,7 +5,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CommandLayer } from '../src/command/CommandLayer';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
@@ -74,8 +74,9 @@ describe('the index and the section routes', () => {
       appearance: () => screen.findByRole('group', { name: 'Theme' }),
       notifications: () => screen.findByText(/Push notifications for this browser|This browser cannot receive Web Push\./),
       automation: () => screen.findByRole('heading', { level: 3, name: 'Temp root collector' }),
-      // Two cards load on this page: the box token's skeleton and the Linear card's.
-      security: () => screen.findAllByRole('status', { name: 'Loading' }),
+      // Two cards load on this page, and exactly two: the box token's skeleton and the Linear card's. A third (a card
+      // drawn twice, or a skeleton left behind) is a defect, so the count is asserted and not merely "some".
+      security: () => waitFor(() => expect(screen.getAllByRole('status', { name: 'Loading' })).toHaveLength(2)),
     };
     for (const s of SETTINGS_SECTIONS) {
       renderSettings(s.id);
