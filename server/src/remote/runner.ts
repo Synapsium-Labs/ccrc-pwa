@@ -116,7 +116,7 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // case exactly — hence the same number rather than a guess.
   start: 300_000,
   enable: 300_000,
-  // `cmd_swap` stops the supervisor unit (ccd/ccd:13722) and kills the tmux
+  // `cmd_swap` stops the supervisor unit (ccd/ccd#cmd_swap) and kills the tmux
   // pane (:13723) BEFORE it flips the registry's `wrapper` (:13817). A kill
   // inside that window leaves a session that is not running, a registry that
   // still names the old account, and NO marker of either: no `swapblocked`, no
