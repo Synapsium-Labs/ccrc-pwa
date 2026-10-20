@@ -1,7 +1,8 @@
 import { constants as fsConstants } from 'node:fs';
 import { lstat, mkdir, open, readdir, stat, writeFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
-import { laneStateOpenHolds, type ReadFailure } from '../../shared/agent-protocol.js';
+import type { ReadFailure } from '../../shared/agent-protocol.js';
+import { laneStateOpenHolds } from '../../shared/agent-protocol.js';
 
 /** The agent's half of `server/src/io.ts`'s `failureFor` (D-1397) — the ONE place
  *  an errno becomes a `ReadFailure` on this side. Only a PROVEN `ENOENT` may
