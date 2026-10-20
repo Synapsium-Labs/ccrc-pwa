@@ -3784,16 +3784,16 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
     ...Array.from({ length: correct }, (_, i) => ({ id: `${arm}-c${i}`, arm, judged: false, judgeFailed: false })),
   ];
 
-  it('handcheckSample: ceil(n/5) of the judged answers per arm, and every judge-failed item outside the 20%', () => {
+  it('handcheckSample: ceil(0.2·n) of the judged answers per arm at share 0.2, and every judge-failed item outside the share', () => {
     const all = [...items('treatment', 11, 1, 4), ...items('control', 10, 2, 5)];
     const ids = gateT8.handcheckSample(SEED, all, 0.2);
     const judgedIn = (arm: string) => ids.filter((id) => id.startsWith(`${arm}-j`)).length;
-    expect(judgedIn('treatment'), 'ceil(11/5)').toBe(3);
-    expect(judgedIn('control'), 'ceil(10/5)').toBe(2);
+    expect(judgedIn('treatment'), 'ceil(0.2·11)').toBe(3);
+    expect(judgedIn('control'), 'ceil(0.2·10)').toBe(2);
     for (const f of all.filter((i) => i.judgeFailed)) expect(ids).toContain(f.id);
     expect(ids.filter((id) => id.includes('-c')), 'an unjudged (correct) answer is never sampled').toEqual([]);
     expect(ids.length).toBe(3 + 2 + 3);
-    expect(gateT8.handcheckSample(SEED, items('treatment', 1, 0), 0.2).length, 'ceil(1/5)').toBe(1);
+    expect(gateT8.handcheckSample(SEED, items('treatment', 1, 0), 0.2).length, 'ceil(0.2·1)').toBe(1);
     expect(gateT8.handcheckSample(SEED, items('control', 0, 0, 3), 0.2), 'nothing judged, nothing sampled').toEqual([]);
     expect(() => gateT8.handcheckSample(SEED, [{ id: 'x', arm: 'treatment', judged: true, judgeFailed: true }], 0.2)).toThrow(/both judged and judge-failed/);
   });
