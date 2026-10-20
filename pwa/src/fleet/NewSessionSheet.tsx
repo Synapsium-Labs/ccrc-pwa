@@ -6,13 +6,22 @@
 // team·alt") and posts api.createSession; success closes the sheet (the
 // new card arrives over /ws/fleet), failure toasts ccd's stderr and leaves
 // every choice in place.
+//
+// THE NAME FIELD (named workspaces S8, design 2026-10-20 §2.1) sits under the project list. Empty, nothing about
+// this sheet changed: the same `createSession`, the same body, the main checkout. Filled, the sheet starts a
+// WORKSPACE instead, `api.workspaceAdd(project, {name, wrapper, route})` with the account picked at step 1 (the
+// server's `--wrapper`, never a quiet placement elsewhere). That create's refusals stay in the sheet with the text
+// intact; an account refusal returns to the account step, with the project and the name kept. A crossing project or
+// an account a workspace never starts on closes the door: the field is disabled with its sentence and no name is
+// ever sent (`nameDoorReason`).
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ProjectRow } from '../../../shared/api';
 import { CLASSES, type ModelClass } from '../../../shared/models';
 import { Button, Select, Sheet, toast } from '@ccrc/ui';
-import { accountLabel, accountPool, accountPoolState } from '../lib/accounts';
+import { accountIsHomeAble, accountLabel, accountPool, accountPoolState } from '../lib/accounts';
 import { api, apiErrorText, failedTo } from '../lib/api';
+import { navigate } from '../lib/router';
 import { effortOptions, modelOptions } from '../lib/models';
 import { poolSide } from '../lib/pools';
 import { declaredAccountPool } from '../../../shared/poolrule';
@@ -29,7 +38,17 @@ import {
 } from './accountPicker';
 import { useAccountUsage } from './useProjectedHome';
 import { ProjectPicker } from './ProjectPicker';
+import { NAME_FIELD_CLASS, WorkspaceNameField } from './WorkspaceNameField';
+import { useNamePreview } from './useNamePreview';
+import { addRefusalText, classifyAddError } from './workspaceAddWords';
+import { LINEAR_SETTINGS_PATH, confirmLabel, nameDoorReason } from './workspaceNameWords';
 import './fleet.css';
+
+/** The new-session door's own sentences for the name field (named workspaces S8, design §2.1). */
+export const NEW_SESSION_NAME_TEXT = {
+  emptyHint: 'Leave empty to run on the main checkout, as today. Fill it to get a new workspace on its own branch.',
+  named: 'Creates a new workspace on its own branch instead of using the main checkout.',
+} as const;
 
 function ProjectRowButton({ row, selected, pool, onPick }: {
   row: ProjectRow;
@@ -127,6 +146,12 @@ export function NewSessionSheet({
   const [routeClass, setRouteClass] = useState('');
   const [routeEffort, setRouteEffort] = useState('');
   const [routeWorkflow, setRouteWorkflow] = useState('');
+  // The name field (named workspaces S8): what the operator typed, and the one sentence a refusal left behind.
+  // `notice` is shown at the step it belongs to: an account refusal on the account step, every other on the field.
+  const [name, setName] = useState('');
+  // A create answers after its sheet was closed: its words are for a sheet that is gone. Bumped on every close.
+  const generation = useRef(0);
+  const [notice, setNotice] = useState<{ step: 'account' | 'name'; text: string } | null>(null);
   const [starting, setStarting] = useState(false);
   /** `starting` has been true for long enough that "Starting…" is no longer an
    *  honest description of the wait. The server's `start`/`enable` budget is
@@ -168,6 +193,7 @@ export function NewSessionSheet({
   // A closed sheet forgets its choices — reopening starts fresh at step 1.
   useEffect(() => {
     if (open) return;
+    generation.current += 1;
     setWrapper(null);
     setProject(null);
     selectedCrossingRef.current = null;
@@ -176,6 +202,8 @@ export function NewSessionSheet({
     setRouteClass('');
     setRouteEffort('');
     setRouteWorkflow('');
+    setName('');
+    setNotice(null);
     setStarting(false);
     setSlow(false);
   }, [open]);
@@ -230,7 +258,15 @@ export function NewSessionSheet({
   const pickProject = (candidate: ProjectRow): void => {
     selectedCrossingRef.current = isCrossing(candidate);
     setProject(candidate);
+    setNotice(null);
   };
+
+  // THE NAME DOOR (S8). A crossing project or an account a workspace never starts on closes it: the field is
+  // disabled with its sentence, the preview asks nothing, and the start below is today's, whatever was typed.
+  const nameReason = project === null || wrapper === null
+    ? null
+    : nameDoorReason({ crossing: isCrossing(project), homeAble: accountIsHomeAble(roster, wrapper) });
+  const preview = useNamePreview(name, { enabled: nameReason === null });
 
   // THE SAME RULE THE SWAP PICKER ASKS, AND THAT IS A DECISION, NOT A SHARED
   // HELPER'S SIDE EFFECT (D-1978). The two surfaces were re-examined separately, because
@@ -269,8 +305,19 @@ export function NewSessionSheet({
 
   const start = async (): Promise<void> => {
     if (wrapper === null || project === null || starting) return;
+    const mine = generation.current;
     setStarting(true);
+    setNotice(null);
     try {
+      // A NAME takes the workspace create, with the account the operator picked (`--wrapper`), instead of
+      // `POST /api/sessions` and the main checkout. The preview is `empty` for a blank field AND for a closed door
+      // (`nameReason`), so a name typed before a crossing project was picked is never sent.
+      if (preview.kind === 'named') {
+        const answer = await api.workspaceAdd(project.name, { name, wrapper, ...(hasRoute ? { route } : {}) });
+        toast(`Starting ${answer.named ? answer.title : preview.title} on ${accountLabel(roster, wrapper)}…`);
+        onClose();
+        return;
+      }
       const body = {
         wrapper, project: project.name, workdir: project.workdir,
         ...(hasRoute ? { route } : {}),
@@ -281,7 +328,16 @@ export function NewSessionSheet({
       toast(`Starting ${project.name} on ${accountLabel(roster, wrapper)}…`);
       onClose();
     } catch (err) {
-      toast(failedTo('start', err), 'error');
+      if (preview.kind === 'named' && mine === generation.current) {
+        // The create's refusals stay in the sheet with the text intact (design §4.2); an account refusal sends the
+        // operator back to the account step, where the remedy is, and keeps the project and the name.
+        const refusal = classifyAddError(err);
+        const text = addRefusalText(refusal, { project: project.name, slug: preview.slug, roster });
+        setNotice({ step: refusal.kind === 'account-refused' ? 'account' : 'name', text });
+        if (refusal.kind === 'account-refused') setWrapper(null);
+      } else if (preview.kind !== 'named') {
+        toast(failedTo('start', err), 'error');
+      }
     } finally {
       setStarting(false);
     }
@@ -292,6 +348,7 @@ export function NewSessionSheet({
       {wrapper === null ? (
         <>
           <p className="sheet-copy">Pick the account it runs on — you can move it later.</p>
+          {notice?.step === 'account' && <p role="alert" className={NAME_FIELD_CLASS.refusal}>{notice.text}</p>}
           <div className="acct-list">
             {/* A lane an OPERATOR switched off is not offered — intent cannot
                 be wrong. A lane the health PROBE condemned is offered, marked
@@ -327,6 +384,7 @@ export function NewSessionSheet({
               setRouteClass('');
               setRouteEffort('');
               setRouteWorkflow('');
+              setNotice(null);
             }}
           >
             <span aria-hidden="true">‹</span> on {accountLabel(roster, wrapper)} — change
@@ -371,6 +429,23 @@ export function NewSessionSheet({
                 </>
               )}
           </ProjectPicker>
+          {/* The name field (named workspaces S8, design §2.1), after the project it belongs to. Empty is today's
+              start on the main checkout; a name starts a workspace on the account picked at step 1. */}
+          {project !== null && (
+            <div className="grid gap-2 mb-2">
+              <WorkspaceNameField
+                value={name}
+                onChange={(v) => { setName(v); setNotice(null); }}
+                preview={preview}
+                project={project.name}
+                emptyHint={NEW_SESSION_NAME_TEXT.emptyHint}
+                disabledReason={nameReason}
+                onOpenSettings={() => { onClose(); navigate(LINEAR_SETTINGS_PATH); }}
+              />
+              {preview.kind === 'named' && <p className={NAME_FIELD_CLASS.hint}>{NEW_SESSION_NAME_TEXT.named}</p>}
+              {notice?.step === 'name' && <p role="alert" className={NAME_FIELD_CLASS.refusal}>{notice.text}</p>}
+            </div>
+          )}
           {/* The optional routing row (routing spec, slice 4, Task 6): every
               option is derived from `CLASSES`/`effortOptions` at render time,
               never a hand-typed list, so a class or effort rung this build
@@ -403,14 +478,19 @@ export function NewSessionSheet({
           </p>
           <Button
             variant="primary" className="sheet-confirm"
-            disabled={project === null || starting}
+            disabled={project === null || starting || preview.kind === 'refused'}
             onClick={() => void start()}
           >
-            {starting
-              ? (slow ? 'Still starting — a cold session can take minutes' : 'Starting…')
-              : project === null
-                ? 'Choose a project'
-                : `Start ${project.name} on ${accountLabel(roster, wrapper)}`}
+            <span className="min-w-0 truncate">
+              {starting
+                ? (slow ? 'Still starting — a cold session can take minutes' : 'Starting…')
+                : project === null
+                  ? 'Choose a project'
+                  : confirmLabel(preview, {
+                    empty: `Start ${project.name} on ${accountLabel(roster, wrapper)}`,
+                    named: (short) => `Start ${short} on ${accountLabel(roster, wrapper)}`,
+                  })}
+            </span>
           </Button>
         </>
       )}

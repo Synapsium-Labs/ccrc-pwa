@@ -2,8 +2,11 @@
 // does to it. Pure; the debounce and the call are `useNamePreview`'s (workspace-name-field.test.tsx).
 import { describe, expect, it } from 'vitest';
 import {
-  LOOKUP_NOTE, confirmLabel, isResolveReason, localPreview, needsLookup, shortTitle, withLookup, type NamePreview,
+  LOOKUP_NOTE, NAME_DOOR_TEXT, confirmLabel, isResolveReason, localPreview, nameDoorReason, needsLookup, shortTitle, withLookup,
+  type NamePreview,
 } from '../src/fleet/workspaceNameWords';
+import { accountIsHomeAble } from '../src/lib/accounts';
+import { TEST_ROSTER } from './rosterFixture';
 import { NAME_REFUSAL_TEXT } from '../../shared/slug';
 
 describe('localPreview', () => {
@@ -90,6 +93,31 @@ describe('LOOKUP_NOTE', () => {
   it('reads the server\'s words and none of the client\'s own as a server reason', () => {
     for (const w of ['not-configured', 'unauthorised', 'not-found', 'timeout', 'malformed', 'unreachable']) expect(isResolveReason(w)).toBe(true);
     for (const w of ['unrecognised', 'call-failed', 'nope', 3, null, undefined]) expect(isResolveReason(w)).toBe(false);
+  });
+});
+
+describe('nameDoorReason', () => {
+  it('a crossing project and an overflow account are two conditions with two sentences', () => {
+    expect(nameDoorReason({ crossing: true, homeAble: true })).toBe(NAME_DOOR_TEXT.crossing);
+    expect(nameDoorReason({ crossing: false, homeAble: false })).toBe(NAME_DOOR_TEXT.overflow);
+    expect(NAME_DOOR_TEXT.crossing).not.toBe(NAME_DOOR_TEXT.overflow);
+  });
+
+  it('says the crossing first when both hold, since the project step can fix it', () => {
+    expect(nameDoorReason({ crossing: true, homeAble: false })).toBe(NAME_DOOR_TEXT.crossing);
+  });
+
+  it('is open for an in-pool project on a home-able account', () => {
+    expect(nameDoorReason({ crossing: false, homeAble: true })).toBeNull();
+  });
+});
+
+describe('accountIsHomeAble (absence permits)', () => {
+  it('reads the roster entry, and leaves a wrapper the roster has no entry for open', () => {
+    expect(accountIsHomeAble(TEST_ROSTER, 'claude')).toBe(true);
+    expect(accountIsHomeAble(TEST_ROSTER, 'gpt')).toBe(false);
+    expect(accountIsHomeAble(TEST_ROSTER, 'not-in-the-roster')).toBe(true);
+    expect(accountIsHomeAble([], 'claude')).toBe(true);
   });
 });
 

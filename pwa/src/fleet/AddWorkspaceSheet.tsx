@@ -24,11 +24,8 @@ import { landsOnLine, type ProjectPlacementRead } from './placementWords';
 import { useProjectedHome } from './useProjectedHome';
 import type { AddOutcome } from './useProjectRows';
 import { addRefusalText, classifyAddError } from './workspaceAddWords';
-import { confirmLabel } from './workspaceNameWords';
+import { LINEAR_SETTINGS_PATH, confirmLabel } from './workspaceNameWords';
 import './fleet.css';
-
-/** Where the field's pointer takes the operator: Settings → Security, which holds the Linear section. */
-export const LINEAR_SETTINGS_PATH = '/settings/security';
 
 export const ADD_WORKSPACE_TEXT = {
   eyebrow: 'new workspace',

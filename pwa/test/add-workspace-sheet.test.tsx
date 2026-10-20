@@ -5,10 +5,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ToastHost } from '@ccrc/ui';
-import { AddWorkspaceSheet, LINEAR_SETTINGS_PATH, type AddWorkspaceSheetProps } from '../src/fleet/AddWorkspaceSheet';
+import { AddWorkspaceSheet, type AddWorkspaceSheetProps } from '../src/fleet/AddWorkspaceSheet';
 import { NAME_FIELD_TEXT } from '../src/fleet/WorkspaceNameField';
 import type { AddOutcome } from '../src/fleet/useProjectRows';
-import { LOOKUP_NOTE } from '../src/fleet/workspaceNameWords';
+import { LINEAR_SETTINGS_PATH, LOOKUP_NOTE } from '../src/fleet/workspaceNameWords';
+import { matchRoute } from '../src/lib/routes';
 import { api } from '../src/lib/api';
 import { ApiError } from '../src/lib/apiError';
 import { TEST_ROSTER } from './rosterFixture';
@@ -279,6 +280,10 @@ describe('the Settings pointer', () => {
     fireEvent.click(screen.getByRole('button', { name: LOOKUP_NOTE['not-configured'].pointer }));
     expect(p.onClose).toHaveBeenCalledTimes(1);
     expect(window.location.pathname).toBe(LINEAR_SETTINGS_PATH);
+  });
+
+  it('points at the page the route table calls Security, which holds the Linear section', () => {
     expect(LINEAR_SETTINGS_PATH).toBe('/settings/security');
+    expect(matchRoute(LINEAR_SETTINGS_PATH)?.route.id).toBe('settings-security');
   });
 });

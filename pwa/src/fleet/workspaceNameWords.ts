@@ -112,3 +112,30 @@ export function confirmLabel(p: NamePreview, door: { empty: string; named: (shor
   if (p.kind === 'refused') return 'Fix the name to continue';
   return door.named(p.short);
 }
+
+/** Where the field's Settings pointer goes: Settings → Security, which holds the Linear section. Held equal to the
+ *  route table's own path for that page by `add-workspace-sheet.test.tsx`. */
+export const LINEAR_SETTINGS_PATH = '/settings/security';
+
+/**
+ * Why the NEW-SESSION door cannot take a name for this pick, or `null` when it can (named workspaces S8, design §2.1).
+ * Two conditions, each its own sentence, never one boolean: the operator's remedy differs (pick a project in this
+ * account's pool; pick another account). The first wins when both hold, as it is the one the project step can fix.
+ *
+ *   * `crossing`: the project is in another pool than the account's. `ws-add` has no cross-pool path and `_pool_ok`
+ *     would refuse it, so a name there could only fail after the operator typed it.
+ *   * `overflow`: the account is not home-able, an overflow lane the picker still offers for `ccd start`. A workspace
+ *     never starts on one (`_is_home_able`), and the server would refuse it as `account-refused`.
+ *
+ * The `+` door has neither condition: it places the workspace itself.
+ */
+export const NAME_DOOR_TEXT = {
+  crossing: "Named workspaces start in this account's own pool.",
+  overflow: "Workspaces don't start on overflow accounts.",
+} as const;
+
+export function nameDoorReason(pick: { crossing: boolean; homeAble: boolean }): string | null {
+  if (pick.crossing) return NAME_DOOR_TEXT.crossing;
+  if (!pick.homeAble) return NAME_DOOR_TEXT.overflow;
+  return null;
+}
