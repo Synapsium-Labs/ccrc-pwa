@@ -11,8 +11,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  freePort, killLaneProcesses, laneProxyAnswersAs, laneProxyGets, laneProxyMode, laneProxyRequests, shimRefusedPrefix,
-  spawnFakeLaneProxy, type FakeLaneProxy, type LaneProxyMode,
+  freePort, killLaneProcesses, laneProxyAnswersAs, laneProxyGets, laneProxyMode, laneProxyProbeMode, laneProxyRequests,
+  shimRefusedPrefix, spawnFakeLaneProxy, type FakeLaneProxy, type LaneProxyMode,
 } from './codexLaneFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { REASON_MAX } from '../../shared/model-advance.mjs';
@@ -67,13 +67,16 @@ describe.skipIf(PY === null)('deploy/models-canary.mjs (auto-advance spec §2.3 
     expect(c.code).toBe(0);
     expect(c.body).toEqual({ ok: true, op: 'canary', result: 'passed', status: 200, reason: null });
     // The lane probe came first, and carried no key.
-    expect(laneProxyGets(proxy)).toEqual([expect.objectContaining({ n: 1, path: '/ccgpt/lane', authorization: null })]);
-    expect(laneProxyGets(proxy)[0]!.headerNames).not.toContain('authorization');
+    expect(laneProxyGets(proxy)).toEqual([{
+      n: 1, path: '/ccgpt/lane', authorization: null, headerNames: ['accept', 'connection', 'host'],
+    }]);
     const [q] = laneProxyRequests(proxy);
     expect(q!.path).toBe('/v1/messages');
     // The vacuity control for every "the key never leaves" case below: it was read, and it went out here.
     expect(q!.authorization).toBe(`Bearer ${key}`);
-    expect(q!.headerNames).toEqual(expect.arrayContaining(['accept', 'anthropic-version', 'authorization', 'content-type']));
+    expect(q!.headerNames).toEqual([
+      'accept', 'anthropic-version', 'authorization', 'connection', 'content-length', 'content-type', 'host',
+    ]);
     expect(q!.body).toEqual({ model: 'model-6.1-gamma', max_tokens: 512, stream: true,
       messages: [{ role: 'user', content: 'Reply with the single word OK.' }], output_config: { effort: 'low' } });
   });
@@ -92,6 +95,22 @@ describe.skipIf(PY === null)('deploy/models-canary.mjs (auto-advance spec §2.3 
   it('a listener that does not answer the lane probe (404) is unavailable, and nothing is sent', () => {
     laneProxyAnswersAs(proxy, null);
     expect(canary().body).toMatchObject({ result: 'unavailable', status: null });
+    expect(laneProxyRequests(proxy)).toEqual([]);
+  });
+
+  it('a lane-probe answer over 4 KiB is unavailable, and nothing keyed is sent', () => {
+    laneProxyProbeMode(proxy, 'pad');
+    const c = canary(['--timeout-s', '10']);
+    expect(c.body).toMatchObject({ result: 'unavailable', status: null });
+    expect(c.ms).toBeLessThan(2_000);
+    expect(laneProxyRequests(proxy)).toEqual([]);
+  });
+
+  it('an endless lane-probe body is unavailable at its cap, before the deadline and without a POST', () => {
+    laneProxyProbeMode(proxy, 'flood');
+    const c = canary(['--timeout-s', '10']);
+    expect(c.body).toMatchObject({ result: 'unavailable', status: null });
+    expect(c.ms).toBeLessThan(2_000);
     expect(laneProxyRequests(proxy)).toEqual([]);
   });
 
@@ -154,6 +173,16 @@ describe.skipIf(PY === null)('deploy/models-canary.mjs (auto-advance spec §2.3 
     expect(c.ms).toBeLessThan(15_000);
   });
 
+  it('a stalled lane probe is not-ready and says that the key was not sent', () => {
+    laneProxyProbeMode(proxy, 'hang');
+    const c = canary(['--timeout-s', '2']);
+    expect(c.body).toEqual({ ok: true, op: 'canary', result: 'not-ready', status: null,
+      reason: `the lane probe on 127.0.0.1:${proxy.port} did not answer within 2s, so the key was not sent` });
+    expect(c.ms).toBeGreaterThanOrEqual(1900);
+    expect(c.ms).toBeLessThan(15_000);
+    expect(laneProxyRequests(proxy)).toEqual([]);
+  });
+
   it('a 200 that streams only thinking past the deadline is not-ready (D22), and says the lane answered', () => {
     // Pinned as the spec decides it (§2.3 step 3: a canary that ends in its own
     // timeout means not ready); the reason keeps it apart from a silent lane.
@@ -166,6 +195,14 @@ describe.skipIf(PY === null)('deploy/models-canary.mjs (auto-advance spec §2.3 
 
   it('a 200 stream of more than 256 KiB with no text is failed at the read cap, well before the deadline', () => {
     laneProxyMode(proxy, 'flood');
+    const c = canary(['--timeout-s', '10']);
+    expect(c.body).toEqual({ ok: true, op: 'canary', result: 'failed', status: 200,
+      reason: 'no-text: no text in the first 262144 bytes' });
+    expect(c.ms).toBeLessThan(9_000);
+  });
+
+  it('counts a multibyte stream against the read cap by bytes, not UTF-16 units', () => {
+    laneProxyMode(proxy, 'flood-utf8');
     const c = canary(['--timeout-s', '10']);
     expect(c.body).toEqual({ ok: true, op: 'canary', result: 'failed', status: 200,
       reason: 'no-text: no text in the first 262144 bytes' });
@@ -248,6 +285,14 @@ describe.skipIf(PY === null)('deploy/models-canary.mjs (auto-advance spec §2.3 
     expect(laneProxyRequests(proxy)).toEqual([]);
   });
 
+  it('a relative HOME is unavailable before a lane path is read', () => {
+    const c = canary([], { HOME: 'relative-home' });
+    expect(c.body).toEqual({ ok: true, op: 'canary', result: 'unavailable', status: null,
+      reason: 'HOME is not an absolute path' });
+    expect(laneProxyGets(proxy)).toEqual([]);
+    expect(laneProxyRequests(proxy)).toEqual([]);
+  });
+
   it.each([
     ['an id that is not a lane id', ['--id', '../x']],
     ['a model that is not a model id', ['--model', 'not an id']],
@@ -286,7 +331,25 @@ describe('deploy/models-canary.mjs in source (plan W2 Task 10)', () => {
     expect(s).not.toMatch(/\bconsole\./);
     expect(s).not.toMatch(/process\.stderr/);
     expect(s).toMatch(/new Agent\(/);
-    expect(s).toContain("host: '127.0.0.1'");
+  });
+
+  it('pins every request to its fresh agent and the loopback host', () => {
+    const calls = [...src().matchAll(/request\(\{([\s\S]*?)\n\s*\}\);/g)].map((m) => m[1]!);
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call).toMatch(/\bagent\b/);
+      expect(call).toContain("host: '127.0.0.1'");
+    }
+  });
+
+  it('reads each lane file through one bounded descriptor', () => {
+    const reader = /function readSmall\(p, max\) \{([\s\S]*?)\n\}/.exec(src());
+    expect(reader, 'the bounded lane-file reader is missing').not.toBeNull();
+    expect(reader![1]).toContain('fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);');
+    expect(reader![1]).toContain('const stat = fstatSync(fd);');
+    expect(reader![1]).toContain('const bytes = Buffer.allocUnsafe(max + 1);');
+    expect(reader![1]).toContain('readSync(fd, bytes, 0, bytes.length, 0);');
+    expect(reader![1]).toContain('if (fd !== null) closeSync(fd);');
   });
 
   it("the D-4933 prefix is ccd/ccgpt-proxy.py's own text", () => {

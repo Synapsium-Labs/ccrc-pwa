@@ -2096,8 +2096,9 @@ export const stateCallsNaming = (argv: readonly string[], unit: RegExp): string[
 
 /** One mode per row of the canary's classification table (plan §3.6), and the
  *  caps it reads under. */
-export type LaneProxyMode = 'ok' | `slow-ok:${number}` | 'park' | 'hang' | 'trickle' | 'flood' | '500' | '500-huge'
+export type LaneProxyMode = 'ok' | `slow-ok:${number}` | 'park' | 'hang' | 'trickle' | 'flood' | 'flood-utf8' | '500' | '500-huge'
   | '500-risk' | '502-refused' | '502-reset' | '401-echo' | 'thinking-only' | 'blank-text' | 'stream-error' | 'json-200';
+export type LaneProbeMode = 'hang' | 'pad' | 'flood';
 
 /** The shim's 502 text for a refused gateway connection it waited out
  *  (D-4933), up to its first interpolation, read out of `ccd/ccgpt-proxy.py`:
@@ -2135,6 +2136,12 @@ def lane_answer():
             v = f.read().strip()
         return None if v == "-" else v
     return LANE
+def lane_mode():
+    p = os.path.join(REC, "lane-mode")
+    if os.path.isfile(p):
+        with open(p) as f:
+            return f.read().strip()
+    return ""
 def start():
     return ("message_start", {"type": "message_start", "message": {"id": "msg_fixture", "type": "message", "role": "assistant", "content": []}})
 def thinking(t):
@@ -2162,8 +2169,10 @@ class Handler(BaseHTTPRequestHandler):
         pass
     def _json(self, code, obj):
         body = json.dumps(obj).encode()
+        self._body(code, "application/json", body)
+    def _body(self, code, content_type, body):
         self.send_response(code)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Connection", "close")
         self.end_headers()
@@ -2174,7 +2183,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
     def _event(self, name, data):
-        self.wfile.write(("event: %s\\ndata: %s\\n\\n" % (name, json.dumps(data))).encode())
+        self.wfile.write(("event: %s\\ndata: %s\\n\\n" % (name, json.dumps(data, ensure_ascii=False))).encode())
         self.wfile.flush()
     def _sse(self, events):
         self._sse_head()
@@ -2188,9 +2197,26 @@ class Handler(BaseHTTPRequestHandler):
             json.dump({"n": n, "path": self.path,
                        "headerNames": sorted(k.lower() for k in self.headers.keys()),
                        "authorization": self.headers.get("Authorization")}, f)
+        mode = lane_mode() if self.path == "/ccgpt/lane" else ""
         lane = lane_answer() if self.path == "/ccgpt/lane" else None
         if lane is None:
             return self._json(404, {"error": "not found"})
+        if mode == "pad":
+            return self._body(200, "application/json", b" " * 5000 + json.dumps({"lane": lane}).encode())
+        if mode == "hang":
+            time.sleep(60)
+            return
+        if mode == "flood":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            try:
+                while True:
+                    self.wfile.write(b" " * 1024)
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
         return self._json(200, {"lane": lane})
     def do_POST(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
@@ -2231,6 +2257,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if mode == "flood":
             return self._sse(FLOOD)
+        if mode == "flood-utf8":
+            return self._sse([thinking(chr(0xA3) * 4096) for _ in range(40)])
         if mode == "500":
             return self._json(500, {"error": {"type": "api_error", "message": "upstream error"}})
         if mode == "500-huge":
@@ -2313,6 +2341,13 @@ export function laneProxyMode(p: FakeLaneProxy, mode: LaneProxyMode, model?: str
 /** Which lane the fake's lane probe answers as from now on; null: a 404. */
 export function laneProxyAnswersAs(p: FakeLaneProxy, lane: string | null): void {
   writeFileSync(join(p.rec, 'lane'), `${lane ?? '-'}\n`);
+}
+
+/** How the fake's lane probe answers: a stalled, padded or endless response. */
+export function laneProxyProbeMode(p: FakeLaneProxy, mode: LaneProbeMode | null): void {
+  const file = join(p.rec, 'lane-mode');
+  if (mode === null) fs.rmSync(file, { force: true });
+  else writeFileSync(file, `${mode}\n`);
 }
 
 const recorded = <T extends { n: number }>(p: FakeLaneProxy, re: RegExp): T[] =>

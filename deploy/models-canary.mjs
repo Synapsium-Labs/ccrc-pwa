@@ -46,7 +46,7 @@
 // variable in the environment applies, and no name is resolved.
 
 import { Agent, request } from 'node:http';
-import { statSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 import path from 'node:path';
 // REASON_MAX: the advance file's one cap on a history reason (W1's
 // `shared/model-advance.mjs`, a pure module). A failed canary's reason becomes
@@ -54,7 +54,6 @@ import path from 'node:path';
 // holds it to, imported and never spelled again here.
 import { REASON_MAX } from '../shared/model-advance.mjs';
 import { MODEL_ID_RE, MODELS_LANE_ID_RE } from '../shared/models.mjs';
-import { readRegular } from '../shared/modelenv.mjs';
 
 /** This program's own deadline in seconds when `--timeout-s` is absent. LONGER
  *  than the shim's 60 s refused-connect wait (`UPSTREAM_WAIT_DEFAULT_S`,
@@ -101,11 +100,23 @@ function scrub(text, key) {
   return s.replace(/[^\x20-\x7e]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, REASON_MAX);
 }
 
-/** A lane file, size-bounded before it is read, then read by `readRegular`,
- *  which refuses a FIFO or a directory at once (`ENOTREG`), never opening it. */
+/** A lane file, read through one descriptor: fstat and at most `max + 1` bytes
+ *  from that descriptor. The descriptor keeps the type and size checks on one
+ *  inode, instead of checking one path then reading a replacement. */
 function readSmall(p, max) {
-  if (statSync(p).size > max) throw Object.assign(new Error(`larger than ${max} bytes`), { code: 'ETOOBIG' });
-  return readRegular(p);
+  let fd = null;
+  try {
+    fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw Object.assign(new Error('not a regular file'), { code: 'ENOTREG' });
+    if (stat.size > max) throw Object.assign(new Error(`larger than ${max} bytes`), { code: 'ETOOBIG' });
+    const bytes = Buffer.allocUnsafe(max + 1);
+    const count = readSync(fd, bytes, 0, bytes.length, 0);
+    if (count > max) throw Object.assign(new Error(`larger than ${max} bytes`), { code: 'ETOOBIG' });
+    return bytes.subarray(0, count).toString('utf8');
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
 }
 
 /** The lane's proxy port and key, or `{why}`. A `why` never quotes a file. */
@@ -168,6 +179,7 @@ function send(port, key, id, model, effort, timeoutS) {
   let req = null;
   let timer = null;
   let got200 = false;
+  let probeFinished = false;
   const finish = (result, status, reason) => {
     if (timer !== null) clearTimeout(timer);
     answer({ ok: true, op: 'canary', result, status, reason: reason === null ? null : scrub(reason, key) }, 0);
@@ -180,7 +192,9 @@ function send(port, key, id, model, effort, timeoutS) {
   };
   timer = setTimeout(() => finish('not-ready', got200 ? 200 : null, got200
     ? `the lane answered 200 but sent no text within ${timeoutS}s`
-    : `no text from the lane within ${timeoutS}s`), timeoutS * 1000);
+    : probeFinished
+      ? `no text from the lane within ${timeoutS}s`
+      : `the lane probe on 127.0.0.1:${port} did not answer within ${timeoutS}s, so the key was not sent`), timeoutS * 1000);
 
   // 1. THE LANE PROBE: no key, and nothing keyed unless it answers as `id`.
   req = request({
@@ -195,8 +209,17 @@ function send(port, key, id, model, effort, timeoutS) {
     res.setEncoding('utf8');
     res.on('error', (e) => finish('unavailable', null,
       `the lane probe on 127.0.0.1:${port} failed (socket: ${e.code ?? e.message}), so the key was not sent`));
-    res.on('data', (c) => { if (text.length < LANE_PROBE_CAP) text += c.slice(0, LANE_PROBE_CAP - text.length); });
+    res.on('data', (chunk) => {
+      const bytes = Buffer.byteLength(chunk);
+      if (bytes > LANE_PROBE_CAP - Buffer.byteLength(text)) {
+        finish('unavailable', null, `the lane probe on 127.0.0.1:${port} exceeded ${LANE_PROBE_CAP} bytes, so the key was not sent`);
+        return;
+      }
+      text += chunk;
+    });
     res.on('end', () => {
+      if (answered) return;
+      probeFinished = true;
       if (laneOf(status, type, text) !== id) {
         finish('unavailable', null, `127.0.0.1:${port} does not answer as ${id}'s shim, so the key was not sent`);
         return;
@@ -236,7 +259,7 @@ function send(port, key, id, model, effort, timeoutS) {
       let seen = 0;
       let stop = null;
       res.on('data', (chunk) => {
-        seen += chunk.length;
+        seen += Buffer.byteLength(chunk);
         buf += chunk;
         let nl = buf.indexOf('\n');
         while (nl !== -1) {
@@ -291,6 +314,9 @@ function main(argv) {
       return usage(`--timeout-s must be a whole number from 1 to ${TIMEOUT_MAX_S}`);
     }
     timeoutS = Number(t);
+  }
+  if (!path.isAbsolute(HOME)) {
+    return answer({ ok: true, op: 'canary', result: 'unavailable', status: null, reason: 'HOME is not an absolute path' }, 0);
   }
   const lane = laneInputs(id);
   if (lane.why !== undefined) {
