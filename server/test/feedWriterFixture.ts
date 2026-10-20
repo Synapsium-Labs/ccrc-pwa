@@ -18,7 +18,11 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { PushPayload } from '../src/push.js';
+import type { recordInterrupt } from '../src/interruptlog.js';
+import { noticeSink } from '../src/notice.js';
 import type { NotifyEvent } from '../../shared/api.js';
+import { buildServer } from '../src/server.js';
+import { testDeps } from './helpers.js';
 
 /** One sink call, in the order the writers made them. */
 export type FeedSinkCall = 'record' | 'flush' | 'archive' | 'push';
@@ -118,3 +122,24 @@ export const flushedAfterRecord = (calls: readonly FeedSinkCall[]): boolean => {
 
 /** A writer's degrade sentence for the scripted failure: `ccrc-server: recordFeedEvent failed (<message>) — <tail>`. */
 export const degradeLine = (tail: string): string => `ccrc-server: recordFeedEvent failed (${ARCHIVE_FAILURE}) — ${tail}`;
+
+/** D-5857 (Task C1c): the deps `recordInterrupt` is handed over a recorder, in the shape it takes on this tree. A row
+ *  that drives the interrupt writer calls this, so the writer's deps shape lives here, beside the recorder. */
+export const interruptDeps = (sinks: { notifyLog?: NotifyLog; coord?: CoordStore }): Parameters<typeof recordInterrupt>[0] =>
+  ({ notice: noticeSink(sinks) });
+
+/** D-5857 (Task C1c): the bytes `GET /api/notifications/catchup` answers a client at `seq=0` of the log's own epoch,
+ *  served by a real `buildServer` over the log (masker included), never `catchUp()` read directly. */
+export const catchUpBody = async (home: string, notifyLog: NotifyLog): Promise<string> => {
+  const app = await buildServer({ ...testDeps(home), notifyLog });
+  try {
+    return (await app.inject({ method: 'GET', url: `/api/notifications/catchup?epoch=${notifyLog.epoch}&seq=0` })).body;
+  } finally {
+    await app.close();
+  }
+};
+
+/** The catch-up bytes a client must read: the response's four keys in their order, and each event as the row spells
+ *  it, key by key. A writer that reorders its record, or a response that gains a field, differs from this. */
+export const catchUpExpected = (notifyLog: NotifyLog, events: readonly Record<string, unknown>[]): string =>
+  JSON.stringify({ epoch: notifyLog.epoch, seq: events.length === 0 ? 0 : events.at(-1)!['seq'], resync: false, events });
