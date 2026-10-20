@@ -6191,7 +6191,10 @@ export type MailGate =
   | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable'
   // D-5840 (D-5838): an `enter-ignored` PARK whose recipient's box still holds what it
   // held at the park — our own nudge, unsubmitted. Nothing is pressed or typed.
-  | 'parked';
+  | 'parked'
+  // D-5912: the send's `onDraft: 'stash'` refused — a stash already held (`stash-occupied`), or the box did not
+  // empty after `C-s` (`stash-failed`). Recorded after the send, beside its `lastError`.
+  | 'stash-failed' | 'stash-occupied';
 
 /** Total, so a refusal path added to `sweepMail` without a member here is a
  *  TS2739 rather than a silent hole — the `RUN_REFUSE_CODE_MAP` shape, and the
@@ -6202,6 +6205,7 @@ const MAIL_GATE_MAP: Record<MailGate, true> = {
   'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true, hibernated: true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
   'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true, parked: true,
+  'stash-failed': true, 'stash-occupied': true,
 };
 export const MAIL_GATES: readonly MailGate[] = Object.keys(MAIL_GATE_MAP) as MailGate[];
 

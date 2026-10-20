@@ -535,6 +535,125 @@ describe('local-loss refusals', () => {
     expect(refusal(wt, NOZ).verdict).toBe('tree-unreadable');
   });
 
+  it('retries a failed ignored-set read ONCE before it refuses (D-5884, #128)', () => {
+    // The ignored-set read is the most expensive step of an audit, and the
+    // biggest worktrees are the ones whose read loses under concurrent load:
+    // audited ten at a time, two healthy, fully merged workspaces came back
+    // `tree-unreadable`, and the same two audited one after the other minutes
+    // later came back `reapable`. A verdict that depends on concurrent load is
+    // not a verdict, so a read that fails ONCE is asked again — serialised on
+    // `$REG/.ignored-scan.lock` — before ccd calls the tree unreadable.
+    const { wt } = squashMovedBase();
+    const ONCE = `git() { if [[ "$*" == *"--ignored=matching -z"* && ! -e "$HOME/scan-failed-once" ]]; then `
+      + `: > "$HOME/scan-failed-once"; return 128; fi; command git "$@"; };`;
+    // `flock` is stubbed so the case reads the same with or without util-linux
+    // on the box, and so it can say the retry WAS serialised, and on what.
+    const LOCK = `flock() { printf '%s\\n' "$*" >> "$HOME/flock-calls"; return 0; };`;
+    const a = audit(`${ONCE} ${LOCK}`);
+    expect(fs.existsSync(path.join(h.home, 'scan-failed-once')), 'the stub never failed the read').toBe(true);
+    expect(fs.readFileSync(path.join(h.home, 'flock-calls'), 'utf8'), 'the retry was not serialised').toMatch(/^-w 5 \d+$/m);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.ignored-scan.lock'))).toBe(true);
+    // And the lock is LET GO: the rest of the audit (the fetch, the PR read)
+    // must not run holding it, or the lock serialises far more than the scan.
+    fs.rmSync(path.join(h.home, 'scan-failed-once'));
+    expect(h.sh(`${ONCE} ${LOCK} a=$(ls /dev/fd | wc -l); _ws_collect_ignored_settled "${wt}"; r=$?; `
+      + `b=$(ls /dev/fd | wc -l); echo "rc=$r $((b - a))"`).trim()).toBe('rc=0 0');
+    expect(a.verdict, a.detail).toBe('reapable');
+    expect(a.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(fs.existsSync(wt)).toBe(true);
+  }, 30000);
+
+  it('refuses a scan that KEEPS running out of time as a timeout, never as unreadable (D-5884, #128)', () => {
+    // A tree that is merely slow is not a tree ccd could not read, and the
+    // detail is the only place a human can tell the two apart. Both attempts
+    // are counted, so a retry that silently stopped happening fails here too.
+    const { wt } = squashMovedBase(['build/']);
+    fs.mkdirSync(path.join(wt, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', 'out.o'), 'ordinary rubbish\n');
+    // Only the sensitive-set walk (`find … -mindepth 1 \( …`) runs out of time:
+    // the audit runs other bounded `find`s, and counting them would count
+    // something other than the retry.
+    const SLOW = `timeout() { case "$1" in -*) return 125 ;; esac; `
+      + `[[ "$*" == *" find "*"-mindepth 1 ("* ]] && { echo x >> "$HOME/find-timeouts"; return 124; }; shift; "$@"; };`;
+    const a = refusal(wt, SLOW);
+    expect(a.verdict).toBe('tree-unreadable');
+    expect(a.detail, a.detail).toContain('scan-timeout');
+    expect(a.detail, a.detail).toContain('did not finish within');
+    expect(a.detail, a.detail).toContain('remove or move the largest ignored directory');
+    expect(a.detail, a.detail).not.toContain('could not read');
+    expect(a.detail, a.detail).toContain('both times');
+    expect(fs.readFileSync(path.join(h.home, 'find-timeouts'), 'utf8').trim().split('\n')).toHaveLength(2);
+  }, 30000);
+
+  it('says only the RETRY ran out of time when the first read failed another way (D-5884, #128)', () => {
+    // `_ws_collect_ignored` clears its timeout flag on every attempt, so the
+    // detail must not claim "both times" from the second attempt alone.
+    const { wt } = squashMovedBase(['build/']);
+    fs.mkdirSync(path.join(wt, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', 'out.o'), 'ordinary rubbish\n');
+    const FIRST128 = `git() { if [[ "$*" == *"--ignored=matching -z"* && ! -e "$HOME/scan-failed-once" ]]; then `
+      + `: > "$HOME/scan-failed-once"; return 128; fi; command git "$@"; };`;
+    const SLOW = `timeout() { case "$1" in -*) return 125 ;; esac; `
+      + `[[ "$*" == *" find "*"-mindepth 1 ("* ]] && return 124; shift; "$@"; };`;
+    const a = refusal(wt, `${FIRST128} ${SLOW}`);
+    expect(fs.existsSync(path.join(h.home, 'scan-failed-once')), 'the stub never failed the read').toBe(true);
+    expect(a.verdict).toBe('tree-unreadable');
+    expect(a.detail, a.detail).toContain('scan-timeout');
+    expect(a.detail, a.detail).toContain('on the retry');
+    expect(a.detail, a.detail).not.toContain('both times');
+  }, 30000);
+
+  it('retries even when the lock wait runs out — the lock is never a gate (D-5884, #128)', () => {
+    // A contended lock whose wait expires must still retry, unlocked: a
+    // `flock` failure that skipped the retry would bring back the false
+    // `tree-unreadable` under load that the retry exists to remove.
+    const { wt } = squashMovedBase();
+    const ONCE = `git() { if [[ "$*" == *"--ignored=matching -z"* ]]; then echo x >> "$HOME/ign-reads"; `
+      + `[[ -e "$HOME/scan-failed-once" ]] || { : > "$HOME/scan-failed-once"; return 128; }; fi; command git "$@"; };`;
+    const BUSY = `flock() { printf '%s\\n' "$*" >> "$HOME/flock-calls"; return 1; };`;
+    const a = audit(`${ONCE} ${BUSY}`);
+    expect(fs.readFileSync(path.join(h.home, 'flock-calls'), 'utf8'), 'the lock was never tried').toMatch(/^-w 5 \d+$/m);
+    expect(a.verdict, a.detail).toBe('reapable');
+    expect(fs.readFileSync(path.join(h.home, 'ign-reads'), 'utf8').trim().split('\n').length).toBeGreaterThanOrEqual(2);
+  }, 30000);
+
+  it('calls a spent scan budget a timeout too, not an unreadable tree (D-5884, #128)', () => {
+    // The OTHER expiry arm: the whole-workspace deadline is already spent when
+    // the walk reaches an ignored directory, so `find` is never run at all. A
+    // zero budget is the only way a fixture reaches it without a slow tree.
+    const { wt } = squashMovedBase(['build/']);
+    fs.mkdirSync(path.join(wt, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', 'out.o'), 'ordinary rubbish\n');
+    const a = refusal(wt, 'REAP_SCAN_SECONDS=0;');
+    expect(a.verdict).toBe('tree-unreadable');
+    expect(a.detail, a.detail).toContain('scan-timeout');
+    expect(a.detail, a.detail).not.toContain('could not read');
+  }, 30000);
+
+  it('names what the failed ignored-set read said, and still refuses it after the retry (D-5885, #128)', () => {
+    // The original sighting could not be diagnosed because the detail named the
+    // path and not what went wrong. A read that fails every time is still
+    // `tree-unreadable` — the retry never turns a failure into a pass — and the
+    // detail now carries git's exit status and its first line of stderr.
+    const { wt } = squashMovedBase();
+    const NOIGN = `git() { [[ "$*" == *"--ignored=matching -z"* ]] && { echo x >> "$HOME/ign-reads"; `
+      + `echo 'fatal: unable to read the index' >&2; return 128; }; command git "$@"; };`;
+    const a = refusal(wt, NOIGN);
+    expect(a.verdict).toBe('tree-unreadable');
+    expect(a.detail, a.detail).toContain('could not read the ignored set');
+    expect(a.detail, a.detail).toContain('exited 128');
+    expect(a.detail, a.detail).toContain('fatal: unable to read the index');
+    expect(a.detail, a.detail).not.toContain('scan-timeout');
+    expect(fs.readFileSync(path.join(h.home, 'ign-reads'), 'utf8').trim().split('\n')).toHaveLength(2);
+    // And a read that exits 0 but WARNS — the partially unreadable tree — names
+    // the warning, because that is the case whose cause is in stderr alone.
+    const WARN = `git() { [[ "$*" == *"--ignored=matching -z"* ]] && { command git "$@"; `
+      + `echo "warning: could not open directory 'sub/'" >&2; return 0; }; command git "$@"; };`;
+    const w = refusal(wt, WARN);
+    expect(w.verdict).toBe('tree-unreadable');
+    expect(w.detail, w.detail).toContain("warned: warning: could not open directory 'sub/'");
+  }, 30000);
+
   it('takes only the `!! ` lines from a status that also has dirty ones', () => {
     // The `!! ` filter, deletable with the suite green because Phase B refuses
     // `dirty-tree` BEFORE the collector ever sees a mixed status — so the only
