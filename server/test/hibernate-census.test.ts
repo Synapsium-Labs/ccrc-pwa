@@ -105,8 +105,8 @@ const CENSUS: readonly Row[] = [
   { source: 'dead-compare', file: 'pwa/src/fleet/hibernated.ts', hits: 1, stances: ['definition'],
     why: '`hibernatedSince`, the PWA\'s one reader of `hibernatedAt`: a row is asleep only while it is `dead` with the '
       + 'marker (both halves), so a crash is never woken and a stale marker on a live row is ignored' },
-  { source: 'dead-compare', file: 'pwa/src/session/SessionHeader.tsx', hits: 4, stances: ['consults'],
-    why: 'forces bucket `dead` for a dead stream and paints the ✕ lamp ("not running") with the word `exited` '
+  { source: 'dead-compare', file: 'pwa/src/session/sessionHeaderView.ts', hits: 4, stances: ['consults'],
+    why: 'the session header\'s view (W2 S7a, D-5471; `SessionHeader` renders it) forces bucket `dead` for a dead stream and paints the ✕ lamp ("not running") with the word `exited` '
       + '(`headerStatusWord`, D-5545); a dead row with `hibernatedAt` (`hibernatedSince`) reads `hibernated` with the '
       + 'calm dot instead, so "not running" never sits above "Waking…"' },
   { source: 'dead-compare', file: 'pwa/src/fleet/SessionActionsSheet.tsx', hits: 6, stances: ['consults', 'true-of-pane'],
