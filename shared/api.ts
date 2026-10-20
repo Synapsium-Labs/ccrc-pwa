@@ -4855,6 +4855,41 @@ export const IDLE_RUN_STATES = ['planned', 'awaiting-review', 'merging', 'closin
 export const TERMINAL_RUN_STATES = ['done', 'failed'] as const satisfies readonly RunState[];
 
 /**
+ * THE DRIFT KINDS (coordinator-durability tail spec §4.2, `drift-decider-pure` (D-5921)): what the drift
+ * reconciler can find out of step, each mapped to the kind of subject it names, so a finding's target is a run
+ * (`/runs`) or a session (`/s/<id>`). The one home of the list: `DRIFT_KINDS` is this map's keys and
+ * `isDriftKind` the one narrowing of an untrusted string. The decider is `server/src/coord/drift.ts`.
+ */
+export const DRIFT_KIND_MAP = {
+  'run-quiet': 'run',
+  'claimant-gone': 'run',
+  'mail-parked': 'session',
+  'mail-held': 'session',
+  'parent-mismatch': 'session',
+  'review-waiting': 'run',
+  'question-orphaned': 'session',
+} as const satisfies Record<string, 'run' | 'session'>;
+export type DriftKind = keyof typeof DRIFT_KIND_MAP;
+export const DRIFT_KINDS: readonly DriftKind[] = Object.keys(DRIFT_KIND_MAP) as DriftKind[];
+export function isDriftKind(raw: unknown): raw is DriftKind {
+  return typeof raw === 'string' && Object.prototype.hasOwnProperty.call(DRIFT_KIND_MAP, raw);
+}
+
+/** One finding (D-5921). `key` names the subject, so the same drift is the same key on every pass; `subject` is
+ *  the JSON of the ids it names; `detail` one line in words; `factAt` the fact's own time where it has one, else
+ *  null (its age then runs from first sight). `runId` is set on a run kind (for `claimant-gone`, the programme's
+ *  newest open run) and `sessionId` on a session kind; each is null where it does not apply. */
+export interface DriftFinding {
+  readonly key: string;
+  readonly kind: DriftKind;
+  readonly subject: string;
+  readonly detail: string;
+  readonly factAt: number | null;
+  readonly runId: number | null;
+  readonly sessionId: string | null;
+}
+
+/**
  * The REVIEW run's machine (design 2026-09-14 §5.2). A review run has no
  * `awaiting-review`, `merging` or `closing`: it has nothing to review, merge
  * or release-with-ceremony, and reusing those states would make the table lie
