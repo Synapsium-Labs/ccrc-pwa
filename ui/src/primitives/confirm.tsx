@@ -39,7 +39,10 @@ import { Sheet } from './sheet';
  *  package deleted, so bare hooks rendered unstyled (ink colour, no margin,
  *  buttons touching), caught by the takeover's per-width visual check. Both
  *  hooks are in `design-system-boundary`'s OWNED list now. */
-export const QC_CONSEQUENCE = 'qc-consequence mb-5 text-base leading-normal text-ink-secondary';
+/** `last:mb-0` (D-5932): the answers left the body for the Sheet's footer, so a consequence that ends its body or
+ *  its card is followed by nothing, and its margin would only pad the card's foot (the footer parts itself). */
+export const QC_CONSEQUENCE = 'qc-consequence mb-5 last:mb-0 text-base leading-normal text-ink-secondary';
+/** The row of answers goes in the `Sheet`'s `footer`, never in its children, so it is pinned (D-5932). */
 export const QC_ACTIONS = 'qc-actions grid gap-2';
 
 /** Cancel first (D-5507, settings spec §6.3): while `on`, a confirm opens with its Cancel focused, so an Enter or a
@@ -95,26 +98,34 @@ export function QuickConfirm({
   const cancelRef = useCancelFirst(open, cancelFirst);
   const lines = typeof consequence === 'string' ? [consequence] : consequence;
   return (
-    <Sheet open={open} onClose={onClose} title={title} initialFocus={cancelRef}>
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title={title}
+      initialFocus={cancelRef}
+      // The answers are pinned in the Sheet's footer (D-5932): a long consequence scrolls, they stay.
+      footer={
+        <div className={QC_ACTIONS}>
+          <Button
+            variant={tone === 'danger' ? 'danger' : 'primary'}
+            onClick={() => {
+              onConfirm();
+              onClose();
+            }}
+          >
+            {confirmLabel}
+          </Button>
+          <Button ref={cancelRef} variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
+      }
+    >
       {lines.map((line, i) => (
         <p key={i} className={QC_CONSEQUENCE}>
           {line}
         </p>
       ))}
-      <div className={QC_ACTIONS}>
-        <Button
-          variant={tone === 'danger' ? 'danger' : 'primary'}
-          onClick={() => {
-            onConfirm();
-            onClose();
-          }}
-        >
-          {confirmLabel}
-        </Button>
-        <Button ref={cancelRef} variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-      </div>
     </Sheet>
   );
 }

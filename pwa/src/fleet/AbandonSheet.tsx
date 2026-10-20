@@ -273,11 +273,12 @@ export function AbandonSheet({
   };
 
   return (
-    <Sheet open onClose={onClose} title="Abandon this run?">
-      <div className="abandon-sheet">
-        <p className={QC_CONSEQUENCE}>
-          {abandonConsequence(run, workspaceChild)}
-        </p>
+    <Sheet
+      open
+      onClose={onClose}
+      title="Abandon this run?"
+      // The answers are pinned in the Sheet's footer (D-5932).
+      footer={
         <div className={QC_ACTIONS}>
           <Button variant="danger" disabled={busy} onClick={confirm}>
             {busy ? 'Abandoning…' : 'Abandon'}
@@ -286,6 +287,12 @@ export function AbandonSheet({
             Cancel
           </Button>
         </div>
+      }
+    >
+      <div className="abandon-sheet">
+        <p className={QC_CONSEQUENCE}>
+          {abandonConsequence(run, workspaceChild)}
+        </p>
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>
     </Sheet>
