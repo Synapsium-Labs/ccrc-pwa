@@ -19,6 +19,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { PushPayload } from '../src/push.js';
 import type { recordInterrupt } from '../src/interruptlog.js';
+import { noticeSink } from '../src/notice.js';
 import type { NotifyEvent } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import { testDeps } from './helpers.js';
@@ -125,7 +126,7 @@ export const degradeLine = (tail: string): string => `ccrc-server: recordFeedEve
 /** D-5857 (Task C1c): the deps `recordInterrupt` is handed over a recorder, in the shape it takes on this tree. A row
  *  that drives the interrupt writer calls this, so the writer's deps shape lives here, beside the recorder. */
 export const interruptDeps = (sinks: { notifyLog?: NotifyLog; coord?: CoordStore }): Parameters<typeof recordInterrupt>[0] =>
-  ({ ...(sinks.notifyLog ? { notifyLog: sinks.notifyLog } : {}), ...(sinks.coord ? { coord: sinks.coord } : {}) });
+  ({ notice: noticeSink(sinks) });
 
 /** D-5857 (Task C1c): the bytes `GET /api/notifications/catchup` answers a client at `seq=0` of the log's own epoch,
  *  served by a real `buildServer` over the log (masker included), never `catchUp()` read directly. */
