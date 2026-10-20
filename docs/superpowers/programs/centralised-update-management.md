@@ -2309,6 +2309,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
           pruning), with size only as a 10G backstop. The free-disk line (server under 15G) stands; 27G free.
         - STATUS: fleet and server v0.0.436, newest v0.0.436, stable v0.0.328, intent dev/auto=off, backups fleet
           200M/server 5318M, disk free fleet 208G/work volume 86G/server 27G.
+      - 08:55: both boxes moved to v0.0.439 (#856) by the operator's console tap, fleet 08:50:23 to 08:52:01, then
+        the server 08:53:02 to 08:54:32; both `done`, `from: pwa`, gates passed, doctor 0 failed on both boxes.
+        Server backups 5699M, 10 kept, the newest 714M. STATUS: fleet and server v0.0.439, newest v0.0.439, stable
+        v0.0.328, intent dev/auto=off, backups fleet 201M/server 5699M, disk free fleet 208G/work volume 86G/server
+        27G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
