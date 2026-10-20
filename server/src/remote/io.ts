@@ -12,7 +12,7 @@ import type { FleetClient } from './client.js';
  *
  * `readFileMeasured` is the one exception: it is the SINGLE READER of the
  * `read` op's `absent?: true` wire field (`{data: string|null, absent?:
- * true}`, `shared/agent-protocol.ts:105`). `absent` is set true ONLY on the
+ * true}`, `shared/agent-protocol.ts#ResOk`'s op payloads). `absent` is set true ONLY on the
  * agent's own proven ENOENT; anything else — including an OLDER agent whose
  * response omits the field entirely — must fail SHUT to `unreadable`, never
  * be assumed `absent`. A rejected request (disconnected/timeout/forbidden/
