@@ -15464,6 +15464,9 @@ Each entry is filled at the fix round: one sub-bullet per slug or item, in task 
     unlinks or replaces the file between the two reads makes the map read fail, so the reader answers 1 where it
     answered 0. Through `_ws_leaf_checkout_one` a measured answer becomes rc 2 (unmeasured), and in the compare-and-drop
     the witness is moved back and kept. Both fail safe, and ws-expire's tail reaches it.
+  - After the fix round's review, the three single-occurrence `.replace` calls in `ccd-leaf-nul-backlink.test.ts` that
+    swap the path's one newline and a NUL became `.replaceAll`, with the same arguments, so the code scan reads them as
+    complete. Each CONTROL asserts exactly one occurrence, so the cases are unchanged.
 - **D-5172** (Task 3) `w2-task-3-plan-text`: each case's measured rounds and final states; S2 to S6 measured; S1 deferred to Task 6.
   - Round counts and final states. Both runs of the fence passed all six cases. `late-3` settled in 1 round
     (`["not-witnessed"]`) and `late-4` in 2 (`["collectable","not-witnessed"]`), as drafted. No case ended in a state

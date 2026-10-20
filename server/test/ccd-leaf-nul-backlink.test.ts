@@ -118,9 +118,9 @@ describe('a back-link with a NUL inside the path it names is refused (TR8)', () 
   }, 60_000);
 
   it('a NUL at the offset of the path’s newline — accepted before this wave — is refused', () => {
-    const f = linked(NL, (g) => `${g.replace('\n', '\0')}\n`);
+    const f = linked(NL, (g) => `${g.replaceAll('\n', '\0')}\n`);
     expect(f.split('\n').length - 1, 'the CONTROL: the `.git` path holds exactly one newline').toBe(1);
-    expect(fs.readFileSync(path.join(admOf(), 'gitdir'), 'utf8').replace('\0', '\n'),
+    expect(fs.readFileSync(path.join(admOf(), 'gitdir'), 'utf8').replaceAll('\0', '\n'),
       'the CONTROL: read with its NUL as a newline, the back-link IS the `.git` path').toBe(`${f}\n`);
     const a = ask(leafOf());
     expect(a.rc, a.why).toBe('1');
@@ -164,7 +164,7 @@ describe('a back-link with a NUL inside the path it names is refused (TR8)', () 
 
 describe('_ws_leaf_remove keeps a leaf whose tree has such a back-link (the tail reaches it)', () => {
   it('a leaf holding a tree whose back-link has a NUL inside its path is refused, and every file stands', () => {
-    const f = linked(NL, (g) => `${g.replace('\n', '\0')}\n`);
+    const f = linked(NL, (g) => `${g.replaceAll('\n', '\0')}\n`);
     const r = remove(rootOf(), ID);
     expect(r.rc, r.why).toBe('1');
     expect(r.why).toBe(`${nulWhy(f)} — nothing under ${leafOf()} was removed`);
