@@ -7,7 +7,7 @@
 // keeps its Retry/Discard).
 import { useEffect, useRef, useState } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
-import { AttachButton, AttachTray, Button, Sheet, Well } from '@ccrc/ui';
+import { AttachButton, AttachTray, Button, Icon, Sheet, Well } from '@ccrc/ui';
 import type { PendingAttachment, PendingSend } from '../stores/session';
 import { ATTACH_ACCEPT, clipboardFiles, isAttachable, useStagedImages } from './useAttachImage';
 import { api } from '../lib/api';
@@ -30,6 +30,11 @@ export interface ComposerProps {
   /** Store resolve — re-sends a draft-conflicted pending in place, same
    *  record, so its attachments and preview URLs survive. */
   onResolve?: (key: string, text: string, opts: { replaceDraft: boolean }) => void;
+  /** The LIVE status is `busy` (W2 Task S7b, D-5471): the send slot carries Stop. */
+  busy?: boolean;
+  /** Stop in the send slot. It reports `keycap`, the word the server already records for the on-screen control:
+   *  W2 changes no wire (D-5471), so the type admits no new source. */
+  onInterrupt?: (source: 'keycap') => void;
 }
 
 interface DraftConflict {
@@ -45,6 +50,8 @@ export function Composer({
   disabled = false,
   placeholder = 'Message this session',
   onResolve,
+  busy = false,
+  onInterrupt,
 }: ComposerProps): ReactNode {
   const [value, setValue] = useState('');
   const [conflict, setConflict] = useState<DraftConflict | null>(null);
@@ -117,6 +124,14 @@ export function Composer({
     .map((i) => ({ path: i.path!, previewUrl: i.previewUrl }));
   const canSend = !disabled && !staged.hasFailed && !staged.uploading
     && (value.trim() !== '' || attachments.length > 0);
+
+  // Stop in the send slot (W2 Task S7b; D-5471, inside D-5099's "Later"). While a turn runs and nothing is drafted,
+  // the slot IS Stop. Anything drafted (a word or a staged image) returns the slot to Send, since sending during a
+  // turn is unchanged, and keeps a quieter Stop beside it, so Stop is never more than one tap away. Both skins render
+  // this composer, so both get it; the Escape key's interrupt stays `useEscapeInterrupt`'s.
+  const stopping = busy && onInterrupt !== undefined;
+  const drafted = value.trim() !== '' || staged.images.length > 0;
+  const stop = (): void => onInterrupt?.('keycap');
 
   const send = (): void => {
     if (!canSend) return;
@@ -284,15 +299,30 @@ export function Composer({
         {id !== undefined && (
           <AttachButton accept={ATTACH_ACCEPT} disabled={disabled} onPick={(files) => staged.add(files)} />
         )}
-        <button
-          type="button"
-          className="send-btn"
-          aria-label="Send"
-          disabled={!canSend}
-          onClick={send}
-        >
-          <span aria-hidden="true">↑</span>
-        </button>
+        {stopping && !drafted ? (
+          <Button variant="danger" size="fit" className="stop-slot flex-none gap-2 rounded-full" onClick={stop}>
+            <Icon name="square" />
+            Stop
+          </Button>
+        ) : (
+          <>
+            {stopping && (
+              <Button variant="danger-ghost" size="fit" className="stop-slot flex-none min-w-tap rounded-full"
+                aria-label="Stop" onClick={stop}>
+                <Icon name="square" />
+              </Button>
+            )}
+            <button
+              type="button"
+              className="send-btn"
+              aria-label="Send"
+              disabled={!canSend}
+              onClick={send}
+            >
+              <span aria-hidden="true">↑</span>
+            </button>
+          </>
+        )}
       </div>
 
       <Sheet
