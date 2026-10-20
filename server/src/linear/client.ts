@@ -29,7 +29,7 @@
  * in any tracked file or any blob the branch adds.
  */
 import type { LinearFailure } from '../../../shared/linear.js';
-import { WS_TITLE_MAX_BYTES } from '../../../shared/slug.js';
+import { sanitizeTitle } from '../../../shared/slug.js';
 import { valueDigestHex } from '../token/files.js';
 import type { LinearKeyRead } from './connection.js';
 
@@ -44,32 +44,6 @@ export const LINEAR_API_PATH = '/graphql';
  * for the same reason.
  */
 export const LINEAR_TIMEOUT_MS = 8_000;
-
-const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
-
-/**
- * A title ccd will accept: every run of control characters becomes ONE space
- * (ccd refuses a control character in `--title`, so an unsanitised issue title
- * could turn a lookup into a 502), the result is trimmed, and a result over the
- * cap is SHORTENED with `…`, never refused. The cap is `WS_TITLE_MAX_BYTES`, ccd's own
- * `--title` bound, in UTF-8 BYTES (`_lc_dec_ok` runs under `LC_ALL=C`, so an emoji spends four). Shortening walks whole code points,
- * so it cannot split a character, and drops a space the cut would leave in
- * front of the ellipsis.
- */
-export function sanitizeTitle(raw: string): string {
-  const s = raw.replace(/\p{Cc}+/gu, ' ').trim();
-  if (utf8Bytes(s) <= WS_TITLE_MAX_BYTES) return s;
-  const budget = WS_TITLE_MAX_BYTES - utf8Bytes('…');
-  let kept = '';
-  let used = 0;
-  for (const ch of s) {
-    const n = utf8Bytes(ch);
-    if (used + n > budget) break;
-    kept += ch;
-    used += n;
-  }
-  return `${kept.trimEnd()}…`;
-}
 
 /** The ticket half of a parsed name. Structural, so `shared/slug.ts`'s `LinearRef` satisfies it. */
 export interface LinearTicket { key: string; num: string }

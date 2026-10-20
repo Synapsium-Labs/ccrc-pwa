@@ -8,7 +8,7 @@ import {
 import { accountIsHomeAble } from '../src/lib/accounts';
 import { LINEAR_FAILURES } from '../../shared/linear';
 import { TEST_ROSTER } from './rosterFixture';
-import { NAME_REFUSAL_TEXT } from '../../shared/slug';
+import { NAME_REFUSAL_TEXT, WS_TITLE_MAX_BYTES, sanitizeTitle } from '../../shared/slug';
 
 describe('localPreview', () => {
   it('an empty or blank field is today: nothing to send', () => {
@@ -26,6 +26,28 @@ describe('localPreview', () => {
     const p = localPreview('Login cleanup');
     expect(p).toMatchObject({ kind: 'named', slug: 'login-cleanup', title: 'Login cleanup', lookup: 'none', note: null });
     expect(needsLookup(p)).toBe(false);
+  });
+
+  it('shows the title the create will SAVE: control runs become one space, and a name past the byte cap ends in an ellipsis', () => {
+    // The route saves `sanitizeTitle(offlineTitle(name) ?? name.trim())` (`server/test/workspaces-named-route.test.ts` pins that
+    // argv); the preview must show the same text, not the whole of what was typed.
+    expect(localPreview('Login\tcleanup\n\nflow')).toMatchObject({ kind: 'named', title: 'Login cleanup flow', short: 'Login cleanup flow' });
+    const typed = 'word '.repeat(200).trim();
+    const p = localPreview(typed);
+    if (p.kind !== 'named') throw new Error('expected a named preview');
+    expect(new TextEncoder().encode(p.title).length).toBeLessThanOrEqual(WS_TITLE_MAX_BYTES);
+    expect(p.title.endsWith('…')).toBe(true);
+    expect(p.title).toBe(sanitizeTitle(typed));
+    expect(p.title.length).toBeLessThan(typed.length);
+    // Whole code points: four-byte glyphs are not split by the cut.
+    const emoji = localPreview(`ab ${'😀'.repeat(300)}`);
+    if (emoji.kind !== 'named') throw new Error('expected a named preview');
+    expect(emoji.title).not.toContain('\uFFFD');
+    expect(new TextEncoder().encode(emoji.title).length).toBeLessThanOrEqual(WS_TITLE_MAX_BYTES);
+  });
+
+  it('a name that fits is shown exactly as typed, trimmed', () => {
+    expect(localPreview('  Login cleanup  ')).toMatchObject({ title: 'Login cleanup' });
   });
 
   it('a ticket id is pending, with the offline title and the slug', () => {

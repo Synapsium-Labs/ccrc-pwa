@@ -11,7 +11,7 @@
 // NEVER A GATE. Every fallback keeps the title the operator typed and leaves the create open: "Linear is a lookup,
 // never a gate" (design §In short). A refusal here is the GRAMMAR's (`NameRefusal`), never Linear's.
 import { LINEAR_FAILURES, type LinearFailure } from '../../../shared/linear';
-import { NAME_REFUSAL_TEXT, deriveWorkspaceSlug, offlineTitle, type NameRefusal } from '../../../shared/slug';
+import { NAME_REFUSAL_TEXT, deriveWorkspaceSlug, offlineTitle, sanitizeTitle, type NameRefusal } from '../../../shared/slug';
 
 /** The two notes that are this client's: the preview call itself failed, or answered a word this build does not know. */
 type ClientNote = 'unrecognised' | 'call-failed';
@@ -90,7 +90,9 @@ export function localPreview(value: string): NamePreview {
   if (ask.kind === 'auto') return { kind: 'empty' };
   if (ask.kind === 'refused') return { kind: 'refused', reason: ask.reason, text: NAME_REFUSAL_TEXT[ask.reason] };
   // `offlineTitle` is null only for an empty or refused name, which `ask` is not; the typed text is the safe reading.
-  const title = offlineTitle(value) ?? value.trim();
+  // SANITISED AND CAPPED exactly as the create saves it (`sanitizeTitle`, the one function both sides call), so the
+  // title the sheet shows is the title the board gets: a name past the byte cap reads here as it will be saved, ending in "…".
+  const title = sanitizeTitle(offlineTitle(value) ?? value.trim());
   return {
     kind: 'named', slug: ask.slug, shortened: ask.shortened, title, short: shortTitle(title),
     lookup: ask.ticket === null ? 'none' : 'pending', note: null,

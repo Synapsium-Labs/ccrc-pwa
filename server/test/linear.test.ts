@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   LINEAR_API_ORIGIN, LINEAR_API_PATH, LINEAR_TIMEOUT_MS,
-  lookupLinearIssue, sanitizeTitle, verifyLinearKey, type FetchLike, type LinearLookup,
+  lookupLinearIssue, verifyLinearKey, type FetchLike, type LinearLookup,
 } from '../src/linear/client.js';
 import { LINEAR_KEY_FILE, linearKeyPath, readLinearKey, type LinearKeyRead } from '../src/linear/connection.js';
 import { ticketTitle } from '../src/linear/title.js';
@@ -235,47 +235,6 @@ describe('lookupLinearIssue', () => {
     expect(new Set(LINEAR_FAILURES).size).toBe(LINEAR_FAILURES.length);
     expect([...LINEAR_FAILURES].sort())
       .toEqual(['forbidden', 'malformed', 'not-configured', 'not-found', 'timeout', 'unauthorised', 'unreachable']);
-  });
-});
-
-describe('sanitizeTitle', () => {
-  it('turns a run of control characters into ONE space', () => {
-    expect(sanitizeTitle('a\tb')).toBe('a b');
-    expect(sanitizeTitle('a\n\r\n\tb')).toBe('a b');
-    expect(sanitizeTitle('a\u0000\u001f\u007fb')).toBe('a b');
-  });
-
-  it('trims, and leaves a title that already fits exactly as it was', () => {
-    expect(sanitizeTitle('  ENG-1234 - Fix the login flow \n')).toBe('ENG-1234 - Fix the login flow');
-    expect(sanitizeTitle('Café — naïve ✓')).toBe('Café — naïve ✓');
-  });
-
-  it('keeps a title of exactly the cap, and shortens one a byte over', () => {
-    const exact = 'x'.repeat(WS_TITLE_MAX_BYTES);
-    expect(sanitizeTitle(exact)).toBe(exact);
-    const over = sanitizeTitle('x'.repeat(WS_TITLE_MAX_BYTES + 1));
-    expect(bytes(over)).toBeLessThanOrEqual(WS_TITLE_MAX_BYTES);
-    expect(over.endsWith('…')).toBe(true);
-    expect(over).toBe('x'.repeat(WS_TITLE_MAX_BYTES - 3) + '…');
-  });
-
-  it('measures BYTES, not characters, and never splits a character', () => {
-    // 200 four-byte glyphs: 800 bytes in 200 code points (400 UTF-16 units).
-    const emoji = sanitizeTitle('😀'.repeat(200));
-    expect(bytes(emoji)).toBeLessThanOrEqual(WS_TITLE_MAX_BYTES);
-    expect(emoji).not.toContain('�');
-    expect(emoji.endsWith('…')).toBe(true);
-    // Two-byte letters: 300 of them is 600 bytes.
-    const accented = sanitizeTitle('é'.repeat(300));
-    expect(bytes(accented)).toBeLessThanOrEqual(WS_TITLE_MAX_BYTES);
-    expect(accented.endsWith('…')).toBe(true);
-  });
-
-  it('drops a space the cut would leave in front of the ellipsis', () => {
-    const t = `${'x'.repeat(WS_TITLE_MAX_BYTES - 4)} tail that does not fit`;
-    const s = sanitizeTitle(t);
-    expect(s.endsWith(' …')).toBe(false);
-    expect(s.endsWith('…')).toBe(true);
   });
 });
 

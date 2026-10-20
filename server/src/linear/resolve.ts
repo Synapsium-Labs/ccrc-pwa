@@ -11,8 +11,8 @@
  * offline title carrying its fixed word as `reason`, and neither the key, its digest nor Linear's text leaves it.
  */
 import type { LinearFailure, ResolveAnswer } from '../../../shared/linear.js';
-import { deriveWorkspaceSlug, offlineTitle, type SlugAsk } from '../../../shared/slug.js';
-import { lookupLinearIssue, sanitizeTitle, type FetchLike } from './client.js';
+import { deriveWorkspaceSlug, offlineTitle, sanitizeTitle, type SlugAsk } from '../../../shared/slug.js';
+import { lookupLinearIssue, type FetchLike } from './client.js';
 import { markLinearRejected, readLinearKey } from './connection.js';
 import { ticketTitle } from './title.js';
 

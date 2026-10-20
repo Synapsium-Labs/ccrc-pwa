@@ -278,9 +278,9 @@ export function isWsProject(s: string): boolean {
  * title with `_lc_dec_ok`, the lifecycle decisions' own helper, so the box's
  * answer for a title is `_LC_DEC_MAX` whether or not anyone meant a title to be
  * a decision; `lifecycle-constants-twin.test.ts` holds that number equal to
- * ccd's. Checked here so an over-long name is a 400 the sheet can explain,
- * rather than a ccd refusal arriving as a 502 that reads like the fleet is
- * broken.
+ * ccd's. `sanitizeTitle` shortens to it, so a title that reaches ccd is never
+ * one the box refuses and an over-long name cannot arrive as a 502 that reads
+ * like the fleet is broken.
  *
  * BYTES, not characters — `_lc_dec_ok` measures under `LC_ALL=C`, so an emoji
  * title spends four of these per glyph and a length check would disagree with
@@ -288,8 +288,29 @@ export function isWsProject(s: string): boolean {
  */
 export const WS_TITLE_MAX_BYTES: number = LC_REASON_MAX_BYTES;
 
-export function titleFits(s: string): boolean {
-  return new TextEncoder().encode(s).length <= WS_TITLE_MAX_BYTES;
+const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
+
+/**
+ * A title ccd will accept, and THE ONE FUNCTION that makes one: the create route saves what it returns, and the
+ * sheet's preview shows what it returns, so the title the operator reads is the title the board gets. Every run of
+ * control characters becomes ONE space (ccd refuses a control character in `--title`, so an unsanitised name could turn
+ * a create into a 502), the result is trimmed, and a result over `WS_TITLE_MAX_BYTES` is SHORTENED with `…`, never
+ * refused. Shortening walks whole code points, so it cannot split a character, and drops a space the cut would leave in
+ * front of the ellipsis.
+ */
+export function sanitizeTitle(raw: string): string {
+  const s = raw.replace(/\p{Cc}+/gu, ' ').trim();
+  if (utf8Bytes(s) <= WS_TITLE_MAX_BYTES) return s;
+  const budget = WS_TITLE_MAX_BYTES - utf8Bytes('…');
+  let kept = '';
+  let used = 0;
+  for (const ch of s) {
+    const n = utf8Bytes(ch);
+    if (used + n > budget) break;
+    kept += ch;
+    used += n;
+  }
+  return `${kept.trimEnd()}…`;
 }
 
 /** `fix-the-login-flow` → `Fix the login flow`: Linear's own title slug, read back as words. */

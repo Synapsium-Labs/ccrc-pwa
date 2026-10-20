@@ -207,10 +207,10 @@ describe('wave 3 — the reason cap, in BYTES, refused and never truncated', () 
     // with `_lc_dec_ok` — the lifecycle decisions' own helper, which counts
     // BYTES under `LC_ALL=C` and REFUSES rather than truncates — so ccd's
     // answer for a title is `_LC_DEC_MAX` whether or not anyone intended a
-    // title to be a decision. `shared/slug.ts` measures the same bound so the
-    // PWA can answer 400 instead of letting that refusal reach the operator as
-    // a 502 that reads like a broken fleet. Lower ccd's cap alone and
-    // `titleFits` admits exactly the titles the box refuses.
+    // title to be a decision. `shared/slug.ts` shortens a title to the same
+    // bound so that refusal cannot reach the operator as a 502 that reads like
+    // a broken fleet. Lower ccd's cap alone and `sanitizeTitle` still sends
+    // exactly the titles the box refuses.
     const v = scalar('_LC_DEC_MAX');
     if (v === null) { expect(twinWorld(WAVE3.map((n) => declared(n)))).toBe('absent'); return; }
     expect(WS_TITLE_MAX_BYTES, 'ccd refuses a title this side would accept').toBe(Number(v));

@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { SLUG_MAX, deriveBranch } from '../src/naming.js';
 import {
   WS_SLUG_MAX, WS_SLUG_MIN, WS_TITLE_MAX_BYTES, NAME_REFUSALS, NAME_REFUSAL_TEXT, isNameRefusal,
-  parseLinearRef, deriveWorkspaceSlug, offlineTitle, isWsProject, titleFits,
+  parseLinearRef, deriveWorkspaceSlug, offlineTitle, isWsProject, sanitizeTitle,
   slugifyWords, fitSlug,
 } from '../../shared/slug.js';
 import { LC_REASON_MAX_BYTES } from '../../shared/api.js';
@@ -309,14 +309,48 @@ describe('the title cap', () => {
   it('is ccd’s own number, not a third spelling', () => {
     expect(WS_TITLE_MAX_BYTES).toBe(LC_REASON_MAX_BYTES);
   });
+});
 
-  it('measures BYTES, as ccd does under LC_ALL=C', () => {
-    expect(titleFits('a'.repeat(WS_TITLE_MAX_BYTES))).toBe(true);
-    expect(titleFits('a'.repeat(WS_TITLE_MAX_BYTES + 1))).toBe(false);
-    // Four-byte glyphs: a quarter of the cap in characters is exactly the cap in bytes.
-    const glyph = String.fromCodePoint(0x1f600);
-    expect(titleFits(glyph.repeat(WS_TITLE_MAX_BYTES / 4))).toBe(true);
-    expect(titleFits(glyph.repeat(WS_TITLE_MAX_BYTES / 4 + 1))).toBe(false);
+const bytes = (s: string): number => new TextEncoder().encode(s).length;
+
+describe('sanitizeTitle', () => {
+  it('turns a run of control characters into ONE space', () => {
+    expect(sanitizeTitle('a\tb')).toBe('a b');
+    expect(sanitizeTitle('a\n\r\n\tb')).toBe('a b');
+    expect(sanitizeTitle('a\u0000\u001f\u007fb')).toBe('a b');
+  });
+
+  it('trims, and leaves a title that already fits exactly as it was', () => {
+    expect(sanitizeTitle('  ENG-1234 - Fix the login flow \n')).toBe('ENG-1234 - Fix the login flow');
+    expect(sanitizeTitle('Café — naïve ✓')).toBe('Café — naïve ✓');
+  });
+
+  it('keeps a title of exactly the cap, and shortens one a byte over', () => {
+    const exact = 'x'.repeat(WS_TITLE_MAX_BYTES);
+    expect(sanitizeTitle(exact)).toBe(exact);
+    const over = sanitizeTitle('x'.repeat(WS_TITLE_MAX_BYTES + 1));
+    expect(bytes(over)).toBeLessThanOrEqual(WS_TITLE_MAX_BYTES);
+    expect(over.endsWith('…')).toBe(true);
+    expect(over).toBe('x'.repeat(WS_TITLE_MAX_BYTES - 3) + '…');
+  });
+
+  it('measures BYTES, not characters, and never splits a character', () => {
+    // 200 four-byte glyphs: 800 bytes in 200 code points (400 UTF-16 units).
+    const emoji = sanitizeTitle('😀'.repeat(200));
+    expect(bytes(emoji)).toBeLessThanOrEqual(WS_TITLE_MAX_BYTES);
+    expect(emoji).not.toContain('�');
+    expect(emoji.endsWith('…')).toBe(true);
+    // Two-byte letters: 300 of them is 600 bytes.
+    const accented = sanitizeTitle('é'.repeat(300));
+    expect(bytes(accented)).toBeLessThanOrEqual(WS_TITLE_MAX_BYTES);
+    expect(accented.endsWith('…')).toBe(true);
+  });
+
+  it('drops a space the cut would leave in front of the ellipsis', () => {
+    const t = `${'x'.repeat(WS_TITLE_MAX_BYTES - 4)} tail that does not fit`;
+    const s = sanitizeTitle(t);
+    expect(s.endsWith(' …')).toBe(false);
+    expect(s.endsWith('…')).toBe(true);
   });
 });
 
