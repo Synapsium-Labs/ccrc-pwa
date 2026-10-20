@@ -927,7 +927,7 @@ describe('sweepStalls: wiring', () => {
     expect(claims).toBeGreaterThan(-1);
     expect(lane).toBeGreaterThan(claims);
     expect(primed).toBeGreaterThan(lane);
-    expect(src.match(/setInterval\(/g)).toHaveLength(1);
+    expect(src.match(/setInterval\(/g)).toHaveLength(2); expect(src.match(/LANE_TIMERS\.setInterval\(/g)).toHaveLength(1);   // D-5832: the tick's, and the delegation lane's stall sampler by name
     expect(src).toContain('export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;');
   });
 });
