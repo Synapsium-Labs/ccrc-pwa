@@ -8,11 +8,12 @@
 //
 // So this is a RATCHET, not a cleanup. It counts every numeric line citation in
 // the code and test files of the tree and fails when the count rises above
-// BASELINE. New code cites a SYMBOL instead — `ccd#_ws_least_loaded`, or
+// BASELINE, and also when it falls below it. New code cites a SYMBOL instead — `ccd#_ws_least_loaded`, or
 // `foo.ts#functionName` — which survives the edits that move it. Existing
 // citations are rewritten opportunistically when their file is touched; there
 // is no bulk pass. When you remove some, lower BASELINE to the new count in the
-// same commit; it is never raised.
+// same commit; the test fails until you do, because slack left by an
+// unrecorded removal would let the next added citation pass. It is never raised.
 //
 // CORPUS: tracked and untracked-not-ignored files outside `docs/` (plans and
 // specs are dated history, and their citations were true when written) and
@@ -29,8 +30,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** The count on the day this ratchet landed. May only go DOWN. */
-const BASELINE = 1591;
+/** The exact count in the tree. May only go DOWN (D-5893, revised). */
+const BASELINE = 1587;
 
 const CODE = /\.(?:ts|tsx|mts|cts|mjs|cjs|js|sh|bats|py)$/;
 // `ccd/<name>` and `ccd/<dir>/<name>` with no extension: the bash executables.
@@ -68,11 +69,16 @@ describe('numeric line citations (D-5893)', () => {
     expect(files.some((f) => f.startsWith('docs/'))).toBe(false);
   });
 
-  it(`the count does not rise above ${BASELINE}`, () => {
+  it(`the count is exactly ${BASELINE}`, () => {
     const total = corpus().reduce((n, f) => n + countCitations(read(f)), 0);
     expect(total,
       `the tree now has ${total} numeric line citations (ccd:NNNN or file.ts:NN), above the `
       + `${BASELINE} it may not exceed. Cite a symbol instead (ccd#_ws_least_loaded, file.ts#name); `
       + 'lines move, names do not').toBeLessThanOrEqual(BASELINE);
+    // D-5893 (revised): exact, so the first added citation fails. A `<=` alone let
+    // removals go unrecorded, and the slack they left absorbed later additions.
+    expect(total,
+      `the tree now has ${total} numeric line citations, below BASELINE ${BASELINE}; `
+      + `lower BASELINE to ${total} in this commit so the next added citation fails`).toBe(BASELINE);
   });
 });
