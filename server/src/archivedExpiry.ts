@@ -13,8 +13,8 @@
 // EVERY UNCERTAIN ANSWER IS "NOT THIS PASS". The path these verdicts feed asks for a deletion with no human in it;
 // the executor re-reads, and ccd re-proves inside its lock at the instant of deletion. This file narrows the window.
 import {
-  TERMINAL_RUN_STATES, leafKeptWord, type ChildMark, type ExpiryAttention, type LcRefusalToken, type LeafKeptWord,
-  type RunState,
+  TERMINAL_RUN_STATES, leafKeptWord, type ArchivedHeld, type ArchivedHeldRow, type ChildMark, type ExpiryAttention,
+  type LcRefusalToken, type LeafKeptWord, type RunState,
 } from '../../shared/api.js';
 
 /** THE LANE'S LIVE SWITCH (the coordinator's safety ruling (E), the scope sweep's precedent). Until `$REG/<this>`
@@ -907,4 +907,61 @@ export function expiryAttention(
       archivedAt: e.archivedAt, expiresAt: e.expiresAt, at: e.report.at });
   }
   return out.sort((a, b) => b.at - a.at || (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0));
+}
+
+// ── the ranked held bytes (D-5943) ───────────────────────────────────────────
+
+/** The registry's facts `rankArchivedHeld` reads of a row — `SessionRecord`'s, named structurally because L1 imports L0
+ *  alone. `archivedBytes` is ws-archive's measure at archive time, `null` when its manifest is absent or half-written. */
+export interface ArchivedHeldRecord {
+  readonly id: string;
+  readonly workspace: string | null;
+  readonly archivedAt: number | null;
+  readonly archivedBytes: number | null;
+}
+
+/** The two words this read model adds to the lane's vocabulary (D-6026), spelled ONCE: a row the lane has not audited (no
+ *  memory, or memory of another archive, or a fresh entry nothing has taught), and a row whose audit taught its
+ *  instant while nothing has been asked of it since — its kind is `learned`. */
+export const ARCHIVED_HELD_NOT_YET_AUDITED = 'not-yet-audited';
+export const ARCHIVED_HELD_LEARNED = { kind: 'learned', verdict: 'expiry-known' } as const;
+
+/** One row's verdict (D-6026) — `kind` its family, `verdict` its word — from the lane's memory of THIS archive alone. The
+ *  STANDING REPORT first (what the attention list says, under the wire's word: a stuck report is `failing`, a refusal's
+ *  word is its token), else the LAST ACT'S ANSWER (`archivedExpiryOutcomeKey`'s `kind[:word]`), else what the AUDIT
+ *  taught (the instant: `learned`), else `not-yet-audited`. */
+function archivedHeldVerdict(e: ArchivedExpiryEntry | undefined, archivedAt: number): Pick<ArchivedHeldRow, 'verdict' | 'kind'> {
+  const unaudited = { verdict: ARCHIVED_HELD_NOT_YET_AUDITED, kind: ARCHIVED_HELD_NOT_YET_AUDITED };
+  if (e === undefined || e.archivedAt !== archivedAt) return unaudited;
+  if (e.report !== null) {
+    const kind = e.report.kind === 'stuck' ? 'failing' : e.report.kind;
+    return { kind, verdict: e.report.kind === 'refused' ? e.report.token : kind };
+  }
+  if (e.lastOutcome !== null) {
+    const at = e.lastOutcome.indexOf(':');
+    return at < 0 ? { kind: e.lastOutcome, verdict: e.lastOutcome }
+      : { kind: e.lastOutcome.slice(0, at), verdict: e.lastOutcome.slice(at + 1) };
+  }
+  return e.expiresAt !== null ? { ...ARCHIVED_HELD_LEARNED } : unaudited;
+}
+
+/** THE RANKED TOTAL OF BYTES ARCHIVED WORKSPACES HOLD (D-5943; spec 2026-10-20 §2.7): each archived workspace in the
+ *  registry (the lane's population: a workspace with an archive), its bytes joined to the lane's latest verdict for it.
+ *  Ranked by bytes, descending, ties by id; `null` bytes are UNMEASURED — counted in `unmeasured`, never 0, never in
+ *  `totalBytes`, and ranked last. A read model: it decides nothing, and the lane composes it once per pass. */
+export function rankArchivedHeld(
+  records: readonly ArchivedHeldRecord[], state: ReadonlyMap<string, ArchivedExpiryEntry>,
+): ArchivedHeld {
+  const rows: ArchivedHeldRow[] = [];
+  let totalBytes = 0;
+  let unmeasured = 0;
+  for (const r of records) {
+    if (r.workspace === null || r.archivedAt === null) continue;
+    if (r.archivedBytes === null) unmeasured += 1; else totalBytes += r.archivedBytes;
+    rows.push({ sessionId: r.id, bytes: r.archivedBytes, ...archivedHeldVerdict(state.get(r.id), r.archivedAt) });
+  }
+  const byId = (a: ArchivedHeldRow, b: ArchivedHeldRow): number => (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0);
+  rows.sort((a, b) => (a.bytes === null) !== (b.bytes === null) ? (a.bytes === null ? 1 : -1)
+    : (b.bytes ?? 0) - (a.bytes ?? 0) || byId(a, b));
+  return { totalBytes, unmeasured, rows };
 }

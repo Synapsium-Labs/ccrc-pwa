@@ -736,3 +736,26 @@ describe('a standing in-use refusal is EXPECTED — reported, naming what it is,
     expect(f.calls.filter((c) => c[0] !== 'ws-audit'), 'nothing but audits: nothing is killed or stopped').toEqual([]);
   });
 });
+
+// D-5943 (spec §2.7): the ranked held bytes are composed beside the attention list, once per pass, in shadow too — and a
+// row the act finished this pass holds nothing, so it is never listed as `not-yet-audited` on its way out.
+describe('the ranked held bytes ride the pass (D-5943)', () => {
+  it('in shadow, the due row is listed with the lane’s word for it; a planted manifest-less row is unmeasured', async () => {
+    const f = await fixture();
+    f.plant('demo-a');
+    expect(f.watcher.archivedHeld(), 'nothing before the first pass').toBeNull();
+    await threePasses(f);
+    expect(f.watcher.archivedHeld()).toEqual({ totalBytes: 0, unmeasured: 1,
+      rows: [{ sessionId: 'demo-a', bytes: null, verdict: 'would-expire', kind: 'would-expire' }] });
+  });
+
+  it('armed, the row the act expired this pass leaves the block at once', async () => {
+    const f = await fixture();
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    f.plant('demo-b', OLD + 1);
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    expect(f.watcher.archivedHeld()?.rows.map((r) => r.sessionId), 'the expired row holds nothing').toEqual(['demo-b']);
+  });
+});

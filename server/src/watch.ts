@@ -37,7 +37,7 @@ import { ASK_ANSWERING_MAX_MS, ASK_SETTLE_TICKS, askNotifyAt } from './askwindow
 import { UNTRUSTED_CAP_BYTES, untrustedBlock } from './coord/untrusted.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
+  ArchivedHeld, ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
   LifecycleHealth, MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
   SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
@@ -162,7 +162,7 @@ import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
   EXPIRE_AUDITS_PER_PASS, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
   archivedExpiryOutcomeKey, archivedExpirySighted, archivedExpiryVerdict, expiryAttention, expiryReportStands,
-  type ArchivedExpiryEntry, type ExpiryStoreRead,
+  rankArchivedHeld, type ArchivedExpiryEntry, type ExpiryStoreRead,
 } from './archivedExpiry.js';
 import { expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
 import {
@@ -1526,6 +1526,10 @@ export class FleetWatcher {
    *  own memory — never child reclamation's list, so nothing that reads that one sees an expiry. `[]` until the lane's
    *  first pass. */
   private expiryAttentionList: readonly ExpiryAttention[] = [];
+  /** The ranked total of bytes archived workspaces hold (D-5943), as the expiry lane's last COMPLETED pass composed it
+   *  beside the attention list — shadow and armed alike. `null` until that first pass, which the wire renders as an
+   *  ABSENT block (unknown); a pass the cleanup switch or a missing capability stops composes nothing. */
+  private archivedHeldBlock: ArchivedHeld | null = null;
   /** The expiry lane's clock and memory (wave 3b): its OWN — never the child lane's map, which wave 5's chip reads.
    *  Per archived workspace, `ArchivedExpiryEntry` (L1): the instant ccd gave for THIS archive, the twice-observed
    *  sighting, the last outcome (for change-only feed rows), the in-use and failure runs and the report. IN MEMORY
@@ -2119,6 +2123,12 @@ export class FleetWatcher {
    *  applier: absence on the wire reads as UNKNOWN, never as healthy. */
   currentDelegationHealth(): DelegationObservationHealth | undefined {
     return this.delegationLane().health();
+  }
+
+  /** The ranked total of bytes archived workspaces hold, each with the expiry lane's latest verdict (D-5943), as the
+   *  lane's last completed pass composed it. `null` before that pass: absence on the wire reads as UNKNOWN. */
+  archivedHeld(): ArchivedHeld | null {
+    return this.archivedHeldBlock;
   }
 
   /** What the lane last concluded, for tests and diagnostics: nothing here is wire. */
@@ -5584,6 +5594,7 @@ export class FleetWatcher {
     // FOUR — the act: at most ONE per pass, fleet-wide, never on a box that answered `flock-unavailable`. Never asked
     // first: the row whose `nextAskAt` is earliest, then the oldest instant. No other pass runs meanwhile, so the
     // answer is folded onto the very entry the act was asked for.
+    let left: string | null = null;
     if (this.archivedExpiryBoxRefused === null && due.length > 0) {
       const pick = due.map((id) => [id, this.archivedExpiryState.get(id)!] as const)
         .sort(([ia, a], [ib, b]) => a.nextAskAt - b.nextAskAt || (a.expiresAt ?? 0) - (b.expiresAt ?? 0) || (ia < ib ? -1 : 1))[0]!;
@@ -5600,12 +5611,16 @@ export class FleetWatcher {
         }
         const next = archivedExpiryNextEntry(entry, result, Date.now(), CHILD_RECLAIM_SWEEP_MS);
         if (next === null) this.archivedExpiryState.delete(id); else this.archivedExpiryState.set(id, next);
+        if (result.kind === 'expired' || result.kind === 'gone') left = id;
       } catch (err) {
         console.warn(`ccrc-server: sweepArchivedExpiry: the expiry of ${id} threw (${err instanceof Error ? err.message : String(err)}) — left for the next pass`);
       }
     }
-    // FIVE — the attention list, from the lane's memory alone.
+    // FIVE — the attention list, from the lane's memory alone; and the ranked held bytes (D-5943), this pass's archived
+    // rows joined to that same memory — read once here, never re-derived by a route. A row the act expired (or found
+    // gone) this pass holds nothing, so it leaves the block now, not at the next registry read.
     this.expiryAttentionList = expiryAttention(this.archivedExpiryState, this.archivedExpiryBoxRefused !== null);
+    this.archivedHeldBlock = rankArchivedHeld(left === null ? archived : archived.filter((r) => r.id !== left), this.archivedExpiryState);
   }
 
   /** One archived row's store answers in the lane's pass (spec §5.3's run conjuncts). `reviewing` — a REVIEW run

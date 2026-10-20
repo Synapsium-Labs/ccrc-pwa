@@ -1331,6 +1331,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // The delegation broker's report-only observation health (wave 3, Task 13), from the checkpoint's own intervals. Absent until the
     // lane has run, and on a box with no coordination database: absence reads as UNKNOWN, never as healthy (`FleetHealth.delegation`).
     const delegation = watcher?.currentDelegationHealth() ?? undefined;
+    // The ranked held bytes (D-5943), composed by the expiry lane once per pass and read here ONCE. Absent before the
+    // lane's first pass: absence reads as UNKNOWN, never as nothing held (`FleetHealth.archivedHeld`).
+    const archivedHeld = watcher?.archivedHeld() ?? undefined;
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       // The two stamps: with a coordination database, the inventory's rows —
       // re-measured every minute by `sweepInventory`, superseded rows excluded
@@ -1353,6 +1356,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
         ...(lifecycle ? { lifecycle } : {}),
         ...(delegation ? { delegation } : {}),
+        ...(archivedHeld ? { archivedHeld } : {}),
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1374,6 +1378,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // dev box permanently unable to see its own mirror stall.
       ...(lifecycle ? { lifecycle } : {}),
       ...(delegation ? { delegation } : {}),
+      ...(archivedHeld ? { archivedHeld } : {}),
     };
   });
 
