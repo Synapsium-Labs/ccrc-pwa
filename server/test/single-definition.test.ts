@@ -4813,6 +4813,26 @@ describe('docs section H is declared once, in shared/docs.ts (docs W1a)', () => 
   }
 });
 
+// D-5930: vaul's keyframes are retimed in one place, `ui/src/lib/motion.ts`. The Sheet once retimed them with
+// transition utilities a keyframe never reads, and the command palette carried a private recipe of its own; a
+// third surface spelling `animation-duration:` would be a third pace nothing keeps on the tokens. Every file type
+// under `ui/src`, comments included: a literal-absence pin, and CSS is where the next copy is likeliest.
+describe("vaul's motion is retimed once, in ui/src/lib/motion.ts (D-5930)", () => {
+  const UI_SRC = path.join(ccrcRoot, 'ui', 'src');
+  const walk = (dir: string): string[] => readdirSync(dir).flatMap((e) => {
+    if (e.startsWith('__')) return [];
+    const p = path.join(dir, e);
+    return statSync(p).isDirectory() ? walk(p) : /\.(tsx?|css|mjs)$/.test(p) ? [p] : [];
+  });
+
+  it('no animation-duration: or animation-timing-function: literal exists in ui/src outside ui/src/lib/motion.ts', () => {
+    const files = walk(UI_SRC);
+    expect(files.map(rel), 'the scan reaches the primitives').toContain('ui/src/primitives/command-palette.tsx');
+    const holders = files.filter((f) => /animation-(?:duration|timing-function):/.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders).toEqual(['ui/src/lib/motion.ts']);
+  });
+});
+
 // Docs W1a, Task 5 (spec 2026-10-01 3.1, 3.2, 3.8): the page grammar, the pin and the one docs API URL builder
 // are declared once, in shared/docs.ts. The server's L1 query parser (W2) and the PWA's router and loaders (W5)
 // import them; a second parser or builder is a second grammar nothing forces to agree. The marker header word
