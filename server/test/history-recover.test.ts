@@ -5674,7 +5674,7 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
     }
   }, 2 * HEAVY);
 
-  it('D-5727 re-entry (the null-name arm) L\'s shape driven past E0\'s take-off, then the stored cursor set back to export-blobs with no file, as exportPhaseChunk leaves it when a stalled last segment was moved aside and a kill came before the stubs move: the measuring chunk widens the key it finds and does not re-measure it, so the fork stays and E0 stays owed; the rebuild holds E0\'s two variants', async () => {
+  it('D-5727 re-entry (the null-name arm) L\'s shape driven past E0\'s take-off, then the stored cursor rewound to export-blobs with no file (a state exportPhaseChunk stores only during the blob phase, so this is the rule the null-name arm reaches, not a state a run is known to leave): the measuring chunk widens the key it finds and does not re-measure it, so the fork stays and E0 stays owed; the rebuild holds E0\'s two variants', async () => {
     const { box, ids, db } = await plantL('ccrc-history-d5727-re-', 0x3600, 'zqd5727re');
     try {
       const stop = await drive(box, ids, db, { until: () => marksOf(db)[0] === null });

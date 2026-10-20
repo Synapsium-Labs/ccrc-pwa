@@ -8226,7 +8226,7 @@ export function segmentOrdersAfter(a, b) {
  *  adopt) is a SUCCESSOR of the earlier ones: nextSegmentSeq starts it one past the highest seq on disk or recorded, so every seq of
  *  it lies above every seq of theirs, and its store held everything their segments carried. Writer W2 succeeds W1 when W2's lowest
  *  seq is above W1's highest. Two writers neither of which succeeds the other are a FORK: their ranges interleave or touch (an equal
- *  seq included), which only two writers running at once produce. `forked` is whether any pair of the directory's writers is a
+ *  seq included): two writers whose ranges touch or interleave ran at once, while two that did run at once can also read as succession (D-5726's residual of a segment carried in after the later writer's bind). `forked` is whether any pair of the directory's writers is a
  *  fork. */
 export function replayWriterLayout(listed, marked = [], stored = null) {
   const names = new Set();
