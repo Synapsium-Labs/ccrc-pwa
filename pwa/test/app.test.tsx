@@ -356,9 +356,15 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
     expect(screen.getByRole('region', { name: 'Fleet' })).toHaveClass('fleet');
   });
 
-  it('the skip link is the first focusable element and moves focus to #content', () => {
+  it('the skip link is the first focusable element, before the desk bar, and moves focus to #content', () => {
+    // On a desk, so the bar (and its doors) is mounted ahead of everything but the skip link.
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q.includes('min-width: 900px'), media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
     navigate('/runs');
     render(<App />);
+    expect(document.querySelector('header.shell-accounts'), 'the desk bar is mounted').not.toBeNull();
     const focusable = document.querySelectorAll<HTMLElement>(
       'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
     );
@@ -367,5 +373,13 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
     expect(document.querySelector('.app-shell')!.firstElementChild).toBe(skip);
     fireEvent.click(skip);
     expect(document.activeElement).toBe(document.getElementById('content'));
+    vi.unstubAllGlobals();
+  });
+
+  it("Settings' Theme and Layout fieldsets are the doors of Switch theme and Switch layout (doorMark)", () => {
+    navigate('/settings');
+    render(<App />);
+    expect(screen.getByRole('group', { name: 'Theme' })).toHaveAttribute('data-command', 'switch-theme');
+    expect(screen.getByRole('group', { name: 'Layout' })).toHaveAttribute('data-command', 'switch-layout');
   });
 });
