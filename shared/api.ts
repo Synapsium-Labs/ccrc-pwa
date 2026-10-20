@@ -1516,8 +1516,10 @@ export type BucketInput = Pick<
  *  dropped) — whose work never holds the live file `busy`: an idle main loop
  *  over only shells or monitors writes `shell` or `idle`, and the other four are
  *  outside the live file's delegation set. The hook's `jq` in
- *  `ccd/session-hook.sh` is the documented second spelling, held equal by
- *  `session-hook-background.test.ts`, which iterates over this list. */
+ *  `ccd/session-hook.sh` is the documented second spelling and the rule's only
+ *  executor, held equal by `session-hook-background.test.ts`, which iterates
+ *  over this list and reads the jq's lists back as sets (D-6117). No TS
+ *  predicate over raw tasks exists: no TS reader holds them (D-6117). */
 export const NON_DELEGATING_TASK_KINDS = ['shell', 'monitor', 'mcp-task', 'dream', 'auto-mode-scan', 'memory-import'] as const;
 /** D-5231: the terminal words of Claude Code's task code. A task whose status
  *  is one of them is finished, whatever its kind; `running`, `pending` and any
@@ -1525,12 +1527,10 @@ export const NON_DELEGATING_TASK_KINDS = ['shell', 'monitor', 'mcp-task', 'dream
  *  finished tasks out, so this is a second wall: a finished task some later
  *  build lists must not keep a wedged `busy` on `working`. */
 export const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'killed'] as const;
-/** D-5231: is this listed task delegated work that is still running? `type` is
- *  the CLEANED kind (as the hook records it); an unseen kind or status counts. */
-export function isDelegatedTask(t: { type: string; status: string }): boolean {
-  return !(NON_DELEGATING_TASK_KINDS as readonly string[]).includes(t.type)
-    && !(TERMINAL_TASK_STATUSES as readonly string[]).includes(t.status);
-}
+/* D-6117: the readerless `isDelegatedTask` predicate that stood here is gone;
+ * the server and the PWA read the hook's computed `bgDelegated` and
+ * `bgDelegatedKinds`. This note keeps the lines below where the line-anchored
+ * citations into this file expect them. */
 /** D-5231: the ONE reader of `FleetSession.background` for display. The live
  *  `fleet` frame is cast, not revived, so a server predating the field omits
  *  the key at runtime: `undefined` reads as null here, never as a TypeError.
@@ -8295,17 +8295,17 @@ export interface LifecycleMeas {
    *  `meas.bytes` precedent) — never a fabricated 0. A `null` VALUE here means
    *  the key was absent: an act that is not a reclaim. */
   readonly residueBytes: string | null;
-  /** The per-session temp root (`$HOME/.cc-tmp/<id>`) a `reclaim` or `expire`
-   *  tail did not prove gone (child reclamation wave 6, spec §5.6): `in-use`
-   *  (a process of this uid still used it after the tail's bounded wait),
-   *  `unmeasured` (whether one did could not be measured, or a removal failed
-   *  part-way or was undone: kept means NOT PROVEN GONE, not untouched) or
-   *  `refused` (the helper refused it). The act COMPLETED, so this rides the
-   *  `done` row and a purge failure's; `detail` says why. Null: it went, or another act. */
+  /** The per-session temp root (`$HOME/.cc-tmp/<id>`) a `reclaim` or `expire` tail did not
+   *  prove gone (child reclamation wave 6, spec §5.6): `in-use` (a process of this uid still used
+   *  it after the tail's bounded wait), `unmeasured` (whether one did could not be measured, or a
+   *  removal failed part-way or was undone: kept means NOT PROVEN GONE, not untouched) or `refused`
+   *  (the helper refused it). The act COMPLETED, so this rides the `done` row and a purge failure's;
+   *  `detail` says why. Null: it went, or another act. */
   readonly tmpRootKept: string | null;
   /** The same for the session's clips directory (`$HOME/.cc-clips/<id>`):
    *  `refused` or `unmeasured` only — nothing waits on a clips directory's users. */
   readonly clipsKept: string | null;
+  /** A `collect` `done`'s leaf (path-identity spec §3.4): see `COLLECT_LEAF_END_WORDS`, at the foot. */ readonly leaf: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -8327,7 +8327,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
   from: true, dropped: true, registered: true, state: true, bytes: true,
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
-  unremoved: true, childOf: true, wip: true, residueBytes: true, tmpRootKept: true, clipsKept: true,
+  unremoved: true, childOf: true, wip: true, residueBytes: true, tmpRootKept: true, clipsKept: true, leaf: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -10396,9 +10396,9 @@ export function leafKeptWord(v: unknown): LeafKeptWord {
 export const REGISTRY_ID_MAX_CHARS = 255;
 
 /** THE ONE PREDICATE of a registry id (spec 2026-10-12 §2.3): length first, then the session-id shape, then no leading `.` or `-`.
- *  - The leading `-` is a SAFETY rule, not defence in depth (spec 2026-10-12 §2.1). ccd's verbs read their decision flags from any
- *    position, `--session`'s value included, and every such flag begins `--`. An id of `--actor` is read as a flag,
- *    and the verb binds another token as its id. The shape refuses `=`, so no `--flag=value` can be an id either.
+ *  - The leading `-` is a SAFETY rule (spec 2026-10-12 §2.1). A ccd older than path-identity W1b read its decision flags from any
+ *    position, `--session`'s value included, and every such flag begins `--`; since W1b each identity key takes its value whole,
+ *    so this rule is the server's half of the same refusal and closes the redirect on an older ccd too. The shape refuses `=`.
  *  - The leading `.` keeps `.`, `..` and a hidden name out, as ccd's own `_ws_tmproot_id_ok` does.
  *  - It is the rule for an id the server composes into an id-taking argv, whether the id came from a request, a
  *    stored run row, a registry file name or an executor's job.
@@ -11952,4 +11952,16 @@ export const POOLS_ENFORCEMENTS: readonly PoolsEnforcement[] =
   Object.keys(POOLS_ENFORCEMENT_MAP) as PoolsEnforcement[];
 export function isPoolsEnforcement(v: unknown): v is PoolsEnforcement {
   return typeof v === 'string' && (POOLS_ENFORCEMENTS as readonly string[]).includes(v);
+}
+
+/** What a `collect` `done` journals of the leaf it acted on (path-identity spec §3.4, TR1 A): `removed` on
+ *  `_ws_collect_finish`'s line (the slot's leaf proven gone after this collection removed it), `absent` on the
+ *  witness-only arm's (no leaf stood at the witness's path). Spelled ONCE, as a total table's keys. Not the audit
+ *  document's `collect.leaf` (`present`/`absent`), which is another wire. APPENDED at the foot, never inserted above:
+ *  README and the frozen spec and plan corpus cite this file by line. */
+export type CollectLeafEndWord = 'removed' | 'absent';
+const COLLECT_LEAF_END_TABLE: Readonly<Record<CollectLeafEndWord, true>> = { removed: true, absent: true };
+export const COLLECT_LEAF_END_WORDS: readonly CollectLeafEndWord[] = Object.keys(COLLECT_LEAF_END_TABLE) as CollectLeafEndWord[];
+export function isCollectLeafEndWord(v: unknown): v is CollectLeafEndWord {
+  return typeof v === 'string' && (COLLECT_LEAF_END_WORDS as readonly string[]).includes(v);
 }

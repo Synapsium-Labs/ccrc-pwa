@@ -7,6 +7,7 @@ import type { CloseOutcome, SweepCloseGuard } from './close.js';
 import { closeRefusalOf } from './archiveDoor.js';
 import { measureClaimant, type ReclaimDeps } from './reclaim.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
+import { readSwitches } from '../../../shared/switches.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, type LifecycleHealth } from '../../../shared/api.js';
 import {
   DEAD_COORDINATOR_LANE_LIVE_MARKER, deadCoordinatorBreakerFeedRow, deadCoordinatorBreakerSeedFeedRow, deadCoordinatorCrash, deadCoordinatorFeedRows,
@@ -14,6 +15,7 @@ import {
   type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker, type DeadCoordinatorSeedCause, type DeadCoordinatorJournal,
   type DeadCoordinatorJournalTrust, type DeadCoordinatorProgramme, type DeadCoordinatorStop,
 } from '../deadCoordinator.js';
+import { notifyEach } from '../notice.js';
 
 /**
  * THE DEAD-COORDINATOR LANE'S ONE EXECUTOR (workspace lifecycle spec 2026-09-24 §5.4, "No successor" and "The act").
@@ -163,7 +165,7 @@ export async function stillCrashed(deps: EndDeadCoordinatorDeps, id: string): Pr
     return { kind: 'switch', why: `the registry did not list (${listed.reason}), so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out` };
   }
   const names = listed.entries;
-  if (names.includes(RECLAIM_PAUSE_MARKER)) return { kind: 'switch', why: `${RECLAIM_PAUSE_MARKER} was raised during the act` };
+  if (readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') return { kind: 'switch', why: `${RECLAIM_PAUSE_MARKER} was raised during the act` };
   if (!deadCoordinatorLaneArmed(names)) return { kind: 'switch', why: 'the lane was disarmed during the act' };
   // The journal's own trust FIRST, and whole: a mirror gone `unknown` or `stale` since the pass stops the act as the
   // pass's own hold does — nothing learned, the anchor standing (review 339, F4).
@@ -199,7 +201,7 @@ export async function endDeadCoordinator(
       detail: `the registry did not list (${listed.reason}), so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out` };
   }
   const names = listed.entries;
-  if (names.includes(RECLAIM_PAUSE_MARKER)) {
+  if (readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') {
     return { kind: 'paused-at-server', detail: `${RECLAIM_PAUSE_MARKER} is raised: cleanup is paused fleet-wide` };
   }
   // 2 — the runs it holds NOW.
@@ -274,24 +276,14 @@ export class DeadCoordinatorActThrew extends Error {
 }
 
 /** Feed rows, recorded and never pushed: `kind: 'run'` with no run and a claimant as the session. A missing log
- *  degrades the record and never the act. */
+ *  degrades the record and never the act. Through the funnel's batch (`notice.ts` `notifyEach`, D-5859),
+ *  `'record-only'`: one try over the rows, so a failed archive drops the rows after it and is said once. */
 function recordRows(
   deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, sessionId: string,
   rows: readonly { readonly title: string; readonly body: string }[], what: string,
 ): void {
-  const log = deps.notifyLog;
-  if (!log) return;
-  try {
-    for (const row of rows) {
-      const ev = log.record({ kind: 'run', sessionId, runId: null, title: row.title, body: row.body });
-      deps.coord.recordFeedEvent(log.epoch, ev);
-    }
-  } catch (err) {
-    console.warn('ccrc-server: recordFeedEvent failed '
-      + `(${err instanceof Error ? err.message : String(err)}) — dead coordinator ${what}, feed archive degraded`);
-  } finally {
-    void log.flush();
-  }
+  notifyEach(deps, rows.map((row) => ({ kind: 'run', sessionId, runId: null, title: row.title, body: row.body })),
+    'record-only', { degraded: `dead coordinator ${what}, feed archive degraded` });
 }
 
 /** The feed rows for an act or its shadow — ONE per programme, in the spec's words, with the instant the hour counted

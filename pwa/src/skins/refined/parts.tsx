@@ -5,6 +5,8 @@ import { REFINED } from '@ccrc/ui';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
 import { FleetColumn } from '../../screens/FleetColumn';
 import type { SkinSet } from '../types';
+import { SessionChrome } from './SessionChrome';
+import { TranscriptRow } from './TranscriptRow';
 import './refined.css';
 
 export const REFINED_SET: SkinSet = {
@@ -14,10 +16,12 @@ export const REFINED_SET: SkinSet = {
   Rail: null,
   Nav: FleetColumn,
   FleetList: null,
-  SessionChrome: null,
-  TranscriptRow: null,
+  // W2 Task S7c (D-5471): the short header and its one chip rail.
+  SessionChrome,
+  // W2 Task S13b (D-5475): a run of tool entries reads as one plain-language row.
+  TranscriptRow,
   Inspector: null,
   StatusBar: null,
   PhoneNav: null,
-  transcriptGrouping: 'none',
+  transcriptGrouping: 'tool-runs',
 };

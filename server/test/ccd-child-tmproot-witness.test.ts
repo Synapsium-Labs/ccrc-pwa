@@ -347,9 +347,13 @@ describe('_ws_tmproot_witness_read: parsed, absent, or unreadable — three answ
 
 describe('_ws_tmproot_remove: the witness dies only after the leaf is PROVEN absent', () => {
   /** A recording `_ws_leaf_remove`: its argc and argv, and whether the witness
-   *  still stood at the instant it ran. */
+   *  still stood at the instant it ran. Its rc 0 also removes the leaf, as the
+   *  real helper's rc 0 means: the drop proves the leaf absent again
+   *  (path-identity spec §3.2), so a stub that left it standing would read as a
+   *  leaf re-created after its removal. */
   const STUB = (rc: number): string =>
     `_ws_leaf_remove() { { printf '%s|' "$#" "$@"; [[ -e "$REG/tmproots/${ID}" ]] && printf present; echo; } >> "$HOME/leaf-calls";`
+    + (rc === 0 ? ' rm -rf -- "$HOME/.cc-tmp/$2";' : '')
     + ` _WS_LEAF_WHY="stub-why"; return ${rc}; };`;
   const calls = (): string[] => fs.readFileSync(path.join(h.home, 'leaf-calls'), 'utf8').split('\n').filter(Boolean);
   const root = (): string => path.join(h.home, '.cc-tmp');
@@ -372,28 +376,28 @@ describe('_ws_tmproot_remove: the witness dies only after the leaf is PROVEN abs
     expect(fs.existsSync(witness())).toBe(false);
   });
 
-  it('a witness that cannot be unlinked after the leaf is gone is WARNED about — and rc 0 stays the leaf’s', () => {
+  it('a witness ccd did not write, after the leaf is gone: the removal stands, and the helper answers 2 with the drop’s reason, printing nothing', () => {
     seed(ID, '7');
     h.sh(`_child_tmpdir ${ID} >/dev/null`);
     fs.rmSync(witness());
     fs.mkdirSync(path.join(witness(), 'inside'), { recursive: true });
-    const r = run(`_ws_tmproot_remove ${ID}; echo "[rc=$?]"`);
-    expect(r.out).toContain(`ccd: warn: ${ID}'s temp root is gone but its witness ${witness()} could not be removed`);
-    expect(r.out).toMatch(/\[rc=0\]$/);
+    const r = run(`_ws_tmproot_remove ${ID}; echo "[rc=$?] $_WS_LEAF_WHY"`);
+    expect(r.out, 'nothing printed before the answer').toMatch(/^\[rc=2\] no leaf stands, but its witness was kept: /);
+    expect(r.out).not.toContain('ccd: warn');
     expect(fs.existsSync(leaf())).toBe(false);
     expect(fs.statSync(witness()).isDirectory()).toBe(true);
   });
 
-  it('a LINKED tmproots/ is never followed: the leaf goes, the file the link reaches stands, and it warns', () => {
+  it('a LINKED tmproots/ is never followed: the leaf goes, the file the link reaches stands, and the helper answers 2, printing nothing', () => {
     seed(ID, '7');
     h.sh(`_child_tmpdir ${ID} >/dev/null`);
     const elsewhere = path.join(h.home, 'elsewhere');
     fs.renameSync(wdir(), elsewhere);              // the witness ccd wrote now sits at elsewhere/<id>
     fs.symlinkSync(elsewhere, wdir());
     const bytes = fs.readFileSync(path.join(elsewhere, ID), 'utf8');
-    const r = run(`_ws_tmproot_remove ${ID}; echo "[rc=$?]"`);
-    expect(r.out).toContain(`ccd: warn: ${ID}'s temp root is gone but ${wdir()} is a link`);
-    expect(r.out).toMatch(/\[rc=0\]$/);
+    const r = run(`_ws_tmproot_remove ${ID}; echo "[rc=$?] $_WS_LEAF_WHY"`);
+    expect(r.out, 'nothing printed before the answer').toMatch(/^\[rc=2\] no leaf stands, but its witness was kept: /);
+    expect(r.out).not.toContain('ccd: warn');
     expect(fs.existsSync(leaf()), 'the leaf is still removed: the act this helper reports').toBe(false);
     expect(fs.readFileSync(path.join(elsewhere, ID), 'utf8')).toBe(bytes);
   });

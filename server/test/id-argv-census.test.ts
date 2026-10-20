@@ -336,7 +336,12 @@ const GATES = {
     file: 'coord/collectTempRoot.ts', scope: 'collectTempRoot',
     re: /if \(!isTmpRootId\(job\.id\)\) return \{ kind: 'not-asked', step: 1, why: 'id-refused'/,
   },
-  /** The population gate's witness half; with the record half below, the learning audit's only id check. */
+  /** The learning audit's own id gate (path-identity W2), first in `learnCollect`: the twin of the step-1 check. */
+  'collector-learn-gate': {
+    file: 'coord/collectTempRoot.ts', scope: 'learnCollect',
+    re: /if \(!isTmpRootId\(id\)\) return \{ kind: 'id-refused' \};/,
+  },
+  /** The population gate's witness half; with the record half below, the gate before the learning audit's own. */
   'collector-population': {
     file: 'collectLane.ts', scope: 'collectPopulation',
     re: /if \(isTmpRootId\(n\)\) witnessed\.add\(n\); else refusedNames \+= 1;/,
@@ -391,7 +396,7 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'coord/close.ts', scope: 'closeReviewRun', builder: 'wsHold', id: 'sessionId', origin: ['stored'], gate: ['close-gate'] },
   { file: 'coord/close.ts', scope: 'closeReviewRun', builder: 'wsRelease', id: 'sessionId', origin: ['stored'], gate: ['close-gate'] },
   // coord/collectTempRoot.ts: the learning audit is reached from the population and from the executor's step 1.
-  { file: 'coord/collectTempRoot.ts', scope: 'collectAudit', builder: 'wsCollectAudit', id: 'id', origin: ['collector'], gate: ['collector-step-1', 'collector-population', 'collector-record-name'] },
+  { file: 'coord/collectTempRoot.ts', scope: 'collectAudit', builder: 'wsCollectAudit', id: 'id', origin: ['collector'], gate: ['collector-step-1', 'collector-learn-gate', 'collector-population', 'collector-record-name'] },
   { file: 'coord/collectTempRoot.ts', scope: 'collectTempRoot', builder: 'wsCollect', id: 'job.id', origin: ['collector'], gate: ['collector-step-1'] },
   // coord/dispatch.ts: refuseSpentChild's only caller is dispatchRun, below its gate; the fresh winner is a listed, valid row.
   { file: 'coord/dispatch.ts', scope: 'refuseSpentChild', builder: 'wsHold', id: 'run.sessionId', origin: ['stored'], gate: ['dispatch-gate'] },

@@ -150,6 +150,26 @@ export const holdReasonVerdict = (
   return { ok: true, reason };
 };
 
+/** A programme hold, read back: what `holdReason` wrote for a run's workspace. */
+export interface ProgrammeHold { readonly program: string; readonly wave: number; readonly runId: number | null }
+
+/** Read a `.hold`'s text as a programme hold, or null when it is not one (D-6091, fleet capacity W1-1).
+ *
+ *  THE ONE READER of the grammar `holdReasonVerdict` validates: the same `HOLD_REASON_PATTERN` and the same cap,
+ *  never a second spelling (`single-definition.test.ts`), and ccd's `_hold_is_programme` is crossed with it over one
+ *  fixture list (`hold-programme-parity.test.ts`). The run-done policy reads it to tell a hold that guards a
+ *  WORKSPACE (a programme's) from an operator's own hold: anything this answers null for keeps holding sleep. A text
+ *  outside the cap or a number outside the safe-integer range answers null too, which fails closed (it holds). */
+export const programmeHoldOf = (text: string): ProgrammeHold | null => {
+  if (text.length > HOLD_REASON_MAX_CHARS || !HOLD_REASON_PATTERN.test(text)) return null;
+  // The pattern has matched, so the text is exactly `program:<slug> wave:<n>[/<m>][ run:<id>]`, single-spaced.
+  const [programPart, wavePart, runPart] = text.split(' ');
+  const wave = Number(wavePart!.slice('wave:'.length).split('/')[0]);
+  const runId = runPart === undefined ? null : Number(runPart.slice('run:'.length));
+  if (!Number.isSafeInteger(wave) || (runId !== null && !Number.isSafeInteger(runId))) return null;
+  return { program: programPart!.slice('program:'.length), wave, runId };
+};
+
 /** May this close END the claim on the workspace, or must it hand the claim
  *  to whoever else still owns it?
  *

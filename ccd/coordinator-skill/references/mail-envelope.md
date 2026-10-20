@@ -87,14 +87,34 @@ database:
   for does not move it.
 - `lastError` — how the last attempt failed. **Raw text**, never validated on
   the way in: four writers put four different kinds of thing there, one of them
-  a whole English sentence. Match the one value below; do not build a table off
+  a whole English sentence. Match the values below; do not build a table off
   it and do not show it to anyone as if it were written for them.
 
-### `lastError: "draft-present"` — the recipient's input box is occupied
+### A draft in the recipient's input box never blocks mail
 
-The worker has unsent text sitting in its Claude Code input box, so the lane
-refuses to type over it. It backs off and retries; it does **not** give up
-immediately. You will see `attempts` climb on every tick.
+A draft never stops mail. When the recipient has unsent text in its Claude
+Code input box, the lane saves it with Claude Code's own prompt stash
+(ctrl+s), types and submits the delivery, and checks that Claude Code restored
+the draft afterwards; the recipient sees `Draft restored`, and that is why.
+Nothing is typed over the draft and nothing clears it. A send that fails
+after the stash gives the draft back where it safely can; if a menu or an
+unreadable pane stops it, the stash stays held (the pane shows `stashed`) and
+Claude Code restores it at the next submit. There is no
+back-off for a draft: a row still carrying `lastError: "draft-present"` was
+refused before the lane stashed drafts.
+
+Two words say the stash itself could not be used. The lane types nothing onto
+the draft for either:
+
+- `lastError: "stash-occupied"` — the box holds a draft AND the recipient
+  already holds a stash of its own (ctrl+s; its pane shows `stashed`). A second
+  stash would destroy the first, so the lane refuses.
+- `lastError: "stash-failed"` — the lane pressed ctrl+s and the box never
+  emptied.
+
+Either one backs off and retries, as `dialog-open` (a menu on the pane) does;
+it does **not** give up immediately. You will see `attempts` climb on every
+tick.
 
 The budget is **6 attempts**, and it applies only to a delivery that has never
 been delivered at all. At the sixth the lane **parks** it — and a park is not a
@@ -124,19 +144,20 @@ What to do, in order:
    the worker's own input box, the one the delivery lane types into, which is
    **not** the composer you type into on that screen. Nothing you can do to the
    mail row fixes it.
-2. **If the text in the box is the worker's own half-typed message**, it is
-   theirs. Ask them to send or discard it. Do not replace it.
+2. **If the lane refused `stash-occupied`**, the worker holds a stash of its
+   own under a fresh draft, and both are theirs. Ask them to send or pop one
+   of them. Do not replace either.
 3. **If the box holds a stranded `/clear`**, the lane may clear that one itself
    on the next attempt — but only where it can **prove** the `/clear` is its
    own: a dispatch of this run typed it and had it swallowed, the box still
    holds nothing but that single line, and **no message has landed in that box
    since**. That last one is what spends the proof: a delivery that lands is
    how the lane knows the box it had proof about was emptied, so the first
-   message through clears the wedge and every one after it is refused like any
-   other draft. The characters alone prove nothing,
+   message through clears the wedge and every one after it is stashed and
+   restored like any other draft. The characters alone prove nothing,
    because they are four an operator plausibly types and leaves sitting, so a
-   `/clear` with no such record behind it is treated as the operator's and
-   refused. Assume nothing will be cleared for you; check the screen.
+   `/clear` with no such record behind it is treated as the operator's
+   draft: stashed, never cleared. Assume nothing will be cleared for you; check the screen.
 4. **If the delivery has parked**, do not send it again: clearing the box is
    enough, and the lane delivers it on its own. Only a delivery that was
    REJECTED (`state: "rejected"` — its recipient gone, its run closed, or 24 h
@@ -157,10 +178,11 @@ What to do, in order:
    rather than to the chair, or for a report the new coordinator can already
    read. The door itself is the operator's, and this corpus does not name it.
 
-You do not have to poll for any of this. The first `draft-present` back-off and
-the park each raise **one** notification addressed to you, the sender — the
-first one only, not one per tick, because the tray is not a ticker. What stays
-live across every back-off is `attempts` on the delivery row.
+You do not have to poll for any of this. The park raises **one** notification
+addressed to you, the sender, and a draft or stash back-off before it raises
+none, because the tray is not a ticker. (A nudge held while the recipient waits
+out a usage limit, `auto-continue-armed`, tells you once per hold.) What stays live across every back-off is `attempts` on
+the delivery row.
 
 ### A queued brief is not a delivered brief
 
@@ -178,6 +200,6 @@ when there is one to report.
   as briefed only when the worker acks the mail.
 
 A wave that has gone quiet after a dispatch that answered `ok` is very often
-this: the brief is queued, the box is occupied, and the worker has been sitting
+this: the brief is queued, the pane is blocked, and the worker has been sitting
 with nothing to do. Read `attempts` and `lastError` on the delivery before
 assuming the worker is stuck on the work.
