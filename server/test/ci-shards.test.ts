@@ -8,11 +8,12 @@
 // real vitest subprocess, so the field names (`name`/`startTime`/`endTime`)
 // are pinned against the real reporter, not an assumption about it.
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import {
   durationsFromVitestJson,
   planShards,
@@ -23,6 +24,21 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
 const serverRoot = path.resolve(here, '..');
+const VITEST = path.join(serverRoot, 'node_modules', '.bin', 'vitest');
+
+/** A nested `vitest run`, in a process group of its own (D-6112). The nested run carries the suite's leak check
+ *  (`proc-leak.globalsetup.mjs`), which watches its OWN group: in the suite's group that is the parent shard's,
+ *  so it named what other tests of the shard started while it ran. Detached, it sees only what the nested run
+ *  started, and `spawnSyncGroup` ends that group on a timeout and throws on anything left in it. Throws on a
+ *  non-zero exit, with the output, as `execFileSync` did; returns stdout and stderr. */
+function nestedVitest(args: readonly string[], cwd: string): string {
+  const r = spawnSyncGroup(process.execPath, [VITEST, ...args], { cwd, encoding: 'utf8', timeout: 60_000 });
+  if (r.error || r.status !== 0) {
+    throw new Error(`nested vitest ${args.join(' ')} failed (status ${r.status}`
+      + `${r.error ? `, ${r.error.message}` : ''}):\n${r.stdout}${r.stderr}`);
+  }
+  return `${r.stdout}${r.stderr}`;
+}
 
 describe('durationsFromVitestJson', () => {
   it('converts an absolute testResults name to a repo-relative key and adds 500ms', () => {
@@ -59,15 +75,7 @@ describe('durationsFromVitestJson', () => {
   it('against a REAL vitest JSON report (spawned live)', () => {
     const dir = mkTmp('ci-shards-realreport-');
     const outFile = path.join(dir, 'report.json');
-    execFileSync(
-      process.argv0,
-      [
-        path.join(serverRoot, 'node_modules', '.bin', 'vitest'),
-        'run', 'test/bus.test.ts',
-        '--reporter=json', `--outputFile.json=${outFile}`,
-      ],
-      { cwd: serverRoot },
-    );
+    nestedVitest(['run', 'test/bus.test.ts', '--reporter=json', `--outputFile.json=${outFile}`], serverRoot);
     const report = JSON.parse(readFileSync(outFile, 'utf8'));
     const out = durationsFromVitestJson(report, repoRoot);
     expect(Object.keys(out)).toEqual(['server/test/bus.test.ts']);
@@ -243,15 +251,8 @@ describe('the `times` CLI', () => {
   it('merges vitest JSON reports from repo root into one durations file', () => {
     const dir = mkTmp('ci-shards-times-cli-');
     const reportFile = path.join(dir, 'report.json');
-    execFileSync(
-      process.argv0,
-      [
-        path.join(serverRoot, 'node_modules', '.bin', 'vitest'),
-        'run', 'test/bus.test.ts', 'test/dtbd.test.ts',
-        '--reporter=json', `--outputFile.json=${reportFile}`,
-      ],
-      { cwd: serverRoot },
-    );
+    nestedVitest(['run', 'test/bus.test.ts', 'test/dtbd.test.ts', '--reporter=json',
+      `--outputFile.json=${reportFile}`], serverRoot);
     const outFile = path.join(dir, 'times.json');
     execFileSync(process.argv0, [
       path.join(repoRoot, '.github', 'ci', 'shards.mjs'),
@@ -269,14 +270,8 @@ describe('the `times` CLI', () => {
     const dir = mkTmp('ci-shards-times-cli-multi-');
     const r1 = path.join(dir, 'r1.json');
     const r2 = path.join(dir, 'r2.json');
-    execFileSync(process.argv0, [
-      path.join(serverRoot, 'node_modules', '.bin', 'vitest'), 'run', 'test/bus.test.ts',
-      '--reporter=json', `--outputFile.json=${r1}`,
-    ], { cwd: serverRoot });
-    execFileSync(process.argv0, [
-      path.join(serverRoot, 'node_modules', '.bin', 'vitest'), 'run', 'test/dtbd.test.ts',
-      '--reporter=json', `--outputFile.json=${r2}`,
-    ], { cwd: serverRoot });
+    nestedVitest(['run', 'test/bus.test.ts', '--reporter=json', `--outputFile.json=${r1}`], serverRoot);
+    nestedVitest(['run', 'test/dtbd.test.ts', '--reporter=json', `--outputFile.json=${r2}`], serverRoot);
     const outFile = path.join(dir, 'times.json');
     execFileSync(process.argv0, [
       path.join(repoRoot, '.github', 'ci', 'shards.mjs'), 'times', '--out', outFile, r1, r2,
@@ -330,4 +325,49 @@ describe('the `times` CLI', () => {
       path.join(repoRoot, '.github', 'ci', 'shards.mjs'), 'times', '--out', outFile,
     ], { cwd: repoRoot, stdio: 'pipe' })).toThrow();
   });
+});
+
+// D-6112: a nested `vitest run` carries the suite's leak check (`proc-leak.globalsetup.mjs`), which watches its
+// OWN process group. Spawned in the suite's group, that is the parent shard's group, so the nested check named
+// processes other tests of the shard started while it ran (PR #985's red: ccrc-codex-life supervisors named by
+// the `times` CLI case). The sibling here is that shape made deterministic: it waits until the nested run's test
+// is running (so after the nested check recorded its baseline), then forks an orphan in the suite's group that
+// lives until this case says stop. The nested run must not name it.
+describe('a nested vitest run checks only what it started (D-6112)', () => {
+  it('a process another test forks in the suite\'s group during the nested run is not the nested run\'s leak', () => {
+    const fx = mkTmp('ci-shards-nested-leak-');
+    const at = (f: string): string => path.join(fx, f);
+    const config = { test: { globals: true, include: ['*.fx.test.mjs'], testTimeout: 30_000,
+      globalSetup: [path.join(here, 'proc-leak.globalsetup.mjs')] } };
+    writeFileSync(at('vitest.config.mjs'), `export default ${JSON.stringify(config)};\n`);
+    writeFileSync(at('sibling.fx.test.mjs'), [
+      "import { existsSync, writeFileSync } from 'node:fs';",
+      `const started = ${JSON.stringify(at('started'))};`,
+      `const forked = ${JSON.stringify(at('forked'))};`,
+      "it('runs while a sibling forks', () => {",
+      "  writeFileSync(started, '');",
+      '  const until = Date.now() + 20_000;',
+      '  while (!existsSync(forked) && Date.now() < until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);',
+      "  if (!existsSync(forked)) throw new Error('the sibling never forked');",
+      '});',
+      '',
+    ].join('\n'));
+    // Bounded at every step: 30 s for the nested test to start, 30 s for the orphan to be told to stop.
+    const script = 'i=0; while [ ! -e "$FX/started" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done; '
+      + '( touch "$FX/forked"; j=0; while [ ! -e "$FX/stop" ] && [ $j -lt 300 ]; do sleep 0.1; j=$((j+1)); done; '
+      + 'touch "$FX/gone" ) >/dev/null 2>&1 &';
+    spawn('sh', ['-c', script], { stdio: 'ignore', env: { ...process.env, FX: fx } });
+    try {
+      const out = nestedVitest(['run', '--root', fx], fx);
+      expect(existsSync(at('forked')), 'the sibling never forked: the case proved nothing').toBe(true);
+      expect(out).not.toMatch(/outlived the run/);
+    } finally {
+      // The orphan is ended by the condition it watches, never by a PID (D-3533).
+      writeFileSync(at('stop'), '');
+      const until = Date.now() + 5_000;
+      while (existsSync(at('forked')) && !existsSync(at('gone')) && Date.now() < until) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      }
+    }
+  }, 60_000);
 });
