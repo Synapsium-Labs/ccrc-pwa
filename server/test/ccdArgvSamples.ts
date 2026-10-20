@@ -1,9 +1,7 @@
 /**
  * D-6051 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0k; ARCH-23 (#527)). One
  * representative call per `CCD_ARGV` entry, so `ccd-verb-sets.test.ts` can read the verb each entry sends.
- * D-6053: for now a copy of `whitelist-subset.test.ts`'s `SAMPLES`, in neutral fixture vocabulary, because an open
- * PR rewrites that table's lines; once it lands, `whitelist-subset.test.ts` imports this table and its own goes.
- * Both are typed total over `CCD_ARGV`, so a new entry cannot reach one and miss the other.
+ * D-6053: moved here from `whitelist-subset.test.ts`, which imports it as its `SAMPLES`; one table, two readers.
  */
 import type { CCD_ARGV } from '../src/ccdargv.js';
 

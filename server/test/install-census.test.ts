@@ -2085,8 +2085,11 @@ describe('the box token\'s files: uninstall removes the two node records and nam
 
 // ── D-6051 (ARCH-23 (#527), plan 2026-10-19-consolidation-w0-pins.md Task C0k): the files outside PATH and the unit
 // directory. The two describes above hold the `.local/bin` names and the unit files equal between the two
-// installers; this one holds EVERY OTHER destination either places, as a home-relative path, so together the
-// three cover every `install_atomic` destination in deploy.sh and every `_inst_atomic` one in the install spine.
+// installers; this one holds every other `install_atomic` / `_inst_atomic` destination either places (plus the
+// roster's `mv`), as a home-relative path, so together the three cover every `install_atomic` destination in
+// deploy.sh and every `_inst_atomic` one in the install spine. Out of scope: placements made by other means, such as
+// the operator-owned `~/.ccrc/remote-control` seed (written with printf, deliberately different defaults per lane)
+// and deploy.sh's ccd entry placed through `ccd-entry-install.py`.
 
 /** The spine's functions that place files outside `.local/bin` and the unit directory, and how each is read. */
 const FILE_FNS = ['_inst_files', '_inst_skills', '_inst_graphify_skill', '_inst_graph_noise', '_inst_stamp_shipped'];

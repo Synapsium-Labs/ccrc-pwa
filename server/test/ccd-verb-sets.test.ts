@@ -40,6 +40,13 @@ function armLabels(block: string): string[][] {
   return [...block.matchAll(/^ {2}([a-z][a-z0-9|-]*)\)/gm)].map((m) => m[1]!.split('|'));
 }
 
+/** The arm lines whose body is anything but a hand-off to one command: `[shift;] cmd_x ["$@"] ;;`. The dispatcher
+ *  is evaluated only when this is empty, so inline code in a future arm is refused before it ever runs, not after. */
+function unsafeArms(block: string): string[] {
+  return block.split('\n').filter((l) => /^ {2}[a-z][a-z0-9|-]*\)/.test(l))
+    .filter((l) => !/^ {2}[a-z][a-z0-9|-]*\)\s*(shift;\s*)?cmd_[a-z_]+(\s+"\$@")?\s*;;\s*$/.test(l));
+}
+
 /** Evaluates `block` once per word with every `cmd_*` recording its name, and returns the `cmd_*` each word reached
  *  (`null`: none, the catch-all answered). The block and the words ride the environment, never the snippet. */
 function dispatchEach(h: CcdHarness, block: string, words: readonly string[]): Map<string, string | null> {
@@ -112,6 +119,7 @@ describe('ccd\'s four verb lists are one set (D-6051, ARCH-23)', () => {
   let caps: string[];
   let usage: string[];
   let heads: Map<string, string>;
+  let unsafe: string[];
   const SENTINEL = 'no-such-verb';
 
   beforeAll(() => {
@@ -122,11 +130,16 @@ describe('ccd\'s four verb lists are one set (D-6051, ARCH-23)', () => {
     usage = usageVerbs(h);
     heads = argvHeads();
     const words = [...new Set([...labels.flat(), ...caps, ...usage, ...heads.values(), SENTINEL])].sort();
-    reached = dispatchEach(h, block, words);
+    unsafe = unsafeArms(block);
+    reached = unsafe.length === 0 ? dispatchEach(h, block, words) : new Map(words.map((w) => [w, null]));
   });
   afterAll(() => { h.cleanup(); });
 
   const arms = (): string[] => [...reached].filter(([, c]) => c !== null).map(([w]) => w).sort();
+
+  it('every arm only hands off to one command, so evaluating the block runs nothing else', () => {
+    expect(unsafe, 'arms with inline code: the block was not evaluated').toEqual([]);
+  });
 
   it('every arm label dispatches, and nothing else does', () => {
     expect(labels.length, 'too few arms read: the block extractor has gone stale').toBeGreaterThan(30);
