@@ -200,9 +200,7 @@ describe('D-2764', () => {
 // NEIGHBOURS, not modes of `_plat_timeout`, because its body is byte-pinned against two more copies
 // (`ccd-account-auth`, `ccgpt-runtime`) this change must leave alone; `_auth_timeout`, the table's third row, has
 // neither and is not in this describe.
-// `ccd/ccd` joins this list with the mirror commit (its platform block is held byte-identical to `ccd/ccrc`'s, which
-// the parity row below and `macos-platform.test.ts` measure).
-const PLATFORM_COPIES = COPIES.filter(([, file, name]) => name === '_plat_timeout' && file === 'ccrc');
+const PLATFORM_COPIES = COPIES.filter(([, , name]) => name === '_plat_timeout');
 const NEIGHBOURS = ['_plat_timeout_capability', '_plat_timeout_strict'];
 
 /** A directory holding ONLY the named programs, each a symlink to the system's own. A PATH made of it (and the

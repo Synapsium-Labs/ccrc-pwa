@@ -135,8 +135,7 @@ describe('the platform block is one definition, spelled in two files', () => {
       const body = src.slice(at + 1, src.indexOf('\n}\n', at) + 2);
       return body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     };
-    // `ccd/ccd` joins this loop with the mirror commit; until then the block-parity pin above is the one that is red.
-    for (const [name, src] of [['ccrc', ccrc]] as const) {
+    for (const [name, src] of [['ccd', ccd], ['ccrc', ccrc]] as const) {
       const start = src.indexOf('# ── THE PLATFORM LAYER');
       const end = src.indexOf('# ── END PLATFORM LAYER');
       const block = src.slice(start, end);
