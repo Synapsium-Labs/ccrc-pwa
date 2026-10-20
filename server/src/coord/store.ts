@@ -836,8 +836,10 @@ export type LastRunsResult =
   | {
     ok: true; last: LastRun[]; openWorkers: string[]; openClaimants: string[];
     /** D-6091 (fleet capacity W1-1), additive: each asked session's newest run whose state is not `planned` (a wave
-     *  not yet dispatched uses nothing), and the asked sessions a run outside the terminal set AND outside `planned`
-     *  names. The run-done policy's reads; `last` and `openWorkers` keep their meaning for `fleet.ts` and `watch.ts`. */
+     *  not yet dispatched uses nothing), and the asked sessions an ACTIVE run names (D-6092, W1-1b, F5 (b): outside
+     *  the idle and terminal sets, the caps' predicate, so a state this build cannot name counts, and a producer's run
+     *  parked at review, merge or close does not). The run-done policy's reads; `last` and `openWorkers` keep their
+     *  meaning for `fleet.ts` and `watch.ts`. */
     lastPlaced: LastRun[]; openPlacedWorkers: string[];
   }
   | { ok: false; kind: 'run-unreadable'; detail: string };
@@ -3850,10 +3852,12 @@ export class CoordStore {
     if (!Array.isArray(last)) return { ok: false, kind: 'run-unreadable', detail: last.detail };
     const lastPlaced = newest(true);
     if (!Array.isArray(lastPlaced)) return { ok: false, kind: 'run-unreadable', detail: lastPlaced.detail };
-    const open = (placedOnly: boolean): string[] => (this.db.prepare(
-      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state NOT IN ${TERMINAL_RUN_STATES_SQL}` +
-      (placedOnly ? ' AND state <> ?' : ''),
-    ).all(...sessionIds, ...(placedOnly ? [planned] : [])) as { sessionId: string }[]).map((r) => r.sessionId);
+    // D-6092: the run-done policy's "another run still uses it" is the ACTIVE set, read by the caps' own negative
+    // predicate (`INACTIVE_RUN_STATES_SQL`, which leaves `planned` out too); `openWorkers` keeps the non-terminal one.
+    const open = (activeOnly: boolean): string[] => (this.db.prepare(
+      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state NOT IN ` +
+      (activeOnly ? INACTIVE_RUN_STATES_SQL : TERMINAL_RUN_STATES_SQL),
+    ).all(...sessionIds) as { sessionId: string }[]).map((r) => r.sessionId);
     return {
       ok: true, last, openWorkers: open(false), openClaimants: this.openCoordinatorIds(),
       lastPlaced, openPlacedWorkers: open(true),

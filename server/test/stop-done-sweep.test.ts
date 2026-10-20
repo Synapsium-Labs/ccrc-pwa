@@ -552,6 +552,31 @@ describe('stopDonePass: the mail-only feed row (D-6091)', () => {
     expect(bodies).toEqual([`${ID} was put to sleep: its run 10 is done and it sat idle. Mail, a re-dispatch or a restart wakes it.`]);
   });
 
+  it('the asleep row and journal line name a failed run as failed and a parked run by its state (D-6092)', async () => {
+    for (const [state, closedAt, words] of [
+      ['failed', NOW - STOP_DONE_GRACE_MS - 1, 'is failed'],
+      ['merging', null, 'is parked at merging'],
+      ['awaiting-review', null, 'is parked at awaiting-review'],
+    ] as const) {
+      const f = fake([ID]);
+      f.runs.set(ID, { runId: 10, state, closedAt });
+      const bodies: string[] = [];
+      const log = { ...f.deps.notifyLog!, record: (e: { kind: string; body: string }) => {
+        if (e.kind === 'run') bodies.push(e.body);
+        return { ...e, seq: 1, at: NOW };
+      } };
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        await stopDonePass({ ...f.deps, notifyLog: log as unknown as StopDoneSweepDeps['notifyLog'] }, mem(), [row(ID)], [rec(ID)], []);
+        expect(bodies, state).toEqual([`${ID} was put to sleep: its run 10 ${words} and it sat idle. Mail, a re-dispatch or a restart wakes it.`]);
+        const lines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('put ' + ID + ' to sleep'));
+        expect(lines, state).toEqual([`ccrc-server: stop-done: put ${ID} to sleep (run 10 ${words.replace(/^is /, '')}, idle; D-5370, D-5427, D-6091, D-6092)`]);
+      } finally {
+        warn.mockRestore();
+      }
+    }
+  });
+
   it('the feed archive keeps one writer site', () => {
     const src = readFileSync(path.join(__dirname, '..', 'src', 'stopDoneSweep.ts'), 'utf8');
     expect(src.match(/\.recordFeedEvent\(/g) ?? []).toHaveLength(1);
@@ -760,25 +785,25 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
   // D-6092 (fleet capacity W1-1b), the characterization over the real store: a `failed` run's worker, and a producer
   // parked at `awaiting-review` (its marker quiet 7 hours), are held today: the first `not-done`, the second by its own
   // parked run (`run-worker` before `not-done` is even asked).
-  it('today: a failed run\'s worker, closed past the grace and quiet, is held', async () => {
+  it('now: a failed run\'s worker, closed past the grace and quiet, is put to sleep (was: held)', async () => {
     const h = await harness();
     try {
       h.coord.db.prepare("UPDATE runs SET state = 'failed'").run();
       const t = await h.tick();
       await h.w.sweepStopDone(t.rows, t.records, []);
-      expect(h.stops()).toEqual([]);
+      expect(h.stops()).toEqual([['hibernate', WID]]);
     } finally {
       h.coord.db.close();
     }
   });
 
-  it('today: a producer parked at awaiting-review, quiet 7 hours, is held', async () => {
+  it('now: a producer parked at awaiting-review, quiet 7 hours, is put to sleep — its own parked run does not hold it (was: held)', async () => {
     const h = await harness();
     try {
       h.coord.db.prepare("UPDATE runs SET state = 'awaiting-review', closedAt = NULL").run();
       const t = await h.tick();
       await h.w.sweepStopDone(t.rows, t.records, []);
-      expect(h.stops()).toEqual([]);
+      expect(h.stops()).toEqual([['hibernate', WID]]);
     } finally {
       h.coord.db.close();
     }

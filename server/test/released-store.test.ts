@@ -164,8 +164,8 @@ describe('CoordStore.lastRunBySession: openPlacedWorkers per F5 (b) (D-6092)', (
   };
 
   for (const state of ['awaiting-review', 'merging', 'closing']) {
-    it(`today: a run parked at ${state} names the session in openPlacedWorkers`, () => {
-      expect(at(state)).toEqual(['demo-worker']);
+    it(`now: a run parked at ${state} names no one in openPlacedWorkers (was: the session)`, () => {
+      expect(at(state)).toEqual([]);
     });
   }
 
