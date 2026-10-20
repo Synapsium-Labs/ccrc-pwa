@@ -1376,3 +1376,88 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     for (const p of ['/api/sessions/:id/prompt', '/api/sessions/:id/dialog/text', '/api/claims', '/api/mail']) expect(WRITE_ANSWER_EXEMPT.test(p), p).toBe(false);
   });
 });
+
+describe('the post-merge audit: a key the TUI wraps early on its row (D-5995)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const PROJ = [SK, 'proj', fill(48, 'pj')].join('-');
+  const GEN = [SK, fill(40, 'gn')].join('-');
+  const WRAPPED: [string, string][] = [['sk-ant', OAT], ['sk-proj', PROJ], ['generic sk-', GEN], ['JWT', JWT]];
+  /** A row end and the next row's indent, as the TUI or a tmux redraw writes them. */
+  const INDENTS = ['\r\n    ', '\r\n     ', '\x1b[K\r\n\x1b[5C'];
+
+  it('a shape wrapped onto an indented next row before it can match on its first row leaves no byte of it, at every cut and under every indent form, in rows mode', () => {
+    const m = new SecretMasker();
+    for (const [name, k] of WRAPPED) {
+      for (let cut = 1; cut < k.length; cut++) {
+        for (const sep of INDENTS) {
+          const o = m.maskText(`  ⎿  key ${k.slice(0, cut)}${sep}${k.slice(cut)}\r\n$ `, { rows: true });
+          expect(leaksNone(o, k), `${name} cut ${cut} ${JSON.stringify(sep)}: ${JSON.stringify(o)}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('the same wrap split at the row break across two drawer pushes, back to back or within the row settle, leaves no byte of it', () => {
+    vi.useFakeTimers();
+    const m = new SecretMasker();
+    for (const [name, k] of WRAPPED) {
+      for (let cut = 1; cut < k.length; cut++) {
+        for (const gap of [0, 3, 9]) {
+          const out: string[] = [];
+          const d = m.drawer((t) => out.push(t));
+          d.push(`  ⎿  key ${k.slice(0, cut)}\r\n`);
+          if (gap > 0) vi.advanceTimersByTime(gap);
+          d.push(`    ${k.slice(cut)}\r\n$ `);
+          vi.advanceTimersByTime(80);
+          expect(leaksNone(screen(out.join('')), k), `${name} cut ${cut} gap ${gap}: ${JSON.stringify(out)}`).toBe(true);
+          d.dispose();
+        }
+      }
+    }
+    const out: string[] = [];
+    const d = m.drawer((t) => out.push(t));
+    d.push(`  ⎿  key ${OAT.slice(0, 10)}\r\n`);
+    vi.advanceTimersByTime(9);
+    d.push(`    ${OAT.slice(10)}\r\n$ `);
+    vi.advanceTimersByTime(80);
+    expect(screen(out.join(''))).toBe(`  ⎿  key ${SECRET_MASK}\n    ${SECRET_MASK}\n$`);
+    d.dispose();
+  });
+
+  it('with fingerprint rows held, a chunk that ends a compatible key\'s first row with its row end shows none of it when the indented next row follows, back to back or within the row settle', () => {
+    vi.useFakeTimers();
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    for (const cut of [20, 30, CMP.length - 3]) {
+      for (const gap of [0, 9]) {
+        const out: string[] = [];
+        const d = m.drawer((t) => out.push(t));
+        d.push(`key ${CMP.slice(0, cut)}\r\n`);
+        if (gap > 0) vi.advanceTimersByTime(gap);
+        d.push(`    ${CMP.slice(cut)}\r\n$ `);
+        vi.advanceTimersByTime(80);
+        expect(leaksNone(out.join(''), CMP), `cut ${cut} gap ${gap}: ${JSON.stringify(out)}`).toBe(true);
+        expect(screen(out.join('')), `cut ${cut} gap ${gap}`).toBe(`key ${SECRET_MASK}\n    ${SECRET_MASK}\n$`);
+        d.dispose();
+      }
+    }
+    m.close();
+  });
+
+  it('a row that ends in an ordinary word goes at once in the shape-only mode, and is drawn as typed once the output goes quiet with fingerprint rows held', () => {
+    vi.useFakeTimers();
+    const { m: held } = maskerOver(() => TOKEN_1, [CMP]);
+    for (const [name, m] of [['shape-only', new SecretMasker()], ['held', held]] as const) {
+      const out: string[] = [];
+      const d = m.drawer((t) => out.push(t));
+      d.push(`Downloading ${'w'.repeat(CMP.length - 2)}\r\n`);
+      if (name === 'shape-only') expect(out.join(''), name).toBe(`Downloading ${'w'.repeat(CMP.length - 2)}\r\n`);
+      vi.advanceTimersByTime(80);
+      expect(screen(out.join('')), name).toBe(`Downloading ${'w'.repeat(CMP.length - 2)}`);
+      d.push('$ ');
+      vi.advanceTimersByTime(80);
+      expect(screen(out.join('')), name).toBe(`Downloading ${'w'.repeat(CMP.length - 2)}\n$`);
+      d.dispose();
+    }
+    held.close();
+  });
+});
