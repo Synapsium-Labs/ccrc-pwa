@@ -2422,6 +2422,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         replaces, so the probe's 10240M size line is about two taps away. STATUS: fleet and server v0.0.488, newest
         v0.0.492, stable v0.0.328, intent dev/auto=off, backups fleet 185M/server 8627M, disk free fleet 198G/work
         volume 54G/server 24G, no anomalies.
+      - **20:55 UTC: both boxes on v0.0.493 (#1030) by the operator's tap, clean; the broker's block doubled today.**
+        - Fleet 20:12:56 to 20:14:22, server 20:14:53 to 20:16:57 (`ccrc.service` restarted 20:16:00). Both `done`,
+          `from: pwa`, gates passed, doctor 0 failed on both. Server backups 8951M, 10 kept, the newest 1058M.
+        - The probe's NOTE again: `/health` silent for 5 s at about 20:58:05, then v0.0.493 on the retry. That makes
+          three misses today, each inside a slow pass. The hourly mean of `block` rose from 13.9 s (14:00) to 28.6 s
+          (20:00), max 45.8 s. `rewrite`'s mean rose every hour, 5.2 s to 9.3 s, while `appended` did not trend.
+          `coord.db` is 690M against 532M at 15:00. Sent to the broker's coordinator as mail 7390, data only.
+        - Server free disk 23G, down 2G since 15:00, mostly backups (four taps). At today's tap pace, the 15G line
+          is about a day and a half away.
+        - The macOS fix is #1032 (mail 7371), test-only, with Linux green. Its full run 39489945328 on the fix
+          branch: test-macos 1/4 to 3/4 are green, and 4/4, the shard that carries the file, is still running.
+        - STATUS: fleet and server v0.0.493, newest v0.0.495, stable v0.0.328, intent dev/auto=off, backups fleet
+          185M/server 8951M, disk free fleet 197G/work volume 49G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
