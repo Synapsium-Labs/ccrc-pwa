@@ -10,6 +10,7 @@
  * paste a key, fix permissions, edit the file, or just press Check again. Folding any two is the overloaded
  * result CLAUDE.md forbids.
  */
+import type { NameRefusal } from './slug.js';
 
 /** The shortest key the server will send to Linear. A personal API key is several dozen characters; the floor
  *  stops a pasted word from being stored and, with it, `keyTail` from showing a quarter of a short value. */
@@ -90,3 +91,27 @@ export type LinearDetailsRead =
 
 /** The body of every successful `/api/linear/connection` answer. */
 export interface LinearConnectionAnswer { ok: true; connection: LinearConnectionView }
+
+/**
+ * Why a lookup of a ticket's title produced none: THE ONE LIST of the failure arms, read by the server's client
+ * (`server/src/linear/client.ts` makes them) and by the PWA (`LOOKUP_NOTE` says each in a sentence, a `satisfies
+ * Record` over this type, so a new arm is a compile error until it has its words). EACH ITS OWN, because the operator
+ * and the caller do different things about each: `not-configured` is a setup step, `unauthorised` a bad or expired
+ * key, `not-found` a ticket that does not exist (or that the key cannot see), `timeout` is worth retrying,
+ * `malformed` is an answer that was not the shape asked for, and `unreachable` is everything else the service or the
+ * network did (a 5xx, a 429, a refused connection, a GraphQL errors array).
+ */
+export const LINEAR_FAILURES = [
+  'not-configured', 'unauthorised', 'not-found', 'timeout', 'malformed', 'unreachable',
+] as const;
+export type LinearFailure = (typeof LINEAR_FAILURES)[number];
+
+/**
+ * What `GET /api/linear/resolve` answers (named workspaces S4, S7). `reason` is the grammar's refusal for a `refused`
+ * name, and, on a `named` one that fell back to `source: 'offline'`, the Linear failure arm that made it: the `kind`
+ * says which vocabulary it is.
+ */
+export type ResolveAnswer =
+  | { kind: 'auto'; slug: null; title: null; source: 'offline' }
+  | { kind: 'refused'; slug: null; title: null; source: 'offline'; reason: NameRefusal }
+  | { kind: 'named'; slug: string; title: string; source: 'linear' | 'offline'; reason?: LinearFailure };

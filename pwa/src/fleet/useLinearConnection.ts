@@ -10,12 +10,12 @@ import type { LinearConnectionView } from '../../../shared/linear';
 import { api } from '../lib/api';
 
 /** Why there is no view: the read failed, or its answer was a body this build cannot read. */
-export type LinearFailure = 'failed';
+export type LinearReadFailure = 'failed';
 
 export interface LinearPoll {
   /** The LAST GOOD answer: a later failure never clears it. */
   view: LinearConnectionView | null;
-  failure: LinearFailure | null;
+  failure: LinearReadFailure | null;
   /** One read now, under the newest-issued guard. */
   reload: () => void;
   /** Install a write's answer and drop every read issued before it. */
@@ -23,7 +23,7 @@ export interface LinearPoll {
 }
 
 export function useLinearConnection(): LinearPoll {
-  const [state, setState] = useState<{ view: LinearConnectionView | null; failure: LinearFailure | null }>({ view: null, failure: null });
+  const [state, setState] = useState<{ view: LinearConnectionView | null; failure: LinearReadFailure | null }>({ view: null, failure: null });
   const issued = useRef(0);
   const loadRef = useRef<() => void>(() => {});
 

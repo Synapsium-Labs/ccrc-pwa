@@ -12,13 +12,14 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  LINEAR_API_ORIGIN, LINEAR_API_PATH, LINEAR_FAILURES, LINEAR_TIMEOUT_MS,
+  LINEAR_API_ORIGIN, LINEAR_API_PATH, LINEAR_TIMEOUT_MS,
   lookupLinearIssue, sanitizeTitle, verifyLinearKey, type FetchLike, type LinearLookup,
 } from '../src/linear/client.js';
 import { LINEAR_KEY_FILE, linearKeyPath, readLinearKey, type LinearKeyRead } from '../src/linear/connection.js';
 import { ticketTitle } from '../src/linear/title.js';
 import { valueDigestHex } from '../src/token/files.js';
 import { PLACEHOLDER_TOKEN } from '../src/coord/token.js';
+import { LINEAR_FAILURES } from '../../shared/linear.js';
 import { WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 

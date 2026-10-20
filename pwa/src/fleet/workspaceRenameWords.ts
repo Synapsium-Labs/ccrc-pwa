@@ -11,6 +11,7 @@
 // THE PWA DOES NOT KNOW WHAT `ccd caps` LISTS, so it cannot hide Rename on a box whose ccd predates the verb. The
 // server's `501 unsupported` (`needs: 'ws-title'`) is read here and said plainly instead.
 import { ApiError } from '../lib/apiError';
+import { BAD_TITLE_REASONS, type BadTitleReason } from '../../../shared/refusal';
 import { NAME_REFUSAL_TEXT, isNameRefusal, type NameRefusal } from '../../../shared/slug';
 import { BAD_REQUEST_TEXT } from './workspaceAddWords';
 
@@ -43,7 +44,7 @@ export type RenameRefusal =
   /** `reason` is null for a word this build does not know: the sentence is then the generic one. */
   | { kind: 'bad-name'; reason: NameRefusal | null }
   /** ccd refused text the server had already sanitised, so the two sanitisers disagree; the reason is ccd's rule. */
-  | { kind: 'bad-title'; reason: 'blank' | 'control-characters' | 'too-long' | null }
+  | { kind: 'bad-title'; reason: BadTitleReason | null }
   | { kind: 'not-a-workspace' }
   | { kind: 'unknown-session' }
   /** The fleet box's ccd does not list the verb `ws-title`. */
@@ -59,8 +60,7 @@ export type RenameRefusal =
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-const BAD_TITLE_REASONS = ['blank', 'control-characters', 'too-long'] as const;
-const badTitleReason = (v: unknown): 'blank' | 'control-characters' | 'too-long' | null =>
+const badTitleReason = (v: unknown): BadTitleReason | null =>
   BAD_TITLE_REASONS.find((r) => r === v) ?? null;
 
 export function classifyRenameError(err: unknown): RenameRefusal {
@@ -87,7 +87,7 @@ export function classifyRenameError(err: unknown): RenameRefusal {
   return { kind: 'other', status: err.status };
 }
 
-const BAD_TITLE_TEXT: Record<'blank' | 'control-characters' | 'too-long', string> = {
+const BAD_TITLE_TEXT: Record<BadTitleReason, string> = {
   'blank': "The fleet box's ccd says that title is blank. Type one, or clear the title instead.",
   'control-characters': "The fleet box's ccd says that title has a control character in it. Retype it without pasting.",
   'too-long': "The fleet box's ccd says that title is too long. Shorten it, or paste just the ticket id.",

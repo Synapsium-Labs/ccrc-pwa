@@ -10,13 +10,17 @@
 //
 // NEVER A GATE. Every fallback keeps the title the operator typed and leaves the create open: "Linear is a lookup,
 // never a gate" (design §In short). A refusal here is the GRAMMAR's (`NameRefusal`), never Linear's.
+import { LINEAR_FAILURES, type LinearFailure } from '../../../shared/linear';
 import { NAME_REFUSAL_TEXT, deriveWorkspaceSlug, offlineTitle, type NameRefusal } from '../../../shared/slug';
 
+/** The two notes that are this client's: the preview call itself failed, or answered a word this build does not know. */
+type ClientNote = 'unrecognised' | 'call-failed';
+
 /**
- * Why a ticket's title fell back to the typed text, and the one sentence for each. The first six are the server's
- * `LinearFailure` words, which `GET /api/linear/resolve` carries as `reason` (the server's own list is
- * `server/src/linear/client.ts`'s `LINEAR_FAILURES`); the last two are this client's: the preview call itself failed,
- * or answered a word this build does not know. A `Record`, so a word without its sentence is a compile error.
+ * Why a ticket's title fell back to the typed text, and the one sentence for each. The server's `LinearFailure` words,
+ * which `GET /api/linear/resolve` carries as `reason` (`shared/linear.ts`'s `LINEAR_FAILURES`, the one list), and the two
+ * that are this client's (`ClientNote`). `satisfies Record<…>` over both, so a word without its sentence, or a sentence
+ * for a word that is not one, is a compile error.
  *
  * `pointer` is set where the remedy is in Settings: the field then offers the way there.
  */
@@ -29,15 +33,14 @@ export const LOOKUP_NOTE = {
   'malformed': { hint: "Linear's answer wasn't usable, so the title is what you entered.", pointer: null },
   'unrecognised': { hint: "Linear's lookup said something this app doesn't know, so the title is what you entered.", pointer: null },
   'call-failed': { hint: "Couldn't check Linear just now, so the title is what you entered. The server asks again when you add it.", pointer: null },
-} as const satisfies Record<string, { hint: string; pointer: string | null }>;
+} as const satisfies Record<LinearFailure | ClientNote, { hint: string; pointer: string | null }>;
 
 export type LookupNote = keyof typeof LOOKUP_NOTE;
 
 /** The words the server's `reason` can be; the two client-side notes are not on its wire. */
-export type ResolveReason = Exclude<LookupNote, 'unrecognised' | 'call-failed'>;
+export type ResolveReason = LinearFailure;
 
-export const isResolveReason = (v: unknown): v is ResolveReason =>
-  typeof v === 'string' && v !== 'unrecognised' && v !== 'call-failed' && Object.hasOwn(LOOKUP_NOTE, v);
+export const isResolveReason = (v: unknown): v is ResolveReason => (LINEAR_FAILURES as readonly unknown[]).includes(v);
 
 /** What `GET /api/linear/resolve` answered for a name that parsed, as `lib/api.ts` reads it. The title is the one
  *  the create will use whenever Linear answers (the route resolves it again, with the same function). */

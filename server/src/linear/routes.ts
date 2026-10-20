@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { isLinearKeyShape, type LinearConnectionAnswer, type LinearConnectionView } from '../../../shared/linear.js';
+import { LINEAR_REF_MAX_CHARS } from '../workspaceCreate.js';
 import { refuseRoute } from '../refuse.js';
 import type { AccountGate } from '../accounts/gate.js';
 import { valueDigestHex } from '../token/files.js';
@@ -8,11 +9,8 @@ import {
   keyTailOf, readLinearDetails, readLinearKey, recordLinearCheck, removeLinearConnection,
   withConnectionLock, writeLinearConnection, type LinearKeyRead,
 } from './connection.js';
-import { LINEAR_REF_MAX_CHARS, resolveName, type ResolveAnswer } from './resolve.js';
+import { resolveName } from './resolve.js';
 import { checkOutcomeOf, linearConnectionView, type KeyMeasure } from './view.js';
-
-// Kept importable from here: the route's own tests and the preview's callers name them beside the route.
-export { LINEAR_REF_MAX_CHARS, type ResolveAnswer };
 
 export interface LinearRouteOpts {
   /** The config's ccrc dir (`cfg.ccrcDir`), where `linear.key` and `linear.json` live. */

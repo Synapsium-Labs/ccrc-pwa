@@ -10,27 +10,11 @@
  * format (`title.ts`, L1) has not already decided. It never rejects, every Linear failure arm degrades to the
  * offline title carrying its fixed word as `reason`, and neither the key, its digest nor Linear's text leaves it.
  */
+import type { LinearFailure, ResolveAnswer } from '../../../shared/linear.js';
 import { deriveWorkspaceSlug, offlineTitle, type SlugAsk } from '../../../shared/slug.js';
-import { lookupLinearIssue, sanitizeTitle, type FetchLike, type LinearFailure } from './client.js';
+import { lookupLinearIssue, sanitizeTitle, type FetchLike } from './client.js';
 import { markLinearRejected, readLinearKey } from './connection.js';
 import { ticketTitle } from './title.js';
-import { LINEAR_REF_MAX_CHARS } from '../workspaceCreate.js';
-
-// The bound lives with the create's decisions (`../workspaceCreate.ts`, L1), which an L3 file may import and the
-// reverse would not be allowed; it is re-exported so the preview and the create can never hold two numbers.
-export { LINEAR_REF_MAX_CHARS };
-
-/**
- * What the sheet reads. `reason` is a refusal word (`NameRefusal`) when `kind` is `refused`, and the Linear failure
- * arm when a ticket fell back to `source: 'offline'`; `kind` says which vocabulary it is.
- */
-export interface ResolveAnswer {
-  kind: 'auto' | 'named' | 'refused';
-  slug: string | null;
-  title: string | null;
-  source: 'linear' | 'offline';
-  reason?: string;
-}
 
 export interface ResolveDeps {
   /** The config's ccrc dir (`cfg.ccrcDir`), where `linear.key` lives. */

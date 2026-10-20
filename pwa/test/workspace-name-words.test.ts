@@ -6,6 +6,7 @@ import {
   type NamePreview,
 } from '../src/fleet/workspaceNameWords';
 import { accountIsHomeAble } from '../src/lib/accounts';
+import { LINEAR_FAILURES } from '../../shared/linear';
 import { TEST_ROSTER } from './rosterFixture';
 import { NAME_REFUSAL_TEXT } from '../../shared/slug';
 
@@ -91,7 +92,9 @@ describe('LOOKUP_NOTE', () => {
   });
 
   it('reads the server\'s words and none of the client\'s own as a server reason', () => {
-    for (const w of ['not-configured', 'unauthorised', 'not-found', 'timeout', 'malformed', 'unreachable']) expect(isResolveReason(w)).toBe(true);
+    // Derived from the one list the server also reads, so a new arm is covered here the day it is added.
+    for (const w of LINEAR_FAILURES) expect(isResolveReason(w)).toBe(true);
+    expect(Object.keys(LOOKUP_NOTE).sort()).toEqual([...LINEAR_FAILURES, 'unrecognised', 'call-failed'].sort());
     for (const w of ['unrecognised', 'call-failed', 'nope', 3, null, undefined]) expect(isResolveReason(w)).toBe(false);
   });
 });

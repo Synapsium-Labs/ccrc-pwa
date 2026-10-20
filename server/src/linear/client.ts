@@ -28,6 +28,7 @@
  * scanner (`topology-clean.test.ts`) refuses a host and a path written joined,
  * in any tracked file or any blob the branch adds.
  */
+import type { LinearFailure } from '../../../shared/linear.js';
 import { WS_TITLE_MAX_BYTES } from '../../../shared/slug.js';
 import { valueDigestHex } from '../token/files.js';
 import type { LinearKeyRead } from './connection.js';
@@ -69,23 +70,6 @@ export function sanitizeTitle(raw: string): string {
   }
   return `${kept.trimEnd()}…`;
 }
-
-/**
- * Why a lookup produced no title. EACH ITS OWN, because the caller and the
- * operator do different things about each: `not-configured` is an operator
- * setup step, `unauthorised` a bad or expired key, `not-found` a ticket that
- * does not exist (or that the key cannot see), `timeout` is worth retrying,
- * `malformed` is an answer that was not the shape asked for (Linear changed, or
- * something else is answering), and `unreachable` is everything else the
- * service or the network did (a 5xx, a 429, a refused connection, a GraphQL
- * errors array). Folding them into one "failed" is the overloaded seam
- * CLAUDE.md forbids, and here it would be the difference between "paste your
- * key" and "check the ticket number".
- */
-export const LINEAR_FAILURES = [
-  'not-configured', 'unauthorised', 'not-found', 'timeout', 'malformed', 'unreachable',
-] as const;
-export type LinearFailure = (typeof LINEAR_FAILURES)[number];
 
 /** The ticket half of a parsed name. Structural, so `shared/slug.ts`'s `LinearRef` satisfies it. */
 export interface LinearTicket { key: string; num: string }
