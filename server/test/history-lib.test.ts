@@ -2127,7 +2127,7 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     // The span's 15 readings and the offset reading's 6 candidates: measured 3.7-4.6x one redaction of the field
     // without the context layer, 24-28x with it (8.7-9.6x at 2a8c791bf). Interleaved, each kept at its minimum.
     expect(tLead).toBeLessThan(12 * tOne);
-  }, 60_000);
+  }, 120_000);   // R11: a ceiling, not the detector (the ratio decides); each composed door reads twice
   it('the mark holds no JSON- or XML-special character, and the final belt applies the same layers', () => {
     expect(M).not.toMatch(/["\\<>&]/);
     const tok = rndHex(32);
@@ -2315,7 +2315,8 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     }
     // a leaf the field form's own mask turns into a JSON-form match: only the final pass after it sees the value
     const shaped = '"token":"hunter2hunter2API_KEY: \\"';
-    expect(libRedact.redactField(shaped, idx), 'CONTROL: the field form alone leaves the value').toContain('hunter2hunter2');
+    // R11: the field door's v2 reading reads the base reading's output and takes it too, so the CONTROL reads one pass
+    expect(libRedact.redactDoorReadings(libRedact.redactField)!.base(shaped, idx), 'CONTROL: one field pass leaves the value').toContain('hunter2hunter2');
     expect(JSON.stringify(libRedact.redactFinalJson(shaped, idx)), 'both passes mask it').not.toContain('hunter2hunter2');
     expect(JSON.stringify(libRedact.redactFinalJson(`TOKEN=${M}`, idx)), 'idempotent on the mark').toBe(`"TOKEN=${M}"`);
   });
@@ -2460,14 +2461,14 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     }
   });
   // D-5021 (ruling 5020): the same five characters in every form, by what each form's value class admits. A class that admits the
-  // character masks the value whole; a class that ENDS at it (B1's shared rule, unchanged from the base, and widening it is a
-  // reindex that B3 evaluates) leaves the field pass's own output, so redactFinalLines must equal redactField there: the field pass
+  // character masks the value whole; a class that ENDS at it (the Bearer and box-token header classes at `"`, kept by ruling R2;
+  // D-5745 widened the named form's) leaves the field pass's own output, so redactFinalLines must equal redactField there: the field pass
   // stays the guard. Each pin is red when the field pass leaves redactFinalLines.
   it('(j3) every form masks a value holding < > & " or a backslash whole where its class admits the character, and equals the field pass where its class ends (D-5021)', () => {
     const idx = idxOf([]);
     const cases = f2Cases();
     expect(cases.filter((c) => c.whole).length, 'CONTROL: the table holds whole-mask cases').toBeGreaterThanOrEqual(15);
-    expect(cases.filter((c) => !c.whole).length, 'CONTROL: and ends-at cases').toBeGreaterThanOrEqual(10);
+    expect(cases.filter((c) => !c.whole).length, 'CONTROL: and ends-at cases (D-5745 moved the named form\'s & " ; , \' to whole)').toBeGreaterThanOrEqual(9);
     for (const c of cases) {
       const out = libRedact.redactFinalLines(c.input, idx);
       const field = libRedact.redactField(c.input, idx);
@@ -2479,8 +2480,9 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
         expect(out.match(/\[redacted\]/g) ?? [], `${why}: one mark`).toHaveLength(1);
       }
     }
-    // the residual, as measured: the two examples D-5021 records
-    expect(libRedact.redactFinalLines('password=abc&def', idx)).toBe(`password=${M}&def`);
+    // D-5021's two recorded examples: D-5745 closes the named one (the field form reads the value whole), and the Bearer one stays by
+    // ruling R2 (an RFC 6750 b64token never holds a quote, and a closing `"` after a header value is the common real case)
+    expect(libRedact.redactFinalLines('password=abc&def', idx)).toBe(`password=${M}`);
     expect(libRedact.redactFinalLines('Authorization: Bearer abc"def', idx)).toBe(`Authorization: Bearer ${M}"def`);
   });
   // D-5021, review 462 F4: redactFinalLines is the field pass and THEN the final pass. The (j3) pins are satisfied by the field pass
@@ -2491,9 +2493,361 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     // assembled at run time: the repository is public, and a key-shaped literal is what push protection reads
     const pem = ['-----BEGIN ', 'PRIVATE KEY-----\n', 'MIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8', '\n-----END ', 'PRIVATE KEY-----'].join('');
     const text = `x-ccrc-mail-token: ${pem}TAILSECRET99`;
-    expect(libRedact.redactField(text, idx), 'CONTROL: the field pass alone leaves the tail').toBe(`x-ccrc-mail-token: ${M}TAILSECRET99`);
+    // R11: the field door is now two field passes (its v2 reading over its base reading), and the second takes this tail too, so the
+    // CONTROL reads one pass, the base reading; the second input holds the final pass after both field passes
+    const field = libRedact.redactDoorReadings(libRedact.redactField)!;
+    expect(field.base(text, idx), 'CONTROL: one field pass leaves the tail').toBe(`x-ccrc-mail-token: ${M}TAILSECRET99`);
     expect(libRedact.redactFinalLines(text, idx), 'the final pass takes it').toBe(`x-ccrc-mail-token: ${M}`);
+    const quoted = '"api_key":"hunter2xyz:token=abc&def\\"';
+    expect(libRedact.redactField(quoted, idx), 'CONTROL: both field passes leave the JSON value').toBe(`"api_key":"hunter2xyz:token=${M}"`);
+    expect(libRedact.redactFinalLines(quoted, idx), 'the final pass takes it').toBe(`"api_key":"${M}"`);
   });
+  // D-5745 (history-redact-value-class-widened; closes D-5021's residual; ruling R1): the FIELD form's named value is read whole. A
+  // quoted value runs to its closing quote on the same line. An unquoted value still ends at whitespace and the backtick; it ends at
+  // `&` only before NAME=, and at `,` `;` `"` `'` only before whitespace, a closer or the end of the text. The final form is unchanged
+  // (D-4613's structure safety). Every door reads the widened rules only over its rev 3.6 door's output (R11), so no door masks less
+  // than at the base. A key-shaped literal is never written: these values are plain words.
+  it('(j5) the field form reads a named value whole: & ; , and either quote inside it, and a quoted value to its closing quote (D-5745)', () => {
+    const idx = idxOf([]);
+    // [input, the field door's output, the final form's output alone: v1's reading, unchanged]
+    const cases: Array<[string, string, string]> = [
+      ['password=abc&def', `password=${M}`, `password=${M}&def`],
+      ['password=abc;def', `password=${M}`, `password=${M};def`],
+      ['password=abc,def', `password=${M}`, `password=${M},def`],
+      ["password=abc'def", `password=${M}`, `password=${M}'def`],
+      ['password=abc"def', `password=${M}`, `password=${M}"def`],
+      ['password="abc&def"', `password="${M}"`, `password="${M}&def"`],
+      ['export PASSWORD="s3cr;et"', `export PASSWORD="${M}"`, `export PASSWORD="${M};et"`],
+      ["PASSWORD='a b c'", `PASSWORD='${M}'`, `PASSWORD='${M} b c'`],
+      ['secret: "two words" next', `secret: "${M}" next`, `secret: "${M} words" next`],
+      // an unclosed quote: the rev 3.6 door masks the value after it, and the widened rules read the quote and that mark as one value
+      ['password="abc def', `password=${M} def`, `password="${M} def`],
+      // the plan's third review found the widened reading ALONE less masked than the base on these: a quoted value that takes a
+      // secret NAME and `: ` or a tab in, and an unclosed quote a closer follows. Read over the rev 3.6 door's output (R11), each is
+      // masked at least as the base masks it
+      ['PASSWORD="token: "hunter2xyz', `PASSWORD="${M}"${M}`, `PASSWORD="${M} "${M}`],
+      ["SECRET='password: 'hunter2xyz", `SECRET='${M}'${M}`, `SECRET='${M} '${M}`],
+      ['PASSWORD="token:\thunter2 "zz', `PASSWORD="${M}"zz`, `PASSWORD="${M}\t${M} "zz`],
+      ['PASSWORD=")Kq9xYz end', `PASSWORD=${M} end`, `PASSWORD="${M} end`],
+      ["token: ']Wq8 next", `token: ${M} next`, `token: '${M} next`],
+      ['password="}abc', `password=${M}`, `password="${M}`],
+    ];
+    for (const [input, want, finalAlone] of cases) {
+      expect(libRedact.redactField(input, idx), input).toBe(want);
+      expect(libRedact.redactFinalLines(input, idx), `redactFinalLines: ${input}`).toBe(want);
+      expect(libRedact.redactFinalJson({ a: input }, idx), `redactFinalJson: ${input}`).toEqual({ a: want });
+      expect(libRedact.redactFinal(input, idx), `CONTROL: the final form is unchanged (D-4613): ${input}`).toBe(finalAlone);
+      expect(libRedact.redactForIndex(input, idx), `redactForIndex: ${input}`).toBe(want);
+      expect(libRedact.redactForDisplay(input, idx), `redactForDisplay: ${input}`).toBe(want);
+      expect(libRedact.redactField(want, idx), `idempotent: ${want}`).toBe(want);
+    }
+    // an ESCAPED quote takes no quoted arm: the rev 3.6 door masks the backslash alone, and the widened rules read that mark and the
+    // `"a` after it as one value. Raw, and JSON-serialised. [input, the field door's output, the final form alone, the index door's]
+    const escaped: Array<[string, string, string, string]> = [
+      ['password=\\"a b\\"', `password=${M} b\\"`, 'password=\\"a b\\"', `password=${M} b\\"`],
+      [JSON.stringify('password="a b"'), `"password=${M} b\\""`, JSON.stringify('password="a b"'), `"password=${M} b\\""`],
+    ];
+    for (const [input, want, finalAlone, indexed] of escaped) {
+      expect(libRedact.redactField(input, idx), input).toBe(want);
+      expect(libRedact.redactFinalLines(input, idx), `redactFinalLines: ${input}`).toBe(want);
+      expect(libRedact.redactFinalJson({ a: input }, idx), `redactFinalJson: ${input}`).toEqual({ a: want });
+      expect(libRedact.redactFinal(input, idx), `CONTROL: the final form is unchanged (D-4613): ${input}`).toBe(finalAlone);
+      expect(libRedact.redactForIndex(input, idx), `redactForIndex: ${input}`).toBe(indexed);
+      expect(libRedact.redactForDisplay(input, idx), `redactForDisplay: ${input}`).toBe(indexed);
+    }
+    // the plan's fifth review: a NAME=value glued to an escaped JSON pair. Read alone, the widened rules took the escaped key into the
+    // NAME's value, and the index and display readings, decoding the escapes, then printed hunter2xyz on every glue. The rev 3.6 door
+    // masks it, and the widened rules read only that door's output (R11)
+    const escapedPair = String.raw`{"text":"TOKEN=abc,\"api_key\": \"hunter2xyz\"}"}`;
+    for (const door of [libRedact.redactForIndex, libRedact.redactForDisplay, libRedact.entryIndexText]) {
+      expect(door(escapedPair, idx), `${door.name}: ${escapedPair}`).toBe(`{"text":"TOKEN=${M} "${M}"}"}`);
+      expect(door(String.raw`TOKEN=abc\"api_key\": \"hunter2xyz\"`, idx), `${door.name}: bare`).toBe(`TOKEN=${M} "${M}"`);
+      for (const name of ['TOKEN', 'password', 'api_key', 'SECRET_KEY']) {
+        for (const key of ['api_key', 'token', 'password', 'secret']) {
+          for (const glue of ['', ',', ';', '&', ')', '}', ']', '|', '/', ':', '(', '{', '[', "'"]) {
+            const bare = `${name}=abc${glue}\\"${key}\\": \\"hunter2xyz\\"`;
+            for (const text of [bare, `{"text":"${bare}"}`]) expect(door(text, idx), `${door.name}: ${text}`).not.toContain('hunter2xyz');
+          }
+        }
+      }
+    }
+    // a tail head after a quoted value reads its own quoted value; each span is its value group's own, so both closing quotes stay.
+    // A widened value that ends in a head hands it its quoted value too, which the base reads as no value
+    expect(libRedact.redactField('password="xAPI_KEY="hunter2two"', idx)).toBe(`password="${M}"${M}"`);
+    expect(libRedact.redactField("password=a,API_KEY=' hunter2 two' end", idx)).toBe(`password=${M}'${M}' end`);
+    // whitespace and the backtick still end an unquoted value, and a quoted value never crosses a line
+    expect(libRedact.redactField('password=abc def', idx)).toBe(`password=${M} def`);
+    expect(libRedact.redactField('password=abc`def', idx)).toBe(`password=${M}\`def`);
+    expect(libRedact.redactField('password="abc\ndef"', idx)).toBe(`password=${M}\ndef"`);
+  });
+  it('(j6) the widened value keeps structure: & before NAME=, and , ; " \' before whitespace, a closer or the end, still end it (D-5745)', () => {
+    const idx = idxOf([]);
+    const cases: Array<[string, string]> = [
+      ['url?a=1&password=x&b=2', `url?a=1&password=${M}&b=2`],
+      ['password=abc; path=/', `password=${M}; path=/`],
+      ['password=abc, user=bob', `password=${M}, user=bob`],
+      ['token=x&next=1', `token=${M}&next=1`],
+      ['{"cmd":"password=abc"}', `{"cmd":"password=${M}"}`],
+      ["run('password=abc')", `run('password=${M}')`],
+      ['f(password=abc;)', `f(password=${M};)`],
+      ['password=abc;', `password=${M};`],
+    ];
+    for (const [input, want] of cases) {
+      expect(libRedact.redactField(input, idx), input).toBe(want);
+      expect(libRedact.redactFinalLines(input, idx), `redactFinalLines: ${input}`).toBe(want);
+    }
+    // CONTROLs: an empty quoted value is no value, a line with no secret name is unchanged, and marks are a fixed point
+    for (const x of ['TOKEN=""', "TOKEN='' next", 'level=INFO path=/a/b', 'a=b&c=d <x> "q"', `password="${M}"`, `password=${M}`]) {
+      expect(libRedact.redactField(x, idx), x).toBe(x);
+      expect(libRedact.redactFinalLines(x, idx), x).toBe(x);
+    }
+  });
+  it('(j7) a stored v1 output heals: the field door over what v1 printed equals the field door over the raw text (D-5745)', () => {
+    const idx = idxOf([]);
+    const base = libRedact.redactDoorReadings(libRedact.redactField)!;
+    // [raw text, what v1's field pass printed for it, measured at the base]
+    const table: Array<[string, string]> = [
+      ['password=abc&def', `password=${M}&def`],
+      ['password=abc;def', `password=${M};def`],
+      ['password=abc,def', `password=${M},def`],
+      ["password=abc'def", `password=${M}'def`],
+      ['password=abc"def', `password=${M}"def`],
+      ['password="abc&def"', `password="${M}&def"`],
+      ['export PASSWORD="s3cr;et"', `export PASSWORD="${M};et"`],
+      ["PASSWORD='a b c'", `PASSWORD='${M} b c'`],
+      ['password="abc', `password="${M}`],
+      ['TOKEN="a b" next', `TOKEN="${M} b" next`],
+      ['api_key=x;y,z&w', `api_key=${M};y,z&w`],
+      ['secret: "two words"', `secret: "${M} words"`],
+      ['token=ab"cd"ef', `token=${M}"cd"ef`],
+      ['password=abc;def&ghi', `password=${M};def&ghi`],
+    ];
+    for (const [raw, v1] of table) {
+      // R11: the field door's base reading IS v1's field pass, byte for byte (the rev 3.6 rules, kept as BASE_RULES)
+      expect(base.base(raw, idx), `the base reading is v1's: ${JSON.stringify(raw)}`).toBe(v1);
+      const want = libRedact.redactField(raw, idx);
+      expect(want, `CONTROL: the widening changes ${JSON.stringify(raw)}`).not.toBe(v1);
+      expect(libRedact.redactField(v1, idx), `${JSON.stringify(v1)} heals`).toBe(want);
+    }
+  });
+  it('(j8) the widened named value stays linear: 1 MiB of & before non-names, quotes before non-closers, open quotes and & before long names (D-5745)', () => {
+    const idx = idxOf([]);
+    const MIB = 1 << 20;
+    const fill = (unit: string): string => unit.repeat(Math.ceil(MIB / unit.length)).slice(0, MIB);
+    const inputs: Array<[string, string]> = [
+      ['& before a non-name', `password=${fill('&a')}`],
+      ['a quote before a non-closer', `password=${fill('"x')}`],
+      ['an open quote', `password="${fill('x')}`],
+      ['an open single quote over spaces and semicolons', `password='${fill('x; ')}`],
+      ['& then a long name with no =', `password=&${fill('a')}`],
+      ['& before a 256-character name and =', fill(`password=x&${'a'.repeat(256)}=`)],
+      ['heads with quotes of both kinds', fill('password="x password=\'y ')],
+      ['heads with an empty quoted value', fill('TOKEN="" ')],
+      ['heads ending at a closer', fill('password=a,)')],
+      ['quoted values holding a NAME: head', fill('password="token: "')],
+      ['a quote and a closer after each head', fill('PASSWORD=")K ')],
+      // R11: the widened pattern reads only what the rev 3.6 door leaves, so its long input is an open quote over & before non-names,
+      // which the base masks up to the first & and leaves whole after it
+      ['an open quote over & before non-names', `password="${fill('x&')}`],
+    ];
+    for (const [name, text] of inputs) {
+      for (const [door, fn] of [['redactField', libRedact.redactField], ['redactFinalLines', libRedact.redactFinalLines]] as const) {
+        const t0 = Date.now();
+        fn(text, idx);
+        // a quadratic reading of any of these is minutes; the bound is a ceiling, not the detector
+        expect(Date.now() - t0, `${door} ${name}`).toBeLessThan(30_000);
+      }
+    }
+  }, 300_000);
+  // R11 (the coordinator's composition ruling of 2026-10-19, amending R1 and R3): every redaction door of this build is its v2 reading
+  // (the door built from the widened rules) over its base reading (the rev 3.6 door, BASE_RULES), and every reading is SUBTRACTIVE: its
+  // output is its input, or a JSON-escape decoding of it, or its input with every escape sequence removed (D-4307's joined reading,
+  // which a text holding a sequence takes when that reading finds something), with spans replaced by the mark (a window's or a
+  // snippet's cut may fall inside a mark, and a window carries its note). It writes no character its input did not hold, but removing
+  // a sequence glues the text either side of it, so a value a sequence split can print whole. A value a door MASKS is therefore one
+  // that no reading of its output holds (as written, decoded, or with its sequences removed), and the v2 reading never writes back
+  // a value the base reading masked.
+  const R11_NOTE = libRedact.DISPLAY_INEXACT_NOTE;
+  const r11Decode = (t: string): string => t.replace(/\\(?:([nrtbf"\\/])|u([0-9a-fA-F]{4}))/g, (_m, c: string | undefined, u: string) =>
+    (c !== undefined ? ({ n: '\n', r: '\r', t: '\t', b: '\b', f: '\f', '"': '"', '\\': '\\', '/': '/' } as Record<string, string>)[c]! : String.fromCharCode(parseInt(u, 16))));
+  /** A CSI sequence (the shape r11AnsiCorpus plants), or an `ESC` and the one character after it (what a window's or a snippet's
+   *  cut leaves of one), never taking a mark's first character (ANSI_ESCAPE_RE's rule). */
+  const R11_CSI = /\x1b\[(?!redacted\])[0-?]*[ -/]*[@-~]|\x1b[ -/]*(?!\[redacted\])[0-~]/g;
+  /** The text and each JSON-escape decoding of it. */
+  const r11Readings = (t: string): string[] => {
+    const out = [t];
+    for (let level = 0; level <= libRedact.INDEX_UNESCAPE_PASSES; level += 1) {
+      const next = r11Decode(out[out.length - 1]!);
+      if (next === out[out.length - 1]) break;
+      out.push(next);
+    }
+    return out;
+  };
+  /** `p` as a pattern that may skip any CSI sequence between two of its characters: a reading can remove any of a text's
+   *  sequences (the joined reading removes those its raw reading left whole, and the raw reading's mark can take part of one). */
+  const r11Piece = (p: string): RegExp =>
+    new RegExp([...p].map((c) => c.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&')).join(`(?:${R11_CSI.source})*?`), 'g');
+  /** The end of the first match of `p` in `reading` from `at`, or -1 (a text with no `ESC` is matched as it is). */
+  const r11Find = (reading: string, p: string, at: number): number => {
+    if (!reading.includes('\x1b')) { const k = reading.indexOf(p, at); return k === -1 ? -1 : k + p.length; }
+    const re = r11Piece(p);
+    re.lastIndex = at;
+    const m = re.exec(reading);
+    return m === null ? -1 : m.index + m[0].length;
+  };
+  /** Whether some reading of `t` holds `v`, with or without the sequences inside it: a door that prints `v` in none masks it. */
+  const r11Holds = (t: string, v: string): boolean => r11Readings(t).some((r) => r11Find(r, v, 0) !== -1);
+  /** Whether `out` holds, between its marks, only pieces of one reading of `input` (r11Readings), in order, each read past any
+   *  sequence of `input` it skips. */
+  const r11Subtractive = (input: string, out: string): boolean => {
+    let o = out;
+    if (o.startsWith(`${R11_NOTE}\n`) || o.startsWith(`${R11_NOTE} `)) o = o.slice(R11_NOTE.length + 1);
+    if (o.startsWith('...')) o = o.slice(3);
+    if (o.endsWith('...')) o = o.slice(0, -3);
+    const parts = o.split(M);
+    for (let j = M.length - 1; j > 0; j -= 1) {
+      const last = parts[parts.length - 1]!;
+      if (last.endsWith(M.slice(0, j))) { parts[parts.length - 1] = last.slice(0, -j); break; }
+    }
+    for (let j = M.length - 1; j > 0; j -= 1) if (parts[0]!.startsWith(M.slice(-j))) { parts[0] = parts[0]!.slice(j); break; }
+    const pieces = parts.filter((p) => p !== '');
+    return r11Readings(input).some((reading) => {
+      let at = 0;
+      return pieces.every((p) => { at = r11Find(reading, p, at); return at !== -1; });
+    });
+  };
+  /** A seeded generator (mulberry32). */
+  const r11Rng = (seed0: number): (() => number) => {
+    let seed = seed0;
+    return (): number => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  };
+  /** Seeded texts of the shapes that separated the widened reading from the base (the plan's third and fifth reviews): secret
+   *  `NAME=` and `NAME: ` pairs, quoted, escaped, unclosed and glued values, raw and escaped JSON pairs, a JSON key before the next
+   *  pair, anchors, glue and noise, half of them JSON-serialised. `vs` are the values planted in each. */
+  const r11Corpus = (seed0: number, n: number): Array<{ t: string; vs: string[] }> => {
+    const rnd = r11Rng(seed0);
+    const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)]!;
+    const NAMES = ['password', 'PASSWORD', 'TOKEN', 'api_key', 'SECRET_KEY', 'token', 'secret', 'API_KEY', 'auth', 'private_key'];
+    const KEYS = ['api_key', 'token', 'password', 'secret'];
+    const GLUE = ['', ',', ';', '&', ')', '}', ']', '|', '/', ':', '(', '{', '[', "'", '"', ' ', '\\n', '\\"'];
+    const FR: Array<(v: string) => string> = [
+      (v) => `${pick(NAMES)}=${v}`, (v) => `${pick(NAMES)}: ${v}`, (v) => `${pick(NAMES)}="${v}"`, (v) => `${pick(NAMES)}='${v} more'`,
+      (v) => `${pick(NAMES)}=\\"${v}\\"`, (v) => `${pick(NAMES)}=ab${pick(GLUE)}${v}`, (v) => `"${pick(KEYS)}": "${v}"`,
+      (v) => `"${pick(KEYS)}":"${v}`, (v) => `\\"${pick(KEYS)}\\": \\"${v}\\"`, (v) => `\\"${pick(KEYS)}\\": \\"${v}`,
+      (v) => `${pick(NAMES)}="${pick(KEYS)}: "${v}`, (v) => `${pick(NAMES)}=${pick(['"', "'"])}${pick([')', '}', ']'])}${v} end`,
+      (v) => `Authorization: Bearer ${v}`, (v) => `x?token=${v}&b=1`, (v) => `{"${pick(KEYS)}":\n"${pick(KEYS)}": "${v}"}`,
+      (v) => `${pick(NAMES)}=abc&${v}`, (v) => `${pick(NAMES)}: "${v} two"`,
+      () => 'plain words here', () => '\\n', () => '\\"', () => '"', () => "'", () => ' ', () => '\n', () => 'level=INFO path=/a/b', () => 'url?a=1&b=2',
+    ];
+    let vn = 0;
+    return Array.from({ length: n }, () => {
+      const vs: string[] = [];
+      let t = '';
+      for (let i = 0, k = 1 + Math.floor(rnd() * 6); i < k; i += 1) {
+        const v = `hunter2q${(vn++).toString(36)}z`;
+        const piece = pick(FR)(v);
+        if (piece.includes(v)) vs.push(v);
+        t += piece + pick(GLUE);
+      }
+      return { t: rnd() < 0.5 ? JSON.stringify({ text: t }) : t, vs };
+    });
+  };
+  /** Seeded texts with CSI colour sequences inside a NAME, a key or a value (`grep --color=always` or a highlighter colours a word
+   *  in part), which D-4307's joined reading reads whole, and the break-redaction review of round 1's shape: a NAME a sequence
+   *  splits, whose widened value `&x` only the joined reading finds, then a value a sequence splits, alone and after the same value
+   *  masked. A quarter of them JSON-serialised. `vs` are the values planted, each held by its piece with the sequences removed. */
+  const r11AnsiCorpus = (seed0: number, n: number): Array<{ t: string; vs: string[] }> => {
+    const rnd = r11Rng(seed0);
+    const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)]!;
+    const NAMES = ['password', 'PASSWORD', 'TOKEN', 'api_key', 'secret', 'token'];
+    const SEQS = ['\x1b[0m', '\x1b[32m', '\x1b[1;31m', '\x1b[m'];
+    const cut = (s: string): string => { const k = 1 + Math.floor(rnd() * (s.length - 1)); return `${s.slice(0, k)}${pick(SEQS)}${s.slice(k)}`; };
+    const FR: Array<(v: string) => string> = [
+      (v) => `${cut(pick(NAMES))}=&x ${cut(v)}`, (v) => `${pick(NAMES)}=${v} then ${cut(pick(NAMES))}=&x ${cut(v)}`,
+      (v) => `${cut(pick(NAMES))}=${v}`, (v) => `${pick(NAMES)}=${cut(v)}`, (v) => `${pick(NAMES)}=abc&${cut(v)}`,
+      (v) => `${cut(pick(NAMES))}="${v} two"`, (v) => `\x1b[32m${pick(NAMES)}=${v}\x1b[0m`, (v) => `"${cut(pick(NAMES))}": "${cut(v)}"`,
+      (v) => `see ${cut(v)} here`, () => 'file \x1b[32ma.md\x1b[0m ok', () => 'plain words here', () => '\n',
+    ];
+    let vn = 0;
+    return Array.from({ length: n }, () => {
+      const vs: string[] = [];
+      let t = '';
+      for (let i = 0, k = 1 + Math.floor(rnd() * 5); i < k; i += 1) {
+        const v = `hunter2q${(vn++).toString(36)}z`;
+        const piece = pick(FR)(v);
+        if (piece.replace(R11_CSI, '').includes(v)) vs.push(v);
+        t += piece + pick([' ', '\n', ', ', '; ', '&']);
+      }
+      return { t: rnd() < 0.25 ? JSON.stringify({ text: t }) : t, vs };
+    });
+  };
+  /** Every door, called on one text: its name, the door, and its arguments. */
+  const r11Doors = (idx: libRedact.PairIndex): Array<[string, (...a: never[]) => unknown, (t: string) => unknown[]]> => [
+    ['redactField', libRedact.redactField, (t) => [t, idx]], ['redactFinal', libRedact.redactFinal, (t) => [t, idx]],
+    ['redactFinalLines', libRedact.redactFinalLines, (t) => [t, idx]], ['redactFinalJson', libRedact.redactFinalJson, (t) => [{ a: t }, idx]],
+    ['redactFinalText', libRedact.redactFinalText, (t) => [t, idx]], ['redactForIndex', libRedact.redactForIndex, (t) => [t, idx]],
+    ['redactForDisplay', libRedact.redactForDisplay, (t) => [t, idx]], ['entryIndexText', libRedact.entryIndexText, (t) => [t, idx]],
+    ['sidecarIndexText', libRedact.sidecarIndexText, (t) => [Buffer.from(t), idx]],
+    ['redactDisplayWindow', libRedact.redactDisplayWindow, (t) => [t, Math.floor(t.length / 4), Math.ceil((3 * t.length) / 4), idx]],
+    ['displaySnippet', libRedact.displaySnippet, (t) => [t, ['hunter2q'], idx]],
+  ];
+  const r11Text = (x: unknown): string => (typeof x === 'string' ? x : JSON.stringify(x));
+  it('(j9) every door is its v2 reading over its base reading (R11), and each v2 reading is subtractive over the base reading\'s output', () => {
+    const idx = idxOf([]);
+    const texts = [...f2Cases().map((c) => c.input), ...r11Corpus(0x5745, 600).map((c) => c.t), ...r11AnsiCorpus(0x1b5745, 300).map((c) => c.t)];
+    const failed: string[] = [];
+    for (const [name, door, args] of r11Doors(idx)) {
+      const r = libRedact.redactDoorReadings(door);
+      expect(r, `${name} has R11's readings`).not.toBeNull();
+      for (const t of texts) {
+        const base = r!.base(...args(t));
+        const out = (door as (...a: unknown[]) => unknown)(...args(t));
+        if (r11Text(out) !== r11Text(r!.v2(base, idx))) failed.push(`${name}: not v2(base): ${JSON.stringify(t)}`);
+        const [bt, ot] = name === 'redactFinalJson' ? [(base as { a: string }).a, (out as { a: string }).a] : [r11Text(base), r11Text(out)];
+        if (!r11Subtractive(bt, ot)) failed.push(`${name}: the v2 reading is not subtractive: ${JSON.stringify(bt)} -> ${JSON.stringify(ot)}`);
+        // a window's base reading reads a slice of the text, so it is subtractive over that slice's readings, not the whole text's
+        if (name !== 'redactDisplayWindow' && !r11Subtractive(t, bt)) failed.push(`${name}: the base reading is not subtractive: ${JSON.stringify(t)}`);
+      }
+    }
+    expect(libRedact.redactDoorReadings(libRedact.makePairIndex), 'CONTROL: a function that is no door has none').toBeNull();
+    expect(failed.slice(0, 5), `${failed.length} failed`).toEqual([]);
+  }, 120_000);
+  it('(j10) no door prints a value its rev 3.6 door masks: f2Cases (the (j3) corpus), four of the reviews\' shapes and two seeded corpora, one of them with colour sequences, through every door (R11)', () => {
+    const idx = idxOf([]);
+    const corpus = [
+      ...f2Cases().map((c) => ({ t: c.input, vs: ['cdXQ9'] })),
+      ...['PASSWORD="token: "hunter2xyz', "SECRET='password: 'hunter2xyz", 'PASSWORD=")hunter2xyz end', String.raw`{"text":"TOKEN=abc,\"api_key\": \"hunter2xyz\"}"}`]
+        .map((t) => ({ t, vs: ['hunter2xyz'] })),
+      ...r11Corpus(0x5746, 2000),
+      ...r11AnsiCorpus(0x1b5746, 1000),
+    ];
+    let masked = 0;
+    let separated = 0;
+    let joined = 0;
+    const printed: string[] = [];
+    for (const [name, door, args] of r11Doors(idx)) {
+      const r = libRedact.redactDoorReadings(door)!;
+      for (const { t, vs } of corpus) {
+        const base = r11Text(r.base(...args(t)));
+        const out = r11Text((door as (...a: unknown[]) => unknown)(...args(t)));
+        // the CONTROL: the widened rules over the raw text, which the composition is there to prevent
+        const alone = name === 'sidecarIndexText' ? base : r11Text(r.v2(args(t)[0], idx));
+        for (const v of vs) {
+          // the composed door may print whole a value the base door prints split by a sequence (the joined reading); never one
+          // that no reading of the base door's output holds
+          if (!base.includes(v) && r11Holds(base, v) && out.includes(v)) joined += 1;
+          if (r11Holds(base, v)) continue;
+          masked += 1;
+          if (r11Holds(alone, v)) separated += 1;
+          if (r11Holds(out, v)) printed.push(`${name}: ${JSON.stringify(t)} prints ${v}`);
+        }
+      }
+    }
+    expect(masked, 'CONTROL: values the base doors mask').toBeGreaterThan(20_000);
+    expect(separated, 'CONTROL: the widened rules read over the raw text print some of them').toBeGreaterThan(0);
+    expect(joined, 'CONTROL: the composed door prints whole some values the base door prints split by a sequence').toBeGreaterThan(0);
+    expect(printed.slice(0, 5), `${printed.length} of ${masked}`).toEqual([]);
+  }, 120_000);
   // D-4614 (whole-branch fix round 7): layers 2 and 3 are ORDER-FREE. Every context rule and every shape matches the same text,
   // the union of their spans is masked in one pass. Round 5's order (the named rule first) and round 6's (anchors and shapes
   // first) each lost something a glued name or anchor carried; these pins hold both directions.
@@ -3333,14 +3687,16 @@ describe('redactForIndex: every JSON-escape reading before every index, kept onl
     };
     const one = countingIdx();
     libRows.redactField(s, one.idx);
-    expect(one.asks(), 'CONTROL: one redaction asks once per body run').toBe(RUNS);
+    // R11: the field door is two readings, each one redaction
+    expect(one.asks(), 'CONTROL: one redaction asks once per body run').toBe(2 * RUNS);
     const many = countingIdx();
     // an empty pair set redacts no value, so the chain never reaches a mark and the decodes run to the bound
     expect(libRows.redactForIndex(s, many.idx) === `${M} ${body}`).toBe(true);
     // The bound is written out here on purpose: derived from the constant, a raise of it would raise the assertion too.
     // FU3F (FU1 M2 minor): a ceiling written out as 8 (a raise reds it, and so does the 256- and 512-backslash value case
     // below), so a LOWER bound still passes; `toBeGreaterThan(RUNS)` shows the passes ran.
-    expect(many.asks()).toBeLessThanOrEqual((8 + 1) * RUNS);
+    // R11: the base reading's 8 + 1, and one redaction more for the v2 reading, over a text the bound left with no backslash
+    expect(many.asks()).toBeLessThanOrEqual((8 + 1 + 1) * RUNS);
     expect(many.asks()).toBeGreaterThan(RUNS);
   }, 60_000);
 });
@@ -3485,7 +3841,8 @@ describe('entryIndexText: redact a window ENTRY_REDACT_MARGIN past ENTRY_FTS_BYT
     const text = 'ab '.repeat(5_600_000);   // 16.8 MB, 5,600,000 runs
     const out = libRows.entryIndexText(text, { byLen });
     expect(asks).toBeGreaterThan(W / 3 - 2);
-    expect(asks).toBeLessThanOrEqual(Math.ceil(W / 3));
+    // R11: the base reading reads the window, and the v2 reading reads its output, which the cut holds to N bytes
+    expect(asks).toBeLessThanOrEqual(Math.ceil(W / 3) + Math.ceil(N / 3));
     expect(Buffer.byteLength(out)).toBeLessThanOrEqual(N);
   });
   it.each([0, 1, 3])('a JWT the cut falls %i characters into the signature of leaves no header or payload: redaction precedes the cut', (into) => {
@@ -3500,12 +3857,12 @@ describe('entryIndexText: redact a window ENTRY_REDACT_MARGIN past ENTRY_FTS_BYT
   it('one cut rule: sidecarIndexText and entryIndexText both end in cutIndexText, the only caller of dropTrailingRun', () => {
     const src = readFileSync(fileURLToPath(new URL('../../ccd/history/lib.mjs', import.meta.url)), 'utf8');
     const body = (fn: string): string => {
-      const at = src.indexOf(`export function ${fn}(`);
+      const at = src.indexOf(`function ${fn}(`);   // R11: each door's body over one rule set
       expect(at, fn).toBeGreaterThan(-1);
       return src.slice(at, src.indexOf('\n}\n', at));
     };
-    expect(body('sidecarIndexText')).toMatch(/return cutIndexText\(text, w\.windowCut, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN\);/);
-    expect(body('entryIndexText')).toMatch(/return cutIndexText\(redactForIndex\(w\.text, idx\), w\.windowCut, ENTRY_FTS_BYTES, ENTRY_REDACT_MARGIN\);/);
+    expect(body('sidecarIndexTextWith')).toMatch(/return cutIndexText\(text, w\.windowCut, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN\);/);
+    expect(body('entryIndexTextWith')).toMatch(/return cutIndexText\(redactForIndexWith\(w\.text, idx, rs\), w\.windowCut, ENTRY_FTS_BYTES, ENTRY_REDACT_MARGIN\);/);
     expect((src.match(/\bdropTrailingRun\(/g) ?? []).length).toBe(2);   // its definition and cutIndexText's one call
     expect((src.match(/\bfunction cutIndexText\(/g) ?? []).length).toBe(1);
   });

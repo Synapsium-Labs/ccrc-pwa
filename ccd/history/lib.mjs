@@ -1924,6 +1924,24 @@ export const LEAD_READINGS_MAX = 16;
  *  right before a word is not plain: it reads as a bare `ESC` and a final byte, a single shift or a DCS header. */
 const PLAIN_SEQ_RE = /^(?:\x1b\[|\x9b)[0-?]*[@-~]$|^\x1b[!-/][ -/]*[0-~]$/;
 
+/** The line ends a quoted value never crosses: CR, LF, U+2028 and U+2029, the last two built from their code points. */
+const QUOTED_LINE_ENDS = String.raw`\r\n` + String.fromCharCode(0x2028, 0x2029);
+/** D-5745 (history-redact-value-class-widened; closes D-5021's residual): the named rule's value in the FIELD form, read
+ *  whole. v1's class `[^\s"'`,;&]` ended a value at `&`, `;`, `,` and either quote, so `password=abc&def`,
+ *  `password="abc&def"` and `PASSWORD='a b c'` printed their tails. Three alternatives, group 1 the opening quote:
+ *  - after `"` or `'` (the lookbehind reads group 1), the value runs to the same closing quote on the same line, which
+ *    the backreference `\1` consumes; an empty quoted value matches and every caller reads it as no value;
+ *  - unquoted, a value still ends at whitespace and the backtick. `&` ends it only before `NAME=` (a 256-character NAME,
+ *    the head's own bound), and `,` `;` `"` `'` end it only before whitespace, a closer (`,` `;` `)` `}` `]`) or the end
+ *    of the text, so `url?a=1&password=x&b=2`, `password=x; path=/` and `{"cmd":"password=x"}` keep their structure.
+ *  An unclosed quote fails the quoted reading, and group 1 then backs off to empty, so the quote is read as the
+ *  value's first character. Linear: each alternative's classes are disjoint, the lookaheads are bounded or one
+ *  character, and a failed quoted reading costs its own line once. The final form keeps v1's class (D-4613's structure
+ *  safety is unchanged). This is the prototype scope b2-redaction measured (R1). Every door reads it only over its rev
+ *  3.6 door's output (R11, composeDoor), so it never prints a value that door masks. */
+const NAMED_VALUE_FIELD_SRC = String.raw`(["']?)((?<=")[^"${QUOTED_LINE_ENDS}]*|(?<=')[^'${QUOTED_LINE_ENDS}]*|(?:[^\s"'` + '`'
+  + String.raw`,;&]|[,;"'](?![\s,;)}\]]|$)|&(?![A-Za-z_][A-Za-z0-9_.-]{0,255}=))+)\1`;
+
 /** Layer 2's rules (the context layer), one definition each, built twice: `field` is the field pass, `final` the second
  *  belt's structure-safe form, D-4613 (history-final-belt-layer2-structure-safe) (§8.3, whole-branch review: the final
  *  pass runs over a serialised `--json` envelope and over the human page's frame). In the final form no value class
@@ -1933,10 +1951,12 @@ const PLAIN_SEQ_RE = /^(?:\x1b\[|\x9b)[0-?]*[@-~]$|^\x1b[!-/][ -/]*[0-~]$/;
  *  structure-aware belt (redactFinalText, redactFinalJson): it is never run over serialised structure, so it needs no
  *  rule about a closing quote or a closer (round 2's `]` and `}` exclusion was that, and it made the form
  *  non-idempotent on the field pass's own marks: `TOKEN=[redacted]` read as `[redacted` and was masked again). The
- *  field form is today's, byte for byte. */
-function contextRules(final) {
+ *  field form is today's, byte for byte, except the named rule's value (D-5745). `base` builds the rev 3.6 rules, byte for
+ *  byte, from the same template (BASE_RULES, R11); `final` is kept on the rules, which redactLayers reads. */
+function contextRules(final, base = false) {
   const stop = final ? String.raw`\\<>&` : '';
   return Object.freeze({
+    final,
     json: new RegExp(String.raw`"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"(${final ? String.raw`[^"\\\n\r<>&]+` : String.raw`(?:[^"\\]|\\.)+`})"`, 'g'),
     // D-4614 (history-context-rule-rescans-after-a-plain-name): the named rule is TWO patterns scanned by hand
     // (namedSpans). `namedHead` finds `NAME=` or `NAME: ` and the optional quote; `namedValue` (sticky) takes the value
@@ -1945,7 +1965,10 @@ function contextRules(final) {
     namedHead: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)`, 'g'),
     // The NAME a value ends in (`namedSpans`' tail head): `NAME=` or `NAME:` at the end of a slice of at most 258 characters.
     namedTail: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:)$`),
-    namedValue: new RegExp(String.raw`(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>` : ''}]+)`, 'y'),
+    // D-5745 (history-redact-value-class-widened): the value of the named rule. Group 1 is the opening quote or empty, group 2
+    // the value; a caller's span is group 2's own, never the whole match (the field form consumes a closing quote). The final
+    // form, and the rev 3.6 rules (`base`), keep v1's class from the base's own template; the field form reads a value whole.
+    namedValue: new RegExp(final || base ? String.raw`(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>` : ''}]+)` : NAMED_VALUE_FIELD_SRC, 'y'),
     bearer: new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${stop}]+)`, 'gi'),
     mailToken: new RegExp(String.raw`(x-ccrc-mail-token:[ \t]*)([^\s"'${stop}]+)`, 'gi'),
     bearerSticky: new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${stop}]+)`, 'iy'),
@@ -1954,6 +1977,11 @@ function contextRules(final) {
   });
 }
 const CONTEXT_RULES = Object.freeze({ field: contextRules(false), final: contextRules(true) });
+
+/** R11 (W5h-2; the coordinator's composition ruling of 2026-10-19, which amends R1 and R3): the rev 3.6 (BELT_VERSION 1)
+ *  rules, frozen, built from contextRules' one template (`base`): v1's named value class in both forms. Every redaction
+ *  door reads them first and CONTEXT_RULES over their output (composeDoor). Nothing else reads them. */
+const BASE_RULES = Object.freeze({ field: contextRules(false, true), final: contextRules(true, true) });
 
 /** What a secret value that ends where it could hide a further head of its own rule hands on (D-4614, whole-branch fix
  *  round 7). A rule scanned left to right and not overlapping resumes AFTER a value, so a head that STARTS inside the
@@ -1974,7 +2002,7 @@ function tailHead(s, R, valueStart, end, kind) {
     R.namedValue.lastIndex = at;
     const v = R.namedValue.exec(s);
     if (v === null || v[2] === REDACTED_MARK) return null;
-    return [at + v[1].length, at + v[0].length];
+    return [at + v[1].length, at + v[1].length + v[2].length];   // D-5745: the value group's own span
   }
   // The value's tail against a FULL nested head (D-4614, whole-branch fix round 8). A value holds no whitespace, so a
   // head with no space after its colon ends INSIDE it: `Vabcauthorization:Bearer` (then ` SECRET`) and
@@ -2025,7 +2053,10 @@ function namedSpans(s, R, add) {
       head.lastIndex = sepEnd;
       continue;
     }
-    head.lastIndex = addChain(s, R, sepEnd + v[1].length, sepEnd + v[0].length, 'named', add);
+    const start = sepEnd + v[1].length;
+    // D-5745: the span is the value group's own (the field form consumes a closing quote, which stays). An empty quoted
+    // value (`TOKEN=""`) gives an empty span, which `add` drops: no value.
+    head.lastIndex = addChain(s, R, start, start + v[2].length, 'named', add);
   }
 }
 
@@ -2151,7 +2182,7 @@ function maskSpans(s, spans) {
  *  pattern needs a `"`, `=`, `:`, `?` or `&`, so it can match nothing there,
  *  while on a span of short dotted words it is the costliest layer. `context`
  *  `'final'` runs layer 2 in redactFinal's structure-safe form (D-4613). */
-function redactRun(segment, idx, context = true) {
+function redactRun(segment, idx, context) {
   try {
     return redactLayers(segment, idx, context);
   } catch (e) {
@@ -2185,7 +2216,8 @@ function redactLayers(segment, idx, context) {
   // (`mode=auth: abcdefAuthorization: Bearer S`), anchors and shapes first lets a shape or anchor value swallow a glued
   // NAME (`sk-…api_key: "V"`), so no rule may read what another has rewritten. Every pattern and value class is
   // unchanged. A span whose text already is the mark is not a span (idempotence).
-  const R = context ? (context === 'final' ? CONTEXT_RULES.final : CONTEXT_RULES.field) : null;
+  // R11: `context` is one form of one rule set (BASE_RULES or CONTEXT_RULES, `field` or `final`), or false for no layer 2.
+  const R = context || null;
   const spans = [];
   const add = (a, b) => {
     if (b > a && !(b - a === REDACTED_MARK.length && s.startsWith(REDACTED_MARK, a))) spans.push([a, b]);
@@ -2195,7 +2227,7 @@ function redactLayers(segment, idx, context) {
     jsonSpans(s, R, add);
     namedSpans(s, R, add);
   }
-  if (R === CONTEXT_RULES.final) {
+  if (R !== null && R.final) {
     const shapes = [];
     shapeSpans(s, (x, y) => {
       add(x, y);
@@ -2471,10 +2503,11 @@ function markSpansAt(plain, offsets) {
 /** The complete field redaction. Layer 4 allocates per-field buffers too, so its RangeError shares layers 1-3's
  * fail-closed contract while non-RangeError defects remain visible. */
 export function redactField(text, idx) {
-  return redactFieldIn(text, idx, true);
+  return composeDoor(DOOR_READINGS.redactField, [text, idx], idx);
 }
 
-/** redactField's body, with layer 2's mode (`true` the field form, `'final'` redactFinal's structure-safe form). */
+/** redactField's body, with layer 2's rules for one form (R11: a rule set's `field`, or its `final`, redactFinal's
+ *  structure-safe form). */
 function redactFieldIn(text, idx, context) {
   const layered = redactLayered(text, idx, context);
   try {
@@ -2486,7 +2519,7 @@ function redactFieldIn(text, idx, context) {
 }
 
 /** redactField's three layers over its readings, before the belt: B1's redactField body, unchanged. */
-function redactLayered(text, idx, context = true) {
+function redactLayered(text, idx, context) {
   if (!ESCAPE_INTRODUCER_RE.test(text)) return redactRun(text, idx, context);
   const raw = redactRun(text, idx, context);
   let out = '';
@@ -2550,12 +2583,17 @@ function markEscapeGluedSpans(s) {
  *  backslash marked (`markEscapeGluedSpans`), so no part of a secret a further decode would separate is indexed.
  *  `idx` is required: `sidecarIndexText(…, null)` never calls this. */
 export function redactForIndex(text, idx) {
-  let t = redactIndexReading(text, idx);
+  return composeDoor(DOOR_READINGS.redactForIndex, [text, idx], idx);
+}
+
+/** redactForIndex's body over one rule set (R11). */
+function redactForIndexWith(text, idx, rs) {
+  let t = redactIndexReading(text, idx, rs);
   let keep = t;
   for (let pass = 0; pass < INDEX_UNESCAPE_PASSES; pass += 1) {
     const u = unescapeJsonText(t);
     if (u === t) return keep;
-    t = redactIndexReading(u, idx);
+    t = redactIndexReading(u, idx, rs);
     if (t !== u) keep = t;
   }
   return markEscapeGluedSpans(t);
@@ -2586,6 +2624,11 @@ function dropTrailingRun(s) {
  *  rule). `bytes` is the file's first bytes, never more than the window is read. The window and the cut are
  *  `windowText` and `cutIndexText`, which an entry's index text shares (D-4419). */
 export function sidecarIndexText(bytes, idx) {
+  return composeDoor(DOOR_READINGS.sidecarIndexText, [bytes, idx], idx);
+}
+
+/** sidecarIndexText's body over one rule set (R11). */
+function sidecarIndexTextWith(bytes, idx, rs) {
   const w = windowText(bytes, SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN);
   let text = w.text;
   // D-4336 (history-sidecar-index-text-unescaped): redacted RAW, decoded, then redacted again. Decoding first is a
@@ -2596,9 +2639,9 @@ export function sidecarIndexText(bytes, idx) {
   // are redactForIndex's (D-4343): a nested JSON level or a backslash-u-005c chain glues an escape letter onto a
   // secret one decode later, and the last redaction below reads every remaining level, keeping a deeper reading only
   // when it redacted something.
-  if (idx !== null) text = redactIndexReading(text, idx);
+  if (idx !== null) text = redactIndexReading(text, idx, rs);
   text = unescapeJsonText(text);
-  if (idx !== null) text = redactForIndex(text, idx);
+  if (idx !== null) text = redactForIndexWith(text, idx, rs);
   return cutIndexText(text, w.windowCut, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN);
 }
 
@@ -2636,10 +2679,15 @@ function cutIndexText(text, windowCut, ftsBytes, margin) {
  *  index one text (D-4344's premise). A sidecar's text, `sidecarIndexText`'s, is shorter than the window and is
  *  redacted whole. Text past the cut is not searchable. */
 export function entryIndexText(text, idx) {
+  return composeDoor(DOOR_READINGS.entryIndexText, [text, idx], idx);
+}
+
+/** entryIndexText's body over one rule set (R11). */
+function entryIndexTextWith(text, idx, rs) {
   const window = ENTRY_FTS_BYTES + ENTRY_REDACT_MARGIN;
   // Every UTF-16 code unit is at least one UTF-8 byte, so the window's bytes lie in the text's first `window` units.
   const w = windowText(new TextEncoder().encode(text.length > window ? text.slice(0, window) : text), window);
-  return cutIndexText(redactForIndex(w.text, idx), w.windowCut, ENTRY_FTS_BYTES, ENTRY_REDACT_MARGIN);
+  return cutIndexText(redactForIndexWith(w.text, idx, rs), w.windowCut, ENTRY_FTS_BYTES, ENTRY_REDACT_MARGIN);
 }
 
 /** The second belt (§8.3), per-segment primitive: the field pass's layers once more over ONE piece of text that has no
@@ -2651,7 +2699,7 @@ export function entryIndexText(text, idx) {
  *  line, rounds 1 and 2). The callers are `redactFinalJson` (every string leaf of the envelope value, in the FIELD
  *  form) and `redactFinalText` (each line segment and each frame-tag attribute value, in this form). */
 export function redactFinal(text, idx) {
-  return redactFieldIn(text, idx, 'final');
+  return composeDoor(DOOR_READINGS.redactFinal, [text, idx], idx);
 }
 
 /** The final belt over a `--json` envelope, D-4613 (whole-branch fix round 3): the VALUE is deep-mapped BEFORE it is
@@ -2664,10 +2712,15 @@ export function redactFinal(text, idx) {
  *  holds. Residuals: a secret an object KEY would carry is not masked (no key is data); a leaf the field form cannot
  *  mask is no worse than the field pass was. */
 export function redactFinalJson(value, idx) {
-  if (typeof value === 'string') return redactFinal(redactField(value, idx), idx);
-  if (Array.isArray(value)) return value.map((v) => redactFinalJson(v, idx));
+  return composeDoor(DOOR_READINGS.redactFinalJson, [value, idx], idx);
+}
+
+/** redactFinalJson's body over one rule set (R11). */
+function redactFinalJsonWith(value, idx, rs) {
+  if (typeof value === 'string') return redactFieldIn(redactFieldIn(value, idx, rs.field), idx, rs.final);
+  if (Array.isArray(value)) return value.map((v) => redactFinalJsonWith(v, idx, rs));
   if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactFinalJson(v, idx)]));
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactFinalJsonWith(v, idx, rs)]));
   }
   return value;
 }
@@ -2686,7 +2739,7 @@ export function redactFinalJson(value, idx) {
  *  form's wider value classes costs a reader a few characters and breaks no structure. It is idempotent on the field
  *  pass's marks. `redactFinalText` (tag-aware) stays for the human page, which recallEnvelope frames. */
 export function redactFinalLines(text, idx) {
-  return redactFinal(redactField(text, idx), idx);
+  return composeDoor(DOOR_READINGS.redactFinalLines, [text, idx], idx);
 }
 
 /** A frame tag of the recalled-text envelope (recallEnvelope's opening and closing tag). escapeXmlAttr has escaped every
@@ -2704,22 +2757,86 @@ const FRAME_TAG_RE = /<\/?ccrc-recall\b[^>]*>/g;
  *  pass's output. Residual: a secret split by a line break or a tag is masked only by the field pass, which saw it
  *  whole. */
 export function redactFinalText(text, idx) {
+  return composeDoor(DOOR_READINGS.redactFinalText, [text, idx], idx);
+}
+
+/** redactFinalText's body over one rule set (R11). */
+function redactFinalTextWith(text, idx, rs) {
+  const one = (segment) => redactFieldIn(segment, idx, rs.final);
   return text.split('\n').map((line) => {
     let out = '';
     let last = 0;
     for (const m of line.matchAll(FRAME_TAG_RE)) {
-      out += redactFinal(line.slice(last, m.index), idx);
+      out += one(line.slice(last, m.index));
       let at = 0;
       for (const q of m[0].matchAll(/"([^"]*)"/g)) {
-        out += `${redactFinal(m[0].slice(at, q.index), idx)}"${redactFinal(q[1], idx)}"`;
+        out += `${one(m[0].slice(at, q.index))}"${one(q[1])}"`;
         at = q.index + q[0].length;
       }
-      out += redactFinal(m[0].slice(at), idx);
+      out += one(m[0].slice(at));
       last = m.index + m[0].length;
     }
-    return out + redactFinal(line.slice(last), idx);
+    return out + one(line.slice(last));
   }).join('\n');
 }
+
+/** R11 (W5h-2; the coordinator's composition ruling of 2026-10-19, which amends R1 and R3): each redaction door's two
+ *  readings. `base(...args)` is the door as rev 3.6 built it (BASE_RULES); `v2(out, idx)` is the same door built from this
+ *  build's rules (CONTEXT_RULES), read over `out`, the base reading's output. A text door reads that output as its text. A
+ *  sidecar's v2 reading is the index redaction and the cut: its window and its first decode are readings of the raw bytes,
+ *  which the base reading already took, and decoded again a JSON string held inside a JSON string would be indexed at its
+ *  second level whether or not anything there is masked (D-4343's rule keeps a deeper level only when it masks something).
+ *  A display window's or a snippet's v2 reading is redactForDisplay's, a window of the whole text (displayWindow's step 0).
+ *  nodeIndexTexts, the --regex child, the node fields and the relay read these doors, so they are composed through them. */
+const DOOR_READINGS = (() => {
+  const door = (impl, over = impl) => Object.freeze({
+    base: (...args) => impl(...args, BASE_RULES),
+    v2: (out, idx) => over(out, idx, CONTEXT_RULES),
+  });
+  const shown = (out, idx, rs) => redactForDisplayWith(out, idx, rs);
+  return Object.freeze({
+    redactField: door((text, idx, rs) => redactFieldIn(text, idx, rs.field)),
+    redactFinal: door((text, idx, rs) => redactFieldIn(text, idx, rs.final)),
+    redactFinalLines: door((text, idx, rs) => redactFieldIn(redactFieldIn(text, idx, rs.field), idx, rs.final)),
+    redactFinalJson: door(redactFinalJsonWith),
+    redactFinalText: door(redactFinalTextWith),
+    redactForIndex: door(redactForIndexWith),
+    redactForDisplay: door((text, idx, rs) => redactForDisplayWith(text, idx, rs)),
+    entryIndexText: door(entryIndexTextWith),
+    sidecarIndexText: door(sidecarIndexTextWith, (out, idx, rs) => (idx === null ? out
+      : cutIndexText(redactForIndexWith(out, idx, rs), false, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN))),
+    redactDisplayWindow: door(redactDisplayWindowWith, shown),
+    displaySnippet: door(displaySnippetWith, shown),
+  });
+})();
+
+/** R11: a door of this build is its v2 reading over its base reading, v2(base(…)) (DOOR_READINGS). Every reading is
+ *  SUBTRACTIVE: its output is its input, a JSON-escape decoding of it (the index and display readings), or its input with
+ *  escape sequences removed (D-4307's joined reading), with spans replaced by the mark and, for an index text, cut, so it
+ *  writes no character its input (so read) did not hold but a mark's (and a window's note). A value a door masks is one
+ *  that no reading of its output holds: as written, decoded, or with its sequences removed. So the v2 reading never writes
+ *  back a value the base reading masked, whatever the widened rules read: no door of this build prints a value its rev 3.6
+ *  door masks, in that sense. Two residuals follow (D-5745): where the widened rules find a value only with the text's
+ *  sequences removed, or only at a JSON-decoded level, the door returns that reading, so a value the base printed split by
+ *  a sequence, or only JSON-escaped, prints whole. The cost is about two passes of the door. */
+function composeDoor(r, args, idx) {
+  const base = r.base(...args);
+  return r.v2(base, idx);
+}
+
+/** R11's two readings of one exported door, or null for any other function: a read-only test accessor, which arms nothing
+ *  (no env var, flag or file), read by history-lib's property, subtractiveness and mutant cases. No shipped file calls it. */
+export function redactDoorReadings(door) {
+  return DOOR_OF.get(door) ?? null;
+}
+const DOOR_OF = new Map([
+  [redactField, DOOR_READINGS.redactField], [redactFinal, DOOR_READINGS.redactFinal],
+  [redactFinalLines, DOOR_READINGS.redactFinalLines], [redactFinalJson, DOOR_READINGS.redactFinalJson],
+  [redactFinalText, DOOR_READINGS.redactFinalText], [redactForIndex, DOOR_READINGS.redactForIndex],
+  [redactForDisplay, DOOR_READINGS.redactForDisplay], [entryIndexText, DOOR_READINGS.entryIndexText],
+  [sidecarIndexText, DOOR_READINGS.sidecarIndexText], [redactDisplayWindow, DOOR_READINGS.redactDisplayWindow],
+  [displaySnippet, DOOR_READINGS.displaySnippet],
+]);
 
 // ===========================================================================
 // The harness table and the export's horizon (spec §6.10 item 3, §9.15).
@@ -6463,8 +6580,8 @@ function beltHit(idx) {
 /** One index reading's redaction (redactForIndex's readings, the sidecar's raw pass): the three layers, then the belt
  *  over the literal and escape readings only. An FTS term is a run of the literal text, and redactForIndex decodes
  *  the deeper levels itself, each through this. */
-function redactIndexReading(text, idx) {
-  return beltMask(redactLayered(text, idx), idx.belt, false, beltHit(idx));
+function redactIndexReading(text, idx, rs) {
+  return beltMask(redactLayered(text, idx, rs.field), idx.belt, false, beltHit(idx));
 }
 
 const isGlueSep = (c) => c === 0x5f || c === 0x2d;
@@ -6639,10 +6756,15 @@ export const DISPLAY_READINGS_MAX = ENTRY_FTS_BYTES + ENTRY_REDACT_MARGIN;
  *  It calls nothing but redactField and redactForIndex (whose readings are redactIndexReading's, the belt included),
  *  so it fails closed as they do (R2). */
 export function redactForDisplay(text, idx) {
-  if (text.length <= DISPLAY_READINGS_MAX) return redactForIndex(text, idx);
-  const t = redactField(text, idx);
+  return composeDoor(DOOR_READINGS.redactForDisplay, [text, idx], idx);
+}
+
+/** redactForDisplay's body over one rule set (R11). */
+function redactForDisplayWith(text, idx, rs) {
+  if (text.length <= DISPLAY_READINGS_MAX) return redactForIndexWith(text, idx, rs);
+  const t = redactFieldIn(text, idx, rs.field);
   if (!t.includes('\\')) return t;
-  return t.replace(/[A-Za-z0-9_.\\-]+/g, (span) => (span.includes('\\') && /[A-Za-z0-9_-]/.test(span) && redactForIndex(span, idx) !== span ? REDACTED_MARK : span));
+  return t.replace(/[A-Za-z0-9_.\\-]+/g, (span) => (span.includes('\\') && /[A-Za-z0-9_-]/.test(span) && redactForIndexWith(span, idx, rs) !== span ? REDACTED_MARK : span));
 }
 
 /** A node's `topics` column as a list (HA2 H-14). The writer stores a JSON array of strings; a column that is not
@@ -7121,7 +7243,10 @@ function spanHoldsWord(span) {
 }
 
 /** A break between token spans: whitespace, or one of `"`, `'`, `` ` ``, `,`, `;` and `&`, the characters that end
- *  a value in layer 2's `NAME=` form (coordinator ruling on final-check W2). */
+ *  a value in layer 2's `NAME=` form (coordinator ruling on final-check W2). Since D-5745 the field form reads a value
+ *  past `&`, `,`, `;` and either quote where they do not end it (NAMED_VALUE_FIELD_SRC), so such a value is more than
+ *  one token span: when its NAME sits more than ENTRY_REDACT_MARGIN before a window, it is spec §8.3's display
+ *  residual (a match that is not one token span), as a quoted value already was. The spans are unchanged. */
 const TOKEN_BREAK_RE = /[\s"'`,;&]/;
 
 /** A code unit of a token span (`[^\s"'`,;&]`): a margin's far end moves off one, and a partial one that reaches the
@@ -7176,14 +7301,14 @@ function unmarkedLength(s) {
  *  marked the escape-glued spans. redactForIndex's own loop, step for step, so the window knows which reading it is
  *  cut from; Step 1's case `a whole text's window is redactForDisplay's, …` pins the two equal on every reading, through
  *  each text's window inside a longer one (a whole text's window no longer reaches this function). */
-function displayReading(text, idx) {
-  let t = redactIndexReading(text, idx);
+function displayReading(text, idx, rs) {
+  let t = redactIndexReading(text, idx, rs);
   let keep = t;
   let levels = 0;
   for (let pass = 0; pass < INDEX_UNESCAPE_PASSES; pass += 1) {
     const deeper = unescapeJsonText(t);
     if (deeper === t) return { text: keep, levels, bound: false };
-    t = redactIndexReading(deeper, idx);
+    t = redactIndexReading(deeper, idx, rs);
     if (t !== deeper) {
       keep = t;
       levels = pass + 1;
@@ -7196,9 +7321,9 @@ function displayReading(text, idx) {
  *  redacted, and the escape-glued spans marked when that reading marked them. A margin read so is comparable with the
  *  read text whichever reading the read text's content chose (finding V15: a margin read through its own choice stays
  *  raw while the read text is shown decoded). */
-function readingAt(text, idx, levels, bound) {
-  let t = redactIndexReading(text, idx);
-  for (let pass = 0; pass < levels; pass += 1) t = redactIndexReading(unescapeJsonText(t), idx);
+function readingAt(text, idx, levels, bound, rs) {
+  let t = redactIndexReading(text, idx, rs);
+  for (let pass = 0; pass < levels; pass += 1) t = redactIndexReading(unescapeJsonText(t), idx, rs);
   return bound ? markEscapeGluedSpans(t) : t;
 }
 
@@ -7268,11 +7393,11 @@ function windowEnd(d, rights, s) {
  *  sequences or escapes at the edge goes with it), through redactForDisplay, then every span (DISPLAY_SPAN_RE) that
  *  holds a word of 8 or more characters in its own readings (spanHoldsWord) replaced by the mark. It reads the window
  *  and the one character beyond each edge, and nothing else. */
-function inexactWindow(t, lo, hi, idx) {
+function inexactWindow(t, lo, hi, idx, rs) {
   let w = t.slice(lo, hi);
   if (lo > 0 && isInexactEdgeByte(t.charCodeAt(lo - 1)) && isInexactEdgeByte(t.charCodeAt(lo))) w = dropLeadingWhile(w, isInexactEdgeByte);
   if (hi < t.length && hi > 0 && isInexactEdgeByte(t.charCodeAt(hi - 1)) && isInexactEdgeByte(t.charCodeAt(hi))) w = dropTrailingWhile(w, isInexactEdgeByte);
-  return { text: redactForDisplay(w, idx).replace(DISPLAY_SPAN_RE, (s) => (s !== REDACTED_MARK && spanHoldsWord(s) ? REDACTED_MARK : s)), exact: false };
+  return { text: redactForDisplayWith(w, idx, rs).replace(DISPLAY_SPAN_RE, (s) => (s !== REDACTED_MARK && spanHoldsWord(s) ? REDACTED_MARK : s)), exact: false };
 }
 
 /** text[from, to) as a read verb shows it, and whether it was cut exactly (spec §8.3 and §8.4; coordinator rulings
@@ -7305,31 +7430,31 @@ function inexactWindow(t, lo, hi, idx) {
  *  Each reading reads at most (to - from) + 2 × ENTRY_REDACT_MARGIN characters, through at most
  *  INDEX_UNESCAPE_PASSES + 1 redactions; an inexact window reads the window once more. No slice splits a surrogate
  *  pair. `idx` is the read's pair index, with its belt (Task 7A). */
-function displayWindow(text, from, to, idx) {
+function displayWindow(text, from, to, idx, rs) {
   const t = String(text);
   const lo = pairStart(t, Math.max(0, Math.min(from, t.length)));
   const hi = Math.max(lo, pairStart(t, Math.max(0, Math.min(to, t.length))));
-  if (lo === 0 && hi === t.length) return { text: redactForDisplay(t, idx), exact: true };
-  if (hi - lo > DISPLAY_WINDOW_MAX) return inexactWindow(t, lo, hi, idx);
+  if (lo === 0 && hi === t.length) return { text: redactForDisplayWith(t, idx, rs), exact: true };
+  if (hi - lo > DISPLAY_WINDOW_MAX) return inexactWindow(t, lo, hi, idx, rs);
   let a = pairStart(t, Math.max(0, lo - ENTRY_REDACT_MARGIN));
   while (a > 0 && a < lo && isTokenByte(t.charCodeAt(a - 1)) && isTokenByte(t.charCodeAt(a))) a += 1;
   let b = pairStart(t, Math.min(t.length, hi + ENTRY_REDACT_MARGIN));
   while (b < t.length && b > hi && isTokenByte(t.charCodeAt(b - 1)) && isTokenByte(t.charCodeAt(b))) b -= 1;
   const leadCut = a > 0 && isTokenByte(t.charCodeAt(a - 1)) && isTokenByte(t.charCodeAt(a));
   const tailCut = b < t.length && b > 0 && isTokenByte(t.charCodeAt(b - 1)) && isTokenByte(t.charCodeAt(b));
-  const read = displayReading(t.slice(a, b), idx);
+  const read = displayReading(t.slice(a, b), idx, rs);
   const d = read.text;
-  const lefts = lo > a ? marginReadings(readingAt(t.slice(a, lo), idx, read.levels, read.bound)) : [''];
-  const rights = b > hi ? marginReadings(readingAt(t.slice(hi, b), idx, read.levels, read.bound)) : [''];
+  const lefts = lo > a ? marginReadings(readingAt(t.slice(a, lo), idx, read.levels, read.bound, rs)) : [''];
+  const rights = b > hi ? marginReadings(readingAt(t.slice(hi, b), idx, read.levels, read.bound, rs)) : [''];
   const s0 = windowStart(d, lefts);
   const e0 = s0 === -1 ? -1 : windowEnd(d, rights, s0);
-  if (s0 === -1 || e0 === -1) return inexactWindow(t, lo, hi, idx);
+  if (s0 === -1 || e0 === -1) return inexactWindow(t, lo, hi, idx, rs);
   const s = pairStart(d, s0);
   const e = Math.max(s, pairStart(d, e0));
   let out = d.slice(s, e);
   if (leadCut) out = dropLeadingWhile(out, isTokenByte);
   if (tailCut) out = dropTrailingWhile(out, isTokenByte);
-  if (unmarkedLength(out) > (hi - lo) + 2 * DISPLAY_EDGE_SLACK) return inexactWindow(t, lo, hi, idx);
+  if (unmarkedLength(out) > (hi - lo) + 2 * DISPLAY_EDGE_SLACK) return inexactWindow(t, lo, hi, idx, rs);
   return { text: out, exact: true };
 }
 
@@ -7339,7 +7464,12 @@ function displayWindow(text, from, to, idx) {
  *  (`from` at or before 0, `to` at or past its length) has no margin, so it is always exact and IS redactForDisplay's
  *  reading, whatever its length (displayWindow's step 0, ahead of the DISPLAY_WINDOW_MAX guard). */
 export function redactDisplayWindow(text, from, to, idx) {
-  const w = displayWindow(text, from, to, idx);
+  return composeDoor(DOOR_READINGS.redactDisplayWindow, [text, from, to, idx], idx);
+}
+
+/** redactDisplayWindow's body over one rule set (R11). */
+function redactDisplayWindowWith(text, from, to, idx, rs) {
+  const w = displayWindow(text, from, to, idx, rs);
   return w.exact ? w.text : `${DISPLAY_INEXACT_NOTE}\n${w.text}`;
 }
 
@@ -7354,11 +7484,16 @@ const SNIPPET_READ = SNIPPET_MAX;
  *  text's first 2 × SNIPPET_READ characters are read, and snippetWindow takes its first 80 of them. An inexact window
  *  is shown with DISPLAY_INEXACT_NOTE ahead of the snippet, on the snippet's one line. */
 export function displaySnippet(text, terms, idx) {
+  return composeDoor(DOOR_READINGS.displaySnippet, [text, terms, idx], idx);
+}
+
+/** displaySnippet's body over one rule set (R11). */
+function displaySnippetWith(text, terms, idx, rs) {
   const content = String(text);
   const { at, len } = snippetSpan(content, terms);
   const from = at === -1 ? 0 : Math.max(0, at - SNIPPET_READ);
   const to = at === -1 ? Math.min(content.length, 2 * SNIPPET_READ) : Math.min(content.length, at + Math.max(len, 1) + SNIPPET_READ);
-  const w = displayWindow(content, from, to, idx);
+  const w = displayWindow(content, from, to, idx, rs);
   const shown = snippetWindow(w.text, terms);
   const prefix = from > 0 && !shown.startsWith('...') ? '...' : '';
   const suffix = to < content.length && !shown.endsWith('...') ? '...' : '';

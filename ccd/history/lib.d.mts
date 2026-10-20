@@ -309,6 +309,10 @@ export function redactFinal(text: string, idx: PairIndex): string;
 export function redactFinalJson<T>(value: T, idx: PairIndex): T;
 export function redactFinalText(text: string, idx: PairIndex): string;
 export function redactFinalLines(text: string, idx: PairIndex): string;
+/** R11: an exported redaction door's two readings, its rev 3.6 door (`base`) and the same door built from this build's
+ *  rules over the base reading's output (`v2`); null for any other function. A test seam: no shipped file calls it. */
+export function redactDoorReadings(door: (...args: never[]) => unknown):
+  { base: (...args: any[]) => any; v2: (out: any, idx: PairIndex | null) => any } | null;
 // --- Task 10: harness table and the export's horizon (spec §6.10 item 3, §9.15)
 export type Readable = { state: 'absent' } | { state: 'unreadable' } | { state: 'text'; text: string };
 export const CLAUDE_CODE_DEFAULT_RETENTION_DAYS: 30;
