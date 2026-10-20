@@ -393,8 +393,13 @@ describe('ws-gc --fast', () => {
     const fast = h.sh('cmd_ws_gc --fast');
     expect(sizeOf(fast, 'quiet-mesa'), fast).toMatch(/^(3\.0M|3145728)$/);
     expect(sizeOf(fast, 'still-cove'), fast).toBe('-');
-    // The control: the full run measures the same tracked row.
-    expect(sizeOf(h.sh('cmd_ws_gc'), 'still-cove')).not.toBe('-');
+    // The controls: the full run measures the same tracked row, and it still
+    // measures the ARCHIVED row with `du` too — the manifest's archive-time
+    // figure (3 MiB, on a tree of a few KiB) is `--fast`'s alone.
+    const full = h.sh('cmd_ws_gc');
+    expect(sizeOf(full, 'still-cove')).not.toBe('-');
+    expect(sizeOf(full, 'quiet-mesa'), full).not.toBe('-');
+    expect(sizeOf(full, 'quiet-mesa'), full).not.toMatch(/^(3\.0M|3145728)$/);
   });
 
   for (const [label, manifest] of [
