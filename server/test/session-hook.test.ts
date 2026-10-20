@@ -8706,7 +8706,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // `OUTSTANDING_DELIVERY_STATES`, above README's anchors), so every anchor
       // below them shifts by exactly 11. README's four were re-pointed to the
       // tip's lines (`:8438-8440`, `:8490`, `:8498`, `:8511`). The one site
-      // that ENTERED is the frozen plan's `plan:3379 shared/api.ts:5644` site
+      // that ENTERED is the frozen plan's `plan:3379` site (its `:5644`)
       // named above, losing the coincidental pass the drift decider gave it.
       // No rule changed, so no D-number.
       // RE-MEASURED on the archived-held block (D-5943; base = origin/main
@@ -8714,9 +8714,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // it): nothing in the map moved. This branch adds 51 lines to the cited
       // file (the `FleetHealth.archivedHeld` field and the block's types and
       // reader, above README's anchors), so every anchor below them shifts by
-      // exactly 51 more. README's four were re-pointed to the tip's lines
-      // (`:8489-8491`, `:8541`, `:8549`, `:8562`). The frozen plan's `:5644`
-      // site stays off its quote. No rule changed, so no D-number.
+      // exactly 51 more. README's four were re-pointed to the tip's lines.
+      // The frozen plan's site named above stays off its quote. No rule
+      // changed, so no D-number.
       'shared/api.ts': 1,
     });
     // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
