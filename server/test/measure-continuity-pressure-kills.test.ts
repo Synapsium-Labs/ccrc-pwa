@@ -175,9 +175,15 @@ describe('well-formed notifications that are not pressure kills read as non-even
     expect(read()).toEqual(clean(0, 0, 1));
   });
 
-  it('the kill rule is unchanged: a verified single-task killed envelope with trailing reminders is exactly one kill', () => {
-    transcript(U1, [row(`${note('k1')}\n\n${reminder()}\n${reminder('again')}`)]);
-    expect(read()).toEqual(clean(1, 1, 1));
+  // The kill rule is unchanged: a `killed` envelope keeps the strict envelope the kill count was read under at the base
+  // and when frozen B was measured, so trailing reminder blocks leave it unmeasured, whatever its summary. The reminder
+  // tolerance belongs to the three ruled non-event shapes above and stops at the killed arm.
+  it.each([
+    ['verified single-task killed envelope, the pressure summary', note('k1')],
+    ['single-task killed envelope with one readable summary that is not the pressure reason', note('k1', 'killed', 'stopped')],
+  ])('the kill rule is unchanged: a %s followed by trailing reminder blocks stays unmeasured, as at the base and as frozen B was read', (_name, text) => {
+    transcript(U1, [row(`${text}\n\n${reminder()}\n${reminder('again')}`)]);
+    expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 1 });
   });
 
   it('a batched killed envelope is unmeasured, never a kill (the kill rule is still exactly one task id)', () => {
@@ -262,9 +268,38 @@ describe('the scanner pins its own branches (D-4322 minors)', () => {
     expect(read()).toEqual({ ...clean(1, 1, 1), reading: 'partial', malformed_rows: 1 });
   });
 
-  it('a JSON line nested deep enough to raise RecursionError is a malformed row, not a crash of the instrument', () => {
-    const deep = '['.repeat(100_000) + ']'.repeat(100_000);
-    transcript(U1, [deep, row(note('real'))]);
+  // Whether a row this deep raises RecursionError is the interpreter's doing, not the instrument's: Python 3.12's
+  // json raises it, a newer one (3.15, CI's macOS leg) parses the same line as a nested list, which the scanner then
+  // skips as a non-dict row (and a non-dict row is not counted as malformed). So the case asks the interpreter that
+  // runs the instrument (`python3 -I`, `read()`'s environment) to `json.loads` exactly this row, and runs only
+  // when it raises; otherwise it is skipped with the reason named. The scanner is not changed for it.
+  const DEPTH = 100_000;
+  const DEEP = '['.repeat(DEPTH) + ']'.repeat(DEPTH);
+  const DEEP_PROBE = [
+    'import json, sys',
+    'depth = int(sys.argv[1])',
+    'row = b"[" * depth + b"]" * depth + b"\\n"', // the bytes `for raw in fh` hands the scanner for that line
+    'try:',
+    '    json.loads(row)',
+    'except RecursionError:',
+    '    outcome = "RecursionError"',
+    'except ValueError:',
+    '    outcome = "ValueError"',
+    'else:',
+    '    outcome = "parsed"',
+    'print(json.dumps({"outcome": outcome, "version": sys.version.split()[0]}))',
+  ].join('\n');
+  const probeDeepRow = (): { outcome: string; version: string } => JSON.parse(execFileSync('python3', ['-I', '-c', DEEP_PROBE, String(DEPTH)], {
+    encoding: 'utf8', timeout: 30_000,
+    env: { ...inheritedEnv(), HOME: h.home, TZ: 'UTC', XDG_RUNTIME_DIR: path.join(h.home, 'xdg') },
+  })) as { outcome: string; version: string };
+
+  it('a JSON line nested deep enough to raise RecursionError is a malformed row, not a crash of the instrument', (ctx) => {
+    const probe = probeDeepRow();
+    ctx.skip(probe.outcome !== 'RecursionError',
+      `python ${probe.version}'s json.loads reads this ${DEEP.length}-character row as ${probe.outcome === 'parsed' ? 'a nested list' : probe.outcome}, `
+      + 'not a RecursionError, so the instrument has no deep-nesting failure to catch here');
+    transcript(U1, [DEEP, row(note('real'))]);
     expect(read()).toEqual({ ...clean(1, 1, 1), reading: 'partial', malformed_rows: 1 });
   });
 

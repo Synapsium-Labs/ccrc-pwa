@@ -6,7 +6,7 @@
 // journal export (`--journal`), a fixture HOME's lifecycle journal and
 // transcripts, and binds the lifecycle reader to an event the REAL ccd wrote.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +28,12 @@ const stage = (extra: string[] = []): Stage6 => {
   return (JSON.parse(out) as { stage6: Stage6 }).stage6;
 };
 const run = (extra: string[] = []): Row => stage(extra).reap_class_oom;
+/** The same run under another zone, answering the process's exit and streams instead of throwing. `stage()` stays on UTC. */
+const stageIn = (tz: string, extra: string[]): { status: number | null; stdout: string; stderr: string } => {
+  const xdg = path.join(h.home, 'xdg'); fs.mkdirSync(xdg, { recursive: true });
+  return spawnSync('python3', [TOOL, '--home', h.home, '--stage', '6', '--journal', path.join(h.home, 'journal.json'), ...extra, '--json'],
+    { encoding: 'utf8', env: { ...process.env, TZ: tz, XDG_RUNTIME_DIR: xdg } });
+};
 
 const T = Date.parse('2026-10-06T12:00:00Z') / 1000;            // the hour every stop below happens in
 const iso = (t: number): string => new Date(t * 1000).toISOString();
@@ -223,6 +229,23 @@ describe('the pressure comparison is B-relative and read-only', () => {
     ['--reap-baseline', '5', '--since', '2026-10-06', '--until', '2026-10-07'],
   ])('invalid or incomplete comparison arguments are refused: %s', (...args) => {
     expect(() => stage(args)).toThrow();
+  });
+  // The window is 7 x 86400 ELAPSED seconds and --since/--until are read in the process's local zone, so a local
+  // calendar week across a DST change (Berlin falls back on 2026-10-25: 608400 s between the endpoints) is refused,
+  // and the documented invocation (the plan's Task 5) runs under TZ=UTC. Both sides are pinned.
+  const calendarWeek = ['--since', '2026-10-20', '--until', '2026-10-27', '--reap-baseline', '0'];
+  it('a local calendar week across a DST change is refused: TZ=Europe/Berlin, 2026-10-20 to 2026-10-27', () => {
+    const r = stageIn('Europe/Berlin', calendarWeek);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toContain('explicit seven-day --since/--until window');
+  });
+  it('the same calendar week under TZ=UTC is accepted: the documented invocation', () => {
+    const r = stageIn('UTC', calendarWeek);
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const comparison = (JSON.parse(r.stdout) as { stage6: Stage6 }).stage6.pressure_reap_comparison;
+    expect(comparison).toMatchObject({ baseline_reap_class: 0, withdraw_above: 2 });
   });
 });
 

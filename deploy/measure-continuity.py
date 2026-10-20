@@ -570,7 +570,10 @@ def stage4(ctx):
 #                     beside, in `carried_scopes`, and never inflates dead/inert.
 # `--reap-baseline <count>` supplies B, an already-frozen reap-class count (not a
 # file, not a live re-read), and needs `--stage 6` alone with an explicit seven-day
-# `--since`/`--until`. It adds the READ-ONLY `pressure_reap_comparison` section:
+# `--since`/`--until`. The window is exactly 7 x 86400 elapsed seconds, both ends read
+# in the process's local zone like every time argument (see the docstring), so a local
+# calendar week across a DST change is refused; the documented invocation (the plan's
+# Task 5) sets `TZ=UTC`. It adds the READ-ONLY `pressure_reap_comparison` section:
 # the baseline, the exclusive withdrawal threshold B + 2, the observed reap class
 # and `decision` (`withdraw` above B + 2, `not-triggered` at or below it,
 # `unmeasured` when the journal cannot be read). `not-triggered` is not a health
@@ -604,15 +607,18 @@ def stage4(ctx):
 # element and exactly one plain `<event>` element (an event-style notification).
 # An envelope is the whole `<task-notification>…</task-notification>` text once
 # trailing whitespace and whole trailing `<system-reminder>…</system-reminder>`
-# blocks (optional whitespace between them) are removed. The kill rule has its own
-# non-pressure case: a single-task `killed` envelope (one readable status, one
-# readable task id) with exactly one summary element, readable and not the verified
-# pressure reason, is read as not this event too (with the pressure reason it is
-# the one kill). Every other shape is unmeasured: a status, task-id or summary
-# element the scanner cannot read (an attribute, markup in the value, a second
-# unreadable one) counts against the envelope, a `killed` envelope with no summary
-# or with two is unmeasured, and a batched `killed` envelope is unmeasured, never
-# a kill.
+# blocks (optional whitespace between them) are removed, but only the shapes above
+# keep that reminder tolerance: a `killed` envelope must have nothing after its
+# closing tag, and with trailing reminder blocks it is unmeasured, the strict
+# envelope the kill count was read under at the base and when frozen B was measured.
+# The kill rule has its own non-pressure case: a single-task `killed` envelope (one
+# readable status, one readable task id) with exactly one summary element, readable
+# and not the verified pressure reason, and nothing after its closing tag, is read as
+# not this event too (with the pressure reason it is the one kill). Every other
+# shape is unmeasured: a status, task-id or summary element the scanner cannot read
+# (an attribute, markup in the value, a second unreadable one) counts against the
+# envelope, a `killed` envelope with no summary or with two is unmeasured, and a
+# batched `killed` envelope is unmeasured, never a kill.
 # A partial read (an unreadable file, a malformed row, an envelope with an
 # unreadable stamp or ambiguous fields) and an absent roster are reported as such
 # and are never a clean zero; a row whose stamp is no string, or whose JSON nests
@@ -825,14 +831,17 @@ def s6_pressure_comparison(reading, baseline):
 # An ENVELOPE is the whole `<task-notification>…</task-notification>` text once its
 # trailing whitespace and any whole trailing `<system-reminder>…</system-reminder>`
 # blocks (each complete, optional whitespace between them, nothing else) are
-# removed; any other text after the closing tag leaves it no envelope. A status or
-# task-id or summary element is counted by its OPENER (`<status\b`, `<task-id\b`,
-# `<summary\b`, which also counts an attribute and a longer name: the fail-safe
-# direction) as well as by its readable value, so an element the scanner cannot
-# read is never a missing one.
+# removed; any other text after the closing tag leaves it no envelope. The ruled
+# non-event shapes keep that tolerance; a `killed` envelope does not: one with any
+# trailing reminder block is unmeasured, the strict envelope the kill count was read
+# under at the base and when frozen B was measured (`trailing` names those blocks).
+# A status or task-id or summary element is counted by its OPENER (`<status\b`,
+# `<task-id\b`, `<summary\b`, which also counts an attribute and a longer name: the
+# fail-safe direction) as well as by its readable value, so an element the scanner
+# cannot read is never a missing one.
 S6_NOTIFICATION = re.compile(
     r"<task-notification>\s*(.*?)\s*</task-notification>"
-    r"(?:\s*<system-reminder>(?:(?!</system-reminder>).)*</system-reminder>)*", re.S
+    r"(?P<trailing>(?:\s*<system-reminder>(?:(?!</system-reminder>).)*</system-reminder>)*)", re.S
 )
 S6_TASK_ID = re.compile(r"<task-id>([A-Za-z0-9_-]+)</task-id>")
 S6_STATUS = re.compile(r"<status>([^<>]*)</status>")
@@ -922,6 +931,12 @@ def s6_pressure_kills(ctx):
                         # A known non-killed status is read BEFORE the task-id count, so a
                         # batched envelope (several ids, one status) is a known non-event.
                         if status != "killed":
+                            continue
+                        if envelope.group("trailing"):
+                            # The killed arm keeps the strict envelope: trailing reminder blocks
+                            # leave it unmeasured, whatever its summary (it only moves readings
+                            # toward unmeasured).
+                            file_unmeasured += 1
                             continue
                         if id_openers != 1 or len(ids) != 1:
                             file_unmeasured += 1
