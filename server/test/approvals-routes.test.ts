@@ -7,7 +7,8 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { verdictFor } from '../../ccd/approval-verify.mjs';
-import { APPROVAL_CWD_TRUSTED, APPROVAL_REFUSALS_LOG } from '../../shared/api.js';
+import { APPROVAL_CWD_TRUSTED, APPROVAL_REFUSALS_LOG, SECRET_MASK } from '../../shared/api.js';
+import { SecretMasker, fingerprintGeneration, fingerprintRow } from '../src/accounts/mask.js';
 import {
   approvalCount, CHILD, CHILD2, DENY_DIGEST, DUNE, FAR, FAR_C, hookInput, PARENT, requestBody, sha256, standardFixture,
   TOK, uuidOf, workdirOf, approvalsFixture, type Approvals,
@@ -476,5 +477,29 @@ describe('redaction on the wire (spec §6.7)', () => {
     expect(mail).toHaveLength(1);
     expect(mail[0]!.body).not.toContain(TOKEN_HEX);
     expect(mail[0]!.body).toContain('Authorization: [REDACTED]');
+  });
+
+  it('a fingerprinted lane key in the input is stored masked: the exact-bytes pass runs before the redactor (D-5995 (10))', async () => {
+    // A compatible key has no shape the redactor knows (no prefix, no digit), so only its fingerprint can mask it.
+    const BOX = 'box-token-for-the-approval-input-case';
+    const KEY = ['compat', 'q'.repeat(18), 'Hdxy'].join('-');
+    let masker: SecretMasker | null = null;
+    f = await standardFixture({
+      masker: (db) => {
+        masker = new SecretMasker({ db, token: () => BOX, log: () => {} });
+        masker.ingest({ gen: fingerprintGeneration(BOX), rows: [fingerprintRow(BOX, 'claude-a', KEY)] });
+        return masker;
+      },
+    });
+    try {
+      const { id } = await ask(f, hookInput({ command: `deploy --target ${KEY} now` }));
+      expect(rowOf(f, id).inputRedacted).not.toContain(KEY);
+      expect(rowOf(f, id).inputRedacted).toContain(SECRET_MASK);
+      const mail = mailsTo(f, PARENT);
+      expect(mail).toHaveLength(1);
+      expect(mail[0]!.body).not.toContain(KEY);
+    } finally {
+      (masker as SecretMasker | null)?.close();
+    }
   });
 });
