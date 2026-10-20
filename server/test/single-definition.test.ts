@@ -2347,10 +2347,12 @@ describe("child-reclamation wave 4 — one 'reclaim-paused' literal", () => {
     expect(holders).toEqual(['shared/switches.ts']);
   });
 
-  it('watch.ts reaches the reclaim marker through the shared constant, never a copy', () => {
-    // Not just "no second literal" — that is satisfied by deleting the reader.
+  it('watch.ts reaches the reclaim marker through readSwitches, never a private parse (D-5856)', () => {
+    // Not just "no second literal" — that is satisfied by deleting the reader. Symbol-keyed (scan/symbols.ts): each lane
+    // site calls the switchboard's one reader, and no `includes(RECLAIM_PAUSE_MARKER)` is left in watch.ts.
+    for (const m of ['emitCoord', 'sweepChildReclaim', 'archivedExpiryPass', 'deadCoordinatorPass']) expect(callsIn(symbolOf('server/src/watch.ts', `FleetWatcher.${m}`)).map((c) => c.name), m).toContain('readSwitches');
+    expect(reclaimPauseParseSites().filter((x) => x.file === 'server/src/watch.ts'), 'a private parse in watch.ts').toEqual([]);
     const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'utf8');
-    expect(src).toContain('names.includes(RECLAIM_PAUSE_MARKER)');
     expect(src).toMatch(/import \{[^}]*\bRECLAIM_PAUSE_MARKER\b[^}]*\} from '\.\/coord\/rundefs\.js'/);
   });
 });
@@ -6373,7 +6375,7 @@ describe("one 'tmux unreachable' sentence (design-system wave)", () => {
       'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/ArchiveSheet.tsx',
       // D-5545: the fleet row's and the header's facts are decided in `sessionFacts.ts` now, not `SessionMeta.tsx`.
       'pwa/src/fleet/sessionFacts.ts', 'pwa/src/screens/SessionScreen.tsx',
-      'pwa/src/session/SessionHeader.tsx', 'pwa/src/session/PrSheet.tsx',
+      'pwa/src/session/SessionFlows.tsx', 'pwa/src/session/PrSheet.tsx', // W2 Task S2d: the ⋯ menu moved there
     ]) {
       expect(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)
         .toMatch(/substrateFaultT(ext|itle)\(/);
@@ -7248,6 +7250,42 @@ describe('the account gate, the audit and the AccountOps port each have one home
   });
 });
 
+// D-5517, D-5518, D-5513 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A12). The state word, its
+// thresholds and the lane-state grammar have one home in `shared/accounts.ts`, L0 beside the words; the wire shapes one
+// in `shared/api.ts`; the roster is swapped by `reloadRoster` alone; reconcile, the lanes wire and the lane-state read
+// each have one file.
+describe('the state word, the roster reload and the lanes wire each have one home (D-5517, D-5518)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('stateWordFor').test('export function stateWordFor(i: StateWordInput): AccountStateAnswer {')).toBe(true);
+    expect(decl('stateWordFor').test('state: stateWordFor({ disabled, authDead })')).toBe(false);
+    expect(/\bcfg\.roster\s*=(?!=)/.test('    cfg.roster = roster;')).toBe(true);
+    expect(/\bcfg\.roster\s*=(?!=)/.test('if (ownRosterFpOf?.roster !== deps.cfg.roster)')).toBe(false);
+  });
+  it('the words, their thresholds and the lane-state grammar are declared once, in shared/accounts.ts', () => {
+    for (const c of ['stateWordFor', 'ACCOUNT_STATE_WORDS', 'AccountStateWord', 'AccountStateAnswer', 'StateWordInput',
+      'SIGNED_IN_WITHIN_MS', 'MINTED_TOKEN_LIFETIME_MS', 'MINTED_TOKEN_EXPIRING_MS', 'CREDIT_EXPIRING_FRACTION',
+      'MINTED_KEY_EXPIRING_MS', 'WINDOW_LIMITED_PCT', 'LaneState', 'LaneStateRead', 'laneStateOf', 'laneNotReadyReason',
+      'KEY_HINT_RE', 'LANE_IDENTITY_MAX']) {
+      expect(holders(decl(c)), c).toEqual(['shared/accounts.ts']);
+    }
+  });
+  it('the wire shapes are declared once, in shared/api.ts', () => {
+    for (const c of ['LaneWire', 'AccountsConnect', 'LANE_NOT_READY_REASONS', 'LaneNotReadyReason', 'ACCOUNT_CAPS', 'AccountCap']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the roster is swapped in one place, and reconcile, the lanes wire and the lane-state read each live in one file', () => {
+    expect(holders(/\bcfg\.roster\s*=(?!=)/)).toEqual(['server/src/config.ts']);
+    for (const c of ['reloadRoster', 'rosterAnswerOf', 'RosterAnswer']) expect(holders(decl(c)), c).toEqual(['server/src/config.ts']);
+    expect(holders(decl('reconcilingAccountOps'))).toEqual(['server/src/accounts/reconcile.ts']);
+    for (const c of ['lanesWire', 'accountsConnect']) expect(holders(decl(c)), c).toEqual(['server/src/accounts/lanes.ts']);
+    expect(holders(decl('readLaneStates'))).toEqual(['server/src/limits.ts']);
+    expect(holders(decl('LANE_STATE_DIR_NAME'))).toEqual(['shared/agent-protocol.ts']);
+  });
+});
+
 // D-5513, D-5622 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A8). APPENDED. The agent's typed
 // `account` op: the argv builder and its bounds have one home in `shared/account-argv.ts`, which BOTH `AccountOps`
 // arms call; the op's wire vocabulary and the node-id grammar one home in `shared/agent-protocol.ts`; the agent's
@@ -7552,9 +7590,9 @@ describe("the lane's kind is derived in one place, shared/roster.ts (D-5517)", (
 // WIDTH: a name assembled from pieces, a bash variable assigned in one function and written in another, a path passed
 // through a parameter or object field, and an fs call split over lines are not seen.
 // The import sits here, not at the head, so the append moves no cited line (ESM hoists it either way).
-import { markerDefinitions } from './consolidationCensus.js';
+import { markerDefinitions, reclaimPauseParseSites } from './consolidationCensus.js';
 import { parseSource } from './scan/parse.js';
-import { SWITCHES } from '../../shared/switches.js';
+import { SWITCHES } from '../../shared/switches.js'; import { callsIn, symbolOf } from './scan/symbols.js';
 describe('one writer per fact (ARCH-40): the switches whose writer set is already at target (D-5849)', () => {
   const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const WRITE_VERB = '(?:touch|mv|cp|ln|rm|rmdir|mkdir|install|tee|truncate)';
@@ -7744,6 +7782,15 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(rowless, 'a marker constant with no SWITCHES row').toEqual([]);
   });
 
+  // D-5856 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1b; ARCH-70 (#805)).
+  // Every reclaim-paused reader, at the pass and at the act, goes through `readSwitches`: the private parse sites fold
+  // 10 -> 1 on C1b's tip. The one left is the stop-done lane's (`stopDoneSweep.ts`), which W4 moves. May only shrink.
+  it('reclaim-paused is parsed at <= 1 site outside readSwitches (may only shrink)', () => {
+    const sites = reclaimPauseParseSites();
+    expect(sites.length, 'a private includes(RECLAIM_PAUSE_MARKER): read it through readSwitches').toBeLessThanOrEqual(1);
+    expect(sites.map((x) => x.file)).toEqual(sites.length === 0 ? [] : ['server/src/stopDoneSweep.ts']);
+  });
+
   // D-5853 (Task C0f; ARCH-00 (#525)). The test scanners' TS parser, the operator's option (a) (a TypeScript 6 alias),
   // has ONE importer, `server/test/scan/parse.ts`, and an exact version. The corpus is every tracked or new untracked
   // .ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs file (not .d.*ts), with comment lines dropped (`stallCodeText`). Under
@@ -7823,8 +7870,17 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     });
   };
   interface SourcePin { line: number; target: string; method: string; literal: string }
+  /** How many texts `literalSourcePins` has parsed (D-6111's guard reads it). */
+  let pinParses = 0;
   /** ARCH-06's counting rule over one test file's text (D-5854). */
   const literalSourcePins = (text: string, file = 'probe.ts'): SourcePin[] => {
+    // D-6111: every target below comes from `namesW1aFile` over a substring of `text`, and it answers nothing unless
+    // that substring spells a W1a basename, so a text that spells none has no pin and is not parsed. Parsing all of
+    // server/test took 9.9 s of the 20 s Linux budget untraced, and timed out under the map's trace. KNOWN WIDTH: a
+    // template that splits a basename across lines is joined by `flat` before `namesW1aFile` reads it, so this raw-text
+    // check would miss it; no such pin exists (the counts with and without this check were measured equal).
+    if (!W1A_FILES.some((f) => text.includes(path.basename(f)))) return [];
+    pinParses += 1;
     const p = parseSource(text, file);
     const raw = (c: { start: number; end: number }): string => text.slice(c.start, c.end);
     const resolve = (name: string, at: number): number => {
@@ -7896,17 +7952,33 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     }
     return out;
   };
-  /** Every tracked or new untracked .ts file under server/test, and its pins' count per W1a file. */
-  const literalSourcePinCounts = (): Record<string, number> => {
+  /** Every tracked or new untracked .ts file under server/test, its pins' count per W1a file, and how many files were
+   *  listed and parsed. Scanned once and shared by the ratchet and D-6111's guard. */
+  let pinScan: { counts: Record<string, number>; listed: number; parsed: number } | undefined;
+  const literalSourcePinScan = (): NonNullable<typeof pinScan> => {
+    if (pinScan) return pinScan;
     const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'server/test/*.ts'],
       { cwd: ccrcRoot, encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
     const counts: Record<string, number> = Object.fromEntries(W1A_FILES.map((f) => [f, 0]));
-    for (const f of new Set(r.stdout.split('\0').filter((x) => x && existsSync(path.join(ccrcRoot, x))))) {
+    const files = new Set(r.stdout.split('\0').filter((x) => x && existsSync(path.join(ccrcRoot, x))));
+    const before = pinParses;
+    for (const f of files) {
       for (const pin of literalSourcePins(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)) counts[pin.target]! += 1;
     }
-    return counts;
+    pinScan = { counts, listed: files.size, parsed: pinParses - before };
+    return pinScan;
   };
+  const literalSourcePinCounts = (): Record<string, number> => literalSourcePinScan().counts;
+
+  // D-6111. The ratchet's scan parses only the files that spell a W1a basename, so it fits a traced run's budget; a
+  // scan that parsed every listed file again would put main's map-build red whenever tracing slowed it past 20 s.
+  it('the pin scan parses only the test files that spell a W1a basename (D-6111)', () => {
+    const { listed, parsed } = literalSourcePinScan();
+    expect(listed, 'git listed too few server/test files: the scan saw nothing').toBeGreaterThan(500);
+    expect(parsed, 'no file was parsed: the ratchet would count nothing').toBeGreaterThan(0);
+    expect(parsed, 'the scan parsed most of server/test again').toBeLessThan(listed / 3);
+  });
 
   it('CONTROL (fixture): the counting rule sees a read, a reader, a slice and an inline read, and keeps scopes apart', () => {
     const pins = (code: string): string[] =>
@@ -7952,7 +8024,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   it('literal source pins over W1a\'s files may only shrink (D-5854; ARCH-06\'s counting rule)', () => {
     // Measured on merge day. Lower a row when a pin moves onto scan/symbols.ts; never raise one.
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 114,
+      'server/src/watch.ts': 113,
       'server/src/server.ts': 31,
       'server/src/interruptlog.ts': 0,
       'server/src/coord/routes.ts': 40,

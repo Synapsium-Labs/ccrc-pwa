@@ -48,7 +48,7 @@ import type { FleetSession } from '../../shared/api.js';
 import { CREDENTIAL_MASKS, SECRET_MASK, SECRET_MASK_TOO_LARGE, type SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
-import { sourceOfSymbol } from './scan/symbols.js';
+import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
 // ── assembled credentials ──────────────────────────────────────────────────
 const fill = (n: number, salt: string, alphabet = 'base64url'): string => {
@@ -1556,6 +1556,11 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
     expect(server).toMatch(/app\.setErrorHandler\(\(err, _req, _reply\) => \{\s*throw maskedError\(deps\.masker \?\? SHAPE_ONLY_MASKER, err\);/);
     expect(server.match(/app\.setErrorHandler\(/g)).toHaveLength(1);
     expect(server.match(/app\.addHook\('onSend'/g)).toHaveLength(2);   // the step-up's no-store, and the backstop
+    // A parse-based census of the whole file, so a second registration in a helper outside buildServer cannot hide
+    // from the symbol-keyed counts above (D-5857's follow-up).
+    const calls = parsedFile('server/src/server.ts').calls;
+    expect(calls.filter((c) => c.name === 'setErrorHandler')).toHaveLength(1);
+    expect(calls.filter((c) => c.name === 'addHook' && c.args[0]?.kind === 'string' && c.args[0].text === 'onSend')).toHaveLength(2);
     for (const f of routeFiles()) {
       if (f.join('/') === 'server.ts' || f[0] === 'docs') continue;
       expect(read(f), f.join('/')).not.toMatch(/setErrorHandler\(/);

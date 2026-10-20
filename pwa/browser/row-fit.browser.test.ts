@@ -69,10 +69,12 @@ const session = (project: string, ws: string, extra: object = {}): object => ({
   withCoordinator: null, lastEnd: null, hibernatedAt: null, bucket: 'idle', unmeasured: [], started: true,
   child: { kind: 'none' }, ...extra,
 });
-/** A card carrying all of its meta at once: the count, "2 stranded", the attention mark and, folded, "2 working". */
+/** A card carrying all of its meta at once: the count, "2 stranded" and, folded, "3 working". No member asks the
+ *  operator: a card holding an operator-facing question is held open (D-6088 rule 5), so the attention mark is never
+ *  on a folded header, and the fleet-rollup render suite pins that card per skin. */
 const LONG_META = (project: string): object[] => [
   session(project, 'one', { status: 'busy', bucket: 'working' }),
-  session(project, 'two', { dialogPending: true, bucket: 'attention' }),
+  session(project, 'two', { status: 'busy', bucket: 'working' }),
   session(project, 'three', { stranded: STRANDED }),
   session(project, 'four', { status: 'busy', bucket: 'working', stranded: STRANDED }),
   session(project, 'five'),

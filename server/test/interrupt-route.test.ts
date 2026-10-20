@@ -22,6 +22,7 @@ import { localIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { interruptVerdict } from '../src/inject/send.js';
+import { readHookState } from '../src/hookstate.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { PushService } from '../src/push.js';
 import { guardRunner, seedRoster } from './helpers.js';
@@ -52,7 +53,7 @@ interface Box {
   /** The live file's raw word and stamp; `'unreadable'` writes a directory where the file belongs; absent writes none. */
   live?: { status: string; at: number } | 'unreadable';
   /** The hookstate file's state, event, stamp and D-5231 pair; absent writes none. */
-  hook?: { state: string; event: string; at: number; bg?: { count: number; kinds: string } };
+  hook?: { state: string; event: string; at: number; bg?: { count: number; kinds: string }; ask?: unknown };
   /** The watcher's newest pane dialogs. */
   pending?: string[];
   /** tmux proves the pane gone. */
@@ -82,7 +83,7 @@ const box = async (b: Box) => {
   if (b.hook !== undefined) {
     writeFileSync(path.join(reg, `${ID}.hookstate.json`), JSON.stringify({
       v: 1, state: b.hook.state, event: b.hook.event, sessionId: UUID, pid: PANE, updatedAt: b.hook.at,
-      ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0, ccrcPeerReads: 0, ccrcClaims: 0,
+      ask: b.hook.ask ?? null, subagents: [], graphQueries: 0, graphGateDenials: 0, ccrcPeerReads: 0, ccrcClaims: 0,
       ...(b.hook.bg !== undefined ? { bgDelegated: b.hook.bg.count, bgDelegatedKinds: b.hook.bg.kinds } : {}),
     }));
   }
@@ -111,7 +112,9 @@ const box = async (b: Box) => {
   const url = `/api/sessions/${ID}/interrupt`;
   const res = b.bare ? await app.inject({ method: 'POST', url }) : await app.inject({ method: 'POST', url, payload: b.payload ?? {} });
   const recorded = notifyLog.catchUp(notifyLog.epoch, 0).events.map((e) => ({ kind: e.kind, sessionId: e.sessionId, body: e.body }));
-  return { res, keys: calls.filter((c) => c[0] === 'send-keys'), recorded, pushes: notify.mock.calls.length };
+  // D-6116: the envelope the session stream ships for this file — `sessionws.ts`'s `checkHookAsk` makes this same read.
+  const envelope = (await readHookState(localIO, reg, ID, UUID, Date.now()))?.ask ?? null;
+  return { res, keys: calls.filter((c) => c[0] === 'send-keys'), recorded, pushes: notify.mock.calls.length, envelope };
 };
 
 const ESCAPE = [['send-keys', '-t', `=cc-${ID}:`, 'Escape']];
@@ -279,5 +282,70 @@ describe('POST /api/sessions/:id/interrupt records its source and outcome (D-523
     const gone = await box({ live: { status: 'busy', at: T0 }, gone: true, payload: { source: 'keycap' } });
     expect(gone.recorded).toEqual(rec('source=keycap outcome=not-alive'));
     expect(idle.pushes + gone.pushes).toBe(0);
+  });
+});
+
+// D-6116 (#555, ARCH-13a step 1; plan docs/superpowers/plans/2026-10-20-arch-13a-interrupt-reachability.md): can the
+// envelope sheet's Deny ever be answered `409 background-only`? Deny is the sheet's only interrupt and renders only on an
+// approval envelope. The stream ships an envelope exactly when the hookstate's `ask` is non-null, and the hook writes an
+// ask only with `waiting`, clearing it on every main `working`/`done` (`ccd/session-hook.sh`, "Transitions to
+// working/done clear the ask"). `waiting` is `dialogPending`, which `interruptVerdict` reads as a turn. So while the server
+// ships an envelope, Deny presses Escape; background-only reaches the sheet only from a sheet still open after the
+// request resolved elsewhere — a Deny the stream's `ask_cleared` has not yet overtaken.
+describe('POST /api/sessions/:id/interrupt under an envelope (D-6116)', () => {
+  const APPROVAL = { approval: { tool: 'Bash', summary: 'npm test' } };
+  const QUESTIONS = { questions: [{ question: 'Which branch?', header: 'Branch', multiSelect: false,
+    options: [{ label: 'main', description: 'the default' }, { label: 'next' }] }] };
+  /** A pending wait, stamped after the live word, carrying the main Stop's delegated pair (D-5376 keeps it under a wait). */
+  const wait = (ask: unknown, event: string) => ({ state: 'waiting', event, at: T1, bg: { count: 2, kinds: 'workflow' }, ask });
+
+  it('an approval envelope over delegated work and over a background shell: Deny presses Escape', async () => {
+    for (const status of ['busy', 'shell']) {
+      const { res, keys, envelope } = await box({ live: { status, at: T0 }, hook: wait(APPROVAL, 'PermissionRequest'),
+        payload: { source: 'deny' } });
+      expect(envelope, status).toEqual(APPROVAL);
+      expect(res.statusCode, status).toBe(200);
+      expect(keys, status).toEqual(ESCAPE);
+    }
+  });
+
+  // The issue's remaining candidate: a non-approval envelope with only background work running. It is a wait too, so the
+  // route still answers a turn — and the sheet renders no Deny for it in any case.
+  it('a question envelope with only a background shell running: a turn, never background-only', async () => {
+    for (const event of ['PermissionRequest', 'PreToolUse']) {
+      const { res, keys, envelope } = await box({ live: { status: 'shell', at: T0 }, hook: wait(QUESTIONS, event) });
+      expect(envelope, event).toEqual(QUESTIONS);
+      expect(res.statusCode, event).toBe(200);
+      expect(keys, event).toEqual(ESCAPE);
+    }
+  });
+
+  it('the approval resolved elsewhere, a main Stop over delegated work: no envelope, and a stale Deny is background-only', async () => {
+    const { res, keys, envelope, recorded } = await box({ live: { status: 'busy', at: T0 }, hook: STOP_BG, payload: { source: 'deny' } });
+    expect(envelope).toBeNull();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'background-only', count: 2, kinds: ['workflow'] });
+    expect(keys).toEqual([]);
+    expect(recorded).toEqual([{ kind: 'interrupt', sessionId: ID, body: 'source=deny outcome=background-only' }]);
+  });
+
+  it('the approval resolved elsewhere, the main loop idle over a background shell: a stale Deny is background-only, no count', async () => {
+    const { res, keys, envelope } = await box({ live: { status: 'shell', at: T0 }, hook: { ...STOP_BG, at: T1 },
+      payload: { source: 'deny' } });
+    expect(envelope).toBeNull();
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'background-only', count: null, kinds: [] });
+    expect(keys).toEqual([]);
+  });
+
+  // The route reads no envelope: reachability rests on the hook's clear, not on the verdict. A `done` from a Stop that
+  // still carries an ask is a file the hook never writes; were it written, the stream would ship that envelope and the
+  // route would refuse its Deny as background-only. Step 2 must therefore not assume a 409 under a shown envelope is idle.
+  it('a hand-made Stop that kept its ask: the envelope ships and the route still answers background-only', async () => {
+    const { res, keys, envelope } = await box({ live: { status: 'busy', at: T0 }, hook: { ...STOP_BG, ask: APPROVAL } });
+    expect(envelope).toEqual(APPROVAL);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'background-only', count: 2, kinds: ['workflow'] });
+    expect(keys).toEqual([]);
   });
 });

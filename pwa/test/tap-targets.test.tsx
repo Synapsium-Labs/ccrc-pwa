@@ -47,7 +47,7 @@ import { DocsFailureView } from '../src/docs/DocsFailureView';
 import { DOC_MARKDOWN_ACTION } from '../src/docs/DocMarkdown';
 import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT } from '../src/docs/docsText';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
-import { SessionHeader } from '../src/session/SessionHeader';
+import { SessionHeaderHost } from './sessionHost';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate } from '../src/lib/router';
@@ -294,7 +294,8 @@ describe('the two rules that were already scraped still reach a real element', (
         conn: 'open',
         sessions: [
           sess({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 100, bucket: 'archived' }),
-          sess({ id: 'b', project: 'alpha', workspace: 'live-one', archivedAt: null }),
+          // A change just now keeps the project open (D-6088 rolls up a quiet one).
+          sess({ id: 'b', project: 'alpha', workspace: 'live-one', archivedAt: null, statusUpdatedAt: Date.now() }),
         ],
       });
     });
@@ -306,7 +307,7 @@ describe('the two rules that were already scraped still reach a real element', (
     renderFleet(<FleetScreen store={store} />);
     const releasedFrom = { runId: 1, program: 'lifecycle', programTitle: null, claimedBy: 'coord', closedAt: 1, child: false };
     act(() => {
-      store.setState({ conn: 'open', sessions: [sess({ id: 'r', project: 'alpha', workspace: 'done-one', releasedFrom })] });
+      store.setState({ conn: 'open', sessions: [sess({ id: 'r', project: 'alpha', workspace: 'done-one', releasedFrom, statusUpdatedAt: Date.now() })] });
     });
     const toggle = screen.getByRole('button', { name: /released \(1\)/i });
     expect(toggle).toHaveClass('proj-released-toggle');
@@ -1113,7 +1114,7 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       render(<SessionActionsSheet session={session} open onClose={() => {}} onReap={() => {}} />);
       expect(screen.getByRole('button', { name: 'Docs on main' })).toHaveClass('btn-ghost', 'docs-session-row');
       cleanup();
-      render(<SessionHeader session={session} status="idle" statusUpdatedAt={null} onInterrupt={() => {}}
+      render(<SessionHeaderHost session={session} status="idle" statusUpdatedAt={null} onInterrupt={() => {}}
         onOpenTerminal={() => {}} onBack={() => {}} onChangeModel={() => {}} onChangeEffort={() => {}}
         onMoveAccount={() => {}} onArchive={() => {}} onRestore={() => {}} onOpenHistory={() => {}}
         onReapWorkspace={() => {}} />);

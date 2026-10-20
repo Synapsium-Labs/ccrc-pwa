@@ -8,12 +8,20 @@
 //
 // So this is a RATCHET, not a cleanup. It counts every numeric line citation in
 // the code and test files of the tree and fails when the count rises above
-// BASELINE, and also when it falls below it. New code cites a SYMBOL instead — `ccd#_ws_least_loaded`, or
+// BASELINE. New code cites a SYMBOL instead — `ccd#_ws_least_loaded`, or
 // `foo.ts#functionName` — which survives the edits that move it. Existing
 // citations are rewritten opportunistically when their file is touched; there
-// is no bulk pass. When you remove some, lower BASELINE to the new count in the
-// same commit; the test fails until you do, because slack left by an
-// unrecorded removal would let the next added citation pass. It is never raised.
+// is no bulk pass. BASELINE is never raised; lower it when you remove some.
+//
+// D-5893 (revised again, 2026-10-20): the FIRST added citation fails through a
+// second rule, not through an exact count. An exact count (#969) also failed
+// when the count FELL, and with several PRs landing in parallel two removals
+// raced each other's baselines and turned `main` red twice in a day. So the
+// ceiling is `<=` again, and the rule that slack cannot absorb an addition is
+// measured on the change itself: the lines a branch ADDS against its merge-base
+// with `origin/main` may hold no numeric line citation. Without `origin/main`
+// (a shallow or detached checkout) that row skips with a notice, as the growth
+// check does.
 //
 // CORPUS: tracked and untracked-not-ignored files outside `docs/` (plans and
 // specs are dated history, and their citations were true when written) and
@@ -30,8 +38,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** The exact count in the tree. May only go DOWN (D-5893, revised). */
-const BASELINE = 1587;
+/** The ceiling on the count in the tree. May only go DOWN (D-5893). */
+const BASELINE = 1584;
 
 const CODE = /\.(?:ts|tsx|mts|cts|mjs|cjs|js|sh|bats|py)$/;
 // `ccd/<name>` and `ccd/<dir>/<name>` with no extension: the bash executables.
@@ -69,16 +77,39 @@ describe('numeric line citations (D-5893)', () => {
     expect(files.some((f) => f.startsWith('docs/'))).toBe(false);
   });
 
-  it(`the count is exactly ${BASELINE}`, () => {
+  it(`the count does not rise above ${BASELINE}`, () => {
     const total = corpus().reduce((n, f) => n + countCitations(read(f)), 0);
     expect(total,
       `the tree now has ${total} numeric line citations (ccd:NNNN or file.ts:NN), above the `
       + `${BASELINE} it may not exceed. Cite a symbol instead (ccd#_ws_least_loaded, file.ts#name); `
       + 'lines move, names do not').toBeLessThanOrEqual(BASELINE);
-    // D-5893 (revised): exact, so the first added citation fails. A `<=` alone let
-    // removals go unrecorded, and the slack they left absorbed later additions.
-    expect(total,
-      `the tree now has ${total} numeric line citations, below BASELINE ${BASELINE}; `
-      + `lower BASELINE to ${total} in this commit so the next added citation fails`).toBe(BASELINE);
+    if (total < BASELINE) console.warn(`citations: ${total} in the tree; BASELINE ${BASELINE} can be lowered to ${total}`);
+  });
+
+  it('the lines this branch adds hold no numeric line citation (D-5893, revised)', (ctx) => {
+    const git = (args: string[]): string =>
+      execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
+    let base: string;
+    try {
+      git(['rev-parse', '--verify', '--quiet', 'origin/main^{commit}']);
+      base = git(['merge-base', 'origin/main', 'HEAD']).trim();
+    } catch {
+      console.warn('citations: skipped the added-lines rule, no origin/main or merge-base in this checkout');
+      ctx.skip();
+      return;
+    }
+    const files = new Set(corpus());
+    const diff = git(['diff', '--unified=0', '--no-color', base, '--', '.']);
+    const added: string[] = [];
+    let file = '';
+    for (const line of diff.split('\n')) {
+      if (line.startsWith('+++ ')) { file = line.startsWith('+++ b/') ? line.slice(6) : ''; continue; }
+      if (!line.startsWith('+') || line.startsWith('+++')) continue;
+      if (!files.has(file) || file === 'server/test/citations.test.ts') continue;
+      const n = countCitations(line.slice(1));
+      if (n > 0) added.push(`${file}: ${line.slice(1).trim().slice(0, 120)}`);
+    }
+    expect(added, 'a numeric line citation was added; cite a symbol instead (ccd#_ws_least_loaded, file.ts#name)')
+      .toEqual([]);
   });
 });

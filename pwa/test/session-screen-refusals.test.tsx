@@ -6,11 +6,14 @@
 // The harness is `session-pickers.test.tsx`'s own, down to the Virtuoso
 // stand-in jsdom needs and the `vi.hoisted` spies its factory closes over.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession as baseSession } from './fleetFixture';
 import { SessionScreen } from '../src/screens/SessionScreen';
+// W2 Task S2d: the session menu's items and the model/effort chips are command doors, run by the one layer
+// `app.tsx` mounts above the screen; a case that drives them mounts it beside, as the app does.
+import { CommandLayer } from '../src/command/CommandLayer';
 import { ToastHost } from '@ccrc/ui';
 import { createSessionStore } from '../src/stores/session';
 import * as apiModule from '../src/lib/api';
@@ -62,7 +65,7 @@ const renderScreen = (patch: Partial<FleetSession> = {}, status: 'idle' | 'dead'
   stores.store = store;
   const fleet = createFleetStore();
   act(() => { fleet.setState({ roster: TEST_ROSTER, conn: 'open', sessions: [fleetSession(patch)] }); });
-  render(<><SessionScreen id={ID} store={store} fleet={fleet} /><ToastHost /></>);
+  render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={ID} store={store} fleet={fleet} /><ToastHost /></>);
   act(() => { store.setState({ uuid: 'u1', status }); });
   return { store, fleet };
 };
@@ -137,6 +140,14 @@ describe('Restore, on a session already put away', () => {
 });
 
 describe('Stop — two sentences, because 409 is not a failure', () => {
+  // The header's keycap, by its place: since W2 Task S7b the composer's send slot is a Stop too, and both reach the
+  // same `interrupt` (D-5471).
+  const headerStop = async (): Promise<HTMLElement> =>
+    within(await waitFor(() => {
+      const head = document.querySelector<HTMLElement>('.chat-head');
+      if (head === null) throw new Error('no session header yet');
+      return head;
+    })).findByRole('button', { name: 'Stop' });
   it('a 409 says there was nothing to stop, and says it QUIETLY', async () => {
     // `/interrupt` answers 409 when the pane is idle, which is not an error:
     // the reader asked for a stop and got one, in the sense that nothing is
@@ -145,7 +156,7 @@ describe('Stop — two sentences, because 409 is not a failure', () => {
     vi.spyOn(apiModule.api, 'interrupt').mockImplementation(interrupt);
     renderScreen();
     act(() => { stores.store.setState({ status: 'busy' }); });
-    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    fireEvent.click(await headerStop());
     const said = await screen.findByText(/nothing to stop/);
     expect(said.closest('[role="status"]'), 'an idle pane is a status, not an alert').not.toBeNull();
   });
@@ -157,7 +168,7 @@ describe('Stop — two sentences, because 409 is not a failure', () => {
       new ApiError(409, { ok: false, error: 'background-only', count: 2, kinds: ['workflow'] }));
     renderScreen();
     act(() => { stores.store.setState({ status: 'busy' }); });
-    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    fireEvent.click(await headerStop());
     const said = await screen.findByText(
       'The main turn has finished; 2 background tasks (workflow) are still running. Escape would not stop them.');
     expect(said.closest('[role="status"]')).not.toBeNull();
@@ -168,7 +179,7 @@ describe('Stop — two sentences, because 409 is not a failure', () => {
       new ApiError(409, { ok: false, error: 'background-only', count: null, kinds: [] }));
     renderScreen();
     act(() => { stores.store.setState({ status: 'busy' }); });
-    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    fireEvent.click(await headerStop());
     const said = await screen.findByText(
       'The main turn has finished; a background shell or monitor is still running. Escape would not stop it.');
     expect(said.closest('[role="status"]')).not.toBeNull();
@@ -179,7 +190,7 @@ describe('Stop — two sentences, because 409 is not a failure', () => {
       .mockRejectedValue(new Error('tmux: no server running'));
     renderScreen();
     act(() => { stores.store.setState({ status: 'busy' }); });
-    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    fireEvent.click(await headerStop());
     const said = await screen.findByText("Couldn't stop — tmux: no server running");
     expect(said.closest('[role="alert"]')).not.toBeNull();
   });
@@ -371,7 +382,7 @@ describe('a deep link whose session the fleet has not reported yet', () => {
     const store = createSessionStore(id, { makeSocket: fakeSocket, api: { prompt } });
     const fleet = createFleetStore();
     act(() => { fleet.setState({ roster: TEST_ROSTER, conn: 'open', sessions: [] }); });
-    render(<><SessionScreen id={id} store={store} fleet={fleet} /><ToastHost /></>);
+    render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={id} store={store} fleet={fleet} /><ToastHost /></>);
     act(() => { store.setState({ uuid: 'u1', status: 'idle' }); });
     return { store, fleet };
   };
@@ -470,7 +481,7 @@ describe('the session header knows what the card knows (D-5545)', () => {
         runs: [run],
       } as never);
     });
-    render(<><SessionScreen id={ID} store={store} fleet={fleet} /><ToastHost /></>);
+    render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={ID} store={store} fleet={fleet} /><ToastHost /></>);
     act(() => { store.setState({ uuid: 'u1', status: 'idle' }); });
     const toggle = screen.queryByRole('button', { name: /details/i });
     if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);

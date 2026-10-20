@@ -420,17 +420,27 @@ describe('the swap heartbeats WHILE it carries, not just around the carry', () =
     //
     // The killer subshell is what keeps `while :` from hanging the suite
     // instead of failing it: a beat that had to be killed comes back 137.
+    // Killed itself once the beat ends, it takes its own sleep with it (the
+    // TERM trap): a bare `( command sleep 20; … )` left the sleep running past
+    // the suite, and the run's orphan check (D-3533) fails on it.
     const out = h.sh(`sleep() { :; }; _reg_set() { echo tick >> "$HOME/beats"; }
       _swap_beat ${ID} $$ & beat=$!
-      ( command sleep 20; kill -9 "$beat" ) >/dev/null 2>&1 & killer=$!
+      ( command sleep 20 & s=$!; trap 'kill "$s"; exit 0' TERM; wait "$s"; kill -9 "$beat" ) >/dev/null 2>&1 & killer=$!
       wait "$beat"; rc=$?
+      for _ in $(seq 100); do ks=$(pgrep -P "$killer") && break; command sleep 0.05; done
       kill "$killer" 2>/dev/null; wait "$killer" 2>/dev/null
+      left=yes; for _ in $(seq 40); do kill -0 "$ks" 2>/dev/null || { left=no; break; }; command sleep 0.05; done; [ "$left" = no ] || kill "$ks" 2>/dev/null
+      echo "killer_sleep=\${ks:+found} left=$left"
       echo "rc=$rc ticks=$(wc -l < "$HOME/beats" | tr -d ' ') max=$SWAP_BEAT_MAX window=$(( SWAP_BEAT_INTERVAL * SWAP_BEAT_MAX ))"`);
     // The window is asserted, not just the counter: "bounded twice over" is a
     // claim about TWO HOURS, and 240 ticks means two hours only while the
     // interval is 30s. Turning either constant into something a leaked stamper
     // could live inside fails here.
-    expect(out).toBe('rc=0 ticks=240 max=240 window=7200');
+    // The killer's own sleep is gone too (D-6113): the leak check (D-3533)
+    // failed a CI run on exactly this `sleep 20`, orphaned by `kill "$killer"`.
+    // Its pid is read before the kill, after polling until it exists, so the
+    // check cannot pass vacuously; the 2s poll lets the TERMed sleep be reaped.
+    expect(out).toBe('killer_sleep=found left=no\nrc=0 ticks=240 max=240 window=7200');
   });
 
   /** The refusal fixture's stubs, with ONE difference from `SWAP`: the beat's
@@ -462,5 +472,45 @@ describe('the swap heartbeats WHILE it carries, not just around the carry', () =
       echo "rc=$rc stampers_left=$(jobs -pr | wc -l | tr -d ' ')"
       jobs -pr | xargs -r kill -9 2>/dev/null; true`, { TMUX: '' });
     expect(out).toBe('rc=1 stampers_left=0');
+  });
+
+  it('stopping the stamper ends its in-flight sleep too, so a captured `ccd swap` returns at once (D-6113)', () => {
+    seed('claude');
+    // `_swap_beat_stop` TERMs the stamper subshell, and a subshell killed while
+    // it waits on a foreground `sleep` leaves that sleep running, reparented,
+    // still holding the stdout the stamper inherited from `cmd_swap`. Anything
+    // that captures `ccd swap`'s output (execFile, `$(…)`) then waits for EOF
+    // until that sleep ends: up to SWAP_BEAT_INTERVAL after every swap. Real
+    // `sleep` here (no stub), so the child is the real one production forks;
+    // the interval is 5s so the held pipe is unmistakable in the elapsed time.
+    // The poll waits until the stamper HAS a child, so the stop always lands
+    // mid-sleep rather than racing the first fork.
+    const t0 = Date.now();
+    const out = h.sh(`SWAP_BEAT_INTERVAL=5
+      _swap_beat ${ID} $$ & beat=$!
+      for _ in $(seq 100); do pgrep -P "$beat" >/dev/null && break; command sleep 0.05; done
+      kid=$(pgrep -P "$beat")
+      _swap_beat_stop "$beat"
+      command sleep 0.2
+      if kill -0 "$kid" 2>/dev/null; then alive=yes; else alive=no; fi
+      echo "kid=\${kid:+found} alive=$alive"`);
+    const ms = Date.now() - t0;
+    expect(out, 'the stamper never forked its sleep: the stop did not land mid-sleep').toContain('kid=found');
+    expect(out, 'the stamper\'s sleep outlived `_swap_beat_stop`').toContain('alive=no');
+    expect(ms, 'the orphaned sleep held the caller\'s stdout open past the stop').toBeLessThan(3_000);
+  });
+
+  it('leaves no TERM trap behind on either way out of a foreground call (D-6113)', () => {
+    seed('claude');
+    // The trap above is the stamper's own; production only ever runs it in a
+    // background subshell, but a foreground call (these tests make them) must
+    // hand its caller back the TERM disposition it had. Both exits: the parent
+    // check's early return, and the SWAP_BEAT_MAX bound running out.
+    const out = h.sh(`sleep() { :; }; _reg_set() { :; }
+      ( exit 0 ) & dead=$!; wait "$dead" 2>/dev/null
+      _swap_beat ${ID} "$dead"; trap -p TERM > "$HOME/t-early"
+      _swap_beat ${ID} $$; trap -p TERM > "$HOME/t-bound"
+      echo "early=[$(cat "$HOME/t-early")] bound=[$(cat "$HOME/t-bound")]"`);
+    expect(out).toBe('early=[] bound=[]');
   });
 });
