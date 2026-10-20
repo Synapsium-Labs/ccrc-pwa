@@ -657,10 +657,12 @@ describe('Build 7 nouns', () => {
     expect(store, 'the sentinel is gone from store.ts — pick another comment-only phrase')
       .toContain('the same guard every other');
     expect(code, 'the comment strip did not strip comments').not.toContain('the same guard every other');
-    // Six negative-form guards at 5e9f650d (2026-09-02), as a FLOOR so a
-    // seventh writer raises it rather than breaking it.
-    expect((code.match(/NOT IN \$\{TERMINAL_DELIVERY_SQL\}/g) ?? []).length)
-      .toBeGreaterThanOrEqual(6);
+    // Six negative-form guards at 5e9f650d (2026-09-02), one per writer. Since
+    // D-5997 (#532) the guard is spelled in ONE place, `writeDeliveries`: the
+    // plain negative form and `markAcked`'s replay-ceiling exception. An EXACT
+    // count now, because a third spelling is a writer that bypassed the one
+    // writer — exactly what this pin exists to catch.
+    expect((code.match(/NOT IN \$\{TERMINAL_DELIVERY_SQL\}/g) ?? []).length).toBe(2);
   });
 
   // …and the SAME pair in its JS shape, which the SQL-anchored regex above is
