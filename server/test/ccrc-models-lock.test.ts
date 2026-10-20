@@ -567,7 +567,7 @@ describe.skipIf(!HAVE_FLOCK)('the capture sites take it too (D21)', () => {
     await release(holder);
     expect(busy.stdout, busy.stderr).toBe('rc=1\n');
     // Node never ran: no "models-op exited", and no "those may already be new" beside the lock's "Nothing was written".
-    expect(busy.stderr).toMatch(/^ccrc codex: lock-busy: \S*\/lane\.json was not rendered, and no lane file was written: another writer holds lane lane-b's model files, so models-op never ran\. another writer has held lane lane-b's model files /m);
+    expect(busy.stderr).toMatch(/^ccrc codex: lock-busy: \S*\/lane\.json was not rendered, and no lane file was written: another writer holds lane lane-b's model files, so models-op never ran: another writer has held lane lane-b's model files /m);
     expect(busy.stderr).not.toMatch(/models-op exited|may already be new|Nothing was written/);
     expect(fs.existsSync(laneJson)).toBe(false);
     expect(modelsState(h)).toEqual(before);
@@ -588,7 +588,7 @@ describe.skipIf(!HAVE_FLOCK)('the capture sites take it too (D21)', () => {
     const before = modelsState(h);
     const r = lib(h, '_codex_lane_json_ensure lane-b; echo "rc=$?"');
     expect(r.stdout, r.stderr).toBe('rc=1\n');
-    expect(r.stderr).toMatch(/^ccrc codex: lock-unwritable: \S*\/lane\.json was not rendered, and no lane file was written: ccrc refuses the lock path of lane lane-b's model files, so models-op never ran\. /m);
+    expect(r.stderr).toMatch(/^ccrc codex: lock-unwritable: \S*\/lane\.json was not rendered, and no lane file was written: ccrc refuses the lock path of lane lane-b's model files, so models-op never ran: /m);
     expect(r.stderr).not.toMatch(/models-op exited|may already be new|Nothing was written/);
     expect(fs.existsSync(laneJson)).toBe(false);
     expect(modelsState(h)).toEqual(before);

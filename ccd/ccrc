@@ -11237,7 +11237,7 @@ _codex_lane_json_ensure() {   # <id>
   if [ "$rc" -ne 0 ] || ! printf '%s' "$ans" | jq -e '.ok == true' >/dev/null 2>&1; then
     err="$(printf '%s' "$ans" | jq -r '.error // empty' 2>/dev/null)"
     detail="$(printf '%s' "$ans" | jq -r '.detail // empty' 2>/dev/null)"
-    case "$err" in lock-busy|lock-unwritable) _codex_say "$err" "$(_codex_lane_dir "$CX_ID")/lane.json was not rendered, and no lane file was written: $([ "$err" = lock-busy ] && printf 'another writer holds' || printf 'ccrc refuses the lock path of') lane $CX_ID's model files, so models-op never ran. ${detail% Nothing was written.}" ;; *) _codex_say lane-unwritable "'ccrc models' could not render $(_codex_lane_dir "$CX_ID")/lane.json (models-op exited $rc${err:+: $err}${detail:+ — $detail}). lane.json was not written; models-op renders the lane's other model files first, so those may already be new." ;; esac   # a lane-files lock refusal is the lock's: node never ran
+    case "$err" in lock-busy|lock-unwritable) _codex_say "$err" "$(_codex_lane_dir "$CX_ID")/lane.json was not rendered, and no lane file was written: $([ "$err" = lock-busy ] && printf 'another writer holds' || printf 'ccrc refuses the lock path of') lane $CX_ID's model files, so models-op never ran: ${detail% Nothing was written.}" ;; *) _codex_say lane-unwritable "'ccrc models' could not render $(_codex_lane_dir "$CX_ID")/lane.json (models-op exited $rc${err:+: $err}${detail:+ — $detail}). lane.json was not written; models-op renders the lane's other model files first, so those may already be new." ;; esac   # a lane-files lock refusal is the lock's: node never ran
     return 1
   fi
   if printf '%s' "$ans" | jq -e '.wrote == null' >/dev/null 2>&1; then

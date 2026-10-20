@@ -1659,7 +1659,7 @@ function main(argv) {
         : 'the lane has no advance file yet, and the next write of one creates it from the registry.'}`)}`;
     } else if (seeded.unread !== undefined) {
       advanceNote = `${seeded.unread[0]}: ${seeded.unread[1]} The class registry was created; the advance file an `
-        + 'earlier registry left could not be read, so it was left as it is: its families are not re-seeded. Fix it '
+        + 'earlier registry left could not be used, so it was left as it is: its families are not re-seeded. Fix it '
         + 'by hand, or delete it (the next write re-creates it from the registry, with no holds and no history).';
     } else if (seeded.reused === true) {
       advanceNote = 'the lane already had an advance file, left by an earlier class registry, and it was reused '

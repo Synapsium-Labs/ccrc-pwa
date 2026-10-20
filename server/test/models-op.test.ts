@@ -2410,7 +2410,7 @@ describe('the advance file through init, set-class, rm and advance-backfill (aut
     expect(note.startsWith(`${word}: `), note).toBe(true);
     expect(note.slice(word.length + 2)).toMatch(reason);
     expect(note).toContain(adv);
-    expect(note).toMatch(/The class registry was created; the advance file an earlier registry left could not be read, so it was left as it is: its families are not re-seeded\./);
+    expect(note).toMatch(/The class registry was created; the advance file an earlier registry left could not be used, so it was left as it is: its families are not re-seeded\./);
     expect(note).not.toContain('Nothing was');
     expect(run.stderr).toContain(`models-op: ${note}`);
   });
