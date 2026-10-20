@@ -9356,11 +9356,7 @@ export class FleetWatcher {
       dialogId: dialog.id, question, options, now,
       ...(releaseReason === null ? {} : { releaseReason }),
     });
-    const ev: Parameters<FleetWatcher['pushOne']>[0] = {
-      kind: 'ask', sessionId: r.id, project: r.project,
-      title: '❓ Question', body: askPushBody(hs, dialog),
-      actions,
-    };
+    const ev = askHoldPayload(r, hs, dialog, actions);
     // The parent is asleep and nothing else will wake it. Ordinary mail, so
     // the existing idle gating applies unchanged — and the latency does not
     // gate the operator, because the operator's own push is racing this hold
@@ -9386,6 +9382,22 @@ export class FleetWatcher {
     }
     return { until, askId, ev, answeringSince: null };
   }
+}
+
+/**
+ * The push a held question defers (D-5925): what `hold()` snapshots at the mint and what the restart re-seed in
+ * `detectDialogs` rebuilds from the dialog's current sighting, so the two can never drift apart. Pure: built from the
+ * record, this tick's hookstate, the painted dialog and the actions `askActions` derived, and nothing else. `actions`
+ * `null` (an approval's deferred push, which offers no answer buttons) omits the field.
+ */
+export function askHoldPayload(
+  r: Pick<SessionRecord, 'id' | 'project'>, hs: HookState | null, dialog: Dialog, actions: PushPayload['actions'] | null,
+): { kind: 'ask'; sessionId: string; project: string; title: string; body: string; actions?: PushPayload['actions'] } {
+  return {
+    kind: 'ask', sessionId: r.id, project: r.project,
+    title: '❓ Question', body: askPushBody(hs, dialog),
+    ...(actions === null ? {} : { actions }),
+  };
 }
 
 /**
