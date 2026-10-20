@@ -3926,6 +3926,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
   }
 
-  if (watcher) app.addHook('onClose', async () => { watcher.stop(); });
+  // Stop the beat, then let a server-caps write a tick already started land (landing-order wave 3c): it writes under
+  // `<ccrcDir>`, and a caller that removes that directory after close (a test's teardown) raced it (`ENOTEMPTY`).
+  // `serverCapsNow` never rejects, so this never fails a close.
+  if (watcher) app.addHook('onClose', async () => { watcher.stop(); await watcher.serverCapsSettled(); });
   return app;
 }
