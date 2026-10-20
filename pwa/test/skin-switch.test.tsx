@@ -351,6 +351,26 @@ describe('a reader following a running turn', () => {
     expect(made.scrolls).toContainEqual({ index: 'LAST', align: 'end' });
     expect(screen.queryByRole('button', { name: /jump to latest/i })).toBeNull();
   });
+
+  it('the column reads its line measures again on the switch, under the new tokens, not the old skin\'s', () => {
+    openSession();
+    const list = document.querySelector('.chat-list')!;
+    // `measuresOf` lays a hidden probe frame (`[data-probe]`) into the column
+    // and removes it: each one seen is one fresh read.
+    let probes = 0;
+    const seen = new MutationObserver((records) => {
+      for (const r of records) for (const n of r.addedNodes) {
+        if (n instanceof HTMLElement && n.querySelector('[data-probe]') !== null) probes += 1;
+      }
+    });
+    seen.observe(list, { childList: true, subtree: true });
+    toInstrument();
+    seen.takeRecords().forEach((r) => r.addedNodes.forEach((n) => {
+      if (n instanceof HTMLElement && n.querySelector('[data-probe]') !== null) probes += 1;
+    }));
+    seen.disconnect();
+    expect(probes, 'one re-measure on the switch').toBeGreaterThanOrEqual(1);
+  });
 });
 
 /** Layers a skin's own part owns that close on a switch, each with its reason.

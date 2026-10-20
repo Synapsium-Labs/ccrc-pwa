@@ -586,9 +586,10 @@ class Column {
 
   /** The rows re-wrap without the column changing width: a skin switch puts
    *  new type and density tokens on the same column (D-5466). Read the
-   *  measures again and settle, so a reader at the newest turn is put back. */
+   *  measures again now, in the switch's layout effect, under the new tokens,
+   *  and settle, so a reader at the newest turn is put back. */
   resettle(): void {
-    this.measured = null;
+    this.measured = this.el === null ? null : measuresOf(this.el);
     this.settleUntil = performance.now() + SETTLE_MS;
   }
 
