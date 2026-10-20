@@ -114,13 +114,16 @@ real values: `deploy/reference-fleet.md` (gitignored).
   package runners, the official installer and a global package install of `@anthropic-ai/claude-code`; and writes
   to the build directory, the
   launcher and the files the launcher, the roll and the guard trust (`~/.ccrc/claude-*`, the roll's registry files, the
-  deny file), in any separator spelling, by redirection and the usual writers, through `find`, `xargs`, an interpreter
-  naming the path, a `cd` and a variable, and by the edit tools (D-5994, D-6063, D-6064, D-6065, D-6066). Still open
-  (D-6064's residuals): a symlink into the build directory, a `$VAR` fragment of the path, case variants, `..` in Bash
-  text, nine or more separators or flags, an archive extracted into a parent directory, a script file, `eval`,
-  stdin or an interpreter that does not name the path, and the spellings a later review measured (a `>` with no space
-  after a `cd`, `cd --`, some globs, a glob in a parent directory, `find` actions and variable forms, a permission
-  change, a FIFO for the deny file, and a copy of the build a reader makes and runs under another name). The `ccd claude …` switch verbs are the operator's, by hand; rolls and installs are ccrc's own
+  deny file), in any separator spelling, by redirection and the usual writers, through `find`, a `|` into `xargs`, an
+  interpreter naming the path, a `cd` and a variable, and by the edit tools (D-5994, D-6063, D-6064, D-6065, D-6066).
+  Still open (D-6064's residuals): a symlink into the build directory, a `$VAR` fragment of the path, case variants,
+  `..` in Bash text, nine or more separators or flags, an archive extracted into a parent directory, a script file,
+  `eval`, stdin or an interpreter that does not name the path, and what later reviews measured: a `>` with no space
+  before a relative operand or after a `cd`; `cd --`, a trailing `/.` on the `cd` directory and a bare `cd` home; a glob
+  in the launcher's name, below the build directory's first level or in a parent directory; `find`'s file-writing
+  actions; `|&` before `xargs`; a path from a command substitution or a `for` loop, and a variable name of 65 or more
+  characters; an ACL change (`setfacl`) of a trusted file; a FIFO for the deny file; and a copy of the build a reader
+  makes and runs under another name. The `ccd claude …` switch verbs are the operator's, by hand; rolls and installs are ccrc's own
   automatic acts. Account switching and the auto-swap are not touched: `ccd swap` is never blocked.
 - **NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly.** Each unit is a
   long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet. ONE scoped exception

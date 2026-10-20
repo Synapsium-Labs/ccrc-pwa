@@ -4400,7 +4400,7 @@ fi
 # flags, so `claude -p "update …"` is a prompt, not one; a flag's value may swallow a prompt's first word once quotes
 # are removed (`claude -c "please update x"`), a false deny in the safe direction. `respawn` counts right after the
 # head only, where Claude Code runs it. The official installer's URLs (in any case) and a global npm, pnpm, yarn or bun
-# install of `@anthropic-ai/claude-code` (`-g`, `global`, `--prefix` to an absolute or home path, `npm_config_global=`)
+# install of `@anthropic-ai/claude-code` (`-g`, `global`, `--prefix` with a path naming `.local`, `npm_config_global=`)
 # count too. A write (D-6064) is matched as `BUILDX`, the build directory or the launcher in
 # any separator spelling (`SEPP`: `/`, `//`, `/./`, at most eight), absolute, home-anchored or relative at the start of
 # a word, the bare `.local/share/claude` or a glob segment under it included; by `BWR`, `WR`'s writers and more, with
@@ -4410,16 +4410,19 @@ fi
 # and a variable holding the path (one scan of all such names, and more than 16 deny outright: fail closed); and a
 # writer aimed at a bare `.local`, `.local/share` or `.local/bin` in a segment naming `claude` as a component. An
 # edit tool's path is folded (`pnorm`: `//`, `/./`, `seg/..`, a leading `~`) before the match; Bash text is not, so
-# `..` there, a symlink, a `$VAR` fragment of the path and case variants stay open (D-6064's residuals). Every
-# repetition is bounded, since an unbounded one made jq abort, which here is FAIL-OPEN, and every segment-scanning arm
-# first tests its anchor (and a `cd` row its tail) on the whole command, since jq compiles a regex on each call.
+# `..` there, a symlink, a `$VAR` fragment of the path and case variants stay open (D-6064's residuals). Every group
+# repetition these arms add is bounded (`{0,8}` flags, separators and runner flags, `{0,2}` `cd` flags), since an
+# unbounded one made jq abort, which here is FAIL-OPEN; the single-class runs inside `CFLAGS`, `RUNH`, `CRUN` and `CDH`
+# (`SP+`, `NS*`, `NS+`) are not, and raised no regex error below the ~225 KB single segment at which hbt's prefix
+# already hits the regex retry limit on main (D-6063, D-6064). Every segment-scanning arm first tests its anchor (and a `cd` row its tail) on the whole command, since jq compiles a regex on each call.
 # A write (D-6065) to a file the launcher, the roll or this guard trusts (`TRUST`: `~/.ccrc/claude-*`,
 # `$REG/claude-roll-*`, `$REG/<id>.claude-canary`, `.claude-build`, `.deny-settings`, `$REG/.claude-roll.lock` and the
 # deny file `$REG/child-deny.settings.json`, which the arm below reads) is denied by the same writers, after a `cd` into
 # `.ccrc` or `.cc-sessions`, by the build's `find`, `xargs`, interpreter, variable and parent-directory arms, and by an
 # edit tool; a trusted name may hold glob characters, a glob segment directly under either directory counts, and the
 # relative spelling does too. So spec §7.6's registry sentence holds for a child here too.
-# The roster's upstream id (D-6066) comes from that deny file, read by the hook (`_hook_deny_text`, at most 64 KiB) and
+# The roster's upstream id (D-6066) comes from that deny file, read by the hook (`_hook_deny_text`: at most 64 KiB, up
+# to the first NUL, so over-cap means more than 64 KiB before any NUL, and text after a NUL is never read) and
 # passed to this arm alone as `--arg deny` when it is a regular file and not a symlink (the class-mode call passes
 # none, so `$ARGS.named.deny // ""` reads empty there): every head the file pairs as `Bash(<p> install:*)` AND
 # `Bash(<p> update:*)`, minus `claude` (`ccrc update` stands alone in every file, so one verb is not enough). `UPRE` is
@@ -4615,8 +4618,11 @@ fi
 # so every arm below allowed, and the file is one per box; a FIFO, `/dev/zero` or a huge file blocked jq or ran it
 # unbounded, past the hook's timeout, which fails open too. The cap stays well under the 128 KiB a single `--arg` may
 # hold (E2BIG would fail open again). A FIFO still blocks the open: a residual, as in `install-session-hooks.sh`.
+# The read stops at the first NUL byte: a file with more than the cap's bytes before any NUL passes nothing, and text
+# after a NUL is never read (the safe direction: less text can only drop upstream-id arms).
 APF_DENY_BYTES=65536
-_hook_deny_text() {   # <file> -> APF_DENY (its text; empty when it cannot be read or is over APF_DENY_BYTES bytes)
+_hook_deny_text() {   # <file> -> APF_DENY (its text up to the first NUL; empty when it cannot be read, or when more
+                      # than APF_DENY_BYTES bytes come before any NUL)
   local LC_ALL=C t=""
   APF_DENY=""
   IFS= read -r -d '' -n $((APF_DENY_BYTES + 1)) t 2>/dev/null <"$1"
