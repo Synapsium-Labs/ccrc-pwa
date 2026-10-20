@@ -163,7 +163,7 @@ describe('stop sends --surface before the id (spec §2.3, §2.4)', () => {
 // alone: the project check alone refuses a project that is empty or leads with
 // `-` or `.` (the `demo-a--x` case), and the wrapper check is an equivalent
 // mutant. Both callers of `stopArgvFor` ask `stopPairRefused` in their identity
-// arm and answer 503 `registry-unmeasurable`, with no argv composed.
+// arm and answer 502 `registry-unmeasurable`, with no argv composed.
 
 /** Records every argv and never execs. tmux answers that the pane is GONE, so the archive door's fail-closed turn
  *  read is `idle` for a rostered wrapper, and only the identity arm stands between a request and its stop. */
@@ -203,58 +203,58 @@ describe('stop refuses a legacy pair with a part that is not a registry id, or t
     return { home, app, stops: () => calls.filter((c) => c[0] === 'stop'), all: () => calls };
   };
 
-  it('/stop refuses a .project spelled --surface=pwa (the project and pair clauses): 503 and no stopPair argv', async () => {
+  it('/stop refuses a .project spelled --surface=pwa (the project and pair clauses): 502 and no stopPair argv', async () => {
     // The id does not end in `---surface=pwa`, so the pair is the row's `.wrapper` and `.project`. Composed in the
     // leading form, it was `stop --surface pwa claude-a --surface=pwa`, a stop of `claude-a`.
     const r = await rig(WITH_SURFACE);
     seedLegacy(r.home, 'claude-a-demo', 'claude-a', '--surface=pwa');
     const res = await r.app.inject({ method: 'POST', url: '/api/sessions/claude-a-demo/stop' });
     expect(r.stops(), 'a stopPair argv was composed and sent').toEqual([]);
-    expect(res.statusCode).toBe(503);
+    expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual(REFUSED);
   });
 
-  it('/stop refuses a dash-leading fallback .wrapper (the wrapper and pair clauses): 503 and no stopPair argv', async () => {
+  it('/stop refuses a dash-leading fallback .wrapper (the wrapper and pair clauses): 502 and no stopPair argv', async () => {
     // The id does not end in `-demo`, so the wrapper is the row's `.wrapper`. Composed with no capability evidence,
     // it was the bare `stop --surface=pwa demo`, a stop of `demo`.
     const r = await rig();
     seedLegacy(r.home, 'claude-a-legacy', '--surface=pwa', 'demo');
     const res = await r.app.inject({ method: 'POST', url: '/api/sessions/claude-a-legacy/stop' });
     expect(r.stops(), 'a stopPair argv was composed and sent').toEqual([]);
-    expect(res.statusCode).toBe(503);
+    expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual(REFUSED);
   });
 
-  it('the archive door refuses a .project spelled --surface=pwa before its turn read (the project and pair clauses): 503 and no stop', async () => {
+  it('the archive door refuses a .project spelled --surface=pwa before its turn read (the project and pair clauses): 502 and no stop', async () => {
     // `claude-a` has a config dir and its pane is gone, so the turn reads idle and nothing else refuses. Composed, it
     // was the bare `stop claude-a --surface=pwa`, a stop of `claude-a`.
     const r = await rig();
     seedLegacy(r.home, 'claude-a-demo', 'claude-a', '--surface=pwa');
     const res = await r.app.inject({ method: 'POST', url: '/api/sessions/claude-a-demo/archive' });
     expect(r.stops(), 'a stopPair argv was composed and sent').toEqual([]);
-    expect(res.statusCode).toBe(503);
+    expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual(REFUSED);
   });
 
-  it('the archive door refuses a dash-leading fallback .wrapper before its turn read (the wrapper and pair clauses): 503 and no stop', async () => {
+  it('the archive door refuses a dash-leading fallback .wrapper before its turn read (the wrapper and pair clauses): 502 and no stop', async () => {
     // A roster id never begins with `-`, so this wrapper has no config dir. Without the identity arm's refusal, the
     // fail-closed turn read answers first, 409 `status-unknown`; the refusal stands before that read.
     const r = await rig();
     seedLegacy(r.home, 'claude-a-legacy', '--surface=pwa', 'demo');
     const res = await r.app.inject({ method: 'POST', url: '/api/sessions/claude-a-legacy/archive' });
     expect(r.stops(), 'a stopPair argv was composed and sent').toEqual([]);
-    expect(res.statusCode).toBe(503);
+    expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual(REFUSED);
   });
 
-  it('/stop refuses a .project that is not a registry id when the id ends in -<project> (the project clause): 503 and no stopPair argv', async () => {
+  it('/stop refuses a .project that is not a registry id when the id ends in -<project> (the project clause): 502 and no stopPair argv', async () => {
     // The id passes `isRegistryId`, `stopPairWrapper`'s prefix arm gives `demo-a`, and the pair clause passes, so
     // only the project clause refuses. Composed, it was `stop --surface pwa demo-a -x`.
     const r = await rig(WITH_SURFACE);
     seedLegacy(r.home, 'demo-a--x', 'demo-a', '-x');
     const res = await r.app.inject({ method: 'POST', url: '/api/sessions/demo-a--x/stop' });
     expect(r.stops(), 'a stopPair argv was composed and sent').toEqual([]);
-    expect(res.statusCode).toBe(503);
+    expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual(REFUSED);
   });
 
@@ -266,18 +266,18 @@ describe('stop refuses a legacy pair with a part that is not a registry id, or t
   // stop `<wrapper>-<id>`. `stopPairRefused` refuses both in both identity arms, and a well-formed legacy row, a
   // swapped one included, stops as before.
   describe('and a pair that is not the tapped id', () => {
-    it('/stop refuses a legacy row whose id does not end in -<project>: 503 and no ccd call', async () => {
+    it('/stop refuses a legacy row whose id does not end in -<project>: 502 and no ccd call', async () => {
       // Composed, it was `stop --surface pwa demo-a demo`, a stop of `demo-a-demo`, a session nobody tapped.
       const r = await rig(WITH_SURFACE);
       seedLegacy(r.home, 'demo-a-other', 'demo-a', 'demo');
       const before = r.all().length;
       const res = await r.app.inject({ method: 'POST', url: '/api/sessions/demo-a-other/stop' });
       expect(r.all().slice(before), 'a ccd call was sent: the pair names demo-a-demo').toEqual([]);
-      expect(res.statusCode).toBe(503);
+      expect(res.statusCode).toBe(502);
       expect(res.json()).toEqual(REFUSED);
     });
 
-    it('the archive door refuses a legacy row whose id does not end in -<project>, before its turn read: 503 and no call', async () => {
+    it('the archive door refuses a legacy row whose id does not end in -<project>, before its turn read: 502 and no call', async () => {
       // `demo-a` has no config dir, so without the identity arm's refusal the fail-closed turn read answers first,
       // 409 `status-unknown`; the refusal stands before that read, its claim reads and the programme's end.
       const r = await rig(WITH_SURFACE);
@@ -285,7 +285,7 @@ describe('stop refuses a legacy pair with a part that is not a registry id, or t
       const before = r.all().length;
       const res = await r.app.inject({ method: 'POST', url: '/api/sessions/demo-a-other/archive' });
       expect(r.all().slice(before), 'a ccd or tmux call was sent').toEqual([]);
-      expect(res.statusCode).toBe(503);
+      expect(res.statusCode).toBe(502);
       expect(res.json()).toEqual(REFUSED);
     });
 

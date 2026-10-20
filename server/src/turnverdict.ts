@@ -8,7 +8,9 @@
  * (`coord/archiveDoor.ts`, L1) holds the rule and its reasoning. The watcher's pane-scraped reads arrive as THUNKS,
  * read at call time, so a call never sees a snapshot captured when the deps object was built.
  */
-import { configDirFor, type CcrcConfig } from './config.js';
+// D-5896: the pure join from its own module; through `config.ts` this file loaded `coord/db.ts` and `node:sqlite`.
+import { configDirFor } from './configDir.js';
+import type { CcrcConfig } from './config.js';
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet } from './fleet.js';
