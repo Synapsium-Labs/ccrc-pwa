@@ -106,6 +106,14 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     for (const k of markerSwitchNames) expect(r[k], k).toBe(k === 'reclaim-paused' ? 'set' : 'clear');
   });
 
+  it('a marker matches by its exact name, never a substring: a longer name or a prefixed file does not set it', () => {
+    const r = readSwitches(['mail-gate-busy-shadow', 'abc.mail-disabled', 'xreclaim-paused']);
+    expect(r['mail-gate-busy-shadow']).toBe('set');
+    expect(r['mail-gate-busy']).toBe('clear');
+    expect(r['mail-disabled']).toBe('clear');
+    expect(r['reclaim-paused']).toBe('clear');
+  });
+
   it('an unlistable registry is never clear: a null listing is unmeasurable for every marker row', () => {
     const r = readSwitches(null);
     for (const k of markerSwitchNames) expect(r[k], k).toBe('unmeasurable');
