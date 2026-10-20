@@ -1329,6 +1329,7 @@ export function refuseRecallOff(home, ids) {
 // no run named it unknown and a run that carried it reached its init event (flagsAccepted).
 // The record is canonicalJson + '\n' at <out>/step0a.json, written whole (tmp, then rename), and its sha256 is
 // printed over the bytes read back from that file, the bytes the operator hands pilot-source as --step0a-sha256.
+// D-5983: the line `sha256 <hex>` goes on stderr and stdout stays empty, as open and freeze print theirs.
 // STEP0A_KIND and STEP0A_FIELDS are Task 7's (loadStep0a reads them first); this section never declares them again.
 // HOME and LANG come from main's env parameter only, LANG threaded into each RunJob and into the --version spawn.
 export const STEP0A_FILE = 'step0a.json';
@@ -1477,7 +1478,7 @@ export async function step0aCommand(flags, env) {
   const file = path.join(out, STEP0A_FILE);
   writeFileSync(`${file}.tmp`, canonicalJson(output) + '\n', { mode: 0o600 });
   renameSync(`${file}.tmp`, file);
-  process.stdout.write(`sha256 ${sha256Hex(readFileSync(file))}\n`);
+  process.stderr.write(`sha256 ${sha256Hex(readFileSync(file))}\n`);   // D-5983: stderr, as open and freeze print it; stdout stays empty
   return EXIT.OK;
 }
 HANDLERS.set('step0a', step0aCommand);
@@ -1580,7 +1581,7 @@ function writeProbeJson(out, value) {
 
 /** `probe`: pane and args (main), then every required flag (--budget included, D-5815), HOME, --out, admission and the
  *  gate before every spawn, so every refusal lands before the first spawn. Then one box-mode run per taught spelling (at most two at once),
- *  `<out>/probe.json`, and `sha256 <hex>` on stdout. Exit 0 whatever the runs showed. */
+ *  `<out>/probe.json`, and `sha256 <hex>` on stderr (D-5983), stdout empty. Exit 0 whatever the runs showed. */
 export async function probeCommand(flags, env) {
   for (const k of Object.keys(flags)) if (!PROBE_FLAGS.includes(k)) refuse('args-invalid', `--${k} is not a probe flag`);
   for (const k of PROBE_REQUIRED) if (flags[k] === undefined) refuse('args-invalid', `${k}-required`);
@@ -1613,7 +1614,7 @@ export async function probeCommand(flags, env) {
     budget: flags.budget, spend: spentSoFar(out),
   };
   const sha = writeProbeJson(out, output);
-  process.stdout.write(`sha256 ${sha}\n`);
+  process.stderr.write(`sha256 ${sha}\n`);   // D-5983: stderr, as open and freeze print it; stdout stays empty
   return EXIT.OK;
 }
 HANDLERS.set('probe', probeCommand);

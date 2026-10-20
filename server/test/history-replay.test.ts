@@ -2543,7 +2543,9 @@ describe('W2-4 Task 8: step0a end to end', () => {
     expect(r.code, r.stderr).toBe(0);
     const file = path.join(out, replay.STEP0A_FILE);
     const bytes = readFileSync(file);
-    expect(r.stdout).toBe(`sha256 ${sha256Hex(bytes)}\n`);
+    // D-5983: the sha256 line is the one stderr line, as open and freeze print it; stdout stays empty.
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe(`sha256 ${sha256Hex(bytes)}\n`);
     const text = bytes.toString('utf8');
     expect(text.endsWith('\n') && !text.endsWith('\n\n')).toBe(true);
     const rec = JSON.parse(text);
@@ -2608,10 +2610,22 @@ describe('W2-4 Task 8: step0a end to end', () => {
     const out = t8Out();
     const r = t8Run(t8Tree(), home, t8Argv(out));
     expect(r.code, r.stderr).toBe(0);
-    const printed = /^sha256 ([0-9a-f]{64})\n$/.exec(r.stdout);
-    expect(printed, r.stdout).not.toBeNull();
+    const printed = /^sha256 ([0-9a-f]{64})\n$/.exec(r.stderr);
+    expect(printed, r.stderr).not.toBeNull();
     const file = path.join(out, replay.STEP0A_FILE);
     expect(replay.loadStep0a(file, printed![1]!)).toEqual(JSON.parse(readFileSync(file, 'utf8')));
+  }, 120_000);
+
+  // D-5983: the sha256 line is on stderr (as open and freeze print it), exactly one line, and stdout is empty.
+  it('on success the sha256 line is the whole of stderr and stdout is empty, the hex being the sha256 of step0a json', () => {
+    const home = t8Home('ccrc-w2-t8-shastream-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe('');
+    const m = /^sha256 ([0-9a-f]{64})\n$/.exec(r.stderr);
+    expect(m, r.stderr).not.toBeNull();
+    expect(m![1]).toBe(sha256Hex(readFileSync(path.join(out, replay.STEP0A_FILE))));
   }, 120_000);
 
   it('the fallback settings mode is recorded, and its flags replace --restricted in flags_accepted', () => {
@@ -3058,7 +3072,9 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     expect(cmds.map((c) => log!.filter((e) => e.stdin.includes(c)).length), 'each spelling reaches the stub once').toEqual([1, 1, 1]);
 
     const bytes = t9Fs.readFileSync(t9Path.join(out, 'probe.json'));
-    expect(r.stdout).toBe(`sha256 ${t9CreateHash('sha256').update(bytes).digest('hex')}\n`);
+    // D-5983: the sha256 line is the one stderr line, as open and freeze print it; stdout stays empty.
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe(`sha256 ${t9CreateHash('sha256').update(bytes).digest('hex')}\n`);
     const doc = JSON.parse(bytes.toString('utf8'));
     expect(Object.keys(doc).sort()).toEqual(['account', 'budget', 'kind', 'measured_ms', 'model', 'settings_mode', 'spellings', 'spend', 'v']);
     expect(doc).toMatchObject({ kind: t9Driver.PROBE_KIND, v: 1, account: 'up-a', settings_mode: 'restricted', model: T9_MODEL, budget: 1_000_000 });
@@ -3073,6 +3089,18 @@ describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', (
     ]);
     // This PR's whole subcommand set, in registration order (Task 1's grammar cases use an unregistered name).
     expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe']);
+  });
+
+  // D-5983: the sha256 line is on stderr (as open and freeze print it), exactly one line, and stdout is empty.
+  it('on success the sha256 line is the whole of stderr and stdout is empty, the hex being the sha256 of probe json', () => {
+    const { home, out } = t9Box('ccrc-replay-t9-shastream-');
+    t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({ sessionId: 'sess-probe', assistants: 1, result: { numTurns: 1 } }));
+    const r = runDriver(home, t9Args(out));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe('');
+    const m = /^sha256 ([0-9a-f]{64})\n$/.exec(r.stderr);
+    expect(m, r.stderr).not.toBeNull();
+    expect(m![1]).toBe(t9CreateHash('sha256').update(t9Fs.readFileSync(t9Path.join(out, 'probe.json'))).digest('hex'));
   });
 
   it('a stream with no result event records ran but result_seen false, so its denied false measured nothing', () => {
