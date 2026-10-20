@@ -572,17 +572,30 @@ function settleHandMove(id, after) {
     + "change's intent, which the lane's next locked writer records.";
 }
 
+/** Why the automatic advance does not act on a lane that has a class registry, or null when it does (auto-advance
+ *  spec §2.2; D-5198). The first that applies:
+ *    - `lane-not-codex-kind`: only an `exec.kind: "codex"` row advances; an external row's tier, port and key are
+ *      not ccrc's to know;
+ *    - `probe-not-codex`: the family rule is the Codex lanes', so a registry whose probe is not `codex` never
+ *      advances.
+ *  A fact about the lane, never a refusal: each op of the advance step reports it as its `why`. ONE answer for all
+ *  of them, so they can never disagree about which lanes advance: `advance-backfill` and `advance-plan` call it, and
+ *  W2 Task 9's `advance-commit` calls it too. */
+function advanceIneligible(account, registry) {
+  if (!(isObj(account.exec) && account.exec.kind === 'codex')) return 'lane-not-codex-kind';
+  if (registry.probe !== 'codex') return 'probe-not-codex';
+  return null;
+}
+
 /** `advance-backfill` (auto-advance spec §2.1): give a codex-kind lane whose registry probe is `codex` its advance
  *  file when it has none (`backfillOnce`), and never rewrite one that exists. A lane with a class registry that is
  *  not codex-kind, or whose registry probe is not `codex`, answers `created: false` with why (`lane-not-codex-kind`,
- *  `probe-not-codex`), never a refusal (D-5198); so does a file it cannot read, with the read's word. An Anthropic
- *  lane and a lane with no class registry never reach here: `main`'s gates refuse them first (`anthropic-lane`,
- *  `no-registry`), and the hourly step (W2) asks neither: only a lane whose probe is `codex` and whose probe,
- *  materialise and LiteLLM render all succeeded. */
+ *  `probe-not-codex`: `advanceIneligible`'s word), never a refusal (D-5198); so does a file it cannot read, with the
+ *  read's word. An Anthropic lane and a lane with no class registry never reach here: `main`'s gates refuse them
+ *  first (`anthropic-lane`, `no-registry`), and the hourly step (W2) asks neither: only a lane whose probe is `codex`
+ *  and whose probe, materialise and LiteLLM render all succeeded. */
 function backfillOp(a, account, registry) {
-  let why = null;
-  if (!(isObj(account.exec) && account.exec.kind === 'codex')) why = 'lane-not-codex-kind';
-  else if (registry.probe !== 'codex') why = 'probe-not-codex';
+  const why = advanceIneligible(account, registry);
   const b = why === null ? backfillOnce(a.id, registry) : { created: false, why };
   if (b.err !== undefined) return refuse(1, b.err[0], b.err[1]);
   out({ ok: true, op: 'advance-backfill', id: a.id, created: b.created, ...(b.created ? {} : { why: b.why }) });
@@ -1334,9 +1347,9 @@ function windowOp(opName, a, account, registry, catalogue, reading) {
  *  question the refresh asks before it asks anything of the lane itself.
  *
  *  ELIGIBLE is three facts, and `why` names the first that fails:
- *    - `lane-not-codex-kind`: only an `exec.kind: "codex"` row advances
- *      (D-5198); an external row's tier, port and key are not ccrc's to know;
- *    - `probe-not-codex`: the family rule is the Codex lanes' (§2.2);
+ *    - `lane-not-codex-kind` and `probe-not-codex`: the lane itself
+ *      (`advanceIneligible`, D-5198, the one answer every op of the advance
+ *      step gives);
  *    - `never-probed` and `catalogue-stale`: no advance, and no retired-pin
  *      fallback, on a catalogue that is absent or marked stale (D-5199).
  *  On an ineligible lane every class is still listed, with its pin, family and
@@ -1355,10 +1368,12 @@ function windowOp(opName, a, account, registry, catalogue, reading) {
  *  Per candidate, `effortTo` is the level the class would carry on the new
  *  model (`resolveEffort`, ranked by the old pin's row, D-5200; null: none)
  *  and `canaryEffort` the lowest level the new model lists (null: it lists
- *  none). A held or blocked class is reported with its candidate; the caller
- *  skips it. A candidate on a lane whose windows file cannot be read is
- *  blocked `windows-unreadable` (D-5193): the commit would abandon on it after
- *  the canary, so no request is spent on it.
+ *  none). A HELD class is reported with its candidate and `held: true`. A
+ *  class `chooseCandidate` blocks (`pin-grammar`, `shared-family`) has no
+ *  candidate. A candidate on a lane whose windows file cannot be read is
+ *  KEPT and blocked `windows-unreadable` (D-5193): the commit would abandon on
+ *  it after the canary, so no request is spent on it. The caller skips every
+ *  class that is held or blocked.
  *
  *  A present advance file that cannot be read, or does not parse, is a REFUSAL
  *  carrying its own word, as an unreadable registry or catalogue already is
@@ -1368,11 +1383,8 @@ function advancePlanOp(a, account, registry, catalogue, win) {
   const rd = readAdvance(a.id);
   if (rd.err !== undefined) return refuse(1, rd.err[0], rd.err[1]);
   const adv = rd.advance;
-  const why = !(isObj(account.exec) && account.exec.kind === 'codex') ? 'lane-not-codex-kind'
-    : registry.probe !== 'codex' ? 'probe-not-codex'
-      : catalogue === null ? 'never-probed'
-        : catalogue.stale ? 'catalogue-stale'
-          : null;
+  const why = advanceIneligible(account, registry)
+    ?? (catalogue === null ? 'never-probed' : catalogue.stale ? 'catalogue-stale' : null);
   const classes = CLASSES.map((cls) => {
     const pin = registry.classes[cls];
     const stored = adv === null ? null : adv.classes[cls].family;

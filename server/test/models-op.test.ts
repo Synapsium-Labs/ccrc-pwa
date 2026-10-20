@@ -3529,20 +3529,23 @@ function plantStep(o: { id?: string; registry?: unknown; catalogue?: unknown; ad
   expect(m.code, m.stdout + m.stderr).toBe(0);
 }
 
-/** Every file under ~/.ccrc and lane-a's settings.json, with its bytes and
- *  mtime: the "writes nothing" pins compare two of these. */
+/** Every directory and file under ~/.ccrc and lane-a's settings directory,
+ *  the two roots included: each one's path, type, mode, size and mtime, and a
+ *  file's bytes (a link's target). The "writes nothing" pins compare two of
+ *  these, so a file rewritten in place, a tmp left behind and a directory the
+ *  op creates (whose parent's mtime moves too) each red them. Not followed
+ *  through a link: `lstat`. */
 function snapshot(): string[] {
   const out: string[] = [];
-  const walk = (d: string): void => {
-    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-      const p = path.join(d, e.name);
-      if (e.isDirectory()) walk(p);
-      else out.push(`${path.relative(home, p)} ${fs.statSync(p).mtimeMs} ${fs.readFileSync(p, 'utf8')}`);
-    }
+  const walk = (p: string): void => {
+    const st = fs.lstatSync(p);
+    const type = st.isDirectory() ? 'dir' : st.isFile() ? 'file' : st.isSymbolicLink() ? 'link' : 'other';
+    const body = type === 'file' ? fs.readFileSync(p, 'utf8') : type === 'link' ? fs.readlinkSync(p) : '';
+    out.push(`${path.relative(home, p)} ${type} ${(st.mode & 0o7777).toString(8)} ${st.size} ${st.mtimeMs} ${body}`);
+    if (type === 'dir') for (const e of fs.readdirSync(p)) walk(path.join(p, e));
   };
   walk(path.join(home, '.ccrc'));
-  const settings = path.join(home, STEP_SETTINGS, 'settings.json');
-  if (fs.existsSync(settings)) out.push(`${STEP_SETTINGS} ${fs.statSync(settings).mtimeMs} ${fs.readFileSync(settings, 'utf8')}`);
+  if (fs.existsSync(path.join(home, STEP_SETTINGS))) walk(path.join(home, STEP_SETTINGS));
   return out.sort();
 }
 
@@ -3594,6 +3597,20 @@ describe('advance-plan (auto-advance spec §2.2 to §2.3; plan W2 Task 8)', () =
     expect(opus).toMatchObject({ class: 'opus', held: true, candidate: 'model-6.1-gamma' });
   });
 
+  it('a class chooseCandidate blocks is reported blocked, with no candidate (shared-family)', () => {
+    // haiku and sonnet both follow alpha, and sonnet pins its newest: only the
+    // operator can say which class keeps the family, so haiku is blocked, and
+    // the row says so rather than reading as a class with nothing to do.
+    plantStep({
+      registry: { ...STEP_REGISTRY,
+        classes: { ...STEP_REGISTRY.classes, haiku: 'model-5.6-alpha', sonnet: 'model-6-alpha' } },
+      advance: stepAdvance({ sonnet: { family: 'alpha' } }),
+    });
+    const haiku = (plan().body['classes'] as Record<string, unknown>[])[0];
+    expect(haiku).toEqual({ class: 'haiku', pin: 'model-5.6-alpha', family: 'alpha', held: false, ...none,
+      blocked: 'shared-family' });
+  });
+
   it('an unreadable windows file blocks each candidate with windows-unreadable and keeps the candidate', () => {
     // The commit would abandon `windows-unreadable` after a canary (Task 9), so
     // the plan says so first and the step spends no request on it.
@@ -3629,7 +3646,7 @@ describe('advance-plan (auto-advance spec §2.2 to §2.3; plan W2 Task 8)', () =
     const r = plan(id);
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(r.body).toMatchObject({ eligible: false, why });
-    for (const row of r.body['classes'] as Record<string, unknown>[]) expect(row['candidate']).toBeNull();
+    for (const row of r.body['classes'] as Record<string, unknown>[]) expect(row).toMatchObject(none);
   });
 
   it('an Anthropic lane is refused, as it refuses every op but show', () => {
@@ -3663,11 +3680,25 @@ describe('advance-plan (auto-advance spec §2.2 to §2.3; plan W2 Task 8)', () =
     expect(BLOCKED_CAUSES).toContain(word);
   });
 
-  it('the plan writes nothing: every file under ~/.ccrc and the settings keep their bytes and mtimes', () => {
-    plantStep({ advance: null });
+  // A pending automatic intent that LANDED (the registry pins its `to`): the
+  // next locked WRITER settles it, recording the move; a reader that settled it
+  // in place would be a writer running without the lane-files lock.
+  const LANDED = { class: 'opus', from: 'model-5-gamma', to: 'model-5.6-gamma', effortFrom: 'max', effortTo: 'max',
+    at: '2026-10-22T08:00:00Z' };
+  it.each([
+    ['absent', 0, (): void => plantStep({ advance: null })],
+    ['present, with a landed automatic intent pending', 0, (): void => plantStep({ advance: stepAdvance({}, LANDED) })],
+    ['unreadable, a directory at its path', 1, (): void => {
+      plantStep({ advance: null });
+      fs.mkdirSync(advPath('lane-a'));
+    }],
+  ] as [string, number, () => void][])('the plan writes nothing with the advance file %s: every directory and file under '
+    + '~/.ccrc and the lane\'s settings keeps its type, mode, size, mtime and bytes', (_w, code, plant) => {
+    plant();
     const before = snapshot();
-    expect(plan().code).toBe(0);
-    expect(plan('lane-a').body['eligible']).toBe(true);
+    const r = plan();
+    expect(r.code, r.stdout + r.stderr).toBe(code);
+    expect(plan().code).toBe(code);
     expect(snapshot()).toEqual(before);
   });
 });
