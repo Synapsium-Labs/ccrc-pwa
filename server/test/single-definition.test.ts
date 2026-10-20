@@ -4098,6 +4098,27 @@ describe('the auto-install gate word is declared once, in L0 (programme wave 3)'
   });
 });
 
+describe('the feed archive\'s writer set (D-5859; ARCH-54 #789)', () => {
+  // D-5859 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1e; ARCH-54 (#789);
+  // spec §2.1 rule (f)). The feed archive's writer set reaches its W1a target: the funnel (`notice.ts`, `notify` and its
+  // batch `notifyEach`, one archive call between them) and stop-done's own pair (`stopDoneSweep.ts`, which W4 moves).
+  // May only shrink: a new hand-written `recordFeedEvent(` anywhere under server/src is red; raise a notice through
+  // the funnel instead. Its own describe block, away from the
+  // ARCH-40 tail and the file's end where other open slices append, and the census is loaded here, not at an import
+  // line, so no other block's line moves.
+  it('the feed archive has two writers, the funnel and stop-done\'s, and its call sites may only shrink (D-5859)', async () => {
+    const { feedRecordCallSites } = await import('./consolidationCensus.js');
+    const sites = feedRecordCallSites();
+    const where = sites.map((x) => `${x.file}:${x.line}`).join(', ');
+    expect(sites.length, `the feed archive has two writers at most; found ${where}`).toBeLessThanOrEqual(2);
+    expect(sites.filter((x) => x.file === 'server/src/notice.ts'), 'the funnel archives at exactly one site').toHaveLength(1);
+    for (const x of sites) {
+      expect(['server/src/notice.ts', 'server/src/stopDoneSweep.ts'], `${x.file}:${x.line}: a hand-written feed archive write — `
+        + "raise it through notice.ts's notify").toContain(x.file);
+    }
+  });
+});
+
 // — design 2026-09-20 §10: the update op's refusal words and its launcher, declared once —
 // APPENDED, never inserted: `session-hook.test.ts`'s citation audit cites this
 // file by line (`:32-37`, `:1274`, `:1303`), so an insert above those moves them.
