@@ -279,10 +279,11 @@ describe("ccd's refusals", () => {
     expect(res.json()).toEqual({ ok: false, error: 'account-refused', reason: 'lane-a:auth-dead' });
   });
 
-  it('the post-worktree --wrapper refusal is the same 409', async () => {
-    const { app } = await boot({ run: failing('ccd: --wrapper refused — lane-a:pool=pool-b; the account was named, so ccd will not place this workspace on another. The worktree /w EXISTS') });
+  it('the post-worktree --wrapper refusal is the same 409 word and status, and says what is left behind', async () => {
+    const { app } = await boot({ run: failing('ccd: --wrapper refused — lane-a:pool=pool-b; the account was named, so ccd will not place this workspace on another. The worktree /w and the branch ws/login-cleanup EXIST and no registry row names them: fix the account or choose another, then adopt them with: ccd start <wrapper> project-a /w') });
     const res = await post(app, { name: 'Login cleanup', wrapper: 'lane-a' });
-    expect(res.json()).toEqual({ ok: false, error: 'account-refused', reason: 'lane-a:pool=pool-b' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'account-refused', reason: 'lane-a:pool=pool-b', leftBehind: true });
   });
 
   it("anything else is 502 with ccd's stderr, as the bodyless create answers", async () => {

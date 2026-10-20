@@ -27,8 +27,12 @@ export type AddRefusal =
   | { kind: 'bad-wrapper' }
   | { kind: 'bad-slug' }
   | { kind: 'slug-taken' }
-  /** ccd's own `<lane>:<why>`, kept whole: the sentence is built from its two halves. */
-  | { kind: 'account-refused'; reason: string }
+  /**
+   * ccd's own `<lane>:<why>`, kept whole: the sentence is built from its two halves. `leftBehind` is the server's
+   * reading of ccd's EXIST clause: the refusal came after the worktree and branch were made, so they remain with no
+   * session. Absent on the wire means nothing was created (the pre-flight refusal).
+   */
+  | { kind: 'account-refused'; reason: string; leftBehind: boolean }
   /** `needs` is null when the 501 named no token (a routing class the box cannot parse yet). */
   | { kind: 'unsupported'; needs: AddNeeds | null }
   /** The fleet box ran ccd and ccd failed: its stderr, trimmed, or null when there was none to show. */
@@ -57,7 +61,11 @@ export function classifyAddError(err: unknown): AddRefusal {
   if (err.status === 409) {
     if (word === 'slug-taken') return { kind: 'slug-taken' };
     if (word === 'account-refused') {
-      return { kind: 'account-refused', reason: typeof body.reason === 'string' && body.reason !== '' ? body.reason : 'refused' };
+      return {
+        kind: 'account-refused',
+        reason: typeof body.reason === 'string' && body.reason !== '' ? body.reason : 'refused',
+        leftBehind: body.leftBehind === true,
+      };
     }
   }
   if (err.status === 501 && word === 'unsupported') {
@@ -118,7 +126,11 @@ export function addRefusalText(r: AddRefusal, ctx: AddContext): string {
     case 'slug-taken': return ctx.slug === null
       ? 'A workspace with that name already exists. Open it from the board, or change the name. Your text is kept.'
       : `${ctx.project}-${ctx.slug} already exists. Open it from the board, or change the name. Your text is kept.`;
-    case 'account-refused': return `${accountRefusedText(r.reason, ctx.roster)} Pick another account. Nothing was created.`;
+    case 'account-refused': return r.leftBehind
+      // ccd's own remedy for what it left (`cmd_ws_add`): adopt the worktree and branch onto a working account. A retry
+      // of the same name reads `slug-taken`, because the slug is on disk though no row names it, so that is said too.
+      ? `${accountRefusedText(r.reason, ctx.roster)} The worktree and branch for ${ctx.slug === null ? 'this workspace' : `${ctx.project}-${ctx.slug}`} were already made and are still on the fleet box with no session. Fix the account or pick another, then adopt them there with: ccd start <account> ${ctx.project} <worktree>. Adding the same name again will say it already exists.`
+      : `${accountRefusedText(r.reason, ctx.roster)} Pick another account. Nothing was created.`;
     case 'unsupported': return r.needs === null
       ? "The fleet box's ccd doesn't support that yet. Update the fleet box, or change the options."
       : NEEDS_TEXT[r.needs];

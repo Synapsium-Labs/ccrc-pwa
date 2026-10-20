@@ -19,8 +19,10 @@ describe('classifyAddError reads status and word', () => {
     ['400 bad-wrapper', err(400, { ok: false, error: 'bad-wrapper' }), { kind: 'bad-wrapper' }],
     ['400 bad-slug', err(400, { ok: false, error: 'bad-slug' }), { kind: 'bad-slug' }],
     ['409 slug-taken', err(409, { ok: false, error: 'slug-taken' }), { kind: 'slug-taken' }],
-    ['409 account-refused', err(409, { ok: false, error: 'account-refused', reason: 'lane-a:auth-dead' }), { kind: 'account-refused', reason: 'lane-a:auth-dead' }],
-    ['409 account-refused without a reason', err(409, { ok: false, error: 'account-refused' }), { kind: 'account-refused', reason: 'refused' }],
+    ['409 account-refused', err(409, { ok: false, error: 'account-refused', reason: 'lane-a:auth-dead' }), { kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: false }],
+    ['409 account-refused without a reason', err(409, { ok: false, error: 'account-refused' }), { kind: 'account-refused', reason: 'refused', leftBehind: false }],
+    ['409 account-refused that left a worktree behind', err(409, { ok: false, error: 'account-refused', reason: 'lane-a:pool=pool-b', leftBehind: true }), { kind: 'account-refused', reason: 'lane-a:pool=pool-b', leftBehind: true }],
+    ['409 account-refused, leftBehind not literally true', err(409, { ok: false, error: 'account-refused', reason: 'lane-a:disabled', leftBehind: 'yes' }), { kind: 'account-refused', reason: 'lane-a:disabled', leftBehind: false }],
     ['501 unsupported ws-title-v1', err(501, { ok: false, error: 'unsupported', needs: 'ws-title-v1' }), { kind: 'unsupported', needs: 'ws-title-v1' }],
     ['501 unsupported ws-wrapper-v1', err(501, { ok: false, error: 'unsupported', needs: 'ws-wrapper-v1' }), { kind: 'unsupported', needs: 'ws-wrapper-v1' }],
     ['501 unsupported, no token', err(501, { ok: false, error: 'unsupported' }), { kind: 'unsupported', needs: null }],
@@ -48,7 +50,8 @@ describe('addRefusalText', () => {
     ...NAME_REFUSALS.map((reason): AddRefusal => ({ kind: 'bad-name', reason })),
     { kind: 'bad-name', reason: null },
     { kind: 'bad-wrapper' }, { kind: 'bad-slug' }, { kind: 'slug-taken' },
-    { kind: 'account-refused', reason: 'lane-a:auth-dead' },
+    { kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: false },
+    { kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: true },
     { kind: 'unsupported', needs: 'ws-title-v1' }, { kind: 'unsupported', needs: 'ws-wrapper-v1' }, { kind: 'unsupported', needs: null },
     { kind: 'ccd-failed', stderr: 'no origin/HEAD' }, { kind: 'ccd-failed', stderr: null },
     { kind: 'unreached' }, { kind: 'other', status: 418 },
@@ -70,6 +73,20 @@ describe('addRefusalText', () => {
     expect(addRefusalText({ kind: 'slug-taken' }, ctx)).toContain('project-a-eng-1234 already exists');
     expect(addRefusalText({ kind: 'slug-taken' }, ctx)).toMatch(/Your text is kept/);
     expect(addRefusalText({ kind: 'slug-taken' }, { ...ctx, slug: null })).not.toContain('project-a-');
+  });
+
+  it('an account refusal that left a worktree behind never says nothing was created, and gives ccd\'s own remedy', () => {
+    const left = addRefusalText({ kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: true }, ctx);
+    expect(left).not.toMatch(/Nothing was created/);
+    expect(left).toContain('project-a-eng-1234');
+    expect(left).toMatch(/worktree and branch/);
+    expect(left).toMatch(/still on the fleet box with no session/);
+    expect(left).toContain('ccd start <account> project-a <worktree>');
+    expect(left).toMatch(/same name again will say it already exists/);
+    // With no slug asked for there is no id to name; the sentence still says it.
+    expect(addRefusalText({ kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: true }, { ...ctx, slug: null })).toContain('for this workspace');
+    // The pre-flight refusal keeps its own words.
+    expect(addRefusalText({ kind: 'account-refused', reason: 'lane-a:auth-dead', leftBehind: false }, ctx)).toMatch(/Pick another account\. Nothing was created\.$/);
   });
 
   it('says plainly that the box\'s ccd is too old, and for which feature', () => {

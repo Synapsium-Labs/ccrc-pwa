@@ -91,12 +91,18 @@ export function planCreate(project: string, body: { name?: unknown; wrapper?: un
 export type AddFailure =
   | { kind: 'slug-taken' }
   | { kind: 'bad-slug' }
-  /** `reason` is ccd's own per-lane reason (`<lane>:<why>`), the words the no-placement message already uses. */
-  | { kind: 'account-refused'; reason: string }
+  /**
+   * `reason` is ccd's own per-lane reason (`<lane>:<why>`), the words the no-placement message already uses.
+   * `leftBehind` is ccd's own EXIST clause: the refusal came AFTER the worktree and branch were made, so they remain
+   * with no registry row (the pre-flight refusal touches nothing). Same word, opposite fact, never folded.
+   */
+  | { kind: 'account-refused'; reason: string; leftBehind: boolean }
   | { kind: 'other' };
 
 const WRAPPER_REFUSED = '--wrapper refused — ';
 const WRAPPER_REFUSED_TAIL = '; the account was named';
+/** `cmd_ws_add`'s post-worktree refusal names what it left: "The worktree … and the branch … EXIST and no registry row names them". */
+const LEFT_BEHIND = 'EXIST and no registry row names them';
 
 /**
  * Read ccd's `die` line. A transport failure (`ran === false`) is NEVER a refusal and is `other` whatever its text
@@ -105,6 +111,7 @@ const WRAPPER_REFUSED_TAIL = '; the account was named';
  * `slug in use: ` and `invalid slug '` are `cmd_ws_add`'s own sentences; `--wrapper refused — <lane>:<why>; the
  * account was named …` is `_ws_wrapper_why`'s, in the pre-flight and again after the worktree exists. The reason is
  * the text between the marker and that tail, or the rest of the line when ccd's tail changes — never empty.
+ * The post-worktree sentence also says the worktree and branch EXIST; that is `leftBehind`, and it is never dropped.
  */
 export function classifyAddFailure(res: { ran?: boolean; stderr: string }): AddFailure {
   if (res.ran === false) return { kind: 'other' };
@@ -114,7 +121,7 @@ export function classifyAddFailure(res: { ran?: boolean; stderr: string }): AddF
     const rest = err.slice(at + WRAPPER_REFUSED.length).split('\n')[0] ?? '';
     const cut = rest.indexOf(WRAPPER_REFUSED_TAIL);
     const reason = (cut === -1 ? rest : rest.slice(0, cut)).trim();
-    return { kind: 'account-refused', reason: reason === '' ? 'refused' : reason };
+    return { kind: 'account-refused', reason: reason === '' ? 'refused' : reason, leftBehind: err.includes(LEFT_BEHIND) };
   }
   if (err.includes('slug in use: ')) return { kind: 'slug-taken' };
   if (err.includes("invalid slug '")) return { kind: 'bad-slug' };

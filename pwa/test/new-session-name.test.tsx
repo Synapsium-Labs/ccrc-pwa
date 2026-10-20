@@ -222,6 +222,19 @@ describe('every refusal keeps the sheet open and the text in the field', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
+  it('an account refusal AFTER the worktree exists says what is left on the box, never "Nothing was created"', async () => {
+    vi.spyOn(api, 'workspaceAdd').mockRejectedValue(new ApiError(409, { ok: false, error: 'account-refused', reason: 'claude:auth-dead', leftBehind: true }));
+    const { onClose } = await openAt();
+    await pickDemo();
+    type('Login cleanup');
+    fireEvent.click(start('Start Login cleanup on team·max'));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/team·max can't sign in right now\. The worktree and branch for demo-login-cleanup were already made and are still on the fleet box with no session\./);
+    expect(alert).toHaveTextContent('adopt them there with: ccd start <account> demo <worktree>');
+    expect(alert).not.toHaveTextContent(/Nothing was created/);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('the refusal goes away when the name is edited', async () => {
     vi.spyOn(api, 'workspaceAdd').mockRejectedValue(new ApiError(409, { ok: false, error: 'slug-taken' }));
     await openAt();

@@ -6,13 +6,23 @@ import { classifyAddFailure, isWsWrapper, planCreate } from '../src/workspaceCre
 describe('classifyAddFailure', () => {
   it("reads the lane's reason out of the sentence, up to ccd's tail", () => {
     expect(classifyAddFailure({ stderr: 'ccd: --wrapper refused — lane-a:class=opus-unservable; the account was named, so …' }))
-      .toEqual({ kind: 'account-refused', reason: 'lane-a:class=opus-unservable' });
+      .toEqual({ kind: 'account-refused', reason: 'lane-a:class=opus-unservable', leftBehind: false });
+  });
+
+  it("reads ccd's EXIST clause as leftBehind: the post-worktree refusal left a worktree and a branch no row names", () => {
+    const post = 'ccd: --wrapper refused — lane-a:no-longer-qualifies; the account was named, so ccd will not place this workspace on another. '
+      + 'The worktree /w and the branch ws/eng-1234 EXIST and no registry row names them: fix the account or choose another, then adopt them with: ccd start <wrapper> demo /w';
+    expect(classifyAddFailure({ stderr: post }))
+      .toEqual({ kind: 'account-refused', reason: 'lane-a:no-longer-qualifies', leftBehind: true });
+    // The pre-flight sentence leaves the box as it found it: the same word, the opposite fact.
+    expect(classifyAddFailure({ stderr: 'ccd: --wrapper refused — lane-a:auth-dead; the account was named, so ccd will not place this workspace on another — nothing was touched' }))
+      .toMatchObject({ kind: 'account-refused', leftBehind: false });
   });
 
   it("keeps the rest of the line when ccd's tail changes, and never answers an empty reason", () => {
     expect(classifyAddFailure({ stderr: 'ccd: --wrapper refused — lane-a:disabled\nmore' }))
-      .toEqual({ kind: 'account-refused', reason: 'lane-a:disabled' });
-    expect(classifyAddFailure({ stderr: 'ccd: --wrapper refused — ' })).toEqual({ kind: 'account-refused', reason: 'refused' });
+      .toEqual({ kind: 'account-refused', reason: 'lane-a:disabled', leftBehind: false });
+    expect(classifyAddFailure({ stderr: 'ccd: --wrapper refused — ' })).toEqual({ kind: 'account-refused', reason: 'refused', leftBehind: false });
   });
 
   it('a refusal wins over a slug sentence in the same stderr only because it is checked first', () => {

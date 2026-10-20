@@ -2929,7 +2929,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     switch (failure.kind) {
       case 'slug-taken': return refuseRoute(reply, 'slug-taken');
       case 'bad-slug': return refuseRoute(reply, 'bad-slug');
-      case 'account-refused': return refuseRoute(reply, 'account-refused', { reason: failure.reason });
+      // `leftBehind` only when true: a pre-flight refusal keeps its body, and the post-worktree one is told apart by it.
+      case 'account-refused': return refuseRoute(reply, 'account-refused', failure.leftBehind ? { reason: failure.reason, leftBehind: true } : { reason: failure.reason });
       case 'other': return ccd502(reply, res);
     }
   });
