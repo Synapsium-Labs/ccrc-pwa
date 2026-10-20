@@ -4654,6 +4654,10 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
   const VOS = 'value-outside-set';
   /** A small non-empty set of families that each expect windows, so q18Power walks its grid. */
   const FAMS = Array.from({ length: 6 }, (_, i) => ({ key: `f${i}`, windows: 2, covered_days: 14 }));
+  /** q18Power called with the smallest valid parameters, `over` replacing some: families [] returns once they are valid. */
+  const q18With = (over: Record<string, unknown>): unknown =>
+    (gate9.q18Power as unknown as (i: Record<string, unknown>) => unknown)(
+      { families: [], plannedDays: 14, seedHex: SEED, rho: 0.3, power: 0.5, sims: 24, gridStep: 0.05, B: 200, ...over });
   const gen = (n: number): string => `0189abcd-0000-4000-8000-${String(n).padStart(12, '0')}`;
   const OPUS = 'claude-opus-9-1';
   const ARM = 'claude-arm-9-1';
@@ -5498,10 +5502,6 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
     });
   });
   describe('review fix round 1: validator bindings (D-5791)', () => {
-    /** q18Power called with the smallest valid parameters, `over` replacing some: families [] returns once they are valid. */
-    const q18With = (over: Record<string, unknown>): unknown =>
-      (gate9.q18Power as unknown as (i: Record<string, unknown>) => unknown)(
-        { families: [], plannedDays: 14, seedHex: SEED, rho: 0.3, power: 0.5, sims: 24, gridStep: 0.05, B: 200, ...over });
     const q18 = (key: string, v: unknown): Err[] => verdict(set(draft(), `q18_settings.${key}`, v));
 
     it('CONTROL: the valid draft and the valid final validate', () => {
@@ -5675,7 +5675,7 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
       for (const gridStep of [1e-17, 5e-308, 7.993605777301475e-16]) {
         expect(verdict(set(draft(), 'q18_settings.grid_step', gridStep)), `validator: grid step ${gridStep}`).toEqual([{ path: 'q18_settings.grid_step', word: VOS }]);
         expect(() => q18Run({ gridStep }), `grid step ${gridStep}`).toThrow(RangeError);
-        expect(() => q18Run({ gridStep }), `grid step ${gridStep}`).toThrow(`q18Power: grid step ${gridStep} does not divide 1 - x`);
+        expect(() => q18Run({ gridStep }), `grid step ${gridStep}`).toThrow(`q18Power: grid step ${gridStep} is so small that x.den * N is not a safe integer`);
       }
       expect(() => q18Run({ gridStep: 1e-15 }), 'CONTROL: a step of 1e-15 is still valid and runs').not.toThrow();
       expect(verdict(set(draft(), 'q18_settings.rho_headline', 1e-309)), 'validator: rho 1e-309').toEqual([{ path: 'q18_settings.rho_headline', word: VOS }]);
@@ -5716,6 +5716,11 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
       }
     });
 
+    it('q18Power names the reason it refuses a rho or a grid step too small, with the default families [] (a dropped throw returns, it does not loop)', () => {
+      expect(() => q18With({ rho: 1e-309 })).toThrow('q18Power: rho 1e-309 is so small that (1 - rho)/rho is not finite');
+      expect(() => q18With({ gridStep: 1e-17 })).toThrow('q18Power: grid step 1e-17 is so small that x.den * N is not a safe integer');
+    });
+
     describe('registry_drops', () => {
       it('CONTROL: a non-empty valid registry_drops validates, and so does each closed-set reason', () => {
         expect(verdict(finalWith([{ ...DROPPED, reason: 'registry-absent' }]), chainOf(draft()))).toEqual([]);
@@ -5738,6 +5743,16 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
         expect(verdict(f, chainOf(draft()))).toEqual([{ path: `assignment[${j}]`, word: VOS }]);
         const two = finalWith([{ ...refOf(ASSIGNMENT[0]!), reason: 'unreadable' }, { ...refOf(ASSIGNMENT[5]!), reason: 'unreadable' }]);
         expect(verdict(two, chainOf(draft())), 'by each entry\'s own index').toEqual([{ path: 'assignment[0]', word: VOS }, { path: 'assignment[5]', word: VOS }]);
+      });
+      it('dropping ONE generation of the split session refuses that generation\'s assignment entry alone: the key carries the generation', () => {
+        // SPLIT is two generations of one session, both assigned: the treated one at assignment[11], the controlled one at assignment[7] (measured; the indexes below are looked up).
+        const iT = ASSIGNMENT.findIndex((a) => a.generation === SPLIT.treated.generation);
+        const iC = ASSIGNMENT.findIndex((a) => a.generation === SPLIT.controlled.generation);
+        expect(iT).toBeGreaterThanOrEqual(0);
+        expect(iC).toBeGreaterThanOrEqual(0);
+        expect(iT).not.toBe(iC);
+        const f = finalWith([{ ...refOf(SPLIT.treated), reason: 'registry-mismatch' }]);
+        expect(verdict(f, chainOf(draft()))).toEqual([{ path: `assignment[${iT}]`, word: VOS }]);
       });
     });
 

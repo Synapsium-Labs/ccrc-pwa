@@ -1029,19 +1029,23 @@ function q18ShareAt(nf, p, o) {
 }
 
 /**
- * The number of grid steps from x to 1 for a step that divides 1 - x, or null for a step that does not (zero, negative,
- * not a number, larger than 1 - x by more than 1e-9, or off by more than 1e-9) and for a step so small that x.den times
- * the step count is not a safe integer (the grid's integer forms are then inexact: the bisection never ends, or a
- * grid point's mean leaves [0, 1]). q18Power refuses a null with its RangeError and validateOpenRecord refuses the
- * same value before it is signed: one rule, so the two cannot disagree.
+ * The number of grid steps from x to 1, with the reason a step is refused, the way q18RhoWhy answers a reason: `why` is
+ * null (and N the step count) for a step Q18 can honour; 'divide' (N null) for a step that does not divide 1 - x (zero,
+ * negative, not a number, larger than 1 - x by more than 1e-9, or off by more than 1e-9); and 'tiny' (N null) for a step
+ * so small that x.den times the step count is not a safe integer (the grid's integer forms are then inexact: the bisection
+ * never ends, or a grid point's mean leaves [0, 1]). q18Power chooses its message from the answer and validateOpenRecord
+ * refuses the same value before it is signed on any answer but null: one rule, so the two cannot disagree.
  * @param {number} gridStep
  * @param {Frac} x
- * @returns {number|null}
+ * @returns {{ N: number|null, why: null|'divide'|'tiny' }}
  */
 function q18GridSteps(gridStep, x) {
   const span = (x.den - x.num) / x.den;
   const N = Math.round(span / gridStep);
-  return gridStep > 0 && N >= 1 && Number.isSafeInteger(x.den * N) && Math.abs(N * gridStep - span) <= 1e-9 ? N : null;
+  if (!(gridStep > 0) || !(N >= 1)) return { N: null, why: 'divide' };
+  if (!Number.isSafeInteger(x.den * N)) return { N: null, why: 'tiny' };
+  if (Math.abs(N * gridStep - span) > 1e-9) return { N: null, why: 'divide' };
+  return { N, why: null };
 }
 
 /**
@@ -1085,8 +1089,10 @@ export function q18Power({ families, plannedDays, seedHex, rho, power, sims, gri
   if (!Number.isSafeInteger(sims) || sims < 1) throw new RangeError(`q18Power: sims=${sims} is not a positive integer`);
   nearestRankBounds(B);
   if (cmpFrac(x, frac(0, 1)) <= 0 || cmpFrac(x, frac(1, 1)) >= 0) throw new RangeError('q18Power: x lies outside (0, 1)');
-  const N = q18GridSteps(gridStep, x);
-  if (N === null) throw new RangeError(`q18Power: grid step ${gridStep} does not divide 1 - x`);
+  const grid = q18GridSteps(gridStep, x);
+  if (grid.why === 'divide') throw new RangeError(`q18Power: grid step ${gridStep} does not divide 1 - x`);
+  if (grid.why === 'tiny') throw new RangeError(`q18Power: grid step ${gridStep} is so small that x.den * N is not a safe integer`);
+  const N = /** @type {number} */ (grid.N);
   const procedure = Q18_DEFAULTS.procedure;
   const keys = new Set();
   for (const f of families) {
@@ -2462,7 +2468,7 @@ function recValidate(record, ctx, checkLink) {
   if (!Object.values(Q18_FIGURE_POWER).every((level) => r.q18_settings.power.includes(level))) refuse('q18_settings.power', 'value-outside-set');
   if (r.q18_settings.lookback_days < 1) refuse('q18_settings.lookback_days', 'value-outside-set');
   if (r.q18_settings.sims < 1) refuse('q18_settings.sims', 'value-outside-set');
-  if (q18GridSteps(r.q18_settings.grid_step, X) === null) refuse('q18_settings.grid_step', 'value-outside-set');
+  if (q18GridSteps(r.q18_settings.grid_step, X).why !== null) refuse('q18_settings.grid_step', 'value-outside-set');
 
   // The pilot section signed under part 1's own settings (W2-D76, W2-D71).
   const used = r.pilot.used;
