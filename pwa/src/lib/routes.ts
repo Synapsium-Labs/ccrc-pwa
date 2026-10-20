@@ -18,6 +18,18 @@ export interface Route {
   readonly path: string | null;
 }
 
+/** Settings' five sections, in the index's order (D-5503): each is its own route, `/settings/<id>` (D-5504). The one
+ *  list: the route entries below, the index rows and the section pages all read it. */
+export const SETTINGS_SECTIONS = [
+  { id: 'updates', title: 'Updates' },
+  { id: 'appearance', title: 'Appearance' },
+  { id: 'notifications', title: 'Notifications' },
+  { id: 'automation', title: 'Automation' },
+  { id: 'security', title: 'Security' },
+] as const;
+
+export type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]['id'];
+
 export const ROUTES: readonly Route[] = [
   { id: 'fleet', pattern: /^\/$/, title: 'Fleet', top: true, path: '/' },
   { id: 'session', pattern: /^\/s\/([^/]+)\/?$/, title: 'Session', top: false, path: null },
@@ -28,6 +40,14 @@ export const ROUTES: readonly Route[] = [
   { id: 'docs', pattern: /^\/docs(?:\/|$)/, title: 'Docs', top: true, path: '/docs' },
   { id: 'archive', pattern: /^\/archive\/?$/, title: 'Archive', top: true, path: '/archive' },
   { id: 'settings', pattern: /^\/settings\/?$/, title: 'Settings', top: true, path: '/settings' },
+  // The five section pages (D-5504): pages under Settings, so not `top`; each has its own path, so "Go to" offers
+  // "Go to Settings › Updates" and the others (`command/commands.ts`).
+  ...SETTINGS_SECTIONS.map((s): Route => ({
+    id: `settings-${s.id}`, pattern: new RegExp(`^/settings/${s.id}/?$`), title: s.title, top: false, path: `/settings/${s.id}`,
+  })),
+  // Any other id under Settings (D-5504): still Settings, which says "That section does not exist." above its index,
+  // never the fallback. No path, so "Go to" leaves it out.
+  { id: 'settings-section', pattern: /^\/settings\/([^/]+)\/?$/, title: 'Settings', top: false, path: null },
   // `/digest?day=YYYY-MM-DD` (D-5300): the daily digest push's deep link.
   { id: 'digest', pattern: /^\/digest\/?$/, title: 'Digest', top: false, path: null },
 ];

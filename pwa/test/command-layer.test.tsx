@@ -460,6 +460,16 @@ describe('a door runs its command, through this layer', () => {
     return <>{ids.map((id) => <button key={id} type="button" {...commandDoor(id)}>{id}</button>)}</>;
   }
 
+  it("the palette's Go-to list offers Settings › Updates and the others, and not settings-section (D-5504)", () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    fireEvent.change(openPalette(), { target: { value: 'go to settings' } });
+    for (const name of ['Updates', 'Appearance', 'Notifications', 'Automation', 'Security']) {
+      expect(screen.getByRole('option', { name: new RegExp(`^Go to Settings › ${name}`) })).toBeTruthy();
+    }
+    // Settings itself, then its five pages: nothing for the catch-all row, whose title is also Settings.
+    expect(screen.getAllByRole('option', { name: /^Go to Settings/ })).toHaveLength(6);
+  });
+
   it('a Go to door navigates as the palette would, and carries its id as data-command', () => {
     render(<><Doors ids={['go-runs', 'go-docs']} /><CommandLayer openNewSession={vi.fn()} /></>);
     const runs = screen.getByRole('button', { name: 'go-runs' });

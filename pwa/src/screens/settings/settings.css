@@ -1,0 +1,34 @@
+/* Settings' frame (settings Task R2b1; spec §3.2, §4.1, §4.2; D-5503, D-5504).
+   `PageScaffold` draws the header and the reading column (capped at `--page-max`, padded by `--gutter`), so this
+   sheet holds only the section page's heading and the index rows. NO COLOUR: every ink here is a utility over the
+   measured token pairs (`text-ink-*`, `text-phosphor`, `text-status-*-text` on the page's ground) or inherited, so
+   no rule needs a contrast-gate registration. Spacing reads the roles (`--pad-card`, `--gutter`), never `--sp-*`.
+   The release rows and key/value lines already wrap at any pane width (`.settings-release`'s `minmax(0, 1fr)`
+   column, flex-wrapped actions, `overflow-wrap: anywhere`), so no container query is needed for them yet; R2c's nav
+   adds the pane query at `PAGE_NAV_MIN_PX`. */
+
+/* The section's name leads its page at the page size (spec §4.2). It takes focus when the section opens. */
+.settings-page-title {
+  margin: 0;
+  font: var(--weight-semibold) var(--fs-page) / var(--lh-tight) var(--family-ui);
+}
+
+/* The index: five full-width rows, each one link, at least 64px on a phone (spec §4.2; tap-targets.test.tsx), and
+   never under the tap token, whatever a skin sets it to (control-census.test.ts's TOKEN). */
+.settings-index { display: grid; min-width: 0; }
+.settings-index-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--pad-card);
+  min-height: max(64px, var(--tap-min));
+  padding-block: calc(var(--pad-card) / 2);
+  border-top: 1px solid var(--edge-subtle);
+}
+.settings-index-text { display: grid; min-width: 0; }
+.settings-index-status { overflow-wrap: anywhere; }
+
+/* A section page's Back returns to the index at every width until R2c's nav sits beside the body: the desktop
+   shell hides every other Back in the detail pane (shell.css, `.shell-detail .back-btn`), because the fleet sidebar
+   is the way out of a screen, but the sidebar is not the way back to the sections index. */
+.shell-detail .back-btn.settings-section-back { display: inline-block; }

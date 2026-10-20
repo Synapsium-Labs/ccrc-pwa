@@ -1150,6 +1150,7 @@ describe('every stylesheet under src/ is audited', () => {
       'src/docs/docs.css',
       'src/fleet/fleet.css',
       'src/screens/digest.css',   // the daily digest screen (D-5300)
+      'src/screens/settings/settings.css', // Settings' frame (settings Task R2b1, D-5504): layout only, no colour
       'src/session/chat.css',
       'src/skins/instrument/instrument.css', // W2 Task S2b: header-only until S9
       'src/skins/refined/refined.css',       // W2 Task S2b: header-only until S4b
@@ -1971,8 +1972,17 @@ describe('the /settings shell and its door are measured, not left in the blind s
     return ink as string;
   };
 
+  // Settings Task R2b1 (D-5504): the screen's <h1> is `PageScaffold`'s, so `.settings-title` and the shell's
+  // `.settings-screen`/`.settings-head` retired with their rules; a registration left behind would ground nothing.
+  it('the retired shell rules are gone, and so is their registration', () => {
+    for (const key of ['.settings-title', '.settings-screen', '.settings-head']) {
+      expect(fleetRules.some((r) => ruleKey(r) === key), key).toBe(false);
+      expect(INHERITED_GROUNDS[key], key).toBeUndefined();
+      expect(GRANDFATHERED_UNCOVERED.has(key), key).toBe(false);
+    }
+  });
+
   it.each([
-    ['.settings-title'],
   ])('%s is registered on the page and measured in both themes', (key) => {
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-page)']);
     expect(report.uncovered).not.toContain(key);
