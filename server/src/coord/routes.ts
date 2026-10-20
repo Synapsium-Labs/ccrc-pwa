@@ -545,11 +545,6 @@ export function registerCoordRoutes(
    */
   watcher?: FleetWatcher,
 ): CoordRoutesHandle {
-  /** D-5995: an answer carrying session-derived text is masked as one frame before it is serialized. */
-  // A callback hook, never an async one: it completes in the tick of the route's `reply.send`, so a handler that
-  // sends a refusal and then resolves is answered once.
-  const maskAnswer = (_req: FastifyRequest, _reply: FastifyReply, payload: unknown,
-    done: (err: Error | null, value?: unknown) => void): void => { done(null, (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(payload)); };
   const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');
 
   // One instance for this server (see `CoordMutex`'s own docstring) —
@@ -2706,7 +2701,7 @@ export function registerCoordRoutes(
     };
   };
 
-  app.get('/api/coord/stall-watch', { preSerialization: maskAnswer }, async (_req, reply) => {   // D-5995: session-written text
+  app.get('/api/coord/stall-watch', async (_req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
     const names = await deps.io.readdir(deps.cfg.registryDir);
@@ -3019,7 +3014,7 @@ export function registerCoordRoutes(
    * `expired`-vs-`no-session` distinction on the way. The `detail` names the
    * token half for whoever is holding a terminal.
    */
-  app.get('/api/runs', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995: session-written text
+  app.get('/api/runs', async (req, reply) => {
     // AUTHENTICATE BEFORE ANSWERING ANYTHING, INCLUDING `501 not-configured`.
     // On a gated route the hook would have refused before the handler ran, so
     // moving the check in here means keeping that order by hand: a `501` tells
@@ -3060,7 +3055,7 @@ export function registerCoordRoutes(
    *  when auth is armed, because the coordinator skill reads it cookieless
    *  from the fleet host. Nothing is written here: the refused-close count it
    *  reports is `closeRun`'s own `recordRejection` row. */
-  app.get('/api/runs/:id/signals', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995: session-written text
+  app.get('/api/runs/:id/signals', async (req, reply) => {
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
@@ -3228,7 +3223,7 @@ export function registerCoordRoutes(
    * to be named in that corpus minus its own EXEMPT set — and that parity test
    * is this program's rollout-ordering mechanism, not an inconvenience.
    */
-  app.get('/api/lifecycle', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995: session-written text
+  app.get('/api/lifecycle', async (req, reply) => {
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
@@ -3303,7 +3298,7 @@ export function registerCoordRoutes(
    * `intent` because both come off the same live claim rows and the session
    * line renders both (D12 ruling 3).
    */
-  app.get('/api/peers', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995: session-written text
+  app.get('/api/peers', async (req, reply) => {
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
@@ -3668,7 +3663,7 @@ export function registerCoordRoutes(
    * project's rows verbatim (`allClaims`), ended included: the same read
    * the project arm's `all` gives one project.
    */
-  app.get('/api/claims', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995: session-written text
+  app.get('/api/claims', async (req, reply) => {
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
@@ -3850,7 +3845,7 @@ export function registerCoordRoutes(
    * stored, `DEVIATION_ALLOC_STATES`'s own D4 argument — so a phone can see
    * it without owning a clock policy.
    */
-  app.get('/api/ledger', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995
+  app.get('/api/ledger', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'GET /api/ledger')) return;
     const q = req.query as { project?: unknown };
@@ -4244,7 +4239,7 @@ export function registerCoordRoutes(
    * box" left to scope (CLAUDE.md: "Identity on the fleet is attribution,
    * not authentication: single UNIX user, ccd has no caller auth").
    */
-  app.get('/api/asks', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995
+  app.get('/api/asks', async (req, reply) => {
     let viaBoxToken = false;
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
@@ -4647,7 +4642,7 @@ export function registerCoordRoutes(
   /** `GET /api/approvals/:id?fromId=&fromUuid=` — one row, redacted, for the claimant it was held for (spec §6.7:
    *  "the full input is on the row"). Box token and attribution, as `GET /api/asks` scopes a box-token caller: a
    *  session reads only a row held for it (`403` otherwise, and a row minted released was held for nobody). */
-  app.get('/api/approvals/:id', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995: session-written text
+  app.get('/api/approvals/:id', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
     if (!requireMailToken(req, reply, 'GET /api/approvals/:id')) return;

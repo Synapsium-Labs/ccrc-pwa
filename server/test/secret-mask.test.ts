@@ -22,7 +22,7 @@ vi.mock('web-push', () => {
   };
 });
 
-import { buildServer, WRITE_ANSWER_EXEMPT, type Deps } from '../src/server.js';
+import { buildServer, WRITE_ANSWER_EXEMPT, MASKED_GET_ROUTES, answerMasked, type Deps } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -845,9 +845,8 @@ describe('the review findings: every egress of session text is masked (D-5995)',
   });
 
   it('GET /api/digest and GET /api/ledger are masked like their siblings, as one frame each', () => {
-    const src = (...p: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...p), 'utf8');
-    expect(src('coord', 'routes.ts')).toMatch(/app\.get\('\/api\/ledger', \{ preSerialization: maskAnswer \}/);
-    expect(src('server.ts')).toMatch(/app\.get\('\/api\/digest', \{ preSerialization: maskAnswer \}/);
+    // the one answer hook masks both (D-5995)
+    for (const p of ['/api/digest', '/api/ledger']) expect(answerMasked('GET', p), p).toBe(true);
   });
 });
 
@@ -1092,10 +1091,10 @@ describe('the rulings: every egress of session-derived text goes through the mas
     const seen: string[] = [];
     for (const f of files) {
       const text = src(...f);
-      for (const m of text.matchAll(/app\.get\('(\/(?:api|ws)[^']*)'(, \{[^}]*\})?/g)) {
+      for (const m of text.matchAll(/app\.get\('(\/(?:api|ws)[^']*)'/g)) {
         const p = m[1]!;
         seen.push(p);
-        if ((m[2] ?? '').includes('preSerialization: maskAnswer')) continue;
+        if (MASKED_GET_ROUTES.has(p)) { expect(answerMasked('GET', p), p).toBe(true); continue; }
         if (INLINE[p] !== undefined) {
           expect(text.slice(m.index!, m.index! + 6000), `${p} masks inline`).toMatch(INLINE[p]!);
           continue;
@@ -1103,7 +1102,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
         expect(EXEMPT[p], `${p} is neither masked nor exempt`).toBeDefined();
       }
     }
-    for (const p of [...Object.keys(INLINE), ...Object.keys(EXEMPT)]) expect(seen, `${p} is still registered`).toContain(p);
+    for (const p of [...Object.keys(INLINE), ...Object.keys(EXEMPT), ...MASKED_GET_ROUTES]) expect(seen, `${p} is still registered`).toContain(p);
   });
 });
 
@@ -1362,13 +1361,14 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
 
   it('every write route is masked by the one write-answer hook, or exempt with a reason; the exemption names only auth and token routes', () => {
     const read = (f: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...f), 'utf8');
-    expect(read(['server.ts'])).toMatch(/app\.addHook\('preSerialization', \(req, _reply, payload, done\) => \{\s*done\(null, req\.method === 'GET' \|\| req\.method === 'HEAD' \|\| WRITE_ANSWER_EXEMPT\.test\(req\.routeOptions\.url \?\? ''\)\s*\? payload : \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(payload\)\);/);
+    expect(read(['server.ts'])).toMatch(/app\.addHook\('preSerialization', \(req, _reply, payload, done\) => \{\s*done\(null, answerMasked\(req\.method, req\.routeOptions\.url\) \? \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(payload\) : payload\);/);
     const seen: string[] = [];
     for (const f of routeFiles()) {
       for (const m of read(f).matchAll(/app\.(?:post|put|patch|delete)\('(\/[^']*)'/g)) {
         const p = m[1]!;
         seen.push(p);
         if (WRITE_ANSWER_EXEMPT.test(p)) expect(EXEMPT_WRITES[p], `${p} is exempt with no reason`).toBeDefined();
+        expect(answerMasked(m[0].includes('delete') ? 'DELETE' : 'POST', p), p).toBe(!WRITE_ANSWER_EXEMPT.test(p));
       }
     }
     expect(seen.length).toBeGreaterThan(60);

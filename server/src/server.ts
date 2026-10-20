@@ -192,6 +192,17 @@ const MAX_ATTACHMENTS = 4;
 /** D-5995: the write routes whose answers are never masked: the auth ceremonies and the box-token claim and rotation,
  *  whose answers a reader needs byte for byte and which carry no session text. */
 export const WRITE_ANSWER_EXEMPT = /^\/api\/(?:auth|token)\//;
+/** D-5995: the GET routes whose answers carry session-written text (a name, an ask summary, a reason, a run's or a
+ *  claim's text), masked by the one answer hook. Every other GET route is masked inline or exempt, with its reason,
+ *  in `secret-mask.test.ts`'s egress inventory. */
+export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
+  '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
+  '/api/runs', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/asks',
+  '/api/approvals/:id',
+]);
+/** Whether the one answer hook masks a route's answer (D-5995). */
+export const answerMasked = (method: string, url: string | undefined): boolean =>
+  (method === 'GET' || method === 'HEAD' ? MASKED_GET_ROUTES.has(url ?? '') : !WRITE_ANSWER_EXEMPT.test(url ?? ''));
 
 /**
  * Which `AuthStatus` fields an UNAUTHENTICATED caller may see on the exempt
@@ -1235,20 +1246,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
 
   const stateCachePath = deps.stateCachePath ?? defaultCachePath();
-  /** D-5995: a route answer carrying session-derived text is masked as one frame before it is serialized. */
-  // A callback hook, never an async one: it completes in the tick of the route's `reply.send`, so a handler that
-  // sends a refusal and then resolves is answered once.
-  const maskAnswer = (_req: FastifyRequest, _reply: FastifyReply, payload: unknown,
-    done: (err: Error | null, value?: unknown) => void): void => { done(null, (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(payload)); };
-  // D-5995: EVERY write route's answer is masked the same way, in one place, so no route can forget it: an inject
-  // answer carries the pane tail, the box's draft or the next dialog, and a claim conflict carries its intent. Exempt
-  // are only the answers that must reach their reader byte for byte: the auth ceremonies' challenges and options, and
+  // D-5995: route answers are masked as one frame each, in ONE hook, so no route can forget it: EVERY write route's
+  // answer (an inject answer carries the pane tail, the box's draft or the next dialog; a claim conflict carries its
+  // intent), and the GET routes in `MASKED_GET_ROUTES`, whose answers carry session-written text. Exempt writes are
+  // only those whose answers must reach their reader byte for byte: the auth ceremonies' challenges and options, and
   // the box token a claim hands out (`WRITE_ANSWER_EXEMPT`; none carries session text). A callback hook, never an
   // async one: it completes in the tick of the route's `reply.send`, so a handler that sends and then resolves is
   // answered once.
   app.addHook('preSerialization', (req, _reply, payload, done) => {
-    done(null, req.method === 'GET' || req.method === 'HEAD' || WRITE_ANSWER_EXEMPT.test(req.routeOptions.url ?? '')
-      ? payload : (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(payload));
+    done(null, answerMasked(req.method, req.routeOptions.url) ? (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(payload) : payload);
   });
 
   // Degraded mode: while the remote fleet host is unreachable, serve the
@@ -1257,7 +1263,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // an empty fleet. `stale`/`downSince` let the PWA bannner explain why.
   // D-5995: session text in a fleet answer (a name, an ask summary, a task's active form) is masked before it is
   // serialized, on every arm of the route.
-  app.get('/api/fleet', { preSerialization: maskAnswer }, async () => {
+  app.get('/api/fleet', async () => {
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState && !deps.fleetState.connected) {
       const snap = await loadSnapshot(stateCachePath);
       // NO `pools` KEY on this arm, deliberately: nothing about pools is
@@ -2187,7 +2193,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * the newest day whose window has closed. Session-gated when armed (not EXEMPT); no box token. A read: it changes
    * nothing, and it never sends the push (the beat in `watch.ts` does).
    */
-  app.get('/api/digest', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995: question and reason text
+  app.get('/api/digest', async (req, reply) => {
     if (!deps.coord) return refuseRoute(reply, 'not-configured');
     const q = (req.query ?? {}) as { day?: unknown };
     const hourUtc = readDigestHour(deps.cfg.ccrcDir);
@@ -3657,7 +3663,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return rec && cfgDir ? (await readTasks(deps.io, cfgDir, rec.uuid)).tasks : null;
   };
 
-  app.get('/api/sessions/:id/pr', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995: session-written text
+  app.get('/api/sessions/:id/pr', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
@@ -3946,7 +3952,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return runCcdOr502(reply, argv);
   });
 
-  app.get('/api/sessions/:id/workspace/audit', { preSerialization: maskAnswer }, async (req, reply) => {   // D-5995: session-written text
+  app.get('/api/sessions/:id/workspace/audit', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
