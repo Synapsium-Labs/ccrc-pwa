@@ -3339,6 +3339,7 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
         expect(t7Gate.labelCorrect('command', 'npm run test', `npm run test${c}x`, at7), `right ${c}`).toBe(false);
         expect(t7Gate.labelCorrect('command', 'npm run test', `${c}npm run test`, at7), `left ${c}`).toBe(false);
       }
+      expect(t7Gate.labelCorrect('command', 'npm run test', '(npm run test), then', at7), 'a comma after F is outside the ruled command rule (D-5789)').toBe(false);
       expect(t7Gate.labelCorrect('command', 'npm run test', '(npm run test) then', at7), 'CONTROL: brackets are not edges').toBe(true);
     });
 
@@ -3403,6 +3404,16 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
       expect(cmd('npm run test', 'npm run test $(date)'), '$( after').toBe(false);
       expect(cmd('npm run test', 'npm run test or npm test')).toBe(false);
       expect(cmd('npm run test', 'x OR npm run test')).toBe(false);
+    });
+
+    it('command: a flag at the start of the text before, or right after a hugging backtick pair, is still a flag', () => {
+      expect(cmd('npm run test', '-v npm run test'), 'a flag at the value start').toBe(false);
+      expect(cmd('npm run test', '`npm run test`-v'), 'a flag right after the backtick pair').toBe(false);
+    });
+
+    it('command: a digit flag counts as a flag', () => {
+      expect(cmd('git status', 'git status -1')).toBe(false);
+      expect(cmd('npm run test', 'npm run test -1')).toBe(false);
     });
 
     it('command: an F that itself holds a flag, a pipe or && is answered exactly', () => {

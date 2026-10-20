@@ -1215,11 +1215,12 @@ const PATH_RIGHT = /[A-Za-z0-9._/-]/;
 const PATH_TOKEN = /[A-Za-z0-9._/~-]+/g;
 const CMD_EDGE = /[A-Za-z0-9_./:=@+-]/;
 const CMD_ALTERNATIVE = /\s(or|OR)\s/;
-/** What a COMMAND answer may not carry outside F's own occurrence (D-5789): a flag token, a command separator or
- *  redirect, a comma or backtick, or a command substitution; the error kind uses CMD_ALTERNATIVE alone. */
-const CMD_EXTRA = Object.freeze([/(^|\s)--?[A-Za-z0-9]/, /[;|&><,`]/, /\$\(/]);
+/** The four tests a COMMAND answer may not pass outside F's own occurrence (D-5789), as one list: the alternative
+ *  (` or `/` OR `), a flag token, a command separator or redirect, a comma or backtick, and a command substitution.
+ *  The regex for the alternative is defined once, above; the error kind uses CMD_ALTERNATIVE alone. */
+const CMD_EXTRA = Object.freeze([CMD_ALTERNATIVE, /(^|\s)--?[A-Za-z0-9]/, /[;|&><,`]/, /\$\(/]);
 /** @param {string} text */
-const cmdCarriesMore = (text) => CMD_ALTERNATIVE.test(text) || CMD_EXTRA.some((re) => re.test(text));
+const cmdCarriesMore = (text) => CMD_EXTRA.some((re) => re.test(text));
 
 /**
  * Every index at which `needle` starts in `text` (overlapping occurrences included).
