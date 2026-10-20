@@ -20,7 +20,7 @@ Home project: `ccrc-pwa`   Brief: GitHub #218   Workspace: **a fresh child per w
 
 | # | scope | deploy class | tasks | PRs | state |
 |---|---|---|---|---|---|
-| 1 | observe: lexicon, deny rules, switches and `_mem_headroom`, installer in measure mode, the tenth node file, `FleetSession.claude`, chip and facts, the Settings card read-only | AGENT-FIRST (fleet), then server; PWA after S7a, S16, R2b1, R2b2 | CB1a to CB1h | #726 (CB1a); CB1b (D-5696) in review | in progress |
+| 1 | observe: lexicon, deny rules, switches and `_mem_headroom`, installer in measure mode, the tenth node file, `FleetSession.claude`, chip and facts, the Settings card read-only | AGENT-FIRST (fleet), then server; PWA after S7a, S16, R2b1, R2b2 | CB1a to CB1h | #726 (CB1a); #878 (CB1b) | in progress |
 | 2 | the roll: strict resume, the spawn carrier, `ccd roll` gate, act, canary health; the server's argv, holds, token and route; Restart onto | AGENT-FIRST (fleet), then server; PWA after S2d | CB2a to CB2h | — | not started |
 | 2a | the first manual canary, per (node, lane kind) | operator act | OA-2, OA-3 | — | not started |
 | 3 | install: intent and projection, pull, routes, canary approval, installer live, launcher adopted, descriptor, prune, bootstrap, Settings controls | AGENT-FIRST (the launcher is every lane's exec path), deployed by OA-4 | CB3a to CB3j | — | not started |
