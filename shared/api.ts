@@ -11,6 +11,7 @@
 import type { Hue, RosterKindWire } from './roster.js';
 import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
+import type { AccountStateAnswer, LaneState } from './accounts.js';
 import type { BoxTokenView } from './box-token.js';
 import type { WorkflowView } from './workflows.js';
 
@@ -4000,6 +4001,52 @@ export interface AccountsResponse {
    *  all. This is what lets the PWA label and colour an account before any
    *  telemetry for it exists. */
   roster: RosterWire[];
+  /** Each lane's state and what the screen may show about its credential (spec §3.4, §13.1; D-5517), keyed by lane
+   *  id, read from `~/.cc-sessions/.accounts/<id>.json` in the `readLimits` pass. ONLY for a reader with the
+   *  session verdict (D-5511): a dark gate's reader gets today's three fields and nothing else, and an armed gate
+   *  refuses a box token before the handler. Never persisted by `offline.ts` (G15). Accounts plan Task A12. */
+  lanes?: Record<string, LaneWire>;
+  /** What the screen needs to offer an act, and why it cannot: session verdict only, as `lanes`. */
+  connect?: AccountsConnect;
+}
+
+/** One lane on `GET /api/accounts` (spec §13.1; accounts plan Task A12). `state` is `stateWordFor`'s answer
+ *  (`shared/accounts.ts`); every other field is the lane-state file's, held to its grammar (`laneStateOf`) and masked
+ *  on the server, its times in epoch ms. Absent fields were absent or off their grammar in the file. `ready` is the
+ *  file's own account of A13's three conditions (a credential recorded, a seed verified after the last run, a last
+ *  check of `ok`): display only, never `enable`'s authority, which reads the file on the box (D-5518). */
+export interface LaneWire {
+  state: AccountStateAnswer;
+  check?: { verdict: string; at: number };
+  identity?: string;
+  identitySource?: LaneState['identitySource'];
+  keyHint?: string;
+  validatedAt?: number;
+  credit?: { limit: number | null; remaining: number | null };
+  mintedAt?: number;
+  ready: boolean;
+  notReadyReason?: LaneNotReadyReason;
+}
+
+/** Why `LaneWire.ready` is false, the first that applies: the lane state is absent or unreadable, no last check of
+ *  `ok`, or no seed verified after the last run. */
+export const LANE_NOT_READY_REASONS = ['no-lane-state', 'not-checked', 'seed-unverified'] as const;
+export type LaneNotReadyReason = (typeof LANE_NOT_READY_REASONS)[number];
+
+/** The cap words `ccd caps` advertises for the account subs (N4; spec §13): `account-v2` is the first wave's write
+ *  subs, advertised by the box task that ships them (A16); each later wave appends its own word. Accounts plan Task
+ *  A12 reads `account-v2` for `connect.accountOps`. */
+export const ACCOUNT_CAPS = ['account-v2'] as const;
+export type AccountCap = (typeof ACCOUNT_CAPS)[number];
+
+/** `GET /api/accounts`'s `connect` (spec §12.6, §13.1; D-5511): whether the fleet can run the account subs
+ *  (`account-v2` in its measured caps, the refusing no-evidence polarity), the gate's posture, `cfg.origin`'s class,
+ *  and the first instant this session's step-up is no longer fresh (absent: none). */
+export interface AccountsConnect {
+  accountOps: 'available' | 'unsupported';
+  gate: 'armed' | 'dark';
+  origin: AccountOriginClass;
+  stepUpFreshUntil?: number;
 }
 
 /** Wire shape of `/ws/fleet`, the single source of truth for both ends — it
@@ -11810,8 +11857,9 @@ export const ACCOUNT_ACTS = [
 ] as const;
 export type AccountAct = (typeof ACCOUNT_ACTS)[number];
 
-/** The acts that name no lane, so their row's `laneId` is NULL (and only theirs). */
-export const ACCOUNT_LANELESS_ACTS: readonly AccountAct[] = ['step-up-locked', 'management-remove', 'ceiling-lower'];
+/** The acts that may name no lane, so their row's `laneId` is NULL (and only theirs). `reconcile` names its lane after
+ *  a failed op and none after a roster disagreement (D-6057). */
+export const ACCOUNT_LANELESS_ACTS: readonly AccountAct[] = ['step-up-locked', 'management-remove', 'ceiling-lower', 'reconcile'];
 
 /** How an act ended (D-5516): `unknown` is the outcome-unknown state of D-5518, never retried on its own. */
 export const ACCOUNT_OUTCOMES = ['ok', 'refused', 'failed', 'unknown'] as const;

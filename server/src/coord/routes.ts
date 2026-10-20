@@ -4456,9 +4456,14 @@ export function registerCoordRoutes(
       : null;
     const parent = verdict.parent;
     const notifyAt = now + approvalWindowMs(agentId);
+    // The stored input is what the signed ruling carries unmasked (`GET /api/approvals/:id/ruling`), so the
+    // exact-bytes pass runs HERE, on the raw input before the redactor and the cap: a fingerprinted lane key that has
+    // no shape is masked in the row, the brief and the ruling alike (D-5995 (10), D-6057 (3)). The digest
+    // the ruling is signed over is of the unredacted input, so this changes no signature.
+    const stored = redactedStored((deps.masker ?? SHAPE_ONLY_MASKER).maskText(shown));
     const id = coord.insertApproval({
       childId: rec.id, parentId: parent, runId: verdict.runId, digest, nonce, agentId, tool,
-      inputRedacted: redactedStored(shown), truncated: truncated === true, class: cls, askAt: now, notifyAt,
+      inputRedacted: stored, truncated: truncated === true, class: cls, askAt: now, notifyAt,
       ...(releaseReason === null ? {} : { releaseReason }),
     });
     if (releaseReason !== null) {
@@ -4468,7 +4473,7 @@ export function registerCoordRoutes(
     approvalInputs.set(id, { tool, input, cwd: cwdTrusted ? cwd : null, until: notifyAt });
     queueSystemMail(coord, null, {
       fromId: 'operator', toId: parent, runId: null, kind: 'question', subject: approvalNudgeSubject(id),
-      body: renderApprovalBrief({ id, childId: rec.id, tool, agentId, inputRedacted: redactedStored(shown), class: cls, digest, notifyAt }),
+      body: renderApprovalBrief({ id, childId: rec.id, tool, agentId, inputRedacted: stored, class: cls, digest, notifyAt }),
     });
     const accepted: ApprovalRequestAccepted = { id, waitS: Math.floor((notifyAt - now) / 1000) };
     return reply.code(201).send(accepted);

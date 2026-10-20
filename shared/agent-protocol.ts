@@ -177,6 +177,13 @@ export type NodeFileKey = keyof typeof NODE_FILES;
  *  scan over it read this, never a restatement. */
 export const NODE_FILE_BASENAMES: readonly string[] = Object.values(NODE_FILES);
 
+/** The lane-state directory's name inside `~/.cc-sessions` (D-5517, D-5755): `~/.cc-sessions/.accounts/<id>.json`,
+ *  written by `deploy/account-op.mjs`'s `lane-state` op (bare Node, which spells it once in `laneStateDir`). Read by
+ *  the server's `readLaneStates` (`server/src/limits.ts`) over the agent's `read` op, which opens a file directly in
+ *  this directory with `O_NOFOLLOW`, so a symlink planted at a lane's name reads as unreadable, never as its target
+ *  (accounts plan Task A12; D-5755 (13d)). */
+export const LANE_STATE_DIR_NAME = '.accounts';
+
 /** The shape of a node id, `NODE_FILES.nodeId`'s one line: the lowercase uuid `_inst_node_id` mints and nothing else,
  *  so an uppercase, padded or CR-terminated `~/.ccrc/node-id` never becomes a row key or a `fleetIdentity`. Declared
  *  ONCE, here, beside the file it reads (moved from `server/src/coord/store.ts`, which re-exports it, so the agent's
