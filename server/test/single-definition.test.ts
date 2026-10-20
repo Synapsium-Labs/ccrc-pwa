@@ -6775,25 +6775,28 @@ describe('the ask window, its deadline and the untrusted-data fence are each def
 // the definer and the lane, neither of which reaches a write. Its numbers and its holds are spelled once, in the definer.
 describe('D-5370: the stop-done lane’s kill switch has no writer, and its constants one home', () => {
   const NAME = 'stop-done-disabled';
-  const DEFINER = 'server/src/stopDone.ts';
+  const DEFINER = 'shared/switches.ts'; // the kill switch's switchboard row since D-5855; stopDone.ts re-exports it
+  /** The lane's numbers and holds stay in their own L1 definer. */
+  const LANE_DEFINER = 'server/src/stopDone.ts';
   it('no shell line names it, and its one TS holder is its definer, which reaches no node: module', () => {
     expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
     expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
       .toEqual([DEFINER]);
     expect(stallCode(path.join(ccrcRoot, DEFINER))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
   });
-  it('the files that name STOP_DONE_DISABLED_MARKER are the definer and the lane, and neither reaches a write', () => {
+  it('the files that name STOP_DONE_DISABLED_MARKER are the definer, its re-exporter and the lane, and none reaches a write', () => {
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
     const holders = ALL.filter((f) => stallCode(f).includes('STOP_DONE_DISABLED_MARKER')).map(rel).sort();
-    expect(holders).toEqual([DEFINER, 'server/src/stopDoneSweep.ts']);
+    expect(holders).toEqual([LANE_DEFINER, 'server/src/stopDoneSweep.ts', DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
-  it('each of its constants and its hold list is declared once, in the definer', () => {
+  it('each of its constants and its hold list is declared once: the kill switch in its row, the rest in the lane', () => {
     for (const c of ['STOP_DONE_GRACE_MS', 'STOP_DONE_PER_PASS', 'STOP_DONE_MEASURES_PER_PASS', 'STOP_DONE_SWEEP_MS',
       'STOP_DONE_RETRY_MS', 'STOP_DONE_DISABLED_MARKER', 'STOP_DONE_HOLDS', 'STOP_DONE_HOLD_MAP']) {
       const decl = new RegExp(`\\b(?:const|let|var)\\s+${c}\\b`);
-      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c).toEqual([DEFINER]);
+      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c)
+        .toEqual([c === 'STOP_DONE_DISABLED_MARKER' ? DEFINER : LANE_DEFINER]);
     }
   });
 });
