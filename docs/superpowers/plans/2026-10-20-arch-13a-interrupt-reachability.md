@@ -20,7 +20,7 @@
 
 While the server ships an envelope, Deny is never refused `background-only`. The route presses Escape over delegated work and over a background shell, for approval and question envelopes alike.
 
-The refusal can still reach the sheet through a race. The approval is answered somewhere else (the terminal, another client). The main turn stops over delegated work, or the main loop goes idle over a background shell. The operator presses Deny before the stream's `ask_cleared` closes the sheet. That Deny gets `409 background-only`, and today the sheet calls it "may be idle or the request already resolved". The second half of that copy is true, but the sheet throws away the count and kinds the server sent. So the case is **reachable, narrowly**, and step 2 is worth doing.
+The refusal can still reach the sheet through a race. The approval is answered somewhere else (the terminal, another client). The main turn stops over delegated work, or the main loop goes idle over a background shell. The operator presses Deny before the stream's `ask_cleared` closes the sheet. That Deny gets `409 background-only`, and today the sheet calls it "may be idle or the request already resolved". The second half of that copy is true, but the sheet throws away the count and kinds the server sent. With a connected client that window is short, because the next main `working` or `done` write clears the ask within one 2 s poll. The realistic window is a stale sheet after a reconnect: the PWA store keeps the ask through the socket's automatic reconnects until the fresh connect's `ask_cleared` arrives (`stores/session.ts`), so a phone that wakes can show the old sheet with a live Deny, and Deny goes out over HTTP before that `ask_cleared` lands. So the case is **reachable, narrowly**, and step 2 is worth doing.
 
 ## Tests
 
@@ -47,11 +47,14 @@ Measured on a `git archive` copy of `origin/main` with the new test file overlai
 | M5: `hookstate.ts` refuses an approval envelope | tests 1, 5 |
 | M6: a pending wait is refused as background-only | tests 1, 2 (and three D-5236 tests) |
 | M7: the harness drops the fixture's ask | tests 1, 2, 5 |
+| M8: the `shell` check runs before `dialogPending` | tests 1, 2 (and two D-5236 tests) |
+| M9: `readHookState` returns an ask only when the state is `waiting` | test 5 only (intended: a future hardening of that read updates test 5, it does not delete it) |
 
 ## What step 2 needs
 
 - `EnvelopeSheet`'s Deny reads `backgroundOnlyRefusal(err.body)` on a 409 and shows the background-work wording. Every other 409 keeps today's copy.
-- The wording must have one owner. `SessionScreen` writes it inline today. Step 2 moves it into one helper that both screens call, so that it is not written twice. That edit touches `SessionScreen.tsx`, which the skins chains hold, so step 2 waits for them. `shared/api.ts` is held by #1008 now. The helper belongs in the PWA, not in `shared/`.
+- The shared helper builds only the count-and-kinds clause. The Deny caller frames it as "the request already resolved; N background tasks are still running". It must not reuse `SessionScreen`'s Escape sentence word for word, because in the Deny race the approval was already answered elsewhere.
+- The wording must have one owner. `SessionScreen` writes it inline today. Step 2 moves it into one helper that both screens call, so that it is not written twice. That edit touches `SessionScreen.tsx`, which the skins chains hold, so step 2 waits for them. Re-run `gh pr list --json files` at step-2 time before treating it as blocked. `shared/api.ts` is held by #1008 now. The helper belongs in the PWA, not in `shared/`.
 - A render test: a 409 `background-only` reply to Deny produces the background-work wording, with and without a count.
 - Renders at 360, 390, 1280 and 1920 widths, in both skins and both themes.
 - The issue closes after step 2 lands. Step 1 meets the first acceptance criterion only.
