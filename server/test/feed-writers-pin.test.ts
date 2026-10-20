@@ -1122,3 +1122,80 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
   });
 });
 
+
+// ─── D-5859 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1e; ARCH-54 (#789)) ──
+//
+// APPENDED. The executors' five writers move onto the funnel (`notice.ts`). Every row above stays as it is; these add
+// what a move could break unseen: each writer HANDED a push sink, with the operator looking and not looking, records
+// and never pushes (a funnel mode that pushes when no one looks would show here, and nowhere above for the kept, expiry
+// and dead-coordinator rows, whose rigs hand no push or only a visible presence); and a failed archive leaves the
+// reclaim executor's own result and its run's stored rows exactly as a landing archive leaves them.
+
+describe('the executors\' writers, handed a push sink: recorded whatever the presence, never pushed (D-5859)', () => {
+  const EXPIRE_ID = 'acct-a-project-a';
+  const CLAIMANT = 'acct-a-project-a-coordinator';
+  const ONE: DeadCoordinatorActOutcome = { kind: 'would-end', programmes: [{ slug: 'prog-a', runIds: [11] }] };
+  /** Sinks with a push and a presence that says `visible` for every session the rows below name. */
+  const sinks = async (visible: boolean) => {
+    const home = mkTmp('ccrc-feed-pin-c1e-');
+    const rec = await feedRecorder(home);
+    rec.setVisible(visible ? [A, EXPIRE_ID, CLAIMANT] : []);
+    return { home, rec, deps: { coord: rec.coord, notifyLog: rec.notifyLog, presence: rec.presence, push: rec.push } };
+  };
+  /** The expiry writer's input, from the executor itself (no expire capability: `deferred` before any argv). */
+  const expiryOutcome = async (home: string, rec: FeedRecorder) => {
+    const base = testDeps(home, async () => ({ code: 1, stdout: '', stderr: '' }));
+    mkdirSync(base.cfg.registryDir, { recursive: true });
+    const deps: ExpireArchivedDeps = { coord: rec.coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
+      fleetState: { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: [] },
+      presence: rec.presence, notifyLog: rec.notifyLog };
+    return { deps, out: await expireArchived(deps, { sessionId: EXPIRE_ID, archivedAt: 1_789_000_000, expiresAt: 1_789_604_800 }) };
+  };
+
+  it.each([false, true])('the kept row and the kept-leaf row (visible %s): ring and archive, never a push', async (visible) => {
+    const { rec, deps } = await sinks(visible);
+    recordChildReclaimKeptFeed(deps, KEPT);
+    recordChildReclaimLeafKeptFeed(deps, LEAF);
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive', 'record', 'archive']);
+    expect(rec.archived.map((e) => e.title)).toEqual([CHILD_RECLAIM_KEPT_FEED_TITLE, CHILD_RECLAIM_LEAF_KEPT_FEED_TITLE]);
+    expect(rec.pushes).toEqual([]);
+  });
+
+  it.each([false, true])("expiry's row (visible %s): ring and archive, never a push", async (visible) => {
+    const { home, rec } = await sinks(visible);
+    const { deps, out } = await expiryOutcome(home, rec);
+    const at = rec.mark();
+    recordExpireFeed({ ...deps, push: rec.push }, out);
+    expect(withoutFlush(rec.since(at))).toEqual(['record', 'archive']);
+    expect(rec.archived.map((e) => [e.sessionId, e.title])).toEqual([[EXPIRE_ID, 'archived workspace cleanup deferred']]);
+    expect(rec.pushes).toEqual([]);
+  });
+
+  it.each([false, true])("the dead coordinator's batch (visible %s): ring and archive, never a push", async (visible) => {
+    const { rec, deps } = await sinks(visible);
+    recordDeadCoordinatorFeed(deps, CLAIMANT, ONE, Date.UTC(2026, 9, 1));
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
+    expect(rec.archived.map((e) => [e.sessionId, e.title])).toEqual([[CLAIMANT, 'dead coordinator: programme would be ended']]);
+    expect(rec.pushes).toEqual([]);
+  });
+
+  it("a failed archive leaves the reclaim executor's result and its run's stored rows as a landing archive leaves them",
+    async () => {
+      const stored = async (fail: boolean) => {
+        const r = await reclaimRig(false);
+        if (fail) r.rec.archiveThrowsOn('every');
+        const out = await r.reclaim();
+        const run = r.rec.coord.run(r.runId);
+        const events = r.rec.coord.runEvents(r.runId).map(({ at: _at, ...e }) => e);
+        return { out, run: JSON.stringify(run).replace(/"(?:[a-zA-Z]*At|at|updated|created)":\d+/g, ''), events,
+          archived: r.rec.archived.length, pushes: r.rec.pushes.length };
+      };
+      const landed = await stored(false);
+      const failed = await stored(true);
+      expect([landed.archived, failed.archived], 'the premise: one archive landed, one failed').toEqual([1, 0]);
+      expect(failed.out).toEqual(landed.out);
+      expect(failed.run).toEqual(landed.run);
+      expect(failed.events).toEqual(landed.events);
+      expect([landed.pushes, failed.pushes]).toEqual([0, 0]);
+    });
+});
