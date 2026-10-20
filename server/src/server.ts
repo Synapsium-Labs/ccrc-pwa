@@ -50,7 +50,8 @@ import { projectReadiness } from './readiness.js';
 import { sessionCommands } from './commands.js';
 import { CLIP_MIME, CLIP_NAME_RE, clipPath, clipStem, isSafeSessionId, stageUpload } from './clip.js';
 import type { SpawnPty } from './pty.js';
-import { SHAPE_ONLY_MASKER } from './accounts/mask.js';
+import { SHAPE_ONLY_MASKER, type SecretMasker } from './accounts/mask.js';
+import { maskBody, maskedError, maskFleetFrame } from './accounts/egress.js';
 import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
@@ -178,8 +179,10 @@ const UPLOAD_EXT_RE = new RegExp(`\\.(${CLIP_EXT_ALT})$`, 'i');
 /** Ceiling on attachments per prompt — a sanity bound, not a UX limit. */
 const MAX_ATTACHMENTS = 4;
 /** D-5995: the write routes whose answers are never masked: the auth ceremonies and the box-token claim and rotation,
- *  whose answers a reader needs byte for byte and which carry no session text. */
-export const WRITE_ANSWER_EXEMPT = /^\/api\/(?:auth|token)\//;
+ *  whose answers a reader needs byte for byte and which carry no session text, and the upload, whose answer is the
+ *  clip path the server staged from the name of the file the operator picked (a name like `sk-learn-notes.md` must
+ *  come back as staged, or the prompt names a file that is not there). */
+export const WRITE_ANSWER_EXEMPT = /^\/api\/(?:auth\/|token\/|sessions\/:id\/upload$)/;
 /** D-5995: the GET routes whose answers carry session-written text (a name, an ask summary, a reason, a run's or a
  *  claim's text), masked by the one answer hook. Every other GET route is masked inline or exempt, with its reason,
  *  in `secret-mask.test.ts`'s egress inventory. */
@@ -1103,16 +1106,34 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // the box token a claim hands out (`WRITE_ANSWER_EXEMPT`; none carries session text). A callback hook, never an
   // async one: it completes in the tick of the route's `reply.send`, so a handler that sends and then resolves is
   // answered once.
-  app.addHook('preSerialization', (req, _reply, payload, done) => {
-    done(null, answerMasked(req.method, req.routeOptions.url) ? (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(payload) : payload);
+  // The fleet answer keeps each row's server-built identity fields as they are (`maskFleetFrame`).
+  const maskedSend = new WeakSet<FastifyReply>();
+  app.addHook('preSerialization', (req, reply, payload, done) => {
+    if (!answerMasked(req.method, req.routeOptions.url)) { done(null, payload); return; }
+    maskedSend.add(reply);
+    const mk = deps.masker ?? SHAPE_ONLY_MASKER;
+    done(null, req.routeOptions.url === '/api/fleet' ? maskFleetFrame(mk, payload) : mk.maskDeep(payload));
+  });
+  // D-5995, the backstop behind it: `preSerialization` never runs for a string, Buffer or stream body, nor for an
+  // error's answer, so on the same routes a body that hook did not mask is masked as text here (a binary media type
+  // passes). A callback hook, for the reason above.
+  app.addHook('onSend', (req, reply, payload, done) => {
+    done(null, maskedSend.has(reply) || !answerMasked(req.method, req.routeOptions.url)
+      ? payload : maskBody(deps.masker ?? SHAPE_ONLY_MASKER, payload, reply.getHeader('content-type')));
+  });
+  // D-5995: the default error handler answers with `err.message`, on EVERY route, masked or exempt, so the message is
+  // masked first and the error handed on to it (a throw here reaches the default handler, which sets the status and
+  // logs). The docs plugin's own handler sits below this one, and hands its defects up to it.
+  app.setErrorHandler((err, _req, _reply) => {
+    throw maskedError(deps.masker ?? SHAPE_ONLY_MASKER, err);
   });
 
   // Degraded mode: while the remote fleet host is unreachable, serve the
   // last-known-good snapshot (fleetstate.ts, written by FleetWatcher on every
   // successful poll) instead of a live assemble that would otherwise read as
   // an empty fleet. `stale`/`downSince` let the PWA bannner explain why.
-  // D-5995: session text in a fleet answer (a name, an ask summary, a task's active form) is masked before it is
-  // serialized, on every arm of the route.
+  // D-5995: session text in a fleet answer (an ask summary, a task's active form) is masked before it is serialized,
+  // on every arm of the route; each row's server-built identity fields (its id, its names) are kept as they are.
   app.get('/api/fleet', async () => {
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState && !deps.fleetState.connected) {
       const snap = await loadSnapshot(stateCachePath);
@@ -1405,6 +1426,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     };
   });
 
+  // D-5995: a broadcast is masked and serialized ONCE, and that text handed to every socket: the bus hands each
+  // listener the same object, which keys the cache. It is masked again only once the masker's keys or rows have
+  // changed (`version`), so a later socket's cold frame is never one masked under fewer keys.
+  const frameCache = new WeakMap<object, { v: number; json: string }>();
+  const maskedFrame = (key: object, frame: (mk: SecretMasker) => FleetMsg): string => {
+    const mk = deps.masker ?? SHAPE_ONLY_MASKER;
+    const v = mk.version;
+    const hit = frameCache.get(key);
+    if (hit !== undefined && hit.v === v) return hit.json;
+    const json = JSON.stringify(frame(mk));
+    frameCache.set(key, { v, json });
+    return json;
+  };
   app.get('/ws/fleet', { websocket: true }, (socket) => {
     // The dormant protocol handshake (Rider E): sent SYNCHRONOUSLY, before the
     // awaited assembleFleet below, so it is always the first frame a client
@@ -1413,10 +1447,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // silently (fleet.ts), so this costs nothing while FLEET_PROTO_MIN stays
     // at FLEET_PROTO; it only bites the day MIN is raised on purpose.
     socket.send(JSON.stringify({ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO_MIN } satisfies FleetMsg));
-    // D-5995: the session-derived frames (fleet, notice, runs, coord) are masked before they are serialized.
-    const mk = deps.masker ?? SHAPE_ONLY_MASKER;
+    // D-5995: the session-derived frames (fleet, notice, runs, coord) are masked before they are serialized, once per
+    // broadcast (`maskedFrame`); a fleet row's server-built identity fields are kept as they are (`maskFleetFrame`).
     const sendFleet = (sessions: FleetSession[]) =>
-      socket.send(JSON.stringify(mk.maskDeep({ type: 'fleet', sessions } satisfies FleetMsg)));
+      socket.send(maskedFrame(sessions, (mk) => maskFleetFrame(mk, { type: 'fleet', sessions } satisfies FleetMsg)));
     // THE COLD FRAME IS THE WATCHER'S LAST BROADCAST once there is one
     // (`currentFleet`), and a snapshot is assembled only before it. The watcher
     // re-emits only on change (`lastJson`), so a cold frame that differs from
@@ -1432,11 +1466,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       broadcastSeen = true;
       sendFleet(sessions);
     };
-    const onNotice = (n: Notice) => socket.send(JSON.stringify(mk.maskDeep({ type: 'notice', ...n } satisfies FleetMsg)));
+    const onNotice = (n: Notice) => socket.send(maskedFrame(n, (mk) => mk.maskDeep({ type: 'notice', ...n } satisfies FleetMsg)));
     const onRuns = (runs: RunSummary[]) =>
-      socket.send(JSON.stringify(mk.maskDeep({ type: 'runs', runs } satisfies FleetMsg)));
+      socket.send(maskedFrame(runs, (mk) => mk.maskDeep({ type: 'runs', runs } satisfies FleetMsg)));
     const onCoord = (coord: CoordStatus) =>
-      socket.send(JSON.stringify(mk.maskDeep({ type: 'coord', coord } satisfies FleetMsg)));
+      socket.send(maskedFrame(coord, (mk) => mk.maskDeep({ type: 'coord', coord } satisfies FleetMsg)));
     const onPools = (pools: ProjectPoolsWire) =>
       socket.send(JSON.stringify({ type: 'pools', pools } satisfies FleetMsg));
     // §1.6's census. NO COLD START, deliberately: the sweep's own byte-equality
@@ -1593,7 +1627,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // this SAME `askDeps`/`queue`, not a second one it builds for itself, so
   // both routes agree on the one per-session lock. `knownId` stays where it
   // was: nothing here depends on it.
-  const sendDeps: SendDeps = { tmux: deps.tmux, queue: deps.queue };
+  // `maskDraft`: the 409's `draft` reached the client masked, so "Send it" may claim the box in its masked form (D-5995).
+  const sendDeps: SendDeps = { tmux: deps.tmux, queue: deps.queue, maskDraft: (t) => (deps.masker ?? SHAPE_ONLY_MASKER).maskText(t) };
   // Same queue/tmux as sendDeps — answerAsk and sendPrompt/answerDialog must
   // serialize through the ONE per-session lock, not independent ones.
   const askDeps: AskDeps = {

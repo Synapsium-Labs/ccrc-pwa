@@ -224,7 +224,7 @@ export async function closeRun(
   // D-2545. THE ROW IS THERE AND THIS PROCESS CANNOT REPRESENT ITS INTEGERS —
   // a different condition from "no such run", answered before any fleet act
   // and in words, never by throwing: `CoordMutex.run` is `try`/`finally` with
-  // no catch and there is no `app.setErrorHandler` anywhere in `server/src`,
+  // no catch and the root `app.setErrorHandler` only masks the message (D-5995),
   // so a throw here became a bare Fastify 500 with no `CloseOutcome` shape at
   // all. `hold-invalid` is the right existing code rather than a new one: the
   // refusal is that a persisted number in the hold's own domain cannot be

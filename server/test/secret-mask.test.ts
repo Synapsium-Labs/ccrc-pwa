@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { DatabaseSync } from 'node:sqlite';
+import { Readable } from 'node:stream';
 
 const sent = vi.hoisted(() => [] as string[]);
 vi.mock('web-push', () => {
@@ -39,7 +40,7 @@ import { PushService } from '../src/push.js';
 import { askPushBody } from '../src/askbody.js';
 import { NotifyLog } from '../src/notifylog.js';
 import {
-  SecretMasker, DrawerMask, fingerprintOf, fingerprintGeneration, fingerprintRow, shapeMatchers, RUNS_PER_CHUNK, MAX_CHUNKS,
+  SecretMasker, SHAPE_ONLY_MASKER, DrawerMask, fingerprintOf, fingerprintGeneration, fingerprintRow, shapeMatchers, RUNS_PER_CHUNK, MAX_CHUNKS,
 } from '../src/accounts/mask.js';
 import { approvalsFixture, CHILD, PARENT } from './approvalsHarness.js';
 import { saveSnapshot } from '../src/fleetstate.js';
@@ -785,10 +786,11 @@ describe('the review findings: every egress of session text is masked (D-5995)',
 
   const session = (id: string): FleetSession => ({
     id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
-    workspace: null, name: `n ${OAT}`, status: 'idle', statusUpdatedAt: null, limits: null,
+    // The live name is the operator's (a server-built field, kept as typed): the keys ride in session text.
+    workspace: null, name: 'n demo', status: 'idle', statusUpdatedAt: null, limits: null,
     dialogPending: false, version: null, model: null, effort: null, ultracode: false,
     branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-    hookState: null, askSummary: `paste ${ORKEY}`, subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
+    hookState: null, askSummary: `paste ${ORKEY} then ${OAT}`, subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
     unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
     started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
   });
@@ -1053,7 +1055,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
   const src = (...p: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...p), 'utf8');
   /** Masked inside the handler (a `maskDeep`/`maskText` call, a masked stream or a drawer): path → what masks it. */
   const INLINE: Record<string, RegExp> = {
-    '/ws/fleet': /mk\.maskDeep\(\{ type: 'fleet'/,
+    '/ws/fleet': /maskedFrame\(sessions, \(mk\) => maskFleetFrame\(mk, \{ type: 'fleet'/,
     '/ws/session/:id': /new SessionStream\(/,   // SessionStream's one `send` masks every frame
     '/ws/pty/:id': /\.drawer\(\(text\) => socket\.send\(text\)\)/,
     '/api/notifications/catchup': /maskDeep\(deps\.notifyLog\.catchUp/,
@@ -1357,11 +1359,12 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     '/api/auth/step-up/passphrase': 'the auth state',
     '/api/token/claim': 'the box token a claim hands out, which its holder needs byte for byte',
     '/api/token/rotate': 'the rotated box token',
+    '/api/sessions/:id/upload': 'the clip path staged from the name of the file the operator picked; no session text',
   };
 
-  it('every write route is masked by the one write-answer hook, or exempt with a reason; the exemption names only auth and token routes', () => {
+  it('every write route is masked by the one write-answer hook, or exempt with a reason; the exemption names only auth and token routes and the upload', () => {
     const read = (f: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...f), 'utf8');
-    expect(read(['server.ts'])).toMatch(/app\.addHook\('preSerialization', \(req, _reply, payload, done\) => \{\s*done\(null, answerMasked\(req\.method, req\.routeOptions\.url\) \? \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(payload\) : payload\);/);
+    expect(read(['server.ts'])).toMatch(/app\.addHook\('preSerialization', \(req, reply, payload, done\) => \{\s*if \(!answerMasked\(req\.method, req\.routeOptions\.url\)\) \{ done\(null, payload\); return; \}\s*maskedSend\.add\(reply\);\s*const mk = deps\.masker \?\? SHAPE_ONLY_MASKER;\s*done\(null, req\.routeOptions\.url === '\/api\/fleet' \? maskFleetFrame\(mk, payload\) : mk\.maskDeep\(payload\)\);/);
     const seen: string[] = [];
     for (const f of routeFiles()) {
       for (const m of read(f).matchAll(/app\.(?:post|put|patch|delete)\('(\/[^']*)'/g)) {
@@ -1473,5 +1476,197 @@ describe('the post-merge audit: a key the TUI wraps early on its row (D-5995)', 
       d.dispose();
     }
     held.close();
+  });
+});
+
+describe('the post-merge audit\'s follow-ups: what the answer hook did not see (D-5995)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  /** A server over a one-session registry whose capture-pane answers `pane()` (read at every capture). */
+  const appOver = async (pane: () => string, masker?: SecretMasker, onKeys?: (args: string[]) => void, extra: Partial<Deps> = {}): Promise<FastifyInstance> => {
+    const home = mkTmp('ccrc-mask-fu-');
+    seedRoster(home);
+    seedSession(home, '');
+    const run: Runner = async (_c, args) => {
+      if (args[0] === 'capture-pane') return { code: 0, stdout: pane(), stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      if (args[0] === 'send-keys') onKeys?.(args);
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    return buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker, ...extra }, new Bus());
+  };
+  const clean = (body: string, ...secrets: string[]): void => {
+    expect(body).toContain(SECRET_MASK);
+    for (const s of secrets) expect(leaksNone(body, s), body.slice(0, 300)).toBe(true);
+  };
+
+  it('a thrown error, and a string, Buffer or stream body, on a masked route reach the reader masked; a thrown error on any route too; binary bytes and an exempt answer pass as they are', async () => {
+    app = await appOver(() => '');
+    app.post('/api/test-throw', async () => { throw new Error(`capture failed: KEY=${OAT}`); });
+    app.post('/api/test-string', async (_req, reply) => reply.type('text/plain').send(`pane\nKEY=${OAT}\n`));
+    app.post('/api/test-json-string', async (_req, reply) => reply.type('application/json').send(JSON.stringify({ pane: `KEY=${ORKEY}` })));
+    app.post('/api/test-buffer', async (_req, reply) => reply.type('text/plain').send(Buffer.from(`pane ${OAT} end`)));
+    app.post('/api/test-stream', async (_req, reply) =>
+      reply.type('text/plain').send(Readable.from([Buffer.from(`pane ${OAT.slice(0, 30)}`), Buffer.from(`${OAT.slice(30)} end`)])));
+    app.post('/api/test-png', async (_req, reply) => reply.type('image/png').send(Buffer.from(`\x89PNG ${OAT}`, 'latin1')));
+    app.get('/api/test-get-throw', async () => { throw new Error(`read failed: ${ORKEY}`); });
+    app.post('/api/token/test-raw', async (_req, reply) => reply.type('text/plain').send(`token ${OAT}`));
+
+    const thrown = await app.inject({ method: 'POST', url: '/api/test-throw', payload: {} });
+    expect(thrown.statusCode).toBe(500);
+    clean(thrown.body, OAT);
+    expect(thrown.json().message).toBe(`capture failed: KEY=${SECRET_MASK}`);
+    for (const url of ['/api/test-string', '/api/test-json-string', '/api/test-buffer', '/api/test-stream']) {
+      const r = await app.inject({ method: 'POST', url, payload: {} });
+      expect(r.statusCode, url).toBe(200);
+      clean(r.body, OAT, ORKEY);
+    }
+    expect((await app.inject({ method: 'POST', url: '/api/test-stream', payload: {} })).body).toBe(`pane ${SECRET_MASK} end`);
+    const got = await app.inject({ method: 'GET', url: '/api/test-get-throw' });
+    expect(got.statusCode).toBe(500);
+    clean(got.body, ORKEY);
+    expect((await app.inject({ method: 'POST', url: '/api/test-png', payload: {} })).rawPayload).toEqual(Buffer.from(`\x89PNG ${OAT}`, 'latin1'));
+    expect((await app.inject({ method: 'POST', url: '/api/token/test-raw', payload: {} })).body).toBe(`token ${OAT}`);
+  });
+
+  it('the answer backstop and the error mask are each registered once, on the root, and no other route file sets its own error handler but the exempt docs plugin', () => {
+    const read = (f: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...f), 'utf8');
+    const server = read(['server.ts']);
+    expect(server).toMatch(/app\.addHook\('onSend', \(req, reply, payload, done\) => \{\s*done\(null, maskedSend\.has\(reply\) \|\| !answerMasked\(req\.method, req\.routeOptions\.url\)\s*\? payload : maskBody\(deps\.masker \?\? SHAPE_ONLY_MASKER, payload, reply\.getHeader\('content-type'\)\)\);/);
+    expect(server).toMatch(/app\.setErrorHandler\(\(err, _req, _reply\) => \{\s*throw maskedError\(deps\.masker \?\? SHAPE_ONLY_MASKER, err\);/);
+    expect(server.match(/app\.setErrorHandler\(/g)).toHaveLength(1);
+    expect(server.match(/app\.addHook\('onSend'/g)).toHaveLength(2);   // the step-up's no-store, and the backstop
+    for (const f of routeFiles()) {
+      if (f.join('/') === 'server.ts' || f[0] === 'docs') continue;
+      expect(read(f), f.join('/')).not.toMatch(/setErrorHandler\(/);
+    }
+  });
+
+  it('"Send it" presses Enter when the box holds the draft the 409 showed masked, and still refuses box-mismatch for any other draft', async () => {
+    let entered = 0;
+    app = await appOver(() => (entered > 0 ? '❯ \n' : `❯ export K=${OAT}\n`), SHAPE_ONLY_MASKER, (args) => { if (args.includes('Enter')) entered++; });
+    const other = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: `export J=${SECRET_MASK}` } });
+    expect(other.statusCode).toBe(409);
+    expect(other.json()).toEqual({ ok: false, error: 'box-mismatch' });
+    expect(entered).toBe(0);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: `export K=${SECRET_MASK}` } });
+    expect(res.json()).toEqual({ ok: true });
+    expect(entered).toBe(1);
+  });
+
+  it('the upload answer carries its clip path as staged, even when the file name holds an sk- run', async () => {
+    app = await appOver(() => '');
+    const form = new FormData();
+    form.append('file', new Blob(['hello'], { type: 'text/markdown' }), 'sk-learn-notes.md');
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/upload`, payload: form });
+    expect(res.statusCode).toBe(200);
+    const clip = res.json().clip as { name: string; path: string };
+    expect(clip.name).toMatch(/-sk-learn-notes\.md$/);
+    expect(clip.path).toContain(clip.name);
+    expect(res.body).not.toContain(SECRET_MASK);
+  });
+
+  /** A fleet row whose server-built identity fields hold `-sk-` and 8 characters, and whose session text holds keys. */
+  const SKNAME = 'demo-sk-abcdefgh';
+  const fleetRow = (): FleetSession => ({
+    id: `claude-${SKNAME}`, wrapper: 'claude', home: '/home/rc', project: SKNAME, workdir: `/data/projects/${SKNAME}/ws/${SKNAME}`,
+    workspace: SKNAME, name: SKNAME, status: 'idle', statusUpdatedAt: null, limits: null,
+    dialogPending: false, version: null, model: null, effort: null, ultracode: false,
+    branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+    hookState: null, askSummary: `paste ${ORKEY} and ${CMP}`, subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
+    unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
+    started: true, spawnState: null, ask: { state: 'held', parentId: `claude-${SKNAME}-parent`, answeredBy: null }, usage: null, boardProject: SKNAME, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
+  } as FleetSession);
+  const KEPT = ['id', 'wrapper', 'home', 'project', 'workdir', 'workspace', 'name', 'boardProject', 'ask'] as const;
+
+  it('a session or workspace name holding -sk- and 8 characters renders as typed in the fleet frame and GET /api/fleet, while its session text stays masked', async () => {
+    const home = mkTmp('ccrc-mask-fu-fleet-');
+    seedRoster(home);
+    const cachePath = path.join(home, 'state-cache.json');
+    await saveSnapshot([fleetRow()], cachePath);
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const bus = new Bus();
+    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
+      stateCachePath: cachePath, fleetState: { connected: false, downSince: 1, ccdVerbs: null, rosterFp: null, build: null } }, bus);
+    const want = fleetRow();
+    const check = (s: FleetSession): void => {
+      for (const k of KEPT) expect(s[k], k).toEqual(want[k]);
+      expect(s.askSummary).toBe(`paste ${SECRET_MASK} and ${CMP}`);
+    };
+    check((await app.inject({ method: 'GET', url: '/api/fleet' })).json().sessions[0]);
+    const port = await listen(app);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+    const frame = await new Promise<string>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('no fleet frame')), 5000);
+      ws.on('message', (d) => {
+        const s = String(d);
+        if (s.includes('"hello"')) bus.emit('fleet', [fleetRow()]);
+        if (s.includes('"type":"fleet"')) { clearTimeout(t); resolve(s); }
+      });
+      ws.on('error', reject);
+    });
+    ws.close();
+    check((JSON.parse(frame) as { sessions: FleetSession[] }).sessions[0]!);
+    expect(leaksNone(frame, ORKEY)).toBe(true);
+  });
+
+  it('a fleet, runs, coord or notice broadcast is masked once for every socket, and masked again once the keys change', async () => {
+    const db = openCoordDb(path.join(mkTmp('ccrc-mask-fu-once-'), 'coord.db'));
+    const m = new SecretMasker({ db, token: () => TOKEN_1 });
+    let calls = 0;
+    const deep = m.maskDeep.bind(m);
+    m.maskDeep = <T>(v: T): T => { calls++; return deep(v); };
+    const home = mkTmp('ccrc-mask-fu-ws-');
+    seedRoster(home);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    const bus = new Bus();
+    app = await buildServer({ cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), masker: m }, bus);
+    const port = await listen(app);
+    const N = 4;
+    const frames: string[][] = Array.from({ length: N }, () => []);
+    const sockets = await Promise.all(Array.from({ length: N }, (_, i) => new Promise<WebSocket>((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      ws.on('message', (d) => { frames[i]!.push(String(d)); if (String(d).includes('"hello"')) resolve(ws); });
+      ws.on('error', reject);
+    })));
+    await new Promise((r) => setTimeout(r, 100));   // every cold start settled
+    const until = async (pred: () => boolean): Promise<void> => {
+      for (let i = 0; i < 200 && !pred(); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(pred()).toBe(true);
+    };
+    const count = (type: string): number => frames.reduce((n, f) => n + f.filter((s) => s.includes(`"type":"${type}"`)).length, 0);
+    try {
+      const sessions = [fleetRow()];
+      const runs = [{ id: 7, title: `run ${OAT}` }];
+      const coord = { note: `coord ${OAT}` };
+      const notice = { message: `notice ${OAT}` };
+      for (const [type, payload] of [['fleet', sessions], ['runs', runs], ['coord', coord], ['notice', notice]] as const) {
+        const before = calls;
+        const seen = count(type);
+        bus.emit(type, payload as never);
+        await until(() => count(type) === seen + N);
+        expect(calls - before, type).toBe(1);
+      }
+      // The same broadcast again: no new mask. The keys change: masked again, with the new key.
+      const seen = count('fleet');
+      let before = calls;
+      bus.emit('fleet', sessions);
+      await until(() => count('fleet') === seen + N);
+      expect(calls - before).toBe(0);
+      expect(frames[0]!.at(-1)).toContain(CMP);
+      m.ingest({ gen: fingerprintGeneration(TOKEN_1), rows: [fingerprintRow(TOKEN_1, 'lane0', CMP)] });
+      before = calls;
+      bus.emit('fleet', sessions);
+      await until(() => count('fleet') === seen + 2 * N);
+      expect(calls - before).toBe(1);
+      for (const f of frames) expect(leaksNone(f.at(-1)!, CMP), f.at(-1)!.slice(0, 200)).toBe(true);
+    } finally {
+      for (const ws of sockets) ws.close();
+      m.close();
+    }
   });
 });

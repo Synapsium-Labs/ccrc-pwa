@@ -514,6 +514,9 @@ export class SecretMasker {
   private rekeyTimer: ReturnType<typeof setTimeout> | null = null;
   private rekeyInFlight = false;
   private rekeyDelay = REKEY_FIRST_MS;
+  /** Moves whenever the keys or the rows change, so a mask computed once and reused (a broadcast's, D-5995) is
+   *  recomputed under the keys that hold now. */
+  private epoch = 0;
 
   constructor(opts: SecretMaskerOpts = {}) {
     this.db = opts.db ?? null;
@@ -528,6 +531,7 @@ export class SecretMasker {
   }
 
   private load(): void {
+    this.epoch++;
     this.rows = new Map();
     if (this.db === null) return;
     const all = this.db.prepare('SELECT fp, gen, len FROM secret_fingerprints').all() as unknown as
@@ -556,6 +560,7 @@ export class SecretMasker {
     const key = { gen: fingerprintGeneration(tok), token: tok };
     this.keys = [key, ...this.keys.filter((k) => k.gen !== key.gen && this.rows.has(k.gen))]
       .slice(0, 1 + MAX_PREVIOUS_KEYS);
+    this.epoch++;
     if (this.staleRows()) this.scheduleRekey(true);
   }
 
@@ -586,6 +591,13 @@ export class SecretMasker {
       this.scheduleRekey(false);
     };
     (answer as Promise<FingerprintAnswer | null>).then(settle, () => settle(null));
+  }
+
+  /** Which keys and rows a mask is computed under: equal versions, equal masks of the same value (D-5995). The box
+   *  token is read first, so a rotation moves it. */
+  get version(): number {
+    this.syncKeys();
+    return this.epoch;
   }
 
   /** Stops the re-key retries (a test, or a server closing). */
