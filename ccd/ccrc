@@ -1388,7 +1388,7 @@ _models_lock() {   # <id> -> rc 0 held, or nothing held (FD empty); rc 1 with MO
   if [ -L "$d" ]; then
     why="$d is a symlink, and the lane-files lock never follows one"
   elif [ -d "$d" ]; then
-    chmod 700 -- "$d" 2>/dev/null \
+    chmod -- 700 "$d" 2>/dev/null \
       || why="$d could not be made 0700 (chmod failed: another account owns it, or chmod is not on PATH)"
   elif ! mkdir -p -- "$d" 2>/dev/null; then
     why="$d could not be made"
