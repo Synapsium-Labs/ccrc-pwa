@@ -47,7 +47,7 @@ const ID_BUILDERS = {
   start: 'no-id', enable: 'no-id', startCross: 'no-id', enableCross: 'no-id',
   ensure: 'id', stopId: 'id', stopPair: 'id', forget: 'id', swap: 'id', swapCross: 'id',
   swapInterrupt: 'id', swapCrossInterrupt: 'id', hibernate: 'id',
-  wsAdd: 'no-id', wsAddWorker: 'no-id',
+  wsAdd: 'no-id', wsAddNamed: 'no-id', wsAddWorker: 'no-id',
   prStateSession: 'id', prStateProject: 'no-id', prOpen: 'id',
   wsArchive: 'id', wsRestore: 'id', wsAudit: 'id', wsReap: 'id',
   wsReclaimAudit: 'id', wsReclaim: 'id', wsExpireAudit: 'id', wsExpire: 'id',

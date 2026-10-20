@@ -447,6 +447,11 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     startCross: ['start', '--cross-pool', 'claude', 'demo'],
     enableCross: ['enable', '--cross-pool', 'claude', 'demo'],
     wsAdd: ['ws-add', 'demo'],
+    // THE NAMED CREATE (named workspaces S5, design 2026-10-20 §4.1-4.2): `--title` and `--wrapper` LEAD, before the
+    // project, because an older ccd binds an unknown `--` token as a POSITIONAL (D-6113) — leading, it lands in the
+    // project slot and is refused there; trailing, it would be dropped unread and the workspace created unnamed on the
+    // least-loaded lane with exit 0. The slug follows the project and the dec trails it, as `wsAddWorker` does.
+    wsAddNamed: ['ws-add', '--title', 'ENG-1234', '--wrapper', 'lane-a', 'demo', 'eng-1234', '--surface', 'pwa', '--actor', 'unmeasured'],
     // LEADING flag, then the project — ccd's `cmd_ws_add` shifts `--no-rc`
     // before its positionals, so token order here is parse-load-bearing the
     // same way `prOpen`'s is. The dec rides LAST, after the positional, where
@@ -535,6 +540,18 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     expect(CCD_ARGV.wsAddWorker('demo', null, { class: 'opus' }, null))
       .toEqual(['ws-add', '--no-rc', '--route', 'class=opus', 'demo']);
     expect(CCD_ARGV.wsAddWorker('demo', null, null, null)).toEqual(CCD_ARGV.wsAddWorker('demo', null));
+  });
+
+  // The ORDER the exact-argv row cannot see on its own: title, wrapper, route, project, slug, dec — every flag
+  // that names the create before the project, a `null` wrapper omitted (never an empty token), and the bare
+  // slug-and-project form the one a box without the caps would be sent.
+  it('wsAddNamed leads with --title, --wrapper and --route before the project, then the slug, then the dec', () => {
+    expect(CCD_ARGV.wsAddNamed('demo', 'eng-1', { title: 'T', wrapper: 'lane-a' }, { class: 'opus' }, null))
+      .toEqual(['ws-add', '--title', 'T', '--wrapper', 'lane-a', '--route', 'class=opus', 'demo', 'eng-1']);
+    expect(CCD_ARGV.wsAddNamed('demo', 'eng-1', { title: 'T', wrapper: null }, null, null))
+      .toEqual(['ws-add', '--title', 'T', 'demo', 'eng-1']);
+    expect(CCD_ARGV.wsAddNamed('demo', 'eng-1', { title: 'T', wrapper: null }, null, { surface: 'pwa', actor: 'unmeasured', reason: null }))
+      .toEqual(['ws-add', '--title', 'T', 'demo', 'eng-1', '--surface', 'pwa', '--actor', 'unmeasured']);
   });
 
   it('prOpen maps a real boolean draft to --draft true/false unambiguously', () => {
