@@ -82,7 +82,7 @@ export default defineConfig({
   // fails as "Invalid hook call" — which reads like a bug in the component
   // rather than a second React.
   resolve: {
-    dedupe: ['react', 'react-dom', 'vaul', 'framer-motion'],
+    dedupe: ['react', 'react-dom', 'vaul', 'framer-motion', '@radix-ui/react-popover'],
     alias: {
       // `@/…` RESOLVES INTO `@ccrc/ui`'s SOURCE, not into pwa's. shadcn's CLI
       // writes `@/lib/utils`-style imports into whatever `components.json`
@@ -101,6 +101,10 @@ export default defineConfig({
       react: fileURLToPath(new URL('./node_modules/react', import.meta.url)),
       vaul: fileURLToPath(new URL('./node_modules/vaul', import.meta.url)),
       'framer-motion': fileURLToPath(new URL('./node_modules/framer-motion', import.meta.url)),
+      // The Popover (D-5934) reaches react through Radix exactly as the sheet
+      // does through vaul, so pwa carries its own copy on vaul's Radix line
+      // here and this alias takes it (D-6018).
+      '@radix-ui/react-popover': fileURLToPath(new URL('./node_modules/@radix-ui/react-popover', import.meta.url)),
     },
   },
   plugins: [

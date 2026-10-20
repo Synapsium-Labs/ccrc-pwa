@@ -170,6 +170,7 @@ const NOT_ROLE_BEARING: Readonly<Record<string, string>> = {
   'icon.tsx': 'sized by its caller in em or by prop, so it follows the type around it',
   'limit-bar.tsx': 'draws through Meter; its label is on the 11px floor, below every Refined role',
   'meter.tsx': "its height is the meter's own token, --meter-h, which skins.css already varies",
+  'popover.tsx': 'a panel around content its caller passes in: it sets no type and no row height of its own (D-5934)',
   'skeleton.tsx': 'a placeholder sized by its caller',
   'status-dot.tsx': 'a lamp: part of the identity core, fixed across skins',
   'text-link.tsx': 'an inline link inside a sentence: it inherits the type and colour of the text around it, and has no tap floor (the WCAG 2.5.8 in-text exemption)',

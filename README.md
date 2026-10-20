@@ -1807,6 +1807,9 @@ ccrc models <id> set-subagent <haiku|sonnet>
 ccrc models <id> set-effort <class> <level|default>
 ccrc models <id> set-window <modelId> <tokens>   # record a measured context window, 1000 to 1000000
 ccrc models <id> clear-window <modelId>          # drop one
+ccrc models <id> hold <class>              # no automatic advance moves this class
+ccrc models <id> release <class>           # it may move again, canary first
+ccrc models <id> revert <class>            # back to its model before its last advance, and held there
 ccrc models <id> discovery add <modelId> | rm <modelId> | catalogue
 ccrc models <id> rm                        # reap the lane's model files
 ccrc models refresh <id> | --all           # re-probe the provider catalogues
@@ -1853,6 +1856,23 @@ refresh materialises and writes the default. With a stale or absent catalogue a 
 successful probe, so before rolling back across this change on a lane with windows set, run
 `ccrc models <id> clear-window <model>` for each measured model: each one re-materialises, and clearing the last
 puts the lane on the default rule.
+
+**Holds, revert and the advance file.** Each lane may carry `~/.ccrc/models/<id>.advance.json`, a sibling of the
+registry and never a key in it, so an older ccrc keeps reading the registry after a rollback. Per class it records
+the family the class follows (the last part of a `<vendor>-<version>-<family>` model id), an optional hold, the
+model the class had before its last automatic advance, and its last ten moves. `init codex` writes it, with a
+family for every class, an empty one included. `set-class` records the move and takes the family from the new pin,
+and clears it when you set `none` or a model id outside that shape, so a class you emptied by hand stays empty.
+`hold <class>` keeps a class where it is, and `release <class>` lets it move again. `revert <class>` puts back the
+model the class had before its last automatic advance, with its effort level, and holds it there; with no advance
+on record it refuses `no-previous`. Holds arrive one build before the automatic advance itself, so a class that
+must stay where it is can be held first. Every write to a lane's model files — every per-lane verb but `show`, and
+the hourly refresh's re-materialise — runs under one per-lane lock, `~/.ccrc/locks/models-<id>.lock`. A verb that
+finds it held waits up to 20 seconds and then refuses `lock-busy`, writing nothing; on a box without `flock`, or
+before the first lock on a box whose PATH has no `mkdir`, the verbs run unserialised, as before. The catalogue is
+the one lane model file written outside the lock: the probe replaces it whole, by a rename, so a writer under the
+lock always reads one complete catalogue. `rm` reaps the advance file with the lane's other model files, and never
+the lock.
 
 ### A ChatGPT/Codex lane: `exec.kind: "codex"` and `ccrc codex`
 
@@ -5293,8 +5313,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8392-8394`), each with an operator sentence of its own at `:8444`,
-`:8452` and `:8465`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8427-8429`), each with an operator sentence of its own at `:8479`,
+`:8487` and `:8500`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 

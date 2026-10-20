@@ -230,6 +230,8 @@ describe('ccrc: dispatch and usage', () => {
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
     expect(r.stdout).toMatch(/^ {2}models {4}the model-class registry/m);
+    // auto-advance Codex arm (D12): the shell verbs behind the Models panel's Hold and Revert.
+    expect(r.stdout.replace(/\s+/g, ' ')).toContain('hold/release/revert <class> keep a class where it is');
     expect(r.stdout).toMatch(/^ {2}update {4}fetch a published release/m);
     expect(r.stdout).toMatch(/^ {2}versions {2}list the kept release trees under ~\/ccrc-versions/m);
     expect(r.stdout).toMatch(/^ {2}channel {3}print this box's update channel as the control plane projects/m);

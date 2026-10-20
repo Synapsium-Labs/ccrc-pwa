@@ -8685,7 +8685,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // on the word `null`; the quoted line is main's `:8523`). A coincidental
       // pass lost, not a new debt; Task 11 still owns it. No rule changed, so
       // no D-number.
-      'shared/api.ts': 1,
+      // RE-MEASURED on the drift decider (D-5921; base = origin/main, tip =
+      // this branch merged onto it): `shared/api.ts` 1 -> 0, so its entry is
+      // gone. This branch adds 35 lines to the cited file (the drift kinds,
+      // above README's anchors), and every anchor below them shifts by exactly
+      // 35. README's four were re-pointed to the tip's lines (`:8427-8429`,
+      // `:8479`, `:8487`, `:8500`). The one site that LEFT is the frozen plan's
+      // `plan:3396` site named above (its `:5644`), whose quote now lands by
+      // coincidence on the shifted line: a coincidental pass gained, not a
+      // repair, and Task 11 still owns that anchor. No rule changed, so no
+      // D-number.
     });
     // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
     // number of its own, and it went stale against this very map. Now the
@@ -8838,7 +8847,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 202 -> 201 at hibernation's server half (D-5242, plan Task 17a): the one `shared/api.ts` site (`plan:3396
     // :5644`) passes coincidentally on that file's +20 inserted lines, argued beside the map; no other key moves and
     // neither frozen corpus document changed. S6-R11, no new D-number.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(202); // 201 -> 202: `shared/api.ts` 0 -> 1, the session-workflows view's shift (above)
+    // 202 -> 201 at the drift decider (D-5921): `shared/api.ts` 1 -> 0, the +35 shift argued beside the map; no other
+    // key moves and neither frozen corpus document changed. S6-R11, no new D-number.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(201);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
