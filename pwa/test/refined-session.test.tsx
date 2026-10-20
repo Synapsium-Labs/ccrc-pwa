@@ -106,6 +106,9 @@ describe('the key hints under the composer', () => {
         // Keys, not controls: a hint is never a tab stop.
         expect(line.querySelectorAll('kbd').length).toBeGreaterThanOrEqual(4);
         expect(line.querySelectorAll('button')).toHaveLength(0);
+        // The glyphs are for the eye; a screen reader hears one sentence in words.
+        expect(line).toHaveAttribute('aria-hidden', 'true');
+        expect(line.nextElementSibling?.textContent).toMatch(/Enter sends.*Shift Enter.*Escape.*Command K/);
       }
       cleanup();
       vi.unstubAllGlobals();
@@ -137,5 +140,24 @@ describe('the chrome holds no flow of its own', () => {
     expect(src).not.toMatch(/\bSheet\b|Dialog|PickSheet|SwapSheet|ArchiveSheet|ReapSheet|TerminalDrawer/);
     expect(src).not.toMatch(/useEscapeInterrupt|keydown|addEventListener|['"]Escape['"]/);
     expect(src).toMatch(/useSessionFlows\(\)/);
+  });
+});
+
+describe('the chip rail scrolls sideways on a phone only', () => {
+  it('every nowrap, overflow-x or scrollbar-hiding rail rule sits inside @media (max-width: 899px)', () => {
+    // At ≥900 a mouse wheel and Tab never reach a sideways-scrolled fact, so the desk rail wraps like the shared
+    // `.chat-meta` and the header stays a superset of the card (spec §5.3's laptop row asks for no scrolling rail).
+    const css = readFileSync(path.join(SRC, 'skins', 'refined', 'refined.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const phone = /@media \(max-width: 899px\) \{((?:[^{}]*\{[^}]*\})*)\s*\}/g;
+    const inside = [...css.matchAll(phone)].map((m) => m[1] ?? '').join('\n');
+    const outside = css.replace(phone, '');
+    const scrolling = /nowrap|overflow-x|scrollbar-width|::-webkit-scrollbar/;
+    const railRules = (sheet: string): string[] =>
+      [...sheet.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+        .filter((m) => (m[1] ?? '').includes('.ref-chip-rail'))
+        .map((m) => `${(m[1] ?? '').trim()} {${m[2] ?? ''}}`);
+    const leaks = railRules(outside).filter((r) => scrolling.test(r));
+    expect(leaks, 'rail rules that scroll or refuse to wrap at ≥900').toEqual([]);
+    expect(railRules(inside).some((r) => /overflow-x:\s*auto/.test(r)), 'the phone rail still scrolls').toBe(true);
   });
 });

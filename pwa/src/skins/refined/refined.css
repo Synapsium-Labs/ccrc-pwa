@@ -21,28 +21,33 @@
   order: 1;
   flex-basis: 100%;
   min-width: 0;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: none;
 }
-.chat-head .ref-chip-rail::-webkit-scrollbar {
-  display: none;
-}
-.chat-head .ref-chip-rail > * {
-  flex: none;
-}
-/* The coordination line and the details read as rail items, one row, never a wrapped block. */
 .chat-head .ref-chip-rail .chat-coord {
-  flex-wrap: nowrap;
   margin: 0;
-  white-space: nowrap;
 }
 .chat-head .ref-chip-rail .chat-facts {
   display: contents;
 }
-.chat-head .ref-chip-rail .chat-fact,
-.chat-head .ref-chip-rail .sess-meta > * {
-  flex: none;
-  white-space: nowrap;
+/* The sideways scroll is the phone's only: a swipe reaches every chip there. At >=900 a wheel and Tab never reach a
+   scrolled-off fact, so the desk rail wraps like the shared `.chat-meta` and the header stays a superset of the card. */
+@media (max-width: 899px) {
+  .chat-head .ref-chip-rail {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .chat-head .ref-chip-rail::-webkit-scrollbar {
+    display: none;
+  }
+  .chat-head .ref-chip-rail > *,
+  .chat-head .ref-chip-rail .chat-fact,
+  .chat-head .ref-chip-rail .sess-meta > * {
+    flex: none;
+    white-space: nowrap;
+  }
+  /* The coordination line and the details read as rail items, one row, never a wrapped block. */
+  .chat-head .ref-chip-rail .chat-coord {
+    flex-wrap: nowrap;
+  }
 }

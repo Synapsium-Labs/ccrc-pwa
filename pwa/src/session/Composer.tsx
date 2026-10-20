@@ -60,6 +60,9 @@ const KEY_HINTS: readonly { keys: readonly string[]; word: string }[] = [
   { keys: PALETTE_KEYS, word: 'commands' },
 ];
 
+/** The hints line in words, for a screen reader. */
+const KEY_HINTS_SPOKEN = 'Keys: Enter sends, Shift Enter adds a newline, Escape stops the turn, Command K opens commands.';
+
 export function Composer({
   onSend,
   pending,
@@ -351,14 +354,19 @@ export function Composer({
       </div>
 
       {keyHints && (
-        <p className="composer-hints">
-          {KEY_HINTS.map(({ keys, word }) => (
-            <span key={word} className="composer-hint">
-              <KeyHint keys={keys} />
-              {word}
-            </span>
-          ))}
-        </p>
+        <>
+          {/* The glyphs read badly aloud (⏎ as "return symbol"), so the line is for the eye and one plain sentence
+              says the same to a screen reader. */}
+          <p className="composer-hints" aria-hidden="true">
+            {KEY_HINTS.map(({ keys, word }) => (
+              <span key={word} className="composer-hint">
+                <KeyHint keys={keys} />
+                {word}
+              </span>
+            ))}
+          </p>
+          <p className="sr-only">{KEY_HINTS_SPOKEN}</p>
+        </>
       )}
 
       <Sheet
