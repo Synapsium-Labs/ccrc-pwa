@@ -10,6 +10,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { closeRun, type CloseOutcome } from '../src/coord/close.js';
 import {
   DeadCoordinatorActThrew, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorFeed, rereadDeadCoordinatorJournalTrust,
+  stillCrashed,
   type EndDeadCoordinatorDeps,
 } from '../src/coord/endDeadCoordinator.js';
 import {
@@ -18,6 +19,7 @@ import {
 import { parseJournalLine } from '../src/coord/journalparse.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { SessionVerdict } from '../src/exec.js';
+import type { ReadFailure } from '../src/io.js';
 import type { Runner } from '../src/exec.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, type LifecycleHealth } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
@@ -31,7 +33,10 @@ const NOW = 1_790_000_000_000;
 const SEC = NOW / 1000;
 
 interface Opts {
-  live?: boolean; paused?: boolean; unlistable?: boolean;
+  live?: boolean; paused?: boolean;
+  /** The registry's listing fails, as `readdirMeasured` answers it (`true` is `unreadable`); the plain, collapsing
+   *  `readdir` derives from it, as `localIO`'s does. */
+  unlistable?: boolean | ReadFailure | 'rejects';
   /** tmux's answer for the claimant, asked once per re-measure (default `gone`). */
   verdict?: (asked: number) => SessionVerdict;
   /** Called as tmux is asked — the moment inside the arm's re-measure, before the fleet act. */
@@ -67,7 +72,9 @@ const rig = async (o: Opts = {}) => {
   const abandoned: number[] = [];
   const deps: EndDeadCoordinatorDeps = {
     coord, cfg: base.cfg, notifyLog,
-    io: o.unlistable === true ? { ...base.io, readdir: async () => null } : base.io,
+    io: o.unlistable === undefined || o.unlistable === false ? base.io
+      : o.unlistable === 'rejects' ? { ...base.io, readdirMeasured: async () => { throw new Error('EIO'); } }
+      : { ...base.io, readdirMeasured: async () => ({ ok: false, reason: o.unlistable === true ? 'unreadable' : o.unlistable as ReadFailure }) },
     tmux: { sessionVerdict: async () => { asked += 1; o.onMeasure?.(asked); return o.verdict?.(asked) ?? { verdict: 'gone' }; } },
     journalTrust: async () => ({ hold: o.hold ?? null, trust: o.trust ?? DEAD_COORDINATOR_JOURNAL_TRUSTED }),
     journalReread: (early) => o.reread?.(early) ?? { hold: null, trust: early },
@@ -116,6 +123,41 @@ describe('the one executor — shadow, the switch, and the store', () => {
     u.working('alpha', 'demo-w1');
     expect(await endDeadCoordinator(u.deps, CRASHED, NOW)).toMatchObject({ kind: 'paused-at-server' });
     expect(u.abandoned).toEqual([]);
+  });
+
+  // D-5969 (ARCH-08b, #534): both registry listings — the act's switches and `stillCrashed`'s re-read — are the
+  // MEASURED listing. A registry that did not list stays paused (never widened), and the stop now SAYS why it did not
+  // list: an unreadable registry is reported as unreadable, never as an empty one.
+  it.each<ReadFailure>(['unreadable', 'absent'])('a registry measured %s pauses the act, and the pause says why it did not list', async (reason) => {
+    const r = await rig({ unlistable: reason });
+    r.working('alpha', 'demo-w1');
+    expect(await endDeadCoordinator(r.deps, CRASHED, NOW)).toEqual({ kind: 'paused-at-server',
+      detail: `the registry did not list (${reason}), so a raised reclaim-paused cannot be ruled out` });
+    expect(r.abandoned).toEqual([]);
+  });
+
+  it.each<ReadFailure>(['unreadable', 'absent'])('stillCrashed over a registry measured %s stops on the switch, and says why it did not list', async (reason) => {
+    const r = await rig({ unlistable: reason });
+    expect(await stillCrashed(r.deps, CRASHED)).toEqual({ kind: 'switch',
+      why: `the registry did not list (${reason}), so a raised reclaim-paused cannot be ruled out` });
+  });
+
+  // D-5969: a REJECTING port is a listing that could not be taken — `unreadable`, never folded to an empty registry.
+  it('a registry whose listing rejects pauses the act and stops stillCrashed, each saying it was unreadable', async () => {
+    const r = await rig({ unlistable: 'rejects' });
+    r.working('alpha', 'demo-w1');
+    const why = 'the registry did not list (unreadable), so a raised reclaim-paused cannot be ruled out';
+    expect(await endDeadCoordinator(r.deps, CRASHED, NOW)).toEqual({ kind: 'paused-at-server', detail: why });
+    expect(await stillCrashed(r.deps, CRASHED)).toEqual({ kind: 'switch', why });
+    expect(r.abandoned).toEqual([]);
+  });
+
+  it('a readable registry keeps today\'s verdicts: stillCrashed goes on, and the act ends the run', async () => {
+    const r = await rig();
+    const a = r.working('alpha', 'demo-w1');
+    expect(await stillCrashed(r.deps, CRASHED)).toBeNull();
+    expect(await endDeadCoordinator(r.deps, CRASHED, NOW)).toMatchObject({ kind: 'ended' });
+    expect(r.stateOf(a)).toBe('failed');
   });
 
   it('a store that cannot say which runs the claimant holds ends nothing', async () => {

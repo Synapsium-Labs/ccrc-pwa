@@ -30,7 +30,7 @@ const view = (o: Partial<CollectLaneViewInput> = {}): CollectLaneView => collect
 
 const NOT_LIVE: [string, Partial<CollectLaneViewInput>, State][] = [
   ['a raised pause', { switches: { paused: true, why: 'raised', marker: true } }, 'paused'],
-  ['an unlistable registry', { switches: { paused: true, why: 'unlistable' } }, 'unknown-fleet'],
+  ['an unlistable registry', { switches: { paused: true, why: 'unlistable', reason: 'unreadable' } }, 'unknown-fleet'],
   ['an epoch moved during the listing', { epoch: { before: 3, after: 4 }, node: known(4) }, 'unknown-fleet'],
   ['a stored Live with the node unmeasured', { ...LIVE_HERE, node: { kind: 'unmeasured', connectionEpoch: 3 } }, 'unknown-fleet'],
   ['a missing capability', { caps: { collect: true, reclaimPause: false } }, 'not-running'],
@@ -97,7 +97,7 @@ describe('the view never folds two read states into one (§5.6)', () => {
     expect(view().marker).toEqual({ listing: 'absent', latch: 'unset' });
     expect(view({ switches: { paused: false, marker: true } }).marker).toEqual({ listing: 'stands', latch: 'unset' });
     expect(view({ switches: { paused: true, why: 'raised', marker: true } }).marker).toEqual({ listing: 'stands', latch: 'unset' });
-    expect(view({ switches: { paused: true, why: 'unlistable' } }).marker).toEqual({ listing: 'unmeasured', latch: 'unset' });
+    expect(view({ switches: { paused: true, why: 'unlistable', reason: 'unreadable' } }).marker).toEqual({ listing: 'unmeasured', latch: 'unset' });
     expect(view(LATCHED).marker).toEqual({ listing: 'absent', latch: 'set' });
     expect(view({ row: row({ generation: '0' }) }).marker.latch, 'a malformed row').toBe('unmeasured');
     expect(view({ journal: { kind: 'unreadable', code: 'EIO' } }).marker.latch, 'a latch no journal vouches for').toBe('unmeasured');
