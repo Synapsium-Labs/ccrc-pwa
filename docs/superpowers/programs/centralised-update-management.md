@@ -2416,6 +2416,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
           6.6 s and 6.8 s, against block 12.9 s at 14:58. A stall again, not an update fault. For tomorrow's soak.
         - STATUS: fleet and server v0.0.472, newest v0.0.486, stable v0.0.328, intent dev/auto=off, backups fleet
           222M/server 7978M, disk free fleet 198G/work volume 59G/server 24G, no anomalies.
+      - 19:55: both boxes moved to v0.0.488 (#1019) by the operator's tap, fleet 19:38:10 to 19:39:32, server
+        19:39:49 to 19:41:49 (`ccrc.service` restarted 19:40:55); both `done`, `from: pwa`, gates passed, doctor 0 failed
+        on both. Server backups 8627M, 10 kept, the newest 1038M: each tap's backup is now larger than the one it
+        replaces, so the probe's 10240M size line is about two taps away. STATUS: fleet and server v0.0.488, newest
+        v0.0.492, stable v0.0.328, intent dev/auto=off, backups fleet 185M/server 8627M, disk free fleet 198G/work
+        volume 54G/server 24G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
