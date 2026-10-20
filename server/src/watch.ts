@@ -9401,7 +9401,7 @@ const LANE_EFFECT_SIZES = [
   ['eLease', 'request-linked-lease-identity'], ['eRunChild', 'record-run-child-owned'], ['eUnowned', 'record-unowned-worktree'],
   ['eAbsence', 'record-measured-absence'], ['eRepair', 'repair-report-projection'], ['eInterval', 'record-observation-interval'],
 ] as const satisfies readonly (readonly [DelegationPassSlowKey, DelegationReportEffect['kind']])[];
-/** D-5832: the phases whose own CPU the line carries, by the key that carries it. */
+/** D-5832: the phases whose CPU the line carries, by the key that carries it: the CPU while the phase is open, so other work at its awaits and yields counts, and turn 3's CPU stays in effects and reconcile. */
 const LANE_CPU_KEYS = [
   ['flush', 'flushCpu'], ['upkeep', 'upkeepCpu'], ['effects', 'effectsCpu'], ['repair', 'repairCpu'], ['reconcile', 'reconcileCpu'], ['owners', 'ownersCpu'],
 ] as const satisfies readonly (readonly [DelegationPassSlowKey, DelegationPassSlowKey])[];
