@@ -2287,6 +2287,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 05:55: v0.0.410 (#878) to v0.0.414 (#877) followed, unapplied. STATUS: fleet and server v0.0.395, newest
         v0.0.414, stable v0.0.328, intent dev/auto=off, backups fleet 181M/server 3847M, disk free fleet 208G/work
         volume 88G/server 29G, no anomalies.
+      - 06:55: both boxes moved to v0.0.414 (#877) by the operator's console tap, fleet 06:05:08 to 06:06:34, then
+        the server 06:06:44 to 06:08:01; both `done`, `from: pwa`, gates passed, doctor 0 failed on both boxes;
+        `ccrc.service` restarted 06:07:25. Server backups 4197M: the new 644M backup replaced a 294M one, as coord.db
+        reached 425M. While the oldest kept backups are about 300M, each tap adds about 350M, so the probe's 5G line
+        is about three taps away. v0.0.415 (#870) to v0.0.428 (#910) followed, unapplied. STATUS: fleet and server
+        v0.0.414, newest v0.0.428, stable v0.0.328, intent dev/auto=off, backups fleet 182M/server 4197M, disk free
+        fleet 208G/work volume 85G/server 28G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
