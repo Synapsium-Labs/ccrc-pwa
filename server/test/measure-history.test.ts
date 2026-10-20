@@ -5453,6 +5453,8 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
       (gate9.q18Power as unknown as (i: Record<string, unknown>) => unknown)(
         { families: [], plannedDays: 14, seedHex: SEED, rho: 0.3, power: 0.5, sims: 24, gridStep: 0.05, B: 200, ...over });
     const q18 = (key: string, v: unknown): Err[] => verdict(set(draft(), `q18_settings.${key}`, v));
+    /** A small non-empty set of families that each expect windows, so q18Power walks its grid. */
+    const FAMS = Array.from({ length: 6 }, (_, i) => ({ key: `f${i}`, windows: 2, covered_days: 14 }));
 
     it('CONTROL: the valid draft and the valid final validate', () => {
       expect(verdict(draft())).toEqual([]);
@@ -5556,11 +5558,12 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
         for (const ok of [0, 0.999]) expect(q18('rho_headline', ok), `CONTROL ${ok}`).toEqual([]);
       });
       it('a power level outside (0, 1] is refused at its own index, and 1 validates', () => {
-        expect(q18('power', [0.5, 0])).toEqual([{ path: 'q18_settings.power[1]', word: VOS }]);
-        expect(q18('power', [1.5])).toEqual([{ path: 'q18_settings.power[0]', word: VOS }]);
-        expect(q18('power', [-0.2, 0.5, 2])).toEqual([{ path: 'q18_settings.power[0]', word: VOS }, { path: 'q18_settings.power[2]', word: VOS }]);
-        expect(q18('power', [1]), 'CONTROL').toEqual([]);
-        expect(q18('power', [0.000001]), 'CONTROL: just above 0').toEqual([]);
+        // Every list holds both levels part 2's q18 figures read (0.5 and 0.8, fix round 2), so the per-entry check is alone.
+        expect(q18('power', [0.5, 0.8, 0])).toEqual([{ path: 'q18_settings.power[2]', word: VOS }]);
+        expect(q18('power', [0.5, 0.8, 1.5])).toEqual([{ path: 'q18_settings.power[2]', word: VOS }]);
+        expect(q18('power', [-0.2, 0.5, 0.8, 2])).toEqual([{ path: 'q18_settings.power[0]', word: VOS }, { path: 'q18_settings.power[3]', word: VOS }]);
+        expect(q18('power', [0.5, 0.8, 1]), 'CONTROL').toEqual([]);
+        expect(q18('power', [0.5, 0.8, 0.000001]), 'CONTROL: just above 0').toEqual([]);
       });
       it('sims below 1 is refused; 1 validates; a fraction stays field-malformed', () => {
         for (const bad of [0, -3]) expect(q18('sims', bad), String(bad)).toEqual([{ path: 'q18_settings.sims', word: VOS }]);
@@ -5576,28 +5579,121 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
       it('the validator and q18Power agree at each edge: what one accepts the other runs, what one refuses the other throws on', () => {
         const rows: Array<[string, string, unknown, boolean]> = [
           ['rho_headline', 'rho', 0, true], ['rho_headline', 'rho', 0.999, true], ['rho_headline', 'rho', 1, false], ['rho_headline', 'rho', -0.1, false],
+          ['rho_headline', 'rho', 1e-309, false],
           ['power', 'power', 1, true], ['power', 'power', 0.5, true], ['power', 'power', 0, false], ['power', 'power', 1.5, false],
           ['sims', 'sims', 1, true], ['sims', 'sims', 0, false],
           ['grid_step', 'gridStep', 0.005, true], ['grid_step', 'gridStep', 0.1, true], ['grid_step', 'gridStep', 0.007, false], ['grid_step', 'gridStep', 0, false],
+          ['grid_step', 'gridStep', 1e-17, false], ['grid_step', 'gridStep', 5e-308, false], ['grid_step', 'gridStep', 7.993605777301475e-16, false],
         ];
         for (const [field, param, v, valid] of rows) {
-          const asSigned = field === 'power' ? [v] : v;
+          // A power row gives the validator both levels part 2 reads plus the row's value, so the row tests the per-entry check alone.
+          const asSigned = field === 'power' ? [0.5, 0.8, v] : v;
           expect(q18(field, asSigned).length === 0, `validator: ${field} = ${String(v)}`).toBe(valid);
-          if (valid) expect(() => q18With({ [param]: v }), `q18Power: ${param} = ${String(v)}`).not.toThrow();
-          else expect(() => q18With({ [param]: v }), `q18Power: ${param} = ${String(v)}`).toThrow(RangeError);
+          // q18Power gets NON-EMPTY families, so a grid that hangs or throws on the draws is walked, not skipped.
+          if (valid) expect(() => q18With({ families: FAMS, sims: 4, B: 40, [param]: v }), `q18Power: ${param} = ${String(v)}`).not.toThrow();
+          else expect(() => q18With({ families: FAMS, sims: 4, B: 40, [param]: v }), `q18Power: ${param} = ${String(v)}`).toThrow(RangeError);
         }
       });
       it('q18Power keeps its exact grid-step message', () => {
         expect(() => q18With({ gridStep: 0.007 })).toThrow('q18Power: grid step 0.007 does not divide 1 - x');
       });
-      it('an empty power list and any lookback_days are not refused: q18Power throws on neither', () => {
-        expect(q18('power', [])).toEqual([]);
-        expect(q18('lookback_days', 0)).toEqual([]);
+      it('a power list missing a level part 2 reads, and a lookback_days below 1, are refused: the first makes a q18 figure an overloaded null, the second makes W2-5a\'s covered_days throw in q18Power', () => {
+        const only = [{ path: 'q18_settings.power', word: VOS }];
+        for (const bad of [[], [0.5], [0.8], [0.6, 0.8]]) expect(q18('power', bad), JSON.stringify(bad)).toEqual(only);
+        for (const ok of [[0.5, 0.8], [0.8, 0.5], [0.5, 0.8, 0.9]]) expect(q18('power', ok), `CONTROL ${JSON.stringify(ok)}`).toEqual([]);
+        expect(q18('power', [0.5, 0.8, 0]), 'the per-entry check stays at its own index').toEqual([{ path: 'q18_settings.power[2]', word: VOS }]);
+        for (const bad of [0, -1]) expect(q18('lookback_days', bad), String(bad)).toEqual([{ path: 'q18_settings.lookback_days', word: VOS }]);
+        for (const ok of [1, 14]) expect(q18('lookback_days', ok), `CONTROL ${ok}`).toEqual([]);
       });
       it('the shipped defaults pass every one of these', () => {
         const d = gate9.Q18_DEFAULTS;
         expect(() => q18With({ rho: d.rho_headline, power: d.power[0], sims: d.sims, gridStep: d.grid_step })).not.toThrow();
         expect(verdict(draft())).toEqual([]);
+      });
+    });
+  });
+  describe('review fix round 2: Q18 values and the part 2 bindings (D-5791)', () => {
+    const STORE_C = '00000000-0000-4000-8000-0000000000c3';
+    const VOS = 'value-outside-set';
+    const FAMS = Array.from({ length: 6 }, (_, i) => ({ key: `f${i}`, windows: 2, covered_days: 14 }));
+    const q18Run = (over: Record<string, unknown>): unknown =>
+      (gate9.q18Power as unknown as (i: Record<string, unknown>) => unknown)(
+        { families: FAMS, plannedDays: 14, seedHex: SEED, rho: 0.3, power: 0.5, sims: 4, gridStep: 0.05, B: 40, ...over });
+    /** A registry drop that is valid: a family on a node's store that the assignment does not hold. */
+    const DROPPED: Ref = { store_id: STORE_A, ccrc_id: 'sess-dropped', generation: gen(400) };
+    const finalWith = (drops: Array<Ref & { reason: string }>, d: Rec = draft()): Rec => { const f = final(d); f.registry_drops = drops; return f; };
+
+    it('q18Power throws a RangeError, and returns at once, on each grid step and rho that would hang or throw on the draws', () => {
+      expect(() => q18Run({}), 'CONTROL: the call runs').not.toThrow();
+      // The validator is asked first, so a guard that lets one of these through reds here by assertion, before q18Power is
+      // called on a value that would hang it.
+      for (const gridStep of [1e-17, 5e-308, 7.993605777301475e-16]) {
+        expect(verdict(set(draft(), 'q18_settings.grid_step', gridStep)), `validator: grid step ${gridStep}`).toEqual([{ path: 'q18_settings.grid_step', word: VOS }]);
+        expect(() => q18Run({ gridStep }), `grid step ${gridStep}`).toThrow(RangeError);
+        expect(() => q18Run({ gridStep }), `grid step ${gridStep}`).toThrow(`q18Power: grid step ${gridStep} does not divide 1 - x`);
+      }
+      expect(() => q18Run({ gridStep: 1e-15 }), 'CONTROL: a step of 1e-15 is still valid and runs').not.toThrow();
+      expect(verdict(set(draft(), 'q18_settings.rho_headline', 1e-309)), 'validator: rho 1e-309').toEqual([{ path: 'q18_settings.rho_headline', word: VOS }]);
+      expect(() => q18Run({ rho: 1e-309 })).toThrow(RangeError);
+      expect(() => q18Run({ rho: 1e-309 })).toThrow('q18Power: rho 1e-309 is so small that (1 - rho)/rho is not finite');
+      expect(() => q18Run({ rho: -0.1 })).toThrow('q18Power: rho -0.1 is outside [0, 1)');
+      expect(() => q18Run({ rho: 1 })).toThrow('q18Power: rho 1 is outside [0, 1)');
+    });
+
+    it('edge pins: a grid step of 1e-15 and a rho of 1e-300 still validate, and a rho of 5e-309 does not (validator only: nothing here runs q18Power)', () => {
+      const one = (key: string, v: unknown): Err[] => verdict(set(draft(), `q18_settings.${key}`, v));
+      expect(one('grid_step', 1e-15), 'CONTROL: answers as before').toEqual([]);
+      expect(one('rho_headline', 1e-300), 'CONTROL: (1 - rho)/rho is 1e300, finite').toEqual([]);
+      expect(one('rho_headline', 5e-309)).toEqual([{ path: 'q18_settings.rho_headline', word: VOS }]);
+    });
+
+    describe('registry_drops', () => {
+      it('CONTROL: a non-empty valid registry_drops validates, and so does each closed-set reason', () => {
+        expect(verdict(finalWith([{ ...DROPPED, reason: 'registry-absent' }]), chainOf(draft()))).toEqual([]);
+        for (const reason of ['registry-mismatch', 'registry-absent', 'unreadable']) {
+          expect(verdict(finalWith([{ ...DROPPED, reason }]), chainOf(draft())), reason).toEqual([]);
+        }
+      });
+      it('a drop on a store no node names is value-outside-set at registry_drops[i].store_id', () => {
+        const f = finalWith([{ ...DROPPED, reason: 'registry-absent' }, { ...DROPPED, store_id: STORE_C, ccrc_id: 'sess-orphan-drop', reason: 'unreadable' }]);
+        expect(verdict(f, chainOf(draft()))).toEqual([{ path: 'registry_drops[1].store_id', word: VOS }]);
+      });
+      it('a reason outside the closed set is value-outside-set at registry_drops[i].reason', () => {
+        const f = finalWith([{ ...DROPPED, reason: 'other' }]);
+        expect(verdict(f, chainOf(draft()))).toEqual([{ path: 'registry_drops[0].reason', word: VOS }]);
+        expect(verdict(finalWith([{ ...DROPPED, reason: '' }]), chainOf(draft())), 'the empty string is outside it too').toEqual([{ path: 'registry_drops[0].reason', word: VOS }]);
+      });
+      it('an assigned family that is also registry-dropped is value-outside-set at assignment[j], once per such entry', () => {
+        const j = 3;
+        const f = finalWith([{ ...refOf(ASSIGNMENT[j]!), reason: 'registry-mismatch' }]);
+        expect(verdict(f, chainOf(draft()))).toEqual([{ path: `assignment[${j}]`, word: VOS }]);
+        const two = finalWith([{ ...refOf(ASSIGNMENT[0]!), reason: 'unreadable' }, { ...refOf(ASSIGNMENT[5]!), reason: 'unreadable' }]);
+        expect(verdict(two, chainOf(draft())), 'by each entry\'s own index').toEqual([{ path: 'assignment[0]', word: VOS }, { path: 'assignment[5]', word: VOS }]);
+      });
+    });
+
+    describe('quiz.families', () => {
+      it('a quiz family on a store no node names is value-outside-set at quiz.families[i].store_id', () => {
+        const extra: Ref = { store_id: STORE_C, ccrc_id: 'sess-orphan-quiz', generation: gen(401) };
+        const d = draft();
+        const { r, ctx } = withQuiz(final(d), [...QUIZ, extra]);
+        expect(verdict(r, { ...ctx, draft: d }), 'the frozen list and the counts follow the quiz, so no quiz-mismatch fires').toEqual(
+          [{ path: `quiz.families[${QUIZ.length}].store_id`, word: VOS }]);
+      });
+      it('CONTROL: the same quiz without the orphan family validates', () => {
+        const d = draft();
+        const { r, ctx } = withQuiz(final(d), [...QUIZ]);
+        expect(verdict(r, { ...ctx, draft: d })).toEqual([]);
+      });
+    });
+
+    describe('pilot.families stays unbound', () => {
+      it('CONTROL: a draft, and a final of it, whose pilot.families holds a family on a store no node names get no value-outside-set at a pilot.families path', () => {
+        const orphan: Ref = { store_id: STORE_C, ccrc_id: 'pilot-orphan', generation: gen(402) };
+        const d = set(draft(), 'pilot.families', [...PILOT, orphan]);
+        expect(verdict(d).filter((e) => e.word === VOS && e.path.startsWith('pilot.families'))).toEqual([]);
+        expect(verdict(d), 'and nothing else is refused').toEqual([]);
+        expect(verdict(final(d), chainOf(d)), 'the final carries it unchanged').toEqual([]);
       });
     });
   });

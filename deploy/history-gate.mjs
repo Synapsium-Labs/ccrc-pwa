@@ -1030,8 +1030,10 @@ function q18ShareAt(nf, p, o) {
 
 /**
  * The number of grid steps from x to 1 for a step that divides 1 - x, or null for a step that does not (zero, negative,
- * not a number, larger than 1 - x, or off by more than 1e-9). q18Power refuses a null with its RangeError and
- * validateOpenRecord refuses the same value before it is signed: one rule, so the two cannot disagree.
+ * not a number, larger than 1 - x by more than 1e-9, or off by more than 1e-9) and for a step so small that x.den times
+ * the step count is not a safe integer (the grid's integer forms are then inexact: the bisection never ends, or a
+ * grid point's mean leaves [0, 1]). q18Power refuses a null with its RangeError and validateOpenRecord refuses the
+ * same value before it is signed: one rule, so the two cannot disagree.
  * @param {number} gridStep
  * @param {Frac} x
  * @returns {number|null}
@@ -1039,8 +1041,29 @@ function q18ShareAt(nf, p, o) {
 function q18GridSteps(gridStep, x) {
   const span = (x.den - x.num) / x.den;
   const N = Math.round(span / gridStep);
-  return gridStep > 0 && N >= 1 && Math.abs(N * gridStep - span) <= 1e-9 ? N : null;
+  return gridStep > 0 && N >= 1 && Number.isSafeInteger(x.den * N) && Math.abs(N * gridStep - span) <= 1e-9 ? N : null;
 }
+
+/**
+ * The one test of a Q18 rho: 0, or a value in (0, 1) whose (1 - rho) / rho is finite. A subnormal rho makes
+ * gammaDraw loop forever. Answers null for a rho Q18 can honour, 'range' for a value outside [0, 1), and 'tiny' for a
+ * rho in (0, 1) too small for the procedure. q18Power chooses its message from the answer and validateOpenRecord
+ * refuses on any answer but null.
+ * @param {number} rho
+ * @returns {null|'range'|'tiny'}
+ */
+function q18RhoWhy(rho) {
+  if (!(rho >= 0 && rho < 1)) return 'range';
+  if (rho > 0 && !Number.isFinite((1 - rho) / rho)) return 'tiny';
+  return null;
+}
+
+/** The power levels part 2's q18 figures read, keyed by the figure that reads each (W2-D21: the headline's 0.5, and
+ *  at_rho_0, the headline at rho 0; at_power_80's 0.8). Never derived from Q18_DEFAULTS, which is an operator default. */
+const Q18_FIGURE_POWER = Object.freeze({ headline: 0.5, at_power_80: 0.8 });
+
+/** W2-D20's closed set of reasons a registry drop gives. */
+const REGISTRY_DROP_REASONS = Object.freeze(['registry-mismatch', 'registry-absent', 'unreadable']);
 
 /**
  * Q18, the smallest passing point uptake (W2-D21), procedure 'bisection-on-grid-crn': the grid runs from x to 1
@@ -1055,7 +1078,9 @@ function q18GridSteps(gridStep, x) {
  */
 export function q18Power({ families, plannedDays, seedHex, rho, power, sims, gridStep, B, x = X }) {
   if (typeof seedHex !== 'string' || seedHex === '') throw new TypeError('q18Power: the seed is a non-empty string, passed in');
-  if (!(rho >= 0 && rho < 1)) throw new RangeError(`q18Power: rho ${rho} is outside [0, 1)`);
+  const rhoWhy = q18RhoWhy(rho);
+  if (rhoWhy === 'range') throw new RangeError(`q18Power: rho ${rho} is outside [0, 1)`);
+  if (rhoWhy === 'tiny') throw new RangeError(`q18Power: rho ${rho} is so small that (1 - rho)/rho is not finite`);
   if (!(power > 0 && power <= 1)) throw new RangeError(`q18Power: power ${power} is outside (0, 1]`);
   if (!Number.isSafeInteger(sims) || sims < 1) throw new RangeError(`q18Power: sims=${sims} is not a positive integer`);
   nearestRankBounds(B);
@@ -2398,7 +2423,7 @@ function recValidate(record, ctx, checkLink) {
     boundStores.add(s.store_id);
     if (s.settings_mode !== r.settings_mode) refuse(`step0a[${i}].settings_mode`, 'value-outside-set');
     // Measured under part 1's account: step 0a is carried unchanged into part 2, so this binds both parts (D-5791: the
-    // account, the empty flags map, part 2's census and assignment bindings and the Q18 values below).
+    // account, the empty flags map, part 2's node bindings and the Q18 values below).
     if (s.account !== r.account) refuse(`step0a[${i}].account`, 'value-outside-set');
     // An empty map claims no flag measured, which loses the one thing step 0a is for. That it names every flag the
     // contract uses is W2-5a's parity pin, the first PR that loads both modules.
@@ -2416,10 +2441,15 @@ function recValidate(record, ctx, checkLink) {
   if (!decimalFrac(r.halts.handcheck_agreement_min, false).ok) refuse('halts.handcheck_agreement_min', 'value-outside-set');
   // activeFamilies throws on a negative look-back (the integer type is already checked).
   if (r.active_rule.lookback_ms < 0) refuse('active_rule.lookback_ms', 'value-outside-set');
-  // Every signed Q18 value q18Power would throw on. The grid-step test is q18Power's own, shared. An empty
-  // power list and lookback_days are not refused here: q18Power throws on neither.
-  if (!(r.q18_settings.rho_headline >= 0 && r.q18_settings.rho_headline < 1)) refuse('q18_settings.rho_headline', 'value-outside-set');
+  // Every q18_settings value Q18's procedure cannot honour, on which q18Power throws or never returns whatever the
+  // families; the grid-step and rho tests are q18Power's own, shared. Two seam refusals follow: the power
+  // levels part 2's q18 figures read (a figure without its level would be null for "not signed" and for "not reached"
+  // alike), and a lookback_days below 1 (W2-5a's covered_days then makes q18Power throw). A value that is only costly,
+  // a huge sims or planned_days, is not refused.
+  if (q18RhoWhy(r.q18_settings.rho_headline) !== null) refuse('q18_settings.rho_headline', 'value-outside-set');
   r.q18_settings.power.forEach((p, i) => { if (!(p > 0 && p <= 1)) refuse(`q18_settings.power[${i}]`, 'value-outside-set'); });
+  if (!Object.values(Q18_FIGURE_POWER).every((level) => r.q18_settings.power.includes(level))) refuse('q18_settings.power', 'value-outside-set');
+  if (r.q18_settings.lookback_days < 1) refuse('q18_settings.lookback_days', 'value-outside-set');
   if (r.q18_settings.sims < 1) refuse('q18_settings.sims', 'value-outside-set');
   if (q18GridSteps(r.q18_settings.grid_step, X) === null) refuse('q18_settings.grid_step', 'value-outside-set');
 
@@ -2492,7 +2522,9 @@ function recValidate(record, ctx, checkLink) {
   if (r.assignment_sha256 !== assignmentSha256(r.assignment)) refuse('assignment_sha256', 'assignment-mismatch');
   // Part 2's census binds to part 1's nodes as step 0a does: a census entry names a node's store and each
   // store once, every node has its entry (a store holding no families still does: there is no empty form), and no
-  // assigned family sits on a store that no node names.
+  // assigned family, registry drop or quiz family sits on a store that no node names. A registry drop's reason is
+  // W2-D20's closed set, and an assigned family is not also registry-dropped (W2-D20 removes the drops before the
+  // flip). pilot.families is part 1's and stays unbound: a draft superseded to drop a node may keep a pilot family on it.
   const censusStores = new Set();
   r.census.forEach((c, i) => {
     if (!nodeStores.has(c.store_id) || censusStores.has(c.store_id)) refuse(`census[${i}].store_id`, 'value-outside-set');
@@ -2500,6 +2532,13 @@ function recValidate(record, ctx, checkLink) {
   });
   r.nodes.forEach((n, i) => { if (!censusStores.has(n.store_id)) refuse(`nodes[${i}]`, 'value-outside-set'); });
   r.assignment.forEach((a, i) => { if (!nodeStores.has(a.store_id)) refuse(`assignment[${i}].store_id`, 'value-outside-set'); });
+  r.registry_drops.forEach((d, i) => {
+    if (!nodeStores.has(d.store_id)) refuse(`registry_drops[${i}].store_id`, 'value-outside-set');
+    if (!REGISTRY_DROP_REASONS.includes(d.reason)) refuse(`registry_drops[${i}].reason`, 'value-outside-set');
+  });
+  r.quiz.families.forEach((q, i) => { if (!nodeStores.has(q.store_id)) refuse(`quiz.families[${i}].store_id`, 'value-outside-set'); });
+  const droppedKeys = new Set(r.registry_drops.map(recKeyOf));
+  r.assignment.forEach((a, j) => { if (droppedKeys.has(recKeyOf(a))) refuse(`assignment[${j}]`, 'value-outside-set'); });
 
   // The quiz families: consistent with their counts and the frozen file; no control-held id; no pilot family
   // (W2-D25, W2-D77, W2-D76).
