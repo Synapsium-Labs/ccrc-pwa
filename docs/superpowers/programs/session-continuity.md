@@ -23,7 +23,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
-| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; fix-round handoff `2f6caa48e` accepted by the server 2026-10-20 07:25 UTC, NEW review 685 dispatched 07:42 UTC; PR conflicts with main on the generated stamp; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; fix-round handoff `2f6caa48e` accepted by the server 2026-10-20 07:25 UTC, NEW review 685 dispatched 07:42 UTC; PR conflicts with main on the generated stamp; review 685 closed done 2026-10-20 13:56 UTC with its report fingerprint accepted, no critical finding; run 308 returned to working 13:59 UTC for fix round 2, its last phase waiting on another run's claims on `ccd/ccd` and README; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | deferred by the operator 2026-10-20: the programme stops after 4b ships and its week is measured |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -848,6 +848,33 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     swaps a scratch session off it and back, and changes one pane scope's memory policy (spec section 5.2).
   - Wave 4b's own path is unchanged: review 685, then a fix round or landing, then delivery by the update mechanism
     and Task 5's week. No merge, rollout, restart, arming or settings act is recorded here.
+- **2026-10-20 13:59 UTC - review 685 accepted as a report; fix round 2 sent.**
+  - Review 685 read the fix-round tip `2f6caa48e` once, with the held-out panel and the two wave-specific lenses
+    (74 agents, no error, no unverified lens). The server accepted its report fingerprint; that accepts the report,
+    not the implementation. It found nothing critical: eight panel-confirmed findings, one of them important, and
+    three of the reviewer's own, unvoted.
+  - Rulings, all within the plan and the operator's chosen option texts:
+    - Fix: the instrument's verdict-row reader splits on Unicode whitespace where the sweep folds only ASCII;
+      the scope sweep's zombie exemption also skips a multi-threaded zombie leader; an unused deviation number
+      written with its prefix; the absorbed merge restored a comment the reviewed fix had removed; a deep-JSON pin
+      that holds only on interpreters that raise on it.
+    - The baseline comparison's window stays seven times 24 elapsed hours, as the plan writes its guard, read
+      under `TZ=UTC` as the plan's measurement command sets it. The fix documents the local-zone reading and pins
+      the refusal of a calendar week across a DST change.
+    - The parser widening the operator chose stays attributed to the operator, with its grounds written down: this
+      coordinator released that ask and chose neither option, and a released ask is terminal to its parent, so the
+      returned answer came from the operator's own surface.
+    - Accepted: that widening also tightens an earlier single-task arm toward unmeasured, which the plan discloses.
+    - Narrowed back to the chosen text: trailing reminder blocks made more shapes known non-events, and the chosen
+      text kept the kill rule unchanged, so a killed envelope with trailing text stays unmeasured, as it read when
+      baseline B was measured. Counting it as a kill would be a new operator decision.
+    - The README-size red on the branch clears on the landing merge with main; no CLAUDE.md edit.
+    - No history rewrite for a docs-typed commit that changes one count; the plan's evidence notes it.
+  - The round has two phases. The first covers files no other run holds. The second restores the comment, adds one
+    README sentence and merges current main with a re-stamp; it waits for another run's claims on `ccd/ccd` and
+    README to free. The four required checks must be green on the merged tip, and that tip needs a NEW review.
+  - No routing change. Tasks 1-4 remain unaccepted; Task 5 remains gated. No merge, rollout, restart, arming or
+    settings act.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
