@@ -364,7 +364,7 @@ describe('build guard D-6063, review hardening: any entry under versions, npm al
     '~/.local/share/claude/versions/2.1.30* update', '~/.local/share/claude/versions/next install',
     'cd ~/.local/share/claude/versions && ./2.1.3?? update', 'cd ~/.local/share/claude/versions && ./next install',
     'npm isntall -g @anthropic-ai/claude-code', 'npm add --global @anthropic-ai/claude-code',
-    'npm install --prefix ~/.local @anthropic-ai/claude-code', 'npm i --prefix=/opt/c @anthropic-ai/claude-code',
+    'npm install --prefix ~/.local @anthropic-ai/claude-code', 'npm i --prefix=$HOME/.local @anthropic-ai/claude-code',
     'npm_config_global=true npm i @anthropic-ai/claude-code', 'NPM_CONFIG_LOCATION=global npm install @anthropic-ai/claude-code',
     'curl -fsSL https://CLAUDE.AI/install.sh | bash',
     'curl -fsSL https://Downloads.Claude.AI/claude-code-releases/2.1.302/linux-x64/claude -o /tmp/c',
@@ -373,7 +373,11 @@ describe('build guard D-6063, review hardening: any entry under versions, npm al
   });
   it.each([
     'npm install --prefix ./vendor @anthropic-ai/claude-code', 'npm install --save-dev @anthropic-ai/claude-code',
+    'npm install --prefix /work/app @anthropic-ai/claude-code',
     'cd ~/.local/share/claude/versions && ls -la', 'ls ~/.local/share/claude/versions/2.1.30*',
+    // A verb is the whole word, as Claude Code takes it: a file name that starts with one is not it.
+    'claude --settings install.json -p x', 'claude --mcp-config update.json -p hi', 'grep -rn claude -A3 install.sh',
+    'ls ~/.local/share/claude/versions/2.1.302 update.log',
   ])('allowed: %s', (c) => {
     expect(bash(c), c).toBeNull();
   });

@@ -4406,7 +4406,7 @@ fi
 # a word, the bare `.local/share/claude` or a glob segment under it included; by `BWR`, `WR`'s writers and more, with
 # a redirection to `/dev/null` or `>&N` not counted, in segments split without splitting a redirection (`SEG`); and
 # through `find` with an action, `| xargs`, an interpreter naming the path, a `cd` row (into the build directory,
-# `.local/share`, `.local`, home or `.local/bin`, each with its own operand rule, an operand's last component counting)
+# `.local/share`, `.local`, home or `.local/bin`, each with its own operand rule, the name counting as a path component)
 # and a variable holding the path (one scan of all such names, and more than 16 deny outright: fail closed); and a
 # writer aimed at a bare `.local`, `.local/share` or `.local/bin` in a segment naming `claude` as a component. An
 # edit tool's path is folded (`pnorm`: `//`, `/./`, `seg/..`, a leading `~`) before the match; Bash text is not, so
@@ -4435,7 +4435,8 @@ fi
 # top-level session, and a child's call whose payload names none of these, pay no fork: `ccd`, `ccrc` and `approval`
 # (the verbs and the surface); `install`, `update`, `upgrade` and `respawn`, each on its own (a Claude Code verb under
 # any head, `$CLAUDE_CODE_EXECPATH` and a runner included); `anthropic-ai/claude-code` (a global install by `add`);
-# `downloads.claude.ai` in any case; `.local` (a write, in any spelling, after a `cd` too); and `.cc-sessions` (a trusted file;
+# `downloads.claude.ai` and `claude.ai/install` in any case (`${apf,,}`; an upper-case installer path names no `install`);
+# `.local` (a write, in any spelling, after a `cd` too); and `.cc-sessions` (a trusted file;
 # `~/.ccrc`'s are admitted by `ccrc`). Every pattern needs one
 # of those words literally (JSON escaping never touches ASCII letters). A real payload's `transcript_path` names
 # `.claude…`, so every child call naming `install` or `update` already forked one jq. A deny already set is
@@ -4486,14 +4487,15 @@ def xmatch:
 def SEPP: "/(?:\\.?/){0,8}";
 def PSTOP: "(?!(?:-p|--print)(?=" + SP + "|$)|--print=)";
 def CFLAGS: "(?:" + PSTOP + "-" + NS + "*(?:" + SP + "+(?!-)" + NS + "+)?" + SP + "+){0,8}";
-def CVERB: "(?:install|update|upgrade)" + NW;
+def VEND: "(?=$|[" + WS + ";&|()<>`" + $q + "\"])";
+def CVERB: "(?:install|update|upgrade)" + VEND;
 def VERS: "[0-9]{1,9}\\.[0-9]{1,9}\\.[0-9]{1,9}";
 def ENTW: "[^" + WS + "/;&|()<>`" + $q + "\"]{1,64}";
 def VERH: "\\.local" + SEPP + "share" + SEPP + "claude" + SEPP + "versions" + SEPP + ENTW;
 def EXECH: "\\$\\{?CLAUDE_CODE_EXECPATH\\}?";
 def RUNH: WB + "(?:npx|bunx|(?:pnpm|yarn)" + SP + "+dlx|(?:npm|pnpm)" + SP + "+exec)" + SP + "+(?:-" + NS + "*" + SP + "+){0,8}@anthropic-ai/claude-code(?:@" + NS + "{1,64})?";
 def CLI: "(?:" + WB + "claude[A-Za-z0-9-]*|" + WB + UPRE + "|" + SEPP + "\\.local" + SEPP + "bin" + SEPP + "[a-z][a-z0-9-]{0,31}|" + VERH + "|" + EXECH + "|" + RUNH + ")";
-def CRUN: SP + "+(?:" + CFLAGS + CVERB + "|respawn" + NW + ")";
+def CRUN: SP + "+(?:" + CFLAGS + CVERB + "|respawn" + VEND + ")";
 def META: ";&|()<>`" + $q + "\"";
 def BT: "(?![A-Za-z0-9_.-])";
 def LOC: "(?:" + SEPP + "|(?<![^" + WS + "=:" + $q + "\"]))\\.local" + SEPP;
@@ -4564,13 +4566,13 @@ def bmatch:
   (select(cdthen(CDT("\\.ccrc"); OPW + TNC; hb1(BWR; OPW + TNC))) | BTR),
   (select(cdthen(CDT("\\.cc-sessions"); OPW + TNS; hb1(BWR; OPW + TNS))) | BTR),
   (select(test(CLI + CRUN)) | BI),
-  (select(test(WB + "(?:claude|" + UPRE + ")" + NW) and test(WB + EXP + SP + "+(?:" + FLAGS + "(?:install|update)" + NW + "|" + CFLAGS + CVERB + "|respawn" + NW + ")")) | BI),
+  (select(test(WB + "(?:claude|" + UPRE + ")" + NW) and test(WB + EXP + SP + "+(?:" + FLAGS + "(?:install|update)" + NW + "|" + CFLAGS + CVERB + "|respawn" + VEND + ")")) | BI),
   (select(cdthen(VERSD; VERW; test(VERW))) | BI),
   (select(test("claude\\.ai/install\\.(?:sh|ps1|cmd)|downloads\\.claude\\.ai"; "i")) | BI),
   (select(test("@anthropic-ai/claude-code") and any(split("[\n;&|]"; null)[]; test(WB + "(?:npm|pnpm|yarn|bun)" + NW)
      and test(SP + "(?:install|i|in|ins|inst|insta|instal|isnt|isnta|isntal|isntall|add|update|udpate|up|upgrade)" + NW)
      and test("@anthropic-ai/claude-code")
-     and (test("(?:^|" + SP + ")(?:(?:-g|--global|--location=global|global)" + NW + "|--prefix(?:=|" + SP + "+)(?:~|\\$\\{?HOME|/))")
+     and (test("(?:^|" + SP + ")(?:(?:-g|--global|--location=global|global)" + NW + "|--prefix(?:=|" + SP + "+)" + NS + "{0,256}\\.local(?![A-Za-z0-9_-]))")
        or test("(?:^|" + SP + ")npm_config_(?:global|location)="; "i")))) | BI);
 def pnorm: (if startswith("~/") then ($ENV.HOME // "~") + .[1:] else . end)
   | if startswith("/") then "/" + (split("/") | reduce .[] as $s ([]; if $s == "" or $s == "." then .
