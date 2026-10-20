@@ -683,44 +683,56 @@ describe("coord/routes.ts POST /api/approvals/:id/rule (the ruling's journal row
     let fx: Approvals | undefined;
     afterEach(async () => { if (fx) await fx.close(); fx = undefined; });
 
-    const ruled = async (fail: boolean, verdict: 'allow' | 'deny') => {
+    // The ruling route reads the harness's own Presence and pushes through the harness's own sink (`f.sent`), not the
+    // recorder's: each row sets the child visible (or not) on `f.presence` and asserts `f.sent` gained nothing, so a
+    // push added to the writer, or a record gated on presence, is seen.
+    const ruled = async (fail: boolean, verdict: 'allow' | 'deny', visible: boolean) => {
       const f = await standardFixture();
       fx = f;
       const rec = await feedRecorder(f.home, { coord: f.coord, notifyLog: f.log });
-      rec.setVisible([CHILD, PARENT]);                       // the record gate does not read presence
+      if (visible) f.presence.setVisible(Symbol('pin'), CHILD);
       const minted = await f.request(requestBody(hookInput({ command: 'rm -rf build' })));
       expect(minted.statusCode, 'the premise: the request is held').toBe(201);
       const id = (minted.json() as { id: number }).id;
       if (fail) rec.archiveThrowsOn('every');
       const at = rec.mark();
+      const sentAt = f.sent.length;
       const res = await f.rule(id, PARENT, verdict);
-      return { f, rec, res, id, calls: rec.since(at) };
+      await new Promise((r) => setImmediate(r));
+      return { f, rec, res, id, calls: rec.since(at), pushed: f.sent.slice(sentAt) };
     };
 
-    it.each(['allow', 'deny'] as const)('a %s ruling is recorded and archived, never pushed by the writer, and flushed after the record',
-      async (verdict) => {
-        const { rec, res, calls } = await ruled(false, verdict);
+    it.each([['allow', false], ['allow', true], ['deny', false], ['deny', true]] as const)(
+      'a %s ruling (child visible %s) is recorded and archived, never pushed by the writer, and flushed after the record',
+      async (verdict, visible) => {
+        const { rec, res, calls, pushed } = await ruled(false, verdict, visible);
         expect(res.statusCode).toBe(200);
         expect(res.json()).toEqual({ ok: true, state: verdict === 'allow' ? 'allowed' : 'denied' });
         expect(withoutFlush(calls)).toEqual(['record', 'archive']);
         expect(flushedAfterRecord(calls)).toBe(true);
         expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title, e.body])).toEqual([['ask', CHILD, null,
           'permission ruled', `${PARENT} ${verdict === 'allow' ? 'allowed' : 'denied'} ${CHILD}'s Bash call: ${verdict} by the fixture`]]);
+        expect(pushed, 'the ruling is never pushed').toEqual([]);
         catchUpMatchesRing(rec);
       });
 
     it('ruling stored, feed archive degraded: a failed archive leaves the ruling stored and signed, the answer 200, and says so byte for byte',
       async () => {
-        const { f, rec, res, id, calls } = await ruled(true, 'allow');
+        const { f, rec, res, id, calls, pushed } = await ruled(true, 'allow', true);
         expect(res.statusCode).toBe(200);
         expect(res.json()).toEqual({ ok: true, state: 'allowed' });
         const row = f.coord.approvalById(id);
         expect(row.ok && row.row !== null && [row.row.state, row.row.answeredBy], 'the act\'s own result is unchanged')
           .toEqual(['allowed', PARENT]);
+        const stored = row.ok && row.row !== null && row.row.ruling !== null
+          ? JSON.parse(row.row.ruling) as { record?: { verdict?: string }; sig?: unknown } : null;
+        expect(stored?.record?.verdict, 'the stored ruling carries the verdict').toBe('allow');
+        expect(typeof stored?.sig === 'string' && stored.sig.length > 0, 'and its signature').toBe(true);
         expect(withoutFlush(calls)).toEqual(['record', 'archive']);
         expect(flushedAfterRecord(calls)).toBe(true);
         expect(rec.ring.map((e) => e.title)).toEqual(['permission ruled']);
         expect(rec.archived).toEqual([]);
+        expect(pushed, 'the ruling is never pushed').toEqual([]);
         expect(rec.warned()).toContain(degradeLine('ruling stored, feed archive degraded'));
       });
   });
