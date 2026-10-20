@@ -1118,7 +1118,7 @@ Issued and unused (D1): none.
   `WAVE_BRIEF_SUBJECT` is the subject's one spelling, used by `dispatchRun` and by the pass.
 
   **Files.** `server/src/coord/briefwatch.ts` (new: the L1 decider, its constants, subject and reason words);
-  `server/src/coord/store.ts` (`unlandedBriefs`); `server/src/coord/dispatch.ts` (the subject constant);
+  `server/src/coord/store.ts` (`unlandedBriefs`, `absorbParkEscalation`); `server/src/coord/dispatch.ts` (the subject constant);
   `server/src/watch.ts` (the brief pass in `sweepMail`, and the sweep's empty-queue return counts unlanded briefs);
   `server/test/brief-landed.test.ts` (new); `server/test/single-definition.test.ts` (the new names).
 
@@ -1146,5 +1146,29 @@ Issued and unused (D1): none.
 
   **Routing.** Server only; no wire field, no route, no migration (the durable state is rows `coord.db` already has),
   no `ccd` change. **Needs.** D1 (#754, merged as #853). **Gates.** None open.
+
+  **Review round (extends D-5841).** Four corrections from verification, each with its red test first:
+  - The pass reads its briefs AFTER the sweep's `UserPromptSubmit` edge loop and its awaits, never the list read at the
+    top of `sweepMail` (that one only feeds the empty-queue return): a brief taken just before the 10-minute sweep was
+    otherwise noticed and pushed in the same sweep that set its `ingestedAt`.
+  - The notice absorbs D1's park escalation for that delivery (`CoordStore.absorbParkEscalation`: `parkEscalatedAt` set
+    on the outstanding, never-delivered row, parked or not, since a brief still on its failure ladder at 10 minutes
+    parks after the notice). The operator then gets the brief's one push and no later `mail-parked-<id>` push. D1's
+    park-time sender mail is unchanged.
+  - A REJECTED brief's notice body says the lane has given up and will not try again; only an outstanding brief's says
+    it is retried.
+  - The subject is held to `MAIL_SUBJECT_MAX_BYTES` (system mail skips the HTTP ingress that enforces it), trimmed by
+    code point.
+  Accepted and stated: the push is sent by the call that committed the `brief-not-taken` row, after the commit; a
+  crash between the two loses that push for good, while the claimant's mail is durable in the same transaction.
+
+  **Red tests (review round):** an ingest edge sampled in the same sweep that crosses 10 minutes gets no row, mail or
+  push; a run claimed by its own worker gets the row and one push and no mail; a brief parked behind a foreign draft
+  gives one brief push and no park push over 30 minutes; a rejected brief's notice never promises a retry; the notice
+  subject never exceeds the subject cap.
+
+  **Mutation table (review round):** M11 the `coordinator !== worker` guard dropped; M12 the pass given the list read
+  before the edge loop; M13 the `absorbParkEscalation` call deleted; M14 the rejected body branch dropped; M15 the
+  subject cap dropped.
 
 Issued and unused (D3): D-5842, D-5843.

@@ -13,6 +13,8 @@
  * reads the same answer back.
  */
 
+import { MAIL_SUBJECT_MAX_BYTES } from '../../../shared/api.js';
+
 /** The subject `dispatchRun` gives a wave brief: its one spelling. */
 export const WAVE_BRIEF_SUBJECT = 'wave-brief';
 
@@ -82,15 +84,30 @@ export function briefNotTakenReason(
   return words.length > REASON_MAX ? `${words.slice(0, REASON_MAX - 1)}…` : words;
 }
 
-/** The notice's subject: `brief not taken by <worker>, run N: <reason>`. */
-export const briefNotTakenSubject = (worker: string, runId: number, reason: string): string =>
-  `brief not taken by ${worker}, run ${runId}: ${reason}`;
+/** The notice's subject: `brief not taken by <worker>, run N: <reason>`, held to
+ *  `MAIL_SUBJECT_MAX_BYTES` like any coordinator's subject (system mail skips
+ *  the HTTP ingress that enforces it), trimmed by code point from the end. */
+export function briefNotTakenSubject(worker: string, runId: number, reason: string): string {
+  const full = `brief not taken by ${worker}, run ${runId}: ${reason}`;
+  if (Buffer.byteLength(full, 'utf8') <= MAIL_SUBJECT_MAX_BYTES) return full;
+  const chars = Array.from(full);
+  const ellipsisBytes = Buffer.byteLength('…', 'utf8');
+  let bytes = Buffer.byteLength(full, 'utf8');
+  while (chars.length > 0 && bytes + ellipsisBytes > MAIL_SUBJECT_MAX_BYTES) {
+    bytes -= Buffer.byteLength(chars.pop()!, 'utf8');
+  }
+  return `${chars.join('')}…`;
+}
 
-/** The notice's body, to the run's claimant. */
-export const briefNotTakenBody = (worker: string, runId: number, reason: string): string =>
+/** The notice's body, to the run's claimant. A REJECTED brief is terminal:
+ *  nothing retries it, so its body never says so. */
+export const briefNotTakenBody = (worker: string, runId: number, reason: string, rejected = false): string =>
   `run ${runId}'s wave brief to ${worker} has not been taken ${BRIEF_NOTICE_MS / 60_000} minutes after dispatch: ` +
-  `${reason}. The lane keeps it outstanding and retries it; nothing was re-dispatched and no hold or limit ` +
-  'changed. Look at the worker, or abandon and re-dispatch the run yourself.';
+  `${reason}. ` +
+  (rejected
+    ? 'The lane has given up on it and will not try again: re-send it yourself or abandon the run. '
+    : 'The lane keeps it outstanding and retries it. ') +
+  'Nothing was re-dispatched and no hold or limit changed. Look at the worker, or abandon and re-dispatch the run yourself.';
 
 /** The operator push's collapse key: one per run. */
 export const briefNotTakenTag = (runId: number): string => `brief-not-taken-${runId}`;

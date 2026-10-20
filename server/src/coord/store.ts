@@ -2334,6 +2334,10 @@ export class CoordStore {
    *     park keeps it outstanding, so nothing this arm counts moves. `runHealth`
    *     gains a second narrow-predicate count beside the one above,
    *     `mailParkedLive`, which a re-queued row joins only while parked.
+   *   `absorbParkEscalation` (D-5841, the brief watch) — writes only
+   *     `parkEscalatedAt` on a wave brief's own delivery, which a re-queued row
+   *     never is (it belongs to a `POST /api/mail` mail, not a `coordinator`
+   *     brief); nothing this arm counts moves.
    *
    * BOUNDED by the role-addressed reports of ONE program that parked while its
    * coordinator was dead, at most one new row per `mail` row, and deliberately
@@ -5643,6 +5647,20 @@ export class CoordStore {
     return Number(this.db.prepare(
       'UPDATE mail_deliveries SET parkEscalatedAt = ? ' +
       `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL AND parkEscalatedAt IS NULL`,
+    ).run(at, id).changes) > 0;
+  }
+
+  /** Absorb the park's operator escalation into a more specific notice
+   *  (D-5841, #755): the brief-not-taken notice has told the claimant and pushed
+   *  the operator about this delivery, so its park — now, or a later one —
+   *  escalates nothing more. Unlike `markParkEscalated` it needs no `parkedAt`:
+   *  a brief still on its failure ladder at 10 minutes parks after the notice.
+   *  Writes only an outstanding, never-delivered row not yet escalated, and a
+   *  delivery clears it with the other park columns. */
+  absorbParkEscalation(id: number, at: number): boolean {
+    return Number(this.db.prepare(
+      'UPDATE mail_deliveries SET parkEscalatedAt = ? ' +
+      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND deliveredAt IS NULL AND parkEscalatedAt IS NULL`,
     ).run(at, id).changes) > 0;
   }
 

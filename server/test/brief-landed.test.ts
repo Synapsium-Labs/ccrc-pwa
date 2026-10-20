@@ -18,6 +18,8 @@ import { CoordStore } from '../src/coord/store.js';
 import { renderMailNudge } from '../src/coord/envelope.js';
 import { queueSystemMail } from '../src/coord/rundefs.js';
 import type { PushPayload } from '../src/push.js';
+import { MAIL_SUBJECT_MAX_BYTES } from '../../shared/api.js';
+import { briefNotTakenSubject } from '../src/coord/briefwatch.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -269,4 +271,84 @@ describe('the wave brief is confirmed taken (D-5841)', () => {
     expect(n[0]!.subject).toBe(`brief not taken by ${WORKER}, run ${runId}: rejected (recipient gone)`);
     expect(sent.filter((p) => p.tag === `brief-not-taken-${runId}`)).toHaveLength(1);
   }, 20_000);
+  it('an ingest edge sampled in the same sweep that crosses 10 minutes is not noticed (the pass reads after the edges)', async () => {
+    const st = { box: '', enterWorks: true };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const w = await primed(h, coord, push);
+    seedWorker(h.home);
+    const { runId, deliveryId } = dispatched(coord);
+    await w.sweepMail();
+    expect(deliveryState(coord, deliveryId)).toBe('delivered');
+    advance(BRIEF_RETRY_MS + 1_000);
+    await w.sweepMail();
+    advance(BRIEF_NOTICE_MS - BRIEF_RETRY_MS);
+    seedWorker(h.home, { event: 'UserPromptSubmit', updatedAt: Date.now() - 500 });
+    await w.sweepMail();
+    const ing = coord.db.prepare('SELECT ingestedAt FROM mail_deliveries WHERE id = ?').get(deliveryId) as { ingestedAt: number | null };
+    expect(ing.ingestedAt).not.toBeNull();
+    expect(briefRows(coord, runId, 'brief-not-taken')).toBe(0);
+    expect(notices(coord)).toEqual([]);
+    expect(sent.filter((p) => p.tag === `brief-not-taken-${runId}`)).toEqual([]);
+  }, 20_000);
+
+  it('a run claimed by its own worker gets the row and one push, and no mail to the worker', async () => {
+    const st = { box: 'a human line', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const w = await primed(h, coord, push);
+    seedWorker(h.home);
+    const { runId } = dispatched(coord);
+    coord.db.prepare('UPDATE runs SET claimedBy = ? WHERE id = ?').run(WORKER, runId);
+    for (let t = 0; t <= BRIEF_NOTICE_MS; t += 60_000) { await w.sweepMail(); advance(60_000); }
+    expect(briefRows(coord, runId, 'brief-not-taken')).toBe(1);
+    expect(notices(coord)).toEqual([]);
+    expect(sent.filter((p) => p.tag === `brief-not-taken-${runId}`)).toHaveLength(1);
+    expect(literalSends(h.calls)).toEqual([]);
+  }, 30_000);
+
+  it('a parked brief noticed at 10 minutes absorbs the lane\'s own park escalation: one brief push over 30 minutes, no park push', async () => {
+    const st = { box: 'a human line', enterWorks: false };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const w = await primed(h, coord, push);
+    seedWorker(h.home);
+    const { runId, deliveryId } = dispatched(coord);
+    for (let t = 0; t <= 30 * 60_000; t += 60_000) { await w.sweepMail(); advance(60_000); }
+    expect(notices(coord)).toHaveLength(1);
+    expect(sent.filter((p) => p.tag === `brief-not-taken-${runId}`)).toHaveLength(1);
+    expect(sent.filter((p) => p.tag === `mail-parked-${deliveryId}`)).toEqual([]);
+    const esc = coord.db.prepare('SELECT parkEscalatedAt FROM mail_deliveries WHERE id = ?').get(deliveryId) as { parkEscalatedAt: number | null };
+    expect(esc.parkEscalatedAt).not.toBeNull();
+    expect(literalSends(h.calls)).toEqual([]);
+  }, 60_000);
+
+  it('a rejected brief\'s notice never promises a retry', async () => {
+    const st = { box: '', enterWorks: true };
+    const h = liveHarness(st);
+    const coord = store(h.home);
+    const { push } = pushSpy();
+    const w = await primed(h, coord, push);
+    seedWorker(h.home);
+    const { deliveryId } = dispatched(coord);
+    coord.rejectDelivery(deliveryId, 'undeliverable', 'recipient gone');
+    advance(BRIEF_NOTICE_MS + 1_000);
+    await w.sweepMail();
+    const bodies = coord.db.prepare("SELECT body FROM mail WHERE subject LIKE 'brief not taken%'").all() as unknown as { body: string }[];
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]!.body).not.toContain('retries it');
+    expect(bodies[0]!.body).toContain('given up');
+  }, 20_000);
+
+  it('the notice subject never exceeds the mail subject cap', () => {
+    for (const reason of ['x'.repeat(120), 'é'.repeat(119) + '…']) {
+      const s = briefNotTakenSubject('w'.repeat(150), 123_456, reason);
+      expect(Buffer.byteLength(s, 'utf8')).toBeLessThanOrEqual(MAIL_SUBJECT_MAX_BYTES);
+      expect(s.startsWith('brief not taken by ')).toBe(true);
+    }
+    expect(briefNotTakenSubject(WORKER, 7, 'short')).toBe(`brief not taken by ${WORKER}, run 7: short`);
+  });
 });

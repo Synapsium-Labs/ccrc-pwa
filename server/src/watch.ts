@@ -3314,9 +3314,13 @@ export class FleetWatcher {
       const told = coordinator !== null && coordinator !== b.toId
         ? queueStallNotice(store, { id: b.runId, program: b.program, wave: b.wave, waveOf: b.waveOf }, {
           detail: BRIEF_NOTICE_DETAIL, at: now, toId: coordinator, kind: 'status', subject,
-          body: briefNotTakenBody(b.toId, b.runId, reason) }).queued
+          body: briefNotTakenBody(b.toId, b.runId, reason, b.state === 'rejected') }).queued
         : store.recordStallObservation(b.runId, BRIEF_NOTICE_DETAIL, now).recorded;
       if (!told) continue;
+      // The notice is the more specific word on this delivery: it absorbs the
+      // lane's own park escalation, now or at a later park (its push and its
+      // sender mail).
+      store.absorbParkEscalation(b.deliveryId, now);
       this.pushOne({
         kind: 'mail', sessionId: b.toId,
         project: sessionProjects.get(b.toId) ?? '',
@@ -7458,7 +7462,11 @@ export class FleetWatcher {
 
     // D-5841: the brief pass. It only writes the two run-event rows, the notice
     // mail and D1's `wakeParked`; the woken row goes through every gate below.
-    if (this.sweepBriefs(store, briefs, now, sessionProjects, projects)) woke = true;
+    // Re-read, never the list read at the top: an ingest edge or an ack sampled
+    // since then (the edge loop above, the awaits) has taken that brief.
+    if (this.sweepBriefs(store, store.unlandedBriefs(now - BRIEF_WATCH_HORIZON_MS), now, sessionProjects, projects)) {
+      woke = true;
+    }
 
     // A row the ceiling rejected above may still sit in `dueBefore`: re-read.
     const due = unacked.length === 0 && !woke && !ceilinged ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS);
