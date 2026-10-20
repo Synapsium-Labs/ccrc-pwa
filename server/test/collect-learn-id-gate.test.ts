@@ -21,6 +21,7 @@ import { ACTOR_FLAGS_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
 import { collectTempRoot, learnCollect } from '../src/coord/collectTempRoot.js';
 import { auditDoc, rig } from './collectTempRootFixture.js';
 import { EDGE_ACCEPTED_IDS, REFUSED_IDS } from './registryIdCases.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (f: string): string => readFileSync(path.join(root, f), 'utf8');
@@ -141,10 +142,7 @@ describe('the comments say what W1a and W1b built (the R36 carries)', () => {
   });
 
   it("watch.ts's collectLearn returns on id-refused before its not-asked arm clears every pair (P2)", () => {
-    const s = read('server/src/watch.ts');
-    const a = s.indexOf('\n  private collectLearn(');
-    const b = a < 0 ? -1 : s.indexOf('\n  private ', a + 1);
-    const body = b > a ? s.slice(a, b) : '';
+    const body = sourceOfSymbol('server/src/watch.ts', 'FleetWatcher.collectLearn');
     expect(body.length, 'collectLearn could not be sliced').toBeGreaterThan(200);
     const notAsked = body.indexOf("if (answer.kind === 'not-asked') { this.collectClearPairs(); return; }");
     const refused = body.indexOf("if (answer.kind === 'id-refused') return;");
