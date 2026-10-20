@@ -79,46 +79,48 @@ describe('ccd/contexts.tsv: coverage (D-6054)', () => {
 describe('ccd call graph: the extraction rules, on a fixture tree (D-6054)', () => {
   let root = '';
   beforeAll(() => {
+    // The fixture's functions are named f* with no leading underscore: a test-local `_x() {` in a string reads as an
+    // override of a shipped ccd function to the harness-integrity scan (#943), and these are not overrides.
     root = mkdtempSync(path.join(tmpdir(), 'ccd-contexts-'));
     mkdirSync(path.dirname(ccdLauncherIn(root)), { recursive: true });
     writeFileSync(ccdLauncherIn(root), [
       '#!/usr/bin/env bash',
-      '_k() { _a; }',
-      '_a() {   # calls _b in this comment only',
-      '  # _c in a comment line is not a call',
-      '  local _b=1',
-      '  echo "${_c:-}" "$_b"',
-      '  _b; _b; _k',
+      'fk() { fa; }',
+      'fa() {   # calls fb in this comment only',
+      '  # fc in a comment line is not a call',
+      '  local fb=1',
+      '  echo "${fc:-}" "$fb"',
+      '  fb; fb; fk',
       '}',
-      'TOP=$(_c)',
-      '_b() { _c',
-      '       _a; }',
+      'TOP=$(fc)',
+      'fb() { fc',
+      '       fa; }',
       '',
-      'X=$(_k)',
-      '_c() {',
-      '  _k',
+      'X=$(fk)',
+      'fc() {',
+      '  fk',
       '}',
-      '_d() { _a; }',
-      '_e() {',
+      'fd() { fa; }',
+      'fe() {',
       '  cat <<-EOF',
       '}',
       '\tEOF',
-      '  _a',
+      '  fa',
       '}',
     ].join('\n'));
     writeFileSync(path.join(root, 'ccd', 'contexts.tsv'),
-      ['# header', '_k\tK', '_a\tC1', '_b\tC2', '_c\tC2', '_d\tC1', '_e\tC2', ''].join('\n'));
+      ['# header', 'fk\tK', 'fa\tC1', 'fb\tC2', 'fc\tC2', 'fd\tC1', 'fe\tC2', ''].join('\n'));
   });
   afterAll(() => { if (root) rmSync(root, { recursive: true, force: true }); });
 
   it('regions end at a column-0 `}` or the next definition; comments, expansions and assignments are not calls', () => {
     const edges = ccdCallGraph(root).map((e) => `${e.caller}>${e.callee}@${e.line}`);
-    // _a: `_b` twice is one edge; the comment lines, `local _b=1`, `${_c` and `$_b` are not calls; TOP's `_c` after
-    // `}` is outside every region. _b: a one-liner continued below, so its region runs to the next definition and
-    // takes `_a` from the continuation and `_k` from the top-level line between (a known width). _c: `_k` only.
-    // _e: the heredoc's column-0 `}` ends its region (the blind spot), so its `_a` is lost; see the next row.
+    // fa: `fb` twice is one edge; the comment lines, `local fb=1`, `${fc` and `$fb` are not calls; TOP's `fc` after
+    // `}` is outside every region. fb: a one-liner continued below, so its region runs to the next definition and
+    // takes `fa` from the continuation and `fk` from the top-level line between (a known width). fc: `fk` only.
+    // fe: the heredoc's column-0 `}` ends its region (the blind spot), so its `fa` is lost; see the next row.
     expect(edges).toEqual(
-      ['_k>_a@2', '_a>_b@7', '_a>_k@7', '_b>_c@10', '_b>_a@11', '_b>_k@13', '_c>_k@15', '_d>_a@17']);
+      ['fk>fa@2', 'fa>fb@7', 'fa>fk@7', 'fb>fc@10', 'fb>fa@11', 'fb>fk@13', 'fc>fk@15', 'fd>fa@17']);
   });
 
   it('a column-0 `}` inside a heredoc body is listed, and so is a heredoc that never closes', () => {
@@ -126,15 +128,15 @@ describe('ccd call graph: the extraction rules, on a fixture tree (D-6054)', () 
     const open = mkdtempSync(path.join(tmpdir(), 'ccd-contexts-open-'));
     try {
       mkdirSync(path.dirname(ccdLauncherIn(open)), { recursive: true });
-      writeFileSync(ccdLauncherIn(open), ['_f() {', "  cat <<'JSON'", '  {}', '}', '_g() { :; }'].join('\n'));
+      writeFileSync(ccdLauncherIn(open), ['ff() {', "  cat <<'JSON'", '  {}', '}', 'fg() { :; }'].join('\n'));
       expect(ccdHeredocBraces(open).map((s) => `${s.line} ${s.text}`)).toEqual(['4 }', '2 <<JSON never closes']);
     } finally { rmSync(open, { recursive: true, force: true }); }
   });
 
   it('a cross-context edge joins two contexts, a call into K is not one, and each site says both ends', () => {
-    // _b -> _c is inside C2, _d -> _a inside C1, and every edge to _k goes into K; _k -> _a goes OUT of K, and counts.
+    // fb -> fc is inside C2, fd -> fa inside C1, and every edge to fk goes into K; fk -> fa goes OUT of K, and counts.
     expect(ccdCrossContextCalls(root).map((s) => `${s.line} ${s.text}`))
-      .toEqual(['2 _k (K) -> _a (C1)', '7 _a (C1) -> _b (C2)', '11 _b (C2) -> _a (C1)']);
+      .toEqual(['2 fk (K) -> fa (C1)', '7 fa (C1) -> fb (C2)', '11 fb (C2) -> fa (C1)']);
   });
 });
 
@@ -150,7 +152,7 @@ describe('ccd cross-context references: the ratchet (D-6054)', () => {
     ]);
   });
 
-  it(`the count does not rise above ${BASELINE}`, () => {
+  it(`the count is exactly ${BASELINE}: a rise is red, and a fall lowers BASELINE in the same commit`, () => {
     const sites = ccdCrossContextCalls();
     const pairs = new Map<string, number>();
     for (const s of sites) {
@@ -158,10 +160,15 @@ describe('ccd cross-context references: the ratchet (D-6054)', () => {
       pairs.set(`${a} -> ${b}`, (pairs.get(`${a} -> ${b}`) ?? 0) + 1);
     }
     const table = [...pairs].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).map(([k, n]) => `  ${k}: ${n}`);
+    // Pinned exactly, not `<=`: a relabel between two non-K contexts can lower the count without removing a call,
+    // and an exact pin makes every fall a BASELINE line in the diff, where the reviewer reads why.
     expect(sites.length,
-      `ccd/ccd now has ${sites.length} cross-context references, above the ${BASELINE} it may not exceed. By context `
-      + `pair:\n${table.join('\n')}\nCall the owning context's function from inside its context, or move the `
-      + 'function whose row is wrong (and say why in the PR).').toBeLessThanOrEqual(BASELINE);
+      sites.length > BASELINE
+        ? `ccd/ccd now has ${sites.length} cross-context references, above the ${BASELINE} it may not exceed. By `
+          + `context pair:\n${table.join('\n')}\nCall the owning context's function from inside its context, or move `
+          + 'the function whose row is wrong (and say why in the PR).'
+        : `ccd/ccd now has ${sites.length} cross-context references, below ${BASELINE}: lower BASELINE to `
+          + `${sites.length} in this commit (and, if a row moved, say why in the PR).`).toBe(BASELINE);
   });
 
   it('the listing covers every context pair it counts, and no edge into K', () => {
