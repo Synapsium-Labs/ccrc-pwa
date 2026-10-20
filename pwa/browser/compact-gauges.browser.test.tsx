@@ -3,9 +3,9 @@
 // No screen places the gauges yet (Refined's app bar and Instrument's shell will), and the shells will give them a
 // box a few hundred pixels wide. jsdom lays nothing out, so `test/fleet-pieces.test.tsx` holds the count and this file
 // holds what Chrome computes: the door's markup (`CompactGauges`, rendered here) is put into the running app, so the
-// app's own stylesheets lay it out, in boxes 262, 300, 358 and 600 wide, for each arrangement, at 360 and 1280 in
-// both skins and both palettes. Every gauge that shows is whole inside the row; no two gauges, nor a gauge and the
-// "+n", overlap; no reading is clipped; a short name is never truncated; and the door does not overflow its box.
+// app's own stylesheets lay it out, in boxes 262, 300, 358 and 600 wide, for each arrangement, at 360, 390, 1280 and
+// 1920 in both skins and both palettes. Every gauge that shows is whole inside the row; no two gauges, nor a gauge
+// and the "+n", overlap; no reading is clipped; a short name is never truncated; and the door does not overflow.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/compact-gauges.browser.test.tsx )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -18,7 +18,7 @@ import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 
 const VIEWS: AppView[] = [REFINED, INSTRUMENT].flatMap((skin) => [PHOSPHOR, 'light'].flatMap((theme) =>
-  [360, 1280].map((width) => ({ skin, theme, width }))));
+  [360, 390, 1280, 1920].map((width) => ({ skin, theme, width }))));
 const named = (v: AppView): string => `${v.skin}, ${v.theme}, ${v.width}px`;
 const BOXES = [262, 300, 358, 600];
 const ARRANGEMENTS: CompactArrangement[] = ['bar', 'led', 'grid'];
