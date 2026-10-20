@@ -120,12 +120,12 @@ const DISARMED_DURING = 'the lane was disarmed during the act';
 /** The parse sites this suite pins, per file, as `reclaimPauseParseSites()` finds them. A site added anywhere without a
  *  row here is red; a site W1a folds away is green (the map is a ceiling, and the commit that folds one lowers it). */
 const PINNED_SITES: Readonly<Record<string, number>> = {
-  'server/src/coord/childReclaim.ts': 1,        // childReclaimPauseRead: reclaimChild step 2b, releaseRetiredChildHold step 6
-  'server/src/coord/collectTempRoot.ts': 1,     // collectSwitches: the job's step 2 and step 5
-  'server/src/coord/endDeadCoordinator.ts': 2,  // stillCrashed (the late read), endDeadCoordinator step 1
-  'server/src/coord/expireArchived.ts': 1,      // expirySwitches: step 2 and step 6
+  'server/src/coord/childReclaim.ts': 0,        // folded onto readSwitches (D-5856)
+  'server/src/coord/collectTempRoot.ts': 0,     // folded onto readSwitches (D-5856)
+  'server/src/coord/endDeadCoordinator.ts': 0,  // folded onto readSwitches (D-5856)
+  'server/src/coord/expireArchived.ts': 0,      // folded onto readSwitches (D-5856)
   'server/src/stopDoneSweep.ts': 1,             // stopDonePass's switches
-  'server/src/watch.ts': 4,                     // emitCoord, sweepChildReclaim, archivedExpiryPass, deadCoordinatorPass
+  'server/src/watch.ts': 0,                     // folded onto readSwitches (D-5856)
 };
 
 describe('every includes(RECLAIM_PAUSE_MARKER) site has a verdict row in this suite', () => {
@@ -778,5 +778,61 @@ describe('both spellings of mail-disabled agree: rundefs.ts\'s export and watch.
       tmux: {}, queue: {} } as unknown as DispatchRunDeps;
     expect(await dispatchRun(deps, opened.id, 'do the thing', undefined)).toEqual({ ok: false, kind: 'refused', code: 'paused' });
     expect(ccd).toEqual([]);
+  });
+});
+
+// ── 4. two passes, the marker raised between them (D-5856; W1a C1b's characterization rows) ──────────────────────
+// Each executor runs twice on one rig: the registry is clean for the first run, and the marker is raised on disk
+// between the two. The second run must see it. An executor that kept the first run's switch reading (a cached
+// snapshot, a module-level memo) would act on the second run: the stale act these rows exist to show.
+
+describe('two passes, the marker raised between them: no executor acts on the first pass\'s reading', () => {
+  it('expiry: the first run expires, the second (marker raised between) defers paused-at-server and asks ccd nothing', async () => {
+    const f = await expireRig();
+    expect((await expireArchived(f.deps(f.base.io), f.req)).kind).toBe('expired');
+    expect(f.verbs).toEqual(['ws-audit', 'ws-expire']);
+    writeFileSync(path.join(f.reg, RECLAIM_PAUSE_MARKER), '');
+    expect(await expireArchived(f.deps(f.base.io), f.req))
+      .toEqual({ kind: 'deferred', why: 'paused-at-server', detail: RAISED_CLEANUP, ...f.req });
+    expect(f.verbs, 'nothing asked on the second run').toEqual(['ws-audit', 'ws-expire']);
+  });
+
+  it('collect: the first job acts, the second (marker raised between) is not asked at step 2 and composes nothing', async () => {
+    const r = collectRig();
+    expect((await collectTempRoot(r.deps, r.job())).kind).toBe('acted');
+    const asked = r.attempts.length;
+    r.raise(RECLAIM_PAUSE_MARKER);
+    expect(await collectTempRoot(r.deps, r.job())).toEqual({ kind: 'not-asked', step: 2, why: 'paused', detail: RAISED_CLEANUP });
+    expect(r.attempts.length, 'nothing composed on the second job').toBe(asked);
+  });
+
+  it('dead coordinator: the first act ends the run, the second (marker raised between) is paused-at-server', async () => {
+    const f = await deadRig();
+    expect(await endDeadCoordinator(f.deps(f.base.io), CRASHED, DEAD_NOW)).toMatchObject({ kind: 'ended', stoppedBy: null });
+    expect(f.abandoned).toEqual([f.runId]);
+    writeFileSync(path.join(f.reg, RECLAIM_PAUSE_MARKER), '');
+    expect(await endDeadCoordinator(f.deps(f.base.io), CRASHED, DEAD_NOW)).toEqual({ kind: 'paused-at-server', detail: RAISED_CLEANUP });
+    expect(f.abandoned, 'abandon not reached on the second act').toEqual([f.runId]);
+  });
+
+  it('child reclaim: the first run passes the switch to the audit, the second (marker raised between) defers at 2b', async () => {
+    const f = await childRig();
+    const first = await reclaimChild(f.deps(f.base.io), f.req);
+    expect(first.kind === 'deferred' ? first.why : first.kind).not.toBe('paused-at-server');
+    expect(f.calls.map((c) => c[0])).toContain('ws-audit');
+    const asked = f.calls.length;
+    writeFileSync(path.join(f.reg, RECLAIM_PAUSE_MARKER), '');
+    expect(await reclaimChild(f.deps(f.base.io), f.req))
+      .toEqual({ kind: 'deferred', sessionId: 'demo-a', runId: f.req.runId, why: 'paused-at-server', detail: RAISED_RECLAIM });
+    expect(f.calls.length, 'no argv on the second run').toBe(asked);
+  });
+
+  it('retired-child release: the first run releases, the second (marker raised between) answers changed and releases nothing', async () => {
+    const f = await releaseRig();
+    expect(await releaseRetiredChildHold(f.deps(f.base.io), f.req)).toBe('released');
+    expect(f.ccd).toEqual(['ws-release']);
+    writeFileSync(path.join(f.reg, RECLAIM_PAUSE_MARKER), '');
+    expect(await releaseRetiredChildHold(f.deps(f.base.io), f.req)).toBe('changed');
+    expect(f.ccd, 'no ws-release on the second run').toEqual(['ws-release']);
   });
 });

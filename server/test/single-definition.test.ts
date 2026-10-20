@@ -2347,10 +2347,12 @@ describe("child-reclamation wave 4 — one 'reclaim-paused' literal", () => {
     expect(holders).toEqual(['shared/switches.ts']);
   });
 
-  it('watch.ts reaches the reclaim marker through the shared constant, never a copy', () => {
-    // Not just "no second literal" — that is satisfied by deleting the reader.
+  it('watch.ts reaches the reclaim marker through readSwitches, never a private parse (D-5856)', () => {
+    // Not just "no second literal" — that is satisfied by deleting the reader. Symbol-keyed (scan/symbols.ts): each lane
+    // site calls the switchboard's one reader, and no `includes(RECLAIM_PAUSE_MARKER)` is left in watch.ts.
+    for (const m of ['emitCoord', 'sweepChildReclaim', 'archivedExpiryPass', 'deadCoordinatorPass']) expect(callsIn(symbolOf('server/src/watch.ts', `FleetWatcher.${m}`)).map((c) => c.name), m).toContain('readSwitches');
+    expect(reclaimPauseParseSites().filter((x) => x.file === 'server/src/watch.ts'), 'a private parse in watch.ts').toEqual([]);
     const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'utf8');
-    expect(src).toContain('names.includes(RECLAIM_PAUSE_MARKER)');
     expect(src).toMatch(/import \{[^}]*\bRECLAIM_PAUSE_MARKER\b[^}]*\} from '\.\/coord\/rundefs\.js'/);
   });
 });
@@ -7588,9 +7590,9 @@ describe("the lane's kind is derived in one place, shared/roster.ts (D-5517)", (
 // WIDTH: a name assembled from pieces, a bash variable assigned in one function and written in another, a path passed
 // through a parameter or object field, and an fs call split over lines are not seen.
 // The import sits here, not at the head, so the append moves no cited line (ESM hoists it either way).
-import { markerDefinitions } from './consolidationCensus.js';
+import { markerDefinitions, reclaimPauseParseSites } from './consolidationCensus.js';
 import { parseSource } from './scan/parse.js';
-import { SWITCHES } from '../../shared/switches.js';
+import { SWITCHES } from '../../shared/switches.js'; import { callsIn, symbolOf } from './scan/symbols.js';
 describe('one writer per fact (ARCH-40): the switches whose writer set is already at target (D-5849)', () => {
   const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const WRITE_VERB = '(?:touch|mv|cp|ln|rm|rmdir|mkdir|install|tee|truncate)';
@@ -7778,6 +7780,15 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     const rowless = ALL.filter((f) => /^(?:server\/src|shared)\//.test(rel(f)))
       .flatMap((f) => [...stallCode(f).matchAll(DEF)].filter((m) => !rows.has(m[3]!)).map((m) => `${rel(f)}: ${m[1]} = ${m[3]}`));
     expect(rowless, 'a marker constant with no SWITCHES row').toEqual([]);
+  });
+
+  // D-5856 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1b; ARCH-70 (#805)).
+  // Every reclaim-paused reader, at the pass and at the act, goes through `readSwitches`: the private parse sites fold
+  // 10 -> 1 on C1b's tip. The one left is the stop-done lane's (`stopDoneSweep.ts`), which W4 moves. May only shrink.
+  it('reclaim-paused is parsed at <= 1 site outside readSwitches (may only shrink)', () => {
+    const sites = reclaimPauseParseSites();
+    expect(sites.length, 'a private includes(RECLAIM_PAUSE_MARKER): read it through readSwitches').toBeLessThanOrEqual(1);
+    expect(sites.map((x) => x.file)).toEqual(sites.length === 0 ? [] : ['server/src/stopDoneSweep.ts']);
   });
 
   // D-5853 (Task C0f; ARCH-00 (#525)). The test scanners' TS parser, the operator's option (a) (a TypeScript 6 alias),
@@ -8013,7 +8024,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   it('literal source pins over W1a\'s files may only shrink (D-5854; ARCH-06\'s counting rule)', () => {
     // Measured on merge day. Lower a row when a pin moves onto scan/symbols.ts; never raise one.
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 114,
+      'server/src/watch.ts': 113,
       'server/src/server.ts': 31,
       'server/src/interruptlog.ts': 0,
       'server/src/coord/routes.ts': 40,

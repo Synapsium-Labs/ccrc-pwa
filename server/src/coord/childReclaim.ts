@@ -20,6 +20,7 @@ import {
 } from '../childReclaimSweep.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
+import { readSwitches } from '../../../shared/switches.js';
 import {
   CHILD_RUN_ID, LC_REASON_MAX_BYTES, REG_GENERATION_SHAPE, TERMINAL_RUN_STATES, holdReason, type ChildMark,
   type ChildReclaimGeneration, type ChildReclaimGenerationKey, type LifecycleAct, type LifecycleOutcome,
@@ -1008,9 +1009,8 @@ export async function reclaimChild(deps: ChildReclaimDeps, req: ChildReclaimRequ
 export async function childReclaimPauseRead(
   io: Pick<FleetIO, 'readdir'>, registryDir: string,
 ): Promise<MarkerState> {
-  const names = await io.readdir(registryDir);
-  if (names === null) return 'unmeasurable';
-  return names.includes(RECLAIM_PAUSE_MARKER) ? 'set' : 'clear';
+  // A rejecting `readdir` is NOT folded into `null` here: it propagates, and each caller's try keeps its own sentence.
+  return readSwitches(await io.readdir(registryDir))[RECLAIM_PAUSE_MARKER];
 }
 
 /** THE ONE READ of a registry row's generation, `$REG/<id>.generation` (spec §5.5): the sweep's third key, the

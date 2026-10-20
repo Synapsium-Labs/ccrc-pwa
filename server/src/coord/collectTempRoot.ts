@@ -8,6 +8,7 @@ import type { CcdResult } from '../lifecycle.js';
 import { CCD_ARGV, COLLECT_CAP, RECLAIM_PAUSE_CAP, capSupported, sweepDec, verbSupported } from '../ccdargv.js';
 import type { CoordStore } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
+import { readSwitches } from '../../../shared/switches.js';
 import { CHILD_BIRTH_SKEW_MS } from './childSpent.js';
 import {
   COLLECT_LANE_LIVE_MARKER, collectLicence, collectLicenceStands, parseCollectAudit, parseCollectResult,
@@ -373,7 +374,7 @@ export async function collectSwitches(io: Pick<FleetIO, 'readdirMeasured'>, regi
   if (!listed.ok) return { paused: true, why: 'unlistable', reason: listed.reason };
   const names = listed.entries;
   const marker = names.includes(COLLECT_LANE_LIVE_MARKER);
-  return names.includes(RECLAIM_PAUSE_MARKER) ? { paused: true, why: 'raised', marker } : { paused: false, marker };
+  return readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set' ? { paused: true, why: 'raised', marker } : { paused: false, marker };
 }
 
 // ── the switch's control state and the marker's latch (path-identity spec 2026-10-12 §5.2, §5.4) ──────────────
