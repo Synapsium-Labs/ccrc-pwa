@@ -120,7 +120,7 @@ const DISARMED_DURING = 'the lane was disarmed during the act';
 /** The parse sites this suite pins, per file, as `reclaimPauseParseSites()` finds them. A site added anywhere without a
  *  row here is red; a site W1a folds away is green (the map is a ceiling, and the commit that folds one lowers it). */
 const PINNED_SITES: Readonly<Record<string, number>> = {
-  'server/src/coord/childReclaim.ts': 1,        // childReclaimPauseRead: reclaimChild step 2b, releaseRetiredChildHold step 6
+  'server/src/coord/childReclaim.ts': 0,        // folded onto readSwitches (D-5856)
   'server/src/coord/collectTempRoot.ts': 0,     // folded onto readSwitches (D-5856)
   'server/src/coord/endDeadCoordinator.ts': 0,  // folded onto readSwitches (D-5856)
   'server/src/coord/expireArchived.ts': 0,      // folded onto readSwitches (D-5856)
