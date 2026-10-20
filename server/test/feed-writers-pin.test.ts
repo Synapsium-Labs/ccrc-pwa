@@ -16,6 +16,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, writeFileSync, utimesSync } from 'node:fs';
 import path from 'node:path';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import { buildServer, type Deps } from '../src/server.js';
@@ -27,11 +28,33 @@ import { idleNudgeFeedBody } from '../src/idlenudge.js';
 import { recordInterrupt } from '../src/interruptlog.js';
 import { askKey } from '../src/askkey.js';
 import { COLLECT_FEED_TITLE, COLLECT_SETTING_FEED_TITLE, measureCollectLaneRow } from '../src/collectLane.js';
-import { IDLE_COMPACT_NUDGE_PROMPT, type FleetSession } from '../../shared/api.js';
+import {
+  IDLE_COMPACT_NUDGE_PROMPT, PRESENCE_OPEN_TTL_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT,
+  type CollectLaneView, type FleetSession,
+} from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { IDLE_TAIL, T_NOTICE, T_STOP, jsonl } from './idleNudgeFixtures.js';
 import { collectRig } from './collectLaneFixture.js';
+import { registerCoordRoutes } from '../src/coord/routes.js';
+import type { GateDecision } from '../src/auth/gate.js';
+import type { FleetState } from '../src/fleetstate.js';
+import { FleetIdentityCell } from '../src/fleetidentity.js';
+import { ACTOR_FLAGS_CAP, COLLECT_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
+import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
+import { collectLaneJournalAt, defaultCollectLaneJournalPath } from '../src/coord/collectLaneJournal.js';
+import { parseStallSettings } from '../src/coord/stallsettings.js';
+import {
+  CHILD_RECLAIM_FEED_QUIET_NONE, CHILD_RECLAIM_KEPT_FEED_TITLE, CHILD_RECLAIM_LEAF_KEPT_FEED_TITLE, reclaimChild,
+  recordChildReclaimKeptFeed, recordChildReclaimLeafKeptFeed, type ChildReclaimDeps,
+} from '../src/coord/childReclaim.js';
+import type { ChildReclaimKeptAttention, ChildReclaimLeafKept } from '../src/childReclaimSweep.js';
+import { expireArchived, recordExpireFeed, type ExpireArchivedDeps } from '../src/coord/expireArchived.js';
+import { recordDeadCoordinatorFeed } from '../src/coord/endDeadCoordinator.js';
+import type { DeadCoordinatorActOutcome } from '../src/deadCoordinator.js';
+import { stopDonePass, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
+import { STOP_DONE_GRACE_MS } from '../src/stopDone.js';
+import { CHILD, PARENT, hookInput, requestBody, standardFixture, type Approvals } from './approvalsHarness.js';
 import { degradeLine, feedRecorder, flushedAfterRecord, withoutFlush, type FeedRecorder } from './feedWriterFixture.js';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
@@ -440,3 +463,546 @@ describe("server.ts's operator-answer pair (POST /api/sessions/:id/ask): recorde
       expect(rec.warned()).toContain(degradeLine('ask answered, feed archive degraded'));
     });
 });
+
+// ═══ PART 2 (D-5851, Task C0d): the writers in coord/ and stopDoneSweep.ts ═════════════════════════════════════════
+//
+// The same observable facts as part 1, for the eleven call lines in `coord/` and `stopDoneSweep.ts`: the record gate,
+// the push (every one of these is `never`), the archive row, a flush after the ring record, and with the archive
+// throwing the act's own result unchanged and the writer's degrade sentence byte for byte. Each route row goes through
+// its route under `inject`; each executor row through the executor or the exported writer its lane calls, over fixture
+// HOMEs and fake runners only (no `ccd`, no tmux, no live HOME). The approval ruling's row and the three child-reclaim
+// rows sit on the approval and destructive paths and were written natively (plan Task C0d, band 3).
+
+// ─── coord/routes.ts's five pairs, each through its route ──────────────────────────────────────────────────────────
+
+const SESSION_OK = (): GateDecision => ({ allow: true, verdict: 'ok', reason: 'session', device: null });
+
+/** The coordination routes on a bare Fastify over a recorder, as `stall-settings-route.test.ts` registers them. */
+const coordRoutesApp = (home: string, rec: FeedRecorder, over: Partial<Deps> = {}): FastifyInstance => {
+  const base = testDeps(home);
+  const deps: Deps = { ...base, cfg: { ...base.cfg, authEnabled: false }, coord: rec.coord, notifyLog: rec.notifyLog,
+    push: rec.push as never, presence: rec.presence as never, ...over };
+  const app = Fastify();
+  registerCoordRoutes(app, deps, new Bus(), SESSION_OK, { tmux: deps.tmux, queue: deps.queue, readAsk: async () => null });
+  return app;
+};
+
+describe("coord/routes.ts POST /api/coord/caps: recorded always, never pushed (D-5851)", () => {
+  const posted = async (fail: boolean) => {
+    const home = mkTmp('ccrc-feed-pin-caps-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const rec = await feedRecorder(home);
+    const app = coordRoutesApp(home, rec);
+    try {
+      if (fail) rec.archiveThrowsOn('every');
+      const at = rec.mark();
+      const res = await app.inject({ method: 'POST', url: '/api/coord/caps', payload: { maxConcurrentWorkers: 5 } });
+      return { rec, res, calls: rec.since(at) };
+    } finally { await app.close(); }
+  };
+
+  it('the caps change is recorded and archived, never pushed, and flushed after the ring record', async () => {
+    const { rec, res, calls } = await posted(false);
+    expect(res.statusCode).toBe(200);
+    expect(withoutFlush(calls)).toEqual(['record', 'archive']);
+    expect(flushedAfterRecord(calls)).toBe(true);
+    expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title, e.body]))
+      .toEqual([['coord', '', null, 'caps changed', 'workers 3 → 5, per day 12 → 12']]);
+    expect(rec.pushes).toEqual([]);
+    catchUpMatchesRing(rec);
+  });
+
+  it('a failed archive leaves the caps written and the answer 200, flushes after the record, and says so byte for byte',
+    async () => {
+      const { rec, res, calls } = await posted(true);
+      expect(res.statusCode).toBe(200);
+      expect(rec.coord.caps(), 'the act\'s own result is unchanged').toEqual({ maxConcurrentWorkers: 5, maxSessionsPerDay: 12 });
+      expect(withoutFlush(calls)).toEqual(['record', 'archive']);
+      expect(flushedAfterRecord(calls)).toBe(true);
+      expect(rec.archived).toEqual([]);
+      expect(rec.pushes).toEqual([]);
+      expect(rec.warned()).toContain(degradeLine('caps written, feed archive degraded'));
+    });
+});
+
+describe("coord/routes.ts POST /api/coord/stall-watch: recorded always, never pushed (D-5851)", () => {
+  const posted = async (fail: boolean) => {
+    const home = mkTmp('ccrc-feed-pin-stall-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const rec = await feedRecorder(home);
+    const app = coordRoutesApp(home, rec);
+    try {
+      if (fail) rec.archiveThrowsOn('every');
+      const at = rec.mark();
+      const res = await app.inject({ method: 'POST', url: '/api/coord/stall-watch', payload: { level: 'off' } });
+      return { rec, res, calls: rec.since(at) };
+    } finally { await app.close(); }
+  };
+
+  it('the stall-watch change is recorded and archived, never pushed, and flushed after the ring record', async () => {
+    const { rec, res, calls } = await posted(false);
+    expect(res.statusCode).toBe(200);
+    expect(withoutFlush(calls)).toEqual(['record', 'archive']);
+    expect(flushedAfterRecord(calls)).toBe(true);
+    expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title, e.body]))
+      .toEqual([['coord', '', null, 'stall watch changed', `level: ${STALL_FOLLOW_LABEL} → ${STALL_LEVEL_TEXT.off.label}; by flag-off`]]);
+    expect(rec.pushes).toEqual([]);
+  });
+
+  it('a failed archive leaves the settings written and the answer 200, and says so byte for byte', async () => {
+    const { rec, res, calls } = await posted(true);
+    expect(res.statusCode).toBe(200);
+    expect(parseStallSettings(rec.coord.stallSettings()).level, 'the act\'s own result is unchanged')
+      .toEqual({ kind: 'chosen', level: 'off' });
+    expect(withoutFlush(calls)).toEqual(['record', 'archive']);
+    expect(flushedAfterRecord(calls)).toBe(true);
+    expect(rec.archived).toEqual([]);
+    expect(rec.pushes).toEqual([]);
+    expect(rec.warned()).toContain(degradeLine('stall watch settings written, feed archive degraded'));
+  });
+});
+
+describe("coord/routes.ts POST /api/coord/collect-lane: recorded always, never pushed (D-5851)", () => {
+  const posted = async (fail: boolean) => {
+    const home = mkTmp('ccrc-feed-pin-collect-route-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const rec = await feedRecorder(home);
+    const base = testDeps(home);
+    const journal = collectLaneJournalAt(defaultCollectLaneJournalPath(base.cfg.ccrcDir));
+    const cell = new FleetIdentityCell();
+    cell.invalidate('awaiting-inventory');
+    cell.publish(cell.epochNow(), { kind: 'known', nodeId: 'fleet', measuredAt: 1_790_000_000_000 });
+    const fleetState: FleetState = { connected: true, downSince: null, rosterFp: null, build: null,
+      ccdVerbs: ['ws-audit', 'ws-collect', COLLECT_CAP, RECLAIM_PAUSE_CAP] };
+    // The starting state through the store's one writer, as `collect-lane-route.test.ts` sets it: the latch retired,
+    // the switch Live on this node. These two writes record no feed row.
+    expect(rec.coord.setCollectLane({ kind: 'retire', expected: rec.coord.collectLaneRow(), expectedJournal: journal.read() },
+      1_790_000_100_000, journal).kind).toBe('written');
+    expect(rec.coord.setCollectLane({ kind: 'live', fleetNodeId: 'fleet', expected: rec.coord.collectLaneRow(),
+      expectedJournal: journal.read() }, 1_790_000_100_000, journal).kind).toBe('written');
+    expect(rec.calls, 'the premise: the starting state recorded nothing').toEqual([]);
+    const app = coordRoutesApp(home, rec, { fleetState, fleetIdentity: cell, collectLane: { journal, bootNonce: 'boot-1' } });
+    try {
+      if (fail) rec.archiveThrowsOn('every');
+      const at = rec.mark();
+      const res = await app.inject({ method: 'POST', url: '/api/coord/collect-lane', payload: { choice: 'off' } });
+      return { rec, res, calls: rec.since(at) };
+    } finally { await app.close(); }
+  };
+
+  it('the collector setting is recorded and archived, never pushed, and flushed after the ring record', async () => {
+    const { rec, res, calls } = await posted(false);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(withoutFlush(calls)).toEqual(['record', 'archive']);
+    expect(flushedAfterRecord(calls)).toBe(true);
+    expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title])).toEqual([['coord', '', null, COLLECT_SETTING_FEED_TITLE]]);
+    expect(rec.archived[0]!.body.endsWith('; by flag-off')).toBe(true);
+    expect(rec.pushes).toEqual([]);
+  });
+
+  it('a failed archive leaves the setting written and the answer 200, and says so byte for byte', async () => {
+    const { rec, res, calls } = await posted(true);
+    expect(res.statusCode, res.body).toBe(200);
+    const view = res.json() as CollectLaneView;
+    expect(view.stored.read === 'row' && view.stored.choice, 'the act\'s own result is unchanged').toBe('off');
+    expect(withoutFlush(calls)).toEqual(['record', 'archive']);
+    expect(flushedAfterRecord(calls)).toBe(true);
+    expect(rec.archived).toEqual([]);
+    expect(rec.pushes).toEqual([]);
+    expect(rec.warned()).toContain(degradeLine('collector setting written, feed archive degraded'));
+  });
+});
+
+describe("coord/routes.ts POST /api/asks/:id/answer (the parent's answer): recorded always, never pushed (D-5851)", () => {
+  const QUESTION = { question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] };
+  const ASK_KEY = askKey({ questions: [QUESTION] })!;
+  const ASK_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\nEnter to select\n';
+  const TOKEN = 'f'.repeat(64);
+  const PARENT = 'acct-a-project-a-coordinator';
+  const PARENT_UUID = 'p'.repeat(36);
+
+  const answered = async (fail: boolean) => {
+    const home = mkTmp('ccrc-feed-pin-parent-answer-');
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    for (const [id, uuid] of [[B, 'c'.repeat(36)], [PARENT, PARENT_UUID]] as const) {
+      for (const [k, v] of Object.entries({ wrapper: 'claude', project: 'project-a', workdir: `/w/${id}`, uuid, started: '1' })) {
+        writeFileSync(path.join(reg, `${id}.${k}`), v);
+      }
+    }
+    const now = Date.now();
+    writeFileSync(path.join(reg, `${B}.hookstate.json`), JSON.stringify({
+      v: 1, state: 'waiting', event: 'PermissionRequest', sessionId: 'c'.repeat(36), pid: 4242,
+      updatedAt: now, ask: { questions: [QUESTION] }, subagents: [],
+    }));
+    const run: Runner = async (_cmd, args) => (args[0] === 'capture-pane'
+      ? { code: 0, stdout: ASK_PANE, stderr: '' } : { code: 0, stdout: '', stderr: '' });
+    const rec = await feedRecorder(home);
+    rec.setVisible([B]);                                     // the record gate does not read presence
+    const app = await buildServer({ ...testDeps(home, run), mailToken: TOKEN, coord: rec.coord, notifyLog: rec.notifyLog,
+      push: rec.push as never, presence: rec.presence as never });
+    try {
+      const id = rec.coord.insertAsk({ childId: B, parentId: PARENT, runId: null, askKey: ASK_KEY, askAt: now,
+        dialogId: 'dlg-1', question: QUESTION.question, options: QUESTION.options.map((o) => o.label), now });
+      if (fail) rec.archiveThrowsOn('every');
+      const at = rec.mark();
+      const res = await app.inject({ method: 'POST', url: `/api/asks/${id}/answer`, headers: { 'x-ccrc-mail-token': TOKEN },
+        payload: { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [1] } });
+      return { rec, res, calls: rec.since(at), id };
+    } finally { await app.close(); }
+  };
+
+  it("the parent's answer is recorded and archived, never pushed, and flushed after the ring record", async () => {
+    const { rec, res, calls } = await answered(false);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(withoutFlush(calls)).toEqual(['record', 'archive']);
+    expect(flushedAfterRecord(calls)).toBe(true);
+    expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title, e.body])).toEqual([['ask', B, null,
+      'question answered', `${PARENT} answered ${B}'s question: Which colour? → Blue`]]);
+    expect(rec.pushes).toEqual([]);
+  });
+
+  it('a failed archive leaves the answer 200 and the row answered, and says so byte for byte', async () => {
+    const { rec, res, calls, id } = await answered(true);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    const row = rec.coord.askById(id);
+    expect(row.ok && row.ask?.state, 'the act\'s own result is unchanged').toBe('answered');
+    expect(withoutFlush(calls)).toEqual(['record', 'archive']);
+    expect(flushedAfterRecord(calls)).toBe(true);
+    expect(rec.archived).toEqual([]);
+    expect(rec.pushes).toEqual([]);
+    expect(rec.warned()).toContain(degradeLine('ask answered, feed archive degraded'));
+  });
+});
+
+// Written natively (band 3: the approval path).
+describe("coord/routes.ts POST /api/approvals/:id/rule (the ruling's journal row): recorded always, never pushed (D-5851)",
+  () => {
+    let fx: Approvals | undefined;
+    afterEach(async () => { if (fx) await fx.close(); fx = undefined; });
+
+    const ruled = async (fail: boolean, verdict: 'allow' | 'deny') => {
+      const f = await standardFixture();
+      fx = f;
+      const rec = await feedRecorder(f.home, { coord: f.coord, notifyLog: f.log });
+      rec.setVisible([CHILD, PARENT]);                       // the record gate does not read presence
+      const minted = await f.request(requestBody(hookInput({ command: 'rm -rf build' })));
+      expect(minted.statusCode, 'the premise: the request is held').toBe(201);
+      const id = (minted.json() as { id: number }).id;
+      if (fail) rec.archiveThrowsOn('every');
+      const at = rec.mark();
+      const res = await f.rule(id, PARENT, verdict);
+      return { f, rec, res, id, calls: rec.since(at) };
+    };
+
+    it.each(['allow', 'deny'] as const)('a %s ruling is recorded and archived, never pushed by the writer, and flushed after the record',
+      async (verdict) => {
+        const { rec, res, calls } = await ruled(false, verdict);
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ ok: true, state: verdict === 'allow' ? 'allowed' : 'denied' });
+        expect(withoutFlush(calls)).toEqual(['record', 'archive']);
+        expect(flushedAfterRecord(calls)).toBe(true);
+        expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title, e.body])).toEqual([['ask', CHILD, null,
+          'permission ruled', `${PARENT} ${verdict === 'allow' ? 'allowed' : 'denied'} ${CHILD}'s Bash call: ${verdict} by the fixture`]]);
+        catchUpMatchesRing(rec);
+      });
+
+    it('ruling stored, feed archive degraded: a failed archive leaves the ruling stored and signed, the answer 200, and says so byte for byte',
+      async () => {
+        const { f, rec, res, id, calls } = await ruled(true, 'allow');
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ ok: true, state: 'allowed' });
+        const row = f.coord.approvalById(id);
+        expect(row.ok && row.row !== null && [row.row.state, row.row.answeredBy], 'the act\'s own result is unchanged')
+          .toEqual(['allowed', PARENT]);
+        expect(withoutFlush(calls)).toEqual(['record', 'archive']);
+        expect(flushedAfterRecord(calls)).toBe(true);
+        expect(rec.ring.map((e) => e.title)).toEqual(['permission ruled']);
+        expect(rec.archived).toEqual([]);
+        expect(rec.warned()).toContain(degradeLine('ruling stored, feed archive degraded'));
+      });
+  });
+
+// ─── coord/childReclaim.ts's three writers (written natively, band 3: the destructive path) ──────────────────────────
+//
+// The operator's ruling at `recordChildReclaimFeed`: every reclaim lands in the feed; no push per reap. None of the
+// three writers' deps carries a push sink in production; each row hands one anyway (and a visible presence), so a push
+// added to a writer, or a record gated on presence, is seen.
+
+const CLAIM_RUN = 7;
+
+/** A marked child of a FAILED run with nothing open on it, the reclaim switch raised, under a fixture HOME: the
+ *  executor defers `paused-at-server` before any argv (`child-reclaim-paused-at-server.test.ts`'s fixture), so its one
+ *  feed row is written and no `ccd` verb is ever composed. */
+const reclaimRig = async (visible: boolean) => {
+  const home = mkTmp('ccrc-feed-pin-reclaim-');
+  const argv: string[][] = [];
+  const base = testDeps(home, async (_cmd, args) => { argv.push(args); return { code: 1, stdout: '', stderr: '' }; });
+  const reg = base.cfg.registryDir;
+  mkdirSync(reg, { recursive: true });
+  const rec = await feedRecorder(home);
+  const opened = rec.coord.openRun({ program: 'pin-2', title: 'pin', project: 'project-a', wave: 1, waveOf: null,
+    claimedBy: 'project-a-coordinator' });
+  if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+  const closed = rec.coord.closeRun({ runId: opened.id, finalState: 'failed', causedBy: 'operator', handoffCommit: null,
+    program: 'pin-2', viaClosing: false });
+  if (!closed.ok) throw new Error(`close refused: ${JSON.stringify(closed)}`);
+  for (const [k, v] of Object.entries({ uuid: `u-${A}`, wrapper: 'claude', project: 'project-a', workdir: `/w/${A}`,
+    workspace: 'a', branch: `ws/${A}`, base: 'origin/main', started: '1', child: String(opened.id) })) {
+    writeFileSync(path.join(reg, `${A}.${k}`), v);
+  }
+  writeFileSync(path.join(reg, RECLAIM_PAUSE_MARKER), '');
+  if (visible) rec.setVisible([A]);
+  const deps = {
+    coord: rec.coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
+    fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
+      ccdVerbs: ['ws-audit', 'ws-reclaim', RECLAIM_CAP, ACTOR_FLAGS_CAP] },
+    presence: rec.presence, notifyLog: rec.notifyLog, push: rec.push,
+  };
+  const reclaim = () => reclaimChild(deps as ChildReclaimDeps, {
+    sessionId: A, runId: opened.id, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+    feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'none' },
+  });
+  return { rec, reclaim, runId: opened.id, argv };
+};
+
+describe("coord/childReclaim.ts's executor row (recordChildReclaimFeed): recorded always, no push per reap (D-5851)", () => {
+  it.each([false, true])('every reclaim lands in the feed and no push per reap (visible %s): ring, archive, never a push',
+    async (visible) => {
+      const r = await reclaimRig(visible);
+      const at = r.rec.mark();
+      expect(await r.reclaim()).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
+      expect(r.argv, 'SAFETY: no ccd verb was composed').toEqual([]);
+      expect(withoutFlush(r.rec.since(at))).toEqual(['record', 'archive']);
+      expect(flushedAfterRecord(r.rec.since(at))).toBe(true);
+      expect(r.rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title]))
+        .toEqual([['run', A, r.runId, 'child reclaim deferred']]);
+      expect(r.rec.pushes).toEqual([]);
+      catchUpMatchesRing(r.rec);
+    });
+
+  it('a failed archive leaves the outcome unchanged, flushes after the record, and says so byte for byte', async () => {
+    const r = await reclaimRig(false);
+    r.rec.archiveThrowsOn('every');
+    const at = r.rec.mark();
+    expect(await r.reclaim(), 'the act\'s own result is unchanged').toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
+    expect(withoutFlush(r.rec.since(at))).toEqual(['record', 'archive']);
+    expect(flushedAfterRecord(r.rec.since(at))).toBe(true);
+    expect(r.rec.ring.map((e) => e.title)).toEqual(['child reclaim deferred']);
+    expect(r.rec.archived).toEqual([]);
+    expect(r.rec.pushes).toEqual([]);
+    expect(r.rec.warned()).toContain(degradeLine('child reclaim deferred, feed archive degraded'));
+  });
+});
+
+/** The deps the sweep hands the kept writers (`{ coord, notifyLog }`), plus a push sink and a presence that says
+ *  visible, which no production caller passes: a writer that pushed or read presence would show it. */
+const keptDeps = async (fail: boolean) => {
+  const rec = await feedRecorder(mkTmp('ccrc-feed-pin-kept-'));
+  rec.setVisible([A]);
+  if (fail) rec.archiveThrowsOn('every');
+  const deps = { coord: rec.coord, notifyLog: rec.notifyLog, presence: rec.presence, push: rec.push };
+  return { rec, deps };
+};
+const KEPT: ChildReclaimKeptAttention = { kind: 'kept', sessionId: A, runId: CLAIM_RUN, word: 'coordinating',
+  sentence: 'kept: it has coordinated a run of its own.' };
+const LEAF: ChildReclaimLeafKept = { item: { kind: 'leaf-kept', sessionId: A, runId: CLAIM_RUN,
+  sentence: 'its leaf was kept.', at: null }, source: 1, detail: null, clipsClause: null };
+
+describe("coord/childReclaim.ts's kept row (recordChildReclaimKeptFeed): recorded always, never pushed (D-5851)", () => {
+  it('every reclaim lands in the feed: the kept row is recorded and archived whatever the presence, never pushed', async () => {
+    const { rec, deps } = await keptDeps(false);
+    recordChildReclaimKeptFeed(deps, KEPT);
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
+    expect(flushedAfterRecord(rec.calls)).toBe(true);
+    expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title, e.body])).toEqual([['run', A, CLAIM_RUN,
+      CHILD_RECLAIM_KEPT_FEED_TITLE, `${A}, child of run #${CLAIM_RUN}: ${KEPT.sentence}`]]);
+    expect(rec.pushes).toEqual([]);
+  });
+
+  it('child reclaim kept, feed archive degraded: a failed archive never throws, flushes after the record, byte for byte',
+    async () => {
+      const { rec, deps } = await keptDeps(true);
+      expect(() => { recordChildReclaimKeptFeed(deps, KEPT); }).not.toThrow();
+      expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
+      expect(flushedAfterRecord(rec.calls)).toBe(true);
+      expect(rec.ring.map((e) => e.title)).toEqual([CHILD_RECLAIM_KEPT_FEED_TITLE]);
+      expect(rec.archived).toEqual([]);
+      expect(rec.warned()).toContain(degradeLine('child reclaim kept, feed archive degraded'));
+    });
+});
+
+describe("coord/childReclaim.ts's kept-leaf row (recordChildReclaimLeafKeptFeed): recorded always, never pushed (D-5851)",
+  () => {
+    it('the kept-leaf row is recorded and archived whatever the presence, never pushed, and flushed after the record',
+      async () => {
+        const { rec, deps } = await keptDeps(false);
+        recordChildReclaimLeafKeptFeed(deps, LEAF);
+        expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
+        expect(flushedAfterRecord(rec.calls)).toBe(true);
+        expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title, e.body])).toEqual([['run', A, CLAIM_RUN,
+          CHILD_RECLAIM_LEAF_KEPT_FEED_TITLE, `${A}, child of run #${CLAIM_RUN}: its leaf was kept. ccd recorded no detail.`]]);
+        expect(rec.pushes).toEqual([]);
+      });
+
+    it('a failed archive never throws, flushes after the record, and says so byte for byte', async () => {
+      const { rec, deps } = await keptDeps(true);
+      expect(() => { recordChildReclaimLeafKeptFeed(deps, LEAF); }).not.toThrow();
+      expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
+      expect(flushedAfterRecord(rec.calls)).toBe(true);
+      expect(rec.archived).toEqual([]);
+      expect(rec.warned()).toContain(degradeLine('child reclaim leaf kept, feed archive degraded'));
+    });
+  });
+
+// ─── coord/expireArchived.ts and coord/endDeadCoordinator.ts ─────────────────────────────────────────────────────────
+
+describe("coord/expireArchived.ts's row (recordExpireFeed): recorded always, never pushed (D-5851)", () => {
+  const ID = 'acct-a-project-a';
+  /** The executor over a fixture HOME whose fleet advertises no expire capability: it answers `deferred` before any
+   *  read or argv, and the lane hands that outcome to the writer. */
+  const expired = async (fail: boolean) => {
+    const home = mkTmp('ccrc-feed-pin-expire-');
+    const argv: string[][] = [];
+    const base = testDeps(home, async (_cmd, args) => { argv.push(args); return { code: 1, stdout: '', stderr: '' }; });
+    mkdirSync(base.cfg.registryDir, { recursive: true });
+    const rec = await feedRecorder(home);
+    rec.setVisible([ID]);                                    // the record gate does not read presence
+    const deps: ExpireArchivedDeps = { coord: rec.coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
+      fleetState: { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: [] },
+      presence: rec.presence, notifyLog: rec.notifyLog };
+    const out = await expireArchived(deps, { sessionId: ID, archivedAt: 1_789_000_000, expiresAt: 1_789_604_800 });
+    expect(out, 'the premise').toMatchObject({ kind: 'deferred', why: 'unsupported' });
+    expect(argv, 'SAFETY: no ccd verb was composed').toEqual([]);
+    if (fail) rec.archiveThrowsOn('every');
+    expect(() => { recordExpireFeed(deps, out); }).not.toThrow();
+    return { rec, out };
+  };
+
+  it("expiry's row is flushed: recorded and archived, never pushed, and flushed after the ring record", async () => {
+    const { rec } = await expired(false);
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
+    expect(flushedAfterRecord(rec.calls)).toBe(true);
+    expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title])).toEqual([['run', ID, null, 'archived workspace cleanup deferred']]);
+    expect(rec.pushes).toEqual([]);
+  });
+
+  it('a failed archive never throws, flushes after the record, and says so byte for byte', async () => {
+    const { rec } = await expired(true);
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
+    expect(flushedAfterRecord(rec.calls)).toBe(true);
+    expect(rec.ring.map((e) => e.title)).toEqual(['archived workspace cleanup deferred']);
+    expect(rec.archived).toEqual([]);
+    expect(rec.warned()).toContain(degradeLine('archived expiry deferred, feed archive degraded'));
+  });
+});
+
+describe("coord/endDeadCoordinator.ts's batch (recordRows): one try over the rows, never pushed (D-5851)", () => {
+  const CLAIMANT = 'acct-a-project-a-coordinator';
+  const SINCE = Date.UTC(2026, 9, 1, 0, 0, 0);
+  const TWO: DeadCoordinatorActOutcome = { kind: 'would-end', programmes: [
+    { slug: 'prog-a', runIds: [11] }, { slug: 'prog-b', runIds: [12, 13] }] };
+  const batch = async (fail: boolean) => {
+    const rec = await feedRecorder(mkTmp('ccrc-feed-pin-dead-'));
+    rec.setVisible([CLAIMANT]);                              // the record gate does not read presence
+    if (fail) rec.archiveThrowsOn(1);
+    expect(() => { recordDeadCoordinatorFeed({ coord: rec.coord, notifyLog: rec.notifyLog }, CLAIMANT, TWO, SINCE); }).not.toThrow();
+    return rec;
+  };
+
+  it('two programmes: two rows, each recorded then archived, one flush after the records, never a push', async () => {
+    const rec = await batch(false);
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive', 'record', 'archive']);
+    expect(flushedAfterRecord(rec.calls)).toBe(true);
+    expect(rec.calls.filter((c) => c === 'flush')).toHaveLength(1);
+    expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title])).toEqual([
+      ['run', CLAIMANT, null, 'dead coordinator: programme would be ended'],
+      ['run', CLAIMANT, null, 'dead coordinator: programme would be ended']]);
+    expect(rec.archived.map((e) => e.body.split(' (')[0])).toEqual(['would end programme prog-a', 'would end programme prog-b']);
+    expect(rec.pushes).toEqual([]);
+    catchUpMatchesRing(rec);
+  });
+
+  it('a failed archive mid-batch drops the rows after it: the first row is in the ring only, the second in neither, one sentence',
+    async () => {
+      const rec = await batch(true);
+      expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
+      expect(flushedAfterRecord(rec.calls)).toBe(true);
+      expect(rec.ring.map((e) => e.body.split(' (')[0])).toEqual(['would end programme prog-a']);
+      expect(rec.archived).toEqual([]);
+      expect(rec.warned().filter((l) => l.includes('recordFeedEvent failed')))
+        .toEqual([degradeLine('dead coordinator would-end, feed archive degraded')]);
+    });
+});
+
+// ─── stopDoneSweep.ts ───────────────────────────────────────────────────────────────────────────────────────────────
+
+describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always, never pushed (D-5851)", () => {
+  const NOW = 1_800_000_000_000;
+  const HOUR = 3_600_000;
+  const ID = 'acct-a-project-a';
+  const RUN = 10;
+  /** `stop-done-sweep.test.ts`'s fake, trimmed to the happy path, over the recorder's real log and store: one finished
+   *  worker, idle seven hours, a fake `runCcd` that only records its argv (no fleet is touched). */
+  const passed = async (fail: boolean) => {
+    const rec = await feedRecorder(mkTmp('ccrc-feed-pin-stop-done-'));
+    if (fail) rec.archiveThrowsOn('every');
+    const argv: string[][] = [];
+    const row = { id: ID, child: { kind: 'child', runId: 1 }, archivedAt: null, held: null, stoppedBy: null, unmeasured: [],
+      statusUnmeasured: false, dialogPending: false, background: null, subagents: null, stranded: null, swapBlocked: null,
+      substrate: null, bucket: 'idle' } as unknown as FleetSession;
+    const record = { id: ID, uuid: `uuid-${ID}` } as unknown as SessionRecord;
+    const deps: StopDoneSweepDeps = {
+      coord: {
+        lastRunBySession: (asked: readonly string[]) => ({ ok: true as const,
+          last: asked.map((sessionId) => ({ sessionId, runId: RUN, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1,
+            program: 'p', programTitle: null, claimedBy: 'project-a-coordinator' })),
+          openWorkers: [], openClaimants: ['project-a-coordinator'] }),
+        activeClaims: () => [],
+        outstandingMailFor: () => [] as never,
+        recordFeedEvent: (epoch, ev) => rec.coord.recordFeedEvent(epoch, ev),
+        runsNamingSession: () => ({ ok: true as const, runs: [] }) as never,
+        run: () => ({ ok: true as const, run: { state: 'working', reviews: null } }) as never,
+      },
+      runCcd: async (a) => { argv.push([...a]); return { ok: true, stdout: '', stderr: '', killed: false, signal: null }; },
+      fleetState: { ccdVerbs: ['hibernate', ACTOR_FLAGS_CAP] } as unknown as FleetState,
+      presence: { isOpen: () => false },
+      notifyLog: rec.notifyLog,
+      liveWord: async () => ({ ok: true, word: 'idle', since: null }),
+      turnVerdict: async () => 'idle',
+      mark: async () => ({ ok: true, state: 'done', bg: 0, crons: 0, turnAt: NOW - 7 * HOUR - 60_000, stopAt: NOW - 7 * HOUR,
+        restartAt: null }),
+      readAfterHours: async () => null,
+      rowAtAct: async () => ({ ok: true, row: row as never }),
+      serial: async (fn) => fn(),
+      queueRun: async (_id, fn) => fn(),
+      startedAt: NOW - PRESENCE_OPEN_TTL_MS - 60_000,
+      now: () => NOW,
+    };
+    const out = await stopDonePass(deps, { retryAt: new Map() }, [row], [record], []);
+    return { rec, out, argv };
+  };
+
+  it("stop-done's sleep has a feed row: recorded and archived, never pushed, and flushed after the ring record", async () => {
+    const { rec, out, argv } = await passed(false);
+    expect(out).toEqual([{ id: ID, kind: 'hibernated', runId: RUN }]);
+    expect(argv).toEqual([['hibernate', ID, '--surface', 'agent', '--actor', 'sweep:stop-done']]);
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
+    expect(flushedAfterRecord(rec.calls)).toBe(true);
+    expect(rec.archived.map((e) => [e.kind, e.sessionId, e.runId, e.title, e.body])).toEqual([['run', ID, RUN, 'Worker asleep',
+      `${ID} was put to sleep: its run ${RUN} is done and it sat idle. Mail, a re-dispatch or a restart wakes it.`]]);
+    expect(rec.pushes).toEqual([]);
+  });
+
+  it('a failed archive leaves the worker asleep and the outcome unchanged, and says so byte for byte', async () => {
+    const { rec, out } = await passed(true);
+    expect(out, 'the act\'s own result is unchanged').toEqual([{ id: ID, kind: 'hibernated', runId: RUN }]);
+    expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
+    expect(flushedAfterRecord(rec.calls)).toBe(true);
+    expect(rec.archived).toEqual([]);
+    expect(rec.warned()).toContain(`ccrc-server: stop-done: recordFeedEvent failed (disk full) — ${ID}'s sleep has no feed row`);
+  });
+});
+
