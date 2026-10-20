@@ -2742,6 +2742,177 @@ export function redactFinalLines(text, idx) {
   return composeDoor(DOOR_READINGS.redactFinalLines, [text, idx], idx);
 }
 
+/** How much of a relayed stream's own RAW text the relay keeps behind what it has written, to read the next batch in context:
+ *  16 KiB, which holds a 4096-bit PEM private key (about 3.3 KB) several times over. D-5747 (history-relay-lookbehind-window) */
+export const RELAY_LOOKBEHIND_BYTES = 16384;
+
+/** The relay's next look-behind (D-5747): the last RELAY_LOOKBEHIND_BYTES UTF-8 bytes of `raw`, never starting inside a
+ *  character, and from the first line start inside them, so a shape that opens a line (a PEM BEGIN line) within the window is
+ *  kept whole. With no line start inside them (one line longer than the window) they are kept from mid-line. Every UTF-16 unit
+ *  is at least one UTF-8 byte, so those bytes lie in the last RELAY_LOOKBEHIND_BYTES units. */
+function relayKeep(raw) {
+  if (Buffer.byteLength(raw, 'utf8') <= RELAY_LOOKBEHIND_BYTES) return raw;
+  const from = Math.max(0, raw.length - RELAY_LOOKBEHIND_BYTES);
+  const enc = Buffer.from(raw.slice(from), 'utf8');
+  let at = enc.length - RELAY_LOOKBEHIND_BYTES;
+  while (at < enc.length && (enc[at] & 0xc0) === 0x80) at += 1;
+  const tail = enc.subarray(at).toString('utf8');
+  if (at > 0 ? enc[at - 1] === 0x0a : raw[from - 1] === '\n') return tail;
+  const nl = tail.indexOf('\n');
+  return nl === -1 ? tail : tail.slice(nl + 1);
+}
+
+/** One relayed batch of a stream's text, read in the context of what the same stream wrote before it: the window's
+ *  reading, which redactAfter unions with the per-line reading. D-5747 (history-relay-lookbehind-window), amending
+ *  D-5022's final shape.
+ *
+ *  `lookBehind` is the stream's own RAW text that the relay has already written, at most RELAY_LOOKBEHIND_BYTES of it, or ''
+ *  before the first batch. `text` is the next batch, which the relay writes as whole lines (emit adds the last line break); it
+ *  joins the look-behind at a line break. Three readings:
+ *    - A, the batch read ALONE (redactFinalLines), first: the standalone pass. Its marks are carried into the next reading,
+ *      where a mark stays a mark, so what is written is never less masked than A. Run last instead, over the context
+ *      reading's output, it would not be: a PEM block the look-behind opens can run to an END line in the batch, and its
+ *      mark then takes in a NAME the batch read alone keeps (`TOKEN=<BEGIN line>…<END line>V`), so no pass sees a NAME
+ *      before V;
+ *    - R, the look-behind and A read as ONE text;
+ *    - P, the look-behind read alone, which the relay already wrote (redacted).
+ *  Written: the rest of R when R starts with P and a line break. Otherwise a span runs from the look-behind into the batch,
+ *  and what is written is R from the last mark that starts at or before the first character where R and P differ and
+ *  reaches it (that mark stands for the span's new tail), or, with no such mark, from the start of that character's line.
+ *  `keep` is the next look-behind: the RAW look-behind and batch, cut by relayKeep.
+ *  This reading alone does not keep the per-line guarantee (R4 as amended on review finding 11): one batch can hold a PEM
+ *  block whose mark runs to an END line and takes the next line's NAME in (`<BEGIN line>`, then `TOKEN=<BEGIN line>abc<END
+ *  line>V` prints V, which that line read alone masks), and the line-start branch can write look-behind text again.
+ *  redactAfter's union (relayUnion) closes both, and review finding 11's JSON key and next pair in one batch too: this
+ *  reading takes the next pair's key as the key's value and prints its value, and the union writes that pair as one mark
+ *  from its key on. Each reading here is this build's redactFinalLines, a composed door (R11).
+ *  Residuals: a shape longer than the window; text written before its key line cannot be taken back; the window's raw text
+ *  sits in process memory, as the held stderr already does. */
+function relayRead(lookBehind, text, idx) {
+  const alone = redactFinalLines(text, idx);
+  const keep = relayKeep(lookBehind === '' ? text : `${lookBehind}\n${text}`);
+  if (lookBehind === '') return { emit: alone, keep };
+  const head = `${redactFinalLines(lookBehind, idx)}\n`;
+  const R = redactFinalLines(`${lookBehind}\n${alone}`, idx);
+  if (R.startsWith(head)) return { emit: R.slice(head.length), keep };
+  let d = 0;
+  while (d < head.length && d < R.length && R[d] === head[d]) d += 1;
+  const m = R.lastIndexOf(REDACTED_MARK, d);
+  return { emit: m !== -1 && m + REDACTED_MARK.length >= d ? R.slice(m) : R.slice(R.lastIndexOf('\n', d - 1) + 1), keep };
+}
+
+/** R4's fallback, taken at the plan's second review and aligned by line at its third (D-5747): `read`, the window's reading
+ *  of one batch, with a mark over every piece of it that `perLine` (the same batch read one line at a time by this build's
+ *  redactFinalLines, as the relay before this wave read it) does not print where that piece can lie. `read` is split at its marks and line breaks. A
+ *  mark only ever takes text in, so each line break `read` keeps is one of the batch's, in order, and `perLine` keeps them
+ *  all, one line per batch line. So a piece lies on the line the breaks since the last piece written count to when no mark
+ *  stands between them, and otherwise on a line no earlier than that and no later than the breaks after it allow. On such
+ *  a line, a piece that starts its line in `read` must start the line of `perLine`, one that ends its line must end it, and
+ *  one between two marks is looked for after the last piece written. The lines are tried in order, at most
+ *  RELAY_LOOKBEHIND_BYTES characters of them past the first, and then the last line allowed (one mark that takes in every
+ *  break, a long PEM body, say). A piece found is written; a piece not found becomes a mark, and marks that meet are
+ *  written as one. So every piece written is text the per-line reading prints on a line the window's line breaks allow, and
+ *  a mark of `read` stays a mark, so what is written is never less masked than `read`. A piece the line-start branch wrote
+ *  again from the look-behind is not on any line of `perLine`, so it becomes a mark. A union of the text written, not of
+ *  spans over the original text: no reading of redactFinalLines answers spans (it composes two passes that answer text).
+ *  Each piece costs at most two lines and RELAY_LOOKBEHIND_BYTES characters of the lines between, and the output is joined
+ *  once, so the union stays near linear in the batch (an unaligned search that scanned to the batch's end for each piece
+ *  it missed, and a mark test that read the growing output's end, were each quadratic). */
+function relayUnion(read, perLine) {
+  const lines = perLine.split('\n');
+  const toks = [];   // the pieces of `read`, in order: text, null for a mark, '\n' for a line break
+  read.split(REDACTED_MARK).forEach((part, i) => {
+    if (i > 0) toks.push(null);
+    part.split('\n').forEach((piece, j) => {
+      if (j > 0) toks.push('\n');
+      if (piece !== '') toks.push(piece);
+    });
+  });
+  let breaksLeft = toks.filter((t) => t === '\n').length;
+  let line = 0;      // the line of perLine where the last piece written ends, and its column
+  let col = 0;
+  let breaks = 0;    // the line breaks written since then
+  let open = true;   // a mark since then: the look-behind's own mark may take in the batch's first lines
+  const out = [];
+  const mark = () => {
+    if (out[out.length - 1] !== REDACTED_MARK) out.push(REDACTED_MARK);
+  };
+  toks.forEach((piece, i) => {
+    if (piece === '\n') {
+      out.push('\n');
+      breaks += 1;
+      breaksLeft -= 1;
+      return;
+    }
+    if (piece === null) {
+      mark();
+      open = true;
+      return;
+    }
+    const startsLine = i === 0 || toks[i - 1] === '\n';
+    const endsLine = i === toks.length - 1 || toks[i + 1] === '\n';
+    const find = (L) => {
+      const s = lines[L];
+      const from = L === line ? col : 0;
+      if (startsLine) return from === 0 && (endsLine ? s === piece : s.startsWith(piece)) ? 0 : -1;
+      if (endsLine) return s.length - piece.length >= from && s.endsWith(piece) ? s.length - piece.length : -1;
+      const k = s.slice(from, from + RELAY_LOOKBEHIND_BYTES + piece.length).indexOf(piece);
+      return k === -1 ? -1 : from + k;
+    };
+    const lo = line + breaks;
+    const hi = open ? lines.length - 1 - breaksLeft : lo;
+    let L = lo;
+    let k = L <= hi ? find(L) : -1;
+    for (let reach = 0; k === -1 && L + 1 < hi && reach <= RELAY_LOOKBEHIND_BYTES; ) {
+      reach += lines[L].length + 1;
+      L += 1;
+      k = find(L);
+    }
+    if (k === -1 && L < hi) {
+      L = hi;
+      k = find(L);
+    }
+    if (k === -1) {
+      mark();
+      open = true;
+      return;
+    }
+    out.push(piece);
+    line = L;
+    col = k + piece.length;
+    breaks = 0;
+    open = false;
+  });
+  return out.join('');
+}
+
+/** One relayed batch of a stream's text, as the relay writes it. D-5747 (history-relay-lookbehind-window), amending D-5022's
+ *  final shape; ruling R4 as amended. `lookBehind` is the stream's own RAW text that the relay has already written, at most
+ *  RELAY_LOOKBEHIND_BYTES of it, or '' before the first batch; `text` is the next batch, whole lines joined by line breaks
+ *  (emit adds the last). `emit` is what to write for `text`: the window's reading (relayRead) unioned with the batch read
+ *  one line at a time (relayUnion). `keep` is the next look-behind. What is written is never less masked than
+ *  redactFinalLines of the batch alone (relayRead's standalone pass runs first), and every piece of it is text that this
+ *  build's redactFinalLines prints reading each line alone, on a line the window's line breaks allow (the union): a value a
+ *  line alone masks is written only where another line of the batch, read alone, prints the same characters. This build's
+ *  redactFinalLines reads the widened rules only over the rev 3.6 door's output (R11), so its per-line reading masks every
+ *  value the per-line relay before this wave masked. The per-line reading is memoised by line within the batch:
+ *  redactFinalLines is a function of the line and the index alone (the relay's index is never a probe), so a blank or
+ *  repeated line is read once, and a held stderr of short lines costs per distinct line, not per line (the plan's seventh
+ *  review measured 10 s of CPU on 1 MiB of blank lines without it). */
+export function redactAfter(lookBehind, text, idx) {
+  const { emit, keep } = relayRead(lookBehind, text, idx);
+  const seen = new Map();
+  const perLine = text.split('\n').map((line) => {
+    let read = seen.get(line);
+    if (read === undefined) {
+      read = redactFinalLines(line, idx);
+      seen.set(line, read);
+    }
+    return read;
+  }).join('\n');
+  return { emit: relayUnion(emit, perLine), keep };
+}
+
 /** A frame tag of the recalled-text envelope (recallEnvelope's opening and closing tag). escapeXmlAttr has escaped every
  *  attribute value, so a real tag holds no raw `>` or `"` inside a value. */
 const FRAME_TAG_RE = /<\/?ccrc-recall\b[^>]*>/g;

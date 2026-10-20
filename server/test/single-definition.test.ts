@@ -5266,6 +5266,8 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     'INDEXED_PROVENANCE', 'VERB_TABLES', 'EXPAND_LABEL',
     // W1-B2 Task 7A (spec rev 3.5): the belt's words more than one module reads or writes.
     'BELT_COUNTERS', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META',
+    // W5h-2 Task 3 (D-5747): the operator relay's look-behind window, declared once in lib.mjs.
+    'RELAY_LOOKBEHIND_BYTES',
     // W1-B3: every constant the card line adds to lib, declared there once (Task 11 binds the hook's spellings).
     'CARD_LINE_PATTERN', 'CARD_LINE_MAX', 'CARD_DIR', 'SCOPE_DIR', 'CARD_DESCRIBE_CMD',
     'CARD_MEASURE_ROWS', 'CARD_MEASURE_MAX_WAIT_MS', 'CARD_ATTACHMENT_MAX_BYTES', 'PURGED_FILES_GRACE_MS',

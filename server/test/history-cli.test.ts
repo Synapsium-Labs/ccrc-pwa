@@ -404,7 +404,9 @@ describe('ccrc history status (Linux)', () => {
     expect(fn![1]).toContain('redactFinalLines(');
     // D-4613 round 5: the other lines the CLI never frames take the per-line belt too (emitRefusal's human line, the operator relay's emit)
     expect(src).toContain('redactFinalLines(refusalLine(r.exit, r.reason), pairIdx)');
-    expect(src).toContain('emit(redactFinalLines(line, idx), toStderr)');
+    // D-5747 (W5h-2 Task 3): the relay's emit reads each SOURCE stream through its look-behind, lib redactAfter, whose every reading is redactFinalLines
+    expect(src).toContain('const r = healthLib.redactAfter(behind[k], text, idx);');
+    expect(src).toContain('emit(r.emit, fromStderr);');
     expect((src.match(/\berrLine\(/g) ?? []).length, 'the definition and the three message sites').toBeGreaterThanOrEqual(5);
   });
 

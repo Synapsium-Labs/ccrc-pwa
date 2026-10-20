@@ -309,6 +309,8 @@ export function redactFinal(text: string, idx: PairIndex): string;
 export function redactFinalJson<T>(value: T, idx: PairIndex): T;
 export function redactFinalText(text: string, idx: PairIndex): string;
 export function redactFinalLines(text: string, idx: PairIndex): string;
+export const RELAY_LOOKBEHIND_BYTES: 16384;
+export function redactAfter(lookBehind: string, text: string, idx: PairIndex): { emit: string; keep: string };
 /** R11: an exported redaction door's two readings, its rev 3.6 door (`base`) and the same door built from this build's
  *  rules over the base reading's output (`v2`); null for any other function. A test seam: no shipped file calls it. */
 export function redactDoorReadings(door: (...args: never[]) => unknown):

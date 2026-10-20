@@ -1367,11 +1367,13 @@ export function formatHealth(health) {
 //      from its own environment (slug history-op-gate-in-sweep): decided once, executed twice;
 //   4. the shim, `~/.local/bin/ccd-history-sweep --op <op> <args…>`, as a child. stdin is inherited, so the sweep's
 //      own isatty(0) is the operator's terminal (nothing on the --op path asks whether stderr is a terminal). stdout
-//      and stderr are piped. stdout is relayed line by line as it arrives (an import's dry run can list thousands of
-//      files), each line through redactFinalLines with the read verbs' index (D-5022, review 441 F10; spec §9.8:
-//      redacted on every output). stderr is HELD and redacted as ONE text, as errLine redacts a thrown message, so a
-//      shape that spans lines (a PEM body, a JSON value on the line after its key) is masked whole; it is written when
-//      the child ends, before the CLI's own last line (opRelay's header names the endings and the cap). Its LAST stdout
+//      and stderr are piped. stdout is relayed as it arrives (an import's dry run can list thousands of files), each
+//      read's whole lines as one batch, redacted with the read verbs' index (D-5022, review 441 F10; spec §9.8:
+//      redacted on every output). stderr is HELD and redacted as ONE text, as errLine redacts a thrown message; it is
+//      written when the child ends, before the CLI's own last line (opRelay's header names the endings and the cap).
+//      Every text either stream relays is redacted with the last RELAY_LOOKBEHIND_BYTES its own stream wrote before it
+//      (lib redactAfter, D-5747), so a shape that spans lines (a PEM body, a JSON value on the line after its key) is
+//      masked whole when its head went out in an earlier batch or before the stderr spill. Its LAST stdout
 //      line, the sweep's `{"rc":…}`, is held back for
 //      decideRelay: 75 (the shim found the lock held) is exit 4 writer-busy, a well-formed result is its rc and
 //      reason, and anything else is exit 1.
@@ -1426,16 +1428,20 @@ function opPaneName(form) {
  *  redacted as one text when the child ends. Past it, the text up to its LAST line boundary is redacted and written, and
  *  the rest is held on. A held stretch with NO line break past the cap is written where the over-cap read ended, mid-line, and
  *  emit adds a newline there: the seam falls at that read, not exactly at the cap, and one line break is ADDED (no byte is
- *  dropped). The only residual is a shape that is split across that seam, which no pass on either side can see whole. */
+ *  dropped). The text after the seam is read with stderr's look-behind (D-5747), so a shape split across the seam is masked
+ *  when its head lies within RELAY_LOOKBEHIND_BYTES of it; the residual is a longer shape. The look-behind joins the two sides
+ *  at a line break, as the output shows them, so a value cut by a mid-line seam is read as two lines. */
 const ERR_HOLD_CAP = 1 << 20;
 /** How long the CLI's own signal handler waits for the held text to leave stderr before it ends the CLI anyway. */
 const SIGNAL_FLUSH_MS = 2000;
 const RELAY_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
 
-/** The shim as a child: its stdout relayed line by line as it arrives, its LAST stdout line held back for the relay;
- *  its stderr HELD and redacted as one text (D-5022, review 441 F10 and coordinator ruling 5020: a per-line redaction
- *  cannot see a PEM body after its BEGIN line, or a JSON value on the line after its key, which errLine's whole-text
- *  pass masks). `emit(text, true)` is the held stderr text, without its last line break (emit adds one). The held text
+/** The shim as a child: its stdout relayed as it arrives, each read's whole lines as one batch (D-5747), its LAST stdout
+ *  line held back for the relay; its stderr HELD and redacted as one text (D-5022, review 441 F10 and coordinator ruling
+ *  5020: a per-line redaction cannot see a PEM body after its BEGIN line, or a JSON value on the line after its key, which
+ *  errLine's whole-text pass masks). `emit(text, false)` is a batch of stdout lines and `emit(text, true)` the held stderr
+ *  text, each without its last line break (emit adds one); the second argument names the SOURCE stream, which is what
+ *  runOpVerb keys each stream's look-behind by (D-5747). The held text
  *  is bounded by ERR_HOLD_CAP, and it is written, redacted, BEFORE the CLI's own last line on every ending:
  *    - the child exits with a code, or is killed by a signal (the child's `close`);
  *    - the relay itself fails: a throw in a stream handler rejects the promise, after the flush, and operatorMain's
@@ -1501,12 +1507,18 @@ function opRelay(P, op, opArgs, emit) {
       reject(e);
     };
     const safe = (fn) => (...a) => { try { fn(...a); } catch (e) { fail(e); } };
+    // D-5747 (history-relay-lookbehind-window): each data chunk's complete lines go out as ONE batch, the line held before
+    // them first and the chunk's last complete line held in its place, so a chunk costs one windowed redaction, not one per line.
     const onOut = safe((d) => {
       buf += d;
-      for (let i = buf.indexOf('\n'); i !== -1; i = buf.indexOf('\n')) {
-        take(buf.slice(0, i));
-        buf = buf.slice(i + 1);
-      }
+      const cut = buf.lastIndexOf('\n');
+      if (cut === -1) return;
+      const lines = buf.slice(0, cut).split('\n');
+      buf = buf.slice(cut + 1);
+      const last = lines.pop();
+      if (held !== null) lines.unshift(held);
+      if (lines.length > 0) emit(lines.join('\n'), false);
+      held = last;
     });
     const onErr = safe((d) => {
       errHeld += d;
@@ -1566,9 +1578,10 @@ function relayIndexOf(home, P, reach) {
   return makePairIndex(files.pairs, makeBelt(beltUnits(files.values)));
 }
 
-/** One operator verb through the door. `emit(line, toStderr)` gets each line the sweep printed before its result on
- *  stdout, and the text it printed on stderr, held and written whole (`toStderr` true; D-5022), already through
- *  redactFinalLines with relayIndexOf's index, which is built only once the gate has passed, before the shim starts. */
+/** One operator verb through the door. `emit(text, toStderr)` gets the lines the sweep printed before its result on
+ *  stdout, a read's whole lines at a time, and the text it printed on stderr, held and written whole (`toStderr` true;
+ *  D-5022), already redacted with relayIndexOf's index, which is built only once the gate has passed, before the shim
+ *  starts, and with the look-behind of the stream the text came from (lib redactAfter, D-5747). */
 export async function runOpVerb(home, verb, rest, emit, seam = {}) {
   const P = healthLib.historyPaths(home);
   const map = opFormOf(verb, rest);
@@ -1593,7 +1606,16 @@ export async function runOpVerb(home, verb, rest, emit, seam = {}) {
   if (!gate.ok) return { exit: gate.rc, reason: gate.reason };
   const idx = relayIndexOf(home, P, reach);
   seam.idx = idx;   // the caller's catch redacts its internal-error line with the index of the read that line belongs to (D-5023)
-  return opRelay(P, map.op, map.opArgs, (line, toStderr) => emit(redactFinalLines(line, idx), toStderr));
+  // D-5747 (history-relay-lookbehind-window): one look-behind per SOURCE stream, keyed by the shim's stream that opRelay
+  // names (`fromStderr`), never by where operatorMain writes it: under --json both go to stderr, unordered between themselves.
+  // Every ending (onClose, fail(), the signal handlers) writes through this one callback, so through its window.
+  const behind = { out: '', err: '' };
+  return opRelay(P, map.op, map.opArgs, (text, fromStderr) => {
+    const k = fromStderr ? 'err' : 'out';
+    const r = healthLib.redactAfter(behind[k], text, idx);
+    behind[k] = r.keep;
+    emit(r.emit, fromStderr);
+  });
 }
 
 /** D-4600 (history-operator-door-survives-a-closed-pipe): `ccrc history import --apply | head -1` closes stdout under the
@@ -1619,8 +1641,8 @@ function guardClosedStdio() {
 }
 
 /** main's arm for `import`, `prune`, `reparse` and `doctor`: argv is main's own, the verb first, `--json` anywhere.
- *  Under --json, stdout is the envelope alone and the sweep's lines go to stderr; every relayed line arrives here
- *  already through redactFinalLines (runOpVerb's relayIndexOf). */
+ *  Under --json, stdout is the envelope alone and the sweep's lines go to stderr; every relayed text arrives here
+ *  already redacted (runOpVerb's relayIndexOf, through its stream's look-behind, D-5747). */
 export async function operatorMain(home, argv) {
   guardClosedStdio();
   const json = argv.includes('--json');

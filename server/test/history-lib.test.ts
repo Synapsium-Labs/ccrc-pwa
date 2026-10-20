@@ -9678,3 +9678,240 @@ describe('W5h-2 Task 2: a re-derivation probe counts each row the composed index
     expect(libRedact.decideBelt({ v: libRedact.BELT_VERSION, rids: [], gen: null }, [], 0)).toEqual({ due: false, restart: false, next: { v: libRedact.BELT_VERSION, rids: [], gen: null } });
   });
 });
+
+// ── W5h-2 Task 3: redactAfter, the relay's look-behind window (D-5747 (history-relay-lookbehind-window)) ─
+// Pure, every input a parameter. The relay keeps, per shim stream, the last RELAY_LOOKBEHIND_BYTES of RAW text it has written
+// and reads each new batch with it (ruling R4), so a JSON value on the line after its key and a PEM body after its BEGIN line
+// are masked though the key or the BEGIN line went out in an earlier batch. JSON and PEM shapes, whose masking does not depend
+// on the named rule's value class; the per-line property case also reads NAME:, NAME= and coloured fragments.
+describe('redactAfter: a relayed batch is read with its stream\'s look-behind (D-5747)', () => {
+  const idx = libRedact.makePairIndex([]);
+  const M = libRedact.REDACTED_MARK;
+  const WINDOW = 16384;   // R4's window, spelled here so that a mutant of the constant cannot move these pins with it
+  // assembled at run time: the repository is public, and a key-shaped literal is what push protection reads
+  const BEGIN = ['-----BEGIN ', 'PRIVATE KEY-----'].join('');
+  const END = ['-----END ', 'PRIVATE KEY-----'].join('');
+  const BODY = 'MIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8';
+  const bytes = (s: string): number => Buffer.byteLength(s, 'utf8');
+  /** A BEGIN line and body lines of `Q`s, exactly `n` bytes, with no trailing line break. */
+  const block = (n: number): string => {
+    let s = BEGIN;
+    while (n - bytes(s) > 65) s += `\n${'Q'.repeat(64)}`;
+    return `${s}\n${'Q'.repeat(n - bytes(s) - 1)}`;
+  };
+
+  it('RELAY_LOOKBEHIND_BYTES is 16 KiB (ruling R4)', () => {
+    expect(libRedact.RELAY_LOOKBEHIND_BYTES).toBe(WINDOW);
+  });
+
+  it('the first batch, with no look-behind: a batch whose every line masks alone is written as redactFinalLines writes it, and its keep is the batch, raw', () => {
+    const text = 'zqx26 start\n{"password": "hunter2xyz"}\nzqx26 after';
+    const r = libRedact.redactAfter('', text, idx);
+    expect(r.emit).toBe(libRedact.redactFinalLines(text, idx));
+    expect(r.emit, 'CONTROL: the value is masked').toBe(`zqx26 start\n{"password": "${M}"}\nzqx26 after`);
+    expect(r.keep, 'the window holds RAW text, as the held stderr does').toBe(text);
+    expect(libRedact.redactAfter('zqx26 before', 'plain line two\nplain line three', idx).emit, 'CONTROL: plain lines are unchanged').toBe('plain line two\nplain line three');
+  });
+
+  it('a JSON value on the line after a key in the look-behind is masked; the batch read alone prints it', () => {
+    const text = '  "hunter2xyz"}\nzqx26 next line';
+    expect(libRedact.redactFinalLines(text, idx), 'CONTROL: alone, the value prints').toBe(text);
+    expect(libRedact.redactAfter('zqx26 a\n{"password":', text, idx).emit).toBe(`  "${M}"}\nzqx26 next line`);
+    expect(libRedact.redactAfter('{"password":', `\n${text}`, idx).emit, 'a blank line between key and value').toBe(`\n  "${M}"}\nzqx26 next line`);
+  });
+
+  it('a PEM body after a BEGIN line in an earlier batch is masked, the window carried from batch to batch by keep', () => {
+    const a = libRedact.redactAfter('', `zqx26 start\n${BEGIN}`, idx);
+    expect(a.emit, 'CONTROL: the BEGIN line is masked').toBe(`zqx26 start\n${M}`);
+    const b = libRedact.redactAfter(a.keep, BODY, idx);
+    expect(b.emit, 'a body line is one mark').toBe(M);
+    const c = libRedact.redactAfter(b.keep, `${BODY}\n${END}\nzqx26 after`, idx);
+    expect(c.emit, 'the last body line and END go into the mark; the line after it is written').toBe('zqx26 after');
+    expect(libRedact.redactFinalLines(`${BODY}\n${END}\nzqx26 after`, idx), 'CONTROL: alone, the body prints').toContain(BODY);
+  });
+
+  it('a span that runs from the look-behind into the batch writes a mark for the batch\'s part, never the tail it masked', () => {
+    const text = 'def"}\nzqx26 ok';
+    expect(libRedact.redactFinalLines(text, idx), 'CONTROL: alone, the tail prints').toBe(text);
+    expect(libRedact.redactAfter('x {"token": "abc', text, idx).emit).toBe(`${M}"}\nzqx26 ok`);
+  });
+
+  it('the batch\'s part is never less masked than the batch read alone: a PEM block the look-behind opens takes the batch\'s NAME into its mark, and the value glued after its END stays masked', () => {
+    const lb = `zqx26 ${BEGIN}`;
+    const text = `TOKEN=${BEGIN}abc${END}hunter2xyz`;
+    expect(libRedact.redactFinalLines(text, idx), 'CONTROL: alone, the final pass reads TOKEN= and masks the value glued after END').toBe(`TOKEN=${M}`);
+    expect(libRedact.redactFinalLines(`${lb}\n${text}`, idx), 'CONTROL: read together, the look-behind\'s PEM block runs to the batch\'s END and its mark takes TOKEN=, so the value prints').toContain('hunter2xyz');
+    expect(libRedact.redactAfter(lb, text, idx).emit, 'the batch read alone first keeps its mark').toBe(M);
+  });
+
+  it('the window: a BEGIN line that starts exactly RELAY_LOOKBEHIND_BYTES back is in reach, and one byte further it is not', () => {
+    const next = `${BODY}\n${END}\nzqx26 after`;
+    const at = libRedact.redactAfter('', `zqx26 pad\n${block(WINDOW)}`, idx);
+    const past = libRedact.redactAfter('', `zqx26 pad\n${block(WINDOW + 1)}`, idx);
+    expect(libRedact.redactAfter(at.keep, next, idx).emit, 'in reach: the body is masked').toBe('zqx26 after');
+    expect(libRedact.redactAfter(past.keep, next, idx).emit, 'one byte further: the residual, a shape longer than the window').toBe(next);
+    expect(bytes(at.keep), 'CONTROL: the window is full, from the BEGIN line').toBe(WINDOW);
+    expect(at.keep.startsWith(BEGIN), 'CONTROL: from the BEGIN line').toBe(true);
+    expect(past.keep.startsWith(BEGIN), 'CONTROL: one byte further, the BEGIN line is out of the window').toBe(false);
+  });
+
+  it('keep: at most RELAY_LOOKBEHIND_BYTES bytes of RAW text, from a line start, mid-line only for a longer line, never inside a character', () => {
+    const lines = Array.from({ length: 200 }, (_, i) => `${String(i).padStart(3, '0')}${'L'.repeat(97)}`);
+    const k = libRedact.redactAfter('', lines.join('\n'), idx).keep;
+    expect(k, 'the longest run of whole lines that fits').toBe(lines.slice(-162).join('\n'));
+    expect(bytes(k)).toBeLessThanOrEqual(WINDOW);
+    const long = libRedact.redactAfter('', `${'é'.repeat(10000)}x`, idx).keep;
+    expect(long, 'one line longer than the window: its last bytes, from a whole character').toBe(`${'é'.repeat(8191)}x`);
+    expect(long, 'no replacement character').not.toContain(String.fromCharCode(0xfffd));
+    const key = libRedact.redactAfter('', `${'x'.repeat(20000)} {"password":`, idx);
+    expect(bytes(key.keep), 'CONTROL: a line longer than the window keeps the window, from mid-line').toBe(WINDOW);
+    expect(libRedact.redactAfter(key.keep, '  "hunter2xyz"}', idx).emit, 'so a key at the end of a long line still reaches its value').toBe(`  "${M}"}`);
+    expect(libRedact.redactAfter('', `${'a'.repeat(20000)}\nb`, idx).keep, 'the look-behind and the batch are cut together, at the first line start in the window').toBe('b');
+  });
+
+  it('the residual, named: a BEGIN line with no END masks what its stream writes after it, until the BEGIN line leaves the window', () => {
+    const a = libRedact.redactAfter('', `note: the doc quotes ${BEGIN} as an example`, idx);
+    expect(a.emit, 'CONTROL: the PEM shape runs from the BEGIN line to the end of the text').toBe(`note: the doc quotes ${M}`);
+    const lines = 'file a.md ok\nERROR: disk full at c.md';
+    expect(libRedact.redactFinalLines(lines, idx), 'CONTROL: alone, the lines print, as the per-line relay printed them').toBe(lines);
+    const b = libRedact.redactAfter(a.keep, lines, idx);
+    expect(b.emit, 'while the BEGIN line is in the look-behind, a later batch is one mark (an availability loss, never a leak)').toBe(M);
+    let keep = b.keep;
+    let printed = -1;
+    for (let i = 0; i < 400 && printed === -1; i += 1) {
+      const line = `line ${String(i).padStart(3, '0')} ${'z'.repeat(90)}`;   // 99 bytes, 100 with its line break
+      const r = libRedact.redactAfter(keep, line, idx);
+      keep = r.keep;
+      if (r.emit !== M) {
+        printed = i;
+        expect(r.emit, 'the first batch written once the BEGIN line has left the window is its own text').toBe(line);
+      }
+    }
+    expect(printed, 'the loss ends').toBeGreaterThan(0);
+    expect(printed * 100, 'and is bounded by the window').toBeLessThanOrEqual(WINDOW);
+  });
+
+  // Review finding 11 and R4 as restated: the relay never prints a value a line read alone masks. One stdout chunk holding a JSON key
+  // and, on the next line, the next pair was the measured regression of the batch read alone: the JSON-form rule reads "password" as
+  // token's value and resumes past it. The union writes a mark over every piece the per-line reading does not print, so the next
+  // pair is written as one mark from its key on; with the key in the look-behind, the batch's own standalone pass masks the value
+  it('one batch holding a JSON key and, on the next line, the next pair: the value is masked as each line alone masks it (review finding 11)', () => {
+    const text = 'zqx26 start\n{"token":\n"password": "hunter2xyz"}\nzqx26 after';
+    const perLine = text.split('\n').map((line) => libRedact.redactFinalLines(line, idx)).join('\n');
+    expect(perLine, 'CONTROL: each line alone masks the value').toBe(`zqx26 start\n{"token":\n"password": "${M}"}\nzqx26 after`);
+    expect(libRedact.redactFinalLines(text, idx), 'CONTROL: read as one text, the value prints').toContain('hunter2xyz');
+    expect(libRedact.redactAfter('', text, idx).emit, 'in one batch').toBe(`zqx26 start\n{"token":\n"${M}\nzqx26 after`);
+    expect(libRedact.redactAfter('zqx26 start\n{"token":', '"password": "hunter2xyz"}\nzqx26 after', idx).emit, 'and with the key in the look-behind').toBe(`"${M}": "${M}"}\nzqx26 after`);
+  });
+
+  // R4's fallback, taken at the plan's second review: one batch can hold a PEM block whose mark runs to an END line and takes the next
+  // line's NAME in, so the batch read alone prints a value that line read alone masks. No rule change closes it, so redactAfter unions
+  // the window's reading with the per-line reading: a mark over every piece of it that the per-line reading does not print on a line
+  // the window's line breaks allow (aligned by line at the plan's third review).
+  it('one batch holding a PEM block that runs into the next line\'s NAME: the value glued after its END is masked as that line alone masks it (the union)', () => {
+    const text = `zqx26 ${BEGIN}\nTOKEN=${BEGIN}abc${END}hunter2xyz`;
+    expect(text.split('\n').map((line) => libRedact.redactFinalLines(line, idx)).join('\n'), 'CONTROL: each line alone masks the value').toBe(`zqx26 ${M}\nTOKEN=${M}`);
+    expect(libRedact.redactFinalLines(text, idx), 'CONTROL: read as one text, the first BEGIN line\'s mark runs to the END and takes TOKEN= in').toBe(`zqx26 ${M}hunter2xyz`);
+    expect(libRedact.redactAfter('', text, idx).emit).toBe(`zqx26 ${M}`);
+    // the plan's third review: the union is aligned by line. A search that skipped lines wrote this value where the same
+    // characters begin a later line (`zqx26 [redacted]hunter2xyz`), and turned every line up to a later `done` into marks
+    expect(libRedact.redactAfter('', `${text}\nhunter2xyzzy.log`, idx).emit, 'the same characters at the start of a later line').toBe(`zqx26 ${M}\nhunter2xyzzy.log`);
+    const later = [`zqx26 ${BEGIN}`, `TOKEN=${BEGIN}abc${END}done`, 'file a.md ok', 'file b.md ok', 'file c.md ok', 'all done'].join('\n');
+    expect(libRedact.redactAfter('', later, idx).emit, 'the lines up to a later occurrence are written').toBe(`zqx26 ${M}\nfile a.md ok\nfile b.md ok\nfile c.md ok\nall done`);
+    // a piece that ends its line is matched only where a line of the per-line reading ends with it
+    const inWord = [`zqx26 ${BEGIN}`, `TOKEN=${BEGIN}abc${END}hunter2xyz`, 'hunter2xyzzy.log', `zqx26 ${BEGIN}`, `x ${END}`].join('\n');
+    expect(libRedact.redactAfter('', inWord, idx).emit, 'not inside a longer word').toBe(`zqx26 ${M}\nhunter2xyzzy.log\nzqx26 ${M}`);
+    // the residual, named: where the same characters END another line the window's line breaks allow, they are written beside
+    // the mark, and that line, which printed them alone, is written as a mark (no string the per-line relay did not write)
+    const residual = [`zqx26 ${BEGIN}`, `TOKEN=${BEGIN}abc${END}hunter2xyz`, 'see hunter2xyz', `zqx26 ${BEGIN}`, `x ${END} ok`].join('\n');
+    expect(libRedact.redactAfter('', residual, idx).emit, 'the residual').toBe(`zqx26 ${M}hunter2xyz\n${M}\n${M} ok`);
+    // bounded: a piece is looked for on at most RELAY_LOOKBEHIND_BYTES characters of the lines past the first it may lie on, then
+    // on the last. 8 MiB in which the window's reading drops one line break in every three lines and every third line's value
+    // is not where that reading puts it: the search without that bound took over a minute. The bound is a ceiling, not the detector
+    const unit = `${'a'.repeat(90)}\nz ${BEGIN}\nTOKEN=${BEGIN}a${END}aaab password: v\n`;
+    const big = unit.repeat(Math.ceil((8 << 20) / unit.length)).slice(0, 8 << 20);
+    const t0 = Date.now();
+    libRedact.redactAfter('', big, idx);
+    expect(Date.now() - t0, '8 MiB').toBeLessThan(30_000);
+    // the plan's sixth review, a residual named: a line only the joined reading masks (a NAME a colour sequence splits) has the
+    // window's reading remove every sequence of the batch, so the per-line reading, which keeps them on a line with nothing to mask,
+    // places no piece of a coloured line, and each is a mark (an availability loss; the base's per-line relay printed them). It is
+    // the union's costliest shape, every piece unplaced, and linear: 1 MiB of such lines, under the same ceiling
+    const coloured = ['tok\x1b[0men=abc', 'file \x1b[32ma.md\x1b[0m ok', 'file \x1b[32mb.md\x1b[0m ok', 'plain line'].join('\n');
+    expect(libRedact.redactAfter('', coloured, idx).emit, 'every coloured line of the batch is a mark').toBe(`token=${M}\n${M}\n${M}\nplain line`);
+    const cunit = 'file \x1b[32ma.md\x1b[0m ok\n';
+    const cbig = `tok\x1b[0men=abc\n${cunit.repeat(Math.ceil((1 << 20) / cunit.length))}`.slice(0, 1 << 20);
+    const t1 = Date.now();
+    libRedact.redactAfter('', cbig, idx);
+    expect(Date.now() - t1, '1 MiB of coloured lines after such a line').toBeLessThan(30_000);
+  }, 300_000);
+
+  it('every value a line read alone masks is masked in the batch: f2Cases (the (j3) corpus) and every two- and three-line batch of JSON, NAME:, NAME= and PEM fragments, with no look-behind and after the first line (R4, review finding 11)', () => {
+    const violations: string[] = [];
+    let masked = 0;
+    // a reading may remove a line's escape sequences and glue the text either side (D-4307's joined reading), so a value is held by
+    // a text that holds it with or without the sequences inside it, and masked by a line that holds it in neither form
+    const SEQ = String.raw`(?:\x1b\[(?!redacted\])[0-?]*[ -/]*[@-~]|\x1b[ -/]*(?!\[redacted\])[0-~])*?`;
+    const holds = (t: string, v: string): boolean => (t.includes('\x1b') ? new RegExp([...v].join(SEQ)).test(t) : t.includes(v));
+    /** `planted[i]` is the value planted in `lines[i]`, or null. A value line i alone masks must not print in the batch, and, with line 0
+     *  as the look-behind, a value line 0 alone masks must not be written again. */
+    const check = (lines: string[], planted: Array<string | null>): void => {
+      const one = libRedact.redactAfter('', lines.join('\n'), idx).emit;
+      const after = lines.length > 1 ? libRedact.redactAfter(lines[0]!, lines.slice(1).join('\n'), idx).emit : '';
+      lines.forEach((line, i) => {
+        const v = planted[i];
+        if (v === null || v === undefined || holds(libRedact.redactFinalLines(line, idx), v)) return;
+        masked += 1;
+        if (holds(one, v)) violations.push(`one batch: ${JSON.stringify(lines.join('\n'))} shows ${v}`);
+        if (i > 0 && holds(after, v)) violations.push(`after the first line: ${JSON.stringify(lines.join('\n'))} shows ${v}`);
+        if (i === 0 && lines.length > 1 && holds(after, v)) violations.push(`the look-behind written again: ${JSON.stringify(lines.join('\n'))} shows ${v}`);
+      });
+    };
+    // the measured regressions first, so a red names them: review finding 11's, the PEM block that takes the next line's NAME in, and
+    // a value whose next line starts with a colon
+    check(['zqx26 start', '{"token":', '"password": "hunter2xyz"}', 'zqx26 after'], [null, null, 'hunter2xyz', null]);
+    check([`zqx26 ${BEGIN}`, `TOKEN=${BEGIN}abc${END}hunter2xyz`], [null, 'hunter2xyz']);
+    check(['zqx26 start', '"token": "hunter2xyz"', ': x'], [null, 'hunter2xyz', null]);
+    const FR: Array<(v: string) => string> = [
+      () => '{"token":', () => '"password":', () => '  "api_key" :', () => '{"secret":',
+      (v) => `  "${v}"}`, (v) => `"${v}",`, (v) => `"password": "${v}"}`, (v) => `{"token": "${v}"}`, (v) => `"auth":"${v}",`,
+      () => 'token:', () => 'password: ', () => 'API_KEY:', (v) => `password: ${v}`, (v) => `API_KEY: ${v}`, (v) => `secret: "${v}"`,
+      () => 'TOKEN=', () => 'export PASSWORD=', (v) => `PASSWORD=${v}`, (v) => `export SECRET="${v}"`, (v) => `token=${v}&next=1`,
+      () => BEGIN, (v) => `MIIB${v}QQQQ`, () => END, () => 'zqx26 plain note', () => 'level=INFO path=/a/b',
+      // the plan's second review: a pair that ends its line, colon-led lines, and a value glued after an END on a NAME's line
+      (v) => `"token": "${v}"`, () => ':', () => '  : x', (v) => `TOKEN=${BEGIN}abc${END}${v}`,
+      // a secret pair's value that a colon follows on its line
+      (v) => `"password": "${v}": x`,
+      // the plan's sixth review: a NAME or a value a colour sequence splits, which the joined reading reads whole (D-4307), and a
+      // coloured line that holds nothing to mask
+      (v) => `pass\x1b[0mword=${v}`, () => 'tok\x1b[0men=&x', (v) => `PASSWORD=${v.slice(0, 3)}\x1b[32m${v.slice(3)}`,
+      () => 'file \x1b[32ma.md\x1b[0m ok',
+    ];
+    let n = 0;
+    const mk = (f: (v: string) => string): [string, string | null] => {
+      const v = `zqv${(n++).toString(36).padStart(4, '0')}k`;
+      const line = f(v);
+      return [line, line.includes(v) ? v : null];
+    };
+    for (const a of FR) {
+      for (const b of FR) {
+        const [x, y] = [mk(a), mk(b)];
+        check([x[0], y[0]], [x[1], y[1]]);
+        for (const c of FR) {
+          const [p, q, r] = [mk(a), mk(b), mk(c)];
+          check([p[0], q[0], r[0]], [p[1], q[1], r[1]]);
+        }
+      }
+    }
+    // the (j3) corpus, each case's planted run renamed per line, so a value one line prints is never another line's
+    const cases = f2Cases();
+    const f2 = (input: string, k: number): [string, string] => [input.replaceAll('cdXQ9', `cdXQ9${'abc'[k]}`), `cdXQ9${'abc'[k]}`];
+    for (const c1 of cases) for (const c2 of cases) { const [x, y] = [f2(c1.input, 0), f2(c2.input, 1)]; check([x[0], y[0]], [x[1], y[1]]); }
+    for (let i = 0; i + 2 < cases.length; i += 1) {
+      const [x, y, z] = [f2(cases[i]!.input, 0), f2(cases[i + 1]!.input, 1), f2(cases[i + 2]!.input, 2)];
+      check([x[0], y[0], z[0]], [x[1], y[1], z[1]]);
+    }
+    expect(masked, 'CONTROL: thousands of values each line alone masks').toBeGreaterThan(10_000);
+    expect(violations.slice(0, 5), `${violations.length} of ${masked}`).toEqual([]);
+  }, 120_000);
+});
