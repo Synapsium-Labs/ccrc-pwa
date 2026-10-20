@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~6702 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -100,6 +100,15 @@ real values: `deploy/reference-fleet.md` (gitignored).
   that archive and is re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
   **`ws-collect` is forbidden to every session too**: it is the SERVER's act on an ORPHANED, WITNESSED temp root only,
   behind a token re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
+- **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
+  `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
+  or onto the launcher (`~/.local/bin/claude`) are forbidden on a session's prompt (`FORBIDDEN_CCD_VERBS` and
+  `FORBIDDEN_PATTERNS`, `server/src/coord/approvalguard.ts`). `claude install` and `claude update` (under the roster's
+  upstream id too) are child deny rules (`childDenyRules`, `shared/api.ts`); a top-level session's prompt for them
+  escalates to the operator. A child runs with permissions bypassed, so the session hook's PreToolUse deny is what
+  stops it: the verbs, the writes, and `install`/`update` under any path head, a `claude…` wrapper name or a
+  `~/.local/bin/<id>` launcher (D-5994). The `ccd claude …` switch verbs are the operator's, by hand; rolls and installs are ccrc's own
+  automatic acts. Account switching and the auto-swap are not touched: `ccd swap` is never blocked.
 - **NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly.** Each unit is a
   long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet. ONE scoped exception
   (operator ruling 2026-08-21, R1): `ccrc update`'s step-4 supervisor sweep (`_upd_sweep`) and deploy.sh's
@@ -250,11 +259,17 @@ generated value is never hand-edited, and the contrast gate rules on the result 
 ## Conventions that shape every change
 - **Rings / bounded contexts** (`docs/…-architecture-ddd-clean-solid.md`): ring membership is a property of a
   file's IMPORTS, not its path — check a file by reading its import block. L0 `shared/*.ts` imports NOTHING (not
-  even `node:*`) — the reason is that the PWA bundles those files, so deploy-side `shared/*.mjs`, which it never
-  imports, may use `node:*` (`shared/mark.mjs`'s `node:crypto` import); L1 policy = pure decisions, no `fs`/fastify/`reply`; L2 ports
+  even `node:*`) because the PWA bundles those files. The `.mjs` carve-out: a `shared/*.mjs` file, which the PWA
+  never imports, may import `node:crypto`, `node:fs` and `node:url` and no other `node:*` module; a
+  `shared/*.ts` file imports no `node:*` module at all. L1 policy = pure decisions, no `fs`/fastify/`reply`; L2 ports
   = interfaces + failure contracts, declared BY THE CONSUMER; L3 adapters — **an adapter may not narrow a
-  distinction it received** (highest-yield rule); L4 delivery owns fastify/sockets/timers but is NOT allowed to
-  DECIDE; L5 = `index.ts` only. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
+  distinction it received** (highest-yield rule); L4 delivery owns fastify/sockets/schedulers but is NOT allowed to
+  DECIDE; L5 = `index.ts` only. A deadline timer inside one adapter call is L3; schedulers and pollers are L4. A
+  timer is a deadline inside one adapter call when its handle is a local of that call or is not kept at all; a
+  timer whose handle is stored on an object field or at module scope is a scheduler or poller. PWA: `*Words.ts`, policy and pure lib
+  modules are L1; `lib/api.ts` is L3; stores, hooks, components and screens are L4. Every `server/src` and
+  `pwa/src` file has one ring and one of contexts C1–C9 or K, decided by the spec's "Deciding a file's ring and
+  context" rules and table. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
   collapse to the same value; that's a defect, not style. The server runs `Fastify({ logger: false })`, so `req.log.*` is a silent no-op — a server log line is `console.warn('ccrc-server: …')`, never `req.log`.
 - **Single-source-of-truth values are enumerated once and derived:** runtime lists come from the type
   (`PR_REASONS = Object.keys(PR_REASON_MAP)`), not hand-maintained. `server/test/single-definition.test.ts`
