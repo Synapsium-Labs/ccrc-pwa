@@ -4972,7 +4972,7 @@ describe('the pane-scope sweep: its arming file has no writer in the tree', () =
 // file that reaches no `node:` module and so cannot write it.
 describe('workspace lifecycle wave 3b: the expiry lane’s live switch has no writer in the tree', () => {
   const NAME = 'expire-lane-live';
-  const DEFINER = 'server/src/archivedExpiry.ts';
+  const DEFINER = 'shared/switches.ts'; // its switchboard row since D-5855; archivedExpiry.ts re-exports it
 
   it('no shell line names it, and its one TS holder is its definer', () => {
     expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
@@ -4986,11 +4986,11 @@ describe('workspace lifecycle wave 3b: the expiry lane’s live switch has no wr
   // write it without ever spelling its name. So the files whose code names the constant are pinned, and none of them
   // may reach a write — the executor reads the registry listing and nothing else. KNOWN WIDTH, stated: a write through
   // a helper defined in another file is not seen; the bar is the ordinary call.
-  it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
+  it('the files that name its constant are the definer, its re-exporter and the executor, and none reaches a write', () => {
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
     const holders = ALL.filter((f) => stallCode(f).includes('EXPIRE_LANE_LIVE_MARKER')).map(rel).sort();
-    expect(holders).toEqual([DEFINER, 'server/src/coord/expireArchived.ts']);
+    expect(holders).toEqual(['server/src/archivedExpiry.ts', 'server/src/coord/expireArchived.ts', DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
 });
