@@ -275,6 +275,9 @@ _swap_pin_tick	C1
 _swap_pinned	C1
 _auto_swap_check	C1
 _swap_idle_gate	C1
+_swap_bg_hold	C1
+_swap_bg_note	C1
+_swap_bg_release	C1
 _pane_statusline_seg	C3
 _pane_ctx_pct	C3
 _route_word_in	C1
