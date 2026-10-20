@@ -8,6 +8,7 @@ import type { NotifyLog } from '../notifylog.js';
 import { CCD_ARGV, EXPIRE_CAP, capSupported, sweepDec, verbSupported } from '../ccdargv.js';
 import type { CoordStore } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
+import { readSwitches } from '../../../shared/switches.js';
 import {
   EXPIRE_ASKS_AGAIN_CADENCE, EXPIRE_HALT_WORDS, EXPIRE_LANE_LIVE_MARKER, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, expireKeptParts, parseExpireAudit,
   parseExpireResult, reviewKeeps,
@@ -148,7 +149,7 @@ async function expirySwitches(deps: ExpireArchivedDeps): Promise<{ kind: 'paused
     return { kind: 'paused', detail: `the registry did not list (${listed.reason}), so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out` };
   }
   const names = listed.entries;
-  if (names.includes(RECLAIM_PAUSE_MARKER)) {
+  if (readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') {
     return { kind: 'paused', detail: `${RECLAIM_PAUSE_MARKER} is raised: cleanup is paused fleet-wide` };
   }
   return { kind: 'clear', live: names.includes(EXPIRE_LANE_LIVE_MARKER) };

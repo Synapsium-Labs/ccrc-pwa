@@ -634,6 +634,9 @@ export function SessionScreen({
           disabled={dead || asleep}
           placeholder={asleep ? 'It is asleep — it can take a message once it wakes' : dead ? 'Restart the session to send' : `Message ${project}`}
           onResolve={useStore.getState().resolve}
+          // Stop in the send slot (W2 Task S7b, D-5471): the same LIVE `busy` the Escape interrupt reads.
+          busy={effectiveStatus === 'busy'}
+          onInterrupt={(source) => void interrupt(source)}
         />
       </div>
 

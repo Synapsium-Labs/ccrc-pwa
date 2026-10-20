@@ -220,6 +220,7 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.sess-hold-error': META,
     '.proj-card-count': META,
     '.proj-card-busy': META,
+    '.proj-card-last': META,
     '.pool-new-label': META,
     '.acct-disclosure': META,
     '.pool-note': META,

@@ -7,6 +7,7 @@ import type { CloseOutcome, SweepCloseGuard } from './close.js';
 import { closeRefusalOf } from './archiveDoor.js';
 import { measureClaimant, type ReclaimDeps } from './reclaim.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
+import { readSwitches } from '../../../shared/switches.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, type LifecycleHealth } from '../../../shared/api.js';
 import {
   DEAD_COORDINATOR_LANE_LIVE_MARKER, deadCoordinatorBreakerFeedRow, deadCoordinatorBreakerSeedFeedRow, deadCoordinatorCrash, deadCoordinatorFeedRows,
@@ -163,7 +164,7 @@ export async function stillCrashed(deps: EndDeadCoordinatorDeps, id: string): Pr
     return { kind: 'switch', why: `the registry did not list (${listed.reason}), so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out` };
   }
   const names = listed.entries;
-  if (names.includes(RECLAIM_PAUSE_MARKER)) return { kind: 'switch', why: `${RECLAIM_PAUSE_MARKER} was raised during the act` };
+  if (readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') return { kind: 'switch', why: `${RECLAIM_PAUSE_MARKER} was raised during the act` };
   if (!deadCoordinatorLaneArmed(names)) return { kind: 'switch', why: 'the lane was disarmed during the act' };
   // The journal's own trust FIRST, and whole: a mirror gone `unknown` or `stale` since the pass stops the act as the
   // pass's own hold does — nothing learned, the anchor standing (review 339, F4).
@@ -199,7 +200,7 @@ export async function endDeadCoordinator(
       detail: `the registry did not list (${listed.reason}), so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out` };
   }
   const names = listed.entries;
-  if (names.includes(RECLAIM_PAUSE_MARKER)) {
+  if (readSwitches(names)[RECLAIM_PAUSE_MARKER] === 'set') {
     return { kind: 'paused-at-server', detail: `${RECLAIM_PAUSE_MARKER} is raised: cleanup is paused fleet-wide` };
   }
   // 2 — the runs it holds NOW.
