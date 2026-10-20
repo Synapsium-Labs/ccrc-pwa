@@ -6277,10 +6277,7 @@ describe('the free-text row\'s placeholder is spelled once, in shared/ask-menu.t
     }
     expect(stallCode(path.join(ccrcRoot, 'server/src/inject/send.ts'))).toMatch(/\bfreeTextRow\s*\(/);
   });
-
-  it('shared/ask-menu.ts is L0: it imports nothing', () => {
-    expect(readFileSync(path.join(ccrcRoot, 'shared/ask-menu.ts'), 'utf8')).not.toMatch(/^\s*import\b|\brequire\s*\(/m);
-  });
+  // shared/ask-menu.ts's L0 ring is held by server/test/rings/shared-imports.test.ts (D-6045).
 });
 
 // D-5047 (plan docs/superpowers/plans/2026-10-15-ask-server-half.md, Task 3). APPENDED, as the D-5045 block above. The

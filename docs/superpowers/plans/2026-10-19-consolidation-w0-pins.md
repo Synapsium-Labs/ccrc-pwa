@@ -302,6 +302,51 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 
 **Exit (GATES):** the literal source pins over W1a's moved regions: the Step 0 count → 0; the ratchet predicate pinned for W1a's files; zero production bytes. **Not in this slice:** the other files' literal pins (later slices, ahead of the wave that moves their code).
 
+### Task C0l: the ring rules, stage 1 — L4-only fastify, `shared/*.ts` imports only `./`, no builtin in a `.mjs` the PWA reaches (D-6045; ARCH-04 (#545), stage 1) — lands now
+
+A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (band 2: it writes the first repo-wide ring rules, and which per-file pins they make redundant is a judgment). **Lane:** tests only; zero production bytes. **Needs:** nothing; no operator ruling (ARCH-04 says stage 1 is standalone). **Gates:** ARCH-00 (#915, `scan/parse.ts`), ARCH-02a (#874, the ring rules and the `.mjs` carve-out) and ARCH-03 (#894, #919) merged; all are. #826 edits `lifecycle.test.ts` (≈:1079, ≈:1278), #737 and #929 edit `single-definition.test.ts` (≈:5237; ≈:7538, ≈:7751), and #929 and #931 edit `scan/parse.ts` (≈:10, ≈:51, ≈:85, ≈:98, ≈:137, ≈:181) and `scan-parse.test.ts` (≈:6, ≈:96); this task's hunks in those files are line-disjoint from theirs, and its tree merges cleanly with each (#895, once listed here, merged as c2471e1bd). #927 holds this plan's lines after C0i's exit and around C0i's issued block, and #931 holds the lines after C0h's exit and after C0h's issued block; this section and D-6045's block sit before C0h's section and C0h's issued block, clear of both.
+
+**Files:**
+- Create `server/test/rings/walkSrc.ts`: the rules' one walk, `walkSrc({ roots, min, flat?, match? })`, which throws below its floor, and `REPO`/`rel`.
+- Create `server/test/rings/exemptions.ts`: the `Entry` shape (`reason`, one line; `since`, a `YYYY-MM-DD` day not in the future) every data file uses, and `malformedEntries`.
+- Create one rule per test file, each with its data file beside it:
+  - `rings/fastify-l4.test.ts` + `fastify-l4.data.ts`: the `server/src`, `agent/src`, `pwa/src` and `ui/src` files that import `fastify` or `@fastify/*`, or bind a `Fastify*` name from any module, in any form (type import, per-name `type`, `export … from`, dynamic import, type query), are EXACTLY the allowlist, generated from the tree on the day the rule lands (11 files, all L4 by the ring rules).
+  - `rings/shared-imports.test.ts` + `shared-imports.data.ts`: every edge of every `shared/*.ts` file, a type-only one included, names a `./` sibling. No exemption. The loads `scan/parse.ts` reports no edge for (its KNOWN WIDTH), a `require(…)` call and an `import(…)` whose argument is not a string literal, are refused anywhere in a `shared/*.ts` file's comment-stripped text, with a CONTROL. A `./` sibling that is a `shared/*.mjs` importing a builtin is left to `mjs-node`'s reach and carve-out.
+  - `rings/mjs-node.test.ts` + `mjs-node.data.ts`: a `.mjs` file the PWA's bundle reaches imports no Node builtin (prefixed or bare), and a `shared/*.mjs` file imports none beyond ARCH-02a's carve-out (`node:crypto`, `node:fs`, `node:url`; the data is pinned to the 08-10 spec's sentence). Reachability follows Vite's resolution, `.mjs` before `.ts` for an extension-less specifier, from every `pwa/src` source over every runtime edge, through `@/` and `@ccrc/ui` into `ui/src`.
+- Modify `server/test/scan/parse.ts`: a type query (`import('x').T`, `typeof import('x')`) is an edge of a new kind, `type-query`, always type-only. Additive: no consumer's verdict changes. `scan-parse.test.ts` gains its row.
+- Delete the per-file L0 pins stage 1 makes redundant: a pin is redundant when every shape it refuses is an import edge `shared-imports` refuses, a `require(…)` call or non-literal `import(…)` it refuses, or a `./` sibling import, which the L0 ring allows, and it states no reason of its own beyond the ring. Retired: `single-definition`'s "shared/ask-menu.ts is L0: it imports nothing"; `update-semver`'s import row (its describe keeps the parse row); `claude-version`'s "shared/claudeVersion.ts is L0 and imports nothing"; `lifecycle`'s "is L0: imports nothing at all"; `providers`'s two "imports nothing at all" rows (`providers.ts`, `base-url.ts`); `routing-ladder`'s whole-source `node:` belt. **Kept, stricter for a reason of their own:** `docs-shared` (host globals), `base-url.test.ts` (the decision may not learn the table), `pool-rule-core` (type imports only, no clock), `peers-claims-l0` and `collect-lane-l0` (`shared/api.ts`'s exact type-only lines), `token-shared`, `routing-ladder`'s and `providers`'s exact import lists (an addition must be stated).
+- Modify `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`: the "Import-direction test" and "No `reply` below L4" status rows name the stage 1 rules.
+- **Not in this task:** stages 2 to 4 (outward edges, the PWA rules, one ring and one context per file), the 60-day re-date meta-rule, and C0a's waiver classifier (D-6046). No `single-definition` row is added.
+
+- [ ] **Step 0: Re-ground.** On `origin/main`, list with `scan/parse.ts` every `server/src`, `pwa/src`, `agent/src`, `shared` and `ui/src` edge to `fastify`, `@fastify/*` or a `Fastify*` name (11 files, all `server/src`), every non-`./` edge in `shared/*.ts` (none) and every builtin in `shared/*.mjs` (`mark.mjs`: the three; `modelenv.mjs`: `node:fs`). Grep the suites for per-file L0 pins over `shared/*` and read each. `gh pr list --state open` with `gh pr diff` for every file touched.
+- [ ] **Step 1: Red.** On a `git archive` of `origin/main` with the new test files copied in: `scan-parse.test.ts`'s type-query row is red (no such edge), and `fastify-l4`'s CONTROL is red on `import('fastify').FastifyReply` and `typeof import('fastify')`. Every rule is green on the tree: stage 1 stops new debt, and the tree has none.
+- [ ] **Step 2: Green.** The `parse.ts` edge kind, the kit, the three rules and their data, the pin deletions, the status rows.
+- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | `import type { FastifyReply } from 'fastify'` in `coord/close.ts` (acceptance) | fastify-l4 | red, listing `server/src/coord/close.ts` |
+  | `import fs from 'node:fs'` in `shared/lifecycle.ts` (acceptance) | shared-imports | red, listing `shared/lifecycle.ts` |
+  | `coord/close.ts` names `import('fastify').FastifyReply` in a parameter type | fastify-l4 | red, listing `server/src/coord/close.ts` |
+  | `server/src/refuse.ts` dropped from the allowlist | fastify-l4 | red, listing `server/src/refuse.ts` |
+  | an allowlist entry for `server/src/coord/close.ts`, which imports no fastify | fastify-l4 | red: stale entry |
+  | an allowlist entry's reason blanked | fastify-l4 | red, naming the entry |
+  | `import type { Deps } from '../server/src/deps.js'` in `shared/api.ts` | shared-imports | red: a type-only edge counts |
+  | `import { readFileSync } from 'node:fs'` in `shared/models.mjs` (bundled through `../../../shared/models`) | mjs-node | red, listing `shared/models.mjs` |
+  | `import path from 'node:path'` in `shared/mark.mjs` | mjs-node | red: beyond the carve-out |
+  | a `pwa/src` file imports `../../../shared/mark.mjs` | mjs-node | red: `mark.mjs`'s three builtins reach the bundle |
+  | the resolver tries `.ts` before `.mjs` | mjs-node | red: the CONTROL resolves `shared/models.ts`, and `base-url.mjs` leaves the reach |
+  | `node:path` added to the carve-out data | mjs-node | red: the data is not the spec sentence |
+  | `parse.ts` loses the type-query branch | scan-parse, fastify-l4 | red: the parse row and the CONTROL |
+  | a walk's floor above its count | each rule | red: `walkSrc` throws "below the floor" |
+  | `const fs = require('node:fs');` in `shared/lifecycle.ts` | shared-imports | red, listing `shared/lifecycle.ts` and `require(` |
+  | `export const load = (s: string) => import(s);` in `shared/semver.ts` | shared-imports | red, listing `shared/semver.ts` and `import(` |
+  | `import type { FastifyReply } from 'fastify'` in an `agent/src` file | fastify-l4 | red, listing the file |
+
+- [ ] **Step 4: Verify.** From `server/`, one at a time with `--maxWorkers=2`: the three rules, `scan-parse`, `update-semver`, `claude-version`, `lifecycle`, `providers`, `routing-ladder`, `single-definition`; `tsc -p server` and `tsc -p server/test/tsconfig.tests.json`; then, after `git fetch -q origin main`, `deviation-refs`, `dtbd`, `topology-clean` and `docs-grammar`.
+
+**Exit (GATES):** the three stage 1 rules hold the tree with no exemption and an 11-file fastify allowlist; both acceptance mutants are red; seven per-file pins are retired with their reasons; zero production bytes.
+
 ### Task C0h: decidable ring wording, contexts 7 to 9, the PWA ring map and the status tables (D-6000; ARCH-02a (#528); spec §2.1) — lands now
 
 A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (judgment: it writes the rules every ring scanner will assert). **Lane:** docs only. **Needs:** nothing; no operator ruling (the spec is approved at rev 2.1, and ARCH-02a says none is needed). **Gates:** none. #434 is another session's superseded PR and is not ridden (D-6001). CLAUDE.md is also edited by #842 and #851; this task's hunk (the "Rings / bounded contexts" bullet) is line-disjoint from both.
@@ -454,6 +499,16 @@ The allocator issued the consolidation wave a block of 30 numbers, 5848 to 5877,
 
 - **D-5865** — `pause-pin-tick-fold-for-lane-sites` (Task C0e, #871; extends D-5852): the four `watch.ts` lane sites and `stopDonePass` take the tick's listing, which cannot be `null` by type, so their `null` and rejecting legs are pinned once, at the tick, not per site: neither reaches any lane, a `null` listing gives an `unmeasurable` coord frame, and a rejecting one emits no frame at all.
   - **Departs from** Task C0e's "four listings per site" for those five sites only; every executor site keeps all four. The worker named it by slug and the coordinator entered it from the wave's held numbers, as this plan's header requires.
+
+### Issued for Task C0l and defined here
+
+Task C0l was issued three numbers, 6045 to 6047.
+
+- **D-6045** — `ring-rules-stage-1` (Task C0l; ARCH-04, #545, stage 1): the repo-wide ring rules live one per test file under `server/test/rings/`, each over `scan/parse.ts` and the shared `walkSrc({ min })` floor, never in `single-definition.test.ts`; each rule's allowed or exempted entries live in its own `*.data.ts`, every entry with a one-line reason and a date, and each set is held exactly, so a stale entry is red. Stage 1 holds three rules: `fastify`, `@fastify/*` and every `Fastify*` name are imported, in any form, only by an L4 allowlist generated on the day the rule landed, across `server/src`, `agent/src`, `pwa/src` and `ui/src` (`fastify-l4`); a `shared/*.ts` file imports only its `./` siblings, a type-only edge included, and calls neither `require(…)` nor a non-literal `import(…)`, the loads `scan/parse.ts` reports no edge for (`shared-imports`); and a `.mjs` file the PWA's bundle reaches, by Vite's `.mjs`-first resolution, imports no Node builtin, while a `shared/*.mjs` file imports none beyond ARCH-02a's carve-out (`mjs-node`). `scan/parse.ts` reports a type query as a type-only edge of its own kind. A per-file L0 pin is retired when every shape it refuses is an import edge `shared-imports` refuses, a `require(…)` call or non-literal `import(…)` it refuses, or a `./` sibling import, which the L0 ring allows, and it states no reason of its own beyond the ring; a pin stricter for a reason of its own stays. A `./` sibling that is a `shared/*.mjs` importing a builtin is allowed by `shared-imports`; whether that builtin may reach the PWA is `mjs-node`'s reach and carve-out, not this rule.
+- **D-6046** — `growth-waiver-stays-until-stage-4` (Task C0l): C0a's `L1_L2_NEW_FILE_DIRS` waiver list stays.
+  - **Departs from** Task C0a's "until ARCH-04 stage 1 replaces it with its classifier". Stage 1's rules decide no file's ring: they hold three import facts. The classifier that gives every file one ring is stage 4, so the list is replaced there.
+
+Issued and unused (Task C0l): 6047.
 
 ### Issued for Task C0h and defined here
 

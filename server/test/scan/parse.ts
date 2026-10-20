@@ -17,10 +17,12 @@
 import { readFileSync } from 'node:fs';
 import ts from 'typescript-api';
 
-/** One module edge: an `import`, an `export … from`, an `import x = require(…)` or a literal `import(…)`. */
+/** One module edge: an `import`, an `export … from`, an `import x = require(…)`, a literal `import(…)` or a type
+ *  query `import('…').T` / `typeof import('…')`, always type-only (D-6045: ARCH-04's ring rules see a type reached
+ *  that way as they see an `import type`). */
 export interface ImportEdge {
   specifier: string;
-  kind: 'import' | 'export-from' | 'import-equals' | 'dynamic';
+  kind: 'import' | 'export-from' | 'import-equals' | 'dynamic' | 'type-query';
   /** `import type …`, `export type … from`, `import type x = require(…)`. A per-name `type` leaves this false. */
   typeOnly: boolean;
   /** The bound names: `default` as its local name, a namespace as `* as x`, named ones by their imported name. */
@@ -137,6 +139,13 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
       if (a && ts.isStringLiteralLike(a)) {
         imports.push({ specifier: a.text, kind: 'dynamic', typeOnly: false, names: [], line: lineOf(node.getStart(sf)) });
       }
+    }
+    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
+      // The qualifier's first name (`FastifyReply` in `import('fastify').FastifyReply`); none for `typeof import(…)`.
+      let q: ts.EntityName | undefined = node.qualifier;
+      while (q && ts.isQualifiedName(q)) q = q.left;
+      imports.push({ specifier: node.argument.literal.text, kind: 'type-query', typeOnly: true,
+        names: q ? [q.text] : [], line: lineOf(node.getStart(sf)) });
     }
     if (ts.isFunctionDeclaration(node) && node.name) {
       addSymbol(q(node.name.text), 'function', node);
