@@ -10,6 +10,7 @@ import { COORD_CONFIRM_MS, MARKER_GLYPH, MARKER_WORD } from '../src/fleet/coordW
 import { ApiError } from '../src/lib/api';
 import { ToastHost } from '@ccrc/ui';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { renderFleet } from './fleetHost';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -274,7 +275,7 @@ describe('the coord banner', () => {
     act(() => {
       store.setState({ conn: 'open', sessions: [], coord: coord({ pause: 'set' }), coordFrameSeen: true });
     });
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     expect(document.querySelector('.coord-banner')).toBeNull();
   });
 

@@ -15,6 +15,8 @@ import { LoginScreen } from './components/LoginScreen';
 import { RenderBoundary, ScreenFallback } from './components/RenderBoundary';
 import { ToastHost } from '@ccrc/ui';
 import { AccountsStrip } from './fleet/AccountsStrip';
+import { FleetChromeProvider } from './fleet/FleetChrome';
+import { FleetFlows } from './fleet/FleetFlows';
 import { useAuthLost } from './lib/auth';
 import { navigate, useLocation } from './lib/router';
 import { useMediaQuery } from './lib/useMediaQuery';
@@ -156,8 +158,11 @@ export function App(): ReactNode {
       <p className="shell-placeholder-copy">Select a session</p>
     </div>
   );
+  // The fleet's polls and sheets sit ABOVE the shell (D-5468): one health, updates and projects poll for every
+  // reader, and the five fleet sheets rendered by `FleetFlows` beside `.app-shell`, so a fleet list that remounts
+  // never closes a sheet it opened.
   return (
-    <>
+    <FleetChromeProvider store={useFleetStore}>
       {authLost && <LoginScreen />}
       {blocked && <BlockScreen />}
       <div className="app-shell" data-view={sessionId || archive || accounts || mail || runs || settings || digest || docs ? 'session' : 'fleet'}>
@@ -181,7 +186,8 @@ export function App(): ReactNode {
           <RenderBoundary where="detail" resetKey={path + search} fallback={() => <ScreenFallback />}>{ladder}</RenderBoundary>
         </section>
       </div>
+      <FleetFlows />
       <ToastHost />
-    </>
+    </FleetChromeProvider>
   );
 }
