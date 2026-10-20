@@ -875,6 +875,24 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     README to free. The four required checks must be green on the merged tip, and that tip needs a NEW review.
   - No routing change. Tasks 1-4 remain unaccepted; Task 5 remains gated. No merge, rollout, restart, arming or
     settings act.
+- **2026-10-20 19:22 UTC - fix round 2 handed off; NEW independent review dispatched.**
+  - The worker's wave-done names tip `90c37de9b`, PR #435. The server accepted the fingerprint and moved the run to
+    awaiting review. Its suite line is red, because the round's first full pass was red: two files it calls red on
+    `main` on this box, and load timeouts. The review decides those classifications.
+  - The round met every ruling, as the worker reports it, and merged `main` twice. Each merge conflicted only on
+    `ccd/ccd`'s generated stamp, and each was re-stamped.
+  - One structured ask, answered by this coordinator. `main`'s new function-context census counted one more
+    cross-context call once the live promotion's row was added: the promotion looked up the config directory itself.
+    The chosen fix passes the caller's config directory instead, so the count holds at its ceiling and no answer
+    changes. No new deviation number; one line in the plan's evidence.
+  - The worker made six small rulings of its own, among them withdrawing a check it had added beyond the narrowed
+    kill rule, and correcting this coordinator's wording about when baseline B was measured. The review judges each.
+  - The four required checks passed on the merged tip. One full CI run was started there for the files a pull
+    request does not select. `main` touched `ccd/ccd` again after the second merge, so the landing needs one more
+    stamp-only merge.
+  - A NEW review run reads that tip with the held-out panel and the two wave-specific lenses (operator ruling,
+    absorption). No routing change. Tasks 1-4 remain unaccepted; Task 5 remains gated. No merge, rollout, restart,
+    arming or settings act.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
