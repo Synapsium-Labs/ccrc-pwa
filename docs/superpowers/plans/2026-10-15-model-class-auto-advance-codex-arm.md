@@ -84,7 +84,7 @@ lane to the default window by itself (`contextWindowFor(...).rule === 'default'`
      needs the operator's go (runbook step 6). If it is adopted, it lands with the ccd routing-record change of spec
      §2.5 item 5, outside this plan.
 2. **The design's seventeen deviations are accepted as written,** and the waves add twenty-seven more (Deviations
-   found).
+   found). Executing W1 issued four more, defined there too: D-5819, D-5966, D-5991 and D-5992.
 3. **The lane-files lock is hardened.**
    - A symlink, a FIFO or anything but a regular file at its path is refused `lock-unwritable` before any open.
    - Its directory is made 0700 at every lock.
@@ -18307,3 +18307,16 @@ What changes:
 - When the class's pin already equals `previous.model`, `revertOp` clears `previous` and keeps the hold, but writes no history entry.
 
 Cost if wrong: a revert restores a higher level than the old model's own row would rank. The level is still one the catalogue offers.
+
+### D-5992 — a pinned class advances within its pin's own family
+
+Where: Tasks 2 and 6 (`chooseCandidate`, `revertOp`), issued by the coordinator on 2026-10-20 while executing W1. Task 2's text takes `family ?? familyOf(pin)`, so a stored family wins over the pin's own. Three things leave a pinned class's stored family different from its pin's:
+- a build from before W1, which never opens the advance file, runs a hand `set-class` after a rollback;
+- the registry is edited by hand (models-op calls it a hand-editable file);
+- `revert` moves a pin and does not rewrite the family.
+
+W2's `advance-plan` and `advance-commit` would then canary and re-pin that class across families, undoing the operator's choice. This was measured with a stored `gamma`, a pin in `delta`, and a newer `gamma` in the catalogue.
+
+The fix: for a pinned class, `chooseCandidate` takes the pin's family, and the stored family decides only for an empty class, which is what it exists for (spec §2.2 Seeding). `revertOp` also writes the restored pin's family, so the file stays true for every reader. W4 Task 18's family readback reads the pin's family the same way.
+
+Cost if wrong: an operator who meant a pinned class to follow another family must re-pin it there by hand.
