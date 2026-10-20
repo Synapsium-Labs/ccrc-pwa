@@ -7539,6 +7539,35 @@ export class CoordStore {
     return Number(res.changes) > 0;
   }
 
+  /** D-5925 (held questions survive a restart): every ask row a hold still owns, `held` or `answering`, oldest
+   *  first. Read once, on the boot's unprimed tick (`watch.ts`'s `detectDialogs`), so the in-memory carrier
+   *  (`heldAsks`, D-2169) can be re-seeded from the rows that already hold its deadline (`askNotifyAt(at)`) and its
+   *  identity (`dialogId`, `askKey`). All-or-failure, like every other list read on this surface. */
+  heldQuestionRows(): AsksReadResult {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE state IN ('held','answering') ORDER BY id`,
+    ).all() as Parameters<CoordStore['hydrateAsk']>[0][];
+    const asks: AskRow[] = [];
+    for (const r of rows) {
+      const h = this.hydrateAsk(r);
+      if (!h.ok) return { ok: false, kind: 'ask-unreadable', detail: h.detail };
+      asks.push(h.ask);
+    }
+    return { ok: true, asks };
+  }
+
+  /** D-5925: the main thread's (`agentId` `''`, D-5491) approval rows still `held` for a claimant, oldest first,
+   *  grouped by child: the boot's snapshot `heldApprovals` is re-seeded from. `held` ONLY, never `released`:
+   *  `lapseApproval` records no time and no reason, so a row lapsed and pushed before the restart cannot be told
+   *  from one lapsed after it, and selecting it would push the operator twice. All-or-failure. */
+  heldApprovalRowsByChild(): { ok: true; rows: Map<string, ApprovalRow[]> } | { ok: false; detail: string } {
+    const read = this.approvalRows("WHERE state = 'held' AND agentId = '' AND releaseReason IS NULL ORDER BY id");
+    if (!read.ok) return read;
+    const out = new Map<string, ApprovalRow[]>();
+    for (const r of read.rows) out.set(r.childId, [...(out.get(r.childId) ?? []), r]);
+    return { ok: true, rows: out };
+  }
+
   // ── approvals (coordinator-first routing plan Task 16, D-5298, D-5440, D-5441) ──────────────────────────────────
   //
   // One row per permission-prompt request a dispatched child's hook sent (`POST /api/approvals`). The row is the

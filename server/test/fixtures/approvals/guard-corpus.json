@@ -10067,5 +10067,140 @@
     },
     "class": "escalate",
     "why": "round 9: AGENT.md is matched in any case"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "ccd roll project-a-calm-mesa --to 2.1.302 --expect t"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "forbidden",
+    "why": "D-5696: ccd roll is never a session's"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "ccd claude roll-live on"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "forbidden",
+    "why": "D-5696: an operator's ccd claude switch verb"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "cp /tmp/x ~/.local/share/claude/versions/2.1.302"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "forbidden",
+    "why": "D-5696: a write into the build directory"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "echo x > /rig/home/.local/share/claude/versions/2.1.302"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "forbidden",
+    "why": "D-5696: a redirect into the build directory"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "ln -sf /tmp/x ~/.local/bin/claude"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "forbidden",
+    "why": "D-5696: a write onto the launcher"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "ls ~/.local/share/claude/versions"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "escalate",
+    "why": "D-5696: reading the build directory is not a write"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "cp /tmp/x ~/.local/bin/ccd"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "escalate",
+    "why": "D-5696: ccd's own path is not the launcher"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "cp /tmp/x ~/.local/bin/claude-a"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "escalate",
+    "why": "D-5696: a generated wrapper is not the launcher"
+  },
+  {
+    "tool": "Bash",
+    "input": {
+      "command": "ccd swap project-a-calm-mesa claude-a"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "escalate",
+    "why": "D-5696: account switching is never blocked"
+  },
+  {
+    "tool": "Write",
+    "input": {
+      "file_path": "/rig/home/.local/share/claude/versions/2.1.302",
+      "content": "x"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "forbidden",
+    "why": "D-5696: an edit tool writing a build"
+  },
+  {
+    "tool": "Write",
+    "input": {
+      "file_path": "/rig/home/.local/bin/claude",
+      "content": "x"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "forbidden",
+    "why": "D-5696: an edit tool writing the launcher"
+  },
+  {
+    "tool": "Write",
+    "input": {
+      "file_path": "/rig/home/.local/bin/ccd",
+      "content": "x"
+    },
+    "ctx": {
+      "cwd": "/rig/home/ws/project-a-quiet-basin"
+    },
+    "class": "escalate",
+    "why": "D-5696: an edit tool writing ccd is not newly forbidden"
   }
 ]
