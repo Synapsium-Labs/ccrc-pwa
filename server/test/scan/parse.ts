@@ -14,7 +14,8 @@
  * source-pin ratchet (`single-definition.test.ts`, the ARCH-40 describe) read, so neither imports the parser.
  * KNOWN WIDTH: a file that does not parse yields what the parser recovered (no throw); a computed member name, an
  * object-literal method and a function bound through `as`, a call or parentheses are not symbols; an alias exported
- * by a later `export { X }` is not an exported type alias; `require(…)` calls are not import edges.
+ * by a later `export { X }` is not an exported type alias; `require(…)` calls are not import edges; a `Record<X, true>`
+ * counts only as a variable's annotation or a `satisfies` type, and only with `X` named bare (D-6048).
  */
 import { readFileSync } from 'node:fs';
 import ts from 'typescript-api';
@@ -132,6 +133,65 @@ const literalText = (t: ts.TypeNode): string | null => {
   if (l.kind === ts.SyntaxKind.FalseKeyword) return 'false';
   return null;
 };
+
+/** The bare `X` of a `Record<X, true>` inside `t` (or `Readonly<Record<X, true>>`), else `null`. */
+const recordTrueKey = (t: ts.TypeNode): string | null => {
+  if (!ts.isTypeReferenceNode(t) || !ts.isIdentifier(t.typeName)) return null;
+  const args = t.typeArguments ?? [];
+  if (t.typeName.text === 'Readonly' && args.length === 1) return recordTrueKey(args[0]!);
+  if (t.typeName.text !== 'Record' || args.length !== 2) return null;
+  const [k, v] = [args[0]!, args[1]!];
+  return ts.isTypeReferenceNode(k) && ts.isIdentifier(k.typeName) && !k.typeArguments
+    && ts.isLiteralTypeNode(v) && v.literal.kind === ts.SyntaxKind.TrueKeyword ? k.typeName.text : null;
+};
+
+/** D-6048 (ARCH-12): the wire-totality facts of one parsed file, read by a walk of their own (kept out of
+ *  `ParsedFile` so the shared walk stays one owner's). Runtime-bearing forms only. */
+export interface WireFacts {
+  /** The `X` of every `Record<X, true>` (bare or inside `Readonly<…>`) typing a non-`declare` variable or a
+   *  `satisfies` expression: a map that fails to compile when `X` gains a member. Bare type names only. */
+  recordTrueKeys: string[];
+  /** The `X` of every `v is X` predicate on a function, method or arrow WITH a body; not `asserts v is X`, not a
+   *  type-only signature. Bare type names only. */
+  guardedTypes: string[];
+  /** Every string literal the file compares against by hand: an operand of `===`, `!==`, `==` or `!=`, or a `case`
+   *  label. In source order, repeats kept. */
+  comparedLiterals: string[];
+}
+
+const EQUALITY = new Set<ts.SyntaxKind>([ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken]);
+
+const isDeclared = (d: ts.VariableDeclaration): boolean => {
+  const stmt = d.parent?.parent;
+  return !!stmt && ts.isVariableStatement(stmt)
+    && !!stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.DeclareKeyword);
+};
+
+const hasBody = (n: ts.Node): boolean =>
+  (ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n) || ts.isMethodDeclaration(n))
+  && n.body !== undefined;
+
+/** The wire-totality facts of `p` (D-6048). */
+export function wireFacts(p: ParsedFile): WireFacts {
+  const sf = ts.createSourceFile(p.path, p.text, ts.ScriptTarget.Latest, true, scriptKindOf(p.path));
+  const out: WireFacts = { recordTrueKeys: [], guardedTypes: [], comparedLiterals: [] };
+  const visit = (node: ts.Node): void => {
+    const rk = ts.isVariableDeclaration(node) && node.type && !isDeclared(node) ? recordTrueKey(node.type)
+      : ts.isSatisfiesExpression(node) ? recordTrueKey(node.type) : null;
+    if (rk !== null) out.recordTrueKeys.push(rk);
+    if (ts.isTypePredicateNode(node) && !node.assertsModifier && node.type && ts.isTypeReferenceNode(node.type)
+      && ts.isIdentifier(node.type.typeName) && !node.type.typeArguments && hasBody(node.parent)) {
+      out.guardedTypes.push(node.type.typeName.text);
+    }
+    const operands = ts.isBinaryExpression(node) && EQUALITY.has(node.operatorToken.kind) ? [node.left, node.right]
+      : ts.isCaseClause(node) ? [node.expression] : [];
+    for (const o of operands) if (ts.isStringLiteralLike(o)) out.comparedLiterals.push(o.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
 
 const unionLiterals = (t: ts.TypeNode): string[] | null => {
   const members = ts.isUnionTypeNode(t) ? [...t.types] : [t];

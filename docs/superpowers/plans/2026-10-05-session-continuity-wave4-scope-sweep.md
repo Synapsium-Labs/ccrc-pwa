@@ -1,6 +1,6 @@
 # Session continuity, wave 4 — wave 3's residue, then dead pane scopes reported and the inert ones stopped, shadowed (AGENT-FIRST) Implementation Plan
 
-> **Status: PLANNED 2026-10-05 on `main` `d12b5aba0` — ready for dispatch** (programme session-continuity, CCR-18;
+> **Status: PLANNED 2026-10-05 on `main` `d12b5aba0` — ready for dispatch** (programme session-continuity, #197;
 > wave 4 = run 274, planned). The prototype was built on `77f8d63a5` (#250, wave 3's merge); `main` then took #282 and
 > #283, which touch `README.md`, `CLAUDE.md` and child-reclamation documents only, so the prototype merged them, every
 > README anchor was re-cut, and every block below was replayed onto an export of `d12b5aba0`. **Revised 2026-10-06**
@@ -1943,7 +1943,7 @@ describe('each stop predicate, one at a time — the scope is reported, never st
 
   it('a process in it is the parent of a process in another cgroup', () => {
     proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)) });
-    proc(3999, { age: 2 * 86400, ppid: 3001, cg: '/user.slice/user-1000.slice/user@1000.service/app.slice/mekwar-ddb.service' });
+    proc(3999, { age: 2 * 86400, ppid: 3001, cg: '/user.slice/user-1000.slice/user@1000.service/app.slice/project-f-ddb.service' });
     const u = scope(1, { pane: 3001, procs: [3001] }); seen(u, 7 * HOUR, 7255660000);
     reportedFor(u, 'parent-of-a-process-elsewhere');
   });
@@ -2095,7 +2095,7 @@ describe('a value it cannot measure skips that scope for the tick — the old li
   });
 
   it('a ControlGroup that names another unit', () => {
-    const other = '/user.slice/user-1000.slice/user@1000.service/app.slice/mekwar-ddb.service';
+    const other = '/user.slice/user-1000.slice/user@1000.service/app.slice/project-f-ddb.service';
     one({ pane: 3001, procs: [3001], cgShown: other });
     fs.mkdirSync(path.join(fx.cg, other), { recursive: true });
     fs.writeFileSync(path.join(fx.cg, other, 'cgroup.procs'), '3001\n');

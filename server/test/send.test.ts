@@ -1364,7 +1364,7 @@ describe('DIM_SPAN does not swallow real text after a tmux combined reset (\\e[0
 });
 
 describe('sendPrompt with attachments', () => {
-  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+  const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
 
   it('types the paths above the text as one turn', async () => {
     const { tmux, calls } = fakeTmux([
@@ -1423,7 +1423,7 @@ describe('sendPrompt with attachments', () => {
     // from the first frame: it would stop at one press and strand the text,
     // which is exactly what happens when a stale render is why the echo failed.
     // So the floor is fired blind, and this pane can't talk it out of it.
-    const P2 = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150341-c3d4.jpg';
+    const P2 = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150341-c3d4.jpg';
     const { tmux, calls } = fakeTmux(['❯ \n']); // box stays empty — never echoes
     await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep },
@@ -1472,7 +1472,7 @@ describe('sendPrompt with attachments', () => {
 // live box — the next send then came back `draft-present` carrying exactly the
 // thing this cleanup exists to remove. Judged against box STATE, not a press count.
 describe('the failed-send cleanup actually empties the box', () => {
-  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+  const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
 
   it('empties the box even though the pane NEVER re-renders — the reason the verify failed', async () => {
     // `staleFrames: Infinity` is the case that matters: the pane goes on showing
@@ -1495,7 +1495,7 @@ describe('the failed-send cleanup actually empties the box', () => {
   });
 
   it('a 3-line attachment prompt needs 5 presses and gets them, stale pane or not', async () => {
-    const P2 = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150341-c3d4.jpg';
+    const P2 = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150341-c3d4.jpg';
     const { tmux, calls, box } = boxTmux({ staleFrames: Infinity });
     await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'caption', { attachments: [P, P2] },
@@ -1571,7 +1571,7 @@ describe('the failed-send cleanup actually empties the box', () => {
 // the menu and then hand the user "1. Yes" back as their own leftover draft.
 describe('a menu that opens mid-clear stops the clear', () => {
   const MENU = 'some scrollback\n\n❯ 1. Yes\n  2. No\n  Enter to select\n';
-  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+  const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
 
   it('replaceDraft answers dialog-open, the same as a menu that was already up', async () => {
     // capture 1 = a real draft (passes the guard at the top), everything after
@@ -1603,7 +1603,7 @@ describe('a menu that opens mid-clear stops the clear', () => {
 // message: a 200-line prompt bought 402 presses and a minute of sleeps, and a
 // 500-line one several minutes, all with the lock held.
 describe('a clear cannot hold the session queue open', () => {
-  const P = '/home/u/.cc-clips/claude2-Proj/clip-20260726-150340-a1b2.png';
+  const P = '/home/u/.cc-clips/claude9-Proj/clip-20260726-150340-a1b2.png';
   /** Wall clock the clear itself spent, i.e. from the last typed keystroke on. */
   const clearElapsed = (clock: { now: () => number }, before: number) => clock.now() - before;
 

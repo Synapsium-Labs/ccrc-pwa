@@ -964,10 +964,10 @@ fifth and must go with them.
   it('an UNMEASURABLE transcript says the fleet host is unreadable, not "can\'t find it"', () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:project-c" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'u1', offset: 0, missing: true,
-      file: '/home/rc/.claude/projects/x/u1.jsonl',
+      file: '/home/u/.claude/projects/x/u1.jsonl',
       searchComplete: true, fileMeasured: false, events: [],
     } as Backlog);
     expect(screen.getByText("Can't read the fleet host right now")).toBeInTheDocument();
@@ -981,10 +981,10 @@ fifth and must go with them.
   it('a PRESENT transcript whose bytes could not be read is not an empty chat', () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:project-c" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'u1', offset: 4096, missing: false,
-      file: '/home/rc/.claude/projects/x/u1.jsonl',
+      file: '/home/u/.claude/projects/x/u1.jsonl',
       searchComplete: true, fileMeasured: false, events: [],
     } as Backlog);
     expect(screen.queryByText('No messages yet')).not.toBeInTheDocument();
@@ -996,10 +996,10 @@ fifth and must go with them.
   it('an older server that sends no fileMeasured has MEASURED the file', () => {
     const store = makeStore();
     const fleet = makeFleet();
-    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    render(<SessionScreen id="claude:project-c" store={store} fleet={fleet} />);
     applyBacklog(store, {
       type: 'backlog', uuid: 'u1', offset: 0, missing: true,
-      file: '/home/rc/.claude/projects/x/u1.jsonl', searchComplete: true, events: [],
+      file: '/home/u/.claude/projects/x/u1.jsonl', searchComplete: true, events: [],
     } as Backlog);
     expect(screen.getByText("Can't find this session's transcript")).toBeInTheDocument();
     expect(screen.queryByText("Can't read the fleet host right now")).not.toBeInTheDocument();
@@ -1013,14 +1013,14 @@ the fifth fact belongs inside it. It drives the pure reducer (`applySessionMsg(e
 ```ts
     let s = applySessionMsg(emptySnap(), {
       type: 'backlog', uuid: 'u1', events: [user('a', 'hi')], offset: 90,
-      file: '/t/claude2/u1.jsonl', missing: true,
-      foreignAccount: 'claude2', searchComplete: false, fileMeasured: false,
+      file: '/t/claude9/u1.jsonl', missing: true,
+      foreignAccount: 'claude9', searchComplete: false, fileMeasured: false,
     });
-    expect(s.strandedAccount).toBe('claude2');
+    expect(s.strandedAccount).toBe('claude9');
     expect(s.searchComplete).toBe(false);
     expect(s.fileMeasured).toBe(false);            // NEW
-    expect(s.missingFile).toBe('/t/claude2/u1.jsonl');
-    expect(s.file).toBe('/t/claude2/u1.jsonl');
+    expect(s.missingFile).toBe('/t/claude9/u1.jsonl');
+    expect(s.file).toBe('/t/claude9/u1.jsonl');
 
     s = applySessionMsg(s, { type: 'rotated', uuid: 'u2' });
 
@@ -3539,7 +3539,7 @@ defined in the same act.
 **Why:** For a caller with no pane, `whoami` does not fail — it returns SOMEONE ELSE'S identity and
 exits 0. Measured on the fleet host three times across 2026-09-02, most recently at 15:1x UTC:
 `env -i HOME=$HOME PATH=/usr/bin:/bin tmux display-message -p '#S'` exits 0 naming the
-most-recently-active session, and on that last run it named `cc-intake-platform-keen-meadow` while
+most-recently-active session, and on that last run it named `cc-project-n-keen-meadow` while
 the caller's own pane (`$TMUX_PANE` = `%184`) belonged to `cc-ccrc-pwa-quiet-meadow`. The three runs
 named different sessions, which is why the guard asserts the property and no session name or
 timestamp goes into shipped source. tmux resolves from `TMUX_PANE`, not `$TMUX`

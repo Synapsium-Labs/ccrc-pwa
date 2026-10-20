@@ -84,7 +84,7 @@ of the work rather than a deployment afterthought.
 
 ```
 ┌────────────────────────────────┐
-│ OpenClawHetzner   ▾  2    [+]  │
+│ project-c   ▾  2    [+]  │
 │                claude · 91% free│
 │                                │
 │   main          idle  claude ···│
@@ -166,14 +166,14 @@ does not work:**
 
 | project | per-project, `--limit 100` | per-branch, `--head` |
 |---|---|---|
-| MekWarLive | **11214ms → HTTP 504** | **918ms** |
-| custom-tools | 4638ms (100 PRs) | 515ms |
-| synapsium-platform | 1969ms (51 PRs) | 492ms |
-| intake-platform | 1213ms (13 PRs) | 509ms |
-| OpenClawHetzner | 505ms (0 PRs) | — |
+| project-f | **11214ms → HTTP 504** | **918ms** |
+| project-d | 4638ms (100 PRs) | 515ms |
+| project-k | 1969ms (51 PRs) | 492ms |
+| project-n | 1213ms (13 PRs) | 509ms |
+| project-c | 505ms (0 PRs) | — |
 
 `statusCheckRollup` resolves check runs for every PR returned, so cost scales
-with the repo's PR history rather than with anything we care about. MekWarLive
+with the repo's PR history rather than with anything we care about. project-f
 times out outright.
 
 **So: one `gh pr list --head <branch> --state all --limit 5` per distinct
@@ -205,13 +205,13 @@ Evaluated in that order: terminal states first, then problems, then readiness.
 ### Reading the rollup, from the real shape
 
 `statusCheckRollup` is a **union**, and both members appear in one PR. Measured
-on `custom-tools#593`: one `CheckRun` (`conclusion: null`, `status: IN_PROGRESS`)
+on `project-d#593`: one `CheckRun` (`conclusion: null`, `status: IN_PROGRESS`)
 and one `StatusContext` (`state: 'SUCCESS'`, no `status`). So:
 
 - `CheckRun` → `conclusion` when set; when null, `status` of `QUEUED`/`IN_PROGRESS`
   means **pending**.
 - `StatusContext` → `state` (`SUCCESS` / `PENDING` / `FAILURE` / `ERROR`).
-- **`SKIPPED` and `NEUTRAL` are not failures.** MekWarLive's `#3193` carries
+- **`SKIPPED` and `NEUTRAL` are not failures.** project-f's `#3193` carries
   33 `SUCCESS` and **5 `SKIPPED`** of 38. A naive `every(c => c.conclusion ===
   'SUCCESS')` would call that PR not-green, and skipped jobs are routine in real
   CI — so this is the default case, not an edge one.
@@ -222,7 +222,7 @@ be exactly the confident-and-wrong display this feature exists to avoid, which i
 why readiness requires `mergeStateStatus === 'CLEAN'` and everything else open
 falls through to a bare `#41`.
 
-**`mergeable` is only meaningful for an OPEN PR.** Measured: MekWarLive's merged
+**`mergeable` is only meaningful for an OPEN PR.** Measured: project-f's merged
 `#3193` returns `mergeable: UNKNOWN, mergeStateStatus: UNKNOWN`. Applying the
 readiness rule blindly would render a merged PR as conflicted. Gate the
 `✓`/`⚠` logic on `state === 'OPEN'` first.
@@ -293,7 +293,7 @@ load-bearing rather than cosmetic.
 - **PR state mapping**, as a pure function over the `gh` JSON, from fixtures
   captured from the real API — every row of the readout table, plus:
   a merged PR with `mergeable: UNKNOWN` must render `merged`, never `⚠`
-  (MekWarLive's `#3193` is the real case); a green rollup with
+  (project-f's `#3193` is the real case); a green rollup with
   `mergeable: CONFLICTING` must render `⚠`, not `✓`; and an empty result, a
   non-zero exit, a 504 and unparseable output must all render no badge.
   Verify by mutation that dropping the `state === 'OPEN'` gate turns the suite

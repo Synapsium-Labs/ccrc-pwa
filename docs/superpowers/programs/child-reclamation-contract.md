@@ -1818,7 +1818,7 @@ This note amends; it edits no earlier text.
 
 Wave 7's pre-flight was measured at `b0647d850` by five Opus readers and a completeness critic. The coordinator then
 drafted these rulings, and four Opus attackers (SAFETY at xhigh) attacked the draft. Every break they constructed is
-closed below. Evidence: the coordinator's `ccr15-evidence-archive/wave7-preflight/` (`preflight.json`, `attack.json`).
+closed below. Evidence: the coordinator's `#166-evidence-archive/wave7-preflight/` (`preflight.json`, `attack.json`).
 
 - **R65 — the waves are re-cut, because R63 conflicts with R38/R48.**
   - **Why.** X1, X3 and R61's closure are server code. X1 changes when `ws-reclaim` is licensed, which is a second
@@ -2346,7 +2346,7 @@ the first draft proposed was dropped.
 Wave 8 (run 348) is reclaim's SERVER half (R65). It is server code and shared L0 only: no ccd, agent or PWA edit. Its
 SAFETY subject is "what `ws-reclaim` is licensed against". Its pre-flight was three Opus readers and a critic at
 `226bb881c`. The coordinator's draft rulings were then attacked by three Opus attackers, with SAFETY at xhigh. Every
-break they found is closed below. Evidence: the coordinator's `ccr15-evidence-archive/wave8/` (`preflight.json`,
+break they found is closed below. Evidence: the coordinator's `#166-evidence-archive/wave8/` (`preflight.json`,
 `attack.json`).
 
 - **R73 — X1 is closed on the server.** ccd's binding alone does not close X1, because the executor audits and acts
@@ -2656,7 +2656,7 @@ merge). The coordinator's draft rulings were then attacked by four Opus attacker
 attention, feasibility, SECURITY), with two Sonnet refuters for every break: 68 agents, no error, and 28 breaks
 survived. The revision was checked again by two Opus readers (SAFETY at xhigh) with refuters: 30 agents, no error, and 13
 more items survived, among them five SAFETY wedges and stale-answer paths. A last check (22 agents) found no route that
-composes when a gate forbids it, and 9 more items (three silent-wedge paths among them). Every one is closed below. Evidence: the coordinator's `ccr15-evidence-archive/wave9-preflight/`
+composes when a gate forbids it, and 9 more items (three silent-wedge paths among them). Every one is closed below. Evidence: the coordinator's `#166-evidence-archive/wave9-preflight/`
 (`preflight.json`, `attack.json`).
 
 **Measured at the pre-flight (2026-10-11; counts only, no contents read):**
@@ -3592,7 +3592,7 @@ differ, the spec's design governs and this section is corrected.
   - Its waves, in order: W1a, the server's id gate (run 399); W1b, ccd's id fix, after workspace-lifecycle wave 6 (#351)
     merges; W2, absences and mounts; W3, worktree path identity. W4 is not scheduled (PG1 B), so the spec's section 3.7
     residuals stand.
-  - **The collector's Settings switch is CCR-15's wave 10** (run 400; SW6 A), because it changes what arms this
+  - **The collector's Settings switch is #166's wave 10** (run 400; SW6 A), because it changes what arms this
     programme's destructive lane. R96 is its rule.
   - Every `ccd/ccd` edit waits for #351 and then goes in series. Anything the waves share with `ws-expire` needs
     workspace-lifecycle's coordinator's consent, per wave (PG2 A).
@@ -3662,7 +3662,7 @@ Where wave 10's code and the plan's text narrowed or spelled out R96, they now r
 edits no earlier text. It names each departure by slug and carries no number: the coordinator assigns this wave's
 numbers from the block run 400 was issued, and the wave 10 plan's `## Deviations found` defines them. This wave's
 committed comments and test titles cite §5 of the path-identity design spec, whose "§5 as built" note states the same
-points. The CCR-15 design spec gains an as-built paragraph in §5.10 and a wave row in §8.
+points. The #166 design spec gains an as-built paragraph in §5.10 and a wave row in §8.
 
 **R96 (two arms, then one), reconciled before the build.** The plan's rulings settle where the spec's sections and its
 Figure 5 differ, and the code keeps each:

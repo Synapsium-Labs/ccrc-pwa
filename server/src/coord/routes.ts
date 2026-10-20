@@ -82,6 +82,7 @@ import { redactedStored } from './redact.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import { approvalNudgeSubject } from './rundefs.js';
 import { heldFor } from './heldFor.js';
+import { noticeSink, type NoticeSink } from '../notice.js';
 import {
   APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
 } from './approvalsign.js';
@@ -465,7 +466,7 @@ export interface CoordRoutesHandle {
   ) => Promise<T>): Promise<T>;
   /** The SAME hold, handed `closeRun`'s abandon arm as the DEAD-COORDINATOR LANE runs it (workspace lifecycle spec
    *  2026-09-24 §5.4): `causedBy: 'sweep'`, never the operator's word; the compare-and-set on `claimedBy` against the
-   *  crashed id; the lane's re-measure, which the arm runs before the fleet act and again before the commit; CCR-15 wave
+   *  crashed id; the lane's re-measure, which the arm runs before the fleet act and again before the commit; #166 wave
    *  3's `childReclaim` port wired exactly as the abandon route wires it. The lane's only way to end a run, so the
    *  reclaim door — which runs inside this serialiser — can never interleave with it. */
   withSweepAbandon<T>(coord: CoordStore, fn: (
@@ -544,6 +545,12 @@ export function registerCoordRoutes(
    * had ever held it in memory in the first place.
    */
   watcher?: FleetWatcher,
+  /**
+   * D-5858: the notice sink this file's five feed writers raise their rows through (`notice.ts`, D-5857), the one
+   * `buildServer` builds and passes. Defaulted to a sink over these same `deps`, which is what `buildServer`'s is, so a
+   * test that registers these routes on a bare Fastify raises its rows exactly as the server does.
+   */
+  notice: NoticeSink = noticeSink(deps),
 ): CoordRoutesHandle {
   const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');
 
@@ -554,7 +561,7 @@ export function registerCoordRoutes(
   const turnReads = turnReadDeps(deps, watcher);
 
   /** `closeRun`'s abandon arm exactly as `POST /api/runs/:id/abandon` runs it — `{intent:'abandon'}` built here and
-   *  never read off a body (D-280), `causedBy:'operator'`, CCR-15 wave 3's `childReclaim` port onto the session's own
+   *  never read off a body (D-280), `causedBy:'operator'`, #166 wave 3's `childReclaim` port onto the session's own
    *  queue — handed to `fn` INSIDE `coordMutex`. ONE spelling, two callers: that route, and the archive door's
    *  `{programme:'end'}` through the handle this function returns. */
   const withAbandon: CoordRoutesHandle['withAbandon'] = (coord, fn) => coordMutex.run(() => fn((runId) => closeRun(
@@ -2509,44 +2516,17 @@ export function registerCoordRoutes(
     // skips outright — the row would land and be seen by nobody. The durable
     // feed is where a coordination change with no run belongs.
     //
-    // A missing `NotifyLog` degrades the RECORD and never the write; and
-    // `recordFeedEvent` throws SYNCHRONOUSLY (`node:sqlite`), so it is caught
-    // here exactly the way `watch.ts:1391-1394` catches it. Refusing an
-    // operator's write because the feed archive is unavailable would be the
-    // collapse, not the safety.
-    const log = deps.notifyLog;
-    if (log) {
-      try {
-        const ev = log.record({
-          kind: 'coord', sessionId: '',
-          title: 'caps changed',
-          body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
-                `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
-          runId: null,
-        });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — caps written, feed archive degraded`);
-      } finally {
-        // FLUSH, like the only other `record()` caller in the tree
-        // (`watch.ts:1396`) and for the reason `NotifyLog.flush`'s own docstring
-        // gives: `record()` bumps the in-memory seq, and a seq handed to a
-        // client but never persisted lets a restart re-mint the same
-        // `{epoch, seq}` pair for a different event — the stale-but-valid
-        // landing `catchUp` cannot tell from the truth. `void`, never awaited:
-        // flush never rejects, and the caps write must not wait on it.
-        //
-        // IN A `finally`, NOT AFTER THE ARCHIVE WRITE (D-1213). It shipped
-        // inside the try, one line below `recordFeedEvent` — which throws
-        // SYNCHRONOUSLY, and is the one failure this try/catch exists for. So
-        // the flush was skipped on precisely the path that needed it: the seq
-        // was already spent, the client already had it, and the file still
-        // held the older number. The seq is minted by `record()`, so its
-        // persistence must follow `record()` and nothing else.
-        void log.flush();
-      }
-    }
+    // Through the notice sink (D-5858), `'record-only'`: recorded whatever the presence, never pushed. A missing
+    // `NotifyLog` degrades the RECORD and never the write; the archive's synchronous throw (`node:sqlite`) is caught
+    // inside `notify`, and the seq `record()` minted is flushed whatever the archive does (D-1213). Refusing an
+    // operator's write because the feed archive is unavailable would be the collapse, not the safety.
+    notice({
+      kind: 'coord', sessionId: '',
+      title: 'caps changed',
+      body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
+            `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
+      runId: null,
+    }, 'record-only', { degraded: 'caps written, feed archive degraded' });
     return reply.code(200).send({ ok: true, ...view });
   });
 
@@ -2737,19 +2717,12 @@ export function registerCoordRoutes(
     }
     if (written === null) throw new Error('stall settings changed outside the server twice during one write; nothing written');
     const change = stallSettingsChange(written.before, written.after);
-    const log = deps.notifyLog;
-    if (change !== null && log) {
+    // Through the notice sink (D-5858), `'record-only'`, as the caps door's row. The ring check stays here so that the
+    // actor is read only when there is a ring to record it in, as before.
+    if (change !== null && deps.notifyLog) {
       const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
-      try {
-        const ev = log.record({ kind: 'coord', sessionId: '', title: 'stall watch changed', body: `${change}; by ${actor}`, runId: null });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — stall watch settings written, feed archive degraded`);
-      } finally {
-        // The caps door's reason (D-1213): `record()` minted the seq, so its persistence follows `record()`.
-        void log.flush();
-      }
+      notice({ kind: 'coord', sessionId: '', title: 'stall watch changed', body: `${change}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'stall watch settings written, feed archive degraded' });
     }
     return reply.code(200).send({ ok: true, ...stallWatchView(coord, names, Date.now(), watcher?.stallFallback() ?? null) });
   });
@@ -2893,19 +2866,11 @@ export function registerCoordRoutes(
       return collectRefuse(reply, 'write-failed', `the write failed at its ${w.phase} step`);
     }
     const change = w.kind === 'written' ? collectLaneSettingChange(w.before, w.after, w.journalBefore) : null;
-    const log = deps.notifyLog;
-    if (change !== null && log) {
+    // Through the notice sink (D-5858), `'record-only'`, as the stall-watch door's row (the actor read only with a ring).
+    if (change !== null && deps.notifyLog) {
       const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
-      try {
-        const ev = log.record({ kind: 'coord', sessionId: '', title: COLLECT_SETTING_FEED_TITLE, body: `${change}; by ${actor}`, runId: null });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — collector setting written, feed archive degraded`);
-      } finally {
-        // The caps door's reason: `record()` minted the seq, so its persistence follows `record()`.
-        void log.flush();
-      }
+      notice({ kind: 'coord', sessionId: '', title: COLLECT_SETTING_FEED_TITLE, body: `${change}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'collector setting written, feed archive degraded' });
     }
     const proof = collectControlNow({ coord, journal: lane.journal });
     const proofRow = proof.row;
@@ -4021,32 +3986,17 @@ export function registerCoordRoutes(
     // over a question that never reached their phone. Ordered first so that
     // if `settleAsk` below then throws, at least ONE durable trace of the
     // answer survives — the feed record names who chose what even when the
-    // `asks` row's own `answeredBy`/`answer` never gets written. Same
-    // pattern `POST /api/coord/caps` uses just above: `deps.notifyLog` and
-    // `coord.recordFeedEvent` are independently optional (a box with neither
-    // configured still answers the request), `recordFeedEvent` throws
-    // SYNCHRONOUSLY (`node:sqlite`) so it is caught rather than allowed to
-    // turn a successful press into a 500, and the flush is unconditional in
-    // a `finally` for the reason `POST /api/coord/caps`'s own comment gives:
-    // `record()` mints the seq before this route can fail, so its
-    // persistence must follow regardless.
-    const log = deps.notifyLog;
-    if (log) {
-      try {
-        const ev = log.record({
-          kind: 'ask', sessionId: ask.childId, runId: null,
-          title: 'question answered',
-          body: `${fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
-                `${ask.options[optionIndexes[0]!] ?? '?'}`,
-        });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — ask answered, feed archive degraded`);
-      } finally {
-        void log.flush();
-      }
-    }
+    // `asks` row's own `answeredBy`/`answer` never gets written. Through the
+    // notice sink (D-5858), `'record-only'`, as `POST /api/coord/caps` above:
+    // the archive's synchronous throw is caught inside `notify` rather than
+    // allowed to turn a successful press into a 500, and the seq `record()`
+    // minted is flushed whatever the archive does.
+    notice({
+      kind: 'ask', sessionId: ask.childId, runId: null,
+      title: 'question answered',
+      body: `${fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
+            `${ask.options[optionIndexes[0]!] ?? '?'}`,
+    }, 'record-only', { degraded: 'ask answered, feed archive degraded' });
 
     // GUARDED (fix round 1, item 3): the digit has ALREADY landed by this
     // point — `answerAsk` returned `ok:true` above — so `settleAsk` failing
@@ -4598,21 +4548,13 @@ export function registerCoordRoutes(
         : taken.why === 'unknown-approval' ? 'unknown-approval' : 'not-held');
     }
     approvalInputs.delete(id);
-    // The journal's second record, beside the row: who ruled, and what, in the operator's name.
-    const log = deps.notifyLog;
-    if (log) {
-      try {
-        const ev = log.record({
-          kind: 'ask', sessionId: row.childId, runId: null, title: 'permission ruled',
-          body: `${fromId} ${verdict === 'allow' ? 'allowed' : 'denied'} ${row.childId}'s ${row.tool} call: ${reason}`,
-        });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn(`ccrc-server: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — ruling stored, feed archive degraded`);
-      } finally {
-        void log.flush();
-      }
-    }
+    // The journal's second record, beside the row: who ruled, and what, in the operator's name. Through the notice sink
+    // (D-5858), `'record-only'`: never pushed, whatever the presence, and AFTER the ruling is stored, so a failed archive
+    // costs the feed row only (the funnel catches it and says so), never the ruling or this 200.
+    notice({
+      kind: 'ask', sessionId: row.childId, runId: null, title: 'permission ruled',
+      body: `${fromId} ${verdict === 'allow' ? 'allowed' : 'denied'} ${row.childId}'s ${row.tool} call: ${reason}`,
+    }, 'record-only', { degraded: 'ruling stored, feed archive degraded' });
     watcher?.approvalRuled(row.childId, row.agentId, fromId, verdict);
     return { ok: true, state: verdict === 'allow' ? 'allowed' : 'denied' };
   });

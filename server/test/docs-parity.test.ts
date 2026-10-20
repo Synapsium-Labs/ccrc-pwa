@@ -490,7 +490,7 @@ import * as m79Fs from 'node:fs';
 import * as m79Path from 'node:path';
 import * as m79Cp from 'node:child_process';
 
-const M79_DIR = ['claude', 'doc' + 'server'].join('-');
+const M79_DIR = ['claude', 'docs' + '-preview'].join('-');
 const M79_NAME = ['doc', 'server'].join('');
 /** The two ruling comments: file -> the anchor sentence that locates the paragraph. */
 const M79_RULINGS: ReadonlyMap<string, string> = new Map([

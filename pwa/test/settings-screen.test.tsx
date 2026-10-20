@@ -10,10 +10,10 @@
 // one of the four leaks state into the next case. CSS is asserted by scraping
 // fleet.css through test/cssRule.ts: vitest runs with `css: false`, so jsdom
 // evaluates no stylesheet and no computed style can carry a claim.
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { BuildInfo } from '../../shared/buildinfo';
 import type {
   CatalogueState, IntentWriteAnswer, NodeWire, NotifyMode, ReleaseWire, UpdateIntentWire, UpdatesView,
@@ -26,12 +26,13 @@ import {
   autoGateMissing,
   CHANNEL_NOTES,
   CHANNEL_SENTENCES,
-  NOTIFY_LABELS,
-  SettingsScreen,
-  UNARMED_EXPOSURE_TEXT,
-  unarmedExposure,
   UNCONFIRMED_TEXT,
-} from '../src/screens/SettingsScreen';
+} from '../src/screens/settings/UpdatesSection';
+import { NOTIFY_LABELS } from '../src/screens/settings/NotificationsSection';
+import { UNARMED_EXPOSURE_TEXT, unarmedExposure } from '../src/screens/settings/SecuritySection';
+import { renderSettings } from './settingsHost';
+import { App } from '../src/app';
+import { render } from '@testing-library/react';
 import {
   ACK_UNREADABLE_TEXT,
   canAck,
@@ -63,7 +64,7 @@ import { MOVE_REQUESTED_TEXT } from '../src/fleet/UpdateMoveSheet';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { ApiError, api, apiErrorText, updateErrorText } from '../src/lib/api';
-import { buttonVariants, DOOR, RADIO_FIELDSET, RADIO_OPTION, ToastHost } from '@ccrc/ui';
+import { buttonVariants, DOOR, RADIO_FIELDSET, RADIO_OPTION } from '@ccrc/ui';
 import { declValue, ruleIn } from './cssRule';
 import type {
   StallHeld, StallWatchEffective, StallWatchStages, StallWatchView, StallWriteEffect,
@@ -91,7 +92,7 @@ afterEach(() => {
 
 describe('SettingsScreen — the shell', () => {
   it('titles itself Settings, as the one level-1 heading', () => {
-    render(<SettingsScreen />);
+    renderSettings(null);
     expect(screen.getByRole('heading', { level: 1, name: /^settings$/i })).toBeInTheDocument();
   });
 
@@ -99,7 +100,7 @@ describe('SettingsScreen — the shell', () => {
     // Starts ON /settings, so the assertion cannot pass by the route never
     // having moved (accounts-screen.test.tsx's own back case starts on '/').
     navigate('/settings');
-    render(<SettingsScreen />);
+    renderSettings(null);
     fireEvent.click(screen.getByRole('button', { name: /back to fleet/i }));
     expect(location.pathname).toBe('/');
   });
@@ -118,7 +119,7 @@ describe('SettingsScreen — tap targets and the header door', () => {
   });
 
   it('.settings-back is the class the rendered back button carries', () => {
-    render(<SettingsScreen />);
+    renderSettings(null);
     expect(screen.getByRole('button', { name: /back to fleet/i })).toHaveClass('settings-back');
   });
 
@@ -208,7 +209,7 @@ const T7_GATE_NOTE = 'Auto-install needs every node to run a ccrc with the updat
 /** Mount the screen (beside a toast host) over one answer; resolves once the Updates section has its controls. */
 const t7Mount = async (view: UpdatesView): Promise<HTMLElement> => {
   vi.spyOn(api, 'updates').mockResolvedValue(view);
-  render(<><ToastHost /><SettingsScreen /></>);
+  renderSettings('updates', { toasts: true });
   const region = screen.getByRole('region', { name: 'Updates' });
   await within(region).findByRole('button', { name: 'Check now' });
   return region;
@@ -337,7 +338,7 @@ describe('SettingsScreen — Updates: helpers (W3 Task 7)', () => {
 describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () => {
   it('shows a loading block, and no control, until the first poll lands', () => {
     vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
-    render(<SettingsScreen />);
+    renderSettings('updates');
     const region = screen.getByRole('region', { name: 'Updates' });
     expect(within(region).getByRole('status', { name: 'Loading' })).toBeInTheDocument();
     expect(within(region).queryByRole('radio')).toBeNull();
@@ -393,7 +394,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
   it('a tap on the other channel sends {scope: "*", channel} once and re-polls — the radio moves only when the server says so', async () => {
     const updates = vi.spyOn(api, 'updates').mockResolvedValue(t7View());
     const set = vi.spyOn(api, 'setUpdateIntent').mockResolvedValue({ ok: true, intent: t7Intent({ channel: 'dev' }), epoch: 2 });
-    render(<SettingsScreen />);
+    renderSettings('updates');
     const dev = await screen.findByRole('radio', { name: CHANNEL_SENTENCES.dev });
     fireEvent.click(dev);
     await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
@@ -413,7 +414,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     const set = vi.spyOn(api, 'setUpdateIntent')
       .mockResolvedValueOnce('unreadable')
       .mockRejectedValueOnce(new ApiError(503, { ok: false, error: 'journal-unwritable', detail: 'the intent journal could not be written — see the server log' }));
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('updates', { toasts: true });
     fireEvent.click(await screen.findByRole('radio', { name: CHANNEL_SENTENCES.dev }));
     const channel = (): Element => screen.getByRole('group', { name: 'Channel' });
     await lineUnder(channel, "Saved — the server's answer could not be read; the screen will re-check.", 'answer');
@@ -491,7 +492,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     vi.spyOn(api, 'updates').mockResolvedValueOnce(before).mockResolvedValue(after);
     vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
       new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('updates', { toasts: true });
     const region = await screen.findByRole('region', { name: 'Updates' });
     await within(region).findByText(`${T7_GATE_NOTE}fleet.`);
     fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
@@ -515,7 +516,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     vi.spyOn(api, 'updates').mockResolvedValueOnce(before).mockResolvedValue(after);
     vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
       new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('updates', { toasts: true });
     const region = await screen.findByRole('region', { name: 'Updates' });
     await within(region).findByText(`${T7_GATE_NOTE}fleet, server.`);
     fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
@@ -539,7 +540,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     vi.spyOn(api, 'updates').mockResolvedValueOnce(before).mockReturnValueOnce(afterDeferred.promise);
     vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
       new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('updates', { toasts: true });
     const region = await screen.findByRole('region', { name: 'Updates' });
     await within(region).findByText(`${T7_GATE_NOTE}fleet, server.`);
     fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
@@ -569,7 +570,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
       .mockReturnValue(new Promise<UpdatesView>(() => {}));   // the write's own reload: never resolves here
     const write = Promise.withResolvers<never>();
     vi.spyOn(api, 'setUpdateIntent').mockReturnValue(write.promise);
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('updates', { toasts: true });
     const region = await screen.findByRole('region', { name: 'Updates' });
     await within(region).findByText(`${T7_GATE_NOTE}fleet.`);   // tapView: fleet lacks the gate
     fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));   // the tap
@@ -613,7 +614,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     const refresh = vi.spyOn(api, 'refreshUpdates')
       .mockResolvedValueOnce({ lastOkAt: Date.now(), lastError: null })
       .mockRejectedValueOnce(new ApiError(429, { ok: false, error: 'rate-limited', retryAfterS: 42 }));
-    render(<SettingsScreen />);
+    renderSettings('updates');
     const check = await screen.findByRole('button', { name: 'Check now' });
     fireEvent.click(check);
     await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
@@ -642,7 +643,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
 
   it('a box with no control plane says so, and nothing else of the section renders', async () => {
     vi.spyOn(api, 'updates').mockRejectedValue(new ApiError(501, { ok: false, error: 'not-configured' }));
-    render(<SettingsScreen />);
+    renderSettings('updates');
     const region = screen.getByRole('region', { name: 'Updates' });
     expect(await within(region).findByText(T7_NOT_CONFIGURED)).toHaveClass('settings-note');
     expect(within(region).queryByRole('radio')).toBeNull();
@@ -652,7 +653,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
 
   it('a first read that failed says so instead of loading forever', async () => {
     vi.spyOn(api, 'updates').mockRejectedValue(new TypeError('Failed to fetch'));
-    render(<SettingsScreen />);
+    renderSettings('updates');
     const region = screen.getByRole('region', { name: 'Updates' });
     expect(await within(region).findByText(T7_UNREAD)).toBeInTheDocument();
     expect(within(region).queryByText(T7_NOT_CONFIGURED)).toBeNull();
@@ -662,7 +663,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
   it('a later read that fails keeps the last answer on screen and says it is stale', async () => {
     vi.spyOn(api, 'updates').mockResolvedValueOnce(t7View()).mockRejectedValueOnce(new TypeError('Failed to fetch'));
     vi.spyOn(api, 'refreshUpdates').mockResolvedValue({ lastOkAt: Date.now(), lastError: null });
-    render(<SettingsScreen />);
+    renderSettings('updates');
     fireEvent.click(await screen.findByRole('button', { name: 'Check now' }));   // its reload() is the failing read
     expect(await screen.findByText(T7_STALE)).toHaveClass('settings-note');
     expect(screen.getByRole('radio', { name: CHANNEL_SENTENCES.stable })).toBeChecked();
@@ -807,7 +808,7 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
    *  inventory (Task 9) renders the same tags as node versions on the same screen. */
   const renderList = async (releases: ReleaseWire[], nodes: NodeWire[], channel: 'stable' | 'dev' = 'stable'): Promise<HTMLElement> => {
     vi.spyOn(api, 'updates').mockResolvedValue(view(releases, nodes, channel));
-    render(<SettingsScreen />);
+    renderSettings('updates');
     // The release window (D-5505) is a region of groups, each its own list; every case reads INSIDE the region.
     return screen.findByRole('region', { name: 'Releases' });
   };
@@ -1056,13 +1057,16 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
 
   it('renders no release list when the catalogue holds no release', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(view([], [t8Node()]));
-    render(<SettingsScreen />);
+    renderSettings('updates');
     await screen.findByText(/^checked /);   // Task 7's calm catalogue line: the view HAS landed, so absence is measured
     expect(screen.queryByRole('list', { name: 'Releases' })).toBeNull();
   });
 
   it('spells no raw-HTML path anywhere in the screen (a literal-absence pin over the source)', () => {
-    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'SettingsScreen.tsx'), 'utf8');
+    // Every page of the screen since settings Task R2b1 (D-5504): the frame, the index and the five sections.
+    const dir = path.join(import.meta.dirname, '..', 'src', 'screens', 'settings');
+    const src = readdirSync(dir).filter((f) => f.endsWith('.tsx')).map((f) => readFileSync(path.join(dir, f), 'utf8')).join('\n');
+    expect(src).toMatch(/UpdatesSection/);
     expect(src).not.toMatch(/dangerouslySetInnerHTML/);
     expect(src).not.toMatch(/\binnerHTML\b/);
   });
@@ -1273,7 +1277,7 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
    *  reads INSIDE it, because the release list (Task 8) renders the same tags on the same screen. */
   const renderNodes = async (nodes: NodeWire[], releases?: ReleaseWire[], catalogue?: CatalogueState) => {
     const updates = vi.spyOn(api, 'updates').mockResolvedValue(view(nodes, releases, catalogue));
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('updates', { toasts: true });
     const list = await screen.findByRole('list', { name: 'Nodes' });
     return { list, updates };
   };
@@ -1542,7 +1546,7 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
 
   it('renders no inventory list for an empty nodes array', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(view([]));
-    render(<SettingsScreen />);
+    renderSettings('updates');
     await screen.findByText(/^checked /);   // Task 7's catalogue line: the view has landed
     expect(screen.queryByRole('list', { name: 'Nodes' })).toBeNull();
   });
@@ -1718,7 +1722,7 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
 
   it('offers one native radio per NotifyMode, in NOTIFY_MODES order, checked from the \'*\' row', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'stable' }));
-    render(<SettingsScreen />);
+    renderSettings('notifications');
     const group = await t10Group();
     const radios = within(group).getAllByRole('radio');
     expect(radios.map((r) => r.getAttribute('value'))).toEqual([...NOTIFY_MODES]);
@@ -1731,7 +1735,7 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
   it('a tap writes {scope: \'*\', notify} once, re-polls, and keeps the stored choice checked while the poll lags', async () => {
     const updates = vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
     const write = vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(t10Answer('stable', T10_T0 + 1));
-    render(<SettingsScreen />);
+    renderSettings('notifications');
     const group = await t10Group();
     fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable }));
     await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
@@ -1747,7 +1751,7 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
       .mockResolvedValueOnce(t10View({ notify: 'channel' }))
       .mockResolvedValue(t10View({ notify: 'off', setAt: T10_T0 + 5 }));   // another device, later
     vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(t10Answer('stable', T10_T0 + 1));
-    render(<SettingsScreen />);
+    renderSettings('notifications');
     const group = await t10Group();
     fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable }));
     await waitFor(() => expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.off })).toBeChecked());
@@ -1761,7 +1765,7 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
       .mockResolvedValueOnce(t10View({ notify: 'channel' }))
       .mockResolvedValue(t10View({ notify: 'off', setAt: T10_T0 + 1 }));   // exactly the answer's setAt
     vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(t10Answer('stable', T10_T0 + 1));
-    render(<SettingsScreen />);
+    renderSettings('notifications');
     const group = await t10Group();
     fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable }));
     await waitFor(() => expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.off })).toBeChecked());
@@ -1770,7 +1774,7 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
   it('a write in flight disables the three radios, so a second tap cannot race the first', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
     const write = vi.spyOn(api, 'setUpdateIntent').mockReturnValue(new Promise(() => {}));
-    render(<SettingsScreen />);
+    renderSettings('notifications');
     const group = await t10Group();
     fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
     await waitFor(() => expect(within(group).getByRole('radio', { name: NOTIFY_LABELS.off })).toBeDisabled());
@@ -1782,7 +1786,7 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
   it('an unreadable answer says the write may have landed and shows the stored row, not a guess', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
     vi.spyOn(api, 'setUpdateIntent').mockResolvedValue('unreadable');
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('notifications', { toasts: true });
     const group = await t10Group();
     fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
     expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
@@ -1800,7 +1804,7 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
     vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
     vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(
       { ok: true, intent: { ...t10Intent(), notify: 'loud' as NotifyMode }, epoch: 2 });
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('notifications', { toasts: true });
     const group = await t10Group();
     fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
     expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
@@ -1811,7 +1815,7 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
     vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
     vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(
       { ok: true, intent: { ...t10Intent(), notify: 'off', setAt: 'soon' as unknown as number }, epoch: 2 });
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('notifications', { toasts: true });
     const group = await t10Group();
     fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
     expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
@@ -1821,7 +1825,7 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
   it('an answer with no intent field at all is not stored — unconfirmed, not a guess (the ?? null guard)', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
     vi.spyOn(api, 'setUpdateIntent').mockResolvedValue({ ok: true } as unknown as IntentWriteAnswer);
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('notifications', { toasts: true });
     const group = await t10Group();
     fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.off }));
     expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
@@ -1832,7 +1836,7 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
     vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
     vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
       new ApiError(503, { ok: false, error: 'journal-unwritable', detail: 'the intent journal could not be written — see the server log' }));
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('notifications', { toasts: true });
     const group = await t10Group();
     fireEvent.click(within(group).getByRole('radio', { name: NOTIFY_LABELS.stable }));
     await lineUnder(() => group, 'The server cannot write its intent journal — nothing was changed.', 'refusal');
@@ -1842,14 +1846,17 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
 
   it('renders the section while /api/updates is pending and on a box with no control plane — with no release radios', async () => {
     vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
-    render(<SettingsScreen />);
+    renderSettings('notifications');
     expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
     expect(screen.getByText('This browser cannot receive Web Push.')).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Announce new releases' })).toBeNull();
     cleanup();
-    vi.spyOn(api, 'updates').mockRejectedValue(new ApiError(501, { ok: false, error: 'not-configured' }));
-    render(<SettingsScreen />);
-    await screen.findByText('This box has no update control plane — it runs without a coordination database.');
+    // The not-configured sentence is the Updates page's own (settings Task R2b1, D-5504): here the read settles and
+    // the Notifications page draws its section with no radios.
+    const read = vi.spyOn(api, 'updates').mockRejectedValue(new ApiError(501, { ok: false, error: 'not-configured' }));
+    renderSettings('notifications');
+    await waitFor(() => expect(read).toHaveBeenCalled());
+    await act(async () => {});
     expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Announce new releases' })).toBeNull();
   });
@@ -1857,7 +1864,7 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
   it('reuses the literal NotificationBell where the browser can do Web Push', async () => {
     t10PushBrowser();
     vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
-    render(<SettingsScreen />);
+    renderSettings('notifications');
     const section = screen.getByRole('heading', { name: 'Notifications' }).closest('section')!;
     const bell = await within(section).findByRole('button', { name: 'Notifications off' });
     expect(bell).toHaveClass('bell');
@@ -1867,8 +1874,8 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
   });
 
   it('spells none of the bell\'s own outcomes — the toggle is reused, never copied (a literal-absence pin)', () => {
-    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'SettingsScreen.tsx'), 'utf8');
-    expect(src).toMatch(/import \{ NotificationBell \} from '\.\.\/fleet\/NotificationBell';/);
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'settings', 'NotificationsSection.tsx'), 'utf8');
+    expect(src).toMatch(/import \{ NotificationBell \} from '\.\.\/\.\.\/fleet\/NotificationBell';/);
     expect(src).toMatch(/<NotificationBell \/>/);
     for (const copy of [/\benablePush\b/, /\bdisablePush\b/, /\bpushEnabled\b/, /Allow notifications in your browser/,
       /Push isn't set up on the server/, /Your browser blocks web push/]) {
@@ -1883,9 +1890,10 @@ describe('SettingsScreen — notifications: the unarmed-exposure banner (design 
 
   it('shows the red sentence when the gate reports off and the page was reached over a non-loopback name', async () => {
     t10AuthStatus({ status: 200, body: { authed: true, passkeysEnrolled: 0, mode: 'off' } });
+    navigate('/settings/updates');   // before the stub: it copies the location, path included
     t10Host('ccrc.example');
     vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));   // independent of the update view
-    render(<SettingsScreen />);
+    renderSettings('updates');
     const shown = await screen.findByText(UNARMED_EXPOSURE_TEXT);
     expect(shown).toHaveClass('settings-unarmed');
     expect(shown).toHaveAttribute('role', 'alert');
@@ -1899,7 +1907,7 @@ describe('SettingsScreen — notifications: the unarmed-exposure banner (design 
     const f = t10AuthStatus({ status: 200, body: { authed: true, passkeysEnrolled: 0, mode: 'off' } });
     t10Host('127.0.0.1');
     vi.spyOn(api, 'updates').mockResolvedValue(t10View());
-    render(<SettingsScreen />);
+    renderSettings(null);
     await waitFor(() => expect(f).toHaveBeenCalledWith('/api/auth/status', expect.anything()));
     await t10Settle();
     expect(banner()).toBeNull();
@@ -1909,7 +1917,7 @@ describe('SettingsScreen — notifications: the unarmed-exposure banner (design 
     const f = t10AuthStatus({ status: 200, body: { authed: true, passkeysEnrolled: 1, mode: 'passphrase' } });
     t10Host('ccrc.example');
     vi.spyOn(api, 'updates').mockResolvedValue(t10View());
-    render(<SettingsScreen />);
+    renderSettings(null);
     await waitFor(() => expect(f).toHaveBeenCalledWith('/api/auth/status', expect.anything()));
     await t10Settle();
     expect(banner()).toBeNull();
@@ -1920,7 +1928,7 @@ describe('SettingsScreen — notifications: the unarmed-exposure banner (design 
       const f = t10AuthStatus(answer);
       t10Host('ccrc.example');
       vi.spyOn(api, 'updates').mockResolvedValue(t10View());
-      render(<SettingsScreen />);
+      renderSettings(null);
       await waitFor(() => expect(f).toHaveBeenCalledWith('/api/auth/status', expect.anything()));
       await t10Settle();
       expect(banner()).toBeNull();
@@ -1932,7 +1940,7 @@ describe('SettingsScreen — notifications: the unarmed-exposure banner (design 
     const f = t10AuthStatus({ status: 200, body: { authed: false } });
     t10Host('ccrc.example');
     vi.spyOn(api, 'updates').mockResolvedValue(t10View());
-    render(<SettingsScreen />);
+    renderSettings(null);
     await waitFor(() => expect(f).toHaveBeenCalledWith('/api/auth/status', expect.anything()));
     await t10Settle();
     expect(banner()).toBeNull();
@@ -1952,7 +1960,7 @@ describe('SettingsScreen — notifications: the unarmed-exposure banner (design 
     const f = t10AuthStatus({ status: 200, body: { authed: true, passkeysEnrolled: 0, mode: 'off' } });
     t10Host('ccrc.example');
     vi.spyOn(api, 'updates').mockResolvedValue(t10View());
-    render(<SettingsScreen />);
+    renderSettings(null);
     await screen.findByText(UNARMED_EXPOSURE_TEXT);
     const urls = f.mock.calls.map(([u]) => String(u));
     expect(urls.filter((u) => u === '/api/auth/status')).toHaveLength(1);
@@ -2349,7 +2357,7 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
   const mount = async (first: StallWatchView): Promise<{ read: ReturnType<typeof vi.spyOn> }> => {
     vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
     const read = vi.spyOn(api, 'stallWatch').mockResolvedValue(first);
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('automation', { toasts: true });
     await levelGroup();
     return { read };
   };
@@ -2359,35 +2367,40 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
   };
   const radio = (name: string): HTMLElement => within(section()).getByRole('radio', { name, hidden: true });
 
-  it('LOADING state (api.updates never resolves, so no Box token card): Stall watch comes after Notifications, then Temp root collector', async () => {
-    vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
-    await mount(swView());
-    const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    // The Appearance section (the theme picker) reads no poll, so it renders in every state — AFTER Updates
-    // (operator's ruling, 2026-10-15): at the top, its ~850px pushed the operational sections below a phone's fold.
-    expect(headings).toEqual(['Updates', 'Appearance', 'Notifications', STALL_SECTION_TEXT.title, 'Temp root collector']);
+  // Settings Task R2b1 (D-5503's order, D-5504): the one long page became five; its order is the index's, and
+  // each page keeps today's order inside it.
+  it('the index lists Updates, Appearance, Notifications, Automation, Security, in that order', () => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    renderSettings(null);
+    const nav = screen.getByRole('navigation', { name: 'Settings sections' });
+    const rows = within(nav).getAllByRole('link').map((a) => a.getAttribute('data-section'));
+    expect(rows).toEqual(['updates', 'appearance', 'notifications', 'automation', 'security']);
   });
 
-  it('LANDED state (api.updates answered, so the Box token card renders): the order is Updates, Appearance, Box token, Notifications, Stall watch, Temp root collector', async () => {
-    vi.spyOn(api, 'updates').mockResolvedValue(t7View());
-    vi.spyOn(api, 'stallWatch').mockResolvedValue(swView());
+  it('LOADING state: the Automation page is Stall watch, then Temp root collector, each a card under the page heading', async () => {
     vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
-    render(<SettingsScreen />);
-    await screen.findByRole('heading', { name: 'Box token', level: 2 });
-    await levelGroup();
-    const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(headings).toEqual(['Updates', 'Appearance', 'Box token', 'Notifications', STALL_SECTION_TEXT.title, 'Temp root collector']);
+    await mount(swView());
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Automation']);
+    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent))
+      .toEqual([STALL_SECTION_TEXT.title, 'Temp root collector']);
+  });
+
+  it('LANDED state (api.updates answered, so the Box token card renders): it renders on the Security page', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t7View());
+    renderSettings('security');
+    await screen.findByRole('heading', { name: 'Box token', level: 3 });
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Security']);
   });
 
   it('P1: pending is a skeleton, a failed first read says so, and a view renders — three states, never folded', async () => {
     vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
     vi.spyOn(api, 'stallWatch').mockReturnValue(new Promise(() => {}));
-    render(<SettingsScreen />);
+    renderSettings('automation');
     expect(within(section()).getByRole('status', { name: 'Loading' })).toBeInTheDocument();
     expect(within(section()).queryByText(STALL_SECTION_TEXT.unread)).toBeNull();
     cleanup();
     vi.spyOn(api, 'stallWatch').mockRejectedValue(new ApiError(500, { error: 'Internal Server Error' }));
-    render(<SettingsScreen />);
+    renderSettings('automation');
     expect(await within(section()).findByText(STALL_SECTION_TEXT.unread)).toBeInTheDocument();
     expect(within(section()).queryByRole('status', { name: 'Loading' })).toBeNull();
     expect(within(section()).queryByRole('radio')).toBeNull();
@@ -2416,7 +2429,7 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
   it('P1b: a 501 not-configured first read is the not-available text, not the unread line', async () => {
     vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
     vi.spyOn(api, 'stallWatch').mockRejectedValue(new ApiError(501, { ok: false, error: 'not-configured' }));
-    render(<SettingsScreen />);
+    renderSettings('automation');
     expect(await within(section()).findByText(STALL_NOT_AVAILABLE_TEXT)).toBeInTheDocument();
     expect(within(section()).queryByText(STALL_SECTION_TEXT.unread)).toBeNull();
   });
@@ -2748,7 +2761,7 @@ describe('SettingsScreen — stall watch: source scans (P6, P9)', () => {
     const strings = Object.entries(L0).filter(([k]) => k.startsWith('STALL_')).flatMap(([, v]) => l0Strings(v));
     expect(strings.length).toBeGreaterThan(80);
     for (const s of strings) expect(s).not.toMatch(DEVICE_WORD);
-    const screenSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'SettingsScreen.tsx'), 'utf8');
+    const screenSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'settings', 'NotificationsSection.tsx'), 'utf8');
     expect(screenSrc).toContain('<span>Push notifications for this browser</span>');
     expect(screenSrc).not.toMatch(/Phone notifications/);
   });
@@ -2778,7 +2791,7 @@ describe('SettingsScreen — the release window (D-5505)', () => {
   ];
   const mount = async (v: UpdatesView): Promise<HTMLElement> => {
     vi.spyOn(api, 'updates').mockResolvedValue(v);
-    render(<SettingsScreen />);
+    renderSettings('updates');
     return screen.findByRole('region', { name: 'Releases' });
   };
   const HALTED: Partial<NodeWire> = { update: { state: 'failed', target: 'v0.1.17', startedAt: T8_T0, detail: 'gate: unit not up' } };
@@ -2896,6 +2909,24 @@ describe('SettingsScreen — the release window (D-5505)', () => {
     expect(fold(W_TAG(17)).open).toBe(false);
   });
 
+  it("a push landing on /settings/updates has the waiting release's notes open (D-5504)", async () => {
+    // The release push's url (server/src/update/notify.ts's RELEASE_PUSH_URL, held there by update-notify.test.ts):
+    // the whole app opened on it, as push-sw.js opens a tap, lands on the Updates page with the notes open.
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    try {
+      const notes = 'Changes since v0.1.0\n\nNew\n- A thing #9\n';
+      vi.spyOn(api, 'updates').mockResolvedValue(wView(w22(() => ({ notes })), at(W_TAG(18), { desiredTag: W_TAG(20) })));
+      navigate('/settings/updates');
+      render(<App />);
+      const region = await screen.findByRole('region', { name: 'Updates' });
+      await within(region).findByRole('button', { name: 'Check now' });
+      const fold = region.querySelector<HTMLDetailsElement>(`li[data-tag="${W_TAG(20)}"] details.settings-release-notes-fold`);
+      expect(fold?.open).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   // ── Verifier fix pass: pins for guards that had no red line, and the unmeasured state's truthful lead ──
   it('a halted mixed fleet with no Newer row and no pending Update: the halt line shows, and Update all to hi is disabled and names it', async () => {
     const region = await mount(wView(w22(), [
@@ -2957,7 +2988,7 @@ describe('SettingsScreen — the release window (D-5505)', () => {
       t8Node({ current: t8Stamp(W_TAG(4)), highestVersion: W_TAG(4), ...HALTED }),
       t8Server({ current: t8Stamp(W_TAG(9)), highestVersion: W_TAG(9) }),
     ]));
-    render(<SettingsScreen />);
+    renderSettings('updates');
     await screen.findByRole('list', { name: 'Nodes' });
     expect(screen.queryByRole('region', { name: 'Releases' })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Update all to/ })).toBeNull();
@@ -3034,7 +3065,7 @@ describe('SettingsScreen — Ack is confirmed (D-5507)', () => {
   });
   const renderNodes = async (nodes: NodeWire[], releases?: ReleaseWire[]) => {
     const updates = vi.spyOn(api, 'updates').mockResolvedValue(view(nodes, releases));
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('updates', { toasts: true });
     const list = await screen.findByRole('list', { name: 'Nodes' });
     const row = list.querySelector<HTMLElement>(`li[data-node-id="${T9_NODE_A}"]`)!;
     return { list, row, updates };
@@ -3117,7 +3148,7 @@ describe('SettingsScreen — Ack is confirmed (D-5507)', () => {
       [t9Node({ previousVersion: 'v0.0.8', desiredTag: 'v0.0.10', update: FAILED }), t9Server({ previousVersion: 'v0.0.8' })],
       [t9Release('v0.0.10'), t9Release('v0.0.9'), t9Release('v0.0.8')],
     ));
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('updates', { toasts: true });
     const releases = await screen.findByRole('region', { name: 'Releases' });
     const nodes = await screen.findByRole('list', { name: 'Nodes' });
     const groups = [
@@ -3153,7 +3184,7 @@ describe('SettingsScreen — the words, the notes and the result lines (settings
   });
   const mountUpdates = async (v: UpdatesView = updatesView()): Promise<HTMLElement> => {
     vi.spyOn(api, 'updates').mockResolvedValue(v);
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('updates', { toasts: true });
     const region = screen.getByRole('region', { name: 'Updates' });
     await within(region).findByRole('button', { name: 'Check now' });
     return region;
@@ -3272,7 +3303,7 @@ describe('SettingsScreen — the words, the notes and the result lines (settings
 
   it('Announce new releases carries its purpose and when-line; This browser says what push does', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(updatesView());
-    render(<SettingsScreen />);
+    renderSettings('notifications');
     const group = await screen.findByRole('group', { name: NOTIFICATIONS_TEXT.announceLegend });
     const section = group.closest('section')!;
     expect(within(section).getByText(NOTIFICATIONS_TEXT.announcePurpose)).toHaveClass('settings-note');
@@ -3287,7 +3318,7 @@ describe('SettingsScreen — the words, the notes and the result lines (settings
   const swMount = async (first: StallWatchView): Promise<HTMLElement> => {
     vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
     vi.spyOn(api, 'stallWatch').mockResolvedValue(first);
-    render(<><ToastHost /><SettingsScreen /></>);
+    renderSettings('automation', { toasts: true });
     return within(swSection()).findByRole('group', { name: STALL_SECTION_TEXT.level });
   };
   const swRadio = (name: string): HTMLElement => within(swSection()).getByRole('radio', { name });

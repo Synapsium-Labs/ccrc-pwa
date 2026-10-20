@@ -533,7 +533,7 @@ _gs_guard() {
   # (`"back\\slash.py"`), a double quote (`"quo\"te.py"`) and any control byte
   # (`"tab\tname.py"`). detect() prints raw UTF-8 relative paths, so `comm -23`
   # read a TRACKED file as untracked and refused the tree for ever, with no
-  # remedy on the box. Measured on the live fleet: mm-data refused over two
+  # remedy on the box. Measured on the live fleet: project-t refused over two
   # tracked files (a JSON named with a/o diacritics, a PNG named with an
   # umlaut). `-c core.quotepath=false` silences ONLY the non-ASCII class and
   # leaves the other three quoting exactly as before (measured), so the fix is
@@ -556,15 +556,15 @@ _gs_guard() {
   # corpus, is untracked, and this guard refuses the tree — for ever, with no
   # remedy on the box (nothing an operator does to the tree changes what detect
   # picks up, and `<repo>.list` does not apply because the path is not ccrc's
-  # noise). MEASURED on the live fleet: synapsium-platform refused over
-  # `frontend/exposynapse-site/.astro/settings.json` (ignored by
-  # `frontend/exposynapse-site/.gitignore`), MekWarLive/swift-harbor over
+  # noise). MEASURED on the live fleet: project-k refused over
+  # `frontend/site-k/.astro/settings.json` (ignored by
+  # `frontend/site-k/.gitignore`), project-f/swift-harbor over
   # `.husky/_/*` (ignored by `.husky/_/.gitignore`).
   #
   # D-1458 — A MEASURED COST WAS ACCEPTED INSTEAD OF REMOVED. D-1451..D-1453
   # derived EVERY path git ignores, and the ledger measured what that costs and
   # signed it off as "inside the timeout". MEASURED on the live fleet
-  # (2026-09-04, custom-tools): 308 derived entries — 211 files under
+  # (2026-09-04, project-d): 308 derived entries — 211 files under
   # `.superpowers/`, 59 under `tools/`, 24 under `.remember/`, because
   # `--directory` collapses a directory only when it holds no TRACKED file — and
   # detect spends ~50 us per (pattern, path) with the path re-resolved inside
@@ -583,7 +583,7 @@ _gs_guard() {
   # whether each BREACH path is ignored (`check-ignore -z --stdin`, one call,
   # NUL-framed for the same four quoting classes as D-1450 — a non-ASCII name
   # must survive the round trip), and derive one entry per ignored one. On a
-  # tree like custom-tools that is ZERO entries and ZERO extra cost; on the
+  # tree like project-d that is ZERO entries and ZERO extra cost; on the
   # trees this was written for it is one to three.
   #
   # Each entry is ANCHORED at the tree root with a leading `/` (detect.py:883-895

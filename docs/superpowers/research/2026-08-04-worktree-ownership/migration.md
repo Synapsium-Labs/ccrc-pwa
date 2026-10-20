@@ -5,16 +5,16 @@ tmux/systemd/registry state was modified.
 
 ## 0. A correction to the task framing (matters for every deploy statement below)
 
-The task brief said "<server-host> (this box)" and "openclaw (fleet host,
-198.51.100.7)". **This box is `openclaw`, 198.51.100.7** — `hostname` =
-`openclaw`, `tailscale ip -4` = `198.51.100.7`. `<server-host>` is
+The task brief said "<server-host> (this box)" and "<fleet-host> (fleet host,
+198.51.100.7)". **This box is `<fleet-host>`, 198.51.100.7** — `hostname` =
+`<fleet-host>`, `tailscale ip -4` = `198.51.100.7`. `<server-host>` is
 **203.0.113.7**, a different machine.
 
 Measured tailnet (`tailscale status`):
 
 | Host | Tailnet IP | Runs |
 | --- | --- | --- |
-| `openclaw` (this box, the monorepo checkout) | `198.51.100.7` | `ccrc-agent.service` (active running), the 16 `claude-session@*` units, `claude-docserver.service` |
+| `<fleet-host>` (this box, the monorepo checkout) | `198.51.100.7` | `ccrc-agent.service` (active running), the 16 `claude-session@*` units, `docs-preview.service` |
 | `<server-host>` | `203.0.113.7` | `ccrc.service` (the server + PWA). Not verifiable from here without SSH — see gaps. |
 
 `systemctl --user cat ccrc` on this box returns **"No files found for
@@ -25,7 +25,7 @@ transient `systemctl set-property` drop-ins under
 `/run/user/1000/systemd/user.control/`). **Those drop-ins are box state, not repo
 state — no deploy reproduces them, and a fresh install loses them.**
 
-So: the docserver and the fleet sessions and the agent are on `openclaw`; the
+So: the docserver and the fleet sessions and the agent are on `<fleet-host>`; the
 ccrc *server*, and therefore the PWA people actually open, is on `<server-host>`.
 
 ---
@@ -34,7 +34,7 @@ ccrc *server*, and therefore the PWA people actually open, is on `<server-host>`
 
 ### The one script
 
-`/srv/projects/OpenClawHetzner/infra/ccrc/deploy/deploy.sh`
+`/srv/projects/project-c/infra/ccrc/deploy/deploy.sh`
 (3,250 bytes, mode `100755`, last touched by `a501b12`).
 
 ```
@@ -136,7 +136,7 @@ touch it, but it is a fourth hand-installed artifact the spec-3 installer owes.
 fallback to `index.html`. So on `<server-host>` the served bundle is
 `~/ccrc/server/dist-pwa/`, populated purely by rsync. Fronted by
 `tailscale serve` on **:8443** (`https://<server-host>.<tailnet>.ts.net:8443/`) —
-443 root belongs to `claude-docserver`. The `tailscale serve` config on
+443 root belongs to `docs-preview`. The `tailscale serve` config on
 `<server-host>` is **not visible from here** (see gaps).
 
 ### What flipping the source to `/srv/projects/ccrc-pwa` touches
@@ -214,7 +214,7 @@ excluded it from the *manifest* but it is still a tracked file in both repos.
 
 ### Commits since extraction — both directions
 
-**Monorepo** (`example-org/OpenClawHetzner`, HEAD `9f15625`, working tree clean;
+**Monorepo** (`example-org/project-c`, HEAD `9f15625`, working tree clean;
 note the session's opening git snapshot showing `5a943c5` was stale):
 
 - `d2c4ba0` is an ancestor of HEAD (verified).
@@ -248,7 +248,7 @@ deliberately-excluded ccclip test.
 
 ## M3 — The findings doc, and how the migration must sequence against specs 1–3
 
-`/srv/projects/OpenClawHetzner/docs/superpowers/specs/2026-08-03-ccrc-pwa-findings-for-specs-1-3.md`
+`/srv/projects/project-c/docs/superpowers/specs/2026-08-03-ccrc-pwa-findings-for-specs-1-3.md`
 (134 lines). Six findings; the ones that constrain this migration:
 
 **Finding 1 → spec 3 (installer/deploy).** `agent/src/server.ts:417` reads
@@ -298,7 +298,7 @@ IPs, username and home paths across **9 files / 20 hits**. Operator ruled
 I re-measured the personalisation spread today. Grepping
 `203.0.113.7|198.51.100.7|you|<tailnet>|/home/you` over
 `*.ts,*.tsx,*.sh,*.service,*.md,*.example` gives **exactly 20 hits**, matching
-the doc. Widening to include `<server-host>|openclaw` and `*.yml` gives **19 files**:
+the doc. Widening to include `<server-host>|<fleet-host>` and `*.yml` gives **19 files**:
 
 `deploy/ccrc.service`, `deploy/deploy.sh`, `deploy/notify.sh`,
 `deploy/ccrc.env.example`, `README.md`, `scripts/extraction-manifest.sh`,
@@ -313,7 +313,7 @@ the doc. Widening to include `<server-host>|openclaw` and `*.yml` gives **19 fil
 The 9-file/20-hit figure is the **narrow** set (identifying strings only); the
 19-file set includes hostname mentions in prose and test fixtures. **Spec 1
 should size against 19, not 9** — otherwise "de-personalised" will still leave
-`<server-host>` and `openclaw` in half a dozen source files.
+`<server-host>` and `<fleet-host>` in half a dozen source files.
 
 **Finding 6 → discharged in part by this research.** The `git ls-files -s`
 comparison it recommends as "cheap insurance" is done above: **no mode drift.**
@@ -344,11 +344,11 @@ any colleague access "until spec 1 lands". So:
 
 ## M4 — Docserver
 
-`/home/you/.claude-docserver/config.json` — 10 entries. **`ccrc-pwa` is
-NOT served.** Entries are `custom-tools`, `data-internal`, `expoAI-assistant`,
-`acme-platform-ts`, `intake-platform`, `MekWarLive`, `OpenClawHetzner`,
-`rp-llm`, `synapsium-platform`, and one worktree entry
-`data-internal-clear-mesa` → `/home/you/worktrees/data-internal/clear-mesa`.
+`/home/you/.docs-preview/config.json` — 10 entries. **`ccrc-pwa` is
+NOT served.** Entries are `project-d`, `project-e`, `project-h`,
+`acme-platform-ts`, `project-n`, `project-f`, `project-c`,
+`project-j`, `project-k`, and one worktree entry
+`project-e-clear-mesa` → `/home/you/worktrees/project-e/clear-mesa`.
 No entry carries a `ref` override, so all serve the default `origin/main`.
 
 The entry to add (do **not** edit the file as part of this research — it
@@ -373,9 +373,9 @@ Two caveats:
   directory** (`readlink -f /data/projects` → `/srv/projects`).
   Every other entry uses the `/mnt/...` spelling; match it.
 
-The live docserver is `claude-docserver.service` (active), running
-`/home/you/.claude-docserver/venv/bin/python
-/home/you/.claude-docserver/server.py` on **this** box (openclaw) — note
+The live docserver is `docs-preview.service` (active), running
+`/home/you/.docs-preview/venv/bin/python
+/home/you/.docs-preview/server.py` on **this** box (<fleet-host>) — note
 that the doc-link convention in CLAUDE.md names `<server-host>.<tailnet>.ts.net`
 as the docserver host, which is the *other* box. Worth confirming which one the
 tailnet name actually resolves to before publishing links (see gaps).
@@ -427,7 +427,7 @@ had a PR; all seven post-extraction commits went straight to `main`.
 (`de2a918`, the CI-introducing commit — fixed by the next one). CI is green on
 `main` today and takes ~5 minutes.
 
-Monorepo for contrast: `example-org/OpenClawHetzner`, private, default `main`, no CI.
+Monorepo for contrast: `example-org/project-c`, private, default `main`, no CI.
 Note the **owner mismatch** — the monorepo is on a personal account, ccrc-pwa is
 on the org. That is what makes the org's 61-reader default apply to one and not
 the other.
@@ -571,7 +571,7 @@ touch a running session.
 **Phase D — optional hardening, confirm before doing**
 
 18. Docserver: add `{"label":"ccrc-pwa","root":"/srv/projects/ccrc-pwa"}`
-    to `~/.claude-docserver/config.json` — **only if** ccrc-pwa is going to hold
+    to `~/.docs-preview/config.json` — **only if** ccrc-pwa is going to hold
     `docs/superpowers/{specs,plans}`. It has no docs directory today. Config
     hot-reloads on mtime; no restart.
 19. `ccrc-pwa` branch protection / ruleset on `main` requiring `test` and

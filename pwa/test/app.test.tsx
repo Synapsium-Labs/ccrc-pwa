@@ -325,6 +325,9 @@ describe('ROUTES and the ladder, both ways', () => {
   const PROBES = [
     '/', `/s/${encodeURIComponent('demo-quiet-basin')}`, '/archive', '/accounts', '/mail', '/runs', '/settings',
     '/digest', '/docs', '/docs/notes/a.md', '/nope', '/docsearch', '/docs-x', '/s/', '/runsx', '/mail/x',
+    // Settings' five pages and the catch-all (D-5504).
+    '/settings/updates', '/settings/appearance', '/settings/notifications', '/settings/automation',
+    '/settings/security', '/settings/bogus', '/settings/a/b',
   ];
   const placeholder = (): Element | null => document.querySelector('.shell-placeholder');
 
@@ -343,6 +346,59 @@ describe('ROUTES and the ladder, both ways', () => {
       }
       view.unmount();
     }
+  });
+
+  it('`/settings/bogus` renders Settings with the not-found line, never ScreenFallback (D-5504)', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    try {
+      navigate('/settings/bogus');
+      render(<App />);
+      const detail = document.querySelector('.shell-detail')!;
+      expect(within(detail as HTMLElement).getByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
+      expect(within(detail as HTMLElement).getByText('That section does not exist.')).toBeInTheDocument();
+      expect(within(detail as HTMLElement).getByRole('navigation', { name: 'Settings sections' })).toBeInTheDocument();
+      expect(within(detail as HTMLElement).queryByText(/could not be shown/i)).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+// ── Settings' reads sit above the frame, on every route (D-5504) ──────────────
+
+describe("Settings' provider keeps the frame (D-5504, D-161, D-5466)", () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('`/` → `/settings/updates` → `/` keeps the same .app-shell and sidebar nodes and the sidebar\'s scrollTop', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    navigate('/');
+    render(<App />);
+    const shell = document.querySelector('.app-shell');
+    const nav = document.querySelector('.shell-nav')!;
+    let top = 900;
+    Object.defineProperty(nav, 'scrollTop', { configurable: true, get: () => top, set: (v: number) => { top = v; } });
+    act(() => { navigate('/settings/updates'); });
+    expect(screen.getByRole('heading', { level: 2, name: 'Updates' })).toBeInTheDocument();
+    expect(document.querySelector('.app-shell')).toBe(shell);
+    expect(document.querySelector('.shell-nav')).toBe(nav);
+    act(() => { navigate('/'); });
+    expect(document.querySelector('.app-shell')).toBe(shell);
+    expect(document.querySelector('.shell-nav')).toBe(nav);
+    expect(nav.scrollTop).toBe(900);
+  });
+
+  it('the detail section is the same DOM node across an entry to Settings and out', () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    navigate('/runs');
+    render(<App />);
+    const detail = document.querySelector('.shell-detail');
+    expect(detail).not.toBeNull();
+    act(() => { navigate('/settings'); });
+    expect(document.querySelector('.shell-detail')).toBe(detail);
+    act(() => { navigate('/settings/automation'); });
+    expect(document.querySelector('.shell-detail')).toBe(detail);
+    act(() => { navigate('/runs'); });
+    expect(document.querySelector('.shell-detail')).toBe(detail);
   });
 });
 
@@ -412,7 +468,8 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
   }
 
   it("Settings' Theme and Layout fieldsets are the doors of Switch theme and Switch layout (doorMark)", () => {
-    navigate('/settings');
+    // On the page the W2 door table names for both (settings Task R2b1's C1).
+    navigate('/settings/appearance');
     render(<App />);
     expect(screen.getByRole('group', { name: 'Theme' })).toHaveAttribute('data-command', 'switch-theme');
     expect(screen.getByRole('group', { name: 'Layout' })).toHaveAttribute('data-command', 'switch-layout');

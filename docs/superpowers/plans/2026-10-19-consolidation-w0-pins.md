@@ -285,6 +285,46 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 
 **Exit (GATES):** one parser wrapper, one importer; the version is exact; zero production bytes.
 
+### Task C0m: ccd's function-to-context manifest (D-6054; ARCH-34 (#536); spec §2.1, §5.13) — lands now
+
+A later W0 slice (spec §5.2), planned here so it has a section. It sits before C0g in this file only to stay line-disjoint from the PRs that edited this plan while it was written (#927 and #934, merged since; #931 and #943, open). **Routing:** band 1 for the bulk labelling (prefix rules, then a read of every rule's leftovers); the boundary rows are judgment, so the PR body tables them for the orchestrator's review. **Lane:** tests and data. **Zero production bytes:** `ccd/ccd` is byte-identical, so the launcher's SHA-256 is unchanged; the one new file under `ccd/` is data that no installer reads (D-6055). **Needs:** nothing; no operator ruling (ARCH-34 names none). **Gates:** ARCH-02a (Task C0h, #874) merged; it is. K2 and K18 (W5) read the manifest, so it lands before W5.
+
+**Files:**
+- Create `ccd/contexts.tsv`: a header naming the contexts, then one `<function><TAB><context>` row per function `ccd/ccd` defines, in definition order. The contexts are the 08-10 spec's C1 to C9 and K (kernels and platform, no aggregate). C6 and C8 have no ccd function today: ccd's operator-facing banner is `notify.sh`'s, and ccd holds no passkey or box-token code.
+- Modify `server/test/consolidationCensus.ts`: five named queries, inserted after `markerDefinitions` (line-disjoint from #927's tail append). `ccdFunctionDefinitions` lists every `name() {` at column 0, `ccdContextRows` lists the manifest's rows, `ccdCallGraph` gives one edge per (caller, callee) pair, and `ccdCrossContextCalls` gives the edges whose ends sit in two contexts, where a call into K does not count (a call out of K does), and `ccdHeredocBraces` lists any column-0 `}` inside a heredoc body in a function, plus any heredoc that never closes. The launcher's path comes from `ccdWsHelpers.ts`'s `CCD` (single-definition's "one path to the ccd script"). The known width is written beside them: a region runs to the first column-0 `}`, or to the next definition for a one-liner; comment lines and trailing ` # …` are cut; a `$name`/`${name` expansion and a `name=` assignment are not calls; a name inside a quoted message counts; a column-0 `}` inside a heredoc would end a region early, which is why the CONTROL below holds `ccdHeredocBraces` empty.
+- Create `server/test/ccd-contexts.test.ts`. Its two CONTROLs check that no bash definition uses a shape the census does not read, and that no heredoc hides a column-0 `}`. The coverage rows check that every function has exactly one row, every row names a defined function in a defined context, and the rows run in definition order. A fixture tree holds the call-graph rules. A pin lists the 26 K rows, so relabelling a function K (which lowers the count without removing a call) is a visible diff. The ratchet pins the cross-context count at exactly `BASELINE`: a rise is red with the count by context pair, and a fall is red until `BASELINE` is lowered in the same commit, so a relabel between two non-K contexts that lowers the count without removing a call is a visible diff. The fixture's functions are named `f*`, with no leading underscore, so #943's harness-integrity scan (which reads a test's `_x() {` text as an override of a shipped function) does not read them.
+
+- [ ] **Step 0: Re-ground.** `gh pr view 874 --json state` (merged). Count `name() {` lines in `ccd/ccd` and check for other definition shapes; read the context sections of the 08-10 spec and the consolidation spec's §2.2 and §5.13. Run `gh pr list --state open` with each PR's files: #927 holds this plan's lines after C0i and the tails of `consolidationCensus.ts` and `consolidation-census.test.ts`, #931 holds the lines before C0i and after C0h's D-block and names its task C0k, and #934 holds the lines before C0h and above C0h's D-block and names its task C0l, so this task is C0m, inserts its section above C0g's and its D-block above the coordinator's departure, and does not edit `consolidation-census.test.ts`.
+- [ ] **Step 1: Red.** Run the new suite and census queries on a `git archive` of `origin/main`. With no manifest, coverage lists all 646 functions as unmapped, and the order row, the K pin and the listing row are red.
+- [ ] **Step 2: Green.** Write the manifest. The suite is green, with 646 rows, 1,984 edges and 521 cross-context references (208 more go into K and are not counted).
+- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | `_ws_reap_tail`'s row deleted | coverage | red, naming `_ws_reap_tail` |
+  | a row for `_no_such_fn` | coverage | red, naming it |
+  | `_reg_get` mapped twice (C1 and C4) | coverage | red, naming it |
+  | `cmd_version` mapped to `C10` | coverage | red, naming the row |
+  | `ccd/ccd` gains `_new_fn() { :; }` and no row | coverage | red, naming `_new_fn` |
+  | `ccd/ccd` gains `function _kw_fn { :; }` | CONTROL | red, naming the line |
+  | `cmd_version` gains a `_reg_get` call | ratchet | red: 522 above 521 |
+  | the region ignores the column-0 `}` | fixture; ratchet | red: TOP's `fc` joins `fa`; 559 |
+  | comment lines are kept | fixture; ratchet | red: the comment's `fb` and `fc` become calls; 885 |
+  | calls into K counted | fixture; ratchet; listing | red: 729, and 208 edges into K listed |
+  | a `$name` expansion counted as a call | fixture | red: `fa>fc@6` |
+  | a `name=` assignment counted as a call | fixture | red: `fa>fb@5` |
+  | `cmd_version` gains a heredoc holding a column-0 `}`, then a `_reg_get` call | CONTROL (heredoc) | red, naming the line; with that CONTROL off, all green at 521 (the blind spot) |
+  | the `<<-` tab strip dropped | fixture | red: `fe`'s heredoc never closes |
+  | a heredoc that never closes not reported | fixture | red: `<<JSON never closes` missing |
+  | calls out of K skipped | fixture | red: `fk (K) -> fa (C1)` missing |
+  | `_reg_get` relabelled K | K pin | red: 27 K rows |
+  | `_reg_get` relabelled C1 to C4 (the count falls, no call removed) | ratchet | red: below 521, lower BASELINE |
+  | D-6054 defined a second time, with another subject, in another plan | `deviation-refs.test.ts` | red (one number, two subjects) |
+
+- [ ] **Step 4: Verify.** `tsc -p server/test/tsconfig.tests.json`. Then, one at a time with `--maxWorkers=2`, the new suite, `consolidation-census`, `citations`, and the suites that read every file under `ccd/`: `ccd-reg-id-ok`, `continued-in-parity`, `ccd-child-tmproot-witness`, `install-census` and `build-release`. Then the doc suites from `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean`, `single-definition` and `docs-grammar`. `git diff origin/main -- ccd/ccd` prints nothing.
+
+**Exit (GATES):** every ccd function maps to exactly one context, and a new function without a row is red. The cross-context count is pinned at its landing-day value, 521; it may only shrink, and each fall lowers the pin in its own commit. `ccd/ccd` is byte-identical. **Not in this task:** the registry field table (ARCH-40's pin against this manifest), splitting `ccd/ccd` (spec §5.13: a later operator decision), and moving any function. A row that later proves wrong moves with a reason in its PR.
+
 ### Task C0g: symbol-keyed source slices for W1a's files (D-5854; ARCH-06 (#554), the W1a slice) — GATED: after C0f
 
 **Routing:** band 2. **Lane:** tests only. **Needs:** C0f.
@@ -423,6 +463,47 @@ A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** na
 
 **Exit (GATES):** every non-test `server/src` and `pwa/src` file has exactly one ring and one context under the written rules (counts in the PR body); CLAUDE.md's restatement matches the spec word for word; the doc suites are green; zero production bytes. **Not in this task:** the committed scanner (ARCH-04), draining outward edges (ARCH-05), and `markDelivered`'s result (ARCH-15).
 
+### Task C0k: wire totality — every exported literal union in `shared/*.ts` has a derived runtime list (D-6048; ARCH-12 (#552)) — lands now
+
+A later W0 slice (spec §5.2), planned here so it has a section. ARCH-12 is a consolidation prerequisite: a wire word with no runtime list is a silent wire change when it gains a member. **Routing:** native (band 1 to 2: the scan is mechanical, the exemption reasons are judgment). **Lane:** a test-scanner fact in `server/test/scan/parse.ts`, three additive lists in `shared/api.ts` and one PWA reader switched to one of them, with no behaviour change (D-6049). **Needs:** nothing; no operator ruling. **Gates:** ARCH-00 (Task C0f, #915) merged; it is. #911 holds `shared/api.ts` (≈:3624, ≈:4156) and #927 holds this plan (after Task C0i and after C0i's issued block); this task's hunks are line-disjoint from both.
+
+**Files:**
+- Modify `server/test/scan/parse.ts`: three syntax facts returned by `wireFacts(p)`, a walk of its own so `ParsedFile` and the shared walk stay as they are. `recordTrueKeys` holds the bare `X` of each `Record<X, true>` (or `Readonly<Record<X, true>>`) that types a non-`declare` variable or a `satisfies`. `guardedTypes` holds the bare `X` of each `v is X` predicate on a function, method or arrow with a body, never `asserts`. `comparedLiterals` holds each string literal that is an equality operand or a `case` label.
+- Modify `server/test/scan-parse.test.ts`: one appended `describe` pins the three facts on a fixture, including what does not count (a `Record<X, string>`, a type alias of the map, a parameter's type, a generic predicate).
+- Create `server/test/rings/wire-totality.test.ts`: every top-level `export type X = …` of two or more literals in `shared/*.ts` has a sibling `Record<X, true>` map or an `is X` guard in the same file, unless it is in `EXEMPT`. A stale entry is red. The same suite pins the three new lists against the parsed unions, `isPoolsEnforcement` over members and non-members, and the fleet store's import and every quoted member word in it (compared or not).
+- Create `server/test/rings/wire-totality.data.ts`: `EXEMPT` as `WIRE_TOTALITY_EXEMPTIONS: EntrySet` in D-6045's shape (keyed `file:Name`, each entry a one-line reason and a `since` date), pinned at its size; the suite checks `malformedEntries` over it.
+- Modify `server/test/rings/exemption-age.data.ts`: one stamp for `WIRE_TOTALITY_EXEMPTIONS` (size 28), so the 60-day staleness rule sees this debt.
+- Modify `shared/api.ts`: `SESSION_STATUS_MAP`/`SESSION_STATUSES`, `SESSION_BUCKET_MAP`/`SESSION_BUCKETS`, and `POOLS_ENFORCEMENT_MAP`/`POOLS_ENFORCEMENTS` with `isPoolsEnforcement`, in `SESSION_ROLE_MAP`'s idiom, appended at the end of the file so that no line other files cite by number moves.
+- Modify `pwa/src/stores/fleet.ts`: the `pools` frame gate reads `isPoolsEnforcement` for `enforcement` and `accountPools`, in place of six hand comparisons. It accepts and rejects exactly the same values.
+
+- [ ] **Step 0: Re-ground.** Re-check the gate with `gh pr view 915`. Measure the listless exported literal unions in `shared/*.ts` with the new facts: 31 of 88 (the issue's "14 of 65" counted `api.ts` alone, at an older sha). `gh pr list --state open` with `gh pr diff` for every file touched.
+- [ ] **Step 1: Red.** Run the new suite with the parser facts in place and `shared/`/`pwa/` untouched. Four rows are red: the totality row names `SessionStatus`, `SessionBucket` and `PoolsEnforcement`, the list and guard rows find no export, and the fleet-store row lists the six compared members.
+- [ ] **Step 2: Green.** Add the lists and switch the fleet store. Both server `tsc` projects and the PWA's are clean. The new suite, `scan-parse` and the PWA's `stores` suite pass.
+- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | a new `export type Fresh = 'a' \| 'b'` in `shared/api.ts`, no list | `wire-totality` | red, naming `api.ts ≈:N Fresh` |
+  | `SESSION_BUCKET_MAP` loses its `Record<SessionBucket, true>` annotation | `wire-totality` | red: `SessionBucket` listless |
+  | `SESSION_STATUS_MAP` typed `Record<SessionStatus, boolean>` | `wire-totality` | red: `SessionStatus` listless (a `boolean` map is not total) |
+  | an exemption's union gains a map, entry kept | `wire-totality` | red: the stale-entry row names it |
+  | a new listless union with an exemption for it | `wire-totality` | red: the pin at 28 (29) |
+  | the fleet store spells `=== 'unknown'` again | `wire-totality` | red: the compared-literals row |
+  | the fleet store holds a hand array `['enforced', 'unavailable', 'unknown']` | `wire-totality` | red: the quoted-member row |
+  | `WIRE_TOTALITY_EXEMPTIONS` loses its stamp | `exemption-age` | red: a set with no stamp |
+  | an exemption entry dated `2026-13-01` | `wire-totality` | red: `malformedEntries` |
+  | an entry added, stamp left at 28 | `exemption-age` | red: size 29, stamp 28 |
+  | the stamp dated 80 days back | `exemption-age` | red: stale |
+  | `isPoolsEnforcement` accepts any string | `wire-totality` | red: `'Enforced'` passes |
+  | the fleet store's `accountPools` gate loses its `undefined` allowance | PWA `stores` | red: five `pools` rows, an older server's frame dropped |
+  | the scanner's map fact also counts a parameter's type | `scan-parse` | red: `Tone` read from `take`'s parameter |
+  | the guard fact drops arrow predicates | `scan-parse` | red: `Kind` missing |
+  | D-6048 defined a second time, with another subject, in another plan | `deviation-refs` | red (one number, two subjects) |
+
+- [ ] **Step 4: Verify.** `tsc` for `server/` (both projects) and `pwa/`. Then, one at a time with `--maxWorkers=2`: `rings/wire-totality`, `scan-parse` and the PWA's `stores`. Then the doc suites from `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean`, `single-definition` and `docs-grammar`.
+
+**Exit (GATES):** a new exported literal union in `shared/*.ts` with no list is red. The exemption list goes from 31 (merge day) to 28 and is pinned. `pwa/src/stores/fleet.ts` compares against no `PoolsEnforcement` member. **Not in this task:** the 28 remaining lists, the hand arrays that could derive from them (`PROBE_KINDS`, the PWA's bucket orders), and readers in `shared/api.ts` that cast `status`/`bucket` after their own checks.
+
 ### Task C0i: consumer-side ports for the coordination lanes and the turn reads (D-6003; ARCH-03 (#541), first half) — lands now
 
 A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (band 1, literal moves, but every line sits in a file another open PR edits, so the line-disjointness check is the judgment). **Lane:** server types only; zero emitted bytes change. **Needs:** nothing; no operator ruling (the spec is approved at rev 2.1, and ARCH-03 says none is needed). **Gates:** ARCH-05 (#846) and ARCH-02a (Task C0h, #874) merged; both are. **Not yet:** the `Deps` move, which #850 blocks (D-6004). #434 is not ridden.
@@ -534,6 +615,16 @@ The allocator issued the consolidation wave a block of 30 numbers, 5848 to 5877,
 - **D-5854** — `symbol-slices-for-w1a` (Task C0g; ARCH-06, first slice): `scan/symbols.ts` replaces literal source slices, and the suites that pin W1a's moved regions move onto it first, with the ticket's ratchet predicate applied to W1a's files.
   - **Departs from ARCH-06:** the ticket's exemplar suites (the stall-sweep tick order, the coord-store UPDATE census) are not W1a's and move in a later slice; this slice moves the suites W1a needs.
 
+### Issued for Task C0m and defined here
+
+Task C0m was issued three numbers, 6054 to 6056.
+
+- **D-6054** — `ccd-function-context-manifest` (Task C0m; ARCH-34): `ccd/contexts.tsv` maps every function `ccd/ccd` defines (a `name() {` at column 0) to one context of the 08-10 spec, C1 to C9 or K. `server/test/ccd-contexts.test.ts` holds full coverage both ways. The census module's `ccdCallGraph` and `ccdCrossContextCalls` extract the call graph, and the test ratchets the cross-context reference count, which excludes calls into K, so that it may only shrink: the pin is exact, so each fall lowers it in the same commit. The landing-day value is 521. A CONTROL holds that no heredoc in a function hides a column-0 `}` (which would end a region early), and a pin lists the K rows. No byte of `ccd/ccd` changes.
+- **D-6055** — `ccd-manifest-lives-under-ccd` (Task C0m): the manifest is `ccd/contexts.tsv`, the path ARCH-34 names, beside the file it describes.
+  - **Departs from** §Global constraints' "no file under `ccd/` is edited". The file is data, not code. `ccd/ccd` never sources it, and neither installer copies it (`deploy.sh` and `ccrc install` place `ccd/` files by name). It does ride in the release tarball, because `build-release.sh` packs `ccd/` whole, but no box reads it. The launcher's SHA-256 is unchanged.
+
+Issued and unused (Task C0m): 6056.
+
 ### Departures entered by the coordinator
 
 - **D-5865** — `pause-pin-tick-fold-for-lane-sites` (Task C0e, #871; extends D-5852): the four `watch.ts` lane sites and `stopDonePass` take the tick's listing, which cannot be `null` by type, so their `null` and rejecting legs are pinned once, at the tick, not per site: neither reaches any lane, a `null` listing gives an `unmeasurable` coord frame, and a rejecting one emits no frame at all.
@@ -566,6 +657,16 @@ Task C0h was issued three numbers, 6000 to 6002.
   - **Departs from** the spec's §5.2 ("ARCH-02a's CLAUDE.md edit rides #434 if that PR is still open") and ARCH-02a's routing line. #434 is still open, but it is superseded and belongs to another session, so riding it would tie this work to a PR nobody is landing. This task's CLAUDE.md hunk is line-disjoint from #434's, #842's and #851's.
 
 Issued and unused (Task C0h): 6002.
+
+### Issued for Task C0k and defined here
+
+Task C0k was issued three numbers, 6048 to 6050.
+
+- **D-6048** — `wire-totality-derived-lists` (Task C0k; ARCH-12, #552): every top-level exported literal union of two or more members in `shared/*.ts` has a sibling `Record<X, true>` map, typing a variable or a `satisfies`, or an `is X` guard in the same file. `server/test/rings/wire-totality.test.ts` holds that through three syntax facts that `server/test/scan/parse.ts` reads. Its exemption list, `WIRE_TOTALITY_EXEMPTIONS` in `server/test/rings/wire-totality.data.ts`, follows D-6045: keyed `file:Name`, each entry a one-line reason and a date, stamped in `exemption-age.data.ts`; it is pinned at its size and only shrinks: 31 on merge day, 28 after this task lists `SessionStatus`, `SessionBucket` and `PoolsEnforcement`. The fleet store's `pools` gate reads `isPoolsEnforcement`, and the store quotes no member word anywhere. The three lists are appended at the end of `shared/api.ts`, so no line other files cite by number moves. The map alone satisfies the rule; deriving a runtime list from it is a convention the rule does not check. Only runtime forms count: a `declare` map, an `asserts v is X` predicate and a type-only guard signature do not. A literal union with a `null` member is not scanned, and a guard's body is not checked, so a hand-written `is X` guard satisfies the rule without being total (stated limits; the map is preferred). The facts come from `wireFacts` in `server/test/scan/parse.ts`, a walk of its own beside the shared one.
+- **D-6049** — `c0k-ships-production-bytes` (Task C0k): this slice edits `shared/api.ts` and `pwa/src/stores/fleet.ts`.
+  - **Departs from** this plan's Deploy class and §Global constraints ("Zero production bytes"). ARCH-12's acceptance needs the lists in `shared/` and the store on one of them. The change is additive and keeps behaviour: four new exports (three lists and a guard), and a gate that accepts and rejects exactly the values it did before. The PWA's `stores` suite pins those values.
+
+Issued and unused (Task C0k): 6050.
 
 ### Issued for Task C0i and defined here
 

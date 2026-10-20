@@ -321,7 +321,7 @@ describe.skipIf(NO_DEADLINE_BIN)('D2 — the hold family, five sites, one shape 
     }, 10000);
 
     it('cmd_forget answers "held: <unreadable — treat as held>", PROMPTLY', () => {
-      const id = 'claude-corp-demo';
+      const id = 'claude-acme-demo';
       regSet(id, 'uuid', 'u');
       plantBad(HOLD(id), shape);
       const r = boundedRun(`cmd_forget ${id}`);

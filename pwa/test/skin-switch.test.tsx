@@ -303,7 +303,7 @@ describe('focus after a switch is never on <body>', () => {
   });
 
   it("the Layout radio that ran the switch keeps focus", () => {
-    navigate('/settings');
+    navigate('/settings/appearance');   // the Layout fieldset's page since the Settings sections (D-5504)
     render(<App />);
     const radio = screen.getByRole('radio', { name: /^Instrument/ });
     act(() => radio.focus());

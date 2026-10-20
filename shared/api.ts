@@ -1754,8 +1754,8 @@ export type TurnStallInput = Pick<FleetSession, 'status' | 'statusUpdatedAt'>;
  * THE THRESHOLD, MEASURED, NOT GUESSED FROM THE ONE INCIDENT (its own
  * deviation text is explicit about this): `turn_duration` system events
  * streamed from every `*.jsonl` transcript under the fleet's five wrapper
- * HOMEs (`~/.claude`, `~/.claude-personal`, `~/.claude-corp`,
- * `~/.claude-dev0`, `~/.claude-gpt`) on 2026-09-08, 28,519 samples:
+ * HOMEs (`~/.claude`, `~/.claude-home`, `~/.claude-acme`,
+ * `~/.claude-lab0`, `~/.claude-gpt`) on 2026-09-08, 28,519 samples:
  *
  *   p50 ~101s · p90 ~23.2m · p95 ~50.4m · p96 ~62.5m · p97 ~85.5m ·
  *   p97.5 ~102.2m · p99 ~271.1m · max ~104.8h
@@ -3767,16 +3767,16 @@ export interface LifecycleQueryResult {
  * SYSTEM, and its emptiness is the point of Stage 2a: the roster stopped being
  * source code.
  *
- * It used to be a five-member union (`'claude' | 'claude2' | 'claude-corp' |
- * 'gpt' | 'claude-dev0'`) beside an `ACCOUNTS: Record<Wrapper, AccountDef>`
+ * It used to be a five-member union (`'claude' | 'claude9' | 'claude-acme' |
+ * 'gpt' | 'claude-lab0'`) beside an `ACCOUNTS: Record<Wrapper, AccountDef>`
  * literal in this file, from which every other enumeration was derived. That
  * literal was itself the fix for a worse defect — one concept hand-enumerated
  * in eight places across three languages, no two of them the same set. A
- * missing entry in the first of those killed chat for six of `claude-dev0`'s
+ * missing entry in the first of those killed chat for six of `claude-lab0`'s
  * 24 sessions, silently, for the account's entire life (`resolve()` in
  * `sessionws.ts` returned null; the client only ever saw "unknown session",
  * indistinguishable from a reaped one). A hand-written, unordered prefix list
- * in the second attributed `claude-dev0-quiet-basin` to `claude`. Deriving
+ * in the second attributed `claude-lab0-quiet-basin` to `claude`. Deriving
  * every list from one literal closed that class of bug: N=1.
  *
  * What one literal could NOT close is that it was still a compile-time fact.
@@ -3806,8 +3806,8 @@ export interface LifecycleQueryResult {
  *                            switch that is not an account, from becoming a
  *                            phantom row on `GET /api/accounts`
  *   `roster.byIdLengthDesc`  (shared/roster.ts) — longest id first, so
- *                            `claude-dev0-quiet-basin` resolves to
- *                            `claude-dev0` rather than to the shorter `claude`
+ *                            `claude-lab0-quiet-basin` resolves to
+ *                            `claude-lab0` rather than to the shorter `claude`
  *                            (`idHomeWrapper`, server/src/fleet.ts)
  *   `roster.homeAble`        — the accounts ccd's `_ws_least_loaded` may land a
  *                            new workspace on (`projectHome`, limits.ts)
@@ -7593,7 +7593,7 @@ export interface PasskeyRegisterStart {
   rpId: string;
   /** The `user.id` handed to `navigator.credentials.create` — an opaque
    *  per-box handle, never an email or a username. Single-operator boxes have
-   *  no user identity to carry (spec §6 holds that seam for the team edition),
+   *  no user identity to carry (spec §6 holds that seam for a later product decision),
    *  so this exists to satisfy the ceremony, not to name anyone. */
   userHandleB64url: string;
 }
@@ -7793,7 +7793,7 @@ export type LifecycleAct =
   | 'unarchive'     // a return verb's gate (wave 3b) or `_spawn_start` cleared
                     // an archive stamp because a pane was asked for. DISTINCT
                     // FROM `restore`: that is the deliberate way back; this is
-                    // a start/ensure/swap/enable on an archived row (CCR-10).
+                    // a start/ensure/swap/enable on an archived row (#127).
   | 'unknown';      // the reader's degrade. NEVER written by a ccd call site.
 
 /** Derived from the type, never restated beside it — `PR_REASON_MAP`'s idiom
@@ -9765,9 +9765,9 @@ export const UPDATE_GATE_CAP = 'update-gate';
  *
  *   - `runId`, `program`, `claimedBy`, `closedAt` — the newest run's own columns; `closedAt` is epoch MS.
  *   - `programTitle` — `programs.title`, `null` only if the programme row could not be joined.
- *   - `child` — the registry's CCR-15 child reading (`FleetSession.child`) is `child` or `unreadable`. An
+ *   - `child` — the registry's #166 child reading (`FleetSession.child`) is `child` or `unreadable`. An
  *     unreadable marker reads as a child, the direction that defers: "Archive all" skips children, which leave
- *     through CCR-15's own reclamation.
+ *     through #166's own reclamation.
  *
  * ADDITIVE; `FLEET_PROTO` is not bumped. The LIVE `fleet` frame is CAST, not revived (`pwa/src/stores/fleet.ts`'s
  * `asFleetMsg`), so a row from an older server has no key at all — read it ONLY through `releasedFromOf`.
@@ -11922,3 +11922,28 @@ export const SECRET_MASK = '‹secret masked›';
 /** What the rest of a text reads as once it holds more candidate runs than the exact-bytes check's hard ceiling: the
  *  check fails closed, so no run is ever passed through unchecked (D-5513). */
 export const SECRET_MASK_TOO_LARGE = '‹output too large to check, masked›';
+
+/* D-6048 (ARCH-12): the derived runtime lists, kept at the end of the file so adding them moves no line that other
+ * files cite by number. */
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom): a member added
+ *  to the union with no key here fails to compile. `server/test/rings/wire-totality.test.ts` holds every exported
+ *  literal union in `shared/` to that. */
+const SESSION_STATUS_MAP: Record<SessionStatus, true> = { busy: true, idle: true, dead: true };
+export const SESSION_STATUSES: readonly SessionStatus[] = Object.keys(SESSION_STATUS_MAP) as SessionStatus[];
+
+/** D-6048 (ARCH-12): the runtime list, in the union's declaration order (not the fleet screen's section order,
+ *  which `pwa/src/fleet/sortFleet.ts` owns). */
+const SESSION_BUCKET_MAP: Record<SessionBucket, true> = {
+  attention: true, working: true, done: true, idle: true, cleanup: true, archived: true, dead: true,
+};
+export const SESSION_BUCKETS: readonly SessionBucket[] = Object.keys(SESSION_BUCKET_MAP) as SessionBucket[];
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type, and the one way to narrow an untrusted value to a
+ *  `PoolsEnforcement` (the fleet store's `pools` frame gate reads it for `enforcement` and `accountPools`). The
+ *  CONSTANT is cast, never the input (`isSessionRole`'s rule). */
+const POOLS_ENFORCEMENT_MAP: Record<PoolsEnforcement, true> = { enforced: true, unavailable: true, unknown: true };
+export const POOLS_ENFORCEMENTS: readonly PoolsEnforcement[] =
+  Object.keys(POOLS_ENFORCEMENT_MAP) as PoolsEnforcement[];
+export function isPoolsEnforcement(v: unknown): v is PoolsEnforcement {
+  return typeof v === 'string' && (POOLS_ENFORCEMENTS as readonly string[]).includes(v);
+}

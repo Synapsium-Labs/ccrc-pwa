@@ -1,7 +1,7 @@
 // Fleet zustand store: mirrors the `/ws/fleet` stream — full session
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { FLEET_PROTO, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
+import { FLEET_PROTO, isPoolsEnforcement, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
@@ -246,9 +246,8 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
       listed?: unknown; enforcement?: unknown; byProject?: unknown;
       epoch?: unknown; observedEpoch?: unknown; accountPools?: unknown;
     };
-    const validEnforcement = outer.enforcement === 'enforced'
-      || outer.enforcement === 'unavailable'
-      || outer.enforcement === 'unknown';
+    // D-6048 (ARCH-12): the shared guard, derived from the type, so a new member is accepted here too.
+    const validEnforcement = isPoolsEnforcement(outer.enforcement);
     // Item 3 (I1, wave-1 fix round A): `accountPools` rides the SAME
     // `PoolsEnforcement` domain as `enforcement` above and gets the identical
     // envelope-level gate — it was produced by `poolsWire` (T9-R2/F2) and
@@ -256,10 +255,7 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
     // value would have slipped through unrejected into the first real
     // consumer (`AccountsScreen`'s account-pool chip, below). Optional, like
     // `epoch`/`observedEpoch`: an older server simply omits it.
-    const validAccountPools = outer.accountPools === undefined
-      || outer.accountPools === 'enforced'
-      || outer.accountPools === 'unavailable'
-      || outer.accountPools === 'unknown';
+    const validAccountPools = outer.accountPools === undefined || isPoolsEnforcement(outer.accountPools);
     const validByProject = typeof outer.byProject === 'object'
       && outer.byProject !== null
       && !Array.isArray(outer.byProject);
@@ -328,7 +324,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
     // fix round 1, finding 3. Before this, a cold offline start hydrated
     // `sessions` from the snapshot but `roster` stayed at its bare `[]`
     // default, so every account rendered as its raw wrapper id
-    // (`claude2`, `claude-corp`) instead of the jargon-free label this
+    // (`claude9`, `claude-acme`) instead of the jargon-free label this
     // whole module exists to restore — a real regression against the
     // compile-time roster this replaced, which never had an "unarrived"
     // state to begin with.

@@ -3,7 +3,7 @@
 **Status:** design approved in the brainstorm by the operator 2026-09-23 (rulings in §3); rev 2 after a six-lens
 adversarial review (61 findings survived, all applied) and a rev-3 verification pass; the operator's ruling on the
 written spec's two open decisions recorded 2026-09-23 (R9, R10); reconciled with its first wave plans 2026-09-24,
-and with `main` `b501698a` the same day (step 6 is CCR-15's; stage 2's wave is re-planned, §9); stage 2 amended
+and with `main` `b501698a` the same day (step 6 is #166's; stage 2's wave is re-planned, §9); stage 2 amended
 2026-09-29, when its wave was re-planned on `main` `6da36f0b` and three reviews of that plan were applied (§4, §5.2,
 §6, §9, §11, §12; the operator's four rulings of that day are §11's) ·
 **Date:** 2026-09-23 · **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
@@ -13,7 +13,7 @@ skill clauses after this spec's stage 1.
 **Parents:** `2026-08-07-build7-fleet-coordination-design.md` (runs, mail, the coordinator),
 `2026-09-14-review-runs-design.md` (review runs; the fix-round channel this spec reuses),
 `2026-09-08-crossrepo-programmes-design.md` (cross-project ordering stays that spec's discipline),
-`2026-09-22-child-workspace-reclamation-design.md` (CCR-15; stage 1's fresh child per wave is its rule 3),
+`2026-09-22-child-workspace-reclamation-design.md` (#166; stage 1's fresh child per wave is its rule 3),
 `2026-09-18-release-rollout-design.md` (patch-per-merge tagging constrains the queue in stage 2).
 
 The operator's complaint, 2026-09-22: *"the order in which commits land, then cancelled work for some tasks due
@@ -61,7 +61,7 @@ In order of cost:
    past an approval rule nobody can satisfy, so every merge needs the admin bypass, whoever types it — the fleet
    has one GitHub login and transcripts show sessions issuing some of the 83.
 3. **Ritual syncs are avoidable.** 60% of PRs that ever synced were already green before their first sync, and
-   more than half of local merges of main were repeats on the same PR. On intake-platform, one of the two
+   more than half of local merges of main were repeats on the same PR. On project-n, one of the two
    repositories with strict up-to-date protection, git reproduced 67 of 68 merges of main without a hand edit
    (93 of 99 across both strict repositories): strict mode is a queue done by hand, one worker round per sibling
    landing.
@@ -94,8 +94,8 @@ repositories are on plans that exclude it.
   merges; this spec gives it a recorded order and a tested composition to rule on.
 - Review runs §4: the worker persists until review clears and a send-back is a `fix-round` mail. Ejection from
   the landing line (stage 5) is the same mail on the `merging → working` edge, which exists.
-- CCR-15 rule 3: one PR per child; a spent child refuses a further run bind; the next run opens without a session
-  id and dispatch mints a fresh child (`server/src/coord/dispatch.ts:418`). CCR-15's wave 2 (#178) made that
+- #166 rule 3: one PR per child; a spent child refuses a further run bind; the next run opens without a session
+  id and dispatch mints a fresh child (`server/src/coord/dispatch.ts:418`). #166's wave 2 (#178) made that
   every PR-bearing wave's path on `main` ("One PR per child"); reclamation of spent children is its wave 3.
 - Cross-repo ruling 4: a consumer wave is dispatched only after the producer's PR is proven merged at an exact
   sha. Ordering ACROSS repositories stays that discipline; the landing line orders within one repository.
@@ -109,13 +109,13 @@ repositories are on plans that exclude it.
 | R1 | The pain is LANDING (order, cancelled work after main moved, absorb rounds), not visibility. | The edit-ledger direction from the earlier analysis is out. |
 | R2 | Two specs: landing (this) and session continuity. | §9. |
 | R3 | Coordinators may enqueue on this repository's native queue on their own. | Stage 2. |
-| R4 | A fresh workspace per wave. | Delivered by CCR-15 rule 3 on `main` (#178), so stage 1 carries no step of its own (§5.1). |
+| R4 | A fresh workspace per wave. | Delivered by #166 rule 3 on `main` (#178), so stage 1 carries no step of its own (§5.1). |
 | R5 | **No unattended lander.** "It's the coordinator's job to do merges, not the sub-workspace's, as it is the coordinator that bears ultimate merge responsibility (ultimate after the human)." | No timer holds MERGE authority; workers never merge; the coordinator composes, tests and merges from its own shell. |
 | R6 | No headroom estimation. | Nothing here reads account headroom. |
 | R7 | The knowledge graph is not used for landing (measured). | §1's closing paragraph; §13. |
 | R8 | Mergify and other queue apps rejected; file-level lanes rejected. | §13. |
 | R9 | Break-glass: the repository-admin role is the ruleset's only bypass actor (operator, 2026-09-23, on the written spec). The main ruleset also names the Maintain role as a bypass actor today; that entry comes off with the queue rule (confirmed by the operator, 2026-09-24). | Stage 2; §4's operator row; §11. |
-| R10 | Strict protection comes off intake-platform and data-internal after a week of coordinator landings with composition tests there (operator, 2026-09-23, on the written spec). | Stage 5; §11. |
+| R10 | Strict protection comes off project-n and project-e after a week of coordinator landings with composition tests there (operator, 2026-09-23, on the written spec). | Stage 5; §11. |
 
 ## 4. Roles and authority
 
@@ -172,12 +172,12 @@ a land-sync only to the PR it named next in a strict repository, never merges ma
 own, and commits programme-ledger documents on its own ledger PR, never inside a feature PR (the ledger file was
 the hottest overlap file in three repositories).
 
-**A fresh workspace per wave (R4) is CCR-15's.** This section first drew it as step 6 of the wave lifecycle,
-gated on CCR-15's reclaim-on-close wave. CCR-15's wave 2 (#178) made it live on `main` without a gate, as "One PR
+**A fresh workspace per wave (R4) is #166's.** This section first drew it as step 6 of the wave lifecycle,
+gated on #166's reclaim-on-close wave. #166's wave 2 (#178) made it live on `main` without a gate, as "One PR
 per child" in the coordinator skill's step 6 and `wave-lifecycle.md` §5 step 3: a marked producer whose workspace
 opened a PR is spent, wave N+1 opens without its `sessionId`, and a wave that builds on its predecessor's code
 dispatches only once that PR is proven merged at its exact head. Stage 1 therefore adds no step 6; a producer
-whose workspace opened no PR keeps it, as CCR-15 rules. (Removed 2026-09-24, when the first plans were
+whose workspace opened no PR keeps it, as #166 rules. (Removed 2026-09-24, when the first plans were
 re-measured against `main` `b501698a`.)
 
 **The hook reaches sessions the skills do not.** `ccd/session-hook.sh`'s PreToolUse arm (matcher `*`) sees every
@@ -419,7 +419,7 @@ which entry becomes head — the successor is whatever the recorded order and th
 `landing-subtractive.test.ts` pins that; `coord-pause-route.test.ts`'s `SESSION_ONLY` set and
 `box-token-census.test.ts` gain the routes in both directions, with `CLAUDE.md`'s box-token bullet.
 
-**Strict protection comes off** intake-platform and data-internal only after the coordinator has landed there
+**Strict protection comes off** project-n and project-e only after the coordinator has landed there
 with composition tests for a week.
 
 Removes: order negotiated in mail, fleet-controlled inversions, duplicate-intent races, and untested compositions
@@ -484,7 +484,7 @@ headlines in the last 40 merged PRs). Stage 1's `ccrc restamp` is its first deli
 ## 9. Sequencing
 
 - Stage 1 first; stage 2 builds on stage 1's coordinator clause 15, so it lands with or after stage 1.
-  Stage 2's wave was re-planned against CCR-15 (2026-09-29): CCR-15's "One PR per child" (#178) closes a
+  Stage 2's wave was re-planned against #166 (2026-09-29): #166's "One PR per child" (#178) closes a
   PR-bearing producer's run before its PR merges, and its wave 3 reclaims that workspace on the close. On a
   native-queue project the producer therefore lands BEFORE it closes (clause 15), the last wave's included: its run
   waits at `merging`, holding the child, so the dequeue lane and the merge deny have the run, the row and the hold
@@ -541,7 +541,7 @@ Decided on the written spec, 2026-09-23:
    actor; the Maintain role's bypass on the main ruleset comes off with the queue rule. The hook stops fleet
    sessions using `--admin`; the operator keeps a direct door for a broken CI or release lane.
 
-2. **Strict-protection removal** — R10: on intake-platform and data-internal, after a week of coordinator landings
+2. **Strict-protection removal** — R10: on project-n and project-e, after a week of coordinator landings
    with composition tests there.
 
 Decided on stage 2's re-planned wave, 2026-09-29 (each as the re-plan proposed):
