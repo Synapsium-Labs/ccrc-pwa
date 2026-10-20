@@ -7,11 +7,9 @@ import { useCallback, useEffect, useRef } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { cn } from '../lib/cn';
 import { EYEBROW } from '../lib/text';
-import { FOCUS_RING } from '../lib/focus';
-import { PRESS_FEEDBACK } from '../lib/press';
 import { SHEET_DESK_MOTION_VARS, SHEET_MOTION_VARS, VAUL_MOTION } from '../lib/motion';
 import { useDesk } from '../lib/use-media-query';
-import { Icon } from './icon';
+import { CloseButton } from './close-button';
 
 interface SheetBaseProps {
   open: boolean;
@@ -82,12 +80,6 @@ const DESK_PANEL =
   + ' min-[900px]:data-[state=open]:[animation-name:sheet-pop-in]!'
   + ' min-[900px]:data-[state=closed]:[animation-name:sheet-pop-out]!';
 
-/** The dialog's close (D-6033): lucide's `x` in a tap target, at the top right, over the head of the body; the title
- *  and the eyebrow pad clear of it at the desk width. */
-const CLOSE_BUTTON =
-  'sheet-close absolute right-2 top-2 flex min-w-tap min-h-tap items-center justify-center rounded-md border-none'
-  + ' bg-transparent text-ink-secondary hover:text-ink-primary cursor-pointer'
-  + ` ${PRESS_FEEDBACK} ${FOCUS_RING}`;
 
 /** A field that raises a phone's keyboard when focused. */
 const isTextField = (el: HTMLElement): boolean =>
@@ -304,9 +296,9 @@ export function Sheet({
                 className="sheet-grabber mx-auto mt-1 mb-2 h-1 w-9 flex-none rounded-full bg-ink-on-well/30!"
               />
             : desk
-              ? <button type="button" aria-label="Close" className={CLOSE_BUTTON} onClick={onClose}>
-                  <Icon name="x" size={20} />
-                </button>
+              ? // The dialog's close (D-6033), at the top right over the head of the body; the title and the eyebrow pad
+                // clear of it at this width.
+                <CloseButton className="sheet-close absolute right-2 top-2" onClick={onClose} />
               : <div
                   aria-hidden="true"
                   className="sheet-grabber mx-auto mt-1 mb-4 h-1 w-9 flex-none rounded-full bg-edge-strong"
