@@ -24,6 +24,7 @@
 //   focus moved through `onOpenAutoFocus` instead ..... both reopen-during-the-close-transition rows
 //   text-field give-back on every pointer ............ the coarse-pointer textarea row
 //   `preventScroll` dropped .......................... quick-confirm-focus's reopen and preventScroll rows
+//   `preventScroll` dropped from the give-back ........ the fine-pointer textarea row
 // The every-render mutant is an undeps'd effect: an unstable callback ref is inert here, because vaul's composed ref
 // on `Drawer.Content` does not re-fire when the Sheet's ref changes (measured: six renders, one ref call).
 import { readFileSync } from 'node:fs';
@@ -305,10 +306,15 @@ describe('back on close', () => {
       act(() => { show(true); });
       await settle();
       expect(document.activeElement, 'a modal left the composer focused behind its scrim').toBe(dialog());
+      const back = vi.spyOn(field, 'focus');
       fireEvent.click(screen.getByRole('button', { name: 'Answer' }));
       await settle();
-      if (kind === 'fine') expect(document.activeElement).toBe(field);
-      else expect(document.activeElement).not.toBe(field);
+      if (kind === 'fine') {
+        expect(document.activeElement).toBe(field);
+        // The give-back never scrolls the page to the field either (spec §2.4, D-5931).
+        expect(back.mock.calls.length).toBeGreaterThan(0);
+        for (const [o] of back.mock.calls) expect(o?.preventScroll).toBe(true);
+      } else expect(document.activeElement).not.toBe(field);
     });
   }
 });

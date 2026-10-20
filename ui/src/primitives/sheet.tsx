@@ -184,7 +184,10 @@ export function Sheet({
             // survived on the full panel and the alphabetical emit order of Tailwind
             // let `z-sheet` (40) win — the terminal drawer sank to the level of
             // the sheets it is meant to sit above (main: 50).
-            'sheet-panel fixed inset-x-0 bottom-0 flex flex-col outline-none',
+            // `outline-none!` is IMPORTANT because the panel takes the focus (D-5931): after a keyboard open Chrome
+            // marks it `:focus-visible`, and the app's page-wide `:focus-visible` ring is unlayered, so it beats a
+            // layered utility. A ring round the whole panel says nothing; the panel is a container, not a control.
+            'sheet-panel fixed inset-x-0 bottom-0 flex flex-col outline-none!',
             // vaul slides the panel with KEYFRAMES, which no transition utility
             // reaches: retimed that way it slid for vaul's own half second, and
             // under reduced motion too. 'lib/motion.ts' puts the keyframes on the
