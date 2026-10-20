@@ -121,7 +121,7 @@ const DISARMED_DURING = 'the lane was disarmed during the act';
  *  row here is red; a site W1a folds away is green (the map is a ceiling, and the commit that folds one lowers it). */
 const PINNED_SITES: Readonly<Record<string, number>> = {
   'server/src/coord/childReclaim.ts': 1,        // childReclaimPauseRead: reclaimChild step 2b, releaseRetiredChildHold step 6
-  'server/src/coord/collectTempRoot.ts': 1,     // collectSwitches: the job's step 2 and step 5
+  'server/src/coord/collectTempRoot.ts': 0,     // folded onto readSwitches (D-5856)
   'server/src/coord/endDeadCoordinator.ts': 2,  // stillCrashed (the late read), endDeadCoordinator step 1
   'server/src/coord/expireArchived.ts': 1,      // expirySwitches: step 2 and step 6
   'server/src/stopDoneSweep.ts': 1,             // stopDonePass's switches
