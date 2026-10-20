@@ -88,6 +88,77 @@ describe('the fleet chrome (D-5468)', () => {
     expect(screen.getByRole('dialog', { name: /start a session/i })).toBeInTheDocument();
   });
 
+  // The same promise for the other three sheets a fleet list opens (spec §5.4): each one's open state is the chrome's,
+  // so unmounting the list alone leaves it open. Move a sheet's state back onto the screen and its case goes red.
+  const rel = (closedAt: number) =>
+    ({ runId: closedAt, program: 'lifecycle', programTitle: null, claimedBy: 'coord', closedAt, child: false });
+  const survivors: Array<{
+    sheet: string;
+    seed: Partial<ReturnType<FleetStore['getState']>>;
+    open: () => Promise<void>;
+    isOpen: () => HTMLElement;
+  }> = [
+    {
+      sheet: 'the ··· actions sheet',
+      seed: { sessions: [session()] },
+      open: async () => {
+        fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
+      },
+      isOpen: () => screen.getByRole('button', { name: /restart session/i }),
+    },
+    {
+      sheet: 'the Archive-all confirm',
+      seed: {
+        sessions: [
+          session({ id: 'a-one', workspace: 'one', bucket: 'idle', releasedFrom: rel(300) }),
+          session({ id: 'a-two', workspace: 'two', bucket: 'idle', releasedFrom: rel(200) }),
+        ],
+      },
+      open: async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /released \(2\)/i }));
+        fireEvent.click(screen.getByRole('button', { name: 'Archive all 2 released workspaces in alpha' }));
+      },
+      isOpen: () => screen.getByRole('button', { name: 'Archive 2' }),
+    },
+    {
+      sheet: 'the pool sheet',
+      seed: {
+        roster: TEST_ROSTER.map((account) => ({ ...account, pool: account.id === 'claude' ? 'pool-a' : null })),
+        pools: { listed: true, byProject: { alpha: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' },
+        sessions: [session()],
+      },
+      open: async () => {
+        fireEvent.click(await screen.findByRole('button', { name: 'project pool pool-a' }));
+      },
+      isOpen: () => screen.getByRole('heading', { name: 'Which pool runs this project?' }),
+    },
+  ];
+
+  it.each(survivors)('$sheet stays open when the fleet screen unmounts', async ({ seed, open, isOpen }) => {
+    vi.spyOn(api, 'fleetHealth').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise<UpdatesView>(() => {}));
+    vi.spyOn(api, 'projects').mockResolvedValue({
+      roots: [],
+      projects: [{ name: 'alpha', workdir: '/alpha', pool: { state: 'tagged', name: 'pool-a' }, placement: { kind: 'unmeasurable' } }],
+    });
+    const store = makeStore();
+    const Host = ({ withScreen }: { withScreen: boolean }): ReactNode => (
+      <FleetChromeProvider store={store}>
+        {withScreen && <FleetScreen store={store} />}
+        <FleetFlows />
+      </FleetChromeProvider>
+    );
+    const { rerender } = render(<Host withScreen />);
+    act(() => {
+      store.setState({ conn: 'open', ...seed });
+    });
+    await open();
+    expect(isOpen()).toBeInTheDocument();
+    rerender(<Host withScreen={false} />);
+    expect(screen.queryByRole('button', { name: 'New session' })).not.toBeInTheDocument();
+    expect(isOpen()).toBeInTheDocument();
+  });
+
   it('the actions sheet follows its session out of the list', async () => {
     vi.spyOn(api, 'fleetHealth').mockReturnValue(new Promise(() => {}));
     vi.spyOn(api, 'updates').mockReturnValue(new Promise<UpdatesView>(() => {}));
@@ -110,6 +181,34 @@ describe('the fleet chrome (D-5468)', () => {
       store.setState({ sessions: [session({ id: 'b', project: 'beta', workspace: 'brave-elm' })] });
     });
     await waitFor(() => expect(screen.queryByRole('button', { name: /restart session/i })).not.toBeInTheDocument());
+  });
+
+  it("a fleet screen given a store that is not the host's throws rather than read one fleet and act on another", () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(api, 'fleetHealth').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise<UpdatesView>(() => {}));
+    expect(() =>
+      render(
+        <FleetChromeProvider store={makeStore()}>
+          <FleetScreen store={makeStore()} />
+        </FleetChromeProvider>,
+      ),
+    ).toThrow('FleetScreen store is not the FleetChrome store');
+  });
+
+  it('a fleet screen with no store prop reads the host\'s store', () => {
+    vi.spyOn(api, 'fleetHealth').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise<UpdatesView>(() => {}));
+    const store = makeStore();
+    render(
+      <FleetChromeProvider store={store}>
+        <FleetScreen />
+      </FleetChromeProvider>,
+    );
+    act(() => {
+      store.setState({ conn: 'open', sessions: [session()] });
+    });
+    expect(screen.getByRole('button', { name: /actions for quiet-mesa/i })).toBeInTheDocument();
   });
 
   it('a fleet screen without the host throws FleetChrome is not mounted', () => {

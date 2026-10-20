@@ -29,12 +29,12 @@ import { navigate } from '../lib/router';
 import { ackAll, acksSnapshot, FEED_ACK_KEY, isUnseenAt, prune, subscribeAcks } from '../lib/seen';
 import { raisesUnread } from '../lib/feed';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
-import { useFleetStore, type FleetStore } from '../stores/fleet';
+import type { FleetStore } from '../stores/fleet';
 import { CLASSES, type ModelClass } from '../../../shared/models';
 import '../fleet/fleet.css';
 
 export function FleetScreen({
-  store = useFleetStore,
+  store: storeProp,
   onOpen,
   onNewSession,
   selectedId = null,
@@ -42,7 +42,8 @@ export function FleetScreen({
   epoch,
   observedEpoch,
 }: {
-  store?: FleetStore; // injectable for tests
+  /** Injectable for tests; it must be the host's own (`FleetChromeProvider store=`), which it defaults to. */
+  store?: FleetStore;
   onOpen?: (id: string) => void;
   onNewSession?: () => void;
   selectedId?: string | null; // the open session, highlighted in the desktop sidebar
@@ -80,6 +81,14 @@ export function FleetScreen({
    *  "not stale"; it still never means "agrees". */
   observedEpoch?: number | null;
 }): ReactNode {
+  // The polls and the sheets' open state live above this screen (D-5468): in W2 a fleet list is a skin's part and
+  // remounts on a skin switch, so an open sheet must outlive it, and a second reader must not start a second poll.
+  // `FleetChromeProvider` holds them once for the shell and `FleetFlows` renders the sheets beside it (`app.tsx`).
+  // The list reads the SAME store the sheets and planes act on: a different one would show one fleet and act on
+  // another, silently, so it throws instead.
+  const chrome = useFleetChrome();
+  if (storeProp !== undefined && storeProp !== chrome.store) throw new Error('FleetScreen store is not the FleetChrome store');
+  const store = storeProp ?? chrome.store;
   const useStore = store;
   const sessions = useStore((s) => s.sessions);
   const conn = useStore((s) => s.conn);
@@ -115,10 +124,6 @@ export function FleetScreen({
   }, [sessions]);
 
   const open = onOpen ?? ((id: string) => navigate(`/s/${encodeURIComponent(id)}`));
-  // The polls and the sheets' open state live above this screen (D-5468): in W2 a fleet list is a skin's part and
-  // remounts on a skin switch, so an open sheet must outlive it, and a second reader must not start a second poll.
-  // `FleetChromeProvider` holds them once for the shell and `FleetFlows` renders the sheets beside it (`app.tsx`).
-  const chrome = useFleetChrome();
   const flows = useFleetFlows();
   const newSession = onNewSession ?? flows.openNewSession;
   // The `/api/projects` plane — rows, class, placement readers, the `+`'s
