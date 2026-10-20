@@ -12,7 +12,7 @@
 //   3. the coord frame's `MarkerState` bytes, and the two spellings of `mail-disabled`.
 // FIXTURE HOMES ONLY: a scripted ccd and fake ports answer. Nothing reaches a box, tmux or a live registry.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher, CHILD_RECLAIM_SWEEP_MS } from '../src/watch.js';
@@ -684,6 +684,21 @@ describe('watch.ts — sweepChildReclaim: a raised switch stops the lane and dro
     await f.watcher.sweepChildReclaim(await f.records(), f.names());
     expect(f.requests.map((q) => q.sessionId)).toEqual(l === 'present' ? [] : ['demo-a']);
   });
+  it('a raised switch drops the sightings: absent, present, absent asks nothing on the third pass, and the fourth (a second fresh sighting) asks', async () => {
+    const f = watchRig();
+    finishedChild(f);
+    const pass = async (): Promise<string[]> => {
+      await f.watcher.sweepChildReclaim(await f.records(), f.names());
+      f.next();
+      return f.requests.map((q) => q.sessionId);
+    };
+    expect(await pass()).toEqual([]);
+    f.touch(RECLAIM_PAUSE_MARKER);
+    expect(await pass()).toEqual([]);
+    rmSync(path.join(f.reg, RECLAIM_PAUSE_MARKER));
+    expect(await pass()).toEqual([]);
+    expect(await pass()).toEqual(['demo-a']);
+  });
 });
 
 describe('watch.ts — archivedExpiryPass: a raised switch stops the expiry lane before it asks anything', () => {
@@ -733,5 +748,21 @@ describe('both spellings of mail-disabled agree: rundefs.ts\'s export and watch.
     const stall = vi.spyOn(f.watcher as unknown as { stallResolveNow: () => unknown }, 'stallResolveNow');
     await f.watcher.sweepMail();
     expect(stall.mock.calls.length > 0).toBe(!listed);
+  });
+
+  it('fail-shut on both readers: a null listing stops the mail lane before the gate, and dispatchRun refuses with no ccd call', async () => {
+    const f = watchRig({ io: (b, reg) => ({ ...b, readdir: async (p, t, s) => (p === reg ? null : b.readdir(p, t, s)) }) });
+    (f.watcher as unknown as { primed: boolean }).primed = true;
+    const stall = vi.spyOn(f.watcher as unknown as { stallResolveNow: () => unknown }, 'stallResolveNow');
+    await f.watcher.sweepMail();
+    expect(stall.mock.calls.length).toBe(0);
+    const opened = f.coord.openRun({ program: 'pin-mail-null', title: 'pin-mail-null', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+    if (!('id' in opened)) throw new Error('openRun refused');
+    const ccd: string[][] = [];
+    const deps = { coord: f.coord, io: { readdir: async () => null },
+      cfg: { registryDir: f.reg }, runCcd: async (a: string[]) => { ccd.push(a); return { ok: false }; },
+      tmux: {}, queue: {} } as unknown as DispatchRunDeps;
+    expect(await dispatchRun(deps, opened.id, 'do the thing', undefined)).toEqual({ ok: false, kind: 'refused', code: 'paused' });
+    expect(ccd).toEqual([]);
   });
 });
