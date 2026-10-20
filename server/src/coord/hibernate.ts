@@ -1,4 +1,5 @@
 import { PRESENCE_OPEN_TTL_MS, type FleetSession } from '../../../shared/api.js';
+import { HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER } from '../../../shared/switches.js';
 
 /**
  * HIBERNATE LONG-IDLE SESSIONS (D-5242, `hibernate-long-idle-sessions`, spec §5.11): the server's pure verdict.
@@ -95,8 +96,8 @@ export const HIBERNATE_SWEEP_ACTOR = 'sweep:hibernate';
  *  - `hibernate-live`: arms the act (Task 17b): a `hibernate` verdict then composes `ccd hibernate`;
  *  - `hibernate-after-hours`: N in whole hours (1 to 168), read only when listed; anything else is the default;
  *  - `<id>.no-hibernate`: that session is never put to sleep (`opted-out`). */
-export const HIBERNATE_DISABLED_MARKER = 'hibernate-disabled';
-export const HIBERNATE_LIVE_MARKER = 'hibernate-live';
+export { HIBERNATE_DISABLED_MARKER };
+export { HIBERNATE_LIVE_MARKER };
 export const HIBERNATE_AFTER_HOURS_FILE = 'hibernate-after-hours';
 export const NO_HIBERNATE_SUFFIX = 'no-hibernate';
 
