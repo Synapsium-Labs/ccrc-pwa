@@ -134,6 +134,17 @@ describe('ccd\'s four verb lists are one set (D-6051, ARCH-23)', () => {
     expect(arms()).toEqual([...new Set(labels.flat())].sort());
   });
 
+  it('every line of the block is an arm the label reader saw, the one catch-all, a comment or blank', () => {
+    // Without this row an arm the reader cannot see (other indentation, a quoted label) would never be dispatched,
+    // so it could carry a verb past every set below unchecked.
+    const body = block.split('\n').slice(1, -1);
+    const unread = body.filter((l) => !/^ {2}[a-z][a-z0-9|-]*\)/.test(l) && !/^ {2}\*\)/.test(l)
+      && !/^\s*(#.*)?$/.test(l));
+    expect(unread, 'block lines that are neither a read arm nor the catch-all').toEqual([]);
+    expect(body.filter((l) => /^ {2}\*\)/.test(l)), 'exactly one catch-all').toHaveLength(1);
+    expect(body.filter((l) => /^ {2}[a-z][a-z0-9|-]*\)/.test(l))).toHaveLength(labels.length);
+  });
+
   it('each arm reaches the command its first label names, and an alias reaches the same one', () => {
     const wrong = labels.flatMap((ls) => ls.map((l) => [l, reached.get(l), `cmd_${ls[0]!.replace(/-/g, '_')}`] as const))
       .filter(([, got, want]) => got !== want).map(([l, got, want]) => `${l}: reached ${got}, wants ${want}`);

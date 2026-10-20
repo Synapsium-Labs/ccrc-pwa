@@ -19,6 +19,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -230,7 +231,15 @@ describe('every python heredoc a shipped shell script holds parses and compiles 
       'print(json.dumps(out))',
     ].join('\n');
     const found = all();
-    const r = spawnSync(REAL_PYTHON3, ['-c', prog], { input: JSON.stringify(found), encoding: 'utf8', timeout: 60_000 });
+    // A contained spawn like every other ccd-adjacent one: a temp HOME and no inherited environment beyond PATH.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-heredoc-parse-'));
+    let r;
+    try {
+      r = spawnSync(REAL_PYTHON3, ['-I', '-c', prog], {
+        input: JSON.stringify(found), encoding: 'utf8', timeout: 60_000,
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home },
+      });
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
     expect(r.status, r.stderr).toBe(0);
     expect(JSON.parse(r.stdout) as string[]).toEqual([]);
   });

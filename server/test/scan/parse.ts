@@ -14,8 +14,7 @@
  * source-pin ratchet (`single-definition.test.ts`, the ARCH-40 describe) read, so neither imports the parser.
  * KNOWN WIDTH: a file that does not parse yields what the parser recovered (no throw); a computed member name, an
  * object-literal method and a function bound through `as`, a call or parentheses are not symbols; an alias exported
- * by a later `export { X }` is not an exported type alias; `require(…)` calls are not import edges. String
- * pieces (`stringPieces`) are cooked text, and a template nested inside a `${…}` yields pieces of its own.
+ * by a later `export { X }` is not an exported type alias; `require(…)` calls are not import edges.
  */
 import { readFileSync } from 'node:fs';
 import ts from 'typescript-api';
@@ -294,7 +293,8 @@ export interface StringPiece {
   line: number;
 }
 
-/** Every string piece in a source text, in source order (D-6051: the ccd stub scanner reads the bash a test holds). */
+/** Every string piece in a source text, in source order (D-6051: the ccd stub scanner reads the bash a test holds).
+ *  KNOWN WIDTH: pieces are cooked text, and a template nested inside a `${…}` yields pieces of its own. */
 export function stringPieces(text: string, fileName = 'source.ts'): StringPiece[] {
   const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
   const out: StringPiece[] = [];

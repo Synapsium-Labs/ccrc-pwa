@@ -1,12 +1,14 @@
 /**
  * D-6051 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0k; ARCH-23 (#527)). One
- * representative call per `CCD_ARGV` entry, moved here unchanged from `whitelist-subset.test.ts` so a second suite
- * can read the verb each entry sends (`ccd-verb-sets.test.ts`) without a second table to drift.
+ * representative call per `CCD_ARGV` entry, so `ccd-verb-sets.test.ts` can read the verb each entry sends.
+ * D-6053: for now a copy of `whitelist-subset.test.ts`'s `SAMPLES`, in neutral fixture vocabulary, because an open
+ * PR rewrites that table's lines; once it lands, `whitelist-subset.test.ts` imports this table and its own goes.
+ * Both are typed total over `CCD_ARGV`, so a new entry cannot reach one and miss the other.
  */
 import type { CCD_ARGV } from '../src/ccdargv.js';
 
-/** One representative call per entry. Every entry MUST appear: `whitelist-subset.test.ts`'s exhaustive
- *  assertion is what stops a new route hiding behind an untested one. */
+/** One representative call per entry. Every entry MUST appear: the `Record` type is total over `CCD_ARGV`, so a
+ *  new entry with no sample fails `tsc`. */
 // `unknown[]`, not `string[]`, since wave 6: `wsArchive` and its four siblings
 // take an `ActorFlags | null` argument, so a sample is no longer all-strings.
 // Every call site casts through `unknown[]`; this widens the
@@ -21,11 +23,11 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   ensure: ['demo-quiet-basin'],
   stopId: ['demo-quiet-basin', 'pwa'],
   stopPair: ['claude', 'demo', 'pwa'],
-  forget: ['claude-corp-demo'],
+  forget: ['claude-acme-demo'],
   // D-5242: the dec rides after the one positional, as an unattended lane sends it; the bare `['hibernate']` grant
   // admits it with no widening.
   hibernate: ['demo-quiet-basin', { surface: 'agent', actor: 'sweep:hibernate', reason: null }],
-  swap: ['demo-quiet-basin', 'claude2'],
+  swap: ['demo-quiet-basin', 'claude9'],
   /** THE DELIBERATE CROSSING (account pools, spec §5.7). Three separate
    *  ENTRIES rather than an option on the three above — `start`/`enable`'s own
    *  rule, for its reason: a route picks the ENTRY, so both spellings are
@@ -33,7 +35,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   swapCross: ['demo-quiet-basin', 'claude-b'],
   // D-5240: the operator's consent to lose the turn, LEADING like `--cross-pool`; the bare `['swap']` prefix grant
   // admits both with no widening.
-  swapInterrupt: ['demo-quiet-basin', 'claude2'],
+  swapInterrupt: ['demo-quiet-basin', 'claude9'],
   swapCrossInterrupt: ['demo-quiet-basin', 'claude-b'],
   startCross: ['claude', 'demo'],
   enableCross: ['claude', 'demo'],
@@ -43,7 +45,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // existing prefix with no widening — tokens after the prefix are
   // unconstrained, the same rule that carries `stop --surface`. It CARRIES A
   // DEC, for `wsHold`'s reason two entries down: a bare sample would leave
-  // layer 2 proving only the unflagged shape reachable, which is not the shape
+  // `whitelist-subset.test.ts`'s layer 2 proving only the unflagged shape reachable, which is not the shape
   // the dispatch path sends on a caps-advertising box.
   //
   // AND THIS FILE STILL CANNOT BE THE PLACE THAT VALIDATES IT (D-410): trailing
@@ -54,7 +56,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // tokens reach it.
   // AND IT CARRIES A CHILD (child-workspace reclamation wave 1), for the dec's
   // reason: the shape the dispatch path sends to a box advertising
-  // `child-argv-v1` is the one layer 2 must prove crosses the bare grant.
+  // `child-argv-v1` is the one `whitelist-subset.test.ts`'s layer 2 must prove crosses the bare grant.
   wsAddWorker: ['demo', { surface: 'agent', actor: 'run:7 dispatch', reason: null }, null, 7],
   prStateSession: ['demo-quiet-basin'],
   prStateProject: ['demo'],
@@ -64,23 +66,23 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   wsAudit: ['demo-quiet-basin'],
   wsReap: ['a'.repeat(64), 'demo-quiet-basin'],
   // CHILD RECLAMATION wave 3. The audit half rides wsAudit's grant; the verb
-  // carries a dec, so layer 2 proves the FLAGGED shape crosses the new grant.
+  // carries a dec, so `whitelist-subset.test.ts`'s layer 2 proves the FLAGGED shape crosses the new grant.
   wsReclaimAudit: ['demo-quiet-basin', true],
   wsReclaim: ['a'.repeat(64), 7, 'demo-quiet-basin', false,
               { surface: 'agent', actor: 'run:7 reclaim close', reason: null }],
-  // WORKSPACE LIFECYCLE wave 3: the expiry's audit rides wsAudit's grant; the verb carries a dec, so layer 2 proves
-  // the FLAGGED shape crosses its own grant.
+  // WORKSPACE LIFECYCLE wave 3: the expiry's audit rides wsAudit's grant; the verb carries a dec, so
+  // `whitelist-subset.test.ts`'s layer 2 proves the FLAGGED shape crosses its own grant.
   wsExpireAudit: ['demo-quiet-dune'],
   wsExpire: ['a'.repeat(64), 'demo-quiet-dune', { surface: 'agent', actor: 'expiry sweep', reason: null }],
-  // CHILD RECLAMATION wave 7: the collector's audit rides wsAudit's grant; the verb carries a dec, so layer 2 proves
-  // the FLAGGED shape crosses its own grant.
+  // CHILD RECLAMATION wave 7: the collector's audit rides wsAudit's grant; the verb carries a dec, so
+  // `whitelist-subset.test.ts`'s layer 2 proves the FLAGGED shape crosses its own grant.
   wsCollectAudit: ['demo-quiet-dune'],
   wsCollect: ['a'.repeat(64), 'demo-quiet-dune', { surface: 'agent', actor: 'collect sweep', reason: null }],
   wsAttic: ['demo-quiet-basin'],
-  // The one sample that carries a dec, so layer 2's `isExecAllowed` check
+  // The one sample that carries a dec, so `whitelist-subset.test.ts`'s layer 2's `isExecAllowed` check
   // actually proves the FLAGGED shape is reachable under the granted
   // `['ws-hold','--session']` prefix rather than only the bare one.
-  wsHold: ['demo-quiet-basin', 'program:agent-evals wave:1/4',
+  wsHold: ['demo-quiet-basin', 'program:prog-j wave:1/4',
            { surface: 'pwa', actor: 'device:iPhone', reason: null }],
   wsRelease: ['demo-quiet-basin', null],
   wsRename: ['demo-quiet-basin', 'ws/brainstorm-helix-and-slide-notes', null],
@@ -94,7 +96,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   projectPoolSet: ['demo', 'pool-a'],
   projectPoolClear: ['demo'],
   // Routing slice 1: the record's one writer besides ccd. The sample carries
-  // a real field=value so layer 2 proves the flagged shape is reachable under
+  // a real field=value so `whitelist-subset.test.ts`'s layer 2 proves the flagged shape is reachable under
   // the granted `['route','--session']` prefix.
   route: ['demo-quiet-basin', 'effort', 'high'],
   // The SAME `['route','--session']` grant, second builder — `wsAdd`/
