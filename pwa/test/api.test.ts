@@ -1266,7 +1266,7 @@ describe('the update plane client (W3 Task 5)', () => {
     // The walk reached the tree: a scan over zero files would pass vacuously.
     expect(files).toContain(path.join('lib', 'api.ts'));
     expect(files).toContain(path.join('fleet', 'UpdateBanner.tsx'));
-    expect(files).toContain(path.join('screens', 'SettingsScreen.tsx'));
+    expect(files).toContain(path.join('screens', 'settings', 'UpdatesSection.tsx'));
     const hits = files.filter((f) => {
       const text = readFileSync(path.join(root, f), 'utf8');
       return text.includes('MOVE_DISABLED_TEXT') || text.includes('lands with the next release (W4)');

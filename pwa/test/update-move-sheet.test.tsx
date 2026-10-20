@@ -514,10 +514,10 @@ describe('one sheet for every move (D-3389)', () => {
   it('UpdateBanner and SettingsScreen import no QuickConfirm — both open UpdateMoveSheet', () => {
     for (const [file, text] of [
       ['UpdateBanner.tsx', src('fleet', 'UpdateBanner.tsx')],
-      ['SettingsScreen.tsx', src('screens', 'SettingsScreen.tsx')],
+      ['UpdatesSection.tsx', src('screens', 'settings', 'UpdatesSection.tsx')],
     ] as const) {
       expect(text, file).not.toMatch(/components\/QuickConfirm/);
-      expect(text, file).toMatch(/from '(\.\/|\.\.\/fleet\/)UpdateMoveSheet'/);
+      expect(text, file).toMatch(/from '(\.\/|(\.\.\/)+fleet\/)UpdateMoveSheet'/);
     }
   });
 

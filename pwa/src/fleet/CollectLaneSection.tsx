@@ -1,6 +1,7 @@
 // The Settings screen's Temp root collector section (path-identity spec 2026-10-12 §5.7; child-reclamation wave 10).
-// It shows what arms the temp-root collector's deletion, and the one choice that moves it. It reads its OWN endpoint,
-// GET /api/coord/collect-lane, through `useCollectLaneView`, and is mounted after Stall watch.
+// It shows what arms the temp-root collector's deletion, and the one choice that moves it. Its endpoint,
+// GET /api/coord/collect-lane, is read through `useCollectLaneView` by the Settings frame (`SettingsDataProvider`,
+// D-5504) and handed in as `poll`; it is mounted after Stall watch.
 //
 // Five rules this file keeps, each pinned in collect-lane-section.test.tsx:
 //   * NOT AVAILABLE WINS. A 501 not-configured, or the 404 not-found an older server answers, replaces the whole
@@ -42,7 +43,7 @@ import {
   COLLECT_PAUSE_TEXT, COLLECT_REFUSAL_TEXT, COLLECT_SECTION_TEXT, collectConfirmLines, collectCountLine,
   collectNowLines, collectOffNote, collectOffersReconfirm, collectUnmeasurableLines,
 } from './collectLaneWords';
-import { asCollectLaneView, collectLanePostRefusal, useCollectLaneView, type CollectLanePoll } from './useCollectLaneView';
+import { asCollectLaneView, collectLanePostRefusal, type CollectLanePoll } from './useCollectLaneView';
 import './fleet.css';
 
 // This file has no words of its own. Every line it renders, the legend, the radio labels, the read and write lines
@@ -58,20 +59,19 @@ type CleanupPause = (state: 'on' | 'off') => Promise<void>;
 export function CollectLaneSection({
   store = useFleetStore,
   childReclaimPause = api.childReclaimPause,
-  pollMs,
+  poll,
 }: {
   store?: typeof useFleetStore;
   /** Injectable so a test drives "Pause all cleanup" without a server: ChildReclaimBanner's seam. */
   childReclaimPause?: CleanupPause;
-  /** The read's cadence: `useCollectLaneView`'s default when absent, its injected mode at `<= 0`. */
-  pollMs?: number;
-} = {}): ReactNode {
+  /** The Settings frame's one read of the switch (`settings/SettingsDataProvider.tsx`, D-5504). */
+  poll: CollectLanePoll;
+}): ReactNode {
   const titleId = useId();
-  const poll = useCollectLaneView(pollMs);
   const { view, failure } = poll;
   return (
     <section className="settings-section" aria-labelledby={titleId}>
-      <h2 id={titleId} className="settings-section-title">{COLLECT_SECTION_TEXT.title}</h2>
+      <h3 id={titleId} className="settings-section-title">{COLLECT_SECTION_TEXT.title}</h3>
       {failure !== null && failure.kind === 'not-configured' ? (
         <p className="settings-note">{COLLECT_SECTION_TEXT.notAvailable}</p>
       ) : failure !== null && failure.kind === 'state-unmeasurable' ? (

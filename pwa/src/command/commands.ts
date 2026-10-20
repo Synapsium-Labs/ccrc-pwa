@@ -17,11 +17,23 @@ import type { Command, CommandContext } from './registry';
  *  than places visited every day. */
 const CHORDS: Readonly<Record<string, string>> = { fleet: 'f', inbox: 'i', runs: 'r', accounts: 'a', settings: 's' };
 
+/** The top row whose page a path sits under (`/settings` for `/settings/updates`), or null. */
+function parentOf(path: string): (typeof ROUTES)[number] | null {
+  return ROUTES.find((p) => p.top && p.path !== null && p.path !== '/' && path.startsWith(`${p.path}/`)) ?? null;
+}
+
 /** The screens a "Go to" command opens: the route table's top rows (D-5466),
- *  each with its `g` chord's second key. `command-registry.test.ts` holds
- *  every path to a route `app.tsx` routes. */
-export const GO_TO: readonly { id: string; title: string; path: string; chord?: string }[] = ROUTES.flatMap((r) =>
-  r.top && r.path !== null ? [{ id: `go-${r.id}`, title: `Go to ${r.title}`, path: r.path, chord: CHORDS[r.id] }] : []);
+ *  each with its `g` chord's second key, then each page under one that has a
+ *  path of its own, titled under its parent ("Go to Settings › Updates",
+ *  D-5504). A row with no path (a session, the digest, `settings-section`)
+ *  is never offered. `command-registry.test.ts` holds every path to a route
+ *  `app.tsx` routes. */
+export const GO_TO: readonly { id: string; title: string; path: string; chord?: string }[] = ROUTES.flatMap((r) => {
+  if (r.path === null) return [];
+  if (r.top) return [{ id: `go-${r.id}`, title: `Go to ${r.title}`, path: r.path, chord: CHORDS[r.id] }];
+  const parent = parentOf(r.path);
+  return parent === null ? [] : [{ id: `go-${r.id}`, title: `Go to ${parent.title} › ${r.title}`, path: r.path }];
+});
 
 /** The fleet in the order the fleet screen draws it: its cards in
  *  `groupFleet`'s order (which sorts with `sortFleet`), and each card's rows
