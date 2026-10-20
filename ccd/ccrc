@@ -67,6 +67,13 @@
 # and stays, hand-written.
 set -uo pipefail
 
+# THE APPLICATION'S OWN ENTRY TIME, FIRST (auto-advance Codex arm, plan W2 Task 11). `SECONDS` counts from the start of
+# this shell, and `ccrc models refresh` is one process, so this is where the hourly unit's 300 s (`MODELS_INVOKE_CEILING_S`,
+# below) begins as far as ccrc can tell: BEFORE the first subprocess the platform layer or anything after it forks. The
+# advance step reads it to know how much of the invocation is left once every lane's refresh is done. Never reset
+# `SECONDS` in this file: a sourced test fixture has its own entry time, taken the same way when it sources this file.
+MODELS_INVOKE_T0=$SECONDS
+
 # ── THE PLATFORM LAYER — one file, two userlands ────────────────────────
 # ccd was written against GNU/Linux and says so out loud: `_reg_set`'s header
 # (below) names `mv -T`, `stat -c`, `readlink -f` and `df -P` as assumptions
@@ -1393,24 +1400,51 @@ _models_answer() {
 #   inherits the fd and holds the lock for its whole life. `_models_answer_locked`'s node inherits it and exits
 #   when its one op ends; `_models_node_locked` closes it before node and its bound's watcher start (below). Never
 #   start a tier, a canary or anything else that outlives the call while it is held.
-# - THE WAIT: `CCRC_MODELS_LOCK_S` whole seconds, default 20, falling back to 20 on anything but 1 to 300.
+# - THE WAIT: `CCRC_MODELS_LOCK_S` whole seconds, default 20, falling back to 20 on anything but 1 to 300 - read by
+#   `_models_lock_secs`, the ONE reading, which the lock and the advance step's reserve share.
 # - THE ORDER: `_codex_lock` (the tier lock) may be held when this is taken — `ccrc doctor --fix` re-renders a lane
 #   inside its tier lock, the one sanctioned nesting — and the reverse never happens: none of these four
 #   functions takes `_codex_lock` (`ccrc-models-lock.test.ts` scans their bodies).
 # - NO `flock` (D-5201): a hand verb runs unserialised, as it did before this lock existed. The
-#   automatic advance's commit (W2) refuses instead, because it alone acts on a re-check.
+#   automatic advance (W2) refuses instead, because it alone acts on a re-check: see AUTOMATIC CONTEXT.
 # - NO `mkdir`, BEFORE THE FIRST LOCK (D-5205): where `~/.ccrc/locks` does not exist
 #   yet and `mkdir` is not on PATH, the same rc 0 with nothing held. `ccrc doctor --fix` re-renders lane.json on
 #   the box doctor most needs to work on, one whose PATH has lost coreutils (the CCRC_HERE note below), and a lock
 #   it cannot make must not cost it that cure. Once the directory exists no `mkdir` is needed, and the lock is
 #   taken once `chmod 700` has run on it (a box with neither, past its first lock, refuses `lock-unwritable`). As
 #   with no `flock`, the automatic advance (W2) must not run where this degrades: its step checks for both before
-#   its first locked call.
+#   its first locked call, and the lock itself refuses `lock-unwritable` there in the automatic context.
+# - AUTOMATIC CONTEXT (plan W2 Task 11): the hourly advance step sets two non-exported locals, MODELS_AUTO_DEADLINE (the
+#   run's one advance deadline, in `$SECONDS` terms) and MODELS_AUTO_TAIL_S (what it still owes after the writer:
+#   31 for the backfill, 44 for a commit), which this file and `_models_node_locked` read by bash's dynamic scope. No
+#   hand caller sets them, and a value inherited from the environment is discarded where they are first declared
+#   (below), so they are the step's own. In that context ONLY, every external stage is a strict deadline
+#   (`_plat_timeout_strict`: no escalating deadline, no program): the mkdir or chmod that prepares the directory, and
+#   the `flock` program (the shell still opens and holds the fd, a child only takes the lock on it); each stage is
+#   re-admitted before it starts, for its own worst case plus everything that must still fit after it; and a lock
+#   that cannot be taken refuses, never degrades to "nothing held". An expired budget refuses `budget-deferred`.
 _models_lock_path() { printf '%s' "$HOME/.ccrc/locks/models-$1.lock"; }
+
+# THE AUTOMATIC CONTEXT IS THE ADVANCE STEP'S OWN, NEVER THE ENVIRONMENT'S: an inherited (exported) value of either
+# name would turn a hand verb into a strict-deadline, deadline-admitted call, so it is discarded here, where the names
+# are first declared, and the step sets them as non-exported locals (see AUTOMATIC CONTEXT above).
+unset MODELS_AUTO_DEADLINE MODELS_AUTO_TAIL_S
+
+# The lane-files lock's wait in seconds: `CCRC_MODELS_LOCK_S`, a whole number from 1 to 300, else 20. `_models_lock`
+# waits this long, and the advance step reserves it for each locked call: ONE reading for both (plan W2 Task 11).
+_models_lock_secs() {
+  local s="${CCRC_MODELS_LOCK_S:-20}"
+  case "$s" in ''|*[!0-9]*|????*) s=20 ;; esac
+  s=$(( 10#$s ))
+  { [ "$s" -ge 1 ] && [ "$s" -le 300 ]; } || s=20
+  printf '%s' "$s"
+}
 
 MODELS_LOCK_FD=''; MODELS_LOCK_ID=''; MODELS_LOCK_ERR=''; MODELS_LOCK_WHY=''
 _models_lock() {   # <id> -> rc 0 held, or nothing held (FD empty); rc 1 with MODELS_LOCK_ERR/WHY; rc 2 a bad id
-  local id="${1:-}" p d fd um bound why=''
+  local id="${1:-}" p d fd um bound why='' auto=0 tail=44 frc=0
+  [ -n "${MODELS_AUTO_DEADLINE:-}" ] && auto=1
+  case "${MODELS_AUTO_TAIL_S:-}" in ''|*[!0-9]*|????*) tail=44 ;; *) tail=$(( 10#$MODELS_AUTO_TAIL_S )) ;; esac
   MODELS_LOCK_ERR=''; MODELS_LOCK_WHY=''
   if ! _codex_shape 2>/dev/null; then
     MODELS_LOCK_ERR=install-incomplete
@@ -1426,16 +1460,41 @@ _models_lock() {   # <id> -> rc 0 held, or nothing held (FD empty); rc 1 with MO
     [ "${MODELS_LOCK_ID:-}" = "$id" ] && return 0
     _models_unlock
   fi
-  command -v flock >/dev/null 2>&1 || return 0
   p="$(_models_lock_path "$id")"; d="${p%/*}"
-  [ -d "$d" ] || command -v mkdir >/dev/null 2>&1 || return 0
+  if [ "$auto" -eq 1 ]; then
+    # The automatic advance never runs unserialised: a box that cannot lock refuses, it does not degrade.
+    if ! command -v flock >/dev/null 2>&1 || { [ ! -d "$d" ] && ! command -v mkdir >/dev/null 2>&1; }; then
+      MODELS_LOCK_ERR=lock-unwritable
+      MODELS_LOCK_WHY="the lane-files lock cannot be taken here (no flock on PATH, or no lock directory yet and no mkdir to make one), so the automatic advance of lane $id does not run unserialised. Nothing was written."
+      return 1
+    fi
+  else
+    command -v flock >/dev/null 2>&1 || return 0
+    [ -d "$d" ] || command -v mkdir >/dev/null 2>&1 || return 0
+  fi
+  bound="$(_models_lock_secs)"
+  # The whole transaction still owed, from the metadata stage on: that stage (P), the flock process (K), the writer
+  # (W) and what follows the writer (the tail). A budget that cannot carry it refuses before anything is touched.
+  if [ "$auto" -eq 1 ] && ! _models_advance_admit "$MODELS_AUTO_DEADLINE" \
+       $(( (MODELS_NODE_BOUND_S + MODELS_KILL_GRACE_MAX_S) + (bound + MODELS_KILL_GRACE_MAX_S) + (MODELS_NODE_BOUND_S + MODELS_KILL_GRACE_MAX_S) + tail )); then
+    MODELS_LOCK_ERR=budget-deferred
+    MODELS_LOCK_WHY="the run's advance budget cannot carry lane $id's locked change and what follows it. Nothing was written."
+    return 1
+  fi
   um="$(umask)"; umask 077
   # The directory: never a symlink, and 0700, made so or chmod-ed so.
   if [ -L "$d" ]; then
     why="$d is a symlink, and the lane-files lock never follows one"
   elif [ -d "$d" ]; then
-    chmod -- 700 "$d" 2>/dev/null \
-      || why="$d could not be made 0700 (chmod failed: another account owns it, or chmod is not on PATH)"
+    if [ "$auto" -eq 1 ]; then
+      _plat_timeout_strict "$MODELS_NODE_BOUND_S" chmod -- 700 "$d" >/dev/null 2>&1 \
+        || why="$d could not be made 0700 (chmod failed or outlived its bound: another account owns it, or chmod is not on PATH)"
+    else
+      chmod -- 700 "$d" 2>/dev/null \
+        || why="$d could not be made 0700 (chmod failed: another account owns it, or chmod is not on PATH)"
+    fi
+  elif [ "$auto" -eq 1 ]; then
+    _plat_timeout_strict "$MODELS_NODE_BOUND_S" mkdir -p -- "$d" >/dev/null 2>&1 || why="$d could not be made"
   elif ! mkdir -p -- "$d" 2>/dev/null; then
     why="$d could not be made"
   fi
@@ -1453,11 +1512,22 @@ _models_lock() {   # <id> -> rc 0 held, or nothing held (FD empty); rc 1 with MO
     MODELS_LOCK_WHY="$why, so this change to lane $id's model files cannot be serialised against another writer. Fix it, then re-run. Nothing was written."
     return 1
   fi
-  bound="${CCRC_MODELS_LOCK_S:-20}"
-  case "$bound" in ''|*[!0-9]*|????*) bound=20 ;; esac
-  bound=$(( 10#$bound ))
-  { [ "$bound" -ge 1 ] && [ "$bound" -le 300 ]; } || bound=20
-  if ! flock -w "$bound" "$fd"; then
+  # The flock stage, re-admitted after the metadata stage: its process (K), the writer (W) and the tail.
+  if [ "$auto" -eq 1 ] && ! _models_advance_admit "$MODELS_AUTO_DEADLINE" \
+       $(( (bound + MODELS_KILL_GRACE_MAX_S) + (MODELS_NODE_BOUND_S + MODELS_KILL_GRACE_MAX_S) + tail )); then
+    exec {fd}>&-
+    MODELS_LOCK_ERR=budget-deferred
+    MODELS_LOCK_WHY="the run's advance budget ran out while lane $id's lock directory was being prepared. Nothing was written."
+    return 1
+  fi
+  # AUTOMATIC: the `flock` PROGRAM is a strict deadline of its own (its native `-w` is not trusted to end it); the
+  # fd stays this shell's, and the child only takes the lock on the open file description both share.
+  if [ "$auto" -eq 1 ]; then
+    _plat_timeout_strict "$bound" flock -w "$bound" "$fd" >/dev/null 2>&1 || frc=$?
+  else
+    flock -w "$bound" "$fd" || frc=$?
+  fi
+  if [ "$frc" -ne 0 ]; then
     exec {fd}>&-   # never held and never published, so this is no release
     MODELS_LOCK_ERR=lock-busy
     MODELS_LOCK_WHY="another writer has held lane $id's model files ($p) for ${bound}s without finishing: an hourly refresh, or another 'ccrc models $id' change. Re-run once it has ended. Nothing was written."
@@ -1515,20 +1585,56 @@ _models_answer_locked() {   # <id> <op> [--k v…]
 #   that long after node had answered. The lock is held by this shell, which waits for node. The price: a SIGKILL
 #   to this shell ALONE, or Ctrl-C on a box with no `timeout` (the pure-bash arm: node ignores SIGINT, the shell
 #   dies), frees the lane while node may still write. With `timeout`, Ctrl-C keeps it held; a systemd stop kills node.
+# - AUTOMATIC CONTEXT (see the lock's header): the writer is a STRICT deadline (`_plat_timeout_strict`: no escalating
+#   deadline, no writer), is admitted AGAIN once the lock is held (a delay in the shell glue between the stages cannot
+#   authorise a late write: it needs W, the writer's whole allowance, plus the tail after it), and a lock that cannot be
+#   had is a refusal printed WITHOUT the optional `detail` and without running jq, with a fixed error word: `lock-busy`,
+#   `lock-unwritable`, `install-incomplete`, or `budget-deferred` (the budget cannot carry the transaction). A writer
+#   that outlives its bound answers rc 124 and no body, and that is NOT a proved restore: a strict bound that ends a
+#   writer can leave the pending intent the next locked writer settles.
 MODELS_NODE_BOUND_S=10
+# The one grace CEILING `_plat_timeout` clamps its kill grace to (its `[ "$grace" -gt 8 ] && grace=8`): a strict deadline
+# of `s` seconds can take `s` + this to end a child that ignores TERM. A test holds this equal to that clamp.
+MODELS_KILL_GRACE_MAX_S=8
 _models_node_locked() {   # <id> <op> [--k v…]
-  local id="$1" rc=0 took=1; shift
+  local id="$1" rc=0 took=1 auto=0 tail=44 word; shift
+  [ -n "${MODELS_AUTO_DEADLINE:-}" ] && auto=1
+  case "${MODELS_AUTO_TAIL_S:-}" in ''|*[!0-9]*|????*) tail=44 ;; *) tail=$(( 10#$MODELS_AUTO_TAIL_S )) ;; esac
   [ -n "${MODELS_LOCK_FD:-}" ] && [ "${MODELS_LOCK_ID:-}" = "$id" ] && took=0
   _models_lock "$id"; rc=$?
   if [ "$rc" -ne 0 ]; then
-    printf '{"ok":false,"error":"%s","detail":%s}\n' "$MODELS_LOCK_ERR" "$(printf '%s' "$MODELS_LOCK_WHY" | jq -Rs .)"
+    if [ "$auto" -eq 1 ]; then
+      case "$MODELS_LOCK_ERR" in
+        lock-busy|lock-unwritable|install-incomplete|budget-deferred|bad-account-id) word="$MODELS_LOCK_ERR" ;;
+        *) word=lock-unwritable ;;
+      esac
+      printf '{"ok":false,"error":"%s"}\n' "$word"
+    else
+      printf '{"ok":false,"error":"%s","detail":%s}\n' "$MODELS_LOCK_ERR" "$(printf '%s' "$MODELS_LOCK_WHY" | jq -Rs .)"
+    fi
     [ "$rc" -eq 2 ] && return 2
     return 1
+  fi
+  if [ "$auto" -eq 1 ]; then
+    # Held, or (where the lock degrades) NOT held: the automatic writer needs the lock, and needs the time.
+    if [ -z "${MODELS_LOCK_FD:-}" ]; then
+      printf '{"ok":false,"error":"lock-unwritable"}\n'
+      return 1
+    fi
+    if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" $(( MODELS_NODE_BOUND_S + MODELS_KILL_GRACE_MAX_S + tail )); then
+      [ "$took" -eq 0 ] || _models_unlock
+      printf '{"ok":false,"error":"budget-deferred"}\n'
+      return 1
+    fi
   fi
   rc=0
   (
     [ -z "${MODELS_LOCK_FD:-}" ] || exec {MODELS_LOCK_FD}>&-
-    _plat_timeout "$MODELS_NODE_BOUND_S" node "$CCRC_HERE/../deploy/models-op.mjs" "$@"
+    if [ "$auto" -eq 1 ]; then
+      _plat_timeout_strict "$MODELS_NODE_BOUND_S" node "$CCRC_HERE/../deploy/models-op.mjs" "$@"
+    else
+      _plat_timeout "$MODELS_NODE_BOUND_S" node "$CCRC_HERE/../deploy/models-op.mjs" "$@"
+    fi
   ) || rc=$?
   [ "$took" -eq 0 ] || _models_unlock
   return "$rc"
@@ -10418,7 +10524,7 @@ _models_id_ok() {   # <token> — a usage-level gate, before node
 }
 
 _models_lane_sub() {   # <accountId> <subcommand> [args…]
-  local id="$1" sub="$2" file; shift 2
+  local id="$1" sub="$2" file ans hrc; shift 2
   file="$(_models_roster_path)"
   case "$sub" in
     show)
@@ -10471,7 +10577,12 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
       shift 2
       [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id set-class takes a class and a model, and got \"$1\""
       _models_class_ok "$cls"
-      _models_answer_locked "$id" set-class --file "$file" --id "$id" --class "$cls" --model "$model" || exit $?
+      # The answer is captured and printed whole, so an automatic advance this verb's writer settled first (D-6067) is
+      # reported once, whether or not the verb then succeeded: see `_models_hand_settled`.
+      ans="$(_models_answer_locked "$id" set-class --file "$file" --id "$id" --class "$cls" --model "$model")"; hrc=$?
+      [ -z "$ans" ] || printf '%s\n' "$ans"
+      _models_hand_settled "$id" "$ans"
+      [ "$hrc" -eq 0 ] || exit "$hrc"
       return 0
       ;;
     set-subagent)
@@ -10525,7 +10636,10 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
       shift
       [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id $sub takes one class, and got \"$1\""
       _models_class_ok "$cls"
-      _models_answer_locked "$id" "$sub" --file "$file" --id "$id" --class "$cls" || exit $?
+      ans="$(_models_answer_locked "$id" "$sub" --file "$file" --id "$id" --class "$cls")"; hrc=$?
+      [ -z "$ans" ] || printf '%s\n' "$ans"
+      _models_hand_settled "$id" "$ans"
+      [ "$hrc" -eq 0 ] || exit "$hrc"
       return 0
       ;;
     discovery)
@@ -11019,6 +11133,523 @@ _codex_litellm_ensure() {   # <codex id> -> 0 iff ~/.ccrc/codex/<id>/litellm.yam
   return 1
 }
 
+# ── The advance step (auto-advance spec §2.3; plan W2 Task 11) ───────────
+# One lane's classes, moved to the newest model of their own family, canary first. The refresh arm below runs it as a
+# SECOND PASS, after every lane's probe, materialise and LiteLLM render (D-5213), for each lane whose probe is `codex`
+# and whose three steps all succeeded, inside `$( … )`, so nothing here can end the pass.
+#
+# WHAT IS ENFORCED, AND WHAT IS ONLY ARITHMETIC. The unit that runs this (`ccrc-models.service`) ends at
+# `TimeoutStartSec=300`, and the first pass (probe, materialise, render, restart) is inherited unchanged: it can overrun
+# or be cut short by its own slowness, and nothing here bounds it. This step spends only what is LEFT of the invocation
+# once that pass is done, and it does so by two different things, never confused:
+#   - ADMISSION (`_models_advance_admit`, the clipped deadline, the reserve sums): a LOGICAL test, "do I, my follow-ups
+#     and one second of clock slack still fit". It interrupts nothing.
+#   - EXECUTION: every NEW external stage is a process under `_plat_timeout_strict`: the lock's mkdir/chmod and its
+#     `flock`, the writer (`_models_node_locked`), the plan / check / receipt reads, the identity question, the canary
+#     and the notify hook, and the final output's jq. Without an escalating deadline (`_plat_timeout_capability` is not
+#     `strong`) no automatic work starts at all, not even the backfill. An expired stage is "no answer" and the lane
+#     defers: partial output of an expired read is discarded and never read as success.
+# NOTHING encloses the inherited stop / write / start transaction in a timeout (a timed-out systemctl client would not
+# prove the manager-side job cancelled), and no claim of whole-invocation safety, of a fresh 250-second window or of
+# every lane being reached each hour is made: an unreached class waits for the next hour.
+#
+# THE ORDER, and which lock each step holds:
+#   0. PREREQUISITES, nothing written: `flock` present, `~/.ccrc/locks` there or `mkdir` to make it (RB5, through
+#      `_models_lock_path`, the one spelling of that path), a strong deadline substrate, and the bounded identity read.
+#   1. `advance-plan`, a bounded read (no lock): the lane gate. A lane that is not codex-kind, or whose registry probe
+#      is not `codex` (`advanceIneligible`'s two words, Tasks 8 and 9), ends here, BEFORE any locked call.
+#   2. `advance-backfill`, under the lane-files lock (W1): creates the advance file once, and settles a pending intent a
+#      crash left in one that exists (D-5215). An automatic advance it finds LANDED is reported as a `moved` event
+#      marked `recovered`, with the push a move owes (D-5216). A hand set-class it finds landed (W1's hand intent,
+#      `how: "hand"`) is recorded in the advance file as the hand move it was, and is no event and no push (ruling
+#      RC3). The recovery is read whether or not the answer was ok (D-6067): a refusal after the writer's first
+#      successful write still carries it. When the backfill created the file or settled a move, the plan is read again.
+#   3. READINESS, asked once, no lock (D22): `_codex_tier_ours --bounded-read` for the LiteLLM tier and then the shim,
+#      each 0 (ours and running; the shim's 0 is its proof that the listener answers as THIS lane, D-5210) AND the
+#      check-only `litellm` op answering `changed: false` (D-5196). Anything else waits for the next hour, silently:
+#      4 (starting), 1 (down), 2 (foreign), 3 (cannot ask), a question that did not finish (D-5197).
+#   4. Per candidate, in CLASSES order: a canary only when it, its commit, its receipt and its hooks can all finish
+#      before the run's deadline (`_models_canary_reserve_secs`), OUTSIDE every lock (D21). `not-ready`, `unavailable`
+#      and a canary that did not finish end the lane silently.
+#   5. `advance-commit`, under the lane-files lock: it settles any pending intent, then re-checks the hold, the pin and
+#      the candidate before it moves anything. A refusal (a busy lock, an exhausted budget among them), or no answer at
+#      all (W1 ends a commit's node at MODELS_NODE_BOUND_S, rc 124 with no body), is an `abandoned` event whose `why` is
+#      the refusal word or `no-answer`, and ends the lane (D-5209). Then the pushes the receipt names.
+# The advance step never takes `_codex_lock`, the tier lock, and never holds one lane's lock across a call for another.
+#
+# WITHOUT `flock` the step does nothing (D-5201). PAST the deadline it does nothing either, not even the backfill:
+# `CCRC_MODELS_ADVANCE_BUDGET_S=0` turns the step off.
+
+# ONE invocation's ceiling in seconds, from the entry time (`MODELS_INVOKE_T0`): `deploy/systemd/ccrc-models.service`'s
+# `TimeoutStartSec=300`, held equal to it by `ccrc-models-advance.test.ts`. Not a second configurable budget.
+MODELS_INVOKE_CEILING_S=300
+# A notify hook's own deadline in seconds (`deploy/notify.sh`'s `curl -m 5`), the soft half of its reserve.
+MODELS_HOOK_S=5
+
+# The advance step's time budget for one refresh run, in seconds: `CCRC_MODELS_ADVANCE_BUDGET_S`, a whole number from 0
+# to 3600, else 250. 0 turns the step off. Read ONCE per run, AFTER the first pass; the deadline it makes is clipped to
+# what is left of the invocation (below), so a large value cannot enlarge the unit's 300 seconds.
+_models_advance_budget_secs() {
+  local s="${CCRC_MODELS_ADVANCE_BUDGET_S:-250}"
+  case "$s" in ''|*[!0-9]*|?????*) s=250 ;; esac
+  s=$(( 10#$s ))
+  [ "$s" -le 3600 ] || s=250
+  printf '%s' "$s"
+}
+
+# The canary's own deadline in seconds: `CCRC_MODELS_CANARY_S`, a whole number from 1 to 600, else 90 -
+# `deploy/models-canary.mjs`'s `CANARY_TIMEOUT_S`, held equal by `ccrc-models-advance.test.ts`. LONGER than the shim's
+# 60 s refused-connect wait (D-4933), so a restarting gateway answers the shim's own 502 (not ready) first.
+_models_canary_secs() {
+  local s="${CCRC_MODELS_CANARY_S:-90}"
+  case "$s" in ''|*[!0-9]*|????*) s=90 ;; esac
+  s=$(( 10#$s ))
+  { [ "$s" -ge 1 ] && [ "$s" -le 600 ]; } || s=90
+  printf '%s' "$s"
+}
+
+# THE ADMISSION TEST: 0 iff `SECONDS + cost + 1 <= deadline`. The extra second is the whole-second clock's
+# under-reading, not unspecified subprocess slack. A logical test only: it interrupts nothing. Not a parser: both
+# arguments are whole numbers already (anything else refuses).
+_models_advance_admit() {   # <deadline> <cost> -> rc 0 iff the cost fits
+  case "${1:-}" in ''|*[!0-9]*|??????????*) return 1 ;; esac
+  case "${2:-}" in ''|*[!0-9]*|??????????*) return 1 ;; esac
+  [ $(( SECONDS + 10#$2 + 1 )) -le $(( 10#$1 )) ]
+}
+
+# THE RESERVES: derived component sums, not parsers. The grace in each is the ceiling (`MODELS_KILL_GRACE_MAX_S`), never
+# a second grace parser; the real grace can be smaller.
+#   J = NB + 8      a whole plan / check / receipt child, or the final output's jq
+#   P = NB + 8      one mkdir OR chmod child
+#   K = L + 8       the complete flock process
+#   W = NB + 8      the whole writer, its restore included
+#   H = 5 + 8       the COMPLETE notify hook, not only its curl
+#   T = P + K + W   the automatic locked transaction (= L + 44)
+#   backfill  = T + J + H                     (95 by default)
+#   candidate = (C + 15 + 8) + T + J + 2H     (221 by default; C = the canary's deadline)
+# Two hooks are reserved on EVERY commit: another writer may leave a recoverable intent during the unlocked canary, so a
+# clean backfill is no proof that the second notification cannot be owed.
+_models_tx_reserve_secs() {   # P + K + W
+  printf '%s' "$(( (MODELS_NODE_BOUND_S + MODELS_KILL_GRACE_MAX_S) + ($(_models_lock_secs) + MODELS_KILL_GRACE_MAX_S) + (MODELS_NODE_BOUND_S + MODELS_KILL_GRACE_MAX_S) ))"
+}
+_models_backfill_reserve_secs() {   # T + J + H
+  printf '%s' "$(( $(_models_tx_reserve_secs) + (MODELS_NODE_BOUND_S + MODELS_KILL_GRACE_MAX_S) + (MODELS_HOOK_S + MODELS_KILL_GRACE_MAX_S) ))"
+}
+_models_canary_reserve_secs() {   # (C + 15 + 8) + T + J + 2H
+  printf '%s' "$(( ($(_models_canary_secs) + 15 + MODELS_KILL_GRACE_MAX_S) + $(_models_tx_reserve_secs) + (MODELS_NODE_BOUND_S + MODELS_KILL_GRACE_MAX_S) + 2 * (MODELS_HOOK_S + MODELS_KILL_GRACE_MAX_S) ))"
+}
+
+# One push for a class that moved or was held back (auto-advance spec §2.3 steps 5 and 6), through the box's own notify
+# hook - `$_SVC_REG/notify.sh`, the path `_inst_files` installs it at, spelled through `$_SVC_REG` and never a second
+# `$HOME/.cc-sessions` - with its `--push` flag, so the server sends it to the phone as well as the banner
+# (`/api/notify`, which pushes only a line `modelsPushOf` reads). Best-effort by the hook's own contract: its output is
+# dropped and its status never ends the refresh. DELIVERY IS NOT PROMISED: a line over `modelsPushOf`'s cap (a long
+# model id makes a failed-canary line long) is still sent and the server may refuse to push it. IN THE AUTOMATIC
+# CONTEXT the COMPLETE hook (not only its curl) is a strict deadline, admitted first (a hook with no time to run is
+# skipped, never run late); a hand caller's call is a best-effort deadline with today's fallbacks.
+_models_push() {   # <message> -> rc 0
+  local hook="$_SVC_REG/notify.sh"
+  [ -x "$hook" ] || return 0
+  if [ -n "${MODELS_AUTO_DEADLINE:-}" ]; then
+    _models_advance_admit "$MODELS_AUTO_DEADLINE" $(( MODELS_HOOK_S + MODELS_KILL_GRACE_MAX_S )) || return 0
+    _plat_timeout_strict "$MODELS_HOOK_S" "$hook" --push "$1" >/dev/null 2>&1 || :
+  else
+    _plat_timeout "$MODELS_HOOK_S" "$hook" --push "$1" >/dev/null 2>&1 || :
+  fi
+  return 0
+}
+
+# THE ONE READING OF A SETTLED INTENT (D-6067), shared by everything that reports one: the step's receipt (below) and a hand
+# verb (`_models_hand_settled`). `recovered($id)` takes a writer's answer object and answers `null`, or the `moved` event
+# (marked `recovered`) and the push line for an AUTOMATIC advance (`how: "advance"`) a crash cut short after its registry
+# rename. It reads `recoveredMove` whether or not the answer was ok: a refusal after the writer's first successful write
+# carries it, and an answer that settled nothing carries none. A hand set-class's landed move (`how: "hand"`) is the
+# operator's own act, and is neither an event nor a push (ruling RC3). The tokens are validated to a safe alphabet here,
+# once, so everything downstream reads them with builtins and a message cannot carry a newline.
+MODELS_JQ_DEFS='def tok: type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$");
+def word: type == "string" and test("^[a-z][a-z0-9-]{0,39}$");
+def flat($n): if type == "string" then (gsub("[^ -~]+"; " ") | gsub("^ +| +$"; "") | .[0:$n]) else "" end;
+def ofpin: if . == null then "none" else . end;
+def recovered($id):
+  (.recoveredMove // null) as $rm
+  | if ($rm | type) == "object" and $rm.how == "advance" and ($rm.class | word) and ($rm.to | tok)
+       and ($rm.from == null or ($rm.from | tok))
+    then {e: {class: $rm.class, from: $rm.from, to: $rm.to, outcome: "moved", recovered: true},
+          p: "\($id): \($rm.class) \($rm.from | ofpin) → \($rm.to)"}
+    else null end;
+'
+
+# What a HAND writer just settled (D-6067): `ccrc models <id> set-class|hold|release|revert` runs a locked writer that
+# first settles an intent an earlier crash left, and its answer names the move when it had landed (`recoveredMove`),
+# whether or not the verb itself then succeeded. An AUTOMATIC advance's (`how: "advance"`) is the one push a move owes,
+# and the hourly step would never see it once this verb settled it first, so it is pushed here, the same message as the
+# refresh's. A hand set-class's own landed move (`how: "hand"`) is the operator's act and owes none. An answer that
+# names no recovery (an early refusal, a writer that settled nothing) pushes nothing, and a settled intent is gone from
+# disk, so no later writer repeats it.
+_models_hand_settled() {   # <id> <answer> -> rc 0
+  local msg
+  case "${2:-}" in *'"recoveredMove"'*) ;; *) return 0 ;; esac
+  msg="$(printf '%s' "$2" | jq -Rrs --arg id "$1" "$MODELS_JQ_DEFS"'
+    (fromjson? // null) | select(type == "object") | recovered($id) | select(. != null) | .p' 2>/dev/null)" || return 0
+  [ -n "$msg" ] || return 0
+  _models_push "$msg"
+}
+
+# One canary for one candidate (auto-advance spec §2.3 step 3): runs `deploy/models-canary.mjs`, which reads the lane's
+# key IN ITS OWN PROCESS, so neither this argv nor this environment ever carries it. Bounded by `_plat_timeout` at the
+# canary's own deadline plus 15 s. Prints ONE JSON object, always: the program's own answer when it printed one;
+# `not-ready` when the bound expired (rc 124); `unavailable` when the program refused its own arguments (a value it
+# cannot carry: a lane state, never a fact about the model, D-5218); `failed`, "canary gave no answer", for anything
+# else (plan §3.6's last row). THE STEP RUNS THIS INSIDE ITS ENCLOSED CANARY READ, whose outer deadline owns the whole
+# thing, `jq` framing included.
+_models_canary() {   # <id> <model> <effort|none> -> prints one JSON object; rc 0
+  local s body rc=0
+  s="$(_models_canary_secs)"
+  body="$(_plat_timeout "$(( s + 15 ))" node "$CCRC_HERE/../deploy/models-canary.mjs" \
+            --id "$1" --model "$2" --effort "$3" --timeout-s "$s" 2>/dev/null)" || rc=$?
+  if [ "$rc" -eq 124 ]; then
+    jq -cn --arg r "the canary did not end within $(( s + 15 ))s" \
+      '{ok: true, op: "canary", result: "not-ready", status: null, reason: $r}'
+    return 0
+  fi
+  if printf '%s' "$body" | jq -e 'type == "object" and .ok == false and .error == "bad-argv"' >/dev/null 2>&1; then
+    jq -cn '{ok: true, op: "canary", result: "unavailable", status: null, reason: "the canary refused its arguments (bad-argv)"}'
+    return 0
+  fi
+  if printf '%s' "$body" | jq -e 'type == "object" and (.result | type) == "string"' >/dev/null 2>&1; then
+    printf '%s\n' "$body"
+    return 0
+  fi
+  jq -cn '{ok: true, op: "canary", result: "failed", status: null, reason: "canary gave no answer"}'
+  return 0
+}
+
+# The soft deadline of the refresh's final output (one strict jq), read from the clock NOW: the smaller of the node bound
+# and what is left of the invocation less that process's own grace ceiling and the clock's second. Not positive means no
+# jq is started: what was reserved for it is not an execution guarantee.
+_models_final_allowance() {   # <invocation end, in $SECONDS terms> -> prints the allowance (may be 0 or negative)
+  local left=$(( $1 - SECONDS - MODELS_KILL_GRACE_MAX_S - 1 ))
+  [ "$left" -le "$MODELS_NODE_BOUND_S" ] || left="$MODELS_NODE_BOUND_S"
+  printf '%s' "$left"
+}
+
+# ── the bounded reads ────────────────────────────────────────────────────────────────────────────────────
+# A READ is one fixed child: `bash -c <this static text>` with the source path, the phase and the data as POSITIONAL
+# arguments (never interpolated into code, never an exported function), `BASH_ENV` and `ENV` cleared, run under
+# `_plat_timeout_strict`. The child sources this very file (its source guard keeps the CLI from dispatching) and runs
+# `_models_advance_read_body`. Its whole life - sourcing, node, jq, framing - is inside the ONE outer deadline, which
+# kills the child's process group; partial output of a child that did not end 0 is discarded by the caller.
+# The tier and canary children additionally run with `_plat_timeout` replaced by a direct call, in THAT PROCESS ONLY:
+# GNU `timeout` puts its child in a process group of its own, which an outer TERM or KILL does not reach, so the lane
+# library's own inner deadlines would leave a probe alive holding the outer capture's pipe. The outer deadline is the
+# one that counts there. This is an enclosed read: only those two children have it, it is code in this text and never an
+# environment toggle, and nothing that writes, notifies or is unbounded runs in them.
+# THE TERM TRAP IS THE CHILD'S, AND IT IS WHAT MAKES THE DEADLINE REACH ITS DESCENDANTS. GNU `timeout` sends TERM to the
+# child and its group, and when the child dies of it, exits at once without the escalation: a descendant that ignores TERM
+# (a stalled helper, a stand-in) would outlive the deadline holding the capture's pipe. A child that traps TERM is not
+# killed by it: bash defers the trap until its foreground command ends, so `timeout` is still waiting when the grace runs
+# out, and its KILL takes the whole group. A command that honours TERM ends at once and the trap exits 124.
+MODELS_ADVANCE_CHILD='trap "exit 124" TERM; set +m; . "$1" || exit 70; shift
+case "${1:-}" in tier|canary) _plat_timeout() { shift; "$@"; } ;; esac
+_models_advance_read_body "$@"'
+
+_models_advance_child() {   # <soft secs> <phase> [args…] -> the child's stdout, only when it ended 0; its status otherwise
+  local out rc=0
+  out="$(BASH_ENV='' ENV='' _plat_timeout_strict "$1" "$BASH" -c "$MODELS_ADVANCE_CHILD" _ "$CCRC_HERE/ccrc" "${@:2}")" || rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  printf '%s\n' "$out"
+}
+
+# A read phase of the step, admitted first (rc 3: no time for it, nothing run). plan, check and receipt end within
+# MODELS_NODE_BOUND_S (+ the grace); the canary within its own deadline + 15.
+_models_advance_read() {   # <plan|check|receipt|canary> <id> [args…] -> frames on stdout (rc 0); stdin is the child's
+  local phase="${1:-}" soft
+  shift
+  case "$phase" in
+    plan|check|receipt) soft="$MODELS_NODE_BOUND_S" ;;
+    canary) soft=$(( $(_models_canary_secs) + 15 )) ;;
+    *) return 2 ;;
+  esac
+  _models_advance_admit "${MODELS_AUTO_DEADLINE:-}" $(( soft + MODELS_KILL_GRACE_MAX_S )) || return 3
+  _models_advance_child "$soft" "$phase" "$@"
+}
+
+# The IDENTITY QUESTION, bounded (opt-in mode of the existing identity owner): see `_codex_tier_ours`.
+_codex_tier_read() {   # <seconds> <id> <tier> -> the library's text and, LAST, `CX-VERDICT rc=<n>`; rc 0 only when the child ended
+  local out rc=0
+  out="$(BASH_ENV='' ENV='' _plat_timeout_strict "${1:-0}" "$BASH" -c "$MODELS_ADVANCE_CHILD" _ "$CCRC_HERE/ccrc" tier "${2:-}" "${3:-}")" || rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  printf '%s' "$out"
+}
+# The child's body: the ordinary question, its text and its status folded into the marker `_models_lane_verdict` reads.
+_codex_tier_read_body() {   # <id> <tier>
+  local rc=0
+  _codex_tier_ours "${1:-}" "${2:-}" 2>&1 >/dev/null || rc=$?
+  printf '\nCX-VERDICT rc=%s' "$rc"
+}
+
+# The child's dispatcher: a fixed table, the phase word first.
+_models_advance_read_body() {   # <phase> [args…]
+  local phase="${1:-}"
+  shift || :
+  case "$phase" in
+    plan)    _models_adv_body_plan "$@" ;;
+    check)   _models_adv_body_check "$@" ;;
+    receipt) _models_adv_body_receipt "$@" ;;
+    canary)  _models_adv_body_canary "$@" ;;
+    tier)    _codex_tier_read_body "$@" ;;
+    *) return 2 ;;
+  esac
+}
+
+# plan: `PLAN<TAB>eligible|ineligible<TAB><why|none>`, one `CAND<TAB>class<TAB>pin|none<TAB>to<TAB>effort|none` line per
+# class that is neither held nor blocked and has a candidate, then `END`. Every field is validated to a safe token here,
+# so the caller reads it with builtins; a row that does not look like one fails the whole read.
+_models_adv_body_plan() {   # <id>
+  local ans
+  ans="$(_models_node advance-plan --file "$(_models_roster_path)" --id "$1" 2>/dev/null)" || return 1
+  printf '%s' "$ans" | jq -er '
+    def word: type == "string" and test("^[a-z][a-z0-9-]{0,39}$");
+    def tok: type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$");
+    def eff: type == "string" and test("^[a-z][a-z0-9_-]{0,39}$");
+    if type == "object" and .ok == true and (.eligible | type) == "boolean" and (.classes | type) == "array"
+       and (.why == null or (.why | word)) then
+      [.classes[] | select(.held == false and .blocked == null and (.candidate | type) == "string")] as $c
+      | if ($c | all((.class | word) and (.candidate | tok) and (.pin == null or (.pin | tok))
+                     and (.canaryEffort == null or (.canaryEffort | eff))))
+        then "PLAN\t\(if .eligible then "eligible" else "ineligible" end)\t\(.why // "none")",
+             ($c[] | "CAND\t\(.class)\t\(.pin // "none")\t\(.candidate)\t\(.canaryEffort // "none")"),
+             "END"
+        else error("a plan row is not shaped like one") end
+    else error("not a plan") end' 2>/dev/null
+}
+
+# check: the check-only LiteLLM comparison (no `--commit`, so it writes nothing, takes no tier lock, stops and starts
+# nothing): `CHECK<TAB>unchanged` and `END` only when the rendering on disk is what the catalogue would render now.
+_models_adv_body_check() {   # <id>
+  local ans id="$1"
+  ans="$(_models_node litellm --file "$(_models_roster_path)" --id "$id" --template "$(_models_litellm_template)" \
+           --out "$(_models_litellm_path "$id")" 2>/dev/null)" || return 1
+  printf '%s' "$ans" | jq -er 'if type == "object" and .ok == true and .changed == false then "CHECK\tunchanged", "END" else error("changed") end' 2>/dev/null
+}
+
+# canary: the existing canary owner and ALL its decoding, framed: `CANARY<TAB><result>` and, for a failed one, `REASON<TAB>
+# <text>` - the canary's own reason with leading dashes stripped (models-op refuses a `--key` value that starts with
+# `--`) and cut to 200 characters: REASON_MAX, the advance file's one cap on a history reason (`shared/model-advance.mjs`),
+# which bash cannot import. `ccrc-models-advance.test.ts` holds this literal equal to it, and `advance-commit` cuts the
+# field again with the imported number.
+_models_adv_body_canary() {   # <id> <model> <effort|none>
+  local can
+  can="$(_models_canary "$1" "$2" "$3")" || return 1
+  printf '%s' "$can" | jq -er '
+    def flat($n): if type == "string" then (gsub("[^ -~]+"; " ") | gsub("^ +| +$"; "") | .[0:$n]) else "" end;
+    if type == "object" and (.result | type) == "string" and (.result | IN("passed", "failed", "not-ready", "unavailable")) then
+      "CANARY\t\(.result)",
+      (if .result == "failed"
+       then "REASON\t\(((.reason // "") | flat(400) | sub("^[- ]+"; "") | .[0:200]) | if . == "" then "the canary failed" else . end)"
+       else empty end),
+      "END"
+    else error("the canary answered no result") end' 2>/dev/null
+}
+
+# receipt: one backfill or commit answer (stdin), decoded into line frames the parent applies with builtins -
+#   `EVENT<space><json>`  a trusted event object        `PUSH<space><message>`  one push line, no newline in it
+#   `RESTOREFAIL`          a move whose restore failed   `LANEEND`  the commit was refused, the lane ends   `END`
+# D-6067: `recoveredMove` is read WHETHER OR NOT the answer was ok: a refusal after the writer's first successful write
+# carries it, and an answer that settled nothing carries none. An automatic advance's (`how: "advance"`) becomes a
+# `moved` event marked `recovered` and its push; a hand set-class's (`how: "hand"`) is neither (RC3). For a commit, an
+# ok answer is the event it names; anything else is an `abandoned` event whose `why` is the answer's fixed error word, or
+# `no-answer`, and the lane ends (D-5209). Pushes: a move, or a failure the answer marks `push` (D-5192).
+_models_adv_body_receipt() {   # <backfill|commit> <id> <class|-> <pin|-> <to|-> <canary result|->   (the answer on stdin)
+  jq -Rrs --arg kind "$1" --arg id "$2" --arg cls "$3" --arg pin "$4" --arg to "$5" --arg res "$6" "$MODELS_JQ_DEFS"'
+    (fromjson? // null) as $b
+    | (if ($b | type) == "object" then $b else {} end) as $o
+    | ($o | recovered($id)) as $rec
+    | ($o.ok == true and ($o.outcome | IN("moved", "failed", "abandoned")) and ($o.class | word) and ($o.to | tok)
+       and ($o.from == null or ($o.from | tok))) as $good
+    | [ (if $rec != null then $rec else empty end),
+        (if $kind == "commit" then
+           if $good then
+             {e: ({class: $o.class, from: $o.from, to: $o.to, outcome: $o.outcome}
+                  + (if ($o.why | word) then {why: $o.why} else {} end)
+                  + (if ($o.reason | type) == "string" then {reason: ($o.reason | flat(200))} else {} end)
+                  + (if $o.restored == false then {restored: false} else {} end)),
+              p: (if $o.push != true then null
+                  elif $o.outcome == "moved" then "\($id): \($o.class) \($o.from | ofpin) → \($o.to)"
+                  elif $o.outcome == "failed" and $res == "failed" then
+                    "\($id): \($o.class) stays on \($o.from | ofpin): \($o.to) failed its canary (\(($o.reason // "") | flat(120)))"
+                  elif $o.outcome == "failed" then
+                    "\($id): \($o.class) stays on \($o.from | ofpin): moving to \($o.to) failed (\(($o.reason // "") | flat(120)))"
+                  else null end),
+              rf: ($o.restored == false)}
+           else
+             {e: {class: $cls, from: (if $pin == "none" then null else $pin end), to: $to, outcome: "abandoned",
+                  why: (if ($o.error | word) then $o.error else "no-answer" end)}, stop: true}
+           end
+         else empty end) ]
+    | (.[] | "EVENT \(.e | tojson)", (if .p != null then "PUSH \(.p)" else empty end),
+         (if .rf == true then "RESTOREFAIL" else empty end), (if .stop == true then "LANEEND" else empty end)),
+      "END"' 2>/dev/null
+}
+
+# ── the parent's readers (builtins only on the child's frames) ───────────────────────────────────────────
+
+# A frame text is whole only when its last line is `END`; anything else (an expired or crashed child's partial output is
+# already discarded, this guards a child that ended 0 without finishing) is no answer.
+_models_adv_whole() {   # <frames> -> rc 0 iff it ends in END
+  case "$1" in END|*$'\n'END) return 0 ;; esac
+  return 1
+}
+
+# plan -> ADV_PLAN_WHY (`none`, or the lane's/catalogue's word) and the parallel candidate arrays ADV_C_CLS / ADV_C_PIN /
+# ADV_C_TO / ADV_C_EFF, assigned in the CALLER's locals (bash's dynamic scope). rc 0 only for a whole, well-formed plan.
+_models_advance_plan() {   # <id>
+  local out tag a b c d
+  ADV_PLAN_WHY=''; ADV_C_CLS=(); ADV_C_PIN=(); ADV_C_TO=(); ADV_C_EFF=()
+  out="$(_models_advance_read plan "$1")" || return 1
+  _models_adv_whole "$out" || return 1
+  while IFS=$'\t' read -r tag a b c d; do
+    case "$tag" in
+      PLAN) ADV_PLAN_WHY="$b" ;;
+      CAND) ADV_C_CLS+=("$a"); ADV_C_PIN+=("$b"); ADV_C_TO+=("$c"); ADV_C_EFF+=("$d") ;;
+    esac
+  done <<<"$out"
+  [ -n "$ADV_PLAN_WHY" ]
+}
+
+# check -> rc 0 only when the check-only comparison says nothing needs rendering.
+_models_advance_check() {   # <id>
+  local out
+  out="$(_models_advance_read check "$1")" || return 1
+  _models_adv_whole "$out" || return 1
+  case "$out" in "CHECK"$'\t'"unchanged"$'\n'END) return 0 ;; esac
+  return 1
+}
+
+# canary -> ADV_CAN_RESULT (passed|failed|not-ready|unavailable) and ADV_CAN_REASON, in the caller's locals; rc 0 only for a
+# whole answer. A canary that did not finish (rc 124, 125, a crash) is no answer: the lane defers.
+_models_advance_canary() {   # <id> <model> <effort|none>
+  local out tag a b
+  ADV_CAN_RESULT=''; ADV_CAN_REASON=''
+  out="$(_models_advance_read canary "$1" "$2" "$3")" || return 1
+  _models_adv_whole "$out" || return 1
+  while IFS=$'\t' read -r tag a b; do
+    case "$tag" in
+      CANARY) ADV_CAN_RESULT="$a" ;;
+      REASON) ADV_CAN_REASON="$a${b:+$'\t'$b}" ;;
+    esac
+  done <<<"$out"
+  [ -n "$ADV_CAN_RESULT" ]
+}
+
+# receipt -> applies the frames: events are appended to the caller's `evs`, each push goes through `_models_push`,
+# ADV_LANE_END is 1 after a refused commit. rc 0 only for a whole receipt; an expired or failed one reports NOTHING
+# (no event, no push) and the lane ends: a landed move whose receipt did not finish is still on record in the advance
+# file, and no event is inferred from partial bytes.
+_models_advance_receipt() {   # <backfill|commit> <answer> <class|-> <pin|-> <to|-> <result|-> -> reads the caller's `id`
+  local frames line
+  ADV_LANE_END=0
+  frames="$(_models_advance_read receipt "$1" "$id" "$3" "$4" "$5" "$6" <<<"$2")" || return 1
+  _models_adv_whole "$frames" || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      'EVENT '*) evs+=("${line#EVENT }") ;;
+      'PUSH '*) _models_push "${line#PUSH }" ;;
+      LANEEND) ADV_LANE_END=1 ;;
+    esac
+  done <<<"$frames"
+  return 0
+}
+
+# Everything the step needs before it may write anything. Called in the shell that will run the step: the capability
+# record it fills must live there.
+_models_advance_capable() {   # <id> -> rc 0 iff the step may run on this lane here
+  local p d
+  command -v flock >/dev/null 2>&1 || return 1
+  p="$(_models_lock_path "$1")"; d="${p%/*}"
+  [ -d "$d" ] || command -v mkdir >/dev/null 2>&1 || return 1
+  # The capability probe is itself a bounded call (`timeout -k 1 1 printf`, a two-second allowance on the substrate it is
+  # looking for), so it is admitted before it is made.
+  _models_advance_admit "${MODELS_AUTO_DEADLINE:-}" 2 || return 1
+  _plat_timeout_capability >/dev/null
+  [ "$CCD_TIMEOUT_CAPABILITY" = strong ] || return 1
+  declare -F _codex_tier_read_body >/dev/null 2>&1 || return 1
+  declare -F _models_advance_read_body >/dev/null 2>&1 || return 1
+  return 0
+}
+
+_models_advance_lane() {   # <id> <deadline-secs> -> prints ONE JSON array of events; rc 0 always
+  local -a evs=()
+  local out='' e
+  _models_advance_steps "$1" "$2" || :
+  for e in "${evs[@]+"${evs[@]}"}"; do out="${out:+$out,}$e"; done
+  printf '[%s]\n' "$out"
+}
+
+# The body of `_models_advance_lane`: every early end is a plain `return 0`, and every event is appended to the CALLER's
+# `evs` (bash's dynamic scope, the way `_codex_tier_ours` reads CX_TIER_ASKER), which the caller prints once.
+_models_advance_steps() {   # <id> <deadline-secs> -> appends to the caller's `evs`; rc 0 always
+  local id="$1" file bf n k cls pin to ceff result reason body tier said R
+  local -a rarg=()
+  local -a ADV_C_CLS=() ADV_C_PIN=() ADV_C_TO=() ADV_C_EFF=()
+  local ADV_PLAN_WHY='' ADV_CAN_RESULT='' ADV_CAN_REASON='' ADV_LANE_END=0
+  local CX_VERDICT_RC CX_VERDICT_MARKED CX_VERDICT_SAID
+  # The automatic context (see `_models_lock`): the step's own non-exported locals.
+  local MODELS_AUTO_DEADLINE="$2" MODELS_AUTO_TAIL_S=0
+  _models_advance_admit "$MODELS_AUTO_DEADLINE" 0 || return 0
+  _models_advance_capable "$id" || return 0
+  file="$(_models_roster_path)"
+  R="$(_codex_ready_secs)"
+  # 1. The lane gate: a bounded read, before any locked call.
+  _models_advance_plan "$id" || return 0
+  case "$ADV_PLAN_WHY" in lane-not-codex-kind|probe-not-codex) return 0 ;; esac
+  # One readiness question has to fit the run at all, or the backfill's writes would be followed by nothing.
+  _models_advance_admit "$MODELS_AUTO_DEADLINE" $(( R + MODELS_KILL_GRACE_MAX_S )) || return 0
+  # 2. The backfill, under the lane-files lock: creates the file once, and settles a pending intent every hour.
+  _models_advance_admit "$MODELS_AUTO_DEADLINE" "$(_models_backfill_reserve_secs)" || return 0
+  MODELS_AUTO_TAIL_S=31
+  bf="$(_models_node_locked "$id" advance-backfill --file "$file" --id "$id" 2>/dev/null)" || :
+  case "$bf" in
+    *'"recoveredMove"'*) _models_advance_receipt backfill "$bf" - - - - || return 0 ;;
+  esac
+  case "$bf" in
+    *'"recoveredMove"'*|*'"created":true'*) _models_advance_plan "$id" || return 0 ;;
+  esac
+  # A catalogue that is stale or never probed leaves nothing to advance; the backfill's work above stands.
+  [ "$ADV_PLAN_WHY" = none ] || return 0
+  n="${#ADV_C_CLS[@]}"
+  [ "$n" -gt 0 ] || return 0
+  # 3. Readiness, asked once (D22): the LiteLLM tier, then the shim, each measured by a bounded identity read. The verdict
+  #    is the marker the child prints LAST, read after the child ended normally; a question that did not finish, or whose
+  #    marker is missing or malformed, is unmeasured, never ours and never down.
+  for tier in litellm shim; do
+    _models_advance_admit "$MODELS_AUTO_DEADLINE" $(( R + MODELS_KILL_GRACE_MAX_S )) || return 0
+    said="$(_codex_tier_ours --bounded-read "$R" "$id" "$tier")" || return 0
+    _models_lane_verdict "$said"
+    [ "$CX_VERDICT_MARKED" = 1 ] && [ "$CX_VERDICT_RC" = 0 ] || return 0
+  done
+  _models_advance_check "$id" || return 0
+  # 4 and 5. Per candidate, in CLASSES order.
+  for (( k = 0; k < n; k++ )); do
+    cls="${ADV_C_CLS[k]}"; pin="${ADV_C_PIN[k]}"; to="${ADV_C_TO[k]}"; ceff="${ADV_C_EFF[k]}"
+    # The budget: no canary starts unless it, its commit, its receipt and its hooks can all end before the deadline.
+    _models_advance_admit "$MODELS_AUTO_DEADLINE" "$(_models_canary_reserve_secs)" || break
+    _models_advance_canary "$id" "$to" "$ceff" || break
+    result="$ADV_CAN_RESULT"
+    case "$result" in
+      passed|failed) ;;
+      *) break ;;
+    esac
+    rarg=()
+    [ "$result" != failed ] || rarg=(--reason "$ADV_CAN_REASON")
+    MODELS_AUTO_TAIL_S=44
+    body="$(_models_node_locked "$id" advance-commit --file "$file" --id "$id" --class "$cls" --from "$pin" --to "$to" --canary "$result" "${rarg[@]+"${rarg[@]}"}" 2>/dev/null)" || :
+    _models_advance_receipt commit "$body" "$cls" "$pin" "$to" "$result" || break
+    [ "$ADV_LANE_END" -eq 0 ] || break
+  done
+  return 0
+}
+
 # The box-wide half of the verb group: the CATALOGUES the class registries are
 # classified against, which is a different question from a lane's own classes
 # and runs on a different cadence — a timer runs `--all` hourly
@@ -11086,6 +11717,11 @@ _models_box_sub() {   # <subcommand> [args…]
       fi
 
       local rows=() failed=0 n i id probe baseurl count reginvalid row lit
+      # The advance step's lists (plan W2 Task 11): the codex lanes whose three first-pass steps all succeeded, and the row
+      # index each one's events land on. The step itself runs AFTER the lane loop (D-5213), from ONE deadline taken then
+      # (below), never here: this loop is the inherited first pass and must not forget what discovery cost.
+      local adv_deadline adv_budget adv_end adv_k adv_j adv_left adv_entered=0 adv_rows adv_map adv_r adv_x adv
+      local -a adv_ids=() adv_at=() adv_ev=()
       n="$(printf '%s' "$wanted" | jq 'length')"
       i=0
       while [ "$i" -lt "$n" ]; do
@@ -11160,6 +11796,9 @@ _models_box_sub() {   # <subcommand> [args…]
           else
             row="$(jq -cn --arg id "$id" --arg p "$probe" --argjson c "$count" --arg lit "$lit" \
               '{id:$id, probe:$p, ok:true, count:$c, litellm:$lit}')"
+            # A codex lane whose probe, materialise and render all succeeded is advanced after the loop; the index its
+            # row is about to take is kept, so the step's events land on it.
+            if [ "$probe" = codex ]; then adv_ids+=("$id"); adv_at+=("${#rows[@]}"); fi
           fi
         else
           # Every failed row names WHY (Fix round 1, Finding 2, ruling): the
@@ -11174,6 +11813,63 @@ _models_box_sub() {   # <subcommand> [args…]
         rows+=("$row")
         i=$((i + 1))
       done
+
+      # THE ADVANCE STEP (auto-advance spec §2.3; plan W2 Task 11), a SECOND pass, once every lane's probe, materialise
+      # and LiteLLM render is done (D-5213): a canary can never delay another lane's render, so a late SIGTERM can only cut
+      # an advance short, whose crash gap `pending` covers. Its ONE deadline is taken HERE, after the whole first pass, and
+      # spends only what is LEFT of the invocation: `adv_end` is the unit's 300 s from the entry time (nothing here
+      # extends it), less the final output's own bounded process, and the budget is read once. A large budget cannot
+      # enlarge the invocation, and a slow first pass leaves the step less, possibly none: an unreached lane or class waits
+      # for the next hour. No claim is made about the inherited first pass, which this step neither bounds nor shortens.
+      # Where no escalating deadline exists, or the budget is 0, or nothing is left, the step does not run at all - not
+      # even the backfill - and the output below is the inherited one. A row gains `advance` only when something
+      # happened; a failed canary leaves the row ok (doctor and one push are its signals); a move whose restore failed
+      # leaves the lane's files unlike its registry, and fails the row with that reason.
+      adv_budget="$(_models_advance_budget_secs)"
+      adv_end=$(( MODELS_INVOKE_T0 + MODELS_INVOKE_CEILING_S ))
+      adv_deadline=$(( SECONDS + adv_budget ))
+      [ "$adv_deadline" -le $(( adv_end - MODELS_NODE_BOUND_S - MODELS_KILL_GRACE_MAX_S )) ] \
+        || adv_deadline=$(( adv_end - MODELS_NODE_BOUND_S - MODELS_KILL_GRACE_MAX_S ))
+      if [ "${#adv_ids[@]}" -gt 0 ] && [ "$adv_budget" -gt 0 ] && _models_advance_admit "$adv_deadline" 2 \
+         && { _plat_timeout_capability >/dev/null; [ "$CCD_TIMEOUT_CAPABILITY" = strong ]; }; then
+        for (( adv_k = 0; adv_k < ${#adv_ids[@]}; adv_k++ )); do
+          _models_advance_admit "$adv_deadline" 0 || break
+          adv_entered=1
+          adv_j="${adv_at[$adv_k]}"
+          adv="$(_models_advance_lane "${adv_ids[$adv_k]}" "$adv_deadline")"
+          case "$adv" in '['*']') ;; *) continue ;; esac
+          [ "$adv" != '[]' ] || continue
+          adv_ev[adv_j]="$adv"
+          case "$adv" in *'"restored":false'*) failed=1 ;; esac
+        done
+      fi
+      if [ "$adv_entered" -eq 1 ]; then
+        # The final output, bounded: ONE strict jq assembles the rows and the advance overlays and writes the result
+        # straight to stdout (no capture, no outer printf, no per-lane merge elsewhere). Its allowance is the 18 s
+        # `adv_deadline` left unspent at the end of the invocation (soft deadline 10 s, grace ceiling 8 s), re-read now: what
+        # was reserved is not an execution guarantee, so a soft deadline that does not fit refuses without starting jq.
+        # An expired jq is a FAILURE (rc 1, a sentence on stderr), never a partial answer.
+        adv_rows=''; adv_map=''
+        for adv_r in "${rows[@]+"${rows[@]}"}"; do adv_rows="${adv_rows:+$adv_rows,}$adv_r"; done
+        for adv_x in "${!adv_ev[@]}"; do adv_map="${adv_map:+$adv_map,}\"$adv_x\":${adv_ev[$adv_x]}"; done
+        adv_left="$(_models_final_allowance "$adv_end")"
+        if [ "$adv_left" -lt 1 ]; then
+          echo "$PROG: models refresh: no time was left to write its answer inside the unit's ${MODELS_INVOKE_CEILING_S}s, so none was written" >&2
+          return 1
+        fi
+        _plat_timeout_strict "$adv_left" jq -cn --argjson rows "[$adv_rows]" --argjson adv "{$adv_map}" '
+          [ range(0; ($rows | length)) as $i | $rows[$i] as $r | ($adv[($i | tostring)] // []) as $ev
+            | if ($ev | length) == 0 then $r
+              elif any($ev[]; .restored == false) then
+                {id: $r.id, ok: false,
+                 reason: ([$ev[] | select(.restored == false) | .reason][0] // "an advance could not restore the previous registry"),
+                 advance: $ev}
+              else $r + {advance: $ev} end ] as $out
+          | {ok: ($out | all(.ok)), op: "refresh", refreshed: $out}' \
+          || { echo "$PROG: models refresh: its answer could not be written inside its allowance, so none was" >&2; return 1; }
+        [ "$failed" -eq 0 ] || return 1
+        return 0
+      fi
 
       # ONE JSON OBJECT, on every path — including the mixed one. A run where
       # three lanes refreshed and one did not is not a failure to report; it is
@@ -11764,7 +12460,15 @@ _codex_pid_listens() {   # <pid> <port> -> 0 listens; 1 another holds it; 3 cann
 # a proven pid of either tier that does not hold its port; `unit-unproven`, a unit of
 # this tier's name is live and its MainPID is not this lane's) for the verb's
 # sentence and `status --json`.
-_codex_tier_ours() {   # <id> <tier>
+_codex_tier_ours() {   # <id> <tier>   |   --bounded-read <seconds> <id> <tier>
+  # THE BOUNDED MEASUREMENT (the hourly advance step's, plan W2 Task 11): `--bounded-read <seconds> <id> <tier>` asks
+  # this very question in a bounded child and returns the TEXT it printed, ending in the marker `CX-VERDICT rc=<n>`
+  # (`_models_lane_verdict` reads it), not the CX_TIER_* handle globals, which are the ordinary caller's. <seconds> is the
+  # WHOLE question's deadline, row lookup, manager inspection, `ps`, fd enumeration and network identity included. rc 0
+  # means the child finished and the marker is its answer; any other status (an expired deadline, no strong deadline, a
+  # crash) means the question was NOT measured, and nothing it printed is to be read. Ordinary callers pass `<id> <tier>`
+  # and keep this function's rc and globals exactly.
+  if [ "${1:-}" = --bounded-read ]; then _codex_tier_read "${2:-}" "${3:-}" "${4:-}"; return $?; fi
   CX_TIER_VIA=''; CX_TIER_PID=''; CX_TIER_WHY=''
   local id="${1:-}" tier="${2:-}" port unit st mp p pf lane arc lrc orc unit_live=0 pid='' via=''
   if ! _codex_tier_ok "$tier"; then
