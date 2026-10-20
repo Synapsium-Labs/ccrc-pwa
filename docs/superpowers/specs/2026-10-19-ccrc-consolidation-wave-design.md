@@ -113,7 +113,11 @@ A pin like this is the right answer when the two copies have to live in two lang
 ### 2.1 How this extends the 08-10 spec
 
 - **The rings are unchanged.** L0 shared kernel, L1 policy, L2 ports, L3 adapters, L4 delivery, L5 composition root. Ring membership is still a property of a file's imports.
-- **ARCH-02a's wording is adopted as written:** a deadline timer inside one adapter call is L3, schedulers and pollers are L4, the `.mjs` carve-out lists its `node:*` modules, and the PWA rings are `*Words.ts`/policy/pure lib = L1, `lib/api.ts` = L3, stores/hooks/components/screens = L4.
+- **ARCH-02a's wording is adopted as written** (D-6000). It lives in the 08-10 spec's rings and its "Deciding a file's ring and context" section, and CLAUDE.md copies it word for word:
+  - A deadline timer inside one adapter call is L3; schedulers and pollers are L4. A timer is a deadline inside one adapter call when its handle is a local of that call; a timer whose handle is stored on an object field or at module scope is a scheduler or poller.
+  - The `.mjs` carve-out: a `shared/*.mjs` file, which the PWA never imports, may import `node:crypto`, `node:fs` and `node:url` and no other `node:*` module; a `shared/*.ts` file imports no `node:*` module at all.
+  - PWA: `*Words.ts`, policy and pure lib modules are L1; `lib/api.ts` is L3; stores, hooks, components and screens are L4.
+  - Every non-test file under `server/src` and `pwa/src` has one ring and one context (C1 to C9, or K for the kernels and platform files), decided by that section's rules and its path table.
 - **Two cross-cutting rules are added** to 08-10's (a)–(e):
   - **(f) One writer per fact.** Every fact this spec names in §2.2 has a declared writer set, and a `writers` pin (§5.1) lists it. The set may only shrink. "Writer" means the function that performs the write, not the callers that ask for it: two lanes may ask one primitive to write.
   - **(g) A schedule is data.** A lane's cadence, clock and single-flight rule are a row in one table. They are not fields on a class or a constant aliased from another lane. This is **not** a lane interface (see §2.5).
@@ -214,14 +218,15 @@ The 08-10 six are kept and re-cut in two places: Workspace takes the whole end o
 - **Ports:** `PushService`, `NotifyLog` (ring cache) and coord.db.
 
 #### C7. Update control plane (ARCH-02a)
+- Its language, allowed dependencies and files are in the 08-10 spec's context 7 and its path table (D-6000).
 - Catalogue, inventory, intent, dispatch/converge leases, server-caps, and the Claude Code binary roll and install (CB-tasks).
 - The server-caps file is written by `update/serverCaps.ts` on server nodes and by `ccd-update-sync` on fleet nodes. That is one fact per node with one writer per node kind, which is legitimately different, but it is pinned.
 
 #### C8. Auth & box token (ARCH-02a)
-`auth/`, `token/`, WebAuthn, the box token. The wave does not touch it except to move its redaction calls onto the kernel.
+`auth/`, `token/`, WebAuthn, the box token. Its language, allowed dependencies and files are in the 08-10 spec's context 8 and its path table (D-6000). The wave does not touch it except to move its redaction calls onto the kernel.
 
 #### C9. Docs (ARCH-02a)
-`docs/`, `shared/docs.ts`, and ccd's docs verbs. The wave moves only its redactor (§3 K7).
+`docs/`, `shared/docs.ts`, and ccd's docs verbs. Its language, allowed dependencies and files are in the 08-10 spec's context 9 and its path table (D-6000). The wave moves only its redactor (§3 K7).
 
 ### 2.3 Shared kernels: one implementation, no context
 
