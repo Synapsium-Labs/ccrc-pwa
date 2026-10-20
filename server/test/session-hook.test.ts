@@ -9540,6 +9540,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // `ccd/ccd:11665-11670`, `ccd/ccd:11669`, `ccd/ccd:13650-13652`, `ccd/ccd:2433-2439`, `ccd/ccd:3037-3089`,
     // `ccd/ccd:3038`, `ccd/ccd:3070` x3, `ccd/ccd:5385-5388`. Measured by diffing the dumped failure sets of the
     // two trees, never retyped. No D-number.
+    // RE-MEASURED at named workspaces S9's ccd half (`ws-title`, `_ws_title_check`/`_set`/`_clear`, ws-add's title block
+    // folded into them), 53 -> 54: the second `ccd/ccd:13573-13575` site ENTERS again, the line S1's growth slid under it
+    // having slid back off. Nothing re-pointed; measured on the pre-S9 and the S9 tree, never retyped. S6-R11, no D-number.
     // RE-MEASURED at named workspaces S1 (`ws-add --title` / `--wrapper`, `_ws_lane_why`, two caps tokens), 54 -> 53.
     // ONE LEFT, NONE ENTERED: the second `ccd/ccd:13573-13575` site. `ccd/ccd` grows above every anchor in this set, so
     // a line slid under that site whose token the row quotes. Neither frozen corpus document changed, so nothing was
@@ -9805,6 +9808,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
+        'ccd/ccd:13573-13575',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
@@ -9878,6 +9882,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // ccd/ccd:12032-12034` x2, `spec:2209 ccd/ccd:4046` and `spec:2220 ccd/ccd:2874` x2 enter and `spec:2125
     // ccd/ccd:13673`, `spec:2220 ccd/ccd:3050` x2 leave on M's lines. 40, FROM THE SAME RUN as the row-pass set
     // above. Measured by diffing the dumped failure sets of the three trees, never retyped. No D-number.
+    // RE-MEASURED at named workspaces S9's ccd half, 34 -> 35, FROM THE SAME RUN: `spec:2210 ccd/ccd:13573-13575` enters again.
     // RE-MEASURED at named workspaces S1, 35 -> 34, FROM THE SAME RUN as the row-pass set above: `spec:2210
     // ccd/ccd:13573-13575` leaves, the one site of that anchor the `|`-row set also lost. Nothing was re-pointed.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
@@ -10028,6 +10033,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
+        'spec:2210 ccd/ccd:13573-13575',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',
