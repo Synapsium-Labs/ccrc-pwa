@@ -251,3 +251,48 @@ describe('the forbidden-verb deny: a child never runs a SAFETY verb or ccrc upda
     expect(why).toContain('merge');
   });
 });
+
+// D-5696's enforcement for bypassed children (D-5993's companion, review of CB1b): a child runs with permissions
+// bypassed, so a rule the classifier alone holds never fires for it. The deny arm therefore carries a third category,
+// `build`, read in deny mode only: a write into the build directory or onto the launcher (the classifier's own
+// pattern), and Claude Code's `install` or `update` under any path head or a `claude…` wrapper name, normalised as the
+// verbs are. The deny file's bare rules stay; this is the arm that covers what they cannot spell.
+describe('the build deny: a child never writes a Claude Code build or the launcher, nor runs its install or update (D-5696)', () => {
+  const denied = [
+    'ln -sf /tmp/x ~/.local/bin/claude', 'cp /tmp/x ~/.local/share/claude/versions/2.1.302',
+    'mv build/claude "$HOME/.local/share/claude/versions/2.1.302"', 'echo x > /home/u/.local/bin/claude',
+    'rm -rf ~/.local/share/claude/versions', 'cd /tmp && cp x ~/.local/bin/claude',
+    '~/.local/bin/claude install 2.1.302', '/home/u/.local/bin/claude update', 'claude update', 'claude install stable',
+    'claude-corp update', 'claude2 install 2.1.302', './claude install latest',
+    "c''laude update", 'c\\laude install x', '"claude" "update"', 'bash -c "claude update"', 'true; claude update',
+    '$(which claude) update', '"$(command -v claude)" install 2.1.302', 'P=claude; $P update',
+    '~/.local/bin/upstream-a update', '/home/u/.local/bin/upstream-a install 2.1.302',
+  ];
+  it.each(THREADS)('%s: every write and every install or update form is denied, naming the build', (_t, extra) => {
+    const missed = denied.filter((c) => { const why = bash(c, extra); return why === null || !why.includes('Claude Code build'); });
+    expect(missed).toEqual([]);
+  }, 60_000);
+  it.each(THREADS)('%s: an edit tool writing into the build directory or onto the launcher is denied', (_t, extra) => {
+    for (const fp of [`${home}/.local/share/claude/versions/2.1.302`, `${home}/.local/bin/claude`]) {
+      expect(fire('Write', { file_path: fp, content: 'x' }, extra), fp).toContain('Claude Code build');
+      expect(fire('Edit', { file_path: fp, old_string: 'a', new_string: 'b' }, extra), fp).toContain('Claude Code build');
+    }
+  });
+  it('reads, ordinary installs and look-alike paths are not denied', () => {
+    for (const [, extra] of THREADS) {
+      for (const c of [
+        'ls ~/.local/share/claude/versions', 'claude --version', 'claude mcp list', 'npm install', 'npm update',
+        'pip install -r requirements.txt', 'cat ~/.local/bin/claude', 'cp /tmp/x ~/.local/bin/claude.bak',
+        'cp /tmp/x ~/.local/share/claude/versions-old/2.1.302', 'cp /tmp/x ~/.local/bin/claude-a',
+        'git log --oneline -- docs/update-claude.md', '"$PIP" install x', 'ls ~/.claude && npm install',
+        'claude -p "update the changelog"', 'claude --resume x',
+      ]) expect(bash(c, extra), c).toBeNull();
+      expect(fire('Write', { file_path: `${home}/.local/share/claude/versions-old/x`, content: 'x' }, extra)).toBeNull();
+    }
+  });
+  it('a top-level session is not denied any of them', () => {
+    fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));
+    for (const c of denied) expect(bash(c), c).toBeNull();
+    expect(fire('Write', { file_path: `${home}/.local/bin/claude`, content: 'x' })).toBeNull();
+  });
+});
