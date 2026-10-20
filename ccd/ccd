@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f0ec1fb83790a7f73b146004dc2f8b5cffa45edc8adf2f022bd201a23288d4f6
+# ccrc:generated 1 sha256=19cef82f54ea4a9acf9a1a25dd79f89b92aaf2051bfa3e5e2644559a2544e16e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22729,8 +22729,9 @@ _child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPA
 # its ordinary writes and cleanups could take or clobber them by accident.
 # `tmproots/` is no harder to write on purpose (TRUST, above); it is only out
 # of the session's way. A `tmproots/` that is itself a link is never
-# followed: the writer refuses it, the reader answers 2, and
-# `_ws_tmproot_remove` warns and leaves what it reaches. The writer's temp file is dot-leading INSIDE
+# followed: the writer refuses it, the reader answers 2, and so the drop
+# (`_ws_tmproot_witness_drop`) keeps what it reaches and answers unmeasured,
+# printing nothing. The writer's temp file is dot-leading INSIDE
 # `tmproots/`, never `$REG/.<x>`, so no `tmproots/*` glob sees it and
 # `_reg_purge`'s dot-prefixed inventory is unchanged. A writer that dies
 # between its `printf` and its `mv` leaves that temp file behind, and nothing
@@ -22756,8 +22757,12 @@ _child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPA
 # `-`. UID is the `-O` test: the leaf's owner IS this process's effective
 # uid, so `$EUID` is that owner, not a guess.
 #
-# DEATH belongs to `_ws_tmproot_witness_drop` alone (RECLAIM region), and only
-# once the leaf is PROVEN absent (`_ws_leaf_remove`, or `_ws_reclaim_absent`).
+# DEATH belongs to two compare-and-drops: the collector's own
+# (`_ws_collect_witness_cad`), and the reclaim tail's `_ws_tmproot_witness_drop`
+# (RECLAIM region; path-identity spec §3.2 and §3.3), which drops a witness only
+# on a PROVEN absence of its leaf, proven again at the drop, on the device the
+# witness records, beside no quarantine slot of the id, and only in the
+# generation it read. A drop that cannot say all of that keeps the witness.
 _ws_tmproot_witness_file() { printf '%s' "$REG/tmproots/${1-}"; }   # id -> the witness's path (a path, not a decision)
 
 # THE ID A VERB MAY BIND (path-identity spec §2.4): the registry charset, read under LC_ALL=C, and never
@@ -32713,14 +32718,24 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
 # THE TEMP ROOT'S REMOVAL (spec §5.6 and §5.2): the ONE removal helper on
 # the temp root, then — on its rc 0 only, the leaf removed or PROVEN
 # absent — the leaf's witness (`_ws_tmproot_witness_drop`). Remove, prove,
-# THEN unlink the witness: a crash between the last two leaves a witness with
+# THEN drop the witness: a crash between the last two leaves a witness with
 # no leaf, which is nothing to do and is cleaned by the next call; the
 # reverse order could leave a leaf with no witness, which no collector may
 # ever take. A refusal or an unmeasured answer leaves the witness beside the
 # leaf it still describes.
+# THE ANSWER IS THE LEAF'S AND THE DROP'S (path-identity spec §3.2). A drop
+# that keeps the witness (its 1) or could not measure (its 2) makes this
+# helper answer 2, `_WS_LEAF_WHY` reading "no leaf stands, but " and the
+# drop's reason (step (6)'s own lead, true whether the leaf half removed the
+# leaf or PROVED it absent), so the tail records the temp root `unmeasured`
+# with that reason. Never 1: this helper's 1 means the leaf was refused, and
+# no leaf stands here.
 # The tail passes NO dev:ino (the row and the marker prove identity there,
-# and the check-to-rm window is `_ws_leaf_remove`'s own stated residual);
-# a collector passes the witness's own.
+# and the check-to-rm window is `_ws_leaf_remove`'s own stated residual).
+# The optional second argument hands an expected dev:ino through to
+# `_ws_leaf_remove`; no caller in ccd passes one: the collector removes its
+# slot's leaf through `_ws_leaf_remove` itself, and drops a witness by its
+# own compare-and-drop (`_ws_collect_witness_cad`).
 # An id no witness is named for (`_ws_tmproot_id_ok`: anything dot-leading,
 # `.`, `..` and the writer's own `.<id>.*.tmp` names among them) is refused
 # FIRST, rc 1 with `_WS_LEAF_WHY`, and nothing is asked or touched: a
@@ -32733,8 +32748,9 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
 # leaf that is gone is nothing to keep, and after the row's purge nothing
 # would ask about that id again. Those arms call the drop alone, never this
 # helper: its leaf half would remove, unprobed, a leaf re-created after the
-# absence was proven.
-_ws_tmproot_remove() {   # id [expect-devino] -> _ws_leaf_remove's rc (0 removed-or-absent | 1 refused | 2 unmeasured; _WS_LEAF_WHY)
+# absence was proven. Either way the drop decides, by its own proofs,
+# whether the witness dies.
+_ws_tmproot_remove() {   # id [expect-devino] -> 0 the leaf removed or PROVEN absent, and its witness drop complete | 1 the leaf refused | 2 unmeasured: the leaf, or a drop that kept the witness (_WS_LEAF_WHY)
   local id="${1-}" rc=0
   _ws_tmproot_id_ok "$id" || { _WS_LEAF_WHY="'$id' is not an id a witness is named for, so nothing was touched"; return 1; }
   if [[ -n "${2-}" ]]; then
@@ -32743,29 +32759,92 @@ _ws_tmproot_remove() {   # id [expect-devino] -> _ws_leaf_remove's rc (0 removed
     _ws_leaf_remove "$HOME/.cc-tmp" "$id"; rc=$?
   fi
   (( rc == 0 )) || return "$rc"
-  _ws_tmproot_witness_drop "$id" || :
-  return 0
+  _ws_tmproot_witness_drop "$id" && return 0
+  _WS_LEAF_WHY="no leaf stands, but $_WS_WDROP_WHY"
+  return 2
 }
-# THE WITNESS'S DEATH (spec §5.2), and nothing else: the witness file of
-# `<id>` is unlinked; the leaf it names is never looked at, so a caller drops
-# it only once that leaf is removed or PROVEN absent. A drop never fails its
-# caller's act — the act a caller reports is the leaf's: a witness that cannot
-# be unlinked is warned about, and so is a `tmproots/` that is itself a link,
-# which is never followed (the file it reaches is not one ccd wrote); both
-# answer 0. An id no witness is named for (`_ws_tmproot_id_ok`) is refused,
-# rc 1 and warned, with nothing touched.
-_ws_tmproot_witness_drop() {   # id -> 0 dropped, or warned about; 1 an id no witness is named for, nothing touched
-  local id="${1-}" w
-  _ws_tmproot_id_ok "$id" \
-    || { echo "ccd: warn: '$id' is not an id a witness is named for, so no witness was touched" >&2; return 1; }
-  w=$(_ws_tmproot_witness_file "$id")
-  if [[ -L "${w%/*}" ]]; then
-    echo "ccd: warn: $id's temp root is gone but ${w%/*} is a link, not ccd's own directory — it is never followed, so the file it reaches was left as it stands" >&2
-    return 0
+# THE WITNESS'S DEATH (path-identity spec §3.2 and §3.3, Figure 3): the
+# witness of `<id>` is dropped only on a PROVEN absence of its leaf, on the
+# device the witness records, beside no quarantine slot of the id, and only
+# in the generation this call read. Its callers are `_ws_tmproot_remove`,
+# after its leaf half answers 0, and the reclaim tail's step (6) on its kept
+# arms, once `_ws_reclaim_absent` has proven no leaf stands; both run under
+# the id's reap lock.
+# THREE ANSWERS, and every reason in `_WS_WDROP_WHY` begins "its witness was
+# kept: " and names its cause before any path, which follows in parentheses:
+#   0 complete — `_WS_WDROP` is `dropped` (exactly the generation read was
+#     unlinked) or `absent` (no witness stood, at the read or at the compare,
+#     PROVEN by `_ws_reclaim_absent`: never read off a failed test, because a
+#     `tmproots/` this process cannot search reads `-e` false);
+#   1 kept — a quarantine slot of the id stands, whether or not a record names
+#     it; a leaf stands at `~/.cc-tmp/<id>` again; a newer generation stands
+#     (or one this call did not read is stranded at a compare-and-drop aside);
+#     or the id is no witness's name, and nothing is touched;
+#   2 unmeasured — no witness was read, but its absence could not be proven;
+#     the witness does not parse (a `tmproots/` that is a link included: never
+#     followed); the physical `~/.cc-tmp` is on another device
+#     or its device cannot be read; the quarantine cannot be listed; the
+#     leaf's absence cannot be proven again; or the compare could not finish.
+# THE ORDER IS FIXED: the read, the device the witness records
+# (`_ws_collect_root_dev`), the slots (`_ws_collect_slots_of`), the leaf's
+# absence proven again (`_ws_reclaim_absent`), then the drop. The device
+# comes BEFORE the slots: with `~/.cc-tmp` deleted whole, or its volume
+# missing and its mount point standing empty, every slot under it reads
+# absent, and "no slot" would license the drop. The absence is proven again
+# HERE because the caller's proof came before this read: a leaf re-created
+# between the two keeps its witness, so "kept" always means "not proven gone".
+# TWO WAYS TO DROP. Where `mv` makes a NOREPLACE rename (`_ws_collect_mv_ok`),
+# the collector's own compare-and-drop, `_ws_collect_witness_cad`, is called
+# with the fields of THIS read: moved aside, compared, unlinked there only if
+# equal, and moved back otherwise — no window. Where it does not (Darwin, or
+# an `mv` without `--no-copy`), the witness is read a second time, all six
+# fields are compared with the first read, and only an equal one is unlinked
+# and proven gone. The window from that second read to the unlink is a stated
+# residual (`tail-drop-not-noreplace-without-mv-no-copy`): a writer that lands
+# in it loses the witness of a leaf that is not gone, which leaks that leaf
+# (nothing collects what no witness names) and never loses it.
+# IT PRINTS NOTHING: the reason reaches the journal through the caller's row.
+# The compare-and-drop warns once on stderr when it cannot move what it moved
+# aside back; that call's stderr is dropped here, and the kept reason is
+# chosen by a look at the witness's name instead — nothing there means the
+# move back failed and the generation it moved aside stands at its aside;
+# otherwise a newer generation stands at the name.
+_WS_WDROP=''; _WS_WDROP_WHY=''
+_ws_tmproot_witness_drop() {   # id -> 0 complete (_WS_WDROP dropped or absent); 1 kept; 2 unmeasured (both with _WS_WDROP_WHY)
+  local id="${1-}" w leaf rc run dev ino bt uid at
+  local _WS_WIT_DEV='' _WS_WIT_INO='' _WS_WIT_BTIME='' _WS_WIT_RUN='' _WS_WIT_UID='' _WS_WIT_AT='' _WS_CAD='' _WS_CAD_WHY=''
+  local -a _WS_QSLOTS=()
+  _WS_WDROP=''; _WS_WDROP_WHY=''
+  _ws_tmproot_id_ok "$id" || { _WS_WDROP_WHY="its witness was kept: '$id' is not an id a witness is named for, so no witness was touched"; return 1; }
+  w=$(_ws_tmproot_witness_file "$id"); leaf="$HOME/.cc-tmp/$id"
+  _ws_tmproot_witness_read "$id"; rc=$?
+  (( rc != 1 )) || { _ws_reclaim_absent "$w" && { _WS_WDROP=absent; return 0; }   # no witness stands, PROVEN: nothing to drop
+    _WS_WDROP_WHY="its witness was kept: no witness was read at its name, and its absence could not be proven (${_WS_ABSENT_WHY:-something stands at $w})"; return 2; }
+  (( rc == 0 )) || { _WS_WDROP_WHY="its witness was kept: it cannot be read as ccd writes it, so the generation it names was never read ($w; a link at ${w%/*} is never followed)"; return 2; }
+  run="$_WS_WIT_RUN"; dev="$_WS_WIT_DEV"; ino="$_WS_WIT_INO"; bt="$_WS_WIT_BTIME"; uid="$_WS_WIT_UID"; at="$_WS_WIT_AT"
+  _ws_collect_root_dev "$dev" "the witness of $id" || { _WS_WDROP_WHY="its witness was kept: the physical ~/.cc-tmp was not proven on the device the witness records ($_WS_ROOTDEV_WHY)"; return 2; }
+  _ws_collect_slots_of "$id" || { _WS_WDROP_WHY="its witness was kept: the quarantine slots of the id could not be listed ($_WS_QSLOTS_WHY)"; return 2; }
+  (( ${#_WS_QSLOTS[@]} == 0 )) || { _WS_WDROP_WHY="its witness was kept: the quarantine slot ${_WS_QSLOTS[0]##*/} of $id stands, so the collector lists it"; return 1; }
+  _ws_reclaim_absent "$leaf"; rc=$?   # the absence, proven again here
+  (( rc != 1 )) || { _WS_WDROP_WHY="its witness was kept: a leaf stands at $leaf again, so the leaf it names is not proven gone"; return 1; }
+  (( rc == 0 )) || { _WS_WDROP_WHY="its witness was kept: the absence of the leaf could not be proven again ($_WS_ABSENT_WHY)"; return 2; }
+  if _ws_collect_mv_ok; then   # a NOREPLACE rename exists: the collector's compare-and-drop, with this read's fields
+    _ws_collect_witness_cad "$id" "$dev" "$ino" "$bt" "$run" "$at" 2>/dev/null \
+      || { _WS_WDROP_WHY="its witness was kept: the compare-and-drop could not finish, so it was never compared and dropped ($_WS_CAD_WHY)"; return 2; }
+    case "$_WS_CAD" in dropped|absent) _WS_WDROP="$_WS_CAD"; return 0 ;; esac
+    _ws_reclaim_absent "$w" && { _WS_WDROP_WHY="its witness was kept: a generation this tail did not read could not be moved back from its compare-and-drop aside, where it stands, so nothing stands at its name ($w)"; return 1; }
+    _WS_WDROP_WHY="its witness was kept: a newer generation stands at $w"; return 1
   fi
-  rm -f -- "$w" 2>/dev/null \
-    || echo "ccd: warn: $id's temp root is gone but its witness $w could not be removed — a witness with no leaf is nothing to do, and a later removal of $id cleans it" >&2
-  return 0
+  # NO NOREPLACE RENAME: a second read, six fields compared, then the unlink.
+  _ws_tmproot_witness_read "$id"; rc=$?
+  (( rc != 1 )) || { _ws_reclaim_absent "$w" && { _WS_WDROP=absent; return 0; }   # it went since the first read, PROVEN
+    _WS_WDROP_WHY="its witness was kept: on a second read no witness was read at its name, and its absence could not be proven (${_WS_ABSENT_WHY:-something stands at $w})"; return 2; }
+  (( rc == 0 )) || { _WS_WDROP_WHY="its witness was kept: on a second read it cannot be read as ccd writes it, so it was never dropped ($w)"; return 2; }
+  [[ "$_WS_WIT_RUN" == "$run" && "$_WS_WIT_DEV" == "$dev" && "$_WS_WIT_INO" == "$ino" && "$_WS_WIT_BTIME" == "$bt" && "$_WS_WIT_UID" == "$uid" && "$_WS_WIT_AT" == "$at" ]] \
+    || { _WS_WDROP_WHY="its witness was kept: a newer generation stands at $w"; return 1; }
+  rm -f -- "$w" 2>/dev/null || :
+  _ws_reclaim_absent "$w" || { _WS_WDROP_WHY="its witness was kept: its unlink could not be proven ($w${_WS_ABSENT_WHY:+: $_WS_ABSENT_WHY})"; return 2; }
+  _WS_WDROP=dropped; return 0
 }
 _ws_leaf_why_line() {   # text -> ONE short line a journal row can carry: printable ASCII only (every
   #                          other byte reads "?", ccd's own "—" reads "-"), cut at 300 bytes, the cut marked "…"
@@ -33381,9 +33460,12 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # Darwin, always): the leaf is KEPT, and said — but only a leaf that STANDS
   # is kept: over nothing, nothing is recorded. `_ws_reclaim_absent`'s three
   # answers are read apart there: absent, PROVEN — nothing is kept, and the
-  # leaf's witness is dropped (`_ws_tmproot_witness_drop`, spec §5.2; never
-  # through `_ws_tmproot_remove`, whose leaf half would remove, unprobed, a
-  # leaf re-created since); standing — kept as the probe said; and an absence
+  # leaf's witness goes to `_ws_tmproot_witness_drop` (spec §5.2; path-identity
+  # spec §3.2 and §3.3), which drops it only once it has proven that absence
+  # again, on the device the witness records, beside no quarantine slot of the
+  # id, and only in the generation it read — never through
+  # `_ws_tmproot_remove`, whose leaf half would remove, unprobed, a leaf
+  # re-created since; standing — kept as the probe said; and an absence
   # that could not be proven — kept `unmeasured`, with the absence's reason,
   # and the witness stays. Every reason the row carries is the probe's, the
   # absence's or the helper's, through `_ws_leaf_why_line`.
@@ -35339,8 +35421,10 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # `quarantine`. Past those, and unless the cleanup pause stands, it is collectable
 # with a token of its own, and the verb then drops the witness and nothing else.
 # So a FRESH collection never orphans a slot in silence (spec §5.10): the resume
-# does not ask, because a record names its own slot there, and the reclaim tail's witness
-# drop is not the collector's (`tail-drop-ignores-a-recordless-slot`).
+# does not ask, because a record names its own slot there. Since path-identity W2
+# (TR4 A; path-identity spec §3.3) the reclaim tail's witness drop keeps the
+# witness beside any slot of the id too (`_ws_tmproot_witness_drop`;
+# `tail-drop-ignores-a-recordless-slot`, closed).
 #
 # THE DOCUMENT mirrors `ws-audit --expire`'s, with a `collect` object.
 # `collectable` MEANS a token, spelled through `_json_str` as the other audits'

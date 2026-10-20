@@ -121,7 +121,8 @@ export const g2Spawn = (id = COL_ID, scratch = 'g2.txt'): string =>
   `d=$(_child_tmpdir ${id}) && printf '%s' "$d" > "$HOME/g2-dir"`
   + (scratch === '' ? '' : ` && printf 'g2 scratch\\n' > "$d/${scratch}"`);
 /** The recycled child LEAVES, as its own reclaim leaves: its tail removes its temp root and drops the witness
- *  (`_ws_tmproot_remove`, wave 6), and its row goes. */
+ *  unless a quarantine slot of the id stands (`_ws_tmproot_remove`, wave 6; path-identity W2, TR4 A: the drop keeps
+ *  a witness beside any slot of its id), and its row goes. */
 export function g2Departs(h: PrHarness, id = COL_ID): void {
   h.sh(`_ws_tmproot_remove ${id} >/dev/null 2>&1; :`);
   for (const f of ['uuid', 'project', 'workdir', 'child']) fs.rmSync(path.join(regOf(h), `${id}.${f}`), { force: true });
