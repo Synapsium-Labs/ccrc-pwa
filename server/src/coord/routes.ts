@@ -545,8 +545,10 @@ export function registerCoordRoutes(
   watcher?: FleetWatcher,
 ): CoordRoutesHandle {
   /** D-5995: an answer carrying session-derived text is masked as one frame before it is serialized. */
-  const maskAnswer = async (_req: FastifyRequest, _reply: FastifyReply, payload: unknown): Promise<unknown> =>
-    (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(payload);
+  // A callback hook, never an async one: it completes in the tick of the route's `reply.send`, so a handler that
+  // sends a refusal and then resolves is answered once.
+  const maskAnswer = (_req: FastifyRequest, _reply: FastifyReply, payload: unknown,
+    done: (err: Error | null, value?: unknown) => void): void => { done(null, (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(payload)); };
   const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');
 
   // One instance for this server (see `CoordMutex`'s own docstring) —

@@ -2,8 +2,9 @@
  * THE EGRESS MASK (D-5513, accounts-connect spec 2026-10-18 §3.3, plan Task A10; G31). Every server egress of
  * session-derived text passes here before it leaves: the transcript and ask websocket (`sessionws.ts`), the fleet
  * websocket's session frames and `GET /api/fleet`, the drawer (`/ws/pty/:id`'s `onData`, the one point the local
- * `attachPty` and the remote `createSpawnPty` arms share), pane history, `GET /api/feed`, `GET /api/runs/:id/items`,
- * the mail answers, `GET /api/asks`, `GET /api/ledger`, `GET /api/digest`, the notification catch-up and every
+ * `attachPty` and the remote `createSpawnPty` arms share), pane history (in slices), `GET /api/feed`,
+ * `GET /api/runs/:id/items`, the mail answers, `GET /api/asks`, `GET /api/ledger`, `GET /api/digest`, the other GET
+ * routes the egress inventory lists, every write route's answer (one hook), the notification catch-up and every
  * web-push payload (`push.ts`).
  *
  * Two halves, both on DECODED strings before serialization, never on a serialized frame:
@@ -21,10 +22,10 @@
  *     candidate is a run between delimiters (two delimiter sets, a coarse and a fine one, on both views of the
  *     escapes), the same run with its leading and trailing ASCII punctuation trimmed, and in rows mode a run that
  *     ends its row joined with the next row's leading run. Only a candidate whose byte length some row holds counts,
- *     and the search for one is linear (D-5995). THE CAP FAILS CLOSED: one budget of 32 × 256 candidate RUNS, each
+ *     and the search for one is linear in the text: a fine run is searched only inside its coarse run (D-5995). THE CAP FAILS CLOSED: one budget of 32 × 256 candidate RUNS, each
  *     checked under every live key, covers a whole frame (a `maskDeep` walk, a drawer flush); once it is spent the
  *     rest of the string is replaced by `SECRET_MASK_TOO_LARGE`, and every later string of the frame is cut at its
- *     first candidate, read no further. That bounds a frame's work at about 20 ms (D-5995). With no fingerprint row
+ *     first candidate, read no further. That bounds a frame's hashing at about 20 ms (D-5995). With no fingerprint row
  *     held there is nothing to hash against, so the pass (and its ceiling) is skipped.
  *
  * A ROTATION keeps every previous box token whose generation still has rows, in memory only, so those rows go on
@@ -125,6 +126,8 @@ export function fingerprintAnswerOf(stdout: string): FingerprintAnswer | null {
 const ESC_SEQ = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[ -/]*[0-~])/g;
 /** A row move's stand-in (D-5995): a newline, with a NUL indent when it lands past the first column. */
 function rowMove(e: string): string | null {
+  if (e.length === 2) return e === '\x1bE' ? '\n' : e === '\x1bD' ? '\n\0' : null;
+  if (e[1] !== '[' || !'HfEFdB'.includes(e[e.length - 1]!)) return null;   // the common escape: no regex (D-5995)
   const m = /^\x1b\[([0-9;]*)([HfEFdB])$/.exec(e);
   if (m !== null) {
     if (m[2] === 'H' || m[2] === 'f') return Number(m[1]!.split(';')[1] || '1') > 1 ? '\n\0' : '\n';
@@ -138,8 +141,15 @@ function rowMove(e: string): string | null {
  *  stand-in in both, and the map from each view index to its index in the original (`map[t.length]` is the
  *  original's length). */
 interface View { readonly t: string; readonly map: Int32Array | null }
+/** The last text's two views: one mask reads the same text's views in several passes (D-5995). */
+let viewMemo: { s: string; v: [View | null, View | null] } = { s: '', v: [null, null] };
 function viewOf(s: string, sep: '' | '\0'): View {
   if (!s.includes('\x1b')) return { t: s, map: null };   // no escape: the view is the text (the common case)
+  if (viewMemo.s !== s) viewMemo = { s, v: [null, null] };
+  const k = sep === '' ? 0 : 1;
+  return viewMemo.v[k] ??= buildView(s, sep);
+}
+function buildView(s: string, sep: '' | '\0'): View {
   const parts: string[] = [];
   const map = new Int32Array(s.length + 1);
   let n = 0;
@@ -168,8 +178,9 @@ const origin = (v: View, i: number): number => (v.map === null ? i : v.map[i]!);
 
 // ── shapes ─────────────────────────────────────────────────────────────────
 
-/** A shape's left boundary (D-5995): no letter or digit before it, or a literal JSON escape, or a percent-escape. */
-const BOUNDARY = String.raw`(?:(?<![A-Za-z0-9])|(?<=\\[nrt])|(?<=%[0-9A-Fa-f]{2}))`;
+/** A shape's left boundary (D-5995): no letter or digit before it, or a literal JSON escape (`\n` `\r` `\t`, a
+ *  `\uXXXX`), a `\xXX` escape, or a percent-escape. */
+const BOUNDARY = String.raw`(?:(?<![A-Za-z0-9])|(?<=\\[nrt])|(?<=\\u[0-9A-Fa-f]{4})|(?<=\\x[0-9A-Fa-f]{2})|(?<=%[0-9A-Fa-f]{2}))`;
 
 /** One regular expression per shape, each with its boundary (a lookbehind source keeps its own). */
 export function shapeMatchers(masks: readonly CredentialMask[] = CREDENTIAL_MASKS): RegExp[] {
@@ -283,15 +294,31 @@ const HEX = /[0-9A-Fa-f]/;
 /** A byte only the fine set delimits on. */
 const FINE_ONLY = /[/?#()<>{[|*%]/;
 /** Where the run that ends at `e` starts, read back at most `max` units (D-5995). */
+/** Each ASCII byte's class for a read back (D-5995): 1 a coarse (and fine) delimiter, 2 a fine-only delimiter, 4 a
+ *  JSON escape's second byte, 8 a hex digit, 16 `%`; so a read back costs no regular expression. */
+const BYTE_CLASS = (() => {
+  const tab = new Uint8Array(128);
+  for (let c = 0; c < 128; c++) {
+    const ch = String.fromCharCode(c);
+    if (DELIM_COARSE.test(ch)) tab[c] = 1; else if (DELIM_FINE.test(ch)) tab[c] = 2;
+    if ('nrt"\\'.includes(ch)) tab[c] = tab[c]! | 4;
+    if (HEX.test(ch)) tab[c] = tab[c]! | 8;
+    if (ch === '%') tab[c] = tab[c]! | 16;
+  }
+  return tab;
+})();
+const isHex = (t: string, i: number): boolean => { const c = t.charCodeAt(i); return c < 128 && (BYTE_CLASS[c]! & 8) !== 0; };
 function runStartBefore(t: string, e: number, fine: boolean, max: number): number {
   const delim = fine ? DELIM_FINE : DELIM_COARSE;
   let i = e;
   while (i > 0 && e - i < max) {
-    const c = t[i - 1]!;
-    if (delim.test(c)) break;
-    if (i >= 2 && t[i - 2] === '\\' && 'nrt"\\'.includes(c) && !(i >= 3 && t[i - 3] === '\\')) break;   // a JSON escape
-    if (fine && i >= 3 && t[i - 3] === '%' && HEX.test(t[i - 2]!) && HEX.test(c)) break;           // a percent-escape
-    if (fine && c === '%' && i + 1 < t.length && HEX.test(t[i]!) && HEX.test(t[i + 1]!)) break;
+    const code = t.charCodeAt(i - 1);
+    if (code >= 128) { if (delim.test(t[i - 1]!)) break; i--; continue; }
+    const k = BYTE_CLASS[code]!;
+    if ((k & 1) !== 0 || (fine && (k & 2) !== 0)) break;
+    if ((k & 4) !== 0 && i >= 2 && t.charCodeAt(i - 2) === 0x5c && !(i >= 3 && t.charCodeAt(i - 3) === 0x5c)) break;   // a JSON escape
+    if (fine && (k & 8) !== 0 && i >= 3 && t.charCodeAt(i - 3) === 0x25 && isHex(t, i - 2)) break;                  // a percent-escape
+    if (fine && (k & 16) !== 0 && i + 1 < t.length && isHex(t, i) && isHex(t, i + 1)) break;
     i--;
   }
   return i;
@@ -321,19 +348,21 @@ function hasherOf(key: { readonly token: string }): FpHasher {
   if (h === undefined) hashers.set(key, (h = new FpHasher(key.token)));
   return h;
 }
-const PUNCT_LEAD = /^[!-/:-@[-`{-~]+/;
-const PUNCT_TRAIL = /[!-/:-@[-`{-~]+$/;
+/** ASCII punctuation (`[!-/:-@[-\`{-~]`), the bytes a candidate is trimmed of. */
+const isPunct = (c: number): boolean => (c >= 0x21 && c <= 0x2f) || (c >= 0x3a && c <= 0x40) || (c >= 0x5b && c <= 0x60)
+  || (c >= 0x7b && c <= 0x7e);
 /** The longest punctuation a candidate is trimmed of. */
 const TRIM_MAX = 16;
 
 /** The fail-closed start of a text's open tail (D-5995): an open Codex token value, `sk-` or `eyJ` at a boundary in
  *  its last run (a shape's prefix), or, while fingerprints are held (`fpMax`: the longest held byte length), a last run
- *  of 20 bytes or more that could still be one. Nothing else: an ordinary run is never masked for being open. An index
- *  into `t`, or null. */
+ *  of `floor` bytes or more that could still be one. Nothing else: an ordinary run is never masked for being open. An
+ *  index into `t`, or null. The floor is 20 for a run typed key by key (a keystroke's echo is never delayed, ruling a)
+ *  and 1 for a run a burst of output left open (a key a chunk boundary split shows none of its bytes). */
 const SHAPE_STARTED = new RegExp(`${BOUNDARY}(?:sk-|eyJ)`);
 const CODEX_VALUE_OPEN = /"(?:access_token|id_token|refresh_token|OPENAI_API_KEY)"\s*:\s*"((?:[^"\\\n]|\\.)*)$/;
 const OPEN_DELIM = /[\s"'=:,;&}\]`\0]/;
-function failClosedStart(t: string, fpMax: number | null): number | null {
+function failClosedStart(t: string, fpMax: number | null, floor = RUN_MIN_BYTES): number | null {
   const near = Math.max(0, t.length - DRAWER_HELD_MAX);
   if (t.lastIndexOf('"') >= near) {
     const cx = CODEX_VALUE_OPEN.exec(t.slice(near));
@@ -347,7 +376,7 @@ function failClosedStart(t: string, fpMax: number | null): number | null {
   if (sh !== null) return i + sh.index;
   if (fpMax === null) return null;
   const n = Buffer.byteLength(run, 'utf8');
-  return n >= RUN_MIN_BYTES && n <= fpMax + TRIM_MAX ? i : null;
+  return n >= floor && n <= fpMax + TRIM_MAX ? i : null;
 }
 
 interface Key { readonly gen: string; readonly token: string }
@@ -370,7 +399,14 @@ export interface MaskOpts {
   readonly failClosedTail?: boolean;
   /** The frame's shared exact-bytes budget (D-5995); absent: this string's own. */
   readonly budget?: MaskBudget;
+  /** A sliced mask (pane history): raw text that follows this text, matched with it and never emitted (D-5995). */
+  readonly lookahead?: string;
 }
+
+/** A sliced mask's slice and the raw overlap read on each side of it (D-5995): one slice of pane history costs a few
+ *  milliseconds, and the overlap is what a drawer holds, so a key or a wrapped shape a cut splits is matched whole. */
+const SLICE_UNITS = 64 * 1024;
+const SLICE_OVERLAP = DRAWER_HELD_MAX;
 
 /** Masks `text` for every egress of session-derived text. */
 export class SecretMasker {
@@ -539,7 +575,7 @@ export class SecretMasker {
     const consider = (v: View, pieces: readonly [number, number][]): void => {
       let n = 0;
       for (const [a, b] of pieces) n += b - a;
-      if (n > maxLen || n * 3 < minLen) return;
+      if (n > maxLen || n * 3 < minLen || (ascii && !lens.has(n))) return;
       const text = pieces.length === 1 ? v.t.slice(pieces[0]![0], pieces[0]![1]) : pieces.map(([a, b]) => v.t.slice(a, b)).join('');
       if (!lens.has(ascii ? text.length : Buffer.byteLength(text, 'utf8'))) return;
       const spans = pieces.map(([a, b]) => spanIn(v, a, b));
@@ -548,14 +584,17 @@ export class SecretMasker {
       occ.set(id, { at: spans[0]![0], text, spans });
       seen++;
     };
-    const trims = (t: string, a: number, b: number): [number, number][] => {
-      const run = t.slice(a, b);
-      const l = Math.min(PUNCT_LEAD.exec(run)?.[0].length ?? 0, TRIM_MAX);
-      const r = Math.min(PUNCT_TRAIL.exec(run)?.[0].length ?? 0, TRIM_MAX);
-      const out: [number, number][] = [[a, b]];
-      if (l > 0 && a + l < b) out.push([a + l, b]);
-      if (r > 0 && a < b - r) out.push([a, b - r]);
-      if (l > 0 && r > 0 && a + l < b - r) out.push([a + l, b - r]);
+    /** A run and its punctuation trims (`lead`/`trail`: that end may be trimmed). In an ASCII text every depth of
+     *  each trim is tried (D-5995: a key that itself ends in `_` or `-`, then a `.`, is found with its own last byte),
+     *  which costs nothing past the length prefilter; otherwise the whole punctuation run of each end. */
+    const trims = (t: string, a: number, b: number, lead = true, trail = true): [number, number][] => {
+      let l = 0; if (lead) while (l < TRIM_MAX && a + l < b && isPunct(t.charCodeAt(a + l))) l++;
+      let r = 0; if (trail) while (r < TRIM_MAX && b - r > a && isPunct(t.charCodeAt(b - r - 1))) r++;
+      if (l === 0 && r === 0) return [[a, b]];
+      const out: [number, number][] = [];
+      for (let x = 0; x <= l; x = ascii || x === l ? x + 1 : l) {
+        for (let y = 0; y <= r; y = ascii || y === r ? y + 1 : r) if (a + x < b - y) out.push([a + x, b - y]);
+      }
       return out;
     };
     const views = [viewOf(s, '\0')];
@@ -574,33 +613,40 @@ export class SecretMasker {
         const a = m.index; const b = a + m[0].length;
         if (b - a <= longest) for (const p of trims(t, a, b)) consider(v, [p]);
         if (!FINE_ONLY.test(m[0])) continue;
-        fine.lastIndex = a;
-        for (let f = fine.exec(t); f !== null && f.index < b; f = fine.exec(t)) {
-          const fb = Math.min(b, f.index + f[0].length);
-          if (fb - f.index <= longest) for (const p of trims(t, f.index, fb)) consider(v, [p]);
+        // The fine runs are searched inside the coarse run only, never past it (D-5995): searching the whole text from
+        // `a` costs the rest of the text for every coarse run with no long fine run, quadratic on a path listing. The
+        // run's own start is a run start, so its slice yields the same runs.
+        const sub = m[0];
+        fine.lastIndex = 0;
+        for (let f = fine.exec(sub); f !== null; f = fine.exec(sub)) {
+          const fa = a + f.index; const fb = fa + f[0].length;
+          if (fb - fa <= longest) for (const p of trims(t, fa, fb)) consider(v, [p]);
         }
         coarse.lastIndex = b;
       }
       if (!rows) continue;
-      // A run that ends its row, joined with the next row's leading run: a key the TUI wrapped.
-      for (const fineSet of [false, true]) {
-        seen = 0;
-        LINE_BREAK.lastIndex = 0;
-        for (let m = LINE_BREAK.exec(t); m !== null && seen < limit; m = LINE_BREAK.exec(t)) {
-          let e = m.index;
-          while (e > 0 && (t[e - 1] === ' ' || t[e - 1] === '\t' || t[e - 1] === '\0')) e--;
-          const a = runStartBefore(t, e, fineSet, longest + 1);
-          if (a === e || e - a > longest) continue;
-          const after = m.index + m[0].length;
-          ROW_INDENT_OPT.lastIndex = after;
-          const at = after + ROW_INDENT_OPT.exec(t)![0].length;
-          TOKEN_RUN.lastIndex = at;
-          const run = TOKEN_RUN.exec(t);
-          if (run === null) continue;
-          const next: [number, number] = [at, at + run[0].length];
-          if ((e - a) + (next[1] - next[0]) - 2 * TRIM_MAX > maxLen) continue;
-          const head = trims(t, a, e).filter(([x, y]) => y === e && y - x <= maxLen);
-          const tail = trims(t, next[0], next[1]).filter(([x]) => x === next[0]);
+      // A run that ends its row, joined with the next row's leading run: a key the TUI wrapped. One read back gives
+      // the fine run's start and, read on from there, the coarse run's (D-5995: the same starts as two reads).
+      seen = 0;
+      LINE_BREAK.lastIndex = 0;
+      for (let m = LINE_BREAK.exec(t); m !== null && seen < limit; m = LINE_BREAK.exec(t)) {
+        let e = m.index;
+        while (e > 0 && (t[e - 1] === ' ' || t[e - 1] === '\t' || t[e - 1] === '\0')) e--;
+        const aFine = runStartBefore(t, e, true, longest + 1);
+        if (e - aFine > longest) continue;
+        const aCoarse = runStartBefore(t, aFine, false, longest + 1 - (e - aFine));
+        if (aCoarse === e) continue;
+        const after = m.index + m[0].length;
+        ROW_INDENT_OPT.lastIndex = after;
+        const at = after + ROW_INDENT_OPT.exec(t)![0].length;
+        TOKEN_RUN.lastIndex = at;
+        const run = TOKEN_RUN.exec(t);
+        if (run === null) continue;
+        const next: [number, number] = [at, at + run[0].length];
+        const tail = trims(t, next[0], next[1], false, true);
+        for (const a of aCoarse === aFine ? [aFine] : [aCoarse, aFine]) {
+          if (a === e || e - a > longest || (e - a) + (next[1] - next[0]) - 2 * TRIM_MAX > maxLen) continue;
+          const head = trims(t, a, e, true, false).filter(([x, y]) => y - x <= maxLen);
           for (const h of head) for (const tl of tail) consider(v, [h, tl]);
         }
       }
@@ -620,36 +666,36 @@ export class SecretMasker {
     return { spans, cut: null };
   }
 
-  /** Where the first exact-bytes candidate of `s` can start (at or before it), or null: `s` holds none. */
+  /** Where the first exact-bytes candidate of `s` can start (at or before it), or null: `s` holds none. Only the text
+   *  ahead of the first escape is read, where both views are the text itself; a candidate that an escape could join
+   *  starts no later than the run before that escape (D-5995: a spent frame's later strings cost no views). */
   private firstCandidate(s: string, rows: boolean): number | null {
     const live = this.liveKeys();
     if (live.length === 0) return null;
     let minLen = Infinity;
     for (const l of live) for (const n of l.lens) if (n < minLen) minLen = n;
-    let best: number | null = null;
-    const views = [viewOf(s, '\0')];
-    if (s.includes('\x1b')) views.push(viewOf(s, ''));
-    for (const v of views) {
-      const re = runExpr(false, Math.ceil(minLen / 3));
-      re.lastIndex = 0;
-      const m = re.exec(v.t);
-      if (m !== null) best = Math.min(best ?? Infinity, origin(v, m.index));
-      if (!rows) continue;
-      LINE_BREAK.lastIndex = 0;
-      for (let b = LINE_BREAK.exec(v.t); b !== null; b = LINE_BREAK.exec(v.t)) {
-        if (best !== null && origin(v, b.index) >= best) break;
-        let e = b.index;
-        while (e > 0 && (v.t[e - 1] === ' ' || v.t[e - 1] === '\t' || v.t[e - 1] === '\0')) e--;
-        const a = runStartBefore(v.t, e, false, Infinity);
-        if (a < e) { best = Math.min(best ?? Infinity, origin(v, a)); break; }
-      }
+    const esc = s.indexOf('\x1b');
+    const t = esc < 0 ? s : s.slice(0, esc);
+    let best: number | null = esc < 0 ? null : runStartBefore(t, t.length, false, Infinity);
+    const re = runExpr(false, Math.ceil(minLen / 3));
+    re.lastIndex = 0;
+    const m = re.exec(t);
+    if (m !== null) best = Math.min(best ?? Infinity, m.index);
+    if (!rows) return best;
+    LINE_BREAK.lastIndex = 0;
+    for (let b = LINE_BREAK.exec(t); b !== null; b = LINE_BREAK.exec(t)) {
+      if (best !== null && b.index >= best) break;
+      let e = b.index;
+      while (e > 0 && (t[e - 1] === ' ' || t[e - 1] === '\t' || t[e - 1] === '\0')) e--;
+      const a = runStartBefore(t, e, false, Infinity);
+      if (a < e) { best = Math.min(best ?? Infinity, a); break; }
     }
     return best;
   }
 
   /** `text` masked, and whether a shape ran to its text's last row (the drawer carries it into the next chunk). */
-  maskWithCarry(text: string, opts: MaskOpts = {}): { text: string; carry: boolean } {
-    if (text === '') return { text, carry: opts.leadingWrap === true };
+  maskWithCarry(text: string, opts: MaskOpts = {}): { text: string; carry: boolean; cut: boolean } {
+    if (text === '') return { text, carry: opts.leadingWrap === true, cut: false };
     this.syncKeys();
     const rows = opts.rows === true;
     const ctx = opts.context ?? '';
@@ -657,7 +703,7 @@ export class SecretMasker {
     // A frame whose budget is spent cuts each later string at its first candidate: only the text ahead of it is read
     // (D-5995), so a frame of many long strings costs what its first strings cost.
     const spent = budget.left <= 0 ? this.firstCandidate(ctx + text, rows) : null;
-    const full = spent === null ? ctx + text : (ctx + text).slice(0, Math.max(spent, ctx.length));
+    const full = spent === null ? ctx + text + (opts.lookahead ?? '') : (ctx + text).slice(0, Math.max(spent, ctx.length));
     const off = ctx.length;
     const spans: [number, number][] = [];
     /** Full-text spans, as spans of `text`: a span wholly in the context was sent masked already. */
@@ -685,7 +731,9 @@ export class SecretMasker {
       const p = failClosedStart(v.t, this.fingerprintMax());
       if (p !== null) clip([[origin(v, p), full.length]]);
     }
-    const limit = fp.cut === null ? text.length : Math.max(0, fp.cut - off);
+    // A cut inside the lookahead is the next slice's: this text is whole (its budget is spent, so that one is cut).
+    const cutAt = fp.cut !== null && fp.cut - off < text.length ? fp.cut : null;
+    const limit = cutAt === null ? text.length : Math.max(0, cutAt - off);
     spans.sort((x, y) => x[0] - y[0]);
     // Parts joined once (D-5995): appending to a string and testing its end on every span flattens it each time.
     const out: string[] = []; let at = 0; let masked = false;
@@ -698,8 +746,33 @@ export class SecretMasker {
       at = b;
     }
     if (at < limit) out.push(text.slice(at, limit));
-    if (fp.cut !== null) out.push(SECRET_MASK_TOO_LARGE);
-    return { text: out.join(''), carry: fp.cut === null && shapes.carry };
+    if (cutAt !== null) out.push(SECRET_MASK_TOO_LARGE);
+    return { text: out.join(''), carry: cutAt === null && shapes.carry, cut: cutAt !== null };
+  }
+
+  /** A long text (pane history) masked in slices at line breaks, yielding to the event loop between them, so no slice
+   *  blocks it past the 25 ms bound (D-5995). Each slice reads the raw text on both sides of it, and one budget covers
+   *  them all; once it cuts, the rest is the too-large notice. The same answer as `maskText` but for that overlap. */
+  async maskTextSliced(text: string, opts: { rows?: boolean } = {},
+    pause: () => Promise<void> = () => new Promise((r) => setImmediate(r))): Promise<string> {
+    if (text.length <= SLICE_UNITS) return this.maskText(text, opts);
+    const budget = newBudget();
+    const out: string[] = [];
+    let carry = false;
+    for (let at = 0; at < text.length;) {
+      let end = Math.min(text.length, at + SLICE_UNITS);
+      if (end < text.length) { const nl = text.lastIndexOf('\n', end - 1); if (nl > at) end = nl + 1; }
+      const r = this.maskWithCarry(text.slice(at, end), {
+        rows: opts.rows, leadingWrap: carry, budget,
+        context: text.slice(Math.max(0, at - SLICE_OVERLAP), at), lookahead: text.slice(end, end + SLICE_OVERLAP),
+      });
+      out.push(r.text);
+      if (r.cut) break;
+      carry = r.carry;
+      at = end;
+      if (at < text.length) await pause();
+    }
+    return out.join('');
   }
 
   /** One string, masked. `rows`: the drawer and pane history (TUI row wraps). */
@@ -751,12 +824,14 @@ function codexValueOpenAt(t: string): number | null {
  *  mode an ordinary run (a word, a path, a keystroke's echo) is never held: a shape a cut splits ahead of `sk-` is
  *  matched across the cut by the drawer's context. `null`: that tail is longer than a drawer holds. Only the end of
  *  the text is scanned. */
+/** An escape whose final byte has not arrived yet, at the end of a text. */
+const UNFINISHED_ESC = /\x1b(?:\[[0-?]*[ -/]*|\][^\x07\x1b]*|[PX^_][^\x1b]*|[ -/]*)?$/;
 function openTailAt(s: string, fingerprints: boolean, ctx = ''): number | null {
   const base = Math.max(0, s.length - (DRAWER_HELD_MAX + 64));
   // What was sent just before is read with the text (a run `sk-` began in it is still open), never held again.
   const lead = base === 0 ? ctx.slice(-64) : '';
   const w = lead + s.slice(base);
-  const esc = /\x1b(?:\[[0-?]*[ -/]*|\][^\x07\x1b]*|[PX^_][^\x1b]*|[ -/]*)?$/.exec(w);
+  const esc = UNFINISHED_ESC.exec(w);
   const bodyEnd = esc === null ? w.length : esc.index;
   const v = viewOf(w.slice(0, bodyEnd), '\0');
   let i = v.t.length;
@@ -781,11 +856,15 @@ const MASK_COLUMNS = [...SECRET_MASK].length;
 /** Erases the provisional mask: back over its columns, then blank them (CUB, ECH), so the completed text is drawn
  *  where the terminal would have drawn it. */
 const ERASE_MASK = `\x1b[${MASK_COLUMNS}D\x1b[${MASK_COLUMNS}X`;
+/** How many holds a provisional mask whose run ended its row waits for a wrapped next row (D-5995): a TUI writes a
+ *  wrapped line's rows in one write, so a quiet row end is the line's end, and its text is drawn as typed. */
+const ROW_SETTLE_HOLDS = 2;
 
 /** Whether the run that opens `s` has ended within it (D-5995): a delimiter or an escape after it, and when that is a
  *  row end, the next row's leading run ended too (a TUI wrap continues the run there). 'spaces': only blanks follow
- *  it so far (closed once the hold passes with nothing after them). */
-function runClosed(s: string): boolean | 'spaces' {
+ *  it so far (closed once the hold passes with nothing after them). 'row': only a row end (and an indent) follows it
+ *  so far (closed once a longer settle passes with no wrapped next row: the output went quiet at a line's end). */
+function runClosed(s: string): boolean | 'spaces' | 'row' {
   const v = viewOf(s, '\0');
   const t = v.t;
   let k = 0;
@@ -801,10 +880,12 @@ function runClosed(s: string): boolean | 'spaces' {
     return j < t.length ? true : 'spaces';
   }
   let j = k + nl[0].length;
+  if (j >= t.length) return 'row';
   ROW_INDENT.lastIndex = j;
   const ind = ROW_INDENT.exec(t);
-  if (ind === null) return j < t.length;   // an unindented next row: a new line
+  if (ind === null) return true;   // an unindented next row: a new line
   j += ind[0].length;
+  if (j >= t.length) return 'row';
   TOKEN_RUN.lastIndex = j;
   const run = TOKEN_RUN.exec(t);
   return j + (run === null ? 0 : run[0].length) < t.length;
@@ -824,6 +905,8 @@ export class DrawerMask {
   private pending: string | null = null;
   /** A run past what a drawer holds ended in a mask: the next chunk's leading run continues it. */
   private taint = false;
+  /** Every chunk the held tail came in was a keystroke's echo (D-5995): its expired hold keeps the 20-byte floor. */
+  private heldTyped = true;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly masker: SecretMasker, private readonly emit: (text: string) => void,
@@ -833,20 +916,22 @@ export class DrawerMask {
     if (chunk === '') return;
     if (this.pending !== null) {
       const s = this.pending + chunk;
-      // Still able to be a secret, by the rule that drew the mask: keep it behind the provisional mask.
+      // Still able to be a secret, by the rule that drew the mask: keep it behind the provisional mask. The context is
+      // read through the same escape view (D-5995): a cursor escape before the run is a delimiter, never run bytes.
       const v = viewOf(s, '\0');
       let k = 0;
       while (k < v.t.length && !OPEN_DELIM.test(v.t[k]!)) k++;
-      const first = this.ctx.slice(-64) + v.t.slice(0, k);   // the run the mask stands for, as far as it has come
-      const couldBe = failClosedStart(first, this.masker.fingerprintMax()) !== null
+      const first = viewOf(this.ctx.slice(-64), '\0').t + v.t.slice(0, k);   // the run the mask stands for, so far
+      const couldBe = failClosedStart(first, this.masker.fingerprintMax(), 1) !== null
         || (k === v.t.length && codexValueOpenAt(this.ctx + s) !== null)
         || (k < v.t.length && CODEX_VALUE_OPEN.test(`${this.ctx.slice(-64)}${v.t.slice(0, k)}`));
       const closed = runClosed(s);
       if (closed !== true && couldBe && s.length <= DRAWER_HELD_MAX) {
         this.pending = s;
         // Blanks after the run: it ends there unless a row end and a wrapped next row follow within the hold.
-        if (closed === 'spaces' && this.timer === null) {
-          this.timer = setTimeout(() => { this.timer = null; this.settlePending(); }, this.holdMs);
+        if (closed !== false && this.timer === null) {
+          this.timer = setTimeout(() => { this.timer = null; this.settlePending(); },
+            closed === 'row' ? ROW_SETTLE_HOLDS * this.holdMs : this.holdMs);
         }
         return;
       }
@@ -855,6 +940,9 @@ export class DrawerMask {
       this.resolve(s);
       return;
     }
+    // A keystroke's echo is at most two visible characters (a surrogate pair), its escapes aside.
+    const typed = viewOf(chunk, '').t.length <= 2;
+    this.heldTyped = (this.held === '' || this.heldTyped) && typed;
     this.route(this.held + chunk, '');
   }
 
@@ -862,17 +950,28 @@ export class DrawerMask {
   flush(): void {
     this.stopTimer();
     if (this.held === '') return;
-    const h = this.held;
+    let h = this.held;
     this.held = '';
-    const v = viewOf(h, '\0');
-    const p = failClosedStart(this.ctx.slice(-64) + v.t, this.masker.fingerprintMax());
+    // The context and the held text are read as one text (D-5995): an escape the cut split is whole in it, and a
+    // cursor escape before the run is a delimiter, never run bytes. An escape that has not ended is never sent in part,
+    // nor masked into: it stays held until its next byte.
+    const lead = this.ctx.slice(-64);
+    const open = UNFINISHED_ESC.exec(lead + h);
+    let tail = '';
+    if (open !== null) {
+      const at = Math.max(0, open.index - lead.length);
+      tail = h.slice(at);
+      h = h.slice(0, at);
+      if (h === '') { this.held = tail; return; }
+    }
+    const v = viewOf(lead + h, '\0');
+    const p = failClosedStart(v.t, this.masker.fingerprintMax(), this.heldTyped ? RUN_MIN_BYTES : 1);
     // A start inside the context: the run began before the held text, which is all of it.
-    const at = p === null ? null : Math.max(0, p - Math.min(64, this.ctx.length));
-    if (at === null) { this.out(h, false, ''); return; }
-    const cut = origin(v, at);
+    const cut = p === null ? null : Math.max(0, origin(v, p) - lead.length);
+    if (cut === null) { this.out(h, false, ''); this.held = tail; return; }
     if (cut > 0) this.out(h.slice(0, cut), false, '');
     this.emit(SECRET_MASK);
-    this.pending = h.slice(cut);
+    this.pending = h.slice(cut) + tail;
   }
 
   /** The provisional mask's run ended in blanks that nothing followed within the hold: resolve it now. */

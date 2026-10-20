@@ -189,6 +189,9 @@ const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 const UPLOAD_EXT_RE = new RegExp(`\\.(${CLIP_EXT_ALT})$`, 'i');
 /** Ceiling on attachments per prompt — a sanity bound, not a UX limit. */
 const MAX_ATTACHMENTS = 4;
+/** D-5995: the write routes whose answers are never masked: the auth ceremonies and the box-token claim and rotation,
+ *  whose answers a reader needs byte for byte and which carry no session text. */
+export const WRITE_ANSWER_EXEMPT = /^\/api\/(?:auth|token)\//;
 
 /**
  * Which `AuthStatus` fields an UNAUTHENTICATED caller may see on the exempt
@@ -1233,8 +1236,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   const stateCachePath = deps.stateCachePath ?? defaultCachePath();
   /** D-5995: a route answer carrying session-derived text is masked as one frame before it is serialized. */
-  const maskAnswer = async (_req: FastifyRequest, _reply: FastifyReply, payload: unknown): Promise<unknown> =>
-    (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(payload);
+  // A callback hook, never an async one: it completes in the tick of the route's `reply.send`, so a handler that
+  // sends a refusal and then resolves is answered once.
+  const maskAnswer = (_req: FastifyRequest, _reply: FastifyReply, payload: unknown,
+    done: (err: Error | null, value?: unknown) => void): void => { done(null, (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(payload)); };
+  // D-5995: EVERY write route's answer is masked the same way, in one place, so no route can forget it: an inject
+  // answer carries the pane tail, the box's draft or the next dialog, and a claim conflict carries its intent. Exempt
+  // are only the answers that must reach their reader byte for byte: the auth ceremonies' challenges and options, and
+  // the box token a claim hands out (`WRITE_ANSWER_EXEMPT`; none carries session text). A callback hook, never an
+  // async one: it completes in the tick of the route's `reply.send`, so a handler that sends and then resolves is
+  // answered once.
+  app.addHook('preSerialization', (req, _reply, payload, done) => {
+    done(null, req.method === 'GET' || req.method === 'HEAD' || WRITE_ANSWER_EXEMPT.test(req.routeOptions.url ?? '')
+      ? payload : (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(payload));
+  });
 
   // Degraded mode: while the remote fleet host is unreachable, serve the
   // last-known-good snapshot (fleetstate.ts, written by FleetWatcher on every
@@ -2039,8 +2054,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // the census holds a 302-column window, so the multiplier is measured
     // rather than assumed (spec §5.4).
     // The text is masked before it leaves (D-5513), in rows mode: `-J` joins the pane's own wraps, and Claude Code's
-    // TUI hard-wraps a long line into indented rows of its own.
-    const text = (deps.masker ?? SHAPE_ONLY_MASKER).maskText(r.text, { rows: true });
+    // TUI hard-wraps a long line into indented rows of its own. In slices, so a 2,000-line history never blocks the
+    // event loop past the 25 ms bound (D-5995).
+    const text = await (deps.masker ?? SHAPE_ONLY_MASKER).maskTextSliced(r.text, { rows: true });
     return probe.ok
       ? { ok: true, text, lines: asked, scrollback: probe.history, alternate: probe.alternate, width: probe.width }
       : { ok: true, text, lines: asked };
