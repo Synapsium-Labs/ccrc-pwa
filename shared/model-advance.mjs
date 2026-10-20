@@ -79,8 +79,11 @@ export function eligibleIds(registry, catalogue) {
  * this hour, or why not. `family` is the class's stored family, or null when there is none.
  *  1. A pin that breaks the grammar is `blocked: 'pin-grammar'`: such a class never advances, and the
  *     `model-advance-blocked` WARN names it, so it cannot go quiet.
- *  2. A missing family is derived from the pin. An empty class with no family gets nothing: an empty class is
- *     filled only from a family stored for it (init's seed, or the backfill's), never from a guess.
+ *  2. THE FAMILY (D-5992). A PINNED class follows its pin's own family, whatever family is stored: a stored family
+ *     that disagrees with the pin is stale (a hand set-class by a build from before the advance file, a hand-edited
+ *     registry), and following it would move the class across families. The stored family decides only for an
+ *     EMPTY class, which is what it exists for: an empty class with no family gets nothing, because it is filled
+ *     only from a family stored for it (init's seed, or the backfill's), never from a guess.
  *  3. SHARED FAMILY (D-5819). Over every eligible id of the family, ties included, take its newest version. The
  *     class is `blocked: 'shared-family'` when an id at that version, other than the class's own pin, is
  *     another class's pin: two classes follow one family, and only the operator can say which keeps it. A model
@@ -106,7 +109,7 @@ export function chooseCandidate({ registry, catalogue, cls, family }) {
   const none = { candidate: null, reason: null, blocked: null };
   const pin = registry.classes[cls] ?? null;
   if (pin !== null && parseModelId(pin) === null) return { ...none, blocked: 'pin-grammar' };
-  const fam = family ?? familyOf(pin);
+  const fam = pin !== null ? familyOf(pin) : family;   // D-5992: step 1 has refused a pin familyOf cannot read
   const inFamily = [];
   for (const id of eligibleIds(registry, catalogue)) {
     const p = parseModelId(id);

@@ -632,6 +632,9 @@ function revertLeft(detail, rest) {
  *  - COMMIT AFTER MATERIALISE, as an advance commits (D21): `previous` is cleared and the move recorded only once the
  *    lane's files are rendered. A materialise that fails puts the old registry back and renders it again, and the
  *    refusal says the class is held.
+ *  - THE FAMILY (D-5992): the commit writes the restored pin's family, so a pin moved back across families leaves no
+ *    stale family for a later reader. A revert to none keeps the stored family, the one an empty class is filled
+ *    from (spec §2.2 Seeding).
  *  - A RE-RUN ON A REVERTED PIN (D-5991): a revert cut short after its registry write left the class on
  *    `previous.model` with no history entry. Run again, it renders the lane, clears `previous` and keeps the hold,
  *    and records no move: an entry from that model to itself would be a move that never happened.
@@ -723,6 +726,9 @@ function revertOp(a, account, registry, catalogue, win) {
       + 'its previous model is still on record, so the revert can be run again.');
   }
   c.previous = null;
+  // D-5992: the restored pin's family, so the file stays true for every reader. A revert to none keeps the stored
+  // family: an empty class is filled from it, and a held one is reported behind it.
+  if (to !== null) c.family = familyOf(to);
   // D-5991: a re-run on a reverted pin records no move (from and to are one model).
   const done = from === to ? adv : recordMove(adv, a.class, {
     at: now(), how: 'revert', from, to, ok: true, canary: 'not-run',

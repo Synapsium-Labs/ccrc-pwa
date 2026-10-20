@@ -101,6 +101,30 @@ describe('chooseCandidate — one class, one family, forwards (§2.2)', () => {
       .toEqual({ candidate: 'model-6.1-gamma', reason: 'newer', blocked: null });
   });
 
+  it("a pinned class follows its pin's own family, never a stored family that disagrees with it (D-5992)", () => {
+    // A stored family goes stale when a pin moves and the family is not rewritten: a hand set-class by a build from
+    // before the advance file, after a rollback; a hand-edited registry; a revert by a build that did not rewrite it.
+    const r = reg({ opus: 'model-6-delta' });
+    expect(chooseCandidate({ registry: r, catalogue: cat([mrow('model-6-delta'), mrow('model-6.1-gamma')]), cls: 'opus',
+      family: 'gamma' }), 'a newer model of the stored family is no candidate for a pin of another').toEqual(NONE);
+    // …and the pin's own family is the one it moves in.
+    const both = cat([mrow('model-6-delta'), mrow('model-6.1-gamma'), mrow('model-7-delta')]);
+    expect(chooseCandidate({ registry: r, catalogue: both, cls: 'opus', family: 'gamma' }))
+      .toEqual({ candidate: 'model-7-delta', reason: 'newer', blocked: null });
+    // A retired pin falls back within its own family too, never into the stored one.
+    expect(chooseCandidate({ registry: reg({ opus: 'model-5-delta' }), catalogue: both, cls: 'opus', family: 'gamma' }))
+      .toEqual({ candidate: 'model-7-delta', reason: 'retired', blocked: null });
+  });
+
+  it('the stored family decides for an empty class, which is what it exists for, beside a pinned class of another family (D-5992)', () => {
+    const c = cat([mrow('model-6-delta'), mrow('model-6.1-gamma'), mrow('model-7-delta')]);
+    const r = reg({ opus: 'model-6-delta' });
+    expect(chooseCandidate({ registry: r, catalogue: c, cls: 'fable', family: 'gamma' }))
+      .toEqual({ candidate: 'model-6.1-gamma', reason: 'empty', blocked: null });
+    expect(chooseCandidate({ registry: r, catalogue: c, cls: 'fable', family: null }), 'no stored family: no guess')
+      .toEqual(NONE);
+  });
+
   it('forwards only: a pin with only an older model listed gets no candidate', () => {
     expect(chooseCandidate({ registry: reg({ opus: 'model-6.1-gamma' }), catalogue: gamma, cls: 'opus', family: 'gamma' }))
       .toEqual(NONE);

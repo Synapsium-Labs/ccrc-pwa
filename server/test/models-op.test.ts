@@ -2667,6 +2667,27 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
       to: 'model-5.6-gamma', ok: true, canary: 'not-run', effort: { from: 'xhigh', to: 'max' } });
   });
 
+  it("revert writes the restored pin's family, so the advance file stays true for every reader (D-5992)", () => {
+    // opus on model-6.1-gamma, family gamma, with a previous pin of another family: the stored family would be stale
+    // the moment the pin moved back, and W2 would read it.
+    advanced({ model: 'model-6-delta', effort: 'max' });
+    expect(advanceOf(ID).classes.opus.family, 'CONTROL: the family before the revert').toBe('gamma');
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(classesOf(ID)['opus']).toBe('model-6-delta');
+    expect(advanceOf(ID).classes.opus.family).toBe(familyOf('model-6-delta'));
+  });
+
+  it('a revert to none keeps the stored family: an empty class is filled from it, and a held one is reported behind it (D-5992)', () => {
+    // fable filled from empty by an advance, then reverted to empty: the plan's example file's fable.
+    advanced({ model: null, effort: null }, { ...ADV_REGISTRY, classes: { ...ADV_REGISTRY.classes, fable: 'model-6-delta' } },
+      'fable');
+    const r = verb('revert', 'fable');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(classesOf(ID)['fable']).toBeNull();
+    expect(advanceOf(ID).classes.fable.family).toBe('delta');
+  });
+
   it('a revert whose materialise fails puts the registry back and leaves the class held, previous and history as they were (D-5206)', () => {
     advanced();
     const reg0 = fs.readFileSync(regPath(ID), 'utf8');
