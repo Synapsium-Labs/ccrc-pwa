@@ -609,10 +609,10 @@ describe('D-5027: a held pass is fresh for tick-stale', () => {
     heldPasses(box);
     return box;
   };
-  const verdict = (box: HistoryBox): Array<{ word: string; detail: string }> => {
+  const verdict = (box: HistoryBox): Array<{ word: string; detail: string; remedy: string }> => {
     const r = runCli(box, ['status', '--json']);
     expect(r.code, r.stderr).toBe(0);
-    return (r.json!['health'] as { fail: Array<{ word: string; detail: string }> }).fail;
+    return (r.json!['health'] as { fail: Array<{ word: string; detail: string; remedy: string }> }).fail;
   };
   const setMetaRaw = (box: HistoryBox, k: string, v: string): void => {
     const db = new DatabaseSync(paths(box).db);
@@ -635,6 +635,10 @@ describe('D-5027: a held pass is fresh for tick-stale', () => {
     const fail = verdict(box);
     expect(fail.map((i) => i.word).sort()).toEqual(['lag-high', 'migration-needs-op']);
     expect(fail.find((i) => i.word === 'lag-high')!.detail).toContain('over 1800 s');
+    // W5h-2 Task 5 (R6): the lag cannot drain while the hold stands, so lag-high's remedy is the hold's own, end to end through status.
+    const needsOp = fail.find((i) => i.word === 'migration-needs-op')!.remedy;
+    expect(needsOp, 'CONTROL: the hold\'s own remedy names the verb').toContain('ccrc history doctor --migrate');
+    expect(fail.find((i) => i.word === 'lag-high')!.remedy).toBe(`no scheduled pass ingests while migration-needs-op stands, so this lag cannot drain until it clears: ${needsOp}`);
   });
 
   it('F1 (review 466): a store newer than this build is refused at openStore, before the held arm: schema-newer, exit 5, NO held_pass_ms, so tick-stale stands beside schema-newer', () => {

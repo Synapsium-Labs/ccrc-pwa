@@ -4206,6 +4206,8 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
       ...(['store-missing', 'store-unbound', 'store-recoverable', 'store-zero-byte', 'store-schema-missing'] as const).flatMap((reason) =>
         [{ exit: 5, reason }, { exit: 5, reason, backupsDb: ['20261001T000000Z.db'], journalStoreDirs: ['0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e'] }]),
       { sizeBytes: 41 * 2 ** 30 }, { capturePause: 'at-cap', sizeBytes: 50 * 2 ** 30 },
+      // W5h-2 Task 5 (R6): lag-high's remedy on a node held by each of D-5027's three holds.
+      ...(['snapshot-needs-op', 'refuse-low-disk', 'refuse-newer'] as const).map((migration) => ({ migration, userVersion: 1, codeVersion: 2, lagS: 7200 })),
     ];
     for (const o of dynamic) {
       const r = healthLib.deriveHealth(base(o));
@@ -4607,6 +4609,47 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
       expect(words(unmeasured, 'warn')).not.toContain('lag-unmeasured');
       const high = healthLib.deriveHealth(base({ ...HELD, lagS: 7200, heldPassMs: NOW - MIN }));
       expect(words(high, 'fail'), 'lag-high is judged as it always was').toEqual(['lag-high', 'migration-needs-op']);
+    });
+    // W5h-2 Task 5 (D-5027's follow-up, coordinator ruling R6): while a hold stands no scheduled pass ingests, so the lag cannot drain,
+    // and lag-high's remedy is the hold's own (schema-newer first). A capture pause is not a hold here: it has its own FAIL.
+    describe('lag-high on a held node names the hold that keeps the lag high (D-5027, R6)', () => {
+      const GiB = 2 ** 30;
+      const failOf = (r: healthLib.HealthResult, word: string): healthLib.HealthItem => {
+        const i = r.fail.find((x) => x.word === word);
+        expect(i, `${word} in ${JSON.stringify(words(r, 'fail'))}`).toBeDefined();
+        return i!;
+      };
+      const HOLDS: Array<[string, string, Partial<healthLib.HealthInputs>, string]> = [
+        ['snapshot-needs-op', 'migration-needs-op', {}, 'the operator runs ccrc history doctor --migrate'],
+        ['refuse-low-disk', 'migration-refused', { migration: 'refuse-low-disk' }, 'free space on the filesystem holding /home/u/.ccrc/history/db until more than 21600000000 bytes are free'],
+        ['refuse-newer', 'schema-newer', { migration: 'refuse-newer', userVersion: 3, codeVersion: 2 }, '(ccrc update)'],
+        ['a stored version past this build\'s', 'schema-newer', { migration: 'none', userVersion: 3, codeVersion: 2 }, '(ccrc update)'],
+      ];
+      it.each(HOLDS)('held by %s: lag-high\'s remedy is the %s FAIL\'s own remedy, behind the sentence that says why the lag stands', (_v, hold, o, fragment) => {
+        const r = healthLib.deriveHealth(base({ ...HELD, lagS: 7200, heldPassMs: NOW - MIN, ...o }));
+        const own = failOf(r, hold).remedy;
+        expect(own, 'CONTROL: the fragment is the hold\'s own remedy').toContain(fragment);
+        expect(failOf(r, 'lag-high').remedy).toBe(`no scheduled pass ingests while ${hold} stands, so this lag cannot drain until it clears: ${own}`);
+      });
+      it('schema-newer beside a migration verdict: the remedy names schema-newer, never the migration', () => {
+        const r = healthLib.deriveHealth(base({ ...HELD, lagS: 7200, heldPassMs: NOW - MIN, userVersion: 3, codeVersion: 2 }));
+        expect(words(r, 'fail'), 'CONTROL: both FAILs stand').toEqual(expect.arrayContaining(['schema-newer', 'migration-needs-op']));
+        const remedy = failOf(r, 'lag-high').remedy;
+        expect(remedy).toContain('while schema-newer stands');
+        expect(remedy).toContain('(ccrc update)');
+        expect(remedy).not.toContain('doctor --migrate');
+      });
+      it('CONTROL: with no hold, lag-high\'s remedy is HEALTH_REMEDIES[\'lag-high\'], unchanged', () => {
+        expect(failOf(healthLib.deriveHealth(base({ lagS: 7200 })), 'lag-high').remedy).toBe(healthLib.HEALTH_REMEDIES['lag-high']);
+      });
+      it.each([
+        ['at-cap', { capturePause: 'at-cap', sizeBytes: 50 * GiB }],
+        ['capture-paused-low-disk', { capturePause: 'low-disk' }],
+      ] as Array<[string, Partial<healthLib.HealthInputs>]>)('a capture pause is not a hold here (R6): beside %s, lag-high keeps the default remedy', (pause, o) => {
+        const r = healthLib.deriveHealth(base({ lagS: 7200, ...o }));
+        expect(words(r, 'fail'), 'CONTROL: the pause FAILs on its own').toEqual(['lag-high', pause]);
+        expect(failOf(r, 'lag-high').remedy).toBe(healthLib.HEALTH_REMEDIES['lag-high']);
+      });
     });
     it('an open D-5026 death is not closed by a held pass', () => {
       const r = healthLib.deriveHealth(base({ ...HELD, heldPassMs: NOW - MIN, passDied: { pid: 4242, startMs: NOW - 20 * MIN, foundMs: NOW - 18 * MIN, count: 1 } }));

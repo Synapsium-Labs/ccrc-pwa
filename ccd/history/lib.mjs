@@ -3770,8 +3770,30 @@ function evidenceOf(h) {
   return found.length > 0 ? found.join(', ') : 'the evidence the refusal found';
 }
 
+/** Whether the store is newer than this build: deriveHealth's schema-newer FAIL and lagHoldOf read this one predicate. */
+function schemaNewerOf(h) {
+  return h.migration === 'refuse-newer' || (h.userVersion !== null && h.userVersion > h.codeVersion);
+}
+
+/** D-5027's follow-up (wave 5h-2 Task 5, coordinator ruling R6): the hold that keeps a lag from draining, as the word of the hold's
+ *  own FAIL, or null. No scheduled pass ingests while one stands (planRun holds on a migration verdict; openStore refuses a newer
+ *  store before that), so the lag is real and only clearing the hold drains it. D-5027's three holds only, schema-newer first when
+ *  it stands beside a migration verdict. A capture pause (at-cap, capture-paused-low-disk) is not one here: it has its own FAIL. */
+function lagHoldOf(h) {
+  if (schemaNewerOf(h)) return 'schema-newer';
+  if (h.migration === 'snapshot-needs-op') return 'migration-needs-op';
+  if (h.migration === 'refuse-low-disk') return 'migration-refused';
+  return null;
+}
+
 function remedyFor(word, h) {
   switch (word) {
+    case 'lag-high': {   // R6: on a held node, the hold's own remedy, through remedyFor so it stays single-sourced
+      const hold = lagHoldOf(h);
+      return hold === null
+        ? HEALTH_REMEDIES['lag-high']
+        : `no scheduled pass ingests while ${hold} stands, so this lag cannot drain until it clears: ${remedyFor(hold, h)}`;
+    }
     case 'at-cap':
       return `raise the cap in ${h.capFile} (an integer, in GB); capture resumes below the cap; or the operator frees space with ccrc history prune --older-than <age> --apply, from a terminal outside any session`;
     case 'cap-near':
@@ -3978,7 +4000,7 @@ export function deriveHealth(h) {
   if (h.capturePause === 'at-cap') fail.push(item('at-cap', `capture is paused: the store is at its cap of ${h.capGb} GB`));
   if (h.capturePause === 'low-disk') fail.push(item('capture-paused-low-disk', `capture is paused: free space on the filesystem holding ${h.dbPath} is below the floor`));
   if (h.modesWrong.length > 0) fail.push(item('mode-wrong', h.modesWrong.map((m) => `${m.path} is ${m.got}, wants ${m.want}`).join('; ')));
-  if (h.migration === 'refuse-newer' || (h.userVersion !== null && h.userVersion > h.codeVersion)) {
+  if (schemaNewerOf(h)) {   // W5h-2 Task 5: one predicate, which lag-high's remedy reads too
     fail.push(item('schema-newer', `the store is schema v${h.userVersion ?? '?'}, newer than this build's v${h.codeVersion}`));
   }
   if (h.migration === 'refuse-low-disk') {
