@@ -14,7 +14,8 @@
 // shell started beside vitest) is a leak: a test's child whose parent was a worker, or an orphan reparented to init
 // or a subreaper. Teardown waits
 // `LEAK_GRACE_MS` for stragglers that are already dying, then names each survivor (pid, age, command and working
-// directory: the cwd is usually a fixture directory, which names the test file that started it) and sets
+// directory: the cwd is often a fixture directory, which names the test file that started it, though a spawn
+// that set no cwd shows the package directory instead) and sets
 // `process.exitCode = 1`. It never signals what it names: a PID it OBSERVED is an observation, not a handle this run
 // holds, and a globalSetup carries no signal authority (D-3533, pinned in `ccrc-uninstall.test.ts`). The run is
 // red; the leak runs out its own bound or is ended by whoever reads the report. It does not throw: measured against the vitest 4 this repo pins, an error

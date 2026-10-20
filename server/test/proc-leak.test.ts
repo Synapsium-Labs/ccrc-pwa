@@ -91,7 +91,7 @@ describe('spawnSyncGroup: a child that can fork runs in its own process group (s
       gone = !alive(pid);
       if (!gone) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
     }
-    if (!gone) process.kill(pid, 'SIGKILL');
+    if (!gone) killGroup(r.pid); // through the group this case made, never the PID from the file (D-3533)
     expect(gone, 'the grandchild outlived the timeout').toBe(true);
     expect(groupAlive(r.pid)).toBe(false);
   });
@@ -107,7 +107,7 @@ describe('spawnSyncGroup: a child that can fork runs in its own process group (s
       gone = !alive(pid);
       if (!gone) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
     }
-    if (!gone) process.kill(pid, 'SIGKILL');
+    // No kill of the PID from the file (D-3533): on a red the member is a bounded sleep.
     expect(gone, 'the helper threw but left the member running').toBe(true);
   });
 

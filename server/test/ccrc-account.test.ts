@@ -7263,9 +7263,9 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
       if (holders === '') break;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
     }
-    for (const pid of holders.split('\n').filter(Boolean)) {
-      try { process.kill(Number(pid), 'SIGKILL'); } catch { /* gone */ }
-    }
+    // No kill of the listed holders: a PID read from a listing is never signalled
+    // (D-3533). The group kill above is the handle; a survivor fails here and the
+    // run-level leak check names it.
     expect(holders, 'a process still holds the lock after the timeout: the flock outlived its bash').toBe('');
   });
 
