@@ -118,9 +118,11 @@ export interface ApprovalCtx extends ApprovalRoots {
 
 /** The forbidden `ccd` verbs (CLAUDE.md SAFETY). Plan Task 15 derives the children's deny rules from this list. One
  *  `|`-joined string, not eight quoted literals: the verb censuses (`ws-collect-wiring.test.ts` and its siblings)
- *  count a quoted verb as a composer of it, and this list composes nothing. */
+ *  count a quoted verb as a composer of it, and this list composes nothing. D-5696 (spec §7.6): `roll` and the
+ *  operator's `claude …` switch verbs join it, so a session never rolls, installs or selects a Claude Code build.
+ *  No account verb is here: account switching and the auto-swap are never blocked (operator ruling 2026-10-19). */
 export const FORBIDDEN_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|roll|claude'.split('|');
 
 // ── roots ──────────────────────────────────────────────────────────────────
 
@@ -160,6 +162,12 @@ const reEsc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const CCD_HEAD = String.raw`${WB}ccd['"]?\s+(?:-\S+\s+)*`;
 /** A Claude settings file, a `CLAUDE.md`, a hook script. */
 const SENSITIVE_EDIT = String.raw`(?:CLAUDE\.md|settings(?:\.local)?\.json|session-hook\.sh|/hooks/)`;
+/** The commands that write a file they name, the head `headBeforeTail` reads before a sensitive path. */
+const WRITE_HEAD = String.raw`>|\btee\b|\bsed\s+(?:-\S+\s+)*-i|\bperl\s+-\S*i|\bmv\b|\bcp\b|\bln\b|\btruncate\b|\brm\b`;
+/** D-5696 (spec §7.6): Claude Code's build directory and its launcher, the files a session never writes. The launcher
+ *  is matched by its shape, Claude Code's own name under `/.local/bin/` (a generated wrapper `claude-<x>`, a backup
+ *  `claude.bak` and ccrc's own `ccd` are other names); a roster whose upstream id is another name is D-5993's. */
+const CLAUDE_BUILD_PATH = String.raw`(?:/\.local/share/claude/versions(?![\w.-])|/\.local/bin/claude(?![\w.-]))`;
 /** spec §6.5's credential paths, and D-5361's credential stores (gh's `hosts.yml` and `config.yml`, docker's and
  *  kubectl's configs, `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, `.aws/`, `.ssh/`, `.gnupg/`,
  *  `.config/gcloud/`), and, after review round 3, the private-key basenames (`id_rsa`, `id_dsa`, `id_ecdsa`,
@@ -213,8 +221,8 @@ export const FORBIDDEN_PATTERNS: readonly { readonly why: string; readonly test:
   ...[
     { why: 'a session unit or the tmux scope', sep: /\n/,
       head: new RegExp(`${WB}(?:systemctl|systemd-run|kill|pkill|killall)(?![\\w-])`), tail: g('claude-session@|ccrc|tmux') },
-    { why: 'an edit to a settings file, a hook or a CLAUDE.md', sep: /[\n;&|]/,
-      head: new RegExp(String.raw`>|\btee\b|\bsed\s+(?:-\S+\s+)*-i|\bperl\s+-\S*i|\bmv\b|\bcp\b|\bln\b|\btruncate\b|\brm\b`), tail: g(SENSITIVE_EDIT) },
+    { why: 'an edit to a settings file, a hook or a CLAUDE.md', sep: /[\n;&|]/, head: new RegExp(WRITE_HEAD), tail: g(SENSITIVE_EDIT) },
+    { why: 'a write to a Claude Code build or its launcher', sep: /[\n;&|]/, head: new RegExp(WRITE_HEAD), tail: g(CLAUDE_BUILD_PATH) },
     { why: 'printing a secret', sep: /[\n;&|]/,
       head: new RegExp(String.raw`${WB}(?:cat|head|tail|less|more|base64|xxd|strings|od|nl|bat)(?![\w-])`), tail: g(CREDENTIAL) },
   ].map(({ why, sep, head, tail }) => ({ why, test: (t: string) => headBeforeTail(t, sep, head, tail) })),
@@ -241,6 +249,7 @@ function nonBashClass(tool: string, input: Record<string, unknown>): ApprovalCla
     if (typeof p !== 'string') continue;
     if (PATH_FORBIDDEN.test(p)) return 'forbidden';
     if (EDIT_TOOLS.has(tool) && new RegExp(`(?:^|/)${SENSITIVE_EDIT}`).test(p)) return 'forbidden';
+    if (EDIT_TOOLS.has(tool) && new RegExp(CLAUDE_BUILD_PATH).test(p)) return 'forbidden';
     if (tool === 'Read' && CREDENTIAL_RE.test(p)) return 'forbidden';
   }
   return 'escalate';
