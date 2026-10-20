@@ -53,6 +53,21 @@ import { SWAP_REFUSALS } from './api.js';
 export const WS_CREATE_REFUSALS = ['bad-project', 'name-too-long', 'bad-name', 'bad-wrapper'] as const;
 export type WsCreateRefusal = (typeof WS_CREATE_REFUSALS)[number];
 
+/**
+ * The workspace rename's own words (named workspaces S9, `POST /api/sessions/:id/title`), decided from ccd's refusal
+ * sentences by `classifyTitleFailure` (`server/src/workspaceTitle.ts`, L1) and sent through `refuseRoute` with a
+ * computed word, so a typed vocabulary of their own, like `WS_CREATE_REFUSALS`. The rename reuses the create's `bad-name`
+ * and `name-too-long` for a name the grammar refuses, and the existing `bad-session-id`, `unknown-session`, `bad-request`
+ * and `unsupported`; only what is new to it is listed here.
+ */
+export const WS_TITLE_REFUSALS = ['not-a-workspace', 'bad-title', 'title-not-saved'] as const;
+export type WsTitleRefusal = (typeof WS_TITLE_REFUSALS)[number];
+
+/** Why `bad-title`: the three rules ccd re-proves over a title the server already sanitised, so a refusal here means the
+ *  two sanitisers disagree (an older or newer ccd), never a thing the operator typed past the field's own checks. */
+export const BAD_TITLE_REASONS = ['blank', 'control-characters', 'too-long'] as const;
+export type BadTitleReason = (typeof BAD_TITLE_REASONS)[number];
+
 /** The mail codes a route answers in `error`. The done-authority codes travel
  *  as a run advance's `reject.code` and `undeliverable` is a delivery outcome;
  *  neither is an HTTP `error` word. */
@@ -85,7 +100,7 @@ export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
-  | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal;
+  | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal | WsTitleRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -156,6 +171,11 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // well-formed; the box's state refused it). A missing ccd cap answers the existing `unsupported` (501).
   'bad-project': 400, 'name-too-long': 400, 'bad-name': 400, 'bad-wrapper': 400, 'bad-slug': 400,
   'slug-taken': 409, 'account-refused': 409,
+  // The workspace rename (named workspaces S9): CHOSEN — `not-a-workspace` is 409, the request was well-formed and the
+  // row's own state (a main checkout) refuses it; `bad-title` is 400, the one thing the operator can retype, though only
+  // an older or newer ccd's sanitiser reaches it; `title-not-saved` is 502, the box could not write its registry fields,
+  // which is the box's fault and not the operator's, and the one answer here whose cure is to try again.
+  'not-a-workspace': 409, 'bad-title': 400, 'title-not-saved': 502,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */

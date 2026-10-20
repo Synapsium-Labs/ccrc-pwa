@@ -3,6 +3,7 @@
 // reads (the registry's, not the assembled one) and when it records the stat
 // probe (after the verb gate, never before it).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
@@ -16,6 +17,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { absentField, unreadableField } from './ioDoubles.js';
+import { makeCcdHarness, ghContainedEnv, CCD } from './ccdWsHelpers.js';
 
 const ID = 'demo-quiet-mesa';
 const UUID = 'a'.repeat(36);
@@ -926,5 +928,36 @@ describe('the naming sweep leaves a human-named workspace alone (D-6112)', () =>
 
     await w.sweepNames();
     expect(renames(h.calls)).toEqual(['ws/brainstorm-helix-and-slide-notes']);
+  });
+});
+
+// ── CLEARING A NAME GIVES THE ROW BACK TO THE SWEEP (named-workspaces S9) ───
+// `ccd ws-title --clear` removes `title` and `named`, so a workspace a human named and then un-named is an auto row
+// again. This runs the REAL verb against the fixture HOME the sweep reads, rather than deleting the marker by hand: the
+// claim is about what the verb leaves on disk, and a test that removed the file itself would prove only that the sweep
+// reads absence.
+describe('the naming sweep renames a row again once its name is cleared (S9)', () => {
+  it('skips the named row, then renames it after `ccd ws-title --clear`', async () => {
+    const ccdH = makeCcdHarness('ccrc-name-sweep-clear-');
+    try {
+      const h = { ...harness(), home: ccdH.home };
+      seed(h.home, { named: '1', title: 'ENG-1234 - Fix the login flow' });
+      transcript(h.home, [USER('go'), TITLE('Brainstorm Helix and slide notes integration')]);
+      const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
+
+      await w.sweepNames();
+      expect(h.calls, 'a named row is left alone').toEqual([]);
+
+      const r = spawnSync('bash', [CCD, 'ws-title', '--session', ID, '--clear'], {
+        encoding: 'utf8', cwd: h.home,
+        env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
+      });
+      expect([r.status, r.stdout.trim()]).toEqual([0, `untitled ${ID}`]);
+
+      await again(w);
+      expect(renames(h.calls), 'the cleared row is renamed from its ai-title').toEqual(['ws/brainstorm-helix-and-slide-notes']);
+    } finally {
+      ccdH.cleanup();
+    }
   });
 });

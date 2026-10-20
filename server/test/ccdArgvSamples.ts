@@ -66,6 +66,10 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   wsArchive: ['demo-quiet-basin', null],
   wsRestore: ['demo-quiet-basin', null],
   wsAudit: ['demo-quiet-basin'],
+  // NAMED WORKSPACES S9: the rename verb's own two-token grant, `['ws-title','--session']`. The sample sets a title that
+  // BEGINS WITH DASHES, so layer 2 proves a title token ccd must read as text still crosses the grant; its sibling
+  // clear form is pinned by name in `whitelist-subset.test.ts`.
+  wsTitle: ['demo-quiet-basin', { title: '-- ENG-1234 - Fix the login flow' }],
   wsReap: ['a'.repeat(64), 'demo-quiet-basin'],
   // CHILD RECLAMATION wave 3. The audit half rides wsAudit's grant; the verb
   // carries a dec, so `whitelist-subset.test.ts`'s layer 2 proves the FLAGGED shape crosses the new grant.

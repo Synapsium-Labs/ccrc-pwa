@@ -31,7 +31,7 @@ import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAg
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP,
+import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, WS_TITLE_CAP, WS_TITLE_VERB, WS_WRAPPER_CAP,
          capSupported, deviceActor,
          stopSurfaceSupported, verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
@@ -66,6 +66,7 @@ import { registerLinearRoutes } from './linear/routes.js';
 import { createAccountGate } from './accounts/gate.js';
 import { resolveTitle } from './linear/resolve.js';
 import { classifyAddFailure, planCreate } from './workspaceCreate.js';
+import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
@@ -1998,7 +1999,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 21 request-id routes (17 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 22 request-id routes (18 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
   // fleet's baseline is 745 agent-WS operations [registry-read-census:fleet]
@@ -3892,6 +3893,48 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(501).send({ ok: false, error: 'unsupported' });
     }
     return runCcdOr502(reply, argv);
+  });
+
+  /**
+   * Rename an existing workspace (named workspaces S9, design 2026-10-20 §6): set its display title, or clear it. The
+   * SLUG NEVER CHANGES: ccd's `ws-title` writes the registry's `title` and `named` fields and nothing else. Body:
+   * `{title: string}` (free text, a Linear ticket or a pasted link, resolved with the create's own `resolveTitle`) or
+   * `{clear: true}`. Answers `{ok: true, id, title}` (`title: null` after a clear).
+   *
+   * What to do with the body, and what each ccd refusal MEANS, are `workspaceTitle.ts`'s (L1); this handler acts on
+   * them. A box that does not list the verb `ws-title` in `ccd caps` is `501 unsupported` before any argv exists
+   * (`capSupported`, never `verbSupported`: no evidence refuses). Session-gated when the auth gate is armed, like every
+   * other PWA write; NO box token, it is not coordination. A MAIN CHECKOUT is refused by ccd (`not-a-workspace`), and the
+   * PWA does not offer it there. Nothing caches the title: `/api/fleet` and the watcher's frame re-read the registry.
+   */
+  app.post('/api/sessions/:id/title', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isRegistryId(id)) return refuseRoute(reply, 'bad-session-id');
+    if (!(await knownId(id))) return refuseRoute(reply, 'unknown-session');
+    const body = (req.body ?? {}) as { title?: unknown; clear?: unknown };
+    const plan = planRetitle(body, { verb: capSupported(deps.fleetState, WS_TITLE_VERB) });
+    if (plan.kind === 'refuse') return refuseRoute(reply, plan.refusal.error, plan.refusal.extra);
+
+    // The title is resolved HERE, as the create does: Linear's when the text is a ticket and Linear answers, the offline
+    // title otherwise (never a failure), and sanitised inside `resolveTitle`, so ccd's text refusals are not reachable
+    // through a lookup.
+    const title = plan.kind === 'clear' ? null : (await resolveTitle(plan.name, plan.ask, {
+      ccrcDir: deps.cfg.ccrcDir, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+    })).title;
+    const argv = CCD_ARGV.wsTitle(id, title === null ? { clear: true } : { title });
+    // Through the per-session queue, like the reap and the forget, so a rename cannot interleave with another write to
+    // the same session.
+    const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));
+    if (res.ok) return { ok: true, id, title };
+    const failure = classifyTitleFailure(res);
+    switch (failure.kind) {
+      case 'bad-session-id': return refuseRoute(reply, 'bad-session-id');
+      case 'unknown-session': return refuseRoute(reply, 'unknown-session');
+      case 'not-a-workspace': return refuseRoute(reply, 'not-a-workspace');
+      case 'bad-title': return refuseRoute(reply, 'bad-title', { reason: failure.reason });
+      case 'not-saved': return refuseRoute(reply, 'title-not-saved');
+      case 'other': return ccd502(reply, res);
+    }
   });
 
   app.get('/api/sessions/:id/workspace/audit', async (req, reply) => {

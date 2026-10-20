@@ -109,7 +109,6 @@ const SERVER_NEVER_SENDS: Readonly<Record<string, string>> = {
   version: 'read by the deploy and the agent from the box, not through a route',
   'ws-gc': 'ungrantable (`UNGRANTABLE_VERBS`): its `--prune` deletes, so no agent prefix may start with it',
   'ws-rm': 'ungrantable (`UNGRANTABLE_VERBS`): the unguarded legacy delete',
-  'ws-title': 'D-TBD-ws-title-server-half: the Rename route and its `CCD_ARGV` entry are named workspaces S9\'s server half; the agent-first ccd half lands first, and this row leaves the list with that entry',
 };
 
 describe('ccd\'s four verb lists are one set (D-6051, ARCH-23)', () => {

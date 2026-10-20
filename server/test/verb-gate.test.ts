@@ -109,6 +109,9 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
  */
 const CAP_GATED_VERBS: ReadonlySet<string> = new Set([
   'route', 'ws-reclaim', 'reclaim-pause', 'ws-expire', 'ws-collect', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch',
+  // Named workspaces S9: the rename route asks `capSupported(WS_TITLE_VERB)`, which REFUSES on no evidence (M7); `verbSupported`
+  // would offer a Rename on a box nobody has heard from.
+  'ws-title',
 ]);
 
 /**
@@ -128,6 +131,8 @@ const CAP_GATED_VERBS: ReadonlySet<string> = new Set([
  */
 const PROBE_ARGS: Partial<Record<string, readonly unknown[]>> = {
   routeSet: ['x', { effort: 'x' }, null],
+  // `wsTitle`'s second parameter is a `WsTitleChange` object, not a string (named workspaces S9).
+  wsTitle: ['x', { title: 'x' }],
 };
 
 /** `CCD_ARGV` key -> the verb it emits, taken from the table itself rather

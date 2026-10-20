@@ -4,6 +4,15 @@ import type { DocSectionSlug } from '../../shared/docs.js';
 
 declare const CcdArgvBrand: unique symbol;
 
+/** The verb that renames an existing workspace, spelled ONCE in `server/src`: `CCD_ARGV.wsTitle` builds its argv from
+ *  it and the route reads `ccd caps` for it (named workspaces S9). It is a VERB in the caps list, not the `ws-title-v1`
+ *  token (`WS_TITLE_CAP`), which only says that `ws-add` takes `--title` and is advertised before the verb exists. */
+export const WS_TITLE_VERB = 'ws-title';
+
+/** What a rename does to the title: set it to `title` (ccd also marks the workspace named), or clear it (both fields go,
+ *  which gives the workspace back to the ai-title sweep). Two shapes, never a `null` that means "clear". */
+export type WsTitleChange = { readonly title: string } | { readonly clear: true };
+
 /**
  * A ccd argv that provably came from `CCD_ARGV`. The brand is phantom — it
  * exists only in the type system — so this costs nothing at runtime, and an
@@ -575,6 +584,22 @@ export const CCD_ARGV = {
    *  and the server learns its verdict from the `bad-branch` refusal token. */
   wsRename:  (id: string, branch: string, dec: ActorFlags | null) =>
                argv(['ws-rename', '--session', id, '--branch', branch, ...decFlags(dec)]),
+  /** Rename an EXISTING workspace (named workspaces S9, design 2026-10-20 §6): `ws-title --session <id> (--title <text> |
+   *  --clear)`, which writes a workspace's operator `title` and `named` marker, or removes both, and nothing else. A NEW
+   *  KEY: its own verb, its own two-token grant (`['ws-title','--session']`, enrolled in the agent's `REQUIRED_VERB_FLAG`).
+   *
+   *  `--session` LEADS and its value is the id, ALREADY a registry id (the route's `knownId`): ccd consumes the value
+   *  whole, so even a flag-shaped one could not be read as a flag, but the census still classifies this builder `'id'`.
+   *  The title is its OWN token after `--title`, verbatim: ccd takes the next word as the text, so a title that begins
+   *  with dashes is still a title, and it is never joined into one `--title=` word. The caller sends a title that is
+   *  non-blank, free of control characters and within `WS_TITLE_MAX_BYTES` (`planRetitle`'s sanitising), and ccd re-proves
+   *  all three. NO `dec`: ccd's verb takes no `--surface`/`--actor` (it moves no workspace and journals nothing), and would
+   *  refuse the flags with its usage line.
+   *
+   *  Sent only behind `capSupported(state, WS_TITLE_VERB)`, never `verbSupported`: an unlisted verb is a 502 from a ccd that
+   *  has never heard of it, and "no evidence" must not offer a Rename the box cannot do (M7). */
+  wsTitle:   (id: string, change: WsTitleChange) =>
+               argv([WS_TITLE_VERB, '--session', id, ...('clear' in change ? ['--clear'] : ['--title', change.title])]),
   /** The pause marker's writer (Build 4, spec §4.2). `state` is a two-member
    *  union rather than a string: `POST /api/coord/pause` takes a boolean, and
    *  the on|off vocabulary is ccd's — the mapping happens once, at the call

@@ -213,6 +213,22 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsRename('demo-quiet-basin', 'ws/x', null)])).toBe(true);
   });
 
+  // NAMED WORKSPACES S9: the workspace rename, `ws-rename`'s shape one verb over (enrolled for its argument surface, and
+  // granted on `--session` alone). Both forms cross the grant: the title form with a title that begins with dashes, which
+  // ccd reads as text because it is its OWN token after `--title`, and the clear form with no title at all.
+  it('ws-title is grantable ONLY with --session, and builds its set and clear forms', () => {
+    const wt = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-title');
+    expect(wt, 'exactly one ws-title grant').toEqual([['ws-title', '--session']]);
+    expect(isExecAllowed('ccd', ['ws-title', '--title', 'X', '--session', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-title'])).toBe(false);
+    expect(CCD_ARGV.wsTitle('demo-quiet-basin', { title: 'ENG-1234 - Fix' }))
+      .toEqual(['ws-title', '--session', 'demo-quiet-basin', '--title', 'ENG-1234 - Fix']);
+    expect(CCD_ARGV.wsTitle('demo-quiet-basin', { clear: true }))
+      .toEqual(['ws-title', '--session', 'demo-quiet-basin', '--clear']);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsTitle('demo-quiet-basin', { title: '--clear' })])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsTitle('demo-quiet-basin', { clear: true })])).toBe(true);
+  });
+
   // Enrolled in REQUIRED_VERB_FLAG for its ARGUMENT SURFACE rather than for a
   // confirmation token — `ws-rename`, `coord-pause`, `project-pool` and
   // `route`'s reason — and reached from a door as open as any of theirs, with
@@ -488,6 +504,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
              '--surface', 'pwa', '--actor', 'device:iPhone'],
     wsRelease: ['ws-release', '--session', 'demo-quiet-basin'],
     wsRename: ['ws-rename', '--session', 'demo-quiet-basin', '--branch', 'ws/brainstorm-helix-and-slide-notes'],
+    wsTitle: ['ws-title', '--session', 'demo-quiet-basin', '--title', '-- ENG-1234 - Fix the login flow'],
     coordPause: ['coord-pause', '--state', 'on'],
     reclaimPause: ['reclaim-pause', '--state', 'on'],
     projectPoolSet: ['project-pool', '--project', 'demo', '--pool', 'pool-a'],

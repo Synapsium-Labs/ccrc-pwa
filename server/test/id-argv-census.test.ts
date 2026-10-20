@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 48 id-taking calls across 12 files.
+// THE CLAIM: 49 id-taking calls across 12 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -52,7 +52,7 @@ const ID_BUILDERS = {
   wsArchive: 'id', wsRestore: 'id', wsAudit: 'id', wsReap: 'id',
   wsReclaimAudit: 'id', wsReclaim: 'id', wsExpireAudit: 'id', wsExpire: 'id',
   wsCollectAudit: 'id', wsCollect: 'id', wsAttic: 'id',
-  wsHold: 'id', wsRelease: 'id', wsRename: 'id',
+  wsHold: 'id', wsRelease: 'id', wsRename: 'id', wsTitle: 'id',
   coordPause: 'no-id', reclaimPause: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
   route: 'id', routeApply: 'id', routeSet: 'id', winSize: 'id',
   docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id',
@@ -98,6 +98,7 @@ const ID_PROBE = {
   wsHold: [PROBE_ID, 'a reason', null],
   wsRelease: [PROBE_ID, null],
   wsRename: [PROBE_ID, 'a-branch', null],
+  wsTitle: [PROBE_ID, { title: 'a title' }],
   route: [PROBE_ID, 'class', 'x', null],
   routeApply: [PROBE_ID, 'class', 'x', null],
   routeSet: [PROBE_ID, { effort: 'high' }, null],
@@ -429,6 +430,7 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'server.ts', scope: 'POST /api/sessions/:id/forget', builder: 'forget', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/hold', builder: 'wsHold', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/release', builder: 'wsRelease', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
+  { file: 'server.ts', scope: 'POST /api/sessions/:id/title', builder: 'wsTitle', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'GET /api/sessions/:id/workspace/audit', builder: 'wsAudit', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/workspace/reap', builder: 'wsReap', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   // hibernateSweep.ts and stopDoneSweep.ts (D-5242, D-5370): each acts on a fleet row whose record the listing built,
@@ -471,7 +473,7 @@ function paired(): { readonly site: Site; readonly row: CensusRow }[] {
 describe('every id-taking argv call has an origin and a gate (spec §2.3)', () => {
   it('every CCD_ARGV key is classified id or no-id', () => {
     expect(Object.keys(ID_BUILDERS).sort()).toEqual(Object.keys(CCD_ARGV).sort());
-    expect(ID_KEYS).toHaveLength(29);
+    expect(ID_KEYS).toHaveLength(30);
     expect(Object.keys(ID_PROBE).sort()).toEqual([...ID_KEYS].sort());
     for (const k of ID_KEYS) {
       const args = ID_PROBE[k] as readonly unknown[];
@@ -490,7 +492,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     }
   });
 
-  it('the header claim, "48 id-taking calls across 12 files", matches the scan', () => {
+  it('the header claim, "49 id-taking calls across 12 files", matches the scan', () => {
     const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
     const claim = /^\/\/ THE CLAIM: (\d+) id-taking calls across (\d+) files\b/m.exec(self);
     expect(claim, 'the census claim was removed or reworded without its guard').not.toBeNull();
