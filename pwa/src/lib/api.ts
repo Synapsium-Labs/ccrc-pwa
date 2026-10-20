@@ -9,6 +9,9 @@ import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBod
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
 import type { Dialog, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource } from '../../../shared/api';
 
+import {
+  LINEAR_CHECK_OUTCOMES, LINEAR_DETAILS_PROBLEMS, type LinearCheckOutcome, type LinearConnectionView,
+} from '../../../shared/linear';
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
 import {
@@ -619,6 +622,45 @@ function rotateRefusalOf(err: unknown): RotateAnswer | null {
   return null;
 }
 
+/**
+ * The Linear section's state, read off `{ok: true, connection}` (also off the `connection` a 409 `not-connected`
+ * carries). A state this build does not know, or a field of the wrong type, reads as null: the section then says
+ * it could not read the connection, never a state the box did not send. Every key the view has is checked, and
+ * NOTHING else is kept, so a field a newer server adds is never rendered by accident.
+ */
+export function readLinearConnection(raw: unknown): LinearConnectionView | null {
+  if (!isRecord(raw)) return null;
+  const shown = (outcome: LinearCheckOutcome): { org: string | null; user: string | null; keyTail: string; checkedAt: number; outcome: LinearCheckOutcome } | null => {
+    const { org, user, keyTail, checkedAt } = raw;
+    if (!orNull(org, (x) => typeof x === 'string') || !orNull(user, (x) => typeof x === 'string')) return null;
+    if (typeof keyTail !== 'string' || typeof checkedAt !== 'number' || !Number.isFinite(checkedAt)) return null;
+    return { org: org as string | null, user: user as string | null, keyTail, checkedAt, outcome };
+  };
+  switch (raw.state) {
+    case 'not-connected': case 'unreadable': case 'unusable': case 'placeholder':
+      return { state: raw.state };
+    case 'details-unknown':
+      return isWord(LINEAR_DETAILS_PROBLEMS, raw.why) ? { state: 'details-unknown', why: raw.why } : null;
+    case 'connected': case 'key-rejected': case 'unreachable': {
+      const state = raw.state;
+      const outcome: LinearCheckOutcome = state === 'connected' ? 'ok' : state === 'key-rejected' ? 'rejected' : 'unreachable';
+      if (!isWord(LINEAR_CHECK_OUTCOMES, raw.outcome) || raw.outcome !== outcome) return null;
+      const s = shown(outcome);
+      if (s === null) return null;
+      return state === 'connected' ? { state, ...s, outcome: 'ok' }
+        : state === 'key-rejected' ? { state, ...s, outcome: 'rejected' }
+          : { state, ...s, outcome: 'unreachable' };
+    }
+    default:
+      return null;
+  }
+}
+
+/** A 2xx `{ok: true, connection}` body, read; anything else is `'unreadable'`. */
+function linearViewOf(raw: unknown): LinearConnectionView | 'unreadable' {
+  return (isRecord(raw) && raw.ok === true ? readLinearConnection(raw.connection) : null) ?? 'unreadable';
+}
+
 /** Injectable for tests; defaults to the real global fetch. */
 export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
   const request = async (path: string, init?: RequestInit): Promise<Response> => {
@@ -895,6 +937,32 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       const view = readBoxTokenView(answer.view);
       return view === null ? 'unreadable' : { ok: true, outcome: answer.outcome, view };
     },
+
+    /** The Linear section's four calls (named workspaces S4b, design §5.1). Each answers the connection's state, or
+     *  `'unreadable'` for a 2xx whose body is not one (the exchange completed, so a write may have landed: the
+     *  section re-reads). A refusal rejects with its `ApiError`, whose body names the word (`bad-key`,
+     *  `key-rejected`, `unreachable`, `step-up-required`…); `checkLinear` is the one exception, resolving the state
+     *  a 409 `not-connected` carries, because that state IS its answer. The key is only ever in the PUT's body. */
+    linearConnection: async (): Promise<LinearConnectionView | 'unreadable'> =>
+      linearViewOf(await (await request('/api/linear/connection', { headers: { accept: 'application/json' } })).json().catch(() => null)),
+    connectLinear: async (key: string): Promise<LinearConnectionView | 'unreadable'> =>
+      linearViewOf(await (await request('/api/linear/connection', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ key }),
+      })).json().catch(() => null)),
+    checkLinear: async (): Promise<LinearConnectionView | 'unreadable'> => {
+      try {
+        return linearViewOf(await (await request('/api/linear/connection/check', jsonInit())).json().catch(() => null));
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409 && isRecord(err.body) && err.body.error === 'not-connected') {
+          return readLinearConnection(err.body.connection) ?? 'unreadable';
+        }
+        throw err;
+      }
+    },
+    disconnectLinear: async (): Promise<LinearConnectionView | 'unreadable'> =>
+      linearViewOf(await (await request('/api/linear/connection', { method: 'DELETE', headers: { accept: 'application/json' } })).json().catch(() => null)),
 
     // `AccountsResponse`, not a restatement of it: this shape used to be
     // hand-written here, in the handler and in the route test, and the roster

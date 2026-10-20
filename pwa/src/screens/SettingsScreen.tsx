@@ -36,6 +36,7 @@ import {
 } from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { StallWatchSection } from './StallWatchSection';
+import { LinearSection } from './LinearSection';
 import { AppearanceFieldset, AppearanceGroup, AppearanceRow } from './AppearanceRow';
 import { SkinFieldset } from './SkinFieldset';
 import { CollectLaneSection } from '../fleet/CollectLaneSection';
@@ -634,6 +635,9 @@ export function SettingsScreen(): ReactNode {
       <UpdatesSection poll={poll} now={now} />
       <AppearanceSection />
       {poll.view !== null && <BoxTokenSection view={poll.view} now={now} reload={poll.reload} />}
+      {/* Linear (named workspaces S4b): its own file and its own read, like Stall watch, mounted beside the card it is
+          modelled on. */}
+      <LinearSection />
       <NotificationsSection view={poll.view} reload={poll.reload} />
       <StallWatchSection />
       <CollectLaneSection />
