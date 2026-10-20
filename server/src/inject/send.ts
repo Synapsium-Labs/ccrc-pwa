@@ -65,9 +65,10 @@ export type SendResult =
         // else was pressed, so nothing was typed onto the draft.
         | 'stash-failed'
         // D-6010, `onDraft: 'stash'` only. Both Enters were swallowed (`enter-ignored`), and then our own text was
-        // cleared and the stashed draft popped back (`giveBackStash`). Not `enter-ignored`: that word says our text
-        // is still in the box, which the mail lane's park hold and dispatch's stranded-`/clear` proof both read.
-        // Nothing of ours is left, so a retry types afresh.
+        // cleared (`giveBackStash`). The stashed draft is popped back when the pop lands; one that does not leaves it
+        // in the stash behind the empty box, with a warn line, and the next send's submit is then gated on the
+        // indicator (D-6011). Not `enter-ignored`: that word says our text is still in the box, which the mail lane's
+        // park hold and dispatch's stranded-`/clear` proof both read. Nothing of ours is left, so a retry types afresh.
         | 'enter-ignored-restored';
       draft?: string;
       pane?: string;
@@ -317,6 +318,15 @@ type StillInBox = (pane: string, draft: string) => boolean;
  *  marker row is still non-empty. See `submitted`. */
 const stillStartsWith = (needle: string): StillInBox => (_pane, draft) =>
   needle === '' ? draft !== '' : draft.startsWith(needle);
+
+/**
+ * D-6011. The submit proof while a stash this call did NOT make is held (an earlier stash-path send that could not
+ * give it back, or the human's own ctrl+s): Claude Code restores it at our submit, and a restored human draft that
+ * starts with our needle would read as our text and take the retry Enter. A held stash pops only at a submit, so
+ * while the indicator shows the box is still ours; once it has gone our text was taken. The retry Enter is pressed
+ * only while it still shows.
+ */
+const whileStashHeld = (still: StillInBox): StillInBox => (pane, draft) => stashHeld(pane) && still(pane, draft);
 
 /**
  * Press Enter (up to twice — the SAME one-retry-after-an-overlay budget
@@ -1245,8 +1255,13 @@ export function sendPrompt(
     let provenance: TypeProvenance = 'unproven';
     // D-5911: `carry.held` is set only when this call stashed a draft; every submit below then goes through
     // `submitAroundStash`.
+    // D-6011: a stash already held when this call began (not ours) is restored by Claude Code at OUR submit, so
+    // every submit that does not go around our own stash takes the indicator-gated proof (`whileStashHeld`).
+    const heldBefore = stashHeld(pane);
     const submit = (still: StillInBox): Promise<SendResult> =>
-      carry.held === null ? pressEnterAndConfirm(d, id, sleep, still) : submitAroundStash(d, id, sleep, still, carry.held);
+      carry.held === null
+        ? pressEnterAndConfirm(d, id, sleep, heldBefore ? whileStashHeld(still) : still)
+        : submitAroundStash(d, id, sleep, still, carry.held);
     if (draft || hasContentBelowMarker(pane)) {
       // `resumeIfOwn`'s discrimination: `needle` is derived from THIS call's
       // OWN `text`, and `submitEnter`'s own correspondence gate already
@@ -1281,13 +1296,8 @@ export function sendPrompt(
       // untouched: F2 (never type over a human mid-sentence) is unaffected,
       // because this branch only ever PRESSES ENTER, never clears or types.
       if (opts.resumeIfOwn && needle !== '' && draft.startsWith(needle) && matchesOwnDraft(pane, parts)) {
-        // D-6011: with a stash HELD (an earlier stash-path send that could not give it back), Claude Code restores
-        // it at this submit, and a restored human draft that starts with our needle would read as our text and
-        // take the retry Enter. A held stash pops only at a submit, so while the indicator shows the box is ours;
-        // once it has gone our text was taken. The retry Enter is pressed only while it still shows.
-        const own = stillStartsWith(needle);
-        return pressEnterAndConfirm(d, id, sleep,
-          stashHeld(pane) ? (p, dr) => stashHeld(p) && own(p, dr) : own);
+        // D-6011: the resume goes through the same `submit`, so a held stash gates its retry Enter too.
+        return submit(stillStartsWith(needle));
       }
       // `clearMailResidue`: the box holds MACHINE residue this system's OLD
       // typed-envelope lane left behind (a paste-chip collapse or a stranded

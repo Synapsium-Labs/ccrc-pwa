@@ -469,6 +469,18 @@ describe("onDraft: 'stash' (D-5911)", () => {
       expect(res).not.toHaveProperty('submittable');
     });
 
+    it('`enter-ignored` whose pop does not land: `enter-ignored-restored` still (our text is gone), the draft in the stash, a warn line', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const f = fakeCc({ box: [...DRAFT], swallowEnters: 2, popWorks: false });
+      const res = await send(f, 'hello from the lane');
+      expect(res).toMatchObject({ ok: false, error: 'enter-ignored-restored' });
+      expect(res).not.toHaveProperty('draft');
+      expect(f.state.box.filter((r) => r.trim() !== '')).toEqual([]);
+      expect(f.state.stash).toEqual(DRAFT);
+      expect(f.state.history).toEqual([]);
+      expect(warn).toHaveBeenCalled();
+    });
+
     it('`restore-unverified` (a turn started over a box that could be the restore): a stash still held on an empty box is popped', async () => {
       const draft = 'hello world, and the rest of a half typed thought';
       const f = fakeCc({
@@ -573,6 +585,39 @@ describe("onDraft: 'stash' (D-5911)", () => {
       const res = await send(f, nudge, { ...STASH, resumeIfOwn: true });
       expect(f.keys).toEqual(['Enter', 'Enter']);
       expect(f.state.history).toEqual([nudge]);
+      expect(res).toEqual({ ok: true });
+    });
+  });
+
+  describe('D-6011: the ordinary submit on an empty box with a stash already held', () => {
+    // The precondition is reachable from D-6010's own failure arm (a pop that does not land leaves the box empty and
+    // the stash held) as well as from a human's own ctrl+s. Claude Code restores the held stash at OUR submit.
+    it("dispatch's `/clear` over a held `/clear …` stash: one Enter, the human's draft back in the box, unsent", async () => {
+      const human = '/clear and also my note';
+      const f = fakeCc({ box: [], stash: [human] });
+      const res = await send(f, '/clear');
+      expect(f.keys).toEqual(['lit:/clear', 'Enter']);
+      expect(f.state.history).toEqual(['/clear']);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true });
+    });
+
+    it('a mail nudge over a held stash that begins with the needle: one Enter, the human draft unsent', async () => {
+      const nudge = 'you have mail waiting for you, fetch it';
+      const human = `${nudge.slice(0, 30)} and then the human kept typing`;
+      const f = fakeCc({ box: [], stash: [human] });
+      const res = await send(f, nudge, { ...STASH, resumeIfOwn: true });
+      expect(f.keys).toEqual([`lit:${nudge}`, 'Enter']);
+      expect(f.state.history).toEqual([nudge]);
+      expect(f.state.box).toEqual([human]);
+      expect(res).toEqual({ ok: true });
+    });
+
+    it('…and while the stash still shows, our swallowed text still gets the retry Enter', async () => {
+      const f = fakeCc({ box: [], stash: ['an earlier human note'], swallowEnters: 1 });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys).toEqual(['lit:hello from the lane', 'Enter', 'Enter']);
+      expect(f.state.history).toEqual(['hello from the lane']);
       expect(res).toEqual({ ok: true });
     });
   });
