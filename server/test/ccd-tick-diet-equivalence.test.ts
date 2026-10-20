@@ -116,6 +116,7 @@ const PLAN_DIRECT_HELPERS = [
  *  edge reds E0c. */
 const ACCEPTED_EDGES = ['_route_get -> _reg_get', '_route_note_floored -> _reg_get'];
 
+/** The index just past the balanced `open…close` run that starts at `s[i] === open`, quotes inside honoured. */
 function skipBalanced(s: string, i: number, open: string, close: string): number {
   let depth = 0;
   for (let k = i; k < s.length;) {
