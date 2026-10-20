@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=fc7444954cc9b02708740b35a2c4d84a2d20a9841d97fee02c63cfdc82678898
+# ccrc:generated 1 sha256=e33842c86eba2ce44447848332289188420af066bb478c1dde143410ba19ecd1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -282,8 +282,8 @@ _plat_devino() {  # <file> -> "<device>:<inode>", the identity of a lock
 # false on macOS — the total EQUALLED the row sum and overstated the
 # reclaim. `-type l` rides along because `du -sb` counts a symlink's own
 # st_size too (directories need nothing: GNU du charges a directory 0 in
-# byte totals — measured, coreutils 9.4). `stat -f '%d %i %z'` hands awk the
-# identity to dedup on (device:inode) and the size in one exec batch.
+# byte totals — measured, coreutils 9.4). `find -ls` hands awk inode ($1) and size ($7) from find's own lstat;
+# `-exec stat` cost ~6 ms a file on macOS, minutes per worktree. Dedup by inode: one workspace, one filesystem.
 #
 # `awk` PRINTS `s+0`, so an empty walk answers `0` rather than the empty
 # string — every caller validates the result with `^[0-9]+$` and would read a
@@ -330,8 +330,8 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
   local p errf err out rc
   for p in "$@"; do [ -e "$p" ] || return 1; done
   errf=$(_plat_mktemp) || return 1
-  out=$(find "$@" \( -type f -o -type l \) -exec stat -f '%d %i %z' {} + 2>"$errf" \
-        | awk '{ if (!seen[$1":"$2]++) s+=$3 } END{print s+0}'); rc=$?
+  out=$(find "$@" \( -type f -o -type l \) -ls 2>"$errf" \
+        | awk '{ if (!seen[$1]++) s+=$7 } END{print s+0}'); rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   # THE DIAGNOSTIC IS RELAYED, not swallowed. GNU `du` writes "cannot read
   # directory …" to stderr and the callers CAPTURE it — `_ws_gc_bytes` puts it
