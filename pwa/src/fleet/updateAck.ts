@@ -144,7 +144,7 @@ export function sendAck(nodeId: string, say: (text: string, tone?: ResultTone) =
  *  opens this, and focus is inside the confirm when the commit lands). The commit disables the Ack that opened it, so the focus the
  *  confirm gives back would land on a disabled button and drop to <body>. When the Ack was opened from inside its
  *  row, the row (focusable from script, `tabIndex={-1}`) takes the focus once the confirm has closed; this effect is
- *  the parent's, so it runs after `useCancelFirst`'s give-back. Opened from elsewhere, the focus goes back there. A
+ *  the parent's, so it runs after the Sheet's give-back (D-5931): React runs the child's cleanup before the parent's effect. Opened from elsewhere, the focus goes back there. A
  *  Cancel gives it back to the Ack itself. */
 export function AckConfirm({ node, releases, open, onClose, onConfirm, rowRef }: {
   node: NodeWire; releases: readonly ReleaseWire[]; open: boolean; onClose: () => void; onConfirm: () => void;
