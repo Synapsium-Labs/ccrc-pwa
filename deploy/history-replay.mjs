@@ -1290,18 +1290,22 @@ const LOCK_NAME = '.driver.lock';
 const liveClaims = new WeakSet();
 
 /** D-5985: take the --out lock. `<out>/.driver.lock` holds `{pid, start}` of its driver; it is created whole through an
- *  exclusive tmp file and `linkSync` (EEXIST means held), so a lock is never empty or torn. A holder that reads alive or
- *  unmeasured, a lock that is no regular file, a lock record that cannot be read (its errno in the detail) and one that
- *  is no record refuse `out-in-use`. If the holder releases the lock between the failed link and the read (the read finds
- *  nothing), the link is tried ONCE more before the driver refuses. A dead holder's lock is
- *  renamed to `<lock>.stale-<pid>`, re-read, and taken over only if it still names the same dead holder; if it names
- *  anyone else it is put back and the driver refuses. The lock's tmp file is written through writeWhole (a failed write
- *  refuses `.driver.lock.tmp-<pid> unwritable <code>` and drops the tmp file). Every removal here (the stale file, the tmp
- *  file in the `finally`) is `dropQuietly` (D-5986): best-effort, on a path that is refusing or after the lock is taken,
- *  where a raw error would replace the answer; a stale or tmp file left behind is harmless, because the claim walk reads
- *  only `.jsonl.part` and `.pid` names. Residual: a put-back link that fails for a reason other than EEXIST refuses
- *  `out-refused` with the holder's lock still renamed away to the stale file (a live holder then no longer has its lock
- *  at `.driver.lock`; D-5985). */
+ *  exclusive tmp file and `linkSync` (EEXIST means held), so a lock is never empty or torn. A holder that reads alive
+ *  or unmeasured, a lock that is no regular file, a lock record that cannot be read (its errno in the detail) and one
+ *  that is no record refuse `out-in-use`. If the holder releases the lock between the failed link and the read (the
+ *  read finds nothing), the link is tried ONCE more before the driver refuses. A dead holder's lock is renamed to
+ *  `<lock>.stale-<pid>`, re-read, and taken over only if it still names the same dead holder (pid and start). A re-read
+ *  lock naming anyone else is put back and the driver refuses; when the put-back meets EEXIST (a third driver linked
+ *  its own lock inside the window), the stale file, which is the only copy of that holder's record, is dropped. The
+ *  lock's tmp file is written through writeWhole (a failed write refuses `.driver.lock.tmp-<pid> unwritable <code>` and
+ *  drops the tmp file). Every removal here (the stale file, the tmp file in the `finally`) is `dropQuietly` (D-5986):
+ *  best-effort, on a path that is refusing or after the lock is taken, where a raw error would replace the answer; a
+ *  stale or tmp file left behind is harmless, because the claim walk reads only `.jsonl.part` and `.pid` names.
+ *  Residuals (D-5985): a put-back link that fails for a reason other than EEXIST refuses `out-refused` with the
+ *  holder's lock still renamed away to the stale file (a live holder then no longer has its lock at `.driver.lock`);
+ *  and the two routes to two holders: three or more drivers racing over one dead lock (the EEXIST drop above), and a
+ *  driver SIGKILLed between its rename and its put-back, after which a later driver links freely beside the live
+ *  holder. */
 function takeLock(out, live, afterHeld) {
   const lock = path.join(out, LOCK_NAME);
   const tmpRel = `${LOCK_NAME}.tmp-${process.pid}`;

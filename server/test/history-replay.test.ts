@@ -2066,6 +2066,31 @@ describe('fix round 1 (D-5985): one driver per --out, and the claim every runner
     expect(readFileSync(lockPath(out), 'utf8'), 'a reused pid\'s lock is left alone').toBe(reused);
   });
 
+  // D-5985: the pid half of both identity checks, and release()'s idempotence.
+  it('release leaves a lock that names another pid with this process\'s start', () => {
+    const out = freshOut();
+    const c = claimNow(out);
+    const theirs = recText(424262, myStart());
+    writeFileSync(lockPath(out), theirs);
+    c.release();
+    expect(existsSync(lockPath(out)), 'release did not remove another pid\'s lock').toBe(true);
+    expect(readFileSync(lockPath(out), 'utf8'), 'another pid\'s lock is left alone even with this start').toBe(theirs);
+  });
+
+  it('an old claim\'s second release does not remove a newer claim\'s lock in the same process', () => {
+    const out = freshOut();
+    const a = claimNow(out);
+    a.release();
+    expect(existsSync(lockPath(out))).toBe(false);
+    const b = claimNow(out);
+    expect(readFileSync(lockPath(out), 'utf8'), 'the newer claim holds the lock').toBe(recText(process.pid, myStart()));
+    a.release();
+    expect(existsSync(lockPath(out)), 'the second release of the old claim did not remove the newer claim\'s lock').toBe(true);
+    expect(readFileSync(lockPath(out), 'utf8'), 'the second release of the old claim leaves the newer claim\'s lock').toBe(recText(process.pid, myStart()));
+    b.release();
+    expect(existsSync(lockPath(out))).toBe(false);
+  });
+
   it('a lock held by a live driver refuses out-in-use naming the pid, and leaves the lock as it was: this process, another process, an unmeasured holder', async () => {
     const out = freshOut();
     claimNow(out);
@@ -2102,6 +2127,18 @@ describe('fix round 1 (D-5985): one driver per --out, and the claim every runner
     expect(() => replay.claimOut(out, { liveness: swap })).toThrow(/out-in-use: .driver.lock changed hands/);
     expect(readFileSync(lockPath(out), 'utf8'), 'the live driver\'s lock is back').toBe(theirs);
     expect(readdirSync(out).sort()).toEqual([replay.OUT_MARKER, LOCK].sort());
+  });
+
+  // D-5985: the pid half of the takeover's re-read. The stale file names ANOTHER pid with the dead holder's START (a new
+  // driver took the lock in the window), so it is not the holder read as dead: put back, refuse.
+  it('a stale lock that names another pid with the dead holder\'s start is put back, and the claim refuses out-in-use', () => {
+    const out = freshOut();
+    writeFileSync(lockPath(out), recText(424260, '7'));
+    const theirs = recText(424261, '7');
+    const swap = (): 'dead' => { writeFileSync(lockPath(out), theirs); return 'dead'; };   // read as dead, then another pid takes the lock
+    expect(() => replay.claimOut(out, { liveness: swap })).toThrow(/out-in-use: .driver.lock changed hands/);
+    expect(readFileSync(lockPath(out), 'utf8'), 'the other pid\'s lock is back').toBe(theirs);
+    expect(readdirSync(out).sort(), 'no stale or temp file remains').toEqual([replay.OUT_MARKER, LOCK].sort());
   });
 
   // D-5985: the start half of the takeover's re-read. The stale file names the SAME dead pid but ANOTHER start (the pid was
