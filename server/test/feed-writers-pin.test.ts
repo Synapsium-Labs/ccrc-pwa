@@ -447,7 +447,7 @@ describe("server.ts's operator-answer pair (POST /api/sessions/:id/ask): recorde
   const ASK_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\nEnter to select\n';
   const PARENT = 'acct-a-project-a-coordinator';
 
-  const answered = async (fail: boolean) => {
+  const answered = async (fail: boolean, visible = true) => {
     const home = mkTmp('ccrc-feed-pin-ask-');
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
@@ -464,7 +464,7 @@ describe("server.ts's operator-answer pair (POST /api/sessions/:id/ask): recorde
     const run: Runner = async (_cmd, args) => (args[0] === 'capture-pane'
       ? { code: 0, stdout: ASK_PANE, stderr: '' } : { code: 0, stdout: '', stderr: '' });
     const rec = await feedRecorder(home);
-    rec.setVisible([B]);                                     // the record gate does not read presence
+    rec.setVisible(visible ? [B] : []);                      // the record gate does not read presence
     const app = await buildServer({ ...testDeps(home, run), coord: rec.coord, notifyLog: rec.notifyLog,
       push: rec.push as never, presence: rec.presence as never });
     try {
@@ -489,6 +489,15 @@ describe("server.ts's operator-answer pair (POST /api/sessions/:id/ask): recorde
     expect(rec.archived.map((e) => [e.kind, e.sessionId, e.title])).toEqual([['ask', B, 'question answered']]);
     expect(rec.pushes).toEqual([]);
   });
+
+  it('with no one looking at the session the answer is still recorded and archived, and still never pushed (D-5857, Task C1c)',
+    async () => {
+      const { rec, res, calls } = await answered(false, false);
+      expect(res.statusCode).toBe(200);
+      expect(withoutFlush(calls)).toEqual(['record', 'archive']);
+      expect(rec.archived.map((e) => [e.kind, e.sessionId, e.title])).toEqual([['ask', B, 'question answered']]);
+      expect(rec.pushes, "the sink carries deps.push now; only 'record-only' keeps it silent").toEqual([]);
+    });
 
   it("the catch-up response's bytes, filled through the operator-answer pair: the pair's key order (D-5857, Task C1c)",
     async () => {
