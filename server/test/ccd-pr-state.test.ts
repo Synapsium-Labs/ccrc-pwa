@@ -815,7 +815,7 @@ describe('binding, batched (landing-order wave 3c)', () => {
     expect(got.filter((c) => c === 'cat-file -e' || c.startsWith('merge-base'))).toEqual([]);
   });
 
-  it('(c) dedupes an oid that two rows name, and still answers each row', () => {
+  it('(c) answers every row when two rows name one oid, beside a missing and an abbreviated oid', () => {
     const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
     h.git(main, 'checkout', '-q', '-b', 'someone-else');
     fs.writeFileSync(path.join(main, 'other.txt'), 'theirs\n');
