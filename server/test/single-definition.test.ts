@@ -7038,6 +7038,11 @@ describe('the Claude Code version grammar and its floor are defined once, in sha
 // read is not a write. The hold list is spelled once.
 describe('D-5242: hibernation’s markers have no writer, and its holds one home', () => {
   const DEFINER = 'server/src/coord/hibernate.ts';
+  /** D-5855: the two switches are rows of the switchboard, which defines them; `hibernate.ts` re-exports them. The
+   *  hours file and the per-session suffix stay in `hibernate.ts`. */
+  const SWITCH_DEFINER = 'shared/switches.ts';
+  const definerOf = (name: string): string =>
+    (name === 'hibernate-live' || name === 'hibernate-disabled' ? SWITCH_DEFINER : DEFINER);
   const MARKERS = [
     ['hibernate-live', 'HIBERNATE_LIVE_MARKER'], ['hibernate-disabled', 'HIBERNATE_DISABLED_MARKER'],
     ['hibernate-after-hours', 'HIBERNATE_AFTER_HOURS_FILE'], ['no-hibernate', 'NO_HIBERNATE_SUFFIX'],
@@ -7054,12 +7059,12 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
     // `hibernate-…` names, so each scan finds its own word only.
     expect(ALL.filter((f) => stallCode(f).includes(`'${name}'`) || stallCode(f).includes(`"${name}"`)
       || stallCode(f).includes(`\`${name}`) || stallCode(f).includes(`/${name}`)).map(rel).sort(),
-    `${name} spelled on a code line outside ${DEFINER}`).toEqual([DEFINER]);
-    expect(stallCode(path.join(ccrcRoot, DEFINER))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+    `${name} spelled on a code line outside ${definerOf(name)}`).toEqual([definerOf(name)]);
+    expect(stallCode(path.join(ccrcRoot, definerOf(name)))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
   });
-  it.each(MARKERS)('%s: the files that name its constant reach no write', (_name, constant) => {
+  it.each(MARKERS)('%s: the files that name its constant reach no write', (name, constant) => {
     const holders = ALL.filter((f) => stallCode(f).includes(constant)).map(rel).sort();
-    expect(holders, `${constant}: nobody names it`).toContain(DEFINER);
+    expect(holders, `${constant}: nobody names it`).toContain(definerOf(name));
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(TS_WRITE);
   });
   it('HIBERNATE_HOLDS, its map and its constants are declared once, in the definer', () => {
@@ -7067,7 +7072,8 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
       'HIBERNATE_SHADOW_LINE_MS', 'HIBERNATE_AFTER_HOURS_MIN', 'HIBERNATE_AFTER_HOURS_MAX',
       ...MARKERS.map(([, k]) => k)]) {
       const decl = new RegExp(`\\b(?:const|let|var)\\s+${c}\\b`);
-      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c).toEqual([DEFINER]);
+      const home = MARKERS.find(([, k]) => k === c)?.[0];
+      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c).toEqual([home === undefined ? DEFINER : definerOf(home)]);
     }
   });
   it('PRESENCE_OPEN_TTL_MS is declared once, in shared/api.ts beside PRESENCE_TTL_MS', () => {
