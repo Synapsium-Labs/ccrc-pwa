@@ -96,7 +96,9 @@ describe("Refined's transcript folds each run of tool entries into one row", () 
     expect(rows).toHaveLength(1);
     const row = rows[0]!;
     expect(row.textContent).toContain('Read 2 files · Ran npm');
-    expect(row.textContent).toContain('3');
+    // The count is drawn (aria-hidden) and spoken (sr-only) separately; each is held on its own.
+    expect(row.querySelector('.ref-tool-group-count > [aria-hidden="true"]')?.textContent).toBe('3');
+    expect(row.querySelector('.ref-tool-group-count > .sr-only')?.textContent).toBe(', 3 tool calls');
     // Collapsed by default: none of the three cards is drawn yet.
     expect(row.getAttribute('aria-expanded')).toBe('false');
     expect(container.querySelectorAll('.toolcard')).toHaveLength(0);
