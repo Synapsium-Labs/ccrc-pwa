@@ -505,7 +505,7 @@ function secretsRefusal(p) {
 //     spawns spent. A finished job is never re-spawned, so a double count needs a kill inside one of three windows
 //     (the spend line to the rename; the rename to the run.json; a leftover's charge to its `.part`'s removal; D-5811,
 //     D-5984), and over-counting is the safe direction for a budget. A ledger that cannot be read
-//     whole fails closed as budget-exhausted 'ledger-unreadable', never as 0.
+//     whole fails closed as out-refused (spentSoFar names which of four), never as 0 and never as budget-exhausted.
 
 /** The most code points of a tool_result a spawn's input carries (spec §10.2, reconstruction item 2). */
 export const TOOL_RESULT_CUT = 4000;
@@ -933,22 +933,28 @@ function spendRow(line) {
 }
 
 /** The cumulative spend under `out` (W2-D55): every line summed, a repeated name included (never de-duplicated:
- *  over-counting is the budget's safe direction). 0 when no ledger exists yet. A ledger
- *  that is not a regular file, cannot be read, or holds a line recordSpend would not write (a torn last line
- *  included) throws DriverRefusal('budget-exhausted', 'ledger-unreadable').
+ *  over-counting is the budget's safe direction). 0 when no ledger exists yet. A ledger the driver cannot read whole
+ *  refuses `out-refused` (D-5986), with exactly one of `spend.jsonl is not a regular file`, `spend.jsonl unreadable <code>`,
+ *  `spend.jsonl over-cap` and `spend.jsonl malformed` (a torn or foreign line, one recordSpend would not write): raising
+ *  --budget clears none of these states, so `budget-exhausted` means only that spend has reached the budget. (Task 4
+ *  answered all of them `budget-exhausted` `ledger-unreadable`.)
  *  @param {string} out
  *  @returns {number} */
 export function spentSoFar(out) {
   const read = readPlain(`${out}/${SPEND_LEDGER}`, OUT_STREAM_CAP);   // D-5986: lstat, no-follow open, fstat, bounded read
   if (read.state === 'absent') return 0;
-  if (read.state !== 'bytes') refuse('budget-exhausted', 'ledger-unreadable');
+  if (read.state === 'bad') {
+    if (read.why === 'not-regular') refuse('out-refused', `${SPEND_LEDGER} is not a regular file`);
+    if (read.why === 'over-cap') refuse('out-refused', `${SPEND_LEDGER} over-cap`);
+    refuse('out-refused', `${SPEND_LEDGER} unreadable ${read.code}`);
+  }
   const text = read.bytes.toString('utf8');
   const rows = text.split('\n');
-  if (rows.pop() !== '') refuse('budget-exhausted', 'ledger-unreadable');   // the last line was torn
+  if (rows.pop() !== '') refuse('out-refused', `${SPEND_LEDGER} malformed`);   // the last line was torn
   let sum = 0;
   for (const line of rows) {
     const row = spendRow(line);
-    if (row === null) refuse('budget-exhausted', 'ledger-unreadable');
+    if (row === null) refuse('out-refused', `${SPEND_LEDGER} malformed`);
     sum += row.tokens;
   }
   return sum;
@@ -2305,8 +2311,11 @@ function shaOfPlain(out, rel) {
 /** `probe`: pane and args (main), then, in the code's order: unknown flags (a flag the probe never reads), required flags
  *  (--budget included, D-5815), the settings mode, HOME, the unusable inputs (D-5813), `prepareOut`, the realpath ':'
  *  check (D-5813), `claimOut` (D-5985), the roster and admission, the launcher's X_OK, and the gate before every spawn,
- *  so every refusal lands before the first spawn. Then one box-mode run per taught spelling (at most two at once),
- *  `<out>/probe.json`, and `sha256 <hex>` on stderr (D-5983), stdout empty. Exit 0 whatever the runs showed. */
+ *  so every one of those refusals lands before the first spawn. A refusal can also land after one: the gate's stops before
+ *  a later spawn (`budget-exhausted`, the limits words), `interrupted`, and every `out-refused` a run's files raise after
+ *  its spawn (the `.pid` write, the stream read, the spend line, the removals, the rename, run.json). Then one box-mode run
+ *  per taught spelling (at most two at once), `<out>/probe.json`, and `sha256 <hex>` on stderr (D-5983), stdout empty.
+ *  Exit 0 whatever the runs showed; only a refusal is non-zero. */
 export async function probeCommand(flags, env) {
   for (const k of Object.keys(flags)) if (!PROBE_FLAGS.includes(k)) refuse('args-invalid', `--${k} is not a probe flag`);
   for (const k of PROBE_REQUIRED) if (flags[k] === undefined) refuse('args-invalid', `${k}-required`);

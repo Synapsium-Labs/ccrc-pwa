@@ -924,7 +924,10 @@ describe('W2-4 Task 4: spawned text, the stream-json reader and the spend ledger
     }
     return null;
   };
-  const CLOSED = { word: 'budget-exhausted', detail: 'ledger-unreadable' };
+  // D-5986: a ledger the gate cannot read whole is out-refused, never budget-exhausted (raising --budget clears none of these states).
+  const NOT_REGULAR = { word: 'out-refused', detail: 'spend.jsonl is not a regular file' };
+  const MALFORMED = { word: 'out-refused', detail: 'spend.jsonl malformed' };
+  const UNREADABLE = { word: 'out-refused', detail: 'spend.jsonl unreadable EACCES' };
   const GOOD = '{"name":"a","tokens":1,"ts_ms":1}\n';
 
   it('the ledger: absent is 0; one canonical line per finished spawn, mode 0600; summed over every line, a repeated name included', () => {
@@ -961,28 +964,28 @@ describe('W2-4 Task 4: spawned text, the stream-json reader and the spend ledger
     ['an extra key', `${GOOD}{"name":"b","tokens":1,"ts_ms":1,"x":0}\n`],
     ['a missing key', `${GOOD}{"name":"b","tokens":1}\n`],
     ['an empty name', `${GOOD}{"name":"","tokens":1,"ts_ms":1}\n`],
-  ])('a malformed ledger (%s) fails closed as budget-exhausted, never a count', (_why, body) => {
+  ])('a malformed ledger (%s) fails closed as out-refused spend.jsonl malformed, never a count', (_why, body) => {
     const out = t4MkTmp('ccrc-replay-t4-malformed-');
     t4Fs.writeFileSync(ledger(out), body);
-    expect(refusalOf(() => t4Replay.spentSoFar(out))).toEqual(CLOSED);
+    expect(refusalOf(() => t4Replay.spentSoFar(out))).toEqual(MALFORMED);
   });
 
-  it('a ledger that is a directory, or a symlink to a readable ledger, fails closed too', () => {
+  it('a ledger that is a directory, or a symlink to a readable ledger, fails closed too: out-refused spend.jsonl is not a regular file', () => {
     const dir = t4MkTmp('ccrc-replay-t4-dir-');
     t4Fs.mkdirSync(ledger(dir));
-    expect(refusalOf(() => t4Replay.spentSoFar(dir))).toEqual(CLOSED);
+    expect(refusalOf(() => t4Replay.spentSoFar(dir))).toEqual(NOT_REGULAR);
     const link = t4MkTmp('ccrc-replay-t4-link-');
     t4Fs.writeFileSync(`${link}/elsewhere`, GOOD);
     t4Fs.symlinkSync(`${link}/elsewhere`, ledger(link));
-    expect(refusalOf(() => t4Replay.spentSoFar(link))).toEqual(CLOSED);
+    expect(refusalOf(() => t4Replay.spentSoFar(link))).toEqual(NOT_REGULAR);
   });
 
   // D-5814: an --out whose search bit is gone makes the ledger's lstat fail with EACCES (not ENOENT): fail closed, never 0.
-  it.skipIf(process.getuid?.() === 0)('an --out that lost its search bit fails closed: the lstat error other than ENOENT is ledger-unreadable, never an empty ledger (skipped as root)', () => {
+  it.skipIf(process.getuid?.() === 0)('an --out that lost its search bit fails closed: the lstat error other than ENOENT is out-refused spend.jsonl unreadable EACCES, never an empty ledger (skipped as root)', () => {
     const out = t4MkTmp('ccrc-replay-t4-nosearch-');
     t4Replay.recordSpend(out, 'r0', 500);
     t4Fs.chmodSync(out, 0o600);
-    try { expect(refusalOf(() => t4Replay.spentSoFar(out))).toEqual(CLOSED); }
+    try { expect(refusalOf(() => t4Replay.spentSoFar(out))).toEqual(UNREADABLE); }
     finally { t4Fs.chmodSync(out, 0o700); }
     expect(t4Replay.spentSoFar(out), 'CONTROL: the mode restored, the ledger reads').toBe(500);
   });
@@ -991,7 +994,7 @@ describe('W2-4 Task 4: spawned text, the stream-json reader and the spend ledger
     const out = t4MkTmp('ccrc-replay-t4-unreadable-');
     t4Fs.writeFileSync(ledger(out), GOOD);
     t4Fs.chmodSync(ledger(out), 0o000);
-    expect(refusalOf(() => t4Replay.spentSoFar(out))).toEqual(CLOSED);
+    expect(refusalOf(() => t4Replay.spentSoFar(out))).toEqual(UNREADABLE);
   });
 });
 
@@ -2697,7 +2700,7 @@ describe('fix round 1 (D-5986): no-follow, type-checked I/O under --out', () => 
     const dir = mkTmp('ccrc-replay-d5986-child-');
     const script = path.join(dir, 'child.mjs');
     writeFileSync(script, `import * as D from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, ftruncateSync, mkdirSync, openSync, symlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 const base = process.argv[2];
@@ -2728,12 +2731,25 @@ process.stdout.write(JSON.stringify(results));
     expect(r.status, r.err).toBe(0);
     expect(JSON.parse(r.out)).toEqual({
       append: 'out-refused: spend.jsonl is not a regular file',
-      read: 'budget-exhausted: ledger-unreadable',
+      read: 'out-refused: spend.jsonl is not a regular file',
       lock: 'out-in-use: .driver.lock is not a regular file; remove it only after confirming no driver runs on this --out',
       pid: 'out-refused: a.pid is not a regular file',
       part: 'out-refused: run-stream-invalid b',
     });
   });
+
+  // D-5986: a ledger past the read bound (256 MiB) is out-refused spend.jsonl over-cap, never read whole and never summed. The
+  // file is sparse (no disk), and the read runs in a child, so its transient buffers cannot take the test runner with them.
+  it('a ledger past the read bound refuses out-refused spend.jsonl over-cap, in a child with a deadline', () => {
+    const r = inChild(`
+{ const out = fresh('cap');
+  const fd = openSync(join(out, D.SPEND_LEDGER), 'w'); ftruncateSync(fd, 256 * 1024 * 1024 + 1); closeSync(fd);
+  results.read = said(() => D.spentSoFar(out)); }
+`, 60_000);
+    expect(r.signal, `the read did not finish: ${r.err}`).toBeNull();
+    expect(r.status, r.err).toBe(0);
+    expect(JSON.parse(r.out)).toEqual({ read: 'out-refused: spend.jsonl over-cap' });
+  }, 90_000);
 
   it('a --step0a input that is a FIFO, a symlink or a directory refuses input-invalid not-regular and is never opened or waited on', () => {
     const r = inChild(`
@@ -3238,6 +3254,22 @@ describe('W2-4 Task 6: a stop is resumable (W2-D55: a stopped batch spawns nothi
     gate();
     await expect(claimedBatch(r.jobs, { concurrency: 1, gate })).rejects.toMatchObject({ word: 'budget-exhausted', detail: 'spent 150 of 150' });
     expect(stubLog(r.home)?.length, 'one spawn, then the stop').toBe(1);
+  }, 60_000);
+
+  // D-5986: budget-exhausted means only that spend has reached the budget. A ledger the gate cannot read whole is out-refused,
+  // and a larger --budget does not clear it.
+  it('a torn ledger stops the gate out-refused spend.jsonl malformed under any budget, before a spawn; budget-exhausted is left to a ledger that reads', async () => {
+    const r = t6Rig('ccrc-replay-t6-torn-');
+    t6Fs.writeFileSync(r.row, rowAt(NOW_S));
+    t6Fs.writeFileSync(t6Path.join(r.out, t6Driver.SPEND_LEDGER), '{"name":"a","tok');
+    for (const budget of [150, 1_000_000_000]) {
+      const gate = t6Driver.batchGate({ out: r.out, home: r.home, accountId: 'up-a', budget, limits: LIMITS, now: () => NOW_S * 1000 });
+      await expect(claimedBatch(r.jobs, { concurrency: 1, gate }), `budget ${budget}`).rejects.toMatchObject({ word: 'out-refused', detail: 'spend.jsonl malformed' });
+    }
+    expect(stubLog(r.home), 'no spawn').toBeNull();
+    t6Fs.writeFileSync(t6Path.join(r.out, t6Driver.SPEND_LEDGER), '{"name":"a","tokens":200,"ts_ms":1}\n');
+    const gate = t6Driver.batchGate({ out: r.out, home: r.home, accountId: 'up-a', budget: 150, limits: LIMITS, now: () => NOW_S * 1000 });
+    expect(() => gate(), 'CONTROL: a ledger that reads and has reached the budget').toThrow('budget-exhausted: spent 200 of 150');
   }, 60_000);
 });
 
