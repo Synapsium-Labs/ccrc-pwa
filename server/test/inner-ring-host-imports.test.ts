@@ -86,9 +86,22 @@ const OUTER_IMPORTERS = [
   'update/routes.ts',
 ];
 
-/** D-6004: the one inner-ring importer still pending. `commands.ts` reads the whole `Deps`, and `Deps` moves to
- *  `deps.ts` only after #850 (which edits inside `Deps`) lands. Removing this entry is ARCH-03's second half. */
-const PENDING = ['commands.ts'];
+/** The ports `server.ts` used to declare for its inner consumers, now in a type-only file of their own (ARCH-03's
+ *  second half, extending D-6003): `Deps`, the bag the composition root builds and `buildServer` takes, and
+ *  `CollectLaneDeps`, one of its members. `server.ts` re-exports both, so every caller that names them there still
+ *  compiles. */
+const DEPS = path.join(SRC, 'deps.ts');
+
+/** True when every top-level statement of a source text is a type: `import type`, `export type`, an interface or a
+ *  type alias. Such a file emits `export {};` and nothing else, so it is no runtime edge for anyone. */
+function typeOnly(src: string): boolean {
+  const c = codeOnly(src);
+  const tops = c.split('\n').filter((l) => /^\S/.test(l) && !/^\}/.test(l));
+  return tops.length > 0 && tops.every((l) =>
+    /^import type\s/.test(l) || /^export (?:type|interface)\s/.test(l) || /^(?:type|interface)\s/.test(l))
+    // and no runtime declaration hides anywhere: indented, or on the line a closing brace ends
+    && !/(^|[;}])\s*(?:export\s+)?(?:const|let|var|function|class|enum|default)\b|\bexport\s*\{(?!\s*type\b)/m.test(c);
+}
 
 describe('the scan itself (CONTROL)', () => {
   it('sees every import shape, type-only ones included', () => {
@@ -120,15 +133,33 @@ describe('the scan itself (CONTROL)', () => {
     });
   }
 
-  for (const f of PENDING) {
-    it(`${f} (pending, D-6004) is below L4 — the pending list holds only inner files`, () => {
-      expect(outerRingFact(path.join(SRC, f))).toBeNull();
-    });
-  }
+  it('reads a type-only file as type-only, and a file with one runtime statement as not', () => {
+    expect(typeOnly(`import type { A } from './a.js';\n\nexport interface B {\n  a: A;\n}\nexport type C = B;\n`)).toBe(true);
+    expect(typeOnly(`import type { A } from './a.js';\nexport const b = 1;\n`)).toBe(false);
+    expect(typeOnly(`import { A } from './a.js';\nexport type C = A;\n`)).toBe(false);
+    // A runtime statement that is indented, or that shares a line with a closing brace, is still one.
+    expect(typeOnly(`export interface B {\n  a: 1;\n}\n  export const b = 1;\n`)).toBe(false);
+    expect(typeOnly(`export interface B {\n  a: 1;\n} export const b = 1;\n`)).toBe(false);
+  });
+});
+
+describe('Deps lives in a type-only deps.ts, and server.ts re-exports it (ARCH-03, D-6003)', () => {
+  it('deps.ts declares Deps and CollectLaneDeps, and every top-level statement in it is a type', () => {
+    const src = readFileSync(DEPS, 'utf8');
+    expect(src).toMatch(/^export interface Deps \{/m);
+    expect(src).toMatch(/^export interface CollectLaneDeps \{/m);
+    expect(typeOnly(src)).toBe(true);
+  });
+
+  it('server.ts declares neither and re-exports both from deps.ts, so no caller breaks', () => {
+    const c = codeOnly(readFileSync(path.join(SRC, 'server.ts'), 'utf8'));
+    expect(c).not.toMatch(/\binterface (?:Deps|CollectLaneDeps)\b/);
+    expect(c).toMatch(/^export type \{ CollectLaneDeps, Deps \} from '\.\/deps\.js';$/m);
+  });
 });
 
 describe('no file below L4 imports server.ts or watch.ts, even for a type (D-6003)', () => {
-  it('the importers are exactly the L4/L5 files and the one pending inner file', () => {
-    expect(hostImporters()).toEqual([...OUTER_IMPORTERS, ...PENDING].sort());
+  it('the importers are exactly the L4/L5 files — no inner file, none pending', () => {
+    expect(hostImporters()).toEqual([...OUTER_IMPORTERS].sort());
   });
 });
