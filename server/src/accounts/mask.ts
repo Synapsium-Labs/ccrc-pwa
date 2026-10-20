@@ -15,7 +15,9 @@
  *     (D-5995). A shape's boundary is a non-alphanumeric byte, a literal JSON escape (`\n` `\r` `\t`) or a
  *     percent-escape (D-5995). In ROWS mode (the drawer and pane history, where Claude Code's TUI hard-wraps a long
  *     line into indented rows) a shape that reaches the end of its row also masks the leading token run of the next
- *     row, and on through every row that run fills.
+ *     row, and on through every row that run fills; and a row whose last run has begun a shape (or ends in a prefix
+ *     of one that the next row completes) is joined to the next indented row's leading run before the shapes are
+ *     matched, so a key wrapped before its first row could match is matched whole (D-5995).
  *   - EXACT BYTES. A `compatible` key has no shape, so each lane secret has a fingerprint row (D-5996): the secret
  *     with its trailing `=` stripped, `HMAC-SHA256(box token, "ccrc-secret-fp-v1\0" ‖ that)`, and its byte length,
  *     computed on the box and stored in `secret_fingerprints` with the box-token generation it was keyed with. A
@@ -910,7 +912,8 @@ function codexValueOpenAt(t: string): number | null {
 }
 
 /** Where a drawer chunk's open tail begins (D-5995): an unfinished escape, a run that has begun a shape (`sk-` or
- *  `eyJ` at a boundary), an open Codex token value, or, while fingerprints are held, any open run. In the shape-only
+ *  `eyJ` at a boundary), an open Codex token value, a run that ends the chunk's last row (`rowTailAt`), or, while
+ *  fingerprints are held, any open run. In the shape-only
  *  mode an ordinary run (a word, a path, a keystroke's echo) is never held: a shape a cut splits ahead of `sk-` is
  *  matched across the cut by the drawer's context. `null`: that tail is longer than a drawer holds. Only the end of
  *  the text is scanned. */

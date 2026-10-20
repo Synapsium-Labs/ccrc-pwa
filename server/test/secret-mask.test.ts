@@ -1397,6 +1397,20 @@ describe('the post-merge audit: a key the TUI wraps early on its row (D-5995)', 
     }
   });
 
+  it('a key wrapped early at 80 columns is masked through its last row, and the indented row after it is drawn as it is', () => {
+    const m = new SecretMasker();
+    for (const [name, k] of WRAPPED) {
+      for (const cut of [1, 3, 8, 10]) {
+        const head = `${`  ⎿  ${'word '.repeat(15)}`.slice(0, 79 - cut)} `;   // a blank before the key: its boundary
+        const rows = [`${head}${k.slice(0, cut)}`];
+        for (let at = cut; at < k.length; at += 75) rows.push(`     ${k.slice(at, at + 75)}`);
+        const o = m.maskText(`${rows.join('\r\n')}\r\n     next row\r\n`, { rows: true });
+        expect(leaksNone(o, k), `${name} cut ${cut}: ${JSON.stringify(o)}`).toBe(true);
+        expect(o, `${name} cut ${cut}`).toContain('\r\n     next row\r\n');
+      }
+    }
+  });
+
   it('the same wrap split at the row break across two drawer pushes, back to back or within the row settle, leaves no byte of it', () => {
     vi.useFakeTimers();
     const m = new SecretMasker();
