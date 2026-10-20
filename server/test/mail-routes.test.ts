@@ -652,6 +652,11 @@ describe('the rejection table is total, in both directions', () => {
                                // unknown delivery id; not a mail reject code
                                // (nothing was ever rejected — it never existed)
       'wave-brief',           // mail SUBJECT text (dispatch's own brief)
+      'brief-retry',          // a `run_events.detail` (D-5841, `coord/briefwatch.ts`): the
+                              // brief watch's one retry row, not a mail or run refusal
+      'brief-not-taken',      // the same file's notice row, and the push tag's stem
+      'draft-present',        // a `SendResult` error (`inject/send.ts`), the `enter-ignored`
+                              // shape: `briefwatch.ts`'s refusal words key on it
       'wave-done-rejected',   // mail SUBJECT text (close's own rejection)
       'wave-advance-rejected', // mail SUBJECT text (advance's own rejection, review findings 1/15)
       'review-done-rejected', // mail SUBJECT text (the review close's own rejection, design 2026-09-14)
