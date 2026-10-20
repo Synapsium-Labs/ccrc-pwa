@@ -16,6 +16,11 @@ not here. Coordinator: `ccrc-pwa-quiet-river`.
 
 The third PR that lands is the coordinator's next ledger PR, slot C. So the proof spends three dispatches, not five.
 
+That order is the 2026-10-07 departure, and the run of 2026-10-20 spent (e) on it: (a1)'s pushes, made outside slot
+D's workspace, unbound the PR, so its removal could not reach the lane. The re-run follows Task 7's runbook as
+landing-order wave 3c amends it: (e) is read on its PR right after (a0), before (a1) and before any landing, and
+never on a PR that (a1) has pushed to. Every reading is recorded in `docs/superpowers/programs/landing-order.md`.
+
 ## Slots
 
 Each proof PR changes only its own slot line below, and nothing else in the repository.

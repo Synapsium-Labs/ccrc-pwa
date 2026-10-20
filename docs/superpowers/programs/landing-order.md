@@ -635,13 +635,15 @@ carries it (spec §5.1, amended 2026-09-24).
 - **2026-10-20 13:00 — Task 7's proof run, stopped by stop rule 3; the queue is off.** This is Step 7's record.
   - **Arming.** The operator chose "Run Task 7 now" on 2026-10-20. Step 1 was clean: a trusted full run on `main`
     (daily run 39364571048), both boxes on one release, the payload cap in the installed hook, doctor's
-    `PASS jq_regex`, the canary's `deny` and a clean census. Step 4 wrote the queue ruleset at 08:59:54Z. The fleet's
+    `PASS jq_regex`, the canary's `deny` and a clean census. Step 2's read differed from the runbook's in one setting:
+    the repository allows auto-merge, an operator change covered by the ruling. Step 4 wrote the queue ruleset at
+    08:59:54Z, removing the maintain role's bypass (Step 3) at both writes; each rollback restored it. The fleet's
     daily dispatch cap then refused the proof dispatches, so the coordinator rolled the ruleset back at 09:07:30Z
     (nothing had merged) and wrote it again at 11:53:33Z, once slots A, B and C were green and D was open. The queue
     was on from 11:53:33Z to 12:56:47Z.
   - **Departures.** Slot C was this coordinator's continuity ledger PR, #409, because its other ledger PR conflicted
     with `main`. The proof slots wrote new one-line files under `docs/superpowers/programs/landing-order-proof/`
-    instead of this programme's slot lines, which another run's claim held. Runs 690 and 691 went to `merging`
+    instead of the proof ledger's slot lines, which another run's claim held. Runs 690 and 691 went to `merging`
     before the enqueue, as ruled on 2026-10-07.
   - **Readings.**
     - (a0), twice (09:00 and 11:53), on #409: the wrong sha was refused ("expected head oid does not match the
@@ -651,33 +653,43 @@ carries it (spec §5.1, amended 2026-09-24).
       second empty push from the same login left the request armed: a push by the arming login does not disarm it,
       so clause 15's disarm rule carries weight. It was disarmed with `--disable-auto`. Both pushes were made
       outside D's workspace, so the PR's head left the workspace's own tip, and `pr-state` stopped binding D.
-    - The enqueue: #942, #963 and #409 within 9 s. Each entry read back non-null within about 2 s.
+    - The enqueue: #942 (`abafcd696`), #963 (`d82ccb0e2`) and #409 (`b5efafba3`) within 9 s. Each entry read back
+      non-null within about 2 s.
     - (a) while waiting: A and B read `open queued <time>`. C read `unknown`, its known branch drift.
     - (a2), (b), (c) and (d) were not reached: nothing merged.
     - **What stopped it.** At 12:01 another programme's ledger PR, #964, was merged through the admin bypass while
       the queue was on. `main` moved, and the queue rebuilt #942's group on the new base. In that group one server
-      shard ran only `ccd-tick-diet-equivalence.test.ts` and hit the 30-minute job bound (run 39419159770); the same
-      shard took about 16 and 18 minutes earlier that day. GitHub removed #942 at 12:32:35Z (`failed_checks`).
-      #963's group failed on a teardown race in `fleetws.test.ts`, `ENOTEMPTY` from the `afterEach` removal (run
-      39423071534), and GitHub removed it at 12:54:52Z (`failed_checks`). Neither failure was its PR's own.
+      shard ran only `ccd-tick-diet-equivalence.test.ts` and hit the 30-minute job bound (run 39419159770). That
+      shard is slow everywhere: over the day's successful runs its median was 20.9 minutes and its 90th percentile
+      26.7, and one pull-request run hit the same bound. GitHub removed #942 at 12:32:35Z (`failed_checks`), and the
+      coordinator enqueued it again at 12:52:04Z, after reading why. #963's group failed in `fleetws.test.ts`:
+      `ENOTEMPTY` from the `afterEach` removal of the test's home, which reads as a race with a write still landing
+      (run 39423071534). GitHub removed it at 12:54:52Z (`failed_checks`). Neither failure was its PR's own.
     - **The lane was blind.** `ccd pr-state --project` read #942 as `dequeued 12:32:35Z`, correctly. Yet no `queue`
       feed event appeared and this coordinator got no `dequeued:` mail, although run 690 was waiting at `merging`.
-      Measured afterwards: that call takes about 60 s on this box, against the server's 25 s bound for `pr-state`.
-      So every sweep of this project failed, and failed silently: the server backs off as if the agent were down
-      and logs nothing. The cost is in `ccd`: for each workspace, `is_ours` runs two `git` calls for every listed PR,
+      Measured afterwards, under heavy load: that call takes about 60 s on the fleet box, against the server's 25 s
+      bound for `pr-state` (the same bound in both releases the boxes ran during the window). So most likely every
+      sweep of this project timed out. That was not measured on the server side, because a failed sweep backs off
+      as if the agent were down and logs nothing. The cost is in `ccd`: for each workspace, `is_ours` runs two `git` calls for every listed PR,
       while only the rows that name that workspace's own branch can ever bind it. The `merged:` notice could not be
       measured, and on this project neither notice wakes a coordinator until this is fixed.
     - (e), on D: enqueued, then removed with `dequeuePullRequest`; the timeline reads Added, then Removed
       (`manual`). No feed event appeared, which was expected twice over: D no longer bound, and the lane was blind.
       #965 was closed unmerged and run 692 closed.
     - (f): D's held worker ran `gh pr merge` and the wave-hold arm refused it, live. Pass.
-  - **Stop rule 3 fired.** Three groups were built in an hour, none merged, and two failed for reasons that were not
-    their PR's. The ruleset was rolled back at 12:56:47Z, and its writable projection equals `ruleset-rollback.json`
-    (one approval, both bypass roles). Landing is back on the pre-queue path.
-  - **Finding: turning the queue requirement off drops every entry silently.** #409, #942 and two other sessions'
+  - **Stop rule 3 fired** on the second queue run that failed for a reason not its PR's own. After the first, the
+    coordinator ruled it not fired: one slow file over a job bound, measured passing twice that hour. The second
+    failure, and the blind lane, decided it: with no lane the proof could not be clean this round, so more queue
+    time only exposed other sessions' landings. The ruleset was rolled back at 12:56:47Z, and its writable projection
+    equals `ruleset-rollback.json` (one approval, both bypass roles). Landing is back on the pre-queue path.
+  - **Finding: turning the queue requirement off drops every entry silently.** #409, #942 (enqueued again) and two
+    other sessions'
     PRs (#936, #947) then read open, not queued and not armed, and each timeline's last queue act is still its
     `AddedToMergeQueueEvent`. GitHub records no removal, so no lane can announce one. This coordinator commented on
     #936 and #947.
+  - **The 2026-10-07 order for slot D is superseded.** Running (a1) and then (e) on one PR spent (e): (a1)'s pushes
+    unbound the PR. Wave 3c's runbook runs (e) on the fourth PR right after (a0), before (a1) and before any landing,
+    and never runs (e) on a PR that (a1) has pushed to.
   - **State.** Runs 690 and 691 wait at `merging` with #942 and #963 open, unqueued, and their own checks green; they
     are held for wave 3c's re-run. Wave 2b is not planned, because the proof is not clean.
   - **Next: wave 3c, Task 7's re-run preconditions.**
@@ -685,9 +697,11 @@ carries it (spec §5.1, amended 2026-09-24).
       the same answers.
     - The server reports a failed sweep.
     - The two flakes are fixed.
-    - The runbook changes: every entry is dequeued before any rollback; (e) runs on a PR whose binding no
-      reading has touched; a live-lane reading comes before arming; a bypass merge during the window is recorded,
-      not a stop.
+    - The runbook changes:
+      - before arming, the project's sweep is measured finishing within its bound;
+      - inside the window, (e) comes first, and a silent lane is a stop;
+      - every entry is dequeued before any rollback;
+      - a bypass merge during the window is recorded, not a stop.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -726,7 +740,8 @@ carries it (spec §5.1, amended 2026-09-24).
   starts only once its runbook carries the listed classes, the payload cap and a quote-dense timing pin.
 - **From Task 7's proof run (2026-10-20).** Never switch the queue requirement off while entries are in it: dequeue
   each entry first, so that GitHub records the removal and the lane can announce it. A queue window on this project
-  starts only after a live reading shows the lane announcing a removal.
+  starts only once the project's sweep is measured finishing within its bound, and inside it (e) is read first: a
+  removal the lane does not announce within one sweep ends the window.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec
   whitelist; never print secret contents.
@@ -745,7 +760,7 @@ on stop rule 3, and the queue is off (Decisions, 2026-10-20 13:00).
 
 Then, in order:
 1. ccrc's updater moves both boxes onto wave 3c's build;
-2. a live reading shows the lane announcing a removal;
+2. the project's sweep is measured finishing within its bound (Task 7's Step 1, as wave 3c amends it);
 3. this coordinator re-runs Task 7 (delegated 2026-10-04 12:41), with runs 690 and 691 as slots A and B.
 
 **Wave 3b (stage 3, `ccd-land-probe`)** stays planned after wave 3c, run 310 open.
