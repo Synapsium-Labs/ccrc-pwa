@@ -53,12 +53,16 @@ interface Fake {
   atAct: Map<string, Partial<FleetSession> | 'unreadable'>;
   /** Per session: the open run it reviews, if any (`runsNamingSession` → `run.reviews` → an open state). */
   reviewsOpen: Set<string>;
+  /** D-6091: sessions a newer `planned` run names (run 50): today it is their newest run and an open one. */
+  planned: Set<string>;
+  /** D-6091: run states `run(id)` answers (a hold's `run:` suffix); absent → `working`. 'unreadable' → `ok: false`. */
+  runStates: Map<number, string>;
 }
 
 function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean } = {}): Fake {
   const f: Fake = {
     argv: [], feed: [], serialCalls: 0, runs: new Map(), openWorkers: new Set(), mailTo: new Set(), ccdOk: true,
-    atAct: new Map(), reviewsOpen: new Set(),
+    atAct: new Map(), reviewsOpen: new Set(), planned: new Set(), runStates: new Map(),
     deps: undefined as unknown as StopDoneSweepDeps,
   };
   ids.forEach((id, i) => f.runs.set(id, { runId: 10 + i, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1 }));
@@ -68,17 +72,26 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean } = 
       lastRunBySession: (asked: readonly string[]) => ({
         ok: true as const,
         last: asked.flatMap((sessionId) => {
+          const r = f.planned.has(sessionId) ? { runId: 50, state: 'planned', closedAt: null } : f.runs.get(sessionId);
+          return r === undefined ? [] : [{ sessionId, ...r, program: 'p', programTitle: null, claimedBy: 'lane-a-project-a' }];
+        }),
+        lastPlaced: asked.flatMap((sessionId) => {
           const r = f.runs.get(sessionId);
           return r === undefined ? [] : [{ sessionId, ...r, program: 'p', programTitle: null, claimedBy: 'lane-a-project-a' }];
         }),
-        openWorkers: asked.filter((id) => f.openWorkers.has(id)),
+        openWorkers: asked.filter((id) => f.openWorkers.has(id) || f.planned.has(id)),
+        openPlacedWorkers: asked.filter((id) => f.openWorkers.has(id)),
         openClaimants: ['lane-a-project-a'],
       }),
       activeClaims: () => [],
       outstandingMailFor: (toId: string) => (f.mailTo.has(toId) ? [{}] : []) as never,
       recordFeedEvent: () => undefined,
       runsNamingSession: (id: string) => ({ ok: true as const, runs: f.reviewsOpen.has(id) ? [{ id: 900 }] : [] }) as never,
-      run: (runId: number) => ({ ok: true as const, run: runId === 900 ? { reviews: 901 } : { state: 'working', reviews: null } }) as never,
+      run: (runId: number) => {
+        const st = f.runStates.get(runId);
+        if (st === 'unreadable') return { ok: false as const, kind: 'run-unreadable' as const, detail: 'locked' };
+        return { ok: true as const, run: runId === 900 ? { reviews: 901 } : { id: runId, state: st ?? 'working', reviews: null } };
+      },
     },
     runCcd: async (a) => { f.argv.push([...a]); return { ok: f.ccdOk, stdout: '', stderr: f.ccdOk ? '' : 'refused', killed: false, signal: null }; },
     fleetState: { ccdVerbs: o.verb === false ? ['stop-surface', ACTOR_FLAGS_CAP] : ['hibernate', ACTOR_FLAGS_CAP] } as unknown as FleetState,
@@ -126,7 +139,7 @@ describe('stopDonePass (D-5370)', () => {
     expect(f.argv).toEqual([]);
   });
 
-  it('N is the operator\'s hibernate-after-hours, read only when listed: 2 puts a 3 h worker to sleep', async () => {
+  it('today: N is the operator\'s hibernate-after-hours, read only when listed: 2 puts a 3 h worker to sleep', async () => {
     const f = fake([ID]);
     const mark: StopDoneSweepDeps['mark'] = async () => ({ ...MARK_IDLE, turnAt: NOW - 3 * HOUR, stopAt: NOW - 3 * HOUR });
     const after = vi.fn(async () => '2');
@@ -387,6 +400,24 @@ describe('stopDonePass (D-5370)', () => {
     const f = fake([ID]);
     f.runs.set(ID, { runId: 10, state: 'done', closedAt: NOW - 60_000 });
     await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+  });
+});
+
+// D-6091 (fleet capacity W1-1), the characterization: today's pass answers for the rows the behaviour commit flips.
+describe('stopDonePass: run-close timing, before and after (D-6091)', () => {
+  it('today: (e)/(f) a planned run naming the child — its newest run and an open one — leaves it awake', async () => {
+    const f = fake([ID]);
+    f.planned.add(ID);
+    expect(await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], [])).toEqual([]);
+    expect(f.argv).toEqual([]);
+  });
+
+  it('kept: a hold raised between pass and act holds (none at the pass, an operator hold at the act)', async () => {
+    const f = fake([ID]);
+    f.atAct.set(ID, { held: 'keep: debugging' });
+    const out = await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], []);
+    expect(out).toEqual([{ id: ID, kind: 'held-at-act', verdict: { act: 'hold', reason: 'held' } }]);
     expect(f.argv).toEqual([]);
   });
 });

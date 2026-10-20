@@ -208,6 +208,8 @@ describe('ccd hibernate: every re-measure refuses session-busy at exit 3 and tou
     ['crons -1', 'scheduled', () => { marker({ crons: -1 }); }],
     ['a marker with no crons (an older hook)', 'scheduled', () => { marker({ crons: undefined }); }],
     ['a .hold', 'held', () => { fs.writeFileSync(regPath('hold'), 'wave 2'); }],
+    // D-6091 characterization: without `--hold-ok`, a programme hold refuses exactly as an operator's own text does.
+    ['today: (h) a .hold reading program:programme-a wave:3', 'held', () => { fs.writeFileSync(regPath('hold'), 'program:programme-a wave:3'); }],
     ['a .no-hibernate', 'opted-out', () => { fs.writeFileSync(regPath('no-hibernate'), ''); }],
     ['a fresh lastswap', 'recent-swap', () => { fs.writeFileSync(regPath('lastswap'), String(nowS() - 30)); }],
     // The window's edge: past 60 s, inside SWAP_JITTER + 60 = 180 s (a swap still behind its random delay).

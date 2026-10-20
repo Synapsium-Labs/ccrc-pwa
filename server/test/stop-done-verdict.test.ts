@@ -165,7 +165,7 @@ describe('stopDoneVerdict (D-5370)', () => {
     }
   });
 
-  it('recent is N from the marker\'s newest stamp, compactions never moving it: exactly N holds, N + 1 ms sleeps', () => {
+  it('today: recent is N from the marker\'s newest stamp, compactions never moving it: exactly N holds, N + 1 ms sleeps', () => {
     const at = (ms: number) => readLive({ mark: markAt({ turnAt: NOW - ms, stopAt: NOW - ms }) });
     expect(stopDoneVerdict(base({ live: at(HIBERNATE_AFTER_MS_DEFAULT) }))).toEqual({ act: 'hold', reason: 'recent' });
     expect(stopDoneVerdict(base({ live: at(HIBERNATE_AFTER_MS_DEFAULT + 1) })))
@@ -184,5 +184,65 @@ describe('stopDoneVerdict (D-5370)', () => {
     const hib = new Set<string>(HIBERNATE_HOLDS);
     expect(STOP_DONE_HOLDS.filter((h) => !own.has(h) && !hib.has(h))).toEqual([]);
     expect(HIBERNATE_HOLDS.filter((h) => !(STOP_DONE_HOLDS as readonly string[]).includes(h)), 'every hibernation hold is the lane\'s too').toEqual([]);
+  });
+});
+
+// D-6091 (fleet capacity W1-1), the characterization: today's answer for every row the behaviour commit flips ("today:"),
+// and the rows it must not flip ("kept:"). Neutral fixtures: programme `programme-a`, run 7.
+describe('stopDoneVerdict: run-close timing, before and after (D-6091)', () => {
+  const MIN = 60_000;
+  const closedAgo = (ms: number) => okStore({ last: { runId: 7, state: 'done', closedAt: NOW - ms } });
+  const quietFor = (ms: number) => readLive({ mark: markAt({ turnAt: NOW - ms, stopAt: NOW - ms }) });
+
+  it('today: (a) a done child 11 minutes after close, its marker quiet 11 minutes, N 6 h, holds recent', () => {
+    expect(stopDoneVerdict(base({ store: closedAgo(11 * MIN), live: quietFor(11 * MIN) })))
+      .toEqual({ act: 'hold', reason: 'recent' });
+  });
+
+  it('today: (b) a programme hold holds', () => {
+    expect(stopDoneVerdict(base({ row: row({ held: 'program:programme-a wave:3' }) }))).toEqual({ act: 'hold', reason: 'held' });
+  });
+
+  it('today: (c) a programme hold naming a done run holds', () => {
+    expect(stopDoneVerdict(base({ row: row({ held: 'program:programme-a wave:2 run:7' }) })))
+      .toEqual({ act: 'hold', reason: 'held' });
+  });
+
+  it('today: (d) a reviewer of an open run holds reviewing', () => {
+    expect(stopDoneVerdict(base({ store: okStore({ reviewing: true }) }))).toEqual({ act: 'hold', reason: 'reviewing' });
+  });
+
+  it('kept: an operator .hold holds', () => {
+    expect(stopDoneVerdict(base({ row: row({ held: 'keep: debugging' }) }))).toEqual({ act: 'hold', reason: 'held' });
+  });
+
+  it('kept: outstanding mail holds', () => {
+    expect(stopDoneVerdict(base({ store: okStore({ mail: true }) }))).toEqual({ act: 'hold', reason: 'mail' });
+  });
+
+  it('kept: a viewer holds', () => {
+    expect(stopDoneVerdict(base({ viewer: true }))).toEqual({ act: 'hold', reason: 'viewer' });
+  });
+
+  it('kept: a session cron holds scheduled', () => {
+    expect(stopDoneVerdict(base({ live: readLive({ mark: markAt({ crons: 1 }) }) }))).toEqual({ act: 'hold', reason: 'scheduled' });
+  });
+
+  it('kept: the operator\'s opt-out holds', () => {
+    expect(stopDoneVerdict(base({ optedOut: true }))).toEqual({ act: 'hold', reason: 'opted-out' });
+  });
+
+  it('kept: an awaiting-review newest run holds not-done (W1-1b\'s row, not this task\'s)', () => {
+    expect(stopDoneVerdict(base({ store: okStore({ last: { runId: 7, state: 'awaiting-review', closedAt: null } }) })))
+      .toEqual({ act: 'hold', reason: 'not-done' });
+  });
+
+  it('kept: inside the grace after close holds grace', () => {
+    expect(stopDoneVerdict(base({ store: closedAgo(9 * MIN) }))).toEqual({ act: 'hold', reason: 'grace' });
+  });
+
+  it('kept: no marker stamp holds recent', () => {
+    expect(stopDoneVerdict(base({ live: readLive({ mark: markAt({ turnAt: null, stopAt: null, restartAt: null }) }) })))
+      .toEqual({ act: 'hold', reason: 'recent' });
   });
 });
