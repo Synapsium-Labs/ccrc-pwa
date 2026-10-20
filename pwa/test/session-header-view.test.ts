@@ -10,21 +10,25 @@ import { UNCHECKED_PR, type FleetSession, type SessionStatus } from '../../share
 import type { Coordination } from '../src/fleet/fleetTree';
 import { sessionFacts } from '../src/fleet/sessionFacts';
 import { sessionMenu } from '../src/session/SessionFlows';
-import { sessionHeaderView, type HeaderChipKind, type SessionHeaderViewInput } from '../src/session/sessionHeaderView';
+import { headerTickMs, sessionHeaderView, type HeaderChipKind, type SessionHeaderViewInput } from '../src/session/sessionHeaderView';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 
 // The header renders whatever the view returns; `drop` removes chip kinds from it, so a case can ask whether the
 // header follows the view or derives the chip itself.
-const drop = vi.hoisted(() => ({ kinds: new Set<string>() }));
+// `override` replaces the title or Stop's state the same way, so a header that derives either itself is red too.
+const drop = vi.hoisted(() => ({
+  kinds: new Set<string>(),
+  override: {} as { title?: string; stop?: { shown: boolean; enabled: boolean } },
+}));
 vi.mock('../src/session/sessionHeaderView', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/session/sessionHeaderView')>();
   return {
     ...real,
     sessionHeaderView: (input: SessionHeaderViewInput) => {
       const v = real.sessionHeaderView(input);
-      return { ...v, chips: v.chips.filter((c) => !drop.kinds.has(c.kind)) };
+      return { ...v, ...drop.override, chips: v.chips.filter((c) => !drop.kinds.has(c.kind)) };
     },
   };
 });
@@ -32,6 +36,7 @@ vi.mock('../src/session/sessionHeaderView', async (importOriginal) => {
 afterEach(() => {
   cleanup();
   drop.kinds.clear();
+  drop.override = {};
   vi.unstubAllGlobals();
 });
 
@@ -175,5 +180,33 @@ describe('sessionHeaderView (W2 Task S7a, D-5471)', () => {
     expect(viewOf(p, true).stop).toEqual({ shown: false, enabled: true });
     render(createElement(SessionHeaderHost, p));
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+  });
+
+  it('the header draws the view\'s title and Stop, not its own', () => {
+    stubPointer(false);
+    const session = fleetSession({ id: 'claude:demo', project: 'demo', bucket: 'working', status: 'busy' });
+    const p = hostProps(session, 'busy');
+    drop.override = { title: 'sentinel-title', stop: { shown: true, enabled: false } };
+    const { container } = render(createElement(SessionHeaderHost, p));
+    expect(container.querySelector('.chat-title')?.textContent).toContain('sentinel-title');
+    expect(container.querySelector('.chat-title')?.textContent).not.toContain('demo');
+    expect((screen.getByRole('button', { name: 'Stop' }) as HTMLButtonElement).disabled).toBe(true);
+    cleanup();
+    drop.override = { stop: { shown: false, enabled: true } };
+    render(createElement(SessionHeaderHost, p));
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+  });
+
+  it('a working row ticks every second in the busy tint; any other ticks every 30 s', () => {
+    const working = fleetSession({ id: 'claude:demo', project: 'demo', bucket: 'working', status: 'busy' });
+    const idle = fleetSession({ id: 'claude:demo', project: 'demo', bucket: 'idle', status: 'idle' });
+    expect(headerTickMs('busy', working)).toBe(1_000);
+    expect(headerTickMs('idle', idle)).toBe(30_000);
+    const variantOf = (s: FleetSession, st: SessionStatus) => {
+      const c = viewOf(hostProps(s, st)).chips.find((x) => x.kind === 'status');
+      return c?.kind === 'status' ? c.variant : null;
+    };
+    expect(variantOf(working, 'busy')).toBe('busy');
+    expect(variantOf(idle, 'idle')).toBe('idle');
   });
 });
