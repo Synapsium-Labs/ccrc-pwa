@@ -73,7 +73,7 @@ const built = (o: {
 describe('the one latch helper (§5.4)', () => {
   it.each<[string, (b: Built) => void, CollectLaneSwitches, CollectEpochPair]>([
     ['a raised pause', () => {}, { paused: true, why: 'raised', marker: false }, SAME],
-    ['an unlistable registry', () => {}, { paused: true, why: 'unlistable' }, SAME],
+    ['an unlistable registry', () => {}, { paused: true, why: 'unlistable', reason: 'unreadable' }, SAME],
     ['an epoch that moved', () => {}, ABSENT, { before: 3, after: 4 }],
     ['the marker standing', () => {}, { paused: false, marker: true }, SAME],
     ['the latch already set', (b) => { b.plant('markerRetiredAt = 5, generation = 1, updatedAt = 1'); b.journal.appendGeneration(1); },

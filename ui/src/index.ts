@@ -17,6 +17,8 @@ export { LimitBar, limitBand, fillVariants, TRACK as LIMIT_TRACK, type LimitBand
 export { Meter, type MeterProps } from './primitives/meter';
 export { Skeleton, type SkeletonProps } from './primitives/skeleton';
 export { Sheet, type SheetProps } from './primitives/sheet';
+// The popover (D-5934): Radix's, on the layers the Sheet already runs on.
+export { Popover, PopoverTrigger, PopoverClose, PopoverContent, type PopoverContentProps } from './primitives/popover';
 export { OptionRow, type OptionRowProps } from './primitives/option-row';
 export { CollapsibleStrip, type CollapsibleStripProps } from './primitives/collapsible-strip';
 export { Banner, bannerVariants, type BannerProps } from './primitives/banner';
@@ -34,7 +36,8 @@ export { Icon, type IconName, type IconProps, type IconSize } from './primitives
 export { Well, WELL, type WellProps } from './primitives/well';
 // The page scaffold (D-5102; the C3 slots D-5666).
 export {
-  PageScaffold, PAGE_HEAD, PAGE_HEAD_ROW, PAGE_CARET, PAGE_TITLE, PAGE_ACTIONS, PAGE_BODY, PAGE_FOCUS_CLEAR, type PageScaffoldProps,
+  PageScaffold, PAGE_HEAD, PAGE_HEAD_ROW, PAGE_CARET, PAGE_TITLE, PAGE_ACTIONS, PAGE_BODY, PAGE_FOCUS_CLEAR, PAGE_NAV_MIN_PX,
+  type PageScaffoldProps,
 } from './primitives/page-scaffold';
 export {
   Section, SECTION, SECTION_HEAD, SECTION_TITLE, SECTION_SCOPE, SECTION_PURPOSE, SECTION_CARD, type SectionProps,

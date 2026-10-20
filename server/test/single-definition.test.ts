@@ -657,10 +657,12 @@ describe('Build 7 nouns', () => {
     expect(store, 'the sentinel is gone from store.ts — pick another comment-only phrase')
       .toContain('the same guard every other');
     expect(code, 'the comment strip did not strip comments').not.toContain('the same guard every other');
-    // Six negative-form guards at 5e9f650d (2026-09-02), as a FLOOR so a
-    // seventh writer raises it rather than breaking it.
-    expect((code.match(/NOT IN \$\{TERMINAL_DELIVERY_SQL\}/g) ?? []).length)
-      .toBeGreaterThanOrEqual(6);
+    // Six negative-form guards at 5e9f650d (2026-09-02), one per writer. Since
+    // D-5997 (#532) the guard is spelled in ONE place, `writeDeliveries`: the
+    // plain negative form and `markAcked`'s replay-ceiling exception. An EXACT
+    // count now, because a third spelling is a writer that bypassed the one
+    // writer — exactly what this pin exists to catch.
+    expect((code.match(/NOT IN \$\{TERMINAL_DELIVERY_SQL\}/g) ?? []).length).toBe(2);
   });
 
   // …and the SAME pair in its JS shape, which the SQL-anchored regex above is
@@ -4814,6 +4816,26 @@ describe('docs section H is declared once, in shared/docs.ts (docs W1a)', () => 
   }
 });
 
+// D-5930: vaul's keyframes are retimed in one place, `ui/src/lib/motion.ts`. The Sheet once retimed them with
+// transition utilities a keyframe never reads, and the command palette carried a private recipe of its own; a
+// third surface spelling `animation-duration:` would be a third pace nothing keeps on the tokens. Every file type
+// under `ui/src`, comments included: a literal-absence pin, and CSS is where the next copy is likeliest.
+describe("vaul's motion is retimed once, in ui/src/lib/motion.ts (D-5930)", () => {
+  const UI_SRC = path.join(ccrcRoot, 'ui', 'src');
+  const walk = (dir: string): string[] => readdirSync(dir).flatMap((e) => {
+    if (e.startsWith('__')) return [];
+    const p = path.join(dir, e);
+    return statSync(p).isDirectory() ? walk(p) : /\.(tsx?|css|mjs)$/.test(p) ? [p] : [];
+  });
+
+  it('no animation-duration: or animation-timing-function: literal exists in ui/src outside ui/src/lib/motion.ts', () => {
+    const files = walk(UI_SRC);
+    expect(files.map(rel), 'the scan reaches the primitives').toContain('ui/src/primitives/command-palette.tsx');
+    const holders = files.filter((f) => /animation-(?:duration|timing-function):/.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders).toEqual(['ui/src/lib/motion.ts']);
+  });
+});
+
 // Docs W1a, Task 5 (spec 2026-10-01 3.1, 3.2, 3.8): the page grammar, the pin and the one docs API URL builder
 // are declared once, in shared/docs.ts. The server's L1 query parser (W2) and the PWA's router and loaders (W5)
 // import them; a second parser or builder is a second grammar nothing forces to agree. The marker header word
@@ -7362,6 +7384,122 @@ describe('docs section H, W5: GithubPermalink, githubPermalink and githubUrlAt a
   }
 });
 
+// ── auto-advance spec §2.1, D21: the advance file has one writer and one clock ─────────────────────────────────
+describe('the advance file and its clock, each spelled once (auto-advance spec §2.1, D21)', () => {
+  const walkSrc = (dir: string): string[] => {
+    const out: string[] = [];
+    if (!existsSync(dir)) return out;
+    for (const e of readdirSync(dir)) {
+      if (e.startsWith('__') || e === 'node_modules' || e === 'dist') continue;
+      const p = path.join(dir, e);
+      if (statSync(p).isDirectory()) { out.push(...walkSrc(p)); continue; }
+      if (/\.(tsx?|mjs|mts)$/.test(p)) out.push(p);
+    }
+    return out;
+  };
+  /** Every shipped source a second spelling could hide in: the four TypeScript roots, `deploy/` and `shared/`
+   *  (their `.mjs`), and every bash tool, comments stripped. */
+  const SHIPPED = [...new Set([
+    ...['shared', 'deploy', 'server/src', 'pwa/src', 'agent/src'].flatMap((d) => walkSrc(path.join(ccrcRoot, d))),
+    ...BASH,
+  ])];
+  const textOf = (f: string): string => (BASH.includes(f) ? codeLines(f).join('\n') : readFileSync(f, 'utf8'));
+  const OP = path.join(ccrcRoot, 'deploy', 'models-op.mjs');
+  /** `deploy/models-op.mjs` cut at each top-level `function` line: name → that function's text, to the next. */
+  const functionsOf = (src: string): Map<string, string> => {
+    const starts = [...src.matchAll(/^(?:export\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/gm)]
+      .map((m) => ({ name: m[1]!, at: m.index! }));
+    return new Map(starts.map((s, i) => [s.name, src.slice(s.at, i + 1 < starts.length ? starts[i + 1]!.at : src.length)]));
+  };
+
+  it('the corpus is real', () => {
+    const names = SHIPPED.map(rel);
+    for (const f of ['deploy/models-op.mjs', 'shared/model-advance.mjs', 'ccd/ccrc']) expect(names).toContain(f);
+  });
+
+  it('`.advance.json` is spelled by deploy/models-op.mjs alone, on advancePath\'s one line, and by no bash tool', () => {
+    expect(SHIPPED.filter((f) => textOf(f).includes('.advance.json')).map(rel).sort()).toEqual(['deploy/models-op.mjs']);
+    expect(readFileSync(OP, 'utf8').split('\n').filter((l) => l.includes('.advance.json')))
+      .toEqual(['const advancePath = (id) => path.join(modelsDir(), `${id}.advance.json`);']);
+  });
+
+  it('its bytes come from one place: writeAdvance writes through writeJsonFile (D-5783), and nothing else writes the file or spells its bytes', () => {
+    const src = readFileSync(OP, 'utf8');
+    const fns = functionsOf(src);
+    // The one writer: the only function that names both the path and the JSON write is writeAdvance, and it hands
+    // that write the path with its own error word.
+    const writesIt = (body: string): boolean => /\badvancePath\(/.test(body) && /\bwriteJsonFile\(/.test(body);
+    expect([...fns].filter(([, body]) => writesIt(body)).map(([n]) => n)).toEqual(['writeAdvance']);
+    expect(fns.get('writeAdvance')).toMatch(/\bwriteJsonFile\(advancePath\(id\), \w+, 'advance-unwritable'\)/);
+    // serializeAdvance spells writeJsonFile's bytes for readers and tests (model-advance-file.test.ts pins that the
+    // two agree), so a shipped call of it could only be a second writer's.
+    const CALL = /(?<!function )\bserializeAdvance\(/;
+    expect(SHIPPED.filter((f) => CALL.test(textOf(f))).map(rel)).toEqual([]);
+    expect(src.split('\n')
+      .filter((l) => /\badvancePath\(/.test(l) && /\b(?:writeFileSync|renameSync|appendFileSync)\(/.test(l))).toEqual([]);
+    // Every call of advancePath in the file, pinned whole, the `.advance.json` case's idiom: a writer that holds the
+    // path in a variable, or an arrow const after writeAdvance (which the function cut above folds into it), adds a
+    // line here. readAdvance's, writeAdvance's and rm's reap (Task 5).
+    expect(src.split('\n').filter((l) => /\badvancePath\(/.test(l)).map((l) => l.trim())).toEqual([
+      'const p = advancePath(id);',
+      "return writeJsonFile(advancePath(id), parsed, 'advance-unwritable');",
+      'windowsPath(a.id), advancePath(a.id)]) {',
+    ]);
+  });
+
+  it('CCRC_MODELS_NOW is read in one place, and models-op reads the wall clock on two named lines only', () => {
+    expect(SHIPPED.filter((f) => textOf(f).includes('CCRC_MODELS_NOW')).map(rel)).toEqual(['deploy/models-op.mjs']);
+    const lines = readFileSync(OP, 'utf8').split('\n');
+    expect(lines.filter((l) => l.includes("process.env['CCRC_MODELS_NOW']"))).toHaveLength(1);
+    expect(lines.filter((l) => /\bnew Date\(|\bDate\.now\(/.test(l)).map((l) => l.trim())).toEqual([
+      "const now = () => process.env['CCRC_MODELS_NOW'] ?? new Date().toISOString().replace(/\\.\\d{3}Z$/, 'Z');",
+      'raw.windows[a.model] = { ...prev, tokens, setAt: new Date().toISOString() };',
+    ]);
+  });
+
+  it("REASON_MAX is assigned once, in shared/model-advance.mjs: every other source that caps a reason imports it", () => {
+    // The advance reason's cappers live in deploy/, shared/, the models server code, the PWA and the bash tools.
+    // server/src/coord/briefwatch.ts holds its own, unrelated REASON_MAX (a wave brief's word cap), so the
+    // coordination code is outside this census rather than a second spelling of this one.
+    const ASSIGN = /\bREASON_MAX\s*=(?!=)/;
+    const inScope = (f: string): boolean => BASH.includes(f) || /^(?:deploy|shared|server\/src\/models|pwa\/src)\//.test(rel(f));
+    expect(SHIPPED.filter((f) => inScope(f) && ASSIGN.test(textOf(f))).map(rel)).toEqual(['shared/model-advance.mjs']);
+    expect(readFileSync(path.join(ccrcRoot, 'shared', 'model-advance.mjs'), 'utf8')).toContain('export const REASON_MAX = 200;');
+  });
+});
+
+// ── auto-advance spec D21: the lane-files lock, and the one list of ops that run under it ──────────────────────
+describe('the lane-files lock: one path outside ~/.ccrc/models, and one list of writing ops (auto-advance spec D21)', () => {
+  it('the lock path is spelled once, in ccd/ccrc, on _models_lock_path\'s one line, and by no node or TypeScript source', () => {
+    expect(holdersOf('.ccrc/locks')).toEqual(['ccd/ccrc']);
+    expect(codeLines(path.join(ccrcRoot, 'ccd', 'ccrc')).filter((l) => l.includes('.ccrc/locks')))
+      .toEqual(['_models_lock_path() { printf \'%s\' "$HOME/.ccrc/locks/models-$1.lock"; }']);
+    const mjs = (d: string): string[] => readdirSync(path.join(ccrcRoot, d)).filter((f) => f.endsWith('.mjs'))
+      .map((f) => path.join(ccrcRoot, d, f));
+    expect([...ALL, ...mjs('deploy'), ...mjs('shared')].filter((f) => readFileSync(f, 'utf8').includes('.ccrc/locks')).map(rel))
+      .toEqual([]);
+  });
+
+  it('MODELS_WRITE_OPS is exactly the OPS rows marked writes: true, in both directions, and every row says which', () => {
+    const bash = /^MODELS_WRITE_OPS="([^"]*)"$/m.exec(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8'));
+    expect(bash, 'ccd/ccrc has no file-scope MODELS_WRITE_OPS').toBeTruthy();
+    const op = readFileSync(path.join(ccrcRoot, 'deploy', 'models-op.mjs'), 'utf8');
+    const start = op.indexOf('const OPS = {');
+    expect(start).toBeGreaterThan(0);
+    const block = op.slice(start, op.indexOf('\n};\n', start));
+    const rows = [...block.matchAll(/^ {2}'?([a-z][a-z-]*)'?: \{([^\n]*)\},$/gm)]
+      .map((m) => ({ op: m[1]!, writes: /\bwrites: (true|false)\b/.exec(m[2]!)?.[1] ?? null }));
+    expect(rows.length, 'the OPS scan found too few rows to be reading the table').toBeGreaterThanOrEqual(12);
+    // Every row is ONE line, so the scan above sees it: a row written over several lines would be invisible to it in
+    // both directions, and a new writing op left out of MODELS_WRITE_OPS would run unlocked with this case green.
+    const starts = [...block.matchAll(/^ {2}'?([a-z][a-z-]*)'?: \{/gm)].map((m) => m[1]!);
+    expect(starts, 'an OPS row written over several lines: write each row on one line').toEqual(rows.map((r) => r.op));
+    expect(rows.filter((r) => r.writes === null).map((r) => r.op), 'an OPS row with no writes flag').toEqual([]);
+    expect(bash![1]!.split(' ').filter(Boolean).sort())
+      .toEqual(rows.filter((r) => r.writes === 'true').map((r) => r.op).sort());
+  });
+});
+
 // D-5517, D-5751 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A1). APPENDED. The lane's kind on
 // the wire has one reader: `rosterKindOf` derives `provider`, `kind`, `telemetry` and `managed` from a parsed roster
 // entry, and its vocabulary (`RosterKind`, `RosterKindWire`) is declared beside it. A second derivation in the server's
@@ -7561,6 +7699,58 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   it('mail-disabled: hand-only, no writer in the tree', () => {
     expect(writersOf('mail-disabled')).toEqual([]);
   });
+
+  // D-5853 (Task C0f; ARCH-00 (#525)). The test scanners' TS parser, the operator's option (a) (a TypeScript 6 alias),
+  // has ONE importer, `server/test/scan/parse.ts`, and an exact version. The corpus is every tracked or new untracked
+  // .ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs file (not .d.*ts), with comment lines dropped (`stallCodeText`). Under
+  // `server/` any TS parser package counts (the 7.x compiler's `typescript/unstable/*` among them); elsewhere only the
+  // alias does, because the PWA's tests use the PWA's own TypeScript 6. KNOWN WIDTH: a `createRequire` require and a
+  // specifier built at run time are not seen.
+  const SCAN_PARSER = 'typescript-api';
+  const TS_PARSERS = ['typescript', SCAN_PARSER, 'oxc-parser', '@typescript-eslint/parser',
+    '@typescript-eslint/typescript-estree', '@babel/parser', '@swc/core', 'acorn', 'esprima'];
+  const importsPkg = (code: string, pkgs: readonly string[]): boolean =>
+    new RegExp(`(?:\\bfrom\\s*|\\bimport\\s*\\(?\\s*|\\brequire\\s*\\(\\s*)['"\`](?:${pkgs.map(esc).join('|')
+    })(?:/[^'"\`]*)?['"\`]`).test(code);
+  const parserImporters = (): string[] => {
+    const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--',
+      '*.ts', '*.tsx', '*.mts', '*.cts', '*.js', '*.jsx', '*.mjs', '*.cjs'], { cwd: ccrcRoot, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    return [...new Set(r.stdout.split('\0').filter((f) => f && !/\.d\.[mc]?ts$/.test(f)))]
+      .filter((f) => existsSync(path.join(ccrcRoot, f)))
+      .filter((f) => importsPkg(stallCodeText(readFileSync(path.join(ccrcRoot, f), 'utf8')),
+        f.startsWith('server/') ? TS_PARSERS : [SCAN_PARSER]))
+      .sort();
+  };
+
+  it('CONTROL: the parser-import pattern sees each import form and passes over a comment and a longer name', () => {
+    const sees = (code: string): boolean => importsPkg(stallCodeText(code), TS_PARSERS);
+    // Each specifier is quoted by `q`, so this file's own text names none and stays out of the importer list.
+    const q = (s: string, c = "'"): string => `${c}${s}${c}`;
+    expect(sees(`import ts from ${q('typescript-api')};`)).toBe(true);
+    expect(sees(`import {\n  createSourceFile,\n} from ${q('typescript', '"')};`)).toBe(true);
+    expect(sees(`const m = await import(${q('typescript/unstable/ast')});`)).toBe(true);
+    expect(sees(`const p = require(${q('oxc-parser')});`)).toBe(true);
+    expect(sees(`export { parse } from ${q('@babel/parser')};`)).toBe(true);
+    expect(sees(`// import ts from ${q('typescript-api')};\nconst x = 1;`)).toBe(false);
+    expect(sees(`import x from ${q('typescript-api-extra')};`)).toBe(false);
+  });
+
+  it('only scan/parse.ts imports a TS parser (D-5853)', () => {
+    expect(parserImporters()).toEqual(['server/test/scan/parse.ts']);
+  });
+
+  it('the parser is a dev-only dependency pinned exactly, and the lockfile resolves that version (D-5853)', () => {
+    const pkg = JSON.parse(readFileSync(path.join(ccrcRoot, 'server/package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+    const spec = pkg.devDependencies?.[SCAN_PARSER] ?? '';
+    expect(spec).toMatch(/^npm:typescript@6\.\d+\.\d+$/);
+    expect(pkg.dependencies?.[SCAN_PARSER]).toBeUndefined();
+    const lock = JSON.parse(readFileSync(path.join(ccrcRoot, 'server/package-lock.json'), 'utf8')) as {
+      packages: Record<string, { version?: string; dev?: boolean; devDependencies?: Record<string, string> }> };
+    expect(lock.packages['']!.devDependencies?.[SCAN_PARSER]).toBe(spec);
+    expect(lock.packages[`node_modules/${SCAN_PARSER}`]).toMatchObject({ version: spec.split('@').pop(), dev: true });
+  });
 });
 
 // D-5841 (D3, #755; plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Durability). APPENDED. The
@@ -7592,5 +7782,37 @@ describe('the brief watch is defined once (D-5841)', () => {
   it("the wave brief's subject is spelled on one source code line", () => {
     expect(holders(/['"]wave-brief['"]/)).toEqual([HOME]);
     expect(stallCode(path.join(ccrcRoot, 'server/src/coord/dispatch.ts'))).toMatch(/subject: WAVE_BRIEF_SUBJECT\b/);
+  });
+});
+
+// D-5513 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A10). APPENDED. The credential shapes have
+// one home, `CREDENTIAL_MASKS` in `shared/api.ts`, beside the mask's two words; the egress mask has one home,
+// `server/src/accounts/mask.ts`; and `redact.ts`'s approval-row redactor reads its generic `sk-` and JWT shapes from
+// the registry rather than keeping a second copy that could drift from the egress mask's.
+describe('the credential shapes and the egress mask each have one home (D-5513)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('CREDENTIAL_MASKS').test('export const CREDENTIAL_MASKS = [')).toBe(true);
+    expect(decl('CREDENTIAL_MASKS').test("import { CREDENTIAL_MASKS } from '../../../shared/api.js';")).toBe(false);
+  });
+  it('the shapes and the mask words are declared once, in shared/api.ts', () => {
+    for (const c of ['CREDENTIAL_MASKS', 'CredentialMask', 'CredentialMaskId', 'credentialMaskSource', 'SECRET_MASK',
+      'SECRET_MASK_TOO_LARGE']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the mask lives in its one file', () => {
+    for (const c of ['SecretMasker', 'DrawerMask', 'SHAPE_ONLY_MASKER', 'fingerprintOf', 'fingerprintGeneration', 'shapeMatchers',
+      'fingerprintRow', 'fingerprintAnswerOf']) {   // the last two: D-5996
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/mask.ts']);
+    }
+  });
+  it("maskSecretAssigns's file and mask.ts read the shapes from CREDENTIAL_MASKS, and no other file spells one", () => {
+    expect(holders(/\bcredentialMaskSource\('genericSk'\)/)).toEqual(['server/src/coord/redact.ts']);
+    expect(holders(/\bcredentialMaskSource\('jwt'\)/)).toEqual(['server/src/coord/redact.ts']);
+    expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/mask.ts']);
+    // A second copy of a shape's source: the Anthropic family's prefix, the generic rule, or the JWT header pair.
+    expect(holders(/sk-ant-\[|sk-\[A-Za-z0-9_-\]\{8,\}|eyJ\[A-Za-z0-9_-\]\+\\\.eyJ/)).toEqual(['shared/api.ts']);
   });
 });

@@ -66,8 +66,10 @@ export const WithSections: Story = {
   },
 };
 
-/** D-5666: a section nav beside the body once the pane is 960 wide; stacked
- *  above it below that. */
+/** D-5666, D-5668: a section nav beside the body from a 760 pane
+ *  (`PAGE_NAV_MIN_PX`), 200 wide, 220 from a 1600 viewport. Below 760 the slot
+ *  draws nothing: a caller shows its own index there (Settings' sections
+ *  list), so at 390 this story shows the header and the body only. */
 export const WithNav: Story = {
   args: {
     title: 'Settings',

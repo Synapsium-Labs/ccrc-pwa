@@ -51,15 +51,19 @@ export interface FeedRecorder {
   warned(): string[];
 }
 
-/** A recorder over a REAL `NotifyLog` under `home/.ccrc/notify.json` and a real `CoordStore` (`opts.coord`, or a fresh
- *  one under `home/.ccrc/coord.db`). Restore the warn spy with `vi.restoreAllMocks()` in the suite's `afterEach`. */
-export const feedRecorder = async (home: string, opts: { coord?: CoordStore } = {}): Promise<FeedRecorder> => {
+/** A recorder over a REAL `NotifyLog` (`opts.notifyLog`, or a fresh one under `home/.ccrc/notify.json`) and a real
+ *  `CoordStore` (`opts.coord`, or a fresh one under `home/.ccrc/coord.db`). Restore the warn spy with
+ *  `vi.restoreAllMocks()` in the suite's `afterEach`. `opts.notifyLog` (D-5851, part 2) is for a rig that built its
+ *  own log before the recorder: its two methods are wrapped in place, as `opts.coord`'s archive is. */
+export const feedRecorder = async (
+  home: string, opts: { coord?: CoordStore; notifyLog?: NotifyLog } = {},
+): Promise<FeedRecorder> => {
   const calls: FeedSinkCall[] = [];
   const ring: NotifyEvent[] = [];
   const archived: NotifyEvent[] = [];
   const pushes: PushPayload[] = [];
-  const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
-  await notifyLog.load();
+  const notifyLog = opts.notifyLog ?? new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+  if (opts.notifyLog === undefined) await notifyLog.load();
   const record = notifyLog.record.bind(notifyLog);
   const flush = notifyLog.flush.bind(notifyLog);
   notifyLog.record = (e) => {

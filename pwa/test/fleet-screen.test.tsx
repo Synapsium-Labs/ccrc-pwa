@@ -8,6 +8,7 @@ import { api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
 import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { renderFleet } from './fleetHost';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '@ccrc/ui';
 import { ICONS } from '../../ui/src/icons/lucide';
@@ -145,7 +146,7 @@ const seed = (store: FleetStore, patch: Partial<ReturnType<FleetStore['getState'
 describe('FleetScreen', () => {
   it('renders a card per session with account label and status word', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       roster: TEST_ROSTER,
@@ -188,7 +189,7 @@ describe('FleetScreen', () => {
       }],
     });
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       roster: TEST_ROSTER.map((account) => ({
@@ -211,7 +212,7 @@ describe('FleetScreen', () => {
 
   it('shows the attention badge when a dialog is pending', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [session({ dialogPending: true, bucket: 'attention' })] });
 
     // The attention SENTENCE is gone from the line (SessionLine.tsx) — it
@@ -229,7 +230,7 @@ describe('FleetScreen', () => {
   // `idle`, even with a hook actively reporting `waiting`.
   it('does not render the waiting treatment from hookState alone — only the server bucket decides', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ dialogPending: false, hookState: 'waiting', bucket: 'idle' })],
@@ -242,7 +243,7 @@ describe('FleetScreen', () => {
 
   it('renders the subagent chip on the line when the hook reports subagents running', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ subagents: [{ name: 'reviewer', startedAt: 1 }] })],
@@ -254,7 +255,7 @@ describe('FleetScreen', () => {
 
   it('shows the muted ask summary line under a waiting session', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ hookState: 'waiting', askSummary: 'Deploy now?' })],
@@ -266,7 +267,7 @@ describe('FleetScreen', () => {
 
   it("shows a persistent offline banner when conn is 'down', keeping last-known cards", () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'down', sessions: [session()] });
 
     expect(screen.getByText('Reconnecting…')).toBeInTheDocument();
@@ -275,7 +276,7 @@ describe('FleetScreen', () => {
 
   it('renders the first-run block when the fleet is empty and connected', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [] });
 
     expect(screen.getByText('No sessions yet')).toBeInTheDocument();
@@ -284,7 +285,7 @@ describe('FleetScreen', () => {
 
   it('renders 3 skeleton cards while connecting with nothing known', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     // untouched store: conn 'connecting', no sessions
     expect(screen.getAllByRole('status', { name: 'Loading' })).toHaveLength(3);
   });
@@ -302,7 +303,7 @@ describe('FleetScreen', () => {
       roster: [],
     });
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [] });
 
     expect(screen.getByText('No sessions yet')).toBeInTheDocument();
@@ -312,7 +313,7 @@ describe('FleetScreen', () => {
   it('renders the accounts strip during the initial skeleton load, not just once sessions are known', () => {
     vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     // untouched store: conn 'connecting', no sessions — same state as the
     // skeleton test above.
     expect(screen.getByRole('link', { name: 'account usage — open accounts' })).toBeInTheDocument();
@@ -329,7 +330,7 @@ describe('FleetScreen', () => {
   // populated.
   it('renders the mail door in the first-run block, not just the populated fleet', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [] });
 
     expect(screen.getByText('No sessions yet')).toBeInTheDocument();
@@ -338,7 +339,7 @@ describe('FleetScreen', () => {
 
   it('renders the mail door during the initial skeleton load, not just once sessions are known', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     // untouched store: conn 'connecting', no sessions — same state as the
     // skeleton test above.
     expect(screen.getByRole('button', { name: /mail/i })).toHaveClass('mail-badge');
@@ -352,7 +353,7 @@ describe('FleetScreen', () => {
   // name — the same `isUnseenAt` comparison the bucket chips use.
   it("the mail door's count is the feed filtered through the SAME isUnseenAt comparison the bucket chips use", () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     const stamp = Date.now();
     act(() => { ack(FEED_ACK_KEY, stamp); });
     seed(store, {
@@ -372,7 +373,7 @@ describe('FleetScreen', () => {
   // `interruptEventBody`, no run), every one of them past the ack.
   it("an interrupt record never raises the mail door's count; every other record-only kind still does (D-5431)", () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     const stamp = Date.now();
     act(() => { ack(FEED_ACK_KEY, stamp); });
     const after = stamp + 60_000;
@@ -404,7 +405,7 @@ describe('FleetScreen', () => {
 
   it('renders notices as dismissible banners', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session()],
@@ -425,7 +426,7 @@ describe('FleetScreen', () => {
         { name: 'beta', workdir: '/beta', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude', score: 18 } },
       ]));
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open', roster: TEST_ROSTER,
         pools: { listed: true, byProject: {}, enforcement: 'enforced' },
@@ -449,7 +450,7 @@ describe('FleetScreen', () => {
         projects: [{ name: 'alpha', workdir: '/alpha', repo: { state: 'named', slug: 'o/alpha' } }],
       });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open', roster: TEST_ROSTER,
         pools: { listed: true, byProject: {}, enforcement: 'enforced' },
@@ -462,7 +463,7 @@ describe('FleetScreen', () => {
     it('skips the null-state cold-load sweep, then refreshes for each pools frame only', async () => {
       const projects = vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       expect(projects).not.toHaveBeenCalled();
 
       seed(store, { conn: 'open' });
@@ -479,7 +480,7 @@ describe('FleetScreen', () => {
         const projects = vi.spyOn(api, 'projects').mockReturnValue(new Promise(() => {}));
         const store = makeStore();
         seed(store, { pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
-        render(<FleetScreen store={store} />);
+        renderFleet(<FleetScreen store={store} />);
         expect(projects).toHaveBeenCalledTimes(1);
         act(() => {
           vi.advanceTimersByTime(120_000);
@@ -509,7 +510,7 @@ describe('FleetScreen', () => {
           .mockImplementationOnce(() => new Promise((resolve) => { resolveInitial = resolve; }))
           .mockImplementationOnce(() => new Promise((resolve) => { resolveVisible = resolve; }));
         const store = makeLiveStore();
-        render(<FleetScreen store={store} />);
+        renderFleet(<FleetScreen store={store} />);
         const pools = { listed: true as const, byProject: {}, enforcement: 'enforced' as const };
 
         act(() => {
@@ -554,7 +555,7 @@ describe('FleetScreen', () => {
           .mockImplementationOnce(() => new Promise((resolve) => { resolveInitial = resolve; }))
           .mockImplementationOnce(() => new Promise(() => {}));
         const store = makeLiveStore();
-        render(<FleetScreen store={store} />);
+        renderFleet(<FleetScreen store={store} />);
         const pools: ProjectPoolsWire = {
           listed: true,
           byProject: {
@@ -612,7 +613,7 @@ describe('FleetScreen', () => {
           .mockImplementationOnce(() => new Promise((resolve) => { resolveInitial = resolve; }))
           .mockImplementation(() => new Promise(() => {}));
         const store = makeLiveStore();
-        render(<FleetScreen store={store} />);
+        renderFleet(<FleetScreen store={store} />);
         const pools = { listed: true as const, byProject: {}, enforcement: 'enforced' as const };
 
         act(() => {
@@ -663,7 +664,7 @@ describe('FleetScreen', () => {
         .mockResolvedValueOnce(undefined)
         .mockRejectedValueOnce(new Error('refused'));
       const store = makeStore();
-      render(<><FleetScreen store={store} /><ToastHost /></>);
+      renderFleet(<><FleetScreen store={store} /><ToastHost /></>);
       seed(store, {
         conn: 'open',
         pools: { listed: true, byProject: {}, enforcement: 'enforced' },
@@ -690,7 +691,7 @@ describe('FleetScreen', () => {
         }],
       });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
@@ -728,7 +729,7 @@ describe('FleetScreen', () => {
           placement: { kind: 'none', pool: 'pool-b' },
         }] });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
@@ -778,7 +779,7 @@ describe('FleetScreen', () => {
         }] })
         .mockResolvedValueOnce({ roots: [], projects: [] });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
@@ -837,7 +838,7 @@ describe('FleetScreen', () => {
         pool: { state: 'tagged', name: 'pool-a' },
       });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
@@ -897,7 +898,7 @@ describe('FleetScreen', () => {
         }] })
         .mockImplementationOnce(() => new Promise((resolve) => { resolveRefresh = resolve; }));
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
@@ -948,7 +949,7 @@ describe('FleetScreen', () => {
         pool: { state: 'tagged', name: 'pool-a' },
       });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
@@ -985,7 +986,7 @@ describe('FleetScreen', () => {
         pool: { state: 'tagged', name: 'pool-a' },
       });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
@@ -1032,7 +1033,7 @@ describe('FleetScreen', () => {
         pool: { state: 'tagged', name: 'pool-a' },
       });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
@@ -1092,7 +1093,7 @@ describe('FleetScreen', () => {
         pool: { state: 'tagged', name: 'pool-a' },
       });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
@@ -1169,7 +1170,7 @@ describe('FleetScreen', () => {
           pool: account.id === 'claude' ? 'pool-a' : 'pool-b',
         }));
         const store = makeLiveStore(roster);
-        render(<FleetScreen store={store} />);
+        renderFleet(<FleetScreen store={store} />);
         seed(store, {
           conn: 'open',
           roster,
@@ -1245,7 +1246,7 @@ describe('FleetScreen', () => {
         accounts: [], projected: { wrapper: 'claude', score: 18 }, roster: TEST_ROSTER,
       });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open', roster: TEST_ROSTER,
         pools: { listed: true, byProject: {}, enforcement: 'enforced' },
@@ -1267,7 +1268,7 @@ describe('FleetScreen', () => {
         }] })
         .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRefresh = reject; }));
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         roster: TEST_ROSTER.map((account) => ({
@@ -1301,7 +1302,7 @@ describe('FleetScreen', () => {
         accounts: [], projected: { wrapper: 'claude', score: 18 }, roster: TEST_ROSTER,
       });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open', roster: TEST_ROSTER,
         pools: { listed: true, byProject: {}, enforcement: 'enforced' },
@@ -1331,7 +1332,7 @@ describe('FleetScreen', () => {
         accounts: [], projected: { wrapper: 'claude', score: 18 }, roster: TEST_ROSTER,
       });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open', roster: TEST_ROSTER,
         pools: { listed: true, byProject: {}, enforcement: 'enforced' },
@@ -1357,7 +1358,7 @@ describe('FleetScreen', () => {
           { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude9', score: 9 } },
         ] });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open', roster: TEST_ROSTER,
         sessions: [session({ id: 'a', project: 'alpha' })],
@@ -1383,7 +1384,7 @@ describe('FleetScreen', () => {
           { name: 'alpha', workdir: '/alpha', pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude9', score: 9 } },
         ] });
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open', roster: TEST_ROSTER,
         sessions: [session({ id: 'a', project: 'alpha' })],
@@ -1406,7 +1407,7 @@ describe('FleetScreen', () => {
       { name: 'ghost', workdir: '/home/u/projects/ghost' },
     ] });
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [session()], pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
     await waitFor(() => {
       const names = [...document.querySelectorAll('.proj-card-name')].map((n) => n.textContent);
@@ -1420,7 +1421,7 @@ describe('FleetScreen', () => {
       calls.push(p);
     });
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -1436,7 +1437,7 @@ describe('FleetScreen', () => {
   it('surfaces a failure as a toast rather than a silent no-op', async () => {
     vi.spyOn(api, 'workspaceAdd').mockRejectedValue(new Error('no origin/HEAD'));
     const store = makeStore();
-    render(
+    renderFleet(
       <>
         <FleetScreen store={store} />
         <ToastHost />
@@ -1458,7 +1459,7 @@ describe('FleetScreen', () => {
     // Every one of the nine live projects holds exactly one session, so a +
     // that only exists on grouped headers exists nowhere at all.
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [session({ id: 'a', project: 'solo' })] });
 
     expect(screen.getByRole('button', { name: /New workspace on solo/i })).toBeInTheDocument();
@@ -1474,7 +1475,7 @@ describe('FleetScreen', () => {
       () => new Promise<void>((resolve) => { release = resolve; }),
     );
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha' }), session({ id: 'b', project: 'beta' })],
@@ -1501,7 +1502,7 @@ describe('FleetScreen', () => {
       () => new Promise<void>((_resolve, r) => { reject = r; }),
     );
     const store = makeStore();
-    render(
+    renderFleet(
       <>
         <FleetScreen store={store} />
         <ToastHost />
@@ -1522,7 +1523,7 @@ describe('FleetScreen', () => {
     // translation that apiErrorText performs and a raw err.message does not.
     stubFetch502('no origin/HEAD — run: git -C /repo remote set-head origin -a');
     const store = makeStore();
-    render(
+    renderFleet(
       <>
         <FleetScreen store={store} />
         <ToastHost />
@@ -1547,13 +1548,13 @@ describe('FleetScreen', () => {
     // The whole reason fold state left useState: navigating into a session and
     // back re-expanded everything.
     const store = makeStore();
-    const first = render(<FleetScreen store={store} />);
+    const first = renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [session({ id: 'a', project: 'alpha' })] });
 
     await userEvent.click(screen.getByRole('button', { expanded: true }));
     first.unmount();
 
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     expect(screen.getByRole('button', { expanded: false })).toBeInTheDocument();
   });
 
@@ -1566,7 +1567,7 @@ describe('FleetScreen', () => {
   describe('actions sheet lifecycle', () => {
     it('keeps the limit note current with a live fleet update (Finding 5)', async () => {
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         sessions: [session({
@@ -1594,7 +1595,7 @@ describe('FleetScreen', () => {
       'swapOpen to the next session tapped (Findings 2, 3, 5)',
       async () => {
         const store = makeStore();
-        render(<FleetScreen store={store} />);
+        renderFleet(<FleetScreen store={store} />);
         seed(store, {
           conn: 'open',
           sessions: [
@@ -1653,7 +1654,7 @@ describe('FleetScreen', () => {
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
       }));
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         sessions: [session({
@@ -1692,7 +1693,7 @@ describe('FleetScreen', () => {
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
       }));
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         sessions: [session({
@@ -1716,7 +1717,7 @@ describe('FleetScreen', () => {
 
     it('offers no Clean up workspace… button before the workspace is archived', () => {
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         sessions: [session({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: null })],
@@ -1757,7 +1758,7 @@ describe('FleetScreen', () => {
         return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
       }));
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         sessions: [
@@ -1807,7 +1808,7 @@ describe('FleetScreen', () => {
 describe('bucket sections', () => {
   it('renders one section per non-empty bucket, in RANK order, and none for an empty one', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -1827,7 +1828,7 @@ describe('bucket sections', () => {
 
   it('counts from the same array the rows render, not a second tally', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -1843,7 +1844,7 @@ describe('bucket sections', () => {
 
   it('shows no unseen badge or Mark-all-seen control when nothing is unseen', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'idle' })],
@@ -1855,7 +1856,7 @@ describe('bucket sections', () => {
 
   it('badges an unseen session in a badged bucket, with a Mark all seen control', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: Date.now() })],
@@ -1870,7 +1871,7 @@ describe('bucket sections', () => {
   // attention/done/cleanup ask for a human (pwa/src/lib/seen.ts's `BADGED`).
   it('never badges a working or idle session, however fresh', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'working', bucketSince: Date.now() })],
@@ -1882,7 +1883,7 @@ describe('bucket sections', () => {
 
   it('clicking Mark all seen acks every session in THAT bucket, and only that bucket', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -1904,7 +1905,7 @@ describe('bucket sections', () => {
   it('the ack survives a remount — it is written through to localStorage, not held only in state', () => {
     const bucketSince = Date.now() - 60_000; // fixed instant, strictly before the click below
     const store = makeStore();
-    const first = render(<FleetScreen store={store} />);
+    const first = renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince })],
@@ -1915,7 +1916,7 @@ describe('bucket sections', () => {
     // Same session, same bucketSince — a stale in-memory `acks` (never
     // reloaded from localStorage on this fresh mount) would still show the
     // control, since nothing else in this render path re-acks it.
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince })],
@@ -1925,7 +1926,7 @@ describe('bucket sections', () => {
 
   it('prunes an acked session that has since left the fleet — the map does not grow unbounded', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ id: 'gone', project: 'alpha', bucket: 'attention', bucketSince: Date.now() })],
@@ -1953,7 +1954,7 @@ describe('archived footer row', () => {
 
   it('reads Archived on disk · count · total bytes across every project, and routes to /archive on tap', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -1979,7 +1980,7 @@ describe('archived footer row', () => {
     // both ends) because the old, unqualified text is a prefix of the new one
     // and a loose regex would match either.
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -1994,7 +1995,7 @@ describe('archived footer row', () => {
     // The pure forgery case: three archives, no manifest read on any of them,
     // rendered as a stated total of zero for work that may be gigabytes.
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -2009,7 +2010,7 @@ describe('archived footer row', () => {
 
   it('does not render when nothing in the fleet is archived', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: null })],
@@ -2019,7 +2020,7 @@ describe('archived footer row', () => {
 
   it('renders for exactly one archived workspace too — the guard is count > 0, not > 1', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', workspace: 'quiet-mesa', archivedAt: 100, archivedBytes: 1_200_000_000 })],
@@ -2080,7 +2081,7 @@ describe('the head count', () => {
     // ladder checks `status === 'dead'` first. Three surfaces on one screen —
     // this head, the bucket chip, the row — must give ONE answer.
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', status: 'dead', dialogPending: true, bucket: 'dead' })],
@@ -2094,7 +2095,7 @@ describe('the head count', () => {
 
   it('still says how many are waiting when the server says any are', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -2114,7 +2115,7 @@ describe('an ack written by another screen', () => {
     // nothing here re-reads localStorage. A merged-and-archived session's wire
     // record never changes again, so its badge used to survive until a reload.
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({
@@ -2159,7 +2160,7 @@ describe('a chip never names rows that are not on the screen', () => {
 
   const seedBoth = (): FleetStore => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [merged(), plain()] });
     return store;
   };
@@ -2193,7 +2194,7 @@ describe('a chip never names rows that are not on the screen', () => {
 
   it('a STOPPED main checkout sits behind the Archived fold while the Dead chip still counts it (workspace lifecycle §5.2)', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [plain(), session({
       id: 'claude-P', project: 'P', workspace: null, status: 'dead', bucket: 'dead',
       stoppedBy: { at: 1785300000_000, surface: 'pwa' },
@@ -2225,7 +2226,7 @@ describe('a chip never names rows that are not on the screen', () => {
   // silently clears the badge on the session Claude is still blocked on.
   it('names each ack control by its bucket, so a control list can tell them apart', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     const now = Date.now();
     seed(store, {
       conn: 'open',
@@ -2251,7 +2252,7 @@ describe('a chip never names rows that are not on the screen', () => {
   // landmark rotor into that many dead ends.
   it('adds no landmark per bucket', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -2270,7 +2271,7 @@ describe('a chip never names rows that are not on the screen', () => {
   // the top of the document, and a screen-reader user is told nothing at all.
   it('moves focus to the chip and announces the ack, instead of dropping to body', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -2302,7 +2303,7 @@ describe('a chip never names rows that are not on the screen', () => {
   it('clears the badge even when this device\'s clock is behind the fleet host', () => {
     const serverNow = Date.now() + 90_000; // the host is 90s ahead of us
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: serverNow })],
@@ -2345,7 +2346,7 @@ const runRow = (over: Partial<RunSummary> = {}): RunSummary => ({
 describe('the programme tree on the fleet screen', () => {
   it('brackets a worker under the coordinator that owns its run', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -2365,7 +2366,7 @@ describe('the programme tree on the fleet screen', () => {
     // screen, so a screen that handed every card every run would draw an edge
     // between two cards; the tree is per card, and the child stays flat.
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -2386,7 +2387,7 @@ describe('the programme tree on the fleet screen', () => {
     vi.useFakeTimers({ now: RUN_FROZEN });
     try {
       const store = makeStore();
-      render(<FleetScreen store={store} />);
+      renderFleet(<FleetScreen store={store} />);
       seed(store, {
         conn: 'open',
         sessions: [session({ id: 'claude:ProjectC', workspace: 'quiet-mesa' })],
@@ -2453,7 +2454,7 @@ describe('the programme tree on the fleet screen', () => {
    *  the same seed the cases above use, minus the assertions. */
   const withRuns = (runs: RunSummary[]) => (): void => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ id: 'claude:ProjectC', workspace: 'quiet-mesa' })],
@@ -2489,7 +2490,7 @@ describe('the programme tree on the fleet screen', () => {
     // the whole of what ends this row. A card that keyed on the timestamp
     // alone would claim every worker on the fleet is still being spawned.
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [session({ id: 'claude:ProjectC', workspace: 'quiet-mesa' })],
@@ -2504,7 +2505,7 @@ describe('the programme tree on the fleet screen', () => {
     // is a fact about runs on OTHER projects, which its own `runs` filter has
     // already excluded by construction) and `nestFleet` must never see it.
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -2544,7 +2545,7 @@ describe('the programme tree on the fleet screen', () => {
 
   it('brackets a cross-repo worker under its coordinator ON THE COORDINATOR\'S CARD — the run follows the row (Task 4)', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -2581,7 +2582,7 @@ describe('the programme tree on the fleet screen', () => {
     // actually needs: a dead-measured session fleet-wide, and BOTH frame-seen
     // flags true.
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -2611,7 +2612,7 @@ describe('the programme tree on the fleet screen', () => {
     // under the row it belongs to. With `project: 'alpha'` — the old fixture —
     // both rules answer alpha and the case is blind.
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -2638,7 +2639,7 @@ describe('the programme tree on the fleet screen', () => {
 
   it('gives a single-project programme no abroad line at all', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -2668,7 +2669,7 @@ describe('the door to /settings (centralised update management §13)', () => {
   afterEach(() => navigate('/'));
 
   it('sits in the fleet header, says what it is, and routes to /settings', () => {
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     const door = screen.getByRole('button', { name: 'Settings — updates and notifications' });
     expect(door.closest('.fleet-head-right')).not.toBeNull();
     expect(door).toHaveClass('settings-door');
@@ -2710,13 +2711,13 @@ describe('the update banner on the fleet screen', () => {
 
   it('polls /api/updates ONCE for the whole screen and hands the answer to UpdateBanner', async () => {
     const updates = vi.spyOn(api, 'updates').mockResolvedValue(updatesNewer());
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     expect(await screen.findByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
     expect(updates).toHaveBeenCalledTimes(1);
   });
 
   it('shows no update banner while /api/updates has not answered', () => {
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     expect(document.querySelector('.update-banner')).toBeNull();
   });
 
@@ -2744,7 +2745,7 @@ describe('the update banner on the fleet screen', () => {
       nodes: [nodeOf('5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93', 'server')].map((n) => ({ ...n, role: 'both' })),
       intent: [],
     });
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     expect(await screen.findByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
   });
 });
@@ -2785,7 +2786,7 @@ describe('BuildLine and the skew banner read the screen\'s one /api/updates poll
       intent: [],
     };
     const updates = vi.spyOn(api, 'updates').mockResolvedValue(view);
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     await waitFor(() =>
       expect(document.querySelector('.build-line')?.textContent).toBe('fleet v0.0.7 → v0.0.9 · server v0.0.9'));
     expect(screen.getByText(/run different builds/i)).toHaveTextContent('fleet v0.0.7 (bd2bf57a) · server v0.0.9 (2985b9d1).');
@@ -2824,7 +2825,7 @@ describe('a malformed /api/updates element does not blank the fleet screen (F11)
     vi.spyOn(api, 'updates').mockResolvedValue(raw as unknown as UpdatesView);
     vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     expect(await screen.findByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
     await waitFor(() => expect(document.querySelector('.build-line')?.textContent).toContain('fleet v0.0.7'));
     expect(document.querySelector('.build-line')?.textContent).toContain('server v0.0.7');
@@ -2843,7 +2844,7 @@ describe('Archive all in the Released fold (workspace lifecycle spec §5.1)', ()
       .mockResolvedValueOnce(null)
       .mockRejectedValueOnce(new Error('busy: a turn is in progress'));
     const store = makeStore();
-    render(<><FleetScreen store={store} /><ToastHost /></>);
+    renderFleet(<><FleetScreen store={store} /><ToastHost /></>);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -2877,7 +2878,7 @@ describe('Archive all in the Released fold (workspace lifecycle spec §5.1)', ()
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
     const archive = vi.spyOn(api, 'archive').mockResolvedValue(null);
     const store = makeStore();
-    render(<><FleetScreen store={store} /><ToastHost /></>);
+    renderFleet(<><FleetScreen store={store} /><ToastHost /></>);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -2909,7 +2910,7 @@ describe('Archive all in the Released fold (workspace lifecycle spec §5.1)', ()
       }
       return null;
     });
-    render(<><FleetScreen store={store} /><ToastHost /></>);
+    renderFleet(<><FleetScreen store={store} /><ToastHost /></>);
     seed(store, {
       conn: 'open',
       sessions: [
@@ -2953,7 +2954,7 @@ describe('Update all on the fleet screen (programme wave 5)', () => {
   it('opens the move sheet naming the fleet node first, sends apply {all: true, tag}, and re-polls the screen', async () => {
     const updates = vi.spyOn(api, 'updates').mockResolvedValue(behind());
     const apply = vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [FLEET, SERVER], skipped: [] });
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Update all' }));
     const list = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
     expect(within(list).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
@@ -2997,7 +2998,7 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null, roster: 'agreed', build: 'skewed' });
     const updates = vi.spyOn(api, 'updates').mockResolvedValue(halted());
     const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: halted().nodes[0]! });
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     const ackButton = await screen.findByRole('button', { name: 'Ack fleet' });
     expect(document.querySelector('.halt-banner-node-text')?.textContent).toBe('fleet: failed (last tried v0.0.84) — gate: unit not up');
     expect(screen.getByRole('button', { name: 'Update all' })).toBeDisabled();
@@ -3023,7 +3024,7 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     const acked = halted();
     acked.nodes[0] = { ...acked.nodes[0]!, update: { state: 'idle', target: 'v0.0.84', startedAt: null, detail: 'acknowledged by the operator' } };
     vi.spyOn(api, 'updates').mockResolvedValue(acked);
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     await waitFor(() => expect(screen.getByText(/run different builds/i))
       .toHaveTextContent('Auto-install is on and the console can move the lagging box — follow the move in Settings.'));
     expect(document.querySelector('.halt-banner')).toBeNull();
@@ -3048,7 +3049,7 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
       .mockImplementationOnce(() => Promise.reject(new Error('offline')))
       .mockImplementation(() => Promise.resolve(halted()));
     const ack = vi.spyOn(api, 'ackUpdateNode').mockRejectedValue(new TypeError('Failed to fetch'));
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Ack fleet' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Ack' }));   // through AckConfirm (D-5507)
     await until(() => expect(updates).toHaveBeenCalledTimes(2));
@@ -3087,7 +3088,7 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     const updates = vi.spyOn(api, 'updates')
       .mockImplementationOnce(() => Promise.resolve(halted()))
       .mockImplementation(() => Promise.reject(new Error('offline')));
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     await screen.findByRole('button', { name: 'Ack fleet' });
     await until(() => expect(screen.getByText(/run different builds/i)).toBeInTheDocument());
     expect(count(document.body), 'the first read landed: nothing is stale yet').toBe(0);
@@ -3103,7 +3104,7 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     expect(screen.getByText(/run different builds/i), 'and the skew arm no longer vouches for auto').toHaveTextContent('then run ccrc rollout');
     cleanup();
     vi.spyOn(api, 'updates').mockRejectedValue(new Error('offline'));
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     await until(() => expect(document.querySelector('.build-line')).not.toBeNull());
     expect(count(document.body), 'no answer ever landed: nothing to call the last one').toBe(0);
   });
@@ -3137,7 +3138,7 @@ describe('cross-project nesting on the fleet screen (D-5527)', () => {
 
   it('nests the child under its coordinator inside the coordinator’s project card, beside a same-project child', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seedCross(store);
     const nested = [...card('project-a').querySelectorAll('.proj-nest .sess-label')].map((e) => e.textContent);
     expect(nested).toEqual(['still-pond', 'quiet-river']);
@@ -3147,7 +3148,7 @@ describe('cross-project nesting on the fleet screen (D-5527)', () => {
 
   it('the cross-project child names its project, and only it does', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seedCross(store);
     const chips = [...document.querySelectorAll('.sess-workson')];
     expect(chips.map((c) => c.textContent)).toEqual(['works on project-b']);
@@ -3159,7 +3160,7 @@ describe('cross-project nesting on the fleet screen (D-5527)', () => {
 
   it('each child names its programme and wave — the CURRENT wave of a resumed workspace — and no run number', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seedCross(store);
     const labels = [...document.querySelectorAll('.sess-child')].map((e) => e.textContent);
     expect(labels).toEqual(['tidy-docs · wave 1 of 2', 'port-api · wave 5 of 7']);
@@ -3177,7 +3178,7 @@ describe('the Docs door (docs design 4.8, M4.L1)', () => {
   afterEach(() => navigate('/'));
 
   it('sits in the fleet header immediately before the accounts door, says Docs, and routes to /docs', () => {
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     const door = screen.getByRole('button', { name: 'Docs: specs, plans and design notes' });
     expect(door).toHaveClass('docs-door');
     expect(door.parentElement).toHaveClass('fleet-head-right');
@@ -3196,14 +3197,14 @@ describe('the Docs door (docs design 4.8, M4.L1)', () => {
 
   it('renders with no sessions at all', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     act(() => { store.setState({ conn: 'open', sessions: [] }); });
     expect(screen.getByRole('button', { name: 'Docs: specs, plans and design notes' })).toHaveClass('docs-door');
   });
 
   it('is still there, in the header cluster before the accounts door, with a session present', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     seed(store, { conn: 'open', sessions: [session({ project: 'demo' })] });
     // The fleet really holds a session now (the header counts it, and the first-run empty state is gone), so the
     // empty-fleet cases above are not what this one measures.

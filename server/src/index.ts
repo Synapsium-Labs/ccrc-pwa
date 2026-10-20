@@ -31,6 +31,7 @@ import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import { AccountAudit } from './accounts/audit.js';
 import { accountOpsFor } from './accounts/ops.js';
+import { SecretMasker, fingerprintAnswerOf } from './accounts/mask.js';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -273,6 +274,20 @@ deps.tokenDriver = tokenDriver;
 const accountAudit = new AccountAudit(coord.db);
 deps.accountAudit = accountAudit;
 deps.accountOps = accountOpsFor(cfg, { client: fleetClient });
+// The egress mask (D-5513, accounts plan Task A10) over the same coord.db and the box token's holder: every server
+// egress of session-derived text passes it. It follows the holder's current value, keeps every previous generation
+// whose rows it holds in memory across a rotation, and asks for the re-keying `roster` sub, whose answer it ingests,
+// retrying with backoff until it lands (D-5995); A12's `reloadRoster` ingests every other answer's fingerprints.
+const masker = new SecretMasker({
+  db: coord.db,
+  token: () => mailToken.currentValue(),
+  requestRekey: async () => {
+    const r = await deps.accountOps?.run('roster', null, {});
+    return r?.kind === 'exited' && r.code === 0 ? fingerprintAnswerOf(r.stdout) : null;
+  },
+});
+deps.masker = masker;
+push?.setMasker(masker);
 // The audit's 365-day retention, at boot and then daily on its own unref'd timer. Not a lane in `watch.ts`'s
 // coordination sweeps, which another branch holds (D-5620).
 accountAudit.sweep(Date.now());

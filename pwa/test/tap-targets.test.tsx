@@ -27,6 +27,7 @@ import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ArchiveScreen } from '../src/screens/ArchiveScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { renderFleet } from './fleetHost';
 import { MailScreen } from '../src/screens/MailScreen';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { CoordBanner } from '../src/fleet/CoordBanner';
@@ -171,7 +172,7 @@ describe('.fleet-archived-row — the fleet footer route into the archive', () =
 
   it('is the class the rendered footer row actually carries', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     act(() => {
       store.setState({
         conn: 'open',
@@ -286,7 +287,7 @@ describe('the two rules that were already scraped still reach a real element', (
 
   it('.proj-archived-toggle is on the rendered Archived (n) sub-fold', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     act(() => {
       store.setState({
         conn: 'open',
@@ -301,7 +302,7 @@ describe('the two rules that were already scraped still reach a real element', (
 
   it('.proj-released-toggle and .proj-released-archive are on the rendered Released (n) sub-fold', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     const releasedFrom = { runId: 1, program: 'lifecycle', programTitle: null, claimedBy: 'coord', closedAt: 1, child: false };
     act(() => {
       store.setState({ conn: 'open', sessions: [sess({ id: 'r', project: 'alpha', workspace: 'done-one', releasedFrom })] });
@@ -448,7 +449,7 @@ describe('.fleet-runs-row — the only door to /runs', () => {
   });
   it('is the class the rendered footer row actually carries, once a runs frame has landed', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     act(() => { store.setState({ conn: 'open', sessions: [sess()], runs: [], runsFrameSeen: true }); });
     expect(screen.getByRole('button', { name: /runs · none active/i })).toHaveClass('fleet-runs-row');
   });
@@ -458,7 +459,7 @@ describe('.fleet-runs-row — the only door to /runs', () => {
   // already reads the flag.
   it('reads unknown, not "none active", before runsFrameSeen', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     act(() => { store.setState({ conn: 'open', sessions: [sess()] }); });
     expect(screen.queryByRole('button', { name: /runs · none active/i })).toBeNull();
     expect(screen.getByRole('button', { name: /runs · —/i })).toHaveClass('fleet-runs-row');
@@ -469,7 +470,7 @@ describe('.fleet-runs-row — the only door to /runs', () => {
   // first-run panel (an honest `sessions: []`, `conn: 'open'`).
   it('renders in the first-run (zero-session) arm, not only the populated one', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     act(() => { store.setState({ conn: 'open', sessions: [] }); });
     expect(screen.getByText('No sessions yet')).toBeTruthy();
     expect(screen.getByRole('button', { name: /runs ·/i })).toHaveClass('fleet-runs-row');
@@ -887,7 +888,7 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       expect(floorIn(docsCss, '.docs-door')).toBe('var(--tap-min)');
     });
     it('is the class the rendered door actually carries', () => {
-      render(<FleetScreen store={makeStore()} />);
+      renderFleet(<FleetScreen store={makeStore()} />);
       expect(screen.getByRole('button', { name: 'Docs: specs, plans and design notes' })).toHaveClass('docs-door');
     });
     it('reaches the main stylesheet: DocsScreen imports docs.css, and app.tsx imports DocsScreen statically', () => {

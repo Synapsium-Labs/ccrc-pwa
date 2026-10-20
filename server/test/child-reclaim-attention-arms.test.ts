@@ -10,6 +10,7 @@ import {
   LEAF_KEPT_WORDS, isChildReclaimKeptWord, leafKeptWord,
   type ChildReclaimAttention, type ChildReclaimGeneration, type ChildReclaimGenerationKey,
 } from '../../shared/api.js';
+import { CHILD_RECLAIM_SKIP, childReclaimKeptItems, type ChildReclaimSweepVerdict } from '../src/childReclaimSweep.js';
 import { codeOnly } from './sourceScan.js';
 
 const ccrcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -76,5 +77,21 @@ describe('the three new ChildReclaimAttention arms (spec §5.9)', () => {
     // @ts-expect-error an unreadable read is never a key
     const notAKey: ChildReclaimGenerationKey = { kind: 'unreadable' };
     expect(notAKey.kind).toBe('unreadable');
+  });
+});
+
+// D-5942 (spec §2.6): a review child past its ceiling reaches the banner through the kept arm that every
+// kept word already takes, under the minting (review) run, with the sweep table's own sentence. No new arm.
+describe('review-report-stale on the banner (D-5942)', () => {
+  it('is listed as a kept item under the minting run, with the table’s sentence', () => {
+    const verdicts = new Map<string, ChildReclaimSweepVerdict>([
+      ['demo-r', { eligible: false, why: 'review-report-stale', runId: 9 }],
+      ['demo-s', { eligible: false, why: 'review-report-live' }],
+    ]);
+    const live = new Map<string, number | null>([['demo-r', 9], ['demo-s', 9]]);
+    expect(childReclaimKeptItems({ verdicts, live, mirrorArms: [] })).toEqual([
+      { kind: 'kept', sessionId: 'demo-r', runId: 9, word: 'review-report-stale',
+        sentence: CHILD_RECLAIM_SKIP['review-report-stale'].sentence },
+    ]);
   });
 });

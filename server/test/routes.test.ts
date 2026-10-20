@@ -335,6 +335,17 @@ describe('write routes', () => {
     await app.close();
   });
 
+  it("POST prompt maps `replaceDraft: true` to `onDraft: 'replace'`: it clears, and never stashes (D-5911)", async () => {
+    const { app, calls } = await makeApp(['❯ half-typed thought\n', '❯ \n', '❯ hi\n', '❯ \n']);
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/prompt`, payload: { text: 'hi', replaceDraft: true } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    const keys = sendKeysCalls(calls).map((c) => c.at(-1));
+    expect(keys[0]).toBe('C-u');
+    expect(keys).not.toContain('C-s');
+    await app.close();
+  });
+
   // C0.2, the user-visible fix: knownId used to answer via readRegistry,
   // which drops a session's ENTIRE row when any one of its three
   // completeness fields (wrapper/workdir/uuid) fails to read — so a single

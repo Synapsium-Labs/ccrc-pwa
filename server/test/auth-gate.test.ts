@@ -998,6 +998,34 @@ describe('the exempt check is set membership on the MATCHED ROUTE, not the raw u
   });
 });
 
+// D-5936 (spec 2026-10-20 §4.5): the workflow control verb is the operator's door, so it is never exempt. The row is
+// written before the route (D-5937) registers it: a key that names it, or a pattern that would match it, reds here.
+describe('the workflow control verb is never exempt (D-5936)', () => {
+  const ROUTE = 'POST /api/sessions/:id/workflows/:runId/control';
+  const URL = '/api/sessions/project-a/workflows/wf_fixture01/control';
+  /** A Fastify route pattern as a whole-path matcher: `:param` is one segment, `*` is any tail. */
+  const patternRe = (url: string): RegExp => new RegExp(
+    `^${url.split(/(:[A-Za-z_]\w*|\*)/).map((p) => (p === '*' ? '.*' : p.startsWith(':') ? '[^/]+' : p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('')}$`);
+
+  it('no `EXEMPT` key matches `POST /api/sessions/:id/workflows/:runId/control`', () => {
+    expect(exemptKey('POST', '/api/sessions/:id/workflows/:runId/control')).toBe(ROUTE);
+    expect(EXEMPT.has(ROUTE)).toBe(false);
+    const hits = [...EXEMPT.keys()].filter((k) => {
+      const [method, url] = [k.slice(0, k.indexOf(' ')), k.slice(k.indexOf(' ') + 1)];
+      return method === 'POST' && (patternRe(url).test(URL) || patternRe(url).test(ROUTE.slice(5)));
+    });
+    expect(hits, 'an EXEMPT key reaches the workflow control verb').toEqual([]);
+  });
+
+  it('the matcher above sees a key that would exempt it, so the row cannot pass for want of looking', () => {
+    for (const k of [ROUTE, 'POST /api/sessions/:sid/workflows/:run/control', 'POST /api/sessions/*']) {
+      const url = k.slice(k.indexOf(' ') + 1);
+      expect(patternRe(url).test(URL), k).toBe(true);
+    }
+    expect(patternRe('/api/sessions/:id/workflows').test(URL)).toBe(false);
+  });
+});
+
 // ── the flag: dark by default ────────────────────────────────────────────
 
 describe('with CCRC_AUTH off — the shipped default', () => {

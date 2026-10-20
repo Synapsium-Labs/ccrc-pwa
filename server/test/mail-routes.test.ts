@@ -31,6 +31,7 @@ import { isDelegationCheckpointKebab } from '../src/coord/delegation-checkpoint.
 import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
+import { isDriftKind } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isCollectLaneKebab } from '../src/collectLane.js';
 
@@ -628,6 +629,9 @@ describe('the rejection table is total, in both directions', () => {
       // Task 9 (`coord/routes.ts`'s run routes) — a SEPARATE `refused`/
       // `reject.code` vocabulary for `POST /api/runs*`, now typed as
       // `RunRefuseCode` above and so no longer hand-allowlisted here.
+      'non-terminal',        // coord/store.ts — a `writeDeliveries` guard name (D-5997).
+                             // NOT a wire code: the one delivery writer's private
+                             // guard selector, never answered over a route.
       'no-refs',              // coord/ledgerseed.ts — a `FloorMeasurement.why`
                                // (wave 2, F2). NOT a wire code: the allocator's
                                // refusal stays `not-seeded`, and this only
@@ -931,8 +935,13 @@ describe('the rejection table is total, in both directions', () => {
         // read's reasons as literals. None is a mail rejection or a run refusal: they ride a verdict and a log line,
         // never a `refused` or `reject.code`. Admitted through the exported guard, derived from that file's tables,
         // never NOT_CODES, for the reason every union above gives.
-        || isHibernateKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal or hibernation word`).toBe(true);
+        || isHibernateKebab(tok)
+        // DRIFT (D-5921, plan Task DT1): the next union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/drift.ts` keys its findings by the seven drift kinds, spelled there as
+        // literals. None is a mail rejection or a run refusal: a kind names a finding, never a `refused` or
+        // `reject.code`. Admitted through L0's own guard, derived from `DRIFT_KIND_MAP`, never NOT_CODES.
+        || isDriftKind(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word or drift kind`).toBe(true);
     }
   });
 });
