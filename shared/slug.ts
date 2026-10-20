@@ -229,7 +229,7 @@ export function deriveWorkspaceSlug(input: string): SlugAsk {
   } else {
     // Linear's copy-branch-name form is `<user>/<key>-<n>-<title>`. Taking the
     // TAIL rather than mapping `/`→`-` is the difference between
-    // `eng-1234-fix-login` and `maciek-eng-1234-fix-login`, which spends 7 of
+    // `eng-1234-fix-login` and `user-a-eng-1234-fix-login`, which spends 7 of
     // 31 characters on somebody's name. Only when the tail still has something
     // in it — otherwise fall back to the whole string and let the refusal
     // arms below name what is wrong.
