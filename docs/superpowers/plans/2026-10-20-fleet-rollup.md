@@ -48,23 +48,40 @@ intercept and did not answer. "Roll up" is read as COLLAPSE in the fleet list, n
   3. The header of a rolled-up project keeps its counts and adds `active <age>` (`formatAge`), the latest change
      of a live member, when one is known.
   4. The operator's own ▾ on a project is stored per device with the activity class it was made in, and applies
-     only while that class holds; the first frame in the other class drops it and the default applies again. A
-     toggle back to the default removes the entry.
-  5. A project with an operator-facing session is never rolled up, whatever is stored, and its ▾ is disabled.
-  6. A coordinator's children (its depth-1 rows) fold into one summary line under it — `n workers · 2 working ·
-     5 idle · 1 needs you`, the row's own state words (`STATE_WORD`, `asleep` for a hibernated row, `spawning`
+     only while that class holds; the first frame in the other class drops it and the default applies again, and
+     a fresh frame that no longer carries the project drops it too. A toggle back to the default removes the
+     entry. A card holding the open session is open by default (a deep link or a jump lands on a visible row);
+     the operator may still roll it up, which departs from that default and is stored.
+  5. A project with an operator-facing session is never rolled up, whatever is stored. Its ▾ does nothing and says
+     why: `aria-disabled`, still in the tab order, with the reason as screen-reader text (never `disabled` and a
+     `title`, which keyboard and touch cannot reach).
+  6. A coordinator's children (its depth-1 rows) fold into one summary line under it — `n workers · 1 needs you ·
+     2 working · 5 idle`, `needs you` straight after the total so a narrow column never pushes it to a second
+     line, each `n word` drawn unbreakable so a wrap falls only between counts, and `needs you` in the attention
+     ink the row's own `needs you` wears; the row's own state words (`STATE_WORD`, `asleep` for a hibernated row, `spawning`
      for a pending spawn) with `needs you` for an operator-facing child, zero counts left out. The line is the
      fold's toggle (per device, by coordinator id).
   7. While folded, an operator-facing child stays visible as its own row under the line, and so does the open
      session (the row being read never vanishes into a fold, the Released fold's rule).
   8. Phone, laptop and wide follow the same rules: the decider takes no width.
+  9. The clock the 30-minute window is read against is read fresh on every render (`useRollupClock`), and one timer
+     is set for the next instant a project leaves the window (`nextRollupBoundary`); a quiet fleet sets none. An
+     interval that stops while quiet keeps its last tick and would hold a gone-quiet project open.
   The sub-folds (`Released`, `Archived`) keep `useFolded`; the project fold moves to the rollup preferences
   (`ccrc.fleet-rollup.v1`), and the project names `useFolded` stored before are no longer read.
 - **D-6089** — `fleet-rollup-one-child`: a coordinator with ONE child keeps that child's row and draws no summary
   line. Folding one row into one line saves no height and replaces the workspace's name with a count, which is the
   glance the card exists for; the fold starts at two children (`CHILD_FOLD_MIN`).
 
-Issued and unused: 6090.
+- **D-6090** — `fleet-rollup-hold-view`: an automatic roll-up or roll-out (a project going quiet or waking, a
+  worker's question appearing) must not move the card the operator is reading. Chromium's scroll anchoring already
+  holds it; WebKit (iOS Safari) has none, and measured at 390 px the card in view moved 468 px there. So
+  `useHoldView` (`pwa/src/fleet/useHoldView.ts`), keyed on the rollup's shape, records the first visible card's
+  top from the layout still on screen and, once the new layout is in, scrolls its scroller by how far that card
+  moved. A departure from the brief, which asked nothing about scroll position: main never folded on its own, so
+  this jump arrives with the rollup and is the rollup's to prevent.
+
+Issued and unused: none.
 
 ## Task 1 — the rollup decider and both lists reading it (D-6088, D-6089)
 
@@ -73,6 +90,8 @@ Issued and unused: 6090.
 - Create `pwa/src/fleet/rollup.ts` (the decider), `pwa/test/rollup.test.ts` (skin-independent),
   `pwa/test/fleet-rollup-render.test.tsx` (rendered, once per skin through `SKIN_SETS[skin].Nav`, and through
   `ProjectCard`).
+- Create `pwa/src/fleet/useRollupClock.ts` (rule 9), `pwa/src/fleet/useHoldView.ts` (D-6090) and
+  `pwa/test/useHoldView.test.tsx`.
 - Modify `pwa/src/fleet/foldState.ts` (`useRollupPrefs`, its load/save), `pwa/src/fleet/ProjectCard.tsx` (the
   summary row, `rollup` prop), `pwa/src/fleet/ProjectCardHead.tsx` (`active <age>`, the disabled ▾),
   `pwa/src/screens/FleetScreen.tsx` (one `rollupFleet` call, the prune effect), `pwa/src/fleet/fleet.css`
@@ -92,11 +111,11 @@ Issued and unused: 6090.
 1. Red tests first (below), proved red on origin/main (the module does not exist; the rendered cases render every
    project open and every child as a row).
 2. `rollup.ts`: `operatorAsk`, `projectActivity`, `rollupCard`, `rollupFleet`, `toggleProject`,
-   `toggleChildren`, `prunePrefs`, `anyRecent`.
+   `toggleChildren`, `prunePrefs`, `nextRollupBoundary`.
 3. `foldState.ts`: `loadRollupPrefs`/`saveRollupPrefs`/`useRollupPrefs`, tolerant (absent, corrupt or unreadable
    reads as no preferences, which is the default rule, never a hidden fleet).
-4. `FleetScreen`: one `rollupFleet` over the tree; `collapsed`, the rows and the toggles come from it; a one-minute
-   clock runs only while some member's change is inside the 30-minute window; the prune effect runs on a fresh
+4. `FleetScreen`: one `rollupFleet` over the tree; `collapsed`, the rows and the toggles come from it; the clock is
+   `useRollupClock` (rule 9); `useHoldView` holds the view across an automatic fold (D-6090); the prune effect runs on a fresh
    frame only (`fleetFrameSeen`).
 5. `ProjectCard`/`ProjectCardHead`: render `summary` rows; header `active <age>` while folded; ▾ disabled when held
    open.
@@ -134,9 +153,40 @@ applying a stored ▾ whatever its class. `toggleProject` stores only the non-de
 so in the other class the stored value always equals that class's default; the reset is carried by
 `prunePrefs`, and M5 mutates that instead (its filter keeps every entry).
 
+### Review fixes (after the first build's three verifiers)
+
+- **Stale clock** (rule 9): the first build's `useNow(60_000, …)` kept its in-window tick once the window closed between
+  ticks. Red: the frame-between-ticks case and the no-frame case in `fleet-rollup-render.test.tsx`.
+- **Deep link into a rolled-up project** (rule 4): `selectedId` exempted only the worker fold. Red: the decider's
+  open-session case and the FleetScreen case `shows the open session inside a quiet project`.
+- **Worker line breaks a count** (rule 6): the column is 251-322 px wide at every width. Red: the decider's parts
+  case and the per-skin rendered parts case (classes, order, CSS `nowrap` and attention ink).
+- **WebKit jump** (D-6090): red in `useHoldView.test.tsx`; checked in WebKit at 390 px (the PR body).
+- **Low, fixed**: the held-open ▾ (rule 5), red per skin; a stored ▾ for a project the fleet no longer carries
+  (rule 4), red in the decider.
+- **Low, follow-up**: a worker in `attention` whose held ask chip outlives `notifyAt` by up to 60 s still says
+  `with coordinator` (`sessionFacts`' chip window, existing code); placement and counts are right.
+
+| # | Mutant | Red |
+|---|--------|-----|
+| M5 | `prunePrefs` keeps every entry (re-spelled for the new filter) | class reset ×2, absent project |
+| M11 | `needs you` last in the order | needs-you child count text, parts order |
+| M12 | the open session no longer opens its card | rendered deep-link case |
+| M13 | `prunePrefs` keeps a project the frame no longer carries | absent project |
+| M14 | the window-end timer never set | no-frame case |
+| M15 | the clock back to the frozen one-minute interval | frame-between-ticks case |
+| M16 | `useHoldView` measures but never scrolls | hold case |
+| M17 | the counts lose their unbreakable part | rendered parts, per skin |
+| M18 | the held-open ▾ back to `disabled` | rendered held-open ▾, per skin |
+| M19 | `.proj-children-part` loses `nowrap` | rendered parts, per skin |
+
+Two first spellings were equivalent and are recorded, not counted: dropping `needs you` from the order (a missing
+word sorts first) and splitting the part's text into two text nodes inside the same span.
+
 ### Verify
 
 - `pwa`: `npx vitest run --maxWorkers=2 test/rollup.test.ts`, then `test/fleet-rollup-render.test.tsx`,
+  `test/useHoldView.test.tsx`,
   `test/fleet-screen.test.tsx`, `test/project-card.test.tsx`, `test/fleet-css.test.ts`, `test/foldState.test.ts`,
   `test/app.test.tsx`, `test/tap-targets.test.tsx`, `test/session-line.test.tsx`, `test/role-census.test.ts`,
   `test/audit-refusals.test.ts`, `test/contrast.test.ts`, `test/ink-tiers.test.ts`, one at a time;

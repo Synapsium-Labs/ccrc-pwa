@@ -73,9 +73,6 @@ const lastChange = (s: FleetSession): number | null => {
   return at.length === 0 ? null : Math.max(...at);
 };
 
-/** Whether any of these rows changed state inside the window. */
-export const anyRecent = (sessions: readonly FleetSession[], now: number): boolean => nextRollupBoundary(sessions, now) !== null;
-
 /** The next instant a row's last change leaves the 30-minute window, or `null` when none is inside it: the one moment
  *  a quiet fleet's rollup can change with no frame, so the screen sets ONE timer for it and none in a quiet fleet. */
 export function nextRollupBoundary(sessions: readonly FleetSession[], now: number): number | null {
