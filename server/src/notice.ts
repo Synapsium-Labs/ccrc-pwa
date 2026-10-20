@@ -68,6 +68,35 @@ export const NOTICE_DEGRADED_DEFAULT = 'feed archive degraded, ring/push unaffec
 
 /** Raise one notice (D-5857). See the module comment for the order and the guard. */
 export function notify(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: NoticeOpts = {}): NoticeOutcome {
+  return raise(deps, event, mode, opts, true);
+}
+
+/** D-5859: raise a batch of notices (departure `funnel-batch-one-flush`), each through `notify`'s gate, ring, guarded
+ *  archive and push, for a writer that writes several rows in one try (`endDeadCoordinator.ts`): the batch STOPS at
+ *  its first failed archive, so the rows after it reach neither the ring nor the archive and the caller's sentence is
+ *  printed once, and the ring is flushed once, after the records. The outcome is the batch's: `recorded` if any row
+ *  was, `archived` the failed row's `'failed'`, else `'landed'` if any row's archive landed, else `'none'`. */
+export function notifyEach(
+  deps: NoticeDeps, events: readonly NoticeRecord[], mode: NoticeMode, opts: NoticeOpts = {},
+): NoticeOutcome {
+  let recorded = false;
+  let archived: NoticeOutcome['archived'] = 'none';
+  try {
+    for (const event of events) {
+      const out = raise(deps, event, mode, opts, false);
+      recorded ||= out.recorded;
+      if (out.archived !== 'none') archived = out.archived;
+      if (out.archived === 'failed') break;
+    }
+  } finally {
+    if (recorded) void deps.notifyLog?.flush();
+  }
+  return { recorded, archived };
+}
+
+/** The gate, the ring record (flushed after it when `flush`; a batch flushes once itself), the guarded archive and the
+ *  push for one notice. */
+function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: NoticeOpts, flush: boolean): NoticeOutcome {
   // `'record-only'` never pushes, so presence decides nothing for it and is not consulted.
   const visible = mode !== 'record-only' && deps.presence?.isVisible(event.sessionId) === true;
   if (visible && mode === 'push') return { recorded: false, archived: 'none' };
@@ -77,7 +106,7 @@ export function notify(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, 
   if (log) {
     const ev = log.record(event);
     recorded = true;
-    void log.flush();
+    if (flush) void log.flush();
     if (deps.coord) {
       try {
         deps.coord.recordFeedEvent(log.epoch, ev);
