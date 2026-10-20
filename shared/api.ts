@@ -1522,6 +1522,10 @@ export const NON_DELEGATING_TASK_KINDS = ['shell', 'monitor', 'mcp-task', 'dream
  *  finished tasks out, so this is a second wall: a finished task some later
  *  build lists must not keep a wedged `busy` on `working`. */
 export const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'killed'] as const;
+/* D-6117: the readerless `isDelegatedTask` predicate that stood here is gone;
+ * the server and the PWA read the hook's computed `bgDelegated` and
+ * `bgDelegatedKinds`. This note keeps the lines below where the line-anchored
+ * citations into this file expect them. */
 /** D-5231: the ONE reader of `FleetSession.background` for display. The live
  *  `fleet` frame is cast, not revived, so a server predating the field omits
  *  the key at runtime: `undefined` reads as null here, never as a TypeError.
