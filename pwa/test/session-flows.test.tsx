@@ -152,6 +152,27 @@ describe('the Escape interrupt is the session screen\'s', () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
+  it('the live status wins over the fleet snapshot: Escape interrupts a turn the stream calls busy, once', () => {
+    // The fleet still files the session idle; the stream already says busy. The screen reads `liveStatus`, so the
+    // turn is interruptible now, not when the next snapshot catches up. (The inverse is the snapshot-only mutant.)
+    stubPointer(true);
+    const spy = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined);
+    chrome.mounted = false;
+    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const fleet = createFleetStore({ makeSocket: fakeSocket });
+    act(() => { fleet.setState({ sessions: [{ ...S, status: 'idle' }], conn: 'open' }); });
+    render(<SessionScreen id={ID} store={store} fleet={fleet} />);
+    act(() => { store.setState({ uuid: 'u1', status: 'busy' }); });
+    fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    expect(spy).toHaveBeenCalledTimes(1);
+    // And the other way round: a stream that says idle overrules a snapshot still filed busy.
+    spy.mockClear();
+    act(() => { fleet.setState({ sessions: [{ ...S, status: 'busy' }], conn: 'open' }); });
+    act(() => { store.setState({ status: 'idle' }); });
+    fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape', keyCode: 27 });
+    expect(spy, 'a snapshot still filed busy interrupted an idle stream').not.toHaveBeenCalled();
+  });
+
   it('a coarse pointer has no Escape binding: the keycap is the control there (unchanged)', () => {
     stubPointer(false);
     const spy = vi.spyOn(api, 'interrupt').mockResolvedValue(undefined);
@@ -211,6 +232,26 @@ describe('the ⋯ menu\'s items are registry commands', () => {
     expect(offered.some((t) => t.includes('Show history')), 'the control: a session command is offered').toBe(true);
     expect(offered.some((t) => t.includes('Move to another account'))).toBe(false);
     expect(offered.some((t) => t.includes('Archive this session'))).toBe(false);
+  });
+
+  it('a main checkout has no PR: the palette does not offer "Open the pull request" where the header has no PR cap', () => {
+    const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });
+    const fleet = createFleetStore({ makeSocket: fakeSocket });
+    act(() => { fleet.setState({ sessions: [{ ...S, workspace: null, branch: 'main' }], conn: 'open' }); });
+    render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={ID} store={store} fleet={fleet} /></>);
+    expect(document.querySelector('.keycap--pr'), 'the header shows no PR cap on a main checkout').toBeNull();
+    fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
+    const offered = screen.getAllByRole('option').map((o) => o.textContent ?? '');
+    expect(offered.some((t) => t.includes('Show history')), 'the control: a session command is offered').toBe(true);
+    expect(offered.some((t) => t.includes('Open the pull request'))).toBe(false);
+  });
+
+  it('a workspace session offers "Open the pull request" in the palette, as its header shows the PR cap', () => {
+    mount();
+    expect(document.querySelector('.keycap--pr')).not.toBeNull();
+    fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
+    const offered = screen.getAllByRole('option').map((o) => o.textContent ?? '');
+    expect(offered.some((t) => t.includes('Open the pull request'))).toBe(true);
   });
 
   it('a command run from a stale list still meets the gate: under a fault, running session-swap opens no swap sheet', () => {

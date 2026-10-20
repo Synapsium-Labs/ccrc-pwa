@@ -24,6 +24,12 @@ import './chat.css';
  *  one object; `server/test/single-definition.test.ts` fails on a fourth. */
 export { UNCHECKED_PR };
 
+/** A workspace session has a PR cap; a main checkout has none. ONE predicate: the header's cap renders where it holds
+ *  and the palette offers `session-pr` where it holds, so neither offers a PR the other hides (W2 Task S2d). */
+export function hasPrCap<S extends { workspace: string | null }>(session: S | null): session is S {
+  return session !== null && session.workspace !== null;
+}
+
 /** '2m' | '3h' | '5d', or null under a minute — `elapsedShort`'s own answer
  *  there, which is why this cap needs nothing of its own for that case. */
 function rel(then: number | null): string | null {

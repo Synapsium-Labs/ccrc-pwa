@@ -25,7 +25,8 @@ import { useMediaQuery } from '../lib/useMediaQuery';
 import { sessionLabel } from '../fleet/sessionLabel';
 // main's TypedLabel import is dropped, not lost: the component lives in
 // @ccrc/ui now and the line above already carries it.
-import { PrKeycap } from './PrKeycap';
+import { PrKeycap, hasPrCap } from './PrKeycap';
+import { liveStatus } from './liveStatus';
 import { useSessionFlows } from './SessionFlows';
 import './chat.css';
 import { hibernatedSince } from '../fleet/hibernated';
@@ -90,8 +91,8 @@ export function SessionHeader({
   // The PR cap runs `session-pr` (D-5469's door rule), which opens `SessionFlows`' PR sheet.
   const prDoor = commandDoor('session-pr');
 
-  // Live stream status wins; the fleet snapshot fills in before it connects.
-  const st: SessionStatus | null = status ?? session?.status ?? null;
+  // Live stream status wins; the fleet snapshot fills in before it connects (`liveStatus`, the screen's one derivation).
+  const st: SessionStatus | null = liveStatus(status, session);
   const at = statusUpdatedAt ?? session?.statusUpdatedAt ?? null;
 
   // THE bucket — the server's, never this header's. It used to OR
@@ -295,7 +296,7 @@ export function SessionHeader({
       {/* Top right, to the right of the ···. `esc` keeps the OUTER edge because
           it is the interrupt and its position is muscle memory; on a fine
           pointer esc is absent and this becomes rightmost naturally. */}
-      {session !== null && session.workspace !== null && (
+      {hasPrCap(session) && (
         <PrKeycap pr={session.pr} onOpen={prDoor.onClick} data-command={prDoor['data-command']} />
       )}
       {!finePointer && (

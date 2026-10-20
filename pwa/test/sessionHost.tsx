@@ -11,6 +11,7 @@ import { CommandLayer } from '../src/command/CommandLayer';
 import { SessionFlows } from '../src/session/SessionFlows';
 import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
 import { useEscapeInterrupt } from '../src/session/useEscapeInterrupt';
+import { liveStatus } from '../src/session/liveStatus';
 
 /** The header's props as they were before the lift: the flows' handlers beside the header's own. */
 export interface HeaderHostProps extends SessionHeaderProps {
@@ -32,7 +33,7 @@ export function SessionHeaderHost(
     onReapWorkspace, layer = true, ...header
   }: HeaderHostProps,
 ): ReactNode {
-  const busy = (header.status ?? header.session?.status ?? null) === 'busy';
+  const busy = liveStatus(header.status, header.session) === 'busy';
   useEscapeInterrupt({ busy, onInterrupt: () => header.onInterrupt('escape-key') });
   return (
     <>

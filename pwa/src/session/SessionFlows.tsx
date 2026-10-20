@@ -22,6 +22,7 @@ import { sessionDocsHref } from '../docs/docsLinks';
 import { isPutAway, restoreReachesEnsure } from '../fleet/ArchiveSheet';
 import { substrateFaultText } from '../fleet/substrateWords';
 import { PrSheet } from './PrSheet';
+import { hasPrCap } from './PrKeycap';
 
 /** What the session screen does for each flow the menu or a door opens. */
 export interface SessionActions {
@@ -185,7 +186,7 @@ export function SessionFlows({ session, title, actions, children }: SessionFlows
     const offers = (id: string): boolean => {
       const { entries: now, session: s } = latest.current;
       if (id === 'open-terminal') return true;
-      if (id === 'session-pr') return s !== null && s.workspace !== null;
+      if (id === 'session-pr') return hasPrCap(s);
       return now.some((e) => e.id === id && e.enabled);
     };
     return { offers, run: (id) => {

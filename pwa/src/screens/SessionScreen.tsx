@@ -29,6 +29,7 @@ import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionHeader } from '../session/SessionHeader';
 import { SessionFlows, type SessionActions } from '../session/SessionFlows';
 import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
+import { liveStatus } from '../session/liveStatus';
 import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
 import { sessionFacts } from '../fleet/sessionFacts';
 import { coordPresence } from '../fleet/coordWords';
@@ -326,7 +327,7 @@ export function SessionScreen({
   // The stream sends status only on change — until its first frame the fleet
   // snapshot speaks for the session (same fallback the header does), so a
   // dead session is read-only and a busy one wears the caret from first paint.
-  const effectiveStatus = status ?? live?.status ?? null;
+  const effectiveStatus = liveStatus(status, live);
   const dead = effectiveStatus === 'dead';
   const pulsing = chatPulsing(live, effectiveStatus);
   const loading = uuid === null && missingFile === null;
@@ -471,10 +472,10 @@ export function SessionScreen({
     reapWorkspace: () => setReapOpen(true),
   };
 
-  // The desktop Escape interrupt, once, here: neither skin's chrome holds it (W2 Task S2d). `busy` is the LIVE
-  // status, with the fleet snapshot filling in before the stream connects, as the header reads it.
+  // The desktop Escape interrupt, once, here: neither skin's chrome holds it (W2 Task S2d). `busy` is `liveStatus`,
+  // the one derivation the header's chip reads too.
   useEscapeInterrupt({
-    busy: (status ?? live?.status ?? null) === 'busy',
+    busy: effectiveStatus === 'busy',
     onInterrupt: () => void interrupt('escape-key'),
   });
 
