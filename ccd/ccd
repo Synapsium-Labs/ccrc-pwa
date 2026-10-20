@@ -31782,10 +31782,12 @@ _ws_reclaim_residue() {   # workdir -> bytes under the harness's path-keyed temp
   # root for the test harness only.
   #
   # THE DEFAULT ROOT IS THE BOX'S OWN, not the child's: `${TMPDIR:-/tmp}/claude-<uid>`,
-  # the exact derivation `ccd-tmp-sweep`'s own `ROOT=` line uses (`ccd/ccd-tmp-sweep`),
-  # because that is where Claude Code actually lands this scratch — under whatever
-  # TMPDIR the ccd PROCESS runs under, never the child's own `$HOME/.cc-tmp/<id>`
-  # (`_child_tmpdir`'s TMPDIR, a different variable in a different process). A bare
+  # the exact derivation `ccd-tmp-sweep`'s own `ROOT=` line uses (`ccd/ccd-tmp-sweep`).
+  # Claude Code's scratch FOLLOWS the session's TMPDIR (child-reclamation ledger,
+  # Measurement (a)): a child spawned with `_child_tmpdir`'s TMPDIR keeps it under its
+  # own `$HOME/.cc-tmp/<id>/claude-<uid>/`, which dies with that root. What lands here
+  # is the scratch of a child spawned WITHOUT that TMPDIR (`_child_tmpdir`'s rc 2), under
+  # whatever TMPDIR the ccd process runs under, so this is the root to measure (D-5888). A bare
   # `/tmp/claude-$(id -u)` measured nothing on a box whose TMPDIR points elsewhere —
   # macOS scan, mail 2375.
   local root="${CCD_RECLAIM_RESIDUE_ROOT:-${TMPDIR:-/tmp}/claude-$(id -u)}" d b
