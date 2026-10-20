@@ -5480,12 +5480,12 @@ prior `first`/`cpu0` pair if there is one (`none`/`none` otherwise). It is not a
 and cannot authorize a stop this tick. A clock carried through uncertainty is reusable only after a later
 tick measures EVERY predicate again; an implausible clock starts again. Child-cgroup uncertainty is
 `unknown` because it is checked before liveness; a known-live parent-walk cap is `live`. Measured live
-scopes otherwise reset the dead clock. A zombie outside child does not block; a live outside child does.
-The clock is boot-relative (`/proc/uptime`), so a wall-clock step moves no stop. **The stop ships
-shadowed:** an inert scope is recorded `would-stop`, and `systemctl --user stop --no-block` is issued only
-while `~/.cc-sessions/scope-sweep-live` exists — nothing writes that file; the operator touches it after
-reading the shadow verdicts. Armed, one tick stops at most three scopes and records the rest `held`.
-`~/.cc-sessions/scope-sweep-paused` stops everything, the shadow record included.
+scopes otherwise reset the dead clock. A zombie outside child with at most one thread does not block; any
+other outside child does. The clock is boot-relative (`/proc/uptime`), so a wall-clock step moves no stop.
+**The stop ships shadowed:** an inert scope is recorded `would-stop`, and `systemctl --user stop --no-block`
+is issued only while `~/.cc-sessions/scope-sweep-live` exists — nothing writes that file; the operator
+touches it after reading the shadow verdicts. Armed, one tick stops at most three scopes and records the
+rest `held`. `~/.cc-sessions/scope-sweep-paused` stops everything, the shadow record included.
 
 Its verdicts live in `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`, rewritten every tick (a reboot empties it,
 which restarts every clock): one `dead` line per dead ccd scope, one `carry` line per scope the tick could not
@@ -5513,13 +5513,14 @@ partial reads and absent input are reported, never claimed as a clean zero. Noti
 observations at delivery, not exact kill instants.
 
 The frozen baseline B is the pane-OOM reap-class count with the reap still enabled. A read-only
-`--reap-baseline B` comparison requires stage 6 alone and an explicit seven-day interval: observed
-reap-class OOMs ABOVE B + 2 means withdraw the spawn assignment through a follow-up release. At B + 2 it
-is `not-triggered`, not a health verdict; raw pane stops, unmapped and unmeasured classifications remain
-beside it. Direct pressure kills do not feed that comparison. The variable is
-`CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in ccd's child spawn environment, primary AND resume-retry,
-including an external-provider wrapper that execs Claude Code. Deploying it does not retrofit existing
-panes. Assignment and any subsequent removal take effect at each session's NEXT ordinary start; no
+`--reap-baseline B` comparison requires stage 6 alone and an explicit interval of seven elapsed days
+(`--since`/`--until` are read in the local zone, so a week across a DST change is refused; the documented
+invocation sets `TZ=UTC`): observed reap-class OOMs ABOVE B + 2 means withdraw the spawn assignment through
+a follow-up release. At B + 2 it is `not-triggered`, not a health verdict; raw pane stops, unmapped and
+unmeasured classifications remain beside it. Direct pressure kills do not feed that comparison. The variable
+is `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in ccd's child spawn environment, primary AND
+resume-retry, including an external-provider wrapper that execs Claude Code. Deploying it does not retrofit
+existing panes. Assignment and any subsequent removal take effect at each session's NEXT ordinary start; no
 forced fleet restart is part of this change. An aggregate slice `MemoryHigh` must never return.
 
 ### Memory guardrails (Linux)

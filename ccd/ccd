@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=97c92504fbbdb497d2437a33b4d057444c8538532a865ea6edec8c6811c3d31b
+# ccrc:generated 1 sha256=e4c2837cd9e3bcc7ed0f1863558f448002d504f382e45cb42e8cc00d5ebb0d5e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23057,14 +23057,11 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # Codex lane cannot answer it.
   _is_anthropic_backend "$wrapper" && _rc_enabled && [[ "$(_reg_get "$id" rc)" != "off" ]] && rcflag="--remote-control '$id'"
   # UNCONDITIONAL, unlike `rcflag` above — deliberately, not an oversight: on a
-  # non-home-able lane the vars `_resume_env` composes are simply inert (the
-  # external backend never reads CLAUDE_CODE_RESUME_INTERRUPTED_TURN), and
-  # `_redrive_after_spawn`'s own transcript measurement (`_transcript_path`,
-  # which only ever names a Claude Code JSONL) fails closed there regardless —
-  # so gating this line would buy nothing and cost a second home-ability check.
-  # Its pressure-reap key is the exception: deliberately LIVE there, because every
-  # supported wrapper (an external-provider shim included) execs Claude Code, which
-  # reads it — so gating this line would drop that key.
+  # non-home-able lane the RESUME vars `_resume_env` composes are inert, and
+  # `_redrive_after_spawn`'s transcript measurement fails closed there anyway;
+  # its pressure-reap key is deliberately LIVE there, because every supported
+  # wrapper (an external-provider shim included) execs Claude Code, which reads
+  # it — so gating this line would drop that key and buy nothing at all.
   resenv=$(_resume_env "$id")   # D-5237: the prompt names a recent end's cause
   # THE ROUTING RECORD (routing spec 2026-09-14 §5.2, §5.4 last paragraph):
   # `--model` from `class`, and the subagent floor into the SAME `env` line
