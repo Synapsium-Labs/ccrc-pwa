@@ -43,6 +43,10 @@ interface Cc {
   menu: boolean;
   running: boolean;
   armed: boolean;
+  /** A transcript, todo or spinner row above the notification row, shown when no turn is running. */
+  above: string;
+  /** Other text on the notification row, left of the update notice. */
+  notice: string;
 }
 
 interface FakeOpts {
@@ -51,6 +55,7 @@ interface FakeOpts {
   menu?: boolean;
   running?: boolean;
   armed?: boolean;
+  above?: string;
   /** `inert`: a rebound or missing binding, `C-s` does nothing. */
   stashKey?: 'stash' | 'inert';
   /** Claude Code restores the stash at submit (measured, b). `false` models a restore that does not land. */
@@ -73,8 +78,8 @@ function render(s: Cc): string {
     lines.push(' Pick one', ' ❯ 1. Yes', '   2. No', '', ' Enter to confirm · Esc to cancel');
     return lines.join('\n') + '\n';
   }
-  lines.push(s.running ? '✳ Working… (3s · esc to interrupt)' : '');
-  lines.push(`\x1b[38;5;246m${s.stash !== null ? ' › stashed ·' : ''}\x1b[39m \x1b[38;5;114m✔ Update installed\x1b[39m`);
+  lines.push(s.running ? '✳ Working… (3s · esc to interrupt)' : s.above);
+  lines.push(`\x1b[38;5;246m${s.notice}${s.stash !== null ? ' › stashed ·' : ''}\x1b[39m \x1b[38;5;114m✔ Update installed\x1b[39m`);
   lines.push(RULE);
   if (!nonBlank(s.box)) lines.push(`❯ ${PLACEHOLDER}`);
   else s.box.forEach((r, i) => lines.push((i === 0 ? '❯ ' : '  ') + r));
@@ -88,7 +93,7 @@ function render(s: Cc): string {
 function fakeCc(o: FakeOpts = {}) {
   const s: Cc = {
     box: [...(o.box ?? [])], stash: o.stash === undefined ? null : o.stash, history: [],
-    menu: o.menu ?? false, running: o.running ?? false, armed: o.armed ?? false,
+    menu: o.menu ?? false, running: o.running ?? false, armed: o.armed ?? false, above: o.above ?? '', notice: '',
   };
   const keys: string[] = [];
   let swallow = o.swallowEnters ?? 0;
@@ -239,6 +244,53 @@ describe("onDraft: 'stash' (D-5911)", () => {
       expect(f.state.box).toEqual(['/clear']);
       expect(res).toEqual({ ok: true, draftRestore: 'restored' });
     });
+    it('D-6009: the word "stashed" in a transcript or todo row is not the indicator: a restored draft gets no second Enter', async () => {
+      for (const row of ['⏺ I stashed the WIP with git stash and rebased', '  ☐ Restore the stashed changes', '⏺ The notice reads › stashed · while a stash is held']) {
+        const draft = 'hello world, and the rest of a half typed thought';
+        const f = fakeCc({ box: [draft], afterSubmit: (_k, s) => { s.above = row; } });
+        const res = await send(f, 'hello world');
+        expect(f.keys.filter((k) => k === 'Enter'), row).toHaveLength(1);
+        expect(f.state.history, row).toEqual(['hello world']);
+        expect(f.state.box, row).toEqual([draft]);
+        expect(res, row).toEqual({ ok: true, draftRestore: 'restored' });
+      }
+      // …nor does a notification row that says "stashed" without the measured ` › stashed ·` form.
+      const draft = 'hello world, and the rest of a half typed thought';
+      const f = fakeCc({ box: [draft], afterSubmit: (_k, s) => { s.notice = ' 2 changes stashed'; } });
+      const res = await send(f, 'hello world');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+      expect(f.state.history).toEqual(['hello world']);
+      expect(res).toEqual({ ok: true, draftRestore: 'restored' });
+    });
+
+    it('D-6009: the word "stashed" in a transcript row does not refuse `stash-occupied`', async () => {
+      const f = fakeCc({ box: ['a half typed note'], above: '⏺ I stashed the WIP with git stash' });
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys).toEqual(['C-s', 'lit:hello from the lane', 'Enter']);
+      expect(res).toEqual({ ok: true, draftRestore: 'restored' });
+    });
+
+    it('D-6008: while the stash is held, our text that is only a PREFIX of the stashed draft gets no retry Enter', async () => {
+      const f = fakeCc({ box: ['hello world, and the rest of a half typed thought'], swallowEnters: 1 });
+      const res = await send(f, 'hello world');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+      expect(f.state.history).toEqual([]);
+      expect(res).toMatchObject({ ok: false, error: 'enter-ignored' });
+    });
+
+    it('a turn already running before the call proves nothing: a mid-render box is `enter-ignored`, one Enter', async () => {
+      const f = fakeCc({
+        box: ['hello world, and the rest of a half typed thought'], running: true,
+        afterSubmit: (_k, s) => { s.box = ['hello world, and the rest']; },
+      });
+      const res = await send(f, 'hello world');
+      expect(f.keys.filter((k) => k === 'Enter')).toHaveLength(1);
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error).toBe('enter-ignored');
+      expect(res.submittable).toBeUndefined();
+      expect(res.draft).toBeUndefined();
+    });
   });
 
   describe('the restore', () => {
@@ -269,6 +321,18 @@ describe("onDraft: 'stash' (D-5911)", () => {
       expect(f.keys).toEqual(['C-s', 'lit:hello from the lane', 'Enter']);
       expect(f.state.box).toEqual(['a half typed note']);
       expect(res).toEqual({ ok: true, draftRestore: 'restored' });
+    });
+
+    it('no held-stash indicator at the pop: no `C-s` is sent, `restore-unverified`', async () => {
+      // The stash was already restored and consumed (or cleared) by the human: a `C-s` cannot bring it back.
+      const f = fakeCc({
+        box: ['a half typed note'], restoreOnSubmit: false,
+        afterSubmit: (k, s) => { if (k === 1) s.stash = null; },
+      });
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const res = await send(f, 'hello from the lane');
+      expect(f.keys).toEqual(['C-s', 'lit:hello from the lane', 'Enter']);
+      expect(res).toEqual({ ok: true, draftRestore: 'restore-unverified' });
     });
 
     it("a dialog open at the pop's capture: no `C-s` is sent", async () => {

@@ -845,20 +845,24 @@ export const STASH_TRIES = 12;
 
 /**
  * D-5911. Does the pane show Claude Code's HELD-STASH INDICATOR? Measured (plan Task P1b Step 0, 2.1.303,
- * `fixtures/panes/box/stash-*.ansi`): while a stash is held, the notification row two rows above the marker row
- * reads ` › stashed ·`, on an empty box, with new text in the box, during a running turn, after a turn ends, and at
- * 80 columns; it goes the moment the stash pops. The window is the three rows above the LAST marker row (the rule,
- * the notification row, and one more), so a scrollback turn far above never answers. A false positive refuses
- * `stash-occupied` and presses nothing, which is the safe direction; the word alone is matched for that reason.
+ * `fixtures/panes/box/stash-*.ansi`): while a stash is held, the notification row reads ` › stashed ·`, on an empty
+ * box, with new text in the box, during a running turn, after a turn ends, and at 80 columns; it goes the moment the
+ * stash pops.
+ *
+ * D-6009: only the MEASURED FORM on the NOTIFICATION ROW answers — the row directly above the rule over the LAST
+ * marker row, reading `›`, `stashed`, then ` ·` or the row's end. A false positive is NOT safe: `stashAwareStill`
+ * reads it as "the stash has not popped, so the box is ours" and presses the retry Enter, which would submit a
+ * restored human draft that starts with our needle. So a transcript, todo or spinner row that merely says
+ * "stashed" (`git stash` output, "Restore the stashed changes") never answers, and a scrollback turn never does.
  */
-const STASH_HELD_WINDOW = 3;
-const STASH_HELD_RE = /\bstashed\b/;
+const STASH_HELD_RE = /(?:^|\s)›\s+stashed(?:\s+·|\s*$)/;
+const RULE_ROW = /^─+$/;
 function stashHeld(ansiPane: string): boolean {
   const lines = ansiPane.split('\n').map((l) => l.replace(SGR, ''));
   let marker = -1;
   for (let i = 0; i < lines.length; i++) if (lines[i]!.startsWith('❯')) marker = i;
-  if (marker === -1) return false;
-  return lines.slice(Math.max(0, marker - STASH_HELD_WINDOW), marker).some((l) => STASH_HELD_RE.test(l));
+  if (marker < 2 || !RULE_ROW.test(lines[marker - 1]!.trim())) return false;
+  return STASH_HELD_RE.test(lines[marker - 2]!);
 }
 
 /** The box is in the capture, no menu owns the keyboard, and it holds nothing: no marker-row text (a placeholder
@@ -911,9 +915,10 @@ async function stashDraft(
  * so the plain proof (`still`, "the box still starts with our needle") would read a restored draft that starts with
  * the needle as our unsent text, and the retry Enter would submit the human's draft. So, on a capture where `still`
  * says ours:
- *  - D-6008: while the held-stash indicator shows, the stash has not popped, so the box cannot be the restored draft
- *    and it IS ours (a box that merely EQUALS the stashed text, such as our `/clear` around a stashed `/clear` with
- *    its Enter lost, is unsent, not restored);
+ *  - D-6008: a box that EQUALS the stashed text while the held-stash indicator shows is ours and unsent (the stash
+ *    has not popped, so it cannot be the restore: our `/clear` around a stashed `/clear` with its Enter lost). Only
+ *    that case: a prefix match while the indicator shows still takes the no-retry arm below, so a misread indicator
+ *    can never buy a retry Enter onto a restored draft;
  *  - otherwise a box equal to the stashed text is submitted-and-restored;
  *  - a box that is a prefix of the stashed text, or that it is a prefix of, could be the restore mid-render: no retry
  *    Enter. `ok` with `restore-unverified` when a turn is running now that was not before, else `enter-ignored`
@@ -929,9 +934,9 @@ async function submitAroundStash(
 ): Promise<SendResult> {
   const stashAwareStill = (pane: string, draft: string): SubmitSeen => {
     if (!still(pane, draft)) return 'gone';
-    if (stashHeld(pane)) return 'ours'; // D-6008: the stash has not popped, so this is not the restore
     const now = boxText(pane);
-    if (now === stash.text) return 'gone';
+    if (now === stash.text) return stashHeld(pane) ? 'ours' : 'gone'; // D-6008: held, so not the restore
+
     if (stash.text.startsWith(now) || now.startsWith(stash.text)) return 'maybe-restored';
     return 'ours';
   };
@@ -957,8 +962,8 @@ function unverifiedRestore(id: string, why: string): SendResult {
 /**
  * Spec §2.1 step 6. The box must read back the stashed text. If it does not within the budget, ONE FRESH CAPTURE is
  * taken immediately before any key, because Claude Code's own late restore may have landed since the last read: only
- * if it shows no menu and an empty box is one `C-s` sent, which pops the stash, and the box read again. Otherwise
- * nothing is pressed.
+ * if it shows no menu, an empty box and the held-stash indicator (D-6009: with no stash held, a `C-s` cannot bring
+ * the draft back) is one `C-s` sent, which pops the stash, and the box read again. Otherwise nothing is pressed.
  */
 async function verifyRestore(
   d: SendDeps,
@@ -978,6 +983,7 @@ async function verifyRestore(
   const fresh = await d.tmux.captureAnsi(id);
   if (fresh !== null && boxHolds(fresh, stash.text)) return { ok: true, draftRestore: 'restored' };
   if (fresh === null || !boxEmptyAndFree(fresh)) return unverifiedRestore(id, 'the box was not empty to pop it into');
+  if (!stashHeld(fresh)) return unverifiedRestore(id, 'no stash is held to pop'); // D-6009
   await d.tmux.sendKey(id, 'C-s');
   if (await restored()) return { ok: true, draftRestore: 'restored' };
   return unverifiedRestore(id, 'one pop did not bring it back');
