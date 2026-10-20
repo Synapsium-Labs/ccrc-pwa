@@ -60,6 +60,7 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
+import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
 import {
   DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
@@ -2176,7 +2177,7 @@ export class CoordStore {
    * this is a second delivery, so it renders its own envelope, naming the heir
    * in `to:` and its own id in `ack:` — the `queueDelivery(…, '') ->
    * renderEnvelope(delivery.id) -> setDeliveryEnvelope` pair `routes.ts` and
-   * `rundefs.ts` already use, for the same reason (the delivery id does not
+   * `rundefsTx.ts` already use, for the same reason (the delivery id does not
    * exist until the row does).
    *
    * THE PREDICATE IS NOT HAND-WRITTEN. `ABANDONED_PARK_SQL` is the mailbox's own
@@ -2333,6 +2334,10 @@ export class CoordStore {
    *     park keeps it outstanding, so nothing this arm counts moves. `runHealth`
    *     gains a second narrow-predicate count beside the one above,
    *     `mailParkedLive`, which a re-queued row joins only while parked.
+   *   `absorbParkEscalation` (D-5841, the brief watch) — writes only
+   *     `parkEscalatedAt` on a wave brief's own delivery, which a re-queued row
+   *     never is (it belongs to a `POST /api/mail` mail, not a `coordinator`
+   *     brief); nothing this arm counts moves.
    *
    * BOUNDED by the role-addressed reports of ONE program that parked while its
    * coordinator was dead, at most one new row per `mail` row, and deliberately
@@ -2570,7 +2575,7 @@ export class CoordStore {
    * comment in the body), so a close that landed after the lane's candidate read
    * is never given a row or a mail.
    *
-   * OPENS NO TRANSACTION, so `queueStallNotice` (`rundefs.ts`) can hold this
+   * OPENS NO TRANSACTION, so `queueStallNotice` (`rundefsTx.ts`) can hold this
    * row and its mail in ONE. `tx` is not re-entrant. A caller with no
    * transaction of its own uses `recordStallObservation` below, so the check and
    * the insert are never split by another writer.
@@ -5180,7 +5185,7 @@ export class CoordStore {
    * Overwrites a delivery's stored `envelope`, once, immediately after
    * `queueDelivery`. THREE direct callers, each doing exactly that and none of
    * them a re-render: the ingress route in `routes.ts`, the system-mail queue
-   * in `rundefs.ts` (which has called it since Build 7 — this sentence said
+   * in `rundefsTx.ts` (which has called it since Build 7 — this sentence said
    * "the ingress route ONLY" for two builds while it did: D-1426), and
    * `requeueAbandonedMail` in this file, which renders the heir's own envelope
    * for a second delivery of one mail. Pinned by `single-definition.test.ts`'s
@@ -5202,7 +5207,7 @@ export class CoordStore {
    * GUARDED. The three direct callers expand to SIX reachable paths, all in
    * the same transaction as their `queueDelivery`: the mail route's send `tx`,
    * the system-mail queue's own `tx` and the stall watch's (`queueSystemMail`
-   * and `queueStallNotice`, each around `rundefs.ts`'s `insertSystemMailTx`),
+   * and `queueStallNotice`, each around `rundefsTx.ts`'s `insertSystemMailTx`),
    * `dispatchRun`'s dispatch `tx` through
    * `markDispatched` -> `bindSession` -> `requeueAbandonedMail`,
    * `reclaimProgram`'s `tx`, and the open route's post-hold `tx` through
@@ -5645,6 +5650,20 @@ export class CoordStore {
     ).run(at, id).changes) > 0;
   }
 
+  /** Absorb the park's operator escalation into a more specific notice
+   *  (D-5841, #755): the brief-not-taken notice has told the claimant and pushed
+   *  the operator about this delivery, so its park — now, or a later one —
+   *  escalates nothing more. Unlike `markParkEscalated` it needs no `parkedAt`:
+   *  a brief still on its failure ladder at 10 minutes parks after the notice.
+   *  Writes only an outstanding, never-delivered row not yet escalated, and a
+   *  delivery clears it with the other park columns. */
+  absorbParkEscalation(id: number, at: number): boolean {
+    return Number(this.db.prepare(
+      'UPDATE mail_deliveries SET parkEscalatedAt = ? ' +
+      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND deliveredAt IS NULL AND parkEscalatedAt IS NULL`,
+    ).run(at, id).changes) > 0;
+  }
+
   /** Set a parked row's box baseline when the park could not read it (D-5838,
    *  verification round): `parkBox` NULL means UNKNOWN, and the first reading
    *  after the park becomes what later readings are compared against. Writes
@@ -5669,6 +5688,30 @@ export class CoordStore {
       `FROM mail_deliveries WHERE state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL ORDER BY id`,
     ).all() as unknown as { id: number; mailId: number; toId: string; parkedAt: number; parkReason: string | null;
                             parkBox: string | null; parkEscalatedAt: number | null; nextAttemptAt: number }[];
+  }
+
+  /** Every UNLANDED wave brief of an ACTIVE run (D-5841, #755), for the mail
+   *  sweep's brief pass: the brief's LATEST delivery has no `ingestedAt` and is
+   *  not `acked`, it was queued at or after `since`, and its run carries no
+   *  `brief-not-taken` row yet. `retried` is whether the run carries its
+   *  `brief-retry` row. A read only; the pass's writes are its own. */
+  unlandedBriefs(since: number): UnlandedBrief[] {
+    const rows = this.db.prepare(
+      'SELECT r.id AS runId, r.program AS program, r.wave AS wave, r.waveOf AS waveOf, ' +
+      'd.id AS deliveryId, m.id AS mailId, d.toId AS toId, m.at AS queuedAt, d.state AS state, ' +
+      'd.deliveredAt AS deliveredAt, d.parkedAt AS parkedAt, d.parkReason AS parkReason, ' +
+      'd.lastGate AS lastGate, d.lastError AS lastError, ' +
+      'EXISTS (SELECT 1 FROM run_events e WHERE e.runId = r.id AND e.detail = ?) AS retried ' +
+      'FROM mail m JOIN runs r ON r.id = m.runId ' +
+      'JOIN mail_deliveries d ON d.id = (SELECT MAX(x.id) FROM mail_deliveries x WHERE x.mailId = m.id) ' +
+      "WHERE m.fromId = 'coordinator' AND m.subject = ? AND m.at >= ? " +
+      `AND r.state NOT IN ${INACTIVE_RUN_STATES_SQL} ` +
+      "AND d.ingestedAt IS NULL AND d.state != 'acked' " +
+      'AND NOT EXISTS (SELECT 1 FROM run_events e WHERE e.runId = r.id AND e.detail = ?) ' +
+      'ORDER BY r.id',
+    ).all(BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, since, BRIEF_NOTICE_DETAIL) as unknown as
+      (Omit<UnlandedBrief, 'retried'> & { retried: number })[];
+    return rows.map((r) => ({ ...r, retried: Number(r.retried) === 1 }));
   }
 
   recordRejection(r: { code: MailRejectCode; fromId?: string; fromUuid?: string; toId?: string;
@@ -7537,6 +7580,35 @@ export class CoordStore {
       "UPDATE asks SET askAt = ? WHERE id = ? AND state = 'held' AND dialogId = ? AND askKey = ?",
     ).run(a.askAt, a.id, a.dialogId, a.askKey);
     return Number(res.changes) > 0;
+  }
+
+  /** D-5925 (held questions survive a restart): every ask row a hold still owns, `held` or `answering`, oldest
+   *  first. Read once, on the boot's unprimed tick (`watch.ts`'s `detectDialogs`), so the in-memory carrier
+   *  (`heldAsks`, D-2169) can be re-seeded from the rows that already hold its deadline (`askNotifyAt(at)`) and its
+   *  identity (`dialogId`, `askKey`). All-or-failure, like every other list read on this surface. */
+  heldQuestionRows(): AsksReadResult {
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.ASK_COLS} FROM asks WHERE state IN ('held','answering') ORDER BY id`,
+    ).all() as Parameters<CoordStore['hydrateAsk']>[0][];
+    const asks: AskRow[] = [];
+    for (const r of rows) {
+      const h = this.hydrateAsk(r);
+      if (!h.ok) return { ok: false, kind: 'ask-unreadable', detail: h.detail };
+      asks.push(h.ask);
+    }
+    return { ok: true, asks };
+  }
+
+  /** D-5925: the main thread's (`agentId` `''`, D-5491) approval rows still `held` for a claimant, oldest first,
+   *  grouped by child: the boot's snapshot `heldApprovals` is re-seeded from. `held` ONLY, never `released`:
+   *  `lapseApproval` records no time and no reason, so a row lapsed and pushed before the restart cannot be told
+   *  from one lapsed after it, and selecting it would push the operator twice. All-or-failure. */
+  heldApprovalRowsByChild(): { ok: true; rows: Map<string, ApprovalRow[]> } | { ok: false; detail: string } {
+    const read = this.approvalRows("WHERE state = 'held' AND agentId = '' AND releaseReason IS NULL ORDER BY id");
+    if (!read.ok) return read;
+    const out = new Map<string, ApprovalRow[]>();
+    for (const r of read.rows) out.set(r.childId, [...(out.get(r.childId) ?? []), r]);
+    return { ok: true, rows: out };
   }
 
   // ── approvals (coordinator-first routing plan Task 16, D-5298, D-5440, D-5441) ──────────────────────────────────

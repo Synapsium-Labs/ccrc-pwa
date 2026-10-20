@@ -317,7 +317,7 @@ W1's §Global constraints bind here in full. In addition:
 **Files:**
 - Modify `pwa/src/screens/settings/ClaudeCodeCard.tsx`: channel (`latest`, `stable`; the server's answer checks the radio, never the tap); Pin (a danger confirm naming the downgrade) and Unpin; result lines under each control (R1c).
 - Modify `pwa/src/screens/settings/AutomationSection.tsx` (R2b1 creates it): a Claude Code mode card, `off` and `manual` only in this wave (`auto` arrives with CB5c).
-- Modify `pwa/src/screens/settingsText.ts`; create `pwa/test/claude-code-controls.test.tsx`.
+- Modify `pwa/src/fleet/settingsText.ts` (moved from `screens/` by D-5897); create `pwa/test/claude-code-controls.test.tsx`.
 
 - [ ] **Step 1: Red.** "the radio follows the server, not the tap"; "Pin asks first, Cancel focused"; "a refusal is an amber result line, never a toast"; "the mode card offers off and manual only"; "both are operator-cookie writes through the provider".
 - [ ] **Step 2: Green.**

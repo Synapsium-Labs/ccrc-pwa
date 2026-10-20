@@ -1089,3 +1089,86 @@ as such.
   (additive on a closed union; `GATE_PHRASE` in the mail strip has its words), and the hold records it.
 
 Issued and unused (D1): none.
+
+### Durability (#752) — D3, #755: the wave brief is confirmed taken (issued 2026-10-20 and defined here)
+
+- **D-5841** — `brief-landed-or-coordinator-told` (D3, #755): after a run is dispatched, the server confirms its wave
+  brief was taken. Measured on main before it: the brief is an ordinary `queueSystemMail` row (subject `wave-brief`,
+  from `coordinator`), and nothing looked at whether it ever reached `ingestedAt`; a brief parked behind a dirty box
+  (D1 now keeps it outstanding) was learned of only through the quiet stall ladder, hours later. Now the mail sweep's
+  brief pass (`sweepMail`, after the parked pass) reads every UNLANDED brief of an ACTIVE run (`CoordStore.unlandedBriefs`:
+  the brief's latest delivery has no `ingestedAt` and is not `acked`, queued within the last 24 h, and its run has no
+  `brief-not-taken` row yet), and the pure decider `briefStep` (`server/src/coord/briefwatch.ts`) answers per row:
+  - at `BRIEF_RETRY_MS` (5 min) after the brief was queued, ONE retry: a `brief-retry` run-event row
+    (`recordStallObservation`, so it is durable and deduped by `(runId, detail)`), then, for a PARKED row, D1's own
+    `wakeParked`. The woken row goes through every gate of the due loop exactly as D1's 10-minute retry does: the
+    ensure-wake gate first for a hibernated worker, a box holding OUR OWN nudge gets `resumeIfOwn`'s verified Enter
+    and is never re-typed, and any other text is held with nothing pressed or typed. A row that is not parked is
+    already on its own retry ladder and gets the row only;
+  - at `BRIEF_NOTICE_MS` (10 min), ONE notice: the run's claimant (`resolveCoordinator(runId)`) gets a system mail from
+    `operator`, subject `brief not taken by <worker>, run N: <reason>` (`briefNotTakenSubject`, `briefNotTakenReason`),
+    in one transaction with its `brief-not-taken` row (`queueStallNotice`); a run with no claimant, or whose claimant
+    is the worker itself, gets the row alone (`recordStallObservation`). The operator gets one push, tagged
+    `brief-not-taken-<runId>`, only for the call that wrote the row, so a second sweep or a restart never repeats it.
+  The pass dispatches nothing, writes no run state, hold, claim or pool limit, and types nothing itself: its only
+  writes are the two run-event rows, the notice mail, and D1's `wakeParked`. Every timer reads back from `coord.db`
+  (`mail.at`, the run-event rows), so a server restart neither re-sends nor forgets. A closed run is out of the pass
+  (`INACTIVE_RUN_STATES_SQL`, and `insertStallObservation`'s own `run-gone` re-check). The mail kill-switch stops it
+  with the rest of the sweep. A rejected brief of a still-active run is noticed too: it has not landed either.
+  `WAVE_BRIEF_SUBJECT` is the subject's one spelling, used by `dispatchRun` and by the pass.
+
+  **Files.** `server/src/coord/briefwatch.ts` (new: the L1 decider, its constants, subject and reason words);
+  `server/src/coord/store.ts` (`unlandedBriefs`, `absorbParkEscalation`); `server/src/coord/dispatch.ts` (the subject constant);
+  `server/src/watch.ts` (the brief pass in `sweepMail`, and the sweep's empty-queue return counts unlanded briefs);
+  `server/test/brief-landed.test.ts` (new); `server/test/single-definition.test.ts` (the new names).
+
+  **Steps.** (1) The red suite, seen failing on `origin/main`. (2) `briefwatch.ts` and `unlandedBriefs`. (3) The pass in
+  `sweepMail`. (4) Green; the mutation table run on a `git archive` copy; tsc and the doc suites.
+
+  **Red tests** (`server/test/brief-landed.test.ts`): a brief taken within 5 min gets no row, no mail and no push; an
+  `enter-ignored` brief on a fresh worker is retried at 5 min through the park and lands with our nudge never
+  re-typed, and the retry is one row however many sweeps follow; a FOREIGN draft is never typed over, and at 10 min
+  the claimant is mailed `brief not taken by <worker>, run N: …` and the operator pushed once; a restart over the same
+  `coord.db` repeats neither; a closed run is never noticed; a rejected brief of an active run is noticed even when
+  nothing else is outstanding; the pass leaves the run row (state, session, claimant) as it found it.
+
+  **Mutation table** (each run against the suite alone): M1 the retry's `wakeParked` deleted; M2 the retry at the
+  notice's 10 min; M3 the notice's dedupe dropped (the reader's `brief-not-taken` filter and the pass's `told` check
+  both: either alone is held by the other, the observation row's own `(runId, detail)` dedupe); M4 the
+  `ingestedAt IS NULL` filter dropped; M5 the active-run filter dropped and `insertStallObservation`'s `run-gone`
+  re-check bypassed (again both: either alone is held by the other); M6 the notice addressed to the worker; M7 the
+  empty-queue return blind to unlanded briefs; M8 the push untagged per run; M9 the notice step deleted; M10 the
+  pass never called.
+
+  **Verify.** `server/test/brief-landed.test.ts`, `mail-sweep.test.ts`, `stall-store.test.ts`, `run-routes.test.ts`,
+  `coord-store.test.ts`; `tsc --noEmit -p .` in `server/`; `single-definition`, `deviation-refs` (after
+  `git fetch -q origin main`), `dtbd`, `topology-clean`, `docs-grammar`. Nothing rendered: no UI table.
+
+  **Routing.** Server only; no wire field, no route, no migration (the durable state is rows `coord.db` already has),
+  no `ccd` change. **Needs.** D1 (#754, merged as #853). **Gates.** None open.
+
+  **Review round (extends D-5841).** Four corrections from verification, each with its red test first:
+  - The pass reads its briefs AFTER the sweep's `UserPromptSubmit` edge loop and its awaits, never the list read at the
+    top of `sweepMail` (that one only feeds the empty-queue return): a brief taken just before the 10-minute sweep was
+    otherwise noticed and pushed in the same sweep that set its `ingestedAt`.
+  - The notice absorbs D1's park escalation for that delivery (`CoordStore.absorbParkEscalation`: `parkEscalatedAt` set
+    on the outstanding, never-delivered row, parked or not, since a brief still on its failure ladder at 10 minutes
+    parks after the notice). The operator then gets the brief's one push and no later `mail-parked-<id>` push. D1's
+    park-time sender mail is unchanged.
+  - A REJECTED brief's notice body says the lane has given up and will not try again; only an outstanding brief's says
+    it is retried.
+  - The subject is held to `MAIL_SUBJECT_MAX_BYTES` (system mail skips the HTTP ingress that enforces it), trimmed by
+    code point.
+  Accepted and stated: the push is sent by the call that committed the `brief-not-taken` row, after the commit; a
+  crash between the two loses that push for good, while the claimant's mail is durable in the same transaction.
+
+  **Red tests (review round):** an ingest edge sampled in the same sweep that crosses 10 minutes gets no row, mail or
+  push; a run claimed by its own worker gets the row and one push and no mail; a brief parked behind a foreign draft
+  gives one brief push and no park push over 30 minutes; a rejected brief's notice never promises a retry; the notice
+  subject never exceeds the subject cap.
+
+  **Mutation table (review round):** M11 the `coordinator !== worker` guard dropped; M12 the pass given the list read
+  before the edge loop; M13 the `absorbParkEscalation` call deleted; M14 the rejected body branch dropped; M15 the
+  subject cap dropped.
+
+Issued and unused (D3): D-5842, D-5843.

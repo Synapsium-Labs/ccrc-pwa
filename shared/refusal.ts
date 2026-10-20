@@ -27,11 +27,12 @@
  * literal-status and computed-status inline sends only fall. A send whose
  * status or word is computed is counted, not checked against the table.
  *
- * THREE MEASURED SPLITS, kept as they were:
- *   - `registry-unmeasurable` answers 502 in `coord/routes.ts` and 503 in
- *     `server.ts`. The table says 502; `server.ts`'s eight 503 sends (four
- *     literal, four through a `read.reason === 'unlistable' ? 503 : 404`
- *     ternary) stay inline until #549 (ARCH-11b) unifies them.
+ * `registry-unmeasurable` answers the table's 502 everywhere (D-5971, #549,
+ * ARCH-11b): `server.ts`'s eight sends answered 503 until then and now answer
+ * through `refuseRoute`, and the scan holds that no send of the word uses
+ * another status. Readers branch on the word, not the status.
+ *
+ * TWO MEASURED SPLITS, kept as they were:
  *   - `unauthenticated` answers 429 with verdict `locked-out` and a
  *     `retry-after` header from the three sign-in lockout sends in
  *     `server.ts`. The table's 401 is every other `unauthenticated`.

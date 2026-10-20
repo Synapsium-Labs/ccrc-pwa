@@ -38,7 +38,8 @@ import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type Sw
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
-import { MAIL_DISABLED_MARKER, queueSystemMail } from './rundefs.js';
+import { MAIL_DISABLED_MARKER } from './rundefs.js';
+import { queueSystemMail } from './rundefsTx.js';
 import { STALL_QUIET_MS } from './stall.js';
 import {
   STALL_NOTICE_WINDOW_MS, STALL_QUIET_MAX_MS, STALL_QUIET_MIN_MS, STALL_QUIET_STEP_MS, decideStallSettings,
@@ -1718,9 +1719,8 @@ export function registerCoordRoutes(
         return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
       case 'unknown-session': return reply.code(404).send({ ok: false, error: 'unknown-session' });
       case 'no-claimant': return reply.code(409).send({ ok: false, refused: 'no-claimant' });
-      // 502, the coord-route family's status for this condition
-      // (`sendDispatchOutcome` above) — NOT the kickoff route's 503, which is
-      // server.ts's own vocabulary. `detail` rides along because it is a
+      // 502, the table's one status for this condition (`REFUSAL_STATUS`; the
+      // kickoff route's 503 was unified to it, D-5971). `detail` rides along because it is a
       // distinction this adapter RECEIVED: L1 measured WHICH read failed, and
       // this layer cannot recompute it.
       case 'registry-unmeasurable':

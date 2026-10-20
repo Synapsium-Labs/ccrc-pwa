@@ -11227,7 +11227,7 @@ export const DELEGATION_SPOOL_BOUNDS = {
  *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
  *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
 const CHILD_DENY_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|roll|claude'.split('|');
 
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
@@ -11238,17 +11238,29 @@ export const CHILD_DENY_PATH_QUALIFIED = false as boolean;
 
 /** The program heads a deny rule is written for: the bare name always, and the path-qualified forms only behind
  *  `CHILD_DENY_PATH_QUALIFIED`. */
-const childDenyHeads = (prog: 'ccd' | 'ccrc'): readonly string[] =>
+const childDenyHeads = (prog: string): readonly string[] =>
   CHILD_DENY_PATH_QUALIFIED ? [prog, `*/${prog}`, `~/.local/bin/${prog}`] : [prog];
 
+/** The deny list for a box whose roster's upstream id is `upstreamId` (D-5696, spec §7.6): the forbidden `ccd` verbs
+ *  (`roll` and the operator's `claude …` switches among them), then `ccrc update` and `ccrc rollback`, then Claude
+ *  Code's own `install` and `update` under its name and, when the roster names the upstream account otherwise, under
+ *  that id too. `upstreamId` is a roster id `parseRoster` has already admitted, or `null` for no roster. The bash twin
+ *  reads the id from the generated roster (`CCRC_UPSTREAM`) and is held equal to this by iteration. */
+export function childDenyRules(upstreamId: string | null): readonly string[] {
+  const claudes = upstreamId === null || upstreamId === 'claude' ? ['claude'] : ['claude', upstreamId];
+  return [
+    ...CHILD_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
+    ...['update', 'rollback'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
+    ...claudes.flatMap((p) => ['install', 'update'].flatMap((v) => childDenyHeads(p).map((h) => `Bash(${h} ${v}:*)`))),
+  ];
+}
+
 /** The `permissions.deny` list of `~/.cc-sessions/child-deny.settings.json`, the one managed file every dispatched
- *  child (a row with `.child`) spawns with through `--settings` (spec §6.6, plan Task 15, D-5299): the forbidden
- *  `ccd` verbs, then `ccrc update` and `ccrc rollback`. No approval overrides a deny rule. The installer's bash copy
- *  is held equal to this list by iteration (`install-session-hooks.test.ts`), never respelled in a test. */
-export const CHILD_DENY_RULES: readonly string[] = [
-  ...CHILD_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
-  ...['update', 'rollback'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
-];
+ *  child (a row with `.child`) spawns with through `--settings` (spec §6.6, plan Task 15, D-5299), on a box whose
+ *  upstream account is named `claude` (`childDenyRules` for any other). No approval overrides a deny rule. The
+ *  installer's bash copy is held equal to this list by iteration (`install-session-hooks.test.ts`), never respelled
+ *  in a test. */
+export const CHILD_DENY_RULES: readonly string[] = childDenyRules(null);
 
 /** `$REG/<id>.deny-settings` (plan Task 15, D-5299): the sha256 of the deny file the child was last spawned with,
  *  written by `ccd`'s spawn of a `.child` row and only when it passed the file. Three answers, as `ChildMark`: Task

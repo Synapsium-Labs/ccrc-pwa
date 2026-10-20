@@ -14,7 +14,7 @@ import { SETTLED_UPDATE_STATES } from '../../../shared/api';
 import { compareReleaseTags } from '../../../shared/semver';
 import { QuickConfirm } from '@ccrc/ui';
 import { ApiError, api, updateErrorText } from '../lib/api';
-import type { ResultTone } from '../screens/settingsText';
+import type { ResultTone } from './settingsText';
 
 export const ACK_UNREADABLE_TEXT = "Acknowledged — the server's answer could not be read; the screen will re-check.";
 

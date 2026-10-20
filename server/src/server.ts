@@ -2300,7 +2300,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const read = await readSessionRecord(deps.io, deps.cfg, id);
     switch (read.kind) {
       case 'found': break;
-      case 'unlistable': return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+      case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
       case 'absent': return refuseRoute(reply, 'unknown-session');
       // An id `isRegistryId` refuses (spec §2.3) is a malformed request, never an unknown session: 400 in
       // this file's request-shape word, the one `isSafeSessionId` above answers.
@@ -3292,7 +3292,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    *   it passes. Deleting the clause changes no outcome.
    *
    * Both callers of `stopArgvFor` ask this in their identity arm and answer what an unmeasured identity field
-   * answers, 503 `registry-unmeasurable`, with no argv composed; the archive door asks it before its turn read, its
+   * answers, 502 `registry-unmeasurable`, with no argv composed; the archive door asks it before its turn read, its
    * claim reads and the programme's end. A workspace row is never refused here: it stops by its id, which each
    * caller's id gate has already vetted.
    */
@@ -3333,7 +3333,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    *
    * A legacy row's PAIR PARTS are vetted before this runs as well: both
    * callers ask `stopPairRefused` (above) in their identity arm and answer
-   * 503 `registry-unmeasurable` for a wrapper part or project part that is
+   * 502 `registry-unmeasurable` for a wrapper part or project part that is
    * not a registry id, so `stopPair` below never carries one.
    *
    * A `function` declaration on purpose: `verb-gate.test.ts` reads a call site's skew gate off its enclosing
@@ -3375,8 +3375,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // way or the other). Only `absent` — a listing that plainly does not
       // name this id at all — earns the terminal unknown-session answer; a
       // route that answered 404 for both would be reopening the exact
-      // overloaded-null this 503 gate exists to close, one branch over.
-      case 'unlistable': return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+      // overloaded-null this 502 gate exists to close, one branch over.
+      case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
       case 'absent': return refuseRoute(reply, 'unknown-session');
       // This read is the ONLY gate in front of `stopArgvFor` (spec §2.3), so an id `isRegistryId` refuses
       // is refused here, before any argv: 400, this file's request-shape word, never a proven absence's 404.
@@ -3390,14 +3390,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // wrapper/project pair from these very fields to kill a tmux session by
     // name. Two unmeasured fields could otherwise conspire to name the WRONG
     // session — 404 unknown-session would be a LIE (the row is right there,
-    // just unmeasured), so this answers 503, the fleet's own
+    // just unmeasured), so this answers 502, the fleet's own
     // registry-unmeasurable shape, instead. A legacy row whose pair part is
     // not a registry id (`stopPairRefused`) is refused the same way: a
     // measured field that would aim the stop at a session nobody named is no
     // more an identity than an unmeasured one.
     const identity = measuredIdentity(read.record);
     if (identity === null || stopPairRefused(id, read.record, identity)) {
-      return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+      return refuseRoute(reply, 'registry-unmeasurable');
     }
     const rec = read.record;
     // The argv is `stopArgvFor`'s (above), shared with the archive door: `--surface` and the two id shapes are argued
@@ -3539,7 +3539,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const read = await readSessionRecord(deps.io, deps.cfg, id);
     switch (read.kind) {
       case 'found': break;
-      case 'unlistable': return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+      case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
       case 'absent': return refuseRoute(reply, 'unknown-session');
       // The ordinary arm's id gate (spec §2.3): an id `isRegistryId` refuses is a malformed request.
       case 'bad-id': return refuseRoute(reply, 'bad-session-id');
@@ -3568,9 +3568,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // D-5240: the turn gate, archive's fail-closed `turnVerdictFor` under archive's consent rule (`swapTurnRefusal`):
     // `busy` without consent is `409 session-busy`, `unmeasured` is `409 status-unknown` with or without it. Read here,
     // before the queue, and again inside the job, so a turn that began during the wait is refused the same way. An
-    // identity field that could not be read is `/archive`'s 503 (D-5380): the turn reads need the uuid.
+    // identity field that could not be read is `/archive`'s 502 (D-5380, D-5971): the turn reads need the uuid.
     const identity = measuredIdentity(read.record);
-    if (identity === null) return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+    if (identity === null) return refuseRoute(reply, 'registry-unmeasurable');
     const rec = read.record;
     const turnRefusal = async (): Promise<SwapRefusal | null> =>
       swapTurnRefusal(await turnVerdictFor(turnReads, rec, identity.uuid), interrupt);
@@ -3733,22 +3733,22 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/archive', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
-    // A registry that did not LIST is `503 registry-unmeasurable` — never folded into `404 unknown-session`, which is
+    // A registry that did not LIST is `502 registry-unmeasurable` (the table's status, D-5971) — never folded into `404 unknown-session`, which is
     // what `knownId` alone answers for it (workspace lifecycle wave 3b, wave 2's carried follow-up). Asked BEFORE
     // `knownId`, whose call is left as every other request-id gate's (`routes.test.ts` derives that census).
     if ((await deps.io.readdir(deps.cfg.registryDir)) === null) {
-      return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+      return refuseRoute(reply, 'registry-unmeasurable');
     }
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const flags = archiveFlags(req.body);
     if (flags === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    // The row itself, `/stop`'s ladder. An unlistable registry has already answered 503 above; the `unlistable` arm
-    // below can only answer if the registry goes unreadable between the two reads (503 too). The identity fields are a
+    // The row itself, `/stop`'s ladder. An unlistable registry has already answered 502 above; the `unlistable` arm
+    // below can only answer if the registry goes unreadable between the two reads (502 too, D-5971). The identity fields are a
     // separate arm: an unmeasured one is refused rather than guessed at — the stop argv recomputes a tmux name from them.
     const read = await readSessionRecord(deps.io, deps.cfg, id);
     switch (read.kind) {
       case 'found': break;
-      case 'unlistable': return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+      case 'unlistable': return refuseRoute(reply, 'registry-unmeasurable');
       case 'absent': return refuseRoute(reply, 'unknown-session');
       // Masked by `knownId` above (spec §2.3), which answers 404 for an id `isRegistryId` refuses before
       // its listing. This arm answers the request-shape word all the same.
@@ -3762,7 +3762,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // `/stop`'s pair-part refusal (`stopPairRefused`), asked HERE, before the turn read, the claim reads and the
     // programme's end, so a refused part ends nothing, stops nothing and composes no argv.
     if (identity === null || stopPairRefused(id, read.record, identity)) {
-      return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+      return refuseRoute(reply, 'registry-unmeasurable');
     }
     const rec = read.record;
     const archiveArgv = rec.workspace === null ? null : CCD_ARGV.wsArchive(id, pwaDec(req));
