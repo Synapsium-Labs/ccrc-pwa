@@ -239,6 +239,9 @@ const CONTROLS: Record<string, string> = {
   'screens/AccountsScreen.tsx <button> proj-card-pool acct-pool-chip': "TOKEN. The card's pool tag, reused as a chip.",
   'screens/FleetScreen.tsx <button> fab': 'TOKEN by VALUE, not by name — see FLOOR_BY_VALUE.',
   'screens/FleetScreen.tsx <button> notice-x': 'TOKEN. The notice dismiss.',
+  'skins/frame.tsx <a> skip-link':
+    'TOKEN. The frame\'s "Skip to content" link (W2 Task S2b): visually hidden until focused, '
+    + 'then `.skip-link:focus` declares the floor. Its first focusable element, so a keyboard reaches it first.',
   'screens/MailScreen.tsx <button> mail-chip': 'TOKEN. Both filter chips.',
   'screens/RunRow.tsx <button> run-abandon': 'TOKEN. The abandon door.',
   'screens/RunRow.tsx <button> run-open': 'TOKEN. The open door.',
