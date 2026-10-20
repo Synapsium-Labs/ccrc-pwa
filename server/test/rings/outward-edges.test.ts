@@ -8,6 +8,8 @@
 // A type-only edge (`import type`, every name a per-name `type`, a type query) moves nothing and is not counted.
 // The edges on the tree the day the rule landed are `outward-edges.data.ts`, held exactly: a new one is red, and an
 // entry whose edge is gone is red until it is deleted. `exemption-age.test.ts` keeps the set from going stale.
+// An exemption is a file pair: a new import line or a new name inside an exempt pair is not red until ARCH-05
+// (#551) drains the pair; a new pair is.
 import { describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import path from 'node:path';

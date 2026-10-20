@@ -19,5 +19,5 @@ export const EXEMPTION_SET_STAMPS: Readonly<Record<string, SetStamp>> = {
   'server/test/rings/host-imports.data.ts#HOST_IMPORT_EXEMPTIONS': { size: 0, reason: 'empty since ARCH-03 (#541)', since: '2026-10-20' },
   'server/test/rings/shared-imports.data.ts#SHARED_IMPORT_EXEMPTIONS': { size: 0, reason: 'empty since stage 1 landed', since: '2026-10-20' },
   'server/test/rings/mjs-node.data.ts#REACHABLE_MJS_EXEMPTIONS': { size: 0, reason: 'empty since stage 1 landed', since: '2026-10-20' },
-  'server/test/deviation-refs.test.ts#GRANDFATHERED': { size: 16, reason: "the pre-allocator D-number collisions, grandfathered by measurement; wave 10's reconciliation shrinks them", since: '2026-08-24' },
+  'server/test/deviation-refs.test.ts#GRANDFATHERED': { size: 16, reason: "re-reviewed 2026-10-20: the 16 pre-allocator D-number collisions all still collide (deviation-refs pins each member); wave 10's reconciliation drains them", since: '2026-10-20' },
 };
