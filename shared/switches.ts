@@ -82,7 +82,7 @@ export const SWITCHES = {
   [COORDINATOR_PAUSE_MARKER]: {
     storage: { marker: COORDINATOR_PAUSE_MARKER }, default: 'absent: coordination runs', owner: 'C5',
     meaning: 'Coordination is paused fleet-wide: no run is dispatched, and no coordinator can lift it itself.',
-    writer: 'hand-only',
+    writer: 'ccd coord-pause, through POST /api/coord/pause',
   },
   [RECLAIM_PAUSE_MARKER]: {
     storage: { marker: RECLAIM_PAUSE_MARKER }, default: 'absent: reclamation runs', owner: 'C4',
