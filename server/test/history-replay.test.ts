@@ -1,0 +1,5429 @@
+// deploy/history-replay.mjs: the ccrc history W2 replay driver (spec 2026-10-05 §10.2; W2 decisions W2-D50 to W2-D59).
+// The ONE test file W2 creates (W2-D5). It is listed in ci.yml's node-floor heredoc, so the 22.16.0 leg runs it on
+// every pull request; ci-pipeline.test.ts derives that list from this directory and reds when the line is missing.
+//
+// ISOLATION: every spawn runs on a mkTmp fixture HOME with historyHelpers' scrubbedEnv, which drops the session's
+// own TMUX, TMUX_PANE, CLAUDECODE, CLAUDE_CONFIG_DIR, CCRC_SESSION_GENERATION and CCRC_RECALL_* first. Children are
+// spawned with an argv array on process.execPath, never through a shell. Key-shaped fixture values are assembled at
+// run time; no fixture names a real account, host or path.
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { spawn, spawnSync } from 'node:child_process';
+import { chmodSync, closeSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import path, { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { mkTmp } from './tmpHelpers.js';
+import { REPO, scrubbedEnv } from './historyHelpers.js';
+import { EXIT, REASONS, sha256Hex } from '../../ccd/history/lib.mjs';
+import * as replay from '../../deploy/history-replay.mjs';
+import { DriverRefusal, admitAccount, readRoster } from '../../deploy/history-replay.mjs';
+// W2-4 Task 2 (the --out rule, W2-D53, RP4): aliased, so no name here collides with an import above.
+import * as t2Fs from 'node:fs';
+import * as t2Path from 'node:path';
+import { spawnSync as t2SpawnSync } from 'node:child_process';
+import { pathToFileURL as t2FileUrl } from 'node:url';
+import * as t2Drv from '../../deploy/history-replay.mjs';
+import { mkTmp as t2MkTmp } from './tmpHelpers.js';
+import { scrubbedEnv as t2Scrubbed } from './historyHelpers.js';
+// ── W2-4 Task 4: imports under t4 aliases, so no binding collides with Tasks 1–3 above ───────────────────────────
+import * as t4Fs from 'node:fs';
+import * as t4Lib from '../../ccd/history/lib.mjs';
+import * as t4Replay from '../../deploy/history-replay.mjs';
+import { mkTmp as t4MkTmp } from './tmpHelpers.js';
+import * as t5fs from 'node:fs';
+import * as t5os from 'node:os';
+import * as t5path from 'node:path';
+import { spawnSync as t5spawnSync } from 'node:child_process';
+import { afterEach as t5afterEach, vi as t5vi } from 'vitest';
+import * as t5drv from '../../deploy/history-replay.mjs';
+import { generateWrapperBody, generateWrapperBody as t5WrapperBody } from '../../shared/wrapper.mjs';
+import { rosterFromJson } from '../../shared/roster-json.mjs';
+import { mkTmp as t5MkTmp } from './tmpHelpers.js';
+// W2-4 Task 6 (W2-D55): t6-prefixed bindings, so none collides with a named import Tasks 1–5 put in this block.
+import * as t6Driver from '../../deploy/history-replay.mjs';
+import * as t6Fs from 'node:fs';
+import t6Path from 'node:path';
+import { execFileSync as t6ExecFile } from 'node:child_process';
+import { readLimits as t6ReadLimits } from '../src/limits.js';
+import { loadConfig as t6LoadConfig } from '../src/config.js';
+import { localIO as t6LocalIO } from '../src/io.js';
+import { rolloverCases as t6RolloverCases } from './fixtures/rollover.js';
+import { DEFAULT_TEST_ROSTER as T6_ROSTER } from './helpers/roster.js';
+
+const SCRIPT = path.join(REPO, 'deploy', 'history-replay.mjs');
+
+/** One driver run as the operator makes it: node on the script, an argv array, a fixture HOME, the scrubbed env plus
+ *  `extraEnv`, and the HOME as cwd so a relative path never lands in the checkout. */
+function runDriver(home: string, args: string[], extraEnv: Record<string, string> = {}): { code: number | null; stdout: string; stderr: string } {
+  const r = spawnSync(process.execPath, [SCRIPT, ...args], {
+    cwd: home, encoding: 'utf8', timeout: 60_000,
+    env: { ...scrubbedEnv(process.env), HOME: home, ...extraEnv },
+  });
+  return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
+// ── D-5985: the claim every runBatch, launchRun and step0bMechanics call needs ────────────────────────────
+// A case that calls the runner directly claims its --out first, as a subcommand does after prepareOut. `claimFor` makes
+// the claim once per --out and releases every claim after the test, so the lock never outlives a case. `claimedBatch` and
+// `claimedRun` are runBatch and launchRun with that claim added; a case that pins the claim requirement itself calls
+// the exports bare.
+type Claim = ReturnType<typeof replay.claimOut>;
+const claimsByOut = new Map<string, Claim>();
+function claimFor(out: string, liveness?: typeof replay.liveness): Claim {
+  const have = claimsByOut.get(out);
+  if (have !== undefined) return have;
+  const c = replay.claimOut(out, liveness === undefined ? {} : { liveness });
+  claimsByOut.set(out, c);
+  return c;
+}
+afterEach(() => {
+  for (const c of claimsByOut.values()) c.release();
+  claimsByOut.clear();
+});
+const claimedBatch = (jobs: Parameters<typeof replay.runBatch>[0], opts: Record<string, unknown> = {}): ReturnType<typeof replay.runBatch> =>
+  replay.runBatch(jobs, { claim: claimFor((jobs[0] as { out: string }).out), ...opts } as never);
+const claimedRun = (job: Parameters<typeof replay.launchRun>[0], opts: Record<string, unknown> = {}): ReturnType<typeof replay.launchRun> =>
+  replay.launchRun(job, { claim: claimFor((job as { out: string }).out), ...opts } as never);
+
+// ── D-5984, D-5985: helpers for the cases that run, signal and wait on real child processes ─────────────────
+const HAS_PROC = existsSync('/proc/self/stat');
+/** Field 22 of /proc/<pid>/stat, read as the driver reads it (the text after the last ')' starts at field 3). */
+const startOf = (pid: number): string => {
+  const t = readFileSync(`/proc/${pid}/stat`, 'utf8');
+  return t.slice(t.lastIndexOf(')') + 1).trim().split(/\s+/)[19]!;
+};
+/** A pid record's bytes, as the driver writes them (sorted keys, one newline). */
+const recText = (pid: number, start: string | null): string => `{"pid":${pid},"start":${start === null ? 'null' : JSON.stringify(start)}}\n`;
+/** A wait on a child that cannot hang the suite. */
+const bounded = <T,>(p: Promise<T>, ms: number, what: string): Promise<T> => {
+  let timer: NodeJS.Timeout;
+  const clock = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`timed out after ${ms} ms: ${what}`)), ms); });
+  return Promise.race([p, clock]).finally(() => clearTimeout(timer));
+};
+const pause = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+/** Poll `ok` every 50 ms for at most `ms`; true when it held. */
+async function until(ok: () => boolean, ms: number): Promise<boolean> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { if (ok()) return true; await pause(50); }
+  return ok();
+}
+/** True when no process answers to the group (ESRCH). */
+const groupGone = (pid: number): boolean => { try { process.kill(-pid, 0); return false; } catch (e) { return (e as NodeJS.ErrnoException).code === 'ESRCH'; } };
+/** Child processes a case started; killed after it (only these pids) so a failed case leaves nothing running. */
+const startedChildren: Array<ReturnType<typeof spawn>> = [];
+function sleeperChild(): ReturnType<typeof spawn> {
+  const c = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore' });
+  startedChildren.push(c);
+  return c;
+}
+/** A pid that was alive, with the start it had, and is dead and reaped now. */
+async function deadRecord(): Promise<{ pid: number; start: string | null }> {
+  const c = sleeperChild();
+  const pid = c.pid!;
+  const start = HAS_PROC ? startOf(pid) : null;
+  const closed = new Promise<void>((r) => c.once('close', () => r()));
+  c.kill('SIGKILL');
+  await bounded(closed, 20_000, 'a killed sleeper closing');
+  return { pid, start };
+}
+afterEach(() => {
+  for (const c of startedChildren) { try { c.kill('SIGKILL'); } catch { /* already gone */ } }
+  startedChildren.length = 0;
+});
+
+/** What a refusal prints: exactly one stderr line. */
+const refusalLine = (word: string, detail: string): string => `ccrc history-replay: ${word}: ${detail}\n`;
+
+// ── W2-4 Task 1: the driver's words (W2-D59, W2-D12; D-5774) ──────────────
+describe('history-replay W2-4 Task 1: the driver words (W2-D59, W2-D12; D-5774)', () => {
+  const W2_D59 = ['family-unlisted', 'family-recall-off', 'quiz-unanswerable', 'quiz-sha-mismatch',
+    'claude-version-moved', 'tree-moved', 'wrapper-moved', 'code-changed', 'limits-threshold', 'limits-stale',
+    'budget-exhausted', 'record-invalid', 'record-sha-mismatch', 'input-sha-mismatch', 'assignment-mismatch', 'out-refused'];
+  const PLAN_CHOSEN = ['args-invalid', 'in-pane', 'roster-invalid', 'account-refused', 'input-invalid', 'code-unmeasured', 'version-unmeasured', 'tree-unmeasured', 'wrapper-unmeasured'];
+  const FIX_ROUND_1 = ['run-live', 'out-in-use', 'interrupted'];   // D-5984, D-5985
+
+  it('DRIVER_REASONS is frozen, duplicate-free, and exactly W2-D59\'s sixteen words in order, then W2-4\'s nine, then fix round 1\'s three', () => {
+    expect(W2_D59).toHaveLength(16);
+    expect(Object.isFrozen(replay.DRIVER_REASONS)).toBe(true);
+    expect(new Set(replay.DRIVER_REASONS).size, 'a word is listed twice').toBe(replay.DRIVER_REASONS.length);
+    expect([...replay.DRIVER_REASONS]).toEqual([...W2_D59, ...PLAN_CHOSEN, ...FIX_ROUND_1]);
+  });
+
+  it('DRIVER_REASONS is disjoint from lib REASONS: no driver word is a CLI word (C-J)', () => {
+    const cli = Object.keys(REASONS);
+    expect(cli.length, 'lib REASONS read empty: the disjointness would hold vacuously').toBeGreaterThan(40);
+    expect(replay.DRIVER_REASONS.filter((w) => cli.includes(w))).toEqual([]);
+  });
+
+  it('DriverRefusal carries its word and detail, refuse() throws one, and a word outside DRIVER_REASONS is a TypeError', () => {
+    const r = new replay.DriverRefusal('out-refused', 'symlink');
+    expect(r).toBeInstanceOf(Error);
+    expect([r.name, r.word, r.detail, r.message]).toEqual(['DriverRefusal', 'out-refused', 'symlink', 'out-refused: symlink']);
+    expect(() => replay.refuse('in-pane', 'x')).toThrow(replay.DriverRefusal);
+    expect(() => new replay.DriverRefusal('bad-args', 'x'), 'a lib word is not a driver word').toThrow(TypeError);
+    expect(() => new replay.DriverRefusal('', 'x')).toThrow(TypeError);
+  });
+});
+
+// ── W2-4 Task 1: the argument grammar ─────────────────────────────────────
+describe('history-replay W2-4 Task 1: the argument grammar', () => {
+  /** A fixture grammar: one subcommand and one flag of each kind. */
+  const OPTS = { specs: { out: 'string', budget: 'int', dry: 'bool' } as const, subs: ['fixture-sub'] };
+  const refusalOf = (argv: string[], opts: Parameters<typeof replay.parseArgs>[1] = OPTS): [string, string] | null => {
+    try { replay.parseArgs(argv, opts); return null; } catch (e) {
+      if (e instanceof replay.DriverRefusal) return [e.word, e.detail];
+      throw e;
+    }
+  };
+
+  it('FLAG_SPECS declares exactly the seven flags W2-4 uses, frozen', () => {
+    expect(Object.isFrozen(replay.FLAG_SPECS)).toBe(true);
+    expect(replay.FLAG_SPECS).toEqual({ out: 'string', account: 'string', budget: 'int', 'writer-model': 'string',
+      'judge-model': 'string', 'arm-model': 'string', 'settings-mode': 'string' });
+  });
+
+  it('a subcommand, a string, an int and a bool parse to {sub, flags}', () => {
+    expect(replay.parseArgs(['fixture-sub', '--out', '/x/y', '--budget', '3000000', '--dry'], OPTS))
+      .toEqual({ sub: 'fixture-sub', flags: { out: '/x/y', budget: 3_000_000, dry: true } });
+    expect(replay.parseArgs(['fixture-sub'], OPTS)).toEqual({ sub: 'fixture-sub', flags: {} });
+  });
+
+  it.each([
+    [[], 'no subcommand'],
+    [['--out', '/x'], 'no subcommand'],
+    [['other-sub'], 'unknown subcommand "other-sub"'],
+    [['fixture-sub', '--nope', 'v'], 'unknown flag "--nope"'],
+    [['fixture-sub', '--out=/x'], 'unknown flag "--out=/x"'],
+    [['fixture-sub', 'stray'], 'unexpected argument "stray"'],
+    [['fixture-sub', '--out', '/a', '--out', '/b'], 'repeated flag --out'],
+    [['fixture-sub', '--dry', '--dry'], 'repeated flag --dry'],
+    [['fixture-sub', '--out'], 'missing value for --out'],
+    [['fixture-sub', '--out', '--budget', '5'], 'missing value for --out'],
+    [['fixture-sub', '--budget', '0'], '--budget wants a positive integer, got "0"'],
+    [['fixture-sub', '--budget', '-5'], '--budget wants a positive integer, got "-5"'],
+    [['fixture-sub', '--budget', '1.5'], '--budget wants a positive integer, got "1.5"'],
+    [['fixture-sub', '--budget', '1e6'], '--budget wants a positive integer, got "1e6"'],
+    [['fixture-sub', '--budget', '0x10'], '--budget wants a positive integer, got "0x10"'],
+    [['fixture-sub', '--budget', '007'], '--budget wants a positive integer, got "007"'],
+    [['fixture-sub', '--budget', '99999999999999999999'], '--budget wants a positive integer, got "99999999999999999999"'],
+  ])('argv %j is args-invalid: %s', (argv, detail) => {
+    expect(refusalOf(argv)).toEqual(['args-invalid', detail]);
+  });
+
+  it('under the driver\'s own grammar (no opts: FLAG_SPECS and HANDLERS\' keys) an unregistered subcommand is args-invalid', () => {
+    // parseArgs is called with no opts here; refusalOf's default is the fixture grammar. The name is one no task
+    // registers, so the case holds after Tasks 8 and 9 register step0a and probe, and those tasks pin their own names.
+    const own = (argv: string[]): [string, string] | null => {
+      try { replay.parseArgs(argv); return null; } catch (e) {
+        if (e instanceof replay.DriverRefusal) return [e.word, e.detail];
+        throw e;
+      }
+    };
+    expect(replay.HANDLERS.has('no-such-sub')).toBe(false);
+    expect(own(['no-such-sub', '--out', '/x'])).toEqual(['args-invalid', 'unknown subcommand "no-such-sub"']);
+    expect(own(['fixture-sub']), 'the fixture grammar is not the default').toEqual(['args-invalid', 'unknown subcommand "fixture-sub"']);
+  });
+});
+
+// ── W2-4 Task 1: RP2, the pane refusal (W2-D51, W2-D45) ───────────────────
+describe('history-replay W2-4 Task 1: RP2, the pane refusal comes first (W2-D51, W2-D45)', () => {
+  const PANE = 'TMUX_PANE is set; run the driver from a shell outside tmux';
+
+  it('paneRefusal: undefined answers null; any defined value, the empty string included, answers in-pane', () => {
+    expect(replay.paneRefusal({})).toBeNull();
+    expect(replay.paneRefusal({ TMUX_PANE: undefined, TMUX: '/tmp/fixture-sock,1,0' })).toBeNull();
+    for (const v of ['%9', '']) {
+      const r = replay.paneRefusal({ TMUX_PANE: v });
+      expect(r, JSON.stringify(v)).toBeInstanceOf(replay.DriverRefusal);
+      expect([r?.word, r?.detail]).toEqual(['in-pane', PANE]);
+    }
+  });
+
+  it.each(['%9', ''])('RP2: TMUX_PANE=%j refuses in-pane, exit 2, before anything: the --out path is not created', (pane) => {
+    const home = mkTmp('ccrc-replay-rp2-');
+    const out = path.join(home, 'replay-out');
+    const r = runDriver(home, ['step0a', '--out', out, '--account', 'up-a', '--budget', '1000'], { TMUX_PANE: pane });
+    expect(r.code).toBe(EXIT.REFUSED);
+    expect(r.stderr).toBe(refusalLine('in-pane', PANE));
+    expect(r.stdout).toBe('');
+    expect(existsSync(out), 'the --out path was created').toBe(false);
+  });
+
+  it('RP2: with TMUX_PANE set, an argv the grammar refuses still answers in-pane: the pane is checked first', () => {
+    const home = mkTmp('ccrc-replay-rp2-');
+    const r = runDriver(home, ['--no-such-flag'], { TMUX_PANE: '' });
+    expect([r.code, r.stderr]).toEqual([EXIT.REFUSED, refusalLine('in-pane', PANE)]);
+  });
+
+  it('RP2 CONTROL: without TMUX_PANE the same argv reaches the grammar, so the scrubbed env really lacks it', () => {
+    expect(scrubbedEnv({ TMUX_PANE: '%1', HOME: '/h' })).toEqual({ HOME: '/h' });
+    const home = mkTmp('ccrc-replay-rp2-');
+    const r = runDriver(home, ['--no-such-flag']);
+    expect([r.code, r.stderr]).toEqual([EXIT.REFUSED, refusalLine('args-invalid', 'no subcommand')]);
+  });
+});
+
+// ── W2-4 Task 1: main's stderr line and exit codes, and the entry guard ───
+describe('history-replay W2-4 Task 1: main answers one stderr line, exit 2 for a word and 1 for a defect', () => {
+  /** Runs `fn` with a handler registered under `sub`, and removes it afterwards (HANDLERS is module state). From Task 2
+   *  on, main sets process.umask(0o077) before parseArgs, and these cases call main in this test process (vitest's fork
+   *  pool), so the worker's umask is saved first and restored afterwards: no later case inherits 077. */
+  const withHandler = async (sub: string, h: (flags: Record<string, string | number | boolean>, env: Record<string, string | undefined>) => Promise<number>,
+    fn: () => Promise<void>): Promise<void> => {
+    replay.HANDLERS.set(sub, h);
+    const umask = process.umask(0o022);
+    process.umask(umask);
+    try { await fn(); } finally { replay.HANDLERS.delete(sub); process.umask(umask); }
+  };
+  const stderrOf = async (fn: () => Promise<number>): Promise<{ code: number; err: string }> => {
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = await fn();
+      return { code, err: spy.mock.calls.map((c) => String(c[0])).join('') };
+    } finally { spy.mockRestore(); }
+  };
+
+  it('a registered handler gets the parsed flags and the env, and its code is main\'s', async () => {
+    const seen: unknown[] = [];
+    await withHandler('fixture-sub', async (flags, env) => { seen.push(flags, env.HOME); return 0; }, async () => {
+      const r = await stderrOf(() => replay.main(['fixture-sub', '--out', '/x', '--budget', '7'], { HOME: '/fixture-home' }));
+      expect(r).toEqual({ code: 0, err: '' });
+    });
+    expect(seen).toEqual([{ out: '/x', budget: 7 }, '/fixture-home']);
+  });
+
+  it('a handler\'s DriverRefusal is one stderr line and EXIT.REFUSED (2)', async () => {
+    await withHandler('fixture-sub', async () => replay.refuse('budget-exhausted', 'spent 10 of 10'), async () => {
+      expect(await stderrOf(() => replay.main(['fixture-sub'], {})))
+        .toEqual({ code: EXIT.REFUSED, err: refusalLine('budget-exhausted', 'spent 10 of 10') });
+    });
+    expect(EXIT.REFUSED).toBe(2);
+  });
+
+  it('any other throw is a defect: one internal-error report and EXIT.INTERNAL (1)', async () => {
+    await withHandler('fixture-sub', async () => { throw new Error('fixture defect'); }, async () => {
+      const r = await stderrOf(() => replay.main(['fixture-sub'], {}));
+      expect(r.code).toBe(EXIT.INTERNAL);
+      expect(r.err).toMatch(/^ccrc history-replay: internal error: Error: fixture defect\n/);
+    });
+    expect(EXIT.INTERNAL).toBe(1);
+  });
+
+  it('spawned with no subcommand: exit 2, the one args-invalid line, nothing on stdout', () => {
+    const r = runDriver(mkTmp('ccrc-replay-main-'), []);
+    expect(r).toEqual({ code: EXIT.REFUSED, stdout: '', stderr: refusalLine('args-invalid', 'no subcommand') });
+  });
+
+  it('the entry guard: run through a symlink, main still runs (realpath), and importing the module ran nothing', () => {
+    const home = mkTmp('ccrc-replay-main-');
+    mkdirSync(path.join(home, 'bin'));
+    const link = path.join(home, 'bin', 'replay.mjs');
+    symlinkSync(SCRIPT, link);
+    // A name no task registers, so this case still holds once Tasks 8 and 9 register step0a and probe.
+    const r = spawnSync(process.execPath, [link, 'no-such-sub'], {
+      cwd: home, encoding: 'utf8', timeout: 60_000, env: { ...scrubbedEnv(process.env), HOME: home },
+    });
+    expect([r.status, r.stderr]).toEqual([EXIT.REFUSED, refusalLine('args-invalid', 'unknown subcommand "no-such-sub"')]);
+    expect(process.exitCode ?? 0, 'importing the driver set an exit code').toBe(0);
+  });
+});
+
+// ── W2-4 Task 1: W2-D51, no deploy/history-*.mjs loads node:sqlite ────────
+describe('history-replay W2-4 Task 1: no deploy/history-*.mjs loads node:sqlite (W2-D51)', () => {
+  /** Any quoted `node:sqlite` specifier: a static import, a dynamic import() and a createRequire call all quote it.
+   *  KNOWN WIDTH: a specifier assembled from pieces is not seen; review is the backstop. A quoted mention inside a
+   *  comment reds too, which is the safe side. */
+  const SQLITE_LOAD = /(['"`])node:sqlite\1/;
+  const DEPLOY = path.join(REPO, 'deploy');
+  const historyMjs = (): string[] => readdirSync(DEPLOY).filter((f) => /^history-[\w.-]*\.mjs$/.test(f)).sort();
+
+  it('CONTROL: the pattern sees each load form on a planted line, and not prose; the corpus holds the driver', () => {
+    for (const planted of [
+      "import { DatabaseSync } from 'node:sqlite';",
+      'const { DatabaseSync } = await import("node:sqlite");',
+      "const sqlite = createRequire(import.meta.url)('node:sqlite');",
+      'const s = require(`node:sqlite`);',
+    ]) expect(SQLITE_LOAD.test(planted), planted).toBe(true);
+    expect(SQLITE_LOAD.test('// every store read opens through openReader, never node:sqlite directly')).toBe(false);
+    expect(SQLITE_LOAD.test("import { DatabaseSync } from 'node:sqlite3';")).toBe(false);
+    expect(historyMjs()).toContain('history-replay.mjs');
+  });
+
+  it('no deploy/history-*.mjs spells a node:sqlite load: every store read opens through store.mjs openReader', () => {
+    const loaders = historyMjs().filter((f) => readFileSync(path.join(DEPLOY, f), 'utf8').split('\n').some((l) => SQLITE_LOAD.test(l)));
+    expect(loaders).toEqual([]);
+  });
+});
+
+
+// ── W2-4 Task 2: the --out rule (W2-D53; spec §10.2 "creates 0700 under umask 077", "refuses an --out inside a git
+// tree"; pin RP4) ──────────────────────────────────────────────────────────────────────────────────────────────────
+// prepareOut is called in-process: it reads only the paths it is handed and the uid parameter. main's umask is
+// measured in a child process, because process.umask would otherwise change this test worker's own.
+describe('W2-4 Task 2: the --out rule, created 0700 with its marker, reused only when it is still exactly that (W2-D53, RP4)', () => {
+  const T2_SCRIPT = t2Path.resolve(__dirname, '../../deploy/history-replay.mjs');
+  const asRoot = process.getuid?.() === 0;
+  /** A fresh fixture directory, by its realpath (a darwin TMPDIR is a symlink). */
+  const base = (): string => t2Fs.realpathSync(t2MkTmp('ccrc-replay-out-'));
+  /** The refusal a call throws, or null when it returns; any other throw fails the case. */
+  const refusalOf = (fn: () => unknown): { word: string; detail: string } | null => {
+    try { fn(); return null; } catch (e) {
+      if (e instanceof t2Drv.DriverRefusal) return { word: e.word, detail: e.detail };
+      throw e;
+    }
+  };
+  const out = (word: string): { word: string; detail: string } => ({ word: 'out-refused', detail: word });
+  const modeOf = (p: string): string => (t2Fs.lstatSync(p).mode & 0o7777).toString(8).padStart(4, '0');
+  /** A valid --out, made by prepareOut itself. */
+  const made = (b: string): string => t2Drv.prepareOut(t2Path.join(b, 'out'));
+
+  it('CONTROL: a fresh fixture is outside any git tree, and the walk sees a planted .git directory and a planted .git file above a path that does not exist yet', () => {
+    const b = base();
+    expect(t2Drv.insideGitTree(b), 'the run temp dir sits inside a git tree: every --out case below would refuse').toEqual({ state: 'outside' });
+    t2Fs.mkdirSync(t2Path.join(b, 'repo', '.git'), { recursive: true });
+    expect(t2Drv.insideGitTree(t2Path.join(b, 'repo', 'a', 'b'))).toEqual({ state: 'inside', at: t2Path.join(b, 'repo') });
+    t2Fs.mkdirSync(t2Path.join(b, 'wt'));
+    t2Fs.writeFileSync(t2Path.join(b, 'wt', '.git'), 'gitdir: /nowhere/.git/worktrees/wt\n');
+    expect(t2Drv.insideGitTree(t2Path.join(b, 'wt', 'out'))).toEqual({ state: 'inside', at: t2Path.join(b, 'wt') });
+  });
+
+  it.each([
+    ['a .git directory', (r: string) => t2Fs.mkdirSync(t2Path.join(r, '.git'))],
+    ['a .git file (a worktree)', (r: string) => t2Fs.writeFileSync(t2Path.join(r, '.git'), 'gitdir: /nowhere/.git/worktrees/r\n')],
+  ])('RP4: an --out under %s is refused in-git-tree and never created', (_what, plant) => {
+    const b = base();
+    const repo = t2Path.join(b, 'repo');
+    t2Fs.mkdirSync(repo);
+    plant(repo);
+    const o = t2Path.join(repo, 'out');
+    expect(refusalOf(() => t2Drv.prepareOut(o))).toEqual(out(`in-git-tree ${repo}`));
+    expect(t2Fs.existsSync(o), 'the refused --out was created').toBe(false);
+  });
+
+  it('RP4: a created --out is mode 0700 and holds the marker with OUT_KIND, and prepareOut answers its realpath', () => {
+    expect(t2Drv.OUT_MARKER).toBe('.ccrc-history-replay');
+    expect(t2Drv.OUT_KIND).toBe('ccrc-history-replay-out');
+    const b = base();
+    const o = t2Path.join(b, 'out');
+    expect(t2Drv.prepareOut(o)).toBe(t2Fs.realpathSync(o));
+    expect(modeOf(o)).toBe('0700');
+    const marker = t2Path.join(o, t2Drv.OUT_MARKER);
+    expect(t2Fs.lstatSync(marker).isFile()).toBe(true);
+    expect(modeOf(marker)).toBe('0600');
+    expect(t2Fs.readFileSync(marker, 'utf8')).toBe(t2Drv.OUT_KIND);
+    expect(t2Fs.readdirSync(o)).toEqual([t2Drv.OUT_MARKER]);
+  });
+
+  it('a clean reuse is accepted and keeps what is there: an interrupted batch resumes (W2-D53)', () => {
+    const b = base();
+    const o = made(b);
+    t2Fs.writeFileSync(t2Path.join(o, 'finished.run.json'), '{}\n');
+    expect(t2Drv.prepareOut(o)).toBe(o);
+    expect(t2Drv.prepareOut(`${o}/`), 'a trailing slash names the same directory').toBe(o);
+    expect(t2Fs.readdirSync(o).sort()).toEqual([t2Drv.OUT_MARKER, 'finished.run.json'].sort());
+  });
+
+  /** Each reuse that W2-D53 refuses, planted beside a fresh base: [what, plant -> the --out to pass, the detail]. */
+  const REUSE: ReadonlyArray<readonly [string, (b: string) => string, string]> = [
+    ['a symlink to a valid --out', (b) => { const l = t2Path.join(b, 'link'); t2Fs.symlinkSync(made(b), l); return l; }, 'symlink'],
+    ['the same symlink named with a trailing slash', (b) => { const l = t2Path.join(b, 'link'); t2Fs.symlinkSync(made(b), l); return `${l}/`; }, 'symlink'],
+    ['a dangling symlink', (b) => { const l = t2Path.join(b, 'link'); t2Fs.symlinkSync(t2Path.join(b, 'target'), l); return l; }, 'symlink'],
+    ['a regular file', (b) => { const f = t2Path.join(b, 'out'); t2Fs.writeFileSync(f, ''); return f; }, 'not-directory'],
+    ['mode 0750', (b) => { const o = made(b); t2Fs.chmodSync(o, 0o750); return o; }, 'mode 0750'],
+    ['mode 0700 with the sticky bit', (b) => { const o = made(b); t2Fs.chmodSync(o, 0o1700); return o; }, 'mode 1700'],
+    ['an empty 0700 directory with no marker', (b) => { const o = t2Path.join(b, 'out'); t2Fs.mkdirSync(o, { mode: 0o700 }); t2Fs.chmodSync(o, 0o700); return o; }, 'marker-absent'],
+    ['a marker holding another word', (b) => { const o = made(b); t2Fs.writeFileSync(t2Path.join(o, t2Drv.OUT_MARKER), 'something-else'); return o; }, 'marker-mismatch'],
+    ['a marker holding OUT_KIND and a newline', (b) => { const o = made(b); t2Fs.writeFileSync(t2Path.join(o, t2Drv.OUT_MARKER), `${t2Drv.OUT_KIND}\n`); return o; }, 'marker-mismatch'],
+    ['a marker that is a directory', (b) => { const o = made(b); const m = t2Path.join(o, t2Drv.OUT_MARKER); t2Fs.rmSync(m); t2Fs.mkdirSync(m); return o; }, 'marker-mismatch'],
+    // D-5814: a symlink is never followed, even to a file holding the right text (the isFile guard, W2-D53's marker rule).
+    ['a marker that is a symlink to a file holding OUT_KIND', (b) => {
+      const o = made(b); const m = t2Path.join(o, t2Drv.OUT_MARKER); const target = t2Path.join(b, 'marker-target');
+      t2Fs.writeFileSync(target, t2Drv.OUT_KIND); t2Fs.rmSync(m); t2Fs.symlinkSync(target, m); return o;
+    }, 'marker-mismatch'],
+  ];
+
+  it.each(REUSE)('W2-D53: %s is refused, and nothing is created in its place', (_what, plant, detail) => {
+    const b = base();
+    const o = plant(b);
+    const before = t2Fs.readdirSync(b).sort();
+    expect(refusalOf(() => t2Drv.prepareOut(o))).toEqual(out(detail));
+    expect(t2Fs.readdirSync(b).sort(), 'the refusal created something').toEqual(before);
+  });
+
+  // D-5814: a FIFO marker must be refused without being opened, or readFileSync blocks the driver forever. The call runs
+  // in a child with a deadline (the FIFO cases of Task 3), and a CONTROL shows the same child accepts a regular marker.
+  const MARKER_CHILD = [
+    'const d = await import(process.env.MARKER_DRIVER_URL);',
+    'try { process.stdout.write("accepted " + d.prepareOut(process.env.MARKER_OUT)); }',
+    'catch (e) { if (!(e instanceof d.DriverRefusal)) throw e; process.stdout.write(e.word + " " + e.detail); }',
+  ].join('\n');
+  const markerChild = (o: string) => spawnSync(process.execPath, ['--input-type=module', '-e', MARKER_CHILD], {
+    env: { ...scrubbedEnv(process.env), MARKER_DRIVER_URL: pathToFileURL(T2_SCRIPT).href, MARKER_OUT: o }, encoding: 'utf8', timeout: 10_000,
+  });
+  it('D-5814: a marker that is a FIFO is refused marker-mismatch without being opened (child with a deadline); a regular marker is accepted by the same child', () => {
+    const o = made(base());
+    const marker = t2Path.join(o, t2Drv.OUT_MARKER);
+    const control = markerChild(o);
+    expect(control.status, control.stderr).toBe(0);
+    expect(control.stdout, 'CONTROL').toBe(`accepted ${o}`);
+    t2Fs.rmSync(marker);
+    const mk = spawnSync('mkfifo', [marker], { encoding: 'utf8' });
+    expect(mk.status, mk.stderr).toBe(0);
+    const r = markerChild(o);
+    expect(r.signal, `prepareOut blocked on the FIFO marker: ${r.stderr}`).toBeNull();
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toBe('out-refused marker-mismatch');
+  });
+
+  it('W2-D53: an --out another uid owns is refused foreign-owner (the uid is a parameter, so no second account is needed)', () => {
+    const o = made(base());
+    expect(refusalOf(() => t2Drv.prepareOut(o, process.getuid!() + 1))).toEqual(out('foreign-owner'));
+    expect(t2Drv.prepareOut(o, process.getuid!()), 'CONTROL: the caller\'s own uid is accepted').toBe(o);
+  });
+
+  it('a relative --out is refused, and a missing parent is never created: no recursive create', () => {
+    expect(refusalOf(() => t2Drv.prepareOut('rel/out'))).toEqual(out('relative'));
+    expect(refusalOf(() => t2Drv.prepareOut(''))).toEqual(out('relative'));
+    const b = base();
+    expect(refusalOf(() => t2Drv.prepareOut(t2Path.join(b, 'no', 'such', 'out')))).toEqual(out('parent-absent'));
+    expect(t2Fs.existsSync(t2Path.join(b, 'no')), 'a missing parent was created').toBe(false);
+  });
+
+  it.skipIf(asRoot)('an ancestor the walk cannot lstat is unmeasured, and unmeasured refuses: never read as outside', () => {
+    const b = base();
+    const locked = t2Path.join(b, 'locked');
+    t2Fs.mkdirSync(locked);
+    t2Fs.chmodSync(locked, 0o000);
+    try {
+      const o = t2Path.join(locked, 'out');
+      expect(t2Drv.insideGitTree(o)).toEqual({ state: 'unmeasured', at: o, code: 'EACCES' });
+      expect(refusalOf(() => t2Drv.prepareOut(o))).toEqual(out(`git-unmeasured ${o} EACCES`));
+    } finally {
+      t2Fs.chmodSync(locked, 0o700);
+    }
+    expect(t2Fs.readdirSync(locked), 'the refused --out was created').toEqual([]);
+  });
+
+  it('main sets umask 077 before any file act: a file the handler writes with the default mode lands 0600 (child process)', () => {
+    const b = base();
+    const o = t2Path.join(b, 'out');
+    // A handler registered for this case only, in a child that starts under umask 022: only main's own umask can
+    // make the probe 0600. Argv arrays, never a shell.
+    const code = [
+      `const d = await import(${JSON.stringify(t2FileUrl(T2_SCRIPT).href)});`,
+      'const fs = await import(\'node:fs\');',
+      'process.umask(0o022);',
+      'd.HANDLERS.set(\'t2-umask\', async (flags) => { const real = d.prepareOut(flags.out); fs.writeFileSync(real + \'/probe\', \'x\'); return 0; });',
+      `process.exitCode = await d.main(['t2-umask', '--out', ${JSON.stringify(o)}], { HOME: ${JSON.stringify(b)} });`,
+    ].join('\n');
+    const r = t2SpawnSync(process.execPath, ['--input-type=module', '-e', code],
+      { encoding: 'utf8', env: { ...t2Scrubbed(process.env), HOME: b }, timeout: 60_000 });
+    expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(modeOf(t2Path.join(o, 'probe')), 'main set no umask 077 before the handler').toBe('0600');
+    expect(modeOf(o)).toBe('0700');
+  });
+
+  it('the driver sets its umask once, to 077', () => {
+    const src = t2Fs.readFileSync(T2_SCRIPT, 'utf8');
+    expect(src.match(/process\.umask\(/g) ?? []).toHaveLength(1);
+    expect(src).toContain('process.umask(0o077);');
+  });
+});
+
+// ── W2-4 Task 3: account admission from the roster, before any spawn (W2-D52; RP3-admission, RP9) ─────────────────
+// Function level, on fixture HOMEs only. The 'before any spawn' half of RP3 and RP9 (the stub's log absent, no stream
+// file under --out) is Task 8's, through the step0a subcommand. No fixture holds a key: admission never opens a
+// secrets file, so each one holds a comment line.
+// The three declarations below are MODULE-LEVEL: Tasks 5, 6, 8 and 9 call writeRoster, and Task 8 rosters
+// FIXTURE_ACCOUNTS, from their own describes.
+
+/** One roster account in rosterFromJson's grammar; `extra` overrides the defaults. */
+const fixtureAccount = (id: string, exec: Record<string, unknown>, extra: Record<string, unknown> = {}): Record<string, unknown> =>
+  ({ id, label: id, configDirSuffix: `.${id}`, exec, homeAble: false, telemetry: 'none', ...extra });
+/** The twelve fixture rows. gen-u declares no provider, so it reads as anthropic (the roster's default, ruled). */
+const FIXTURE_ACCOUNTS = [
+  fixtureAccount('up-a', { kind: 'upstream' }, { configDirSuffix: '.claude', homeAble: true, telemetry: 'anthropic' }),
+  fixtureAccount('gen-a', { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/gen-a.env' }),
+  fixtureAccount('gen-o', { kind: 'generated', provider: 'openai', secretsFile: '.cc-secrets/gen-o.env' }),
+  fixtureAccount('cx-a', { kind: 'codex', provider: 'openai', proxyPort: 41001, litellmPort: 41002, authDir: '.cx-a-auth' }),
+  fixtureAccount('ext-n', { kind: 'external' }),
+  fixtureAccount('ext-a', { kind: 'external', provider: 'anthropic', secretsFile: '.cc-secrets/ext-a.env' }),
+  fixtureAccount('gen-h', { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/gen-h.env' }, { hidden: true }),
+  fixtureAccount('gen-u', { kind: 'generated', secretsFile: '.cc-secrets/gen-u.env' }),
+  fixtureAccount('gen-s', { kind: 'generated', provider: 'anthropic' }),
+  fixtureAccount('gen-m', { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/gen-m.env' }),
+  fixtureAccount('gen-r', { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/gen-r.env' }),
+  fixtureAccount('gen-d', { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/gen-d.env' }),
+];
+/** `$HOME/.ccrc/accounts.json`, as the operator's roster. */
+function writeRoster(home: string, accounts: object[]): void {
+  mkdirSync(join(home, '.ccrc'), { recursive: true, mode: 0o700 });
+  writeFileSync(join(home, '.ccrc', 'accounts.json'), `${JSON.stringify({ version: 1, accounts }, null, 2)}\n`);
+}
+
+describe('W2-4 Task 3: account admission from the roster (W2-D52, RP3-admission, RP9)', () => {
+  const ADMIT_DRIVER = fileURLToPath(new URL('../../deploy/history-replay.mjs', import.meta.url));
+  const IS_ROOT = (process.getuid?.() ?? 1) === 0;
+  const SECRETS_TEXT = '# fixture secrets file: admission stats it and never opens it\n';
+  const acct = fixtureAccount;
+  const ACCOUNTS = FIXTURE_ACCOUNTS;
+  /** A fixture HOME with ACCOUNTS rostered. Every declared secrets file is a readable regular file except gen-m's
+   *  (never planted), gen-r's (mode 000) and gen-d's (a directory). A secrets file is planted even where the row is
+   *  refused for something else, so each refusal below is that row's own and never a missing file's. */
+  function admitHome(): string {
+    const home = mkTmp('ccrc-replay-admit-');
+    writeRoster(home, ACCOUNTS);
+    mkdirSync(join(home, '.cc-secrets'), { mode: 0o700 });
+    for (const id of ['gen-a', 'gen-o', 'ext-a', 'gen-h', 'gen-u', 'gen-r']) {
+      writeFileSync(join(home, '.cc-secrets', `${id}.env`), SECRETS_TEXT, { mode: 0o600 });
+    }
+    chmodSync(join(home, '.cc-secrets', 'gen-r.env'), 0o000);
+    mkdirSync(join(home, '.cc-secrets', 'gen-d.env'));
+    return home;
+  }
+  /** A DriverRefusal as {word, detail}, or 'passed'; anything else is rethrown. */
+  function refusalOf(f: () => unknown): { word: string; detail: string } | 'passed' {
+    try {
+      f();
+      return 'passed';
+    } catch (e) {
+      if (e instanceof DriverRefusal) return { word: e.word, detail: e.detail };
+      throw e;
+    }
+  }
+  /** admitAccount's verdict on `id` over one readRoster of `home`. */
+  function verdict(home: string, id: string): { word: string; detail: string } | 'passed' {
+    const { json, roster } = readRoster(home);
+    return refusalOf(() => admitAccount(json, roster, id, home));
+  }
+
+  it('readRoster parses the file once and answers the parsed object beside its validation', () => {
+    const home = admitHome();
+    const { json, roster } = readRoster(home);
+    expect((json as { accounts: Array<{ id: string }> }).accounts.map((a) => a.id)).toEqual(ACCOUNTS.map((a) => a['id']));
+    expect((json as { accounts: Array<{ hidden?: boolean }> }).accounts[6]!.hidden, 'hidden is read from the parsed object').toBe(true);
+    expect(roster.upstreamId).toBe('up-a');
+    expect(Object.keys(roster.accounts[6]!), 'rosterFromJson returns no hidden: why admission reads the parsed object').not.toContain('hidden');
+  });
+
+  it('readRoster refuses roster-invalid: absent, unreadable with its code, not JSON, and RosterInvalid with its message', () => {
+    const absent = mkTmp('ccrc-replay-roster-');
+    expect(refusalOf(() => readRoster(absent))).toEqual({ word: 'roster-invalid', detail: 'absent' });
+    const dir = mkTmp('ccrc-replay-roster-');
+    mkdirSync(join(dir, '.ccrc', 'accounts.json'), { recursive: true });
+    expect(refusalOf(() => readRoster(dir))).toEqual({ word: 'roster-invalid', detail: 'unreadable EISDIR' });
+    const garbled = mkTmp('ccrc-replay-roster-');
+    mkdirSync(join(garbled, '.ccrc'));
+    writeFileSync(join(garbled, '.ccrc', 'accounts.json'), '{"version": 1, "accounts": [');
+    expect(refusalOf(() => readRoster(garbled))).toEqual({ word: 'roster-invalid', detail: 'not-json' });
+    const twoUp = mkTmp('ccrc-replay-roster-');
+    writeRoster(twoUp, [ACCOUNTS[0]!, acct('up-b', { kind: 'upstream' })]);
+    expect(refusalOf(() => readRoster(twoUp))).toEqual({
+      word: 'roster-invalid',
+      detail: 'the roster has 2 upstream accounts: exactly one account must have exec.kind "upstream".',
+    });
+  });
+
+  it('admits upstream and generated/anthropic (RP3), each with its launch path and config dir from the roster; a generated account with no declared provider reads as anthropic', () => {
+    const home = admitHome();
+    const { json, roster } = readRoster(home);
+    expect(admitAccount(json, roster, 'up-a', home)).toEqual({
+      accountId: 'up-a', kind: 'upstream', launcher: join(home, '.local', 'bin', 'up-a'),
+      configDir: join(home, '.claude'), wrapperPath: null, secretsPath: null,
+    });
+    expect(admitAccount(json, roster, 'gen-a', home)).toEqual({
+      accountId: 'gen-a', kind: 'generated', launcher: join(home, '.local', 'bin', 'gen-a'),
+      configDir: join(home, '.gen-a'), wrapperPath: join(home, '.local', 'bin', 'gen-a'),
+      secretsPath: join(home, '.cc-secrets', 'gen-a.env'),
+    });
+    // gen-u declares no provider: the roster's own default reads it as anthropic (coordinator ruling), so it is admitted.
+    expect(admitAccount(json, roster, 'gen-u', home)).toEqual({
+      accountId: 'gen-u', kind: 'generated', launcher: join(home, '.local', 'bin', 'gen-u'),
+      configDir: join(home, '.gen-u'), wrapperPath: join(home, '.local', 'bin', 'gen-u'),
+      secretsPath: join(home, '.cc-secrets', 'gen-u.env'),
+    });
+  });
+
+  const REFUSED: Array<[string, string, string]> = [
+    ['cx-a', 'kind-codex', 'a codex account (RP3)'],
+    ['ext-n', 'kind-external', 'an external account with no declared provider (RP3)'],
+    ['ext-a', 'kind-external', 'an external account declaring anthropic, its secrets file readable (RP3)'],
+    ['gen-o', 'provider-openai', 'a generated account declaring openai, its secrets file readable (RP3)'],
+    ['gen-h', 'hidden', 'a hidden generated/anthropic account, its secrets file readable'],
+    ['gen-s', 'secrets-undeclared', 'a generated/anthropic account with no declared secretsFile'],
+    ['gen-m', 'secrets-absent', 'a declared secretsFile that is absent (RP9)'],
+    ['gen-d', 'secrets-not-regular', 'a declared secretsFile that is a directory (RP9)'],
+    ['nobody', 'unknown-id', 'an id the roster does not hold'],
+  ];
+  it.each(REFUSED)('%s is refused account-refused %s: %s', (id, detail) => {
+    expect(verdict(admitHome(), id)).toEqual({ word: 'account-refused', detail });
+  });
+
+  it.skipIf(IS_ROOT)('a declared secretsFile this user cannot read is refused secrets-unreadable (RP9; skipped as root)', () => {
+    expect(verdict(admitHome(), 'gen-r')).toEqual({ word: 'account-refused', detail: 'secrets-unreadable' });
+  });
+
+  it('the secretsFile is stat\'ed through a symlink, as the wrapper\'s [ -r ] reads it: to a readable file admitted, dangling absent', () => {
+    const home = admitHome();
+    const real = join(home, 'elsewhere.env');
+    writeFileSync(real, SECRETS_TEXT, { mode: 0o600 });
+    symlinkSync(real, join(home, '.cc-secrets', 'gen-m.env'));
+    expect(verdict(home, 'gen-m')).toBe('passed');
+    const dangling = admitHome();
+    symlinkSync(join(dangling, 'nowhere.env'), join(dangling, '.cc-secrets', 'gen-m.env'));
+    expect(verdict(dangling, 'gen-m')).toEqual({ word: 'account-refused', detail: 'secrets-absent' });
+  });
+
+  it('an upstream account whose config dir is not exactly $HOME/.claude is refused upstream-config-dir', () => {
+    const home = mkTmp('ccrc-replay-admit-');
+    writeRoster(home, [acct('up-b', { kind: 'upstream' }, { homeAble: true, telemetry: 'anthropic' })]);
+    expect(verdict(home, 'up-b')).toEqual({ word: 'account-refused', detail: 'upstream-config-dir' });
+  });
+
+  // The json/roster disagreement is the caller's defect, never an account's refusal: a TypeError (main answers exit 1),
+  // not a DriverRefusal (exit 2). Both halves: a row whose exec kind differs from the roster's, and a row that is gone
+  // (D-5801: the plan's interface states this guard, and its test block had no case for it).
+  it('a parsed json that disagrees with its roster about an account is a TypeError, never a refusal (caller defect)', () => {
+    const home = admitHome();
+    const { json, roster } = readRoster(home);
+    const kindSwapped = structuredClone(json);
+    kindSwapped.accounts.find((a: { id: string }) => a.id === 'up-a').exec.kind = 'generated';
+    const rowGone = structuredClone(json);
+    rowGone.accounts = rowGone.accounts.filter((a: { id: string }) => a.id !== 'up-a');
+    for (const bad of [kindSwapped, rowGone]) {
+      let thrown: unknown = null;
+      try {
+        admitAccount(bad, roster, 'up-a', home);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(TypeError);
+      expect(thrown).not.toBeInstanceOf(DriverRefusal);
+    }
+    // CONTROL: the undamaged pair admits the same account.
+    expect(admitAccount(json, roster, 'up-a', home).kind).toBe('upstream');
+  });
+
+  // RP9's "no credentials file is read", measured: a FIFO with no writer blocks whoever opens it, so admission run in
+  // a child with a deadline returns promptly only if it never opened one. CONTROL: a child that does open it is killed.
+  // The driver URL rides the env, never argv: with `-e`, process.argv[1] stays unset, so the entry guard never runs main.
+  const ADMIT_CHILD = [
+    'const d = await import(process.env.ADMIT_DRIVER_URL);',
+    'const home = process.env.HOME;',
+    'const { json, roster } = d.readRoster(home);',
+    'const out = {};',
+    "for (const id of ['gen-m', 'gen-a', 'up-a']) {",
+    '  try { out[id] = d.admitAccount(json, roster, id, home).kind; }',
+    '  catch (e) { if (!(e instanceof d.DriverRefusal)) throw e; out[id] = e.detail; }',
+    '}',
+    'process.stdout.write(JSON.stringify(out));',
+  ].join('\n');
+  /** A FIFO at `<configDir>/.credentials.json` for gen-m, gen-a and up-a; the name is assembled, never spelled. */
+  function plantCredentialFifos(home: string): string[] {
+    const fifos = ['.gen-m', '.gen-a', '.claude'].map((dir) => join(home, dir, ['.credentials', 'json'].join('.')));
+    for (const f of fifos) {
+      mkdirSync(join(f, '..'), { recursive: true, mode: 0o700 });
+      const r = spawnSync('mkfifo', [f], { encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(lstatSync(f).isFIFO()).toBe(true);
+    }
+    return fifos;
+  }
+
+  it('admission never opens a config dir\'s credentials file: planted as FIFOs, admission returns promptly (RP9)', () => {
+    const home = admitHome();
+    plantCredentialFifos(home);
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', ADMIT_CHILD], {
+      env: { ...scrubbedEnv(process.env), HOME: home, ADMIT_DRIVER_URL: pathToFileURL(ADMIT_DRIVER).href },
+      encoding: 'utf8', timeout: 15_000,
+    });
+    expect(r.signal, `admission blocked on a FIFO: ${r.stderr}`).toBeNull();
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ 'gen-m': 'secrets-absent', 'gen-a': 'generated', 'up-a': 'upstream' });
+  });
+
+  it('CONTROL: a child that opens one of those FIFOs is killed at its deadline, so the probe above can see a read', () => {
+    const home = admitHome();
+    const [fifo] = plantCredentialFifos(home);
+    const r = spawnSync(process.execPath, ['-e', 'require("node:fs").readFileSync(process.argv[1])', fifo!], {
+      env: { ...scrubbedEnv(process.env), HOME: home }, encoding: 'utf8', timeout: 2_000,
+    });
+    expect(r.signal).toBe('SIGTERM');
+  });
+
+  it('the driver never spells a credentials file name', () => {
+    expect(readFileSync(ADMIT_DRIVER, 'utf8')).not.toMatch(/credentials\.json/);
+  });
+});
+
+// ── W2-4 Task 4: spawned text, the stream-json reader and the spend ledger (W2-D54, W2-D51, W2-D55) ─────────────
+// Pure or small: no spawn and no HOME. Redaction runs over a pair index the test builds with makePairIndex, standing
+// in for the index W2-5a passes once per run. The secret is assembled at runtime from parts and never written whole.
+// A mkTmp directory stands in for --out.
+describe('W2-4 Task 4: spawned text, the stream-json reader and the spend ledger', () => {
+  const SECRET = ['q7v', 'k2m9', 'x4p8', 'w3n6', 'z5r1', 'h8t2', 'j6y4', 'c9d3', 'b1f7', 'g5s'].join('');
+  const IDX = t4Lib.makePairIndex([{ len: SECRET.length, sha256: t4Lib.sha256Hex(SECRET) }]);
+  /** A tool_result whose secret starts 20 code points before the cut and ends 18 after it, with text after it, so the
+   *  cut bites after redaction too. */
+  const STRADDLE = `${'a '.repeat(1990)}${SECRET} ${'b '.repeat(100)}`;
+  const field = (text: string, rawLen: number = Buffer.byteLength(text)) => ({ text, rawLen });
+  const points = (s: string): number => Array.from(s).length;
+  /** The text of a 'text' answer; any other answer fails the case. */
+  const textOf = (r: { state: string }): string => {
+    expect(r.state).toBe('text');
+    return (r as unknown as { text: string }).text;
+  };
+
+  it('the fixture straddles the cut: the secret starts before code point 4,000 and ends after it', () => {
+    expect(t4Replay.TOOL_RESULT_CUT).toBe(4000);
+    const at = STRADDLE.indexOf(SECRET);
+    expect(at).toBeLessThan(t4Replay.TOOL_RESULT_CUT);
+    expect(at + SECRET.length).toBeGreaterThan(t4Replay.TOOL_RESULT_CUT);
+  });
+
+  it('W2-D54 order: a secret straddling code point 4,000 is redacted whole before the cut, and no prefix of it survives', () => {
+    const text = textOf(t4Replay.toolResultText(field(STRADDLE), IDX));
+    expect(text, "the secret's head survived the cut").not.toContain(SECRET.slice(0, 6));
+    expect(text).toContain(t4Lib.REDACTED_MARK);
+    expect(points(text)).toBe(t4Replay.TOOL_RESULT_CUT);
+    // CONTROL: cut first and redact afterwards, and the head the cut leaves matches no (length, sha256) pair.
+    expect(t4Lib.redactField(t4Replay.cutToolResult(STRADDLE), IDX)).toContain(SECRET.slice(0, 20));
+  });
+
+  it('redactForSpawn passes the WHOLE field through redactField and never cuts it', () => {
+    const long = `${'c '.repeat(4000)}${SECRET} end`;
+    const r = t4Replay.redactForSpawn(field(long), IDX);
+    expect(r).toEqual({ state: 'text', text: t4Lib.redactField(long, IDX) });
+    expect(textOf(r)).not.toContain(SECRET);
+    expect(points(textOf(r))).toBeGreaterThan(t4Replay.TOOL_RESULT_CUT);
+  });
+
+  it('a field over blobOverDecodeCap is discarded, never truncated or decoded; at the cap it is redacted', () => {
+    const over = t4Lib.BLOB_DECODE_MAX + 1;
+    const discard = { state: 'discard', why: 'over-decode-cap' };
+    expect(t4Replay.redactForSpawn(field(STRADDLE, over), IDX)).toEqual(discard);
+    expect(t4Replay.toolResultText(field(STRADDLE, over), IDX)).toEqual(discard);
+    expect(t4Replay.redactForSpawn({ text: STRADDLE, rawLen: '12' as unknown as number }, IDX), "a non-numeric raw_len is over the cap, as lib's reader holds")
+      .toEqual(discard);
+    expect(t4Replay.redactForSpawn(field('ok', t4Lib.BLOB_DECODE_MAX), IDX)).toEqual({ state: 'text', text: 'ok' });
+  });
+
+  it('cutToolResult keeps the first 4,000 code points and never splits a surrogate pair', () => {
+    const astral = String.fromCodePoint(0x1f600);
+    const cut = t4Replay.cutToolResult(astral.repeat(4001));
+    expect(points(cut)).toBe(4000);
+    expect(cut.length).toBe(8000);
+    expect(t4Replay.cutToolResult(`${'a'.repeat(3999)}${astral}tail`)).toBe(`${'a'.repeat(3999)}${astral}`);
+    expect(t4Replay.cutToolResult('short')).toBe('short');
+  });
+
+  it("the driver never names lib's display-window redaction (CONTROL: the pattern sees a planted line)", () => {
+    const NAME = /\bredactDisplayWindow\b/;
+    expect(NAME.test("import { redactDisplayWindow } from '../ccd/history/lib.mjs';")).toBe(true);
+    expect(t4Fs.readFileSync(new URL('../../deploy/history-replay.mjs', import.meta.url), 'utf8')).not.toMatch(NAME);
+  });
+
+  // ── the stream-json reader ──
+  const SID = '4d1c9e2a-7b3f-4a6c-9d8e-1f2a3b4c5d6e';
+  /** Stream lines: an object is one JSON line, a string is written as it is. */
+  const lines = (...events: unknown[]): string => `${events.map((e) => (typeof e === 'string' ? e : JSON.stringify(e))).join('\n')}\n`;
+  const usage = (input: number, cacheCreation: number, cacheRead: number, output: number) =>
+    ({ input_tokens: input, cache_creation_input_tokens: cacheCreation, cache_read_input_tokens: cacheRead, output_tokens: output });
+  /** An init event with no `plugins` field: absent, so it must read null. `mcp_servers` is present and empty. */
+  const INIT = { type: 'system', subtype: 'init', session_id: SID, model: 'model-a', tools: ['Bash', 'Agent'], mcp_servers: [], skills: ['ccrc-history'], slash_commands: ['compact'] };
+  /** One assistant message written as two content-block events, each repeating the message's id and usage. */
+  const A1_TEXT = { type: 'assistant', message: { id: 'msg_1', role: 'assistant', content: [{ type: 'text', text: 'running it' }], usage: usage(10, 20, 30, 4) } };
+  const A1_TOOL = { type: 'assistant', message: { id: 'msg_1', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'true' } }], usage: usage(10, 20, 30, 4) } };
+  const U1 = { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok', is_error: false }] } };
+  const A2 = { type: 'assistant', message: { id: 'msg_2', role: 'assistant', content: [{ type: 'text', text: 'done' }], usage: usage(1, 2, 3, 5) } };
+  const DENIAL = { tool_name: 'Bash', tool_use_id: 'toolu_9', tool_input: { command: 'cat x' } };
+  const RESULT = { type: 'result', subtype: 'success', is_error: false, num_turns: 2, result: 'done', usage: usage(100, 200, 300, 40), permission_denials: [DENIAL] };
+  const STREAM = lines(INIT, A1_TEXT, A1_TOOL, U1, 'not json {', A2, RESULT);
+
+  it('the init event: each field as the stream carried it, and a field it did not carry reads null', () => {
+    expect(t4Replay.readStreamJson(STREAM).init).toEqual({
+      sessionId: SID, model: 'model-a', tools: ['Bash', 'Agent'], mcpServers: [], plugins: null, skills: ['ccrc-history'], slashCommands: ['compact'],
+    });
+    expect(t4Replay.readStreamJson(lines({ type: 'system', subtype: 'init' })).init)
+      .toEqual({ sessionId: null, model: null, tools: null, mcpServers: null, plugins: null, skills: null, slashCommands: null });
+  });
+
+  it('the rest of the stream: one tool pair by id, the result event, its permission denial, its usage, the message count and the malformed line', () => {
+    const f = t4Replay.readStreamJson(STREAM);
+    expect(f.toolPairs).toEqual([{ id: 'toolu_1', name: 'Bash', input: { command: 'true' }, result: 'ok', isError: false }]);
+    expect(f.result).toEqual({ subtype: 'success', isError: false, numTurns: 2, text: 'done' });
+    expect(f.permissionDenials).toEqual([DENIAL]);
+    expect(f.usageSource).toBe('result');
+    expect(f.usage).toEqual({ input: 100, cacheCreation: 200, cacheRead: 300, output: 40 });
+    expect(f.assistantMessages).toBe(2);
+    expect(f.malformedLines).toBe(1);
+    expect(t4Replay.spendTokens(f)).toBe(640);
+  });
+
+  it("with no result event, usage is the assistant messages' summed once per message.id, and there is no result or denial list", () => {
+    const f = t4Replay.readStreamJson(lines(INIT, A1_TEXT, A1_TOOL, U1, A2));
+    expect(f.usageSource).toBe('assistant');
+    expect(f.usage).toEqual({ input: 11, cacheCreation: 22, cacheRead: 33, output: 9 });
+    expect(f.assistantMessages).toBe(2);
+    expect(f.result).toBeNull();
+    expect(f.permissionDenials).toBeNull();
+    expect(t4Replay.spendTokens(f)).toBe(75);
+  });
+
+  it('an empty stream is no init, no result and no usage: zeros with usageSource none', () => {
+    expect(t4Replay.readStreamJson('')).toEqual({
+      init: null, usage: { input: 0, cacheCreation: 0, cacheRead: 0, output: 0 }, usageSource: 'none', toolPairs: [],
+      permissionDenials: null, result: null, assistantMessages: 0, malformedLines: 0,
+    });
+  });
+
+  it('a line that is not a JSON object is counted, and odd shapes never throw', () => {
+    const f = t4Replay.readStreamJson(lines('42', 'null', '[1]', '{"type":',
+      { type: 'assistant' }, { type: 'assistant', message: { content: 'text' } },
+      { type: 'user', message: { content: [null, 5, { type: 'tool_result' }] } },
+      { type: 'system', subtype: 'init', tools: 'Bash' }, { type: 'result', num_turns: '3', usage: null }));
+    expect(f.malformedLines).toBe(4);
+    expect(f.init?.tools).toBeNull();
+    expect(f.result).toEqual({ subtype: null, isError: null, numTurns: null, text: null });
+    expect(f.usageSource).toBe('none');
+    expect(f.toolPairs).toEqual([]);
+  });
+
+  // D-5802: the brief's odd-shapes list states sjCount's fold to 0, and its test block had no case that reds without it.
+  it('a usage count that is not a non-negative integer reads 0, and an absent cache key reads 0, so spend stays a finite sum', () => {
+    const odd = t4Replay.readStreamJson(lines(
+      { type: 'result', usage: { input_tokens: '7', cache_creation_input_tokens: -3, cache_read_input_tokens: 1.5, output_tokens: 2 } }));
+    expect(odd.usageSource).toBe('result');
+    expect(odd.usage).toEqual({ input: 0, cacheCreation: 0, cacheRead: 0, output: 2 });
+    expect(t4Replay.spendTokens(odd)).toBe(2);
+    const bare = t4Replay.readStreamJson(lines(
+      { type: 'assistant', message: { id: 'msg_4', usage: { input_tokens: 5, output_tokens: 2 } } }));
+    expect(bare.usageSource).toBe('assistant');
+    expect(bare.usage).toEqual({ input: 5, cacheCreation: 0, cacheRead: 0, output: 2 });
+    expect(t4Replay.spendTokens(bare)).toBe(7);
+  });
+
+  it('a tool_result in content blocks joins its text blocks, an absent is_error reads null, and a result with no tool_use pairs nothing', () => {
+    const f = t4Replay.readStreamJson(lines(
+      { type: 'assistant', message: { id: 'msg_3', content: [{ type: 'tool_use', id: 'toolu_3', name: 'Agent', input: { prompt: 'look' } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_3', content: [{ type: 'text', text: 'one' }, { type: 'image' }, { type: 'text', text: 'two' }] }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_stray', content: 'stray' }] } },
+    ));
+    expect(f.toolPairs).toEqual([{ id: 'toolu_3', name: 'Agent', input: { prompt: 'look' }, result: 'one\ntwo', isError: null }]);
+    expect(f.assistantMessages).toBe(1);
+    expect(f.usageSource).toBe('none');
+  });
+
+  // ── the spend ledger ──
+  const ledger = (out: string): string => `${out}/${t4Replay.SPEND_LEDGER}`;
+  /** The word and detail of the DriverRefusal `f` throws, or null when it returns. */
+  const refusalOf = (f: () => unknown): { word: string; detail: string } | null => {
+    try { f(); } catch (e) {
+      expect(e).toBeInstanceOf(t4Replay.DriverRefusal);
+      const r = e as { word: string; detail: string };
+      return { word: r.word, detail: r.detail };
+    }
+    return null;
+  };
+  // D-5986: a ledger the gate cannot read whole is out-refused, never budget-exhausted (raising --budget clears none of these states).
+  const NOT_REGULAR = { word: 'out-refused', detail: 'spend.jsonl is not a regular file' };
+  const MALFORMED = { word: 'out-refused', detail: 'spend.jsonl malformed' };
+  const UNREADABLE = { word: 'out-refused', detail: 'spend.jsonl unreadable EACCES' };
+  const GOOD = '{"name":"a","tokens":1,"ts_ms":1}\n';
+
+  it('the ledger: absent is 0; one canonical line per finished spawn, mode 0600; summed over every line, a repeated name included', () => {
+    const out = t4MkTmp('ccrc-replay-t4-ledger-');
+    expect(t4Fs.existsSync(ledger(out))).toBe(false);
+    expect(t4Replay.spentSoFar(out)).toBe(0);
+    t4Replay.recordSpend(out, 'step0a/writer', 100);
+    t4Replay.recordSpend(out, 'step0a/judge', 50);
+    t4Replay.recordSpend(out, 'step0a/writer', 120);   // a resumed batch re-ran this job: both spawns spent
+    expect(t4Replay.spentSoFar(out), 'a re-run adds to the total, never replaces it').toBe(270);
+    const rows = t4Fs.readFileSync(ledger(out), 'utf8').split('\n');
+    expect(rows).toHaveLength(4);
+    expect(rows[3]).toBe('');
+    expect(rows[0]).toMatch(/^\{"name":"step0a\/writer","tokens":100,"ts_ms":[0-9]+\}$/);
+    expect(t4Fs.statSync(ledger(out)).mode & 0o777).toBe(0o600);
+  });
+
+  it('recordSpend refuses a name or a count it could not read back, and writes nothing', () => {
+    const out = t4MkTmp('ccrc-replay-t4-record-');
+    expect(() => t4Replay.recordSpend(out, '', 1)).toThrow(/^recordSpend: /);
+    expect(() => t4Replay.recordSpend(out, 'x', -1)).toThrow(/^recordSpend: /);
+    expect(() => t4Replay.recordSpend(out, 'x', 1.5)).toThrow(/^recordSpend: /);
+    expect(() => t4Replay.recordSpend(out, 'x', Number.NaN)).toThrow(/^recordSpend: /);
+    expect(t4Fs.existsSync(ledger(out))).toBe(false);
+  });
+
+  it.each([
+    ['a torn last line', `${GOOD}{"name":"b","tok`],
+    ['a line that is not JSON', `${GOOD}not json\n`],
+    ['a blank line', `${GOOD}\n${GOOD}`],
+    ['a JSON array', `${GOOD}[1]\n`],
+    ['a negative count', `${GOOD}{"name":"b","tokens":-1,"ts_ms":1}\n`],
+    ['a fractional count', `${GOOD}{"name":"b","tokens":1.5,"ts_ms":1}\n`],
+    ['an extra key', `${GOOD}{"name":"b","tokens":1,"ts_ms":1,"x":0}\n`],
+    ['a missing key', `${GOOD}{"name":"b","tokens":1}\n`],
+    ['an empty name', `${GOOD}{"name":"","tokens":1,"ts_ms":1}\n`],
+    ['lines that each read but sum past the safe-integer range', `{"name":"a","tokens":${Number.MAX_SAFE_INTEGER},"ts_ms":1}\n{"name":"b","tokens":${Number.MAX_SAFE_INTEGER},"ts_ms":1}\n`],
+  ])('a malformed ledger (%s) fails closed as out-refused spend.jsonl malformed, never a count', (_why, body) => {
+    const out = t4MkTmp('ccrc-replay-t4-malformed-');
+    t4Fs.writeFileSync(ledger(out), body);
+    expect(refusalOf(() => t4Replay.spentSoFar(out))).toEqual(MALFORMED);
+  });
+
+  it('a ledger that is a directory, or a symlink to a readable ledger, fails closed too: out-refused spend.jsonl is not a regular file', () => {
+    const dir = t4MkTmp('ccrc-replay-t4-dir-');
+    t4Fs.mkdirSync(ledger(dir));
+    expect(refusalOf(() => t4Replay.spentSoFar(dir))).toEqual(NOT_REGULAR);
+    const link = t4MkTmp('ccrc-replay-t4-link-');
+    t4Fs.writeFileSync(`${link}/elsewhere`, GOOD);
+    t4Fs.symlinkSync(`${link}/elsewhere`, ledger(link));
+    expect(refusalOf(() => t4Replay.spentSoFar(link))).toEqual(NOT_REGULAR);
+  });
+
+  // D-5814: an --out whose search bit is gone makes the ledger's lstat fail with EACCES (not ENOENT): fail closed, never 0.
+  it.skipIf(process.getuid?.() === 0)('an --out that lost its search bit fails closed: the lstat error other than ENOENT is out-refused spend.jsonl unreadable EACCES, never an empty ledger (skipped as root)', () => {
+    const out = t4MkTmp('ccrc-replay-t4-nosearch-');
+    t4Replay.recordSpend(out, 'r0', 500);
+    t4Fs.chmodSync(out, 0o600);
+    try { expect(refusalOf(() => t4Replay.spentSoFar(out))).toEqual(UNREADABLE); }
+    finally { t4Fs.chmodSync(out, 0o700); }
+    expect(t4Replay.spentSoFar(out), 'CONTROL: the mode restored, the ledger reads').toBe(500);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('an unreadable ledger fails closed (skipped as root, which reads it anyway)', () => {
+    const out = t4MkTmp('ccrc-replay-t4-unreadable-');
+    t4Fs.writeFileSync(ledger(out), GOOD);
+    t4Fs.chmodSync(ledger(out), 0o000);
+    expect(refusalOf(() => t4Replay.spentSoFar(out))).toEqual(UNREADABLE);
+  });
+});
+
+// ── W2-4 Task 5: the spawn contract and the batch runner (W2-D50, W2-D51, W2-D53, W2-D55; RP1-contract) ────────
+// Every spawn reaches a recording stub, a node script at `$HOME/.local/bin/up-a` (the fixture upstream), never a
+// real Claude Code. The generated account's launcher is the real wrapper text from generateWrapperBody, which
+// sources a fixture secrets file and execs the same stub, so the generated case runs through its own wrapper.
+// The stub logs one JSON line per run: argv, env key names, every env value except CLAUDE_CODE_OAUTH_TOKEN, cwd,
+// the cwd's mode and entries, stdin, and start and end stamps; then it prints STUB_STREAM on stdout. It finds its
+// fixture home from its own path (`<home>/.local/bin/<id>`), never from $HOME, so a mutant that leaks the
+// caller's env still logs inside the fixture and never writes to the HOME running the suite.
+
+/** The file the stub prints as its stream-json. */
+const STUB_STREAM = 'stub-stream.jsonl';
+const T5_STUB_LOG = 'stub-log.jsonl';
+type T5Launch = ReturnType<typeof t5drv.admitAccount>;
+type T5Job = Parameters<typeof t5drv.launchRun>[0];
+/** Optional stub controls, each a file under $HOME: sleep before exiting, text for stderr, an exit code. */
+const T5_STUB_SLEEP = 'stub-sleep-ms';
+const T5_STUB_STDERR = 'stub-stderr.txt';
+const T5_STUB_EXIT = 'stub-exit';
+const T5_STUB_SWAP = 'stub-swap-path';
+/** Optional stub acts (D-5986), each a file under $HOME holding a path, taken just before the stub exits: remove the path;
+ *  chmod the directory to 0500 (a run subdirectory nobody may then change); and, only in a run whose argv carries
+ *  `--tools Bash,Agent` (an arm or a box run; in step 0a, the box run), replace the path by a directory, as a same-user
+ *  process could. */
+const T5_STUB_RM = 'stub-rm-path';
+const T5_STUB_CHMOD = 'stub-chmod-path';
+const T5_STUB_BOX_SWAP = 'stub-box-swap-path';
+/** When present, the stub leaves a mode-000 directory with a file in it in its cwd (D-5984: nobody may remove it). */
+const T5_STUB_LOCK = 'stub-lock-cwd';
+const T5_STUB_SOURCE = `#!/usr/bin/env node
+(async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const start = Date.now();
+  const home = path.resolve(path.dirname(process.argv[1]), '..', '..');
+  const at = (f) => path.join(home, f);
+  const opt = (f) => { try { return fs.readFileSync(at(f), 'utf8'); } catch { return null; } };
+  const stdin = fs.readFileSync(0, 'utf8');
+  const cwd = process.cwd();
+  const env = {};
+  for (const [k, v] of Object.entries(process.env)) if (k !== 'CLAUDE_CODE_OAUTH_TOKEN') env[k] = v;
+  const cwdMode = fs.statSync(cwd).mode & 0o777;
+  const cwdEntries = fs.readdirSync(cwd);
+  const sleep = Number(opt(${JSON.stringify(T5_STUB_SLEEP)}) ?? '0');
+  if (sleep > 0) await new Promise((r) => setTimeout(r, sleep));
+  const err = opt(${JSON.stringify(T5_STUB_STDERR)});
+  if (err !== null) process.stderr.write(err);
+  // D-5986: replace the named path by a directory while the run is open, as a same-user process could.
+  const swap = opt(${JSON.stringify(T5_STUB_SWAP)});
+  if (swap !== null) { fs.rmSync(swap, { force: true }); fs.mkdirSync(swap); }
+  const rm = opt(${JSON.stringify(T5_STUB_RM)});
+  if (rm !== null) fs.rmSync(rm, { force: true });
+  const boxSwap = opt(${JSON.stringify(T5_STUB_BOX_SWAP)});
+  if (boxSwap !== null && process.argv.slice(2).includes('Bash,Agent')) { fs.rmSync(boxSwap, { force: true }); fs.mkdirSync(boxSwap); }
+  const chmod = opt(${JSON.stringify(T5_STUB_CHMOD)});
+  if (chmod !== null) fs.chmodSync(chmod, 0o500);
+  if (opt(${JSON.stringify(T5_STUB_LOCK)}) !== null) {
+    fs.mkdirSync(path.join(cwd, 'locked'), { mode: 0o700 });
+    fs.writeFileSync(path.join(cwd, 'locked', 'f'), 'x');
+    fs.chmodSync(path.join(cwd, 'locked'), 0o000);
+  }
+  fs.appendFileSync(at(${JSON.stringify(T5_STUB_LOG)}), JSON.stringify({ argv: process.argv.slice(2),
+    envKeys: Object.keys(process.env).sort(), env, cwd, cwdMode, cwdEntries, stdin, start, end: Date.now() }) + '\\n');
+  process.stdout.write(opt(${JSON.stringify(STUB_STREAM)}) ?? '');
+  process.exitCode = Number(opt(${JSON.stringify(T5_STUB_EXIT)}) ?? '0');
+})();
+`;
+
+/** A canned stream-json: init, one assistant message, a result whose usage sums to 65. */
+const T5_STREAM = [
+  { type: 'system', subtype: 'init', session_id: 'fixture-session-id', model: 'fixture-model', tools: [], mcp_servers: [], plugins: [], skills: [], slash_commands: [] },
+  { type: 'assistant', message: { id: 'msg-fixture-1', usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: 'text', text: 'ok' }] } },
+  { type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'ok', permission_denials: [],
+    usage: { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 30, output_tokens: 5 } },
+].map((e) => JSON.stringify(e)).join('\n') + '\n';
+const T5_TOKENS = 65;
+
+/** Plant the recording stub at `$HOME/.local/bin/<id>` (mode 0700) and the default STUB_STREAM. */
+function plantStub(home: string, id: string): void {
+  const bin = t5path.join(home, '.local', 'bin');
+  t5fs.mkdirSync(bin, { recursive: true });
+  t5fs.writeFileSync(t5path.join(bin, id), T5_STUB_SOURCE, { mode: 0o700 });
+  if (!t5fs.existsSync(t5path.join(home, STUB_STREAM))) t5fs.writeFileSync(t5path.join(home, STUB_STREAM), T5_STREAM);
+}
+
+type T5Log = { argv: string[]; envKeys: string[]; env: Record<string, string>; cwd: string; cwdMode: number;
+  cwdEntries: string[]; stdin: string; start: number; end: number };
+/** Every line the stub logged, in order, or null when it never ran. */
+function stubLog(home: string): T5Log[] | null {
+  const p = t5path.join(home, T5_STUB_LOG);
+  if (!t5fs.existsSync(p)) return null;
+  return t5fs.readFileSync(p, 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as T5Log);
+}
+
+/** The fixture OAuth token, assembled at runtime so no key-shaped literal sits in the tree. */
+const T5_TOKEN = ['sk', 'ant', 'oat01'].join('-') + '-' + ['FIXTURE', 'TASK5', 'x'.repeat(24)].join('');
+
+/** A home with up-a (upstream, the stub) and gen-a (generated/anthropic: its real wrapper, its secrets file),
+ *  an admitted LaunchSpec for each, and a prepared --out. */
+function t5Box(prefix: string): { home: string; out: string; up: T5Launch; gen: T5Launch } {
+  const home = t5MkTmp(prefix);
+  writeRoster(home, [
+    { id: 'up-a', label: 'Up A', configDirSuffix: '.claude', homeAble: true, telemetry: 'anthropic', exec: { kind: 'upstream' } },
+    { id: 'gen-a', label: 'Gen A', configDirSuffix: '.gen-a', homeAble: true, telemetry: 'anthropic',
+      exec: { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/gen-a.env' } },
+  ]);
+  plantStub(home, 'up-a');
+  t5fs.writeFileSync(t5path.join(home, '.local', 'bin', 'gen-a'),
+    t5WrapperBody({ id: 'gen-a', configDirSuffix: '.gen-a', execKind: 'generated', secretsFile: '.cc-secrets/gen-a.env' }, 'up-a'),
+    { mode: 0o700 });
+  t5fs.mkdirSync(t5path.join(home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+  t5fs.writeFileSync(t5path.join(home, '.cc-secrets', 'gen-a.env'), `export CLAUDE_CODE_OAUTH_TOKEN=${T5_TOKEN}\n`, { mode: 0o600 });
+  const { json, roster: parsed } = t5drv.readRoster(home);
+  const out = t5drv.prepareOut(t5path.join(home, 'out'));
+  claimFor(out);   // D-5985: claimed like a subcommand's --out, before any leftover a case plants
+  return {
+    home, out,
+    up: t5drv.admitAccount(json, parsed, 'up-a', home), gen: t5drv.admitAccount(json, parsed, 'gen-a', home),
+  };
+}
+
+const T5_RECALL = { session: 'fixture-recall-session', arm: 'fixture-arm-value', asof: 'fixture-asof-uuid' };
+/** An explicit no-op gate: runBatch requires one, and these cases test the runner, not Task 6's stop. */
+const T5_NO_GATE = (): void => {};
+const T5_BASE_KEYS = ['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH'];
+const T5_RECALL_KEYS = ['CCRC_RECALL_ARM', 'CCRC_RECALL_ASOF', 'CCRC_RECALL_SESSION'];
+/** Keys bash itself exports to what it execs; seen only on the generated route, which runs the wrapper. */
+const T5_BASH_KEYS = ['PWD', 'SHLVL', '_'];
+const T5_NEVER_KEYS = ['CCRC_SESSION_GENERATION', 'TMUX', 'TMUX_PANE', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'];
+const t5job = (b: { out: string }, launch: T5Launch, mode: string, name: string, extra: Partial<T5Job> = {}): T5Job => ({
+  launch, mode, model: `fixture-model-${mode}`, settingsMode: 'restricted', stdin: `fixture input for ${name}\n`,
+  out: b.out, name, lang: 'fixture.UTF-8', ...(mode === 'arm' ? { recall: T5_RECALL } : {}), ...extra,
+});
+/** What a call raises (sync or async), or null when it raises nothing. */
+async function t5caught(run: () => unknown): Promise<unknown> {
+  try { await run(); } catch (e) { return e; }
+  return null;
+}
+/** The error is a TypeError whose message matches `re`: the refusal under test, never some other TypeError. */
+function t5typeError(err: unknown, re: RegExp): void {
+  expect(err, 'a TypeError was raised').toBeInstanceOf(TypeError);
+  expect((err as Error).message).toMatch(re);
+}
+/** Plant the ambient state a leaked env would carry, so every absence below can fail. The ambient LANG differs from
+ *  the job's, so a child LANG of 'fixture.UTF-8' proves it came through RunJob.lang, never from process.env. */
+function t5Ambient(): void {
+  t5vi.stubEnv('LANG', 'ambient.UTF-8');
+  t5vi.stubEnv('PATH', `/fixture-caller-bin:${process.env['PATH'] ?? ''}`);
+  for (const k of T5_NEVER_KEYS) t5vi.stubEnv(k, 'fixture-ambient');
+  t5vi.stubEnv('CCRC_RECALL_ARM', 'fixture-ambient');
+}
+
+/** The contract's argv, spelled out here rather than taken from spawnArgv, so a stub case is not circular. */
+const t5Spellings = (home: string): string[] =>
+  [`Bash(${home}/.local/bin/ccrc history:*)`, 'Bash("$HOME/.local/bin/ccrc" history:*)', 'Bash(~/.local/bin/ccrc history:*)'];
+const t5Argv = (mode: string, model: string, home: string): string[] => ['--restricted', '-p', '--no-session-persistence',
+  '--strict-mcp-config', '--output-format', 'stream-json', '--verbose', '--max-turns', '12', '--model', model,
+  ...(mode === 'arm' || mode === 'box' ? ['--tools', 'Bash,Agent', '--allowedTools', ...t5Spellings(home)] : ['--tools', ''])];
+
+describe('W2-4 Task 5: the spawn argv and env, pure (W2-D50, W2-D51)', () => {
+  const HOME = '/fixture/home';
+  const SPELLINGS = t5Spellings(HOME);
+  const FIXED = t5Argv('writer', 'fixture-model', HOME).slice(1, -2);
+
+  it('the words: four modes, two settings modes, 12 turns, 10 a batch, 2 at once', () => {
+    expect([...t5drv.SPAWN_MODES]).toEqual(['arm', 'writer', 'judge', 'box']);
+    expect([...t5drv.SETTINGS_MODES]).toEqual(['restricted', 'fallback']);
+    expect([t5drv.MAX_TURNS, t5drv.BATCH_MAX, t5drv.CONCURRENCY_MAX, t5drv.POISON_BIN_DIR]).toEqual([12, 10, 2, 'poison-bin']);
+    expect(Object.isFrozen(t5drv.SPAWN_MODES) && Object.isFrozen(t5drv.SETTINGS_MODES)).toBe(true);
+  });
+
+  it('the three taught spellings, exactly', () => {
+    expect([...t5drv.allowedToolSpellings(HOME)]).toEqual(SPELLINGS);
+    expect(() => t5drv.allowedToolSpellings('relative/home')).toThrow(TypeError);
+  });
+
+  it.each(['arm', 'box'])('%s: --restricted, the fixed flags, --model, --tools Bash,Agent and the three spellings', (mode) => {
+    expect(t5drv.spawnArgv({ mode, model: 'fixture-model', settingsMode: 'restricted', home: HOME }))
+      .toEqual(['--restricted', ...FIXED, '--tools', 'Bash,Agent', '--allowedTools', ...SPELLINGS]);
+  });
+
+  it.each(['writer', 'judge'])('%s: --tools with an empty value and no --allowedTools', (mode) => {
+    expect(t5drv.spawnArgv({ mode, model: 'fixture-model', settingsMode: 'restricted', home: HOME }))
+      .toEqual(['--restricted', ...FIXED, '--tools', '']);
+  });
+
+  it('the fallback settings mode replaces --restricted with the two settings flags, first', () => {
+    expect(t5drv.spawnArgv({ mode: 'writer', model: 'fixture-model', settingsMode: 'fallback', home: HOME }))
+      .toEqual(['--setting-sources', 'project,local', '--settings', '{"disableAllHooks":true}', ...FIXED, '--tools', '']);
+  });
+
+  it('no argv in any mode or settings mode carries a bypass flag; an unknown mode, settings mode or model id is a TypeError', () => {
+    for (const mode of t5drv.SPAWN_MODES) for (const settingsMode of t5drv.SETTINGS_MODES) {
+      const argv = t5drv.spawnArgv({ mode, model: 'fixture-model', settingsMode, home: HOME });
+      expect(argv.filter((a) => /dangerously|bypass/i.test(a)), `${mode} ${settingsMode}`).toEqual([]);
+    }
+    expect(() => t5drv.spawnArgv({ mode: 'other', model: 'm', settingsMode: 'restricted', home: HOME })).toThrow(TypeError);
+    expect(() => t5drv.spawnArgv({ mode: 'box', model: 'm', settingsMode: 'none', home: HOME })).toThrow(TypeError);
+    expect(() => t5drv.spawnArgv({ mode: 'box', model: '--verbose', settingsMode: 'restricted', home: HOME })).toThrow(TypeError);
+  });
+
+  it('the env: the allow-list exactly, PATH built from the poison dir and node, LANG else C.UTF-8, arm values only in arm mode', () => {
+    const base = { home: HOME, configDir: `${HOME}/.claude`, poisonBin: '/fixture/out/poison-bin' };
+    const PATH = `/fixture/out/poison-bin:${t5path.dirname(process.execPath)}:/usr/bin:/bin`;
+    expect(t5drv.spawnEnv({ ...base, mode: 'writer', lang: 'fixture.UTF-8' }))
+      .toEqual({ HOME, PATH, LANG: 'fixture.UTF-8', CLAUDE_CONFIG_DIR: `${HOME}/.claude` });
+    expect(t5drv.spawnEnv({ ...base, mode: 'judge', lang: undefined })['LANG']).toBe('C.UTF-8');
+    expect(t5drv.spawnEnv({ ...base, mode: 'box', lang: '' })['LANG']).toBe('C.UTF-8');
+    expect(t5drv.spawnEnv({ ...base, mode: 'arm', lang: 'fixture.UTF-8', recall: T5_RECALL })).toEqual({
+      HOME, PATH, LANG: 'fixture.UTF-8', CLAUDE_CONFIG_DIR: `${HOME}/.claude`,
+      CCRC_RECALL_SESSION: T5_RECALL.session, CCRC_RECALL_ARM: T5_RECALL.arm, CCRC_RECALL_ASOF: T5_RECALL.asof,
+    });
+    expect(() => t5drv.spawnEnv({ ...base, mode: 'arm', lang: undefined })).toThrow(TypeError);
+    expect(() => t5drv.spawnEnv({ ...base, mode: 'arm', lang: undefined, recall: { ...T5_RECALL, asof: '' } })).toThrow(TypeError);
+    expect(() => t5drv.spawnEnv({ ...base, mode: 'writer', lang: undefined, recall: T5_RECALL })).toThrow(TypeError);
+  });
+
+  // D-5804 (history-w2-4-spawn-guard-pins): each spawnEnv path check is pinned, one assertion per distinct check.
+  it.each(['home', 'configDir', 'poisonBin'] as const)('the env refuses a %s that is not a string, is relative, or holds a colon, by its name', async (key) => {
+    const good = { home: HOME, configDir: `${HOME}/.claude`, poisonBin: '/fixture/out/poison-bin' };
+    const re = new RegExp(`spawnEnv: ${key} .* is not an absolute path without`);
+    const withBad = (bad: unknown): Record<string, string> =>
+      t5drv.spawnEnv({ ...good, mode: 'writer', lang: undefined, [key]: bad as string });
+    t5typeError(await t5caught(() => withBad(undefined)), re);
+    t5typeError(await t5caught(() => withBad('relative/path')), re);
+    t5typeError(await t5caught(() => withBad(`${good[key]}:/fixture/extra`)), re);
+    expect(withBad(good[key])['PATH'], 'the control: the good value is accepted').toContain('/fixture/out/poison-bin');
+  });
+});
+
+describe('W2-4 Task 5: RP1-contract on the stub, launch per kind (W2-D50, W2-D51)', () => {
+  t5afterEach(() => { t5vi.unstubAllEnvs(); });
+
+  it.each(['arm', 'writer', 'judge', 'box'])('upstream, %s: launched direct; exact argv, exact env keys and values, stdin, an empty 0700 cwd outside any git tree, removed after', async (mode) => {
+    const b = t5Box(`ccrc-replay-t5-up-${mode}-`);
+    t5Ambient();
+    const o = await claimedRun(t5job(b, b.up, mode, `rp1-${mode}`));
+    const log = stubLog(b.home);
+    expect(log, 'the stub ran once').toHaveLength(1);
+    const l = log![0]!;
+    expect(l.argv).toEqual(t5Argv(mode, `fixture-model-${mode}`, b.home));
+    expect(l.envKeys).toEqual([...T5_BASE_KEYS, ...(mode === 'arm' ? T5_RECALL_KEYS : [])].sort());
+    expect(l.env['HOME']).toBe(b.home);
+    expect(l.env['PATH']).toBe(`${b.out}/poison-bin:${t5path.dirname(process.execPath)}:/usr/bin:/bin`);
+    expect(l.env['LANG']).toBe('fixture.UTF-8');
+    expect(l.env['CLAUDE_CONFIG_DIR']).toBe(t5path.join(b.home, '.claude'));
+    if (mode === 'arm') {
+      expect([l.env['CCRC_RECALL_SESSION'], l.env['CCRC_RECALL_ARM'], l.env['CCRC_RECALL_ASOF']]).toEqual([T5_RECALL.session, T5_RECALL.arm, T5_RECALL.asof]);
+    }
+    for (const k of T5_NEVER_KEYS) expect(l.envKeys, k).not.toContain(k);
+    expect(l.stdin).toBe(`fixture input for rp1-${mode}\n`);
+    expect([l.cwdMode, l.cwdEntries]).toEqual([0o700, []]);
+    expect(l.cwd.startsWith(t5fs.realpathSync(t5os.tmpdir()) + t5path.sep)).toBe(true);
+    expect(t5drv.insideGitTree(l.cwd).state).toBe('outside');
+    expect(o.cwd).toBe(l.cwd);
+    expect(t5fs.existsSync(l.cwd), 'the cwd is removed after the run').toBe(false);
+    expect([o.skipped, o.code, o.signal, o.tokens]).toEqual([false, 0, null, T5_TOKENS]);
+  }, 60_000);
+
+  it('generated: launched through its own wrapper, which sources the declared secrets file: CLAUDE_CODE_OAUTH_TOKEN reaches the stub, by name only', async () => {
+    const b = t5Box('ccrc-replay-t5-gen-');
+    t5Ambient();
+    expect(b.gen.launcher).toBe(t5path.join(b.home, '.local', 'bin', 'gen-a'));
+    await claimedRun(t5job(b, b.gen, 'writer', 'rp1-gen'));
+    const l = stubLog(b.home)![0]!;
+    expect(l.envKeys).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+    expect(l.envKeys.filter((k) => !T5_BASH_KEYS.includes(k))).toEqual([...T5_BASE_KEYS, 'CLAUDE_CODE_OAUTH_TOKEN'].sort());
+    expect(l.env['CLAUDE_CONFIG_DIR']).toBe(t5path.join(b.home, '.gen-a'));
+    expect(l.env['PATH']).toBe(`${b.out}/poison-bin:${t5path.dirname(process.execPath)}:/usr/bin:/bin`);
+    for (const k of T5_NEVER_KEYS) expect(l.envKeys, k).not.toContain(k);
+    expect(t5fs.readFileSync(t5path.join(b.home, T5_STUB_LOG), 'utf8')).not.toContain(T5_TOKEN);
+  }, 60_000);
+
+  it('upstream gets no CLAUDE_CODE_OAUTH_TOKEN from the driver, even when the caller carries one', async () => {
+    const b = t5Box('ccrc-replay-t5-uptok-');
+    t5vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', T5_TOKEN);
+    await claimedRun(t5job(b, b.up, 'judge', 'rp1-uptok'));
+    expect(stubLog(b.home)![0]!.envKeys).not.toContain('CLAUDE_CODE_OAUTH_TOKEN');
+  }, 60_000);
+
+  it('the poisoned gh sits first on PATH under --out and exits 97', async () => {
+    const b = t5Box('ccrc-replay-t5-gh-');
+    await claimedRun(t5job(b, b.up, 'box', 'rp1-gh'));
+    const gh = t5path.join(b.out, 'poison-bin', 'gh');
+    expect(t5fs.statSync(gh).mode & 0o777).toBe(0o700);
+    const r = t5spawnSync(gh, ['pr', 'merge'], { encoding: 'utf8' });
+    expect(r.status).toBe(97);
+  }, 60_000);
+
+  it('a run leaves its stream, one ledger line and its run.json, written last with no tmp left, and keeps only the unknown option names from stderr', async () => {
+    const b = t5Box('ccrc-replay-t5-files-');
+    t5fs.writeFileSync(t5path.join(b.home, T5_STUB_STDERR), "error: unknown option '--fixture-flag'\nfixture-noise that is not kept\n");
+    t5fs.writeFileSync(t5path.join(b.home, T5_STUB_EXIT), '1');
+    const o = await claimedRun(t5job(b, b.up, 'writer', 'step/files'));
+    expect([o.code, o.unknownOptions]).toEqual([1, ['--fixture-flag']]);
+    expect(t5fs.readFileSync(t5path.join(b.out, 'step', 'files.jsonl'), 'utf8')).toBe(T5_STREAM);
+    expect(o.facts.usageSource).toBe('result');
+    const run = JSON.parse(t5fs.readFileSync(t5path.join(b.out, 'step', 'files.run.json'), 'utf8'));
+    expect([run.kind, run.name, run.code, run.tokens, run.unknown_options]).toEqual(['ccrc-history-replay-run', 'step/files', 1, T5_TOKENS, ['--fixture-flag']]);
+    expect(JSON.stringify(run)).not.toContain('fixture-noise');
+    expect(t5fs.readdirSync(t5path.join(b.out, 'step')).sort()).toEqual(['files.jsonl', 'files.run.json']);
+    expect(t5drv.spentSoFar(b.out)).toBe(T5_TOKENS);
+  }, 60_000);
+
+  it('a run that outlives its timeout is killed with its process group and recorded with its signal', async () => {
+    const b = t5Box('ccrc-replay-t5-timeout-');
+    t5fs.writeFileSync(t5path.join(b.home, T5_STUB_SLEEP), '8000');
+    const o = await claimedRun(t5job(b, b.up, 'box', 'rp1-timeout', { timeoutMs: 300 }));
+    expect([o.code, o.signal]).toEqual([null, 'SIGTERM']);
+    expect(o.ms).toBeLessThan(5_000);
+    expect(stubLog(b.home), 'killed before it logged').toBeNull();
+  }, 6_000);
+
+  // D-5804 (history-w2-4-spawn-guard-pins): the run-name grammar, the launcher-under-home check and the poison-bin
+  // directory check each have a case that reaches the guard's branch.
+  it.each(['', 'Upper', 'a b', '../escape', 'x/../../escape', '/escape', 'a//b', '.hidden', 'a/b/c/d/e', 'x'.repeat(65)])(
+    'a bad run name %j is a TypeError before any spawn and writes nothing outside --out', async (name) => {
+      const b = t5Box('ccrc-replay-t5-badname-');
+      t5typeError(await t5caught(() => claimedRun(t5job(b, b.up, 'box', name))), /is not a run name/);
+      expect(stubLog(b.home), 'nothing spawned').toBeNull();
+      expect(t5fs.readdirSync(b.home).filter((f) => f.startsWith('escape')), 'nothing beside --out').toEqual([]);
+      expect(t5fs.readdirSync(b.out).filter((f) => f !== 'poison-bin' && !f.startsWith('.')), 'nothing inside --out').toEqual([]);
+    }, 60_000);
+
+  it('a run name that is not a string is a TypeError, not the name undefined', async () => {
+    const b = t5Box('ccrc-replay-t5-nostrname-');
+    t5typeError(await t5caught(() => claimedRun(t5job(b, b.up, 'box', undefined as unknown as string))), /is not a run name/);
+    t5typeError(await t5caught(() => claimedRun(t5job(b, b.up, 'box', 7 as unknown as string))), /is not a run name/);
+    expect(stubLog(b.home)).toBeNull();
+    expect(t5fs.readdirSync(b.out).filter((f) => f !== '.driver.lock'), '--out holds only its marker (and the claim\'s lock)').toEqual(['.ccrc-history-replay']);
+  }, 60_000);
+
+  it('a launcher under another home, or in a sibling directory sharing the bin prefix, is a TypeError before any spawn', async () => {
+    const b = t5Box('ccrc-replay-t5-launcher-');
+    const other = t5Box('ccrc-replay-t5-otherhome-');
+    const near = t5path.join(b.home, '.local', 'bin-near');
+    t5fs.mkdirSync(near, { recursive: true });
+    t5fs.writeFileSync(t5path.join(near, 'up-a'), T5_STUB_SOURCE, { mode: 0o700 });
+    for (const launcher of [other.up.launcher, t5path.join(near, 'up-a')]) {
+      const launch = { ...b.up, launcher };
+      t5typeError(await t5caught(() => claimedRun(t5job(b, launch, 'box', 'launcher-0'))), /is not under .*\/\.local\/bin/);
+    }
+    expect(stubLog(b.home), 'nothing spawned in this home').toBeNull();
+    expect(stubLog(other.home), 'nothing spawned in the other home').toBeNull();
+  }, 60_000);
+
+  it('a poison-bin that is a file, or a symlink to a directory, is refused out-refused before any spawn', async () => {
+    const file = t5Box('ccrc-replay-t5-poisonfile-');
+    t5fs.writeFileSync(t5path.join(file.out, 'poison-bin'), 'not a directory');
+    await expect(claimedRun(t5job(file, file.up, 'box', 'poison-0')))
+      .rejects.toMatchObject({ word: 'out-refused', detail: 'poison-bin is not a directory' });
+    expect(stubLog(file.home)).toBeNull();
+    const link = t5Box('ccrc-replay-t5-poisonlink-');
+    const target = t5path.join(link.home, 'poison-target');
+    t5fs.mkdirSync(target);
+    t5fs.symlinkSync(target, t5path.join(link.out, 'poison-bin'));
+    await expect(claimedRun(t5job(link, link.up, 'box', 'poison-1')))
+      .rejects.toMatchObject({ word: 'out-refused', detail: 'poison-bin is not a directory' });
+    expect(t5fs.readdirSync(target), 'nothing planted through the link').toEqual([]);
+    expect(stubLog(link.home)).toBeNull();
+  }, 60_000);
+});
+
+describe('W2-4 Task 5: the batch runner, at most 2 at once, gated, resumable (W2-D51, W2-D53, W2-D55)', () => {
+  t5afterEach(() => { t5vi.unstubAllEnvs(); });
+
+  it('a batch of more than BATCH_MAX jobs, a concurrency above CONCURRENCY_MAX, a batch with no gate, or a job without its lang key is a TypeError before any spawn', async () => {
+    const b = t5Box('ccrc-replay-t5-bounds-');
+    const eleven = Array.from({ length: 11 }, (_, i) => t5job(b, b.up, 'box', `bound-${i}`));
+    await expect(claimedBatch(eleven, { gate: T5_NO_GATE })).rejects.toThrow(TypeError);
+    await expect(claimedBatch(eleven.slice(0, 2), { concurrency: 3, gate: T5_NO_GATE })).rejects.toThrow(TypeError);
+    await expect(claimedBatch(eleven.slice(0, 2), {}), 'a batch with no gate never spawns ungated').rejects.toThrow(/opts\.gate is required/);
+    const { lang: _lang, ...noLang } = t5job(b, b.up, 'box', 'no-lang');
+    await expect(claimedRun(noLang as T5Job), 'a caller that forgets lang fails loudly').rejects.toThrow(TypeError);
+    expect(stubLog(b.home)).toBeNull();
+  }, 60_000);
+
+  it('four jobs run two at a time, never three: the stub stamps overlap at most 2 deep', async () => {
+    const b = t5Box('ccrc-replay-t5-conc-');
+    t5fs.writeFileSync(t5path.join(b.home, T5_STUB_SLEEP), '1500');
+    const outs = await claimedBatch(Array.from({ length: 4 }, (_, i) => t5job(b, b.up, 'box', `conc-${i}`)), { gate: T5_NO_GATE });
+    expect(outs.map((o) => o.skipped)).toEqual([false, false, false, false]);
+    const log = stubLog(b.home)!;
+    expect(log).toHaveLength(4);
+    const depth = Math.max(...log.map((x) => log.filter((y) => y.start <= x.start && x.start < y.end).length));
+    expect(depth).toBe(2);
+  }, 60_000);
+
+  it('the gate is called before each spawn; a gate that throws stops the batch with its refusal and no further spawn', async () => {
+    const b = t5Box('ccrc-replay-t5-gate-');
+    let calls = 0;
+    const gate = (): void => { calls += 1; if (calls === 2) throw new t5drv.DriverRefusal('budget-exhausted', 'fixture stop'); };
+    const jobs = Array.from({ length: 3 }, (_, i) => t5job(b, b.up, 'box', `gate-${i}`));
+    await expect(claimedBatch(jobs, { concurrency: 1, gate })).rejects.toMatchObject({ word: 'budget-exhausted' });
+    expect(stubLog(b.home)).toHaveLength(1);
+    expect(t5fs.existsSync(t5path.join(b.out, 'gate-0.run.json'))).toBe(true);
+    const again = await claimedBatch(jobs, { concurrency: 1, gate: () => { calls += 1; } });
+    expect(again.map((o) => o.skipped)).toEqual([true, false, false]);
+    expect(calls, 'the resumed batch gated its two spawns only').toBe(4);
+    expect(stubLog(b.home)).toHaveLength(3);
+  }, 60_000);
+
+  it('resume: a finished job is never spawned again and the ledger counts it once; a job with no run.json is spawned again and its spend adds to the total', async () => {
+    const b = t5Box('ccrc-replay-t5-resume-');
+    const jobs = [t5job(b, b.up, 'writer', 'resume-0'), t5job(b, b.up, 'judge', 'resume-1')];
+    await claimedBatch(jobs, { gate: T5_NO_GATE });
+    const again = await claimedBatch(jobs, { gate: T5_NO_GATE });
+    expect(again.map((o) => [o.skipped, o.tokens, o.facts.usageSource])).toEqual([[true, T5_TOKENS, 'result'], [true, T5_TOKENS, 'result']]);
+    expect(stubLog(b.home)).toHaveLength(2);
+    expect(t5drv.spentSoFar(b.out)).toBe(2 * T5_TOKENS);
+    t5fs.rmSync(t5path.join(b.out, 'resume-1.run.json'));
+    const third = await claimedBatch(jobs, { gate: T5_NO_GATE });
+    expect(third.map((o) => o.skipped)).toEqual([true, false]);
+    expect(stubLog(b.home)).toHaveLength(3);
+    // A run.json lost after its ledger line (a kill between the two): the re-spawn spends again, and the summed
+    // ledger counts both spawns. Over-counting is the budget's safe direction (coordinator ruling).
+    expect(t5drv.spentSoFar(b.out), 'the re-spawned job spent twice, and both count').toBe(3 * T5_TOKENS);
+  }, 60_000);
+
+  // D-5811 (history-w2-4-interrupted-spawn-spend): a spawn streams into `<name>.jsonl.part`; its spend line, then the
+  // rename to `<name>.jsonl`, then run.json. A `.part` with no run.json is a spawn whose driver died, charged once.
+  const T5_LEFTOVER_STREAM = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'x', permission_denials: [],
+    usage: { input_tokens: 3, cache_creation_input_tokens: 4, cache_read_input_tokens: 5, output_tokens: 6 } }) + '\n';
+  const T5_LEFTOVER_TOKENS = 18;
+  const ledgerRows = (out: string): Array<{ name: string; tokens: number }> =>
+    t5fs.readFileSync(t5path.join(out, t5drv.SPEND_LEDGER), 'utf8').split('\n').filter((l) => l !== '').map((l) => { const r = JSON.parse(l); return { name: r.name, tokens: r.tokens }; });
+
+  it('a spawn streams into .jsonl.part and renames it after its spend line: the final stream and run.json appear only when it closes', async () => {
+    const b = t5Box('ccrc-replay-t5-partflow-');
+    t5fs.writeFileSync(t5path.join(b.home, T5_STUB_SLEEP), '1500');
+    const flight = claimedRun(t5job(b, b.up, 'box', 'flow-0'));
+    const part = t5path.join(b.out, 'flow-0.jsonl.part');
+    for (let i = 0; i < 100 && !t5fs.existsSync(part); i++) await new Promise((r) => setTimeout(r, 50));
+    expect(t5fs.existsSync(part), 'the stream is opened as .part').toBe(true);
+    expect(t5fs.existsSync(t5path.join(b.out, 'flow-0.jsonl')), 'no final stream while the child runs').toBe(false);
+    expect(t5fs.existsSync(t5path.join(b.out, 'flow-0.run.json'))).toBe(false);
+    await flight;
+    expect(t5fs.existsSync(part), 'renamed away').toBe(false);
+    expect(t5fs.readFileSync(t5path.join(b.out, 'flow-0.jsonl'), 'utf8')).toBe(T5_STREAM);
+    expect(t5fs.existsSync(t5path.join(b.out, 'flow-0.run.json'))).toBe(true);
+  }, 60_000);
+
+  it('the spend line lands before the rename of .part: a rename that fails leaves the spawn charged', async () => {
+    const b = t5Box('ccrc-replay-t5-spendfirst-');
+    t5fs.writeFileSync(t5path.join(b.home, T5_STUB_SLEEP), '1500');
+    const flight = claimedRun(t5job(b, b.up, 'box', 'order-0'));
+    const settled = flight.then(() => null, (e: unknown) => e);
+    const part = t5path.join(b.out, 'order-0.jsonl.part');
+    for (let i = 0; i < 100 && !t5fs.existsSync(part); i++) await new Promise((r) => setTimeout(r, 50));
+    expect(t5fs.existsSync(part), 'the stream is open while the child runs').toBe(true);
+    // The rename fails DURING the run: the final path becomes a non-empty directory after the pre-spawn check passed.
+    const finalDir = t5path.join(b.out, 'order-0.jsonl');
+    t5fs.mkdirSync(finalDir);
+    t5fs.writeFileSync(t5path.join(finalDir, 'blocker'), 'x');
+    expect(await settled, 'the rename failed').not.toBeNull();
+    expect(t5drv.spentSoFar(b.out), 'charged although the rename failed').toBe(T5_TOKENS);
+    expect(t5fs.existsSync(t5path.join(b.out, 'order-0.run.json'))).toBe(false);
+  }, 60_000);
+
+  // D-5811: a final stream path that is not a regular file refuses before the spawn, so no tokens are spent on a damaged --out.
+  it('a final stream path that is a directory or a symlink refuses out-refused run-stream-invalid before the spawn; a regular file there is replaced by the re-spawn', async () => {
+    for (const [label, plant] of [
+      ['directory', (p: string, b: { home: string }) => { void b; t5fs.mkdirSync(p); }],
+      ['symlink', (p: string, b: { home: string }) => { const t = t5path.join(b.home, 'final-target'); t5fs.writeFileSync(t, T5_LEFTOVER_STREAM); t5fs.symlinkSync(t, p); }],
+    ] as const) {
+      const b = t5Box(`ccrc-replay-t5-finalpath-${label}-`);
+      const final = t5path.join(b.out, 'fin-0.jsonl');
+      plant(final, b);
+      const job = t5job(b, b.up, 'box', 'fin-0');
+      await expect(claimedRun(job), `${label} through launchRun`).rejects.toMatchObject({ word: 'out-refused', detail: 'run-stream-invalid fin-0' });
+      await expect(claimedBatch([job], { gate: T5_NO_GATE }), `${label} through the batch`).rejects.toMatchObject({ word: 'out-refused', detail: 'run-stream-invalid fin-0' });
+      expect(stubLog(b.home), `${label}: no spawn`).toBeNull();
+      expect(t5drv.spentSoFar(b.out), `${label}: nothing spent`).toBe(0);
+      expect(t5fs.existsSync(t5path.join(b.out, 'fin-0.jsonl.part')), `${label}: no .part`).toBe(false);
+      expect(t5fs.lstatSync(final).isFile(), `${label}: left untouched`).toBe(false);
+    }
+    // CONTROL: a finished spawn whose run.json was lost leaves a regular file there; the re-spawn replaces it.
+    const c = t5Box('ccrc-replay-t5-finalpath-file-');
+    t5fs.writeFileSync(t5path.join(c.out, 'fin-1.jsonl'), 'stale\n');
+    await claimedRun(t5job(c, c.up, 'box', 'fin-1'));
+    expect(stubLog(c.home)).toHaveLength(1);
+    expect(t5fs.readFileSync(t5path.join(c.out, 'fin-1.jsonl'), 'utf8')).toBe(T5_STREAM);
+    expect(t5drv.spentSoFar(c.out)).toBe(T5_TOKENS);
+  }, 60_000);
+
+  it('a .part leftover with no run.json is charged once before the re-spawn, its inode is never reused, and the spawn adds its own spend', async () => {
+    const b = t5Box('ccrc-replay-t5-leftover-');
+    const job = t5job(b, b.up, 'box', 'left-0');
+    const part = t5path.join(b.out, 'left-0.jsonl.part');
+    t5fs.writeFileSync(part, T5_LEFTOVER_STREAM);
+    const held = t5path.join(b.home, 'held-part');
+    t5fs.linkSync(part, held);
+    const heldIno = t5fs.statSync(held).ino;
+    const outs = await claimedBatch([job], { gate: T5_NO_GATE });
+    expect(outs.map((o) => o.skipped)).toEqual([false]);
+    expect(ledgerRows(b.out), 'the leftover is charged first, once').toEqual([{ name: 'left-0', tokens: T5_LEFTOVER_TOKENS }, { name: 'left-0', tokens: T5_TOKENS }]);
+    expect(t5drv.spentSoFar(b.out)).toBe(T5_LEFTOVER_TOKENS + T5_TOKENS);
+    expect(t5fs.existsSync(part)).toBe(false);
+    expect(t5fs.readFileSync(held, 'utf8'), 'the dead driver\'s stream was removed, not truncated in place').toBe(T5_LEFTOVER_STREAM);
+    expect(t5fs.statSync(t5path.join(b.out, 'left-0.jsonl')).ino, 'the new stream is a new inode').not.toBe(heldIno);
+    expect(stubLog(b.home)).toHaveLength(1);
+    // Resumed again: nothing is charged twice.
+    await claimedBatch([job], { gate: T5_NO_GATE });
+    expect(t5drv.spentSoFar(b.out)).toBe(T5_LEFTOVER_TOKENS + T5_TOKENS);
+  }, 60_000);
+
+  it('launchRun charges the leftover itself, for a caller that bypasses the batch', async () => {
+    const b = t5Box('ccrc-replay-t5-leftover-direct-');
+    t5fs.writeFileSync(t5path.join(b.out, 'left-1.jsonl.part'), T5_LEFTOVER_STREAM);
+    await claimedRun(t5job(b, b.up, 'box', 'left-1'));
+    expect(ledgerRows(b.out)).toEqual([{ name: 'left-1', tokens: T5_LEFTOVER_TOKENS }, { name: 'left-1', tokens: T5_TOKENS }]);
+  }, 60_000);
+
+  it('a gate sees a leftover\'s charge: a budget the leftover alone exhausts refuses budget-exhausted with no spawn', async () => {
+    const b = t5Box('ccrc-replay-t5-leftover-gate-');
+    t5fs.writeFileSync(t5path.join(b.out, 'left-2.jsonl.part'), T5_LEFTOVER_STREAM);
+    const gate = (): void => {
+      const stop = t5drv.decideBudget(t5drv.spentSoFar(b.out), T5_LEFTOVER_TOKENS);
+      if (stop !== null) throw new t5drv.DriverRefusal(stop.word, stop.detail);
+    };
+    await expect(claimedBatch([t5job(b, b.up, 'box', 'left-2')], { concurrency: 1, gate }))
+      .rejects.toMatchObject({ word: 'budget-exhausted', detail: `spent ${T5_LEFTOVER_TOKENS} of ${T5_LEFTOVER_TOKENS}` });
+    expect(stubLog(b.home), 'nothing spawned').toBeNull();
+    expect(t5drv.spentSoFar(b.out)).toBe(T5_LEFTOVER_TOKENS);
+    expect(t5fs.existsSync(t5path.join(b.out, 'left-2.jsonl.part'))).toBe(false);
+  }, 60_000);
+
+  it('a leftover that is a directory or a symlink refuses out-refused run-stream-invalid with no spawn and no charge, through the batch and through launchRun', async () => {
+    for (const [label, plant] of [
+      ['directory', (p: string, b: { home: string }) => { void b; t5fs.mkdirSync(p); }],
+      ['symlink', (p: string, b: { home: string }) => { const t = t5path.join(b.home, 'link-target'); t5fs.writeFileSync(t, T5_LEFTOVER_STREAM); t5fs.symlinkSync(t, p); }],
+    ] as const) {
+      const b = t5Box(`ccrc-replay-t5-leftover-${label}-`);
+      plant(t5path.join(b.out, 'left-3.jsonl.part'), b);
+      const job = t5job(b, b.up, 'box', 'left-3');
+      await expect(claimedBatch([job], { gate: T5_NO_GATE }), `${label} through the batch`).rejects.toMatchObject({ word: 'out-refused', detail: 'run-stream-invalid left-3' });
+      await expect(claimedRun(job), `${label} through launchRun`).rejects.toMatchObject({ word: 'out-refused', detail: 'run-stream-invalid left-3' });
+      expect(stubLog(b.home), label).toBeNull();
+      expect(t5drv.spentSoFar(b.out), label).toBe(0);
+      expect(t5fs.lstatSync(t5path.join(b.out, 'left-3.jsonl.part')).isFile(), `${label} left untouched`).toBe(false);
+    }
+  }, 60_000);
+
+  // D-5814: the first throw stops the batch at concurrency 2 too: the lane that did not throw takes no further job.
+  it('at concurrency 2 a job that refuses on resume stops the other lane: exactly the job already started runs', async () => {
+    const b = t5Box('ccrc-replay-t5-stoplane-');
+    const jobs = Array.from({ length: 4 }, (_, i) => t5job(b, b.up, 'box', `lane-${i}`));
+    t5fs.writeFileSync(t5path.join(b.out, 'lane-1.run.json'), JSON.stringify({
+      kind: 'ccrc-history-replay-run', name: 'lane-1', account: 'other-a', mode: 'box', model: 'fixture-model-box', settings_mode: 'restricted' }) + '\n');
+    await expect(claimedBatch(jobs, { concurrency: 2, gate: T5_NO_GATE })).rejects.toMatchObject({ word: 'out-refused', detail: 'run-json-mismatch lane-1' });
+    expect(stubLog(b.home), 'lane-0 was already started; lanes 2 and 3 never start').toHaveLength(1);
+    expect(t5fs.existsSync(t5path.join(b.out, 'lane-2.jsonl.part')) || t5fs.existsSync(t5path.join(b.out, 'lane-2.jsonl'))).toBe(false);
+  }, 60_000);
+
+  // D-5814: spend before the completion marker. A run.json that cannot be written leaves the spawn charged already.
+  it('the spend line lands before run.json: a run.json write that fails leaves the spawn charged', async () => {
+    const b = t5Box('ccrc-replay-t5-spendbeforemarker-');
+    t5fs.mkdirSync(t5path.join(b.out, `marker-0.run.json.tmp-${process.pid}`));
+    await expect(claimedRun(t5job(b, b.up, 'box', 'marker-0'))).rejects.toThrow();
+    expect(t5fs.existsSync(t5path.join(b.out, 'marker-0.run.json'))).toBe(false);
+    expect(t5drv.spentSoFar(b.out), 'charged although run.json was never written').toBe(T5_TOKENS);
+  }, 60_000);
+
+  // D-5814: stderr is kept to STDERR_KEEP_BYTES (64 KiB); an unknown-option line past it is not read.
+  it('stderr is bounded: an unknown option named past 64 KiB is not kept, one named early is', async () => {
+    const b = t5Box('ccrc-replay-t5-stderrcap-');
+    t5fs.writeFileSync(t5path.join(b.home, T5_STUB_STDERR),
+      `error: unknown option '--early-flag'\n${'x'.repeat(70_000)}\nerror: unknown option '--beyond-cap'\n`);
+    const o = await claimedRun(t5job(b, b.up, 'box', 'cap-0'));
+    expect(o.unknownOptions).toEqual(['--early-flag']);
+  }, 60_000);
+
+  it('resume refuses a stream changed after its run.json, a run.json that does not parse, and one recorded for another account, mode, model or settings mode', async () => {
+    const b = t5Box('ccrc-replay-t5-tamper-');
+    const job = t5job(b, b.up, 'box', 'tamper-0');
+    await claimedBatch([job], { gate: T5_NO_GATE });
+    // The same --out and name under another account, mode, model or settings mode is never answered from this run.
+    // D-5804: variant 1 carries the recorded model, so it differs from the recorded run in its mode alone.
+    const others = [t5job(b, b.gen, 'box', 'tamper-0'), t5job(b, b.up, 'writer', 'tamper-0', { model: 'fixture-model-box' }),
+      t5job(b, b.up, 'box', 'tamper-0', { model: 'fixture-model-other' }), t5job(b, b.up, 'box', 'tamper-0', { settingsMode: 'fallback' })];
+    for (const [i, other] of others.entries()) {
+      await expect(claimedBatch([other], { gate: T5_NO_GATE }), `variant ${i}`).rejects.toMatchObject({ word: 'out-refused', detail: 'run-json-mismatch tamper-0' });
+    }
+    t5fs.appendFileSync(t5path.join(b.out, 'tamper-0.jsonl'), '{}\n');
+    await expect(claimedBatch([job], { gate: T5_NO_GATE })).rejects.toMatchObject({ word: 'out-refused', detail: 'run-stream-changed tamper-0' });
+    t5fs.writeFileSync(t5path.join(b.out, 'tamper-0.run.json'), 'not json');
+    await expect(claimedBatch([job], { gate: T5_NO_GATE })).rejects.toMatchObject({ word: 'out-refused', detail: 'run-json-invalid tamper-0' });
+    expect(stubLog(b.home)).toHaveLength(1);
+  }, 60_000);
+
+  // D-5804 (history-w2-4-spawn-guard-pins): the duplicate-job check and finishedOutcome's kind, name and null checks.
+  it('two jobs in one batch with the same --out and name are a TypeError before any spawn', async () => {
+    const b = t5Box('ccrc-replay-t5-dup-');
+    const job = t5job(b, b.up, 'box', 'dup-0');
+    t5typeError(await t5caught(() => claimedBatch([job, { ...job }], { gate: T5_NO_GATE })), /two jobs share one --out and name/);
+    expect(stubLog(b.home)).toBeNull();
+    expect(t5fs.readdirSync(b.out).filter((f) => f !== '.driver.lock'), '--out holds only its marker (and the claim\'s lock)').toEqual(['.ccrc-history-replay']);
+    const ok = await claimedBatch([job, t5job(b, b.up, 'box', 'dup-1')], { gate: T5_NO_GATE });
+    expect(ok.map((o) => o.skipped), 'the control: two names are fine').toEqual([false, false]);
+  }, 60_000);
+
+  it('resume refuses a well-formed run.json of the wrong kind or the wrong name, and one that is the JSON null', async () => {
+    const b = t5Box('ccrc-replay-t5-kind-');
+    const job = t5job(b, b.up, 'box', 'kind-0');
+    await claimedBatch([job], { gate: T5_NO_GATE });
+    const runJson = t5path.join(b.out, 'kind-0.run.json');
+    const good = t5fs.readFileSync(runJson, 'utf8');
+    const rec = JSON.parse(good) as Record<string, unknown>;
+    for (const [label, text] of [['kind', { ...rec, kind: 'ccrc-history-replay-other' }], ['name', { ...rec, name: 'kind-1' }], ['null', null]] as const) {
+      t5fs.writeFileSync(runJson, JSON.stringify(text) + '\n');
+      await expect(claimedBatch([job], { gate: T5_NO_GATE }), label).rejects.toMatchObject({ word: 'out-refused', detail: 'run-json-invalid kind-0' });
+    }
+    t5fs.writeFileSync(runJson, good);
+    const again = await claimedBatch([job], { gate: T5_NO_GATE });
+    expect(again.map((o) => o.skipped), 'the control: the untouched record resumes').toEqual([true]);
+    expect(stubLog(b.home)).toHaveLength(1);
+  }, 60_000);
+
+  it('a run named for the spend ledger is refused before any spawn: its stream path would truncate the ledger (D-5803)', async () => {
+    const b = t5Box('ccrc-replay-t5-spendname-');
+    const ledger = t5path.join(b.out, t5drv.SPEND_LEDGER);
+    for (const [n, tokens] of [['seed-a', 10], ['seed-b', 20], ['seed-c', 35]] as const) t5drv.recordSpend(b.out, n, tokens);
+    const before = t5fs.readFileSync(ledger);
+    expect(before.toString('utf8').split('\n').filter((l) => l !== '')).toHaveLength(3);
+    const name = t5drv.SPEND_LEDGER.replace(/\.jsonl$/, '');
+    const refusal = /would stream into the spend ledger/;
+    t5typeError(await t5caught(() => claimedRun(t5job(b, b.up, 'box', name))), refusal);
+    t5typeError(await t5caught(() => claimedBatch([t5job(b, b.up, 'box', name)], { gate: T5_NO_GATE })), refusal);
+    expect(t5fs.readFileSync(ledger).equals(before), 'the ledger is byte-identical').toBe(true);
+    expect(t5drv.spentSoFar(b.out)).toBe(65);
+    expect(t5fs.existsSync(t5path.join(b.out, `${name}.run.json`))).toBe(false);
+    expect(stubLog(b.home), 'nothing spawned').toBeNull();
+  }, 60_000);
+});
+
+// ── fix round 1: no unseen child (D-5984) and one driver per --out (D-5985) ────────────────────────────────
+// In-process cases stub the liveness reader, so no verdict depends on what the box is running; the cases that use the
+// real reader start their own children and signal only those. Every wait on a child is bounded.
+describe('fix round 1 (D-5984): liveness answers alive, dead or unmeasured', () => {
+  it.skipIf(!HAS_PROC)('this process reads alive with its own start, dead with another start, and a reaped child dead with its old start', async () => {
+    expect(replay.liveness(process.pid, startOf(process.pid))).toBe('alive');
+    expect(replay.liveness(process.pid, '1'), 'a start that is not this process\'s: the pid was reused').toBe('dead');
+    const gone = await deadRecord();
+    expect(replay.liveness(gone.pid, gone.start)).toBe('dead');
+    expect(replay.liveness(gone.pid, '1')).toBe('dead');
+  });
+
+  it('with no recorded start the answer is kill(pid, 0): this process alive, a reaped child dead', async () => {
+    expect(replay.liveness(process.pid, null)).toBe('alive');
+    const gone = await deadRecord();
+    expect(replay.liveness(gone.pid, null)).toBe('dead');
+  });
+
+  it('a pid that is no positive integer, or a start that is no string, reads unmeasured', () => {
+    for (const pid of [0, -1, 1.5, Number.NaN, '12' as never, null as never]) expect(replay.liveness(pid, null), String(pid)).toBe('unmeasured');
+    expect(replay.liveness(process.pid, 7 as never)).toBe('unmeasured');
+  });
+
+  // kill(pid, 0) answers EPERM for a process of another user: it exists, so the answer is alive. Pid 1 is the one process
+  // that is always there and, run as a user, never ours. As root kill succeeds and the answer is alive either way, so the
+  // case measures nothing there.
+  it.skipIf(process.getuid?.() === 0)('with no recorded start, a process another user owns (EPERM) reads alive', () => {
+    expect(replay.liveness(1, null)).toBe('alive');
+  });
+
+  // A /proc that does not answer for this very process cannot say a pid is gone: its ENOENT is "no /proc", not "no process".
+  it('a pid file that is missing reads dead only where /proc answers for this process, and unmeasured where it does not', () => {
+    const proc = mkTmp('ccrc-replay-proc-');
+    const stat = (start: string): string => `777 (a b) S ${'0 '.repeat(18)}${start} 0\n`;
+    mkdirSync(path.join(proc, '777'), { recursive: true });
+    writeFileSync(path.join(proc, '777', 'stat'), stat('12345'));
+    expect(replay.liveness(777, '12345', proc), 'CONTROL: the fixture /proc has the pid with its start').toBe('alive');
+    expect(replay.liveness(777, '999', proc), 'CONTROL: another start is a reused pid').toBe('dead');
+    expect(replay.liveness(778, '12345', proc), 'no /proc/self/stat: a missing pid file proves nothing').toBe('unmeasured');
+    mkdirSync(path.join(proc, 'self'), { recursive: true });
+    writeFileSync(path.join(proc, 'self', 'stat'), stat('1'));
+    expect(replay.liveness(778, '12345', proc), 'a /proc that answers for itself: the pid is gone').toBe('dead');
+  });
+
+  // D-5984: the two other unmeasured arms. Each fixture row also holds <procDir>/self/stat, so that a /proc which answers
+  // for itself is not what makes the answer: deleting either arm falls through to 'dead', not to the missing-/proc arm.
+  it('a stat that cannot be read for any reason but ENOENT (a directory there: EISDIR) reads unmeasured, never dead', () => {
+    const proc = mkTmp('ccrc-replay-proc-unreadable-');
+    mkdirSync(path.join(proc, 'self'), { recursive: true });
+    writeFileSync(path.join(proc, 'self', 'stat'), `1 (a) S ${'0 '.repeat(18)}1 0\n`);
+    mkdirSync(path.join(proc, '779', 'stat'), { recursive: true });
+    expect(replay.liveness(780, '12345', proc), 'CONTROL: the fixture /proc answers for itself, so a missing pid file is dead').toBe('dead');
+    expect(replay.liveness(779, '12345', proc), 'a stat that fails to read with EISDIR is not a dead process').toBe('unmeasured');
+  });
+
+  it('a stat line with no closing parenthesis (unparsable) reads unmeasured, never dead', () => {
+    const proc = mkTmp('ccrc-replay-proc-unparsable-');
+    mkdirSync(path.join(proc, 'self'), { recursive: true });
+    writeFileSync(path.join(proc, 'self', 'stat'), `1 (a) S ${'0 '.repeat(18)}1 0\n`);
+    mkdirSync(path.join(proc, '781'), { recursive: true });
+    writeFileSync(path.join(proc, '781', 'stat'), `781 (a b S ${'0 '.repeat(18)}12345 0\n`);
+    mkdirSync(path.join(proc, '782'), { recursive: true });
+    writeFileSync(path.join(proc, '782', 'stat'), `782 (a b) S ${'0 '.repeat(18)}12345 0\n`);
+    expect(replay.liveness(782, '12345', proc), 'CONTROL: the same line with its parenthesis closed reads alive').toBe('alive');
+    expect(replay.liveness(781, '12345', proc), 'an unparsable stat line is not a dead process').toBe('unmeasured');
+  });
+});
+
+describe('fix round 1 (D-5984): a leftover whose writer is alive is never charged, removed or spawned again; a dead one is charged once', () => {
+  const L_STREAM = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'x', permission_denials: [],
+    usage: { input_tokens: 3, cache_creation_input_tokens: 4, cache_read_input_tokens: 5, output_tokens: 6 } }) + '\n';
+  const L_TOKENS = 18;
+  const noGate = (): void => {};
+  /** Plant `<name>.jsonl.part` (unless `part` is null) and `<name>.pid` (unless `pid` is null) under out. */
+  function plant(out: string, name: string, files: { part?: string | null; pid?: string | null }): void {
+    mkdirSync(path.dirname(path.join(out, name)), { recursive: true });
+    if (files.part !== null) writeFileSync(path.join(out, `${name}.jsonl.part`), files.part ?? L_STREAM);
+    if (files.pid !== undefined && files.pid !== null) writeFileSync(path.join(out, `${name}.pid`), files.pid);
+  }
+  const asks: Array<[number, string | null]> = [];
+  const stubLive = (state: 'alive' | 'dead' | 'unmeasured') => (pid: number, start: string | null) => { asks.push([pid, start]); return state; };
+  const notAsked = (): never => { throw new Error('liveness was asked about a record that needed no answer'); };
+  const ledgerOf = (out: string): Array<{ name: string; tokens: number }> =>
+    existsSync(path.join(out, replay.SPEND_LEDGER))
+      ? readFileSync(path.join(out, replay.SPEND_LEDGER), 'utf8').split('\n').filter((l) => l !== '').map((l) => { const r = JSON.parse(l); return { name: r.name, tokens: r.tokens }; })
+      : [];
+
+  it.each(['alive', 'unmeasured'] as const)('a .part whose .pid reads %s refuses run-live naming the pid, its group and both files: nothing is charged, removed or spawned, through the batch and through launchRun', async (state) => {
+    const b = t5Box('ccrc-replay-d5984-live-');
+    plant(b.out, 'live-0', { pid: recText(424242, '777') });
+    asks.length = 0;
+    const job = t5job(b, b.up, 'box', 'live-0');
+    for (const via of ['batch', 'launchRun'] as const) {
+      const call = via === 'batch' ? claimedBatch([job], { gate: noGate, liveness: stubLive(state) }) : claimedRun(job, { liveness: stubLive(state) });
+      await expect(call, via).rejects.toMatchObject({ word: 'run-live' });
+      await call.catch((e: replay.DriverRefusal) => {
+        expect(e.detail).toContain('424242');
+        expect(e.detail).toContain('process group 424242');
+        expect(e.detail).toContain(state);
+        expect(e.detail).toContain('live-0.jsonl.part');
+        expect(e.detail).toContain('live-0.pid');
+      });
+    }
+    expect(asks[0], 'asked about the record\'s pid and start').toEqual([424242, '777']);
+    expect(existsSync(path.join(b.out, 'live-0.jsonl.part')) && existsSync(path.join(b.out, 'live-0.pid')), 'both files stay').toBe(true);
+    expect(readFileSync(path.join(b.out, 'live-0.jsonl.part'), 'utf8'), 'the stream is untouched').toBe(L_STREAM);
+    expect(ledgerOf(b.out), 'nothing charged').toEqual([]);
+    expect(stubLog(b.home), 'nothing spawned').toBeNull();
+  }, 60_000);
+
+  // D-5984: the remedy the detail gives is the one that keeps the charge. With the `.pid` removed ALONE, the next claim
+  // charges the `.part` once and removes it; removing both files would lose that run's tokens for good.
+  it.each(['alive', 'unmeasured'] as const)('a run-live detail (%s writer) says to remove only the .pid; doing so, the next claim charges the .part once and removes it', (state) => {
+    const out = replay.prepareOut(path.join(mkTmp('ccrc-replay-d5984-remedy-'), 'out'));
+    plant(out, 'sub/rem-0', { pid: recText(424290, '31') });
+    let detail = '';
+    try { replay.claimOut(out, { liveness: stubLive(state) }); } catch (e) { detail = (e as replay.DriverRefusal).detail; expect((e as replay.DriverRefusal).word).toBe('run-live'); }
+    expect(detail, 'the detail says to remove only the .pid and never the .part').toContain(
+      'If the pid is confirmed not to be a live Claude Code from this --out (a reused pid, or a box with no /proc), remove only the `sub/rem-0.pid`: '
+      + 'the next driver then charges the `sub/rem-0.jsonl.part` and removes it. Never remove the `sub/rem-0.jsonl.part`.');
+    expect(detail, 'one line').not.toContain('\n');
+    expect(ledgerOf(out), 'the refused claim charged nothing').toEqual([]);
+    rmSync(path.join(out, 'sub', 'rem-0.pid'));
+    const c = replay.claimOut(out, { liveness: notAsked });
+    try {
+      expect(ledgerOf(out), 'the .part\'s tokens are charged exactly once').toEqual([{ name: 'sub/rem-0', tokens: L_TOKENS }]);
+      expect(existsSync(path.join(out, 'sub', 'rem-0.jsonl.part')), 'and the .part is removed').toBe(false);
+    } finally { c.release(); }
+  });
+
+  it('a regular .pid that is not exactly {pid, start} refuses run-live naming the file: nothing is charged, removed or spawned', async () => {
+    const malformed: Array<[string, string]> = [['not json', 'not json\n'], ['empty', ''], ['pid zero', recText(0, null)], ['pid missing', '{"start":null}\n'],
+      ['start missing', '{"pid":5}\n'], ['start a number', '{"pid":5,"start":7}\n'], ['start not digits', '{"pid":5,"start":"1x"}\n'],
+      ['extra key', '{"extra":1,"pid":5,"start":null}\n'], ['not whole (no newline)', '{"pid":5,"start":null}'], ['an array', '[5,null]\n']];
+    for (const [label, text] of malformed) {
+      const b = t5Box('ccrc-replay-d5984-malformed-');
+      plant(b.out, 'bad-0', { pid: text });
+      await expect(claimedBatch([t5job(b, b.up, 'box', 'bad-0')], { gate: noGate, liveness: notAsked }), label).rejects.toMatchObject({ word: 'run-live' });
+      await expect(claimedBatch([t5job(b, b.up, 'box', 'bad-0')], { gate: noGate, liveness: notAsked }), label).rejects.toThrow(/bad-0\.pid/);
+      expect(existsSync(path.join(b.out, 'bad-0.pid')) && existsSync(path.join(b.out, 'bad-0.jsonl.part')), `${label}: both files stay`).toBe(true);
+      expect(ledgerOf(b.out), label).toEqual([]);
+      expect(stubLog(b.home), label).toBeNull();
+    }
+  }, 60_000);
+
+  it('a .pid that is no regular file (a directory, a symlink either way, a FIFO) beside a .part refuses out-refused naming the file: nothing is charged, removed or spawned, through the batch and through launchRun (D-5984, D-5986)', async () => {
+    for (const [label, make] of [
+      ['directory', (p: string) => mkdirSync(p)],
+      ['symlink', (p: string) => symlinkSync(path.join(path.dirname(p), 'target.pid'), p)],
+      ['dangling symlink', (p: string) => symlinkSync(path.join(path.dirname(p), 'nowhere.pid'), p)],
+      ['fifo', (p: string) => { const r = spawnSync('mkfifo', [p], { encoding: 'utf8' }); expect(r.status, r.stderr).toBe(0); }],
+    ] as const) {
+      const b = t5Box(`ccrc-replay-d5984-notfile-${label.replace(' ', '-')}-`);
+      plant(b.out, 'bad-1', {});
+      writeFileSync(path.join(b.out, 'target.pid'), recText(5, null));
+      make(path.join(b.out, 'bad-1.pid'));
+      for (const via of ['launchRun', 'runBatch'] as const) {
+        const call = via === 'launchRun'
+          ? claimedRun(t5job(b, b.up, 'box', 'bad-1'), { liveness: notAsked })
+          : claimedBatch([t5job(b, b.up, 'box', 'bad-1')], { gate: noGate, liveness: notAsked });
+        await expect(call, `${label} via ${via}`).rejects.toMatchObject({ word: 'out-refused', detail: 'bad-1.pid is not a regular file' });
+      }
+      expect(lstatSync(path.join(b.out, 'bad-1.pid')), `${label}: the .pid stays`).toBeTruthy();
+      expect(readFileSync(path.join(b.out, 'bad-1.jsonl.part'), 'utf8'), `${label}: the stream is untouched`).toBe(L_STREAM);
+      expect(ledgerOf(b.out), label).toEqual([]);
+      expect(stubLog(b.home), label).toBeNull();
+    }
+  }, 60_000);
+
+  it('a mode-000 .pid beside a .part (skipped as root) refuses out-refused <name>.pid unreadable EACCES: nothing is charged or removed, though liveness would say dead (D-5986)', async () => {
+    if (process.getuid?.() === 0) return;   // root reads a mode 000 file
+    const b = t5Box('ccrc-replay-d5986-pid-eacces-');
+    plant(b.out, 'eacces-0', { pid: recText(424262, '1') });
+    const pidFile = path.join(b.out, 'eacces-0.pid');
+    chmodSync(pidFile, 0o000);
+    try {
+      for (const via of ['launchRun', 'runBatch'] as const) {
+        const call = via === 'launchRun'
+          ? claimedRun(t5job(b, b.up, 'box', 'eacces-0'), { liveness: () => 'dead' })
+          : claimedBatch([t5job(b, b.up, 'box', 'eacces-0')], { gate: noGate, liveness: () => 'dead' });
+        await expect(call, via).rejects.toMatchObject({ word: 'out-refused', detail: 'eacces-0.pid unreadable EACCES' });
+      }
+      expect(existsSync(pidFile) && existsSync(path.join(b.out, 'eacces-0.jsonl.part')), 'both files stay').toBe(true);
+      expect(ledgerOf(b.out), 'nothing charged').toEqual([]);
+      expect(stubLog(b.home), 'nothing spawned').toBeNull();
+    } finally {
+      chmodSync(pidFile, 0o600);
+    }
+  }, 60_000);
+
+  it('a .part whose .pid reads dead is charged once, then both files are removed, and the job spawns on a new stream', async () => {
+    const b = t5Box('ccrc-replay-d5984-dead-');
+    plant(b.out, 'dead-0', { pid: recText(424243, '55') });
+    asks.length = 0;
+    const out = await claimedBatch([t5job(b, b.up, 'box', 'dead-0')], { gate: noGate, liveness: stubLive('dead') });
+    expect(out.map((o) => o.skipped)).toEqual([false]);
+    expect(asks).toEqual([[424243, '55']]);
+    expect(ledgerOf(b.out), 'the dead writer\'s stream is charged once, then the new spawn').toEqual([{ name: 'dead-0', tokens: L_TOKENS }, { name: 'dead-0', tokens: T5_TOKENS }]);
+    expect(existsSync(path.join(b.out, 'dead-0.pid')), 'the record is gone').toBe(false);
+    expect(existsSync(path.join(b.out, 'dead-0.jsonl.part')), 'the part is gone').toBe(false);
+    expect(stubLog(b.home)).toHaveLength(1);
+  }, 60_000);
+
+  it('a lone .pid is removed, liveness is never asked, and nothing is charged', async () => {
+    const b = t5Box('ccrc-replay-d5984-lone-');
+    plant(b.out, 'lone-0', { part: null, pid: recText(424244, null) });
+    await claimedBatch([t5job(b, b.up, 'box', 'lone-0')], { gate: noGate, liveness: notAsked });
+    expect(existsSync(path.join(b.out, 'lone-0.pid'))).toBe(false);
+    expect(ledgerOf(b.out)).toEqual([{ name: 'lone-0', tokens: T5_TOKENS }]);
+  }, 60_000);
+
+  it('claimOut settles every leftover under --out, whatever its job: a dead writer\'s .part at any of four depths is charged and removed, a link is never followed', async () => {
+    const out = replay.prepareOut(path.join(mkTmp('ccrc-replay-d5984-walk-'), 'out'));
+    plant(out, 'a', { pid: recText(424245, '9') });
+    plant(out, 'b', { pid: null });
+    plant(out, 'deep/er/est/x', { pid: recText(424246, null) });
+    plant(out, 'gone/only', { part: null, pid: recText(424247, '1') });
+    const tooDeep = path.join(out, 'q/r/s/t/u');
+    mkdirSync(tooDeep, { recursive: true });
+    writeFileSync(path.join(tooDeep, 'v.jsonl.part'), L_STREAM);
+    const target = mkTmp('ccrc-replay-d5984-walk-link-');
+    writeFileSync(path.join(target, 'linked.jsonl.part'), L_STREAM);
+    symlinkSync(target, path.join(out, 'link'));
+    const c = claimFor(out, stubLive('dead'));
+    expect(c.out).toBe(out);
+    expect(ledgerOf(out).map((r) => r.name).sort()).toEqual(['a', 'b', 'deep/er/est/x']);
+    expect(ledgerOf(out).every((r) => r.tokens === L_TOKENS)).toBe(true);
+    for (const f of ['a.jsonl.part', 'a.pid', 'b.jsonl.part', 'deep/er/est/x.jsonl.part', 'deep/er/est/x.pid', 'gone/only.pid']) {
+      expect(existsSync(path.join(out, f)), `${f} is gone`).toBe(false);
+    }
+    expect(existsSync(path.join(tooDeep, 'v.jsonl.part')), 'a directory past four levels is not walked').toBe(true);
+    expect(existsSync(path.join(target, 'linked.jsonl.part')), 'a symlinked directory is not followed').toBe(true);
+  }, 60_000);
+
+  it('claimOut refuses run-live on a live writer anywhere under --out and releases its lock; a name that is no run name refuses out-refused', () => {
+    const out = replay.prepareOut(path.join(mkTmp('ccrc-replay-d5984-walkrefuse-'), 'out'));
+    plant(out, 'sub/live-1', { pid: recText(424248, '3') });
+    expect(() => replay.claimOut(out, { liveness: stubLive('alive') })).toThrow(/run-live: pid 424248/);
+    expect(existsSync(path.join(out, '.driver.lock')), 'the refused claim leaves no lock').toBe(false);
+    rmSync(path.join(out, 'sub'), { recursive: true });
+    for (const [file, detail] of [['Bad.jsonl.part', 'run-name-invalid Bad.jsonl.part'], ['.jsonl.part', 'run-name-invalid .jsonl.part'],
+      ['spend.jsonl.part', 'run-name-invalid spend.jsonl.part'], ['x y.pid', 'run-name-invalid x y.pid']] as const) {
+      writeFileSync(path.join(out, file), L_STREAM);
+      expect(() => replay.claimOut(out, { liveness: stubLive('dead') }), file).toThrow(new replay.DriverRefusal('out-refused', detail));
+      expect(existsSync(path.join(out, '.driver.lock')), `${file}: no lock left`).toBe(false);
+      rmSync(path.join(out, file));
+    }
+  });
+});
+
+describe('fix round 1 (D-5984): each child leads its own process group, with a pid record while it runs', () => {
+  it('while a child runs its .pid names it (pid and start, mode 0600, a group leader) beside its .part; the record is gone once it has closed', async () => {
+    const b = t5Box('ccrc-replay-d5984-record-');
+    t5fs.writeFileSync(t5path.join(b.home, T5_STUB_SLEEP), '1500');
+    const flight = claimedRun(t5job(b, b.up, 'box', 'rec-0'));
+    const pidFile = t5path.join(b.out, 'rec-0.pid');
+    expect(await until(() => existsSync(pidFile), 10_000), 'the record appears').toBe(true);
+    const text = readFileSync(pidFile, 'utf8');
+    const rec = JSON.parse(text);
+    expect(Object.keys(rec).sort()).toEqual(['pid', 'start']);
+    expect(text).toBe(recText(rec.pid, rec.start));
+    expect(statSync(pidFile).mode & 0o777).toBe(0o600);
+    expect(existsSync(t5path.join(b.out, 'rec-0.jsonl.part'))).toBe(true);
+    expect(replay.liveness(rec.pid, rec.start), 'the record names a live process').toBe('alive');
+    expect(() => process.kill(-rec.pid, 0), 'it leads a process group of its own').not.toThrow();
+    if (HAS_PROC) {
+      expect(rec.start).toBe(startOf(rec.pid));
+      const stat = readFileSync(`/proc/${rec.pid}/stat`, 'utf8');
+      expect(Number(stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/)[2]), 'its pgrp is its own pid').toBe(rec.pid);
+    }
+    await bounded(flight, 30_000, 'the run finishing');
+    expect(existsSync(pidFile), 'removed after the spend line').toBe(false);
+    expect(existsSync(t5path.join(b.out, 'rec-0.jsonl.part'))).toBe(false);
+  }, 60_000);
+
+  it('a launcher that cannot be started rejects and leaves neither a .part nor a .pid', async () => {
+    const b = t5Box('ccrc-replay-d5984-spawnfail-');
+    chmodSync(t5path.join(b.home, '.local', 'bin', 'up-a'), 0o644);
+    await expect(claimedRun(t5job(b, b.up, 'box', 'fail-0'))).rejects.toThrow(/EACCES/);
+    expect(existsSync(t5path.join(b.out, 'fail-0.jsonl.part')), 'no part left').toBe(false);
+    expect(existsSync(t5path.join(b.out, 'fail-0.pid')), 'no record left').toBe(false);
+  }, 60_000);
+
+  // D-5984: the run's cwd is removed best-effort. A child that leaves an entry nobody may remove in it (a mode-000 directory)
+  // must not turn a finished run into a raw EACCES before its spend line: the run is charged once and its run.json written.
+  // Skipped as root, which removes it anyway. The case restores the modes and removes the leftover cwd itself.
+  it.skipIf(process.getuid?.() === 0)('a child-made entry nobody may remove in the run cwd does not fail the finished run: it is charged and recorded', async () => {
+    const b = t5Box('ccrc-replay-d5984-cwdlock-');
+    t5fs.writeFileSync(t5path.join(b.home, T5_STUB_LOCK), '1');
+    const outcome = await claimedRun(t5job(b, b.up, 'box', 'cwd-0'));
+    try {
+      expect(outcome.skipped).toBe(false);
+      expect(replay.spentSoFar(b.out), 'charged once').toBe(T5_TOKENS);
+      expect(existsSync(t5path.join(b.out, 'cwd-0.run.json')), 'recorded').toBe(true);
+      expect(existsSync(t5path.join(outcome.cwd, 'locked')), 'CONTROL: the entry the child made is the one left behind').toBe(true);
+    } finally {
+      chmodSync(t5path.join(outcome.cwd, 'locked'), 0o700);
+      rmSync(outcome.cwd, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  // D-5984: a child no record names must not run on. Whatever stops the `.pid` record being written whole, the child's
+  // group is SIGKILLed and the run rejects. The record's tmp file is `<name>.pid.tmp-<this pid>` (the run is in-process, so
+  // process.pid is the writer's); a DIRECTORY planted there (settleLeftover and the claim walk look at `.pid` and
+  // `.jsonl.part` names only, so they let it through) makes the exclusive create refuse.
+  it('when the .pid record cannot be written, the child\'s whole group is killed, the run rejects and no run.json is written', async () => {
+    const b = t5Box('ccrc-replay-d5984-pidfail-');
+    writeFileSync(t5path.join(b.home, '.local', 'bin', 'up-a'), `#!/usr/bin/env node
+(async () => {
+  const fs = await import('node:fs');
+  const cp = await import('node:child_process');
+  const path = await import('node:path');
+  const home = path.resolve(path.dirname(process.argv[1]), '..', '..');
+  fs.writeFileSync(path.join(home, 'stub.pid'), String(process.pid));
+  const g = cp.spawn(process.execPath, ['-e', 'setTimeout(() => {}, 25000)'], { stdio: 'ignore' });
+  fs.writeFileSync(path.join(home, 'grandchild.pid'), String(g.pid));
+  setTimeout(() => {}, 25000);
+})();
+`, { mode: 0o700 });
+    mkdirSync(t5path.join(b.out, `pf-0.pid.tmp-${process.pid}`));
+    const files = ['stub.pid', 'grandchild.pid'].map((f) => t5path.join(b.home, f));
+    const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    let killedPid: number | null = null;
+    try {
+      const failure = await bounded(claimedRun(t5job(b, b.up, 'box', 'pf-0')).then(() => null, (e: unknown) => e), 30_000, 'the run rejecting');
+      expect(failure, 'the run rejects').toBeInstanceOf(DriverRefusal);
+      expect((failure as DriverRefusal).word).toBe('out-refused');
+      // The refusal names the child it killed, so the check below does not depend on the stub having started.
+      const detail = (failure as DriverRefusal).detail;
+      const named = /^pf-0\.pid\.tmp-\d+ already exists and is not a regular file; its child \(pid (\d+)\) was killed with its group$/.exec(detail);
+      expect(named, detail).not.toBeNull();
+      killedPid = Number(named![1]);
+      expect(await until(() => groupGone(killedPid!), 10_000), 'no process is left in the killed child\'s group').toBe(true);
+      // A stub that did start has its pid file read after the group is gone, so its grandchild is checked too.
+      const grandchild = existsSync(files[1]!) ? Number(readFileSync(files[1]!, 'utf8')) : null;
+      if (grandchild !== null) expect(await until(() => !alive(grandchild), 10_000), 'the grandchild died with the group').toBe(true);
+      expect(existsSync(t5path.join(b.out, 'pf-0.run.json')), 'no run.json').toBe(false);
+      expect(existsSync(t5path.join(b.out, 'pf-0.pid')), 'no record').toBe(false);
+      expect(existsSync(t5path.join(b.out, 'pf-0.jsonl.part')), 'the .part is left for the next claim').toBe(true);
+      // The next driver on this --out charges that .part once (one ledger line) and removes it (D-5811).
+      claimsByOut.get(b.out)!.release();
+      claimsByOut.delete(b.out);
+      claimFor(b.out);
+      const ledger = readFileSync(t5path.join(b.out, replay.SPEND_LEDGER), 'utf8').split('\n').filter((l) => l !== '');
+      expect(ledger, 'charged once').toHaveLength(1);
+      expect(existsSync(t5path.join(b.out, 'pf-0.jsonl.part')), 'the .part is removed after the charge').toBe(false);
+    } finally {
+      if (killedPid !== null && !groupGone(killedPid)) { try { process.kill(-killedPid, 'SIGKILL'); } catch { /* gone */ } }
+      for (const f of files) { try { process.kill(Number(readFileSync(f, 'utf8')), 'SIGKILL'); } catch { /* gone, or never written */ } }
+    }
+  }, 60_000);
+
+  it('a run that outlives its timeout is killed with its whole group, and still records its run.json', async () => {
+    const b = t5Box('ccrc-replay-d5984-timeout-');
+    writeFileSync(t5path.join(b.home, '.local', 'bin', 'up-a'), `#!/usr/bin/env node
+(async () => {
+  const fs = await import('node:fs');
+  const cp = await import('node:child_process');
+  const path = await import('node:path');
+  const home = path.resolve(path.dirname(process.argv[1]), '..', '..');
+  fs.readFileSync(0);
+  const g = cp.spawn(process.execPath, ['-e', 'setTimeout(() => {}, 25000)'], { stdio: 'ignore' });
+  fs.writeFileSync(path.join(home, 'grandchild.pid'), String(g.pid));
+  setTimeout(() => {}, 25000);
+})();
+`, { mode: 0o700 });
+    const grandchildFile = t5path.join(b.home, 'grandchild.pid');
+    try {
+      const o = await bounded(claimedRun(t5job(b, b.up, 'box', 'to-0', { timeoutMs: 3000 })), 30_000, 'the timed-out run');
+      expect([o.skipped, o.signal]).toEqual([false, 'SIGTERM']);
+      expect(existsSync(t5path.join(b.out, 'to-0.run.json')), 'a timed-out run records its run.json').toBe(true);
+      const grandchild = Number(readFileSync(grandchildFile, 'utf8'));
+      const dead = await until(() => { try { process.kill(grandchild, 0); return false; } catch { return true; } }, 10_000);
+      expect(dead, 'the grandchild in the run\'s group died with it').toBe(true);
+    } finally {
+      try { process.kill(Number(readFileSync(grandchildFile, 'utf8')), 'SIGKILL'); } catch { /* gone */ }
+    }
+  }, 60_000);
+
+  it('main installs one handler each for SIGINT, SIGTERM and SIGHUP while a subcommand runs and removes them after it returns, however it ends', async () => {
+    const count = (): number[] => ['SIGINT', 'SIGTERM', 'SIGHUP'].map((s) => process.listenerCount(s));
+    const before = count();
+    const seen: number[][] = [];
+    const umask = process.umask(0o022);
+    process.umask(umask);
+    const quiet = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      replay.HANDLERS.set('fixture-sig', async () => { seen.push(count()); return 0; });
+      replay.HANDLERS.set('fixture-sig-throws', async () => { seen.push(count()); return replay.refuse('budget-exhausted', 'x'); });
+      expect(await replay.main(['fixture-sig'], {})).toBe(0);
+      expect(count(), 'removed after a return').toEqual(before);
+      expect(await replay.main(['fixture-sig-throws'], {})).toBe(EXIT.REFUSED);
+      expect(count(), 'removed after a refusal').toEqual(before);
+    } finally {
+      quiet.mockRestore();
+      replay.HANDLERS.delete('fixture-sig');
+      replay.HANDLERS.delete('fixture-sig-throws');
+      process.umask(umask);
+    }
+    for (const during of seen) expect(during, 'one more of each while the handler ran').toEqual(before.map((n) => n + 1));
+  });
+});
+
+describe('fix round 1 (D-5985): one driver per --out, and the claim every runner requires', () => {
+  const extra: Claim[] = [];
+  afterEach(() => { for (const c of extra) c.release(); extra.length = 0; });
+  const claimNow = (out: string, liveness?: typeof replay.liveness): Claim => {
+    const c = replay.claimOut(out, liveness === undefined ? {} : { liveness });
+    extra.push(c);
+    return c;
+  };
+  const freshOut = (): string => replay.prepareOut(path.join(mkTmp('ccrc-replay-d5985-'), 'out'));
+  const LOCK = '.driver.lock';
+  const lockPath = (out: string): string => path.join(out, LOCK);
+  const myStart = (): string | null => (HAS_PROC ? startOf(process.pid) : null);
+
+  it('a claim writes the lock naming this driver (whole, 0600), leaves no temp file, and release removes it; a second release is harmless', () => {
+    const out = freshOut();
+    const c = claimNow(out);
+    expect(readFileSync(lockPath(out), 'utf8')).toBe(recText(process.pid, myStart()));
+    expect(statSync(lockPath(out)).mode & 0o777).toBe(0o600);
+    expect(readdirSync(out).sort(), 'no tmp or stale file beside the lock').toEqual([replay.OUT_MARKER, LOCK].sort());
+    c.release();
+    expect(existsSync(lockPath(out))).toBe(false);
+    expect(() => c.release()).not.toThrow();
+    const again = claimNow(out);
+    expect(existsSync(lockPath(out)), 'the --out is claimable again').toBe(true);
+    again.release();
+  });
+
+  it('release removes only a lock that still names this driver', () => {
+    const out = freshOut();
+    const c = claimNow(out);
+    writeFileSync(lockPath(out), recText(424250, '4'));
+    c.release();
+    expect(readFileSync(lockPath(out), 'utf8'), 'another driver\'s lock is left alone').toBe(recText(424250, '4'));
+  });
+
+  // D-5985: the start half of the identity. A lock that names THIS pid with ANOTHER start is a reused pid's, not this
+  // driver's, and release leaves it alone.
+  it('release leaves a lock that names this pid with another start', () => {
+    const out = freshOut();
+    const c = claimNow(out);
+    const reused = recText(process.pid, '1');
+    expect(reused, 'the planted start differs from this process\'s').not.toBe(recText(process.pid, myStart()));
+    writeFileSync(lockPath(out), reused);
+    c.release();
+    expect(readFileSync(lockPath(out), 'utf8'), 'a reused pid\'s lock is left alone').toBe(reused);
+  });
+
+  // D-5985: the pid half of both identity checks, and release()'s idempotence.
+  it('release leaves a lock that names another pid with this process\'s start', () => {
+    const out = freshOut();
+    const c = claimNow(out);
+    const theirs = recText(424262, myStart());
+    writeFileSync(lockPath(out), theirs);
+    c.release();
+    expect(existsSync(lockPath(out)), 'release did not remove another pid\'s lock').toBe(true);
+    expect(readFileSync(lockPath(out), 'utf8'), 'another pid\'s lock is left alone even with this start').toBe(theirs);
+  });
+
+  it('an old claim\'s second release does not remove a newer claim\'s lock in the same process', () => {
+    const out = freshOut();
+    const a = claimNow(out);
+    a.release();
+    expect(existsSync(lockPath(out))).toBe(false);
+    const b = claimNow(out);
+    expect(readFileSync(lockPath(out), 'utf8'), 'the newer claim holds the lock').toBe(recText(process.pid, myStart()));
+    a.release();
+    expect(existsSync(lockPath(out)), 'the second release of the old claim did not remove the newer claim\'s lock').toBe(true);
+    expect(readFileSync(lockPath(out), 'utf8'), 'the second release of the old claim leaves the newer claim\'s lock').toBe(recText(process.pid, myStart()));
+    b.release();
+    expect(existsSync(lockPath(out))).toBe(false);
+  });
+
+  it('a lock held by a live driver refuses out-in-use naming the pid, and leaves the lock as it was: this process, another process, an unmeasured holder', async () => {
+    const out = freshOut();
+    claimNow(out);
+    expect(() => replay.claimOut(out)).toThrow(new replay.DriverRefusal('out-in-use', `pid ${process.pid} holds ${LOCK} (alive)`));
+    expect(readFileSync(lockPath(out), 'utf8')).toBe(recText(process.pid, myStart()));
+    const other = freshOut();
+    const sleeper = sleeperChild();
+    const rec = recText(sleeper.pid!, HAS_PROC ? startOf(sleeper.pid!) : null);
+    writeFileSync(lockPath(other), rec);
+    expect(() => replay.claimOut(other)).toThrow(new replay.DriverRefusal('out-in-use', `pid ${sleeper.pid} holds ${LOCK} (alive)`));
+    expect(readFileSync(lockPath(other), 'utf8')).toBe(rec);
+    const unknown = freshOut();
+    writeFileSync(lockPath(unknown), recText(424251, '8'));
+    expect(() => replay.claimOut(unknown, { liveness: () => 'unmeasured' })).toThrow(new replay.DriverRefusal('out-in-use', `pid 424251 holds ${LOCK} (unmeasured)`));
+    expect(readFileSync(lockPath(unknown), 'utf8')).toBe(recText(424251, '8'));
+    expect(readdirSync(unknown).sort(), 'a refusal leaves no temp or stale file').toEqual([replay.OUT_MARKER, LOCK].sort());
+  });
+
+  it('a lock held by a dead driver is taken over: it then names this driver, and no stale or temp file remains', async () => {
+    const out = freshOut();
+    const dead = await deadRecord();
+    writeFileSync(lockPath(out), recText(dead.pid, dead.start));
+    claimNow(out);
+    expect(readFileSync(lockPath(out), 'utf8')).toBe(recText(process.pid, myStart()));
+    expect(readdirSync(out).sort()).toEqual([replay.OUT_MARKER, LOCK].sort());
+  });
+
+  it('a dead holder\'s lock that changes hands before it is taken is put back, and the claim refuses out-in-use', async () => {
+    const out = freshOut();
+    const sleeper = sleeperChild();
+    const theirs = recText(sleeper.pid!, HAS_PROC ? startOf(sleeper.pid!) : null);
+    writeFileSync(lockPath(out), recText(424252, '2'));
+    const swap = (): 'dead' => { writeFileSync(lockPath(out), theirs); return 'dead'; };   // read as dead, then another driver takes it
+    expect(() => replay.claimOut(out, { liveness: swap })).toThrow(/out-in-use: .driver.lock changed hands/);
+    expect(readFileSync(lockPath(out), 'utf8'), 'the live driver\'s lock is back').toBe(theirs);
+    expect(readdirSync(out).sort()).toEqual([replay.OUT_MARKER, LOCK].sort());
+  });
+
+  // D-5985: the pid half of the takeover's re-read. The stale file names ANOTHER pid with the dead holder's START (a new
+  // driver took the lock in the window), so it is not the holder read as dead: put back, refuse.
+  it('a stale lock that names another pid with the dead holder\'s start is put back, and the claim refuses out-in-use', () => {
+    const out = freshOut();
+    writeFileSync(lockPath(out), recText(424260, '7'));
+    const theirs = recText(424261, '7');
+    const swap = (): 'dead' => { writeFileSync(lockPath(out), theirs); return 'dead'; };   // read as dead, then another pid takes the lock
+    expect(() => replay.claimOut(out, { liveness: swap })).toThrow(/out-in-use: .driver.lock changed hands/);
+    expect(readFileSync(lockPath(out), 'utf8'), 'the other pid\'s lock is back').toBe(theirs);
+    expect(readdirSync(out).sort(), 'no stale or temp file remains').toEqual([replay.OUT_MARKER, LOCK].sort());
+  });
+
+  // D-5985: the start half of the takeover's re-read. The stale file names the SAME dead pid but ANOTHER start (the pid was
+  // reused by a new driver that took the lock in the window), so it is not the holder read as dead: put back, refuse.
+  it('a stale lock that names the same pid with another start is put back, and the claim refuses out-in-use', () => {
+    const out = freshOut();
+    writeFileSync(lockPath(out), recText(424254, '2'));
+    const theirs = recText(424254, '3');
+    const swap = (): 'dead' => { writeFileSync(lockPath(out), theirs); return 'dead'; };   // read as dead, then the pid's new owner takes the lock
+    expect(() => replay.claimOut(out, { liveness: swap })).toThrow(/out-in-use: .driver.lock changed hands/);
+    expect(readFileSync(lockPath(out), 'utf8'), 'the other start\'s lock is back').toBe(theirs);
+    expect(readdirSync(out).sort(), 'no stale or temp file remains').toEqual([replay.OUT_MARKER, LOCK].sort());
+  });
+
+  it('a lock that is empty, torn, not a record, a directory or a symlink refuses out-in-use naming the file, and is left as it was', () => {
+    for (const text of ['', 'junk\n', '{"pid":1}\n', recText(0, null), '{"pid":5,"start":null}']) {
+      const out = freshOut();
+      writeFileSync(lockPath(out), text);
+      expect(() => replay.claimOut(out, { liveness: () => 'dead' }), JSON.stringify(text)).toThrow(/out-in-use: \.driver\.lock is not a lock record/);
+      expect(readFileSync(lockPath(out), 'utf8')).toBe(text);
+    }
+    const dir = freshOut();
+    mkdirSync(lockPath(dir));
+    expect(() => replay.claimOut(dir, { liveness: () => 'dead' })).toThrow(/out-in-use: \.driver\.lock is not a regular file/);
+    const linked = freshOut();
+    const elsewhere = path.join(mkTmp('ccrc-replay-d5985-target-'), 'real-lock');
+    writeFileSync(elsewhere, recText(424253, '6'));
+    symlinkSync(elsewhere, lockPath(linked));
+    expect(() => replay.claimOut(linked, { liveness: () => 'dead' })).toThrow(/out-in-use: \.driver\.lock is not a regular file/);
+    expect(readFileSync(elsewhere, 'utf8'), 'the link\'s target is untouched').toBe(recText(424253, '6'));
+    expect(lstatSync(lockPath(linked)).isSymbolicLink()).toBe(true);
+  });
+
+  it('two drivers that both see one dead lock end with exactly one holder', async () => {
+    const dir = mkTmp('ccrc-replay-d5985-race-');
+    const racer = path.join(dir, 'racer.mjs');
+    writeFileSync(racer, `import { claimOut } from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
+let claim = null;
+let buf = '';
+process.stdout.write('ready\\n');
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (d) => {
+  buf += d;
+  let i;
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const cmd = buf.slice(0, i);
+    buf = buf.slice(i + 1);
+    if (cmd === 'go') {
+      try { claim = claimOut(process.argv[2]); process.stdout.write('ok\\n'); } catch (e) { process.stdout.write('refused ' + (e.word ?? e.message) + '\\n'); }
+    } else if (cmd === 'quit') {
+      if (claim) claim.release();
+      process.exit(0);
+    }
+  }
+});
+`);
+    for (let round = 0; round < 3; round++) {
+      const out = freshOut();
+      const dead = await deadRecord();
+      writeFileSync(lockPath(out), recText(dead.pid, dead.start));
+      const racers = [0, 1].map(() => {
+        const c = spawn(process.execPath, [racer, out], { stdio: ['pipe', 'pipe', 'inherit'] });
+        startedChildren.push(c);
+        const lines: string[] = [];
+        let partial = '';
+        c.stdout!.setEncoding('utf8');
+        c.stdout!.on('data', (d: string) => { partial += d; const parts = partial.split('\n'); partial = parts.pop()!; lines.push(...parts); });
+        const exited = new Promise<void>((r) => c.once('close', () => r()));
+        return { c, lines, exited };
+      });
+      for (const r of racers) expect(await until(() => r.lines.includes('ready'), 20_000), 'a racer is up').toBe(true);
+      for (const r of racers) r.c.stdin!.write('go\n');
+      for (const r of racers) expect(await until(() => r.lines.length >= 2, 20_000), 'a racer answered').toBe(true);
+      const answers = racers.map((r) => r.lines[1]).sort();
+      expect(answers, `round ${round}`).toEqual(['ok', 'refused out-in-use']);
+      const winner = racers.find((r) => r.lines[1] === 'ok')!;
+      expect(JSON.parse(readFileSync(lockPath(out), 'utf8')).pid, 'the lock names the one holder').toBe(winner.c.pid);
+      for (const r of racers) r.c.stdin!.write('quit\n');
+      for (const r of racers) await bounded(r.exited, 20_000, 'a racer exiting');
+      expect(existsSync(lockPath(out)), 'the winner released').toBe(false);
+      expect(readdirSync(out), 'no tmp or stale file').toEqual([replay.OUT_MARKER]);
+    }
+  }, 120_000);
+
+  it('runBatch, launchRun and step0bMechanics refuse a call with no claim, a released claim or a claim over another --out: a TypeError before any spawn', async () => {
+    const b = t5Box('ccrc-replay-d5985-claim-');
+    const other = t5Box('ccrc-replay-d5985-claim-other-');
+    const job = t5job(b, b.up, 'box', 'cl-0');
+    const spent = claimNow(freshOut());
+    spent.release();
+    const noClaim = /opts\.claim is required/;
+    t5typeError(await t5caught(() => replay.runBatch([job], { gate: T5_NO_GATE } as never)), noClaim);
+    t5typeError(await t5caught(() => replay.launchRun(job)), noClaim);
+    t5typeError(await t5caught(() => replay.launchRun(job, {} as never)), noClaim);
+    t5typeError(await t5caught(() => replay.runBatch([job], { gate: T5_NO_GATE, claim: spent } as never)), noClaim);
+    t5typeError(await t5caught(() => replay.launchRun(job, { claim: spent } as never)), noClaim);
+    t5typeError(await t5caught(() => replay.runBatch([job], { gate: T5_NO_GATE, claim: { ...claimFor(b.out) } } as never)), noClaim);
+    const wrongOut = /is not the claimed --out/;
+    t5typeError(await t5caught(() => replay.runBatch([job], { gate: T5_NO_GATE, claim: claimFor(other.out) } as never)), wrongOut);
+    t5typeError(await t5caught(() => replay.launchRun(job, { claim: claimFor(other.out) } as never)), wrongOut);
+    t5typeError(await t5caught(() => replay.step0bMechanics({ launch: b.up, out: b.out, model: 'fixture-model-arm', settingsMode: 'restricted', lang: undefined, gate: T5_NO_GATE } as never)), noClaim);
+    expect(stubLog(b.home), 'no spawn').toBeNull();
+    expect(stubLog(other.home), 'no spawn').toBeNull();
+    expect((await claimedBatch([job], { gate: T5_NO_GATE })).map((o) => o.skipped), 'CONTROL: the live claim runs').toEqual([false]);
+  }, 60_000);
+});
+
+// ── fix round 1 (D-5986): no-follow, type-checked I/O under --out ───────────────────────────────────────────
+// Every path the driver reads or writes under a reused --out, and the --step0a input, is read with lstat, a no-follow
+// non-blocking open and an fstat, and written through an exclusive create (a tmp file and then a rename or a link, or the
+// `.part` the child writes in place), or opened O_APPEND|O_NOFOLLOW.
+// A link or a FIFO planted there refuses out-refused (input-invalid for --step0a) and nothing is followed or waited on.
+// A case that could block runs the call in a child with a deadline, so a regression times out instead of hanging the suite.
+describe('fix round 1 (D-5986): no-follow, type-checked I/O under --out', () => {
+  const D6_STREAM = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'x', permission_denials: [],
+    usage: { input_tokens: 3, cache_creation_input_tokens: 4, cache_read_input_tokens: 5, output_tokens: 6 } }) + '\n';
+  const freshOut = (): string => replay.prepareOut(path.join(mkTmp('ccrc-replay-d5986-'), 'out'));
+  const outsideDir = (): string => mkTmp('ccrc-replay-d5986-outside-');
+  /** What a call throws, or null when it throws nothing. */
+  const thrown = (f: () => unknown): unknown => { try { f(); } catch (e) { return e; } return null; };
+
+  it('a ledger that is a symlink (to a file, or dangling): recordSpend and claimOut\'s charge refuse out-refused, and the target is untouched', () => {
+    for (const dangling of [false, true]) {
+      const out = freshOut();
+      const target = path.join(outsideDir(), 'outside.jsonl');
+      if (!dangling) writeFileSync(target, 'ORIGINAL\n');
+      symlinkSync(target, path.join(out, replay.SPEND_LEDGER));
+      expect(() => replay.recordSpend(out, 'x', 5), `dangling ${dangling}`).toThrow(new replay.DriverRefusal('out-refused', `${replay.SPEND_LEDGER} is not a regular file`));
+      writeFileSync(path.join(out, 'a.jsonl.part'), D6_STREAM);
+      expect(thrown(() => replay.claimOut(out, { liveness: () => 'dead' })), `claimOut, dangling ${dangling}`).toMatchObject({ word: 'out-refused' });
+      if (dangling) expect(existsSync(target), 'the dangling target is not created').toBe(false);
+      else expect(readFileSync(target, 'utf8'), 'the target gained no line').toBe('ORIGINAL\n');
+      expect(existsSync(path.join(out, 'a.jsonl.part')), 'the uncharged stream stays').toBe(true);
+      expect(existsSync(path.join(out, '.driver.lock')), 'the refused claim leaves no lock').toBe(false);
+    }
+    const ok = freshOut();
+    replay.recordSpend(ok, 'x', 5);
+    expect(replay.spentSoFar(ok), 'CONTROL: a plain ledger takes the line').toBe(5);
+    expect(statSync(path.join(ok, replay.SPEND_LEDGER)).mode & 0o777).toBe(0o600);
+  });
+
+  it('poison-bin/gh as a symlink (to a file, or dangling) or a directory: ensurePoisonBin refuses out-refused, and the target keeps its bytes and mode', () => {
+    for (const kind of ['file', 'dangling', 'directory'] as const) {
+      const out = freshOut();
+      mkdirSync(path.join(out, 'poison-bin'));
+      const gh = path.join(out, 'poison-bin', 'gh');
+      const target = path.join(outsideDir(), 'outside-target');
+      if (kind === 'file') { writeFileSync(target, 'KEEP\n', { mode: 0o644 }); chmodSync(target, 0o644); symlinkSync(target, gh); }
+      if (kind === 'dangling') symlinkSync(target, gh);
+      if (kind === 'directory') mkdirSync(gh);
+      expect(thrown(() => replay.ensurePoisonBin(out)), kind).toMatchObject({ word: 'out-refused' });
+      if (kind === 'file') {
+        expect(readFileSync(target, 'utf8'), 'the target is not overwritten').toBe('KEEP\n');
+        expect(statSync(target).mode & 0o777, 'the target\'s mode is not changed').toBe(0o644);
+      }
+      if (kind === 'dangling') expect(existsSync(target), 'the dangling target is not created').toBe(false);
+      expect(readdirSync(path.join(out, 'poison-bin')), `${kind}: no tmp file left`).toEqual(['gh']);
+    }
+    const ok = freshOut();
+    const dir = replay.ensurePoisonBin(ok);
+    expect(statSync(path.join(dir, 'gh')).mode & 0o777, 'CONTROL: a plain gh is 0700').toBe(0o700);
+    expect(replay.ensurePoisonBin(ok), 'and is planted again').toBe(dir);
+  });
+
+  it('a run subdirectory that is a symlink (to a directory, or dangling), a file, or a link in the middle of a nested name: out-refused before any spawn, and nothing is written through it', async () => {
+    const cases: Array<[string, string, (p: string, outside: string) => void, string]> = [
+      ['a symlink to a directory', 'sub/run-0', (p, o) => symlinkSync(o, p), 'sub is not a directory'],
+      ['a dangling symlink', 'sub/run-0', (p, o) => symlinkSync(path.join(o, 'nothing-here'), p), 'sub is not a directory'],
+      // A file in the directory's place: the check-only walk of the name's parents answers first, still out-refused and still before any spawn.
+      ['a file', 'sub/run-0', (p) => writeFileSync(p, 'not a directory'), 'sub is not a directory'],
+    ];
+    for (const [label, name, plant, detail] of cases) {
+      const b = t5Box('ccrc-replay-d5986-subdir-');
+      const outside = outsideDir();
+      plant(path.join(b.out, 'sub'), outside);
+      const job = t5job(b, b.up, 'box', name);
+      await expect(claimedRun(job), `${label} through launchRun`).rejects.toMatchObject({ word: 'out-refused', detail });
+      await expect(claimedBatch([job], { gate: T5_NO_GATE }), `${label} through the batch`).rejects.toMatchObject({ word: 'out-refused', detail });
+      expect(readdirSync(outside).filter((f) => f !== 'nothing-here'), `${label}: nothing written through the link`).toEqual([]);
+      expect(stubLog(b.home), `${label}: no spawn`).toBeNull();
+      expect(replay.spentSoFar(b.out), `${label}: nothing spent`).toBe(0);
+    }
+    const nested = t5Box('ccrc-replay-d5986-subdir-nested-');
+    const outside = outsideDir();
+    mkdirSync(path.join(outside, 'inner'));
+    symlinkSync(outside, path.join(nested.out, 'top'));
+    await expect(claimedRun(t5job(nested, nested.up, 'box', 'top/inner/run-1'))).rejects.toMatchObject({ word: 'out-refused', detail: 'top is not a directory' });
+    expect(readdirSync(path.join(outside, 'inner')), 'nothing written through the middle link').toEqual([]);
+    const ok = t5Box('ccrc-replay-d5986-subdir-ok-');
+    await claimedRun(t5job(ok, ok.up, 'box', 'deep/er/run-2'));
+    expect(lstatSync(path.join(ok.out, 'deep', 'er')).isDirectory(), 'CONTROL: a nested name makes its real directories').toBe(true);
+    expect(statSync(path.join(ok.out, 'deep')).mode & 0o777).toBe(0o700);
+  }, 60_000);
+
+  it('a run subdirectory that is a symlink to a directory HOLDING a matching leftover or finished run: the batch refuses out-refused before it reads, charges, removes or skips anything there', async () => {
+    // The check-only walk of a name's parents runs before the pre-pass settle and before finishedOutcome, because
+    // O_NOFOLLOW protects only the last component: an outside .part would be charged and deleted, and an outside
+    // finished run would resolve skipped with its cwd read from outside --out.
+    const part = t5Box('ccrc-replay-d5986-linked-part-');
+    const outsidePart = outsideDir();
+    writeFileSync(path.join(outsidePart, 'run-0.jsonl.part'), D6_STREAM);
+    symlinkSync(outsidePart, path.join(part.out, 'sub'));
+    const partJob = t5job(part, part.up, 'box', 'sub/run-0');
+    await expect(claimedBatch([partJob], { gate: T5_NO_GATE }), 'a leftover .part behind the link').rejects.toMatchObject({ word: 'out-refused', detail: 'sub is not a directory' });
+    expect(readFileSync(path.join(outsidePart, 'run-0.jsonl.part'), 'utf8'), 'the outside .part was not removed').toBe(D6_STREAM);
+    expect(replay.spentSoFar(part.out), 'and was not charged').toBe(0);
+    expect(stubLog(part.home), 'no spawn').toBeNull();
+
+    // A finished run made for the name 'sub/run-0' in a real run, then moved behind the link.
+    const done = t5Box('ccrc-replay-d5986-linked-done-');
+    const outsideDone = outsideDir();
+    await claimedRun(t5job(done, done.up, 'box', 'seed-0'));
+    const rec = JSON.parse(readFileSync(path.join(done.out, 'seed-0.run.json'), 'utf8'));
+    rec.name = 'sub/run-0';
+    writeFileSync(path.join(outsideDone, 'run-0.run.json'), JSON.stringify(rec) + '\n');
+    writeFileSync(path.join(outsideDone, 'run-0.jsonl'), readFileSync(path.join(done.out, 'seed-0.jsonl')));
+    symlinkSync(outsideDone, path.join(done.out, 'sub'));
+    const spawnsBefore = stubLog(done.home)?.length ?? 0;
+    const doneJob = t5job(done, done.up, 'box', 'sub/run-0');
+    await expect(claimedBatch([doneJob], { gate: T5_NO_GATE }), 'a finished run behind the link').rejects.toMatchObject({ word: 'out-refused', detail: 'sub is not a directory' });
+    await expect(claimedRun(doneJob), 'through launchRun').rejects.toMatchObject({ word: 'out-refused', detail: 'sub is not a directory' });
+    expect(stubLog(done.home)?.length ?? 0, 'no new spawn').toBe(spawnsBefore);
+  }, 60_000);
+
+  it('a run.json tmp, or a .pid tmp, planted as a symlink is refused out-refused and never written through', async () => {
+    const rj = t5Box('ccrc-replay-d5986-rjtmp-');
+    const target = path.join(outsideDir(), 'outside-target');
+    writeFileSync(target, 'KEEP\n');
+    symlinkSync(target, path.join(rj.out, `rj-0.run.json.tmp-${process.pid}`));
+    await expect(claimedRun(t5job(rj, rj.up, 'box', 'rj-0'))).rejects.toMatchObject({ word: 'out-refused' });
+    expect(readFileSync(target, 'utf8'), 'run.json\'s tmp was not written through').toBe('KEEP\n');
+    expect(existsSync(path.join(rj.out, 'rj-0.run.json'))).toBe(false);
+    expect(replay.spentSoFar(rj.out), 'the finished spawn is charged before the marker').toBe(T5_TOKENS);
+
+    const pid = t5Box('ccrc-replay-d5986-pidtmp-');
+    const target2 = path.join(outsideDir(), 'outside-target');
+    writeFileSync(target2, 'KEEP\n');
+    symlinkSync(target2, path.join(pid.out, `pid-0.pid.tmp-${process.pid}`));
+    await expect(claimedRun(t5job(pid, pid.up, 'box', 'pid-0'))).rejects.toMatchObject({ word: 'out-refused' });
+    expect(readFileSync(target2, 'utf8'), 'the .pid tmp was not written through').toBe('KEEP\n');
+    expect(existsSync(path.join(pid.out, 'pid-0.pid'))).toBe(false);
+  }, 60_000);
+
+  it('a .part that was swapped for a directory while the run was open is refused out-refused run-stream-invalid, not read: nothing is charged, no run.json', async () => {
+    const b = t5Box('ccrc-replay-d5986-swapped-part-');
+    writeFileSync(path.join(b.home, 'stub-swap-path'), path.join(b.out, 'sw-0.jsonl.part'));
+    await expect(claimedRun(t5job(b, b.up, 'box', 'sw-0'))).rejects.toMatchObject({ word: 'out-refused', detail: 'run-stream-invalid sw-0' });
+    expect(stubLog(b.home), 'the run did happen').toHaveLength(1);
+    expect(existsSync(path.join(b.out, 'sw-0.run.json'))).toBe(false);
+    expect(replay.spentSoFar(b.out)).toBe(0);
+  }, 60_000);
+
+  it('a stale tmp file of this pid that is a regular file is replaced; the lock\'s tmp as a symlink refuses out-refused and the target is untouched', () => {
+    const out = freshOut();
+    writeFileSync(path.join(out, `.driver.lock.tmp-${process.pid}`), 'stale junk from an earlier driver of this pid');
+    const c = replay.claimOut(out);
+    expect(readFileSync(path.join(out, '.driver.lock'), 'utf8')).toBe(recText(process.pid, HAS_PROC ? startOf(process.pid) : null));
+    expect(readdirSync(out).sort(), 'the stale tmp is gone').toEqual([replay.OUT_MARKER, '.driver.lock'].sort());
+    c.release();
+    const linked = freshOut();
+    const target = path.join(outsideDir(), 'outside-target');
+    writeFileSync(target, 'KEEP\n');
+    symlinkSync(target, path.join(linked, `.driver.lock.tmp-${process.pid}`));
+    expect(thrown(() => replay.claimOut(linked))).toMatchObject({ word: 'out-refused' });
+    expect(readFileSync(target, 'utf8'), 'the lock\'s tmp was not written through').toBe('KEEP\n');
+    expect(existsSync(path.join(linked, '.driver.lock')), 'no lock taken').toBe(false);
+  });
+
+  // D-5986: every failure to read, list, create or write a path under --out answers a driver refusal (out-refused), never
+  // a raw errno (exit 1): an --out holder can make each of these happen. Root ignores modes, so each case is skipped for
+  // uid 0 and restores the modes it changed in a finally, so the fixture's cleanup can remove the tree.
+  it('a spend.jsonl nobody may write (mode 000) met by a leftover to charge: claimOut refuses out-refused spend.jsonl unwritable EACCES, keeps the .part, and releases the lock', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const out = freshOut();
+    writeFileSync(path.join(out, 'lo-0.jsonl.part'), D6_STREAM);
+    const ledger = path.join(out, replay.SPEND_LEDGER);
+    writeFileSync(ledger, '');
+    chmodSync(ledger, 0o000);
+    try {
+      expect(thrown(() => replay.claimOut(out))).toMatchObject({ word: 'out-refused', detail: 'spend.jsonl unwritable EACCES' });
+      expect(existsSync(path.join(out, 'lo-0.jsonl.part')), 'the .part stays, for the next driver to charge').toBe(true);
+      expect(existsSync(path.join(out, '.driver.lock')), 'the lock was released').toBe(false);
+    } finally {
+      chmodSync(ledger, 0o600);
+    }
+  });
+
+  it('a run subdirectory nobody may list (mode 000): claimOut\'s walk refuses out-refused <sub> unreadable EACCES and releases the lock; a batch into it, on a claim taken before, refuses out-refused and spawns nothing', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const out = freshOut();
+    const sub = path.join(out, 'sub');
+    mkdirSync(sub);
+    chmodSync(sub, 0o000);
+    try {
+      expect(thrown(() => replay.claimOut(out))).toMatchObject({ word: 'out-refused', detail: 'sub unreadable EACCES' });
+      expect(existsSync(path.join(out, '.driver.lock')), 'the lock was released after the walk refused').toBe(false);
+    } finally {
+      chmodSync(sub, 0o700);
+    }
+    const b = t5Box('ccrc-replay-d5986-unlistable-');   // claims b.out first, as a subcommand does
+    const bsub = path.join(b.out, 'sub');
+    mkdirSync(bsub);
+    chmodSync(bsub, 0o000);
+    try {
+      await expect(claimedBatch([t5job(b, b.up, 'box', 'sub/run-0')], { gate: T5_NO_GATE }))
+        .rejects.toMatchObject({ word: 'out-refused', detail: 'sub/run-0.run.json unreadable EACCES' });
+      expect(stubLog(b.home), 'no spawn').toBeNull();
+    } finally {
+      chmodSync(bsub, 0o700);
+    }
+  }, 60_000);
+
+  it('a run subdirectory nobody may write into (mode 0500): the run refuses out-refused <name>.jsonl.part unwritable EACCES before it spawns, and a --out nobody may write to refuses to plant the poison bin', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const b = t5Box('ccrc-replay-d5986-unwritable-');
+    const sub = path.join(b.out, 'sub');
+    mkdirSync(sub);
+    chmodSync(sub, 0o500);
+    try {
+      await expect(claimedRun(t5job(b, b.up, 'box', 'sub/run-0')))
+        .rejects.toMatchObject({ word: 'out-refused', detail: 'sub/run-0.jsonl.part unwritable EACCES' });
+      expect(stubLog(b.home), 'no spawn, so no orphan').toBeNull();
+      expect(replay.spentSoFar(b.out), 'nothing spent').toBe(0);
+    } finally {
+      chmodSync(sub, 0o700);
+    }
+    const o = freshOut();
+    chmodSync(o, 0o500);
+    try {
+      expect(thrown(() => replay.ensurePoisonBin(o))).toMatchObject({ word: 'out-refused', detail: 'poison-bin unwritable EACCES' });
+    } finally {
+      chmodSync(o, 0o700);
+    }
+  }, 60_000);
+
+  it('a run subdirectory nobody may write into (mode 0500) holding a leftover .part, a lone .pid, or a stale tmp of the lock: the removal that fails refuses out-refused <rel> unwritable EACCES, never a raw errno, and the lock is released', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const ledgerLines = (out: string): number =>
+      existsSync(path.join(out, replay.SPEND_LEDGER)) ? readFileSync(path.join(out, replay.SPEND_LEDGER), 'utf8').split('\n').filter((l) => l !== '').length : 0;
+    // (1) a leftover .part (no .pid): the charge lands, the removal fails, the .part stays and is charged again by the next driver (an over-count)
+    const a = freshOut();
+    const asub = path.join(a, 'sub');
+    mkdirSync(asub);
+    writeFileSync(path.join(asub, 'lo-0.jsonl.part'), D6_STREAM);
+    chmodSync(asub, 0o500);
+    try {
+      expect(thrown(() => replay.claimOut(a))).toMatchObject({ word: 'out-refused', detail: 'sub/lo-0.jsonl.part unwritable EACCES' });
+      expect(existsSync(path.join(asub, 'lo-0.jsonl.part')), 'the .part stays').toBe(true);
+      expect(ledgerLines(a), 'charged once').toBe(1);
+      expect(existsSync(path.join(a, '.driver.lock')), 'the lock was released').toBe(false);
+      expect(thrown(() => replay.claimOut(a))).toMatchObject({ word: 'out-refused', detail: 'sub/lo-0.jsonl.part unwritable EACCES' });
+      expect(ledgerLines(a), 'the left .part is charged again: an over-count, never a lost charge').toBe(2);
+    } finally {
+      chmodSync(asub, 0o700);
+    }
+    // (2) a lone .pid
+    const b = freshOut();
+    const bsub = path.join(b, 'sub');
+    mkdirSync(bsub);
+    writeFileSync(path.join(bsub, 'lo-1.pid'), recText(424242, null));
+    chmodSync(bsub, 0o500);
+    try {
+      expect(thrown(() => replay.claimOut(b))).toMatchObject({ word: 'out-refused', detail: 'sub/lo-1.pid unwritable EACCES' });
+      expect(existsSync(path.join(bsub, 'lo-1.pid')), 'the .pid stays').toBe(true);
+      expect(existsSync(path.join(b, '.driver.lock')), 'the lock was released').toBe(false);
+    } finally {
+      chmodSync(bsub, 0o700);
+    }
+    // (3) a stale regular tmp of the lock, in a --out nobody may write into: the replace-stale removal refuses
+    const c = freshOut();
+    const tmpName = `.driver.lock.tmp-${process.pid}`;
+    writeFileSync(path.join(c, tmpName), 'stale');
+    chmodSync(c, 0o500);
+    try {
+      expect(thrown(() => replay.claimOut(c))).toMatchObject({ word: 'out-refused', detail: `${tmpName} unwritable EACCES` });
+    } finally {
+      chmodSync(c, 0o700);
+    }
+  });
+
+  it('a dead record\'s .pid, removed after its .part is charged, in a run subdirectory nobody may write into (mode 0500): claimOut refuses out-refused <rel> unwritable EACCES, charged once, both files left', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const a = freshOut();
+    const sub = path.join(a, 'sub');
+    mkdirSync(sub);
+    writeFileSync(path.join(sub, 'dd-0.jsonl.part'), D6_STREAM);
+    writeFileSync(path.join(sub, 'dd-0.pid'), recText(424243, null));
+    chmodSync(sub, 0o500);
+    try {
+      expect(thrown(() => replay.claimOut(a, { liveness: () => 'dead' }))).toMatchObject({ word: 'out-refused', detail: 'sub/dd-0.pid unwritable EACCES' });
+      const ledger = readFileSync(path.join(a, replay.SPEND_LEDGER), 'utf8').split('\n').filter((l) => l !== '');
+      expect(ledger, 'the charge happened, once').toHaveLength(1);
+      expect(existsSync(path.join(sub, 'dd-0.pid')), 'the .pid stays').toBe(true);
+      expect(existsSync(path.join(sub, 'dd-0.jsonl.part')), 'the .part stays').toBe(true);
+      expect(existsSync(path.join(a, '.driver.lock')), 'the lock was released').toBe(false);
+    } finally {
+      chmodSync(sub, 0o700);
+    }
+  });
+
+  it('a removal that cannot mask a refusal is quiet: release in a --out nobody may write into does not throw, and a takeover that fails refuses out-refused, not the raw errno of its tmp cleanup', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    // (1) the claim's release: the lock cannot be removed, and the release still returns
+    const a = freshOut();
+    const claim = replay.claimOut(a);
+    chmodSync(a, 0o500);
+    try {
+      expect(() => claim.release()).not.toThrow();
+      expect(existsSync(path.join(a, '.driver.lock')), 'the lock stays (it names this driver, dead by the next start)').toBe(true);
+    } finally {
+      chmodSync(a, 0o700);
+    }
+    // (2) a dead holder's lock in a --out that turns unwritable while the driver starts: the rename refuses, and the
+    // tmp file's cleanup in the finally, which fails too, must not replace that refusal
+    const b = freshOut();
+    writeFileSync(path.join(b, '.driver.lock'), recText(424244, null));
+    try {
+      expect(thrown(() => replay.claimOut(b, { liveness: () => 'dead', afterHeld: () => chmodSync(b, 0o500) })))
+        .toMatchObject({ word: 'out-refused', detail: '.driver.lock unwritable EACCES' });
+    } finally {
+      chmodSync(b, 0o700);
+    }
+  });
+
+  // D-5986: guards a seam reaches. Each case below is skipped as root (which ignores modes) and restores the modes it changed
+  // in a finally, so the fixture's cleanup can remove the tree.
+  it('the lock\'s link that fails for a reason other than EEXIST (the --out turns unwritable between the failed link and the retry) refuses out-refused .driver.lock unwritable EACCES and leaves no lock', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const out = freshOut();
+    writeFileSync(path.join(out, '.driver.lock'), recText(424270, null));
+    let held = 0;
+    try {
+      expect(thrown(() => replay.claimOut(out, { afterHeld: () => { held++; rmSync(path.join(out, '.driver.lock')); chmodSync(out, 0o500); } })))
+        .toMatchObject({ word: 'out-refused', detail: '.driver.lock unwritable EACCES' });
+      expect(held, 'the lock was found held once, so the retry is the link that failed').toBe(1);
+      expect(existsSync(path.join(out, '.driver.lock')), 'no lock was taken').toBe(false);
+    } finally {
+      chmodSync(out, 0o700);
+    }
+    expect(replay.claimOut(out, { liveness: () => 'dead' }).release, 'CONTROL: the mode restored, the same --out is claimed').toBeTypeOf('function');
+  });
+
+  /** A box whose stub, just before it exits, removes `rm` (when given) and then makes `sub` mode 0500. */
+  function subdirBox(prefix: string, rm: string | null): { b: ReturnType<typeof t5Box>; sub: string } {
+    const b = t5Box(prefix);
+    const sub = path.join(b.out, 'sub');
+    if (rm !== null) writeFileSync(path.join(b.home, 'stub-rm-path'), path.join(sub, rm));
+    writeFileSync(path.join(b.home, 'stub-chmod-path'), sub);
+    return { b, sub };
+  }
+  const ledgerLines = (out: string): string[] =>
+    existsSync(path.join(out, replay.SPEND_LEDGER)) ? readFileSync(path.join(out, replay.SPEND_LEDGER), 'utf8').split('\n').filter((l) => l !== '') : [];
+  /** After a refused run: release the case's claim and claim the --out again as a later driver would (the dead writer's
+   *  leftovers are charged again and removed), then answer the ledger's line count. */
+  function nextDriverCharges(b: { out: string }): number {
+    claimsByOut.get(b.out)?.release();
+    claimsByOut.delete(b.out);
+    replay.claimOut(b.out, { liveness: () => 'dead' }).release();
+    return ledgerLines(b.out).length;
+  }
+
+  it('launchRun\'s removal of the .pid after the spend line, in a run subdirectory the stub made mode 0500 before it exited: out-refused sub/<name>.pid unwritable EACCES, charged once, the .part and .pid left for the next driver', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const { b, sub } = subdirBox('ccrc-replay-d5986-postspend-pid-', null);
+    try {
+      await expect(claimedRun(t5job(b, b.up, 'box', 'sub/run-0')))
+        .rejects.toMatchObject({ word: 'out-refused', detail: 'sub/run-0.pid unwritable EACCES' });
+      expect(stubLog(b.home), 'the run spawned once').toHaveLength(1);
+      expect(ledgerLines(b.out), 'the spend line was written before the removal').toHaveLength(1);
+      expect(existsSync(path.join(sub, 'run-0.jsonl.part')), 'the .part stays').toBe(true);
+      expect(existsSync(path.join(sub, 'run-0.pid')), 'the .pid stays').toBe(true);
+      expect(existsSync(path.join(sub, 'run-0.jsonl')) || existsSync(path.join(sub, 'run-0.run.json')), 'no stream, no run.json').toBe(false);
+    } finally {
+      chmodSync(sub, 0o700);
+    }
+    expect(nextDriverCharges(b), 'the next driver charges the left .part again: an over-count, never a lost charge').toBe(2);
+    expect(existsSync(path.join(sub, 'run-0.jsonl.part')) || existsSync(path.join(sub, 'run-0.pid')), 'and removes both').toBe(false);
+  }, 60_000);
+
+  it('launchRun\'s rename of the .part, in a run subdirectory the stub made mode 0500 after it removed its own .pid: out-refused sub/<name>.jsonl unwritable EACCES, charged once, the .part left for the next driver', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const { b, sub } = subdirBox('ccrc-replay-d5986-rename-', 'run-1.pid');
+    try {
+      await expect(claimedRun(t5job(b, b.up, 'box', 'sub/run-1')))
+        .rejects.toMatchObject({ word: 'out-refused', detail: 'sub/run-1.jsonl unwritable EACCES' });
+      expect(stubLog(b.home), 'the run spawned once').toHaveLength(1);
+      expect(ledgerLines(b.out), 'the spend line was written before the rename').toHaveLength(1);
+      expect(existsSync(path.join(sub, 'run-1.jsonl.part')), 'the .part stays').toBe(true);
+      expect(existsSync(path.join(sub, 'run-1.pid')), 'the .pid was the stub\'s to remove, and it is gone').toBe(false);
+      expect(existsSync(path.join(sub, 'run-1.jsonl')) || existsSync(path.join(sub, 'run-1.run.json')), 'no stream, no run.json').toBe(false);
+    } finally {
+      chmodSync(sub, 0o700);
+    }
+    expect(nextDriverCharges(b), 'the next driver charges the left .part again').toBe(2);
+    expect(existsSync(path.join(sub, 'run-1.jsonl.part')), 'and removes it').toBe(false);
+  }, 60_000);
+
+  it('the .part\'s exclusive create: a regular file planted at <name>.jsonl.part after launchRun\'s settle and before the create (through a RunJob getter) refuses out-refused <name>.jsonl.part already exists, spawns nothing and keeps the planted bytes', async () => {
+    const b = t5Box('ccrc-replay-d5986-oexcl-');
+    const planted = path.join(b.out, 'ex-0.jsonl.part');
+    const job = t5job(b, b.up, 'box', 'ex-0');
+    let reads = 0;
+    Object.defineProperty(job, 'timeoutMs', {
+      enumerable: true,
+      // launchRun reads timeoutMs once, after settleLeftover and before runChild creates the .part
+      get: () => { reads++; writeFileSync(planted, 'PLANTED\n', { mode: 0o600 }); return 5_000; },
+    });
+    await expect(claimedRun(job)).rejects.toMatchObject({ word: 'out-refused', detail: 'ex-0.jsonl.part already exists' });
+    expect(reads, 'the getter planted the file once, at the place the case means').toBe(1);
+    expect(stubLog(b.home), 'no spawn').toBeNull();
+    expect(readFileSync(planted, 'utf8'), 'the planted file was not opened for writing').toBe('PLANTED\n');
+    expect(existsSync(path.join(b.out, 'ex-0.pid')), 'no .pid').toBe(false);
+    expect(ledgerLines(b.out), 'nothing spent').toEqual([]);
+  }, 60_000);
+
+  it('a launcher that vanished after admission: the spawn fails with its own error, the child-less .part and .pid are removed, and nothing is charged', async () => {
+    const b = t5Box('ccrc-replay-d5986-nospawn-');
+    rmSync(b.up.launcher);
+    const err = await t5caught(() => claimedRun(t5job(b, b.up, 'box', 'ns-0')));
+    expect(err, 'the spawn error is raised as it is').toMatchObject({ code: 'ENOENT' });
+    expect(err).not.toBeInstanceOf(replay.DriverRefusal);
+    expect(existsSync(path.join(b.out, 'ns-0.jsonl.part')), 'the .part of a spawn that produced no child is removed').toBe(false);
+    expect(existsSync(path.join(b.out, 'ns-0.pid')), 'no .pid').toBe(false);
+    expect(ledgerLines(b.out), 'nothing spent').toEqual([]);
+  }, 60_000);
+
+  it('prepareOut under a parent nobody may write into: the mkdir fails with its own EACCES and --out is refused out-refused create-failed EACCES, nothing created', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const parent = outsideDir();
+    chmodSync(parent, 0o500);
+    try {
+      const err = thrown(() => replay.prepareOut(path.join(parent, 'out')));
+      expect(err).toBeInstanceOf(replay.DriverRefusal);
+      expect(err).toMatchObject({ word: 'out-refused', detail: 'create-failed EACCES' });
+    } finally {
+      chmodSync(parent, 0o700);
+    }
+    expect(readdirSync(parent), 'nothing was created').toEqual([]);
+    expect(replay.prepareOut(path.join(parent, 'out')), 'CONTROL: the mode restored, the same --out is made').toBe(path.join(realpathSync(parent), 'out'));
+  });
+
+  // D-5986: the marker write refuses out-refused marker-unwritable <errno>, telling the operator to remove --out. A file-size
+  // limit of 0 (prlimit, an argv, no shell) makes the write of the marker's bytes fail EFBIG after mkdir and the exclusive
+  // create succeeded: node ignores SIGXFSZ.
+  it.skipIf(!existsSync('/usr/bin/prlimit'))('prepareOut whose marker cannot be written (a file-size limit of 0): out-refused marker-unwritable EFBIG, the directory made and the marker left empty', () => {
+    const dir = mkTmp('ccrc-replay-d5986-marker-');
+    const script = path.join(dir, 'child.mjs');
+    writeFileSync(script, `import * as D from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
+import { join } from 'node:path';
+let said;
+try { D.prepareOut(join(process.argv[2], 'out')); said = 'no refusal'; } catch (e) { said = e.word + ': ' + e.detail; }
+process.stdout.write(said);
+`);
+    const r = spawnSync('/usr/bin/prlimit', ['--fsize=0', process.execPath, script, dir], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    expect(r.signal, r.stderr).toBeNull();
+    expect(r.stdout).toBe('out-refused: marker-unwritable EFBIG; --out was created: remove it before a re-run');
+    expect(readdirSync(path.join(dir, 'out')), 'the directory was made; the marker was created empty').toEqual([replay.OUT_MARKER]);
+    expect(readFileSync(path.join(dir, 'out', replay.OUT_MARKER), 'utf8'), 'its bytes were not written').toBe('');
+  });
+
+  // D-5985, D-5986: the same file-size seam reaches writeWhole's write arm through the lock's tmp (claimOut on a made --out):
+  // the tmp's write fails EFBIG, the tmp is dropped and no lock is made. Under --fsize=0 the marker itself would fail, so
+  // the parent makes --out.
+  it.skipIf(!existsSync('/usr/bin/prlimit'))('claimOut whose lock tmp cannot be written (a file-size limit of 0): out-refused .driver.lock.tmp-<pid> unwritable EFBIG, the tmp dropped and no lock made; a large limit does not refuse', () => {
+    const dir = mkTmp('ccrc-replay-d5985-locktmp-');
+    const out = replay.prepareOut(path.join(dir, 'out'));
+    const script = path.join(dir, 'child.mjs');
+    writeFileSync(script, `import * as D from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
+let said;
+try { D.claimOut(process.argv[2]); said = 'no refusal'; } catch (e) { said = e?.word ? e.word + ': ' + e.detail : 'RAW ' + (e?.code ?? e); }
+process.stdout.write(said);
+`);
+    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const r = run(0);
+    expect(r.signal, r.stderr).toBeNull();
+    expect(r.stdout).toMatch(/^out-refused: \.driver\.lock\.tmp-\d+ unwritable EFBIG$/);
+    expect(readdirSync(out).filter((n) => n === '.driver.lock' || n.startsWith('.driver.lock.tmp-')), 'the tmp was dropped and no lock was made').toEqual([]);
+    const c = run(1_000_000);
+    expect(c.signal, c.stderr).toBeNull();
+    expect(c.stdout, 'CONTROL: a large limit does not refuse').toBe('no refusal');
+  });
+
+  // D-5986: the same arm through writePlain (ensurePoisonBin): poison-bin/gh unwritable EFBIG, the tmp dropped, no target.
+  it.skipIf(!existsSync('/usr/bin/prlimit'))('ensurePoisonBin whose tmp cannot be written (a file-size limit of 0): out-refused poison-bin/gh unwritable EFBIG, nothing left; a large limit does not refuse', () => {
+    const dir = mkTmp('ccrc-replay-d5986-poison-');
+    const out = replay.prepareOut(path.join(dir, 'out'));
+    const script = path.join(dir, 'child.mjs');
+    writeFileSync(script, `import * as D from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
+let said;
+try { D.ensurePoisonBin(process.argv[2]); said = 'no refusal'; } catch (e) { said = e?.word ? e.word + ': ' + e.detail : 'RAW ' + (e?.code ?? e); }
+process.stdout.write(said);
+`);
+    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const r = run(0);
+    expect(r.signal, r.stderr).toBeNull();
+    expect(r.stdout).toBe('out-refused: poison-bin/gh unwritable EFBIG');
+    expect(existsSync(path.join(out, 'poison-bin', 'gh')), 'no target').toBe(false);
+    expect(readdirSync(path.join(out, 'poison-bin')).filter((n) => n.startsWith('gh.tmp-')), 'the tmp was dropped').toEqual([]);
+    const c = run(1_000_000);
+    expect(c.signal, c.stderr).toBeNull();
+    expect(c.stdout, 'CONTROL: a large limit does not refuse').toBe('no refusal');
+    expect(existsSync(path.join(out, 'poison-bin', 'gh')), 'CONTROL: the target exists').toBe(true);
+  });
+
+  // D-5986: appendPlain's write arm through recordSpend. The limit is EXACTLY the ledger's size: a larger one makes a partial
+  // write and a torn line. The refusal leaves the ledger's bytes as they were.
+  it.skipIf(!existsSync('/usr/bin/prlimit'))('recordSpend whose ledger is at the file-size limit: out-refused spend.jsonl unwritable EFBIG, the ledger unchanged; a large limit appends one line', () => {
+    const dir = mkTmp('ccrc-replay-d5986-spend-');
+    const out = replay.prepareOut(path.join(dir, 'out'));
+    replay.recordSpend(out, 'old', 1);
+    const ledger = path.join(out, replay.SPEND_LEDGER);
+    const before = readFileSync(ledger);
+    const script = path.join(dir, 'child.mjs');
+    writeFileSync(script, `import * as D from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
+let said;
+try { D.recordSpend(process.argv[2], 'j0', 5); said = 'no refusal'; } catch (e) { said = e?.word ? e.word + ': ' + e.detail : 'RAW ' + (e?.code ?? e); }
+process.stdout.write(said);
+`);
+    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const r = run(before.length);
+    expect(r.signal, r.stderr).toBeNull();
+    expect(r.stdout).toBe('out-refused: spend.jsonl unwritable EFBIG');
+    expect(readFileSync(ledger).equals(before), 'the ledger is byte for byte what it was').toBe(true);
+    const c = run(1_000_000);
+    expect(c.signal, c.stderr).toBeNull();
+    expect(c.stdout, 'CONTROL: a large limit does not refuse').toBe('no refusal');
+    const lines = readFileSync(ledger, 'utf8').split('\n').filter((l) => l !== '');
+    expect(lines.length, 'CONTROL: exactly one line was added').toBe(2);
+    expect(lines[1]).toContain('"j0"');
+  });
+
+  // D-5986: appendPlain's fstat arm. A FIFO at spend.jsonl with a reader held open lets the no-follow O_NONBLOCK open succeed, so
+  // only the fstat type check refuses (without the held reader the open fails ENXIO, which is the open arm, pinned elsewhere).
+  it('recordSpend onto a FIFO ledger with a reader held open: out-refused spend.jsonl is not a regular file, and nothing went into the FIFO', () => {
+    const dir = mkTmp('ccrc-replay-d5986-fifo-');
+    const out = replay.prepareOut(path.join(dir, 'out'));
+    const p = path.join(out, replay.SPEND_LEDGER);
+    const mk = spawnSync('mkfifo', [p], { encoding: 'utf8' });
+    expect(mk.status, mk.stderr).toBe(0);
+    const rd = openSync(p, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const err = thrown(() => replay.recordSpend(out, 'j0', 5));
+      expect(err).toBeInstanceOf(replay.DriverRefusal);
+      expect(err).toMatchObject({ word: 'out-refused', detail: 'spend.jsonl is not a regular file' });
+      // A non-blocking read of a FIFO with no writer answers 0 (end of file), or EAGAIN when a writer is open: either way no bytes.
+      let got = 0;
+      try { got = readSync(rd, Buffer.alloc(64), 0, 64, null); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EAGAIN') throw e; }
+      expect(got, 'the FIFO holds no bytes: nothing of the spend line went into it').toBe(0);
+    } finally {
+      closeSync(rd);
+    }
+  });
+
+  /** Run `body` (ESM, top-level await) in a child with a deadline; the driver is `D`, a scratch directory is `base`. */
+  function inChild(body: string, ms: number): { out: string; err: string; signal: NodeJS.Signals | null; status: number | null } {
+    const dir = mkTmp('ccrc-replay-d5986-child-');
+    const script = path.join(dir, 'child.mjs');
+    writeFileSync(script, `import * as D from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
+import { closeSync, ftruncateSync, mkdirSync, openSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
+const base = process.argv[2];
+const fresh = (n) => { mkdirSync(join(base, n)); return D.prepareOut(join(base, n, 'out')); };
+const fifo = (p) => execFileSync('mkfifo', [p]);
+const said = (f) => { try { f(); return 'no refusal'; } catch (e) { return e.word + ': ' + e.detail; } };
+const results = {};
+${body}
+process.stdout.write(JSON.stringify(results));
+`);
+    const r = spawnSync(process.execPath, [script, dir], { encoding: 'utf8', timeout: ms, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    return { out: r.stdout, err: r.stderr, signal: r.signal, status: r.status };
+  }
+
+  it('a FIFO as the ledger, the lock, a .pid or a .part never blocks the driver: each is refused, the call returns inside its deadline', () => {
+    const r = inChild(`
+{ const out = fresh('ledger'); fifo(join(out, D.SPEND_LEDGER));
+  results.append = said(() => D.recordSpend(out, 'x', 1));
+  results.read = said(() => D.spentSoFar(out)); }
+{ const out = fresh('lock'); fifo(join(out, '.driver.lock'));
+  results.lock = said(() => D.claimOut(out)); }
+{ const out = fresh('pid'); writeFileSync(join(out, 'a.jsonl.part'), '{}\\n'); fifo(join(out, 'a.pid'));
+  results.pid = said(() => D.claimOut(out)); }
+{ const out = fresh('part'); fifo(join(out, 'b.jsonl.part'));
+  results.part = said(() => D.claimOut(out)); }
+`, 30_000);
+    expect(r.signal, `a call blocked on a FIFO: ${r.err}`).toBeNull();
+    expect(r.status, r.err).toBe(0);
+    expect(JSON.parse(r.out)).toEqual({
+      append: 'out-refused: spend.jsonl is not a regular file',
+      read: 'out-refused: spend.jsonl is not a regular file',
+      lock: 'out-in-use: .driver.lock is not a regular file; remove it only after confirming no driver runs on this --out',
+      pid: 'out-refused: a.pid is not a regular file',
+      part: 'out-refused: run-stream-invalid b',
+    });
+  });
+
+  // D-5986: a ledger past the read bound (256 MiB) is out-refused spend.jsonl over-cap, never read and never summed. The file is
+  // sparse (no disk), and the call runs in a child, so a read that did happen could not take the test runner with it.
+  it('a ledger past the read bound refuses out-refused spend.jsonl over-cap from its size, before any read: the child\'s peak memory stays small', () => {
+    const r = inChild(`
+{ const out = fresh('cap');
+  const fd = openSync(join(out, D.SPEND_LEDGER), 'w'); ftruncateSync(fd, 256 * 1024 * 1024 + 1); closeSync(fd);
+  results.read = said(() => D.spentSoFar(out)); }
+results.peakMiB = Math.round(process.resourceUsage().maxRSS / 1024);
+`, 60_000);
+    expect(r.signal, `the read did not finish: ${r.err}`).toBeNull();
+    expect(r.status, r.err).toBe(0);
+    const got = JSON.parse(r.out);
+    expect(got.read).toBe('out-refused: spend.jsonl over-cap');
+    // The refusal is the same whether the size or the read loop finds the excess, so the up-front answer shows only as memory:
+    // a loop that reads up to the cap holds 256 MiB of chunks.
+    expect(got.peakMiB, `the child held ${got.peakMiB} MiB at its peak: the file was read into memory`).toBeLessThan(160);
+  }, 90_000);
+
+  it('a --step0a input that is a FIFO, a symlink or a directory refuses input-invalid not-regular and is never opened or waited on', () => {
+    const r = inChild(`
+const sha = 'a'.repeat(64);
+{ const p = join(base, 'in.fifo'); fifo(p); results.fifo = said(() => D.loadStep0a(p, sha)); }
+{ writeFileSync(join(base, 'real.json'), '{}\\n'); symlinkSync(join(base, 'real.json'), join(base, 'in.link')); results.link = said(() => D.loadStep0a(join(base, 'in.link'), sha)); }
+{ mkdirSync(join(base, 'in.dir')); results.dir = said(() => D.loadStep0a(join(base, 'in.dir'), sha)); }
+`, 30_000);
+    expect(r.signal, `loadStep0a blocked on a FIFO: ${r.err}`).toBeNull();
+    expect(r.status, r.err).toBe(0);
+    expect(JSON.parse(r.out)).toEqual({
+      fifo: 'input-invalid: step0a not-regular', link: 'input-invalid: step0a not-regular', dir: 'input-invalid: step0a not-regular' });
+  });
+
+  it('a .pid or a lock the driver cannot tell is a record tells its cause: a malformed one, a type (a .pid out-refused, a lock out-in-use) and an unreadable file (mode 000, skipped as root) say different things', async () => {
+    const lockOut = freshOut();
+    writeFileSync(path.join(lockOut, '.driver.lock'), 'junk\n');
+    expect(() => replay.claimOut(lockOut)).toThrow(/out-in-use: \.driver\.lock is not a lock record/);
+    const b = t5Box('ccrc-replay-d5986-cause-');
+    writeFileSync(path.join(b.out, 'p-0.jsonl.part'), D6_STREAM);
+    writeFileSync(path.join(b.out, 'p-0.pid'), 'junk\n');
+    await expect(claimedRun(t5job(b, b.up, 'box', 'p-0'))).rejects.toMatchObject({ word: 'run-live', detail: expect.stringContaining('p-0.pid is not a pid record') });
+    rmSync(path.join(b.out, 'p-0.pid'));
+    mkdirSync(path.join(b.out, 'p-0.pid'));
+    await expect(claimedRun(t5job(b, b.up, 'box', 'p-0'))).rejects.toMatchObject({ word: 'out-refused', detail: 'p-0.pid is not a regular file' });
+    if (process.getuid?.() === 0) return;   // root reads a mode 000 file
+    const lock = freshOut();
+    writeFileSync(path.join(lock, '.driver.lock'), recText(424260, '1'), { mode: 0o600 });
+    chmodSync(path.join(lock, '.driver.lock'), 0o000);
+    expect(() => replay.claimOut(lock, { liveness: () => 'dead' })).toThrow(/out-in-use: \.driver\.lock is unreadable \(EACCES\)/);
+    expect(existsSync(path.join(lock, '.driver.lock')), 'an unreadable lock is left as it was').toBe(true);
+    rmSync(path.join(b.out, 'p-0.pid'), { recursive: true });
+    writeFileSync(path.join(b.out, 'p-0.pid'), recText(424261, '1'), { mode: 0o600 });
+    chmodSync(path.join(b.out, 'p-0.pid'), 0o000);
+    await expect(claimedRun(t5job(b, b.up, 'box', 'p-0'), { liveness: () => 'dead' })).rejects.toMatchObject({
+      word: 'out-refused', detail: 'p-0.pid unreadable EACCES' });
+    expect(replay.spentSoFar(b.out), 'nothing charged for an unreadable record').toBe(0);
+    expect(stubLog(b.home), 'nothing spawned').toBeNull();
+  }, 60_000);
+
+  it('a lock released between the failed link and the read is taken at once, instead of refusing out-in-use', async () => {
+    const out = freshOut();
+    const dead = await deadRecord();
+    writeFileSync(path.join(out, '.driver.lock'), recText(dead.pid, dead.start));
+    let held = 0;
+    const c = replay.claimOut(out, { afterHeld: () => { held++; rmSync(path.join(out, '.driver.lock')); } });
+    expect(held, 'the lock was found held once').toBe(1);
+    expect(readFileSync(path.join(out, '.driver.lock'), 'utf8')).toBe(recText(process.pid, HAS_PROC ? startOf(process.pid) : null));
+    expect(readdirSync(out).sort(), 'no tmp or stale file').toEqual([replay.OUT_MARKER, '.driver.lock'].sort());
+    c.release();
+    const again = freshOut();
+    writeFileSync(path.join(again, '.driver.lock'), recText(dead.pid, dead.start));
+    let swapped = 0;
+    expect(() => replay.claimOut(again, { afterHeld: () => { swapped++; rmSync(path.join(again, '.driver.lock')); writeFileSync(path.join(again, '.driver.lock'), recText(process.pid, null)); } }),
+      'CONTROL: a lock that is held again after the release is a live holder\'s, and refuses').toThrow(/out-in-use: pid \d+ holds \.driver\.lock/);
+    expect(swapped).toBe(1);
+  });
+});
+
+describe('W2-4 Task 5: makeRunCwd refuses a temp root inside a git tree (W2-D51)', () => {
+  t5afterEach(() => { t5vi.unstubAllEnvs(); });
+
+  it('a TMPDIR under a planted git tree refuses out-refused and leaves no directory behind', () => {
+    const root = t5MkTmp('ccrc-replay-t5-gitcwd-');
+    t5fs.mkdirSync(t5path.join(root, '.git'));
+    const tmp = t5path.join(root, 'tmp');
+    t5fs.mkdirSync(tmp);
+    t5vi.stubEnv('TMPDIR', tmp);
+    let err: unknown = null;
+    try { t5drv.makeRunCwd(); } catch (e) { err = e; }
+    expect(err).toMatchObject({ word: 'out-refused', detail: `run-cwd-in-git-tree ${root}` });
+    expect(t5fs.readdirSync(tmp)).toEqual([]);
+  });
+
+  // D-5814: mkdtemp is subject to the umask, so a umask that strips the owner's write bit yields a directory that is not
+  // 0700. makeRunCwd refuses it and removes it. The umask is saved and restored around the call (a fork worker).
+  it('under umask 0o277 a run cwd made 0500 is refused out-refused run-cwd-mode 500 and removed', () => {
+    const tmp = t5MkTmp('ccrc-replay-t5-cwdmode-');
+    t5vi.stubEnv('TMPDIR', tmp);
+    const was = process.umask(0o277);
+    let err: unknown = null;
+    try { t5drv.makeRunCwd(); } catch (e) { err = e; } finally { process.umask(was); }
+    expect(err).toMatchObject({ word: 'out-refused', detail: 'run-cwd-mode 500' });
+    expect(t5fs.readdirSync(tmp), 'the refused directory is removed').toEqual([]);
+    expect(t5fs.statSync(t5drv.makeRunCwd()).mode & 0o777, 'CONTROL: under the default umask the cwd is 0700').toBe(0o700);
+  });
+});
+
+describe('W2-4 Task 5: the driver passes no env whole and names only HOME, TMUX_PANE and LANG on a process.env line (os.tmpdir() reads TMPDIR implicitly, for the run cwd)', () => {
+  const SRC = t5path.resolve(__dirname, '..', '..', 'deploy', 'history-replay.mjs');
+  /** The entry guard's by-name projection (Task 1): the driver's ONE process.env line. No line is exempt from the scan. */
+  const PROJECTION = 'process.exitCode = await main(process.argv.slice(2), { HOME: process.env.HOME, TMUX_PANE: process.env.TMUX_PANE, LANG: process.env.LANG });';
+  const isComment = (t: string): boolean => t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
+  /** Non-comment lines that pass an env whole, spread one, or read process.env by any name outside the three. */
+  const envViolations = (text: string): string[] => text.split('\n').filter((line) => {
+    const t = line.trim();
+    if (isComment(t)) return false;
+    if (/\.\.\.\s*(?:process\.)?env\b/.test(t) || /\benv\s*:\s*(?:process\.)?env\b/.test(t) || /[{,]\s*env\s*[,}]/.test(t)
+      || /Object\.assign\([^)]*\benv\b/.test(t)) return true;
+    return [...t.matchAll(/process\.env(\.[A-Za-z_][A-Za-z0-9_]*)?/g)].some((m) => !['.HOME', '.TMUX_PANE', '.LANG'].includes(m[1] ?? ''));
+  });
+
+  it('CONTROL: the scan sees a spread, a whole pass (the old entry-guard form included), another name and a computed read, and passes the by-name projection', () => {
+    for (const bad of ['const e = { ...process.env, HOME: home };', 'spawn(cmd, argv, { env: process.env });', 'const p = process.env.PATH;',
+      'const v = process.env[name];', 'run({ ...env });', 'spawn(cmd, argv, { cwd, env: env });', 'spawn(cmd, argv, { cwd, env });',
+      'Object.assign(child, process.env);', 'process.exitCode = await main(process.argv.slice(2), process.env);']) {
+      expect(envViolations(bad), bad).toEqual([bad]);
+    }
+    expect(envViolations([`  ${PROJECTION}`, '// never { ...process.env }', 'spawn(cmd, argv, { cwd, env: childEnv });'].join('\n'))).toEqual([]);
+  });
+
+  it('deploy/history-replay.mjs: no violation, and the entry guard\'s by-name projection is its only process.env line', () => {
+    const text = t5fs.readFileSync(SRC, 'utf8');
+    expect(envViolations(text)).toEqual([]);
+    const envLines = text.split('\n').map((l) => l.trim()).filter((t) => !isComment(t) && /\bprocess\.env\b/.test(t));
+    expect(envLines, 'no other process.env text; a handler\'s env arrives as main\'s parameter').toEqual([PROJECTION]);
+  });
+
+  it('deploy/history-replay.mjs spells no bypass flag and spawns through no shell', () => {
+    const code = t5fs.readFileSync(SRC, 'utf8').split('\n').filter((l) => !/^\s*(?:\/\/|\*|\/\*)/.test(l));
+    expect(code.filter((l) => /dangerously-skip-permissions|bypassPermissions/.test(l))).toEqual([]);
+    expect(code.filter((l) => /\bshell\s*:|\b(?:exec|execSync|execFile|execFileSync)\s*\(/.test(l))).toEqual([]);
+  });
+
+  // D-5814: the import block is exactly the seven modules the plan names, and node:child_process brings in `spawn` only,
+  // so W2-D24's code hash covers the driver's whole scoring path and no later edit widens it unseen.
+  const EXPECTED_IMPORTS = ['node:fs', 'node:os', 'node:path', 'node:child_process', 'node:url', '../ccd/history/lib.mjs', '../shared/roster-json.mjs'];
+  const importViolations = (text: string): string[] => {
+    const found: string[] = [];
+    const froms = [...text.matchAll(/^import\s+([^;]*?)\s*from\s*'([^']+)';/gms)];
+    if (JSON.stringify(froms.map((m) => m[2])) !== JSON.stringify(EXPECTED_IMPORTS)) found.push(`imports ${froms.map((m) => m[2]).join(', ')}`);
+    for (const m of froms) if (m[2] === 'node:child_process' && m[1]!.trim() !== '{ spawn }') found.push(`child_process brings in ${m[1]}`);
+    for (const l of text.split('\n')) {
+      if (isComment(l.trim())) continue;
+      if (/^import\s*['"]/.test(l) || /\bimport\s*\(/.test(l) || /\brequire\s*\(/.test(l)) found.push(`side-effect or dynamic load ${l.trim()}`);
+    }
+    return found;
+  };
+  it('CONTROL: the import scan sees spawnSync, an import of history-gate.mjs, node:fs/promises, a dynamic import and a missing module', () => {
+    const real = t5fs.readFileSync(SRC, 'utf8');
+    expect(importViolations(real), 'the driver itself').toEqual([]);
+    const variants: Array<[string, string]> = [
+      ['spawnSync', real.replace("import { spawn } from 'node:child_process';", "import { spawn, spawnSync } from 'node:child_process';")],
+      ['history-gate', real.replace("import { rosterFromJson", "import { x } from '../deploy/history-gate.mjs';\nimport { rosterFromJson")],
+      ['fs/promises', real.replace("import os from 'node:os';", "import os from 'node:os';\nimport { readFile } from 'node:fs/promises';")],
+      ['dynamic', real + "\nconst m = await import('node:sqlite');\n"],
+      ['missing', real.replace("import os from 'node:os';\n", '')],
+    ];
+    for (const [label, text] of variants) {
+      expect(text, `${label}: the variant differs from the driver`).not.toBe(real);
+      expect(importViolations(text), label).not.toEqual([]);
+    }
+  });
+  it('deploy/history-replay.mjs imports exactly its seven modules, and node:child_process brings in spawn only', () => {
+    expect(importViolations(t5fs.readFileSync(SRC, 'utf8'))).toEqual([]);
+  });
+});
+
+// ── W2-4 Task 6: the limits stop and the spend budget (W2-D55; spec §10.2:2697, erratum E18) ─────────────────────
+// The driver reads one limits row, read-only, by readLimits' rules, and keeps the provenance readLimits folds: a 0 from
+// a lapsed resetAt is a measured reset, a 0 inferred from age measured nothing and stops as stale. The parity case holds
+// the driver's reading to readLimits' over rolloverCases' bytes, the fixture limits.test.ts and ccd-limits.test.ts share.
+// Fixture HOMEs only; the clock is a parameter.
+describe('W2-4 Task 6: the limits row is read by readLimits\' rules, keeping its provenance (W2-D55 parity)', () => {
+  const NOW_S = 1_785_231_736;
+  const PICK = (r: { five: number | null; seven: number | null; ts: number | null; fiveResetAt: number | null; sevenResetAt: number | null; fiveRolledOver: boolean; sevenRolledOver: boolean }) =>
+    ({ five: r.five, seven: r.seven, ts: r.ts, fiveResetAt: r.fiveResetAt, sevenResetAt: r.sevenResetAt, fiveRolledOver: r.fiveRolledOver, sevenRolledOver: r.sevenRolledOver });
+
+  it('over every rolloverCases row, parseLimitsRow and readLimitsRow answer exactly what readLimits answers over the same bytes', async () => {
+    const home = mkTmp('ccrc-replay-t6-parity-');
+    t6Fs.mkdirSync(t6Path.join(home, '.ccrc'), { recursive: true });
+    t6Fs.writeFileSync(t6Path.join(home, '.ccrc', 'accounts.json'), JSON.stringify(T6_ROSTER));
+    const dir = t6Path.join(home, '.cc-limits');
+    t6Fs.mkdirSync(dir, { recursive: true });
+    const cases = t6RolloverCases(NOW_S);
+    for (const c of cases) t6Fs.writeFileSync(t6Path.join(dir, c.file), c.content);
+    const theirs = await t6ReadLimits(t6LocalIO, t6LoadConfig({ CCRC_HOME: home }), NOW_S);
+    expect(cases.length, 'CONTROL: the shared fixture is not empty').toBeGreaterThan(10);
+    for (const c of cases) {
+      const id = c.file.slice(0, -'.json'.length);
+      const want = PICK(theirs[id]!);
+      expect(PICK(t6Driver.parseLimitsRow(c.content, NOW_S)), `${c.file}: ${c.why}`).toEqual(want);
+      expect(want, `${c.file}: the fixture's own expectation`).toMatchObject(c.expect);
+      const read = t6Driver.readLimitsRow(home, id, NOW_S);
+      expect(read.state, c.file).toBe('row');
+      if (read.state === 'row') expect(PICK(read.row!), c.file).toEqual(want);
+    }
+  });
+
+  // D-5805: the window constants (18000, 604800) are held equal to readLimits' by this case, not by an import. rolloverCases has
+  // no non-fact row aged in [3601, 20000) s for five or [20000, 700000) s for seven, so without these rows changing either
+  // constant over that range reds nothing. Rows carry NO resetAt fields (no fact), aged window-1, window and window+1 seconds.
+  it('the window boundaries agree with readLimits: a row with no resetAt aged window-1, window and window+1 seconds (D-5805)', async () => {
+    const FIVE_W = 18000;
+    const SEVEN_W = 604800;
+    const home = mkTmp('ccrc-replay-t6-window-');
+    t6Fs.mkdirSync(t6Path.join(home, '.ccrc'), { recursive: true });
+    t6Fs.writeFileSync(t6Path.join(home, '.ccrc', 'accounts.json'), JSON.stringify(T6_ROSTER));
+    const dir = t6Path.join(home, '.cc-limits');
+    t6Fs.mkdirSync(dir, { recursive: true });
+    // The five rows keep seven well inside its window; the seven rows carry a five value too (its age passes the five window).
+    const rows: { id: string; ageS: number }[] = [];
+    for (const d of [-1, 0, 1]) { rows.push({ id: `win-five-${d + 1}`, ageS: FIVE_W + d }); rows.push({ id: `win-seven-${d + 1}`, ageS: SEVEN_W + d }); }
+    for (const r of rows) t6Fs.writeFileSync(t6Path.join(dir, `${r.id}.json`), JSON.stringify({ five: 50, seven: 60, ts: NOW_S - r.ageS }));
+    const theirs = await t6ReadLimits(t6LocalIO, t6LoadConfig({ CCRC_HOME: home }), NOW_S);
+    const inferredOf = (id: string) => {
+      const read = t6Driver.readLimitsRow(home, id, NOW_S);
+      expect(read.state, id).toBe('row');
+      const row = (read as { row: ReturnType<typeof t6Driver.parseLimitsRow> }).row;
+      expect(PICK(row), `${id}: the parity with readLimits`).toEqual(PICK(theirs[id]!));
+      // No resetAt, so no fact: every rolled-over flag here is the age inference's, in readLimits and in the driver.
+      expect(row.fiveInferred, `${id}: five provenance is readLimits' flag`).toBe(theirs[id]!.fiveRolledOver);
+      expect(row.sevenInferred, `${id}: seven provenance is readLimits' flag`).toBe(theirs[id]!.sevenRolledOver);
+      return row;
+    };
+    expect(inferredOf('win-five-0').fiveInferred, 'five at 17999 s is inside its window').toBe(false);
+    expect(inferredOf('win-five-2').fiveInferred, 'five at 18001 s is past its window').toBe(true);
+    inferredOf('win-five-1');   // exactly the window: whatever it answers equals readLimits' (asserted above)
+    expect(inferredOf('win-seven-0').sevenInferred, 'seven at 604799 s is inside its window').toBe(false);
+    expect(inferredOf('win-seven-2').sevenInferred, 'seven at 604801 s is past its window').toBe(true);
+    inferredOf('win-seven-1');
+  });
+
+  // D-5814: a sample at exactly its resetAt second has rolled over, in readLimits (`now >= resetAt`) and in the driver.
+  it('a resetAt equal to now is a lapsed reset, held to readLimits: five alone, then seven alone', async () => {
+    const home = mkTmp('ccrc-replay-t6-resetedge-');
+    t6Fs.mkdirSync(t6Path.join(home, '.ccrc'), { recursive: true });
+    t6Fs.writeFileSync(t6Path.join(home, '.ccrc', 'accounts.json'), JSON.stringify(T6_ROSTER));
+    const dir = t6Path.join(home, '.cc-limits');
+    t6Fs.mkdirSync(dir, { recursive: true });
+    t6Fs.writeFileSync(t6Path.join(dir, 'edge-five.json'), JSON.stringify({ five: 80, seven: 30, ts: NOW_S - 60, fiveResetAt: NOW_S, sevenResetAt: NOW_S + 1000 }));
+    t6Fs.writeFileSync(t6Path.join(dir, 'edge-seven.json'), JSON.stringify({ five: 30, seven: 80, ts: NOW_S - 60, fiveResetAt: NOW_S + 1000, sevenResetAt: NOW_S }));
+    const theirs = await t6ReadLimits(t6LocalIO, t6LoadConfig({ CCRC_HOME: home }), NOW_S);
+    for (const id of ['edge-five', 'edge-seven']) {
+      const read = t6Driver.readLimitsRow(home, id, NOW_S);
+      expect(read.state, id).toBe('row');
+      expect(PICK((read as { row: ReturnType<typeof t6Driver.parseLimitsRow> }).row), id).toEqual(PICK(theirs[id]!));
+    }
+    expect([theirs['edge-five']!.fiveRolledOver, theirs['edge-five']!.five], 'CONTROL: readLimits rolls five over at resetAt === now').toEqual([true, 0]);
+    expect([theirs['edge-seven']!.sevenRolledOver, theirs['edge-seven']!.seven]).toEqual([true, 0]);
+  });
+
+  it('only the age path sets *Inferred: a lapsed resetAt is a measured reset, an age-inferred 0 is not', () => {
+    const inferred: Record<string, { fiveInferred: boolean; sevenInferred: boolean }> = {
+      'no-reset-fields-old.json': { fiveInferred: true, sevenInferred: false },
+    };
+    for (const c of t6RolloverCases(NOW_S)) {
+      const r = t6Driver.parseLimitsRow(c.content, NOW_S);
+      expect({ fiveInferred: r.fiveInferred, sevenInferred: r.sevenInferred }, c.file)
+        .toEqual(inferred[c.file] ?? { fiveInferred: false, sevenInferred: false });
+    }
+    const both = t6Driver.parseLimitsRow(JSON.stringify({ five: 5, seven: 50, ts: NOW_S - 700_000 }), NOW_S);
+    expect(both).toMatchObject({ five: 0, seven: 0, fiveRolledOver: true, sevenRolledOver: true, fiveInferred: true, sevenInferred: true });
+  });
+
+  it('parseLimitsRow throws on text that is not JSON, and on JSON that is not one object', () => {
+    expect(() => t6Driver.parseLimitsRow('not json', NOW_S)).toThrow(SyntaxError);
+    for (const text of ['null', '[1, 2]', '42', '"row"']) {
+      expect(() => t6Driver.parseLimitsRow(text, NOW_S), text).toThrow('a limits row is one JSON object');
+    }
+  });
+
+  // D-5807: the account-id guard is the only thing between an id and a path. Decoy rows are planted where each bad id
+  // would resolve if the guard were gone ('../up-a' reads <home>/up-a.json, 'a/b' reads <home>/.cc-limits/a/b.json), so
+  // without the guard readLimitsRow answers a row instead of throwing.
+  it('readLimitsRow and batchGate refuse an id that is not one path segment, and read the plain id (D-5807)', () => {
+    const home = mkTmp('ccrc-replay-t6-id-');
+    const dir = t6Path.join(home, '.cc-limits');
+    t6Fs.mkdirSync(t6Path.join(dir, 'a'), { recursive: true });
+    const row = JSON.stringify({ five: 1, seven: 1, ts: NOW_S - 60, fiveResetAt: NOW_S + 3600, sevenResetAt: NOW_S + 86_400 });
+    for (const f of [t6Path.join(home, 'up-a.json'), t6Path.join(dir, 'a', 'b.json'), t6Path.join(dir, '.hidden.json'), t6Path.join(dir, '.json'), t6Path.join(dir, 'up-a.json')]) {
+      t6Fs.writeFileSync(f, row);
+    }
+    expect(t6Driver.readLimitsRow(home, 'up-a', NOW_S).state, 'CONTROL: a plain id is read').toBe('row');
+    const out = t6Path.join(home, 'out');
+    t6Fs.mkdirSync(out, { mode: 0o700 });
+    for (const bad of ['../up-a', '.hidden', 'a/b', '', 42, null, undefined]) {
+      expect(() => t6Driver.readLimitsRow(home, bad as string, NOW_S), JSON.stringify(bad)).toThrow('not an account id');
+      const gate = t6Driver.batchGate({ out, home, accountId: bad as string, budget: 1000, limits: { threshold_pct: 70, max_age_ms: 3_600_000 }, now: () => NOW_S * 1000 });
+      expect(() => gate(), `batchGate ${JSON.stringify(bad)}`).toThrow('not an account id');
+    }
+    const okGate = t6Driver.batchGate({ out, home, accountId: 'up-a', budget: 1000, limits: { threshold_pct: 70, max_age_ms: 3_600_000 }, now: () => NOW_S * 1000 });
+    expect(() => okGate(), 'CONTROL: the plain id passes the gate').not.toThrow();
+  });
+});
+
+describe('W2-4 Task 6: the gate stops on every limits and budget condition (W2-D55)', () => {
+  const NOW_S = 1_800_000_000;
+  const NOW_MS = NOW_S * 1000;
+  type Stop = { word: string; detail: string } | null;
+  function t6Box(prefix: string): { home: string; out: string; row: string } {
+    const base = mkTmp(prefix);
+    const home = t6Path.join(base, 'home');
+    t6Fs.mkdirSync(t6Path.join(home, '.cc-limits'), { recursive: true });
+    const out = t6Path.join(base, 'out');
+    t6Fs.mkdirSync(out, { mode: 0o700 });
+    return { home, out, row: t6Path.join(home, '.cc-limits', 'up-a.json') };
+  }
+  const fresh = (five: number | null, seven: number | null, o: Record<string, number> = {}) => JSON.stringify(
+    { five, seven, ts: NOW_S - 60, fiveResetAt: NOW_S + 3600, sevenResetAt: NOW_S + 86_400, ...o });
+  function stopOf(b: { home: string; out: string }, o: { budget?: number; threshold?: number; maxAge?: number } = {}): Stop {
+    const gate = t6Driver.batchGate({
+      out: b.out, home: b.home, accountId: 'up-a', budget: o.budget ?? 1_000_000,
+      limits: { threshold_pct: o.threshold ?? t6Driver.LIMITS_DEFAULTS.threshold_pct, max_age_ms: o.maxAge ?? t6Driver.LIMITS_DEFAULTS.max_age_ms },
+      now: () => NOW_MS,
+    });
+    try { gate(); return null; } catch (e) {
+      expect(e).toBeInstanceOf(t6Driver.DriverRefusal);
+      return { word: (e as InstanceType<typeof t6Driver.DriverRefusal>).word, detail: (e as InstanceType<typeof t6Driver.DriverRefusal>).detail };
+    }
+  }
+
+  it('LIMITS_DEFAULTS is frozen and exactly the open record\'s defaults, its batch fields Task 5\'s constants', () => {
+    expect(Object.isFrozen(t6Driver.LIMITS_DEFAULTS)).toBe(true);
+    expect(t6Driver.LIMITS_DEFAULTS).toEqual({ threshold_pct: 70, max_age_ms: 3_600_000, batch_max: 10, concurrency: 2 });
+    expect(t6Driver.LIMITS_DEFAULTS.batch_max).toBe(t6Driver.BATCH_MAX);
+    expect(t6Driver.LIMITS_DEFAULTS.concurrency).toBe(t6Driver.CONCURRENCY_MAX);
+  });
+
+  it('CONTROL: a fresh row under the threshold with an empty ledger admits the batch', () => {
+    const b = t6Box('ccrc-replay-t6-pass-');
+    t6Fs.writeFileSync(b.row, fresh(42, 61));
+    expect(stopOf(b)).toBeNull();
+  });
+
+  it('absent: limits-stale absent', () => {
+    expect(stopOf(t6Box('ccrc-replay-t6-absent-'))).toEqual({ word: 'limits-stale', detail: 'absent' });
+  });
+
+  it('a directory, a symlink to a fresh row and a FIFO: limits-stale not-regular, and the FIFO is never opened', () => {
+    const b = t6Box('ccrc-replay-t6-notreg-');
+    t6Fs.mkdirSync(b.row);
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'not-regular' });
+    t6Fs.rmdirSync(b.row);
+    const real = t6Path.join(b.home, 'elsewhere.json');
+    t6Fs.writeFileSync(real, fresh(1, 1));
+    t6Fs.symlinkSync(real, b.row);
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'not-regular' });
+    t6Fs.unlinkSync(b.row);
+    t6ExecFile('mkfifo', [b.row]);
+    const t0 = Date.now();
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'not-regular' });
+    expect(Date.now() - t0, 'a FIFO opened for read would block').toBeLessThan(5000);
+  });
+
+  it('unreadable (mode 000): limits-stale unreadable EACCES', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const b = t6Box('ccrc-replay-t6-unread-');
+    t6Fs.writeFileSync(b.row, fresh(1, 1));
+    t6Fs.chmodSync(b.row, 0o000);
+    try { expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'unreadable EACCES' }); }
+    finally { t6Fs.chmodSync(b.row, 0o600); }
+  });
+
+  it.each([
+    ['not json', 'not json'],
+    ['a JSON array', '[1, 2]'],
+    // D-5806: a VALID object whose file is past the cap, so only LIMITS_ROW_CAP can answer malformed (padding inside the
+    // object would leave a truncated prefix that fails JSON.parse by itself, and the row would stay green without the cap).
+    ['past the 64 KiB read bound', fresh(1, 1) + ' '.repeat(65_536)],
+  ])('malformed (%s): limits-stale malformed', (_label, text) => {
+    const b = t6Box('ccrc-replay-t6-malformed-');
+    t6Fs.writeFileSync(b.row, text);
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'malformed' });
+  });
+
+  it('five null, seven null, a percent outside 0 to 100, a row with no ts and a ts ahead of the clock: each limits-stale with its own detail', () => {
+    const b = t6Box('ccrc-replay-t6-null-');
+    t6Fs.writeFileSync(b.row, fresh(null, 10));
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'five-null' });
+    t6Fs.writeFileSync(b.row, fresh(10, null));
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'seven-null' });
+    t6Fs.writeFileSync(b.row, fresh(101, 10));
+    expect(stopOf(b), 'over 100 is not a percent').toEqual({ word: 'limits-stale', detail: 'percent-out-of-range' });
+    t6Fs.writeFileSync(b.row, fresh(10, -1));
+    expect(stopOf(b), 'a negative value never passes the threshold').toEqual({ word: 'limits-stale', detail: 'percent-out-of-range' });
+    t6Fs.writeFileSync(b.row, JSON.stringify({ five: 10, seven: 10 }));
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'ts-null' });
+    t6Fs.writeFileSync(b.row, fresh(10, 10, { ts: NOW_S + 60 }));
+    expect(stopOf(b), 'a minute ahead is clock skew: admitted').toBeNull();
+    t6Fs.writeFileSync(b.row, fresh(10, 10, { ts: NOW_S + 61 }));
+    expect(stopOf(b), 'a minute and a second ahead is no longer skew (D-5814)').toEqual({ word: 'limits-stale', detail: 'ts-future 61000' });
+    t6Fs.writeFileSync(b.row, fresh(10, 10, { ts: NOW_S + 3600 }));
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'ts-future 3600000' });
+  });
+
+  it('an age-inferred 0 stops as stale even when max_age_ms is raised past its age, so the inference is what stops', () => {
+    const b = t6Box('ccrc-replay-t6-inferred-');
+    t6Fs.writeFileSync(b.row, JSON.stringify({ five: 99, seven: 20, ts: NOW_S - 20_000 }));
+    expect(stopOf(b, { maxAge: 30_000_000 })).toEqual({ word: 'limits-stale', detail: 'inferred-by-age' });
+  });
+
+  it('seven ALONE inferred by age stops as stale: five is a resetAt fact, seven is older than its own 7d window, max_age_ms is past seven days (D-5814)', () => {
+    const b = t6Box('ccrc-replay-t6-seven-inferred-');
+    // five rolled over by a resetAt FACT (not inferred); seven has no resetAt and its sample is 700000 s old (past 604800 s).
+    // max_age_ms is raised past that age, so neither the age check nor the threshold stops it: only the sevenInferred half does.
+    t6Fs.writeFileSync(b.row, JSON.stringify({ five: 87, seven: 20, ts: NOW_S - 700_000, fiveResetAt: NOW_S - 60 }));
+    expect(stopOf(b, { maxAge: 800_000_000 })).toEqual({ word: 'limits-stale', detail: 'inferred-by-age' });
+  });
+
+  it('a resetAt-fact 0 beside a fresh seven is a measured reset: admitted', () => {
+    const b = t6Box('ccrc-replay-t6-fact-');
+    t6Fs.writeFileSync(b.row, JSON.stringify({ five: 87, seven: 40, ts: NOW_S - 600, fiveResetAt: NOW_S - 60, sevenResetAt: NOW_S + 200_000 }));
+    expect(stopOf(b)).toBeNull();
+  });
+
+  it('older than max_age_ms: limits-stale old <age_ms>; exactly max_age_ms old still passes', () => {
+    const b = t6Box('ccrc-replay-t6-old-');
+    t6Fs.writeFileSync(b.row, fresh(10, 10, { ts: NOW_S - 3600 }));
+    expect(stopOf(b)).toBeNull();
+    t6Fs.writeFileSync(b.row, fresh(10, 10, { ts: NOW_S - 3601 }));
+    expect(stopOf(b)).toEqual({ word: 'limits-stale', detail: 'old 3601000' });
+  });
+
+  it('the threshold is inclusive: max(five, seven) 69 passes, 70 stops on either window', () => {
+    const b = t6Box('ccrc-replay-t6-threshold-');
+    t6Fs.writeFileSync(b.row, fresh(69, 12));
+    expect(stopOf(b)).toBeNull();
+    t6Fs.writeFileSync(b.row, fresh(70, 12));
+    expect(stopOf(b)).toEqual({ word: 'limits-threshold', detail: 'five 70 seven 12 at or over 70' });
+    t6Fs.writeFileSync(b.row, fresh(12, 70));
+    expect(stopOf(b)).toEqual({ word: 'limits-threshold', detail: 'five 12 seven 70 at or over 70' });
+  });
+
+  it('the budget is inclusive: a ledger at budget-1 passes, at budget stops with budget-exhausted', () => {
+    const b = t6Box('ccrc-replay-t6-budget-');
+    t6Fs.writeFileSync(b.row, fresh(10, 10));
+    t6Driver.recordSpend(b.out, 'run-a', 999);
+    expect(stopOf(b, { budget: 1000 })).toBeNull();
+    t6Driver.recordSpend(b.out, 'run-b', 1);
+    expect(stopOf(b, { budget: 1000 })).toEqual({ word: 'budget-exhausted', detail: 'spent 1000 of 1000' });
+  });
+
+  it('batchGate refuses a malformed budget or limits at construction, before any read', () => {
+    const b = t6Box('ccrc-replay-t6-shape-');
+    const mk = (budget: number, limits: { threshold_pct: number; max_age_ms: number }) => () =>
+      t6Driver.batchGate({ out: b.out, home: b.home, accountId: 'up-a', budget, limits });
+    expect(mk(0, { threshold_pct: 70, max_age_ms: 1 })).toThrow('a budget is a positive integer');
+    expect(mk(1.5, { threshold_pct: 70, max_age_ms: 1 })).toThrow('a budget is a positive integer');
+    expect(mk(10, { threshold_pct: 0, max_age_ms: 1 })).toThrow('limits.threshold_pct');
+    expect(mk(10, { threshold_pct: 101, max_age_ms: 1 })).toThrow('limits.threshold_pct');
+    expect(mk(10, { threshold_pct: 70, max_age_ms: 0 })).toThrow('limits.max_age_ms');
+    expect(mk(10, { threshold_pct: 70, max_age_ms: 1 })).not.toThrow();
+  });
+});
+
+describe('W2-4 Task 6: a stop is resumable (W2-D55: a stopped batch spawns nothing more, and a re-run resumes)', () => {
+  const NOW_S = 1_800_000_000;
+  const LIMITS = { threshold_pct: 70, max_age_ms: 3_600_000 };
+  /** One upstream account on the stub (Task 5's plantStub), with a canned stream whose result usage is 150 tokens. */
+  const T6_UP_A = { id: 'up-a', label: 'up-a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' };
+  const T6_STREAM = [
+    { type: 'system', subtype: 'init', session_id: 'sess-t6', model: 'model-w', tools: [], mcp_servers: [], plugins: [], skills: [], slash_commands: [] },
+    { type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'ok',
+      usage: { input_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 50 } },
+  ].map((e) => JSON.stringify(e)).join('\n') + '\n';
+  const rowAt = (tsS: number): string => JSON.stringify({ five: 10, seven: 20, ts: tsS, fiveResetAt: tsS + 7200, sevenResetAt: tsS + 86_400 });
+  function t6Rig(prefix: string) {
+    const base = mkTmp(prefix);
+    const home = t6Path.join(base, 'home');
+    t6Fs.mkdirSync(t6Path.join(home, '.claude'), { recursive: true });
+    t6Fs.mkdirSync(t6Path.join(home, '.cc-limits'), { recursive: true });
+    writeRoster(home, [T6_UP_A]);
+    plantStub(home, 'up-a');
+    t6Fs.writeFileSync(t6Path.join(home, 'stub-stream.jsonl'), T6_STREAM);
+    const { json, roster } = t6Driver.readRoster(home);
+    const launch = t6Driver.admitAccount(json, roster, 'up-a', home);
+    const out = t6Driver.prepareOut(t6Path.join(base, 'out'));
+    claimFor(out);
+    const jobs = ['t6-j1', 't6-j2', 't6-j3'].map((name) =>
+      ({ launch, mode: 'writer', model: 'model-w', settingsMode: 'restricted', stdin: 'q', out, name, lang: undefined }));
+    return { home, out, jobs, row: t6Path.join(home, '.cc-limits', 'up-a.json') };
+  }
+
+  it('a limits stop mid-batch spawns nothing more; refreshed, the re-run spawns only the unfinished jobs and counts spend once', async () => {
+    const r = t6Rig('ccrc-replay-t6-resume-');
+    t6Fs.writeFileSync(r.row, rowAt(NOW_S));
+    const late = (NOW_S + 3601) * 1000;
+    let calls = 0;
+    // The batch's gate and the first spawn's gate see a fresh row; the clock then passes max_age_ms, so the second stops.
+    const gate = t6Driver.batchGate({ out: r.out, home: r.home, accountId: 'up-a', budget: 1_000_000, limits: LIMITS,
+      now: () => (++calls <= 2 ? NOW_S * 1000 : late) });
+    gate();
+    await expect(claimedBatch(r.jobs, { concurrency: 1, gate })).rejects.toMatchObject({ word: 'limits-stale', detail: 'old 3601000' });
+    expect(stubLog(r.home)?.length, 'the first job spawned and nothing after the stop').toBe(1);
+    expect(t6Fs.existsSync(t6Path.join(r.out, 't6-j1.run.json'))).toBe(true);
+    expect(t6Fs.existsSync(t6Path.join(r.out, 't6-j2.run.json'))).toBe(false);
+    // The operator refreshes the row (one interactive statusline render on the account); the same batch runs again.
+    t6Fs.writeFileSync(r.row, rowAt(NOW_S + 3601));
+    const again = t6Driver.batchGate({ out: r.out, home: r.home, accountId: 'up-a', budget: 1_000_000, limits: LIMITS, now: () => late });
+    again();
+    const outcomes = await claimedBatch(r.jobs, { concurrency: 1, gate: again });
+    expect(outcomes.map((o) => [o.name, o.skipped]).sort()).toEqual([['t6-j1', true], ['t6-j2', false], ['t6-j3', false]]);
+    expect(stubLog(r.home)?.length, 'the finished job is never re-spawned').toBe(3);
+    expect(t6Driver.spentSoFar(r.out), 'three spawns of 150 tokens, each counted once: the finished job was never re-spawned').toBe(450);
+  }, 60_000);
+
+  it('a budget the first spawn exhausts stops the batch before the second spawn', async () => {
+    const r = t6Rig('ccrc-replay-t6-spend-');
+    t6Fs.writeFileSync(r.row, rowAt(NOW_S));
+    const gate = t6Driver.batchGate({ out: r.out, home: r.home, accountId: 'up-a', budget: 150, limits: LIMITS, now: () => NOW_S * 1000 });
+    gate();
+    await expect(claimedBatch(r.jobs, { concurrency: 1, gate })).rejects.toMatchObject({ word: 'budget-exhausted', detail: 'spent 150 of 150' });
+    expect(stubLog(r.home)?.length, 'one spawn, then the stop').toBe(1);
+  }, 60_000);
+
+  // D-5986: budget-exhausted means only that spend has reached the budget. A ledger the gate cannot read whole is out-refused,
+  // and a larger --budget does not clear it.
+  it('a torn ledger stops the gate out-refused spend.jsonl malformed under any budget, before a spawn; budget-exhausted is left to a ledger that reads', async () => {
+    const r = t6Rig('ccrc-replay-t6-torn-');
+    t6Fs.writeFileSync(r.row, rowAt(NOW_S));
+    t6Fs.writeFileSync(t6Path.join(r.out, t6Driver.SPEND_LEDGER), '{"name":"a","tok');
+    for (const budget of [150, 1_000_000_000]) {
+      const gate = t6Driver.batchGate({ out: r.out, home: r.home, accountId: 'up-a', budget, limits: LIMITS, now: () => NOW_S * 1000 });
+      await expect(claimedBatch(r.jobs, { concurrency: 1, gate }), `budget ${budget}`).rejects.toMatchObject({ word: 'out-refused', detail: 'spend.jsonl malformed' });
+    }
+    expect(stubLog(r.home), 'no spawn').toBeNull();
+    t6Fs.writeFileSync(t6Path.join(r.out, t6Driver.SPEND_LEDGER), '{"name":"a","tokens":200,"ts_ms":1}\n');
+    const gate = t6Driver.batchGate({ out: r.out, home: r.home, accountId: 'up-a', budget: 150, limits: LIMITS, now: () => NOW_S * 1000 });
+    expect(() => gate(), 'CONTROL: a ledger that reads and has reached the budget').toThrow('budget-exhausted: spent 200 of 150');
+  }, 60_000);
+});
+
+// ── W2-4 Task 7: preflights, codeShas, the release stamp and the recall-off presence check ──────────────────────
+// (W2-D56, W2-D24, W2-D6, W2-D78(ii), W2-D29, W2-D59). Function level, every HOME and tree a mkTmp fixture. The only
+// child spawned is a fixture `--version` stub under the fixture HOME, through the driver's own env and cwd rules.
+import * as t7fs from 'node:fs';
+import * as t7path from 'node:path';
+import { fileURLToPath as t7FileURLToPath } from 'node:url';
+import { describe as t7describe, expect as t7expect, it as t7it } from 'vitest';
+import * as t7drv from '../../deploy/history-replay.mjs';
+import { sha256Hex as t7Sha, canonicalJson as t7Canon } from '../../ccd/history/lib.mjs';
+import { mkTmp as t7MkTmp } from './tmpHelpers.js';
+// ── W2-4 Task 9 imports ──
+import * as t9Driver from '../../deploy/history-replay.mjs';
+import * as t9Fs from 'node:fs';
+import t9Path from 'node:path';
+import { createHash as t9CreateHash } from 'node:crypto';
+
+t7describe('W2-4 Task 7: preflights, codeShas, the release stamp and recall-off presence', () => {
+  const REPO = t7path.resolve(t7path.dirname(t7FileURLToPath(import.meta.url)), '..', '..');
+  const ROOT_SKIP = typeof process.getuid === 'function' && process.getuid() === 0;
+  const H = (s: string): string => t7Sha(s);   // a well-formed sha256 for a fixture value
+  /** A fixture tree holding the four gate_code files, each with its own bytes. */
+  const plantTree = (): string => {
+    const root = t7MkTmp('t7-tree-');
+    for (const rel of t7drv.CODE_SHA_FILES) {
+      t7fs.mkdirSync(t7path.join(root, t7path.dirname(rel)), { recursive: true });
+      t7fs.writeFileSync(t7path.join(root, rel), `fixture bytes of ${rel}\n`);
+    }
+    return root;
+  };
+  const shasOf = (root: string): Record<string, string> =>
+    Object.fromEntries(t7drv.CODE_SHA_FILES.map((rel: string) => [rel, t7Sha(t7fs.readFileSync(t7path.join(root, rel)))]));
+  /** What a later subcommand compares against: step 0a's recorded values. */
+  const EXPECTED = (): { claude_code_version: string; release_stamp: string; wrapper_sha256: string | null; code_shas: Record<string, string> } => ({
+    claude_code_version: '9.9.9 (Claude Code)', release_stamp: 'v0.0.900', wrapper_sha256: H('wrapper'),
+    code_shas: Object.fromEntries(t7drv.CODE_SHA_FILES.map((f: string) => [f, H(f)])),
+  });
+  /** The same values measured now, unmoved; `o` moves one. */
+  const MEASURED = (o: Record<string, unknown> = {}): Record<string, unknown> => ({
+    version: { state: 'value', version: '9.9.9 (Claude Code)' }, stamp: { state: 'value', tag: 'v0.0.900' },
+    wrapperSha256: H('wrapper'), codeShas: { state: 'measured', files: { ...EXPECTED().code_shas } }, ...o,
+  });
+  /** The word and detail a DriverRefusal carries, or the throw itself when it is not one. */
+  const refusalOf = (fn: () => unknown): { word: string; detail: string } => {
+    try {
+      fn();
+    } catch (e) {
+      if (e instanceof t7drv.DriverRefusal) return { word: (e as { word: string }).word, detail: (e as { detail: string }).detail };
+      throw e;
+    }
+    throw new Error('expected a DriverRefusal, and nothing was thrown');
+  };
+
+  t7describe('codeShas over the four gate_code files, W2-D24', () => {
+    t7it('CODE_SHA_FILES is exactly the four files gate_code pins, frozen, and TREE_ROOT is the tree the driver runs from', () => {
+      t7expect([...t7drv.CODE_SHA_FILES]).toEqual(['deploy/history-gate.mjs', 'deploy/measure-history.py', 'deploy/history-replay.mjs', 'ccd/history/lib.mjs']);
+      t7expect(Object.isFrozen(t7drv.CODE_SHA_FILES)).toBe(true);
+      t7expect(t7drv.TREE_ROOT).toBe(REPO);
+    });
+
+    t7it('over a fixture root, each entry is that file\'s sha256 and there are exactly four', () => {
+      const root = plantTree();
+      t7expect(t7drv.codeShas(root)).toEqual({ state: 'measured', files: shasOf(root) });
+    });
+
+    t7it.each(['deploy/history-gate.mjs', 'deploy/measure-history.py', 'deploy/history-replay.mjs', 'ccd/history/lib.mjs'])(
+      'one changed byte in %s changes exactly that entry', (rel) => {
+        const root = plantTree();
+        const before = (t7drv.codeShas(root) as { files: Record<string, string> }).files;
+        const p = t7path.join(root, rel);
+        const b = t7fs.readFileSync(p);
+        b[0] = b[0]! ^ 1;
+        t7fs.writeFileSync(p, b);
+        const after = (t7drv.codeShas(root) as { files: Record<string, string> }).files;
+        t7expect(Object.keys(after).filter((k) => after[k] !== before[k])).toEqual([rel]);
+      });
+
+    t7it('an absent file answers unmeasured absent, never a hash of nothing; an empty file is bytes and is hashed', () => {
+      const root = plantTree();
+      t7fs.rmSync(t7path.join(root, 'deploy/history-gate.mjs'));
+      t7expect(t7drv.codeShas(root)).toEqual({ state: 'unmeasured', path: 'deploy/history-gate.mjs', cause: 'absent' });
+      const root2 = plantTree();
+      t7fs.writeFileSync(t7path.join(root2, 'ccd/history/lib.mjs'), '');
+      t7expect((t7drv.codeShas(root2) as { files: Record<string, string> }).files['ccd/history/lib.mjs']).toBe(t7Sha(''));
+    });
+
+    t7it('a directory where a file belongs answers unmeasured unreadable', () => {
+      const root = plantTree();
+      t7fs.rmSync(t7path.join(root, 'deploy/measure-history.py'));
+      t7fs.mkdirSync(t7path.join(root, 'deploy/measure-history.py'));
+      t7expect(t7drv.codeShas(root)).toEqual({ state: 'unmeasured', path: 'deploy/measure-history.py', cause: 'unreadable' });
+    });
+
+    t7it.skipIf(ROOT_SKIP)('a mode-000 file answers unmeasured unreadable', () => {
+      const root = plantTree();
+      t7fs.chmodSync(t7path.join(root, 'deploy/history-replay.mjs'), 0o000);
+      t7expect(t7drv.codeShas(root)).toEqual({ state: 'unmeasured', path: 'deploy/history-replay.mjs', cause: 'unreadable' });
+    });
+
+    t7it('over the real tree, before or after W2-3 lands: measured when history-gate.mjs exists, else unmeasured absent', () => {
+      const r = t7drv.codeShas();
+      if (t7fs.existsSync(t7path.join(REPO, 'deploy/history-gate.mjs'))) t7expect(r).toEqual({ state: 'measured', files: shasOf(REPO) });
+      else t7expect(r).toEqual({ state: 'unmeasured', path: 'deploy/history-gate.mjs', cause: 'absent' });
+    });
+  });
+
+  t7describe('readReleaseStamp keeps absent, unreadable, malformed and untagged apart', () => {
+    const stampHome = (text: string | null): string => {
+      const home = t7MkTmp('t7-stamp-');
+      t7fs.mkdirSync(t7path.join(home, '.ccrc'), { mode: 0o700 });
+      if (text !== null) t7fs.writeFileSync(t7path.join(home, '.ccrc', 'build.json'), text);
+      return home;
+    };
+    const STAMP = { sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-10-19T00:00:00Z', dirty: false };
+
+    t7it('a tagged stamp is its version', () => {
+      t7expect(t7drv.readReleaseStamp(stampHome(JSON.stringify({ ...STAMP, version: 'v0.0.900' })))).toEqual({ state: 'value', tag: 'v0.0.900' });
+    });
+    t7it('no build.json is absent', () => {
+      t7expect(t7drv.readReleaseStamp(stampHome(null))).toEqual({ state: 'absent' });
+    });
+    t7it('a stamp with no version field is untagged', () => {
+      t7expect(t7drv.readReleaseStamp(stampHome(JSON.stringify(STAMP)))).toEqual({ state: 'untagged' });
+    });
+    t7it('not JSON, an array, or a version that is not a non-empty string is malformed', () => {
+      for (const text of ['{"sha":', '[]', JSON.stringify({ ...STAMP, version: 7 }), JSON.stringify({ ...STAMP, version: '' })]) {
+        t7expect(t7drv.readReleaseStamp(stampHome(text)), text).toEqual({ state: 'malformed' });
+      }
+    });
+    t7it('a directory at build.json is unreadable, with its code', () => {
+      const home = stampHome(null);
+      t7fs.mkdirSync(t7path.join(home, '.ccrc', 'build.json'));
+      t7expect(t7drv.readReleaseStamp(home)).toEqual({ state: 'unreadable', code: 'EISDIR' });
+    });
+  });
+
+  t7describe('wrapperSha and measureClaudeVersion', () => {
+    /** A fixture home with one launcher at .local/bin/<id>, a node script that prints `out` and exits `rc`, logging
+     *  its argv, env key names, cwd and the cwd's entries to $HOME/version-stub.json. */
+    const versionHome = (id: string, out: string, rc = 0): { home: string; launcher: string } => {
+      const home = t7MkTmp('t7-ver-');
+      t7fs.mkdirSync(t7path.join(home, '.local', 'bin'), { recursive: true });
+      t7fs.mkdirSync(t7path.join(home, '.claude'), { mode: 0o700 });
+      const launcher = t7path.join(home, '.local', 'bin', id);
+      t7fs.writeFileSync(launcher, [
+        '#!/usr/bin/env node',
+        "const fs = require('node:fs');",
+        "const path = require('node:path');",
+        `fs.writeFileSync(path.join(process.env.HOME, 'version-stub.json'), JSON.stringify({ argv: process.argv.slice(2), envKeys: Object.keys(process.env).sort(), cwd: process.cwd(), entries: fs.readdirSync(process.cwd()) }));`,
+        `process.stdout.write(${JSON.stringify(out)});`,
+        `process.exit(${rc});`,
+        '',
+      ].join('\n'), { mode: 0o700 });
+      return { home, launcher };
+    };
+    const upstreamLaunch = (home: string, launcher: string) => ({
+      accountId: 'up-a', kind: 'upstream', launcher, configDir: t7path.join(home, '.claude'), wrapperPath: null, secretsPath: null,
+    });
+    const outDir = (): string => { const d = t7MkTmp('t7-out-'); t7fs.chmodSync(d, 0o700); return d; };
+
+    t7it('wrapperSha: a generated account\'s wrapper bytes hashed; null for upstream', () => {
+      const home = t7MkTmp('t7-wrap-');
+      const w = t7path.join(home, 'gen-a');
+      t7fs.writeFileSync(w, '#!/bin/sh\n# fixture wrapper\n');
+      t7expect(t7drv.wrapperSha({ accountId: 'gen-a', kind: 'generated', launcher: w, configDir: t7path.join(home, '.claude-gen-a'), wrapperPath: w, secretsPath: t7path.join(home, 's') }))
+        .toBe(t7Sha('#!/bin/sh\n# fixture wrapper\n'));
+      t7expect(t7drv.wrapperSha({ accountId: 'up-a', kind: 'upstream', launcher: w, configDir: t7path.join(home, '.claude'), wrapperPath: null, secretsPath: null })).toBeNull();
+    });
+
+    t7it('wrapperSha: an unreadable wrapper refuses wrapper-unmeasured, never wrapper-moved and never null (coordinator ruling)', () => {
+      const home = t7MkTmp('t7-wrap-');
+      const w = t7path.join(home, 'gen-a');
+      const r = refusalOf(() => t7drv.wrapperSha({ accountId: 'gen-a', kind: 'generated', launcher: w, configDir: t7path.join(home, '.claude-gen-a'), wrapperPath: w, secretsPath: t7path.join(home, 's') }));
+      t7expect(r.word).toBe('wrapper-unmeasured');
+      t7expect(r.detail).toBe(`${w}: ENOENT`);
+    });
+
+    t7it('measureClaudeVersion: the first stdout line, trimmed, from --version alone, under the writer env and a fresh cwd, spending nothing', async () => {
+      const { home, launcher } = versionHome('up-a', '  9.9.9 (Claude Code)  \nsecond line\n');
+      const out = outDir();
+      t7expect(await t7drv.measureClaudeVersion(upstreamLaunch(home, launcher), out, 'fixture.UTF-8')).toEqual({ state: 'value', version: '9.9.9 (Claude Code)' });
+      const log = JSON.parse(t7fs.readFileSync(t7path.join(home, 'version-stub.json'), 'utf8'));
+      t7expect(log.argv).toEqual(['--version']);
+      t7expect(log.envKeys).toEqual(['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
+      t7expect(log.entries).toEqual([]);
+      t7expect(log.cwd.startsWith(out)).toBe(false);
+      t7expect(t7fs.existsSync(log.cwd), 'the run cwd is removed afterwards').toBe(false);
+      t7expect(t7fs.existsSync(t7path.join(out, t7drv.SPEND_LEDGER)), '--version records no spend').toBe(false);
+    });
+
+    t7it('measureClaudeVersion: a non-zero exit, or an empty first line, is failed with its code', async () => {
+      const a = versionHome('up-a', '9.9.9 (Claude Code)\n', 3);
+      t7expect(await t7drv.measureClaudeVersion(upstreamLaunch(a.home, a.launcher), outDir(), undefined)).toEqual({ state: 'failed', code: 3, signal: null });
+      const b = versionHome('up-a', '\n9.9.9\n', 0);
+      t7expect(await t7drv.measureClaudeVersion(upstreamLaunch(b.home, b.launcher), outDir(), undefined)).toEqual({ state: 'failed', code: 0, signal: null });
+    });
+  });
+
+  t7describe('preflight, W2-D56: four words in a fixed order', () => {
+    t7it('nothing moved: ok with no stamps', () => {
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED())).toEqual({ ok: true, stamps: [] });
+    });
+    t7it('a moved version is claude-version-moved', () => {
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ version: { state: 'value', version: '9.9.10 (Claude Code)' } })))
+        .toEqual({ ok: false, word: 'claude-version-moved', detail: 'recorded 9.9.9 (Claude Code), measured 9.9.10 (Claude Code)' });
+    });
+    t7it('a failed --version is version-unmeasured, never claude-version-moved (coordinator ruling)', () => {
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ version: { state: 'failed', code: 3, signal: null } })))
+        .toEqual({ ok: false, word: 'version-unmeasured', detail: '--version failed (code 3, signal null)' });
+    });
+    t7it('a moved release stamp is tree-moved', () => {
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ stamp: { state: 'value', tag: 'v0.0.901' } })))
+        .toEqual({ ok: false, word: 'tree-moved', detail: 'recorded v0.0.900, measured v0.0.901' });
+    });
+    t7it.each([[{ state: 'absent' }], [{ state: 'untagged' }], [{ state: 'malformed' }], [{ state: 'unreadable', code: 'EACCES' }]])(
+      'a release stamp read as %j is tree-unmeasured, never tree-moved and never a pass (coordinator ruling)', (stamp) => {
+        t7expect(t7drv.preflight(EXPECTED(), MEASURED({ stamp })))
+          .toEqual({ ok: false, word: 'tree-unmeasured', detail: `the release stamp is ${stamp.state}${stamp.state === 'unreadable' ? ' (EACCES)' : ''}` });
+      });
+    t7it('each unmeasured input refuses its own word at its place: version-unmeasured, then tree-unmeasured, then code-unmeasured', () => {
+      const all = MEASURED({
+        version: { state: 'failed', code: 3, signal: null }, stamp: { state: 'absent' },
+        codeShas: { state: 'unmeasured', path: 'deploy/history-gate.mjs', cause: 'absent' },
+      });
+      const wordOf = (m: Record<string, unknown>): string => (t7drv.preflight(EXPECTED(), m) as { word: string }).word;
+      const back = MEASURED();
+      t7expect([
+        wordOf(all),
+        wordOf({ ...all, version: back.version }),
+        wordOf({ ...all, version: back.version, stamp: back.stamp }),
+      ]).toEqual(['version-unmeasured', 'tree-unmeasured', 'code-unmeasured']);
+    });
+    t7it('a moved wrapper is wrapper-moved, and so is a wrapper where none was recorded', () => {
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ wrapperSha256: H('other wrapper') }))).toMatchObject({ ok: false, word: 'wrapper-moved' });
+      t7expect(t7drv.preflight({ ...EXPECTED(), wrapper_sha256: null }, MEASURED())).toMatchObject({ ok: false, word: 'wrapper-moved' });
+      t7expect(t7drv.preflight({ ...EXPECTED(), wrapper_sha256: null }, MEASURED({ wrapperSha256: null }))).toEqual({ ok: true, stamps: [] });
+    });
+    t7it('one changed code sha is code-changed, naming that file', () => {
+      const files = { ...EXPECTED().code_shas, 'ccd/history/lib.mjs': H('one byte moved') };
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ codeShas: { state: 'measured', files } })))
+        .toEqual({ ok: false, word: 'code-changed', detail: 'changed ccd/history/lib.mjs' });
+    });
+    t7it('an unmeasured code file is code-unmeasured, never code-changed (coordinator ruling)', () => {
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ codeShas: { state: 'unmeasured', path: 'deploy/history-gate.mjs', cause: 'absent' } })))
+        .toEqual({ ok: false, word: 'code-unmeasured', detail: 'deploy/history-gate.mjs is absent' });
+    });
+    t7it('the order is fixed: with all four moved, each word shows only once those before it are put back', () => {
+      const all = MEASURED({
+        version: { state: 'value', version: 'moved' }, stamp: { state: 'value', tag: 'moved' }, wrapperSha256: H('moved'),
+        codeShas: { state: 'measured', files: { ...EXPECTED().code_shas, 'deploy/history-replay.mjs': H('moved') } },
+      });
+      const words: string[] = [];
+      const m = { ...all };
+      for (const [k, back] of Object.entries(MEASURED())) {
+        words.push((t7drv.preflight(EXPECTED(), m) as { word: string }).word);
+        m[k] = back;
+      }
+      t7expect(words).toEqual(['claude-version-moved', 'tree-moved', 'wrapper-moved', 'code-changed']);
+    });
+    t7it('allowCodeChange stamps code-changed and nothing else: an unmeasured code file still refuses code-unmeasured, a moved or unmeasured stamp still refuses', () => {
+      const files = { ...EXPECTED().code_shas, 'deploy/history-gate.mjs': H('moved') };
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ codeShas: { state: 'measured', files } }), { allowCodeChange: true })).toEqual({ ok: true, stamps: ['code-changed'] });
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ codeShas: { state: 'unmeasured', path: 'deploy/history-gate.mjs', cause: 'absent' } }), { allowCodeChange: true }))
+        .toEqual({ ok: false, word: 'code-unmeasured', detail: 'deploy/history-gate.mjs is absent' });
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED({ codeShas: { state: 'unmeasured', path: 'deploy/measure-history.py', cause: 'unreadable' } }), { allowCodeChange: true }))
+        .toEqual({ ok: false, word: 'code-unmeasured', detail: 'deploy/measure-history.py is unreadable' });
+      t7expect(t7drv.preflight(EXPECTED(), MEASURED(), { allowCodeChange: true })).toEqual({ ok: true, stamps: [] });
+      for (const moved of [{ version: { state: 'value', version: 'moved' } }, { version: { state: 'failed', code: 3, signal: null } },
+        { stamp: { state: 'value', tag: 'moved' } }, { stamp: { state: 'untagged' } }, { wrapperSha256: H('moved') }]) {
+        t7expect(t7drv.preflight(EXPECTED(), MEASURED(moved), { allowCodeChange: true }).ok, JSON.stringify(moved)).toBe(false);
+      }
+    });
+  });
+
+  t7describe('loadStep0a checks the sha before parsing, then the shape', () => {
+    const step0a = (o: Record<string, unknown> = {}): Record<string, unknown> => ({
+      kind: t7drv.STEP0A_KIND, v: 1, measured_ms: 1_800_000_000_000, account: 'up-a', settings_mode: 'restricted',
+      claude_code_version: '9.9.9 (Claude Code)', wrapper_sha256: null, flags_accepted: { '--restricted': true },
+      writer_init: null, judge_init: null, box_init: null, code_shas: Object.fromEntries(t7drv.CODE_SHA_FILES.map((f: string) => [f, H(f)])),
+      release_stamp: 'v0.0.900', budget: 100_000, spend: 1_234, ...o,
+    });
+    const plant = (text: string): string => {
+      const dir = t7MkTmp('t7-s0a-');
+      const p = t7path.join(dir, 'step0a.json');
+      t7fs.writeFileSync(p, text);
+      return p;
+    };
+
+    t7it('a step 0a output with its own sha loads, whole', () => {
+      const text = t7Canon(step0a()) + '\n';
+      t7expect(t7drv.loadStep0a(plant(text), t7Sha(text))).toEqual(step0a());
+    });
+    t7it('a wrong sha refuses input-sha-mismatch, before the bytes are parsed: valid JSON and not-JSON alike', () => {
+      const good = t7Canon(step0a()) + '\n';
+      t7expect(refusalOf(() => t7drv.loadStep0a(plant(good), t7Sha('other bytes'))).word).toBe('input-sha-mismatch');
+      t7expect(refusalOf(() => t7drv.loadStep0a(plant('{"kind":'), t7Sha('other bytes'))).word).toBe('input-sha-mismatch');
+    });
+    t7it('the right sha over bytes that are not JSON refuses input-invalid not-json', () => {
+      t7expect(refusalOf(() => t7drv.loadStep0a(plant('{"kind":'), t7Sha('{"kind":')))).toEqual({ word: 'input-invalid', detail: 'step0a not-json' });
+    });
+    // D-5808: each field check of the step 0a shape, and loadStep0a's path, read and git-tree refusals, pinned by name.
+    const hexOf = (c: string): string => c.repeat(64);
+    t7it.each([
+      ['an extra field', { extra: 1 }, (keys: string) => `fields ${keys}`],
+      ['another kind', { kind: 'ccrc-history-w2-probe' }, () => 'kind'],
+      ['a code sha missing', { code_shas: { 'ccd/history/lib.mjs': H('x') } }, () => 'code_shas'],
+      ['a code sha that is not 64 lowercase hex', { code_shas: Object.fromEntries(t7drv.CODE_SHA_FILES.map((f: string) => [f, 'nothex'])) }, () => 'code_shas'],
+      ['an unknown settings mode', { settings_mode: 'bypass' }, () => 'settings_mode'],
+      ['a zero budget', { budget: 0 }, () => 'budget'],
+      ['a fractional budget', { budget: 1.5 }, () => 'budget'],
+      ['an empty release stamp', { release_stamp: '' }, () => 'release_stamp'],
+      ['a non-string release stamp', { release_stamp: 9 }, () => 'release_stamp'],
+      ['a version other than 1', { v: 2 }, () => 'v'],
+      ['a zero measured_ms', { measured_ms: 0 }, () => 'measured_ms'],
+      ['a fractional measured_ms', { measured_ms: 1.5 }, () => 'measured_ms'],
+      ['an empty account', { account: '' }, () => 'account'],
+      ['a non-string account', { account: 7 }, () => 'account'],
+      ['an empty claude_code_version', { claude_code_version: '' }, () => 'claude_code_version'],
+      ['a non-string claude_code_version', { claude_code_version: 1 }, () => 'claude_code_version'],
+      ['a wrapper_sha256 that is not a sha', { wrapper_sha256: 'nothex' }, () => 'wrapper_sha256'],
+      ['an uppercase wrapper_sha256', { wrapper_sha256: hexOf('A') }, () => 'wrapper_sha256'],
+      ['a non-object flags_accepted', { flags_accepted: null }, () => 'flags_accepted'],
+      ['an array flags_accepted', { flags_accepted: [true] }, () => 'flags_accepted'],
+      ['a non-boolean flag', { flags_accepted: { '--restricted': 'yes' } }, () => 'flags_accepted'],
+      ['a string writer_init', { writer_init: 'x' }, () => 'writer_init'],
+      ['an array judge_init', { judge_init: [] }, () => 'judge_init'],
+      ['a number box_init', { box_init: 3 }, () => 'box_init'],
+      ['a negative spend', { spend: -1 }, () => 'spend'],
+      ['a fractional spend', { spend: 0.5 }, () => 'spend'],
+    ])('the right sha over %s refuses input-invalid, naming the field', (_name, o, detail) => {
+      const text = t7Canon(step0a(o as Record<string, unknown>)) + '\n';
+      const keys = Object.keys(step0a(o as Record<string, unknown>)).sort().join(' ');
+      t7expect(refusalOf(() => t7drv.loadStep0a(plant(text), t7Sha(text)))).toEqual({ word: 'input-invalid', detail: `step0a shape ${(detail as (k: string) => string)(keys)}` });
+    });
+    t7it.each([['an array', '[]'], ['null', 'null'], ['a string', '"x"'], ['a number', '7']])('the right sha over %s refuses input-invalid not-object', (_name, text) => {
+      t7expect(refusalOf(() => t7drv.loadStep0a(plant(text), t7Sha(text)))).toEqual({ word: 'input-invalid', detail: 'step0a shape not-object' });
+    });
+    t7it('a step 0a path that does not exist refuses input-invalid unreadable ENOENT, not a raw error', () => {
+      const p = t7path.join(t7path.dirname(plant('x')), 'absent.json');
+      t7expect(refusalOf(() => t7drv.loadStep0a(p, t7Sha('x')))).toEqual({ word: 'input-invalid', detail: 'step0a unreadable ENOENT' });
+    });
+    // D-5986: the input is type-checked before it is opened, so a directory is said to be what it is (it was the kernel's EISDIR).
+    t7it('a step 0a path that is a directory refuses input-invalid not-regular', () => {
+      const dir = t7path.join(t7path.dirname(plant('x')), 'a-dir');
+      t7fs.mkdirSync(dir);
+      t7expect(refusalOf(() => t7drv.loadStep0a(dir, t7Sha('x')))).toEqual({ word: 'input-invalid', detail: 'step0a not-regular' });
+    });
+    t7it('an empty or non-string step 0a path refuses args-invalid', () => {
+      const sha = t7Sha('x');
+      t7expect(refusalOf(() => t7drv.loadStep0a('', sha))).toEqual({ word: 'args-invalid', detail: '--step0a names no path' });
+      t7expect(refusalOf(() => t7drv.loadStep0a(undefined, sha))).toEqual({ word: 'args-invalid', detail: '--step0a names no path' });
+    });
+    t7it.skipIf(process.getuid?.() === 0)('a step 0a path whose ancestor cannot be measured refuses input-invalid git-unmeasured, before the file is read', () => {
+      const text = t7Canon(step0a()) + '\n';
+      const p = plant(text);
+      const dir = t7path.dirname(p);
+      t7fs.chmodSync(dir, 0o000);
+      try {
+        t7expect(refusalOf(() => t7drv.loadStep0a(p, t7Sha(text)))).toEqual({ word: 'input-invalid', detail: `step0a git-unmeasured ${t7path.join(dir, '.git')} EACCES` });
+      } finally {
+        t7fs.chmodSync(dir, 0o700);
+      }
+    });
+    t7it('a step 0a file inside a git tree refuses input-invalid, before it is read', () => {
+      const text = t7Canon(step0a()) + '\n';
+      const p = plant(text);
+      t7fs.mkdirSync(t7path.join(t7path.dirname(p), '.git'));
+      t7expect(refusalOf(() => t7drv.loadStep0a(p, t7Sha(text)))).toEqual({ word: 'input-invalid', detail: `step0a in-git-tree ${t7path.dirname(p)}` });
+    });
+    t7it('a --step0a-sha256 that is not 64 lowercase hex refuses args-invalid', () => {
+      const text = t7Canon(step0a()) + '\n';
+      t7expect(refusalOf(() => t7drv.loadStep0a(plant(text), t7Sha(text).toUpperCase())).word).toBe('args-invalid');
+    });
+  });
+
+  t7describe('recall-off presence, W2-D78 ii: lstat whatever the entry, ENOENT alone is absent', () => {
+    /** Where lib's recallOffPath puts `<id>` under `home` (the CONTROL below holds the two equal). */
+    const roPath = (home: string, id: string): string => t7path.join(home, '.ccrc', 'history', 'recall-off', id);
+    const roHome = (): { home: string; dir: string } => {
+      const home = t7MkTmp('t7-ro-');
+      const dir = t7path.dirname(roPath(home, 'fam-a'));
+      t7fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      return { home, dir };
+    };
+
+    t7it('CONTROL: the fixture path is lib\'s recallOffPath', async () => {
+      const lib = await import('../../ccd/history/lib.mjs');
+      const home = t7MkTmp('t7-ro-');
+      t7expect(lib.recallOffPath(home, 'fam-a')).toBe(roPath(home, 'fam-a'));
+    });
+    t7it('absent passes: no recall-off directory at all, and an empty one', () => {
+      t7expect(t7drv.recallOffPresence(t7MkTmp('t7-ro-'), ['fam-a', 'fam-b'])).toEqual({ present: [], unmeasured: [] });
+      const { home } = roHome();
+      t7expect(t7drv.recallOffPresence(home, ['fam-a'])).toEqual({ present: [], unmeasured: [] });
+      t7expect(() => t7drv.refuseRecallOff(home, ['fam-a'])).not.toThrow();
+    });
+    t7it.each([
+      ['a regular file', (p: string) => t7fs.writeFileSync(p, 'a-generation\n')],
+      ['an empty file', (p: string) => t7fs.writeFileSync(p, '')],
+      ['a directory', (p: string) => t7fs.mkdirSync(p)],
+      ['a dangling symlink', (p: string) => t7fs.symlinkSync(t7path.join(t7path.dirname(p), 'nowhere'), p)],
+    ])('%s is present, and refuses family-recall-off', (_name, plantEntry) => {
+      const { home, dir } = roHome();
+      plantEntry(t7path.join(dir, 'fam-b'));
+      t7expect(t7drv.recallOffPresence(home, ['fam-a', 'fam-b'])).toEqual({ present: ['fam-b'], unmeasured: [] });
+      t7expect(refusalOf(() => t7drv.refuseRecallOff(home, ['fam-a', 'fam-b']))).toEqual({ word: 'family-recall-off', detail: 'present fam-b' });
+    });
+    t7it.skipIf(ROOT_SKIP)('a recall-off directory with mode 000 answers unmeasured, and refuses', () => {
+      const { home, dir } = roHome();
+      t7fs.chmodSync(dir, 0o000);
+      try {
+        t7expect(t7drv.recallOffPresence(home, ['fam-a'])).toEqual({ present: [], unmeasured: [{ id: 'fam-a', code: 'EACCES' }] });
+        t7expect(refusalOf(() => t7drv.refuseRecallOff(home, ['fam-a']))).toEqual({ word: 'family-recall-off', detail: 'unmeasured fam-a EACCES' });
+      } finally {
+        t7fs.chmodSync(dir, 0o700);
+      }
+    });
+    t7it('an id lib refuses is input-invalid, never read as absent and never exit 1 (coordinator ruling)', () => {
+      t7expect(refusalOf(() => t7drv.recallOffPresence(t7MkTmp('t7-ro-'), ['../escape'])))
+        .toEqual({ word: 'input-invalid', detail: 'family id "../escape" is not a session id' });
+      t7expect(refusalOf(() => t7drv.refuseRecallOff(t7MkTmp('t7-ro-'), ['fam-a', '../escape'])), 'refuseRecallOff carries the same refusal')
+        .toEqual({ word: 'input-invalid', detail: 'family id "../escape" is not a session id' });
+    });
+    t7it('the driver names recall-off on exactly one code line, an lstatSync of recallOffPath, and never spells the directory', () => {
+      const code = t7fs.readFileSync(t7path.join(REPO, 'deploy', 'history-replay.mjs'), 'utf8').split('\n')
+        .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l));
+      const naming = (lines: string[]): string[] => lines.filter((l) => l.includes('recallOffPath(')).map((l) => l.trim());
+      const spells = (lines: string[]): string[] => lines.filter((l) => /\/recall-off|'recall-off'|RECALL_OFF_DIR/.test(l));
+      t7expect(naming(code)).toEqual(['lstatSync(recallOffPath(home, id));']);
+      t7expect(spells(code)).toEqual([]);
+      // CONTROL: both needles see a planted line.
+      t7expect(naming(['  writeFileSync(recallOffPath(home, id), g);'])).toHaveLength(1);
+      t7expect(spells(["  const p = path.join(root, 'recall-off', id);"])).toHaveLength(1);
+    });
+  });
+});
+
+// ── W2-4 Task 8: step 0a, end to end (W2-D57, W2-D55, W2-D24, W2-D52, W2-D51) ──────────────────────────────────
+// The subcommand as the operator runs it: a child process with a fixture HOME (t8Run, runDriver's env contract over
+// a driver copy) against Task 5's recording stub. Every rostered id's launcher is a stub and every id has a fresh
+// limits row, so a spawn of ANY account, admitted or not, leaves a log line, and only admission can stop it. Each
+// run uses a fixture tree (t8Tree): a copy of the driver beside fixture bytes for the two gate_code files this PR
+// does not own, so codeShas() is measured whichever of W2-3 and this PR merges first and the recorded shas can be
+// pinned exactly; lib.mjs is copied, and ccd/history's other entries and shared/ are symlinks to this checkout.
+describe('W2-4 Task 8: step0a end to end', () => {
+  const T8_SESSION = '00000000-0000-4000-8000-0000000000a8';
+  const T8_USAGE = { input_tokens: 100, cache_creation_input_tokens: 20, cache_read_input_tokens: 30, output_tokens: 50 };
+  const T8_PER_RUN = 200;   // the sum of T8_USAGE: what one run spends
+  const T8_STREAM = [
+    { type: 'system', subtype: 'init', session_id: T8_SESSION, model: 'fixture-model-writer', tools: [], mcp_servers: [], plugins: [], skills: [], slash_commands: [] },
+    { type: 'assistant', message: { id: 'msg-t8-1', role: 'assistant', content: [{ type: 'text', text: 'ready' }], usage: T8_USAGE } },
+    { type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'ready', usage: T8_USAGE, permission_denials: [] },
+  ].map((e) => JSON.stringify(e)).join('\n') + '\n';
+  const T8_STAMP = 'v9.9.9';
+  const T8_GATE_BYTES = '// fixture bytes for deploy/history-gate.mjs (W2-4 Task 8)\n';
+  const T8_MEASURE_BYTES = '# fixture bytes for deploy/measure-history.py (W2-4 Task 8)\n';
+  const T8_CALLER_ENV = {
+    TMUX: '/tmp/fixture-tmux,1,0', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'fixture-session', CCRC_SESSION_GENERATION: 'fixture-generation',
+    CCRC_RECALL_SESSION: 'fixture-session', CCRC_RECALL_ARM: 'fixture-arm', CCRC_RECALL_ASOF: 'fixture-asof',
+  };
+  const T8_MODELS = { writer: 'fixture-model-writer', judge: 'fixture-model-judge', box: 'fixture-model-arm' } as const;
+  /** Step0aOutput's fifteen keys, sorted. */
+  const T8_STEP0A_KEYS = ['account', 'box_init', 'budget', 'claude_code_version', 'code_shas', 'flags_accepted', 'judge_init',
+    'kind', 'measured_ms', 'release_stamp', 'settings_mode', 'spend', 'v', 'wrapper_sha256', 'writer_init'];
+
+  /** A limits row read as fresh: `five` and `seven` as given, sampled a minute ago, both windows still running. */
+  function t8Limits(home: string, id: string, five: number, seven: number): void {
+    const nowS = Math.floor(Date.now() / 1000);
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-limits', `${id}.json`),
+      JSON.stringify({ five, seven, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+  }
+
+  /** A fixture HOME: Task 3's twelve rows (FIXTURE_ACCOUNTS); a stub at every id's launcher; gen-a's real wrapper (over its stub)
+   *  and its secrets file, whose token is assembled here; gen-r's secrets file at mode 000, gen-d's a directory; a fresh limits row
+   *  for every id, so only admission can stop a refused one; a tagged release stamp; the canned stream every stub prints. */
+  function t8Home(prefix: string): string {
+    const home = mkTmp(prefix);
+    writeRoster(home, FIXTURE_ACCOUNTS);
+    for (const a of FIXTURE_ACCOUNTS as Array<{ id: string }>) { plantStub(home, a.id); t8Limits(home, a.id, 10, 20); }
+    const flat = rosterFromJson(JSON.parse(readFileSync(path.join(home, '.ccrc', 'accounts.json'), 'utf8')));
+    const byId = new Map(flat.accounts.map((a) => [a.id, a]));
+    writeFileSync(path.join(home, '.local', 'bin', 'gen-a'), generateWrapperBody(byId.get('gen-a')!, flat.upstreamId), { mode: 0o755 });
+    for (const id of ['gen-a', 'gen-r']) {
+      const p = path.join(home, byId.get(id)!.secretsFile!);
+      mkdirSync(path.dirname(p), { recursive: true });
+      writeFileSync(p, `export CLAUDE_CODE_OAUTH_TOKEN=${['sk', 'ant', 'oat01', 'fixture', 't8'].join('-')}\n`, { mode: 0o600 });
+    }
+    chmodSync(path.join(home, byId.get('gen-r')!.secretsFile!), 0o000);
+    // D-5809: gen-d's declared secretsFile is a DIRECTORY (RP9), so admission alone can stop it.
+    mkdirSync(path.join(home, byId.get('gen-d')!.secretsFile!), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'build.json'),
+      JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-10-19T00:00:00Z', dirty: false, version: T8_STAMP }));
+    writeFileSync(path.join(home, STUB_STREAM), T8_STREAM);
+    return home;
+  }
+
+  /** A tree the driver runs from: its own bytes copied (so TREE_ROOT is this tree), fixture bytes for the two
+   *  gate_code files this PR does not own (`gate: false` leaves deploy/history-gate.mjs out), lib.mjs copied and
+   *  ccd/history's other entries and shared/ symlinked to this checkout, so every import resolves. */
+  function t8Tree(opts: { gate?: boolean } = {}): string {
+    const repo = path.resolve(path.dirname(SCRIPT), '..');
+    const tree = mkTmp('ccrc-w2-t8-tree-');
+    mkdirSync(path.join(tree, 'deploy'));
+    copyFileSync(SCRIPT, path.join(tree, 'deploy', 'history-replay.mjs'));
+    if (opts.gate !== false) writeFileSync(path.join(tree, 'deploy', 'history-gate.mjs'), T8_GATE_BYTES);
+    writeFileSync(path.join(tree, 'deploy', 'measure-history.py'), T8_MEASURE_BYTES);
+    mkdirSync(path.join(tree, 'ccd', 'history'), { recursive: true });
+    for (const n of readdirSync(path.join(repo, 'ccd', 'history'))) {
+      const from = path.join(repo, 'ccd', 'history', n);
+      const to = path.join(tree, 'ccd', 'history', n);
+      if (n === 'lib.mjs') copyFileSync(from, to); else symlinkSync(from, to);
+    }
+    symlinkSync(path.join(repo, 'shared'), path.join(tree, 'shared'));
+    return tree;
+  }
+
+  /** runDriver's contract, for the driver copy in `tree`. */
+  function t8Run(tree: string, home: string, args: string[], extraEnv: Record<string, string> = {}, timeout = 120_000) {
+    const r = spawnSync(process.execPath, [path.join(tree, 'deploy', 'history-replay.mjs'), ...args],
+      // SIGKILL at the deadline (D-5986): the driver holds SIGTERM until its event loop turns, so a call blocked on a FIFO would outlive a SIGTERM and hang spawnSync.
+      { env: { ...scrubbedEnv(process.env), HOME: home, ...extraEnv }, encoding: 'utf8', timeout, killSignal: 'SIGKILL' });
+    return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+  }
+
+  /** A fresh --out path whose parent exists (Task 2 creates it). */
+  const t8Out = (): string => path.join(mkTmp('ccrc-w2-t8-out-'), 'out');
+
+  /** step0a's argv: every flag it requires, `over` replacing a value or (null) leaving the flag out. */
+  function t8Argv(out: string, over: Record<string, string | null> = {}): string[] {
+    const base: Record<string, string | null> = {
+      out, account: 'up-a', budget: '100000', 'writer-model': T8_MODELS.writer, 'judge-model': T8_MODELS.judge,
+      'arm-model': T8_MODELS.box, ...over,
+    };
+    return ['step0a', ...Object.entries(base).flatMap(([k, v]) => (v === null ? [] : [`--${k}`, v]))];
+  }
+
+  /** The stub's log lines for the batch's runs (print mode), by the model each was given. */
+  function t8Runs(home: string): Array<Record<string, any>> {
+    return (stubLog(home) ?? []).filter((e) => (e.argv as string[]).includes('-p'));
+  }
+  const t8ModelOf = (e: Record<string, any>): string => (e.argv as string[])[(e.argv as string[]).indexOf('--model') + 1]!;
+
+  it('flagsAccepted: every flag the argvs carry, each true unless a run named it an unknown option', () => {
+    const argvs = [['--restricted', '-p', '--tools', '', '--model', 'm1'], ['--restricted', '-p', '--tools', 'Bash,Agent', '--allowedTools', 'Bash(x:*)']];
+    const ok = { unknownOptions: [] as string[], facts: { init: {} as object | null } };
+    expect(replay.flagsAccepted(argvs, [ok, ok])).toEqual({ '--restricted': true, '-p': true, '--tools': true, '--model': true, '--allowedTools': true });
+    const named: Record<string, boolean> = replay.flagsAccepted(argvs, [ok, { ...ok, unknownOptions: ['--allowedTools'] }]);
+    expect(named['--allowedTools']).toBe(false);
+    expect(Object.entries(named).filter(([, v]) => !v).map(([k]) => k)).toEqual(['--allowedTools']);
+  });
+
+  // D-5812: a flag is accepted only when a run that carried it reached its init event.
+  it('flagsAccepted: a flag whose every run emitted no init is false, a flag a run with an init also carried stays true', () => {
+    const argvs = [['--restricted', '-p', '--tools', '', '--model', 'm1'], ['--restricted', '-p', '--tools', 'Bash,Agent', '--allowedTools', 'Bash(x:*)']];
+    const reached = { unknownOptions: [] as string[], facts: { init: {} as object | null } };
+    const notReached = { unknownOptions: [] as string[], facts: { init: null as object | null } };
+    expect(replay.flagsAccepted(argvs, [reached, notReached]), 'the box-only flag was never reached').toEqual({
+      '--restricted': true, '-p': true, '--tools': true, '--model': true, '--allowedTools': false });
+    expect(replay.flagsAccepted(argvs, [notReached, reached]), 'the writer-only flag was never reached').toEqual({
+      '--restricted': true, '-p': true, '--tools': true, '--model': false, '--allowedTools': true });
+    expect(Object.values(replay.flagsAccepted(argvs, [notReached, notReached])).every((v) => v === false)).toBe(true);
+    expect(replay.flagsAccepted(argvs, [reached, { ...reached, unknownOptions: ['-p'] }])['-p'], 'a run that reached init but named the flag unknown').toBe(false);
+  });
+
+  it('records the step 0a facts in step0a json under --out and prints the sha256 of its bytes, RP1-contract through the subcommand', async () => {
+    const home = t8Home('ccrc-w2-t8-green-');
+    const tree = t8Tree();
+    const out = t8Out();
+    // The caller's own session variables (all but TMUX_PANE, which refuses) must not reach a spawn.
+    const r = t8Run(tree, home, t8Argv(out), T8_CALLER_ENV);
+    expect(r.code, r.stderr).toBe(0);
+    const file = path.join(out, replay.STEP0A_FILE);
+    const bytes = readFileSync(file);
+    // D-5983: the sha256 line is the one stderr line, as open and freeze print it; stdout stays empty.
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe(`sha256 ${sha256Hex(bytes)}\n`);
+    const text = bytes.toString('utf8');
+    expect(text.endsWith('\n') && !text.endsWith('\n\n')).toBe(true);
+    const rec = JSON.parse(text);
+    expect(Object.keys(rec).sort()).toEqual(T8_STEP0A_KEYS);
+    expect(rec).toMatchObject({ kind: 'ccrc-history-w2-step0a', v: 1, account: 'up-a', settings_mode: 'restricted', wrapper_sha256: null,
+      release_stamp: T8_STAMP, budget: 100000, spend: 3 * T8_PER_RUN });
+    expect(replay.STEP0A_KIND).toBe('ccrc-history-w2-step0a');
+    expect(rec.code_shas).toEqual({
+      'deploy/history-gate.mjs': sha256Hex(T8_GATE_BYTES),
+      'deploy/measure-history.py': sha256Hex(T8_MEASURE_BYTES),
+      'deploy/history-replay.mjs': sha256Hex(readFileSync(SCRIPT)),
+      'ccd/history/lib.mjs': sha256Hex(readFileSync(path.join(path.dirname(SCRIPT), '..', 'ccd', 'history', 'lib.mjs'))),
+    });
+    const init = replay.readStreamJson(T8_STREAM).init;
+    expect(init).not.toBeNull();
+    expect([rec.writer_init, rec.judge_init, rec.box_init]).toEqual([init, init, init]);
+    expect(typeof rec.measured_ms).toBe('number');
+    expect(readdirSync(path.join(out, 'step0a')).filter((n) => n.endsWith('.jsonl')).sort()).toEqual(['box.jsonl', 'judge.jsonl', 'writer.jsonl']);
+
+    // RP1-contract through the subcommand: one run per mode, each exactly the contract's argv for its model.
+    const runs = t8Runs(home);
+    expect(runs.map(t8ModelOf).sort()).toEqual([T8_MODELS.box, T8_MODELS.judge, T8_MODELS.writer]);
+    const want = {
+      writer: replay.spawnArgv({ mode: 'writer', model: T8_MODELS.writer, settingsMode: 'restricted', home }),
+      judge: replay.spawnArgv({ mode: 'judge', model: T8_MODELS.judge, settingsMode: 'restricted', home }),
+      box: replay.spawnArgv({ mode: 'box', model: T8_MODELS.box, settingsMode: 'restricted', home }),
+    };
+    for (const e of runs) {
+      const key = (Object.keys(T8_MODELS) as Array<keyof typeof T8_MODELS>).find((k) => T8_MODELS[k] === t8ModelOf(e))!;
+      const argv = e.argv as string[];
+      expect(argv, key).toEqual(want[key]);
+      expect(e.stdin, key).toBe(replay.STEP0A_PROMPT);
+      expect(e.envKeys, key).toEqual(['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
+      expect(argv.some((t) => /dangerously|bypassPermissions/.test(t)), key).toBe(false);
+      if (key === 'box') {
+        expect(argv.slice(argv.indexOf('--tools'), argv.indexOf('--tools') + 2)).toEqual(['--tools', 'Bash,Agent']);
+        for (const s of replay.allowedToolSpellings(home)) expect(argv).toContain(s);
+      } else {
+        expect(argv.slice(argv.indexOf('--tools'), argv.indexOf('--tools') + 2), key).toEqual(['--tools', '']);
+        expect(argv, key).not.toContain('--allowedTools');
+      }
+    }
+    // Every flag the three argvs carry is recorded, and the stub rejected none.
+    const flags = [...new Set(Object.values(want).flat().filter((t) => t.startsWith('-')))].sort();
+    expect(Object.keys(rec.flags_accepted).sort()).toEqual(flags);
+    expect(Object.values(rec.flags_accepted).every((v) => v === true)).toBe(true);
+    expect(flags).toEqual(expect.arrayContaining(['--restricted', '--no-session-persistence', '--strict-mcp-config', '--verbose', '--max-turns', '--model', '--tools', '--allowedTools']));
+
+    // The version is the one the launcher answers (measured last: it adds a line to the stub's log).
+    const { json, roster } = replay.readRoster(home);
+    const v = await replay.measureClaudeVersion(replay.admitAccount(json, roster, 'up-a', home), mkTmp('ccrc-w2-t8-version-'), undefined);
+    expect(v).toEqual({ state: 'value', version: rec.claude_code_version });
+    // Task 1's grammar cases use an unregistered name; this task pins its own registration (has, not the exact
+    // key list, which Task 9 extends).
+    expect(replay.HANDLERS.has('step0a'), 'step0a is registered').toBe(true);
+  }, 120_000);
+
+  // D-5809: the writer and its validator cannot drift. The file step0a wrote, loaded back through Task 7's loadStep0a with
+  // the sha256 step0a printed, comes back as the same object the file parses to.
+  it('the step0a json it wrote loads back through loadStep0a with the sha256 it printed, as the same object', () => {
+    const home = t8Home('ccrc-w2-t8-roundtrip-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out));
+    expect(r.code, r.stderr).toBe(0);
+    const printed = /^sha256 ([0-9a-f]{64})\n$/.exec(r.stderr);
+    expect(printed, r.stderr).not.toBeNull();
+    const file = path.join(out, replay.STEP0A_FILE);
+    expect(replay.loadStep0a(file, printed![1]!)).toEqual(JSON.parse(readFileSync(file, 'utf8')));
+  }, 120_000);
+
+  // D-5983: the sha256 line is on stderr (as open and freeze print it), exactly one line, and stdout is empty.
+  it('on success the sha256 line is the whole of stderr and stdout is empty, the hex being the sha256 of step0a json', () => {
+    const home = t8Home('ccrc-w2-t8-shastream-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe('');
+    const m = /^sha256 ([0-9a-f]{64})\n$/.exec(r.stderr);
+    expect(m, r.stderr).not.toBeNull();
+    expect(m![1]).toBe(sha256Hex(readFileSync(path.join(out, replay.STEP0A_FILE))));
+  }, 120_000);
+
+  it('the fallback settings mode is recorded, and its flags replace --restricted in flags_accepted', () => {
+    const home = t8Home('ccrc-w2-t8-fallback-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { 'settings-mode': 'fallback' }));
+    expect(r.code, r.stderr).toBe(0);
+    const rec = JSON.parse(readFileSync(path.join(out, replay.STEP0A_FILE), 'utf8'));
+    expect(rec.settings_mode).toBe('fallback');
+    expect(rec.flags_accepted['--setting-sources']).toBe(true);
+    expect(rec.flags_accepted['--settings']).toBe(true);
+    expect(rec.flags_accepted).not.toHaveProperty('--restricted');
+    for (const e of t8Runs(home)) expect((e.argv as string[]).slice(0, 4)).toEqual(['--setting-sources', 'project,local', '--settings', '{"disableAllHooks":true}']);
+  }, 120_000);
+
+  it('a generated account runs through its own wrapper, and step0a records that wrapper sha256', () => {
+    const home = t8Home('ccrc-w2-t8-wrapper-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { account: 'gen-a' }));
+    expect(r.code, r.stderr).toBe(0);
+    const rec = JSON.parse(readFileSync(path.join(out, replay.STEP0A_FILE), 'utf8'));
+    expect(rec.account).toBe('gen-a');
+    expect(rec.wrapper_sha256).toBe(sha256Hex(readFileSync(path.join(home, '.local', 'bin', 'gen-a'))));
+    const runs = t8Runs(home);
+    expect(runs).toHaveLength(3);
+    for (const e of runs) expect(e.envKeys).toContain('CLAUDE_CODE_OAUTH_TOKEN');   // by name only: the stub never logs its value
+  }, 120_000);
+
+  // RP3-admission and RP9 through the subcommand. gen-r's mode-000 file is readable to root, so as root its row is left out.
+  // gen-u is not a row: a generated account with no declared provider reads as anthropic (the admission ruling, Task 3).
+  const T8_REFUSED: Array<[string, string]> = ([
+    ['cx-a', 'kind-codex'], ['ext-n', 'kind-external'], ['ext-a', 'kind-external'], ['gen-o', 'provider-openai'],
+    ['gen-h', 'hidden'], ['gen-s', 'secrets-undeclared'], ['gen-m', 'secrets-absent'],
+    // D-5809: gen-d, a secretsFile that is a directory, is a row.
+    ['gen-r', 'secrets-unreadable'], ['gen-d', 'secrets-not-regular'], ['nobody-a', 'unknown-id'],
+  ] as Array<[string, string]>).filter(([id]) => id !== 'gen-r' || process.getuid?.() !== 0);
+  it.each(T8_REFUSED)('account %s is refused before any spawn: account-refused %s, no stub line, nothing under --out but its marker', (id, detail) => {
+    const home = t8Home('ccrc-w2-t8-refused-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { account: id }));
+    expect(stubLog(home), 'a spawn reached the stub').toBeNull();
+    expect(r.code).toBe(2);
+    expect(r.stderr).toBe(`ccrc history-replay: account-refused: ${detail}\n`);
+    expect(readdirSync(out)).toEqual([replay.OUT_MARKER]);
+  }, 60_000);
+
+  // D-5809: an upstream account whose config dir is not exactly $HOME/.claude (Task 3's up-b, the roster's one upstream)
+  // is refused upstream-config-dir through the subcommand, with a stub and a fresh limits row planted so only admission stops it.
+  it('an upstream account whose config dir is not $HOME/.claude is refused account-refused upstream-config-dir before any spawn', () => {
+    const home = t8Home('ccrc-w2-t8-upconf-');
+    writeRoster(home, [fixtureAccount('up-b', { kind: 'upstream' }, { homeAble: true, telemetry: 'anthropic' })]);
+    plantStub(home, 'up-b');
+    t8Limits(home, 'up-b', 10, 20);
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { account: 'up-b' }));
+    expect(stubLog(home), 'a spawn reached the stub').toBeNull();
+    expect(r.code).toBe(2);
+    expect(r.stderr).toBe('ccrc history-replay: account-refused: upstream-config-dir\n');
+    expect(readdirSync(out)).toEqual([replay.OUT_MARKER]);
+  }, 60_000);
+
+  it.each(['out', 'account', 'budget', 'writer-model', 'judge-model', 'arm-model'])('a missing --%s is refused args-invalid before any spawn', (flag) => {
+    const home = t8Home('ccrc-w2-t8-required-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { [flag]: null }));
+    expect(r.code).toBe(2);
+    expect(r.stderr).toBe(`ccrc history-replay: args-invalid: ${flag}-required\n`);
+    expect(stubLog(home)).toBeNull();
+    expect(existsSync(path.join(out, replay.STEP0A_FILE))).toBe(false);
+    // D-5815: every required flag is checked before --out is made, so a missing one never leaves a fresh --out behind.
+    expect(existsSync(out), `a missing --${flag} left --out behind`).toBe(false);
+  }, 60_000);
+
+  // D-5815: the required-flag check precedes admission (it supersedes Task 8's order), so a missing --budget answers
+  // args-invalid even when the account would be refused, and nothing is made.
+  it('a missing --budget with an unadmissible account answers budget-required, not account-refused, and makes no --out', () => {
+    const home = t8Home('ccrc-w2-t8-required-first-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { account: 'cx-a', budget: null }));
+    expect(r.code).toBe(2);
+    expect(r.stderr).toBe('ccrc history-replay: args-invalid: budget-required\n');
+    expect(existsSync(out)).toBe(false);
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
+
+  it('an empty HOME is refused args-invalid before --out is made, as the probe refuses it', () => {
+    const home = t8Home('ccrc-w2-t8-home-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out), { HOME: '' });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toBe('ccrc history-replay: args-invalid: HOME is unset or not absolute\n');
+    expect(existsSync(out)).toBe(false);
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
+
+  // D-5813: a model id the argv builder would throw on, and a ':' in HOME or --out (PATH's separator), are operator
+  // inputs: a driver word before --out is made, never exit 1 after the writer run has spent.
+  it.each(['writer-model', 'judge-model', 'arm-model'])('a malformed --%s is refused args-invalid before --out is made, with no spawn and no spend', (flag) => {
+    for (const bad of ['fx judge', '-x']) {
+      const home = t8Home('ccrc-w2-t8-badmodel-');
+      const out = t8Out();
+      const r = t8Run(t8Tree(), home, t8Argv(out, { [flag]: bad }));
+      expect(r.code, `${bad}: ${r.stderr}`).toBe(2);
+      expect(r.stderr, bad).toBe(`ccrc history-replay: args-invalid: ${flag} ${JSON.stringify(bad)} is not a model id\n`);
+      expect(stubLog(home), `${bad}: nothing spawned`).toBeNull();
+      expect(existsSync(out), `${bad}: --out not made`).toBe(false);
+    }
+    const home = t8Home('ccrc-w2-t8-goodmodel-');
+    const control = t8Run(t8Tree(), home, t8Argv(t8Out(), { [flag]: 'fixture-model-ok.1:x' }));
+    expect(control.code, `CONTROL: ${control.stderr}`).toBe(0);
+  }, 120_000);
+
+  it("a ':' in HOME or in --out is refused args-invalid before --out is made and before any spawn", () => {
+    const home = t8Home('ccrc-w2-t8-colon-');
+    const out = t8Out();
+    const inHome = t8Run(t8Tree(), home, t8Argv(out), { HOME: '/fixture/home:x' });
+    expect(inHome.code).toBe(2);
+    expect(inHome.stderr).toBe("ccrc history-replay: args-invalid: HOME contains ':'\n");
+    expect(existsSync(out)).toBe(false);
+    const colonOut = path.join(mkTmp('ccrc-w2-t8-colonout-'), 'out:x');
+    const inOut = t8Run(t8Tree(), home, t8Argv(colonOut));
+    expect(inOut.code).toBe(2);
+    expect(inOut.stderr).toBe("ccrc history-replay: args-invalid: out contains ':'\n");
+    expect(existsSync(colonOut)).toBe(false);
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
+
+  // D-5813: the ':' check also runs on the realpath prepareOut answers, so an --out under an ancestor symlink to a
+  // directory whose name holds ':' is a driver word, not spawnEnv's TypeError (exit 1). Without the check that TypeError
+  // is thrown BEFORE any spawn (in measureClaudeVersion's env build for step 0a, in launchRun for the probe), so the empty
+  // stub log does not tell the mutant from the guard: the exit code does.
+  it("an --out under an ancestor symlink to a path holding ':' is refused args-invalid before any spawn", () => {
+    const home = t8Home('ccrc-w2-t8-colonlink-');
+    const base = mkTmp('ccrc-w2-t8-colonlink-base-');
+    mkdirSync(path.join(base, 'a:b'));
+    symlinkSync(path.join(base, 'a:b'), path.join(base, 'link'));
+    const r = t8Run(t8Tree(), home, t8Argv(path.join(base, 'link', 'out')));
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toBe("ccrc history-replay: args-invalid: out contains ':'\n");
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
+
+  it('a settings mode outside SETTINGS_MODES is refused args-invalid before any spawn', () => {
+    const home = t8Home('ccrc-w2-t8-settings-');
+    const r = t8Run(t8Tree(), home, t8Argv(t8Out(), { 'settings-mode': 'open' }));
+    expect(r.code).toBe(2);
+    expect(r.stderr).toBe('ccrc history-replay: args-invalid: settings-mode open\n');
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
+
+  // D-5815: --settings-mode is checked before --out is made, as the probe checks it, so a bogus value is a usage mistake
+  // that leaves nothing behind.
+  it('--settings-mode bogus is refused args-invalid and no --out is made', () => {
+    const home = t8Home('ccrc-w2-t8-settings-first-');
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { 'settings-mode': 'bogus' }));
+    expect(r.code).toBe(2);
+    expect(r.stderr).toBe('ccrc history-replay: args-invalid: settings-mode bogus\n');
+    expect(existsSync(out), 'a bogus --settings-mode left --out behind').toBe(false);
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
+
+  it('an unmeasured code sha refuses code-unmeasured, and an untagged stamp tree-unmeasured, before any spawn', () => {
+    const home = t8Home('ccrc-w2-t8-unmeasured-');
+    const noGate = t8Run(t8Tree({ gate: false }), home, t8Argv(t8Out()));
+    expect(noGate.code).toBe(2);
+    expect(noGate.stderr).toBe('ccrc history-replay: code-unmeasured: deploy/history-gate.mjs is absent\n');
+    writeFileSync(path.join(home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', ref: 'main', dirty: false }));
+    const untagged = t8Run(t8Tree(), home, t8Argv(t8Out()));
+    expect(untagged.code).toBe(2);
+    expect(untagged.stderr).toBe('ccrc history-replay: tree-unmeasured: stamp untagged\n');
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
+
+  it('a generated account whose wrapper cannot be read stops step0a with wrapper-unmeasured before any spawn or spend (coordinator ruling)', () => {
+    const home = t8Home('ccrc-w2-t8-wrapper-unread-');
+    const wrapper = path.join(home, '.local', 'bin', 'gen-a');
+    rmSync(wrapper);
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out, { account: 'gen-a' }));
+    expect(stubLog(home), 'a spawn reached the stub').toBeNull();
+    expect(r.code).toBe(2);
+    expect(readdirSync(out), 'no spawn and no spend: nothing under --out but its marker').toEqual([replay.OUT_MARKER]);
+    expect(r.stderr).toBe(`ccrc history-replay: wrapper-unmeasured: ${wrapper}: ENOENT\n`);
+  }, 60_000);
+
+  it('a budget the first run exhausts stops before the second, and a larger budget resumes without re-spawning the first', () => {
+    const home = t8Home('ccrc-w2-t8-budget-');
+    const tree = t8Tree();
+    const out = t8Out();
+    const stopped = t8Run(tree, home, t8Argv(out, { budget: String(T8_PER_RUN) }));
+    expect(stopped.code).toBe(2);
+    expect(stopped.stderr.startsWith('ccrc history-replay: budget-exhausted: ')).toBe(true);
+    expect(t8Runs(home).map(t8ModelOf)).toEqual([T8_MODELS.writer]);
+    expect(existsSync(path.join(out, replay.STEP0A_FILE))).toBe(false);
+    const resumed = t8Run(tree, home, t8Argv(out, { budget: String(10 * T8_PER_RUN) }));
+    expect(resumed.code, resumed.stderr).toBe(0);
+    expect(t8Runs(home).map(t8ModelOf)).toEqual([T8_MODELS.writer, T8_MODELS.judge, T8_MODELS.box]);
+    const rec = JSON.parse(readFileSync(path.join(out, replay.STEP0A_FILE), 'utf8'));
+    expect(rec).toMatchObject({ budget: 10 * T8_PER_RUN, spend: 3 * T8_PER_RUN });
+    expect(rec.writer_init).toEqual(replay.readStreamJson(T8_STREAM).init);
+  }, 120_000);
+
+  // D-5986: the init read after the batch. The stub acts only in the box run (the last of the three): it replaces the writer's
+  // finished stream, which the earlier lane left a regular file, by a directory. Nothing between that run and the read
+  // looks at the writer's stream again, so the read is what finds it. (The box run's own stream is renamed by the driver
+  // after the stub has exited, so it cannot be the one the stub changes.)
+  it('step0a: a finished stream that stops being a regular file by the time the batch is done refuses out-refused run-stream-invalid step0a/writer from the init read, and writes no step0a json', () => {
+    const home = t8Home('ccrc-w2-t8-initread-');
+    const out = t8Out();
+    mkdirSync(path.dirname(out), { recursive: true });
+    const real = path.join(realpathSync(path.dirname(out)), 'out');
+    writeFileSync(path.join(home, 'stub-box-swap-path'), path.join(real, 'step0a', 'writer.jsonl'));
+    const r = t8Run(t8Tree(), home, t8Argv(out));
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toBe('ccrc history-replay: out-refused: run-stream-invalid step0a/writer\n');
+    expect(t8Runs(home).map(t8ModelOf), 'all three runs spawned and finished').toEqual([T8_MODELS.writer, T8_MODELS.judge, T8_MODELS.box]);
+    expect(lstatSync(path.join(out, 'step0a', 'writer.jsonl')).isDirectory(), 'the stub made the swap').toBe(true);
+    expect(existsSync(path.join(out, replay.STEP0A_FILE)), 'no step0a json').toBe(false);
+    expect(existsSync(path.join(out, 'step0a', 'box.run.json')), 'the box run itself was recorded').toBe(true);
+  }, 120_000);
+
+  // D-5812: step 0a pins the launch it measured (account, Claude Code version, wrapper sha256) before its first run.
+  describe('the launch step 0a recorded is the launch a resume runs under (D-5812)', () => {
+    const FIRST_LINE = T8_STREAM.split('\n')[0]!;
+    const MOVED_STREAM = T8_STREAM.replace('fixture-model-writer', 'fixture-model-moved');
+    const MOVED_LINE = MOVED_STREAM.split('\n')[0]!;
+    const stoppedStep0a = (home: string, tree: string, out: string, account = 'up-a') => {
+      const stopped = t8Run(tree, home, t8Argv(out, { account, budget: String(T8_PER_RUN) }));
+      expect(stopped.code, stopped.stderr).toBe(2);
+      expect(stopped.stderr.startsWith('ccrc history-replay: budget-exhausted: ')).toBe(true);
+      expect(t8Runs(home).map(t8ModelOf)).toEqual([T8_MODELS.writer]);
+    };
+    const resume = (home: string, tree: string, out: string, account = 'up-a') => t8Run(tree, home, t8Argv(out, { account, budget: String(10 * T8_PER_RUN) }));
+
+    it('pins {kind, v, account, claude_code_version, wrapper_sha256} at 0600 before the first run', () => {
+      const home = t8Home('ccrc-w2-t8-launch-pin-');
+      const out = t8Out();
+      stoppedStep0a(home, t8Tree(), out);
+      const file = path.join(out, 'step0a', 'launch.json');
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({
+        kind: 'ccrc-history-replay-step0a-launch', v: 1, account: 'up-a', claude_code_version: FIRST_LINE, wrapper_sha256: null });
+      expect(readdirSync(path.join(out, 'step0a')).sort()).toEqual(['launch.json', 'writer.jsonl', 'writer.run.json']);
+    }, 120_000);
+
+    it('a Claude Code version that moved between the stop and the resume refuses claude-version-moved with no new spawn; nothing moved resumes', () => {
+      const home = t8Home('ccrc-w2-t8-launch-version-');
+      const tree = t8Tree();
+      const out = t8Out();
+      stoppedStep0a(home, tree, out);
+      writeFileSync(path.join(home, STUB_STREAM), MOVED_STREAM);
+      const r = resume(home, tree, out);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toBe(`ccrc history-replay: claude-version-moved: step0a recorded ${JSON.stringify(FIRST_LINE)}, now ${JSON.stringify(MOVED_LINE)}\n`);
+      expect(t8Runs(home), 'no new spawn').toHaveLength(1);
+      expect(existsSync(path.join(out, replay.STEP0A_FILE))).toBe(false);
+      writeFileSync(path.join(home, STUB_STREAM), T8_STREAM);
+      const control = resume(home, tree, out);
+      expect(control.code, control.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(path.join(out, replay.STEP0A_FILE), 'utf8')).claude_code_version).toBe(FIRST_LINE);
+      const again = resume(home, tree, out);
+      expect(again.code, 'a complete step0a re-run with nothing moved still exits 0').toBe(0);
+    }, 180_000);
+
+    it('a wrapper that moved between the stop and the resume refuses wrapper-moved with no new spawn; the wrapper restored resumes', () => {
+      const home = t8Home('ccrc-w2-t8-launch-wrapper-');
+      const tree = t8Tree();
+      const out = t8Out();
+      stoppedStep0a(home, tree, out, 'gen-a');
+      const wrapper = path.join(home, '.local', 'bin', 'gen-a');
+      const was = readFileSync(wrapper);
+      writeFileSync(wrapper, Buffer.concat([was, Buffer.from('\n# moved\n')]), { mode: 0o755 });
+      const r = resume(home, tree, out, 'gen-a');
+      expect(r.code).toBe(2);
+      expect(r.stderr).toBe(`ccrc history-replay: wrapper-moved: step0a recorded ${JSON.stringify(sha256Hex(was))}, now ${JSON.stringify(sha256Hex(readFileSync(wrapper)))}\n`);
+      expect(t8Runs(home), 'no new spawn').toHaveLength(1);
+      writeFileSync(wrapper, was, { mode: 0o755 });
+      const control = resume(home, tree, out, 'gen-a');
+      expect(control.code, control.stderr).toBe(0);
+    }, 180_000);
+
+    it('a step0a that is a regular file in an otherwise valid --out refuses out-refused (step0a is not a directory, D-5986) before any new spawn and spends nothing', () => {
+      const home = t8Home('ccrc-w2-t8-launch-dirfile-');
+      const tree = t8Tree();
+      const out = t8Out();
+      stoppedStep0a(home, tree, out);
+      const ledgerBefore = readFileSync(path.join(out, replay.SPEND_LEDGER), 'utf8');
+      rmSync(path.join(out, 'step0a'), { recursive: true });
+      writeFileSync(path.join(out, 'step0a'), 'not a directory');
+      const r = resume(home, tree, out);
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toBe('ccrc history-replay: out-refused: step0a is not a directory\n');
+      expect(t8Runs(home), 'no new print-mode run').toHaveLength(1);
+      expect(readFileSync(path.join(out, replay.SPEND_LEDGER), 'utf8'), 'no new spend line').toBe(ledgerBefore);
+    }, 180_000);
+
+    // D-5986: a step0a that is a link in a reused --out is refused, never followed, and never an exit 1.
+    it('a step0a that is a symlink (to a directory, or dangling) in a reused --out refuses out-refused step0a is not a directory: exit 2, nothing written through it, no spawn', () => {
+      for (const dangling of [false, true]) {
+        const home = t8Home(`ccrc-w2-t8-d5986-link-${dangling}-`);
+        const out = t8Out();
+        replay.prepareOut(out);
+        const target = path.join(mkTmp('ccrc-w2-t8-d5986-target-'), 'dir');
+        if (!dangling) mkdirSync(target);
+        symlinkSync(target, path.join(out, 'step0a'));
+        const r = t8Run(t8Tree(), home, t8Argv(out), {}, 60_000);
+        expect(r.code, `dangling ${dangling}: ${r.stderr}`).toBe(2);
+        expect(r.stderr).toBe('ccrc history-replay: out-refused: step0a is not a directory\n');
+        if (dangling) expect(existsSync(target), 'the dangling target is not created').toBe(false);
+        else expect(readdirSync(target), 'nothing written through the link').toEqual([]);
+        expect(t8Runs(home), 'no print-mode run').toEqual([]);
+      }
+    }, 180_000);
+
+    it('a finished run whose stream or run.json is a FIFO, a directory, a link or (the stream) gone is refused out-refused on the resume: exit 2, never a block, never exit 1, no new spawn', () => {
+      const home = t8Home('ccrc-w2-t8-d5986-finished-');
+      const tree = t8Tree();
+      const out = t8Out();
+      stoppedStep0a(home, tree, out);
+      const stream = path.join(out, 'step0a', 'writer.jsonl');
+      const runJson = path.join(out, 'step0a', 'writer.run.json');
+      const streamBytes = readFileSync(stream);
+      const runJsonBytes = readFileSync(runJson);
+      const link = path.join(home, 'link-target');
+      writeFileSync(link, 'x');
+      const fifo = (p: string): void => { expect(spawnSync('mkfifo', [p]).status).toBe(0); };
+      const changed = 'ccrc history-replay: out-refused: run-stream-changed step0a/writer\n';
+      const unreadable = 'ccrc history-replay: out-refused: run-json-unreadable step0a/writer not-regular\n';
+      const rows: Array<[string, (p: string) => void, string, string]> = [
+        ['a FIFO as the stream', fifo, stream, changed],
+        ['a directory as the stream', (p) => mkdirSync(p), stream, changed],
+        ['a symlink as the stream', (p) => symlinkSync(link, p), stream, changed],
+        ['the stream gone', () => {}, stream, changed],
+        ['a FIFO as run.json', fifo, runJson, unreadable],
+        ['a directory as run.json', (p) => mkdirSync(p), runJson, unreadable],
+        ['a symlink as run.json', (p) => symlinkSync(link, p), runJson, unreadable],
+      ];
+      for (const [label, plant, at, line] of rows) {
+        rmSync(stream, { recursive: true, force: true });
+        rmSync(runJson, { recursive: true, force: true });
+        writeFileSync(stream, streamBytes);
+        writeFileSync(runJson, runJsonBytes);
+        rmSync(at);
+        plant(at);
+        const r = t8Run(tree, home, t8Argv(out, { account: 'up-a', budget: String(10 * T8_PER_RUN) }), {}, 30_000);
+        expect(r.code, `${label}: ${r.stderr}`).toBe(2);
+        expect(r.stderr, label).toBe(line);
+        expect(t8Runs(home), `${label}: no new print-mode run`).toHaveLength(1);
+      }
+      writeFileSync(stream, streamBytes);
+      rmSync(runJson, { recursive: true, force: true });
+      writeFileSync(runJson, runJsonBytes);
+      const control = resume(home, tree, out);
+      expect(control.code, `CONTROL: the untouched pair resumes: ${control.stderr}`).toBe(0);
+    }, 300_000);
+
+    it('a launch.json that is not a file, not JSON, of another kind or version, over its size, of the wrong types or for another account is refused before any new spawn', () => {
+      const home = t8Home('ccrc-w2-t8-launch-invalid-');
+      const tree = t8Tree();
+      const out = t8Out();
+      stoppedStep0a(home, tree, out);
+      const file = path.join(out, 'step0a', 'launch.json');
+      const good = readFileSync(file, 'utf8');
+      const rec = JSON.parse(good) as Record<string, unknown>;
+      const as = (v: unknown): (() => void) => () => writeFileSync(file, JSON.stringify(v) + '\n');
+      const invalid = 'ccrc history-replay: out-refused: step0a-launch-invalid\n';
+      const copy = path.join(home, 'launch-copy.json');
+      const rows: Array<[string, () => void, string, number?]> = [
+        ['a directory', () => { rmSync(file); mkdirSync(file); }, invalid],
+        ['a symlink to a good launch.json', () => { writeFileSync(copy, good); rmSync(file); symlinkSync(copy, file); }, invalid],
+        ['a FIFO (read with a deadline)', () => { rmSync(file); expect(spawnSync('mkfifo', [file]).status).toBe(0); }, invalid, 20_000],
+        ['not JSON', () => writeFileSync(file, 'not json'), invalid],
+        ['the JSON null', as(null), invalid],
+        ['an array', as([rec]), invalid],
+        ['another kind', as({ ...rec, kind: 'ccrc-history-replay-other' }), invalid],
+        ['another version', as({ ...rec, v: 2 }), invalid],
+        ['over its size bound', as({ ...rec, pad: 'x'.repeat(5000) }), invalid],
+        ['an account that is not a string', as({ ...rec, account: 7 }), invalid],
+        ['a version that is not a string', as({ ...rec, claude_code_version: 7 }), invalid],
+        ['a wrapper sha of the wrong type', as({ ...rec, wrapper_sha256: 7 }), invalid],
+        ['another account', as({ ...rec, account: 'other-a' }), 'ccrc history-replay: out-refused: step0a-launch-mismatch\n'],
+      ];
+      for (const [label, plant, line, deadline] of rows) {
+        rmSync(file, { recursive: true, force: true });
+        writeFileSync(file, good);
+        plant();
+        const r = deadline === undefined ? resume(home, tree, out)
+          : t8Run(tree, home, t8Argv(out, { budget: String(10 * T8_PER_RUN) }), {}, deadline);
+        expect(r.code, label).toBe(2);
+        expect(r.stderr, label).toBe(line);
+        expect(t8Runs(home), `${label}: no new spawn`).toHaveLength(1);
+      }
+      rmSync(file, { recursive: true, force: true });
+      writeFileSync(file, good);
+      const control = resume(home, tree, out);
+      expect(control.code, control.stderr).toBe(0);
+    }, 300_000);
+  });
+
+  it('a limits row at the threshold stops before any spawn, the version spawn included', () => {
+    const home = t8Home('ccrc-w2-t8-limits-');
+    t8Limits(home, 'up-a', 70, 20);
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out));
+    expect(r.code).toBe(2);
+    expect(r.stderr.startsWith('ccrc history-replay: limits-threshold: ')).toBe(true);
+    expect(stubLog(home)).toBeNull();
+    expect(readdirSync(out)).toEqual([replay.OUT_MARKER]);
+  }, 60_000);
+
+  it('a launcher whose version cannot be measured stops step0a before its batch, refusing version-unmeasured, recording nothing', () => {
+    const home = t8Home('ccrc-w2-t8-version-');
+    chmodSync(path.join(home, '.local', 'bin', 'up-a'), 0o644);
+    const out = t8Out();
+    const r = t8Run(t8Tree(), home, t8Argv(out));
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc history-replay: version-unmeasured: \S+ --version failed \(code [^\n]*\)\n$/);
+    expect(existsSync(path.join(out, 'step0a'))).toBe(false);
+    expect(existsSync(path.join(out, replay.STEP0A_FILE))).toBe(false);
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
+
+  // D-5984: a driver stopped by SIGINT, SIGTERM or SIGHUP leaves no child running and starts no further spawn. The real driver
+  // runs as a child of this test with the real liveness reader; the stub sleeps through the writer run so the signal lands
+  // while it runs. Only the driver child this case started, and that child's own process groups, are ever signalled.
+  describe('a signal stops the driver: no child left running, no further spawn, nothing recorded (D-5984)', () => {
+    const SLEEPER_STUB = `#!/usr/bin/env node
+(async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const home = path.resolve(path.dirname(process.argv[1]), '..', '..');
+  const args = process.argv.slice(2);
+  if (args.includes('--version')) {
+    if (fs.existsSync(path.join(home, 'version-sleep'))) {
+      fs.writeFileSync(path.join(home, 'version-started'), String(process.pid));
+      await new Promise((r) => setTimeout(r, 60000));
+    }
+    process.stdout.write('9.9.9 (Claude Code)\\n');
+    return;
+  }
+  fs.readFileSync(0);
+  // The spawn is logged only AFTER the ignoring handler is installed and the grandchild is recorded, and the case signals on
+  // that log line: a SIGTERM that landed earlier would end the stub and let a dropped-SIGKILL mutant pass by chance.
+  if (fs.existsSync(path.join(home, 'ignore-term'))) process.on('SIGTERM', () => {});
+  if (fs.existsSync(path.join(home, 'with-grandchild'))) {
+    // A grandchild in the stub's own group (no setsid), its stdio on /dev/null: only a group signal reaches it.
+    const g = (await import('node:child_process')).spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore' });
+    fs.writeFileSync(path.join(home, 'grandchild.pid'), String(g.pid));
+  }
+  fs.appendFileSync(path.join(home, 'spawn-log.jsonl'), JSON.stringify({ pid: process.pid, argv: args }) + '\\n');
+  const ms = Number(fs.readFileSync(path.join(home, 'sleep-ms'), 'utf8'));
+  if (ms > 0) await new Promise((r) => setTimeout(r, ms));
+  process.stdout.write(fs.readFileSync(path.join(home, 'stub-stream.jsonl'), 'utf8'));
+})();
+`;
+    const STOP_GRACE_MS = 5_000;   // the driver's own, module-private
+    const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const spawnLog = (home: string): Array<{ pid: number; argv: string[] }> => {
+      const p = path.join(home, 'spawn-log.jsonl');
+      return existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l)) : [];
+    };
+    const modelOf = (e: { argv: string[] }): string => e.argv[e.argv.indexOf('--model') + 1]!;
+
+    it.each([
+      ['SIGTERM', false], ['SIGINT', false], ['SIGHUP', false], ['SIGTERM', true],
+    ] as const)('%s while the writer runs (stub ignores SIGTERM: %s): exit 2 interrupted, the writer\'s group is gone, no judge or box spawn, no run.json, no step0a.json, no .pid or .part; a re-run spawns the writer again', async (sig, ignoresTerm) => {
+      const home = t8Home('ccrc-w2-t8-signal-');
+      writeFileSync(path.join(home, '.local', 'bin', 'up-a'), SLEEPER_STUB, { mode: 0o700 });
+      writeFileSync(path.join(home, 'sleep-ms'), '60000');
+      writeFileSync(path.join(home, 'with-grandchild'), '');
+      if (ignoresTerm) writeFileSync(path.join(home, 'ignore-term'), '');
+      const tree = t8Tree();
+      const out = t8Out();
+      const driver = spawn(process.execPath, [path.join(tree, 'deploy', 'history-replay.mjs'), ...t8Argv(out)],
+        { env: { ...scrubbedEnv(process.env), HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
+      startedChildren.push(driver);
+      let stdout = '';
+      let stderr = '';
+      driver.stdout.on('data', (d) => { stdout += String(d); });
+      driver.stderr.on('data', (d) => { stderr += String(d); });
+      const exited = new Promise<{ code: number | null; signal: string | null }>((r) => driver.once('close', (code, signal) => r({ code, signal })));
+      let stubPid = 0;
+      let grandchildPid = 0;
+      try {
+        const pidFile = path.join(out, 'step0a', 'writer.pid');
+        expect(await until(() => existsSync(pidFile) && spawnLog(home).length === 1, 60_000), 'the writer started and was recorded').toBe(true);
+        stubPid = JSON.parse(readFileSync(pidFile, 'utf8')).pid;
+        expect(spawnLog(home)[0]!.pid, 'the record names the stub').toBe(stubPid);
+        expect(groupGone(stubPid), 'the stub leads a live group').toBe(false);
+        grandchildPid = Number(readFileSync(path.join(home, 'grandchild.pid'), 'utf8'));
+        expect(alive(grandchildPid), 'CONTROL: the grandchild in the stub\'s group is running').toBe(true);
+        const signalled = Date.now();
+        driver.kill(sig);
+        // The SIGTERM step: a stub that exits on SIGTERM is gone, group and all, well before the grace ends, so a stop whose
+        // SIGTERM step is dropped (only the SIGKILL after the grace remains) reds here. The ignoring stub is ended by the
+        // SIGKILL after the grace, which is its own bound below.
+        expect(await until(() => groupGone(stubPid), 10_000), 'no process is left in the writer\'s group').toBe(true);
+        const groupEnded = Date.now() - signalled;
+        if (ignoresTerm) expect(groupEnded, 'the stub that ignores SIGTERM lives until the SIGKILL after the grace').toBeGreaterThanOrEqual(STOP_GRACE_MS - 500);
+        else expect(groupEnded, 'a cooperative stub ends on the SIGTERM, before the grace').toBeLessThan(STOP_GRACE_MS);
+        const r = await bounded(exited, ignoresTerm ? 40_000 : 30_000, 'the driver exiting after the signal');
+        expect(r, `${stderr}`).toEqual({ code: 2, signal: null });
+        expect(stdout).toBe('');
+        expect(stderr).toMatch(new RegExp(`^ccrc history-replay: interrupted: ${sig} received; [^\\n]*\\n$`));
+        // The group half: a signal sent to the leader alone leaves the grandchild running.
+        expect(await until(() => !alive(grandchildPid), 10_000), 'the grandchild in the writer\'s group died with it').toBe(true);
+        expect(spawnLog(home).map(modelOf), 'the judge and the box never spawned').toEqual([T8_MODELS.writer]);
+        expect(existsSync(path.join(out, 'step0a', 'writer.run.json')), 'no run.json for the stopped run').toBe(false);
+        expect(existsSync(path.join(out, replay.STEP0A_FILE)), 'no step0a.json').toBe(false);
+        expect(readdirSync(path.join(out, 'step0a')).filter((n) => n.endsWith('.pid') || n.endsWith('.part')), 'no record or stream left').toEqual([]);
+        expect(existsSync(path.join(out, '.driver.lock')), 'the lock is released').toBe(false);
+        expect(readFileSync(path.join(out, replay.SPEND_LEDGER), 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l).name),
+          'the stopped run\'s spend line is written once').toEqual(['step0a/writer']);
+        // A plain re-run spawns the writer again, then the judge and the box.
+        writeFileSync(path.join(home, 'sleep-ms'), '0');
+        rmSync(path.join(home, 'ignore-term'), { force: true });
+        rmSync(path.join(home, 'with-grandchild'), { force: true });
+        const again = t8Run(tree, home, t8Argv(out));
+        expect(again.code, again.stderr).toBe(0);
+        expect(spawnLog(home).slice(1).map(modelOf)).toEqual([T8_MODELS.writer, T8_MODELS.judge, T8_MODELS.box]);
+        expect(existsSync(path.join(out, replay.STEP0A_FILE))).toBe(true);
+      } finally {
+        if (stubPid > 0) { try { process.kill(-stubPid, 'SIGKILL'); } catch { /* gone */ } }
+        if (grandchildPid > 0) { try { process.kill(grandchildPid, 'SIGKILL'); } catch { /* gone */ } }
+        driver.kill('SIGKILL');
+      }
+    }, 180_000);
+
+    it('SIGTERM while --version runs: exit 2 interrupted (never version-unmeasured), the version child\'s group is gone, step0a has written nothing', async () => {
+      const home = t8Home('ccrc-w2-t8-signal-version-');
+      writeFileSync(path.join(home, '.local', 'bin', 'up-a'), SLEEPER_STUB, { mode: 0o700 });
+      writeFileSync(path.join(home, 'sleep-ms'), '0');
+      writeFileSync(path.join(home, 'version-sleep'), '');
+      const tree = t8Tree();
+      const out = t8Out();
+      const driver = spawn(process.execPath, [path.join(tree, 'deploy', 'history-replay.mjs'), ...t8Argv(out)],
+        { env: { ...scrubbedEnv(process.env), HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
+      startedChildren.push(driver);
+      let stderr = '';
+      driver.stderr.on('data', (d) => { stderr += String(d); });
+      const exited = new Promise<{ code: number | null; signal: string | null }>((r) => driver.once('close', (code, signal) => r({ code, signal })));
+      let versionPid = 0;
+      try {
+        const started = path.join(home, 'version-started');
+        expect(await until(() => existsSync(started) && readFileSync(started, 'utf8') !== '', 60_000), 'the --version child started').toBe(true);
+        versionPid = Number(readFileSync(started, 'utf8'));
+        driver.kill('SIGTERM');
+        expect(await bounded(exited, 30_000, 'the driver exiting after the signal'), stderr).toEqual({ code: 2, signal: null });
+        expect(stderr).toMatch(/^ccrc history-replay: interrupted: SIGTERM received; [^\n]*\n$/);
+        expect(await until(() => groupGone(versionPid), 10_000), 'the --version child\'s group is gone').toBe(true);
+        expect(spawnLog(home), 'no run spawned').toEqual([]);
+        expect(existsSync(path.join(out, 'step0a')) || existsSync(path.join(out, replay.STEP0A_FILE)), 'nothing written by step0a').toBe(false);
+        expect(existsSync(path.join(out, '.driver.lock')), 'the lock is released').toBe(false);
+      } finally {
+        if (versionPid > 0) { try { process.kill(-versionPid, 'SIGKILL'); } catch { /* gone */ } }
+        driver.kill('SIGKILL');
+      }
+    }, 120_000);
+  });
+});
+
+// ── W2-4 Task 9: the probe and step 0b's mechanics (W2-D58, W2-D57, W2-D55) ─────────────────────────────────────
+// The probe drives the real subcommand through runDriver against Task 5's recording stub at $HOME/.local/bin/up-a.
+// Step 0b's mechanics are exports W2-5b wires; they are pinned here at function level and, for the two halves of
+// the persistence check, through step0bMechanics on a stub (Task 5's, and a Task 9 stub that writes the transcript
+// a --no-session-persistence run must not leave).
+
+/** One stream-json line per event, as `claude -p --output-format stream-json --verbose` prints them: the init
+ *  event, an assistant message per tool call (each followed by its tool_result) and per extra text turn, and a
+ *  result event unless `result` is null, its subtype `success` unless one is given. Every message id is distinct. */
+function t9Stream(o: {
+  sessionId: string | null;
+  assistants: number;
+  result: null | { numTurns: number | null; subtype?: string; denials?: unknown[] };
+  calls?: Array<{ id: string; command: string; isError: boolean }>;
+}): string {
+  const usage = { input_tokens: 3, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 2 };
+  const lines: unknown[] = [{
+    type: 'system', subtype: 'init', ...(o.sessionId === null ? {} : { session_id: o.sessionId }), model: 'fixture-model-arm',
+    tools: ['Bash', 'Agent'], mcp_servers: [], plugins: [], skills: [], slash_commands: [],
+  }];
+  let n = 0;
+  for (const c of o.calls ?? []) {
+    n += 1;
+    lines.push({ type: 'assistant', message: { id: `msg-${n}`, role: 'assistant', content: [{ type: 'tool_use', id: c.id, name: 'Bash', input: { command: c.command } }], usage } });
+    lines.push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: c.id, content: c.isError ? 'permission denied' : '{}', is_error: c.isError }] } });
+  }
+  while (n < o.assistants) {
+    n += 1;
+    lines.push({ type: 'assistant', message: { id: `msg-${n}`, role: 'assistant', content: [{ type: 'text', text: 'DONE' }], usage } });
+  }
+  if (o.result !== null) {
+    lines.push({
+      type: 'result', subtype: o.result.subtype ?? 'success', is_error: (o.result.subtype ?? 'success') !== 'success',
+      ...(o.result.numTurns === null ? {} : { num_turns: o.result.numTurns }),
+      result: 'DONE', usage, permission_denials: o.result.denials ?? [],
+    });
+  }
+  return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
+/** The LaunchSpec Task 3's admitAccount answers for the upstream fixture up-a. */
+function t9Launch(home: string): { accountId: string; kind: 'upstream'; launcher: string; configDir: string; wrapperPath: null; secretsPath: null } {
+  return { accountId: 'up-a', kind: 'upstream', launcher: t9Path.join(home, '.local', 'bin', 'up-a'), configDir: t9Path.join(home, '.claude'), wrapperPath: null, secretsPath: null };
+}
+
+/** A stub that prints $HOME/<STUB_STREAM> and then does what --no-session-persistence forbids: it writes
+ *  `<CLAUDE_CONFIG_DIR>/projects/<slug of its cwd>/<the init session_id>.jsonl`. */
+function t9PlantPersistingStub(home: string, id: string): void {
+  const bin = t9Path.join(home, '.local', 'bin');
+  t9Fs.mkdirSync(bin, { recursive: true });
+  t9Fs.writeFileSync(t9Path.join(bin, id), [
+    '#!/usr/bin/env node',
+    "const fs = require('node:fs');",
+    "const path = require('node:path');",
+    'fs.readFileSync(0);',
+    `const text = fs.readFileSync(path.join(process.env.HOME, ${JSON.stringify(STUB_STREAM)}), 'utf8');`,
+    'process.stdout.write(text);',
+    "const sid = JSON.parse(text.split('\\n')[0]).session_id;",
+    "const dir = path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', process.cwd().replace(/[^A-Za-z0-9]/g, '-'));",
+    'fs.mkdirSync(dir, { recursive: true });',
+    "fs.writeFileSync(path.join(dir, sid + '.jsonl'), text);",
+    '',
+  ].join('\n'), { mode: 0o700 });
+}
+
+describe('W2-4 Task 9: the probe, a box verb and an early check only, W2-D58', () => {
+  type T9Entry = { argv: string[]; envKeys: string[]; stdin: string };
+  const T9_MODEL = 'fixture-model-arm';
+  const t9Account = (id: string, configDirSuffix: string, exec: Record<string, unknown>) =>
+    ({ id, label: id, configDirSuffix, exec, homeAble: true, hue: 'cyan', telemetry: 'anthropic' });
+  /** The command each taught spelling admits, in allowedToolSpellings' order, spelled here independently. */
+  const t9Commands = (home: string): string[] => [
+    `${home}/.local/bin/ccrc history status --json`,
+    '"$HOME/.local/bin/ccrc" history status --json',
+    '~/.local/bin/ccrc history status --json',
+  ];
+  /** A fixture HOME: up-a (upstream, Task 5's recording stub) and ext-n (external, refused), and up-a's limits row
+   *  fresh at `pct` percent. --out is a sibling of HOME, not yet created. */
+  function t9Box(prefix: string, pct = 10): { home: string; out: string } {
+    const base = mkTmp(prefix);
+    const home = t9Path.join(base, 'home');
+    t9Fs.mkdirSync(home, { mode: 0o700 });
+    writeRoster(home, [t9Account('up-a', '.claude', { kind: 'upstream' }), t9Account('ext-n', '.ext-n', { kind: 'external' })]);
+    plantStub(home, 'up-a');
+    const now = Math.floor(Date.now() / 1000);
+    t9Fs.mkdirSync(t9Path.join(home, '.cc-limits'), { recursive: true });
+    t9Fs.writeFileSync(t9Path.join(home, '.cc-limits', 'up-a.json'),
+      JSON.stringify({ five: pct, seven: pct, ts: now, fiveResetAt: now + 3600, sevenResetAt: now + 86_400 }));
+    return { home, out: t9Path.join(base, 'out') };
+  }
+  const t9Args = (out: string, account = 'up-a'): string[] =>
+    ['probe', '--out', out, '--account', account, '--budget', '1000000', '--arm-model', T9_MODEL];
+
+  it('three box-mode spawns, one per taught spelling, and a denial for one spelling is recorded for that one only; exit 0', () => {
+    const { home, out } = t9Box('ccrc-replay-t9-probe-');
+    const cmds = t9Commands(home);
+    t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({
+      sessionId: 'sess-probe', assistants: 4,
+      result: { numTurns: 4, denials: [{ tool_name: 'Bash', tool_use_id: 'tu-2', tool_input: { command: cmds[1] } }] },
+      calls: [{ id: 'tu-1', command: cmds[0]!, isError: false }, { id: 'tu-2', command: cmds[1]!, isError: true }, { id: 'tu-3', command: cmds[2]!, isError: false }],
+    }));
+    const r = runDriver(home, t9Args(out));
+    expect(r.code, r.stderr).toBe(0);
+
+    const log = stubLog(home) as T9Entry[] | null;
+    expect(log, 'the stub ran').not.toBeNull();
+    expect(log!.length, 'one spawn per taught spelling').toBe(3);
+    const boxArgv = t9Driver.spawnArgv({ mode: 'box', model: T9_MODEL, settingsMode: 'restricted', home });
+    for (const e of log!) {
+      expect(e.argv, 'box mode: the arm tools and the three spellings, no arm values').toEqual(boxArgv);
+      expect([...e.envKeys].sort(), 'the box env: no CCRC_RECALL_*').toEqual(['CLAUDE_CONFIG_DIR', 'HOME', 'LANG', 'PATH']);
+    }
+    expect(cmds.map((c) => log!.filter((e) => e.stdin.includes(c)).length), 'each spelling reaches the stub once').toEqual([1, 1, 1]);
+
+    const bytes = t9Fs.readFileSync(t9Path.join(out, 'probe.json'));
+    // D-5983: the sha256 line is the one stderr line, as open and freeze print it; stdout stays empty.
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe(`sha256 ${t9CreateHash('sha256').update(bytes).digest('hex')}\n`);
+    const doc = JSON.parse(bytes.toString('utf8'));
+    expect(Object.keys(doc).sort()).toEqual(['account', 'budget', 'kind', 'measured_ms', 'model', 'settings_mode', 'spellings', 'spend', 'v']);
+    expect(doc).toMatchObject({ kind: t9Driver.PROBE_KIND, v: 1, account: 'up-a', settings_mode: 'restricted', model: T9_MODEL, budget: 1_000_000 });
+    expect(doc.spend, 'the ledger under --out counts the three runs').toBe(3 * 5);
+    expect(doc.spellings).toEqual([
+      { spelling: t9Driver.allowedToolSpellings(home)[0], denied: false, tool_error: false, ran: true, result_seen: true },
+      { spelling: t9Driver.allowedToolSpellings(home)[1], denied: true, tool_error: true, ran: true, result_seen: true },
+      { spelling: t9Driver.allowedToolSpellings(home)[2], denied: false, tool_error: false, ran: true, result_seen: true },
+    ]);
+    expect(t9Fs.readdirSync(t9Path.join(out, 'probe')).sort(), 'the streams live under out/probe').toEqual([
+      'spelling-1.jsonl', 'spelling-1.run.json', 'spelling-2.jsonl', 'spelling-2.run.json', 'spelling-3.jsonl', 'spelling-3.run.json',
+    ]);
+    // This PR's whole subcommand set, in registration order (Task 1's grammar cases use an unregistered name).
+    expect([...t9Driver.HANDLERS.keys()]).toEqual(['step0a', 'probe']);
+  });
+
+  // D-5983: the sha256 line is on stderr (as open and freeze print it), exactly one line, and stdout is empty.
+  it('on success the sha256 line is the whole of stderr and stdout is empty, the hex being the sha256 of probe json', () => {
+    const { home, out } = t9Box('ccrc-replay-t9-shastream-');
+    t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({ sessionId: 'sess-probe', assistants: 1, result: { numTurns: 1 } }));
+    const r = runDriver(home, t9Args(out));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe('');
+    const m = /^sha256 ([0-9a-f]{64})\n$/.exec(r.stderr);
+    expect(m, r.stderr).not.toBeNull();
+    expect(m![1]).toBe(t9CreateHash('sha256').update(t9Fs.readFileSync(t9Path.join(out, 'probe.json'))).digest('hex'));
+  });
+
+  it('a stream with no result event records ran but result_seen false, so its denied false measured nothing', () => {
+    const { home, out } = t9Box('ccrc-replay-t9-noresult-');
+    const cmds = t9Commands(home);
+    t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({
+      sessionId: 'sess-probe', assistants: 1, result: null, calls: [{ id: 'tu-1', command: cmds[0]!, isError: false }],
+    }));
+    const r = runDriver(home, t9Args(out));
+    expect(r.code, r.stderr).toBe(0);
+    const doc = JSON.parse(t9Fs.readFileSync(t9Path.join(out, 'probe.json'), 'utf8'));
+    expect(doc.spellings.map((s: { ran: boolean; denied: boolean; tool_error: boolean | null; result_seen: boolean }) => [s.ran, s.denied, s.tool_error, s.result_seen]))
+      .toEqual([[true, false, false, false], [false, false, null, false], [false, false, null, false]]);
+  });
+
+  // D-5810: a result event with no permission_denials array measured nothing about denial, so result_seen is false for it.
+  it('a result event carrying no permission_denials array records result_seen false', () => {
+    const { home, out } = t9Box('ccrc-replay-t9-nodenials-');
+    const cmds = t9Commands(home);
+    const stream = t9Stream({
+      sessionId: 'sess-probe', assistants: 1, result: { numTurns: 1 }, calls: [{ id: 'tu-1', command: cmds[0]!, isError: false }],
+    });
+    const stripped = stream.replace(',"permission_denials":[]', '');
+    expect(stripped, 'CONTROL: the result line lost its permission_denials key').not.toBe(stream);
+    expect(stripped).not.toContain('permission_denials');
+    t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), stripped);
+    const r = runDriver(home, t9Args(out));
+    expect(r.code, r.stderr).toBe(0);
+    const doc = JSON.parse(t9Fs.readFileSync(t9Path.join(out, 'probe.json'), 'utf8'));
+    expect(doc.spellings.map((s: { ran: boolean; denied: boolean; result_seen: boolean }) => [s.ran, s.denied, s.result_seen]))
+      .toEqual([[true, false, false], [false, false, false], [false, false, false]]);
+  });
+
+  // D-5813: operator inputs the probe refuses with a driver word, and one HOME spelling shared by argv and prompt.
+  it('a malformed --arm-model, a ":" in HOME or in --out, and an absent or non-executable launcher are driver refusals before any spawn', () => {
+    const rows: Array<{ name: string; line: string; env?: Record<string, string>; args?: (out: string) => string[]; prep?: (home: string) => void }> = [
+      { name: 'space in model', args: (out) => t9Args(out).map((a) => (a === T9_MODEL ? 'fx arm' : a)), line: 'ccrc history-replay: args-invalid: arm-model "fx arm" is not a model id\n' },
+      { name: 'leading dash model', args: (out) => t9Args(out).map((a) => (a === T9_MODEL ? '-x' : a)), line: 'ccrc history-replay: args-invalid: arm-model "-x" is not a model id\n' },
+      { name: 'colon in HOME', env: { HOME: '/fixture/home:x' }, line: "ccrc history-replay: args-invalid: HOME contains ':'\n" },
+      { name: 'colon in out', args: (out) => t9Args(`${out}:x`), line: "ccrc history-replay: args-invalid: out contains ':'\n" },
+      { name: 'absent launcher', prep: (home) => t9Fs.rmSync(t9Path.join(home, '.local', 'bin', 'up-a')), line: 'ccrc history-replay: account-refused: launcher-ENOENT\n' },
+      ...(process.getuid?.() === 0 ? [] : [{ name: 'non-executable launcher', prep: (home: string) => t9Fs.chmodSync(t9Path.join(home, '.local', 'bin', 'up-a'), 0o644), line: 'ccrc history-replay: account-refused: launcher-EACCES\n' }]),
+    ];
+    for (const c of rows) {
+      const { home, out } = t9Box(`ccrc-replay-t9-input-${c.name.replace(/[^a-z]/g, '-')}-`);
+      c.prep?.(home);
+      const r = runDriver(home, (c.args ?? t9Args)(out), c.env);
+      expect(r.code, `${c.name}: ${r.stderr}`).toBe(2);
+      expect(r.stderr, c.name).toBe(c.line);
+      expect(stubLog(home), `${c.name}: nothing was spawned`).toBeNull();
+      expect(t9Fs.existsSync(t9Path.join(out, 'probe')), `${c.name}: no stream file`).toBe(false);
+      expect(t9Fs.existsSync(t9Path.join(out, 'probe.json')), c.name).toBe(false);
+      if (!c.name.includes('colon in out')) continue;
+      expect(t9Fs.existsSync(`${out}:x`), 'the colon --out was not made').toBe(false);
+    }
+  });
+
+  it('a HOME with a trailing slash gives the probe one spelling: the first taught spelling in the argv is the one its prompt asks for', () => {
+    const { home, out } = t9Box('ccrc-replay-t9-trailing-');
+    t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({ sessionId: 'sess-probe', assistants: 1, result: { numTurns: 1 } }));
+    const r = runDriver(home, t9Args(out), { HOME: `${home}/` });
+    expect(r.code, r.stderr).toBe(0);
+    const log = stubLog(home) as T9Entry[];
+    expect(log).toHaveLength(3);
+    const first = `${home}/.local/bin/ccrc history status --json`;
+    for (const e of log) {
+      expect(e.argv).toContain(`Bash(${home}/.local/bin/ccrc history:*)`);
+      expect(e.stdin).not.toContain(`${home}//`);
+    }
+    expect(log.filter((e) => e.stdin.includes(first)), 'the prompt asks for the spelling the argv carries').toHaveLength(1);
+    const doc = JSON.parse(t9Fs.readFileSync(t9Path.join(out, 'probe.json'), 'utf8'));
+    expect(doc.spellings[0].spelling).toBe(`Bash(${home}/.local/bin/ccrc history:*)`);
+  });
+
+  it('refused before any spawn: an external account, a missing budget, a flag the probe never reads, a limits row at the threshold', () => {
+    // D-5810: the last five rows pin each PROBE_REQUIRED entry, the SETTINGS_MODES refusal and the probe's own HOME refusal,
+    // each of which reds when its line is deleted; `env` is runDriver's extraEnv.
+    const cases: Array<{ name: string; pct?: number; args: (out: string) => string[]; line: string; env?: Record<string, string> }> = [
+      { name: 'external', args: (out) => t9Args(out, 'ext-n'), line: 'ccrc history-replay: account-refused: ' },
+      { name: 'no budget', args: (out) => t9Args(out).filter((_, i, a) => a[i] !== '--budget' && a[i - 1] !== '--budget'), line: 'ccrc history-replay: args-invalid: budget-required\n' },
+      { name: 'writer flag', args: (out) => [...t9Args(out), '--writer-model', 'fixture-model-writer'], line: 'ccrc history-replay: args-invalid: --writer-model is not a probe flag\n' },
+      { name: 'threshold', pct: 70, args: (out) => t9Args(out), line: 'ccrc history-replay: limits-threshold: ' },
+      { name: 'no arm model', args: (out) => t9Args(out).filter((_, i, a) => a[i] !== '--arm-model' && a[i - 1] !== '--arm-model'), line: 'ccrc history-replay: args-invalid: arm-model-required\n' },
+      { name: 'no out', args: (out) => t9Args(out).filter((_, i, a) => a[i] !== '--out' && a[i - 1] !== '--out'), line: 'ccrc history-replay: args-invalid: out-required\n' },
+      { name: 'no account', args: (out) => t9Args(out).filter((_, i, a) => a[i] !== '--account' && a[i - 1] !== '--account'), line: 'ccrc history-replay: args-invalid: account-required\n' },
+      { name: 'bogus settings mode', args: (out) => [...t9Args(out), '--settings-mode', 'bogus'], line: 'ccrc history-replay: args-invalid: settings-mode bogus\n' },
+      { name: 'empty HOME', args: (out) => t9Args(out), env: { HOME: '' }, line: 'ccrc history-replay: args-invalid: HOME is unset or not absolute\n' },
+    ];
+    for (const c of cases) {
+      const { home, out } = t9Box(`ccrc-replay-t9-refuse-${c.name.replace(/ /g, '-')}-`, c.pct);
+      t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({ sessionId: 'sess-probe', assistants: 1, result: { numTurns: 1 } }));
+      const r = runDriver(home, c.args(out), c.env);
+      expect(r.code, `${c.name}: ${r.stderr}`).toBe(2);
+      expect(r.stderr.startsWith(c.line), `${c.name}: ${r.stderr}`).toBe(true);
+      expect(stubLog(home), `${c.name}: nothing was spawned`).toBeNull();
+      expect(t9Fs.existsSync(t9Path.join(out, 'probe.json')), c.name).toBe(false);
+      expect(t9Fs.existsSync(t9Path.join(out, 'probe')), `${c.name}: no stream file`).toBe(false);
+    }
+  });
+});
+
+describe('W2-4 Task 9: the probe checks every required flag before --out is made (D-5815)', () => {
+  // The probe's own fixture box is built inline, as Task 9's t9Box does: up-a (a recording stub) and ext-n (external, refused).
+  function box(prefix: string): { home: string; out: string } {
+    const base = mkTmp(prefix);
+    const home = path.join(base, 'home');
+    mkdirSync(home, { mode: 0o700 });
+    const acct = (id: string, suffix: string, exec: Record<string, unknown>) =>
+      ({ id, label: id, configDirSuffix: suffix, exec, homeAble: true, hue: 'cyan', telemetry: 'anthropic' });
+    writeRoster(home, [acct('up-a', '.claude', { kind: 'upstream' }), acct('ext-n', '.ext-n', { kind: 'external' })]);
+    plantStub(home, 'up-a');
+    const now = Math.floor(Date.now() / 1000);
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-limits', 'up-a.json'),
+      JSON.stringify({ five: 10, seven: 10, ts: now, fiveResetAt: now + 3600, sevenResetAt: now + 86_400 }));   // fresh, so only the ':' check can stop it
+    return { home, out: path.join(base, 'out') };
+  }
+  const argvOf = (out: string, account: string, drop: string | null): string[] => {
+    const base: Array<[string, string]> = [['out', out], ['account', account], ['budget', '1000000'], ['arm-model', 'fixture-model-arm']];
+    return ['probe', ...base.filter(([k]) => k !== drop).flatMap(([k, v]) => [`--${k}`, v])];
+  };
+  it.each(['out', 'account', 'budget', 'arm-model'])('a missing --%s alone is args-invalid, with no --out made and no spawn', (flag) => {
+    const { home, out } = box('ccrc-replay-t9-req-');
+    const r = runDriver(home, argvOf(out, 'up-a', flag));
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toBe(`ccrc history-replay: args-invalid: ${flag}-required\n`);
+    expect(existsSync(out), `a missing --${flag} left --out behind`).toBe(false);
+    expect(stubLog(home)).toBeNull();
+  });
+  describe("the realpath ':' check (D-5813)", () => {
+    // D-5813: as step0a, the ':' check also runs on prepareOut's realpath (an ancestor symlink to a path holding ':').
+    // Without the check the TypeError (exit 1) is thrown in launchRun, before its spawn; the exit code tells the mutant
+    // from the guard.
+    it("an --out under an ancestor symlink to a path holding ':' is refused args-invalid before any spawn", () => {
+      const { home } = box('ccrc-replay-t9-colonlink-');
+      const base = mkTmp('ccrc-replay-t9-colonlink-base-');
+      mkdirSync(path.join(base, 'a:b'));
+      symlinkSync(path.join(base, 'a:b'), path.join(base, 'link'));
+      const r = runDriver(home, argvOf(path.join(base, 'link', 'out'), 'up-a', null));
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.stderr).toBe("ccrc history-replay: args-invalid: out contains ':'\n");
+      expect(stubLog(home)).toBeNull();
+    });
+  });
+  it('a missing --budget with an unadmissible account answers budget-required, not account-refused, and makes no --out', () => {
+    const { home, out } = box('ccrc-replay-t9-reqfirst-');
+    const r = runDriver(home, argvOf(out, 'ext-n', 'budget'));
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toBe('ccrc history-replay: args-invalid: budget-required\n');
+    expect(existsSync(out)).toBe(false);
+    expect(stubLog(home)).toBeNull();
+  });
+});
+
+describe('W2-4 Task 9: step 0b mechanics without the seam, W2-D57', () => {
+  const T9_MODEL_0B = 'fixture-model-arm';
+  const t9Facts = (o: Parameters<typeof t9Stream>[0]) => t9Driver.readStreamJson(t9Stream(o));
+  const T9_ALLOWED = '~/.local/bin/ccrc history status --json';
+  const T9_STOP = 'error_max_turns';
+
+  it('the turn probe prompt asks for twenty separate Bash calls of an allowed spelling, MAX_TURNS is 12, and the stop it reads is error_max_turns', () => {
+    expect(t9Driver.MAX_TURNS).toBe(12);
+    expect(t9Driver.TURN_PROBE_PROMPT).toContain('twenty separate Bash tool calls');
+    expect(t9Driver.TURN_PROBE_PROMPT).toContain(`exactly the command \`${T9_ALLOWED}\``);
+    expect(t9Driver.allowedToolSpellings('/h')[2], 'CONTROL: the third taught spelling admits that command').toBe('Bash(~/.local/bin/ccrc history:*)');
+    expect(t9Driver.MAX_TURNS_STOP_SUBTYPE).toBe(T9_STOP);
+  });
+
+  it('the bound holds only when the result event shows the max-turns stop within 12 assistant turns; 13 turns does not hold', () => {
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 12, result: { numTurns: 12, subtype: T9_STOP } })))
+      .toEqual({ held: true, turns: 12, num_turns: 12, subtype: T9_STOP });
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 13, result: { numTurns: 13, subtype: T9_STOP } })))
+      .toEqual({ held: false, turns: 13, num_turns: 13, subtype: T9_STOP });
+  });
+
+  // D-5810: a maxTurns that is no positive integer throws; compared with `>` it would read a bound that never trips as held.
+  it('turnBoundHeld refuses a maxTurns that is not a positive integer', () => {
+    const facts = t9Facts({ sessionId: 's', assistants: 12, result: { numTurns: 12, subtype: T9_STOP } });
+    for (const maxTurns of [0, -1, 1.5, Number.NaN, 'x' as never, null as never]) {
+      expect(() => t9Driver.turnBoundHeld(facts, maxTurns), `maxTurns ${String(maxTurns)}`).toThrow(TypeError);
+    }
+    expect(t9Driver.turnBoundHeld(facts, 12), 'CONTROL: 12 is accepted').toEqual({ held: true, turns: 12, num_turns: 12, subtype: T9_STOP });
+  });
+
+  it('a run that ended for any other reason within the bound is unmeasured, never held', () => {
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 12, result: { numTurns: 12 } })))
+      .toEqual({ held: 'unmeasured', turns: 12, num_turns: 12, subtype: 'success' });
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 3, result: { numTurns: 3, subtype: 'error_during_execution' } })))
+      .toEqual({ held: 'unmeasured', turns: 3, num_turns: 3, subtype: 'error_during_execution' });
+  });
+
+  it('no result event is unmeasured within the bound and false past it, its subtype and num_turns null', () => {
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 5, result: null })))
+      .toEqual({ held: 'unmeasured', turns: 5, num_turns: null, subtype: null });
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 13, result: null })))
+      .toEqual({ held: false, turns: 13, num_turns: null, subtype: null });
+  });
+
+  it('a max-turns result without num_turns still holds: num_turns is recorded, the assistant turn count decides', () => {
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 12, result: { numTurns: null, subtype: T9_STOP } })))
+      .toEqual({ held: true, turns: 12, num_turns: null, subtype: T9_STOP });
+  });
+
+  it('num_turns within the bound beside more assistant messages than the bound does not hold', () => {
+    expect(t9Driver.turnBoundHeld(t9Facts({ sessionId: 's', assistants: 14, result: { numTurns: 12, subtype: T9_STOP } })))
+      .toEqual({ held: false, turns: 14, num_turns: 12, subtype: T9_STOP });
+  });
+
+  it('the project slug replaces every non-alphanumeric character with a dash', () => {
+    expect(t9Driver.projectSlugOf('/tmp/ccrc-history-replay-Ab9_x.y')).toBe('-tmp-ccrc-history-replay-Ab9-x-y');
+    expect(() => t9Driver.projectSlugOf('relative/dir')).toThrow(TypeError);
+  });
+
+  it('persistenceLeft over a config dir: nothing under projects is nothing left', () => {
+    const configDir = t9Path.join(mkTmp('ccrc-replay-t9-pl-none-'), '.claude');
+    expect(t9Driver.persistenceLeft({ configDir, sessionId: 'sess-a', cwd: '/tmp/run-a' })).toEqual({ left: false, transcripts: [], projectDir: false });
+    t9Fs.mkdirSync(t9Path.join(configDir, 'projects', '-tmp-other'), { recursive: true });
+    t9Fs.writeFileSync(t9Path.join(configDir, 'projects', '-tmp-other', 'sess-b.jsonl'), '{}\n');
+    expect(t9Driver.persistenceLeft({ configDir, sessionId: 'sess-a', cwd: '/tmp/run-a' }), 'another session under another project is not this run')
+      .toEqual({ left: false, transcripts: [], projectDir: false });
+  });
+
+  it('persistenceLeft: a transcript named by the session id under another project dir is caught by the session id half alone', () => {
+    const configDir = t9Path.join(mkTmp('ccrc-replay-t9-pl-sid-'), '.claude');
+    t9Fs.mkdirSync(t9Path.join(configDir, 'projects', '-tmp-elsewhere'), { recursive: true });
+    t9Fs.writeFileSync(t9Path.join(configDir, 'projects', '-tmp-elsewhere', 'sess-a.jsonl'), '{}\n');
+    expect(t9Driver.persistenceLeft({ configDir, sessionId: 'sess-a', cwd: '/tmp/run-a' }))
+      .toEqual({ left: true, transcripts: ['-tmp-elsewhere/sess-a.jsonl'], projectDir: false });
+  });
+
+  it('persistenceLeft: a project dir keyed by the run cwd is caught by the slug half alone', () => {
+    const configDir = t9Path.join(mkTmp('ccrc-replay-t9-pl-slug-'), '.claude');
+    t9Fs.mkdirSync(t9Path.join(configDir, 'projects', '-tmp-run-a'), { recursive: true });
+    expect(t9Driver.persistenceLeft({ configDir, sessionId: 'sess-a', cwd: '/tmp/run-a' })).toEqual({ left: true, transcripts: [], projectDir: true });
+  });
+
+  // D-5810: a non-ENOENT failure on the projects directory is thrown, never answered as clean. Mode 000 is the named
+  // case; it trips the lstat of the cwd slug first, so the two other modes isolate each rethrow: 0o400 lets the listing
+  // succeed but refuses the lstat (search denied), and 0o100 lets the lstat answer ENOENT but refuses the listing.
+  // The skip is for root, for whom a mode does not refuse a read.
+  it.skipIf(process.getuid?.() === 0)('persistenceLeft: an unreadable projects directory throws, never reads as clean', () => {
+    for (const mode of [0o000, 0o400, 0o100]) {
+      const configDir = t9Path.join(mkTmp(`ccrc-replay-t9-pl-eacces-${mode.toString(8)}-`), '.claude');
+      const projects = t9Path.join(configDir, 'projects');
+      t9Fs.mkdirSync(projects, { recursive: true });
+      t9Fs.chmodSync(projects, mode);
+      try {
+        expect(() => t9Driver.persistenceLeft({ configDir, sessionId: 'sess-a', cwd: '/tmp/run-a' }), `mode ${mode.toString(8)}`).toThrow(/EACCES/);
+      } finally {
+        t9Fs.chmodSync(projects, 0o700);
+      }
+    }
+  });
+
+  // D-5810: the input guards refuse a shape rather than reading it as clean or held.
+  it('persistenceLeft: a relative configDir and a sessionId that is no session id throw TypeError', () => {
+    const configDir = t9Path.join(mkTmp('ccrc-replay-t9-pl-input-'), '.claude');
+    expect(() => t9Driver.persistenceLeft({ configDir: 'rel/.claude', sessionId: 'sess-a', cwd: '/tmp/run-a' }), 'relative configDir').toThrow(TypeError);
+    expect(() => t9Driver.persistenceLeft({ configDir: undefined as never, sessionId: 'sess-a', cwd: '/tmp/run-a' }), 'configDir not a string').toThrow(TypeError);
+    // D-5814: the message is asserted, so the `typeof` half of the guard has its own mutant: without it a number or
+    // undefined throws a runtime TypeError of another text, and a String object passes as a clean verdict.
+    for (const sessionId of ['', 'a/b', '.hidden', 42 as never, undefined as never, ['x'] as never, new String('x') as never]) {
+      expect(() => t9Driver.persistenceLeft({ configDir, sessionId, cwd: '/tmp/run-a' }), `sessionId ${JSON.stringify(sessionId)}`).toThrow(/is not a session id/);
+    }
+    expect(t9Driver.persistenceLeft({ configDir, sessionId: 'sess-a', cwd: '/tmp/run-a' }), 'CONTROL: a plain id on an absolute configDir answers').toEqual({ left: false, transcripts: [], projectDir: false });
+  });
+
+  it('persistenceLeft: a null session id never reads as clean', () => {
+    const configDir = t9Path.join(mkTmp('ccrc-replay-t9-pl-null-'), '.claude');
+    expect(t9Driver.persistenceLeft({ configDir, sessionId: null, cwd: '/tmp/run-a' })).toEqual({ left: true, transcripts: [], projectDir: false });
+  });
+
+  it('step0bMechanics on the stub: a stub that writes its transcript is caught by both halves', async () => {
+    const base = mkTmp('ccrc-replay-t9-0b-left-');
+    const home = t9Path.join(base, 'home');
+    t9Fs.mkdirSync(home, { mode: 0o700 });
+    t9PlantPersistingStub(home, 'up-a');
+    t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({ sessionId: 'sess-left', assistants: 13, result: { numTurns: 13 } }));
+    const out = t9Driver.prepareOut(t9Path.join(base, 'out'));
+    const got = await t9Driver.step0bMechanics({ launch: t9Launch(home), out, model: T9_MODEL_0B, settingsMode: 'restricted', lang: undefined, gate: () => {}, claim: claimFor(out) });
+    const projects = t9Fs.readdirSync(t9Path.join(home, '.claude', 'projects'));
+    expect(projects.length, 'CONTROL: the stub wrote one project dir').toBe(1);
+    expect(got).toEqual({
+      turn_bound: { held: false, turns: 13, num_turns: 13, subtype: 'success' },
+      persistence: { left: true, transcripts: [`${projects[0]}/sess-left.jsonl`], project_dir: true },
+    });
+    expect(t9Fs.existsSync(t9Path.join(out, 'step0b', 'turn-bound.run.json')), 'one box-mode run named step0b/turn-bound').toBe(true);
+  });
+
+  it('step0bMechanics on the stub: a clean run leaves nothing, and a run that ended without the max-turns stop is unmeasured, never held', async () => {
+    const base = mkTmp('ccrc-replay-t9-0b-clean-');
+    const home = t9Path.join(base, 'home');
+    t9Fs.mkdirSync(home, { mode: 0o700 });
+    plantStub(home, 'up-a');
+    t9Fs.writeFileSync(t9Path.join(home, STUB_STREAM), t9Stream({ sessionId: 'sess-clean', assistants: 12, result: { numTurns: 12 } }));
+    const out = t9Driver.prepareOut(t9Path.join(base, 'out'));
+    await expect(t9Driver.step0bMechanics({ launch: t9Launch(home), out, model: T9_MODEL_0B, settingsMode: 'restricted', lang: undefined, claim: claimFor(out) } as never),
+      'no gate: a TypeError before any spawn (the stub log below still counts one run)').rejects.toThrow(/opts\.gate is required/);
+    const got = await t9Driver.step0bMechanics({ launch: t9Launch(home), out, model: T9_MODEL_0B, settingsMode: 'restricted', lang: undefined, gate: () => {}, claim: claimFor(out) });
+    expect(got).toEqual({ turn_bound: { held: 'unmeasured', turns: 12, num_turns: 12, subtype: 'success' }, persistence: { left: false, transcripts: [], project_dir: false } });
+    const log = stubLog(home) as Array<{ argv: string[]; stdin: string }> | null;
+    expect(log?.length).toBe(1);
+    expect(log![0]!.argv).toEqual(t9Driver.spawnArgv({ mode: 'box', model: T9_MODEL_0B, settingsMode: 'restricted', home }));
+    expect(log![0]!.stdin).toBe(t9Driver.TURN_PROBE_PROMPT);
+  });
+});
+
+// ── fix round 2 (D-5984): the driver yields to signals before every spawn, and every stop check is pinned or removed ──────
+// A Node signal handler runs only when the loop reaches its poll phase. These cases run main in-process, hold a no-op
+// SIGTERM listener (without one the vitest fork dies), and send this process a real SIGTERM where the point is the
+// yield, or call main's installed listener directly where the point is the check after it. An in-process stop leaves
+// the driver's flag set until the next main entry, and its unref'd SIGKILL timer fires STOP_GRACE_MS later over
+// whatever the registry holds then: endStop resets the flag through one more main call and waits the grace out, so
+// nothing spawns inside it.
+describe('fix round 2 (D-5984): signals are yielded to before every spawn, and every stop check is pinned or removed', () => {
+  const STOP_GRACE_MS = 5_000;   // the driver's own, module-private
+  const hold = (): void => {};
+  const probeArgs = (out: string): string[] => ['probe', '--out', out, '--account', 'up-a', '--budget', '1000000', '--arm-model', 'fixture-model-arm'];
+  const LEFTOVER = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'x', permission_denials: [],
+    usage: { input_tokens: 3, cache_creation_input_tokens: 4, cache_read_input_tokens: 5, output_tokens: 6 } }) + '\n';
+
+  /** A fixture HOME for a probe run by main: up-a (the recording stub), a fresh limits row, an --out that is not made yet. */
+  function probeBox(prefix: string): { home: string; out: string } {
+    const base = mkTmp(prefix);
+    const home = join(base, 'home');
+    mkdirSync(home, { mode: 0o700 });
+    writeRoster(home, [{ id: 'up-a', label: 'up-a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' }]);
+    plantStub(home, 'up-a');
+    const now = Math.floor(Date.now() / 1000);
+    mkdirSync(join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five: 10, seven: 10, ts: now, fiveResetAt: now + 3600, sevenResetAt: now + 86_400 }));
+    return { home, out: join(base, 'out') };
+  }
+  const spendNames = (out: string): string[] => {
+    const p = join(out, replay.SPEND_LEDGER);
+    return existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l).name) : [];
+  };
+  /** Run `fn` with a no-op SIGTERM listener held, and main's stderr captured; answers what stderr got. */
+  async function holdingTerm(fn: () => Promise<void>): Promise<string> {
+    let err = '';
+    const quiet = vi.spyOn(process.stderr, 'write').mockImplementation((c: unknown) => { err += String(c); return true; });
+    const umask = process.umask(0o022);
+    process.umask(umask);
+    process.on('SIGTERM', hold);
+    try { await fn(); } finally { process.off('SIGTERM', hold); quiet.mockRestore(); process.umask(umask); }
+    return err;
+  }
+  /** Reset the stopping flag with one more main call (a no-op handler), then wait out the SIGKILL timer a stop armed. */
+  async function endStop(): Promise<void> {
+    const umask = process.umask(0o022);
+    process.umask(umask);
+    replay.HANDLERS.set('fr2-reset', async () => 0);
+    try { await replay.main(['fr2-reset'], {}); } finally { replay.HANDLERS.delete('fr2-reset'); process.umask(umask); }
+    await pause(STOP_GRACE_MS + 400);
+  }
+  /** Run `fn` as a subcommand of main, so main's SIGINT, SIGTERM and SIGHUP listeners are installed while it runs. */
+  async function underMain(fn: () => Promise<void>): Promise<void> {
+    let failure: unknown = null;
+    replay.HANDLERS.set('fr2-fixture', async () => { try { await fn(); } catch (e) { failure = e; } return 0; });
+    const umask = process.umask(0o022);
+    process.umask(umask);
+    try { await replay.main(['fr2-fixture'], {}); } finally { replay.HANDLERS.delete('fr2-fixture'); process.umask(umask); }
+    if (failure !== null) throw failure;
+  }
+  /** main's own SIGTERM listener, called as the signal would: the stopping flag is set at once, with no loop turn. */
+  const raiseStop = (): void => { (process.listeners('SIGTERM').at(-1) as () => void)(); };
+  const noProbeResult = (out: string): void => {
+    expect(existsSync(join(out, 'probe.json')), 'no probe.json').toBe(false);
+  };
+
+  it('a SIGTERM pending across main\'s whole stretch, claimOut\'s walk included, is handled at the first yield: exit 2 interrupted, no spawn, no spawn charge, no probe.json', async () => {
+    const { home, out } = probeBox('ccrc-replay-fr2-pending-');
+    replay.prepareOut(out);
+    writeFileSync(join(out, 'old-run.jsonl.part'), LEFTOVER);   // a leftover with no record: claimOut charges and removes it before any yield
+    let code = -1;
+    let err = '';
+    try {
+      err = await holdingTerm(async () => {
+        process.kill(process.pid, 'SIGTERM');
+        code = await replay.main(probeArgs(out), { HOME: home });
+      });
+    } finally { await endStop(); }
+    expect(code, err).toBe(EXIT.REFUSED);
+    expect(err).toMatch(/^ccrc history-replay: interrupted: SIGTERM received; [^\n]*\n$/);
+    expect(stubLog(home), 'no probe spawn').toBeNull();
+    expect(spendNames(out), 'only the leftover was charged: no spawn charge').toEqual(['old-run']);
+    expect(existsSync(join(out, 'old-run.jsonl.part')), 'CONTROL: claimOut did walk').toBe(false);
+    noProbeResult(out);
+    expect(existsSync(join(out, 'probe')) ? readdirSync(join(out, 'probe')) : [], 'no run under probe').toEqual([]);
+  }, 60_000);
+
+  it('a signal that arrives in a job\'s post-close stretch is handled by the yield before the next job: that job never spawns, and the first one is recorded', async () => {
+    const b = t5Box('ccrc-replay-fr2-yield-');
+    let gates = 0;
+    let sent = false;
+    const armed = { ...b.up, get accountId(): string {
+      // launchRun reads launch.accountId when it builds run.json, after the child's close and the rename.
+      if (!sent && existsSync(join(b.out, 'y-0.jsonl'))) { sent = true; process.kill(process.pid, 'SIGTERM'); }
+      return 'up-a';
+    } } as T5Launch;
+    const jobs = [t5job(b, armed, 'box', 'y-0'), t5job(b, b.up, 'box', 'y-1')];
+    try {
+      await holdingTerm(async () => {
+        await underMain(async () => {
+          await expect(claimedBatch(jobs, { concurrency: 1, gate: () => { gates += 1; } })).rejects.toMatchObject({ word: 'interrupted' });
+        });
+      });
+    } finally { await endStop(); }
+    expect(sent, 'CONTROL: the signal was sent in the first job\'s post-close stretch').toBe(true);
+    expect(gates, 'the second job never reached the gate').toBe(1);
+    expect(stubLog(b.home), 'one spawn only').toHaveLength(1);
+    expect(existsSync(join(b.out, 'y-0.run.json')), 'the first job is recorded').toBe(true);
+    expect(readdirSync(b.out).filter((n) => n.startsWith('y-1')), 'nothing of the second job').toEqual([]);
+  }, 60_000);
+
+  it('the batch\'s last check: a signal pending after the LAST job refuses interrupted, because that lane\'s final iteration takes no job and checks nothing itself', async () => {
+    const b = t5Box('ccrc-replay-fr2-last-');
+    let sent = false;
+    const armed = { ...b.up, get accountId(): string {
+      if (!sent && existsSync(join(b.out, 'l-0.jsonl'))) { sent = true; process.kill(process.pid, 'SIGTERM'); }
+      return 'up-a';
+    } } as T5Launch;
+    try {
+      await holdingTerm(async () => {
+        await underMain(async () => {
+          await expect(claimedBatch([t5job(b, armed, 'box', 'l-0')], { concurrency: 1, gate: T5_NO_GATE })).rejects.toMatchObject({ word: 'interrupted' });
+        });
+      });
+    } finally { await endStop(); }
+    expect(sent, 'CONTROL: the signal was sent in the last job\'s post-close stretch').toBe(true);
+    expect(existsSync(join(b.out, 'l-0.run.json')), 'the job itself was recorded').toBe(true);
+  }, 60_000);
+
+  it('the lane check: with the stop set, runBatch refuses interrupted before its gate, and nothing spawns', async () => {
+    const b = t5Box('ccrc-replay-fr2-lane-');
+    let gates = 0;
+    try {
+      await holdingTerm(async () => {
+        await underMain(async () => {
+          raiseStop();
+          await expect(claimedBatch([t5job(b, b.up, 'box', 'k-0'), t5job(b, b.up, 'box', 'k-1')], { gate: () => { gates += 1; } })).rejects.toMatchObject({ word: 'interrupted' });
+        });
+      });
+    } finally { await endStop(); }
+    expect(gates, 'the gate was never called').toBe(0);
+    expect(stubLog(b.home)).toBeNull();
+  }, 60_000);
+
+  it('a fully resumed probe with a SIGTERM pending refuses interrupted and writes no probe.json (the lane check or the batch\'s last check)', async () => {
+    const { home, out } = probeBox('ccrc-replay-fr2-resumed-');
+    const first = runDriver(home, probeArgs(out));
+    expect(first.code, first.stderr).toBe(0);
+    expect(stubLog(home), 'CONTROL: the first run spawned the three spellings').toHaveLength(3);
+    rmSync(join(out, 'probe.json'));
+    let code = -1;
+    let err = '';
+    try {
+      err = await holdingTerm(async () => {
+        process.kill(process.pid, 'SIGTERM');
+        code = await replay.main(probeArgs(out), { HOME: home });
+      });
+    } finally { await endStop(); }
+    expect(code, err).toBe(EXIT.REFUSED);
+    expect(err).toMatch(/^ccrc history-replay: interrupted: SIGTERM received; [^\n]*\n$/);
+    expect(stubLog(home), 'nothing spawned again').toHaveLength(3);
+    noProbeResult(out);
+  }, 120_000);
+
+  it('launchRun\'s pre-spawn check: with the stop set it refuses interrupted, the stub never runs, and no .part or .pid is made', async () => {
+    const b = t5Box('ccrc-replay-fr2-launch-');
+    try {
+      await holdingTerm(async () => {
+        await underMain(async () => {
+          raiseStop();
+          await expect(claimedRun(t5job(b, b.up, 'box', 'p-0'))).rejects.toMatchObject({ word: 'interrupted' });
+        });
+      });
+    } finally { await endStop(); }
+    expect(stubLog(b.home), 'the stub never ran').toBeNull();
+    expect(readdirSync(b.out).filter((n) => n.startsWith('p-0')), 'no .part, .pid or stream').toEqual([]);
+  }, 60_000);
+
+  it('measureClaudeVersion\'s check: with the stop set it refuses interrupted and --version never spawns', async () => {
+    const b = t5Box('ccrc-replay-fr2-version-');
+    try {
+      await holdingTerm(async () => {
+        await underMain(async () => {
+          raiseStop();
+          await expect(replay.measureClaudeVersion(b.up, b.out, undefined)).rejects.toMatchObject({ word: 'interrupted' });
+        });
+      });
+    } finally { await endStop(); }
+    expect(stubLog(b.home), '--version never spawned').toBeNull();
+  }, 60_000);
+
+  it('measureClaudeVersion yields first: a SIGTERM pending when it is called is handled before its check, so --version never spawns', async () => {
+    const b = t5Box('ccrc-replay-fr2-version-yield-');
+    try {
+      await holdingTerm(async () => {
+        await underMain(async () => {
+          process.kill(process.pid, 'SIGTERM');
+          await expect(replay.measureClaudeVersion(b.up, b.out, undefined)).rejects.toMatchObject({ word: 'interrupted' });
+        });
+      });
+    } finally { await endStop(); }
+    expect(stubLog(b.home), '--version never spawned').toBeNull();
+  }, 60_000);
+});
+
+// ── fix round 2 (D-5984): the wait after a leader's exit is bounded ─────────────────────────────────────────────────
+// 'close' fires only when every stdio pipe has closed, so a process that outlives the leader and holds one would hold
+// the run, the lock and every signal's answer. spawnGroup starts a STOP_GRACE_MS timer at the leader's 'exit'; 'close'
+// clears it; when it fires it SIGKILLs the leader's group and destroys the streams. A grandchild that calls setsid is
+// the one process the group kill cannot reach: it keeps running, and no longer holds the driver. Every stub here is a
+// recording stub under a fixture HOME that starts only processes the case kills by their recorded pid, in a finally.
+describe.skipIf(!existsSync('/usr/bin/setsid'))('fix round 2 (D-5984): the wait after a leader exits is bounded', () => {
+  const STOP_GRACE_MS = 5_000;   // the driver's own, module-private
+  const SLEEP_S = 12;            // the setsid grandchild outlives every bound below
+  const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  /** The pids a stub recorded, one per line; each is killed (alone and as a group) by a case's finally. */
+  const recorded = (file: string): number[] => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter((l) => l !== '').map(Number) : []);
+  const killAll = (pids: number[]): void => {
+    for (const pid of pids) {
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* gone, or never a group */ }
+      try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+    }
+  };
+  /** Node, run as a CommonJS launcher. `body` runs after `home`, `args` and the requires exist. */
+  const stubSource = (body: string): string => `#!/usr/bin/env node
+const fs = require('node:fs');
+const cp = require('node:child_process');
+const path = require('node:path');
+const home = path.resolve(path.dirname(process.argv[1]), '..', '..');
+const args = process.argv.slice(2);
+const stream = () => fs.readFileSync(path.join(home, ${JSON.stringify(STUB_STREAM)}), 'utf8');
+fs.appendFileSync(path.join(home, 'leaders.pids'), process.pid + '\\n');
+${body}
+`;
+  /** setsid as the stub starts it: not detached, so setsid is no group leader and execs sleep in its own pid, which is
+   *  recorded. Its stderr is the run's stderr pipe; its stdout and stdin are not. */
+  const SETSID_GRANDCHILD = `const g = cp.spawn('/usr/bin/setsid', ['sleep', '${SLEEP_S}'], { stdio: ['ignore', 'ignore', 'inherit'] });
+fs.appendFileSync(path.join(home, 'grandchildren.pids'), g.pid + '\\n');
+g.unref();`;
+  const pidsOf = (b: { home: string }): string => path.join(b.home, 'grandchildren.pids');
+  /** Every pid a case's stubs recorded, leaders and grandchildren: what its finally kills. */
+  const allOf = (home: string): number[] => [...recorded(join(home, 'leaders.pids')), ...recorded(join(home, 'grandchildren.pids'))];
+
+  it('SIGTERM while a setsid grandchild holds the run\'s stderr: exit 2 interrupted well before the grandchild ends, which keeps running (the named residual)', async () => {
+    const base = mkTmp('ccrc-replay-fr2-setsid-stop-');
+    const home = join(base, 'home');
+    mkdirSync(home, { mode: 0o700 });
+    writeRoster(home, [{ id: 'up-a', label: 'up-a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' }]);
+    plantStub(home, 'up-a');
+    writeFileSync(join(home, '.local', 'bin', 'up-a'), stubSource(`fs.readFileSync(0);
+${SETSID_GRANDCHILD}
+process.stdout.write(stream());`), { mode: 0o700 });
+    const now = Math.floor(Date.now() / 1000);
+    mkdirSync(join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five: 10, seven: 10, ts: now, fiveResetAt: now + 3600, sevenResetAt: now + 86_400 }));
+    const out = join(base, 'out');
+    const driver = spawn(process.execPath, [SCRIPT, 'probe', '--out', out, '--account', 'up-a', '--budget', '1000000', '--arm-model', 'fixture-model-arm'],
+      { env: { ...scrubbedEnv(process.env), HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
+    startedChildren.push(driver);
+    let stderr = '';
+    driver.stderr.on('data', (d) => { stderr += String(d); });
+    const exited = new Promise<{ code: number | null; signal: string | null }>((r) => driver.once('close', (code, signal) => r({ code, signal })));
+    const gcFile = join(home, 'grandchildren.pids');
+    try {
+      expect(await until(() => recorded(gcFile).length >= 1, 60_000), 'a stub started and recorded its setsid grandchild').toBe(true);
+      const started = Date.now();
+      await pause(2_000);
+      driver.kill('SIGTERM');
+      const r = await bounded(exited, 30_000, 'the driver exiting after the signal');
+      const answered = Date.now() - started;
+      expect(r, stderr).toEqual({ code: 2, signal: null });
+      expect(stderr).toMatch(/^ccrc history-replay: interrupted: SIGTERM received; [^\n]*\n$/);
+      expect(answered, `answered at ${answered} ms, not when the ${SLEEP_S} s grandchild ended`).toBeLessThan(9_000);
+      expect(recorded(gcFile).some(alive), 'the setsid grandchild escaped the group kill and is still running: the residual, no longer holding the driver').toBe(true);
+    } finally {
+      killAll(allOf(home));
+      driver.kill('SIGKILL');
+    }
+  }, 120_000);
+
+  it('the bound\'s timer is cleared at close: a real probe whose stubs exit at once ends within STOP_GRACE_MS - 1 s of its last child\'s exit, not a grace later', async () => {
+    const base = mkTmp('ccrc-replay-fr2-timer-cleared-');
+    const home = join(base, 'home');
+    mkdirSync(home, { mode: 0o700 });
+    writeRoster(home, [{ id: 'up-a', label: 'up-a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' }]);
+    plantStub(home, 'up-a');
+    // Each stub notes the time just before it writes its stream and exits; the driver's own exit is measured against the last.
+    writeFileSync(join(home, '.local', 'bin', 'up-a'), stubSource(`fs.readFileSync(0);
+fs.appendFileSync(path.join(home, 'exits.ms'), Date.now() + '\\n');
+process.stdout.write(stream());`), { mode: 0o700 });
+    const now = Math.floor(Date.now() / 1000);
+    mkdirSync(join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five: 10, seven: 10, ts: now, fiveResetAt: now + 3600, sevenResetAt: now + 86_400 }));
+    const out = join(base, 'out');
+    const driver = spawn(process.execPath, [SCRIPT, 'probe', '--out', out, '--account', 'up-a', '--budget', '1000000', '--arm-model', 'fixture-model-arm'],
+      { env: { ...scrubbedEnv(process.env), HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
+    startedChildren.push(driver);
+    let stderr = '';
+    driver.stderr.on('data', (d) => { stderr += String(d); });
+    const exited = new Promise<{ code: number | null; signal: string | null }>((r) => driver.once('close', (code, signal) => r({ code, signal })));
+    try {
+      const r = await bounded(exited, 60_000, 'the driver exiting');
+      const closedAt = Date.now();
+      expect(r, stderr).toEqual({ code: 0, signal: null });
+      const exits = recorded(join(home, 'exits.ms'));
+      expect(exits.length, 'the stubs ran').toBeGreaterThanOrEqual(1);
+      const lag = closedAt - Math.max(...exits);
+      expect(lag, `the driver ended ${lag} ms after its last child's exit (an uncleared bound timer holds it a whole grace)`).toBeLessThan(STOP_GRACE_MS - 1_000);
+    } finally {
+      killAll(allOf(home));
+      driver.kill('SIGKILL');
+    }
+  }, 120_000);
+
+  it('a run whose leader exits while a setsid grandchild holds stderr returns after about the grace, with the leader\'s stderr line read and recorded', async () => {
+    const b = t5Box('ccrc-replay-fr2-setsid-read-');
+    writeFileSync(join(b.home, '.local', 'bin', 'up-a'), stubSource(`fs.readFileSync(0);
+process.stderr.write("error: unknown option '--fixture-flag'\\n");
+${SETSID_GRANDCHILD}
+process.stdout.write(stream());`), { mode: 0o700 });
+    try {
+      const started = Date.now();
+      const o = await bounded(claimedRun(t5job(b, b.up, 'box', 'bw-0')), 60_000, 'the run returning');
+      const took = Date.now() - started;
+      expect(took, `returned after ${took} ms`).toBeLessThan(9_000);
+      expect(took, 'the bound waits out the grace (a timer that fires at the exit returns early and reds this by time)').toBeGreaterThanOrEqual(STOP_GRACE_MS - 1_000);
+      expect([o.skipped, o.code, o.unknownOptions]).toEqual([false, 0, ['--fixture-flag']]);
+      const run = JSON.parse(readFileSync(join(b.out, 'bw-0.run.json'), 'utf8'));
+      expect(run.unknown_options, 'the leader\'s stderr line is recorded').toEqual(['--fixture-flag']);
+      expect(recorded(pidsOf(b)).some(alive), 'the setsid grandchild is still running').toBe(true);
+    } finally { killAll(allOf(b.home)); }
+  }, 120_000);
+
+  it('the bound reaches --version too: a setsid grandchild holding its stdout does not hold measureClaudeVersion', async () => {
+    const b = t5Box('ccrc-replay-fr2-setsid-version-');
+    writeFileSync(join(b.home, '.local', 'bin', 'up-a'), stubSource(`process.stdout.write('9.9.9 (Claude Code)\\n');
+const g = cp.spawn('/usr/bin/setsid', ['sleep', '${SLEEP_S}'], { stdio: ['ignore', 'inherit', 'ignore'] });
+fs.appendFileSync(path.join(home, 'grandchildren.pids'), g.pid + '\\n');
+g.unref();`), { mode: 0o700 });
+    try {
+      const started = Date.now();
+      const v = await bounded(replay.measureClaudeVersion(b.up, b.out, 'fixture.UTF-8'), 60_000, '--version returning');
+      const took = Date.now() - started;
+      expect(took, `returned after ${took} ms`).toBeLessThan(9_000);
+      expect(v).toEqual({ state: 'value', version: '9.9.9 (Claude Code)' });
+    } finally { killAll(allOf(b.home)); }
+  }, 120_000);
+
+  it('the timeout path: a process in the run\'s group that ignores SIGTERM and holds stderr survives the timeout\'s SIGTERM, and is dead when the run returns', async () => {
+    const b = t5Box('ccrc-replay-fr2-timeout-group-');
+    // The grandchild records its own pid only AFTER it has installed its ignoring handler, so a recorded pid is one the
+    // timeout's SIGTERM cannot kill. Same group (no setsid, no detached), stderr inherited from the run's pipe.
+    writeFileSync(join(b.home, '.local', 'bin', 'up-a'), stubSource(`fs.readFileSync(0);
+const g = cp.spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); require('node:fs').appendFileSync(process.argv[1], process.pid + '\\\\n'); setTimeout(() => {}, 25000)", path.join(home, 'grandchildren.pids')], { stdio: ['ignore', 'ignore', 'inherit'] });
+setTimeout(() => {}, 25000);`), { mode: 0o700 });
+    try {
+      const run = bounded(claimedRun(t5job(b, b.up, 'box', 'tg-0', { timeoutMs: 8_000 })), 60_000, 'the timed-out run returning');
+      run.catch(() => {});
+      expect(await until(() => recorded(pidsOf(b)).length >= 1 && recorded(join(b.home, 'leaders.pids')).length >= 1, 60_000), 'the stub and its grandchild recorded their pids').toBe(true);
+      const [gc] = recorded(pidsOf(b));
+      const [leader] = recorded(join(b.home, 'leaders.pids'));
+      expect(await until(() => !alive(leader!), 30_000), 'the timeout\'s SIGTERM ended the leader').toBe(true);
+      expect(alive(gc!), 'CONTROL: the grandchild survived the timeout\'s SIGTERM (it ignores it), so only the bound can end it').toBe(true);
+      const o = await run;
+      expect([o.skipped, o.signal]).toEqual([false, 'SIGTERM']);
+      expect(await until(() => !alive(gc!), 3_000), 'the group member that ignored SIGTERM is dead when the run returns').toBe(true);
+    } finally { killAll(allOf(b.home)); }
+  }, 120_000);
+});

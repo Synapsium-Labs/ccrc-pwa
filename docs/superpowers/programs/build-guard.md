@@ -3,7 +3,8 @@
 Spec: `docs/superpowers/specs/2026-10-18-claude-binary-lifecycle-design.md` §7.6 and invariant 11   Plan: `docs/superpowers/plans/2026-10-20-build-guard-878-follow-up.md` (lands with the wave's PR)   Workspace: a fresh child (one PR)
 Home project: `ccrc-pwa`   Coordinator: the ccrc-history programme's coordinator, by the operator's ruling of 2026-10-20
 A one-wave follow-up to `claude-binary-lifecycle`'s CB1b (#878).
-**Status: wave 1 dispatched 2026-10-20** (run 697).
+**Status: wave 1's wave-done accepted 2026-10-20** (run 697, #967, at `a2b60a743`). Review run 703 is briefed and
+waits on the daily dispatch cap.
 
 **What this program is.** #878 (CB1b of claude-binary-lifecycle, merged as `4deebe5b3`) gave the session hook's deny
 arm a `build` class: a child session never installs, updates or selects a Claude Code build. Three security findings
@@ -20,7 +21,7 @@ the hook's deny arm is the guard that binds them. This programme closes the gaps
 
 | # | scope | PRs | state |
 |---|---|---|---|
-| 1 | The hook's `build` deny arm, in deny mode only: the CLI arm, build-path writes, the files the launcher, the roll and the guard trust, and the upstream id read from the children's deny file (plan Tasks 1-4); CLAUDE.md's SAFETY bullet on builds and the W1 plan's pointer sentences (Task 5) | — | run 697, dispatched 2026-10-20 |
+| 1 | The hook's `build` deny arm, in deny mode only: the CLI arm, build-path writes, the files the launcher, the roll and the guard trust, and the upstream id read from the children's deny file (plan Tasks 1-4); CLAUDE.md's SAFETY bullet on builds and the W1 plan's pointer sentences (Task 5) | #967 | run 697, wave-done accepted at `a2b60a743`; review 703 waits on the dispatch cap |
 
 ## Decisions & deviations
 
@@ -38,7 +39,32 @@ the hook's deny arm is the guard that binds them. This programme closes the gaps
 - **How the plan was checked.** The four verifiers probed the findings on `main` in fixture HOMEs. One plan checker
   built Tasks 1-4 into a scratch copy of the hook and drove every pin through it; the other measured which command
   forms the CLI runs as a subcommand. Their corrections are folded into the plan.
-- **Waiting on the operator.** The PR body asks both; neither is the PR's to answer.
+- **2026-10-20 — the deny file can no longer make jq fail (ruling 7221, the coordinator's).** The worker's own
+  review of the arm's regexes, before the PR opened, found a regression in the branch's Task 4 (`main` never read that
+  file): a deny file jq could not read made jq exit with no output, and the hook then allowed the verb, surface and
+  build arms. The deny file is one per box, so one child could have opened those arms for every child.
+  - The hook now reads the file once itself, with a byte cap, and passes its text to jq as an argument. A missing,
+    unreadable, non-regular, symlinked, over-cap or unparsable file leaves the arm as on `main`: the verb, surface and
+    build arms still deny, and only the upstream-id arms, which `main` never had, stop matching. One non-regular case
+    is not covered: opening it blocks before any read, so it stays a named residual, as the installer already
+    accepts.
+  - Two mutants show it, each red and then green: going back to letting jq read the file reds on an unreadable file,
+    and dropping the cap reds on an over-cap file.
+  - Every other finding that showed a claim in the plan or the PR body false is named as a residual, by its class,
+    in the plan's entries and in the PR body, and was not fixed in the wave; so are two that a later automated
+    security review of the pushed branch found. The cost note is one line in the PR body, and the low items are in
+    its Notes for review. Review run 703 decides which residuals must be fixed before merge, and the coordinator rules
+    on its report.
+- **2026-10-20 — wave-done accepted** at `a2b60a743`, PR #967.
+  - The PR run tests the merge with `main` and is green on every check, `single-definition` included.
+  - The branch's full run has one Linux red: D-5854's ratchet on `server/src/server.ts`, inherited from the branch's
+    base, whose count is over the ceiling where `main`'s is at it. By the coordinator's ruling the branch does not
+    merge `main` for it.
+  - Review run 703 is briefed and waits on the daily dispatch cap. It verifies that each arm denies what the plan's
+    entries say, that nothing a child controls turns the arm off where `main`'s would still deny, and that no
+    top-level session is denied anything `main` allows. For each residual it says whether a child's ordinary work
+    would plausibly produce it or only a deliberate evasion, and which must be fixed before merge.
+- **Waiting on the operator** (unchanged on 2026-10-20). The PR body asks both; neither is the PR's to answer.
   1. Top-level sessions. Spec invariant 11 says these acts are "denied to sessions and children", but the routing
      spec's children-only ruling (`2026-10-17-coordinator-first-routing-design.md` §6.6, "Top-level sessions keep
      today's settings") leaves a top-level session undenied. Either the `build` deny extends to top-level sessions, or
@@ -57,12 +83,14 @@ the hook's deny arm is the guard that binds them. This programme closes the gaps
 - **Fixture HOMEs only.** Never run claude, an installer, `ccd` or the hook against the live HOME, and never fetch an
   installer.
 - **Lines another PR owns.** #722, the public-tree scrub, rewrites one line of the deny test and four comment lines of
-  the hook. The wave edits none of them, and whichever PR lands second merges main.
+  the hook. The wave edits none of them. #722 landed first, on 2026-10-20. The coordinator measured the branch's merge
+  with `main` at `780c8126c`, and with #722's branch, as clean.
 - **No line citations** in code or test comments (`citations.test.ts`): cite symbols.
 
 ## Next-wave brief
 
 Wave 1 was dispatched on 2026-10-20 as run 697. Its brief named the plan (committed unchanged as the branch's first
 commit), the verifiers' and checkers' evidence, the claims it edits under, the four numbers, the gates and the PR's
-title. No second wave is planned. An operator answer to either question above that widens the deny opens one, with its
-own plan.
+title. Its wave-done was accepted at `a2b60a743`. Next is review run 703, when the dispatch cap allows; its brief
+holds the plan and ruling 7221 as the bar. No second wave is planned. An operator answer to either question above
+that widens the deny opens one, with its own plan.

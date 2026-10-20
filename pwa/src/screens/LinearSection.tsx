@@ -1,6 +1,7 @@
 // The Settings screen's Linear section (named workspaces S4b, design 2026-10-20 §5.1): connect a personal API key
 // so a pasted ticket shows its real title, see what the box last found out about it, check it again, disconnect.
-// Mounted beside the Box token card; it has its own read of GET /api/linear/connection, like Stall watch.
+// Mounted on the Security page beside the Box token card; its read of GET /api/linear/connection is the Settings
+// frame's (`useLinearConnection`, handed down as `poll`), like Stall watch's, so this file reads nothing itself.
 //
 // Rules this file keeps, each pinned in linear-section.test.tsx:
 //   * THE KEY NEVER LIVES HERE LONGER THAN A TAP. The field is `type=password`, its value is held in this one
@@ -20,8 +21,13 @@ import { Button, Skeleton, TextInput, elapsedWords } from '@ccrc/ui';
 import { isLinearKeyShape, type LinearConnectionView } from '../../../shared/linear';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
+import type { LinearPoll } from '../fleet/useLinearConnection';
 import { ResultLine, useResultLine } from '../fleet/settingsText';
 import { ApiError, api, apiErrorText } from '../lib/api';
+
+/** The key field's stack and the action row: named here, not copied from the passphrase step's literals. */
+const FIELD_STACK = 'flex flex-col gap-2';
+const ACTION_ROW = 'flex flex-wrap gap-2';
 
 /** The hook is told the session's step-up is fresh until an act proves otherwise: see the file's third rule. */
 const ASSUME_FRESH = Infinity;
@@ -107,25 +113,16 @@ export function linearControls(v: LinearConnectionView): { field: 'connect' | 'r
   }
 }
 
-export function LinearSection({ stepUpDeps }: { stepUpDeps?: StepUpDeps } = {}): ReactNode {
+export function LinearSection({ poll, stepUpDeps }: { poll: LinearPoll; stepUpDeps?: StepUpDeps }): ReactNode {
   const titleId = useId();
   const fieldId = useId();
-  const [view, setView] = useState<LinearConnectionView | 'unreadable' | null>(null);
+  // The last GOOD view; a failed read with none to show is the `unread` sentence.
+  const view = poll.view;
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const result = useResultLine();
   const stepUp = useStepUp(ASSUME_FRESH, stepUpDeps);
-
-  // The section's own read, once. A failed read is its own sentence, never an empty section.
-  useEffect(() => {
-    let live = true;
-    void api.linearConnection().then(
-      (v) => { if (live) setView(v); },
-      () => { if (live) setView('unreadable'); },
-    );
-    return () => { live = false; };
-  }, []);
 
   // "checked 3m ago" ages on screen.
   useEffect(() => {
@@ -150,9 +147,9 @@ export function LinearSection({ stepUpDeps }: { stepUpDeps?: StepUpDeps } = {}):
       if (outcome === 'step-up') return;
       if (answer === undefined || answer === 'unreadable') {
         // The call completed and its body could not be read: it may have landed, so re-read the truth.
-        setView(await api.linearConnection().catch(() => 'unreadable' as const));
+        poll.reload();
       } else {
-        setView(answer);
+        poll.settle(answer);
         if (done !== null) result.say(done);
       }
       if (clearKey) setKey('');
@@ -175,9 +172,9 @@ export function LinearSection({ stepUpDeps }: { stepUpDeps?: StepUpDeps } = {}):
   };
 
   let body: ReactNode;
-  if (view === null) {
+  if (view === null && poll.failure === null) {
     body = <Skeleton lines={2} />;
-  } else if (view === 'unreadable') {
+  } else if (view === null) {
     body = <p className="settings-note" data-linear="unread">{LINEAR_TEXT.unread}</p>;
   } else {
     const controls = linearControls(view);
@@ -185,7 +182,7 @@ export function LinearSection({ stepUpDeps }: { stepUpDeps?: StepUpDeps } = {}):
       <>
         <p className="settings-note" data-linear="state" data-linear-state={view.state}>{linearStateText(view, now)}</p>
         {controls.field !== null && (
-          <form className="flex flex-col gap-2" onSubmit={submitKey}>
+          <form className={FIELD_STACK} onSubmit={submitKey}>
             <label htmlFor={fieldId} className="settings-note">{LINEAR_TEXT.keyLabel}</label>
             <TextInput
               id={fieldId}
@@ -202,7 +199,7 @@ export function LinearSection({ stepUpDeps }: { stepUpDeps?: StepUpDeps } = {}):
           </form>
         )}
         {(controls.check || controls.disconnect) && (
-          <div className="flex flex-wrap gap-2">
+          <div className={ACTION_ROW}>
             {controls.check && (
               <Button variant="ghost" className="settings-check" disabled={busy}
                 onClick={() => void perform(() => api.checkLinear(), null, false)}>
@@ -223,7 +220,7 @@ export function LinearSection({ stepUpDeps }: { stepUpDeps?: StepUpDeps } = {}):
 
   return (
     <section className="settings-section" aria-labelledby={titleId} data-linear="section">
-      <h2 id={titleId} className="settings-section-title">{LINEAR_TEXT.title}</h2>
+      <h3 id={titleId} className="settings-section-title">{LINEAR_TEXT.title}</h3>
       <p className="settings-note">{LINEAR_TEXT.purpose}</p>
       {body}
       <ConfirmItsYou stepUp={stepUp} subject={LINEAR_TEXT.stepUpSubject} />

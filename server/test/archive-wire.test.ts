@@ -8,8 +8,8 @@ import {
 
 const base: FleetSession = {
   hibernatedAt: null,
-  id: 'demo-amber', wrapper: 'claude', home: '/home/rc', project: 'demo', workdir: '/data/projects/demo',
-  workspace: 'amber', name: null, status: 'idle', statusUpdatedAt: null, limits: null,
+  id: 'demo-amber', wrapper: 'claude', home: '/home/u', project: 'demo', workdir: '/data/projects/demo',
+  workspace: 'amber', name: null, title: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, background: null, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,

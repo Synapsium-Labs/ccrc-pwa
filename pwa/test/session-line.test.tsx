@@ -363,7 +363,7 @@ describe('the selected row', () => {
 // sentence as its title.
 describe('away from home', () => {
   it('says where it runs and where it is pinned when the session is not on its pinned account', () => {
-    header(s({ wrapper: 'claude2', home: 'claude' }), { roster: TEST_ROSTER });
+    header(s({ wrapper: 'claude9', home: 'claude' }), { roster: TEST_ROSTER });
     expect(screen.getByText('running on team·alt, pinned to team·max')).toBeInTheDocument();
   });
 
@@ -373,7 +373,7 @@ describe('away from home', () => {
   });
 
   it('never says so for a dead session — it is not running anywhere', () => {
-    header(s({ wrapper: 'claude2', home: 'claude', status: 'dead' }), { roster: TEST_ROSTER });
+    header(s({ wrapper: 'claude9', home: 'claude', status: 'dead' }), { roster: TEST_ROSTER });
     expect(screen.queryByText(/pinned to/)).not.toBeInTheDocument();
   });
 });
@@ -627,12 +627,12 @@ describe('held chip', () => {
   // D-5545: a hold no run explains reads `held` on the card — the reason is bookkeeping text, verbatim in the
   // cell's title and in the header's details.
   it('shows `held` on the card and the reason verbatim in the header', () => {
-    render(<SessionLine session={s({ held: 'program:agent-evals wave:2/4' })}
+    render(<SessionLine session={s({ held: 'program:prog-j wave:2/4' })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(document.querySelector('[data-held]')).toHaveTextContent(/^held$/);
     cleanup();
-    header(s({ held: 'program:agent-evals wave:2/4' }));
-    expect(screen.getByText('held: program:agent-evals wave:2/4')).toBeInTheDocument();
+    header(s({ held: 'program:prog-j wave:2/4' }));
+    expect(screen.getByText('held: program:prog-j wave:2/4')).toBeInTheDocument();
   });
 
   it('shows no chip when unheld — null is the wire default, not a state to render', () => {
@@ -1401,55 +1401,55 @@ describe('the off-pool marker', () => {
   const SENTENCE = 'running on team·alt (pool pool-b), project is pool pool-a';
 
   it('shows one `off-pool` marker, the sentence in its title, when both pools are known and differ', () => {
-    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
-                        roster={pooled({ claude2: 'pool-b' })}
+    render(<SessionLine session={s({ wrapper: 'claude9', home: 'claude9' })}
+                        roster={pooled({ claude9: 'pool-b' })}
                         projectPool={{ state: 'tagged', name: 'pool-a' }}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getAllByText('off-pool')).toHaveLength(1);
     expect(screen.getByText('off-pool')).toHaveAttribute('title', SENTENCE);
     cleanup();
-    header(s({ wrapper: 'claude2', home: 'claude2' }), {
-      roster: pooled({ claude2: 'pool-b' }), projectPool: { state: 'tagged', name: 'pool-a' },
+    header(s({ wrapper: 'claude9', home: 'claude9' }), {
+      roster: pooled({ claude9: 'pool-b' }), projectPool: { state: 'tagged', name: 'pool-a' },
     });
     expect(screen.getByText('off-pool')).toHaveAttribute('title', SENTENCE);
   });
 
   it('says nothing when only one side is known — an untagged account is not off-pool', () => {
     const { rerender } = render(
-      <SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
+      <SessionLine session={s({ wrapper: 'claude9', home: 'claude9' })}
                    roster={pooled({})} projectPool={{ state: 'tagged', name: 'pool-a' }}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
     // …and the mirror: the account is tagged, the project is not.
-    rerender(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
-                          roster={pooled({ claude2: 'pool-b' })} projectPool={{ state: 'untagged' }}
+    rerender(<SessionLine session={s({ wrapper: 'claude9', home: 'claude9' })}
+                          roster={pooled({ claude9: 'pool-b' })} projectPool={{ state: 'untagged' }}
                           onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
   });
 
   it('says nothing when the names agree, and nothing at all with no projectPool', () => {
     const { rerender } = render(
-      <SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
-                   roster={pooled({ claude2: 'pool-a' })} projectPool={{ state: 'tagged', name: 'pool-a' }}
+      <SessionLine session={s({ wrapper: 'claude9', home: 'claude9' })}
+                   roster={pooled({ claude9: 'pool-a' })} projectPool={{ state: 'tagged', name: 'pool-a' }}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
-    rerender(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
-                          roster={pooled({ claude2: 'pool-b' })}
+    rerender(<SessionLine session={s({ wrapper: 'claude9', home: 'claude9' })}
+                          roster={pooled({ claude9: 'pool-b' })}
                           onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
   });
 
   it('is silent on a dead row', () => {
-    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2', status: 'dead', bucket: 'dead' })}
-                        roster={pooled({ claude2: 'pool-b' })}
+    render(<SessionLine session={s({ wrapper: 'claude9', home: 'claude9', status: 'dead', bucket: 'dead' })}
+                        roster={pooled({ claude9: 'pool-b' })}
                         projectPool={{ state: 'tagged', name: 'pool-a' }}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
   });
 
   it('outranks the away sentence in the header: off-pool already names the account it runs on', () => {
-    header(s({ wrapper: 'claude2', home: 'claude' }), {
-      roster: pooled({ claude2: 'pool-b' }), projectPool: { state: 'tagged', name: 'pool-a' },
+    header(s({ wrapper: 'claude9', home: 'claude' }), {
+      roster: pooled({ claude9: 'pool-b' }), projectPool: { state: 'tagged', name: 'pool-a' },
     });
     expect(screen.getByText('off-pool')).toHaveAttribute('title', SENTENCE);
     expect(screen.queryByText(/pinned to/)).not.toBeInTheDocument();

@@ -1,4 +1,5 @@
-import { configDirFor, type CcrcConfig } from './config.js';
+import type { CcrcConfig } from './config.js';
+import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { readRegistryMeasured, readSessionRecord } from './registry.js';
@@ -342,11 +343,11 @@ function readReleased(coord: CoordStore | undefined, sessionIds: readonly string
  * are generated from — one rule, two languages.
  *
  * The ordering is the entire point. Its predecessor was a hand-typed, unordered
- * prefix array that did not even MENTION `claude-dev0`, under which
- * `claude-dev0-quiet-basin` fell through to the bare `claude-` branch and came
+ * prefix array that did not even MENTION `claude-lab0`, under which
+ * `claude-lab0-quiet-basin` fell through to the bare `claude-` branch and came
  * back `claude` — a live session attributed to the wrong account, which is not
- * hypothetical: `claude-dev0-*` ids exist in the registry today. Get the order
- * wrong here (or in ccd's own `case`) and a `claude-dev0` session is silently
+ * hypothetical: `claude-lab0-*` ids exist in the registry today. Get the order
+ * wrong here (or in ccd's own `case`) and a `claude-lab0` session is silently
  * re-attributed to `claude`, reproducing the old bug for real. `fleet.test.ts`
  * pins both the real ids and a synthetic prefix-collision roster.
  *
@@ -647,7 +648,7 @@ export async function assembleFleet(
         if (read.ok) {
           const live = read.state;
           status = liveSessionStatus(live.status);
-          // A derived name is Claude Code's session handle (`openclawhetzner-42`
+          // A derived name is Claude Code's session handle (`project-c-42`
           // — cwd basename plus a counter), never a description of the work, so
           // it is dropped HERE rather than shipped for the PWA to re-judge.
           // `name` on the wire therefore means "a name worth displaying", and
@@ -760,7 +761,7 @@ export async function assembleFleet(
     const lifecycleInput: LifecycleInput = lifecycleInputFor(r, alive, now * 1000);
     const session: FleetSession = {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(cfg.roster, r.id),
-      project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,
+      project: r.project, workdir: r.workdir, workspace: r.workspace, name, title: r.title, status, statusUpdatedAt,
       // Task 3: which CARD this row renders on. ONE port, SESSION-keyed
       // (D-2921) — the walk starts at this row's own id and every later hop
       // asks the same question of the coordinator it just reached. Built ONCE

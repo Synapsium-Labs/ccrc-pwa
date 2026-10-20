@@ -278,7 +278,7 @@ export function workingSet(tokens, index, cwd, cap = WORKSET_CAP) {
  *  run: 0.13–0.18 s at 9 MB, measured. */
 /** A graph.json larger than this is not parsed: node's peak RSS runs about
  *  five times the file (measured 249 MB at 51 MB), on a box that runs ~20
- *  sessions under a memory.high cgroup. The 70 MB MekWarLive graph passes. */
+ *  sessions under a memory.high cgroup. The 70 MB project-f graph passes. */
 export const GRAPH_MAX_BYTES = 96 * 1024 * 1024;
 
 /** Reads no more than `maxBytes + 1` from an already-open graph descriptor.

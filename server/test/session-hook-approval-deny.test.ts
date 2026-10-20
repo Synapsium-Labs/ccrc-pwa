@@ -263,7 +263,7 @@ describe('the build deny: a child never writes a Claude Code build or the launch
     'mv build/claude "$HOME/.local/share/claude/versions/2.1.302"', 'echo x > /home/u/.local/bin/claude',
     'rm -rf ~/.local/share/claude/versions', 'cd /tmp && cp x ~/.local/bin/claude',
     '~/.local/bin/claude install 2.1.302', '/home/u/.local/bin/claude update', 'claude update', 'claude install stable',
-    'claude-corp update', 'claude2 install 2.1.302', './claude install latest',
+    'claude-acme update', 'claude9 install 2.1.302', './claude install latest',
     "c''laude update", 'c\\laude install x', '"claude" "update"', 'bash -c "claude update"', 'true; claude update',
     '$(which claude) update', '"$(command -v claude)" install 2.1.302', 'P=claude; $P update',
     '~/.local/bin/upstream-a update', '/home/u/.local/bin/upstream-a install 2.1.302',

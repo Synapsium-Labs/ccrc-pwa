@@ -228,7 +228,7 @@ describe('Settings\' Roll back and Ack sit on the card ground, not the dead bann
 // update plane's one stale sentence, rather than spelling either itself. Read from source: the screen's own suite is
 // another run's to edit, and behaviour is pinned there already (its gated fixtures and T7_STALE).
 describe('SettingsScreen asks the shared reads (wave 19, R24(d))', () => {
-  const settingsSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'SettingsScreen.tsx'), 'utf8');
+  const settingsSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'settings', 'UpdatesSection.tsx'), 'utf8');
   it('autoGateMissing asks carriesUpdateGate, keeping its Array.isArray guard', () => {
     expect(settingsSrc).toContain('nodes.filter((n) => !(Array.isArray(n.caps) && carriesUpdateGate(n.caps)))');
     expect(settingsSrc).not.toMatch(/caps\.includes\(UPDATE_GATE_CAP\)/);

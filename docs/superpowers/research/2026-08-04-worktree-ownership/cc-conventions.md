@@ -117,7 +117,7 @@ Research findings for external cleanup tool (ccd) — collected from documentati
 
 **OBSERVED + DOCUMENTED**:
 
-- Found 31-32 agent-<hex> worktrees in `/data/projects/expoAI-assistant/.claude/worktrees/`
+- Found 31-32 agent-<hex> worktrees in `/data/projects/project-h/.claude/worktrees/`
 - Total size: 20 GB (older data, likely smaller now)
 - Individual worktrees: 1-1.3 GB each
 
@@ -249,11 +249,11 @@ Example from local filesystem:
 
 Example output:
 ```
-/srv/projects/expoAI-assistant
+/srv/projects/project-h
 HEAD 54fac4cf440138d091ca11f980948e1f473a11f2
 branch refs/heads/fix/canary-cards-nondeterminism
 
-/srv/projects/expoAI-assistant/.claude/worktrees/agent-a060b944c2ef05931
+/srv/projects/project-h/.claude/worktrees/agent-a060b944c2ef05931
 HEAD b46e76293908895018d109decaf64a1e68164173
 branch refs/heads/fix/cha-150-persona-greeting-thinking-disabled
 ```

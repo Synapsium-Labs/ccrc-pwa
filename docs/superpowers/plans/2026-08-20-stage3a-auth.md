@@ -114,7 +114,7 @@
 
 **Files:** `server/src/config.ts` (`CCRC_AUTH`, `CCRC_RP_ID`, `CCRC_ORIGIN`, `cookieSecure`), `deploy/ccrc.env.example`, the VM-gate runbook (the auth step), `README.md`, the plan ledger.
 
-- [x] Config keys through `loadConfig` (the `||`-not-`??` discipline; `cookieSecure` defaults on, off only for an explicit localhost-http dev flag); `ccrc.env.example` documents all four with the rpId non-portability warning. The runbook's install flow gains: set `CCRC_AUTH=on`, `ccrc passwd`, restart, log in — and the honest note that 3a's proof runs on localhost (passkeys enrolled there don't carry to 3b's name; the mechanism is what's proven). README's auth section. Ledger: D-entries; the config-flag-default-off deploy note; the pending items (Caddy/`Secure`-behind-real-TLS is 3b; per-user identity is the team edition).
+- [x] Config keys through `loadConfig` (the `||`-not-`??` discipline; `cookieSecure` defaults on, off only for an explicit localhost-http dev flag); `ccrc.env.example` documents all four with the rpId non-portability warning. The runbook's install flow gains: set `CCRC_AUTH=on`, `ccrc passwd`, restart, log in — and the honest note that 3a's proof runs on localhost (passkeys enrolled there don't carry to 3b's name; the mechanism is what's proven). README's auth section. Ledger: D-entries; the config-flag-default-off deploy note; the pending items (Caddy/`Secure`-behind-real-TLS is 3b; per-user identity is a later product decision).
 - [x] Full three suites; commit `docs(auth): the gate is documented, flagged off, and ready for the operator to arm`.
 
 **Amended by the Task 5 controller ruling:** the config keys were introduced by Tasks 5 and 8 (there is no gating a route on a key that does not exist); this task DOCUMENTS them. It also carries one CODE fix from Task 9 — **D-144**, the boot refusal's journal leak.
@@ -425,8 +425,8 @@ rewrites the file from memory, resurrecting the row.
 
 - **Passkeys are origin-bound; 3a's proof is localhost-scoped** — enrolled-there credentials don't carry to 3b's DuckDNS name; per-credential rpId binding makes that a loud failure, not a silent one. Stated, not engineered around.
 - **`Secure` behind real TLS + `trustProxy`** — 3a drives `Secure` from config; the `trustProxy`/`X-Forwarded-Proto` decision lands properly in 3b when Caddy terminates TLS.
-- **Per-user identity** — the single-identity session layer is deliberately the team-edition seam (spec §6); this slice ships one operator.
-- **Attestation verification** (packed/tpm/etc.) — out of scope; `attestation:'none'` is what keeps the crypto library-free; the team edition revisits it.
+- **Per-user identity** — the single-identity session layer is deliberately a seam held open for a later decision (spec §6); this slice ships one operator.
+- **Attestation verification** (packed/tpm/etc.) — out of scope; `attestation:'none'` is what keeps the crypto library-free; a later decision revisits it.
 
 **Minors found DURING the stage, recorded rather than fixed.** Consolidated here
 from each task's own progress notes at close-out, because once the plan is the

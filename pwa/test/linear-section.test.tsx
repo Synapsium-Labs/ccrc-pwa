@@ -1,11 +1,13 @@
 // Settings → Linear (named workspaces S4b, design 2026-10-20 §5.1). The section is driven against a fake BOX (a
 // fetch stub keyed by method and path), not against stubbed `api` methods, so the wire readers and the step-up
 // hook run for real. Tests use `fireEvent`, not `userEvent` (the plan's rule for this feature).
+import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { LinearConnectionView } from '../../shared/linear';
 import { LinearSection, LINEAR_TEXT, linearControls, linearStateText } from '../src/screens/LinearSection';
-import { SettingsScreen } from '../src/screens/SettingsScreen';
+import { useLinearConnection } from '../src/fleet/useLinearConnection';
+import { renderSettings } from './settingsHost';
 import { readLinearConnection } from '../src/lib/api';
 
 const KEY = 'lin_api_fixture_key_one_0001';
@@ -25,7 +27,8 @@ interface Sent { method: string; path: string; body: unknown }
 interface Box {
   sent: Sent[];
   /** What each linear route answers next; mutate to script a scenario. */
-  get: () => Response; put: () => Response; check: () => Response; del: () => Response;
+  get: () => Response | Promise<Response>; put: () => Response | Promise<Response>;
+  check: () => Response | Promise<Response>; del: () => Response | Promise<Response>;
   /** The passphrase arm's start answer: no enrolled passkey, so the step is the passphrase field. */
   paths: () => string[];
 }
@@ -60,8 +63,13 @@ const install = (init: Partial<Pick<Box, 'get' | 'put' | 'check' | 'del'>> = {})
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
+/** The section over the frame's read, as `SettingsDataProvider` hands it down. */
+function Harness(): ReactNode {
+  return <LinearSection poll={useLinearConnection()} />;
+}
+
 const mount = async (): Promise<void> => {
-  render(<LinearSection />);
+  render(<Harness />);
   await waitFor(() => expect(document.querySelector('[data-linear="state"], [data-linear="unread"]')).not.toBeNull());
 };
 const field = (): HTMLInputElement => screen.getByLabelText(LINEAR_TEXT.keyLabel);
@@ -72,7 +80,7 @@ const stateText = (): string => document.querySelector('[data-linear="state"]')?
 describe('the section, state by state (§5.1)', () => {
   it('shows a loading block until the box answers', () => {
     install({ get: () => new Response(new ReadableStream()) });
-    render(<LinearSection />);
+    render(<Harness />);
     expect(screen.getByRole('heading', { name: 'Linear' })).toBeTruthy();
     expect(document.querySelector('[data-linear="state"]')).toBeNull();
   });
@@ -154,10 +162,21 @@ describe('the section, state by state (§5.1)', () => {
     expect(JSON.stringify(text)).toContain('this key');
   });
 
-  it('is on the Settings screen', async () => {
+  it('is on the Security page, a level-3 card beside the box token, read once by the frame', async () => {
     install();
-    render(<SettingsScreen />);
-    expect(await screen.findByRole('heading', { name: 'Linear' })).toBeTruthy();
+    renderSettings('security');
+    expect(await screen.findByRole('heading', { level: 3, name: 'Linear' })).toBeTruthy();
+    await waitFor(() => expect(stateText()).toBe(LINEAR_TEXT.notConnected));
+    expect(box.paths().filter((p) => p === 'GET /api/linear/connection')).toHaveLength(1);
+  });
+
+  it('is on no other page', async () => {
+    install();
+    for (const id of ['updates', 'appearance', 'notifications', 'automation'] as const) {
+      renderSettings(id);
+      expect(screen.queryByRole('heading', { name: 'Linear' }), id).toBeNull();
+      cleanup();
+    }
   });
 });
 
@@ -255,6 +274,40 @@ describe('Connect', () => {
       delete (document as unknown as Record<string, unknown>)['visibilityState'];
       if (real) Object.defineProperty(Document.prototype, 'visibilityState', real);
     }
+  });
+});
+
+describe('reads and writes racing', () => {
+  it('a read issued before a write\'s answer cannot put the old state back', async () => {
+    let releaseRead: (r: Response) => void = () => undefined;
+    let first = true;
+    install({
+      get: () => {
+        if (first) { first = false; return ok(NOT_CONNECTED); }
+        return new Promise<Response>((res) => { releaseRead = res; });
+      },
+    });
+    await mount();
+    // The page comes back to the front: a read starts and is held.
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    await waitFor(() => expect(box.paths().filter((p) => p === 'GET /api/linear/connection')).toHaveLength(2));
+    // A Connect lands while it is in flight.
+    type(KEY);
+    fireEvent.click(button('Connect'));
+    await waitFor(() => expect(stateText()).toContain('Connected to team-a'));
+    // The held read now answers with what it saw BEFORE the write.
+    await act(async () => { releaseRead(ok(NOT_CONNECTED)); await Promise.resolve(); });
+    expect(stateText()).toContain('Connected to team-a');
+  });
+
+  it('a page returning to the front re-reads, so a rejection marked meanwhile shows', async () => {
+    let state: LinearConnectionView = CONNECTED;
+    install({ get: () => ok(state) });
+    await mount();
+    expect(stateText()).toContain('Connected to team-a');
+    state = REJECTED;
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    await waitFor(() => expect(stateText()).toBe(LINEAR_TEXT.rejected));
   });
 });
 

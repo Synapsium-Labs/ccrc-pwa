@@ -37,7 +37,7 @@ const toolchainCollisionRoster = (id: string, kind: ToolchainExecKind) => ({
 });
 
 /** A minimal valid two-account roster — one `upstream` `claude`, one
- *  `generated` `claude2` whose `exec` carries `secretsFile` when it is not
+ *  `generated` `claude9` whose `exec` carries `secretsFile` when it is not
  *  `undefined`. Used by the `exec.secretsFile` gate cases below. */
 const rosterWithSecrets = (secretsFile: string | undefined) => ({
   version: 1,
@@ -47,7 +47,7 @@ const rosterWithSecrets = (secretsFile: string | undefined) => ({
       exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
     },
     {
-      id: 'claude2', label: 'claude2', configDirSuffix: '.claude2',
+      id: 'claude9', label: 'claude9', configDirSuffix: '.claude9',
       exec: secretsFile !== undefined ? { kind: 'generated', secretsFile } : { kind: 'generated' },
       homeAble: true, hue: 'violet', telemetry: 'anthropic',
     },
@@ -494,17 +494,17 @@ describe('exec.secretsFile is a path, not merely a string', () => {
   }
 
   it('accepts the shape every real account uses', () => {
-    const r = parseRoster(rosterWithSecrets('.cc-secrets/claude2-oauth.env'));
-    const acct = r.accounts.find((a) => a.id === 'claude2');
+    const r = parseRoster(rosterWithSecrets('.cc-secrets/claude9-oauth.env'));
+    const acct = r.accounts.find((a) => a.id === 'claude9');
     // `provider` is now on every generated exec — defaulted to `anthropic` for a
     // roster that predates the field, which is what this fixture is.
     expect(acct?.exec).toEqual(
-      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude2-oauth.env' });
+      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude9-oauth.env' });
   });
 
   it('still accepts a generated account with no secretsFile at all', () => {
     const r = parseRoster(rosterWithSecrets(undefined));
-    expect(r.accounts.find((a) => a.id === 'claude2')?.exec)
+    expect(r.accounts.find((a) => a.id === 'claude9')?.exec)
       .toEqual({ kind: 'generated', provider: 'anthropic' });
   });
 });

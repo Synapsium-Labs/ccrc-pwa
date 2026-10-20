@@ -38,25 +38,24 @@ import {
 export const HANDOFF_SHA = /^[0-9a-f]{40}$/;
 
 /** `$REG/mail-disabled` — the SAME kill-switch `watch.ts`'s `sweepMail`
- *  already gates on (its own `MAIL_DISABLED_MARKER`), duplicated as a literal
- *  there rather than imported (fix, review finding 17): dispatch's own
- *  registry listing already covers `COORDINATOR_PAUSE_MARKER` below, and a
- *  second literal is lower-risk than an import into a file `watch.ts` itself
- *  does not depend on. Before this fix, dispatch consulted ONLY the
+ *  gates on; both reach its one definition, its `shared/switches.ts` row
+ *  (D-5855). Dispatch reads it (fix, review finding 17) from its own registry
+ *  listing, which already covers `COORDINATOR_PAUSE_MARKER` below. Before
+ *  this fix, dispatch consulted ONLY the
  *  coordinator-pause marker: an operator who `touch`ed this one to silence
  *  injection mid-debugging still got `ccd ensure` + an injected `/clear`
  *  wiping the worker's context, with the wave brief queued but held by the
  *  very kill-switch the operator raised — the worker sat in an EMPTY,
  *  `/clear`ed context for as long as the marker stood, invisible to anything
  *  short of reading the pane. */
-export const MAIL_DISABLED_MARKER = 'mail-disabled';
+export { MAIL_DISABLED_MARKER } from '../../../shared/switches.js';
 
 /** `$REG/coordinator-paused` — spec:199-205: "no verb, no route, no way for
  *  the coordinator to unpause itself." Deliberately not `-disabled`-suffixed
  *  like `mail-disabled`: `limits.ts:134-142` filters `<name>-disabled`
  *  markers out of `/api/accounts` as candidate wrapper names, and this is not
  *  a lane kill-switch — it must not read as one there. */
-export const COORDINATOR_PAUSE_MARKER = 'coordinator-paused';
+export { COORDINATOR_PAUSE_MARKER } from '../../../shared/switches.js';
 
 /** `$REG/reclaim-paused` — the fleet-wide kill-switch on the AUTOMATIC
  *  reclamation of child workspaces (child-reclamation spec §5.8). Written only
@@ -71,7 +70,7 @@ export const COORDINATOR_PAUSE_MARKER = 'coordinator-paused';
  *  `ws-reclaim` itself on the box, which refuses `paused`. Not
  *  `-disabled`-suffixed, for `COORDINATOR_PAUSE_MARKER`'s reason: `limits.ts`
  *  reads `<name>-disabled` as a wrapper's lane switch. */
-export const RECLAIM_PAUSE_MARKER = 'reclaim-paused';
+export { RECLAIM_PAUSE_MARKER } from '../../../shared/switches.js';
 
 /**
  * `run_events.detail` for a dispatch whose post-resume `/clear` was refused

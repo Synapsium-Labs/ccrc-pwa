@@ -927,9 +927,9 @@ describe('the account roster — runtime data, no compile-time copies', () => {
   // two of them anywhere under the roots scores a hit exactly as it did before.
   //
   // Hand-typing the names HERE instead would make the scanner that exists to
-  // prevent hand-typed copies one itself: a 6th account (say `claude-dev1`)
+  // prevent hand-typed copies one itself: a 6th account (say `claude-lab1`)
   // added to the production roster and then restated as
-  // `['claude-dev1', 'claude2']` under some root must score a hit, and a
+  // `['claude-lab1', 'claude9']` under some root must score a hit, and a
   // scanner frozen at five names would stay green while that drift reopened.
   const WRAPPER_NAMES = DEFAULT_TEST_ROSTER.accounts.map((a) => a.id);
 
@@ -1830,7 +1830,7 @@ describe('the model files, and who reads each one', () => {
   });
 
   it('the ownership whitelist is read by exactly one thing in this repo', () => {
-    // `handoff-proxy` and `claude-glm` read it too — in the monorepo, which
+    // `handoff-proxy` and `claude-alt1` read it too — in the monorepo, which
     // this scan cannot see. Within this repo it must stay one reader, because
     // a second one would be a second opinion about which providers may serve.
     expect(spell('providers-whitelist.json')).toEqual(['deploy/models-op.mjs']);
@@ -2290,25 +2290,24 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
   });
 
   it("'coordinator-paused' is a literal in exactly one source file", () => {
-    // `COORDINATOR_PAUSE_MARKER` (`server/src/coord/rundefs.ts`) is the ONE
-    // definition; `dispatch.ts` and `watch.ts` both import it. A second literal
-    // is how the pause banner and the dispatch gate would come to disagree
-    // about what "paused" means — one of them reading a name the other never
-    // writes.
+    // `COORDINATOR_PAUSE_MARKER` (its `shared/switches.ts` row, D-5855,
+    // re-exported by `server/src/coord/rundefs.ts`) is the ONE definition;
+    // `dispatch.ts` and `watch.ts` both import it. A second literal is how the
+    // pause banner and the dispatch gate would come to disagree about what
+    // "paused" means — one of them reading a name the other never writes.
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'coordinator-paused'")).map(rel);
-    expect(holders).toEqual(['server/src/coord/rundefs.ts']);
+    expect(holders).toEqual(['shared/switches.ts']);
   });
 
-  it("'mail-disabled' is deliberately NOT held to one literal, and this says so BY NAME", () => {
-    // THE EXCLUSION IS WRITTEN DOWN, not a scanner quietly narrowed — the
-    // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. `watch.ts:194` holds
-    // a second literal ON PURPOSE (`sweepMail` uses it; importing the
-    // `rundefs.ts` copy into that scope as well would be a redeclaration,
-    // TS2451), and `rundefs.ts`'s own docstring carries the argument for the
-    // split. So the expected shape here is a NAMED LIST rather than one file —
-    // and any new holder still fails.
+  it("'mail-disabled' is held by a NAMED list: one marker literal, the rest other words that spell it", () => {
+    // THE LIST IS WRITTEN DOWN, not a scanner quietly narrowed — the
+    // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. The marker literal is
+    // defined ONCE, in its `shared/switches.ts` row (D-5855); `watch.ts`'s
+    // module-local copy is gone (it held a second literal on purpose until
+    // then), and `rundefs.ts` re-exports the row. Any new holder still
+    // fails.
     //
-    // Two of the five are refusal codes, not marker literals: `'mail-disabled'` is also
+    // Two of the four are refusal codes, not marker literals: `'mail-disabled'` is also
     // a `RunRefuseCode` member, so `shared/api.ts` (the vocabulary) and
     // `coord/dispatch.ts` (the refusal that uses it) spell the same characters
     // for a different reason. Listing them here is the honest shape — a scan
@@ -2316,9 +2315,9 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'mail-disabled'")).map(rel).sort();
     expect(holders).toEqual([
       'server/src/coord/dispatch.ts',   // the refusal CODE
-      'server/src/coord/rundefs.ts', 'server/src/coord/stall.ts', // the marker literal (definition); stall.ts: the hold named for the marker it honours
-      'server/src/watch.ts',            // the marker literal (module-local, on purpose)
+      'server/src/coord/stall.ts',      // the hold named for the marker it honours
       'shared/api.ts',                  // the refusal-code vocabulary
+      'shared/switches.ts',             // the marker literal (its one definition, D-5855)
     ]);
   });
 
@@ -2339,12 +2338,13 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
 // — Child-reclamation wave 4: the reclaim switch's file name —
 describe("child-reclamation wave 4 — one 'reclaim-paused' literal", () => {
   it("'reclaim-paused' is a literal in exactly one source file", () => {
-    // `RECLAIM_PAUSE_MARKER` (`server/src/coord/rundefs.ts`) is the ONE
-    // definition. A second literal is how the banner and the sweep would come
-    // to disagree about what "paused" means — one reading a name the other
-    // never checks, with the deleting side the one that is wrong.
+    // `RECLAIM_PAUSE_MARKER` (its `shared/switches.ts` row, D-5855; re-exported
+    // by `server/src/coord/rundefs.ts`) is the ONE definition. A second literal
+    // is how the banner and the sweep would come to disagree about what
+    // "paused" means — one reading a name the other never checks, with the
+    // deleting side the one that is wrong.
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'reclaim-paused'")).map(rel);
-    expect(holders).toEqual(['server/src/coord/rundefs.ts']);
+    expect(holders).toEqual(['shared/switches.ts']);
   });
 
   it('watch.ts reaches the reclaim marker through the shared constant, never a copy', () => {
@@ -4287,7 +4287,7 @@ describe('worker stall watch: the four operator-switch markers have no writer in
   // code lines, not a quoted literal. KNOWN WIDTH: a name assembled from pieces
   // (`'stall-watch-' + w`) is not seen; the bar is the ordinary copy.
   const MARKERS: [string, string][] = [
-    ['mail-gate-strict', 'server/src/turnidle.ts'],
+    ['mail-gate-strict', 'shared/switches.ts'], // its switchboard row since D-5855; turnidle.ts re-exports it
     ['stall-watch-disabled', 'server/src/coord/stall.ts'],
     ['stall-watch-live', 'server/src/coord/stall.ts'],
     ['stall-watch-escalate', 'server/src/coord/stall.ts'],
@@ -4435,13 +4435,13 @@ describe('worker stall watch wave 2: the three new operator-switch markers have 
   // Wave 1's describe above, for the three markers wave 2 adds. It is appended, never merged into that one, because
   // this file is cited by line. SUBSTRING CAVEAT: both halves match with `includes`, and `mail-gate-busy` is a
   // substring of `mail-gate-busy-shadow`, so the `mail-gate-busy` row counts every holder of EITHER spelling: a
-  // superset. That is sound only while both are spelled in `turnidle.ts` alone (planning departure
-  // `gate-markers-spelled-in-turnidle-only` (D-3607)), and the CONTROL row states the superset so nobody reads the row as more.
+  // superset. That is sound only while both are spelled in ONE file (D-3607, `gate-markers-spelled-in-turnidle-only`;
+  // `shared/switches.ts` since D-5855), and the CONTROL row states the superset so nobody reads the row as more.
   // `stall-watch-live` is not a substring of `stall-watch-w2-live`, so wave 1's row is untouched by this one.
   const MARKERS: [string, string][] = [
     ['stall-watch-w2-live', 'server/src/coord/stall.ts'],
-    ['mail-gate-busy-shadow', 'server/src/turnidle.ts'],
-    ['mail-gate-busy', 'server/src/turnidle.ts'],
+    ['mail-gate-busy-shadow', 'shared/switches.ts'],
+    ['mail-gate-busy', 'shared/switches.ts'],
   ];
 
   it('CONTROL: the match is a substring — a line spelling mail-gate-busy-shadow also holds mail-gate-busy, never the reverse', async () => {
@@ -4972,7 +4972,7 @@ describe('the pane-scope sweep: its arming file has no writer in the tree', () =
 // file that reaches no `node:` module and so cannot write it.
 describe('workspace lifecycle wave 3b: the expiry lane’s live switch has no writer in the tree', () => {
   const NAME = 'expire-lane-live';
-  const DEFINER = 'server/src/archivedExpiry.ts';
+  const DEFINER = 'shared/switches.ts'; // its switchboard row since D-5855; archivedExpiry.ts re-exports it
 
   it('no shell line names it, and its one TS holder is its definer', () => {
     expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
@@ -4986,11 +4986,11 @@ describe('workspace lifecycle wave 3b: the expiry lane’s live switch has no wr
   // write it without ever spelling its name. So the files whose code names the constant are pinned, and none of them
   // may reach a write — the executor reads the registry listing and nothing else. KNOWN WIDTH, stated: a write through
   // a helper defined in another file is not seen; the bar is the ordinary call.
-  it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
+  it('the files that name its constant are the definer, its re-exporter and the executor, and none reaches a write', () => {
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
     const holders = ALL.filter((f) => stallCode(f).includes('EXPIRE_LANE_LIVE_MARKER')).map(rel).sort();
-    expect(holders).toEqual([DEFINER, 'server/src/coord/expireArchived.ts']);
+    expect(holders).toEqual(['server/src/archivedExpiry.ts', 'server/src/coord/expireArchived.ts', DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
 });
@@ -5041,7 +5041,7 @@ describe('workspace lifecycle wave 4: the expiry lane’s own words type no peri
 // holder on a code line is its definer, an L1 file that reaches no `node:` module and so cannot write it.
 describe('workspace lifecycle wave 4: the dead-coordinator lane’s live switch has no writer in the tree', () => {
   const NAME = 'dead-coordinator-lane-live';
-  const DEFINER = 'server/src/deadCoordinator.ts';
+  const DEFINER = 'shared/switches.ts'; // its switchboard row since D-5855; deadCoordinator.ts re-exports it
 
   it('no shell line names it, and its one TS holder is its definer', () => {
     expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
@@ -5053,11 +5053,11 @@ describe('workspace lifecycle wave 4: the dead-coordinator lane’s live switch 
 
   // THE WIDER WRITER, the expiry pin's argument: a file that imports the ONE spelling and holds an `io` could write it
   // without spelling its name. The files whose code names the constant are pinned, and none of them reaches a write.
-  it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
+  it('the files that name its constant are the definer, its re-exporter and the executor, and none reaches a write', () => {
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
     const holders = ALL.filter((f) => stallCode(f).includes('DEAD_COORDINATOR_LANE_LIVE_MARKER')).map(rel).sort();
-    expect(holders).toEqual(['server/src/coord/endDeadCoordinator.ts', DEFINER]);
+    expect(holders).toEqual(['server/src/coord/endDeadCoordinator.ts', 'server/src/deadCoordinator.ts', DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
 });
@@ -5269,7 +5269,11 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     // W1-B3: every constant the card line adds to lib, declared there once (Task 11 binds the hook's spellings).
     'CARD_LINE_PATTERN', 'CARD_LINE_MAX', 'CARD_DIR', 'SCOPE_DIR', 'CARD_DESCRIBE_CMD',
     'CARD_MEASURE_ROWS', 'CARD_MEASURE_MAX_WAIT_MS', 'CARD_ATTACHMENT_MAX_BYTES', 'PURGED_FILES_GRACE_MS',
-    'SCOPE_MARKER_MAX_AGE_MS', 'CARD_CONSUMED_SCOPES', 'CARD_WITHDRAW_REASONS', 'EXPORT_DIR', 'EXPORT_SEGMENT_MAX_BYTES', 'EXPORT_PASS_INTERVAL_MS', 'EXPORT_SEGMENT_FORMAT', 'EXPORT_ROW_META_BYTES', 'EXPORT_MARK_BACKOFF_MAX_MS', 'EXPORT_DUE_OLDEST_UNMEASURED'] as const;
+    'SCOPE_MARKER_MAX_AGE_MS', 'CARD_CONSUMED_SCOPES', 'CARD_WITHDRAW_REASONS', 'EXPORT_DIR', 'EXPORT_SEGMENT_MAX_BYTES', 'EXPORT_PASS_INTERVAL_MS', 'EXPORT_SEGMENT_FORMAT', 'EXPORT_ROW_META_BYTES', 'EXPORT_MARK_BACKOFF_MAX_MS', 'EXPORT_DUE_OLDEST_UNMEASURED',
+    // W5h-1 Task 1 (D-5632 (history-export-bind-check-batched)): the check after a bind's bounds and stop words; EXPORT_BIND_BATCH moved here from sweep.mjs.
+    'EXPORT_BIND_BYTES', 'EXPORT_BIND_WAL_CEILING', 'EXPORT_BIND_BATCH', 'EXPORT_MARKS_STALL_MS', 'MARK_CHECK_WORDS',
+    // W5h-1 Task 3 (D-5634 (history-export-segment-whole-check)): SQLite's header length, which store.mjs segmentFileFacts reads and lib decideSegmentWhole compares.
+    'SEGMENT_HEADER_BYTES'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
@@ -5900,7 +5904,7 @@ describe('child reclamation wave 9: the temp-root id predicate and its cap are d
 // L1 file that reaches no `node:` module and so cannot write it.
 describe('child reclamation wave 9: the collector lane’s live switch has no writer in the tree', () => {
   const NAME = 'collect-lane-live';
-  const DEFINER = 'server/src/collectLane.ts';
+  const DEFINER = 'shared/switches.ts'; // its switchboard row since D-5855; collectLane.ts re-exports it
 
   it('no shell line names it, and its one TS holder is its definer', () => {
     expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
@@ -5914,11 +5918,11 @@ describe('child reclamation wave 9: the collector lane’s live switch has no wr
   // without spelling its name. The files whose code names the constant are the definer and the executor, which reads
   // it from the registry listing alone; neither reaches a FILE write, and since wave 10 the executor's one write is
   // the latch, through the store's setCollectLane. The lane's feed and attention writes live in watch.ts, never naming it.
-  it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
+  it('the files that name its constant are the definer, its re-exporter and the executor, and none reaches a write', () => {
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
     const holders = ALL.filter((f) => stallCode(f).includes('COLLECT_LANE_LIVE_MARKER')).map(rel).sort();
-    expect(holders).toEqual([DEFINER, 'server/src/coord/collectTempRoot.ts']);
+    expect(holders).toEqual(['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
 });
@@ -6162,12 +6166,13 @@ describe('child reclamation wave 10: the collector switch has one writer, one jo
       'watch.ts’s call is not in the pass').toBe(1);
   });
 
-  it('the marker’s holders are still exactly the definer and the executor', () => {
+  it('the marker’s holders are still exactly the definer, its re-exporter and the executor', () => {
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    // D-5855: the definer is the marker's switchboard row; `collectLane.ts` re-exports it.
     expect(ALL.filter((f) => stallCode(f).includes('collect-lane-live')).map(rel).sort(), 'the marker spelled outside its definer')
-      .toEqual([LANE]);
-    expect(ALL.filter((f) => stallCode(f).includes('COLLECT_LANE_LIVE_MARKER')).map(rel).sort(), 'a third holder of its constant')
-      .toEqual([LANE, EXECUTOR]);
+      .toEqual(['shared/switches.ts']);
+    expect(ALL.filter((f) => stallCode(f).includes('COLLECT_LANE_LIVE_MARKER')).map(rel).sort(), 'a fourth holder of its constant')
+      .toEqual([LANE, EXECUTOR, 'shared/switches.ts']);
     expect(code(EXECUTOR), 'the executor reaches a file write').not.toMatch(WRITE);
     expect(count(code(EXECUTOR), /\.setCollectLane\s*\(/g), 'the executor’s one write is the latch, through the store').toBe(1);
     expect(code(EXECUTOR), 'the executor appends to the journal itself').not.toMatch(/\.appendGeneration\s*\(/);
@@ -6368,7 +6373,7 @@ describe("one 'tmux unreachable' sentence (design-system wave)", () => {
       'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/ArchiveSheet.tsx',
       // D-5545: the fleet row's and the header's facts are decided in `sessionFacts.ts` now, not `SessionMeta.tsx`.
       'pwa/src/fleet/sessionFacts.ts', 'pwa/src/screens/SessionScreen.tsx',
-      'pwa/src/session/SessionHeader.tsx', 'pwa/src/session/PrSheet.tsx',
+      'pwa/src/session/SessionFlows.tsx', 'pwa/src/session/PrSheet.tsx', // W2 Task S2d: the ⋯ menu moved there
     ]) {
       expect(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)
         .toMatch(/substrateFaultT(ext|itle)\(/);
@@ -6774,25 +6779,28 @@ describe('the ask window, its deadline and the untrusted-data fence are each def
 // the definer and the lane, neither of which reaches a write. Its numbers and its holds are spelled once, in the definer.
 describe('D-5370: the stop-done lane’s kill switch has no writer, and its constants one home', () => {
   const NAME = 'stop-done-disabled';
-  const DEFINER = 'server/src/stopDone.ts';
+  const DEFINER = 'shared/switches.ts'; // the kill switch's switchboard row since D-5855; stopDone.ts re-exports it
+  /** The lane's numbers and holds stay in their own L1 definer. */
+  const LANE_DEFINER = 'server/src/stopDone.ts';
   it('no shell line names it, and its one TS holder is its definer, which reaches no node: module', () => {
     expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
     expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
       .toEqual([DEFINER]);
     expect(stallCode(path.join(ccrcRoot, DEFINER))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
   });
-  it('the files that name STOP_DONE_DISABLED_MARKER are the definer and the lane, and neither reaches a write', () => {
+  it('the files that name STOP_DONE_DISABLED_MARKER are the definer, its re-exporter and the lane, and none reaches a write', () => {
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
     const holders = ALL.filter((f) => stallCode(f).includes('STOP_DONE_DISABLED_MARKER')).map(rel).sort();
-    expect(holders).toEqual([DEFINER, 'server/src/stopDoneSweep.ts']);
+    expect(holders).toEqual([LANE_DEFINER, 'server/src/stopDoneSweep.ts', DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
-  it('each of its constants and its hold list is declared once, in the definer', () => {
+  it('each of its constants and its hold list is declared once: the kill switch in its row, the rest in the lane', () => {
     for (const c of ['STOP_DONE_GRACE_MS', 'STOP_DONE_PER_PASS', 'STOP_DONE_MEASURES_PER_PASS', 'STOP_DONE_SWEEP_MS',
       'STOP_DONE_RETRY_MS', 'STOP_DONE_DISABLED_MARKER', 'STOP_DONE_HOLDS', 'STOP_DONE_HOLD_MAP']) {
       const decl = new RegExp(`\\b(?:const|let|var)\\s+${c}\\b`);
-      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c).toEqual([DEFINER]);
+      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c)
+        .toEqual([c === 'STOP_DONE_DISABLED_MARKER' ? DEFINER : LANE_DEFINER]);
     }
   });
 });
@@ -6803,7 +6811,7 @@ describe('D-5370: the stop-done lane’s kill switch has no writer, and its cons
 describe('idle-compact-nudge: the kill switch has no writer, and the prompt is spelled once (D-5373)', () => {
   it('idle-compact-nudge-disabled: no shell line names it, and its one TS holder is its pure definer', () => {
     const name = 'idle-compact-nudge-disabled';
-    const definer = 'server/src/idlenudge.ts';
+    const definer = 'shared/switches.ts'; // its switchboard row since D-5855; idlenudge.ts re-exports it
     expect(holdersOf(name), `${name}: a line of shell names it`).toEqual([]);
     expect(ALL.filter((f) => stallCode(f).includes(name)).map(rel).sort(), `${name}: spelled on a code line outside ${definer}`)
       .toEqual([definer]);
@@ -7034,6 +7042,11 @@ describe('the Claude Code version grammar and its floor are defined once, in sha
 // read is not a write. The hold list is spelled once.
 describe('D-5242: hibernation’s markers have no writer, and its holds one home', () => {
   const DEFINER = 'server/src/coord/hibernate.ts';
+  /** D-5855: the two switches are rows of the switchboard, which defines them; `hibernate.ts` re-exports them. The
+   *  hours file and the per-session suffix stay in `hibernate.ts`. */
+  const SWITCH_DEFINER = 'shared/switches.ts';
+  const definerOf = (name: string): string =>
+    (name === 'hibernate-live' || name === 'hibernate-disabled' ? SWITCH_DEFINER : DEFINER);
   const MARKERS = [
     ['hibernate-live', 'HIBERNATE_LIVE_MARKER'], ['hibernate-disabled', 'HIBERNATE_DISABLED_MARKER'],
     ['hibernate-after-hours', 'HIBERNATE_AFTER_HOURS_FILE'], ['no-hibernate', 'NO_HIBERNATE_SUFFIX'],
@@ -7050,12 +7063,12 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
     // `hibernate-…` names, so each scan finds its own word only.
     expect(ALL.filter((f) => stallCode(f).includes(`'${name}'`) || stallCode(f).includes(`"${name}"`)
       || stallCode(f).includes(`\`${name}`) || stallCode(f).includes(`/${name}`)).map(rel).sort(),
-    `${name} spelled on a code line outside ${DEFINER}`).toEqual([DEFINER]);
-    expect(stallCode(path.join(ccrcRoot, DEFINER))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+    `${name} spelled on a code line outside ${definerOf(name)}`).toEqual([definerOf(name)]);
+    expect(stallCode(path.join(ccrcRoot, definerOf(name)))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
   });
-  it.each(MARKERS)('%s: the files that name its constant reach no write', (_name, constant) => {
+  it.each(MARKERS)('%s: the files that name its constant reach no write', (name, constant) => {
     const holders = ALL.filter((f) => stallCode(f).includes(constant)).map(rel).sort();
-    expect(holders, `${constant}: nobody names it`).toContain(DEFINER);
+    expect(holders, `${constant}: nobody names it`).toContain(definerOf(name));
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(TS_WRITE);
   });
   it('HIBERNATE_HOLDS, its map and its constants are declared once, in the definer', () => {
@@ -7063,7 +7076,8 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
       'HIBERNATE_SHADOW_LINE_MS', 'HIBERNATE_AFTER_HOURS_MIN', 'HIBERNATE_AFTER_HOURS_MAX',
       ...MARKERS.map(([, k]) => k)]) {
       const decl = new RegExp(`\\b(?:const|let|var)\\s+${c}\\b`);
-      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c).toEqual([DEFINER]);
+      const home = MARKERS.find(([, k]) => k === c)?.[0];
+      expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel), c).toEqual([home === undefined ? DEFINER : definerOf(home)]);
     }
   });
   it('PRESENCE_OPEN_TTL_MS is declared once, in shared/api.ts beside PRESENCE_TTL_MS', () => {
@@ -7231,6 +7245,42 @@ describe('the account gate, the audit and the AccountOps port each have one home
   it('the arm is chosen in one place, and constructed by the composition root alone', () => {
     expect(holders(/\baccountOpsFor\(/)).toEqual(['server/src/accounts/ops.ts', 'server/src/index.ts']);
     expect(holders(/\blocalAccountOps\(/)).toEqual(['server/src/accounts/ops.ts']);
+  });
+});
+
+// D-5517, D-5518, D-5513 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A12). The state word, its
+// thresholds and the lane-state grammar have one home in `shared/accounts.ts`, L0 beside the words; the wire shapes one
+// in `shared/api.ts`; the roster is swapped by `reloadRoster` alone; reconcile, the lanes wire and the lane-state read
+// each have one file.
+describe('the state word, the roster reload and the lanes wire each have one home (D-5517, D-5518)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('stateWordFor').test('export function stateWordFor(i: StateWordInput): AccountStateAnswer {')).toBe(true);
+    expect(decl('stateWordFor').test('state: stateWordFor({ disabled, authDead })')).toBe(false);
+    expect(/\bcfg\.roster\s*=(?!=)/.test('    cfg.roster = roster;')).toBe(true);
+    expect(/\bcfg\.roster\s*=(?!=)/.test('if (ownRosterFpOf?.roster !== deps.cfg.roster)')).toBe(false);
+  });
+  it('the words, their thresholds and the lane-state grammar are declared once, in shared/accounts.ts', () => {
+    for (const c of ['stateWordFor', 'ACCOUNT_STATE_WORDS', 'AccountStateWord', 'AccountStateAnswer', 'StateWordInput',
+      'SIGNED_IN_WITHIN_MS', 'MINTED_TOKEN_LIFETIME_MS', 'MINTED_TOKEN_EXPIRING_MS', 'CREDIT_EXPIRING_FRACTION',
+      'MINTED_KEY_EXPIRING_MS', 'WINDOW_LIMITED_PCT', 'LaneState', 'LaneStateRead', 'laneStateOf', 'laneNotReadyReason',
+      'KEY_HINT_RE', 'LANE_IDENTITY_MAX']) {
+      expect(holders(decl(c)), c).toEqual(['shared/accounts.ts']);
+    }
+  });
+  it('the wire shapes are declared once, in shared/api.ts', () => {
+    for (const c of ['LaneWire', 'AccountsConnect', 'LANE_NOT_READY_REASONS', 'LaneNotReadyReason', 'ACCOUNT_CAPS', 'AccountCap']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the roster is swapped in one place, and reconcile, the lanes wire and the lane-state read each live in one file', () => {
+    expect(holders(/\bcfg\.roster\s*=(?!=)/)).toEqual(['server/src/config.ts']);
+    for (const c of ['reloadRoster', 'rosterAnswerOf', 'RosterAnswer']) expect(holders(decl(c)), c).toEqual(['server/src/config.ts']);
+    expect(holders(decl('reconcilingAccountOps'))).toEqual(['server/src/accounts/reconcile.ts']);
+    for (const c of ['lanesWire', 'accountsConnect']) expect(holders(decl(c)), c).toEqual(['server/src/accounts/lanes.ts']);
+    expect(holders(decl('readLaneStates'))).toEqual(['server/src/limits.ts']);
+    expect(holders(decl('LANE_STATE_DIR_NAME'))).toEqual(['shared/agent-protocol.ts']);
   });
 });
 
@@ -7540,6 +7590,7 @@ describe("the lane's kind is derived in one place, shared/roster.ts (D-5517)", (
 // The import sits here, not at the head, so the append moves no cited line (ESM hoists it either way).
 import { markerDefinitions } from './consolidationCensus.js';
 import { parseSource } from './scan/parse.js';
+import { SWITCHES } from '../../shared/switches.js';
 describe('one writer per fact (ARCH-40): the switches whose writer set is already at target (D-5849)', () => {
   const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const WRITE_VERB = '(?:touch|mv|cp|ln|rm|rmdir|mkdir|install|tee|truncate)';
@@ -7677,7 +7728,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       .toBe(false);
     expect(pyFileWrites("# open(os.path.join(reg, 'mail-disabled'), 'w') is the operator's", 'mail-disabled')).toBe(false);
     expect(constsOf('reclaim-paused')).toEqual(['RECLAIM_PAUSE_MARKER']);
-    expect(constsOf('mail-disabled')).toEqual(['MAIL_DISABLED_MARKER', 'MAIL_DISABLED_MARKER']);
+    expect(constsOf('mail-disabled')).toEqual(['MAIL_DISABLED_MARKER']); // one definition since D-5855
   });
 
   it("reclaim-paused: one writer, ccd's reclaim-pause verb", () => {
@@ -7700,6 +7751,33 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 
   it('mail-disabled: hand-only, no writer in the tree', () => {
     expect(writersOf('mail-disabled')).toEqual([]);
+  });
+
+  // D-5855 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1a; ARCH-70 (#805)).
+  // The switchboard's exit: `mail-disabled` is defined once (2 -> 1 on C1a's tip; the count may only shrink), and so
+  // is every other marker row; and every marker literal a `const *_MARKER` defines under `server/src` or `shared/` is
+  // a `SWITCHES` row. KNOWN WIDTH: the stall watch's map keys (`coord/stall.ts`) are not `*_MARKER` constants and are
+  // not rows yet; a name assembled from pieces is not seen.
+  it('mail-disabled is defined once, in its switchboard row (may only shrink)', () => {
+    const sites = markerDefinitions('mail-disabled');
+    expect(sites.length, 'a second definition of mail-disabled').toBeLessThanOrEqual(1);
+    expect(sites.map((x) => x.file)).toEqual(['shared/switches.ts']);
+  });
+
+  it('every marker row is defined once, in shared/switches.ts', () => {
+    const markers = Object.values(SWITCHES).flatMap((r) => ('marker' in r.storage ? [r.storage.marker] : []));
+    expect(markers.length, 'CONTROL: the switchboard has marker rows').toBeGreaterThan(10);
+    for (const m of markers) expect(markerDefinitions(m).map((x) => x.file), m).toEqual(['shared/switches.ts']);
+  });
+
+  it('every marker literal is a SWITCHES row: no const *_MARKER under server/src or shared/ names a marker without one', () => {
+    const DEF = /\bconst\s+([A-Z0-9_]*_MARKER)\s*(?::[^=]+)?=\s*(['"])([a-z][a-z0-9-]*)\2/g;
+    const rows = new Set<string>(Object.values(SWITCHES).flatMap((r) => ('marker' in r.storage ? [r.storage.marker] : [])));
+    expect([...'const X_MARKER = \'x-y\';'.matchAll(DEF)].map((m) => m[3]), 'CONTROL: the pattern sees a definition')
+      .toEqual(['x-y']);
+    const rowless = ALL.filter((f) => /^(?:server\/src|shared)\//.test(rel(f)))
+      .flatMap((f) => [...stallCode(f).matchAll(DEF)].filter((m) => !rows.has(m[3]!)).map((m) => `${rel(f)}: ${m[1]} = ${m[3]}`));
+    expect(rowless, 'a marker constant with no SWITCHES row').toEqual([]);
   });
 
   // D-5853 (Task C0f; ARCH-00 (#525)). The test scanners' TS parser, the operator's option (a) (a TypeScript 6 alias),

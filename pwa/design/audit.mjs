@@ -907,10 +907,8 @@ export const INHERITED_GROUNDS = {
   // design/contrast-check.mjs, which measures it in all twelve palettes for
   // every one of the five rather than for one of them. Worst 6.55 in
   // solarized-light.
-  '.settings-title': {
-    under: ['var(--bg-page)'],
-    why: "the screen's own <h1> beside the chevron, on the same unpainted .settings-head, so the same --bg-page ground. The chevron itself is `BackButton` now and its ink/ground pair moved to contrast-check.mjs's token contract; this <h1> is still a rule, so it is still grounded here",
-  },
+  // `.settings-title` RETIRED (settings Task R2b1, D-5504): the screen's <h1> is `PageScaffold`'s, a utility over
+  // the measured --ink-primary on --bg-page token pair, so no rule is left to ground.
   // `.settings-door` and `.settings-door:active` RETIRED from this registry
   // with the two header doors, which are @ccrc/ui's `Door` now.
   //

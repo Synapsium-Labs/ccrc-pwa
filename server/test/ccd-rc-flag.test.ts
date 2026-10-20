@@ -208,7 +208,7 @@ const acceptRc = (paneText: string, fromswap = '0'): number => {
 /** AN INVENTED FIXTURE, and it is labelled so deliberately.
  *
  *  Only the LAST line is measured bytes: it is the real captured footer from
- *  `statusline.test.ts:9` (`cc-claude2-expoAI-assistant`), which is the one part
+ *  `statusline.test.ts:9` (`cc-claude9-project-h`), which is the one part
  *  of the pane the marker set actually matches on when RC is off. The lines
  *  above it are a plausible idle prompt box written by hand — nobody has yet
  *  run a flag-off session on a real box, because Stage 2e is what makes flag-off
