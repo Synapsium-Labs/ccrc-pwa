@@ -5358,7 +5358,7 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
     }
   }, 2 * HEAVY);
 
-  it('L (FR1 F1, the fork the listing hides) the backup\'s mark names writer 1\'s seq 2, moved aside; writer 1 lists only seq 5 and writer 2 only seq 3, so by the listing alone they succeed one another and no fork shows: the marked name puts writer 1 at seq 2 to 5, a fork with writer 2, so seq 3 takes the mark off and seq 5, which lacks the variants, cannot re-mark it; with writer 2\'s segment lost after a pass the rebuild from export holds E0\'s two variants', async () => {
+  it('L (FR1 F1, the fork the listing hides) the backup\'s mark names writer 1\'s seq 2, moved aside; writer 1 lists only seq 5 and writer 2 only seq 3, so by the listing alone they succeed one another and no fork shows: the marked name puts writer 1 at seq 2 to 5, a fork with writer 2, so the take-off comes at the third writer\'s seq 1 rows (E0\'s held mark names the unlisted writer-1 seq 2, of another writer, in a layout forked by the marked name), and neither seq 3 nor seq 5, which lacks the variants, can re-mark it; with writer 2\'s segment lost after a pass the rebuild from export holds E0\'s two variants', async () => {
     const { box, ids, db } = x10Store('ccrc-history-d5726-l-');
     let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
     try {
@@ -5376,7 +5376,7 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
       plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
       plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [], rows: x10Rows(e0) });
       expect.soft(await recoverAgain(box, ids, db), 'the restore\'s replay completes').toEqual({ moved: true, done: true, held: false });
-      expect.soft(marksOf(db), 'D-5726 (FR1 F1): E0\'s mark came off at writer 2\'s seq 3, and writer 1\'s seq 5 did not re-mark it').toEqual([null, seg(1, W0)]);
+      expect.soft(marksOf(db), 'D-5726 (FR1 F1): E0\'s mark came off at the third writer\'s seq 1 rows (an unlisted held name of another writer, in a layout forked by the marked name), and neither writer 2\'s seq 3 nor writer 1\'s seq 5 re-marked it').toEqual([null, seg(1, W0)]);
       expect.soft(countersOn(db, 'export_mark_taken_off')['export_mark_taken_off'], 'one take-off').toBe(1);
       expect.soft(checkAfterLoss(box, ids, db).segments, 'no mark names a missing segment now').toEqual([]);
       const live = await passAfterRebuild(box, ids, db);
