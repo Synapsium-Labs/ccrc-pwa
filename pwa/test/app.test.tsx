@@ -304,7 +304,9 @@ describe('App mounts the fleet sheets (D-5468)', () => {
 
   it("the fleet's New session door and a session's ··· door each open their sheet", () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
-    act(() => useFleetStore.setState({ conn: 'open', sessions: [fleetSession({ id: 'a', project: 'alpha', workspace: 'quiet-mesa' })] }));
+    act(() => useFleetStore.setState({ conn: 'open', sessions: [fleetSession({ id: 'a', project: 'alpha', workspace: 'quiet-mesa',
+      // A change just now keeps its project open (D-6088 rolls up a quiet one).
+      statusUpdatedAt: Date.now() })] }));
     navigate('/');
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: 'New session' }));

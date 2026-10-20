@@ -2347,10 +2347,12 @@ describe("child-reclamation wave 4 — one 'reclaim-paused' literal", () => {
     expect(holders).toEqual(['shared/switches.ts']);
   });
 
-  it('watch.ts reaches the reclaim marker through the shared constant, never a copy', () => {
-    // Not just "no second literal" — that is satisfied by deleting the reader.
+  it('watch.ts reaches the reclaim marker through readSwitches, never a private parse (D-5856)', () => {
+    // Not just "no second literal" — that is satisfied by deleting the reader. Symbol-keyed (scan/symbols.ts): each lane
+    // site calls the switchboard's one reader, and no `includes(RECLAIM_PAUSE_MARKER)` is left in watch.ts.
+    for (const m of ['emitCoord', 'sweepChildReclaim', 'archivedExpiryPass', 'deadCoordinatorPass']) expect(callsIn(symbolOf('server/src/watch.ts', `FleetWatcher.${m}`)).map((c) => c.name), m).toContain('readSwitches');
+    expect(reclaimPauseParseSites().filter((x) => x.file === 'server/src/watch.ts'), 'a private parse in watch.ts').toEqual([]);
     const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'utf8');
-    expect(src).toContain('names.includes(RECLAIM_PAUSE_MARKER)');
     expect(src).toMatch(/import \{[^}]*\bRECLAIM_PAUSE_MARKER\b[^}]*\} from '\.\/coord\/rundefs\.js'/);
   });
 });
@@ -6028,6 +6030,9 @@ describe('path identity W1a: the registry id predicate is defined once, and isTm
 // store's writer, and the PWA cannot import server/src. Code lines only (`stallCode`): a sentence about a call is never a
 // call. KNOWN WIDTH: a call spelled inside a string on a code line counts, which errs toward red. A call through an
 // alias (`const w = store.setCollectLane; w(…)`) is not seen; the bar is the ordinary call.
+// D-6114: the pass's call count below reads `FleetWatcher.collectPass` by symbol. Imported here, beside its one
+// reader, so no line above moves (line citations into this file stay anchored).
+import { sourceOfSymbol } from './scan/symbols.js';
 describe('child reclamation wave 10: the collector switch has one writer, one journal and one resolver', () => {
   const STORE = 'server/src/coord/store.ts';
   const ROUTES = 'server/src/coord/routes.ts';
@@ -6162,7 +6167,8 @@ describe('child reclamation wave 10: the collector switch has one writer, one jo
     expect(sitesOf(calls), 'a third caller, or a second call').toEqual([`${EXECUTOR}:1`, `${WATCH}:1`]);
     expect(count(bodyAfter(code(EXECUTOR), /^export async function collectTempRoot\(/m), calls),
       'the executor file’s call is not in collectTempRoot').toBe(1);
-    expect(count(bodyAfter(code(WATCH), /^[ \t]*private async collectPass\(/m), calls),
+    // D-6114: keyed on the method's symbol (scan/symbols.ts), so C1h's rewrite of the pass moves the slice with it.
+    expect(count(stallCodeText(sourceOfSymbol(path.join(ccrcRoot, WATCH), 'FleetWatcher.collectPass')), calls),
       'watch.ts’s call is not in the pass').toBe(1);
   });
 
@@ -6432,8 +6438,8 @@ describe('the review screen\'s rows and last line are spelled once, in shared/as
 // for the reason the notes above state: `session-hook.test.ts` cites this file by line. THE DELEGATED-TASK RULE — the
 // six non-delegating kinds and the three terminal statuses — has one TypeScript home, `shared/api.ts`, which the
 // server's and the PWA's wording read. The hook's `jq` in `ccd/session-hook.sh` is the documented second spelling, held
-// equal by `session-hook-background.test.ts`, which iterates over these lists, not by this text scan. A second
-// TypeScript copy that drifts would let one reader call a task delegated that the other does not.
+// equal by `session-hook-background.test.ts` (it iterates these lists and reads the jq's back as sets, D-6117), not by
+// this scan. A drifting TypeScript copy would split readers; `isDelegatedTask`, which nothing called, is gone (D-6117).
 describe('the delegated-task rule is declared once, in shared/api.ts (D-5231)', () => {
   const VALUE_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`, 'm');
   const FUNCTION_DEF = (name: string): RegExp =>
@@ -6452,11 +6458,11 @@ describe('the delegated-task rule is declared once, in shared/api.ts (D-5231)', 
     expect(RARE.test('the memory-import kind, in prose')).toBe(false);
   });
 
-  it('declares NON_DELEGATING_TASK_KINDS, TERMINAL_TASK_STATUSES and isDelegatedTask exactly once, in shared/api.ts', () => {
+  it('declares NON_DELEGATING_TASK_KINDS and TERMINAL_TASK_STATUSES once, in shared/api.ts; isDelegatedTask nowhere (D-6117)', () => {
     for (const name of ['NON_DELEGATING_TASK_KINDS', 'TERMINAL_TASK_STATUSES']) {
       expect(ALL.filter((f) => VALUE_DEF(name).test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/api.ts']);
     }
-    expect(ALL.filter((f) => FUNCTION_DEF('isDelegatedTask').test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+    expect(ALL.filter((f) => FUNCTION_DEF('isDelegatedTask').test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
   });
 
   it('quotes the rare kinds on a code line in shared/api.ts and nowhere else across the four roots', () => {
@@ -7588,9 +7594,9 @@ describe("the lane's kind is derived in one place, shared/roster.ts (D-5517)", (
 // WIDTH: a name assembled from pieces, a bash variable assigned in one function and written in another, a path passed
 // through a parameter or object field, and an fs call split over lines are not seen.
 // The import sits here, not at the head, so the append moves no cited line (ESM hoists it either way).
-import { markerDefinitions } from './consolidationCensus.js';
+import { markerDefinitions, reclaimPauseParseSites } from './consolidationCensus.js';
 import { parseSource } from './scan/parse.js';
-import { SWITCHES } from '../../shared/switches.js';
+import { SWITCHES } from '../../shared/switches.js'; import { callsIn, symbolOf } from './scan/symbols.js';
 describe('one writer per fact (ARCH-40): the switches whose writer set is already at target (D-5849)', () => {
   const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const WRITE_VERB = '(?:touch|mv|cp|ln|rm|rmdir|mkdir|install|tee|truncate)';
@@ -7780,6 +7786,15 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(rowless, 'a marker constant with no SWITCHES row').toEqual([]);
   });
 
+  // D-5856 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1b; ARCH-70 (#805)).
+  // Every reclaim-paused reader, at the pass and at the act, goes through `readSwitches`: the private parse sites fold
+  // 10 -> 1 on C1b's tip. The one left is the stop-done lane's (`stopDoneSweep.ts`), which W4 moves. May only shrink.
+  it('reclaim-paused is parsed at <= 1 site outside readSwitches (may only shrink)', () => {
+    const sites = reclaimPauseParseSites();
+    expect(sites.length, 'a private includes(RECLAIM_PAUSE_MARKER): read it through readSwitches').toBeLessThanOrEqual(1);
+    expect(sites.map((x) => x.file)).toEqual(sites.length === 0 ? [] : ['server/src/stopDoneSweep.ts']);
+  });
+
   // D-5853 (Task C0f; ARCH-00 (#525)). The test scanners' TS parser, the operator's option (a) (a TypeScript 6 alias),
   // has ONE importer, `server/test/scan/parse.ts`, and an exact version. The corpus is every tracked or new untracked
   // .ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs file (not .d.*ts), with comment lines dropped (`stallCodeText`). Under
@@ -7847,20 +7862,35 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   const W1A_FILES = ['server/src/watch.ts', 'server/src/server.ts', 'server/src/interruptlog.ts',
     'server/src/coord/routes.ts', 'server/src/coord/childReclaim.ts', 'server/src/coord/expireArchived.ts',
     'server/src/coord/collectTempRoot.ts', 'server/src/coord/endDeadCoordinator.ts', 'server/src/coord/rundefs.ts'];
-  /** The W1a files a read's source text names: its basename quoted or after a `/`; `routes.ts` only beside `coord`;
-   *  nothing when the text (or the reading function's, `context`) names another package. */
+  // D-6114 (Task C0o; ARCH-06 (#554), the W1b slice). The same counting rule over W1b's files: `watch.ts` and
+  // `coord/routes.ts` (shared with W1a), and the three only W1b moves.
+  const W1B_FILES = ['server/src/watch.ts', 'server/src/coord/routes.ts', 'server/src/ccdargv.ts',
+    'server/src/registry.ts', 'server/src/coord/redact.ts'];
+  const RATCHET_FILES = [...new Set([...W1A_FILES, ...W1B_FILES])];
+  /** The ratcheted files a read's source text names: its basename quoted or after a `/`; `routes.ts` and `redact.ts`
+   *  only beside `coord`; nothing when the text (or the reading function's, `context`) names another package. */
   const namesW1aFile = (text: string, context = ''): string[] => {
     const all = `${text}\n${context}`;
     if (/['"`/](?:agent|pwa|ui|ccd|shared)['"`/]/.test(all)) return [];
-    return W1A_FILES.filter((f) => {
+    return RATCHET_FILES.filter((f) => {
       const base = path.basename(f);
       if (!new RegExp(`['"\`/]${esc(base)}['"\`]`).test(text)) return false;
-      return base !== 'routes.ts' || /['"`/]coord['"`/]/.test(all);
+      return (base !== 'routes.ts' && base !== 'redact.ts') || /['"`/]coord['"`/]/.test(all);
     });
   };
   interface SourcePin { line: number; target: string; method: string; literal: string }
+  /** How many texts `literalSourcePins` has parsed (D-6111's guard reads it). */
+  let pinParses = 0;
   /** ARCH-06's counting rule over one test file's text (D-5854). */
   const literalSourcePins = (text: string, file = 'probe.ts'): SourcePin[] => {
+    // D-6111: every target below comes from `namesW1aFile` over a substring of `text`, and it answers nothing unless
+    // that substring spells a W1a basename, so a text that spells none has no pin and is not parsed. Parsing all of
+    // server/test took 9.9 s of the 20 s Linux budget untraced, and timed out under the map's trace. KNOWN WIDTH: a
+    // template that splits a basename across lines is joined by `flat` before `namesW1aFile` reads it, so this raw-text
+    // check would miss it; no such pin exists (the counts with and without this check were measured equal).
+    // D-6114: every ratcheted file's basename, W1b's too, or a pin over `ccdargv.ts` alone would never be parsed.
+    if (!RATCHET_FILES.some((f) => text.includes(path.basename(f)))) return [];
+    pinParses += 1;
     const p = parseSource(text, file);
     const raw = (c: { start: number; end: number }): string => text.slice(c.start, c.end);
     const resolve = (name: string, at: number): number => {
@@ -7932,17 +7962,37 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     }
     return out;
   };
-  /** Every tracked or new untracked .ts file under server/test, and its pins' count per W1a file. */
-  const literalSourcePinCounts = (): Record<string, number> => {
+  /** Every tracked or new untracked .ts file under server/test, its pins' count per ratcheted file (W1a's and W1b's,
+   *  D-6114), and how many files were listed and parsed. Scanned once and shared by both ratchets and D-6111's guard. */
+  let pinScan: { counts: Record<string, number>; listed: number; parsed: number } | undefined;
+  const literalSourcePinScan = (): NonNullable<typeof pinScan> => {
+    if (pinScan) return pinScan;
     const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'server/test/*.ts'],
       { cwd: ccrcRoot, encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
-    const counts: Record<string, number> = Object.fromEntries(W1A_FILES.map((f) => [f, 0]));
-    for (const f of new Set(r.stdout.split('\0').filter((x) => x && existsSync(path.join(ccrcRoot, x))))) {
+    const counts: Record<string, number> = Object.fromEntries(RATCHET_FILES.map((f) => [f, 0]));
+    const files = new Set(r.stdout.split('\0').filter((x) => x && existsSync(path.join(ccrcRoot, x))));
+    const before = pinParses;
+    for (const f of files) {
       for (const pin of literalSourcePins(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)) counts[pin.target]! += 1;
     }
-    return counts;
+    pinScan = { counts, listed: files.size, parsed: pinParses - before };
+    return pinScan;
   };
+  /** The shared scan's counts for `files` alone, in their order (D-6114: one scan serves both ratchets). */
+  const literalSourcePinCounts = (files: readonly string[] = W1A_FILES): Record<string, number> => {
+    const { counts } = literalSourcePinScan();
+    return Object.fromEntries(files.map((f) => [f, counts[f]!]));
+  };
+
+  // D-6111. The ratchet's scan parses only the files that spell a W1a basename, so it fits a traced run's budget; a
+  // scan that parsed every listed file again would put main's map-build red whenever tracing slowed it past 20 s.
+  it('the pin scan parses only the test files that spell a W1a basename (D-6111)', () => {
+    const { listed, parsed } = literalSourcePinScan();
+    expect(listed, 'git listed too few server/test files: the scan saw nothing').toBeGreaterThan(500);
+    expect(parsed, 'no file was parsed: the ratchet would count nothing').toBeGreaterThan(0);
+    expect(parsed, 'the scan parsed most of server/test again').toBeLessThan(listed / 3);
+  });
 
   it('CONTROL (fixture): the counting rule sees a read, a reader, a slice and an inline read, and keeps scopes apart', () => {
     const pins = (code: string): string[] =>
@@ -7988,7 +8038,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   it('literal source pins over W1a\'s files may only shrink (D-5854; ARCH-06\'s counting rule)', () => {
     // Measured on merge day. Lower a row when a pin moves onto scan/symbols.ts; never raise one.
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 114,
+      'server/src/watch.ts': 113,
       'server/src/server.ts': 31,
       'server/src/interruptlog.ts': 0,
       'server/src/coord/routes.ts': 40,
@@ -8001,6 +8051,42 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     const counts = literalSourcePinCounts();
     expect(Object.keys(counts)).toEqual(Object.keys(CEILING));
     for (const f of W1A_FILES) {
+      expect(counts[f], `${f}: a new literal source pin — key it on scan/symbols.ts (sourceOfSymbol) `
+        + 'or a parse.ts-based census instead')
+        .toBeLessThanOrEqual(CEILING[f]!);
+    }
+  });
+
+  it('CONTROL (fixture, D-6114): W1b\'s three files are counted the same way, and `redact.ts` only beside `coord`', () => {
+    const pins = (code: string): string[] =>
+      literalSourcePins(code).map((x) => `${x.line} ${x.target.replace('server/src/', '')} ${x.method} ${x.literal}`);
+    expect(pins([
+      "const a = readFileSync(path.join(srcDir, 'ccdargv.ts'), 'utf8');",
+      "expect(a).toContain('x');",
+      "const b = readFileSync(path.join(srcDir, 'registry.ts'), 'utf8');",
+      "expect(b.indexOf('y')).toBe(1);",
+      "const c = readFileSync(path.join(srcDir, 'coord', 'redact.ts'), 'utf8');",
+      'expect(c).toMatch(/z/);',
+      "const d = readFileSync(path.join(srcDir, 'docs', 'redact.ts'), 'utf8');",
+      "expect(d).toContain('w');",
+      "const e = readFileSync(path.join(root, 'pwa', 'src', 'command', 'registry.ts'), 'utf8');",
+      "expect(e).toContain('v');",
+    ].join('\n'))).toEqual(['2 ccdargv.ts toContain x', '4 registry.ts indexOf y', '6 coord/redact.ts toMatch /z/']);
+  });
+
+  // D-6114 (Task C0o; ARCH-06 (#554), the W1b slice). The same rule over W1b's files, its own ceiling, so a slice moved
+  // onto scan/symbols.ts ahead of W1b lowers a row here. Measured on this slice's tip; may only shrink.
+  it('literal source pins over W1b\'s files may only shrink (D-6114; ARCH-06\'s counting rule)', () => {
+    const CEILING: Record<string, number> = {
+      'server/src/watch.ts': 85,
+      'server/src/coord/routes.ts': 40,
+      'server/src/ccdargv.ts': 6,
+      'server/src/registry.ts': 2,
+      'server/src/coord/redact.ts': 0,
+    };
+    const counts = literalSourcePinCounts(W1B_FILES);
+    expect(Object.keys(counts)).toEqual(Object.keys(CEILING));
+    for (const f of W1B_FILES) {
       expect(counts[f], `${f}: a new literal source pin — key it on scan/symbols.ts (sourceOfSymbol) `
         + 'or a parse.ts-based census instead')
         .toBeLessThanOrEqual(CEILING[f]!);

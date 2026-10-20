@@ -1513,8 +1513,10 @@ export type BucketInput = Pick<
  *  dropped) — whose work never holds the live file `busy`: an idle main loop
  *  over only shells or monitors writes `shell` or `idle`, and the other four are
  *  outside the live file's delegation set. The hook's `jq` in
- *  `ccd/session-hook.sh` is the documented second spelling, held equal by
- *  `session-hook-background.test.ts`, which iterates over this list. */
+ *  `ccd/session-hook.sh` is the documented second spelling and the rule's only
+ *  executor, held equal by `session-hook-background.test.ts`, which iterates
+ *  over this list and reads the jq's lists back as sets (D-6117). No TS
+ *  predicate over raw tasks exists: no TS reader holds them (D-6117). */
 export const NON_DELEGATING_TASK_KINDS = ['shell', 'monitor', 'mcp-task', 'dream', 'auto-mode-scan', 'memory-import'] as const;
 /** D-5231: the terminal words of Claude Code's task code. A task whose status
  *  is one of them is finished, whatever its kind; `running`, `pending` and any
@@ -1522,12 +1524,10 @@ export const NON_DELEGATING_TASK_KINDS = ['shell', 'monitor', 'mcp-task', 'dream
  *  finished tasks out, so this is a second wall: a finished task some later
  *  build lists must not keep a wedged `busy` on `working`. */
 export const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'killed'] as const;
-/** D-5231: is this listed task delegated work that is still running? `type` is
- *  the CLEANED kind (as the hook records it); an unseen kind or status counts. */
-export function isDelegatedTask(t: { type: string; status: string }): boolean {
-  return !(NON_DELEGATING_TASK_KINDS as readonly string[]).includes(t.type)
-    && !(TERMINAL_TASK_STATUSES as readonly string[]).includes(t.status);
-}
+/* D-6117: the readerless `isDelegatedTask` predicate that stood here is gone;
+ * the server and the PWA read the hook's computed `bgDelegated` and
+ * `bgDelegatedKinds`. This note keeps the lines below where the line-anchored
+ * citations into this file expect them. */
 /** D-5231: the ONE reader of `FleetSession.background` for display. The live
  *  `fleet` frame is cast, not revived, so a server predating the field omits
  *  the key at runtime: `undefined` reads as null here, never as a TypeError.
