@@ -25,6 +25,7 @@ import { archivableReleased } from './archiveReleased';
 import { nestFleet, type FleetRow } from './nestFleet';
 import { childRunContext, workingOnCard, type FleetTreeGroup } from './fleetTree';
 import { ProjectCardHead } from './ProjectCardHead';
+import type { CardRollup, RolledRow } from './rollup';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, dispatchWindow, runForSession, waveLabel } from './runWords';
 import { SessionLine } from './SessionLine';
 import './fleet.css';
@@ -88,7 +89,7 @@ export function ProjectCard({
   projected,
   placement = { kind: 'legacy' },
   adding = false,
-  collapsed = false,
+  collapsed: collapsedProp = false,
   onToggle,
   onActions,
   archivedOpen = false,
@@ -104,6 +105,8 @@ export function ProjectCard({
   nowMs = Date.now(),
   coordOf = () => null,
   frameSeen = false,
+  rollup,
+  onToggleChildren,
 }: {
   group: FleetGroup;
   onOpen: (id: string) => void;
@@ -206,7 +209,14 @@ export function ProjectCard({
   /** `stores/fleet.ts`'s `fleetFrameSeen`: without it a coordinator absent from
    *  a STALE array would read as gone (D-1138). Default false = unknown. */
   frameSeen?: boolean;
+  /** D-6088: this card's rollup (`rollup.ts`), the one answer both skins' lists draw. When given, it decides the
+   *  fold and the body's rows (a coordinator's folded workers as one summary line); without it the card draws its
+   *  tree's rows and the `collapsed` it was handed, as before. */
+  rollup?: CardRollup;
+  /** Open or close a coordinator's worker line, by the coordinator's id. */
+  onToggleChildren?: (parentId: string) => void;
 }): ReactNode {
+  const collapsed = rollup?.collapsed ?? collapsedProp;
   // A measured row carries pool and placement from one `/api/projects` read.
   // Only a legacy row's forecast falls back to the global projection; no row
   // reads a pool value from the independently paced websocket frame.
@@ -250,9 +260,10 @@ export function ProjectCard({
   // D-5527: the fleet tree's rows when the caller built them (`fleetTree`, the
   // one model both skins read); a caller that hands a bare group still gets
   // `nestFleet` over the same two inputs, which is the identical answer.
-  const rows = 'rows' in group ? (group as FleetTreeGroup).rows : nestFleet(group.sessions, runs);
-  const rowKey = (row: FleetRow): string =>
-    row.kind === 'session' ? row.session.id : `spawn:${row.run.id}`;
+  const rows: readonly RolledRow[] = rollup?.rows
+    ?? ('rows' in group ? (group as FleetTreeGroup).rows : nestFleet(group.sessions, runs));
+  const rowKey = (row: RolledRow): string =>
+    row.kind === 'session' ? row.session.id : row.kind === 'pending' ? `spawn:${row.run.id}` : `workers:${row.parentId}`;
   // Task 5: the hold reason's door, decided HERE because this is the level that
   // holds the runs. `runForSession` answers off the run rows — never by reading
   // the id out of the hold string, which stays display-only (its docstring
@@ -307,8 +318,20 @@ export function ProjectCard({
     />
   );
 
-  const rowBody = (row: FleetRow): ReactNode =>
-    row.kind === 'session' ? line(row.session, noteFor(row)) : <PendingSpawn run={row.run} nowMs={nowMs} />;
+  const rowBody = (row: RolledRow): ReactNode =>
+    row.kind === 'session' ? line(row.session, noteFor(row))
+    : row.kind === 'pending' ? <PendingSpawn run={row.run} nowMs={nowMs} />
+    : (
+      // D-6088 rule 6: the coordinator's workers as one line, the Released fold's disclosure in the row's place.
+      <BareRow
+        className="proj-children-toggle"
+        aria-expanded={row.expanded}
+        onClick={() => onToggleChildren?.(row.parentId)}
+      >
+        <span className="proj-card-chevron" aria-hidden="true">{row.expanded ? '▾' : '▸'}</span>
+        {row.text}
+      </BareRow>
+    );
 
   return (
     <section
@@ -327,6 +350,9 @@ export function ProjectCard({
           onAddWorkspace={onAddWorkspace}
           addLabel={addLabel}
           adding={adding}
+          lastActive={rollup?.lastActive ?? null}
+          now={nowMs}
+          pinnedOpen={rollup?.pinnedOpen ?? false}
         />
 
       {!collapsed && (

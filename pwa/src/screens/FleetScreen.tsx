@@ -21,7 +21,8 @@ import { ProjectCard } from '../fleet/ProjectCard';
 import { BucketBar } from '../fleet/BucketBar';
 import { FleetHead } from '../fleet/FleetHead';
 import { anyDispatchPending, isRunClosed } from '../fleet/runWords';
-import { useFolded } from '../fleet/foldState';
+import { useFolded, useRollupPrefs } from '../fleet/foldState';
+import { anyRecent, prunePrefs, rollupFleet, toggleChildren, toggleProject } from '../fleet/rollup';
 import { useProjectedHome } from '../fleet/useProjectedHome';
 import { useFleetChrome } from '../fleet/FleetChrome';
 import { useFleetFlows } from '../fleet/FleetFlows';
@@ -172,6 +173,24 @@ export function FleetScreen({
   // Fold state persists across navigation (foldState.ts) — useState here would
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
+  // D-6088: the rollup's per-device preferences, and the clock its 30-minute window reads. The clock ticks a minute
+  // at a time and ONLY while some row's last change is inside the window, so a quiet fleet still runs no timer.
+  const [rollupPrefs, updateRollup] = useRollupPrefs();
+  const rollNow = useNow(60_000, anyRecent(sessions, Date.now()));
+  // The tree the cards draw, once, and its rollup over the same groups (D-6088).
+  const tree = fleetTree(sessions, projects.knownProjects, activeRuns, acks);
+  const rollup = rollupFleet(tree, rollupPrefs, Math.max(nowMs, rollNow), selectedId);
+  // Rule 4's reset: a stored ▾ made in the other activity class, or an open worker line whose coordinator left, is
+  // dropped — from a FRESH frame only, never from a cached snapshot (`fleetFrameSeen`). `prunePrefs` answers null when
+  // nothing changes, so this writes nothing on an ordinary frame.
+  // Keyed on what the reset reads — each card's class and the fleet's ids — so it runs when one of them moves.
+  const pruneKey = `${[...rollup.cards].map(([p, c]) => `${p}:${c.cls}`).join('|')}#${sessions.map((s) => s.id).join('|')}`;
+  useEffect(() => {
+    if (!fleetFrameSeen) return;
+    const ids = new Set(sessions.map((s) => s.id));
+    updateRollup((p) => prunePrefs(p, rollup, ids) ?? p);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `pruneKey` is the dependency: it names every input read.
+  }, [fleetFrameSeen, pruneKey, updateRollup]);
   // One poll of /api/fleet/health feeds both the banner and BuildLine below
   // (spec §6) — the chrome owns it (D-5468) so neither issues its own request.
   // The same for /api/updates (centralised-update §13): ONE 60 s poll, its
@@ -388,7 +407,7 @@ export function FleetScreen({
           <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />
 
           <div className="fleet-list">
-            {fleetTree(sessions, projects.knownProjects, activeRuns, acks).map((g) => (
+            {tree.map((g) => (
               <ProjectCard
                 key={g.project}
                 group={g}
@@ -399,8 +418,15 @@ export function FleetScreen({
                 placement={projects.placementFor(g.project)}
                 poolFor={projects.poolFor}
                 adding={projects.adding.has(g.project)}
-                collapsed={folded.has(g.project)}
-                onToggle={toggleFold}
+                /* D-6088: the project fold and the worker lines are the rollup's (`rollup.ts`); the Released and
+                   Archived sub-folds keep `useFolded`. */
+                rollup={rollup.cards.get(g.project)}
+                onToggle={(key) => {
+                  const card = rollup.cards.get(g.project);
+                  if (key === g.project && card !== undefined) updateRollup((p) => toggleProject(p, card, g.project));
+                  else toggleFold(key);
+                }}
+                onToggleChildren={(id) => updateRollup((p) => toggleChildren(p, id))}
                 onActions={(s) => flows.openActions(s.id)}
                 roster={roster}
                 pools={pools}
@@ -444,7 +470,7 @@ export function FleetScreen({
                    here, and a second line for it would state the same wave
                    twice (spec §6). */
                 abroad={g.abroad}
-                nowMs={nowMs}
+                nowMs={Math.max(nowMs, rollNow)}
                 /* Fleet-wide, unlike every other lookup this card is handed —
                    an orphan's coordinator is by construction NOT among this
                    card's own sessions (D-3009), so a card-scoped read would

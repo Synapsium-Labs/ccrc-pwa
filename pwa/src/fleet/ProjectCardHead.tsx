@@ -20,6 +20,7 @@ import type { ProjectPoolWire, RosterWire } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import type { FleetGroup, FleetPin } from './groupFleet';
 import { POOL_UNAVAILABLE_TEXT } from './ProjectCard';
+import { formatAge } from './formatReset';
 import './fleet.css';
 
 /** The project's measured route pool as one chip. A non-measured read yields
@@ -108,10 +109,17 @@ export interface ProjectCardHeadProps {
    *  forecast, which lives there rather than in the layout. */
   addLabel: string;
   adding: boolean;
+  /** D-6088: the latest change of a live member (`rollup.ts`'s `lastActive`); a folded header says how long ago. */
+  lastActive?: number | null;
+  /** The clock `lastActive` is read against. */
+  now?: number;
+  /** D-6088 rule 5: an operator-facing question holds the card open, so the ▾ does nothing and says so. */
+  pinnedOpen?: boolean;
 }
 
 export function ProjectCardHead({
   group, collapsed, onToggle, roster, pool, poolDim, onPool, onAddWorkspace, addLabel, adding,
+  lastActive = null, now = Date.now(), pinnedOpen = false,
 }: ProjectCardHeadProps): ReactNode {
   return (
       <div className="proj-card-head">
@@ -119,6 +127,8 @@ export function ProjectCardHead({
           type="button"
           className="proj-card-toggle"
           aria-expanded={!collapsed}
+          disabled={pinnedOpen}
+          title={pinnedOpen ? 'held open: a question here is waiting on you' : undefined}
           onClick={() => onToggle?.(group.project)}
         >
           <span className="proj-card-chevron" aria-hidden="true">
@@ -156,6 +166,10 @@ export function ProjectCardHead({
             <span className="proj-card-busy">
               {group.busy > 1 ? `${group.busy} working` : 'working'}
             </span>
+          )}
+          {/* D-6088: a rolled-up card says when it last moved, so a quiet project reads as quiet since when. */}
+          {collapsed && lastActive !== null && (
+            <span className="proj-card-last">{`active ${formatAge(Math.floor((now - lastActive) / 1000))}`}</span>
           )}
         </button>
 

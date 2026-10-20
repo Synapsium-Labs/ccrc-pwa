@@ -1746,6 +1746,18 @@ button.sess-held {
   font-size: var(--fs-meta);
   color: var(--status-busy-text);
 }
+/* D-6088: when a rolled-up project last moved. Ambient, so the pin's tertiary ink, and the first thing to give way:
+   it shrinks and clips before the name does. */
+.proj-card-last {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--family-mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-tertiary);
+}
 
 /* A fold hides the selected row exactly as it would hide a pending dialog, so
    the card name says "the one you are in" on the folded card, in the selected
@@ -2106,8 +2118,10 @@ button.proj-card-pool::before {
 /* A card's two disclosures are `<BareRow>`, and ONE rule: Released and
    Archived are the same control twice over, which is why they declared the
    same seven as well as the component's six. */
+/* D-6088: a coordinator's folded workers (`.proj-children-toggle`) are the same disclosure a third time. */
 .proj-released-toggle,
-.proj-archived-toggle {
+.proj-archived-toggle,
+.proj-children-toggle {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
