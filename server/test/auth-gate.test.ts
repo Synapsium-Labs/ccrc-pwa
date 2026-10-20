@@ -295,7 +295,9 @@ describe('the scanner is looking at something', () => {
     expect(scanRoutes('docs/routes.ts').length).toBe(4);
     // 1 in `linear/routes.ts` (named workspaces S4, design 2026-10-20 §4.2): `GET /api/linear/resolve`, the
     // ticket-title preview read. Session-gated and NOT EXEMPT, no box token, `Cache-Control: no-store`.
-    expect(scanRoutes('linear/routes.ts').length).toBe(1);
+    // 5 since S4b (design §5.1): the connection's `GET`, `PUT`, `POST …/check` and `DELETE /api/linear/connection`, all
+    // session-gated and NOT EXEMPT, no box token; the PUT and DELETE also take the account gate with a step-up.
+    expect(scanRoutes('linear/routes.ts').length).toBe(5);
     // The `server.ts` half moved too, and NOT on that ladder: 47 since
     // `POST /api/projects/:project/pool` (account pools wave 3, task 9) — the
     // project-pool tag write, registered in `server.ts` rather than in
@@ -395,7 +397,9 @@ describe('the scanner is looking at something', () => {
     // 59 + 42 + 7 + 2 + 4 = 114, the HTTP half 111, the gated count 68 -> 71, the exempt-HTTP count stays 40.
     // 115 since named workspaces S4's `GET /api/linear/resolve` (session-gated, NOT EXEMPT, no box token):
     // 59 + 42 + 7 + 2 + 4 + 1 = 115, the HTTP half 112, the gated count 71 -> 72, the exempt-HTTP count stays 40.
-    expect(ROUTES.length).toBe(115);
+    // 119 since named workspaces S4b's four connection routes (session-gated, NOT EXEMPT, no box token):
+    // 59 + 42 + 7 + 2 + 4 + 5 = 119, the HTTP half 116, the gated count 72 -> 76, the exempt-HTTP count stays 40.
+    expect(ROUTES.length).toBe(119);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -543,7 +547,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 115 scanned + the static wildcard when the bundle is built.
+    // 119 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1061,9 +1065,13 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // Step-up's three (D-5512, accounts plan Task A5): with no session gate there is
     // no session to step up, so all three answer `501 auth-off` dark.
     'POST /api/auth/step-up/start', 'POST /api/auth/step-up/finish', 'POST /api/auth/step-up/passphrase',
+    // The Linear connection's two credential writes (named workspaces S4b): they take the account gate, whose first
+    // refusal is `auth-off` (501) dark and whose step-up refusal is `step-up-required` (403) armed with a session
+    // that has not stepped up, so dark and authenticated differ BY DESIGN, as they do for the step-up routes.
+    'PUT /api/linear/connection', 'DELETE /api/linear/connection',
   ]);
 
-  it('FLAG_AWARE is exactly those eleven — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those thirteen — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -1079,6 +1087,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // prevent, arrived at by automation.
     expect([...FLAG_AWARE].sort()).toEqual([
       'DELETE /api/auth/passkey/:id',
+      'DELETE /api/linear/connection',
       'GET /api/auth/passkeys',
       'POST /api/auth/login',
       'POST /api/auth/logout',
@@ -1089,6 +1098,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'POST /api/auth/step-up/finish',
       'POST /api/auth/step-up/passphrase',
       'POST /api/auth/step-up/start',
+      'PUT /api/linear/connection',
     ]);
     // …and both really are exempt-or-gated as the loop below assumes: login is
     // EXEMPT (the door), logout is GATED (only a logged-in caller can log out).
@@ -1097,7 +1107,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 112 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 116 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1161,7 +1171,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 112 HTTP routes, not the 40 exempt.
+          //    is not itself flag-aware — the assertion that covers all 116 HTTP routes, not the 40 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

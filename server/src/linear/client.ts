@@ -128,6 +128,65 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
+ * What one call to Linear produced, before anything reads its body for a meaning: the parsed JSON, or the
+ * fixed word for why there is none. THE ONE FETCH PATH in this file (the lookup and the key check both go
+ * through it), so the deadline, the header and the failure arms exist once.
+ */
+type Call =
+  | { ok: true; body: unknown }
+  | { ok: false; reason: Exclude<LinearFailure, 'not-configured' | 'not-found'> };
+
+async function callLinear(
+  token: string,
+  query: string,
+  variables: Record<string, unknown>,
+  deps: { fetch?: FetchLike; timeoutMs?: number },
+): Promise<Call> {
+  const doFetch: FetchLike = deps.fetch ?? ((url, init) => fetch(url, init));
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), deps.timeoutMs ?? LINEAR_TIMEOUT_MS);
+  try {
+    const res = await doFetch(`${LINEAR_API_ORIGIN}${LINEAR_API_PATH}`, {
+      method: 'POST',
+      headers: {
+        // NO `Bearer`. A Linear PERSONAL API KEY is sent as the bare
+        // Authorization value; only OAuth access tokens take the `Bearer`
+        // prefix. Adding it "for correctness" is the natural slip, so
+        // `linear.test.ts` pins the exact header.
+        'authorization': token,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ query, variables }),
+      signal: ac.signal,
+    });
+
+    if (!res.ok) {
+      // 401/403 is a key problem the operator can fix; everything else is the
+      // service. 429 lands in `unreachable` deliberately: it is not a
+      // credential fault and the caller's answer (use the offline title) is
+      // the same as for a 500.
+      return { ok: false, reason: res.status === 401 || res.status === 403 ? 'unauthorised' : 'unreachable' };
+    }
+
+    try {
+      return { ok: true, body: await res.json() };
+    } catch {
+      // The deadline can fire while the body is still arriving; that is a
+      // timeout, not a shape fault.
+      return { ok: false, reason: ac.signal.aborted ? 'timeout' : 'malformed' };
+    }
+  } catch {
+    // An abort is the deadline, and it is worth telling apart from a DNS
+    // failure: one is worth retrying on the same input, the other means the
+    // box cannot reach Linear at all. The error itself is never kept; its text
+    // can carry a URL or a header.
+    return { ok: false, reason: ac.signal.aborted ? 'timeout' : 'unreachable' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Look up a ticket's title with the key `readLinearKey` produced.
  *
  * Anything but a usable key answers `not-configured` WITHOUT a call, the
@@ -141,85 +200,98 @@ export async function lookupLinearIssue(
 ): Promise<LinearLookup> {
   if (key.kind !== 'key') return { ok: false, reason: 'not-configured', key: key.kind };
 
-  const token = key.key;
-  const keyDigest = valueDigestHex(token);
-  const doFetch: FetchLike = deps.fetch ?? ((url, init) => fetch(url, init));
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), deps.timeoutMs ?? LINEAR_TIMEOUT_MS);
+  const keyDigest = valueDigestHex(key.key);
   const asked = `${ref.key.toUpperCase()}-${ref.num}`;
   const fail = (reason: Exclude<LinearFailure, 'not-configured'>): LinearLookup =>
     ({ ok: false, reason, keyDigest });
 
-  try {
-    const res = await doFetch(`${LINEAR_API_ORIGIN}${LINEAR_API_PATH}`, {
-      method: 'POST',
-      headers: {
-        // NO `Bearer`. A Linear PERSONAL API KEY is sent as the bare
-        // Authorization value; only OAuth access tokens take the `Bearer`
-        // prefix. Adding it "for correctness" is the natural slip, so
-        // `linear.test.ts` pins the exact header.
-        'authorization': token,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ query: QUERY, variables: { id: asked } }),
-      signal: ac.signal,
-    });
+  const call = await callLinear(key.key, QUERY, { id: asked }, deps);
+  if (!call.ok) return fail(call.reason);
+  const body = call.body;
 
-    if (!res.ok) {
-      // 401/403 is a key problem the operator can fix; everything else is the
-      // service. 429 lands in `unreachable` deliberately: it is not a
-      // credential fault and the caller's answer (use the offline title) is
-      // the same as for a 500.
-      return fail(res.status === 401 || res.status === 403 ? 'unauthorised' : 'unreachable');
-    }
+  if (!isRecord(body)) return fail('malformed');
+  const data = body['data'];
+  if (!isRecord(data) || !('issue' in data)) return fail('malformed');
+  const issue = data['issue'];
 
-    let body: unknown;
-    try {
-      body = await res.json();
-    } catch {
-      // The deadline can fire while the body is still arriving; that is a
-      // timeout, not a shape fault.
-      return fail(ac.signal.aborted ? 'timeout' : 'malformed');
-    }
-
-    if (!isRecord(body)) return fail('malformed');
-    const data = body['data'];
-    if (!isRecord(data) || !('issue' in data)) return fail('malformed');
-    const issue = data['issue'];
-
-    // GraphQL answers 200 with an `errors` array. A missing issue arrives as
-    // `data.issue === null`, which is NOT an error condition on the wire; both
-    // have to be read, and they mean different things to the operator.
-    if (issue === null) {
-      const errors = body['errors'];
-      return fail(Array.isArray(errors) && errors.length > 0 ? 'unreachable' : 'not-found');
-    }
-    if (!isRecord(issue)) return fail('malformed');
-    const rawTitle = issue['title'];
-    if (typeof rawTitle !== 'string') return fail('malformed');
-
-    // A ticket with no title once sanitised is not a lookup failure to retry:
-    // there is simply nothing to name it with.
-    const title = sanitizeTitle(rawTitle);
-    if (title === '') return fail('not-found');
-
-    const echoed = issue['identifier'];
-    return {
-      ok: true,
-      // Linear's own casing for the identifier, when it gives a well-formed
-      // one: the operator may have typed `eng-1234` and the board should read
-      // `ENG-1234`.
-      identifier: typeof echoed === 'string' && IDENTIFIER.test(echoed) ? echoed : asked,
-      title,
-      keyDigest,
-    };
-  } catch {
-    // An abort is the deadline, and it is worth telling apart from a DNS
-    // failure: one is worth retrying on the same input, the other means the
-    // box cannot reach Linear at all. The error itself is never kept; its text
-    // can carry a URL or a header.
-    return fail(ac.signal.aborted ? 'timeout' : 'unreachable');
-  } finally {
-    clearTimeout(timer);
+  // GraphQL answers 200 with an `errors` array. A missing issue arrives as
+  // `data.issue === null`, which is NOT an error condition on the wire; both
+  // have to be read, and they mean different things to the operator.
+  if (issue === null) {
+    const errors = body['errors'];
+    return fail(Array.isArray(errors) && errors.length > 0 ? 'unreachable' : 'not-found');
   }
+  if (!isRecord(issue)) return fail('malformed');
+  const rawTitle = issue['title'];
+  if (typeof rawTitle !== 'string') return fail('malformed');
+
+  // A ticket with no title once sanitised is not a lookup failure to retry:
+  // there is simply nothing to name it with.
+  const title = sanitizeTitle(rawTitle);
+  if (title === '') return fail('not-found');
+
+  const echoed = issue['identifier'];
+  return {
+    ok: true,
+    // Linear's own casing for the identifier, when it gives a well-formed
+    // one: the operator may have typed `eng-1234` and the board should read
+    // `ENG-1234`.
+    identifier: typeof echoed === 'string' && IDENTIFIER.test(echoed) ? echoed : asked,
+    title,
+    keyDigest,
+  };
+}
+
+/** The key check's query: who the key is and which organisation it reads. Two names and nothing else. */
+const VIEWER_QUERY = 'query Viewer { viewer { name } organization { name } }';
+
+/** The longest an organisation or user name is kept (code points). A bound on what Linear's text can put
+ *  in a file and on the screen. */
+export const LINEAR_NAME_MAX_CHARS = 80;
+
+/** A name from Linear, made safe to store and show: control runs collapse to one space, trimmed, bounded. Null
+ *  when nothing is left (a name that is all control characters is no name). */
+function cleanName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const s = [...raw.replace(/\p{Cc}+/gu, ' ').trim()].slice(0, LINEAR_NAME_MAX_CHARS).join('').trim();
+  return s === '' ? null : s;
+}
+
+/** The failures a key check can end in. `not-configured` makes no call and `not-found` has no meaning here. */
+export type LinearVerifyFailure = Exclude<LinearFailure, 'not-configured' | 'not-found'>;
+
+/**
+ * `keyDigest` on EVERY outcome, as in the lookup: a caller acting on `unauthorised` compares it with the digest
+ * of the key now on disk before it condemns anything.
+ */
+export type LinearVerify =
+  | { ok: true; org: string; user: string; keyDigest: string }
+  | { ok: false; reason: LinearVerifyFailure; keyDigest: string };
+
+/**
+ * Ask Linear who `key` is. The Settings route's Connect and Check again: a key is stored only once this
+ * answered `ok`. The same fetch path, header and deadline as the lookup (`callLinear`); the names are Linear's
+ * text and are cleaned here, and nothing else of the answer is kept.
+ */
+export async function verifyLinearKey(
+  key: string,
+  deps: { fetch?: FetchLike; timeoutMs?: number } = {},
+): Promise<LinearVerify> {
+  const keyDigest = valueDigestHex(key);
+  const call = await callLinear(key, VIEWER_QUERY, {}, deps);
+  if (!call.ok) return { ok: false, reason: call.reason, keyDigest };
+  const body = call.body;
+  if (!isRecord(body)) return { ok: false, reason: 'malformed', keyDigest };
+  const data = body['data'];
+  if (!isRecord(data)) {
+    // A GraphQL `errors` array with no data is the service refusing the query, not a shape fault.
+    const errors = body['errors'];
+    return { ok: false, reason: Array.isArray(errors) && errors.length > 0 ? 'unreachable' : 'malformed', keyDigest };
+  }
+  const viewer = data['viewer'];
+  const organization = data['organization'];
+  const user = isRecord(viewer) ? cleanName(viewer['name']) : null;
+  const org = isRecord(organization) ? cleanName(organization['name']) : null;
+  if (user === null || org === null) return { ok: false, reason: 'malformed', keyDigest };
+  return { ok: true, org, user, keyDigest };
 }

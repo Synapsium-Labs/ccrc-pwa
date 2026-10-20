@@ -60,6 +60,7 @@ import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from '.
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes } from './linear/routes.js';
+import { createAccountGate } from './accounts/gate.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
@@ -1729,7 +1730,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `box-token-census.test.ts`'s lane sources read by name. `deps.tokenDriver`
   // is read at request time, so a box with no driver answers `no-claim`/`501`.
   registerTokenRoutes(app, deps);
-  registerLinearRoutes(app, { ccrcDir: deps.cfg.ccrcDir });
+  // The Linear connection's two credential writes take the account gate with a step-up (D-5511, D-5512), built here
+  // from the same measured inputs every gate decision reads: no ccd verb is involved, so its routes ask `cap: null`.
+  const accountGate = createAccountGate({
+    enabled: deps.cfg.authEnabled, origin: deps.cfg.origin, sessionAuth, fleetState: () => deps.fleetState, stepUp,
+  });
+  registerLinearRoutes(app, { ccrcDir: deps.cfg.ccrcDir, gate: accountGate });
 
   // The native Docs reader's API (design 2026-10-01 section 3.4), registered from its own files as ONE encapsulated
   // plugin, so its provenance hook, its request-body error handler and its response policy reach its four routes and

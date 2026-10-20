@@ -7,9 +7,11 @@ import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fast
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { LINEAR_REF_MAX_CHARS, registerLinearRoutes, type ResolveAnswer } from '../src/linear/routes.js';
-import { LINEAR_KEY_FILE } from '../src/linear/connection.js';
+import { LINEAR_DETAILS_FILE, LINEAR_KEY_FILE } from '../src/linear/connection.js';
 import { type FetchLike } from '../src/linear/client.js';
 import { WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
+import type { AccountGate } from '../src/accounts/gate.js';
+import { refuseRoute } from '../src/refuse.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
 removeTmpFixturesEachTest();
@@ -27,6 +29,10 @@ const fetchAnswering = (answer: Awaited<ReturnType<FetchLike>>): { f: FetchLike;
 const linearOk = (identifier: string, title: string): Awaited<ReturnType<FetchLike>> =>
   ({ ok: true, status: 200, json: async () => ({ data: { issue: { identifier, title } } }) });
 
+/** The resolve read never reaches the account gate (the connection's two writes do, in linear-connection-routes.test.ts):
+ *  a gate that refuses everything proves it. */
+const refusingGate: AccountGate = (_req, reply) => { void refuseRoute(reply, 'auth-off'); return { pass: false }; };
+
 let app: FastifyInstance | null = null;
 afterEach(async () => { await app?.close(); app = null; });
 
@@ -34,7 +40,7 @@ async function boot(opts: { fetch?: FetchLike; timeoutMs?: number; key?: string 
   const dir = mkTmp('ccrc-linear-route-');
   if (opts.key !== null) writeFileSync(path.join(dir, LINEAR_KEY_FILE), `${opts.key ?? KEY}\n`, { mode: 0o600 });
   const a = Fastify();
-  registerLinearRoutes(a, { ccrcDir: dir, fetch: opts.fetch, timeoutMs: opts.timeoutMs });
+  registerLinearRoutes(a, { ccrcDir: dir, gate: refusingGate, fetch: opts.fetch, timeoutMs: opts.timeoutMs });
   await a.ready();
   app = a;
   return { app: a, dir };
@@ -212,15 +218,28 @@ describe('GET /api/linear/resolve', () => {
     }
   });
 
-  it('writes nothing, not even on a 401: the connection state is the next stage’s', async () => {
+  it('on a 401 it writes the rejection record and nothing else: the key file is never touched', async () => {
     const { f } = fetchAnswering({ ok: false, status: 401, json: async () => ({}) });
     const { app: a, dir } = await boot({ fetch: f });
-    const before = readdirSync(dir).sort();
     const stat = statSync(path.join(dir, LINEAR_KEY_FILE));
     const text = readFileSync(path.join(dir, LINEAR_KEY_FILE), 'utf8');
     await get(a, 'ENG-1234');
-    expect(readdirSync(dir).sort()).toEqual(before);
+    expect(readdirSync(dir).sort()).toEqual([LINEAR_DETAILS_FILE, LINEAR_KEY_FILE]);
     expect(statSync(path.join(dir, LINEAR_KEY_FILE)).mtimeMs).toBe(stat.mtimeMs);
     expect(readFileSync(path.join(dir, LINEAR_KEY_FILE), 'utf8')).toBe(text);
+  });
+
+  it('writes nothing on a failure that is not a 401', async () => {
+    for (const ans of [
+      { ok: false, status: 502, json: async () => ({}) },
+      { ok: true, status: 200, json: async () => ({ data: { issue: null } }) },
+    ]) {
+      const { f } = fetchAnswering(ans);
+      const { app: a, dir } = await boot({ fetch: f });
+      await get(a, 'ENG-1234');
+      expect(readdirSync(dir).sort()).toEqual([LINEAR_KEY_FILE]);
+      await a.close();
+      app = null;
+    }
   });
 });

@@ -1086,6 +1086,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/docs/projects': 'repository content, not session text',
     '/api/docs/:project/tree': 'repository content, not session text',
     '/api/docs/:project/file': 'repository content, not session text',
+    '/api/linear/connection': "the Linear connection's state: organisation and user names, the key's last four characters, the check time; never the key",
   };
 
   it('every GET route and websocket is masked by the hook, masked inline, or exempt with a reason', () => {

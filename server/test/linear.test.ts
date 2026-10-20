@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   LINEAR_API_ORIGIN, LINEAR_API_PATH, LINEAR_FAILURES, LINEAR_TIMEOUT_MS,
-  lookupLinearIssue, sanitizeTitle, type FetchLike, type LinearLookup,
+  lookupLinearIssue, sanitizeTitle, verifyLinearKey, type FetchLike, type LinearLookup,
 } from '../src/linear/client.js';
 import { LINEAR_KEY_FILE, linearKeyPath, readLinearKey, type LinearKeyRead } from '../src/linear/connection.js';
 import { ticketTitle } from '../src/linear/title.js';
@@ -320,6 +320,67 @@ describe('readLinearKey', () => {
   it('never returns the file metadata, only the vocabulary the callers need', async () => {
     const r = await readLinearKey(dirWith(`${KEY}\n`));
     expect(Object.keys(r).sort()).toEqual(['key', 'kind']);
+  });
+});
+
+describe('verifyLinearKey', () => {
+  const viewer = (v: unknown): Answer => bodyOf(v);
+  const GOOD = viewer({ data: { viewer: { name: 'user-a' }, organization: { name: 'team-a' } } });
+
+  it('names the user and the organisation, and carries the digest of the key it asked with', async () => {
+    const { f } = spyFetch(GOOD);
+    expect(await verifyLinearKey(KEY, { fetch: f })).toEqual({ ok: true, org: 'team-a', user: 'user-a', keyDigest: valueDigestHex(KEY) });
+  });
+
+  it('sends the bare key (no Bearer) to the one endpoint, with the viewer query and a signal', async () => {
+    const { f, calls } = spyFetch(GOOD);
+    await verifyLinearKey(KEY, { fetch: f });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe(`${LINEAR_API_ORIGIN}${LINEAR_API_PATH}`);
+    expect(calls[0]!.init.headers['authorization']).toBe(KEY);
+    expect(calls[0]!.init.signal).toBeInstanceOf(AbortSignal);
+    expect(JSON.parse(calls[0]!.init.body)).toMatchObject({ query: expect.stringContaining('viewer') });
+  });
+
+  it('carries the deadline: a hung call is a timeout, in well under it', async () => {
+    const hang: FetchLike = (_u, init) => new Promise((_res, rej) => {
+      init.signal.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    });
+    expect(await verifyLinearKey(KEY, { fetch: hang, timeoutMs: 15 })).toEqual({ ok: false, reason: 'timeout', keyDigest: valueDigestHex(KEY) });
+  });
+
+  it('each failure is its own word, and every one carries the digest', async () => {
+    const cases: [Answer | (() => Promise<Answer>), string][] = [
+      [bodyOf({}, 401), 'unauthorised'],
+      [bodyOf({}, 403), 'unauthorised'],
+      [bodyOf({}, 500), 'unreachable'],
+      [bodyOf({}, 429), 'unreachable'],
+      [async () => { throw new Error('ECONNREFUSED'); }, 'unreachable'],
+      [viewer({ errors: [{ message: 'x' }] }), 'unreachable'],
+      [viewer('nope'), 'malformed'],
+      [viewer({ data: {} }), 'malformed'],
+      [viewer({ data: { viewer: { name: 'u' }, organization: {} } }), 'malformed'],
+      [viewer({ data: { viewer: { name: '\u0001\u0002' }, organization: { name: 'o' } } }), 'malformed'],
+      [{ ok: true, status: 200, json: async () => { throw new SyntaxError('bad json'); } }, 'malformed'],
+    ];
+    for (const [ans, word] of cases) {
+      const f: FetchLike = async () => (typeof ans === 'function' ? ans() : ans);
+      expect(await verifyLinearKey(KEY, { fetch: f }), word).toEqual({ ok: false, reason: word, keyDigest: valueDigestHex(KEY) });
+    }
+  });
+
+  it('cleans and bounds the names, and never copies the rest of the answer', async () => {
+    const { f } = spyFetch(viewer({ data: { viewer: { name: `a\tb${'x'.repeat(300)}`, email: 'leak@example.invalid' }, organization: { name: ' team-a\n' } } }));
+    const r = await verifyLinearKey(KEY, { fetch: f });
+    expect(r.ok && r.org).toBe('team-a');
+    expect(r.ok && [...r.user].length).toBe(80);
+    expect(JSON.stringify(r)).not.toContain('leak@');
+  });
+
+  it('shares the lookup\'s one fetch path: client.ts has exactly one call to the network', () => {
+    const text = readFileSync(path.resolve(here, '..', 'src', 'linear', 'client.ts'), 'utf8');
+    expect(text.match(/\bdoFetch\(/g)).toHaveLength(1);
+    expect(text.match(/\bfetch\(url, init\)/g)).toHaveLength(1);
   });
 });
 

@@ -68,6 +68,8 @@ export const GENERIC_REFUSALS = [
   'not-remote', 'not-seeded', 'pool-mismatch', 'pool-unreadable', 'registry-unreadable', 'run-closed',
   'run-unreadable', 'runs-unreadable', 'sweep-stopped', 'too-large', 'unknown-ask', 'unknown-claim',
   'unknown-session', 'unmeasured', 'unrouteable-record', 'unsupported', 'unsupported-type',
+  // The Linear routes (named workspaces S4 and S4b): the preview read's two and the connection routes' six.
+  'bad-ref', 'ref-too-long', 'bad-key', 'key-rejected', 'not-connected', 'unreachable', 'timeout', 'malformed',
 ] as const;
 export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
 
@@ -131,6 +133,14 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // answers, and never 401: the credential is fine, the box's own origin is not, and a 401 with a verdict would raise
   // the PWA's login screen, which no passphrase could clear. Its other four words are defined above.
   'insecure-origin': 403,
+  // The Linear routes (named workspaces S4, S4b): CHOSEN, not measured — new words. 400 for what the caller sent
+  // (a ref with no text or over its cap, a key the shape rule refuses, a key Linear rejected: all things the
+  // operator can fix and none a fault of the box), 409 for a check with no usable stored key, and 503 for Linear
+  // not answering, one word per arm (`timeout` and `malformed` are not folded into `unreachable`: a retry helps
+  // the first and not the second).
+  'bad-ref': 400, 'ref-too-long': 400, 'bad-key': 400, 'key-rejected': 400,
+  'not-connected': 409,
+  'unreachable': 503, 'timeout': 503, 'malformed': 503,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */
