@@ -22,3 +22,17 @@
  */
 export const UNMEASURED = 'unmeasured';
 export type Unmeasured = typeof UNMEASURED;
+
+/** D-6034 (ARCH-10, #543, step 1): the FOURTH face of the same rule, one layer down — the command itself, not a
+ *  measurement of it. Why a command NEVER RAN, or may not have:
+ *   - `spawn`: it was never started, and that is known (a local spawn error; the agent declining the request,
+ *     `forbidden` among them);
+ *   - `transport`: the link failed (a dropped socket, an abort, a frame never handed to the link), so whether it ran
+ *     is unknown;
+ *   - `timeout`: this server stopped waiting, so whether it ran, or still runs, is unknown.
+ *  None of the three is a refusal: a runner forges `code: 1` on this arm, and a reader that classified that code would
+ *  read an agent drop as the verb saying no. */
+export type NotRanReason = 'transport' | 'spawn' | 'timeout';
+
+/** The arm `ExecResult` (`exec.ts`) and `CcdResult` (`coord/ports.ts`) both carry when the command never ran. */
+export interface NotRan { ran: false; reason: NotRanReason; detail: string }

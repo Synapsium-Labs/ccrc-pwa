@@ -8672,7 +8672,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // 13, the same five sites ENTERED and nothing LEFT. Main's new blocks in
       // that file are appended below every frozen anchor, and this branch's
       // block stays last.
-      'server/test/single-definition.test.ts': 13,
+      // RE-MEASURED on the one delivery writer (D-5997; base = origin/main,
+      // tip = this branch merged onto it): 13 -> 11. This branch's census
+      // edits in that file shift the frozen `plan:3236 :1319-1323` and
+      // `spec:1347 :1319-1323` sites back onto lines that carry their quote:
+      // two coincidental passes gained, not repairs; Task 11 still owns them.
+      'server/test/single-definition.test.ts': 11,
       // RE-MEASURED on the session-workflows view (D-5560; base = origin/main,
       // tip = this branch merged onto it): `shared/api.ts` 0 -> 1, nothing
       // else moved. This branch adds 11 lines to the cited file (one type
@@ -8695,6 +8700,24 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // coincidence on the shifted line: a coincidental pass gained, not a
       // repair, and Task 11 still owns that anchor. No rule changed, so no
       // D-number.
+      // RE-MEASURED on the one delivery writer (D-5997; base = origin/main,
+      // tip = this branch merged onto it): `shared/api.ts` 0 -> 1. This branch
+      // adds 11 lines to the cited file (`outstandingDeliveryStates` and
+      // `OUTSTANDING_DELIVERY_STATES`, above README's anchors), so every anchor
+      // below them shifts by exactly 11. README's four were re-pointed to the
+      // tip's lines (`:8438-8440`, `:8490`, `:8498`, `:8511`). The one site
+      // that ENTERED is the frozen plan's `plan:3379` site (its `:5644`)
+      // named above, losing the coincidental pass the drift decider gave it.
+      // No rule changed, so no D-number.
+      // RE-MEASURED on the archived-held block (D-5943; base = origin/main
+      // after the one delivery writer above, tip = this branch merged onto
+      // it): nothing in the map moved. This branch adds 51 lines to the cited
+      // file (the `FleetHealth.archivedHeld` field and the block's types and
+      // reader, above README's anchors), so every anchor below them shifts by
+      // exactly 51 more. README's four were re-pointed to the tip's lines.
+      // The frozen plan's site named above stays off its quote. No rule
+      // changed, so no D-number.
+      'shared/api.ts': 1,
     });
     // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
     // number of its own, and it went stale against this very map. Now the
@@ -8849,7 +8872,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // neither frozen corpus document changed. S6-R11, no new D-number.
     // 202 -> 201 at the drift decider (D-5921): `shared/api.ts` 1 -> 0, the +35 shift argued beside the map; no other
     // key moves and neither frozen corpus document changed. S6-R11, no new D-number.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(201);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(200);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a

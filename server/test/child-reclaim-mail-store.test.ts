@@ -51,14 +51,14 @@ describe('cancelDeliveriesTo — the reclaimed child’s outstanding mail, parke
     const parked = deliver(s, CHILD, w2);
     s.rejectDelivery(parked, 'undeliverable', 'recipient not in registry');
 
-    expect(s.cancelDeliveriesTo(CHILD), 'the count is the three outstanding rows, nothing else').toBe(3);
+    expect(s.cancelDeliveriesTo(CHILD), 'the count is the three outstanding rows, nothing else').toEqual({ changed: 3 });
     for (const id of [fromWave1, fromWave2, peer]) {
       expect(row(s, id)).toEqual({ state: 'rejected', rejectCode: 'undeliverable', lastError: MAIL_CHILD_RECLAIMED_ERROR });
     }
     expect(row(s, elsewhere).state, 'another recipient is untouched').toBe('queued');
     expect(row(s, acked).state, 'an acked row is not outstanding').toBe('acked');
     expect(row(s, parked).lastError, 'an earlier park keeps its own reason').toBe('recipient not in registry');
-    expect(s.cancelDeliveriesTo(CHILD), 'a second call finds nothing outstanding').toBe(0);
+    expect(s.cancelDeliveriesTo(CHILD), 'a second call finds nothing outstanding').toEqual({ changed: 0 });
     expect(s.dueDeliveries(NOW + 10_000_000, 1).map((d) => d.id)).not.toEqual(
       expect.arrayContaining([fromWave1, fromWave2, peer]));
   });
@@ -70,7 +70,7 @@ describe('cancelDeliveriesTo — the reclaimed child’s outstanding mail, parke
     const ofRun = deliver(s, CHILD, w);
     const abandoned = deliver(s, CHILD, w);
     s.rejectDelivery(abandoned, 'undeliverable', 'recipient not in registry');   // the CONTROL
-    expect(s.cancelDeliveriesTo(CHILD)).toBe(2);
+    expect(s.cancelDeliveriesTo(CHILD)).toEqual({ changed: 2 });
     const listed = s.outstandingMailFor(CHILD).map((m) => m.deliveryId);
     expect(listed, 'the control: an abandoned park is still a human’s to see').toContain(abandoned);
     expect(listed, 'the reclaim park is not').not.toContain(peer);

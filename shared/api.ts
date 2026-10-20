@@ -3624,6 +3624,13 @@ export interface FleetHealth {
    * Wave 3 adds no fleet frame and no PWA state; nothing renders it yet.
    */
   delegation?: DelegationObservationHealth;
+  /**
+   * The ranked total of bytes archived workspaces hold, each with the expiry lane's latest verdict (D-5943,
+   * `ArchivedHeld`). Optional for the same absence-permits reason the blocks above are: absent until the lane's first
+   * pass, and on a server with no watcher or no coordination database; absent reads as UNKNOWN, never as nothing held.
+   * Read it through `readArchivedHeld` alone. No PWA surface renders it yet (the PWA epic's, under the UI rule).
+   */
+  archivedHeld?: ArchivedHeld;
 }
 
 /**
@@ -4154,6 +4161,50 @@ export interface ExpiryAttention {
   readonly archivedAt: number;
   readonly expiresAt: number | null;
   readonly at: number;
+}
+
+/** The RANKED TOTAL of bytes ARCHIVED WORKSPACES hold (D-5943; spec 2026-10-20 §2.7, #120 folded into #318), each with
+ *  the expiry lane's latest verdict for it — a READ MODEL, never a tap: it decides nothing and nothing acts on it. Composed
+ *  by the lane once per pass (`rankArchivedHeld`, L1 `server/src/archivedExpiry.ts`), shadow and armed alike, and carried
+ *  by `GET /api/fleet/health` as the optional `archivedHeld` block. It covers registry rows only.
+ *   - `bytes` is ws-archive's own measure AT ARCHIVE TIME (`FleetSession.archivedBytes`); `null` is UNMEASURED — never 0 —
+ *     counted in `unmeasured`, left out of `totalBytes` and ranked last.
+ *   - `rows` are ranked by bytes, descending, ties by `sessionId`.
+ *   - `kind` is the family of the lane's latest word, `verdict` the word itself (D-6026): the standing report's
+ *     (`ExpiryAttention.kind`, a refusal's token as its word), else the last act's answer (`deferred` with its reason,
+ *     `refused` with its token, …), else `learned`/`expiry-known` (the audit taught the instant, nothing asked yet), else
+ *     `not-yet-audited` for both. Read them as text: the vocabulary is the lane's and grows with it. */
+export interface ArchivedHeldRow {
+  readonly sessionId: string;
+  readonly bytes: number | null;
+  readonly verdict: string;
+  readonly kind: string;
+}
+export interface ArchivedHeld {
+  readonly totalBytes: number;
+  readonly unmeasured: number;
+  readonly rows: readonly ArchivedHeldRow[];
+}
+
+/** THE ONE READER of `FleetHealth.archivedHeld` (D-5943): the block, or `null` — absent (an older server, or a lane that
+ *  has not passed yet) or malformed alike, and `null` reads as UNKNOWN, never as nothing held. */
+export function readArchivedHeld(health: unknown): ArchivedHeld | null {
+  if (typeof health !== 'object' || health === null) return null;
+  const v = (health as Record<string, unknown>)['archivedHeld'];
+  if (v === undefined || v === null) return null;
+  try {
+    const o = asObj(v, 'archivedHeld');
+    const rowsRaw = o['rows'];
+    if (!Array.isArray(rowsRaw)) return null;
+    const rows = rowsRaw.map((r, i): ArchivedHeldRow => {
+      const x = asObj(r, `archivedHeld.rows[${i}]`);
+      return { sessionId: reqStr(x, 'sessionId'), bytes: optNum(x, 'bytes'), verdict: reqStr(x, 'verdict'), kind: reqStr(x, 'kind') };
+    });
+    return { totalBytes: reqNum(o, 'totalBytes'), unmeasured: reqNum(o, 'unmeasured'), rows };
+  } catch (err) {
+    if (err instanceof MalformedSnapshot) return null;
+    throw err;
+  }
 }
 
 /** One report of the DEAD-COORDINATOR lane (workspace lifecycle spec 2026-09-24 §5.4, wave 4): a claimant it WOULD end
@@ -4996,6 +5047,17 @@ export function isMailDeliveryState(v: unknown): v is MailDeliveryState {
  *  recorded by this wave, not a decision this list makes. */
 export const TERMINAL_DELIVERY_STATES = ['acked', 'rejected'] as const satisfies
   readonly MailDeliveryState[];
+
+/** The states a delivery sits in while it is still OUTSTANDING, DERIVED as the
+ *  complement of `terminal` within this vocabulary (D-5997, #532), so a member
+ *  added to `TERMINAL_DELIVERY_STATES` leaves this list in the same edit and both
+ *  of the store's guards move together. `unknown` is in neither list: a state this
+ *  build cannot name is not outstanding either (D-1406 stays open). A function so
+ *  the derivation itself can be measured against a different terminal list. */
+export function outstandingDeliveryStates(terminal: readonly MailDeliveryState[]): readonly MailDeliveryState[] {
+  return MAIL_DELIVERY_STATES.filter((s) => s !== 'unknown' && !terminal.includes(s));
+}
+export const OUTSTANDING_DELIVERY_STATES = outstandingDeliveryStates(TERMINAL_DELIVERY_STATES);
 
 /** ≤8KB, spec:114. Measured in UTF-8 BYTES, not string length — the same
  *  char-vs-byte care `hookstate.ts:128-135` already takes with its own cap. */

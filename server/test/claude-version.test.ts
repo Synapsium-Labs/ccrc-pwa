@@ -2,7 +2,6 @@
 // numeric comparator, the channel / mode / lane-kind vocabularies, the closed
 // `why` enum, the numbers of spec §12 and the one parser of the tenth node
 // file (spec §6.2). Pure functions; no fixture HOME, no process, no network.
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   CLAUDE_CHANNEL_DEFAULT,
@@ -440,11 +439,4 @@ describe('parseClaudeNodeFile: every field validator refuses (the leak guards, s
   });
 });
 
-describe('shared/claudeVersion.ts is L0 and imports nothing (the PWA bundles it)', () => {
-  it('has no import line, static or dynamic, and no require', () => {
-    const src = readFileSync(new URL('../../shared/claudeVersion.ts', import.meta.url), 'utf8');
-    expect(src.split('\n').filter((l) => /^\s*import\b/.test(l))).toEqual([]);
-    expect(src).not.toMatch(/\bimport\s*\(/);
-    expect(src).not.toMatch(/\brequire\s*\(/);
-  });
-});
+// shared/claudeVersion.ts's L0 ring is held by server/test/rings/shared-imports.test.ts (D-6045).

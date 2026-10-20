@@ -1172,3 +1172,88 @@ Issued and unused (D1): none.
   subject cap dropped.
 
 Issued and unused (D3): D-5842, D-5843.
+
+### Durability (#752) — ARCH-15, #532: one guarded writer for `mail_deliveries` (issued 2026-10-20 and defined here)
+
+Defined here rather than in the consolidation W1a plan: W1a owns the switches and the notify door, while this section
+already owns the mail lane's delivery states (D1's park columns and writers, D3's brief pass), and every writer this
+task folds is one of them or sits beside them.
+
+- **D-5997** — `mail-deliveries-one-writer` (ARCH-15, #532): `CoordStore` writes `mail_deliveries` in ONE place, the
+  private `writeDeliveries(set, setArgs, guard, where, whereArgs)`, which owns the terminality guard: `'outstanding'`
+  (`OUTSTANDING_STATES_SQL`), `'non-terminal'` (`TERMINAL_DELIVERY_SQL`), or `'ack'` (the negative form plus
+  `markAcked`'s one named exception, the replay-ceiling park). A caller's `where` is ANDed after the guard, never ORed
+  into it, so no writer can widen what the guard admits. `writeDelivery(id, …)` wraps it for one row and answers
+  `DeliveryWrite` = `{changed, state}`, the state read back after the write (`'absent'` for no row). Measured on main
+  before it: 19 `UPDATE mail_deliveries` statements in `store.ts`, `OUTSTANDING_STATES_SQL` a hand-typed literal, nine
+  writers returning `void` and six park writers (D1's five, D3's one) a bare boolean, and `sweepMail` assuming every write landed: an ack
+  landing while a send was in flight still had the sender mailed `mail parked` for a row that was acked. Now
+  `OUTSTANDING_STATES_SQL` is built from L0's `OUTSTANDING_DELIVERY_STATES`, the complement of
+  `TERMINAL_DELIVERY_STATES` (`outstandingDeliveryStates`, `shared/api.ts`); all nineteen writers delegate and return
+  the result (`setDeliveryEnvelope`, `bumpReplayCount` and `markAcked` keep their unions, now built from it); and
+  `sweepMail` consumes each answer through `FleetWatcher.landed`: a refused `markDelivered`, `markIngested`, `backOff`,
+  `noteGate`, `rejectDelivery`, `parkDelivery`, `holdParked` or `baselineParkBox` is logged (`mail sweep: <writer>
+  refused on delivery <id> (row is <state>)`) and the step that assumed it is skipped (the park's sender mail and
+  escalation, the ceiling's rejected mail, the replay count, and the `draft-present` blocked notice, now sent only
+  after its back-off lands). `wakeParked`, `markParkEscalated` and
+  `absorbParkEscalation` refuse in the ordinary course, so their `changed` is read without a log. No other behaviour
+  changes: every SQL predicate is the one it replaces, and the bound `lastError` values are the strings that were
+  interpolated.
+
+**Files.** `shared/api.ts` (`outstandingDeliveryStates`, `OUTSTANDING_DELIVERY_STATES`); `server/src/coord/store.ts`
+(`writeDeliveries`, `writeDelivery`, `DeliveryWrite`, `DeliveryBulkWrite`, the nineteen writers, the derived
+`OUTSTANDING_STATES_SQL`, the reader walk); `server/src/watch.ts` (`landed` and its call sites in `sweepMail` and the
+brief pass); `server/test/mail-deliveries-writer.test.ts` (new); `server/test/mail-sweep.test.ts` (four race tests);
+`server/test/mail-hardening.test.ts` (the census as one writer and no `void`); `server/test/single-definition.test.ts`
+(the negative-form count is exact); `server/test/child-reclaim-mail-store.test.ts` and `hibernate-sweep.test.ts` (the
+new result shapes); `server/test/mail-routes.test.ts` (`non-terminal`, a guard name, joins the non-code kebab
+allowlist); `server/test/session-hook.test.ts` and `README.md` (the citation census re-measured and README's four
+`shared/api.ts` anchors re-pointed past the 11 new lines); `CLAUDE.md` (the "Open on `main`" paragraph).
+
+**Steps.** (1) The red tests, seen failing on `origin/main`; the mail suites' baseline green. (2) The L0 derivation.
+(3) The primitive and the nineteen writers. (4) `sweepMail` consumes the results. (5) The censuses and `CLAUDE.md`.
+(6) Green; the mutation table on a `git archive` copy; tsc and the doc suites.
+
+**Red tests.** `mail-deliveries-writer.test.ts`: `backOff` on an acked row answers `{changed: false, state: 'acked'}`
+and leaves the row as it was; `noteGate` on a rejected row the same; `markDelivered`, `markIngested` and
+`rejectDelivery` on an acked row; the park writers refuse a delivered row and a terminal one; an absent row answers
+`absent`; every one-row writer answers `{changed: true, state}` on a live row; `cancelDeliveriesTo` answers
+`{changed: n}`; a member added to the terminal list leaves the outstanding list; `store.ts` holds exactly one
+`UPDATE mail_deliveries` in code, still one `UPDATE` and one `mail_deliveries SET` once string concatenations are
+folded, and no hand-typed outstanding literal. `mail-sweep.test.ts`: an ack landing mid-send refuses the
+`enter-ignored` park, so the sender gets no `mail parked` mail and the refusal is logged; an ack landing before a
+`draft-present` back-off leaves the row with no back-off, pushes the sender no blocked notice and logs the refusal; an
+ack landing after the parked pass read its rows refuses that pass's ceiling reject, and an ack landing during the
+in-flight send of a row past the ceiling refuses the due loop's ceiling reject: in both the sender gets no `mail
+rejected` mail and the refusal is logged.
+
+**Mutation table** (each against the suites named): M1 the guard dropped from `writeDeliveries`; M2 `where` ORed into
+the guard; M3 `OUTSTANDING_STATES_SQL` back to a literal; M4 the derivation no longer removes the terminal states; M5
+`backOff` writes its own unguarded `UPDATE`, bypassing the one writer; M6 `writeDelivery` answers `changed: true`
+always; M7 `writeDelivery` never reads the state back; M8 `sweepMail` ignores `parkDelivery`'s refusal; M9 `landed`
+logs nothing; M10 `markAcked`'s replay-ceiling exception dropped; M11 the first park's escalation `.changed` dropped
+(an object is always truthy; held by `brief-landed.test.ts`, where D3's notice has already absorbed the escalation).
+Review round: M12 the parked pass's ceiling-reject skip dropped (the sender is mailed `rejected` for an acked row); M13
+the due loop's ceiling-reject skip dropped, the same; M14 the `draft-present` back-off's skip dropped (the blocked
+notice is pushed for an acked row); M15 a writer rewritten as `'UPDATE ' + 'mail_deliveries SET …'` outside the one
+writer (the folded census). Recorded as equivalent: the parked pass's own `.changed` dropped (M11b), since that pass
+reads `parkEscalatedAt IS NULL` first and nothing else stamps the column between that read and the write; and
+`markDelivered`'s skip dropped (M16), since a refused `markDelivered` means the row is terminal, so the
+`bumpReplayCount` that follows refuses too.
+
+**Verify.** `mail-deliveries-writer`, `mail-hardening`, `mail-sweep`, `coord-store`, `brief-landed`, `stall-store`,
+`child-reclaim-mail-store`, `hibernate-sweep`, `single-definition`; `tsc --noEmit -p .` in `server/` and `pwa/`
+(`shared/api.ts` is L0); `deviation-refs` (after `git fetch -q origin main`), `dtbd`, `topology-clean`, `docs-grammar`.
+Nothing rendered: no UI table.
+
+**Routing.** Server and L0 only; no wire field, no route, no migration, no `ccd` change. **Needs.** D1 (#754, merged
+as #853) and D3 (#755, merged as #877). **Gates.** #448 merged; none open.
+
+### Deviations (ARCH-15)
+
+- **D-5998** — `bulk-delivery-write-count` (ARCH-15, #532): the issue says every writer returns `{changed, state}`.
+  The five scoped bulk writers (`cancelKickoffsTo`, `repointCoordinatorMail`, `parkSupersededDeliveries`,
+  `cancelOutstandingDeliveries`, `cancelDeliveriesTo`) write many rows and have no one state to name, so they answer
+  `DeliveryBulkWrite` = `{changed: <rows>}`. None of them returns `void` any more.
+
+Issued and unused (ARCH-15): D-5999.
