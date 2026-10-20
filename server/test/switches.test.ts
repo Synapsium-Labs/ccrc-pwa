@@ -5,6 +5,7 @@
 // The first describe is the CHARACTERIZATION PIN (spec §5.1 rule 1): every marker constant the server exports today,
 // read through the module that exports it, against the value it has on the PR's base. It is green on the old code and
 // stays green through every move commit, because the old names keep exporting the same characters.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, RECLAIM_PAUSE_MARKER,
@@ -78,13 +79,26 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     }
   });
 
-  it('the writers are the ones the tree has: one route-backed verb, two settings routes, the rest by hand', () => {
+  it('the writers are the ones the tree has: two route-backed ccd verbs, two settings routes, the rest by hand', () => {
     const writers = Object.fromEntries(rows.filter(([, r]) => r.writer !== 'hand-only').map(([k, r]) => [k, r.writer]));
     expect(writers).toEqual({
+      'coordinator-paused': 'ccd coord-pause, through POST /api/coord/pause',
       'reclaim-paused': 'ccd reclaim-pause, through POST /api/coord/reclaim-pause',
       'stall-watch-level': 'POST /api/coord/stall-watch',
       'collect-lane-choice': 'POST /api/coord/collect-lane',
     });
+  });
+
+  it('every ccd-verb writer names a verb ccdargv builds and a route that runs it', () => {
+    const argvSrc = readFileSync(new URL('../src/ccdargv.ts', import.meta.url), 'utf8');
+    const routesSrc = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
+    for (const [k, r] of rows) {
+      const m = /^ccd ([a-z-]+), through POST (\/api\/[a-z/-]+)$/.exec(r.writer);
+      if (!r.writer.startsWith('ccd ')) continue;
+      expect(m, `${k}: writer shape`).not.toBeNull();
+      expect(argvSrc.includes(`argv(['${m![1]}'`), `${k}: ccdargv builds ${m![1]}`).toBe(true);
+      expect(routesSrc.includes(`app.post('${m![2]}'`), `${k}: ${m![2]} exists`).toBe(true);
+    }
   });
 
   it('a listing with reclaim-paused is set for it and clear for every other marker row', () => {
