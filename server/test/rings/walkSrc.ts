@@ -1,5 +1,5 @@
 /**
- * D-6045 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0k; ARCH-04 (#545), stage 1). The
+ * D-6045 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0l; ARCH-04 (#545), stage 1). The
  * ring rules' one file walk, with a floor. Every rule under `server/test/rings/` lists its files here, never with a
  * walk of its own, and states the fewest files it expects: a walk that silently stepped outside its tree (a moved
  * directory, a wrong root, a narrowed pattern) visits nothing, and a rule over nothing passes. The floor makes that

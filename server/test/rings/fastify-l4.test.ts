@@ -1,4 +1,4 @@
-// D-6045 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0k; ARCH-04 (#545), stage 1).
+// D-6045 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0l; ARCH-04 (#545), stage 1).
 // RING RULE: `fastify`, `@fastify/*` and every `Fastify*` name (FastifyReply above all) are imported only by the L4
 // files `fastify-l4.data.ts` names, across `server/src`, `agent/src`, `pwa/src` and `ui/src`. The 08-10 spec's L1
 // says "no `fastify` … **no `reply`**": a decision that can touch the reply can answer HTTP itself, and the refusal

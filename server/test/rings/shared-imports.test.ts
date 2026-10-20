@@ -1,4 +1,4 @@
-// D-6045 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0k; ARCH-04 (#545), stage 1).
+// D-6045 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0l; ARCH-04 (#545), stage 1).
 // RING RULE: a `shared/*.ts` file imports only its `./` siblings. L0 "imports nothing, not even `node:*`" (the 08-10
 // spec): the PWA bundles every one of these files, so a `node:*` or a package import breaks the client build, and
 // a `../` import points L0 at an outer ring. Every edge counts, a type-only one included: an L0 type that names a

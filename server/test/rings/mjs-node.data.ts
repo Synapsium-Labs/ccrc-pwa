@@ -1,5 +1,5 @@
 /**
- * D-6045 (Task C0k; ARCH-04 (#545), stage 1): the `node:*` modules a `.mjs` file may import, by where it sits.
+ * D-6045 (Task C0l; ARCH-04 (#545), stage 1): the `node:*` modules a `.mjs` file may import, by where it sits.
  *
  * `MJS_CARVE_OUT` is ARCH-02a's `.mjs` carve-out (the 08-10 spec, L0; D-6000), copied here so the rule reads data,
  * and pinned to the spec's sentence by `mjs-node.test.ts`: a `shared/*.mjs` file, which the PWA never imports, may

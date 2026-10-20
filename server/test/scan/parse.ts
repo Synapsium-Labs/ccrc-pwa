@@ -13,14 +13,13 @@
  * KNOWN WIDTH: a file that does not parse yields what the parser recovered (no throw); a computed member name, an
  * object-literal method and a function bound through `as`, a call or parentheses are not symbols; an alias exported
  * by a later `export { X }` is not an exported type alias; `require(…)` calls are not import edges.
- * A type query (`import('x').T`, `typeof import('x')`) is an edge of its own kind, `type-query`, always type-only
- * (D-6045: ARCH-04's ring rules see a type reached that way as they see an `import type`).
  */
 import { readFileSync } from 'node:fs';
 import ts from 'typescript-api';
 
 /** One module edge: an `import`, an `export … from`, an `import x = require(…)`, a literal `import(…)` or a type
- *  query `import('…').T` / `typeof import('…')`. */
+ *  query `import('…').T` / `typeof import('…')`, always type-only (D-6045: ARCH-04's ring rules see a type reached
+ *  that way as they see an `import type`). */
 export interface ImportEdge {
   specifier: string;
   kind: 'import' | 'export-from' | 'import-equals' | 'dynamic' | 'type-query';

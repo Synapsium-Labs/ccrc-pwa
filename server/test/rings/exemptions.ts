@@ -1,5 +1,5 @@
 /**
- * D-6045 (Task C0k; ARCH-04 (#545), stage 1). The shape every ring rule's data file uses for an entry that its rule
+ * D-6045 (Task C0l; ARCH-04 (#545), stage 1). The shape every ring rule's data file uses for an entry that its rule
  * allows by name: an allowlist member or an exemption. Each entry says why, in one line, and when the entry was
  * written or last re-dated. The sets live in per-rule `*.data.ts` files beside their rule, so a PR that adds or
  * drops an entry edits that rule's data alone, never a file every PR edits.

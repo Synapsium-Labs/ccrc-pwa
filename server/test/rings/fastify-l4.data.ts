@@ -1,5 +1,5 @@
 /**
- * D-6045 (Task C0k; ARCH-04 (#545), stage 1): the L4 files allowed to import `fastify` or an `@fastify/*` package,
+ * D-6045 (Task C0l; ARCH-04 (#545), stage 1): the L4 files allowed to import `fastify` or an `@fastify/*` package,
  * or to bind a `Fastify*` name from any module, in any form (a type import, a re-export and a type query
  * included). Generated from the tree on the day the rule landed; `fastify-l4.test.ts` holds the set EXACTLY, so a
  * new importer needs an entry here (with its reason) and an entry whose file stopped importing fastify must go.

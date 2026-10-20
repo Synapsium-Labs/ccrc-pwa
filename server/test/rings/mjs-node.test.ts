@@ -1,4 +1,4 @@
-// D-6045 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0k; ARCH-04 (#545), stage 1).
+// D-6045 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0l; ARCH-04 (#545), stage 1).
 // RING RULE: no Node builtin in a `.mjs` file the PWA's bundle reaches, and no builtin beyond ARCH-02a's carve-out
 // in any `shared/*.mjs` file. The carve-out (the 08-10 spec, L0) lets a `shared/*.mjs` file "which the PWA never
 // imports" use `node:crypto`, `node:fs` and `node:url`; this rule is the check behind "never imports".

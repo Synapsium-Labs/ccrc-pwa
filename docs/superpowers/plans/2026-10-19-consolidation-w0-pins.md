@@ -302,46 +302,9 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 
 **Exit (GATES):** the literal source pins over W1a's moved regions: the Step 0 count → 0; the ratchet predicate pinned for W1a's files; zero production bytes. **Not in this slice:** the other files' literal pins (later slices, ahead of the wave that moves their code).
 
-### Task C0h: decidable ring wording, contexts 7 to 9, the PWA ring map and the status tables (D-6000; ARCH-02a (#528); spec §2.1) — lands now
+### Task C0l: the ring rules, stage 1 — L4-only fastify, `shared/*.ts` imports only `./`, no builtin in a `.mjs` the PWA reaches (D-6045; ARCH-04 (#545), stage 1) — lands now
 
-A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (judgment: it writes the rules every ring scanner will assert). **Lane:** docs only. **Needs:** nothing; no operator ruling (the spec is approved at rev 2.1, and ARCH-02a says none is needed). **Gates:** none. #434 is another session's superseded PR and is not ridden (D-6001). CLAUDE.md is also edited by #842 and #851; this task's hunk (the "Rings / bounded contexts" bullet) is line-disjoint from both.
-
-**Files:**
-- Modify `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`:
-  - (a) the timer rule under L3, and L4's "timers" read as "schedulers and pollers";
-  - (b) the `.mjs` carve-out under L0, listing every `node:*` module it allows (`node:crypto`, `node:fs`, `node:url`);
-  - (c) contexts 7 (Update control plane, `update/`), 8 (Auth & box token, `auth/`, `token/`) and 9 (Docs, `docs/`), each with its language and allowed dependencies, plus the **K** row (kernels and platform files, no aggregate);
-  - (d) a new section, "Deciding a file's ring and context": the server and PWA ring predicates, the header declaration rule (outward only), and the path table between `ring-context-map` markers;
-  - (e) a status table per increment and per enforcement item, each row naming its test file or ARCH ticket, and the "still open" lines re-verified against `main` by symbol.
-- Modify `docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md`: §2.1's adoption bullet quotes the wording; C7 to C9 point at the 08-10 contexts.
-- Modify `CLAUDE.md`: the "Rings / bounded contexts" bullet copies the timer, `.mjs` and PWA sentences word for word.
-- No test file, no production byte. The proof is a throwaway checker in the scratchpad, never committed: ARCH-04 stage 4 is the committed assertion.
-
-- [ ] **Step 0: Re-ground.** On `origin/main`: list `shared/*.mjs`'s `node:*` imports; read `CoordStore.bumpReplayCount`, `markIngested`, `markDelivered`, `rejectDelivery`, `backOff` and `FleetWatcher.sweepMail`'s use of them; list every timer call in `server/src` with where its handle lives; list every test the status tables will cite. `gh pr list --state open` for PRs holding the three files.
-- [ ] **Step 1: Red (doc checks).** Two throwaway scripts: `map-check.mjs` parses the spec's `ring-context-map` table and the ring rules and lists every non-test `server/src` and `pwa/src` file that maps to zero or two rings or contexts; `word-check.mjs` asserts CLAUDE.md and the consolidation spec carry the 08-10 spec's timer, `.mjs` and PWA sentences byte for byte after whitespace folding. Both are red on `origin/main` (no table; no sentences).
-- [ ] **Step 2: Green.** Write the spec, consolidation-spec and CLAUDE.md edits. `map-check` reports zero files with zero or two contexts; the ring predicates exclude each other by construction (ordered "any other file" clauses), so for rings it measures coverage, and it lists every header that names a ring token without a declaration the grammar accepts, each read by hand to confirm it is a reference to another file's ring and not the file's own. The timer rule is wired into the predicates (a deadline timer is an L3 fact, a scheduler or poller an L4 fact, in both packages), so no file has one ring by the predicates and another by the timer sentence. `word-check` passes. The PR body carries the per-ring and per-context counts.
-- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
-
-  | Mutant | Check | Expected |
-  |---|---|---|
-  | delete the `fleet/**` row from the table | map-check | the `fleet/` files no file row names are listed with zero contexts |
-  | add `watch.ts` to C3's file rows as well as K's | map-check | `server/src/watch.ts` listed with two contexts |
-  | duplicate the `session/**` directory row under C6 | map-check | every `session/` file no file row names listed with two contexts |
-  | drop the scheduler/poller clause from the server L4 predicate | map-check | the ring counts change: `auth/sessions.ts`, `remote/client.ts`, `sessionws.ts` and `watch.ts` leave L4 (`token/driver.ts` stays, by its header) |
-  | drop the deadline-timer clause from the server L3 predicate | map-check | the ring counts change: `inject/send.ts`, `livestate.ts` and `shutdownseal.ts` fall to L1 |
-  | the header grammar loses the `— ` and `ring ` prefixes | map-check | `update/converge.ts` and `token/link.ts` fall to L1 and are listed as undeclared ring tokens |
-  | CLAUDE.md's timer sentence loses "inside one adapter call" | word-check | red, naming the timer sentence |
-  | the spec's carve-out drops `node:url` | word-check | red, naming the `.mjs` sentence |
-  | D-6000 defined a second time, with another subject, in another plan | `deviation-refs.test.ts` | red (one number, two subjects) |
-  | a concrete `D-TBD-<slug>` placeholder (a real slug) in the task section | `dtbd.test.ts` | red |
-
-- [ ] **Step 4: Verify.** From `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean`, `single-definition`, `docs-grammar`, one at a time with `--maxWorkers=2`. No `tsc` is needed (no TypeScript changes).
-
-**Exit (GATES):** every non-test `server/src` and `pwa/src` file has exactly one ring and one context under the written rules (counts in the PR body); CLAUDE.md's restatement matches the spec word for word; the doc suites are green; zero production bytes. **Not in this task:** the committed scanner (ARCH-04), draining outward edges (ARCH-05), and `markDelivered`'s result (ARCH-15).
-
-### Task C0k: the ring rules, stage 1 — L4-only fastify, `shared/*.ts` imports only `./`, no builtin in a `.mjs` the PWA reaches (D-6045; ARCH-04 (#545), stage 1) — lands now
-
-A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (band 2: it writes the first repo-wide ring rules, and which per-file pins they make redundant is a judgment). **Lane:** tests only; zero production bytes. **Needs:** nothing; no operator ruling (ARCH-04 says stage 1 is standalone). **Gates:** ARCH-00 (#915, `scan/parse.ts`), ARCH-02a (#874, the ring rules and the `.mjs` carve-out) and ARCH-03 (#894, #919) merged; all are. #826 edits `lifecycle.test.ts` (≈:1079, ≈:1278), #737 and #929 edit `single-definition.test.ts` (≈:5237; ≈:7538, ≈:7751), and #929 and #931 edit `scan/parse.ts` (≈:10, ≈:51, ≈:85, ≈:98, ≈:137, ≈:181) and `scan-parse.test.ts` (≈:6, ≈:96); this task's hunks in those files are line-disjoint from theirs, and its tree merges cleanly with each (#895, once listed here, merged as c2471e1bd). #927 holds this plan's lines after C0i's exit and around C0i's issued block; this section and D-6045's block sit before both.
+A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (band 2: it writes the first repo-wide ring rules, and which per-file pins they make redundant is a judgment). **Lane:** tests only; zero production bytes. **Needs:** nothing; no operator ruling (ARCH-04 says stage 1 is standalone). **Gates:** ARCH-00 (#915, `scan/parse.ts`), ARCH-02a (#874, the ring rules and the `.mjs` carve-out) and ARCH-03 (#894, #919) merged; all are. #826 edits `lifecycle.test.ts` (≈:1079, ≈:1278), #737 and #929 edit `single-definition.test.ts` (≈:5237; ≈:7538, ≈:7751), and #929 and #931 edit `scan/parse.ts` (≈:10, ≈:51, ≈:85, ≈:98, ≈:137, ≈:181) and `scan-parse.test.ts` (≈:6, ≈:96); this task's hunks in those files are line-disjoint from theirs, and its tree merges cleanly with each (#895, once listed here, merged as c2471e1bd). #927 holds this plan's lines after C0i's exit and around C0i's issued block, and #931 holds the lines after C0h's exit and after C0h's issued block; this section and D-6045's block sit before C0h's section and C0h's issued block, clear of both.
 
 **Files:**
 - Create `server/test/rings/walkSrc.ts`: the rules' one walk, `walkSrc({ roots, min, flat?, match? })`, which throws below its floor, and `REPO`/`rel`.
@@ -383,6 +346,43 @@ A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** na
 - [ ] **Step 4: Verify.** From `server/`, one at a time with `--maxWorkers=2`: the three rules, `scan-parse`, `update-semver`, `claude-version`, `lifecycle`, `providers`, `routing-ladder`, `single-definition`; `tsc -p server` and `tsc -p server/test/tsconfig.tests.json`; then, after `git fetch -q origin main`, `deviation-refs`, `dtbd`, `topology-clean` and `docs-grammar`.
 
 **Exit (GATES):** the three stage 1 rules hold the tree with no exemption and an 11-file fastify allowlist; both acceptance mutants are red; seven per-file pins are retired with their reasons; zero production bytes.
+
+### Task C0h: decidable ring wording, contexts 7 to 9, the PWA ring map and the status tables (D-6000; ARCH-02a (#528); spec §2.1) — lands now
+
+A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (judgment: it writes the rules every ring scanner will assert). **Lane:** docs only. **Needs:** nothing; no operator ruling (the spec is approved at rev 2.1, and ARCH-02a says none is needed). **Gates:** none. #434 is another session's superseded PR and is not ridden (D-6001). CLAUDE.md is also edited by #842 and #851; this task's hunk (the "Rings / bounded contexts" bullet) is line-disjoint from both.
+
+**Files:**
+- Modify `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`:
+  - (a) the timer rule under L3, and L4's "timers" read as "schedulers and pollers";
+  - (b) the `.mjs` carve-out under L0, listing every `node:*` module it allows (`node:crypto`, `node:fs`, `node:url`);
+  - (c) contexts 7 (Update control plane, `update/`), 8 (Auth & box token, `auth/`, `token/`) and 9 (Docs, `docs/`), each with its language and allowed dependencies, plus the **K** row (kernels and platform files, no aggregate);
+  - (d) a new section, "Deciding a file's ring and context": the server and PWA ring predicates, the header declaration rule (outward only), and the path table between `ring-context-map` markers;
+  - (e) a status table per increment and per enforcement item, each row naming its test file or ARCH ticket, and the "still open" lines re-verified against `main` by symbol.
+- Modify `docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md`: §2.1's adoption bullet quotes the wording; C7 to C9 point at the 08-10 contexts.
+- Modify `CLAUDE.md`: the "Rings / bounded contexts" bullet copies the timer, `.mjs` and PWA sentences word for word.
+- No test file, no production byte. The proof is a throwaway checker in the scratchpad, never committed: ARCH-04 stage 4 is the committed assertion.
+
+- [ ] **Step 0: Re-ground.** On `origin/main`: list `shared/*.mjs`'s `node:*` imports; read `CoordStore.bumpReplayCount`, `markIngested`, `markDelivered`, `rejectDelivery`, `backOff` and `FleetWatcher.sweepMail`'s use of them; list every timer call in `server/src` with where its handle lives; list every test the status tables will cite. `gh pr list --state open` for PRs holding the three files.
+- [ ] **Step 1: Red (doc checks).** Two throwaway scripts: `map-check.mjs` parses the spec's `ring-context-map` table and the ring rules and lists every non-test `server/src` and `pwa/src` file that maps to zero or two rings or contexts; `word-check.mjs` asserts CLAUDE.md and the consolidation spec carry the 08-10 spec's timer, `.mjs` and PWA sentences byte for byte after whitespace folding. Both are red on `origin/main` (no table; no sentences).
+- [ ] **Step 2: Green.** Write the spec, consolidation-spec and CLAUDE.md edits. `map-check` reports zero files with zero or two contexts; the ring predicates exclude each other by construction (ordered "any other file" clauses), so for rings it measures coverage, and it lists every header that names a ring token without a declaration the grammar accepts, each read by hand to confirm it is a reference to another file's ring and not the file's own. The timer rule is wired into the predicates (a deadline timer is an L3 fact, a scheduler or poller an L4 fact, in both packages), so no file has one ring by the predicates and another by the timer sentence. `word-check` passes. The PR body carries the per-ring and per-context counts.
+- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | delete the `fleet/**` row from the table | map-check | the `fleet/` files no file row names are listed with zero contexts |
+  | add `watch.ts` to C3's file rows as well as K's | map-check | `server/src/watch.ts` listed with two contexts |
+  | duplicate the `session/**` directory row under C6 | map-check | every `session/` file no file row names listed with two contexts |
+  | drop the scheduler/poller clause from the server L4 predicate | map-check | the ring counts change: `auth/sessions.ts`, `remote/client.ts`, `sessionws.ts` and `watch.ts` leave L4 (`token/driver.ts` stays, by its header) |
+  | drop the deadline-timer clause from the server L3 predicate | map-check | the ring counts change: `inject/send.ts`, `livestate.ts` and `shutdownseal.ts` fall to L1 |
+  | the header grammar loses the `— ` and `ring ` prefixes | map-check | `update/converge.ts` and `token/link.ts` fall to L1 and are listed as undeclared ring tokens |
+  | CLAUDE.md's timer sentence loses "inside one adapter call" | word-check | red, naming the timer sentence |
+  | the spec's carve-out drops `node:url` | word-check | red, naming the `.mjs` sentence |
+  | D-6000 defined a second time, with another subject, in another plan | `deviation-refs.test.ts` | red (one number, two subjects) |
+  | a concrete `D-TBD-<slug>` placeholder (a real slug) in the task section | `dtbd.test.ts` | red |
+
+- [ ] **Step 4: Verify.** From `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean`, `single-definition`, `docs-grammar`, one at a time with `--maxWorkers=2`. No `tsc` is needed (no TypeScript changes).
+
+**Exit (GATES):** every non-test `server/src` and `pwa/src` file has exactly one ring and one context under the written rules (counts in the PR body); CLAUDE.md's restatement matches the spec word for word; the doc suites are green; zero production bytes. **Not in this task:** the committed scanner (ARCH-04), draining outward edges (ARCH-05), and `markDelivered`'s result (ARCH-15).
 
 ### Task C0i: consumer-side ports for the coordination lanes and the turn reads (D-6003; ARCH-03 (#541), first half) — lands now
 
@@ -456,6 +456,16 @@ The allocator issued the consolidation wave a block of 30 numbers, 5848 to 5877,
 - **D-5865** — `pause-pin-tick-fold-for-lane-sites` (Task C0e, #871; extends D-5852): the four `watch.ts` lane sites and `stopDonePass` take the tick's listing, which cannot be `null` by type, so their `null` and rejecting legs are pinned once, at the tick, not per site: neither reaches any lane, a `null` listing gives an `unmeasurable` coord frame, and a rejecting one emits no frame at all.
   - **Departs from** Task C0e's "four listings per site" for those five sites only; every executor site keeps all four. The worker named it by slug and the coordinator entered it from the wave's held numbers, as this plan's header requires.
 
+### Issued for Task C0l and defined here
+
+Task C0l was issued three numbers, 6045 to 6047.
+
+- **D-6045** — `ring-rules-stage-1` (Task C0l; ARCH-04, #545, stage 1): the repo-wide ring rules live one per test file under `server/test/rings/`, each over `scan/parse.ts` and the shared `walkSrc({ min })` floor, never in `single-definition.test.ts`; each rule's allowed or exempted entries live in its own `*.data.ts`, every entry with a one-line reason and a date, and each set is held exactly, so a stale entry is red. Stage 1 holds three rules: `fastify`, `@fastify/*` and every `Fastify*` name are imported, in any form, only by an L4 allowlist generated on the day the rule landed, across `server/src`, `agent/src`, `pwa/src` and `ui/src` (`fastify-l4`); a `shared/*.ts` file imports only its `./` siblings, a type-only edge included, and calls neither `require(…)` nor a non-literal `import(…)`, the loads `scan/parse.ts` reports no edge for (`shared-imports`); and a `.mjs` file the PWA's bundle reaches, by Vite's `.mjs`-first resolution, imports no Node builtin, while a `shared/*.mjs` file imports none beyond ARCH-02a's carve-out (`mjs-node`). `scan/parse.ts` reports a type query as a type-only edge of its own kind. A per-file L0 pin is retired when every shape it refuses is an import edge `shared-imports` refuses, a `require(…)` call or non-literal `import(…)` it refuses, or a `./` sibling import, which the L0 ring allows, and it states no reason of its own beyond the ring; a pin stricter for a reason of its own stays. A `./` sibling that is a `shared/*.mjs` importing a builtin is allowed by `shared-imports`; whether that builtin may reach the PWA is `mjs-node`'s reach and carve-out, not this rule.
+- **D-6046** — `growth-waiver-stays-until-stage-4` (Task C0l): C0a's `L1_L2_NEW_FILE_DIRS` waiver list stays.
+  - **Departs from** Task C0a's "until ARCH-04 stage 1 replaces it with its classifier". Stage 1's rules decide no file's ring: they hold three import facts. The classifier that gives every file one ring is stage 4, so the list is replaced there.
+
+Issued and unused (Task C0l): 6047.
+
 ### Issued for Task C0h and defined here
 
 Task C0h was issued three numbers, 6000 to 6002.
@@ -466,16 +476,6 @@ Task C0h was issued three numbers, 6000 to 6002.
   - **Departs from** the spec's §5.2 ("ARCH-02a's CLAUDE.md edit rides #434 if that PR is still open") and ARCH-02a's routing line. #434 is still open, but it is superseded and belongs to another session, so riding it would tie this work to a PR nobody is landing. This task's CLAUDE.md hunk is line-disjoint from #434's, #842's and #851's.
 
 Issued and unused (Task C0h): 6002.
-
-### Issued for Task C0k and defined here
-
-Task C0k was issued three numbers, 6045 to 6047.
-
-- **D-6045** — `ring-rules-stage-1` (Task C0k; ARCH-04, #545, stage 1): the repo-wide ring rules live one per test file under `server/test/rings/`, each over `scan/parse.ts` and the shared `walkSrc({ min })` floor, never in `single-definition.test.ts`; each rule's allowed or exempted entries live in its own `*.data.ts`, every entry with a one-line reason and a date, and each set is held exactly, so a stale entry is red. Stage 1 holds three rules: `fastify`, `@fastify/*` and every `Fastify*` name are imported, in any form, only by an L4 allowlist generated on the day the rule landed, across `server/src`, `agent/src`, `pwa/src` and `ui/src` (`fastify-l4`); a `shared/*.ts` file imports only its `./` siblings, a type-only edge included, and calls neither `require(…)` nor a non-literal `import(…)`, the loads `scan/parse.ts` reports no edge for (`shared-imports`); and a `.mjs` file the PWA's bundle reaches, by Vite's `.mjs`-first resolution, imports no Node builtin, while a `shared/*.mjs` file imports none beyond ARCH-02a's carve-out (`mjs-node`). `scan/parse.ts` reports a type query as a type-only edge of its own kind. A per-file L0 pin is retired when every shape it refuses is an import edge `shared-imports` refuses, a `require(…)` call or non-literal `import(…)` it refuses, or a `./` sibling import, which the L0 ring allows, and it states no reason of its own beyond the ring; a pin stricter for a reason of its own stays. A `./` sibling that is a `shared/*.mjs` importing a builtin is allowed by `shared-imports`; whether that builtin may reach the PWA is `mjs-node`'s reach and carve-out, not this rule.
-- **D-6046** — `growth-waiver-stays-until-stage-4` (Task C0k): C0a's `L1_L2_NEW_FILE_DIRS` waiver list stays.
-  - **Departs from** Task C0a's "until ARCH-04 stage 1 replaces it with its classifier". Stage 1's rules decide no file's ring: they hold three import facts. The classifier that gives every file one ring is stage 4, so the list is replaced there.
-
-Issued and unused (Task C0k): 6047.
 
 ### Issued for Task C0i and defined here
 

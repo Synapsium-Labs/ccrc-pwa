@@ -40,6 +40,26 @@ const FIXTURE = [
   '',
 ].join('\n');
 
+// D-6045 (Task C0l; ARCH-04 (#545), stage 1): a type query is an import edge of its own kind, always type-only, so a
+// ring rule sees `import('fastify').FastifyReply` as it sees `import type { FastifyReply } from 'fastify'`.
+describe('scan/parse.ts lists a type query as a type-only edge (D-6045)', () => {
+  it('names the qualifier for import(…).T, none for typeof import(…), and in a nested type position too', () => {
+    const t = parseSource([
+      "let r: import('fastify').FastifyReply;",
+      "type M = typeof import('node:fs');",
+      "type Q = Promise<{ e: import('../shared/api').NotifyEvent[] }>;",
+      "type Deep = import('./a.js').Outer.Inner;",
+    ].join('\n'));
+    expect(t.imports.map(({ specifier, kind, typeOnly, names, line }) => ({ specifier, kind, typeOnly, names, line })))
+      .toEqual([
+        { specifier: 'fastify', kind: 'type-query', typeOnly: true, names: ['FastifyReply'], line: 1 },
+        { specifier: 'node:fs', kind: 'type-query', typeOnly: true, names: [], line: 2 },
+        { specifier: '../shared/api', kind: 'type-query', typeOnly: true, names: ['NotifyEvent'], line: 3 },
+        { specifier: './a.js', kind: 'type-query', typeOnly: true, names: ['Outer'], line: 4 },
+      ]);
+  });
+});
+
 describe('scan/parse.ts parses a fixture file (D-5853)', () => {
   let dir = '';
   let parsed: ParsedFile;
@@ -99,25 +119,5 @@ describe('scan/parse.ts parses a fixture file (D-5853)', () => {
   it('parseSource takes text directly, and a .tsx name parses JSX', () => {
     const t = parseSource('export const View = () => <div>hi</div>;\n', 'view.tsx');
     expect(t.symbols.map((s) => s.name)).toEqual(['View']);
-  });
-});
-
-// D-6045 (Task C0k; ARCH-04 (#545), stage 1): a type query is an import edge of its own kind, always type-only, so a
-// ring rule sees `import('fastify').FastifyReply` as it sees `import type { FastifyReply } from 'fastify'`.
-describe('scan/parse.ts lists a type query as a type-only edge (D-6045)', () => {
-  it('names the qualifier for import(…).T, none for typeof import(…), and in a nested type position too', () => {
-    const t = parseSource([
-      "let r: import('fastify').FastifyReply;",
-      "type M = typeof import('node:fs');",
-      "type Q = Promise<{ e: import('../shared/api').NotifyEvent[] }>;",
-      "type Deep = import('./a.js').Outer.Inner;",
-    ].join('\n'));
-    expect(t.imports.map(({ specifier, kind, typeOnly, names, line }) => ({ specifier, kind, typeOnly, names, line })))
-      .toEqual([
-        { specifier: 'fastify', kind: 'type-query', typeOnly: true, names: ['FastifyReply'], line: 1 },
-        { specifier: 'node:fs', kind: 'type-query', typeOnly: true, names: [], line: 2 },
-        { specifier: '../shared/api', kind: 'type-query', typeOnly: true, names: ['NotifyEvent'], line: 3 },
-        { specifier: './a.js', kind: 'type-query', typeOnly: true, names: ['Outer'], line: 4 },
-      ]);
   });
 });
