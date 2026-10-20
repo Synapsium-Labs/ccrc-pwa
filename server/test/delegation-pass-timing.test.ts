@@ -1326,7 +1326,7 @@ describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s th
   const productionPass = (setup?: ScenarioX['setup']) =>
     scenario('std', { noteSessions: 1001 }, undefined, { seams: { cpuMicros: undefined }, setup });
 
-  it('D-5832 R6 (i) (MCPUlie red it): with no CPU seam the line\'s cpuThread is 1 when the runtime has process.threadCpuUsage and 0 when it has not, the production CPU keys are whole non-negative numbers, and with the property present the pass reads it', async () => {
+  it('D-5832 R6 (i) (MCPUlie, MCPUsrc red it):with no CPU seam the line\'s cpuThread is 1 when the runtime has process.threadCpuUsage and 0 when it has not, the production CPU keys are whole non-negative numbers, and with the property present the pass reads it', async () => {
     const hasThread = typeof (process as unknown as { threadCpuUsage?: unknown }).threadCpuUsage === 'function';
     const usage: { spy: { mock: { calls: unknown[] }; mockRestore(): void } | null } = { spy: null };
     let calls = 0;
@@ -1351,7 +1351,7 @@ describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s th
     if (hasThread) expect(calls, 'process.threadCpuUsage is the source of the thread clock: the pass read it at least twice (one read to open a phase and one to close it)').toBeGreaterThanOrEqual(2);
   });
 
-  it('D-5832 R6 (ii) (MCPUthread, MCPUsrc red it): with process.threadCpuUsage absent the lane reads the real process.cpuUsage and the line says cpuThread=0; the property is restored exactly', async () => {
+  it('D-5832 R6 (ii) (MCPUthread, MCPUsrc red it; MCPUsrc reds R6 (i) too, since its thread-clock spy):with process.threadCpuUsage absent the lane reads the real process.cpuUsage and the line says cpuThread=0; the property is restored exactly', async () => {
     const holder = process as unknown as { threadCpuUsage?: unknown };
     const had = Object.prototype.hasOwnProperty.call(process, 'threadCpuUsage');
     const desc = Object.getOwnPropertyDescriptor(process, 'threadCpuUsage');
