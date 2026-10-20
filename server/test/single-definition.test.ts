@@ -2339,12 +2339,13 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
 // — Child-reclamation wave 4: the reclaim switch's file name —
 describe("child-reclamation wave 4 — one 'reclaim-paused' literal", () => {
   it("'reclaim-paused' is a literal in exactly one source file", () => {
-    // `RECLAIM_PAUSE_MARKER` (`server/src/coord/rundefs.ts`) is the ONE
-    // definition. A second literal is how the banner and the sweep would come
-    // to disagree about what "paused" means — one reading a name the other
-    // never checks, with the deleting side the one that is wrong.
+    // `RECLAIM_PAUSE_MARKER` (its `shared/switches.ts` row, D-5855; re-exported
+    // by `server/src/coord/rundefs.ts`) is the ONE definition. A second literal
+    // is how the banner and the sweep would come to disagree about what
+    // "paused" means — one reading a name the other never checks, with the
+    // deleting side the one that is wrong.
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'reclaim-paused'")).map(rel);
-    expect(holders).toEqual(['server/src/coord/rundefs.ts']);
+    expect(holders).toEqual(['shared/switches.ts']);
   });
 
   it('watch.ts reaches the reclaim marker through the shared constant, never a copy', () => {
