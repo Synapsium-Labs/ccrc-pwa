@@ -101,3 +101,35 @@ describe('scan/parse.ts parses a fixture file (D-5853)', () => {
     expect(t.symbols.map((s) => s.name)).toEqual(['View']);
   });
 });
+
+describe('scan/parse.ts reads the totality facts: Record<X, true> maps, type guards, compared literals (D-6048)', () => {
+  const FACTS = parseSource([
+    "export type Mode = 'on' | 'off';",
+    "export type Kind = 'a' | 'b';",
+    "export type Tone = 'x' | 'y';",
+    'const MODE_MAP: Record<Mode, true> = { on: true, off: true };',
+    'const KIND_TABLE: Readonly<Record<Kind, true>> = { a: true, b: true };',
+    'const TONES = { x: true, y: true } satisfies Record<Tone, true>;',
+    'const NOT_A_MAP: Record<Mode, string> = { on: "1", off: "0" };',
+    'type Shadow = Record<Kind, true>;',
+    'function take(m: Record<Tone, true>): void {}',
+    "export function isMode(v: unknown): v is Mode { return v === 'on' || 'off' == v; }",
+    'const isKind = (v: unknown): v is Kind => true;',
+    'function isMany(v: unknown): v is Array<Kind> { return true; }',
+    'export function check(v: string): string {',
+    "  switch (v) { case 'left': return v !== 'right' ? 'up' : 'down'; default: return v; }",
+    '}',
+  ].join('\n'));
+
+  it('a Record<X, true> counts as a variable annotation (bare or Readonly) or a satisfies type, nowhere else', () => {
+    expect(FACTS.recordTrueKeys).toEqual(['Mode', 'Kind', 'Tone']);
+  });
+
+  it('a type guard counts by its bare predicate type, a declaration or an arrow', () => {
+    expect(FACTS.guardedTypes).toEqual(['Mode', 'Kind']);
+  });
+
+  it('a compared literal is an equality operand or a case label, in source order', () => {
+    expect(FACTS.comparedLiterals).toEqual(['on', 'off', 'left', 'right']);
+  });
+});

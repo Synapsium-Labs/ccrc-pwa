@@ -339,6 +339,40 @@ A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** na
 
 **Exit (GATES):** every non-test `server/src` and `pwa/src` file has exactly one ring and one context under the written rules (counts in the PR body); CLAUDE.md's restatement matches the spec word for word; the doc suites are green; zero production bytes. **Not in this task:** the committed scanner (ARCH-04), draining outward edges (ARCH-05), and `markDelivered`'s result (ARCH-15).
 
+### Task C0k: wire totality — every exported literal union in `shared/*.ts` has a derived runtime list (D-6048; ARCH-12 (#552)) — lands now
+
+A later W0 slice (spec §5.2), planned here so it has a section. ARCH-12 is a consolidation prerequisite: a wire word with no runtime list is a silent wire change when it gains a member. **Routing:** native (band 1 to 2: the scan is mechanical, the exemption reasons are judgment). **Lane:** a test-scanner fact in `server/test/scan/parse.ts`, three additive lists in `shared/api.ts` and one PWA reader switched to one of them, with no behaviour change (D-6049). **Needs:** nothing; no operator ruling. **Gates:** ARCH-00 (Task C0f, #915) merged; it is. #911 holds `shared/api.ts` (≈:3624, ≈:4156) and #927 holds this plan (after Task C0i and after C0i's issued block); this task's hunks are line-disjoint from both.
+
+**Files:**
+- Modify `server/test/scan/parse.ts`: three syntax facts on `ParsedFile`. `recordTrueKeys` holds the bare `X` of each `Record<X, true>` (or `Readonly<Record<X, true>>`) that types a variable or a `satisfies`. `guardedTypes` holds the bare `X` of each `v is X` predicate. `comparedLiterals` holds each string literal that is an equality operand or a `case` label.
+- Modify `server/test/scan-parse.test.ts`: one appended `describe` pins the three facts on a fixture, including what does not count (a `Record<X, string>`, a type alias of the map, a parameter's type, a generic predicate).
+- Create `server/test/rings/wire-totality.test.ts`: every top-level `export type X = …` of two or more literals in `shared/*.ts` has a sibling `Record<X, true>` map or an `is X` guard in the same file, unless it is in `EXEMPT`. `EXEMPT` is keyed `file:Name`, with one reason per entry, and pinned at its size. A stale entry is red. The same suite pins the three new lists against the parsed unions, `isPoolsEnforcement` over members and non-members, and the fleet store's compared literals and import.
+- Modify `shared/api.ts`: `SESSION_STATUS_MAP`/`SESSION_STATUSES`, `SESSION_BUCKET_MAP`/`SESSION_BUCKETS`, and `POOLS_ENFORCEMENT_MAP`/`POOLS_ENFORCEMENTS` with `isPoolsEnforcement`, each beside its union (`SESSION_ROLE_MAP`'s idiom).
+- Modify `pwa/src/stores/fleet.ts`: the `pools` frame gate reads `isPoolsEnforcement` for `enforcement` and `accountPools`, in place of six hand comparisons. It accepts and rejects exactly the same values.
+
+- [ ] **Step 0: Re-ground.** Re-check the gate with `gh pr view 915`. Measure the listless exported literal unions in `shared/*.ts` with the new facts: 31 of 88 (the issue's "14 of 65" counted `api.ts` alone, at an older sha). `gh pr list --state open` with `gh pr diff` for every file touched.
+- [ ] **Step 1: Red.** Run the new suite with the parser facts in place and `shared/`/`pwa/` untouched. Four rows are red: the totality row names `SessionStatus`, `SessionBucket` and `PoolsEnforcement`, the list and guard rows find no export, and the fleet-store row lists the six compared members.
+- [ ] **Step 2: Green.** Add the lists and switch the fleet store. Both server `tsc` projects and the PWA's are clean. The new suite, `scan-parse` and the PWA's `stores` suite pass.
+- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | a new `export type Fresh = 'a' \| 'b'` in `shared/api.ts`, no list | `wire-totality` | red, naming `api.ts ≈:N Fresh` |
+  | `SESSION_BUCKET_MAP` loses its `Record<SessionBucket, true>` annotation | `wire-totality` | red: `SessionBucket` listless |
+  | `SESSION_STATUS_MAP` typed `Record<SessionStatus, boolean>` | `wire-totality` | red: `SessionStatus` listless (a `boolean` map is not total) |
+  | an exemption's union gains a map, entry kept | `wire-totality` | red: the stale-entry row names it |
+  | a new listless union with an exemption for it | `wire-totality` | red: the pin at 28 (29) |
+  | the fleet store spells `=== 'unknown'` again | `wire-totality` | red: the compared-literals row |
+  | `isPoolsEnforcement` accepts any string | `wire-totality` | red: `'Enforced'` passes |
+  | the fleet store's `accountPools` gate loses its `undefined` allowance | PWA `stores` | red: five `pools` rows, an older server's frame dropped |
+  | the scanner's map fact also counts a parameter's type | `scan-parse` | red: `Tone` read from `take`'s parameter |
+  | the guard fact drops arrow predicates | `scan-parse` | red: `Kind` missing |
+  | D-6048 defined a second time, with another subject, in another plan | `deviation-refs` | red (one number, two subjects) |
+
+- [ ] **Step 4: Verify.** `tsc` for `server/` (both projects) and `pwa/`. Then, one at a time with `--maxWorkers=2`: `rings/wire-totality`, `scan-parse` and the PWA's `stores`. Then the doc suites from `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean`, `single-definition` and `docs-grammar`.
+
+**Exit (GATES):** a new exported literal union in `shared/*.ts` with no list is red. The exemption list goes from 31 (merge day) to 28 and is pinned. `pwa/src/stores/fleet.ts` compares against no `PoolsEnforcement` member. **Not in this task:** the 28 remaining lists, the hand arrays that could derive from them (`PROBE_KINDS`, the PWA's bucket orders), and readers in `shared/api.ts` that cast `status`/`bucket` after their own checks.
+
 ### Task C0i: consumer-side ports for the coordination lanes and the turn reads (D-6003; ARCH-03 (#541), first half) — lands now
 
 A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (band 1, literal moves, but every line sits in a file another open PR edits, so the line-disjointness check is the judgment). **Lane:** server types only; zero emitted bytes change. **Needs:** nothing; no operator ruling (the spec is approved at rev 2.1, and ARCH-03 says none is needed). **Gates:** ARCH-05 (#846) and ARCH-02a (Task C0h, #874) merged; both are. **Not yet:** the `Deps` move, which #850 blocks (D-6004). #434 is not ridden.
@@ -421,6 +455,16 @@ Task C0h was issued three numbers, 6000 to 6002.
   - **Departs from** the spec's §5.2 ("ARCH-02a's CLAUDE.md edit rides #434 if that PR is still open") and ARCH-02a's routing line. #434 is still open, but it is superseded and belongs to another session, so riding it would tie this work to a PR nobody is landing. This task's CLAUDE.md hunk is line-disjoint from #434's, #842's and #851's.
 
 Issued and unused (Task C0h): 6002.
+
+### Issued for Task C0k and defined here
+
+Task C0k was issued three numbers, 6048 to 6050.
+
+- **D-6048** — `wire-totality-derived-lists` (Task C0k; ARCH-12, #552): every top-level exported literal union of two or more members in `shared/*.ts` has a sibling `Record<X, true>` map, typing a variable or a `satisfies`, or an `is X` guard in the same file. `server/test/rings/wire-totality.test.ts` holds that through three syntax facts that `server/test/scan/parse.ts` reads. Its exemption list is keyed `file:Name`, carries one reason per entry, is pinned at its size and only shrinks: 31 on merge day, 28 after this task lists `SessionStatus`, `SessionBucket` and `PoolsEnforcement`. The fleet store's `pools` gate reads `isPoolsEnforcement`.
+- **D-6049** — `c0k-ships-production-bytes` (Task C0k): this slice edits `shared/api.ts` and `pwa/src/stores/fleet.ts`.
+  - **Departs from** this plan's Deploy class and §Global constraints ("Zero production bytes"). ARCH-12's acceptance needs the lists in `shared/` and the store on one of them. The change is additive and keeps behaviour: three new exports, and a gate that accepts and rejects exactly the values it did before. The PWA's `stores` suite pins those values.
+
+Issued and unused (Task C0k): 6050.
 
 ### Issued for Task C0i and defined here
 

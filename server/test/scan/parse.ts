@@ -12,7 +12,8 @@
  * Syntax only, no type checker: import-edge and symbol rules do not need one.
  * KNOWN WIDTH: a file that does not parse yields what the parser recovered (no throw); a computed member name, an
  * object-literal method and a function bound through `as`, a call or parentheses are not symbols; an alias exported
- * by a later `export { X }` is not an exported type alias; `require(…)` calls are not import edges.
+ * by a later `export { X }` is not an exported type alias; `require(…)` calls are not import edges; a `Record<X, true>`
+ * counts only as a variable's annotation or a `satisfies` type, and only with `X` named bare (D-6048).
  */
 import { readFileSync } from 'node:fs';
 import ts from 'typescript-api';
@@ -57,6 +58,14 @@ export interface ParsedFile {
   imports: ImportEdge[];
   exportedTypeAliases: TypeAlias[];
   symbols: SymbolSpan[];
+  /** D-6048 (ARCH-12): the `X` of every `Record<X, true>` (bare or inside `Readonly<…>`) that types a variable or a
+   *  `satisfies` expression: a map that fails to compile when `X` gains a member. Bare type names only. */
+  recordTrueKeys: string[];
+  /** D-6048 (ARCH-12): the `X` of every `v is X` / `asserts v is X` type predicate, bare type names only. */
+  guardedTypes: string[];
+  /** D-6048 (ARCH-12): every string literal a file compares against by hand: an operand of `===`, `!==`, `==` or
+   *  `!=`, or a `case` label. In source order, repeats kept. */
+  comparedLiterals: string[];
 }
 
 const scriptKindOf = (file: string): ts.ScriptKind =>
@@ -85,6 +94,17 @@ const literalText = (t: ts.TypeNode): string | null => {
   return null;
 };
 
+/** The bare `X` of a `Record<X, true>` inside `t` (or `Readonly<Record<X, true>>`), else `null`. */
+const recordTrueKey = (t: ts.TypeNode): string | null => {
+  if (!ts.isTypeReferenceNode(t) || !ts.isIdentifier(t.typeName)) return null;
+  const args = t.typeArguments ?? [];
+  if (t.typeName.text === 'Readonly' && args.length === 1) return recordTrueKey(args[0]!);
+  if (t.typeName.text !== 'Record' || args.length !== 2) return null;
+  const [k, v] = [args[0]!, args[1]!];
+  return ts.isTypeReferenceNode(k) && ts.isIdentifier(k.typeName) && !k.typeArguments
+    && ts.isLiteralTypeNode(v) && v.literal.kind === ts.SyntaxKind.TrueKeyword ? k.typeName.text : null;
+};
+
 const unionLiterals = (t: ts.TypeNode): string[] | null => {
   const members = ts.isUnionTypeNode(t) ? [...t.types] : [t];
   const out = members.map(literalText);
@@ -98,6 +118,11 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
   const imports: ImportEdge[] = [];
   const exportedTypeAliases: TypeAlias[] = [];
   const symbols: SymbolSpan[] = [];
+  const recordTrueKeys: string[] = [];
+  const guardedTypes: string[] = [];
+  const comparedLiterals: string[] = [];
+  const EQUALITY = new Set<ts.SyntaxKind>([ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken,
+    ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken]);
 
   const addSymbol = (name: string, kind: SymbolKind, node: ts.Node): void => {
     const start = node.getStart(sf);
@@ -132,6 +157,14 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
 
   const visit = (node: ts.Node, scope: readonly string[]): void => {
     const q = (n: string): string => [...scope, n].join('.');
+    const rk = ts.isVariableDeclaration(node) && node.type ? recordTrueKey(node.type)
+      : ts.isSatisfiesExpression(node) ? recordTrueKey(node.type) : null;
+    if (rk !== null) recordTrueKeys.push(rk);
+    if (ts.isTypePredicateNode(node) && node.type && ts.isTypeReferenceNode(node.type)
+      && ts.isIdentifier(node.type.typeName) && !node.type.typeArguments) guardedTypes.push(node.type.typeName.text);
+    const operands = ts.isBinaryExpression(node) && EQUALITY.has(node.operatorToken.kind) ? [node.left, node.right]
+      : ts.isCaseClause(node) ? [node.expression] : [];
+    for (const o of operands) if (ts.isStringLiteralLike(o)) comparedLiterals.push(o.text);
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
       const a = node.arguments[0];
       if (a && ts.isStringLiteralLike(a)) {
@@ -182,7 +215,8 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
   visit(sf, []);
   imports.sort((a, b) => a.line - b.line);
 
-  return { path: fileName, text, imports, exportedTypeAliases, symbols };
+  return { path: fileName, text, imports, exportedTypeAliases, symbols, recordTrueKeys, guardedTypes,
+    comparedLiterals };
 }
 
 /** Read and parse one file. */
