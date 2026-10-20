@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { FleetIO, MeasuredPathKind, MeasuredStat } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { Deps } from '../server.js';
+import type { RunCcd } from './ports.js';
 import type { Presence } from '../presence.js';
 import type { CcdResult } from '../lifecycle.js';
 import { CCD_ARGV, COLLECT_CAP, RECLAIM_PAUSE_CAP, capSupported, sweepDec, verbSupported } from '../ccdargv.js';
@@ -150,7 +150,7 @@ export interface CollectTempRootDeps {
   coord: Pick<CoordStore, 'run' | 'openRunsForSession' | 'openRunsClaimedBy'>;
   io: Pick<FleetIO, 'readdir'>;
   cfg: Pick<CcrcConfig, 'registryDir'>;
-  runCcd: Deps['runCcd'];
+  runCcd: RunCcd;
   fleetState?: FleetState;
   presence?: Pick<Presence, 'isVisible'>;
   lane: CollectLanePort;

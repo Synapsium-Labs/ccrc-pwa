@@ -5,7 +5,7 @@ import { readBranchTip } from './gitref.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
-import type { Deps } from '../server.js';
+import type { RunCcd } from './ports.js';
 import { isPrPhase, isRegistryId, type DoneRejectCode, type PrPhase } from '../../../shared/api.js';
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -48,7 +48,7 @@ export type DoneVerdict =
  *  function at all — the call site would report `gated: false` regardless of
  *  the `verbSupported(` call two lines below it. Naming the types keeps the
  *  signature, params and return type on one line. */
-export interface VerifyDoneDeps { io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState }
+export interface VerifyDoneDeps { io: FleetIO; cfg: CcrcConfig; runCcd: RunCcd; fleetState?: FleetState }
 /** `branch` here is a FALLBACK, not the measurement, and after Wave 3 §3.2 it
  *  is reached by EXACTLY ONE state: the live registry has no row for this
  *  session at all (retired, purged, or a narrowed drop `readRegistry` itself
