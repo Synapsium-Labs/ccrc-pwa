@@ -283,9 +283,16 @@ export function Sheet({
           {/* THE FOOTER IS NOT IN THE BODY (D-5932). The panel is a column capped below the viewport and the body may
               shrink below its content (`min-h-0`) and scrolls what it lost; this row may not shrink, so the answers
               stay inside the panel however tall the body is. The panel's `px-card` and safe-area `pb` are its side
-              padding and bottom; `pt-4` parts it from the body's last line. */}
+              padding and bottom; `pt-4` parts it from the body's last line.
+              A ROW THAT MAY NOT SHRINK NEEDS ITS OWN CEILING (D-6030): uncapped, a tall footer (the resume sheet's
+              five reclaim controls) took the whole panel in a landscape phone and left the body, title and question
+              0px. Past half the viewport its rows scroll inside `.sheet-footer-rows`, which sits below the `pt-4` gap
+              so a half-scrolled row never butts against the body's clip edge, and moves its own clip edge out by the
+              focus ring's reach on all four sides (`-m-1 p-1`, as the body does at its sides). */}
           {footer != null && footer !== false && !full ? (
-            <div className="sheet-footer flex-none pt-4">{footer}</div>
+            <div className="sheet-footer flex-none pt-4">
+              <div className="sheet-footer-rows max-h-[50dvh] -m-1 p-1 overflow-y-auto overscroll-contain">{footer}</div>
+            </div>
           ) : null}
         </Drawer.Content>
       </Drawer.Portal>

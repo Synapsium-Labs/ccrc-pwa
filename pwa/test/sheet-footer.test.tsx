@@ -70,6 +70,22 @@ describe('Sheet: the footer is a row of the panel, outside the scrolling body', 
     expect(classes(footer)).toContain('flex-none');
   });
 
+  // D-6030: the footer may not shrink, so it carries its own ceiling. Uncapped, a tall footer (the resume sheet's
+  // five reclaim controls) squeezed the body to 0px in a landscape phone and hid the title and the question.
+  it('the footer has a ceiling and scrolls past it, with room for the focus rings at its sides', () => {
+    mount();
+    const rows = panel().querySelector('.sheet-footer > .sheet-footer-rows');
+    expect(rows, 'no .sheet-footer-rows scroller inside the footer').not.toBeNull();
+    expect(rows!.textContent).toBe('Answer');
+    expect(classes(rows).some((c) => /^max-h-\[\d+dvh\]$/.test(c)), 'no viewport-relative max-h on the footer rows').toBe(true);
+    expect(classes(rows)).toEqual(expect.arrayContaining(['overflow-y-auto', 'overscroll-contain', '-m-1', 'p-1']));
+  });
+
+  it('a full sheet draws no footer even when a caller slips one past the type', () => {
+    render(<Sheet full open onClose={() => {}} title="t" {...({ footer: <b>pinned</b> } as object)}>body</Sheet>);
+    expect(document.querySelector('.sheet-footer')).toBeNull();
+  });
+
   it('a sheet given no footer draws none', () => {
     render(<Sheet open onClose={() => {}} title="t">body</Sheet>);
     expect(panel().querySelector('.sheet-footer')).toBeNull();
