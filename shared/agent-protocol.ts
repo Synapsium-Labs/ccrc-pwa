@@ -177,6 +177,27 @@ export type NodeFileKey = keyof typeof NODE_FILES;
  *  scan over it read this, never a restatement. */
 export const NODE_FILE_BASENAMES: readonly string[] = Object.values(NODE_FILES);
 
+/** The lane-state directory's name inside `~/.cc-sessions` (D-5517, D-5755): `~/.cc-sessions/.accounts/<id>.json`,
+ *  written by `deploy/account-op.mjs`'s `lane-state` op (bare Node, which spells it once in `laneStateDir`). Read by
+ *  the server's `readLaneStates` (`server/src/limits.ts`) over the agent's `read` op, which opens a file directly in
+ *  this directory with `O_NOFOLLOW`, so a symlink planted at a lane's name reads as unreadable, never as its target
+ *  (accounts plan Task A12; D-5755 (13d)). */
+export const LANE_STATE_DIR_NAME = '.accounts';
+
+/** What a lane-state open must still hold once the file is open (D-6058 (2), (5)), on both arms (the agent's
+ *  `openRegular`, the server's `localIO.readFileMeasured`): `O_NOFOLLOW` guards only the last name, so the handle must
+ *  be the one regular file at that name (`lstat`, same device and inode), have no second name (`nlink` 1, so no
+ *  hardlink lends it another file's bytes), and sit in a real directory that is not a symlink. Pure: the caller
+ *  passes the three stats it took AFTER the open, and treats `false` as unreadable. */
+export function laneStateOpenHolds(
+  opened: { dev: number; ino: number; nlink: number; isFile(): boolean },
+  atName: { dev: number; ino: number; isSymbolicLink(): boolean },
+  dir: { isDirectory(): boolean; isSymbolicLink(): boolean },
+): boolean {
+  return opened.isFile() && opened.nlink === 1 && !atName.isSymbolicLink()
+    && atName.dev === opened.dev && atName.ino === opened.ino && dir.isDirectory() && !dir.isSymbolicLink();
+}
+
 /** The shape of a node id, `NODE_FILES.nodeId`'s one line: the lowercase uuid `_inst_node_id` mints and nothing else,
  *  so an uppercase, padded or CR-terminated `~/.ccrc/node-id` never becomes a row key or a `fleetIdentity`. Declared
  *  ONCE, here, beside the file it reads (moved from `server/src/coord/store.ts`, which re-exports it, so the agent's

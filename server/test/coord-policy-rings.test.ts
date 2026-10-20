@@ -94,7 +94,9 @@ describe('the import walk itself (CONTROL)', () => {
 
   it('finds the adapter from the adapter — a walk that finds nothing would pass every assertion below', () => {
     expect(chainTo(coord('db.ts'), 'node:sqlite')).toEqual(['server/src/coord/db.ts', 'node:sqlite']);
-    expect(chainTo(coord('store.ts'), 'node:sqlite')).not.toBeNull();
+    // D-5896: `store.ts` takes `tx` from `tx.ts` now and holds the handle by type, so the two-hop control is
+    // `config.ts`, which loads `db.ts` for its default path.
+    expect(chainTo(src('config.ts'), 'node:sqlite')).toEqual(['server/src/config.ts', 'server/src/coord/db.ts', 'node:sqlite']);
     expect(chainTo(coord('routes.ts'), 'node:sqlite')).not.toBeNull();
     expect(chainTo(src('exec.ts'), 'node:child_process')).not.toBeNull();
   });

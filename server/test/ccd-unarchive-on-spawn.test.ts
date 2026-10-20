@@ -2,7 +2,7 @@
 // pane and unsupervises the unit, but nothing stopped a later `start`/`ensure`/
 // `swap` from creating a pane again — and none of those cleared the stamp, so
 // the workspace stayed archived while it ran. Every cleanup selector that
-// filters on `.archived` then calls a live session dormant (CCR-10: two live
+// filters on `.archived` then calls a live session dormant (#127: two live
 // sessions carried the stamp for weeks, one mid-deploy on an irreversible step).
 //
 // `_spawn_start` is the single pane-creating chokepoint — every start path

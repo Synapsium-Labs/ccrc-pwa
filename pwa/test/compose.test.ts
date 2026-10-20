@@ -6,9 +6,9 @@ import {
   composePrompt, splitClipPaths, CLIP_EXTS, CLIP_PATH_RE, hasClipExt, isImageClip,
 } from '../../shared/api';
 
-const P1 = '/home/you/.cc-clips/claude2-demo-app-ts/clip-20260726-150340-a1b2.png';
-const P2 = '/home/you/.cc-clips/claude2-demo-app-ts/clip-20260726-150341-c3d4.jpg';
-const DOC = '/home/you/.cc-clips/claude2-demo-app-ts/clip-20260726-150342-e5f6-design-notes.md';
+const P1 = '/home/you/.cc-clips/claude9-demo-app-ts/clip-20260726-150340-a1b2.png';
+const P2 = '/home/you/.cc-clips/claude9-demo-app-ts/clip-20260726-150341-c3d4.jpg';
+const DOC = '/home/you/.cc-clips/claude9-demo-app-ts/clip-20260726-150342-e5f6-design-notes.md';
 
 describe('composePrompt', () => {
   it('puts each attachment on its own line above the text', () => {
@@ -41,7 +41,7 @@ describe('CLIP_PATH_RE', () => {
   });
 
   it('recognises every admitted extension, and nothing outside the list', () => {
-    const base = '/home/you/.cc-clips/claude2-demo-app-ts/clip-20260726-150340-a1b2';
+    const base = '/home/you/.cc-clips/claude9-demo-app-ts/clip-20260726-150340-a1b2';
     for (const ext of CLIP_EXTS) expect(CLIP_PATH_RE.test(`${base}.${ext}`), ext).toBe(true);
     for (const ext of ['docx', 'zip', 'exe', 'svg', 'html']) {
       expect(CLIP_PATH_RE.test(`${base}.${ext}`), ext).toBe(false);
@@ -75,7 +75,7 @@ describe('the image / document split', () => {
   // `.cc-clips`, so a path with no dot in its last segment must not read the
   // tail of the folder name as one.
   it('reads the last segment only, never a dot from the path above it', () => {
-    expect(hasClipExt('/home/you/.cc-clips/claude2-x/README')).toBe(false);
+    expect(hasClipExt('/home/you/.cc-clips/claude9-x/README')).toBe(false);
   });
 });
 
@@ -141,7 +141,7 @@ describe('splitClipPaths', () => {
     const raw = [
       'name      | five | seven',
       '--------- | ---- | -----',
-      'claude2   |  12% |   44%',
+      'claude9   |  12% |   44%',
       'serverbox |   3% |    9%',
     ].join('\n');
     expect(splitClipPaths(raw)).toEqual({ paths: [], rest: raw });

@@ -583,6 +583,16 @@ describe("coord/routes.ts POST /api/coord/caps: recorded always, never pushed (D
       expect(rec.pushes).toEqual([]);
       expect(rec.warned()).toContain(degradeLine('caps written, feed archive degraded'));
     });
+  it("caps's answer is the same status and bytes whether the archive lands or throws: a feed write never fails the route (D-5858, Task C1d)",
+    async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(1_790_000_200_000);   // the view carries the write's moment: one clock for both
+      const landed = await posted(false);
+      const failed = await posted(true);
+      expect(landed.res.statusCode, landed.res.body).toBe(200);
+      expect(failed.res.statusCode, failed.res.body).toBe(200);
+      expect(failed.res.body.startsWith('{"ok":true,')).toBe(true);
+      expect(failed.res.body).toBe(landed.res.body);
+    });
 });
 
 describe("coord/routes.ts POST /api/coord/stall-watch: recorded always, never pushed (D-5851)", () => {
@@ -620,6 +630,16 @@ describe("coord/routes.ts POST /api/coord/stall-watch: recorded always, never pu
     expect(rec.pushes).toEqual([]);
     expect(rec.warned()).toContain(degradeLine('stall watch settings written, feed archive degraded'));
   });
+  it("stall-watch's answer is the same status and bytes whether the archive lands or throws: a feed write never fails the route (D-5858, Task C1d)",
+    async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(1_790_000_200_000);   // the view carries the write's moment: one clock for both
+      const landed = await posted(false);
+      const failed = await posted(true);
+      expect(landed.res.statusCode, landed.res.body).toBe(200);
+      expect(failed.res.statusCode, failed.res.body).toBe(200);
+      expect(failed.res.body.startsWith('{"ok":true,')).toBe(true);
+      expect(failed.res.body).toBe(landed.res.body);
+    });
 });
 
 describe("coord/routes.ts POST /api/coord/collect-lane: recorded always, never pushed (D-5851)", () => {
@@ -671,6 +691,16 @@ describe("coord/routes.ts POST /api/coord/collect-lane: recorded always, never p
     expect(rec.pushes).toEqual([]);
     expect(rec.warned()).toContain(degradeLine('collector setting written, feed archive degraded'));
   });
+  it("collect-lane's answer is the same status and bytes whether the archive lands or throws: a feed write never fails the route (D-5858, Task C1d)",
+    async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(1_790_000_200_000);   // the view carries the write's moment: one clock for both
+      const landed = await posted(false);
+      const failed = await posted(true);
+      expect(landed.res.statusCode, landed.res.body).toBe(200);
+      expect(failed.res.statusCode, failed.res.body).toBe(200);
+      expect(failed.res.body.startsWith('{"ok":true,')).toBe(true);
+      expect(failed.res.body).toBe(landed.res.body);
+    });
 });
 
 describe("coord/routes.ts POST /api/asks/:id/answer (the parent's answer): recorded always, never pushed (D-5851)", () => {
@@ -735,6 +765,12 @@ describe("coord/routes.ts POST /api/asks/:id/answer (the parent's answer): recor
     expect(rec.pushes).toEqual([]);
     expect(rec.warned()).toContain(degradeLine('ask answered, feed archive degraded'));
   });
+  it("the parent's answer is the same status and bytes whether the archive lands or throws (D-5858, Task C1d)", async () => {
+    const landed = await answered(false);
+    const failed = await answered(true);
+    expect([landed.res.statusCode, landed.res.body]).toEqual([200, '{"ok":true}']);
+    expect([failed.res.statusCode, failed.res.body]).toEqual([200, '{"ok":true}']);
+  });
 });
 
 // Written natively (band 3: the approval path).
@@ -795,6 +831,15 @@ describe("coord/routes.ts POST /api/approvals/:id/rule (the ruling's journal row
         expect(pushed, 'the ruling is never pushed').toEqual([]);
         expect(rec.warned()).toContain(degradeLine('ruling stored, feed archive degraded'));
       });
+    it('the ruling answers the same status and bytes whether the archive lands or throws (D-5858, Task C1d)', async () => {
+      const landed = await ruled(false, 'deny', false);
+      const landedAnswer = [landed.res.statusCode, landed.res.body];
+      await landed.f.close();
+      fx = undefined;
+      const failed = await ruled(true, 'deny', false);
+      expect(landedAnswer).toEqual([200, '{"ok":true,"state":"denied"}']);
+      expect([failed.res.statusCode, failed.res.body]).toEqual([200, '{"ok":true,"state":"denied"}']);
+    });
   });
 
 // ─── coord/childReclaim.ts's three writers (written natively, band 3: the destructive path) ──────────────────────────

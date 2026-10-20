@@ -163,7 +163,7 @@ path wedges. This is pinned by an existing test.
 3. **`listProjects` skips linked worktrees**: skip iff readdir(workdir)
    includes `.git` AND readdir(workdir/'.git') === null (readdir-null is the
    file-vs-dir probe FleetIO affords). MEASURED constraint: four legitimate
-   non-git project dirs exist (cctest, cab-batch, cab-archive, bt-rules) —
+   non-git project dirs exist (cctest, project-r, project-q, project-o) —
    "has no .git" must NOT be skipped. Apply the same probe to the
    registry-union loop (the second door for the masquerade). The pinned
    lifecycle test's expected array updates accordingly.

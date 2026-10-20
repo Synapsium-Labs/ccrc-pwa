@@ -132,7 +132,7 @@ describe('parseDialog', () => {
   });
 
   it('parses a LIVE 2-column pane: clean labels, no trailing chrome, "Chat about this" offered', () => {
-    // Captured from cc-claude-b-data-internal while it was actually asking.
+    // Captured from cc-claude-b-project-e while it was actually asking.
     // Two failures this pane caused: the last option's label ran on into the
     // right-hand box's chrome ("Ship as-is, alert + runbook Notes: press n to
     // add notes Chat about this"), and the unnumbered "Chat about this" row
@@ -236,7 +236,7 @@ describe('FleetWatcher dialog detection', () => {
   it('emits dialog once, marks dialogPending, then clears', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    seedSession(home, 'claude-a-project-f', 'claude-a');
     let pane = fixture('ask-user-question.txt');
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
@@ -249,7 +249,7 @@ describe('FleetWatcher dialog detection', () => {
     const bus = new Bus();
     const msgs: SessionStreamMsg[] = [];
     const fleets: FleetSession[][] = [];
-    bus.on('session:claude-a-MekWarLive', (m) => msgs.push(m));
+    bus.on('session:claude-a-project-f', (m) => msgs.push(m));
     bus.on('fleet', (s) => fleets.push(s));
     const watcher = new FleetWatcher(deps, bus);
 
@@ -285,7 +285,7 @@ describe('FleetWatcher hookstate wiring', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     const uuid = '1'.repeat(36);
-    seedSession(home, 'claude-a-MekWarLive', 'claude-a'); // writes this same uuid
+    seedSession(home, 'claude-a-project-f', 'claude-a'); // writes this same uuid
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
@@ -295,7 +295,7 @@ describe('FleetWatcher hookstate wiring', () => {
       return { code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
-    writeFileSync(path.join(cfg.registryDir, 'claude-a-MekWarLive.hookstate.json'), JSON.stringify({
+    writeFileSync(path.join(cfg.registryDir, 'claude-a-project-f.hookstate.json'), JSON.stringify({
       v: 1, state: 'waiting', event: 'Notification', sessionId: uuid, pid: 40613,
       updatedAt: Date.now(), // fresh relative to sweepHookStates' own Date.now()
       ask: { questions: [{ question: 'Full text nobody should see on a card', header: 'Pick one', options: [{ label: 'A' }, { label: 'B' }] }] },
@@ -309,7 +309,7 @@ describe('FleetWatcher hookstate wiring', () => {
 
     await watcher.tick();
 
-    const s = fleets.at(-1)!.find((x) => x.id === 'claude-a-MekWarLive')!;
+    const s = fleets.at(-1)!.find((x) => x.id === 'claude-a-project-f')!;
     expect(s.hookState).toBe('waiting');
     expect(s.askSummary).toBe('Pick one');
     expect(s.subagents).toEqual([{ name: 'reviewer', startedAt: expect.any(Number) }]);
@@ -331,7 +331,7 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
      'cannot re-identify by uuid', async () => {
     const home = mkTmp('ccrc-retain-');
     seedRoster(home);
-    const id = 'claude-a-MekWarLive';
+    const id = 'claude-a-project-f';
     seedSession(home, id, 'claude-a');
     writeFileSync(path.join(home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
       v: 1, state: 'waiting', event: 'Notification', sessionId: HOOK_UUID, pid: 40613,
@@ -372,7 +372,7 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
      'genuinely reaped id — RED against a naive full rebuild, which drops any id configDirFor cannot map', async () => {
     const home = mkTmp('ccrc-retain-');
     seedRoster(home);
-    const id = 'claude-a-MekWarLive';
+    const id = 'claude-a-project-f';
     seedSession(home, id, 'claude-a');
     const cfg = loadConfig({ CCRC_HOME: home });
     const cfgDir = configDirFor(cfg, 'claude-a')!;
@@ -426,7 +426,7 @@ describe('FleetWatcher retain-don\'t-erase (Task 2, the heal side)', () => {
   it('sweepTasks keeps the tally when the task DIRECTORY will not list, and still prunes a reaped id', async () => {
     const home = mkTmp('ccrc-retain-dir-');
     seedRoster(home);
-    const id = 'claude-a-MekWarLive';
+    const id = 'claude-a-project-f';
     seedSession(home, id, 'claude-a');
     const cfg = loadConfig({ CCRC_HOME: home });
     const cfgDir = configDirFor(cfg, 'claude-a')!;
@@ -495,7 +495,7 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
      'while the registry directory cannot be listed, and heals on the next successful tick', async () => {
     const home = mkTmp('ccrc-collapse-');
     seedRoster(home);
-    const id = 'claude-a-MekWarLive';
+    const id = 'claude-a-project-f';
     seedSession(home, id, 'claude-a');
     writeFileSync(path.join(home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
       v: 1, state: 'waiting', event: 'Notification', sessionId: HOOK_UUID, pid: 40613,
@@ -548,7 +548,7 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
      'through an unlistable directory', async () => {
     const home = mkTmp('ccrc-collapse-');
     seedRoster(home);
-    const id = 'claude-a-MekWarLive';
+    const id = 'claude-a-project-f';
     seedSession(home, id, 'claude-a');
     writeFileSync(path.join(home, '.cc-sessions', `${id}.hookstate.json`), JSON.stringify({
       v: 1, state: 'waiting', event: 'Notification', sessionId: HOOK_UUID, pid: 40613,
@@ -585,7 +585,7 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
      'listed', async () => {
     const home = mkTmp('ccrc-collapse-');
     seedRoster(home);
-    const id = 'claude-a-MekWarLive';
+    const id = 'claude-a-project-f';
     seedSession(home, id, 'claude-a');
     const cfg = loadConfig({ CCRC_HOME: home });
     const cfgDir = configDirFor(cfg, 'claude-a')!;

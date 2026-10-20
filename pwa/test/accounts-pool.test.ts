@@ -36,7 +36,7 @@ describe('accountPool — the ONE reader of RosterWire.pool', () => {
   });
 
   it('answers null for an account the roster carries with no pool', () => {
-    expect(accountPool(pooled({ claude: 'pool-a' }), 'claude2')).toBeNull();
+    expect(accountPool(pooled({ claude: 'pool-a' }), 'claude9')).toBeNull();
   });
 
   it('answers null when the key is absent altogether — an older server is untagged, not unknown', () => {
@@ -115,15 +115,15 @@ describe('poolSide — the rule, composed and never restated', () => {
 });
 
 describe('splitByPool', () => {
-  const roster = pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' });
-  const all = ['claude', 'claude2', 'claude-corp', 'claude-dev0'];
+  const roster = pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' });
+  const all = ['claude', 'claude9', 'claude-acme', 'claude-lab0'];
 
   it('puts in-pool and untagged accounts on the eligible side and the rest on the crossing side', () => {
-    // `claude-dev0` carries no pool: an untagged ACCOUNT serves a tagged
+    // `claude-lab0` carries no pool: an untagged ACCOUNT serves a tagged
     // project, so it is eligible, not crossing.
     const split = splitByPool(roster, all, tagged('pool-a'));
-    expect(split.eligible).toEqual(['claude', 'claude-corp', 'claude-dev0']);
-    expect(split.crossing).toEqual(['claude2']);
+    expect(split.eligible).toEqual(['claude', 'claude-acme', 'claude-lab0']);
+    expect(split.crossing).toEqual(['claude9']);
     expect(split.unknown).toBe(false);
   });
 
@@ -158,10 +158,10 @@ describe('splitByPool', () => {
   });
 
   it('preserves the caller order it was handed and returns fresh arrays', () => {
-    const wrappers = ['claude2', 'claude'];
+    const wrappers = ['claude9', 'claude'];
     const split = splitByPool(roster, wrappers, tagged('pool-a'));
     expect(split.eligible).toEqual(['claude']);
-    expect(split.crossing).toEqual(['claude2']);
+    expect(split.crossing).toEqual(['claude9']);
     expect(split.eligible).not.toBe(wrappers);
   });
 });
@@ -217,7 +217,7 @@ describe('projectPoolOf — the frame, read by project name', () => {
 
 describe('poolOptions — derived, never enumerated', () => {
   it('lists each distinct pool name once, in roster order', () => {
-    expect(poolOptions(pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })))
+    expect(poolOptions(pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' })))
       .toEqual(['pool-a', 'pool-b']);
   });
 
@@ -227,7 +227,7 @@ describe('poolOptions — derived, never enumerated', () => {
 });
 
 describe('poolLabelList', () => {
-  const roster = pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' });
+  const roster = pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' });
 
   it('names only the HOME-ABLE accounts that can serve this pool, by label', () => {
     // `gpt` is homeAble:false and is never consulted for a placement fact —
@@ -251,7 +251,7 @@ describe('poolLabelList', () => {
     // tagged. Placement additionally needs `_account_ok` and `_avail`, so this
     // pure projection does not decide whether a session strands.
     const emptyPoolRoster = pooled({
-      claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a', 'claude-dev0': 'pool-a',
+      claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a', 'claude-lab0': 'pool-a',
     });
     expect(poolLabelList(emptyPoolRoster, tagged('pool-c'))).toBe('');
   });

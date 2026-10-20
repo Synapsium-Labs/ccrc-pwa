@@ -785,14 +785,14 @@ describe('cmd_stop', () => {
     + `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; };`;
 
   it('takes a workspace id whole rather than reversing it into a wrapper', () => {
-    expect(sh(`${STOP} cmd_stop rp-llm-quiet-mesa`)).toBe('stopped rp-llm-quiet-mesa');
+    expect(sh(`${STOP} cmd_stop project-j-quiet-mesa`)).toBe('stopped project-j-quiet-mesa');
     expect(calls()).toEqual([
       // cmd_stop's own `_lc_done` (task 18) is the first `_lc_emit` in this
       // process, so `_lc_obs`'s once-per-process `tmux list-panes` probe fires
       // before the disable/kill pair.
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
-      'systemctl --user disable --now claude-session@rp-llm-quiet-mesa',
-      'tmux kill-session -t =cc-rp-llm-quiet-mesa:',
+      'systemctl --user disable --now claude-session@project-j-quiet-mesa',
+      'tmux kill-session -t =cc-project-j-quiet-mesa:',
     ]);
   });
 

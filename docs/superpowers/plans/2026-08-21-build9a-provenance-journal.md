@@ -811,7 +811,7 @@ column families in the mirror, three panes in the PWA. **Nothing computes a sing
   const DEC: LifecycleDec = { surface: 'cli', actor: 'still-river', reason: 'wave 3 cleanup' };
   const MEAS: LifecycleMeas = {
     project: 'ccrc-pwa', workspace: 'still-river', branch: 'ws/still-river',
-    uuid: '72be9ee2-0000-4bcc-b60b-0cfc0dc3d199', wrapper: 'claude-corp',
+    uuid: '72be9ee2-0000-4bcc-b60b-0cfc0dc3d199', wrapper: 'claude-acme',
     tip: 'a'.repeat(40), attic: 201, archivedAt: null, archivedReason: null, held: null,
   };
   const EVENT: LifecycleEvent = {
@@ -3498,9 +3498,9 @@ describe('_lc_obs — kernel-observed, memoised, never a decision', () => {
   it('names the tmux session when an ancestor pid is a pane pid', () => {
     const o = JSON.parse(h.sh(`${OBS}
       _lc_cgroup_read() { printf '%s' '/x'; }
-      tmux() { echo "cc-claude2 $$"; }
+      tmux() { echo "cc-claude9 $$"; }
       _lc_obs_probe`)) as Record<string, unknown>;
-    expect(o['pane']).toBe('cc-claude2');
+    expect(o['pane']).toBe('cc-claude9');
     expect(o['paneWhy']).toBe('ok');
   });
 
@@ -4737,7 +4737,7 @@ const seed = (id = 'demo-still-river'): string => {
     _reg_set ${id} project demo
     _reg_set ${id} workspace still-river
     _reg_set ${id} branch ws/still-river
-    _reg_set ${id} wrapper claude-corp
+    _reg_set ${id} wrapper claude-acme
     _reg_set ${id} workdir /data/worktrees/demo/still-river
     _reg_set ${id} archived 1787000000
     _reg_set ${id} archivedreason merged:#42`);
@@ -4755,7 +4755,7 @@ describe('_reg_purge always journals, and journals BEFORE it unlinks', () => {
     expect(m['project']).toBe('demo');
     expect(m['workspace']).toBe('still-river');
     expect(m['branch']).toBe('ws/still-river');
-    expect(m['wrapper']).toBe('claude-corp');
+    expect(m['wrapper']).toBe('claude-acme');
     expect(m['uuid']).toBe('72be9ee2-0000-4bcc-b60b-0cfc0dc3d199');
     expect(m['workdir']).toBe('/data/worktrees/demo/still-river');
     expect(m['archivedAt']).toBe('1787000000');
@@ -4959,10 +4959,10 @@ describe('session call sites', () => {
   });
 
   it('_reg_claim writes one claim line', () => {
-    h.sh('_reg_set sess wrapper claude-corp; _reg_claim sess');
+    h.sh('_reg_set sess wrapper claude-acme; _reg_claim sess');
     expect(actsOf(h.home)).toEqual(['claim']);
     expect(readJournal(h.home)[0]!['id']).toBe('sess');
-    expect(measOf(readJournal(h.home)[0]!)['wrapper']).toBe('claude-corp');
+    expect(measOf(readJournal(h.home)[0]!)['wrapper']).toBe('claude-acme');
   });
 
   it('_spawn_settle is CHANGE-ONLY — an unchanged rc inside 300s writes nothing', () => {
@@ -5011,10 +5011,10 @@ describe('session call sites', () => {
   it('cmd_enable and cmd_start write TWO independent events, not one folded pair', () => {
     // The ruling: a re-entrant verb records two acts because two acts happened.
     // `wrapper` and `workdir` are seeded because cmd_start's ladder dies at
-    // ccd:8682 and ccd:8694 without them; `claude-corp` is in the harness's
-    // home-able roster, so `[[ -x "$WRAPPER_DIR/claude-corp" ]]` (ccd:8683) holds.
+    // ccd:8682 and ccd:8694 without them; `claude-acme` is in the harness's
+    // home-able roster, so `[[ -x "$WRAPPER_DIR/claude-acme" ]]` (ccd:8683) holds.
     h.sh(`_reg_set sess uuid u; _reg_set sess project demo
-      _reg_set sess wrapper claude-corp; _reg_set sess workdir "$HOME"
+      _reg_set sess wrapper claude-acme; _reg_set sess workdir "$HOME"
       _supervised_start() { return 0; }; _reg_claim() { :; }; _spawn_settle() { :; }
       _spawn_start() { SPAWN_FROMSWAP=0; }; _alive() { return 1; }
       cmd_enable sess`);
@@ -5579,7 +5579,7 @@ describe('ws-rm writes an intent/done pair sharing one tx', () => {
 
 describe('forget writes an intent/done pair', () => {
   it('brackets the purge and names the verb', () => {
-    h.sh(`_reg_set s uuid u; _reg_set s wrapper claude-corp
+    h.sh(`_reg_set s uuid u; _reg_set s wrapper claude-acme
       ${STUB} _session_verdict() { echo gone; }
       cmd_forget s`);
     expect(eventsOf(h.home, 'forget').map((e) => e['outcome'])).toEqual(['intent', 'done']);
@@ -11369,7 +11369,7 @@ Spec §2 says the only agent-side delta in this whole build is a **test**, and �
 - Modify `agent/test/whitelist.test.ts` — append one `it` inside the existing `describe('whitelist.checkPath')` (opens `:29`, closes `:93`), before that closing `});`; extend the import block (`:1-10`)
 
 **Interfaces:**
-- Consumes: `checkPath(targetPath: string, cfg: {home, projectsRoot}, mode: 'read' | 'write'): Promise<string | null>` (`agent/src/whitelist.ts:64`); the file's own `seed()` helper (`:41`), which mints a fresh `$HOME` with `.cc-sessions`, `.cc-limits`, `.cc-clips`, `.claude`, `.claude-corp`; `LC_DIR_NAME`, `LC_GEN_PREFIX`, `LC_GEN_SUFFIX`, `LC_ERRORS_NAME` from `shared/api.js` (`agent/tsconfig.json`'s `include` already carries `../shared/**/*.ts`).
+- Consumes: `checkPath(targetPath: string, cfg: {home, projectsRoot}, mode: 'read' | 'write'): Promise<string | null>` (`agent/src/whitelist.ts:64`); the file's own `seed()` helper (`:41`), which mints a fresh `$HOME` with `.cc-sessions`, `.cc-limits`, `.cc-clips`, `.claude`, `.claude-acme`; `LC_DIR_NAME`, `LC_GEN_PREFIX`, `LC_GEN_SUFFIX`, `LC_ERRORS_NAME` from `shared/api.js` (`agent/tsconfig.json`'s `include` already carries `../shared/**/*.ts`).
 - Produces: no source change anywhere. This is a pin over shipped behaviour.
 
 - [ ] **Step 1: Write the test.** Add to `agent/test/whitelist.test.ts`'s import block:
@@ -13214,7 +13214,7 @@ exercised:
   // The one sample that carries a dec, so layer 2's `isExecAllowed` check
   // actually proves the FLAGGED shape is reachable under the granted
   // `['ws-hold','--session']` prefix rather than only the bare one.
-  wsHold: ['demo-quiet-basin', 'program:agent-evals wave:1/4',
+  wsHold: ['demo-quiet-basin', 'program:prog-j wave:1/4',
            { surface: 'pwa', actor: 'device:iPhone', reason: null }],
   wsRelease: ['demo-quiet-basin', null],
   wsRename: ['demo-quiet-basin', 'ws/brainstorm-helix-and-slide-notes', null],
@@ -13234,7 +13234,7 @@ without it**:
 `:307`, EXPECTED's `wsHold` grows the two flag pairs its sample now sends:
 
 ```ts
-    wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:agent-evals wave:1/4',
+    wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:prog-j wave:1/4',
              '--surface', 'pwa', '--actor', 'device:iPhone'],
 ```
 `:302`, `:303`, `:308`, `:309` are **unchanged** — their samples pass `null`, so the argv is
@@ -13630,7 +13630,7 @@ describe('wave 6 — the dec flags are sent only to a ccd that says it parses th
 cd /home/you/worktrees/ccrc-pwa/still-river/server && ./node_modules/.bin/vitest run test/lifecycle.test.ts -t 'wave 6'
 ```
 Expected failure: `a NEW ccd receives --surface pwa and the device actor` fails with
-`expected [ [ '…/ccd', 'ws-archive', '--session', 'claude2-MekWarLive' ] ] to deeply equal [ [ …, '--surface', 'pwa', '--actor', 'device:unmeasured' ] ]`.
+`expected [ [ '…/ccd', 'ws-archive', '--session', 'claude9-project-f' ] ] to deeply equal [ [ …, '--surface', 'pwa', '--actor', 'device:unmeasured' ] ]`.
 The three "old ccd" cases pass already, and that is correct — they are regression pins.
 
 - [ ] **Step 3: extend the import at `server.ts:24`.**
@@ -13696,7 +13696,7 @@ unchanged. That is the inverted default doing its job on a real existing suite.
 `capSupported(deps.fleetState, ACTOR_FLAGS_CAP)` with `true` and re-run step 6's first two commands.
 Mutant: ungated -> `an OLD ccd (no actor-flags-v1) receives the bare argv, byte for byte` and
 `NO EVIDENCE AT ALL is treated as an old ccd, never as a new one` both fail with
-`expected [ …, '--surface', 'pwa', … ] to deeply equal [ …, '--session', 'claude2-MekWarLive' ]`, and
+`expected [ …, '--surface', 'pwa', … ] to deeply equal [ …, '--session', 'claude9-project-f' ]`, and
 `hold-gate.test.ts` fails too. Restore.
 
 - [ ] **Step 8: mutant — the wrong device.** Swap `deviceActor(sessionAuth(req).device)` for

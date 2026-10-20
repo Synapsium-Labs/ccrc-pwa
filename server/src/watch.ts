@@ -48,11 +48,9 @@ import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthI
 // form is invisible to it.
 import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, isRegistryId, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
-// The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
-// NOT imported beside it: this file holds its own module-local literal
-// (`sweepMail` already uses it), a second `const` of that name in one scope is
-// a redeclaration (TS2451), and `rundefs.ts` explains on purpose why the two
-// literals exist. `single-definition.test.ts` pins both halves of that split.
+import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER } from '../../shared/switches.js';
+// The pause marker, reached through `rundefs.ts`'s re-export of its one definition, the `shared/switches.ts` row.
+// `single-definition.test.ts` pins that this file holds no copy.
 import {
   COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, askNudgeSubject, isApprovalNudgeMail, isAskNudgeMail,
   survivorOf,
@@ -732,7 +730,7 @@ function parkBoxSeen(box: string | null, parkBox: string | null): 'changed' | 's
   return box === parkBox ? 'same' : 'changed';
 }
 
-/** The fleet kill-switch, `$REG/mail-disabled` — ccd's `-disabled` family
+/* The fleet kill-switch, `$REG/mail-disabled` — ccd's `-disabled` family
  *  (`ccd/ccd:40-41`, `_lane_enabled` at `:248`), which the operator already
  *  knows how to use: `touch` to stop, `rm` to resume. Read by LISTING the
  *  registry directory, never by reading the file — and that stays true even
@@ -751,16 +749,17 @@ function parkBoxSeen(box: string | null, parkBox: string | null): 'changed' | 's
  *  because the marker itself couldn't be seen. `limits.ts:134-142` already
  *  filters unknown `<name>-disabled` markers out of `/api/accounts`, so
  *  this name cannot fabricate an account row there. */
-const MAIL_DISABLED_MARKER = 'mail-disabled';
+// `MAIL_DISABLED_MARKER` is imported: its one definition is its `shared/switches.ts` row (D-5855). The read discipline
+// above is this file's own mapping of an unlistable registry, which `readSwitches` leaves to each reader.
 
-/** The hold's own kill switch, `$REG/asks-disabled` — same family, same read
+/* The hold's own kill switch, `$REG/asks-disabled` — same family, same read
  *  discipline as `MAIL_DISABLED_MARKER` immediately above: LISTED, never
  *  statted directly, and an unlistable registry (`listing === null`, "can't
  *  tell") reads as disabled rather than as license to keep holding. Touch to
  *  stop every FUTURE hold from deferring (an already-held ask still waits out
  *  its own `until`, and `sweepAsks` still releases it on schedule); `rm` to
  *  resume. */
-const ASKS_DISABLED_MARKER = 'asks-disabled';
+// `ASKS_DISABLED_MARKER` is imported from its `shared/switches.ts` row as well (D-5855).
 
 /** D-5298 (plan Task 16): how long a deferred approval push waits after every row it covers was ruled, for the hook
  *  to print the ruling and the dialog to clear, before `sweepApprovals` pushes anyway. Two hook polls (2 s each) and
@@ -5627,7 +5626,7 @@ export class FleetWatcher {
 
   /**
    * THE DEAD-COORDINATOR LANE (workspace lifecycle spec 2026-09-24 §5.4, wave 4): a coordinator that CRASHED and has
-   * stayed dead an hour, with no successor, has its open runs closed `failed` — and CCR-15 then reclaims its marked
+   * stayed dead an hour, with no successor, has its open runs closed `failed` — and #166 then reclaims its marked
    * children. A THIRD SIBLING of `sweepChildReclaim` on the same tick, with its registry read, its cadence
    * (`CHILD_RECLAIM_SWEEP_MS`) and its switch (`reclaim-paused`, the fleet's one cleanup switch) — and nothing else:
    * its own memory, verdicts (`deadCoordinator.ts`, L1), executor (`endDeadCoordinator`), feed rows and attention list

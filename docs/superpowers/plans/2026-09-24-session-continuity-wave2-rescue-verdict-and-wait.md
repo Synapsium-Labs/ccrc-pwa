@@ -92,7 +92,7 @@ rules 2–3 and their tests list (NOT the refusal of non-rescue swaps, `--cut-de
 rule 1 as shipped by D-3526 (`docs/superpowers/plans/2026-09-28-carried-in-banner-is-not-a-block.md`); §3 C6 (slug
 `rescue-waits-near-reset`, D-3498), C12 (D-3497), C13 (the 600 s bound); §8 (the near-reset wait, stalled-session and
 chain-wait bullets); §9's stage-4 rows except "non-rescue swaps that cut delegated work"; §11 item 3 and item 6
-(ruled 2026-09-24 "leave it and count it"; the decision returns to the operator with that count — Linear CCR-20).
+(ruled 2026-09-24 "leave it and count it"; the decision returns to the operator with that count — issue #199).
 Programme ledger: `docs/superpowers/programs/session-continuity.md` (wave 2).
 
 ---
@@ -1964,13 +1964,13 @@ with
 
 <!-- replay: replace ccd/ccd -->
 ```bash
-  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41 — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41 — by addition, NOT a fresh census of
 ```
 
 with
 
 ```bash
-  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, continuity's `rescuewait` 42 — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, continuity's `rescuewait` 42 — by addition, NOT a fresh census of
 ```
 
 <!-- replay: replace ccd/ccd -->
@@ -2061,7 +2061,7 @@ ccd/ccd:2955-2956, before it D-3526's carried-in verdict` (measured). The lines 
 
 ```text
 # THE LAST MOVE WAS the rescue wait's reads (session-continuity wave 2), the +3; before it D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`);
-# then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
+# then the RECLAIM region's reads (#166 wave 3, Task 5), `_child_tmpdir`'s and #127's.
 ```
 
 Any `STOP` means nothing was written: a count other than `+3` means a read other than this task's three moved it
@@ -3063,7 +3063,7 @@ MSG
   noroom_waits_past_their_reset_by_end, noroom_seconds_past_their_reset_total,
   noroom_seconds_past_their_reset_max}`, or `{swap_log: "absent"}` — spec §9's stage-4 rows except "non-rescue swaps
   that cut delegated work" (wave 7's). The four `noroom_…` rows are §11 item 6's count (ruled 2026-09-24, "leave it
-  and count it"; the question returns to the operator with it — CCR-20); a wait ended `turned` or `stale` is never
+  and count it"; the question returns to the operator with it — #199); a wait ended `turned` or `stale` is never
   in it.
 
 **Whichever continuity wave lands first writes the file — and the file is the same either way** (the programme
@@ -3870,7 +3870,7 @@ the chain then reading
 
 ```text
 # THE LAST MOVE WAS the rescue wait's reads (session-continuity wave 2), the +3; before it the fake wave's reads, the +2 (`_fake_wave`);
-# then D-3526's carried-in verdict, the +6, then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
+# then D-3526's carried-in verdict, the +6, then the RECLAIM region's reads (#166 wave 3, Task 5), `_child_tmpdir`'s and #127's.
 ```
 
 and, when wave 1 landed, `deploy/measure-continuity.py: main's file + the stage-4 block, 476 lines` before
@@ -3940,7 +3940,7 @@ gh pr create --base main --title "Session continuity wave 2: the rescue waits ne
 Wave 2 of the session-continuity programme (spec `docs/superpowers/specs/2026-09-23-session-continuity-design.md` §5.4 rules 2–3; rule 1 shipped as D-3526, #207). **AGENT-FIRST, ccd only.** No wire change.
 
 1. **The dated row.** The verdict keeps a rate-limit row's `resetsAt`, window and own epoch only from the row D-3526's reader answered rc 0 on — a row this pane's process wrote — through a new `dated` reader mode cached with its answer in `$REG/<id>.tdate`. An unplaced process, lost auth on either surface, a carried-in row and a reset the row was written at or after date nothing; no wait of any kind opens without a dated row.
-2. **Rule 2 — the near-reset wait** (C6, C13). A `five_hour` block on an Anthropic lane within 600 s of its kept reset, with Claude Code's auto-continue armed (its own footer, outside the prompt box — never a draft or prose saying the words), waits; it ends at the reset or 120 s after it — in a swap if a newer rate-limit row exists; otherwise, while still armed and only for a wait open before that grace ran out, in place, never away from an account that has just reset — and only until 30 minutes past that reset (`RESCUE_CHAIN_WAIT`; the planner's default bound, which the operator may rule away), after which the tick is rescued as today. Today's stranded path is the no-room wait; a stalled one swaps the moment a target has room, inside the grace too, and one whose reset a newer row proves stale ends `stale`. The residual — a stalled session whose own account is the only one with room idles until another target gains room, exactly as today — was ruled 2026-09-24 (spec §11 item 6): left as today and counted by `--stage 4`'s four `noroom_…` rows (CCR-20).
+2. **Rule 2 — the near-reset wait** (C6, C13). A `five_hour` block on an Anthropic lane within 600 s of its kept reset, with Claude Code's auto-continue armed (its own footer, outside the prompt box — never a draft or prose saying the words), waits; it ends at the reset or 120 s after it — in a swap if a newer rate-limit row exists; otherwise, while still armed and only for a wait open before that grace ran out, in place, never away from an account that has just reset — and only until 30 minutes past that reset (`RESCUE_CHAIN_WAIT`; the planner's default bound, which the operator may rule away), after which the tick is rescued as today. Today's stranded path is the no-room wait; a stalled one swaps the moment a target has room, inside the grace too, and one whose reset a newer row proves stale ends `stale`. The residual — a stalled session whose own account is the only one with room idles until another target gains room, exactly as today — was ruled 2026-09-24 (spec §11 item 6): left as today and counted by `--stage 4`'s four `noroom_…` rows (#199).
 3. **Rule 3 — spread, no bounce, chain wait.** From the swap log's tail, read only when a decision needs it: skip the accounts just left blocked, prefer a target no rescue landed on in 10 minutes (never at the price of a class degrade or an undecidable tick, and never over the session's recovered home), and chain-wait a fourth rescue within the hour up to 30 minutes — on an Anthropic lane and a dated block not past its five-hour reset's grace, held only on the account it was taken on.
 4. `$REG/<id>.rescuewait` records each wait once on entry and once on exit; `deploy/measure-continuity.py --stage 4` reads §9's stage-4 rows back, read-only.
 
@@ -4149,7 +4149,7 @@ reviewers; one `sonnet` refute pass per finding.
 1. **§11 item 6 comes back with its count.** Ruled 2026-09-24: a stalled session whose own account is the only one
    with room idles as today, no in-place restart, and stage 4's instrument counts it — `noroom_waits_past_their_reset`,
    by end, with the seconds past the reset. The operator rules again once the first deploy's data is in (Linear
-   CCR-20); nothing in this plan depends on that ruling.
+   #199); nothing in this plan depends on that ruling.
 2. **A no-room wait whose block turns into lost auth mid-strand keeps its record open.** The strand stands (as
    today) and the session moves when a target has room, but the record — and so §11 item 6's count — still names the
    rate-limit reset it opened on. Closing it on the first undated strand tick would make the count exact at the price

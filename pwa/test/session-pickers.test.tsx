@@ -15,6 +15,9 @@ import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession as baseSession } from './fleetFixture';
 import { SessionScreen } from '../src/screens/SessionScreen';
+// W2 Task S2d: the session menu's items and the model/effort chips are command doors, run by the one layer
+// `app.tsx` mounts above the screen; a case that drives them mounts it beside, as the app does.
+import { CommandLayer } from '../src/command/CommandLayer';
 import { ToastHost } from '@ccrc/ui';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -65,13 +68,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const ID = 'claude:OpenClawHetzner';
+const ID = 'claude:ProjectC';
 const fakeSocket = (): WebSocket =>
   ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket;
 
 const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession =>
   baseSession({
-    id: ID, project: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner',
+    id: ID, project: 'ProjectC', workdir: '/root/projects/ProjectC',
     // Non-null model/effort — the header's model/effort chips only render at
     // all once one of model/branch/effort/ultracode is truthy (`SessionHeader`'s
     // `hasMeta`), and the `queued` badge for a field rides that field's own
@@ -98,6 +101,7 @@ const renderScreen = (patch: Partial<FleetSession> = {}): { store: SessionStore;
   const fleet = makeFleet(patch);
   render(
     <>
+      <CommandLayer openNewSession={() => {}} />
       <SessionScreen id={ID} store={store} fleet={fleet} />
       <ToastHost />
     </>,

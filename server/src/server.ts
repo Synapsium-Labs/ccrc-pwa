@@ -10,7 +10,9 @@ import { configDirFor } from './config.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { Deps } from './deps.js';
 import { assembleFleet } from './fleet.js';
-import { readLimits, projectHome, projectPlacement } from './limits.js';
+import { readLaneStates, readLimits, projectHome, projectPlacement } from './limits.js';
+import { accountsConnect, lanesWire } from './accounts/lanes.js';
+import { accountOriginClass } from './accounts/gate.js';
 import { readSharesMeasured } from './shares.js';
 import { CLASSES, type ModelClass } from '../../shared/models.js';
 import {
@@ -1208,11 +1210,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     };
   });
 
-  // The digest of the projection THIS box's roster produces, computed once:
-  // `deps.cfg.roster` is loaded at boot and never reloaded (`loadConfig` is
-  // called at module top level in index.ts), so re-deriving it per poll would
-  // be a sha256 every 15 seconds for an answer that cannot have changed.
-  const ownRosterFp = bodyDigest(generateAccountsSh(deps.cfg.roster));
+  // The digest of the projection THIS box's roster produces, once per roster (D-6057 (5)): `reloadRoster`
+  // swaps `deps.cfg.roster` for a new object when the box answers a different one, so the digest is re-derived the
+  // first time it is read after a swap and never on an unchanged roster.
+  let ownRosterFpOf: { roster: typeof deps.cfg.roster; fp: string } | null = null;
+  const ownRosterFp = (): string => {
+    if (ownRosterFpOf?.roster !== deps.cfg.roster) {
+      ownRosterFpOf = { roster: deps.cfg.roster, fp: bodyDigest(generateAccountsSh(deps.cfg.roster)) };
+    }
+    return ownRosterFpOf.fp;
+  };
 
   // Typed at the producer (`FleetHealth`, shared/api.ts): before this
   // annotation the two returns below were structurally checked against
@@ -1255,7 +1262,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         mode: 'remote',
         connected: deps.fleetState.connected,
         downSince: deps.fleetState.downSince,
-        roster: rosterAgreement(deps.fleetState.rosterFp, ownRosterFp),
+        roster: rosterAgreement(deps.fleetState.rosterFp, ownRosterFp()),
         build: buildAgreement(builds.fleet, builds.own),
         builds,
         projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
@@ -1348,7 +1355,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // Account usage read straight from telemetry (cc-limits), independent of which
   // sessions are running or where they've swapped — so it survives restarts,
   // respawns, and swaps. Ordered by the roster's declaration order.
-  app.get('/api/accounts', async (): Promise<AccountsResponse> => {
+  app.get('/api/accounts', async (req, reply): Promise<AccountsResponse> => {
+    // `no-store` on every answer (accounts plan Task A12): a session reader's carries identities and key hints.
+    reply.header('cache-control', 'no-store');
     const limits = await readLimits(deps.io, deps.cfg);
     // ONE central-edges read for the WHOLE request (review round 1, Minor 1),
     // exactly the way `shares`/`limits` are each one read for every row below
@@ -1406,7 +1415,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // browser can use (`RosterWire`): `exec` and `configDirSuffix` stay
     // server-side. The lane's kind (`provider`, `kind`, `telemetry`, `managed`)
     // is `rosterKindOf`'s one derivation, spread here (D-5517, D-5751).
-    return {
+    const today: AccountsResponse = {
       accounts,
       // THE UNTAGGED FORECAST, said out loud (account pools, spec §5.6): this
       // field answers "where would a new workspace land on a project with no
@@ -1433,6 +1442,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         resolvedPool: resolvedAccountPool(a.id, a, accountEdges),
       })),
     };
+    // `lanes` and `connect` for the SESSION verdict only (D-5511, D-5517): a dark gate's reader, and a box token (which
+    // an armed gate refuses before this handler), get today's three fields and nothing else. The lane states are read
+    // only here, so no other `readLimits` caller pays for them.
+    const auth = sessionAuth(req);
+    if (!deps.cfg.authEnabled || !auth.allow || auth.reason !== 'session') return today;
+    const lanes = lanesWire(today.roster, limits, await readLaneStates(deps.io, deps.cfg),
+      deps.masker ?? SHAPE_ONLY_MASKER, Date.now());
+    const connect = accountsConnect({
+      ccdVerbs: deps.fleetState?.ccdVerbs ?? null, origin: accountOriginClass(deps.cfg.origin),
+      stepUpFreshUntil: stepUp.stepUpFreshUntil(req),
+    });
+    return { ...today, lanes, connect };
   });
 
   // D-5995: a broadcast is masked and serialized ONCE, and that text handed to every socket: the bus hands each
@@ -1707,7 +1728,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   //
   // It answers with its handle (workspace lifecycle §5.2): the coordination serialiser with the operator abandon inside
   // it, which the archive door below runs its `{programme:'end'}` on.
-  const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher);
+  const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher, notice);
   // The dead-coordinator lane (workspace lifecycle §5.4) ends a programme only on this same serialiser: the watcher is
   // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
   // (a structural double, not a `FleetWatcher`) carries no such method, and has no lane to hand it to.

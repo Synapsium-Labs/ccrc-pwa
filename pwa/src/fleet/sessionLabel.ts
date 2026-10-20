@@ -8,7 +8,7 @@ import type { FleetSession } from '../../../shared/api';
  * first rung. The server maps an empty title file to null, so '' never arrives.
  *
  * `name` is only ever present when it is worth showing: the server drops
- * Claude Code's derived session handles (`openclawhetzner-42` — cwd basename
+ * Claude Code's derived session handles (`project-c-42` — cwd basename
  * plus a counter) before they reach the wire, so a non-null name is one a
  * human chose. Branch outranks the slug because a workspace's branch gets
  * renamed to something descriptive while `workspace` keeps the slug it was

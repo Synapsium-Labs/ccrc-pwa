@@ -13,8 +13,8 @@ its write path.
 D-1159, D-1160 and D-1161 all served the same half of graphify: the engine, the skill, the
 per-tree excludes, the noise list, the 15-minute sweep. That half now works, and it was
 verified by effect rather than shape — after the D-1161 deploy, `refused-by-guard` fell
-from 15 trees to 11, and three repos rebuilt within minutes (OpenClawHetzner 2,611 nodes,
-data-internal 4,181, wt-model-rates-sync 1,797), each `built_at_commit` matching HEAD.
+from 15 trees to 11, and three repos rebuilt within minutes (project-c 2,611 nodes,
+project-e 4,181, wt-model-rates-sync 1,797), each `built_at_commit` matching HEAD.
 
 None of it makes a session *read* a graph.
 

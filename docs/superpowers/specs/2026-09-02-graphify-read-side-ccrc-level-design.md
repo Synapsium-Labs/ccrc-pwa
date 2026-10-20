@@ -30,7 +30,7 @@ row per `query`/`path`/`explain` with the graph's path in `corpus`):
 | last 7 days | 265 | 11 | 0 |
 | since D-1243 deployed (2026-09-01) | 109 | 4 | 0 |
 
-103 of the 109 were MekWarLive — whose **project** `CLAUDE.md` has carried graphify's block, committed,
+103 of the 109 were project-f — whose **project** `CLAUDE.md` has carried graphify's block, committed,
 since 2026-07-08. The account-wide block moved nothing. "5/5 homes converged" was shape; this is effect.
 
 Two more read-side facts nobody had measured:
@@ -41,8 +41,8 @@ Two more read-side facts nobody had measured:
   Jul 7, **no dist-info, no `__version__`**. The venv at `~/.ccrc/graphify-venv` is pinned at 0.9.9 and
   builds every graph; the read side runs whatever was on `PATH` in July. The write side resolves the
   engine by absolute path everywhere (spec §A); the read side was never given a path at all.
-- **13 of 16 live trees are fresh; 3 are behind** (`custom-tools` 97 commits — refused by the corpus
-  guard, correctly; `expoAI-assistant/keen-prairie` 43; `MekWarLive/swift-harbor` 4). Nothing in a session
+- **13 of 16 live trees are fresh; 3 are behind** (`project-d` 97 commits — refused by the corpus
+  guard, correctly; `project-h/keen-prairie` 43; `project-f/swift-harbor` 4). Nothing in a session
   says which. A session querying a graph 97 commits stale gets confident wrong answers.
 
 ## 1. The rule
@@ -58,7 +58,7 @@ rather than asserted. Those artifacts already exist:
 | `~/.ccrc/graphify-venv` | `_inst_graph_engine`, pinned | the sweep — and, after R3, sessions |
 | `~/.cc-sessions/<id>.hookstate.json` | the hook writes it; `server/src/hookstate.ts` is its one reader | the server, the PWA, the run board |
 
-**Never a `CLAUDE.md` at either level.** The project-level `## graphify` sections in MekWarLive and rp-llm
+**Never a `CLAUDE.md` at either level.** The project-level `## graphify` sections in project-f and project-j
 are graphify's own doing in the operator's repositories — theirs, untouched by this design.
 
 ## 2. Mechanisms
@@ -75,7 +75,7 @@ lines `ls..le` plus the one separating blank line the append path wrote, via tmp
 own mode preserved. Anything else: *"left in place — remove by hand"*, counted, `INST_DEGRADED`. This is
 D-1244's hardened census and splice doing its last job; PR #44's code is reused, not discarded.
 
-Fleet today: 5 rostered homes, **3 physical files** (`.claude-gpt` and `.claude-kimi` are symlinks to
+Fleet today: 5 rostered homes, **3 physical files** (`.claude-gpt` and `.claude-alt2` are symlinks to
 `~/.claude/CLAUDE.md`). The step stays in the tree afterwards exactly as `_inst_graph_hooks_off` does.
 
 ### R1 — the graph card: `SessionStart` context from the session hook
@@ -268,7 +268,7 @@ by its installer) nudge on every `Bash` whose command contains a search word any
 `Read`/`Glob` of a source or doc file; they never block, never stop, and never look at freshness. Being
 project-scoped they reach only the seven projects where someone ran the installer, four of them in
 UNTRACKED files that vanish in a fresh clone or worktree. Over the week before the read side shipped,
-330 of 345 queries came from those projects; the custom-tools worktrees, which lack the untracked file,
+330 of 345 queries came from those projects; the project-d worktrees, which lack the untracked file,
 sit at zero. So the Read hole is real — a session can navigate file by file and never trip the gate —
 and the mechanism that closes it has to be the fleet-wide one. **Ruling 2026-09-06 12:49 UTC:** close
 it, as a NUDGE, not a deny: `Edit` requires a prior `Read`, so a deny on `Read` would charge every
