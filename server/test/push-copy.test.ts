@@ -1289,10 +1289,10 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     title: 'ccrc v0.0.9 is out',
     body: 'On stable — fleet and server are on v0.0.7. Tap to see what\'s new.',
     tag: 'release-v0.0.9',
-    url: '/settings',
+    url: '/settings/updates',
   };
 
-  it('sends the pinned copy — title, body, collapse tag and the /settings url, with no session', () => {
+  it('sends the pinned copy — title, body, collapse tag and the /settings/updates url, with no session', () => {
     const { sent, push } = recorder();
     const w = watcher({ push, coord: true, sessions: [] });
     seed(w.coord!, { releases: [listed('v0.0.9'), listed('v0.0.7')], server: 'v0.0.7', fleet: 'v0.0.7' });
