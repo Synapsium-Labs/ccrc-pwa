@@ -16,6 +16,7 @@ export const INSTRUMENT_SET: SkinSet = {
   Nav: FleetColumn,
   FleetList: null,
   SessionChrome: null,
+  // No row part and no fold: each transcript item renders as today until S14's log rows (D-5475).
   TranscriptRow: null,
   Inspector: null,
   StatusBar: null,

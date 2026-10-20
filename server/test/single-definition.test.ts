@@ -4098,6 +4098,27 @@ describe('the auto-install gate word is declared once, in L0 (programme wave 3)'
   });
 });
 
+describe('the feed archive\'s writer set (D-5859; ARCH-54 #789)', () => {
+  // D-5859 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1e; ARCH-54 (#789);
+  // spec §2.1 rule (f)). The feed archive's writer set reaches its W1a target: the funnel (`notice.ts`, `notify` and its
+  // batch `notifyEach`, one archive call between them) and stop-done's own pair (`stopDoneSweep.ts`, which W4 moves).
+  // May only shrink: a new hand-written `recordFeedEvent(` anywhere under server/src is red; raise a notice through
+  // the funnel instead. Its own describe block, away from the
+  // ARCH-40 tail and the file's end where other open slices append, and the census is loaded here, not at an import
+  // line, so no other block's line moves.
+  it('the feed archive has two writers, the funnel and stop-done\'s, and its call sites may only shrink (D-5859)', async () => {
+    const { feedRecordCallSites } = await import('./consolidationCensus.js');
+    const sites = feedRecordCallSites();
+    const where = sites.map((x) => `${x.file}:${x.line}`).join(', ');
+    expect(sites.length, `the feed archive has two writers at most; found ${where}`).toBeLessThanOrEqual(2);
+    expect(sites.filter((x) => x.file === 'server/src/notice.ts'), 'the funnel archives at exactly one site').toHaveLength(1);
+    for (const x of sites) {
+      expect(['server/src/notice.ts', 'server/src/stopDoneSweep.ts'], `${x.file}:${x.line}: a hand-written feed archive write — `
+        + "raise it through notice.ts's notify").toContain(x.file);
+    }
+  });
+});
+
 // — design 2026-09-20 §10: the update op's refusal words and its launcher, declared once —
 // APPENDED, never inserted: `session-hook.test.ts`'s citation audit cites this
 // file by line (`:32-37`, `:1274`, `:1303`), so an insert above those moves them.
@@ -8155,5 +8176,32 @@ describe('the credential shapes and the egress mask each have one home (D-5513)'
     expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/mask.ts']);
     // A second copy of a shape's source: the Anthropic family's prefix, the generic rule, or the JWT header pair.
     expect(holders(/sk-ant-\[|sk-\[A-Za-z0-9_-\]\{8,\}|eyJ\[A-Za-z0-9_-\]\+\\\.eyJ/)).toEqual(['shared/api.ts']);
+  });
+});
+
+// PATH IDENTITY W2 (spec 2026-10-12 §3.4). APPENDED, for the reason the blocks above state: `session-hook.test.ts`'s
+// citation audit cites this file by line. A `collect` `done`'s leaf words (`meas.leaf`) are ONE L0 table's keys in
+// `shared/api.ts`, and the runtime list derives from it. A second hand copy (a reader in `childReclaimSweep.ts` that
+// lists the two words itself, say) would drift from ccd's emit census, which reads the L0 list. KNOWN WIDTH: the two
+// words as a pair (a table, a union or an array) are seen; either word alone is ordinary copy and is not scanned.
+describe('path identity W2: the collect leaf words are spelled once, in shared/api.ts', () => {
+  const PAIR = /\bremoved:\s*true\b[^}]*\babsent:\s*true\b|\babsent:\s*true\b[^}]*\bremoved:\s*true\b|['"]removed['"]\s*[,|]\s*['"]absent['"]|['"]absent['"]\s*[,|]\s*['"]removed['"]/;
+  const api = (): string => readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+
+  it('CONTROL: the pair pattern sees a table, a union and an array, either way round, and passes over two comparisons', () => {
+    expect(PAIR.test('const T = { removed: true, absent: true };')).toBe(true);
+    expect(PAIR.test("type W = 'absent' | 'removed';")).toBe(true);
+    expect(PAIR.test("const W = ['removed', 'absent'];")).toBe(true);
+    expect(PAIR.test("x.word === 'removed' || x.word === 'absent'")).toBe(false);
+  });
+
+  it('COLLECT_LEAF_END_WORDS derives from its table', () => {
+    expect(api()).toMatch(/export const COLLECT_LEAF_END_WORDS[^=]*=\s*\n?\s*Object\.keys\(COLLECT_LEAF_END_TABLE\)/);
+    expect(api(), 'a hand-written array').not.toMatch(/export const COLLECT_LEAF_END_WORDS[^=]*=\s*\[/);
+  });
+
+  it('the two words are spelled as a vocabulary in shared/api.ts alone', () => {
+    const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders).toEqual(['shared/api.ts']);
   });
 });

@@ -1891,3 +1891,57 @@ button.metachip:active {
 .ask-tab:disabled:not([aria-current]) {
   color: var(--ink-tertiary);
 }
+
+/* ------------------------------------------------------------------ *
+ *  W2 Task S7c (D-5471) — the strips' container, the reading column   *
+ *  and the key hints.                                                 *
+ * ------------------------------------------------------------------ */
+/* The mail, workflow and task strips in ONE container under the transcript,
+   in both skins, until S8 and S12 place them by width. Layout only. */
+.chat-strips {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+/* THE READING COLUMN. From 900 the transcript's rows, the strips and the
+   composer sit in one column of the skin's measure (`--measure-chat`: 780,
+   820 at ≥1600; Instrument's log column 860), centred in the pane. A
+   max-width, never a fixed width: at 1600 with the inspector rail the pane is
+   narrower than the measure, and the column yields to it. */
+@media (min-width: 900px) {
+  .chat-item,
+  .chat-strips,
+  .composer {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: min(var(--measure-chat), 100%);
+    margin-inline: auto;
+  }
+}
+/* D-5100's 🤖 is `Icon bot` now: drawn at the glyph's own em, so the chip
+   keeps the height the emoji gave it. */
+.metachip-glyph svg {
+  width: 1em;
+  height: 1em;
+}
+/* The key hints: one quiet line of keys under the composer (spec §6). Only
+   rendered at ≥900 under a fine pointer (`Composer`'s query). The page
+   ground `.chat` paints behind the composer is restated here, so the
+   contrast gate measures the pair. */
+.composer-hints {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: var(--sp-4);
+  row-gap: var(--sp-1);
+  margin: var(--sp-2) 0 0;
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
+  color: var(--ink-tertiary);
+  background: var(--bg-page);
+}
+.composer-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}

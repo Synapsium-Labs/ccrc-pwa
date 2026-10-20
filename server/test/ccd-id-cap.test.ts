@@ -85,6 +85,8 @@ const ID_NAME_TEMPLATES: readonly IdNameTemplate[] = [
   { file: 'ccd/ccd', template: '.<id>.generation-init.XXXXXX', overhead: 24 },
   { file: 'ccd/ccd', template: '.<id>.generation-read.<pid>.<R>.<R>', overhead: 37 },
   { file: 'ccd/ccd', template: '.<id>.starts', overhead: 8 },
+  // The compare-and-drop aside (path-identity spec §3.6).
+  { file: 'ccd/ccd', template: '.<id>.drop.<pid>', overhead: 14 },
   { file: 'ccd/ccd', template: '.reap-<id>.lock', overhead: 11 },
   // Keyed on the project, which is shorter than any id composed from it, so this row is an upper bound.
   { file: 'ccd/ccd', template: '.ws-add-<id>.lock', overhead: 13 },

@@ -9,37 +9,14 @@
 // follows every runtime edge (a type-only edge is erased and bundles nothing) through relative specifiers and the
 // `@/` and `@ccrc/ui` doors into `ui/src`. Bare packages are not followed.
 import { describe, expect, it } from 'vitest';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import path from 'node:path';
 import { parseFile, parseSource, type ParsedFile } from '../scan/parse.js';
 import { MJS_CARVE_OUT, REACHABLE_MJS_EXEMPTIONS } from './mjs-node.data.js';
 import { malformedEntries } from './exemptions.js';
+import { resolveVite } from './resolveVite.js';
 import { REPO, SOURCE_RE, rel, walkSrc } from './walkSrc.js';
-
-/** Vite's default `resolve.extensions`, in its order. */
-const VITE_EXTS = ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json'];
-/** What a `.js`-style specifier may name in a TypeScript tree. */
-const TS_TWINS: Record<string, string[]> = { '.js': ['.ts', '.tsx'], '.jsx': ['.tsx'], '.mjs': ['.mts'] };
-
-const isFile = (p: string): boolean => existsSync(p) && statSync(p).isFile();
-
-/** The absolute file a specifier names from `fromAbs`, `'external'` for a bare package, or `null` when a relative
- *  or aliased specifier names no file. */
-function resolveVite(fromAbs: string, spec: string): string | 'external' | null {
-  const s = spec.replace(/[?#].*$/, '');
-  let base: string;
-  if (s === '@ccrc/ui') return path.join(REPO, 'ui', 'src', 'index.ts');
-  if (s.startsWith('@/')) base = path.join(REPO, 'ui', 'src', s.slice(2));
-  else if (s.startsWith('./') || s.startsWith('../')) base = path.resolve(path.dirname(fromAbs), s);
-  else return 'external';
-  if (isFile(base)) return base;
-  const ext = path.extname(base);
-  for (const twin of TS_TWINS[ext] ?? []) if (isFile(base.slice(0, -ext.length) + twin)) return base.slice(0, -ext.length) + twin;
-  for (const e of VITE_EXTS) if (isFile(base + e)) return base + e;
-  for (const e of VITE_EXTS) if (isFile(path.join(base, `index${e}`))) return path.join(base, `index${e}`);
-  return null;
-}
 
 const BUILTINS = new Set(builtinModules);
 /** A Node builtin specifier, `node:`-prefixed or bare. */
