@@ -4411,10 +4411,12 @@ fi
 # writer aimed at a bare `.local`, `.local/share` or `.local/bin` in a segment naming `claude` as a component. An
 # edit tool's path is folded (`pnorm`: `//`, `/./`, `seg/..`, a leading `~`) before the match; Bash text is not, so
 # `..` there, a symlink, a `$VAR` fragment of the path and case variants stay open (D-6064's residuals). Every group
-# repetition these arms add is bounded (`{0,8}` flags, separators and runner flags, `{0,2}` `cd` flags), since an
-# unbounded one made jq abort, which here is FAIL-OPEN; the single-class runs inside `CFLAGS`, `RUNH`, `CRUN` and `CDH`
-# (`SP+`, `NS*`, `NS+`) are not, and raised no regex error below the ~225 KB single segment at which hbt's prefix
-# already hits the regex retry limit on main (D-6063, D-6064). Every segment-scanning arm first tests its anchor (and a `cd` row its tail) on the whole command, since jq compiles a regex on each call.
+# repetition these arms define is bounded (`{0,8}` flags, separators and runner flags, `{0,2}` `cd` flags), since an
+# unbounded one made jq abort, which here is FAIL-OPEN, except main's `FLAGS` (`(?:-NS+SP+)*`), which BWR's `sed`
+# writer and the `$VAR` head reuse. Single-class runs (`SP+`, `SP*`, `NS*`, `NS+`, hb1's `[\s\S]*`) are not bounded,
+# in `CFLAGS`, `RUNH`, `CRUN` and `CDH` and in other arms; none raised a regex error below the ~225 KB single segment at
+# which hbt's prefix already hits the regex retry limit on main (D-6063, D-6064). Every segment-scanning arm first
+# tests its anchor (and a `cd` row its tail) on the whole command, since jq compiles a regex on each call.
 # A write (D-6065) to a file the launcher, the roll or this guard trusts (`TRUST`: `~/.ccrc/claude-*`,
 # `$REG/claude-roll-*`, `$REG/<id>.claude-canary`, `.claude-build`, `.deny-settings`, `$REG/.claude-roll.lock` and the
 # deny file `$REG/child-deny.settings.json`, which the arm below reads) is denied by the same writers, after a `cd` into
