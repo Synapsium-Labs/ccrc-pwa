@@ -2,7 +2,7 @@ import type { Tmux } from '../exec.js';
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { Deps } from '../server.js';
+import type { RunCcd } from './ports.js';
 import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
 import type { SessionRecord } from '../registry.js';
@@ -83,7 +83,7 @@ export const kickoffPrefixFor = (kind: RunKind): string =>
  */
 export interface DispatchRunDeps {
   coord: CoordStore;
-  io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState;
+  io: FleetIO; cfg: CcrcConfig; runCcd: RunCcd; fleetState?: FleetState;
   tmux: Tmux; queue: KeyedQueue;
   /**
    * A wrapper's config dir, or `undefined` when this box's roster does not
