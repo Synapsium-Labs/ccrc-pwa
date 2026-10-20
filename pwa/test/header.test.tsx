@@ -646,8 +646,8 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
     // same-named opener may still be unmounting behind it (the actions-sheet
     // suite's Release idiom).
     // The archive confirm is the danger variant now (D-5099); its hook class follows (D-5449).
-    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-danger')).not.toBeNull());
-    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-danger')!);
+    await waitFor(() => expect(document.querySelector('.sheet-footer .btn-danger')).not.toBeNull());
+    fireEvent.click(document.querySelector('.sheet-footer .btn-danger')!);
     expect(spy).not.toHaveBeenCalled();
     expect(await screen.findByText(/tmux unreachable — x/)).toBeInTheDocument();
   });
