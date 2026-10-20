@@ -8,8 +8,11 @@ import type { FleetSession } from '../../shared/api';
 import { fleetSession as baseSession, hibernatedSession } from './fleetFixture';
 import { Sheet, ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
-import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
+import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import { SessionScreen, chatPulsing, useKeyboardInsets } from '../src/screens/SessionScreen';
+// W2 Task S2d: the ⋯ menu's items and the PR cap are command doors, run by the one layer `app.tsx` mounts above the
+// screen; a case that drives them through `SessionScreen` mounts it beside, as the app does.
+import { CommandLayer } from '../src/command/CommandLayer';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';
 import { TEST_ROSTER } from './rosterFixture';
@@ -53,10 +56,10 @@ const WS_ID = 'ProjectC-quiet-basin';
 
 const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => (baseSession({ id: 'claude:ProjectC', home: '/home/u', project: 'ProjectC', workdir: '/root/projects/ProjectC', ...patch }));
 
-/** Full SessionHeaderProps with no-op callbacks — build it, don't render it,
+/** Full HeaderHostProps with no-op callbacks — build it, don't render it,
  *  so tests that need to compose SessionHeader alongside sibling elements
  *  (the Escape-while-typing case) can render for themselves. */
-const props = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => ({
+const props = (over: Partial<HeaderHostProps> = {}): HeaderHostProps => ({
   session: fleetSession(),
   status: 'idle',
   statusUpdatedAt: null,
@@ -74,9 +77,9 @@ const props = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => ({
   ...over,
 });
 
-const renderHeader = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => {
+const renderHeader = (over: Partial<HeaderHostProps> = {}): HeaderHostProps => {
   const p = props(over);
-  render(<SessionHeader {...p} />);
+  render(<SessionHeaderHost {...p} />);
   return p;
 };
 
@@ -252,13 +255,13 @@ describe('SessionHeader', () => {
 describe('interrupt control', () => {
   it('renders the esc keycap on touch, where there is no Escape key', () => {
     stubPointer(false);
-    render(<SessionHeader {...props({ status: 'busy' })} />);
+    render(<SessionHeaderHost {...props({ status: 'busy' })} />);
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
   });
 
   it('hides the keycap where a real keyboard exists', () => {
     stubPointer(true);
-    render(<SessionHeader {...props({ status: 'busy' })} />);
+    render(<SessionHeaderHost {...props({ status: 'busy' })} />);
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
   });
 
@@ -267,7 +270,7 @@ describe('interrupt control', () => {
     // pass a change that silently removes the ability to interrupt.
     stubPointer(true);
     const onInterrupt = vi.fn();
-    render(<SessionHeader {...props({ status: 'busy', onInterrupt })} />);
+    render(<SessionHeaderHost {...props({ status: 'busy', onInterrupt })} />);
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onInterrupt).toHaveBeenCalled();
     // D-5237: the physical key names itself as the interrupt's source.
@@ -277,7 +280,7 @@ describe('interrupt control', () => {
   it('does not interrupt an idle session, matching the keycap\'s disabled state', () => {
     stubPointer(true);
     const onInterrupt = vi.fn();
-    render(<SessionHeader {...props({ status: 'idle', onInterrupt })} />);
+    render(<SessionHeaderHost {...props({ status: 'idle', onInterrupt })} />);
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onInterrupt).not.toHaveBeenCalled();
   });
@@ -285,7 +288,7 @@ describe('interrupt control', () => {
   it('ignores Escape while typing — it dismisses, it does not interrupt', () => {
     stubPointer(true);
     const onInterrupt = vi.fn();
-    render(<><textarea data-testid="box" /><SessionHeader {...props({ status: 'busy', onInterrupt })} /></>);
+    render(<><textarea data-testid="box" /><SessionHeaderHost {...props({ status: 'busy', onInterrupt })} /></>);
     const box = screen.getByTestId('box');
     box.focus();
     fireEvent.keyDown(box, { key: 'Escape' });
@@ -464,7 +467,7 @@ describe('SessionScreen reap wiring (Task 17)', () => {
         conn: 'open',
       });
     });
-    render(<SessionScreen id={WS_ID} store={store} fleet={fleet} />);
+    render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={WS_ID} store={store} fleet={fleet} /></>);
     fireEvent.click(screen.getByLabelText(/pull request/i));
     fireEvent.click(await screen.findByRole('button', { name: /clean up/i }));
     expect(await screen.findByText('/w/quiet-basin')).toBeInTheDocument();
@@ -521,7 +524,7 @@ describe('SessionScreen reap wiring (Task 17)', () => {
         conn: 'open',
       });
     });
-    render(<SessionScreen id={WS_ID} store={store} fleet={fleet} />);
+    render(<><CommandLayer openNewSession={() => {}} /><SessionScreen id={WS_ID} store={store} fleet={fleet} /></>);
     fireEvent.click(screen.getByLabelText(/pull request/i));
     fireEvent.click(await screen.findByRole('button', { name: /clean up/i }));
     fireEvent.click(await screen.findByRole('button', { name: /Remove quiet-basin/ }));
@@ -632,6 +635,7 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
     });
     render(
       <>
+        <CommandLayer openNewSession={() => {}} />
         <SessionScreen id="claude:ProjectC" store={store} fleet={fleet} />
         <ToastHost />
       </>,
@@ -661,7 +665,7 @@ describe('breadcrumb', () => {
     // already renders this session's raw branch text, so a bare getByText for
     // 'ws/quiet-basin' is ambiguous once the crumb exists too — scope to the
     // crumb span, which is what this test is actually about.
-    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+    const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'project-d', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin',
     }) })} />);
     expect(screen.getByText('project-d')).toBeInTheDocument();
@@ -671,24 +675,24 @@ describe('breadcrumb', () => {
   it('distinguishes two workspaces of one project — the whole point', () => {
     // Same ambiguity as above: the branch metachip duplicates the crumb text,
     // so assert against the crumb element specifically.
-    const { container, unmount } = render(<SessionHeader {...props({ session: fleetSession({
+    const { container, unmount } = render(<SessionHeaderHost {...props({ session: fleetSession({
       id: 'a', project: 'demo', workspace: 'quiet-basin', branch: 'ws/quiet-basin' }) })} />);
     expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
     unmount();
-    const { container: container2 } = render(<SessionHeader {...props({ session: fleetSession({
+    const { container: container2 } = render(<SessionHeaderHost {...props({ session: fleetSession({
       id: 'b', project: 'demo', workspace: 'still-cove', branch: 'ws/still-cove' }) })} />);
     expect(container2.querySelector('.chat-crumb')).toHaveTextContent('ws/still-cove');
   });
 
   it('shows the project alone for a main checkout', () => {
-    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+    const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'demo', workspace: null, name: null, branch: null, id: 'demo' }) })} />);
     expect(screen.getByText('demo')).toBeInTheDocument();
     expect(container.querySelector('.chat-crumb')).toBeNull();
   });
 
   it('prefers a chosen name over the branch, as the fleet line does', () => {
-    render(<SessionHeader {...props({ session: fleetSession({
+    render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'demo', workspace: 'quiet-basin', name: 'refactor-auth', branch: 'ws/quiet-basin' }) })} />);
     expect(screen.getByText('refactor-auth')).toBeInTheDocument();
   });
@@ -697,7 +701,7 @@ describe('breadcrumb', () => {
   // `branch` and the crumb prints the exact same string the branch metachip
   // would — a few pixels below it. The chip must not repeat it.
   it('suppresses the branch chip when it would repeat the crumb', () => {
-    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+    const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'demo', workspace: 'quiet-basin', name: null, branch: 'ws/quiet-basin' }) })} />);
     expect(container.querySelector('.chat-crumb')).toHaveTextContent('ws/quiet-basin');
     expect(container.querySelector('.metachip--branch')).toBeNull();
@@ -708,7 +712,7 @@ describe('breadcrumb', () => {
   });
 
   it('keeps the branch chip once it differs from the crumb — two distinct elements', () => {
-    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+    const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'demo', workspace: 'quiet-basin', name: 'refactor-auth', branch: 'ws/quiet-basin' }) })} />);
     const crumb = container.querySelector('.chat-crumb');
     const chip = container.querySelector('.metachip--branch');
@@ -723,7 +727,7 @@ describe('breadcrumb', () => {
     // render exactly as it always has. (Not the common case in practice —
     // `branch` is usually only parsed for worktree sessions — but the fix
     // must not regress it if it ever occurs.)
-    const { container } = render(<SessionHeader {...props({ session: fleetSession({
+    const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({
       project: 'demo', workspace: null, name: null, branch: 'main', id: 'demo' }) })} />);
     expect(container.querySelector('.chat-crumb')).toBeNull();
     expect(container.querySelector('.metachip--branch')).toHaveTextContent('main');
@@ -732,12 +736,12 @@ describe('breadcrumb', () => {
 
 describe('the PR cap in the header', () => {
   it('renders for a workspace session, whatever its pr value is', () => {
-    render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
+    render(<SessionHeaderHost {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
     expect(screen.getByLabelText(/pull request/i)).toBeInTheDocument();
   });
 
   it('does NOT render for a project main checkout', () => {
-    render(<SessionHeader {...props({ session: fleetSession({ workspace: null, pr: null }) })} />);
+    render(<SessionHeaderHost {...props({ session: fleetSession({ workspace: null, pr: null }) })} />);
     expect(screen.queryByLabelText(/pull request/i)).not.toBeInTheDocument();
   });
 
@@ -747,7 +751,7 @@ describe('the PR cap in the header', () => {
   // (status 'dead' — tmux gone) both still get the cap. Gating visibility on
   // either would hide the retry affordance behind a control that isn't there.
   it('renders during a gh outage — phase unknown is not phase absent', () => {
-    render(<SessionHeader {...props({ session: fleetSession({
+    render(<SessionHeaderHost {...props({ session: fleetSession({
       workspace: 'quiet-basin',
       pr: {
         phase: 'unknown', number: null, url: null, title: null, checks: null, checkNames: null,
@@ -763,7 +767,7 @@ describe('the PR cap in the header', () => {
   });
 
   it('renders while the agent link is down (status dead)', () => {
-    render(<SessionHeader {...props({
+    render(<SessionHeaderHost {...props({
       status: 'dead',
       session: fleetSession({ workspace: 'quiet-basin', status: 'dead', pr: null }),
     })} />);
@@ -774,7 +778,7 @@ describe('the PR cap in the header', () => {
     // PrSheet fires a one-shot GET on open; stub it so this stays a unit test
     // rather than reaching a real network.
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{"ok":true}', { status: 200 })));
-    render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
+    render(<SessionHeaderHost {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
     expect(screen.queryByText(/not checked yet/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText(/pull request/i));
     expect(await screen.findByText(/not checked yet/i)).toBeInTheDocument();
@@ -782,7 +786,7 @@ describe('the PR cap in the header', () => {
 
   it('closes PrSheet (Task 16) via its own scrim, same as any other sheet', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{"ok":true}', { status: 200 })));
-    render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
+    render(<SessionHeaderHost {...props({ session: fleetSession({ workspace: 'quiet-basin', pr: null }) })} />);
     fireEvent.click(screen.getByLabelText(/pull request/i));
     await screen.findByText(/not checked yet/i);
     fireEvent.click(screen.getByTestId('sheet-overlay'));
@@ -796,7 +800,7 @@ describe('the PR cap in the header', () => {
       phase: 'merged', number: 42, url: 'u', title: null, checks: null, checkNames: null,
       ahead: 0, reason: null, checkedAt: Date.now(), mergedAt: Date.now(), retryAt: null,
     };
-    render(<SessionHeader {...props({
+    render(<SessionHeaderHost {...props({
       onReapWorkspace,
       session: fleetSession({ workspace: 'quiet-basin', archivedAt: 1, pr: mergedPr }),
     })} />);
@@ -809,7 +813,7 @@ describe('the PR cap in the header', () => {
   it('sits after the ⋯ cap and before esc, which keeps the outer edge', () => {
     // esc is the interrupt and its position is muscle memory.
     stubPointer(false);
-    const { container } = render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin' }), status: 'busy' })} />);
+    const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({ workspace: 'quiet-basin' }), status: 'busy' })} />);
     const caps = [...container.querySelectorAll('.chat-head .keycap')].map((n) => n.className);
     expect(caps.findIndex((c) => c.includes('keycap--more')))
       .toBeLessThan(caps.findIndex((c) => c.includes('keycap--pr')));
@@ -820,7 +824,7 @@ describe('the PR cap in the header', () => {
 
 describe('archived chip', () => {
   it('says the session is archived and names the PR', () => {
-    render(<SessionHeader {...props({ session: fleetSession({
+    render(<SessionHeaderHost {...props({ session: fleetSession({
       workspace: 'quiet-basin', archivedAt: 1785300000,
       pr: { phase: 'merged', number: 42, url: 'u', title: 't', checks: null, checkNames: null,
         ahead: 3, reason: null, checkedAt: 1, mergedAt: 1, retryAt: null },
@@ -831,7 +835,7 @@ describe('archived chip', () => {
   });
 
   it('renders no chip for a live session', () => {
-    render(<SessionHeader {...props({ session: fleetSession({ workspace: 'quiet-basin', archivedAt: null }) })} />);
+    render(<SessionHeaderHost {...props({ session: fleetSession({ workspace: 'quiet-basin', archivedAt: null }) })} />);
     expect(screen.queryByText(/^archived/)).not.toBeInTheDocument();
   });
 
@@ -839,7 +843,7 @@ describe('archived chip', () => {
     // Pins the ternary's OTHER branch — the first test above only exercises
     // the "PR known" half, so a mutant collapsing both to one string would
     // survive it.
-    render(<SessionHeader {...props({ session: fleetSession({
+    render(<SessionHeaderHost {...props({ session: fleetSession({
       workspace: 'quiet-basin', archivedAt: 1785300000, pr: null,
     }) })} />);
     expect(screen.getByText('archived')).toBeInTheDocument();
@@ -848,7 +852,7 @@ describe('archived chip', () => {
   it('does not derive from pr.phase — a merged PR alone is not an archive', () => {
     // The context this chip exists for: a merged PR whose archive was
     // deferred (session busy, say) must not claim it was archived.
-    render(<SessionHeader {...props({ session: fleetSession({
+    render(<SessionHeaderHost {...props({ session: fleetSession({
       workspace: 'quiet-basin', archivedAt: null,
       pr: { phase: 'merged', number: 42, url: 'u', title: 't', checks: null, checkNames: null,
         ahead: 3, reason: null, checkedAt: 1, mergedAt: 1, retryAt: null },
@@ -984,7 +988,7 @@ describe('the Escape binding ignores every other key', () => {
     // kill the turn.
     stubPointer(true);
     const p = props({ status: 'busy' });
-    render(<SessionHeader {...p} />);
+    render(<SessionHeaderHost {...p} />);
     fireEvent.keyDown(document, { key: 'a' });
     fireEvent.keyDown(document, { key: 'Enter' });
     expect(p.onInterrupt, 'an ordinary keystroke interrupted the turn').not.toHaveBeenCalled();
@@ -1089,7 +1093,7 @@ describe('Escape that closes a sheet never interrupts (D-5235)', () => {
     const p = props({ session: neutral, status: 'busy' });
     render(
       <>
-        <SessionHeader {...p} />
+        <SessionHeaderHost {...p} />
         <Sheet open onClose={onClose} title="a sheet"><button type="button">inside</button></Sheet>
       </>,
     );
@@ -1103,7 +1107,7 @@ describe('Escape that closes a sheet never interrupts (D-5235)', () => {
   it('an Escape something earlier already handled (defaultPrevented) interrupts nothing', () => {
     stubPointer(true);
     const p = props({ session: neutral, status: 'busy' });
-    render(<SessionHeader {...p} />);
+    render(<SessionHeaderHost {...p} />);
     // What Radix's dismiss does: a document capture listener that prevents
     // the default and lets the event go on bubbling.
     const handled = (e: Event): void => { e.preventDefault(); };
@@ -1121,7 +1125,7 @@ describe('Escape that closes a sheet never interrupts (D-5235)', () => {
     const p = props({ session: neutral, status: 'busy' });
     render(
       <>
-        <SessionHeader {...p} />
+        <SessionHeaderHost {...p} />
         <Sheet open onClose={vi.fn()} title="a sheet"><button type="button">inside</button></Sheet>
       </>,
     );
@@ -1134,7 +1138,7 @@ describe('Escape that closes a sheet never interrupts (D-5235)', () => {
   it('with nothing open, Escape still interrupts, once', () => {
     stubPointer(true);
     const p = props({ session: neutral, status: 'busy' });
-    render(<SessionHeader {...p} />);
+    render(<SessionHeaderHost {...p} />);
     fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape', keyCode: 27 });
     expect(p.onInterrupt).toHaveBeenCalledTimes(1);
   });
@@ -1142,7 +1146,7 @@ describe('Escape that closes a sheet never interrupts (D-5235)', () => {
   it('with focus in a textarea, Escape does not interrupt (unchanged)', () => {
     stubPointer(true);
     const p = props({ session: neutral, status: 'busy' });
-    render(<><textarea data-testid="box" /><SessionHeader {...p} /></>);
+    render(<><textarea data-testid="box" /><SessionHeaderHost {...p} /></>);
     const box = screen.getByTestId('box');
     act(() => box.focus());
     fireEvent.keyDown(box, { key: 'Escape', code: 'Escape', keyCode: 27 });
