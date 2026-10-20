@@ -171,7 +171,7 @@ export function PasskeyNotice({ status: injected }: {
 
   // Read at render, not captured in state: it is a property of the BROWSER, so
   // there is nothing to keep in sync and nothing to invalidate.
-  if (!nagWorthy(status, passkeyEnrollSupported())) return null;
+  if (!passkeyNoticeShows(status)) return null;
   return (
     <button
       type="button"

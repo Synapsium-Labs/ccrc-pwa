@@ -1,9 +1,10 @@
 // The fleet's global banners, stacked (W2 Task S2c; D-5471, D-5472). Refined's app bar and Instrument's shell
 // both place a banner stack, so it is built once here and each skin only places it.
 //
-// WHAT IT DOES. It renders the applicable banners in `BANNER_ORDER`'s rank order: every alert, and the first two
-// banners that are not alerts; the rest fold behind a quiet "+n more" that expands them in place. Nothing is
-// dropped, and no banner's own role or announcement changes: the stack decides only which slots are hidden.
+// WHAT IT DOES. It renders the applicable banners in `BANNER_ORDER`'s rank order: every alert and every pinned
+// line, and the first two of the rest; the others fold behind a quiet "+n more" that expands them in place. Nothing
+// is dropped, and no banner's own role changes: the stack decides only which slots are hidden. A banner that is not
+// folded announces as before; a folded one is out of the accessibility tree and announces once expanded.
 //
 // WHAT IT KEEPS. Every banner stays mounted, applicable or not, folded or not, exactly as each was before the
 // stack: a banner carries state (the fleet host's Reboot confirm, the halt's Ack, the update's sheets, the passkey
@@ -29,6 +30,8 @@ export interface BannerRank {
   /** The module that renders it, or null for a line `FleetScreen` writes inline. The source scan in
    *  `fleet-pieces.test.tsx` reads this. */
   readonly module: string | null;
+  /** Never folded and never counted toward the two, like an alert, though its role is `status`. */
+  readonly pinned?: true;
 }
 
 /** Every global banner: one per fleet, above the list. */
@@ -41,8 +44,10 @@ export const BANNER_ORDER: Readonly<Record<BannerId, BannerRank>> = {
   halt: { rank: 2, role: 'status', module: 'HaltBanner' },
   update: { rank: 3, role: 'status', module: 'UpdateBanner' },
   substrate: { rank: 4, role: 'status', module: 'SubstrateBanner' },
-  offline: { rank: 5, role: 'status', module: null },
-  connecting: { rank: 6, role: 'status', module: null },
+  // The connection lines say every other line on the screen is stale, so they are pinned: whatever else applies,
+  // "Reconnecting…" and "Last known state" stay in sight (and announced). Their rank keeps the order main drew.
+  offline: { rank: 5, role: 'status', module: null, pinned: true },
+  connecting: { rank: 6, role: 'status', module: null, pinned: true },
   notice: { rank: 7, role: 'status', module: null },
   passkey: { rank: 8, role: 'door', module: 'PasskeyNotice' },
 };
@@ -57,7 +62,7 @@ export const LOCAL_BANNERS: Readonly<Record<string, string>> = {
   AttentionList: 'the list the two attention parts render; a part of a local banner, never a banner itself',
 };
 
-/** How many non-alert banners show before the fold. */
+/** How many banners that are neither alerts nor pinned show before the fold. */
 export const BANNER_FOLD_AT = 2;
 
 export interface BannerItem<Id extends string = BannerId> {
@@ -78,7 +83,7 @@ export function foldBanners<Id extends string>(
   let open = 0;
   let more = 0;
   const slots = sorted.map((item) => {
-    if (!item.shows || order[item.id].role === 'alert') return { item, folded: false };
+    if (!item.shows || order[item.id].role === 'alert' || order[item.id].pinned === true) return { item, folded: false };
     open += 1;
     if (open <= BANNER_FOLD_AT) return { item, folded: false };
     more += 1;
@@ -106,7 +111,13 @@ export function BannerStack<Id extends string = BannerId>({ items, order }: {
       ))}
       {more > 0 && (
         <div className="banner-more">
-          <Button variant="quiet" size="fit" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)}>
+          <Button
+            variant="quiet"
+            size="fit"
+            aria-expanded={expanded}
+            aria-label={expanded ? 'Show fewer banners' : `${more} more ${more === 1 ? 'banner' : 'banners'}`}
+            onClick={() => setExpanded((e) => !e)}
+          >
             {expanded ? 'Show fewer' : `+${more} more`}
           </Button>
         </div>

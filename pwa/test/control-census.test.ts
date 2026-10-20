@@ -271,8 +271,8 @@ const CONTROLS: Record<string, string> = {
     'TOKEN. A `role="link"` div with `tabIndex={0}` and a keydown handler — '
     + 'the strip D-161 calls the only door to /accounts. `.accounts-strip` '
     + 'declares the floor.',
-  'fleet/AccountsStrip.tsx <div> accounts-compact':
-    'TOKEN. The same strip in its compact arrangement (W2 Task S2c), the gauges '
+  'fleet/CompactGauges.tsx <div> accounts-compact':
+    'TOKEN. The compact arrangement of the strip (W2 Task S2c), the gauges '
     + 'both shells place: the same `role="link"` door to /accounts, one group. '
     + '`.accounts-compact` declares the floor.',
   // THE TWO DROPDOWNS LEFT THIS CENSUS, and the right way round: they are

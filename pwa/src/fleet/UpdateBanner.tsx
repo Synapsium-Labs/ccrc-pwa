@@ -144,7 +144,8 @@ export function UpdateBanner({ updates: injected, health = null, onMoved, stale:
   const halted = halting.length > 0 ? updateAllHaltedText(halting) : null;
   return (
     <>
-      {view !== null && release !== null && text !== null && (
+      {/* The render reads its own check (W2 Task S2c); the sheets below stay mounted either way. */}
+      {updateBannerShows(view) && view !== null && release !== null && text !== null && (
         <div className="update-banner" role="status">
           <span className="update-banner-msg">{text}</span>
           {halted !== null && <span className="update-banner-msg" id={haltedId}>{halted}</span>}

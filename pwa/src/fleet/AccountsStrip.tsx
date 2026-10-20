@@ -24,26 +24,13 @@ import type { AccountUsage, RosterWire } from '../../../shared/api';
 import { accountColorVar, accountLabel, warnNonArrayRoster } from '../lib/accounts';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
-import { limitBand, Meter, useNow } from '@ccrc/ui';
+import { useNow } from '@ccrc/ui';
+import { ACCOUNTS_DOOR_LABEL, CompactGauges, type CompactArrangement } from './CompactGauges';
 import { AccountMeterRow } from './AccountMeterRow';
 import './fleet.css';
 
-/** The compact gauges both skins' shells place (W2 Task S2c; D-5471, D-5472): one `Meter` per lane with its name in
- *  mono and its binding percentage. `bar` is Refined's app-bar row, `led` Instrument's top-bar meters (the LED
- *  segments are the skin's `--meter-segments` token, not this arrangement's), `grid` Refined's phone 2×2: two
- *  columns, one row per two lanes. Each is one group that is one door to /accounts, like the full strip. */
-export type CompactArrangement = 'bar' | 'grid' | 'led';
-
-/** How many lanes an arrangement places before the rest become a "+n" in the same door. `grid` wraps, so it
- *  places every lane. */
-export const COMPACT_FIT: Readonly<Record<CompactArrangement, number>> = { bar: 4, led: 6, grid: Number.POSITIVE_INFINITY };
-
-/** A lane's binding percentage: the fuller of its windows, the one that stops work first. Null when neither
- *  window was ever measured (gpt's lane has only the weekly one). */
-export function bindingPct(a: Pick<AccountUsage, 'five' | 'seven'>): number | null {
-  const known = [a.five, a.seven].filter((p): p is number => p !== null);
-  return known.length === 0 ? null : Math.max(...known);
-}
+/** The compact gauges (W2 Task S2c; D-5471, D-5472) live in CompactGauges.tsx; this strip only hands them its lanes. */
+export type { CompactArrangement } from './CompactGauges';
 
 export function AccountsStrip({ compact }: { compact?: CompactArrangement } = {}): ReactNode {
   const [accounts, setAccounts] = useState<AccountUsage[] | null>(null);
@@ -123,48 +110,14 @@ export function AccountsStrip({ compact }: { compact?: CompactArrangement } = {}
     openAccounts();
   };
 
-  if (compact !== undefined) {
-    const placed = live.slice(0, COMPACT_FIT[compact]);
-    const rest = live.length - placed.length;
-    return (
-      <div
-        className="accounts-compact"
-        data-compact={compact}
-        role="link"
-        tabIndex={0}
-        aria-label="account usage — open accounts"
-        onClick={openAccounts}
-        onKeyDown={onKeyDown}
-      >
-        {placeholder !== null ? (
-          <span className="accounts-strip-empty">{placeholder}</span>
-        ) : (
-          <>
-            {placed.map((a) => {
-              const pct = bindingPct(a);
-              return (
-                <span key={a.wrapper} className="accounts-compact-gauge">
-                  <span className="accounts-compact-name min-w-0 truncate font-mono" style={{ color: `var(${accountColorVar(roster, a.wrapper)})` }}>
-                    {accountLabel(roster, a.wrapper)}
-                  </span>
-                  <Meter pct={pct} band={pct === null ? 'none' : limitBand(pct)} off={a.authDead === true} className="w-10 flex-none" />
-                  <span className="accounts-compact-pct font-mono">{pct === null ? '—' : `${pct}%`}</span>
-                </span>
-              );
-            })}
-            {rest > 0 && <span className="accounts-compact-more font-mono">{`+${rest}`}</span>}
-          </>
-        )}
-      </div>
-    );
-  }
+  if (compact !== undefined) return <CompactGauges compact={compact} lanes={live} roster={roster} placeholder={placeholder} />;
 
   return (
     <div
       className="accounts-strip"
       role="link"
       tabIndex={0}
-      aria-label="account usage — open accounts"
+      aria-label={ACCOUNTS_DOOR_LABEL}
       onClick={openAccounts}
       onKeyDown={onKeyDown}
     >
