@@ -84,7 +84,7 @@ lane to the default window by itself (`contextWindowFor(...).rule === 'default'`
      needs the operator's go (runbook step 6). If it is adopted, it lands with the ccd routing-record change of spec
      §2.5 item 5, outside this plan.
 2. **The design's seventeen deviations are accepted as written,** and the waves add twenty-seven more (Deviations
-   found).
+   found). Executing W1 issued four more, defined there too: D-5819, D-5966, D-5991 and D-5992.
 3. **The lane-files lock is hardened.**
    - A symlink, a FIFO or anything but a regular file at its path is refused `lock-unwritable` before any open.
    - Its directory is made 0700 at every lock.
@@ -18285,3 +18285,38 @@ Where: Task 19. The audit line names the session by the device label the gate me
 ### D-5230 — the route's decisions live in an L1 policy file
 
 Where: Task 19. A third server file beyond the skeleton's two: `server/src/models/policy.ts` (L1, imports `shared/` only) declares the link's result vocabulary and every route verdict (`outcomeOf`, `parseActBody`, `NOT_CONFIGURED`, `badLane`), so `routes.ts` (L4) applies verdicts and decides nothing, as CLAUDE.md's rings require and as the token and docs surfaces' own `policy.ts` files already do.
+
+### D-5819 — the shared-family check reads the family's newest version with its ties
+
+Where: Task 2 (`chooseCandidate`), issued by the coordinator on 2026-10-19 while executing W1. Task 2's text checks shared-family against the family's newest UNTIED id. When the newest version is a tie, that skips the tied pair and tests an older id, which gives incoherent answers. For example, with family ids 5.6, 6 and 6.0, haiku on 6 and opus on 5.6, opus answers nothing, while the same input without the twin blocks it. The check now takes the family's newest version over every eligible id, ties included, and blocks a class when an id at that version other than its own pin is another class's pin (§3.2 step 6, "the newest eligible id"; ties are still eligible). Candidate choice keeps Task 2's tie-first order, which follows spec §2.2's tie rule: §3.2's literal order removes other classes' pins before dropping ties, and would untie a twin. Two readings ruled with it, each pinned by a case: a model two classes pin is silent for both, and only eligible ids count toward a tie (a hidden twin, or one outside the discovery list, unties the other). Cost if wrong: a class shown blocked where the old text named nothing. The block clears once the tie leaves the catalogue.
+
+### D-5966 — `init` over an advance file left behind keeps holds and history and re-seeds the rest
+
+Where: Task 5 (the create path of `init`, for every probe). The coordinator issued it on 2026-10-19 while executing W1. Task 5's text says `init codex` "never overwrites" an advance file it finds. But an advance file with no registry beside it is left over. Three routes make one: the `probe-declared` refusal's remedy (delete the registry by hand), a rollback to a build whose `rm` reaps five files, and an `rm` cut short before its last reap. Adopting it whole stores families that disagree with the new pins, so W2 could advance a class across families. It also keeps a `pending` intent, which the next writer would settle as a move that never happened. A hand act records into the advance file on any lane, so the same false move can follow an `init` for any probe. So on that path, `init` for every probe does three things. It keeps each class's `hold` and the `history`, which record the operator's acts. It clears `pending` and `previous`, because the registry they described is gone, and a revert to that old pin would jump to an unrelated model. It writes each class's family exactly as a fresh `init` of that probe would: the seeds' families for `codex`, and no family for a probe with no seeds. Its answer carries an `advanceNote` saying the file was reused. It relaxes Review Focus 4 on this one path: a class a person emptied by hand gets its seed family back after its registry is lost, unless it carries a hold, which is kept. Cost if wrong: an old `previous` is lost, so `revert` refuses `no-previous` until W2 next advances that class.
+
+### D-5991 — revert keeps the effort level it restores, and a re-run on a reverted pin records no move
+
+Where: Task 6 (`revertOp`). Issued by the coordinator on 2026-10-19, while executing W1.
+
+Task 6's text has two gaps that this entry closes:
+- **The effort level.** The text ranks the class's stored effort against the current model's row. In the case D-5189 exists for, that row no longer lists the stored level, so `resolveEffort` falls back to the model's lowest. Measured: `opus` advanced from `max` to `xhigh`, and the old model then stopped offering `max`. The revert set `low` where `xhigh` was right, which leaves the class "at a level it never had" (D-5189).
+- **The re-run.** A revert cut short after its registry write records no history entry; D-5206 and Task 17 accept that state. A second revert then recorded a self-move (`from` equal to `to`) and cleared `previous`.
+
+What changes:
+- `revertOp` ranks the stored level against a catalogue row that lists it (the first one), and falls back as before only when no row lists it.
+- When the class's pin already equals `previous.model`, `revertOp` clears `previous` and keeps the hold, but writes no history entry.
+
+Cost if wrong: a revert restores a higher level than the old model's own row would rank. The level is still one the catalogue offers.
+
+### D-5992 — a pinned class advances within its pin's own family
+
+Where: Tasks 2 and 6 (`chooseCandidate`, `revertOp`), issued by the coordinator on 2026-10-20 while executing W1. Task 2's text takes `family ?? familyOf(pin)`, so a stored family wins over the pin's own. Three things leave a pinned class's stored family different from its pin's:
+- a build from before W1, which never opens the advance file, runs a hand `set-class` after a rollback;
+- the registry is edited by hand (models-op calls it a hand-editable file);
+- `revert` moves a pin and does not rewrite the family.
+
+W2's `advance-plan` and `advance-commit` would then canary and re-pin that class across families, undoing the operator's choice. This was measured with a stored `gamma`, a pin in `delta`, and a newer `gamma` in the catalogue.
+
+The fix: for a pinned class, `chooseCandidate` takes the pin's family, and the stored family decides only for an empty class, which is what it exists for (spec §2.2 Seeding). `revertOp` also writes the restored pin's family, so the file stays true for every reader. W4 Task 18's family readback reads the pin's family the same way.
+
+Cost if wrong: an operator who meant a pinned class to follow another family must re-pin it there by hand.
