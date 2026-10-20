@@ -14,17 +14,33 @@ spec → plan → subagent execution with per-PR review lenses + whole-branch pa
 ## Architecture aim: DDD, Clean Architecture, SOLID
 ccrc aims to follow **Domain-Driven Design, Clean Architecture and SOLID** (operator directive 2026-08-10). Every
 change should leave the code closer to that aim, never further from it:
-- **DDD:** each concept lives in one bounded context, with one model and one vocabulary. Domain rules, such as
-  state transitions, refusal sets and derived lists, are written once, and every caller goes through them.
-- **Clean Architecture:** dependencies point inward through the rings (L0 shared up to L5 `index.ts`). Policy
-  makes no I/O, and delivery code makes no decisions.
-- **SOLID:** small modules with one reason to change. Ports are interfaces declared by the consumer, and an
-  adapter keeps every distinction it receives.
+- **DDD:** each concept lives in one bounded context, with one model and one vocabulary: Fleet Registry & Accounts,
+  Fleet Mutation, Session Conversation, Workspace & PR Lifecycle, Coordination, Attention & Notification (the
+  consolidation wave adds the update control plane, auth & box token, docs, and context-free shared kernels: clock
+  and schedule, switches, redaction, Claude Code grammar). Domain rules, such as state transitions, refusal sets and
+  derived lists, are written once, and every caller goes through them. Every invariant and fact has ONE writer: a
+  new fact gets an owner, never a second writer.
+- **Clean Architecture:** imports point inward: L0 shared kernel (`shared/`, pure vocabulary) → L1 policy (pure
+  deciders) → L2 ports → L3 adapters (IO) → L4 delivery (routes, sockets, timers, executors) → L5 composition root
+  (`index.ts`). **Decide in L1, act in L4**: policy makes no I/O, and delivery code makes no decisions.
+- **Ports and adapters at the edges:** the agent link (FleetIO, the runner); `ccd`, the anti-corruption layer — the
+  only component that names tmux, systemd and Claude Code's on-disk layout, reached only through `CcdArgv`; Claude
+  Code panes and transcripts; `coord.db` (`CoordStore`, synchronous, no repository over it). The consumer declares
+  each port, the port states its failure contract, and an adapter keeps every distinction it receives.
+- **SOLID:** small modules with one reason to change; extend through tables and deciders (a row, an edge, a case),
+  never by growing a parallel mechanism beside them.
+- **Consolidate, don't duplicate:** before adding a lane, poller, predicate, redactor, parser, notifier or switch,
+  find the existing owner in the target context and extend it. A second mechanism for the same job needs a recorded
+  "legitimately different" reason (a TOCTOU re-check, an opposite safety direction, a security boundary, another
+  host or process) in its spec or PR.
+- **Characterization tests first when moving code:** pin today's inputs → outputs, green on `main` against the old
+  code; a move commit changes only the test's imports, and an intended behaviour change is a commit of its own.
 
-Adoption is incremental: fix what you touch, and do not start a big-bang rewrite. The assessment and target design are
-in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`. The binding ring rules are the
-**Rings / bounded contexts** bullet under *Conventions that shape every change* below. When a change and the
-aim conflict, say so in the PR. Do not bend the rings without saying so.
+Adoption is incremental: fix what you touch, never a big-bang rewrite. The assessment, target design and a Rejected
+list no PR relitigates are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`; the consolidation
+wave's spec (one owner per job, the "legitimately different" catalogue) is its follow-up, not on `main` yet. The
+binding ring rules are the **Rings / bounded contexts** bullet under *Conventions that shape every change* below.
+When a change and the aim conflict, or a change bends the rings, say so in the PR.
 
 ## This repository is public — nothing private goes in it
 Everything here is public: code, test fixtures, docs, commit messages, branch names, issues, PRs and comments.
@@ -230,32 +246,6 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   newest STABLE; a dev build is `rollout --to vX.Y.Z`. The ordering rule survives as `rollout`'s default: fleet box first
   because the server reads what the hook writes and the agent caches `ccd caps` at boot — `--server-first` when a
   wave's server arm is a reader-widening.
-
-## Architecture direction — DDD, Clean Architecture, SOLID
-ccrc is moving, incrementally, to a DDD / Clean Architecture / SOLID shape (operator directive 2026-08-10). Every
-change moves toward it, never away:
-- **Rings, imports point inward:** L0 shared kernel (`shared/`, pure vocabulary) → L1 policy (pure deciders) → L2
-  ports → L3 adapters (IO) → L4 delivery (routes, sockets, timers, executors) → L5 composition root (`index.ts`).
-  **Decide in L1, act in L4**; an inner ring never imports an outer one. Ring rules in detail: the next section.
-- **Bounded contexts, one writer per invariant:** Fleet Registry & Accounts, Fleet Mutation, Session Conversation,
-  Workspace & PR Lifecycle, Coordination, Attention & Notification (the consolidation wave adds the update control
-  plane, auth & box token, docs, and context-free shared kernels: clock and schedule, switches, redaction, Claude
-  Code grammar). Every invariant and fact has ONE writer: a new fact gets an owner, never a second writer.
-- **Ports and adapters at the edges:** the agent link (FleetIO, the runner); `ccd`, the anti-corruption layer — the
-  only component that names tmux, systemd and Claude Code's on-disk layout, reached only through `CcdArgv`; Claude
-  Code panes and transcripts; `coord.db` (`CoordStore`, synchronous, no repository over it). The consumer declares
-  each port, and the port states its failure contract.
-- **SOLID in practice:** one reason to change per module; extend through tables and deciders (a row, an edge, a
-  case), never by growing a new parallel mechanism beside them.
-- **Consolidate, don't duplicate:** before adding a lane, poller, predicate, redactor, parser, notifier or switch,
-  find the existing owner in the target context and extend it. A second mechanism for the same job needs a recorded
-  "legitimately different" reason (a TOCTOU re-check, an opposite safety direction, a security boundary, another
-  host or process) in its spec or PR.
-- **Characterization tests first when moving code:** pin today's inputs → outputs, green on `main` against the old
-  code; a move commit changes only the test's imports, and an intended behaviour change is a commit of its own.
-- **Specs:** `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` (rings, contexts, cross-cutting
-  rules, and a Rejected list no PR relitigates). The consolidation wave's spec — one owner per job: the nine
-  contexts, the shared kernels, the "legitimately different" catalogue — is its follow-up and is not on `main` yet.
 
 ## Conventions that shape every change
 - **Rings / bounded contexts** (`docs/…-architecture-ddd-clean-solid.md`): ring membership is a property of a
