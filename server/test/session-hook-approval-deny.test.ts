@@ -63,12 +63,13 @@ afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 type Envelope = { hookSpecificOutput: { hookEventName?: string; permissionDecision?: string; permissionDecisionReason?: string } };
 
 /** One PreToolUse event through the real hook; returns the deny reason, or null when nothing was denied. */
-const fire = (tool: string, toolInput: Record<string, unknown>, extra: Record<string, unknown> = {}): string | null => {
+const fire = (tool: string, toolInput: Record<string, unknown>, extra: Record<string, unknown> = {},
+  envExtra: Record<string, string> = {}): string | null => {
   const r = spawnSync('bash', [HOOK], {
     input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: toolInput, cwd: CWD, ...extra }),
     encoding: 'utf8',
     env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
+      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...envExtra },
   });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
@@ -81,7 +82,8 @@ const fire = (tool: string, toolInput: Record<string, unknown>, extra: Record<st
 };
 const SUB = { agent_id: 'a0000000000000001', agent_type: 'general-purpose' };
 const THREADS: ReadonlyArray<[string, Record<string, unknown>]> = [['main thread', {}], ['subagent', SUB]];
-const bash = (command: string, extra: Record<string, unknown> = {}): string | null => fire('Bash', { command }, extra);
+const bash = (command: string, extra: Record<string, unknown> = {}, envExtra: Record<string, string> = {}): string | null =>
+  fire('Bash', { command }, extra, envExtra);
 
 describe('the hook\'s forbidden match is held equal to approvalClass over Task 12\'s corpus', () => {
   interface Row { tool: string; input: Record<string, unknown>; class: ApprovalClass; why: string; ctx: { cwd: string | null } }
@@ -601,6 +603,13 @@ describe('build guard D-6066: the upstream id, read from the deny file the insta
       .filter((c) => !(bash(c) ?? '').includes(BUILD_WHY));
     expect(missed).toEqual([]);
   });
+  it('the pair rule\'s other half: a head the file lists with install:* only gets no upstream-id entry, as on main', () => {
+    const rules = (JSON.parse(denyFileText(null)) as { permissions: { deny: string[] } }).permissions.deny;
+    fs.writeFileSync(DENY(), JSON.stringify({ permissions: { deny: [...rules, 'Bash(tool-b install:*)'] } }));
+    expect(bash('tool-b update')).toBeNull();
+    expect(bash('tool-b install')).toBeNull();
+    expect(bash('claude update')).toContain(BUILD_WHY);
+  });
   // The deny file is one per box, so a child that could make it unreadable would open every child's deny arm: an
   // unreadable or over-cap file passes nothing, and only the upstream-id arms go, as on main.
   it('regression: with no deny file, a symlinked, unparsable, unreadable or over-cap one, upstream-a update is allowed and main\'s denies stand', () => {
@@ -610,8 +619,20 @@ describe('build guard D-6066: the upstream id, read from the deny file the insta
     ] } });
     expect(big.length).toBeGreaterThan(190_000);
     const asRoot = process.getuid?.() === 0;
-    for (const setup of ['none', 'symlink', 'unparsable', 'mode 000', 'over the cap'] as const) {
+    // The cap counts BYTES only because `_hook_deny_text` reads under `LC_ALL=C`: under a UTF-8 locale, 65536 two-byte
+    // characters are 131072 bytes, past the cap and past what one `--arg` may hold, but only 65536 characters. Held only
+    // where bash, under that locale, counts one such character as length 1; elsewhere the setup is skipped, by name.
+    const UTF8 = { LC_ALL: 'C.UTF-8' };
+    const utf8Counts = spawnSync('bash', ['-c', 'x=$(printf "\\303\\251"); printf %s "${#x}"'], { env: { ...process.env, ...UTF8 }, encoding: 'utf8' }).stdout === '1';
+    const wide = 'é'.repeat(65_536);
+    expect(Buffer.byteLength(wide)).toBe(131_072);
+    for (const setup of ['none', 'symlink', 'unparsable', 'mode 000', 'over the cap', 'over the cap in two-byte characters'] as const) {
       if (setup === 'mode 000' && asRoot) continue;
+      if (setup === 'over the cap in two-byte characters' && !utf8Counts) {
+        console.warn('skipped setup "over the cap in two-byte characters": bash under LC_ALL=C.UTF-8 does not count one two-byte character as length 1 here');
+        continue;
+      }
+      const env = setup === 'over the cap in two-byte characters' ? UTF8 : {};
       fs.rmSync(DENY(), { force: true });
       if (setup === 'symlink') {
         const real = path.join(home, 'real-deny.json');
@@ -621,11 +642,12 @@ describe('build guard D-6066: the upstream id, read from the deny file the insta
       if (setup === 'unparsable') fs.writeFileSync(DENY(), '{"permissions":{"deny":["Bash(upstream-a install:*)",');
       if (setup === 'mode 000') { useDenyFile('upstream-a'); fs.chmodSync(DENY(), 0o000); }
       if (setup === 'over the cap') fs.writeFileSync(DENY(), big);
+      if (setup === 'over the cap in two-byte characters') fs.writeFileSync(DENY(), wide);
       try {
-        expect(bash('upstream-a update'), setup).toBeNull();
-        expect(bash('claude update'), setup).toContain(BUILD_WHY);
-        expect(bash('ccd ws-rm x'), setup).toContain('ccd ws-rm');
-        expect(bash('ccrc-api approvals list'), setup).toContain('approval');
+        expect(bash('upstream-a update', {}, env), setup).toBeNull();
+        expect(bash('claude update', {}, env), setup).toContain(BUILD_WHY);
+        expect(bash('ccd ws-rm x', {}, env), setup).toContain('ccd ws-rm');
+        expect(bash('ccrc-api approvals list', {}, env), setup).toContain('approval');
       } finally {
         if (setup === 'mode 000') fs.chmodSync(DENY(), 0o644);
       }
