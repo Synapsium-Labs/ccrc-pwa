@@ -159,10 +159,15 @@ export function paneRefusal(env) {
 // (settleLeftover). What a stop guarantees: a signal that has arrived by a yield (yieldToSignals) is handled there, and the
 // stop check after it refuses `interrupted`, so no spawn starts after the handler has run. A signal that arrives in the
 // synchronous stretch between a yield and a spawn is handled at the next turn, and that child is stopped and charged.
-// Residuals, named: that yield-to-spawn window; a grandchild that calls setsid itself escapes the group kill (and writes no
-// `.part`); a driver killed between spawn() and its `.pid` record leaves a `.part` with no record, charged as D-5811 says;
-// and a process in the run's group that ignores SIGTERM and holds no pipe to the driver can outlive its leader (no SIGKILL
-// follows the leader's close; it writes no `.part`, so no spend goes unseen).
+// The wait after a leader's exit is bounded (spawnGroup): a STOP_GRACE_MS timer from the leader's 'exit', cleared at
+// 'close', SIGKILLs the leader's group and destroys the streams, so a process that outlives the leader and holds a pipe
+// cannot hold the driver, its lock or a signal's answer.
+// Residuals, named: that yield-to-spawn window; a driver killed between spawn() and its `.pid` record leaves a `.part` with
+// no record, charged as D-5811 says; a grandchild that calls setsid escapes every group kill and keeps running, and it no
+// longer holds the driver (if it inherited the run's stdout, it can still write into the stream after the charge, and a
+// resume then refuses the changed stream); and a process in the run's group that ignores SIGTERM and holds NO pipe to the
+// driver: the run's 'close' fires at once, the timer is cleared, so the bounded wait never fires and that process can
+// outlive its leader (it writes no `.part`, so no spend goes unseen).
 /** Every live child, keyed by its pid (which is its process-group id). A Map, not a Set of pids, so 'close' can tell its
  *  own entry from a newer child's: the kernel may hand a reaped child's pid to a sibling spawned before the old child's
  *  'close' fires, and the old 'close' must not drop that newer entry (D-5984). No test reaches this: the reuse window
@@ -197,7 +202,9 @@ function onStopSignal(sig) {
  *  handler runs only when the loop reaches its poll phase, and a lane resumes in a poll-phase callback (a child's 'exit' or
  *  'close'). From there one setImmediate runs in the same iteration's check phase, before the next poll, so a single turn
  *  can resume the lane ahead of a pending signal's handler. Two turns always have a poll phase between them. setTimeout 0
- *  is no substitute. Every stop check that guards a spawn follows one (D-5984). */
+ *  is no substitute. The yields precede the stop checks on runBatch's path and on measureClaudeVersion's. launchRun's own
+ *  pre-spawn check is kept for direct callers of that exported function, who pass no yield: a direct caller that wants a
+ *  pending signal seen must yield itself (D-5984). */
 async function yieldToSignals() {
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
@@ -213,13 +220,38 @@ function refuseIfStopping() {
 /** `spawn` as a registered group leader: not unref'd, the caller's stdio. The registry drops the entry at 'close', and only
  *  when it is still THIS child's (see liveChildren). It does not drop it on 'error': a child with a pid that reports an
  *  error (a failed kill, say) may still be running, and a stop must still signal its group. A child with no pid (the
- *  spawn failed) is never registered. */
+ *  spawn failed) is never registered.
+ *
+ *  The wait after the leader is bounded (D-5984). 'close' fires only when every stdio pipe has closed, so a process that
+ *  outlives the leader and holds one of them would hold the run, the lock and every signal's answer with it. When the
+ *  leader's 'exit' fires, a STOP_GRACE_MS timer starts and 'close' clears it. If it fires it SIGKILLs the leader's group
+ *  (only processes still in the run's group: a live member keeps the group allocated) and destroys the child's stdin,
+ *  stdout and stderr streams that exist (runChild's stdout is the `.part`'s descriptor, so `child.stdout` is null there).
+ *  Node then emits 'close' with the exit's code and signal and the run finishes as on close. Only stderr written after
+ *  the leader's exit is cut: its stdout is the `.part`'s descriptor, and its stderr is in the pipe at its exit and read
+ *  well before the timer fires. The timer is NOT unref'd: when a grandchild holds a pipe the pipe's handle keeps the loop
+ *  alive anyway, and a ref'd timer is what guarantees it fires; it is cleared at 'close', so it never holds a finished run. */
 function spawnGroup(launcher, argv, options) {
   const child = spawn(launcher, argv, { ...options, detached: true });
   const pid = child.pid;
   if (typeof pid === 'number') {
     liveChildren.set(pid, child);
-    child.once('close', () => { if (liveChildren.get(pid) === child) liveChildren.delete(pid); });
+    let closed = false;
+    let bound = null;
+    child.once('exit', () => {
+      if (closed) return;   // 'close' came first: nothing is left to bound
+      bound = setTimeout(() => {
+        signalGroup(pid, 'SIGKILL');
+        child.stdin?.destroy();
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }, STOP_GRACE_MS);
+    });
+    child.once('close', () => {
+      closed = true;
+      if (bound !== null) clearTimeout(bound);
+      if (liveChildren.get(pid) === child) liveChildren.delete(pid);
+    });
   }
   return child;
 }
@@ -933,8 +965,9 @@ export function spentSoFar(out) {
 // leftover whose writer is alive (its `.pid` record reads alive or unmeasured) refuses `run-live` and
 // is never charged, removed or spawned again; a dead writer's `.part` is charged once and removed. The named residual
 // windows are a driver killed between spawn() and its `.pid` record (the `.part` has no record and is charged as D-5811
-// says, even if the child lives on), and a grandchild that calls setsid itself (it escapes the group kill and writes no
-// `.part`). The over-count windows are spend line to rename, rename to run.json, and a leftover's charge to its `.part`'s
+// says, even if the child lives on), and a grandchild that calls setsid (it escapes every group kill and keeps running, and
+// the bounded wait after the leader's exit, spawnGroup, no longer lets it hold the driver; if it inherited the run's stdout
+// it can still write into the stream after the charge, and a resume then refuses the changed stream). The over-count windows are spend line to rename, rename to run.json, and a leftover's charge to its `.part`'s
 // removal (the `.pid` goes first, then the `.part`). A run whose run.json exists is never spawned again (W2-D53, W2-D55).
 // The child's LANG arrives as RunJob.lang, threaded from main's env: this section never reads process.env.
 
@@ -1425,7 +1458,9 @@ function finishedOutcome(job) {
 /** One child, stdout straight into the `.part` stream file (D-5811: launchRun renames it once the spawn is charged),
  *  stdin written whole, stderr kept to a bound. The child leads its own process group and is registered (D-5984); a
  *  `<name>.pid` record is written right after spawn() when it has a pid. It is killed, group and all, when it outlives
- *  `timeoutMs` (SIGTERM, then SIGKILL after a grace). A spawn that fails removes the `.part` and the `.pid`. It checks
+ *  `timeoutMs` (SIGTERM, then SIGKILL after a grace). The wait after its leader exits is bounded by spawnGroup (a
+ *  STOP_GRACE_MS timer that SIGKILLs the group and destroys the stderr pipe; `child.stdout` is null here, the `.part`
+ *  being the leader's stdout), so a same-group process that ignores SIGTERM and holds stderr is dead when this returns. A spawn that fails removes the `.part` and the `.pid`. It checks
  *  nothing about a stop itself: launchRun's check runs in the same synchronous stretch, before this is called (D-5984). */
 function runChild(launcher, argv, { cwd, childEnv, stdin, out, name, partPath, pidPath, timeoutMs }) {
   return new Promise((resolve, reject) => {
@@ -1607,7 +1642,7 @@ export async function runBatch(jobs, opts = {}) {
       if (stop !== null || next >= jobs.length) return;   // re-read after the yield: a sibling may have failed meanwhile
       const i = next++;
       try {
-        refuseIfStopping();   // D-5984: no spawn starts after the handler has run; before finishedOutcome, so a resume of finished jobs refuses too
+        refuseIfStopping();   // D-5984: no spawn and no gate call after the handler has run. Its place before finishedOutcome is not pinned on its own: the batch's last check below already refuses a fully resumed batch
         const done = finishedOutcome(jobs[i]);
         if (done !== null) { outcomes[i] = done; continue; }
         gate();

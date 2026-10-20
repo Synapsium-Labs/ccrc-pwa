@@ -4110,14 +4110,23 @@ describe('W2-4 Task 8: step0a end to end', () => {
     process.stdout.write('9.9.9 (Claude Code)\\n');
     return;
   }
-  fs.appendFileSync(path.join(home, 'spawn-log.jsonl'), JSON.stringify({ pid: process.pid, argv: args }) + '\\n');
   fs.readFileSync(0);
+  // The spawn is logged only AFTER the ignoring handler is installed and the grandchild is recorded, and the case signals on
+  // that log line: a SIGTERM that landed earlier would end the stub and let a dropped-SIGKILL mutant pass by chance.
   if (fs.existsSync(path.join(home, 'ignore-term'))) process.on('SIGTERM', () => {});
+  if (fs.existsSync(path.join(home, 'with-grandchild'))) {
+    // A grandchild in the stub's own group (no setsid), its stdio on /dev/null: only a group signal reaches it.
+    const g = (await import('node:child_process')).spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore' });
+    fs.writeFileSync(path.join(home, 'grandchild.pid'), String(g.pid));
+  }
+  fs.appendFileSync(path.join(home, 'spawn-log.jsonl'), JSON.stringify({ pid: process.pid, argv: args }) + '\\n');
   const ms = Number(fs.readFileSync(path.join(home, 'sleep-ms'), 'utf8'));
   if (ms > 0) await new Promise((r) => setTimeout(r, ms));
   process.stdout.write(fs.readFileSync(path.join(home, 'stub-stream.jsonl'), 'utf8'));
 })();
 `;
+    const STOP_GRACE_MS = 5_000;   // the driver's own, module-private
+    const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
     const spawnLog = (home: string): Array<{ pid: number; argv: string[] }> => {
       const p = path.join(home, 'spawn-log.jsonl');
       return existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l)) : [];
@@ -4130,6 +4139,7 @@ describe('W2-4 Task 8: step0a end to end', () => {
       const home = t8Home('ccrc-w2-t8-signal-');
       writeFileSync(path.join(home, '.local', 'bin', 'up-a'), SLEEPER_STUB, { mode: 0o700 });
       writeFileSync(path.join(home, 'sleep-ms'), '60000');
+      writeFileSync(path.join(home, 'with-grandchild'), '');
       if (ignoresTerm) writeFileSync(path.join(home, 'ignore-term'), '');
       const tree = t8Tree();
       const out = t8Out();
@@ -4142,18 +4152,30 @@ describe('W2-4 Task 8: step0a end to end', () => {
       driver.stderr.on('data', (d) => { stderr += String(d); });
       const exited = new Promise<{ code: number | null; signal: string | null }>((r) => driver.once('close', (code, signal) => r({ code, signal })));
       let stubPid = 0;
+      let grandchildPid = 0;
       try {
         const pidFile = path.join(out, 'step0a', 'writer.pid');
         expect(await until(() => existsSync(pidFile) && spawnLog(home).length === 1, 60_000), 'the writer started and was recorded').toBe(true);
         stubPid = JSON.parse(readFileSync(pidFile, 'utf8')).pid;
         expect(spawnLog(home)[0]!.pid, 'the record names the stub').toBe(stubPid);
         expect(groupGone(stubPid), 'the stub leads a live group').toBe(false);
+        grandchildPid = Number(readFileSync(path.join(home, 'grandchild.pid'), 'utf8'));
+        expect(alive(grandchildPid), 'CONTROL: the grandchild in the stub\'s group is running').toBe(true);
+        const signalled = Date.now();
         driver.kill(sig);
+        // The SIGTERM step: a stub that exits on SIGTERM is gone, group and all, well before the grace ends, so a stop whose
+        // SIGTERM step is dropped (only the SIGKILL after the grace remains) reds here. The ignoring stub is ended by the
+        // SIGKILL after the grace, which is its own bound below.
+        expect(await until(() => groupGone(stubPid), 10_000), 'no process is left in the writer\'s group').toBe(true);
+        const groupEnded = Date.now() - signalled;
+        if (ignoresTerm) expect(groupEnded, 'the stub that ignores SIGTERM lives until the SIGKILL after the grace').toBeGreaterThanOrEqual(STOP_GRACE_MS - 500);
+        else expect(groupEnded, 'a cooperative stub ends on the SIGTERM, before the grace').toBeLessThan(STOP_GRACE_MS);
         const r = await bounded(exited, ignoresTerm ? 40_000 : 30_000, 'the driver exiting after the signal');
         expect(r, `${stderr}`).toEqual({ code: 2, signal: null });
         expect(stdout).toBe('');
         expect(stderr).toMatch(new RegExp(`^ccrc history-replay: interrupted: ${sig} received; [^\\n]*\\n$`));
-        expect(await until(() => groupGone(stubPid), 10_000), 'no process is left in the writer\'s group').toBe(true);
+        // The group half: a signal sent to the leader alone leaves the grandchild running.
+        expect(await until(() => !alive(grandchildPid), 10_000), 'the grandchild in the writer\'s group died with it').toBe(true);
         expect(spawnLog(home).map(modelOf), 'the judge and the box never spawned').toEqual([T8_MODELS.writer]);
         expect(existsSync(path.join(out, 'step0a', 'writer.run.json')), 'no run.json for the stopped run').toBe(false);
         expect(existsSync(path.join(out, replay.STEP0A_FILE)), 'no step0a.json').toBe(false);
@@ -4164,12 +4186,14 @@ describe('W2-4 Task 8: step0a end to end', () => {
         // A plain re-run spawns the writer again, then the judge and the box.
         writeFileSync(path.join(home, 'sleep-ms'), '0');
         rmSync(path.join(home, 'ignore-term'), { force: true });
+        rmSync(path.join(home, 'with-grandchild'), { force: true });
         const again = t8Run(tree, home, t8Argv(out));
         expect(again.code, again.stderr).toBe(0);
         expect(spawnLog(home).slice(1).map(modelOf)).toEqual([T8_MODELS.writer, T8_MODELS.judge, T8_MODELS.box]);
         expect(existsSync(path.join(out, replay.STEP0A_FILE))).toBe(true);
       } finally {
         if (stubPid > 0) { try { process.kill(-stubPid, 'SIGKILL'); } catch { /* gone */ } }
+        if (grandchildPid > 0) { try { process.kill(grandchildPid, 'SIGKILL'); } catch { /* gone */ } }
         driver.kill('SIGKILL');
       }
     }, 180_000);
@@ -4858,4 +4882,127 @@ describe('fix round 2 (D-5984): signals are yielded to before every spawn, and e
     } finally { await endStop(); }
     expect(stubLog(b.home), '--version never spawned').toBeNull();
   }, 60_000);
+});
+
+// ── fix round 2 (D-5984): the wait after a leader's exit is bounded ─────────────────────────────────────────────────
+// 'close' fires only when every stdio pipe has closed, so a process that outlives the leader and holds one would hold
+// the run, the lock and every signal's answer. spawnGroup starts a STOP_GRACE_MS timer at the leader's 'exit'; 'close'
+// clears it; when it fires it SIGKILLs the leader's group and destroys the streams. A grandchild that calls setsid is
+// the one process the group kill cannot reach: it keeps running, and no longer holds the driver. Every stub here is a
+// recording stub under a fixture HOME that starts only processes the case kills by their recorded pid, in a finally.
+describe.skipIf(!existsSync('/usr/bin/setsid'))('fix round 2 (D-5984): the wait after a leader exits is bounded', () => {
+  const STOP_GRACE_MS = 5_000;   // the driver's own, module-private
+  const SLEEP_S = 12;            // the setsid grandchild outlives every bound below
+  const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  /** The pids a stub recorded, one per line; each is killed (alone and as a group) by a case's finally. */
+  const recorded = (file: string): number[] => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter((l) => l !== '').map(Number) : []);
+  const killAll = (pids: number[]): void => {
+    for (const pid of pids) {
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* gone, or never a group */ }
+      try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+    }
+  };
+  /** Node, run as a CommonJS launcher. `body` runs after `home`, `args` and the requires exist. */
+  const stubSource = (body: string): string => `#!/usr/bin/env node
+const fs = require('node:fs');
+const cp = require('node:child_process');
+const path = require('node:path');
+const home = path.resolve(path.dirname(process.argv[1]), '..', '..');
+const args = process.argv.slice(2);
+const stream = () => fs.readFileSync(path.join(home, ${JSON.stringify(STUB_STREAM)}), 'utf8');
+${body}
+`;
+  /** setsid as the stub starts it: not detached, so setsid is no group leader and execs sleep in its own pid, which is
+   *  recorded. Its stderr is the run's stderr pipe; its stdout and stdin are not. */
+  const SETSID_GRANDCHILD = `const g = cp.spawn('/usr/bin/setsid', ['sleep', '${SLEEP_S}'], { stdio: ['ignore', 'ignore', 'inherit'] });
+fs.appendFileSync(path.join(home, 'grandchildren.pids'), g.pid + '\\n');
+g.unref();`;
+  const pidsOf = (b: { home: string }): string => path.join(b.home, 'grandchildren.pids');
+
+  it('SIGTERM while a setsid grandchild holds the run\'s stderr: exit 2 interrupted well before the grandchild ends, which keeps running (the named residual)', async () => {
+    const base = mkTmp('ccrc-replay-fr2-setsid-stop-');
+    const home = join(base, 'home');
+    mkdirSync(home, { mode: 0o700 });
+    writeRoster(home, [{ id: 'up-a', label: 'up-a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' }]);
+    plantStub(home, 'up-a');
+    writeFileSync(join(home, '.local', 'bin', 'up-a'), stubSource(`fs.readFileSync(0);
+${SETSID_GRANDCHILD}
+process.stdout.write(stream());`), { mode: 0o700 });
+    const now = Math.floor(Date.now() / 1000);
+    mkdirSync(join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five: 10, seven: 10, ts: now, fiveResetAt: now + 3600, sevenResetAt: now + 86_400 }));
+    const out = join(base, 'out');
+    const driver = spawn(process.execPath, [SCRIPT, 'probe', '--out', out, '--account', 'up-a', '--budget', '1000000', '--arm-model', 'fixture-model-arm'],
+      { env: { ...scrubbedEnv(process.env), HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] });
+    startedChildren.push(driver);
+    let stderr = '';
+    driver.stderr.on('data', (d) => { stderr += String(d); });
+    const exited = new Promise<{ code: number | null; signal: string | null }>((r) => driver.once('close', (code, signal) => r({ code, signal })));
+    const gcFile = join(home, 'grandchildren.pids');
+    try {
+      expect(await until(() => recorded(gcFile).length >= 1, 60_000), 'a stub started and recorded its setsid grandchild').toBe(true);
+      const started = Date.now();
+      await pause(2_000);
+      driver.kill('SIGTERM');
+      const r = await bounded(exited, 30_000, 'the driver exiting after the signal');
+      const answered = Date.now() - started;
+      expect(r, stderr).toEqual({ code: 2, signal: null });
+      expect(stderr).toMatch(/^ccrc history-replay: interrupted: SIGTERM received; [^\n]*\n$/);
+      expect(answered, `answered at ${answered} ms, not when the ${SLEEP_S} s grandchild ended`).toBeLessThan(9_000);
+      expect(recorded(gcFile).some(alive), 'the setsid grandchild escaped the group kill and is still running: the residual, no longer holding the driver').toBe(true);
+    } finally {
+      killAll(recorded(gcFile));
+      driver.kill('SIGKILL');
+    }
+  }, 120_000);
+
+  it('a run whose leader exits while a setsid grandchild holds stderr returns after about the grace, with the leader\'s stderr line read and recorded', async () => {
+    const b = t5Box('ccrc-replay-fr2-setsid-read-');
+    writeFileSync(join(b.home, '.local', 'bin', 'up-a'), stubSource(`fs.readFileSync(0);
+process.stderr.write("error: unknown option '--fixture-flag'\\n");
+${SETSID_GRANDCHILD}
+process.stdout.write(stream());`), { mode: 0o700 });
+    try {
+      const started = Date.now();
+      const o = await bounded(claimedRun(t5job(b, b.up, 'box', 'bw-0')), 60_000, 'the run returning');
+      const took = Date.now() - started;
+      expect(took, `returned after ${took} ms`).toBeLessThan(9_000);
+      expect(took, 'the bound waits out the grace; a bound that cuts at the exit would lose stderr still in the pipe').toBeGreaterThanOrEqual(STOP_GRACE_MS - 1_000);
+      expect([o.skipped, o.code, o.unknownOptions]).toEqual([false, 0, ['--fixture-flag']]);
+      const run = JSON.parse(readFileSync(join(b.out, 'bw-0.run.json'), 'utf8'));
+      expect(run.unknown_options, 'the leader\'s stderr line is recorded').toEqual(['--fixture-flag']);
+      expect(recorded(pidsOf(b)).some(alive), 'the setsid grandchild is still running').toBe(true);
+    } finally { killAll(recorded(pidsOf(b))); }
+  }, 120_000);
+
+  it('the bound reaches --version too: a setsid grandchild holding its stdout does not hold measureClaudeVersion', async () => {
+    const b = t5Box('ccrc-replay-fr2-setsid-version-');
+    writeFileSync(join(b.home, '.local', 'bin', 'up-a'), stubSource(`process.stdout.write('9.9.9 (Claude Code)\\n');
+const g = cp.spawn('/usr/bin/setsid', ['sleep', '${SLEEP_S}'], { stdio: ['ignore', 'inherit', 'ignore'] });
+fs.appendFileSync(path.join(home, 'grandchildren.pids'), g.pid + '\\n');
+g.unref();`), { mode: 0o700 });
+    try {
+      const started = Date.now();
+      const v = await bounded(replay.measureClaudeVersion(b.up, b.out, 'fixture.UTF-8'), 60_000, '--version returning');
+      const took = Date.now() - started;
+      expect(took, `returned after ${took} ms`).toBeLessThan(9_000);
+      expect(v).toEqual({ state: 'value', version: '9.9.9 (Claude Code)' });
+    } finally { killAll(recorded(pidsOf(b))); }
+  }, 120_000);
+
+  it('the timeout path: a process in the run\'s group that ignores SIGTERM and holds stderr is dead when the run returns', async () => {
+    const b = t5Box('ccrc-replay-fr2-timeout-group-');
+    writeFileSync(join(b.home, '.local', 'bin', 'up-a'), stubSource(`fs.readFileSync(0);
+// Same group (no setsid, no detached), stderr inherited from the run's pipe, SIGTERM ignored.
+const g = cp.spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setTimeout(() => {}, 25000)"], { stdio: ['ignore', 'ignore', 'inherit'] });
+fs.appendFileSync(path.join(home, 'grandchildren.pids'), g.pid + '\\n');
+setTimeout(() => {}, 25000);`), { mode: 0o700 });
+    try {
+      const o = await bounded(claimedRun(t5job(b, b.up, 'box', 'tg-0', { timeoutMs: 3_000 })), 60_000, 'the timed-out run returning');
+      expect([o.skipped, o.signal]).toEqual([false, 'SIGTERM']);
+      const [gc] = recorded(pidsOf(b));
+      expect(gc, 'the stub recorded its grandchild').toBeGreaterThan(0);
+      expect(await until(() => !alive(gc!), 3_000), 'the group member that ignored SIGTERM is dead when the run returns').toBe(true);
+    } finally { killAll(recorded(pidsOf(b))); }
+  }, 120_000);
 });
