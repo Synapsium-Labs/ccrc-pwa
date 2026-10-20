@@ -98,7 +98,7 @@ Issued and unused: none.
   (`.proj-children-toggle` joins the disclosure rule; `.proj-card-last`), `pwa/src/fleet/sessionFacts.ts`
   (`rowStateWord`, the row's state word spelled once, read by the row's facts and the worker line, so the rollup
   never imports `STATE_WORD`), `pwa/design/audit.mjs` (the disclosure rule's key gains `.proj-children-toggle`;
-  `.proj-card-last` grounded on the card), `pwa/test/role-census.test.ts` (`.proj-card-last` reads `--fs-meta`).
+  `.proj-card-last` and `.proj-children-part--needs-you` grounded on the card), `pwa/test/role-census.test.ts` (`.proj-card-last` reads `--fs-meta`).
 - Adapt the cases whose subject is not the rollup but whose fixture is now rolled up: `fleet-screen.test.tsx`
   (an all-archived or emptied project opens with its own ▾ first; the cross-project nesting cases open the worker
   line through the stored preference), `app.test.tsx` and `tap-targets.test.tsx` (the fixture row changed just

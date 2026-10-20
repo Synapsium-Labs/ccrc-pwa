@@ -671,6 +671,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'every attention-state project-pool chip uses the same project-card ground as the base chip. The grouped selector changes the ink but still names no painted ancestor, so it needs its own registration',
   },
+  '.proj-children-part--needs-you': {
+    under: ['var(--bg-surface)'],
+    why: "D-6088: the `n needs you` count of a coordinator's folded-workers line, inside .proj-children-toggle on the project card's --bg-surface, the ground that rule's own entry names; its selector names no painted ancestor",
+  },
   '.proj-card-last': {
     under: ['var(--bg-surface)'],
     why: "D-6088: a rolled-up project's `active <age>`, inside .proj-card-toggle beside .proj-card-stranded, on the project card's --bg-surface for the same reason: its selector names no painted ancestor",
