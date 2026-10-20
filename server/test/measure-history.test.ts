@@ -3339,7 +3339,7 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
         expect(t7Gate.labelCorrect('command', 'npm run test', `npm run test${c}x`, at7), `right ${c}`).toBe(false);
         expect(t7Gate.labelCorrect('command', 'npm run test', `${c}npm run test`, at7), `left ${c}`).toBe(false);
       }
-      expect(t7Gate.labelCorrect('command', 'npm run test', '(npm run test), then', at7), 'CONTROL: brackets and commas are not edges').toBe(true);
+      expect(t7Gate.labelCorrect('command', 'npm run test', '(npm run test) then', at7), 'CONTROL: brackets are not edges').toBe(true);
     });
 
     it('labelCorrect path: every character of the path boundary sets glues, on either side', () => {
@@ -3372,6 +3372,84 @@ describe('W2-3 Task 7: the quiz labeller and its texts', () => {
       expect(t7Gate.parseQuestionLine('QUESTION: ok?\nQUESTION: ')).toEqual({ ok: false, word: 'writer-malformed' });
       expect(t7Gate.parseQuestionLine('QUESTION: ok?\nQUESTION:\t ')).toEqual({ ok: false, word: 'writer-malformed' });
       expect(t7Gate.parseQuestionLine('QUESTION:')).toEqual({ ok: false, word: 'writer-malformed' });
+    });
+  });
+
+  describe('review fix round 1: the command arm takes one command, and ./R is a path form (D-5789)', () => {
+    const cmd = (F: string, a: string) => t7Gate.labelCorrect('command', F, a, pathAt7);
+    const PF = '/r/src/app.ts';
+    const pth = (a: string) => t7Gate.labelCorrect('path', PF, a, pathAt7);
+
+    it('command: an answer that carries a further command-shaped piece is not that command', () => {
+      expect(cmd('git status', 'git status -s')).toBe(false);
+      for (const a of ['npm run test --watch', 'npm run test; npm run lint', 'npm run test, npm test', 'npm test | npm run test']) {
+        expect(cmd('npm run test', a), a).toBe(false);
+      }
+      const parsed = t7Gate.parseAnswerField('thinking\nANSWER: `npm test`, `npm run test`');
+      expect(parsed.state).toBe('value');
+      expect(cmd('npm run test', (parsed as { value: string }).value), 'the outer-backtick strip applies').toBe(false);
+      expect(cmd('npm run test', '`npm test` `npm run test`')).toBe(false);
+      expect(cmd('npm run test', 'cd server && npm run test')).toBe(false);
+    });
+
+    it('command: each clause of the rule alone, before and after the occurrence', () => {
+      expect(cmd('npm run test', 'x -v npm run test'), 'a short flag before').toBe(false);
+      expect(cmd('npm run test', 'npm run test -v'), 'a short flag after').toBe(false);
+      for (const c of [';', '|', '&', '>', '<', ',', '`']) {
+        expect(cmd('npm run test', `npm run test ${c} x`), `${c} after`).toBe(false);
+        expect(cmd('npm run test', `x ${c} npm run test`), `${c} before`).toBe(false);
+      }
+      expect(cmd('npm run test', '$(npm run test)'), '$( before').toBe(false);
+      expect(cmd('npm run test', 'npm run test $(date)'), '$( after').toBe(false);
+      expect(cmd('npm run test', 'npm run test or npm test')).toBe(false);
+      expect(cmd('npm run test', 'x OR npm run test')).toBe(false);
+    });
+
+    it('command: an F that itself holds a flag, a pipe or && is answered exactly', () => {
+      expect(cmd('git log --oneline | head -5', 'git log --oneline | head -5')).toBe(true);
+      expect(cmd('npm ci && npm test', 'npm ci && npm test')).toBe(true);
+      expect(cmd('npm ci && npm test', '`npm ci && npm test`')).toBe(true);
+      expect(cmd('git log --oneline | head -5', 'git log --oneline | head -5 | wc'), 'CONTROL: a further pipe is outside F').toBe(false);
+    });
+
+    it('command: prose around F stays correct', () => {
+      expect(cmd('npm run test', '`npm run test`.')).toBe(true);
+      expect(cmd('npm run test', 'Run `npm run test` from the root')).toBe(true);
+      expect(cmd('npm run test', 'npm run test (from the repo root)')).toBe(true);
+      expect(cmd('npm run test', 'npm run test in the dry-run mode')).toBe(true);
+    });
+
+    it('command: the hugging backticks count as a pair or not at all', () => {
+      expect(cmd('npm run test', '`npm run test')).toBe(false);
+      expect(cmd('npm run test', 'npm run test`')).toBe(false);
+      expect(cmd('npm run test', 'Run `npm run test` now')).toBe(true);
+    });
+
+    it('error: the split is pinned, trailing context stays correct and an alternative stays refused', () => {
+      const E = 'TypeError: x is undefined';
+      expect(t7Gate.labelCorrect('error', E, `${E}, at line 3 of app.js`, pathAt7)).toBe(true);
+      expect(t7Gate.labelCorrect('error', E, `${E} -- see app.js; retry`, pathAt7)).toBe(true);
+      expect(t7Gate.labelCorrect('error', E, `${E} or ReferenceError: y`, pathAt7)).toBe(false);
+      expect(t7Gate.labelCorrect('error', 'X', 'X or Y', pathAt7)).toBe(false);
+    });
+
+    it('path: ./R is one of F\'s forms, left-bounded, and masked whole', () => {
+      for (const a of ['./src/app.ts', '(./src/app.ts)', '`./src/app.ts`', './src/app.ts.']) {
+        expect(pth(a), a).toBe(true);
+      }
+      for (const a of ['../src/app.ts', 'x./src/app.ts', '././src/app.ts', './src/app.ts and ./src/other.ts']) {
+        expect(pth(a), a).toBe(false);
+      }
+      expect(pth('src/app.ts'), 'CONTROL').toBe(true);
+      expect(pth('/r/src/app.ts'), 'CONTROL').toBe(true);
+      expect(pth('.//r/src/app.ts'), './ before the absolute form is not a form').toBe(false);
+      expect(pth('./src/app.tsx'), 'right-bounded').toBe(false);
+      expect(pth('./src/app.ts and /r/src/app.ts'), 'CONTROL: two of F\'s own forms').toBe(true);
+    });
+
+    it('path admission is unchanged: ./R in a baseline rejects through the repo-relative variant', () => {
+      expect(t7Gate.admitFact('path', PF, 'saw ./src/app.ts', 'q', ROOT_R))
+        .toEqual({ admitted: false, hit: { where: 'baseline', variant: 'src/app.ts' } });
     });
   });
 });

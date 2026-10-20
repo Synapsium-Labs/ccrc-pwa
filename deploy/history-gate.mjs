@@ -1215,6 +1215,11 @@ const PATH_RIGHT = /[A-Za-z0-9._/-]/;
 const PATH_TOKEN = /[A-Za-z0-9._/~-]+/g;
 const CMD_EDGE = /[A-Za-z0-9_./:=@+-]/;
 const CMD_ALTERNATIVE = /\s(or|OR)\s/;
+/** What a COMMAND answer may not carry outside F's own occurrence (D-5789): a flag token, a command separator or
+ *  redirect, a comma or backtick, or a command substitution; the error kind uses CMD_ALTERNATIVE alone. */
+const CMD_EXTRA = Object.freeze([/(^|\s)--?[A-Za-z0-9]/, /[;|&><,`]/, /\$\(/]);
+/** @param {string} text */
+const cmdCarriesMore = (text) => CMD_ALTERNATIVE.test(text) || CMD_EXTRA.some((re) => re.test(text));
 
 /**
  * Every index at which `needle` starts in `text` (overlapping occurrences included).
@@ -1252,9 +1257,17 @@ const cmdRightOk = (t, j) => j === t.length || !CMD_EDGE.test(t[j]) || (t[j] ===
  *   because W2-D63 refuses "a second path-shaped token that is not one of F's forms": an occurrence glued to more
  *   path (`src/app.tsx`, `src/app.ts.bak`, `src/app.ts-old`, `x/r/src/app.ts`) is not F's form but a longer token,
  *   so it must stay visible to the token rule instead of being hidden by its F-shaped prefix or suffix.
- * - command, error: collapseWs(F) occurs in collapseWs(value) with boundaries (left: the start or a character
+ *   `./` followed by a repo-relative form is one of F's forms too (D-5789): left-bounded on its `.` like the
+ *   others, right-bounded like the others, and masked whole, `./` included. `./` before the absolute form is not.
+ * - error: collapseWs(F) occurs in collapseWs(value) with boundaries (left: the start or a character
  *   outside [A-Za-z0-9_./:=@+-]; right: the end, a character outside that set, or a final `.`), and neither the
- *   text before nor the text after that occurrence holds /\s(or|OR)\s/.
+ *   text before nor the text after that occurrence holds /\s(or|OR)\s/. An error answer may carry trailing context.
+ * - command: the same occurrence and boundaries, with one backtick immediately before it and one immediately
+ *   after it counting as part of it (as a pair only), and then neither the text before nor the text after that
+ *   widened occurrence holds /\s(or|OR)\s/, a flag token /(^|\s)--?[A-Za-z0-9]/, any of `; | & > < ,` or a
+ *   backtick, or `$(` (D-5789, amending W2-D63): W2-D64 asks for one exact value, so an answer that carries a
+ *   further command-shaped piece is not that command. Too strict for prose holding a comma, `>`, `<`, `&` or a
+ *   negative number; too lenient for an extra operand or a `sudo` or `VAR=` prefix.
  * @param {string} kind
  * @param {string} F
  * @param {string} answerValue
@@ -1275,7 +1288,8 @@ export function labelCorrect(kind, F, answerValue, opts) {
       return m >= opts.shaMinPrefix && r.slice(0, m) === f.slice(0, m);
     }
     case 'path': {
-      const forms = [F, ...repoRelativeForms(F, opts.repoRoots)];
+      const rel = repoRelativeForms(F, opts.repoRoots);
+      const forms = [F, ...rel, ...rel.map((r) => `./${r}`)];
       const covered = new Array(answerValue.length).fill(false);
       let bounded = false;
       for (const form of forms) {
@@ -1291,13 +1305,26 @@ export function labelCorrect(kind, F, answerValue, opts) {
       for (const tok of rest.match(PATH_TOKEN) ?? []) if (tok.includes('/')) return false;
       return bounded;
     }
-    default: {
+    case 'error': {
       const c = collapseWs(F);
       const v = collapseWs(answerValue);
       for (const i of occurrencesOf(v, c)) {
         const j = i + c.length;
         if (!cmdLeftOk(v, i) || !cmdRightOk(v, j)) continue;
         if (!CMD_ALTERNATIVE.test(v.slice(0, i)) && !CMD_ALTERNATIVE.test(v.slice(j))) return true;
+      }
+      return false;
+    }
+    default: {
+      const c = collapseWs(F);
+      const v = collapseWs(answerValue);
+      for (const i of occurrencesOf(v, c)) {
+        const j = i + c.length;
+        if (!cmdLeftOk(v, i) || !cmdRightOk(v, j)) continue;
+        const hug = v[i - 1] === '`' && v[j] === '`';
+        const lo = hug ? i - 1 : i;
+        const hi = hug ? j + 1 : j;
+        if (!cmdCarriesMore(v.slice(0, lo)) && !cmdCarriesMore(v.slice(hi))) return true;
       }
       return false;
     }
