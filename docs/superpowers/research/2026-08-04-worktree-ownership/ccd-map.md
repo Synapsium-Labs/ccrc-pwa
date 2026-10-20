@@ -1,6 +1,6 @@
 # ccd change-map — "worktree ownership": adoption, child worktrees, truthful archivedreason
 
-Target file: `/srv/projects/OpenClawHetzner/infra/<server-host>-portability/ccd`
+Target file: `/srv/projects/project-c/infra/<server-host>-portability/ccd`
 (5,439 lines, single bash file). Every claim below carries a `ccd:LINE` cite.
 
 **Evidence labels used throughout**
@@ -23,7 +23,7 @@ falsifiable proposition with the ccd site it decides.
    directory (ccd:2095). If `.claude/worktrees/` is gitignored, that walk descends the entire child
    tree. Measured on this box the largest ignored tree cost 3.4 s for 355k entries (ccd:2062-2066
    comment) — but the foreign-worktree footprint is 26 GB / 37 trees. Proposition: *on a real
-   OpenClaw project with a nested `.claude/worktrees/agent-*` present and ignored, the reap's
+   legacy-tree project with a nested `.claude/worktrees/agent-*` present and ignored, the reap's
    inside-scan exceeds 30 s and every workspace in that project answers `tree-unreadable` with the
    `did not finish within 30s` detail (ccd:2087-2090, ccd:2102).* Decides whether descent needs its
    own budget or a "skip registered child worktrees" predicate.
@@ -44,7 +44,7 @@ falsifiable proposition with the ccd site it decides.
    on a live project, plus `cat <child>/.git` to see which gitdir it points at.
 
 4. **[I] Whether the live foreign trees are on stable branches.** The CONTEXT states one live
-   session (custom-tools-warm-meadow) was measured switching branches mid-session. Proposition:
+   session (project-d-warm-meadow) was measured switching branches mid-session. Proposition:
    *`_ws_wt_branch` (ccd:1002) polled twice a day over the 37 foreign trees returns a different name
    for ≥1 of them*, which is what kills the registry-`branch` field as an adoption primary key
    (§6 below).
@@ -483,7 +483,7 @@ recorded detached HEAD, and exit 1 for no record at all (ccd:1012). It explicitl
 whether ccd or the user did it* (ccd:995-1001).
 
 **The measured collision:** the CONTEXT records a live session
-(`custom-tools-warm-meadow`) moving `ws/warm-meadow → feat/… → main` within hours. Applied to an
+(`project-d-warm-meadow`) moving `ws/warm-meadow → feat/… → main` within hours. Applied to an
 adopted foreign tree, that means:
 
 - `ws-reap` refuses `registry-branch-drift` **permanently** (ccd:2539) — a state the operator must
@@ -610,7 +610,7 @@ Verbs/flags the design plausibly needs:
 
 ## 9. Existing tests that pin the behaviours this design changes
 
-Root: `/srv/projects/OpenClawHetzner/infra/ccrc/server/test/`
+Root: `/srv/projects/project-c/infra/ccrc/server/test/`
 Harness: `ccdWsHelpers.ts` — `HOME` is the **only** isolation boundary (`ccdWsHelpers.ts:1-4`),
 `PROJECTS_ROOT`/`WORKTREES_ROOT` derive from it with no env override (ccd:9-13). Any new fixture
 must build its repos with `makeRepo`/`makeGhRepo` (`ccdWsHelpers.ts:98-158`) or it leaves the box.
@@ -693,7 +693,7 @@ untracked rather than ignored, and ccd counts untracked files (ccd:2735, ccd:107
 # Verification
 
 Adversarial pass, 2026-08-04. Method: every ccd cite re-opened against
-`/srv/projects/OpenClawHetzner/infra/<server-host>-portability/ccd` at its committed
+`/srv/projects/project-c/infra/<server-host>-portability/ccd` at its committed
 state (`281d625`, 2026-08-02, working tree clean — so no drift excuse); the three load-bearing git
 measurements re-run from scratch on fresh fixtures (git 2.43.0, `GIT_CONFIG_GLOBAL=/dev/null`,
 no network, throwaway repos under `…/scratchpad/probes-verify/`, deleted after); consumer hunt
@@ -717,15 +717,15 @@ Read-only file check of every project under `/data/projects` that actually holds
 
 | project | children | ignored by |
 |---|---|---|
-| custom-tools | 1 | `.gitignore:21 .claude/worktrees/` **and** `.git/info/exclude:11 **/.claude/worktrees/` |
-| expoAI-assistant | 31 | `.gitignore:51 .claude/*` **and** `info/exclude:11` |
+| project-d | 1 | `.gitignore:21 .claude/worktrees/` **and** `.git/info/exclude:11 **/.claude/worktrees/` |
+| project-h | 31 | `.gitignore:51 .claude/*` **and** `info/exclude:11` |
 | acme-platform-ts | 1 | `.gitignore:16 .claude/worktrees/` **and** `info/exclude:11` |
-| intake-platform | 3 | `.gitignore:20 .claude/worktrees/` |
-| rp-llm | 2 | `.gitignore:63 .claude/worktrees/` |
-| MekWarLive | 0 | `.gitignore:120 .claude/*` **and** `info/exclude:12` |
+| project-n | 3 | `.gitignore:20 .claude/worktrees/` |
+| project-j | 2 | `.gitignore:63 .claude/worktrees/` |
+| project-f | 0 | `.gitignore:120 .claude/*` **and** `info/exclude:12` |
 
-6/6. (Also ignored, wholesale, in `megamek:21 .claude/` and `mm-data:13 .claude/`, and in
-`synapsium-platform:51 .claude/*`.) So the state the map calls the safe one — untracked, `?? .claude/`,
+6/6. (Also ignored, wholesale, in `project-u:21 .claude/` and `project-t:13 .claude/`, and in
+`project-k:51 .claude/*`.) So the state the map calls the safe one — untracked, `?? .claude/`,
 `dirty-tree` refusal — **does not exist for any project that has children**. Every one of them is in
 the state the map's own [P] measured as *passes the dirty-tree guard*.
 
@@ -739,8 +739,8 @@ Consequences the map states backwards:
   (ccd:2650): a child holding a `.env` refuses; a child holding only source is walked, sized, and
   passed. The map says exactly this in §4 Phase B rung 2 — it just never carries it back to the
   conclusion.
-- ccd:913 still deserves the `.claude/worktrees/` line (belt-and-braces, and `intake-platform` /
-  `rp-llm` have no `info/exclude` entry), but it is now a **low-risk** edit, not "critical, and LAST".
+- ccd:913 still deserves the `.claude/worktrees/` line (belt-and-braces, and `project-n` /
+  `project-j` have no `info/exclude` entry), but it is now a **low-risk** edit, not "critical, and LAST".
 
 ### R2 — line citations in ccd:2640–2860 are wrong by 5 to 90 lines; two §10 edit-site rows point at the wrong code.
 

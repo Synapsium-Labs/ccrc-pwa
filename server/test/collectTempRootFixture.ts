@@ -1,4 +1,4 @@
-// Child reclamation wave 9 (spec §5.10), widened by CCR-15 wave 10 (path-identity spec 2026-10-12 §5.4, §5.5): what the
+// Child reclamation wave 9 (spec §5.10), widened by #166 wave 10 (path-identity spec 2026-10-12 §5.4, §5.5): what the
 // collector executor's case files share: `collect-temp-root.test.ts`, `collect-temp-root-reads.test.ts`,
 // `collect-open-run-hold.test.ts` and `collect-switch-executor.test.ts`. A ccd SCRIPT behind the agent's REAL exec
 // whitelist (`testDeps`), a registry and a coordination store under a fixture HOME, the switch's REAL generation journal

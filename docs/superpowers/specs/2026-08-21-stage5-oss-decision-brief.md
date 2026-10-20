@@ -10,12 +10,12 @@ spec is written from the answers, **against the post-merge tree** — both #78 (
 ## The operator rulings
 
 **S1 — Org identity and copyright holder.** The AGPL notice needs a name, and the parent
-spec says "AGPL-3.0, **sole copyright holder**" — which sits oddly with the repo living
-under the operator's employer org. This decides three literals at once: the LICENSE
+spec's licence row does not settle it; the owner and the copyright holder are a decision
+for the operator, recorded outside this tree. This decides three literals at once: the LICENSE
 copyright line, `install.sh`/`ccrc`'s `CCRC_RELEASE_OWNER` pair (the release-fetch URL),
-and the README's `curl … | bash` one-liner. Options: stay under the employer org (copyright
-the company), move to your personal account, or a new org. **No recommendation — this is a
-business/ownership call.**
+and the README's `curl … | bash` one-liner. The options and their reasons are kept
+outside this tree. **No recommendation — this is a
+decision for the operator.**
 
 **S2 — Does `docs/superpowers/` ship in the public tree?** 35 of 86 files carry the tailnet
 name, both node IPs, and the SSH username — no credentials, but the full topology of a live
@@ -74,12 +74,12 @@ with no doctor check — one small check joins the sweep.
 
 ## Rulings received (2026-08-22)
 
-**S1 — RULED:** transfer the repo to **Synapsium-Labs** (the org exists; the operator is a
-member) and publish under that company. Copyright identity: Synapsium Labs. The transfer
+**S1 — RULED:** publish under **Synapsium-Labs** (the owner and copyright decisions
+are recorded outside this tree). Copyright identity: Synapsium Labs. The owner step
 itself is an operator act sequenced with the flip; the code side parameterises the owner
 first (`CCRC_RELEASE_OWNER`, README one-liner, LICENSE line) so the tree is owner-agnostic
 before either happens. Exact legal copyright string to confirm at LICENSE-writing time
-(default "Synapsium Labs" unless the operator supplies a registered-company form).
+(default "Synapsium Labs" unless the operator supplies another form).
 
 **S2 — RULED:** option (b), sanitise and ship — with two operator qualifications: the
 sanitisation bar is **verified, not asserted** ("ensure it's sufficiently secure" — the

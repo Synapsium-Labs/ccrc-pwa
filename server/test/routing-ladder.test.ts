@@ -81,11 +81,5 @@ describe('shared/routing-ladder.ts is L0 — imports nothing but its two shared/
     expect(new Set(specifiers)).toEqual(new Set(['./models.js', './api.js']));
   });
 
-  it('never names a node: specifier anywhere in the source, quoting style notwithstanding', () => {
-    // Whole-source belt (the same shape as pool-rule-core.test.ts:175's poolrule.ts
-    // check) — catches a double-quoted `import ... from "node:fs";` even if the
-    // specifier-scan above were ever narrowed again.
-    expect(code(), 'shared/routing-ladder.ts imports a node builtin — the PWA bundles this file')
-      .not.toMatch(/from\s+['"]node:/);
-  });
+  // The whole-source node: belt is server/test/rings/shared-imports.test.ts now (D-6045): it parses every edge.
 });

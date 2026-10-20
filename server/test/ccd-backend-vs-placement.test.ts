@@ -143,7 +143,7 @@ describe('the four callers now ask the backend question', () => {
 // Codex's vocabulary — "Codex weekly cap reached (100%)", a 5h cooldown
 // countdown, the ccgpt-usage JSON shape. Until 2026-09-14 that trailer was a
 // single hardcoded line about `gpt`, which by then was wrong twice over: a
-// second Codex lane (`gpt2`) had existed since 2026-09-10 and had no line at
+// second Codex lane (`gpt7`) had existed since 2026-09-10 and had no line at
 // all, and both lanes had become home-able on 2026-09-11, so calling either an
 // "overflow lane" was false.
 //
@@ -171,12 +171,12 @@ describe('_is_codex_backend — and why it is not the complement of the other tw
     // `[[ "$w" == "$v" ]]` with an unquoted RHS would glob, and `"$v"*` would
     // prefix-match: both mutants survived the original suite, because no
     // fixture had a non-Codex account whose id extends a Codex one. The live
-    // roster is full of that shape (`claude` / `claude-corp` / `claude-dev1`),
+    // roster is full of that shape (`claude` / `claude-acme` / `claude-lab1`),
     // so this is one rename away from being real.
     const prefixy = parseRoster({ version: 1, accounts: [
       { id: 'an', label: 'AN', configDirSuffix: '.an', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
       { id: 'cx', label: 'CX', configDirSuffix: '.cx', exec: { kind: 'external' }, homeAble: true, hue: 'blue', telemetry: 'codex' },
-      { id: 'cx-corp', label: 'CXC', configDirSuffix: '.cx-corp', exec: { kind: 'generated' }, homeAble: true, hue: 'green', telemetry: 'anthropic' },
+      { id: 'cx-acme', label: 'CXC', configDirSuffix: '.cx-acme', exec: { kind: 'generated' }, homeAble: true, hue: 'green', telemetry: 'anthropic' },
     ] });
     const dir = mkTmp('ccd-backend-prefix-');
     mkdirSync(path.join(dir, '.ccrc'), { recursive: true });
@@ -185,10 +185,10 @@ describe('_is_codex_backend — and why it is not the complement of the other tw
       { cwd: dir, encoding: 'utf8',
         env: ghContainedEnv(dir, { ...process.env, HOME: dir }, { systemd: true, tmux: true }) }).trim();
     expect(ask('_is_codex_backend cx && echo yes || echo no')).toBe('yes');
-    expect(ask('_is_codex_backend cx-corp && echo yes || echo no')).toBe('no');
+    expect(ask('_is_codex_backend cx-acme && echo yes || echo no')).toBe('no');
     // The identical unguarded comparison lives in `_is_anthropic_backend`, so
     // pin it from the other side in the same fixture.
-    expect(ask('_is_anthropic_backend cx-corp && echo yes || echo no')).toBe('yes');
+    expect(ask('_is_anthropic_backend cx-acme && echo yes || echo no')).toBe('yes');
     expect(ask('_is_anthropic_backend cx && echo yes || echo no')).toBe('no');
   });
 

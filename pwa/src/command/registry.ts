@@ -15,6 +15,11 @@ export interface CommandContext {
   setSkin: (choice: string) => void;
   setTheme: (choice: string) => void;
   openShortcuts: () => void;
+  /** The fleet flows' New session sheet (`useFleetFlows().openNewSession`, D-5468). */
+  openNewSession: () => void;
+  openPalette: () => void;
+  /** The palette is showing: a command that opens it is not offered inside it. */
+  paletteOpen: boolean;
 }
 
 /** A second list a command opens in place of running: "Switch theme…" opens

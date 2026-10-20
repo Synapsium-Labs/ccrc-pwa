@@ -145,7 +145,7 @@ describe('away note', () => {
   it('spells out the swap, which the line only marks', () => {
     const fleet = createFleetStore();
     act(() => { fleet.setState({ roster: TEST_ROSTER }); });
-    render(<SessionActionsSheet session={s({ wrapper: 'claude2', home: 'claude' })}
+    render(<SessionActionsSheet session={s({ wrapper: 'claude9', home: 'claude' })}
                                 open onClose={() => {}} onReap={() => {}} fleet={fleet} />);
     expect(screen.getByText(/Pinned to team·max, running on team·alt/)).toBeInTheDocument();
   });
@@ -185,8 +185,8 @@ describe('archive and restore (workspace lifecycle §5.2: one Archive, Restore o
   /** The archive sheet's own confirm — its primary button, beside the actions sheet's same-named opener. */
   const confirmArchive = async (): Promise<void> => {
     // The archive confirm is the danger variant now (D-5099); its hook class follows (D-5449).
-    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-danger')).not.toBeNull());
-    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-danger')!);
+    await waitFor(() => expect(document.querySelector('.sheet-footer .btn-danger')).not.toBeNull());
+    fireEvent.click(document.querySelector('.sheet-footer .btn-danger')!);
   };
   const posted = (suffix: string) => vi.mocked(fetch).mock.calls.some((c) => String(c[0]).endsWith(suffix));
 
@@ -480,10 +480,10 @@ describe('hold and release', () => {
     const onClose = vi.fn();
     render(<SessionActionsSheet session={f({ held: null })} open onClose={onClose} onReap={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: /^hold$/i }));
-    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'program:agent-evals wave:2/4' } });
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'program:prog-j wave:2/4' } });
     fireEvent.click(screen.getByRole('button', { name: /confirm/i }));
     await waitFor(() => expect(heldCalls).toEqual(
-      [{ id: 'demo-quiet-mesa', reason: 'program:agent-evals wave:2/4' }]));
+      [{ id: 'demo-quiet-mesa', reason: 'program:prog-j wave:2/4' }]));
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -535,10 +535,10 @@ describe('hold and release', () => {
 
 describe('forget — the end-of-life a non-workspace session never had', () => {
   // The exact production shape: a dead wrapper session on a project's main
-  // checkout (`claude-corp-data-internal`), which no other affordance on this
+  // checkout (`claude-acme-project-e`), which no other affordance on this
   // sheet can remove — archive/reap are workspace-only, stop leaves the row.
   const deadWrapper = (over: Partial<FleetSession> = {}): FleetSession =>
-    s({ id: 'claude-corp-demo', wrapper: 'claude-corp', home: 'claude-corp',
+    s({ id: 'claude-acme-demo', wrapper: 'claude-acme', home: 'claude-acme',
         workspace: null, status: 'dead', ...over });
 
   it('offers Forget on a dead non-workspace session only', () => {
@@ -567,7 +567,7 @@ describe('forget — the end-of-life a non-workspace session never had', () => {
     expect(screen.getByText(/transcript and any pasted images stay/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^Forget$/ }));
     await waitFor(() =>
-      expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/api/sessions/claude-corp-demo/forget'))).toBe(true),
+      expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/api/sessions/claude-acme-demo/forget'))).toBe(true),
     );
     expect(onClose).toHaveBeenCalled();
   });
@@ -626,8 +626,8 @@ describe('the substrate gate — destructive affordances refuse a session nobody
     const session = s({ workspace: 'quiet-basin', archivedAt: null });
     renderSheet(session, { archive });
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
-    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-danger')).not.toBeNull());
-    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-danger')!);
+    await waitFor(() => expect(document.querySelector('.sheet-footer .btn-danger')).not.toBeNull());
+    fireEvent.click(document.querySelector('.sheet-footer .btn-danger')!);
     const stop = await screen.findByRole('button', { name: 'Stop only' });
     expect(stop).toBeEnabled();
     (session as { substrate: FleetSession['substrate'] }).substrate = { at: 1, text: 'x' };
@@ -824,8 +824,8 @@ describe('a door that fails still says so, in ccd’s own words', () => {
     const archive = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'worktree-gone' }));
     renderSheet(workspaceSession(), { archive: archive as unknown as typeof api.archive });
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
-    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-danger')).not.toBeNull());
-    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-danger')!);
+    await waitFor(() => expect(document.querySelector('.sheet-footer .btn-danger')).not.toBeNull());
+    fireEvent.click(document.querySelector('.sheet-footer .btn-danger')!);
     const stopOnly = await screen.findByRole('button', { name: 'Stop only' });
 
     // Only now make the box refuse, so the archive path above is unaffected.

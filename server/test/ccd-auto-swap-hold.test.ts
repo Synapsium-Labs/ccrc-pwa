@@ -53,7 +53,7 @@ const AFFINITY_STUBS = `
              capture-pane) printf '%s\\n' "❯ " ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
-  _swap_target() { echo claude2; }; _avail() { return 0; };
+  _swap_target() { echo claude9; }; _avail() { return 0; };
   _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
 `;
 
@@ -64,7 +64,7 @@ const RESCUE_STUBS = `
   tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) echo "API Error: 429 Too Many Requests" ;;
            esac; return 0; };
-  _swap_target() { echo claude2; }; _avail() { return 0; };
+  _swap_target() { echo claude9; }; _avail() { return 0; };
   _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
 `;
 
@@ -85,7 +85,7 @@ describe('_auto_swap_check and a held workspace', () => {
     // vacuous — a fixture that never dispatches proves nothing about a rung.
     seed(); idleStatus();
     h.sh(`${AFFINITY_STUBS} _auto_swap_check ${ID}`);
-    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude2`);
+    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude9`);
   });
 
   it('does NOT relocate a HELD session on the affinity path', () => {
@@ -103,7 +103,7 @@ describe('_auto_swap_check and a held workspace', () => {
     // noticing quickly.
     seed(); hold();
     h.sh(`${RESCUE_STUBS} _auto_swap_check ${ID}`);
-    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude2`);
+    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude9`);
   });
 
   it('defers on a present-but-unreadable hold — `-e` not `-f`', () => {
@@ -121,6 +121,6 @@ describe('_auto_swap_check and a held workspace', () => {
     expect(h.calls().join('\n')).not.toContain('dispatch');
     fs.rmSync(path.join(h.home, '.cc-sessions', `${ID}.hold`));
     h.sh(`${AFFINITY_STUBS} _auto_swap_check ${ID}`);
-    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude2`);
+    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude9`);
   });
 });

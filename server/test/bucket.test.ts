@@ -158,9 +158,9 @@ describe('sessionBucket', () => {
   //     call was a Bash ends without Claude Code ever writing the transition
   //     back, so the file stays on `"status":"shell"` (which
   //     `liveSessionStatus` reads as busy, correctly, for every value but
-  //     `idle`). `claude-b-data-internal` held that wedge for 1h48m while
+  //     `idle`). `claude-b-project-e` held that wedge for 1h48m while
   //     its hook had written `done` 5.7s after the file's last write;
-  //     `expoAI-assistant-warm-mesa` reproduced it during the same sampling
+  //     `project-h-warm-mesa` reproduced it during the same sampling
   //     run. Those rows read `working` for ever.
   //   * The live file can also be ABSENT or unreadable, where `fleet.ts`
   //     leaves `status` at its `'idle'` fallback (an unknown wrapper =>
@@ -283,17 +283,17 @@ describe('sessionBucket', () => {
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const fields = {
-      wrapper: 'claude-a', project: 'claude-a-MekWarLive', workdir: '/data/projects/MekWarLive',
+      wrapper: 'claude-a', project: 'claude-a-project-f', workdir: '/data/projects/project-f',
       uuid: '1'.repeat(36), started: '1',
     };
-    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `claude-a-MekWarLive.${k}`), v);
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `claude-a-project-f.${k}`), v);
     mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
     writeFileSync(path.join(home, '.claude-a', 'sessions', '40613.json'), JSON.stringify({
-      pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/MekWarLive',
-      name: 'mekwar-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
+      pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/project-f',
+      name: 'project-f-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-MekWarLive:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
@@ -301,14 +301,14 @@ describe('sessionBucket', () => {
 
     const withoutHook = await assembleFleet(localIO, cfg, new Tmux(run), 1784600000);
     const waitingHookStates = new Map<string, HookState>([
-      ['claude-a-MekWarLive', { state: 'waiting', updatedAt: 1784600000000, event: null, ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0, interrupted: false }],
+      ['claude-a-project-f', { state: 'waiting', updatedAt: 1784600000000, event: null, ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0, interrupted: false }],
     ]);
     const withWaitingHook = await assembleFleet(
       localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, waitingHookStates,
     );
 
-    const before = withoutHook.find((x) => x.id === 'claude-a-MekWarLive')!;
-    const afterWaiting = withWaitingHook.find((x) => x.id === 'claude-a-MekWarLive')!;
+    const before = withoutHook.find((x) => x.id === 'claude-a-project-f')!;
+    const afterWaiting = withWaitingHook.find((x) => x.id === 'claude-a-project-f')!;
 
     // status stays frozen — the field this task must not move.
     expect(afterWaiting.status).toBe(before.status);
@@ -478,29 +478,29 @@ describe('sessionBucket', () => {
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
     const fields = {
-      wrapper: 'claude-a', project: 'claude-a-MekWarLive', workdir: '/data/projects/MekWarLive',
+      wrapper: 'claude-a', project: 'claude-a-project-f', workdir: '/data/projects/project-f',
       uuid: '1'.repeat(36), started: '1',
     };
-    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `claude-a-MekWarLive.${k}`), v);
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `claude-a-project-f.${k}`), v);
     mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
     writeFileSync(path.join(home, '.claude-a', 'sessions', '40613.json'), JSON.stringify({
-      pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/MekWarLive',
-      name: 'mekwar-a1', status: 'idle', statusUpdatedAt: 1784582728369, version: '2.1.210',
+      pid: 40613, sessionId: '1'.repeat(36), cwd: '/data/projects/project-f',
+      name: 'project-f-a1', status: 'idle', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-MekWarLive:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
     const cfg = loadConfig({ CCRC_HOME: home });
     const sessionStartDone = new Map<string, HookState>([
-      ['claude-a-MekWarLive',
+      ['claude-a-project-f',
         { state: 'done', updatedAt: 1784600000000, event: 'SessionStart', ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0, interrupted: false }],
     ]);
     const fleet = await assembleFleet(
       localIO, cfg, new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, sessionStartDone,
     );
-    const s = fleet.find((x) => x.id === 'claude-a-MekWarLive')!;
+    const s = fleet.find((x) => x.id === 'claude-a-project-f')!;
     // The raw hook field is unchanged — the mail delivery gate still reads it.
     expect(s.hookState).toBe('done');
     // The bucket — what the PWA sections/badges on — is not.

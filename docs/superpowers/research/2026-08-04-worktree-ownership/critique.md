@@ -9,7 +9,7 @@ New measurements taken for this pass (read-only, nothing outside the scratchpad 
 | fact | measured now | as stated to me |
 |---|---|---|
 | free disk on `/` (holds `/srv`) | **48G avail**, 84% used | 51G |
-| `.claude/worktrees/` children | **38 dirs, ~26.3G** (expoAI 20G, custom-tools 5.0G, acme-platform-ts 707M, intake-platform 613M, rp-llm 16M, MekWarLive 0) | 37 trees / 26 GB (breaker, ccd-map) |
+| `.claude/worktrees/` children | **38 dirs, ~26.3G** (project-h 20G, project-d 5.0G, acme-platform-ts 707M, project-n 613M, project-j 16M, project-f 0) | 37 trees / 26 GB (breaker, ccd-map) |
 | RAM | 30G total, **22G available, 5G of 7G swap in use** | — |
 | `ccrc-pwa/.git/info/exclude` | **no non-comment lines** — ccd has never written `.ccrc/` there | — |
 | `ccrc-pwa/.gitignore` | 14 lines; **no `.claude/worktrees/`, no `.worktrees/`, no `docs/`** | — |
@@ -46,7 +46,7 @@ is **not** in the 6. It has no `.claude/worktrees/` ignore and no ccd `.ccrc/` e
 | report | position |
 |---|---|
 | `ccd-map` §2 / §10 #13 | add `.claude/worktrees/` **and** `.worktrees/`, as a loop; critical, last |
-| `ccd-map` Verification R1 | still add it (intake-platform and rp-llm have no `info/exclude` entry), but low-risk |
+| `ccd-map` Verification R1 | still add it (project-n and project-j have no `info/exclude` entry), but low-risk |
 | `breaker` **F14** | **do not use `info/exclude` for this at all** — it is a write into git metadata of repos ccd never initialised (measured: only 6 of 21 projects carry ccd's `.ccrc/` line), it is repo-wide across the user's main checkout, and it hides from the user's own `git status` the only signal that 26G of agent worktrees exist |
 | `git-empirics` E7 note 2 | `info/exclude` is uncommitted per-clone state ccd must install *and re-install after every fresh clone* — a maintenance obligation nobody has costed |
 
@@ -280,7 +280,7 @@ Ranked by blast radius. `[U]` = user's/architect's call. `[M]` = answerable by m
 
 13. **[M] `breaker` F5 has no closure**: the 30s `REAP_SCAN_SECONDS` whole-workspace deadline and the
     per-entry `du -sb` over a 20G child tree. Asserted to fail; never run. If it does fail, every
-    workspace in `expoAI-assistant` answers `tree-unreadable` and the remedy text tells the operator
+    workspace in `project-h` answers `tree-unreadable` and the remedy text tells the operator
     to hand-delete the very children the design exists to manage.
 14. **[M] `ccd-map` §0 items 1/2/5/6 remain UNTESTED** by its own Verification: `_ws_status` on a
     wrapper-less adopted id (decides whether adoption is even reachable), parent-vs-child `flock`
@@ -304,7 +304,7 @@ Ranked by blast radius. `[U]` = user's/architect's call. `[M]` = answerable by m
     proposes to measure it *after* restarting the live server.
 20. **[M] Does `<server-host>.<tailnet>.ts.net` resolve to `<server-host>` or to this box?**
     `migration.md` §0 flags that the CLAUDE.md docserver convention names `<server-host>` while
-    `claude-docserver.service` runs on **openclaw**, and leaves it in "gaps". Any doc link the
+    `docs-preview.service` runs on **the fleet box**, and leaves it in "gaps". Any doc link the
     migration prompt emits depends on the answer.
 21. **[M] Do `deploy/ccrc.env` and `ccrc-agent.env` exist anywhere current?** `ship_env` silently
     no-ops when absent (`if [ -f ]`), so a flipped deploy would never re-ship a rotated token and a
@@ -322,7 +322,7 @@ Ranked by blast radius. `[U]` = user's/architect's call. `[M]` = answerable by m
 |---|---|---|
 | M-A | lock/dirty/unpushed state of all 38 children | `git -C <main> worktree list --porcelain` per project + `git -C <child> status --porcelain` + `rev-list --count` |
 | M-B | which of the 16 sessions are workspaces, and in which projects | read `~/.cc-sessions/*.workspace` / `.workdir` (read-only) |
-| M-C | the 30s scan budget + `du` cost over the 20G tree (F5) | time a `find`/`du` over `expoAI-assistant/.claude/worktrees` — a measurement, not a ccd run |
+| M-C | the 30s scan budget + `du` cost over the 20G tree (F5) | time a `find`/`du` over `project-h/.claude/worktrees` — a measurement, not a ccd run |
 | M-D | `_ws_status` on a wrapper-less id; parent/child `flock`; nested-child reap end-to-end | the existing vitest fixture-HOME harness (`ccdWsHelpers.ts`) — isolated `HOME`, never the live fleet |
 | M-E | does CC set worktree locks here; `cleanupPeriodDays`; sweep evidence | `worktree list --porcelain \| grep locked`; read `~/.claude/settings.json`; mtimes of `.git/worktrees/<name>/` vs child age |
 | M-F | are the 38 children old+clean+unlocked (sweep broken) or dirty/locked (sweep correct) | falls out of M-A + M-E; **this decides Tier-1 #4** |
@@ -351,7 +351,7 @@ Ranked by blast radius. `[U]` = user's/architect's call. `[M]` = answerable by m
 | U-I | **`ccclip` + its 149-line test: port or bury** (C8) | a deliberate coverage loss |
 | U-J | **Do specs/plans move into `ccrc-pwa/docs/superpowers/`** — and therefore the docserver entry and the link convention for this work | where the user wants to read them |
 | U-K | **`ccrc-pwa` PR workflow + required checks + `delete_branch_on_merge`** — and whether the known flake is fixed first | process change |
-| U-L | **The migration agent's permission envelope**: may `claude-ccrc-pwa` restart `ccrc-agent` on a host with 16 live sessions, deploy to `<server-host>`, edit `~/.claude-docserver/config.json`, run ccd verbs? And is it started through ccd (17th unit, C11) or outside the fleet? | authority, not fact — and **the migration prompt cannot be written responsibly without it** |
+| U-L | **The migration agent's permission envelope**: may `claude-ccrc-pwa` restart `ccrc-agent` on a host with 16 live sessions, deploy to `<server-host>`, edit `~/.docs-preview/config.json`, run ccd verbs? And is it started through ccd (17th unit, C11) or outside the fleet? | authority, not fact — and **the migration prompt cannot be written responsibly without it** |
 | U-M | **Rollback**: is "deploy again from the monorepo" a supported recovery after the freeze, and is the previous `~/.local/bin/ccd` kept anywhere? | a commitment, and today there is no versioned copy of the installed ccd |
 
 ---

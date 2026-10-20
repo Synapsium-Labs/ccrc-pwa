@@ -57,7 +57,7 @@ import { reportFrom, type NodeFileRead } from '../src/update/inventory.js';
 import { emptyDelegationCheckpoint } from '../src/coord/delegation-model.js';
 import { encodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
 import { buildDelegationJournalRecord, encodeDelegationJournalRecord } from '../src/coord/delegation-journal.js';
-// CCR-15 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
+// #166 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
 import { COLLECT_LANE_JOURNAL_BASENAME } from '../src/coord/collectLaneJournal.js';
 import {
   SPINE_CONTAINMENT_PROBE, spineRunCalls, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms,
@@ -7465,7 +7465,7 @@ function plantRole(home: string, role: 'fleet' | 'server' | 'both'): void {
 
 /** "Configured" on a fleet node: the puller's timer unit FILE is installed —
  *  `_pool_sync_installed`'s rule, and `plantPoolSyncTimer`'s zero-byte idiom
- *  (`ccdWsHelpers.ts:136-139`): nothing reads the unit's content. */
+ *  (in `ccdWsHelpers.ts`): nothing reads the unit's content. */
 function plantSyncTimer(home: string): void {
   const units = join(home, '.config', 'systemd', 'user');
   mkdirSync(units, { recursive: true });

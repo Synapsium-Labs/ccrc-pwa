@@ -4,7 +4,7 @@
 - **Amended 2026-10-05 by `2026-10-05-stall-watch-settings-design.md`** (stall-watch settings): a level and a quiet
   time chosen in Settings can override the arming markers and `STALL_QUIET_MS`; §4.2's marker paragraph and §10's
   constants line and kill rules say so.
-- **Rev 3.1** applies the MekWarLive coordinator's read-back of S4 (mail 2526), checked against the worker's and the
+- **Rev 3.1** applies the project-f coordinator's read-back of S4 (mail 2526), checked against the worker's and the
   implementer's transcripts. §3.2 gains the measured self-resume contrast. §6.2's clause stops counting an agent whose
   completion says it may resume on its own as a wake; rev 3's text would have allowed S4's last turn-end. §2 prices the
   coordinator's proposed Stop-hook variant, and the S4 row gains what the silence left exposed. Nothing else changed,
@@ -34,13 +34,13 @@
 
 ## 1. The problem, measured
 
-**The ask.** On 2026-09-28 the MekWarLive programme coordinator reported: "Stall prevention is still missing, and
+**The ask.** On 2026-09-28 the project-f programme coordinator reported: "Stall prevention is still missing, and
 it's the most urgent. The only stop hook on this machine is the fleet's session-state recorder; nothing checks that a
 report mail went out. The worker has gone silent for days three times this wave. The fix is either a stop hook in the
 worker's workspace that refuses to end a turn when no mail was sent that turn, or a ccrc watchdog that mails me when a
 working session sits idle for hours."
 
-**Run 67 (battlescape-operational wave 9/9, worker `MekWarLive-swift-harbor`) — four silences, all UTC.**
+**Run 67 (prog-c wave 9/9, worker `project-f-swift-harbor`) — four silences, all UTC.**
 
 | # | Began | Ran | How it began | What prolonged it | What ended it |
 |---|---|---|---|---|---|
@@ -74,7 +74,7 @@ Work runs hold 140 of the 145 gaps of 2 h or more. By cause:
 
 | Cause | Gaps / hours | Stall or legit |
 |---|---|---|
-| waiting on the coordinator | 56 / 1,020 | 23 hand-offs and 15 declared-idle legit; 18 ambiguous, the heavy tail all MekWarLive and called stalls in that coordinator's own mail |
+| waiting on the coordinator | 56 / 1,020 | 23 hand-offs and 15 declared-idle legit; 18 ambiguous, the heavy tail all project-f and called stalls in that coordinator's own mail |
 | usage limit or swap | 26 / 142 | 19 limit waits legit; 5 post-swap idle and 2 Fable-consent blocks are stalls |
 | ended turn, other | 21 / 374 | all stalls |
 | background task | 17 / 180 | 6 confirmed legit, 10 unconfirmed, 1 never returned |
@@ -89,7 +89,7 @@ Strict stalls of 2 h or more ran a median 6.7 h (p90 45 h, max 84 h; the loose v
 ended by a mail nudge 21 times, an operator 9, a task-notification 7, run close 4, a restart 2, other 6 (attribution
 approximate: a verifier found one "mail" ending that an operator prompt preceded).
 
-"The 53 stalls" below means the 49 census-strict stalls of 2 h or more plus the 4 MekWarLive gaps its coordinator's
+"The 53 stalls" below means the 49 census-strict stalls of 2 h or more plus the 4 project-f gaps its coordinator's
 own mail calls stalls.
 
 ## 2. What was asked, and what this spec does instead
@@ -106,7 +106,7 @@ The coordinator offered two fixes. This spec builds the second, widened, and doe
 - The design-grade gate built for this review (held turn-ends, exempting only waits on a main-launched Agent, Workflow,
   Monitor or cron) fires 36 times a day (992 in 27.6 days), 87% followed by activity within 30 minutes, and catches 25
   of the 36.
-- After S4 the MekWarLive coordinator proposed a third variant (mail 2526): refuse a turn-end with no mail while a
+- After S4 the project-f coordinator proposed a third variant (mail 2526): refuse a turn-end with no mail while a
   background agent or Monitor is registered, or while the tree is dirty. That condition is the complement of the
   tightest variant's exemption. 2,199 of the no-mail turn-ends had background work outstanding, about 80 a day before
   the dirty-tree term is added. It reaches the 9–17 stalls that exemption loses, plus whatever the dirty-tree term
@@ -391,7 +391,7 @@ slug (never `programTitle`), integers, mail kinds and server-formatted UTC times
 or a task description. A value that fails its pattern is replaced by `(unprintable)`, never quoted or escaped. The r1
 body carries its own protocol, so no skill must be installed first. For S4 it would read:
 
-> stall-check from the ccrc stall watch (server), run 67 — battlescape-operational wave 9/9.
+> stall-check from the ccrc stall watch (server), run 67 — prog-c wave 9/9.
 > Your main loop has been idle since 2026-09-28T21:56:31Z (2h 0m). Your last mail on this run: #2509 status at
 > 21:17:43Z. Newest mail to you on this run: #2510 answer at 21:19:17Z.
 > Background work you ended your turn to wait for may have finished or died without a notice that can wake you: a task

@@ -412,12 +412,12 @@ describe('the floor/previous carry-forward (fix round 1, D-3213, corrected by th
   it('the shared per-node deadline expiring reads the floor as unmeasured too (m-3), never absent', async () => {
     const b = box('ccrc-inv-floor-deadline-');
     plant(b.ccrcDir, FULL);
-    // Only the floor's own read hangs, so this isolates the DEADLINE path (readNodeFile's own `deadline?.expired()`
-    // check, not an EACCES/chmod-based unreadable) from every other file. Every OTHER file answers from memory
-    // (centralised-update wave 19, B5): each of its lstat/stat/read promises settles in the microtask queue, which
-    // drains before any timer callback runs, so the 50 ms deadline cannot expire them first however loaded the box
-    // is. Over real fs they raced the one shared deadline, and under load node-id lost: the row was then keyed by
-    // label, and `node(U1)` answered null.
+    // Only the floor's own read hangs, so this isolates the DEADLINE path (`deadline.race` answering null for
+    // readNodeFile's hung read, not an EACCES/chmod-based unreadable) from every other file. Every OTHER file
+    // answers from memory (centralised-update wave 19, B5): each of its lstat/stat/read promises settles in the
+    // microtask queue, which drains before any timer callback runs, so the 50 ms deadline cannot expire them first
+    // however loaded the box is. Over real fs they raced the one shared deadline, and under load node-id lost: the
+    // row was then keyed by label, and `node(U1)` answered null.
     const planted = new Map<string, string>((Object.keys(FULL) as Measured[])
       .map((k) => [NODE_FILES[k], readFileSync(path.join(b.ccrcDir, NODE_FILES[k]), 'utf8')]));
     const bodyOf = (p: string): string | undefined => planted.get(path.basename(p));

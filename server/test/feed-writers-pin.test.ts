@@ -55,7 +55,9 @@ import type { DeadCoordinatorActOutcome } from '../src/deadCoordinator.js';
 import { stopDonePass, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
 import { STOP_DONE_GRACE_MS } from '../src/stopDone.js';
 import { CHILD, PARENT, hookInput, requestBody, standardFixture, type Approvals } from './approvalsHarness.js';
-import { degradeLine, feedRecorder, flushedAfterRecord, withoutFlush, type FeedRecorder } from './feedWriterFixture.js';
+import {
+  catchUpBody, catchUpExpected, degradeLine, feedRecorder, flushedAfterRecord, interruptDeps, withoutFlush, type FeedRecorder,
+} from './feedWriterFixture.js';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -66,7 +68,7 @@ const B = 'acct-b-project-a';
 
 /** One registry entry and one live-status file per id (all `busy`, so the priming tick records `busy` and a later
  *  `markIdle` is a real busy→idle edge, the `done` push's lane), under one wrapper. `push-copy.test.ts`'s seeding. */
-const pushRig = async () => {
+const pushRig = async (o: { coord?: false; notifyLog?: false } = {}) => {
   const home = mkTmp('ccrc-feed-pin-');
   const rec = await feedRecorder(home);
   const reg = path.join(home, '.cc-sessions');
@@ -94,7 +96,8 @@ const pushRig = async () => {
     if (args[0] === 'capture-pane') return { code: 0, stdout: 'ready\n❯ \n', stderr: '' };
     return { code: 0, stdout: '', stderr: '' };
   };
-  const deps = { ...testDeps(home, run), push: rec.push, presence: rec.presence, notifyLog: rec.notifyLog, coord: rec.coord };
+  const deps = { ...testDeps(home, run), push: rec.push, presence: rec.presence,
+    ...(o.notifyLog === false ? {} : { notifyLog: rec.notifyLog }), ...(o.coord === false ? {} : { coord: rec.coord }) };
   const w = new FleetWatcher(deps as never, new Bus(), 10_000, path.join(home, 'state-cache.json'));
   await w.tick();                                          // priming: no push, no record
   /** A run bound to session A, its watermark seeded by the priming tick. */
@@ -104,7 +107,7 @@ const pushRig = async () => {
     rec.coord.setSession(r.id, A);
     return r.id;
   };
-  return { rec, w, markIdle: (id: string) => live(id, 'idle'), openRun };
+  return { home, rec, w, markIdle: (id: string) => live(id, 'idle'), openRun };
 };
 
 /** The ring as catch-up serves it, against the objects `record` returned: the same bytes, key order included. */
@@ -191,6 +194,44 @@ describe("pushOne's archive-failure isolation (D-5850)", () => {
     expect(r.rec.warned()).toContain(degradeLine('feed archive degraded, ring/push unaffected'));
     catchUpMatchesRing(r.rec);
   });
+});
+
+describe("pushOne at the funnel's edges: catch-up bytes, no coord.db, no notify log (D-5857, Task C1c)", () => {
+  it("the catch-up response's bytes, filled through pushOne: pushOne's key order, the response's four keys", async () => {
+    const r = await pushRig();
+    r.markIdle(A);
+    await r.w.tick();
+    const [ev] = r.rec.ring;
+    expect(await catchUpBody(r.home, r.rec.notifyLog)).toBe(catchUpExpected(r.rec.notifyLog, [
+      { kind: 'done', sessionId: A, title: ev!.title, body: ev!.body, runId: null, seq: 1, at: ev!.at },
+    ]));
+  });
+
+  it('a box with no coord.db still records the ring, pushes, and serves catch-up: no archive is attempted', async () => {
+    const r = await pushRig({ coord: false });
+    const at = r.rec.mark();
+    r.markIdle(A);
+    await r.w.tick();
+    expect(withoutFlush(r.rec.since(at))).toEqual(['record', 'push']);
+    expect(flushedAfterRecord(r.rec.since(at))).toBe(true);
+    expect(r.rec.archived).toEqual([]);
+    const [ev] = r.rec.ring;
+    expect(await catchUpBody(r.home, r.rec.notifyLog)).toBe(catchUpExpected(r.rec.notifyLog, [
+      { kind: 'done', sessionId: A, title: ev!.title, body: ev!.body, runId: null, seq: 1, at: ev!.at },
+    ]));
+  });
+
+  it('a box with no notify log archives nothing ("a feed row that mirrors nothing is not an archive"), and still pushes',
+    async () => {
+      const r = await pushRig({ notifyLog: false });
+      const at = r.rec.mark();
+      r.markIdle(A);
+      await r.w.tick();
+      expect(r.rec.since(at)).toEqual(['push']);
+      expect(r.rec.ring).toEqual([]);
+      expect(r.rec.archived).toEqual([]);
+      expect(r.rec.pushes.map((p) => p.tag)).toEqual([`done-${A}`]);
+    });
 });
 
 // ─── the idle nudge's landing gate ──────────────────────────────────────────────────────────────────────────────────
@@ -381,7 +422,7 @@ describe("interruptlog.ts's recordInterrupt: recorded always, never pushed (D-58
   it('an interrupt is archived, never pushed, and flushed after the ring record', async () => {
     const rec = await feedRecorder(mkTmp('ccrc-feed-pin-interrupt-'));
     rec.setVisible([A]);                                     // the record gate does not read presence
-    recordInterrupt({ notifyLog: rec.notifyLog, coord: rec.coord }, A, 'keycap', 'sent');
+    recordInterrupt(interruptDeps(rec), A, 'keycap', 'sent');
     expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
     expect(flushedAfterRecord(rec.calls)).toBe(true);
     expect(rec.archived.map((e) => [e.kind, e.sessionId, e.title])).toEqual([['interrupt', A, 'interrupt · keycap']]);
@@ -392,7 +433,7 @@ describe("interruptlog.ts's recordInterrupt: recorded always, never pushed (D-58
   it("recordInterrupt's degrade sentence: a failed archive never fails the interrupt, and the flush still follows", async () => {
     const rec = await feedRecorder(mkTmp('ccrc-feed-pin-interrupt-'));
     rec.archiveThrowsOn('every');
-    expect(() => { recordInterrupt({ notifyLog: rec.notifyLog, coord: rec.coord }, A, 'keycap', 'sent'); }).not.toThrow();
+    expect(() => { recordInterrupt(interruptDeps(rec), A, 'keycap', 'sent'); }).not.toThrow();
     expect(withoutFlush(rec.calls)).toEqual(['record', 'archive']);
     expect(flushedAfterRecord(rec.calls)).toBe(true);
     expect(rec.ring.map((e) => e.kind)).toEqual(['interrupt']);
@@ -406,7 +447,7 @@ describe("server.ts's operator-answer pair (POST /api/sessions/:id/ask): recorde
   const ASK_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\nEnter to select\n';
   const PARENT = 'acct-a-project-a-coordinator';
 
-  const answered = async (fail: boolean) => {
+  const answered = async (fail: boolean, visible = true) => {
     const home = mkTmp('ccrc-feed-pin-ask-');
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
@@ -423,7 +464,7 @@ describe("server.ts's operator-answer pair (POST /api/sessions/:id/ask): recorde
     const run: Runner = async (_cmd, args) => (args[0] === 'capture-pane'
       ? { code: 0, stdout: ASK_PANE, stderr: '' } : { code: 0, stdout: '', stderr: '' });
     const rec = await feedRecorder(home);
-    rec.setVisible([B]);                                     // the record gate does not read presence
+    rec.setVisible(visible ? [B] : []);                      // the record gate does not read presence
     const app = await buildServer({ ...testDeps(home, run), coord: rec.coord, notifyLog: rec.notifyLog,
       push: rec.push as never, presence: rec.presence as never });
     try {
@@ -433,7 +474,7 @@ describe("server.ts's operator-answer pair (POST /api/sessions/:id/ask): recorde
       const at = rec.mark();
       const res = await app.inject({ method: 'POST', url: `/api/sessions/${B}/ask`,
         payload: { askKey: ASK_KEY, optionIndexes: [1] } });
-      return { rec, res, calls: rec.since(at), id };
+      return { home, rec, res, calls: rec.since(at), id };
     } finally {
       await app.close();
     }
@@ -448,6 +489,24 @@ describe("server.ts's operator-answer pair (POST /api/sessions/:id/ask): recorde
     expect(rec.archived.map((e) => [e.kind, e.sessionId, e.title])).toEqual([['ask', B, 'question answered']]);
     expect(rec.pushes).toEqual([]);
   });
+
+  it('with no one looking at the session the answer is still recorded and archived, and still never pushed (D-5857, Task C1c)',
+    async () => {
+      const { rec, res, calls } = await answered(false, false);
+      expect(res.statusCode).toBe(200);
+      expect(withoutFlush(calls)).toEqual(['record', 'archive']);
+      expect(rec.archived.map((e) => [e.kind, e.sessionId, e.title])).toEqual([['ask', B, 'question answered']]);
+      expect(rec.pushes, "the sink carries deps.push now; only 'record-only' keeps it silent").toEqual([]);
+    });
+
+  it("the catch-up response's bytes, filled through the operator-answer pair: the pair's key order (D-5857, Task C1c)",
+    async () => {
+      const { home, rec } = await answered(false);
+      const [ev] = rec.ring;
+      expect(await catchUpBody(home, rec.notifyLog)).toBe(catchUpExpected(rec.notifyLog, [
+        { kind: 'ask', sessionId: B, runId: null, title: 'question answered', body: ev!.body, seq: 1, at: ev!.at },
+      ]));
+    });
 
   it('a failed archive leaves the answer 200 and the row answered, flushes after the record, and says so byte for byte',
     async () => {
@@ -523,6 +582,16 @@ describe("coord/routes.ts POST /api/coord/caps: recorded always, never pushed (D
       expect(rec.pushes).toEqual([]);
       expect(rec.warned()).toContain(degradeLine('caps written, feed archive degraded'));
     });
+  it("caps's answer is the same status and bytes whether the archive lands or throws: a feed write never fails the route (D-5858, Task C1d)",
+    async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(1_790_000_200_000);   // the view carries the write's moment: one clock for both
+      const landed = await posted(false);
+      const failed = await posted(true);
+      expect(landed.res.statusCode, landed.res.body).toBe(200);
+      expect(failed.res.statusCode, failed.res.body).toBe(200);
+      expect(failed.res.body.startsWith('{"ok":true,')).toBe(true);
+      expect(failed.res.body).toBe(landed.res.body);
+    });
 });
 
 describe("coord/routes.ts POST /api/coord/stall-watch: recorded always, never pushed (D-5851)", () => {
@@ -560,6 +629,16 @@ describe("coord/routes.ts POST /api/coord/stall-watch: recorded always, never pu
     expect(rec.pushes).toEqual([]);
     expect(rec.warned()).toContain(degradeLine('stall watch settings written, feed archive degraded'));
   });
+  it("stall-watch's answer is the same status and bytes whether the archive lands or throws: a feed write never fails the route (D-5858, Task C1d)",
+    async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(1_790_000_200_000);   // the view carries the write's moment: one clock for both
+      const landed = await posted(false);
+      const failed = await posted(true);
+      expect(landed.res.statusCode, landed.res.body).toBe(200);
+      expect(failed.res.statusCode, failed.res.body).toBe(200);
+      expect(failed.res.body.startsWith('{"ok":true,')).toBe(true);
+      expect(failed.res.body).toBe(landed.res.body);
+    });
 });
 
 describe("coord/routes.ts POST /api/coord/collect-lane: recorded always, never pushed (D-5851)", () => {
@@ -611,6 +690,16 @@ describe("coord/routes.ts POST /api/coord/collect-lane: recorded always, never p
     expect(rec.pushes).toEqual([]);
     expect(rec.warned()).toContain(degradeLine('collector setting written, feed archive degraded'));
   });
+  it("collect-lane's answer is the same status and bytes whether the archive lands or throws: a feed write never fails the route (D-5858, Task C1d)",
+    async () => {
+      vi.spyOn(Date, 'now').mockReturnValue(1_790_000_200_000);   // the view carries the write's moment: one clock for both
+      const landed = await posted(false);
+      const failed = await posted(true);
+      expect(landed.res.statusCode, landed.res.body).toBe(200);
+      expect(failed.res.statusCode, failed.res.body).toBe(200);
+      expect(failed.res.body.startsWith('{"ok":true,')).toBe(true);
+      expect(failed.res.body).toBe(landed.res.body);
+    });
 });
 
 describe("coord/routes.ts POST /api/asks/:id/answer (the parent's answer): recorded always, never pushed (D-5851)", () => {
@@ -648,7 +737,7 @@ describe("coord/routes.ts POST /api/asks/:id/answer (the parent's answer): recor
       const at = rec.mark();
       const res = await app.inject({ method: 'POST', url: `/api/asks/${id}/answer`, headers: { 'x-ccrc-mail-token': TOKEN },
         payload: { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [1] } });
-      return { rec, res, calls: rec.since(at), id };
+      return { home, rec, res, calls: rec.since(at), id };
     } finally { await app.close(); }
   };
 
@@ -674,6 +763,12 @@ describe("coord/routes.ts POST /api/asks/:id/answer (the parent's answer): recor
     expect(rec.archived).toEqual([]);
     expect(rec.pushes).toEqual([]);
     expect(rec.warned()).toContain(degradeLine('ask answered, feed archive degraded'));
+  });
+  it("the parent's answer is the same status and bytes whether the archive lands or throws (D-5858, Task C1d)", async () => {
+    const landed = await answered(false);
+    const failed = await answered(true);
+    expect([landed.res.statusCode, landed.res.body]).toEqual([200, '{"ok":true}']);
+    expect([failed.res.statusCode, failed.res.body]).toEqual([200, '{"ok":true}']);
   });
 });
 
@@ -735,6 +830,15 @@ describe("coord/routes.ts POST /api/approvals/:id/rule (the ruling's journal row
         expect(pushed, 'the ruling is never pushed').toEqual([]);
         expect(rec.warned()).toContain(degradeLine('ruling stored, feed archive degraded'));
       });
+    it('the ruling answers the same status and bytes whether the archive lands or throws (D-5858, Task C1d)', async () => {
+      const landed = await ruled(false, 'deny', false);
+      const landedAnswer = [landed.res.statusCode, landed.res.body];
+      await landed.f.close();
+      fx = undefined;
+      const failed = await ruled(true, 'deny', false);
+      expect(landedAnswer).toEqual([200, '{"ok":true,"state":"denied"}']);
+      expect([failed.res.statusCode, failed.res.body]).toEqual([200, '{"ok":true,"state":"denied"}']);
+    });
   });
 
 // ─── coord/childReclaim.ts's three writers (written natively, band 3: the destructive path) ──────────────────────────

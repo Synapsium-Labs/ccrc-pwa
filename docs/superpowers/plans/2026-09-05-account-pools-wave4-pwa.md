@@ -146,7 +146,7 @@ describe('accountPool — the ONE reader of RosterWire.pool', () => {
   });
 
   it('answers null for an account the roster carries with no pool', () => {
-    expect(accountPool(pooled({ claude: 'pool-a' }), 'claude2')).toBeNull();
+    expect(accountPool(pooled({ claude: 'pool-a' }), 'claude9')).toBeNull();
   });
 
   it('answers null when the key is absent altogether — an older server is untagged, not unknown', () => {
@@ -205,15 +205,15 @@ describe('poolSide — the rule, composed and never restated', () => {
 });
 
 describe('splitByPool', () => {
-  const roster = pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' });
-  const all = ['claude', 'claude2', 'claude-corp', 'claude-dev0'];
+  const roster = pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' });
+  const all = ['claude', 'claude9', 'claude-acme', 'claude-lab0'];
 
   it('puts in-pool and untagged accounts on the eligible side and the rest on the crossing side', () => {
-    // `claude-dev0` carries no pool: an untagged ACCOUNT serves a tagged
+    // `claude-lab0` carries no pool: an untagged ACCOUNT serves a tagged
     // project, so it is eligible, not crossing.
     const split = splitByPool(roster, all, tagged('pool-a'));
-    expect(split.eligible).toEqual(['claude', 'claude-corp', 'claude-dev0']);
-    expect(split.crossing).toEqual(['claude2']);
+    expect(split.eligible).toEqual(['claude', 'claude-acme', 'claude-lab0']);
+    expect(split.crossing).toEqual(['claude9']);
     expect(split.unknown).toBe(false);
   });
 
@@ -241,10 +241,10 @@ describe('splitByPool', () => {
   });
 
   it('preserves the caller order it was handed and returns fresh arrays', () => {
-    const wrappers = ['claude2', 'claude'];
+    const wrappers = ['claude9', 'claude'];
     const split = splitByPool(roster, wrappers, tagged('pool-a'));
     expect(split.eligible).toEqual(['claude']);
-    expect(split.crossing).toEqual(['claude2']);
+    expect(split.crossing).toEqual(['claude9']);
     expect(split.eligible).not.toBe(wrappers);
   });
 });
@@ -291,7 +291,7 @@ describe('projectPoolOf — the frame, read by project name', () => {
 
 describe('poolOptions — derived, never enumerated', () => {
   it('lists each distinct pool name once, in roster order', () => {
-    expect(poolOptions(pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })))
+    expect(poolOptions(pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' })))
       .toEqual(['pool-a', 'pool-b']);
   });
 
@@ -301,7 +301,7 @@ describe('poolOptions — derived, never enumerated', () => {
 });
 
 describe('poolLabelList', () => {
-  const roster = pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' });
+  const roster = pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' });
 
   it('names only the HOME-ABLE accounts that can serve this pool, by label', () => {
     // `gpt` is homeAble:false and is never consulted for a placement fact —
@@ -619,31 +619,31 @@ describe('account pools', () => {
   it('swap(id, w) posts the complete ordinary swap request', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
-    await api.swap('s1', 'claude2');
+    await api.swap('s1', 'claude9');
     expect(fetchImpl.mock.calls[0]).toEqual([
       '/api/sessions/s1/swap',
       { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ wrapper: 'claude2' }) },
+        body: JSON.stringify({ wrapper: 'claude9' }) },
     ]);
   });
 
   it('swap(id, w, {crossPool:false}) is the same complete ordinary request', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
-    await api.swap('s1', 'claude2', { crossPool: false });
+    await api.swap('s1', 'claude9', { crossPool: false });
     expect(fetchImpl.mock.calls[0]).toEqual([
       '/api/sessions/s1/swap',
       { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ wrapper: 'claude2' }) },
+        body: JSON.stringify({ wrapper: 'claude9' }) },
     ]);
   });
 
   it('swap(id, w, {crossPool:true}) declares the crossing on the wire', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
-    await api.swap('s1', 'claude2', { crossPool: true });
+    await api.swap('s1', 'claude9', { crossPool: true });
     const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2', crossPool: true });
+    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude9', crossPool: true });
   });
 
   it('createSession omits crossPool entirely unless it is true', async () => {
@@ -836,7 +836,7 @@ diverge from reported tests.
 
 - [ ] **Step 6: Prove the guard by mutation**
 
-1. In `swap`, change the ternary to `{ wrapper, crossPool: opts?.crossPool === true }`. Expected red: both complete ordinary-request tests receive a body containing `crossPool:false` instead of `JSON.stringify({ wrapper: 'claude2' })`.
+1. In `swap`, change the ternary to `{ wrapper, crossPool: opts?.crossPool === true }`. Expected red: both complete ordinary-request tests receive a body containing `crossPool:false` instead of `JSON.stringify({ wrapper: 'claude9' })`.
 2. In `createSession`, change the body to plain `rest` regardless. Expected red: `createSession omits crossPool entirely unless it is true` — the third assertion fails, `expected {…} to deeply equal { …, crossPool: true }`.
 3. Delete the `'pool-mismatch'` entry from `API_ERROR_TEXT`. Expected red: `uses the unchanged generic mismatch sentence when either pool name is absent` receives the raw `pool-mismatch` slug instead of D-2620's generic fallback.
 4. **D-2618 URL pin:** change only `swap`'s suffix from `/swap` to `/swop`. Expected red: both complete ordinary-request tests receive `/api/sessions/s1/swop` instead of `/api/sessions/s1/swap`. Restore by exact inverse.
@@ -1327,7 +1327,7 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
   it('names only the accounts the project\'s pool admits', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={null}
-                        roster={pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })}
+                        roster={pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
     const btn = screen.getByRole('button', { name: /New workspace on demo/ });
     expect(btn.getAttribute('aria-label')).toContain('team·alt and team·d');
@@ -1337,7 +1337,7 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
   it('says the pool is empty rather than listing nobody', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
                         projected={null}
-                        roster={pooled({ claude: 'pool-a', claude2: 'pool-a', 'claude-corp': 'pool-a', 'claude-dev0': 'pool-a' })}
+                        roster={pooled({ claude: 'pool-a', claude9: 'pool-a', 'claude-acme': 'pool-a', 'claude-lab0': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
     expect(screen.getByRole('button', { name: 'New workspace on demo — nothing is in pool pool-b' }))
       .toBeInTheDocument();
@@ -1722,11 +1722,11 @@ const storeWith = (roster: RosterWire[]): FleetStore => {
 
 describe('PoolSheet options', () => {
   it('offers each distinct roster pool ONCE, plus none — never a list from source', () => {
-    // `claude` and `claude-corp` are both in pool-a; `claude2` is in pool-b.
+    // `claude` and `claude-acme` are both in pool-a; `claude9` is in pool-b.
     // Three tagged accounts, two options. A hand-written list would not even
     // notice the duplicate, and would name the operator's real pools in a file
     // this repo ships publicly.
-    const store = storeWith(pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' }));
+    const store = storeWith(pooled({ claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' }));
     render(<PoolSheet project="demo" open onClose={vi.fn()} fleet={store} />);
     expect(screen.getAllByRole('button', { name: /^pool / }).map((b) => b.textContent))
       .toEqual(['pool-a', 'pool-b']);
@@ -1769,7 +1769,7 @@ describe('PoolSheet writes', () => {
   it('toasts the unknown-pool warning — the empty pool, named before it strands', async () => {
     vi.spyOn(api, 'setProjectPool')
       .mockResolvedValue({ ok: true, pool: { state: 'tagged', name: 'pool-b' }, warning: 'unknown-pool' });
-    const store = storeWith(pooled({ claude: 'pool-a', claude2: 'pool-b' }));
+    const store = storeWith(pooled({ claude: 'pool-a', claude9: 'pool-b' }));
     render(<PoolSheet project="demo" open onClose={vi.fn()} fleet={store} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'pool pool-b' }));
@@ -2102,19 +2102,19 @@ describe('SwapSheet and the pool line', () => {
   const tagged = (project: string, name: string): ProjectPoolsWire =>
     ({ listed: true, byProject: { [project]: { state: 'tagged', name } }, enforcement: 'enforced' });
 
-  // `claude` and `claude-corp` are pool-a; `claude2` is pool-b; `claude-dev0`
+  // `claude` and `claude-acme` are pool-a; `claude9` is pool-b; `claude-lab0`
   // and `gpt` carry no pool. The session runs on `claude`, so the sheet's own
   // filter drops it and the targets are the other four; the project is pool-a,
-  // so `claude2` (team·alt) is the one crossing.
-  const POOLS = { claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' };
+  // so `claude9` (team·alt) is the one crossing.
+  const POOLS = { claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' };
 
   it('offers only the accounts the project pool admits, and counts the rest behind a disclosure', () => {
     const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={poolStore([s], POOLS, tagged('demo', 'pool-a'))} />);
 
-    expect(screen.getByRole('button', { name: /team·b/ })).toBeInTheDocument();      // claude-corp, in pool
-    expect(screen.getByRole('button', { name: /team·d/ })).toBeInTheDocument();      // claude-dev0, untagged
-    expect(screen.queryByRole('button', { name: /team·alt/ })).not.toBeInTheDocument(); // claude2, other pool
+    expect(screen.getByRole('button', { name: /team·b/ })).toBeInTheDocument();      // claude-acme, in pool
+    expect(screen.getByRole('button', { name: /team·d/ })).toBeInTheDocument();      // claude-lab0, untagged
+    expect(screen.queryByRole('button', { name: /team·alt/ })).not.toBeInTheDocument(); // claude9, other pool
     expect(screen.getByRole('button', { name: 'show other pools (1)' })).toBeInTheDocument();
   });
 
@@ -2140,7 +2140,7 @@ describe('SwapSheet and the pool line', () => {
     expect(screen.getByText(/pool-a/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Move' }));
-    expect(swap).toHaveBeenCalledWith(s.id, 'claude2', { crossPool: true });
+    expect(swap).toHaveBeenCalledWith(s.id, 'claude9', { crossPool: true });
   });
 
   it('an ELIGIBLE pick posts the byte-identical two-argument call', async () => {
@@ -2154,7 +2154,7 @@ describe('SwapSheet and the pool line', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /team·b/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
-    expect(swap).toHaveBeenCalledWith(s.id, 'claude-corp');
+    expect(swap).toHaveBeenCalledWith(s.id, 'claude-acme');
     expect(swap.mock.calls[0]).toHaveLength(2);
   });
 
@@ -2200,7 +2200,7 @@ Run:
 cd pwa && ./node_modules/.bin/vitest run test/swap-sheet.test.tsx
 ```
 
-Expected: FAIL — `Unable to find an accessible element with the role "button" and name "show other pools (1)"`, and `expected "swap" to be called with [ …, 'claude2', { crossPool: true } ]`.
+Expected: FAIL — `Unable to find an accessible element with the role "button" and name "show other pools (1)"`, and `expected "swap" to be called with [ …, 'claude9', { crossPool: true } ]`.
 
 - [ ] **Step 3: Give `AccountRow` a pool chip**
 
@@ -2428,8 +2428,8 @@ Expected: PASS on all four; `tsc` exits 0.
 - [ ] **Step 7: Prove the guard by mutation**
 
 1. Render `wrappers` instead of `split.eligible` in the default list. Expected red: `offers only the accounts the project pool admits` — `expected null not to be null` on the `team·alt` `queryByRole`.
-2. In `move`, replace the ternary with `api.swap(session.id, wrapper, { crossPool: cross })`. Expected red: `an ELIGIBLE pick posts the byte-identical two-argument call` — `expected [ 's1', 'claude-corp', { crossPool: false } ] to have a length of 2 but got 3`.
-3. In `move`, set `const cross = true;`. Expected red: the same test — `expected "swap" to be called with [ 's1', 'claude-corp' ]`.
+2. In `move`, replace the ternary with `api.swap(session.id, wrapper, { crossPool: cross })`. Expected red: `an ELIGIBLE pick posts the byte-identical two-argument call` — `expected [ 's1', 'claude-acme', { crossPool: false } ] to have a length of 2 but got 3`.
+3. In `move`, set `const cross = true;`. Expected red: the same test — `expected "swap" to be called with [ 's1', 'claude-acme' ]`.
 4. In `splitByPool`'s call here, pass `projectPool ?? { state: 'untagged' }`. Expected red: `offers EVERY account with no disclosure and one honest note when the pool is not known from here` — `Unable to find an element with the text: /pool is not known from here/i`. (This is the null-treated-as-a-pool mutant row 26 names.)
 5. Delete `crossingClause` from the consequence. Expected red: `names the crossing in the confirm sentence and posts crossPool on the wire` — `Unable to find an element with the text: /crosses pools/i`.
 6. Drop `poolChip={accountPool(roster, w)}` from the crossing rows. Expected red: `reveals the crossing rows with a pool chip when the disclosure is opened` — `expected '…team·alt…' to contain 'pool · pool-b'`.
@@ -2500,7 +2500,7 @@ const openAtStepTwo = async (projects: ProjectRow[], byId: Record<string, string
   fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
 };
 
-const POOLS = { claude: 'pool-a', claude2: 'pool-b' };
+const POOLS = { claude: 'pool-a', claude9: 'pool-b' };
 
 describe('NewSessionSheet step 2 and the pool line', () => {
   it('lists the projects this account may take, and counts the rest behind the disclosure', async () => {
@@ -2790,8 +2790,8 @@ describe('the off-pool marker', () => {
     TEST_ROSTER.map((a) => ({ ...a, pool: byId[a.id] ?? null }));
 
   it('marks the account cell when both pools are known and differ', () => {
-    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
-                        roster={pooled({ claude2: 'pool-b' })}
+    render(<SessionLine session={s({ wrapper: 'claude9', home: 'claude9' })}
+                        roster={pooled({ claude9: 'pool-b' })}
                         projectPool={{ state: 'tagged', name: 'pool-a' }}
                         onOpen={() => {}} onActions={() => {}} />);
     const acct = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
@@ -2800,34 +2800,34 @@ describe('the off-pool marker', () => {
 
   it('says nothing when only one side is known — an untagged account is not off-pool', () => {
     const { rerender } = render(
-      <SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
+      <SessionLine session={s({ wrapper: 'claude9', home: 'claude9' })}
                    roster={pooled({})} projectPool={{ state: 'tagged', name: 'pool-a' }}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
 
     // …and the mirror: the account is tagged, the project is not.
-    rerender(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
-                          roster={pooled({ claude2: 'pool-b' })} projectPool={{ state: 'untagged' }}
+    rerender(<SessionLine session={s({ wrapper: 'claude9', home: 'claude9' })}
+                          roster={pooled({ claude9: 'pool-b' })} projectPool={{ state: 'untagged' }}
                           onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
   });
 
   it('says nothing when the names agree, and nothing at all with no projectPool', () => {
     const { rerender } = render(
-      <SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
-                   roster={pooled({ claude2: 'pool-a' })} projectPool={{ state: 'tagged', name: 'pool-a' }}
+      <SessionLine session={s({ wrapper: 'claude9', home: 'claude9' })}
+                   roster={pooled({ claude9: 'pool-a' })} projectPool={{ state: 'tagged', name: 'pool-a' }}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
 
-    rerender(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
-                          roster={pooled({ claude2: 'pool-b' })}
+    rerender(<SessionLine session={s({ wrapper: 'claude9', home: 'claude9' })}
+                          roster={pooled({ claude9: 'pool-b' })}
                           onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
   });
 
   it('is silent on a dead row', () => {
-    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2', status: 'dead', bucket: 'dead' })}
-                        roster={pooled({ claude2: 'pool-b' })}
+    render(<SessionLine session={s({ wrapper: 'claude9', home: 'claude9', status: 'dead', bucket: 'dead' })}
+                        roster={pooled({ claude9: 'pool-b' })}
                         projectPool={{ state: 'tagged', name: 'pool-a' }}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
@@ -2838,8 +2838,8 @@ describe('the off-pool marker', () => {
     // exactly how that happens. One element, one accessible name: off-pool is
     // the sharper fact and already names the account it is running on, so it
     // is the sentence that wins. `data-away` and the ↗ are untouched.
-    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
-                        roster={pooled({ claude2: 'pool-b' })}
+    render(<SessionLine session={s({ wrapper: 'claude9', home: 'claude' })}
+                        roster={pooled({ claude9: 'pool-b' })}
                         projectPool={{ state: 'tagged', name: 'pool-a' }}
                         onOpen={() => {}} onActions={() => {}} />);
     const acct = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
@@ -3268,7 +3268,7 @@ wave 1, and **D-1683** (the cold-start `pools` frame the store's `null` slot wai
 deviation found while executing this plan is allocated in its own call at the moment it is found.
 
 - **D-2591 — The Task 1 `poolLabelList` test block contradicted itself.** Its
-  shared roster deliberately leaves the home-able `claude-dev0` untagged, and
+  shared roster deliberately leaves the home-able `claude-lab0` untagged, and
   its pool-b expectation correctly includes that account (`team·alt and
   team·d`); its pool-c expectation incorrectly excluded the same account by
   asserting an empty list. D-1664's shared `poolRule` admits an untagged
@@ -3394,7 +3394,7 @@ deviation found while executing this plan is allocated in its own call at the mo
   swap's `{ wrapper }` literal is owned inside `api.ts`, so its whole wire shape
   is stable at this seam. Ruling: the absent and explicit-false swap tests each
   assert the URL plus the complete `RequestInit` — POST, JSON content type, and
-  `JSON.stringify({ wrapper: 'claude2' })`. Named URL and init mutations must
+  `JSON.stringify({ wrapper: 'claude9' })`. Named URL and init mutations must
   reach those assertions and red, then be restored by exact inverse.
 
 - **D-2619 — `apiErrorText` must preserve malformed versus unreadable in its

@@ -8,7 +8,7 @@ import { cn } from '../lib/cn';
 import { EYEBROW } from '../lib/text';
 import { SHEET_MOTION_VARS, VAUL_MOTION } from '../lib/motion';
 
-export interface SheetProps {
+interface SheetBaseProps {
   open: boolean;
   onClose: () => void;
   children: ReactNode;
@@ -17,10 +17,6 @@ export interface SheetProps {
    *  element so callers can hang a chip off it. Falsy renders no kicker line at
    *  all — an empty <p> is invisible but still spends its margin. */
   eyebrow?: ReactNode;
-  /** Full-height variant — the terminal drawer's chrome: a --bg-well panel
-   *  rising to the safe-area line on --z-drawer, body as a flex column. The
-   *  title goes screen-reader-only so the glass keeps its full height. */
-  full?: boolean;
   className?: string;
   /** Called with a physical Escape before the sheet dismisses on it, as
    *  Radix's `onEscapeKeyDown` (vaul passes it through). `preventDefault()`
@@ -33,6 +29,26 @@ export interface SheetProps {
    *  (`useCancelFirst`). The terminal drawer passes nothing: xterm focuses its own textarea when its socket opens. */
   initialFocus?: RefObject<HTMLElement | null>;
 }
+
+/** `full` and `footer` are exclusive (D-5932): the terminal drawer's glass runs to the safe-area line and has no
+ *  answers to pin, so the type refuses a footer on it rather than the Sheet ignoring one. */
+export type SheetProps = SheetBaseProps & (
+  | {
+      full?: false;
+      /** The sheet's answers, PINNED (D-5932, spec §2.5): drawn after the scrolling body as a row of the panel that
+       *  does not shrink, so a tall body scrolls and the answers stay in reach, at every width. It sits inside the
+       *  panel's own side padding and safe-area bottom. Every confirm's `QC_ACTIONS` row goes here, never in the
+       *  children. */
+      footer?: ReactNode;
+    }
+  | {
+      /** Full-height variant — the terminal drawer's chrome: a --bg-well panel
+       *  rising to the safe-area line on --z-drawer, body as a flex column. The
+       *  title goes screen-reader-only so the glass keeps its full height. */
+      full: true;
+      footer?: never;
+    }
+);
 
 /** A field that raises a phone's keyboard when focused. */
 const isTextField = (el: HTMLElement): boolean =>
@@ -111,6 +127,7 @@ export function Sheet({
   className,
   onEscapeKeyDown,
   initialFocus,
+  footer,
 }: SheetProps): ReactNode {
   const panelRef = useSheetFocus(open, initialFocus);
   // The visible title rides INSIDE the scroller, above the children it heads.
@@ -263,6 +280,20 @@ export function Sheet({
             {inBody ? heading : null}
             {children}
           </div>
+          {/* THE FOOTER IS NOT IN THE BODY (D-5932). The panel is a column capped below the viewport and the body may
+              shrink below its content (`min-h-0`) and scrolls what it lost; this row may not shrink, so the answers
+              stay inside the panel however tall the body is. The panel's `px-card` and safe-area `pb` are its side
+              padding and bottom; `pt-4` parts it from the body's last line.
+              A ROW THAT MAY NOT SHRINK NEEDS ITS OWN CEILING (D-6030): uncapped, a tall footer (the resume sheet's
+              five reclaim controls) took the whole panel in a landscape phone and left the body, title and question
+              0px. Past half the viewport its rows scroll inside `.sheet-footer-rows`, which sits below the `pt-4` gap
+              so a half-scrolled row never butts against the body's clip edge, and moves its own clip edge out by the
+              focus ring's reach on all four sides (`-m-1 p-1`, as the body does at its sides). */}
+          {footer != null && footer !== false && !full ? (
+            <div className="sheet-footer flex-none pt-4">
+              <div className="sheet-footer-rows max-h-[50dvh] -m-1 p-1 overflow-y-auto overscroll-contain">{footer}</div>
+            </div>
+          ) : null}
         </Drawer.Content>
       </Drawer.Portal>
     </Drawer.Root>

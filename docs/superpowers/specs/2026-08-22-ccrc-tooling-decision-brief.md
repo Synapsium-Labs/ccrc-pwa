@@ -17,7 +17,7 @@ box are unversioned. `~/.local/bin/claude` is 173 lines, exec'd by 18 live units
 OAuth token, and is versioned by `cp`. The same holds for `claude-prune-versions` (daily timer,
 guarding a disk that twice reached 95%), `code-usage-hook-guard` (written after a 9.7-hour
 stall), the four account wrappers, and the docserver's real `config.json`. The sharpest
-instance is the docserver itself: `~/.claude-docserver` **already is** a git repo — with no
+instance is the docserver itself: `~/.docs-preview` **already is** a git repo — with no
 remote, one commit, a dirty tree, and a working `server.py` of 966 lines against the 770-line
 copy the monorepo tracks. The artifact git knows about is 196 lines stale and the thing that
 actually runs is un-remoted. This is fixed by `git init` and a private remote. No publishing
@@ -69,7 +69,7 @@ The recommendation below assumes the second. If the first is the real want, the 
 argument still holds but the contents list changes. **No recommendation — only you know which
 itch this was.**
 
-**T2 — `ccgpt` and `cck3`: publish, hold, or never?** `ccgpt`'s own header states it drives
+**T2 — `ccgpt` and `ccx3`: publish, hold, or never?** `ccgpt`'s own header states it drives
 Claude Code on ChatGPT-subscription OAuth and is "unofficial for Claude Code". Published beside
 a five-lane account rotator keyed to rate limits, under a real GitHub identity, it is a
 ToS/reputational artifact that cannot be recalled once forked. **Recommendation: hold** — excluded
@@ -94,11 +94,11 @@ lose and rewriting history is the more failure-prone of the two.
 ## Engineering decisions (recommendations I take unless overruled)
 
 **T6 — A private "rebuild this box" repo, this week.** Fresh `git init` — do **not** revive
-`OpenClawHetzner`, which is `ahead 1, behind 20` and is not a maintained home for anything.
+`project-c`, which is `ahead 1, behind 20` and is not a maintained home for anything.
 `.gitignore` gets `*.bak*` and `*.pre-*` in commit 1, and the initial add is an **explicit file
 allowlist, never `git add -A`**: roughly fifteen stale siblings are one careless add from being
 tracked, including a `config.json.bak` naming two dead worktree roots. Contents:
-`bin/{claude, claude-prune-versions, code-usage-hook-guard, claude2, claude-corp, claude-dev0}`,
+`bin/{claude, claude-prune-versions, code-usage-hook-guard, claude9, claude-acme, claude-lab0}`,
 `docserver/{server.py, config.json}`, `handoff/`, `guardrails/hardening.sh`,
 `skills/graphify-patches/`, `systemd/`. One `bootstrap.sh` that is the only path by which these
 land in `~/.local/bin`, backing up rather than overwriting (`_inst_keep_aside` is the pattern to
@@ -139,7 +139,7 @@ the outside reader's real gap at a cost of one section.
 **T10 — The deferred public option, and its gate.** Gated on `v0.0.1` tagged **and** LICENSE
 landed **and** the two-VM install gate run. Then, if still wanted: **one** repo, **two** items —
 `cc-compact-restore.sh` (104 lines, byte-identical to the installed copy, zero operator specifics)
-and `handoff/` minus `ccgpt` and `cck3`, with the roster read from `~/.ccrc/accounts.json` and the
+and `handoff/` minus `ccgpt` and `ccx3`, with the roster read from `~/.ccrc/accounts.json` and the
 `$/MTok` price table moved to a config file. Not the docserver. Not the launcher. Its own licence,
 its own identity constant, and no coupling to `install.sh`.
 
@@ -147,16 +147,16 @@ its own identity constant, and no coupling to `install.sh`.
 
 - `~/.local/bin/claude` — see the BREAK above.
 - The four account wrappers: the roster's physical, per-box form.
-- `~/.claude-docserver`'s **git history**, its `config.json` in any form, and the server itself
+- `~/.docs-preview`'s **git history**, its `config.json` in any form, and the server itself
   for now (T3).
 - The `code-usage` plugin: hardcoded corporate domain, a private AWS API Gateway, and
   self-updating executables fetched from it on a timer.
-- `ccgpt`, `cck3` — held pending T2.
+- `ccgpt`, `ccx3` — held pending T2.
 - The incident diaries as written in `hardening.sh` and `code-usage-hook-guard`: instance sizing,
   dated outages, and the plainly-stated fact that memory pressure kills `sshd` and `tailscaled`
   for hours while ICMP keeps answering. The mechanisms are publishable; the diaries are
   reconnaissance.
-- Every `*.bak` / `*.pre-*` sibling in `~/.local/bin` and `~/.claude-docserver`.
+- Every `*.bak` / `*.pre-*` sibling in `~/.local/bin` and `~/.docs-preview`.
 - `hammerspoon-init.lua`, `cc-termux`, `cc`, `ccswap` — per-machine, carrying stale three-account
   rosters, and superseded by the PWA, which is ccrc's whole thesis.
 - Any secret file. `.example` at 0600, refused unedited, per `MailTokenPlaceholderUnedited`.
@@ -164,7 +164,7 @@ its own identity constant, and no coupling to `install.sh`.
 ## The honest weakness in this recommendation
 
 A private repo's success is a habit, not a mechanism, and this operator's private repos have
-already been measured rotting: `OpenClawHetzner` is `ahead 1, behind 20`, and `~/.claude-docserver`
+already been measured rotting: `project-c` is `ahead 1, behind 20`, and `~/.docs-preview`
 is itself a private repo that drifted 196 lines ahead of its own only commit. The recommendation
 therefore puts four load-bearing artifacts into exactly the condition that produced the drift it
 cites as the reason to act. Public CI and outside readers create pressure a private repo has none of.

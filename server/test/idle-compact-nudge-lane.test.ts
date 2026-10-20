@@ -104,7 +104,7 @@ const seedTranscript = (home: string, rows: readonly object[]): void => {
 /** A complete fleet row (stall-sweep.test.ts's `fleetRow`), alive, running and idle. */
 const fleetRow = (over: Partial<FleetSession> = {}): FleetSession => ({
   hibernatedAt: null,
-  id: ID, wrapper: 'claude', home: '/home/rc', project: 'demo', workdir: WORKDIR,
+  id: ID, wrapper: 'claude', home: '/home/u', project: 'demo', workdir: WORKDIR,
   workspace: `${ID}-ws`, name: null, status: 'idle', statusUpdatedAt: T_NOTICE, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
@@ -197,18 +197,53 @@ describe('sweepIdleCompactNudge: at most once per compaction (D-5373)', () => {
     expect(literalSends(first.h.calls)).toHaveLength(1);
     expect(nudgeRows(first.coord)).toHaveLength(1);
   });
-  it('a send that was refused (a draft in the box) is never retried, and the feed says nothing was typed', async () => {
+  it('a send that was refused (a draft the stash did not take) is never retried, and the feed says nothing was typed', async () => {
+    // D-5912: the nudge passes `onDraft: 'stash'`. This fixed pane never empties after `C-s` (a rebound key), so the
+    // send refuses `stash-failed` (the stashed path, typed and restored, is `lane-draft-never-blocks.test.ts`).
     const { h, coord, w } = await rig({ fixed: '❯ half-typed draft\n' });
     await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
     at(NOW + IDLE_NUDGE_SWEEP_MS);
     await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
-    // No key press at all: not the text, and not a C-u over the operator's draft.
-    expect(anySends(h.calls)).toEqual([]);
-    expect(warned('refused (draft-present), not retried')).toBe(1);
+    // The one key is the stash's `C-s`: not the text, and not a C-u over the operator's draft.
+    expect(anySends(h.calls).map((a) => a[3])).toEqual(['C-s']);
+    expect(warned('refused (stash-failed), not retried')).toBe(1);
     expect(nudgeRows(coord)).toEqual([
       { sessionId: ID, title: '↻ Nudging after idle compaction', body: idleNudgeFeedBody('b1') },
-      { sessionId: ID, title: '↻ Nudge not typed', body: idleNudgeRefusedBody('b1', 'draft-present') },
+      { sessionId: ID, title: '↻ Nudge not typed', body: idleNudgeRefusedBody('b1', 'stash-failed') },
     ]);
+  });
+  it('D-5912: the idle compact nudge with a draft: typed, draft restored', async () => {
+    // A pane with Claude Code's measured stash (`send-stash.test.ts`'s five facts): `C-s` stashes a non-empty box and
+    // shows ` › stashed ·` above the rule; a submit restores it.
+    const home = mkTmp('ccrc-idle-nudge-stash-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const calls: string[][] = [];
+    const st = { box: 'half-typed draft', stash: null as string | null, sent: [] as string[] };
+    const rule = '─'.repeat(80);
+    const run: Runner = async (_cmd, args) => {
+      calls.push([...args]);
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+      if (args[0] === 'capture-pane') {
+        return { code: 0, stdout: ['⏺ done', '', st.stash !== null ? ' › stashed ·' : '', rule, `❯ ${st.box}`, rule, ''].join('\n'), stderr: '' };
+      }
+      if (args[0] === 'send-keys') {
+        if (args[3] === '-l') st.box += args[5]!;
+        else if (args[3] === 'C-s' && st.box !== '') { st.stash = st.box; st.box = ''; }
+        else if (args[3] === 'Enter' && st.box !== '') {
+          st.sent.push(st.box); st.box = st.stash ?? ''; st.stash = null;
+        }
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      return { code: 1, stdout: '', stderr: '' };
+    };
+    const { w } = await rig({ home: { home, calls, run } });
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(anySends(calls).map((a) => (a[3] === '-l' ? `lit:${a[5]}` : a[3]))).toEqual(['C-s', `lit:${IDLE_COMPACT_NUDGE_PROMPT}`, 'Enter']);
+    expect(st.sent).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
+    expect(st.box).toBe('half-typed draft');
+    expect(st.stash).toBeNull();
+    expect(warned('typed')).toBe(1);
   });
   it('the durable row pruned (FEED_RETENTION): this process\'s own set still stops a second send', async () => {
     const { h, coord, w } = await rig();
