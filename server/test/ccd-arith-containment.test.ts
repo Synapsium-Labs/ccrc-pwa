@@ -172,7 +172,7 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     // degrades to jitter=0 — the documented pre-jitter behaviour.
     h.sh(
       ' SWAP_JITTER=\'REG[$(touch "$HOME/PWNED-jitter")]\';'
-      + ' _dispatch_swap myid claude2 || :');
+      + ' _dispatch_swap myid claude9 || :');
     expect(existsSync(path.join(h.home, 'PWNED-jitter'))).toBe(false);
     h.cleanup();
   });

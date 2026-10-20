@@ -28,7 +28,7 @@ import type { NodeWire, ReleaseWire, UpdatesView } from '../../../shared/api';
 import { Button } from '@ccrc/ui';
 import { AckConfirm, canAck, sendAck } from './updateAck';
 import type { AckOutcome } from './updateAck';
-import { ResultLine, useResultLine } from '../screens/settingsText';
+import { ResultLine, useResultLine } from './settingsText';
 import { haltLine, haltingNodes } from './updateHalt';
 import { UPDATES_STALE_TEXT } from './useUpdatesView';
 import './fleet.css';

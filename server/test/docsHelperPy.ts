@@ -38,6 +38,44 @@ export function docsHelperSource(ccdText?: string): string {
   return `${body.join('\n')}\n`;
 }
 
+/** One python program a shell script feeds python through a heredoc. `line` is the opener's, 1-based. */
+export interface PythonHeredoc {
+  line: number;
+  tag: string;
+  body: string;
+}
+
+/**
+ * D-6051 (ARCH-23). The opener of a python heredoc: a redirection `<<TAG`, `<<'TAG'`, `<<"TAG"` or `<<-TAG` whose tag
+ * ends in `PY` (`PY`, `DOCS_PY`, `GFXPY`: the tree's own naming), on a line that is not a comment. THIS REGEX DEFINES
+ * THE COUNT: a program fed any other way (`python3 -c`, a file, a tag without `PY`) is not one.
+ */
+const PY_HEREDOC_OPEN = /<<(-?)[ \t]*(['"]?)((?:[A-Za-z_][A-Za-z0-9_]*)?PY)\2(?![A-Za-z0-9_])/;
+
+/**
+ * Every python heredoc in a shell script's text, in order: the lines strictly between each opener and the first later
+ * line equal to its tag (leading tabs dropped for `<<-`), with a final newline. A heredoc's body is not scanned for
+ * another opener. Throws on an opener whose terminator never comes: an extraction that ran to the end of the file is an
+ * error, never a program. `docsHelperSource` is the `DOCS_PY` one, under its stricter one-opener contract.
+ */
+export function pythonHeredocs(text: string): PythonHeredoc[] {
+  const lines = text.split('\n');
+  const out: PythonHeredoc[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]!;
+    const m = PY_HEREDOC_OPEN.exec(l);
+    if (m === null || /^\s*#/.test(l)) continue;
+    const tag = m[3]!;
+    const end = (s: string): string => (m[1] === '-' ? s.replace(/^\t+/, '') : s);
+    let j = i + 1;
+    while (j < lines.length && end(lines[j]!) !== tag) j++;
+    if (j >= lines.length) throw new Error(`pythonHeredocs: the heredoc opened at line ${i + 1} (${tag}) never closes`);
+    out.push({ line: i + 1, tag, body: `${lines.slice(i + 1, j).join('\n')}\n` });
+    i = j;
+  }
+  return out;
+}
+
 /**
  * The text after `NAME=` on the helper's ONE binding of `name`, which must be the single-line, unindented
  * `NAME=<value>` form (no spaces around `=`). The count is taken first over ANY binding of the name, in any

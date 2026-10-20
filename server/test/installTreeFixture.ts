@@ -92,6 +92,9 @@ export const TREE_FILES = [
   'deploy/litellm-config.template.yaml',
   'shared/modelenv.mjs',
   'shared/litellm.mjs',
+  // The auto-advance plan's pure rules (Codex arm, Task 3): `deploy/models-op.mjs` imports them at load, so a
+  // placed tree without this file fails every models verb with ERR_MODULE_NOT_FOUND.
+  'shared/model-advance.mjs',
   // The roster SEED `_inst_roster` places on a box that has none. The
   // realistic "the operator already has a roster" fixture is no repo file any
   // more — the shipped five-account migration roster left the tree with the

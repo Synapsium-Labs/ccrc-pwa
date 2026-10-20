@@ -1,7 +1,7 @@
 // Workspace lifecycle wave 3 — who may remove an ARCHIVED workspace (spec 2026-09-24 §5.3, "The contracts that
 // move"). Narrowed, never widened: every destructive verb stays forbidden to every session, `ws-reap` stays human-only
 // literally, and the one new remover is the server, on an archived workspace seven days after its archive. The skill
-// corpora never name the verb — CCR-15 wave 3's ruling for the server-composed `ws-reclaim`, and the same argument:
+// corpora never name the verb — #166 wave 3's ruling for the server-composed `ws-reclaim`, and the same argument:
 // a skill that names a verb has given a model a reason to reach for it.
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';

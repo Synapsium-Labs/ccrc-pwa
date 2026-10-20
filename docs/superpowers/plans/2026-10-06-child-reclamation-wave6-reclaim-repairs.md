@@ -2,7 +2,7 @@
 
 > **For agentic workers:** this plan is dispatched as a wave to a `ccrc-worker` session; follow the `ccrc-worker` skill for the protocol (ack, claims, asks, wave-done). To execute the tasks, REQUIRED SUB-SKILL: superpowers:subagent-driven-development, with superpowers:test-driven-development inside every task (red first, then green, then the mutation table). Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Programme:** child-reclamation (CCR-15), **wave 6 of 8**, run 291. **Deploy class: AGENT-FIRST** — the `ccd/ccd` half moves the fleet box first, and the server + pwa half (Task 12, and the server's reading of Task 11's two tokens) is live when the server box converges. **One child, one PR.**
+**Programme:** child-reclamation (#166), **wave 6 of 8**, run 291. **Deploy class: AGENT-FIRST** — the `ccd/ccd` half moves the fleet box first, and the server + pwa half (Task 12, and the server's reading of Task 11's two tokens) is live when the server box converges. **One child, one PR.**
 
 **Goal:** Make the existing destructive verb delete only what it should, and say what it kept. After this wave:
 - a reclaim's temp root never comes back after `reclaim done` because a straggler still held it;
@@ -77,7 +77,7 @@ Each line binds every task.
 
 - **Fixture HOMEs only.** Every ccd case runs under `makeCcdHarness` / `makePrHarness` homes (`server/test/ccdWsHelpers.ts`, `ccdPrHelpers.ts`), cleaned by `tmpHelpers.ts`. No new test file spreads `process.env`: it builds its environment or takes `inheritedEnv()` (Task 2).
 - **Never run `ccd` against the live `$HOME`**, from a shell or a test. Never touch tmux, `~/.cc-sessions`, `~/.cc-limits` or `claude-session@*.service`. Never print a secret file's contents.
-- **No destructive verb against the live host:** `ws-rm`, `ws-reap`, `ws-gc --prune`, `ws-archive`/`ws-restore`, `ws-reclaim` (forbidden to every session), and `ws-expire`. The live residue in `~/.cc-tmp` and `expoAI-assistant-calm-mesa` stay the operator's (R59).
+- **No destructive verb against the live host:** `ws-rm`, `ws-reap`, `ws-gc --prune`, `ws-archive`/`ws-restore`, `ws-reclaim` (forbidden to every session), and `ws-expire`. The live residue in `~/.cc-tmp` and `project-h-calm-mesa` stay the operator's (R59).
 - **Re-stamp after EVERY `ccd/ccd` edit:** `bash ccd/ccrc restamp ccd/ccd`, then `node shared/mark.mjs --check ccd/ccd` (exit 0) and `server/test/ownership.test.ts`. Never commit an unstamped `ccd/ccd`.
 - **S6-R11 citation tax and the 19109 boundary.**
   - An edit at or above `ccd/ccd:19109` stays LENGTH-NEUTRAL, or re-measures the census with the instrument, never by hand. That covers the platform block, `cmd_ws_audit`, the LC region (`_lc_fail`), `_ws_slug_free`, `cmd_caps` and the entry guard.
@@ -4220,7 +4220,7 @@ MSG
 **Why:** Wave 3's reclaim folds "the branch is absent" and "the branch could not be read" into one empty `REAP_TIP`. Measured on git 2.43.0 (the fleet box), `rev-parse --verify --quiet` and `show-ref --verify --quiet` both answer rc 1 for three cases: an absent ref, a corrupt loose ref, and a ref under an unreadable directory. Only `git show-ref --exists` gives three answers: 0 present, 2 absent, and anything else (1 for a ref that will not read, 128 for no repository, 129 for a git older than 2.43 that does not know the flag) means the read did not run. On any answer but 0 or 2, a successful `rev-parse --verify --quiet refs/heads/<b>^{commit}` still reads present (the positive fallback, ruled on gone-branch.OPEN4), so only `--exists` rc 2 can ever prove absent, and a box on a git older than 2.43 (Apple's 2.39, for one) reclaims a standing branch as it does today and never a gone one. One old-git shape is a stated residual, not closed: a resume whose step 5 already deleted the branch, or whose branch someone else deleted after the pin, reads `unmeasured` there and stops at step 5 as `branch-unmeasured` on every retry. The fleet runs 2.43 (see the carried residuals at the foot of this task).
 
 Because of the fold, the two worktree arms disagree today:
-- **The present arm.** The ladder mints a token with `tip=` over a gone branch. The pin then fails `pin-failed` for good. The live `expoAI-assistant-calm-mesa` child has failed this way 95 times, while its HEAD and every reflog commit are already on `origin/main`.
+- **The present arm.** The ladder mints a token with `tip=` over a gone branch. The pin then fails `pin-failed` for good. The live `project-h-calm-mesa` child has failed this way 95 times, while its HEAD and every reflog commit are already on `origin/main`.
 - **The vanished arm (R19).** It already goes ahead over an empty tip. So does the tail's step 5, which skips the delete when `show-ref --verify` fails and then purges the row. That means an existing but unreadable branch is left with no row.
 
 R53 rules one rule at every seam, in one act:
@@ -4387,7 +4387,7 @@ const reaches = (repo: string, sha: string, ref: string): boolean => {
 
 /** A child whose branch is PROVEN gone, its worktree standing: HEAD detached first
  *  (`git branch -D` refuses a checked-out branch), then the branch deleted — the live
- *  `expoAI-assistant-calm-mesa` shape (shape A). */
+ *  `project-h-calm-mesa` shape (shape A). */
 function goneBranch(c: Child): void {
   h.git(c.wt, 'checkout', '-q', '--detach');
   h.git(c.main, 'branch', '-q', '-D', CHILD_BRANCH);
@@ -4586,7 +4586,7 @@ describe('the ladder, vanished arm (R19)', () => {
 });
 
 describe('the pin and the tail', () => {
-  it('the live expoAI-assistant-calm-mesa shape reclaims, HEAD and every reflog commit kept', () => {
+  it('the live project-h-calm-mesa shape reclaims, HEAD and every reflog commit kept', () => {
     const c = makeChild(h);
     // The work landed on main: the live HEAD and every reflog commit are on origin/main.
     h.git(c.main, 'merge', '-q', '--ff-only', CHILD_BRANCH);
@@ -4857,7 +4857,7 @@ Expected: FAIL. Everything below fails except three cases, which PASS. `the tail
 - **`present arm: absence mints …`:** `expected [ …(n) ] to deeply equal ArrayContaining [ 'worktree=present', 'tip=<sha>', 'branchState=present' ]`.
 - **`present arm: a corrupt/unreadable branch …` and `vanished arm: a corrupt/unreadable branch …`:** `expected 'reclaimable' to be 'unmeasured'`, because the fold mints a token.
 - **`vanished arm: absence mints …`:** the `ArrayContaining` assertion, because `branchState=absent` is missing.
-- **`the live expoAI-assistant-calm-mesa shape`:** `expected 1 to be 0`. stdout carries `pin-failed` with `refs/heads/ws/quiet-basin does not resolve in … — there is no branch tip to pin`, the live box's own detail.
+- **`the live project-h-calm-mesa shape`:** `expected 1 to be 0`. stdout carries `pin-failed` with `refs/heads/ws/quiet-basin does not resolve in … — there is no branch tip to pin`, the live box's own detail.
 - **`a HEAD still symbolic …`:** the detail regex fails. The pin fails at the WIP commit instead, with the WIP's own reason: it cannot diff the index against a HEAD that names no commit.
 - **`a branch that reappears …`:** `Command failed: bash -c …` from `interrupted()`, because the pin refuses the absent branch.
 - **`the settle reads the branch itself`:** the detail regex fails. The detail is today's `does not resolve … no branch tip to pin`.
@@ -5207,7 +5207,7 @@ Make one edit at a time, run the command, see the red, then restore. Every row r
 | 10 | In `_ws_reclaim_pin_absent_contained`, `… \|\| { RECLAIM_PIN_WHY="$_WS_BRANCH_WHY"; return 1; }` → `… \|\| :` | same file, `-t 'vanished arm’s pin reads it too'` | `expected 'branch-unmeasured' to be 'pin-failed'` |
 | 11 | Delete the settle's `[[ -n "$tip" ]] \|\| REAP_TIP=""` | same file, `-t 'reappears after the tombstone'` | `expected 0 to be 1`: the settle adopted the reappeared tip, and step 5 deleted that branch |
 | 12 | In step 5, replace the new `bstate=…` line, its unmeasured `if … fi` and `if [[ "$bstate" == "present "* ]]; then` with the old `if git -C "$main" show-ref --verify --quiet "refs/heads/$branch"; then` | same file, `-t 'step 5'` | `expected 0 to be 1`: the delete was skipped and the row purged |
-| 13 | In `_ws_reclaim_pin_contained`, directly after the tip read add `[[ -n "$REAP_TIP" ]] \|\| { RECLAIM_PIN_WHY="no tip"; return 1; }` (today's hard failure) | same file, `-t 'live expoAI'` | `expected 1 to be 0`, with stdout naming `pin-failed` |
+| 13 | In `_ws_reclaim_pin_contained`, directly after the tip read add `[[ -n "$REAP_TIP" ]] \|\| { RECLAIM_PIN_WHY="no tip"; return 1; }` (today's hard failure) | same file, `-t 'live project-h'` | `expected 1 to be 0`, with stdout naming `pin-failed` |
 | 14 | In step 5, `_ws_reclaim_fail "$id" "$lctx" branch-unmeasured \` → `_ws_reclaim_fail "$id" "$lctx" branch-elsewhere \` | `cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-gone-branch.test.ts test/ccd-refusal-scan.test.ts -t 'step 5\|set-equal'` | `expected 'branch-elsewhere' to be 'branch-unmeasured'`; and `declared journal-only tokens with no literal ccd call-site argument: expected [ 'branch-unmeasured' ] to deeply equal []` |
 | 15 | In `LC_REFUSAL_WORD['branch-unmeasured']`, `stopped before removing anything further` → `stopped, and the workspace is intact` | `cd server && ./node_modules/.bin/vitest run test/lifecycle-refusal-word.test.ts` | `branch-unmeasured says nothing further went, and never that anything is intact`: `expected '…the workspace is intact…' not to match /intact/` |
 | 16 | In `_ws_reclaim_branch_state`, prefix the `sha=$(_ws_reclaim_contained git -C "$repo" rev-parse …` line with `(( rc == 0 )) && ` (the fallback dropped) | `cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-gone-branch.test.ts -t 'rejects --exists\|reclaims a standing branch'` | `expected 'unmeasured\|0' to be 'present <sha>\|0'`; and `expected 'unmeasured' to be 'reclaimable'` |
@@ -8887,7 +8887,7 @@ Expected: one line, the workspace's own noreply identity. Any other identity is 
 ```bash
 git push -u origin "$(git rev-parse --abbrev-ref HEAD)"
 gh pr create --base main --title "Child reclamation wave 6: what ws-reclaim deletes, repaired — the temp root's wait and witness, contained git, the gone-branch pin, the gone-directory recovery, failures journaled" --body-file - <<'EOF'
-Wave 6 of 8 of the child-reclamation programme (CCR-15; spec §5.2, §5.5, §5.6, §5.9, §7, §8), run 291. **AGENT-FIRST:** the `ccd/ccd` half is live when the fleet box converges, and the server + pwa half when the server box does.
+Wave 6 of 8 of the child-reclamation programme (#166; spec §5.2, §5.5, §5.6, §5.9, §7, §8), run 291. **AGENT-FIRST:** the `ccd/ccd` half is live when the fleet box converges, and the server + pwa half when the server box does.
 
 **What changes for `ws-reclaim`.**
 1. **The temp root no longer comes back.** After the kill, the tail waits at most 15 s until no process of this uid uses the temp root (its `TMPDIR`, its cwd, an open fd), then removes it through ONE removal helper. The helper never follows a leaf link, takes only a real directory this uid owns at exactly root/id, never crosses a file-system boundary, reads every exit code, and proves absence. A temp root still in use or unmeasured, and a clips leaf the helper refuses or cannot measure, are KEPT and recorded on the `done` row (`tmpRootKept`, `clipsKept`). That is not a refusal. This fixes the measured recreation 3.7 s after `reclaim done`.
@@ -8900,7 +8900,7 @@ Wave 6 of 8 of the child-reclamation programme (CCR-15; spec §5.2, §5.5, §5.6
 
 **What changes for `ws-expire`.** It shares the containment, the ladder pieces and the tail, so F6, the contained deletes, the helper with its wait and keep (recorded on the `expire` done row), the gone-branch reads and the gone-directory recovery all reach it. Its EXPIRE-region code is unchanged except for three header comment lines of `_ws_expire_cwd_users`. Its own unmeasured answer stays unjournaled. Workspace-lifecycle's coordinator was told before dispatch.
 
-**The live case.** `expoAI-assistant-calm-mesa` has its branch proven absent, HEAD and every reflog commit on `origin/main`, and a clean tree. It fails `pin-failed` on every pass today. Once the fleet box runs this build, the sweep reclaims it with nothing lost. The operator may still recreate the branch at HEAD to reclaim it sooner.
+**The live case.** `project-h-calm-mesa` has its branch proven absent, HEAD and every reflog commit on `origin/main`, and a clean tree. It fails `pin-failed` on every pass today. Once the fleet box runs this build, the sweep reclaims it with nothing lost. The operator may still recreate the branch at HEAD to reclaim it sooner.
 
 **AGENT-FIRST windows.**
 - A token minted before the fleet box converged and spent after answers `state-changed` once per child, on both verbs, because the format gained `branchState=`.
@@ -8941,7 +8941,7 @@ The worker's part ends at Step 7.
 
 **Before the merge (the coordinator, read-only).**
 1. Read the review report's SAFETY and SECURITY measurements (both lenses are mandatory). A SAFETY finding stops the landing until the coordinator rules.
-2. Re-measure the live case read-only on the fleet box: `expoAI-assistant-calm-mesa`'s row, the branch's `git show-ref --exists` rc in its main repository (2 expected), and its HEAD's ancestry from `origin/main`.
+2. Re-measure the live case read-only on the fleet box: `project-h-calm-mesa`'s row, the branch's `git show-ref --exists` rc in its main repository (2 expected), and its HEAD's ancestry from `origin/main`.
 3. Confirm workspace-lifecycle's coordinator holds the X2 list (dispatch-time). Tell the operator, before landing, that the reclaim and expiry tails now KEEP a temp root still in use, and record why. The ledger line names this, the live case, and the AGENT-FIRST windows.
 4. Land at the measured head, per `ccd/coordinator-skill/references/wave-lifecycle.md` §5. Whether `main` needs the merge queue is measured then, never assumed.
 

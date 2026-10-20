@@ -63,6 +63,11 @@ import {
   EXPORT_DIR, EXPORT_SEGMENT_MAX_BYTES, EXPORT_SEGMENT_FORMAT, segmentName, nextSegmentSeq, planSegment, budgetHeldPass, CLAUDE_CODE_DEFAULT_RETENTION_DAYS,
   shortestRetention, exportHorizonDays, decideExportPass, planExportRoom, exportPassIntervalMs, exportMarkFailsOf, decideMarkOutcome,
   decideMarkCheck, missingSegmentNames, deadFileSourceKey, decideSegmentReplay, orderSegmentNames, entryMayHoldMark, segmentMayMarkEntry,
+  decideSegmentWhole, decideSegmentOwn, readSegmentNameList,
+  BUSY_TIMEOUT_MS, EXPORT_BIND_BATCH, EXPORT_BIND_BYTES, EXPORT_BIND_WAL_CEILING, markCheckStop, planMarkCheckBatch, formatMarkCheckState, nextMarkCheckState,
+  segmentListingRecord, addSegmentToListing, segmentListingVanished,
+  decideReplayMark, replayWriterLayout, planReplayLayout, formatReplayLayout, widestReplayRanges,
+  carryHoldAdvice,
 } from './lib.mjs';
 import {
   MIGRATIONS, OWED_INDEX, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -73,7 +78,7 @@ import {
   integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, getStep, setStep, setCounter, adoptStore,
   peekStoreId, stageRestore, commitRestore, abortRestore,
   ensureSegmentDir, createSegment, segmentInserts, publishSegment, listSegments, removeStaleSegmentTemps, setSegmentSeq,
-  openSegment, segmentMeta, segmentBlobsAfter, segmentRowsAfter, segmentHasBlob,
+  openSegment, segmentMeta, segmentBlobsAfter, segmentRowsAfter, segmentHasBlob, segmentFileFacts,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 import {
@@ -2626,7 +2631,8 @@ async function recoverReindexChunk(db, run, cursor) {
 // After the journal (index, apply), the step replays this store's export segments in three passes, so no row ever
 // waits on a blob in a later segment (BK21), and no stub swallows bytes (D-5397 (history-export-replay-bytes-before-stubs)):
 //   export-blobs  every segment's blobs that carry bytes, insert-or-ignore by sha256; each replayed blob is marked with
-//                 its segment, so it is never exported again. A body ignored over a prune tombstone the store held
+//                 the LAST segment that carries its bytes (D-5637 (history-export-replay-last-carrier)), so it is never
+//                 exported again while that segment is on the box. A body ignored over a prune tombstone the store held
 //                 before the replay began is counted export_blob_tombstone_kept: every tombstone this phase meets was held
 //                 before the replay began, because only the stubs phase, which comes after, makes one;
 //   export-stubs  every segment's stubs (D-4759), insert-or-ignore, dated by the replay: a blob the store already holds,
@@ -2643,8 +2649,9 @@ async function recoverReindexChunk(db, run, cursor) {
 //                   segmentMayMarkEntry says every blob it references, as the store holds them, is exported or is pruned and
 //                   carried by THIS segment (D-5395 (history-export-mark-needs-its-blobs), refined by D-5396
 //                   (history-export-bind-clears-pruned-referrers)): a live, unmarked blob licenses no mark, and a pruned blob no
-//                   mark names licenses one only in a segment that holds its stub or its bytes, as the pass writes them; an
-//                   entry an earlier segment marked already is not marked again;
+//                   mark names licenses one only in a segment that holds its stub or its bytes, as the pass writes them; the
+//                   LAST segment that carries the entry's row and may mark it takes the mark, and one that carries the row
+//                   but may not takes an earlier mark off (D-5637); a segment that does not order after the mark moves nothing;
 //                 - variants, boundaries (their carried ord), sidecars and memberships, idempotently; one that links such a
 //                   blob to its entry takes the entry's mark off, unless the entry is marked by THIS segment and this segment
 //                   carries a pruned blob (D-5396): an entry marked by another segment loses its mark over a pruned, unmarked
@@ -2662,6 +2669,11 @@ async function recoverReindexChunk(db, run, cursor) {
 // has one, and lib formatRecoverCursor refuses one beside an export phase. Replay writes no journal record (O36) and
 // no segment.
 
+/** D-5726 (history-export-replay-mark-one-writer): the counter of every mark replay takes off across a fork (two writers whose seqs
+ *  interleave or touch) that carries the row too, an entry's or a blob's. It counts take-off EVENTS: a signal of a fork, not the
+ *  number of rows exported again (the sticky 'keep' leaves others unmarked too). Spelled here once. */
+const EXPORT_MARK_TAKEN_OFF = 'export_mark_taken_off';
+
 /** Rows read per page of one segment; a chunk applies them until run.budget.chunkBytes. */
 const EXPORT_REPLAY_PAGE = 256;
 
@@ -2674,7 +2686,13 @@ function replayStmts(db) {
   if (s !== undefined) return s;
   s = {
     blobIns: db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, pruned_ms) VALUES (?, ?, ?, ?, ?) ON CONFLICT (sha256) DO NOTHING'),
-    blobMark: db.prepare('UPDATE blobs SET exported_ms = ?, exported_seg = ? WHERE sha256 = ? AND z IS NOT NULL AND exported_ms IS NULL'),
+    // D-5637 (history-export-replay-last-carrier): a blob's mark moves to the LAST segment that carries its bytes; the sweep asks
+    // lib segmentOrdersAfter of blobMarkOf's answer before it runs, so the statement itself no longer keeps a mark.
+    // Since D-5726 lib decideReplayMark decides (the sweep asks it for a fresh insert too): a mark moves within one writer or to a
+    // successor writer, and comes off across a fork.
+    blobMark: db.prepare('UPDATE blobs SET exported_ms = ?, exported_seg = ? WHERE sha256 = ? AND z IS NOT NULL'),
+    // D-5726 (history-export-replay-mark-one-writer): blob_id rides along, for the take-off's referrers (clearReferrerMarks).
+    blobMarkOf: db.prepare('SELECT blob_id, exported_seg AS seg FROM blobs WHERE sha256 = ? AND z IS NOT NULL'),
     // D-5397: asked only when a body's insert answered 0 changes, to tell a prune tombstone from a blob that holds bytes.
     blobTombstone: db.prepare('SELECT 1 AS x FROM blobs WHERE sha256 = ? AND z IS NULL'),
     blobId: db.prepare('SELECT blob_id FROM blobs WHERE sha256 = ?'),
@@ -2700,10 +2718,11 @@ function replayStmts(db) {
         status, eof_ms, parser_version) VALUES (?, ?, ?, ?, ?, ?, 0, 'exported', ?, ?)
       ON CONFLICT (dev, ino, source_key) DO UPDATE SET eof_ms = coalesce(ingest_files.eof_ms, excluded.eof_ms)`),
     deadFileId: db.prepare('SELECT file_id FROM ingest_files WHERE dev = ? AND ino = ? AND source_key = ?'),
-    // exported_ms and exported_seg: an entry's mark, which replay reads where it would mark or unmark it (D-5396): an entry already
-    // marked is not marked again, and a row of another segment than the one that marks it can only take the mark off.
+    // exported_ms and exported_seg: an entry's mark, which replay reads where it would mark or unmark it (D-5396): an entry row moves
+    // the mark only to a segment that orders after it (D-5637), and a row of another segment than the one that marks it can only take
+    // the mark off.
     entrySel: db.prepare('SELECT entry_id, struct_file_id, exported_ms, exported_seg FROM entries WHERE uuid = ?'),
-    entryMark: db.prepare('UPDATE entries SET exported_ms = ?, exported_seg = ? WHERE entry_id = ? AND exported_ms IS NULL'),
+    entryMark: db.prepare('UPDATE entries SET exported_ms = ?, exported_seg = ? WHERE entry_id = ?'),
     // B1's boundaryIns draws ord itself; replay carries the exporter's. It meets two uniqueness rules, PRIMARY KEY
     // (entry_id) and UNIQUE (transcript_pk, ord), and absorbs both: a repeated entry (a second segment of it) is the
     // ordinary case, silent; a collision on (transcript_pk, ord) with ANOTHER entry's boundary is a row the store cannot
@@ -2800,29 +2819,51 @@ function replayEntryRow(db, seg, r) {
   const blobId = blobIdOf(db, r.blob_sha256);
   if (blobId === null) { bump(db, 'export_row_blob_missing'); return; }
   const fileId = ensureDeadFile(db, seg, r.struct_path, r.struct_dev, r.struct_ino, t, null, null, null);
+  // D-5726: only where the listing holds a fork, whether the entry existed before this upsert (one lookup); without a fork the answer
+  // cannot differ (a fresh entry is unmarked, and an unmarked one is marked), so single-writer and successor-only replay cost
+  // what Task 5's did.
+  const fresh = seg.layout.forked && replayStmts(db).entrySel.get(r.uuid) === undefined;
   stmts(db).entryUpsert.run(r.uuid, t, r.type, r.subtype, r.role, r.model, r.parent_uuid, r.ts_ms, r.request_id,
     r.api_block_index, r.msg_id, r.source_tool_use_id, r.tool_name, r.is_compact_summary, r.provenance, r.prov_version,
-    r.parse_state, r.struct_rank_ns, fileId, blobId);
+    r.parse_state, r.struct_rank_ns, fileId, blobId, 0);   // 0: a replayed copy never wins a tie (D-5638)
   const s = replayStmts(db);
   const e = s.entrySel.get(r.uuid);
   // D-5395: the segment holds this row's bytes, but the store may hold more of the entry than the segment did (a late
   // variant, a late-linked sidecar, a revived blob in the backup a restore started from): marked only when lib says every
-  // blob the entry references, as the store holds them now, is exported, or pruned and carried by THIS segment (D-5396). The
-  // entry is marked by the first segment that says so, as the pass marks it with the segment that holds what it needs: an
-  // exported blob's bytes are where its own mark names, and a pruned blob no mark names has its stub only in the segments
-  // that carry it, so a mark naming a segment without the stub would outlive the loss of the one that holds it (a rebuild
-  // from the live segments could not place the entry). A segment that lacks the stub leaves the entry unmarked for a later
-  // segment that carries it, or for the next pass, which writes the stub. An entry an earlier segment already marked is not
-  // this segment's to mark whatever lib answers (entryMark leaves it: the first segment's mark wins), so its pruned blobs read
-  // as not carried and cost no lookup in this segment. The rows of this segment that link a pruned blob to such an entry are
-  // judged by unmarkEntryOverBlobIn.
-  const states = s.entryBlobStates.all(e.entry_id, e.entry_id, t, e.entry_id, e.entry_id).map((b) => blobStateIn(seg, b, e.exported_ms === null));
+  // blob the entry references, as the store holds them now, is exported, or pruned and carried by THIS segment (D-5396).
+  // D-5637 (history-export-replay-last-carrier): the entry's mark goes to the LAST segment that carries its row, in replay's
+  // (seq, writer) order (lib segmentOrdersAfter), not the first. Every export of an entry writes all the store held of it
+  // then (every variant, its boundary, every linked sidecar, every membership), and nothing deletes those rows, so a later
+  // carrier holds all an earlier one did, and the mark names the segment whose loss would lose the most: the check after a
+  // bind then clears it with that segment, and the next pass writes the entry again. A segment that orders after the mark
+  // takes it when lib says it may (segmentMayMarkEntry, `carried` measured in this segment); when lib says it may not (a
+  // pruned blob no mark names that this segment lacks, or a live, unmarked one) the older mark goes too (exportClear), so
+  // the next pass writes the entry with all it needs: over-clearing, never a loss. A segment that does not order after the
+  // mark (the same one replayed again, or a restore's backup marked by a later segment) moves nothing and costs no lookup.
+  // The rows of this segment that link a blob to the entry are judged by unmarkEntryOverBlobIn.
+  // D-5726 (history-export-replay-mark-one-writer): that holds within one writer, and to a SUCCESSOR writer (a rebind's new token, all
+  // its seqs above the earlier writer's, its store a superset). Across a FORK (two writers whose seqs interleave or touch) the content
+  // order is unknown either way, so lib decideReplayMark answers instead: 'keep' returns (the same page again, a restore's backup mark
+  // of a later segment or writer, or, in a directory that holds a fork, an entry this segment did not insert and that is unmarked:
+  // the take-off is sticky), 'take-off' takes the mark off (counted EXPORT_MARK_TAKEN_OFF) so the next pass writes the entry
+  // again, and 'mark' is the path below. A held mark naming a segment the listing does not hold, of another writer, is kept for
+  // the check (which clears it, the segment being missing), or taken off in a directory that holds a fork (lib decideReplayMark).
+  const word = decideReplayMark({ seg: seg.name, held: e.exported_seg === null ? null : String(e.exported_seg), fresh, layout: seg.layout });
+  if (word === 'keep') return;
+  if (word === 'take-off') {
+    stmts(db).exportClear.run(e.entry_id);
+    bump(db, EXPORT_MARK_TAKEN_OFF);
+    return;
+  }
+  const states = s.entryBlobStates.all(e.entry_id, e.entry_id, t, e.entry_id, e.entry_id).map((b) => blobStateIn(seg, b, true));
   if (segmentMayMarkEntry({ blobs: states })) s.entryMark.run(seg.markMs, seg.name, e.entry_id);
+  else stmts(db).exportClear.run(e.entry_id);
 }
 /** One blob's state as lib segmentMayMarkEntry reads it for an entry's mark and the segment being replayed (`seg`): `carried`
  *  is whether the segment THE ENTRY'S MARK NAMES holds the blob (D-5396). It is measured, by a lookup in `seg`'s blobs table,
  *  only of a pruned blob no mark names (`b.sha` is set only for such a blob) and only where `seg` is that segment
- *  (`markNamesSeg`: the entry's mark names `seg`, or, for an entry not marked yet, would). An entry marked by ANOTHER
+ *  (`markNamesSeg`: the entry's mark names `seg`, or, for an entry not marked yet, would; replayEntryRow passes it only where this
+ *  segment may take the entry's mark, an earlier mark included, D-5637). An entry marked by ANOTHER
  *  segment names one this is not, and what that one carries is not measured here (it is not open): the blob reads as not
  *  carried, so lib clears the mark and the next pass writes the entry with the stub, one more export in the worst case and
  *  never a loss. `carried` is false of any other blob, whose answer lib does not read from it. */
@@ -2853,7 +2894,7 @@ function unmarkEntryOverBlob(db, entryId, blobId) {
  *  row linked what the export that wrote it had not carried. The pruned arm is no rarity: an entry's variant rows include its
  *  first body, so a segment written after a late variant names that body without carrying it (an earlier segment held it when
  *  the pass wrote), and a store without that earlier segment holds it pruned and unmarked, its stub being in a later segment
- *  alone; and the entry itself is marked by whichever segment first carried its row. */
+ *  alone; and the entry itself is marked by the last segment that carries its row and may mark it (D-5637). */
 function unmarkEntryOverBlobIn(db, seg, entry, blobId) {
   const b = replayStmts(db).blobStateIn.get(blobId);
   if (b !== undefined && !segmentMayMarkEntry({ blobs: [blobStateIn(seg, b, entry.exported_seg === seg.name)] })) stmts(db).exportClear.run(entry.entry_id);
@@ -2932,14 +2973,70 @@ function rowBytes(row) {
   return n;
 }
 
-/** This store's segment names in replay order, listed once per pass (the run object is the pass's). An absent
- *  directory is no segment; a listing that throws fails the chunk. */
+/** This store's segment names in replay order, listed once per call (the run object is the call's): a readdir and one lstat per
+ *  segment name (store.mjs listSegments), opening no segment. An absent directory is no segment; a listing that throws fails the
+ *  phase advance into export-blobs (measureReplayLayout) or the export chunk that lists, and the next call lists again. The writer
+ *  layout is not measured here: the phase advance measures it and replayLayoutAt keeps it (D-5727). */
 function exportReplayListing(run) {
   if (run.exportListing === undefined) {
     const dir = `${run.P.root}/${EXPORT_DIR}/${run.storeId}`;
     run.exportListing = { dir, names: orderSegmentNames(listSegments(dir).map((s) => s.name)) };
   }
   return run.exportListing;
+}
+
+/** The writer layout one export chunk replays with: measured ONCE per replay, at its phase advance into export-blobs
+ *  (measureReplayLayout), kept in one meta key, and only ever widened here (D-5727 (history-export-replay-layout-once), wave 5h-1
+ *  FR1, amended by FR2 for where the measure is taken; D-5726 for where the layout comes from). Called in the chunk's transaction, so
+ *  the key and the marks the chunk writes commit together. Lib planReplayLayout decides which of two:
+ *  - `widen`: a key that parses and carries this replay's version is the layout so far, and this chunk's listing widens it; the key
+ *    is written back only when the union widens it (a writer it lacked, a lower lo or a higher hi). A chunk never re-measures: a
+ *    re-entered export-blobs chunk with no file (a stalled last segment moved aside) widens the advance's key like any other;
+ *  - `widest`: a key that is missing, malformed or of another version means an older build carried this replay past the phase
+ *    advance (a rollout or rollback across an open recovery, or a cursor an older build advanced into export-blobs): the layout is the
+ *    WIDEST (every writer the listing or the marks name, over the whole seq line), never a fresh measure, which the older build's
+ *    take-offs may have made narrower than the truth (probe M); the key is written with this version.
+ *  The measure is taken at the PHASE ADVANCE, not at a chunk, because the advance opens no segment: a segment that cannot be read
+ *  fails the chunk that opens it, before that chunk's transaction, and the operator's way out (move it aside) would otherwise change
+ *  the listing the measure reads. The advance is the point at which the bind has left its marks and the replay has taken none off:
+ *  the journal phases (index, apply) write no `exported_seg` (recoverPass runs no ingest, and recoverApplyChunk reaches only
+ *  applyJournalRecord, then applyReplayAction, then replayVerdict and replayReceipt; none of those, nor ensureFamily, mergeFamily,
+ *  chainEpoch, replayEpochLine or applyEventLine, writes a mark; the clears at writeChunk, ingestSidecar and storeBlob belong to live
+ *  ingest only). A later change that adds a mark writer to the journal phases must move this measure.
+ *  A range that only widens can turn a 'mark' into a 'keep' or a 'take-off', never the reverse, so a layout too wide costs
+ *  re-exports and never a row. finishRecovery deletes the key. Rule 5 of lib decideReplayMark reads the CURRENT listing, not the key. */
+function replayLayoutAt(db, run, names) {
+  const plan = planReplayLayout({ text: getMeta(db, EXPORT_REPLAY_LAYOUT_META), version: run.version });
+  if (plan.word === 'widen') {
+    const layout = replayWriterLayout(names, [], plan.ranges);
+    if (layout.widened) setMeta(db, EXPORT_REPLAY_LAYOUT_META, formatReplayLayout({ version: run.version, ranges: layout.ranges }));
+    return layout;
+  }
+  const marked = [...markedSegmentNames(db)];
+  const layout = replayWriterLayout(names, [], widestReplayRanges([...names, ...marked]));
+  setMeta(db, EXPORT_REPLAY_LAYOUT_META, formatReplayLayout({ version: run.version, ranges: layout.ranges }));
+  return layout;
+}
+
+/** The replay's writer layout, MEASURED (D-5727, FR2): the store's segment listing (exportReplayListing: a readdir and one lstat per
+ *  name, opening no segment, so a segment that cannot be read cannot stop it) plus the names the store's marks hold
+ *  (markedSegmentNames), as replayWriterLayout ranges them, written to the layout key with this replay's version. recoveryStep calls it
+ *  in the transaction of the phase advance from apply into export-blobs, so the key and the cursor commit together. A listing that
+ *  throws fails the advance: the cursor stays at apply's end, recover_chunk_failed counts it, and the next call retries. */
+function measureReplayLayout(db, run) {
+  const { names } = exportReplayListing(run);
+  const layout = replayWriterLayout(names, [...markedSegmentNames(db)]);
+  setMeta(db, EXPORT_REPLAY_LAYOUT_META, formatReplayLayout({ version: run.version, ranges: layout.ranges }));
+}
+
+/** The distinct segment names the store's marks hold: blobs.exported_seg and entries.exported_seg, two DISTINCT scans. The readers of
+ *  them: the check after a bind (which names the ones no segment is listed for), and replay's writer layout (measureReplayLayout at
+ *  the phase advance into export-blobs; replayLayoutAt on a key it cannot trust). */
+function markedSegmentNames(db) {
+  const named = new Set();
+  for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM blobs WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
+  for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM entries WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
+  return named;
 }
 
 /** The failure of a segment that cannot be read, naming the segment and the way out: an unreadable segment fails its
@@ -3006,11 +3103,13 @@ function noteSkippedSegment(db, name, verdict) {
 /** One page of one kind of one segment's blobs past `after` (a rowid), bounded by the chunk's bytes: `stubs` false is
  *  export-blobs' page (the blobs that carry bytes), true export-stubs' (D-5397 (history-export-replay-bytes-before-stubs)).
  *  insert-or-ignore by sha256 (§9.14) in both: a blob the store already holds, whole or pruned, keeps its row; one with
- *  bytes is marked with its segment. A body ignored over a prune tombstone is counted export_blob_tombstone_kept; the
+ *  bytes is marked with its last carrier (D-5637) within one writer or to a successor writer; across a fork the mark comes off
+ *  instead (D-5726, lib decideReplayMark; export_mark_taken_off); a held mark naming a segment the listing does not hold, of another
+ *  writer, is kept for the check, or taken off in a forked directory. A body ignored over a prune tombstone is counted export_blob_tombstone_kept; the
  *  probe runs only when the insert answered 0 changes, so a fresh blob costs no statement more, and no read's answer
  *  changes. A stub (no bytes) goes in pruned (D-4759 (history-export-pruned-row-stub)), dated by the replay. An empty
  *  page ends the segment. */
-function replayBlobPage(db, run, sdb, dir, name, after, stubs) {
+function replayBlobPage(db, run, sdb, dir, name, after, stubs, layout) {
   const page = readSegmentPage(dir, name, () => segmentBlobsAfter(sdb, after, run.budget.chunkBytes, stubs ? 'stubs' : 'bytes'));
   if (page.length === 0) return { pos: after, done: true, bytes: 0 };
   const s = replayStmts(db);
@@ -3019,8 +3118,32 @@ function replayBlobPage(db, run, sdb, dir, name, after, stubs) {
   for (const b of page) {
     const ins = s.blobIns.run(b.sha256, b.codec, b.z, b.raw_len, b.z === null ? markMs : null);
     if (b.z !== null) {
-      if (Number(ins.changes) === 0 && s.blobTombstone.get(b.sha256) !== undefined) bump(db, 'export_blob_tombstone_kept');
-      s.blobMark.run(markMs, name, b.sha256);
+      // D-5637 (history-export-replay-last-carrier): the blob's mark goes to the last segment that carries its bytes. A fresh
+      // row has no mark and costs no statement more; a blob the store held already is read once, and its mark moves only to
+      // a segment that orders after it (a restore's backup may hold a mark naming a later segment, which stays).
+      // D-5726 (history-export-replay-mark-one-writer): that holds within one writer and to a successor writer. Lib decideReplayMark
+      // answers for a held blob: 'mark' moves it, 'keep' leaves it, and 'take-off' (a fork: the other writer's seqs interleave or touch
+      // this one's) takes the blob's referrers' marks off FIRST and then the blob's own, in this transaction (D-5395, D-5396: an
+      // entry holds its mark only while every blob it references is exported or pruned), so the pass writes the row again; each is
+      // counted EXPORT_MARK_TAKEN_OFF. A held mark naming a segment the listing does not hold, of another writer, is kept for the
+      // check (which clears it, the segment being missing), or taken off in a directory that holds a fork.
+      // R-F5: a fresh insert goes through lib too (fresh: true answers 'mark'), so every mark decision is lib's.
+      if (Number(ins.changes) === 1) {
+        if (decideReplayMark({ seg: name, held: null, fresh: true, layout }) === 'mark') s.blobMark.run(markMs, name, b.sha256);
+      }
+      else if (s.blobTombstone.get(b.sha256) !== undefined) bump(db, 'export_blob_tombstone_kept');
+      else {
+        const held = s.blobMarkOf.get(b.sha256);
+        if (held !== undefined) {
+          const word = decideReplayMark({ seg: name, held: held.seg === null ? null : String(held.seg), fresh: false, layout });
+          if (word === 'mark') s.blobMark.run(markMs, name, b.sha256);
+          else if (word === 'take-off') {
+            clearReferrerMarks(db, [Number(held.blob_id)]);
+            sideStmts(db).blobUnmark.run(Number(held.blob_id));
+            bump(db, EXPORT_MARK_TAKEN_OFF);
+          }
+        }
+      }
       bytes += b.z.length;
     }
   }
@@ -3029,10 +3152,10 @@ function replayBlobPage(db, run, sdb, dir, name, after, stubs) {
 
 /** One page of one segment's rows past `after` (an ord), applied in order until the chunk's bytes; at least one. An
  *  empty page ends the segment. A kind format 1 does not define fails the chunk. */
-function replayRowPage(db, run, sdb, dir, name, meta, after) {
+function replayRowPage(db, run, sdb, dir, name, meta, after, layout) {
   const page = readSegmentPage(dir, name, () => segmentRowsAfter(sdb, after, EXPORT_REPLAY_PAGE));
   if (page.length === 0) return { pos: after, done: true, bytes: 0 };
-  const seg = { name, dir, sdb, markMs: run.now(), cutoffMs: meta.cutoffMs };   // sdb and dir: what segmentCarries reads (D-5396)
+  const seg = { name, dir, sdb, markMs: run.now(), cutoffMs: meta.cutoffMs, layout };   // sdb and dir: what segmentCarries reads (D-5396); layout: D-5726, kept by D-5727
   let bytes = 0;
   let pos = after;
   for (const r of page) {
@@ -3070,10 +3193,11 @@ function exportPhaseChunk(db, run, cursor, kind) {
   try {
     next = withTx(db, 'NORMAL', () => {
       if (kind === 'bytes' && cursor.file === null) setMeta(db, HEALTH_META.exportSegmentNewer, '[]');
+      const layout = replayLayoutAt(db, run, names);   // D-5727: the layout was measured at the phase advance into export-blobs; a chunk only widens it
       if (opened.verdict !== null && opened.verdict.word === 'replay') {
         page = kind === 'rows'
-          ? replayRowPage(db, run, opened.sdb, dir, name, opened.verdict.meta, after)
-          : replayBlobPage(db, run, opened.sdb, dir, name, after, kind === 'stubs');
+          ? replayRowPage(db, run, opened.sdb, dir, name, opened.verdict.meta, after, layout)
+          : replayBlobPage(db, run, opened.sdb, dir, name, after, kind === 'stubs', layout);
       } else if (opened.verdict !== null && kind === 'bytes') {
         noteSkippedSegment(db, name, opened.verdict);
       }
@@ -3135,6 +3259,8 @@ function finishRecovery(db, run, cursor) {
   withTx(db, 'NORMAL', () => {
     db.prepare(RECOVER_DONE_SQL).run(formatRecoverCursor(cursor), run.now(), run.version);
     for (const t of RECOVER_SCRATCH_TABLES) db.exec(`DROP TABLE IF EXISTS ${t}`);
+    // D-5727: the replay's writer layout is this replay's alone; D-4725's precedent, deleted with the scratch tables in one transaction.
+    db.prepare('DELETE FROM meta WHERE k = ?').run(EXPORT_REPLAY_LAYOUT_META);
     setMeta(db, HEALTH_META.recoverUnmovedTicks, '0');
     // D-4723 (history-counter-resets-after-cure): a restored or rebuilt store's spool counters are another moment's; this box's
     // spool is the standing truth (Task 23's re-measure, inside the step's closing transaction).
@@ -3232,8 +3358,13 @@ export async function recoveryStep(db, ctx, executors = RECOVER_EXECUTORS) {
         return { moved: true, done: true, held: false };
       }
       const next = { phase: RECOVER_PHASES[at + 1], file: null, offset: 0, blobId: null, groupSize: null, pairsAdded: run.pairsAdded };
+      // history-off is otherwise read only at the top of this loop, so a chunk in flight when it is touched still commits and
+      // the advance after it would too. No phase advance starts under it (D-5727, FR2): an advance under off waits one more tick. One already past this check, waiting on the write lock or inside its transaction, may still commit; the procedure touches off before the verb.
+      if (existsSync(ctx.paths.off)) return { moved, done: false, held: true };
       withTx(db, 'NORMAL', () => {
         if (at === 0 && run.foreign.length > 0) bump(db, 'journal_head_mismatch', run.foreign.length);
+        // D-5727: the replay's writer layout is measured here, in the advance's transaction with the cursor (measureReplayLayout).
+        if (next.phase === 'export-blobs') measureReplayLayout(db, run);
         db.prepare(RECOVER_CURSOR_SQL).run(formatRecoverCursor(next), version);
       });
       cursor = next;
@@ -3414,7 +3545,9 @@ function finishBind(home, P, role, deps, out, now) {
  *  On success, store.mjs's adoptStore commits `bound:<ms>` = adopt, a new writer token and the `bind` row, then
  *  writes store.writer, then store.id (D-4220). Adopt registers no recovery step: the store
  *  is whole, it only moved (RC16). The carry line repeats §8.4's remedy, because the journal and the export are
- *  keyed by the store's id, not by this box; adopt prints it itself (RB11), and HEALTH_REMEDIES is unchanged. */
+ *  keyed by the store's id, not by this box; adopt prints it itself (RB11). D-5635 reverses RB11's "HEALTH_REMEDIES is
+ *  unchanged": the store-unbound remedy, read before the verb, and this line, printed after it, both say lib's
+ *  carryHoldAdvice, because a carry still running at the first tick after the bind clears its segments' marks. */
 export async function adoptArm(home, P, args, deps, out) {
   const now = deps.now ?? Date.now;
   const role = readRole(P);
@@ -3430,7 +3563,7 @@ export async function adoptArm(home, P, args, deps, out) {
     const bound = adoptStore(home, { nowMs: now() });
     const id = bound.storeId;
     out(`history-sweep: adopt: store ${id} is this box's now, under writer ${bound.writer}`);
-    out(`history-sweep: the operator, from a terminal outside any session: if the box this store left still has ~/.ccrc/history/journal/${id}/ or ~/.ccrc/history/export/${id}/, copy each to the same path here (~/.ccrc/history/journal/${id}/, ~/.ccrc/history/export/${id}/); their file names never collide with this box's`);
+    out(`history-sweep: the operator, from a terminal outside any session: if the box this store left still has ~/.ccrc/history/journal/${id}/ or ~/.ccrc/history/export/${id}/, copy each to the same path here (~/.ccrc/history/journal/${id}/, ~/.ccrc/history/export/${id}/); their file names never collide with this box's; if you copy them after this adopt, ${carryHoldAdvice('before you copy')}`);
     return finishBind(home, P, role, deps, out, now);
   } catch (e) {
     if (!(e instanceof StoreError)) throw e;
@@ -4250,6 +4383,13 @@ function findLineEnd(fd, start, size) {
   return null;
 }
 
+// D-5638 (history-ingest-live-beats-exported-tie): the tie flag is the statement's 21st parameter, written as a plain ? because
+// node:sqlite on Node 22 binds positional arguments only to anonymous parameters (a numbered ?NNN fails there with "column index
+// out of range"; measured on the node-floor leg, 22.16.0). It is 1 at ingest (writeChunk) and 0 at segment
+// replay (replayEntryRow). A replayed copy never wins a tie, so a restore's entry keeps its structure on the live file the
+// backup held rather than move onto the exported: row replay just made (whose file_id is always the larger); and at ingest
+// a live copy beats an exported: holder at an equal rank whatever the file ids, which brings back an entry a replay took at
+// a strictly newer rank once the live file is read at that rank. A strictly newer rank wins from either caller, as before.
 const ENTRY_UPSERT = `INSERT INTO entries (uuid, transcript_pk, type, subtype, role, model, parent_uuid,
     ts_ms, request_id, api_block_index, msg_id, source_tool_use_id, tool_name, is_compact_summary,
     provenance, prov_version, parse_state, struct_rank_ns, struct_file_id, blob_id)
@@ -4262,7 +4402,9 @@ const ENTRY_UPSERT = `INSERT INTO entries (uuid, transcript_pk, type, subtype, r
     prov_version = excluded.prov_version, parse_state = excluded.parse_state,
     struct_rank_ns = excluded.struct_rank_ns, struct_file_id = excluded.struct_file_id
   WHERE excluded.struct_rank_ns > entries.struct_rank_ns
-     OR (excluded.struct_rank_ns = entries.struct_rank_ns AND excluded.struct_file_id > entries.struct_file_id)`;
+     OR (? = 1 AND excluded.struct_rank_ns = entries.struct_rank_ns
+         AND (excluded.struct_file_id > entries.struct_file_id
+              OR (SELECT status FROM ingest_files WHERE file_id = entries.struct_file_id) = 'exported'))`;
 
 const INGEST_STMTS = new WeakMap();
 /** The ingest's prepared statements, one set per connection. Each names its columns. */
@@ -4555,7 +4697,7 @@ export function writeChunk(db, chunk) {
         e?.msgId ?? null, e?.sourceToolUseId ?? null, e?.toolName ?? null, e?.isCompactSummary ?? 0,
         e !== null ? r.provenance : RAW_ROW.provenance, PROV_VERSION,
         e !== null ? PARSE_STATE.ok : RAW_ROW.parseState,
-        chunk.rankNs, chunk.fileId, blobId);
+        chunk.rankNs, chunk.fileId, blobId, 1);   // 1: ingest's tie arm (D-5638)
       const entryId = before !== undefined ? before.entry_id : Number(info.lastInsertRowid);
       if (before === undefined) {
         newEntries += 1;
@@ -5262,9 +5404,10 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
         // or revived the bytes in hand, so the guard is for a blob pruned between that probe and this insert, which the lock
         // rules out, and prune never takes a blob an unlinked row names: D-5399's residual is a row replay places against a
         // restore-held tombstone, never one stored here. Replay's replaySidecarRow does not do this: a replayed row travelled
-        // already. Replay marks the blob and its referrers by the first segment that carries them, so after a rebuild no mark
-        // on them names the later segment that carried them again with the new rows: once that segment is lost nothing carries
-        // those rows again, and a second rebuild drops them (the plan's first-wins residual).
+        // already. Replay marks the blob and its referrers by the LAST segment that carries them (D-5637
+        // (history-export-replay-last-carrier), wave 5h-1), the one that carried them again with the new rows, so once that
+        // segment is lost the check after a bind clears those marks and the next pass carries the rows again (closing the
+        // residual B4's plan named, review 621 F3).
         if (!fresh && Number(q.blobUnmark.run(blobId).changes) === 1) clearReferrerMarks(db, [Number(blobId)]);
       }
       // W1-B4 Task 8 (D-4763 (history-export-late-sidecar-clears-marks), NEW): a sidecar row first linked after its entry was
@@ -8531,6 +8674,13 @@ function markExported(db, m) {
     for (const id of m.blobs) s.markBlob.run(m.nowMs, m.name, id);
     for (const id of m.entries) s.markEntry.run(m.nowMs, m.name, id);
     setMeta(db, EXPORT_SEQ_META, String(m.seq));
+    // W5h-1 Task 4 (D-5636 (history-export-vanished-rearm)): the published name joins the listing record in the same
+    // transaction as its marks, so a crash never records a name whose marks did not commit, and the next step does not
+    // re-arm the check on this pass's own segment. lib adds the name; the directory is never re-measured here. A pass
+    // never creates the record (D-5725 (history-export-listing-record-born-at-a-check)): with none, lib answers null and
+    // nothing is written, so the record is born only at a check's done stamp.
+    const listed = addSegmentToListing(getMeta(db, EXPORT_MARKS_CHECKED_LISTING_META), m.name);
+    if (listed !== null) setMeta(db, EXPORT_MARKS_CHECKED_LISTING_META, listed);
     // marked: lib decideMarkOutcome ends the backoff, writing '0' only over another value (RD2)
     const ended = decideMarkOutcome({ outcome: 'marked', recorded: getMeta(db, EXPORT_MARK_FAILS_META) });
     if (ended.write !== null) setMeta(db, EXPORT_MARK_FAILS_META, ended.write);
@@ -8670,11 +8820,48 @@ export async function exportStep(db, ctx) {
   // §9.15 "After a bind": first, and outside the cadence, on the first step after an adopt, a restore or a rebuild. lib
   // decideMarkCheck decides it from WHICH bind facts the last check covered, never their clocks (RD2). A check that
   // cannot list the directory is counted and tried again next step, never thrown out of the tick.
-  const markCheck = decideMarkCheck({ metaKeys: bindFactKeys(db), checkedRecord: getMeta(db, EXPORT_MARKS_CHECKED_BINDS_META) });
+  // W5h-1 Task 4 (D-5636 (history-export-vanished-rearm)): and again, with no new bind fact, when the segment names
+  // listed now (damaged ones included) differ from the record the last check and every pass since left (lib
+  // segmentListingVanished): a segment moved aside or deleted after the first tick re-arms the check. A listing that
+  // cannot be measured is never vanished.
+  const listing = measureSegmentListing(ctx);
+  const vanished = segmentListingVanished({ recorded: getMeta(db, EXPORT_MARKS_CHECKED_LISTING_META), measured: listing });
+  const markCheck = decideMarkCheck({ metaKeys: bindFactKeys(db), checkedRecord: getMeta(db, EXPORT_MARKS_CHECKED_BINDS_META), vanished });
   if (markCheck.check) {
-    try { checkSegmentMarks(db, ctx, markCheck.record); } catch (e) {
+    try { checkSegmentMarks(db, ctx, markCheck.record, listing); } catch (e) {
       if (isBusy(e)) throw e;
       process.stderr.write(`history-sweep: the export marks could not be checked against ${exportDirFor(ctx.paths, ctx.ids.storeId)}: ${e && e.message ? e.message : String(e)}\n`);
+      // D-5632 (history-export-bind-check-batched): counted, and the check's stop recorded beside the count (HEALTH_META.exportMarksCheck),
+      // `unlistable` for a listing that failed and `failed` for any other caught error; best effort, as countOutside is.
+      try {
+        withTx(db, 'NORMAL', () => {
+          bump(db, 'export_marks_check_failed');
+          noteMarkCheckStop(db, ctx, e instanceof SegmentsUnlistable ? 'unlistable' : 'failed', 0);
+        });
+      } catch { /* counted and recorded on the next step that meets it */ }
+    }
+  }
+  // D-5632 (history-export-bind-check-batched): no check is owed, so no stop record and no once-a-check flag may stand.
+  // A build that finished the check without deleting them (B4, after a rollback and a roll-forward) leaves a record that
+  // would age into doctor's export-marks-stalled, or, after a check killed between two batches, the flag alone; both are
+  // deleted whichever of the two stands, so the next check counts once.
+  // W5h-1 Task 4 (D-5636): only on a measured listing. An unlistable directory (null) is never vanished, so a check
+  // owed through the listing alone would read as "no check owed" here; its stop record and the flag stay until a step can list.
+  if (!markCheck.check && listing !== null && (getMeta(db, HEALTH_META.exportMarksCheck) !== null || getMeta(db, EXPORT_MARKS_COUNTED_META) !== null)) {
+    withTx(db, 'NORMAL', () => {
+      const del = db.prepare('DELETE FROM meta WHERE k = ?');
+      del.run(HEALTH_META.exportMarksCheck);
+      del.run(EXPORT_MARKS_COUNTED_META);
+    });
+  }
+  // D-5641 (history-export-damaged-record-remeasured): no check is owed, so a name the damaged record holds is re-measured.
+  // A busy answer ends the tick, as everywhere; any other throw is a bug in the re-measure, and it is counted
+  // (export_marks_check_failed, as a throw inside the check is) and reported, so it fails no scheduled pass: the step goes
+  // on to the export pass, and the next step re-measures again. ctx.deps.remeasureDamaged is an in-process test's seam (D-4247).
+  if (!markCheck.check) {
+    try { (ctx.deps?.remeasureDamaged ?? remeasureDamagedSegments)(db, ctx); } catch (e) {
+      if (isBusy(e)) throw e;
+      process.stderr.write(`history-sweep: the damaged-segment re-measure failed: ${e && e.message ? e.message : String(e)}\n`);
       countOutside(db, 'export_marks_check_failed');
     }
   }
@@ -8727,11 +8914,81 @@ const EXPORT_MARKS_CHECKED_META = 'export_marks_checked_ms';
 /** meta: the bind facts the last check covered, as lib decideMarkCheck's `record` gives them (a JSON list of
  *  `bound:<ms>` keys). */
 const EXPORT_MARKS_CHECKED_BINDS_META = 'export_marks_checked_binds';
-/** Lost live blob ids the bind check hands the referrer clears at a time (D-5395 (history-export-mark-needs-its-blobs)):
- *  bound as one JSON array a batch, so the check's memory is a batch and never every lost blob of a store (1,000,000 of them
- *  cost 609 MB of rows and 3,000,000 over 1.3 GB, past the unit's memory cap; a smaller old-space limit aborted the process
- *  inside the transaction). An in-process test's ctx.deps.exportBindBatch overrides it (D-4247). */
-const EXPORT_BIND_BATCH = 50_000;
+/** meta: the compact record of every segment name the last check listed, damaged ones included, plus every segment a
+ *  pass published since (lib segmentListingRecord's `<count> <digest>`; W5h-1 Task 4, D-5636
+ *  (history-export-vanished-rearm)). Never the names. */
+const EXPORT_MARKS_CHECKED_LISTING_META = 'export_marks_checked_listing';
+
+/** The listing record of export/<store_id>/ now: lib segmentListingRecord over EVERY name listSegments gives, damaged
+ *  ones included. Whether a listed file is whole and this store's is the check's to judge (Task 3, D-5634); this record
+ *  only notices that the listing changed, so moving a damaged file out re-arms the check and empties Task 3's record.
+ *  One readdir and one lstat per listed segment (listSegments' own), no header read and no open. Null when the directory
+ *  cannot be listed for any reason but ENOENT (listSegments throws: ENOTDIR, EACCES), which lib never reads as a vanished
+ *  segment; an absent directory lists none. A file that goes between the readdir and its lstat reads as unlistable for that
+ *  step, so the re-arm waits one step. W5h-1 Task 4 (D-5636). */
+function measureSegmentListing(ctx) {
+  let segs;
+  try { segs = listSegments(exportDirFor(ctx.paths, ctx.ids.storeId)); } catch { return null; }
+  return segmentListingRecord(segs.map((x) => x.name));
+}
+/** meta: set in the transaction of the first batch of a check after a bind that clears any mark, and deleted by the check's
+ *  done stamp: export_segment_missing is bumped once per check, however many batches and steps it takes, a kill between two
+ *  batches included (O39; D-5632 (history-export-bind-check-batched)). */
+const EXPORT_MARKS_COUNTED_META = 'export_marks_counted';
+/** meta: the writer layout one recovery replay measured (D-5727 (history-export-replay-layout-once)): the recover row's version and each
+ *  writer's `[lo, hi]` seq range (lib formatReplayLayout, parseReplayLayout). Written at the replay's phase advance into export-blobs, widened
+ *  by its export chunks, deleted by finishRecovery. Sweep-private: neither status nor doctor reads it, and decideMarkCheck's bind facts
+ *  (`bound:<ms>`) never match it. It never rides the recover cursor (an older build refuses a cursor grammar it does not know, and the step stalls). */
+const EXPORT_REPLAY_LAYOUT_META = 'export_replay_layout';
+/** One page of the check's blob keyset: the blobs whose mark names a missing segment, pruned ones too (D-5396), from
+ *  blob_id `after` on, with their stored length (0 for a pruned blob, so a NULL length never reaches lib). */
+const MARK_CHECK_BLOB_PAGE_SQL = 'SELECT blob_id AS id, coalesce(length(z), 0) AS bytes FROM blobs WHERE blob_id > ? AND exported_seg IN (SELECT value FROM json_each(?)) ORDER BY blob_id LIMIT ?';
+/** The same over the entries marked with a missing segment themselves; an entry is bounded by rows only. */
+const MARK_CHECK_ENTRY_PAGE_SQL = 'SELECT entry_id AS id, 0 AS bytes FROM entries WHERE entry_id > ? AND exported_seg IN (SELECT value FROM json_each(?)) ORDER BY entry_id LIMIT ?';
+
+/** export/<store_id>/ could not be listed (listSegments threw: ENOTDIR, EACCES and the rest, never ENOENT). Its message is
+ *  the listing's own, so the step's stderr line names the cause; exportStep records the stop as `unlistable`. */
+class SegmentsUnlistable extends Error {
+  constructor(cause) {
+    super(cause && cause.message ? cause.message : String(cause), { cause });
+    this.name = 'SegmentsUnlistable';
+  }
+}
+
+/** After a batch of the check commits: a TRUNCATE checkpoint under busy_timeout 0, so a reader on an older snapshot answers
+ *  busy at once instead of after BUSY_TIMEOUT_MS (measured: 30 s a batch), with the writer's timeout restored whatever
+ *  happened. A busy answer is tolerated, never thrown. Answers the WAL bytes the checkpoint could not truncate: 0 when it
+ *  did, the log's frames times the page size when it answered busy, which lib markCheckStop reads against the ceiling. */
+function truncateWalAfterBatch(db, pageSize) {
+  db.exec('PRAGMA busy_timeout = 0');
+  try {
+    const r = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+    return Number(r.busy) === 0 ? 0 : Math.max(0, Number(r.log)) * pageSize;
+  } finally {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  }
+}
+
+/** A batch's cleared marks, in the batch's transaction: HEALTH_META.exportSegmentMissing ACCUMULATES them (the marks
+ *  cleared since the last complete pass, which resets it to 0), and the first batch of a check that clears any bumps
+ *  export_segment_missing, once (EXPORT_MARKS_COUNTED_META). */
+function noteMarksCleared(db, n) {
+  if (n === 0) return;
+  const prev = getMeta(db, HEALTH_META.exportSegmentMissing);
+  setMeta(db, HEALTH_META.exportSegmentMissing, String((prev !== null && /^[0-9]{1,16}$/.test(prev) ? Number(prev) : 0) + n));
+  if (getMeta(db, EXPORT_MARKS_COUNTED_META) === null) {
+    bump(db, 'export_segment_missing');
+    setMeta(db, EXPORT_MARKS_COUNTED_META, '1');
+  }
+}
+
+/** A check that stopped short records why, in the caller's transaction: HEALTH_META.exportMarksCheck, lib's
+ *  nextMarkCheckState over what meta holds (the word; since when its class of word first stood, kept within a class and
+ *  restarted across classes; the marks cleared so far, added) in formatMarkCheckState's grammar. */
+function noteMarkCheckStop(db, ctx, word, cleared) {
+  const next = nextMarkCheckState({ recorded: getMeta(db, HEALTH_META.exportMarksCheck), word, nowMs: ctx.now(), cleared });
+  setMeta(db, HEALTH_META.exportMarksCheck, formatMarkCheckState(next));
+}
 
 /** The meta keys that may be bind facts: every adopt, restore and rebuild writes `bound:<ms>` inside its binding
  *  transaction (B2's D-4724 (history-binding-facts-before-link)). A measurement only: lib decideMarkCheck says which are facts.
@@ -8740,68 +8997,176 @@ function bindFactKeys(db) {
   return db.prepare("SELECT k FROM meta WHERE k LIKE 'bound:%'").all().map((r) => String(r.k));
 }
 
-/** §9.15 "After a bind": every blob and entry mark whose segment is not in export/<store_id>/ on THIS box is cleared,
- *  so its rows export again. A directory left on the box the store came from is the usual cause; carrying it before
- *  the verb avoids the re-export (§8.4). Which names are missing is lib missingSegmentNames' answer over the marked
- *  names and the listing measured here. One NORMAL transaction; when anything was cleared, export_segment_missing +1
- *  and HEALTH_META.exportSegmentMissing holds how many marks, which doctor WARNs on until a complete pass resets it.
- *  Either way it records its clock and `record`, the bind facts lib decideMarkCheck says it covers. Two DISTINCT scans
- *  of exported_seg per bind, blobs then entries, and one more of the blobs and one of the entries for the missing segments
- *  together (the blobs their marks name, then the marks themselves); neither column has an index and none is added. An entry
- *  that references a blob whose mark went, pruned or live, loses its own mark with it, whichever segment marked it
- *  (D-5395 (history-export-mark-needs-its-blobs), D-5396 (history-export-bind-clears-pruned-referrers)), and
- *  those entries count in the number cleared. A directory that is
- *  absent (ENOENT) lists as none, so every mark naming a segment is missing; one that cannot be listed for any other
- *  reason (ENOTDIR, EACCES) is NOT absent: listSegments throws, before anything is cleared or recorded, and exportStep
- *  counts it and tries again next step. */
-export function checkSegmentMarks(db, ctx, record) {
-  const dir = exportDirFor(ctx.paths, ctx.ids.storeId);
-  const present = listSegments(dir).map((x) => x.name);   // [] only for a proven ENOENT; ENOTDIR, EACCES and the rest throw
-  const named = new Set();
-  for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM blobs WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
-  for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM entries WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
-  const segments = missingSegmentNames({ named, present });
-  let cleared = 0;
-  withTx(db, 'NORMAL', () => {
-    if (segments.length > 0) {
-      // Set-wise, once for every missing segment (the names bound as one JSON array): one scan of the blobs for the ones
-      // whose marks go, four statements a batch of them for their referrers, then the two clears of the marks themselves. Per
-      // segment and per blob this took 6.7 s on 300,000 blobs and entries over 30 segments (measured), set-wise 1.7 to 2.0 s.
-      const names = JSON.stringify(segments);
-      // D-5395 (history-export-mark-needs-its-blobs), D-5396 (history-export-bind-clears-pruned-referrers): the blobs whose marks
-      // name a missing segment, pruned or live, collected BEFORE their marks go. An entry that references one of them stays
-      // marked with a segment that IS here, and its blob is exported no more, so the entries get their marks cleared with the
-      // blobs'. A pruned blob is no exception: its bytes are gone, but a mark on it means its bytes were exported, and they are
-      // held only by the segment the mark names (a stub is never marked), and an entry exported again later into another
-      // segment does not carry it again (planSegment carries only a live blob with no mark, and stubs every pruned blob with
-      // no mark, on every export of its entry, so a pruned blob with a mark gets neither). With that segment gone no live
-      // segment would hold the blob, and a rebuild from the live segments could not place the entry (export_row_blob_missing)
-      // or its variants. Clearing the entry lets the next pass that finds it due write it again, with a stub of the pruned
-      // blob (D-4759), in the segment that then marks it. Each entry is counted once, here or in the clear of its own
-      // segment's marks below.
-      // Iterated, never materialised, and handed to the clears a batch at a time: the referrer clears touch `entries` only and
-      // the blobs' marks go after the last of them, so the cursor over `blobs` is never written under.
-      const batch = Number.isSafeInteger(ctx.deps?.exportBindBatch) && ctx.deps.exportBindBatch > 0 ? ctx.deps.exportBindBatch : EXPORT_BIND_BATCH;
-      let ids = [];
-      for (const r of db.prepare('SELECT blob_id FROM blobs WHERE exported_seg IN (SELECT value FROM json_each(?))').iterate(names)) {
-        ids.push(Number(r.blob_id));
-        if (ids.length >= batch) {
-          cleared += clearReferrerMarks(db, ids);
-          ids = [];
-        }
+/** W5h-1 Task 3 (D-5634 (history-export-segment-whole-check)): which of the listed segment names count as present. A name
+ *  counts only when lib decideSegmentWhole answers `whole` over store.mjs segmentFileFacts (its length agrees with its
+ *  SQLite header) and lib decideSegmentOwn answers `own` over the meta openSegment and segmentMeta read back (this store's
+ *  store_id, under the name its seq and writer give). Every other listed name is `damaged`, with the verdict that failed
+ *  it, and the caller treats it as missing. A header read and one read-only open per listed segment; no quick_check (its
+ *  cost grows with the whole export). Only a segment-unreadable StoreError is a verdict; any other throw is a bug and
+ *  propagates to the caller. From checkSegmentMarks it reaches exportStep's catch, which counts the check failed
+ *  (export_marks_check_failed), records the stop `failed` and leaves the done stamp unwritten, so the check runs again. From
+ *  remeasureDamagedSegments it reaches the catch around that call in exportStep (D-5641), which counts
+ *  export_marks_check_failed, prints one stderr line and lets the step go on to the export pass; the next step re-measures
+ *  again. A busy answer is rethrown by both, and ends the tick. Nothing under export/ is written, renamed or removed here. */
+function segmentsWholeAndOwn(dir, names, storeId) {
+  const present = [];
+  const damaged = [];
+  for (const name of names) {
+    const p = `${dir}/${name}`;
+    let verdict = decideSegmentWhole(segmentFileFacts(p));
+    if (verdict === 'whole') {
+      let meta = null;
+      try {
+        const h = openSegment(p);
+        try { meta = segmentMeta(h); } finally { h.close(); }
+      } catch (e) {
+        if (!(e instanceof StoreError && e.word === 'segment-unreadable')) throw e;
       }
-      cleared += clearReferrerMarks(db, ids);
-      cleared += Number(db.prepare('UPDATE blobs SET exported_ms = NULL, exported_seg = NULL WHERE exported_seg IN (SELECT value FROM json_each(?))').run(names).changes);
-      cleared += Number(db.prepare('UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE exported_seg IN (SELECT value FROM json_each(?))').run(names).changes);
+      verdict = decideSegmentOwn({ meta, storeId, name });
     }
-    if (cleared > 0) {
-      bump(db, 'export_segment_missing');
-      setMeta(db, HEALTH_META.exportSegmentMissing, String(cleared));
+    if (verdict === 'own') present.push(name);
+    else damaged.push({ name, verdict });
+  }
+  return { present, damaged };
+}
+
+/** The damaged names this check found, recorded for doctor (HEALTH_META.exportSegmentDamaged, a JSON list in (seq, writer)
+ *  order; lib readSegmentNameList reads it back), in one NORMAL transaction of its own, and only when the record changes:
+ *  each name not already recorded counts export_segment_damaged once and prints one stderr line naming its verdict. A
+ *  check that finds none empties a record that held some, so doctor's WARN clears once the files are moved out and a
+ *  check runs. A record that does not read back is rewritten whole, every name in it counted as new. */
+function noteSegmentsDamaged(db, dir, damaged) {
+  const names = orderSegmentNames(damaged.map((d) => d.name));
+  const text = JSON.stringify(names);
+  const was = getMeta(db, HEALTH_META.exportSegmentDamaged);
+  if ((was ?? '[]') === text) return;
+  let before;
+  try { before = new Set(readSegmentNameList(was)); } catch { before = new Set(); }
+  const fresh = damaged.filter((d) => !before.has(d.name));
+  withTx(db, 'NORMAL', () => {
+    if (fresh.length > 0) bump(db, 'export_segment_damaged', fresh.length);
+    setMeta(db, HEALTH_META.exportSegmentDamaged, text);
+  });
+  for (const d of fresh) {
+    process.stderr.write(`history-sweep: export segment ${d.name} in ${dir} is ${d.verdict}: its marks are cleared and its rows export again; it is left in place\n`);
+  }
+}
+
+/** D-5641 (history-export-damaged-record-remeasured): a step that owes no check re-measures the names the damaged record
+ *  holds, and only those, with the check's own measurement and lib's verdicts (segmentsWholeAndOwn). A name that now reads
+ *  whole and this store's leaves the record, so a repair in place (a whole copy put back under the name, or a late carry
+ *  that finished) clears doctor's WARN without waiting for the next bind. The record is rewritten only when it changes;
+ *  nothing is counted, cleared or marked (the name's marks were cleared when it was recorded). A name that still fails, or is
+ *  now absent, stays until a check rewrites the record. An absent or empty record costs nothing; one that does not read
+ *  back is left alone (the next check rewrites it whole, and status names it unmeasured). Nothing under export/ is written
+ *  and no file is opened read-write. */
+function remeasureDamagedSegments(db, ctx) {
+  const was = getMeta(db, HEALTH_META.exportSegmentDamaged);
+  if (was === null) return;
+  let names;
+  try { names = readSegmentNameList(was); } catch { return; }
+  if (names.length === 0) return;
+  const dir = exportDirFor(ctx.paths, ctx.ids.storeId);
+  const { present, damaged } = segmentsWholeAndOwn(dir, names, ctx.ids.storeId);
+  if (present.length === 0) return;
+  setMeta(db, HEALTH_META.exportSegmentDamaged, JSON.stringify(damaged.map((d) => d.name)));
+  for (const name of present) {
+    process.stderr.write(`history-sweep: export segment ${name} in ${dir} is whole again; it leaves the damaged record\n`);
+  }
+}
+
+/** §9.15 "After a bind": every blob and entry mark whose segment is not in export/<store_id>/ on THIS box is cleared, so its
+ *  rows export again. A directory left on the box the store came from is the usual cause; carrying it before the verb avoids
+ *  the re-export (§8.4). Which names are missing is lib missingSegmentNames' answer over the marked names (two DISTINCT
+ *  scans of exported_seg, blobs then entries; no index, none added) and the listing measured here, recomputed on every step:
+ *  no cursor is kept, and rows a step already cleared no longer match.
+ *
+ *  In bounded batches (D-5632 (history-export-bind-check-batched)), blobs first and then entries, each paged by its primary
+ *  key from the first row. A blob batch is one NORMAL transaction that reads its page, takes what lib planMarkCheckBatch
+ *  says (EXPORT_BIND_BYTES of stored z, at most EXPORT_BIND_BATCH rows, always one), clears the marks of every entry that
+ *  references one of those blobs (the four referrer statements, D-5395 (history-export-mark-needs-its-blobs), pruned blobs
+ *  included, D-5396 (history-export-bind-clears-pruned-referrers)) and THEN the blobs' own marks, so no commit leaves a live
+ *  blob unmarked under marked entries. An entry batch clears the marks naming a missing segment on the entries themselves.
+ *  Each batch adds its count to HEALTH_META.exportSegmentMissing and its stored bytes to the run's budget, and is followed by
+ *  a TRUNCATE checkpoint that a reader may answer busy. Before each batch lib markCheckStop decides whether it may start:
+ *  history-off (`off`), a WAL the last checkpoint could not truncate past EXPORT_BIND_WAL_CEILING (`wal-held`) or a spent
+ *  run budget (`budget`) stops the check, recorded in HEALTH_META.exportMarksCheck, with no done stamp, so the next step
+ *  checks again. After the last batch, one transaction stamps export_marks_checked_ms and `record` (the bind facts lib
+ *  decideMarkCheck says this check covers) and deletes the stop record and the once-a-check flag.
+ *
+ *  Outside db/'s free-space floor, as the export pass is (D-4762 (history-export-outside-capture-pause)): one batch's WAL is
+ *  17.4 MiB for a full 16 MiB batch of 8 KiB blobs and 23.2 MiB for a batch of 50,000 blobs of 300 B with their referrers (both
+ *  measured), truncated after each batch when no reader holds the WAL. While a reader does, the WAL can reach about
+ *  EXPORT_BIND_WAL_CEILING plus one batch (64 MiB plus the 17-23 MiB measured) before the check stops on `wal-held`. A directory that is absent (ENOENT) lists as none, so every
+ *  mark naming a segment is missing; one that cannot be listed for any other reason throws SegmentsUnlistable before
+ *  anything is cleared or recorded. Answers what it cleared in this step, the missing names, and the word it stopped with
+ *  (null when it ran to its done stamp). */
+export function checkSegmentMarks(db, ctx, record, listing = null) {
+  const dir = exportDirFor(ctx.paths, ctx.ids.storeId);
+  let listed;
+  try { listed = listSegments(dir).map((x) => x.name); } catch (e) { throw new SegmentsUnlistable(e); }   // [] only for ENOENT
+  // D-5634 (history-export-segment-whole-check): a listed name is present only when whole and this store's; a damaged one is
+  // treated as missing (its marks clear, its rows export again) and recorded for doctor, and stays where it is.
+  const { present, damaged } = segmentsWholeAndOwn(dir, listed, ctx.ids.storeId);
+  noteSegmentsDamaged(db, dir, damaged);
+  const named = markedSegmentNames(db);
+  const segments = missingSegmentNames({ named, present });
+  const names = JSON.stringify(segments);
+  // ctx.deps.exportBindBatch, exportBindBytes and exportBindWalCeiling are an in-process test's bounds (D-4247); shipped code
+  // reads lib's.
+  const seam = (v, d) => (Number.isSafeInteger(v) && v > 0 ? v : d);
+  const maxRows = seam(ctx.deps?.exportBindBatch, EXPORT_BIND_BATCH);
+  const maxBytes = seam(ctx.deps?.exportBindBytes, EXPORT_BIND_BYTES);
+  const walCeiling = seam(ctx.deps?.exportBindWalCeiling, EXPORT_BIND_WAL_CEILING);
+  const pageSize = Number(db.prepare('PRAGMA page_size').get().page_size);
+  let cleared = 0;
+  let walBytes = 0;
+  /** One phase's batches until its keyset is spent (null) or a stop word. */
+  const phase = (pageSql, clearBatch) => {
+    const page = db.prepare(pageSql);
+    let after = 0;
+    for (;;) {
+      const word = markCheckStop({ budgetLeft: budgetLeft(ctx.budget), off: existsSync(ctx.paths.off), walBytes, walCeiling });
+      if (word !== null) return word;
+      const b = withTx(db, 'NORMAL', () => {
+        const plan = planMarkCheckBatch({ rows: page.all(after, names, maxRows), maxBytes, maxRows });
+        if (plan.ids.length === 0) return null;
+        const n = clearBatch(plan.ids);
+        noteMarksCleared(db, n);
+        return { ...plan, n };
+      });
+      if (b === null) return null;
+      cleared += b.n;
+      ctx.budget.bytes += b.bytes;
+      after = b.after;
+      walBytes = truncateWalAfterBatch(db, pageSize);
+      ctx.deps?.afterMarkBatch?.({ ids: b.ids.length, bytes: b.bytes, walBytes });   // an in-process test's hook (D-4247)
     }
+  };
+  if (segments.length > 0) {
+    const blobClear = db.prepare('UPDATE blobs SET exported_ms = NULL, exported_seg = NULL WHERE blob_id IN (SELECT value FROM json_each(?)) AND exported_seg IN (SELECT value FROM json_each(?))');
+    const entryClear = db.prepare('UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE entry_id IN (SELECT value FROM json_each(?)) AND exported_seg IN (SELECT value FROM json_each(?))');
+    // D-5639 (history-export-bind-check-wal-first): measure the WAL before the step's first batch too, with the same busy-tolerant
+    // checkpoint, so a step that starts behind a reader's held WAL past the ceiling stops `wal-held` without writing a batch.
+    walBytes = truncateWalAfterBatch(db, pageSize);
+    const stopped = phase(MARK_CHECK_BLOB_PAGE_SQL, (ids) => clearReferrerMarks(db, ids) + Number(blobClear.run(JSON.stringify(ids), names).changes))
+      ?? phase(MARK_CHECK_ENTRY_PAGE_SQL, (ids) => Number(entryClear.run(JSON.stringify(ids), names).changes));
+    if (stopped !== null) {
+      withTx(db, 'NORMAL', () => noteMarkCheckStop(db, ctx, stopped, cleared));
+      return { cleared, segments, stopped };
+    }
+  }
+  withTx(db, 'NORMAL', () => {
     setMeta(db, EXPORT_MARKS_CHECKED_META, String(ctx.now()));
     setMeta(db, EXPORT_MARKS_CHECKED_BINDS_META, record);
+    // W5h-1 Task 4 (D-5636): the listing measured at the start of this step, never re-measured here, so a segment that
+    // goes after that measurement differs from the record and re-arms the next step. Null (unmeasured): left as it is.
+    if (listing !== null) setMeta(db, EXPORT_MARKS_CHECKED_LISTING_META, listing);
+    const del = db.prepare('DELETE FROM meta WHERE k = ?');
+    del.run(HEALTH_META.exportMarksCheck);
+    del.run(EXPORT_MARKS_COUNTED_META);
   });
-  return { cleared, segments };
+  return { cleared, segments, stopped: null };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {

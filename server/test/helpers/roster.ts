@@ -92,7 +92,7 @@ export const DEFAULT_TEST_ROSTER = {
       // ccrc-account.test.ts, and adopt.test.ts's `expect(gpt.telemetry)
       // .toBe('none')`). Nothing in this repo ever writes `'codex'`; a roster
       // only carries it after an operator edits it by hand, which is how the
-      // live fleet's gpt/gpt2 got theirs on 2026-09-11.
+      // live fleet's gpt/gpt7 got theirs on 2026-09-11.
       //
       // So this row is the shape the PRODUCT can actually produce, and bending
       // it to the post-edit value left the declare-shaped case guarded by

@@ -15,6 +15,21 @@ export interface CommandContext {
   setSkin: (choice: string) => void;
   setTheme: (choice: string) => void;
   openShortcuts: () => void;
+  /** The fleet flows' New session sheet (`useFleetFlows().openNewSession`, D-5468). */
+  openNewSession: () => void;
+  openPalette: () => void;
+  /** The palette is showing: a command that opens it is not offered inside it. */
+  paletteOpen: boolean;
+  /** The session screen's flows (`SessionFlows`, W2 Task S2d), while one is mounted: null elsewhere, so a session
+   *  command is offered only on a session route. */
+  session: SessionCommandTarget | null;
+}
+
+/** What a session command reaches (D-5466): the open session's flows, which say whether an item is offered (its
+ *  gate, the ⋯ menu's own) and run it. One answer for the menu, the palette and every door. */
+export interface SessionCommandTarget {
+  offers: (id: string) => boolean;
+  run: (id: string) => void;
 }
 
 /** A second list a command opens in place of running: "Switch theme…" opens

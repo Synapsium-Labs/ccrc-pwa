@@ -19,8 +19,9 @@ import {
  *  Until `$REG/<this>` exists the lane MEASURES, keeps its durable first-dead anchors, trips its breaker and RECORDS
  *  "would end programme <slug> (<n> runs)" — a feed row and an attention entry — and never reaches `closeRun`'s abandon
  *  arm or the child-reclaim port. It has NO WRITER in the tree: the operator touches it by hand in the registry the
- *  server reads, and `single-definition.test.ts` pins that. Spelled here and nowhere else in `server/src`. */
-export const DEAD_COORDINATOR_LANE_LIVE_MARKER = 'dead-coordinator-lane-live';
+ *  server reads, and `single-definition.test.ts` pins that. Spelled once, in its `shared/switches.ts` row (D-5855), and
+ *  re-exported here. */
+export { DEAD_COORDINATOR_LANE_LIVE_MARKER } from '../../shared/switches.js';
 
 /** The hour (L4). The anchor's age is compared with it; it is the server's own rule, not a box's. */
 export const DEAD_COORDINATOR_AFTER_MS = 60 * 60_000;
@@ -58,7 +59,7 @@ export type ClaimantReading =
 // ── the journal clause ───────────────────────────────────────────────────────
 
 /** The acts that put a session down ON PURPOSE (spec §5.4): ccd's `stop`, `archive`, `reap`, `destroy`, `purge` and
- *  `forget` (`_LC_ACTS`), CCR-15's `reclaim` and stage 3's `expire`. An `unsupervise` counts when it carries a
+ *  `forget` (`_LC_ACTS`), #166's `reclaim` and stage 3's `expire`. An `unsupervise` counts when it carries a
  *  DECLARED surface — `_ws_unsupervise`'s `dec.surface`, which reads `none` when ccd acted on its own account.
  *
  *  `hibernate` (`hibernate-long-idle-sessions` (D-5242)): `ccd hibernate` journals it BEFORE its own `_ws_unsupervise`

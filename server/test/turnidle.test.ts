@@ -422,10 +422,16 @@ describe('turnidle.ts is the pure module its docstring says it is', () => {
     expect(code().replace(/\s/g, '').length).toBeGreaterThan(400);
   });
 
-  it('imports nothing: not a type, not a value, not a re-export, not a dynamic import', () => {
-    expect(code(), 'turnidle.ts has an import line').not.toMatch(/^\s*import\b/m);
-    expect(code(), 'turnidle.ts re-exports from another module').not.toMatch(/\bfrom\s+['"`]/);
-    expect(code(), 'turnidle.ts has a dynamic import or a require').not.toMatch(/\bimport\s*\(|\brequire\s*\(/);
+  /** D-5855: the one import it may hold, its three markers from the L0 switchboard (`shared/switches.ts`, which
+   *  imports nothing but a type and reaches no `node:` module). Anything else is still refused below. */
+  const SWITCHBOARD = /^import \{ MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER \} from '\.\.\/\.\.\/shared\/switches\.js';$/m;
+
+  it('imports nothing but its markers from the switchboard: no other type, value, re-export or dynamic import', () => {
+    expect(code(), 'turnidle.ts no longer takes its markers from the switchboard').toMatch(SWITCHBOARD);
+    const rest = code().replace(SWITCHBOARD, '');
+    expect(rest, 'turnidle.ts has an import line').not.toMatch(/^\s*import\b/m);
+    expect(rest, 'turnidle.ts re-exports from another module').not.toMatch(/\bfrom\s+['"`]/);
+    expect(rest, 'turnidle.ts has a dynamic import or a require').not.toMatch(/\bimport\s*\(|\brequire\s*\(/);
   });
 
   it('has no clock: now is an argument', () => {

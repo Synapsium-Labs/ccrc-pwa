@@ -51,6 +51,7 @@ import { navigate } from '../src/lib/router';
 import { resetAcks } from '../src/lib/seen';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { renderFleet } from './fleetHost';
 import { TEST_ROSTER } from './rosterFixture';
 
 beforeEach(() => {
@@ -174,7 +175,7 @@ describe('the durable door to /accounts (D-161)', () => {
   it('sits in the fleet header, says what it is, and routes there', async () => {
     stubFetch({ authed: true, passkeysEnrolled: 1, mode: 'passphrase' });
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     const door = screen.getByRole('button', { name: 'Your sign-in and accounts' });
     // In the header's control cluster, beside the mail badge and the bell —
     // not somewhere down the list where it would be a second strip.
@@ -193,7 +194,7 @@ describe('the durable door to /accounts (D-161)', () => {
     // never signed in anywhere.
     stubFetch({ authed: true, passkeysEnrolled: 1, mode: 'passphrase' });
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     act(() => { store.setState({ conn: 'open', sessions: [] }); });
     expect(screen.getByRole('button', { name: 'Your sign-in and accounts' })).toBeInTheDocument();
   });
@@ -225,7 +226,7 @@ describe('the passphrase-only notice (D-161)', () => {
     supportBrowser();
     stubFetch({ authed: true, passkeysEnrolled: 0, mode: 'off' });
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     await settle();
     expect(screen.queryByRole('button', { name: NOTICE })).not.toBeInTheDocument();
   });
@@ -234,7 +235,7 @@ describe('the passphrase-only notice (D-161)', () => {
     supportBrowser();
     stubFetch(PASSPHRASE_ONLY);
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     const line = await screen.findByRole('button', { name: NOTICE });
     // ONE line, not one per render path.
     expect(screen.getAllByRole('button', { name: NOTICE })).toHaveLength(1);
@@ -247,7 +248,7 @@ describe('the passphrase-only notice (D-161)', () => {
     supportBrowser();
     stubFetch({ authed: true, passkeysEnrolled: 1, mode: 'passphrase' });
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     await settle();
     expect(screen.queryByRole('button', { name: NOTICE })).not.toBeInTheDocument();
   });
@@ -260,7 +261,7 @@ describe('the passphrase-only notice (D-161)', () => {
     supportBrowser();
     stubFetch({ authed: false, passkeysEnrolled: 0, mode: 'passphrase' });
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     await settle();
     expect(screen.queryByRole('button', { name: NOTICE })).not.toBeInTheDocument();
   });
@@ -291,7 +292,7 @@ describe('an OLDER SERVER omitting a field never buys the nag (D-161 fix round)'
   ])('says nothing when the body omits %s', async (_field, body) => {
     supportBrowser();
     stubFetch(body);
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     await settle();
     expect(screen.queryByRole('button', { name: NOTICE })).not.toBeInTheDocument();
   });
@@ -327,7 +328,7 @@ describe('an UNREADABLE mode never buys the nag (D-161 honesty pass)', () => {
   ])('says nothing when mode is %s', async (_what, mode) => {
     supportBrowser();
     stubFetch({ authed: true, passkeysEnrolled: 0, mode });
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     await settle();
     expect(screen.queryByRole('button', { name: NOTICE })).not.toBeInTheDocument();
   });
@@ -342,7 +343,7 @@ describe('an UNREADABLE mode never buys the nag (D-161 honesty pass)', () => {
     // way in. A guard that only knew `'passphrase'` would go quiet exactly then.
     supportBrowser();
     stubFetch({ authed: true, passkeysEnrolled: 0, mode: 'locked-out' });
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     expect(await screen.findByRole('button', { name: NOTICE })).toBeInTheDocument();
   });
 });
@@ -358,7 +359,7 @@ describe('the notice does not nag when enrolling is IMPOSSIBLE (D-161 fix round)
     // operator's only move is to stop trusting the line.
     level1Browser();
     stubFetch(PASSPHRASE_ONLY);
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
     await act(async () => {});
     expect(screen.queryByRole('button', { name: NOTICE })).not.toBeInTheDocument();
@@ -369,7 +370,7 @@ describe('the notice does not nag when enrolling is IMPOSSIBLE (D-161 fix round)
     // entirely would satisfy it.
     supportBrowser();
     stubFetch(PASSPHRASE_ONLY);
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     expect(await screen.findByRole('button', { name: NOTICE })).toBeInTheDocument();
   });
 });
@@ -381,7 +382,7 @@ describe('the notice retires and returns with the box\'s posture (D-161 fix roun
     supportBrowser();
     let keys = 0;
     stubFetch(() => ({ authed: true, passkeysEnrolled: keys, mode: 'passphrase' }));
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     await screen.findByRole('button', { name: NOTICE });
     keys = 1;
     await act(async () => { authPostureChanged(); });
@@ -392,7 +393,7 @@ describe('the notice retires and returns with the box\'s posture (D-161 fix roun
     supportBrowser();
     let keys = 1;
     stubFetch(() => ({ authed: true, passkeysEnrolled: keys, mode: 'passphrase' }));
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
     await act(async () => {});
     expect(screen.queryByRole('button', { name: NOTICE })).not.toBeInTheDocument();
@@ -420,7 +421,7 @@ describe('the notice retires and returns with the box\'s posture (D-161 fix roun
       }
       return json(200, {});
     }));
-    render(<FleetScreen store={makeStore()} />);
+    renderFleet(<FleetScreen store={makeStore()} />);
     await waitFor(() => expect(pending).toHaveLength(1));
     act(() => { authPostureChanged(); });
     await waitFor(() => expect(pending).toHaveLength(2));
@@ -450,7 +451,7 @@ describe('enrolling on /accounts retires the notice in the same document (D-161 
       () => ({ credentials: keys > 0 ? [CRED] : [], storeUnreadable: false }),
       { onEnrolled: () => { keys = 1; }, onRevoked: () => { keys = 0; } },
     );
-    render(<><FleetScreen store={makeStore()} /><AccountsScreen /></>);
+    renderFleet(<><FleetScreen store={makeStore()} /><AccountsScreen /></>);
     return { keys: () => keys };
   };
 
@@ -488,7 +489,7 @@ describe('the /accounts auth blocks say whose they are (D-161)', () => {
     const title = await screen.findByText('Your sign-in');
     const block = title.closest('section');
     expect(block).not.toBeNull();
-    // `.accounts-row` + `.account-gauge-label` are what a claude2/gpt row
+    // `.accounts-row` + `.account-gauge-label` are what a claude9/gpt row
     // wears. Wearing them made "Passkeys" scan as a fifth fleet account.
     expect(block!.className).not.toContain('accounts-row');
     expect(title.className).not.toContain('account-gauge-label');

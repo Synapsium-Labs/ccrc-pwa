@@ -21,7 +21,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isReclaimRefuseCode, type ReclaimRefuseCode, type RunSummary } from '../../../shared/api';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, TextInput } from '@ccrc/ui';
-import { ApiError, UNKNOWN_RUN_TEXT, api, apiErrorText, kickoffErrorText } from '../lib/api';
+import { ApiError, UNKNOWN_RUN_TEXT, api, apiErrorText, isRegistryUnmeasurable, kickoffErrorText } from '../lib/api';
 import './fleet.css';
 
 /** The reclaim refusals this sheet renders its OWN sentence for — a total
@@ -82,6 +82,14 @@ function reclaimErrorText(err: unknown): string {
   if (!(err instanceof ApiError)) return RECLAIM_COPY.unknown;
   const body = typeof err.body === 'object' && err.body !== null
     ? (err.body as Record<string, unknown>) : {};
+  // D-5971: the WORD, not the status (the door answers it 502, the table's status; an older server's kickoff
+  // answered the same word 503). `detail` is the only thing separating this code's two producers — an
+  // unlistable registry and a tmux that did not answer (D-1139).
+  if (isRegistryUnmeasurable(err)) {
+    const detail = typeof body.detail === 'string' && body.detail.trim() !== ''
+      ? body.detail.trim() : null;
+    return detail ?? RECLAIM_COPY['registry-unmeasurable'];
+  }
   if (err.status === 404) {
     return body.error === 'unknown-session' ? RECLAIM_COPY['unknown-session'] : RECLAIM_COPY['unknown-run'];
   }
@@ -132,13 +140,6 @@ function reclaimErrorText(err: unknown): string {
     // moment it does.
     if (code !== null) return RECLAIM_COPY[code];
     return RECLAIM_COPY.unknown;
-  }
-  if (err.status === 502) {
-    // `detail` is the only thing separating this code's two producers — an
-    // unlistable registry and a tmux that did not answer (D-1139).
-    const detail = typeof body.detail === 'string' && body.detail.trim() !== ''
-      ? body.detail.trim() : null;
-    return detail ?? RECLAIM_COPY['registry-unmeasurable'];
   }
   if (err.status === 501) return RECLAIM_COPY['not-configured'];
   if (err.status === 400) return RECLAIM_COPY['bad-request'];
@@ -282,7 +283,48 @@ export function ResumeSheet({
   };
 
   return (
-    <Sheet open onClose={onClose} title="The coordinator is gone">
+    <Sheet
+      open
+      onClose={onClose}
+      title="The coordinator is gone"
+      // The three doors are pinned in the Sheet's footer (D-5932); a run nobody claims offers none.
+      footer={claimedBy === null ? undefined : (
+        <div className={QC_ACTIONS}>
+          <Button variant="primary" disabled={busy !== null} onClick={revive}>
+            {busy === 'revive' ? 'Reviving…' : `Revive ${claimedBy}`}
+          </Button>
+          <Button variant="ghost" disabled={busy !== null} onClick={reKickoff}>
+            {busy === 'kickoff' ? 'Queueing…' : 'Re-kickoff'}
+          </Button>
+          {reclaimOpen ? (
+            <>
+              {/* The same object `.sess-hold-input` was: a single-line id
+                  field inside a fleet sheet, self-grounded, tap-floored, with
+                  the ::placeholder ink. It is `TextInput` now rather than a
+                  third copy of those ten declarations. */}
+              <TextInput
+                aria-label={`Hand run ${run.id} to this session id`}
+                placeholder="session id"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+              />
+              <Button variant="ghost"
+                      disabled={busy !== null || to.trim() === ''} onClick={reclaim}>
+                {busy === 'reclaim' ? 'Handing over…' : 'Reclaim'}
+              </Button>
+            </>
+          ) : (
+            <Button variant="ghost" disabled={busy !== null}
+                    onClick={() => setReclaimOpen(true)}>
+              That id cannot be revived
+            </Button>
+          )}
+          <Button variant="ghost" disabled={busy !== null} onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
+      )}
+    >
       <div className="abandon-sheet">
         <p className={QC_CONSEQUENCE}>
           {claimedBy === null
@@ -293,42 +335,6 @@ export function ResumeSheet({
             ? `Run ${run.id} names no coordinator, so there is nobody to revive and nothing to hand over.`
             : `${claimedBy} claims run ${run.id} — ${run.program}, wave ${run.wave} — and this box measured it dead. Cheapest door first: bring the pane back, tell it to pick the wave up, or hand the program to another session.`}
         </p>
-        {claimedBy !== null && (
-          <div className={QC_ACTIONS}>
-            <Button variant="primary" disabled={busy !== null} onClick={revive}>
-              {busy === 'revive' ? 'Reviving…' : `Revive ${claimedBy}`}
-            </Button>
-            <Button variant="ghost" disabled={busy !== null} onClick={reKickoff}>
-              {busy === 'kickoff' ? 'Queueing…' : 'Re-kickoff'}
-            </Button>
-            {reclaimOpen ? (
-              <>
-                {/* The same object `.sess-hold-input` was: a single-line id
-                    field inside a fleet sheet, self-grounded, tap-floored, with
-                    the ::placeholder ink. It is `TextInput` now rather than a
-                    third copy of those ten declarations. */}
-                <TextInput
-                  aria-label={`Hand run ${run.id} to this session id`}
-                  placeholder="session id"
-                  value={to}
-                  onChange={(e) => setTo(e.target.value)}
-                />
-                <Button variant="ghost"
-                        disabled={busy !== null || to.trim() === ''} onClick={reclaim}>
-                  {busy === 'reclaim' ? 'Handing over…' : 'Reclaim'}
-                </Button>
-              </>
-            ) : (
-              <Button variant="ghost" disabled={busy !== null}
-                      onClick={() => setReclaimOpen(true)}>
-                That id cannot be revived
-              </Button>
-            )}
-            <Button variant="ghost" disabled={busy !== null} onClick={onClose}>
-              Cancel
-            </Button>
-          </div>
-        )}
         {note !== null && <p className={QC_CONSEQUENCE}>{note}</p>}
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>

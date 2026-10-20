@@ -1,4 +1,4 @@
-// Child reclamation wave 9 (spec §5.10), widened by CCR-15 wave 10 (path-identity spec 2026-10-12 §5.4, §5.5): what the
+// Child reclamation wave 9 (spec §5.10), widened by #166 wave 10 (path-identity spec 2026-10-12 §5.4, §5.5): what the
 // collector executor's case files share: `collect-temp-root.test.ts`, `collect-temp-root-reads.test.ts`,
 // `collect-open-run-hold.test.ts` and `collect-switch-executor.test.ts`. A ccd SCRIPT behind the agent's REAL exec
 // whitelist (`testDeps`), a registry and a coordination store under a fixture HOME, the switch's REAL generation journal
@@ -23,7 +23,7 @@ import type {
   CollectControlDeps, CollectJob, CollectLanePort, CollectLinkPort, CollectTempRootDeps,
 } from '../src/coord/collectTempRoot.js';
 import { FleetIdentityCell, type FleetNodeMeasured } from '../src/fleetidentity.js';
-import type { FleetIO } from '../src/io.js';
+import type { FleetIO, MeasuredDirectoryRead } from '../src/io.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { ExecResult, Runner } from '../src/exec.js';
 import type { CollectToken } from '../../shared/api.js';
@@ -209,17 +209,23 @@ export const rig = (o: RigOpts = {}) => {
   let returned = 0;
   const io: FleetIO = {
     ...base.io,
-    readdir: async (p: string, timeoutMs?: number, signal?: AbortSignal) => {
-      if (p !== reg) return base.io.readdir(p, timeoutMs, signal);
+    // The registry's listing is intercepted on the MEASURED reader, which the executor reads (D-5969); `'null'` is
+    // the measured `unreadable` an older agent's bare null becomes. The plain `readdir` derives from it.
+    async readdirMeasured(p: string, timeoutMs?: number, signal?: AbortSignal): Promise<MeasuredDirectoryRead> {
+      if (p !== reg) return base.io.readdirMeasured(p, timeoutMs, signal);
       listings += 1;
       const what = hooks.listing?.(listings);
       try {
         if (what === 'reject') throw new Error('EIO: the registry listing failed');
-        if (what === 'null') return null;
-        return await base.io.readdir(p, timeoutMs, signal);
+        if (what === 'null') return { ok: false, reason: 'unreadable' };
+        return await base.io.readdirMeasured(p, timeoutMs, signal);
       } finally {
         returned += 1;
       }
+    },
+    async readdir(p: string, timeoutMs?: number, signal?: AbortSignal) {
+      const r = await this.readdirMeasured(p, timeoutMs, signal);
+      return r.ok ? [...r.entries] : null;
     },
   };
   const lane = fakeLane({ obs1: o.obs1 === undefined ? RIPE : o.obs1, lastSeenLive: o.lastSeenLive ?? (o.live !== false) });

@@ -264,9 +264,9 @@ describe('the naming sweep', () => {
     // Own account (claude): the projects root exists but holds nothing for
     // this uuid — a genuine, COMPLETE miss.
     mkdirSync(path.join(h.home, '.claude', 'projects'), { recursive: true });
-    // A DIFFERENT account (claude2, `.claude-personal`) holds a transcript for
+    // A DIFFERENT account (claude9, `.claude-home`) holds a transcript for
     // the SAME uuid, with a real ai-title — findable only via rung 6.
-    const foreignDir = path.join(h.home, '.claude-personal', 'projects', '-stranded');
+    const foreignDir = path.join(h.home, '.claude-home', 'projects', '-stranded');
     mkdirSync(foreignDir, { recursive: true });
     writeFileSync(path.join(foreignDir, `${UUID}.jsonl`),
       TITLE('Brainstorm Helix and slide notes integration') + '\n');
@@ -560,14 +560,14 @@ describe('the naming sweep', () => {
   // while a coordinator held a ledger naming the old one. The claim now wins.
   it('will not rename a HELD workspace — the claim outranks the title', async () => {
     const h = harness();
-    seed(h.home, { hold: 'program:agent-evals wave:1/4' });
+    seed(h.home, { hold: 'program:prog-j wave:1/4' });
     transcript(h.home, [TITLE('Fix the PR sheet')]);
     const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);
 
     await w.sweepNames();
     expect(renames(h.calls), 'a claimed workspace is not renamed').toEqual([]);
     expect(readFileSync(path.join(h.home, '.cc-sessions', `${ID}.hold`), 'utf8'))
-      .toBe('program:agent-evals wave:1/4');
+      .toBe('program:prog-j wave:1/4');
     expect(h.calls, 'a skipped row emits no verb at all — not even a probe').toEqual([]);
   });
 
@@ -673,7 +673,7 @@ describe('the naming sweep', () => {
   // stop naming that workspace for the life of the server process, with no log
   // line saying why.
   it('does not retire an incarnation on a `held` refusal — a hold is not permanent', async () => {
-    const h = harness('{"refused":"held","detail":"program:agent-evals wave:1/4","paths":[]}');
+    const h = harness('{"refused":"held","detail":"program:prog-j wave:1/4","paths":[]}');
     seed(h.home);                                   // unheld at read time; ccd refuses at call time
     transcript(h.home, [TITLE('Fix the PR sheet')]);
     const w = new FleetWatcher(testDeps(h.home, h.run), new Bus(), 2000);

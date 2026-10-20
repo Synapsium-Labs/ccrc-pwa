@@ -1,8 +1,8 @@
-# CCR-15 wave 10: the collector switch in Settings Implementation Plan
+# #166 wave 10: the collector switch in Settings Implementation Plan
 
 > **For agentic workers:** this plan is dispatched as a wave to a `ccrc-worker` session; follow the `ccrc-worker` skill for the protocol (ack, claims, asks, wave-done). To execute the tasks, REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Programme:** child-reclamation (CCR-15), **wave 10 of 10**, run 400. **Deploy class: server.** The `ccd/ccrc` wording reaches each box through the normal release. This wave changes the server, the shared L0 foot, the PWA and the `ccd/ccrc` wording only. It does not edit `ccd/ccd` or the agent. Wave 9 (#354, `28e8dc1b2`) shipped the collector lane, armed by the hand-touched `$REG/collect-lane-live`. It is deployed and was armed on 2026-10-12 at 11:02 UTC.
+**Programme:** child-reclamation (#166), **wave 10 of 10**, run 400. **Deploy class: server.** The `ccd/ccrc` wording reaches each box through the normal release. This wave changes the server, the shared L0 foot, the PWA and the `ccd/ccrc` wording only. It does not edit `ccd/ccd` or the agent. Wave 9 (#354, `28e8dc1b2`) shipped the collector lane, armed by the hand-touched `$REG/collect-lane-live`. It is deployed and was armed on 2026-10-12 at 11:02 UTC.
 
 **Goal:** Give the operator a Settings switch for what arms the temp-root collector's deletion, in a form that is safe across rollback. After this wave:
 - **Two arms, then one (R96).** The lane is live when either of these holds:
@@ -71,7 +71,7 @@ Task 14 writes this wave's as-built note into §5. `docs/superpowers/specs/2026-
 - `ccd/ccrc`: usage text, comments and `_upd_report`'s downgrade echo only (Task 13);
 - `README.md` (Task 14's sentences);
 - `CLAUDE.md`: the box-token bullet's session-only sentence (Task 9), the coord.db bullet (Task 14), and line 10's README numeral only if Task 14's re-measure moves it;
-- the path-identity spec's and the CCR-15 spec's as-built notes, the contract's "§17 as built" note (Task 14); and this plan's `## Deviations found`, which only the coordinator writes, at a fix round (no task edits this plan).
+- the path-identity spec's and the #166 spec's as-built notes, the contract's "§17 as built" note (Task 14); and this plan's `## Deviations found`, which only the coordinator writes, at a fix round (no task edits this plan).
 
 **It never edits:**
 - `ccd/ccd`, anything under `agent/` or `deploy/`, `ccd/ccrc-api`, or any skill text (`ccd/*-skill/**`);
@@ -143,7 +143,7 @@ A ruling wins over any task text it names.
 R1 to R19 are the coordinator's wave-10 rulings (SW-R1 to SW-R19), renumbered.
 
 - **R1. Shape.**
-  - CCR-15 wave 10 of 10, run 400.
+  - #166 wave 10 of 10, run 400.
   - Server, PWA and `ccd/ccrc` wording only: no `ccd/ccd` and no agent edit.
   - Deploy class: server.
   - Plan path: `docs/superpowers/plans/2026-10-12-child-reclamation-wave10-collector-settings-switch.md`.
@@ -8083,7 +8083,7 @@ STOP rules:
 (a) Replace the whole content of `server/test/collectTempRootFixture.ts` with:
 
 ```ts
-// Child reclamation wave 9 (spec §5.10), widened by CCR-15 wave 10 (path-identity spec 2026-10-12 §5.4, §5.5): what the
+// Child reclamation wave 9 (spec §5.10), widened by #166 wave 10 (path-identity spec 2026-10-12 §5.4, §5.5): what the
 // collector executor's case files share: `collect-temp-root.test.ts`, `collect-temp-root-reads.test.ts`,
 // `collect-open-run-hold.test.ts` and `collect-switch-executor.test.ts`. A ccd SCRIPT behind the agent's REAL exec
 // whitelist (`testDeps`), a registry and a coordination store under a fixture HOME, the switch's REAL generation journal
@@ -8422,7 +8422,7 @@ After:
 (a) Create `server/test/collect-switch-executor.test.ts`:
 
 ```ts
-// CCR-15 wave 10 (path-identity spec 2026-10-12 §5.5, §5.9): the executor's FINAL RE-READ. After the job's last await
+// #166 wave 10 (path-identity spec 2026-10-12 §5.5, §5.9): the executor's FINAL RE-READ. After the job's last await
 // (the registry listing at step 5), with nothing awaited before the argv, the executor does four things:
 //   - it retires the marker's latch through its one helper;
 //   - it measures both capabilities;
@@ -8723,7 +8723,7 @@ describe('through the lane: the watcher’s port, its control and the latch row 
 (b) Create `server/test/collect-latch.test.ts`:
 
 ```ts
-// CCR-15 wave 10 (path-identity spec 2026-10-12 §5.4): the ONE latch helper, `collectRetireLatch`, and the control read
+// #166 wave 10 (path-identity spec 2026-10-12 §5.4): the ONE latch helper, `collectRetireLatch`, and the control read
 // it stands on, `collectControlNow`. The helper retires the legacy marker's latch through the store's one writer only
 // when L1's `collectLatchDue` says so. That needs a listing that is coherent, unpaused, listed, on the same epoch, and
 // that proves the marker absent while the latch is unset. The helper never heals a mismatch, writes its one row only on
@@ -8898,7 +8898,7 @@ describe('collectControlNow reads the switch as it stands (path-identity spec §
 (c) Create `server/test/collect-switch-scans.test.ts`:
 
 ```ts
-// CCR-15 wave 10 (path-identity spec 2026-10-12 §5.5, §5.9): the executor's final re-read, read as TEXT. These are the
+// #166 wave 10 (path-identity spec 2026-10-12 §5.5, §5.9): the executor's final re-read, read as TEXT. These are the
 // orderings a type cannot hold:
 //   - nothing is awaited from the final listing's answer to the argv, the latch, the reads and the resolution included;
 //   - the control and identity reads stand after the job's last await;
@@ -10340,7 +10340,7 @@ Every line after that stays byte for byte.
 **(iii) Create `server/test/collect-switch-lane.test.ts`:**
 
 ```ts
-// CCR-15 wave 10 (path-identity spec 2026-10-12 §5.4, §5.5, §5.7): the collector switch, wired through the LANE. The
+// #166 wave 10 (path-identity spec 2026-10-12 §5.4, §5.5, §5.7): the collector switch, wired through the LANE. The
 // executor's own final reads and its latch are `collect-switch-executor`'s and `collect-latch`'s; what is only provable
 // HERE is what the pass and the port do:
 // - the pass's own listing retires the latch (the hand transition), so an idle lane follows a removed marker within one
@@ -16197,7 +16197,7 @@ wc -l < ccd/ccrc > "${TMPDIR:-/tmp}/t13-lines"                                  
 **1a. Create `server/test/collect-lane-restore-wording.test.ts`:**
 
 ```ts
-// CCR-15 wave 10, Task 13 (path-identity spec 2026-10-12 §5.3, §5.9): the temp-root collector's generation journal is
+// #166 wave 10, Task 13 (path-identity spec 2026-10-12 §5.3, §5.9): the temp-root collector's generation journal is
 // never backed up, restored or rolled back. A coord.db snapshot may move backward while the journal stays current, so a
 // restored database that disagrees with it stops the lane instead of re-arming it. These cases pin what the operator is
 // TOLD: both `CoordDbUnmigratable` restore sentences, `ccrc`'s update and backup usage, the one cross-side name, and the
@@ -16354,7 +16354,7 @@ After:
 
 ```ts
 import { reportFrom, type NodeFileRead } from '../src/update/inventory.js';
-// CCR-15 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
+// #166 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
 import { COLLECT_LANE_JOURNAL_BASENAME } from '../src/coord/collectLaneJournal.js';
 ```
 
@@ -16576,7 +16576,7 @@ After:
 
 ```ts
 import { psArgs } from './laneReaper.js';
-// CCR-15 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
+// #166 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
 import { COLLECT_LANE_JOURNAL_BASENAME } from '../src/coord/collectLaneJournal.js';
 ```
 
@@ -17073,7 +17073,7 @@ MSG
   - the coord.db bullet (`- `~/.ccrc/coord.db`:` up to `- **Zero new ccd verbs`);
   - line 10's numeral, only if Step 4 measures that it must change.
 - Modify: `server/test/stall-settings-prose.test.ts`: the coord.db bullet's pinned substring (`'mail, claims, asks, central pool edges, update intents, the stall-watch settings choice — is '`).
-- Modify: `docs/superpowers/specs/2026-10-12-path-identity-design.md`: add a new `### §5 as built (CCR-15 wave 10, run 400)` after §5.9's last bullet (`- PWA tests cover every state, the confirm sheet, pre-latch Off policy, other-node view, mismatch and 404.`) and before `## 6. The waves`.
+- Modify: `docs/superpowers/specs/2026-10-12-path-identity-design.md`: add a new `### §5 as built (#166 wave 10, run 400)` after §5.9's last bullet (`- PWA tests cover every state, the confirm sheet, pre-latch Off policy, other-node view, mismatch and 404.`) and before `## 6. The waves`.
 - Modify: `docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md`:
   - a new paragraph in §5.10, after `  Arming is what makes "an orphaned temp root is collected with no human act" true.`;
   - §8, a wave 10 row after `| 9 | server | the collector's lane, as built…`;
@@ -17137,7 +17137,7 @@ Any other count than the one stated is a STOP. Report it by slug and build nothi
 // Child reclamation wave 10 (path-identity spec 2026-10-12 §5): what the operator documents say about the temp-root
 // collector's switch in Settings. The lane has two arms, then one: the legacy file until its journaled retirement, and
 // Settings for the fleet node measured on the current connection. These rows pin the sentences that say so, the
-// whole-state restore boundary, the two as-built notes and the CCR-15 spec's wave 10 paragraph and row, CLAUDE.md's
+// whole-state restore boundary, the two as-built notes and the #166 spec's wave 10 paragraph and row, CLAUDE.md's
 // coord.db bullet, and the two carried retitles (inventory items 38 and 40). Wave 9's `collect-lane-prose.test.ts` keeps
 // its pins and is run, never edited. The marker's name and the journal's basename are imported from their definers, so
 // this file is a second holder of neither spelling.
@@ -17243,7 +17243,7 @@ describe("the switch's prose is true (path-identity spec §5)", () => {
 
   it('the path-identity spec carries §5 as built', () => {
     const spec = read(PI_SPEC);
-    const heading = '### §5 as built (CCR-15 wave 10, run 400)';
+    const heading = '### §5 as built (#166 wave 10, run 400)';
     expect(spec.indexOf('### 5.9 Proof'), 'the note sits after §5.9').toBeLessThan(spec.indexOf(heading));
     const note = flat(between('the path-identity spec, §5 as built', spec, heading, '## 6. The waves'));
     expect(note).not.toMatch(DEVIATION);
@@ -17276,7 +17276,7 @@ describe("the switch's prose is true (path-identity spec §5)", () => {
     expect(note).toContain('**Departures found while building.**');
   });
 
-  it('the CCR-15 spec carries wave 10 in §5.10 and in §8', () => {
+  it('the #166 spec carries wave 10 in §5.10 and in §8', () => {
     const s = flat(read(CCR_SPEC));
     const para = '**The Settings switch (wave 10), as built.** Wave 10 gives the lane two arms, then one';
     expect(s).toContain(para);
@@ -17324,7 +17324,7 @@ Expected: 9 cases, 9 failed. Each red shape (these were drafted, not measured, s
 - the CLAUDE.md case: `expected '…' to contain 'update intents, the stall-watch settings choice, the collector switch — is gone without the snapshot'`;
 - the path-identity spec case: `the note sits after §5.9: expected 3… to be less than -1`;
 - the contract case: `the note follows R98: expected -1 to be greater than 3…`;
-- the CCR-15 case: `expected '…' to contain '**The Settings switch (wave 10), as built.** …'`;
+- the #166 case: `expected '…' to contain '**The Settings switch (wave 10), as built.** …'`;
 - item 40: `collectLane.ts, collectBoxProbesAtArrival's docstring: expected '…' to contain 'rebuilt'`;
 - item 38: `expected '…' to contain "the act’s answer counts for the box ahead of the forgotten-id return', async () => {"`.
 
@@ -17504,7 +17504,7 @@ After:
 ```markdown
 - PWA tests cover every state, the confirm sheet, pre-latch Off policy, other-node view, mismatch and 404.
 
-### §5 as built (CCR-15 wave 10, run 400)
+### §5 as built (#166 wave 10, run 400)
 
 This note says how wave 10 of the child-reclamation programme (run 400) built this section, and where the build reads
 it more narrowly than the text above or Figure 5. It amends; it edits no earlier text. The programme contract's
@@ -17591,7 +17591,7 @@ Step 8 replaces the `None.` line when this wave recorded any departure. Measure 
 
 Correct the text to the code, never the reverse.
 
-- [ ] **Step 6: The CCR-15 spec**
+- [ ] **Step 6: The #166 spec**
   - (a) §5.10. Before:
     ```markdown
       Arming is what makes "an orphaned temp root is collected with no human act" true.
@@ -17643,7 +17643,7 @@ Where wave 10's code and the plan's text narrowed or spelled out R96, they now r
 edits no earlier text. It names each departure by slug and carries no number: the coordinator assigns this wave's
 numbers from the block run 400 was issued, and the wave 10 plan's `## Deviations found` defines them. This wave's
 committed comments and test titles cite §5 of the path-identity design spec, whose "§5 as built" note states the same
-points. The CCR-15 design spec gains an as-built paragraph in §5.10 and a wave row in §8.
+points. The #166 design spec gains an as-built paragraph in §5.10 and a wave row in §8.
 
 **R96 (two arms, then one), reconciled before the build.** The plan's rulings settle where the spec's sections and its
 Figure 5 differ, and the code keeps each:
@@ -17708,12 +17708,12 @@ const slugs = (file, from, to) => {
   const s = t.slice(a, b); const d = s.indexOf('**Departures found while building.**');
   return [...new Set(s.slice(d).match(/\`[a-z0-9]+(?:-[a-z0-9]+)+\`/g) || [])].sort().join(' ');
 };
-const spec = slugs('docs/superpowers/specs/2026-10-12-path-identity-design.md', '### §5 as built (CCR-15 wave 10, run 400)', '## 6. The waves');
+const spec = slugs('docs/superpowers/specs/2026-10-12-path-identity-design.md', '### §5 as built (#166 wave 10, run 400)', '## 6. The waves');
 const contract = slugs('docs/superpowers/programs/child-reclamation-contract.md', '### §17 as built (wave 10, run 400)', null);
 console.log(spec === contract ? 'same slugs: ' + (spec || '(none)') : 'DIFFER\nspec: ' + spec + '\ncontract: ' + contract);
 "
 sed -n '/^### §17 as built (wave 10, run 400)/,$p' docs/superpowers/programs/child-reclamation-contract.md | grep -cE 'D-[0-9]'   # 0
-sed -n '/^### §5 as built (CCR-15 wave 10, run 400)/,/^## 6\. The waves/p' docs/superpowers/specs/2026-10-12-path-identity-design.md | grep -cE 'D-[0-9]'   # 0
+sed -n '/^### §5 as built (#166 wave 10, run 400)/,/^## 6\. The waves/p' docs/superpowers/specs/2026-10-12-path-identity-design.md | grep -cE 'D-[0-9]'   # 0
 ```
 Expected: `same slugs: …` and two `0`s.
 
@@ -17815,7 +17815,7 @@ Expected: PASS. What each one checks here:
 | T14.8 | Contract: type a deviation token (the letter D, a hyphen and four digits) into one sentence of the §17 note, in the scratch edit only | `./node_modules/.bin/vitest run test/collect-switch-prose.test.ts test/collect-lane-prose.test.ts` | "the contract carries §17 as built": `expected '…' not to match /\bD-\d/`; and collect-lane-prose's "carries the wave's as-built note…", whose slice runs to the end of the file |
 | T14.9 | `watch.ts`: put back `an answer older than the probes' latest change is skipped, as` | `./node_modules/.bin/vitest run test/collect-switch-prose.test.ts` | item 40: `watch.ts, the collector's arrival comment: expected '…' to contain 'rebuilt'` |
 | T14.10 | `collect-lane-leaving.test.ts`: put back `before its id is looked up` in item 38's title | same | item 38: `expected '…' to contain "the act’s answer counts for the box ahead of the forgotten-id return', async () => {"` |
-| T14.11 | CCR-15 spec: delete the wave 10 row | same | "the CCR-15 spec carries wave 10…": `expected '…' to contain '\| 10 \| server + pwa \| the collector switch in Settings, as built:'` |
+| T14.11 | #166 spec: delete the wave 10 row | same | "the #166 spec carries wave 10…": `expected '…' to contain '\| 10 \| server + pwa \| the collector switch in Settings, as built:'` |
 | T14.12 | A line inserted above a cited anchor: add `// mutation` as a new line 1 of `shared/api.ts` | `./node_modules/.bin/vitest run test/session-hook.test.ts -t 'README HAS ITS OWN CENSUS\|THE RANGE BOUND'` | "README HAS ITS OWN CENSUS ENTRY, and it is EMPTY": README's `shared/api.ts:7878-7880` anchor (and its bare follow-ons) no longer resolves. Measure which of the two cases reds; at least one must |
 | T14.13 | README: append `` (`server/src/collectLane.ts:999999`) `` to the switch block's first sentence | same as T14.12 | "THE RANGE BOUND: no citation names a line its file does not have": a README citation past the end of the file. This proves the new README text is inside the corpus |
 
@@ -17846,7 +17846,7 @@ the Temp root collector section, the verb table's ws-collect row names both
 arms, and the Deploy section's restore prose says to leave the journal in
 place.
 
-The path-identity spec gains "§5 as built", the CCR-15 spec gains wave 10's
+The path-identity spec gains "§5 as built", the #166 spec gains wave 10's
 paragraph in §5.10 and its row in §8, and the contract gains "§17 as built"
 after R98. Each names the reconciliations settled before the build, the
 departures found while building by slug, and the two stated residuals:
@@ -18316,7 +18316,7 @@ The body template (a quoted heredoc, so `$REG` stays literal):
 cat > "${TMPDIR:-/tmp}/w10-pr-body.tmpl.md" <<'EOF'
 ## Child reclamation wave 10: the collector switch in Settings
 
-Programme: child reclamation (CCR-15), wave 10 of 10, run 400. Deploy class: server.
+Programme: child reclamation (#166), wave 10 of 10, run 400. Deploy class: server.
 Plan: `docs/superpowers/plans/2026-10-12-child-reclamation-wave10-collector-settings-switch.md`.
 Spec: `docs/superpowers/specs/2026-10-12-path-identity-design.md` §5. Contract §17, R96.
 

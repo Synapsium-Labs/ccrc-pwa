@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import fs from 'node:fs';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -18,7 +17,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import type { FleetReadiness } from '../src/readiness.js';
 
-const ID = 'claude2-MekWarLive';
+const ID = 'claude9-Project-F';
 
 const seedSession = (home: string, id: string, fields: Record<string, string>) => {
   const reg = path.join(home, '.cc-sessions');
@@ -28,15 +27,15 @@ const seedSession = (home: string, id: string, fields: Record<string, string>) =
 
 const seedDefault = (home: string) =>
   seedSession(home, ID, {
-    wrapper: 'claude2',
-    project: 'MekWarLive',
-    workdir: '/data/projects/MekWarLive',
+    wrapper: 'claude9',
+    project: 'Project-F',
+    workdir: '/data/projects/Project-F',
     uuid: '1'.repeat(36),
     started: '1',
   });
 
 /** D-5240: the swap route reads the turn (`turnVerdictFor`) before the queue and inside it, fail-closed, and this
- *  file's session runs on `claude2`, an account the test roster does not carry, which reads `unmeasured`. A swap case
+ *  file's session runs on `claude9`, an account the test roster does not carry, which reads `unmeasured`. A swap case
  *  here is about argv, queueing and the 502, so it moves the row onto a roster account and proves the pane gone: a
  *  verdict of `idle` with no further read (`swap-route-busy.test.ts` owns busy and unmeasured). */
 const swappable = (home: string): void => {
@@ -146,7 +145,7 @@ describe('lifecycle routes', () => {
     const { app, calls, cfg } = await makeApp({ ccdVerbs: ['start', 'enable', 'ensure', 'stop', 'swap', 'stop-surface'] });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude9', 'Project-F']]);
     await app.close();
   });
 
@@ -173,6 +172,10 @@ describe('lifecycle routes', () => {
   // exactly the shape the agent reports for that old ccd (it lists `stop`
   // but never prints the new capability token), so this test drives the
   // SAME decision the route makes in that real deployment window.
+  // Since path identity W1a a flagged stop puts the pair FIRST
+  // (`stop --surface pwa <id>`, spec §2.4); the trailing spelling above is
+  // the measured history. The rule this test pins is unchanged: a ccd that
+  // never advertised stop-surface is sent no flag, in either position.
   it('a fleet ccd that does not advertise stop-surface gets the bare argv old ccd understands (the skew case)', async () => {
     const { app, calls, cfg } = await makeApp({ ccdVerbs: ['start', 'enable', 'ensure', 'stop', 'swap'] });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
@@ -182,7 +185,7 @@ describe('lifecycle routes', () => {
     // not a degraded failure.
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude9', 'Project-F']]);
     await app.close();
   });
 
@@ -192,7 +195,7 @@ describe('lifecycle routes', () => {
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude9', 'Project-F']]);
     await app.close();
   });
 
@@ -213,19 +216,19 @@ describe('lifecycle routes', () => {
     // Still 200 — the bare argv is one every ccd generation understands, so
     // the stop still genuinely happens. Only the DECLARATION is withheld.
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude9', 'Project-F']]);
     await app.close();
   });
 
   it('POST /api/sessions/:id/stop uses the id-prefix wrapper, not a swapped registry wrapper', async () => {
     // After `ccd swap`, the registry `wrapper` field flips to the new account but
     // the session id and tmux name keep the ORIGINAL wrapper prefix
-    // (claude2-cctest). Stop must target the id's prefix wrapper so ccd recomputes
+    // (claude9-cctest). Stop must target the id's prefix wrapper so ccd recomputes
     // the correct id — using the swapped wrapper would kill a nonexistent session
     // and leave the real one alive.
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude2-cctest', {
+    seedSession(home, 'claude9-cctest', {
       wrapper: 'claude',            // swapped to claude…
       project: 'cctest',
       workdir: '/data/projects/cctest',
@@ -242,27 +245,27 @@ describe('lifecycle routes', () => {
       cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
       fleetState: { connected: true, downSince: null, ccdVerbs: ['stop', 'stop-surface'], rosterFp: null, build: null },
     });
-    const res = await app.inject({ method: 'POST', url: '/api/sessions/claude2-cctest/stop', payload: {} });
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/claude9-cctest/stop', payload: {} });
     expect(res.statusCode).toBe(200);
-    // …but stop must still target claude2-cctest, not claude-cctest.
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'cctest', '--surface', 'pwa']]);
+    // …but stop must still target claude9-cctest, not claude-cctest.
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude9', 'cctest']]);
     await app.close();
   });
 
   it('POST /api/sessions/:id/stop passes a WORKSPACE id whole, never a reversed one', async () => {
     // A workspace id is `<project>-<slug>`, not `<wrapper>-<project>`. Reversing
-    // it cannot work: `rp-llm-quiet-mesa` does not end in `-rp-llm`, so the
+    // it cannot work: `project-j-quiet-mesa` does not end in `-project-j`, so the
     // prefix rule falls through to rec.wrapper and ccd recomputes
-    // `claude-rp-llm` — a DIFFERENT, live session. It would then kill tmux
-    // cc-claude-rp-llm and disable claude-session@claude-rp-llm, exit 0, and
+    // `claude-project-j` — a DIFFERENT, live session. It would then kill tmux
+    // cc-claude-project-j and disable claude-session@claude-project-j, exit 0, and
     // the PWA would report success while the workspace kept running.
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'rp-llm-quiet-mesa', {
+    seedSession(home, 'project-j-quiet-mesa', {
       wrapper: 'claude',
-      project: 'rp-llm',
+      project: 'project-j',
       workspace: 'quiet-mesa',
-      workdir: '/home/rc/worktrees/rp-llm/quiet-mesa',
+      workdir: '/home/u/worktrees/project-j/quiet-mesa',
       uuid: '3'.repeat(36),
       started: '1',
     });
@@ -275,9 +278,9 @@ describe('lifecycle routes', () => {
       cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
       fleetState: { connected: true, downSince: null, ccdVerbs: ['stop', 'stop-surface'], rosterFp: null, build: null },
     });
-    const res = await app.inject({ method: 'POST', url: '/api/sessions/rp-llm-quiet-mesa/stop', payload: {} });
+    const res = await app.inject({ method: 'POST', url: '/api/sessions/project-j-quiet-mesa/stop', payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'rp-llm-quiet-mesa', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'project-j-quiet-mesa']]);
     await app.close();
   });
 
@@ -415,6 +418,8 @@ describe('lifecycle routes', () => {
 // a session literally named `<id>---surface`, exit 0, the real session
 // left running with its unit enabled. That is what a `--surface` in the
 // argv below would have risked; the assertion is that it is never there.
+// Since path identity W1a the flag, when sent, LEADS the id (spec §2.4); the
+// rule pinned here is unchanged: no evidence, no flag, in either position.
 describe('local mode: the stop route with REAL local-caps evidence (fix round 3, task 14)', () => {
   const writeStubCcd = (dir: string, name: string, body: string): string => {
     mkdirSync(dir, { recursive: true });
@@ -454,7 +459,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     // argv an old ccd would have silently misparsed.
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude9', 'Project-F']]);
     await app.close();
   });
 
@@ -479,7 +484,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude9', 'Project-F']]);
     await app.close();
   });
 
@@ -500,7 +505,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude9', 'Project-F']]);
     await app.close();
   });
 
@@ -541,7 +546,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     // Racing the still-in-flight read: no evidence yet, so no --surface.
     const early = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(early.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude9', 'Project-F']]);
 
     await capsPromise; // now it has genuinely resolved
     expect(fleetState.ccdVerbs).toContain('stop-surface');
@@ -549,7 +554,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     calls.length = 0;
     const late = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(late.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude9', 'Project-F']]);
 
     await app.close();
   });
@@ -559,14 +564,14 @@ describe('listProjects', () => {
   it('merges projects-root directories with registry workdirs, deduped by workdir', async () => {
     const root = mkTmp('ccrc-projects-');
     mkdirSync(path.join(root, 'alpha'));
-    mkdirSync(path.join(root, 'mekwar'));
+    mkdirSync(path.join(root, 'mid-project'));
     mkdirSync(path.join(root, '.hidden'));               // dotfile — skipped
     writeFileSync(path.join(root, 'stray.txt'), 'x');    // plain file — skipped
 
     const { app, cfg, home } = await makeApp({ projectsRoot: root });
     // Duplicate of a projects-root dir (same workdir) + one workdir outside the root.
-    seedSession(home, 'claude-mekwar', {
-      wrapper: 'claude', project: 'mekwar', workdir: path.join(root, 'mekwar'),
+    seedSession(home, 'claude-mid-project', {
+      wrapper: 'claude', project: 'mid-project', workdir: path.join(root, 'mid-project'),
       uuid: '2'.repeat(36), started: '1',
     });
     seedSession(home, 'claude-otherproj', {
@@ -577,9 +582,9 @@ describe('listProjects', () => {
     const direct = await listProjects(localIO, cfg);
     expect(direct.roots).toEqual([root]);
     expect(direct.projects).toEqual([
-      { name: 'MekWarLive', workdir: '/data/projects/MekWarLive' },   // default seeded registry session
+      { name: 'Project-F', workdir: '/data/projects/Project-F' },   // default seeded registry session
       { name: 'alpha', workdir: path.join(root, 'alpha') },
-      { name: 'mekwar', workdir: path.join(root, 'mekwar') },         // present once despite registry duplicate
+      { name: 'mid-project', workdir: path.join(root, 'mid-project') },         // present once despite registry duplicate
       { name: 'otherproj', workdir: '/data/projects/other-place' },
     ]);
 
@@ -618,7 +623,7 @@ describe('listProjects', () => {
     const { app, cfg } = await makeApp({ projectsRoot: '/nope/does-not-exist' });
     const out = await listProjects(localIO, cfg);
     expect(out.roots).toEqual(['/nope/does-not-exist']);
-    expect(out.projects).toEqual([{ name: 'MekWarLive', workdir: '/data/projects/MekWarLive' }]);
+    expect(out.projects).toEqual([{ name: 'Project-F', workdir: '/data/projects/Project-F' }]);
     await app.close();
   });
 
@@ -640,7 +645,7 @@ describe('listProjects', () => {
 
     const { app, cfg, home } = await makeApp({ projectsRoot: root });
     // `makeApp` -> `seedDefault` seeds `ID` at the box's REAL
-    // `/data/projects/MekWarLive`, which every other test can ignore because it
+    // `/data/projects/Project-F`, which every other test can ignore because it
     // never readdirs that path. This test's whole point is that the union loop
     // NOW readdirs every registry workdir, so a real path outside the sandbox
     // would make the result depend on whatever this box's disk happens to hold
@@ -648,7 +653,7 @@ describe('listProjects', () => {
     // directory (ordinary, `.git`-less, like case (b)) under the test's own
     // tmp root instead, via the same `seedSession` shape `seedDefault` uses,
     // so the expectation holds identically on every box and in CI.
-    const defaultWorkdir = mkTmp('ccrc-mekwarlive-');
+    const defaultWorkdir = mkTmp('ccrc-project-f-');
     seedSession(home, ID, { workdir: defaultWorkdir });
     seedSession(home, 'claude-linked', {
       wrapper: 'claude', project: 'linked-registry', workdir: linkedRegistryWorkdir,
@@ -663,7 +668,7 @@ describe('listProjects', () => {
 
     const out = await listProjects(localIO, cfg);
     expect(out.projects).toEqual([
-      { name: 'MekWarLive', workdir: defaultWorkdir },                // default seeded registry session — fixture, not the box's real path
+      { name: 'Project-F', workdir: defaultWorkdir },                // default seeded registry session — fixture, not the box's real path
       { name: 'gone', workdir: path.join(root, 'does-not-exist') },  // missing workdir — stays listed
       { name: 'plain', workdir: path.join(root, 'plain') },
     ]);
@@ -1007,17 +1012,14 @@ describe('GET /api/projects — the program-ready readiness', () => {
     const { cfg, app } = await makeApp({ projectsRoot: root });
     const out = await listProjects(localIO, cfg);
     expect(out.projects.map((p) => p.name), 'both row sources are represented')
-      .toEqual(expect.arrayContaining(['alpha', 'MekWarLive']));
+      .toEqual(expect.arrayContaining(['alpha', 'Project-F']));
     expect(out.projects.every((p) => !('pool' in p) && !('placement' in p))).toBe(true);
     await app.close();
   });
 });
 
 describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
-  it('is L0: imports nothing at all', () => {
-    const src = fs.readFileSync(path.resolve(__dirname, '../../shared/lifecycle.ts'), 'utf8');
-    expect(src).not.toMatch(/^\s*import /m);
-  });
+  // Its L0 ring is held by server/test/rings/shared-imports.test.ts (D-6045).
   it('declares the five graphify classes', () => {
     const names = LIFECYCLE.map((c) => c.name).sort();
     for (const n of ['workspace-graph-store', 'project-graph-store', 'graph-corpus-filter',
@@ -1079,11 +1081,12 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     B2: ['history-backups'],
     B3: ['history-scope-markers', 'history-card-files'],
     B4: ['history-export'],
-    W2: ['history-recall-off', 'history-replay-out'],
+    'W2-1': ['history-recall-off'],
+    'W2-4': ['history-replay-out'],
     W3: ['history-steer-files'],
   } as const;
   type HistoryPr = keyof typeof HISTORY_ROWS_BY_PR;
-  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3', 'B4'];
+  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2', 'B3', 'B4', 'W2-4'];
 
   it('the history classes are §9.4\'s thirteen, each declared by the PR its Lands-in column names, and none before it (O17)', () => {
     const all: string[] = Object.values(HISTORY_ROWS_BY_PR).flat();
@@ -1277,6 +1280,24 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
         .toContain(`the files of purged sessions after ${days} days`);
     }
     expect(LIFECYCLE.find((x) => x.name === 'history-card-files')!.tier).toBe(`<=${CARD_LINE_MAX} B per session`);
+  });
+
+  // ── ccrc history W2-4 (spec 2026-10-05 §9.4, O17's W2-4 half; W2-D9, W2-D53) ──────────────────────────────────────
+  // The replay driver's --out. Operator-made: the operator names the directory and removes it by hand once the W2
+  // decision is recorded, so the class has no collector and carries the ruling instead. The marker's name in the
+  // row is the code's own: the manifest is L0 and imports nothing, so it is bound here, as the B3 numbers are above.
+  it('declares history-replay-out: the W2 driver\'s --out, an O class it creates, with no collector, removed by hand once the W2 decision is recorded', async () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-replay-out');
+    expect(c, 'shared/lifecycle.ts declares no history-replay-out class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['deploy/history-replay.mjs']);
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('removed by hand once the W2 decision is recorded');
+    expect(c!.bound).toBe('one W2 run, until the W2 decision is recorded');
+    expect(c!.root).toContain('outside any git tree');
+    expect(c!.root).toContain('mode 0700');
+    const { OUT_MARKER } = await import('../../deploy/history-replay.mjs');
+    expect(c!.root, 'the row names another marker than the driver writes').toContain(`marked by ${OUT_MARKER}`);
   });
 });
 

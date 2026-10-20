@@ -141,7 +141,7 @@ self.addEventListener('notificationclick', (event) => {
   const action = event.action || '';
   const notification = event.notification;
   const sid = (notification.data && notification.data.sessionId) || null;
-  // A payload url (a release push's '/settings', design 2026-09-20 §13) wins
+  // A payload url (a release push's '/settings/updates', design 2026-09-20 §13) wins
   // over the session deep-link. The push listener filtered it already; it is
   // filtered again here because the data is whatever this notification carries —
   // one shown by an older copy of this worker, or by replace(), has no url, and

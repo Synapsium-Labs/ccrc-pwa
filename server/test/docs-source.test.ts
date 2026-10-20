@@ -39,7 +39,8 @@ function recorder(answer: CcdResult): { run: CcdRunner; calls: string[][] } {
   return { calls, run: async (argv: CcdArgv) => { calls.push([...argv]); return answer; } };
 }
 /** A measured, clean exit unless a case says otherwise. */
-const res = (over: Partial<CcdResult>): CcdResult =>
+// D-6034: the five fields every arm shares; `Partial` of the whole union would distribute over the `ran` arm.
+const res = (over: Partial<Pick<CcdResult, 'ok' | 'stdout' | 'stderr' | 'killed' | 'signal'>>): CcdResult =>
   ({ ok: true, stdout: '', stderr: '', killed: false, signal: null, ...over });
 const state = (ccdVerbs: string[] | null): { ccdVerbs: string[] | null } => ({ ccdVerbs });
 const READY = state(['caps', DOCS_CAP]);
@@ -910,7 +911,7 @@ describe('refinement (g): killed and signal have one reader, ccdEnding', () => {
   });
 
   it('CONTROL: a third read planted inside ccd() reds the ccd() pin', () => {
-    const files = withPlanted('src/lifecycle.ts', '  return {\n    ok: r.code === 0', '  const k = r.killed;');
+    const files = withPlanted('src/lifecycle.ts', '  const answer: CcdResult = {\n    ok: r.code === 0', '  const k = r.killed;');
     expect(oneReaderProblems(files)).toEqual(['pin: ccd() reads [r.killed, r.killed, r.killed, r.signal, r.signal] off its ExecResult, wanted exactly [r.killed, r.killed, r.signal, r.signal]']);
   });
 

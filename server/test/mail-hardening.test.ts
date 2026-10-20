@@ -8,7 +8,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { queueSystemMail } from '../src/coord/rundefs.js';
+import { queueSystemMail } from '../src/coord/rundefsTx.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const store = (): CoordStore =>
@@ -224,8 +224,9 @@ describe('terminality guards: markIngested and bumpReplayCount (D10 holes 3/4)',
 
   /** The fixture's own proof. Both setup calls below (`rejectDelivery`,
    *  `markAcked`) carry terminality guards of their OWN and can decline in
-   *  silence — `rejectDelivery` returns void, so a declined park is
-   *  indistinguishable from a taken one at the call site. Without this the
+   *  silence — written when `rejectDelivery` returned void, so a declined
+   *  park was indistinguishable from a taken one at the call site (it answers
+   *  `{changed, state}` since D-5997; the read stays, as the row's own proof). Without this the
    *  "gate columns unchanged" assertion could pass for a row that never
    *  reached the state the test names, i.e. it would measure nothing. */
   const stateOf = (s: CoordStore, id: number) => (s.db.prepare(
@@ -350,62 +351,62 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
     return out;
   };
 
-  it('finds every one of them — a renamed table or a rewritten call shape must red this, not disarm it', () => {
+  /** D-5997 (#532): the line range of the one-writer primitive pair —
+   *  `writeDeliveries` and `writeDelivery` — whose signatures are multi-line and
+   *  which the writer census below walks AROUND rather than through. */
+  const primitive = (): { from: number; to: number } => {
+    const from = srcLines.findIndex((l) => l.startsWith('  private writeDeliveries(')) + 1;
+    const one = srcLines.findIndex((l) => l.startsWith('  private writeDelivery('));
+    const to = srcLines.findIndex((l, i) => i > one && /^ {2}\}/.test(l)) + 1;
+    expect(from, 'writeDeliveries is gone').toBeGreaterThan(0);
+    expect(one, 'writeDelivery is gone').toBeGreaterThan(from);
+    return { from, to };
+  };
+
+  it('ONE statement writes a delivery row, in the one writer (D-5997) — a renamed table or call shape reds this', () => {
     const found = writers();
-    // A FLOOR, not a count: eleven at 5e9f650d (2026-09-02), and a twelfth
-    // writer raises it rather than breaking it. Without this the assertion in
-    // the next test is satisfied by an extractor that found nothing.
-    expect(found.length).toBeGreaterThanOrEqual(11);
-    // …and each window is a STATEMENT, not a runaway slice that swallowed the
-    // next method's docstring. Measured max: 498 characters at 5e9f650d, 502
-    // once this wave's guards landed — `markDelivered`'s window is the long
-    // one. The 1000 is a plausibility ceiling with room above the measurement,
-    // not a second count.
-    for (const w of found) {
-      expect(w.text.includes('*/'), `store.ts:${w.line}'s window swallowed a docstring`).toBe(false);
-      expect(w.text.length, `store.ts:${w.line}'s window is implausibly long`).toBeLessThan(1000);
-      expect(w.method.length, `store.ts:${w.line} resolved to an empty method name`).toBeGreaterThan(0);
-    }
-    // Eleven statements in eleven distinct methods — a duplicate name means the
-    // walk-back attributed two statements to one signature.
-    expect(new Set(found.map((w) => w.method)).size).toBe(found.length);
+    // EXACTLY one: a second `UPDATE mail_deliveries` is a writer that bypassed
+    // the guard owner, which is the whole defect #532 retires.
+    expect(found.map((w) => w.line)).toHaveLength(1);
+    const { from, to } = primitive();
+    expect(found[0]!.line).toBeGreaterThan(from);
+    expect(found[0]!.line).toBeLessThan(to);
+    expect(found[0]!.text.includes('*/'), 'the window swallowed a docstring').toBe(false);
   });
 
-  it('names OUTSTANDING_STATES_SQL or TERMINAL_DELIVERY_SQL, never a hand-written state list', () => {
-    // `w.code`, not `w.text`: the raw window includes the statement's own
-    // comments, so a writer whose only mention of a fragment is an inline
-    // comment used to pass with no guard in its SQL at all.
-    for (const w of writers()) {
-      expect(/OUTSTANDING_STATES_SQL|TERMINAL_DELIVERY_SQL/.test(w.code),
-        `store.ts:${w.line} (${w.method}) writes a delivery row with no shared terminality guard`).toBe(true);
-    }
+  it('the one writer spells BOTH shared guard fragments, never a hand-written state list', () => {
+    const { from, to } = primitive();
+    const body = blankComments(srcLines.slice(from - 1, to).join('\n')).join('\n');
+    expect(body).toMatch(/state IN \$\{OUTSTANDING_STATES_SQL\}/);
+    expect(body).toMatch(/state NOT IN \$\{TERMINAL_DELIVERY_SQL\}/);
+    // `where` is ANDed AFTER the guard, never ORed into it.
+    expect(body).toMatch(/WHERE \$\{guardSql\} AND \(\$\{where\}\)/);
   });
 
-  it("CLAUDE.md names exactly the delivery-row writers that still return void", () => {
-    // THE OTHER HALF OF THE SENTENCE, as a mechanism. The clause this replaces
-    // sat unreworded from 2026-08-12 while three guard commits landed after it,
-    // because nothing measured it. This derives the list from source and
-    // compares both directions, so widening one of these writers reds here and
-    // the sentence has to move with the code.
+  it('no delivery-row writer returns void, and CLAUDE.md says so (D-5997)', () => {
+    // THE OTHER HALF OF THE SENTENCE, as a mechanism: every method that calls
+    // the one writer is derived from source, and none may return `void`, so a
+    // refused write is never invisible to its caller.
     const md = readFileSync(path.join(ccrcRoot, 'CLAUDE.md'), 'utf8').replace(/\s+/g, ' ');
-    // Flattened first, the way `box-token-census.test.ts` flattens its own
-    // corpus and for the same reason: this is hard-wrapped prose and a
-    // backticked name routinely sits either side of a newline.
-    const MARK = 'still return `void` are ';
-    expect(md, 'CLAUDE.md no longer carries the void-writer sentence this test reads')
-      .toContain(MARK);
-    const span = md.slice(md.indexOf(MARK) + MARK.length);
-    const listed = span.slice(0, span.indexOf('.'));
-    const named = [...listed.matchAll(/`([A-Za-z_$][\w$]*)`/g)].map((m) => m[1]!);
-    expect(named, 'the void-writer list in CLAUDE.md came out empty — was the sentence reworded?')
-      .not.toEqual([]);
-    // De-duplicated: a legitimate method holding two delivery writes is a
-    // real shape, and it must red the duplicate-name check above — which is
-    // the honest report — not this one with "CLAUDE.md and store.ts disagree"
-    // naming a method CLAUDE.md does in fact list.
-    const voids = [...new Set(writers().filter((w) => w.returns === 'void').map((w) => w.method))];
-    expect([...named].sort(), 'CLAUDE.md and store.ts disagree about which delivery writers return void')
-      .toEqual([...voids].sort());
+    expect(md, 'CLAUDE.md no longer carries the no-void-writer sentence this test reads')
+      .toContain('no delivery-row writer returns `void`');
+    const { from, to } = primitive();
+    const out: { method: string; returns: string }[] = [];
+    srcLines.forEach((l, i) => {
+      const line = i + 1;
+      if (!/this\.writeDeliver(?:y|ies)\(/.test(l) || (line >= from && line <= to)) return;
+      let sig = 0;
+      for (let j = line - 1; j > 0; j--) { if (SIG.test(srcLines[j - 1]!)) { sig = j; break; } }
+      expect(sig, `no method signature above store.ts:${line}`).toBeGreaterThan(0);
+      expect(/^ {2}\}/m.test(srcLines.slice(sig, line - 1).join('\n')),
+        `the walk-back from store.ts:${line} crossed a method close`).toBe(false);
+      const m = SIG.exec(srcLines[sig - 1]!)!;
+      out.push({ method: m[1]!, returns: m[2]! });
+    });
+    // Nineteen writers at D-5997: fourteen one-row, five scoped bulk. A floor,
+    // so a twentieth raises it rather than breaking it.
+    expect(new Set(out.map((w) => w.method)).size).toBeGreaterThanOrEqual(19);
+    expect(out.filter((w) => w.returns === 'void'), 'a delivery writer returns void').toEqual([]);
   });
 
   // D-1409, the half of it that was still a promise. `setDeliveryEnvelope` was

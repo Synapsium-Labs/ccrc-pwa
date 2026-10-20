@@ -799,7 +799,7 @@ then, at the end of the file:
 ```ts
 /** A complete fleet row — `fleet-wire-route.test.ts`'s `session()` shape. */
 const fleetRow = (id: string): FleetSession => ({
-  id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
+  id, wrapper: 'claude', home: '/home/u', project: id, workdir: `/data/projects/${id}`,
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
@@ -3026,7 +3026,7 @@ Expected: one line, the identity this workspace commits as. If it is a placehold
 ```bash
 git push -u origin "$(git rev-parse --abbrev-ref HEAD)"
 gh pr create --base main --title "Child reclamation wave 2: the spent refusals (rule 3, server)" --body-file - <<'EOF'
-Wave 2 of the child-reclamation programme (CCR-15), **server only**.
+Wave 2 of the child-reclamation programme (#166), **server only**.
 Spec: `docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md` §5.1, §5.3, §5.4.
 Plan: `docs/superpowers/plans/2026-09-22-child-reclamation-wave2-spent-refusals.md`.
 

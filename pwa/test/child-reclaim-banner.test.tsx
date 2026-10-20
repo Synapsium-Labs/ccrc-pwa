@@ -16,6 +16,7 @@ import { COORD_CONFIRM_MS } from '../src/fleet/coordWords';
 import { ApiError, COORD_UNSUPPORTED_TEXT } from '../src/lib/api';
 import { ToastHost } from '@ccrc/ui';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { renderFleet } from './fleetHost';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
@@ -303,7 +304,7 @@ describe('the reclaim row', () => {
     cleanup();
     const fleet = makeStore();
     act(() => { fleet.setState({ conn: 'open', sessions: [], coord: coord(), coordFrameSeen: true }); });
-    render(<FleetScreen store={fleet} />);
+    renderFleet(<FleetScreen store={fleet} />);
     expect(document.querySelector('.child-reclaim-banner')).toBeNull();
   });
 });

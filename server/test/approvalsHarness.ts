@@ -14,6 +14,9 @@ import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import type { Runner } from '../src/exec.js';
 import type { PushPayload } from '../src/push.js';
+import type { Presence } from '../src/presence.js';
+import type { SecretMasker } from '../src/accounts/mask.js';
+import type { DatabaseSync } from 'node:sqlite';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { approvalDigestBytes, CHILD_DENY_SETTINGS_FILE } from '../../shared/api.js';
@@ -66,6 +69,8 @@ export function requestBody(input: Record<string, unknown>, id = CHILD): Request
 export interface Approvals {
   home: string; coord: CoordStore; app: FastifyInstance; watcher: FleetWatcher; log: NotifyLog;
   sent: PushPayload[]; panes: Map<string, string>; gone: Set<string>; unmeasured: Set<string>;
+  /** The Presence the routes read (`buildServer` sets it on the shared deps; a restart keeps it). */
+  presence: Presence;
   /** A registry row: wrapper `claude`, the project, a workdir, a uuid, and a live state file naming `version`. */
   seed(id: string, project: string, version?: string | null): void;
   /** Make `id` a dispatched child of `runId`, spawned with Task 15's two fields (the managed deny digest and bash). */
@@ -84,7 +89,10 @@ export interface Approvals {
 const DENY_FILE = '{"permissions":{"deny":["Bash(ccd ws-rm:*)"]}}\n';
 export const DENY_DIGEST = sha256(DENY_FILE);
 
-export async function approvalsFixture(over: { role?: 'server' | 'both' } = {}): Promise<Approvals> {
+/** Fixture options: the box's role, and (accounts plan Task A12) an egress masker built over the fixture's coord.db. */
+export interface ApprovalsFixtureOpts { role?: 'server' | 'both'; masker?: (db: DatabaseSync) => SecretMasker }
+
+export async function approvalsFixture(over: ApprovalsFixtureOpts = {}): Promise<Approvals> {
   const home = mkTmp('ccrc-approvals-');
   const reg = path.join(home, '.cc-sessions');
   const cfgDir = path.join(home, '.claude');
@@ -120,6 +128,7 @@ export async function approvalsFixture(over: { role?: 'server' | 'both' } = {}):
     // A two-box server is `server` over CCRC_FLEET=remote; `both` is the single box, CCRC_FLEET=local.
     ...base, cfg: { ...base.cfg, role: over.role ?? 'server', fleetMode: (over.role ?? 'server') === 'both' ? 'local' as const : 'remote' as const },
     mailToken: TOKEN, coord, notifyLog: log,
+    ...(over.masker ? { masker: over.masker(coord.db) } : {}),
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
   };
   const watcher = new FleetWatcher(deps, new Bus(), 10_000);
@@ -127,6 +136,7 @@ export async function approvalsFixture(over: { role?: 'server' | 'both' } = {}):
   const put = (id: string, field: string, v: string): void => writeFileSync(path.join(reg, `${id}.${field}`), v);
   const f: Approvals = {
     home, coord, app, watcher, log, sent, panes, gone, unmeasured,
+    presence: (deps as { presence?: Presence }).presence as Presence,
     seed(id, project, version = VERIFIED) {
       for (const [k, v] of Object.entries({ wrapper: 'claude', project, workdir: workdirOf(id), uuid: uuidOf(id), started: '1' })) put(id, k, v);
       nextPid += 1;
@@ -174,7 +184,7 @@ export async function approvalsFixture(over: { role?: 'server' | 'both' } = {}):
 
 /** The standard family: a parent and its child in `project-a`, a second child, an operator-created session of the
  *  same project, and sessions in two other projects; the child dispatched by an attributed run of the parent. */
-export async function standardFixture(over: { role?: 'server' | 'both' } = {}): Promise<Approvals & { runId: number }> {
+export async function standardFixture(over: ApprovalsFixtureOpts = {}): Promise<Approvals & { runId: number }> {
   const f = await approvalsFixture(over);
   f.seed(PARENT, 'project-a');
   f.seed(CHILD, 'project-a');

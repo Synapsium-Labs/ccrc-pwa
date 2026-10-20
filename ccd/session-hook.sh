@@ -463,7 +463,7 @@ _ct_read() {   # <path> -> CT_V CT_RAWN ; rc 0 read, 1 absent, 2 unmeasurable
 # this repo already made. `server/src/coord/peers.ts` (D9): the peers route
 # "does NOT filter on `.archived` ... `archivedAt` is reported verbatim and
 # decides nothing", and it ships `archiveContradicted`/`archivedStale` to NAME
-# the contradiction. Measured on this box: `data-internal-still-prairie` has
+# the contradiction. Measured on this box: `project-e-still-prairie` has
 # carried `.archived` for 33 days beside a 4-second-old heartbeat, and the
 # server calls it `deliverable:"yes"`. In the other direction a main checkout
 # can never be archived at all, so an `.archived` filter over-counts a dead
@@ -2408,7 +2408,7 @@ CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
 # TWO OF THE THREE COMPONENTS ARE MODELLED, NOT BOUNDED. `$id` carries a shape
 # gate but no length cap and appears more than once across these sentences, so
 # 1826 assumes a 40-character id rather than proving a ceiling (the longest id
-# live on this fleet today is 29, `expoAI-assistant-keen-prairie`); and
+# live on this fleet today is 29, `project-h-id-pad-keen-prairie`); and
 # `$CT_N` is interpolated un-padded, so each extra digit adds one character —
 # 244 at one co-tenant, 245 at the two-digit counts this fleet actually
 # carries (`coTenantN:15` in the pre-deploy baseline), 246 at three. The
@@ -2497,7 +2497,7 @@ COMPACT_LIVE_S=120
 # index) at roughly twice their sum, and RE-MEASURED on this box's real graphs
 # before it shipped — the p95 and peak RSS are recorded here by Task 6 of
 # plans/2026-09-10-graphify-compaction-card-plan-a.md: ccrc 9,543,597-byte graph
-# p95 0.36 s / 104,384 KiB RSS; largest admissible graph (MekWarLive,
+# p95 0.36 s / 104,384 KiB RSS; largest admissible graph (project-f,
 # 70,434,955 bytes) p95 1.05 s / 332,184 KiB RSS (five fresh-nonce runs each,
 # 2026-09-10).
 COMPACT_HELPER_TIMEOUT=8
@@ -2515,7 +2515,7 @@ COMPACT_WORKSET_MAX=12
 # bound), and `ccd`'s own row-creation, `_spawn_start` and `_reg_purge`
 # acquisitions, which carry a twinned literal of the same value.
 #
-# MEASURED, NOT ARGUED (Task 9, 2026-09-14, fleet box `openclaw`, load ~5.8,
+# MEASURED, NOT ARGUED (Task 9, 2026-09-14, fleet box `<fleet-host>`, load ~5.8,
 # fixture HOME — never the live one). What a waiter can be blocked behind is
 # ONE HELD SECTION, so each section is timed at its own acquire and release
 # rather than the arm being timed end to end, n=30 per section:
@@ -4389,7 +4389,11 @@ fi
 # `session-hook-approval-deny.test.ts` holds equal to `approvalClass` over Task 12's corpus,
 # `server/test/fixtures/approvals/guard-corpus.json`. It answers one line: `<category>\t<why>`, or empty. In mode
 # `class` (the PermissionRequest arm below) any category counts; in mode `deny` (this arm) only `verb` (a SAFETY `ccd`
-# verb, `ccrc update` or `ccrc rollback`) and `surface` (the approval surface) do. JavaScript's regexes are ASCII
+# verb, `ccrc update` or `ccrc rollback`), `surface` (the approval surface) and `build` do. `build` (D-5696, spec
+# 2026-10-18 §7.6) is deny mode's alone (`bmatch`, never read in `class` mode, so the classifier parity is untouched): a
+# write into `~/.local/share/claude/versions/` or onto the launcher, by Bash or an edit tool, and Claude Code's `install`
+# or `update` under any path head, a `claude…` wrapper name or a `~/.local/bin/<id>` launcher, with no flag between
+# (so `claude -p "update …"` is not one). A bypassed child raises no prompt, so this arm is its only enforcement. JavaScript's regexes are ASCII
 # where Oniguruma's are Unicode, so `\w` and `\b` are spelled as ASCII classes and `\s` as JavaScript's own set
 # (`WS`, built by `implode` so this file stays ASCII). `hbt` is the classifier's `headBeforeTail`: in one segment, the
 # head matches wholly inside the text before the LAST start of the tail (found by a greedy prefix and a lookahead,
@@ -4397,8 +4401,9 @@ fi
 # bash word.
 #
 # ORDER IS BUDGET, as in the denies above: the event, the `.child` test and a substring prefilter are builtins, so a
-# top-level session, and a child's call whose payload names none of `ccd`, `ccrc` and `approval`, pay no fork. Every
-# pattern needs one of the three words literally (JSON escaping never touches ASCII letters). A deny already set is
+# top-level session, and a child's call whose payload names none of `ccd`, `ccrc` and `approval`, nor `claude` or
+# `/.local/bin/` together with `install`, `update` or `/.local/`, pay no fork. Every pattern needs one of those words
+# literally (JSON escaping never touches ASCII letters). A deny already set is
 # never replaced. FAIL-OPEN as every gate here: a jq that cannot run (no Oniguruma, say) denies nothing, and
 # `ccrc doctor`'s `jq_regex` check names that box.
 APPROVAL_FORBIDDEN_JQ='def WS: "\t\n\u000b\f\r " + ([160, 5760, 8192, 45, 8202, 8232, 8233, 8239, 8287, 12288, 65279] | implode);
@@ -4412,11 +4417,13 @@ def CCD: WB + "ccd[" + $q + "\"]?" + SP + "+" + FLAGS;
 def SENS: "(?:CLAUDE\\.md|settings(?:\\.local)?\\.json|session-hook\\.sh|/hooks/)";
 def CRED: "(?:\\.ssh(?![A-Za-z0-9_-])|\\.cc-secrets|\\.token(?![A-Za-z0-9_-])|\\.env(?:rc|\\.[A-Za-z0-9_.-]+)?(?![A-Za-z0-9_-])|credentials|auth\\.json|\\.netrc|\\.pem(?![A-Za-z0-9_-])|\\.key(?![A-Za-z0-9_.-])|agent\\.env|gh/(?:hosts|config)\\.yml|\\.docker/config\\.json|\\.kube/config(?![A-Za-z0-9_-])|\\.npmrc|\\.pypirc|\\.git-credentials|(?<![A-Za-z0-9_-])\\.aws(?![A-Za-z0-9_-])|(?<![A-Za-z0-9_-])\\.gnupg(?![A-Za-z0-9_-])|\\.config/gcloud(?![A-Za-z0-9_-])|_(?:rsa|dsa|ecdsa|ed25519)(?![A-Za-z0-9_-])|deploy_key|(?<![A-Za-z0-9_.-])identity(?![A-Za-z0-9_.-])|ssh_host_|\\.pgpass|\\.vault-token|rclone\\.conf|\\.s3cfg|(?<![A-Za-z0-9_-])\\.azure(?![A-Za-z0-9_-])|\\.git/config(?![A-Za-z0-9_-])|\\.claude\\.json|(?<![A-Za-z0-9_-])secrets?\\.(?:ya?ml|json|toml)(?![A-Za-z0-9_-])|_(?:ecdsa|ed25519)_sk(?![A-Za-z0-9_-])|\\.(?:p12|pfx|jks|keystore)(?![A-Za-z0-9_-])|\\.htpasswd|\\.my\\.cnf|kubeconfig|\\.tfstate|(?<![A-Za-z0-9_-])\\.boto(?![A-Za-z0-9_-])|service[-_]account[A-Za-z0-9_-]*\\.json|token\\.json(?![A-Za-z0-9_-])|\\.yarnrc\\.yml)";
 def PATHF: "/\\.(?:cc-sessions|cc-limits|ccrc)(?![A-Za-z0-9_.-])|approval-signing|approval-verify\\.mjs";
+def WR: ">|" + NB + "tee" + NA + "|" + NB + "sed" + SP + "+" + FLAGS + "-i|" + NB + "perl" + SP + "+-" + NS + "*i|" + NB + "mv" + NA + "|" + NB + "cp" + NA + "|" + NB + "ln" + NA + "|" + NB + "truncate" + NA + "|" + NB + "rm" + NA;
+def BUILD: "(?:/\\.local/share/claude/versions(?![A-Za-z0-9_.-])|/\\.local/bin/claude(?![A-Za-z0-9_.-]))";
 def hbt($sep; $head; $tail): any(split($sep; null)[];
   ([match("^[\\s\\S]*(?=" + $tail + ")")] | if length == 0 then -1 else .[0].length end) as $last
   | $last >= 0 and (.[0:$last] | test($head)));
 def fmatch:
-  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect") as $v
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "roll", "claude") as $v
      | select(test(CCD + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; CCD + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "tmux(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\ttmux"),
@@ -4425,29 +4432,36 @@ def fmatch:
   (select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
   (select(test("(?:ccrc-api|\\$\\{?API\\}?)[" + $q + "\"]?" + SP + "+" + FLAGS + "approvals" + NW + "|/api/approvals" + NW + "|approval-signing|approval-verify\\.mjs")) | "surface\tthe approval surface"),
   (select(hbt("\n"; WB + "(?:systemctl|systemd-run|kill|pkill|killall)" + NW; "claude-session@|ccrc|tmux")) | "other\ta session unit or the tmux scope"),
-  (select(hbt("[\n;&|]"; ">|" + NB + "tee" + NA + "|" + NB + "sed" + SP + "+" + FLAGS + "-i|" + NB + "perl" + SP + "+-" + NS + "*i|" + NB + "mv" + NA + "|" + NB + "cp" + NA + "|" + NB + "ln" + NA + "|" + NB + "truncate" + NA + "|" + NB + "rm" + NA; SENS)) | "other\tan edit to a settings file, a hook or a CLAUDE.md"),
+  (select(hbt("[\n;&|]"; WR; SENS)) | "other\tan edit to a settings file, a hook or a CLAUDE.md"),
+  (select(hbt("[\n;&|]"; WR; BUILD)) | "other\ta write to a Claude Code build or its launcher"),
   (select(hbt("[\n;&|]"; WB + "(?:cat|head|tail|less|more|base64|xxd|strings|od|nl|bat)" + NW; CRED)) | "other\tprinting a secret");
 def norm: gsub("\\\\\n"; "") | gsub("\\$(?=[" + $q + "\"])"; "") | gsub("\\\\(?<c>[\\s\\S])"; .c) | gsub("[" + $q + "\"]"; "");
 def EXP: "(?:\\$\\{[^}]*\\}|\\$\\([^)]*\\)|\\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`)";
 def EXPV: WB + EXP + SP + "+" + FLAGS;
 def xmatch:
-  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect") as $v
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "roll", "claude") as $v
      | select(test(EXPV + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
   (select(test(EXPV + "approvals" + NW)) | "surface\tthe approval surface");
+def CLI: "(?:" + WB + "claude[A-Za-z0-9-]*|/\\.local/bin/[a-z][a-z0-9-]{0,31})";
+def bmatch:
+  (select(hbt("[\n;&|]"; WR; BUILD)) | "build\ta write to a Claude Code build or its launcher"),
+  (select(test(CLI + SP + "+(?:install|update)" + NW)) | "build\tinstalling or updating a Claude Code build"),
+  (select(test(WB + "claude" + NW) and test(EXPV + "(?:install|update)" + NW)) | "build\tinstalling or updating a Claude Code build");
 def edittool: . == "Write" or . == "Edit" or . == "MultiEdit" or . == "NotebookEdit";
 def pathwhy($t):
   first((.file_path, .path, .notebook_path) | select(type == "string")
     | if test(PATHF) then "other\ta forbidden path"
       elif ($t | edittool) and test("(?:^|/)" + SENS) then "other\tan edit to a settings file, a hook or a CLAUDE.md"
+      elif ($t | edittool) and test(BUILD) then "other\ta write to a Claude Code build or its launcher"
       elif $t == "Read" and test(CRED) then "other\treading a secret"
       else empty end);
 (.tool_name | if type == "string" then . else "" end) as $t
 | (.tool_input | if type == "object" then . else {} end) as $i
 | if $mode == "deny" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t"))) // "" else "" end)
-     elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // "")
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t"))) // first((., norm) | bmatch) // "" else "" end)
+     elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // first(($i.file_path, $i.notebook_path) | select(type == "string" and test(BUILD)) | "build\ta write to a Claude Code build or its launcher") // "")
      elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // "")
      else "" end)
   elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch) // "" else "" end)
@@ -4461,7 +4475,9 @@ if [[ "$event" == PreToolUse && -n "$id" && -e "$REG/$id.child" \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
   apf=$payload
   if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]]; then apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}; fi
-  [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* ]] || apf=""
+  [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* \
+     || ( ( "$apf" == *claude* || "$apf" == */.local/bin/* ) \
+          && ( "$apf" == *install* || "$apf" == *update* || "$apf" == */.local/* ) ) ]] || apf=""
 fi
 if [[ -n "$apf" ]]; then
   case "${tool:-}" in
@@ -4475,6 +4491,9 @@ if [[ -n "$apf" ]]; then
         surface$'\t'*)
           areason="ccrc: this call reaches the approval surface (\`ccrc-api approvals\`, \`/api/approvals\`, a signing key or the verifier), which a dispatched child never calls, reads or writes: your coordinator rules on your permission prompts, and the operator on the rest."
           areason+=" Carry on with your task; a prompt you raise reaches them by itself." ;;
+        build$'\t'*)
+          areason="ccrc: this call is ${afw#*$'\t'}, which a dispatched child never does: rolling, installing and selecting a Claude Code build are the operator's acts and ccrc's own (CLAUDE.md's SAFETY section; spec 2026-10-18 §7.6; D-5696)."
+          areason+=" Report what you need to your coordinator instead." ;;
       esac
       if [[ -n "$areason" ]] && ajson=$(_hook_deny_json "$areason"); then pre_json=$ajson; fi ;;
   esac

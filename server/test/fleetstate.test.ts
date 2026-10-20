@@ -11,7 +11,7 @@ const tmpDir = (): string => mkTmp('ccrc-cache-');
 // harmless until loadSnapshot started validating what it reads, and invisible
 // because server/tsconfig.json does not include test/.
 const session = (id: string): FleetSession => ({
-  id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
+  id, wrapper: 'claude', home: '/home/u', project: id, workdir: `/data/projects/${id}`,
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
@@ -38,7 +38,7 @@ describe('fleetstate', () => {
 
   it('saveSnapshot writes atomically (mkdir -p, tmp+rename — no leftover tmp file) and loadSnapshot reads it back', async () => {
     const cachePath = path.join(tmpDir(), 'nested', 'dir', 'state-cache.json');
-    const sessions = [session('claude-Foo'), session('claude2-Bar')];
+    const sessions = [session('claude-Foo'), session('claude9-Bar')];
 
     await saveSnapshot(sessions, cachePath);
 
@@ -79,8 +79,8 @@ describe('fleetstate', () => {
  * the path is fixed. So the read is what has to negotiate versions.
  */
 const v1Session = (id: string): Record<string, unknown> => ({
-  id, wrapper: 'claude', home: '/home/rc', project: 'OpenClawHetzner',
-  workdir: '/home/rc/worktrees/OpenClawHetzner/quiet-basin', workspace: 'quiet-basin',
+  id, wrapper: 'claude', home: '/home/u', project: 'project-c',
+  workdir: '/home/u/worktrees/project-c/quiet-basin', workspace: 'quiet-basin',
   name: null, status: 'busy', statusUpdatedAt: 1785300000000,
   limits: { five: 10, seven: 40 }, dialogPending: false, version: '2.1.0',
   model: null, effort: null, ultracode: false, branch: 'ws/quiet-basin',
@@ -340,8 +340,8 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect(absent?.held).toBeNull();
     expect(Object.keys(absent ?? {})).toContain('held');
 
-    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), held: 'program:agent-evals wave:1/4' }]);
-    expect((await loadSnapshot(cachePath))?.sessions[0]?.held).toBe('program:agent-evals wave:1/4');
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), held: 'program:prog-j wave:1/4' }]);
+    expect((await loadSnapshot(cachePath))?.sessions[0]?.held).toBe('program:prog-j wave:1/4');
 
     // Not `held: null`, and not a dropped field: the WHOLE snapshot goes.
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), held: true }]);
@@ -789,22 +789,22 @@ describe('reviveFleetSession carries boardProject (board-placement wave 1, Task 
 
   it('a revived session WITH a boardProject keeps it', () => {
     const raw = JSON.parse(JSON.stringify(session('demo-c'))) as Record<string, unknown>;
-    raw.boardProject = 'intake-platform';
-    expect(reviveFleetSession(raw)!.boardProject).toBe('intake-platform');
+    raw.boardProject = 'project-n';
+    expect(reviveFleetSession(raw)!.boardProject).toBe('project-n');
   });
 });
 
 describe('boardHome — the ONE reader of FleetSession.boardProject (board-placement wave 2, Task 1)', () => {
   it('reads the placement when the server decided one', () => {
-    expect(boardHome({ project: 'custom-tools', boardProject: 'intake-platform' })).toBe('intake-platform');
+    expect(boardHome({ project: 'project-d', boardProject: 'project-n' })).toBe('project-n');
   });
   it('falls back to the project on null — an older server, an older snapshot, or a failed read (D-2875)', () => {
-    expect(boardHome({ project: 'custom-tools', boardProject: null })).toBe('custom-tools');
+    expect(boardHome({ project: 'project-d', boardProject: null })).toBe('project-d');
   });
   it('falls back on an ABSENT key — the live frame is cast, not revived', () => {
     // No `boardProject` key at all, the runtime shape of a row from a server
     // that predates the field. `??` reads it as null; `=== null` would not.
-    expect(boardHome({ project: 'custom-tools' })).toBe('custom-tools');
+    expect(boardHome({ project: 'project-d' })).toBe('project-d');
   });
 });
 

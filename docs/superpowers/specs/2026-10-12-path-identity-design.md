@@ -4,7 +4,7 @@
 
 ## In short
 
-This is W0 of the path-identity follow-up programme: it designs fixes for the residuals that child-workspace reclamation (CCR-15) left open, and the collector switch the operator asked for on the Settings page.
+This is W0 of the path-identity follow-up programme: it designs fixes for the residuals that child-workspace reclamation (#166) left open, and the collector switch the operator asked for on the Settings page.
 It answers four questions about ccrc's destructive verbs: which session id a verb binds, what the tail and the collector may believe about a temp-root leaf, which worktree `git worktree remove --force` may delete, and what arms the temp-root collector.
 Every change to ccd and to the server's id handling refuses or holds more at the verb it touches; three W2 changes keep or return an id to the collector's population, where it stays collectable only under the collector's full ladder, while today the leaf leaks.
 The switch adds a signed-in console-session arm alongside the fleet-box marker, then moves control solely to Settings after the operator removes that marker and a successful listing journals its retirement; after that hand migration, a database-only rollback, re-created marker or other fleet box cannot arm deletion the operator turned off.
@@ -13,11 +13,11 @@ The operator rules on the rows marked Operator in each decision table, listed ag
 
 ## 1. Context
 
-This section says what CCR-15 shipped, what it left open, and why identity is the common thread. It also records the fleet box layout this design was measured against.
+This section says what #166 shipped, what it left open, and why identity is the common thread. It also records the fleet box layout this design was measured against.
 
-### 1.1 What CCR-15 shipped
+### 1.1 What #166 shipped
 
-CCR-15 built child-workspace reclamation in nine waves. Its last wave, the temp-root collector's server lane, merged as `28e8dc1b2` and is deployed (sourced: the programme ledger; the git log of the home repo).
+#166 built child-workspace reclamation in nine waves. Its last wave, the temp-root collector's server lane, merged as `28e8dc1b2` and is deployed (sourced: the programme ledger; the git log of the home repo).
 
 - `ws-reclaim` removes a dead child's worktree, branch and temp root. It runs behind a ladder of refusals and a token that is re-proved on the box.
 - `ws-expire` (workspace-lifecycle's verb) removes an archived workspace after seven days, through the same ladder and tail.
@@ -139,7 +139,7 @@ The gate is one L0 predicate, `isRegistryId(id: unknown): id is string`, placed 
 - Every absence-acting caller (`reclaim.ts:128`, `close.ts:748`, `childReclaim.ts:1045`, `childBind.ts:60`) treats `bad-id` as unmeasured, never as absent, with a pin each.
 - `readRegistryMeasured` (`:1114`) keeps every raw name in `names` and adds each invalid `.uuid` basename to `refused: ReadonlySet<string>`. Its seven direct application callers place that distinction explicitly: fingerprint holds when the run's id is refused; post-spawn dispatch refuses when a refused name can affect candidate-by-subtraction identity; resume dispatch holds when the requested id is refused; the main, hook-state and task-state watches retain prior state for refused ids rather than observing their absence; and mail holds a delivery to a refused recipient rather than classifying the recipient as vanished or unknown. `readRegistry` (`registry.ts:1179-1181`) is an eighth direct consumer and currently erases every distinction except `records`; it has 12 direct production callers (`commands.ts:52`, `lifecycle.ts:163`, `fleet.ts:506`, `watch.ts:3013`, `:6725`, `:7166`, `server.ts:3207`, `coord/routes.ts:620`, `:825`, `:1055`, `:3158`, and `coord/dispatch.ts:548`). The reviewed split migrates four callers to `RegistryRead`: lifecycle project enumeration, the fleet fallback, project-scoped peer enumeration, and dispatch's pre-spawn subtraction read. Commands and PR-task reads may keep the wrapper only behind mutation-pinned `knownId`; the three watch sweeps may keep it because omission suppresses observation while retaining prior state; and attribution, mail creation and mail acknowledgement may keep it because their independent raw-name ladder maps a listed-but-omitted row to registry-unmeasurable, never absence. Each retained reason and each migrated caller gets a mutation pin for its terminal behavior. Refused basenames are logged once as `ccrc-server: ...`; they are never composed.
 - `knownId` (`server/src/server.ts:1921-1928`) returns false for any id that fails `isRegistryId`, before its readdir. That is one choke point for every request-id route: it gates 18 of them (sourced: `:1901`; measured: 19 `await knownId(` call sites against 13 `isSafeSessionId(` in `server.ts`). The per-route `isSafeSessionId` stays the clip path-component rule (`server/src/clip.ts:10-13`).
-- `POST /api/runs` refuses a `claimedBy` or `sessionId` that fails the predicate with a 400 `bad-session` (`server/src/coord/routes.ts:1290`, `:1294`).
+- `POST /api/runs` refuses a `claimedBy` or `sessionId` that fails the predicate with a 400 `bad-session` (`server/src/coord/routes.ts:1290`, `:1294`). As built (landing round 3, D-5824), these answer 400 `bad-session-id`, as do the reclaim heir and `GET /api/peers?of=`, because main's refusal table gives `bad-session` one status, 409.
 - Every persisted `claimedBy` or `sessionId` that can reach an id-taking `CCD_ARGV` builder is validated where the stored row enters the id-taking flow and before builder construction. W1a carries a checked inventory of those stored-row flows through `coord/close.ts`, `coord/dispatch.ts`, `coord/routes.ts`, `coord/fingerprint.ts`, `coord/childSpent.ts` and `coord/childReclaim.ts`, including nested calls from close into fingerprint and child-spent live measurement, with a mutation pin showing that each invalid stored id refuses before `runCcd`. The POST check is not relied on because existing coord.db rows predate that gate. `coord/expireArchived.ts` and `coord/collectTempRoot.ts` are separate non-persisted residual seams: expiry receives a registry-derived `sessionId` and validates it with `isRegistryId` at the executor boundary before either `CCD_ARGV.wsExpireAudit` or `CCD_ARGV.wsExpire`; collection receives a collector-population id and retains its existing `isTmpRootId(job.id)` refusal before either `CCD_ARGV.wsCollectAudit` or `CCD_ARGV.wsCollect`. Each residual seam carries a mutation pin showing that a bad id cannot reach `runCcd`.
 - The stop builders (`stopId`, `stopPair`, `ccdargv.ts:309-312`) move respectively to `['stop', '--surface', surface, id]` and `['stop', '--surface', surface, w, p]`. This is a change, safe on every ccd that advertises the stop-surface capability (`stopSurfaceSupported`, `:980`), because cmd_stop's loop accepts the flag in any position, and the builder sends no flag at all to a ccd without it.
 
@@ -152,6 +152,7 @@ The counted id-taking builder vocabulary is `ensure`, `stopId`, `stopPair`, `for
 Both halves are needed (judgement). The rebound id is the surface word, which passes every id regex, so predicates alone cannot stop the redirect. Loops alone would leave ccd able to mint a dash id.
 
 - Loops: in every loop W1b touches, each value-taking key consumes its key and value atomically, so a value is never scanned again as a flag. Identity values (`--session`, `--child-of`, and positional ids) and closed-grammar values keep or gain their own domain checks, and every post-loop id check refuses a leading `-`. Free-form `--actor` and `--reason` prose, including ws-hold's positional reason, remains non-blank and bounded but may begin with `-`; atomic consumption closes the rebinding defect without narrowing that existing input domain. `--surface`, `--expect`, and `--branch` retain their existing verb-specific grammars.
+- Recorded exception, 2026-10-19: `ccd hibernate`, which reached W1b with the sixth absorption of `main`, refuses `--actor` and `--reason` prose that begins with `-`, and a dash-leading `--surface` value, in both spellings. The server composes its id first, so its two-token checks close its redirect. Review 641 found the narrowing, and the operator accepted it. §2.9 records it as built (`hibernate-refuses-a-dash-leading-id`).
 - Why the builder order still changes for stop: with the id first, its loop cannot tell an id that spells `--surface` from the key itself. Moving the surface pair before the positional id gives the parser one atomic closed-grammar pair and leaves the final token or pair as the id. The post-loop id check then refuses `stop --surface pwa --surface`, rather than redirecting it to `pwa` (sourced: `ccdargv.ts:309-312`; `ccd/ccd:25904-25913`).
 - Predicates: `_ws_tmproot_id_ok` (`:21072`) and `_ws_project_valid` (`:6414-6431`) refuse a leading `-`. Making `_ws_project_valid` refuse it closes the only mint path (project `-` plus slug `actor`).
 - What was measured before tightening `_ws_project_valid`: 96 rows and 18 distinct projects, with 0 dash- or dot-leading project values. No workdir has a dash-leading path component, `~/projects` has no dash-leading entry, and there is no `~/.cc-sessions/pools/` directory. The comment warns that a tag you can create but not remove is worse (`:6421-6427`), but there is nothing to strand. W1b's Task 0 repeats the ls-only count on both boxes immediately before the edit and stops if any dash-leading name appears.
@@ -225,6 +226,8 @@ measured at the wave's tip unless it says otherwise.
     line. At ws-restore the refusal row now names the flag as its id (`--surface`, for example), where it named `''`.
     Each is still a refusal, with the same exit code and before any act: §2.4's atomic consumption.
 - `--actor` and `--reason` prose, and a hold reason, may still begin with `-`.
+  - Except at hibernate (recorded 2026-10-19): there `--actor` and `--reason` prose may not begin with `-`, by the
+    operator's ruling that accepted the narrowing (`hibernate-refuses-a-dash-leading-id`, below).
 - No refusal word, probe word or journal act was added, and the refusal scan's sanctioned `die` set is unchanged. The
   verbs reuse `bad session id` and their usage lines. Stop's two new refusals print `bad session id: ` followed by
   the token or the id they refused.
@@ -235,6 +238,9 @@ measured at the wave's tip unless it says otherwise.
   `-` is refused with the verb's usage line, in both the `--surface <v>` and the `--surface=<v>` spellings, because
   there it closes a redirect. The eight `--session` verbs keep their surface grammar, since the `--session` pair
   already closes their redirect.
+  - Except at hibernate (recorded 2026-10-19): it is a third verb that refuses a dash-leading `--surface` value, in
+    both spellings. It came with the sixth absorption of `main`, after W1b built the rule
+    (`hibernate-refuses-a-dash-leading-id`, below).
 - `stop --surface pwa --surface` is refused by the loop's arity check, not by the post-loop id check.
 - §2.4's "remains non-blank and bounded": bounded holds for the `--actor` and `--reason` decision fields only.
   ws-hold's positional reason is checked for blankness only, and W1b adds no byte cap to it.
@@ -365,6 +371,16 @@ measured at the wave's tip unless it says otherwise.
   literally and looked it up. At stop, stopPair, start and enable it also acted on it (stopped it, or created it), and
   at ws-restore, ws-reclaim and ws-expire it also took a reap lock and journaled a line. And one verdict is wider than §2.2's: its stop row names the one-argument form, but the
   two-argument form redirected too, since a project of `--surface` stopped `<wrapper>-pwa`.
+- As built at the landing (recorded 2026-10-19). The 259, 188 and 71 above are Task 10's figures, from before
+  hibernate existed, and they stand as that measurement. At #410's final head (`6968de956`) the file has 275 cases:
+  the sixth absorption of `main` added 16 hibernate rows, eight dash ids each with and without a reason.
+  - Correction (review 647 F3, 2026-10-19): the absorption brought the verb, not the rows. At the merge `adca4a843` the parity file had no hibernate probe, so it had no hibernate rows, and its anti-whitelist case was red. The 16 rows came from `6968de956`'s hibernate probe, added in the landing round. The counts stand: 275 cases, 188 red and 87 green against the pre-wave binary, and 16 red and 259 green against `adca4a843`'s.
+  - Re-run against the pre-wave binary, which has no `hibernate` verb, 188 go red and 87 stay green. The 16
+    hibernate rows are green there, because that binary refuses an unknown verb.
+  - Against `adca4a843`'s binary, which had hibernate without its fix, those 16 rows go red and the other 259 stay
+    green.
+  - Run 640 added one prose case per decision-appending verb, so the file now has 285 cases. Table 1 gains a
+    hibernate row.
 
 | Verb | Ids that went red before W1b | What the pre-wave binary did | At the tip |
 |---|---|---|---|
@@ -378,6 +394,7 @@ measured at the wave's tip unless it says otherwise.
 | ws-collect | all eight | `--actor`, `--surface` and `--reason` bound `agent`, took its reap lock because a witness stood for it, and journaled a line; the other five answered `not-witnessed` and journaled a line | Refused before any lock |
 | ws-add | `--actor`, `--surface` as the project | Bound project `agent`, which is a create: a worktree, rows, a unit and a pane | Refused before any worktree |
 | stop | all eight in the builder's order, and all but `--surface` in the order W1a composes | The builder's order stopped the literal id, and an id of `--surface` stopped `pwa`; the other order stopped the literal id | Refused before any unit call |
+| hibernate (the sixth absorption's; measured on `adca4a843`'s binary) | all eight | `--actor`, `--surface` and `--reason` bound the surface word `agent` and re-measured it, so only its hold refused the act; the other five bound the literal id, re-measured it and were refused `session-busy: marker` | Refused before any act, on the usage line |
 | Ids that arity already refused: ws-hold's `--actor` and `--surface`; ws-rename's `--actor`, `--surface` and `--reason`; ws-reclaim's `--defer-expired`; stop's `--surface` in the order W1a composes | None | Refused | Refused, as before |
 
 *Table 1. The decision-carrying verbs, under a decision with and without a reason (ws-add without only).*
@@ -397,6 +414,23 @@ measured at the wave's tip unless it says otherwise.
 - the audit pays one kill grace, about 73 s, or 78 s at the widest grace, against ws-audit's 90 s row;
 - the lane acts only once the operator arms it, by the fleet box's legacy marker or by the Settings switch where it
   has shipped.
+
+**At the landing, after the sixth absorption of `main`.**
+- `hibernate-refuses-a-dash-leading-id`: the absorption brought `ccd hibernate`, whose server argv puts the id first,
+  so an id spelled `--actor` took `--surface` as its value and the surface word became the id. Hibernate now refuses a
+  `--surface`, `--actor` or `--reason` value that begins with `-`, in either spelling, with its usage line, and its id
+  passes `_reg_id_ok`. So at hibernate, unlike the eight `--session` verbs, actor and reason prose may not begin with
+  `-`. `ccdargv-dash-id-parity.test.ts` covers it: its 16 hibernate rows went red against the binary before the fix.
+  Hibernate is a third verb that refuses a dash-leading `--surface` value, so the correction to §2.4 above, "except
+  at stop and ws-add", speaks of the verbs W1b built, not of hibernate, which came later. Review 641 found that this
+  narrows the prose §2.4 kept, and the operator accepted the narrowing on 2026-10-19. The two-token checks close the
+  redirect. The three `=`-form checks close none, since a `--key=value` token consumes only itself; they only refuse
+  `--surface=-x`, `--actor=-x` and `--reason=-x`. `ccd-hibernate.test.ts` pins all six checks, and the parity file
+  holds one prose case for each decision-appending verb: hibernate refuses dash-led prose, and the others accept it.
+- The census gained rows for the absorption's new names, `<id>.deny-settings`, `<id>.no-hibernate` and
+  `<id>.rescueprev.tmp.XXXXXX`, none wider than the widest row, so the cap is unchanged. Its row for
+  `server/src/workflows/read.ts`'s `-<id>.js` is a workflow run id, not a session id: the row accounts for the scan's
+  hit and bounds nothing, since a run id is never a registry id.
 
 **Stated residuals.**
 - `dot-rule-only-at-the-token-verbs`: release, archive, restore, hold, rename and stop still accept a dot-leading id.
@@ -968,7 +1002,7 @@ L0 additions to `shared/api.ts` are `CollectLaneChoice`, `COLLECT_LANE_CHOICES`,
 | SW3 | Change detection | 1: final synchronous resolver and flip on effective boolean. 2: route clears pairs. 3: source changes also flip | 1. The destructive executor retains the decision, and source-only handoff leaves the licence unchanged | Coordinator | Proposed |
 | SW4 | Route gate | 1: session gate and confirm. 2: also refuse Live while sign-in is dark. 3: box token | 2. Arming unattended deletion requires a signed-in operator | Operator | Proposed |
 | SW5 | Placement | 1: own Settings section. 2: /runs. 3: section plus durable feed query | 1 | Coordinator | Proposed |
-| SW6 | Programme | A: CCR-15 wave 10. B: path-identity wave | A, because it changes what arms CCR-15's destructive lane | Operator | Proposed |
+| SW6 | Programme | A: #166 wave 10. B: path-identity wave | A, because it changes what arms #166's destructive lane | Operator | Proposed |
 | SW7 | Stored Live across a version change | A: eligible to re-arm after the same node is freshly measured. B: require a new confirm for every version | A, with the post-ready state stopped until same-epoch identity is known | Operator | Proposed |
 
 SW1 does not cover a whole-state restore that rolls both database and journal backward together. Approval of SW1 option A accepts that boundary and the required pause plus fresh confirmation after such a restore. It also accepts the server-memory connection-epoch identity cache; persisted inventory alone is not sufficient.
@@ -1019,7 +1053,7 @@ Executor, route and census:
 - `SESSION_ONLY` adds the path so its source scan covers the POST and its auth assertion proves both GET and POST absent from `EXEMPT`; the no-box-token census and its CLAUDE.md prose add the POST coordination write. A separate route test proves the GET also consults no box token. The exempt-from-naming list and all three skill forbid-mention suites cover both methods and the marker.
 - PWA tests cover every state, the confirm sheet, pre-latch Off policy, other-node view, mismatch and 404.
 
-### §5 as built (CCR-15 wave 10, run 400)
+### §5 as built (#166 wave 10, run 400)
 
 This note says how wave 10 of the child-reclamation programme (run 400) built this section, and where the build reads
 it more narrowly than the text above or Figure 5. It amends; it edits no earlier text. The programme contract's
@@ -1188,7 +1222,7 @@ Smaller departures carry no slug: three further pins in the store and journal su
 
 This section orders the work. One rule shapes it: every `ccd/ccd` edit waits for workspace-lifecycle W6 (#351, which holds `ccd/ccd`) to merge, and the ccd waves then go in series. Anything shared with ws-expire also needs the consent of workspace-lifecycle's coordinator for each wave (the cross-programme precedent).
 
-SW is listed here for ordering only. If SW6 rules A, it runs as CCR-15 wave 10 under that programme's ledger and contract; if B, as a wave of this programme.
+SW is listed here for ordering only. If SW6 rules A, it runs as #166 wave 10 under that programme's ledger and contract; if B, as a wave of this programme.
 
 | Wave | Content | Size | Touches | Gating | Order |
 |---|---|---|---|---|---|
@@ -1221,7 +1255,7 @@ Each wave is one PR with one safety subject (contract R38 and R48):
 | W2 | What a removal or witness drop is licensed against: absences and mounts |
 | W3 | Which tree `git worktree remove` may delete |
 | W4 | The collector's identity proof |
-| SW (CCR-15 wave 10 if SW6 rules A) | What arms the collector's deletion |
+| SW (#166 wave 10 if SW6 rules A) | What arms the collector's deletion |
 
 Scheduling conflicts (measured or sourced):
 - SW and #322 both edit `SettingsScreen.tsx`, and CLAUDE.md's session-only sentence and its census.
@@ -1348,7 +1382,7 @@ Each wave starts with a read-only Task 0, so the guarantees in this spec are sti
 - Temp roots and mounts: TR1 (the truncation-stable kept-leaf key), TR2 (rows without the key, distinct from malformed or truncated rows), TR5 (the mount question in the removal helper and before every standing nested-checkout and child forced removal, all in W2), TR9 (rec==f), TR10 (the root identity format), TR11 (the temp-root probe and another mount), TR12 (how many recycled-spawn pins).
 - TR3 and TR4 keep an id in the collector's population; TR6 first makes one valid aside-only id visible to both server composition and ccd admission, then restores its witness under the reap lock. These W2 changes refuse at the tail but let the collector reach a leaf that leaks today. The coordinator proposes them; say if you want them held.
 - Worktree identity: PI1 (an entry field at every spawn), PI2 (legacy rows), PI3 (add-only ancestry and mounts), PI4 (the R31 amendment and the cwd probe), PI5 (narrow or close the tail window).
-- The switch: SW1 (generation-journaled OR, latch, connection-bound node, and the whole-state-restore boundary), SW2 (pre-latch Off; recommendation changed to refusal), SW4 (the sign-in gate for Live), SW6 (CCR-15 wave 10), SW7 (a version change with Live stored). The switch adds a signed-in console-session arm now and moves control solely to Settings only after the marker hand step; please confirm that is what you want.
+- The switch: SW1 (generation-journaled OR, latch, connection-bound node, and the whole-state-restore boundary), SW2 (pre-latch Off; recommendation changed to refusal), SW4 (the sign-in gate for Live), SW6 (#166 wave 10), SW7 (a version change with Live stored). The switch adds a signed-in console-session arm now and moves control solely to Settings only after the marker hand step; please confirm that is what you want.
 - Before SW ships: tell us whether sign-in (`CCRC_AUTH`) is armed on the server box; its env file is outside what a session may read.
 - The programme: PG1 (whether W4 is wanted), PG2 (consent per wave).
 - When the switch is deployed: set Settings to live, then remove the marker by hand on the fleet box. That act is yours, never a session's.

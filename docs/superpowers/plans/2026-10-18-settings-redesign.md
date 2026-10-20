@@ -158,7 +158,7 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 
 ## Coordinator items (from the spec's §15.3, re-measured)
 
-- **C1. W2's door table and ROUTES.** `switch-layout` and `switch-theme` name `/settings/appearance` as their route, so S17(b) evaluates them there; ROUTES gains the five section entries (`top: false`) and the sixth, `settings-section` (`/^\/settings\/([^/]+)\/?$/`), which the palette's Go-to derivation leaves out, so S2b's both-way ROUTES test still holds. **Open:** the W2 plan does not say so yet. The coordinator acks it before R2b1 is dispatched, and R2b1's PR amends the W2 plan's door table in the same commit.
+- **C1. W2's door table and ROUTES.** `switch-layout` and `switch-theme` name `/settings/appearance` as their route, so S17(b) evaluates them there; ROUTES gains the five section entries (`top: false`) and the sixth, `settings-section` (`/^\/settings\/([^/]+)\/?$/`), which the palette's Go-to derivation leaves out, so S2b's both-way ROUTES test still holds. **Answered (2026-10-19):** the coordinator acked it before R2b1 was dispatched, and R2b1 amends the W2 plan's door table in the same commit (its `switch-layout` and `switch-theme` rows, and a row for the five `go-settings-*` commands).
 - **C2. W3-LC**, the shared list-column seam: a per-route list and a per-route inspector slot in `ListColumn`, owned once and used by R3a, R3b and the Accounts redesign. **Answered (2026-10-19):** the W3 plan (`docs/superpowers/plans/2026-10-19-ccrc-skins-w3-screens.md`, #680) owns it, and the coordinator acknowledged that. Its Task **P1a** is the list half, keyed by list section rather than by route (D-5581): the registry `SkinSet.routeLists` (Instrument's in `pwa/src/skins/instrument/routeLists.ts`), where R3a's entry is the one line `settings: SettingsIndex`, and the one question a shared screen asks, `useListColumnHolds(section)`. Its Task **P1b** is the inspector half (D-5582): `routeInspectors`, keyed the same way. R3a is not dispatched until P1a has merged, nor R3b until P1b has.
 - **C3. F11's primitives.** `Section({ scope, title, purpose, children })` with `scope` drawn per skin by CSS, and a `PageScaffold` `nav` slot. **Open:** F11 is unbuilt. If F11 ships without them, R2b0 extends the two primitives, their stories and the role census in its own PR, before R2b1.
 - **C4. The order on `AccountsScreen.tsx` and `AuthSection`:** F11, then R2d, then A2 (the first Accounts task that edits `AccountsScreen.tsx`) and later. **Half answered:** the Accounts spec's rev 3 states that sign-in "moves to Settings › Security, … the Settings spec owns it" (its §1), but its D-5522 still names the move. This plan defines D-5508 as the one definition of the move; the Accounts plan, when written, defines D-5522 without the move clause and cites D-5508, and cites D-5508's two passkey routes beside D-5512's step-up list.
@@ -445,6 +445,8 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
 - [ ] **Step 4: Per width × skin × mode** (32 cells, in Storybook): `scope` reads as Refined's eyebrow and as Instrument's right-aligned mono tag (§15.2 call 2); the `nav` slot's story at 390 shows no nav.
 - [ ] **Step 5: Verify.** `cd ui && ./node_modules/.bin/tsc --noEmit`; `cd pwa && ./node_modules/.bin/vitest run test/role-census.test.ts test/design-system-boundary.test.ts test/ui-package-boundary.test.ts` then the full pwa suite at `--maxWorkers=2`.
 
+**As run (2026-10-19, D-5668).** F11 (#765) shipped `Section`'s three slots and a `nav` slot, but the nav's geometry was not C3's: beside the body only from a 60rem (960 px) pane, at 13rem, stacked above the body below that. So R2b0 ran in reduced form: the slot moved to §4.2's measures (D-5668), and its contract gained guards for what F11 left unpinned (characterization pins, each proven by a mutant) (the purpose follows the head; each slot is omitted when absent; with no nav, the body is the scaffold's own child). `Section`'s DOM order is title, scope, purpose (D-5666): Refined lifts the scope above the title with `column-reverse`, so Step 1's "scope, title and purpose in that order" is the visual order in Refined, not the DOM's; later tasks assert the DOM order D-5666 pins.
+
 ### Task R2b1: the sections, their routes, and the reads made once (D-5503's order, D-5504; spec §3.1, §3.2, §4.1, §4.2's phone and narrow-pane rows, §4.4) — GATED: after #627, F11 (or R2b0), S2a, S2b, C1 and #652
 
 **Routing:** band 3 (a new seam above the shell, and the frame identity it must not break; the review reads Review focus item 5). **Needs:** #627, F11 with C3's slots (or R2b0), S2a, S2b, the coordinator's ack of C1, #652 merged (it holds `tap-targets.test.tsx`), and R1a to R1d and R2a. **Frozen files touched:** none once those merge.
@@ -549,20 +551,20 @@ They live in `settingsText.ts` as `STALL_LEVEL_NOTE: Record<StallLevel, string>`
 
 ### Task R2c: Refined's section nav on a wide pane (D-5504; spec §4.2's pane ≥ 760 and wide rows) — GATED: after R2b2 and S4b
 
-**Routing:** band 2. **Needs:** R2b2, S4b (Refined's frame, the sidebar at `clamp(320px, 24vw, 400px)`), F11's `nav` slot (or R2b0's). **Frozen files touched:** none.
+**Routing:** band 2. **Needs:** R2b2, S4b (Refined's frame, the sidebar at `clamp(320px, 24vw, 400px)`), R2b0's `nav` slot (D-5668). **Frozen files touched:** none.
 
 **Files:** modify `pwa/src/screens/settings/SettingsFrame.tsx` and `settings.css`; create `pwa/src/screens/settings/usePaneWidth.ts`; extend `pwa/test/settings-frame.test.tsx`.
 
-**The shape.** What `/settings` shows depends on the pane, so the content choice reads the pane width through one hook, `usePaneWidth(ref)` (a `ResizeObserver` on the pane), against `SETTINGS_NAV_MIN_PX = 760`. The column and the nav are drawn by `@container settings-pane (min-width: 760px)` in `settings.css`; a test reads that file's text and binds the literal to the constant. At ≥ 760: `SettingsIndex` as a sticky nav of 200 px (220 at a viewport ≥ 1600), under the 56 px scaffold header, rows 40 px with the tint and 2 px `--accent` rail on the current section (D-5101), each row the name plus a one-line ellipsised status, the purpose line in its `title`; beside it the reading column at `min(100%, 760px)`. `/settings` shows Updates with Updates current and the URL unchanged; an unknown id shows Updates with the not-found line above its `<h2>`. Under 760, R2b1's pattern.
+**The shape.** What `/settings` shows depends on the pane, so the content choice reads the pane width through one hook, `usePaneWidth(ref)` (a `ResizeObserver` on the pane), against `SETTINGS_NAV_MIN_PX`, which is `@ccrc/ui`'s `PAGE_NAV_MIN_PX` (760), imported, never re-spelled. The column and the nav are drawn by `PageScaffold`'s `nav` slot, whose container queries spell that number (D-5668; `page-scaffold.test.tsx` reds a drift), so Settings passes its nav at every width and the slot draws nothing under 760; `settings.css` adds no container query of its own. At ≥ 760: `SettingsIndex` as a sticky nav of 200 px (220 at a viewport ≥ 1600), under the 56 px scaffold header, rows 40 px with the tint and 2 px `--accent` rail on the current section (D-5101), each row the name plus a one-line ellipsised status, the purpose line in its `title`; beside it the reading column at `min(100%, 760px)`. `/settings` shows Updates with Updates current and the URL unchanged; an unknown id shows Updates with the not-found line above its `<h2>`. Under 760, R2b1's pattern.
 
-- [ ] **Step 1: Red** (`ResizeObserver` mocked): "at a 960 pane, /settings shows Updates in the column, Updates current in the nav, and the URL unchanged"; "at a 960 pane an unknown id shows Updates with the not-found line"; "at a 704 pane, /settings is the index"; "the nav's current row has aria-current=page"; "settings.css's container query reads SETTINGS_NAV_MIN_PX".
+- [ ] **Step 1: Red** (`ResizeObserver` mocked): "at a 960 pane, /settings shows Updates in the column, Updates current in the nav, and the URL unchanged"; "at a 960 pane an unknown id shows Updates with the not-found line"; "at an 800 pane, /settings shows Updates in the column and the nav beside it" (D-5668: the band from 760 to 959 the slot first missed); "at a 704 pane, /settings is the index"; "the nav's current row has aria-current=page"; "SETTINGS_NAV_MIN_PX is PAGE_NAV_MIN_PX".
 - [ ] **Step 2: Green.**
 - [ ] **Step 3: Mutation table, RUN.**
 
   | Mutant | Suite | Expected red |
   |---|---|---|
   | the threshold read as 700 in the hook | settings-frame | "at a 704 pane, /settings is the index" |
-  | the CSS literal changed to 720px | settings-frame | "the container query reads SETTINGS_NAV_MIN_PX" |
+  | `SETTINGS_NAV_MIN_PX` spelled as a literal 720 | settings-frame | "SETTINGS_NAV_MIN_PX is PAGE_NAV_MIN_PX" |
   | `/settings` at a wide pane navigates to `/settings/updates` | settings-frame | "the URL unchanged" |
   | `aria-current` dropped | settings-frame | its case |
 
@@ -835,9 +837,24 @@ The coordinator issued D-5612 and D-5613 for Task R1c's departures from its file
 
 - **D-5612** — `move-sheet-hands-its-answer` (Task R1c): the move's 202 line ("Requested. The nodes report back within a minute.", spec §6.4) is written under the control that opened the move sheet, which only the sheet can tell has answered. So `UpdateMoveSheet` (`pwa/src/fleet/UpdateMoveSheet.tsx`, not in R1c's file list) takes an optional `onAnswered(text)` and, when it is given, hands the caller `MOVE_REQUESTED_TEXT` (defined beside `MOVE_UNREADABLE_TEXT`), or `MOVE_UNREADABLE_TEXT` for a 2xx it could not read, as it closes on a request, instead of toasting. With `onAnswered`, an answer that lands after the sheet was dismissed (the scrim, Esc, a swipe) is toasted, the sentence it would have said, an error toast for a refusal, because the control that asked is gone: spec §6.4's one toast case. Without it (the update banner) the sheet behaves as before. Settings keys the line by the opener (`moveKey` of the intent, or the What's-new sheet's own Update all, whose line sits under "See what's new").
 
+### Issued for Task R1d and defined here
+
+The coordinator issued D-5614 and D-5615 for Task R1d's departures. Each is defined once, here.
+
+- **D-5614** — `box-token-card-inline-layout` (Task R1d): the card's foot hairline and its Details layout are inline styles in `SettingsScreen.tsx`, because R1d's file list holds no stylesheet and `contrast.test.ts` is frozen until #627 merges. The hairline is `border-top` 1px solid `var(--edge-subtle)`, the token `.settings-section`'s own top border already names, so no new colour is introduced; the Details `<dl>` grid and its values' `overflow-wrap: anywhere` carry no colour, as R1c's Quiet time cap does not. The fold reuses `.settings-release-fold`, keys wear `.settings-note` and values `.settings-catalogue`. R2b2, which restyles the cards, moves the three into the section's stylesheet.
+- **D-5615** — `rotate-note-names-no-interval` (Task R1d): Rotate now's note reads "Starts a rotation now instead of waiting for the next scheduled one. …" in place of spec §5.5's "instead of waiting for the weekly one". "Weekly" types the interval, which the card must read from `TOKEN_ROTATION_INTERVAL_MS` and never type; the definition directly above already states it from the constant. The rest of the note is the spec's.
+
+### Issued for Task R2b0 and defined here
+
+The coordinator issued D-5668 and D-5669 for Task R2b0. D-5668 is defined once, here.
+
+- **D-5668** — `page-nav-at-760` (Task R2b0; spec §4.2, §15.3 C3): `PageScaffold`'s `nav` slot (D-5666) sits beside the body from a pane of `PAGE_NAV_MIN_PX` = 760 px, a sticky column 200 px wide, 220 from a 1600 px viewport, with the gutter outside the nav and only the body's right gutter beside it, so a 960 pane in Refined leaves the 688 px column §4.2 measures. Below the threshold the slot draws nothing and the body is centred as on a page with no nav, because a phone or a narrow pane shows the caller's own index (§4.2's phone and pane < 760 rows). `PAGE_NAV_MIN_PX` is exported from `@ccrc/ui` and is the only number the slot's container queries spell, so R2c's hook and the CSS cannot drift. This departs from F11's shipped slot (a 60rem pane, a 13rem column, stacked below), which put a pane of 760 to 959 px, and Refined's 1280 viewport with a classic scrollbar (a 945 px pane), on the stacked side.
+
 ### Issued and unused
 
 D-5613
+
+D-5669
 
 ### Spare
 

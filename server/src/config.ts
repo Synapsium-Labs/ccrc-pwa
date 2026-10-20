@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { defaultCoordDbPath } from './coord/db.js';
@@ -8,6 +8,7 @@ import { parseRoster, RosterError, type Roster } from '../../shared/roster.js';
 import { isNodeRole } from '../../shared/node-role.js';
 import { isReleaseSourceName } from '../../shared/release-notes.js';
 import type { NodeRole } from '../../shared/api.js';
+import type { FingerprintAnswer } from './accounts/mask.js';
 
 export type FleetMode = 'local' | 'remote';
 
@@ -310,31 +311,9 @@ export interface CcrcConfig {
   passkeysPath: string;
 }
 
-/**
- * THE ONE place a wrapper becomes a directory — every other reader of an
- * account's config dir (`fleet.ts`, `server.ts`, `commands.ts`, `watch.ts`,
- * `sessionws.ts`) calls this instead of indexing `cfg.roster.byId` directly
- * by wrapper name (`single-definition.test.ts` enforces it). `undefined` for
- * any id the roster does not have — a `SessionRecord.wrapper` read off disk
- * is an untrusted string (a stale build, a hand-edited registry file, or the
- * `'ghost-wrapper'` fixture `pr-sweep.test.ts` writes on purpose), and the
- * whole point of this function existing is that callers get one `undefined`
- * to check rather than a bare index into a map that might not have the key.
- *
- * The lookup is DATA, not a hand-typed table, and that is load-bearing: the
- * account roster's 5th member (`claude-dev0`) was once missing from a
- * hand-typed sibling of this map for its entire life (see this file's git
- * history), because that map used to be a second literal kept BESIDE the
- * roster instead of derived FROM it. Going through `cfg.roster.byId` — built
- * once, by `loadConfig`, straight from `~/.ccrc/accounts.json` — closes that
- * class of bug structurally: an account added to the roster gets a config
- * dir here with no second edit, and none can be silently skipped the way a
- * hand-typed table could be.
- */
-export function configDirFor(cfg: CcrcConfig, wrapper: string): string | undefined {
-  const account = cfg.roster.byId.get(wrapper);
-  return account ? path.join(cfg.home, account.configDirSuffix) : undefined;
-}
+/** `configDirFor` lives in `./configDir.js` (D-5896): it is a pure join, and its readers loaded this file, and with
+ *  it `coord/db.ts` and `node:sqlite`, to call it. Re-exported so every other import keeps working. */
+export { configDirFor } from './configDir.js';
 
 /**
  * Reads and validates `accountsPath` — synchronously, on purpose:
@@ -534,4 +513,80 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     origin: env.CCRC_ORIGIN || `http://localhost:${port}`,
     passkeysPath: env.CCRC_PASSKEYS_PATH || defaultPasskeysPath(home),
   };
+}
+
+// ── roster reload (D-5518, D-5513; accounts plan Task A12) ───────────────────────────────────────────────────────────
+
+/** What a verb's answer carries for `reloadRoster`: the roster as the box holds it now, the node it came from, and
+ *  the lane-secret fingerprints (A10's table; `null` when the answer carries none). */
+export interface RosterAnswer {
+  readonly roster: unknown;
+  readonly fleetIdentity: string | null;
+  readonly fingerprints: FingerprintAnswer | null;
+}
+
+/** A verb's stdout read as a `RosterAnswer` (`{roster, fleetIdentity, fingerprints?}`, spec §3.9), or `null` for an
+ *  answer that carries no roster (the subs that answer one lane, a refusal, anything that is not JSON). The
+ *  fingerprints' grammar is the masker's (`fingerprintAnswerOf`), taken as a port so this file loads nothing from an
+ *  outer ring (D-6058 (7); ARCH-04 stage 2, D-6045). */
+export function rosterAnswerOf(
+  stdout: string, fingerprintsOf: (stdout: string) => FingerprintAnswer | null,
+): RosterAnswer | null {
+  let o: { roster?: unknown; fleetIdentity?: unknown } | null;
+  try { o = JSON.parse(stdout) as typeof o; } catch { return null; }
+  if (o === null || typeof o !== 'object' || o.roster === undefined || o.roster === null || typeof o.roster !== 'object') {
+    return null;
+  }
+  return {
+    roster: o.roster,
+    fleetIdentity: typeof o.fleetIdentity === 'string' ? o.fleetIdentity : null,
+    fingerprints: fingerprintsOf(stdout),
+  };
+}
+
+export type RosterReload = { ok: true; changed: boolean } | { ok: false; why: 'fleet-identity' | 'roster-invalid' };
+
+export interface RosterReloadDeps {
+  /** The fleet node this server drives (`knownFleetIdentity`), or `null` when it is not known: then nothing reloads. */
+  fleetIdentity: () => string | null;
+  /** A10's table (`SecretMasker.offer`): absent in a test that reads the roster only. */
+  fingerprints?: { offer(answer: FingerprintAnswer | null, keep: ReadonlySet<string>): void };
+}
+
+/** The lanes that may hold fingerprint rows: a lane whose entry names a secret file, and a ccrc-owned Codex lane. */
+const secretLanesOf = (roster: Roster): ReadonlySet<string> =>
+  new Set(roster.accounts.filter((a) => a.exec.secretsFile !== undefined || a.exec.kind === 'codex').map((a) => a.id));
+
+/**
+ * THE SERVER'S ONE WAY TO TAKE A ROSTER THE BOX ANSWERED (D-5518; spec §3.9, G6). Every mutating sub's answer feeds
+ * it, and so does reconcile's `roster` sub. A roster from another fleet, or from a fleet this server cannot name, is
+ * refused and nothing changes; so is one `parseRoster` refuses. A good one swaps `cfg.roster` (the fleet-health
+ * agreement follows it: `server.ts` derives its own fingerprint from `cfg.roster` on every read) and, in remote mode,
+ * rewrites the controller's mirror 0644 atomically: a temp file renamed over it, so a reader mid-write sees the old
+ * file or the new one. In local mode the file is the box's own, written by the verb, and the server never writes it.
+ * Then A10's table: the answer's fingerprints are ingested with the current box-token generation, and every row of a
+ * lane the roster no longer holds a secret for is deleted (D-5513). Never throws.
+ */
+export function reloadRoster(cfg: CcrcConfig, answer: RosterAnswer, deps: RosterReloadDeps): RosterReload {
+  const ours = deps.fleetIdentity();
+  if (ours === null || answer.fleetIdentity === null || answer.fleetIdentity !== ours) return { ok: false, why: 'fleet-identity' };
+  let roster: Roster;
+  try { roster = parseRoster(answer.roster); } catch { return { ok: false, why: 'roster-invalid' }; }
+  const changed = JSON.stringify(roster) !== JSON.stringify(cfg.roster);
+  if (changed) {
+    if (cfg.fleetMode === 'remote') {
+      const tmp = path.join(path.dirname(cfg.accountsPath), `.${path.basename(cfg.accountsPath)}.tmp.${process.pid}`);
+      try {
+        writeFileSync(tmp, `${JSON.stringify(answer.roster, null, 2)}\n`, { mode: 0o644 });
+        chmodSync(tmp, 0o644);
+        renameSync(tmp, cfg.accountsPath);
+      } catch (e) {
+        rmSync(tmp, { force: true });
+        console.warn(`[roster] the mirror was not rewritten: ${(e as NodeJS.ErrnoException).code ?? 'error'}`);
+      }
+    }
+    cfg.roster = roster;
+  }
+  deps.fingerprints?.offer(answer.fingerprints, secretLanesOf(roster));
+  return { ok: true, changed };
 }

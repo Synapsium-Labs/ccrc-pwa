@@ -21,6 +21,7 @@ import {
   childReclaimTierFrom, childReclaimTierPaceMs,
   type ChildReclaimCollectInput, type ChildReclaimLaneNow, type ChildReclaimTierState,
 } from './childReclaimSweep.js';
+import { COLLECT_LANE_LIVE_MARKER } from '../../shared/switches.js';
 
 const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 /** A JSON object: never an array, never null. */
@@ -33,8 +34,9 @@ const isObject = (v: unknown): v is Readonly<Record<string, unknown>> =>
  *  It arms `ws-collect` only while it stands AND its journaled latch is unset; Settings is the other arm, and the
  *  resolver at this file's foot decides (`collectLaneEffective`). Nothing in the tree writes it: it is hand-touched, on
  *  the `expire-lane-live` precedent, and once a coherent listing proves it absent the latch retires it for good (§5.4).
- *  Spelled ONCE, here (L1, no `node:` import); its code holders are this file and the executor, nearest the argv. */
-export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';
+ *  Spelled ONCE, in its `shared/switches.ts` row (D-5855; L0, no `node:` import), and re-exported here; its code holders
+ *  are the row, this file and the executor, nearest the argv. */
+export { COLLECT_LANE_LIVE_MARKER };
 
 // ── the probe and refusal tables (spec §5.10) ───────────────────────────────────────────────────────────────────
 
@@ -1984,13 +1986,20 @@ export function isCollectLaneKebab(v: string): boolean {
 // Nothing here reads a file, a row, a clock or the link. `collectLaneEffective` is called by the executor
 // (`coord/collectTempRoot.ts`), nearest the argv, and by the view (`collectLaneView`), and by nothing else.
 
+/** Why a registry listing failed (D-5969). ITS WORDS ARE `ReadFailure`'s (`shared/agent-protocol.ts`). This file cannot
+ *  import that type (its imports are pinned, `collect-readers.test.ts`), so the union is DERIVED from the array rather
+ *  than restated, and `coord/collectTempRoot.ts` holds it EQUAL to `ReadFailure` at compile time. */
+export const COLLECT_LISTING_FAILURES = ['absent', 'unreadable'] as const;
+export type CollectListingFailure = (typeof COLLECT_LISTING_FAILURES)[number];
+
 /** The registry listing as the executor reads it (path-identity spec 2026-10-12 §5.2). `marker` is the MEASURED
  *  presence of `COLLECT_LANE_LIVE_MARKER`. An unlistable registry carries NO marker field: a listing that failed proves
- *  no absence, and a proved absence is what retires the latch. */
+ *  no absence, and a proved absence is what retires the latch. It carries instead `reason`, the measured listing's
+ *  failure: an unreadable registry is REPORTED as unreadable, never folded into an empty one (D-5969, ARCH-08b). */
 export type CollectLaneSwitches =
   | { readonly paused: false; readonly marker: boolean }
   | { readonly paused: true; readonly why: 'raised'; readonly marker: boolean }
-  | { readonly paused: true; readonly why: 'unlistable' };
+  | { readonly paused: true; readonly why: 'unlistable'; readonly reason: CollectListingFailure };
 /** The connection epoch around a listing (path-identity spec 2026-10-12 §5.2, §5.5). In the executor, `before` is the
  *  epoch the job was queued under and `after` the epoch read after the final listing; in the pass, the pass-head epoch
  *  and the epoch after the gather. Epochs only rise, so `before === after` is "no connection came or went". */

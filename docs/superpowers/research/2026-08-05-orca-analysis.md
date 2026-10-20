@@ -9,7 +9,7 @@ file paths; this doc keeps only the conclusions and the paths that matter.
 
 An MIT-licensed (© Lovecast Inc.) Electron desktop IDE for running ~40 CLI
 coding agents in parallel git worktrees — PTY-wrapped real terminals, never
-SDKs — with an Expo/React-Native store-app companion, a headless server mode,
+SDKs — with a React-Native store-app companion, a headless server mode,
 an SSH relay it deploys onto remotes, and an SQLite-backed multi-agent
 orchestration bus. ~2.35M LOC, ~4,600 test files, 221 Playwright E2E specs,
 25–40 merged PRs/day from a funded team. It is ccrc's problem space at two

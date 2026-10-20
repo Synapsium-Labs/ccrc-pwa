@@ -27,7 +27,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ARCHIVE_REFUSALS, isArchiveRefusal } from '../../../shared/api';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet } from '@ccrc/ui';
-import { ARCHIVE_REFUSAL_TEXT, ApiError, UNSUPPORTED_VERB_TEXT, api } from '../lib/api';
+import { ARCHIVE_REFUSAL_TEXT, ApiError, UNSUPPORTED_VERB_TEXT, api, apiErrorText, isRegistryUnmeasurable } from '../lib/api';
 import './fleet.css';
 
 /** One run named by a `409 run-open` body. DEGRADE, NEVER INVENT: if `runs`
@@ -46,7 +46,7 @@ export interface ArchiveConflictRun {
  *  is coverage of something no operator can reach.
  *
  *  It was DROPPED rather than wired because neither door has run-board
- *  navigation to hand it: `SessionActionsSheet` lives on FleetScreen and
+ *  navigation to hand it: `SessionActionsSheet` renders from FleetFlows and
  *  `PrSheet` under SessionHeader, and neither takes a navigate/route prop —
  *  inventing one is a surface the plan never designed, decided from a review
  *  finding.
@@ -115,6 +115,8 @@ export function runOpenRuns(err: unknown): readonly ArchiveConflictRun[] | null 
  *  because a failed forced archive has nowhere else to be said. */
 function archiveErrorText(err: unknown): string {
   if (!(err instanceof ApiError)) return 'the archive was refused, for a reason this build does not recognise';
+  // D-5971: the word, at any status — the box never ran the archive, so the 502 arm's "failed on the box" is wrong.
+  if (isRegistryUnmeasurable(err)) return apiErrorText(err);
   if (err.status === 404) return 'that session is gone — the fleet will catch up';
   // Workspace lifecycle §5.2: the door's typed refusals, in the words every archive surface uses.
   const code = typeof err.body === 'object' && err.body !== null ? (err.body as { error?: unknown }).error : undefined;
@@ -195,18 +197,12 @@ export function ArchiveConflictSheet({
   };
 
   return (
-    <Sheet open onClose={onClose} title={CLAIMED_TITLE}>
-      <div className="archive-conflict-sheet">
-        {/* MERGE NOTE: main moved both sentences behind `claimedSentence` and
-            `CLAIMED_CONSEQUENCE`, which is a single-source-of-truth win this
-            branch has no argument with — the branch had only restyled the
-            literals it replaced. Main's text, the branch's utilities. */}
-        <p className={QC_CONSEQUENCE}>
-          {claimedSentence(named)}
-        </p>
-        <p className={QC_CONSEQUENCE}>
-          {CLAIMED_CONSEQUENCE}
-        </p>
+    <Sheet
+      open
+      onClose={onClose}
+      title={CLAIMED_TITLE}
+      // The answers are pinned in the Sheet's footer (D-5932).
+      footer={
         <div className={QC_ACTIONS}>
           <Button variant="danger" disabled={busy} onClick={force}>
             {busy ? 'Archiving…' : 'Archive anyway'}
@@ -218,6 +214,19 @@ export function ArchiveConflictSheet({
             Cancel
           </Button>
         </div>
+      }
+    >
+      <div className="archive-conflict-sheet">
+        {/* MERGE NOTE: main moved both sentences behind `claimedSentence` and
+            `CLAIMED_CONSEQUENCE`, which is a single-source-of-truth win this
+            branch has no argument with — the branch had only restyled the
+            literals it replaced. Main's text, the branch's utilities. */}
+        <p className={QC_CONSEQUENCE}>
+          {claimedSentence(named)}
+        </p>
+        <p className={QC_CONSEQUENCE}>
+          {CLAIMED_CONSEQUENCE}
+        </p>
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>
     </Sheet>

@@ -137,7 +137,7 @@ describe('checks', () => {
   });
 
   it('truncates an attacker-supplied check name and caps how many arrive', () => {
-    // Fork PRs are accepted continuously on public repos (MegaMek/megamek),
+    // Fork PRs are accepted continuously on public repos (example-org/example-repo),
     // and these names reach the UI. They are inert text there, but they are
     // still bytes crossing a wire and into a React tree.
     const many = Array.from({ length: 40 }, (_, i) => ({ name: 'x'.repeat(500) + i, conclusion: 'FAILURE' }));

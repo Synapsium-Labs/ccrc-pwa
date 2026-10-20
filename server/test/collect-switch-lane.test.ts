@@ -1,4 +1,4 @@
-// CCR-15 wave 10 (path-identity spec 2026-10-12 §5.4, §5.5, §5.7): the collector switch, wired through the LANE. The
+// #166 wave 10 (path-identity spec 2026-10-12 §5.4, §5.5, §5.7): the collector switch, wired through the LANE. The
 // executor's own final reads and its latch are `collect-switch-executor`'s and `collect-latch`'s; what is only provable
 // HERE is what the pass and the port do:
 // - the pass's own listing retires the latch (the hand transition), so an idle lane follows a removed marker within one

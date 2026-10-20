@@ -10,7 +10,9 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { CollectLaneConfirmRequired, CollectLaneView, CoordStatus } from '../../shared/api';
+import type { ComponentProps, ReactNode } from 'react';
 import { CollectLaneSection } from '../src/fleet/CollectLaneSection';
+import { useCollectLaneView } from '../src/fleet/useCollectLaneView';
 import {
   COLLECT_OFF_NOTE_TEXT, COLLECT_PAUSE_TEXT, COLLECT_REFUSAL_TEXT, COLLECT_SECTION_TEXT, COLLECT_STATE_TEXT,
   COLLECT_WARN_TEXT, collectConfirmLines, collectCountLine, collectOffNote, collectOffersReconfirm, collectStateHead,
@@ -19,8 +21,14 @@ import {
 import { COORD_CONFIRM_MS } from '../src/fleet/coordWords';
 import { ApiError, COORD_UNSUPPORTED_TEXT, api, apiErrorText } from '../src/lib/api';
 import { ToastHost } from '@ccrc/ui';
-import { UNCONFIRMED_TEXT } from '../src/screens/settingsText';
+import { UNCONFIRMED_TEXT } from '../src/fleet/settingsText';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+
+
+/** The section over its own read, as the Settings frame hands it one (`SettingsDataProvider`, D-5504). */
+function Polled(props: Omit<ComponentProps<typeof CollectLaneSection>, 'poll'>): ReactNode {
+  return <CollectLaneSection {...props} poll={useCollectLaneView()} />;
+}
 
 afterEach(() => {
   cleanup();
@@ -123,7 +131,7 @@ const mount = async (first: CollectLaneView,
   pause: (state: 'on' | 'off') => Promise<void> = vi.fn(() => new Promise<void>(() => {}))) => {
   const store = makeStore();
   const read = vi.spyOn(api, 'collectLane').mockResolvedValue(first);
-  render(<><ToastHost /><CollectLaneSection store={store} childReclaimPause={pause} /></>);
+  render(<><ToastHost /><Polled store={store} childReclaimPause={pause} /></>);
   await choiceGroup();
   return { read, store };
 };
@@ -420,7 +428,7 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     let answer!: (v: 'unreadable') => void;
     vi.spyOn(api, 'collectLane').mockResolvedValue(OFF_LATCHED);
     render(<ToastHost />);
-    const section1 = render(<CollectLaneSection store={makeStore()} childReclaimPause={vi.fn(() => new Promise<void>(() => {}))} />);
+    const section1 = render(<Polled store={makeStore()} childReclaimPause={vi.fn(() => new Promise<void>(() => {}))} />);
     await choiceGroup();
     vi.spyOn(api, 'setCollectLane').mockReturnValueOnce(new Promise((r) => { answer = r as (v: 'unreadable') => void; }));
     fireEvent.click(radio('live'));
@@ -587,7 +595,7 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
         const store = makeStore();
         vi.spyOn(api, 'collectLane').mockResolvedValue(LIVE_HERE);
         const pause = vi.fn<(state: 'on' | 'off') => Promise<void>>().mockResolvedValue(undefined);
-        render(<CollectLaneSection store={store} childReclaimPause={pause} />);
+        render(<Polled store={store} childReclaimPause={pause} />);
         await act(async () => { await vi.advanceTimersByTimeAsync(0); });
         seen(store, coord());
         fireEvent.click(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));

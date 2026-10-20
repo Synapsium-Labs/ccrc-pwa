@@ -1807,6 +1807,9 @@ ccrc models <id> set-subagent <haiku|sonnet>
 ccrc models <id> set-effort <class> <level|default>
 ccrc models <id> set-window <modelId> <tokens>   # record a measured context window, 1000 to 1000000
 ccrc models <id> clear-window <modelId>          # drop one
+ccrc models <id> hold <class>              # no automatic advance moves this class
+ccrc models <id> release <class>           # it may move again, canary first
+ccrc models <id> revert <class>            # back to its model before its last advance, and held there
 ccrc models <id> discovery add <modelId> | rm <modelId> | catalogue
 ccrc models <id> rm                        # reap the lane's model files
 ccrc models refresh <id> | --all           # re-probe the provider catalogues
@@ -1853,6 +1856,23 @@ refresh materialises and writes the default. With a stale or absent catalogue a 
 successful probe, so before rolling back across this change on a lane with windows set, run
 `ccrc models <id> clear-window <model>` for each measured model: each one re-materialises, and clearing the last
 puts the lane on the default rule.
+
+**Holds, revert and the advance file.** Each lane may carry `~/.ccrc/models/<id>.advance.json`, a sibling of the
+registry and never a key in it, so an older ccrc keeps reading the registry after a rollback. Per class it records
+the family the class follows (the last part of a `<vendor>-<version>-<family>` model id), an optional hold, the
+model the class had before its last automatic advance, and its last ten moves. `init codex` writes it, with a
+family for every class, an empty one included. `set-class` records the move and takes the family from the new pin,
+and clears it when you set `none` or a model id outside that shape, so a class you emptied by hand stays empty.
+`hold <class>` keeps a class where it is, and `release <class>` lets it move again. `revert <class>` puts back the
+model the class had before its last automatic advance, with its effort level, and holds it there; with no advance
+on record it refuses `no-previous`. Holds arrive one build before the automatic advance itself, so a class that
+must stay where it is can be held first. Every write to a lane's model files — every per-lane verb but `show`, and
+the hourly refresh's re-materialise — runs under one per-lane lock, `~/.ccrc/locks/models-<id>.lock`. A verb that
+finds it held waits up to 20 seconds and then refuses `lock-busy`, writing nothing; on a box without `flock`, or
+before the first lock on a box whose PATH has no `mkdir`, the verbs run unserialised, as before. The catalogue is
+the one lane model file written outside the lock: the probe replaces it whole, by a rename, so a writer under the
+lock always reads one complete catalogue. `rm` reaps the advance file with the lane's other model files, and never
+the lock.
 
 ### A ChatGPT/Codex lane: `exec.kind: "codex"` and `ccrc codex`
 
@@ -3109,7 +3129,7 @@ general remote-shell:
   exact bare command name (no path components) and an argv **prefix** — a
   handful of `ccd` verbs are still a bare first token (`start`, `enable`,
   `ensure`, `stop`, `swap`, `ws-add`, `forget`) — a bare-token grant leaves
-  everything after the verb unconstrained, which is what lets `ccd stop <id> --surface <word>`
+  everything after the verb unconstrained, which is what lets `ccd stop --surface <word> <id>`
   cross this seam with no widening: `stop`'s validated `--surface` flag is
   the single enrolment the swap-transcript design costs, and it rides as an
   argv flag rather than an env var because the exec seam is `Runner = (cmd,
@@ -3154,7 +3174,7 @@ general remote-shell:
   it — but where no evidence PERMITS an ordinary verb (guessing wrong there
   is loud: ccd's own usage refusal, a 502, never a lie), no evidence REFUSES
   `--surface`, because guessing wrong there is a *silent success*: an old
-  ccd parses `stop <id> --surface pwa` as a two-argument stop of a session
+  ccd parses the trailing order the server sent before path identity W1a, `stop <id> --surface pwa`, as a two-argument stop of a session
   literally named `<id>---surface`, exits 0, and the real session is never
   touched. Evidence comes from measuring the actual deployed ccd on
   whichever box runs it — the remote agent at handshake and every 60s
@@ -3807,7 +3827,7 @@ gone stale, a pass decides nothing at all. The act runs on the coordination seri
 immediately before each run's fleet act and again before its commit, and commits only while the run still names it, so
 a successor is never failed and a coordinator revived meanwhile keeps its programme — all but a revive that lands
 inside that last round trip.
-Each closed run's event says the sweep did it (`causedBy: sweep`), CCR-15 reclaims each marked worker whose run closed
+Each closed run's event says the sweep did it (`causedBy: sweep`), #166 reclaims each marked worker whose run closed
 (a worker mid-turn loses its turn; its work is pinned in the attic), an unmarked worker is released, and one feed row
 per programme says so. **The lane ships shadowed**: until the operator touches `$REG/dead-coordinator-lane-live` by
 hand in the registry the server reads (the fleet box's, through the agent, when the server runs `CCRC_FLEET=remote`;
@@ -5236,7 +5256,7 @@ the armed-gate sentence present) + held case A **860** (a 127-character workdir,
 reason names a run — the longer of the two case-A sentences the code can emit — and a 40-character id,
 **modelled**: `$id` carries a shape gate but no length bound and appears more than once across these
 sentences, so this is an assumption and not a ceiling; the longest id live on this fleet on 2026-09-08 was 29,
-`expoAI-assistant-keen-prairie`) + co-tenant 245 (a 64-character project and a two-digit count — `$CT_N`
+`project-h-id-pad-keen-prairie`) + co-tenant 245 (a 64-character project and a two-digit count — `$CT_N`
 is interpolated un-padded and the singular and plural halves are the same length, so the count's digits are
 the whole of the difference: 244 / 245 / 246 at one, two and three digits, and the fleet's live shape is
 two) + two joins = **1826**, not the fix wave's 1768 — its own 801 for held case A undercounted the true 860
@@ -5293,8 +5313,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8369-8371`), each with an operator sentence of its own at `:8421`,
-`:8429` and `:8442`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8493-8495`), each with an operator sentence of its own at `:8545`,
+`:8553` and `:8566`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5407,7 +5427,7 @@ is an instruction about one repo; the default is hygiene applied to repos that n
   (D-1451, narrowed by D-1458). detect() reads `.gitignore` only along the ancestor chain from the
   VCS root **down to** the scan root, so a **nested** `.gitignore` below the root is never applied
   and its build artifacts entered the corpus untracked — refusing that tree for ever, with no remedy
-  on the box (measured: synapsium-platform over `frontend/exposynapse-site/.astro/`, swift-harbor
+  on the box (measured: project-k over `frontend/site-k/.astro/`, swift-harbor
   over `.husky/_/`). So the guard runs in two steps: write the noise patterns, run detect() **once**,
   and compute the breach (corpus ∖ tracked) it would refuse on. Then ask git whether each **breach**
   path is ignored (`git check-ignore --no-index -z --stdin`, one call, NUL-framed so a non-ASCII or
@@ -5417,7 +5437,7 @@ is an instruction about one repo; the default is hygiene applied to repos that n
   directory** containing it when git's `--directory` census names one, so a whole ignored tree costs
   one line. Only if something was derived is it appended and detect() run a **second** time.
   D-1451..D-1453 derived git's WHOLE ignored census instead, and the cost was measured and then
-  accepted rather than removed: 308 entries on custom-tools, of which 22 covered a file detect would
+  accepted rather than removed: 308 entries on project-d, of which 22 covered a file detect would
   ingest at all — and on a 2000-file scratch fixture, 300 derived entries cost detect **43.3 s**
   against **1.4 s** with none, which is 1.4 s for a tree with no ignored files at all (D-1458). The
   second detect() is the one cost this shape ADDS, and it is measured too: on a tree that DOES derive

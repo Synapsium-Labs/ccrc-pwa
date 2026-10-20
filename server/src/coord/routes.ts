@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
+import { SHAPE_ONLY_MASKER } from '../accounts/mask.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
 import {
@@ -37,7 +38,8 @@ import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type Sw
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
-import { MAIL_DISABLED_MARKER, queueSystemMail } from './rundefs.js';
+import { MAIL_DISABLED_MARKER } from './rundefs.js';
+import { queueSystemMail } from './rundefsTx.js';
 import { STALL_QUIET_MS } from './stall.js';
 import {
   STALL_NOTICE_WINDOW_MS, STALL_QUIET_MAX_MS, STALL_QUIET_MIN_MS, STALL_QUIET_STEP_MS, decideStallSettings,
@@ -62,7 +64,7 @@ import {
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
-  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isSessionIdShape, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
+  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isRegistryId, isSessionIdShape, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult,
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
@@ -80,6 +82,7 @@ import { redactedStored } from './redact.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import { approvalNudgeSubject } from './rundefs.js';
 import { heldFor } from './heldFor.js';
+import { noticeSink, type NoticeSink } from '../notice.js';
 import {
   APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
 } from './approvalsign.js';
@@ -239,6 +242,8 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
+    // Spec §2.3, a stored defect: the run's session id is not a registry id, and nothing was read or composed.
+    case 'bad-session': return refuseRoute(reply, 'bad-session');
     // `detail` spread, not `detail: r.detail`: an L4 adapter may not narrow a
     // distinction it received (`route: <why>[ <field>]` or `slug: <why>`,
     // present only for those refusals), so its PRESENCE rides the wire exactly as
@@ -316,6 +321,8 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
+    // Spec §2.3, a stored defect: every close but the abandon refuses it, and nothing was read or composed.
+    case 'bad-session': return refuseRoute(reply, 'bad-session');
     case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
     case 'refused': return reply.code(409).send({ ok: false, refused: r.code });
     case 'doneVerdict': return reply.code(409).send({ ok: false, error: r.code, detail: r.detail });
@@ -459,7 +466,7 @@ export interface CoordRoutesHandle {
   ) => Promise<T>): Promise<T>;
   /** The SAME hold, handed `closeRun`'s abandon arm as the DEAD-COORDINATOR LANE runs it (workspace lifecycle spec
    *  2026-09-24 §5.4): `causedBy: 'sweep'`, never the operator's word; the compare-and-set on `claimedBy` against the
-   *  crashed id; the lane's re-measure, which the arm runs before the fleet act and again before the commit; CCR-15 wave
+   *  crashed id; the lane's re-measure, which the arm runs before the fleet act and again before the commit; #166 wave
    *  3's `childReclaim` port wired exactly as the abandon route wires it. The lane's only way to end a run, so the
    *  reclaim door — which runs inside this serialiser — can never interleave with it. */
   withSweepAbandon<T>(coord: CoordStore, fn: (
@@ -538,6 +545,12 @@ export function registerCoordRoutes(
    * had ever held it in memory in the first place.
    */
   watcher?: FleetWatcher,
+  /**
+   * D-5858: the notice sink this file's five feed writers raise their rows through (`notice.ts`, D-5857), the one
+   * `buildServer` builds and passes. Defaulted to a sink over these same `deps`, which is what `buildServer`'s is, so a
+   * test that registers these routes on a bare Fastify raises its rows exactly as the server does.
+   */
+  notice: NoticeSink = noticeSink(deps),
 ): CoordRoutesHandle {
   const notConfigured = (reply: FastifyReply) => refuseRoute(reply, 'not-configured');
 
@@ -548,7 +561,7 @@ export function registerCoordRoutes(
   const turnReads = turnReadDeps(deps, watcher);
 
   /** `closeRun`'s abandon arm exactly as `POST /api/runs/:id/abandon` runs it — `{intent:'abandon'}` built here and
-   *  never read off a body (D-280), `causedBy:'operator'`, CCR-15 wave 3's `childReclaim` port onto the session's own
+   *  never read off a body (D-280), `causedBy:'operator'`, #166 wave 3's `childReclaim` port onto the session's own
    *  queue — handed to `fn` INSIDE `coordMutex`. ONE spelling, two callers: that route, and the archive door's
    *  `{programme:'end'}` through the handle this function returns. */
   const withAbandon: CoordRoutesHandle['withAbandon'] = (coord, fn) => coordMutex.run(() => fn((runId) => closeRun(
@@ -634,6 +647,7 @@ export function registerCoordRoutes(
       return { ok: false, error: 'registry-unmeasurable',
         detail: 'the registry directory could not be listed — transient, not a fact about the sender' };
     }
+    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
     const registry = await readRegistry(deps.io, deps.cfg);
     const row = registry.find((r) => r.id === whoId);
     if (!row) {
@@ -844,6 +858,7 @@ export function registerCoordRoutes(
       return refuse(reply, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
+    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
     const registry = await readRegistry(deps.io, deps.cfg);
 
     // 5: sender — a registry row must exist for fromId.
@@ -1074,6 +1089,7 @@ export function registerCoordRoutes(
       return refuse(reply, 'registry-unmeasurable', { fromId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
+    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
     const registry = await readRegistry(deps.io, deps.cfg);
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
@@ -1207,7 +1223,8 @@ export function registerCoordRoutes(
     const mail = program !== null
       ? coord.mailForProgram(program, { limit, all })
       : all ? coord.mailForRecipient(to!, limit) : coord.outstandingMailFor(to!, limit);
-    return reply.code(200).send({ ok: true, mail });
+    // Session-derived text, masked before it leaves (D-5513, accounts plan Task A10).
+    return reply.code(200).send({ ok: true, mail: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(mail) });
   });
 
   /**
@@ -1239,7 +1256,10 @@ export function registerCoordRoutes(
 
     const row = coord.deliveryEnvelope(id);
     if (!row) return reply.code(404).send({ ok: false, error: 'not-found' });
-    return reply.code(200).send({ ok: true, id: row.id, toId: row.toId, state: row.state, envelope: row.envelope });
+    return reply.code(200).send({
+      ok: true, id: row.id, toId: row.toId, state: row.state,
+      envelope: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(row.envelope),   // masked before it leaves (D-5513)
+    });
   });
 
   // ── runs (Task 9) ──────────────────────────────────────────────────────
@@ -1276,11 +1296,14 @@ export function registerCoordRoutes(
    *  why `deferred` is left to rule 3's child gate, which re-reads. */
   const sessionMarkOf = async (sessionId: string): Promise<SessionMarkRead> => {
     const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
-    if (read.found) {
+    if (read.kind === 'found') {
       const k = read.record.child.kind;
       return k === 'child' ? { kind: 'child' } : k === 'none' ? { kind: 'root' } : { kind: 'deferred' };
     }
-    if (read.reason === 'unlistable') return { kind: 'deferred' };
+    // `bad-id` (path identity, spec §2.3) is unmeasured, never absent, so it is
+    // left to rule 3's child gate like `unlistable`. The open gate's `sessionId`
+    // check already refuses such an id before this read.
+    if (read.kind === 'unlistable' || read.kind === 'bad-id') return { kind: 'deferred' };
     // `absent` is two populations (`readSessionRecord`'s docstring): no
     // `.uuid` listed, and a listed row that could not be built. Only the first
     // is row-less; a listed `.child` is the child gate's `spent-unmeasured`.
@@ -1389,13 +1412,15 @@ export function registerCoordRoutes(
     return coordMutex.run(async () => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     // THE PRECONDITIONS ARE DECIDED IN L1 (D-5384, audit ticket ARCH-21):
-    // `coord/openRun.ts`'s `openRunPreconditions` runs the body shape, the
-    // review arm (D-2799), the slug and home shaping (D-2349), F1's
-    // `project-mismatch`, F2's home verdict and §12's `claimant-is-a-worker`,
-    // in that order, before any row exists — so a refusal leaves no `planned`
-    // orphan and places no hold. Every read it makes is a synchronous DB read
-    // handed in here, called only by the gate that needs it. This route answers
-    // its refusal and acts on its plan; it decides none of it.
+    // `coord/openRun.ts`'s `openRunPreconditions` runs every precondition —
+    // the body shape, path identity's three id checks (spec §2.3), the review
+    // arm (D-2799), the slug and home shaping (D-2349), D-5298's attribution
+    // and registry gates, F1's `project-mismatch`, F2's home verdict and §12's
+    // `claimant-is-a-worker` — in its gate table's order, before any row
+    // exists, so a refusal leaves no `planned` orphan and places no hold.
+    // Every read it makes is handed in here, called only by the gate that
+    // needs it. This route answers its refusal and acts on its plan; it
+    // decides none of it.
     const pre = await openRunPreconditions({
       body, legacyAccepted: HOME_PROJECT_LEGACY_ACCEPTED,
       reviewed: (id) => { const r = coord.run(id); return r.ok ? r : { ok: false, detail: r.detail }; },
@@ -1696,9 +1721,8 @@ export function registerCoordRoutes(
         return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
       case 'unknown-session': return reply.code(404).send({ ok: false, error: 'unknown-session' });
       case 'no-claimant': return reply.code(409).send({ ok: false, refused: 'no-claimant' });
-      // 502, the coord-route family's status for this condition
-      // (`sendDispatchOutcome` above) — NOT the kickoff route's 503, which is
-      // server.ts's own vocabulary. `detail` rides along because it is a
+      // 502, the table's one status for this condition (`REFUSAL_STATUS`; the
+      // kickoff route's 503 was unified to it, D-5971). `detail` rides along because it is a
       // distinction this adapter RECEIVED: L1 measured WHICH read failed, and
       // this layer cannot recompute it.
       case 'registry-unmeasurable':
@@ -1711,6 +1735,15 @@ export function registerCoordRoutes(
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
       case 'heir-is-a-worker':
         return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
+      // spec §2.3: `which` names the side that is not a registry id. The HEIR is
+      // this request's own value, so `bad-session-id` (400), the status main's
+      // refusal table (`shared/refusal.ts`) gives that word, where `bad-session`
+      // is 409. The stored CLAIMANT is a row no retry heals, so `bad-session`
+      // (409), and its detail names the abandon door. Nothing was re-pointed.
+      case 'bad-session':
+        return r.which === 'claimant'
+          ? refuseRoute(reply, 'bad-session', { detail: r.detail })
+          : refuseRoute(reply, 'bad-session-id', { detail: r.detail });
       // D-5298: through `refuseRun` (D-5384's run-refusal helper), not inline.
       case 'project-mismatch':
         return refuseRun(reply, 'project-mismatch', {
@@ -1834,6 +1867,14 @@ export function registerCoordRoutes(
     // Forward motion toward a review claim re-measures; retreating to
     // `working` does not — see this route's own docstring.
     if (to === 'awaiting-review' || to === 'merging') {
+      // Spec §2.3: a STORED sessionId is re-checked where the row enters an
+      // id-taking flow. `verifyDone` composes `pr-state --session <id>`, and a
+      // refusal from it records a rejection and queues mail to that id, so
+      // this check stands before it and outside it. A row written before
+      // POST /api/runs checked its ids can hold an id ccd would read as a
+      // flag. Retreating to `working` composes no argv, so such a row can
+      // still be sent back: the check guards this block alone.
+      if (!isRegistryId(run.sessionId)) return reply.code(409).send({ ok: false, reject: { code: 'bad-session' } });
       const verdict = await verifyDone(
         { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
         { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
@@ -1978,18 +2019,26 @@ export function registerCoordRoutes(
       if (sid === null || sid === '') {
         return reply.code(409).send({ ok: false, error: 'no-session' });
       }
-      // Fix round 1, finding #2: `sid` comes off `run.sessionId`/
-      // `run.claimedBy` (`POST /api/runs` shape-checks `claimedBy`/
-      // `sessionId` only for "non-empty string", no charset guard), but
-      // `routeEventDetail` below embeds `sid` unescaped as the sixth segment
-      // of a `:`-delimited grammar that `ROUTE_EVENT_DETAIL_RE`'s own group
-      // accepts only `[A-Za-z0-9._-]+` for. Refuse the bad shape HERE, before
-      // ever building an argv or writing an event this door's own reader
-      // would later refuse to parse back — `no-session` (nothing to route
-      // to) and `bad-session` (something to route to, but not a name this
-      // door can safely write) are two different conditions and must not
-      // collapse to one refusal.
-      if (!isSessionIdShape(sid)) {
+      // The stored id is re-checked HERE, before any field read, argv or
+      // event (spec §2.3). `sid` comes off `run.sessionId`/`run.claimedBy`,
+      // a STORED row: `POST /api/runs` now refuses a `claimedBy` or
+      // `sessionId` that is not a registry id, but a row written before that
+      // check can still hold one, so this door asks again rather than
+      // trusting the open. The rule is THE registry-id predicate,
+      // `isRegistryId` (`shared/api.ts`): the session-id shape, no leading
+      // `-` or `.`, and at most 255 characters. Fix round 1, finding #2
+      // checked the SHAPE alone, because `routeEventDetail` below embeds
+      // `sid` unescaped as the sixth segment of a `:`-delimited grammar whose
+      // `ROUTE_EVENT_DETAIL_RE` group accepts only `[A-Za-z0-9._-]+`. The
+      // predicate keeps that guarantee and closes what the shape let through:
+      // a stored `--actor` would reach `CCD_ARGV.route`/`routeSet` as
+      // `route --session --actor`, an id the one predicate refuses (spec §2.3).
+      // A manual-field write reads no registry field, so nothing but this
+      // check stands between a bad stored id and that argv. `no-session`
+      // (nothing to route to) and `bad-session` (something to route to, but
+      // not a name this door can safely write or compose) are two different
+      // conditions and must not collapse to one refusal.
+      if (!isRegistryId(sid)) {
         return reply.code(409).send({ ok: false, error: 'bad-session' });
       }
 
@@ -2467,44 +2516,17 @@ export function registerCoordRoutes(
     // skips outright — the row would land and be seen by nobody. The durable
     // feed is where a coordination change with no run belongs.
     //
-    // A missing `NotifyLog` degrades the RECORD and never the write; and
-    // `recordFeedEvent` throws SYNCHRONOUSLY (`node:sqlite`), so it is caught
-    // here exactly the way `watch.ts:1391-1394` catches it. Refusing an
-    // operator's write because the feed archive is unavailable would be the
-    // collapse, not the safety.
-    const log = deps.notifyLog;
-    if (log) {
-      try {
-        const ev = log.record({
-          kind: 'coord', sessionId: '',
-          title: 'caps changed',
-          body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
-                `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
-          runId: null,
-        });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — caps written, feed archive degraded`);
-      } finally {
-        // FLUSH, like the only other `record()` caller in the tree
-        // (`watch.ts:1396`) and for the reason `NotifyLog.flush`'s own docstring
-        // gives: `record()` bumps the in-memory seq, and a seq handed to a
-        // client but never persisted lets a restart re-mint the same
-        // `{epoch, seq}` pair for a different event — the stale-but-valid
-        // landing `catchUp` cannot tell from the truth. `void`, never awaited:
-        // flush never rejects, and the caps write must not wait on it.
-        //
-        // IN A `finally`, NOT AFTER THE ARCHIVE WRITE (D-1213). It shipped
-        // inside the try, one line below `recordFeedEvent` — which throws
-        // SYNCHRONOUSLY, and is the one failure this try/catch exists for. So
-        // the flush was skipped on precisely the path that needed it: the seq
-        // was already spent, the client already had it, and the file still
-        // held the older number. The seq is minted by `record()`, so its
-        // persistence must follow `record()` and nothing else.
-        void log.flush();
-      }
-    }
+    // Through the notice sink (D-5858), `'record-only'`: recorded whatever the presence, never pushed. A missing
+    // `NotifyLog` degrades the RECORD and never the write; the archive's synchronous throw (`node:sqlite`) is caught
+    // inside `notify`, and the seq `record()` minted is flushed whatever the archive does (D-1213). Refusing an
+    // operator's write because the feed archive is unavailable would be the collapse, not the safety.
+    notice({
+      kind: 'coord', sessionId: '',
+      title: 'caps changed',
+      body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
+            `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
+      runId: null,
+    }, 'record-only', { degraded: 'caps written, feed archive degraded' });
     return reply.code(200).send({ ok: true, ...view });
   });
 
@@ -2695,19 +2717,12 @@ export function registerCoordRoutes(
     }
     if (written === null) throw new Error('stall settings changed outside the server twice during one write; nothing written');
     const change = stallSettingsChange(written.before, written.after);
-    const log = deps.notifyLog;
-    if (change !== null && log) {
+    // Through the notice sink (D-5858), `'record-only'`, as the caps door's row. The ring check stays here so that the
+    // actor is read only when there is a ring to record it in, as before.
+    if (change !== null && deps.notifyLog) {
       const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
-      try {
-        const ev = log.record({ kind: 'coord', sessionId: '', title: 'stall watch changed', body: `${change}; by ${actor}`, runId: null });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — stall watch settings written, feed archive degraded`);
-      } finally {
-        // The caps door's reason (D-1213): `record()` minted the seq, so its persistence follows `record()`.
-        void log.flush();
-      }
+      notice({ kind: 'coord', sessionId: '', title: 'stall watch changed', body: `${change}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'stall watch settings written, feed archive degraded' });
     }
     return reply.code(200).send({ ok: true, ...stallWatchView(coord, names, Date.now(), watcher?.stallFallback() ?? null) });
   });
@@ -2851,19 +2866,11 @@ export function registerCoordRoutes(
       return collectRefuse(reply, 'write-failed', `the write failed at its ${w.phase} step`);
     }
     const change = w.kind === 'written' ? collectLaneSettingChange(w.before, w.after, w.journalBefore) : null;
-    const log = deps.notifyLog;
-    if (change !== null && log) {
+    // Through the notice sink (D-5858), `'record-only'`, as the stall-watch door's row (the actor read only with a ring).
+    if (change !== null && deps.notifyLog) {
       const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
-      try {
-        const ev = log.record({ kind: 'coord', sessionId: '', title: COLLECT_SETTING_FEED_TITLE, body: `${change}; by ${actor}`, runId: null });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — collector setting written, feed archive degraded`);
-      } finally {
-        // The caps door's reason: `record()` minted the seq, so its persistence follows `record()`.
-        void log.flush();
-      }
+      notice({ kind: 'coord', sessionId: '', title: COLLECT_SETTING_FEED_TITLE, body: `${change}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'collector setting written, feed archive degraded' });
     }
     const proof = collectControlNow({ coord, journal: lane.journal });
     const proofRow = proof.row;
@@ -3097,7 +3104,7 @@ export function registerCoordRoutes(
     if (read.run === null) {
       return reply.code(404).send({ ok: false, error: 'unknown-run' });
     }
-    return { ok: true, items: deps.coord.workItems(id) };
+    return { ok: true, items: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(deps.coord.workItems(id)) };   // D-5513
   });
 
   /**
@@ -3146,9 +3153,10 @@ export function registerCoordRoutes(
     // predating that grammar legitimately contain dots.
     const program = typeof q.program === 'string' && q.program.trim() !== ''
       ? q.program.trim() : null;
-    return { events: program === null
+    // Every event's text came off a session: masked before it leaves (D-5513, accounts plan Task A10).
+    return { events: (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(program === null
       ? deps.coord.feedEvents(limit)
-      : deps.coord.feedEventsForProgram(program, limit) };
+      : deps.coord.feedEventsForProgram(program, limit)) };
   });
 
   /**
@@ -3282,21 +3290,27 @@ export function registerCoordRoutes(
         detail: 'exactly one of ?project= or ?of= — a peer list is scoped or it is nothing' });
     }
 
-    // ONE listing, reused below for the presence ladder — the same
-    // fail-shut-on-unlistable idiom the mail ingress uses for this directory.
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
+    // A `?of=` that is not a registry id is refused BEFORE any read (spec §2.3): it can never name a row this server
+    // reads, so the presence ladder below would answer 502 for it forever. Checked on the trimmed value `selfId`
+    // takes below.
+    if (hasOf && !isRegistryId((q.of as string).trim())) {
+      return refuseRoute(reply, 'bad-session-id');
+    }
+
+    // ONE read (spec §2.3). Its listing is the presence ladder's. Its rows are `assembleFleet`'s (its own `records`
+    // parameter's contract: every lane of one pass describes one observation) and this route's own for `uuid`,
+    // which `FleetSession` does not carry. Its refused count rides the 200 as `refusedRows`. Unlistable keeps the
+    // fail-shut 502 that the mail ingress uses for this directory.
+    // [registry-refused:reports]
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!reg.listed) {
       return reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
         detail: 'the registry directory could not be listed — transient, not a fact about any peer' });
     }
-    // The records are read ONCE and handed to `assembleFleet` (its own
-    // `records` parameter's contract: every lane of one pass describes one
-    // observation) — this route needs them itself for `uuid`, which
-    // `FleetSession` does not carry.
-    const recs = await readRegistry(deps.io, deps.cfg);
-    const recById = new Map(recs.map((r) => [r.id, r]));
+    const names = reg.names;
+    const recById = new Map(reg.records.map((r) => [r.id, r]));
     const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-      undefined, undefined, undefined, undefined, undefined, undefined, recs, deps.coord, undefined);
+      undefined, undefined, undefined, undefined, undefined, undefined, reg.records, deps.coord, undefined);
 
     let project: string;
     let selfId: string | null = null;
@@ -3377,7 +3391,10 @@ export function registerCoordRoutes(
       });
 
     const projects = [...new Set(sessions.map((s) => s.project))].sort();
-    return reply.code(200).send({ ok: true, peers, projects, etiquette: PEER_ETIQUETTE });
+    // `refusedRows` (spec §2.3): additive and absence-permitting, present only when a listed `.uuid` was refused, so a
+    // peer list that is silently short of a row says that it is. One writer of the field: this line.
+    return reply.code(200).send({ ok: true, peers, projects, etiquette: PEER_ETIQUETTE,
+      ...(reg.refused.size > 0 ? { refusedRows: reg.refused.size } : {}) });
   });
 
   /**
@@ -3485,9 +3502,14 @@ export function registerCoordRoutes(
         // conflict row is REPLACED by what was measured — with the mailHint
         // re-derived through the L1's own `claimMailHint`, so the degradation
         // rule (no:<reason> -> null, never a silent send) has one spelling.
-        const names = await deps.io.readdir(deps.cfg.registryDir);
+        // ONE registry read (spec §2.3): its rows are `assembleFleet`'s and its listing is the presence ladder's, so
+        // the two describe one observation. Unlistable gives no rows and a `null` listing: every holder reads
+        // unmeasurable, never absent and never `yes` off a second read the ladder did not see.
+        // [registry-refused:reports]
+        const reg = await readRegistryMeasured(deps.io, deps.cfg);
+        const names = reg.listed ? reg.names : null;
         const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-          undefined, undefined, undefined, undefined, undefined, undefined, undefined, deps.coord, undefined);
+          undefined, undefined, undefined, undefined, undefined, undefined, reg.listed ? reg.records : [], deps.coord, undefined);
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);
           if (row) {
@@ -3964,32 +3986,17 @@ export function registerCoordRoutes(
     // over a question that never reached their phone. Ordered first so that
     // if `settleAsk` below then throws, at least ONE durable trace of the
     // answer survives — the feed record names who chose what even when the
-    // `asks` row's own `answeredBy`/`answer` never gets written. Same
-    // pattern `POST /api/coord/caps` uses just above: `deps.notifyLog` and
-    // `coord.recordFeedEvent` are independently optional (a box with neither
-    // configured still answers the request), `recordFeedEvent` throws
-    // SYNCHRONOUSLY (`node:sqlite`) so it is caught rather than allowed to
-    // turn a successful press into a 500, and the flush is unconditional in
-    // a `finally` for the reason `POST /api/coord/caps`'s own comment gives:
-    // `record()` mints the seq before this route can fail, so its
-    // persistence must follow regardless.
-    const log = deps.notifyLog;
-    if (log) {
-      try {
-        const ev = log.record({
-          kind: 'ask', sessionId: ask.childId, runId: null,
-          title: 'question answered',
-          body: `${fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
-                `${ask.options[optionIndexes[0]!] ?? '?'}`,
-        });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — ask answered, feed archive degraded`);
-      } finally {
-        void log.flush();
-      }
-    }
+    // `asks` row's own `answeredBy`/`answer` never gets written. Through the
+    // notice sink (D-5858), `'record-only'`, as `POST /api/coord/caps` above:
+    // the archive's synchronous throw is caught inside `notify` rather than
+    // allowed to turn a successful press into a 500, and the seq `record()`
+    // minted is flushed whatever the archive does.
+    notice({
+      kind: 'ask', sessionId: ask.childId, runId: null,
+      title: 'question answered',
+      body: `${fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
+            `${ask.options[optionIndexes[0]!] ?? '?'}`,
+    }, 'record-only', { degraded: 'ask answered, feed archive degraded' });
 
     // GUARDED (fix round 1, item 3): the digit has ALREADY landed by this
     // point — `answerAsk` returned `ok:true` above — so `settleAsk` failing
@@ -4343,6 +4350,7 @@ export function registerCoordRoutes(
     const signer = signerFor();
     if (signer === null) return refuseRoute(reply, 'internal', { detail: 'the approval signing key is not loaded' });
 
+    // [registry-refused:refuses] a refused row is in no `recs`: the request answers `not-a-child`, and a refused claimant reads as `parent-not-live` in `heldFor`, which leaves the prompt the operator's.
     const recs = await readRegistry(deps.io, deps.cfg);
     const rec = recs.find((r) => r.id === sessionId) ?? null;
     if (rec === null || rec.child.kind !== 'child') return refuseRoute(reply, 'not-a-child');
@@ -4398,9 +4406,14 @@ export function registerCoordRoutes(
       : null;
     const parent = verdict.parent;
     const notifyAt = now + approvalWindowMs(agentId);
+    // The stored input is what the signed ruling carries unmasked (`GET /api/approvals/:id/ruling`), so the
+    // exact-bytes pass runs HERE, on the raw input before the redactor and the cap: a fingerprinted lane key that has
+    // no shape is masked in the row, the brief and the ruling alike (D-5995 (10), D-6057 (3)). The digest
+    // the ruling is signed over is of the unredacted input, so this changes no signature.
+    const stored = redactedStored((deps.masker ?? SHAPE_ONLY_MASKER).maskText(shown));
     const id = coord.insertApproval({
       childId: rec.id, parentId: parent, runId: verdict.runId, digest, nonce, agentId, tool,
-      inputRedacted: redactedStored(shown), truncated: truncated === true, class: cls, askAt: now, notifyAt,
+      inputRedacted: stored, truncated: truncated === true, class: cls, askAt: now, notifyAt,
       ...(releaseReason === null ? {} : { releaseReason }),
     });
     if (releaseReason !== null) {
@@ -4410,7 +4423,7 @@ export function registerCoordRoutes(
     approvalInputs.set(id, { tool, input, cwd: cwdTrusted ? cwd : null, until: notifyAt });
     queueSystemMail(coord, null, {
       fromId: 'operator', toId: parent, runId: null, kind: 'question', subject: approvalNudgeSubject(id),
-      body: renderApprovalBrief({ id, childId: rec.id, tool, agentId, inputRedacted: redactedStored(shown), class: cls, digest, notifyAt }),
+      body: renderApprovalBrief({ id, childId: rec.id, tool, agentId, inputRedacted: stored, class: cls, digest, notifyAt }),
     });
     const accepted: ApprovalRequestAccepted = { id, waitS: Math.floor((notifyAt - now) / 1000) };
     return reply.code(201).send(accepted);
@@ -4498,6 +4511,7 @@ export function registerCoordRoutes(
     if (now >= row.notifyAt) {
       return refuseRoute(reply, 'hook-gone', { detail: 'the window has passed: the child\'s hook has returned and the operator has the prompt' });
     }
+    // [registry-refused:refuses] a refused row is in no `recs`: the ruling answers `not-a-child`, and a refused claimant reads as `parent-not-live` in `heldFor`, so no ruling is stored.
     const recs = await readRegistry(deps.io, deps.cfg);
     const rec = recs.find((r) => r.id === row.childId) ?? null;
     if (rec === null || rec.child.kind !== 'child' || rec.child.runId !== row.runId) return refuseRoute(reply, 'not-a-child');
@@ -4534,21 +4548,13 @@ export function registerCoordRoutes(
         : taken.why === 'unknown-approval' ? 'unknown-approval' : 'not-held');
     }
     approvalInputs.delete(id);
-    // The journal's second record, beside the row: who ruled, and what, in the operator's name.
-    const log = deps.notifyLog;
-    if (log) {
-      try {
-        const ev = log.record({
-          kind: 'ask', sessionId: row.childId, runId: null, title: 'permission ruled',
-          body: `${fromId} ${verdict === 'allow' ? 'allowed' : 'denied'} ${row.childId}'s ${row.tool} call: ${reason}`,
-        });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn(`ccrc-server: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — ruling stored, feed archive degraded`);
-      } finally {
-        void log.flush();
-      }
-    }
+    // The journal's second record, beside the row: who ruled, and what, in the operator's name. Through the notice sink
+    // (D-5858), `'record-only'`: never pushed, whatever the presence, and AFTER the ruling is stored, so a failed archive
+    // costs the feed row only (the funnel catches it and says so), never the ruling or this 200.
+    notice({
+      kind: 'ask', sessionId: row.childId, runId: null, title: 'permission ruled',
+      body: `${fromId} ${verdict === 'allow' ? 'allowed' : 'denied'} ${row.childId}'s ${row.tool} call: ${reason}`,
+    }, 'record-only', { degraded: 'ruling stored, feed archive degraded' });
     watcher?.approvalRuled(row.childId, row.agentId, fromId, verdict);
     return { ok: true, state: verdict === 'allow' ? 'allowed' : 'denied' };
   });

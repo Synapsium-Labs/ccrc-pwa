@@ -63,8 +63,8 @@ const ROSTER = {
     // at `_models_run_probe`'s secrets-file branch) with a CHATGPT_TOKEN_DIR to scrub. The secrets file
     // this lane sources sets only ANTHROPIC_AUTH_TOKEN, the normal case: no
     // fleet secrets file sets CHATGPT_TOKEN_DIR.
-    { id: 'gpt2', label: 'gpt2', configDirSuffix: '.claude-gpt2',
-      exec: { kind: 'external', secretsFile: '.secrets/gpt2.env' }, homeAble: false, hue: 'amber',
+    { id: 'gpt7', label: 'gpt7', configDirSuffix: '.claude-gpt7',
+      exec: { kind: 'external', secretsFile: '.secrets/gpt7.env' }, homeAble: false, hue: 'amber',
       telemetry: 'none' },
   ],
 };
@@ -226,7 +226,11 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   // arm honoured and a GPT-lane session can carry. Inherited, it would have
   // aimed a case's render and its `pgrep -f` at a real config. Plan 4 deleted
   // the arm and kept this drop: it costs nothing, and a return stays loud.
-  for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG']) delete inherited[k];
+  // The lane-files lock's wait and the advance file's clock (auto-advance Codex arm): a runner's values never
+  // steer a case either.
+  for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG', 'CCRC_MODELS_LOCK_S', 'CCRC_MODELS_NOW']) {
+    delete inherited[k];
+  }
   const e = ghContainedEnv(h, { ...inherited, HOME: h, ...extra }, { systemd: true });
   const poison = (name: string, says: string): void =>
     fs.writeFileSync(join(h, '.local', 'bin', name),
@@ -537,7 +541,8 @@ describe('the models dispatcher', () => {
     const m = /^MODELS_SUBS="([^"]*)"$/m.exec(src);
     expect(m, 'ccd/ccrc has no file-scope MODELS_SUBS').toBeTruthy();
     expect(m![1]!.split(' ').filter(Boolean).sort())
-      .toEqual(['clear-window', 'discovery', 'init', 'rm', 'set-class', 'set-effort', 'set-subagent', 'set-window', 'show']);
+      .toEqual(['clear-window', 'discovery', 'hold', 'init', 'release', 'revert', 'rm', 'set-class', 'set-effort',
+        'set-subagent', 'set-window', 'show']);
   });
 
   it('spells the reserved first-token words once, at file scope', () => {
@@ -1211,6 +1216,82 @@ describe('ccrc models <id> set-window and clear-window (codex-bridge spec §2.7)
   });
 });
 
+describe('ccrc models <id> hold, release and revert (auto-advance spec §2.7, D12)', () => {
+  // Model ids are read off the fixtures, and roster ids by position: this repository is public.
+  const ID = LEGACY_EXTERNAL_ID;
+  const NOW = '2026-10-15T00:00:00Z';
+  const advPath = (): string => join(home, '.ccrc', 'models', `${ID}.advance.json`);
+  const holdOf = (cls: string): unknown => JSON.parse(fs.readFileSync(advPath(), 'utf8')).classes[cls].hold;
+
+  beforeEach(() => {
+    writeCatalogue(ID);
+    seedCodex(ID);
+  });
+
+  it('hold reaches the op: one JSON object, and the class held by hand at the time given', () => {
+    const r = run(['models', ID, 'hold', 'opus'], { CCRC_MODELS_NOW: NOW });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(oneObject(r)).toMatchObject({ ok: true, op: 'hold', class: 'opus', changed: true });
+    expect(holdOf('opus')).toEqual({ at: NOW, by: 'hand' });
+  });
+
+  it('release reaches the op and clears the hold', () => {
+    expect(run(['models', ID, 'hold', 'opus'], { CCRC_MODELS_NOW: NOW }).code).toBe(0);
+    const r = run(['models', ID, 'release', 'opus']);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(oneObject(r)).toMatchObject({ op: 'release', changed: true });
+    expect(holdOf('opus')).toBeNull();
+  });
+
+  it('revert reaches the op: with no automatic advance on record it refuses no-previous at exit 1, its sentence on stderr', () => {
+    const r = run(['models', ID, 'revert', 'opus']);
+    expect(r.code).toBe(1);
+    expect(oneObject(r)['error']).toBe('no-previous');
+    expect(r.stderr).toMatch(/has no automatic advance on record/);
+  });
+
+  it.each([['hold'], ['release'], ['revert']])('%s refuses a class typo at exit 2, before node, writing nothing', (verb) => {
+    for (const bad of ['subagent', 'opuss']) {
+      const r = run(['models', ID, verb, bad]);
+      expect(r.code, `${verb} ${bad}`).toBe(2);
+      expect(oneObject(r)['error']).toBe('unknown-class');
+    }
+    expect(fs.existsSync(advPath())).toBe(false);
+  });
+
+  it.each([['hold'], ['release'], ['revert']])('%s takes exactly one class', (verb) => {
+    expect(oneObject(run(['models', ID, verb]))['error']).toBe('missing-argument');
+    expect(oneObject(run(['models', ID, verb, 'opus', 'extra']))['error']).toBe('unknown-argument');
+  });
+
+  it('an Anthropic lane refuses all three', () => {
+    for (const verb of ['hold', 'release', 'revert']) {
+      const r = run(['models', ROSTER.accounts[1]!.id, verb, 'opus']);
+      expect(r.code, verb).toBe(1);
+      expect(oneObject(r)['error']).toBe('anthropic-lane');
+    }
+  });
+
+  it('show names a held class in its summary, with the act and the time', () => {
+    expect(run(['models', ID, 'hold', 'opus'], { CCRC_MODELS_NOW: NOW }).code).toBe(0);
+    const r = run(['models', ID, 'show']);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain(`  held, so no automatic advance moves them: opus (hand, since ${NOW})`);
+  });
+
+  it('show names an advance file it cannot read', () => {
+    fs.writeFileSync(advPath(), '[]');
+    const r = run(['models', ID, 'show']);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/the advance file cannot be read \(invalid\): /);
+  });
+
+  it('show --json still prints nothing on stderr with a class held', () => {
+    expect(run(['models', ID, 'hold', 'opus'], { CCRC_MODELS_NOW: NOW }).code).toBe(0);
+    expect(run(['models', ID, 'show', '--json']).stderr).toBe('');
+  });
+});
+
 describe('ccrc models <id> discovery', () => {
   const whitelist = (providers: string[]): void => {
     fs.mkdirSync(join(home, '.handoff'), { recursive: true });
@@ -1330,6 +1411,28 @@ describe('ccrc models <id> discovery', () => {
         { CCRC_MODELS_PROBE_FIXTURE: endpointsFixture(['Fireworks']), TMPDIR: tmpdir });
       expect(fs.readdirSync(tmpdir)).toEqual([]);
     });
+
+    // Auto-advance Task 4 fix round 1, a bug fix: the endpoints temp file is made BEFORE the locked write, and a
+    // refusal of that write (the lane-files lock's, or `_models_answer`'s no-answer) exits before the arm's own rm.
+    // A FIFO at the lane's lock path is refused `lock-unwritable` at once, with no holder to manage. It replaces the
+    // lock file `beforeEach`'s `init` made.
+    it.skipIf(spawnSync('bash', ['-c', 'command -v flock'], { encoding: 'utf8' }).status !== 0)(
+      'leaves no endpoints temp file behind when the lane-files lock refuses the write', () => {
+        whitelist(['provider-a']);
+        const tmpdir = join(home, 'tmpdir-for-endpoints');
+        fs.mkdirSync(tmpdir);
+        const lock = join(home, '.ccrc', 'locks', 'models-router.lock');
+        fs.mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
+        fs.rmSync(lock, { force: true });
+        const fifo = spawnSync('mkfifo', [lock], { encoding: 'utf8' });
+        expect(fifo.status, fifo.stderr).toBe(0);
+        const r = run(['models', 'router', 'discovery', 'add', 'vendor-a/model-6-alpha'],
+          { CCRC_MODELS_PROBE_FIXTURE: endpointsFixture(['Provider-A']), TMPDIR: tmpdir });
+        expect(r.code, r.stdout + r.stderr).toBe(1);
+        expect(oneObject(r)['error']).toBe('lock-unwritable');
+        expect(registryOf('router')['discovery']).toEqual([]);
+        expect(fs.readdirSync(tmpdir)).toEqual([]);
+      });
 
     // Controller ruling on `_models_endpoints` (Task 8, predates the brief):
     // the probe has no lane context, so a lane with no `exec.secretsFile` and
@@ -1464,7 +1567,7 @@ describe('ccrc models <id> discovery', () => {
   });
 
   // Round 3 re-review, M1: the test above only ever reaches the `else`
-  // (no-secrets-file) branch of `_models_run_probe` — `gpt` has none. `gpt2`
+  // (no-secrets-file) branch of `_models_run_probe` — `gpt` has none. `gpt7`
   // carries `exec.secretsFile`, sourcing a file that sets ONLY
   // ANTHROPIC_AUTH_TOKEN, so this drives the `if` branch (`_models_run_probe`'s `if [ -n "$secrets" ]` branch)
   // instead: the secrets file it sources never mentions CHATGPT_TOKEN_DIR, so
@@ -1476,7 +1579,7 @@ describe('ccrc models <id> discovery', () => {
   // never touches this branch at all.
   it('a non-codex row with a secrets file that sets only ANTHROPIC_AUTH_TOKEN still scrubs an ambient CHATGPT_TOKEN_DIR: it refuses no-token-dir (Plan 4)', () => {
     fs.mkdirSync(join(home, '.secrets'), { recursive: true });
-    fs.writeFileSync(join(home, '.secrets', 'gpt2.env'), 'export ANTHROPIC_AUTH_TOKEN=lane-token\n');
+    fs.writeFileSync(join(home, '.secrets', 'gpt7.env'), 'export ANTHROPIC_AUTH_TOKEN=lane-token\n');
     const poisonedDir = join(home, 'someone-elses-chatgpt-auth-2');
     fs.mkdirSync(poisonedDir, { recursive: true });
     fs.writeFileSync(join(poisonedDir, 'auth.json'), JSON.stringify({ account_id: 'leaked-account-id' }));
@@ -1484,7 +1587,7 @@ describe('ccrc models <id> discovery', () => {
     fs.writeFileSync(join(home, '.local', 'bin', 'python'),
       '#!/bin/sh\nprintf \'%s\\n\' "$CHATGPT_TOKEN_DIR" >> "$HOME/python-poison"\nexit 1\n', { mode: 0o755 });
     seedCodex(LEGACY_SECRETS_EXTERNAL_ID);
-    const r = run(['models', 'refresh', 'gpt2'], { CHATGPT_TOKEN_DIR: poisonedDir });
+    const r = run(['models', 'refresh', 'gpt7'], { CHATGPT_TOKEN_DIR: poisonedDir });
     expect(r.code).toBe(1);
     const [row] = oneObject(r)['refreshed'] as { id: string; ok: boolean; reason?: string }[];
     expect(row).toMatchObject({ id: LEGACY_SECRETS_EXTERNAL_ID, ok: false });

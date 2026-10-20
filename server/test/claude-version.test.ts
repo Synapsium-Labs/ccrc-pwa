@@ -2,7 +2,6 @@
 // numeric comparator, the channel / mode / lane-kind vocabularies, the closed
 // `why` enum, the numbers of spec §12 and the one parser of the tenth node
 // file (spec §6.2). Pure functions; no fixture HOME, no process, no network.
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   CLAUDE_CHANNEL_DEFAULT,
@@ -112,6 +111,9 @@ describe('the Claude Code version grammar and comparator (D-5695)', () => {
     expect(isClaudeVersion(2.1)).toBe(false);
     expect(isClaudeVersion(null)).toBe(false);
     expect(isClaudeVersion(undefined)).toBe(false);
+    // RegExp.test coerces its argument, so only the typeof guard refuses a
+    // one-element array of a valid build (D-5695).
+    expect(isClaudeVersion(['2.1.3'])).toBe(false);
   });
 
   it('compareClaudeVersions throws on a non-version, never orders it', () => {
@@ -311,6 +313,8 @@ describe('parseClaudeNodeFile: every field validator refuses (the leak guards, s
   ])('a non-version string in %s is refused', (path) => {
     expect(parse(withField(path, STDERR))).toBeNull();
     expect(parse(withField(path, 2.1))).toBeNull();
+    // A JSON array of one valid build coerces to that build in RegExp.test.
+    expect(parse(withField(path, ['2.1.300']))).toBeNull();
   });
 
   it('a non-version string in localHalts[] is refused', () => {
@@ -435,11 +439,4 @@ describe('parseClaudeNodeFile: every field validator refuses (the leak guards, s
   });
 });
 
-describe('shared/claudeVersion.ts is L0 and imports nothing (the PWA bundles it)', () => {
-  it('has no import line, static or dynamic, and no require', () => {
-    const src = readFileSync(new URL('../../shared/claudeVersion.ts', import.meta.url), 'utf8');
-    expect(src.split('\n').filter((l) => /^\s*import\b/.test(l))).toEqual([]);
-    expect(src).not.toMatch(/\bimport\s*\(/);
-    expect(src).not.toMatch(/\brequire\s*\(/);
-  });
-});
+// shared/claudeVersion.ts's L0 ring is held by server/test/rings/shared-imports.test.ts (D-6045).

@@ -25,9 +25,9 @@ This plan is **Plan 2a of four remaining**. Plan 1 (`2026-09-20-gpt-lane-ownersh
 
 1. **Placement is indivisible.** `server/test/ccrc-install.test.ts` asserts an exact `toEqual` over `$HOME/.local/bin`'s listing with **two arms** (a Darwin set and a longer non-Darwin set), and a second test derives `_inst_bins`' own closing `echo` census against the same directory. Placing two of the four executables in one plan and two in another moves both assertions twice, and the second PR's diff becomes unreviewable against the first's baseline. So all four placements live in one plan — 2b, because `ccd/ccgpt` and `ccd/ccgpt-runtime` must exist to be placed. **2a therefore carries no placement at all.**
 2. **2a's files are fully testable unplaced; 2b's are not testable yet.** `server/test/usage-sweep.test.ts` resolves its subject from the **test file's own path**, not from an installed fixture HOME — so a shipped `ccd/` file with no install line is already a complete, gated subject. Every high-risk thing 2b owns needs an instrument that does not exist yet (a fake-venv seam for the runtime builder; a poisoned-`systemd-run` argv assertion for the lifecycle, because `ghContainedEnv` plants stubs that exit 97 for `systemctl`/`systemd-run`). A single plan mixing ~91 transcribable cases with undesigned instruments gets its instrument design done last, by a worker who has spent the wave transcribing.
-3. **The migrated-test payload alone is a wave.** Of 101 methods in the OpenClaw suite, only ~24 are text scans that port cleanly; ~41 call a private Python function in-process, ~11 `exec()` the publisher with injected `sys.modules` and a swapped `urlopen`, and ~4 bind sockets. None of the ~52 in the middle survives a plain `spawnSync python3` without a new seam — which is why Task 1 designs that seam before any case is written.
+3. **The migrated-test payload alone is a wave.** Of 101 methods in the legacy suite, only ~24 are text scans that port cleanly; ~41 call a private Python function in-process, ~11 `exec()` the publisher with injected `sys.modules` and a swapped `urlopen`, and ~4 bind sockets. None of the ~52 in the middle survives a plain `spawnSync python3` without a new seam — which is why Task 1 designs that seam before any case is written.
 
-**What does NOT force the split, stated so nobody sequences around it:** the OpenClaw suite's SHA-256 pin over the publisher's bytes. Its subject resolves to `infra/handoff/ccgpt-usage` in the **other** repository; `ccd/ccgpt-usage.py` is a new path in a different repo. It constrains step 4 of the cutover only.
+**What does NOT force the split, stated so nobody sequences around it:** the legacy suite's SHA-256 pin over the publisher's bytes. Its subject resolves to `infra/handoff/ccgpt-usage` in the **other** repository; `ccd/ccgpt-usage.py` is a new path in a different repo. It constrains step 4 of the cutover only.
 
 **One scope correction against Plan 1's committed table.** Plan 1 assigned "the usage instance timer" to wave 3 and the file `ccd/ccgpt-usage.py` to wave 2. Both stand: **this plan ships the publisher FILE; wave 3 ships `ccgpt-usage@<id>.timer`'s enablement, together with `_check_codex`.** The reason is a real gap, not tidiness — `_check_services`' `known` list is a fixed seven-name array and deliberately not a glob, so a timer enabled in wave 2 would be watched by nothing until wave 3. Do not pull the timer forward.
 
@@ -39,11 +39,11 @@ Copied from the spec and this repo's `CLAUDE.md`. Every task's requirements impl
 
 - **`$REPO` is this worktree's root.** Every command assumes `export REPO="$(git rev-parse --show-toplevel)"`. Absolute paths are never written into tracked text — they carry the operator's username, which `topology-clean`'s operator-residue class bans.
 - **This repository is PUBLIC, and this wave copies from a private tree.** No real account id, label, email address, host, selected machine port, credential, OAuth path, session codename or operator username may reach any tracked byte. **Scrub at every copy, not once.** Known residue in the sources, by location — re-grep before each copy, never trust these coordinates:
-  - the OpenClaw suite's `TestOneWrapperManyLanes` docstring (a real address), and one occurrence each in `infra/handoff/ccgpt` and `infra/handoff/lanes/gpt2`;
+  - the legacy suite's `TestOneWrapperManyLanes` docstring (a real address), and one occurrence each in `infra/handoff/ccgpt` and `infra/handoff/lanes/gpt7`;
   - the **installed** launcher carries an address+domain near its header and a session codename near its exec block.
   Rewrite all of it to roster-id vocabulary (`codex-a`, `codex-b`) before the bytes are staged.
 - **`topology-clean`'s email class is already live** (landed in Plan 1, Task 12). It scans every blob a commit range introduces, and its `allowed()` exempts systemd instance syntax by unit suffix — so `ccgpt-usage@codex-a.timer` passes while a real address fails. No red-first sequencing is owed for it; the obligation is content, not ordering.
-- **Fixture vocabulary:** account ids are `codex-a`, `codex-b`, `claude`, `claude2`. Synthetic ports are `45010`/`45011` and `45020`/`45021`. They are **not defaults** and must never appear in shipped source as defaults.
+- **Fixture vocabulary:** account ids are `codex-a`, `codex-b`, `claude`, `claude9`. Synthetic ports are `45010`/`45011` and `45020`/`45021`. They are **not defaults** and must never appear in shipped source as defaults.
 - **Never print secret file CONTENTS.** Existence and mode only. Never assert over a real token; fixture tokens are literal strings like `test-token-not-a-secret`.
 - **Fixture HOMEs only.** Never run either Python file, `ccd`, or `ccrc` against the real `$HOME`. Use `mkTmp` from `server/test/tmpHelpers.ts`.
 - **Never run destructive `ccd` verbs** (`ws-rm`, `ws-reap`, `ws-gc --prune`, `ws-archive`, `ws-restore`), and never touch tmux, `~/.cc-sessions`, `~/.cc-limits` or `claude-session@*.service`. **This box runs two live Codex lanes right now** — do not stop, restart or reconfigure them.
@@ -61,19 +61,19 @@ Copied from the spec and this repo's `CLAUDE.md`. Every task's requirements impl
 
 ## Source of truth for the port
 
-The OpenClaw tree holds the sources. **For the shim and the publisher the repo copy and the installed copy are byte-identical** (measured: `diff` clean for both), so either may be read. This is *not* true of the launcher — `ccgpt` diverges by 82 lines and only the installed copy carries production lifecycle — but the launcher is Plan 2b's subject, not this plan's.
+The legacy tree holds the sources. **For the shim and the publisher the repo copy and the installed copy are byte-identical** (measured: `diff` clean for both), so either may be read. This is *not* true of the launcher — `ccgpt` diverges by 82 lines and only the installed copy carries production lifecycle — but the launcher is Plan 2b's subject, not this plan's.
 
 Locate the sources once, at the top of the wave:
 
 ```bash
-export OC="$(cd ~/worktrees/OpenClawHetzner/astra-system/infra/handoff 2>/dev/null && pwd)"
-[ -n "$OC" ] || { echo "OpenClaw handoff tree not found — stop and report"; exit 1; }
+export OC="$(cd ~/worktrees/project-c/astra-system/infra/handoff 2>/dev/null && pwd)"
+[ -n "$OC" ] || { echo "legacy handoff tree not found — stop and report"; exit 1; }
 ls "$OC/ccgpt-proxy" "$OC/ccgpt-usage" "$OC/test_ccgpt_proxy.py"
 diff -q "$OC/ccgpt-proxy" "$HOME/.local/bin/ccgpt-proxy" && echo "shim: repo == installed"
 diff -q "$OC/ccgpt-usage" "$HOME/.local/bin/ccgpt-usage" && echo "publisher: repo == installed"
 ```
 
-**How the port is done, and why not by wholesale copy.** Each behaviour task below builds its slice of the file with its own failing test first. The OpenClaw source is the **reference** — cited per task, read before implementing — not a blob to paste. A wholesale copy in Task 2 would make every later task green on arrival, which is the "tests written after pass immediately" failure this repo's TDD rule exists to prevent, and it would carry residue and the two open transport holes along with it. Where the reference's logic is correct, reproduce it deliberately and say so in the commit.
+**How the port is done, and why not by wholesale copy.** Each behaviour task below builds its slice of the file with its own failing test first. The legacy source is the **reference** — cited per task, read before implementing — not a blob to paste. A wholesale copy in Task 2 would make every later task green on arrival, which is the "tests written after pass immediately" failure this repo's TDD rule exists to prevent, and it would carry residue and the two open transport holes along with it. Where the reference's logic is correct, reproduce it deliberately and say so in the commit.
 
 ---
 
@@ -913,19 +913,19 @@ Write one case per row of the table above, plus the two refusals (absent `lane.j
 cd "$REPO/server"
 ./node_modules/.bin/vitest run test/ccgpt-proxy.test.ts test/ccgpt-usage.test.ts --reporter=verbose | tail -5
 
-# OpenClaw side — the population being split (read-only; nothing is edited there in this wave)
+# legacy-tree side — the population being split (read-only; nothing is edited there in this wave)
 grep -c '    def test_' "$OC/test_ccgpt_proxy.py"
 ```
 
 | Population | Before | After |
 |---|---|---|
-| OpenClaw `test_ccgpt_proxy.py` methods | 101 | unchanged this wave (101, measured Task 12) |
+| Legacy-tree `test_ccgpt_proxy.py` methods | 101 | unchanged this wave (101, measured Task 12) |
 | ccrc `ccgpt-proxy.test.ts` cases | 0 | 83 |
 | ccrc `ccgpt-usage.test.ts` cases | 0 | 31 (29 through Task 11 + 2 from Task 12 item E's accept-side loopback cases) |
 
-**Nothing is deleted in the OpenClaw repository in this wave.** Its deletion is step 4 of the cutover, after a separately authorised rollout. Record the counts; do not act on them.
+**Nothing is deleted in the legacy repository in this wave.** Its deletion is step 4 of the cutover, after a separately authorised rollout. Record the counts; do not act on them.
 
-**B. Two stale pins, recorded for whoever does the OpenClaw side.** Two of that suite's cases positively pin `nohup "$LITELLM_BIN"` launch lines. Measured: that string occurs **zero** times in the installed launcher — they pin behaviour production replaced a lane-generation ago. Copied as-is they are red on arrival, or worse, green against a `ccd/ccgpt` someone shaped to satisfy them. **Plan 2b replaces them; this plan only records that they must be replaced, not copied.** One of the two also uses an unguarded `next(...)` over a generator, which raises `StopIteration` instead of failing with a message when its needle is absent — give the replacement an explicit assertion.
+**B. Two stale pins, recorded for whoever does the legacy-tree side.** Two of that suite's cases positively pin `nohup "$LITELLM_BIN"` launch lines. Measured: that string occurs **zero** times in the installed launcher — they pin behaviour production replaced a lane-generation ago. Copied as-is they are red on arrival, or worse, green against a `ccd/ccgpt` someone shaped to satisfy them. **Plan 2b replaces them; this plan only records that they must be replaced, not copied.** One of the two also uses an unguarded `next(...)` over a generator, which raises `StopIteration` instead of failing with a message when its needle is absent — give the replacement an explicit assertion.
 
 **C. Re-read the wave-1 refusal sentence.** Plan 1 shipped a refusal in `ccd/ccrc`'s `_acct_credential` saying reauthentication "is unavailable in this release and will use ccrc's Codex login flow once the runtime ships". Locate it and judge whether it is still true after this wave:
 
@@ -1000,7 +1000,7 @@ git push -u origin ws/gpt-lane-runtime
 
 The PR body ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`, links the spec by its **GitHub blob URL** (never a docserver URL), carries Task 12's count table, and states plainly that this wave **places nothing, starts nothing and changes no box** — the two files ship in the release tarball and are referenced by no install line, exactly as `ccclip` is today.
 
-**Do not deploy.** The spec's §15 sequence is: land → release → separately authorised cutover → OpenClaw deletion. This plan ends at "land".
+**Do not deploy.** The spec's §15 sequence is: land → release → separately authorised cutover → legacy-tree deletion. This plan ends at "land".
 
 ## Self-review of this plan
 

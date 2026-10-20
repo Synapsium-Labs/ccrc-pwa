@@ -41,6 +41,7 @@ import {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { pythonOrSkip, runPy, PYSTUB_DIR } from './ccgptHarness.js';
 import { renderLitellmConfig } from '../../shared/litellm.mjs';
@@ -294,6 +295,10 @@ interface RunOpts {
    *  the key out is a real unset, not an empty string — and any other value,
    *  including a path to a plain file, is passed through verbatim. */
   homeValue?: string | null;
+  /** The run strands a process ON PURPOSE: the pure-bash deadline arm orphans its sleeper (`sleep <bound>`, by
+   *  design, see the shim's header in ccd/ccgpt-runtime). The runner leads its own process group either way
+   *  (#172, D-5894); with this set, what it leaves there is ended through that group instead of failing. */
+  strands?: boolean;
 }
 /** The ONE runner: every case's environment is built here and nowhere else. */
 function runOpts(home: string, args: string[], o: RunOpts = {}): Run {
@@ -304,7 +309,8 @@ function runOpts(home: string, args: string[], o: RunOpts = {}): Run {
   const homeValue = o.homeValue === undefined ? home : o.homeValue;
   if (homeValue !== null) base['HOME'] = homeValue;
   const env = ghContainedEnv(home, base);
-  const r = spawnSync(BASH, [o.script ?? RUNTIME, ...args], { env, cwd: home, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnSyncGroup(BASH, [o.script ?? RUNTIME, ...args], { env, cwd: home, encoding: 'utf8', timeout: 60_000 },
+    { strays: o.strands ? 'end' : 'throw' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 function run(home: string, args: string[], script = RUNTIME, pathDirs?: string): Run {
@@ -481,7 +487,7 @@ describe.skipIf(!PY)('ccgpt-runtime: the builder\'s decisions, over a scripted r
     const which = spawnSync(BASH, ['-c', 'command -v timeout; command -v gtimeout; exit 0'],
       { env: { PATH: farm }, encoding: 'utf8' });
     expect(which.stdout, 'the link farm still resolves a deadline binary').toBe('');
-    const gen = built(runOpts(home, ['build'], { pathDirs: farm }));
+    const gen = built(runOpts(home, ['build'], { pathDirs: farm, strands: true }));
     expect(readFileSync(path.join(home, 'fixture-runtime', 'probe-stdin')).equals(probeSource()),
       'the probe that ran under the pure-bash bound did not read probe-source\'s bytes').toBe(true);
     expect(lines(home, 'runtime-python-calls')).toContain('-I -');

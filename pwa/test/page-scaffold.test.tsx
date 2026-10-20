@@ -22,9 +22,10 @@
 // for a fine pointer only, and a phone keeps the 44px floor.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
-import { EmptyState, PageScaffold, Section } from '@ccrc/ui';
+import { EmptyState, PAGE_BODY, PAGE_FOCUS_CLEAR, PAGE_NAV_MIN_PX, PageScaffold, Section, cn } from '@ccrc/ui';
 import { SKIN_TOKENS } from '../../ui/src/styles/skins';
 
 afterEach(cleanup);
@@ -121,18 +122,34 @@ describe('PageScaffold (D-5102)', () => {
   });
 
   it("the body's max-width is var(--page-max) or var(--page-max-wide), never a literal", () => {
-    const literal = /\bmax-w-\[[^\]]*\d[^\]]*\]|max-width:\s*\d/;
+    // A literal as a class, as CSS, or as a JSX style object's `maxWidth`.
+    const literal = /\bmax-w-\[[^\]]*\d[^\]]*\]|max-width:\s*\d|\bmaxWidth\b/;
     const src = stripTs(read('ui/src/primitives/page-scaffold.tsx'));
     expect(src, 'a literal column width in the scaffold').not.toMatch(literal);
     for (const wide of [false, true]) {
       const { container, unmount } = scaffold({ wide });
-      const body = container.querySelector('[data-page-body]');
+      const body = container.querySelector<HTMLElement>('[data-page-body]');
       expect(body, 'the scaffold names its body').not.toBeNull();
       const classes = body!.className.split(/\s+/);
       expect(classes).toContain(wide ? 'max-w-(--page-max-wide)' : 'max-w-(--page-max)');
       expect(classes.filter((c) => /^max-w-/.test(c))).toHaveLength(1);
+      expect(body!.style.maxWidth, 'an inline max-width on the body').toBe('');
       unmount();
     }
+  });
+
+  it("the header's row is as wide as the body's column, so the title and actions sit over it", () => {
+    const cap = (el: Element): string[] => el.className.split(/\s+/).filter((c) => /^max-w-/.test(c));
+    for (const wide of [false, true]) {
+      const { container, unmount } = scaffold({ wide });
+      const row = container.querySelector('header')!.firstElementChild!;
+      const body = container.querySelector('[data-page-body]')!;
+      expect(cap(row), `the header row's cap (wide=${wide})`).toEqual(cap(body));
+      expect(cap(row)).toHaveLength(1);
+      unmount();
+    }
+    // With a nav the row's cap is the nav slot's to set (D-5666; the Settings
+    // tasks own it), so it is held there, not here.
   });
 
   it("the scaffold's gutters, title size and header height read tokens in SKIN_TOKENS", () => {
@@ -169,16 +186,68 @@ describe('PageScaffold (D-5102)', () => {
     const nav = screen.getByRole('navigation', { name: 'sections' });
     const body = container.querySelector('[data-page-body]')!;
     expect(body.className.split(/\s+/)).toContain('max-w-(--page-max)');
-    // Beside, from a 60rem PANE: the root is the query container (the pane's
-    // width, not the window's) and the wrapper holding the nav column and the
-    // body turns into two columns at that container width.
+    // The root is the query container: the pane's width, not the window's.
     const root = container.querySelector('[data-page-scaffold]')!;
     expect(root.className.split(/\s+/)).toContain('@container');
     const wrapper = body.parentElement!;
     expect(wrapper.contains(nav)).toBe(true);
-    expect(wrapper.className.split(/\s+/)).toContain('@min-[60rem]:grid-cols-[13rem_minmax(0,1fr)]');
     expect([...wrapper.children].indexOf(nav.parentElement!)).toBe(0);
     expect([...wrapper.children].indexOf(body)).toBe(1);
+  });
+
+  it('D-5668: the nav goes beside the body from a PAGE_NAV_MIN_PX (760) pane, at 200px, 220 from a 1600 viewport', () => {
+    // The Settings spec's §4.2 and §15.3 C3: a pane of 760 or more carries the
+    // 200 px nav (220 at a viewport of 1600 or more) beside the column. The
+    // threshold is exported once, so Settings' own hook (R2c's
+    // SETTINGS_NAV_MIN_PX) reads the number the CSS uses.
+    expect(PAGE_NAV_MIN_PX).toBe(760);
+    const at = `@min-[${PAGE_NAV_MIN_PX}px]:`;
+    const { container } = scaffold({ nav: <nav aria-label="sections">n</nav> });
+    const body = container.querySelector('[data-page-body]')!;
+    const wrapper = body.parentElement!.className.split(/\s+/);
+    expect(wrapper).toContain(`${at}grid-cols-[200px_minmax(0,1fr)]`);
+    expect(wrapper).toContain(`min-[1600px]:${at}grid-cols-[220px_minmax(0,1fr)]`);
+    // The gutter sits outside the nav, so the nav itself is 200 (220) wide and
+    // the body keeps only its right gutter: at a 960 pane with Refined's 24
+    // gutter the column is 960 - 24 - 200 - 24 - 24 = 688 (spec §4.2).
+    expect(wrapper).toContain(`${at}pl-gutter`);
+    expect(wrapper).toContain(`${at}gap-6`);
+    expect(body.className.split(/\s+/)).toEqual(expect.arrayContaining([`${at}pl-0`, `${at}mx-0`]));
+    const navColumn = screen.getByRole('navigation', { name: 'sections' }).parentElement!.className.split(/\s+/);
+    // min-w-0 lets the nav's one-line, ellipsised rows (R2c) shrink inside
+    // the 200/220 track rather than widen it.
+    expect(navColumn).toEqual(expect.arrayContaining(['min-w-0', `${at}sticky`, `${at}top-head`, `${at}self-start`]));
+    expect(navColumn.filter((c) => /^(?:@[\w-[\]]+:)?p[xlr]?-/.test(c)), 'a padding inside the nav column').toEqual([]);
+  });
+
+  it('D-5668: below the threshold the nav slot draws nothing, and the body is centred as on a page with no nav', () => {
+    // A phone or a narrow pane shows the screen's own index instead (spec §4.2),
+    // so the slot is hidden there, not stacked above the body.
+    const at = `@min-[${PAGE_NAV_MIN_PX}px]:`;
+    const { container } = scaffold({ nav: <nav aria-label="sections">n</nav> });
+    const navColumn = screen.getByRole('navigation', { name: 'sections' }).parentElement!.className.split(/\s+/);
+    expect(navColumn).toEqual(expect.arrayContaining(['hidden', `${at}block`]));
+    const body = container.querySelector('[data-page-body]')!.className.split(/\s+/);
+    expect(body).toEqual(expect.arrayContaining(['mx-auto', 'px-gutter']));
+    expect(body.filter((c) => c === 'mx-0' || c === 'pl-0'), 'an unconditional nav-side measure').toEqual([]);
+  });
+
+  it('D-5668: every container breakpoint in the scaffold is PAGE_NAV_MIN_PX, so the CSS and the number cannot drift', () => {
+    const src = stripTs(read('ui/src/primitives/page-scaffold.tsx'));
+    const queries = [...src.matchAll(/@min-\[([^\]]+)\]/g)].map((m) => m[1]);
+    expect(queries.length).toBeGreaterThan(0);
+    expect([...new Set(queries)]).toEqual([`${PAGE_NAV_MIN_PX}px`]);
+  });
+
+  it('D-5666: with no nav there is no nav wrapper: the body is the scaffold\'s own child, its classes unchanged', () => {
+    const { container } = scaffold();
+    const root = container.querySelector('[data-page-scaffold]')!;
+    const body = container.querySelector('[data-page-body]')!;
+    expect(body.parentElement).toBe(root);
+    expect([...root.children].map((c) => c.tagName)).toEqual(['HEADER', 'DIV']);
+    // Today's callers (Mail, Runs, Accounts, Archive) pass no nav: their body
+    // is the F11 drawing, class for class.
+    expect(body.className).toBe(cn(PAGE_BODY, PAGE_FOCUS_CLEAR, 'max-w-(--page-max)'));
   });
 
   it('D-5667: focus scrolled into the body or the nav clears the sticky header (WCAG 2.2 SC 2.4.11)', () => {
@@ -226,6 +295,41 @@ describe('Section (D-5102, D-5666)', () => {
     expect(head.children[1]).toHaveTextContent('Whole fleet');
   });
 
+  it('D-5666: the purpose follows the head, and the card follows the purpose', () => {
+    const { container } = render(
+      <Section scope="This device" title="Appearance" purpose="How ccrc looks here."><p>inside</p></Section>,
+    );
+    const section = container.querySelector('section')!;
+    const head = screen.getByRole('heading', { level: 2 }).parentElement!;
+    const purpose = screen.getByText('How ccrc looks here.');
+    const card = screen.getByText('inside').parentElement!;
+    expect([...section.children]).toEqual([head, purpose, card]);
+  });
+
+  it('D-5666: each slot is omitted when absent: no empty scope, title, purpose or head', () => {
+    const kids = (el: Element): string[] => [...el.children].map((c) => c.tagName);
+    const only = (node: ReactNode): HTMLElement => {
+      cleanup();
+      return render(node).container.querySelector('section')!;
+    };
+    // The title alone: a head of one h2, then the card.
+    let s = only(<Section title="Stall watch"><p>x</p></Section>);
+    expect(kids(s)).toEqual(['DIV', 'DIV']);
+    expect(kids(s.children[0]!)).toEqual(['H2']);
+    // The scope alone: a head of one p, then the card.
+    s = only(<Section scope="Whole fleet"><p>x</p></Section>);
+    expect(kids(s)).toEqual(['DIV', 'DIV']);
+    expect(kids(s.children[0]!)).toEqual(['P']);
+    expect(s.querySelector('h2')).toBeNull();
+    // The purpose alone: no head, the purpose, then the card.
+    s = only(<Section purpose="One line."><p>x</p></Section>);
+    expect(kids(s)).toEqual(['P', 'DIV']);
+    // Nothing: the card alone, and no empty paragraph anywhere.
+    s = only(<Section><p>x</p></Section>);
+    expect(kids(s)).toEqual(['DIV']);
+    expect([...s.querySelectorAll('p')].filter((p) => p.textContent === '')).toEqual([]);
+  });
+
   it('D-5666: Refined lifts the scope above the title, Instrument sets it beside', () => {
     // Refined's place is the default, in tokens.css; Instrument's in skins.css's
     // bare block (every width, every pointer), and nowhere else.
@@ -244,6 +348,23 @@ describe('EmptyState (D-5102)', () => {
     const p = screen.getByText('Nothing yet.');
     expect(p.closest('[data-state]')?.getAttribute('data-state')).toBe('error');
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
+  it('announces a loading state politely and an error assertively; an honest nothing is silent', () => {
+    const { unmount } = render(<EmptyState data-state="loading">Loading…</EmptyState>);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading…');
+    unmount();
+    const err = render(<EmptyState data-state="error">Could not reach the server.</EmptyState>);
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not reach the server.');
+    err.unmount();
+    const { container } = render(<EmptyState data-state="ok">Nothing yet.</EmptyState>);
+    expect(container.querySelector('[data-empty-state]')!.hasAttribute('role')).toBe(false);
+  });
+
+  it("a screen's own role wins over the state's", () => {
+    render(<EmptyState data-state="error" role="status">Retrying…</EmptyState>);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('Retrying…');
   });
 });
 
