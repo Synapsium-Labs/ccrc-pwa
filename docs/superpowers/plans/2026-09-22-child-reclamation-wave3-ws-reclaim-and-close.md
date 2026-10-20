@@ -73,8 +73,8 @@ Copied verbatim from `CLAUDE.md`, the spec and the programme ledger where the va
 
   2. Write N and M over the sentence's two numbers (it wraps across two comment lines; change the digits only), and rewrite the block's two `THE LAST MOVE WAS …` lines — as wave 1 left them — IN PLACE, two lines for two lines, as:
 
-         # THE LAST MOVE WAS the RECLAIM region's reads (CCR-15 wave 3, Task <k>);
-         # before it `_child_tmpdir`'s `.child` read and CCR-10's archive check.
+         # THE LAST MOVE WAS the RECLAIM region's reads (#166 wave 3, Task <k>);
+         # before it `_child_tmpdir`'s `.child` read and #127's archive check.
 
      with no count in them (the second case reads every cardinal in the block). The rewrite keeps the block's line count, because the header sits above the frozen citation corpus's `ccd/ccd` anchors and one added line is citation debt. The dated history list ("It has moved six times…") is NOT extended — the test locates it by that literal, wave 1's own reading.
   3. `(cd server && ./node_modules/.bin/vitest run test/ccd-reg-get-census.test.ts)` — green. A red naming a count means step 1 was typed, not run.

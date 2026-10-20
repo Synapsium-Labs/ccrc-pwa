@@ -1,8 +1,8 @@
-import type { Deps } from './server.js';
+import type { Deps } from './deps.js';
 import { readRegistry } from './registry.js';
 import { readLiveState } from './livestate.js';
 import { resolveTranscript } from './transcript/resolve.js';
-import { configDirFor } from './config.js';
+import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
 import type { SlashCommand } from '../../shared/api.js';
 
 /** Built-in slash commands, most-used first (compact / effort / model lead). */
@@ -49,6 +49,7 @@ function lastSkillListing(jsonl: string): string {
 
 /** Built-ins plus the session's skills (from its transcript's skill_listing). */
 export async function sessionCommands(deps: Deps, id: string): Promise<{ builtins: SlashCommand[]; skills: SlashCommand[] }> {
+  // [registry-refused:knownId] the route's knownId refuses a non-registry id before this read.
   const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
   if (!rec) return { builtins: BUILTINS, skills: [] };
   const cfgDir = configDirFor(deps.cfg, rec.wrapper);

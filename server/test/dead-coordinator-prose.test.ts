@@ -314,7 +314,7 @@ describe('the specs', () => {
   it('README says a stale mirror at the act keeps the hour, and every failed act is recorded (wave 5)', () => {
     expect(flat('README.md')).toContain('A mirror that goes stale between the pass and the act stops the act and keeps the hour, and every act that fails writes a feed row, whatever it had done.');
   });
-  it('CCR-15 §5.8: the one cleanup switch stops the dead-coordinator lane too', () => {
+  it('#166 §5.8: the one cleanup switch stops the dead-coordinator lane too', () => {
     expect(flat('docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md'))
       .toContain('the expiry of archived workspaces too, and — since wave 4 — the dead-coordinator lane');
   });

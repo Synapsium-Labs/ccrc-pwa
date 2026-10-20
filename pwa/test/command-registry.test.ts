@@ -1,10 +1,9 @@
 // The command registry (D-5103): pure ranking, and the base commands' own
 // invariants. `command-layer.test.tsx` drives the palette and the keys.
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { rankCommands, type Command } from '../src/command/registry';
 import { baseCommands, fleetOrder, GO_TO } from '../src/command/commands';
+import { matchRoute, ROUTES } from '../src/lib/routes';
 import { fleetSession } from './fleetFixture';
 
 const cmd = (id: string, title: string): Command => ({ id, title, group: 'Test', run: () => {} });
@@ -41,19 +40,19 @@ describe('the base commands', () => {
       .toBe(ids.length);
   });
 
-  it('every Go to command targets a route app.tsx routes', () => {
-    // A read-only scan of app.tsx: every route is a `/^\/name\/?$/.test(path)`
-    // literal there, and `/` is the fleet, the ladder's fallback. A renamed
-    // route reds here rather than navigating to the placeholder.
-    const app = readFileSync(path.join(import.meta.dirname, '..', 'src', 'app.tsx'), 'utf8');
-    const routes = [...app.matchAll(/\/(\^\\\/[^/]*?\\\/\?\$)\/\.test\(path\)/g)]
-      .map((m) => new RegExp(m[1]!.replace(/\\\//g, '/')));
-    expect(routes.length, 'the scan found the routes').toBeGreaterThanOrEqual(5);
+  it('every Go to command targets a route app.tsx routes: the top rows of ROUTES, the ladder\'s one table', () => {
+    // `app.tsx`'s ladder matches against ROUTES and nothing else (D-5466;
+    // `app.test.tsx` holds the two to each other both ways), so a Go to whose
+    // path no row matches would open the placeholder.
+    // One Go to per top route, and one per page under a top route with a path of its own (Settings' five
+    // sections, D-5504); each targets the row it is named for. A row with no path (`settings-section`) has none.
+    const offered = ROUTES.filter((r) => r.path !== null && (r.top || r.id.startsWith('settings-')));
+    expect(GO_TO.map((g) => g.id), 'one Go to per offered route').toEqual(offered.map((r) => `go-${r.id}`));
     for (const go of GO_TO) {
-      if (go.path === '/') continue;
-      expect(routes.some((r) => r.test(go.path)), `${go.title} → ${go.path}`).toBe(true);
+      expect(`go-${matchRoute(go.path)?.route.id}`, `${go.title} → ${go.path}`).toBe(go.id);
     }
     expect(GO_TO.map((g) => g.path)).toContain('/');
+    expect(GO_TO.map((g) => g.id)).toContain('go-docs');
     const ids = new Set(baseCommands().map((c) => c.id));
     for (const go of GO_TO) expect(ids.has(go.id), go.id).toBe(true);
   });
@@ -72,6 +71,11 @@ describe("the ids are W2's door table's", () => {
       'go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-settings',
       'open-session', 'next-session', 'prev-session',
       'switch-layout', 'switch-theme', 'show-shortcuts',
+      // W2 Task S2b registers these three (§The door table's last column).
+      'go-docs', 'new-session', 'open-palette',
+      // Settings Task R2b1 (D-5504): one per section, its door the section's index row.
+      'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation',
+      'go-settings-security',
     ].sort());
   });
 });

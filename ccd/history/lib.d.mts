@@ -401,6 +401,8 @@ export interface HealthInputs {
   readonly passDied?: PassDied | null;
   /** D-5027: when the last held scheduled pass ended (meta `held_pass_ms`, ms); null or absent when none was recorded. An unreadable value rides extrasUnmeasured. */
   readonly heldPassMs?: number | null;
+  /** D-5633 (W5h-1 Task 2): the check after a bind's stop record (meta HEALTH_META.exportMarksCheck, read by parseMarkCheckState); null or absent when no check stands unfinished. A value the parser refuses rides extrasUnmeasured. */
+  readonly exportMarksCheck?: ReturnType<typeof parseMarkCheckState> | null;
   readonly bytesBehindLast3: readonly number[];
   readonly fts: string | null;
   readonly modesWrong: readonly ModeWrong[];
@@ -432,6 +434,8 @@ export interface HealthInputs {
   readonly spoolNodesRefused: number;
   readonly exportSegmentNewer: readonly string[];
   readonly exportSegmentMissing: number;
+  /** D-5634: the listed segments the last check after a bind found not whole or not this store's (HEALTH_META.exportSegmentDamaged). */
+  readonly exportSegmentDamaged: readonly string[];
   readonly journalUnwritable: boolean;
   readonly dbPath: string;
   readonly freeBytes: number | null;
@@ -450,10 +454,12 @@ export const HEALTH_META: Readonly<{
   recoverUnmovedTicks: 'recover_unmoved_ticks';
   exportSegmentNewer: 'export_segment_newer';
   exportSegmentMissing: 'export_segment_missing';
+  exportSegmentDamaged: 'export_segment_damaged';
   exportPassMs: 'export_pass_ms';
   exportDueOldestMs: 'export_due_oldest_ms';
   exportPaused: 'export_paused';
   heldPassMs: 'held_pass_ms';
+  exportMarksCheck: 'export_marks_check';
 }>;
 export const HEALTH_COUNTERS: Readonly<{
   blobUndecodable: 'blob_undecodable';
@@ -938,10 +944,21 @@ export const EXPORT_DIR: 'export';
 export const EXPORT_SEGMENT_MAX_BYTES: number;
 export const EXPORT_PASS_INTERVAL_MS: number;
 export const EXPORT_SEGMENT_FORMAT: number;
+export const SEGMENT_HEADER_BYTES: 100;
 export function segmentName(i: { seq: number; writer: string }): string;
 export function parseSegmentName(name: string): { seq: number; writer: string } | null;
 export function segmentTempName(name: string): string;
 export function orderSegmentNames(names: readonly string[]): string[];
+export function segmentOrdersAfter(a: string, b: string | null): boolean;
+export type ReplayRanges = ReadonlyMap<string, { lo: number; hi: number }>;
+export interface ReplayWriterLayout { ranges: ReplayRanges; forked: boolean; listed: ReadonlySet<string>; widened: boolean }
+export function replayWriterLayout(listed: readonly string[], marked?: Iterable<string>, stored?: ReplayRanges | null): ReplayWriterLayout;
+export function widenReplayRanges(base: ReplayRanges, add: ReplayRanges): { ranges: Map<string, { lo: number; hi: number }>; widened: boolean };
+export function widestReplayRanges(names: Iterable<string>): Map<string, { lo: number; hi: number }>;
+export function formatReplayLayout(i: { version: number; ranges: ReplayRanges }): string;
+export function parseReplayLayout(text: string | null): { version: number; ranges: Map<string, { lo: number; hi: number }> } | null;
+export function planReplayLayout(i: { text: string | null; version: number }): { word: 'widen'; ranges: Map<string, { lo: number; hi: number }> } | { word: 'widest' };
+export function decideReplayMark(i: { seg: string; held: string | null; fresh: boolean; layout: ReplayWriterLayout }): 'mark' | 'keep' | 'take-off';
 export function nextSegmentSeq(i: { onDisk: readonly number[]; recorded: number | null }): number;
 export function decideExportPass(i: { nowMs: number; lastPassMs: number | null; firstTickMs: number | null; lastAttemptMs?: number | null; intervalMs?: number }): 'run' | 'wait';
 export const EXPORT_MARK_BACKOFF_MAX_MS: number;
@@ -956,8 +973,13 @@ export function deadFileSourceKey(path: string, dev: string | number | bigint, i
 export function exportMarkFailsOf(recorded: string | null): number;
 export type ExportMarkOutcome = 'marked' | 'mark-failed' | 'mark-busy' | 'write-failed';
 export function decideMarkOutcome(i: { outcome: ExportMarkOutcome; recorded: string | null }): { markFails: number; write: string | null; intervalMs: number };
-export function decideMarkCheck(i: { metaKeys: readonly string[]; checkedRecord: string | null }): { check: boolean; facts: string[]; record: string };
+export function decideMarkCheck(i: { metaKeys: readonly string[]; checkedRecord: string | null; vanished?: boolean }): { check: boolean; facts: string[]; record: string };
 export function missingSegmentNames(i: { named: Iterable<string>; present: Iterable<string> }): string[];
+// W5h-1 Task 4: the listing record (D-5636 (history-export-vanished-rearm))
+export function segmentListingDigest(names: Iterable<string>): string;
+export function segmentListingRecord(names: Iterable<string>): string;
+export function addSegmentToListing(recorded: string | null, name: string): string | null;
+export function segmentListingVanished(i: { recorded: string | null; measured: string | null }): boolean;
 export function entryMayHoldMark(i: { blobs: readonly { exported: boolean; pruned: boolean }[] }): boolean;
 export function segmentMayMarkEntry(i: { blobs: readonly { exported: boolean; pruned: boolean; carried: boolean }[] }): boolean;
 export function budgetHeldPass(i: { taken: number; selectionComplete: boolean; written: number; writeStopped: 'budget' | 'off' | null }): boolean;
@@ -973,8 +995,34 @@ export function planSegment(i: {
 
 // --- W1-B4 Task 3: export replay's decisions (spec §9.14 "Export replay")
 export function decideSegmentReplay(i: { meta: { storeId: string; format: number }; storeId: string }): 'replay' | 'newer' | 'foreign';
+/** W5h-1 Task 3 (D-5634): store.mjs segmentFileFacts' answer, and the two verdicts over it. */
+export type SegmentFileFacts =
+  | { readonly size: number; readonly magic: boolean; readonly pageSize: number; readonly pageCount: number; readonly headerValid: boolean; readonly unreadable?: undefined }
+  | { readonly unreadable: string };
+export type SegmentWholeVerdict = 'whole' | 'short' | 'long' | 'not-sqlite' | 'header-invalid' | 'unreadable';
+export function decideSegmentWhole(facts: SegmentFileFacts): SegmentWholeVerdict;
+export function decideSegmentOwn(i: { meta: { storeId: string; seq: number; writer: string } | null; storeId: string; name: string }): 'own' | 'foreign' | 'renamed' | 'meta-unreadable';
+export function readSegmentNameList(v: string | null): string[];
 
 // --- W1-B4 Task 9: the census's oldest due-since in meta, written and read back (no epoch, no overloaded null)
 export const EXPORT_DUE_OLDEST_UNMEASURED: 'unmeasured';
 export function exportDueOldestMeta(due: number, dueOldestMs: number | null): string;
 export function readExportDueOldest(v: string | undefined): number | null | 'unmeasured';
+
+// --- W5h-1 Task 1: the check after a bind, in bounded batches (D-5632 (history-export-bind-check-batched))
+export const EXPORT_BIND_BYTES: number;
+export const EXPORT_BIND_WAL_CEILING: number;
+export const EXPORT_BIND_BATCH: number;
+export const EXPORT_MARKS_STALL_MS: number;
+export type MarkCheckWord = 'budget' | 'off' | 'wal-held' | 'unlistable' | 'failed';
+export const MARK_CHECK_WORDS: readonly MarkCheckWord[];
+export interface MarkCheckState { word: MarkCheckWord; sinceMs: number; cleared: number }
+export function markCheckStop(i: { budgetLeft: boolean; off: boolean; walBytes: number; walCeiling: number }): null | 'budget' | 'off' | 'wal-held';
+export function planMarkCheckBatch(i: { rows: readonly { id: number; bytes: number }[]; maxBytes: number; maxRows: number }): { ids: number[]; bytes: number; after: number | null };
+export function formatMarkCheckState(s: MarkCheckState): string;
+export function parseMarkCheckState(v: string | null): MarkCheckState | null;
+export function nextMarkCheckState(i: { recorded: string | null; word: MarkCheckWord; nowMs: number; cleared: number }): MarkCheckState;
+/** D-5635: the hold a carry after an adopt needs; the store-unbound remedy and the adopt's carry line both say it. */
+export function carryHoldAdvice(when: 'before the adopt' | 'before you copy'): string;
+/** D-5635: the store-unbound remedy's carry half, for a store id (or null when it is not known). */
+export function adoptCarryAdvice(storeId: string | null): string;

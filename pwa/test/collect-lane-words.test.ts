@@ -12,7 +12,7 @@ import {
   collectConfirmLines, collectCountLine, collectNowLines, collectOffNote, collectOffersReconfirm, collectStateHead,
   collectUnmeasurableLines,
 } from '../src/fleet/collectLaneWords';
-import { UNCONFIRMED_TEXT } from '../src/screens/settingsText';
+import { UNCONFIRMED_TEXT } from '../src/fleet/settingsText';
 
 const view = (over: Partial<CollectLaneView> = {}): CollectLaneView => ({
   stored: { read: 'row', choice: 'live', fleetNodeId: 'node-a', markerRetiredAt: null, generation: 1, updatedAt: 1_000 },

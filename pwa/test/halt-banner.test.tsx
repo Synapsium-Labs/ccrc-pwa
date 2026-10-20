@@ -39,7 +39,7 @@ const bannerSrc = readFileSync(path.join(SRC, 'fleet', 'HaltBanner.tsx'), 'utf8'
 // COPY of canAck/ackUpdateNode and calls the shared `sendAck`); what moved is
 // which file carries it, so both files are read and the claim is made of the
 // pair.
-const settingsSrc = readFileSync(path.join(SRC, 'screens', 'SettingsScreen.tsx'), 'utf8')
+const settingsSrc = readFileSync(path.join(SRC, 'screens', 'settings', 'UpdatesSection.tsx'), 'utf8')
   + readFileSync(path.join(SRC, 'screens', 'updates.tsx'), 'utf8');
 
 afterEach(() => {

@@ -26,7 +26,7 @@ Copied from the spec and from `CLAUDE.md`. Every task's requirements implicitly 
 
 - **Fixture HOMEs only.** No test in this plan runs `ccd`, and none may read or write the live `$HOME`. The one route suite builds its server against `mkTmp` (`server/test/tmpHelpers.ts`); everything else is a read of a TRACKED file in this checkout. Never touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or a `claude-session@*` unit.
 - **The one live read in this wave is an OPERATOR act, and it prints a COUNT.** Task 5's `sqlite3 ~/.ccrc/coord.db` read is run by the operator on the server box, returns two integers, and never prints a row, a body or a secret. Nothing in this plan `cat`s a file under `~/.cc-secrets` or `~/.ccrc`.
-- **No real host, IP, tailnet name, DuckDNS name or fleet-account label anywhere** — source, test, README, ledger, or this document. README's examples use `<project>` / `<other project>` placeholders. The dogfood pair `custom-tools` ↔ `data-internal` appears only where the spec and the ledger already carry it (measured: `server/test/topology-clean.test.ts` is green on this branch with the spec present — 48 tests, run 2026-09-08). `topology-clean` scans every tracked file, docs included.
+- **No real host, IP, tailnet name, DuckDNS name or fleet-account label anywhere** — source, test, README, ledger, or this document. README's examples use `<project>` / `<other project>` placeholders. The dogfood pair `project-d` ↔ `project-e` appears only where the spec and the ledger already carry it (measured: `server/test/topology-clean.test.ts` is green on this branch with the spec present — 48 tests, run 2026-09-08). `topology-clean` scans every tracked file, docs included.
 - **`FLEET_PROTO` stays 1; the wire is additive-only.** This wave changes no wire type, and its prose must not describe a bumped protocol.
 - **No overloaded null at a seam.** `project-mismatch` and `home-mismatch` are two conditions a caller handles differently and the prose must keep them apart; a NULL stored home and a home that differs are likewise two facts with two remedies. A sentence that folds them is how the folding gets built next.
 - **`EXEC_COMMANDS = ['tmux','ccd']` stays closed; `gh` gets no grant, ever.** This wave adds no exec surface, and prose implying one is false.
@@ -985,8 +985,8 @@ Anchor quotes from the original planning snapshot. Re-read both files on the fet
 `docs/superpowers/specs/2026-09-08-crossrepo-programmes-design.md`, §9 — the current corrected acceptance list this task consumes (do not substitute the historical draft's stale template):
 
 ```markdown
-**Dogfood, as its own programme after wave 2 is live:** home `custom-tools`, wave 1 there, wave 2 in
-`data-internal` on real work the operator names, opened without `sessionId`. Acceptance, from the Aug
+**Dogfood, as its own programme after wave 2 is live:** home `project-d`, wave 1 there, wave 2 in
+`project-e` on real work the operator names, opened without `sessionId`. Acceptance, from the Aug
 draft with D-2684/D-2687 and D-2715/D-2716's provenance corrections: the wave-2 brief
 carries `homeRepoRoot`, `planRepoPath`, and `planSha` and reads that exact plan blob. Because this
 consumer depends on wave 1's producer interface, the brief also carries `producerRepoRoot`,
@@ -1125,8 +1125,8 @@ Then insert this section immediately BEFORE `## Decisions & deviations` (replaci
 ```markdown
 ## Dogfood exit criteria
 
-The dogfood programme runs as its **own** programme once wave 2 is live: home `custom-tools`, wave 1
-there, wave 2 in `data-internal` on real work the operator names, **opened without `sessionId`** — the
+The dogfood programme runs as its **own** programme once wave 2 is live: home `project-d`, wave 1
+there, wave 2 in `project-e` on real work the operator names, **opened without `sessionId`** — the
 path that spawns fresh in the target repo, which is the only path a crossing may take. Its exit
 criteria are the current build spec's §9 acceptance list with D-2684/D-2687 and D-2715/D-2716's
 provenance corrections, and this ledger is where they are measured:
@@ -1833,7 +1833,7 @@ In `docs/superpowers/programs/crossrepo-programmes.md`:
 ## Next-wave brief
 
 None — the programme's three waves are closed. What remains is a programme of its own, not a wave of
-this one: the **dogfood**, homed in `custom-tools` with its wave 2 in `data-internal`, measured against
+this one: the **dogfood**, homed in `project-d` with its wave 2 in `project-e`, measured against
 the `## Dogfood exit criteria` above. Whoever opens it opens a NEW programme with its own ledger, its
 own slug and its own coordinator; this ledger is closed and is read, not written.
 

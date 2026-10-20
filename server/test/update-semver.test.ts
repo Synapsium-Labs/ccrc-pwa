@@ -148,14 +148,8 @@ describe('a non-tag is refused, never ordered — and the parse is isReleaseTag\
   });
 });
 
-describe('shared/semver.ts is L0 and imports nothing', () => {
-  it('has no import line, static or dynamic, and no require', () => {
-    const src = readFileSync(SEMVER, 'utf8');
-    expect(src.split('\n').filter((l) => /^\s*import\b/.test(l))).toEqual([]);
-    expect(src).not.toMatch(/\bimport\s*\(/);
-    expect(src).not.toMatch(/\brequire\s*\(/);
-  });
-
+// shared/semver.ts's L0 ring is held by server/test/rings/shared-imports.test.ts (D-6045).
+describe('shared/semver.ts parses in one place', () => {
   it('strips the v in exactly one place — the parse', () => {
     const src = readFileSync(SEMVER, 'utf8');
     expect((src.match(/\.slice\(1\)/g) ?? []).length).toBe(1);

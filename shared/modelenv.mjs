@@ -21,17 +21,21 @@
 //
 // AND THE SENTINEL GOES NOWHERE ELSE. `classesTsv` never emits it; its third
 // column is the positive availability marker every bash reader branches on.
-// The EIGHTH key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (spec §6.1, amended
-// 2026-09-08), gets neither treatment: it is OMITTED, never sentinelled, when
-// no measured window exists — there is no "unavailable" reading for a context
-// size, only "unknown", and Claude Code's own 200k default already means
-// "unknown" to the client. `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_
-// ENFORCEMENT` is never set by this file or by anything this design writes:
-// that proactive compaction is what keeps an unexpectedly large lane from
-// hitting the provider's 400 ("input exceeds the context window").
+// The EIGHTH key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (`contextWindowFor` below:
+// the model-class-registry spec §6.1, amended 2026-09-08 and again by the
+// codex-bridge spec §2.7), gets neither treatment: it is OMITTED, never
+// sentinelled, when neither the measured rule nor the default rule yields a
+// window — there is no "unavailable" reading for a context size, only
+// "unknown", and Claude Code's own 200k default already means "unknown" to the
+// client. `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT` is never set
+// by this file or by anything this design writes: that proactive compaction is
+// what keeps an unexpectedly large lane from hitting the provider's 400
+// ("input exceeds the context window").
 
 import { readFileSync, writeFileSync, renameSync, unlinkSync, statSync } from 'node:fs';
-import { CLASSES, SUBAGENT_CLASSES, UNAVAILABLE_PREFIX, deriveModels } from './models.mjs';
+import {
+  CLASSES, SUBAGENT_CLASSES, UNAVAILABLE_PREFIX, WINDOW_MAX, WINDOW_MIN, deriveModels,
+} from './models.mjs';
 
 export class ModelEnvInvalid extends Error {
   constructor(message) { super(message); this.name = 'ModelEnvInvalid'; }
@@ -56,7 +60,8 @@ export function readRegular(p) {
 }
 
 /** The client's default window for a model id it does not know (spec §6.1).
- *  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` never exceeds this. */
+ *  The DEFAULT window rule never writes more than this; only a measured window
+ *  (`contextWindowFor`, codex-bridge spec §2.7) may. */
 export const CLIENT_DEFAULT_CONTEXT_TOKENS = 200000;
 
 /** The eight keys `modelEnvBlock` can write, frozen so a caller iterates them
@@ -86,11 +91,115 @@ const slot = (registry, cls) => {
   return typeof v === 'string' && v.length > 0 ? v : null;
 };
 
+/** `ANTHROPIC_MODEL`'s chain, opus ?? sonnet ?? haiku (§6.1), spelled ONCE:
+ *  `modelEnvBlock` writes the model it names, and the default window rule
+ *  reads that model's catalogue row. It never reaches `fable` — see
+ *  `modelEnvBlock` for why. */
+const primaryModel = (registry) => slot(registry, 'opus') ?? slot(registry, 'sonnet') ?? slot(registry, 'haiku');
+
+/** A measured window is rounded DOWN to a multiple of this (codex-bridge spec
+ *  §2.7: "rounded down to 1k"). */
+const WINDOW_STEP = 1000;
+
+/** The DEFAULT rule's number, or null when it has none: the 2026-09-08
+ *  amendment's code, moved here unchanged from `modelEnvBlock` so the two rules
+ *  sit side by side. Written ONLY when `catalogue` is non-null, NOT stale (§11:
+ *  a stale catalogue is the previous one kept after a failed probe), lists the
+ *  model `ANTHROPIC_MODEL` resolves to, and that row's `context` is a POSITIVE
+ *  INTEGER. */
+function catalogueWindow(registry, catalogue) {
+  if (catalogue === null || catalogue === undefined || catalogue.stale) return null;
+  const primary = primaryModel(registry);
+  const row = catalogue.models.find((m) => m.id === primary);
+  // A POSITIVE INTEGER only (fix round 1, M2): zero, a negative or a
+  // fractional value is not a window — writing one of them verbatim ("0",
+  // "-1", "131072.5") would put a number on disk with no window it describes.
+  if (row !== undefined && typeof row.context === 'number'
+    && Number.isInteger(row.context) && row.context > 0) {
+    // min(), not the row's own number (§6.1, amended 2026-09-08): an
+    // ADVERTISED context may lower the client's 200k default (a 128k model
+    // still compacts at 128k) but never raises it. Raising is the measured
+    // rule's job, never an advertised number's.
+    return Math.min(row.context, CLIENT_DEFAULT_CONTEXT_TOKENS);
+  }
+  return null;
+}
+
 /**
- * `(registry: Registry, catalogue: Catalogue | null) => Record<string, string>`
+ * `(registry, catalogue, windows) => { tokens, rule, unmeasured }` — the eighth
+ * key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, decided ONCE (the model-class-registry
+ * spec §6.1, as amended by the codex-bridge spec §2.7). `modelEnvBlock` writes
+ * `tokens` as a string, or omits the key when it is null, and `ccrc models <id>
+ * show` reports all three fields. The key exists because Claude Code assumes a
+ * 200k window for any model id it does not know and compacts proactively at
+ * that window; the key replaces that assumption for EVERY model in the
+ * session, subagents and quick tasks included.
+ *
+ * THE MEASURED RULE (`rule: 'measured'`). The lane's class models are the
+ * distinct non-null slots among haiku, sonnet, opus and fable. When every one
+ * of them has a measured window in `windows` (the lane's sibling windows file,
+ * read by `parseWindows` in `shared/models.mjs`), the key is the SMALLEST of
+ * them, rounded down to a multiple of 1000 and capped at `WINDOW_MAX`: Claude
+ * Code applies the one value to every model in the session, so the smallest is
+ * the only safe one. The rule reads no catalogue: a measured window is a fact
+ * the operator measured about the backend, not a number a catalogue
+ * advertised, so it holds whether the catalogue is fresh, stale or absent. A
+ * window for a model no class names is ignored, and only the map's OWN entries
+ * count: an inherited entry never counts. An empty set of class models
+ * (an unseeded registry) is never "every one measured". A value built in
+ * memory that is not an integer, or is below `WINDOW_MIN`, counts as
+ * unmeasured: `parseWindows` refuses both on disk, and this function never
+ * writes a window of that shape, whoever built the object.
+ *
+ * THE DEFAULT RULE (`rule: 'default'`, or `'none'` when it yields nothing),
+ * unchanged from 2026-09-08: when any class model has no measured window, or
+ * there is no windows reading at all, the key is `catalogueWindow`'s
+ * `min(catalogue context, 200000)` for `ANTHROPIC_MODEL`'s model, or OMITTED —
+ * never sentinelled: there is no "unavailable" reading for a window, only
+ * "unknown", and the client's own default already means "unknown". A class
+ * that moves to a new model, by hand or by auto-advance, therefore falls back
+ * here until the new model is measured.
+ *
+ * THE PREMISE THE MEASURED RULE REPLACES. The default rule's 200k cap was
+ * first argued from a "196k wall", the largest prompt one home had ever had
+ * accepted, in one July sample. A whole-fleet scan on 2026-10-15 withdrew it
+ * (codex-bridge spec §1.2): prompts of 548,799 and 584,415 tokens had been
+ * accepted on two different models in September, six context refusals on
+ * record, five of them near 373k, with a limit that moves over time, and every
+ * model the lanes' classes name accepted about 512k in a stepped probe that
+ * day. The cap stays only where nothing is measured.
+ *
+ * `unmeasured` lists the class models with no measured window, distinct and in
+ * `CLASSES` order. It is empty when `rule` is `measured`, and on an unseeded
+ * registry.
+ */
+export function contextWindowFor(registry, catalogue, windows) {
+  const models = [];
+  for (const cls of CLASSES) {
+    const id = slot(registry, cls);
+    if (id !== null && !models.includes(id)) models.push(id);
+  }
+  const measuredOf = (id) => {
+    if (windows === null || windows === undefined || !Object.prototype.hasOwnProperty.call(windows, id)) {
+      return null;
+    }
+    const v = windows[id];
+    return typeof v === 'number' && Number.isInteger(v) && v >= WINDOW_MIN ? v : null;
+  };
+  const unmeasured = models.filter((id) => measuredOf(id) === null);
+  if (models.length > 0 && unmeasured.length === 0) {
+    const least = Math.min(...models.map(measuredOf));
+    return { tokens: Math.min(Math.floor(least / WINDOW_STEP) * WINDOW_STEP, WINDOW_MAX), rule: 'measured', unmeasured };
+  }
+  const tokens = catalogueWindow(registry, catalogue);
+  return { tokens, rule: tokens === null ? 'none' : 'default', unmeasured };
+}
+
+/**
+ * `(registry: Registry, catalogue: Catalogue | null, windows?: ModelWindows | null) => Record<string, string>`
  * — the seven MANDATORY variables of §6.1, plus an eighth,
- * `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, written only when `catalogue` can measure
- * it (§6.1, amended 2026-09-08).
+ * `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, written whenever `contextWindowFor` yields
+ * a window (§6.1, amended 2026-09-08 and by the codex-bridge spec §2.7).
  *
  * The two fallback chains STOP where §6.1 stops them, and that is deliberate:
  * `ANTHROPIC_MODEL` is opus ?? sonnet ?? haiku and `ANTHROPIC_SMALL_FAST_MODEL`
@@ -146,41 +255,28 @@ const slot = (registry, cls) => {
  * caller that built a registry object in memory rather than reading one off
  * disk.
  *
- * `CLAUDE_CODE_MAX_CONTEXT_TOKENS` exists because Claude Code 2.1.263 assumes
- * a 200k window for any model id it does not know, and compacts proactively at
- * that window. It is written as `min(row.context, CLIENT_DEFAULT_CONTEXT_TOKENS)`,
- * NOT the row's own number (§6.1, amended 2026-09-08, Task 16c): a fleet-host
- * measurement found the catalogue's advertised context (272000 for the
- * GPT-5.6/6 tiers) is not the usable one — over 2,339 transcripts the largest
- * prompt ever accepted on gpt-5.6-sol was 196,341 tokens, with 30 refusals
- * past that wall — so the key may LOWER the client's default (a 128k model
- * like gpt-5.3-codex-spark must compact at 128k) but never RAISES it above
- * the default on an advertised number alone; raising above it needs a
- * MEASURED ceiling, a future registry field, not this one. It is written
- * ONLY when `catalogue` is non-null, NOT stale (§11: a stale catalogue is the
- * previous one kept after a failed probe, and a stale window is not a
- * measured one), lists the model `ANTHROPIC_MODEL` resolved to above, and
- * that row's `context` is a POSITIVE INTEGER (fix round 1, M2: zero, a
- * negative or a fractional value is not a measured window either) — every
- * other case OMITS the key (never a sentinel: there is no "unavailable"
- * reading for a context window, only "unknown", and the client's own default
- * already means "unknown"). The value is written as a STRING: every other
- * value in this block is one, env vars are always strings on the wire, and a
- * bare number here would be the one key that differs.
- * `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT` is never written by
- * this function, or anywhere else in this design (§6.1): the proactive
- * compaction it would disable is what keeps a lane whose default model has no
- * measured window from hitting the provider's own 400 instead.
+ * `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is `contextWindowFor(registry, catalogue,
+ * windows)`'s answer: the smallest measured window when every class model has
+ * one, else the default rule, else omitted. That function's docstring carries
+ * both rules and the premise the measured one replaced. It is written as a
+ * STRING: every other value in this block is one, env vars are always strings
+ * on the wire, and a bare number here would be the one key that differs.
+ * `windows` is the lane's measured windows (`parseWindows`) or null; null, the
+ * default, gives exactly the block this function wrote before measured windows
+ * existed. `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT` is never
+ * written by this function, or anywhere else in this design (§6.1): the
+ * proactive compaction it would disable is what keeps a lane whose window is
+ * set wrong from hitting the provider's own 400 instead.
  *
  * @throws {ModelEnvInvalid} when no class among opus/sonnet/haiku is set, or
  *   when the subagent class's slot is null.
  */
-export function modelEnvBlock(registry, catalogue) {
+export function modelEnvBlock(registry, catalogue, windows = null) {
   const haiku = slot(registry, 'haiku');
   const sonnet = slot(registry, 'sonnet');
   const opus = slot(registry, 'opus');
   const fable = slot(registry, 'fable');
-  const primary = opus ?? sonnet ?? haiku;
+  const primary = primaryModel(registry);
   if (primary === null) {
     throw new ModelEnvInvalid(
       'a lane needs at least one class among opus, sonnet and haiku: ANTHROPIC_MODEL cannot be '
@@ -214,26 +310,10 @@ export function modelEnvBlock(registry, catalogue) {
     ANTHROPIC_SMALL_FAST_MODEL: haiku ?? sonnet ?? sentinel('haiku'),
     CLAUDE_CODE_SUBAGENT_MODEL: subagentClass,
   };
-  if (catalogue !== null && catalogue !== undefined && !catalogue.stale) {
-    const row = catalogue.models.find((m) => m.id === primary);
-    // A POSITIVE INTEGER only (fix round 1, M2): zero, a negative or a
-    // fractional value is not a measured window — writing one of them
-    // verbatim ("0", "-1", "131072.5") would put a number on disk with no
-    // window it describes. The omit rule's existing reason applies
-    // unchanged: there is no "unavailable" reading for a context window,
-    // only "unknown", and the client's own default already means "unknown".
-    if (row !== undefined && typeof row.context === 'number'
-      && Number.isInteger(row.context) && row.context > 0) {
-      // min(), not the row's own number (§6.1, amended 2026-09-08, Task 16c):
-      // fleet-host measurement found the Codex catalogue's advertised
-      // context_window (272000 for the GPT-5.6/6 tiers) is not the usable
-      // one — over 2,339 transcripts the largest prompt ever ACCEPTED on
-      // gpt-5.6-sol was 196,341 tokens, with 30 refusals past that wall — so
-      // this key may LOWER the client's default (a 128k model still compacts
-      // at 128k) but never RAISES it on an advertised number alone.
-      block.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(Math.min(row.context, CLIENT_DEFAULT_CONTEXT_TOKENS));
-    }
-  }
+  // The eighth key: ONE decision, `contextWindowFor`'s, which `show` reports
+  // too. Omitted, never sentinelled, when it yields no window.
+  const room = contextWindowFor(registry, catalogue, windows);
+  if (room.tokens !== null) block.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(room.tokens);
   return block;
 }
 
@@ -248,7 +328,7 @@ export function modelEnvBlock(registry, catalogue) {
  * other direction (measured, §1), and a lane's `settings.json` carries the
  * operator's own edits. The eighth key is the one exception because it alone
  * has no sentinel (§6.1 amendment): a catalogue going stale, or the lane's
- * default model changing to one with no measured context, must not leave a
+ * default model changing to one with no catalogue context, must not leave a
  * STALE number on disk — omission from `block` has to reach the file as a
  * deletion, or a re-materialise could only ever add this key, never retract
  * it.

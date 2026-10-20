@@ -117,13 +117,13 @@ function idArray(ids) {
  * THAT ORDERING IS THE WHOLE POINT OF EMITTING THIS FUNCTION, and it is worth
  * recording what it cost when the arms were hand-written in `ccd` instead.
  * Bash `case` takes the FIRST arm that matches, never the longest, so
- * `claude-corp-*` and `claude-dev0-*` had to be kept above the shorter
- * `claude-*` by hand. When `claude-dev0` arrived the hand-written comment
+ * `claude-acme-*` and `claude-lab0-*` had to be kept above the shorter
+ * `claude-*` by hand. When `claude-lab0` arrived the hand-written comment
  * beside those arms said "longest match wins" — which is false, and which
  * would have invited a maintainer to sort the arms alphabetically and make
- * `claude-dev0-*` dead code. The failure that follows is silent: every dev0
+ * `claude-lab0-*` dead code. The failure that follows is silent: every lab0
  * id resolves to `claude`, so `_home_for` reports the wrong home and
- * `_swap_target`'s "home recovered" branch permanently evacuates every dev0
+ * `_swap_target`'s "home recovered" branch permanently evacuates every lab0
  * session, with no error printed anywhere. Emitting the arms in
  * length-descending order makes that a property of this function rather than
  * of the care taken by the last person to touch a `case` statement — and it
@@ -167,12 +167,16 @@ function idArray(ids) {
  * for an account the roster says has no such telemetry (`gpt`) — the file
  * would be indistinguishable from a real measurement and would hand
  * `projectHome` the fake zero that `telemetry: 'none'` was added to prevent.
+ * An OpenRouter lane (`telemetry: 'openrouter'`) and a compatible lane (`'none'`)
+ * are outside it and outside `CCRC_ANTHROPIC_BACKEND` too (D-5521): neither
+ * reports Claude Code's rate limits, and neither is an Anthropic backend.
  * Emitted as an array beside `CCRC_HOME_ABLE` rather than as a fifth
  * function, because membership is the only question anyone asks of it.
  *
  * `CCRC_ANTHROPIC_BACKEND` and `CCRC_CODEX_BACKEND` are the two POSITIVE
  * backend memberships, and they are deliberately not each other's complement:
- * `telemetry` has a third value (`none`), so a lane can be in neither. ccd
+ * `telemetry` has four values, and a lane whose telemetry is `openrouter` or
+ * `none` is in neither (D-5521). ccd
  * reads the first for the four things that only work against Claude Code's own
  * protocol (`--remote-control`, spawn-effort injection, the cross-backend
  * sanitiser, the 429 exclusion writer) and the second for the one thing that

@@ -27,6 +27,7 @@ import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ArchiveScreen } from '../src/screens/ArchiveScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { renderFleet } from './fleetHost';
 import { MailScreen } from '../src/screens/MailScreen';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { CoordBanner } from '../src/fleet/CoordBanner';
@@ -50,6 +51,7 @@ import { SessionHeader } from '../src/session/SessionHeader';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate } from '../src/lib/router';
+import { renderSettings } from './settingsHost';
 import { draftOf, entry, failedAnswer, fakeLoaders, fileResponse, holder, okTree, treeOk, type FakeLoaders } from './docsFixtures';
 
 const read = (...seg: string[]): string =>
@@ -78,7 +80,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 // — fixtures —
 
-const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ project: 'custom-tools', workspace: 'quiet-basin', branch: 'ws/quiet-basin', ...over }));
+const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ project: 'project-d', workspace: 'quiet-basin', branch: 'ws/quiet-basin', ...over }));
 
 const prState = (over: Partial<PrState> = {}): PrState => ({
   phase: 'none', number: null, url: null, title: null, checks: null, checkNames: null,
@@ -88,7 +90,7 @@ const prState = (over: Partial<PrState> = {}): PrState => ({
 const wsAudit: WsAudit = {
   id: 'demo-quiet-basin', branch: 'ws/quiet-basin', registryBranch: 'ws/quiet-basin', drift: '',
   base: 'origin/main', workdir: '/w/quiet-basin',
-  project: 'custom-tools', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+  project: 'project-d', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
   alive: true, started: true, unit: 'enabled',
   dirty: [], ignored: [], ignoredCount: 0, ignoredBytes: 0, sensitive: [], sensitiveFiltered: 0,
   clips: [], stashes: 0, worktreeBytes: 500_000_000, commitsAheadOfBase: 1,
@@ -171,7 +173,7 @@ describe('.fleet-archived-row — the fleet footer route into the archive', () =
 
   it('is the class the rendered footer row actually carries', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     act(() => {
       store.setState({
         conn: 'open',
@@ -286,7 +288,7 @@ describe('the two rules that were already scraped still reach a real element', (
 
   it('.proj-archived-toggle is on the rendered Archived (n) sub-fold', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     act(() => {
       store.setState({
         conn: 'open',
@@ -301,7 +303,7 @@ describe('the two rules that were already scraped still reach a real element', (
 
   it('.proj-released-toggle and .proj-released-archive are on the rendered Released (n) sub-fold', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     const releasedFrom = { runId: 1, program: 'lifecycle', programTitle: null, claimedBy: 'coord', closedAt: 1, child: false };
     act(() => {
       store.setState({ conn: 'open', sessions: [sess({ id: 'r', project: 'alpha', workspace: 'done-one', releasedFrom })] });
@@ -350,6 +352,26 @@ describe('the two rules that were already scraped still reach a real element', (
 });
 
 // — Build 7, Task 4: the mail door and its screen's own back control —
+
+describe('.settings-index-row — the Settings index, one row per section (settings Task R2b1, D-5504)', () => {
+  it('is at least 64px tall on a phone, the index row floor (spec §4.2), above the tap token', () => {
+    const rule = ruleIn(read('screens', 'settings', 'settings.css'), '.settings-index-row');
+    expect(declValue(rule, 'min-height')).toBe('max(64px,var(--tap-min))');
+    expect(stripComments(read('screens', 'settings', 'settings.css'))).not.toMatch(/@media[^{]*pointer[^{]*\{[^}]*\.settings-index-row/);
+  });
+
+  it('is the class every rendered index row carries', () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'stallWatch').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
+    renderSettings(null);
+    const rows = screen.getAllByRole('link').filter((a) => a.hasAttribute('data-section'));
+    expect(rows).toHaveLength(5);
+    for (const row of rows) expect(row).toHaveClass('settings-index-row');
+    navigate('/');
+  });
+});
 
 describe('.mail-badge — the only door to /mail', () => {
   it('is at least one tap square, off the shared token', () => {
@@ -448,7 +470,7 @@ describe('.fleet-runs-row — the only door to /runs', () => {
   });
   it('is the class the rendered footer row actually carries, once a runs frame has landed', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     act(() => { store.setState({ conn: 'open', sessions: [sess()], runs: [], runsFrameSeen: true }); });
     expect(screen.getByRole('button', { name: /runs · none active/i })).toHaveClass('fleet-runs-row');
   });
@@ -458,7 +480,7 @@ describe('.fleet-runs-row — the only door to /runs', () => {
   // already reads the flag.
   it('reads unknown, not "none active", before runsFrameSeen', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     act(() => { store.setState({ conn: 'open', sessions: [sess()] }); });
     expect(screen.queryByRole('button', { name: /runs · none active/i })).toBeNull();
     expect(screen.getByRole('button', { name: /runs · —/i })).toHaveClass('fleet-runs-row');
@@ -469,7 +491,7 @@ describe('.fleet-runs-row — the only door to /runs', () => {
   // first-run panel (an honest `sessions: []`, `conn: 'open'`).
   it('renders in the first-run (zero-session) arm, not only the populated one', () => {
     const store = makeStore();
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     act(() => { store.setState({ conn: 'open', sessions: [] }); });
     expect(screen.getByText('No sessions yet')).toBeTruthy();
     expect(screen.getByRole('button', { name: /runs ·/i })).toHaveClass('fleet-runs-row');
@@ -887,7 +909,7 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       expect(floorIn(docsCss, '.docs-door')).toBe('var(--tap-min)');
     });
     it('is the class the rendered door actually carries', () => {
-      render(<FleetScreen store={makeStore()} />);
+      renderFleet(<FleetScreen store={makeStore()} />);
       expect(screen.getByRole('button', { name: 'Docs: specs, plans and design notes' })).toHaveClass('docs-door');
     });
     it('reaches the main stylesheet: DocsScreen imports docs.css, and app.tsx imports DocsScreen statically', () => {

@@ -30,7 +30,7 @@ import { BASE_URL_OK } from './base-url.js';
  * The six colors an account can render in. Replaces today's hand-picked
  * `colorVar` per account (`shared/api.ts`'s `AccountDef.colorVar`) — a
  * free-form id (the whole point of Stage 2a) cannot name a bespoke CSS
- * token the way `claude`/`claude2`/`claude-corp` could, so accounts get a
+ * token the way `claude`/`claude9`/`claude-acme` could, so accounts get a
  * hue instead and `pwa/src/styles/tokens.css` supplies the `--acct-<hue>`
  * custom property. Declared as a runtime list, not just a type, because the
  * auto-assignment walk below needs an actual sequence to walk; exported because
@@ -180,8 +180,13 @@ export interface AccountDef {
    *  `telemetry === 'anthropic'` and drives the STATUSLINE writer — calling a
    *  Codex lane 'anthropic' would enlist a second writer racing ccgpt-usage on
    *  the same `~/.cc-limits/<id>.json`. It scores like a real account (it is not
-   *  `'none'`) and is written by its own publisher. */
-  telemetry: 'anthropic' | 'codex' | 'none';
+   *  `'none'`) and is written by its own publisher.
+   *
+   *  `'openrouter'` (D-5521) is an OpenRouter key lane. It reports no Claude Code rate limits (its meter
+   *  is the key's credit, read by validation and `check`), so it is not in `CCRC_MEASURED`, not an
+   *  Anthropic backend (`CCRC_ANTHROPIC_BACKEND`, `serviceability`'s `anthropic`, `models-op.mjs`'s
+   *  `isAnthropicLane`), and not scorable in `projectHome` (D-5754). A `compatible` lane writes `'none'`. */
+  telemetry: 'anthropic' | 'codex' | 'none' | 'openrouter';
   /** The operator's declaration that this entry is roster PLUMBING rather than
    *  one of their accounts.
    *
@@ -246,7 +251,7 @@ export interface Roster {
   byId: ReadonlyMap<string, AccountDef>;
   /**
    * Longest-`id`-first, so a shorter id that happens to be a prefix of a
-   * longer one (`claude-` inside `claude-dev0-`) never wins a prefix match
+   * longer one (`claude-` inside `claude-lab0-`) never wins a prefix match
    * first. Sorted by `id.length` descending, `id` ascending as the
    * tie-break.
    *
@@ -255,7 +260,7 @@ export interface Roster {
    * fleet.ts's deleted `BY_ID_PREFIX_LENGTH_DESC`) had no secondary key, so
    * equal-length ids fell back to whatever order the JS engine's sort
    * happened to leave them in. Real ids collide on
-   * length today — `claude-corp` and `claude-dev0` are both 11 characters —
+   * length today — `claude-acme` and `claude-lab0` are both 11 characters —
    * so "engine-defined" was never hypothetical. Sorting by `id` ascending
    * as the second key makes the order total and deterministic.
    */
@@ -290,6 +295,52 @@ export interface Roster {
  */
 export function inRoster(roster: Roster, v: unknown): boolean {
   return typeof v === 'string' && roster.byId.has(v);
+}
+
+/** What kind of credential a lane runs on, in the words the Accounts screen's kind chip reads (spec §4.1,
+ *  D-5517): `sign-in` (an Anthropic lane signed in through its config dir), `token` (an Anthropic lane on a
+ *  long-lived token), `codex` (a ChatGPT/Codex lane) and `key` (an API-key lane: OpenRouter or compatible).
+ *  Paste versus mint is NOT a roster fact and is not here: it lives in the lane state (`mintedAt`). */
+export type RosterKind = 'sign-in' | 'token' | 'codex' | 'key';
+
+/** The lane-kind half of `RosterWire` (`shared/api.ts`), with one home. Every field is a closed union or a
+ *  boolean, so none can carry free text (`test/types/bypasses/b8-roster-wire-open-string.ts` pins that). Every
+ *  field is OPTIONAL and ABSENT when the entry does not say, never defaulted: an older server omits all four, and
+ *  an undeclared lane omits `provider` and `kind`, so a reader shows no kind chip rather than a wrong one. */
+export interface RosterKindWire {
+  provider?: ProviderId;
+  kind?: RosterKind;
+  telemetry?: AccountDef['telemetry'];
+  /** Rides OpenAI lanes only: true for a lane ccrc owns end to end (`exec.kind: 'codex'`), false for an
+   *  `external` OpenAI launcher ccrc only records. Absent on every other provider. */
+  managed?: boolean;
+}
+
+/**
+ * The lane's kind, derived ONCE from a parsed roster entry (D-5517, D-5751). The one reader: the server's
+ * `RosterWire` builder spreads it, and nothing else re-derives a kind from `exec`.
+ *
+ * The provider is `exec.provider`, except on `upstream`, which is `anthropic` by construction (`ExecSpec`'s
+ * header) and never spells one. An `external` entry with no provider is UNDECLARED, a real third answer, so it
+ * gets no provider and no kind. The roster has no method field (`ACCOUNT_KEYS`), so an Anthropic lane's kind is
+ * read from `exec.secretsFile`: present is `token`, absent is `sign-in`.
+ */
+export function rosterKindOf(entry: Pick<AccountDef, 'exec' | 'telemetry'>): RosterKindWire {
+  const { exec } = entry;
+  const provider: ProviderId | undefined = exec.kind === 'upstream' ? 'anthropic' : exec.provider;
+  if (provider === undefined) return { telemetry: entry.telemetry };
+  switch (provider) {
+    case 'anthropic':
+      return { provider, kind: exec.secretsFile !== undefined ? 'token' : 'sign-in', telemetry: entry.telemetry };
+    case 'openai':
+      return { provider, kind: 'codex', telemetry: entry.telemetry, managed: exec.kind === 'codex' };
+    case 'openrouter':
+    case 'compatible':
+      return { provider, kind: 'key', telemetry: entry.telemetry };
+    default:
+      // A fifth provider in `PROVIDERS` is a compile error here before it is a lane with no kind.
+      return provider satisfies never;
+  }
 }
 
 /**
@@ -414,6 +465,10 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
 const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
 
 const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external', 'codex']);
+/** `AccountDef['telemetry']`'s values, keyed by the union so the two cannot drift here, and an object rather than
+ *  an array so it is not read as a restatement of the provider ids (`single-definition.test.ts`). The bare-Node
+ *  mirror (`shared/roster-json.mjs`) declares the same keys and `roster-exec-parity.test.ts` compares them (D-5753). */
+const TELEMETRY_VALUES: Readonly<Record<AccountDef['telemetry'], true>> = { anthropic: true, codex: true, none: true, openrouter: true };
 /** Dotless GPT-lane names fit the account-id grammar, so refuse them before wrapper convergence reaches its
  *  self-exec lock: ccrc's `ccrc-codex` and `ccgpt-runtime`, and `ccgpt` (a box may still carry another repository's). */
 const GPT_TOOLCHAIN_ACCOUNT_IDS: ReadonlySet<string> = new Set(['ccrc-codex', 'ccgpt-runtime', 'ccgpt']);
@@ -899,8 +954,8 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
   //
   // The safe set is deliberately conservative rather than "everything that
   // isn't a metacharacter": letters, digits, `.`, `-` and `_` cover every
-  // production suffix today (`.claude`, `.claude-personal`, `.claude-corp`,
-  // `.claude-gpt`, `.claude-dev0`) with room to spare, and a legitimate new
+  // production suffix today (`.claude`, `.claude-home`, `.claude-acme`,
+  // `.claude-gpt`, `.claude-lab0`) with room to spare, and a legitimate new
   // account name has no reason to need anything outside it.
   if (!/^\.[A-Za-z0-9._-]+$/.test(configDirSuffix)) {
     throw new RosterError(
@@ -956,11 +1011,11 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
   const pool = poolRaw === undefined ? null : poolRaw;
 
   const telemetry = raw['telemetry'];
-  if (telemetry !== 'anthropic' && telemetry !== 'codex' && telemetry !== 'none') {
+  if (typeof telemetry !== 'string' || !Object.hasOwn(TELEMETRY_VALUES, telemetry)) {
     throw new RosterError(
       `account "${id}" has an invalid telemetry ${JSON.stringify(telemetry)}: it must be ` +
-        '"anthropic", "codex" or "none".',
-      `Set "telemetry" for account "${id}" in ${ROSTER_PATH} to "anthropic", "codex" or "none".`,
+        '"anthropic", "codex", "openrouter" or "none".',
+      `Set "telemetry" for account "${id}" in ${ROSTER_PATH} to "anthropic", "codex", "openrouter" or "none".`,
     );
   }
 
@@ -980,7 +1035,7 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
     hue = hueRaw;
   }
 
-  return { id, label, configDirSuffix, exec, homeAble, telemetry, hue, hidden, pool };
+  return { id, label, configDirSuffix, exec, homeAble, telemetry: telemetry as AccountDef['telemetry'], hue, hidden, pool };
 }
 
 /**

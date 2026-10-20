@@ -53,7 +53,7 @@ describe('ArchiveScreen', () => {
   it('lists every archived workspace across projects, newest first', () => {
     render(<ArchiveScreen sessions={[
       s({ id: 'demo-quiet-basin', project: 'demo', archivedAt: 100 }),
-      s({ id: 'tools-still-cove', project: 'custom-tools', workspace: 'still-cove', archivedAt: 200 }),
+      s({ id: 'tools-still-cove', project: 'project-d', workspace: 'still-cove', archivedAt: 200 }),
     ]} onOpen={() => {}} />);
     const rows = screen.getAllByRole('button', { name: /workspace/i });
     expect(rows).toHaveLength(2);
@@ -90,14 +90,14 @@ describe('ArchiveScreen', () => {
     // cleanup that cannot happen with nothing on screen to say why.
     render(<ArchiveScreen sessions={[
       s({ id: 'demo-quiet-basin', workspace: 'quiet-basin', project: 'demo',
-        held: 'program:agent-evals wave:3/4' }),
+        held: 'program:prog-j wave:3/4' }),
     ]} onOpen={() => {}} />);
     // The accessible name carries the reason VERBATIM — a reader with no
     // hover gets the whole claim, not the word "held".
     expect(screen.getByRole('button',
-      { name: 'workspace quiet-basin in demo, held: program:agent-evals wave:3/4' })).toBeInTheDocument();
+      { name: 'workspace quiet-basin in demo, held: program:prog-j wave:3/4' })).toBeInTheDocument();
     expect(document.querySelector('.sess-held')?.getAttribute('title'))
-      .toBe('program:agent-evals wave:3/4');
+      .toBe('program:prog-j wave:3/4');
   });
 
   it('an UNHELD archived row gains no hold marker — the label is unchanged', () => {
@@ -116,17 +116,17 @@ describe('ArchiveScreen', () => {
   // known: rows that read '—' cannot be silently worth 0 in the figure above
   // them.
   it('qualifies the total when a row was never measured, and refuses one entirely when none was', () => {
-    const { container, rerender } = render(<ArchiveScreen sessions={[
+    const { rerender } = render(<ArchiveScreen sessions={[
       s({ id: 'demo-quiet-basin' }),
       s({ id: 'demo-still-cove', workspace: 'still-cove', archivedBytes: null }),
     ]} onOpen={() => {}} />);
-    expect(container.querySelector('.archive-total')).toHaveTextContent('2 archived · 1.2 GB + 1 unmeasured');
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('2 archived · 1.2 GB + 1 unmeasured');
 
     rerender(<ArchiveScreen sessions={[
       s({ id: 'demo-quiet-basin', archivedBytes: null }),
       s({ id: 'demo-still-cove', workspace: 'still-cove', archivedBytes: null }),
     ]} onOpen={() => {}} />);
-    expect(container.querySelector('.archive-total')).toHaveTextContent('2 archived · size unknown');
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('2 archived · size unknown');
     expect(screen.queryByText('0 B')).not.toBeInTheDocument();
   });
 
@@ -159,5 +159,37 @@ describe('ArchiveScreen', () => {
     ]} onOpen={() => {}} />);
     expect(screen.getByText('0 B')).toBeInTheDocument();
     expect(screen.getByText('—')).toBeInTheDocument();
+  });
+});
+
+// D-5102: Archive stands on the page scaffold. It drew no header at all
+// before, so a phone had no way back but the browser's own.
+describe('ArchiveScreen on the page scaffold (D-5102)', () => {
+  it('renders a PageScaffold with one h1 and Back to the fleet, with rows and without', () => {
+    for (const sessions of [[s()], []]) {
+      const { container, unmount } = render(<ArchiveScreen sessions={sessions} onOpen={() => {}} />);
+      expect(container.querySelector('[data-page-body]')?.className.split(/\s+/)).toContain('max-w-(--page-max)');
+      const h1 = screen.getAllByRole('heading', { level: 1 });
+      expect(h1).toHaveLength(1);
+      expect(h1[0]).toHaveAccessibleName('Archive');
+      expect(screen.getByRole('button', { name: 'Back to fleet' })).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('says "Nothing is archived." through EmptyState, on the scaffold', () => {
+    render(<ArchiveScreen sessions={[]} onOpen={() => {}} />);
+    const line = screen.getByText('Nothing is archived.');
+    expect(line.closest('[data-empty-state]')?.getAttribute('data-state')).toBe('ok');
+  });
+
+  it("each row sits in the Section's card on --bg-surface, the ground audit.mjs declares for it", () => {
+    const { container } = render(<ArchiveScreen sessions={[s(), s({ id: 'b', workspace: 'ws-b' })]} onOpen={() => {}} />);
+    const rows = [...container.querySelectorAll('.archive-row')];
+    expect(rows.length).toBe(2);
+    for (const row of rows) {
+      const card = row.parentElement!.closest('[class*="bg-"]');
+      expect(card?.className.split(/\s+/)).toContain('bg-surface');
+    }
   });
 });

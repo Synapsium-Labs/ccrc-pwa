@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Repo `/srv/projects/OpenClawHetzner`, branch `ccrc/workspaces-phase1`.
+- Repo `/srv/projects/project-c`, branch `ccrc/workspaces-phase1`.
 - Suites run from the package dir: `cd infra/ccrc/{server,agent,pwa} && npx vitest run`. Single file: `npx vitest run test/x.test.ts`.
 - Baseline to preserve: **server 292, agent 84, pwa 270**. Typecheck (`npx tsc --noEmit`) clean in all three. Contrast gate `node infra/ccrc/pwa/design/contrast-check.mjs` → **ALL 78 PASS**.
 - No new runtime dependencies.
@@ -63,7 +63,7 @@ beforeEach(() => {
   fs.mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
   const bin = path.join(home, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
-  for (const w of ['claude', 'claude2', 'claude-corp']) {
+  for (const w of ['claude', 'claude9', 'claude-acme']) {
     fs.writeFileSync(path.join(bin, w), '#!/bin/sh\n', { mode: 0o755 });
   }
 });
@@ -79,16 +79,16 @@ describe('home is explicit at creation', () => {
   it('writes home when cmd_start registers a new session', () => {
     fs.mkdirSync(path.join(home, 'projects', 'demo'), { recursive: true });
     // _spawn needs tmux; register only, then assert the field.
-    sh(`_reg_set claude2-demo wrapper claude2
-        _reg_set claude2-demo project demo
-        _ws_seed_home claude2-demo claude2`);
-    expect(reg('claude2-demo', 'home')).toBe('claude2');
+    sh(`_reg_set claude9-demo wrapper claude9
+        _reg_set claude9-demo project demo
+        _ws_seed_home claude9-demo claude9`);
+    expect(reg('claude9-demo', 'home')).toBe('claude9');
   });
 
   it('does not overwrite a home that was already chosen', () => {
-    sh(`_reg_set claude2-demo home claude-corp
-        _ws_seed_home claude2-demo claude2`);
-    expect(reg('claude2-demo', 'home')).toBe('claude-corp');
+    sh(`_reg_set claude9-demo home claude-acme
+        _ws_seed_home claude9-demo claude9`);
+    expect(reg('claude9-demo', 'home')).toBe('claude-acme');
   });
 });
 ```
@@ -489,12 +489,12 @@ describe('ws-rm', () => {
   });
 
   it('refuses to remove a session that is not a workspace', () => {
-    sh(`_reg_set claude2-demo wrapper claude2
-        _reg_set claude2-demo project demo
-        _reg_set claude2-demo workdir ${path.join(home, 'projects', 'demo')}
-        _reg_set claude2-demo uuid abc`);
-    expect(() => sh(`${RM} cmd_ws_rm claude2-demo`)).toThrow();
-    expect(reg('claude2-demo', 'uuid')).toBe('abc');
+    sh(`_reg_set claude9-demo wrapper claude9
+        _reg_set claude9-demo project demo
+        _reg_set claude9-demo workdir ${path.join(home, 'projects', 'demo')}
+        _reg_set claude9-demo uuid abc`);
+    expect(() => sh(`${RM} cmd_ws_rm claude9-demo`)).toThrow();
+    expect(reg('claude9-demo', 'uuid')).toBe('abc');
   });
 
   it('refuses a dirty worktree and leaves everything in place', () => {
@@ -598,7 +598,7 @@ import { readRegistry } from '../src/registry.js';
 describe('workspace on the wire', () => {
   it('reads the workspace field when present', async () => {
     const io = memIO({
-      'demo-quiet-mesa.uuid': 'u1', 'demo-quiet-mesa.wrapper': 'claude2',
+      'demo-quiet-mesa.uuid': 'u1', 'demo-quiet-mesa.wrapper': 'claude9',
       'demo-quiet-mesa.project': 'demo', 'demo-quiet-mesa.workdir': '/w/demo/quiet-mesa',
       'demo-quiet-mesa.workspace': 'quiet-mesa',
     });
@@ -608,8 +608,8 @@ describe('workspace on the wire', () => {
 
   it('leaves workspace null for a legacy main-checkout session', async () => {
     const io = memIO({
-      'claude2-demo.uuid': 'u1', 'claude2-demo.wrapper': 'claude2',
-      'claude2-demo.project': 'demo', 'claude2-demo.workdir': '/p/demo',
+      'claude9-demo.uuid': 'u1', 'claude9-demo.wrapper': 'claude9',
+      'claude9-demo.project': 'demo', 'claude9-demo.workdir': '/p/demo',
     });
     const [rec] = await readRegistry(io, cfg);
     expect(rec.workspace).toBeNull();
@@ -711,8 +711,8 @@ describe('workspace routes', () => {
 
   it('passes a URL-encoded project through intact', async () => {
     const { app, calls } = await appWithCcdSpy();
-    await app.inject({ method: 'POST', url: '/api/projects/expoAI-assistant/workspaces' });
-    expect(calls).toContainEqual(['ws-add', 'expoAI-assistant']);
+    await app.inject({ method: 'POST', url: '/api/projects/project-h/workspaces' });
+    expect(calls).toContainEqual(['ws-add', 'project-h']);
   });
 });
 ```
@@ -793,7 +793,7 @@ import { groupFleet } from '../src/fleet/groupFleet';
 import type { FleetSession } from '../../shared/api';
 
 const s = (over: Partial<FleetSession>): FleetSession => ({
-  id: 'x', wrapper: 'claude2', home: 'claude2', project: 'p', workdir: '/p',
+  id: 'x', wrapper: 'claude9', home: 'claude9', project: 'p', workdir: '/p',
   workspace: null, name: null, status: 'idle', statusUpdatedAt: 0, limits: null,
   dialogPending: false, version: null, model: null, effort: null,
   ultracode: false, branch: null, tasks: null, ...over,
@@ -1413,23 +1413,23 @@ git commit -m "feat(pwa): remove a workspace from the card, with ccd's refusal s
 ## Manual verification before merge
 
 Automated tests never exercise a real worktree against a real remote. Before
-finishing the branch, on openclaw:
+finishing the branch, on the fleet box:
 
-1. `ccd ws-add OpenClawHetzner` — expect a new worktree under
-   `~/worktrees/OpenClawHetzner/<slug>`, a session in `ccd ls`, and a `home`
+1. `ccd ws-add project-c` — expect a new worktree under
+   `~/worktrees/project-c/<slug>`, a session in `ccd ls`, and a `home`
    field naming the least-loaded account.
 2. Confirm `.ccrc/` is in `.git/info/exclude` and that `git status` in the
    worktree is clean.
-3. Open the PWA: `OpenClawHetzner` now holds two sessions and renders a group
+3. Open the PWA: `project-c` now holds two sessions and renders a group
    header with a count of 2; every other project still renders bare.
 4. Collapse the group. Trigger a dialog in the workspace session and confirm the
    collapsed header shows the attention dot.
 5. Confirm the two cards in the group are distinguishable — the main checkout
-   and the workspace must not both read `OpenClawHetzner`.
+   and the workspace must not both read `project-c`.
 6. Tap **Remove workspace** in the PWA — worktree gone, branch gone, row gone.
 7. Recreate one, drop a stray file in the worktree, and tap Remove again:
    expect a toast quoting ccd's refusal, with the worktree still present.
-8. Repeat step 7 from the shell (`ccd ws-rm OpenClawHetzner-<slug>`) to confirm
+8. Repeat step 7 from the shell (`ccd ws-rm project-c-<slug>`) to confirm
    the refusal is ccd's, not the PWA's.
 
 ## Out of scope for Phase 1

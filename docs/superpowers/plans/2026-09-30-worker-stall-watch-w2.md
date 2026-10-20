@@ -2827,8 +2827,8 @@ ships as is. A4: no new alias. A5: no lane lacks `background_tasks`. A6: every l
     ```
     The block quotes no `rm` fragment, and `session-hook.test.ts`'s canonical-write scan blanks `#` lines (`/^\s*#/`) anyway.
   - The inventory history line.
-    Old: ``  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41 — by addition, NOT a fresh census of``
-    New: ``  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42 — by addition, NOT a fresh census of``
+    Old: ``  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41 — by addition, NOT a fresh census of``
+    New: ``  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42 — by addition, NOT a fresh census of``
   - The count line.
     Old: ``  # The 41: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,``
     New: ``  # The 42: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,``
@@ -11092,10 +11092,10 @@ describe('assembleFleet hands back the pane pids it read (worker stall watch wav
   const pidsFor = async (listPanes: { code: number; stdout: string }): Promise<Map<string, number | null>> => {
     const home = mkTmp('ccrc-fleet-pids-');
     seedRoster(home);
-    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    seedSession(home, 'claude-a-project-f', 'claude-a');
     seedSession(home, 'claude-dead-proj', 'claude');
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-MekWarLive:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-project-f:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: listPanes.code, stdout: listPanes.stdout, stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
@@ -11106,11 +11106,11 @@ describe('assembleFleet hands back the pane pids it read (worker stall watch wav
   };
 
   it('fills the map with the pid of every ALIVE row, and gives a row whose pane is not alive no entry', async () => {
-    expect([...await pidsFor({ code: 0, stdout: '40613\n' })]).toEqual([['claude-a-MekWarLive', 40613]]);
+    expect([...await pidsFor({ code: 0, stdout: '40613\n' })]).toEqual([['claude-a-project-f', 40613]]);
   });
 
   it('records null for an alive row whose pid tmux did not answer, never dropping the row', async () => {
-    expect([...await pidsFor({ code: 1, stdout: '' })]).toEqual([['claude-a-MekWarLive', null]]);
+    expect([...await pidsFor({ code: 1, stdout: '' })]).toEqual([['claude-a-project-f', null]]);
   });
 });
 ```
@@ -11121,7 +11121,7 @@ describe('assembleFleet hands back the pane pids it read (worker stall watch wav
 ( cd server && ./node_modules/.bin/vitest run test/fleet.test.ts -t 'hands back the pane pids' )
 ```
 
-Expected: FAIL, both rows, with `expected [] to deeply equal [ [ 'claude-a-MekWarLive', 40613 ] ]` and `expected [] to deeply equal [ [ 'claude-a-MekWarLive', null ] ]`. Today's `assembleFleet` ignores the extra argument.
+Expected: FAIL, both rows, with `expected [] to deeply equal [ [ 'claude-a-project-f', 40613 ] ]` and `expected [] to deeply equal [ [ 'claude-a-project-f', null ] ]`. Today's `assembleFleet` ignores the extra argument.
 
 - [ ] **Step 3: Implement the out-param in `server/src/fleet.ts`.** Replace:
 
@@ -11180,7 +11180,7 @@ git status --porcelain     # expect: empty
 ( cd server && ./node_modules/.bin/vitest run test/fleet.test.ts -t 'hands back the pane pids' )
 ```
 
-Expected: FAIL, both rows, `expected [] to deeply equal [ [ 'claude-a-MekWarLive', 40613 ] ]`. Restore the file, and prove it clean:
+Expected: FAIL, both rows, `expected [] to deeply equal [ [ 'claude-a-project-f', 40613 ] ]`. Restore the file, and prove it clean:
 
 ```bash
 git checkout -- server/src/fleet.ts

@@ -835,9 +835,26 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the Released fold's programme headings and its children note, inside .proj-released-body on the same card ground as the toggle above, same register. A grouped selector names no painted ancestor, so it needs its own registration",
   },
+  // ── /archive on the page scaffold (D-5102) ───────────────────────────────
+  // The rows are <BareRow>s inside the archive's <Section>, whose card paints
+  // `bg-surface` (SECTION_CARD, @ccrc/ui primitives/section.tsx). They were in
+  // the uncovered census while the screen was an unpainted grid on the page;
+  // the card gives them one ground, so they are measured now.
+  '.archive-row': {
+    under: ['var(--bg-surface)'],
+    why: "an archived workspace's row, a <BareRow> inside ArchiveScreen's <Section>, whose card paints var(--bg-surface) (SECTION_CARD in @ccrc/ui's section.tsx: utilities, so no CSS selector names it). Its selector names no painted ancestor, so no route could ground it (D-5102)",
+  },
+  '.archive-project': {
+    under: ['var(--bg-surface)'],
+    why: "the row's project cell, inside .archive-row on the same Section card ground (D-5102)",
+  },
+  '.archive-size': {
+    under: ['var(--bg-surface)'],
+    why: "the row's measured size, inside .archive-row on the same Section card ground; the tertiary ink is the one the fleet footer's .fleet-archived-row shows on the desktop sidebar's --bg-surface (D-5102)",
+  },
   '.mail-chip': {
     under: ['var(--bg-page)'],
-    why: "the OFF state of the programme filter chip (F4, cross-repo wave 2). `.mail-screen` sets no background of its own, so its real ground is body's --bg-page (styles/base.css). Its selector names no ancestor, so no route could ground it",
+    why: "the OFF state of the programme filter chip (F4, cross-repo wave 2). it sits in PageScaffold's body (D-5102), which sets no background of its own, so its real ground is body's --bg-page (styles/base.css). Its selector names no ancestor, so no route could ground it",
   },
   ".mail-chip[data-on]": {
     under: ['var(--bg-page)'],
@@ -890,10 +907,8 @@ export const INHERITED_GROUNDS = {
   // design/contrast-check.mjs, which measures it in all twelve palettes for
   // every one of the five rather than for one of them. Worst 6.55 in
   // solarized-light.
-  '.settings-title': {
-    under: ['var(--bg-page)'],
-    why: "the screen's own <h1> beside the chevron, on the same unpainted .settings-head, so the same --bg-page ground. The chevron itself is `BackButton` now and its ink/ground pair moved to contrast-check.mjs's token contract; this <h1> is still a rule, so it is still grounded here",
-  },
+  // `.settings-title` RETIRED (settings Task R2b1, D-5504): the screen's <h1> is `PageScaffold`'s, a utility over
+  // the measured --ink-primary on --bg-page token pair, so no rule is left to ground.
   // `.settings-door` and `.settings-door:active` RETIRED from this registry
   // with the two header doors, which are @ccrc/ui's `Door` now.
   //

@@ -1,5 +1,5 @@
 import type { CoordStore } from './store.js';
-import { queueSystemMail, type SystemMailQueued } from './rundefs.js';
+import { queueSystemMail, type SystemMailQueued } from './rundefsTx.js';
 import {
   PROGRAM_KICKOFF_SUBJECT,
   programKickoffVerdict,

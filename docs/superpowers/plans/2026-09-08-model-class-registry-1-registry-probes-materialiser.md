@@ -4,13 +4,13 @@
 
 **Goal:** Put every model any lane can run into one of four classes — haiku, sonnet, opus, fable — as a per-account registry file this design owns; discover each provider's catalogue on a timer; project the registry into the lane's own `settings.json` env block, into a three-column bash projection, into LiteLLM's model list and into a per-lane effort map the gpt shim reads per request.
 
-**Architecture:** Five units, four of them in the `ccrc-pwa` repo and one in the monorepo. **Registry** — `~/.ccrc/models/<accountId>.classes.json`, its own user-owned file (ruling 280: the account-connections branch's `exec.models` is not on `main` and this plan does not stack on it), with the `Registry` type, `parseRegistry` and the derived states in `shared/models.ts` plus a bare-`node` twin `shared/models.mjs`. **Probes** — one bash executable, `ccd/ccrc-models-probe`, with one arm per PROBE KIND (`codex | openrouter | compatible`, keyed by `registry.probe`, never by a roster provider), writing `~/.ccrc/models/<id>.json` atomically and keeping the previous catalogue marked `stale` on any failure. **Materialiser** — `shared/modelenv.mjs` turns a registry into the eight env variables (the eighth, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, written only when a non-stale catalogue measures the resolved default model's context — spec §6.1, amended 2026-09-08), a three-column `.classes.tsv` and a `.effort.json`, and ships with a single-writer pin; `deploy/models-op.mjs` is the node half of the verbs and `ccd/ccrc`'s new top-level `cmd_models` is the bash half. **Shim** — the monorepo's `ccgpt-proxy` maps the client's `output_config.effort` (or the lane default from `~/.ccrc/models/gpt.effort.json`) onto Codex's `reasoning.effort`, and `ccgpt`/`claude-glm` stop exporting model ids the settings block already decides.
+**Architecture:** Five units, four of them in the `ccrc-pwa` repo and one in the monorepo. **Registry** — `~/.ccrc/models/<accountId>.classes.json`, its own user-owned file (ruling 280: the account-connections branch's `exec.models` is not on `main` and this plan does not stack on it), with the `Registry` type, `parseRegistry` and the derived states in `shared/models.ts` plus a bare-`node` twin `shared/models.mjs`. **Probes** — one bash executable, `ccd/ccrc-models-probe`, with one arm per PROBE KIND (`codex | openrouter | compatible`, keyed by `registry.probe`, never by a roster provider), writing `~/.ccrc/models/<id>.json` atomically and keeping the previous catalogue marked `stale` on any failure. **Materialiser** — `shared/modelenv.mjs` turns a registry into the eight env variables (the eighth, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, written only when a non-stale catalogue measures the resolved default model's context — spec §6.1, amended 2026-09-08), a three-column `.classes.tsv` and a `.effort.json`, and ships with a single-writer pin; `deploy/models-op.mjs` is the node half of the verbs and `ccd/ccrc`'s new top-level `cmd_models` is the bash half. **Shim** — the monorepo's `ccgpt-proxy` maps the client's `output_config.effort` (or the lane default from `~/.ccrc/models/gpt.effort.json`) onto Codex's `reasoning.effort`, and `ccgpt`/`claude-alt1` stop exporting model ids the settings block already decides.
 
 **Tech Stack:** TypeScript (`shared/*.ts`, bundled by the PWA — import-free or `shared/*.ts`-only), bare-`node` ESM (`shared/*.mjs` + hand-written `.d.mts`), bash 5 (`ccd/ccrc`, `ccd/ccrc-models-probe`), python 3 (embedded in the probe; `infra/handoff/ccgpt-proxy`), vitest (`server/test`, `agent/test`), systemd --user timers, LiteLLM.
 
 **Spec:** `docs/superpowers/specs/2026-09-08-model-class-registry-design.md`, at commit **`d3048253`** ("docs(models): registry is its own per-account file until account-connections merges; subagent is an explicit class-to-slot choice; discovery scope named apart from selectable; Plan 3 splits behind wave 4"). Read §4, §5, §6 (including §6.4), §10, §11 and §13.1–13.3 before starting; this plan argues from them and cites them by section. Nothing below may be reconciled against an older tip of that file.
 
-**Skeleton:** the locked skeleton for the plans is `/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-skeleton.md`. Its **"Rulings round 2"** section overrides the "Locked interfaces" above it, and this plan implements the round-2 shape: the `ModelsBlock`-on-the-roster interface is **WITHDRAWN**, `shortlist` is **`discovery`**, `subagent` is an **explicit class name**, the verbs are a **top-level `ccrc models` group**, and the bash projection has a **third column**.
+**Skeleton:** the locked skeleton for the plans is `<scratchpad>/mcr-skeleton.md`. Its **"Rulings round 2"** section overrides the "Locked interfaces" above it, and this plan implements the round-2 shape: the `ModelsBlock`-on-the-roster interface is **WITHDRAWN**, `shortlist` is **`discovery`**, `subagent` is an **explicit class name**, the verbs are a **top-level `ccrc models` group**, and the bash projection has a **third column**.
 
 **Base commit:** the implementation branch `feat/model-class-registry-impl` is cut from **`origin/main`** — NOT from `ws/gemini-subscription-account-connection`. Ruling 280 (mail 280, 2026-09-08): that branch has no PR open, 9 of 29 tasks done, a three-file conflict with `main` awaiting an operator decision, and a tip moving under review. This plan therefore touches **none** of `shared/roster.ts`, `shared/roster-json.mjs`, `deploy/account-op.mjs`, `ccd/ccrc`'s `cmd_account`, `shared/providers.ts`, `ApiKeyModels`, `ModelMap`, `MODEL_ALIASES` or `exec.models` — none of which exist on `main`. `<worktree>/plain-hollow` is that branch's live worktree: **READ ONLY**, consulted only to keep this design's names distinct from its landed `ApiKeyModels`/`selectable`/`provider`, and to copy `MODEL_ID_RE` verbatim (Task 2 does, with a comment naming its origin).
 
@@ -20,7 +20,7 @@
 
 Every task's requirements implicitly include this section.
 
-- **Paths in every task from Task 2 on are relative to the repo root of the implementation worktree**, which is `/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-impl` — except Tasks 13–16, which are relative to the monorepo root `<monorepo checkout>` and say so in their own **Files** block. Run every `npx vitest` from the package directory named in the step (`server/`, `agent/`).
+- **Paths in every task from Task 2 on are relative to the repo root of the implementation worktree**, which is `<scratchpad>/mcr-impl` — except Tasks 13–16, which are relative to the monorepo root `<monorepo checkout>` and say so in their own **Files** block. Run every `npx vitest` from the package directory named in the step (`server/`, `agent/`).
 - **The registry is a FILE, not a roster field.** `~/.ccrc/models/<accountId>.classes.json`, created by `ccrc models <id> init <probe>` and edited only by the verbs. Nothing in this plan writes `~/.ccrc/accounts.json`. `deploy/models-op.mjs` READS the roster (for `configDirSuffix`, `telemetry` and "does this id exist") through `shared/roster-json.mjs` and never writes it.
 - **Fixture HOMEs only.** Never run `ccd`, `ccrc`, `ccrc-models-probe`, `deploy.sh`, `systemctl` or a probe against the real `$HOME`. Never touch the live `~/.ccrc`, `~/.cc-limits`, `~/.cc-sessions` or `~/.handoff`. ccrc tests build a throwaway HOME with `mkTmp` and run the tool through `<home>/ccrc/ccd/ccrc` — the `installCcrc()` / `ghContainedEnv` / `runCcrc()` shape at `server/test/ccrc-doctor-graphify.test.ts:70-110`, which is `main`'s idiom for exercising `ccd/ccrc` from a fixture box.
 - **TDD, red first, with a measured mutation check per guard.** Each guard's test is written and shown failing before the code exists, and every guard carries a mutation step: flip the guard, run the named file, observe the named case go red, restore. The repo's idiom for recording a mutation is `server/test/ccd-default-pool.test.ts:20-52` — that file **is on `origin/main`** (measured 2026-09-08: `ls server/test/ccd-default-pool.test.ts` in the `origin/main` checkout lists it), so read it in the worktree, copy its header shape, and do not `import` from it.
@@ -144,8 +144,8 @@ Task 7 tests both halves.
 ## Task 1: The implementation worktree, from `origin/main`, and a green baseline
 
 **Files:**
-- Create (worktree): `/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-impl`
-- Read only: `/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/deploy-clone` (the clone of `Synapsium-Labs/ccrc-pwa`; `git remote -v` there names `https://github.com/Synapsium-Labs/ccrc-pwa.git`)
+- Create (worktree): `<scratchpad>/mcr-impl`
+- Read only: `<scratchpad>/deploy-clone` (the clone of `Synapsium-Labs/ccrc-pwa`; `git remote -v` there names `https://github.com/Synapsium-Labs/ccrc-pwa.git`)
 - Test: `server/test/roster.test.ts` (run, not edited)
 
 **Interfaces:**
@@ -155,7 +155,7 @@ Task 7 tests both halves.
 - [ ] **Step 1: Fetch and create the worktree from `origin/main`**
 
 ```bash
-git -C /tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/deploy-clone fetch origin && git -C /tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/deploy-clone worktree add -b feat/model-class-registry-impl /tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-impl origin/main
+git -C <scratchpad>/deploy-clone fetch origin && git -C <scratchpad>/deploy-clone worktree add -b feat/model-class-registry-impl <scratchpad>/mcr-impl origin/main
 ```
 
 Expected: `Preparing worktree (new branch 'feat/model-class-registry-impl')` followed by `HEAD is now at <sha> …`.
@@ -170,7 +170,7 @@ proves those types are ABSENT, so a stray rebase onto that branch is caught here
 rather than as a mystifying type error in Task 2.
 
 ```bash
-cd /tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-impl && \
+cd <scratchpad>/mcr-impl && \
   test ! -e shared/providers.ts && \
   test ! -e deploy/account-op.mjs && \
   ! grep -q "ApiKeyModels" shared/roster.ts && \
@@ -191,9 +191,9 @@ account-connections branch, which ruling 280 forbids as a base; a missing
 - [ ] **Step 3: Install dependencies in the three packages**
 
 ```bash
-cd /tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-impl/server && npm ci
-cd /tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-impl/pwa && npm ci
-cd /tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-impl/agent && npm ci
+cd <scratchpad>/mcr-impl/server && npm ci
+cd <scratchpad>/mcr-impl/pwa && npm ci
+cd <scratchpad>/mcr-impl/agent && npm ci
 ```
 
 Expected: each ends with `added N packages …` and exit 0.
@@ -201,7 +201,7 @@ Expected: each ends with `added N packages …` and exit 0.
 - [ ] **Step 4: Prove the baseline is green with one named test file**
 
 ```bash
-cd /tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-impl/server && npx vitest run test/roster.test.ts
+cd <scratchpad>/mcr-impl/server && npx vitest run test/roster.test.ts
 ```
 
 Expected: `Test Files  1 passed (1)` and `Tests  N passed (N)` with N > 40, exit 0. A red baseline means `origin/main` is broken; stop and report rather than "fixing" it inside this plan.
@@ -209,7 +209,7 @@ Expected: `Test Files  1 passed (1)` and `Tests  N passed (N)` with N > 40, exit
 - [ ] **Step 5: Record the baseline sha in the task report**
 
 ```bash
-cd /tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-impl && git log --oneline -1
+cd <scratchpad>/mcr-impl && git log --oneline -1
 ```
 
 Expected: one line, the tip of `origin/main`. Write that sha into your task report — every later task's diff is read against it. No commit in this task: creating a worktree is not a tree change.
@@ -8793,7 +8793,7 @@ describe('the model files, and who reads each one', () => {
   });
 
   it('the ownership whitelist is read by exactly one thing in this repo', () => {
-    // `handoff-proxy` and `claude-glm` read it too — in the monorepo, which
+    // `handoff-proxy` and `claude-alt1` read it too — in the monorepo, which
     // this scan cannot see. Within this repo it must stay one reader, because
     // a second one would be a second opinion about which providers may serve.
     expect(spell('providers-whitelist.json')).toEqual(['deploy/models-op.mjs']);
@@ -9415,11 +9415,11 @@ class TestWrappersStoppedDecidingModels(unittest.TestCase):
         for needle in ("CCGPT_MODEL:-", "CCGPT_SONNET_MODEL:-", "CCGPT_SMALL_MODEL:-"):
             self.assertNotIn(needle, src)
 
-    def test_claude_glm_exports_no_model_variable(self):
-        for line in self._export_lines("claude-glm"):
+    def test_claude_alt1_exports_no_model_variable(self):
+        for line in self._export_lines("claude-alt1"):
             for var in self.GONE:
                 self.assertFalse(line.startswith("export " + var + "="),
-                                 "claude-glm still exports %s: %s" % (var, line))
+                                 "claude-alt1 still exports %s: %s" % (var, line))
 
     def test_ccgpt_usage_is_untouched_by_this_change(self):
         # It answers a DIFFERENT question on a different cadence (telemetry, not
@@ -9435,7 +9435,7 @@ class TestWrappersStoppedDecidingModels(unittest.TestCase):
 ```bash
 cd <monorepo checkout> && python3 infra/handoff/test_ccgpt_proxy.py -v 2>&1 | tail -20
 ```
-Expected: FAIL — `test_ccgpt_exports_no_model_variable` ("ccgpt still exports ANTHROPIC_MODEL"), `test_ccgpt_exports_the_account_id_the_shim_reads`, `test_ccgpt_no_longer_names_a_concrete_model_in_a_default` and `test_claude_glm_exports_no_model_variable`. `test_ccgpt_usage_is_untouched_by_this_change` and the two "keeps" cases pass already, which is what makes them a control.
+Expected: FAIL — `test_ccgpt_exports_no_model_variable` ("ccgpt still exports ANTHROPIC_MODEL"), `test_ccgpt_exports_the_account_id_the_shim_reads`, `test_ccgpt_no_longer_names_a_concrete_model_in_a_default` and `test_claude_alt1_exports_no_model_variable`. `test_ccgpt_usage_is_untouched_by_this_change` and the two "keeps" cases pass already, which is what makes them a control.
 
 - [ ] **Step 3: Edit `infra/handoff/ccgpt`**
 
@@ -9497,7 +9497,7 @@ Expected: `ccgpt parses`. **Do not RUN `ccgpt`** — it would start LiteLLM and 
 ```bash
 cd <monorepo checkout> && python3 infra/handoff/test_ccgpt_proxy.py -v 2>&1 | tail -20
 ```
-Expected: every case in `TestWrappersStoppedDecidingModels` passes except `test_claude_glm_exports_no_model_variable`, which is Task 15's.
+Expected: every case in `TestWrappersStoppedDecidingModels` passes except `test_claude_alt1_exports_no_model_variable`, which is Task 15's.
 
 - [ ] **Step 6: Measured mutation check — the export scan really scans**
 
@@ -9528,30 +9528,30 @@ MSG
 
 ---
 
-## Task 15: `claude-glm` stops deciding models (MONOREPO)
+## Task 15: `claude-alt1` stops deciding models (MONOREPO)
 
 **Files:**
-- Modify: `infra/handoff/claude-glm` (lines 49–57 of the file as measured at `main`)
-- Test: `infra/handoff/test_ccgpt_proxy.py` (`test_claude_glm_exports_no_model_variable`, already written in Task 14)
+- Modify: `infra/handoff/claude-alt1` (lines 49–57 of the file as measured at `main`)
+- Test: `infra/handoff/test_ccgpt_proxy.py` (`test_claude_alt1_exports_no_model_variable`, already written in Task 14)
 
 **Interfaces:**
 - Consumes: nothing new.
 - Produces: a wrapper that keeps its provider switch, its credential handling and its whitelist-proxy lifecycle, and stops exporting the six model variables. §15's decision 1b applies to its effort — the shim maps it only if the backend accepts a reasoning field, which is out of this plan's scope; this task removes the model exports and nothing else.
 
-**Its guard, and where the guard's mutation lives.** The guard is `test_claude_glm_exports_no_model_variable`, written in Task 14 and shown red in Step 1 here. Its measured mutation is Step 5b below — the symmetric twin of Task 14 Step 6, which mutated `ccgpt` and reds `test_ccgpt_exports_no_model_variable`; neither run covers the other wrapper's case, so both are needed.
+**Its guard, and where the guard's mutation lives.** The guard is `test_claude_alt1_exports_no_model_variable`, written in Task 14 and shown red in Step 1 here. Its measured mutation is Step 5b below — the symmetric twin of Task 14 Step 6, which mutated `ccgpt` and reds `test_ccgpt_exports_no_model_variable`; neither run covers the other wrapper's case, so both are needed.
 
 - [ ] **Step 1: Run the one failing case**
 
 ```bash
-cd <monorepo checkout> && python3 -m unittest infra.handoff.test_ccgpt_proxy.TestWrappersStoppedDecidingModels.test_claude_glm_exports_no_model_variable -v 2>&1 | tail -5
+cd <monorepo checkout> && python3 -m unittest infra.handoff.test_ccgpt_proxy.TestWrappersStoppedDecidingModels.test_claude_alt1_exports_no_model_variable -v 2>&1 | tail -5
 ```
 If the dotted path does not import (the directory is not a package), use:
 ```bash
-cd <monorepo checkout> && python3 infra/handoff/test_ccgpt_proxy.py TestWrappersStoppedDecidingModels.test_claude_glm_exports_no_model_variable -v 2>&1 | tail -5
+cd <monorepo checkout> && python3 infra/handoff/test_ccgpt_proxy.py TestWrappersStoppedDecidingModels.test_claude_alt1_exports_no_model_variable -v 2>&1 | tail -5
 ```
-Expected: FAIL — "claude-glm still exports ANTHROPIC_MODEL: export ANTHROPIC_MODEL=\"$model\"".
+Expected: FAIL — "claude-alt1 still exports ANTHROPIC_MODEL: export ANTHROPIC_MODEL=\"$model\"".
 
-- [ ] **Step 2: Edit `infra/handoff/claude-glm`**
+- [ ] **Step 2: Edit `infra/handoff/claude-alt1`**
 
 Replace lines 49–59, not 49–57 (the two `export ANTHROPIC_MODEL`/`ANTHROPIC_SMALL_FAST_MODEL` lines, the three-line "Remap ALL Claude aliases" comment and the four alias exports, plus the two existing `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`/`DISABLE_TELEMETRY` exports at the old 58–59 — same reason as Task 14: the replacement block below ends with its own copies of those same two exports, and stopping the replace at :57 would leave the old pair standing beside them; 5f8815f) with:
 
@@ -9566,7 +9566,7 @@ Replace lines 49–59, not 49–57 (the two `export ANTHROPIC_MODEL`/`ANTHROPIC_
 # beats a shell export for the same variable (probed 2026-09-08), so these
 # exports were already dead.
 #
-# So a `claude-glm` lane MUST be declared and classified before it is used:
+# So a `claude-alt1` lane MUST be declared and classified before it is used:
 #     ccrc models <id> init compatible     # or openrouter
 #     ccrc models <id> set-class sonnet <modelId>
 # An unclassified lane gets `ccrc-unavailable-<class>` sentinels rather than a
@@ -9586,9 +9586,9 @@ Note the `model=`/`small=` assignments inside the `case` (lines 38–46) are NOT
 - [ ] **Step 3: Check it parses and the variables are still assigned**
 
 ```bash
-cd <monorepo checkout> && bash -n infra/handoff/claude-glm && grep -n 'model=\|small=' infra/handoff/claude-glm
+cd <monorepo checkout> && bash -n infra/handoff/claude-alt1 && grep -n 'model=\|small=' infra/handoff/claude-alt1
 ```
-Expected: no output from `bash -n`, then four assignment lines (two per `case` arm). **Do not RUN `claude-glm`.**
+Expected: no output from `bash -n`, then four assignment lines (two per `case` arm). **Do not RUN `claude-alt1`.**
 
 - [ ] **Step 4: Run the tests**
 
@@ -9600,27 +9600,27 @@ Expected: `OK`, all cases.
 - [ ] **Step 5: Confirm shellcheck-clean unused variables are intentional**
 
 ```bash
-cd <monorepo checkout> && command -v shellcheck >/dev/null && shellcheck -S warning infra/handoff/claude-glm || echo "shellcheck not installed — skipping"
+cd <monorepo checkout> && command -v shellcheck >/dev/null && shellcheck -S warning infra/handoff/claude-alt1 || echo "shellcheck not installed — skipping"
 ```
 Expected: either `shellcheck not installed — skipping`, or SC2034 ("model appears unused") on the four assignments. That warning is EXPECTED and is what the comment added in Step 2 answers: the values document which backend the lane talks to. Do not silence it by deleting the assignments — deleting them would remove the only place a reader learns the provider switch's outcome. If the repo gates on shellcheck, add `# shellcheck disable=SC2034` immediately above each `case` arm with the same one-line reason.
 
-- [ ] **Step 5b: Measured mutation check — the scan really scans `claude-glm`**
+- [ ] **Step 5b: Measured mutation check — the scan really scans `claude-alt1`**
 
 Add one export back at the end of the block Step 2 emptied:
 
 ```bash
 cd <monorepo checkout>
-printf 'export ANTHROPIC_DEFAULT_OPUS_MODEL="$model"\n' >> infra/handoff/claude-glm
+printf 'export ANTHROPIC_DEFAULT_OPUS_MODEL="$model"\n' >> infra/handoff/claude-alt1
 python3 -m unittest infra.handoff.test_ccgpt_proxy -v 2>&1 | tail -5
 ```
-Expected: exactly ONE case red — `test_claude_glm_exports_no_model_variable`, its message naming `ANTHROPIC_DEFAULT_OPUS_MODEL` and the line it sits on. `test_ccgpt_exports_no_model_variable` stays green, which is the half that proves the two wrappers' cases are independent and that Task 14 Step 6 did not already cover this one.
+Expected: exactly ONE case red — `test_claude_alt1_exports_no_model_variable`, its message naming `ANTHROPIC_DEFAULT_OPUS_MODEL` and the line it sits on. `test_ccgpt_exports_no_model_variable` stays green, which is the half that proves the two wrappers' cases are independent and that Task 14 Step 6 did not already cover this one.
 
 Restore, and re-measure:
 
 ```bash
 cd <monorepo checkout>
-sed -i '$d' infra/handoff/claude-glm
-git diff --stat infra/handoff/claude-glm
+sed -i '$d' infra/handoff/claude-alt1
+git diff --stat infra/handoff/claude-alt1
 python3 -m unittest infra.handoff.test_ccgpt_proxy -v 2>&1 | tail -5
 ```
 Expected: the `git diff --stat` shows only Step 2's own deletions, and the run is `OK` again.
@@ -9629,9 +9629,9 @@ Expected: the `git diff --stat` shows only Step 2's own deletions, and the run i
 
 ```bash
 cd <monorepo checkout>
-git add infra/handoff/claude-glm
+git add infra/handoff/claude-alt1
 git commit -m "$(cat <<'MSG'
-feat(handoff): claude-glm stops remapping the aliases, and says where the mapping went
+feat(handoff): claude-alt1 stops remapping the aliases, and says where the mapping went
 
 The reason the remap existed is unchanged — a project agent pinned to
 `model: opus` would otherwise request a real Claude model through the gateway at
@@ -9662,14 +9662,14 @@ MSG
 ## Task 16: Stage the deployed copies, and measure exactly what will change (MONOREPO)
 
 **Files:**
-- Read only: `~/.local/bin/ccgpt`, `~/.local/bin/ccgpt-proxy`, `~/.local/bin/claude-glm`, `~/.local/bin/ccgpt-usage`, `~/.handoff/litellm-config.yaml`
-- Create: `/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/handoff-staging/` (three staged files and one diff transcript)
+- Read only: `~/.local/bin/ccgpt`, `~/.local/bin/ccgpt-proxy`, `~/.local/bin/claude-alt1`, `~/.local/bin/ccgpt-usage`, `~/.handoff/litellm-config.yaml`
+- Create: `<scratchpad>/handoff-staging/` (three staged files and one diff transcript)
 
 **Interfaces:**
 - Consumes: the three edited monorepo files (Tasks 13–15).
 - Produces: a measured, reviewable statement of what installing them would change, and the exact `install`/`cmp` commands Task 17's runbook runs **after** the seed. Nothing under `~/.local/bin` or `~/.handoff` is written by this task.
 
-**No guard, so no mutation step.** This task writes no code and adds no assertion: it `diff`s and stages, and every command below is a measurement whose output IS the deliverable. The guards that keep the staged bytes honest are the two export scans, each already mutated where it was written — `ccgpt`'s at Task 14 Step 6, `claude-glm`'s at Task 15 Step 5b.
+**No guard, so no mutation step.** This task writes no code and adds no assertion: it `diff`s and stages, and every command below is a measurement whose output IS the deliverable. The guards that keep the staged bytes honest are the two export scans, each already mutated where it was written — `ccgpt`'s at Task 14 Step 6, `claude-alt1`'s at Task 15 Step 5b.
 
 **Why this task installs nothing.** §13.3: the wrappers lose their exports "in the same change set as the block lands on the boxes, never earlier". The block lands when an operator runs `ccrc models gpt init codex` against the live roster — which this plan may not do (Global Constraints: no `ccrc` against the real HOME, and the migration happens after merge). Installing the new `ccgpt` before that seed would leave the gpt lane with no model at all: no exports, and no `env` block to replace them. So this task stages and measures; Task 17's runbook installs, in the order that keeps the lane alive.
 
@@ -9677,22 +9677,22 @@ MSG
 
 ```bash
 cd <monorepo checkout>
-for f in ccgpt ccgpt-proxy claude-glm ccgpt-usage; do
+for f in ccgpt ccgpt-proxy claude-alt1 ccgpt-usage; do
   printf '%s: ' "$f"
   if diff -q ~/.local/bin/$f <(git show main:infra/handoff/$f) >/dev/null; then echo "matches main"; else echo "DRIFTED"; fi
 done
 diff -q ~/.handoff/litellm-config.yaml <(git show main:infra/handoff/litellm-config.yaml) >/dev/null \
   && echo "litellm-config.yaml: matches main" || echo "litellm-config.yaml: DRIFTED"
 ```
-Expected (re-measured 2026-09-08, dispatch notes v2, a9a2416): `ccgpt-proxy`, `claude-glm` and `ccgpt-usage` print `matches main`; `ccgpt` and `litellm-config.yaml` print `DRIFTED` — a peer session hand-edited both, same day, with a dated rationale (a `gpt-6-astra`/`fable` fourth tier, a measured ~196k usable-context wall against an advertised 872k, and a compaction-timeout fix). This is EXPECTED, not a STOP: `ccgpt`'s drift is exactly the peer's edit (confirmed by diff, Appendix of task-16-report.md) and the branch has already absorbed the part that matters — Task 16a ported the TIMEOUTS block (`API_TIMEOUT_MS`/`CLAUDE_CODE_MAX_RETRIES`) into `infra/handoff/ccgpt`, byte-identical to the box's copy. `litellm-config.yaml` stays drifted on the box until R7 of the runbook regenerates it (backing the hand-edited bytes up to `.prev` first) — this task does not touch it. A `DRIFTED` line on any of the other THREE files (`ccgpt-proxy`, `claude-glm`, `ccgpt-usage`) is still a STOP: report which, with the diff — the runbook's install would silently destroy an edit nothing here expects.
+Expected (re-measured 2026-09-08, dispatch notes v2, a9a2416): `ccgpt-proxy`, `claude-alt1` and `ccgpt-usage` print `matches main`; `ccgpt` and `litellm-config.yaml` print `DRIFTED` — a peer session hand-edited both, same day, with a dated rationale (a `gpt-6-astra`/`fable` fourth tier, a measured ~196k usable-context wall against an advertised 872k, and a compaction-timeout fix). This is EXPECTED, not a STOP: `ccgpt`'s drift is exactly the peer's edit (confirmed by diff, Appendix of task-16-report.md) and the branch has already absorbed the part that matters — Task 16a ported the TIMEOUTS block (`API_TIMEOUT_MS`/`CLAUDE_CODE_MAX_RETRIES`) into `infra/handoff/ccgpt`, byte-identical to the box's copy. `litellm-config.yaml` stays drifted on the box until R7 of the runbook regenerates it (backing the hand-edited bytes up to `.prev` first) — this task does not touch it. A `DRIFTED` line on any of the other THREE files (`ccgpt-proxy`, `claude-alt1`, `ccgpt-usage`) is still a STOP: report which, with the diff — the runbook's install would silently destroy an edit nothing here expects.
 
 - [ ] **Step 2: Stage the three files this branch changes**
 
 ```bash
-STAGE=/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/handoff-staging
+STAGE=<scratchpad>/handoff-staging
 mkdir -p "$STAGE"
 cd <monorepo checkout>
-for f in ccgpt ccgpt-proxy claude-glm; do install -m 755 infra/handoff/$f "$STAGE/$f"; done
+for f in ccgpt ccgpt-proxy claude-alt1; do install -m 755 infra/handoff/$f "$STAGE/$f"; done
 ls -l "$STAGE"
 ```
 Expected: three files, mode `-rwxr-xr-x`.
@@ -9701,7 +9701,7 @@ Expected: three files, mode `-rwxr-xr-x`.
 
 ```bash
 cd <monorepo checkout>
-for f in ccgpt ccgpt-proxy claude-glm; do cmp "$STAGE/$f" infra/handoff/$f && echo "$f: identical to the branch"; done
+for f in ccgpt ccgpt-proxy claude-alt1; do cmp "$STAGE/$f" infra/handoff/$f && echo "$f: identical to the branch"; done
 ```
 Expected: three `identical to the branch` lines, no `cmp` output.
 
@@ -9709,13 +9709,13 @@ Expected: three `identical to the branch` lines, no `cmp` output.
 
 ```bash
 cd <monorepo checkout>
-{ for f in ccgpt ccgpt-proxy claude-glm; do
+{ for f in ccgpt ccgpt-proxy claude-alt1; do
     echo "=== ~/.local/bin/$f ==="
     diff -u ~/.local/bin/$f "$STAGE/$f" || true
   done; } | tee "$STAGE/pending-install.diff" | tail -40
 wc -l "$STAGE/pending-install.diff"
 ```
-Expected (dispatch notes v2, re-measured a9a2416; diffed against the DRIFTED box copy of `ccgpt`, so its diff also carries the peer's edit going the other way): a unified diff showing exactly three changes — `ccgpt-proxy` gains `EFFORT_LEVELS`/`_effort_path`/`_effort_cache`/`_effort_map`/`_base_model`/`_apply_effort`/`_rewrite_messages_body` (folds `system`, applies effort, pops `thinking` alongside `output_config`) and the relay's inline body-rewrite is replaced by a call to it; `ccgpt` loses the six model exports AND the box's `ANTHROPIC_DEFAULT_FABLE_MODEL`/`fable=` addition and paragraph (present on the box, absent from the branch's staged file — Task 16a ported only the TIMEOUTS block, not the fourth-tier wiring), gains `CCGPT_ACCOUNT_ID` with a comment on why it is exported before the file's `nohup` calls (a nohup'd child only inherits what is exported by fork time), and carries the catalogue/`[1m]` paragraph reworded to the same substance in different words; `claude-glm` loses six exports. The TIMEOUTS block (`API_TIMEOUT_MS`/`CLAUDE_CODE_MAX_RETRIES`, 23 lines) is IDENTICAL on both sides of the diff — Task 16a already ported it — and must not appear as a change. Nothing else. Read the whole diff before continuing.
+Expected (dispatch notes v2, re-measured a9a2416; diffed against the DRIFTED box copy of `ccgpt`, so its diff also carries the peer's edit going the other way): a unified diff showing exactly three changes — `ccgpt-proxy` gains `EFFORT_LEVELS`/`_effort_path`/`_effort_cache`/`_effort_map`/`_base_model`/`_apply_effort`/`_rewrite_messages_body` (folds `system`, applies effort, pops `thinking` alongside `output_config`) and the relay's inline body-rewrite is replaced by a call to it; `ccgpt` loses the six model exports AND the box's `ANTHROPIC_DEFAULT_FABLE_MODEL`/`fable=` addition and paragraph (present on the box, absent from the branch's staged file — Task 16a ported only the TIMEOUTS block, not the fourth-tier wiring), gains `CCGPT_ACCOUNT_ID` with a comment on why it is exported before the file's `nohup` calls (a nohup'd child only inherits what is exported by fork time), and carries the catalogue/`[1m]` paragraph reworded to the same substance in different words; `claude-alt1` loses six exports. The TIMEOUTS block (`API_TIMEOUT_MS`/`CLAUDE_CODE_MAX_RETRIES`, 23 lines) is IDENTICAL on both sides of the diff — Task 16a already ported it — and must not appear as a change. Nothing else. Read the whole diff before continuing.
 
 - [ ] **Step 5: Assert the diff touches no credential, endpoint or lifecycle line**
 
@@ -9742,7 +9742,7 @@ Create `infra/handoff/INSTALL-model-class-registry.md` (landed content, AMENDED 
 
 These three files are copied by hand — there is no deploy lane for
 `infra/handoff/`. **The ORDER below is not a suggestion:** `ccgpt` and
-`claude-glm` stop exporting the model variables, and until the lane's own
+`claude-alt1` stop exporting the model variables, and until the lane's own
 `settings.json` carries ccrc's materialised `env` block there is nothing to
 replace them with. Installing them early leaves the lane with no model at all.
 
@@ -9786,9 +9786,9 @@ Run these on each box that has `~/.local/bin/ccgpt`, from a checkout of
    diff -u ~/.local/bin/ccgpt infra/handoff/ccgpt
    install -m 755 infra/handoff/ccgpt ~/.local/bin/ccgpt
    cmp ~/.local/bin/ccgpt infra/handoff/ccgpt && echo installed
-   diff -u ~/.local/bin/claude-glm infra/handoff/claude-glm
-   install -m 755 infra/handoff/claude-glm ~/.local/bin/claude-glm
-   cmp ~/.local/bin/claude-glm infra/handoff/claude-glm && echo installed
+   diff -u ~/.local/bin/claude-alt1 infra/handoff/claude-alt1
+   install -m 755 infra/handoff/claude-alt1 ~/.local/bin/claude-alt1
+   cmp ~/.local/bin/claude-alt1 infra/handoff/claude-alt1 && echo installed
    ```
    `API_TIMEOUT_MS` and `CLAUDE_CODE_MAX_RETRIES` are not among the keys the
    class registry materialises (the seven mandatory ones, plus the
@@ -9811,7 +9811,7 @@ files this task copies, and nothing here overwrites it a second time.
 **A wrapper-only rollback does not restore pre-migration model selection.**
 Once `~/.claude-gpt/settings.json` carries the materialised `env` block, that
 block beats a shell export for the same variable (probed 2026-09-08) —
-reverting `ccgpt`/`claude-glm` to their pre-migration bytes brings the old
+reverting `ccgpt`/`claude-alt1` to their pre-migration bytes brings the old
 exports back, but the block still wins, so the lane keeps routing whatever
 the registry says. To actually change what the lane routes: either edit the
 registry (`ccrc models gpt set-class <class> <modelId|none>`, which
@@ -9830,13 +9830,13 @@ git add infra/handoff/INSTALL-model-class-registry.md
 git commit -m "$(cat <<'MSG'
 docs(handoff): the install order, because the wrappers must go last
 
-ccgpt and claude-glm stop exporting the model variables, and until the lane's own
+ccgpt and claude-alt1 stop exporting the model variables, and until the lane's own
 settings.json carries ccrc's materialised env block there is nothing to replace
 them with — installing them early leaves the lane with no model at all. The shim
 is safe first: with no effort file it sets no reasoning field.
 
 Staged and diffed against the deployed copies; nothing installed. The diff was
-taken against the LIVE bytes on this box: ccgpt-proxy and claude-glm match main
+taken against the LIVE bytes on this box: ccgpt-proxy and claude-alt1 match main
 byte for byte, but ccgpt carries the box's own 2026-09-08 timeout/catalogue edit,
 which the branch absorbed in Task 16a — so the recorded diff, against those live
 bytes, is still the whole change an install would make.
@@ -9874,7 +9874,7 @@ Expected (measured 2a17fe5d, not the original four): SEVEN commits, not four —
 - [ ] **Step 1: Copy the plan and the spec into the implementation worktree**
 
 ```bash
-S=/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad
+S=<scratchpad>
 mkdir -p "$S/mcr-impl/docs/superpowers/plans" "$S/mcr-impl/docs/superpowers/specs"
 for f in 1-registry-probes-materialiser 2-ccd-class-carry 3a-surfaces 3b-swapsheet; do
   cp "$S/mcr/docs/superpowers/plans/2026-09-08-model-class-registry-$f.md" \
@@ -9892,7 +9892,7 @@ The spec travels too, so every plan's `§`-citations resolve inside the branch, 
 - [ ] **Step 2: Verify the copied plan is the one this branch implements**
 
 ```bash
-S=/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad
+S=<scratchpad>
 P="$S/mcr-impl/docs/superpowers/plans/2026-09-08-model-class-registry-1-registry-probes-materialiser.md"
 grep -c "OPERATOR RUNBOOK" "$P"
 grep -c "d3048253" "$P"
@@ -9915,7 +9915,7 @@ Expected: `1`, `1`, a `: 1` line for each of the four plans, then `clean`. If th
 - [ ] **Step 3: Commit**
 
 ```bash
-cd /tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad/mcr-impl
+cd <scratchpad>/mcr-impl
 git add docs/superpowers/plans/2026-09-08-model-class-registry-1-registry-probes-materialiser.md \
         docs/superpowers/plans/2026-09-08-model-class-registry-2-ccd-class-carry.md \
         docs/superpowers/plans/2026-09-08-model-class-registry-3a-surfaces.md \
@@ -9935,7 +9935,7 @@ MSG
 - [ ] **Step 4: Final gate — the whole suite, all three packages, one more time**
 
 ```bash
-S=/tmp/claude-1000/-mnt-HC-Volume-105751470-projects-OpenClawHetzner/fd959665-5e5f-424f-89b3-be8b37bda191/scratchpad
+S=<scratchpad>
 cd "$S/mcr-impl/server" && npx vitest run
 cd "$S/mcr-impl/agent" && npx vitest run
 cd "$S/mcr-impl/pwa" && npx vitest run

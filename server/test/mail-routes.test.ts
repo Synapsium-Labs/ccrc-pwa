@@ -31,8 +31,10 @@ import { isDelegationCheckpointKebab } from '../src/coord/delegation-checkpoint.
 import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
+import { isDriftKind } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isCollectLaneKebab } from '../src/collectLane.js';
+import { isNoticeMode } from '../src/notice.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -628,6 +630,9 @@ describe('the rejection table is total, in both directions', () => {
       // Task 9 (`coord/routes.ts`'s run routes) — a SEPARATE `refused`/
       // `reject.code` vocabulary for `POST /api/runs*`, now typed as
       // `RunRefuseCode` above and so no longer hand-allowlisted here.
+      'non-terminal',        // coord/store.ts — a `writeDeliveries` guard name (D-5997).
+                             // NOT a wire code: the one delivery writer's private
+                             // guard selector, never answered over a route.
       'no-refs',              // coord/ledgerseed.ts — a `FloorMeasurement.why`
                                // (wave 2, F2). NOT a wire code: the allocator's
                                // refusal stays `not-seeded`, and this only
@@ -642,10 +647,21 @@ describe('the rejection table is total, in both directions', () => {
       'reclaim-paused',       // $REG marker filename, not a code (child-reclamation wave 4)
       'bad-request',          // the generic body-shape refusal server.ts
                                // already uses throughout; not a mail code
+      'bad-session-id',       // the request-id refusal server.ts's session routes
+                               // answer (400 in shared/refusal.ts's table); since
+                               // path identity's landing round 3, coord/routes.ts
+                               // and coord/openRun.ts answer it too, for a request
+                               // id that is not a registry id. Not a mail code,
+                               // and not a run refusal.
       'not-found',            // GET /api/mail/:id's generic 404 for an
                                // unknown delivery id; not a mail reject code
                                // (nothing was ever rejected — it never existed)
       'wave-brief',           // mail SUBJECT text (dispatch's own brief)
+      'brief-retry',          // a `run_events.detail` (D-5841, `coord/briefwatch.ts`): the
+                              // brief watch's one retry row, not a mail or run refusal
+      'brief-not-taken',      // the same file's notice row, and the push tag's stem
+      'draft-present',        // a `SendResult` error (`inject/send.ts`), the `enter-ignored`
+                              // shape: `briefwatch.ts`'s refusal words key on it
       'wave-done-rejected',   // mail SUBJECT text (close's own rejection)
       'wave-advance-rejected', // mail SUBJECT text (advance's own rejection, review findings 1/15)
       'review-done-rejected', // mail SUBJECT text (the review close's own rejection, design 2026-09-14)
@@ -745,6 +761,14 @@ describe('the rejection table is total, in both directions', () => {
                                   // every sweep after the first. Nothing is declined,
                                   // nothing switches on it over the wire. Its siblings
                                   // `rekeyed` and `superseded` are one word each.
+      'bad-id',                  // path identity W1a (spec §2.3) — `SingleRead`'s
+                                  // word (registry.ts), switched on by the
+                                  // `readSessionRecord` callers in this directory.
+                                  // A READ RESULT, never a code: no refusal, no
+                                  // `error`/`refused`/`reject.code` and no wire
+                                  // field ever carries it. Each caller maps it to
+                                  // a word of its own (`bad-session`,
+                                  // `spent-unmeasured`, `marker-unreadable`).
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
@@ -912,8 +936,17 @@ describe('the rejection table is total, in both directions', () => {
         // read's reasons as literals. None is a mail rejection or a run refusal: they ride a verdict and a log line,
         // never a `refused` or `reject.code`. Admitted through the exported guard, derived from that file's tables,
         // never NOT_CODES, for the reason every union above gives.
-        || isHibernateKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal or hibernation word`).toBe(true);
+        || isHibernateKebab(tok)
+        // DRIFT (D-5921, plan Task DT1): the next union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/drift.ts` keys its findings by the seven drift kinds, spelled there as
+        // literals. None is a mail rejection or a run refusal: a kind names a finding, never a `refused` or
+        // `reject.code`. Admitted through L0's own guard, derived from `DRIFT_KIND_MAP`, never NOT_CODES.
+        || isDriftKind(tok)
+        // THE NOTIFY FUNNEL (D-5858): `coord/routes.ts`'s five feed writers name their notice mode as a literal
+        // (`'record-only'`). A mode is a ring/push gate, never a mail rejection or a run refusal. Admitted through
+        // `notice.ts`'s exported guard, derived from `NOTICE_MODES`, never NOT_CODES.
+        || isNoticeMode(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind or notice mode`).toBe(true);
     }
   });
 });

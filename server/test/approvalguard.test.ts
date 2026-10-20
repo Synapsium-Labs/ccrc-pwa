@@ -177,7 +177,8 @@ describe('bounded cost (D-5299)', () => {
 
   it('every forbidden pattern is linear: a 256 KB adversarial line is matched in under 250 ms', () => {
     const big = (unit: string): string => unit.repeat(Math.floor((256 * 1024) / unit.length));
-    const units = [' x>', 'cat ', 'rm ', 'kill ', 'systemctl ', 'ccd ws-gc a ', 'ccd -a ', 'sed -a ', 'perl -a ', 'tee '];
+    const units = [' x>', 'cat ', 'rm ', 'kill ', 'systemctl ', 'ccd ws-gc a ', 'ccd -a ', 'sed -a ', 'perl -a ', 'tee ',
+      '/api/sessions/a', '/api/sessions/"a"/workflows/b', '/api/sessions/a/workflows/b/contro'];
     for (const p of FORBIDDEN_PATTERNS) {
       for (const u of units) {
         const t0 = performance.now();
@@ -243,5 +244,93 @@ describe("zsh's own parameters (D-5360 round 7)", () => {
 
   it('every zsh startup and documented name, and the ZSH_ family, is refused as a user variable', () => {
     for (const n of [...ZSH_STARTUP_VARIABLES, ...ZSH_DOCUMENTED_VARIABLES, 'ZSH_FOO', 'ZLE_RPROMPT_INDENT']) expect(isUserVariable(n), n).toBe(false);
+  });
+});
+
+// D-5696 (spec §7.6): rolling, installing and selecting a Claude Code build are the operator's acts or ccrc's own,
+// never a session's. `ccd roll` and the operator's `ccd claude …` verbs are forbidden (under default-escalate a child's
+// `ccd roll` is a deny, not an approvable prompt), and so is a write into the build directory or onto the launcher.
+// Account switching is not touched (operator ruling 2026-10-19): `ccd swap` stays exactly what it was.
+describe('who may roll, install or select a build (D-5696)', () => {
+  it('a child\'s `ccd roll <id> --to <build> --expect <t>` is forbidden, in every spelling the verb list reaches', () => {
+    for (const c of ['ccd roll project-a-calm-mesa --to 2.1.302 --expect t', '~/.local/bin/ccd roll project-a-calm-mesa', 'ccd --json roll x']) {
+      expect(bash(c), c).toBe('forbidden');
+    }
+  });
+  it('a child\'s `ccd claude roll-live on` (an operator switch verb) is forbidden', () => {
+    for (const c of ['ccd claude roll-live on', 'ccd claude self-update keep', 'cd x && ccd claude mode off']) expect(bash(c), c).toBe('forbidden');
+  });
+  it('a write into ~/.local/share/claude/versions/ is forbidden, by Bash and by an edit tool', () => {
+    for (const c of [
+      'cp /tmp/x ~/.local/share/claude/versions/2.1.302', 'mv build/claude "$HOME/.local/share/claude/versions/2.1.302"',
+      'ln -sf /tmp/x /rig/home/.local/share/claude/versions/2.1.302', 'echo x > ~/.local/share/claude/versions/2.1.302',
+      'rm -f ~/.local/share/claude/versions/2.1.296', 'truncate -s 0 ~/.local/share/claude/versions/2.1.302',
+    ]) expect(bash(c), c).toBe('forbidden');
+    expect(approvalClass('Write', { file_path: `${HOME}/.local/share/claude/versions/2.1.302`, content: 'x' }, ctxFor({ cwd: WT }))).toBe('forbidden');
+    expect(approvalClass('Edit', { file_path: `${HOME}/.local/share/claude/versions`, old_string: 'a', new_string: 'b' }, ctxFor({ cwd: WT }))).toBe('forbidden');
+  });
+  it('reading the build directory is not newly forbidden (the rule is about writes)', () => {
+    expect(bash('ls ~/.local/share/claude/versions')).not.toBe('forbidden');
+    expect(bash('ls ~/.local/share/claude/versions > build/list.txt')).not.toBe('forbidden');
+  });
+  it('a write onto the launcher is forbidden; a write to ~/.local/bin/ccd or a generated wrapper is not newly forbidden', () => {
+    for (const c of ['cp /tmp/x ~/.local/bin/claude', 'ln -sf /tmp/x "$HOME/.local/bin/claude"', 'echo x > /rig/home/.local/bin/claude']) {
+      expect(bash(c), c).toBe('forbidden');
+    }
+    expect(approvalClass('Write', { file_path: `${HOME}/.local/bin/claude`, content: 'x' }, ctxFor({ cwd: WT }))).toBe('forbidden');
+    for (const c of ['cp /tmp/x ~/.local/bin/ccd', 'cp /tmp/x ~/.local/bin/claude-a', 'cp /tmp/x ~/.local/bin/claude.bak']) {
+      expect(bash(c), c).not.toBe('forbidden');
+    }
+    expect(approvalClass('Write', { file_path: `${HOME}/.local/bin/ccd`, content: 'x' }, ctxFor({ cwd: WT }))).not.toBe('forbidden');
+  });
+  it('a sibling of the build directory (versions-old) is not newly forbidden: the directory name ends where it ends', () => {
+    expect(bash('cp /tmp/x ~/.local/share/claude/versions-old/2.1.302')).not.toBe('forbidden');
+    expect(bash('cp /tmp/x ~/.local/share/claude/versions.bak')).not.toBe('forbidden');
+    expect(approvalClass('Write', { file_path: `${HOME}/.local/share/claude/versions-old/x`, content: 'x' }, ctxFor({ cwd: WT }))).not.toBe('forbidden');
+  });
+  it('~/.ccrc/claude-intent and $REG/claude-roll-live writes are already forbidden by the registry-path pattern', () => {
+    for (const c of ['echo x > ~/.ccrc/claude-intent', 'touch ~/.cc-sessions/claude-roll-live']) {
+      expect(bash(c), c).toBe('forbidden');
+      expect(FORBIDDEN_PATTERNS.filter((p) => p.test(c)).map((p) => p.why), c).toContain('a registry path');
+    }
+  });
+  it('`ccd swap` and the account verbs are unchanged by this rule (the 2026-10-19 ruling)', () => {
+    for (const c of ['ccd swap project-a-calm-mesa claude-a', 'ccd swap-self claude-a']) {
+      expect(FORBIDDEN_PATTERNS.filter((p) => p.test(c)).map((p) => p.why), c).toEqual([]);
+    }
+  });
+});
+
+// D-5936 (spec 2026-10-20 §4.5): the workflow control verb is the operator's. The classifier forbids any Bash or MCP
+// request naming its path, in every spelling a shell builds it in; the auth gate is the wall for any other tool.
+describe('the workflow control verb is operator-only (D-5936)', () => {
+  it('a `curl` naming the path is `forbidden`', () => {
+    expect(bash('curl -sS -X POST "$API_URL"/api/sessions/project-a/workflows/wf_fixture01/control')).toBe('forbidden');
+    expect(FORBIDDEN_PATTERNS.filter((p) => p.test('curl -X POST /api/sessions/project-a/workflows/wf_fixture01/control')).map((p) => p.why))
+      .toEqual(['a workflow control']);
+  });
+  it('a path with a variable for the id is `forbidden`', () => {
+    for (const c of [
+      'curl -X POST "$API_URL/api/sessions/$ID/workflows/wf_fixture01/control"',
+      'curl -X POST "$API_URL/api/sessions/${ID}/workflows/${RUN}/control" -d \'{"act":"stop-run"}\'',
+    ]) expect(bash(c), c).toBe('forbidden');
+  });
+  it('a quote-split path (`"$API/api/sessions/$ID/workflows/$RUN"/control`) is `forbidden`', () => {
+    for (const c of [
+      'curl -X POST "$API/api/sessions/$ID/workflows/$RUN"/control',
+      'curl -X POST "$API/api/sessions/"$ID"/workflows/"$RUN"/control"',
+      "curl -X POST '/api/sessions/'project-a'/workflows/'wf_fixture01'/control'",
+    ]) expect(bash(c), c).toBe('forbidden');
+  });
+  it('an MCP call naming the path in a string leaf is `forbidden`', () => {
+    expect(approvalClass('mcp__x__fetch', { url: 'http://h/api/sessions/project-a/workflows/wf_fixture01/control', method: 'POST' },
+      ctxFor({ cwd: WT }))).toBe('forbidden');
+  });
+  it('a read of `shared/workflows.ts` is unchanged, and so is the read-only workflows path', () => {
+    for (const c of ['cat shared/workflows.ts', 'grep -n control shared/workflows.ts', 'curl -sS "$API/api/sessions/project-a/workflows"',
+      'curl -sS "$API/api/sessions/project-a/workflows/wf_fixture01/controls"']) {
+      expect(FORBIDDEN_PATTERNS.filter((p) => p.test(c)).map((p) => p.why), c).toEqual([]);
+    }
+    expect(approvalClass('Read', { file_path: `${WT}/shared/workflows.ts` }, ctxFor({ cwd: WT }))).not.toBe('forbidden');
   });
 });

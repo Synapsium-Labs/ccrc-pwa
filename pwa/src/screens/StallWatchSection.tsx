@@ -1,8 +1,8 @@
 // The Settings screen's Stall watch section (stall watch settings, design 2026-10-05 §13; programme
 // stall-watch-settings W2 Task 3). What the watch does now, the next step up its ladder, the level and quiet-time
-// controls, and the notice counts, over the section's OWN read of GET /api/coord/stall-watch (`useStallWatchView`,
-// beside the screen's one /api/updates poll that the other three sections share: Updates, the Box token card and
-// Notifications).
+// controls, and the notice counts, over the Settings frame's one read of GET /api/coord/stall-watch (`useStallWatchView`, made in
+// `settings/SettingsDataProvider.tsx` and handed in as `poll` since settings Task R2b1, D-5504, so the index's status
+// line and this section never read it twice).
 //
 // Four rules this file keeps, each pinned in settings-screen.test.tsx:
 //   * NOT AVAILABLE WINS. A 501 not-configured, or the 404 not-found an older server answers, replaces the whole
@@ -40,13 +40,13 @@ import {
   QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Select, Skeleton,
 } from '@ccrc/ui';
 import {
-  asStallWatchView, stallWriteRefusal, useStallWatchView, type StallWatchPoll,
+  asStallWatchView, stallWriteRefusal, type StallWatchPoll,
 } from '../fleet/useStallWatchView';
 import { api } from '../lib/api';
 import {
   ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_NOW_CLASS, STALL_LEVEL_NOTE, STALL_WORDS, UNCONFIRMED_TEXT, focusLeaves,
   optionNote, setLead, stallQuietBoundsText, useResultLine,
-} from './settingsText';
+} from '../fleet/settingsText';
 
 /** Fill each `{name}` slot of an L0 text from `slots`. A slot it was not given stays as written; a value is
  *  inserted literally (a replacer function, so a `$` in a server's detail is never a replacement pattern). */
@@ -244,13 +244,12 @@ export function stallConfirmLines(effect: StallWriteEffect, request: StallWatchR
 
 /** The section: its heading, then one of four bodies. Not-configured comes FIRST, before any landed view (§13's one
  *  deliberate difference from the Updates section); "don't know yet" never borrows "nothing there". */
-export function StallWatchSection(): ReactNode {
+export function StallWatchSection({ poll }: { poll: StallWatchPoll }): ReactNode {
   const titleId = useId();
-  const poll = useStallWatchView();
   const { view, failure } = poll;
   return (
     <section className="settings-section" aria-labelledby={titleId}>
-      <h2 id={titleId} className="settings-section-title">{STALL_SECTION_TEXT.title}</h2>
+      <h3 id={titleId} className="settings-section-title">{STALL_SECTION_TEXT.title}</h3>
       {failure === 'not-configured' ? (
         <p className="settings-note">{STALL_NOT_AVAILABLE_TEXT}</p>
       ) : view !== null ? (
@@ -439,9 +438,9 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
       </fieldset>
       {view.notices.ok ? (
         <>
-          <h3 className={RADIO_LEGEND}>
+          <h4 className={RADIO_LEGEND}>
             {fillStallText(STALL_SECTION_TEXT.counts, { window: quietText(view.notices.windowMs) })}
-          </h3>
+          </h4>
           <ul className="settings-note">
             {view.notices.counts.map((c) => <li key={c.row}>{stallCountLine(c)}</li>)}
           </ul>

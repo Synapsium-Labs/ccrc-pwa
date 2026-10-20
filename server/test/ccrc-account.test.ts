@@ -36,6 +36,7 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { PROVIDERS, PROVIDER_IDS } from '../../shared/providers.js';
 import { markGenerated } from '../../shared/mark.mjs';
@@ -2339,6 +2340,9 @@ describe('ccrc account add: the ordered write', () => {
     const home = box('ccrc-account-add-rosterfail-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+    // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+    // verb; without it this case would measure the lock refusing, not the write it is about.
+    mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
     chmodSync(join(home, '.ccrc'), 0o500);
     const r = run(home, addArgs(), `${CANARY}\n`);
     chmodSync(join(home, '.ccrc'), 0o700);
@@ -2357,6 +2361,9 @@ describe('ccrc account add: the ordered write', () => {
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
     plantInstallers(home);
+    // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+    // verb; without it this case would measure the lock refusing, not the write it is about.
+    mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
     chmodSync(join(home, '.ccrc'), 0o500);
     expect(run(home, addArgs(), 'first-token-value\n').code).toBe(1);
     chmodSync(join(home, '.ccrc'), 0o700);
@@ -3574,6 +3581,9 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       plantInstallers(home);
       const marker = join(home, '.cc-sessions', 'lab-dev0-disabled');
       try {
+        // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+        // verb; without it this case would measure the lock refusing, not the write it is about.
+        mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
         chmodSync(join(home, '.ccrc'), 0o500);
         const r = run(home, addArgs(), `${CANARY}\n`);
         expect(r.code, r.stderr).toBe(1);
@@ -3928,7 +3938,7 @@ if [ "$1" = -p ] && [ "$2" = "$HOME/.cc-sessions" ]; then
 fi
 exec /bin/mkdir "$@"
 `, { mode: 0o755 });
-    const pair = spawnSync(BASH, ['-c',
+    const pair = spawnSyncGroup(BASH, ['-c',
       '"$1" account disable --id claude >"$HOME/claude.out" 2>"$HOME/claude.err" & p1=$!\n'
       + '"$1" account disable --id alt-max >"$HOME/alt-max.out" 2>"$HOME/alt-max.err" & p2=$!\n'
       + 'wait "$p1" || :\nwait "$p2" || :\n', '_', ccrcIn(home)],
@@ -4383,6 +4393,9 @@ describe('ccrc account declare: somebody else\'s launcher, and what it refuses',
       seedRosterJson(home, [UPSTREAM]);
       plantLauncher(home, 'lab-dev0');
       const dir = join(home, '.ccrc');
+      // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+      // verb; without it this case would measure the lock refusing, not the write it is about.
+      mkdirSync(join(dir, 'locks'), { recursive: true, mode: 0o700 });
       chmodSync(dir, 0o500);
       try {
         const r = run(home, ['account', 'declare', '--id', 'lab-dev0',
@@ -5925,6 +5938,9 @@ describe('ccrc account remove', () => {
       // rehomed`'s lever: `drop` renames a tmp beside the roster, so an
       // unwritable `~/.ccrc` refuses THERE. The lane directory keeps its own
       // mode, so the lane lock and the stop above the drop still run.
+      // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+      // verb; without it this case would measure the lock refusing, not the write it is about.
+      mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
       chmodSync(join(home, '.ccrc'), 0o500);
       const r = run(home, ['account', 'remove', '--id', 'codex-a']);
       expect(r.code, r.stderr).toBe(1);
@@ -6553,6 +6569,9 @@ describe('ccrc account remove', () => {
     const { link, row, ctl } = seedUsageWait(home, []);   // no word: the stand-in answers inactive, so nothing waits
     try {
       // `drop` renames a tmp beside the roster, so an unwritable `~/.ccrc` refuses THERE: the timer is already disabled.
+      // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+      // verb; without it this case would measure the lock refusing, not the write it is about.
+      mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
       chmodSync(join(home, '.ccrc'), 0o500);
       const r = runWith(home, ctl);
       expect(r.code, r.stderr).toBe(1);
@@ -6772,7 +6791,7 @@ describe('ccrc account remove', () => {
     const fifo = make('ccrc-account-remove-registry-fifo-');
     const made = spawnSync('mkfifo', [field(fifo)], { encoding: 'utf8' });
     expect(made.status, made.stderr).toBe(0);
-    const fr = spawnSync(BASH, [ccrcIn(fifo), 'account', 'remove', '--id', 'alt-max'],
+    const fr = spawnSyncGroup(BASH, [ccrcIn(fifo), 'account', 'remove', '--id', 'alt-max'],
       { env: env(fifo), encoding: 'utf8', timeout: 2_000 });
     expect(fr.error, 'remove blocked while reading a FIFO registry field').toBeUndefined();
     expect(fr.status).toBe(1);
@@ -6852,6 +6871,9 @@ describe('ccrc account remove', () => {
       // `drop` writes a tmp beside the roster and renames it, so an unwritable
       // `~/.ccrc` refuses THERE and nowhere earlier: the rehome and the home
       // sweep have both already happened.
+      // The lane lock's directory (accounts plan Task A11) exists on any box that has run an account
+      // verb; without it this case would measure the lock refusing, not the write it is about.
+      mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true, mode: 0o700 });
       chmodSync(join(home, '.ccrc'), 0o500);
       const r = run(home, ['account', 'remove', '--id', 'alt-max']);
       expect(r.code, r.stderr).toBe(1);
@@ -6955,7 +6977,7 @@ describe('ccrc account remove', () => {
       + 'printf %s alt-max > "$HOME/.cc-sessions/orchard-api.wrapper"\n'
       + 'flock -u 9\n'
       + 'wait "$p"; printf \'%s\' "$?" > "$HOME/remove.status"\n';
-    const pair = spawnSync(BASH, ['-c', script, '_', ccrcIn(home)],
+    const pair = spawnSyncGroup(BASH, ['-c', script, '_', ccrcIn(home)],
       { env: env(home), encoding: 'utf8', timeout: 10_000 });
     expect(pair.error, pair.stderr).toBeUndefined();
     expect(readFileSync(join(home, 'remove.status'), 'utf8')).toBe('1');
@@ -6965,15 +6987,20 @@ describe('ccrc account remove', () => {
     expect(roster.accounts.map((a) => a.id)).toContain('alt-max');
   });
 
-  it('revalidates same-target marker changes queued behind removal', () => {
+  it('refuses a marker change on the lane a removal holds, `lane-busy` (accounts plan Task A11)', () => {
+    // UNTIL TASK A11 the marker verb queued on the placement lock behind the
+    // removal and re-validated the regenerated projection after it (`unknown-id`).
+    // Since A11 one lane takes one act at a time: the removal holds lane
+    // alt-max's lock, so the marker verb on that lane is refused at once, before
+    // it reads anything, and never reaches the placement lock at all. The
+    // re-validation after the placement lock stays, for a removal by a ccrc that
+    // predates the lane lock.
     for (const verb of ['enable', 'disable']) {
       const home = box(`ccrc-account-remove-${verb}-queued-`);
       seedFull(home);
       plantTmux(home, []);
 
-      // Stop removal inside its locked drop. The marker verb validates once,
-      // queues on the same lock, then must validate the regenerated projection
-      // again before touching the removed account's marker.
+      // Stop removal inside its locked drop.
       const deploy = join(home, 'ccrc', 'deploy');
       rmSync(deploy);
       mkdirSync(deploy);
@@ -7000,24 +7027,26 @@ describe('ccrc account remove', () => {
         { encoding: 'utf8' }).stdout.trim();
       writeFileSync(join(home, '.local', 'bin', 'flock'), [
         '#!/bin/sh',
-        'if mkdir "$HOME/flock-first" 2>/dev/null; then :; else : > "$HOME/flock-second"; fi',
+        // Only the BLOCKING call counts: that is the placement lock. The lane lock
+      // (accounts plan Task A11) is `flock -n`, taken first, and is not the
+      // queue this case is about.
+      'case "$1" in -n) ;; *) if mkdir "$HOME/flock-first" 2>/dev/null; then :; else : > "$HOME/flock-second"; fi ;; esac',
         `exec ${JSON.stringify(realFlock)} "$@"`,
       ].join('\n') + '\n', { mode: 0o755 });
 
       const script = `"$1" account remove --id alt-max >"$HOME/remove.out" 2>"$HOME/remove.err" & p1=$!\n`
         + 'while [ ! -e "$HOME/drop-ready" ]; do sleep 0.01; done\n'
-        + `"$1" account ${verb} --id alt-max >"$HOME/marker.out" 2>"$HOME/marker.err" & p2=$!\n`
-        + 'while [ ! -e "$HOME/flock-second" ]; do sleep 0.01; done\n'
+        + `"$1" account ${verb} --id alt-max >"$HOME/marker.out" 2>"$HOME/marker.err"\n`
+        + 'printf \'%s\' "$?" > "$HOME/marker.status"\n'
         + ': > "$HOME/drop-release"\n'
-        + 'wait "$p1"; printf \'%s\' "$?" > "$HOME/remove.status"\n'
-        + 'wait "$p2"; printf \'%s\' "$?" > "$HOME/marker.status"\n';
-      const pair = spawnSync(BASH, ['-c', script, '_', ccrcIn(home)],
+        + 'wait "$p1"; printf \'%s\' "$?" > "$HOME/remove.status"\n';
+      const pair = spawnSyncGroup(BASH, ['-c', script, '_', ccrcIn(home)],
         { env: env(home), encoding: 'utf8', timeout: 10_000 });
       expect(pair.error, pair.stderr).toBeUndefined();
       expect(readFileSync(join(home, 'remove.status'), 'utf8')).toBe('0');
       expect(readFileSync(join(home, 'marker.status'), 'utf8')).toBe('1');
       expect(JSON.parse(readFileSync(join(home, 'marker.out'), 'utf8')))
-        .toMatchObject({ ok: false, error: 'unknown-id' });
+        .toMatchObject({ ok: false, error: 'lane-busy' });
       expect(existsSync(offMarker(home, 'alt-max'))).toBe(false);
     }
   });
@@ -7058,7 +7087,10 @@ describe('ccrc account remove', () => {
       { encoding: 'utf8' }).stdout.trim();
     writeFileSync(join(home, '.local', 'bin', 'flock'), [
       '#!/bin/sh',
-      'if mkdir "$HOME/flock-first" 2>/dev/null; then :; else : > "$HOME/flock-second"; fi',
+      // Only the BLOCKING call counts: that is the placement lock. The lane lock
+      // (accounts plan Task A11) is `flock -n`, taken first, and is not the
+      // queue this case is about.
+      'case "$1" in -n) ;; *) if mkdir "$HOME/flock-first" 2>/dev/null; then :; else : > "$HOME/flock-second"; fi ;; esac',
       `exec ${JSON.stringify(realFlock)} "$@"`,
     ].join('\n') + '\n', { mode: 0o755 });
 
@@ -7069,7 +7101,7 @@ describe('ccrc account remove', () => {
       + ': > "$HOME/drop-release"\n'
       + 'wait "$p1"; printf \'%s\' "$?" > "$HOME/remove.status"\n'
       + 'wait "$p2"; printf \'%s\' "$?" > "$HOME/disable.status"\n';
-    const pair = spawnSync(BASH, ['-c', script, '_', ccrcIn(home)],
+    const pair = spawnSyncGroup(BASH, ['-c', script, '_', ccrcIn(home)],
       { env: env(home), encoding: 'utf8', timeout: 10_000 });
     expect(pair.error, pair.stderr).toBeUndefined();
     expect(readFileSync(join(home, 'remove.status'), 'utf8')).toBe('0');
@@ -7118,7 +7150,7 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
       'cp "$HOME/.ccrc/accounts.json" "$HOME/roster-during.json"',
       'flock -u 9',
     ].join('\n');
-    const r = spawnSync(BASH, ['-c', script, '_', ccrcIn(home), BASH],
+    const r = spawnSyncGroup(BASH, ['-c', script, '_', ccrcIn(home), BASH],
       { env: env(home), encoding: 'utf8', input: stdin, timeout: 20_000 });
     expect(r.error, r.stderr).toBeUndefined();
     return {
@@ -7194,7 +7226,13 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
     // directory, so this is a hardening rather than a live hole; what makes it
     // worth the line is that the same two properties are what stop two writers
     // of one roster colliding on one name.
-    const src = readFileSync(join(REPO, 'deploy', 'account-op.mjs'), 'utf8');
+    // THE LANE-STATE FILE'S WRITER IS NOT A ROSTER WRITER (accounts plan Task
+    // A11): it writes `~/.cc-sessions/.accounts/<id>.json` and never the roster,
+    // so its own rename is cut out before the count.
+    const whole = readFileSync(join(REPO, 'deploy', 'account-op.mjs'), 'utf8');
+    const ls = whole.indexOf('function opLaneState(');
+    expect(ls, 'the lane-state writer moved: re-derive this cut').toBeGreaterThan(-1);
+    const src = whole.slice(0, ls) + whole.slice(whole.indexOf('\n}\n', ls) + 3);
     const renames = [...src.matchAll(/\brenameSync\(/g)].length;
     expect(renames, `the roster is written from ${renames} places, not one`).toBe(1);
     expect(src, 'the temporary roster name carries nothing a reader of /proc could not derive')
@@ -7216,7 +7254,7 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
     const home = box('ccrc-account-lock-reentrant-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     mkdirSync(join(home, '.cc-sessions'), { recursive: true });
-    const r = spawnSync(BASH, ['-c',
+    const r = spawnSyncGroup(BASH, ['-c',
       `. ${JSON.stringify(ccrcIn(home))}\n`
       + '_acct_marker_lock "Nothing was written."\n'
       + 'first="$ACCT_MARKER_LOCK_FD"\n'
@@ -7229,6 +7267,43 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
     const [first, second] = (r.stdout ?? '').trim().split(' ');
     expect(first, 'no descriptor was opened at all').toBeTruthy();
     expect(second, 'the second call opened a second descriptor').toBe(first);
+  });
+
+  it('a wedged second acquisition is killed WITH its flock: no lock holder outlives the timeout (#172, D-5894)', () => {
+    // The case above exists for the run where the guard is gone, and on that run
+    // `spawnSync`'s timeout killed only `bash`: the `flock` it had started waited
+    // on, reparented, holding the fixture's lock after the fixture was deleted.
+    // Measured: seven such `flock`s, about eleven days old, one per red run. This
+    // case FORCES that wedge (the guard's variable is emptied between the two calls,
+    // which is exactly what deleting the guard does) and asserts the run left no
+    // process holding the lock. It reds if the runner above stops killing the
+    // child's whole process group.
+    const lsof = spawnSync('sh', ['-c', 'command -v lsof'], { encoding: 'utf8' });
+    expect(lsof.status, 'lsof is needed to see who holds the lock').toBe(0);
+    const home = box('ccrc-account-lock-wedge-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    const r = spawnSyncGroup(BASH, ['-c',
+      `. ${JSON.stringify(ccrcIn(home))}\n`
+      + '_acct_marker_lock "Nothing was written."\n'
+      + 'ACCT_MARKER_LOCK_FD=\n'
+      + '_acct_marker_lock "Nothing was written."\n'],
+    { env: env(home), encoding: 'utf8', timeout: 2_000 });
+    expect((r.error as NodeJS.ErrnoException | undefined)?.code,
+      `the forced wedge did not wedge, so this case measured nothing: ${r.status} ${r.stderr}`).toBe('ETIMEDOUT');
+    const lock = join(home, '.cc-sessions', '.account-placement.lock');
+    expect(existsSync(lock), 'the lock file was never made').toBe(true);
+    // SIGKILL is delivered, not awaited: give the kernel a moment to finish.
+    let holders = '';
+    for (let i = 0; i < 40; i++) {
+      holders = spawnSync('lsof', ['-t', '--', lock], { encoding: 'utf8' }).stdout.trim();
+      if (holders === '') break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+    // No kill of the listed holders: a PID read from a listing is never signalled
+    // (D-3533). The group kill above is the handle; a survivor fails here and the
+    // run-level leak check names it.
+    expect(holders, 'a process still holds the lock after the timeout: the flock outlived its bash').toBe('');
   });
 
   it('every caller of the shared lock names what still stands', () => {
@@ -7420,11 +7495,11 @@ describe('deploy/account-op.mjs: lane and rotated, driven by hand', () => {
     seedRosterJson(home, [UPSTREAM,
       { id: 'gpt', label: 'gpt', hue: 'amber', configDirSuffix: '.claude-gpt',
         homeAble: false, telemetry: 'none', exec: { kind: 'external' } },
-      { id: 'gpt2', label: 'gpt2', hue: 'amber', configDirSuffix: '.claude-gpt2',
+      { id: 'gpt7', label: 'gpt7', hue: 'amber', configDirSuffix: '.claude-gpt7',
         homeAble: false, telemetry: 'none', exec: { kind: 'external', provider: 'openai' } }]);
     expect(node(['lane', '--file', rosterFile(home), '--id', 'gpt']).stdout.split('\n').slice(0, 4))
       .toEqual(['external', '', '', '']);
-    expect(node(['lane', '--file', rosterFile(home), '--id', 'gpt2']).stdout.split('\n').slice(0, 4))
+    expect(node(['lane', '--file', rosterFile(home), '--id', 'gpt7']).stdout.split('\n').slice(0, 4))
       .toEqual(['external', 'openai', '', '']);
   });
 
@@ -8631,11 +8706,15 @@ function snapshotHome(home: string): string[] {
  *  whole shape is "the second call sees the first call's variable", which one
  *  process per invocation can never show. */
 function sourceRun(home: string, script: string,
-  extraEnv: NodeJS.ProcessEnv = {}): Result {
+  extraEnv: NodeJS.ProcessEnv = {}, { strands = false }: { strands?: boolean } = {}): Result {
   const merged = { ...buildEnv(home), ...extraEnv };
   assertManagerStandIns(merged, home);
-  const r = spawnSync(BASH, ['-c', `. ${JSON.stringify(ccrcIn(home))}\n${script}\n`],
-    { env: merged, encoding: 'utf8', input: '' });
+  const argv = ['-c', `. ${JSON.stringify(ccrcIn(home))}\n${script}\n`];
+  // `strands`: the case strands a process ON PURPOSE, so the run leads its own process group (#172, D-5894) and
+  // what it leaves there is ended through that group when it returns, never by a pid it wrote down (D-3533).
+  const r = strands
+    ? spawnSyncGroup(BASH, argv, { env: merged, encoding: 'utf8', input: '', timeout: 60_000 }, { strays: 'end' })
+    : spawnSync(BASH, argv, { env: merged, encoding: 'utf8', input: '' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -8970,7 +9049,14 @@ describe('ccrc account check: why there was no verdict, and what bounds the answ
     const r = run(home, ['account', 'check', '--id', 'claude']);
     expect(r.code, r.stderr).toBe(0);
     expect((oneObject(r)['health'] as Record<string, unknown>)['verdict']).toBe('auth-dead');
-    expect(snapshotHome(home), 'ccrc account check wrote to the box').toEqual(before);
+    // EXCEPT THE TWO WRITES ACCOUNTS PLAN TASK A11 GIVES EVERY VERB: the lane's
+    // lock file and its lane-state file, each named exactly. Everything else on
+    // the box is still byte for byte what it was.
+    const a11 = (l: string): boolean => /^D \.ccrc\/locks$|^F \.ccrc\/locks\/claude\.lock |^D \.cc-sessions$|^D \.cc-sessions\/\.accounts$|^F \.cc-sessions\/\.accounts\/claude\.json /.test(l);
+    const after = snapshotHome(home);
+    expect(after.filter((l) => a11(l) && !before.includes(l)).map((l) => l.split(' ').slice(0, 2).join(' ')))
+      .toEqual(['D .cc-sessions', 'D .cc-sessions/.accounts', 'F .cc-sessions/.accounts/claude.json', 'D .ccrc/locks', 'F .ccrc/locks/claude.lock']);
+    expect(after.filter((l) => !a11(l) || before.includes(l)), 'ccrc account check wrote to the box').toEqual(before);
     // …and the listing is not vacuously empty: it saw the roster it read.
     expect(before.some((l) => l.startsWith('F .ccrc/accounts.json '))).toBe(true);
     expect(before.length).toBeGreaterThan(8);
@@ -10596,6 +10682,11 @@ describe('ccrc account check: the probe', () => {
       expect(real, `this box has no ${name} to link`).toBeTruthy();
       symlinkSync(real, join(bin, name));
     }
+    // THE SLEEPER THIS CASE ORPHANS ON PURPOSE outlives it by up to its bound
+    // (10 s below), and the suite's leak check (#172, D-5894) rightly fails a
+    // run it outlives. So both runs pass `strands` to `sourceRun`, whose own
+    // process group holds the sleeper and is ended when the run returns: the
+    // run's handle, never a pid read back from a file (D-3533).
     // THE GUARDS ARE THE HALF THAT KEEPS THIS FROM PASSING VACUOUSLY: with a
     // coreutils deadline binary still reachable the shim never reaches its
     // fallback at all, and with no `sleep` the watcher exits before it can
@@ -10610,7 +10701,7 @@ describe('ccrc account check: the probe', () => {
     const t0 = Date.now();
     const r = sourceRun(home, [...guards,
       'out="$(_plat_timeout 10 echo hi)"; rc=$?',
-      'printf \'%s|%s\' "$out" "$rc"'].join('\n'));
+      'printf \'%s|%s\' "$out" "$rc"'].join('\n'), {}, { strands: true });
     const ms = Date.now() - t0;
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout, 'the command\'s own answer did not survive the redirection').toBe('hi|0');
@@ -10623,7 +10714,7 @@ describe('ccrc account check: the probe', () => {
     // branches on.
     const slow = sourceRun(home, [...guards,
       'out="$(_plat_timeout 1 sleep 30)"; rc=$?',
-      'printf \'%s|%s\' "$out" "$rc"'].join('\n'));
+      'printf \'%s|%s\' "$out" "$rc"'].join('\n'), {}, { strands: true });
     expect(slow.code, slow.stderr).toBe(0);
     expect(slow.stdout, 'the bounded call no longer reports expiry').toBe('|124');
 
@@ -10683,7 +10774,10 @@ describe('ccrc account check: the probe', () => {
     expect(r.code, r.stderr).toBe(0);
     const added = snapshotHome(home).filter((l) => !before.has(l))
       .map((l) => l.split(' ').slice(0, 2).join(' ')).sort();
-    expect(added).toEqual(['D .ccrc/probe', 'F claude-argv', 'F claude-env']);
+    // Since accounts plan Task A11, `check` also takes the lane's lock and
+    // records its verdict in the lane-state file: two writes, named here.
+    expect(added).toEqual(['D .cc-sessions', 'D .cc-sessions/.accounts', 'D .ccrc/locks', 'D .ccrc/probe',
+      'F .cc-sessions/.accounts/orchard-api.json', 'F .ccrc/locks/orchard-api.lock', 'F claude-argv', 'F claude-env']);
   });
 });
 

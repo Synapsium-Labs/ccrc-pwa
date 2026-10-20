@@ -19,6 +19,7 @@ import path from 'node:path';
 import { WS_ADD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { decOf, eventsOf, readJournal, refusalsOf } from './lifecycleHelpers.js';
 import { DECOY_IDS, plantRow, reapLocks, regListing, type DashId } from './dashIdFixture.js';
+import { stubFn } from './ccdStub.js';
 
 let h: CcdHarness;
 
@@ -40,8 +41,10 @@ const docOf = (stdout: string): unknown => {
 // would reach if a mutant let it past the id check is stubbed, and tmux is stubbed for the journal's `_lc_obs`.
 const REL_STUBS = 'tmux() { return 1; };';
 const HOLD_STUBS = 'tmux() { return 1; };';
-const ARCHIVE_STUBS = `tmux() { return 1; }; _ws_unsupervise() { :; };
-  _ws_idle_ok() { return 0; }; _ws_status() { echo idle; }; _ws_archive_manifest() { echo '{}'; };`;
+// Through `stubFn` (D-6051): each override exits 97 if ccd no longer defines the function it replaces. The
+// `_ws_idle_ok` stub that stood here named a function ccd never had, so it stubbed nothing.
+const ARCHIVE_STUBS = `tmux() { return 1; }; ${stubFn('_ws_unsupervise', ':')}
+  ${stubFn('_ws_status', 'echo idle')} ${stubFn('_ws_archive_manifest', "echo '{}'")}`;
 const RESTORE_STUBS = `tmux() { return 1; }; flock() { return 0; };
   _ws_supervise() { :; }; _spawn() { :; };`;
 const RENAME_STUBS = `tmux() { return 1; }; _ws_branch_valid() { return 0; };
@@ -242,7 +245,38 @@ describe('ws-rename binds its identity pair whole (path-identity spec §2.2, §2
   });
 });
 
+// THE PROSE CONTROLS. At these five verbs the identity arms narrow the id and no prose, so a dash-led `--actor` or
+// `--reason` reaches each verb's act and its journal row as given. hibernate is the one dec-appending verb that refuses
+// dash-led prose, by the operator's ruling of 2026-10-19 (`hibernate-refuses-a-dash-leading-id`); its loop is not one
+// of these, and `ccdargv-dash-id-parity.test.ts` holds one prose case for every dec-appending verb, hibernate's
+// refusal included.
 describe('the identity arms narrow nothing else (path-identity spec §2.4)', () => {
+  it('ws-archive and ws-restore journal a dash-led actor and reason as given', () => {
+    const DASH_DEC = { surface: 'agent', actor: '-device', reason: '--tidy' };
+    const DASH_TAIL = "--surface agent --actor '-device' --reason '--tidy'";
+    plantWorkspace(REAL, null);
+    const arc = run(`${ARCHIVE_STUBS} cmd_ws_archive --session ${REAL} ${DASH_TAIL}`);
+    expect(arc.code, arc.stderr).toBe(0);
+    expect(h.reg(REAL, 'archived'), 'ws-archive did not archive').toMatch(/^\d+$/);
+    expect(decOf(eventsOf(h.home, 'archive')[0] ?? {})).toEqual(DASH_DEC);
+    // ws-restore reaches its act: it removes the archive stamps and journals its row. The fixture's spawn never
+    // settles, so the row's outcome is `spawn-failed` (rc 3); a refusal at the parse would remove nothing.
+    const res = run(`${RESTORE_STUBS} cmd_ws_restore --session ${REAL} ${DASH_TAIL}`);
+    expect(res.code, res.stderr).toBe(3);
+    expect(h.reg(REAL, 'archived'), 'ws-restore did not reach its act').toBeNull();
+    expect(decOf(eventsOf(h.home, 'restore')[0] ?? {})).toEqual(DASH_DEC);
+  });
+
+  it('a ws-rename whose actor and reason lead with a dash renames the branch and journals them as given', () => {
+    h.makeRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const r = run(`${RENAME_STUBS} cmd_ws_rename --session ${REAL} --branch ws/renamed `
+      + "--surface agent --actor '-device' --reason '--tidy'");
+    expect(r.code, r.stderr).toBe(0);
+    expect(h.reg(REAL, 'branch')).toBe('ws/renamed');
+    expect(decOf(eventsOf(h.home, 'rename')[0] ?? {})).toEqual({ surface: 'agent', actor: '-device', reason: '--tidy' });
+  });
+
   it('prose may lead with a dash', () => {
     plantWorkspace(REAL, HOLD_REASON);
     const rel = run(`${REL_STUBS} cmd_ws_release --session ${REAL} --actor '-device' --reason '--tidy'`);

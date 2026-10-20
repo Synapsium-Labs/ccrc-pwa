@@ -258,6 +258,18 @@ be discovered:
   any kind. `ccd-cap-scopes` is not installed there either — it caps cgroup scopes, and
   there are none.
 
+**The launchd class of the jobs.** The server's (or agent's) job and every session's job carry
+`ProcessType`, `Background` by default — launchd's lowest CPU and I/O class. On a box busy with
+other work a Background job is starved, not merely slowed: the server can take minutes to reach
+`listen`, every `ccrc update` health gate then fails and restores, and the sessions run behind
+everything else. The first word of `~/.ccrc/launchd-class` — `Standard`, `Adaptive` or
+`Interactive` — changes the class (an operator-owned file, like `~/.ccrc/remote-control`; nothing
+writes it). It is read when `ccrc install` (and so every `ccrc update`) writes the server's (or agent's) job;
+session jobs still carry `Background` until their writers adopt the same helper. launchd keeps a loaded job's old
+definition until that job is reloaded, so a running session takes the new class when its job is
+next loaded. An unknown word reads as `Background`; `ccrc install` names it on stderr, while
+session callers discard stderr, so check the file itself when a session's class surprises you.
+
 `ccrc doctor` checks all of this and tells you which one is missing, rather than failing
 somewhere further in.
 
@@ -1376,7 +1388,7 @@ The LANE is the third suppressor (2026-09-07): a session spawns with
 (`CCRC_ANTHROPIC_BACKEND` in `accounts.sh`, read by ccd's `_is_anthropic_backend`).
 A lane on any other backend — a ChatGPT/Codex lane, which holds no claude.ai OAuth
 and runs Claude Code in token mode against a local proxy, or any lane declared
-`telemetry: "codex"` or `"none"` — spawns without it whatever the box flag and the
+`telemetry: "codex"`, `"openrouter"` or `"none"` — spawns without it whatever the box flag and the
 row say, because Remote Control needs a claude.ai token with the inference scope
 and that lane cannot present one. The backend decides, not placement: an Anthropic
 account held out of placement with `homeAble: false` keeps the flag, a home-able
@@ -1436,11 +1448,13 @@ scored better — for as long as it is installed and not kill-switched.
 `touch ~/.cc-sessions/<id>-disabled` is the per-lane brake, and a session that
 overflowed onto it returns home when home has headroom again *and* home is still
 servable for the project's pool;
-`telemetry` is `'anthropic'`, `'codex'` or `'none'`: `'anthropic'` means the statusline publishes this
+`telemetry` is `'anthropic'`, `'codex'`, `'openrouter'` or `'none'`: `'anthropic'` means the statusline publishes this
 account's 5h/7d windows and ccd treats the lane as speaking Claude Code's own protocol
 (`CCRC_ANTHROPIC_BACKEND` — `--remote-control`, the spawn-time effort, the 429 exclusion writer and Fable
 eligibility all key on it); `'codex'` means usage is published in Codex's weekly shape by the lane's own
-publisher, never the statusline; `'none'` says the account will never report rate limits,
+publisher, never the statusline; `'openrouter'` marks an OpenRouter key lane, which has no
+`~/.cc-limits` writer, is not an Anthropic backend and carries a class registry (D-5521);
+`'none'` says the account will never report rate limits,
 so its permanent unknown is not read as permanent emptiness; `hidden: true`
 declares the entry to be roster PLUMBING rather than one of your accounts — the
 `upstream` entry naming the binary every generated wrapper `exec`s — so no
@@ -1776,21 +1790,26 @@ may need the new id.
 `haiku`, `sonnet`, `opus`, `fable`. On a lane whose roster `telemetry` is `"anthropic"` those are Claude
 Code's own aliases and there is nothing to classify: `show` answers read-only and every change is refused.
 That includes every lane `ccrc account add` creates, whose key lanes route through their own `--models` map
-(`exec.models`) instead. A lane whose `telemetry` is `"codex"` or `"none"` — a Codex lane, or an OpenRouter or
-Anthropic-compatible endpoint rostered that way by hand — carries a **class registry**,
+(`exec.models`) instead. A lane whose `telemetry` is `"codex"`, `"openrouter"` or `"none"` — a Codex lane, an OpenRouter
+lane, or an Anthropic-compatible endpoint rostered that way by hand — carries a **class registry**,
 `~/.ccrc/models/<id>.classes.json`, naming the concrete model each class means on that lane, which class
 subagents run as, and a default effort per class. Every accepted change is re-validated and then materialised
 into that lane's own `settings.json` `env` block — the four alias defaults, the primary and small models, the
-subagent model, and a context-window key that never exceeds the client's 200k default — plus
+subagent model, and a context-window key (below; set from `<id>.windows.json`) — plus
 `<id>.classes.tsv`, `<id>.effort.json` and, on a Codex lane, `~/.ccrc/codex/<id>/lane.json`, so nothing reads
 a registry the lane's settings disagree with.
 
 ```bash
 ccrc models <id> init <codex|openrouter|compatible> [--base-url <url>]   # seed a registry
-ccrc models <id> show [--json]             # classes, subagent class, catalogue, settings drift
+ccrc models <id> show [--json]             # classes, subagent class, catalogue, context window, settings drift
 ccrc models <id> set-class <haiku|sonnet|opus|fable> <modelId|none>
 ccrc models <id> set-subagent <haiku|sonnet>
 ccrc models <id> set-effort <class> <level|default>
+ccrc models <id> set-window <modelId> <tokens>   # record a measured context window, 1000 to 1000000
+ccrc models <id> clear-window <modelId>          # drop one
+ccrc models <id> hold <class>              # no automatic advance moves this class
+ccrc models <id> release <class>           # it may move again, canary first
+ccrc models <id> revert <class>            # back to its model before its last advance, and held there
 ccrc models <id> discovery add <modelId> | rm <modelId> | catalogue
 ccrc models <id> rm                        # reap the lane's model files
 ccrc models refresh <id> | --all           # re-probe the provider catalogues
@@ -1817,6 +1836,43 @@ lane's launcher refuses to start on such a lane. Doctor's `models` check WARNs o
 unrewritten for three hours, or never probed. Every subcommand prints one JSON object on stdout; `show` adds a human summary on stderr unless `--json`. An
 account whose id is `refresh` or `litellm` cannot be addressed here — `ccrc models refresh …` refuses rather
 than guess which was meant. `ccrc models` needs `node` and `jq`, and has no PWA surface in this build.
+
+**The context window.** The eighth key, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, follows one rule. A lane may record a
+measured window per model in `~/.ccrc/models/<id>.windows.json`, a sibling of the registry, never a key in it (an
+older ccrc refuses registry keys it does not know): `set-window` writes one, a whole number
+from 1,000 to 1,000,000 that you measured — a catalogue number never sets it — and `clear-window` drops one. When
+every model the lane's classes name has a measured window, the key is the smallest of them, rounded down to 1,000
+and capped at 1,000,000, because Claude Code applies one value to every model in the session, subagents included.
+When any of them has none, the key keeps the default rule, `min(catalogue context, 200000)` for the lane's default
+model, or is left out when the catalogue cannot say; so a class moved to a new model falls back to the default until
+the new model is measured. `set-window` refuses a model that is neither in the lane's catalogue nor one of its class
+models. A windows file that cannot be read counts as no measured windows: refresh, materialise and the drift check
+carry on under the default rule (a measured key left in `settings.json` shows as drift until the next materialise
+replaces or removes it), `show` names the reason, and both verbs refuse until the file is fixed or deleted.
+`show` reports each measured window, the effective window, the rule that chose it and the models still unmeasured;
+`rm` reaps the file with the rest. A running session keeps its window until it restarts or swaps.
+A rollback to a ccrc from before measured windows is safe on a lane whose catalogue is fresh: its next successful
+refresh materialises and writes the default. With a stale or absent catalogue a measured key stays until the next
+successful probe, so before rolling back across this change on a lane with windows set, run
+`ccrc models <id> clear-window <model>` for each measured model: each one re-materialises, and clearing the last
+puts the lane on the default rule.
+
+**Holds, revert and the advance file.** Each lane may carry `~/.ccrc/models/<id>.advance.json`, a sibling of the
+registry and never a key in it, so an older ccrc keeps reading the registry after a rollback. Per class it records
+the family the class follows (the last part of a `<vendor>-<version>-<family>` model id), an optional hold, the
+model the class had before its last automatic advance, and its last ten moves. `init codex` writes it, with a
+family for every class, an empty one included. `set-class` records the move and takes the family from the new pin,
+and clears it when you set `none` or a model id outside that shape, so a class you emptied by hand stays empty.
+`hold <class>` keeps a class where it is, and `release <class>` lets it move again. `revert <class>` puts back the
+model the class had before its last automatic advance, with its effort level, and holds it there; with no advance
+on record it refuses `no-previous`. Holds arrive one build before the automatic advance itself, so a class that
+must stay where it is can be held first. Every write to a lane's model files — every per-lane verb but `show`, and
+the hourly refresh's re-materialise — runs under one per-lane lock, `~/.ccrc/locks/models-<id>.lock`. A verb that
+finds it held waits up to 20 seconds and then refuses `lock-busy`, writing nothing; on a box without `flock`, or
+before the first lock on a box whose PATH has no `mkdir`, the verbs run unserialised, as before. The catalogue is
+the one lane model file written outside the lock: the probe replaces it whole, by a rename, so a writer under the
+lock always reads one complete catalogue. `rm` reaps the advance file with the lane's other model files, and never
+the lock.
 
 ### A ChatGPT/Codex lane: `exec.kind: "codex"` and `ccrc codex`
 
@@ -3084,7 +3140,7 @@ general remote-shell:
   exact bare command name (no path components) and an argv **prefix** — a
   handful of `ccd` verbs are still a bare first token (`start`, `enable`,
   `ensure`, `stop`, `swap`, `ws-add`, `forget`) — a bare-token grant leaves
-  everything after the verb unconstrained, which is what lets `ccd stop <id> --surface <word>`
+  everything after the verb unconstrained, which is what lets `ccd stop --surface <word> <id>`
   cross this seam with no widening: `stop`'s validated `--surface` flag is
   the single enrolment the swap-transcript design costs, and it rides as an
   argv flag rather than an env var because the exec seam is `Runner = (cmd,
@@ -3129,7 +3185,7 @@ general remote-shell:
   it — but where no evidence PERMITS an ordinary verb (guessing wrong there
   is loud: ccd's own usage refusal, a 502, never a lie), no evidence REFUSES
   `--surface`, because guessing wrong there is a *silent success*: an old
-  ccd parses `stop <id> --surface pwa` as a two-argument stop of a session
+  ccd parses the trailing order the server sent before path identity W1a, `stop <id> --surface pwa`, as a two-argument stop of a session
   literally named `<id>---surface`, exits 0, and the real session is never
   touched. Evidence comes from measuring the actual deployed ccd on
   whichever box runs it — the remote agent at handshake and every 60s
@@ -3782,7 +3838,7 @@ gone stale, a pass decides nothing at all. The act runs on the coordination seri
 immediately before each run's fleet act and again before its commit, and commits only while the run still names it, so
 a successor is never failed and a coordinator revived meanwhile keeps its programme — all but a revive that lands
 inside that last round trip.
-Each closed run's event says the sweep did it (`causedBy: sweep`), CCR-15 reclaims each marked worker whose run closed
+Each closed run's event says the sweep did it (`causedBy: sweep`), #166 reclaims each marked worker whose run closed
 (a worker mid-turn loses its turn; its work is pinned in the attic), an unmarked worker is released, and one feed row
 per programme says so. **The lane ships shadowed**: until the operator touches `$REG/dead-coordinator-lane-live` by
 hand in the registry the server reads (the fleet box's, through the agent, when the server runs `CCRC_FLEET=remote`;
@@ -5211,7 +5267,7 @@ the armed-gate sentence present) + held case A **860** (a 127-character workdir,
 reason names a run — the longer of the two case-A sentences the code can emit — and a 40-character id,
 **modelled**: `$id` carries a shape gate but no length bound and appears more than once across these
 sentences, so this is an assumption and not a ceiling; the longest id live on this fleet on 2026-09-08 was 29,
-`expoAI-assistant-keen-prairie`) + co-tenant 245 (a 64-character project and a two-digit count — `$CT_N`
+`project-h-id-pad-keen-prairie`) + co-tenant 245 (a 64-character project and a two-digit count — `$CT_N`
 is interpolated un-padded and the singular and plural halves are the same length, so the count's digits are
 the whole of the difference: 244 / 245 / 246 at one, two and three digits, and the fleet's live shape is
 two) + two joins = **1826**, not the fix wave's 1768 — its own 801 for held case A undercounted the true 860
@@ -5268,8 +5324,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:8361-8363`), each with an operator sentence of its own at `:8413`,
-`:8421` and `:8434`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:8493-8495`), each with an operator sentence of its own at `:8545`,
+`:8553` and `:8566`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5382,7 +5438,7 @@ is an instruction about one repo; the default is hygiene applied to repos that n
   (D-1451, narrowed by D-1458). detect() reads `.gitignore` only along the ancestor chain from the
   VCS root **down to** the scan root, so a **nested** `.gitignore` below the root is never applied
   and its build artifacts entered the corpus untracked — refusing that tree for ever, with no remedy
-  on the box (measured: synapsium-platform over `frontend/exposynapse-site/.astro/`, swift-harbor
+  on the box (measured: project-k over `frontend/site-k/.astro/`, swift-harbor
   over `.husky/_/`). So the guard runs in two steps: write the noise patterns, run detect() **once**,
   and compute the breach (corpus ∖ tracked) it would refuse on. Then ask git whether each **breach**
   path is ignored (`git check-ignore --no-index -z --stdin`, one call, NUL-framed so a non-ASCII or
@@ -5392,7 +5448,7 @@ is an instruction about one repo; the default is hygiene applied to repos that n
   directory** containing it when git's `--directory` census names one, so a whole ignored tree costs
   one line. Only if something was derived is it appended and detect() run a **second** time.
   D-1451..D-1453 derived git's WHOLE ignored census instead, and the cost was measured and then
-  accepted rather than removed: 308 entries on custom-tools, of which 22 covered a file detect would
+  accepted rather than removed: 308 entries on project-d, of which 22 covered a file detect would
   ingest at all — and on a 2000-file scratch fixture, 300 derived entries cost detect **43.3 s**
   against **1.4 s** with none, which is 1.4 s for a tree with no ignored files at all (D-1458). The
   second detect() is the one cost this shape ADDS, and it is measured too: on a tree that DOES derive

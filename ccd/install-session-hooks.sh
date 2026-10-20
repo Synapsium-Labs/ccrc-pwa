@@ -160,16 +160,34 @@ done
 # two flips (the iteration test holds them equal) and one test update (the `false` pin).
 CHILD_DENY_PATH_QUALIFIED=0
 CHILD_DENY_FILE="$HOME/.cc-sessions/child-deny.settings.json"
+# D-5696 (spec §7.6): Claude Code's own `install` and `update` are denied under its name and, when the roster names
+# its upstream account otherwise, under that id too (`childDenyRules` in shared/api.ts). The id is read from the
+# generated roster in a subshell, on `--homes` runs as on roster-wide ones, and admitted only in the roster id's shape
+# (`ID_RE`, shared/roster.ts); no roster, or an id that is not one, is the `claude` name alone.
+_child_deny_upstream() {
+  local u=""
+  [[ -f "$HOME/.ccrc/accounts.sh" ]] \
+    && u=$( source "$HOME/.ccrc/accounts.sh" >/dev/null 2>&1; printf '%s' "${CCRC_UPSTREAM:-}" )
+  if [[ "$u" =~ ^[a-z][a-z0-9-]{0,31}$ && "$u" != claude ]]; then printf '%s' "$u"; fi
+  return 0
+}
 _child_deny_json() {
-  local heads_ccd=(ccd) heads_ccrc=(ccrc) v h rules=()
+  local heads_ccd=(ccd) heads_ccrc=(ccrc) claudes=(claude) up v h p rules=()
   if (( CHILD_DENY_PATH_QUALIFIED )); then
     heads_ccd+=('*/ccd' '~/.local/bin/ccd'); heads_ccrc+=('*/ccrc' '~/.local/bin/ccrc')
   fi
-  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect; do
+  up=$(_child_deny_upstream); [[ -z "$up" ]] || claudes+=("$up")
+  for v in ws-rm ws-reap 'ws-gc --prune' ws-archive ws-restore ws-reclaim ws-expire ws-collect roll claude; do
     for h in "${heads_ccd[@]}"; do rules+=("Bash($h $v:*)"); done
   done
   for v in update rollback; do
     for h in "${heads_ccrc[@]}"; do rules+=("Bash($h $v:*)"); done
+  done
+  for p in "${claudes[@]}"; do
+    for v in install update; do
+      rules+=("Bash($p $v:*)")
+      if (( CHILD_DENY_PATH_QUALIFIED )); then rules+=("Bash(*/$p $v:*)" "Bash(~/.local/bin/$p $v:*)"); fi
+    done
   done
   printf '%s\n' "${rules[@]}" | jq -R . | jq -s '{permissions:{deny:.}}'
 }

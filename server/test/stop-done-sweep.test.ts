@@ -244,6 +244,15 @@ describe('stopDonePass (D-5370)', () => {
     expect(f.argv).toEqual([]);
   });
 
+  it('a worker whose only outstanding mail is PARKED is stopped (D-5838); a parked row beside an unparked one still holds', async () => {
+    const f = fake([ID]);
+    const mailOf = (rows: object[]) => ({ ...f.deps.coord, outstandingMailFor: () => rows as never });
+    await stopDonePass({ ...f.deps, coord: mailOf([{ parkedAt: NOW }, { parkedAt: null }]) }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+    await stopDonePass({ ...f.deps, coord: mailOf([{ parkedAt: NOW }]) }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).not.toEqual([]);
+  });
+
   it('a worker somebody has on screen is not stopped', async () => {
     const f = fake([ID]);
     await stopDonePass({ ...f.deps, presence: { isOpen: (id) => id === ID } }, mem(), [row(ID)], [rec(ID)], []);
@@ -485,7 +494,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     // The tick's rows and records, assembled now — before anything a case writes afterwards.
     const tick = async () => {
       const r = await readSessionRecord(deps.io, cfg, WID);
-      if (!r.found) throw new Error('fixture record not found');
+      if (r.kind !== 'found') throw new Error('fixture record not found');
       const row = await liveRowFor(turnReadDeps(deps as never, w), r.record, WUUID);
       if (row === null) throw new Error('fixture row not assembled');
       return { rows: [row], records: [r.record] };

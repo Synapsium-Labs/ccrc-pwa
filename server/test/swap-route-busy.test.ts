@@ -107,12 +107,12 @@ describe('the swap route refuses a turn it was not told to lose (D-5240)', () =>
     expect(b.ccd()).toEqual([]);
   });
 
-  it('D-5380: a row whose identity could not be read is 503 registry-unmeasurable on both arms, with or without consent', async () => {
+  it('D-5380: a row whose identity could not be read is 502 registry-unmeasurable on both arms, with or without consent', async () => {
     for (const payload of [{ wrapper: 'lane-b' }, { wrapper: 'lane-b', crossPool: true, interrupt: true }]) {
       const b = await box({ caps: ALL_CAPS, uuidUnreadable: true });
       liveStatus(b.home, 'idle');
       const res = await post(b.app, payload);
-      expect(res.statusCode).toBe(503);
+      expect(res.statusCode).toBe(502);
       expect(res.json()).toEqual({ ok: false, error: 'registry-unmeasurable' });
       expect(b.ccd()).toEqual([]);
     }

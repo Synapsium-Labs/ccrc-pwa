@@ -71,6 +71,9 @@ describe('the built shell and the Geist pair (D-5095, Task 7 Step 7b)', () => {
   it('licenses/Geist-OFL.txt is in the output', () => {
     const shipped = readFileSync(path.join(out, 'licenses', 'Geist-OFL.txt'));
     expect(shipped.equals(readFileSync(path.join(PWA, 'public', 'licenses', 'Geist-OFL.txt')))).toBe(true);
+    // The vendored source licence too, so this built-output check stands alone (D-5095): an edit to the public copy
+    // only is red here, not just in fonts.test.ts.
+    expect(shipped.equals(readFileSync(path.join(PWA, '..', 'ui', 'src', 'fonts', 'OFL.txt')))).toBe(true);
     expect(shipped.toString('utf8')).toContain('SIL OPEN FONT LICENSE Version 1.1');
   });
 

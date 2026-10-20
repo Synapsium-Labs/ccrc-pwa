@@ -16,10 +16,15 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { CODEX, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
+import { CODEX, CODEX_STALE, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
 import { codexAuthDir } from './codexLaneFixture.js';
+import { ADVANCE_EXAMPLE, ADV_CATALOGUE, ADV_DEEP_TEXT, ADV_REGISTRY, ADV_SEEDS, EFFORTS4 } from './fixtures/advanceCases.js';
+import { backfillAdvance, chooseCandidate, familyOf, recordMove, serializeAdvance } from '../../shared/model-advance.mjs';
+import type { Advance, HistoryEntry } from '../../shared/model-advance.mjs';
+import type { ModelClass, Registry } from '../../shared/models.js';
+import { parseRegistry } from '../../shared/models.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -53,8 +58,13 @@ function seed(roster: unknown = ROSTER): void {
 
 interface Result { code: number; body: Record<string, unknown>; stderr: string; stdout: string }
 function op(...args: string[]): Result {
+  return opEnv({}, ...args);
+}
+
+/** `op`, with `extra` laid over its environment (`CCRC_MODELS_NOW`, the advance file's clock). */
+function opEnv(extra: NodeJS.ProcessEnv, ...args: string[]): Result {
   const r = spawnSync(process.execPath, [OP, ...args],
-    { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    { env: { ...process.env, HOME: home, ...extra }, encoding: 'utf8' });
   const stdout = r.stdout ?? '';
   // THE CONTRACT: exactly one JSON object on stdout, newline-terminated. A
   // helper rather than a `JSON.parse` per call site, because a progress line
@@ -142,6 +152,59 @@ const endpoints = (names: string[]): string => {
   const p = path.join(home, 'endpoints.json');
   fs.writeFileSync(p, JSON.stringify({ data: { endpoints: names.map((n) => ({ provider_name: n })) } }));
   return p;
+};
+
+// Codex-bridge spec §2.7: the lane's measured windows, a SIBLING of the
+// registry. Model ids are read off the fixtures and roster ids by position,
+// never spelled: this repository is public.
+const winPath = (id: string): string => path.join(home, '.ccrc', 'models', `${id}.windows.json`);
+/** The planted registry's class models, distinct and in CLASSES order: what the rule measures. */
+const CLASS_MODELS: string[] = [...new Set(Object.values(SEEDED.classes).filter((v): v is string => v !== null))];
+const windowsFor = (byModel: Record<string, number>): unknown =>
+  ({ windows: Object.fromEntries(Object.entries(byModel).map(([m, tokens]) => [m, { tokens }])) });
+const plantWindows = (id: string, body: unknown): void => {
+  fs.mkdirSync(path.dirname(winPath(id)), { recursive: true });
+  fs.writeFileSync(winPath(id), typeof body === 'string' ? body : `${JSON.stringify(body, null, 2)}\n`);
+};
+const LEGACY_SUFFIX = ROSTER.accounts[2]!.configDirSuffix;
+const eighthKey = (): string | undefined => settingsOf(LEGACY_SUFFIX).env['CLAUDE_CODE_MAX_CONTEXT_TOKENS'];
+
+// auto-advance spec §2.1: the lane's advance file. The neutral fixture lane (`ADV_*`) is planted on this file's
+// external row, or on CODEX_ROW where a case needs a codex-kind lane. Neutral ids only.
+const NOW = '2026-10-15T00:00:00Z';
+const advPath = (id: string): string => path.join(home, '.ccrc', 'models', `${id}.advance.json`);
+const advanceOf = (id: string): Advance => JSON.parse(fs.readFileSync(advPath(id), 'utf8'));
+const opAt = (...args: string[]): Result => opEnv({ CCRC_MODELS_NOW: NOW }, ...args);
+function plantAdv(id: string = LEGACY_EXTERNAL_ID, registry: Registry = ADV_REGISTRY): void {
+  writeCatalogue(id, ADV_CATALOGUE);
+  fs.writeFileSync(regPath(id), `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o600 });
+  const m = op('materialise', '--file', rosterPath(), '--id', id);
+  expect(m.code, m.stdout + m.stderr).toBe(0);
+}
+const plantAdvance = (id: string, adv: Advance | string): void => {
+  fs.writeFileSync(advPath(id), typeof adv === 'string' ? adv : serializeAdvance(adv));
+};
+/** `SEED_FAMILIES.codex`'s one literal word, read off the source rather than spelled (this repository is public), or
+ *  null when the line has changed shape. Read when a case asks, never while vitest collects this file: a throw at
+ *  collection would fail the whole file as one error and hide every other case's own result (`writeOps()`'s rule in
+ *  ccrc-models-lock.test.ts). The case "SEED_FAMILIES.codex has its one literal word" names a reshaped line. */
+const seedEmptyFamily = (): string | null => {
+  const src = fs.readFileSync(OP, 'utf8');
+  return /^\s*fable: '([a-z][a-z0-9]*)',$/m.exec(src.slice(src.indexOf('const SEED_FAMILIES')))?.[1] ?? null;
+};
+/** What `init codex` seeds: the families of SEEDED's three pins, and the literal for its empty class, read lazily: a
+ *  case that needs the literal fails by name when it cannot be read. */
+const CODEX_SEEDS = {
+  haiku: familyOf(SEEDED.classes.haiku), sonnet: familyOf(SEEDED.classes.sonnet),
+  opus: familyOf(SEEDED.classes.opus),
+  get fable(): string {
+    const word = seedEmptyFamily();
+    if (word === null) {
+      throw new Error('deploy/models-op.mjs has no SEED_FAMILIES literal for the empty class (the case '
+        + '"SEED_FAMILIES.codex has its one literal word" names it)');
+    }
+    return word;
+  },
 };
 
 beforeEach(() => { home = mkTmp('ccrc-models-op-'); seed(); });
@@ -797,6 +860,20 @@ describe('a legacy subagent: opus/fable already on disk (fix round 2A, N1)', () 
     // Refused, nothing changed — the legacy value survives untouched.
     expect(registryOf('gpt')['subagent']).toBe('opus');
   });
+
+  // The mutation tail's render check, before the write (`renderRefusal`, the
+  // one check `set-window`/`clear-window` share): the edit itself is valid,
+  // `parseRegistry` accepts it, and only the render refuses. Without the
+  // check the registry would be rewritten and `materialise` then refuse.
+  it('(v) set-effort is refused unroutable-lane BEFORE the write, and the registry is unchanged', () => {
+    const id = LEGACY_EXTERNAL_ID;
+    const before = fs.readFileSync(regPath(id), 'utf8');
+    const r = op('set-effort', '--file', rosterPath(), '--id', id, '--class', 'sonnet', '--level', 'xhigh');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('unroutable-lane');
+    expect(String(r.body['detail'])).toMatch(/set-subagent <haiku\|sonnet>/);
+    expect(fs.readFileSync(regPath(id), 'utf8')).toBe(before);
+  });
 });
 
 describe('set-effort', () => {
@@ -998,7 +1075,7 @@ describe('the registry write', () => {
     const r = op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
     expect(r.body['created'], r.stderr).toBe(true);
     expect(fs.readdirSync(path.join(home, '.ccrc', 'models')).sort())
-      .toEqual(['codex-a.classes.json', 'codex-a.classes.tsv', 'codex-a.effort.json']);
+      .toEqual(['codex-a.advance.json', 'codex-a.classes.json', 'codex-a.classes.tsv', 'codex-a.effort.json']);
   });
 
   it('keeps 2-space indent and a trailing newline', () => {
@@ -1631,6 +1708,1481 @@ describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
   });
 });
 
+describe('the measured windows file — read, applied, reported, reaped (codex-bridge spec §2.7)', () => {
+  const ID = LEGACY_EXTERNAL_ID;
+  const all = (tokens: number): unknown => windowsFor(Object.fromEntries(CLASS_MODELS.map((m) => [m, tokens])));
+  const mat = (): Result => op('materialise', '--file', rosterPath(), '--id', ID);
+  const show = (): Result => op('show', '--file', rosterPath(), '--id', ID);
+
+  beforeEach(() => {
+    writeCatalogue(ID);
+    plantCodex(ID);
+  });
+
+  it('every class model measured: materialise writes the SMALLEST window — above 200000 when measured so', () => {
+    const [m0, m1, m2] = CLASS_MODELS as [string, string, string];
+    plantWindows(ID, windowsFor({ [m0]: 511000, [m1]: 450000, [m2]: 400000 }));
+    const r = mat();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(eighthKey()).toBe('400000');
+  });
+
+  it('one class model unmeasured: the key stays today\'s 200000', () => {
+    const [m0, m1] = CLASS_MODELS as [string, string];
+    plantWindows(ID, windowsFor({ [m0]: 511000, [m1]: 511000 }));
+    expect(mat().code).toBe(0);
+    expect(eighthKey()).toBe('200000');
+  });
+
+  it('with no windows file the env block is today\'s, every key', () => {
+    const { haiku, sonnet, opus } = SEEDED.classes;
+    expect(mat().code).toBe(0);
+    expect(settingsOf(LEGACY_SUFFIX).env).toEqual({
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: haiku, ANTHROPIC_DEFAULT_SONNET_MODEL: sonnet,
+      ANTHROPIC_DEFAULT_OPUS_MODEL: opus, ANTHROPIC_DEFAULT_FABLE_MODEL: 'ccrc-unavailable-fable',
+      ANTHROPIC_MODEL: opus, ANTHROPIC_SMALL_FAST_MODEL: haiku, CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '200000',
+    });
+  });
+
+  it.each([
+    ['not JSON', '{ this is not json'],
+    ['an array', '[]'],
+    ['a windows that is not an object', '{"windows": 7}'],
+    ['a window below the minimum', JSON.stringify({ windows: { [SEEDED.classes.opus!]: { tokens: 5 } } })],
+  ])('an unreadable windows file (%s) never blocks materialise: the default rule applies', (_why, body) => {
+    plantWindows(ID, all(400000));
+    expect(mat().code).toBe(0);
+    expect(eighthKey()).toBe('400000');
+    plantWindows(ID, body);
+    const r = mat();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(eighthKey()).toBe('200000');
+  });
+
+  it('show reports each measured window, the effective window, its rule and the unmeasured models', () => {
+    const [m0, m1, m2] = CLASS_MODELS as [string, string, string];
+    plantWindows(ID, { windows: { [m0]: { tokens: 511000, setAt: '2026-10-15T12:00:00.000Z' }, [m1]: { tokens: 450000 } } });
+    const r = show();
+    expect(r.code).toBe(0);
+    expect(r.body['windows']).toEqual({ state: 'ok', byModel: {
+      [m0]: { tokens: 511000, setAt: '2026-10-15T12:00:00.000Z' }, [m1]: { tokens: 450000, setAt: null } } });
+    expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default', unmeasured: [m2] });
+  });
+
+  it('show with every class model measured reports rule measured', () => {
+    plantWindows(ID, all(400000));
+    expect(show().body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+  });
+
+  it('show with no windows file: state absent, every class model unmeasured', () => {
+    const r = show();
+    expect(r.body['windows']).toEqual({ state: 'absent' });
+    expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default', unmeasured: CLASS_MODELS });
+  });
+
+  // `contextWindow` is null ONLY with no registry file, and a caller tells
+  // that lane apart by the null; an unseeded registry still gets the decision.
+  it('an Anthropic lane, with no registry file, answers contextWindow null and windows absent', () => {
+    const r = op('show', '--file', rosterPath(), '--id', ROSTER.accounts[1]!.id);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['registry']).toBeNull();
+    expect(r.body['contextWindow']).toBeNull();
+    expect(r.body['windows']).toEqual({ state: 'absent' });
+  });
+
+  it('an UNSEEDED registry still gets the decision: no key, rule none (deviation B-1)', () => {
+    const id = ROSTER.accounts[3]!.id;
+    const i = op('init', '--file', rosterPath(), '--id', id, '--probe', 'openrouter');
+    expect(i.code, i.stdout + i.stderr).toBe(0);
+    const r = op('show', '--file', rosterPath(), '--id', id);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['contextWindow']).toEqual({ tokens: null, rule: 'none', unmeasured: [] });
+  });
+
+  it('show on an unreadable windows file answers ok, names the file and the reason, and reports the default rule', () => {
+    plantWindows(ID, '{ this is not json');
+    const r = show();
+    expect(r.code).toBe(0);
+    const w = r.body['windows'] as { state: string; reason: string };
+    expect(w.state).toBe('unreadable');
+    expect(w.reason).toContain(winPath(ID));
+    expect(w.reason).toMatch(/is not valid JSON/);
+    expect((r.body['contextWindow'] as { rule: string }).rule).toBe('default');
+  });
+
+  it('settingsDrift names the eighth key once the windows moved past the last materialise', () => {
+    plantWindows(ID, all(400000));
+    expect(show().body['settingsDrift']).toEqual(['CLAUDE_CODE_MAX_CONTEXT_TOKENS']);
+    expect(mat().code).toBe(0);
+    expect(show().body['settingsDrift']).toEqual([]);
+  });
+
+  it('an unreadable windows file adds no drift: the drift check reads it as the default rule', () => {
+    plantWindows(ID, '[]');
+    expect(show().body['settingsDrift']).toEqual([]);
+  });
+
+  it('a DIRECTORY at the windows path: show reports it unreadable, materialise carries on, rm stops at it', () => {
+    fs.mkdirSync(winPath(ID), { recursive: true });
+    const s = show();
+    expect(s.code, s.stdout + s.stderr).toBe(0);
+    expect(s.body['windows']).toMatchObject({ state: 'unreadable' });
+    expect((s.body['windows'] as { reason: string }).reason).toMatch(/not a regular file/);
+    const m = mat();
+    expect(m.code, m.stdout + m.stderr).toBe(0);
+    expect(eighthKey()).toBe('200000');
+    // `rm -f` semantics per file, as for the other four: a directory is not a
+    // file `rm` may unlink, so it reaps the four before it and stops there,
+    // the answer a directory at any of those four paths already gets.
+    const r = op('rm', '--file', rosterPath(), '--id', ID);
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('unwritable');
+    expect(String(r.body['detail'])).toContain(`${winPath(ID)} could not be removed`);
+    expect(fs.existsSync(regPath(ID))).toBe(false);
+  });
+
+  it('a class that moves to an unmeasured model drops the lane back to the default rule (spec §5)', () => {
+    plantWindows(ID, all(400000));
+    expect(mat().code).toBe(0);
+    expect(eighthKey()).toBe('400000');
+    const next = CODEX.models.find((m) => !m.hidden && !CLASS_MODELS.includes(m.id) && m.context === 272000)!.id;
+    const r = op('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', next);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(eighthKey()).toBe('200000');
+    expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default', unmeasured: [next] });
+  });
+
+  // The mutation tail and init's create each pass the windows reading to
+  // `materialise` (Task 3: the same reading to every caller). A tail or a
+  // create that passed null would write the default rule's 200000 over a
+  // lane every one of whose class models is measured.
+  it('a mutation that leaves the classes alone still writes the measured window (the tail passes the reading)', () => {
+    plantWindows(ID, all(400000));
+    expect(eighthKey()).toBe('200000');
+    const r = op('set-effort', '--file', rosterPath(), '--id', ID, '--class', 'sonnet', '--level', 'xhigh');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(eighthKey()).toBe('400000');
+    expect(r.body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+  });
+
+  it('init applies a windows file already on disk: the lane it creates is materialised with the measured window', () => {
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+    writeCatalogue(CODEX_ROW.id);
+    plantWindows(CODEX_ROW.id, all(400000));
+    const r = op('init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['created']).toBe(true);
+    expect(settingsOf(CODEX_ROW.configDirSuffix).env['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('400000');
+    expect(r.body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+  });
+
+  it('rm reaps the windows file with the lane\'s other model files, last', () => {
+    plantWindows(ID, all(400000));
+    const r = op('rm', '--file', rosterPath(), '--id', ID);
+    expect(r.code).toBe(0);
+    expect(r.body['removed'] as string[]).toHaveLength(5);
+    expect((r.body['removed'] as string[]).slice(-1)).toEqual([winPath(ID)]);
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
+  it('rm reaps an unreadable windows file too — rm -f semantics, not a validated read', () => {
+    plantWindows(ID, '{ this is not json');
+    expect(op('rm', '--file', rosterPath(), '--id', ID).code).toBe(0);
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
+  it('an ORPHAN show reports its windows too', () => {
+    fs.writeFileSync(regPath('ghost'), fs.readFileSync(regPath(ID), 'utf8'));
+    plantWindows('ghost', all(400000));
+    const r = op('show', '--file', rosterPath(), '--id', 'ghost');
+    expect(r.body['orphan']).toBe(true);
+    expect((r.body['windows'] as { state: string }).state).toBe('ok');
+    expect((r.body['contextWindow'] as { rule: string }).rule).toBe('measured');
+  });
+});
+
+// D-5785. With a stale or absent catalogue the default rule yields nothing,
+// so the block OMITS the eighth key, and the hourly refresh materialises only
+// after a successful probe. A windows file deleted or broken outside the two
+// verbs then leaves a measured key of up to 1000000 in settings.json, which
+// a drift check that asked only about the block's own keys never named. The
+// key is drift whenever the next materialise would delete it.
+describe('a measured key the block omits is drift until a materialise removes it (D-5785)', () => {
+  const ID = LEGACY_EXTERNAL_ID;
+  const KEY = 'CLAUDE_CODE_MAX_CONTEXT_TOKENS';
+  const show = (): Result => op('show', '--file', rosterPath(), '--id', ID);
+  const driftOf = (): unknown => show().body['settingsDrift'];
+  const measureAll = (): void => {
+    for (const m of CLASS_MODELS) {
+      const r = op('set-window', '--file', rosterPath(), '--id', ID, '--model', m, '--tokens', '400000');
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+    }
+    expect(eighthKey()).toBe('400000');
+  };
+  const breaks: Record<string, () => void> = {
+    deleted: () => fs.rmSync(winPath(ID)),
+    'not JSON': () => fs.writeFileSync(winPath(ID), '{ this is not json'),
+  };
+
+  const catalogues: Record<string, unknown> = { absent: null, stale: CODEX_STALE };
+
+  it.each([
+    ['absent', 'deleted'],
+    ['absent', 'not JSON'],
+    ['stale', 'deleted'],
+    ['stale', 'not JSON'],
+  ])('catalogue %s, windows file %s: show names the key, materialise removes it', (which, how) => {
+    if (catalogues[which] !== null) writeCatalogue(ID, catalogues[which]);
+    plantCodex(ID);
+    // No window and no catalogue number: no key, and nothing to report.
+    expect(eighthKey()).toBeUndefined();
+    expect(driftOf()).toEqual([]);
+    measureAll();
+    expect(driftOf()).toEqual([]);
+    breaks[how]!();
+    const s = show();
+    expect(s.code, s.stdout + s.stderr).toBe(0);
+    expect((s.body['contextWindow'] as { rule: string }).rule).toBe('none');
+    expect(s.body['settingsDrift']).toEqual([KEY]);
+    // `show` names the drift and never repairs it.
+    expect(eighthKey()).toBe('400000');
+    const m = op('materialise', '--file', rosterPath(), '--id', ID);
+    expect(m.code, m.stdout + m.stderr).toBe(0);
+    expect(Object.keys(settingsOf(LEGACY_SUFFIX).env)).not.toContain(KEY);
+    expect(driftOf()).toEqual([]);
+  });
+
+  // The block INCLUDES the key here (a fresh catalogue's default rule), so the
+  // answer is today's: the key once, by value, never a second time for being
+  // on disk. 'settingsDrift names the eighth key once the windows moved past
+  // the last materialise', above, is the same answer in the other direction.
+  it('a fresh catalogue: the block carries the key, and drift names it once, by value', () => {
+    writeCatalogue(ID);
+    plantCodex(ID);
+    measureAll();
+    fs.rmSync(winPath(ID));
+    expect(driftOf()).toEqual([KEY]);
+    expect(op('materialise', '--file', rosterPath(), '--id', ID).code).toBe(0);
+    expect(eighthKey()).toBe('200000');
+    expect(driftOf()).toEqual([]);
+  });
+});
+
+describe('set-window and clear-window (codex-bridge spec §2.7)', () => {
+  const ID = LEGACY_EXTERNAL_ID;
+  const OPUS = SEEDED.classes.opus!;
+  const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  const windowsFile = (): Record<string, unknown> & { windows: Record<string, Record<string, unknown>> } =>
+    JSON.parse(fs.readFileSync(winPath(ID), 'utf8'));
+  const setWindow = (model: string, tokens: string, id: string = ID): Result =>
+    op('set-window', '--file', rosterPath(), '--id', id, '--model', model, '--tokens', tokens);
+  const clearWindow = (model: string, id: string = ID): Result =>
+    op('clear-window', '--file', rosterPath(), '--id', id, '--model', model);
+  const showOf = (): Result => op('show', '--file', rosterPath(), '--id', ID);
+
+  beforeEach(() => {
+    writeCatalogue(ID);
+    plantCodex(ID);
+  });
+
+  it('set-window records the window with a UTC setAt, answers previous: null, and re-materialises', () => {
+    const r = setWindow(OPUS, '400000');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'set-window', model: OPUS, tokens: 400000, previous: null });
+    const entry = windowsFile().windows[OPUS]!;
+    expect(entry['tokens']).toBe(400000);
+    expect(String(entry['setAt'])).toMatch(ISO_UTC);
+    // Two class models are still unmeasured, so the rule is still the default.
+    expect(eighthKey()).toBe('200000');
+    expect(r.body['contextWindow']).toEqual({ tokens: 200000, rule: 'default',
+      unmeasured: CLASS_MODELS.filter((m) => m !== OPUS) });
+  });
+
+  it('the LAST class model measured flips the lane to the smallest window, in that same call', () => {
+    const [m0, m1, m2] = CLASS_MODELS as [string, string, string];
+    expect(setWindow(m0, '511000').code).toBe(0);
+    expect(setWindow(m1, '450000').code).toBe(0);
+    expect(eighthKey()).toBe('200000');
+    const r = setWindow(m2, '400000');
+    expect(r.code).toBe(0);
+    expect(eighthKey()).toBe('400000');
+    expect(r.body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+    expect(r.body['settingsDrift']).toEqual([]);
+  });
+
+  it('set-window again replaces the value and answers the previous one', () => {
+    expect(setWindow(OPUS, '400000').code).toBe(0);
+    const r = setWindow(OPUS, '350000');
+    expect(r.body).toMatchObject({ tokens: 350000, previous: 400000 });
+    expect(windowsFile().windows[OPUS]!['tokens']).toBe(350000);
+  });
+
+  it.each(['1000', '1000000'])('accepts the bound %s exactly', (tokens) => {
+    expect(setWindow(OPUS, tokens).code).toBe(0);
+  });
+
+  it.each(['400k', '400,000', '4e5', '400000.0', '-400000', ' 400000', '999', '1000001', ''])(
+    'refuses %j as a window, naming the field and the digits-only form, and writes nothing', (tokens) => {
+      const r = setWindow(OPUS, tokens);
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('bad-window');
+      expect(r.body['field']).toBe('tokens');
+      expect(String(r.body['detail'])).toMatch(/from 1000 to 1000000, written in digits only/);
+      expect(fs.existsSync(winPath(ID))).toBe(false);
+    });
+
+  it('refuses a model neither in the catalogue nor a class model — the typo guard — and writes nothing', () => {
+    const r = setWindow('model-9-omega', '400000');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('unknown-window-model');
+    expect(r.body['field']).toBe('model');
+    expect(String(r.body['detail'])).toContain(`ccrc models ${ID} show`);
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
+  it('refuses a CLASS name where a model id belongs, and says which it takes', () => {
+    const r = setWindow('opus', '400000');
+    expect(r.body['error']).toBe('unknown-window-model');
+    expect(String(r.body['detail'])).toMatch(/takes a MODEL id, not a class/);
+  });
+
+  it('accepts a catalogue model no class names yet — measure it before a class moves to it', () => {
+    const spare = CODEX.models.find((m) => !CLASS_MODELS.includes(m.id))!.id;
+    const r = setWindow(spare, '400000');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((r.body['contextWindow'] as { rule: string }).rule).toBe('default');
+  });
+
+  it('accepts a class model on a lane no catalogue vouches for (never probed)', () => {
+    fs.rmSync(path.join(home, '.ccrc', 'models', `${ID}.json`));
+    expect(setWindow(OPUS, '400000').code).toBe(0);
+  });
+
+  it('refuses an id that is not a model id', () => {
+    const r = setWindow('../escape', '400000');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('bad-model-id');
+  });
+
+  // clear-window has no typo guard, so this test is the only thing between
+  // it and answering `ok, removed: false` for a string that is no model id.
+  it('clear-window refuses an id that is not a model id too, and writes nothing', () => {
+    const r = clearWindow('../escape');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('bad-model-id');
+    expect(r.body['field']).toBe('model');
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
+  it('never rewrites the class registry — bytes and mtime unchanged, the rollback property', () => {
+    const before = fs.readFileSync(regPath(ID), 'utf8');
+    const mtime = fs.statSync(regPath(ID)).mtimeMs;
+    expect(setWindow(OPUS, '400000').code).toBe(0);
+    expect(clearWindow(OPUS).code).toBe(0);
+    expect(fs.readFileSync(regPath(ID), 'utf8')).toBe(before);
+    expect(fs.statSync(regPath(ID)).mtimeMs).toBe(mtime);
+    expect(Object.keys(registryOf(ID))).not.toContain('windows');
+  });
+
+  it('PRESERVES keys this build does not know, at the top level and inside an entry', () => {
+    const [m0, m1] = CLASS_MODELS as [string, string];
+    plantWindows(ID, { version: 2, windows: { [m0]: { tokens: 300000, source: 'probe' } } });
+    expect(setWindow(m1, '400000').code).toBe(0);
+    expect(setWindow(m0, '350000').code).toBe(0);
+    const f = windowsFile();
+    expect(f['version']).toBe(2);
+    expect(f.windows[m0]).toMatchObject({ tokens: 350000, source: 'probe' });
+    expect(f.windows[m1]).toMatchObject({ tokens: 400000 });
+  });
+
+  it('clear-window of an absent entry is ok with removed: false, and writes no file', () => {
+    const r = clearWindow(OPUS);
+    expect(r.code).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'clear-window', model: OPUS, removed: false });
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
+  // The write gate: clear-window writes only when it removed an entry. The
+  // file is planted COMPACT and dated in the past, so a rewrite of the very
+  // same object (the writer's two-space form, a fresh mtime) would show.
+  it('clear-window of an absent entry leaves a file holding another entry as it was: bytes and mtime', () => {
+    const other = CLASS_MODELS.find((m) => m !== OPUS)!;
+    plantWindows(ID, JSON.stringify(windowsFor({ [other]: 400000 })));
+    const past = new Date('2026-01-01T00:00:00Z');
+    fs.utimesSync(winPath(ID), past, past);
+    const before = fs.readFileSync(winPath(ID), 'utf8');
+    const mtime = fs.statSync(winPath(ID)).mtimeMs;
+    const r = clearWindow(OPUS);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'clear-window', model: OPUS, removed: false });
+    expect(fs.readFileSync(winPath(ID), 'utf8')).toBe(before);
+    expect(fs.statSync(winPath(ID)).mtimeMs).toBe(mtime);
+  });
+
+  it('clear-window drops one entry and re-materialises: one class model unmeasured is the default rule again', () => {
+    for (const m of CLASS_MODELS) expect(setWindow(m, '400000').code).toBe(0);
+    expect(eighthKey()).toBe('400000');
+    const r = clearWindow(OPUS);
+    expect(r.body).toMatchObject({ removed: true });
+    expect(eighthKey()).toBe('200000');
+    expect(Object.keys(windowsFile().windows)).toEqual(CLASS_MODELS.filter((m) => m !== OPUS));
+  });
+
+  it('clearing the LAST entry deletes the file, so absent keeps meaning no measured window', () => {
+    expect(setWindow(OPUS, '400000').code).toBe(0);
+    expect(clearWindow(OPUS).body).toMatchObject({ removed: true });
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+    expect(showOf().body['windows']).toEqual({ state: 'absent' });
+  });
+
+  it('clearing the last entry KEEPS a file that still holds a top-level key this build does not know', () => {
+    plantWindows(ID, { version: 2, windows: { [OPUS]: { tokens: 300000 } } });
+    expect(clearWindow(OPUS).body).toMatchObject({ removed: true });
+    expect(windowsFile()).toEqual({ version: 2, windows: {} });
+  });
+
+  it('clear-window has no typo guard: a stale entry for a model the lane no longer names is removable', () => {
+    plantWindows(ID, windowsFor({ 'model-9-omega': 5000 }));
+    expect(clearWindow('model-9-omega').body).toMatchObject({ ok: true, removed: true });
+    expect(fs.existsSync(winPath(ID))).toBe(false);
+  });
+
+  it('a stale entry for a model no class names is ignored by the rule and still listed by show', () => {
+    plantWindows(ID, windowsFor({ ...Object.fromEntries(CLASS_MODELS.map((m) => [m, 400000])), 'model-9-omega': 5000 }));
+    const r = showOf();
+    expect(r.body['contextWindow']).toEqual({ tokens: 400000, rule: 'measured', unmeasured: [] });
+    expect(Object.keys((r.body['windows'] as { byModel: Record<string, unknown> }).byModel)).toContain('model-9-omega');
+  });
+
+  it.each([
+    ['not JSON', '{ this is not json'],
+    ['an array', '[]'],
+    ['a window too small', JSON.stringify({ windows: { 'model-9-omega': { tokens: 5 } } })],
+  ])('an unreadable windows file (%s): both verbs refuse with the remedy, and the file is untouched', (_why, body) => {
+    plantWindows(ID, body);
+    for (const r of [setWindow(OPUS, '400000'), clearWindow(OPUS)]) {
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('windows-unreadable');
+      expect(String(r.body['detail'])).toContain(winPath(ID));
+      expect(String(r.body['detail'])).toMatch(/delete it to drop every measured window/);
+    }
+    expect(fs.readFileSync(winPath(ID), 'utf8')).toBe(body);
+  });
+
+  it('a DIRECTORY at the windows path: both verbs refuse windows-unreadable, never a block', () => {
+    fs.mkdirSync(winPath(ID), { recursive: true });
+    for (const r of [setWindow(OPUS, '400000'), clearWindow(OPUS)]) {
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('windows-unreadable');
+      expect(String(r.body['detail'])).toMatch(/not a regular file/);
+    }
+    expect(fs.statSync(winPath(ID)).isDirectory()).toBe(true);
+  });
+
+  it('a lane whose env block cannot be rendered refuses both, as set-effort does, with nothing written', () => {
+    // A legacy `subagent: opus` left on disk from before the 2026-09-09
+    // narrowing: `parseRegistry` still reads it, `modelEnvBlock` refuses to
+    // render it. Written first, the window would change on disk and the op
+    // would then answer `materialise`'s refusal; refused first, nothing moves.
+    plantWindows(ID, windowsFor({ [OPUS]: 300000 }));
+    const before = fs.readFileSync(winPath(ID), 'utf8');
+    const reg = JSON.parse(fs.readFileSync(regPath(ID), 'utf8'));
+    reg.subagent = 'opus';
+    fs.writeFileSync(regPath(ID), `${JSON.stringify(reg, null, 2)}\n`);
+    for (const r of [setWindow(OPUS, '400000'), clearWindow(OPUS)]) {
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('unroutable-lane');
+      expect(String(r.body['detail'])).toMatch(/set-subagent <haiku\|sonnet>/);
+      expect(String(r.body['detail'])).toMatch(/No window was written/);
+    }
+    expect(fs.readFileSync(winPath(ID), 'utf8')).toBe(before);
+  });
+
+  it('a settings.json the materialise cannot rewrite: the refusal says the window was already recorded', () => {
+    fs.writeFileSync(path.join(home, LEGACY_SUFFIX, 'settings.json'), '{ this is not json');
+    const r = setWindow(OPUS, '400000');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('settings-unwritable');
+    expect(String(r.body['detail'])).toContain(`${winPath(ID)} itself was already updated`);
+    expect(windowsFile().windows[OPUS]!['tokens']).toBe(400000);
+  });
+
+  it('an anthropic lane refuses both, as it refuses every op but show', () => {
+    const anthropic = ROSTER.accounts[1]!.id;
+    for (const r of [setWindow(OPUS, '400000', anthropic), clearWindow(OPUS, anthropic)]) {
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('anthropic-lane');
+    }
+  });
+
+  it('a lane with no class registry refuses both, naming init', () => {
+    const bare = ROSTER.accounts[3]!.id;
+    for (const r of [setWindow(OPUS, '400000', bare), clearWindow(OPUS, bare)]) {
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('no-registry');
+    }
+  });
+
+  it('writes the file 0600 under a permissive umask, and leaves no temp file', () => {
+    const prev = process.umask(0o022);
+    try {
+      expect(setWindow(OPUS, '400000').code).toBe(0);
+    } finally {
+      process.umask(prev);
+    }
+    expect(fs.statSync(winPath(ID)).mode & 0o777).toBe(0o600);
+    expect(fs.readdirSync(path.dirname(winPath(ID))).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+
+  // Root ignores a directory's write bit, so this proves nothing there: a
+  // visible skip, not a false red (the lane.json rename case's own reason).
+  it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
+    'a models directory it cannot write: both verbs answer windows-unwritable, and the file is unchanged', () => {
+      expect(setWindow(OPUS, '400000').code).toBe(0);
+      const before = fs.readFileSync(winPath(ID), 'utf8');
+      const dir = path.dirname(winPath(ID));
+      fs.chmodSync(dir, 0o555);
+      try {
+        const set = setWindow(OPUS, '350000');
+        expect(set.code).toBe(1);
+        expect(set.body['error']).toBe('windows-unwritable');
+        expect(String(set.body['detail'])).toMatch(/could not be written/);
+        // OPUS is the only entry, so clearing it is the unlink arm.
+        const clear = clearWindow(OPUS);
+        expect(clear.code).toBe(1);
+        expect(clear.body['error']).toBe('windows-unwritable');
+        expect(String(clear.body['detail'])).toMatch(/could not be removed/);
+      } finally {
+        fs.chmodSync(dir, 0o755);
+      }
+      expect(fs.readFileSync(winPath(ID), 'utf8')).toBe(before);
+    });
+
+  it('a missing --tokens or --model is a usage error at exit 2', () => {
+    const r = op('set-window', '--file', rosterPath(), '--id', ID, '--model', OPUS);
+    expect(r.code).toBe(2);
+    expect(String(r.body['detail'])).toContain('--tokens');
+    expect(op('clear-window', '--file', rosterPath(), '--id', ID).code).toBe(2);
+  });
+});
+
+describe('the advance file through init, set-class, rm and advance-backfill (auto-advance spec §2.1, §2.2)', () => {
+  const ID = LEGACY_EXTERNAL_ID;
+  const withCodexRow = (): void => seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+  const plantSeededRegistry = (id: string): void => {
+    fs.mkdirSync(path.dirname(regPath(id)), { recursive: true });
+    fs.writeFileSync(regPath(id), SEEDED_REGISTRY_BYTES, { mode: 0o600 });
+  };
+
+  it("SEED_FAMILIES.codex has its one literal word, the empty class's seed this file reads off the source", () => {
+    expect(seedEmptyFamily(), "deploy/models-op.mjs's SEED_FAMILIES has no `<class>: '<word>',` line for its empty class")
+      .not.toBeNull();
+  });
+
+  it("init codex writes the advance file: every class's family, the empty class's seed included, 0600", () => {
+    withCodexRow();
+    const prev = process.umask(0o022);
+    try {
+      const r = opAt('init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex');
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+    } finally {
+      process.umask(prev);
+    }
+    expect(fs.readFileSync(advPath(CODEX_ROW.id), 'utf8'))
+      .toBe(serializeAdvance(backfillAdvance({ registry: SEEDED, seedFamilies: CODEX_SEEDS })));
+    expect(Object.values(CODEX_SEEDS).every((f) => typeof f === 'string' && f.length > 0)).toBe(true);
+    expect(fs.statSync(advPath(CODEX_ROW.id)).mode & 0o777).toBe(0o600);
+  });
+
+  it.each([
+    ['openrouter', []],
+    ['compatible', ['--base-url', 'https://compatible.example.invalid']],
+  ] as [string, string[]][])('init %s writes no advance file', (probe, extra) => {
+    const router = ROSTER.accounts[3]!.id;
+    const r = op('init', '--file', rosterPath(), '--id', router, '--probe', probe, ...extra);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(fs.existsSync(advPath(router))).toBe(false);
+  });
+
+  it('init codex over an advance file an earlier registry left keeps its holds and history, clears pending and previous, re-seeds every family as a fresh init does, and says so (D-5966)', () => {
+    withCodexRow();
+    fs.mkdirSync(path.dirname(advPath(CODEX_ROW.id)), { recursive: true });
+    const fresh = backfillAdvance({ registry: SEEDED, seedFamilies: CODEX_SEEDS });
+    const familiesOf = (adv: Advance): Record<string, string | null> =>
+      Object.fromEntries(Object.entries(adv.classes).map(([c, x]) => [c, x.family]));
+    // Left by another registry: no family the new pins have (the empty class has none at all), a previous pin, a
+    // hold, a history entry, and a hand intent whose `to` is the very pin init is about to write.
+    const left = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: null });
+    const hold = { at: NOW, by: 'hand' } as const;
+    const history: HistoryEntry[] = [
+      { at: NOW, how: 'advance', from: 'model-5.6-gamma', to: 'model-6.1-gamma', ok: true, canary: 'passed' },
+    ];
+    left.classes.opus = { ...left.classes.opus, hold, previous: { model: 'model-5.6-gamma', effort: 'max' }, history };
+    left.pending = {
+      how: 'hand', class: 'opus', from: 'model-5.6-gamma', to: SEEDED.classes.opus, emptied: [], at: NOW,
+    };
+    // CONTROL: every family the file holds differs from the one a fresh init writes.
+    for (const [c, f] of Object.entries(familiesOf(left))) expect(f, c).not.toBe(familiesOf(fresh)[c]);
+    plantAdvance(CODEX_ROW.id, left);
+    const r = opAt('init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['created']).toBe(true);
+    // Soft, so a mutation that keeps the old intent is seen by the false-move assertion below as well.
+    const adv = advanceOf(CODEX_ROW.id);
+    expect.soft(familiesOf(adv), 'every family as a fresh init writes it').toEqual(familiesOf(fresh));
+    expect.soft(adv.pending, 'the old intent is cleared').toBeNull();
+    expect.soft(Object.values(adv.classes).map((x) => x.previous), 'every previous cleared')
+      .toEqual([null, null, null, null]);
+    expect.soft([adv.classes.opus.hold, adv.classes.opus.history], 'the hold and the history kept')
+      .toEqual([hold, history]);
+    expect.soft(String(r.body['advanceNote']))
+      .toMatch(/^the lane already had an advance file, left by an earlier class registry, and it was reused \(D-5966\)/);
+    expect.soft(r.stderr).toContain(`models-op: ${String(r.body['advanceNote'])}`);
+    // The next set-class records its own move and nothing else: no intent of the old registry's lands as a move.
+    expect(opAt('set-class', '--file', rosterPath(), '--id', CODEX_ROW.id, '--class', 'sonnet', '--model', 'model-6.1-beta').code)
+      .toBe(0);
+    const after = advanceOf(CODEX_ROW.id);
+    expect(after.classes.opus.history, 'no false move').toEqual(history);
+    expect(after.classes.sonnet.history).toEqual([
+      { at: NOW, how: 'hand', from: SEEDED.classes.sonnet, to: 'model-6.1-beta', ok: true, canary: 'not-run' },
+    ]);
+  });
+
+  it('init of a probe with no seeds over an advance file an earlier registry left resets it the same way: no family, pending and previous cleared, holds and history kept (D-5966)', () => {
+    const router = ROSTER.accounts[3]!.id;
+    fs.mkdirSync(path.dirname(advPath(router)), { recursive: true });
+    // Left by another registry: families, a previous, a hold and a history entry on one class, and a hand intent
+    // to none, the pin init's unseeded registry gives every class.
+    const left = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: ADV_SEEDS });
+    const hold = { at: NOW, by: 'hand' } as const;
+    const history: HistoryEntry[] = [
+      { at: NOW, how: 'hand', from: 'model-5.6-gamma', to: 'model-6.1-gamma', ok: true, canary: 'not-run' },
+    ];
+    left.classes.opus = { ...left.classes.opus, hold, previous: { model: 'model-5.6-gamma', effort: 'max' }, history };
+    left.pending = { how: 'hand', class: 'haiku', from: 'model-5.6-alpha', to: null, emptied: [], at: NOW };
+    plantAdvance(router, left);
+    const r = opAt('init', '--file', rosterPath(), '--id', router, '--probe', 'compatible',
+      '--base-url', 'https://compatible.example.invalid');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['created']).toBe(true);
+    // Soft, so a mutation that skips the reset is seen by the false-move assertion below as well.
+    const adv = advanceOf(router);
+    expect.soft(Object.values(adv.classes).map((x) => x.family), 'no family: the probe has no seeds')
+      .toEqual([null, null, null, null]);
+    expect.soft(adv.pending, 'the old intent is cleared').toBeNull();
+    expect.soft(Object.values(adv.classes).map((x) => x.previous), 'every previous cleared')
+      .toEqual([null, null, null, null]);
+    expect.soft(String(r.body['advanceNote']))
+      .toMatch(/^the lane already had an advance file, left by an earlier class registry, and it was reused \(D-5966\)/);
+    // The next set-class records its own move and nothing else, and the hold and history are still there.
+    const set = opAt('set-class', '--file', rosterPath(), '--id', router, '--class', 'sonnet', '--model', 'model-6.1-beta');
+    expect(set.code, set.stdout + set.stderr).toBe(0);
+    const after = advanceOf(router);
+    expect(after.classes.haiku.history, 'no false move').toEqual([]);
+    expect([after.classes.opus.hold, after.classes.opus.history], 'the hold and the history kept').toEqual([hold, history]);
+    expect(after.classes.sonnet.history).toEqual([
+      { at: NOW, how: 'hand', from: null, to: 'model-6.1-beta', ok: true, canary: 'not-run' },
+    ]);
+  });
+
+  it.each([
+    ['a FIFO, which it cannot read', 'advance-file-unreadable', /could not be read: .*not a regular file/],
+    ['[], which is not an advance file', 'advance-file-invalid', /^an advance file must be a JSON object/],
+  ] as [string, string, RegExp][])('init codex over an advance file an earlier registry left that is %s creates the registry, answers one object, leaves that file as it is, and says so (D-5966)', (shape, word, reason) => {
+    withCodexRow();
+    const adv = advPath(CODEX_ROW.id);
+    fs.mkdirSync(path.dirname(adv), { recursive: true });
+    if (word === 'advance-file-unreadable') expect(spawnSync('mkfifo', [adv]).status, `mkfifo ${adv}`).toBe(0);
+    else plantAdvance(CODEX_ROW.id, '[]');
+    // Bounded, and the one-object contract asserted before the body is read: an op that crashed after its registry
+    // write prints nothing, and one that opened the FIFO would block.
+    const run = spawnSync(process.execPath, [OP, 'init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex'],
+      { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: NOW }, encoding: 'utf8', timeout: 10_000 });
+    expect(run.signal, `init over ${shape} did not exit by itself`).toBeNull();
+    expect(run.stdout.split('\n'), `stdout is not one JSON line: ${JSON.stringify(run.stdout)} ${run.stderr}`).toHaveLength(2);
+    const body = JSON.parse(run.stdout.split('\n')[0]!) as Record<string, unknown>;
+    expect([run.status, body['ok'], body['created']], run.stderr).toEqual([0, true, true]);
+    expect(fs.readFileSync(regPath(CODEX_ROW.id), 'utf8'), 'the registry init creates').toBe(SEEDED_REGISTRY_BYTES);
+    if (word === 'advance-file-unreadable') expect(fs.statSync(adv).isFIFO(), 'init replaced the FIFO').toBe(true);
+    else expect(fs.readFileSync(adv, 'utf8')).toBe('[]');
+    const note = String(body['advanceNote']);
+    expect(note.startsWith(`${word}: `), note).toBe(true);
+    expect(note.slice(word.length + 2)).toMatch(reason);
+    expect(note).toContain(adv);
+    expect(note).toMatch(/The class registry was created; the advance file an earlier registry left could not be used, so it was left as it is: its families are not re-seeded\./);
+    expect(note).not.toContain('Nothing was');
+    expect(run.stderr).toContain(`models-op: ${note}`);
+  });
+
+  it.each([
+    ['with no advance file', false, /The class registry was created; the lane has no advance file yet, and the next write of one creates it from the registry\.$/],
+    ['over an advance file an earlier registry left', true, /The class registry was created; the advance file an earlier registry left is as it was, its families not re-seeded\./],
+  ] as [string, boolean, RegExp][])("init codex %s whose advance-file write fails answers ok, says what was and was not written, and never 'Nothing was changed'", (_why, leftover, rest) => {
+    withCodexRow();
+    let left = '';
+    if (leftover) {
+      fs.mkdirSync(path.dirname(advPath(CODEX_ROW.id)), { recursive: true });
+      left = serializeAdvance(backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: null }));
+      plantAdvance(CODEX_ROW.id, left);
+    }
+    // The advance file's one write made to fail for real, in a COPY of the op (the set-class registry-write case's
+    // idiom): `writeAdvance` aims `writeJsonFile` under the registry FILE, which init has just written.
+    const src = fs.readFileSync(OP, 'utf8');
+    const WRITE = "return writeJsonFile(advancePath(id), parsed, 'advance-unwritable');";
+    expect(src.split(WRITE), 'writeAdvance has its one write').toHaveLength(2);
+    const copy = path.join(home, 'models-op-advance-unwritable.mjs');
+    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+      .replace(WRITE, "return writeJsonFile(path.join(registryPath(id), 'x'), parsed, 'advance-unwritable');"));
+    const run = spawnSync(process.execPath, [copy, 'init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex'],
+      { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: NOW }, encoding: 'utf8', timeout: 10_000 });
+    expect(run.stdout.split('\n'), `stdout is not one JSON line: ${JSON.stringify(run.stdout)} ${run.stderr}`).toHaveLength(2);
+    const body = JSON.parse(run.stdout.split('\n')[0]!) as Record<string, unknown>;
+    expect([run.status, body['ok'], body['created']], run.stderr).toEqual([0, true, true]);
+    expect(fs.readFileSync(regPath(CODEX_ROW.id), 'utf8')).toBe(SEEDED_REGISTRY_BYTES);
+    if (leftover) expect(fs.readFileSync(advPath(CODEX_ROW.id), 'utf8')).toBe(left);
+    else expect(fs.existsSync(advPath(CODEX_ROW.id))).toBe(false);
+    const note = String(body['advanceNote']);
+    expect(note).toMatch(/^advance-unwritable: .*could not be written: /);
+    expect(note).toMatch(rest);
+    expect(note).not.toContain('Nothing was changed');
+    expect(run.stderr).toContain(`models-op: ${note}`);
+  });
+
+  it('set-class records a hand entry and rewrites the family from a pin that parses', () => {
+    plantAdv();
+    const r = opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'model-6-delta');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const adv = advanceOf(ID);
+    expect(adv.classes.opus.family).toBe('delta');
+    expect(adv.classes.opus.history).toEqual([
+      { at: NOW, how: 'hand', from: 'model-5.6-gamma', to: 'model-6-delta', ok: true, canary: 'not-run' },
+    ]);
+    expect(adv.classes.sonnet.history, 'a class the call did not move gets no entry').toEqual([]);
+  });
+
+  it.each([
+    ['none', ['--class', 'haiku', '--model', 'none'], { haiku: { from: 'model-5.6-alpha', to: null } }],
+    ['a pin that breaks the id grammar', ['--class', 'opus', '--model', 'vendor-6-alpha-mini'],
+      { opus: { from: 'model-5.6-gamma', to: 'vendor-6-alpha-mini' } }],
+    ['a class one-model-one-class empties', ['--class', 'fable', '--model', 'model-5.6-alpha'],
+      { haiku: { from: 'model-5.6-alpha', to: null }, fable: { from: null, to: 'model-5.6-alpha' } }],
+  ] as [string, string[], Record<string, { from: string | null; to: string | null }>][])(
+    'set-class with %s records every class it changed, and clears the family of each one it emptied or pinned off-grammar (D-5195)',
+    (_why, args, moves) => {
+      plantAdv();
+      const r = opAt('set-class', '--file', rosterPath(), '--id', ID, ...args);
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      const adv = advanceOf(ID);
+      for (const [c, m] of Object.entries(moves)) {
+        expect(adv.classes[c as ModelClass].history, c).toEqual([{ at: NOW, how: 'hand', ...m, ok: true, canary: 'not-run' }]);
+        expect(adv.classes[c as ModelClass].family, c).toBe(familyOf(m.to));
+      }
+    });
+
+  it('set-class <class> none on a class that is already empty clears the family it was seeded with, and records no move (D-5195; Review Focus: a class emptied by hand)', () => {
+    plantAdv();   // ADV_REGISTRY: the fourth class empty
+    plantAdvance(ID, backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: ADV_SEEDS }));   // …and seeded 'delta'
+    const before = registryOf(ID) as unknown as Registry;
+    // CONTROL: seeded, the empty class would be filled from its family's newest eligible model.
+    expect(chooseCandidate({ registry: before, catalogue: ADV_CATALOGUE, cls: 'fable', family: 'delta' }).candidate)
+      .toBe('model-6-delta');
+    const r = opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'fable', '--model', 'none');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const fable = advanceOf(ID).classes.fable;
+    expect(fable.family).toBeNull();
+    expect(fable.history, 'an unchanged pin is no move: no history entry').toEqual([]);
+    expect(chooseCandidate({ registry: registryOf(ID) as unknown as Registry, catalogue: ADV_CATALOGUE, cls: 'fable',
+      family: fable.family })).toEqual({ candidate: null, reason: null, blocked: null });
+  });
+
+  it('set-class leaves previous alone, so Revert still undoes the last automatic advance', () => {
+    plantAdv();
+    const adv = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS });
+    adv.classes.opus.previous = { model: 'model-5.6-gamma', effort: 'max' };
+    plantAdvance(ID, adv);
+    expect(opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'model-6-delta').code).toBe(0);
+    expect(advanceOf(ID).classes.opus.previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
+  });
+
+  it('set-class over an advance file it cannot read still writes the registry, leaves that file byte for byte, and says so', () => {
+    plantAdv();
+    plantAdvance(ID, '{ this is not json');
+    const r = opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'model-6-delta');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(classesOf(ID)['opus']).toBe('model-6-delta');
+    expect(fs.readFileSync(advPath(ID), 'utf8')).toBe('{ this is not json');
+    expect(String(r.body['advanceNote'])).toMatch(/^advance-file-invalid: .*is not valid JSON/);
+    expect(r.stderr).toContain('models-op: advance-file-invalid: ');
+  });
+
+  it("set-class with no advance file creates one: each pin's own family, init's seed for the empty class, and the move's hand entry", () => {
+    plantAdv();
+    expect(opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'sonnet', '--model', 'model-6.1-beta').code).toBe(0);
+    const want = recordMove(backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS }), 'sonnet',
+      { at: NOW, how: 'hand', from: 'model-6-beta', to: 'model-6.1-beta', ok: true, canary: 'not-run' });
+    expect(fs.readFileSync(advPath(ID), 'utf8')).toBe(serializeAdvance(want));
+  });
+
+  it('set-class writes its hand intent before the registry is renamed, and records the move from it only after materialise (D-5188)', () => {
+    // The order is the guard and a source scan its only red: a SIGTERM cannot be aimed between two lines. The scan
+    // reads `main`'s mutation tail alone, because `revertOp` (Task 6) spells the same materialise line.
+    const whole = fs.readFileSync(OP, 'utf8');
+    const src = whole.slice(whole.indexOf('// Every remaining op needs an existing registry.'),
+      whole.indexOf('process.exit(main(process.argv));'));
+    const at = (text: string): number => {
+      const i = src.indexOf(text);
+      expect(i, `main's mutation tail lacks: ${text}`).toBeGreaterThan(0);
+      return i;
+    };
+    const begin = at("const hand = opName === 'set-class' ? beginHandMove(a.id, registry, validated, a.class) : null;");
+    const rename = at('const w = writeRegistry(a.id, validated);');
+    const mat = at('const mat = materialise(account, validated, catalogue, windowsOf(win));');
+    const settle = at('settleHandMove(a.id, validated)');
+    expect(begin).toBeLessThan(rename);
+    expect(mat).toBeLessThan(settle);
+  });
+
+  it('a set-class cut short after the registry rename leaves its hand intent, and the next locked writer records the move: the class stays empty (Review Focus: the crash gap, a hand set-class cut short)', () => {
+    plantAdv();
+    // A directory where the TSV goes: materialise fails AFTER the rename, where a SIGTERM would cut a set-class short.
+    const tsv = path.join(home, '.ccrc', 'models', `${ID}.classes.tsv`);
+    fs.rmSync(tsv);
+    fs.mkdirSync(tsv);
+    const r = opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'none');
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(r.body['error']).toBe('materialise-failed');
+    expect(classesOf(ID)['opus'], 'the registry moved').toBeNull();
+    const cut = advanceOf(ID);
+    expect(cut.pending).toEqual({ how: 'hand', class: 'opus', from: 'model-5.6-gamma', to: null, emptied: [], at: NOW });
+    expect([cut.classes.opus.family, cut.classes.opus.history]).toEqual(['gamma', []]);
+    // The next locked writer, a set-class of another class once the TSV path is fixed, settles it first.
+    fs.rmdirSync(tsv);
+    expect(opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'sonnet', '--model', 'model-6.1-beta').code).toBe(0);
+    const after = advanceOf(ID);
+    expect(after.pending).toBeNull();
+    expect(after.classes.opus.history).toEqual([
+      { at: NOW, how: 'hand', from: 'model-5.6-gamma', to: null, ok: true, canary: 'not-run' },
+    ]);
+    expect([after.classes.opus.family, after.classes.opus.previous]).toEqual([null, null]);
+    expect(after.classes.sonnet.history).toEqual([
+      { at: NOW, how: 'hand', from: 'model-6-beta', to: 'model-6.1-beta', ok: true, canary: 'not-run' },
+    ]);
+    expect(chooseCandidate({ registry: registryOf(ID) as unknown as Registry, catalogue: ADV_CATALOGUE, cls: 'opus',
+      family: after.classes.opus.family })).toEqual({ candidate: null, reason: null, blocked: null });
+  });
+
+  it("a set-class whose registry write fails after its intent is written says what changed, never 'Nothing was changed', and the next writer records no move (D-5188)", () => {
+    plantAdv();
+    // The registry write is made to fail for real, in a COPY of the op (the probe idiom of the readAdvance and
+    // writeAdvance describe below): `writeRegistry` aims `writeJsonFile` under the registry FILE, so its mkdir fails
+    // after `beginHandMove` has written the intent. Every other byte of the copy is the op as it is.
+    const src = fs.readFileSync(OP, 'utf8');
+    const WRITE = "return writeJsonFile(registryPath(id), registry, 'registry-unwritable');";
+    expect(src.split(WRITE), 'writeRegistry has its one line').toHaveLength(2);
+    const copy = path.join(home, 'models-op-unwritable.mjs');
+    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+      .replace(WRITE, "return writeJsonFile(path.join(registryPath(id), 'x'), registry, 'registry-unwritable');"));
+    const run = spawnSync(process.execPath,
+      [copy, 'set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'model-6-delta'],
+      { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: NOW }, encoding: 'utf8' });
+    expect(run.status, run.stdout + run.stderr).toBe(1);
+    const body = JSON.parse(run.stdout.split('\n')[0]!) as Record<string, unknown>;
+    expect(body['error']).toBe('registry-unwritable');
+    expect(String(body['detail']))
+      .toMatch(/could not be written: .*\. The registry was not changed\. The hand intent this set-class wrote/);
+    expect(String(body['detail'])).not.toContain('Nothing was changed');
+    expect(classesOf(ID)['opus'], 'the registry did not move').toBe('model-5.6-gamma');
+    expect(advanceOf(ID).pending).toEqual(
+      { how: 'hand', class: 'opus', from: 'model-5.6-gamma', to: 'model-6-delta', emptied: [], at: NOW });
+    // The real op, next: it finds the pin unchanged and records no move from that intent.
+    expect(opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'sonnet', '--model', 'model-6.1-beta').code).toBe(0);
+    const after = advanceOf(ID);
+    expect([after.pending, after.classes.opus.family, after.classes.opus.history]).toEqual([null, 'gamma', []]);
+  });
+
+  it('a hand intent whose rename never happened is dropped by the next locked writer: no entry, and the family as it was', () => {
+    plantAdv();   // the registry still pins model-5.6-gamma: the set-class died before its rename
+    const adv = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS });
+    adv.pending = { how: 'hand', class: 'opus', from: 'model-5.6-gamma', to: null, emptied: [], at: NOW };
+    plantAdvance(ID, adv);
+    expect(opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'sonnet', '--model', 'model-6.1-beta').code).toBe(0);
+    const after = advanceOf(ID);
+    expect(after.pending).toBeNull();
+    expect([after.classes.opus.family, after.classes.opus.history]).toEqual(['gamma', []]);
+  });
+
+  it("rm reaps the advance file with the lane's other model files, last", () => {
+    plantAdv();
+    plantWindows(ID, windowsFor({ 'model-5.6-gamma': 400000 }));
+    expect(opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'sonnet', '--model', 'model-6.1-beta').code).toBe(0);
+    const r = op('rm', '--file', rosterPath(), '--id', ID);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const dir = path.join(home, '.ccrc', 'models');
+    expect(r.body['removed']).toEqual([regPath(ID), path.join(dir, `${ID}.json`), path.join(dir, `${ID}.classes.tsv`),
+      path.join(dir, `${ID}.effort.json`), winPath(ID), advPath(ID)]);
+    expect(fs.existsSync(advPath(ID))).toBe(false);
+  });
+
+  it('advance-backfill creates the file once, from the registry, and never rewrites it', () => {
+    withCodexRow();
+    plantSeededRegistry(CODEX_ROW.id);
+    const first = op('advance-backfill', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(first.body).toEqual({ ok: true, op: 'advance-backfill', id: CODEX_ROW.id, created: true });
+    const bytes = fs.readFileSync(advPath(CODEX_ROW.id), 'utf8');
+    expect(bytes).toBe(serializeAdvance(backfillAdvance({ registry: SEEDED, seedFamilies: CODEX_SEEDS })));
+    const mtime = fs.statSync(advPath(CODEX_ROW.id)).mtimeMs;
+    const again = op('advance-backfill', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(again.body).toEqual({ ok: true, op: 'advance-backfill', id: CODEX_ROW.id, created: false, why: 'present' });
+    expect(fs.readFileSync(advPath(CODEX_ROW.id), 'utf8')).toBe(bytes);
+    expect(fs.statSync(advPath(CODEX_ROW.id)).mtimeMs).toBe(mtime);
+  });
+
+  it('advance-backfill answers why and writes nothing on a lane that is not codex-kind, or whose probe is not codex (D-5198)', () => {
+    plantCodex(ID);
+    expect(op('advance-backfill', '--file', rosterPath(), '--id', ID).body)
+      .toEqual({ ok: true, op: 'advance-backfill', id: ID, created: false, why: 'lane-not-codex-kind' });
+    expect(fs.existsSync(advPath(ID))).toBe(false);
+    withCodexRow();
+    expect(op('init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'compatible',
+      '--base-url', 'https://compatible.example.invalid').code).toBe(0);
+    expect(op('advance-backfill', '--file', rosterPath(), '--id', CODEX_ROW.id).body)
+      .toEqual({ ok: true, op: 'advance-backfill', id: CODEX_ROW.id, created: false, why: 'probe-not-codex' });
+    expect(fs.existsSync(advPath(CODEX_ROW.id))).toBe(false);
+  });
+
+  it('advance-backfill leaves an advance file it cannot read as it is, and says which', () => {
+    withCodexRow();
+    plantSeededRegistry(CODEX_ROW.id);
+    plantAdvance(CODEX_ROW.id, '[]');
+    expect(op('advance-backfill', '--file', rosterPath(), '--id', CODEX_ROW.id).body)
+      .toEqual({ ok: true, op: 'advance-backfill', id: CODEX_ROW.id, created: false, why: 'advance-file-invalid' });
+    expect(fs.readFileSync(advPath(CODEX_ROW.id), 'utf8')).toBe('[]');
+  });
+
+  it('advance-backfill refuses an Anthropic lane, and a lane with no registry', () => {
+    expect(op('advance-backfill', '--file', rosterPath(), '--id', ROSTER.accounts[1]!.id).body['error']).toBe('anthropic-lane');
+    expect(op('advance-backfill', '--file', rosterPath(), '--id', ROSTER.accounts[3]!.id).body['error']).toBe('no-registry');
+  });
+
+  it('a class emptied by hand stays empty: no later backfill, re-materialise, init or other set-class gives it a family back (Review Focus: a class emptied by hand)', () => {
+    withCodexRow();
+    plantAdv(CODEX_ROW.id);
+    expect(opAt('set-class', '--file', rosterPath(), '--id', CODEX_ROW.id, '--class', 'opus', '--model', 'none').code).toBe(0);
+    const emptied = fs.readFileSync(advPath(CODEX_ROW.id), 'utf8');
+    expect(advanceOf(CODEX_ROW.id).classes.opus.family).toBeNull();
+    // Every hour's first step (W2 runs advance-backfill, then the refresh's re-materialise), and init again:
+    expect(op('advance-backfill', '--file', rosterPath(), '--id', CODEX_ROW.id).body)
+      .toMatchObject({ created: false, why: 'present' });
+    expect(op('materialise', '--file', rosterPath(), '--id', CODEX_ROW.id).code).toBe(0);
+    expect(op('init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex').body['created']).toBe(false);
+    expect(fs.readFileSync(advPath(CODEX_ROW.id), 'utf8')).toBe(emptied);
+    // …and a hand change to another class leaves it emptied.
+    expect(opAt('set-class', '--file', rosterPath(), '--id', CODEX_ROW.id, '--class', 'haiku', '--model', 'model-6.1-alpha').code).toBe(0);
+    const after = advanceOf(CODEX_ROW.id);
+    expect(after.classes.opus.family).toBeNull();
+    const registry = registryOf(CODEX_ROW.id) as unknown as Registry;
+    expect(chooseCandidate({ registry, catalogue: ADV_CATALOGUE, cls: 'opus', family: after.classes.opus.family }))
+      .toEqual({ candidate: null, reason: null, blocked: null });
+    // CONTROL: the family it lost would have filled it from that family's newest eligible model.
+    expect(chooseCandidate({ registry, catalogue: ADV_CATALOGUE, cls: 'opus', family: 'gamma' }).candidate).toBe('model-6.1-gamma');
+  });
+});
+
+describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
+  const ID = LEGACY_EXTERNAL_ID;
+  /** A lane as an automatic advance leaves it: opus moved from model-5.6-gamma to model-6.1-gamma, its effort
+   *  resolved from max down to xhigh (the newer row offers four levels). */
+  const ADVANCED: Registry = {
+    ...ADV_REGISTRY, classes: { ...ADV_REGISTRY.classes, opus: 'model-6.1-gamma' },
+    effort: { ...ADV_REGISTRY.effort, opus: 'xhigh' },
+  };
+  const advanced = (previous: { model: string | null; effort: string | null } = { model: 'model-5.6-gamma', effort: 'max' },
+    registry: Registry = ADVANCED, cls: ModelClass = 'opus'): void => {
+    plantAdv(ID, registry);
+    const adv = backfillAdvance({ registry, seedFamilies: CODEX_SEEDS });
+    adv.classes[cls].previous = previous;
+    adv.classes[cls].history = [{ at: '2026-10-14T10:00:00Z', how: 'advance', from: previous.model,
+      to: registry.classes[cls], ok: true, canary: 'passed' }];
+    plantAdvance(ID, adv);
+  };
+  const verb = (v: string, cls = 'opus', extra: NodeJS.ProcessEnv = {}): Result =>
+    opEnv({ CCRC_MODELS_NOW: NOW, ...extra }, v, '--file', rosterPath(), '--id', ID, '--class', cls);
+  /** Every file under ~/.ccrc/models, name → bytes: what "writes nothing" is measured against. */
+  const modelFiles = (): Record<string, string> => {
+    const d = path.join(home, '.ccrc', 'models');
+    return Object.fromEntries(fs.readdirSync(d).sort().map((n) => [n, fs.readFileSync(path.join(d, n), 'utf8')]));
+  };
+
+  it('hold records when and by what act; a second hold changes nothing; release clears it; a second release changes nothing', () => {
+    plantAdv();
+    const h1 = verb('hold');
+    expect(h1.code, h1.stdout + h1.stderr).toBe(0);
+    expect(h1.body).toMatchObject({ ok: true, op: 'hold', class: 'opus', changed: true });
+    expect(advanceOf(ID).classes.opus.hold).toEqual({ at: NOW, by: 'hand' });
+    const held = fs.readFileSync(advPath(ID), 'utf8');
+    expect(verb('hold', 'opus', { CCRC_MODELS_NOW: '2026-10-16T00:00:00Z' }).body).toMatchObject({ changed: false });
+    expect(fs.readFileSync(advPath(ID), 'utf8')).toBe(held);
+    expect(verb('release').body).toMatchObject({ ok: true, op: 'release', class: 'opus', changed: true });
+    expect(advanceOf(ID).classes.opus.hold).toBeNull();
+    expect(verb('release').body).toMatchObject({ changed: false });
+    expect(fs.readFileSync(regPath(ID), 'utf8'), 'a hold never touches the registry')
+      .toBe(`${JSON.stringify(ADV_REGISTRY, null, 2)}\n`);
+  });
+
+  it("revert puts previous back — the pin, its effort and the lane's env — turns the hold on, clears previous and records the move", () => {
+    advanced();
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'revert', class: 'opus', from: 'model-6.1-gamma', to: 'model-5.6-gamma' });
+    const reg = registryOf(ID) as unknown as Registry;
+    expect([reg.classes.opus, reg.effort?.opus]).toEqual(['model-5.6-gamma', 'max']);
+    expect(settingsOf(LEGACY_SUFFIX).env['ANTHROPIC_DEFAULT_OPUS_MODEL']).toBe('model-5.6-gamma');
+    const opus = advanceOf(ID).classes.opus;
+    expect(opus.hold).toEqual({ at: NOW, by: 'revert' });
+    expect(opus.previous).toBeNull();
+    expect(opus.history[opus.history.length - 1]).toEqual({ at: NOW, how: 'revert', from: 'model-6.1-gamma',
+      to: 'model-5.6-gamma', ok: true, canary: 'not-run', effort: { from: 'xhigh', to: 'max' } });
+  });
+
+  it("revert writes the restored pin's family, so the advance file stays true for every reader (D-5992)", () => {
+    // opus on model-6.1-gamma, family gamma, with a previous pin of another family: the stored family would be stale
+    // the moment the pin moved back, and W2 would read it.
+    advanced({ model: 'model-6-delta', effort: 'max' });
+    expect(advanceOf(ID).classes.opus.family, 'CONTROL: the family before the revert').toBe('gamma');
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(classesOf(ID)['opus']).toBe('model-6-delta');
+    expect(advanceOf(ID).classes.opus.family).toBe(familyOf('model-6-delta'));
+  });
+
+  it('a revert to a previous with no effort level removes the class\'s level and keeps the others, and records the pair (D-5189)', () => {
+    advanced({ model: 'model-5.6-gamma', effort: null });
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const reg = registryOf(ID) as unknown as Registry;
+    expect(reg.classes.opus).toBe('model-5.6-gamma');
+    expect(reg.effort, 'opus has no level now; the other classes keep theirs')
+      .toEqual({ haiku: 'high', sonnet: 'high', fable: 'max' });
+    const opus = advanceOf(ID).classes.opus;
+    expect(opus.history[opus.history.length - 1]).toEqual({ at: NOW, how: 'revert', from: 'model-6.1-gamma',
+      to: 'model-5.6-gamma', ok: true, canary: 'not-run', effort: { from: 'xhigh', to: null } });
+  });
+
+  it('a revert to a previous with no effort level drops the effort map when that level was its only entry (D-5189)', () => {
+    advanced({ model: 'model-5.6-gamma', effort: null }, { ...ADVANCED, effort: { opus: 'xhigh' } });
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const reg = registryOf(ID);
+    expect(reg['classes']).toMatchObject({ opus: 'model-5.6-gamma' });
+    expect(Object.keys(reg), 'no empty effort map is left behind').not.toContain('effort');
+  });
+
+  it('a revert to none keeps the stored family: an empty class is filled from it, and a held one is reported behind it (D-5992)', () => {
+    // fable filled from empty by an advance, then reverted to empty: the plan's example file's fable.
+    advanced({ model: null, effort: null }, { ...ADV_REGISTRY, classes: { ...ADV_REGISTRY.classes, fable: 'model-6-delta' } },
+      'fable');
+    const r = verb('revert', 'fable');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(classesOf(ID)['fable']).toBeNull();
+    expect(advanceOf(ID).classes.fable.family).toBe('delta');
+  });
+
+  it('a revert whose materialise fails puts the registry back and leaves the class held, previous and history as they were (D-5206)', () => {
+    advanced();
+    const reg0 = fs.readFileSync(regPath(ID), 'utf8');
+    const opus0 = advanceOf(ID).classes.opus;
+    fs.writeFileSync(path.join(home, LEGACY_SUFFIX, 'settings.json'), '{ this is not json');
+    const r = verb('revert');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('settings-unwritable');
+    expect(String(r.body['detail'])).toMatch(/opus is held, on model-6\.1-gamma/);
+    expect(fs.readFileSync(regPath(ID), 'utf8')).toBe(reg0);
+    const opus = advanceOf(ID).classes.opus;
+    expect(opus.hold).toEqual({ at: NOW, by: 'revert' });
+    expect([opus.previous, opus.history]).toEqual([opus0.previous, opus0.history]);
+  });
+
+  it('revert sets its own hold over a hand hold already standing: the hold records the act that set it last (D-5190)', () => {
+    advanced();
+    expect(verb('hold').code).toBe(0);   // { at: NOW, by: 'hand' }
+    const later = '2026-10-16T00:00:00Z';
+    const r = verb('revert', 'opus', { CCRC_MODELS_NOW: later });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(advanceOf(ID).classes.opus.hold).toEqual({ at: later, by: 'revert' });
+  });
+
+  it.each([
+    ['no-previous: no automatic advance on record', (): void => { plantAdv(); }, 'opus', 'no-previous'],
+    ['previous-not-in-catalogue', (): void => { advanced({ model: 'model-9-omega', effort: 'max' }); }, 'opus',
+      'previous-not-in-catalogue'],
+    ['previous-taken: another class pins it now', (): void => { advanced({ model: 'model-6-beta', effort: 'high' }); },
+      'opus', 'previous-taken'],
+    ['registry-invalid: the class subagents run as would be emptied', (): void => {
+      advanced({ model: null, effort: null },
+        { ...ADV_REGISTRY, classes: { ...ADV_REGISTRY.classes, sonnet: 'model-6.1-beta' } }, 'sonnet');
+    }, 'sonnet', 'registry-invalid'],
+    ['unroutable-lane: nothing left for an unqualified request', (): void => {
+      advanced({ model: null, effort: null }, { probe: 'codex', classes: { haiku: 'model-6.1-alpha', sonnet: null,
+        opus: null, fable: null }, subagent: 'haiku', discovery: 'catalogue' }, 'haiku');
+    }, 'haiku', 'unroutable-lane'],
+  ] as [string, () => void, string, string][])('revert refuses %s, and writes nothing', (_why, plant, cls, error) => {
+    plant();
+    const before = modelFiles();
+    const r = verb('revert', cls);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(r.body['error']).toBe(error);
+    expect(modelFiles()).toEqual(before);
+  });
+
+  it('revert puts back an effort level its model no longer offers through resolveEffort (D-5189)', () => {
+    advanced({ model: 'model-5.6-gamma', effort: 'ultra' });
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((registryOf(ID) as unknown as Registry).effort?.opus).toBe('low');
+  });
+
+  it('hold settles a pending intent first: the next locked writer records the move that landed (Review Focus: the crash gap)', () => {
+    // A writer killed between the registry rename and its commit leaves this: the pin already on `to`, the intent
+    // still in the advance file.
+    plantAdv(ID, ADVANCED);
+    const adv = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS });
+    adv.pending = { class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma', effortFrom: 'max', effortTo: 'xhigh',
+      at: '2026-10-14T10:00:00Z' };
+    plantAdvance(ID, adv);
+    expect(verb('hold', 'sonnet').code).toBe(0);
+    const after = advanceOf(ID);
+    expect(after.pending).toBeNull();
+    expect(after.classes.opus.previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
+    expect(after.classes.opus.history).toEqual([{ at: '2026-10-14T10:00:00Z', how: 'advance', from: 'model-5.6-gamma',
+      to: 'model-6.1-gamma', ok: true, canary: 'passed', effort: { from: 'max', to: 'xhigh' }, recovered: true }]);
+    expect(after.classes.sonnet.hold).toEqual({ at: NOW, by: 'hand' });
+  });
+
+  it('an intent that never landed is dropped by the next locked writer, even one whose own change is nothing', () => {
+    plantAdv();   // the pin is still model-5.6-gamma: the rename never happened
+    const adv = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS });
+    adv.classes.sonnet.hold = { at: NOW, by: 'hand' };
+    adv.pending = { class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma', effortFrom: 'max', effortTo: 'xhigh',
+      at: '2026-10-14T10:00:00Z' };
+    plantAdvance(ID, adv);
+    expect(verb('hold', 'sonnet').body).toMatchObject({ changed: false });
+    const after = advanceOf(ID);
+    expect(after.pending).toBeNull();
+    expect(after.classes.opus.history).toEqual([]);
+  });
+
+  it("hold settles a hand intent a set-class left between its rename and its record: the move recorded as hand, the emptied class's family cleared, previous untouched (Review Focus: the crash gap, a hand set-class cut short)", () => {
+    // `set-class opus none` killed after its registry rename: the pin already none, the hand intent still on disk.
+    plantAdv(ID, { ...ADV_REGISTRY, classes: { ...ADV_REGISTRY.classes, opus: null } });
+    const adv = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS });
+    adv.classes.opus.previous = { model: 'model-5-gamma', effort: 'max' };
+    adv.pending = { how: 'hand', class: 'opus', from: 'model-5.6-gamma', to: null, emptied: [], at: '2026-10-14T10:00:00Z' };
+    plantAdvance(ID, adv);
+    expect(verb('hold', 'sonnet').code).toBe(0);
+    const opus = advanceOf(ID).classes.opus;
+    expect(advanceOf(ID).pending).toBeNull();
+    expect(opus.history).toEqual([{ at: '2026-10-14T10:00:00Z', how: 'hand', from: 'model-5.6-gamma', to: null, ok: true,
+      canary: 'not-run' }]);
+    expect(opus.family).toBeNull();
+    expect(opus.previous).toEqual({ model: 'model-5-gamma', effort: 'max' });
+  });
+
+  it.each([['hold'], ['release'], ['revert']])('%s refuses an advance file it cannot read, and leaves it as it is', (v) => {
+    plantAdv();
+    plantAdvance(ID, '{"v": 2}');
+    const r = verb(v);
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('advance-file-invalid');
+    expect(String(r.body['detail'])).toMatch(/will not overwrite one it cannot read/);
+    expect(fs.readFileSync(advPath(ID), 'utf8')).toBe('{"v": 2}');
+  });
+
+  it.each([['hold'], ['release'], ['revert']])('%s is refused on an Anthropic lane, as every op but show is', (v) => {
+    const r = opEnv({ CCRC_MODELS_NOW: NOW }, v, '--file', rosterPath(), '--id', ROSTER.accounts[1]!.id, '--class', 'opus');
+    expect([r.code, r.body['error']]).toEqual([1, 'anthropic-lane']);
+  });
+
+  it('an unknown class is refused by name, writing nothing', () => {
+    plantAdv();
+    const r = verb('hold', 'subagent');
+    expect([r.code, r.body['error']]).toEqual([1, 'unknown-class']);
+    expect(fs.existsSync(advPath(ID))).toBe(false);
+  });
+
+  it('hold on a lane whose probe is not codex writes its advance file too, with no family seeded: a hand act is recorded on any lane, and only the codex arm advances one (D-5198)', () => {
+    const router = ROSTER.accounts[3]!.id;
+    expect(op('init', '--file', rosterPath(), '--id', router, '--probe', 'compatible',
+      '--base-url', 'https://compatible.example.invalid').code).toBe(0);
+    expect(fs.existsSync(advPath(router)), 'init compatible wrote an advance file').toBe(false);
+    const r = opEnv({ CCRC_MODELS_NOW: NOW }, 'hold', '--file', rosterPath(), '--id', router, '--class', 'opus');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const adv = advanceOf(router);
+    expect(adv.classes.opus.hold).toEqual({ at: NOW, by: 'hand' });
+    expect(Object.values(adv.classes).map((c) => c.family)).toEqual([null, null, null, null]);
+    // The hourly step still writes nothing there, and says why.
+    expect(op('advance-backfill', '--file', rosterPath(), '--id', router).body).toMatchObject({ created: false });
+  });
+
+  it("a clock that is not of the advance file's form is refused by writeAdvance's read-back, and nothing is written", () => {
+    plantAdv();
+    const r = verb('hold', 'opus', { CCRC_MODELS_NOW: 'yesterday' });
+    expect([r.code, r.body['error']]).toEqual([1, 'advance-invalid']);
+    expect(fs.existsSync(advPath(ID))).toBe(false);
+  });
+
+  // `want` is a thunk: CODEX_SEEDS reads the seed literal when a case runs, never while vitest collects the table.
+  it.each([
+    ['absent', (): void => {}, () => ({ state: 'absent' })],
+    ['ok', (): void => { plantAdvance(ID, backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS })); },
+      () => ({ state: 'ok', classes: backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS }).classes })],
+    ['invalid', (): void => { plantAdvance(ID, '{ this is not json'); }, () => ({ state: 'invalid' })],
+    ['unreadable', (): void => { fs.mkdirSync(advPath(ID)); }, () => ({ state: 'unreadable' })],
+  ] as [string, () => void, () => Record<string, unknown>][])('show carries the advance state: %s', (_why, plant, wantOf) => {
+    const want = wantOf();
+    plantAdv();
+    plant();
+    const r = op('show', '--file', rosterPath(), '--id', ID);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['advance']).toMatchObject(want);
+    if (want['state'] === 'invalid' || want['state'] === 'unreadable') {
+      expect(String((r.body['advance'] as { detail: string }).detail)).toContain(advPath(ID));
+    }
+  });
+
+  it('the class registry stays what an older parser reads, with an advance file beside it (D13)', () => {
+    const KEYS = ['probe', 'classes', 'subagent', 'discovery', 'effort', 'baseUrl'];
+    expect(fs.readFileSync(path.join(REPO, 'shared', 'models.mjs'), 'utf8'))
+      .toContain(`const REGISTRY_KEYS = [${KEYS.map((k) => `'${k}'`).join(', ')}];`);
+    const id = CODEX_ROW.id;
+    const compatible = (step: string): void => {
+      const text = fs.readFileSync(regPath(id), 'utf8');
+      const json = JSON.parse(text) as Record<string, unknown>;
+      expect(Object.keys(json).filter((k) => !KEYS.includes(k)), step).toEqual([]);
+      expect(text, step).toBe(`${JSON.stringify(parseRegistry(json), null, 2)}\n`);
+      expect(fs.existsSync(advPath(id)), step).toBe(true);
+    };
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+    writeCatalogue(id, ADV_CATALOGUE);
+    expect(opAt('init', '--file', rosterPath(), '--id', id, '--probe', 'codex').code).toBe(0);
+    compatible('init');
+    expect(opAt('set-class', '--file', rosterPath(), '--id', id, '--class', 'opus', '--model', 'model-5.6-gamma').code).toBe(0);
+    compatible('set-class');
+    expect(opAt('hold', '--file', rosterPath(), '--id', id, '--class', 'sonnet').code).toBe(0);
+    compatible('hold');
+    const adv = advanceOf(id);
+    adv.classes.opus.previous = { model: 'model-6-delta', effort: 'max' };
+    plantAdvance(id, adv);
+    expect(opAt('revert', '--file', rosterPath(), '--id', id, '--class', 'opus').code).toBe(0);
+    compatible('revert');
+  });
+
+  // ── Fix round 1: revert's write-failure guards, D-5991, and the rest of its arms ──────────────────────────────
+  /** The op copied with one line changed so that a real write fails, the idiom of the set-class registry-write case
+   *  above: `line` is that line as it is, `instead` its replacement, and every other byte is the op as it is. */
+  const copyOp = (line: string, instead: string): string => {
+    const src = fs.readFileSync(OP, 'utf8');
+    expect(src.split(line), `the op has the line ${line}`).toHaveLength(2);
+    const copy = path.join(home, 'models-op-copy.mjs');
+    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+      .replace(line, instead));
+    return copy;
+  };
+  /** `verb('revert')`, through a copy of the op. */
+  const revertThrough = (copy: string): Result => {
+    const r = spawnSync(process.execPath, [copy, 'revert', '--file', rosterPath(), '--id', ID, '--class', 'opus'],
+      { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: NOW }, encoding: 'utf8' });
+    const stdout = r.stdout ?? '';
+    expect(stdout.split('\n'), `stdout is not one JSON line: ${JSON.stringify(stdout)}`).toHaveLength(2);
+    return { code: r.status ?? -1, body: JSON.parse(stdout.split('\n')[0]!), stderr: r.stderr ?? '', stdout };
+  };
+  const opusEnv = (): string | undefined => settingsOf(LEGACY_SUFFIX).env['ANTHROPIC_DEFAULT_OPUS_MODEL'];
+
+  it("a revert whose hold cannot be written refuses before the registry moves: with a clock not of the file's form, every lane file keeps its bytes (D-5206)", () => {
+    advanced();
+    const before = modelFiles();
+    const settings = fs.readFileSync(path.join(home, LEGACY_SUFFIX, 'settings.json'), 'utf8');
+    const r = verb('revert', 'opus', { CCRC_MODELS_NOW: 'yesterday' });
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'advance-invalid']);
+    expect(modelFiles()).toEqual(before);
+    expect(fs.readFileSync(path.join(home, LEGACY_SUFFIX, 'settings.json'), 'utf8')).toBe(settings);
+  });
+
+  it("a revert whose registry write fails leaves the class held, previous kept and the lane as it was, and never says 'Nothing was changed' (D-5206)", () => {
+    advanced();
+    const reg0 = fs.readFileSync(regPath(ID), 'utf8');
+    const opus0 = advanceOf(ID).classes.opus;
+    // `writeRegistry` aims under the registry FILE, so its mkdir fails after the hold is written.
+    const r = revertThrough(copyOp("return writeJsonFile(registryPath(id), registry, 'registry-unwritable');",
+      "return writeJsonFile(path.join(registryPath(id), 'x'), registry, 'registry-unwritable');"));
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(r.body['error']).toBe('registry-unwritable');
+    expect(String(r.body['detail']))
+      .toMatch(/could not be written: .*\. The registry was not changed\. The hold this revert wrote to the lane's advance file stays, so opus is held now, on model-6\.1-gamma/);
+    expect(String(r.body['detail'])).not.toContain('Nothing was changed');
+    expect(fs.readFileSync(regPath(ID), 'utf8')).toBe(reg0);
+    expect(opusEnv(), 'the lane still renders the pin it had').toBe('model-6.1-gamma');
+    const opus = advanceOf(ID).classes.opus;
+    expect(opus.hold).toEqual({ at: NOW, by: 'revert' });
+    expect([opus.previous, opus.history]).toEqual([opus0.previous, opus0.history]);
+  });
+
+  it('a revert whose last advance-file write fails answers ok and says what is not recorded, and a second revert does what that says (D-5991)', () => {
+    advanced();
+    const opus0 = advanceOf(ID).classes.opus;
+    // The commit's write aims under the registry FILE: the hold's write before it is the op's own.
+    const r = revertThrough(copyOp('  const w2 = writeAdvance(a.id, done);',
+      '  const w2 = writeAdvance(`${a.id}.classes.json/x`, done);'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'revert', class: 'opus', from: 'model-6.1-gamma', to: 'model-5.6-gamma' });
+    const note = String(r.body['advanceNote']);
+    expect(note).toMatch(/^advance-unwritable: .*could not be written: .*\. The class was reverted and is held, but this move is not in its history and its previous model is still on record/);
+    expect(note).not.toContain('Nothing was changed');
+    expect(r.stderr).toContain(`models-op: ${note}`);
+    expect([classesOf(ID)['opus'], opusEnv()]).toEqual(['model-5.6-gamma', 'model-5.6-gamma']);
+    const cut = advanceOf(ID).classes.opus;
+    expect([cut.hold, cut.previous, cut.history]).toEqual([{ at: NOW, by: 'revert' }, opus0.previous, opus0.history]);
+    // What the note says, measured: the real op's second revert clears the record and records no move.
+    const again = verb('revert');
+    expect(again.code, again.stdout + again.stderr).toBe(0);
+    const opus = advanceOf(ID).classes.opus;
+    expect([opus.hold, opus.previous, opus.history]).toEqual([{ at: NOW, by: 'revert' }, null, opus0.history]);
+  });
+
+  it('a revert run again on a pin already reverted, its first run cut short after the registry write, renders the lane, clears previous, keeps the hold and records no self-move (D-5991)', () => {
+    // A revert killed after its registry rename: the pin and its effort already put back, the hold on disk, and
+    // previous and the history as they were.
+    advanced();
+    const adv = advanceOf(ID);
+    adv.classes.opus.hold = { at: '2026-10-14T12:00:00Z', by: 'revert' };
+    plantAdvance(ID, adv);
+    fs.writeFileSync(regPath(ID), `${JSON.stringify(ADV_REGISTRY, null, 2)}\n`, { mode: 0o600 });
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'revert', from: 'model-5.6-gamma', to: 'model-5.6-gamma' });
+    expect(opusEnv()).toBe('model-5.6-gamma');
+    const opus = advanceOf(ID).classes.opus;
+    expect([opus.previous, opus.hold]).toEqual([null, { at: NOW, by: 'revert' }]);
+    expect(opus.history, 'no entry from a model to itself').toEqual(adv.classes.opus.history);
+  });
+
+  /** opus advanced from model-5.6-gamma at max to model-6.1-gamma at xhigh, then set back to model-5.6-gamma BY HAND:
+   *  set-class keeps the class's level (xhigh) and leaves previous alone, so a revert finds the pin already on
+   *  previous.model at another level. */
+  const handBackAtAnotherLevel = (): void => {
+    advanced();
+    const s = opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'model-5.6-gamma');
+    expect(s.code, s.stdout + s.stderr).toBe(0);
+    const reg = registryOf(ID) as unknown as Registry;
+    expect([reg.classes.opus, reg.effort?.opus], 'CONTROL: the pin is previous.model, at another level')
+      .toEqual(['model-5.6-gamma', 'xhigh']);
+    expect(advanceOf(ID).classes.opus.previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
+  };
+  const handEntry: HistoryEntry = { at: NOW, how: 'hand', from: 'model-6.1-gamma', to: 'model-5.6-gamma', ok: true,
+    canary: 'not-run' };
+
+  it('a revert on a pin already on previous.model at another effort level puts the level back and records that change: one model, the effort pair', () => {
+    handBackAtAnotherLevel();
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((registryOf(ID) as unknown as Registry).effort?.opus).toBe('max');
+    const opus = advanceOf(ID).classes.opus;
+    expect([opus.previous, opus.hold]).toEqual([null, { at: NOW, by: 'revert' }]);
+    expect(opus.history.slice(-2)).toEqual([handEntry, { at: NOW, how: 'revert', from: 'model-5.6-gamma',
+      to: 'model-5.6-gamma', ok: true, canary: 'not-run', effort: { from: 'xhigh', to: 'max' } }]);
+  });
+
+  it("a revert of only the effort level whose last advance-file write fails says that change is not recorded, and a second revert does what that says", () => {
+    handBackAtAnotherLevel();
+    const opus0 = advanceOf(ID).classes.opus;
+    const r = revertThrough(copyOp('  const w2 = writeAdvance(a.id, done);',
+      '  const w2 = writeAdvance(`${a.id}.classes.json/x`, done);'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const note = String(r.body['advanceNote']);
+    expect(note).toMatch(/^advance-unwritable: .*could not be written: .*\. The class's effort level was put back and the class is held, but this change is not in its history and its previous model is still on record: a second revert finds the class already on that model at that level, so it clears that record and records no move\.$/);
+    expect((registryOf(ID) as unknown as Registry).effort?.opus).toBe('max');
+    const again = verb('revert');
+    expect(again.code, again.stdout + again.stderr).toBe(0);
+    const opus = advanceOf(ID).classes.opus;
+    expect([opus.previous, opus.history], 'cleared, and no move recorded').toEqual([null, opus0.history]);
+  });
+
+  it('a re-run on a reverted pin whose last advance-file write fails says the previous model is still on record, never that a move went unrecorded', () => {
+    advanced();
+    const adv = advanceOf(ID);
+    adv.classes.opus.hold = { at: '2026-10-14T12:00:00Z', by: 'revert' };
+    plantAdvance(ID, adv);
+    fs.writeFileSync(regPath(ID), `${JSON.stringify(ADV_REGISTRY, null, 2)}\n`, { mode: 0o600 });
+    const r = revertThrough(copyOp('  const w2 = writeAdvance(a.id, done);',
+      '  const w2 = writeAdvance(`${a.id}.classes.json/x`, done);'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const note = String(r.body['advanceNote']);
+    expect(note).toMatch(/^advance-unwritable: .*could not be written: .*\. The class is on its previous model and held, but that previous model is still on record: run the revert again to clear it; it records no move\.$/);
+    expect(note).not.toMatch(/not in its history/);
+    const again = verb('revert');
+    expect(again.code, again.stdout + again.stderr).toBe(0);
+    expect([advanceOf(ID).classes.opus.previous, advanceOf(ID).classes.opus.history]).toEqual([null, adv.classes.opus.history]);
+  });
+
+  it("revert ranks a stored level the old model no longer offers by a row that lists it, so it lands on the next level down, not the model's lowest (D-5991)", () => {
+    advanced();   // opus advanced from model-5.6-gamma at max to model-6.1-gamma at xhigh
+    // Since then the old model has stopped offering max: four levels, as the newer model offers.
+    writeCatalogue(ID, { ...ADV_CATALOGUE, models: ADV_CATALOGUE.models
+      .map((m) => (m.id === 'model-5.6-gamma' ? { ...m, efforts: [...EFFORTS4] } : m)) });
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((registryOf(ID) as unknown as Registry).effort?.opus).toBe('xhigh');
+  });
+
+  it('revert adds the model it puts back to an explicit discovery list, as set-class does', () => {
+    const list = ['model-5.6-alpha', 'model-6-beta', 'model-6.1-gamma'];
+    advanced(undefined, { ...ADVANCED, discovery: list });
+    const r = verb('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((registryOf(ID) as unknown as Registry).discovery).toEqual([...list, 'model-5.6-gamma']);
+  });
+
+  it("revert never grows an openrouter lane's discovery list: a previous model the list lacks is refused, and nothing is written", () => {
+    // No writer sets previous on an openrouter lane today, so it is planted: the guard is the whitelist's, and a list
+    // that grew here would skip `discovery add`'s check.
+    const router = ROSTER.accounts[3]!.id;
+    const list = ['model-6.1-alpha', 'model-6.1-beta', 'model-6.1-gamma'];
+    const registry: Registry = { probe: 'openrouter', classes: { haiku: 'model-6.1-alpha', sonnet: 'model-6.1-beta',
+      opus: 'model-6.1-gamma', fable: null }, subagent: 'sonnet', discovery: list };
+    writeCatalogue(router, { ...ADV_CATALOGUE, probe: 'openrouter' });
+    fs.writeFileSync(regPath(router), `${JSON.stringify(registry, null, 2)}\n`, { mode: 0o600 });
+    const m = op('materialise', '--file', rosterPath(), '--id', router);
+    expect(m.code, m.stdout + m.stderr).toBe(0);
+    const adv = backfillAdvance({ registry, seedFamilies: null });
+    adv.classes.opus.previous = { model: 'model-5.6-gamma', effort: null };
+    plantAdvance(router, adv);
+    const before = modelFiles();
+    const r = opEnv({ CCRC_MODELS_NOW: NOW }, 'revert', '--file', rosterPath(), '--id', router, '--class', 'opus');
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'registry-invalid']);
+    expect(String(r.body['detail'])).toMatch(/discovery list does not offer/);
+    expect(modelFiles()).toEqual(before);
+    expect((registryOf(router) as unknown as Registry).discovery).toEqual(list);
+  });
+
+  it.each([['hold'], ['release'], ['revert']])('%s refuses a lane with no class registry, naming init, and writes no advance file', (v) => {
+    const bare = ROSTER.accounts[3]!.id;
+    const r = opEnv({ CCRC_MODELS_NOW: NOW }, v, '--file', rosterPath(), '--id', bare, '--class', 'opus');
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'no-registry']);
+    expect(fs.existsSync(advPath(bare))).toBe(false);
+  });
+
+  it("an orphan's show carries its advance state too (W4's Models view reads it)", () => {
+    writeCatalogue('ghost', ADV_CATALOGUE);
+    fs.writeFileSync(regPath('ghost'), `${JSON.stringify(ADV_REGISTRY, null, 2)}\n`, { mode: 0o600 });
+    const adv = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS });
+    plantAdvance('ghost', adv);
+    const r = op('show', '--file', rosterPath(), '--id', 'ghost');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['orphan']).toBe(true);
+    expect(r.body['advance']).toEqual({ state: 'ok', classes: adv.classes });
+  });
+});
+
 // C6: the guard is at OP ENTRY, so every op that takes an `--id` refuses a
 // bad one before touching the roster or any path — not just `rm`, which is
 // the one the finding's own repro happened to exploit.
@@ -1640,6 +3192,12 @@ describe('the account-id guard applies to every op, not just rm (C6)', () => {
     ['set-subagent', ['--class', 'opus']],
     ['materialise', []],
     ['discovery', ['--action', 'catalogue']],
+    ['set-window', ['--model', 'model-9-omega', '--tokens', '400000']],
+    ['clear-window', ['--model', 'model-9-omega']],
+    ['advance-backfill', []],
+    ['hold', ['--class', 'opus']],
+    ['release', ['--class', 'opus']],
+    ['revert', ['--class', 'opus']],
   ] as [string, string[]][])('%s refuses a bad --id', (opName, extra) => {
     const r = op(opName, '--file', rosterPath(), '--id', '../etc/passwd', ...extra);
     expect(r.code).toBe(1);
@@ -1711,6 +3269,43 @@ describe('a FIFO at a lane file\'s path is that read\'s unreadable answer, never
     expect(r.code, r.stdout).toBe(1);
     expect(r.body['error']).toBe('registry-unreadable');
     expect(r.body['detail']).toMatch(/not a regular file/);
+  }, 20_000);
+
+  it('show with a FIFO windows file answers ok: the windows unreadable, never a block (codex-bridge spec §2.7)', () => {
+    init();
+    fifo(path.join(home, '.ccrc', 'models', `${CODEX_ROW.id}.windows.json`));
+    const r = bounded('show', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.body['windows']).toMatchObject({ state: 'unreadable' });
+    expect((r.body['windows'] as { reason: string }).reason).toMatch(/not a regular file/);
+  }, 20_000);
+
+  it('materialise with a FIFO windows file answers ok under the default rule — never a block (codex-bridge spec §2.7)', () => {
+    init();
+    fifo(path.join(home, '.ccrc', 'models', `${CODEX_ROW.id}.windows.json`));
+    const r = bounded('materialise', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(0);
+  }, 20_000);
+
+  it('set-class with a FIFO advance file writes the registry and answers at once, the file unreadable and untouched — never a block (auto-advance spec §2.1)', () => {
+    plantAdv(CODEX_ROW.id);
+    const adv = path.join(home, '.ccrc', 'models', `${CODEX_ROW.id}.advance.json`);
+    fifo(adv);
+    const r = bounded('set-class', '--file', rosterPath(), '--id', CODEX_ROW.id,
+      '--class', 'opus', '--model', 'model-6-delta');
+    expect(r.code, r.stdout).toBe(0);
+    expect(classesOf(CODEX_ROW.id)['opus']).toBe('model-6-delta');
+    expect(String(r.body['advanceNote'])).toMatch(/^advance-file-unreadable: .*not a regular file/);
+    expect(fs.statSync(adv).isFIFO(), 'set-class replaced the FIFO it could not read').toBe(true);
+  }, 20_000);
+
+  it('show with a FIFO advance file answers ok: the advance state unreadable, never a block (auto-advance spec §2.7)', () => {
+    plantAdv(CODEX_ROW.id);
+    fifo(path.join(home, '.ccrc', 'models', `${CODEX_ROW.id}.advance.json`));
+    const r = bounded('show', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.body['advance']).toMatchObject({ state: 'unreadable' });
+    expect((r.body['advance'] as { detail: string }).detail).toMatch(/not a regular file/);
   }, 20_000);
 
   it('show with a FIFO settings.json keeps today\'s answer for an unreadable one: every key missing', () => {
@@ -1803,4 +3398,100 @@ describe('a FIFO at a lane file\'s path is that read\'s unreadable answer, never
     expect(r.body['detail']).toMatch(/settings\.json could not be read: /);
     expect(fs.statSync(settingsPath()).isDirectory()).toBe(true);
   }, 20_000);
+});
+
+// ── auto-advance W1 Task 3, fix round 1: readAdvance and writeAdvance keep to their answers ──────────────────────
+// No op calls either until Task 5, and this file is a script that runs `main` when it is loaded, so these cases run
+// the shipped functions through a COPY of it: its one `process.exit(main(…))` line replaced by a probe, and its
+// `../shared/` imports pointed at this checkout's. Every other byte of the copy is the file as it is.
+describe('readAdvance and writeAdvance keep to their answers before any op calls them (auto-advance §2.1)', () => {
+  const LAST = 'process.exit(main(process.argv));';
+  const probe = (line: string): { code: number | null; stdout: string; stderr: string } => {
+    const src = fs.readFileSync(OP, 'utf8');
+    expect(src.split(LAST), 'models-op ends in its one main call').toHaveLength(2);
+    const shared = pathToFileURL(path.join(REPO, 'shared')).href;
+    const file = path.join(home, 'models-op-probe.mjs');
+    fs.writeFileSync(file, src.replaceAll("from '../shared/", `from '${shared}/`).replace(LAST, line));
+    const r = spawnSync(process.execPath, [file], { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  /** The probe's stdout as ONE JSON line, the shape every models-op answer has. */
+  const oneLine = (stdout: string): unknown => {
+    const one = stdout.endsWith('\n') && stdout.indexOf('\n') === stdout.length - 1;
+    expect(one, `one line: ${stdout.slice(0, 200)}`).toBe(true);
+    return JSON.parse(stdout);
+  };
+  const advFile = (): string => path.join(home, '.ccrc', 'models', 'lane-a.advance.json');
+  const EXAMPLE_JSON = JSON.stringify(JSON.stringify(ADVANCE_EXAMPLE));
+
+  it('a file nested too deeply to copy answers advance-file-invalid, as one JSON line, and never throws', () => {
+    fs.mkdirSync(path.dirname(advFile()), { recursive: true });
+    const deep = serializeAdvance(ADVANCE_EXAMPLE).replace(/\n}\n$/, `,\n  "note": ${ADV_DEEP_TEXT}\n}\n`);
+    fs.writeFileSync(advFile(), deep);
+    const r = probe("out(readAdvance('lane-a'));");
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+    const answer = oneLine(r.stdout) as { err: [string, string] };
+    expect(answer.err[0]).toBe('advance-file-invalid');
+    expect(answer.err[1]).toMatch(/nests too deeply/);
+  });
+
+  it.each([
+    ['a history with a hole at [0]', 'adv.classes.opus.history = [, adv.classes.opus.history[0]];',
+      'classes.opus.history[0]'],
+    ['a hold inherited rather than its own',
+      '{ const { hold, ...own } = adv.classes.fable; '
+        + 'adv.classes.fable = Object.assign(Object.create({ hold }), own); }',
+      'classes.fable.hold'],
+  ])('writeAdvance refuses %s as advance-invalid and writes nothing: it checks what a file would hold', (_why, edit, field) => {
+    const r = probe(`const adv = JSON.parse(${EXAMPLE_JSON}); ${edit} out({ answer: writeAdvance('lane-a', adv) });`);
+    expect(r.stderr).toBe('');
+    const { answer } = oneLine(r.stdout) as { answer: [string, string] | null };
+    expect(answer?.[0]).toBe('advance-invalid');
+    expect(answer?.[1]).toContain(`(${field} `);
+    expect(fs.existsSync(advFile()), 'a refused write leaves no file').toBe(false);
+  });
+
+  it("the control: the example unedited is written 0600 as serializeAdvance's bytes (D-5783), and reads back whole", () => {
+    const w = probe(`out({ answer: writeAdvance('lane-a', JSON.parse(${EXAMPLE_JSON})) });`);
+    expect(oneLine(w.stdout)).toEqual({ answer: null });
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(serializeAdvance(ADVANCE_EXAMPLE));
+    expect(fs.statSync(advFile()).mode & 0o777).toBe(0o600);
+    expect(oneLine(probe("out(readAdvance('lane-a'));").stdout)).toEqual({ advance: ADVANCE_EXAMPLE });
+  });
+});
+
+// D-5521 (A26a): `isAnthropicLane` is `telemetry === 'anthropic'`, so an OpenRouter lane
+// writing `openrouter` and a compatible lane writing `none` are both registry lanes. Red
+// before A26a for the openrouter half: `rosterFromJson` refused the whole roster.
+describe('key lanes after D-5521 are not Anthropic lanes', () => {
+  const KEY_ROSTER = {
+    version: 1,
+    accounts: [
+      ROSTER.accounts[0],
+      { id: 'lane-d', label: 'lane-d', configDirSuffix: '.claude-lane-d',
+        exec: { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/lane-d-openrouter.env' },
+        homeAble: true, hue: 'amber', telemetry: 'openrouter' },
+      { id: 'lane-e', label: 'lane-e', configDirSuffix: '.claude-lane-e',
+        exec: { kind: 'generated', provider: 'compatible', baseUrl: 'https://compatible.example.invalid', secretsFile: '.cc-secrets/lane-e-compatible.env' },
+        homeAble: true, hue: 'green', telemetry: 'none' },
+    ],
+  };
+
+  it('init on an openrouter-telemetry lane writes its registry rather than refusing anthropic-lane', () => {
+    seed(KEY_ROSTER);
+    const r = op('init', '--file', rosterPath(), '--id', 'lane-d', '--probe', 'openrouter');
+    expect(r.body['error']).toBeUndefined();
+    expect(r.code).toBe(0);
+    expect(registryOf('lane-d')['probe']).toBe('openrouter');
+  });
+
+  it('…and so does init on a none compatible lane', () => {
+    seed(KEY_ROSTER);
+    const r = op('init', '--file', rosterPath(), '--id', 'lane-e', '--probe', 'compatible',
+      '--base-url', 'https://compatible.example.invalid');
+    expect(r.body['error']).toBeUndefined();
+    expect(r.code).toBe(0);
+    expect(registryOf('lane-e')['probe']).toBe('compatible');
+  });
 });

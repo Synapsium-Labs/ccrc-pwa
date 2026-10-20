@@ -41,7 +41,7 @@ const cfg = () => loadConfig({ CCRC_HOME: home });
 const mark = (content: string): void => writeFileSync(path.join(reg, `${ID}.child`), content);
 const record = async (io: FleetIO = localIO): Promise<SessionRecord> => {
   const r = await readSessionRecord(io, cfg(), ID);
-  if (!r.found) throw new Error(`fixture row not found: ${r.reason}`);
+  if (r.kind !== 'found') throw new Error(`fixture row not found: ${r.kind}`);
   return r.record;
 };
 
@@ -128,7 +128,7 @@ describe('SessionRecord.child — three answers, never a boolean', () => {
 /** A complete fleet row — `fleet-wire-route.test.ts`'s `session()` shape. */
 const fleetRow = (id: string): FleetSession => ({
   hibernatedAt: null,
-  id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
+  id, wrapper: 'claude', home: '/home/u', project: id, workdir: `/data/projects/${id}`,
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,

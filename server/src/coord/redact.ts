@@ -72,6 +72,7 @@
  * the UNREDACTED input, which the server holds only for the request (spec §6.7). The length caps sit here too, so the
  * stored form and the digest line are each cut in one place.
  */
+import { credentialMaskSource } from '../../../shared/api.js';
 
 /** The one mask. */
 export const REDACTED = '[REDACTED]';
@@ -136,7 +137,9 @@ const SINGLE_DASH_SECRET = new RegExp(String.raw`(^|[\s'"])(-(?!-)[A-Za-z0-9-]*(
 const CAMEL_SECRET_FLAG = new RegExp(String.raw`(^|[\s'"])(--?[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)*?(?:Token|Secret|Password|Passwd|Pass|ApiKey|Key))(\s+(?![<>-])|=)${VALUE}`, 'g');
 /** D-5360 round 8: xfreerdp's `/p:<password>`. */
 const RDP_PASS = /(^|[\s'"])\/p:[^\s;&|'"]+/g;
-const KNOWN_TOKEN = /(?<![A-Za-z0-9_-])(?:(?:sk|rk)_(?:live|test)_|gh[pousr]_|github_pat_|glpat-|xox[abprs]-|xapp-|npm_|pypi-)[A-Za-z0-9_-]+|(?<![A-Za-z0-9])(?:(?:AKIA|ASIA)[0-9A-Z]{16}|hf_[A-Za-z0-9]{30,}|AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9_-]{8,})/g;
+/** The generic `sk-` rule is read from `CREDENTIAL_MASKS` (D-5513, accounts plan Task A10): one home for the shape. */
+const KNOWN_TOKEN = new RegExp(String.raw`(?<![A-Za-z0-9_-])(?:(?:sk|rk)_(?:live|test)_|gh[pousr]_|github_pat_|glpat-|xox[abprs]-|xapp-|npm_|pypi-)[A-Za-z0-9_-]+|(?<![A-Za-z0-9])(?:(?:AKIA|ASIA)[0-9A-Z]{16}|hf_[A-Za-z0-9]{30,}|AIza[0-9A-Za-z_-]{20,}|`
+  + credentialMaskSource('genericSk') + ')', 'g');
 const SLACK_HOOK = /(hooks\.slack\.com\/(?:services|workflows|triggers)\/)[^\s'"]+/gi;
 const TELEGRAM_BOT = /\bbot[0-9]{5,}:[A-Za-z0-9_-]{20,}/g;
 /** A base64 (standard or URL-safe) or hex run; hex is a subset of the class. Linear: one class, no nesting. */
@@ -199,8 +202,8 @@ const YAML_SECRET = /(?<![\w-])((?:[A-Za-z0-9]+_)*(?:token|password|passwd|secre
  *  `privatekey`). */
 const JSON_PAIR = /"([A-Za-z0-9_-]+)"(\s*:\s*)"(?:[^"\\\n]|\\.)*"/g;
 const JSON_SECRET_KEY = /password|passwd|passphrase|pass|pwd|credential|auth(?!or)|secret|token|api_?key|private_?key/i;
-/** A JSON Web Token: `eyJ…` header, `eyJ…` payload, and a signature. */
-const JWT = /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g;
+/** A JSON Web Token: `eyJ…` header, `eyJ…` payload, and a signature. The shape is read from `CREDENTIAL_MASKS` (D-5513). */
+const JWT = new RegExp(String.raw`(?<![A-Za-z0-9_-])` + credentialMaskSource('jwt'), 'g');
 
 /** Masks every token-shaped string in `text` (the shapes above). */
 export function redactCommand(text: string): string {

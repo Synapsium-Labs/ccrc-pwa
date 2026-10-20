@@ -1,7 +1,8 @@
-import { configDirFor, type CcrcConfig } from './config.js';
+import type { CcrcConfig } from './config.js';
+import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
-import { readRegistry, readSessionRecord } from './registry.js';
+import { readRegistryMeasured, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readLimits } from './limits.js';
 import { liveSessionStatus, liveStatusCoversDelegation, readLiveState, readLiveStateMeasured } from './livestate.js';
@@ -342,11 +343,11 @@ function readReleased(coord: CoordStore | undefined, sessionIds: readonly string
  * are generated from — one rule, two languages.
  *
  * The ordering is the entire point. Its predecessor was a hand-typed, unordered
- * prefix array that did not even MENTION `claude-dev0`, under which
- * `claude-dev0-quiet-basin` fell through to the bare `claude-` branch and came
+ * prefix array that did not even MENTION `claude-lab0`, under which
+ * `claude-lab0-quiet-basin` fell through to the bare `claude-` branch and came
  * back `claude` — a live session attributed to the wrong account, which is not
- * hypothetical: `claude-dev0-*` ids exist in the registry today. Get the order
- * wrong here (or in ccd's own `case`) and a `claude-dev0` session is silently
+ * hypothetical: `claude-lab0-*` ids exist in the registry today. Get the order
+ * wrong here (or in ccd's own `case`) and a `claude-lab0` session is silently
  * re-attributed to `claude`, reproducing the old bug for real. `fleet.test.ts`
  * pins both the real ids and a synthetic prefix-collision roster.
  *
@@ -388,15 +389,27 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   // A degraded row must never answer 'dead' — the interrupt route's own
   // "not busy" refusal reads THIS, and reporting dead-by-drop on a session
   // this read simply could not measure would let it refuse an interrupt on a
-  // plainly busy one. `!read.found` (genuinely absent, or the whole
-  // directory unlistable) is still 'dead': there is no pane to ask about
-  // either way, the same answer this gave before the ladder existed.
+  // plainly busy one. `absent` and `unlistable` (genuinely absent, or the
+  // whole directory unlistable) are still 'dead': there is no pane to ask
+  // about either way, the same answer this gave before the ladder existed.
   // D-309 (was D-B8-13): `hasSession` here deliberately collapses `unknown` into 'dead' —
   // which this route turns into a REFUSED interrupt, the safe direction this
   // function's own comment above already argues for. Splitting the pair for
   // the operator's view is the substrate-unreachable spec's job (a state word
   // through shared/server/pwa), not a guard's.
-  if (!read.found || !(await tmux.hasSession(id))) return 'dead';
+  switch (read.kind) {
+    case 'found': break;
+    case 'absent': case 'unlistable': return 'dead';
+    // Masked by `knownId` (spec §2.3): `POST /api/sessions/:id/interrupt`,
+    // this function's one consumer, refuses an id `isRegistryId` refuses
+    // before it calls here. 'dead' all the same: it refuses the interrupt.
+    case 'bad-id': return 'dead';
+    default: {
+      const _x: never = read;
+      return _x;
+    }
+  }
+  if (!(await tmux.hasSession(id))) return 'dead';
   const rec = read.record;
   const pid = await tmux.panePid(id);
   // Unmeasured wrapper => 'idle', via the EXISTING `!cfgDir` fallback: a
@@ -560,7 +573,11 @@ export async function assembleFleet(
    *  watch wave 2, M6: slug `tick-hands-the-lane-pids-and-records` (D-3649)). */
   panePids?: Map<string, number | null>,
 ): Promise<FleetSession[]> {
-  const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
+  // Reached by TESTS alone (spec §2.3): every production caller passes the rows it read itself, and
+  // registry-refused-census.test.ts pins all six `assembleFleet(` calls, so this fallback decides nothing a user
+  // sees. An unlistable registry reads as no rows here, the old fallback's answer; refused rows were never rows.
+  // [registry-refused:tests-only]
+  const [recs, limits] = await Promise.all([records ?? readRegistryMeasured(io, cfg).then((r) => (r.listed ? r.records : [])), readLimits(io, cfg, now)]);
   // Task 19 fix round 1, item 3: ONE batched read for the whole assembly,
   // outside the per-session map below — never one `currentAskFor` per row.
   // `now` here is SECONDS (this function's own parameter contract); `asks`
@@ -631,7 +648,7 @@ export async function assembleFleet(
         if (read.ok) {
           const live = read.state;
           status = liveSessionStatus(live.status);
-          // A derived name is Claude Code's session handle (`openclawhetzner-42`
+          // A derived name is Claude Code's session handle (`project-c-42`
           // — cwd basename plus a counter), never a description of the work, so
           // it is dropped HERE rather than shipped for the PWA to re-judge.
           // `name` on the wire therefore means "a name worth displaying", and

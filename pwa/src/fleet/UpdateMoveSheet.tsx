@@ -185,7 +185,7 @@ export function rollbackBlockedText(blockers: readonly RollbackBlocker[], tag: s
 
 // ── The danger tone (D-5507, settings spec §6.3) ─────────────────────────────────────────────────────────────────
 // A rollback is a danger action. Under `tone="danger"` the sheet asks the question, commits in the filled red
-// `danger` variant labelled with the verb, gives Cancel the focus (`useCancelFirst`, QuickConfirm's own; D-5610), and says what
+// `danger` variant labelled with the verb, gives Cancel the focus (`useCancelFirst` chooses it, the Sheet moves it; D-5610, D-5931), and says what
 // a rollback will not undo. The default tone, `move`, is every Install and Update and is unchanged.
 
 /** The question a danger rollback asks (spec §6.3's title). */
@@ -281,7 +281,7 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone, onAnswered, tone 
     return () => { gen.current += 1; };
   }, [open, plan]);
   const danger = tone === 'danger';
-  useCancelFirst(open && plan !== null, danger);
+  const cancelRef = useCancelFirst(open && plan !== null, danger);
 
   if (!open || plan === null) return null;
   const headline = danger ? rollbackQuestion(plan) : moveHeadline(plan.intent);
@@ -350,7 +350,25 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone, onAnswered, tone 
   };
 
   return (
-    <Sheet open onClose={onClose} title={headline}>
+    <Sheet
+      open
+      onClose={onClose}
+      title={headline}
+      initialFocus={cancelRef}
+      // The answers are pinned in the Sheet's footer (D-5932): a long node list scrolls, they stay.
+      footer={
+        <div className={QC_ACTIONS}>
+          {lines.length > 0 && !answered && (
+            <Button variant={danger ? 'danger' : 'primary'} disabled={busy} onClick={confirm}>
+              {busy ? 'Sending…' : danger ? rollbackCommitLabel(plan) : headline}
+            </Button>
+          )}
+          <Button ref={cancelRef} variant="ghost" disabled={busy} onClick={onClose}>
+            {answered ? 'Close' : 'Cancel'}
+          </Button>
+        </div>
+      }
+    >
       <div className="update-move-sheet">
         {lines.length === 0 ? (
           <p className={QC_CONSEQUENCE}>{moveEmptyText(plan.intent)}</p>
@@ -365,16 +383,6 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone, onAnswered, tone 
         {danger && lines.length > 0 && dangerLines(plan, release).map((line) => (
           <p key={line} className={QC_CONSEQUENCE}>{line}</p>
         ))}
-        <div className={QC_ACTIONS}>
-          {lines.length > 0 && !answered && (
-            <Button variant={danger ? 'danger' : 'primary'} disabled={busy} onClick={confirm}>
-              {busy ? 'Sending…' : danger ? rollbackCommitLabel(plan) : headline}
-            </Button>
-          )}
-          <Button variant="ghost" autoFocus={danger} disabled={busy} onClick={onClose}>
-            {answered ? 'Close' : 'Cancel'}
-          </Button>
-        </div>
         {error !== null && <p className="update-move-error" role="alert">{error}</p>}
       </div>
     </Sheet>

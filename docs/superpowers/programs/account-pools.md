@@ -53,7 +53,7 @@ execution gets its own allocator call (see Decisions, "execution-time deviations
   mails the numbers back (`kind:answer`), and the worker substitutes before `wave-done`. `dtbd.test.ts`
   refuses any surviving placeholder, so a PR cannot go green with one. No spare numbers are pre-minted —
   a minted number is defined in the same act or not minted.
-- **Concurrent program:** `battlescape-operational` (MekWarLive, run 31, wave 8/9) is active. Every
+- **Concurrent program:** `prog-c` (project-f, run 31, wave 8/9) is active. Every
   `toId:'coordinator'` mail in this program MUST carry this wave's `runId`; the runId-less form resolves
   only when exactly one program is active. Briefs restate this.
 - **Deploy after wave 1:** not agent-first. Server lane only, from the merge sha; `accounts.sh` regenerates

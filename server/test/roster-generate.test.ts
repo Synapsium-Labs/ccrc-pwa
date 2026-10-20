@@ -2,8 +2,8 @@
 // Behaviour is asserted by running the GENERATED file in a real bash
 // subshell, never by comparing generated text to a hand-written expectation:
 // `_ccrc_id_wrapper`'s arm order is the point of this generator (today's
-// hand-written `ccd` equivalent is only correct by accident — `claude-corp-`
-// and `claude-dev0-` tie at 12 characters, and `claude2-` precedes `claude-`
+// hand-written `ccd` equivalent is only correct by accident — `claude-acme-`
+// and `claude-lab0-` tie at 12 characters, and `claude9-` precedes `claude-`
 // by hand-authoring luck, not a rule), so a test that pinned literal arm
 // text would fail against a correctly-sorted generator the moment two ids
 // happened to tie.
@@ -408,5 +408,36 @@ describe('generateAccountsSh — the credential-file projection (D-3524)', () =>
     writeFileSync(path.join(flatHome, '.ccrc', 'accounts.sh'),
       generateAccountsSh(flatRoster as unknown as Parameters<typeof generateAccountsSh>[0]));
     expect(sh(flatHome, "_ccrc_secrets_file 'a'")).toBe('.cc-secrets/a-oauth.env');
+  });
+});
+
+// D-5521 (A26a): an OpenRouter lane writes `telemetry: "openrouter"` and a compatible
+// lane writes `"none"`, where both used to write `"anthropic"`. Neither reports Claude
+// Code's rate limits into `~/.cc-limits` (an OpenRouter lane's meter is its credit,
+// refreshed by validation and check), and neither is an Anthropic backend: Remote
+// Control, the class vocabulary, the effort injection and the 429 writer are Anthropic
+// facts. So both stay out of every positive membership this file emits.
+describe('generateAccountsSh — key lanes after D-5521', () => {
+  const keyRoster = parseRoster({ version: 1, accounts: [
+    { id: 'a', label: 'A', configDirSuffix: '.a', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'o', label: 'O', configDirSuffix: '.o',
+      exec: { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/o-openrouter.env' },
+      homeAble: true, hue: 'amber', telemetry: 'openrouter' },
+    { id: 'c', label: 'C', configDirSuffix: '.c',
+      exec: { kind: 'generated', provider: 'compatible', baseUrl: 'https://compatible.example.invalid', secretsFile: '.cc-secrets/c-compatible.env' },
+      homeAble: true, hue: 'green', telemetry: 'none' },
+  ] });
+  const home = mkTmp('roster-gen-keylanes-');
+  mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(home, '.ccrc', 'accounts.sh'), generateAccountsSh(keyRoster));
+
+  it('leaves an openrouter lane and a none compatible lane out of CCRC_MEASURED', () => {
+    expect(sh(home, 'echo "${CCRC_MEASURED[@]}"')).toBe('a');
+  });
+
+  it('…and out of both backend arrays, while both stay placeable', () => {
+    expect(sh(home, 'echo "${CCRC_ANTHROPIC_BACKEND[@]}"')).toBe('a');
+    expect(sh(home, 'echo "${CCRC_CODEX_BACKEND[@]+${CCRC_CODEX_BACKEND[@]}}"')).toBe('');
+    expect(sh(home, 'echo "${CCRC_HOME_ABLE[@]}"')).toBe('a o c');
   });
 });

@@ -2,7 +2,6 @@
 // numeric comparator, the channel / mode / lane-kind vocabularies, the closed
 // `why` enum, the numbers of spec §12 and the one parser of the tenth node
 // file (spec §6.2). Pure functions; no fixture HOME, no process, no network.
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   CLAUDE_CHANNEL_DEFAULT,
@@ -112,6 +111,9 @@ describe('the Claude Code version grammar and comparator (D-5695)', () => {
     expect(isClaudeVersion(2.1)).toBe(false);
     expect(isClaudeVersion(null)).toBe(false);
     expect(isClaudeVersion(undefined)).toBe(false);
+    // RegExp.test coerces its argument, so only the typeof guard refuses a
+    // one-element array of a valid build (D-5695).
+    expect(isClaudeVersion(['2.1.3'])).toBe(false);
   });
 
   it('compareClaudeVersions throws on a non-version, never orders it', () => {
@@ -283,6 +285,16 @@ function withField(path: string, value: unknown): Record<string, unknown> {
   return doc;
 }
 
+/** A copy of the sample with the key at a dotted path removed. */
+function withoutField(path: string): Record<string, unknown> {
+  const doc = sample();
+  const keys = path.split('.');
+  let at: Record<string, unknown> = doc;
+  for (const k of keys.slice(0, -1)) at = at[k] as Record<string, unknown>;
+  delete at[keys[keys.length - 1]!];
+  return doc;
+}
+
 const STDERR = 'curl: (22) The requested URL returned error: 404';
 
 describe('parseClaudeNodeFile: every field validator refuses (the leak guards, spec §9 trap 9)', () => {
@@ -301,6 +313,8 @@ describe('parseClaudeNodeFile: every field validator refuses (the leak guards, s
   ])('a non-version string in %s is refused', (path) => {
     expect(parse(withField(path, STDERR))).toBeNull();
     expect(parse(withField(path, 2.1))).toBeNull();
+    // A JSON array of one valid build coerces to that build in RegExp.test.
+    expect(parse(withField(path, ['2.1.300']))).toBeNull();
   });
 
   it('a non-version string in localHalts[] is refused', () => {
@@ -378,16 +392,51 @@ describe('parseClaudeNodeFile: every field validator refuses (the leak guards, s
     },
   );
 
+  // A nullable key that is absent is refused, never read as null: only an
+  // explicit null means "unknown" (verification follow-up to D-5695).
+  it.each([
+    'memory',
+    'pointer',
+    'pin',
+    'candidate',
+    'intentAt',
+    'target.anthropic',
+    'target.codex',
+    'prevTarget.anthropic',
+    'prevTarget.codex',
+    'builds.0.sha256ok',
+    'builds.0.sigok',
+    'builds.0.smoke',
+    'switches.hibernateShadowAt',
+    'switches.hibernateLiveAt',
+    'memory.swapUsedBytes',
+    'memory.swapTotalBytes',
+  ])('a missing %s is refused, not read as null', (path) => {
+    expect(parse(withField(path, null))).not.toBeNull();
+    expect(parse(withoutField(path))).toBeNull();
+  });
+
+  it('memory.ceiling must be a string within 1 to 128 characters', () => {
+    expect(parse(withField('memory.ceiling', 123))).toBeNull();
+    expect(parse(withField('memory.ceiling', 'u'.repeat(128)))).not.toBeNull();
+    expect(parse(withField('memory.ceiling', 'u'.repeat(129)))).toBeNull();
+    expect(parse(withField('memory.ceiling', ''))).toBeNull();
+  });
+
+  it('a count past the safe-integer range is refused', () => {
+    expect(parse(withField('placeholders', 2 ** 53 - 1))).not.toBeNull();
+    expect(parse(withField('placeholders', 2 ** 53))).toBeNull();
+    expect(parse(withField('memory.anonBytes', 1e300))).toBeNull();
+  });
+
+  it.each(['builds', 'running', 'localHalts'])('%s refuses a non-array', (path) => {
+    expect(parse(withField(path, {}))).toBeNull();
+    expect(parse(withField(path, { 0: '2.1.300' }))).toBeNull();
+  });
+
   it('the sample itself passes, so each refusal above is the field alone', () => {
     expect(parse(sample())).not.toBeNull();
   });
 });
 
-describe('shared/claudeVersion.ts is L0 and imports nothing (the PWA bundles it)', () => {
-  it('has no import line, static or dynamic, and no require', () => {
-    const src = readFileSync(new URL('../../shared/claudeVersion.ts', import.meta.url), 'utf8');
-    expect(src.split('\n').filter((l) => /^\s*import\b/.test(l))).toEqual([]);
-    expect(src).not.toMatch(/\bimport\s*\(/);
-    expect(src).not.toMatch(/\brequire\s*\(/);
-  });
-});
+// shared/claudeVersion.ts's L0 ring is held by server/test/rings/shared-imports.test.ts (D-6045).

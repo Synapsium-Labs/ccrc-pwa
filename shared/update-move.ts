@@ -13,7 +13,8 @@
 //
 // Since wave 19 (R24(d), R26(b)) the store's JS form of the halt (`rowHalts`, `server/src/coord/store.ts`) calls
 // `isHaltingUpdate`, and the resolver's `autoGateBlockers` calls `carriesUpdateGate`. NOT HERE: the store's SQL form
-// (`haltingRowSql`), which SQL cannot call; `update-store-nodes.test.ts` pins it equal to `isHalting`.
+// (`haltingRowSql`), which SQL cannot call; `halting-parity.test.ts` pins it equal to `isHaltingUpdate` row for row
+// (D-5890), and `update-store-nodes.test.ts` pins the heir guard that embeds it to `isHalting`.
 import {
   PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, UPDATE_GATE_CAP, isReleaseTag, type AutoMode, type UpdateChannel,
 } from './api.js';

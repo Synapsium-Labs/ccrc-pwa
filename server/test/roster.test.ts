@@ -37,7 +37,7 @@ const toolchainCollisionRoster = (id: string, kind: ToolchainExecKind) => ({
 });
 
 /** A minimal valid two-account roster — one `upstream` `claude`, one
- *  `generated` `claude2` whose `exec` carries `secretsFile` when it is not
+ *  `generated` `claude9` whose `exec` carries `secretsFile` when it is not
  *  `undefined`. Used by the `exec.secretsFile` gate cases below. */
 const rosterWithSecrets = (secretsFile: string | undefined) => ({
   version: 1,
@@ -47,7 +47,7 @@ const rosterWithSecrets = (secretsFile: string | undefined) => ({
       exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
     },
     {
-      id: 'claude2', label: 'claude2', configDirSuffix: '.claude2',
+      id: 'claude9', label: 'claude9', configDirSuffix: '.claude9',
       exec: secretsFile !== undefined ? { kind: 'generated', secretsFile } : { kind: 'generated' },
       homeAble: true, hue: 'violet', telemetry: 'anthropic',
     },
@@ -494,17 +494,17 @@ describe('exec.secretsFile is a path, not merely a string', () => {
   }
 
   it('accepts the shape every real account uses', () => {
-    const r = parseRoster(rosterWithSecrets('.cc-secrets/claude2-oauth.env'));
-    const acct = r.accounts.find((a) => a.id === 'claude2');
+    const r = parseRoster(rosterWithSecrets('.cc-secrets/claude9-oauth.env'));
+    const acct = r.accounts.find((a) => a.id === 'claude9');
     // `provider` is now on every generated exec — defaulted to `anthropic` for a
     // roster that predates the field, which is what this fixture is.
     expect(acct?.exec).toEqual(
-      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude2-oauth.env' });
+      { kind: 'generated', provider: 'anthropic', secretsFile: '.cc-secrets/claude9-oauth.env' });
   });
 
   it('still accepts a generated account with no secretsFile at all', () => {
     const r = parseRoster(rosterWithSecrets(undefined));
-    expect(r.accounts.find((a) => a.id === 'claude2')?.exec)
+    expect(r.accounts.find((a) => a.id === 'claude9')?.exec)
       .toEqual({ kind: 'generated', provider: 'anthropic' });
   });
 });
@@ -738,5 +738,41 @@ describe('exec.secretsFile is legal on all three kinds — and gated on all thre
     expect(execOf(rosterWithExec(
       { kind: 'external', provider: 'openai', secretsFile: '.cc-secrets/lane.env' }), 'lane'))
       .toEqual({ kind: 'external', provider: 'openai', secretsFile: '.cc-secrets/lane.env' });
+  });
+});
+
+// D-5521 (A26a): `telemetry` gains `openrouter`, the value A26 writes for an OpenRouter
+// lane. `roster-exec-parity.test.ts` holds the bare-Node mirror to the same set.
+describe('parseRoster — telemetry "openrouter" (D-5521)', () => {
+  const withKeyLane = (telemetry: unknown) => ({
+    version: 1,
+    accounts: [
+      { id: 'lane-a', label: 'lane-a', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'lane-d', label: 'lane-d', configDirSuffix: '.claude-lane-d',
+        exec: { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/lane-d-openrouter.env' },
+        homeAble: true, hue: 'amber', telemetry },
+    ],
+  });
+
+  it('keeps an openrouter lane\'s telemetry as written', () => {
+    expect(parseRoster(withKeyLane('openrouter')).byId.get('lane-d')!.telemetry).toBe('openrouter');
+  });
+
+  it('still refuses a value outside the four, naming them in the remedy', () => {
+    let caught: unknown;
+    try { parseRoster(withKeyLane('OpenRouter')); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(RosterError);
+    expect((caught as RosterError).message).toMatch(/invalid telemetry "OpenRouter": it must be "anthropic", "codex", "openrouter" or "none"\./);
+    expect((caught as RosterError).remedy).toMatch(/to "anthropic", "codex", "openrouter" or "none"\./);
+  });
+
+  it('refuses a name the value set inherits from Object.prototype (own keys only)', () => {
+    for (const bad of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) {
+      let caught: unknown;
+      try { parseRoster(withKeyLane(bad)); } catch (e) { caught = e; }
+      expect(caught, `took "${bad}"`).toBeInstanceOf(RosterError);
+      expect((caught as RosterError).message).toMatch(new RegExp(`invalid telemetry "${bad}"`));
+    }
   });
 });

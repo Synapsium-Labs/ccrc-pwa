@@ -119,6 +119,18 @@ describe('the warn row says nothing it was not told', () => {
 });
 
 describe('the warn row draws each wedge, with two cues', () => {
+  it('names live PARKED mail as waiting, apart from the given-up count (D-5838)', () => {
+    board(health({ mailParkedLive: 1 }));
+    expect(warn()?.textContent).toContain('1 waiting');
+    expect(warn()?.textContent).not.toContain('parked');
+    expect(warn()?.querySelector('[title]')?.getAttribute('title')).toContain('submitted or cleared');
+  });
+
+  it('an older server, which omits mailParkedLive, draws no waiting mail (D-5838)', () => {
+    board(health({}));
+    expect(warn()?.textContent ?? '').not.toContain('waiting');
+  });
+
   it('names parked mail, and the outstanding half beside it', () => {
     board(health({ mailParked: 2, mailOutstanding: 5 }));
     expect(warn()?.textContent).toContain('2 parked');

@@ -48,7 +48,7 @@ const merge = extendTailwindMerge({
     // `p-gutter`, `px-card`, `gap-section`, `m-*`, `h-row` and `min-h-row` in
     // the same groups as their scale twins, so either replaces the other.
     theme: {
-      spacing: ['gutter', 'row', 'card', 'section'],
+      spacing: ['gutter', 'row', 'card', 'section', 'head'],
     },
     classGroups: {
       // The sizes Tailwind has no name for: two scale steps and the type

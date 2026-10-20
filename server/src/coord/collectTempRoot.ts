@@ -1,8 +1,8 @@
 import path from 'node:path';
-import type { FleetIO, MeasuredPathKind, MeasuredStat } from '../io.js';
+import type { FleetIO, MeasuredDirectoryRead, MeasuredPathKind, MeasuredStat, ReadFailure } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { Deps } from '../server.js';
+import type { RunCcd } from './ports.js';
 import type { Presence } from '../presence.js';
 import type { CcdResult } from '../lifecycle.js';
 import { CCD_ARGV, COLLECT_CAP, RECLAIM_PAUSE_CAP, capSupported, sweepDec, verbSupported } from '../ccdargv.js';
@@ -148,9 +148,9 @@ export interface CollectControlDeps {
  *  the lane's stamping wrapper (Task 7), which reads `argv[0]` to tell this job's audit from its act. */
 export interface CollectTempRootDeps {
   coord: Pick<CoordStore, 'run' | 'openRunsForSession' | 'openRunsClaimedBy'>;
-  io: Pick<FleetIO, 'readdir'>;
+  io: Pick<FleetIO, 'readdirMeasured'>;
   cfg: Pick<CcrcConfig, 'registryDir'>;
-  runCcd: Deps['runCcd'];
+  runCcd: RunCcd;
   fleetState?: FleetState;
   presence?: Pick<Presence, 'isVisible'>;
   lane: CollectLanePort;
@@ -293,7 +293,7 @@ const sameGenerations = (a: CollectGenerations, b: CollectGenerations): boolean 
  *  an id whose witness is already gone has its record written, so the later listing sees it unless the collection
  *  finished, and then forgetting it is right. */
 export async function readCollectPopulation(
-  io: Pick<FleetIO, 'lstatMeasured' | 'readdir' | 'statMeasured'>, registryDir: string,
+  io: Pick<FleetIO, 'lstatMeasured' | 'readdirMeasured' | 'statMeasured'>, registryDir: string,
 ): Promise<{ tmproots: CollectListing; tmpquarantine: CollectListing }> {
   const tmproots = await readCollectListing(io, registryDir, COLLECT_WITNESS_DIR);
   const tmpquarantine = await readCollectListing(io, registryDir, COLLECT_RECORD_DIR);
@@ -315,7 +315,7 @@ export async function readCollectPopulation(
  *  between the two reads is listed through the link, and every audit of such a name answers ccd's `witness` probe and
  *  mints no token. */
 async function readCollectListing(
-  io: Pick<FleetIO, 'lstatMeasured' | 'readdir' | 'statMeasured'>, registryDir: string, leaf: string,
+  io: Pick<FleetIO, 'lstatMeasured' | 'readdirMeasured' | 'statMeasured'>, registryDir: string, leaf: string,
 ): Promise<CollectListing> {
   const dir = path.join(registryDir, leaf);
   let kind: MeasuredPathKind;
@@ -331,9 +331,12 @@ async function readCollectListing(
   }
   if (kind.kind === 'symlink') return { kind: 'unmeasured', why: `${leaf}/ is a symbolic link, which is never followed` };
   if (kind.kind === 'regular') return { kind: 'unmeasured', why: `${leaf}/ is a plain file, not a directory` };
-  let names: readonly unknown[] | null;
-  try { names = await io.readdir(dir); } catch { names = null; }
-  if (names !== null) return { kind: 'listed', names: names.filter((n): n is string => typeof n === 'string') };
+  // D-5969 (ARCH-08b): the MEASURED listing. A proven absence is an empty listing; an unlistable one is reported as
+  // such and still asks the stat, because an older agent folds every failure into `unreadable`.
+  let listed: MeasuredDirectoryRead;
+  try { listed = await io.readdirMeasured(dir); } catch { listed = { ok: false, reason: 'unreadable' }; }
+  if (listed.ok) return { kind: 'listed', names: (listed.entries as readonly unknown[]).filter((n): n is string => typeof n === 'string') };
+  if (listed.reason === 'absent') return { kind: 'absent' };
   let st: MeasuredStat;
   try {
     st = await io.statMeasured(dir);
@@ -341,7 +344,7 @@ async function readCollectListing(
     return { kind: 'unmeasured', why: `${leaf}/ did not list, and what stands there could not be asked (${said(err)})` };
   }
   if (!st.ok && st.reason === 'absent') return { kind: 'absent' };
-  return { kind: 'unmeasured', why: `${leaf}/ did not list` };
+  return { kind: 'unmeasured', why: `${leaf}/ did not list (${listed.reason})` };
 }
 
 // ── the switches ─────────────────────────────────────────────────────────────
@@ -353,14 +356,22 @@ async function readCollectListing(
  *  registry carries none, because a measured absence now retires the marker's latch, and a listing never taken proves
  *  nothing absent. */
 export type CollectSwitches = CollectLaneSwitches;
+/** L1's listing-failure words are `ReadFailure`'s, EQUAL at compile time (D-5969): a word added to either side is a
+ *  type error here until the other names it too. */
+type CollectListingFailure = Extract<CollectLaneSwitches, { why: 'unlistable' }>['reason'];
+const LISTING_FAILURE_WORDS_ARE_READ_FAILURES: [ReadFailure] extends [CollectListingFailure]
+  ? ([CollectListingFailure] extends [ReadFailure] ? true : never) : never = true;
+void LISTING_FAILURE_WORDS_ARE_READ_FAILURES;
 
 /** The two switches, from ONE registry listing (spec §5.10). A raised `reclaim-paused` is `paused`, `raised`. A listing
  *  that could not be taken is `paused` too, `unlistable`, with NO `marker` field: it cannot rule a pause out, and it
  *  measured nothing. `marker` is whether `collect-lane-live` stands, which no writer in the tree touches. */
-export async function collectSwitches(io: Pick<FleetIO, 'readdir'>, registryDir: string): Promise<CollectSwitches> {
-  let names: readonly string[] | null;
-  try { names = await io.readdir(registryDir); } catch { names = null; }
-  if (names === null) return { paused: true, why: 'unlistable' };
+export async function collectSwitches(io: Pick<FleetIO, 'readdirMeasured'>, registryDir: string): Promise<CollectSwitches> {
+  // D-5969 (ARCH-08b): the MEASURED listing; a rejecting port is `unreadable`, and the pause says which it was.
+  let listed: MeasuredDirectoryRead;
+  try { listed = await io.readdirMeasured(registryDir); } catch { listed = { ok: false, reason: 'unreadable' }; }
+  if (!listed.ok) return { paused: true, why: 'unlistable', reason: listed.reason };
+  const names = listed.entries;
   const marker = names.includes(COLLECT_LANE_LIVE_MARKER);
   return names.includes(RECLAIM_PAUSE_MARKER) ? { paused: true, why: 'raised', marker } : { paused: false, marker };
 }
@@ -452,6 +463,8 @@ async function collectAudit(
     return { value: { kind: 'no-document', stderr: said(err) }, composed, arrived };
   }
   const arrived = deps.lane.clock();
+  // D-6034: a call that never ran is read FIRST, as the rejection above is: an audit with no document, never a probe.
+  if (res.ran === false) return { value: { kind: 'no-document', stderr: res.stderr }, composed, arrived };
   return { value: parseCollectAudit(id, res.ok, res.stdout, res.stderr), composed, arrived };
 }
 
@@ -564,6 +577,12 @@ export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob
     return { kind: 'acted', audit: observed, composedMono: now.mono, result: { kind: 'no-document', stderr: said(err) }, arrived };
   }
   const arrived = deps.lane.clock();
+  // D-6034: read FIRST, before a recognised pre-lock die is read off the runner's stderr. A die "acted nothing"; a call
+  // that may not have reached ccd, or reached it and lost the answer, MAY have acted, so it is `no-document` — the lane
+  // keeps the id and the slot — exactly as the rejection above is.
+  if (act.ran === false) {
+    return { kind: 'acted', audit: observed, composedMono: now.mono, result: { kind: 'no-document', stderr: act.stderr }, arrived };
+  }
   return { kind: 'acted', audit: observed, composedMono: now.mono,
     result: parseCollectResult(job.id, act.ok, act.stdout, act.stderr), arrived };
 }

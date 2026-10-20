@@ -22,7 +22,7 @@ import { readTurnMarkMeasured } from './turnmark.js';
 import { finishedAfter } from './coord/finished.js';
 import { readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
-import { sendPrompt } from './inject/send.js';
+import { readBoxText, sendPrompt } from './inject/send.js';
 import {
   decideIdleCompactNudge, idleNudgeDisabled, idleNudgeFeedBody, idleNudgeRefusedBody, idleNudgeRowHold, readCompactionTail,
   type CompactionTail, type IdleNudgeRowFacts,
@@ -37,7 +37,7 @@ import { ASK_ANSWERING_MAX_MS, ASK_SETTLE_TICKS, askNotifyAt } from './askwindow
 import { UNTRUSTED_CAP_BYTES, untrustedBlock } from './coord/untrusted.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
+  ArchivedHeld, ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
   LifecycleHealth, MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
   SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
@@ -46,7 +46,7 @@ import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthI
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, SERVER_CAPS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, isRegistryId, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -55,8 +55,13 @@ import { JournalMirror } from './coord/mirror.js';
 // literals exist. `single-definition.test.ts` pins both halves of that split.
 import {
   COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, askNudgeSubject, isApprovalNudgeMail, isAskNudgeMail,
-  queueStallNotice, queueSystemMail, survivorOf,
+  survivorOf,
 } from './coord/rundefs.js';
+import { queueStallNotice, queueSystemMail } from './coord/rundefsTx.js';
+import {
+  BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, BRIEF_WATCH_HORIZON_MS, briefNotTakenBody, briefNotTakenReason,
+  briefNotTakenSubject, briefNotTakenTag, briefStep, type UnlandedBrief,
+} from './coord/briefwatch.js';
 import { landingAsk, landingVerdict, type LandingFacts } from './coord/landing.js';
 import {
   readParentGenerations, readWorktreeCensus, settleParentIncarnations, type DelegationCensusPass, type WorktreeCensus,
@@ -122,6 +127,7 @@ import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/le
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
+import { notify } from './notice.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
@@ -157,7 +163,7 @@ import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
   EXPIRE_AUDITS_PER_PASS, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
   archivedExpiryOutcomeKey, archivedExpirySighted, archivedExpiryVerdict, expiryAttention, expiryReportStands,
-  type ArchivedExpiryEntry, type ExpiryStoreRead,
+  rankArchivedHeld, type ArchivedExpiryEntry, type ExpiryStoreRead,
 } from './archivedExpiry.js';
 import { expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
 import {
@@ -363,6 +369,11 @@ interface StallResolution {
 export interface StallTick {
   readonly panePids: ReadonlyMap<string, number | null>;
   readonly records: readonly SessionRecord[];
+  /** The ids this tick's listing REFUSED (`RegistryRead.refused`, path identity spec §2.3): listed, never read or built,
+   *  so in no `records` and no `sessions`. A run worker or a claimant among them is held as unmeasured, never read as
+   *  absent: the lane takes no live, marker or hookstate read and composes no path or argv from it, and drops its clocks
+   *  (slug `tick-lanes-hold-a-refused-id`). */
+  readonly refused: ReadonlySet<string>;
 }
 
 /** The registry uuid the stall lane reads a marker and a hookstate against, off the tick's rows: `uuid: null` for no
@@ -375,6 +386,10 @@ interface StallLive { readonly live: LiveWordRead; readonly startedAt: number | 
 const STALL_HOOK_ASK_UNREAD: HookAskFact = { kind: 'unmeasured' };
 /** An identity the tick could not measure: the hookstate cannot be compared with it, so it is not read. */
 const STALL_RAW_UNMEASURED: HookStateRawRead = { ok: false, reason: 'unmeasured' };
+/** A turn marker this lane did not read (a refused id, `tick-lanes-hold-a-refused-id`): `unmeasured` says it was not
+ *  read, as `stallMarkRead` answers for an identity the tick could not measure. No verdict reaches it: each holds the
+ *  refused arm first. */
+const STALL_MARK_UNREAD: TurnMarkRead = { ok: false, reason: 'unmeasured' };
 
 /** The hookstate ask the run verdict's holds 2a and 2b read, projected from the ONE raw read
  *  (`readHookStateRawMeasured`). A foreign or unregistered file carries no ask of this session's. `absent` and
@@ -598,10 +613,11 @@ const COORD_COOLDOWN_MS = 30_000;
  *
  *  The PRE-DELIVERY attempt budget, and the spacing between attempts —
  *  applies ONLY while a delivery's own `deliveredAt` is still null (review
- *  finding 4). A row that has NEVER been delivered parks as
- *  `rejected('undeliverable')` at the cap, and THE MAIL ROW IS UNTOUCHED
- *  (spec:170-172): the record of what was said survives the failure to say
- *  it. The instant `deliveredAt` is set, this budget stops applying: the
+ *  finding 4). A row that has NEVER been delivered PARKS at the cap — since
+ *  D-5838 (#754) the durable, still-outstanding parked state, no longer
+ *  `rejected('undeliverable')` while its recipient lives (`MAIL_PARK_RETRY_MS`
+ *  below) — and THE MAIL ROW IS UNTOUCHED (spec:170-172): the record of what
+ *  was said survives the failure to say it. The instant `deliveredAt` is set, this budget stops applying: the
  *  row's own history already disproves 'undeliverable', so a failing REPLAY
  *  backs off instead of rejecting on THIS counter — `attempts` keeps
  *  counting on a delivered row too (it is one cumulative column), just
@@ -655,6 +671,66 @@ const MAIL_TURN_HOLD_MS = 60_000;
  *  dressed as coordination" eventually parks rather than running for the
  *  life of the box. */
 const MAIL_REPLAY_MAX_ATTEMPTS = 20;
+
+/** THE PARKED STATE (D-5838, #754). A mail is never rejected as
+ *  undeliverable while its recipient session is alive. Measured before this:
+ *  in 21 days five wave briefs to new workers and two workers' done-mails to
+ *  their coordinators were rejected — `enter-ignored` on the FIRST attempt (the
+ *  nudge sat in a fresh box), or `draft-present` at `MAIL_MAX_ATTEMPTS` after
+ *  about 15 minutes of a human's unsent text — and the sending session was never
+ *  told. Now such a row PARKS (`CoordStore.parkDelivery`): still `queued`, so
+ *  every outstanding reader keeps it, and:
+ *   - the sweep PROBES its recipient's box (`readBoxText`, at most every
+ *     `MAIL_PARK_PROBE_MS`) and wakes it the moment the box differs from what it
+ *     held at the park — a draft cleared or changed;
+ *   - otherwise it is re-attempted every `MAIL_PARK_RETRY_MS`, through every
+ *     gate, so a recipient that has since died or stopped is rejected exactly as
+ *     before (the lifecycle rung) — the park keeps no dead recipient's mail;
+ *   - an `enter-ignored` park never TYPES while its box still holds what it
+ *     held at the park — that would put the nudge under itself. On its timer, a
+ *     box holding exactly our own nudge is resumed by `sendPrompt`'s
+ *     `resumeIfOwn` arm (a correspondence-checked Enter, never a blind one, never
+ *     a retype), at most once per retry; any other unchanged text is held with
+ *     nothing pressed. A box the park could not read is unknown, not empty
+ *     (`parkBoxSeen`);
+ *   - its SENDING session is told once, by system mail; the operator is told
+ *     once, at `MAIL_PARK_ESCALATE_MS` parked (`tellSender`'s push, its tag
+ *     `mail-parked-<id>`);
+ *   - at `MAIL_PARK_CEILING_MS` parked it is rejected, with a `lastError` that
+ *     says so (`parkExpiredError`). */
+const MAIL_PARK_RETRY_MS = 600_000;
+const MAIL_PARK_PROBE_MS = 30_000;
+const MAIL_PARK_ESCALATE_MS = 900_000;
+const MAIL_PARK_CEILING_MS = 24 * 60 * 60_000;
+/** The park ceiling's `lastError` (D-5838) — free text, the reason appended. */
+const parkExpiredError = (reason: string | null): string =>
+  `parked 24 h, never delivered: ${reason ?? 'unknown'}`;
+/** The words a park notice uses for its reason (D-5838). Branched on the
+ *  literal tokens it has words for; anything else is named as a failing send. */
+function parkWords(reason: string | null): { why: string; when: string } {
+  if (reason === 'draft-present') {
+    return { why: 'the recipient\'s input box holds unsent text', when: 'that text is sent or cleared' };
+  }
+  if (reason === 'enter-ignored') {
+    return { why: 'the nudge is sitting unsubmitted in the recipient\'s input box',
+             when: 'that box is submitted or cleared' };
+  }
+  return { why: `the send keeps failing (${reason ?? 'unknown'})`,
+           when: 'a retry lands — every 10 minutes, or as soon as its input box changes' };
+}
+
+/** What a box reading says about a PARKED row (D-5838, verification round).
+ *  `parkBox` is what the box held when the row parked, or NULL when that could
+ *  not be read (the box absent, or a menu up). NULL is UNKNOWN, never an empty
+ *  box: a NULL park wakes only on a box seen EMPTY, and any other reading
+ *  becomes its baseline (`CoordStore.baselineParkBox`) without pressing or
+ *  typing anything. A non-NULL park wakes on any difference. A `null` reading
+ *  says nothing. */
+function parkBoxSeen(box: string | null, parkBox: string | null): 'changed' | 'same' | 'baseline' | 'unknown' {
+  if (box === null) return 'unknown';
+  if (parkBox === null) return box === '' ? 'changed' : 'baseline';
+  return box === parkBox ? 'same' : 'changed';
+}
 
 /** The fleet kill-switch, `$REG/mail-disabled` — ccd's `-disabled` family
  *  (`ccd/ccd:40-41`, `_lane_enabled` at `:248`), which the operator already
@@ -739,6 +815,11 @@ function mergeBreakerMembers(
   return [...out.values()];
 }
 
+/** `pushOne`'s two flags narrowed to the three combinations a lane can reach, each one `NoticeMode` (D-5857): neither
+ *  (`'push'`), `recordAlways` (`'record-always'`), or `recordAlways` with `recordOnly` (`'record-only'`). `recordOnly`
+ *  without `recordAlways` had no caller and is not a type. */
+type PushOneMode = { recordOnly?: false | undefined } | { recordAlways: true; recordOnly: true };
+
 export class FleetWatcher {
   private timer: NodeJS.Timeout | null = null;
   private lastJson: string | null = null;
@@ -763,10 +844,13 @@ export class FleetWatcher {
   /** Asks whose operator push is DEFERRED, keyed by session id. IN MEMORY BY
    *  DESIGN and not in coord.db (D-2169): this map is the only carrier of the
    *  deferred push, so a lost database must not be able to swallow it. A server
-   *  restart drops the hold and the push is lost — which is PRE-EXISTING, not a
-   *  regression: `this.primed` is false on the first tick after boot and
-   *  `dialogIds` suppresses the second, so a restart during any live dialog
-   *  re-pushes nothing today either.
+   *  restart empties the map; since D-5925 the boot re-seeds it FROM THE ROWS
+   *  (`pendingReseed`): a `held` or `answering` row whose dialog the pane is
+   *  measured still painting, with the same `askKey`, is held again until
+   *  `askNotifyAt(at)`, so the deferred push still fires (late if the deadline
+   *  passed while the server was down). A lost `coord.db` has no rows, and the
+   *  restart then re-pushes nothing, as before D-5925: `this.primed` is false
+   *  on the first tick after boot and `dialogIds` suppresses the second.
    *
    *  Cleared in TWO places, both keyed off the dialog leaving the pane: the
    *  orphan-settle in the `last !== dialog.id` branch above, when a NEW
@@ -799,9 +883,21 @@ export class FleetWatcher {
    *  approvals row held for its claimant (`tryHold`'s approval arm). `until` is the latest `notifyAt` of the rows it
    *  covers; `rowIds` are those rows (the main thread's only, D-5491), so a cleared dialog marks only them `operator`. `sweepApprovals` pushes `ev` once
    *  no covered row is held any more and the dialog is still painted. In memory only, as `heldAsks` is: a restart
-   *  loses the deferral, and the dialog then raises on its next sighting. */
+   *  empties it, and since D-5925 the boot re-seeds it (`pendingReseed`) from a snapshot of the child's main-thread
+   *  rows still `held` at boot, once the pane is measured painting a permission prompt; a row already `released` at
+   *  boot is never re-seeded (its lapse may have pushed before the restart). Before D-5925 a restart lost the
+   *  deferral and the dialog never raised: `dialogIds` suppresses every sighting after the unprimed boot tick. */
   private heldApprovals = new Map<string, { until: number; dialogId: string; rowIds: number[];
     ev: Parameters<FleetWatcher['pushOne']>[0] }>();
+  /** D-5925 (held questions survive a restart): what the boot found held in `coord.db`, per child, still to be
+   *  matched against a MEASURED pane. Filled once, on the first unprimed `detectDialogs` (before that tick's
+   *  `sweepApprovals`), and consumed by every tick before `tryHold` can run for the child (`reseedFromRows`), so a
+   *  pane the boot tick could not measure is decided by a later tick and never mints a second row. Bounded by the
+   *  number of children with a held row: at most one ask row per child (the newest) and that child's held
+   *  main-thread approval rows (`id`, `notifyAt`). An entry leaves when both halves are decided. */
+  private pendingReseed = new Map<string, { ask: AskRow | null; approvals: { id: number; notifyAt: number }[] }>();
+  /** Set once the boot snapshot behind `pendingReseed` has been read (or there was no store to read). */
+  private reseedLoaded = false;
   /** The day the approval inputs and the asks' question text were last pruned (`sweepApprovals`). */
   private lastApprovalPrune = 0;
   /** The digest beat's memory (D-5300): the last day it settled (sent, skipped at zero, or found already claimed),
@@ -1182,7 +1278,8 @@ export class FleetWatcher {
    *  restart re-times each one, which the spec accepts (slug `absent-worker-is-dead-after-grace` (D-3631)): when a run worker
    *  was first seen with no fleet row; when it was first seen with an `orphan` or `never-started` lifecycle; when a
    *  worker's or coordinator's turn marker was first READ `unmeasured` or `malformed` (`stallMarkClock`: an unmeasured
-   *  identity reads no marker, so it neither starts nor keeps that clock). */
+   *  identity reads no marker, so it neither starts nor keeps that clock). A subject's clocks are also dropped on a
+   *  sweep that refuses its id (`judgeStall`, `judgeStallCoordinator`). */
   private stallAbsentSince = new Map<string, number>();
   private stallDeadSince = new Map<string, number>();
   private stallMarkUnreadableSince = new Map<string, number>();
@@ -1194,7 +1291,8 @@ export class FleetWatcher {
    *  the prune keys on. IN MEMORY (slug `run-less-push-latches-are-in-memory` (D-3751)): a restart re-pushes a run-less orphan D
    *  rung 2, a mail-stuck, a marker-unreadable or a coordinator's failed rung 2 to the operator while it stands. A
    *  coordinator's marker-unreadable push is keyed on its first-seen time, which a restart or a clock drop (an
-   *  unobserved gap, `dropStallClocks`) re-times, so one push can go out on each side of it. Pushes only, never mail. */
+   *  unobserved gap, `dropStallClocks`, or a sweep that refuses its id) re-times, so one push can go out on each side
+   *  of it. Pushes only, never mail. */
   private stallLatch = new Map<string, string>();
   /** Warn-once keys, `<sessionId>|<what>`: a run-less shadow rung, `failed-unknown`, and the defensive r2-with-no-r1
    *  line (`applyStall`; no real input reaches it today). */
@@ -1373,6 +1471,10 @@ export class FleetWatcher {
    *  was making it, and there is nothing left to guard once the process is
    *  gone. */
   private mailInFlight = new Set<string>();
+  /** D-5838: when each PARKED delivery's box was last probed, so the probe runs
+   *  at most every `MAIL_PARK_PROBE_MS` per row. In memory: a restart probes once
+   *  more, which costs one capture. */
+  private parkProbeAt = new Map<number, number>();
   /** THE WAKE BUDGET's window (D-5242, `coord/wakeBudget.ts`): every wake of a hibernated session this process asked
    *  for or admitted, newest last, pruned to `WAKE_WINDOW_MS` by `wakeAdmit`. ONE list for the server: the mail lane's
    *  automatic wakes and the routes' asked ones (`admitWake`) share it. In memory by design — a restart empties it,
@@ -1430,6 +1532,11 @@ export class FleetWatcher {
    *  own memory — never child reclamation's list, so nothing that reads that one sees an expiry. `[]` until the lane's
    *  first pass. */
   private expiryAttentionList: readonly ExpiryAttention[] = [];
+  /** The ranked total of bytes archived workspaces hold (D-5943), as the expiry lane's last pass composed it beside the
+   *  attention list — shadow and armed alike. `null` until that first pass, which the wire renders as an ABSENT block
+   *  (unknown). A pass the cleanup switch or a missing capability stops still composes it, from that pass's registry
+   *  and the lane's standing memory (D-6027), so it never freezes at the last acting pass. */
+  private archivedHeldBlock: ArchivedHeld | null = null;
   /** The expiry lane's clock and memory (wave 3b): its OWN — never the child lane's map, which wave 5's chip reads.
    *  Per archived workspace, `ArchivedExpiryEntry` (L1): the instant ccd gave for THIS archive, the twice-observed
    *  sighting, the last outcome (for change-only feed rows), the in-use and failure runs and the report. IN MEMORY
@@ -2025,6 +2132,12 @@ export class FleetWatcher {
     return this.delegationLane().health();
   }
 
+  /** The ranked total of bytes archived workspaces hold, each with the expiry lane's latest verdict (D-5943), as the
+   *  lane's last pass composed it, stopped or not (D-6027). `null` before that pass: absence on the wire reads as UNKNOWN. */
+  archivedHeld(): ArchivedHeld | null {
+    return this.archivedHeldBlock;
+  }
+
   /** What the lane last concluded, for tests and diagnostics: nothing here is wire. */
   delegationReport() {
     return this.delegationLane().report();
@@ -2248,7 +2361,8 @@ export class FleetWatcher {
   private async rowAtAct(rec: SessionRecord): Promise<{ ok: true; row: FleetSession } | { ok: false }> {
     const reads = turnReadDeps(this.deps, this);
     const again = await readSessionRecord(this.deps.io, this.deps.cfg, rec.id);
-    if (!again.found) return { ok: false };
+    // Every arm but `found` (`absent`, `unlistable`, and the id gate's `bad-id`, path-identity spec §2.3) acts on nothing.
+    if (again.kind !== 'found') return { ok: false };
     const row = await liveRowFor(reads, again.record, again.record.uuid);
     return row === null ? { ok: false } : { ok: true, row };
   }
@@ -2352,6 +2466,10 @@ export class FleetWatcher {
       // `!registryRead.listed` return) and `registry.ts`'s own docstring
       // states for this exact read: "a failed second listing proves nothing
       // and changes nothing".
+      // A refused id's absence from `records` is no measure of the session. The lanes on this tick that would read
+      // it as one are handed `registryRead.refused` and hold the id, or leave it out (`tick-lanes-hold-a-refused-id`):
+      // the stall watch on `StallTick`, the claim lease lanes and the divergence census.
+      // [registry-refused:omits] a refused id is in no `records`: no state and no field read here, and the lanes handed `refused` hold it, never read it as absent.
       const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
       // BEFORE the fail-shut return below, and on BOTH arms (D-283 (was D-B4-10)). An
       // unlistable registry is not "nothing is set": it is the exact state
@@ -2427,7 +2545,7 @@ export class FleetWatcher {
       // the latch remembers that push and amends it when the envelope turns up.
       await this.sweepHookStates(records);
       await this.sweepUsage(records);
-      const pending = await this.detectDialogs(this.primed, records);
+      const pending = await this.detectDialogs(this.primed, registryRead.names, records);
       await this.sweepTasks();
       // NEVER awaited: it shells out over the network and `gh` has no
       // --timeout, so awaiting it would stall the dialog detector and the
@@ -2457,7 +2575,13 @@ export class FleetWatcher {
       // AFTER git's records — the census weighs the two against each other, and
       // a listing snapshotted here would be three awaited lanes older than the
       // records it is compared with. `sweepDivergences` states the race in full.
-      void this.sweepDivergences(records)
+      // HANDED `registryRead.refused`, though: rule 3's open-run side leaves a
+      // refused id out rather than name it as carrying no hold
+      // (`tick-lanes-hold-a-refused-id`). Rule 3 weighs `refused` against
+      // `records`, never against the census's own listing (that feeds rule 1
+      // only), and both come from this one tick read, so rule 3 compares two
+      // halves of one listing and has no skew.
+      void this.sweepDivergences(records, registryRead.refused)
         .catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepNames` above and then some: this
       // lane joins the per-session KeyedQueue behind wave 3's `ws-reclaim`,
@@ -2646,20 +2770,24 @@ export class FleetWatcher {
       // clocks — no new timer (D12), and the mail sweep below this block is
       // untouched by name (D10: a second producer lands BESIDE the most
       // load-bearing loop on the box, never inside it). Liveness comes off
-      // the SAME `sessions` this tick assembled. Wrapped like `pushNewMail`,
-      // for its reason: both walk straight into synchronous `node:sqlite`.
+      // the SAME `sessions` this tick assembled, and off the listing's refused
+      // ids, which are in no `sessions` and so must not read as gone
+      // (`tick-lanes-hold-a-refused-id`). Wrapped like `pushNewMail`, for its
+      // reason: both walk straight into synchronous `node:sqlite`.
       try {
-        this.renewClaims(sessions);
-        this.lapseClaims(sessions);
+        this.renewClaims(sessions, registryRead.refused);
+        this.lapseClaims(sessions, registryRead.refused);
       } catch (err) {
         console.warn(`ccrc-server: claim sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
       }
       // The stall watch (spec 2026-09-29 §4.2, §5) runs after the claim lanes, on THIS tick's `sessions`, its
       // registry listing (the listing carries the markers) and what this tick already measured: the pane pids
-      // `assembleFleet` read and the registry rows (`StallTick`), so the lane reads neither again. It is never
-      // awaited: its reads are async, so it cannot sit in the claim pair's synchronous try-block. It gates itself
-      // on `primed`, which is set below, so the priming tick never judges.
-      void this.sweepStalls(sessions, registryRead.names, { panePids, records }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // `assembleFleet` read and the registry rows (`StallTick`), so the lane reads neither again. It is handed the
+      // listing's refused ids too, so a refused worker or claimant holds as unmeasured rather than reading as absent
+      // from `sessions` (`tick-lanes-hold-a-refused-id`). It is never awaited: its reads are async, so it cannot sit in
+      // the claim pair's synchronous try-block. It gates itself on `primed`, which is set below, so the priming tick
+      // never judges.
+      void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the stall watch's reasons: the STOP-DONE lane (D-5370) on THIS tick's rows and listing. Gated on
       // `primed` like the stall watch, so the priming tick never stops anything.
       if (this.primed) void this.sweepStopDone(sessions, records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
@@ -2668,7 +2796,7 @@ export class FleetWatcher {
       // D-5373: NEVER awaited, `sweepMail`'s reason — it can call `sendPrompt` through the per-session queue. Own clock.
       if (Date.now() - this.lastIdleNudgeAt >= IDLE_NUDGE_SWEEP_MS) {
         this.lastIdleNudgeAt = Date.now();
-        void this.sweepIdleCompactNudge(sessions, registryRead.names, { panePids, records })
+        void this.sweepIdleCompactNudge(sessions, registryRead.names, { panePids, records, refused: registryRead.refused })
           .catch(() => { /* one bad sweep must not kill the poll */ });
       }
       // NEVER awaited, same reasoning as `sweepDivergences`: each is a
@@ -2756,7 +2884,12 @@ export class FleetWatcher {
               const survivingIds = new Set(sessions.map((s) => s.id));
               const missingIds = prior.sessions.map((s) => s.id).filter((id) => !survivingIds.has(id));
               const names = await this.deps.io.readdir(this.deps.cfg.registryDir);
-              const allGenuinelyPurged = names !== null && missingIds.every((id) => !names.includes(`${id}.uuid`));
+              // Spec §2.3: a REFUSED id (not a registry id) is never assembled, so a
+              // snapshot an older build wrote may still carry it while its `.uuid`
+              // stays listed. Its absence from `sessions` is not a partial read and
+              // never heals, so it counts as purged — or one stray file would freeze
+              // every snapshot write for as long as it stands.
+              const allGenuinelyPurged = names !== null && missingIds.every((id) => !isRegistryId(id) || !names.includes(`${id}.uuid`));
               if (allGenuinelyPurged) {
                 await saveSnapshot(sessions, this.cachePath);
                 this.snapshotWriteSkippedWarned = false;
@@ -3103,6 +3236,166 @@ export class FleetWatcher {
    *  no coordination database still gets a working ring and catch-up, it
    *  simply has no durable archive behind either.
    */
+  /**
+   * The session that SENT a delivery's mail, or `null` when it was sent by a
+   * role with no session behind it (D-5838: shared by `pushSenderNotice` and
+   * `tellParkedSender`; it was `tellSender`'s own body).
+   *
+   * A ROLE is not a session id, and until wave 4 this knew that about
+   * exactly one role (D-1040). `'coordinator'` is the only role that can
+   * ever be resolved to a session, and only through the RUN it names:
+   * the run's `claimedBy` is the fact, and a mail that names no run
+   * carries no such fact. `resolveCoordinator(null)`'s answer — whichever
+   * program happens to be the single active one — is exactly right on the
+   * ADDRESSING side, where `toId:'coordinator'` with no run is the
+   * documented recovery for a retired program, and is a guess here: a
+   * message that belongs to no run cannot be inferred to belong to the one
+   * program that happens to be open. Every other role (`'operator'`, wave
+   * 4's program kickoff) has no session behind it at all — the operator
+   * taps a button in a browser.
+   *
+   * Degrade, never guess, on all three arms: inventing a session id would
+   * tag and presence-gate against an id no registry row carries, and
+   * naming the wrong live one is worse — it tells a coordinator running an
+   * unrelated program about a message it never sent and cannot act on.
+   */
+  private mailSender(store: CoordStore, mailId: number):
+    { senderId: string; origin: { fromId: string; runId: number | null; subject: string } } | null {
+    const origin = store.mailOrigin(mailId);
+    if (!origin) return null;
+    const senderId = !MAIL_ROLE_IDS.has(origin.fromId)
+      ? origin.fromId
+      : origin.fromId === 'coordinator' && origin.runId !== null
+        ? store.resolveCoordinator(origin.runId)
+        : null;
+    return senderId === null ? null : { senderId, origin };
+  }
+
+  /** `sweepMail`'s `tellSender` (Task 409 — see the docstring at its call site)
+   *  and the park's operator escalation (D-5838): one durable feed row, and a
+   *  presence-gated push, tagged with the sender's session. */
+  private pushSenderNotice(store: CoordStore, mailId: number, toId: string, why: string, tag: string,
+                           sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): void {
+    const s = this.mailSender(store, mailId);
+    if (s === null) return;
+    this.pushOne({
+      kind: 'mail', sessionId: s.senderId,
+      project: sessionProjects.get(s.senderId) ?? '',
+      title: `✉ blocked › ${toId}`,
+      body: `${s.origin.subject}: ${why}`,
+      runId: s.origin.runId,
+      tag,
+      recordAlways: true,
+    }, projects);
+  }
+
+  /** The park's ONE operator escalation (D-5838): `MAIL_PARK_ESCALATE_MS` after an
+   *  `enter-ignored` park, or at once for a park that already followed
+   *  `MAIL_MAX_ATTEMPTS` failures. The caller has won `markParkEscalated`.
+   *
+   *  It is UNCONDITIONAL: `tellSender`'s degrade rule governs only who is
+   *  MAILED (`tellParkedSender`). A mail sent by a role with no session behind
+   *  it — the operator, a program kickoff, `coordinator` naming no run — is
+   *  still pushed, tagged with the RECIPIENT's session instead, since that is
+   *  the box the operator has to look at. */
+  private escalatePark(store: CoordStore, p: { id: number; mailId: number; toId: string; parkReason: string | null },
+                       sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): void {
+    const words = parkWords(p.parkReason);
+    const why = `parked — ${words.why}; it will be delivered when ${words.when}`;
+    const tag = `mail-parked-${p.id}`;
+    if (this.mailSender(store, p.mailId) !== null) {
+      this.pushSenderNotice(store, p.mailId, p.toId, why, tag, sessionProjects, projects);
+      return;
+    }
+    const origin = store.mailOrigin(p.mailId);
+    this.pushOne({
+      kind: 'mail', sessionId: p.toId,
+      project: sessionProjects.get(p.toId) ?? '',
+      title: `✉ blocked › ${p.toId}`,
+      body: `${origin?.subject ?? 'mail'}: ${why}`,
+      runId: origin?.runId ?? null,
+      tag,
+      recordAlways: true,
+    }, projects);
+  }
+
+  /** The wave brief is confirmed taken (D-5841, D3, #755): `sweepMail`'s brief
+   *  pass, acting on `briefStep`. At 5 min an unlanded brief gets ONE retry — its
+   *  durable `brief-retry` row, then, for a parked row, D1's `wakeParked`, so the
+   *  due loop re-attempts it through every gate (the ensure-wake gate first; our
+   *  own nudge gets `resumeIfOwn`'s verified Enter, any other text is held with
+   *  nothing pressed or typed). At 10 min the run's claimant is mailed
+   *  `brief not taken by <worker>, run N: <reason>` with its `brief-not-taken`
+   *  row in one transaction (`queueStallNotice`), or the row alone when there is
+   *  no other claimant to tell, and the operator gets one push, only from the
+   *  call that wrote the row. Dispatches nothing; writes no run state, hold,
+   *  claim or limit. Answers whether a parked row was woken. */
+  private sweepBriefs(store: CoordStore, briefs: readonly UnlandedBrief[], now: number,
+                      sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): boolean {
+    let woke = false;
+    for (const b of briefs) {
+      const step = briefStep(b, now);
+      if (step === 'wait') continue;
+      if (step === 'retry') {
+        if (!store.recordStallObservation(b.runId, BRIEF_RETRY_DETAIL, now).recorded) continue;
+        if (b.parkedAt !== null && store.wakeParked(b.deliveryId, now).changed) woke = true;
+        continue;
+      }
+      const reason = briefNotTakenReason(b);
+      const subject = briefNotTakenSubject(b.toId, b.runId, reason);
+      const coordinator = store.resolveCoordinator(b.runId);
+      const told = coordinator !== null && coordinator !== b.toId
+        ? queueStallNotice(store, { id: b.runId, program: b.program, wave: b.wave, waveOf: b.waveOf }, {
+          detail: BRIEF_NOTICE_DETAIL, at: now, toId: coordinator, kind: 'status', subject,
+          body: briefNotTakenBody(b.toId, b.runId, reason, b.state === 'rejected') }).queued
+        : store.recordStallObservation(b.runId, BRIEF_NOTICE_DETAIL, now).recorded;
+      if (!told) continue;
+      // The notice is the more specific word on this delivery: it absorbs the
+      // lane's own park escalation, now or at a later park (its push and its
+      // sender mail). Its `changed: false` is ordinary, not a race: the park had
+      // already escalated, or the row was delivered or finished (D-5997).
+      store.absorbParkEscalation(b.deliveryId, now);
+      this.pushOne({
+        kind: 'mail', sessionId: b.toId,
+        project: sessionProjects.get(b.toId) ?? '',
+        title: `✉ brief not taken › ${b.toId}`,
+        body: subject,
+        runId: b.runId,
+        tag: briefNotTakenTag(b.runId),
+        recordAlways: true,
+      }, projects);
+    }
+    return woke;
+  }
+
+  /** D-5997 (ARCH-15, #532): the sweep CONSUMES a delivery writer's answer. A
+   *  write the store's one guarded writer refused means another path finished
+   *  the row while this sweep held it (an ack, a park, a run close); it is
+   *  logged and the step that assumed it is skipped. Answers whether it landed. */
+  private landed(w: { changed: boolean; state: string }, writer: string, id: number): boolean {
+    if (!w.changed) console.warn(`ccrc-server: mail sweep: ${writer} refused on delivery ${id} (row is ${w.state}) — skipped`);
+    return w.changed;
+  }
+
+  /** Tell the SENDING session, by system mail (D-5838), that its mail parked —
+   *  or, at the ceiling, that it was rejected. Never a role (`mailSender`
+   *  degrades it to nobody), and never the recipient itself. `queueSystemMail`
+   *  dedupes an identical outstanding notice. */
+  private tellParkedSender(store: CoordStore, mailId: number, toId: string,
+                           what: 'parked' | 'rejected', reason: string | null): void {
+    const s = this.mailSender(store, mailId);
+    if (s === null || s.senderId === toId) return;
+    const subject = s.origin.subject.length > 80 ? `${s.origin.subject.slice(0, 79)}…` : s.origin.subject;
+    const words = parkWords(reason);
+    const body = what === 'parked'
+      ? `your "${subject}" to ${toId} is parked: ${words.why}; it will be delivered when ${words.when}. ` +
+        'Nothing to resend: the lane keeps it outstanding and retries it, and rejects it only after 24 h parked.'
+      : `your "${subject}" to ${toId} was rejected after 24 h parked: ${words.why}. ` +
+        'It was never delivered; send it again or act on it directly.';
+    queueSystemMail(store, null, { fromId: 'operator', toId: s.senderId, runId: null, kind: 'status',
+      subject: `mail ${what}: ${subject}`, body });
+  }
+
   private pushOne(e: {
     kind: NotifyEvent['kind']; sessionId: string; project: string; title: string; body: string;
     /** WHICH RUN this push is about, when the lane raising it knows one
@@ -3139,49 +3432,23 @@ export class FleetWatcher {
     /** A same-origin path the service worker opens on tap, ahead of `/s/<sessionId>` (`PushPayload.url`): the digest
      *  push's deep link to its day's screen (D-5300). */
     url?: string;
-  }, projects: Set<string>): void {
-    const visible = this.deps.presence?.isVisible(e.sessionId) === true;
-    if (visible && !e.recordAlways) return;
+  } & PushOneMode, projects: Set<string>): void {
     // Decorated only when BOTH more than one project is active AND the
     // project is actually known (review finding 3) — an empty `e.project`
     // (run-less mail whose recipient session could not be resolved either,
     // `pushNewMail`'s own fallback chain) must degrade to no decoration at
     // all, never to a dangling ` · ` with nothing after it.
     const title = projects.size > 1 && e.project !== '' ? `${e.title} · ${e.project}` : e.title;
-    const log = this.deps.notifyLog;
-    const recorded = log?.record({ kind: e.kind, sessionId: e.sessionId, title, body: e.body,
-      runId: e.runId ?? null });
-    void log?.flush();
-    // The durable feed archive — same record, same point, ALL kinds (Task
-    // 10's orchestrator-added scope). Only reachable when NotifyLog actually
-    // produced an event: no `notifyLog` configured means no `{epoch,seq}`
-    // pair exists to mirror, and a feed row that mirrors nothing is not an
-    // archive of anything. GUARDED (review finding 1): `node:sqlite` throws
-    // SYNCHRONOUSLY (a full disk, a second connection holding coord.db's
-    // write lock — `tx()`'s `BEGIN IMMEDIATE` takes it eagerly, no busy
-    // timeout) and this call sits directly on the poll, reached from every
-    // kind this method ever raises (the `done` push above, the ask push in
-    // `detectDialogs`, and both new Task 10 lanes). `tick()`'s own rule is
-    // that one bad lane must not kill the others — every neighbouring lane
-    // already earns that non-throwing property one way or another (see
-    // `tick()`'s own comment above `pushNewMail`/`pushNewRuns`) and this call
-    // was the one exception reachable from every push, not just two lanes.
-    // The ring record and the push below are UNAFFECTED by a failure here —
-    // only the archive row is lost.
-    if (log && recorded) {
-      try { this.deps.coord?.recordFeedEvent(log.epoch, recorded); }
-      catch (err) {
-        console.warn(`ccrc-server: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — feed archive degraded, ring/push unaffected`);
-      }
-    }
-    if (visible) return;                       // recorded, not pushed
-    if (e.recordOnly) return;                   // recorded, deliberately never pushed
-    void this.deps.push?.notify({
-      title, body: e.body, sessionId: e.sessionId,
-      tag: e.tag ?? `${e.kind}-${e.sessionId}`,
-      ...(e.actions ? { actions: e.actions } : {}),
-      ...(e.url !== undefined ? { url: e.url } : {}),
-    });
+    // D-5857: the presence gate, the ring record, its flush, the GUARDED durable archive (review finding 1: one bad
+    // lane must not kill the others, and `node:sqlite` throws synchronously from every kind this method raises) and
+    // the push are `notify`'s (`notice.ts`), in the mode the two flags name. The ring record and the push are
+    // UNAFFECTED by an archive failure; only the archive row is lost.
+    notify(this.deps, { kind: e.kind, sessionId: e.sessionId, title, body: e.body, runId: e.runId ?? null },
+      e.recordOnly ? 'record-only' : e.recordAlways ? 'record-always' : 'push', {
+        ...(e.tag !== undefined ? { tag: e.tag } : {}),
+        ...(e.actions ? { actions: e.actions } : {}),
+        ...(e.url !== undefined ? { url: e.url } : {}),
+      });
   }
 
   /**
@@ -3211,6 +3478,7 @@ export class FleetWatcher {
       // UNTOUCHED on `{listed:false}` rather than rebuilt from an empty `[]`
       // — a failed listing must not wipe every retained entry the branch
       // below exists to protect.
+      // [registry-refused:tests-only] `tick()` hands this lane its own `records`; the census pins that hand-off.
       const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
       if (!registryRead.listed) return;
       recs = registryRead.records;
@@ -3300,6 +3568,7 @@ export class FleetWatcher {
     // failed listing still consumes this sweep's slot rather than retrying
     // every 2 s tick, the same throttle discipline every other sweep here
     // keeps.
+    // [registry-refused:omits] a refused id is in no `records`: no `taskProgress` entry and no read.
     const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
     if (!registryRead.listed) return;
     const records = registryRead.records;
@@ -3454,6 +3723,7 @@ export class FleetWatcher {
     // is the pane's branch, else the worktree HEAD's, else this (fleet.ts), so it
     // lags a rename by however long Claude Code takes to re-render its pane.
     // Same reason sweepTasks and sweepPr read the registry themselves.
+    // [registry-refused:omits] a refused row is never in `records`, so it is never renamed.
     const records = await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of records) {
       // SKIP a degraded row before anything else: an unmeasured `uuid`
@@ -3626,7 +3896,7 @@ export class FleetWatcher {
    * `this.deps.coord` is `?.`-chained because `testDeps` supplies none — a
    * non-optional call TypeErrors fourteen `hold-gate` tests plus `pr-sweep`'s.
    */
-  async sweepDivergences(records: SessionRecord[]): Promise<void> {
+  async sweepDivergences(records: SessionRecord[], refused: ReadonlySet<string>): Promise<void> {
     // `Date.now()`, not an injected clock: this class has none, and `sweepNames`
     // just above reads the same way. `!== 0` is not a style tic — it is what
     // makes the FIRST sweep run immediately after a restart instead of waiting a
@@ -3820,6 +4090,9 @@ export class FleetWatcher {
         supervisedAtMs: registrySecondsToMs(r.supervisedAt),
       })),
       worktrees, headBranch, openRunSessionIds, openRunIds, liveClaims,
+      // THE TICK'S REFUSED IDS, carried as a fact: `divergence.ts` decides that
+      // rule 3's open-run side leaves them out (`tick-lanes-hold-a-refused-id`).
+      refusedIds: refused,
       // THE REGISTRY'S OWN DIRECTORY LISTING — the evidence that a workspace
       // mid-`ws-add` is claimed before its row parses (see
       // `unclaimedWorktrees`), taken above AFTER git's records for the ordering
@@ -4134,7 +4407,9 @@ export class FleetWatcher {
           mintingRunFull = run.ok ? run.run : null;
           mintingRun = run.ok
             ? { ok: true, run: run.run === null ? null : { state: run.run.state, sessionId: run.run.sessionId,
-                dispatchStartedAt: run.run.dispatchStartedAt, openedAt: run.run.openedAt } }
+                dispatchStartedAt: run.run.dispatchStartedAt, openedAt: run.run.openedAt,
+                // D-5942: a review run's close starts the review child's ceiling.
+                closedAt: run.run.closedAt } }
             : { ok: false, detail: run.detail };
           // THE HOLD READ (spec §5.7's "no hold" conjunct): built from the
           // row's own trimmed `held` text, the candidate runs a match might be
@@ -4972,41 +5247,23 @@ export class FleetWatcher {
   }
 
   /** The collector's feed rows (spec §5.10): written HERE, never by the definer (`collectLane.ts`) or the executor
-   *  (`coord/collectTempRoot.ts`), in `recordExpireFeed`'s idiom — a `run` row, recorded and archived, never pushed; a
-   *  failed archive write is said and never stops the lane; the log is flushed whatever happened. */
+   *  (`coord/collectTempRoot.ts`) — a `run` row, recorded and archived, never pushed (`notify`'s `'record-only'`, D-5857);
+   *  a failed archive write is said in the collector's own sentence and never stops the lane. */
   private collectRecordFeed(coord: CoordStore, row: {
     readonly sessionId: string; readonly runId: number | null; readonly title: string; readonly body: string;
   }): void {
-    const log = this.deps.notifyLog;
-    if (!log) return;
-    try {
-      const ev = log.record({ kind: 'run', sessionId: row.sessionId, runId: row.runId, title: row.title, body: row.body });
-      coord.recordFeedEvent(log.epoch, ev);
-    } catch (err) {
-      console.warn('ccrc-server: recordFeedEvent failed '
-        + `(${err instanceof Error ? err.message : String(err)}) — temp-root collector ${row.title}, feed archive degraded`);
-    } finally {
-      void log.flush();
-    }
+    notify({ notifyLog: this.deps.notifyLog, coord },
+      { kind: 'run', sessionId: row.sessionId, runId: row.runId, title: row.title, body: row.body },
+      'record-only', { degraded: `temp-root collector ${row.title}, feed archive degraded` });
   }
 
   /** The collector's `coord` feed row (path-identity spec 2026-10-12 §5.4). It records the marker latch's retirement,
    *  a change to the switch's control state with no run and no session: `kind:'coord'`, `sessionId:''` and
-   *  `runId:null`, as `POST /api/coord/caps` records its change. It is recorded and archived, never pushed. A failed
-   *  archive write is said and never stops the lane, and the log is flushed whatever happened (`collectRecordFeed`'s
-   *  idiom). */
+   *  `runId:null`, as `POST /api/coord/caps` records its change. It is recorded and archived, never pushed (`notify`'s
+   *  `'record-only'`, D-5857). A failed archive write is said in the collector's own sentence and never stops the lane. */
   private collectRecordCoordFeed(coord: CoordStore, title: string, body: string): void {
-    const log = this.deps.notifyLog;
-    if (!log) return;
-    try {
-      const ev = log.record({ kind: 'coord', sessionId: '', runId: null, title, body });
-      coord.recordFeedEvent(log.epoch, ev);
-    } catch (err) {
-      console.warn('ccrc-server: recordFeedEvent failed '
-        + `(${err instanceof Error ? err.message : String(err)}) — temp-root collector ${title}, feed archive degraded`);
-    } finally {
-      void log.flush();
-    }
+    notify({ notifyLog: this.deps.notifyLog, coord }, { kind: 'coord', sessionId: '', runId: null, title, body },
+      'record-only', { degraded: `temp-root collector ${title}, feed archive degraded` });
   }
 
   /** The executor's view of this lane's memory (spec §5.10; `CollectLanePort`, declared by the executor). Every member is
@@ -5256,15 +5513,18 @@ export class FleetWatcher {
         if (e.eligibleSince !== null) this.archivedExpiryState.set(id, { ...e, eligibleSince: null });
       }
     };
+    const archived = records.filter((r) => r.workspace !== null && r.archivedAt !== null);
     // ONE — the switch and the capability. Either way the twice-observed sightings are dropped: a row needs two
     // FRESH passes once the switch is lowered or the box proves the verb. What was learned and reported stands.
+    // The ranked held bytes are still composed (D-6027): they need neither the store nor the capability, and the
+    // operator needs them exactly while the lane is not acting — a block left from the last acting pass would freeze.
     if (names.includes(RECLAIM_PAUSE_MARKER) || !capSupported(this.deps.fleetState, EXPIRE_CAP)) {
       forgetSightings();
+      this.archivedHeldBlock = rankArchivedHeld(archived, this.archivedExpiryState);
       return;
     }
     // TWO — the population, and the store's answers for it, read ONCE (`lastRunBySession`). A read that fails makes
     // every row ineligible this pass. (The executor re-reads them for its one row at the act.)
-    const archived = records.filter((r) => r.workspace !== null && r.archivedAt !== null);
     let store: { ok: true; workers: ReadonlySet<string>; claimants: ReadonlySet<string> } | { ok: false; detail: string };
     try {
       const last = coord.lastRunBySession(archived.map((r) => r.id));
@@ -5310,6 +5570,7 @@ export class FleetWatcher {
     // FOUR — the act: at most ONE per pass, fleet-wide, never on a box that answered `flock-unavailable`. Never asked
     // first: the row whose `nextAskAt` is earliest, then the oldest instant. No other pass runs meanwhile, so the
     // answer is folded onto the very entry the act was asked for.
+    let left: string | null = null;
     if (this.archivedExpiryBoxRefused === null && due.length > 0) {
       const pick = due.map((id) => [id, this.archivedExpiryState.get(id)!] as const)
         .sort(([ia, a], [ib, b]) => a.nextAskAt - b.nextAskAt || (a.expiresAt ?? 0) - (b.expiresAt ?? 0) || (ia < ib ? -1 : 1))[0]!;
@@ -5326,12 +5587,16 @@ export class FleetWatcher {
         }
         const next = archivedExpiryNextEntry(entry, result, Date.now(), CHILD_RECLAIM_SWEEP_MS);
         if (next === null) this.archivedExpiryState.delete(id); else this.archivedExpiryState.set(id, next);
+        if (result.kind === 'expired' || result.kind === 'gone') left = id;
       } catch (err) {
         console.warn(`ccrc-server: sweepArchivedExpiry: the expiry of ${id} threw (${err instanceof Error ? err.message : String(err)}) — left for the next pass`);
       }
     }
-    // FIVE — the attention list, from the lane's memory alone.
+    // FIVE — the attention list, from the lane's memory alone; and the ranked held bytes (D-5943), this pass's archived
+    // rows joined to that same memory — read once here, never re-derived by a route. A row the act expired (or found
+    // gone) this pass holds nothing, so it leaves the block now, not at the next registry read.
     this.expiryAttentionList = expiryAttention(this.archivedExpiryState, this.archivedExpiryBoxRefused !== null);
+    this.archivedHeldBlock = rankArchivedHeld(left === null ? archived : archived.filter((r) => r.id !== left), this.archivedExpiryState);
   }
 
   /** One archived row's store answers in the lane's pass (spec §5.3's run conjuncts). `reviewing` — a REVIEW run
@@ -5348,7 +5613,7 @@ export class FleetWatcher {
 
   /**
    * THE DEAD-COORDINATOR LANE (workspace lifecycle spec 2026-09-24 §5.4, wave 4): a coordinator that CRASHED and has
-   * stayed dead an hour, with no successor, has its open runs closed `failed` — and CCR-15 then reclaims its marked
+   * stayed dead an hour, with no successor, has its open runs closed `failed` — and #166 then reclaims its marked
    * children. A THIRD SIBLING of `sweepChildReclaim` on the same tick, with its registry read, its cadence
    * (`CHILD_RECLAIM_SWEEP_MS`) and its switch (`reclaim-paused`, the fleet's one cleanup switch) — and nothing else:
    * its own memory, verdicts (`deadCoordinator.ts`, L1), executor (`endDeadCoordinator`), feed rows and attention list
@@ -5915,13 +6180,22 @@ export class FleetWatcher {
    * `Pick<…>` in the sweep signatures is deliberate: the sweeps read exactly
    * three fields, and a test should not have to fabricate a whole
    * `FleetSession` to exercise a lease.
+   *
+   * `refused` is the tick listing's refused ids (`RegistryRead.refused`). A
+   * holder among them is in no `sessions`, and that proves nothing about it:
+   * it answers `unmeasurable` — doubt, which D12 renews and holds, while the
+   * hard cap still fells it — and is checked BEFORE the absent test, which
+   * would answer `gone` (slug `tick-lanes-hold-a-refused-id`). A holder with
+   * no listed row at all still reads `gone`.
    */
   private claimProbe(
     sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[],
+    refused: ReadonlySet<string>,
   ): LivenessProbe {
     const byId = new Map(sessions.map((s) => [s.id, s]));
     return {
       liveness: (id: string) => {
+        if (refused.has(id)) return 'unmeasurable';        // listed but refused: never read, so never gone
         const s = byId.get(id);
         if (s === undefined) return 'gone';                 // the fleet no longer lists it
         if (s.unmeasured.length > 0) return 'unmeasurable'; // doubt reads as HELD (D12)
@@ -5949,13 +6223,13 @@ export class FleetWatcher {
    * lapse lane below keeps the honest verdict, which is where "doubt is not
    * death" does its other half of the work.
    */
-  renewClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[]): void {
+  renewClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[], refused: ReadonlySet<string>): void {
     const now = Date.now();
     if (this.lastClaimRenew !== 0 && now - this.lastClaimRenew < CLAIM_SWEEP_MS) return;
     this.lastClaimRenew = now;
     const store = this.deps.coord;
     if (!store) return;
-    const probe = this.claimProbe(sessions);
+    const probe = this.claimProbe(sessions, refused);
     for (const c of store.activeClaims()) {
       const v = probe.liveness(c.heldBy);
       const d = claimExpiry(c, now, v === 'unmeasurable' ? 'running' : v);
@@ -5967,13 +6241,13 @@ export class FleetWatcher {
    *  gone lapses at the STANDING `expiresAt` with `endedBy:'session-gone'`;
    *  the 8 h hard cap lapses whatever the liveness said. Rows survive —
    *  `lapseClaimRow` lapses, never deletes. */
-  lapseClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[]): void {
+  lapseClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[], refused: ReadonlySet<string>): void {
     const now = Date.now();
     if (this.lastClaimLapse !== 0 && now - this.lastClaimLapse < CLAIM_SWEEP_MS) return;
     this.lastClaimLapse = now;
     const store = this.deps.coord;
     if (!store) return;
-    const probe = this.claimProbe(sessions);
+    const probe = this.claimProbe(sessions, refused);
     for (const c of store.activeClaims()) {
       const d = claimExpiry(c, now, probe.liveness(c.heldBy));
       if (d.act === 'lapse') store.lapseClaimRow(c.id, d.endedBy, now);
@@ -6052,7 +6326,9 @@ export class FleetWatcher {
       // every judged sweep since it was set. More than STALL_CLOCK_GAP_MS from the END of the last judged sweep to this
       // start means nobody watched in between (a disabled window, unreadable or throwing candidate reads, ticks that
       // never reached the lane), so every clock restarts here. The early returns above never stamp it: they are that
-      // unobserved time. A judged sweep's own duration is observed time, so `finally` stamps its end.
+      // unobserved time. A judged sweep's own duration is observed time, so `finally` stamps its end. A sweep that
+      // refuses a subject's id is unobserved time for that subject too, so its clocks restart there: `judgeStall` and
+      // `judgeStallCoordinator` drop them (slug `tick-lanes-hold-a-refused-id`).
       if (this.lastStallJudgedAt !== null && now - this.lastStallJudgedAt > STALL_CLOCK_GAP_MS) this.dropStallClocks();
       judging = true;
       const workers = stallSubjects(candidates.runs);
@@ -6178,16 +6454,30 @@ export class FleetWatcher {
     const primary = subject.primary;
     const id = primary.sessionId;
     const s = sessions.find((x) => x.id === id);
-    this.stallSince(this.stallAbsentSince, id, s === undefined, now);
-    this.stallSince(this.stallDeadSince, id, s !== undefined && stallDeadShaped(s.lifecycle), now);
-    const ident = this.stallUuid(tick, id);
-    const lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
-    const mark = await this.stallMarkRead(id, ident, lr);
-    this.stallMarkClock(id, ident, mark, now);
-    const raw = ident.ok
-      ? await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid)
-      : STALL_RAW_UNMEASURED;
-    const worker = this.stallWorkerFor(store, s, lr, stallHookAskOf(raw));
+    // A worker id this tick's listing refused (`tick-lanes-hold-a-refused-id`) is in no `sessions`, and that is no
+    // measure of absence. The lane carries the fact and decides nothing: it composes no path or argv from the id, takes
+    // no live, marker or hookstate read, and DROPS its absent, dead and marker-unreadable clocks, because a refused sweep
+    // observes nothing about the subject: an unlisting after it starts them afresh. L1 holds the arm.
+    const refused = tick.refused.has(id);
+    let lr: StallLive | null = null;
+    let mark: TurnMarkRead = STALL_MARK_UNREAD;
+    let raw: HookStateRawRead = STALL_RAW_UNMEASURED;
+    if (refused) {
+      this.stallAbsentSince.delete(id);
+      this.stallDeadSince.delete(id);
+      this.stallMarkUnreadableSince.delete(id);
+    } else {
+      this.stallSince(this.stallAbsentSince, id, s === undefined, now);
+      this.stallSince(this.stallDeadSince, id, s !== undefined && stallDeadShaped(s.lifecycle), now);
+      const ident = this.stallUuid(tick, id);
+      lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
+      mark = await this.stallMarkRead(id, ident, lr);
+      this.stallMarkClock(id, ident, mark, now);
+      raw = ident.ok
+        ? await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid)
+        : STALL_RAW_UNMEASURED;
+    }
+    const worker = this.stallWorkerFor(store, s, lr, stallHookAskOf(raw), refused);
     const runIds = subject.runs.map((r) => r.id);
     const read = store.stallMailFor(id, runIds, now - BACKLOG_HORIZON_MS);
     if (!read.ok) {
@@ -6239,11 +6529,21 @@ export class FleetWatcher {
   ): Promise<void> {
     const id = c.sessionId;
     const s = sessions.find((x) => x.id === id);
-    const ident = this.stallUuid(tick, id);
-    const lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
-    const mark = await this.stallMarkRead(id, ident, lr);
-    this.stallMarkClock(id, ident, mark, now);
-    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD);
+    // A refused claimant id, as `judgeStall`'s refused worker (`tick-lanes-hold-a-refused-id`): no composed path, no
+    // live or marker read, and its marker clock is DROPPED (a refused sweep observes nothing about the subject, so a
+    // later unlisting starts it afresh). Every session verdict below holds the arm.
+    const refused = tick.refused.has(id);
+    let lr: StallLive | null = null;
+    let mark: TurnMarkRead = STALL_MARK_UNREAD;
+    if (refused) {
+      this.stallMarkUnreadableSince.delete(id);
+    } else {
+      const ident = this.stallUuid(tick, id);
+      lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
+      mark = await this.stallMarkRead(id, ident, lr);
+      this.stallMarkClock(id, ident, mark, now);
+    }
+    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD, refused);
     const read = store.stallMailFor(id, [], now - BACKLOG_HORIZON_MS);
     if (!read.ok) {
       console.warn(`ccrc-server: stall-watch coordinator ${id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
@@ -6282,7 +6582,8 @@ export class FleetWatcher {
     if (!mark.ok || !stallOrphanDCandidate(mark)) return;
     const s = sessions.find((x) => x.id === r.id);
     const lr = s === undefined ? null : await this.stallLiveRead(r.id, s.wrapper, tick);
-    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD);
+    // A row of `records` is never refused: the listing builds no refused row.
+    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD, false);
     const read = store.stallMailFor(r.id, [], now - BACKLOG_HORIZON_MS);
     if (!read.ok) {
       console.warn(`ccrc-server: stall-watch session ${r.id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
@@ -6364,8 +6665,10 @@ export class FleetWatcher {
 
   /** The session's facts. They come from this tick's fleet row, the live read and the hookstate ask; the two store
    *  reads are synchronous. A failed auto-continue read has no slot of its own: it is a failed store read, hold 1,
-   *  so it raises `unmeasured`. */
-  private stallWorkerFor(store: CoordStore, s: FleetSession | undefined, lr: StallLive | null, hookAsk: HookAskFact): StallWorker {
+   *  so it raises `unmeasured`. The one constructor of `StallWorker`: an id this tick's listing refused is its own
+   *  arm, built before the absent test and never folded into it (`tick-lanes-hold-a-refused-id`), with no store read. */
+  private stallWorkerFor(store: CoordStore, s: FleetSession | undefined, lr: StallLive | null, hookAsk: HookAskFact, refused: boolean): StallWorker {
+    if (refused) return { present: 'refused' };
     if (s === undefined || lr === null) return { present: false };
     const ask = store.currentAskFor(s.id);
     const askRow: AskRowFact = !ask.ok ? { kind: 'unmeasured' }
@@ -6636,8 +6939,9 @@ export class FleetWatcher {
       console.warn(`ccrc-server: idle-compact-nudge ${s.id} compaction ${v.key}: the feed record did not land — nothing typed`);
       return;
     }
+    // D-5912: a human's draft is stashed around the nudge and restored, never a reason to skip it.
     const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, s.id, IDLE_COMPACT_NUDGE_PROMPT,
-      { holdIfAutoContinueArmed: true, refuseIfTurnRunning: true });
+      { onDraft: 'stash', holdIfAutoContinueArmed: true, refuseIfTurnRunning: true });
     console.warn(`ccrc-server: idle-compact-nudge ${s.id} compaction ${v.key}: ${res.ok ? 'typed' : `refused (${res.error}), not retried`}`);
     // The feed agrees with the log line: a refused send gets its own row, so "Nudging" is never the last word on a
     // nudge that typed nothing.
@@ -6920,22 +7224,27 @@ export class FleetWatcher {
    *      and this lane is now the only place the rule still has work to do.
    *
    * ONLY THEN `sendPrompt`, with its whole proof discipline — echo verified,
-   * `draft-present` refused, `dialog-open` refused — inside the session's own
+   * a draft stashed and restored, `dialog-open` refused — inside the session's own
    * `KeyedQueue` slot, injecting `renderMailNudge(d.toId)` — a tiny, single-
    * line, ID-AGNOSTIC reference (robust-mail-delivery spec §1), NEVER
    * `d.envelope` — with `resumeIfOwn: true` (F3 / bug #21, fix-round): a box
    * already holding this session's own un-submitted nudge (a prior sweep's
    * lost Enter) is recognized and its Enter finished, rather than misread as
-   * `draft-present` and backed off forever — the exact self-block the build4
+   * a human's draft — the exact self-block the build4
    * dogfood measured live (`docs/superpowers/programs/build4.md`). See
    * `sendPrompt`'s own docstring for the discrimination. NOTHING HERE TEACHES
    * IT TO RETYPE OR PRESS BLINDLY: the two-Enter budget and `submitEnter`'s
    * one-Enter doctrine (`inject/send.ts:456-460`) are load-bearing, and the
    * escalation for a stuck box is the human.
    *
-   * `replaceDraft` IS NEVER PASSED. A half-typed human message outranks every
-   * agent-to-agent finding in this system; `draft-present` is a back-off, and
-   * the mail is still there in two minutes. `clearMailResidue` IS passed, but
+   * `onDraft: 'stash'` (D-5912), NEVER `replace`. A half-typed human message
+   * outranks every agent-to-agent finding in this system, so it is never typed
+   * over and never cleared: Claude Code's own stash (`C-s`) holds it around the
+   * nudge and gives it back, verified (D-5911), and a send that fails after the
+   * stash gives it back too (D-6010). A draft is therefore no reason to wait:
+   * there is no `draft-present` back-off and no "unsent text" sender notice on
+   * this lane. The two stash refusals (`stash-failed`, `stash-occupied`) are
+   * gates that back off and park like `dialog-open`. `clearMailResidue` IS passed, but
    * only once this delivery has provably been attempted before (spec §2.2) —
    * see the send site's own comment — and it can never clear a human draft
    * either (`isMailResidue`'s own docstring, `inject/send.ts`).
@@ -7021,6 +7330,15 @@ export class FleetWatcher {
 
     const unacked = store.deliveredUnacked();
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
+    // D-5838: every outstanding PARKED row, due or not — probed, escalated and
+    // held to its ceiling below, on every pass.
+    const parkedRows = store.parkedDeliveries();
+    // D-5841: every unlanded wave brief of an active run, retried once at 5 min
+    // and told at 10 (the brief pass below). A REJECTED brief is outstanding
+    // nowhere else, so the empty-queue return counts these too.
+    const briefs = store.unlandedBriefs(now - BRIEF_WATCH_HORIZON_MS);
+    const parkedIds = new Set(parkedRows.map((p) => p.id));
+    for (const id of this.parkProbeAt.keys()) if (!parkedIds.has(id)) this.parkProbeAt.delete(id);
     // The busy-shadow log's memory keeps only deliveries still outstanding.
     // It is pruned BEFORE the empty-queue return, so an idle box empties it.
     // Due or delivered this sweep is outstanding; a row in neither is looked up,
@@ -7032,7 +7350,7 @@ export class FleetWatcher {
       const row = store.delivery(loggedId);
       if (row === null || (TERMINAL_DELIVERY_STATES as readonly string[]).includes(row.state)) this.busyShadowLogged.delete(loggedId);
     }
-    if (unacked.length === 0 && dueBefore.length === 0) return;
+    if (unacked.length === 0 && dueBefore.length === 0 && parkedRows.length === 0 && briefs.length === 0) return;
     // Fix — blocking review findings 1/5: `readRegistry`'s OLD signature
     // collapses a whole-fleet `io.readdir` failure to `[]` — the SAME shape
     // "this recipient is not in the registry" wears below (`rec ===
@@ -7049,6 +7367,7 @@ export class FleetWatcher {
     // own unreadable listing already does three lines up, rather than
     // silently emptying `records` and letting every row downstream mistake
     // "we could not read the fleet this pass" for "this recipient is gone".
+    // [registry-refused:holds] a refused recipient is held `registry-unmeasurable` below, never parked.
     const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
     if (!registryRead.listed) return;
     const records = registryRead.records;
@@ -7099,7 +7418,7 @@ export class FleetWatcher {
       if (row.ingestedAt !== null) continue;
       const hs = await hookStateFor(row.toId);
       if (hs !== null && hs.event === 'UserPromptSubmit' && hs.updatedAt > row.deliveredAt) {
-        store.markIngested(row.id, hs.updatedAt);
+        this.landed(store.markIngested(row.id, hs.updatedAt), 'markIngested', row.id);
       }
     }
 
@@ -7109,7 +7428,63 @@ export class FleetWatcher {
     // sweep. Skipped when nothing was sampled (`unacked.length === 0`) —
     // nothing could have changed, so `dueBefore` is still exact and a second
     // identical query would only cost, never correct, anything.
-    const due = unacked.length === 0 ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS);
+    // D-5838: the PARKED rows. The 24 h ceiling, the one operator escalation, and
+    // the box probe that wakes a row whose box changed since it parked.
+    let woke = false;
+    let ceilinged = false;
+    // D-5838 (verification round): the probe is grouped per RECIPIENT — one
+    // capture per box per sweep, its answer fanned out to every parked row for
+    // that box — and claims `mailInFlight` for that recipient while it waits, the
+    // same single-flight the due loop below keeps. A probe stuck behind another
+    // caller's `KeyedQueue` slot therefore holds only ITS recipient: the next
+    // sweep skips that box (here and in the due loop, `in-flight`) and still
+    // delivers to everyone else, exactly as an ordinary row's stuck send does.
+    const probeFor = new Map<string, (typeof parkedRows)[number][]>();
+    for (const p of parkedRows) {
+      if (now - p.parkedAt >= MAIL_PARK_CEILING_MS) {
+        ceilinged = true;
+        if (!this.landed(store.rejectDelivery(p.id, 'undeliverable', parkExpiredError(p.parkReason)), 'rejectDelivery', p.id)) continue;
+        this.tellParkedSender(store, p.mailId, p.toId, 'rejected', p.parkReason);
+        continue;
+      }
+      if (p.parkEscalatedAt === null && now - p.parkedAt >= MAIL_PARK_ESCALATE_MS
+          && store.markParkEscalated(p.id, now).changed) {
+        this.escalatePark(store, p, sessionProjects, projects);
+      }
+      if (p.nextAttemptAt <= now || this.mailInFlight.has(p.toId)) continue;
+      if (now - (this.parkProbeAt.get(p.id) ?? 0) < MAIL_PARK_PROBE_MS) continue;
+      this.parkProbeAt.set(p.id, now);
+      const rows = probeFor.get(p.toId) ?? [];
+      rows.push(p);
+      probeFor.set(p.toId, rows);
+    }
+    for (const [toId, rows] of probeFor) {
+      if (this.mailInFlight.has(toId)) continue;
+      this.mailInFlight.add(toId);
+      let box: string | null;
+      try {
+        box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, toId).catch(() => null);
+      } finally {
+        this.mailInFlight.delete(toId);
+      }
+      if (box === null) continue;
+      for (const p of rows) {
+        const seen = parkBoxSeen(box, p.parkBox);
+        if (seen === 'baseline') this.landed(store.baselineParkBox(p.id, box), 'baselineParkBox', p.id);
+        else if (seen === 'changed' && store.wakeParked(p.id, now).changed) woke = true;
+      }
+    }
+
+    // D-5841: the brief pass. It only writes the two run-event rows, the notice
+    // mail and D1's `wakeParked`; the woken row goes through every gate below.
+    // Re-read, never the list read at the top: an ingest edge or an ack sampled
+    // since then (the edge loop above, the awaits) has taken that brief.
+    if (this.sweepBriefs(store, store.unlandedBriefs(now - BRIEF_WATCH_HORIZON_MS), now, sessionProjects, projects)) {
+      woke = true;
+    }
+
+    // A row the ceiling rejected above may still sit in `dueBefore`: re-read.
+    const due = unacked.length === 0 && !woke && !ceilinged ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS);
     if (due.length === 0) return;
     // WHO IS COORDINATING SOMETHING LIVE — one read for the whole sweep, for
     // every row in it. The same bargain `hsCache` strikes one field over
@@ -7130,7 +7505,7 @@ export class FleetWatcher {
     // may this be retried" and "what refused it" are different questions.
     const gated = (d: { id: number; lastGate: string | null; gateSince: number | null },
                    gate: MailGate): void => {
-      store.noteGate(d.id, gate, now, d.lastGate === gate, d.gateSince);
+      this.landed(store.noteGate(d.id, gate, now, d.lastGate === gate, d.gateSince), 'noteGate', d.id);
     };
     const seen = new Set<string>();          // one message per session per sweep
     for (const d of due) {
@@ -7206,7 +7581,11 @@ export class FleetWatcher {
         // assertion being a claim nothing checks, which is the shape this tree
         // asks a guard not to be.
         if (rec === undefined || identity === null) {
-          const unmeasurable = rec !== undefined;
+          // Spec §2.3: a REFUSED recipient (listed, never read, because its id is
+          // not a registry id) is absent from `records` but is not proven gone. It
+          // is held exactly as a degraded row is: backed off, never ratcheted,
+          // never parked.
+          const unmeasurable = rec !== undefined || registryRead.refused.has(d.toId);
           // Fix — review finding 30: a row whose recipient's registry row is
           // genuinely ABSENT (reaped, purged) used to `continue` here with
           // `attempts` untouched forever — `MAIL_MAX_ATTEMPTS` can only ever be
@@ -7292,15 +7671,15 @@ export class FleetWatcher {
           // so the only party that could ever walk through that door is a
           // re-minted stranger wearing the same id.
           if (attempts >= MAIL_MAX_ATTEMPTS && !unmeasurable) {
-            store.rejectDelivery(d.id, 'undeliverable',
+            this.landed(store.rejectDelivery(d.id, 'undeliverable',
               d.deliveredAt === null
                 ? 'recipient not in registry'
-                : 'recipient purged after this message was delivered, and never acked');
+                : 'recipient purged after this message was delivered, and never acked'), 'rejectDelivery', d.id);
           } else {
             const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-            store.backOff(d.id,
+            this.landed(store.backOff(d.id,
               unmeasurable ? 'registry row listed but unreadable (registry-unmeasurable)' : 'recipient not in registry',
-              now + step, !unmeasurable);
+              now + step, !unmeasurable), 'backOff', d.id);
           }
           continue;
         }
@@ -7405,16 +7784,17 @@ export class FleetWatcher {
           const attempts = d.attempts + 1;
           const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
           if (d.deliveredAt === null && attempts >= MAIL_MAX_ATTEMPTS) {
-            store.rejectDelivery(d.id, 'undeliverable', `recipient session is ${lc}`);
+            this.landed(store.rejectDelivery(d.id, 'undeliverable', `recipient session is ${lc}`), 'rejectDelivery', d.id);
           } else {
-            store.backOff(d.id, `recipient session is ${lc}`, now + step, true);
+            this.landed(store.backOff(d.id, `recipient session is ${lc}`, now + step, true), 'backOff', d.id);
           }
           continue;
         }
         if (sv.verdict === 'unknown') {
           gated(d, 'tmux-unknown');
           const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** d.attempts, MAIL_BACKOFF_MAX_MS);
-          store.backOff(d.id, `tmux did not answer (substrate-unknown): ${sv.detail}`, now + step, false);
+          this.landed(store.backOff(d.id, `tmux did not answer (substrate-unknown): ${sv.detail}`, now + step, false),
+            'backOff', d.id);
           continue;
         }
         const hs = await hookStateFor(d.toId);
@@ -7508,8 +7888,8 @@ export class FleetWatcher {
         // `resumeIfOwn: true` (F3 / bug #21): if a PRIOR sweep's Enter for
         // this session's nudge was lost, the box now holds our own
         // un-submitted text — `sendPrompt` recognizes it (see its own
-        // docstring) and presses Enter rather than reading it as
-        // `draft-present` and backing off forever. Because the nudge carries
+        // docstring) and presses Enter rather than reading it as a human's
+        // draft and stashing it. Because the nudge carries
         // no per-delivery identity, resuming it is always correct regardless
         // of which due row this sweep is actually attempting.
         //
@@ -7539,8 +7919,30 @@ export class FleetWatcher {
         // sitting, so the TEXT proves nothing and a text-only recogniser
         // would have put this lane's C-u onto a human's own slash command.
         // With no run event to read, nothing is passed and `sendPrompt`
-        // refuses `draft-present` exactly as it does today.
+        // stashes the `/clear` as a draft and restores it (D-5912).
         const ownStrandedClear = store.strandedClear(d.toId);
+        // D-5838: an `enter-ignored` PARK re-attempts only once its box is seen
+        // different from what it held at the park (`parkBoxSeen`) — or, on this
+        // timer, when the box holds exactly OUR OWN nudge. That case goes to
+        // `sendPrompt`, whose `resumeIfOwn` arm presses Enter on our own text only
+        // after its correspondence check (`pressEnterAndConfirm`) and never
+        // types: our leftover nudge is submitted, never re-typed under itself.
+        // It runs at most once per `MAIL_PARK_RETRY_MS`, because the probe never
+        // wakes a box that still reads the same. Any other text — a human's, or
+        // a box that cannot be read — is held: nothing pressed, nothing typed.
+        // The row has still come through every gate above, so a recipient that
+        // died is rejected there.
+        if (d.parkedAt !== null && d.parkReason === 'enter-ignored') {
+          const box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId).catch(() => null);
+          this.parkProbeAt.set(d.id, now);
+          const seen = parkBoxSeen(box, d.parkBox);
+          if (seen === 'baseline') this.landed(store.baselineParkBox(d.id, box!), 'baselineParkBox', d.id);
+          if (seen !== 'changed' && box !== renderMailNudge(d.toId)) {
+            gated(d, 'parked');   // D-5840
+            this.landed(store.holdParked(d.id, now + MAIL_PARK_RETRY_MS), 'holdParked', d.id);
+            continue;
+          }
+        }
         // `refuseIfTurnRunning` only when the live word that delivered is not
         // `idle` (worker stall watch §4.1). It is a tripwire for a build where
         // `shell` stopped meaning idle: the last 8 captured rows showing
@@ -7548,11 +7950,11 @@ export class FleetWatcher {
         // where the line wraps, and on a `--remote-control` pane, which never
         // renders it.
         const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, renderMailNudge(d.toId),
-          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
+          { onDraft: 'stash', resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
             refuseIfTurnRunning: turn.via !== 'idle' });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
-          store.markDelivered(d.id, now);
+          if (!this.landed(store.markDelivered(d.id, now), 'markDelivered', d.id)) continue;
           // A REPLAY — this row was already `delivered` before this send —
           // counts against its own ceiling, independent of `attempts` (fix,
           // review finding 20: see `MAIL_REPLAY_MAX_ATTEMPTS`'s own
@@ -7566,7 +7968,7 @@ export class FleetWatcher {
             // own guard exists to refuse.
             const bumped = store.bumpReplayCount(d.id);
             if (bumped.state === 'counted' && bumped.replayCount >= MAIL_REPLAY_MAX_ATTEMPTS) {
-              store.rejectDelivery(d.id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR);
+              this.landed(store.rejectDelivery(d.id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR), 'rejectDelivery', d.id);
             }
           }
           continue;
@@ -7602,50 +8004,17 @@ export class FleetWatcher {
          * at exactly this point, which is the durability that was wanted.
          */
         const tellSender = (why: string, tag: string): void => {
-          const origin = store.mailOrigin(d.mailId);
-          if (!origin) return;
-          // A ROLE is not a session id, and until wave 4 this knew that about
-          // exactly one role (D-1040). `'coordinator'` is the only role that can
-          // ever be resolved to a session, and only through the RUN it names:
-          // the run's `claimedBy` is the fact, and a mail that names no run
-          // carries no such fact. `resolveCoordinator(null)`'s answer — whichever
-          // program happens to be the single active one — is exactly right on the
-          // ADDRESSING side, where `toId:'coordinator'` with no run is the
-          // documented recovery for a retired program, and is a guess here: a
-          // message that belongs to no run cannot be inferred to belong to the one
-          // program that happens to be open. Every other role (`'operator'`, wave
-          // 4's program kickoff) has no session behind it at all — the operator
-          // taps a button in a browser.
-          //
-          // Degrade, never guess, on all three arms: inventing a session id would
-          // tag and presence-gate against an id no registry row carries, and
-          // naming the wrong live one is worse — it tells a coordinator running an
-          // unrelated program about a message it never sent and cannot act on.
-          const senderId = !MAIL_ROLE_IDS.has(origin.fromId)
-            ? origin.fromId
-            : origin.fromId === 'coordinator' && origin.runId !== null
-              ? store.resolveCoordinator(origin.runId)
-              : null;
-          if (senderId === null) return;
-          this.pushOne({
-            kind: 'mail', sessionId: senderId,
-            project: sessionProjects.get(senderId) ?? '',
-            title: `✉ blocked › ${d.toId}`,
-            body: `${origin.subject}: ${why}`,
-            runId: origin.runId,
-            tag,
-            recordAlways: true,
-          }, projects);
+          this.pushSenderNotice(store, d.mailId, d.toId, why, tag, sessionProjects, projects);
         };
 
         if (res.error === 'auto-continue-armed') {
           // D-2369. Before the attempts ceiling on purpose: a held delivery is
-          // not a failed one. Told once per hold, like draft-present.
+          // not a failed one. Told once per hold.
           if (d.lastError !== 'auto-continue-armed') {
             tellSender('the recipient is waiting out a usage limit on its own; the nudge is held until it resumes',
               `mail-blocked-${d.id}`);
           }
-          store.backOff(d.id, res.error, now + MAIL_ARMED_HOLD_MS, false);
+          this.landed(store.backOff(d.id, res.error, now + MAIL_ARMED_HOLD_MS, false), 'backOff', d.id);
           continue;
         }
 
@@ -7656,9 +8025,19 @@ export class FleetWatcher {
           // failed send. There is NO `tellSender`: a running turn is not a
           // blocked recipient, and the first sweep after the hold reads the
           // live word again.
-          store.backOff(d.id, res.error, now + MAIL_TURN_HOLD_MS, false);
+          this.landed(store.backOff(d.id, res.error, now + MAIL_TURN_HOLD_MS, false), 'backOff', d.id);
           continue;
         }
+
+        // D-5912: the two stash refusals are the delivery's GATE as well as its
+        // `lastError`, so `mail-stuck`'s "Its last gate:" names them (its port
+        // carries no `lastError`, D-792). They then take the path `dialog-open`
+        // and `box-unreadable` take: the back-off, the park at the attempts
+        // ceiling, the operator's one `mail-parked` push, and the 24 h ceiling.
+        // No hold arm exempts them: with the stash armed a draft is no reason to
+        // wait, so either word means something abnormal the operator should hear.
+        if (res.error === 'stash-failed') gated(d, 'stash-failed');
+        if (res.error === 'stash-occupied') gated(d, 'stash-occupied');
 
         // The park below applies ONLY to a row that has NEVER been delivered
         // (review finding 4): `d.deliveredAt === null` is the row's own,
@@ -7668,37 +8047,52 @@ export class FleetWatcher {
         // replay-until-ack (spec:174-177) — see `MAIL_MAX_ATTEMPTS`'s own
         // docstring for the full reasoning, including why this is also what
         // makes `MAIL_BACKOFF_MAX_MS` reachable (review finding 9).
-        if (d.deliveredAt === null) {
-          // `enter-ignored` is terminal HERE and nowhere else, and only for a
-          // row that has never been delivered: the text is sitting in a
-          // FRESH box, `submitEnter`'s doctrine forbids a blind third Enter,
-          // and the rescue is a human looking at the pane. Re-injecting would
-          // type the whole envelope a second time UNDER the first one.
-          if (res.error === 'enter-ignored') {
-            tellSender('the recipient never took the message — it is sitting in their input box',
-              `mail-parked-${d.id}`);
-            store.rejectDelivery(d.id, 'undeliverable', res.error);
+        if (d.deliveredAt === null
+            && (res.error === 'enter-ignored' || attempts >= MAIL_MAX_ATTEMPTS || d.parkedAt !== null)) {
+          // D-5838 (#754): PARK, never reject, a live recipient's mail. The
+          // recipient has passed every lifecycle rung above, so it is alive; the
+          // reject this replaced lost five wave briefs and two done-mails in 21
+          // days. `enter-ignored` parks at once — the nudge is sitting in a FRESH
+          // box, `submitEnter`'s doctrine forbids a blind third Enter, and typing
+          // again would put the nudge under itself; its re-attempt waits for the
+          // box to change, or resumes our own nudge on the timer (the hold
+          // above). Any other refusal parks at the attempts ceiling, as the reject used to — and an already-parked row
+          // re-parks on every failure, keeping its first `parkedAt`.
+          // `MAIL_PARK_RETRY_MS`'s docstring has the whole contract.
+          if (d.parkedAt !== null && now - d.parkedAt >= MAIL_PARK_CEILING_MS) {
+            if (!this.landed(store.rejectDelivery(d.id, 'undeliverable', parkExpiredError(res.error)), 'rejectDelivery', d.id)) continue;
+            this.tellParkedSender(store, d.mailId, d.toId, 'rejected', res.error);
             continue;
           }
-          if (attempts >= MAIL_MAX_ATTEMPTS) {
-            // PARKING IS KEPT: a message that can never land should not retry
-            // forever. What was wrong was parking SILENTLY.
-            tellSender(`the lane gave up after ${attempts} attempts (${res.error})`,
-              `mail-parked-${d.id}`);
-            store.rejectDelivery(d.id, 'undeliverable', res.error);
-            continue;
+          // What the box holds NOW, for the probe to compare against, read once
+          // more. (D-5912: no refusal on this lane carries the box any more; the
+          // lane's sends stash a draft, so `draft-present` cannot reach here.)
+          const box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId);
+          if (!this.landed(store.parkDelivery(d.id, res.error, box, now, now + MAIL_PARK_RETRY_MS), 'parkDelivery', d.id)) continue;
+          this.parkProbeAt.set(d.id, now);
+          if (d.parkedAt === null) {
+            this.tellParkedSender(store, d.mailId, d.toId, 'parked', res.error);
+            // A park that followed `MAIL_MAX_ATTEMPTS` failures has already been
+            // stuck about `MAIL_PARK_ESCALATE_MS`: the operator hears it now.
+            if (res.error !== 'enter-ignored' && store.markParkEscalated(d.id, now).changed) {
+              this.escalatePark(store, { id: d.id, mailId: d.mailId, toId: d.toId, parkReason: res.error },
+                sessionProjects, projects);
+            }
           }
+          continue;
         }
         // THE FIRST failure of this kind, and only the first. `d.lastError` is
         // what the row already carried coming IN (`dueDeliveries` selects it),
         // so a repeat of the same refusal does not re-raise — the tray is not
         // a ticker. What stays live across every back-off tick is the strip,
         // via `attempts` on the wire (Task 408).
-        if (res.error === 'draft-present' && d.lastError !== 'draft-present') {
-          tellSender("the recipient's input box has unsent text in it", `mail-blocked-${d.id}`);
-        }
+        // D-5997: told only once the back-off LANDED — an ack that beat it means
+        // the mail arrived, and its sender hears nothing about a blocked box.
+        // D-5912: no sender notice here any more. The one this lane had was for
+        // `draft-present`, which its sends can no longer produce (they stash the
+        // draft); a long wait is the park's `mail-parked` push (spec §2.4).
         const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-        store.backOff(d.id, res.error, now + step);
+        if (!this.landed(store.backOff(d.id, res.error, now + step), 'backOff', d.id)) continue;
       } finally {
         this.mailInFlight.delete(d.toId);
       }
@@ -7742,6 +8136,7 @@ export class FleetWatcher {
     const mySweep = now;
     this.prSweepStartedAt = mySweep;
     try {
+      // [registry-refused:omits] a refused row is never in `records`: no pr-state, no prStates key.
       const records = await readRegistry(this.deps.io, this.deps.cfg);
       const projects = [...new Set(records.filter((r) => r.workspace !== null).map((r) => r.project))];
       for (const project of projects) {
@@ -8181,9 +8576,12 @@ export class FleetWatcher {
    * always has, needing no retain-don't-erase logic of its own — the code
    * makes that visible by NOT mentioning `measuredIdentity` anywhere below.
    */
-  private async detectDialogs(notify: boolean, records?: SessionRecord[]): Promise<Set<string>> {
+  private async detectDialogs(notify: boolean, listing?: readonly string[], records?: SessionRecord[]): Promise<Set<string>> {
     const pending = new Set<string>();
+    // [registry-refused:tests-only] tick() passes its records; only tests reach this read, which omits refused rows.
     const recs = records ?? await readRegistry(this.deps.io, this.deps.cfg);
+    // D-5925: the boot's snapshot of held rows, read before this tick's `sweepApprovals` can lapse any of them.
+    if (!this.primed && !this.reseedLoaded) this.loadReseed();
     for (const r of recs) {
       const pane = await this.deps.tmux.capture(r.id);
       // Same capture feeds the statusline read — no extra tmux call. FOUR
@@ -8274,6 +8672,10 @@ export class FleetWatcher {
       // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
       // captureAnsi().
       const dialog = pane !== null && hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
+      // D-5925: a child the boot found holding a question or a prompt is decided from the rows first. Re-seeded, or
+      // still in doubt, nothing below may hold or raise it on this tick: the hold already exists in `coord.db`.
+      const reseed = this.reseedFromRows(r, pane, dialog);
+      const mayRaise = notify && reseed === 'none';
       const last = this.dialogIds.get(r.id);
       if (dialog) {
         pending.add(r.id);
@@ -8354,7 +8756,7 @@ export class FleetWatcher {
           this.dialogIds.set(r.id, dialog.id);
           this.bus.emit(`session:${r.id}`, { type: 'dialog', dialog });
           this.settlingAsks.delete(r.id);
-          if (notify) {
+          if (mayRaise) {
             // D-5290: the FIRST raise waits while the child's hookstate is not
             // yet `waiting` and nothing made the dialog answerable — the menu
             // painted after this tick's hookstate read (`tick()`'s ordering
@@ -8390,9 +8792,9 @@ export class FleetWatcher {
               settling.ticks += 1;
             } else {
               this.settlingAsks.delete(r.id);
-              if (notify && (await this.tryHold(r, dialog, actions, recs)).kind === 'none') raise();
+              if (mayRaise && (await this.tryHold(r, dialog, actions, recs)).kind === 'none') raise();
             }
-          } else if (notify && actions && this.actionlessAsks.get(r.id) === dialog.id) {
+          } else if (mayRaise && actions && this.actionlessAsks.get(r.id) === dialog.id) {
             // The amendment. Same question, same tag — `push-sw.js` sets
             // `renotify` from the tag, so a raise here REPLACES the
             // un-answerable notification in its slot rather than stacking a
@@ -8469,7 +8871,127 @@ export class FleetWatcher {
         this.bus.emit(`session:${r.id}`, { type: 'dialog_cleared' });
       }
     }
+    // D-5925, spec §5.2 step 3: a child measured ABSENT from the listing (its `.uuid` gone, not a refused or
+    // unreadable row, and never on an unlistable tick, which returns before this) holds no question any more.
+    if (listing !== undefined && this.pendingReseed.size > 0) {
+      const listed = new Set(recs.map((x) => x.id));
+      for (const [id, entry] of [...this.pendingReseed]) {
+        if (listed.has(id) || listing.includes(`${id}.uuid`)) continue;
+        this.pendingReseed.delete(id);
+        if (entry.ask !== null) this.staleReseedRow(id, entry.ask);
+      }
+    }
     return pending;
+  }
+
+  /** D-5925: the boot's one read of the held rows into `pendingReseed` (spec §5.2 step 1, §5.3). At most one ask
+   *  row per child, the newest by `id`: a child paints one question at a time, so an older held row of the same
+   *  child is settled `stale` at once (when it names the same dialog, `staleAsk`'s `dialogId` key settles it with
+   *  the newest instead). The approvals half is the main thread's `held` rows only, never `released` ones. A read
+   *  that fails re-seeds that half from nothing: the restart behaves as it did before D-5925. */
+  private loadReseed(): void {
+    this.reseedLoaded = true;
+    const coord = this.deps.coord;
+    if (!coord) return;
+    const entryOf = (id: string) => {
+      let e = this.pendingReseed.get(id);
+      if (e === undefined) { e = { ask: null, approvals: [] }; this.pendingReseed.set(id, e); }
+      return e;
+    };
+    try {
+      const asks = coord.heldQuestionRows();
+      if (!asks.ok) console.warn(`ccrc-server: held asks unreadable at boot (${asks.detail}) — none re-seeded`);
+      else for (const row of asks.asks) {
+        const e = entryOf(row.childId);
+        if (e.ask !== null && e.ask.dialogId !== row.dialogId) this.staleReseedRow(row.childId, e.ask);
+        e.ask = row;
+      }
+      const approvals = coord.heldApprovalRowsByChild();
+      if (!approvals.ok) console.warn(`ccrc-server: held approvals unreadable at boot (${approvals.detail}) — none re-seeded`);
+      else for (const [child, rows] of approvals.rows) entryOf(child).approvals = rows.map((x) => ({ id: x.id, notifyAt: x.notifyAt }));
+    } catch (err) {
+      console.warn(`ccrc-server: reading held rows at boot failed (${err instanceof Error ? err.message : String(err)}) — none re-seeded`);
+    }
+  }
+
+  /** A re-seed candidate the pane disproved, settled `stale` through the existing CAS; guarded, as its neighbours in
+   *  `detectDialogs` are (a synchronous `node:sqlite` UPDATE on the 2 s poll). */
+  private staleReseedRow(childId: string, row: AskRow): void {
+    try {
+      this.deps.coord?.staleAsk(row.dialogId, childId, Date.now());
+    } catch (err) {
+      console.warn(`ccrc-server: settling a held ask at boot failed for ${childId} (${err instanceof Error ? err.message : String(err)}) — a held row may remain in coord.db`);
+    }
+  }
+
+  /**
+   * D-5925 (spec §5.2 step 2, §5.3): decide a child the boot found holding a question or a permission prompt, from
+   * THIS tick's pane and hookstate. Answers `reseeded` (a carrier was re-seeded this tick), `waiting` (doubt: left for
+   * a later tick) or `none` (nothing pending, or the pane disproved it and today's path takes over). Never settles on
+   * doubt: an unmeasured pane, or a matching dialog whose hookstate is unreadable, leaves the row and the entry.
+   *
+   * The ask: a painted dialog with the row's `dialogId` and a hookstate ask hashing to its `askKey` re-seeds
+   * `heldAsks` (`until = askNotifyAt(at)`, `answeringSince` null, the payload `hold()` builds) after re-stamping
+   * `askAt` through `restampAsk`'s CAS. `askAt` is deliberately not matched: it is the field that moves while the
+   * question does not (D-2403). No `insertAsk`, no parent mail: the parent already has its brief. No dialog, or
+   * another one, settles the row `stale`.
+   *
+   * The prompt: a painted permission prompt re-seeds `heldApprovals` from the snapshot's rows, whatever state a later
+   * tick finds them in (`sweepApprovals` pushes once none is held). A pane with no prompt drops the snapshot and
+   * leaves the rows (their cleared-dialog path needs a dialog the server never saw).
+   */
+  private reseedFromRows(r: SessionRecord, pane: string | null, dialog: Dialog | null): 'none' | 'reseeded' | 'waiting' {
+    const entry = this.pendingReseed.get(r.id);
+    if (entry === undefined) return 'none';
+    if (pane === null) return 'waiting';
+    const hs = this.hookStates.get(r.id) ?? null;
+    let waiting = false;
+    let reseeded = false;
+    const row = entry.ask;
+    if (row !== null) {
+      if (dialog === null || dialog.id !== row.dialogId) {
+        entry.ask = null;
+        this.staleReseedRow(r.id, row);
+      } else if (hs === null) {
+        waiting = true;
+      } else {
+        const key = hs.ask === null ? null : askKey(hs.ask);
+        entry.ask = null;
+        if (key !== row.askKey) {
+          this.staleReseedRow(r.id, row);
+        } else {
+          try {
+            this.deps.coord?.restampAsk({ id: row.id, dialogId: dialog.id, askKey: key, askAt: hs.updatedAt });
+          } catch (err) {
+            console.warn(`ccrc-server: re-stamping a re-seeded ask failed for ${r.id} (${err instanceof Error ? err.message : String(err)}) — a parent answer may refuse ask-moved until the next tick`);
+          }
+          this.heldAsks.set(r.id, {
+            until: askNotifyAt(row.at), askId: row.id, answeringSince: null,
+            ev: askHoldPayload(r, hs, dialog, askActions(hs)),
+          });
+          reseeded = true;
+        }
+      }
+    }
+    if (entry.approvals.length > 0) {
+      if (dialog === null) {
+        entry.approvals = [];
+      } else if (hs === null) {
+        waiting = true;
+      } else {
+        const rows = entry.approvals;
+        entry.approvals = [];
+        if (hs.ask !== null && 'approval' in hs.ask) {
+          this.heldApprovals.set(r.id, {
+            until: Math.max(...rows.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: rows.map((x) => x.id),
+            ev: askHoldPayload(r, hs, dialog, null),
+          });
+          reseeded = true;
+        }
+      }
+    }
+    if (entry.ask === null && entry.approvals.length === 0) this.pendingReseed.delete(r.id);
+    return waiting ? 'waiting' : reseeded ? 'reseeded' : 'none';
   }
 
   /** Advance a held ask's `askAt` to the child's CURRENT hookstate, but only
@@ -8741,9 +9263,7 @@ export class FleetWatcher {
       // subagent's held row neither withholds this push nor is marked `operator` when this dialog clears.
       const open = read.rows.filter((x) => x.agentId === '' && now < x.notifyAt && x.releaseReason === null);
       if (open.length === 0) return { kind: 'none' };
-      const ev: Parameters<FleetWatcher['pushOne']>[0] = {
-        kind: 'ask', sessionId: r.id, project: r.project, title: '❓ Question', body: askPushBody(hs, dialog),
-      };
+      const ev = askHoldPayload(r, hs, dialog, null); // the builder the restart re-seed shares (D-5925)
       this.pushOne({ ...ev, recordAlways: true, recordOnly: true }, this.activeProjects);
       this.heldApprovals.set(r.id, {
         until: Math.max(...open.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: open.map((x) => x.id), ev,
@@ -9049,11 +9569,7 @@ export class FleetWatcher {
       dialogId: dialog.id, question, options, now,
       ...(releaseReason === null ? {} : { releaseReason }),
     });
-    const ev: Parameters<FleetWatcher['pushOne']>[0] = {
-      kind: 'ask', sessionId: r.id, project: r.project,
-      title: '❓ Question', body: askPushBody(hs, dialog),
-      actions,
-    };
+    const ev = askHoldPayload(r, hs, dialog, actions);
     // The parent is asleep and nothing else will wake it. Ordinary mail, so
     // the existing idle gating applies unchanged — and the latency does not
     // gate the operator, because the operator's own push is racing this hold
@@ -9079,6 +9595,22 @@ export class FleetWatcher {
     }
     return { until, askId, ev, answeringSince: null };
   }
+}
+
+/**
+ * The push a held question defers (D-5925): what `hold()` snapshots at the mint and what the restart re-seed in
+ * `detectDialogs` rebuilds from the dialog's current sighting, so the two can never drift apart. Pure: built from the
+ * record, this tick's hookstate, the painted dialog and the actions `askActions` derived, and nothing else. `actions`
+ * `null` (an approval's deferred push, which offers no answer buttons) omits the field.
+ */
+export function askHoldPayload(
+  r: Pick<SessionRecord, 'id' | 'project'>, hs: HookState | null, dialog: Dialog, actions: PushPayload['actions'] | null,
+): { kind: 'ask'; sessionId: string; project: string; title: string; body: string; actions?: PushPayload['actions'] } {
+  return {
+    kind: 'ask', sessionId: r.id, project: r.project,
+    title: '❓ Question', body: askPushBody(hs, dialog),
+    ...(actions === null ? {} : { actions }),
+  };
 }
 
 /**
@@ -9297,6 +9829,65 @@ function renderAskBrief(
 export const DELEGATION_SWEEP_MS = DIVERGENCE_SWEEP_MS;
 /** What a pass may spend: under the cadence, so a stuck pass ends before the next is due. */
 export const DELEGATION_PASS_BUDGET_MS = 45_000;
+/** D-5692: a pass whose BLOCKING phases (`block`) sum to MORE than this writes one timing line (exactly this writes none). */
+export const DELEGATION_PASS_SLOW_MS = 1000;
+/** D-5692: the most bytes the whole timing line may take, prefix included. */
+export const DELEGATION_PASS_SLOW_LINE_BYTES = 2048;
+export const DELEGATION_PASS_SLOW_PREFIX = 'ccrc-server: delegation pass slow:';
+/** D-5692: every key the line may carry, in the one order it is written. Phases and parts are elapsed ms (an awaited one holds its waits,
+ *  it is never CPU time); everything after the times is a size or a count, measured where the pass held it. `ownerCount` is D-5693: the
+ *  size of the owner list, `owners` being the phase that reads them. `dropped` is the formatter's own and is never an input. */
+export const DELEGATION_PASS_SLOW_KEYS = [
+  'block', 'cut', 'total', 'other',
+  'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile',
+  'pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
+  'attempts', 'leases', 'intervals', 'absence', 'repair',
+  'rewrite', 'rewrites', 'rewriteEvents',
+  'trees', 'treesPastWait', 'win', 'winLost', 'winHeld', 'winHeldNull', 'evidence', 'activities', 'pointMetas',
+  'cpSessions', 'cpAttempts', 'cpLeases', 'openLeases', 'cpLineage', 'cpIntervals', 'cpCursors',
+  'ownerCount', 'pendingOwners', 'staged', 'appended',
+  'claimants', 'launches', 'pathMap', 'droppedKeys',
+  'markPaths', 'markIds', 'lostProjects', 'lostPrefixes', 'lossy', 'droppedMeasured',
+  'ladder', 'markCalls', 'windowCalls', 'lostCalls',
+  'vLinked', 'vRunChild', 'vUnresolved', 'vConflicting', 'vUnmeasured',
+  'eLease', 'eRunChild', 'eUnowned', 'eAbsence', 'eRepair', 'eInterval',
+  'repairPasses', 'repairInserted', 'repairFull', 'repairWiped', 'repairHealed',
+  'censusAge',
+  'dropped',
+] as const;
+export type DelegationPassSlowKey = (typeof DELEGATION_PASS_SLOW_KEYS)[number];
+/** D-5692: the timing line, pure: the prefix, then ` key=value` for each key of `DELEGATION_PASS_SLOW_KEYS` the caller gave, in list order.
+ *  A value is a whole non-negative safe integer (`+Infinity` is the largest, any other non-finite one 0), so no string ever enters the
+ *  line. Bounded to `bound` bytes, never by cutting a pair: a pair that does not fit is dropped whole, the next key is still tried, and
+ *  ` dropped=<n>` closes the line when any were (its room is reserved first, at the digits of the key count). A caller's `dropped` is ignored. */
+export function delegationPassSlowLine(fields: Readonly<Partial<Record<DelegationPassSlowKey, number>>>, bound: number = DELEGATION_PASS_SLOW_LINE_BYTES): string {
+  const reserve = ` dropped=${DELEGATION_PASS_SLOW_KEYS.length}`.length;
+  let line = DELEGATION_PASS_SLOW_PREFIX;
+  let dropped = 0;
+  for (const key of DELEGATION_PASS_SLOW_KEYS) {
+    if (key === 'dropped') continue;
+    const v = fields[key];
+    if (v === undefined) continue;
+    const n = v === Number.POSITIVE_INFINITY ? Number.MAX_SAFE_INTEGER : !Number.isFinite(v) ? 0 : Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.round(v)));
+    const pair = ` ${key}=${String(n)}`;
+    if (line.length + pair.length <= bound - reserve) line += pair; else dropped += 1;
+  }
+  return dropped > 0 ? `${line} dropped=${dropped}` : line;
+}
+/** D-5692: what one pass records for its timing line: summed elapsed ms per phase (present iff the phase ran, even at 0) and the sizes it
+ *  measured, read only at the pass's settle. `step` ends the open phase of `reconcile`'s consecutive stretch. */
+/** D-5692: the line's verdict and effect counts, by the correlation kind and the effect kind each counts. */
+const LANE_VERDICT_SIZES = [
+  ['vLinked', 'linked'], ['vRunChild', 'run-child-owned'], ['vUnresolved', 'unresolved'], ['vConflicting', 'conflicting'], ['vUnmeasured', 'unmeasured'],
+] as const satisfies readonly (readonly [DelegationPassSlowKey, string])[];
+const LANE_EFFECT_SIZES = [
+  ['eLease', 'request-linked-lease-identity'], ['eRunChild', 'record-run-child-owned'], ['eUnowned', 'record-unowned-worktree'],
+  ['eAbsence', 'record-measured-absence'], ['eRepair', 'repair-report-projection'], ['eInterval', 'record-observation-interval'],
+] as const satisfies readonly (readonly [DelegationPassSlowKey, DelegationReportEffect['kind']])[];
+interface LanePassTiming {
+  ms: Map<DelegationPassSlowKey, number>; sizes: Map<DelegationPassSlowKey, number>; startedAt: number; durable: DelegationDurability | null;
+  rewrites: number; rewriteEvents: number; step: (() => void) | null;
+}
 /** What one read of the lane may take (the stat fallback after a failed range read included: it is bounded by the pass signal). */
 const DELEGATION_READ_TIMEOUT_MS = 10_000;
 /** A recovery that failed is tried again no more often than this: it reads the whole journal. */
@@ -9384,6 +9975,9 @@ export interface DelegationLaneSeams {
   projectHoldCap?: number; markCap?: number;
   /** D-4658: apply each bucket result at once, as before the batching (the reference an "equal to an unbatched run" row compares with). */
   unbatched?: boolean;
+  /** D-5692: called synchronously right after the lane reads its clock at the START of each timed phase and part (and of each rewrite
+   *  the coordination store's port makes), with that phase's key: a row advances a virtual `monotonicMs` from here. */
+  onPassPhase?: (phase: string) => void;
 }
 
 /** `hibernatedAt` optional (D-5242): absent reads as not asleep, the old behaviour, so a caller that never knew the field
@@ -9537,12 +10131,13 @@ export function delegationListingWindowsOf(
       const first = listedAt(start.cwd);
       listedRepository = end === undefined || (first !== null && listedAt(end.cwd) === first) ? first : null;
     }
-    out.push({
+    // D-5643: a window and its listings are frozen as they are built; the memos keyed by them (D-5604, D-5642) rely on it.
+    out.push(Object.freeze({
       sessionId: start.sessionId, parentIncarnation: start.parentIncarnation, toolUseId: start.toolUseId, repository,
       ...(listedRepository === undefined ? {} : { listedRepository }), ...(lost ? { lost: true as const } : {}),
-      startedAt: start.observedAt, endedAt: end === undefined ? null : end.observedAt, before: start.listing ?? [],
-      after: lost || end === undefined || end.listing === undefined ? null : end.listing,
-    });
+      startedAt: start.observedAt, endedAt: end === undefined ? null : end.observedAt, before: Object.freeze(start.listing ?? []),
+      after: lost || end === undefined || end.listing === undefined ? null : Object.freeze(end.listing),
+    }));
   }
   return out;
 }
@@ -9556,11 +10151,11 @@ const LANE_TORN_TAIL = 'torn-tail:';
  *  one margin later (a call that began in the hour may have ended up to the margin after it). An hour that cannot be placed (null) is a
  *  window over all of time: it fails SAFE. Pure. */
 function delegationLostHourWindow(sessionId: string, parentIncarnation: string, hourMs: number | null): DelegationListingWindow {
-  return {
-    sessionId, parentIncarnation, toolUseId: '', repository: null, lost: true,
+  return Object.freeze({
+    sessionId, parentIncarnation, toolUseId: '', repository: null, lost: true as const,
     startedAt: formatDelegationInstant(hourMs ?? 0),
-    endedAt: hourMs === null ? null : formatDelegationInstant(hourMs + DELEGATION_HOUR_MS + DELEGATION_EVIDENCE_MARGIN_MS), before: [], after: null,
-  };
+    endedAt: hourMs === null ? null : formatDelegationInstant(hourMs + DELEGATION_HOUR_MS + DELEGATION_EVIDENCE_MARGIN_MS), before: Object.freeze([]), after: null,
+  });
 }
 
 /**
@@ -9575,10 +10170,10 @@ function delegationLostHourWindow(sessionId: string, parentIncarnation: string, 
  * vetoes everything: it fails safe, and it is never reached, since the lane reconciles only after a pass has set the instant. Pure.
  */
 export function delegationNotReadyWindowOf(readyAtMs: number | null): DelegationListingWindow {
-  return {
-    sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true,
-    startedAt: formatDelegationInstant(0), endedAt: readyAtMs === null ? null : formatDelegationInstant(readyAtMs + DELEGATION_CLOCK_SKEW_MS), before: [], after: null,
-  };
+  return Object.freeze({
+    sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true as const,
+    startedAt: formatDelegationInstant(0), endedAt: readyAtMs === null ? null : formatDelegationInstant(readyAtMs + DELEGATION_CLOCK_SKEW_MS), before: Object.freeze([]), after: null,
+  });
 }
 
 /**
@@ -9622,11 +10217,20 @@ export function delegationLostWindowsOf(
   }
   for (const c of cursors) if ((c.detail ?? '').startsWith(LANE_TORN_TAIL)) add(c.sessionId, c.parentIncarnation, delegationBucketHourMs(c.bucket));
   const keepFrom = laneHourOf(nowMs) - DELEGATION_INTERVAL_RETENTION_HOURS * DELEGATION_HOUR_MS;
-  out.push({
-    sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true,
-    startedAt: formatDelegationInstant(0), endedAt: formatDelegationInstant(keepFrom + DELEGATION_EVIDENCE_MARGIN_MS), before: [], after: null,
-  });
+  out.push(Object.freeze({
+    sessionId: '', parentIncarnation: '', toolUseId: '', repository: null, lost: true as const,
+    startedAt: formatDelegationInstant(0), endedAt: formatDelegationInstant(keepFrom + DELEGATION_EVIDENCE_MARGIN_MS), before: Object.freeze([]), after: null,
+  }));
   return out;
+}
+
+/** D-5643: the one list a pass hands every tree: the listing windows, the checkpoint's lost ones, the not-ready stretch and the pending
+ *  ones, in that order. Frozen, so a memo keyed by it (D-5604, D-5642) can never serve a list changed after it was handed over. Pure. */
+export function delegationPassWindowsOf(
+  listing: readonly DelegationListingWindow[], lost: readonly DelegationListingWindow[],
+  notReady: DelegationListingWindow, pending: readonly DelegationListingWindow[],
+): readonly DelegationListingWindow[] {
+  return Object.freeze([...listing, ...lost, notReady, ...pending]);
 }
 
 class DelegationLane {
@@ -9758,6 +10362,84 @@ class DelegationLane {
    *  not journal evidence, so it is never durable and is read again after a restart. */
   private readonly pointMetas = new Map<string, LanePointMeta>();
   private readonly metaMiss = new Map<string, number>();
+  /** D-5692: each pass's timing record, and the one a rewrite lands in: the latest pass STARTED (after a cut two passes can overlap, and the
+   *  port's rewrite then lands in the later one's record; with none set it is dropped). Diagnostics only: nothing here is ever read to decide. */
+  private readonly timings = new WeakMap<LanePass, LanePassTiming>();
+  private passTiming: LanePassTiming | null = null;
+
+  /** D-5692: the ONE clock read for timing: the watcher's own monotonic clock (`Deps.monotonicMs`), else `performance.now()`. */
+  private mono(): number { return this.deps.monotonicMs?.() ?? performance.now(); }
+  /** D-5692: begins a timed phase or part: reads the clock, tells `onPassPhase`, and answers the call that ends it. Times are ELAPSED ms, so an
+   *  awaited phase holds its waits; a phase that ran is on the line even at 0, and one that did not run is absent. Summed over repeats. */
+  private phase(pass: LanePass, key: DelegationPassSlowKey): () => void {
+    const at = this.mono();
+    this.seams.onPassPhase?.(key);
+    return () => { const ms = this.timings.get(pass)?.ms; if (ms !== undefined) ms.set(key, (ms.get(key) ?? 0) + (this.mono() - at)); };
+  }
+  /** (A step or a size of a pass that has no record, as when a row calls `applyEffects` or `reconcile` alone, is dropped.) */
+  private size(pass: LanePass, key: DelegationPassSlowKey, n: number): void { this.timings.get(pass)?.sizes.set(key, n); }
+  /** D-5692: `reconcile`'s consecutive phases: ends the open one and begins `key`. `reconcile`'s caller ends the last with `stepEnd`. */
+  private stepTo(pass: LanePass, key: DelegationPassSlowKey): void { this.stepEnd(pass); const t = this.timings.get(pass); if (t !== undefined) t.step = this.phase(pass, key); }
+  private stepEnd(pass: LanePass): void { const t = this.timings.get(pass); if (t === undefined) return; const end = t.step; t.step = null; end?.(); }
+  /** D-5692: opens a pass's record at `run`'s entry; it is also where the port's rewrites land until a later pass starts. */
+  private startTiming(pass: LanePass): LanePassTiming {
+    const t: LanePassTiming = { ms: new Map(), sizes: new Map(), startedAt: this.mono(), durable: null, rewrites: 0, rewriteEvents: 0, step: null };
+    this.timings.set(pass, t);
+    this.passTiming = t;
+    return t;
+  }
+  /** D-5692: the applier's open options with the projection port's three calls timed (`rewritten`); the port itself is called as before. The
+   *  port is wrapped here, not where the lane names the store, because the lane's contact with the store is pinned to those lines. */
+  private timedPort(deps: Parameters<typeof DelegationDurability.open>[0]): Parameters<typeof DelegationDurability.open>[0] {
+    const port = deps.projection;
+    if (port === null) return deps;
+    return { ...deps, projection: {
+      project: (cp) => this.rewritten(() => port.project(cp), 1, 0),
+      insertEvents: (rows) => this.rewritten(() => port.insertEvents(rows), 0, rows.length),
+      eventStats: () => this.rewritten(() => port.eventStats(), 0, 0),
+    } };
+  }
+  /** D-5692: times one call of the coordination store's port (`project`, `insertEvents`, `eventStats`) as `rewrite`, in the CURRENT pass's
+   *  record, and returns or throws exactly what `fn` does. `rewrite` OVERLAPS the phase that made the call (flush, repair, a lease, ...),
+   *  which holds it too, so it is never summed into `block`. */
+  private rewritten<T>(fn: () => T, projects: number, events: number): T {
+    const at = this.mono();
+    this.seams.onPassPhase?.('rewrite');
+    try { return fn(); } finally {
+      const t = this.passTiming;
+      if (t !== null) { t.ms.set('rewrite', (t.ms.get('rewrite') ?? 0) + (this.mono() - at)); t.rewrites += projects; t.rewriteEvents += events; }
+    }
+  }
+  /** D-5692: the pass's ONE timing line, decided here, in `run`'s finally, on every path (normal end, an early return, a throw, a cut pass's
+   *  late settle, which is why `cut` is read now). `block` sums the lane's own work and writes, and leaves out the read phases (`open
+   *  recover root load owners readMetas`), `rewrite` (it overlaps its callers), `reconcile` (its stretches are summed instead) and the
+   *  effect parts (inside `effects`). `pre` and the stretch from `prep` to `policy` hold no await, so their elapsed time is the lane's
+   *  own and a slow read is never taken for a block. The awaited blocking phases (`expire`, `flush`, `upkeep`, `prune`, `effects`) are
+   *  elapsed too, so their writes' waits (a journal fsync, the repair's yields between chunks) count in `block`: a reader sets them against
+   *  the await-free stretches before calling the time CPU. Written iff `block` is MORE than `DELEGATION_PASS_SLOW_MS`; never throws out of `run`. */
+  private passLine(pass: LanePass, t: LanePassTiming): void {
+    try {
+      const sum = (keys: readonly DelegationPassSlowKey[]): number => keys.reduce((n, k) => n + (t.ms.get(k) ?? 0), 0);
+      const block = sum(['noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects']);
+      if (!(block > DELEGATION_PASS_SLOW_MS)) return;
+      const total = this.mono() - t.startedAt;
+      const f: Partial<Record<DelegationPassSlowKey, number>> = {};
+      for (const [k, v] of t.ms) f[k] = v;
+      for (const [k, v] of t.sizes) f[k] = v;
+      f.block = block; f.cut = pass.signal.aborted ? 1 : 0; f.total = total;
+      f.other = Math.max(0, total - sum(['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile']));
+      if (t.ms.has('rewrite')) { f.rewrites = t.rewrites; f.rewriteEvents = t.rewriteEvents; }
+      if (t.durable !== null) {
+        const cp = t.durable.state().checkpoint;
+        f.cpSessions = cp.sessions.length; f.cpAttempts = cp.attempts.length; f.cpLeases = cp.leases.length; f.openLeases = cp.leases.filter((l) => l.releasedAt === null).length;
+        f.cpLineage = cp.lineage.length; f.cpIntervals = cp.observationIntervals.length; f.cpCursors = cp.bucketCursors.length;
+      }
+      f.pendingOwners = this.pendingOwners.size; f.markPaths = this.pathMarkCount(); f.markIds = this.markIds.size; f.lostProjects = this.lostProjects.size;
+      f.lostPrefixes = this.lostPrefixes().size; f.lossy = this.lossy ? 1 : 0; f.droppedMeasured = this.evidenceLoaded ? 1 : 0;
+      f.censusAge = Math.max(0, pass.now - pass.census.measuredAt);
+      console.warn(delegationPassSlowLine(f));
+    } catch { /* diagnostics only: a line that cannot be built is not written, and `run` settles as it would have */ }
+  }
 
   constructor(private readonly deps: Deps, private readonly census: () => DelegationCensusPass | null) {}
 
@@ -9981,7 +10663,7 @@ class DelegationLane {
       const coord = this.deps.coord;
       this.opening = (async (): Promise<DelegationDurability | null> => {
         try {
-          const d = await DelegationDurability.open({
+          const d = await DelegationDurability.open(this.timedPort({                  // D-5692: the port's calls are timed as `rewrite`
             dir: this.deps.cfg.ccrcDir,
             projection: coord === undefined ? null : {
               project: (cp) => coord.projectDelegationCheckpoint(cp),
@@ -9989,7 +10671,7 @@ class DelegationLane {
               eventStats: () => coord.delegationEventStats(),
             },
             now: () => Date.now(), randomUUID: () => randomUUID(), warn: (m) => console.warn(m),
-          });
+          }));
           this.durable = d;
           this.lastRecoverAt = Date.now();                                // open() has just recovered: a retry waits its interval
           return d;
@@ -10092,92 +10774,120 @@ class DelegationLane {
   }
 
   private async run(pass: LanePass): Promise<void> {
-    this.noteSessions(pass);
-    const durable = await this.applier();
-    /** R113 (review 544 P2): when the applier answered, so the boot recovery `open()` makes is covered like an in-process one (R112): for
-     *  the pass that started the open, and for a later pass awaiting the cached applier after the first was cut (R117), because the
-     *  cached promise resolves only after `open()` recovered. Measured after the await for the reason on `recoveredAt`. The wall clock
-     *  can step back during the await, so this can be earlier than `pass.now`: the instant below clamps it (R115). */
-    const appliedAt = Date.now();
-    if (durable === null) {
-      this.notReady = true;                                            // R88: no applier, nothing is read
-      return;
-    }
-    if (this.recovering) { this.notReady = true; return; }             // R116 (W1): a recovery the lane started has not settled: not ready
-    if (pass.signal.aborted) return;
-    if (durable.state().phase !== 'ready' || durable.failure() !== null) {
-      this.notReady = true;                                            // R88: in recovery, or failed: what happens now is not read
-      this.unreconcile();                                              // M-1: what was counted is not this state's
-      // A recovery that failed applies NOTHING and reads nothing: the files are left exactly as they are. It is tried again, rarely.
-      if (pass.now - this.lastRecoverAt < DELEGATION_RECOVERY_RETRY_MS) return;
-      this.lastRecoverAt = pass.now;
-      this.recovering = true;                                          // R116: until it settles, every pass is not ready
-      try {
-        await durable.recover();
-      } finally {
-        this.recovering = false;                                       // R116: settled, returned or thrown
-        this.recoveredAt = Date.now();                                 // R112, R116: the settle, for whichever pass sets the next instant
+    const t: LanePassTiming = this.startTiming(pass);
+    try {
+      const endNote = this.phase(pass, 'noteSessions');
+      try { this.noteSessions(pass); } finally { endNote(); }
+      const endOpen = this.phase(pass, 'open');
+      let durable: DelegationDurability | null;
+      try { durable = await this.applier(); } finally { endOpen(); }
+      t.durable = durable;
+      /** R113 (review 544 P2): when the applier answered, so the boot recovery `open()` makes is covered like an in-process one (R112): for
+       *  the pass that started the open, and for a later pass awaiting the cached applier after the first was cut (R117), because the
+       *  cached promise resolves only after `open()` recovered. Measured after the await for the reason on `recoveredAt`. The wall clock
+       *  can step back during the await, so this can be earlier than `pass.now`: the instant below clamps it (R115). */
+      const appliedAt = Date.now();
+      if (durable === null) {
+        this.notReady = true;                                            // R88: no applier, nothing is read
+        return;
       }
-      // On a return these run in the same synchronous continuation as the `finally`, so no pass sees the recovery settled with the old
-      // slice still marked loaded. (A throw skips them, as before: `recover()` throws only before it clears its failure, since its
-      // projection repair never throws, so the next pass finds the applier failed and is not ready, by R88's arm above.)
-      this.evidenceLoaded = false;                                     // the slice and the dropped-evidence index are measured again by the next load
-      this.dropped.clear();
-      this.tupleLatest.clear();
-      this.droppedIndexCache = null;
-      if (durable.state().phase !== 'ready' || durable.failure() !== null || pass.signal.aborted) return;
-    }
-    await this.resolveProjectsRoot(pass);
-    if (pass.signal.aborted) { this.notReady = true; return; }        // R109: cut before the owners, so nothing was listed
-    this.passes += 1;
-    await this.loadEvidence(durable, pass);
-    if (pass.signal.aborted) { this.notReady = true; return; }        // R109: the same
-    pass.reachedOwners = true;                                         // R109: synchronously after the last check, before any await
+      if (this.recovering) { this.notReady = true; return; }             // R116 (W1): a recovery the lane started has not settled: not ready
+      if (pass.signal.aborted) return;
+      if (durable.state().phase !== 'ready' || durable.failure() !== null) {
+        this.notReady = true;                                            // R88: in recovery, or failed: what happens now is not read
+        this.unreconcile();                                              // M-1: what was counted is not this state's
+        // A recovery that failed applies NOTHING and reads nothing: the files are left exactly as they are. It is tried again, rarely.
+        if (pass.now - this.lastRecoverAt < DELEGATION_RECOVERY_RETRY_MS) return;
+        this.lastRecoverAt = pass.now;
+        this.recovering = true;                                          // R116: until it settles, every pass is not ready
+        const endRecover = this.phase(pass, 'recover');
+        try {
+          await durable.recover();
+        } finally {
+          this.recovering = false;                                       // R116: settled, returned or thrown
+          this.recoveredAt = Date.now();                                 // R112, R116: the settle, for whichever pass sets the next instant
+          endRecover();
+        }
+        // On a return these run in the same synchronous continuation as the `finally`, so no pass sees the recovery settled with the old
+        // slice still marked loaded. (A throw skips them, as before: `recover()` throws only before it clears its failure, since its
+        // projection repair never throws, so the next pass finds the applier failed and is not ready, by R88's arm above.)
+        this.evidenceLoaded = false;                                     // the slice and the dropped-evidence index are measured again by the next load
+        this.dropped.clear();
+        this.tupleLatest.clear();
+        this.droppedIndexCache = null;
+        if (durable.state().phase !== 'ready' || durable.failure() !== null || pass.signal.aborted) return;
+      }
+      const endRoot = this.phase(pass, 'root');
+      try { await this.resolveProjectsRoot(pass); } finally { endRoot(); }
+      if (pass.signal.aborted) { this.notReady = true; return; }        // R109: cut before the owners, so nothing was listed
+      this.passes += 1;
+      const endLoad = this.phase(pass, 'load');
+      try { await this.loadEvidence(durable, pass); } finally { endLoad(); }
+      if (pass.signal.aborted) { this.notReady = true; return; }        // R109: the same
+      pass.reachedOwners = true;                                         // R109: synchronously after the last check, before any await
 
-    // R88: the first pass to reach the owners after a not-ready mark (and the first of a process) is the latest ready instant: the
-    // settle of the last recovery the lane started (`recoveredAt`, R112, R116), whichever pass started it, else the instant this pass's
-    // applier answered, after the boot recovery `open()` makes (R113, R117); and never earlier than this pass's own clock, whatever the
-    // wall clock did during the awaits (one clamp for both arms: R115 for the appliedAt arm, R120 for the recoveredAt arm). Measured
-    // after the awaits, so the skew allowance runs from the settle (the reason on `recoveredAt`). The settle is consumed here. Everything
-    // at or before the instant may hold a session nothing listed.
-    if (this.notReady) {
-      this.readyAt = Math.max(pass.now, this.recoveredAt ?? appliedAt);
-      this.recoveredAt = null;
-      this.notReady = false;
-    }
-    await this.expirePendingOwners(pass, durable);
-    for (const owner of this.ownersOf(pass, durable.state())) {
-      if (pass.signal.aborted) break;
+      // R88: the first pass to reach the owners after a not-ready mark (and the first of a process) is the latest ready instant: the
+      // settle of the last recovery the lane started (`recoveredAt`, R112, R116), whichever pass started it, else the instant this pass's
+      // applier answered, after the boot recovery `open()` makes (R113, R117); and never earlier than this pass's own clock, whatever the
+      // wall clock did during the awaits (one clamp for both arms: R115 for the appliedAt arm, R120 for the recoveredAt arm). Measured
+      // after the awaits, so the skew allowance runs from the settle (the reason on `recoveredAt`). The settle is consumed here. Everything
+      // at or before the instant may hold a session nothing listed.
+      if (this.notReady) {
+        this.readyAt = Math.max(pass.now, this.recoveredAt ?? appliedAt);
+        this.recoveredAt = null;
+        this.notReady = false;
+      }
+      const endExpire = this.phase(pass, 'expire');
+      try { await this.expirePendingOwners(pass, durable); } finally { endExpire(); }
+      const endOwners = this.phase(pass, 'owners');
       try {
-        await this.observeOwner(pass, durable, owner);
-        // R89: one observation COMPLETED, in a pass that was not cut. R101: it is forgotten only once what it staged is durable.
-        if (!pass.signal.aborted) pass.completed.push(owner);
-      } catch (err) { console.warn(`ccrc-server: delegation owner ${owner.id} could not be observed: ${err instanceof Error ? err.message : String(err)}`); }
-    }
-    // D-4658: what the owners staged, as ONE durable application. Also after a cut: everything staged came from a read that answered
-    // before the cut (an abort check follows every read), and a fleet whose passes are always cut must still make progress. Its FIRST
-    // application is enqueued at once; its standing refusals go one by one, and a bisection's halves only after the attempt before them
-    // settles, so after a cut a later pass's flush CAN land between them (R85, A-F5), and apply a bucket from a newer cursor before this
-    // pass applies it from an older one. Nothing applies twice (events dedupe by `eventId`), intervals never regress (their merge is
-    // order-independent and `unmeasured` is sticky), `replaced` stays sticky, and a cursor that steps back once is re-read and deduped by
-    // the next pass.
-    // R101: the owners this pass read are forgotten only now, and only for what the flush made durable (a cut pass's late flush too).
-    this.forgetRead(pass, await this.flushPass(pass, durable));
-    if (pass.signal.aborted) return;
+        const owners = this.ownersOf(pass, durable.state());
+        this.size(pass, 'ownerCount', owners.length);                  // D-5693: the key is `ownerCount`, `owners` being the phase
+        for (const owner of owners) {
+          if (pass.signal.aborted) break;
+          try {
+            await this.observeOwner(pass, durable, owner);
+            // R89: one observation COMPLETED, in a pass that was not cut. R101: it is forgotten only once what it staged is durable.
+            if (!pass.signal.aborted) pass.completed.push(owner);
+          } catch (err) { console.warn(`ccrc-server: delegation owner ${owner.id} could not be observed: ${err instanceof Error ? err.message : String(err)}`); }
+        }
+      } finally { endOwners(); }
+      // D-4658: what the owners staged, as ONE durable application. Also after a cut: everything staged came from a read that answered
+      // before the cut (an abort check follows every read), and a fleet whose passes are always cut must still make progress. Its FIRST
+      // application is enqueued at once; its standing refusals go one by one, and a bisection's halves only after the attempt before them
+      // settles, so after a cut a later pass's flush CAN land between them (R85, A-F5), and apply a bucket from a newer cursor before this
+      // pass applies it from an older one. Nothing applies twice (events dedupe by `eventId`), intervals never regress (their merge is
+      // order-independent and `unmeasured` is sticky), `replaced` stays sticky, and a cursor that steps back once is re-read and deduped by
+      // the next pass.
+      // R101: the owners this pass read are forgotten only now, and only for what the flush made durable (a cut pass's late flush too).
+      const endFlush = this.phase(pass, 'flush');
+      try { this.forgetRead(pass, await this.flushPass(pass, durable)); } finally { endFlush(); }
+      if (pass.signal.aborted) return;
 
-    // The upkeep: retention, and the hour that was never closed. One checkpoint-only change over the INTERVALS, and only when there is
-    // something to do (the same array comes back otherwise). Cursors are never in it.
-    if (upkeepDelegationIntervals(durable.state().checkpoint.observationIntervals, pass.now).changed) {
+      // The upkeep: retention, and the hour that was never closed. One checkpoint-only change over the INTERVALS, and only when there is
+      // something to do (the same array comes back otherwise). Cursors are never in it.
+      const endUpkeep = this.phase(pass, 'upkeep');
       try {
-        await durable.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: upkeepDelegationIntervals(cp.observationIntervals, pass.now).intervals }));
-      } catch (err) { console.warn(`ccrc-server: delegation interval upkeep failed: ${err instanceof Error ? err.message : String(err)}`); }
-    }
-    if (pass.signal.aborted) return;
-    await this.pruneCursors(pass, durable);
-    if (pass.signal.aborted) return;
+        if (upkeepDelegationIntervals(durable.state().checkpoint.observationIntervals, pass.now).changed) {
+          try {
+            await durable.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: upkeepDelegationIntervals(cp.observationIntervals, pass.now).intervals }));
+          } catch (err) { console.warn(`ccrc-server: delegation interval upkeep failed: ${err instanceof Error ? err.message : String(err)}`); }
+        }
+      } finally { endUpkeep(); }
+      if (pass.signal.aborted) return;
+      const endPrune = this.phase(pass, 'prune');
+      try { await this.pruneCursors(pass, durable); } finally { endPrune(); }
+      if (pass.signal.aborted) return;
 
-    // A census this lane has not reconciled yet; an older or equal one is left alone.
-    if (pass.census.measuredAt > this.reconciledAt && (this.evidenceLoaded || this.seams.reconcileBeforeLoad === true)) await this.reconcile(pass, durable);
+      // A census this lane has not reconciled yet; an older or equal one is left alone.
+      if (pass.census.measuredAt > this.reconciledAt && (this.evidenceLoaded || this.seams.reconcileBeforeLoad === true)) {
+        const endReconcile = this.phase(pass, 'reconcile');
+        try { await this.reconcile(pass, durable); } finally { this.stepEnd(pass); endReconcile(); }
+      }
+    } finally {
+      if (this.passTiming === t) this.passTiming = null;
+      this.passLine(pass, t);
+    }
   }
 
   /** M-1: the lane no longer vouches for its last counts: the breaker reads unmeasured and the counts read 0 until a reconcile. */
@@ -10467,6 +11177,8 @@ class DelegationLane {
    */
   private async flushPass(pass: LanePass, durable: DelegationDurability): Promise<{ failed: boolean; refused: ReadonlySet<string> }> {
     const staged = pass.pending.splice(0);
+    this.size(pass, 'staged', staged.length);
+    const tally = { appended: 0 };                                       // D-5692: what the applier's batches journaled, for the line
     const refused = new Set<string>();
     // R85 (A-F4): a refusal whose bucket is past the read horizon is never staged again, so remembering it would only grow the set.
     for (const k of [...this.refusedBuckets]) {
@@ -10476,14 +11188,16 @@ class DelegationLane {
     try {
       // a standing refusal goes first, alone (it may apply now, and then leaves the set); every other result goes as one application
       const standing = new Set(staged.filter((x) => this.refusedBuckets.has(x.key)).map((x) => x.key));
-      for (const e of staged.filter((x) => standing.has(x.key))) await this.applyIsolating(durable, [e], refused);
-      await this.applyIsolating(durable, staged.filter((x) => !standing.has(x.key)), refused);
+      for (const e of staged.filter((x) => standing.has(x.key))) await this.applyIsolating(durable, [e], refused, tally);
+      await this.applyIsolating(durable, staged.filter((x) => !standing.has(x.key)), refused, tally);
     } catch (err) {
       console.warn(`ccrc-server: the delegation pass's durable application of ${staged.length} bucket result(s) failed after it began writing; the applier recovers and the next pass reads them again: ${err instanceof Error ? err.message : String(err)}`);
       pass.settle.length = 0;
+      this.size(pass, 'appended', tally.appended);
       return { failed: true, refused };
     }
     for (const k of pass.settle.splice(0)) if (!refused.has(k)) this.settled.add(k);
+    this.size(pass, 'appended', tally.appended);
     return { failed: false, refused };
   }
 
@@ -10513,7 +11227,7 @@ class DelegationLane {
 
   /** R82: applies `entries` as one application; on a PRE-WRITE refusal, bisects until each refusing result stands alone, and refuses it
    *  (its warn line, remembered in `refusedBuckets`); a failure after the first byte (the applier failed) is rethrown, whole. */
-  private async applyIsolating(durable: DelegationDurability, entries: readonly LaneStaged[], refused: Set<string>): Promise<void> {
+  private async applyIsolating(durable: DelegationDurability, entries: readonly LaneStaged[], refused: Set<string>, tally: { appended: number }): Promise<void> {
     if (entries.length === 0) return;
     let out: Awaited<ReturnType<DelegationDurability['applyAcceptedBatch']>>;
     try {
@@ -10528,12 +11242,13 @@ class DelegationLane {
         return;
       }
       const mid = entries.length >> 1;
-      await this.applyIsolating(durable, entries.slice(0, mid), refused);
-      await this.applyIsolating(durable, entries.slice(mid), refused);
+      await this.applyIsolating(durable, entries.slice(0, mid), refused, tally);
+      await this.applyIsolating(durable, entries.slice(mid), refused, tally);
       return;
     }
     // R85 (A-F6): the bookkeeping after a DURABLE application stays outside the try that reads every throw as a pre-write refusal: a
     // throw here must never re-apply what was written, nor leave its records out of the evidence slice unnoticed.
+    tally.appended += out.appended.length;                               // D-5692
     for (const r of out.appended) if (r.entry.kind === 'evidence-accepted') this.noteEvidence(r.journalId, r.entry.event);
     for (const e of entries) this.refusedBuckets.delete(e.key);
   }
@@ -10718,6 +11433,7 @@ class DelegationLane {
   // ── reconciliation ────────────────────────────────────────────────────────────────────────────────────────────────────
 
   private async reconcile(pass: LanePass, durable: DelegationDurability): Promise<void> {
+    this.stepTo(pass, 'pre');                                            // D-5692: the stretches below (the last ended by `run`'s `stepEnd`)
     this.reconciledAt = pass.census.measuredAt;
     if (durable.state().phase !== 'ready') return;
     const now = formatDelegationInstant(pass.now);
@@ -10743,6 +11459,7 @@ class DelegationLane {
     };
     const waitRemaining = (record: DelegationCensusRecord): number =>
       DELEGATION_BIRTH_PASSES - (this.reconciliations - (nextFirstSeen.get(laneTreeKey(record.project, record.adminRecord)) ?? this.reconciliations));
+    this.size(pass, 'trees', flat.length); this.size(pass, 'treesPastWait', flat.filter((r) => waitRemaining(r) <= 0).length);
 
     // M6: the lane's memory is bounded by the census. A miss and a positive meta leave with their tree; a measured absence leaves when
     // its tree is back in the census. N4: only against projects that were CENSUSED in this pass. A project whose view was null
@@ -10775,7 +11492,10 @@ class DelegationLane {
 
     // Rung 2's point lookups come BEFORE the snapshot: a meta that opens an activity changes the checkpoint, and correlation and policy
     // must both read the one state that includes it.
+    this.size(pass, 'claimants', index.claimants.size); this.size(pass, 'launches', index.launches.size);
+    this.stepTo(pass, 'readMetas');
     await this.readMetas(pass, durable, flat, index, (r) => registryRowOf(r) === undefined && waitRemaining(r) <= 0);
+    this.stepTo(pass, 'prep');
     if (pass.signal.aborted) return;
     const state = durable.state();                                       // ONE snapshot: correlation and policy both read it
     if (state.phase !== 'ready') return;
@@ -10787,8 +11507,10 @@ class DelegationLane {
     // every project was measured (a project with no view contributes no paths, and would read as "nothing needs this").
     if (this.droppedAdded >= (this.seams.droppedPruneEvery ?? DELEGATION_DROPPED_PRUNE_EVERY)) this.pruneDropped(pass.census, state.checkpoint.activities);
     const droppedEvidence = this.droppedIndex();
+    this.size(pass, 'droppedKeys', this.dropped.size);
 
-    const evidence = [...this.evidence].map(([journalId, v]) => ({ journalId, event: v.event }));
+    this.stepTo(pass, 'build');
+    const evidence = Object.freeze([...this.evidence].map(([journalId, v]) => Object.freeze({ journalId, event: v.event })));
     // 2c d (R84): a call's listing is the repository its cwd is attributed to, by the TREES (every census path and every remembered one; the
     // nearest wins, so a nested worktree is its own repository's), and by the projects root only when it is RESOLVED. Unattributed: null.
     const trees = new Map<string, string>();
@@ -10799,13 +11521,17 @@ class DelegationLane {
     // 2c (R84): the windows the slice holds, the shed ones lost, and the windows the checkpoint says were lost (hours, torn tails, the floor).
     // W1 (R88, R89): and the stretches the lane's own memory knows it did not read: everything up to the latest ready instant, and every
     // listed hour of an owner no completed observation has read.
-    const windows = [
-      ...delegationListingWindowsOf([...this.evidence.values()].map((v) => v.event), (sessionId) => this.sessionProject.get(sessionId), listedOf),
-      ...delegationLostWindowsOf(state.checkpoint.observationIntervals, state.checkpoint.bucketCursors, pass.now),
+    const windows = delegationPassWindowsOf(
+      delegationListingWindowsOf([...this.evidence.values()].map((v) => v.event), (sessionId) => this.sessionProject.get(sessionId), listedOf),
+      delegationLostWindowsOf(state.checkpoint.observationIntervals, state.checkpoint.bucketCursors, pass.now),
       delegationNotReadyWindowOf(this.readyAt),
-      ...this.pendingWindows(state),
-    ];
-    const pointMetas = [...this.pointMetas.values()];
+      this.pendingWindows(state),
+    );
+    const pointMetas = Object.freeze([...this.pointMetas.values()].map((m) => Object.freeze(m)));
+    this.size(pass, 'evidence', evidence.length); this.size(pass, 'activities', state.checkpoint.activities.length);
+    this.size(pass, 'pointMetas', pointMetas.length); this.size(pass, 'pathMap', trees.size);
+    this.size(pass, 'win', windows.length); this.size(pass, 'winLost', windows.filter((w) => w.lost === true).length);
+    this.size(pass, 'winHeld', windows.filter((w) => w.lost !== true).length); this.size(pass, 'winHeldNull', windows.filter((w) => w.lost !== true && w.repository === null).length);
     const inputFor = (record: DelegationCensusRecord): DelegationCorrelationInput => {
       const row = registryRowOf(record);
       return {
@@ -10821,7 +11547,15 @@ class DelegationLane {
       };
     };
     // ONE expression: each pair is a census record and the verdict about it, never sorted or filtered apart.
-    const pairs = flat.map((record) => ({ record, verdict: correlateDelegation(inputFor(record)) }));
+    this.stepTo(pass, 'pairs');
+    let ladder = 0;                                                      // D-5692: the calls correlation received
+    const pairs = flat.map((record) => { ladder += 1; return { record, verdict: correlateDelegation(inputFor(record)) }; });
+    this.size(pass, 'ladder', ladder);
+    for (const [key, kind] of LANE_VERDICT_SIZES) {
+      this.size(pass, key, pairs.filter((x) => x.verdict.kind === kind).length);
+    }
+    this.stepTo(pass, 'forced');
+    let markCalls = 0; let windowCalls = 0;                              // D-5692: the calls made, which the gates and the `??` decide
     // R73, N16: which verdicts each kind of mark changed (a verdict two marks cover goes to the first of flag, project, path, id), counted
     // apart from every other `unmeasured` reason: a gauge of this reconcile, and the trees, cumulatively until the next hourly line.
     const forced: Record<DelegationMarkKind, number> = { path: 0, id: 0, project: 0, lossy: 0, prefix: 0, window: 0 };
@@ -10830,31 +11564,40 @@ class DelegationLane {
     if (droppedEvidence.measured || unknownWindows) {
       for (const { record, verdict } of pairs) {
         const input = inputFor(record);
-        const kind = (droppedEvidence.measured ? delegationMarkForced(input, verdict) : null)
-          ?? (unknownWindows && delegationUnknownWindowForced(input, verdict) ? 'window' : null);
+        const kind = (droppedEvidence.measured ? (markCalls += 1, delegationMarkForced(input, verdict)) : null)
+          ?? (unknownWindows && (windowCalls += 1, delegationUnknownWindowForced(input, verdict)) ? 'window' : null);
         if (kind === null) continue;
         forced[kind] += 1;
         this.forcedSinceLine[kind].add(laneTreeKey(record.project, record.adminRecord));
       }
     }
     this.markForced = forced;
+    this.size(pass, 'markCalls', markCalls); this.size(pass, 'windowCalls', windowCalls);
+    this.stepTo(pass, 'lostForced');
+    let lostCalls = 0;                                                   // D-5692
     // 2c (R84): the links lost evidence held back, counted apart from the marks. A tree an unreleased lease holds is owned already (N5).
     const leasedNow = new Set(state.checkpoint.leases.filter((l) => l.releasedAt === null).map((l) => laneTreeKey(l.project, l.adminRecord)));
     let lostForced = 0;
     for (const { record, verdict } of pairs) {
       if (verdict.kind !== 'unmeasured' || leasedNow.has(laneTreeKey(record.project, record.adminRecord))) continue;   // the reason is correlation's to read
+      lostCalls += 1;
       if (!delegationLostEvidenceForced(inputFor(record), verdict)) continue;
       lostForced += 1;
       this.lostSinceLine.add(laneTreeKey(record.project, record.adminRecord));
     }
     this.lostForced = lostForced;
+    this.size(pass, 'lostCalls', lostCalls);
 
+    this.stepTo(pass, 'policy');
     const deaths = this.firstDeadParents();
     const effects = planDelegationReconciliation({
       now, recovery: state, census: flat, correlations: pairs, registryReadable: this.registryListed, firstDeadParents: deaths,
       previousSuccessfulCensus: this.previous === null ? null : this.previous.flat,
       censusedProjects: censused, previousCensusedProjects: this.previous === null ? null : this.previous.projects,
     });
+    for (const [key, kind] of LANE_EFFECT_SIZES) {
+      this.size(pass, key, effects.filter((x) => x.kind === kind).length);
+    }
 
     // The counts are the pass's VERDICTS, one per census record that is a tree or could not be read; an `absent` record is a tree
     // being removed. Never attempt rows: policy files none for work no parent is named for.
@@ -10879,6 +11622,7 @@ class DelegationLane {
     this.reconciledWallMs = pass.now;
     this.warnMarks(pass.now);
     if (pass.signal.aborted) return;
+    this.stepTo(pass, 'effects');
     await this.applyEffects(pass, durable, effects);
   }
 
@@ -11007,40 +11751,60 @@ class DelegationLane {
     for (const e of effects) {
       if (e.kind === 'request-linked-lease-identity' || e.kind === 'record-run-child-owned' || e.kind === 'record-unowned-worktree') attempts.push(e.attempt);
     }
-    const filed = attempts.length === 0 ? new Set<string>() : await this.fileAttempts(durable, attempts);
+    let filed = new Set<string>();
+    if (attempts.length > 0) {                                           // D-5692: the part is timed only when it runs
+      const endAttempts = this.phase(pass, 'attempts');
+      try { filed = await this.fileAttempts(durable, attempts); } finally { endAttempts(); }
+    }
     let repair = false;
     for (const e of effects) {
       if (pass.signal.aborted) return;
       switch (e.kind) {
-        case 'request-linked-lease-identity':
+        case 'request-linked-lease-identity': {
           // The attempt is on file before the lease is journaled; `createLease` deduplicates on the identity key, so a request re-emitted
           // after a crash between the two is a no-op.
           if (!filed.has(e.attempt.attemptId)) break;
+          const endLease = this.phase(pass, 'leases');                   // D-5692: the parts (`leases`, `intervals`, `absence`) are summed over the pass
           try { await durable.createLease(e.request); }
           catch (err) { console.warn(`ccrc-server: a delegation lease identity could not be journaled: ${err instanceof Error ? err.message : String(err)}`); }
+          finally { endLease(); }
           break;
+        }
         case 'record-run-child-owned':
         case 'record-unowned-worktree':
           break;                                                         // the attempt row is the whole record
         case 'record-measured-absence': {
-          const k = laneTreeKey(e.project, e.adminRecord);
-          if (!this.absences.has(k)) this.absences.set(k, { project: e.project, adminRecord: e.adminRecord, observedAt: e.observedAt });
+          const endAbsence = this.phase(pass, 'absence');
+          try {
+            const k = laneTreeKey(e.project, e.adminRecord);
+            if (!this.absences.has(k)) this.absences.set(k, { project: e.project, adminRecord: e.adminRecord, observedAt: e.observedAt });
+          } finally { endAbsence(); }
           break;
         }
         case 'repair-report-projection':
           repair = true;
           break;
-        case 'record-observation-interval':
+        case 'record-observation-interval': {
+          const endInterval = this.phase(pass, 'intervals');
           try { await durable.applyAccepted({ accepted: [], cursor: null, interval: e.interval }); }
           catch (err) { console.warn(`ccrc-server: a delegation interval could not be recorded: ${err instanceof Error ? err.message : String(err)}`); }
+          finally { endInterval(); }
           break;
+        }
         default:
           e satisfies never;
       }
     }
     if (repair && !pass.signal.aborted) {
-      try { await durable.repairProjection(); }
+      const endRepair = this.phase(pass, 'repair');
+      let report: Awaited<ReturnType<DelegationDurability['repairProjection']>> = null;
+      try { report = await durable.repairProjection(); }
       catch (err) { console.warn(`ccrc-server: the delegation projection could not be repaired: ${err instanceof Error ? err.message : String(err)}`); }
+      finally { endRepair(); }
+      if (report !== null) {                                             // D-5692: read only; a throw or no report leaves these off the line
+        this.size(pass, 'repairPasses', report.journalPasses); this.size(pass, 'repairInserted', report.inserted); this.size(pass, 'repairFull', report.fullReplay ? 1 : 0);
+        this.size(pass, 'repairWiped', report.wipedAll ? 1 : 0); this.size(pass, 'repairHealed', report.healedSessions);
+      }
     }
   }
 

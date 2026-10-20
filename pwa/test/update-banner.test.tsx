@@ -336,7 +336,7 @@ describe('UpdateBanner — its two buttons', () => {
 });
 
 describe('UpdateBanner — the FleetHostBanner idiom: injected, or self-polling', () => {
-  it('never polls when the view is injected — FleetScreen polls once for the whole screen', () => {
+  it('never polls when the view is injected — FleetChromeProvider polls once for the whole shell (D-5468)', () => {
     const updates = vi.spyOn(api, 'updates');
     render(<UpdateBanner updates={view()} />);
     render(<UpdateBanner updates={null} />);

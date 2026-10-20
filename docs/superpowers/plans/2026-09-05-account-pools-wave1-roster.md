@@ -1247,12 +1247,12 @@ In `server/src/server.ts:1186`–`:1188`:
 // sends.
 export const TEST_ROSTER: RosterWire[] = [
   { id: 'claude', label: 'team·max', hue: 'cyan', homeAble: true, hidden: false, pool: null },
-  { id: 'claude2', label: 'team·alt', hue: 'violet', homeAble: true, hidden: false, pool: null },
-  { id: 'claude-corp', label: 'team·b', hue: 'blue', homeAble: true, hidden: false, pool: null },
+  { id: 'claude9', label: 'team·alt', hue: 'violet', homeAble: true, hidden: false, pool: null },
+  { id: 'claude-acme', label: 'team·b', hue: 'blue', homeAble: true, hidden: false, pool: null },
   // Opt-in only: a lane a session reaches solely by being sent there on
   // purpose, never one ccd's `_ws_least_loaded` chooses on its own.
   { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false, pool: null },
-  { id: 'claude-dev0', label: 'team·d', hue: 'green', homeAble: true, hidden: false, pool: null },
+  { id: 'claude-lab0', label: 'team·d', hue: 'green', homeAble: true, hidden: false, pool: null },
 ];
 ```
 

@@ -8,7 +8,7 @@
 // `AccountPoolWire` and `BuildInfo` belong to their decision/parser files for
 // the parallel reason: this file carries their shapes but does not redefine
 // them.
-import type { Hue } from './roster.js';
+import type { Hue, RosterKindWire } from './roster.js';
 import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
@@ -1754,8 +1754,8 @@ export type TurnStallInput = Pick<FleetSession, 'status' | 'statusUpdatedAt'>;
  * THE THRESHOLD, MEASURED, NOT GUESSED FROM THE ONE INCIDENT (its own
  * deviation text is explicit about this): `turn_duration` system events
  * streamed from every `*.jsonl` transcript under the fleet's five wrapper
- * HOMEs (`~/.claude`, `~/.claude-personal`, `~/.claude-corp`,
- * `~/.claude-dev0`, `~/.claude-gpt`) on 2026-09-08, 28,519 samples:
+ * HOMEs (`~/.claude`, `~/.claude-home`, `~/.claude-acme`,
+ * `~/.claude-lab0`, `~/.claude-gpt`) on 2026-09-08, 28,519 samples:
  *
  *   p50 ~101s · p90 ~23.2m · p95 ~50.4m · p96 ~62.5m · p97 ~85.5m ·
  *   p97.5 ~102.2m · p99 ~271.1m · max ~104.8h
@@ -3624,6 +3624,13 @@ export interface FleetHealth {
    * Wave 3 adds no fleet frame and no PWA state; nothing renders it yet.
    */
   delegation?: DelegationObservationHealth;
+  /**
+   * The ranked total of bytes archived workspaces hold, each with the expiry lane's latest verdict (D-5943,
+   * `ArchivedHeld`). Optional for the same absence-permits reason the blocks above are: absent until the lane's first
+   * pass, and on a server with no watcher or no coordination database; absent reads as UNKNOWN, never as nothing held.
+   * Read it through `readArchivedHeld` alone. No PWA surface renders it yet (the PWA epic's, under the UI rule).
+   */
+  archivedHeld?: ArchivedHeld;
 }
 
 /**
@@ -3760,16 +3767,16 @@ export interface LifecycleQueryResult {
  * SYSTEM, and its emptiness is the point of Stage 2a: the roster stopped being
  * source code.
  *
- * It used to be a five-member union (`'claude' | 'claude2' | 'claude-corp' |
- * 'gpt' | 'claude-dev0'`) beside an `ACCOUNTS: Record<Wrapper, AccountDef>`
+ * It used to be a five-member union (`'claude' | 'claude9' | 'claude-acme' |
+ * 'gpt' | 'claude-lab0'`) beside an `ACCOUNTS: Record<Wrapper, AccountDef>`
  * literal in this file, from which every other enumeration was derived. That
  * literal was itself the fix for a worse defect — one concept hand-enumerated
  * in eight places across three languages, no two of them the same set. A
- * missing entry in the first of those killed chat for six of `claude-dev0`'s
+ * missing entry in the first of those killed chat for six of `claude-lab0`'s
  * 24 sessions, silently, for the account's entire life (`resolve()` in
  * `sessionws.ts` returned null; the client only ever saw "unknown session",
  * indistinguishable from a reaped one). A hand-written, unordered prefix list
- * in the second attributed `claude-dev0-quiet-basin` to `claude`. Deriving
+ * in the second attributed `claude-lab0-quiet-basin` to `claude`. Deriving
  * every list from one literal closed that class of bug: N=1.
  *
  * What one literal could NOT close is that it was still a compile-time fact.
@@ -3799,8 +3806,8 @@ export interface LifecycleQueryResult {
  *                            switch that is not an account, from becoming a
  *                            phantom row on `GET /api/accounts`
  *   `roster.byIdLengthDesc`  (shared/roster.ts) — longest id first, so
- *                            `claude-dev0-quiet-basin` resolves to
- *                            `claude-dev0` rather than to the shorter `claude`
+ *                            `claude-lab0-quiet-basin` resolves to
+ *                            `claude-lab0` rather than to the shorter `claude`
  *                            (`idHomeWrapper`, server/src/fleet.ts)
  *   `roster.homeAble`        — the accounts ccd's `_ws_least_loaded` may land a
  *                            new workspace on (`projectHome`, limits.ts)
@@ -3897,16 +3904,24 @@ export type ProjectPlacement =
 /**
  * One roster entry as the wire carries it — the PWA's entire view of an
  * account's identity, and deliberately NOT the parsed `AccountDef`
- * (`shared/roster.ts`). `configDirSuffix`, `exec` and `telemetry` describe how
- * the SERVER launches and measures an account; a browser has no use for them,
- * and `exec.secretsFile` in particular is a path into `~/.cc-secrets` with no
- * reader on the other end.
+ * (`shared/roster.ts`). `configDirSuffix` and `exec` describe how the SERVER
+ * launches an account; a browser has no use for them, and `exec.secretsFile` in
+ * particular is a path into `~/.cc-secrets` with no reader on the other end.
+ *
+ * The lane-kind fields — `provider`, `kind`, `telemetry` and `managed` — come
+ * from `RosterKindWire` (`shared/roster.ts`), derived once by `rosterKindOf`
+ * (D-5517, D-5751): ADDITIVE and OPTIONAL, `FLEET_PROTO` not bumped, on
+ * `hidden`'s terms. A server built before them omits all four, and an
+ * undeclared lane omits `provider` and `kind`, so a reader treats absence as
+ * "does not say" and shows no kind chip, never a defaulted one. Each is a
+ * closed union or a boolean, so none can carry free text, and no
+ * secret-bearing field rides this interface.
  *
  * `hue` is a colour NAME, never a colour value: `pwa/src/styles/tokens.css`
  * owns the actual colours and resolves each hue per theme, so shipping a hex
  * here would freeze one theme's palette into the wire.
  */
-export interface RosterWire {
+export interface RosterWire extends RosterKindWire {
   id: Wrapper;
   /** Jargon-free, for a human — the one place a wrapper name is translated
    *  (plan: "Move to another account", never "swap wrapper"). */
@@ -4052,10 +4067,10 @@ export function isMarkerState(v: unknown): v is MarkerState {
  *  says what ends each). The PWA renders sentences and never switches on a word. */
 export type ChildReclaimKeptWord =
   | 'coordinating' | 'minting-run-absent' | 'minting-run-postdates-child'
-  | 'reviewed-run-absent' | 'not-a-workspace';
+  | 'reviewed-run-absent' | 'not-a-workspace' | 'review-report-stale';
 const CHILD_RECLAIM_KEPT_WORD_TABLE: Readonly<Record<ChildReclaimKeptWord, true>> = {
   coordinating: true, 'minting-run-absent': true, 'minting-run-postdates-child': true,
-  'reviewed-run-absent': true, 'not-a-workspace': true,
+  'reviewed-run-absent': true, 'not-a-workspace': true, 'review-report-stale': true,  // D-5942
 };
 export const CHILD_RECLAIM_KEPT_WORDS: readonly ChildReclaimKeptWord[] =
   Object.keys(CHILD_RECLAIM_KEPT_WORD_TABLE) as ChildReclaimKeptWord[];
@@ -4146,6 +4161,50 @@ export interface ExpiryAttention {
   readonly archivedAt: number;
   readonly expiresAt: number | null;
   readonly at: number;
+}
+
+/** The RANKED TOTAL of bytes ARCHIVED WORKSPACES hold (D-5943; spec 2026-10-20 §2.7, #120 folded into #318), each with
+ *  the expiry lane's latest verdict for it — a READ MODEL, never a tap: it decides nothing and nothing acts on it. Composed
+ *  by the lane once per pass (`rankArchivedHeld`, L1 `server/src/archivedExpiry.ts`), shadow and armed alike, and carried
+ *  by `GET /api/fleet/health` as the optional `archivedHeld` block. It covers registry rows only.
+ *   - `bytes` is ws-archive's own measure AT ARCHIVE TIME (`FleetSession.archivedBytes`); `null` is UNMEASURED — never 0 —
+ *     counted in `unmeasured`, left out of `totalBytes` and ranked last.
+ *   - `rows` are ranked by bytes, descending, ties by `sessionId`.
+ *   - `kind` is the family of the lane's latest word, `verdict` the word itself (D-6026): the standing report's
+ *     (`ExpiryAttention.kind`, a refusal's token as its word), else the last act's answer (`deferred` with its reason,
+ *     `refused` with its token, …), else `learned`/`expiry-known` (the audit taught the instant, nothing asked yet), else
+ *     `not-yet-audited` for both. Read them as text: the vocabulary is the lane's and grows with it. */
+export interface ArchivedHeldRow {
+  readonly sessionId: string;
+  readonly bytes: number | null;
+  readonly verdict: string;
+  readonly kind: string;
+}
+export interface ArchivedHeld {
+  readonly totalBytes: number;
+  readonly unmeasured: number;
+  readonly rows: readonly ArchivedHeldRow[];
+}
+
+/** THE ONE READER of `FleetHealth.archivedHeld` (D-5943): the block, or `null` — absent (an older server, or a lane that
+ *  has not passed yet) or malformed alike, and `null` reads as UNKNOWN, never as nothing held. */
+export function readArchivedHeld(health: unknown): ArchivedHeld | null {
+  if (typeof health !== 'object' || health === null) return null;
+  const v = (health as Record<string, unknown>)['archivedHeld'];
+  if (v === undefined || v === null) return null;
+  try {
+    const o = asObj(v, 'archivedHeld');
+    const rowsRaw = o['rows'];
+    if (!Array.isArray(rowsRaw)) return null;
+    const rows = rowsRaw.map((r, i): ArchivedHeldRow => {
+      const x = asObj(r, `archivedHeld.rows[${i}]`);
+      return { sessionId: reqStr(x, 'sessionId'), bytes: optNum(x, 'bytes'), verdict: reqStr(x, 'verdict'), kind: reqStr(x, 'kind') };
+    });
+    return { totalBytes: reqNum(o, 'totalBytes'), unmeasured: reqNum(o, 'unmeasured'), rows };
+  } catch (err) {
+    if (err instanceof MalformedSnapshot) return null;
+    throw err;
+  }
 }
 
 /** One report of the DEAD-COORDINATOR lane (workspace lifecycle spec 2026-09-24 §5.4, wave 4): a claimant it WOULD end
@@ -4847,6 +4906,41 @@ export const IDLE_RUN_STATES = ['planned', 'awaiting-review', 'merging', 'closin
 export const TERMINAL_RUN_STATES = ['done', 'failed'] as const satisfies readonly RunState[];
 
 /**
+ * THE DRIFT KINDS (coordinator-durability tail spec §4.2, `drift-decider-pure` (D-5921)): what the drift
+ * reconciler can find out of step, each mapped to the kind of subject it names, so a finding's target is a run
+ * (`/runs`) or a session (`/s/<id>`). The one home of the list: `DRIFT_KINDS` is this map's keys and
+ * `isDriftKind` the one narrowing of an untrusted string. The decider is `server/src/coord/drift.ts`.
+ */
+export const DRIFT_KIND_MAP = {
+  'run-quiet': 'run',
+  'claimant-gone': 'run',
+  'mail-parked': 'session',
+  'mail-held': 'session',
+  'parent-mismatch': 'session',
+  'review-waiting': 'run',
+  'question-orphaned': 'session',
+} as const satisfies Record<string, 'run' | 'session'>;
+export type DriftKind = keyof typeof DRIFT_KIND_MAP;
+export const DRIFT_KINDS: readonly DriftKind[] = Object.keys(DRIFT_KIND_MAP) as DriftKind[];
+export function isDriftKind(raw: unknown): raw is DriftKind {
+  return typeof raw === 'string' && Object.prototype.hasOwnProperty.call(DRIFT_KIND_MAP, raw);
+}
+
+/** One finding (D-5921). `key` names the subject, so the same drift is the same key on every pass; `subject` is
+ *  the JSON of the ids it names; `detail` one line in words; `factAt` the fact's own time where it has one, else
+ *  null (its age then runs from first sight). `runId` is set on a run kind (for `claimant-gone`, the programme's
+ *  newest open run) and `sessionId` on a session kind; each is null where it does not apply. */
+export interface DriftFinding {
+  readonly key: string;
+  readonly kind: DriftKind;
+  readonly subject: string;
+  readonly detail: string;
+  readonly factAt: number | null;
+  readonly runId: number | null;
+  readonly sessionId: string | null;
+}
+
+/**
  * The REVIEW run's machine (design 2026-09-14 §5.2). A review run has no
  * `awaiting-review`, `merging` or `closing`: it has nothing to review, merge
  * or release-with-ceremony, and reusing those states would make the table lie
@@ -4953,6 +5047,17 @@ export function isMailDeliveryState(v: unknown): v is MailDeliveryState {
  *  recorded by this wave, not a decision this list makes. */
 export const TERMINAL_DELIVERY_STATES = ['acked', 'rejected'] as const satisfies
   readonly MailDeliveryState[];
+
+/** The states a delivery sits in while it is still OUTSTANDING, DERIVED as the
+ *  complement of `terminal` within this vocabulary (D-5997, #532), so a member
+ *  added to `TERMINAL_DELIVERY_STATES` leaves this list in the same edit and both
+ *  of the store's guards move together. `unknown` is in neither list: a state this
+ *  build cannot name is not outstanding either (D-1406 stays open). A function so
+ *  the derivation itself can be measured against a different terminal list. */
+export function outstandingDeliveryStates(terminal: readonly MailDeliveryState[]): readonly MailDeliveryState[] {
+  return MAIL_DELIVERY_STATES.filter((s) => s !== 'unknown' && !terminal.includes(s));
+}
+export const OUTSTANDING_DELIVERY_STATES = outstandingDeliveryStates(TERMINAL_DELIVERY_STATES);
 
 /** ≤8KB, spec:114. Measured in UTF-8 BYTES, not string length — the same
  *  char-vs-byte care `hookstate.ts:128-135` already takes with its own cap. */
@@ -6083,7 +6188,13 @@ export type MailGate =
   | 'registry-absent' | 'registry-unmeasurable'
   | 'tmux-gone' | 'session-dead' | 'tmux-unknown' | 'hibernated'   // D-5242: asleep, never parked — the mail lane wakes it
   | 'pending-ask' | 'no-pane' | 'no-config-dir'
-  | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable';
+  | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable'
+  // D-5840 (D-5838): an `enter-ignored` PARK whose recipient's box still holds what it
+  // held at the park — our own nudge, unsubmitted. Nothing is pressed or typed.
+  | 'parked'
+  // D-5912: the send's `onDraft: 'stash'` refused — a stash already held (`stash-occupied`), or the box did not
+  // empty after `C-s` (`stash-failed`). Recorded after the send, beside its `lastError`.
+  | 'stash-failed' | 'stash-occupied';
 
 /** Total, so a refusal path added to `sweepMail` without a member here is a
  *  TS2739 rather than a silent hole — the `RUN_REFUSE_CODE_MAP` shape, and the
@@ -6093,7 +6204,8 @@ const MAIL_GATE_MAP: Record<MailGate, true> = {
   'registry-absent': true, 'registry-unmeasurable': true,
   'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true, hibernated: true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
-  'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true,
+  'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true, parked: true,
+  'stash-failed': true, 'stash-occupied': true,
 };
 export const MAIL_GATES: readonly MailGate[] = Object.keys(MAIL_GATE_MAP) as MailGate[];
 
@@ -6233,8 +6345,17 @@ export interface RunHealth {
    *  cross-repo §4) and a `child workspace reclaimed` park (the server
    *  reclaimed a finished child, spec 2026-09-22 §5.6) are all the machinery
    *  working as designed, and reporting any of them would announce a change
-   *  that has already been handled. */
+   *  that has already been handled.
+   *
+   *  NOT the parked STATE below: this count is the older sense of the word, a
+   *  delivery the lane gave up on and rejected, and it stays exactly that. */
   readonly mailParked: number;
+  /** Deliveries of this run's mail still OUTSTANDING and PARKED (D-5838,
+   *  #754; a field of its own, not a second sense of `mailParked`, D-5839): the recipient is alive, its input box would not take the
+   *  nudge, and the lane is waiting for the box to change (or its retry timer)
+   *  to deliver it — not lost, and not yet delivered. OPTIONAL because an older
+   *  server omits it; absence means "nothing to say", never zero. */
+  readonly mailParkedLive?: number;
   /** MAX(`replayCount`) across this run's deliveries. Mail 120 reached 722
    *  delivery attempts and mail 129 reached 911, each arriving after the work it
    *  was meant to steer; this is the number that was climbing the whole time
@@ -7052,6 +7173,17 @@ export interface MailSummary {
   gateCount: number;
   gateSince: number | null;
   gateAt: number | null;
+  /**
+   * D-5838 (#754): when this delivery was PARKED, or `null` when it is
+   * not. A parked delivery is still `state: 'queued'` — outstanding, not lost:
+   * its recipient is alive, its input box would not take the nudge, and the lane
+   * delivers it when the box changes (or on its retry timer), rejecting it only
+   * after 24 h parked. `state` deliberately does NOT gain a member for it, so
+   * every reader that counts `queued` as outstanding stays right. Set only on a
+   * `queued` row. ADDITIVE and OPTIONAL: an older server omits it, and absence
+   * means "nothing to say about a park".
+   */
+  parkedAt?: number | null;
 }
 
 /** The two enforced caps (spec:199-201). The two COUNTS are queries over
@@ -7461,7 +7593,7 @@ export interface PasskeyRegisterStart {
   rpId: string;
   /** The `user.id` handed to `navigator.credentials.create` — an opaque
    *  per-box handle, never an email or a username. Single-operator boxes have
-   *  no user identity to carry (spec §6 holds that seam for the team edition),
+   *  no user identity to carry (spec §6 holds that seam for a later product decision),
    *  so this exists to satisfy the ceremony, not to name anyone. */
   userHandleB64url: string;
 }
@@ -7661,7 +7793,7 @@ export type LifecycleAct =
   | 'unarchive'     // a return verb's gate (wave 3b) or `_spawn_start` cleared
                     // an archive stamp because a pane was asked for. DISTINCT
                     // FROM `restore`: that is the deliberate way back; this is
-                    // a start/ensure/swap/enable on an archived row (CCR-10).
+                    // a start/ensure/swap/enable on an archived row (#127).
   | 'unknown';      // the reader's degrade. NEVER written by a ccd call site.
 
 /** Derived from the type, never restated beside it — `PR_REASON_MAP`'s idiom
@@ -9633,9 +9765,9 @@ export const UPDATE_GATE_CAP = 'update-gate';
  *
  *   - `runId`, `program`, `claimedBy`, `closedAt` — the newest run's own columns; `closedAt` is epoch MS.
  *   - `programTitle` — `programs.title`, `null` only if the programme row could not be joined.
- *   - `child` — the registry's CCR-15 child reading (`FleetSession.child`) is `child` or `unreadable`. An
+ *   - `child` — the registry's #166 child reading (`FleetSession.child`) is `child` or `unreadable`. An
  *     unreadable marker reads as a child, the direction that defers: "Archive all" skips children, which leave
- *     through CCR-15's own reclamation.
+ *     through #166's own reclamation.
  *
  * ADDITIVE; `FLEET_PROTO` is not bumped. The LIVE `fleet` frame is CAST, not revived (`pwa/src/stores/fleet.ts`'s
  * `asFleetMsg`), so a row from an older server has no key at all — read it ONLY through `releasedFromOf`.
@@ -10249,25 +10381,43 @@ export function leafKeptWord(v: unknown): LeafKeptWord {
  * The three edits above (`ChildReclaimAttention`'s doc line pair, its `runId` sentence and its last arm's line) are
  * rewritten in place, line for line. */
 
-/** The longest temp-root id (spec §5.10): 255 characters.
- *  - A session id is a FILE NAME component (`$REG/<id>.uuid`, `$REG/tmproots/<id>`), and no file system this runs on
- *    takes a component over 255 bytes. The session-id shape is ASCII, so a character is a byte.
- *  - ccd's own names run out sooner: `.reap-<id>.lock` past 244, and a slot's or a record's name sooner still (spec §7).
- *  - The coordination store's displacement parsers bound a candidate id by it too. */
-export const TMPROOT_ID_MAX_CHARS = 255;
+/** The longest registry id (spec 2026-10-12 §2.3): 255 characters, one file-name component (`$REG/<id>.uuid`); the session-id
+ *  shape is ASCII, so a character is a byte.
+ *  - No file system this runs on takes a component over 255 bytes. A temp root is named by the same id
+ *    (`$REG/tmproots/<id>`), so the collector's cap below is this one.
+ *  - ccd's own names run out sooner: `.reap-<id>.lock` past 244, and a slot's name sooner still. A tighter cap belongs
+ *    where ccd mints an id (spec 2026-10-12 §2.6), not here: this cap is the longest name the registry can hold at all. */
+export const REGISTRY_ID_MAX_CHARS = 255;
 
-/** THE ONE PREDICATE of a temp-root id (spec §5.10): ccd's `_ws_tmproot_id_ok` (a session id's shape, no leading
- *  `.`), plus NO LEADING `-` and at most `TMPROOT_ID_MAX_CHARS` characters.
- *  - The leading `-` is a SAFETY rule, not defence in depth. ccd's destructive verbs read their decision flags from any
- *    position, `--session`'s value included, and every such flag begins `--`. The shape refuses `=`, so no
- *    `--flag=value` can be an id either.
+/** THE ONE PREDICATE of a registry id (spec 2026-10-12 §2.3): length first, then the session-id shape, then no leading `.` or `-`.
+ *  - The leading `-` is a SAFETY rule, not defence in depth (spec 2026-10-12 §2.1). ccd's verbs read their decision flags from any
+ *    position, `--session`'s value included, and every such flag begins `--`. An id of `--actor` is read as a flag,
+ *    and the verb binds another token as its id. The shape refuses `=`, so no `--flag=value` can be an id either.
+ *  - The leading `.` keeps `.`, `..` and a hidden name out, as ccd's own `_ws_tmproot_id_ok` does.
+ *  - It is the rule for an id the server composes into an id-taking argv, whether the id came from a request, a
+ *    stored run row, a registry file name or an executor's job.
+ *  - It sits at this foot, beside the collector's names, and not after `isSessionIdShape`: README cites this file by
+ *    line, and an insertion there would move every anchor it names.
+ *  - A non-string is not an id. The length is asked first, so a long string never reaches the shape's regex. */
+export function isRegistryId(id: unknown): id is string {
+  return typeof id === 'string' && id.length <= REGISTRY_ID_MAX_CHARS && isSessionIdShape(id)
+    && !id.startsWith('.') && !id.startsWith('-');
+}
+
+/** The longest temp-root id (spec §5.10) is the longest registry id: a temp root is named by a registry id.
+ *  - A derived alias, never a second literal. The coordination store's displacement parsers bound a candidate id by
+ *    this name, and their move to `REGISTRY_ID_MAX_CHARS` waits for a wave that edits the store. */
+export const TMPROOT_ID_MAX_CHARS = REGISTRY_ID_MAX_CHARS;
+
+/** THE ONE PREDICATE of a temp-root id (spec 2026-09-22 §5.10) is the registry id predicate, so the dash, dot and length clauses
+ *  are written once (spec 2026-10-12 §2.3) and the accepted set is unchanged.
  *  - The collector asks it of every listed name before any argv, and again of a job's id before its audit or its act.
  *  - The kept-leaf reader asks it before it names a leaf, so an id the collector never audits is not listed there
  *    either.
- *  - A non-string is not an id. The length is asked first, so a long string never reaches the shape's regex. */
+ *  - It stays a `function` declaration that calls `isRegistryId`, never a `const` alias of it, so the temp-root name
+ *    keeps its one function definer. */
 export function isTmpRootId(id: unknown): id is string {
-  return typeof id === 'string' && id.length <= TMPROOT_ID_MAX_CHARS && isSessionIdShape(id)
-    && !id.startsWith('.') && !id.startsWith('-');
+  return isRegistryId(id);
 }
 
 declare const collectTokenBrand: unique symbol;
@@ -11178,7 +11328,7 @@ export const DELEGATION_SPOOL_BOUNDS = {
  *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
  *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
 const CHILD_DENY_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|roll|claude'.split('|');
 
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
@@ -11189,17 +11339,29 @@ export const CHILD_DENY_PATH_QUALIFIED = false as boolean;
 
 /** The program heads a deny rule is written for: the bare name always, and the path-qualified forms only behind
  *  `CHILD_DENY_PATH_QUALIFIED`. */
-const childDenyHeads = (prog: 'ccd' | 'ccrc'): readonly string[] =>
+const childDenyHeads = (prog: string): readonly string[] =>
   CHILD_DENY_PATH_QUALIFIED ? [prog, `*/${prog}`, `~/.local/bin/${prog}`] : [prog];
 
+/** The deny list for a box whose roster's upstream id is `upstreamId` (D-5696, spec §7.6): the forbidden `ccd` verbs
+ *  (`roll` and the operator's `claude …` switches among them), then `ccrc update` and `ccrc rollback`, then Claude
+ *  Code's own `install` and `update` under its name and, when the roster names the upstream account otherwise, under
+ *  that id too. `upstreamId` is a roster id `parseRoster` has already admitted, or `null` for no roster. The bash twin
+ *  reads the id from the generated roster (`CCRC_UPSTREAM`) and is held equal to this by iteration. */
+export function childDenyRules(upstreamId: string | null): readonly string[] {
+  const claudes = upstreamId === null || upstreamId === 'claude' ? ['claude'] : ['claude', upstreamId];
+  return [
+    ...CHILD_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
+    ...['update', 'rollback'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
+    ...claudes.flatMap((p) => ['install', 'update'].flatMap((v) => childDenyHeads(p).map((h) => `Bash(${h} ${v}:*)`))),
+  ];
+}
+
 /** The `permissions.deny` list of `~/.cc-sessions/child-deny.settings.json`, the one managed file every dispatched
- *  child (a row with `.child`) spawns with through `--settings` (spec §6.6, plan Task 15, D-5299): the forbidden
- *  `ccd` verbs, then `ccrc update` and `ccrc rollback`. No approval overrides a deny rule. The installer's bash copy
- *  is held equal to this list by iteration (`install-session-hooks.test.ts`), never respelled in a test. */
-export const CHILD_DENY_RULES: readonly string[] = [
-  ...CHILD_DENY_CCD_VERBS.flatMap((v) => childDenyHeads('ccd').map((h) => `Bash(${h} ${v}:*)`)),
-  ...['update', 'rollback'].flatMap((v) => childDenyHeads('ccrc').map((h) => `Bash(${h} ${v}:*)`)),
-];
+ *  child (a row with `.child`) spawns with through `--settings` (spec §6.6, plan Task 15, D-5299), on a box whose
+ *  upstream account is named `claude` (`childDenyRules` for any other). No approval overrides a deny rule. The
+ *  installer's bash copy is held equal to this list by iteration (`install-session-hooks.test.ts`), never respelled
+ *  in a test. */
+export const CHILD_DENY_RULES: readonly string[] = childDenyRules(null);
 
 /** `$REG/<id>.deny-settings` (plan Task 15, D-5299): the sha256 of the deny file the child was last spawned with,
  *  written by `ccd`'s spawn of a `.child` row and only when it passed the file. Three answers, as `ChildMark`: Task
@@ -11683,3 +11845,61 @@ export type AccountGateRefusal = (typeof ACCOUNT_GATE_REFUSALS)[number];
 /** The class of `cfg.origin` the gate decides on, and `GET /api/accounts`'s `connect.origin` (A12): https, plain HTTP
  *  on a loopback host, or anything else. */
 export type AccountOriginClass = 'https' | 'loopback' | 'insecure';
+
+/** One credential shape (D-5513, plan Task A10): a bare regular-expression source, with no flags and no boundary, so
+ *  each reader adds its own (`server/src/accounts/mask.ts` for every egress of session-derived text,
+ *  `server/src/coord/redact.ts` for approval rows). */
+export interface CredentialMask { readonly id: string; readonly source: string }
+
+/** THE credential shapes a lane's files can hold, whether or not ccrc wrote them (D-5513, plan Task A10): the whole
+ *  Anthropic `sk-ant-<kind><nn>-` family (the OAuth access token `oat`, the refresh token `ort` a login lane's
+ *  `.credentials.json` holds, and the API key `api`), OpenRouter keys, the Codex gateway key (`ccrc-codex` reads it
+ *  as `sk-` and 48 lowercase hex), the generic `sk-` rule and the JWT shape (so a Codex `auth.json`'s access, id and
+ *  refresh tokens are covered), and the Codex `auth.json` token fields by name. The one home: `redact.ts`'s
+ *  `KNOWN_TOKEN` and `JWT` read `genericSk` and `jwt` from here. Each specific family is its own entry, so it is
+ *  masked even if the generic rule were ever narrowed. */
+export const CREDENTIAL_MASKS = [
+  { id: 'anthropic', source: String.raw`sk-ant-[a-z]{3}[0-9]{2}-[A-Za-z0-9_-]{8,}` },
+  { id: 'openrouter', source: String.raw`sk-or-v1-[A-Za-z0-9]{8,}` },
+  { id: 'codexGateway', source: String.raw`sk-[0-9a-f]{48}` },
+  { id: 'genericSk', source: String.raw`sk-[A-Za-z0-9_-]{8,}` },
+  { id: 'jwt', source: String.raw`eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*` },
+  { id: 'codexTokenField', source: String.raw`(?<="(?:access_token|id_token|refresh_token|OPENAI_API_KEY)"\s*:\s*")(?:[^"\\\n]|\\.)+` },
+] as const satisfies readonly CredentialMask[];
+export type CredentialMaskId = (typeof CREDENTIAL_MASKS)[number]['id'];
+
+/** One credential shape's source, by id. */
+export function credentialMaskSource(id: CredentialMaskId): string {
+  return CREDENTIAL_MASKS.find((m) => m.id === id)!.source;
+}
+
+/** What a masked credential reads as, everywhere session-derived text leaves the server (D-5513). */
+export const SECRET_MASK = '‹secret masked›';
+/** What the rest of a text reads as once it holds more candidate runs than the exact-bytes check's hard ceiling: the
+ *  check fails closed, so no run is ever passed through unchecked (D-5513). */
+export const SECRET_MASK_TOO_LARGE = '‹output too large to check, masked›';
+
+/* D-6048 (ARCH-12): the derived runtime lists, kept at the end of the file so adding them moves no line that other
+ * files cite by number. */
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom): a member added
+ *  to the union with no key here fails to compile. `server/test/rings/wire-totality.test.ts` holds every exported
+ *  literal union in `shared/` to that. */
+const SESSION_STATUS_MAP: Record<SessionStatus, true> = { busy: true, idle: true, dead: true };
+export const SESSION_STATUSES: readonly SessionStatus[] = Object.keys(SESSION_STATUS_MAP) as SessionStatus[];
+
+/** D-6048 (ARCH-12): the runtime list, in the union's declaration order (not the fleet screen's section order,
+ *  which `pwa/src/fleet/sortFleet.ts` owns). */
+const SESSION_BUCKET_MAP: Record<SessionBucket, true> = {
+  attention: true, working: true, done: true, idle: true, cleanup: true, archived: true, dead: true,
+};
+export const SESSION_BUCKETS: readonly SessionBucket[] = Object.keys(SESSION_BUCKET_MAP) as SessionBucket[];
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type, and the one way to narrow an untrusted value to a
+ *  `PoolsEnforcement` (the fleet store's `pools` frame gate reads it for `enforcement` and `accountPools`). The
+ *  CONSTANT is cast, never the input (`isSessionRole`'s rule). */
+const POOLS_ENFORCEMENT_MAP: Record<PoolsEnforcement, true> = { enforced: true, unavailable: true, unknown: true };
+export const POOLS_ENFORCEMENTS: readonly PoolsEnforcement[] =
+  Object.keys(POOLS_ENFORCEMENT_MAP) as PoolsEnforcement[];
+export function isPoolsEnforcement(v: unknown): v is PoolsEnforcement {
+  return typeof v === 'string' && (POOLS_ENFORCEMENTS as readonly string[]).includes(v);
+}

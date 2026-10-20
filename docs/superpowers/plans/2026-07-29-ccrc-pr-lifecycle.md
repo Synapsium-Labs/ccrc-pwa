@@ -79,7 +79,7 @@ expect a third round of drift — and expect to find it yourself rather than hav
 folded in for you. `main` moving is the normal case; the text-first rule is what
 makes it cost nothing.
 
-- Repo `/srv/projects/OpenClawHetzner`. **Branch from `main`
+- Repo `/srv/projects/project-c`. **Branch from `main`
   (`20d8829`) into a fresh worktree and run `npm ci` in `server/`, `agent/` and
   `pwa/` before Task 1.** Two things `main` pinned that this plan must not undo,
   both because a step here rewrites the surrounding block and so git will raise no
@@ -1049,7 +1049,7 @@ content `rm -rf` destroys all the same. All types, not `-type f`, because the
 top-level matcher matches directory names too. Bounded by a whole-workspace 30 s
 deadline rather than a per-entry timeout, so 226 ignored entries cannot cost 226
 timeouts; measured against the tree `--ignored=matching` was chosen for
-(custom-tools, 226 collapsed entries, 355,392 entries beneath them) the whole
+(project-d, 226 collapsed entries, 355,392 entries beneath them) the whole
 scan costs 3.4 s. Expiry and any `find` diagnostic are reads that did not
 complete, so they refuse `tree-unreadable` with the remedy in the message. The
 glob list becomes ONE list with two consumers (`_ws_sensitive_match` and a
@@ -2087,8 +2087,8 @@ token (`--pr-merged: #C7A7F4;`) is dark-only: measured against LIGHT's
 `--bg-raised` (`#EAEEEA`, the keycap's own background) it reads **1.75:1**,
 well under the 3:1 UI floor `design/contrast-check.mjs` enforces, because the
 brief gives no light-theme override for it. Fixed by aliasing
-`--pr-merged: var(--acct-claude2)` instead of a second literal hex:
-`--acct-claude2`'s dark value is byte-identical to the brief's literal
+`--pr-merged: var(--acct-claude9)` instead of a second literal hex:
+`--acct-claude9`'s dark value is byte-identical to the brief's literal
 (`#C7A7F4`) and its light value (`#6D3FB4`) already clears the floor at
 **5.93:1** (dark: **8.06:1** vs `8.32:1` the brief's own comment claimed for
 an unspecified ground — neither `--bg-surface` nor `--bg-raised` measures
@@ -2517,11 +2517,11 @@ commit's `git add` alongside the brief's own three-path list.
 `groupFleet.test.ts`'s `'excludes archived rows from attention, busy and the
 pin'` test, run verbatim, asserts `g!.pin` to be `'claude'`, but `demo-a`
 (via the shared `s()` fixture, unmodified by the `at()` helper for this
-describe block) defaults to `home: 'claude2'`, and `busyArchived`'s `home` is
-explicitly `'claude2'` too — the two rows AGREE, so the test cannot
+describe block) defaults to `home: 'claude9'`, and `busyArchived`'s `home` is
+explicitly `'claude9'` too — the two rows AGREE, so the test cannot
 distinguish the correct behaviour (pin computed from `live` only) from the
 bug it exists to catch (pin computed from the whole membership): both give
-`'claude2'`, and the literal assertion of `'claude'` matches neither. Fixed
+`'claude9'`, and the literal assertion of `'claude'` matches neither. Fixed
 by overriding `demo-a`'s home to `'claude'`, so the two rows genuinely
 disagree and the assertion becomes meaningful — a `forPin = members`
 regression now reads `null` (disagreement), not `'claude'`, which the
@@ -3658,10 +3658,10 @@ invariant was implemented rather than the claim weakened.
 
 One fixture note was itself false and is corrected in c120938: it called
 `id: 'demo'` "a response ccd cannot produce" while substituting
-`claude:OpenClawHetzner`, which ccd cannot produce either — `cmd_ws_audit`
+`claude:project-c`, which ccd cannot produce either — `cmd_ws_audit`
 validates the id against `^[A-Za-z0-9._-]+$` before doing anything (ccd:2512),
 so a colon dies at the verb and the route 502s. Both reap tests now use
-`OpenClawHetzner-quiet-basin`, the `$project-$slug` form ccd actually builds
+`project-c-quiet-basin`, the `$project-$slug` form ccd actually builds
 (ccd:712); no assertion changed and reverting the fixture id to a mismatch still
 fails both.
 
@@ -5981,7 +5981,7 @@ _ws_ignored_digest() {   # workdir -> sha256 of the ignored-entry set
   # NON-ZERO when the set could not be read at all.
   #
   # --ignored=matching, NEVER `ls-files --others --ignored`: the latter
-  # enumerates per file (measured 210,070 entries / 24.6 MB in custom-tools,
+  # enumerates per file (measured 210,070 entries / 24.6 MB in project-d,
   # against an 8 MB agent EXEC_MAX_BUFFER), while this collapses each ignored
   # directory to one entry.
   #
@@ -6714,8 +6714,8 @@ export function makePrHarness(prefix: string): PrHarness {
  *  `wrapper` field and comes through here — hardcoding `.claude` is right for
  *  exactly one of the four wrappers and silently wrong for the other three. */
 export const CFG_DIR: Record<string, string> = {
-  claude: '.claude', claude2: '.claude-personal',
-  'claude-corp': '.claude-corp', gpt: '.claude-gpt',
+  claude: '.claude', claude9: '.claude-home',
+  'claude-acme': '.claude-acme', gpt: '.claude-gpt',
 };
 
 /** A gh row for a PR on `head`, merged into `base` by `mergeOid`, whose head
@@ -8504,7 +8504,7 @@ name the registry's branch before we push it at all."
 
 **Context.** `git ls-files --others --ignored --exclude-standard` is **NOT**
 used: it enumerates per file — measured 210,070 entries / 24.6 MB in
-`custom-tools` against the agent's 8 MB `EXEC_MAX_BUFFER` — so a manifest
+`project-d` against the agent's 8 MB `EXEC_MAX_BUFFER` — so a manifest
 capped at "20 + a count" would show twenty `.remember/logs/**` lines and the
 one judgement this whole design depends on becomes structurally unavailable.
 `git status --porcelain --ignored=matching` collapses each ignored directory to
@@ -10017,7 +10017,7 @@ describe('the manifest', () => {
     expect(h.ghCalls().some((c) => /^timeout 60 git .* fetch --quiet origin$/.test(c)),
       `no bounded fetch in ${JSON.stringify(h.ghCalls())}`).toBe(true);
     // `_cfg_dir` maps the wrapper `_ws_least_loaded` picked to its config dir
-    // (claude -> ~/.claude, claude2 -> ~/.claude-personal, …), so the assertion
+    // (claude -> ~/.claude, claude9 -> ~/.claude-home, …), so the assertion
     // is derived, never hardcoded to `.claude`.
     expect(a.transcript).toContain(`${CFG_DIR[h.reg('demo-quiet-basin', 'wrapper')!]}/projects/`);
     expect(a.stashes).toBe(0);
@@ -10197,7 +10197,7 @@ _ws_sensitive_inside() {   # absdir relpath deadline -> 0 with hits in _WS_INSID
   # BOUNDED, and the bound is a DEADLINE for the whole workspace rather than a
   # per-entry timeout, so a workspace with 226 ignored entries cannot cost 226
   # timeouts. Measured on this box against the tree `--ignored=matching` was
-  # chosen for (custom-tools: 226 collapsed entries, 355,392 entries beneath
+  # chosen for (project-d: 226 collapsed entries, 355,392 entries beneath
   # them): 3.4 s with one `find` per entry, 1.2 s as a single walk. The
   # performance reason for `--ignored=matching` still holds for the DISPLAY —
   # nothing here is printed, counted or sized, only matched — and sensitivity
@@ -11145,7 +11145,7 @@ pushes people onto the unguarded door. The control case (squash plus one
 genuinely unmerged commit) fails all four rungs; that is the point.
 
 The manifest uses --ignored=matching, never ls-files --others --ignored:
-the latter measured 210,070 entries in custom-tools against an 8 MB
+the latter measured 210,070 entries in project-d against an 8 MB
 buffer, and a list truncated at 20 makes the one human judgement this
 design depends on structurally unavailable.
 
@@ -12770,7 +12770,7 @@ describe('the manifest', () => {
     expect(h.ghCalls().some((c) => /^timeout 60 git .* fetch --quiet origin$/.test(c)),
       `no bounded fetch in ${JSON.stringify(h.ghCalls())}`).toBe(true);
     // `_cfg_dir` maps the wrapper `_ws_least_loaded` picked to its config dir
-    // (claude -> ~/.claude, claude2 -> ~/.claude-personal, …), so the assertion
+    // (claude -> ~/.claude, claude9 -> ~/.claude-home, …), so the assertion
     // is derived, never hardcoded to `.claude`.
     expect(a.transcript).toContain(`${CFG_DIR[h.reg('demo-quiet-basin', 'wrapper')!]}/projects/`);
     expect(a.stashes).toBe(0);
@@ -14285,8 +14285,8 @@ it (`:117-129`) with:
   // remote nothing, and are never re-proved at the instant of deletion.
   // See whitelist-noghosts.test.ts for the full statement.
   it('allows ws-add and refuses ws-rm', () => {
-    expect(isExecAllowed('ccd', ['ws-add', 'OpenClawHetzner'])).toBe(true);
-    expect(isExecAllowed('ccd', ['ws-rm', 'OpenClawHetzner-quiet-mesa'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-add', 'project-c'])).toBe(true);
+    expect(isExecAllowed('ccd', ['ws-rm', 'project-c-quiet-mesa'])).toBe(false);
   });
 
   it('allows the PR and archive verbs at their pinned prefixes', () => {
@@ -14897,7 +14897,7 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, string[]> = {
   ensure: ['demo-quiet-basin'],
   stopId: ['demo-quiet-basin'],
   stopPair: ['claude', 'demo'],
-  swap: ['demo-quiet-basin', 'claude2'],
+  swap: ['demo-quiet-basin', 'claude9'],
   wsAdd: ['demo'],
   prStateSession: ['demo-quiet-basin'],
   prStateProject: ['demo'],
@@ -15262,7 +15262,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     ensure: ['ensure', 'demo-quiet-basin'],
     stopId: ['stop', 'demo-quiet-basin'],
     stopPair: ['stop', 'claude', 'demo'],
-    swap: ['swap', 'demo-quiet-basin', 'claude2'],
+    swap: ['swap', 'demo-quiet-basin', 'claude9'],
     wsAdd: ['ws-add', 'demo'],
     prStateSession: ['pr-state', '--session', 'demo-quiet-basin'],
     prStateProject: ['pr-state', '--project', 'demo'],
@@ -15504,7 +15504,7 @@ the call site goes away with it.
 The emitted argv for five of these six is already pinned token-for-token by
 existing tests — `test/lifecycle.test.ts:60` (`enable claude foo`), `:72`
 (`start claude foo /data/projects/foo`), `:81` (`ensure <id>`), `:89`/`:115`
-(`stop claude2 <project>`), `:141` (`stop rp-llm-quiet-mesa`), `:161`
+(`stop claude9 <project>`), `:141` (`stop project-j-quiet-mesa`), `:161`
 (`swap <id> claude`), and `test/workspaces-route.test.ts:26` (`ws-add demo`).
 **If any of those assertions moves, the conversion changed behaviour and is
 wrong** — fix the conversion, never the assertion. That existing coverage is
@@ -15758,7 +15758,7 @@ describe('checks', () => {
   });
 
   it('truncates an attacker-supplied check name and caps how many arrive', () => {
-    // Fork PRs are accepted continuously on public repos (MegaMek/megamek),
+    // Fork PRs are accepted continuously on public repos (example-org/example-repo),
     // and these names reach the UI. They are inert text there, but they are
     // still bytes crossing a wire and into a React tree.
     const many = Array.from({ length: 40 }, (_, i) => ({ name: 'x'.repeat(500) + i, conclusion: 'FAILURE' }));
@@ -18810,7 +18810,7 @@ applies to locals, not to a used setter, so read it in the JSX as
 attribute in Task 16. Say in your report that you did this.
 
 - [x] **Step 5: Add the token, the CSS and the contrast pair** — as shipped,
-after deviations 86 (`--pr-merged` aliased to `--acct-claude2`, closing a
+after deviations 86 (`--pr-merged` aliased to `--acct-claude9`, closing a
 real LIGHT-theme contrast-floor failure the brief's literal hex left open),
 87 (`--pr-dim` aliased to `--ink-tertiary`) and 88 (the three "nothing to
 say" rules wired to `--pr-dim`, not left pointed at `--ink-tertiary` beside
@@ -18819,7 +18819,7 @@ an unused token).
 In `infra/ccrc/pwa/src/styles/tokens.css`, beside the `--status-*` block:
 
 ```css
-  /* PR keycap (Task 15). --pr-merged ALIASES --acct-claude2 rather than
+  /* PR keycap (Task 15). --pr-merged ALIASES --acct-claude9 rather than
      repeating its hex: a literal single hex here (#C7A7F4, dark-only) reads
      8.06:1 on dark --bg-raised but only 1.75:1 on LIGHT's --bg-raised — well
      under the 3:1 non-text floor — because it never gets a light-theme
@@ -18829,7 +18829,7 @@ In `infra/ccrc/pwa/src/styles/tokens.css`, beside the `--status-*` block:
      "== --ink-tertiary", so a second hardcoded copy is exactly the kind of
      duplicate this file's own account-hue mechanism (--acct-active,
      below) exists to avoid. */
-  --pr-merged: var(--acct-claude2);   /* violet, filled — merged: DARK 8.06:1, LIGHT 5.93:1 vs --bg-raised */
+  --pr-merged: var(--acct-claude9);   /* violet, filled — merged: DARK 8.06:1, LIGHT 5.93:1 vs --bg-raised */
   --pr-dim:    var(--ink-tertiary);   /* the "nothing to say" dot */
 ```
 
@@ -18968,7 +18968,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 const view = (over: Partial<PrView> = {}): PrView => ({
   pr: pr(),
   draft: { title: 'the work', body: '## Commits\n\n- aaaaaaa the work\n' },
-  facts: { branch: 'ws/quiet-basin', baseShort: 'main', repo: 'example-org/custom-tools', commits: 3, dirty: 0 },
+  facts: { branch: 'ws/quiet-basin', baseShort: 'main', repo: 'example-org/project-d', commits: 3, dirty: 0 },
   ...over,
 });
 
@@ -19027,7 +19027,7 @@ describe('none — the composer', () => {
 
   it('shows the facts line', async () => {
     open();
-    expect(await screen.findByText(/ws\/quiet-basin → main · example-org\/custom-tools · 3 commits/)).toBeInTheDocument();
+    expect(await screen.findByText(/ws\/quiet-basin → main · example-org\/project-d · 3 commits/)).toBeInTheDocument();
   });
 
   it('warns about an uncommitted tree without blocking', async () => {
@@ -19572,8 +19572,8 @@ import { ToastHost } from '../src/components/Toast';
 import { ReapSheet } from '../src/session/ReapSheet';
 
 const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
-  id: 'demo-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/home/u/worktrees/custom-tools/quiet-basin',
-  project: 'custom-tools', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
+  id: 'demo-quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main', workdir: '/home/u/worktrees/project-d/quiet-basin',
+  project: 'project-d', repo: 'o/r', exists: true, headMatchesRegistry: true, reaping: null,
   dirty: [], ignored: [
     { path: 'node_modules/', bytes: 412_000_000, sensitive: false },
     { path: 'dist/', bytes: 8_000_000, sensitive: false },
@@ -19589,7 +19589,7 @@ const audit = (over: Partial<WsAudit> = {}): WsAudit => ({
 });
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'custom-tools',
+  id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'project-d',
   workdir: '/w', workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: null,
   limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: 'ws/quiet-basin', tasks: null, pr: null, archivedAt: 1, ...over,
@@ -19622,7 +19622,7 @@ describe('the manifest', () => {
     // title, the branch row and the button too, and a loose regex would match
     // four nodes and throw.
     open();
-    expect(await screen.findByText('/home/u/worktrees/custom-tools/quiet-basin')).toBeInTheDocument();
+    expect(await screen.findByText('/home/u/worktrees/project-d/quiet-basin')).toBeInTheDocument();
     expect(screen.getByText('1.2 GB')).toBeInTheDocument();
     expect(screen.getByText('uncommitted')).toBeInTheDocument();
     // Two rows legitimately read `none`: uncommitted and stashes.
@@ -20141,9 +20141,9 @@ describe('archived rows', () => {
   it('excludes archived rows from attention, busy and the pin', () => {
     // RE-SYNCED (deviation 105(a)): demo-a and busyArchived deliberately
     // disagree on home — shipped verbatim, both default/explicit to
-    // 'claude2' and the test could not distinguish correct exclusion from
+    // 'claude9' and the test could not distinguish correct exclusion from
     // the bug it exists to catch.
-    const busyArchived = { ...at('demo-b', 1785300000), status: 'busy' as const, dialogPending: true, home: 'claude2' };
+    const busyArchived = { ...at('demo-b', 1785300000), status: 'busy' as const, dialogPending: true, home: 'claude9' };
     const [g] = groupFleet([{ ...at('demo-a', null), home: 'claude' }, busyArchived]);
     expect(g!.busy).toBe(0);
     expect(g!.attention).toBe(false);
@@ -20154,8 +20154,8 @@ describe('archived rows', () => {
     // ADDED (deviation 107): the live.length > 0 ? live : members fallback's
     // own neighbour test never checked `pin`, so dropping it crashed instead
     // of merely failing.
-    const [g] = groupFleet([{ ...at('demo-b', 1785300000), home: 'claude-corp' }]);
-    expect(g!.pin).toBe('claude-corp');
+    const [g] = groupFleet([{ ...at('demo-b', 1785300000), home: 'claude-acme' }]);
+    expect(g!.pin).toBe('claude-acme');
   });
 
   it('excludes a NOT-waiting busy archived row from the busy count', () => {
@@ -20673,7 +20673,7 @@ describe('ArchiveScreen', () => {
   it('lists every archived workspace across projects, newest first', () => {
     render(<ArchiveScreen sessions={[
       s({ id: 'demo-quiet-basin', project: 'demo', archivedAt: 100 }),
-      s({ id: 'tools-still-cove', project: 'custom-tools', workspace: 'still-cove', archivedAt: 200 }),
+      s({ id: 'tools-still-cove', project: 'project-d', workspace: 'still-cove', archivedAt: 200 }),
     ]} onOpen={() => {}} />);
     const rows = screen.getAllByRole('button', { name: /workspace/i });
     expect(rows).toHaveLength(2);
@@ -20900,7 +20900,7 @@ consumer (`loadFleetSnapshot`), beside its existing `'revives absent
 pr/archivedAt/tasks as null, not undefined'` test:
 ```ts
 it('revives archivedBytes independently of archivedAt — no key-swap, no shared fallback', () => {
-  putRaw([{ ...v1Session('claude:OpenClawHetzner'), archivedAt: 100, archivedBytes: 5_000_000 }]);
+  putRaw([{ ...v1Session('claude:project-c'), archivedAt: 100, archivedBytes: 5_000_000 }]);
   const s = loadFleetSnapshot()?.sessions[0];
   expect(s?.archivedAt).toBe(100);
   expect(s?.archivedBytes).toBe(5_000_000);
@@ -21185,7 +21185,7 @@ mutant that survives.
 - [ ] **Verify nothing destructive ever ran against the real host.**
 ```bash
 ls ~/.cc-sessions/*.reaping ~/.cc-sessions/.reaped 2>/dev/null || echo "clean: no breadcrumbs or tombstones on this box"
-git -C /srv/projects/OpenClawHetzner for-each-ref refs/ccrc/attic | head
+git -C /srv/projects/project-c for-each-ref refs/ccrc/attic | head
 ```
 Expected: `clean`, and no attic refs. Every ccd behaviour in this plan runs
 under the isolated-HOME harness; a hit here means a test escaped it, which is

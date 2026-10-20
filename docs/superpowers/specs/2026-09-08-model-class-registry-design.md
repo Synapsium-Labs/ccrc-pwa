@@ -46,7 +46,7 @@ Decided in the brainstorm (each was a question with options):
   survives every launch.
 - **The gpt wrapper hardcodes three classes and no Fable** (`infra/handoff/ccgpt`
   126–138: `ANTHROPIC_DEFAULT_{HAIKU,SONNET,OPUS}_MODEL` = luna/terra/sol,
-  `CLAUDE_CODE_SUBAGENT_MODEL`=terra). `claude-glm` maps every alias to one
+  `CLAUDE_CODE_SUBAGENT_MODEL`=terra). `claude-alt1` maps every alias to one
   model (49–58). A `--model fable` on the gpt lane resolves to
   `claude-fable-5-1` and LiteLLM 404s.
 - **The Codex catalogue moved.** `GET chatgpt.com/backend-api/codex/models`
@@ -275,7 +275,7 @@ ANTHROPIC_DEFAULT_FABLE_MODEL  = classes.fable  ?? "ccrc-unavailable-fable"
 ANTHROPIC_MODEL                = classes.opus ?? classes.sonnet ?? classes.haiku   (the lane's default; refused if all null)
 ANTHROPIC_SMALL_FAST_MODEL     = classes.haiku ?? classes.sonnet
 CLAUDE_CODE_SUBAGENT_MODEL     = subagent                            (the class ALIAS, haiku|sonnet; opus and fable refused at write and at render, never at read; refused if that class's slot is null)
-CLAUDE_CODE_MAX_CONTEXT_TOKENS = min(catalogue.context, 200000) of ANTHROPIC_MODEL's model   (only when a non-stale catalogue names it; otherwise the key is left unset)
+CLAUDE_CODE_MAX_CONTEXT_TOKENS = min(catalogue.context, 200000) of ANTHROPIC_MODEL's model   (only when a non-stale catalogue names it; otherwise the key is left unset) (the default rule; see the amendment note below)
 ```
 
 **Amendment, 2026-09-09:** `CLAUDE_CODE_SUBAGENT_MODEL` is materialised as the
@@ -379,6 +379,14 @@ proactive compaction is the behaviour that keeps an unexpectedly large lane
 from hitting the provider's 400 ("input exceeds the context window"). (amended
 2026-09-08, fleet-host measurement; Task 16c)
 
+> **Amended by `2026-10-15-codex-bridge-design.md` §2.7 (2026-10-15).** The 196k premise above is withdrawn: it was
+> the maximum of one July sample from one home, and a whole-fleet scan found prompts of 548,799 and 584,415 tokens
+> accepted (that spec's §1.2). The "measured ceiling" this paragraph defers to now exists, as a sibling file of
+> per-model windows, `~/.ccrc/models/<id>.windows.json`, never a registry key (an older ccrc would refuse one after a
+> rollback). `ccrc models <id> set-window` and `clear-window` edit it. When every model the lane's classes name has a
+> window, the key is the smallest, rounded down to 1,000 and capped at 1,000,000; when any lacks one,
+> `min(catalogue.context, 200000)` above applies unchanged.
+
 A `null` slot is written as a **sentinel**, never left unset: unset, the alias
 falls through to Anthropic's own id and the proxied backend answers with an
 opaque 404 (today's Fable-on-gpt failure). The sentinel makes an in-session
@@ -407,7 +415,7 @@ per-account registry file, `~/.ccrc/models/<accountId>.classes.json`.
 
 ### 6.2 Wrapper migration
 
-`ccgpt` and `claude-glm` (monorepo `infra/handoff/`) drop their
+`ccgpt` and `claude-alt1` (monorepo `infra/handoff/`) drop their
 `ANTHROPIC_DEFAULT_*`, `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL` and
 `CLAUDE_CODE_SUBAGENT_MODEL` exports once the lane's settings carry the block
 (the block wins anyway, §1; the exports become dead code that misleads).
@@ -477,7 +485,7 @@ for that session from the next turn, and a session that never chose one runs
 at the lane default — today's `max` for Sol, `high` for Terra and Luna, which
 the seeded map preserves. `ultra` (Codex only, above `max`) is reachable as a
 lane default, not per session: the client's enum has no such level. The
-`claude-glm` lane gets the same treatment only if its backend accepts a
+`claude-alt1` lane gets the same treatment only if its backend accepts a
 reasoning field; otherwise the shim leaves the request alone (§15).
 
 ## 7. Class across swaps and restarts (ccd)
@@ -694,7 +702,7 @@ marker re-stamped after every `ccd/ccd` edit.
    unavailable" until then — doctor says so.
 2. First refresh writes the catalogue; the Accounts screen shows Astra and
    three others unclassified. The operator assigns Fable-class to Astra there.
-3. Materialise; `ccgpt` and `claude-glm` lose their exports in the same
+3. Materialise; `ccgpt` and `claude-alt1` lose their exports in the same
    change set as the block lands on the boxes (monorepo `infra/handoff` + the
    deployed copies), never earlier.
 4. `pwa/src/lib/models.ts`'s table is deleted, not kept as a fallback.
@@ -717,7 +725,7 @@ the account-pools coordinator is `ccrc-pwa-amber-summit`.
   ships with its single-writer pin.
 - **Plan 2 — class carried in ccd — starts after account-pools PR #62 is merged
   AND deployed** (satisfied 2026-09-08 17:18Z: merged as 4dc87366, both lanes
-  deployed, `ccd version` on openclaw carries it; the doctor check it carries
+  deployed, `ccd version` on the fleet box carries it; the doctor check it carries
   registers against the AVAILABILITY wording of `pools-orphan-pool` that #62's
   final review landed). Ruling 275: no per-session registry field and no edit to
   `_swap_target`, `cmd_swap`, `cmd_start`, `cmd_enable`, `cmd_prefer` or
@@ -749,7 +757,7 @@ the account-pools coordinator is `ccrc-pwa-amber-summit`.
 | # | Decision | Default |
 |---|---|---|
 | 1 | Effort on Codex | lane defaults fable/opus `max`, sonnet/haiku `high` (editable per lane); a session's own `/effort` overrides per request; `ultra` as a lane default only |
-| 1b | Effort on `claude-glm` | shim-mapped only if the backend accepts a reasoning field; else untouched |
+| 1b | Effort on `claude-alt1` | shim-mapped only if the backend accepts a reasoning field; else untouched |
 | 2 | Auto-swap for a session whose class is unavailable on a lane | skip the lane (never silently downgrade) |
 | 3 | Refresh cadence | 60 min timer + on-demand button |
 | 4 | Anthropic catalogue probe | none; no registry file; classes are client defaults |

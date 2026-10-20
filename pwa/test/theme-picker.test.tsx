@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { PHOSPHOR, SYSTEM, THEMES } from '@ccrc/ui';
 import { initTheme, rememberTheme, setTheme, storedTheme } from '../src/lib/theme';
-import { AppearanceSection } from '../src/screens/SettingsScreen';
+import { AppearanceSection } from '../src/screens/settings/AppearanceSection';
 import { baseCommands } from '../src/command/commands';
 import type { CommandContext, CommandPage } from '../src/command/registry';
 
