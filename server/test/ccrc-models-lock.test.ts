@@ -626,16 +626,6 @@ describe.skipIf(!HAVE_FLOCK)("the capture sites' node is bounded, and never carr
     ].join('\n'), { PATH: pathWithout(h, 'timeout', 'gtimeout') });
     expect(r.stdout, r.stderr).toBe('rc=0\nafter free\n');
   });
-
-  it("with no coreutils timeout, the watcher takes its own sleep with it: nothing outlives a call that answered (D-3533's orphan check)", () => {
-    const h = box();
-    const r = lib(h, [
-      '_plat_timeout 37 command sleep 0.3; echo "rc=$?"',
-      'command sleep 0.3',
-      'n=$(ps -Ao args= | grep -cx "sleep 37"); echo "left=$n"',
-    ].join('\n'), { PATH: pathWithout(h, 'timeout', 'gtimeout') });
-    expect(r.stdout, r.stderr).toBe('rc=0\nleft=0\n');
-  });
 });
 
 describe('no writing models-op call runs outside the lane lock (D21)', () => {

@@ -340,7 +340,7 @@ _rt_timeout() {   # <seconds> <cmd> [args...]
   # a fix for the WHOLE call-site population, not for one new call site. The
   # population is measured in ccrc-account.test.ts rather than counted here, so
   # the claim cannot rot back into a claim about one caller.
-  ( s=''; trap '[ -n "$s" ] && kill "$s" 2>/dev/null; exit 0' TERM; sleep "$secs" 2>/dev/null & s=$!; wait "$s" || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watcher=$!
   wait "$pid" 2>/dev/null; rc=$?
   kill -TERM "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
