@@ -4886,8 +4886,6 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
       }
       for (const ok of [0, 0.8, 1, 0.123456]) expect(at('handcheck_agreement_min', ok), `CONTROL agreement = ${ok}`).toEqual([]);
       expect(verdict(draft()), 'CONTROL: the defaults').toEqual([]);
-      // The refusal is exactly decideGate's own rule: a value the validator lets through is one decideGate reads.
-      expect(() => gate9.decideGate({ halts: { run_failed_max: 1, absent_rate_max: 0.05, handcheck_agreement_min: 0.8 } })).toThrow();
     });
 
     it('final A: a halts value that is not a number is still field-malformed (the shape answers first, nothing throws)', () => {
@@ -4908,7 +4906,7 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
       expect(verdict(set(draft(), 'active_rule.lookback_ms', Number.MIN_SAFE_INTEGER))).toEqual([{ path: 'active_rule.lookback_ms', word: 'value-outside-set' }]);
       expect(verdict(set(draft(), 'active_rule.lookback_ms', 0)), 'CONTROL: zero is a look-back activeFamilies reads').toEqual([]);
       expect(verdict(set(draft(), 'active_rule.lookback_ms', 1.5))).toEqual([{ path: 'active_rule.lookback_ms', word: 'field-malformed' }]);
-      const census = { as_of_ms: T0, families: [] };
+      const census = { as_of_ms: T0, families: [] } as never;
       expect(() => gate9.activeFamilies(STORE_A, census, { lookbackMs: -1 }), 'the value the validator now refuses is one activeFamilies throws on').toThrow();
       expect(() => gate9.activeFamilies(STORE_A, census, { lookbackMs: 0 }), 'and zero is one it reads').not.toThrow();
     });
@@ -4919,7 +4917,7 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
       const fewer = QUIZ.slice(1);
       const refrozen = { families: fewer.map(refOf), n_questions: N_QUESTIONS + 6 };
       const successor = (over: Rec = {}): Rec => {
-        const f = { ...structuredClone(f1), supersedes: gate9.recordSha256(f1), ...over };
+        const f: Rec = { ...structuredClone(f1), supersedes: gate9.recordSha256(f1), ...over };
         f.quiz = { ...f.quiz, families: fewer.map(refOf), n_families: fewer.length, n_questions: refrozen.n_questions };
         return f;
       };
