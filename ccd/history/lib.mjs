@@ -8213,25 +8213,29 @@ export function segmentOrdersAfter(a, b) {
   return pb === null ? true : segmentPartsOrder(pa, pb) > 0;
 }
 
-/** The writers of a replay's segments and where each one's seqs lie (D-5726 (history-export-replay-mark-one-writer), wave 5h-1).
- *  `listed` is the segment names the directory holds; `marked` is the distinct segment names the store's marks hold
- *  (blobs.exported_seg and entries.exported_seg), which may name a segment that is no longer listed (moved aside after a recovery).
- *  `ranges` maps a writer token to its lowest and highest seq over BOTH sets, so a fork hidden by a missing segment reads as a fork
- *  and not as succession; a name off the segment grammar is dropped. `listed` is the set of listed names (the grammar ones), so
- *  that decideReplayMark can ask whether a held mark names a segment that is there. A writer minted by a rebind (rebuild, restore,
+/** The writers of a replay's segments and where each one's seqs lie (D-5726 (history-export-replay-mark-one-writer), wave 5h-1;
+ *  D-5727 (history-export-replay-layout-once) says where the layout comes from). `listed` is the segment names the directory
+ *  holds; `marked` is the distinct segment names the store's marks hold (blobs.exported_seg and entries.exported_seg), which may
+ *  name a segment that is no longer listed (moved aside after a recovery); `stored` is the ranges a replay already measured (the
+ *  kept layout, parseReplayLayout's `ranges`), or null for none.
+ *  `ranges` maps a writer token to its lowest and highest seq over ALL THREE, so a fork hidden by a missing segment reads as a fork
+ *  and not as succession, and a range a replay has kept never narrows; a name off the segment grammar is dropped. `listed` is the
+ *  set of listed names (the grammar ones), so that decideReplayMark can ask whether a held mark names a segment that is there, and
+ *  every listed name's writer is ranged, whatever `stored` holds. `widened` is whether the listed and marked names widened `stored`
+ *  (a writer it lacked, a lower lo or a higher hi); false when none was given. A writer minted by a rebind (rebuild, restore,
  *  adopt) is a SUCCESSOR of the earlier ones: nextSegmentSeq starts it one past the highest seq on disk or recorded, so every seq of
  *  it lies above every seq of theirs, and its store held everything their segments carried. Writer W2 succeeds W1 when W2's lowest
  *  seq is above W1's highest. Two writers neither of which succeeds the other are a FORK: their ranges interleave or touch (an equal
  *  seq included), which only two writers running at once produce. `forked` is whether any pair of the directory's writers is a
  *  fork. */
-export function replayWriterLayout(listed, marked = []) {
-  const ranges = new Map();
+export function replayWriterLayout(listed, marked = [], stored = null) {
   const names = new Set();
+  const fresh = new Map();
   const range = (n) => {
     const p = parseSegmentName(n);
     if (p === null) return null;
-    const r = ranges.get(p.writer);
-    if (r === undefined) ranges.set(p.writer, { lo: p.seq, hi: p.seq });
+    const r = fresh.get(p.writer);
+    if (r === undefined) fresh.set(p.writer, { lo: p.seq, hi: p.seq });
     else {
       if (p.seq < r.lo) r.lo = p.seq;
       if (p.seq > r.hi) r.hi = p.seq;
@@ -8240,6 +8244,7 @@ export function replayWriterLayout(listed, marked = []) {
   };
   for (const n of listed) if (range(n) !== null) names.add(n);
   for (const n of marked) range(n);
+  const { ranges, widened } = widenReplayRanges(stored ?? new Map(), fresh);
   const all = [...ranges.values()];
   let forked = false;
   for (let i = 0; i < all.length && !forked; i += 1) {
@@ -8247,7 +8252,82 @@ export function replayWriterLayout(listed, marked = []) {
       if (!(all[i].lo > all[j].hi || all[j].lo > all[i].hi)) { forked = true; break; }
     }
   }
-  return { ranges, forked, listed: names };
+  return { ranges, forked, listed: names, widened: stored === null ? false : widened };
+}
+
+/** `base` widened by `add` (D-5727): each writer of either, over the lowest lo and the highest hi of the two. Never narrows, and
+ *  touches neither argument. `widened` is whether the answer differs from `base` (a writer it lacked, a lower lo, a higher hi). */
+export function widenReplayRanges(base, add) {
+  const ranges = new Map();
+  for (const [w, r] of base) ranges.set(w, { lo: r.lo, hi: r.hi });
+  let widened = false;
+  for (const [w, r] of add) {
+    const have = ranges.get(w);
+    if (have === undefined) { ranges.set(w, { lo: r.lo, hi: r.hi }); widened = true; continue; }
+    if (r.lo < have.lo) { have.lo = r.lo; widened = true; }
+    if (r.hi > have.hi) { have.hi = r.hi; widened = true; }
+  }
+  return { ranges, widened };
+}
+
+/** Every writer the segment names give, over the whole seq line (D-5727): the layout a replay takes when it cannot know what it
+ *  measured, which ranges every pair of writers as a fork. Names off the segment grammar are dropped. */
+export function widestReplayRanges(names) {
+  const ranges = new Map();
+  for (const n of names) {
+    const p = parseSegmentName(n);
+    if (p !== null) ranges.set(p.writer, { lo: 0, hi: Number.MAX_SAFE_INTEGER });
+  }
+  return ranges;
+}
+
+/** The replay layout's meta value (D-5727): the recover row's version (its bind ms) and each writer's `[lo, hi]`, writers in code-unit
+ *  order, as JSON. `ranges` is a Map of writer token to { lo, hi }. */
+export function formatReplayLayout({ version, ranges }) {
+  const w = {};
+  for (const k of [...ranges.keys()].sort()) w[k] = [ranges.get(k).lo, ranges.get(k).hi];
+  return JSON.stringify({ version, ranges: w });
+}
+
+/** A replay layout's meta value back to `{ version, ranges }` (ranges a Map of writer token to { lo, hi }), or null for anything
+ *  malformed (D-5727): not text, not JSON, not exactly the two keys, a version that is not a safe integer of at least 1, a writer
+ *  token off WRITER_RE's grammar, or a range that is not two safe integers 0 <= lo <= hi. The sweep treats null as a layout it
+ *  cannot trust (planReplayLayout), never as a throw. */
+export function parseReplayLayout(text) {
+  if (typeof text !== 'string') return null;
+  let j;
+  try { j = JSON.parse(text); } catch { return null; }
+  if (j === null || typeof j !== 'object' || Array.isArray(j)) return null;
+  const keys = Object.keys(j);
+  if (keys.length !== 2 || !keys.includes('version') || !keys.includes('ranges')) return null;
+  if (!Number.isSafeInteger(j.version) || j.version < 1) return null;
+  const r = j.ranges;
+  if (r === null || typeof r !== 'object' || Array.isArray(r)) return null;
+  const ranges = new Map();
+  for (const [w, v] of Object.entries(r)) {
+    if (!WRITER_RE.test(w) || !Array.isArray(v) || v.length !== 2) return null;
+    const [lo, hi] = v;
+    if (!Number.isSafeInteger(lo) || !Number.isSafeInteger(hi) || lo < 0 || lo > hi) return null;
+    ranges.set(w, { lo, hi });
+  }
+  return { version: j.version, ranges };
+}
+
+/** What a replay does about its writer layout at one export chunk (D-5727 (history-export-replay-layout-once)). `measuring` is the
+ *  replay's first export-blobs chunk, the one measuring point; `text` is the kept layout's meta value or null; `version` is this
+ *  replay's (the recover row's).
+ *  - `measure`: at the measuring point the layout is measured from the listing and the store's marks, and kept whatever the key held;
+ *  - `widen`: past it, a key that parses and carries this replay's version is the layout so far (`ranges`), and the chunk's listing
+ *    widens it;
+ *  - `widest`: past it, a key that is missing, malformed or of another version means this replay passed its measuring point under a
+ *    build that kept none (a rollout or rollback across an open recovery), and the marks that witnessed a fork may be gone. The
+ *    layout is the widest, never a fresh measure, which would be narrower than the truth. Widening a range can only turn a 'mark'
+ *    into a 'keep' or a 'take-off', or a 'keep' into a 'take-off' (decideReplayMark), so a layout too wide costs re-exports only. */
+export function planReplayLayout({ text, version, measuring }) {
+  if (measuring) return { word: 'measure' };
+  const kept = parseReplayLayout(text);
+  if (kept !== null && kept.version === version) return { word: 'widen', ranges: kept.ranges };
+  return { word: 'widest' };
 }
 
 /** What replay does with an export mark when the segment `seg` carries the row (D-5726 (history-export-replay-mark-one-writer),
@@ -8276,8 +8356,9 @@ export function replayWriterLayout(listed, marked = []) {
  *  From the unlisted-held rule on, `held` is listed, so its writer is ranged (replayWriterLayout ranges the listed names), as is
  *  `seg`'s: a writer the layout does not range there is a caller's bug and throws, as an off-grammar `seg` does. `held` is the
  *  row's mark as the store holds it; a name off the segment grammar names no carrier and counts as null. `layout` is
- *  replayWriterLayout's answer for the segments listed for this replay and the names the store's marks hold. `seg` is a listed
- *  name: off the grammar it is a caller's bug and throws, as segmentOrdersAfter does. */
+ *  replayWriterLayout's answer: the replay's KEPT layout (D-5727, planReplayLayout: measured once from the listing and the store's
+ *  marked names, then only widened) merged with the segments listed now. 'held is not listed' reads the current listing, never the
+ *  kept ranges. `seg` is a listed name: off the grammar it is a caller's bug and throws, as segmentOrdersAfter does. */
 export function decideReplayMark({ seg, held, fresh, layout }) {
   const ps = parseSegmentName(seg);
   if (ps === null) throw new TypeError(`decideReplayMark: not a segment name: ${JSON.stringify(seg)}`);

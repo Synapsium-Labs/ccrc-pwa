@@ -8104,6 +8104,101 @@ describe('W1-B4: segment names, their order and the next number (spec 9.15 "Writ
     expect(() => libSeg.decideReplayMark({ seg: '01.0000000b.db', held: null, fresh: true, layout: chain })).toThrow(TypeError);
     expect(() => libSeg.decideReplayMark({ seg: 'notes.db', held: null, fresh: false, layout: chain })).toThrow(TypeError);
   });
+  // ── FR1 part b: D-5727 (history-export-replay-layout-once): the replay's writer layout, kept in one meta key, only ever widened ──
+  describe('D-5727: the replay layout\'s meta value (history-export-replay-layout-once)', () => {
+    type R = Map<string, { lo: number; hi: number }>;
+    const rs = (o: Record<string, [number, number]>): R => new Map(Object.entries(o).map(([w, [lo, hi]]) => [w, { lo, hi }]));
+    const plain = (m: ReadonlyMap<string, { lo: number; hi: number }>): Record<string, [number, number]> =>
+      Object.fromEntries([...m.entries()].map(([w, r]) => [w, [r.lo, r.hi] as [number, number]]));
+    it('formatReplayLayout and parseReplayLayout round-trip a version and each writer\'s [lo, hi], writers in code-unit order', () => {
+      const text = libSeg.formatReplayLayout({ version: 1_760_000_000_123, ranges: rs({ '0000000b': [3, 9], '0000000a': [1, 4] }) });
+      expect(text, 'writers sorted, so the same layout is the same text').toBe('{"version":1760000000123,"ranges":{"0000000a":[1,4],"0000000b":[3,9]}}');
+      const back = libSeg.parseReplayLayout(text);
+      expect(back?.version).toBe(1_760_000_000_123);
+      expect(plain(back!.ranges)).toEqual({ '0000000a': [1, 4], '0000000b': [3, 9] });
+      expect(libSeg.formatReplayLayout(back!), 'and back again').toBe(text);
+      const empty = libSeg.formatReplayLayout({ version: 5, ranges: new Map() });
+      expect(libSeg.parseReplayLayout(empty), 'a replay of no segment keeps an empty layout').toEqual({ version: 5, ranges: new Map() });
+      const widest = libSeg.formatReplayLayout({ version: 5, ranges: libSeg.widestReplayRanges(['1.0000000a.db']) });
+      expect(plain(libSeg.parseReplayLayout(widest)!.ranges), 'the widest layout survives the round trip, safe integers included').toEqual({ '0000000a': [0, Number.MAX_SAFE_INTEGER] });
+    });
+    it('parseReplayLayout answers null to anything malformed, never a throw', () => {
+      const bad: unknown[] = [
+        null, undefined, 5, '', 'torn{', 'null', '[]', '"x"', '{}', '{"version":5}', '{"ranges":{}}',
+        '{"version":5,"ranges":{},"x":1}', '{"version":0,"ranges":{}}', '{"version":-3,"ranges":{}}', '{"version":1.5,"ranges":{}}',
+        '{"version":"5","ranges":{}}', '{"version":9007199254740993,"ranges":{}}', '{"version":5,"ranges":[]}', '{"version":5,"ranges":null}',
+        '{"version":5,"ranges":{"0000000a":[1]}}', '{"version":5,"ranges":{"0000000a":[1,2,3]}}', '{"version":5,"ranges":{"0000000a":"1,2"}}',
+        '{"version":5,"ranges":{"0000000a":[4,1]}}', '{"version":5,"ranges":{"0000000a":[-1,2]}}', '{"version":5,"ranges":{"0000000a":[1.5,2]}}',
+        '{"version":5,"ranges":{"0000000a":[1,9007199254740993]}}', '{"version":5,"ranges":{"0000000a":["1","2"]}}',
+        '{"version":5,"ranges":{"0000000A":[1,2]}}', '{"version":5,"ranges":{"a":[1,2]}}', '{"version":5,"ranges":{"__proto__":[1,2]}}',
+        '{"version":5,"ranges":{"0000000a":[1,2]}} trailing',
+      ];
+      for (const t of bad) expect(libSeg.parseReplayLayout(t as string | null), String(t)).toBeNull();
+    });
+    it('widenReplayRanges: adds a writer, lowers a lo, raises a hi, and never narrows; it touches neither argument and says whether it widened', () => {
+      const base = rs({ '0000000a': [3, 6] });
+      const keep = plain(base);
+      const same = libSeg.widenReplayRanges(base, rs({ '0000000a': [4, 5] }));
+      expect(plain(same.ranges), 'a narrower range changes nothing').toEqual({ '0000000a': [3, 6] });
+      expect(same.widened).toBe(false);
+      expect(libSeg.widenReplayRanges(base, new Map()).widened, 'nothing to add').toBe(false);
+      const both = libSeg.widenReplayRanges(base, rs({ '0000000a': [1, 9], '0000000b': [2, 2] }));
+      expect(plain(both.ranges)).toEqual({ '0000000a': [1, 9], '0000000b': [2, 2] });
+      expect(both.widened).toBe(true);
+      expect(libSeg.widenReplayRanges(base, rs({ '0000000a': [3, 7] })).widened, 'a higher hi alone').toBe(true);
+      expect(libSeg.widenReplayRanges(base, rs({ '0000000a': [2, 6] })).widened, 'a lower lo alone').toBe(true);
+      expect(libSeg.widenReplayRanges(new Map(), rs({ '0000000c': [1, 1] })).widened, 'a new writer alone').toBe(true);
+      expect(plain(base), 'the base is untouched').toEqual(keep);
+      // widening is monotone: whatever order the additions come in, no writer's range ever shrinks
+      let acc: R = new Map();
+      for (const add of [rs({ '0000000a': [5, 6] }), rs({ '0000000a': [2, 3] }), rs({ '0000000a': [4, 4] }), rs({ '0000000b': [1, 1] })]) {
+        const next = libSeg.widenReplayRanges(acc, add).ranges;
+        for (const [w, r] of acc) {
+          expect(next.get(w)!.lo, `${w} lo`).toBeLessThanOrEqual(r.lo);
+          expect(next.get(w)!.hi, `${w} hi`).toBeGreaterThanOrEqual(r.hi);
+        }
+        acc = next;
+      }
+      expect(plain(acc)).toEqual({ '0000000a': [2, 6], '0000000b': [1, 1] });
+    });
+    it('replayWriterLayout over a kept layout: the union of the kept ranges, the listed names and the marked names, so a fork the kept ranges witness stays; every listed writer is ranged, which keeps decideReplayMark\'s TypeError arm unreachable', () => {
+      const listed = ['3.0000000b.db', '5.0000000a.db'];
+      expect(libSeg.replayWriterLayout(listed).forked, 'by the listing alone, a [5] and b [3] succeed one another').toBe(false);
+      const kept = libSeg.replayWriterLayout(listed, [], rs({ '0000000a': [2, 5], '0000000b': [3, 3] }));
+      expect(kept.forked, 'the kept a [2, 5] witnesses the fork with b [3]').toBe(true);
+      expect(kept.widened, 'and the listing widens nothing it held').toBe(false);
+      expect(libSeg.replayWriterLayout(listed, [], rs({ '0000000a': [2, 5] })).widened, 'a listed writer the kept ranges lack does widen them').toBe(true);
+      expect(plain(kept.ranges)).toEqual({ '0000000a': [2, 5], '0000000b': [3, 3] });
+      expect(kept.listed.size, 'the listed set is the listed names, whatever was kept').toBe(2);
+      const grown = libSeg.replayWriterLayout([...listed, '9.0000000c.db'], [], rs({ '0000000a': [2, 5] }));
+      expect(grown.widened, 'a listed writer the kept layout lacks widens it').toBe(true);
+      expect(grown.ranges.get('0000000c'), 'and is ranged').toEqual({ lo: 9, hi: 9 });
+      expect(libSeg.replayWriterLayout(['1.0000000a.db'], [], rs({ '0000000a': [4, 8] })).ranges.get('0000000a'), 'a lower listed seq lowers the lo, the hi stays').toEqual({ lo: 1, hi: 8 });
+      expect(libSeg.replayWriterLayout(listed).widened, 'with no kept layout there is nothing it widened').toBe(false);
+      // every name the layout is asked about is ranged: decideReplayMark's TypeError arm (a writer not in the layout) cannot be reached by a listed seg
+      const stale = libSeg.replayWriterLayout(['7.0000000e.db', '3.0000000a.db'], [], rs({ '0000000a': [1, 3] }));
+      expect(libSeg.decideReplayMark({ seg: '7.0000000e.db', held: '3.0000000a.db', fresh: false, layout: stale }), 'e is listed, so it is ranged, whatever the kept layout lacked').toBe('mark');
+      expect(libSeg.decideReplayMark({ seg: '3.0000000a.db', held: '7.0000000e.db', fresh: false, layout: stale }), 'and as the held writer').toBe('keep');
+    });
+    it('widestReplayRanges: every writer the names give, over the whole seq line, so every pair reads as a fork; names off the grammar are dropped', () => {
+      const w = libSeg.widestReplayRanges(['3.0000000a.db', '4.0000000b.db', 'notes.db', '9.0000000a.db']);
+      expect(plain(w)).toEqual({ '0000000a': [0, Number.MAX_SAFE_INTEGER], '0000000b': [0, Number.MAX_SAFE_INTEGER] });
+      expect(libSeg.replayWriterLayout(['3.0000000a.db', '4.0000000b.db'], [], w).forked).toBe(true);
+      expect(libSeg.replayWriterLayout(['3.0000000a.db', '4.0000000a.db'], [], libSeg.widestReplayRanges(['3.0000000a.db', '4.0000000a.db'])).forked, 'one writer alone is no fork').toBe(false);
+      expect(libSeg.widestReplayRanges([]).size).toBe(0);
+    });
+    it('planReplayLayout: the first export-blobs chunk measures; a later chunk widens a key of its own version; a key that is missing, malformed or of another version takes the widest', () => {
+      const kept = libSeg.formatReplayLayout({ version: 42, ranges: rs({ '0000000a': [2, 5] }) });
+      expect(libSeg.planReplayLayout({ text: kept, version: 42, measuring: true }), 'at the measuring point the key is overwritten, whatever it holds').toEqual({ word: 'measure' });
+      expect(libSeg.planReplayLayout({ text: null, version: 42, measuring: true })).toEqual({ word: 'measure' });
+      const widen = libSeg.planReplayLayout({ text: kept, version: 42, measuring: false });
+      expect(widen.word).toBe('widen');
+      expect(widen.word === 'widen' ? plain(widen.ranges) : null).toEqual({ '0000000a': [2, 5] });
+      for (const [what, text] of [['missing', null], ['another version', libSeg.formatReplayLayout({ version: 41, ranges: rs({ '0000000a': [2, 5] }) })], ['torn', 'torn{'], ['not a layout', '{"version":42}']] as const) {
+        expect(libSeg.planReplayLayout({ text, version: 42, measuring: false }), what).toEqual({ word: 'widest' });
+      }
+    });
+  });
   it('O39: nextSegmentSeq is one past every seq on disk, of any writer, and past meta\'s; a counter behind the directory moves past it', () => {
     expect(libSeg.nextSegmentSeq({ onDisk: [], recorded: null })).toBe(1);
     expect(libSeg.nextSegmentSeq({ onDisk: [3, 9, 4], recorded: 5 })).toBe(10);
@@ -8223,7 +8318,7 @@ describe('W1-B4: the hourly cadence, the room verdict and the dead-file key (spe
     expect(libSeg.HEALTH_META.exportPaused).toBe('export_paused');
     const values = Object.values(libSeg.HEALTH_META);
     expect(new Set(values).size).toBe(values.length);
-    for (const taken of ['export_due', 'export_overdue', 'export_census_ms', 'oldest_row_ms', 'first_due_ms', 'first_deletion_ms', 'export_seq']) {
+    for (const taken of ['export_due', 'export_overdue', 'export_census_ms', 'oldest_row_ms', 'first_due_ms', 'first_deletion_ms', 'export_seq', 'export_replay_layout']) {
       expect(values, taken).not.toContain(taken);
     }
   });
@@ -8269,6 +8364,11 @@ describe('W1-B4: the mark-failure backoff and the check after a bind, decided in
       expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: rec }).check, rec).toBe(true);
     }
     expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: '[5, "bound:5"]' }).check, 'a string entry still covers').toBe(false);
+  });
+  it('decideMarkCheck: the replay layout key (D-5727) is not a bind fact, so a store that holds one is owed no check and records nothing of it', () => {
+    expect(libSeg.decideMarkCheck({ metaKeys: ['export_replay_layout', 'export_seq', 'export_marks_counted'], checkedRecord: null }))
+      .toEqual({ check: false, facts: [], record: '[]' });
+    expect(libSeg.decideMarkCheck({ metaKeys: ['export_replay_layout', 'bound:5'], checkedRecord: '["bound:5"]' }).check, 'beside a covered bind fact').toBe(false);
   });
   it('missingSegmentNames: the names the marks give that this box does not hold, once each, sorted', () => {
     expect(libSeg.missingSegmentNames({ named: new Set([`3.${W}.db`, `1.${W}.db`, `2.${W}.db`]), present: [`1.${W}.db`] })).toEqual([`2.${W}.db`, `3.${W}.db`]);

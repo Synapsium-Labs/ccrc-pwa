@@ -5446,6 +5446,300 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
       closeWriter(db);
     }
   });
+
+  // ── FR1 part b: D-5727 (history-export-replay-layout-once): the writer layout is measured once per replay, kept in one meta key, and only widened ──
+  // D-5726's first form measured the layout from the listing and the store's marks on EVERY recovery call, and a replay that spans calls
+  // (the budget ends a call after a chunk) consumed the very marks that witnessed a fork: probe M. The cases below run the replay one
+  // chunk per call (the smallest budget), so the layout the next call reads is whatever the previous calls left. Intermediate states are
+  // `expect.soft`, and the last assertion of each is the loss they guard: E0's two variants after the rebuild from export.
+  const LAYOUT_KEY = 'export_replay_layout';
+  const W0 = '00000001';
+  const rangesOf = (db: DatabaseSync): Record<string, [number, number]> | null => {
+    const kept = recExport.parseReplayLayout(getMeta(db, LAYOUT_KEY));
+    return kept === null ? null : Object.fromEntries([...kept.ranges.entries()].map(([w, r]) => [w, [r.lo, r.hi] as [number, number]]));
+  };
+  const rearm = (db: DatabaseSync): void => {
+    db.prepare("UPDATE derivation_state SET cursor = NULL, completed_ms = NULL, version = ? WHERE step = 'recover'").run(Date.now() + 7);
+  };
+  /** The recovery step called one chunk at a time (the smallest budget) until it is done or `until` answers true after a call; `each` sees every call. */
+  const drive = async (box: HistoryBox, ids: { storeId: string; writer: string }, db: DatabaseSync,
+    o: { until?: (c: { calls: number; seen: string[] }) => boolean; each?: (c: { calls: number; seen: string[] }) => void } = {}): Promise<{ calls: number; done: boolean }> => {
+    let calls = 0;
+    let done = false;
+    while (!done && calls < 150) {
+      const seen: string[] = [];
+      const r = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 1, chunkBytes: 1 }), x10Recording(seen)) as { done: boolean };
+      calls += 1;
+      done = r.done;
+      o.each?.({ calls, seen });
+      if (!done && o.until?.({ calls, seen }) === true) break;
+    }
+    return { calls, done };
+  };
+  const insideRowsOf = (db: DatabaseSync, name: string): boolean => (cursorOn(db) ?? '').startsWith(`export-rows:${name}:`);
+  /** After the replay: the check, a pass, the writer-2 segment lost, the check, and the rebuild from what export/ holds. Answers E0's variant rows there. */
+  const variantsAfterLoss = async (box: HistoryBox, ids: { storeId: string; writer: string }, db: DatabaseSync, lost: string): Promise<number> => {
+    expect.soft(checkAfterLoss(box, ids, db).segments, 'no mark names a missing segment once the replay is done').toEqual([]);
+    await passAfterRebuild(box, ids, db);
+    expect.soft(unmarkedOn(db), 'and nothing is left due after the pass').toEqual({ entries: 0, blobs: 0 });
+    moveAside(box, lost);
+    checkAfterLoss(box, ids, db);
+    const again = await rebuildAgain(box, ids);
+    try {
+      return x10Count(again.db, 'entry_variants');
+    } finally {
+      closeWriter(again.db);
+    }
+  };
+  /** L's shape (writer 0 carries the bodies and E1, a backup marks E0 by writer 1's seq 2, which is moved aside; writer 2's seq 3 carries E0 and its two
+   *  variants, writer 1's seq 5 carries E0 without them), recovered once, and the step re-armed for the replay. */
+  const plantL = async (prefix: string, base: number, word: string): Promise<{ box: HistoryBox; ids: { storeId: string; writer: string }; db: DatabaseSync }> => {
+    const { box, ids, db } = x10Store(prefix);
+    const t0 = Date.now() - 400 * X10_DAY;
+    const texts = x10Texts(base, 2, word, t0);
+    const fam: X10Family = { uuid: x10U(base >> 8), path: `/home/u/gone/${word}.jsonl`, ino: 9000 + (base >> 8), texts };
+    const e0 = { ...fam, texts: [texts[0]!] };
+    plantSegment(box, ids.storeId, { seq: 1, writer: W0, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+    plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+    expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+    expect(marksOf(db), 'the backup state: E0 marked by writer 1 seq 2').toEqual([seg(2), seg(1, W0)]);
+    expect(x10Count(db, 'entry_variants'), 'the backup holds E0\'s two variants').toBe(2);
+    moveAside(box, seg(2));
+    plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+    plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [], rows: x10Rows(e0) });
+    rearm(db);
+    return { box, ids, db };
+  };
+
+  it('D-5727 M (probe M, committed) L\'s shape run one chunk per call: the take-off at writer 0\'s rows must survive to the end, so writer 1\'s seq 5, which lacks the variants, never re-marks E0, and with writer 2\'s segment lost the rebuild from export holds E0\'s two variants', async () => {
+    const { box, ids, db } = await plantL('ccrc-history-d5727-m-', 0x2c00, 'zqd5727m');
+    try {
+      let takenOffAt = -1;
+      const run = await drive(box, ids, db, {
+        each: ({ calls }) => {
+          const m = marksOf(db)[0];
+          if (takenOffAt === -1) { if (m === null) takenOffAt = calls; }
+          else expect.soft(m, `call ${calls}: E0 stays unmarked from its take-off to done`).toBeNull();
+        },
+      });
+      expect(run.done, 'the replay completed').toBe(true);
+      expect(takenOffAt, 'E0\'s mark came off').toBeGreaterThan(0);
+      expect.soft(marksOf(db), 'E0 is unmarked, owed to the pass').toEqual([null, seg(1, W0)]);
+      expect(await variantsAfterLoss(box, ids, db, seg(3, W2)), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 M-K (control, K\'s shape one chunk per call) the fork shows in the listing alone, so it survives the take-off at either form: green before and after D-5727', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5727-mk-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x2b80, 2, 'zqd5727mk', t0);
+      const fam: X10Family = { uuid: x10U(0x2b), path: '/home/u/gone/d5727mk.jsonl', ino: 9981, texts };
+      const e0 = { ...fam, texts: [texts[0]!] };
+      plantSegment(box, ids.storeId, { seq: 3, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 4, writer: W1, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'the backup state: E0 marked by writer 1 seq 4').toEqual([seg(4), seg(3)]);
+      moveAside(box, seg(4));
+      plantSegment(box, ids.storeId, { seq: 5, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      plantSegment(box, ids.storeId, { seq: 7, writer: W1, blobs: [], rows: x10Rows(e0) });
+      rearm(db);
+      let takenOffAt = -1;
+      const run = await drive(box, ids, db, {
+        each: ({ calls }) => {
+          const m = marksOf(db)[0];
+          if (takenOffAt === -1) { if (m === null) takenOffAt = calls; }
+          else expect.soft(m, `call ${calls}: E0 stays unmarked from its take-off to done`).toBeNull();
+        },
+      });
+      expect(run.done).toBe(true);
+      expect(takenOffAt, 'E0\'s mark came off').toBeGreaterThan(0);
+      expect.soft(marksOf(db)).toEqual([null, seg(3)]);
+      expect(await variantsAfterLoss(box, ids, db, seg(5, W2)), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  /** S and U: writer 0 carries the bodies and E0 (recovered once, so the store marks E0 by it); then writer 1's seq 2 (E0), writer 2's seq 3 (E0 and
+   *  two variants) and writer 1's seq 5 (E0, no variants). Writer 1's seq 2 is the only segment that shows writer 1 starting below writer 2's seq 3,
+   *  and no mark names it. The replay marks E0 by it, writer 2's seq 3 takes the mark off (a fork), and `2.W1` is moved aside from inside writer 2's
+   *  rows, before writer 1's seq 5 is replayed. `late`: seq 2 is planted AFTER the call that measured the layout (U), not before it (S). */
+  const witnessCase = async (prefix: string, base: number, word: string, late: boolean): Promise<{ variants: number; stored: Record<string, [number, number]> | null; seen: Array<Record<string, [number, number]> | null> }> => {
+    const { box, ids, db } = x10Store(prefix);
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(base, 2, word, t0);
+      const fam: X10Family = { uuid: x10U(base >> 8), path: `/home/u/gone/${word}.jsonl`, ino: 9100 + (base >> 8), texts };
+      const e0 = { ...fam, texts: [texts[0]!] };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W0, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(e0) });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'the backup state: E0 marked by writer 0').toEqual([seg(1, W0)]);
+      const plantTwo = (): void => { plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [], rows: x10Rows(e0) }); };
+      if (!late) plantTwo();
+      plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [], rows: x10Rows(e0) });
+      rearm(db);
+      const seen: Array<Record<string, [number, number]> | null> = [];
+      if (late) {
+        await drive(box, ids, db, { until: () => true });   // the call that measures the layout
+        seen.push(rangesOf(db));
+        plantTwo();
+        await drive(box, ids, db, { until: () => true });   // the first chunk to list seq 2
+        seen.push(rangesOf(db));
+      }
+      // a stop INSIDE writer 2's seq 3 rows, past E0's take-off: the zero-byte chunk that finishes a segment rides the next segment's first row
+      const stop = await drive(box, ids, db, { until: () => marksOf(db)[0] === null && insideRowsOf(db, seg(3, W2)) });
+      expect(stop.done, 'the replay is still open inside writer 2\'s rows').toBe(false);
+      expect.soft(marksOf(db), 'E0\'s mark came off at writer 2\'s seq 3 (a fork with writer 1\'s seq 2 to 5)').toEqual([null]);
+      moveAside(box, seg(2));
+      const rest = await drive(box, ids, db, { each: () => { expect.soft(marksOf(db)[0], 'E0 stays unmarked until done').toBeNull(); } });
+      expect(rest.done, 'the replay completed').toBe(true);
+      return { variants: await variantsAfterLoss(box, ids, db, seg(3, W2)), stored: rangesOf(db), seen };
+    } finally {
+      closeWriter(db);
+    }
+  };
+
+  it('D-5727 S (the witness is listed at the measuring point and named by no mark) writer 1\'s seq 2 is moved aside after writer 2\'s take-off and before writer 1\'s seq 5: the kept layout still reads a fork, so seq 5 never re-marks E0 and the rebuild holds E0\'s two variants', async () => {
+    const out = await witnessCase('ccrc-history-d5727-s-', 0x2e00, 'zqd5727s', false);
+    expect(out.variants, 'E0\'s variant rows survive in the export').toBe(2);
+  }, 2 * HEAVY);
+
+  it('D-5727 U (the witness arrives after the measuring point) writer 1\'s seq 2 is planted after the call that measured the layout: the first chunk to list it widens the kept layout (writer 1 to [2, 5]), writer 2\'s seq 3 takes E0\'s mark off, and once seq 2 is moved aside seq 5 still never re-marks it', async () => {
+    const out = await witnessCase('ccrc-history-d5727-u-', 0x2f00, 'zqd5727u', true);
+    expect.soft(out.seen[0], 'the measuring point ranged the listing: writer 0 at 1, writer 2 at 3 and writer 1 at 5 alone').toEqual({ [W0]: [1, 1], [W2]: [3, 3], [W1]: [5, 5] });
+    expect.soft(out.seen[1], 'the next chunk listed seq 2 and the kept layout widened to it').toEqual({ [W0]: [1, 1], [W2]: [3, 3], [W1]: [2, 5] });
+    expect(out.variants, 'E0\'s variant rows survive in the export').toBe(2);
+  }, 2 * HEAVY);
+
+  it('D-5727 write-back (state pin) a segment of a NEW writer planted after the measuring point: the chunk that first lists it writes the widened layout back, naming that writer; a chunk that widens nothing writes nothing', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5727-wb-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x3000, 2, 'zqd5727wb', t0);
+      const fam: X10Family = { uuid: x10U(0x30), path: '/home/u/gone/d5727wb.jsonl', ino: 9301, texts };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [], rows: x10Rows(fam) });
+      await drive(box, ids, db, { until: () => true });
+      expect(rangesOf(db), 'the measuring point ranged the listing').toEqual({ [W1]: [1, 2] });
+      const before = getMeta(db, LAYOUT_KEY);
+      await drive(box, ids, db, { until: () => true });
+      expect(getMeta(db, LAYOUT_KEY), 'a chunk that widens nothing writes the key back unchanged').toBe(before);
+      plantSegment(box, ids.storeId, { seq: 4, writer: W2, blobs: [], rows: [] });
+      await drive(box, ids, db, { until: () => true });
+      expect(rangesOf(db), 'the chunk that first listed writer 2\'s segment ranged it').toEqual({ [W1]: [1, 2], [W2]: [4, 4] });
+      const run = await drive(box, ids, db);
+      expect(run.done).toBe(true);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 widest (a replay an older build carried past its measuring point) M\'s shape with the key deleted right after E0\'s take-off: the next chunk takes the widest layout (every writer over the whole seq line, a fork), writer 0, 1 and 2 stay forked, E0 stays unmarked, and the rebuild holds E0\'s two variants', async () => {
+    const { box, ids, db } = await plantL('ccrc-history-d5727-wide-', 0x3100, 'zqd5727w');
+    try {
+      const stop = await drive(box, ids, db, { until: () => marksOf(db)[0] === null });
+      expect(stop.done, 'E0\'s mark came off with the replay still open').toBe(false);
+      expect.soft(getMeta(db, LAYOUT_KEY), 'the key stands mid-replay').not.toBeNull();
+      db.prepare('DELETE FROM meta WHERE k = ?').run(LAYOUT_KEY);
+      await drive(box, ids, db, { until: () => true });
+      const whole: [number, number] = [0, Number.MAX_SAFE_INTEGER];
+      expect.soft(rangesOf(db), 'the key was rewritten, widest').toEqual({ [W0]: whole, [W1]: whole, [W2]: whole });
+      const run = await drive(box, ids, db);
+      expect(run.done).toBe(true);
+      expect.soft(marksOf(db), 'E0 is unmarked').toEqual([null, seg(1, W0)]);
+      expect(await variantsAfterLoss(box, ids, db, seg(3, W2)), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it.each([
+    ['stale key', 'the key carries another replay\'s version and narrow ranges (no fork)', (): string => recExport.formatReplayLayout({ version: 7, ranges: new Map([[W0, { lo: 1, hi: 1 }], [W2, { lo: 3, hi: 3 }], [W1, { lo: 5, hi: 5 }]]) })],
+    ['torn key', 'the key is not a layout at all', (): string => '{"version":'],
+  ])('D-5727 %s (past the measuring point): L\'s shape, then %s: it is a mismatch, so the step completes on the widest layout, E0 comes off, and the rebuild holds E0\'s two variants', async (_name, _what, plant) => {
+    const { box, ids, db } = await plantL('ccrc-history-d5727-bad-', 0x3200, 'zqd5727b2');
+    try {
+      await drive(box, ids, db, { until: () => true });
+      expect.soft(getMeta(db, LAYOUT_KEY), 'the measuring point wrote this replay\'s key').not.toBeNull();
+      setMeta(db, LAYOUT_KEY, plant());
+      await drive(box, ids, db, { until: () => true });
+      const kept = recExport.parseReplayLayout(getMeta(db, LAYOUT_KEY));
+      expect.soft(kept, 'the next chunk replaced it with a layout').not.toBeNull();
+      expect.soft(kept?.version, 'of this replay, not the planted version').not.toBe(7);
+      expect.soft(kept === null ? null : kept.ranges.get(W1), 'the widest').toEqual({ lo: 0, hi: Number.MAX_SAFE_INTEGER });
+      const run = await drive(box, ids, db);
+      expect(run.done, 'the step completes, never a stall').toBe(true);
+      expect.soft(marksOf(db), 'E0 is unmarked').toEqual([null, seg(1, W0)]);
+      expect(await variantsAfterLoss(box, ids, db, seg(3, W2)), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 delete at done: the key stands from the measuring point to the last chunk, and finishRecovery\'s transaction deletes it', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5727-del-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x3300, 1, 'zqd5727d', t0);
+      const fam: X10Family = { uuid: x10U(0x33), path: '/home/u/gone/d5727d.jsonl', ino: 9303, texts };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      expect(getMeta(db, LAYOUT_KEY), 'no key before the replay').toBeNull();
+      let last: string | null = null;
+      const run = await drive(box, ids, db, { each: () => { const k = getMeta(db, LAYOUT_KEY); if (k !== null) last = k; } });
+      expect(run.done).toBe(true);
+      expect(last, 'the key stood during the replay').not.toBeNull();
+      expect(getMeta(db, LAYOUT_KEY), 'and finishRecovery deleted it').toBeNull();
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 blob arm (an unlinked sidecar blob) L\'s shape with the blob in place of E0: a backup marks the blob (and its orphan sidecar row) by writer 1\'s seq 2, moved aside; writer 2\'s seq 3 takes the blob\'s mark off, and writer 1\'s seq 5, which carries the blob without the row, cannot re-mark it; with writer 2\'s segment lost the rebuild still finds the orphan row', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5727-blob-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x3400, 1, 'zqd5727bl', t0);
+      const fam: X10Family = { uuid: x10U(0x34), path: '/home/u/gone/d5727bl.jsonl', ino: 9304, texts };
+      const out = 'zqd5727bl the tool output only the lost segment and writer 2 carry';
+      const orphan = sidecarRow(fam, 'd5727bl-orphan.txt', out, null, t0);
+      plantSegment(box, ids.storeId, { seq: 1, writer: W0, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [{ text: out }], rows: [orphan] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(blobMarkOf(db, out), 'the backup state: the blob marked by writer 1 seq 2').toBe(seg(2));
+      expect(sidecarNames(db), 'and its orphan row placed').toEqual(['d5727bl-orphan.txt']);
+      moveAside(box, seg(2));
+      plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [{ text: out }], rows: [orphan] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [{ text: out }], rows: [] });
+      rearm(db);
+      let takenOffAt = -1;
+      const run = await drive(box, ids, db, {
+        each: ({ calls }) => {
+          const m = blobMarkOf(db, out);
+          if (takenOffAt === -1) { if (m === null) takenOffAt = calls; }
+          else expect.soft(m, `call ${calls}: the blob stays unmarked from its take-off to done`).toBeNull();
+        },
+      });
+      expect(run.done, 'the replay completed').toBe(true);
+      expect(takenOffAt, 'the blob\'s mark came off at writer 2\'s seq 3').toBeGreaterThan(0);
+      expect.soft(checkAfterLoss(box, ids, db).segments, 'no mark names a missing segment once the replay is done').toEqual([]);
+      await passAfterRebuild(box, ids, db);
+      expect.soft(unmarkedOn(db), 'and nothing is left due after the pass').toEqual({ entries: 0, blobs: 0 });
+      moveAside(box, seg(3, W2));
+      checkAfterLoss(box, ids, db);
+      const again = await rebuildAgain(box, ids);
+      try {
+        expect(sidecarNames(again.db), 'the rebuild from export still finds the orphan row').toEqual(['d5727bl-orphan.txt']);
+      } finally {
+        closeWriter(again.db);
+      }
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
 });
 
 describe('W1-B4 whole-branch review: export replay resumes after a segment moved aside, and walks no earlier segment again', () => {

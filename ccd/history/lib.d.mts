@@ -950,8 +950,14 @@ export function parseSegmentName(name: string): { seq: number; writer: string } 
 export function segmentTempName(name: string): string;
 export function orderSegmentNames(names: readonly string[]): string[];
 export function segmentOrdersAfter(a: string, b: string | null): boolean;
-export interface ReplayWriterLayout { ranges: ReadonlyMap<string, { lo: number; hi: number }>; forked: boolean; listed: ReadonlySet<string> }
-export function replayWriterLayout(listed: readonly string[], marked?: readonly string[]): ReplayWriterLayout;
+export type ReplayRanges = ReadonlyMap<string, { lo: number; hi: number }>;
+export interface ReplayWriterLayout { ranges: ReplayRanges; forked: boolean; listed: ReadonlySet<string>; widened: boolean }
+export function replayWriterLayout(listed: readonly string[], marked?: Iterable<string>, stored?: ReplayRanges | null): ReplayWriterLayout;
+export function widenReplayRanges(base: ReplayRanges, add: ReplayRanges): { ranges: Map<string, { lo: number; hi: number }>; widened: boolean };
+export function widestReplayRanges(names: Iterable<string>): Map<string, { lo: number; hi: number }>;
+export function formatReplayLayout(i: { version: number; ranges: ReplayRanges }): string;
+export function parseReplayLayout(text: string | null): { version: number; ranges: Map<string, { lo: number; hi: number }> } | null;
+export function planReplayLayout(i: { text: string | null; version: number; measuring: boolean }): { word: 'measure' } | { word: 'widen'; ranges: Map<string, { lo: number; hi: number }> } | { word: 'widest' };
 export function decideReplayMark(i: { seg: string; held: string | null; fresh: boolean; layout: ReplayWriterLayout }): 'mark' | 'keep' | 'take-off';
 export function nextSegmentSeq(i: { onDisk: readonly number[]; recorded: number | null }): number;
 export function decideExportPass(i: { nowMs: number; lastPassMs: number | null; firstTickMs: number | null; lastAttemptMs?: number | null; intervalMs?: number }): 'run' | 'wait';
