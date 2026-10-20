@@ -102,13 +102,13 @@ export function liveMainCheckoutIn(
  *  Why liveness is needed: project + wrapper + `workspace === null` is NOT a
  *  unique key, by the same `cmd_swap` fact that widened the refusal arm
  *  (`ccd/ccd:13459` moves the wrapper, keeps the id). A main checkout
- *  `claude-ccrc-pwa` swapped to `claude2` and since DEAD is skipped by the
+ *  `claude-ccrc-pwa` swapped to `claude9` and since DEAD is skipped by the
  *  refusal (`status !== 'dead'`), so Start is offered; the projection says
- *  `claude2`, `cmd_start` spawns a NEW `claude2-ccrc-pwa`, and the next frame
+ *  `claude9`, `cmd_start` spawns a NEW `claude9-ccrc-pwa`, and the next frame
  *  carries both in registry-id sort order (`registry.ts:869`), where
- *  `'claude-'` sorts before `'claude2'` (`-` 0x2D < `2` 0x32). Without
+ *  `'claude-'` sorts before `'claude9'` (`-` 0x2D < `9` 0x39). Without
  *  liveness `.find()` returns the DEAD swapped row — it satisfies project,
- *  `workspace === null` and `wrapper === 'claude2'` — and the kickoff goes to
+ *  `workspace === null` and `wrapper === 'claude9'` — and the kickoff goes to
  *  a dead session while the coordinator that actually started never gets its
  *  brief.
  *

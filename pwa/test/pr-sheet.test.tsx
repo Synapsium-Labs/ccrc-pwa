@@ -266,10 +266,10 @@ describe('merged', () => {
   // rung (only ws-rm/ws-reap do).
   it('names what a hold costs — cleanup, not the archive — on a merged workspace', async () => {
     fetched = view({ pr: merged, draft: null });
-    open(sess({ pr: merged, archivedAt: null, held: 'program:agent-evals wave:2/4' }));
+    open(sess({ pr: merged, archivedAt: null, held: 'program:prog-j wave:2/4' }));
     // `Held: ` is this note's own word; what must survive verbatim is the
     // reason after it (shared/api.ts's no-parsing rule).
-    const note = (await screen.findByText(/Held: program:agent-evals wave:2\/4/)).textContent ?? '';
+    const note = (await screen.findByText(/Held: program:prog-j wave:2\/4/)).textContent ?? '';
     expect(note).toMatch(/cleanup will refuse until the hold is released/);
     expect(note).not.toMatch(/session busy/i);
     // Not a reason the archive is blocked: the button below still works.
@@ -285,7 +285,7 @@ describe('merged', () => {
   // hold arm that reappeared here would be inventing a difference the merge no
   // longer makes. Both fixtures, so the ternary cannot come back on either
   // side without turning this red.
-  for (const held of [null, 'program:agent-evals wave:1/4']) {
+  for (const held of [null, 'program:prog-j wave:1/4']) {
     it(`an OPEN PR promises no archive — held: ${held ?? 'no'}`, async () => {
       const openPr = pr({ phase: 'open', number: 591, url: 'https://gh/591', checks: 'pass' });
       fetched = view({ pr: openPr, draft: null });

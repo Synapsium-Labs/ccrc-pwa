@@ -930,7 +930,7 @@ export const MIGRATIONS: readonly string[] = [
   //
   // ROW PER EDGE, not a column on an account (operator ruling 2). `subjectKind`
   // exists from day one though wave 1 writes only 'account' rows: the project
-  // half may migrate in later, and the org edition's `user -> pinned account` is
+  // half may migrate in later, and a later product decision's `user -> pinned account` is
   // a DIFFERENT EDGE, not a wider column. Wave 1's "one pool per account" is a
   // PARTIAL UNIQUE INDEX, so relaxing it to multi-pool later drops an index and
   // rewrites no rows and changes no wire shape — where widening a column would

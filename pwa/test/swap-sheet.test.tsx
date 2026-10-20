@@ -25,13 +25,13 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 // imported. Reproduced here in the same shape.
 //
 // THE LABELS BELOW ARE READ OFF `TEST_ROSTER`, not off the plan, which named a
-// different pair: the fixture resolves `claude` -> "team·max", `claude2` ->
-// "team·alt" and `claude-corp` -> "team·b". `home` is an ACCOUNT ID (it is
+// different pair: the fixture resolves `claude` -> "team·max", `claude9` ->
+// "team·alt" and `claude-acme` -> "team·b". `home` is an ACCOUNT ID (it is
 // `r.home ?? idHomeWrapper(...)` in `server/src/fleet.ts`), which is the whole
 // reason it can be turned into a label at all.
 const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
 
-const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => (baseSession({ id: 'claude:OpenClawHetzner', project: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner', statusUpdatedAt: Date.now() - 120_000, limits: { five: 62, seven: 71 }, ...patch }));
+const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => (baseSession({ id: 'claude:ProjectC', project: 'ProjectC', workdir: '/root/projects/ProjectC', statusUpdatedAt: Date.now() - 120_000, limits: { five: 62, seven: 71 }, ...patch }));
 
 const storeWith = (sessions: FleetSession[], roster = TEST_ROSTER): FleetStore => {
   const store = createFleetStore({ makeSocket: fakeSocket });
@@ -41,7 +41,7 @@ const storeWith = (sessions: FleetSession[], roster = TEST_ROSTER): FleetStore =
 
 describe('SwapSheet says the move is temporary and names the home account', () => {
   it('names the home account the session will return to', () => {
-    const s = fleetSession({ wrapper: 'claude2', home: 'claude' });
+    const s = fleetSession({ wrapper: 'claude9', home: 'claude' });
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
     // The account it is on NOW and the account it goes BACK to are different
     // facts and the sheet must show both — before this task it showed only
@@ -72,7 +72,7 @@ describe('SwapSheet says the move is temporary and names the home account', () =
     // instead of `session.home`. On a session that has already been relocated
     // those differ, and the sentence would name the account it is leaving as
     // the one it returns to — precisely backwards, in the case that matters.
-    const s = fleetSession({ wrapper: 'claude2', home: 'claude-corp' });
+    const s = fleetSession({ wrapper: 'claude9', home: 'claude-acme' });
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
     expect(screen.getByText(/home account is team·b/i)).toBeInTheDocument();
   });
@@ -122,7 +122,7 @@ describe('SwapSheet says the move is temporary and names the home account', () =
   // not an account at all, so offering it would invite a move onto a lane
   // that holds no login of the operator's.
   it('never offers a hidden entry as a target, while still offering the overflow lane', () => {
-    const roster = [...TEST_ROSTER.map((a) => (a.id === 'claude-corp' ? { ...a, hidden: true } : a))];
+    const roster = [...TEST_ROSTER.map((a) => (a.id === 'claude-acme' ? { ...a, hidden: true } : a))];
     const s = fleetSession({ wrapper: 'claude', home: 'claude' });
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s], roster)} />);
     expect(screen.queryByRole('button', { name: /team·b/ })).not.toBeInTheDocument();
@@ -152,7 +152,7 @@ describe('SwapSheet does not promise a held session an automatic return', () => 
   const HOLD = 'program:build8 wave:3/4 run:21';
 
   it('a HELD session is told the return waits for the hold', () => {
-    const s = fleetSession({ wrapper: 'claude2', home: 'claude', held: HOLD });
+    const s = fleetSession({ wrapper: 'claude9', home: 'claude', held: HOLD });
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
     const copy = screen.getByText(/Its home account is/i);
     // The promise §3.3 falsified. Not a loose /temporary/ match: the sentence
@@ -175,7 +175,7 @@ describe('SwapSheet does not promise a held session an automatic return', () => 
     // always) leaves the promise sentence intact INSIDE the hedge, so the
     // positive match below passed a mutant that had made the copy useless.
     // The hedge's own words are what separate the two.
-    const s = fleetSession({ wrapper: 'claude2', home: 'claude', held: null });
+    const s = fleetSession({ wrapper: 'claude9', home: 'claude', held: null });
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
     const copy = screen.getByText(/Its home account is/i);
     expect(copy.textContent).toMatch(/returns the session to team·max as soon as team·max has room/i);
@@ -185,7 +185,7 @@ describe('SwapSheet does not promise a held session an automatic return', () => 
   });
 
   it('says it in the CONSEQUENCE too, where the tap actually happens', async () => {
-    const s = fleetSession({ wrapper: 'claude2', home: 'claude', held: HOLD });
+    const s = fleetSession({ wrapper: 'claude9', home: 'claude', held: HOLD });
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
     fireEvent.click(await screen.findByRole('button', { name: /team·b/ }));
     // A bare /held/i matches the sheet copy too — it is still mounted under
@@ -254,14 +254,14 @@ const acct = (over: Partial<AccountUsage>): AccountUsage => ({
 // lane could never be ranked at all — and because ccd tied every unrankable
 // lane at the same score and broke the tie on roster order, a weekly-CAPPED
 // Codex lane could be preferred over a healthy sibling. Measured on the live
-// fleet 2026-09-11: gpt at 100% beat gpt2 at 55%.
+// fleet 2026-09-11: gpt at 100% beat gpt7 at 55%.
 describe('leastLoaded — a lane with no 5h window', () => {
   it('ranks a weekly-only lane on its weekly figure', () => {
     const rows = [
       acct({ wrapper: 'gpt', five: null, seven: 80, fiveWindowMinutes: 0 }),
-      acct({ wrapper: 'gpt2', five: null, seven: 30, fiveWindowMinutes: 0 }),
+      acct({ wrapper: 'gpt7', five: null, seven: 30, fiveWindowMinutes: 0 }),
     ];
-    expect(leastLoaded(rows, ['gpt', 'gpt2'])).toBe('gpt2');
+    expect(leastLoaded(rows, ['gpt', 'gpt7'])).toBe('gpt7');
   });
 
   it('does not rank one whose only applicable window is unknown', () => {
@@ -281,9 +281,9 @@ describe('leastLoaded — a lane with no 5h window', () => {
     // The marker is a WIDTH, not a lane flag.
     const rows = [
       acct({ wrapper: 'claude', five: 90, seven: 10, fiveWindowMinutes: 300 }),
-      acct({ wrapper: 'claude2', five: 20, seven: 20, fiveWindowMinutes: 300 }),
+      acct({ wrapper: 'claude9', five: 20, seven: 20, fiveWindowMinutes: 300 }),
     ];
-    expect(leastLoaded(rows, ['claude', 'claude2'])).toBe('claude2');
+    expect(leastLoaded(rows, ['claude', 'claude9'])).toBe('claude9');
   });
 });
 
@@ -311,9 +311,9 @@ describe('SwapSheet does not rank an account on an inferred zero', () => {
   it('never suggests an account whose 5h window merely rolled over', async () => {
     stubAccounts([
       // The magnet: 0% with the flag set. Nothing measured this.
-      acct({ wrapper: 'claude2', five: 0, seven: 0, fiveRolledOver: true }),
+      acct({ wrapper: 'claude9', five: 0, seven: 0, fiveRolledOver: true }),
       // Honestly reporting, and much fuller — it must still win.
-      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude-acme', five: 62, seven: 71 }),
     ]);
     renderSwap();
     await waitFor(() =>
@@ -325,8 +325,8 @@ describe('SwapSheet does not rank an account on an inferred zero', () => {
     // The score is a MAXIMUM, so the ended half bounds the truth only from
     // below: `{five: 4, seven: <ended>}` could really be at 99.
     stubAccounts([
-      acct({ wrapper: 'claude2', five: 4, seven: 0, sevenRolledOver: true }),
-      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude9', five: 4, seven: 0, sevenRolledOver: true }),
+      acct({ wrapper: 'claude-acme', five: 62, seven: 71 }),
     ]);
     renderSwap();
     await waitFor(() =>
@@ -339,8 +339,8 @@ describe('SwapSheet does not rank an account on an inferred zero', () => {
     // A measured 0 is the best possible target and saying so is the whole
     // point of the tag; only the INFERRED zero is disqualified.
     stubAccounts([
-      acct({ wrapper: 'claude2', five: 0, seven: 0 }),
-      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude9', five: 0, seven: 0 }),
+      acct({ wrapper: 'claude-acme', five: 62, seven: 71 }),
     ]);
     renderSwap();
     await waitFor(() =>
@@ -352,8 +352,8 @@ describe('SwapSheet does not rank an account on an inferred zero', () => {
 
   it('suggests NOBODY when every candidate is unscoreable — no suggestion beats a wrong one', async () => {
     stubAccounts([
-      acct({ wrapper: 'claude2', five: 0, seven: 0, fiveRolledOver: true, sevenRolledOver: true }),
-      acct({ wrapper: 'claude-corp', five: 0, seven: 30, fiveRolledOver: true }),
+      acct({ wrapper: 'claude9', five: 0, seven: 0, fiveRolledOver: true, sevenRolledOver: true }),
+      acct({ wrapper: 'claude-acme', five: 0, seven: 30, fiveRolledOver: true }),
       acct({ wrapper: 'gpt', five: null, seven: 12 }),
     ]);
     renderSwap();
@@ -376,7 +376,7 @@ describe('SwapSheet does not rank an account on an inferred zero', () => {
     // `44`, not a round `40`: "40%" CONTAINS "0%", so the negative assertion
     // below would fire on the honest half and this test would pass for the
     // wrong reason (measured, first run).
-    stubAccounts([acct({ wrapper: 'claude2', five: 0, seven: 44, fiveRolledOver: true })]);
+    stubAccounts([acct({ wrapper: 'claude9', five: 0, seven: 44, fiveRolledOver: true })]);
     renderSwap();
     const row = await screen.findByRole('button', { name: /team·alt/ });
     await waitFor(() => expect(row).toHaveTextContent('reset'));
@@ -420,8 +420,8 @@ describe('a probe verdict costs preference, never eligibility', () => {
     // WAS "never offers". The inverted rule emptied this picker on an
     // all-condemned fleet, which is the one state it exists for.
     stubAccounts([
-      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
-      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude9', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-acme', five: 62, seven: 71 }),
     ]);
     renderSwap();
     await waitFor(() =>
@@ -434,8 +434,8 @@ describe('a probe verdict costs preference, never eligibility', () => {
     // screen says "sign-in expired on the fleet host" and carries it on
     // `data-disabled`, and this is the same fact on a second surface.
     stubAccounts([
-      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
-      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude9', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-acme', five: 62, seven: 71 }),
     ]);
     renderSwap();
     const row = await screen.findByRole('button', { name: /team·alt/ });
@@ -466,8 +466,8 @@ describe('a probe verdict costs preference, never eligibility', () => {
     // constrains auto-swaps"), so the human-directed move onto a condemned
     // lane is a supported act, not an accident this sheet has to prevent.
     stubAccounts([
-      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
-      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude9', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-acme', five: 62, seven: 71 }),
     ]);
     renderSwap();
     const row = await screen.findByRole('button', { name: /team·alt/ });
@@ -482,8 +482,8 @@ describe('a probe verdict costs preference, never eligibility', () => {
     // the sheet and `load` refuses to score it — an auth-dead account at 3/4
     // is the emptiest number on this fleet and must still lose.
     stubAccounts([
-      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
-      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude9', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-acme', five: 62, seven: 71 }),
     ]);
     renderSwap();
     await waitFor(() =>
@@ -498,8 +498,8 @@ describe('a probe verdict costs preference, never eligibility', () => {
     // every other candidate is unscoreable — so a staleness-based fix would
     // still hand it the tag. Nobody wears it instead.
     stubAccounts([
-      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4, ts: Math.floor(Date.now() / 1000) }),
-      acct({ wrapper: 'claude-corp', five: null, seven: null }),
+      acct({ wrapper: 'claude9', authDead: true, five: 3, seven: 4, ts: Math.floor(Date.now() / 1000) }),
+      acct({ wrapper: 'claude-acme', five: null, seven: null }),
       acct({ wrapper: 'gpt', five: 0, seven: 0, fiveRolledOver: true, sevenRolledOver: true }),
     ]);
     renderSwap();
@@ -517,10 +517,10 @@ describe('a probe verdict costs preference, never eligibility', () => {
     // range precisely so that cannot happen to `ws-add`.
     stubAccounts([
       acct({ wrapper: 'claude', authDead: true, five: 9, seven: 9 }),
-      acct({ wrapper: 'claude2', authDead: true, five: 3, seven: 4 }),
-      acct({ wrapper: 'claude-corp', authDead: true, five: 62, seven: 71 }),
+      acct({ wrapper: 'claude9', authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-acme', authDead: true, five: 62, seven: 71 }),
       acct({ wrapper: 'gpt', authDead: true, five: 1, seven: 1 }),
-      acct({ wrapper: 'claude-dev0', authDead: true, five: 5, seven: 5 }),
+      acct({ wrapper: 'claude-lab0', authDead: true, five: 5, seven: 5 }),
     ]);
     renderSwap();
     await waitFor(() =>
@@ -538,8 +538,8 @@ describe('a probe verdict costs preference, never eligibility', () => {
     // everything". `disabled` is a file a human touched; it is not a
     // measurement and it does not get a marked row.
     stubAccounts([
-      acct({ wrapper: 'claude2', disabled: true, five: 3, seven: 4 }),
-      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude9', disabled: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-acme', five: 62, seven: 71 }),
     ]);
     renderSwap();
     await waitFor(() =>
@@ -549,8 +549,8 @@ describe('a probe verdict costs preference, never eligibility', () => {
 
   it('a lane that is BOTH is removed — the switch decides, the measurement cannot override it', async () => {
     stubAccounts([
-      acct({ wrapper: 'claude2', disabled: true, authDead: true, five: 3, seven: 4 }),
-      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude9', disabled: true, authDead: true, five: 3, seven: 4 }),
+      acct({ wrapper: 'claude-acme', five: 62, seven: 71 }),
     ]);
     renderSwap();
     await waitFor(() =>
@@ -564,11 +564,11 @@ describe('a probe verdict costs preference, never eligibility', () => {
     // built before it simply omits the key. `=== true`, never truthiness: an
     // omitted field must leave every account rendering exactly as it does
     // today — offered, rankable, and UNMARKED.
-    const older: Record<string, unknown> = { ...acct({ wrapper: 'claude2', five: 8, seven: 22 }) };
+    const older: Record<string, unknown> = { ...acct({ wrapper: 'claude9', five: 8, seven: 22 }) };
     delete older.authDead;
     stubAccounts([
       older as unknown as AccountUsage,
-      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude-acme', five: 62, seven: 71 }),
     ]);
     renderSwap();
     await waitFor(() =>
@@ -587,10 +587,10 @@ describe('a probe verdict costs preference, never eligibility', () => {
 describe('SwapSheet says WHY it has nothing to offer', () => {
   it('every other lane switched off — named as the operator act it is', async () => {
     stubAccounts([
-      acct({ wrapper: 'claude2', disabled: true }),
-      acct({ wrapper: 'claude-corp', disabled: true }),
+      acct({ wrapper: 'claude9', disabled: true }),
+      acct({ wrapper: 'claude-acme', disabled: true }),
       acct({ wrapper: 'gpt', disabled: true }),
-      acct({ wrapper: 'claude-dev0', disabled: true }),
+      acct({ wrapper: 'claude-lab0', disabled: true }),
     ]);
     renderSwap();
     expect(await screen.findByText(
@@ -638,10 +638,10 @@ describe('SwapSheet reads one source for one account', () => {
   // minus the flags, minus every account with no live session on it. The poll
   // wins, and these pin that it is the ONLY reader.
   it('ignores the frame\'s number when the poll says that window merely reset', async () => {
-    const live = fleetSession({ id: 'claude2:a', wrapper: 'claude2', limits: { five: 1, seven: 1 } });
+    const live = fleetSession({ id: 'claude9:a', wrapper: 'claude9', limits: { five: 1, seven: 1 } });
     stubAccounts([
-      acct({ wrapper: 'claude2', five: 0, seven: 0, fiveRolledOver: true }),
-      acct({ wrapper: 'claude-corp', five: 62, seven: 71 }),
+      acct({ wrapper: 'claude9', five: 0, seven: 0, fiveRolledOver: true }),
+      acct({ wrapper: 'claude-acme', five: 62, seven: 71 }),
     ]);
     renderSwap([live]);
     const row = await screen.findByRole('button', { name: /team·alt/ });
@@ -657,8 +657,8 @@ describe('SwapSheet reads one source for one account', () => {
     // lane and nothing else, so an account telemetry has never mentioned has
     // no row — and the frame's copy of a number the poll never carried is not
     // a second opinion this sheet is entitled to.
-    const live = fleetSession({ id: 'claude-dev0:a', wrapper: 'claude-dev0', limits: { five: 5, seven: 5 } });
-    stubAccounts([acct({ wrapper: 'claude-corp', five: 62, seven: 71 })]);
+    const live = fleetSession({ id: 'claude-lab0:a', wrapper: 'claude-lab0', limits: { five: 5, seven: 5 } });
+    stubAccounts([acct({ wrapper: 'claude-acme', five: 62, seven: 71 })]);
     renderSwap([live]);
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /team·b/ })).toHaveTextContent('71%'));
@@ -690,11 +690,11 @@ describe('SwapSheet and the pool line', () => {
   const tagged = (project: string, name: string): ProjectPoolsWire =>
     ({ listed: true, byProject: { [project]: { state: 'tagged', name } }, enforcement: 'enforced' });
 
-  // `claude` and `claude-corp` are pool-a; `claude2` is pool-b; `claude-dev0`
+  // `claude` and `claude-acme` are pool-a; `claude9` is pool-b; `claude-lab0`
   // and `gpt` carry no pool. The session runs on `claude`, so the sheet's own
   // filter drops it and the targets are the other four; the project is pool-a,
-  // so `claude2` (team·alt) is the one crossing.
-  const POOLS = { claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' };
+  // so `claude9` (team·alt) is the one crossing.
+  const POOLS = { claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' };
 
   it('offers only the accounts the project pool admits, and counts the rest behind a disclosure', () => {
     const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
@@ -709,7 +709,7 @@ describe('SwapSheet and the pool line', () => {
   it('preserves a maximum-length crossing pool in the chip name and title', () => {
     const maximumPool = `a${'z'.repeat(31)}`;
     const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
-    const pools = { claude: 'pool-a', claude2: maximumPool, 'claude-corp': 'pool-a' };
+    const pools = { claude: 'pool-a', claude9: maximumPool, 'claude-acme': 'pool-a' };
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={poolStore([s], pools, tagged('demo', 'pool-a'))} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'show other pools (1)' }));
@@ -732,7 +732,7 @@ describe('SwapSheet and the pool line', () => {
     expect(consequence.textContent).toContain('pool-a');
 
     fireEvent.click(screen.getByRole('button', { name: 'Move' }));
-    expect(swap).toHaveBeenCalledWith(s.id, 'claude2', { crossPool: true });
+    expect(swap).toHaveBeenCalledWith(s.id, 'claude9', { crossPool: true });
   });
 
   it('an ELIGIBLE pick posts the byte-identical two-argument call', async () => {
@@ -746,7 +746,7 @@ describe('SwapSheet and the pool line', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /team·b/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
-    expect(swap).toHaveBeenCalledWith(s.id, 'claude-corp');
+    expect(swap).toHaveBeenCalledWith(s.id, 'claude-acme');
     expect(swap.mock.calls[0]).toHaveLength(2);
   });
 
@@ -777,10 +777,10 @@ describe('SwapSheet and the pool line', () => {
 
   it('keeps the unknown-pool note truthful when every alternative is switched off', async () => {
     stubAccounts([
-      acct({ wrapper: 'claude2', disabled: true }),
-      acct({ wrapper: 'claude-corp', disabled: true }),
+      acct({ wrapper: 'claude9', disabled: true }),
+      acct({ wrapper: 'claude-acme', disabled: true }),
       acct({ wrapper: 'gpt', disabled: true }),
-      acct({ wrapper: 'claude-dev0', disabled: true }),
+      acct({ wrapper: 'claude-lab0', disabled: true }),
     ]);
     const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
     render(<SwapSheet session={s} open onClose={vi.fn()} fleet={poolStore([s], POOLS, null)} />);
@@ -840,8 +840,8 @@ describe('SwapSheet: a busy session asks "swap anyway" (D-5240)', () => {
     expect(screen.queryByText(/Couldn.t move|failed/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Swap anyway' }));
     await waitFor(() => expect(swap).toHaveBeenCalledTimes(2));
-    expect(swap.mock.calls[0]).toEqual([s.id, 'claude-corp']);
-    expect(swap.mock.calls[1]).toEqual([s.id, 'claude-corp', { interrupt: true }]);
+    expect(swap.mock.calls[0]).toEqual([s.id, 'claude-acme']);
+    expect(swap.mock.calls[1]).toEqual([s.id, 'claude-acme', { interrupt: true }]);
   });
 
   it('a crossing that comes back busy keeps the crossing beside the consent', async () => {
@@ -849,8 +849,8 @@ describe('SwapSheet: a busy session asks "swap anyway" (D-5240)', () => {
       .mockRejectedValueOnce(refused(SWAP_REFUSALS.sessionBusy))
       .mockResolvedValueOnce(undefined);
     const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
-    // The pool suite's `poolStore` shape: `claude2` (team·alt) is the one crossing for a pool-a project.
-    const byId: Record<string, string> = { claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' };
+    // The pool suite's `poolStore` shape: `claude9` (team·alt) is the one crossing for a pool-a project.
+    const byId: Record<string, string> = { claude: 'pool-a', claude9: 'pool-b', 'claude-acme': 'pool-a' };
     const pools: ProjectPoolsWire = {
       listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' };
     const store = createFleetStore({ makeSocket: fakeSocket });
@@ -863,7 +863,7 @@ describe('SwapSheet: a busy session asks "swap anyway" (D-5240)', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Swap anyway' }));
     await waitFor(() => expect(swap).toHaveBeenCalledTimes(2));
-    expect(swap.mock.calls[1]).toEqual([s.id, 'claude2', { crossPool: true, interrupt: true }]);
+    expect(swap.mock.calls[1]).toEqual([s.id, 'claude9', { crossPool: true, interrupt: true }]);
   });
 
   it('a 409 status-unknown says why in a toast and offers no consent', async () => {

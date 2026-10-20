@@ -14,7 +14,7 @@
 
 - Box access: `ssh -p 2222 -i ~/.ssh/<your-key> you@<server-host>` (Tailscale). `~/.local/bin` is NOT on PATH over non-interactive SSH — always absolute `~/.local/bin/ccd`. `systemctl --user` needs `XDG_RUNTIME_DIR=/run/user/$(id -u)` exported.
 - The server must be reachable at `http://203.0.113.7:7788` from the tailnet and **unreachable** on any other interface.
-- Never touch the six production sessions during e2e — all live testing goes through a dedicated `cctest` project session (`claude2-cctest` — gmail Max, the least-critical account). Stop it when done.
+- Never touch the six production sessions during e2e — all live testing goes through a dedicated `cctest` project session (`claude9-cctest` — <label>, the least-critical account). Stop it when done.
 - E2E suite: `server/test-e2e/*.e2e.test.ts`, guarded by `const BASE = process.env.CCRC_BASE_URL; describe.skipIf(!BASE)`.
 - Commit after every task: `feat(ccrc): <what>` / `test(ccrc): <what>`.
 
@@ -37,7 +37,7 @@
 ### Task 2: notify.sh hook install + swap notice verify
 
 - [ ] **Step 1:** Install: `scp -P 2222 -i ~/.ssh/<your-key> infra/ccrc/deploy/notify.sh you@<server-host>:.cc-sessions/notify.sh` then `ssh ... 'chmod +x ~/.cc-sessions/notify.sh'`.
-- [ ] **Step 2:** Verify manually: `ssh ... '~/.cc-sessions/notify.sh "cc swap: claude2-cctest moved claude2 -> claude (limits) — test"'` while `websocat ws://203.0.113.7:7788/ws/fleet` (or a tiny node script) is connected from the Mac. Expected: a `{"type":"notice",...}` frame arrives.
+- [ ] **Step 2:** Verify manually: `ssh ... '~/.cc-sessions/notify.sh "cc swap: claude9-cctest moved claude9 -> claude (limits) — test"'` while `websocat ws://203.0.113.7:7788/ws/fleet` (or a tiny node script) is connected from the Mac. Expected: a `{"type":"notice",...}` frame arrives.
 - [ ] **Step 3: Commit** any fixes: `git commit -m "feat(ccrc): notify hook installed and verified"` (docs-only note if no code changed).
 
 ---
@@ -50,11 +50,11 @@
 **Interfaces:**
 - `helpers.ts`: `wsCollect(url, pred, timeoutMs): Promise<msg[]>` (connect, buffer messages until predicate or timeout); `post(path, body)`; `BASE` from env.
 - Test flow (single serial describe, generous timeouts — real Claude turns take a while; each step asserts through the **public API only**):
-  1. **Create:** `POST /api/sessions {wrapper:'claude2', project:'cctest'}` (workdir default `/data/projects/cctest`; pre-create the dir on the box in Step 1 if absent) → poll `/api/fleet` until `claude2-cctest` alive (≤3 min: first-run gates).
-  2. **Prompt→reply:** connect `/ws/session/claude2-cctest`; `POST .../prompt {text:"Reply with exactly the word pong"}` → expect a `user` event then an `assistant` event containing `pong` (≤2 min).
+  1. **Create:** `POST /api/sessions {wrapper:'claude9', project:'cctest'}` (workdir default `/data/projects/cctest`; pre-create the dir on the box in Step 1 if absent) → poll `/api/fleet` until `claude9-cctest` alive (≤3 min: first-run gates).
+  2. **Prompt→reply:** connect `/ws/session/claude9-cctest`; `POST .../prompt {text:"Reply with exactly the word pong"}` → expect a `user` event then an `assistant` event containing `pong` (≤2 min).
   3. **Dialog:** prompt: `"Use your AskUserQuestion tool to ask me which colour I prefer, options Red, Green, Blue."` → expect a `dialog` message with ≥3 options → `POST .../dialog {dialogId, optionIndex:2}` → expect `dialog_cleared` and a subsequent assistant turn mentioning the chosen colour.
   4. **Interrupt:** prompt a long task ("count to 200 slowly, one number per line") → wait for `status:'busy'` → `POST .../interrupt` → expect status back to `idle` within 30 s.
-  5. **Upload:** POST a small PNG to `.../upload` → capture verify via next prompt: `"What file path did I just paste into your prompt box? Send it back."` → assistant reply contains `/.cc-clips/claude2-cctest/`.
+  5. **Upload:** POST a small PNG to `.../upload` → capture verify via next prompt: `"What file path did I just paste into your prompt box? Send it back."` → assistant reply contains `/.cc-clips/claude9-cctest/`.
   6. **Swap follow:** `POST .../swap {wrapper:'claude'}` → expect fleet to show wrapper `claude` for the id (≤3 min, swap + respawn) → session WS reconnect streams events under the new account (send one more prompt→reply round).
   7. **Stop:** `POST .../stop` → fleet shows status `dead`.
 - [ ] **Step 1:** Write helpers + the suite (complete code, all seven phases).
@@ -66,7 +66,7 @@
 
 ### Task 4: Fixture re-capture from live panes
 
-- [ ] **Step 1:** With cctest running, drive it to each dialog state and capture real panes into `server/test/fixtures/panes/`: AskUserQuestion (single + multiSelect variants via prompts), `/model` picker (`POST .../prompt {text:"/model"}`, capture, then Esc via interrupt route or terminal), and the trust/resume gates if observable (kill + `ensure` cctest and capture during startup). Capture command: `ssh ... 'tmux capture-pane -t cc-claude2-cctest -p'`.
+- [ ] **Step 1:** With cctest running, drive it to each dialog state and capture real panes into `server/test/fixtures/panes/`: AskUserQuestion (single + multiSelect variants via prompts), `/model` picker (`POST .../prompt {text:"/model"}`, capture, then Esc via interrupt route or terminal), and the trust/resume gates if observable (kill + `ensure` cctest and capture during startup). Capture command: `ssh ... 'tmux capture-pane -t cc-claude9-cctest -p'`.
 - [ ] **Step 2:** Replace the authored fixtures with the real captures; run `npx vitest run test/dialog.test.ts` — adjust `parseDialog` until green against reality. Any pane that can't parse must yield `parsed:false` (never a crash).
 - [ ] **Step 3:** Document the re-capture procedure in `infra/ccrc/README.md` ("after every Claude Code version bump: re-capture, re-run dialog tests").
 - [ ] **Step 4: Commit** `git add -A && git commit -m "test(ccrc): real pane fixtures from live box"`

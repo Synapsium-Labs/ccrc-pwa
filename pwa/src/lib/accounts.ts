@@ -53,7 +53,7 @@ export function warnNonArrayRoster(body: unknown): void {
   console.warn('ccrc: GET /api/accounts answered with a non-array roster; keeping the last known one.', body);
 }
 
-/** Human label for an account, e.g. 'claude2' → 'team·alt'. Unknown wrappers
+/** Human label for an account, e.g. 'claude9' → 'team·alt'. Unknown wrappers
  *  fall back to the raw name — never hide an account the server reports,
  *  including in the window before the roster has arrived at all. */
 export function accountLabel(roster: readonly RosterWire[], wrapper: string): string {
@@ -214,8 +214,8 @@ export function joinLabels(labels: readonly string[]): string {
  *  must name these accounts individually rather than claim "all accounts":
  *  an enabled gpt sitting in the same list would make that claim false on
  *  its face. Same discipline ccd's own placement refusal already uses
- *  (ccd/ccd's `cmd_ws_add`: `claude:disabled claude2:disabled
- *  claude-corp:disabled`, never "all accounts"). Its pool-aware sibling is
+ *  (ccd/ccd's `cmd_ws_add`: `claude:disabled claude9:disabled
+ *  claude-acme:disabled`, never "all accounts"). Its pool-aware sibling is
  *  `poolLabelList` (lib/pools.ts), which answers the same question for a
  *  TAGGED project. */
 export function homeAbleLabelList(roster: readonly RosterWire[]): string {

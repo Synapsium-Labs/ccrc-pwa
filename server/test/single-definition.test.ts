@@ -927,9 +927,9 @@ describe('the account roster — runtime data, no compile-time copies', () => {
   // two of them anywhere under the roots scores a hit exactly as it did before.
   //
   // Hand-typing the names HERE instead would make the scanner that exists to
-  // prevent hand-typed copies one itself: a 6th account (say `claude-dev1`)
+  // prevent hand-typed copies one itself: a 6th account (say `claude-lab1`)
   // added to the production roster and then restated as
-  // `['claude-dev1', 'claude2']` under some root must score a hit, and a
+  // `['claude-lab1', 'claude9']` under some root must score a hit, and a
   // scanner frozen at five names would stay green while that drift reopened.
   const WRAPPER_NAMES = DEFAULT_TEST_ROSTER.accounts.map((a) => a.id);
 
@@ -1830,7 +1830,7 @@ describe('the model files, and who reads each one', () => {
   });
 
   it('the ownership whitelist is read by exactly one thing in this repo', () => {
-    // `handoff-proxy` and `claude-glm` read it too — in the monorepo, which
+    // `handoff-proxy` and `claude-alt1` read it too — in the monorepo, which
     // this scan cannot see. Within this repo it must stay one reader, because
     // a second one would be a second opinion about which providers may serve.
     expect(spell('providers-whitelist.json')).toEqual(['deploy/models-op.mjs']);
@@ -5269,7 +5269,11 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     // W1-B3: every constant the card line adds to lib, declared there once (Task 11 binds the hook's spellings).
     'CARD_LINE_PATTERN', 'CARD_LINE_MAX', 'CARD_DIR', 'SCOPE_DIR', 'CARD_DESCRIBE_CMD',
     'CARD_MEASURE_ROWS', 'CARD_MEASURE_MAX_WAIT_MS', 'CARD_ATTACHMENT_MAX_BYTES', 'PURGED_FILES_GRACE_MS',
-    'SCOPE_MARKER_MAX_AGE_MS', 'CARD_CONSUMED_SCOPES', 'CARD_WITHDRAW_REASONS', 'EXPORT_DIR', 'EXPORT_SEGMENT_MAX_BYTES', 'EXPORT_PASS_INTERVAL_MS', 'EXPORT_SEGMENT_FORMAT', 'EXPORT_ROW_META_BYTES', 'EXPORT_MARK_BACKOFF_MAX_MS', 'EXPORT_DUE_OLDEST_UNMEASURED'] as const;
+    'SCOPE_MARKER_MAX_AGE_MS', 'CARD_CONSUMED_SCOPES', 'CARD_WITHDRAW_REASONS', 'EXPORT_DIR', 'EXPORT_SEGMENT_MAX_BYTES', 'EXPORT_PASS_INTERVAL_MS', 'EXPORT_SEGMENT_FORMAT', 'EXPORT_ROW_META_BYTES', 'EXPORT_MARK_BACKOFF_MAX_MS', 'EXPORT_DUE_OLDEST_UNMEASURED',
+    // W5h-1 Task 1 (D-5632 (history-export-bind-check-batched)): the check after a bind's bounds and stop words; EXPORT_BIND_BATCH moved here from sweep.mjs.
+    'EXPORT_BIND_BYTES', 'EXPORT_BIND_WAL_CEILING', 'EXPORT_BIND_BATCH', 'EXPORT_MARKS_STALL_MS', 'MARK_CHECK_WORDS',
+    // W5h-1 Task 3 (D-5634 (history-export-segment-whole-check)): SQLite's header length, which store.mjs segmentFileFacts reads and lib decideSegmentWhole compares.
+    'SEGMENT_HEADER_BYTES'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];

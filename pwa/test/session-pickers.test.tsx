@@ -65,13 +65,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const ID = 'claude:OpenClawHetzner';
+const ID = 'claude:ProjectC';
 const fakeSocket = (): WebSocket =>
   ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket;
 
 const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession =>
   baseSession({
-    id: ID, project: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner',
+    id: ID, project: 'ProjectC', workdir: '/root/projects/ProjectC',
     // Non-null model/effort — the header's model/effort chips only render at
     // all once one of model/branch/effort/ultracode is truthy (`SessionHeader`'s
     // `hasMeta`), and the `queued` badge for a field rides that field's own

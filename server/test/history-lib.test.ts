@@ -3672,7 +3672,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
     redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0,
     exportWriterLive: false, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
-    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
+    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0, exportSegmentNewer: [], exportSegmentMissing: 0, exportSegmentDamaged: [],
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
     thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [], exportLastPassMs: null, exportDueOldestMs: null,
     ...o,
@@ -3723,12 +3723,22 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     ['retention-unmeasured', 'warn', { retentionUnmeasured: ['/home/u/.claude-a'] }],
     ['retention-lowered', 'warn', { retentionLowered: { home: '/home/u/.claude-b', days: 30, othersMin: 180 } }],
     ['export-segment-missing', 'warn', { exportSegmentMissing: 2 }],
+    ['export-segment-damaged', 'warn', { exportSegmentDamaged: ['2.0a1b2c3d.db'] }],
     ['journal-record-skipped', 'warn', { journalSkipped: 4 }],
     ['journal-growth', 'warn', { journalGrowth30d: 41_943_041 }],
     ['blob-undecodable', 'warn', { blobUndecodable: 2 }],
     ['drain-rejected', 'warn', { drainRejected: 3 }],
     ['spool-planted', 'warn', { spoolDisplaced: 2, spoolBlocked: 1 }],
+    // W5h-1 Task 2 (D-5633): a check after a bind that has not finished; stopped on an escalating word past EXPORT_MARKS_STALL_MS, it FAILs.
+    ['export-marks-unchecked', 'warn', { exportMarksCheck: { word: 'budget', sinceMs: NOW - MIN, cleared: 4 } }],
+    ['export-marks-stalled', 'fail', { exportMarksCheck: { word: 'failed', sinceMs: NOW - 25 * 60 * MIN, cleared: 0 } }],
   ];
+
+  it('export-segment-damaged: the remedy puts a whole copy back and keeps another outside export/<store_id>/ for good, but not while a recovery is open (wave 5h-1 FR2, F3)', () => {
+    const r = healthLib.deriveHealth(base({ exportSegmentDamaged: ['2.0a1b2c3d.db'] })).warn.find((i) => i.word === 'export-segment-damaged')!;
+    expect(r.remedy.startsWith(`put a whole copy of each named file back if one exists (the source box or a backup), and keep another copy of it outside ~/.ccrc/history/${healthLib.EXPORT_DIR}/<store_id>/ for good, but not while a recovery is open: `)).toBe(true);
+    expect(r.remedy, 'the rest of the remedy stands').toContain(`otherwise move each named file out of ~/.ccrc/history/${healthLib.EXPORT_DIR}/<store_id>/ (its live rows export again by themselves)`);
+  });
 
   it('retention-lowered is a reminder under the per-copy rule: it names the home and when its own rows fall due, and claims no node-wide horizon (W1-B2 Task 35, ruled Q15)', () => {
     const r = healthLib.deriveHealth(base({ retentionLowered: { home: '/home/u/.claude-b', days: 30, othersMin: 180 } }));
@@ -3959,6 +3969,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
   it('the off remedy names the switch through SWITCHES, the one spelling (O13)', () => {
     const r = healthLib.deriveHealth(base({ historyOff: true }));
     expect(r.warn.find((i) => i.word === 'off')!.remedy).toContain(healthLib.SWITCHES.off);
+    expect(r.warn.find((i) => i.word === 'off')!.remedy, 'review 644 F4: a late carry is the reason to keep it').toContain('when capture should resume, once any carry is whole');
   });
 
   // ── the grace D-4168 ──
@@ -4288,6 +4299,21 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     const r = healthLib.deriveHealth(base({ exit: 5, reason: 'store-unbound' }));
     expect(r.fail[0]!.detail).toContain(STORE);
     expect(r.fail[0]!.remedy).toContain('ccrc history doctor --adopt');
+  });
+  it('store-unbound\'s remedy says to carry before the adopt or to hold the ticks with history-off until the carry is whole (D-5635)', () => {
+    const hold = 'touch ~/.ccrc/history-off before the adopt and remove it only once both directories hold every source file at the same size';
+    const loss = 'a tick before then clears the export mark of every segment not here whole, and its rows export again';
+    const fallback = healthLib.HEALTH_REMEDIES['store-unbound']!;
+    expect(fallback).toContain('; when ~/.ccrc/history/journal/<store_id>/ and ~/.ccrc/history/export/<store_id>/ are to come from the box the store left, copy them here before the adopt, or ');
+    expect(fallback).toContain(hold);
+    expect(fallback).toContain(loss);
+    const r = healthLib.deriveHealth(base({ exit: 5, reason: 'store-unbound', storeId: STORE })).fail[0]!.remedy;
+    expect(r).toContain(`; when ~/.ccrc/history/journal/${STORE}/ and ~/.ccrc/history/export/${STORE}/ are to come from the box the store left`);
+    expect(r).toContain(hold);
+    expect(r).toContain(loss);
+    expect(r, 'the bind half is unchanged').toContain(`if store ${STORE} is another box's, remove the ~/.ccrc/history/db link or move the DB aside`);
+    expect(healthLib.carryHoldAdvice('before you copy')).toBe(
+      `touch ~/.ccrc/history-off before you copy and before the next tick, which comes within minutes (the bind has armed the check) and remove it only once both directories hold every source file at the same size: ${loss}`);
   });
   it('store-missing names --restore with the backup db/backups holds, and --rebuild', () => {
     const r = healthLib.deriveHealth(base({ exit: 5, reason: 'store-missing', backupsDb: ['20261001T000000Z.db'] }));
@@ -7991,6 +8017,195 @@ describe('W1-B4: segment names, their order and the next number (spec 9.15 "Writ
     expect(libSeg.orderSegmentNames(['10.0000000a.db', '9.ffffffff.db', '.9.0000000b.db.tmp', 'notes.db', '9.0000000b.db', '01.0000000a.db']))
       .toEqual(['9.0000000b.db', '9.ffffffff.db', '10.0000000a.db']);
   });
+  it('segmentOrdersAfter is orderSegmentNames\' order, strict: a later seq, or the same seq and a later writer; never itself or an earlier one; no mark, or a mark off the grammar, names no carrier (D-5637 (history-export-replay-last-carrier))', () => {
+    expect(libSeg.segmentOrdersAfter('10.0000000a.db', '9.ffffffff.db'), 'seq is numeric, never lexical').toBe(true);
+    expect(libSeg.segmentOrdersAfter('9.ffffffff.db', '10.0000000a.db')).toBe(false);
+    expect(libSeg.segmentOrdersAfter('9.ffffffff.db', '9.0000000b.db'), 'the same seq: the writer token decides').toBe(true);
+    expect(libSeg.segmentOrdersAfter('9.0000000b.db', '9.ffffffff.db')).toBe(false);
+    expect(libSeg.segmentOrdersAfter('9.0000000b.db', '9.0000000b.db'), 'never after itself: a page replayed again moves nothing').toBe(false);
+    expect(libSeg.segmentOrdersAfter('1.0000000a.db', null), 'no mark').toBe(true);
+    expect(libSeg.segmentOrdersAfter('1.0000000a.db', 'notes.db'), 'a mark off the grammar names no carrier').toBe(true);
+    expect(() => libSeg.segmentOrdersAfter('01.0000000a.db', null), 'the replayed name is the caller\'s, from the listing').toThrow(TypeError);
+    const names = libSeg.orderSegmentNames(['10.0000000a.db', '9.ffffffff.db', '9.0000000b.db', '2.0000000c.db', '2.0000000b.db']);
+    for (let i = 0; i < names.length; i += 1) {
+      for (let j = 0; j < names.length; j += 1) expect(libSeg.segmentOrdersAfter(names[i]!, names[j]!), `${names[i]!} after ${names[j]!}: one order with orderSegmentNames`).toBe(i > j);
+    }
+  });
+  it('replayWriterLayout: each writer\'s lowest and highest seq over the listed names and the marked names; a directory holds a fork when some pair of writers is neither one\'s successor (equal and interleaved seqs included), and a rebind\'s writer, wholly above the earlier one, is a successor (D-5726 (history-export-replay-mark-one-writer))', () => {
+    const lay = (names: string[]): { ranges: Array<[string, number, number]>; forked: boolean } => {
+      const l = libSeg.replayWriterLayout(names);
+      return { ranges: [...l.ranges.entries()].map(([w, r]: [string, { lo: number; hi: number }]) => [w, r.lo, r.hi] as [string, number, number]).sort(), forked: l.forked };
+    };
+    expect(lay([]), 'no segment').toEqual({ ranges: [], forked: false });
+    expect(lay(['1.0000000a.db', '4.0000000a.db']), 'one writer').toEqual({ ranges: [['0000000a', 1, 4]], forked: false });
+    expect(lay(['1.0000000a.db', '2.0000000a.db', '3.0000000b.db', '9.0000000b.db']).forked, 'a successor: wholly above').toBe(false);
+    expect(lay(['1.0000000a.db', '2.0000000a.db', '3.0000000b.db', '4.0000000c.db']).forked, 'a chain of successors').toBe(false);
+    expect(lay(['5.0000000a.db', '5.0000000b.db']).forked, 'an equal seq touches: a fork').toBe(true);
+    expect(lay(['5.0000000a.db', '7.0000000a.db', '6.0000000b.db']).forked, 'interleaved ranges: a fork').toBe(true);
+    expect(lay(['1.0000000a.db', '2.0000000b.db', '2.0000000c.db']).forked, 'a fork anywhere in the directory holds it, though b and c both succeed a').toBe(true);
+    expect(lay(['notes.db', '3.0000000a.db', '.3.0000000a.db.tmp']), 'names off the grammar are dropped').toEqual({ ranges: [['0000000a', 3, 3]], forked: false });
+    // FR1 F1: the names the store's marks hold widen a writer's range, so a fork hidden by a missing segment reads as a fork
+    const listed = ['3.0000000b.db', '5.0000000a.db'];
+    expect(libSeg.replayWriterLayout(listed).forked, 'by the listing alone, b [3] and a [5] succeed one another').toBe(false);
+    const marked = libSeg.replayWriterLayout(listed, ['2.0000000a.db']);
+    expect(marked.forked, 'a mark names a [2] that is not listed: a [2, 5] and b [3] interleave').toBe(true);
+    expect(marked.ranges.get('0000000a'), 'the marked name widens the range').toEqual({ lo: 2, hi: 5 });
+    expect([...marked.listed].sort(), 'but only the listed names are listed').toEqual(listed);
+    expect(libSeg.replayWriterLayout(listed, ['notes.db', '9.0000000a.db']).ranges.get('0000000a'), 'a marked name off the grammar is dropped; one above widens the other way').toEqual({ lo: 5, hi: 9 });
+    expect(libSeg.replayWriterLayout(['1.0000000a.db'], ['1.0000000a.db']).listed.size, 'a name both listed and marked is one').toBe(1);
+  });
+  it('decideReplayMark: fresh marks; an unmarked held row is kept in a directory that holds a fork and marked otherwise; the same segment keeps; the same writer moves only forward; a successor writer moves the mark forward, a held mark of a later writer stays; a fork takes the mark off; a held name that is not listed, of another writer, stays for the check, or comes off in a forked directory (D-5726 (history-export-replay-mark-one-writer))', () => {
+    type Layout = ReturnType<typeof libSeg.replayWriterLayout>;
+    const lay = (names: string[]): Layout => libSeg.replayWriterLayout(names);
+    const seg = '5.0000000b.db';
+    // the writers: a [1,3] and b [5,6] (b succeeds a), c [5,9] (a fork with b), d [2,9] (a fork with a and with b)
+    const chain = lay(['1.0000000a.db', '3.0000000a.db', '5.0000000b.db', '6.0000000b.db']);
+    const fork = lay(['1.0000000a.db', '5.0000000b.db', '5.0000000c.db', '9.0000000c.db']);
+    const decide = (held: string | null, layout: Layout, fresh = false): string => libSeg.decideReplayMark({ seg, held, fresh, layout });
+    // 1. fresh gives mark, whatever held is and whether or not the directory holds a fork
+    for (const held of [null, seg, '3.0000000a.db', '9.0000000b.db', '5.0000000c.db', 'notes.db']) {
+      for (const layout of [chain, fork]) expect(decide(held, layout, true), `fresh over ${String(held)}`).toBe('mark');
+    }
+    // 2. held null (or off the grammar): sticky only where a fork stands
+    expect(decide(null, fork), 'a fork in the directory: the row stays owed').toBe('keep');
+    expect(decide(null, chain), 'no fork: Task 5\'s rule').toBe('mark');
+    expect(decide('notes.db', fork), 'off the grammar counts as null: a fork').toBe('keep');
+    expect(decide('notes.db', chain), 'off the grammar counts as null: no fork').toBe('mark');
+    // 3. the same segment
+    expect(decide(seg, chain)).toBe('keep');
+    expect(decide(seg, fork)).toBe('keep');
+    // 5. the same writer: forward only
+    expect(decide('1.0000000b.db', libSeg.replayWriterLayout(['1.0000000b.db', '5.0000000b.db'])), 'same writer, earlier seq').toBe('mark');
+    expect(decide('9.0000000b.db', libSeg.replayWriterLayout(['5.0000000b.db', '9.0000000b.db'])), 'same writer, later seq').toBe('keep');
+    // 6. a successor writer moves the mark forward; a held mark of a later writer stays
+    expect(decide('3.0000000a.db', chain), 'b succeeds a: the mark moves to the superset').toBe('mark');
+    const reverse = lay(['1.0000000a.db', '2.0000000a.db', '3.0000000b.db']);
+    expect(libSeg.decideReplayMark({ seg: '2.0000000a.db', held: '3.0000000b.db', fresh: false, layout: reverse }), 'the held mark names a successor: it stays').toBe('keep');
+    // 7. a fork takes the mark off, whichever way the order runs
+    expect(decide('5.0000000c.db', fork), 'b and c touch at seq 5').toBe('take-off');
+    expect(decide('9.0000000c.db', fork), 'b and c: held later').toBe('take-off');
+    const interleaved = lay(['5.0000000a.db', '7.0000000a.db', '6.0000000b.db']);
+    expect(libSeg.decideReplayMark({ seg: '6.0000000b.db', held: '5.0000000a.db', fresh: false, layout: interleaved }), 'interleaved ranges: held earlier').toBe('take-off');
+    expect(libSeg.decideReplayMark({ seg: '6.0000000b.db', held: '7.0000000a.db', fresh: false, layout: interleaved }), 'interleaved ranges: held later').toBe('take-off');
+    // 4. a held mark naming a segment the listing does not hold (moved aside after a recovery), of ANOTHER writer: the mark is not moved
+    // onto this writer's segment (that one may lack what the missing one carried). It stays for the check after a bind, which clears a
+    // mark naming a missing segment, and comes off at once in a directory that holds a fork. (FR1 F1, D-5726 (history-export-replay-mark-one-writer))
+    // 4A. the held writer has no listed name at all (the layout is of the listed names and no marked ones)
+    expect(decide('3.0000000f.db', chain), 'A: an absent writer, held earlier in the order: it stays for the check').toBe('keep');
+    expect(decide('9.0000000f.db', chain), 'A: an absent writer, held later in the order').toBe('keep');
+    expect(decide('3.0000000f.db', fork), 'A: an absent writer, in a forked directory: it comes off').toBe('take-off');
+    expect(decide('9.0000000f.db', fork), 'A: an absent writer held later, in a forked directory').toBe('take-off');
+    // 4B. the held writer has a listed name but the held name is not listed
+    expect(decide('2.0000000a.db', chain), 'B: writer a lists 1 and 3, not 2; b is its successor: the mark stays, it does not move to b').toBe('keep');
+    expect(decide('4.0000000a.db', chain), 'B: held above a\'s listed range').toBe('keep');
+    expect(decide('2.0000000a.db', fork), 'B: the same in a forked directory: it comes off').toBe('take-off');
+    expect(decide('7.0000000a.db', fork), 'B: held later, in a forked directory').toBe('take-off');
+    // 4C. the same writer's unlisted held name still moves forward: the same-writer rule runs first, whether or not the name is listed
+    expect(decide('2.0000000b.db', chain), 'C: same writer, unlisted, earlier: it moves forward').toBe('mark');
+    expect(decide('2.0000000b.db', fork), 'C: the same in a forked directory').toBe('mark');
+    expect(decide('9.0000000b.db', chain), 'C: same writer, unlisted, later: it stays').toBe('keep');
+    // a writer the layout does not range, where the rules need it, is the caller\'s bug (seg is a listed name, so its writer is ranged)
+    expect(() => libSeg.decideReplayMark({ seg: '5.0000000e.db', held: '3.0000000a.db', fresh: false, layout: chain }), 'seg\'s writer is not in the layout').toThrow(TypeError);
+    // an off-grammar seg is the caller's bug
+    expect(() => libSeg.decideReplayMark({ seg: '01.0000000b.db', held: null, fresh: true, layout: chain })).toThrow(TypeError);
+    expect(() => libSeg.decideReplayMark({ seg: 'notes.db', held: null, fresh: false, layout: chain })).toThrow(TypeError);
+  });
+  // ── FR1 part b: D-5727 (history-export-replay-layout-once): the replay's writer layout, kept in one meta key, only ever widened ──
+  describe('D-5727: the replay layout\'s meta value (history-export-replay-layout-once)', () => {
+    type R = Map<string, { lo: number; hi: number }>;
+    const rs = (o: Record<string, [number, number]>): R => new Map(Object.entries(o).map(([w, [lo, hi]]) => [w, { lo, hi }]));
+    const plain = (m: ReadonlyMap<string, { lo: number; hi: number }>): Record<string, [number, number]> =>
+      Object.fromEntries([...m.entries()].map(([w, r]) => [w, [r.lo, r.hi] as [number, number]]));
+    it('formatReplayLayout and parseReplayLayout round-trip a version and each writer\'s [lo, hi], writers in code-unit order', () => {
+      const text = libSeg.formatReplayLayout({ version: 1_760_000_000_123, ranges: rs({ '0000000b': [3, 9], '0000000a': [1, 4] }) });
+      expect(text, 'writers sorted, so the same layout is the same text').toBe('{"version":1760000000123,"ranges":{"0000000a":[1,4],"0000000b":[3,9]}}');
+      const back = libSeg.parseReplayLayout(text);
+      expect(back?.version).toBe(1_760_000_000_123);
+      expect(plain(back!.ranges)).toEqual({ '0000000a': [1, 4], '0000000b': [3, 9] });
+      expect(libSeg.formatReplayLayout(back!), 'and back again').toBe(text);
+      const empty = libSeg.formatReplayLayout({ version: 5, ranges: new Map() });
+      expect(libSeg.parseReplayLayout(empty), 'a replay of no segment keeps an empty layout').toEqual({ version: 5, ranges: new Map() });
+      const widest = libSeg.formatReplayLayout({ version: 5, ranges: libSeg.widestReplayRanges(['1.0000000a.db']) });
+      expect(plain(libSeg.parseReplayLayout(widest)!.ranges), 'the widest layout survives the round trip, safe integers included').toEqual({ '0000000a': [0, Number.MAX_SAFE_INTEGER] });
+    });
+    it('parseReplayLayout answers null to anything malformed, never a throw', () => {
+      const bad: unknown[] = [
+        null, undefined, 5, '', 'torn{', 'null', '[]', '"x"', '{}', '{"version":5}', '{"ranges":{}}',
+        '{"version":5,"ranges":{},"x":1}', '{"version":0,"ranges":{}}', '{"version":-3,"ranges":{}}', '{"version":1.5,"ranges":{}}',
+        '{"version":"5","ranges":{}}', '{"version":9007199254740993,"ranges":{}}', '{"version":5,"ranges":[]}', '{"version":5,"ranges":null}',
+        '{"version":5,"ranges":{"0000000a":[1]}}', '{"version":5,"ranges":{"0000000a":[1,2,3]}}', '{"version":5,"ranges":{"0000000a":"1,2"}}',
+        '{"version":5,"ranges":{"0000000a":[4,1]}}', '{"version":5,"ranges":{"0000000a":[-1,2]}}', '{"version":5,"ranges":{"0000000a":[1.5,2]}}',
+        '{"version":5,"ranges":{"0000000a":[1,9007199254740993]}}', '{"version":5,"ranges":{"0000000a":["1","2"]}}',
+        '{"version":5,"ranges":{"0000000A":[1,2]}}', '{"version":5,"ranges":{"a":[1,2]}}', '{"version":5,"ranges":{"__proto__":[1,2]}}',
+        '{"version":5,"ranges":{"0000000a":[1,2]}} trailing',
+      ];
+      for (const t of bad) expect(libSeg.parseReplayLayout(t as string | null), String(t)).toBeNull();
+    });
+    it('widenReplayRanges: adds a writer, lowers a lo, raises a hi, and never narrows; it touches neither argument and says whether it widened', () => {
+      const base = rs({ '0000000a': [3, 6] });
+      const keep = plain(base);
+      const same = libSeg.widenReplayRanges(base, rs({ '0000000a': [4, 5] }));
+      expect(plain(same.ranges), 'a narrower range changes nothing').toEqual({ '0000000a': [3, 6] });
+      expect(same.widened).toBe(false);
+      expect(libSeg.widenReplayRanges(base, new Map()).widened, 'nothing to add').toBe(false);
+      const both = libSeg.widenReplayRanges(base, rs({ '0000000a': [1, 9], '0000000b': [2, 2] }));
+      expect(plain(both.ranges)).toEqual({ '0000000a': [1, 9], '0000000b': [2, 2] });
+      expect(both.widened).toBe(true);
+      expect(libSeg.widenReplayRanges(base, rs({ '0000000a': [3, 7] })).widened, 'a higher hi alone').toBe(true);
+      expect(libSeg.widenReplayRanges(base, rs({ '0000000a': [2, 6] })).widened, 'a lower lo alone').toBe(true);
+      expect(libSeg.widenReplayRanges(new Map(), rs({ '0000000c': [1, 1] })).widened, 'a new writer alone').toBe(true);
+      expect(plain(base), 'the base is untouched').toEqual(keep);
+      // widening is monotone: whatever order the additions come in, no writer's range ever shrinks
+      let acc: R = new Map();
+      for (const add of [rs({ '0000000a': [5, 6] }), rs({ '0000000a': [2, 3] }), rs({ '0000000a': [4, 4] }), rs({ '0000000b': [1, 1] })]) {
+        const next = libSeg.widenReplayRanges(acc, add).ranges;
+        for (const [w, r] of acc) {
+          expect(next.get(w)!.lo, `${w} lo`).toBeLessThanOrEqual(r.lo);
+          expect(next.get(w)!.hi, `${w} hi`).toBeGreaterThanOrEqual(r.hi);
+        }
+        acc = next;
+      }
+      expect(plain(acc)).toEqual({ '0000000a': [2, 6], '0000000b': [1, 1] });
+    });
+    it('replayWriterLayout over a kept layout: the union of the kept ranges, the listed names and the marked names, so a fork the kept ranges witness stays; every listed writer is ranged, which keeps decideReplayMark\'s TypeError arm unreachable', () => {
+      const listed = ['3.0000000b.db', '5.0000000a.db'];
+      expect(libSeg.replayWriterLayout(listed).forked, 'by the listing alone, a [5] and b [3] succeed one another').toBe(false);
+      const kept = libSeg.replayWriterLayout(listed, [], rs({ '0000000a': [2, 5], '0000000b': [3, 3] }));
+      expect(kept.forked, 'the kept a [2, 5] witnesses the fork with b [3]').toBe(true);
+      expect(kept.widened, 'and the listing widens nothing it held').toBe(false);
+      expect(libSeg.replayWriterLayout(listed, [], rs({ '0000000a': [2, 5] })).widened, 'a listed writer the kept ranges lack does widen them').toBe(true);
+      expect(plain(kept.ranges)).toEqual({ '0000000a': [2, 5], '0000000b': [3, 3] });
+      expect(kept.listed.size, 'the listed set is the listed names, whatever was kept').toBe(2);
+      const grown = libSeg.replayWriterLayout([...listed, '9.0000000c.db'], [], rs({ '0000000a': [2, 5] }));
+      expect(grown.widened, 'a listed writer the kept layout lacks widens it').toBe(true);
+      expect(grown.ranges.get('0000000c'), 'and is ranged').toEqual({ lo: 9, hi: 9 });
+      expect(libSeg.replayWriterLayout(['1.0000000a.db'], [], rs({ '0000000a': [4, 8] })).ranges.get('0000000a'), 'a lower listed seq lowers the lo, the hi stays').toEqual({ lo: 1, hi: 8 });
+      expect(libSeg.replayWriterLayout(listed).widened, 'with no kept layout there is nothing it widened').toBe(false);
+      // every name the layout is asked about is ranged: decideReplayMark's TypeError arm (a writer not in the layout) cannot be reached by a listed seg
+      const stale = libSeg.replayWriterLayout(['7.0000000e.db', '3.0000000a.db'], [], rs({ '0000000a': [1, 3] }));
+      expect(libSeg.decideReplayMark({ seg: '7.0000000e.db', held: '3.0000000a.db', fresh: false, layout: stale }), 'e is listed, so it is ranged, whatever the kept layout lacked').toBe('mark');
+      expect(libSeg.decideReplayMark({ seg: '3.0000000a.db', held: '7.0000000e.db', fresh: false, layout: stale }), 'and as the held writer').toBe('keep');
+    });
+    it('widestReplayRanges: every writer the names give, over the whole seq line, so every pair reads as a fork; names off the grammar are dropped', () => {
+      const w = libSeg.widestReplayRanges(['3.0000000a.db', '4.0000000b.db', 'notes.db', '9.0000000a.db']);
+      expect(plain(w)).toEqual({ '0000000a': [0, Number.MAX_SAFE_INTEGER], '0000000b': [0, Number.MAX_SAFE_INTEGER] });
+      expect(libSeg.replayWriterLayout(['3.0000000a.db', '4.0000000b.db'], [], w).forked).toBe(true);
+      expect(libSeg.replayWriterLayout(['3.0000000a.db', '4.0000000a.db'], [], libSeg.widestReplayRanges(['3.0000000a.db', '4.0000000a.db'])).forked, 'one writer alone is no fork').toBe(false);
+      expect(libSeg.widestReplayRanges([]).size).toBe(0);
+    });
+    it('planReplayLayout answers two words: a key of this replay\'s version widens, and a key that is missing, malformed or of another version takes the widest (the measure is the phase advance\'s, never a chunk\'s)', () => {
+      const kept = libSeg.formatReplayLayout({ version: 42, ranges: rs({ '0000000a': [2, 5] }) });
+      const widen = libSeg.planReplayLayout({ text: kept, version: 42 });
+      expect(widen.word).toBe('widen');
+      expect(widen.word === 'widen' ? plain(widen.ranges) : null).toEqual({ '0000000a': [2, 5] });
+      for (const [what, text] of [['missing', null], ['another version', libSeg.formatReplayLayout({ version: 41, ranges: rs({ '0000000a': [2, 5] }) })], ['torn', 'torn{'], ['not a layout', '{"version":42}']] as const) {
+        expect(libSeg.planReplayLayout({ text, version: 42 }), what).toEqual({ word: 'widest' });
+      }
+      for (const text of [kept, null, 'torn{']) {
+        expect(libSeg.planReplayLayout({ text, version: 42 }).word, 'no input answers measure').not.toBe('measure');
+      }
+    });
+  });
   it('O39: nextSegmentSeq is one past every seq on disk, of any writer, and past meta\'s; a counter behind the directory moves past it', () => {
     expect(libSeg.nextSegmentSeq({ onDisk: [], recorded: null })).toBe(1);
     expect(libSeg.nextSegmentSeq({ onDisk: [3, 9, 4], recorded: 5 })).toBe(10);
@@ -8110,7 +8325,7 @@ describe('W1-B4: the hourly cadence, the room verdict and the dead-file key (spe
     expect(libSeg.HEALTH_META.exportPaused).toBe('export_paused');
     const values = Object.values(libSeg.HEALTH_META);
     expect(new Set(values).size).toBe(values.length);
-    for (const taken of ['export_due', 'export_overdue', 'export_census_ms', 'oldest_row_ms', 'first_due_ms', 'first_deletion_ms', 'export_seq']) {
+    for (const taken of ['export_due', 'export_overdue', 'export_census_ms', 'oldest_row_ms', 'first_due_ms', 'first_deletion_ms', 'export_seq', 'export_replay_layout']) {
       expect(values, taken).not.toContain(taken);
     }
   });
@@ -8156,6 +8371,11 @@ describe('W1-B4: the mark-failure backoff and the check after a bind, decided in
       expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: rec }).check, rec).toBe(true);
     }
     expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: '[5, "bound:5"]' }).check, 'a string entry still covers').toBe(false);
+  });
+  it('decideMarkCheck: the replay layout key (D-5727) is not a bind fact, so a store that holds one is owed no check and records nothing of it', () => {
+    expect(libSeg.decideMarkCheck({ metaKeys: ['export_replay_layout', 'export_seq', 'export_marks_counted'], checkedRecord: null }))
+      .toEqual({ check: false, facts: [], record: '[]' });
+    expect(libSeg.decideMarkCheck({ metaKeys: ['export_replay_layout', 'bound:5'], checkedRecord: '["bound:5"]' }).check, 'beside a covered bind fact').toBe(false);
   });
   it('missingSegmentNames: the names the marks give that this box does not hold, once each, sorted', () => {
     expect(libSeg.missingSegmentNames({ named: new Set([`3.${W}.db`, `1.${W}.db`, `2.${W}.db`]), present: [`1.${W}.db`] })).toEqual([`2.${W}.db`, `3.${W}.db`]);
@@ -8358,7 +8578,7 @@ describe('W1-B4 review 614, F1b: segmentMayMarkEntry, replay marks an entry with
     expect(may(b(true, false, true), b(false, true, true)), 'beside an exported one').toBe(true);
     expect(may(b(true, false, false), b(false, true, false)), 'beside an exported one, not carried').toBe(false);
   });
-  it('an exported blob licenses the mark whether or not the segment carries it, pruned since or not: first wins stays for what is exported', () => {
+  it('an exported blob licenses the mark whether or not the segment carries it, pruned since or not: any carrier of the row may take it (replay gives it to the last, D-5637)', () => {
     expect(may(b(true, false, false)), 'exported, not carried').toBe(true);
     expect(may(b(true, false, true)), 'exported, carried').toBe(true);
     expect(may(b(true, true, false)), 'exported, then pruned, not carried').toBe(true);
@@ -8555,7 +8775,7 @@ describe('deriveHealth, W1-B4: with the export writer live, export-due waits for
     redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 5, exportOverdue: 0,
     exportWriterLive: true, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
     journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0,
-    exportSegmentNewer: [], exportSegmentMissing: 0,
+    exportSegmentNewer: [], exportSegmentMissing: 0, exportSegmentDamaged: [],
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
     thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
     exportLastPassMs: NOW - 10 * MIN, exportDueOldestMs: NOW - 90 * MIN,
@@ -8667,5 +8887,321 @@ describe('deriveHealth, W1-B4: with the export writer live, export-due waits for
         expect(item.remedy).toContain('W1-B4');
       }
     });
+  });
+});
+
+// ===========================================================================
+// W5h-1 Task 1: the check after a bind in bounded, resumable batches, decided
+// in lib (D-5632 (history-export-bind-check-batched); RD2). Pure, on lib.mjs alone.
+// ===========================================================================
+import * as libBind from '../../ccd/history/lib.mjs';
+
+describe('W5h-1: the check after a bind in bounded batches, decided in lib (D-5632)', () => {
+  const MIB = 1024 * 1024;
+  it('the bounds are lib constants: 16 MiB of stored z a batch, a 64 MiB WAL ceiling, 50,000 rows a page, a 24 h stall; the stop words and the meta key are spelled once', () => {
+    expect(libBind.EXPORT_BIND_BYTES).toBe(16 * MIB);
+    expect(libBind.EXPORT_BIND_WAL_CEILING).toBe(64 * MIB);
+    expect(libBind.EXPORT_BIND_BATCH).toBe(50_000);
+    expect(libBind.EXPORT_MARKS_STALL_MS).toBe(24 * 3_600_000);
+    expect(libBind.MARK_CHECK_WORDS).toEqual(['budget', 'off', 'wal-held', 'unlistable', 'failed']);
+    expect(Object.isFrozen(libBind.MARK_CHECK_WORDS)).toBe(true);
+    expect(libBind.HEALTH_META.exportMarksCheck).toBe('export_marks_check');
+  });
+  it('markCheckStop: null while every gate is open; off, then wal-held past the ceiling (not at it), then budget', () => {
+    const open = { budgetLeft: true, off: false, walBytes: 0, walCeiling: 64 };
+    expect(libBind.markCheckStop(open)).toBeNull();
+    expect(libBind.markCheckStop({ ...open, walBytes: 64 }), 'at the ceiling is not past it').toBeNull();
+    expect(libBind.markCheckStop({ ...open, budgetLeft: false })).toBe('budget');
+    expect(libBind.markCheckStop({ ...open, off: true })).toBe('off');
+    expect(libBind.markCheckStop({ ...open, walBytes: 65 })).toBe('wal-held');
+    expect(libBind.markCheckStop({ budgetLeft: false, off: true, walBytes: 65, walCeiling: 64 }), 'a non-progress word wins').toBe('off');
+    expect(libBind.markCheckStop({ budgetLeft: false, off: false, walBytes: 65, walCeiling: 64 })).toBe('wal-held');
+  });
+  it('planMarkCheckBatch: rows in order until the stored bytes would pass the bound or the rows reach the cap; an exact fit is taken; the first row whatever its size; `after` is the last row TAKEN', () => {
+    const rows = [{ id: 3, bytes: 400 }, { id: 5, bytes: 400 }, { id: 9, bytes: 400 }, { id: 12, bytes: 1 }];
+    expect(libBind.planMarkCheckBatch({ rows, maxBytes: 1000, maxRows: 10 }), 'the byte cut').toEqual({ ids: [3, 5], bytes: 800, after: 5 });
+    expect(libBind.planMarkCheckBatch({ rows, maxBytes: 1200, maxRows: 10 }), 'an exact fit is taken').toEqual({ ids: [3, 5, 9], bytes: 1200, after: 9 });
+    expect(libBind.planMarkCheckBatch({ rows, maxBytes: 10_000, maxRows: 2 }), 'the row cap').toEqual({ ids: [3, 5], bytes: 800, after: 5 });
+    expect(libBind.planMarkCheckBatch({ rows: [{ id: 7, bytes: 5000 }, { id: 8, bytes: 1 }], maxBytes: 1000, maxRows: 10 }), 'one row over the bound is still taken, alone')
+      .toEqual({ ids: [7], bytes: 5000, after: 7 });
+    expect(libBind.planMarkCheckBatch({ rows: [{ id: 4, bytes: 0 }, { id: 6, bytes: 0 }], maxBytes: 1, maxRows: 10 }), 'pruned blobs and entries weigh nothing')
+      .toEqual({ ids: [4, 6], bytes: 0, after: 6 });
+    expect(libBind.planMarkCheckBatch({ rows: [], maxBytes: 1000, maxRows: 10 }), 'an empty page ends the phase').toEqual({ ids: [], bytes: 0, after: null });
+  });
+  it('planMarkCheckBatch: a row that is not two non-negative safe integers, or a bound that is not positive, throws (a NULL length never reads as 0)', () => {
+    expect(typeof libBind.planMarkCheckBatch, 'CONTROL: the function exists, so a throw below is its own').toBe('function');
+    for (const bad of [{ id: 1, bytes: null }, { id: 1, bytes: -1 }, { id: 0, bytes: 1 }, { id: 1.5, bytes: 1 }, { id: 2, bytes: '3' }]) {
+      expect(() => libBind.planMarkCheckBatch({ rows: [{ id: 1, bytes: 1 }, bad as unknown as { id: number; bytes: number }], maxBytes: 10, maxRows: 10 }), JSON.stringify(bad)).toThrow(TypeError);
+    }
+    expect(() => libBind.planMarkCheckBatch({ rows: [], maxBytes: 0, maxRows: 10 })).toThrow(TypeError);
+    expect(() => libBind.planMarkCheckBatch({ rows: [], maxBytes: 10, maxRows: 0 })).toThrow(TypeError);
+  });
+  it('the stop record: format and parse round-trip; absent is null; a value off the grammar throws, never null', () => {
+    const s = { word: 'wal-held' as const, sinceMs: 1_700_000_000_000, cleared: 42 };
+    expect(libBind.formatMarkCheckState(s)).toBe('wal-held 1700000000000 42');
+    expect(libBind.parseMarkCheckState(libBind.formatMarkCheckState(s))).toEqual(s);
+    for (const w of libBind.MARK_CHECK_WORDS) expect(libBind.parseMarkCheckState(`${w} 1 0`)!.word).toBe(w);
+    expect(libBind.parseMarkCheckState(null)).toBeNull();
+    for (const bad of ['', 'budget', 'budget x 1', 'nope 1 1', 'budget -1 0', 'budget 1 -1', 'budget 12345678901234567 0', 'budget 1 0 ', ' budget 1 0', 'budget 99999999999999999 1', 'budget 9007199254740993 0']) {
+      expect(() => libBind.parseMarkCheckState(bad), JSON.stringify(bad)).toThrow(TypeError);
+    }
+    expect(() => libBind.formatMarkCheckState({ word: 'started' as unknown as 'budget', sinceMs: 1, cleared: 0 })).toThrow(TypeError);
+    expect(() => libBind.formatMarkCheckState({ word: 'budget', sinceMs: -1, cleared: 0 })).toThrow(TypeError);
+  });
+  it('nextMarkCheckState: the first stop starts the clock; a later stop in the same class keeps it, takes the new word and adds what it cleared; a stop that crosses between the escalating words (wal-held, unlistable, failed) and the others (budget, off) restarts it; a record off the grammar restarts', () => {
+    expect(libBind.nextMarkCheckState({ recorded: null, word: 'budget', nowMs: 1000, cleared: 4 })).toEqual({ word: 'budget', sinceMs: 1000, cleared: 4 });
+    expect(libBind.nextMarkCheckState({ recorded: 'wal-held 1000 4', word: 'failed', nowMs: 5000, cleared: 3 }), 'since kept, cleared added')
+      .toEqual({ word: 'failed', sinceMs: 1000, cleared: 7 });
+    expect(libBind.nextMarkCheckState({ recorded: 'budget 1000 4', word: 'off', nowMs: 5000, cleared: 0 }), 'within budget and off: since kept')
+      .toEqual({ word: 'off', sinceMs: 1000, cleared: 4 });
+    expect(libBind.nextMarkCheckState({ recorded: 'budget 1000 4', word: 'wal-held', nowMs: 5000, cleared: 3 }), 'into the escalating class: since restarts')
+      .toEqual({ word: 'wal-held', sinceMs: 5000, cleared: 7 });
+    expect(libBind.nextMarkCheckState({ recorded: 'unlistable 1000 4', word: 'off', nowMs: 5000, cleared: 0 }), 'out of the escalating class: since restarts')
+      .toEqual({ word: 'off', sinceMs: 5000, cleared: 4 });
+    expect(libBind.nextMarkCheckState({ recorded: 'torn', word: 'off', nowMs: 5000, cleared: 2 }), 'the writer cures a record status cannot read')
+      .toEqual({ word: 'off', sinceMs: 5000, cleared: 2 });
+    expect(() => libBind.nextMarkCheckState({ recorded: null, word: 'off', nowMs: -1, cleared: 0 })).toThrow(TypeError);
+  });
+});
+
+// ── W5h-1 Task 2: doctor sees a check after a bind that cannot finish (D-5633 (history-export-bind-check-doctor)) ─
+// Pure, every input a parameter, the clock included. Task 1 writes HEALTH_META.exportMarksCheck ('<word> <sinceMs>
+// <cleared>') when the check stops short and deletes it with the done stamp; status reads it through Task 1's
+// parseMarkCheckState. This is the rule doctor relays (coordinator ruling R5, as amended): WARN export-marks-unchecked
+// while the record stands; FAIL export-marks-stalled IN ITS PLACE once an escalating word (wal-held, unlistable, failed)
+// has stood, by the record's sinceMs, more than EXPORT_MARKS_STALL_MS. `budget` and `off` never escalate (R4, R5, D-4314).
+describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)', () => {
+  const NOW = 1_800_000_000_000;
+  const MIN = 60_000;
+  const STORE = '5f0c2d3e-8a1b-4c2d-9e3f-0a1b2c3d4e5f';
+  const STALL = healthLib.EXPORT_MARKS_STALL_MS;
+  const TAIL = 'until it finishes, a mark may still name a segment that is not on this box, and the gap guard cannot see those rows';
+  type Check = NonNullable<healthLib.HealthInputs['exportMarksCheck']>;
+  /** Task 28's healthy baseline: a bound store that ticked a minute ago, with no check standing. */
+  const clean = (o: Partial<healthLib.HealthInputs> = {}): healthLib.HealthInputs => ({
+    nowMs: NOW, storeId: STORE, exit: 0, reason: null,
+    shimMtimeMs: NOW - 60 * MIN, lastTickMs: NOW - MIN, lagS: 5, sizeBytes: 1_000_000,
+    capGb: 50, capMalformed: false, capFile: '/home/u/.ccrc/cap-fixture', capturePause: '',
+    migration: 'none', userVersion: 1, codeVersion: 1, historyOff: false, recovering: null, op: null, pass: null,
+    bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
+    redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0,
+    exportWriterLive: true, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
+    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0, exportSegmentNewer: [], exportSegmentMissing: 0, exportSegmentDamaged: [],
+    journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
+    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [], exportLastPassMs: null, exportDueOldestMs: null,
+    ...o,
+  });
+  /** The stop record as status hands it over: `word`, its `sinceMs` `agoMs` before NOW, `cleared` marks so far. */
+  const check = (word: Check['word'], agoMs: number, cleared = 0): Partial<healthLib.HealthInputs> =>
+    ({ exportMarksCheck: { word, sinceMs: NOW - agoMs, cleared } });
+  const words = (r: healthLib.HealthResult, cls: 'warn' | 'fail'): string[] => r[cls].map((i) => i.word);
+  const ESCALATING = ['wal-held', 'unlistable', 'failed'] as const;
+  const NEVER = ['budget', 'off'] as const;
+  const ALL = healthLib.MARK_CHECK_WORDS;   // Task 1's shared name: the five stop words
+  /** One fragment of each word's own remedy. */
+  const REMEDY: Record<Check['word'], string> = {
+    budget: `none needed while ingest leaves the check room: the check resumes at the next tick that runs it, and none runs while ~/${healthLib.SWITCHES.off} stands; if it stands for days, read the sweep: journalctl --user -u ccd-history-sweep -n 50`,
+    off: `remove ~/${healthLib.SWITCHES.off} when capture should resume, once any carry is whole`,
+    'wal-held': 'so a checkpoint can truncate the WAL',
+    unlistable: `make ~/.ccrc/history/${healthLib.EXPORT_DIR}/${STORE} a directory this user can read`,
+    failed: 'the check\'s error is logged there each tick it fails',
+  };
+
+  it('no stop record, absent or null, is no word: the baseline stays PASS ok', () => {
+    expect(healthLib.deriveHealth(clean())).toEqual({ pass: 'ok', warn: [], fail: [] });
+    expect(healthLib.deriveHealth(clean({ exportMarksCheck: null }))).toEqual({ pass: 'ok', warn: [], fail: [] });
+  });
+
+  it('a check that stopped WARNs export-marks-unchecked, naming its last word, how long it has stopped on words of that class and the marks it cleared so far', () => {
+    const r = healthLib.deriveHealth(clean(check('budget', 30 * MIN, 4)));
+    expect(words(r, 'warn')).toEqual(['export-marks-unchecked']);
+    expect(words(r, 'fail')).toEqual([]);
+    expect(r.warn[0]!.detail).toBe(`store ${STORE}: the check of the export marks after a bind has not finished: it last stopped on budget `
+      + `(the run budget was spent before its next batch, ingest first), has stopped on budget or off for 30 min, and has cleared at least 4 mark(s) so far; ${TAIL}`);
+  });
+
+  it.each(ALL)('stopped on %s: the detail names the word, and the remedy is that word\'s own, then the prune hold', (word) => {
+    const i = healthLib.deriveHealth(clean(check(word, 30 * MIN))).warn.find((x) => x.word === 'export-marks-unchecked');
+    expect(i?.detail).toContain(`it last stopped on ${word} (`);
+    expect(i?.remedy).toContain(REMEDY[word]);
+    expect(i?.remedy, 'prune --apply is not gated on the marks').toContain('; until the check finishes, hold any ccrc history prune --apply');
+  });
+
+  it.each(['budget', 'off', 'wal-held', 'unlistable'] as const)('stopped on %s: the remedy says the check resumes at the next tick that runs it, and none runs while history-off stands (review 644 F4)', (word) => {
+    const own = healthLib.deriveHealth(clean(check(word, 30 * MIN))).warn.find((x) => x.word === 'export-marks-unchecked')!.remedy;
+    expect(own).toContain(`the check resumes at the next tick that runs it, and none runs while ~/${healthLib.SWITCHES.off} stands`);
+    expect(own).not.toContain('resumes with the next tick');
+  });
+
+  it('the five words carry five remedies, none of them the fallback text', () => {
+    const remedies = ALL.map((w) => healthLib.deriveHealth(clean(check(w, 30 * MIN))).warn[0]!.remedy);
+    expect(new Set(remedies).size).toBe(ALL.length);
+    for (const r of remedies) expect(r).not.toBe(healthLib.HEALTH_REMEDIES['export-marks-unchecked']);
+  });
+
+  it('every MARK_CHECK_WORDS member has its own remedy text, and the table names no other word (Task 1\'s shared list, bound both ways)', () => {
+    expect(Object.keys(REMEDY).sort()).toEqual([...healthLib.MARK_CHECK_WORDS].sort());
+    for (const w of healthLib.MARK_CHECK_WORDS) {
+      const remedy = healthLib.deriveHealth(clean(check(w, 30 * MIN))).warn.find((x) => x.word === 'export-marks-unchecked')?.remedy;
+      expect(remedy, w).toContain(REMEDY[w]);
+      expect(remedy, w).not.toBe(healthLib.HEALTH_REMEDIES['export-marks-unchecked']);
+    }
+  });
+
+  it.each(ESCALATING)('%s standing past EXPORT_MARKS_STALL_MS FAILs export-marks-stalled, which replaces the WARN', (word) => {
+    const r = healthLib.deriveHealth(clean(check(word, STALL + 60 * MIN, 7)));
+    expect(words(r, 'fail')).toEqual(['export-marks-stalled']);
+    expect(words(r, 'warn')).toEqual([]);
+    expect(r.fail[0]!.detail).toContain(`has not finished: it last stopped on ${word} (`);
+    expect(r.fail[0]!.detail).toContain(`has stopped on wal-held, unlistable or failed for ${Math.round(STALL / MIN) + 60} min (over ${Math.round(STALL / MIN)} min), words no tick moves past by itself, and has cleared at least 7 mark(s) so far; ${TAIL}`);
+    expect(r.fail[0]!.remedy).toContain(REMEDY[word]);
+  });
+
+  it('the threshold is strict, and R5 ruled it 24 h: at EXPORT_MARKS_STALL_MS still the WARN, one ms past the FAIL', () => {
+    expect(STALL).toBe(24 * 60 * MIN);
+    const at = healthLib.deriveHealth(clean(check('failed', STALL)));
+    expect(words(at, 'warn')).toEqual(['export-marks-unchecked']);
+    expect(words(at, 'fail')).toEqual([]);
+    expect(words(healthLib.deriveHealth(clean(check('failed', STALL + 1))), 'fail')).toEqual(['export-marks-stalled']);
+  });
+
+  it.each(NEVER)('%s never escalates: a check stopped on it for thirty days stays a WARN (R4, R5 as amended; off holds back every freshness FAIL, D-4314)', (word) => {
+    const r = healthLib.deriveHealth(clean(check(word, 30 * 24 * 60 * MIN, 2)));
+    expect(words(r, 'fail')).toEqual([]);
+    expect(words(r, 'warn')).toEqual(['export-marks-unchecked']);
+    expect(r.warn[0]!.detail).toContain('has stopped on budget or off for 43200 min');
+  });
+
+  it('a first stop recorded in the future (the clock stepped back) reads 0 min and never FAILs', () => {
+    const r = healthLib.deriveHealth(clean(check('failed', -10 * MIN)));
+    expect(words(r, 'fail')).toEqual([]);
+    expect(r.warn[0]!.detail).toContain('has stopped on wal-held, unlistable or failed for 0 min');
+  });
+
+  it('beside export-segment-missing: two items with two sentences, what was cleared and that the check is unfinished, and two remedies', () => {
+    const r = healthLib.deriveHealth(clean({ exportSegmentMissing: 3, ...check('budget', 30 * MIN, 3) }));
+    expect(words(r, 'warn').sort()).toEqual(['export-marks-unchecked', 'export-segment-missing']);
+    const missing = r.warn.find((i) => i.word === 'export-segment-missing')!;
+    const unchecked = r.warn.find((i) => i.word === 'export-marks-unchecked')!;
+    const tag = `store ${STORE}: `;
+    expect(unchecked.detail).not.toContain(missing.detail.slice(tag.length));
+    expect(missing.detail).not.toContain('has not finished');
+    expect(unchecked.remedy).not.toBe(missing.remedy);
+  });
+
+  it('a check stopped on an escalating word past the stall threshold stays a WARN while history-off stands: no tick can retry it, and the switch holds the FAIL back (D-5640, D-4314)', () => {
+    const r = healthLib.deriveHealth(clean({ historyOff: true, ...check('failed', STALL + 60 * MIN) }));
+    expect(words(r, 'fail')).toEqual([]);
+    expect(words(r, 'warn')).toContain('off');
+    expect(words(r, 'warn')).toContain('export-marks-unchecked');
+  });
+});
+
+// ── W5h-1 Task 3: the verdicts over a carried segment (D-5634 (history-export-segment-whole-check)) ──────────────
+describe('decideSegmentWhole, decideSegmentOwn and readSegmentNameList (W5h-1 Task 3; D-5634)', () => {
+  const SID = '0189abcd-1234-4678-9abc-0000000000f3';
+  const W = '0a1b2c3e';
+  /** A whole 4 KiB-page file of 12 pages; each case changes one fact. */
+  const whole = { size: 12 * 4096, magic: true, pageSize: 4096, pageCount: 12, headerValid: true } as const;
+  const WHOLE_CASES: Array<[string, libReplay.SegmentFileFacts, libReplay.SegmentWholeVerdict]> = [
+    ['whole', whole, 'whole'],
+    ['unreadable', { unreadable: 'ELOOP' }, 'unreadable'],
+    ['empty', { ...whole, size: 0, magic: false, pageSize: 0, pageCount: 0, headerValid: false }, 'short'],
+    ['under the header', { ...whole, size: 99, headerValid: false }, 'short'],
+    ['one page short', { ...whole, size: 11 * 4096 }, 'short'],
+    ['one byte short', { ...whole, size: 12 * 4096 - 1 }, 'short'],
+    ['one page long', { ...whole, size: 13 * 4096 }, 'long'],
+    ['one byte long', { ...whole, size: 12 * 4096 + 1 }, 'long'],
+    ['no magic', { ...whole, magic: false }, 'not-sqlite'],
+    ['valid-for off the counter', { ...whole, headerValid: false }, 'header-invalid'],
+    ['no pages', { ...whole, pageCount: 0, size: 4096 }, 'header-invalid'],
+    ['page size not a power of two', { ...whole, pageSize: 3000, size: 12 * 3000 }, 'header-invalid'],
+    ['page size under 512', { ...whole, pageSize: 256, size: 12 * 256 }, 'header-invalid'],
+    ['the largest page size', { ...whole, pageSize: 65536, size: 12 * 65536 }, 'whole'],
+  ];
+  it.each(WHOLE_CASES)('decideSegmentWhole: %s', (_what, facts, want) => {
+    expect(libReplay.decideSegmentWhole(facts)).toBe(want);
+  });
+
+  const meta = (o: Partial<{ storeId: string; seq: number; writer: string }> = {}) => ({ storeId: SID, seq: 3, writer: W, ...o });
+  const own = `3.${W}.db`;
+  const OWN_CASES: Array<[string, Parameters<typeof libReplay.decideSegmentOwn>[0], string]> = [
+    ['own', { meta: meta(), storeId: SID, name: own }, 'own'],
+    ['meta-unreadable', { meta: null, storeId: SID, name: own }, 'meta-unreadable'],
+    ['foreign', { meta: meta({ storeId: '0189abcd-1234-4678-9abc-0000000000f4' }), storeId: SID, name: own }, 'foreign'],
+    ['renamed: another seq\'s bytes under this name', { meta: meta({ seq: 2 }), storeId: SID, name: own }, 'renamed'],
+    ['renamed: another writer\'s bytes under this name', { meta: meta({ writer: '0a1b2c3f' }), storeId: SID, name: own }, 'renamed'],
+  ];
+  it.each(OWN_CASES)('decideSegmentOwn: %s', (_what, input, want) => {
+    expect(libReplay.decideSegmentOwn(input)).toBe(want);
+  });
+
+  it('readSegmentNameList: never written is []; a list of segment names reads back; anything else throws, never []', () => {
+    expect(libReplay.readSegmentNameList(null)).toEqual([]);
+    expect(libReplay.readSegmentNameList('[]')).toEqual([]);
+    expect(libReplay.readSegmentNameList(JSON.stringify([own, `10.${W}.db`]))).toEqual([own, `10.${W}.db`]);
+    for (const bad of ['', 'nope', '{}', '"3.0a1b2c3e.db"', '[3]', '["3.0a1b2c3e.db.tmp"]', '[null]']) {
+      expect(() => libReplay.readSegmentNameList(bad), bad).toThrow(TypeError);
+    }
+  });
+});
+
+// ===========================================================================
+// W5h-1 Task 4: the check re-arms when a segment it saw is gone (D-5636 (history-export-vanished-rearm)). Pure, on
+// lib.mjs alone: the compact listing record (a count and an order-independent digest of every listed segment's name,
+// damaged ones included, never the names), what a pass adds to it, whether a measured listing differs from it, and
+// decideMarkCheck's `vanished` input.
+// ===========================================================================
+describe('W5h-1 Task 4: the listing record and decideMarkCheck\'s vanished input (D-5636 (history-export-vanished-rearm))', () => {
+  const T4W = '0a1b2c3d';
+  const T4C = 'c0ffee00';
+  const s = (seq: number, w: string = T4W): string => `${seq}.${w}.db`;
+  const zero = '0'.repeat(32);
+  const head16 = (n: string): string => createHash('sha256').update(n, 'utf8').digest().subarray(0, 16).toString('hex');
+  it('segmentListingDigest: the XOR of each distinct name\'s first 16 sha256 bytes, so the same set in any order gives one digest', () => {
+    const fwd = libSeg.segmentListingDigest([s(1), s(2), s(1, T4C)]);
+    expect(libSeg.segmentListingDigest([s(1, T4C), s(2), s(1)]), 'the same set in another order').toBe(fwd);
+    expect(fwd).toMatch(/^[0-9a-f]{32}$/);
+    expect(libSeg.segmentListingDigest([])).toBe(zero);
+    expect(libSeg.segmentListingDigest([s(1)])).toBe(head16(s(1)));
+    expect(libSeg.segmentListingDigest(new Set([s(2), s(1, T4C), s(1)])), 'any iterable').toBe(fwd);
+    expect(libSeg.segmentListingDigest([s(1), s(1), s(2), s(1, T4C)]), 'a name twice counts once').toBe(fwd);
+    expect(libSeg.segmentListingDigest([s(1), s(2)]), 'another set').not.toBe(fwd);
+  });
+  it('segmentListingRecord: "<count> <digest>" over the distinct names', () => {
+    expect(libSeg.segmentListingRecord([])).toBe(`0 ${zero}`);
+    expect(libSeg.segmentListingRecord([s(2), s(1), s(2)])).toBe(`2 ${libSeg.segmentListingDigest([s(1), s(2)])}`);
+  });
+  it('addSegmentToListing: one more name, its digest XORed in, equal to the record of the whole set; no record stays none (a pass never creates it, D-5725); a torn record is left for the check', () => {
+    expect(libSeg.addSegmentToListing(null, s(1)), 'a pass never creates the record (D-5725)').toBeNull();
+    expect(libSeg.addSegmentToListing(libSeg.segmentListingRecord([s(1), s(1, T4C)]), s(2)), 'the pass never lists the directory')
+      .toBe(libSeg.segmentListingRecord([s(1), s(1, T4C), s(2)]));
+    expect(libSeg.addSegmentToListing(`0 ${zero}`, s(3))).toBe(libSeg.segmentListingRecord([s(3)]));
+    for (const torn of ['', 'x', `1 ${zero.slice(1)}`, `01 ${zero}`, `-1 ${zero}`, `1 ${'A'.repeat(32)}`, `1  ${zero}`]) {
+      expect(libSeg.addSegmentToListing(torn, s(2)), JSON.stringify(torn)).toBeNull();
+    }
+  });
+  it('segmentListingVanished: any difference from the record re-arms (a count and a digest cannot tell a segment gone from one added); an unmeasured listing never does', () => {
+    const rec = (...n: string[]): string => libSeg.segmentListingRecord(n);
+    expect(libSeg.segmentListingVanished({ recorded: rec(s(1), s(2)), measured: rec(s(2), s(1)) }), 'the same set').toBe(false);
+    expect(libSeg.segmentListingVanished({ recorded: rec(s(1), s(2)), measured: rec(s(2)) }), 'one gone').toBe(true);
+    expect(libSeg.segmentListingVanished({ recorded: rec(s(1)), measured: rec(s(1), s(1, T4C)) }), 'one carried in').toBe(true);
+    expect(libSeg.segmentListingVanished({ recorded: rec(s(1)), measured: rec(s(1, T4C)) }), 'one gone and one carried in, the count unchanged').toBe(true);
+    expect(libSeg.segmentListingVanished({ recorded: rec(s(1)), measured: null }), 'a listing that could not be measured is never vanished').toBe(false);
+    expect(libSeg.segmentListingVanished({ recorded: null, measured: rec() }), 'no record and no segment: marks may name segments the listing has lost (D-5725)').toBe(true);
+    expect(libSeg.segmentListingVanished({ recorded: null, measured: rec(s(1)) }), 'segments that predate the record: one check records them').toBe(true);
+    expect(libSeg.segmentListingVanished({ recorded: null, measured: null }), 'no record and an unmeasured listing: never vanished').toBe(false);
+    for (const torn of ['', 'not a record', `2 ${zero.slice(2)}`]) {
+      expect(libSeg.segmentListingVanished({ recorded: torn, measured: rec(s(1)) }), `a torn record ${JSON.stringify(torn)} fails toward a check`).toBe(true);
+    }
+    expect(() => libSeg.segmentListingVanished({ recorded: null, measured: 'torn' }), 'a measured record is lib\'s own; a torn one is a caller\'s bug').toThrow(TypeError);
+  });
+  it('decideMarkCheck: vanished checks with no new bind fact, and records the facts it covers; absent or false leaves the bind rule as it was', () => {
+    expect(libSeg.decideMarkCheck({ metaKeys: [], checkedRecord: null, vanished: true })).toEqual({ check: true, facts: [], record: '[]' });
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: '["bound:5"]', vanished: true }), 'a covered fact and a segment gone')
+      .toEqual({ check: true, facts: ['bound:5'], record: '["bound:5"]' });
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: '["bound:5"]', vanished: false }).check, 'neither').toBe(false);
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: '["bound:5"]' }).check, 'no vanished input').toBe(false);
+    expect(libSeg.decideMarkCheck({ metaKeys: ['bound:5'], checkedRecord: null, vanished: false }).check, 'a new fact still checks').toBe(true);
   });
 });

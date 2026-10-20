@@ -29,7 +29,7 @@ across two files, no wire change, no new bucket token.
 
 ## 1. What was measured
 
-All three probes are read-only and were run on the fleet host (`openclaw`), which owns
+All three probes are read-only and were run on the fleet host (`<fleet-host>`), which owns
 `~/.cc-sessions`, the tmux sessions and the five wrapper HOMEs.
 
 ### 1.1 A quarter of the fleet was misfiled
@@ -42,11 +42,11 @@ curl -s http://203.0.113.7:7788/api/fleet \
 | id | status | hookState | bucket | verdict |
 | --- | --- | --- | --- | --- |
 | `ccrc-pwa-calm-mesa` | busy | working | **cleanup** | wrong |
-| `custom-tools-brisk-ridge` | busy | working | **cleanup** | wrong |
-| `expoAI-assistant-warm-mesa` | busy | working | **cleanup** | wrong |
-| `data-internal-still-prairie` | busy | done | **cleanup** | wrong |
-| `data-internal-plain-harbor` | idle | – | **cleanup** | wrong |
-| `claude-corp-data-internal` | busy | – | working | wrong, the other way |
+| `project-d-brisk-ridge` | busy | working | **cleanup** | wrong |
+| `project-h-warm-mesa` | busy | working | **cleanup** | wrong |
+| `project-e-still-prairie` | busy | done | **cleanup** | wrong |
+| `project-e-plain-harbor` | idle | – | **cleanup** | wrong |
+| `claude-acme-project-e` | busy | – | working | wrong, the other way |
 
 Five of the box's **seven** archive markers sat on sessions with a live tmux pane; four of those
 panes were mid-turn:
@@ -63,10 +63,10 @@ then reused for six further days of work.
 
 ### 1.2 The live status file wedges, and it is not a one-off
 
-`claude-corp-data-internal` held `"status":"shell"` with `statusUpdatedAt` **6 480 s** stale, while
+`claude-acme-project-e` held `"status":"shell"` with `statusUpdatedAt` **6 480 s** stale, while
 its hookstate recorded `state:"done"` written **5.7 s after** the live file's last write — the turn
 demonstrably ended, and Claude Code never wrote the transition back. Forty samples at 15 s intervals
-found `expoAI-assistant-warm-mesa` reproducing the identical signature (`shell`, hook `done` +5.7 s)
+found `project-h-warm-mesa` reproducing the identical signature (`shell`, hook `done` +5.7 s)
 during the same run. Ninety seconds of 1 Hz sampling over eight busy sessions produced **zero**
 idle↔busy transitions, so this is a stuck value, not flapping.
 

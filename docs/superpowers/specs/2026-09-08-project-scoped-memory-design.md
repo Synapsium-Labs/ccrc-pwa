@@ -20,23 +20,23 @@ Measured on the fleet host, **re-taken 2026-09-09**, for this one project:
 | HOME | memory files for `ccrc-pwa` | in roster? | session hook? |
 |---|---|---|---|
 | `.claude` | 30 | yes (`claude`) | yes |
-| `.claude-corp` | 15 | yes (`claude-corp`) | yes |
-| `.claude-dev0` | 10 | yes (`claude-dev0`) | yes |
-| `.claude-personal` | 6 | yes (`claude2`) | yes |
-| `.claude-expoai` | 5 | yes (`claude-expoai`) | yes |
+| `.claude-acme` | 15 | yes (`claude-acme`) | yes |
+| `.claude-lab0` | 10 | yes (`claude-lab0`) | yes |
+| `.claude-home` | 6 | yes (`claude9`) | yes |
+| `.claude-ext1` | 5 | yes (`claude-ext1`) | yes |
 | `.claude-gpt` | 0 | yes (`gpt`) | yes |
-| `.claude-glm` | 0 | **no** | **no** |
-| `.claude-kimi` | 0 | **no** | **no** |
+| `.claude-alt1` | 0 | **no** | **no** |
+| `.claude-alt2` | 0 | **no** | **no** |
 
 **An earlier draft of this table was wrong in three ways, and the error is itself a design input.** It
-listed five homes, not eight; it reported `.claude-expoai` as empty when it holds five files; and it
-recorded a home called `.claude2` as absent. There is no `~/.claude2` — the roster entry `claude2`
-declares `configDirSuffix: .claude-personal`. The homes had been enumerated **by account id** instead
+listed five homes, not eight; it reported `.claude-ext1` as empty when it holds five files; and it
+recorded a home called `.claude9` as absent. There is no `~/.claude9` — the roster entry `claude9`
+declares `configDirSuffix: .claude-home`. The homes had been enumerated **by account id** instead
 of by the roster's own `configDirSuffix`, which is the "derive, never hand-maintain" rule this repo
 already enforces elsewhere. Any implementation that enumerates homes must derive them, and §4 says
 from what.
 
-The failure is not theoretical and not cosmetic. On 2026-09-08 a session swapped to `claude-dev0`
+The failure is not theoretical and not cosmetic. On 2026-09-08 a session swapped to `claude-lab0`
 mid-run and read an index from 06:05 that still said the account-health branch needed 29 deviation
 numbers minted — work that had been merged and deployed hours earlier. **A durable record written by
 this session, about this session's own work, was invisible to it after the swap.** Memory that
@@ -46,7 +46,7 @@ Fleet-wide the fragmentation is **40 real memory directories across 8 agent home
 projects**, plus **8 directories that are already symlinks** (§ "prior art" below).
 
 **The roster is not a census of agent homes, and this is not a temporary state.** Two homes on disk —
-`.claude-glm` and `.claude-kimi` — are in no roster entry. They are Claude Code pointed at other
+`.claude-alt1` and `.claude-alt2` — are in no roster entry. They are Claude Code pointed at other
 model providers (GLM via Cortecs, Kimi K3), and more will follow: the fleet's own model-routing policy
 names an overflow tier and a handoff lane, and both arrive as new `CLAUDE_CONFIG_DIR`s. Any design
 that enumerates "the accounts" rather than "the homes" is already incomplete on the day it ships.
@@ -55,14 +55,14 @@ that enumerates "the accounts" rather than "the homes" is already incomplete on 
 
 The first hypothesis was that the harness rewrites `memory/` as a plain directory and clobbers any
 symlink. **That is false**, and the evidence against it is unusually strong: two memory directories in
-`.claude-corp` have been symlinks since **2026-07-15 22:06** and are intact 55 days later, with a
+`.claude-acme` have been symlinks since **2026-07-15 22:06** and are intact 55 days later, with a
 write through one of them at 21:20 on 2026-09-08. (The two project slugs are deliberately not named:
 `topology-clean.test.ts`'s `fleet account label` class forbids one of them in tracked text, and the
 count and the dates are the whole of the evidence — the names carried none of it.)
 
 The real mechanism is quieter: **the harness creates a plain `memory/` directory in any home that does
-not already have one.** `.claude-dev0` holds a real, empty `custom-tools/memory` — created *after* the
-`.claude-corp` symlinks were made, in the one home nobody converged.
+not already have one.** `.claude-lab0` holds a real, empty `project-d/memory` — created *after* the
+`.claude-acme` symlinks were made, in the one home nobody converged.
 
 This is the fact the design turns on. A fork needs no clobbering and produces no error. **Any home you
 do not converge forks on its first session**, and new wrapper accounts arrive over time — so a
@@ -71,7 +71,7 @@ one-time sweep is structurally insufficient.
 ### A second defect in the existing prior art
 
 The hand-made symlinks are more numerous than first measured — **8 of them, across 2 homes**
-(`.claude-corp` × 2, `.claude-personal` × 6), covering 7 distinct projects. Every one points at
+(`.claude-acme` × 2, `.claude-home` × 6), covering 7 distinct projects. Every one points at
 `~/.claude/projects/<slug>/memory`, which makes **one account's HOME the master** for every other.
 Retire, reset or lose `.claude` and every shared store on the box goes with it. No script owns them;
 they were made by hand on 2026-07-15 and never extended to a third home.
@@ -82,10 +82,10 @@ memory.
 
 ### A third defect: two homes the mechanism could never reach
 
-`.claude-glm` and `.claude-kimi` carry a `settings.json` that does **not** reference
+`.claude-alt1` and `.claude-alt2` carry a `settings.json` that does **not** reference
 `~/.cc-sessions/session-hook.sh`. The hook is a single shared file, referenced per home — so a home
 that does not reference it never runs it, and would never converge no matter how correct §2 is.
-`.claude-glm` already holds one memory directory.
+`.claude-alt1` already holds one memory directory.
 
 This is the same shape as the original defect one level up: **a home nobody wired in forks silently.**
 §4 is what makes it audible, and it is why §4 must enumerate the filesystem rather than the roster.
@@ -194,7 +194,7 @@ unconverged pair.
 
 **It discovers homes from the filesystem** — every `~/.claude*` carrying a `projects/` directory —
 **and not from the roster.** This was left open in the first draft and the measurement closed it:
-`.claude-glm` and `.claude-kimi` exist, hold memory, and are in no roster entry. A roster-driven check
+`.claude-alt1` and `.claude-alt2` exist, hold memory, and are in no roster entry. A roster-driven check
 would have reported PASS while the exact homes most likely to fork went unexamined. The roster
 describes accounts ccrc *places work on*; it was never a census of homes on the box, and using it as
 one is how the first draft's own table came to be wrong.
@@ -217,13 +217,13 @@ forked row is therefore a **WARN** (remedy: `ccrc memory --apply`) and only the 
 a **FAIL** — the check still reports three conditions and never collapses them, but two severities
 now carry the difference the two remedies always implied.
 
-The third row is what `.claude-glm` and `.claude-kimi` need, and it is a different failure from the
+The third row is what `.claude-alt1` and `.claude-alt2` need, and it is a different failure from the
 second: a home can be perfectly converged today and still be unable to *stay* converged.
 
 This is the most load-bearing piece in the design, and it is worth being explicit about why: **the
 entire defect existed because a fork is currently silent.** Nothing on the box reports that two homes
 disagree about a project's memory. A convergence mechanism without a detector would simply move the
-silence one layer down — the next un-converged home would fork exactly as `.claude-dev0` did, and
+silence one layer down — the next un-converged home would fork exactly as `.claude-lab0` did, and
 nothing would say so.
 
 ### 4a. New homes, and agents that are not Claude Code
@@ -278,8 +278,8 @@ Every guard ships with its mutation measured RED (mutation-table discipline).
 
 The measurements this design rests on, to be re-taken before implementation since the fleet moves:
 
-1. The two `.claude-corp` symlinks are intact and written through (durability evidence).
-2. `.claude-dev0`'s empty `custom-tools/memory` exists (the fork mechanism).
+1. The two `.claude-acme` symlinks are intact and written through (durability evidence).
+2. `.claude-lab0`'s empty `project-d/memory` exists (the fork mechanism).
 3. The union's shape for `ccrc-pwa`: 57 distinct files, 52 unique to one home, 5 colliding by name,
    3 of those differing in content (the migration's real cost).
 4. The home census itself — **derived from `configDirSuffix` AND from the filesystem, never from
@@ -305,7 +305,7 @@ Behavioural cases that must be pinned, in fixture HOMEs only — never against t
 **Resolved 2026-09-09 by measurement, not judgement.** The first draft deferred one question: should
 the doctor check enumerate every home, or only roster-named homes? It reasoned that "the roster is the
 smaller and more honest set, but a home outside the roster is exactly where an un-noticed fork would
-live." The second half was right and the first half was wrong: `.claude-glm` and `.claude-kimi` are on
+live." The second half was right and the first half was wrong: `.claude-alt1` and `.claude-alt2` are on
 disk, hold memory, and are in no roster entry. §4 enumerates the filesystem. There was no judgement to
 make once the homes were counted.
 
