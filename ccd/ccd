@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7e6554ab99b8466e93d4419f1c90bd14a200ad8cababd707ef8704f5fbcf01d9
+# ccrc:generated 1 sha256=fcda38a5c959d44698c0bd3e83a1e4eb0a41288d82ff2d613656ba29c5f68a92
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -17288,7 +17288,7 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
     if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] \
        && ! _ci_pane_parked "$id" "$cfg" "$cfg/sessions/$pid.json" \
        && ! _ci_pane_refused "$id" "$cfg" "$cfg/sessions/$pid.json" "$sid"; then
-      _operator_choice_promote "$id" "kept before a uuid rotation" "$sid"; _reg_set "$id" uuid "$sid"
+      _operator_choice_promote "$id" "kept before a uuid rotation" "$sid" "$cfg"; _reg_set "$id" uuid "$sid"
       unset "_CI_BG[$id]" "_CI_BGMISS[$id]" "_CI_BGSID[$id]" "_CI_BGADDRS[$id]"
     fi
   fi
@@ -21300,8 +21300,8 @@ _operator_choice_keep() {   # id — before a stop that a spawn follows, and at 
   return 0
 }
 
-_operator_choice_promote() {   # id [reason] [incoming-sid] — the keep's read and route write, WITHOUT its choicekept marker (the dead-session keep owns that marker): `_operator_choice_keep` calls it, and `_sync_uuid` calls it before a live pane rotation moves the registry uuid off the transcript that holds the operator's choice. Reads the CURRENT registry uuid's transcript and, given the rotation's incoming sid, that one too: the newest acknowledged command of each kind in either wins, by time (D-4321). Always 0.
-  local id="$1" reason="${2:-kept across a restart}" sid="${3:-}" f typed why="" out kind val at n field want fm shown drift=0 w fin inc="" merged="" kv
+_operator_choice_promote() {   # id [reason] [incoming-sid incoming-cfg] — the keep's read and route write, WITHOUT its choicekept marker (the dead-session keep owns that marker): `_operator_choice_keep` calls it, and `_sync_uuid` calls it before a live pane rotation moves the registry uuid off the transcript that holds the operator's choice. Reads the CURRENT registry uuid's transcript and, given the rotation's incoming sid AND the config dir the caller already resolved for it (the promotion makes no call into the registry context for it; no config dir, no incoming read), that one too: the newest acknowledged command of each kind in either wins, by time (D-4321). Always 0.
+  local id="$1" reason="${2:-kept across a restart}" sid="${3:-}" icfg="${4:-}" f typed why="" out kind val at n field want fm shown drift=0 w fin inc="" merged="" kv
   local -A ackv=() acka=() ackn=() drifta=()
   local -a sets=() kinds=()
   [[ -f "$REG/$id.uuid" ]] || return 0
@@ -21334,7 +21334,7 @@ _operator_choice_promote() {   # id [reason] [incoming-sid] — the keep's read 
   # absent (the ordinary case right after a `/clear`), not a readable regular file
   # (`_ci_transcript_path` answers only a regular file), or that the reader fails
   # on contributes no lines; the outgoing ones stand alone, as the keep's always do.
-  if [[ -n "$sid" ]] && fin=$(_ci_transcript_path "$id" "$(_cfg_dir "$w")" "$sid") && [[ -r "$fin" ]]; then
+  if [[ -n "$sid" && -n "$icfg" ]] && fin=$(_ci_transcript_path "$id" "$icfg" "$sid") && [[ -r "$fin" ]]; then
     inc=$(_operator_choice_read "$fin" "$typed") || inc=""
   fi
   if [[ -z "$inc" ]]; then
