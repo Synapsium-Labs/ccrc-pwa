@@ -2802,7 +2802,14 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
       for (const t of texts) {
         const base = r!.base(...args(t));
         const out = (door as (...a: unknown[]) => unknown)(...args(t));
-        if (r11Text(out) !== r11Text(r!.v2(base, idx))) failed.push(`${name}: not v2(base): ${JSON.stringify(t)}`);
+        // a display window and a snippet compose BEFORE their cut (D-6071), so they are v2(base) only where no margin is read, a window of
+        // the whole text; the snippet masks tokens of its base cut and is not v2(base) even then. Both are subtractive over the base output (below).
+        const display = r!.whole !== undefined;
+        if (!display && r11Text(out) !== r11Text(r!.v2(base, idx))) failed.push(`${name}: not v2(base): ${JSON.stringify(t)}`);
+        if (name === 'redactDisplayWindow') {
+          const wholeArgs = [t, 0, t.length, idx];
+          if ((door as (...a: unknown[]) => unknown)(...wholeArgs) !== r!.v2(r!.base(...wholeArgs), idx)) failed.push(`${name}: a whole-text window is not v2(base): ${JSON.stringify(t)}`);
+        }
         const [bt, ot] = name === 'redactFinalJson' ? [(base as { a: string }).a, (out as { a: string }).a] : [r11Text(base), r11Text(out)];
         if (!r11Subtractive(bt, ot)) failed.push(`${name}: the v2 reading is not subtractive: ${JSON.stringify(bt)} -> ${JSON.stringify(ot)}`);
         // a window's base reading reads a slice of the text, so it is subtractive over that slice's readings, not the whole text's
@@ -2847,6 +2854,85 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     expect(separated, 'CONTROL: the widened rules read over the raw text print some of them').toBeGreaterThan(0);
     expect(joined, 'CONTROL: the composed door prints whole some values the base door prints split by a sequence').toBeGreaterThan(0);
     expect(printed.slice(0, 5), `${printed.length} of ${masked}`).toEqual([]);
+  }, 120_000);
+  // D-6071 (review 711 F1): the display doors compose BEFORE the cut. A window or a snippet is cut from the margin-widened text's
+  // reading, so the widened rules read the base reading of that whole margin text and the cut comes last; a widened value whose
+  // NAME lies in the margin (cut away from the window) is masked, not printed by its tail.
+  const d6071Case = (t: string, anchor: string, len: number, terms: string[]): { t: string; from: number; to: number; terms: string[] } =>
+    ({ t, from: t.indexOf(anchor), to: t.indexOf(anchor) + len, terms });
+  const d6071Cases: Record<string, { t: string; from: number; to: number; terms: string[] }> = {
+    review: d6071Case('intro text. password="abc defSECRET ghi" after', 'defSECRET', 13, ['ghi']),
+    dq: d6071Case('intro text. password="a b SECRETX c" after', 'SECRETX', 12, ['SECRETX']),
+    sq: d6071Case("intro text. password='a b SECRETX' after", 'SECRETX', 9, ['SECRETX']),
+    semi: d6071Case('intro text. password=abc;SECRETX;ZZ after', 'SECRETX', 11, ['SECRETX']),
+    amp: d6071Case('intro text. password=abc&SECRETX&ZZ after', 'SECRETX', 11, ['SECRETX']),
+    ansi: d6071Case('intro \x1b[32mpassword\x1b[0m="a b SECRETX c" after', 'SECRETX', 12, ['SECRETX']),
+    // the JSON-escaped form is a base pin only: the whole-text door itself prints this value (D-6070's escaped-quote residual)
+    json: d6071Case(String.raw`{"text":"intro password=\"a b SECRETX c\" after"}`, 'SECRETX', 12, ['SECRETX']),
+    plain: d6071Case('nothing secret here, just words and a path /a/b/c.txt and more words', 'just', 20, ['path']),
+  };
+  it('(j11) a snippet whose hit lies inside a widened value masks the value\'s tail when the NAME is before the snippet: the review\'s measured case (D-6071, review 711 F1)', () => {
+    const idx = idxOf([]);
+    const c = d6071Cases.review!;
+    // the whole-text door masks the value whole: this is what the snippet must not undercut
+    expect(libRedact.redactForDisplay(c.t, idx)).toBe(`intro text. password="${M}" after`);
+    const snip = libRedact.displaySnippet(c.t, c.terms, idx);
+    expect(snip, 'the value\'s tail is not printed').not.toContain('defSECRET');
+    expect(snip).toBe(`...d="${M} ${M} ${M}" after`);
+    // CONTROL: the rev 3.6 reading of the same snippet printed it (the review measured `...d="[redacted] defSECRET ghi" after`)
+    expect(libRedact.redactDoorReadings(libRedact.displaySnippet)!.base(c.t, c.terms, idx)).toContain('defSECRET');
+  });
+  it('(j12) a window or a snippet starting inside a widened value masks its tail when the NAME is a few characters before it: a double-quoted, a single-quoted, a ; and a & value, a colour sequence in the NAME (D-6071, review 711 F1)', () => {
+    const idx = idxOf([]);
+    for (const name of ['dq', 'sq', 'semi', 'amp', 'ansi']) {
+      const c = d6071Cases[name]!;
+      expect(libRedact.redactForDisplay(c.t, idx), `${name}: the whole-text door masks the tail`).not.toContain('SECRETX');
+      const win = libRedact.redactDisplayWindow(c.t, c.from, c.to, idx);
+      expect(win, `${name}: redactDisplayWindow`).not.toContain('SECRETX');
+      const snip = libRedact.displaySnippet(c.t, c.terms, idx);
+      expect(snip, `${name}: displaySnippet`).not.toContain('SECRETX');
+      // CONTROL: the rev 3.6 readings of the same window and snippet printed the tail
+      expect(libRedact.redactDoorReadings(libRedact.redactDisplayWindow)!.base(c.t, c.from, c.to, idx), `${name}: CONTROL base window`).toContain('SECRETX');
+      expect(libRedact.redactDoorReadings(libRedact.displaySnippet)!.base(c.t, c.terms, idx), `${name}: CONTROL base snippet`).toContain('SECRETX');
+    }
+  });
+  it('(j13) the named residual: a NAME MORE than ENTRY_REDACT_MARGIN before the window still prints the tail of a widened value (D-6071)', () => {
+    const idx = idxOf([]);
+    const t = `x password="a b ${'word '.repeat(Math.ceil((libRedact.ENTRY_REDACT_MARGIN + 4000) / 5))}SECRETX c" after`;
+    const from = t.indexOf('SECRETX');
+    expect(from - t.indexOf('password'), 'the NAME is further than the margin').toBeGreaterThan(libRedact.ENTRY_REDACT_MARGIN);
+    expect(libRedact.redactForDisplay(t, idx), 'CONTROL: the whole-text door masks the tail').not.toContain('SECRETX');
+    // the widened class cannot read a NAME the margin does not hold: this is D-6071's residual (spec 8.3 residual 1), as a quoted value always was
+    expect(libRedact.redactDisplayWindow(t, from, from + 12, idx)).toContain('SECRETX');
+    // CONTROL: the same text with the NAME a few characters before the window does not
+    const near = 'x password="a b SECRETX c" after';
+    expect(libRedact.redactDisplayWindow(near, near.indexOf('SECRETX'), near.indexOf('SECRETX') + 12, idx)).not.toContain('SECRETX');
+  });
+  it('(j14) the display doors\' base readings are byte for byte what rev 3.6 built, as captured before D-6071 (D-6071)', () => {
+    const idx = idxOf([]);
+    const want: Record<string, [string, string]> = {
+      review: ['defSECRET ghi', '...d="[redacted] defSECRET ghi" after'],
+      dq: ['SECRETX c" a', '...password="[redacted] b SECRETX c" after'],
+      sq: ["SECRETX' ", "...password='[redacted] b SECRETX' after"],
+      semi: ['SECRETX;ZZ ', '...xt. password=[redacted];SECRETX;ZZ after'],
+      amp: ['SECRETX&ZZ ', '...xt. password=[redacted]&SECRETX&ZZ after'],
+      ansi: ['SECRETX c" a', '...password="[redacted] b SECRETX c" after'],
+      json: [String.raw`SECRETX c\" `, String.raw`...password=[redacted]"a b SECRETX c\" after"}`],
+      plain: ['just words and a pat', '...here, just words and a path /a/b/c.txt and more words'],
+    };
+    for (const [name, [win, snip]] of Object.entries(want)) {
+      const c = d6071Cases[name]!;
+      expect(libRedact.redactDoorReadings(libRedact.redactDisplayWindow)!.base(c.t, c.from, c.to, idx), `${name}: window`).toBe(win);
+      expect(libRedact.redactDoorReadings(libRedact.displaySnippet)!.base(c.t, c.terms, idx), `${name}: snippet`).toBe(snip);
+    }
+    // and over the (j3) corpus and both seeded corpora, a window of the middle half and a snippet, as one digest taken before the change
+    const h = createHash('sha256');
+    const texts = [...f2Cases().map((x) => x.input), ...r11Corpus(0x6071, 300).map((x) => x.t), ...r11AnsiCorpus(0x1b6071, 200).map((x) => x.t)];
+    for (const t of texts) {
+      h.update(JSON.stringify(libRedact.redactDoorReadings(libRedact.redactDisplayWindow)!.base(t, Math.floor(t.length / 4), Math.ceil((3 * t.length) / 4), idx)));
+      h.update(JSON.stringify(libRedact.redactDoorReadings(libRedact.displaySnippet)!.base(t, ['hunter2q', 'cdXQ9'], idx)));
+    }
+    expect(h.digest('hex')).toBe('afbb04e790d3878de2135b558331ebed89f967c26e800ee89170b53f54794e79');
   }, 120_000);
   // D-4614 (whole-branch fix round 7): layers 2 and 3 are ORDER-FREE. Every context rule and every shape matches the same text,
   // the union of their spans is masked in one pass. Round 5's order (the named rule first) and round 6's (anchors and shapes
