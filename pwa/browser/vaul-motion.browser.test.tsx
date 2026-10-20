@@ -6,8 +6,8 @@
 // four variables that each surface sets from the tokens, and the tokens' reduced-motion block takes every duration to
 // 1ms. jsdom computes no animation, so `test/sheet-motion.test.tsx` holds the classes and this file holds what Chrome
 // computes from them: the open Sheet ("Keyboard shortcuts", `?`) and the open palette (Ctrl+K), under `no-preference`
-// and under `reduce`, at 360, 390, 1280 and 1920 in both skins and both Phosphor palettes; and the closing panel's
-// curve.
+// and under `reduce`, at 360, 390, 1280 and 1920 in both skins and both Phosphor palettes; the closing panel's
+// curve; and vaul's snap-back after a short drag, an inline transition the same helper retimes.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/vaul-motion.browser.test.tsx )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -142,18 +142,25 @@ describe("the Sheet's motion is vaul's keyframes on the tokens (D-5930)", () => 
         await page.emulateMedia({ reducedMotion: 'no-preference' });
         await boot(page, view);
         await openSheet(page);
-        // Read at the moment vaul flips the panel to `closed`: it unmounts once the exit has run.
-        const closing = page.evaluate(() => new Promise<Read>((resolve) => {
+        // Read at the moment vaul flips the panel to `closed`: it unmounts once the exit has run. The observer is
+        // INSTALLED (an awaited evaluate) before Escape is pressed, so the flip cannot happen unwatched.
+        await page.evaluate(() => {
           const el = document.querySelector('.sheet-panel')!;
-          new MutationObserver((_, obs) => {
-            if (el.getAttribute('data-state') !== 'closed') return;
-            obs.disconnect();
+          const read = (): Read => {
             const s = getComputedStyle(el);
-            resolve({ duration: s.animationDuration, curve: s.animationTimingFunction });
-          }).observe(el, { attributes: true, attributeFilter: ['data-state'] });
-        }));
+            return { duration: s.animationDuration, curve: s.animationTimingFunction };
+          };
+          (window as unknown as { __closing: Promise<Read> }).__closing = new Promise<Read>((resolve) => {
+            if (el.getAttribute('data-state') === 'closed') { resolve(read()); return; }
+            new MutationObserver((_, obs) => {
+              if (el.getAttribute('data-state') !== 'closed') return;
+              obs.disconnect();
+              resolve(read());
+            }).observe(el, { attributes: true, attributeFilter: ['data-state'] });
+          });
+        });
         await page.keyboard.press('Escape');
-        const read = await closing;
+        const read = await page.evaluate(() => (window as unknown as { __closing: Promise<Read> }).__closing);
         expect(flat(read.curve)).toBe(flat(await token(page, '--curve-swift')));
         expect(ms(read.duration), 'the exit runs at --dur-slow').toBe(ms(await token(page, '--dur-slow')));
         expect(errors).toEqual([]);
@@ -161,5 +168,45 @@ describe("the Sheet's motion is vaul's keyframes on the tokens (D-5930)", () => 
         await ctx.close();
       }
     });
+
+    // vaul's snap-back after a drag that does not dismiss is an inline TRANSITION (`resetDrawer`: `transform .5s`),
+    // not a keyframe; only an important declaration beats an inline style, so VAUL_MOTION retimes it too.
+    for (const motion of ['no-preference', 'reduce'] as const) {
+      it(`the snap-back after a short drag runs on the tokens under ${motion} — ${named(view)}`, async () => {
+        const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+        try {
+          await page.emulateMedia({ reducedMotion: motion });
+          await boot(page, view);
+          await openSheet(page);
+          await page.waitForTimeout(600); // vaul refuses a drag in the first 500ms after it opens
+          const box = (await page.locator('.sheet-panel').boundingBox())!;
+          const x = box.x + box.width / 2;
+          const y = box.y + 4; // the grabber's strip: no text to select, which would also refuse the drag
+          await page.mouse.move(x, y);
+          await page.mouse.down();
+          for (let i = 1; i <= 8; i++) { await page.mouse.move(x, y + i * 6); await page.waitForTimeout(40); }
+          await page.mouse.up();
+          const after = await page.evaluate(async () => {
+            const el = document.querySelector<HTMLElement>('.sheet-panel')!;
+            const s = getComputedStyle(el);
+            const read = { inline: el.style.transition, duration: s.transitionDuration, curve: s.transitionTimingFunction };
+            await new Promise((r) => setTimeout(r, 60));
+            return { ...read, state: el.getAttribute('data-state'), transform: getComputedStyle(el).transform };
+          });
+          expect(after.state, 'a short slow drag does not dismiss').toBe('open');
+          expect(after.inline, "vaul's resetDrawer ran (its inline transition)").toMatch(/transform/);
+          if (motion === 'reduce') {
+            expect(after.duration, 'the snap-back').toBe('0.001s');
+            expect(['none', 'matrix(1, 0, 0, 1, 0, 0)'], 'back at rest 60ms after release').toContain(after.transform);
+          } else {
+            expect(ms(after.duration), 'the snap-back springs at --dur-sheet').toBe(ms(await token(page, '--dur-sheet')));
+            expect(flat(after.curve), 'on the spring').toBe(flat(await token(page, '--curve-spring')));
+          }
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      });
+    }
   }
 });

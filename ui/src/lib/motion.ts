@@ -6,6 +6,13 @@
 // retime is on the animation properties, and important because vaul's rule is
 // unlayered: a layered utility wins over it only on importance.
 //
+// vaul also moves the panel with a TRANSITION of its own: the snap-back after a
+// drag that does not dismiss ('resetDrawer' inlines 'transition: transform .5s
+// cubic-bezier(.32,.72,0,1)') and the drag-dismiss slide. An inline style yields
+// only to an important declaration, so 'VAUL_MOTION' retimes the transition too,
+// from the same four variables: under reduced motion the snap-back is 1ms, not
+// vaul's half second. The command palette has no drag, so for it they are inert.
+//
 // 'VAUL_MOTION' reads four variables; each surface sets them from the tokens
 // ('SHEET_MOTION_VARS', 'PALETTE_MOTION_VARS'). The tokens' reduced-motion
 // block takes every '--dur-*' to 1ms, so a surface that is on the tokens
@@ -17,12 +24,16 @@
 // space, never by interpolation ('pwa/test/sheet-motion.test.tsx' scans this
 // file for one).
 
-/** vaul's keyframes timed by '--vaul-in-*' while open and '--vaul-out-*' while closing. */
+/** vaul's keyframes and its inline drag transitions, timed by '--vaul-in-*' while open and '--vaul-out-*' while closing. */
 export const VAUL_MOTION =
   'data-[state=open]:[animation-duration:var(--vaul-in-dur)]!'
   + ' data-[state=open]:[animation-timing-function:var(--vaul-in-curve)]!'
   + ' data-[state=closed]:[animation-duration:var(--vaul-out-dur)]!'
-  + ' data-[state=closed]:[animation-timing-function:var(--vaul-out-curve)]!';
+  + ' data-[state=closed]:[animation-timing-function:var(--vaul-out-curve)]!'
+  + ' data-[state=open]:[transition-duration:var(--vaul-in-dur)]!'
+  + ' data-[state=open]:[transition-timing-function:var(--vaul-in-curve)]!'
+  + ' data-[state=closed]:[transition-duration:var(--vaul-out-dur)]!'
+  + ' data-[state=closed]:[transition-timing-function:var(--vaul-out-curve)]!';
 
 /** The Sheet's pace: the entrance springs ('--dur-sheet'), the exit leaves swiftly ('--dur-slow'). */
 export const SHEET_MOTION_VARS =

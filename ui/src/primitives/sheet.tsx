@@ -109,7 +109,9 @@ export function Sheet({
             // reaches: retimed that way it slid for vaul's own half second, and
             // under reduced motion too. 'lib/motion.ts' puts the keyframes on the
             // tokens (D-5930): the entrance springs on --dur-sheet, the exit
-            // leaves swiftly on --dur-slow, and both are 1ms under reduce.
+            // leaves swiftly on --dur-slow, and both are 1ms under reduce. The
+            // same helper retimes vaul's inline drag transition (the snap-back
+            // after a short drag), which the old utilities had covered.
             VAUL_MOTION,
             SHEET_MOTION_VARS,
             full

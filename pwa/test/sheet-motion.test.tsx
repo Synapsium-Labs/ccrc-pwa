@@ -47,9 +47,16 @@ describe("the Sheet's motion is vaul's keyframes on the tokens (D-5930)", () => 
     }
   });
 
-  it('no duration-sheet! transition utility remains on the panel', () => {
+  // vaul's snap-back after a short drag is an inline TRANSITION, not a keyframe, so the retime must reach both.
+  // It does so from VAUL_MOTION's variables, not from a transition utility of the Sheet's own.
+  it("the panel retimes vaul's drag transition from VAUL_MOTION's variables, and no duration-sheet! utility remains", () => {
     const { panel } = openSheet();
     const cls = tokens(panel.className);
+    const retime = /^data-\[state=(open|closed)\]:\[transition-(duration|timing-function):var\(--vaul-(in|out)-(dur|curve)\)\]!$/;
+    expect(cls.map((c) => retime.exec(c)?.slice(1).join(' ')).filter(Boolean), 'the transition retime').toEqual([
+      'open duration in dur', 'open timing-function in curve',
+      'closed duration out dur', 'closed timing-function out curve',
+    ]);
     for (const c of ['data-[state=open]:duration-sheet!', 'data-[state=open]:ease-spring!',
       'data-[state=closed]:duration-slow!', 'data-[state=closed]:ease-swift!']) {
       expect(cls, c).not.toContain(c);
@@ -72,11 +79,13 @@ describe("the Sheet's motion is vaul's keyframes on the tokens (D-5930)", () => 
   // the test tree too, so a whole class here would keep its CSS in the build
   // and hide a class 'motion.ts' stopped spelling (the browser leg's mutant).
   // The rows below parse the helper's classes instead.
-  it('VAUL_MOTION times both states from the four variables, important over vaul', () => {
-    const shape = /^data-\[state=(open|closed)\]:\[animation-(duration|timing-function):var\(--vaul-(in|out)-(dur|curve)\)\]!$/;
+  it("VAUL_MOTION times vaul's keyframes and its drag transition in both states from the four variables, important over vaul", () => {
+    const shape = /^data-\[state=(open|closed)\]:\[(animation|transition)-(duration|timing-function):var\(--vaul-(in|out)-(dur|curve)\)\]!$/;
     expect(tokens(VAUL_MOTION).map((c) => shape.exec(c)?.slice(1).join(' ') ?? `unparsed: ${c}`)).toEqual([
-      'open duration in dur', 'open timing-function in curve',
-      'closed duration out dur', 'closed timing-function out curve',
+      'open animation duration in dur', 'open animation timing-function in curve',
+      'closed animation duration out dur', 'closed animation timing-function out curve',
+      'open transition duration in dur', 'open transition timing-function in curve',
+      'closed transition duration out dur', 'closed transition timing-function out curve',
     ]);
   });
 
