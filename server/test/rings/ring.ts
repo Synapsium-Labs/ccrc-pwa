@@ -14,6 +14,9 @@
  * - L2: every top-level statement is a type: no value is declared, called or imported.
  * - L1: every other file.
  * A header declaration, or a ring pin's role table, moves a file outward of its facts, never inward.
+ *
+ * D-6118 (Task C0p; ARCH-04 stage 3) adds `pwaRing`, the spec's PWA rules over the same facts and header grammar,
+ * here beside `serverRing` so the two packages' rings have one owner.
  */
 import { builtinModules } from 'node:module';
 import path from 'node:path';
@@ -151,6 +154,59 @@ export function serverRing(file: string, parsed?: ParsedFile): RingVerdict {
   if (declared !== null && outward(fact.ring, declared)) {
     return { ring: declared, why: pinned ? `the docs ring pin puts it in ${declared}` : `declares ${declared} in its header` };
   }
+  return fact;
+}
+
+/** The browser I/O globals the 08-10 spec names for the PWA's L3 (D-6000), each as it is written in code. */
+export const BROWSER_IO = ['fetch(', 'WebSocket', 'navigator.', 'localStorage', 'sessionStorage', 'indexedDB',
+  'new Worker', 'caches.', 'document.', 'window.', 'location.', 'history.'] as const;
+
+/** The first browser I/O global a file's code (comments blanked) names, or null. A name is a word of its own: a
+ *  member access or a longer identifier that contains it (`fleet.location.`, `myWindow.`) is not the global. */
+export function browserIoOf(text: string): string | null {
+  const code = codeOnly(text);
+  for (const g of BROWSER_IO) {
+    const word = g.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`(?<![\\w$.])${word}${/\w$/.test(g) ? '(?![\\w$])' : ''}`).test(code)) return g;
+  }
+  return null;
+}
+
+/** True when the file exports a hook: an exported function or const named `use` plus a capital letter, or one
+ *  re-exported by name from an export list. */
+const exportsHook = (text: string): boolean => {
+  const code = codeOnly(text);
+  return /^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function\s*\*?\s*|const\s+|let\s+)use[A-Z]/m.test(code)
+    || /\bexport\s*\{[^}]*\buse[A-Z]\w*\s*(?:[,}]|\bas\b)/.test(code);
+};
+
+/** The ring of a repo-relative `pwa/src` file, by the 08-10 spec's PWA rules (D-6000), from the file's own facts and
+ *  header, parsed from disk unless given. In order, each clause applying only to a file no earlier one matched:
+ *  L5 `main.tsx`; L4 any other `.tsx` or `.css` file, a file under `stores/`, a file that exports a hook, or one that
+ *  holds a scheduler or poller; L3 `lib/api.ts`, a file that names a browser I/O global, or one that holds a
+ *  deadline timer; L2 types only; L1 the `*Words.ts` files, the policy modules and the pure lib modules. A header
+ *  declaration moves a file outward of its facts, never inward (the spec: "in either package"). */
+export function pwaRing(file: string, parsed?: ParsedFile): RingVerdict {
+  const sub = file.replace(/^pwa\/src\//, '');
+  if (sub === 'main.tsx') return { ring: 'L5', why: 'main.tsx' };
+  if (/\.(?:tsx|css)$/.test(sub)) return { ring: 'L4', why: `a ${path.extname(sub)} file` };
+  if (sub.startsWith('stores/')) return { ring: 'L4', why: 'a store' };
+  const p = parsed ?? parseFile(path.join(REPO, file));
+  const fact = ((): RingVerdict => {
+    if (exportsHook(p.text)) return { ring: 'L4', why: 'exports a hook' };
+    const timers = timersOf(p);
+    const sched = timers.find((t) => t.kind === 'scheduler');
+    if (sched) return { ring: 'L4', why: `holds a scheduler or poller, its handle on a ${sched.held} (:${sched.line})` };
+    if (sub === 'lib/api.ts') return { ring: 'L3', why: 'lib/api.ts, the fetch adapter' };
+    const io = browserIoOf(p.text);
+    if (io !== null) return { ring: 'L3', why: `names the browser I/O global ${io}` };
+    const deadline = timers.find((t) => t.kind === 'deadline');
+    if (deadline) return { ring: 'L3', why: `holds a deadline timer, ${deadline.held} (:${deadline.line})` };
+    if (typesOnly(p)) return { ring: 'L2', why: 'every top-level statement is a type' };
+    return { ring: 'L1', why: 'no outer-ring fact' };
+  })();
+  const declared = headerDeclaration(p.text);
+  if (declared !== null && outward(fact.ring, declared)) return { ring: declared, why: `declares ${declared} in its header` };
   return fact;
 }
 
