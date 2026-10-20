@@ -1294,8 +1294,9 @@ function checkpointWithoutSessions(cp: DelegationCheckpointV1, drifted: readonly
  *      the repair never reports success with a conflict outstanding. The cost of deleting is the sessions' events (about 70 to 85 µs
  *      each), paid only on drift.
  * With `evidence` (recovery's per-sequence count) the repair knows BEFORE reading whether the journal has anything to tell SQLite: a
- * matching `(count, max)` and nothing past it skips the read entirely, and a count that disagrees goes straight to the one full pass
- * instead of a counting pass followed by a full one. Without it, the repair counts as it reads (two passes when counts disagree).
+ * matching `(count, max)` and nothing past it skips the read entirely, and a count that disagrees, or a max the journal holds no evidence
+ * at (D-5836, review 705 F1), goes straight to the one full pass instead of a counting pass followed by a full one. Without it, the
+ * repair counts as it reads (two passes when counts disagree).
  * The journal is read as a stream through `journal()`, a fresh async iterable per pass.
  */
 export async function repairDelegationProjection(input: {
@@ -1320,11 +1321,12 @@ export async function repairDelegationProjection(input: {
   for (const k of input.heal ?? []) conflicted.set(sessionKeyOf(k.sessionId, k.incarnation), k);
 
   /** One pass over the journal. `from`: rows at or below it are only counted. `only`: just these sessions' events. */
-  const replay = async (from: number, only: ReadonlySet<string> | null): Promise<{ evidenceBelow: number; total: number }> => {
+  const replay = async (from: number, only: ReadonlySet<string> | null): Promise<{ evidenceBelow: number; total: number; heldAt: boolean }> => {
     report.journalPasses++;
     let chunk: DelegationEventRow[] = [];
     let evidenceBelow = 0;
     let total = 0;
+    let heldAt = false;
     const flush = async (): Promise<void> => {
       if (chunk.length === 0) return;
       const r = projection.insertEvents(chunk);
@@ -1339,12 +1341,12 @@ export async function repairDelegationProjection(input: {
       const e = record.entry.event;
       if (only !== null && !only.has(sessionKeyOf(e.sessionId, e.parentIncarnation))) continue;
       total++;
-      if (record.sequence <= from) { evidenceBelow++; continue; }
+      if (record.sequence <= from) { evidenceBelow++; if (only === null && record.sequence === from) heldAt = true; continue; }
       chunk.push(delegationEventRowOfRecord(record));
       if (chunk.length >= chunkSize) await flush();
     }
     await flush();
-    return { evidenceBelow, total };
+    return { evidenceBelow, total, heldAt };
   };
 
   let total: number;
@@ -1352,13 +1354,15 @@ export async function repairDelegationProjection(input: {
   if (known !== undefined) {
     total = known.total;
     const below = known.countAtOrBelow(resume);
-    const behind = below !== stats.count;
+    // sequences are integers that only increase, so equal counts up to `max - 1` and up to `max` mean no evidence AT `max` (D-5836, review 705 F1)
+    const foreign = stats.maxSequence !== null && known.countAtOrBelow(stats.maxSequence - 1) === below;
+    const behind = below !== stats.count || foreign;
     if (behind) report.fullReplay = true;
     if (behind || total > below) await replay(behind ? 0 : resume, null);
   } else {
     const first = await replay(resume, null);
     total = first.total;
-    if (first.evidenceBelow !== stats.count) {
+    if (first.evidenceBelow !== stats.count || (stats.maxSequence !== null && !first.heldAt)) {     // the max is a sequence the journal holds no evidence at (D-5836)
       report.fullReplay = true;
       await replay(0, null);
     }
