@@ -5900,7 +5900,7 @@ describe('child reclamation wave 9: the temp-root id predicate and its cap are d
 // L1 file that reaches no `node:` module and so cannot write it.
 describe('child reclamation wave 9: the collector lane’s live switch has no writer in the tree', () => {
   const NAME = 'collect-lane-live';
-  const DEFINER = 'server/src/collectLane.ts';
+  const DEFINER = 'shared/switches.ts'; // its switchboard row since D-5855; collectLane.ts re-exports it
 
   it('no shell line names it, and its one TS holder is its definer', () => {
     expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
@@ -5914,11 +5914,11 @@ describe('child reclamation wave 9: the collector lane’s live switch has no wr
   // without spelling its name. The files whose code names the constant are the definer and the executor, which reads
   // it from the registry listing alone; neither reaches a FILE write, and since wave 10 the executor's one write is
   // the latch, through the store's setCollectLane. The lane's feed and attention writes live in watch.ts, never naming it.
-  it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
+  it('the files that name its constant are the definer, its re-exporter and the executor, and none reaches a write', () => {
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
     const holders = ALL.filter((f) => stallCode(f).includes('COLLECT_LANE_LIVE_MARKER')).map(rel).sort();
-    expect(holders).toEqual([DEFINER, 'server/src/coord/collectTempRoot.ts']);
+    expect(holders).toEqual(['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
 });
@@ -6162,12 +6162,13 @@ describe('child reclamation wave 10: the collector switch has one writer, one jo
       'watch.ts’s call is not in the pass').toBe(1);
   });
 
-  it('the marker’s holders are still exactly the definer and the executor', () => {
+  it('the marker’s holders are still exactly the definer, its re-exporter and the executor', () => {
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    // D-5855: the definer is the marker's switchboard row; `collectLane.ts` re-exports it.
     expect(ALL.filter((f) => stallCode(f).includes('collect-lane-live')).map(rel).sort(), 'the marker spelled outside its definer')
-      .toEqual([LANE]);
-    expect(ALL.filter((f) => stallCode(f).includes('COLLECT_LANE_LIVE_MARKER')).map(rel).sort(), 'a third holder of its constant')
-      .toEqual([LANE, EXECUTOR]);
+      .toEqual(['shared/switches.ts']);
+    expect(ALL.filter((f) => stallCode(f).includes('COLLECT_LANE_LIVE_MARKER')).map(rel).sort(), 'a fourth holder of its constant')
+      .toEqual([LANE, EXECUTOR, 'shared/switches.ts']);
     expect(code(EXECUTOR), 'the executor reaches a file write').not.toMatch(WRITE);
     expect(count(code(EXECUTOR), /\.setCollectLane\s*\(/g), 'the executor’s one write is the latch, through the store').toBe(1);
     expect(code(EXECUTOR), 'the executor appends to the journal itself').not.toMatch(/\.appendGeneration\s*\(/);
