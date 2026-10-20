@@ -172,6 +172,29 @@ describe('childReclaimLeafKept — the temp-root half ends only on a removal (TR
     expect(listed(src({ meas: TMP_IN_USE_MEAS }), ABSENT, MALFORMED)).toEqual([[TMP_IN_USE_FOUND, true]]);
   });
 
+  // 9a to 9e use a temp-root-only item, which the `continue` drops once the half ends, before the found-nothing mark is
+  // read. These carry an item whose OTHER half stands, so it outlives the end and the mark meets a collected half.
+  it.each([
+    ['9f: absent, then removed', [ABSENT, REMOVED]],
+    ['9g: removed, then absent — an earlier end still ends', [REMOVED, ABSENT]],
+    ['9h: keyless, then absent — an older ccd’s end still ends', [KEYLESS, ABSENT]],
+  ] as const)('%s, both leaves kept: the temp root reads as collected, no found-nothing clause, and the item joins the kept-many collapse', (_what, reads) => {
+    const bothMeas = { childOf: '41', clipsKept: 'refused', tmpRootKept: 'refused' };
+    expect(listed(src({ meas: bothMeas }), ...reads), 'the clips half alone, and no clause').toEqual([[CLIPS_REFUSED, false]]);
+    const cut = src({ truncated: true, meas: null, detail: 'clips kept (refused)' });
+    expect(listed(cut, ...reads), 'a cut line says its temp root has since been collected, and no clause').toEqual([[TRUNCATED_COLLECTED, false]]);
+    // The list: the item is no found-nothing one, so it is not set apart and counts toward the collapse with the rest.
+    const ids = Array.from({ length: CHILD_RECLAIM_KEPT_MANY_OVER + 2 }, (_, k) => `demo-${String.fromCharCode(97 + k)}`);
+    const rows = ids.map((sessionId) => src({ sessionId, meas: bothMeas }));
+    const leaves = derive(rows, collects(rows[3]!, ...reads));
+    expect(leaves.map((l) => [l.item.sessionId, l.foundNothing]), 'CONTROL: no item is a found-nothing one')
+      .toEqual(ids.map((id) => [id, false]));
+    expect(childReclaimAttentionWithLeaves([], leaves, CHILD_RECLAIM_COLLECT_NONE)).toEqual([
+      { kind: 'kept-many', word: 'leaf-kept', members: ids.map((sessionId) => ({ sessionId, runId: 41 })),
+        sentence: childReclaimLeafKeptManySentence(CHILD_RECLAIM_KEPT_MANY_OVER + 2) },
+    ]);
+  });
+
   it('10: absent, at the horizon and a millisecond past it: listed, then ended by the horizon', () => {
     expect(listed(src({ at: NOW - 7 * DAY, meas: TMP_IN_USE_MEAS }), ABSENT)).toEqual([[TMP_IN_USE_FOUND, true]]);
     expect(listed(src({ at: NOW - 7 * DAY - 1, meas: TMP_IN_USE_MEAS }), ABSENT)).toEqual([]);
