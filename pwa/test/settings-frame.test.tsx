@@ -58,6 +58,15 @@ describe('the index and the section routes', () => {
     expect(within(row('automation')).getByText(/clearing what dead sessions leave behind/)).toBeInTheDocument();
   });
 
+  it('a row\'s visible purpose line is not repeated as its title, so a screen reader says it once', () => {
+    pendingReads();
+    renderSettings(null);
+    for (const a of within(index()).getAllByRole('link')) {
+      expect(a.querySelector('.settings-index-purpose')?.textContent).not.toBe('');
+      expect(a).not.toHaveAttribute('title');
+    }
+  });
+
   it('/settings/<id> renders that section\'s bodies under its h2, and the h1 stays Settings', async () => {
     pendingReads();
     const marks: Record<string, () => Promise<unknown>> = {
@@ -137,6 +146,46 @@ describe('the provider: reads made once (spec §4.4)', () => {
       expect(reads.fetch.mock.calls.filter(([u]) => String(u).includes('/api/auth/status'))).toHaveLength(1);
     });
   }
+
+  /** A browser that can do Web Push, with the given permission and a subscription the test can flip. */
+  const stubPush = (permission: NotificationPermission) => {
+    const state = { subscribed: false };
+    vi.stubGlobal('PushManager', class {});
+    vi.stubGlobal('Notification', { permission, requestPermission: vi.fn() });
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      serviceWorker: {
+        getRegistration: async () => ({ pushManager: { getSubscription: async () => (state.subscribed ? {} : null) } }),
+      },
+    });
+    return state;
+  };
+  const pushLine = (): string => row('notifications').querySelector('.settings-index-status')?.textContent ?? '';
+
+  it('the index reads the push state again when it mounts, so a toggle on the Notifications page shows after Back', async () => {
+    pendingReads();
+    const push = stubPush('granted');
+    renderSettings(null);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(pushLine()).toMatch(/^Pushes off in this browser/);
+    act(() => { navigate('/settings/notifications'); });
+    push.subscribed = true;
+    act(() => { navigate('/settings'); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(pushLine()).toMatch(/^Pushes on in this browser/);
+  });
+
+  it('a denied notification permission reads as blocked, never off', async () => {
+    pendingReads();
+    stubPush('denied');
+    let seen: ReturnType<typeof useSettingsView> = null;
+    function Probe(): null { seen = useSettingsView(); return null; }
+    navigate('/settings');
+    render(<SettingsDataProvider active><SettingsScreen /><Probe /></SettingsDataProvider>);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(seen!.push).toBe('blocked');
+    expect(pushLine()).toMatch(/^Pushes blocked in this browser/);
+  });
 
   it('no Settings read starts while active is false, and the view is null', () => {
     const reads = pendingReads();

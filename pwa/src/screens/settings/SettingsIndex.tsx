@@ -7,6 +7,8 @@
 //
 // Each row is the door of its "Go to Settings › …" command (`commandDoor`, D-5469), so the row and the palette can
 // never disagree about where a section is. The link keeps a real `href` for a new tab and a screen reader.
+// The purpose line is visible here, so it is not repeated as the link's `title` (a screen reader would say it twice);
+// R2c's desktop nav, which hides the line, is where a `title` belongs.
 import { useEffect } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
 import { AUTO, Icon, SKINS, SYSTEM, THEMES, Skeleton, cn, useNow, type IconName } from '@ccrc/ui';
@@ -66,7 +68,6 @@ export function SettingsIndex({ view, current = null }: {
             data-section={s.id}
             data-command={door['data-command']}
             aria-current={current === s.id ? 'page' : undefined}
-            title={SETTINGS_INDEX_TEXT.purpose[s.id]}
             className="settings-index-row text-ink-primary no-underline"
             onClick={(e: MouseEvent<HTMLAnchorElement>) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;   // a new tab or window keeps the href

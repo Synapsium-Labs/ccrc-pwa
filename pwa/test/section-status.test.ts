@@ -51,6 +51,17 @@ describe('Updates', () => {
     // And never when nothing is pending.
     expect(bannerRelease(updatesView())).toBeNull();
     expect(text(of('updates', settings()))).not.toMatch(/available/);
+    // Releases listed but nothing pending (the fleet already on the newest one): still no "available", and no
+    // fall-back to the newest listed release.
+    const rel = (tag: string, at: number) => ({
+      tag, version: tag, channel: 'stable' as const, publishedAt: at, commitSha: null,
+      bundleListed: true, yanked: false, refused: [], notes: null,
+    });
+    const current = updatesView({ releases: [rel('v0.0.9', 2), rel('v0.0.8', 1)] });
+    expect(bannerRelease(current)).toBeNull();
+    const sNone = of('updates', settings({ updates: { view: current, failure: null, seq: 1, reload: () => 0 } }));
+    expect(text(sNone)).toBe('v0.0.9 · Stable · Auto-install off');
+    expect(tone(sNone)).toBe('calm');
   });
 
   it('says the range when nodes run different versions', () => {
