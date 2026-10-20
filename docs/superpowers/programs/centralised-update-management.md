@@ -2435,6 +2435,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
           branch: test-macos 1/4 to 3/4 are green, and 4/4, the shard that carries the file, is still running.
         - STATUS: fleet and server v0.0.493, newest v0.0.495, stable v0.0.328, intent dev/auto=off, backups fleet
           185M/server 8951M, disk free fleet 197G/work volume 49G/server 23G, no anomalies.
+      - **21:55 UTC: #1032's macOS proof is green; the promotion waits on its merge.** Full run 39489945328 on the fix
+        branch at `9fb98375a` completed green: all four macOS shards and `full-suite` (job 118892201933). Shard 4/4
+        (job 118860291236) ran `history-replay.test.ts`, with 217 files passed, 2 skipped and none failed. Sent to the
+        owner as mail 7406, the re-measure I offered. A fourth `/health` miss today (about 21:58:05) fell inside a slow
+        pass (21:57:12 to 21:58:28, block 27.5 s). The 21:00 hour's block mean is 28.7 s, level with 20:00, max 50.5 s;
+        `coord.db` is 727M. STATUS: fleet and server v0.0.493, newest v0.0.498, stable v0.0.328, intent dev/auto=off,
+        backups fleet 185M/server 8951M, disk free fleet 189G/work volume 58G/server 23G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
