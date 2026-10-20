@@ -657,10 +657,12 @@ describe('Build 7 nouns', () => {
     expect(store, 'the sentinel is gone from store.ts — pick another comment-only phrase')
       .toContain('the same guard every other');
     expect(code, 'the comment strip did not strip comments').not.toContain('the same guard every other');
-    // Six negative-form guards at 5e9f650d (2026-09-02), as a FLOOR so a
-    // seventh writer raises it rather than breaking it.
-    expect((code.match(/NOT IN \$\{TERMINAL_DELIVERY_SQL\}/g) ?? []).length)
-      .toBeGreaterThanOrEqual(6);
+    // Six negative-form guards at 5e9f650d (2026-09-02), one per writer. Since
+    // D-5997 (#532) the guard is spelled in ONE place, `writeDeliveries`: the
+    // plain negative form and `markAcked`'s replay-ceiling exception. An EXACT
+    // count now, because a third spelling is a writer that bypassed the one
+    // writer — exactly what this pin exists to catch.
+    expect((code.match(/NOT IN \$\{TERMINAL_DELIVERY_SQL\}/g) ?? []).length).toBe(2);
   });
 
   // …and the SAME pair in its JS shape, which the SQL-anchored regex above is
@@ -7696,6 +7698,58 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 
   it('mail-disabled: hand-only, no writer in the tree', () => {
     expect(writersOf('mail-disabled')).toEqual([]);
+  });
+
+  // D-5853 (Task C0f; ARCH-00 (#525)). The test scanners' TS parser, the operator's option (a) (a TypeScript 6 alias),
+  // has ONE importer, `server/test/scan/parse.ts`, and an exact version. The corpus is every tracked or new untracked
+  // .ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs file (not .d.*ts), with comment lines dropped (`stallCodeText`). Under
+  // `server/` any TS parser package counts (the 7.x compiler's `typescript/unstable/*` among them); elsewhere only the
+  // alias does, because the PWA's tests use the PWA's own TypeScript 6. KNOWN WIDTH: a `createRequire` require and a
+  // specifier built at run time are not seen.
+  const SCAN_PARSER = 'typescript-api';
+  const TS_PARSERS = ['typescript', SCAN_PARSER, 'oxc-parser', '@typescript-eslint/parser',
+    '@typescript-eslint/typescript-estree', '@babel/parser', '@swc/core', 'acorn', 'esprima'];
+  const importsPkg = (code: string, pkgs: readonly string[]): boolean =>
+    new RegExp(`(?:\\bfrom\\s*|\\bimport\\s*\\(?\\s*|\\brequire\\s*\\(\\s*)['"\`](?:${pkgs.map(esc).join('|')
+    })(?:/[^'"\`]*)?['"\`]`).test(code);
+  const parserImporters = (): string[] => {
+    const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--',
+      '*.ts', '*.tsx', '*.mts', '*.cts', '*.js', '*.jsx', '*.mjs', '*.cjs'], { cwd: ccrcRoot, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    return [...new Set(r.stdout.split('\0').filter((f) => f && !/\.d\.[mc]?ts$/.test(f)))]
+      .filter((f) => existsSync(path.join(ccrcRoot, f)))
+      .filter((f) => importsPkg(stallCodeText(readFileSync(path.join(ccrcRoot, f), 'utf8')),
+        f.startsWith('server/') ? TS_PARSERS : [SCAN_PARSER]))
+      .sort();
+  };
+
+  it('CONTROL: the parser-import pattern sees each import form and passes over a comment and a longer name', () => {
+    const sees = (code: string): boolean => importsPkg(stallCodeText(code), TS_PARSERS);
+    // Each specifier is quoted by `q`, so this file's own text names none and stays out of the importer list.
+    const q = (s: string, c = "'"): string => `${c}${s}${c}`;
+    expect(sees(`import ts from ${q('typescript-api')};`)).toBe(true);
+    expect(sees(`import {\n  createSourceFile,\n} from ${q('typescript', '"')};`)).toBe(true);
+    expect(sees(`const m = await import(${q('typescript/unstable/ast')});`)).toBe(true);
+    expect(sees(`const p = require(${q('oxc-parser')});`)).toBe(true);
+    expect(sees(`export { parse } from ${q('@babel/parser')};`)).toBe(true);
+    expect(sees(`// import ts from ${q('typescript-api')};\nconst x = 1;`)).toBe(false);
+    expect(sees(`import x from ${q('typescript-api-extra')};`)).toBe(false);
+  });
+
+  it('only scan/parse.ts imports a TS parser (D-5853)', () => {
+    expect(parserImporters()).toEqual(['server/test/scan/parse.ts']);
+  });
+
+  it('the parser is a dev-only dependency pinned exactly, and the lockfile resolves that version (D-5853)', () => {
+    const pkg = JSON.parse(readFileSync(path.join(ccrcRoot, 'server/package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+    const spec = pkg.devDependencies?.[SCAN_PARSER] ?? '';
+    expect(spec).toMatch(/^npm:typescript@6\.\d+\.\d+$/);
+    expect(pkg.dependencies?.[SCAN_PARSER]).toBeUndefined();
+    const lock = JSON.parse(readFileSync(path.join(ccrcRoot, 'server/package-lock.json'), 'utf8')) as {
+      packages: Record<string, { version?: string; dev?: boolean; devDependencies?: Record<string, string> }> };
+    expect(lock.packages['']!.devDependencies?.[SCAN_PARSER]).toBe(spec);
+    expect(lock.packages[`node_modules/${SCAN_PARSER}`]).toMatchObject({ version: spec.split('@').pop(), dev: true });
   });
 });
 

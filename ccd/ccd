@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0f9a22e52e5aa4528405efe5ec1cf8b0cdd8238371bd4542bd21e2bcd43d0153
+# ccrc:generated 1 sha256=a6686c0149beceb01a47d55427d70784facface10048040c6a4f8d4a1a441efb
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11966,7 +11966,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   _ws_reap_reset
   local id="$1" ws project workdir branch base baseShort main wthead common mainreal
   local st up ahead repo rows row registered errf err rc stashall dirt clipsjson nested
-  local children strays contained=0 obase ourl ancwhy regbranch tombbranch
+  local children strays contained=0 obase ourl ancwhy regbranch tombbranch uplive upremote upmerge uprc   # the last four: C1's live-head probe (D-5882)
 
   # ── Phase A: identity ────────────────────────────────────────────
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -12570,25 +12570,10 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   REAP_TIP=$(git -C "$main" rev-parse --verify "refs/heads/$branch" 2>/dev/null) \
     || { _reap_refuse branch-missing "refs/heads/$branch does not resolve"; return 1; }
 
-  # ── C1: work that is only here ───────────────────────────────────
-  # A tracking ref that EXISTS and is behind the branch is direct evidence of
-  # commits that are nowhere else — cheap, local, and it refuses before any
-  # network cost. It selects no prover: when the tracking ref is gone (the whole
-  # defect above) this rung is simply SKIPPED and both provers still run.
-  if up=$(git -C "$main" rev-parse --verify --quiet "$branch@{upstream}" 2>/dev/null); then
-    # The DIRECTION is unchanged and the SENTENCE is not — round-3 P2's class,
-    # last instance, found by the final-round destructive review (F5b). A failed
-    # `rev-list` yields "", which is `!= 0`, so this refuses, which is right; but
-    # it then printed " commit(s) are not on the remote" — a count, with the
-    # number missing, about a comparison that never ran. `_ws_gc_merged` and
-    # `_ws_gc_dirty` both already say the rule for the file: report unprovable as
-    # unprovable.
-    ahead=$(git -C "$main" rev-list --count "$up..refs/heads/$branch" 2>/dev/null)
-    [[ "$ahead" == 0 ]] \
-      || { _reap_refuse unpushed-commits "$( [[ "$ahead" =~ ^[0-9]+$ ]] \
-             && echo "$ahead commit(s) are not on the remote" \
-             || echo "could not count the commits between $up and refs/heads/$branch — refusing on a comparison that did not run")"; return 1; }
-  fi
+  # ── C1 runs AFTER C3's fetch (D-5882, #126) — see "C1: work that is only
+  # here" below. It used to sit here, before any network cost, and read
+  # whatever the local tracking ref held: a STALE one, left behind when GitHub
+  # deleted a merged head and nobody pruned, refused a merged workspace forever.
 
   # ── C2: there is a remote at all ─────────────────────────────────
   # `git config --get remote.origin.url`, NOT `git remote get-url origin`, and
@@ -12619,6 +12604,52 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   _plat_timeout 60 git -C "$main" fetch --quiet origin \
     || { _reap_refuse fetch-failed "could not fetch origin — nothing is claimed about your commits"; return 1; }
   REAP_FETCHED=$(date +%s)
+
+  # ── C1: work that is only here ───────────────────────────────────
+  # A tracking ref that the remote STILL BACKS and that is behind the branch is
+  # direct evidence of commits that are nowhere else. It selects no prover:
+  # when the tracking ref is gone, or proven stale, this rung is SKIPPED and
+  # both provers below still run.
+  #
+  # AFTER THE FETCH, AND ONLY ON A LIVE HEAD (D-5882, #126). Before the fetch,
+  # `@{upstream}` is whatever this clone last saw. GitHub deletes a merged head
+  # and `git fetch` without `--prune` leaves its tracking ref where it was, so a
+  # squash-merged workspace kept a ref frozen at its pre-merge tip and was
+  # counted "6 commit(s) are not on the remote" by a ladder whose merge proof
+  # would have cleared it — until someone happened to prune. The answer was a
+  # function of prune timing, not of where the commits are. So: count against
+  # the ref C3 just refreshed, and first ask the upstream's remote whether the
+  # head still exists. ONLY an `ls-remote --exit-code` that ANSWERS "no such
+  # head" (rc 2) skips the rung. A probe that failed or timed out keeps the old
+  # refusal: a check that did not run is never evidence that the work is safe.
+  # Both config keys are set whenever `@{upstream}` resolves, and a local `.`
+  # upstream is answered by `ls-remote .` itself (rc 0, the branch exists), so
+  # the probe needs no guard of its own.
+  #
+  # Skipping can only reach the merge provers, which refuse unmerged work on
+  # their own, so this never widens what a reap deletes.
+  if up=$(git -C "$main" rev-parse --verify --quiet "$branch@{upstream}" 2>/dev/null); then
+    uplive=1
+    upremote=$(git -C "$main" config --get "branch.$branch.remote" 2>/dev/null) || upremote=""
+    upmerge=$(git -C "$main" config --get "branch.$branch.merge" 2>/dev/null) || upmerge=""
+    uprc=0
+    _plat_timeout 60 git -C "$main" ls-remote --exit-code --heads "$upremote" "$upmerge" >/dev/null 2>&1 || uprc=$?
+    (( uprc == 2 )) && uplive=0
+    if (( uplive )); then
+      # The DIRECTION is unchanged and the SENTENCE is not — round-3 P2's class,
+      # last instance, found by the final-round destructive review (F5b). A failed
+      # `rev-list` yields "", which is `!= 0`, so this refuses, which is right; but
+      # it then printed " commit(s) are not on the remote" — a count, with the
+      # number missing, about a comparison that never ran. `_ws_gc_merged` and
+      # `_ws_gc_dirty` both already say the rule for the file: report unprovable as
+      # unprovable.
+      ahead=$(git -C "$main" rev-list --count "$up..refs/heads/$branch" 2>/dev/null)
+      [[ "$ahead" == 0 ]] \
+        || { _reap_refuse unpushed-commits "$( [[ "$ahead" =~ ^[0-9]+$ ]] \
+               && echo "$ahead commit(s) are not on the remote" \
+               || echo "could not count the commits between $up and refs/heads/$branch — refusing on a comparison that did not run")"; return 1; }
+    fi
+  fi
 
   # ── C4 — RUNG 1: strict ancestry against origin/HEAD ─────────────
   # The strongest and cheapest statement available: every commit on this branch

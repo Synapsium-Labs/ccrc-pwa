@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AccountsResponse, ChatEvent, Dialog, FleetSession, HookAsk, MailSummary, SessionStreamMsg } from '../../shared/api';
 import { fleetSession as baseSession } from './fleetFixture';
-import { FLEET_PROTO } from '../../shared/api';
+import { FLEET_PROTO, SECRET_MASK } from '../../shared/api';
 import { ApiError } from '../src/lib/api';
 import { applySessionMsg, createSessionStore, getSessionStore, type SessionSnapshot } from '../src/stores/session';
 import { createFleetStore } from '../src/stores/fleet';
@@ -848,6 +848,35 @@ describe('the echo that clears a pending', () => {
     const echo = `<pasted_content id="adc2">\n${long}X\n</pasted_content id="adc2">`;
     store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('c1', echo, T1)] });
     expect(store.getState().pending).toHaveLength(1);
+  });
+
+  // — D-5995: the server masks every frame, so a prompt holding a credential shape echoes MASKED —
+  it('a prompt holding a credential shape is cleared by its masked echo, plain or paste-wrapped, and a masked echo of other text is not', async () => {
+    const jwt = ['eyJhbGciOiJub25lIn0', 'eyJzdWIiOiJkZW1vIn0', 'c2lnbmF0dXJl'].join('.');
+    const sent = `why does this token fail: ${jwt} and also ${jwt}?`;
+    const echo = `why does this token fail: ${SECRET_MASK} and also ${SECRET_MASK}?`;
+    const s1 = make('e5e');
+    await s1.getState().send(sent);
+    s1.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('c1', echo, T1)] });
+    expect(s1.getState().pending).toEqual([]);
+
+    const s2 = make('e5f');
+    const long = `${'alpha bravo charlie '.repeat(50)}${jwt}`;
+    await s2.getState().send(long);
+    const wrapped = `\n\n<pasted_content id="adc2">\n${'alpha bravo charlie '.repeat(50)}${SECRET_MASK}\n</pasted_content id="adc2">\n`;
+    s2.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('c1', wrapped, T1)] });
+    expect(s2.getState().pending).toEqual([]);
+
+    for (const [key, other] of [
+      ['e5g', `why does this token fail: ${SECRET_MASK} and also ${SECRET_MASK}!`],
+      ['e5h', `why does this token fail: ${SECRET_MASK}`],
+      ['e5i', `${SECRET_MASK}`],
+    ] as const) {
+      const s = make(key);
+      await s.getState().send(sent);
+      s.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('c1', other, T1)] });
+      expect(s.getState().pending, other).toHaveLength(1);
+    }
   });
 
   // — D-4952: a replay is not an echo —

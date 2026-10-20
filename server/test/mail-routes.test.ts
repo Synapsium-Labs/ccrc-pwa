@@ -629,6 +629,9 @@ describe('the rejection table is total, in both directions', () => {
       // Task 9 (`coord/routes.ts`'s run routes) — a SEPARATE `refused`/
       // `reject.code` vocabulary for `POST /api/runs*`, now typed as
       // `RunRefuseCode` above and so no longer hand-allowlisted here.
+      'non-terminal',        // coord/store.ts — a `writeDeliveries` guard name (D-5997).
+                             // NOT a wire code: the one delivery writer's private
+                             // guard selector, never answered over a route.
       'no-refs',              // coord/ledgerseed.ts — a `FloorMeasurement.why`
                                // (wave 2, F2). NOT a wire code: the allocator's
                                // refusal stays `not-seeded`, and this only

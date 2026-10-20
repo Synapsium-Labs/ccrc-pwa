@@ -454,25 +454,15 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   against the shipped tree, and `ccrc doctor --fix` cures it from the same tree.
 
 ## Open on `main` — do NOT assume these are fixed
-`MailDeliveryState` terminality: as of **2026-09-02 (wave 8)** every `UPDATE mail_deliveries` in
-`server/src/coord/store.ts` names one of two shared guard fragments — `OUTSTANDING_STATES_SQL` or
-`TERMINAL_DELIVERY_SQL`, the latter built by `.join` from L0's `TERMINAL_DELIVERY_STATES` (`shared/api.ts`) —
-pinned by `mail-hardening.test.ts`'s writer scan and, against a second hand-written copy in SQL or in JS, by
-two scans in `single-definition.test.ts`. STILL OPEN, and do not assume otherwise. The delivery-row writers
-that still return `void` are `cancelKickoffsTo`, `repointCoordinatorMail`, `cancelOutstandingDeliveries`,
-`markDelivered`, `markIngested`, `backOff`, `noteGate`, `rejectDelivery` and `parkSupersededDeliveries`.
-The last is Task 6 of the crossrepo-programmes wave-1-server plan, carrying D-2059's worker-arm park —
-but its EXTRACTION into its own method is a separate departure from the brief's own text (which put this
-`UPDATE` inline), recorded as its own number, **D-2338**, because D-2059 argues the park's role-generalised
-SQL and says nothing about this method's existence. Split into its own single-line-signature method rather
-than inlined in the method that calls it — a write inlined there would have this file's own writer census
-walk back past that caller's DECLARED multi-line-signature exemption and mis-attribute it, the failure mode
-that exemption's own comment warns about. Their guard is
-invisible to the caller — the defect `store.ts`'s own `SetWorkItemResult` docstring names `markDelivered`
-as the archetype of,
-and `watch.ts`'s `sweepMail` leans on `bumpReplayCount`'s union to cover `markDelivered`'s silence in its
-replay branch. And an out-of-vocabulary `state` token (the column is `schema.ts:138-139`; the deploy-rollback
-that can reach it is argued at `schema.ts:41-45`) is LIVE to every negative-form guard and to `markAcked`,
+`MailDeliveryState` terminality: since **D-5997** (#532) `server/src/coord/store.ts` writes `mail_deliveries` in ONE
+place, the private `writeDeliveries`, which owns the guard: `OUTSTANDING_STATES_SQL` or `TERMINAL_DELIVERY_SQL`, both
+built by `.join` from L0 (`TERMINAL_DELIVERY_STATES` and its derived complement `OUTSTANDING_DELIVERY_STATES`,
+`shared/api.ts`). Every writer delegates to it and returns what it decided — `{changed, state}` for one row
+(`DeliveryWrite`), `{changed}` for a scoped bulk write (D-5998) — so no delivery-row writer returns `void`, and
+`watch.ts`'s `sweepMail` consumes each answer: a refused write is logged and the step that assumed it skipped.
+Pinned by `mail-hardening.test.ts`'s one-writer census, `mail-deliveries-writer.test.ts`, and two scans in
+`single-definition.test.ts`. STILL OPEN, and do not assume otherwise: an out-of-vocabulary `state` token (the
+column is `schema.ts:138-139`; the deploy-rollback that can reach it is argued at `schema.ts:41-45`) is LIVE to every negative-form guard and to `markAcked`,
 while `dueDeliveries` and the positive-form writers treat it as not-outstanding — an asymmetry nothing has
 ruled on. D-114's measured read is **LANDED, not open** — corrected 2026-09-04 (D-1441), because the paragraph
 this replaces was falsified by wave 8's own commits and still read as live guidance. What is true now:
