@@ -220,7 +220,14 @@ function checkText(pr: PrState): string {
   return ` ${CHECK_PHRASE[pr.checks ?? 'none']}${names}.`;
 }
 
-export function PrKeycap({ pr, onOpen }: { pr: PrState | null; onOpen: () => void }): ReactNode {
+export function PrKeycap(
+  { pr, onOpen, 'data-command': command }: {
+    pr: PrState | null;
+    onOpen: () => void;
+    /** The registry command this cap is the door of (`session-pr`, W2 Task S2d), carried for the parity test. */
+    'data-command'?: string;
+  },
+): ReactNode {
   // MUTATION SURVIVOR, disclosed: `??` here is swappable for `||` with the
   // suite green, and no test can ever distinguish them. `pr` is
   // `PrState | null`, and a `PrState` is an object — so the only falsy values
@@ -238,6 +245,7 @@ export function PrKeycap({ pr, onOpen }: { pr: PrState | null; onOpen: () => voi
       data-phase={state.phase}
       data-checks={state.checks ?? undefined}
       aria-label={prSentence(state)}
+      data-command={command}
       onClick={onOpen}
     >
       <span className="pr-dot" aria-hidden="true" />

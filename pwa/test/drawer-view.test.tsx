@@ -98,7 +98,7 @@ import type { DrawerTerm, MakeTerm } from '../src/session/terminalFactory';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
 import { SYNTHETIC_SCREENS, STATUS_TEXT } from './fixtures/drawer/synthetic';
 import { declaredValues } from './cssRule';
-import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
+import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -1029,7 +1029,7 @@ describe('P4: a physical Escape goes to Claude Code while the terminal has focus
         addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => false,
       }) as unknown as MediaQueryList);
     };
-    const headerProps = (): SessionHeaderProps => ({
+    const headerProps = (): HeaderHostProps => ({
       session: fleetSession({ id: 'project-a-quiet-basin', project: 'project-a', status: 'busy', bucket: 'working' }),
       status: 'busy', statusUpdatedAt: null,
       onInterrupt: vi.fn(), onOpenTerminal: vi.fn(), onBack: vi.fn(), onChangeModel: vi.fn(),
@@ -1045,7 +1045,7 @@ describe('P4: a physical Escape goes to Claude Code while the terminal has focus
       const hp = headerProps();
       render(
         <>
-          <SessionHeader {...hp} />
+          <SessionHeaderHost {...hp} />
           <TerminalDrawer id={ID} open onClose={onClose} makeSocket={makeSocket} viewStorage={() => store} />
         </>,
       );
@@ -1072,7 +1072,7 @@ describe('P4: a physical Escape goes to Claude Code while the terminal has focus
       const hp = headerProps();
       render(
         <>
-          <SessionHeader {...hp} />
+          <SessionHeaderHost {...hp} />
           <TerminalDrawer
             id={ID} open onClose={onClose} makeSocket={makeSocket} makeTerm={t.makeTerm}
             viewStorage={() => memStore()}

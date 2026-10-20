@@ -20,6 +20,9 @@ import { NewSessionSheet } from '../src/fleet/NewSessionSheet';
 import { SwapSheet } from '../src/fleet/SwapSheet';
 import { pickableWrappers } from '../src/fleet/accountPicker';
 import { SessionScreen } from '../src/screens/SessionScreen';
+// W2 Task S2d: the session menu's items and the model/effort chips are command doors, run by the one layer
+// `app.tsx` mounts above the screen; a case that drives them mounts it beside, as the app does.
+import { CommandLayer } from '../src/command/CommandLayer';
 import { TEST_ROSTER } from './rosterFixture';
 
 afterEach(() => {
@@ -706,6 +709,7 @@ describe('SessionScreen overflow menu', () => {
     const { store, fleet } = makeStores();
     render(
       <>
+        <CommandLayer openNewSession={() => {}} />
         <SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />
         <ToastHost />
       </>,

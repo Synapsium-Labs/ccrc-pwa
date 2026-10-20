@@ -12,7 +12,7 @@ import { clearAuthLost, raiseAuthLost, useAuthLost } from '../src/lib/auth';
 import { useLocation } from '../src/lib/router';
 import { setSkin } from '../src/lib/skin';
 import { Composer } from '../src/session/Composer';
-import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
+import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import { useFleetStore } from '../src/stores/fleet';
 import { PALETTE_MOTION_VARS, VAUL_MOTION } from '../../ui/src/lib/motion';
 import { fleetSession } from './fleetFixture';
@@ -32,7 +32,7 @@ const stubPointer = (fine: boolean): void => {
 const A = fleetSession({ id: 'project-a-one', project: 'project-a', name: 'first', bucket: 'attention', statusUpdatedAt: 3 });
 const B = fleetSession({ id: 'project-a-two', project: 'project-a', name: 'second', bucket: 'idle', statusUpdatedAt: 2 });
 
-const headerProps = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => ({
+const headerProps = (over: Partial<HeaderHostProps> = {}): HeaderHostProps => ({
   session: A,
   status: 'busy',
   statusUpdatedAt: null,
@@ -125,7 +125,7 @@ describe('Escape in the palette never reaches the session header', () => {
   it('Escape inside the palette closes it and does not interrupt a busy session', () => {
     stubPointer(true);
     const p = headerProps();
-    render(<><SessionHeader {...p} /><CommandLayer openNewSession={vi.fn()} /></>);
+    render(<><SessionHeaderHost {...p} layer={false} /><CommandLayer openNewSession={vi.fn()} /></>);
     const input = openPalette();
     fireEvent.keyDown(input, { key: 'Escape', code: 'Escape', keyCode: 27 });
     expect(palette(), 'the palette closed').toBeNull();
@@ -135,7 +135,7 @@ describe('Escape in the palette never reaches the session header', () => {
   it('Escape with focus on an option does not interrupt', () => {
     stubPointer(true);
     const p = headerProps();
-    render(<><SessionHeader {...p} /><CommandLayer openNewSession={vi.fn()} /></>);
+    render(<><SessionHeaderHost {...p} layer={false} /><CommandLayer openNewSession={vi.fn()} /></>);
     openPalette();
     // D-5456: the header's own guard (D-5235) already skips an Escape Radix
     // prevented, so the interrupt alone cannot see the palette's stop. A plain
@@ -158,7 +158,7 @@ describe('Escape in the palette never reaches the session header', () => {
   it('the control: with the palette shut, Escape still interrupts the busy session', () => {
     stubPointer(true);
     const p = headerProps();
-    render(<><SessionHeader {...p} /><CommandLayer openNewSession={vi.fn()} /></>);
+    render(<><SessionHeaderHost {...p} layer={false} /><CommandLayer openNewSession={vi.fn()} /></>);
     fireEvent.keyDown(document.body, { key: 'Escape', code: 'Escape', keyCode: 27 });
     expect(p.onInterrupt).toHaveBeenCalledTimes(1);
   });

@@ -47,7 +47,7 @@ import { DocsFailureView } from '../src/docs/DocsFailureView';
 import { DOC_MARKDOWN_ACTION } from '../src/docs/DocMarkdown';
 import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT } from '../src/docs/docsText';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
-import { SessionHeader } from '../src/session/SessionHeader';
+import { SessionHeaderHost } from './sessionHost';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate } from '../src/lib/router';
@@ -1092,7 +1092,7 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       render(<SessionActionsSheet session={session} open onClose={() => {}} onReap={() => {}} />);
       expect(screen.getByRole('button', { name: 'Docs on main' })).toHaveClass('btn-ghost', 'docs-session-row');
       cleanup();
-      render(<SessionHeader session={session} status="idle" statusUpdatedAt={null} onInterrupt={() => {}}
+      render(<SessionHeaderHost session={session} status="idle" statusUpdatedAt={null} onInterrupt={() => {}}
         onOpenTerminal={() => {}} onBack={() => {}} onChangeModel={() => {}} onChangeEffort={() => {}}
         onMoveAccount={() => {}} onArchive={() => {}} onRestore={() => {}} onOpenHistory={() => {}}
         onReapWorkspace={() => {}} />);

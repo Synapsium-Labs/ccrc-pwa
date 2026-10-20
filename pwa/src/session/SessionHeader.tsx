@@ -6,30 +6,28 @@
 // archive), and `esc` interrupts (DIRECTION: "a keycap, not an icon"), enabled
 // only while the session is busy. Confirm-free: pressing esc just sends it.
 // The esc cap is touch-only: where a physical keyboard exists ((pointer:
-// fine)) it hides and the real Escape key takes over instead, guarded so it
-// never fires while focus is in a text field.
-import { useEffect, useState } from 'react';
+// fine)) it hides and the real Escape key takes over instead — the session
+// screen's `useEscapeInterrupt`, never this header's (W2 Task S2d, D-5466).
+// The ⋯ menu and the PR sheet are `SessionFlows`', opened through
+// `useSessionFlows()`, so a skin switch that replaces this chrome keeps them.
 import type { ReactNode } from 'react';
 import {
-  backgroundWork, backgroundWords, sessionWithCoordinator, substrateFault, withCoordinatorWords,
+  backgroundWork, backgroundWords, sessionWithCoordinator, withCoordinatorWords,
   type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
 import { restartWords } from '../lib/restart';
 import {
-  BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, useNow,
+  BackButton, Chip, Keycap, StatusDot, TypedLabel, cn, useNow,
 } from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
-import { navigate } from '../lib/router';
-import { sessionDocsHref } from '../docs/docsLinks';
+import { commandDoor } from '../command/door';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { sessionLabel } from '../fleet/sessionLabel';
 // main's TypedLabel import is dropped, not lost: the component lives in
 // @ccrc/ui now and the line above already carries it.
-import { isPutAway, restoreReachesEnsure } from '../fleet/ArchiveSheet';
 import { PrKeycap } from './PrKeycap';
-import { PrSheet } from './PrSheet';
+import { useSessionFlows } from './SessionFlows';
 import './chat.css';
-import { substrateFaultText } from '../fleet/substrateWords';
 import { hibernatedSince } from '../fleet/hibernated';
 import { headerStatusWord } from '../fleet/sessionFacts';
 import { chipTone, metaChipTone } from './chipTones';
@@ -41,14 +39,10 @@ export interface SessionHeaderProps {
   session: FleetSession | null;
   status: SessionStatus | null;
   statusUpdatedAt: number | null;
-  /** D-5237: called with the control that sent it, which the server records. */
+  /** D-5237: called with the control that sent it, which the server records. The keycap's; the Escape key is the
+   *  session screen's (`useEscapeInterrupt`). */
   onInterrupt: (source: 'keycap' | 'escape-key') => void;
-  onOpenTerminal: () => void;
   onBack: () => void;
-  /** "Change model" — opens the one-tap model chooser. */
-  onChangeModel: () => void;
-  /** "Change effort" — opens the one-tap effort chooser. */
-  onChangeEffort: () => void;
   /** A routing write in flight on this field, until the pane reads it back
    *  or the 60s timeout clears it (routing spec §5.3, slice 4, Task 5) — the
    *  chip for THAT field wears a `queued` badge while this is non-null.
@@ -59,18 +53,6 @@ export interface SessionHeaderProps {
    *  satisfy without a cast). Defaults to `null` so a caller that never wires
    *  the picker's queue state renders exactly as it always did. */
   queuedField?: RouteField | null;
-  /** Overflow menu: "Move to another account" — opens the SwapSheet. */
-  onMoveAccount: () => void;
-  /** Overflow menu: "Archive" — opens the one archive sheet (workspace lifecycle §5.2). It replaced "Stop session":
-   *  stop and archive are one user feature, and the `esc` keycap below (interrupt) is a different control. */
-  onArchive: () => void;
-  /** Overflow menu: "Restore" — in place of Archive on a session already put away (`isPutAway`). */
-  onRestore: () => void;
-  /** Overflow menu: "History" — opens the lifecycle journal tab. */
-  onOpenHistory: () => void;
-  /** `PrSheet`'s merged phase "Clean up…" hands off here — Task 17 mounts
-   *  `ReapSheet` off it. A no-op until then. */
-  onReapWorkspace: () => void;
   /** Pre-snapshot identity derived from the session id (`wrapper:project`) —
    *  keeps the header instant on deep links before `/ws/fleet` lands. */
   fallback?: { title: string; wrapper: string };
@@ -91,58 +73,12 @@ export interface SessionHeaderProps {
   facts?: SessionFactSet | null;
 }
 
-/** One row of the session menu: a label, and — for the three that answer a
- *  slash command — the command itself, dimmed, read by nobody.
- *
- *  SEVEN CALL SITES in this file and nowhere else, which is why it lives here
- *  rather than in `@ccrc/ui`: a menu row that knows a hint is a slash command
- *  is this app's idea, and three of these rows carry a substrate gate whose
- *  reasons are argued at the call sites below. The markup census named the
- *  three with hints; the three without are the same row with one child. The
- *  seventh, Docs (docs design 4.8), carries its branch as the hint.
- *
- *  `aria-hidden` on the hint is deliberate and was already: the label is the
- *  accessible name, and "/model" read aloud after it is noise. */
-function MenuItem(
-  { label, hint, className, disabled, title, onClick }: {
-    label: string;
-    /** A NODE, not a string, and `server/test/no-routing-keystroke-from-server.test.ts`
-     *  is why. Two of these hints ARE the slash commands, and that census
-     *  refuses a quote immediately before `/effort` or `/model` anywhere under
-     *  `pwa/src` — the record is the arbiter and ccd is the one typer, so a
-     *  routing keystroke must not exist as a string literal in this app even
-     *  as a label. The original markup said them as JSX text; so do the call
-     *  sites below. Measured: as `hint="/model"` the guard went red naming
-     *  both lines. */
-    hint?: ReactNode;
-    className?: string;
-    disabled?: boolean;
-    title?: string;
-    onClick: () => void;
-  },
-): ReactNode {
-  return (
-    <ListRow className={cn('menu-item', className)} disabled={disabled} title={title} onClick={onClick}>
-      <span className="menu-label">{label}</span>
-      {hint !== undefined && <span className="menu-hint" aria-hidden="true">{hint}</span>}
-    </ListRow>
-  );
-}
-
 export function SessionHeader({
   session,
   status,
   statusUpdatedAt,
   onInterrupt,
-  onOpenTerminal,
   onBack,
-  onChangeModel,
-  onChangeEffort,
-  onMoveAccount,
-  onArchive,
-  onRestore,
-  onOpenHistory,
-  onReapWorkspace,
   fallback,
   roster = [],
   queuedField = null,
@@ -150,14 +86,9 @@ export function SessionHeader({
   coordination = null,
   facts = null,
 }: SessionHeaderProps): ReactNode {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [prOpen, setPrOpen] = useState(false);
-  // Menu taps close the sheet first so the follow-up surface (swap sheet,
-  // archive sheet, arriving model dialog) never fights it for the bottom edge.
-  const menuAct = (fn: () => void): void => {
-    setMenuOpen(false);
-    fn();
-  };
+  const { openMenu } = useSessionFlows();
+  // The PR cap runs `session-pr` (D-5469's door rule), which opens `SessionFlows`' PR sheet.
+  const prDoor = commandDoor('session-pr');
 
   // Live stream status wins; the fleet snapshot fills in before it connects.
   const st: SessionStatus | null = status ?? session?.status ?? null;
@@ -205,34 +136,10 @@ export function SessionHeader({
   const now = useNow(working ? 1_000 : 30_000);
 
   // The keycap exists because phone keyboards have no Escape key. Where one
-  // exists, the key is the better control and the cap is clutter — but the
-  // binding has to land in the SAME change that hides the cap, or interrupting
-  // simply stops being possible. The PWA had no Escape handler at all before.
+  // exists the key is the better control and the cap is clutter; the binding
+  // is the session screen's `useEscapeInterrupt` (W2 Task S2d), which reads the
+  // same query, so the cap hides exactly where the key takes over.
   const finePointer = useMediaQuery('(pointer: fine)');
-
-  useEffect(() => {
-    if (!finePointer || !busy) return;
-    const onKey = (e: globalThis.KeyboardEvent): void => {
-      if (e.key !== 'Escape') return;
-      // D-5235: AN ESCAPE THAT CLOSES A SHEET IS NOT AN INTERRUPT. Radix's
-      // dismiss (under every `@ccrc/ui` Sheet and dialog, the terminal drawer
-      // included) handles the key in its document capture listener and
-      // prevents the default without stopping propagation, so the same
-      // keystroke reached this window listener and killed the turn. Both
-      // checks: the first is the one Radix sets today; the second holds if a
-      // layer ever handles Escape without preventing it.
-      if (e.defaultPrevented) return;
-      if (document.querySelector('[role="dialog"][data-state="open"]') !== null) return;
-      // Escape inside a text field dismisses autocomplete or clears the draft —
-      // it must not reach through and kill the turn.
-      const el = e.target as HTMLElement | null;
-      const tag = el?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable === true) return;
-      onInterrupt('escape-key');
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [finePointer, busy, onInterrupt]);
 
   // Dot, word and tint all read the one bucket, so this strip cannot
   // contradict itself either. The word is the bucket's, with the two facts
@@ -260,28 +167,11 @@ export function SessionHeader({
   const variant =
     bucket === 'attention' ? 'attention' : wcWords !== null || asleepAt !== null ? 'idle' : working ? 'busy' : bucket === 'dead' ? 'dead' : 'idle';
 
-  // The substrate gate (spec §4): under a standing fault the console cannot
-  // SEE this session, so Archive (and a main checkout's Restore) — an offer to act on a pane nobody can measure
-  // — refuses, disabled with the reason on `title` (the PrSheet idiom; the
-  // string is `substrateFaultText`, the chip's own `tmux unreachable —
-  // <reason>`. THIS COMMENT USED TO END "never a second copy" over a line that
-  // spelled the sentence out — one of seven that did; the words live in
-  // `substrateWords.ts` now). Read through `substrateFault`: the frame is cast, not
-  // revived, so an older server's row lacks the key at runtime. Interrupt
-  // (esc) stays ungated — it targets the turn, not the substrate, and is not
-  // on the spec's destructive list.
-  const fault = session === null ? null : substrateFault(session);
-  const faultTitle = fault === null ? undefined : substrateFaultText(fault);
-
   // The project is the ground; the second crumb is this particular workspace.
   // Without it, two workspaces of one project produce two identical headers.
   const title = session ? session.project : (fallback?.title ?? '…');
   const crumb = session && session.workspace !== null ? sessionLabel(session) : null;
   const wrapper = session?.wrapper ?? fallback?.wrapper ?? '';
-  // The menu's Docs item (docs design 4.8), from the one builder the actions sheet's row also calls. No item while no
-  // row has arrived (a deep link before its first frame), and none when the builder answers null (the project fails
-  // the project grammar).
-  const docsLink = session === null ? null : sessionDocsHref(session);
 
   // Model / effort / ultracode / branch — read from the pane statusline the
   // server already parses. Tapping the model or effort chip opens its chooser.
@@ -362,7 +252,7 @@ export function SessionHeader({
           {hasMeta && (
             <>
               {model !== null ? (
-              <button type="button" className={metaChipTone('model')} onClick={onChangeModel}>
+              <button type="button" className={metaChipTone('model')} {...commandDoor('session-model')}>
                 <span className="metachip-glyph" aria-hidden="true">🤖</span>
                 <span className="metachip-text">{model}</span>
                 {queuedField === 'class' && <span className="route-queued">queued</span>}
@@ -379,7 +269,7 @@ export function SessionHeader({
             <button
               type="button"
               className={metaChipTone(ultracode ? 'ultra' : 'plain')}
-              onClick={onChangeEffort}
+              {...commandDoor('session-effort')}
             >
               <span className="metachip-text">{ultracode ? 'ultracode' : (effort ?? 'set effort')}</span>
               {queuedField === 'effort' && <span className="route-queued">queued</span>}
@@ -396,73 +286,23 @@ export function SessionHeader({
           {facts !== null && <SessionDetails facts={facts} coordination={coordination} />}
         </div>
       </div>
-      <Keycap className="keycap--term" aria-label="Terminal" onClick={onOpenTerminal}>
+      <Keycap className="keycap--term" aria-label="Terminal" {...commandDoor('open-terminal')}>
         <span aria-hidden="true">&gt;_</span>
       </Keycap>
-      <Keycap className="keycap--more" aria-label="More" onClick={() => setMenuOpen(true)}>
+      <Keycap className="keycap--more" aria-label="More" onClick={openMenu}>
         <span aria-hidden="true">⋯</span>
       </Keycap>
       {/* Top right, to the right of the ···. `esc` keeps the OUTER edge because
           it is the interrupt and its position is muscle memory; on a fine
           pointer esc is absent and this becomes rightmost naturally. */}
       {session !== null && session.workspace !== null && (
-        <PrKeycap pr={session.pr} onOpen={() => setPrOpen(true)} />
+        <PrKeycap pr={session.pr} onOpen={prDoor.onClick} data-command={prDoor['data-command']} />
       )}
       {!finePointer && (
         <Keycap className="keycap--esc" aria-label="Stop" disabled={!busy} onClick={() => onInterrupt('keycap')}>
           esc
         </Keycap>
       )}
-
-      <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} eyebrow="session" title={title}>
-        <div className="menu">
-          <MenuItem label="Change model" hint={<>/model</>} onClick={() => menuAct(onChangeModel)} />
-          <MenuItem label="Change effort" hint={<>/effort</>} onClick={() => menuAct(onChangeEffort)} />
-          <MenuItem label="History" hint="journal" onClick={() => menuAct(onOpenHistory)} />
-          {docsLink !== null && (
-            <MenuItem label="Docs" hint={docsLink.branch ?? 'default'} className="docs-menu-item"
-                      onClick={() => menuAct(() => navigate(docsLink.href))} />
-          )}
-          {/* Gated like Archive below (branch review): this item opens the SAME
-              SwapSheet as the actions sheet's gated opener, and SwapSheet's
-              confirm fires api.swap with no substrate check of its own — so
-              an ungated door here was a swap reachable with no gate anywhere. */}
-          <MenuItem
-            label="Move to another account"
-            disabled={fault !== null}
-            title={faultTitle}
-            onClick={() => menuAct(onMoveAccount)}
-          />
-          {/* Archive for every session, Restore for one already put away (workspace lifecycle §5.2) — never both.
-              Archive is gated like Move above: it ends the pane. It needs the row to choose its words, so a deep
-              link that has not seen its first frame yet offers it disabled. Restore is gated exactly where it IS
-              Restart's request (`restoreReachesEnsure`: a main checkout posts `/ensure`); a workspace's `ws-restore`
-              is a different verb and stays ungated, as in the actions sheet. */}
-          {session !== null && isPutAway(session) ? (
-            <MenuItem
-              label="Restore"
-              disabled={fault !== null && restoreReachesEnsure(session)}
-              title={restoreReachesEnsure(session) ? faultTitle : undefined}
-              onClick={() => menuAct(onRestore)}
-            />
-          ) : (
-            <MenuItem
-              label="Archive"
-              className="menu-item--danger"
-              disabled={fault !== null || session === null}
-              title={faultTitle}
-              onClick={() => menuAct(onArchive)}
-            />
-          )}
-        </div>
-      </Sheet>
-
-      <PrSheet
-        session={session}
-        open={prOpen}
-        onClose={() => setPrOpen(false)}
-        onReap={() => { setPrOpen(false); onReapWorkspace(); }}
-      />
     </header>
   );
 }
