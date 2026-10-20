@@ -405,9 +405,11 @@ Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here whe
   77.1), the latter in a throwaway `node:22.16.0` container with no network: every pinned point is default-ignorable
   in both, U+0600 is not, and the pins hold in both. The pair check's letter-or-digit gate reads the facing ends
   folded, as `hitsIn` reads them, so a character NFKC folds to a letter counts on either side of a line break, with or
-  without a default-ignorable letter beside it. Seven positive pins red when the gate reads the raw ends (measured). A
-  known limit, older than this PR and not fixed here: the pair check misses a phrase whose first word ends in a
-  camelCase break, because its early exit reads only the split token stream.
+  without a default-ignorable letter beside it. Seven positive pins red when the gate reads the raw ends (measured).
+  Known limits, older than this PR and not fixed here: the pair check misses a phrase broken across two lines when its
+  part on the previous line holds a camelCase break in any of its words (a capital inside a word, or a character that
+  folds to one), because its early exit reads only the split token stream; and when the phrase's part on either line
+  lies more than 80 units from the line break, because the facing ends are cut at 80 units before matching.
 - **D-5288** — `the-guard-pins-itself` (Task 1 Steps 7-8, Review Focus 3 and 4; review 662 F7 and F8): the shape
   checks passed with an entry deleted. `PRIVATE_NAMES` is now pinned by `PRIVATE_NAMES_DIGEST`, a digest of every
   entry's four fields that `hash --list` prints beside the literal it regenerates, so a deleted, reordered or weakened
