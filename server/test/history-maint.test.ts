@@ -663,18 +663,23 @@ describe.skipIf(process.platform === 'darwin')('the relay holds the shim\'s stde
   // The argument, in numbers. The shim writes ALL its stderr, touches its marker, then waits (bounded, 120 s) for a go-file. It cannot touch
   // the marker until the CLI has accepted every byte (a pipe holds 64 KiB, so at most the last 64 KiB are still in flight, and the CLI reads
   // them next), and while it waits nothing else arrives. So whether any stderr reached the terminal BEFORE the go-file depends only on the
-  // cap, never on a pipe's size or on timing: a hold is spilled once its byte count is OVER the cap (`errBytes > ERR_HOLD_CAP`), and
+  // cap, never on a pipe's size or on timing (a claim about the spill and every green case below; one mutant's red on a byte count
+  // is not, see the lower side): a hold is spilled once its byte count is OVER the cap (`errBytes > ERR_HOLD_CAP`), and
   //   - a stream of exactly 1,048,577 bytes ((1 << 20) + 1) is over it with its last byte: it spills before the go-file (upper side:
   //     red for any cap of 1,048,577 or more, so `(1 << 20) + 1`, `+ 300000`, `+ 380000`, 2 MiB, no spill at all);
   //   - a stream of exactly 1,048,576 bytes (1 << 20) is not over it: nothing reaches the terminal until the shim ends and the close
-  //     flushes it (lower side: red for any cap below 1,048,576, so `1 << 16`, `(1 << 20) - 1`, and a comparison `>=`).
+  //     flushes it (lower side: red for any cap below 1,048,576, so `1 << 16`, `(1 << 20) - 1`, and a comparison `>=`). The cap
+  //     `(1 << 20) - 1` also reds the no-line-break over-the-cap case on its byte count, but only when a read ends exactly at byte
+  //     1,048,576 (64 KiB and 4 KiB reads do; 65,535-byte reads and one whole read do not), so its red rests on these two cases.
   // The lower side waits a settle window (5 s) after the marker before it calls stderr empty. The green direction does not depend on that
   // window (a held stream stays held however long it is watched); only a mutant's red does, when the spill is written within it.
   // Exact byte counts come from `head -c`. The lines stream is 128-byte lines, so 1 MiB is 8,192 whole lines; the stream with no line
   // break is `z` bytes. At the seam the spill and the close together add no byte and drop none, apart from the one line break `emit` adds
   // where a held text ends without one (spillErr's comment, cli.mjs): the lines stream, ending in a line break at 1 MiB, gets none added,
   // and its one extra byte past the cap is a partial last line that gets its line break at the close; the stream with no line break gets
-  // exactly one, so the bytes received are the bytes written plus that one.
+  // exactly one, so the bytes received are the bytes written plus that one. Since wave 5h-2 (D-5747) the spill and the close write
+  // through the stream's look-behind window (`redactAfter`: the text alone, then with the last RELAY_LOOKBEHIND_BYTES of the stream,
+  // unioned with each line read alone), which changes no byte of a text no rule masks, so these counts stand as they were.
   const CAP = 1 << 20;
   const CAP_LINE = `zqx23 ${'y'.repeat(121)}`;   // 127 bytes and a line break: 128, so 1 MiB is 8,192 lines
   const CAP_BOUND = [

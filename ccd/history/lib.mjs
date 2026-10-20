@@ -3966,7 +3966,9 @@ export function deriveHealth(h) {
   // zero-behind tick (capture is paused while the hold stands, so the lag is real). schema-newer is NOT covered (review 466 F1): a
   // scheduled pass on a newer store is refused at openStore, before the held arm, and leaves through holdPass, which opens no
   // database and stamps nothing (DM17: no write on a newer store), so tick-stale keeps standing beside schema-newer; planRun's
-  // refuse-newer arm is defensive on a scheduled pass.
+  // refuse-newer arm is defensive on a scheduled pass. One window stays, as text only (review 467 F3; wave 5h-2's R7): heldFresh
+  // reads no schema verdict, so a held_pass_ms stamped before the store became newer still reads fresh, and tick-stale is held
+  // back beside schema-newer for up to TICK_STALE_MS after that stamp (spec §9.6; D-5027's residual (d) in the B2 plan).
   const heldFresh = h.heldPassMs !== null && h.heldPassMs !== undefined
     && h.nowMs - h.heldPassMs <= TICK_STALE_MS && h.heldPassMs - h.nowMs <= PASS_FUTURE_SLACK_MS;
 
