@@ -17,7 +17,8 @@
  *     line into indented rows) a shape that reaches the end of its row also masks the leading token run of the next
  *     row, and on through every row that run fills; and a row whose last run has begun a shape (or ends in a prefix
  *     of one that the next row completes) is joined to the next indented row's leading run before the shapes are
- *     matched, so a key wrapped before its first row could match is matched whole (D-5995).
+ *     matched, so a key wrapped before its first row could match is matched whole; the shapes are matched on the
+ *     joined text and on the text as drawn, so a join never hides a key that begins the joined row (D-5995).
  *   - EXACT BYTES. A `compatible` key has no shape, so each lane secret has a fingerprint row (D-5996): the secret
  *     with its trailing `=` stripped, `HMAC-SHA256(box token, "ccrc-secret-fp-v1\0" ‖ that)`, and its byte length,
  *     computed on the box and stored in `secret_fingerprints` with the box-token generation it was keyed with. A
@@ -349,42 +350,47 @@ function shapeSpans(s: string, rows: boolean, masks: readonly RegExp[]): { spans
   for (const sep of ['', '\0'] as const) {
     if (sep === '\0' && !hasEsc) break;   // with no escape the two views are one
     const v = viewOf(s, sep);
-    const j = rows ? joinWraps(v.t) : null;
-    const t = j === null ? v.t : j.t;
-    if (!SHAPE_HINT.test(t)) continue;
-    /** A span of `t` as original spans: split at each joined seam, so a row end between its rows is kept. */
-    const put = (a: number, b: number): void => {
-      if (j === null) { spans.push(spanIn(v, a, b)); return; }
-      let p = a;
-      for (let k = firstSeamAfter(j.seams, a); k < j.seams.length && j.seams[k]! < b; k++) {
-        spans.push(spanIn(v, j.map[p]!, j.map[j.seams[k]! - 1]! + 1));
-        p = j.seams[k]!;
-      }
-      spans.push(spanIn(v, j.map[p]!, j.map[b - 1]! + 1));
-    };
-    const r = rows ? new Rows(t) : null;
-    for (const re of masks) {
-      re.lastIndex = 0;
-      for (let m = re.exec(t); m !== null; m = re.exec(t)) {
-        if (m[0].length === 0) { re.lastIndex++; continue; }
-        let end = m.index + m[0].length;
-        put(m.index, end);
-        // A match across a joined row end already ran through every row its run fills: the join chain stopped at the
-        // row the value ends on.
-        if (r === null || (j !== null && seamWithin(j.seams, m.index, end))) continue;
-        // Rows mode: a shape that reaches its row's end runs on into the next row's leading run, and on through every
-        // further row while the row before it was as full as the shape's own (a shorter row is the value's last).
-        const full = r.length(m.index);
-        for (let first = true; ; first = false) {
-          if (!first && r.length(end - 1) < full) break;
-          const next = continuationAfter(t, end);
-          if (next === null) {
-            TEXT_END.lastIndex = end;
-            if (TEXT_END.test(t)) carry = true;   // the next row is in the next text
-            break;
+    const joined = rows ? joinWraps(v.t) : null;
+    // The joined text AND the text as drawn (D-5995): a join glues a run that has begun a shape and matches none (a
+    // base64 JSON blob's `eyJ…`, a name like `sk-v1.py`) to the next row's leading run, so a key that begins that row
+    // loses its left boundary in the joined text; the text as drawn keeps it. The union of both is masked.
+    for (const j of joined === null ? [null] : [joined, null]) {
+      const t = j === null ? v.t : j.t;
+      if (!SHAPE_HINT.test(t)) continue;
+      /** A span of `t` as original spans: split at each joined seam, so a row end between its rows is kept. */
+      const put = (a: number, b: number): void => {
+        if (j === null) { spans.push(spanIn(v, a, b)); return; }
+        let p = a;
+        for (let k = firstSeamAfter(j.seams, a); k < j.seams.length && j.seams[k]! < b; k++) {
+          spans.push(spanIn(v, j.map[p]!, j.map[j.seams[k]! - 1]! + 1));
+          p = j.seams[k]!;
+        }
+        spans.push(spanIn(v, j.map[p]!, j.map[b - 1]! + 1));
+      };
+      const r = rows ? new Rows(t) : null;
+      for (const re of masks) {
+        re.lastIndex = 0;
+        for (let m = re.exec(t); m !== null; m = re.exec(t)) {
+          if (m[0].length === 0) { re.lastIndex++; continue; }
+          let end = m.index + m[0].length;
+          put(m.index, end);
+          // A match across a joined row end already ran through every row its run fills: the join chain stopped at the
+          // row the value ends on.
+          if (r === null || (j !== null && seamWithin(j.seams, m.index, end))) continue;
+          // Rows mode: a shape that reaches its row's end runs on into the next row's leading run, and on through every
+          // further row while the row before it was as full as the shape's own (a shorter row is the value's last).
+          const full = r.length(m.index);
+          for (let first = true; ; first = false) {
+            if (!first && r.length(end - 1) < full) break;
+            const next = continuationAfter(t, end);
+            if (next === null) {
+              TEXT_END.lastIndex = end;
+              if (TEXT_END.test(t)) carry = true;   // the next row is in the next text
+              break;
+            }
+            put(next[0], next[1]);
+            end = next[1];
           }
-          put(next[0], next[1]);
-          end = next[1];
         }
       }
     }
