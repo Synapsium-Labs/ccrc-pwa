@@ -379,8 +379,8 @@ describe('refusals are answers', () => {
     // `_json_str`'s one remaining failure is python3 not being RUNNABLE, and it
     // reports that on its exit status — which every one of the ~20
     // substitutions below swallows by construction, because they sit inside
-    // printf ARGUMENT LISTS. `cmd_ws_audit` (ccd:8068) and `_ws_manifest`
-    // (ccd:5260) each probe once up front for exactly that reason, and this is
+    // printf ARGUMENT LISTS. `cmd_ws_audit` (ccd#cmd_ws_audit) and `_ws_manifest`
+    // (ccd#_ws_manifest) each probe once up front for exactly that reason, and this is
     // the THIRD caller that builds a whole record: `_ws_tombstone` writes the
     // one document that outlives the workspace. Without the probe the resume
     // path — the one path that reaches the destructive tail without ever
@@ -760,7 +760,7 @@ describe('destruction order', () => {
   it('removes the worktree, CAS-deletes the branch, and clears the registry LAST', () => {
     const { wt, main } = ready();
     const tok = tokenOf();
-    // COUNTED, not `toContain`. `cmd_ws_archive` (ccd:5164) kills the same pane
+    // COUNTED, not `toContain`. `cmd_ws_archive` (ccd#cmd_ws_archive) kills the same pane
     // with the same argv, and `ready()` runs it — so the line is already in the
     // log before the reap starts and a `toContain` passes with (e) deleted.
     // Measured: the mutation sweep reported that assertion's mutant SURVIVED,
