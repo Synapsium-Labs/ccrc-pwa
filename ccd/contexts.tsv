@@ -649,3 +649,4 @@ cmd_docs_tree	C9
 cmd_docs_show	C9
 cmd_docs_fetch	C9
 _docs_py	C9
+_launchd_class	C2
