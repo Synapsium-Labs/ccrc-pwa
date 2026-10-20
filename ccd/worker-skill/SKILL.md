@@ -62,7 +62,7 @@ clause, where they would have to be escaped on the other side, except the
 1. Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time. `/clear` rotates that uuid and dispatch `/clear`s you on every wave >= 2, so a uuid you cached is guaranteed stale.
 2. Commit on THIS workspace's own branch (`ws/<slug>`), never a separate feature branch. The done-fingerprint re-measures the workspace branch's tip, so work parked on a feature branch leaves that tip unmoved and wedges every close `stale-tip` forever (F5 — the server's own `stale-tip` detail names this as the almost-certain cause).
 3. Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.
-4. Keep your input box empty. A half-typed draft makes the delivery lane refuse `draft-present`, only you can clear your own text, and a parked delivery means your brief was never read.
+4. A draft in your input box never stops mail. The delivery lane stashes it with Claude Code's own prompt stash (ctrl+s), delivers, and Claude Code restores it after the delivery; if you see `Draft restored`, that is why. Keep using your box normally. Only a draft typed over a stash you already hold yourself makes the lane refuse (`stash-occupied`), so send or pop your own stash rather than leaving it held.
 5. Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may. In a shell script, never delete through a variable (`rm -rf "$X"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.
 6. Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.
 7. Large payloads travel as files: write the file, then name its ABSOLUTE path in the mail's `artifacts` (a relative entry is refused `bad-kind`). Never ask for content to be pasted into your pane (F7).
@@ -276,10 +276,13 @@ goes with the tree.
 
 ## When something is wrong
 
-- **You have been sitting idle and no brief ever arrived.** Look at your own
-  input box first. A draft you left half-typed makes the delivery lane refuse
-  `draft-present` and back off; after 6 attempts it parks the delivery
-  `rejected` and your brief is never read. Only you can clear that text.
+- **You have been sitting idle and no brief ever arrived.** A draft in your
+  input box is not the reason: the lane stashes it around a delivery and Claude
+  Code restores it. Look at your own pane for a dialog or permission menu, or
+  for a draft typed over a stash you hold yourself (`stash-occupied`). The
+  lane backs off from either; after 6 attempts it parks the delivery, still
+  queued and unread, until your pane frees. Answer the menu, or send or pop
+  your own stash.
 - **A rejection arrives as mail**, kind `answer`, subject `rejected: <code>` —
   the coordinator submitted your fingerprint, the server re-measured it, and it
   did not hold. The code is the whole message; read it before you touch

@@ -982,6 +982,9 @@ describe('the skill on `final:true` — a release is now conditional', () => {
   // enforces it is the shipped test, and this file runs whole.
 });
 
+/** D-5913: mail-envelope.md's draft contract, verbatim (whitespace-collapsed). */
+const DRAFT_NEVER_BLOCKS = "A draft never stops mail. When the recipient has unsent text in its Claude Code input box, the lane saves it with Claude Code's own prompt stash (ctrl+s), types and submits the delivery, and checks that Claude Code restored the draft afterwards; the recipient sees `Draft restored`, and that is why.";
+
 describe('the skill tells a SENDER what a blocked delivery obliges them to do', () => {
   // MEASURED at the frozen ref, not assumed: the corpus is NOT silent about
   // undeliverable mail — `undeliverable` ×3 and `rejected` ×4 across
@@ -994,9 +997,15 @@ describe('the skill tells a SENDER what a blocked delivery obliges them to do', 
   // the false premise this describe is written NOT to repeat.
   const envelope = (): string => refs('mail-envelope.md');
 
-  it('names what lastError === draft-present means for the sender', () => {
-    expect(allSkillText).toContain('draft-present');
-    expect(allSkillText).toMatch(/input box/i);
+  // D-5913 (spec §2.5): the lane stashes a recipient's draft around a delivery
+  // (D-5911, D-5912), so the corpus may no longer tell a sender that a draft
+  // blocks mail. Pinned verbatim, whitespace-collapsed, in the file that owns it.
+  it('says a draft in the recipient\'s box never blocks mail, and names the two stash refusals', () => {
+    const env = flat(envelope());
+    expect(env).toContain(flat(DRAFT_NEVER_BLOCKS));
+    expect(env).toContain('`lastError: "stash-occupied"`');
+    expect(env).toContain('`lastError: "stash-failed"`');
+    expect(env, 'the old contract (the lane refuses a draft) is back').not.toMatch(/refuses to type over it/);
   });
 
   it('names the attempt ceiling, so a first block reads differently from the last', () => {
