@@ -127,6 +127,7 @@ import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/le
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
 import type { PushPayload } from './push.js';
+import { notify } from './notice.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
@@ -813,6 +814,11 @@ function mergeBreakerMembers(
   }
   return [...out.values()];
 }
+
+/** `pushOne`'s two flags narrowed to the three combinations a lane can reach, each one `NoticeMode` (D-5857): neither
+ *  (`'push'`), `recordAlways` (`'record-always'`), or `recordAlways` with `recordOnly` (`'record-only'`). `recordOnly`
+ *  without `recordAlways` had no caller and is not a type. */
+type PushOneMode = { recordOnly?: false | undefined } | { recordAlways: true; recordOnly: true };
 
 export class FleetWatcher {
   private timer: NodeJS.Timeout | null = null;
@@ -3426,49 +3432,23 @@ export class FleetWatcher {
     /** A same-origin path the service worker opens on tap, ahead of `/s/<sessionId>` (`PushPayload.url`): the digest
      *  push's deep link to its day's screen (D-5300). */
     url?: string;
-  }, projects: Set<string>): void {
-    const visible = this.deps.presence?.isVisible(e.sessionId) === true;
-    if (visible && !e.recordAlways) return;
+  } & PushOneMode, projects: Set<string>): void {
     // Decorated only when BOTH more than one project is active AND the
     // project is actually known (review finding 3) — an empty `e.project`
     // (run-less mail whose recipient session could not be resolved either,
     // `pushNewMail`'s own fallback chain) must degrade to no decoration at
     // all, never to a dangling ` · ` with nothing after it.
     const title = projects.size > 1 && e.project !== '' ? `${e.title} · ${e.project}` : e.title;
-    const log = this.deps.notifyLog;
-    const recorded = log?.record({ kind: e.kind, sessionId: e.sessionId, title, body: e.body,
-      runId: e.runId ?? null });
-    void log?.flush();
-    // The durable feed archive — same record, same point, ALL kinds (Task
-    // 10's orchestrator-added scope). Only reachable when NotifyLog actually
-    // produced an event: no `notifyLog` configured means no `{epoch,seq}`
-    // pair exists to mirror, and a feed row that mirrors nothing is not an
-    // archive of anything. GUARDED (review finding 1): `node:sqlite` throws
-    // SYNCHRONOUSLY (a full disk, a second connection holding coord.db's
-    // write lock — `tx()`'s `BEGIN IMMEDIATE` takes it eagerly, no busy
-    // timeout) and this call sits directly on the poll, reached from every
-    // kind this method ever raises (the `done` push above, the ask push in
-    // `detectDialogs`, and both new Task 10 lanes). `tick()`'s own rule is
-    // that one bad lane must not kill the others — every neighbouring lane
-    // already earns that non-throwing property one way or another (see
-    // `tick()`'s own comment above `pushNewMail`/`pushNewRuns`) and this call
-    // was the one exception reachable from every push, not just two lanes.
-    // The ring record and the push below are UNAFFECTED by a failure here —
-    // only the archive row is lost.
-    if (log && recorded) {
-      try { this.deps.coord?.recordFeedEvent(log.epoch, recorded); }
-      catch (err) {
-        console.warn(`ccrc-server: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — feed archive degraded, ring/push unaffected`);
-      }
-    }
-    if (visible) return;                       // recorded, not pushed
-    if (e.recordOnly) return;                   // recorded, deliberately never pushed
-    void this.deps.push?.notify({
-      title, body: e.body, sessionId: e.sessionId,
-      tag: e.tag ?? `${e.kind}-${e.sessionId}`,
-      ...(e.actions ? { actions: e.actions } : {}),
-      ...(e.url !== undefined ? { url: e.url } : {}),
-    });
+    // D-5857: the presence gate, the ring record, its flush, the GUARDED durable archive (review finding 1: one bad
+    // lane must not kill the others, and `node:sqlite` throws synchronously from every kind this method raises) and
+    // the push are `notify`'s (`notice.ts`), in the mode the two flags name. The ring record and the push are
+    // UNAFFECTED by an archive failure; only the archive row is lost.
+    notify(this.deps, { kind: e.kind, sessionId: e.sessionId, title, body: e.body, runId: e.runId ?? null },
+      e.recordOnly ? 'record-only' : e.recordAlways ? 'record-always' : 'push', {
+        ...(e.tag !== undefined ? { tag: e.tag } : {}),
+        ...(e.actions ? { actions: e.actions } : {}),
+        ...(e.url !== undefined ? { url: e.url } : {}),
+      });
   }
 
   /**
