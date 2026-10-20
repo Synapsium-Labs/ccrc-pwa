@@ -4391,9 +4391,15 @@ fi
 # `class` (the PermissionRequest arm below) any category counts; in mode `deny` (this arm) only `verb` (a SAFETY `ccd`
 # verb, `ccrc update` or `ccrc rollback`), `surface` (the approval surface) and `build` do. `build` (D-5696, spec
 # 2026-10-18 §7.6) is deny mode's alone (`bmatch`, never read in `class` mode, so the classifier parity is untouched): a
-# write into `~/.local/share/claude/versions/` or onto the launcher, by Bash or an edit tool, and Claude Code's `install`
-# or `update` under any path head, a `claude…` wrapper name or a `~/.local/bin/<id>` launcher, with no flag between
-# (so `claude -p "update …"` is not one). A bypassed child raises no prompt, so this arm is its only enforcement. JavaScript's regexes are ASCII
+# write into `~/.local/share/claude/versions/` or onto the launcher, by Bash or an edit tool, and Claude Code's
+# `install`, `update` or `upgrade` (D-6063) under a `claude…` wrapper name, a `~/.local/bin/<id>` launcher, a `$VAR`
+# head, the build's own path (`…/versions/X.Y.Z`, `$CLAUDE_CODE_EXECPATH`, or `./X.Y.Z` after a `cd` into the build
+# directory) or a package runner of `@anthropic-ai/claude-code`, after up to eight flags (`CFLAGS`, each with at most
+# one value that does not start with `-`, `--` included). A print-mode word (`-p`, `--print`, `--print=…`) stops the
+# flags, so `claude -p "update …"` is a prompt, not one; a flag's value may swallow a prompt's first word once quotes
+# are removed (`claude -c "please update x"`), a false deny in the safe direction. `respawn` counts right after the
+# head only, where Claude Code runs it. The official installer's URLs and a global npm, pnpm, yarn or bun install of
+# `@anthropic-ai/claude-code` count too. A bypassed child raises no prompt, so this arm is its only enforcement. JavaScript's regexes are ASCII
 # where Oniguruma's are Unicode, so `\w` and `\b` are spelled as ASCII classes and `\s` as JavaScript's own set
 # (`WS`, built by `implode` so this file stays ASCII). `hbt` is the classifier's `headBeforeTail`: in one segment, the
 # head matches wholly inside the text before the LAST start of the tail (found by a greedy prefix and a lookahead,
@@ -4401,9 +4407,12 @@ fi
 # bash word.
 #
 # ORDER IS BUDGET, as in the denies above: the event, the `.child` test and a substring prefilter are builtins, so a
-# top-level session, and a child's call whose payload names none of `ccd`, `ccrc` and `approval`, nor `claude` or
-# `/.local/bin/` together with `install`, `update` or `/.local/`, pay no fork. Every pattern needs one of those words
-# literally (JSON escaping never touches ASCII letters). A deny already set is
+# top-level session, and a child's call whose payload names none of these, pay no fork: `ccd`, `ccrc` and `approval`
+# (the verbs and the surface); `install`, `update`, `upgrade` and `respawn`, each on its own (a Claude Code verb under
+# any head, `$CLAUDE_CODE_EXECPATH` and a runner included); `anthropic-ai/claude-code` (a global install by `add`);
+# `downloads.claude.ai`; and `claude` or `/.local/bin/` together with `/.local/` (a write). Every pattern needs one
+# of those words literally (JSON escaping never touches ASCII letters). A real payload's `transcript_path` names
+# `.claude…`, so every child call naming `install` or `update` already forked one jq. A deny already set is
 # never replaced. FAIL-OPEN as every gate here: a jq that cannot run (no Oniguruma, say) denies nothing, and
 # `ccrc doctor`'s `jq_regex` check names that box.
 APPROVAL_FORBIDDEN_JQ='def WS: "\t\n\u000b\f\r " + ([160, 5760, 8192, 45, 8202, 8232, 8233, 8239, 8287, 12288, 65279] | implode);
@@ -4444,11 +4453,33 @@ def xmatch:
   (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
   (select(test(EXPV + "approvals" + NW)) | "surface\tthe approval surface");
-def CLI: "(?:" + WB + "claude[A-Za-z0-9-]*|/\\.local/bin/[a-z][a-z0-9-]{0,31})";
+def SEPP: "/(?:\\.?/){0,8}";
+def PSTOP: "(?!(?:-p|--print)(?=" + SP + "|$)|--print=)";
+def CFLAGS: "(?:" + PSTOP + "-" + NS + "*(?:" + SP + "+(?!-)" + NS + "+)?" + SP + "+){0,8}";
+def CVERB: "(?:install|update|upgrade)" + NW;
+def VERS: "[0-9]{1,9}\\.[0-9]{1,9}\\.[0-9]{1,9}";
+def VERH: "\\.local" + SEPP + "share" + SEPP + "claude" + SEPP + "versions" + SEPP + VERS;
+def EXECH: "\\$\\{?CLAUDE_CODE_EXECPATH\\}?";
+def RUNH: WB + "(?:npx|bunx|(?:pnpm|yarn)" + SP + "+dlx|(?:npm|pnpm)" + SP + "+exec)" + SP + "+(?:-" + NS + "*" + SP + "+){0,8}@anthropic-ai/claude-code(?:@" + NS + "{1,64})?";
+def CLI: "(?:" + WB + "claude[A-Za-z0-9-]*|" + SEPP + "\\.local" + SEPP + "bin" + SEPP + "[a-z][a-z0-9-]{0,31}|" + VERH + "|" + EXECH + "|" + RUNH + ")";
+def CRUN: SP + "+(?:" + CFLAGS + CVERB + "|respawn" + NW + ")";
+def END: "(?=$|[" + WS + ";&|)])";
+def ANC: "(?:(?:~|\\$\\{?HOME\\}?|/[^" + WS + ";&|()<>]{0,256}?)?" + SEPP + "|\\./)?";
+def CDH: "(?:^|[" + WS + "(])(?:cd|pushd)" + SP + "+(?:-[PLe]{1,3}" + SP + "+){0,2}";
+def VERSD: CDH + ANC + "\\.local" + SEPP + "share" + SEPP + "claude" + SEPP + "versions/{0,8}" + END;
+def cdthen($cd; $then): test($cd) and (split("[\n;&|]"; null) as $s
+  | first(range(0; $s | length) | select($s[.] | test($cd))) as $k
+  | any($s[$k + 1:][]; test($then)));
+def BI: "build\tinstalling or updating a Claude Code build";
 def bmatch:
   (select(hbt("[\n;&|]"; WR; BUILD)) | "build\ta write to a Claude Code build or its launcher"),
-  (select(test(CLI + SP + "+(?:install|update)" + NW)) | "build\tinstalling or updating a Claude Code build"),
-  (select(test(WB + "claude" + NW) and test(EXPV + "(?:install|update)" + NW)) | "build\tinstalling or updating a Claude Code build");
+  (select(test(CLI + CRUN)) | BI),
+  (select(test(WB + "claude" + NW) and test(WB + EXP + SP + "+(?:" + FLAGS + "(?:install|update)" + NW + "|" + CFLAGS + CVERB + "|respawn" + NW + ")")) | BI),
+  (select(cdthen(VERSD; "(?:^|[" + WS + "(])(?:\\./{1,8})?" + VERS + CRUN)) | BI),
+  (select(test("claude\\.ai/install\\.(?:sh|ps1|cmd)|downloads\\.claude\\.ai")) | BI),
+  (select(test("@anthropic-ai/claude-code") and any(split("[\n;&|]"; null)[]; test(WB + "(?:npm|pnpm|yarn|bun)" + NW)
+     and test(SP + "(?:install|i|add|update|up|upgrade)" + NW) and test("@anthropic-ai/claude-code")
+     and test("(?:^|" + SP + ")(?:-g|--global|--location=global|global)" + NW))) | BI);
 def edittool: . == "Write" or . == "Edit" or . == "MultiEdit" or . == "NotebookEdit";
 def pathwhy($t):
   first((.file_path, .path, .notebook_path) | select(type == "string")
@@ -4476,8 +4507,9 @@ if [[ "$event" == PreToolUse && -n "$id" && -e "$REG/$id.child" \
   apf=$payload
   if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]]; then apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}; fi
   [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* \
-     || ( ( "$apf" == *claude* || "$apf" == */.local/bin/* ) \
-          && ( "$apf" == *install* || "$apf" == *update* || "$apf" == */.local/* ) ) ]] || apf=""
+     || "$apf" == *install* || "$apf" == *update* || "$apf" == *upgrade* || "$apf" == *respawn* \
+     || "$apf" == *anthropic-ai/claude-code* || "$apf" == *downloads.claude.ai* \
+     || ( ( "$apf" == *claude* || "$apf" == */.local/bin/* ) && "$apf" == */.local/* ) ]] || apf=""
 fi
 if [[ -n "$apf" ]]; then
   case "${tool:-}" in

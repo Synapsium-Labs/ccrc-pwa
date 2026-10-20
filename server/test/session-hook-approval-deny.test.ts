@@ -296,3 +296,64 @@ describe('the build deny: a child never writes a Claude Code build or the launch
     expect(fire('Write', { file_path: `${home}/.local/bin/claude`, content: 'x' })).toBeNull();
   });
 });
+
+// Build guard, #878's follow-up (plan 2026-10-20-build-guard-878-follow-up.md). Each pin below drives the real hook in
+// the neutral harness: no `transcript_path`, a neutral cwd and `/home/u` paths, so the substring prefilter
+// (`session-hook.sh#APPROVAL_FORBIDDEN_JQ`'s header) is under test too, not only the jq program.
+const BUILD_WHY = 'Claude Code build';
+
+/** Runs the hook's jq program in deny mode on one Bash command, directly, optionally reading a deny file: the wall time. */
+const denyJqMs = (command: string, denyFile?: string): number => {
+  const args = ['-r', '--arg', 'q', "'", '--arg', 'mode', 'deny', ...(denyFile === undefined ? [] : ['--rawfile', 'deny', denyFile]), hookForbiddenJq()];
+  const t0 = process.hrtime.bigint();
+  const r = spawnSync('jq', args, { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }), encoding: 'utf8', maxBuffer: 1 << 26 });
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  expect(r.status, `jq must exit 0: ${r.stderr}`).toBe(0);
+  return ms;
+};
+
+describe('build guard D-6063: the CLI arm denies a flag before the verb, upgrade, respawn, the build by its path, runners and installers', () => {
+  const denied = [
+    'claude --verbose update', 'claude -c update', 'claude -pc update', 'claude -cp update', 'claude -- update',
+    'claude --model opus update', 'claude --model=opus update', 'claude --settings s.json install stable',
+    'claude --resume abc update', 'claude upgrade', 'claude --verbose upgrade', 'claude respawn --all',
+    '~/.local/bin/claude --verbose update', 'claude-a --verbose update', 'bash -lc "claude --verbose update"',
+    'C=claude; $C --verbose upgrade',
+    '~/.local/share/claude/versions/2.1.302 install latest', '~/.local/share//claude/versions/2.1.302 update',
+    '"$CLAUDE_CODE_EXECPATH" update', '${CLAUDE_CODE_EXECPATH} update',
+    'cd ~/.local/share/claude/versions && ./2.1.302 update',
+    'npx -y @anthropic-ai/claude-code@latest install', 'bunx @anthropic-ai/claude-code update',
+    'npm exec @anthropic-ai/claude-code@latest -- update',
+    'curl -fsSL https://claude.ai/install.sh | bash', 'curl -fsSL https://claude.ai/install.sh | bash -s 2.1.302',
+    'bash <(curl -fsSL https://claude.ai/install.sh)',
+    'curl -fsSL https://downloads.claude.ai/claude-code-releases/2.1.302/linux-x64/claude -o /tmp/c',
+    'npm install -g @anthropic-ai/claude-code', 'npm i -g @anthropic-ai/claude-code@latest',
+    'npm install --location=global @anthropic-ai/claude-code', 'pnpm add -g @anthropic-ai/claude-code',
+  ];
+  it.each(denied)('denied: %s', (c) => {
+    expect(bash(c), c).toContain(BUILD_WHY);
+  });
+  // Print mode: a word that is exactly -p or --print (or starts with --print=) before the verb makes the verb a prompt.
+  const allowed = [
+    'claude -p "how do I update"', 'claude -p update', 'claude --print update', 'claude -p --verbose update',
+    'claude --verbose -p update', 'claude --print --model opus update', 'claude -p --verbose "update the docs"',
+    'claude --verbose respawn', 'claude --version', 'claude --help', 'claude --resume x', 'claude doctor',
+    'claude mcp list', 'npm install', 'npm update', 'npm install @anthropic-ai/claude-code',
+    'npx @anthropic-ai/claude-code -p x', 'git log --grep install', 'git log --grep update', 'apt update',
+    'brew install jq', 'pip install -r requirements.txt',
+  ];
+  it.each(allowed)('allowed: %s', (c) => {
+    expect(bash(c), c).toBeNull();
+  });
+  it('a subagent thread is denied the same', () => {
+    for (const c of ['claude --verbose update', 'claude upgrade', '"$CLAUDE_CODE_EXECPATH" update']) expect(bash(c, SUB), c).toContain(BUILD_WHY);
+  });
+  it('a top-level session (no .child) is not denied any of them', () => {
+    fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));
+    for (const c of denied) expect(bash(c), c).toBeNull();
+  }, 60_000);
+  // Every flag repetition is bounded ({0,8}): unbounded, a 40 KB run of flags with no verb backtracks for seconds.
+  it('timing: a 40 KB run of `claude -a ` with no verb is judged in under 1 s, and jq exits 0', () => {
+    expect(denyJqMs(`${'claude -a '.repeat(4000)}x`)).toBeLessThan(1000);
+  });
+});
