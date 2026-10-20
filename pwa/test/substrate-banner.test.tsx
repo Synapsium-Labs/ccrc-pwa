@@ -13,6 +13,7 @@ import type { FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { SubstrateBanner } from '../src/fleet/SubstrateBanner';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { renderFleet } from './fleetHost';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => cleanup());
@@ -118,7 +119,7 @@ describe('the substrate banner — one fault, one banner (spec §4)', () => {
     act(() => {
       store.setState({ conn: 'open', sessions: [s({ id: 'a', lifecycle: 'restarting', substrate: FAULT })] });
     });
-    render(<FleetScreen store={store} />);
+    renderFleet(<FleetScreen store={store} />);
     expect(document.querySelector('.substrate-banner')).not.toBeNull();
   });
 });

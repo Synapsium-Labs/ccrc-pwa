@@ -46,7 +46,7 @@ export interface ArchiveConflictRun {
  *  is coverage of something no operator can reach.
  *
  *  It was DROPPED rather than wired because neither door has run-board
- *  navigation to hand it: `SessionActionsSheet` lives on FleetScreen and
+ *  navigation to hand it: `SessionActionsSheet` renders from FleetFlows and
  *  `PrSheet` under SessionHeader, and neither takes a navigate/route prop —
  *  inventing one is a surface the plan never designed, decided from a review
  *  finding.

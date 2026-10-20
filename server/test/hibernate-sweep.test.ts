@@ -243,7 +243,7 @@ describe('hibernatePass: the store reads, on a real store', () => {
       return f.coord.queueDelivery(m.id, ID, 'env').id;
     };
     const parked = send();
-    expect(f.coord.parkDelivery(parked, 'draft-present', 'a human line', NOW, NOW + 600_000)).toBe(true);
+    expect(f.coord.parkDelivery(parked, 'draft-present', 'a human line', NOW, NOW + 600_000).changed).toBe(true);
     expect((await pass(f))[0]!.verdict).not.toEqual({ act: 'hold', reason: 'mail' });
     send();
     expect((await pass(f))[0]!.verdict).toEqual({ act: 'hold', reason: 'mail' });

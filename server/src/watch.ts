@@ -3332,7 +3332,7 @@ export class FleetWatcher {
       if (step === 'wait') continue;
       if (step === 'retry') {
         if (!store.recordStallObservation(b.runId, BRIEF_RETRY_DETAIL, now).recorded) continue;
-        if (b.parkedAt !== null && store.wakeParked(b.deliveryId, now)) woke = true;
+        if (b.parkedAt !== null && store.wakeParked(b.deliveryId, now).changed) woke = true;
         continue;
       }
       const reason = briefNotTakenReason(b);
@@ -3346,7 +3346,8 @@ export class FleetWatcher {
       if (!told) continue;
       // The notice is the more specific word on this delivery: it absorbs the
       // lane's own park escalation, now or at a later park (its push and its
-      // sender mail).
+      // sender mail). Its `changed: false` is ordinary, not a race: the park had
+      // already escalated, or the row was delivered or finished (D-5997).
       store.absorbParkEscalation(b.deliveryId, now);
       this.pushOne({
         kind: 'mail', sessionId: b.toId,
@@ -3359,6 +3360,15 @@ export class FleetWatcher {
       }, projects);
     }
     return woke;
+  }
+
+  /** D-5997 (ARCH-15, #532): the sweep CONSUMES a delivery writer's answer. A
+   *  write the store's one guarded writer refused means another path finished
+   *  the row while this sweep held it (an ack, a park, a run close); it is
+   *  logged and the step that assumed it is skipped. Answers whether it landed. */
+  private landed(w: { changed: boolean; state: string }, writer: string, id: number): boolean {
+    if (!w.changed) console.warn(`ccrc-server: mail sweep: ${writer} refused on delivery ${id} (row is ${w.state}) — skipped`);
+    return w.changed;
   }
 
   /** Tell the SENDING session, by system mail (D-5838), that its mail parked —
@@ -7440,7 +7450,7 @@ export class FleetWatcher {
       if (row.ingestedAt !== null) continue;
       const hs = await hookStateFor(row.toId);
       if (hs !== null && hs.event === 'UserPromptSubmit' && hs.updatedAt > row.deliveredAt) {
-        store.markIngested(row.id, hs.updatedAt);
+        this.landed(store.markIngested(row.id, hs.updatedAt), 'markIngested', row.id);
       }
     }
 
@@ -7464,13 +7474,13 @@ export class FleetWatcher {
     const probeFor = new Map<string, (typeof parkedRows)[number][]>();
     for (const p of parkedRows) {
       if (now - p.parkedAt >= MAIL_PARK_CEILING_MS) {
-        store.rejectDelivery(p.id, 'undeliverable', parkExpiredError(p.parkReason));
-        this.tellParkedSender(store, p.mailId, p.toId, 'rejected', p.parkReason);
         ceilinged = true;
+        if (!this.landed(store.rejectDelivery(p.id, 'undeliverable', parkExpiredError(p.parkReason)), 'rejectDelivery', p.id)) continue;
+        this.tellParkedSender(store, p.mailId, p.toId, 'rejected', p.parkReason);
         continue;
       }
       if (p.parkEscalatedAt === null && now - p.parkedAt >= MAIL_PARK_ESCALATE_MS
-          && store.markParkEscalated(p.id, now)) {
+          && store.markParkEscalated(p.id, now).changed) {
         this.escalatePark(store, p, sessionProjects, projects);
       }
       if (p.nextAttemptAt <= now || this.mailInFlight.has(p.toId)) continue;
@@ -7492,8 +7502,8 @@ export class FleetWatcher {
       if (box === null) continue;
       for (const p of rows) {
         const seen = parkBoxSeen(box, p.parkBox);
-        if (seen === 'baseline') store.baselineParkBox(p.id, box);
-        else if (seen === 'changed' && store.wakeParked(p.id, now)) woke = true;
+        if (seen === 'baseline') this.landed(store.baselineParkBox(p.id, box), 'baselineParkBox', p.id);
+        else if (seen === 'changed' && store.wakeParked(p.id, now).changed) woke = true;
       }
     }
 
@@ -7527,7 +7537,7 @@ export class FleetWatcher {
     // may this be retried" and "what refused it" are different questions.
     const gated = (d: { id: number; lastGate: string | null; gateSince: number | null },
                    gate: MailGate): void => {
-      store.noteGate(d.id, gate, now, d.lastGate === gate, d.gateSince);
+      this.landed(store.noteGate(d.id, gate, now, d.lastGate === gate, d.gateSince), 'noteGate', d.id);
     };
     const seen = new Set<string>();          // one message per session per sweep
     for (const d of due) {
@@ -7693,15 +7703,15 @@ export class FleetWatcher {
           // so the only party that could ever walk through that door is a
           // re-minted stranger wearing the same id.
           if (attempts >= MAIL_MAX_ATTEMPTS && !unmeasurable) {
-            store.rejectDelivery(d.id, 'undeliverable',
+            this.landed(store.rejectDelivery(d.id, 'undeliverable',
               d.deliveredAt === null
                 ? 'recipient not in registry'
-                : 'recipient purged after this message was delivered, and never acked');
+                : 'recipient purged after this message was delivered, and never acked'), 'rejectDelivery', d.id);
           } else {
             const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-            store.backOff(d.id,
+            this.landed(store.backOff(d.id,
               unmeasurable ? 'registry row listed but unreadable (registry-unmeasurable)' : 'recipient not in registry',
-              now + step, !unmeasurable);
+              now + step, !unmeasurable), 'backOff', d.id);
           }
           continue;
         }
@@ -7806,16 +7816,17 @@ export class FleetWatcher {
           const attempts = d.attempts + 1;
           const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
           if (d.deliveredAt === null && attempts >= MAIL_MAX_ATTEMPTS) {
-            store.rejectDelivery(d.id, 'undeliverable', `recipient session is ${lc}`);
+            this.landed(store.rejectDelivery(d.id, 'undeliverable', `recipient session is ${lc}`), 'rejectDelivery', d.id);
           } else {
-            store.backOff(d.id, `recipient session is ${lc}`, now + step, true);
+            this.landed(store.backOff(d.id, `recipient session is ${lc}`, now + step, true), 'backOff', d.id);
           }
           continue;
         }
         if (sv.verdict === 'unknown') {
           gated(d, 'tmux-unknown');
           const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** d.attempts, MAIL_BACKOFF_MAX_MS);
-          store.backOff(d.id, `tmux did not answer (substrate-unknown): ${sv.detail}`, now + step, false);
+          this.landed(store.backOff(d.id, `tmux did not answer (substrate-unknown): ${sv.detail}`, now + step, false),
+            'backOff', d.id);
           continue;
         }
         const hs = await hookStateFor(d.toId);
@@ -7957,10 +7968,10 @@ export class FleetWatcher {
           const box = await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId).catch(() => null);
           this.parkProbeAt.set(d.id, now);
           const seen = parkBoxSeen(box, d.parkBox);
-          if (seen === 'baseline') store.baselineParkBox(d.id, box!);
+          if (seen === 'baseline') this.landed(store.baselineParkBox(d.id, box!), 'baselineParkBox', d.id);
           if (seen !== 'changed' && box !== renderMailNudge(d.toId)) {
             gated(d, 'parked');   // D-5840
-            store.holdParked(d.id, now + MAIL_PARK_RETRY_MS);
+            this.landed(store.holdParked(d.id, now + MAIL_PARK_RETRY_MS), 'holdParked', d.id);
             continue;
           }
         }
@@ -7975,7 +7986,7 @@ export class FleetWatcher {
             refuseIfTurnRunning: turn.via !== 'idle' });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
-          store.markDelivered(d.id, now);
+          if (!this.landed(store.markDelivered(d.id, now), 'markDelivered', d.id)) continue;
           // A REPLAY — this row was already `delivered` before this send —
           // counts against its own ceiling, independent of `attempts` (fix,
           // review finding 20: see `MAIL_REPLAY_MAX_ATTEMPTS`'s own
@@ -7989,7 +8000,7 @@ export class FleetWatcher {
             // own guard exists to refuse.
             const bumped = store.bumpReplayCount(d.id);
             if (bumped.state === 'counted' && bumped.replayCount >= MAIL_REPLAY_MAX_ATTEMPTS) {
-              store.rejectDelivery(d.id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR);
+              this.landed(store.rejectDelivery(d.id, 'undeliverable', MAIL_REPLAY_CEILING_ERROR), 'rejectDelivery', d.id);
             }
           }
           continue;
@@ -8035,7 +8046,7 @@ export class FleetWatcher {
             tellSender('the recipient is waiting out a usage limit on its own; the nudge is held until it resumes',
               `mail-blocked-${d.id}`);
           }
-          store.backOff(d.id, res.error, now + MAIL_ARMED_HOLD_MS, false);
+          this.landed(store.backOff(d.id, res.error, now + MAIL_ARMED_HOLD_MS, false), 'backOff', d.id);
           continue;
         }
 
@@ -8046,7 +8057,7 @@ export class FleetWatcher {
           // failed send. There is NO `tellSender`: a running turn is not a
           // blocked recipient, and the first sweep after the hold reads the
           // live word again.
-          store.backOff(d.id, res.error, now + MAIL_TURN_HOLD_MS, false);
+          this.landed(store.backOff(d.id, res.error, now + MAIL_TURN_HOLD_MS, false), 'backOff', d.id);
           continue;
         }
 
@@ -8071,7 +8082,7 @@ export class FleetWatcher {
           // re-parks on every failure, keeping its first `parkedAt`.
           // `MAIL_PARK_RETRY_MS`'s docstring has the whole contract.
           if (d.parkedAt !== null && now - d.parkedAt >= MAIL_PARK_CEILING_MS) {
-            store.rejectDelivery(d.id, 'undeliverable', parkExpiredError(res.error));
+            if (!this.landed(store.rejectDelivery(d.id, 'undeliverable', parkExpiredError(res.error)), 'rejectDelivery', d.id)) continue;
             this.tellParkedSender(store, d.mailId, d.toId, 'rejected', res.error);
             continue;
           }
@@ -8081,13 +8092,13 @@ export class FleetWatcher {
           const box = res.error === 'draft-present' && typeof res.draft === 'string'
             ? res.draft
             : await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId);
-          store.parkDelivery(d.id, res.error, box, now, now + MAIL_PARK_RETRY_MS);
+          if (!this.landed(store.parkDelivery(d.id, res.error, box, now, now + MAIL_PARK_RETRY_MS), 'parkDelivery', d.id)) continue;
           this.parkProbeAt.set(d.id, now);
           if (d.parkedAt === null) {
             this.tellParkedSender(store, d.mailId, d.toId, 'parked', res.error);
             // A park that followed `MAIL_MAX_ATTEMPTS` failures has already been
             // stuck about `MAIL_PARK_ESCALATE_MS`: the operator hears it now.
-            if (res.error !== 'enter-ignored' && store.markParkEscalated(d.id, now)) {
+            if (res.error !== 'enter-ignored' && store.markParkEscalated(d.id, now).changed) {
               this.escalatePark(store, { id: d.id, mailId: d.mailId, toId: d.toId, parkReason: res.error },
                 sessionProjects, projects);
             }
@@ -8099,11 +8110,13 @@ export class FleetWatcher {
         // so a repeat of the same refusal does not re-raise — the tray is not
         // a ticker. What stays live across every back-off tick is the strip,
         // via `attempts` on the wire (Task 408).
+        // D-5997: told only once the back-off LANDED — an ack that beat it means
+        // the mail arrived, and its sender hears nothing about a blocked box.
+        const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
+        if (!this.landed(store.backOff(d.id, res.error, now + step), 'backOff', d.id)) continue;
         if (res.error === 'draft-present' && d.lastError !== 'draft-present') {
           tellSender("the recipient's input box has unsent text in it", `mail-blocked-${d.id}`);
         }
-        const step = Math.min(MAIL_BACKOFF_BASE_MS * 2 ** (attempts - 1), MAIL_BACKOFF_MAX_MS);
-        store.backOff(d.id, res.error, now + step);
       } finally {
         this.mailInFlight.delete(d.toId);
       }
