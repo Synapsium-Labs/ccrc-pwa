@@ -13,7 +13,7 @@
 import type { LinearFailure, ResolveAnswer } from '../../../shared/linear.js';
 import { deriveWorkspaceSlug, offlineTitle, sanitizeTitle, type LinearRef } from '../../../shared/slug.js';
 import { lookupLinearIssue, type FetchLike } from './client.js';
-import { markLinearRejected, readLinearKey } from './connection.js';
+import { clearLinearVerdict, markLinearRejected, readLinearKey } from './connection.js';
 import { ticketTitle } from './title.js';
 
 export interface ResolveDeps {
@@ -45,6 +45,10 @@ export async function resolveTitle(ref: string, ticket: LinearRef | null, deps: 
   const key = await readLinearKey(deps.ccrcDir);
   const look = await lookupLinearIssue(ticket, key, { fetch: deps.fetch, timeoutMs: deps.timeoutMs });
   if (look.ok) {
+    // A success with this key refutes a stale 401/403 mark against it (design §5.1); its failing never changes the answer.
+    await clearLinearVerdict(deps.ccrcDir, look.keyDigest, (deps.now ?? Date.now)()).catch(() => {
+      console.warn('ccrc-server: linear: could not clear a stale key verdict');
+    });
     // Composed, then sanitised AGAIN: the lookup's title fits the cap alone, and `ENG-1234 - ` in front of it may
     // push the whole past it.
     return { title: sanitizeTitle(ticketTitle(look.identifier, look.title)), source: 'linear' };

@@ -67,6 +67,20 @@ describe('lookupLinearIssue', () => {
     expect(calls[0]!.init.method).toBe('POST');
   });
 
+  it('refuses a redirect (redirect: "error"), so the key is never carried to wherever Linear is told to send us', async () => {
+    const { f, calls } = spyFetch(okBody('ENG-1234', 'T'));
+    await lookupLinearIssue(REF, HAVE_KEY, { fetch: f });
+    expect(calls[0]!.init.redirect).toBe('error');
+    const v = spyFetch(bodyOf({ data: { viewer: { name: 'u' }, organization: { name: 'o' } } }));
+    await verifyLinearKey(KEY, { fetch: v.f });
+    expect(v.calls[0]!.init.redirect).toBe('error');
+  });
+
+  it('a redirect the runtime refuses is unreachable, never a verdict on the key', async () => {
+    const f: FetchLike = async () => { throw new TypeError('fetch failed: unexpected redirect'); };
+    expect(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f })).toEqual({ ok: false, reason: 'unreachable', keyDigest: valueDigestHex(KEY) });
+  });
+
   it('asks for the issue by its HUMAN identifier, the same key the parse produced', async () => {
     const { f, calls } = spyFetch(okBody('ENG-1234', 'T'));
     await lookupLinearIssue(REF, HAVE_KEY, { fetch: f });

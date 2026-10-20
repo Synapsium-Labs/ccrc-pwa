@@ -176,3 +176,23 @@ export async function recordLinearCheck(
 export function markLinearRejected(ccrcDir: string, usedDigest: string, now: number): Promise<boolean> {
   return recordLinearCheck(ccrcDir, usedDigest, 'rejected', null, now);
 }
+
+/**
+ * The other half of the marker (spec 5.1): a SUCCESSFUL lookup with the key whose digest is `usedDigest` clears a stale
+ * verdict against it. A 401 can be Linear's own blip, or a key re-enabled on Linear's side, and the section must not
+ * keep calling a working key bad until somebody presses Check again. It is `recordLinearCheck`'s race rule exactly: inside
+ * the lock, only if the stored key still has that digest AND its record describes the same key with a `rejected` or
+ * `forbidden` outcome, so a key replaced meanwhile is never touched and a connected key is never rewritten (no file churn
+ * per lookup). The names the record already holds are kept. Answers whether it wrote.
+ */
+export function clearLinearVerdict(ccrcDir: string, usedDigest: string, now: number): Promise<boolean> {
+  return withConnectionLock(ccrcDir, async () => {
+    const k = await readLinearKey(ccrcDir);
+    if (k.kind !== 'key' || valueDigestHex(k.key) !== usedDigest) return false;
+    const prev = await readLinearDetails(ccrcDir);
+    if (prev.kind !== 'details' || prev.details.keyDigest !== usedDigest) return false;
+    if (prev.details.outcome !== 'rejected' && prev.details.outcome !== 'forbidden') return false;
+    await writeLinearDetails(ccrcDir, { ...prev.details, checkedAt: now, outcome: 'ok' });
+    return true;
+  });
+}

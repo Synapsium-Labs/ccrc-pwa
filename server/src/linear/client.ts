@@ -70,6 +70,7 @@ export type FetchLike = (url: string, init: {
   headers: Record<string, string>;
   body: string;
   signal: AbortSignal;
+  redirect?: 'error';
 }) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
 
 /**
@@ -116,6 +117,8 @@ async function callLinear(
       },
       body: JSON.stringify({ query, variables }),
       signal: ac.signal,
+      // A redirect would carry the key to wherever Linear is told to send us; an error here reads as `unreachable`.
+      redirect: 'error',
     });
 
     if (!res.ok) {

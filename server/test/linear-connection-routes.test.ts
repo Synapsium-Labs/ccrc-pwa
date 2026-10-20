@@ -684,6 +684,70 @@ describe('a Linear 401 on the resolve read marks the connection rejected (only f
     }
   });
 
+  // SPEC 5.1: a later success with the same key clears a stale "rejected" mark. A 401 can be Linear's own blip or a key
+  // re-enabled on Linear's side; once the key that was marked works again, the section must not keep calling it bad.
+  it('a successful lookup with the marked key clears the rejection, keeping the names', async () => {
+    const r = await rig();
+    await connect(r);
+    r.answer(status(401));
+    await resolve(r);
+    expect(view(await get(r)).state).toBe('key-rejected');
+    r.clock.now = NOW + 120_000;
+    r.answer({ ok: true, status: 200, json: async () => ({ data: { issue: { identifier: 'ENG-1234', title: 'Fix the login flow' } } }) });
+    expect(json(await resolve(r))['source']).toBe('linear');
+    expect(view(await get(r))).toEqual({
+      state: 'connected', outcome: 'ok', org: 'team-a', user: 'user-a', keyTail: '0001', checkedAt: NOW + 120_000,
+    });
+  });
+
+  it('also clears a forbidden mark, and writes nothing for a connected key (no file churn per lookup)', async () => {
+    const r = await rig();
+    await connect(r);
+    const okIssue = { ok: true, status: 200, json: async () => ({ data: { issue: { identifier: 'ENG-1234', title: 'T' } } }) };
+    r.answer(okIssue);
+    const before = readFileSync(detailsPath(r), 'utf8');
+    r.clock.now = NOW + 5_000;
+    await resolve(r);
+    expect(readFileSync(detailsPath(r), 'utf8')).toBe(before);
+    r.answer(status(403));
+    await check(r);
+    expect(view(await get(r)).state).toBe('key-forbidden');
+    r.answer(okIssue);
+    await resolve(r);
+    expect(view(await get(r)).state).toBe('connected');
+  });
+
+  it('does NOT clear a mark when the key has been replaced since the successful lookup began', async () => {
+    const r = await rig();
+    await connect(r);
+    r.answer(status(401));
+    await resolve(r);
+    r.answer(async () => {
+      // A new key is connected (and then rejected) while the lookup with the old one is in flight.
+      writeFileSync(keyPath(r), `${KEY2}\n`);
+      writeFileSync(detailsPath(r), `${JSON.stringify({
+        v: 1, org: 'team-b', user: 'user-b', keyTail: '0002', keyDigest: valueDigestHex(KEY2), checkedAt: NOW, outcome: 'rejected',
+      })}\n`);
+      return { ok: true, status: 200, json: async () => ({ data: { issue: { identifier: 'ENG-1234', title: 'T' } } }) };
+    });
+    await resolve(r);
+    expect(view(await get(r))).toMatchObject({ state: 'key-rejected', keyTail: '0002' });
+  });
+
+  it('does NOT write when the stored key changed but its record still describes the old one (the two files are written one after the other)', async () => {
+    const r = await rig();
+    await connect(r);
+    r.answer(status(401));
+    await resolve(r);
+    const stale = readFileSync(detailsPath(r), 'utf8');
+    r.answer(async () => {
+      writeFileSync(keyPath(r), `${KEY2}\n`);   // the record is left describing KEY: a Connect caught between its two writes
+      return { ok: true, status: 200, json: async () => ({ data: { issue: { identifier: 'ENG-1234', title: 'T' } } }) };
+    });
+    await resolve(r);
+    expect(readFileSync(detailsPath(r), 'utf8')).toBe(stale);
+  });
+
   it('a 401 with no details file records the rejection with no names', async () => {
     const r = await rig();
     await connect(r);

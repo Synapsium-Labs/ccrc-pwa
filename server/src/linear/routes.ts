@@ -77,7 +77,7 @@ export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts
 
   app.get('/api/linear/resolve', noStore, async (req, reply) => {
     const q: unknown = req.query;
-    const ref = typeof q === 'object' && q !== null && 'ref' in q ? (q as { ref: unknown }).ref : undefined;
+    const ref = typeof q === 'object' && q !== null && 'ref' in q ? q.ref : undefined;
     if (typeof ref !== 'string') return refuseRoute(reply, 'bad-ref');
     if (ref.length > LINEAR_REF_MAX_CHARS) return refuseRoute(reply, 'ref-too-long');
     return resolveName(ref, { ccrcDir: opts.ccrcDir, ...net, now });
@@ -102,7 +102,7 @@ export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts
     // its success alike, carries `no-store` (`account-gate.test.ts`, and this route's own test).
     if (!opts.gate(req, reply, { cap: null, stepUp: true }).pass) return reply;
     const body: unknown = req.body;
-    const key = typeof body === 'object' && body !== null && 'key' in body ? (body as { key: unknown }).key : undefined;
+    const key = typeof body === 'object' && body !== null && 'key' in body ? body.key : undefined;
     if (typeof key !== 'string') return refuseRoute(reply, 'bad-request');
     // BEFORE any call: a key that fails the shape rule would be stored differently from how it was verified, or
     // make `fetch` throw on a header and be reported as unreachable.
