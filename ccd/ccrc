@@ -6585,11 +6585,13 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   # shellcheck disable=SC2174  # -m applying to the deepest directory ONLY is
   # the intent, and an EXISTING directory keeping the operator's mode is the
   # rule this function is written to obey — see the paragraph above.
-  local created=0
-  [ -e "$ACCT_SECRETS_DIR" ] || created=1
   mkdir -p -m 0700 "$ACCT_SECRETS_DIR" \
     || _acct_refuse 1 secrets-dir "cannot create $ACCT_SECRETS_DIR (0700) — nothing was written"
-  [ "$created" -eq 0 ] || _acct_backup_exclude "$ACCT_SECRETS_DIR"
+  # EVERY ENSURE EXCLUDES, NOT ONLY A CREATE (D-5756): on an upgraded node the
+  # directory is already there, made by an older ccrc, `ccrc token sync` or the
+  # setup-token sign-in, none of which exclude it. `addexclusion` is sticky and
+  # idempotent, so repeating it is harmless.
+  _acct_backup_exclude "$ACCT_SECRETS_DIR"
   # THE NAME SAYS WHAT THE FILE CARRIES, and it is derived from the THIRD
   # argument rather than from the second, for the reason `check-add` derives it
   # the same way (Task 23's plan literal, `secretTag`): a lane exporting
@@ -8522,9 +8524,11 @@ _acct_credential() {
   # one value in this run that must never be read for a request the box was
   # going to refuse anyway.
   _acct_read_credential "$cred"                # -> ACCT_CREDENTIAL, or refuses
-  _acct_write_secret "$id" "$ACCT_PROVIDER" "$ACCT_SECRET_ENV"
-  # A verdict measured on the old secret says nothing about this one (D-5755 (12)).
+  # A verdict measured on the old secret says nothing about this one (D-5755
+  # (12)), and it is dropped BEFORE the write, so a write that refuses or a TERM
+  # after the rename fails safe: the lane reads Not checked either way.
   _acct_lane_state "$id" --clear check
+  _acct_write_secret "$id" "$ACCT_PROVIDER" "$ACCT_SECRET_ENV"
   _acct_live "$id"
 
   # `${arr[@]+"${arr[@]}"}` — this tree's empty-array idiom under `set -u`.
@@ -16611,6 +16615,9 @@ _inst_legacy_verified_parent() {
 # the summary line, and the next account verb on the lane writes it.
 _inst_lane_state() {
   if [ "$INST_ROLE" = server ]; then echo "install: lane-state: skipped — a server-role box hosts no sessions"; return 0; fi
+  # D-5756: an upgraded darwin node's existing `~/.cc-secrets` was never
+  # excluded from Time Machine; this step excludes it (advisory, silent on Linux).
+  [ ! -d "$ACCT_SECRETS_DIR" ] || _acct_backup_exclude "$ACCT_SECRETS_DIR"
   local sh="$HOME/.ccrc/accounts.sh" op="$CCRC_HERE/../deploy/account-op.mjs" locks="$HOME/.ccrc/locks"
   local listed="" id="" rc=0 wrote=0 kept=0 busy=0 failed=0
   if ! listed="$(

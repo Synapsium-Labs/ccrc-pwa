@@ -4,7 +4,7 @@
 // that reads it. The fixture is `laneStateFixture.ts`.
 import { describe, it, expect, beforeEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ACCOUNT_OP, CANARY, HAVE_FLOCK, HEALTH_SRC, NODE_ID, addLane, answer, boxEnv, ccrcRun, laneBox, laneState,
@@ -91,6 +91,23 @@ describe('every verb writes the lane-state file (G16)', () => {
     expect(cred.code, cred.stderr).toBe(0);
     expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID });
     expectPrivateAndClean(home, 'lane-c', `${CANARY}-r`);
+  });
+
+  // D-5755 (12): the old verdict is dropped BEFORE the new secret is written, so a write that refuses, or a TERM
+  // that lands after the rename, leaves the lane Not checked rather than wearing the old secret's verdict.
+  it('`credential` drops `check` before it writes: a secret write that refuses still leaves the lane Not checked', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();   // root writes through a 0500 directory
+    const home = laneBox('ccrc-lane-state-cred-order-');
+    expect(addLane(home, 'lane-c').code).toBe(0);
+    expect(writeLaneState(home, ['--id', 'lane-c', '--check-verdict', 'ok', '--check-at', '2026-10-19T00:00:00Z'])
+      .code).toBe(0);
+    const secrets = join(home, '.cc-secrets');
+    chmodSync(secrets, 0o500);
+    try {
+      const cred = ccrcRun(home, ['account', 'credential', '--id', 'lane-c', '--credential', '-'], `${CANARY}-r\n`);
+      expect(cred.code, 'the write into a 0500 directory refuses').not.toBe(0);
+    } finally { chmodSync(secrets, 0o700); }
+    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID });
   });
 
   it('`declare` starts the lane\'s state over, as `add` does', () => {
@@ -218,6 +235,20 @@ describe('the writer keeps what it was not asked to set (spec §3.4)', () => {
     expect(writeLaneState(home, ['--id', 'lane-b', '--clear', 'check', '--check-verdict', 'ok',
       '--check-at', '2026-10-19T00:00:00Z']).code).toBe(2);
     expect(laneState(home, 'lane-b')).toBeNull();
+  });
+
+  // The writer's path guard (D-5755 (1)): an id that is not one file name in the directory is refused, and nothing
+  // is written beside or inside it.
+  it('`--id ../x` and `--id .x` are refused, and nothing is written', () => {
+    const home = laneBox('ccrc-lane-state-idguard-');
+    for (const id of ['../x', '.x', 'a/b']) {
+      const w = writeLaneState(home, ['--id', id, '--check-verdict', 'ok', '--check-at', '2026-10-19T00:00:00Z']);
+      expect(w.code, id).toBe(2);
+      expect(answer(w)['error'], id).toBe('bad-argv');
+    }
+    expect(existsSync(join(laneStateDir(home), '..', 'x.json')), '../x').toBe(false);
+    expect(existsSync(join(laneStateDir(home), '.x.json')), '.x').toBe(false);
+    expect(existsSync(join(laneStateDir(home), 'a')), 'a/b').toBe(false);
   });
 
   it('a file that is not a JSON object is refused, never overwritten', () => {

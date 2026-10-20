@@ -1201,9 +1201,10 @@ function readNodeIdentity(home) {
  *     the fields it held cannot be preserved, so the operator moves it aside.
  *     WHAT IS KEPT IS SPEC §3.4'S FIELD LIST, NOTHING ELSE (`LANE_STATE_FIELDS`;
  *     D-5755 (11)). A field the spec does not name is dropped on the rewrite,
- *     so a secret some other same-uid process planted or hardlinked at this
- *     path is never carried into the file the agent's poll serves: "never
- *     holds a secret" rests on this writer, not on what others wrote.
+ *     so a secret planted under an unnamed field is not carried forward. The
+ *     named fields' values are copied as they are, unchecked, and a same-uid
+ *     process can write the file directly, so A12's reader treats every field
+ *     as untrusted and masked.
  *     `--clear check` drops `check`: `credential` passes it, because a verdict
  *     measured on the old secret says nothing about the new one, and `enable`'s
  *     readiness (A13) reads `check` (D-5755 (12)).

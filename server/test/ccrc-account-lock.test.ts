@@ -139,4 +139,3 @@ describe('the lock order (spec §3.9)', () => {
     expect(answer({ code: r.status ?? -1, stdout: r.stdout, stderr: r.stderr })['error']).toBe('lock-order');
   });
 });
-
