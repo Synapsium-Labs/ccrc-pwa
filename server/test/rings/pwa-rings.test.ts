@@ -79,6 +79,11 @@ describe('a PWA L1 module loads no .tsx, no store and not lib/api.ts (ARCH-04 st
     // A name inside a longer one, a member of another object, or a comment is not the global.
     expect(ringOfSource('pwa/src/lib/a.ts', ['// reads document.title', 'export const f = (s: { location: { x: 1 } }) => s.location.x;',
       'export const myWindow = 1;', 'export const refetch = (g: () => 1) => g();'])).toBe('L1');
+    // Prose in a string or a template is not code; an expression inside a template is.
+    expect(ringOfSource('pwa/src/session/aWords.ts', ["export const HINT = 'Open it in a new window.';",
+      'export const TIP = "Check the browser history.";', 'export const T = (n: number) => `${n} items in this document.`;']))
+      .toBe('L1');
+    expect(ringOfSource('pwa/src/lib/a.ts', ['export const t = () => `width ${window.innerWidth}px`;'])).toBe('L3');
     // A header declaration moves a file outward only.
     expect(ringOfSource('pwa/src/lib/a.ts', ['// The poller: L4, it schedules.', 'export const f = () => 1;'])).toBe('L4');
     expect(ringOfSource('pwa/src/lib/a.ts', ['// L1 policy.', 'export const f = () => document.title;'])).toBe('L3');
@@ -93,6 +98,9 @@ describe('a PWA L1 module loads no .tsx, no store and not lib/api.ts (ARCH-04 st
       .toEqual(['pwa/src/session/plantedWords.ts -> pwa/src/stores/fleet.ts']);
     expect(planted("import { ApiError } from '../lib/api';\nexport const f = (e: unknown) => e instanceof ApiError;"))
       .toEqual(['pwa/src/session/plantedWords.ts -> pwa/src/lib/api.ts']);
+    // A Words file whose prose names a browser global is still L1, so its .tsx import is still red.
+    expect(planted("import { MessageBubble } from './MessageBubble';\nexport const HINT = 'Open it in a new window.';\nexport const f = () => MessageBubble;"))
+      .toEqual(['pwa/src/session/plantedWords.ts -> pwa/src/session/MessageBubble.tsx']);
     // Type-only edges are erased and move nothing; a pure sibling is allowed.
     for (const src of ["import type { ApiError } from '../lib/api';", "import { type ApiError } from '../lib/api';",
       "import { journalWord } from './journalWords';"]) {

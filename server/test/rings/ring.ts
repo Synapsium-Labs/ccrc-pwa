@@ -161,10 +161,52 @@ export function serverRing(file: string, parsed?: ParsedFile): RingVerdict {
 export const BROWSER_IO = ['fetch(', 'WebSocket', 'navigator.', 'localStorage', 'sessionStorage', 'indexedDB',
   'new Worker', 'caches.', 'document.', 'window.', 'location.', 'history.'] as const;
 
-/** The first browser I/O global a file's code (comments blanked) names, or null. A name is a word of its own: a
- *  member access or a longer identifier that contains it (`fleet.location.`, `myWindow.`) is not the global. */
+/** The text of every string and template literal blanked to spaces (quotes kept, so offsets and lines stay), with a
+ *  template's `${…}` expressions kept as code: prose such as `'Open it in a new window.'` names no global. Run it on
+ *  `codeOnly` output, so a quote inside a comment is already gone. */
+export const literalsBlanked = (code: string): string => {
+  const out = code.split('');
+  const braces: number[] = []; // per open `${`: the brace depth inside it; a `}` at depth 0 resumes the template
+  let i = 0;
+  const blankTemplate = (): void => { // at the char after a backtick or a closing `}` of `${`
+    while (i < out.length) {
+      const c = out[i]!;
+      if (c === '\\') { out[i] = ' '; if (out[i + 1] !== '\n' && i + 1 < out.length) out[i + 1] = ' '; i += 2; continue; }
+      if (c === '`') { i++; return; }
+      if (c === '$' && out[i + 1] === '{') { i += 2; braces.push(0); return; }
+      if (c !== '\n') out[i] = ' ';
+      i++;
+    }
+  };
+  while (i < out.length) {
+    const c = out[i]!;
+    if (c === "'" || c === '"') {
+      i++;
+      while (i < out.length && out[i] !== c && out[i] !== '\n') {
+        if (out[i] === '\\') { out[i] = ' '; i++; if (i < out.length && out[i] !== '\n') out[i] = ' '; i++; continue; }
+        out[i] = ' ';
+        i++;
+      }
+      i++;
+    } else if (c === '`') {
+      i++;
+      blankTemplate();
+    } else if (c === '{' && braces.length > 0) {
+      braces[braces.length - 1]!++;
+      i++;
+    } else if (c === '}' && braces.length > 0) {
+      i++;
+      if (braces[braces.length - 1] === 0) { braces.pop(); blankTemplate(); } else braces[braces.length - 1]!--;
+    } else i++;
+  }
+  return out.join('');
+};
+
+/** The first browser I/O global a file's code (comments and literal text blanked) names, or null. A name is a word
+ *  of its own: a member access or a longer identifier that contains it (`fleet.location.`, `myWindow.`) is not the
+ *  global, and neither is a word in a string's prose. */
 export function browserIoOf(text: string): string | null {
-  const code = codeOnly(text);
+  const code = literalsBlanked(codeOnly(text));
   for (const g of BROWSER_IO) {
     const word = g.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     if (new RegExp(`(?<![\\w$.])${word}${/\w$/.test(g) ? '(?![\\w$])' : ''}`).test(code)) return g;
