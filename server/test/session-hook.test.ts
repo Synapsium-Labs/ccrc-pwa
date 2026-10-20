@@ -9703,6 +9703,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // neither corpus document nor README changed, so nothing was re-pointed
         // and no rule changed. Values in the instrument's order, never retyped.
         // S6-R11 covers it, so no D-number.
+        // RE-MEASURED on the ws-rm shared-branch guard (#138, D-5880), 55 -> 54,
+        // FROM THE SAME RUN as the site-level set below (35 -> 34, its
+        // `spec:2125 ccd/ccd:13560-13562` leaving for the same reason). ONE cause:
+        // the guard's 7 net lines in `cmd_ws_rm` slid every
+        // `ccd/ccd` line below it down 7. ONE LEAVES (`ccd/ccd:13560-13562`)
+        // and none enter: those lines now hold a comment reading "destroyed",
+        // which the row's own quoted `destroy` matches — a coincidence, not a
+        // repair. Measured by running this test with `origin/main`'s `ccd/ccd`
+        // and with this branch's, everything else the same tree. Neither corpus
+        // document changed, so nothing was re-pointed and no rule changed.
+        // S6-R11 covers it, so no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9717,7 +9728,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:13561',
         'ccd/ccd:13567',
         'ccd/ccd:13673',
-        'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
         'ccd/ccd:19098',
         'ccd/ccd:19120',
@@ -9945,7 +9955,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2125 ccd/ccd:13561',
         'spec:2125 ccd/ccd:13567',
         'spec:2125 ccd/ccd:13673',
-        'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',
         'spec:2125 ccd/ccd:19098',
         'spec:2125 ccd/ccd:19120',
