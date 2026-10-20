@@ -34,6 +34,7 @@ import { isDelegationCensusKebab } from '../src/coord/gitref.js';
 import { isDriftKind } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isCollectLaneKebab } from '../src/collectLane.js';
+import { isNoticeMode } from '../src/notice.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -940,8 +941,12 @@ describe('the rejection table is total, in both directions', () => {
         // `enter-ignored` above states. `coord/drift.ts` keys its findings by the seven drift kinds, spelled there as
         // literals. None is a mail rejection or a run refusal: a kind names a finding, never a `refused` or
         // `reject.code`. Admitted through L0's own guard, derived from `DRIFT_KIND_MAP`, never NOT_CODES.
-        || isDriftKind(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word or drift kind`).toBe(true);
+        || isDriftKind(tok)
+        // THE NOTIFY FUNNEL (D-5858): `coord/routes.ts`'s five feed writers name their notice mode as a literal
+        // (`'record-only'`). A mode is a ring/push gate, never a mail rejection or a run refusal. Admitted through
+        // `notice.ts`'s exported guard, derived from `NOTICE_MODES`, never NOT_CODES.
+        || isNoticeMode(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind or notice mode`).toBe(true);
     }
   });
 });
