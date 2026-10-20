@@ -1325,9 +1325,21 @@ describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s th
   const productionPass = (setup?: ScenarioX['setup']) =>
     scenario('std', { noteSessions: 1001 }, undefined, { seams: { cpuMicros: undefined }, setup });
 
-  it('D-5832 R6 (i): with no CPU seam the line\'s cpuThread is 1 when the runtime has process.threadCpuUsage and 0 when it has not, and the production CPU keys are whole non-negative numbers', async () => {
+  it('D-5832 R6 (i) (MCPUlie red it): with no CPU seam the line\'s cpuThread is 1 when the runtime has process.threadCpuUsage and 0 when it has not, the production CPU keys are whole non-negative numbers, and with the property present the pass reads it', async () => {
     const hasThread = typeof (process as unknown as { threadCpuUsage?: unknown }).threadCpuUsage === 'function';
-    const sc = await productionPass();
+    const usage: { spy: { mock: { calls: unknown[] }; mockRestore(): void } | null } = { spy: null };
+    let calls = 0;
+    let sc: Awaited<ReturnType<typeof scenario>>;
+    try {
+      sc = await productionPass(() => {
+        if (!hasThread) return;                                           // absent: the fallback is R6 (ii)'s
+        usage.spy = vi.spyOn(process as unknown as { threadCpuUsage(): unknown }, 'threadCpuUsage');   // calls through; the scenario's own mock restore ran before this setup
+        calls = usage.spy!.mock.calls.length;
+      });
+      if (usage.spy !== null) calls = usage.spy.mock.calls.length - calls;
+    } finally {
+      usage.spy?.mockRestore();
+    }
     const m = theLine(sc.lines);
     expect(m.get('cpuThread'), `cpuThread follows the runtime's feature (threadCpuUsage is ${hasThread ? 'present' : 'absent'})`).toBe(hasThread ? 1 : 0);
     for (const k of ['blockCpu', 'effectsCpu', 'reconcileCpu']) {
@@ -1335,6 +1347,7 @@ describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s th
       const v = m.get(k)!;
       expect(Number.isInteger(v) && v >= 0, `${k} is a whole non-negative number (read ${v})`).toBe(true);
     }
+    if (hasThread) expect(calls, 'process.threadCpuUsage is the source of the thread clock: the pass read it at least twice (one read to open a phase and one to close it)').toBeGreaterThanOrEqual(2);
   });
 
   it('D-5832 R6 (ii) (MCPUthread, MCPUsrc red it): with process.threadCpuUsage absent the lane reads the real process.cpuUsage and the line says cpuThread=0; the property is restored exactly', async () => {
@@ -1695,7 +1708,7 @@ describe('D-5835 R5 (review 677 F3): the turn before the repair keeps its CPU in
 });
 
 describe('D-5836 R1: after one ready pass, a pass that appends a spool line projects once, from the flush, and its repair is skipped', () => {
-  it('D-5836 R1: three further passes each call projectDelegationCheckpoint once and report skipped:true; the armed one carries repairSkipped=1', async () => {
+  it('D-5836 R1: three further passes each call projectDelegationCheckpoint once and report skipped:true; the armed one carries repairSkipped=1 and no attemptsSkipped (its attempts part did not run)', async () => {
     const warn = quietWarn();
     const w = world();
     writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
@@ -1704,6 +1717,7 @@ describe('D-5836 R1: after one ready pass, a pass that appends a spool line proj
     const repair = vi.spyOn(DelegationDurability.prototype, 'repairProjection');
     const projected = vi.spyOn(w.coord, 'projectDelegationCheckpoint');
     const change = vi.spyOn(DelegationDurability.prototype, 'applyCheckpointChange');
+    const filing = vi.spyOn(laneOf(w) as { fileAttempts(...a: unknown[]): Promise<Set<string>> }, 'fileAttempts');   // the attempts part's method; calls through
     for (let i = 0; i < 3; i++) {
       appendBucket(w, 'demo-a', BUCKET10, startLine('demo-a', `2026-10-15T10:0${2 + i}:00.000Z`));
       if (i === 2) r.arm({ noteSessions: 1001 });
@@ -1715,6 +1729,12 @@ describe('D-5836 R1: after one ready pass, a pass that appends a spool line proj
       const report = (await repair.mock.results.at(-1)!.value) as DelegationProjectionRepairReport & { skipped?: boolean };
       expect(report.skipped, `pass ${i}: the repair's report says it was skipped`).toBe(true);
     }
-    expect(theLine(slowLines(warn)).get('repairSkipped'), 'the armed pass\'s line says the repair was skipped').toBe(1);
+    const m = theLine(slowLines(warn));
+    expect(m.get('repairSkipped'), 'the armed pass\'s line says the repair was skipped').toBe(1);
+    // `attemptsSkipped` is sized only inside the attempts part (`fileAttempts`); these passes reconcile (the repair ran) but plan no attempt,
+    // so the part did not run: the method was never called and its phase never announced, and the key is not on the line.
+    expect(filing.mock.calls.length, 'the attempts part did not run in any of the three passes (fileAttempts was not called)').toBe(0);
+    expect(r.fired, 'and its phase was not announced').not.toContain('attempts');
+    expect(m.has('attemptsSkipped'), 'attemptsSkipped is absent: the attempts part did not run').toBe(false);
   });
 });
