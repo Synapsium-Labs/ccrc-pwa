@@ -161,7 +161,11 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
     expect(first.querySelector('.opt-glyph')?.textContent).toBe('');
   });
 
-  it('under a coarse pointer focus stays where it was (a phone keeps its composer); a key in the composer is text', async () => {
+  // D-6029: this row pinned the composer keeping the focus behind the open sheet's scrim, which D-5931 replaces (spec
+  // 2026-10-20 §2.4: the Sheet takes the focus on open, and a phone's keyboard still never rises because the panel is
+  // no field). What it guards is kept: under a coarse pointer the sheet puts no row in focus, and a key in the composer
+  // is text, never an answer.
+  it('under a coarse pointer the panel takes the focus, never a row (no keyboard rises); a key in the composer is text', async () => {
     pointer('coarse');
     const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     const composer = document.createElement('textarea');
@@ -169,11 +173,12 @@ describe('the sheet\'s keyboard over the recorded 2.1.296 ask', () => {
     composer.focus();
     renderAsk(q1());
     await frame();
-    expect(document.activeElement).toBe(composer);
+    expect(document.activeElement).toBe(screen.getByRole('dialog'));
+    expect(document.activeElement).not.toBe(row(/^Split shifts/));
     fireEvent.keyDown(composer, { key: '2' });
     fireEvent.keyDown(composer, { key: 'ArrowDown' });
     expect(spy).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(composer);
+    expect(document.activeElement).toBe(screen.getByRole('dialog'));
     composer.remove();
   });
 

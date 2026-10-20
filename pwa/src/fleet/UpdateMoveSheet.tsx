@@ -185,7 +185,7 @@ export function rollbackBlockedText(blockers: readonly RollbackBlocker[], tag: s
 
 // ── The danger tone (D-5507, settings spec §6.3) ─────────────────────────────────────────────────────────────────
 // A rollback is a danger action. Under `tone="danger"` the sheet asks the question, commits in the filled red
-// `danger` variant labelled with the verb, gives Cancel the focus (`useCancelFirst`, QuickConfirm's own; D-5610), and says what
+// `danger` variant labelled with the verb, gives Cancel the focus (`useCancelFirst` chooses it, the Sheet moves it; D-5610, D-5931), and says what
 // a rollback will not undo. The default tone, `move`, is every Install and Update and is unchanged.
 
 /** The question a danger rollback asks (spec §6.3's title). */
@@ -350,7 +350,7 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone, onAnswered, tone 
   };
 
   return (
-    <Sheet open onClose={onClose} title={headline}>
+    <Sheet open onClose={onClose} title={headline} initialFocus={cancelRef}>
       <div className="update-move-sheet">
         {lines.length === 0 ? (
           <p className={QC_CONSEQUENCE}>{moveEmptyText(plan.intent)}</p>
