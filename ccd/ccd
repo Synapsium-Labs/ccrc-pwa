@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=26d537eaa86e59d348105d7be1021d5adb77ef9a5a685fb0175b06c35aa0198b
+# ccrc:generated 1 sha256=a0ae359390bad5410285e43e219ab7d305d82ac2c79d888c7cf3b09b14ef2ef6
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32522,9 +32522,10 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
   [[ -z "$why" ]] || return 2
   return 0
 }
-_ws_removal_mounts_clear() {   # dir [resolve] -> 0 nothing is mounted at dir or under it — on Darwin, never asked (spec
-  #                                §3.5); 2 (_WS_MOUNTS_WHY) one is, the table could not be read whole, or (resolve) dir
-  #                                could not be resolved. Never 1: every caller refuses both alike
+_ws_removal_mounts_clear() {   # dir [resolve] -> 0 nothing is mounted at dir or under it — on Darwin, never asked
+  #                                (path-identity spec §3.5); 2 (_WS_MOUNTS_WHY) one is, the table could not be read
+  #                                whole, or (resolve) dir could not be resolved. Never 1: every caller refuses both
+  #                                alike
   # ONE QUESTION, ONE DEFINITION, ONE GUARD (path-identity spec §3.5). A
   # removal that could cross a mount asks it before it acts. The device
   # compare in `_ws_leaf_remove` and `rm --one-file-system` see only another
@@ -35798,8 +35799,9 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   _ws_collect_witness_judge "$id" || return 1
   # THE WITNESS'S NAME IN A DETAIL (path-identity spec §3.6): when the judge
   # read a compare-and-drop aside as the witness (`_ws_collect_aside_judge`,
-  # no witness standing), each `witness-mismatch` detail below that speaks of
-  # the witness names the aside's path in its place, the one file that stands.
+  # no witness standing), each detail below that speaks of the witness — a
+  # `witness-mismatch`, a `quarantine-kept`, the device probe's — names the
+  # aside's path in its place, the one file that stands.
   local wof="the witness of $id" wits="its witness"
   if [[ -n "$_WS_COLLECT_ASIDE" ]]; then
     wof="the compare-and-drop aside $_WS_COLLECT_ASIDE, read as the witness of $id,"
@@ -35819,7 +35821,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     # names its own slot there).
     # FIRST, the absence is believed only on the device the witness carries:
     # an empty mount point is no proof that the leaf is gone.
-    _ws_collect_root_dev "$_WS_WIT_DEV" "the witness of $id" \
+    _ws_collect_root_dev "$_WS_WIT_DEV" "$wof" \
       || { _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again"; return 1; }
     _WS_COLLECT_LEAF=absent
     # This arm lists the quarantine's slots, so a quarantine that is a link or
@@ -35829,7 +35831,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     _ws_collect_slots_of "$id"; rc=$?
     (( rc == 0 )) || { _ws_collect_unmeasured quarantine "$_WS_QSLOTS_WHY"; return 1; }
     (( ${#_WS_QSLOTS[@]} == 0 )) \
-      || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and the witness of $id stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it"; return 1; }
+      || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and $wof stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it"; return 1; }
     _ws_collect_paused || return 1
     REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect-absent "id=$id" "dev=$_WS_WIT_DEV" "ino=$_WS_WIT_INO" \
       "btime=$_WS_WIT_BTIME" "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT")
@@ -35853,7 +35855,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   _ws_collect_slots_of "$id"; rc=$?
   (( rc == 0 )) || { _ws_collect_unmeasured quarantine "$_WS_QSLOTS_WHY"; return 1; }
   (( ${#_WS_QSLOTS[@]} == 0 )) \
-    || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and the witness of $id stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it, and the leaf at $leaf is not collected beside it"; return 1; }
+    || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and $wof stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it, and the leaf at $leaf is not collected beside it"; return 1; }
   [[ -d "$leaf" && ! -L "$leaf" ]] \
     || { _ws_collect_refuse witness-mismatch "$leaf is a link or not a directory — the collector takes only the directory $wits names; it is offered to the operator"; return 1; }
   _ws_collect_ident "$leaf" "$_WS_WIT_DEV:$_WS_WIT_INO" "$_WS_WIT_BTIME"; rc=$?

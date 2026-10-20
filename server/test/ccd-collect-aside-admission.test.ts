@@ -7,7 +7,8 @@
 // - two or more asides, or one that does not parse, answer the per-leaf probe word `aside` (R20), and only after the
 //   registry peek, so a row keeps `registered` (R23); asides that cannot be listed keep `witness`;
 // - an old-generation aside beside a new leaf is the terminal `witness-mismatch`, its uncut detail naming the aside
-//   (R19, P11; the stated residual `stale-aside-beside-a-new-leaf-is-a-mismatch`).
+//   (R19, P11; the stated residual `stale-aside-beside-a-new-leaf-is-a-mismatch`), and beside a recordless slot the
+//   device probe and both `quarantine-kept` details name the aside too, the one file an operator finds.
 // NOTHING HERE RESTORES AN ASIDE: the restore is the settle's, under the reap lock (Task 11), and every verb case here
 // holds on either side of it.
 // FIXTURE HOME ONLY (`makePrHarness`): every path derives from `h.home`, and both verbs run as SOURCED functions, never
@@ -21,8 +22,8 @@ import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CCD } from './ccdWsHelpers.js';
 import { eventsOf, readJournal, refusalsOf } from './lifecycleHelpers.js';
 import {
-  AGED, COL_ID, NO_WALK, collectAudit, collectForkOf, collectOf, holdLock, lockOf, makeOrphan, regDir, replaceLeaf,
-  verdictOf, walked, witnessOf,
+  AGED, COL_ID, NO_WALK, collectAudit, collectForkOf, collectOf, holdLock, lockOf, makeOrphan, quarantineOf, regDir,
+  replaceLeaf, verdictOf, walked, witnessOf,
 } from './collectFixture.js';
 import { NOBODY } from './collectRaceFixture.js';
 import { WRONG_TOKEN, collectVerb, docOf } from './wsCollectFixture.js';
@@ -244,6 +245,41 @@ describe.skipIf(!LINUX)('an id a compare-and-drop aside is for: admitted before 
     expect(f.detail.startsWith(`the compare-and-drop aside ${asideOf(4242)}, read as the witness of ${COL_ID},`
       + ' records no birth time'), f.detail).toBe(true);
   }, 60_000);
+
+  it('case 9d: an aside-only id beside a recordless slot: the device probe and both quarantine-kept details name the aside', () => {
+    const { leaf } = makeOrphan(h);
+    fs.rmSync(leaf, { recursive: true });
+    const body = toAside();
+    const asWitness = `the compare-and-drop aside ${asideOf(4242)}, read as the witness of ${COL_ID},`;
+    expect(body, 'the fixture records a device').toMatch(/ dev=[0-9]+ /);
+    fs.writeFileSync(asideOf(4242), body.replace(/ dev=[0-9]+ /, ' dev=1 '));
+    const d = collectAudit(h, { pre: NO_WALK });
+    expect(collectOf(d)['unmeasured'], d.stdout + d.stderr).toBe('device');
+    expect(String(d.doc!['detail']), 'the audit document’s detail is the uncut REAP_DETAIL')
+      .toContain(`not on device 1 that ${asWitness} carries`);
+    if (locked()) unlock();
+    fs.writeFileSync(asideOf(4242), body);
+    const slot = path.join(quarantineOf(h), `slot.${COL_ID}.1791000000000000000.4242`);
+    fs.mkdirSync(quarantineOf(h), { mode: 0o700 });
+    fs.mkdirSync(slot, { mode: 0o700 });
+    const kept = `kept as it stands, listed for the operator, and ${asWitness} stays: the quarantine slot`
+      + ` ${path.basename(slot)} stands with no record naming it`;
+    const a = collectAudit(h, { pre: NO_WALK });
+    expect(a.code, a.stdout + a.stderr).toBe(0);
+    expect(verdictOf(a)).toBe('quarantine-kept');
+    expect(String(a.doc!['detail']), 'the leaf-absent arm').toBe(kept);
+    expect(refusalsOf(h.home), 'journaled once').toEqual([{ act: 'collect', token: 'quarantine-kept' }]);
+    expect(String(eventsOf(h.home, 'collect').at(-1)!['detail']), 'the journaled detail leads with the aside')
+      .toMatch(/^kept as it stands, listed for the operator, and the compare-and-drop aside \//);
+    unlock();
+    fs.mkdirSync(leaf, { mode: 0o700 });
+    const p = collectAudit(h, { pre: AGED });
+    expect(verdictOf(p), p.stdout + p.stderr).toBe('quarantine-kept');
+    expect(String(p.doc!['detail']), 'the leaf-present arm').toBe(`${kept}, and the leaf at ${leaf} is not collected beside it`);
+    expect(fs.existsSync(witnessOf(h)), 'nothing is restored').toBe(false);
+    expect(fs.readFileSync(asideOf(4242), 'utf8'), 'the aside stands as it was').toBe(body);
+    expect(fs.existsSync(slot), 'the slot stands').toBe(true);
+  }, 90_000);
 
   it('case 10: no witness, no record and no aside of ITS id: not-witnessed before any lock, in today’s words (control)', () => {
     const dir = path.dirname(witnessOf(h));

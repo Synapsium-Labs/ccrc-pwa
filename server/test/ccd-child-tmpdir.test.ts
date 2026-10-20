@@ -308,10 +308,11 @@ describe('the BSD-order shim is the chmod ccd resolves, and it refuses a trailin
 });
 
 /** ITEM 35 (path-identity spec §3.9): the collector's quarantine maker, `_ws_collect_qdir`, clears the setgid bit a
- *  setgid `~/.cc-tmp` hands the directory it makes, with `chmod -- g-s "$q"`. No case ran that line under BSD argument
- *  order: `ccd-collect-quarantine.test.ts` logs it through a shell function that calls the HOST chmod, which on Linux
- *  is GNU and permutes, so a `--` after the mode would pass there. The literal census below reads one line at a time,
- *  so a `chmod g-s \` broken before its `--` passes it too; these cases do not. Both orders, one body. */
+ *  setgid `~/.cc-tmp` hands the directory it makes, with `chmod -- g-s "$q"`. No case EXECUTED that line under BSD
+ *  argument order: `ccd-collect-quarantine.test.ts` logs it through a shell function that pins its argv exactly
+ *  (`-- g-s <q>`) and then calls the HOST chmod, which on Linux is GNU and permutes. These cases add executing the
+ *  maker line under BSD argument order. The literal census below reads one line at a time, so a `chmod g-s \` broken
+ *  before its `--` passes it; these cases do not. Both orders, one body. */
 const LINUX = process.platform === 'linux';
 /** `_ws_collect_qdir`'s answer: its rc and its two globals, read in the shell that called it. */
 const qdir = (env: NodeJS.ProcessEnv): { status: number; rc: string; q: string; why: string; out: string } => {

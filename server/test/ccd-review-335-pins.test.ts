@@ -139,6 +139,10 @@ const doneOf = (): Record<string, unknown> => eventsOf(h.home, 'reclaim').find((
  *  300 bytes when it does not. */
 const opensWithUpToTheCut = (why: string, want: string): void => {
   const cut = why.slice(0, -1);
+  // A MARKED cut is `head -c 300` of a line already made printable ASCII (`_ws_leaf_why_line`), so it is exactly 300
+  // bytes, measured so in both cases under a short and a long TMPDIR — never empty, so the compare below is never
+  // `''` against `''`.
+  expect(Buffer.byteLength(cut, 'utf8'), 'a marked cut is exactly 300 bytes').toBe(300);
   const n = Math.min(want.length, Buffer.byteLength(cut, 'utf8'));
   expect(cut.slice(0, n), 'the reason opens with the needle, as far as the cut lets it reach').toBe(want.slice(0, n));
 };

@@ -233,11 +233,13 @@ describe('the drop’s three answers, in its fixed order (path-identity spec §3
     expect(fs.readFileSync(witness(id), 'utf8')).toBe('a writer’s in-flight temp file');
   });
 
-  it('the caller’s own reads stand: the witness fields and the compare-and-drop answer are shadowed', () => {
+  it('the caller’s own reads stand: the witness fields, the compare-and-drop answer and the slot list are shadowed', () => {
     orphaned();
-    const r = h.run(`exec 2>"$HOME/drop-stderr"; _WS_WIT_RUN=sentinel; _WS_WIT_DEV=sentinel; _WS_CAD=sentinel; ${DROP(ID)};`
-      + ' printf \'after %s %s %s\\n\' "$_WS_WIT_RUN" "$_WS_WIT_DEV" "$_WS_CAD"');
-    expect(r.stdout.split('\n')).toEqual(['[rc=0] dropped|', 'after sentinel sentinel sentinel']);
+    const r = h.run('exec 2>"$HOME/drop-stderr"; _WS_WIT_RUN=sentinel; _WS_WIT_DEV=sentinel; _WS_CAD=sentinel;'
+      + ` _WS_CAD_WHY=sentinel; _WS_QSLOTS=(sentinel); ${DROP(ID)};`
+      + ' printf \'after %s %s %s %s %s:%s\\n\' "$_WS_WIT_RUN" "$_WS_WIT_DEV" "$_WS_CAD" "$_WS_CAD_WHY" "${#_WS_QSLOTS[@]}"'
+      + ' "${_WS_QSLOTS[0]-}"');
+    expect(r.stdout.split('\n')).toEqual(['[rc=0] dropped|', 'after sentinel sentinel sentinel sentinel 1:sentinel']);
     expect(fs.readFileSync(path.join(h.home, 'drop-stderr'), 'utf8')).toBe('');
   });
 });

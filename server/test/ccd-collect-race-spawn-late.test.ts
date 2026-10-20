@@ -1,10 +1,12 @@
 // path-identity W2 (TR12 B; path-identity spec §3.9): six LATE recycled-spawn boundaries of the collector, forced
 // through the real verb. `ccd-collect-race-spawn.test.ts` forces a spawn on the recycled slug before the move and at
 // `moved`, `proven` and `removed`. Review 369's C1 built thirteen later boundaries through the verb and measured each
-// safe, and none was pinned. This file pins six of them, one for each guard that alone keeps the new child whole:
+// safe, and none was pinned. This file pins six of them, one for each guard in play at that boundary:
 //   a fresh collection's `emptied`: the compare-and-drop, fed the record's fields;
-//   its `witnessed`: the temp-file reap, which waits for a free slug;
-//   its `dropped`: the next audit's registry rung;
+//   its `witnessed`: the temp-file reap, which waits for a free slug (its mutation reds the planted aged temp file
+//   the reap would take, not the new child);
+//   its `dropped`: the next audit's registry rung (behind which `_ws_collect_rows_clear`'s own-row check also
+//   refuses, `containment-unproven`);
 //   the putback's `restoring`: the restore's NOREPLACE rename, behind a doubt that is not the registry;
 //   the witness-only arm's `witnessed`: the reap again, on the arm that makes no record;
 //   a resume past `removed`, at its `emptied`: the compare-and-drop, on a path with no step 5 and no registry ask.
@@ -27,7 +29,7 @@ import { eventsOf } from './lifecycleHelpers.js';
 import {
   COL_ID, DEAD_RUN, G2_RUN, LINUX, NO_COPY, collectAudit, collectVerb, crashAt, crashedAt, devinoOf, docOf, g2Departs,
   g2Row, g2Spawn, gapAt, gapErrorsOf, gapsOf, lastVerdict, leafOf, orphanLeaf, quarantineOf, recordsOf, regOf, settle,
-  shownRounds, slotsOf, tokenOf, verdictOf, witnessField, witnessOf,
+  shownRounds, slotsOf, tokenOf, verdictOf, witnessField,
 } from './collectRaceFixture.js';
 
 let h: PrHarness;
