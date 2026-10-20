@@ -1947,7 +1947,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const p = spawnPty(id, cols, rows);
     // server->client: raw utf8 frames, each masked first (D-5513, accounts plan Task A10). HERE, not in `pty.ts`:
     // this is the one point both drawer arms pass, the local `attachPty` and the remote `createSpawnPty`. A chunk that
-    // ends inside a candidate run is held back until the next chunk or 50 ms (`DrawerMask`).
+    // ends inside a run that could begin a secret is held back until the next chunk or 6 ms (`DrawerMask`, D-5995).
     const drawerMask = (deps.masker ?? SHAPE_ONLY_MASKER).drawer((text) => socket.send(text));
     const sub = p.onData((data) => drawerMask.push(data));
     socket.on('message', (raw) => {
