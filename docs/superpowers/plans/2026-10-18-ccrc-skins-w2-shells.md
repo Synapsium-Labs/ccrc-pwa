@@ -1487,6 +1487,13 @@ Issued 2026-10-19 to the stale-run fix, a block of four. D-5828 to D-5830 are de
 
 Issued and unused: 5831.
 
+### Found while executing Task S2a
+
+Issued 2026-10-19 to Task S2a as its two spares. Both are defined here, once.
+
+- **D-5676** — `fleet-host-test-wrapper` (Task S2a): the suites that render `FleetScreen` alone mount the host through one shared helper, `pwa/test/fleetHost.tsx` (`FleetHost` and `renderFleet`), and nine suites take it, not only `fleet-screen.test.tsx`. Step 0 counted ten files that render the screen: `fleet-screen`, `account-pool-chip`, `archive-all-guard`, `auth-door`, `child-reclaim-banner`, `coord-banner`, `fleet-class-chooser`, `substrate-banner` and `tap-targets`, plus `app.test.tsx`, which renders `App` and so already has the host. Because `useFleetChrome()` throws outside its provider (D-5468's rule), each of the nine would otherwise go red on its first render. `renderFleet` is `render` with the host as its wrapper, taking the store the element under test was given, so a call site changes its function name and nothing else; no assertion is edited. One helper rather than nine copies of the wrapper, so the host a test mounts is the one `app.tsx` mounts.
+- **D-5677** — `open-pool-keeps-one-argument` (Task S2a): `useFleetFlows().openPool` takes the project alone, not `(project, pool)` as the task's shape wrote it. It is `useProjectRows`' own `openPool(project)`, which reads the pool from that project's `/api/projects` row at open time and keeps it through the sheet's exit animation; a pool passed in by the caller would be a second reader of the same field, and could disagree with the row the sheet then measures.
+
 ## Review log
 
 Two adversarial reviews of rev 0, both against `origin/main` `bd10981d`, both "NEEDS REVISION". Rev 1 applies every finding above low severity and each cheap low one. Findings are listed by severity, each with its resolution.
