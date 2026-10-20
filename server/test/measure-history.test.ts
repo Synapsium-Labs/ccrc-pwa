@@ -594,6 +594,12 @@ describe('W2-3 Task 1: raw window rows', () => {
       /\bmodels?\b['"\]]?\s*(?:==|!=|<>|<=|>=|<|>|=|\bnot\s+in\b|\bin\b|\bis\b|\blike\b|\bglob\b|\bbetween\b)/i],
     ['a model value on the right of a comparison or membership test', /(?:==|!=|<>|\bin|\blike|\bglob)\s*\(?\s*(?:\w+[.[])?['"]?models?\b/i],
     ['a K binding', /^\s*K\s*=/m],
+    // The review of PR #856, F6: the shapes the three above cannot see. Appended, so CLASSIFY[2] stays the K binding.
+    ['an endswith test', /\.endswith\(/],
+    ['a regex call', /\bre\.\w+\(/],
+    ['an import of re', /^[ \t]*(?:import[ \t]+(?:[\w., \t]*,[ \t]*)?re\b|from[ \t]+re[ \t]+import\b)/m],
+    ['a negated SQL comparison after a model value', /\bmodels?\b['"\]]*\s*not\s+(?:glob|like|between|in)\b/i],
+    ['a function applied to a model value', /\b\w+\(\s*(?:\w+\.)?models?\b/i],
   ];
   it('O32 narrowed, CONTROL: each pattern catches the shape it bans, the 7d01973a2 K line among them', () => {
     const samples = [
@@ -601,8 +607,25 @@ describe('W2-3 Task 1: raw window rows', () => {
       'if model not in seen:', "if row['model'] == wanted:", "WHERE e.model = ? AND e.model LIKE 'x%'", 'if wanted in models:',
       'if model is None:',
     ];
-    for (const [why, re] of CLASSIFY) expect(samples.some((s) => re.test(s)), why).toBe(true);
+    for (const [why, re] of CLASSIFY.slice(0, 3)) expect(samples.some((s) => re.test(s)), why).toBe(true);  // the first three; the widened ones have their own CONTROL below
     expect(CLASSIFY[2]![1].test(samples[0]!)).toBe(true);
+  });
+  it('O32 narrowed, CONTROL: the widened shapes (the review of PR #856, F6) each red a sample', () => {
+    const widened = CLASSIFY.slice(3);
+    const samples: ReadonlyArray<readonly string[]> = [
+      ["if model.endswith('>'):", "return e.model.endswith('>')"],
+      ["re.match(r'claude', model)", "m = re.search('<.*>', row['model'])"],
+      ['import re', 'import os, re', 'from re import match', 'import argparse, re, sys'],
+      ["e.model NOT GLOB '<*>'", "AND e.model NOT LIKE 'x%'", "WHERE model NOT BETWEEN 'a' AND 'b'", "if row['model'] NOT IN synthetic:"],
+      ["substr(e.model,1,1) <> '<'", "instr(e.model, '<')", 'lower(model)', 'length(e.model)'],
+    ];
+    expect(widened, 'one sample list per widened entry').toHaveLength(samples.length);
+    widened.forEach(([why, re], i) => {
+      for (const s of samples[i]!) expect(re.test(s), `${why}: ${s}`).toBe(true);
+    });
+    // The script's own import line is none of them.
+    const imp = 'import argparse, hashlib, json, os, sqlite3, sys, time, urllib.parse';
+    for (const [why, re] of CLASSIFY) expect(re.test(imp), `the import line is not ${why}`).toBe(false);
   });
   it('O32 narrowed: no comparison or membership test is applied to a model value, and no K is bound, in measure-history.py', () => {
     const src = readFileSync(SCRIPT, 'utf8');
@@ -1712,6 +1735,16 @@ describe('W2-3 Task 4: the census and the active rule', () => {
     expect(reasonOf(g, c, 'demo-z', CG('c5'))).toBe('no-recent-entry');
     expect(reasonOf(g, c, 'demo-x', CG('c1'))).toBeNull();
     expect(reasonOf(g, c, 'demo-y', CG('c3'))).toBeNull();
+    // Legacy BEFORE not-newest (the review of PR #856, F2): an older, unmerged '' family beside a newer UUID family of
+    // the same id. The '' row is not the newest of its id either, so only the clause order decides its reason.
+    const old = pure([
+      fam({ ccrc_id: 'demo-w', session_pk: 7, generation: '', first_seen_ms: 1000 }),
+      fam({ ccrc_id: 'demo-w', session_pk: 8, generation: CG('c6'), first_seen_ms: 2000 }),
+    ]);
+    const ro = g.activeFamilies(STORE, old);
+    expect(ro.active.length + ro.excluded.length, 'each family is reported once').toBe(2);
+    expect(reasonOf(g, old, 'demo-w', '')).toBe('legacy');
+    expect(reasonOf(g, old, 'demo-w', CG('c6')), 'CONTROL: the newest is the UUID row').toBeNull();
   });
 
   it('active rule: newestFamilyCompare orders by first_seen_ms then session_pk, both descending', async () => {
