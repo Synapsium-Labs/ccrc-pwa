@@ -302,6 +302,19 @@ describe('PUT and DELETE take the credential posture', () => {
     ];
     await r.stamp();
     all.push(await put(r, 'x'), await put(r, KEY), await check(r), await del(r));
+    // The body errors answer BEFORE a handler runs, so a header the handler (or the gate) sets is not on them: a
+    // malformed body and an oversize one, on the route that carries a key and on the one that removes it.
+    const malformed = '{"key": ';
+    const oversize = { key: KEY, pad: 'x'.repeat(4096) };
+    for (const method of ['PUT', 'DELETE'] as const) {
+      const bad = await req(r, method, PATH, malformed);
+      expect(bad.statusCode, `${method} malformed`).toBe(400);
+      expect(json(bad), `${method} malformed`).toEqual({ ok: false, error: 'bad-request' });
+      const big = await req(r, method, PATH, oversize);
+      expect(big.statusCode, `${method} oversize`).toBe(413);
+      expect(json(big), `${method} oversize`).toEqual({ ok: false, error: 'oversize' });
+      all.push(bad, big);
+    }
     for (const res of all) expect(res.headers['cache-control'], `${res.statusCode} ${res.body.slice(0, 50)}`).toBe('no-store');
   });
 });

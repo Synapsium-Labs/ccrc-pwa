@@ -92,9 +92,14 @@ export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts
 
   app.get('/api/linear/connection', noStore, async () => answer(await currentView()));
 
-  app.put('/api/linear/connection', { bodyLimit: PUT_BODY_LIMIT, errorHandler: bodyError }, async (req, reply) => {
-    // The gate first: before the body is read, before Linear is asked. It sets `no-store` FIRST, so every answer of
-    // this route, its refusals and its success alike, carries it (`account-gate.test.ts`, and this route's own test).
+  // THE BODY ERRORS TOO. A parse error (400) or an oversize body (413) answers from `bodyError` BEFORE any handler or
+  // gate runs, so the `no-store` they set never reaches it: the `onRequest` hook runs first of all, and carries the header
+  // on those answers. The gate still sets it, harmlessly, for the refusals it makes.
+  const write = { bodyLimit: PUT_BODY_LIMIT, errorHandler: bodyError, ...noStore };
+
+  app.put('/api/linear/connection', write, async (req, reply) => {
+    // The gate first: before the body is read, before Linear is asked. Every answer of this route, its refusals and
+    // its success alike, carries `no-store` (`account-gate.test.ts`, and this route's own test).
     if (!opts.gate(req, reply, { cap: null, stepUp: true }).pass) return reply;
     const body: unknown = req.body;
     const key = typeof body === 'object' && body !== null && 'key' in body ? (body as { key: unknown }).key : undefined;
@@ -143,8 +148,10 @@ export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts
     return answer(await currentView());
   });
 
-  app.delete('/api/linear/connection', async (req, reply) => {
-    if (!opts.gate(req, reply, { cap: null, stepUp: true }).pass) return reply;   // sets `no-store` first, as above
+  // DELETE reads no body, but a client may send one: it gets the same fixed-word refusal and bound as the PUT, never
+  // Fastify's own parser text.
+  app.delete('/api/linear/connection', write, async (req, reply) => {
+    if (!opts.gate(req, reply, { cap: null, stepUp: true }).pass) return reply;
     try {
       await withConnectionLock(opts.ccrcDir, () => removeLinearConnection(opts.ccrcDir));
     } catch {
