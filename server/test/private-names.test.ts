@@ -219,7 +219,7 @@ describe('the class and scan helpers', () => {
 
   it('the exemptions are the upstream citation only: any other entry is a hit even there', () => {
     const rows = entriesOf('zz-alpha', 'part');
-    expect(hitsIn('`zz-alpha@abcdef01:src/x.ts:1`', 'docs/superpowers/specs/x-ccrc-history-y.md', rows))
+    expect(hitsIn('`zz-alpha@abcdef01:src/x.ts' + ':1`', 'docs/superpowers/specs/x-ccrc-history-y.md', rows))
       .toEqual([h8(rows[0]!)]);
     expect(hitsIn('lossless-claw, an zz-alpha plugin', 'docs/superpowers/specs/x-ccrc-history-y.md', rows))
       .toEqual([h8(rows[0]!)]);

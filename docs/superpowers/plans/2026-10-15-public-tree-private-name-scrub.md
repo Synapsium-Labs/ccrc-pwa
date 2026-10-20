@@ -412,4 +412,5 @@ Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here whe
   digest pin's failure message names `hash --list` and says to paste the literal and its digest line together, and a
   CLI pin runs `hash --list` over a fixture list of synthetic tokens: the canary prints first, no `local` row's entry
   prints, and the printed digest is the digest of exactly the printed entries (measured: a digest of
-  `entries.slice(1)` reds; review 673 F8).
+  `entries.slice(1)` reds; review 673 F8). A pin's fixture splits its `x.ts:1` literal as `citations.test.ts` spells its
+  own, so `main`'s D-5893 ratchet does not count a synthetic string as a line citation.
