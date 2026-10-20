@@ -323,13 +323,40 @@ const stillStartsWith = (needle: string): StillInBox => (_pane, draft) =>
   needle === '' ? draft !== '' : draft.startsWith(needle);
 
 /**
- * D-6011. The submit proof while a stash this call did NOT make is held (an earlier stash-path send that could not
- * give it back, or the human's own ctrl+s): Claude Code restores it at our submit, and a restored human draft that
- * starts with our needle would read as our text and take the retry Enter. A held stash pops only at a submit, so
- * while the indicator shows the box is still ours; once it has gone our text was taken. The retry Enter is pressed
- * only while it still shows.
+ * D-6011. The submit while a stash this call did NOT make is held (an earlier stash-path send that could not give
+ * it back, or the human's own ctrl+s): Claude Code restores it at our submit, and a restored human draft that starts
+ * with our needle would read as our text and take the retry Enter. A held stash pops only at a submit, so while the
+ * indicator shows the box is still ours and gets the retry Enter. A box that no longer reads as ours (`still` false)
+ * is gone: our text was taken.
+ *
+ * D-6011, post-merge review of #940: a capture where `still` says ours but the indicator does not show is NOT proof
+ * our text left. The indicator is a layout reading (`stashHeld`), and one frame that does not parse (a transient
+ * redraw, a notification taking the row) would otherwise claim an unsent send delivered. It is ambiguous, the way
+ * `submitAroundStash`'s prefix match is: `maybe-restored`, no retry Enter, `ok` only when a turn is running now that
+ * was not running before the call, else `enter-ignored` with no `draft` and no `submittable` (the box may be the
+ * human's restored draft, so no rescue may be offered onto it).
  */
-const whileStashHeld = (still: StillInBox): StillInBox => (pane, draft) => stashHeld(pane) && still(pane, draft);
+async function submitOverHeldStash(
+  d: SendDeps,
+  id: string,
+  sleep: (ms: number) => Promise<void>,
+  still: StillInBox,
+  turnWasRunning: boolean,
+): Promise<SendResult> {
+  const classify = (pane: string, draft: string): SubmitSeen =>
+    !still(pane, draft) ? 'gone' : stashHeld(pane) ? 'ours' : 'maybe-restored';
+  for (let press = 0; press < 2; press++) {
+    await d.tmux.sendKey(id, 'Enter');
+    const { seen, pane } = await watchSubmit(d, id, sleep, classify);
+    if (seen === 'gone') return { ok: true };
+    if (seen === 'maybe-restored') {
+      const window = (pane ?? '').replace(SGR, '').replace(/\n$/, '').split('\n').slice(-8).join('\n');
+      if (!turnWasRunning && turnRunning(window)) return { ok: true };
+      return { ok: false, error: 'enter-ignored', pane: (pane ?? '').replace(SGR, '').slice(-PANE_TAIL) };
+    }
+  }
+  return enterIgnored(d, id);
+}
 
 /**
  * Press Enter (up to twice — the SAME one-retry-after-an-overlay budget
@@ -1259,12 +1286,15 @@ export function sendPrompt(
     // D-5911: `carry.held` is set only when this call stashed a draft; every submit below then goes through
     // `submitAroundStash`.
     // D-6011: a stash already held when this call began (not ours) is restored by Claude Code at OUR submit, so
-    // every submit that does not go around our own stash takes the indicator-gated proof (`whileStashHeld`).
+    // every submit that does not go around our own stash takes the indicator-gated submit (`submitOverHeldStash`).
     const heldBefore = stashHeld(pane);
+    const turnBefore = turnRunning(armWindow);
     const submit = (still: StillInBox): Promise<SendResult> =>
-      carry.held === null
-        ? pressEnterAndConfirm(d, id, sleep, heldBefore ? whileStashHeld(still) : still)
-        : submitAroundStash(d, id, sleep, still, carry.held);
+      carry.held !== null
+        ? submitAroundStash(d, id, sleep, still, carry.held)
+        : heldBefore
+          ? submitOverHeldStash(d, id, sleep, still, turnBefore)
+          : pressEnterAndConfirm(d, id, sleep, still);
     if (draft || hasContentBelowMarker(pane)) {
       // `resumeIfOwn`'s discrimination: `needle` is derived from THIS call's
       // OWN `text`, and `submitEnter`'s own correspondence gate already
