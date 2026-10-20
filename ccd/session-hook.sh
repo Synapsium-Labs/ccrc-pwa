@@ -4406,7 +4406,9 @@ fi
 # a word, the bare `.local/share/claude` or a glob segment under it included; by `BWR`, `WR`'s writers and more, with
 # a redirection to `/dev/null` or `>&N` not counted, in segments split without splitting a redirection (`SEG`); and
 # through `find` with an action, `| xargs`, an interpreter naming the path, a `cd` row (into the build directory,
-# `.local/share`, `.local`, home or `.local/bin`, each with its own operand rule) and a variable holding the path. An
+# `.local/share`, `.local`, home or `.local/bin`, each with its own operand rule, an operand's last component counting)
+# and a variable holding the path (one scan of all such names, and more than 16 deny outright: fail closed); and a
+# writer aimed at a bare `.local`, `.local/share` or `.local/bin` in a segment naming `claude` as a component. An
 # edit tool's path is folded (`pnorm`: `//`, `/./`, `seg/..`, a leading `~`) before the match; Bash text is not, so
 # `..` there, a symlink, a `$VAR` fragment of the path and case variants stay open (D-6064's residuals). Every
 # repetition is bounded, since an unbounded one made jq abort, which here is FAIL-OPEN, and every segment-scanning arm
@@ -4414,7 +4416,9 @@ fi
 # A write (D-6065) to a file the launcher, the roll or this guard trusts (`TRUST`: `~/.ccrc/claude-*`,
 # `$REG/claude-roll-*`, `$REG/<id>.claude-canary`, `.claude-build`, `.deny-settings`, `$REG/.claude-roll.lock` and the
 # deny file `$REG/child-deny.settings.json`, which the arm below reads) is denied by the same writers, after a `cd` into
-# `.ccrc` or `.cc-sessions`, and by an edit tool. So spec §7.6's registry sentence holds for a child here too.
+# `.ccrc` or `.cc-sessions`, by the build's `find`, `xargs`, interpreter, variable and parent-directory arms, and by an
+# edit tool; a trusted name may hold glob characters, a glob segment directly under either directory counts, and the
+# relative spelling does too. So spec §7.6's registry sentence holds for a child here too.
 # The roster's upstream id (D-6066) comes from that deny file, passed to this arm alone as `--rawfile deny` when it is
 # a regular file and not a symlink (the class-mode call passes none, so `$ARGS.named.deny // ""` reads empty there):
 # every head the file pairs as `Bash(<p> install:*)` AND `Bash(<p> update:*)`, minus `claude` (`ccrc update` stands
@@ -4507,7 +4511,7 @@ def END: "(?=$|[" + WS + ";&|)])";
 def ANC: "(?:(?:~|\\$\\{?HOME\\}?|/[^" + WS + ";&|()<>]{0,256}?)?" + SEPP + "|\\./)?";
 def CDH: "(?:^|[" + WS + "(])(?:cd|pushd)" + SP + "+(?:-[PLe]{1,3}" + SP + "+){0,2}";
 def CDT($dir): CDH + ANC + $dir + "/{0,8}" + END;
-def OPW: "(?<![^" + WS + "=])(?:\\./{1,8})?";
+def OPW: "(?<![^" + WS + "=/])";
 def VERSD: CDT("\\.local" + SEPP + "share" + SEPP + "claude" + SEPP + "versions");
 def cdthen($cd; $gate; f): test($cd) and test($gate) and (split(SEG; null) as $s
   | ([range(0; $s | length) | select($s[.] | test($cd))] | .[0]) as $k
@@ -4515,20 +4519,33 @@ def cdthen($cd; $gate; f): test($cd) and test($gate) and (split(SEG; null) as $s
 def BI: "build\tinstalling or updating a Claude Code build";
 def BW: "build\ta write to a Claude Code build or its launcher";
 def BTR: "build\ta write to a file the Claude Code launcher, roll or guard trusts";
-def TNC: "claude-[A-Za-z0-9_.-]{1,64}";
-def TNS: "(?:claude-roll-[A-Za-z0-9_.-]{1,64}|[A-Za-z0-9_.-]{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|child-deny\\.settings\\.json)" + BT;
-def TRUST: "(?:" + SEPP + "\\.ccrc" + SEPP + TNC + "|" + SEPP + "\\.cc-sessions" + SEPP + TNS + ")";
+def TCH: "[A-Za-z0-9_.*?\\[\\]{},-]";
+def TNC: "claude-" + TCH + "{1,64}";
+def TNS: "(?:claude-roll-" + TCH + "{1,64}|" + TCH + "{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|child-deny\\.settings\\.json)" + BT;
+def DANC: "(?:" + SEPP + "|(?<![^" + WS + "=:" + $q + "\"]))";
+def TGL: GLOBW + "[*?\\[{]" + GLOBW + "/{0,8}(?=$|[" + WS + META + "])";
+def TRUST: "(?:" + DANC + "\\.ccrc" + SEPP + "(?:" + TNC + "|" + TGL + ")|" + DANC + "\\.cc-sessions" + SEPP + "(?:" + TNS + "|" + TGL + "))";
+def PDIR($d): DANC + $d + "(?:/\\.?){0,8}(?=$|[" + WS + META + "])";
+def COMP($n): "(?:^|[" + WS + "/=])" + $n + "(?=$|[" + WS + "/;&|)])";
+def pdirw($d; $n): test(PDIR($d)) and test(COMP($n)) and any(split(SEG; null)[]; test(BWR) and test(PDIR($d)) and test(COMP($n)));
+def findw($re): test(NB + "find" + NA) and test($re) and any(split(SEG; null)[]; test(NB + "find" + NA) and test($re)
+  and test(SP + "-(?:delete|exec|execdir|ok|okdir)" + NW));
+def xargsw($re): test(NB + "xargs" + NA) and test($re) and any(split("[\n;&]"; null)[]; split("|") as $p
+  | ([range(0; $p | length) | select($p[.] | test($re))] | .[0]) as $k
+  | $k != null and any($p[$k + 1:][]; test("^" + SP + "*xargs" + NA) and test(BWR)));
+def INTERP: NB + "(?:python[0-9.]{0,8}|node|perl|ruby|bun|deno)" + NA;
+def varw($re): test($re) and test("=") and (. as $c
+  | [limit(17; match("(?:^|[" + WS + ";&|(])(?<n>[A-Za-z_][A-Za-z0-9_]{0,63})=(?<v>[^" + WS + ";&|()]{0,512})"; "g")
+      | select(.captures[1].string | test($re)) | .captures[0].string)] | unique
+  | length > 16 or (length > 0 and (. as $ns | $c | hbt(SEG; BWR; "\\$\\{?(?:" + ($ns | join("|")) + ")" + NA))));
 def VERW: "(?:^|[" + WS + "(])(?:\\./{1,8}" + ENTW + "|" + VERS + ")" + CRUN;
 def CLOP: "claude(?=$|[" + WS + "/;&|)])";
 def LBOP: "bin" + SEPP + "(?:claude|" + UPRE + ")(?=$|[" + WS + ";&|)])";
 def bmatch:
   (select(test(BUILDX) and hbt(SEG; BWR; BUILDX)) | BW),
-  (select(test(NB + "find" + NA) and test(BUILDX) and any(split(SEG; null)[]; test(NB + "find" + NA) and test(BUILDX)
-     and test(SP + "-(?:delete|exec|execdir|ok|okdir)" + NW))) | BW),
-  (select(test(NB + "xargs" + NA) and test(BUILDX) and any(split("[\n;&]"; null)[]; split("|") as $p
-     | ([range(0; $p | length) | select($p[.] | test(BUILDX))] | .[0]) as $k
-     | $k != null and any($p[$k + 1:][]; test("^" + SP + "*xargs" + NA) and test(BWR)))) | BW),
-  (select(test(NB + "(?:python[0-9.]{0,8}|node|perl|ruby|bun|deno)" + NA) and test(BUILDX)) | BW),
+  (select(findw(BUILDX)) | BW),
+  (select(xargsw(BUILDX)) | BW),
+  (select(test(INTERP) and test(BUILDX)) | BW),
   (select(cdthen(CDT("\\.local" + SEPP + "share" + SEPP + "claude(?:" + SEPP + "versions)?"); BWR; test(BWR))) | BW),
   (select(cdthen(CDT("\\.local" + SEPP + "share"); OPW + CLOP; hb1(BWR; OPW + CLOP))) | BW),
   (select(cdthen(CDT("\\.local"); "(?:share" + SEPP + CLOP + "|" + LBOP + ")";
@@ -4536,10 +4553,14 @@ def bmatch:
   (select(cdthen("(?:" + CDH + "(?:~|\\$\\{?HOME\\}?)/{0,8}" + END + "|(?:^|[" + WS + "(])cd" + SP + "*$)"; "\\.local" + SEPP + "(?:share" + SEPP + CLOP + "|" + LBOP + ")";
      hb1(BWR; OPW + "\\.local" + SEPP + "(?:share" + SEPP + CLOP + "|" + LBOP + ")"))) | BW),
   (select(cdthen(CDT("\\.local" + SEPP + "bin"); OPW + "(?:claude|" + UPRE + ")" + END; hb1(BWR; OPW + "(?:claude|" + UPRE + ")" + END))) | BW),
-  (select(test(BUILDX) and test("=") and (. as $c | [match("(?:^|[" + WS + ";&|(])(?<n>[A-Za-z_][A-Za-z0-9_]{0,63})=(?<v>[^" + WS + ";&|()]{0,512})"; "g")
-     | select(.captures[1].string | test(BUILDX)) | .captures[0].string] | unique
-     | any(.[]; . as $n | $c | hbt(SEG; BWR; "\\$\\{?" + $n + NA)))) | BW),
+  (select(varw(BUILDX)) | BW),
+  (select(pdirw("\\.local(?:" + SEPP + "(?:share|bin))?"; "(?:claude|" + UPRE + ")")) | BW),
   (select(test(TRUST) and hbt(SEG; BWR; TRUST)) | BTR),
+  (select(findw(TRUST)) | BTR),
+  (select(xargsw(TRUST)) | BTR),
+  (select(test(INTERP) and test(TRUST)) | BTR),
+  (select(varw(TRUST)) | BTR),
+  (select(pdirw("\\.ccrc"; TNC) or pdirw("\\.cc-sessions"; TNS)) | BTR),
   (select(cdthen(CDT("\\.ccrc"); OPW + TNC; hb1(BWR; OPW + TNC))) | BTR),
   (select(cdthen(CDT("\\.cc-sessions"); OPW + TNS; hb1(BWR; OPW + TNS))) | BTR),
   (select(test(CLI + CRUN)) | BI),
@@ -4582,7 +4603,7 @@ if [[ "$event" == PreToolUse && -n "$id" && -e "$REG/$id.child" \
   if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]]; then apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}; fi
   [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* \
      || "$apf" == *install* || "$apf" == *update* || "$apf" == *upgrade* || "$apf" == *respawn* \
-     || "$apf" == *anthropic-ai/claude-code* || "${apf,,}" == *downloads.claude.ai* || "$apf" == *.local* \
+     || "$apf" == *anthropic-ai/claude-code* || "${apf,,}" == *downloads.claude.ai* || "${apf,,}" == *claude.ai/install* || "$apf" == *.local* \
      || "$apf" == *.cc-sessions* ]] || apf=""
 fi
 if [[ -n "$apf" ]]; then

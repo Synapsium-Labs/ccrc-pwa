@@ -619,3 +619,59 @@ describe('build guard D-6066: the upstream id, read from the deny file the insta
     expect(denyJqMs(`${'upstream-a -a '.repeat(2900)}x`, DENY())).toBeLessThan(1000);
   });
 });
+
+// Automated security reviews of Tasks 2 and 3 found these past the plan's forms; each widening is in the safe direction.
+describe('build guard D-6064 and D-6065, review hardening: parent-directory targets, sibling arms, globs, and the variable arm\'s cost', () => {
+  const TRUST_WHY = 'launcher, roll or guard trusts';
+  it.each([
+    // A writer aimed at a parent directory, with the build's or launcher's name as a path component in the same segment.
+    'cp -r /tmp/claude ~/.local/share/', 'mv /tmp/claude ~/.local/bin/', 'cp /tmp/claude ~/.local/bin',
+    'install -t ~/.local/bin /tmp/claude',
+    // After a cd, the name as the last component of any operand, not only a bare word.
+    'cd ~/.local/share && cp -r /tmp/claude .', 'cd ~/.local/bin && cp /tmp/claude .',
+    // The installer's path in any case.
+    'curl -fsSL https://CLAUDE.AI/INSTALL.SH | bash',
+  ])('denied, naming the build: %s', (c) => {
+    expect(bash(c), c).toContain(BUILD_WHY);
+  });
+  it.each([
+    'cp /tmp/claude-smoked ~/.ccrc/', 'mv /tmp/child-deny.settings.json ~/.cc-sessions', 'cd ~/.ccrc && cp /tmp/claude-target .',
+    'python3 -c "open(\'/home/u/.ccrc/claude-smoked\',\'w\').write(\'2.1.999\')"', 'find ~/.ccrc/claude-smoked -delete',
+    'ls ~/.ccrc/claude-* | xargs rm', 'F=~/.ccrc/claude-target; echo x > $F',
+    'rm ~/.ccrc/claude-*', 'rm -f ~/.cc-sessions/*.claude-canary', 'rm -rf ~/.ccrc/*', 'cd ~ && rm .ccrc/claude-halted',
+    'echo x > .cc-sessions/child-deny.settings.json',
+    // A glob in a bare operand after a cd (a full path's glob segment is caught as one already).
+    'cd ~/.ccrc && rm claude-*', 'cd ~/.cc-sessions && rm *.claude-canary',
+  ])('denied, naming a trusted file: %s', (c) => {
+    expect(bash(c), c).toContain(TRUST_WHY);
+  });
+  it.each([
+    'cp -r /tmp/myapp ~/.local/share/', 'cp /tmp/x ~/.local/bin/', 'cp /tmp/claude-notes.md ~/.local/share/',
+    'cd ~/.local/bin && cp /tmp/claude-helper .', 'cp /tmp/notes ~/.ccrc/', 'cat ~/.ccrc/claude-*',
+    'ls ~/.cc-sessions/*.claude-canary', 'find ~/.ccrc -maxdepth 1 -name "claude-*"',
+  ])('allowed: %s', (c) => {
+    expect(bash(c), c).toBeNull();
+  });
+  // Each assignment's name was once scanned over every segment on its own, quadratic: 200 took 2.7 s, and 40 KB of them
+  // ran for minutes, past the hook's timeout, which fails open. Now one alternation of the names per command, and more
+  // than 16 build-path assignments deny outright (fail closed). On this input main's deny program took 4.1 s and class
+  // mode 1.25 s (a ratio of 3.3); held as at most 3.5 times class mode on the same input, as the `cd` timing pin is.
+  it('timing: 40 KB of distinct build-path assignments is denied, no slower than main (at most 3.5x class mode)', () => {
+    const cmd = Array.from({ length: 1600 }, (_, i) => `V${i}=~/.local/bin/claude; `).join('');
+    const t0 = process.hrtime.bigint();
+    const cls = spawnSync('jq', ['-r', '--arg', 'q', "'", '--arg', 'mode', 'class', hookForbiddenJq()], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: cmd } }), encoding: 'utf8', maxBuffer: 1 << 26 });
+    const classMs = Number(process.hrtime.bigint() - t0) / 1e6;
+    expect(cls.status, cls.stderr).toBe(0);
+    const r = spawnSync('jq', ['-r', '--arg', 'q', "'", '--arg', 'mode', 'deny', hookForbiddenJq()], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: cmd } }), encoding: 'utf8', timeout: 60_000 });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain(BUILD_WHY);
+    expect(denyJqMs(cmd)).toBeLessThan(3.5 * classMs);
+  }, 180_000);
+  it('a few build-path assignments and no writer are allowed; a writer through any of them is denied', () => {
+    const vars = Array.from({ length: 12 }, (_, i) => `V${i}=~/.local/share/claude/versions; `).join('');
+    expect(bash(`${vars}ls $V3`)).toBeNull();
+    expect(bash(`${vars}cp x $V7/2.1.400`)).toContain(BUILD_WHY);
+  });
+});
