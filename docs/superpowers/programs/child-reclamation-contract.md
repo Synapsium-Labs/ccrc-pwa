@@ -4216,9 +4216,9 @@ entry defines them.
   check the population makes on an aside's name, so the census does not cite that check.
 - Task 10: `prelock-resets-a-pre-peek-aside-answer` and `aside-detail-texts-beyond-p11`. Before the reap lock, the pass
   clears the aside judge's first answer before the registry peek, so an `in-progress` audit document never carries a
-  stale probe word `aside`. Of the details that speak of the witness, only the `witness-mismatch` ones name the aside
-  when an aside was read as the witness; two terminal `quarantine-kept` details and the `device` unmeasured detail
-  still say "the witness of" the id.
+  stale probe word `aside`. Task 10 named the aside only in the `witness-mismatch` details; the final review's fix
+  wave closed the rest, so the two terminal `quarantine-kept` details and the `device` unmeasured detail name it too:
+  every detail that speaks of the witness names the aside when an aside was read as the witness.
 - Task 11: `aside-settle-link-spy-reads-tmproots-only`. The settle's link spy counts only the `link` calls under
   `tmproots/`, because the reclaim verb already calls `link` for its own locks.
 - Task 13: `satisfies-after-a-line-break-is-asi`. A drafted layout that began a line with `satisfies` does not parse,
