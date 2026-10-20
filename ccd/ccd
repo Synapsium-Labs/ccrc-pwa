@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7b84a72101f7864a548d7ed8c1f30c148f8061285ceef3569888f4b0d64b53b7
+# ccrc:generated 1 sha256=26d537eaa86e59d348105d7be1021d5adb77ef9a5a685fb0175b06c35aa0198b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -4907,7 +4907,7 @@ for drop in (None, "reason", "cgraw", "meas"):
     elif drop == "cgraw" and isinstance(ev.get("obs"), dict):
         ev["obs"].pop("cgraw", None); ev["truncated"] = True
     elif drop == "meas":
-        ev["meas"] = None; ev["truncated"] = True
+        ev["meas"] = {"leaf": meas["leaf"]} if "leaf" in meas else None; ev["truncated"] = True
     s = line(ev)
     # FIX ROUND 2 (task 15): THE BYTE MEASUREMENT IS CURRENTLY UNDETECTABLE
     # AS A DISTINCT CHOICE, and that is worth writing down rather than
@@ -4934,7 +4934,7 @@ for drop in (None, "reason", "cgraw", "meas"):
 # moment its payload was interesting.
 fb = {"v": 1, "uid": uid, "atNs": ns, "at": int(ns[:13]), "act": act,
       "outcome": outcome, "id": sid,
-      "dec": {"surface": ev["dec"].get("surface", "none")}, "truncated": True}
+      "dec": {"surface": ev["dec"].get("surface", "none")}, "truncated": True, **({"meas": {"leaf": meas["leaf"]}} if "leaf" in meas else {})}
 if tx: fb["tx"] = tx
 if ev.get("refusal"): fb["refusal"] = ev["refusal"]
 sys.stdout.write(line(fb))
@@ -36664,7 +36664,7 @@ _ws_collect_witness_only() {   # id surface actor reason — a witness whose lea
     || { _ws_reclaim_fail "$id" "$lctx" probe-unmeasured "$(_ws_leaf_why_line "nothing was removed: the witness of $id, whose leaf is gone, could not be compared and dropped: $_WS_CAD_WHY")"; return 1; }
   _ws_collect_gap witnessed "$id"
   _ws_collect_reap_temps "$id"
-  _lc_done collect "$id" "$lctx" verb ws-collect meas.resumed "" \
+  _lc_done collect "$id" "$lctx" verb ws-collect meas.resumed "" meas.leaf absent \
     detail "$(_ws_leaf_why_line "witness $_WS_CAD; $_WS_COLLECT_TEMPS_REMOVED stale witness temp file(s) removed; no leaf stood at $HOME/.cc-tmp/$id")"
   printf '{"collected":%s,"record":null,"resumed":false,"witness":%s}\n' "$(_json_str "$id")" "$(_json_str "$_WS_CAD")"
   return 0
@@ -36694,7 +36694,7 @@ _ws_collect_finish() {   # id rec slot lctx resumed — the order (spec §5.10),
   _ws_collect_record_drop "$rec" \
     || { _ws_collect_keep "$id" "$rec" "$lctx" "the leaf is gone and its witness $cad, but the record could not be dropped"; return 1; }
   _ws_collect_gap dropped "$id" "$slot"
-  _lc_done collect "$id" "$lctx" verb ws-collect meas.resumed "$resumed" \
+  _lc_done collect "$id" "$lctx" verb ws-collect meas.resumed "$resumed" meas.leaf removed \
     detail "$(_ws_leaf_why_line "witness $cad; $_WS_COLLECT_TEMPS_REMOVED stale witness temp file(s) removed; collected $slot/leaf (record ${rec##*/})")"
   printf '{"collected":%s,"record":%s,"resumed":%s,"witness":%s}\n' "$(_json_str "$id")" "$(_json_str "${rec##*/}")" \
     "$( [[ -n "$resumed" ]] && echo true || echo false )" "$(_json_str "$cad")"
