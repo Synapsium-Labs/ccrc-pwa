@@ -302,6 +302,45 @@ Every task's requirements include this section. `CLAUDE.md` is the authority; th
 
 **Exit (GATES):** the literal source pins over W1a's moved regions: the Step 0 count → 0; the ratchet predicate pinned for W1a's files; zero production bytes. **Not in this slice:** the other files' literal pins (later slices, ahead of the wave that moves their code).
 
+### Task C0l: ccd's function-to-context manifest (D-6054; ARCH-34 (#536); spec §2.1, §5.13) — lands now
+
+A later W0 slice (spec §5.2), planned here so it has a section. It sits before C0i in this file only to stay line-disjoint from #927, which appends after C0i. **Routing:** band 1 for the bulk labelling (prefix rules, then a read of every rule's leftovers); the boundary rows are judgment, so the PR body tables them for the orchestrator's review. **Lane:** tests and data. **Zero production bytes:** `ccd/ccd` is byte-identical, so the launcher's SHA-256 is unchanged; the one new file under `ccd/` is data that no installer reads (D-6055). **Needs:** nothing; no operator ruling (ARCH-34 names none). **Gates:** ARCH-02a (Task C0h, #874) merged; it is. K2 and K18 (W5) read the manifest, so it lands before W5.
+
+**Files:**
+- Create `ccd/contexts.tsv`: a header naming the contexts, then one `<function><TAB><context>` row per function `ccd/ccd` defines, in definition order. The contexts are the 08-10 spec's C1 to C9 and K (kernels and platform, no aggregate). C6 and C8 have no ccd function today: ccd's operator-facing banner is `notify.sh`'s, and ccd holds no passkey or box-token code.
+- Modify `server/test/consolidationCensus.ts`: five named queries, inserted after `markerDefinitions` (line-disjoint from #927's tail append). `ccdFunctionDefinitions` lists every `name() {` at column 0, `ccdContextRows` lists the manifest's rows, `ccdCallGraph` gives one edge per (caller, callee) pair, and `ccdCrossContextCalls` gives the edges whose ends sit in two contexts, where a call into K does not count (a call out of K does), and `ccdHeredocBraces` lists any column-0 `}` inside a heredoc body in a function, plus any heredoc that never closes. The launcher's path comes from `ccdWsHelpers.ts`'s `CCD` (single-definition's "one path to the ccd script"). The known width is written beside them: a region runs to the first column-0 `}`, or to the next definition for a one-liner; comment lines and trailing ` # …` are cut; a `$name`/`${name` expansion and a `name=` assignment are not calls; a name inside a quoted message counts; a column-0 `}` inside a heredoc would end a region early, which is why the CONTROL below holds `ccdHeredocBraces` empty.
+- Create `server/test/ccd-contexts.test.ts`. Its two CONTROLs check that no bash definition uses a shape the census does not read, and that no heredoc hides a column-0 `}`. The coverage rows check that every function has exactly one row, every row names a defined function in a defined context, and the rows run in definition order. A fixture tree holds the call-graph rules. A pin lists the 26 K rows, so relabelling a function K (which lowers the count without removing a call) is a visible diff. The ratchet holds the cross-context count at `BASELINE`, which may only shrink, and its failure message lists the count by context pair.
+
+- [ ] **Step 0: Re-ground.** `gh pr view 874 --json state` (merged). Count `name() {` lines in `ccd/ccd` and check for other definition shapes; read the context sections of the 08-10 spec and the consolidation spec's §2.2 and §5.13. Run `gh pr list --state open` with each PR's files: #927 holds this plan's lines after C0i and the tails of `consolidationCensus.ts` and `consolidation-census.test.ts`, and #931 holds the lines before C0i and after C0h's D-block, so this task inserts its section above C0h's and its D-block above C0h's, and does not edit `consolidation-census.test.ts`.
+- [ ] **Step 1: Red.** Run the new suite and census queries on a `git archive` of `origin/main`. With no manifest, coverage lists all 644 functions as unmapped, and the order row, the K pin and the listing row are red.
+- [ ] **Step 2: Green.** Write the manifest. The suite is green, with 644 rows, 1,982 edges and 521 cross-context references (208 more go into K and are not counted).
+- [ ] **Step 3: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | `_ws_reap_tail`'s row deleted | coverage | red, naming `_ws_reap_tail` |
+  | a row for `_no_such_fn` | coverage | red, naming it |
+  | `_reg_get` mapped twice (C1 and C4) | coverage | red, naming it |
+  | `cmd_version` mapped to `C10` | coverage | red, naming the row |
+  | `ccd/ccd` gains `_new_fn() { :; }` and no row | coverage | red, naming `_new_fn` |
+  | `ccd/ccd` gains `function _kw_fn { :; }` | CONTROL | red, naming the line |
+  | `cmd_version` gains a `_reg_get` call | ratchet | red: 522 above 521 |
+  | the region ignores the column-0 `}` | fixture; ratchet | red: TOP's `_c` joins `_a`; 559 |
+  | comment lines are kept | fixture; ratchet | red: the comment's `_b` and `_c` become calls; 885 |
+  | calls into K counted | fixture; ratchet; listing | red: 729, and 208 edges into K listed |
+  | a `$name` expansion counted as a call | fixture | red: `_a>_c@6` |
+  | a `name=` assignment counted as a call | fixture | red: `_a>_b@5` |
+  | `cmd_version` gains a heredoc holding a column-0 `}`, then a `_reg_get` call | CONTROL (heredoc) | red, naming the line; with that CONTROL off, all green at 521 (the blind spot) |
+  | the `<<-` tab strip dropped | fixture | red: `_e`'s heredoc never closes |
+  | a heredoc that never closes not reported | fixture | red: `<<JSON never closes` missing |
+  | calls out of K skipped | fixture | red: `_k (K) -> _a (C1)` missing |
+  | `_reg_get` relabelled K | K pin | red: 27 K rows |
+  | D-6054 defined a second time, with another subject, in another plan | `deviation-refs.test.ts` | red (one number, two subjects) |
+
+- [ ] **Step 4: Verify.** `tsc -p server/test/tsconfig.tests.json`. Then, one at a time with `--maxWorkers=2`, the new suite, `consolidation-census`, `citations`, and the suites that read every file under `ccd/`: `ccd-reg-id-ok`, `continued-in-parity`, `ccd-child-tmproot-witness`, `install-census` and `build-release`. Then the doc suites from `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean`, `single-definition` and `docs-grammar`. `git diff origin/main -- ccd/ccd` prints nothing.
+
+**Exit (GATES):** every ccd function maps to exactly one context, and a new function without a row is red. The cross-context count is pinned at its landing-day value, 521, and may only shrink. `ccd/ccd` is byte-identical. **Not in this task:** the registry field table (ARCH-40's pin against this manifest), splitting `ccd/ccd` (spec §5.13: a later operator decision), and moving any function. A row that later proves wrong moves with a reason in its PR.
+
 ### Task C0h: decidable ring wording, contexts 7 to 9, the PWA ring map and the status tables (D-6000; ARCH-02a (#528); spec §2.1) — lands now
 
 A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** native (judgment: it writes the rules every ring scanner will assert). **Lane:** docs only. **Needs:** nothing; no operator ruling (the spec is approved at rev 2.1, and ARCH-02a says none is needed). **Gates:** none. #434 is another session's superseded PR and is not ridden (D-6001). CLAUDE.md is also edited by #842 and #851; this task's hunk (the "Rings / bounded contexts" bullet) is line-disjoint from both.
@@ -410,6 +449,16 @@ The allocator issued the consolidation wave a block of 30 numbers, 5848 to 5877,
 
 - **D-5865** — `pause-pin-tick-fold-for-lane-sites` (Task C0e, #871; extends D-5852): the four `watch.ts` lane sites and `stopDonePass` take the tick's listing, which cannot be `null` by type, so their `null` and rejecting legs are pinned once, at the tick, not per site: neither reaches any lane, a `null` listing gives an `unmeasurable` coord frame, and a rejecting one emits no frame at all.
   - **Departs from** Task C0e's "four listings per site" for those five sites only; every executor site keeps all four. The worker named it by slug and the coordinator entered it from the wave's held numbers, as this plan's header requires.
+
+### Issued for Task C0l and defined here
+
+Task C0l was issued three numbers, 6054 to 6056.
+
+- **D-6054** — `ccd-function-context-manifest` (Task C0l; ARCH-34): `ccd/contexts.tsv` maps every function `ccd/ccd` defines (a `name() {` at column 0) to one context of the 08-10 spec, C1 to C9 or K. `server/test/ccd-contexts.test.ts` holds full coverage both ways. The census module's `ccdCallGraph` and `ccdCrossContextCalls` extract the call graph, and the test ratchets the cross-context reference count, which excludes calls into K, so that it may only shrink. The landing-day value is 521. A CONTROL holds that no heredoc in a function hides a column-0 `}` (which would end a region early), and a pin lists the K rows. No byte of `ccd/ccd` changes.
+- **D-6055** — `ccd-manifest-lives-under-ccd` (Task C0l): the manifest is `ccd/contexts.tsv`, the path ARCH-34 names, beside the file it describes.
+  - **Departs from** §Global constraints' "no file under `ccd/` is edited". The file is data, not code. `ccd/ccd` never sources it, and neither installer copies it (`deploy.sh` and `ccrc install` place `ccd/` files by name). It does ride in the release tarball, because `build-release.sh` packs `ccd/` whole, but no box reads it. The launcher's SHA-256 is unchanged.
+
+Issued and unused (Task C0l): 6056.
 
 ### Issued for Task C0h and defined here
 
