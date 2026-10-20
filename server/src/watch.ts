@@ -2152,7 +2152,7 @@ export class FleetWatcher {
     this.delegationLane().setSeams(seams);
   }
 
-  /** Closes the delegation applier's journal descriptor, if it was ever opened (tests, and a clean shutdown). */
+  /** Closes the delegation applier's journal descriptor, if it was ever opened (tests only: no production code calls it, so in production the lane's unref'd sampler interval lives for the process). */
   closeDelegation(): Promise<void> {
     return this.delegationLaneMemo === null ? Promise.resolve() : this.delegationLaneMemo.close();
   }
@@ -10052,7 +10052,7 @@ export interface DelegationLaneSeams {
    *  like any throw out of `run`; only the line's wait is guarded. */
   loopTurn?: () => Promise<void>;
 }
-/** D-5832: what the lane reads of the event loop's stall. One sampler for the lane, never one per pass. */
+/** D-5832: what the lane reads of the event loop's stall. One sampler for the lane, never one per pass, so under overlap a cut pass's late reads see the newer pass's histogram and zero its open stretch (review 716 G4). */
 export interface DelegationLaneStall {
   /** At the start of a pass: opens a new pass-wide histogram (and starts the sampler if it is not running). */
   startPass(): void;
@@ -10602,7 +10602,7 @@ class DelegationLane {
 
   setSeams(seams: DelegationLaneSeams): void { this.seams = seams; }
 
-  /** Closes the applier's journal descriptor, if it was ever opened (tests, and a clean shutdown). */
+  /** Closes the applier's journal descriptor, if it was ever opened (tests only: nothing in production calls closeDelegation). */
   async close(): Promise<void> {
     this.sampler?.stop();                                                // D-5832: the lane's own stall sampler (its interval is unref'd, but a closed lane has none)
     this.seams.loopDelay?.stop();   // a seam-supplied sampler is stopped too, deliberately: a test's sampler is stopped like the lane's own
