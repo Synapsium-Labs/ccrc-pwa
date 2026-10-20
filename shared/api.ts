@@ -4063,9 +4063,7 @@ export type ChildReclaimKeptWord =
   | 'reviewed-run-absent' | 'not-a-workspace' | 'review-report-stale';
 const CHILD_RECLAIM_KEPT_WORD_TABLE: Readonly<Record<ChildReclaimKeptWord, true>> = {
   coordinating: true, 'minting-run-absent': true, 'minting-run-postdates-child': true,
-  'reviewed-run-absent': true, 'not-a-workspace': true,
-  // D-5942: a review child past its ceiling while the run it reviewed is open.
-  'review-report-stale': true,
+  'reviewed-run-absent': true, 'not-a-workspace': true, 'review-report-stale': true,  // D-5942
 };
 export const CHILD_RECLAIM_KEPT_WORDS: readonly ChildReclaimKeptWord[] =
   Object.keys(CHILD_RECLAIM_KEPT_WORD_TABLE) as ChildReclaimKeptWord[];
