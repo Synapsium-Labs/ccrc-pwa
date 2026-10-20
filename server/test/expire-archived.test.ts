@@ -13,6 +13,7 @@ import { EXPIRE_LANE_LIVE_MARKER } from '../src/archivedExpiry.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
+import type { ReadFailure } from '../src/io.js';
 import { ACTOR_FLAGS_CAP, EXPIRE_CAP } from '../src/ccdargv.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -34,7 +35,7 @@ const expiredDoc = JSON.stringify({ expired: ID, archivedAt: ARCH, wip: null, at
 interface Script { audit?: { code: number; stdout: string; stderr?: string }; verb?: { code: number; stdout: string; stderr?: string } }
 
 const rig = async (over: { script?: Script; caps?: FleetState; live?: boolean; paused?: boolean; visible?: boolean;
-  unlistable?: boolean; duringAudit?: (reg: string) => void } = {}) => {
+  unlistable?: boolean | ReadFailure | 'rejects'; duringAudit?: (reg: string) => void } = {}) => {
   const home = mkTmp('ccrc-expire-archived-');
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
@@ -53,7 +54,12 @@ const rig = async (over: { script?: Script; caps?: FleetState; live?: boolean; p
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
   const deps: ExpireArchivedDeps = {
-    coord, io: over.unlistable === true ? { ...base.io, readdir: async () => null } : base.io, cfg: base.cfg,
+    coord, cfg: base.cfg,
+    // The registry's listing fails as `readdirMeasured` answers it (`true` is `unreadable`, D-5969); the plain
+    // `readdir` derives from it, as `localIO`'s does.
+    io: over.unlistable === undefined || over.unlistable === false ? base.io
+      : over.unlistable === 'rejects' ? { ...base.io, readdirMeasured: async () => { throw new Error('EIO'); } }
+      : { ...base.io, readdirMeasured: async () => ({ ok: false, reason: over.unlistable === true ? 'unreadable' : over.unlistable as ReadFailure }) },
     runCcd: base.runCcd, fleetState: over.caps ?? CAPS,
     presence: { isVisible: (id: string) => over.visible === true && id === ID }, notifyLog,
   };
@@ -101,6 +107,23 @@ describe('the one executor', () => {
   it('a registry that did not list cannot rule the pause out: deferred, nothing asked', async () => {
     const s = await rig({ unlistable: true });
     expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
+    expect(s.calls).toEqual([]);
+  });
+
+  // D-5969 (ARCH-08b, #534): the switches read the MEASURED listing. Still deferred, nothing asked — never widened —
+  // and the pause now says why the registry did not list: unreadable is reported, never an empty registry.
+  it.each<ReadFailure>(['unreadable', 'absent'])('a registry measured %s defers, nothing asked, and says why it did not list', async (reason) => {
+    const s = await rig({ unlistable: reason });
+    expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'deferred', why: 'paused-at-server',
+      detail: `the registry did not list (${reason}), so a raised reclaim-paused cannot be ruled out` });
+    expect(s.calls).toEqual([]);
+  });
+
+  // D-5969: a REJECTING port is a listing that could not be taken — `unreadable`, never folded to an empty registry.
+  it('a registry whose listing rejects defers, nothing asked, and says it was unreadable', async () => {
+    const s = await rig({ unlistable: 'rejects' });
+    expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'deferred', why: 'paused-at-server',
+      detail: 'the registry did not list (unreadable), so a raised reclaim-paused cannot be ruled out' });
     expect(s.calls).toEqual([]);
   });
 

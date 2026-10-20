@@ -13,6 +13,7 @@ import { setSkin } from '../src/lib/skin';
 import { Composer } from '../src/session/Composer';
 import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
 import { useFleetStore } from '../src/stores/fleet';
+import { PALETTE_MOTION_VARS, VAUL_MOTION } from '../../ui/src/lib/motion';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -442,10 +443,11 @@ describe('the palette as drawn', () => {
     const dialog = openPalette().closest('[role="dialog"]')!;
     const overlay = document.querySelector('[data-vaul-overlay]')!;
     for (const [name, el] of [['content', dialog], ['overlay', overlay]] as const) {
+      // The shared retime and the palette's pace (D-5930), read off the helper:
+      // a class spelled whole in a test keeps its CSS in the build
+      // (`sheet-motion.test.tsx`). The pace Chrome computes is the browser leg's.
       const cls = el.className.split(/\s+/);
-      expect(cls, `${name} open`).toContain('data-[state=open]:[animation-duration:var(--dur-base)]!');
-      expect(cls, `${name} closed`).toContain('data-[state=closed]:[animation-duration:var(--dur-fast)]!');
-      expect(cls, `${name} curve`).toContain('data-[state=open]:[animation-timing-function:var(--curve-swift)]!');
+      for (const c of [...VAUL_MOTION.split(' '), ...PALETTE_MOTION_VARS.split(' ')]) expect(cls, `${name}: ${c}`).toContain(c);
     }
   });
 });

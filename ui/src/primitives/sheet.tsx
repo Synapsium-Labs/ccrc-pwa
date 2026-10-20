@@ -5,6 +5,7 @@ import { Drawer } from 'vaul';
 import type { ReactNode } from 'react';
 import { cn } from '../lib/cn';
 import { EYEBROW } from '../lib/text';
+import { SHEET_MOTION_VARS, VAUL_MOTION } from '../lib/motion';
 
 export interface SheetProps {
   open: boolean;
@@ -89,7 +90,8 @@ export function Sheet({
     >
       <Drawer.Portal>
         <Drawer.Overlay
-          className="sheet-scrim fixed inset-0 z-sheet bg-scrim"
+          // The scrim fades on vaul's keyframes at the panel's pace (D-5930).
+          className={cn('sheet-scrim fixed inset-0 z-sheet bg-scrim', VAUL_MOTION, SHEET_MOTION_VARS)}
           data-testid="sheet-overlay"
           onClick={onClose}
         />
@@ -103,11 +105,15 @@ export function Sheet({
             // let `z-sheet` (40) win — the terminal drawer sank to the level of
             // the sheets it is meant to sit above (main: 50).
             'sheet-panel fixed inset-x-0 bottom-0 flex flex-col outline-none',
-            // vaul inlines its own transition, so retiming it to the motion
-            // tokens needs the important suffix. Entrance springs (420ms
-            // overshoot); exit leaves swiftly (320ms).
-            'data-[state=open]:duration-sheet! data-[state=open]:ease-spring!',
-            'data-[state=closed]:duration-slow! data-[state=closed]:ease-swift!',
+            // vaul slides the panel with KEYFRAMES, which no transition utility
+            // reaches: retimed that way it slid for vaul's own half second, and
+            // under reduced motion too. 'lib/motion.ts' puts the keyframes on the
+            // tokens (D-5930): the entrance springs on --dur-sheet, the exit
+            // leaves swiftly on --dur-slow, and both are 1ms under reduce. The
+            // same helper retimes vaul's inline drag transition (the snap-back
+            // after a short drag), which the old utilities had covered.
+            VAUL_MOTION,
+            SHEET_MOTION_VARS,
             full
               ? // The panel becomes the well itself: dark glass in BOTH themes,
                 // stacked above ordinary sheets. Horizontal padding drops to
