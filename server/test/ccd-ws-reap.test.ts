@@ -25,11 +25,11 @@ const ARCH = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; };
  *  the branch AFTER the squash landed adds a commit that is genuinely not in
  *  the merge, so the ladder refuses `tree-differs` and the test becomes about a
  *  refusal instead of about what it says it is about. */
-function ready(ignore: string[] = []): { main: string; wt: string; tip: string } {
+function ready(ignore: string[] = [], works: string[] = ['1', '2', '3']): { main: string; wt: string; tip: string } {
   const main = h.makeGhRepo('demo');
   h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
   const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
-  for (const n of ['1', '2', '3']) {
+  for (const n of works) {
     fs.writeFileSync(path.join(wt, `f${n}.txt`), `work ${n}\n`);
     h.git(wt, 'add', `f${n}.txt`); h.git(wt, 'commit', '-m', `work ${n}`);
   }
@@ -40,7 +40,7 @@ function ready(ignore: string[] = []): { main: string; wt: string; tip: string }
   const tip = h.git(wt, 'rev-parse', 'HEAD');
   fs.writeFileSync(path.join(main, 'other.txt'), 'someone else\n');
   h.git(main, 'add', 'other.txt'); h.git(main, 'commit', '-m', 'unrelated');
-  for (const n of ['1', '2', '3']) fs.writeFileSync(path.join(main, `f${n}.txt`), `work ${n}\n`);
+  for (const n of works) fs.writeFileSync(path.join(main, `f${n}.txt`), `work ${n}\n`);
   if (ignore.length) fs.writeFileSync(path.join(main, '.gitignore'), `${ignore.join('\n')}\n`);
   h.git(main, 'add', '-A'); h.git(main, 'commit', '-m', 'squash (#42)');
   const merge = h.git(main, 'rev-parse', 'HEAD');
@@ -3249,4 +3249,108 @@ describe('ignored files are dirt in a nested child — a child’s own excludesF
     expect(o.refused).toBe('nested-checkouts-present');
     expectKept(main, path.join(stray, 'work.txt'), 'kept\n', ['ca']);
   }, 60000);
+});
+
+/**
+ * C1 READS ONLY A TRACKING REF THE REMOTE STILL BACKS (D-5882, #126).
+ *
+ * `unpushed-commits` used to be decided from `@{upstream}..branch` BEFORE the
+ * fetch, against whatever the local tracking ref happened to hold. GitHub deletes
+ * a merged head and `git fetch` without `--prune` leaves its tracking ref where it
+ * was. So a squash-merged workspace whose remote head was deleted kept a STALE ref
+ * at the pre-push tip, counted every commit as "not on the remote", and refused for
+ * as long as nobody pruned: the verdict depended on when someone last pruned, not on
+ * where the commits were. C1 now runs after C3's fetch and is skipped only when
+ * `ls-remote` ANSWERS that the upstream head is gone. Any other answer — live, or a
+ * probe that failed — keeps the refusal.
+ */
+describe('C1 reads only a tracking ref the remote still backs (D-5882)', () => {
+  const SIX = ['1', '2', '3', '4', '5', '6'];
+  const ORIGIN = () => path.join(h.home, 'origins', 'demo.git');
+  const ahead = (main: string): string =>
+    h.git(main, 'rev-list', '--count', 'ws/quiet-basin@{upstream}..refs/heads/ws/quiet-basin');
+
+  /** The audit with a stubbed probe — the same `_ws_reap_eval` the reap runs —
+   *  and the refusal's one meaning, asserted: nothing was touched. */
+  const probeAudit = (pre: string, main: string, wt: string): Record<string, any> => {
+    const a = JSON.parse(h.sh(`${pre} ${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toContain('ws/quiet-basin');
+    return a;
+  };
+
+  /** The issue's state: merged by squash, head deleted on the remote, and the
+   *  local tracking ref never pruned and six commits behind the branch. */
+  function staleGone(): { main: string; wt: string; tip: string } {
+    const b = ready([], SIX);
+    h.git(ORIGIN(), 'branch', '-D', 'ws/quiet-basin');
+    h.git(b.main, 'update-ref', 'refs/remotes/origin/ws/quiet-basin', `${b.tip}~6`);
+    // A plain fetch is what C3 runs. The fixture has to survive it, or the test
+    // would be about a ref the fetch had already removed.
+    h.git(b.main, 'fetch', '--quiet', 'origin');
+    expect(ahead(b.main), 'the CONTROL: the stale ref is six behind after a plain fetch').toBe('6');
+    expect(h.git(b.main, 'ls-remote', '--heads', 'origin', 'refs/heads/ws/quiet-basin'),
+      'the CONTROL: the remote holds no such head').toBe('');
+    return b;
+  }
+
+  it('reaps a squash whose remote head was deleted, past a stale tracking ref six commits behind', () => {
+    const { main, wt } = staleGone();
+    const a = JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+    expect(a.verdict, a.detail).toBe('reapable');
+    const out = JSON.parse(reap(a.token).stdout);
+    expect(out.reaped).toBe('demo-quiet-basin');
+    // patch-id: the merge proof was REACHED, which is the point of skipping C1.
+    expect(out.proof).toBe('patch-id');
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
+  }, 30000);
+
+  it('still refuses unpushed-commits when the remote branch is live and behind', () => {
+    const { main, wt } = ready();
+    const tok = tokenOf();
+    fs.writeFileSync(path.join(wt, 'z.txt'), 'only here\n');
+    h.git(wt, 'add', 'z.txt'); h.git(wt, 'commit', '-m', 'only here');
+    expect(h.git(main, 'ls-remote', '--heads', 'origin', 'refs/heads/ws/quiet-basin'),
+      'the CONTROL: the remote head is live').not.toBe('');
+    const o = refused(tok, wt, main);
+    expect(o.refused).toBe('unpushed-commits');
+    expect(o.detail, o.detail).toContain('1 commit(s) are not on the remote');
+  }, 30000);
+
+  it('refuses unpushed-commits when it could not ask the remote — a failed probe is not "gone"', () => {
+    const { main, wt } = staleGone();
+    // `_plat_timeout` runs the EXTERNAL `timeout`, so a `git` function cannot
+    // reach the probe through it; the wrapper itself is stubbed instead, and
+    // fails only the ls-remote (rc 128, git's own "could not read from remote").
+    const NOPROBE = `_plat_timeout() { shift; [[ "$*" == *ls-remote* ]] && return 128; "$@"; };`;
+    const o = probeAudit(NOPROBE, main, wt);
+    expect(o.verdict).toBe('unpushed-commits');
+    expect(o.detail, o.detail).toContain('6 commit(s) are not on the remote');
+  }, 30000);
+
+  it('refuses unpushed-commits when the probe times out', () => {
+    const { main, wt } = staleGone();
+    const SLOW = `_plat_timeout() { shift; [[ "$*" == *ls-remote* ]] && return 124; "$@"; };`;
+    expect(probeAudit(SLOW, main, wt).verdict).toBe('unpushed-commits');
+  }, 30000);
+
+  it('a gone head does not clear unmerged work — the merge provers still refuse it', () => {
+    const { main, wt } = staleGone();
+    fs.writeFileSync(path.join(wt, 'z.txt'), 'never merged\n');
+    h.git(wt, 'add', 'z.txt'); h.git(wt, 'commit', '-m', 'never merged');
+    const a = JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+    expect(a.verdict, 'skipping C1 must never make unmerged work reapable').not.toBe('reapable');
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toContain('ws/quiet-basin');
+  }, 30000);
+
+  it('counts against the FETCHED ref — a live head that holds every commit does not refuse on a stale local copy', () => {
+    const { main, wt, tip } = ready();
+    h.git(main, 'update-ref', 'refs/remotes/origin/ws/quiet-basin', `${tip}~3`);
+    expect(ahead(main), 'the CONTROL: the local copy is three behind before any fetch').toBe('3');
+    const a = JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+    expect(a.verdict, a.detail).toBe('reapable');
+    expect(fs.existsSync(wt)).toBe(true);
+  }, 30000);
 });
