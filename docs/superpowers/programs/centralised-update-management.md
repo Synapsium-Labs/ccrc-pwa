@@ -2277,6 +2277,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         line is about four taps away, and free disk is 29G. v0.0.396 to v0.0.398 followed, unapplied. STATUS: fleet
         and server v0.0.395, newest v0.0.398, stable v0.0.328, intent dev/auto=off, backups fleet 181M/server
         3847M, disk free fleet 208G/work volume 90G/server 29G, no anomalies.
+      - 04:55: the broker's coordinator qualifies the 03:55 reading (mail 7043). `block` is the sum of phase elapsed
+        times, awaits included; it is not a measured blackout or CPU time. So 8.3 s shows the cost per pass rising,
+        not 8.3 s of stall, and the tie to the checkpoint is a correlation. These are not soak observations: by the
+        operator's ruling of 2026-10-19 21:15, the soak restarts on the release that carries the broker's fix run, now
+        in review. The raw lines are kept outside the source tree, as asked. v0.0.399 (#864) to v0.0.409 (#871)
+        followed, unapplied. STATUS: fleet and server v0.0.395, newest v0.0.409, stable v0.0.328, intent
+        dev/auto=off, backups fleet 181M/server 3847M, disk free fleet 208G/work volume 88G/server 29G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
