@@ -3734,6 +3734,12 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     ['export-marks-stalled', 'fail', { exportMarksCheck: { word: 'failed', sinceMs: NOW - 25 * 60 * MIN, cleared: 0 } }],
   ];
 
+  it('export-segment-damaged: the remedy puts a whole copy back and keeps another outside export/<store_id>/ for good, but not while a recovery is open (wave 5h-1 FR2, F3)', () => {
+    const r = healthLib.deriveHealth(base({ exportSegmentDamaged: ['2.0a1b2c3d.db'] })).warn.find((i) => i.word === 'export-segment-damaged')!;
+    expect(r.remedy.startsWith(`put a whole copy of each named file back if one exists (the source box or a backup), and keep another copy of it outside ~/.ccrc/history/${healthLib.EXPORT_DIR}/<store_id>/ for good, but not while a recovery is open: `)).toBe(true);
+    expect(r.remedy, 'the rest of the remedy stands').toContain(`otherwise move each named file out of ~/.ccrc/history/${healthLib.EXPORT_DIR}/<store_id>/ (its live rows export again by themselves)`);
+  });
+
   it('retention-lowered is a reminder under the per-copy rule: it names the home and when its own rows fall due, and claims no node-wide horizon (W1-B2 Task 35, ruled Q15)', () => {
     const r = healthLib.deriveHealth(base({ retentionLowered: { home: '/home/u/.claude-b', days: 30, othersMin: 180 } }));
     expect(words(r, 'warn')).toEqual(['retention-lowered']);
@@ -8994,7 +9000,7 @@ describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)'
   const ALL = healthLib.MARK_CHECK_WORDS;   // Task 1's shared name: the five stop words
   /** One fragment of each word's own remedy. */
   const REMEDY: Record<Check['word'], string> = {
-    budget: 'once ingest leaves it room',
+    budget: `none needed while ingest leaves the check room: the check resumes at the next tick that runs it, and none runs while ~/${healthLib.SWITCHES.off} stands; if it stands for days, read the sweep: journalctl --user -u ccd-history-sweep -n 50`,
     off: `remove ~/${healthLib.SWITCHES.off} when capture should resume, once any carry is whole`,
     'wal-held': 'so a checkpoint can truncate the WAL',
     unlistable: `make ~/.ccrc/history/${healthLib.EXPORT_DIR}/${STORE} a directory this user can read`,
@@ -9021,7 +9027,7 @@ describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)'
     expect(i?.remedy, 'prune --apply is not gated on the marks').toContain('; until the check finishes, hold any ccrc history prune --apply');
   });
 
-  it.each(['off', 'wal-held', 'unlistable'] as const)('stopped on %s: the remedy says the check resumes at the next tick that runs it, and none runs while history-off stands (review 644 F4)', (word) => {
+  it.each(['budget', 'off', 'wal-held', 'unlistable'] as const)('stopped on %s: the remedy says the check resumes at the next tick that runs it, and none runs while history-off stands (review 644 F4)', (word) => {
     const own = healthLib.deriveHealth(clean(check(word, 30 * MIN))).warn.find((x) => x.word === 'export-marks-unchecked')!.remedy;
     expect(own).toContain(`the check resumes at the next tick that runs it, and none runs while ~/${healthLib.SWITCHES.off} stands`);
     expect(own).not.toContain('resumes with the next tick');

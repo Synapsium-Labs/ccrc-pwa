@@ -3427,7 +3427,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'retention-unmeasured': 'make cleanupPeriodDays readable in the named homes\' settings.json',
   'retention-lowered': 'set cleanupPeriodDays in the named home\'s settings.json to at least the others\' value',
   'export-segment-missing': 'carry the export directory from the box the store came from, or let the rows export again',
-  'export-segment-damaged': `put a whole copy of each named file back if one exists (the source box or a backup): text the store pruned that only that file held cannot be exported again; otherwise move each named file out of ~/.ccrc/history/${EXPORT_DIR}/<store_id>/ (its live rows export again by themselves); a later ccrc history doctor --restore or --rebuild stops at a segment it cannot read`,
+  'export-segment-damaged': `put a whole copy of each named file back if one exists (the source box or a backup), and keep another copy of it outside ~/.ccrc/history/${EXPORT_DIR}/<store_id>/ for good, but not while a recovery is open: text the store pruned that only that file held cannot be exported again; otherwise move each named file out of ~/.ccrc/history/${EXPORT_DIR}/<store_id>/ (its live rows export again by themselves); a later ccrc history doctor --restore or --rebuild stops at a segment it cannot read`,
   // D-5633 (history-export-bind-check-doctor): the fallback texts; remedyFor answers by the word the check stopped on.
   'export-marks-unchecked': `none needed while the check resumes each tick; otherwise act on the word it stopped on (history off, a long-running reader, an unreadable export directory), or read the sweep: ${SWEEP_LOG}`,
   'export-marks-stalled': `act on the word the check stopped on (history off, a long-running reader, an unreadable export directory), or read the sweep: ${SWEEP_LOG}`,
@@ -9093,8 +9093,9 @@ function markCheckRemedy(word, h) {
   return (h.exportMarksCheck ?? null) === null ? own : `${own}; ${MARK_CHECK_PRUNE_HOLD}`;
 }
 
-/** The clause the stop remedies of `off`, `wal-held` and `unlistable` share (review 644 F4): the check runs from the tick's export
- *  step, and no scheduled tick runs while the history-off switch stands, so "the next tick" would be false under it. */
+/** The clause the stop remedies of `budget`, `off`, `wal-held` and `unlistable` share (review 644 F4; `budget` too since wave 5h-1 FR2):
+ *  the check runs from the tick's export step, and no scheduled tick runs while the history-off switch stands, so "the next tick" would be
+ *  false under it, and a switch set after a budget stop leaves the record on `budget`. */
 const MARK_CHECK_RESUMES = `the check resumes at the next tick that runs it, and none runs while ~/${SWITCHES.off} stands`;
 
 /** The remedy of the word the check last stopped on alone. */
@@ -9102,7 +9103,7 @@ function markCheckOwnRemedy(word, h) {
   const s = h.exportMarksCheck ?? null;
   switch (s === null ? null : s.word) {
     case 'budget':
-      return `none needed: the check resumes within each tick's budget once ingest leaves it room; if it stands for days, read the sweep: ${SWEEP_LOG}`;
+      return `none needed while ingest leaves the check room: ${MARK_CHECK_RESUMES}; if it stands for days, read the sweep: ${SWEEP_LOG}`;
     case 'off':
       return `remove ~/${SWITCHES.off} when capture should resume, once any carry is whole: ${MARK_CHECK_RESUMES}`;
     case 'wal-held':

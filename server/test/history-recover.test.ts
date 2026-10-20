@@ -5186,7 +5186,7 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
     }
   }, 2 * HEAVY);
 
-  it('(g) the operator\'s way out of the over-export of a forked directory: after the pass has re-exported what the two forked writers shared, moving both old writers\' segments out of export/ re-arms the check, clears the one mark that still names them, and the pass writes that row into the current writer\'s segment; the directory then holds one writer, and a rebuild from it takes nothing off and loses nothing', async () => {
+  it('(g) after a forked rebuild and a pass, two old writers\' segments leave the listing: the check re-arms (D-5636), clears the one mark that still names them, and the pass rewrites that row under the current writer', async () => {
     const { box, ids, db } = x10Store('ccrc-history-d5726-g-');
     let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
     try {
@@ -5202,13 +5202,13 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
       expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
       expect(marksOf(db), 'E0, which both writers carry, is unmarked; E1, which only writer 1 carries, keeps writer 1\'s mark').toEqual([null, seg(5, W1)]);
       expect(countersOn(db, 'export_mark_taken_off')['export_mark_taken_off'], 'E0\'s body and the sidecar blob were taken off').toBe(2);
-      // Step 1 of the remedy: the pass lets the re-export land.
+      // The pass re-exports what the two forked writers shared, and lets the re-export land.
       const first = await passAfterRebuild(box, ids, db);
       const s6 = `6.${ids.writer}.db`;
       expect(first, 'the pass wrote one segment').toEqual([seg(5, W1), seg(5, W2), s6]);
       expect(unmarkedOn(db), 'and nothing is left due: no entry and no live blob is unmarked').toEqual({ entries: 0, blobs: 0 });
       expect(marksOf(db), 'E0 is marked by it; E1 still names writer 1').toEqual([s6, seg(5, W1)]);
-      // Step 2: both old writers\' segments leave export/ (and are kept outside it).
+      // Both old writers\' segments leave the listing (moved out of export/).
       moveAside(box, seg(5, W1));
       moveAside(box, seg(5, W2));
       expect(segmentsOf(box), 'only the current writer\'s segment is left').toEqual([s6]);
@@ -5221,7 +5221,7 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
       expect(segmentRows(path.join(exportDirOf(box), s7), 'entries').map((r) => r['uuid']), 'E1 alone').toEqual([texts[1]!.uuid]);
       expect(marksOf(db), 'every mark names a segment of the current writer').toEqual([s6, s7]);
       expect(unmarkedOn(db)).toEqual({ entries: 0, blobs: 0 });
-      // Step 3: the directory holds one writer, so a rebuild from it takes nothing off, and the orphan row is found.
+      // The directory now holds one writer, so a rebuild from it takes nothing off, and the orphan row is found.
       again = await rebuildAgain(box, ids);
       expect(countersOn(again.db, 'export_mark_taken_off'), 'one writer: nothing taken off').toEqual({ export_mark_taken_off: 0 });
       expect(sidecarNames(again.db), 'and the orphan row is found').toEqual(['d5726g-linked.txt', 'd5726g-orphan.txt']);
@@ -5846,6 +5846,35 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
       const rest = await drive(box, ids, db);
       expect(rest.done, 'and with the switch removed the replay completes').toBe(true);
     } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('JA (FR2, R-2\'s residue, arm A end to end) a held writer with NO listed name: writer 0 carries the bodies, writer 1\'s seq 2 carries E0 and its variants and is moved aside, and writer 2\'s seq 3 carries E0 without them; the held mark is ranged by its marked name alone, so the mark stays for the check and the rebuild holds E0\'s two variants', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5726-ja-');
+    let again: Awaited<ReturnType<typeof rebuildAgain>> | null = null;
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x3a00, 2, 'zqd5726ja', t0);
+      const fam: X10Family = { uuid: x10U(0x3a), path: '/home/u/gone/d5726ja.jsonl', ino: 9990, texts };
+      const e0 = { ...fam, texts: [texts[0]!] };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W0, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 2, writer: W1, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      expect(await SW.recoveryStep(db, stepCtx(box, ids))).toEqual({ moved: true, done: true, held: false });
+      expect(marksOf(db), 'the backup state: E0 marked by writer 1 seq 2').toEqual([seg(2), seg(1, W0)]);
+      moveAside(box, seg(2));
+      plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [], rows: x10Rows(e0) });
+      rearm(db);
+      expect.soft(await SW.recoveryStep(db, stepCtx(box, ids)), 'the restore\'s replay completes').toEqual({ moved: true, done: true, held: false });
+      expect.soft(marksOf(db), 'the mark stays on the missing writer-1 segment, for the check').toEqual([seg(2), seg(1, W0)]);
+      expect.soft(checkAfterLoss(box, ids, db).segments, 'the check finds it, named by the mark').toEqual([seg(2)]);
+      expect.soft(marksOf(db), 'and clears E0\'s mark').toEqual([null, seg(1, W0)]);
+      await passAfterRebuild(box, ids, db);
+      expect.soft(unmarkedOn(db), 'and nothing is left due after the pass').toEqual({ entries: 0, blobs: 0 });
+      again = await rebuildAgain(box, ids);
+      expect(x10Count(again.db, 'entry_variants'), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      if (again !== null) closeWriter(again.db);
       closeWriter(db);
     }
   }, 2 * HEAVY);
