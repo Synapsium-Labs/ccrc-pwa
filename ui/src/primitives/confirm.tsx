@@ -14,8 +14,8 @@
 // button.tsx's note. Callers and tests reach the confirm button through
 // `.qc-actions .btn-primary` (`.btn-danger` under `tone="danger"`), because
 // the opener button behind the sheet matches the same role and name.
-import { useCallback, useEffect, useRef } from 'react';
-import type { ReactNode } from 'react';
+import { useMemo, useRef } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { Button } from './button';
 import { Sheet } from './sheet';
 
@@ -42,50 +42,24 @@ import { Sheet } from './sheet';
 export const QC_CONSEQUENCE = 'qc-consequence mb-5 text-base leading-normal text-ink-secondary';
 export const QC_ACTIONS = 'qc-actions grid gap-2';
 
-/** Cancel first (D-5507, settings spec §6.3; the give-back is D-5610): while `on`, the confirm's Cancel takes the focus on open, and
- *  closing hands the focus back to the control that opened it. The caller puts the returned ref on its Cancel.
+/** Cancel first (D-5507, settings spec §6.3): while `on`, a confirm opens with its Cancel focused, so an Enter or a
+ *  Space pressed out of habit answers "no". The caller puts the returned ref on its Cancel AND passes it to its
+ *  `Sheet` as `initialFocus`.
  *
- *  WHY BOTH HALVES. `Sheet` is vaul, whose `autoFocus` is false: the sheet takes no focus on open, so today the
- *  opener keeps it, and that is every untouched caller's behaviour. Moving the focus to Cancel means something must
- *  give it back, because Radix's modal dialog returns it only to its own `Dialog.Trigger`, which no sheet here uses:
- *  without the second half a closed danger confirm leaves the focus on <body>.
- *
- *  The opener is read in an effect of the commit that opens the sheet. The sheet's portal mounts its content one
- *  pass later (Radix's `Portal` waits for a layout effect of its own, and React flushes this effect before that pass
- *  renders), so Cancel has not mounted yet and `document.activeElement` is still the opener
- *  (`quick-confirm-focus.test.tsx` pins it). It is given back in the effect's cleanup: by then the dialog's
- *  focus trap (`trapped={open}`) has released, and a focus moved outside a live trap would be pulled back in. An
- *  opener that has left the document is left alone; one that is disabled ignores the call (an Ack in flight), and its
- *  caller places the focus itself.
- *
- *  CANCEL IS FOCUSED WITHOUT SCROLLING (D-5610, extended). The sheet's body is its own scroller and Cancel sits at its
- *  foot, so a plain `focus()` (what `autoFocus` does) scrolls the question and the plan out of view on a short phone:
- *  measured at 375x667, the rollback sheet opened 172 px down with its title above the top. Every focus this hook moves
- *  to Cancel passes `preventScroll`, so the sheet opens at its top with Cancel focused.
- *
- *  Two paths reach Cancel. A first open mounts it, and the returned ref focuses it then. A REOPEN REUSES CANCEL: a
- *  sheet keeps its closing content mounted through the close transition, so a confirm reopened inside it opens on the
- *  very same Cancel and no mount happens (measured in a browser, the focus stayed on the opener behind the open modal
- *  before this path existed). When Cancel is already in the document as the sheet opens, the effect focuses it itself,
- *  after reading the opener. */
-export function useCancelFirst(open: boolean, on: boolean): (el: HTMLElement | null) => void {
-  const cancel = useRef<HTMLElement | null>(null);
-  const armed = useRef(false);
-  armed.current = open && on;
-  useEffect(() => {
-    if (!open || !on) return undefined;
-    const active = document.activeElement;
-    const opener = active instanceof HTMLElement && active !== document.body ? active : null;
-    const el = cancel.current;
-    if (el !== null && el.isConnected && el !== active) el.focus({ preventScroll: true });
-    return () => {
-      if (opener !== null && opener.isConnected) opener.focus();
-    };
-  }, [open, on]);
-  return useCallback((el: HTMLElement | null) => {
-    cancel.current = el;
-    if (el !== null && armed.current) el.focus({ preventScroll: true });
-  }, []);
+ *  THIS HOOK ONLY CHOOSES (D-5931). The Sheet owns the focus: it moves it to `initialFocus` when the panel mounts and
+ *  when a reopen reuses the closing panel (D-5610's two measured paths, `quick-confirm-focus.test.tsx`), every time
+ *  with `preventScroll`, and it gives the focus back to the opener on close. What is left here is the choice of
+ *  Cancel: the ref reads Cancel only while the confirm is `open` and `on`, and nothing otherwise, so the Sheet falls
+ *  back to its panel. */
+export function useCancelFirst<T extends HTMLElement = HTMLButtonElement>(open: boolean, on: boolean): RefObject<T | null> {
+  const cancel = useRef<T | null>(null);
+  const chosen = useRef(false);
+  chosen.current = open && on;
+  // React writes the element through `current`; the Sheet reads it back through the same field.
+  return useMemo<RefObject<T | null>>(() => ({
+    get current(): T | null { return chosen.current ? cancel.current : null; },
+    set current(el: T | null) { cancel.current = el; },
+  }), []);
 }
 
 export interface QuickConfirmProps {
@@ -101,9 +75,9 @@ export interface QuickConfirmProps {
    *  ghost either way. A caller reaching the confirm by its hook class reads
    *  `.qc-actions .btn-danger` under `danger`. */
   tone?: 'commit' | 'danger';
-  /** Which answer holds the focus when the sheet opens (D-5507). `confirm`, the default, is today's behaviour: the
-   *  sheet moves no focus, so every caller that does not pass it is unchanged. `cancel` focuses Cancel, and closing
-   *  returns the focus to the opener (`useCancelFirst`): a danger confirm answered by habit answers no. */
+  /** Which answer holds the focus when the sheet opens (D-5507). `confirm`, the default, leaves it to the Sheet, which
+   *  focuses its panel, so no answer is pre-selected (D-5931). `cancel` focuses Cancel (`useCancelFirst`): a danger
+   *  confirm answered by habit answers no. Either way closing returns the focus to the opener (the Sheet's). */
   defaultFocus?: 'confirm' | 'cancel';
 }
 
@@ -121,7 +95,7 @@ export function QuickConfirm({
   const cancelRef = useCancelFirst(open, cancelFirst);
   const lines = typeof consequence === 'string' ? [consequence] : consequence;
   return (
-    <Sheet open={open} onClose={onClose} title={title}>
+    <Sheet open={open} onClose={onClose} title={title} initialFocus={cancelRef}>
       {lines.map((line, i) => (
         <p key={i} className={QC_CONSEQUENCE}>
           {line}
