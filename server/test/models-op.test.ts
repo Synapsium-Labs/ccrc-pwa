@@ -25,6 +25,15 @@ import { backfillAdvance, chooseCandidate, familyOf, recordMove, serializeAdvanc
 import type { Advance, HistoryEntry } from '../../shared/model-advance.mjs';
 import type { ModelClass, Registry } from '../../shared/models.js';
 import { parseRegistry } from '../../shared/models.js';
+// Auto-advance plan W2 (Tasks 8 and 9). Only names this file does not bind yet:
+// W1 already imports `parseRegistry` and the type `Advance`.
+import { BLOCKED_CAUSES } from '../../shared/model-advance.mjs';
+import type { ClassAdvance } from '../../shared/model-advance.mjs';
+import { contextWindowFor, modelEnvBlock } from '../../shared/modelenv.mjs';
+import { parseCatalogue, parseWindows } from '../../shared/models.js';
+import {
+  STEP_CATALOGUE, STEP_REGISTRY, stepAdvance, stepRoster, stepRow,
+} from './fixtures/advanceCases.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -3198,6 +3207,7 @@ describe('the account-id guard applies to every op, not just rm (C6)', () => {
     ['hold', ['--class', 'opus']],
     ['release', ['--class', 'opus']],
     ['revert', ['--class', 'opus']],
+    ['advance-plan', []],
   ] as [string, string[]][])('%s refuses a bad --id', (opName, extra) => {
     const r = op(opName, '--file', rosterPath(), '--id', '../etc/passwd', ...extra);
     expect(r.code).toBe(1);
@@ -3493,5 +3503,171 @@ describe('key lanes after D-5521 are not Anthropic lanes', () => {
     expect(r.body['error']).toBeUndefined();
     expect(r.code).toBe(0);
     expect(registryOf('lane-e')['probe']).toBe('compatible');
+  });
+});
+
+// ── auto-advance plan W2, Tasks 8 and 9: the advance step's two ops ──────────
+// Their own lane (`stepRoster`, fixtures/advanceCases.ts): neutral ids only.
+// The roster's ports are pure-parse: nothing in this file connects to either.
+const STEP_PORTS = { proxyPort: 45020, litellmPort: 45021 };
+const STEP_SETTINGS = '.claude-lane-a';
+/** lane-a's advance file, through W1's `advanceOf`. */
+const laneAdvance = (): Advance => advanceOf('lane-a');
+
+/** A lane's registry, catalogue and advance file, then the op's own materialise.
+ *  `catalogue: null` leaves the lane never probed; `advance: null` leaves the
+ *  advance file absent. */
+function plantStep(o: { id?: string; registry?: unknown; catalogue?: unknown; advance?: unknown } = {}): void {
+  const id = o.id ?? 'lane-a';
+  fs.mkdirSync(path.join(home, '.ccrc', 'models'), { recursive: true });
+  fs.writeFileSync(regPath(id), `${JSON.stringify(o.registry ?? STEP_REGISTRY, null, 2)}\n`, { mode: 0o600 });
+  if (o.catalogue !== null) writeCatalogue(id, o.catalogue ?? STEP_CATALOGUE);
+  if (o.advance !== null) {
+    fs.writeFileSync(advPath(id), `${JSON.stringify(o.advance ?? stepAdvance(), null, 2)}\n`, { mode: 0o600 });
+  }
+  const m = op('materialise', '--file', rosterPath(), '--id', id);
+  expect(m.code, m.stdout + m.stderr).toBe(0);
+}
+
+/** Every file under ~/.ccrc and lane-a's settings.json, with its bytes and
+ *  mtime: the "writes nothing" pins compare two of these. */
+function snapshot(): string[] {
+  const out: string[] = [];
+  const walk = (d: string): void => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else out.push(`${path.relative(home, p)} ${fs.statSync(p).mtimeMs} ${fs.readFileSync(p, 'utf8')}`);
+    }
+  };
+  walk(path.join(home, '.ccrc'));
+  const settings = path.join(home, STEP_SETTINGS, 'settings.json');
+  if (fs.existsSync(settings)) out.push(`${STEP_SETTINGS} ${fs.statSync(settings).mtimeMs} ${fs.readFileSync(settings, 'utf8')}`);
+  return out.sort();
+}
+
+describe('advance-plan (auto-advance spec §2.2 to §2.3; plan W2 Task 8)', () => {
+  const plan = (id = 'lane-a'): Result => op('advance-plan', '--file', rosterPath(), '--id', id);
+  const none = { candidate: null, reason: null, blocked: null, effortTo: null, canaryEffort: null };
+
+  beforeEach(() => { seed(stepRoster({ ...STEP_PORTS, authDir: codexAuthDir('lane-a') })); });
+
+  it('a codex-kind lane on a fresh catalogue is eligible, and its candidate carries effortTo and canaryEffort', () => {
+    plantStep();
+    const r = plan();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'advance-plan', id: 'lane-a', eligible: true, why: null, file: 'ok' });
+    expect(r.body['classes']).toEqual([
+      { class: 'haiku', pin: 'model-6-alpha', family: 'alpha', held: false, ...none },
+      { class: 'sonnet', pin: 'model-6-beta', family: 'beta', held: false, ...none },
+      { class: 'opus', pin: 'model-5.6-gamma', family: 'gamma', held: false, candidate: 'model-6.1-gamma',
+        reason: 'newer', blocked: null, effortTo: 'xhigh', canaryEffort: 'low' },
+      { class: 'fable', pin: null, family: null, held: false, ...none },
+    ]);
+  });
+
+  it('a pinned class whose stored family differs reports its pin\'s family, its candidate\'s (D-5992)', () => {
+    // A stored family that disagrees with the pin is stale (a hand-edited file, a
+    // set-class by a build from before the advance file): `chooseCandidate`
+    // follows the pin's family, so the row must name that one. A newer gamma is
+    // listed, so a row naming the stored word would point a reader at a move
+    // across families that the step never makes.
+    plantStep({
+      registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, haiku: 'model-5.6-alpha' } },
+      advance: stepAdvance({ haiku: { family: 'gamma' } }),
+    });
+    const haiku = (plan().body['classes'] as Record<string, unknown>[])[0];
+    expect(haiku).toEqual({ class: 'haiku', pin: 'model-5.6-alpha', family: 'alpha', held: false,
+      candidate: 'model-6-alpha', reason: 'newer', blocked: null, effortTo: 'high', canaryEffort: 'low' });
+  });
+
+  it('an empty class whose family is stored takes the newest of its family, with no effort of its own', () => {
+    plantStep({ advance: stepAdvance({ fable: { family: 'delta' } }) });
+    const fable = (plan().body['classes'] as Record<string, unknown>[])[3];
+    expect(fable).toEqual({ class: 'fable', pin: null, family: 'delta', held: false, candidate: 'model-6-delta',
+      reason: 'empty', blocked: null, effortTo: null, canaryEffort: 'low' });
+  });
+
+  it('a held class reports its candidate with held true', () => {
+    plantStep({ advance: stepAdvance({ opus: { hold: { at: '2026-10-22T08:00:00Z', by: 'hand' } } }) });
+    const opus = (plan().body['classes'] as Record<string, unknown>[])[2];
+    expect(opus).toMatchObject({ class: 'opus', held: true, candidate: 'model-6.1-gamma' });
+  });
+
+  it('an unreadable windows file blocks each candidate with windows-unreadable and keeps the candidate', () => {
+    // The commit would abandon `windows-unreadable` after a canary (Task 9), so
+    // the plan says so first and the step spends no request on it.
+    plantStep();
+    plantWindows('lane-a', '{ not json');
+    const rows = plan().body['classes'] as Record<string, unknown>[];
+    expect(rows[2]).toMatchObject({ class: 'opus', candidate: 'model-6.1-gamma', blocked: 'windows-unreadable' });
+    expect(rows[0]).toMatchObject({ class: 'haiku', candidate: null, blocked: null });
+    expect(BLOCKED_CAUSES).toContain('windows-unreadable');
+  });
+
+  it('an absent advance file derives families from pins and seeds no empty class', () => {
+    plantStep({ advance: null });
+    const r = plan();
+    expect(r.body).toMatchObject({ eligible: true, file: 'absent' });
+    const rows = r.body['classes'] as Record<string, unknown>[];
+    expect(rows[2]).toMatchObject({ class: 'opus', family: 'gamma', candidate: 'model-6.1-gamma' });
+    // A seeded family here would be the backfill's job done by a read-only op.
+    expect(rows[3]).toEqual({ class: 'fable', pin: null, family: null, held: false, ...none });
+    expect(fs.existsSync(advPath('lane-a'))).toBe(false);
+  });
+
+  it.each([
+    ['an external-kind lane', 'lane-not-codex-kind', (): void => plantStep({ id: 'lane-b' }), 'lane-b'],
+    ['a codex-kind lane whose registry is not a codex probe', 'probe-not-codex', (): void => plantStep({
+      registry: { probe: 'openrouter', classes: { haiku: null, sonnet: null, opus: null, fable: null },
+        subagent: 'sonnet', discovery: [] } }), 'lane-a'],
+    ['a lane never probed', 'never-probed', (): void => plantStep({ catalogue: null }), 'lane-a'],
+    ['a stale catalogue', 'catalogue-stale', (): void => plantStep({ catalogue: { ...STEP_CATALOGUE, stale: true } }),
+      'lane-a'],
+  ] as [string, string, () => void, string][])('%s is ineligible, why %s, and no class has a candidate', (_w, why, plant, id) => {
+    plant();
+    const r = plan(id);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ eligible: false, why });
+    for (const row of r.body['classes'] as Record<string, unknown>[]) expect(row['candidate']).toBeNull();
+  });
+
+  it('an Anthropic lane is refused, as it refuses every op but show', () => {
+    const r = plan('lane-c');
+    expect(r.code).toBe(1);
+    expect(r.body['error']).toBe('anthropic-lane');
+  });
+
+  it.each([
+    ['an advance file that is a directory', 'advance-file-unreadable', (): void => {
+      fs.rmSync(advPath('lane-a')); fs.mkdirSync(advPath('lane-a'));
+    }],
+    ['an advance file of another version', 'advance-file-invalid', (): void => {
+      fs.writeFileSync(advPath('lane-a'), `${JSON.stringify({ ...stepAdvance(), v: 2 }, null, 2)}\n`);
+    }],
+    ['a registry that is not JSON', 'registry-invalid', (): void => { fs.writeFileSync(regPath('lane-a'), '{ not json'); }],
+    ['a registry that is a directory', 'registry-unreadable', (): void => {
+      fs.rmSync(regPath('lane-a')); fs.mkdirSync(regPath('lane-a'));
+    }],
+    ['a catalogue that is not a catalogue', 'catalogue-invalid', (): void => { writeCatalogue('lane-a', { probe: 'codex' }); }],
+    ['a catalogue that is a directory', 'catalogue-unreadable', (): void => {
+      const p = path.join(home, '.ccrc', 'models', 'lane-a.json');
+      fs.rmSync(p); fs.mkdirSync(p);
+    }],
+  ] as [string, string, () => void][])('%s is a refusal naming %s, a BLOCKED_CAUSES word', (_w, word, spoil) => {
+    plantStep();
+    spoil();
+    const r = plan();
+    expect(r.code).toBe(1);
+    expect(r.body).toMatchObject({ ok: false, error: word });
+    expect(BLOCKED_CAUSES).toContain(word);
+  });
+
+  it('the plan writes nothing: every file under ~/.ccrc and the settings keep their bytes and mtimes', () => {
+    plantStep({ advance: null });
+    const before = snapshot();
+    expect(plan().code).toBe(0);
+    expect(plan('lane-a').body['eligible']).toBe(true);
+    expect(snapshot()).toEqual(before);
   });
 });

@@ -76,7 +76,8 @@ import {
   modelEnvBlock, readRegular,
 } from '../shared/modelenv.mjs';
 import {
-  AdvanceInvalid, backfillAdvance, familyOf, parseAdvance, reconcilePending, recordMove, resolveEffort,
+  AdvanceInvalid, backfillAdvance, canaryEffort, chooseCandidate, familyOf, parseAdvance, reconcilePending,
+  recordFailure, recordMove, resolveEffort,
 } from '../shared/model-advance.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
@@ -1131,6 +1132,9 @@ const OPS = {
   rm: { keys: ['file', 'id'], required: ['file', 'id'], writes: true },
   // auto-advance spec §2.1: create the lane's advance file when it has none (`backfillOp`); never rewrites one.
   'advance-backfill': { keys: ['file', 'id'], required: ['file', 'id'], writes: true },
+  // Auto-advance plan W2 Task 8: what the hourly refresh may advance on this
+  // lane, and to what. READ-ONLY: the backfill is `advance-backfill`'s.
+  'advance-plan': { keys: ['file', 'id'], required: ['file', 'id'], writes: false },
   // auto-advance spec §2.7 (D12): the hold the automatic advance honours, and the one-act revert.
   hold: { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
   release: { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
@@ -1322,6 +1326,82 @@ function windowOp(opName, a, account, registry, catalogue, reading) {
     return refuse(1, mat.err[0], detail);
   }
   out({ ok: true, op: opName, ...extra, ...describe(account, registry, catalogue, next) });
+  return 0;
+}
+
+/** `advance-plan` (auto-advance spec §2.2 to §2.3; plan W2 Task 8): READ-ONLY.
+ *  Which classes of this lane the hourly refresh may advance, and to what — the
+ *  question the refresh asks before it asks anything of the lane itself.
+ *
+ *  ELIGIBLE is three facts, and `why` names the first that fails:
+ *    - `lane-not-codex-kind`: only an `exec.kind: "codex"` row advances
+ *      (D-5198); an external row's tier, port and key are not ccrc's to know;
+ *    - `probe-not-codex`: the family rule is the Codex lanes' (§2.2);
+ *    - `never-probed` and `catalogue-stale`: no advance, and no retired-pin
+ *      fallback, on a catalogue that is absent or marked stale (D-5199).
+ *  On an ineligible lane every class is still listed, with its pin, family and
+ *  hold, and no candidate.
+ *
+ *  THE FAMILY each row reports is the one its candidate is chosen from
+ *  (D-5992): a PINNED class's is its pin's own family, whatever the advance
+ *  file stores, because `chooseCandidate` follows the pin and a stored word
+ *  that disagrees with it is stale (null for a pin that breaks the grammar,
+ *  which is blocked `pin-grammar`); an EMPTY class's is the stored one. So a
+ *  row never names a family its class does not follow. With the file absent
+ *  (a lane not yet backfilled) an empty class has none, so this op never seeds
+ *  one (§2.1: the step "leaves an empty class unseeded until the backfill
+ *  runs").
+ *
+ *  Per candidate, `effortTo` is the level the class would carry on the new
+ *  model (`resolveEffort`, ranked by the old pin's row, D-5200; null: none)
+ *  and `canaryEffort` the lowest level the new model lists (null: it lists
+ *  none). A held or blocked class is reported with its candidate; the caller
+ *  skips it. A candidate on a lane whose windows file cannot be read is
+ *  blocked `windows-unreadable` (D-5193): the commit would abandon on it after
+ *  the canary, so no request is spent on it.
+ *
+ *  A present advance file that cannot be read, or does not parse, is a REFUSAL
+ *  carrying its own word, as an unreadable registry or catalogue already is
+ *  before this op is reached (`main`'s reads): a pin never moves on data that
+ *  cannot be read (§2.8). */
+function advancePlanOp(a, account, registry, catalogue, win) {
+  const rd = readAdvance(a.id);
+  if (rd.err !== undefined) return refuse(1, rd.err[0], rd.err[1]);
+  const adv = rd.advance;
+  const why = !(isObj(account.exec) && account.exec.kind === 'codex') ? 'lane-not-codex-kind'
+    : registry.probe !== 'codex' ? 'probe-not-codex'
+      : catalogue === null ? 'never-probed'
+        : catalogue.stale ? 'catalogue-stale'
+          : null;
+  const classes = CLASSES.map((cls) => {
+    const pin = registry.classes[cls];
+    const stored = adv === null ? null : adv.classes[cls].family;
+    const row = {
+      class: cls, pin, family: pin !== null ? familyOf(pin) : stored,
+      held: adv !== null && adv.classes[cls].hold !== null,
+      candidate: null, reason: null, blocked: null, effortTo: null, canaryEffort: null,
+    };
+    if (why !== null) return row;
+    const choice = chooseCandidate({ registry, catalogue, cls, family: stored });
+    row.candidate = choice.candidate;
+    row.reason = choice.reason;
+    row.blocked = choice.blocked;
+    if (choice.candidate !== null) {
+      const next = catalogue.models.find((m) => m.id === choice.candidate);
+      const prev = pin === null ? undefined : catalogue.models.find((m) => m.id === pin);
+      const newEfforts = next === undefined ? [] : next.efforts;
+      row.effortTo = resolveEffort({
+        stored: isObj(registry.effort) ? registry.effort[cls] : undefined,
+        oldEfforts: prev === undefined ? null : prev.efforts,
+        newEfforts,
+      }) ?? null;
+      row.canaryEffort = canaryEffort(newEfforts);
+      if (row.blocked === null && win.state === 'unreadable') row.blocked = 'windows-unreadable';
+    }
+    return row;
+  });
+  out({ ok: true, op: 'advance-plan', id: a.id, eligible: why === null, why,
+    file: adv === null ? 'absent' : 'ok', classes });
   return 0;
 }
 
@@ -1702,6 +1782,10 @@ function main(argv) {
     return opName === 'revert' ? revertOp(a, account, registry, catalogue, win)
       : holdOp(opName, a, account, registry, catalogue, win);
   }
+  // Auto-advance plan W2: the advance step's two ops. Both need a registry
+  // (the gate above), and both are refused on an Anthropic lane (the gate
+  // before the catalogue read), as every op but `show` is.
+  if (opName === 'advance-plan') return advancePlanOp(a, account, registry, catalogue, win);
   const next = JSON.parse(JSON.stringify(registry));
 
   if (opName === 'set-class') {
