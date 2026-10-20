@@ -155,14 +155,22 @@ describe('readCollectPopulation — the two listings, read exactly', () => {
     } finally { chmodSync(dir, 0o755); }
   });
 
-  it('readable directories keep today\'s verdicts, and the plain collapsing listing is never read', async () => {
+  // The characterization pin: these verdicts held before D-5969 and hold after it.
+  it('readable directories keep today\'s verdicts', async () => {
     const reg = registry();
     mkdirSync(path.join(reg, 'tmproots'));
     writeFileSync(path.join(reg, 'tmproots', 'demo-a'), '');
     mkdirSync(path.join(reg, 'tmpquarantine'));
-    const c = counted();
-    expect(await readCollectPopulation(c.io, reg))
+    expect(await readCollectPopulation(counted().io, reg))
       .toEqual({ tmproots: { kind: 'listed', names: ['demo-a'] }, tmpquarantine: { kind: 'listed', names: [] } });
+  });
+
+  it('the plain collapsing listing is never read (D-5969)', async () => {
+    const reg = registry();
+    mkdirSync(path.join(reg, 'tmproots'));
+    mkdirSync(path.join(reg, 'tmpquarantine'));
+    const c = counted();
+    await readCollectPopulation(c.io, reg);
     expect(c.of('plain')).toEqual([]);
   });
 

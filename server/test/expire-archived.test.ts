@@ -35,7 +35,7 @@ const expiredDoc = JSON.stringify({ expired: ID, archivedAt: ARCH, wip: null, at
 interface Script { audit?: { code: number; stdout: string; stderr?: string }; verb?: { code: number; stdout: string; stderr?: string } }
 
 const rig = async (over: { script?: Script; caps?: FleetState; live?: boolean; paused?: boolean; visible?: boolean;
-  unlistable?: boolean | ReadFailure; duringAudit?: (reg: string) => void } = {}) => {
+  unlistable?: boolean | ReadFailure | 'rejects'; duringAudit?: (reg: string) => void } = {}) => {
   const home = mkTmp('ccrc-expire-archived-');
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
@@ -58,6 +58,7 @@ const rig = async (over: { script?: Script; caps?: FleetState; live?: boolean; p
     // The registry's listing fails as `readdirMeasured` answers it (`true` is `unreadable`, D-5969); the plain
     // `readdir` derives from it, as `localIO`'s does.
     io: over.unlistable === undefined || over.unlistable === false ? base.io
+      : over.unlistable === 'rejects' ? { ...base.io, readdirMeasured: async () => { throw new Error('EIO'); } }
       : { ...base.io, readdirMeasured: async () => ({ ok: false, reason: over.unlistable === true ? 'unreadable' : over.unlistable as ReadFailure }) },
     runCcd: base.runCcd, fleetState: over.caps ?? CAPS,
     presence: { isVisible: (id: string) => over.visible === true && id === ID }, notifyLog,
@@ -115,6 +116,14 @@ describe('the one executor', () => {
     const s = await rig({ unlistable: reason });
     expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'deferred', why: 'paused-at-server',
       detail: `the registry did not list (${reason}), so a raised reclaim-paused cannot be ruled out` });
+    expect(s.calls).toEqual([]);
+  });
+
+  // D-5969: a REJECTING port is a listing that could not be taken — `unreadable`, never folded to an empty registry.
+  it('a registry whose listing rejects defers, nothing asked, and says it was unreadable', async () => {
+    const s = await rig({ unlistable: 'rejects' });
+    expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'deferred', why: 'paused-at-server',
+      detail: 'the registry did not list (unreadable), so a raised reclaim-paused cannot be ruled out' });
     expect(s.calls).toEqual([]);
   });
 
