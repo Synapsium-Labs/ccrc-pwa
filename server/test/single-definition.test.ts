@@ -6438,8 +6438,8 @@ describe('the review screen\'s rows and last line are spelled once, in shared/as
 // for the reason the notes above state: `session-hook.test.ts` cites this file by line. THE DELEGATED-TASK RULE — the
 // six non-delegating kinds and the three terminal statuses — has one TypeScript home, `shared/api.ts`, which the
 // server's and the PWA's wording read. The hook's `jq` in `ccd/session-hook.sh` is the documented second spelling, held
-// equal by `session-hook-background.test.ts`, which iterates over these lists, not by this text scan. A second
-// TypeScript copy that drifts would let one reader call a task delegated that the other does not.
+// equal by `session-hook-background.test.ts` (it iterates these lists and reads the jq's back as sets, D-6117), not by
+// this scan. A drifting TypeScript copy would split readers; `isDelegatedTask`, which nothing called, is gone (D-6117).
 describe('the delegated-task rule is declared once, in shared/api.ts (D-5231)', () => {
   const VALUE_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`, 'm');
   const FUNCTION_DEF = (name: string): RegExp =>
@@ -6458,11 +6458,11 @@ describe('the delegated-task rule is declared once, in shared/api.ts (D-5231)', 
     expect(RARE.test('the memory-import kind, in prose')).toBe(false);
   });
 
-  it('declares NON_DELEGATING_TASK_KINDS, TERMINAL_TASK_STATUSES and isDelegatedTask exactly once, in shared/api.ts', () => {
+  it('declares NON_DELEGATING_TASK_KINDS and TERMINAL_TASK_STATUSES once, in shared/api.ts; isDelegatedTask nowhere (D-6117)', () => {
     for (const name of ['NON_DELEGATING_TASK_KINDS', 'TERMINAL_TASK_STATUSES']) {
       expect(ALL.filter((f) => VALUE_DEF(name).test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/api.ts']);
     }
-    expect(ALL.filter((f) => FUNCTION_DEF('isDelegatedTask').test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+    expect(ALL.filter((f) => FUNCTION_DEF('isDelegatedTask').test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
   });
 
   it('quotes the rare kinds on a code line in shared/api.ts and nowhere else across the four roots', () => {
