@@ -9958,6 +9958,22 @@ describe('redactAfter: a relayed batch is read with its stream\'s look-behind (D
     expect(masked, 'CONTROL: thousands of values each line alone masks').toBeGreaterThan(10_000);
     expect(violations.slice(0, 5), `${violations.length} of ${masked}`).toEqual([]);
   }, 120_000);
+
+  // D-6069 (b), the whole-branch review's residual, pinned as measured. A NAME that a colour sequence splits across the look-behind
+  // boundary is found only by the joined reading, which differs from the batch inside the look-behind with no mark covering the
+  // first difference, so relayRead's line-start fallback writes the look-behind's last line again, relayUnion's line alignment
+  // fails, and every line of the batch is a mark, with one line more than the batch held. Nothing leaks; availability is lost.
+  it('a NAME a colour sequence splits across the look-behind boundary: the value is masked, but the whole batch is written as marks, one line more than it held (D-6069)', () => {
+    const name = ['"pass', '\x1b[0m', 'word":'].join('');   // a key-shaped NAME, assembled at run time
+    const lookBehind = `file a.md ok\n{${name}`;
+    const batch = '"hunter2xyz"}\nnext line';
+    const out = libRedact.redactAfter(lookBehind, batch, idx).emit;
+    expect(out, 'nothing leaks: the value is masked').not.toContain('hunter2xyz');
+    expect(out, 'the residual: all marks, the plain line of the batch included').toBe(`${M}\n${M}\n${M}`);
+    expect(out.split('\n').length, 'three lines for a batch of two').toBe(3);
+    expect(batch.split('\n').length, 'CONTROL: the batch held two').toBe(2);
+    expect(libRedact.redactAfter('file a.md ok\n{"password":', batch, idx).emit, 'CONTROL: the same key without the sequence is aligned, and the plain line is written').toBe(`"${M}"}\nnext line`);
+  });
 });
 
 // ── W5h-2 Task 4: the op marker names its process (D-5748 (history-op-marker-identity)) ─────────────────────────

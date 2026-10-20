@@ -6916,8 +6916,9 @@ export function formatBeltState(s) {
  *  holds. `rids`: the units every indexed row is known to carry the belt of, at version `v`. `gen`: the units live at
  *  every tick of the open generation, which opened under version `gv`.
  *  - A unit no longer live leaves `rids` and `gen`: a row indexed while its value is not loaded lacks its belt.
- *  - Due: the version differs (a B1 store's absent state, and the `v: 0` due record, included), or a live unit at or
- *    below the mark is not in `rids` (its file readable again). A unit above the mark is the pair generation's.
+ *  - Due: the version differs (a B1 store's absent state, and the `v: 0` due record, included), or an open generation
+ *    (`gen` a list) was recorded under another BELT_VERSION (D-6068), or a live unit at or below the mark is not in
+ *    `rids` (its file readable again). A unit above the mark is the pair generation's.
  *  - Restart (ruling R-version): when due, an open generation whose `gen` is absent (one a build without the belt
  *    opened, or one a due record cleared) or was recorded under another BELT_VERSION covers nothing this version can
  *    stamp, so rederivePlan begins its walk again from cursor 0 rather than finishing one that ran partly under other
