@@ -463,4 +463,44 @@ describe('the swap heartbeats WHILE it carries, not just around the carry', () =
       jobs -pr | xargs -r kill -9 2>/dev/null; true`, { TMUX: '' });
     expect(out).toBe('rc=1 stampers_left=0');
   });
+
+  it('stopping the stamper ends its in-flight sleep too, so a captured `ccd swap` returns at once (D-6113)', () => {
+    seed('claude');
+    // `_swap_beat_stop` TERMs the stamper subshell, and a subshell killed while
+    // it waits on a foreground `sleep` leaves that sleep running, reparented,
+    // still holding the stdout the stamper inherited from `cmd_swap`. Anything
+    // that captures `ccd swap`'s output (execFile, `$(…)`) then waits for EOF
+    // until that sleep ends: up to SWAP_BEAT_INTERVAL after every swap. Real
+    // `sleep` here (no stub), so the child is the real one production forks;
+    // the interval is 5s so the held pipe is unmistakable in the elapsed time.
+    // The poll waits until the stamper HAS a child, so the stop always lands
+    // mid-sleep rather than racing the first fork.
+    const t0 = Date.now();
+    const out = h.sh(`SWAP_BEAT_INTERVAL=5
+      _swap_beat ${ID} $$ & beat=$!
+      for _ in $(seq 100); do pgrep -P "$beat" >/dev/null && break; command sleep 0.05; done
+      kid=$(pgrep -P "$beat")
+      _swap_beat_stop "$beat"
+      command sleep 0.2
+      if kill -0 "$kid" 2>/dev/null; then alive=yes; else alive=no; fi
+      echo "kid=\${kid:+found} alive=$alive"`);
+    const ms = Date.now() - t0;
+    expect(out, 'the stamper never forked its sleep: the stop did not land mid-sleep').toContain('kid=found');
+    expect(out, 'the stamper\'s sleep outlived `_swap_beat_stop`').toContain('alive=no');
+    expect(ms, 'the orphaned sleep held the caller\'s stdout open past the stop').toBeLessThan(3_000);
+  });
+
+  it('leaves no TERM trap behind on either way out of a foreground call (D-6113)', () => {
+    seed('claude');
+    // The trap above is the stamper's own; production only ever runs it in a
+    // background subshell, but a foreground call (these tests make them) must
+    // hand its caller back the TERM disposition it had. Both exits: the parent
+    // check's early return, and the SWAP_BEAT_MAX bound running out.
+    const out = h.sh(`sleep() { :; }; _reg_set() { :; }
+      ( exit 0 ) & dead=$!; wait "$dead" 2>/dev/null
+      _swap_beat ${ID} "$dead"; trap -p TERM > "$HOME/t-early"
+      _swap_beat ${ID} $$; trap -p TERM > "$HOME/t-bound"
+      echo "early=[$(cat "$HOME/t-early")] bound=[$(cat "$HOME/t-bound")]"`);
+    expect(out).toBe('early=[] bound=[]');
+  });
 });
