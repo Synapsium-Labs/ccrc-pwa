@@ -57,6 +57,10 @@ import {
   COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, askNudgeSubject, isApprovalNudgeMail, isAskNudgeMail,
   queueStallNotice, queueSystemMail, survivorOf,
 } from './coord/rundefs.js';
+import {
+  BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, BRIEF_WATCH_HORIZON_MS, briefNotTakenBody, briefNotTakenReason,
+  briefNotTakenSubject, briefNotTakenTag, briefStep, type UnlandedBrief,
+} from './coord/briefwatch.js';
 import { landingAsk, landingVerdict, type LandingFacts } from './coord/landing.js';
 import {
   readParentGenerations, readWorktreeCensus, settleParentIncarnations, type DelegationCensusPass, type WorktreeCensus,
@@ -3280,6 +3284,50 @@ export class FleetWatcher {
       tag,
       recordAlways: true,
     }, projects);
+  }
+
+  /** The wave brief is confirmed taken (D-5841, D3, #755): `sweepMail`'s brief
+   *  pass, acting on `briefStep`. At 5 min an unlanded brief gets ONE retry — its
+   *  durable `brief-retry` row, then, for a parked row, D1's `wakeParked`, so the
+   *  due loop re-attempts it through every gate (the ensure-wake gate first; our
+   *  own nudge gets `resumeIfOwn`'s verified Enter, any other text is held with
+   *  nothing pressed or typed). At 10 min the run's claimant is mailed
+   *  `brief not taken by <worker>, run N: <reason>` with its `brief-not-taken`
+   *  row in one transaction (`queueStallNotice`), or the row alone when there is
+   *  no other claimant to tell, and the operator gets one push, only from the
+   *  call that wrote the row. Dispatches nothing; writes no run state, hold,
+   *  claim or limit. Answers whether a parked row was woken. */
+  private sweepBriefs(store: CoordStore, briefs: readonly UnlandedBrief[], now: number,
+                      sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): boolean {
+    let woke = false;
+    for (const b of briefs) {
+      const step = briefStep(b, now);
+      if (step === 'wait') continue;
+      if (step === 'retry') {
+        if (!store.recordStallObservation(b.runId, BRIEF_RETRY_DETAIL, now).recorded) continue;
+        if (b.parkedAt !== null && store.wakeParked(b.deliveryId, now)) woke = true;
+        continue;
+      }
+      const reason = briefNotTakenReason(b);
+      const subject = briefNotTakenSubject(b.toId, b.runId, reason);
+      const coordinator = store.resolveCoordinator(b.runId);
+      const told = coordinator !== null && coordinator !== b.toId
+        ? queueStallNotice(store, { id: b.runId, program: b.program, wave: b.wave, waveOf: b.waveOf }, {
+          detail: BRIEF_NOTICE_DETAIL, at: now, toId: coordinator, kind: 'status', subject,
+          body: briefNotTakenBody(b.toId, b.runId, reason) }).queued
+        : store.recordStallObservation(b.runId, BRIEF_NOTICE_DETAIL, now).recorded;
+      if (!told) continue;
+      this.pushOne({
+        kind: 'mail', sessionId: b.toId,
+        project: sessionProjects.get(b.toId) ?? '',
+        title: `✉ brief not taken › ${b.toId}`,
+        body: subject,
+        runId: b.runId,
+        tag: briefNotTakenTag(b.runId),
+        recordAlways: true,
+      }, projects);
+    }
+    return woke;
   }
 
   /** Tell the SENDING session, by system mail (D-5838), that its mail parked —
@@ -7266,6 +7314,10 @@ export class FleetWatcher {
     // D-5838: every outstanding PARKED row, due or not — probed, escalated and
     // held to its ceiling below, on every pass.
     const parkedRows = store.parkedDeliveries();
+    // D-5841: every unlanded wave brief of an active run, retried once at 5 min
+    // and told at 10 (the brief pass below). A REJECTED brief is outstanding
+    // nowhere else, so the empty-queue return counts these too.
+    const briefs = store.unlandedBriefs(now - BRIEF_WATCH_HORIZON_MS);
     const parkedIds = new Set(parkedRows.map((p) => p.id));
     for (const id of this.parkProbeAt.keys()) if (!parkedIds.has(id)) this.parkProbeAt.delete(id);
     // The busy-shadow log's memory keeps only deliveries still outstanding.
@@ -7279,7 +7331,7 @@ export class FleetWatcher {
       const row = store.delivery(loggedId);
       if (row === null || (TERMINAL_DELIVERY_STATES as readonly string[]).includes(row.state)) this.busyShadowLogged.delete(loggedId);
     }
-    if (unacked.length === 0 && dueBefore.length === 0 && parkedRows.length === 0) return;
+    if (unacked.length === 0 && dueBefore.length === 0 && parkedRows.length === 0 && briefs.length === 0) return;
     // Fix — blocking review findings 1/5: `readRegistry`'s OLD signature
     // collapses a whole-fleet `io.readdir` failure to `[]` — the SAME shape
     // "this recipient is not in the registry" wears below (`rec ===
@@ -7403,6 +7455,10 @@ export class FleetWatcher {
         else if (seen === 'changed' && store.wakeParked(p.id, now)) woke = true;
       }
     }
+
+    // D-5841: the brief pass. It only writes the two run-event rows, the notice
+    // mail and D1's `wakeParked`; the woken row goes through every gate below.
+    if (this.sweepBriefs(store, briefs, now, sessionProjects, projects)) woke = true;
 
     // A row the ceiling rejected above may still sit in `dueBefore`: re-read.
     const due = unacked.length === 0 && !woke && !ceilinged ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS);

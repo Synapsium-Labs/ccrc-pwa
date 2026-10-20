@@ -7489,3 +7489,35 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(writersOf('mail-disabled')).toEqual([]);
   });
 });
+
+// D-5841 (D3, #755; plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Durability). APPENDED. The
+// brief watch has ONE home: its two timers, its decider and the wave brief's subject are defined in
+// `server/src/coord/briefwatch.ts` alone, and the subject is spelled on no other source code line, so `dispatchRun`'s
+// brief and the pass that looks for it cannot drift apart. Code lines only (`stallCode`).
+describe('the brief watch is defined once (D-5841)', () => {
+  const holders = (re: RegExp): string[] =>
+    ALL.filter((f) => rel(f).startsWith('server/src/') && re.test(stallCode(f))).map(rel).sort();
+  const defines = (name: string): RegExp =>
+    new RegExp(`\\bfunction\\s+${name}\\b|\\b(?:const|let|var)\\s+${name}\\s*=`);
+  const HOME = 'server/src/coord/briefwatch.ts';
+
+  it('CONTROL: the patterns see a definition and pass over comment lines', () => {
+    expect(defines('briefStep').test('export function briefStep(b: B, now: number): BriefStep {')).toBe(true);
+    expect(stallCodeText("// the subject is 'wave-brief'\nconst x = 1;")).not.toMatch(/'wave-brief'/);
+  });
+
+  it('the two timers are 5 and 10 minutes, defined in briefwatch.ts alone', () => {
+    const src = stallCode(path.join(ccrcRoot, HOME));
+    expect(src).toMatch(/export const BRIEF_RETRY_MS = 5 \* 60_000;/);
+    expect(src).toMatch(/export const BRIEF_NOTICE_MS = 10 \* 60_000;/);
+    for (const name of ['BRIEF_RETRY_MS', 'BRIEF_NOTICE_MS', 'BRIEF_RETRY_DETAIL', 'BRIEF_NOTICE_DETAIL',
+      'WAVE_BRIEF_SUBJECT', 'briefStep', 'briefNotTakenSubject', 'briefNotTakenTag']) {
+      expect(holders(defines(name)), name).toEqual([HOME]);
+    }
+  });
+
+  it("the wave brief's subject is spelled on one source code line", () => {
+    expect(holders(/['"]wave-brief['"]/)).toEqual([HOME]);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/coord/dispatch.ts'))).toMatch(/subject: WAVE_BRIEF_SUBJECT\b/);
+  });
+});

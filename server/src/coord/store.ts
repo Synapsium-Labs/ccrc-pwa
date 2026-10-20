@@ -60,6 +60,7 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
+import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
 import {
   DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
@@ -5669,6 +5670,30 @@ export class CoordStore {
       `FROM mail_deliveries WHERE state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL ORDER BY id`,
     ).all() as unknown as { id: number; mailId: number; toId: string; parkedAt: number; parkReason: string | null;
                             parkBox: string | null; parkEscalatedAt: number | null; nextAttemptAt: number }[];
+  }
+
+  /** Every UNLANDED wave brief of an ACTIVE run (D-5841, #755), for the mail
+   *  sweep's brief pass: the brief's LATEST delivery has no `ingestedAt` and is
+   *  not `acked`, it was queued at or after `since`, and its run carries no
+   *  `brief-not-taken` row yet. `retried` is whether the run carries its
+   *  `brief-retry` row. A read only; the pass's writes are its own. */
+  unlandedBriefs(since: number): UnlandedBrief[] {
+    const rows = this.db.prepare(
+      'SELECT r.id AS runId, r.program AS program, r.wave AS wave, r.waveOf AS waveOf, ' +
+      'd.id AS deliveryId, m.id AS mailId, d.toId AS toId, m.at AS queuedAt, d.state AS state, ' +
+      'd.deliveredAt AS deliveredAt, d.parkedAt AS parkedAt, d.parkReason AS parkReason, ' +
+      'd.lastGate AS lastGate, d.lastError AS lastError, ' +
+      'EXISTS (SELECT 1 FROM run_events e WHERE e.runId = r.id AND e.detail = ?) AS retried ' +
+      'FROM mail m JOIN runs r ON r.id = m.runId ' +
+      'JOIN mail_deliveries d ON d.id = (SELECT MAX(x.id) FROM mail_deliveries x WHERE x.mailId = m.id) ' +
+      "WHERE m.fromId = 'coordinator' AND m.subject = ? AND m.at >= ? " +
+      `AND r.state NOT IN ${INACTIVE_RUN_STATES_SQL} ` +
+      "AND d.ingestedAt IS NULL AND d.state != 'acked' " +
+      'AND NOT EXISTS (SELECT 1 FROM run_events e WHERE e.runId = r.id AND e.detail = ?) ' +
+      'ORDER BY r.id',
+    ).all(BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, since, BRIEF_NOTICE_DETAIL) as unknown as
+      (Omit<UnlandedBrief, 'retried'> & { retried: number })[];
+    return rows.map((r) => ({ ...r, retried: Number(r.retried) === 1 }));
   }
 
   recordRejection(r: { code: MailRejectCode; fromId?: string; fromUuid?: string; toId?: string;
