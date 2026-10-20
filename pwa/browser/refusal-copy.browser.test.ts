@@ -190,7 +190,7 @@ describe('D-5972: registry-unmeasurable at 502 is drawn by its word on all four 
         // AbandonSheet and ResumeSheet, off the run row.
         await page.goto(`${server!.origin}/runs`);
         await page.getByRole('button', { name: `Abandon run ${RUN_ID}` }).click();
-        await page.locator('.sheet-body').getByRole('button', { name: 'Abandon', exact: true }).click();
+        await page.locator('.sheet-footer').getByRole('button', { name: 'Abandon', exact: true }).click();
         await page.locator('.sheet-body .abandon-error').waitFor();
         const abandon = await measure(page, '.sheet-body', '.abandon-error');
         expect.soft(abandon.text, 'abandon: the sheet prefixes nothing it does not own').toContain(ABANDON_COPY['registry-unmeasurable']);

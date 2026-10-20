@@ -10,6 +10,8 @@
  * later swap of the parser touches this file alone.
  *
  * Syntax only, no type checker: import-edge and symbol rules do not need one.
+ * D-5854 (Task C0g; ARCH-06 (#554)) adds `calls` and `bindings`, which `scan/symbols.ts` (`callsIn`) and the literal
+ * source-pin ratchet (`single-definition.test.ts`, the ARCH-40 describe) read, so neither imports the parser.
  * KNOWN WIDTH: a file that does not parse yields what the parser recovered (no throw); a computed member name, an
  * object-literal method and a function bound through `as`, a call or parentheses are not symbols; an alias exported
  * by a later `export { X }` is not an exported type alias; `require(…)` calls are not import edges.
@@ -17,10 +19,12 @@
 import { readFileSync } from 'node:fs';
 import ts from 'typescript-api';
 
-/** One module edge: an `import`, an `export … from`, an `import x = require(…)` or a literal `import(…)`. */
+/** One module edge: an `import`, an `export … from`, an `import x = require(…)`, a literal `import(…)` or a type
+ *  query `import('…').T` / `typeof import('…')`, always type-only (D-6045: ARCH-04's ring rules see a type reached
+ *  that way as they see an `import type`). */
 export interface ImportEdge {
   specifier: string;
-  kind: 'import' | 'export-from' | 'import-equals' | 'dynamic';
+  kind: 'import' | 'export-from' | 'import-equals' | 'dynamic' | 'type-query';
   /** `import type …`, `export type … from`, `import type x = require(…)`. A per-name `type` leaves this false. */
   typeOnly: boolean;
   /** The bound names: `default` as its local name, a namespace as `* as x`, named ones by their imported name. */
@@ -51,12 +55,53 @@ export interface SymbolSpan {
   endLine: number;
 }
 
+/** One argument of a call: a string (a plain or no-substitution template literal, by its value), a regex literal (by
+ *  its source text, slashes and flags included), or anything else (by its source text). */
+export interface CallArg {
+  kind: 'string' | 'regex' | 'other';
+  text: string;
+}
+
+/** A call expression (`f(…)`, `a.b(…)`, `expect(x).not.toContain(…)`; not `new`, not `import(…)`), in source order.
+ *  `callee` is the callee's text with each line break and its indentation removed; `name` its rightmost identifier
+ *  (`null` for an element access or a call of a call); `head` the leftmost identifier of its chain (`src` for
+ *  `src.slice(1).indexOf`, `expect` for `expect(a).not.toContain`); `headArgs` the argument texts when that head is
+ *  itself called (`expect(a, 'm')` → `['a', "'m'"]`), else `null`. `boundTo` is the `const|let|var` the call
+ *  initialises, through any wrapping expression but never through a function, block or statement. */
+export interface CallSite {
+  callee: string;
+  name: string | null;
+  head: string | null;
+  headArgs: string[] | null;
+  args: CallArg[];
+  boundTo: string | null;
+  start: number;
+  end: number;
+  line: number;
+}
+
+/** A `const|let|var` with a plain identifier name and an initialiser (`init` its source text, starting at offset
+ *  `initStart`), in source order. `scopeStart`/`scopeEnd` span the block, loop, function or file it is declared in, so
+ *  a name used at an offset resolves to the innermost binding whose scope holds it. */
+export interface Binding {
+  name: string;
+  init: string;
+  initStart: number;
+  start: number;
+  end: number;
+  line: number;
+  scopeStart: number;
+  scopeEnd: number;
+}
+
 export interface ParsedFile {
   path: string;
   text: string;
   imports: ImportEdge[];
   exportedTypeAliases: TypeAlias[];
   symbols: SymbolSpan[];
+  calls: CallSite[];
+  bindings: Binding[];
 }
 
 const scriptKindOf = (file: string): ts.ScriptKind =>
@@ -98,6 +143,39 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
   const imports: ImportEdge[] = [];
   const exportedTypeAliases: TypeAlias[] = [];
   const symbols: SymbolSpan[] = [];
+  const calls: CallSite[] = [];
+  const bindings: Binding[] = [];
+  const flat = (n: ts.Node): string => n.getText(sf).replace(/\r?\n[ \t]*/g, '');
+
+  const addCall = (node: ts.CallExpression): void => {
+    const callee = node.expression;
+    const name = ts.isIdentifier(callee) ? callee.text
+      : ts.isPropertyAccessExpression(callee) ? callee.name.text : null;
+    let h: ts.Expression = callee;
+    let headArgs: string[] | null = null;
+    for (;;) {
+      if (ts.isPropertyAccessExpression(h) || ts.isElementAccessExpression(h) || ts.isNonNullExpression(h)
+        || ts.isParenthesizedExpression(h)) { h = h.expression; continue; }
+      if (ts.isCallExpression(h)) {
+        if (ts.isIdentifier(h.expression)) headArgs = h.arguments.map(flat);
+        h = h.expression; continue;
+      }
+      break;
+    }
+    const head = ts.isIdentifier(h) ? h.text : h.kind === ts.SyntaxKind.ThisKeyword ? 'this' : null;
+    if (head === null) headArgs = null;
+    let boundTo: string | null = null;
+    for (let p: ts.Node = node.parent; ; p = p.parent) {
+      if (ts.isVariableDeclaration(p)) { boundTo = nameText(p.name); break; }
+      if (ts.isFunctionLike(p) || ts.isBlock(p) || ts.isSourceFile(p) || ts.isExpressionStatement(p)
+        || ts.isReturnStatement(p) || ts.isClassLike(p) || ts.isPropertyDeclaration(p)) break;
+    }
+    const args: CallArg[] = node.arguments.map((a) => ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a)
+      ? { kind: 'string' as const, text: a.text }
+      : ts.isRegularExpressionLiteral(a) ? { kind: 'regex' as const, text: a.text } : { kind: 'other' as const, text: flat(a) });
+    const start = node.getStart(sf);
+    calls.push({ callee: flat(callee), name, head, headArgs, args, boundTo, start, end: node.end, line: lineOf(start) });
+  };
 
   const addSymbol = (name: string, kind: SymbolKind, node: ts.Node): void => {
     const start = node.getStart(sf);
@@ -137,6 +215,21 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
       if (a && ts.isStringLiteralLike(a)) {
         imports.push({ specifier: a.text, kind: 'dynamic', typeOnly: false, names: [], line: lineOf(node.getStart(sf)) });
       }
+    } else if (ts.isCallExpression(node)) addCall(node);
+    if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.name)) {
+      const start = node.getStart(sf);
+      let sc: ts.Node = node.parent;
+      while (!(ts.isBlock(sc) || ts.isSourceFile(sc) || ts.isModuleBlock(sc) || ts.isCaseBlock(sc) || ts.isForStatement(sc)
+        || ts.isForOfStatement(sc) || ts.isForInStatement(sc) || ts.isFunctionLike(sc))) sc = sc.parent;
+      bindings.push({ name: node.name.text, init: node.initializer.getText(sf), initStart: node.initializer.getStart(sf),
+        start, end: node.end, line: lineOf(start), scopeStart: sc.getStart(sf), scopeEnd: sc.end });
+    }
+    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
+      // The qualifier's first name (`FastifyReply` in `import('fastify').FastifyReply`); none for `typeof import(…)`.
+      let q: ts.EntityName | undefined = node.qualifier;
+      while (q && ts.isQualifiedName(q)) q = q.left;
+      imports.push({ specifier: node.argument.literal.text, kind: 'type-query', typeOnly: true,
+        names: q ? [q.text] : [], line: lineOf(node.getStart(sf)) });
     }
     if (ts.isFunctionDeclaration(node) && node.name) {
       addSymbol(q(node.name.text), 'function', node);
@@ -181,8 +274,10 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
   };
   visit(sf, []);
   imports.sort((a, b) => a.line - b.line);
+  calls.sort((a, b) => a.start - b.start);
+  bindings.sort((a, b) => a.start - b.start);
 
-  return { path: fileName, text, imports, exportedTypeAliases, symbols };
+  return { path: fileName, text, imports, exportedTypeAliases, symbols, calls, bindings };
 }
 
 /** Read and parse one file. */

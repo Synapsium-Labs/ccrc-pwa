@@ -773,7 +773,7 @@ describe('SessionScreen overflow menu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
     // The archive confirm is the danger variant now (D-5099); its hook class follows (D-5449).
-    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-danger')!);
+    fireEvent.click(document.querySelector('.sheet-footer .btn-danger')!);
     await waitFor(() => expect(archive).toHaveBeenCalledWith(fleetSession().id, {}));
     expect(stop).not.toHaveBeenCalled();
   });

@@ -1,4 +1,4 @@
-import type { ExecResult, Runner } from '../exec.js';
+import type { ExecResult, NotRanReason, Runner } from '../exec.js';
 import type { FleetClient } from './client.js';
 
 /**
@@ -116,7 +116,7 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // case exactly — hence the same number rather than a guess.
   start: 300_000,
   enable: 300_000,
-  // `cmd_swap` stops the supervisor unit (ccd/ccd:13722) and kills the tmux
+  // `cmd_swap` stops the supervisor unit (ccd/ccd#cmd_swap) and kills the tmux
   // pane (:13723) BEFORE it flips the registry's `wrapper` (:13817). A kill
   // inside that window leaves a session that is not running, a registry that
   // still names the old account, and NO marker of either: no `swapblocked`, no
@@ -229,7 +229,24 @@ export function createRunner(client: FleetClient): Runner {
       // on was never uniqueness — it is that omitting BOTH lands on
       // `UNMEASURED`, and it still does. Adding either field here would demote
       // this from "unknown" to "measured, and it refused cleanly".
-      return { code: 1, stdout: '', stderr: e instanceof Error ? e.message : String(e) };
+      //
+      // D-6034 (ARCH-10, #543): and the ARM says which of the three it is not. `ran: false` rides beside the forged
+      // `code: 1`, which stays, so every reader of `code` is unchanged; a refusal-classifying reader narrows on `ran`
+      // first. The agent DECLINING the request (`AgentOpError`: `forbidden`, `bad-request`) started nothing:
+      // `spawn`. This server's own wait expiring is `timeout`. Every other rejection is the link: `transport`.
+      const detail = e instanceof Error ? e.message : String(e);
+      return { code: 1, stdout: '', stderr: detail, ran: false, reason: notRanReason(e), detail };
     }
   };
+}
+
+/** D-6034: which `NotRanReason` a rejected `request()` is, read off the error's `name`: `client.ts` imports this
+ *  file, so an `instanceof` here would be an import cycle. `AgentOpError` (the agent declined) and `LinkNotSentError`
+ *  (a link failure before the send) name themselves; a plain `Error('timeout')` is the client's own wait, the one
+ *  word `register` rejects with for it. */
+function notRanReason(e: unknown): NotRanReason {
+  if (!(e instanceof Error)) return 'transport';
+  if (e.name === 'AgentOpError') return 'spawn';
+  if (e.name === 'Error' && e.message === 'timeout') return 'timeout';
+  return 'transport';
 }

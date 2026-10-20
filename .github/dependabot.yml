@@ -24,6 +24,10 @@ updates:
     directory: /server
     schedule:
       interval: weekly
+    # The test scanners' parser (D-5853) is an exact pin: a new version is a reviewed PR
+    # that edits it, never a grouped bump.
+    ignore:
+      - dependency-name: typescript-api
     open-pull-requests-limit: 5
     commit-message:
       prefix: chore(deps)

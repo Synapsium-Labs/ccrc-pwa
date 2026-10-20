@@ -1151,6 +1151,8 @@ describe('every stylesheet under src/ is audited', () => {
       'src/fleet/fleet.css',
       'src/screens/digest.css',   // the daily digest screen (D-5300)
       'src/session/chat.css',
+      'src/skins/instrument/instrument.css', // W2 Task S2b: header-only until S9
+      'src/skins/refined/refined.css',       // W2 Task S2b: header-only until S4b
       'src/styles/base.css',
       'src/styles/shell.css',
     ];
@@ -1159,8 +1161,20 @@ describe('every stylesheet under src/ is audited', () => {
     expect(report.sheets).toEqual(expected);
   });
 
-  it.each(stylesheets(ROOT))('parses rules out of %s', (rel) => {
+  // The skins' own sheets exist before they hold a rule (W2 Task S2b creates
+  // each with only its header, so the element guard has a sheet to find in
+  // each skin; S4b and S9 fill them). Exact, both ways: a listed sheet that
+  // gains a rule leaves this list, and is then held to the vacuity check.
+  const HEADER_ONLY = ['src/skins/instrument/instrument.css', 'src/skins/refined/refined.css'];
+
+  it.each(stylesheets(ROOT).filter((rel) => !HEADER_ONLY.includes(rel)))('parses rules out of %s', (rel) => {
     expect(rulesOf(ROOT, rel).length).toBeGreaterThan(0);
+  });
+
+  it.each(HEADER_ONLY)('%s is walked, holds its header comment and no rule yet', (rel) => {
+    expect(stylesheets(ROOT)).toContain(rel);
+    expect(rulesOf(ROOT, rel)).toEqual([]);
+    expect(readFileSync(path.join(ROOT, rel), 'utf8')).toMatch(/^\/\*[\s\S]*\*\/\s*$/);
   });
 
   it('finds a non-trivial number of rules and self-grounded pairs', () => {
