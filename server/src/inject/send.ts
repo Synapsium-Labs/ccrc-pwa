@@ -149,7 +149,30 @@ const SGR = /\x1b\[[0-9;]*m/g;                 // any ANSI colour/attr code
 // starts with `0` (a reset, bare or combined) via a negative lookahead, so a
 // reset — combined or not — always ends the span instead of being absorbed
 // by it, and the terminator itself accepts the combined form.
-const DIM_SPAN = /\x1b\[2m(?:\x1b\[(?!0[;m])[0-9;]*m|[^\x1b])*?\x1b\[0[0-9;]*m/g;
+//
+// D-5910: every dim ENCODING is a dim run, not only the bare `\e[2m…\e[0m` pair
+// (corpus `test/fixtures/panes/box/`, held by `send-box-corpus.test.ts`). The
+// open also takes a combined code that turns dim on with other attributes
+// (`\e[2;3m`), and one that resets first (`\e[0;2m`, D-6006: tmux writes any
+// attribute removal as a reset, so dim after a bold cell captures that way).
+// Its first parameters must be `0`, `1`, then `2`, so a truecolour `38;2;…`
+// is never read as dim. The close also takes the dim-off `\e[22m` (bare or
+// combined), which the interleaved alternative excludes for the same reason it
+// excludes a reset: a close must end the run, never be absorbed by it.
+//
+// D-6006, the same rule mid-run: when another attribute drops partway through
+// a dim run (an italic hint, a dim+inverse cursor cell, bold-dim then dim),
+// tmux writes the drop as a reset that turns dim straight back on
+// (`\e[0;2m`, `\e[0;1;2m`). That code continues the run; it never closes it.
+// `undim` first rewrites it to a bare `\e[2m`, which opens a run outside one and
+// is absorbed as an interleaved code inside one, so DIM_SPAN itself needs no
+// lookahead for it. A reset that keeps dim off (`\e[0;22m`) is not matched:
+// the `2` must be followed by `;` or `m`. The interleaved code needs a digit, so
+// a parameterless reset `\e[m` is a close, as it is in ccd.
+const DIM_REOPEN = /\x1b\[0;(?:1;)?2(?:;[0-9;]*)?m/g;
+const DIM_SPAN = /\x1b\[(?:0;)?(?:1;)?2(?:;[0-9;]*)?m(?:\x1b\[(?!0[;m]|22[;m])[0-9][0-9;]*m|[^\x1b])*?\x1b\[(?:0[0-9;]*|22(?:;[0-9;]*)?)?m/g;
+/** A line with every dim run removed (SGR elsewhere left in place). */
+const undim = (line: string): string => line.replace(DIM_REOPEN, '\x1b[2m').replace(DIM_SPAN, '');
 
 /**
  * Text the user actually typed into the live input box, trimmed; '' when empty.
@@ -183,7 +206,7 @@ export type BoxRead =
 export const draftOfMeasured = (ansiPane: string): BoxRead => {
   const boxLine = ansiPane.split('\n').filter((l) => l.replace(SGR, '').startsWith('❯')).at(-1);
   if (boxLine === undefined) return { box: 'absent' };
-  return { box: 'present', draft: boxLine.replace(DIM_SPAN, '').replace(SGR, '').slice(1).trim() };
+  return { box: 'present', draft: undim(boxLine).replace(SGR, '').slice(1).trim() };
 };
 
 /**
@@ -657,9 +680,9 @@ function boxRows(ansiPane: string): string[] | null {
   let marker = -1;
   for (let i = 0; i < lines.length; i++) if (lines[i]!.replace(SGR, '').startsWith('❯')) marker = i;
   if (marker === -1) return null;
-  const rows = [lines[marker]!.replace(DIM_SPAN, '').replace(SGR, '').slice(1).trim()];
+  const rows = [undim(lines[marker]!).replace(SGR, '').slice(1).trim()];
   for (let i = marker + 1; i < lines.length; i++) {
-    const row = lines[i]!.replace(DIM_SPAN, '').replace(SGR, '');
+    const row = undim(lines[i]!).replace(SGR, '');
     if (isRuleRow(row)) return rows;
     rows.push(row.trim());
   }
@@ -1313,7 +1336,7 @@ function continuationRows(ansiPane: string): string[] {
   if (markerIdx === -1) return [];
   const rows: string[] = [];
   for (let i = markerIdx + 1; i < lines.length; i++) {
-    const stripped = lines[i]!.replace(DIM_SPAN, '').replace(SGR, '');
+    const stripped = undim(lines[i]!).replace(SGR, '');
     if (isRuleRow(stripped)) break;
     if (stripped.trim() !== '') rows.push(stripped.trim());
   }
