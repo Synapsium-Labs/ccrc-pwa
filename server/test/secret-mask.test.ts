@@ -942,6 +942,13 @@ describe('the rulings: the drawer echoes at once and never masks ordinary text f
     const { m } = maskerOver(() => TOKEN_1, [CMP]);
     const long = 'x'.repeat(CMP.length + 40);
     expect(typeSlowly(m, long).shown).toBe(`$ ${long}\n$`);
+    // and before the run ends: once it is longer than every fingerprinted length, it is drawn as typed
+    vi.useFakeTimers();
+    const out: string[] = [];
+    const d = m.drawer((t) => out.push(t));
+    for (const ch of long) { d.push(ch); vi.advanceTimersByTime(30); }
+    expect(screen(out.join(''))).toBe(long);
+    d.dispose();
     m.close();
   });
 });
