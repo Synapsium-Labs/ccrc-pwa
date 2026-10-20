@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   boundRow, checksFor, draftPr, isFullLine, isMergedRow, parsePrLines, phaseFor,
-  prView, unknownView,
+  prView, sweepFailureReason, unknownView,
   type CcdPrLine, type CcdPrRow,
 } from '../src/prstate.js';
-import type { TaskItem } from '../../shared/api.js';
+import { UNMEASURED } from '../src/unmeasured.js';
+import type { CcdResult } from '../src/coord/ports.js';
+import type { PrReason, TaskItem } from '../../shared/api.js';
 
 const row = (over: Partial<CcdPrRow> = {}): CcdPrRow => ({
   number: 42, state: 'MERGED', headRefName: 'ws/quiet-basin', headRefOid: 'deadbee',
@@ -458,5 +460,20 @@ describe('draftPr composition — exact title and body', () => {
     // M50: dropping `commits.length > 0` would render "## Commits" with
     // nothing under it.
     expect(draftPr(line({ commits: [] }), null).body).not.toContain('## Commits');
+  });
+});
+
+describe('sweepFailureReason (landing-order wave 3c)', () => {
+  const base = { ok: false as const, stdout: '', stderr: '' };
+  const rows: [string, CcdResult, PrReason][] = [
+    ['the agent killed it', { ...base, killed: true, signal: 'SIGTERM' }, 'cut-short'],
+    ["the server's own wait ran out", { ...base, killed: UNMEASURED, signal: UNMEASURED, ran: false, reason: 'timeout', detail: 'timeout' }, 'cut-short'],
+    ['the link dropped', { ...base, killed: UNMEASURED, signal: UNMEASURED, ran: false, reason: 'transport', detail: 'disconnected' }, 'agent-down'],
+    ['the agent declined it', { ...base, killed: UNMEASURED, signal: UNMEASURED, ran: false, reason: 'spawn', detail: 'x' }, 'agent-down'],
+    ['ccd exited non-zero by itself', { ...base, killed: false, signal: null }, 'agent-down'],
+    ['an older agent measured nothing', { ...base, killed: UNMEASURED, signal: UNMEASURED }, 'agent-down'],
+  ];
+  it.each(rows)('%s', (_what, res, want) => {
+    expect(sweepFailureReason(res)).toBe(want);
   });
 });

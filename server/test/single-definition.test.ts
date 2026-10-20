@@ -163,7 +163,7 @@ describe('integration finding 7 — one reason vocabulary', () => {
     // impossible to construct, and that is the point being recorded. The
     // literal count is the ONE thing here that a new member touches,
     // deliberately: it is what makes adding one a decision.
-    expect(PR_REASONS).toHaveLength(12);
+    expect(PR_REASONS).toHaveLength(13);
     expect(new Set(PR_REASONS).size).toBe(PR_REASONS.length);
     for (const r of PR_REASONS) expect(isPrReason(r), r).toBe(true);
     expect(isPrReason('not-a-reason')).toBe(false);

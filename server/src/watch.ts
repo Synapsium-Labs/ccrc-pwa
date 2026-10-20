@@ -8,13 +8,14 @@ import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
 } from './pools.js';
+import type { CcdResult } from './coord/ports.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, EXPIRE_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, capSupported, verbSupported, sweepDec } from './ccdargv.js';
 import {
-  isFullLine, parsePrLines, phaseFor, queueFor, repoCellFor, type CcdPrFailure, type PrQueueRead,
+  isFullLine, parsePrLines, phaseFor, queueFor, repoCellFor, sweepFailureReason, type CcdPrFailure, type PrQueueRead,
 } from './prstate.js';
 import { readLiveState, readLiveStateMeasured } from './livestate.js';
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
@@ -819,6 +820,12 @@ function mergeBreakerMembers(
  *  without `recordAlways` had no caller and is not a type. */
 type PushOneMode = { recordOnly?: false | undefined } | { recordAlways: true; recordOnly: true };
 
+/** What a failed `pr-state` call says for itself, for the one log line `backoffPr` writes: the not-ran arm's detail, else
+ *  the first line of ccd's stderr, cut to 160 characters. */
+function failureDetail(res: CcdResult): string {
+  return (res.ran === false ? res.detail : res.stderr.split('\n')[0] ?? '').slice(0, 160);
+}
+
 export class FleetWatcher {
   private timer: NodeJS.Timeout | null = null;
   private lastJson: string | null = null;
@@ -999,6 +1006,9 @@ export class FleetWatcher {
   /** Per-PROJECT backoff after a failed read: one repo failing must not slow
    *  or silence the other seven. */
   private prBackoff = new Map<string, { until: number; step: number }>();
+  /** The reason a project's last failed sweep was logged with, until a sweep succeeds: the latch behind `backoffPr`'s
+   *  one line per change and the success arm's `recovered`. */
+  private readonly prSweepFailure = new Map<string, PrState['reason']>();
   private lastPrSweep = 0;
   /** The fourth lane's clock. Starts at 0 so the first tick after start
    *  always refreshes — which is what recovers a server that connected to an
@@ -8151,7 +8161,7 @@ export class FleetWatcher {
           continue;
         }
         const res = await this.deps.runCcd(argv);
-        if (!res.ok) { this.backoffPr(project, now, 'agent-down', records); continue; }
+        if (!res.ok) { this.backoffPr(project, now, sweepFailureReason(res), records, failureDetail(res)); continue; }
         const lines = parsePrLines(res.stdout);
         // A WHOLE-REPO failure — the id-less shape, emitted by `_gh_repo_slug`,
         // `_gh_pr_list`, and `_pr_py` for an unparseable rc-0 body — really
@@ -8187,6 +8197,7 @@ export class FleetWatcher {
           continue;
         }
         this.prBackoff.delete(project);
+        if (this.prSweepFailure.delete(project)) console.warn(`ccrc-server: PR sweep of ${project} recovered`);
         for (const line of lines) {
           if (!isFullLine(line)) {
             // Greyed alone, and NEVER passed to phaseFor: it has no `rows`, so
@@ -8253,7 +8264,7 @@ export class FleetWatcher {
   /** A failed read never overwrites a good phase — only greys it — and an
    *  unauthenticated lane jumps straight to the ceiling, because retrying a
    *  revoked token every two minutes buys nothing. */
-  private backoffPr(project: string, now: number, reason: PrState['reason'], records: SessionRecord[]): void {
+  private backoffPr(project: string, now: number, reason: PrState['reason'], records: SessionRecord[], detail = ''): void {
     const prev = this.prBackoff.get(project);
     const step = reason === 'unauthenticated' || reason === 'rate-limit'
       ? PR_BACKOFF_MAX_MS
@@ -8265,6 +8276,12 @@ export class FleetWatcher {
       // retry time, and a 15-minute flat backoff with neither is indistinguishable
       // from a cap that has simply stopped working.
       this.prStates.set(r.id, { ...keep, phase: 'unknown', reason, retryAt: now + step });
+    }
+    // Said once per change (landing-order wave 3c): a blind lane used to be invisible, every pass backing off as
+    // `agent-down` with nothing in the journal. The latch is the reason, so a new reason speaks and a repeat does not.
+    if (this.prSweepFailure.get(project) !== reason) {
+      console.warn(`ccrc-server: PR sweep of ${project} failed (${reason}${detail ? `: ${detail}` : ''}); retrying in ${Math.round(step / 1000)}s`);
+      this.prSweepFailure.set(project, reason);
     }
   }
 
