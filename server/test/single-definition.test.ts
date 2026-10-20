@@ -7865,7 +7865,9 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   const literalSourcePins = (text: string, file = 'probe.ts'): SourcePin[] => {
     // D-6111: every target below comes from `namesW1aFile` over a substring of `text`, and it answers nothing unless
     // that substring spells a W1a basename, so a text that spells none has no pin and is not parsed. Parsing all of
-    // server/test took 9.9 s of the 20 s Linux budget untraced, and timed out under the map's trace.
+    // server/test took 9.9 s of the 20 s Linux budget untraced, and timed out under the map's trace. KNOWN WIDTH: a
+    // template that splits a basename across lines is joined by `flat` before `namesW1aFile` reads it, so this raw-text
+    // check would miss it; no such pin exists (the counts with and without this check were measured equal).
     if (!W1A_FILES.some((f) => text.includes(path.basename(f)))) return [];
     pinParses += 1;
     const p = parseSource(text, file);

@@ -20,8 +20,9 @@ tracing has newly perturbed. The file passes in the normal suite.
 - In CI's own untraced Linux run (artifact `times-5` of run 39463359525), one case, `literal source pins over W1a's
   files may only shrink (D-5854)`, takes **9.9 s**. Every other case in the file takes at most 1.2 s. Linux's
   `testTimeout` is 20 s, and strace costs 1.7-4.3x (the trace shard's own header). With two traced vitest processes
-  sharing a runner, that case lands on either side of 20 s. This also explains why the "newly fails" file changes from
-  run to run.
+  sharing a runner, that case lands on either side of 20 s. This explains single-definition only. It does not explain
+  why other files have also newly failed under trace on main: two of them (citations, secret-mask) have no case near
+  the budget (see the follow-ups).
 - The case's time goes into `literalSourcePinCounts`, which parses every one of the 981 `server/test/*.ts` files with
   the TypeScript parser. Only 167 of them spell a W1a file's basename, and only those can hold a pin.
 - Reproduced on Linux under the exact strace argv `trace-run.mjs` uses, with the container throttled to 0.5 CPU to
@@ -64,7 +65,8 @@ These ran on a git-archive copy of the branch. Each mutant is caught by at least
 From `server/`: `vitest run test/single-definition.test.ts --maxWorkers=2`, plus the doc suites (deviation-refs,
 dtbd, topology-clean, docs-grammar), `citations.test.ts`, `tsc --noEmit` and `typecheck-tests.test.ts`. Then run the file once under
 `trace-run.mjs`'s strace argv on Linux. After the merge, the next `map-build` on main must no longer name
-single-definition. Other flaky files may still trip exit 3 (see the follow-ups).
+single-definition. **`map-build` is expected to keep going red after D-6111** whenever one of the other flaky files
+below newly fails under trace: this task fixes single-definition's cause, not theirs.
 
 ## Follow-ups (measured, not fixed here)
 
@@ -77,9 +79,18 @@ single-definition. Other flaky files may still trip exit 3 (see the follow-ups).
     discards stdio, so their cause cannot be read from CI.
 - **trace-run should keep the tail of a failed run's output** in the record's `why`, or as an artifact. Without it,
   every "newly fails" needs a local Linux replay like this one.
-- **Other files have also flaked into exit 3 under trace on main**: boot and secret-mask, update-spawn and citations,
-  session-hook-approval-wait and ccd-ws-*. Each may need the same treatment: measure the slowest case against the
-  20 s budget under strace.
+- **Other files have also flaked into exit 3 under trace on main** (runs 39454270698, 39445580416, 39437225576). By
+  their slowest case in CI's untraced times (artifact of run 39463359525), they split in two:
+  - (a) Timeout-shaped, slowest case about 4-8.5 s untraced: update-spawn, ccd-ws-audit, ccd-workspaces and
+    session-hook-approval-wait (4.3 s). The same mechanism as single-definition can apply.
+  - (b) Not a timeout, cause unknown: citations (slowest case 0.2 s) and secret-mask (0.7 s). boot's 3.1 s case is
+    borderline. For citations, check the git and merge-base dependence of its added-lines rule under the trace
+    checkout.
+- **The traced budget does not scale.** `vitest.config.ts` keeps `testTimeout` and `hookTimeout` at 20 s on Linux even
+  when trace-run sets `CCRC_TRACING=1`, although strace slows every case 1.7-4.3x. Every case that takes about 5 s or
+  more untraced is a candidate for exit 3. Scaling the timeouts when `CCRC_TRACING=1` (or passing `--testTimeout` from
+  trace-run) would cover group (a); trace-run's own 1560 s per-file timeout still bounds hangs, and the normal suite is
+  unaffected.
 - **The leak check on PR runs (D-3533)**: ccd-swap's swap-heartbeat cases leave a `sleep 20`, and ci-shards' nested
   `times` vitest shares the parent's test-run temp root, so it names the parent shard's processes. These are separate
   tasks.
