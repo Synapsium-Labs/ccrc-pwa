@@ -761,6 +761,26 @@ function ensurePlainDir(out, rel) {
   }
 }
 
+/** Check-only walk of a run name's parent directories (D-5986): every EXISTING segment of dirname(`name`) under `out`
+ *  must lstat as a directory (a link, dangling or not, or any other type refuses `out-refused`
+ *  `<path so far> is not a directory`); a missing segment ends the walk, since nothing below it can exist. It makes
+ *  nothing. Run it before any path under the name is read, listed, charged or removed, because O_NOFOLLOW protects only
+ *  the last component of a path.
+ *  @param {string} out  @param {string} name */
+function refuseLinkedDirs(out, name) {
+  const dir = path.dirname(name);
+  if (dir === '.') return;
+  let cur = out;
+  let sofar = '';
+  for (const seg of dir.split('/')) {
+    cur = path.join(cur, seg);
+    sofar = sofar === '' ? seg : `${sofar}/${seg}`;
+    const st = lstatOrNull(cur);
+    if (st === null) return;
+    if (!st.isDirectory()) refuse('out-refused', `${sofar} is not a directory`);
+  }
+}
+
 /** The spend ledger's file name under --out. */
 export const SPEND_LEDGER = 'spend.jsonl';
 /** A ledger line's keys, sorted as canonicalJson writes them. */
@@ -1078,6 +1098,7 @@ function lstatOrNull(p) {
  *  @param {string} out  @param {string} name  @param {typeof liveness} live */
 function settleLeftover(out, name, live) {
   const { partPath, pidPath } = runPaths(out, name);
+  refuseLinkedDirs(out, name);   // D-5986: before any path under the name is touched
   const part = lstatOrNull(partPath);
   const pid = lstatOrNull(pidPath);
   if (part !== null && !part.isFile()) refuse('out-refused', `run-stream-invalid ${name}`);
@@ -1250,6 +1271,7 @@ function requireClaim(who, opts, outs) {
  *  refuses: a resumed batch builds on what was recorded, and only for the job that recorded it. */
 function finishedOutcome(job) {
   const { streamPath, runJsonPath } = runPaths(job.out, job.name);
+  refuseLinkedDirs(job.out, job.name);   // D-5986: before run.json or the stream is read
   const runJson = readPlain(runJsonPath, OUT_JSON_CAP);   // D-5986: a FIFO or a link there refuses, never blocks or follows
   if (runJson.state === 'absent') return null;
   if (runJson.state === 'bad') refuse('out-refused', `run-json-unreadable ${job.name} ${badWord(runJson)}`);
@@ -1431,6 +1453,7 @@ export async function runBatch(jobs, opts = {}) {
   const gate = opts.gate;
   for (const job of jobs) {
     const { runJsonPath } = runPaths(job.out, job.name);
+    refuseLinkedDirs(job.out, job.name);   // D-5986: before the run.json lstat or the settle go through a link
     let hasRunJson = true;
     try { lstatSync(runJsonPath); } catch (e) { hasRunJson = e?.code !== 'ENOENT'; }
     if (!hasRunJson) settleLeftover(job.out, job.name, liveNow);

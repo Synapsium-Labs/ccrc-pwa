@@ -2071,8 +2071,8 @@ describe('fix round 1 (D-5986): no-follow, type-checked I/O under --out', () => 
     const cases: Array<[string, string, (p: string, outside: string) => void, string]> = [
       ['a symlink to a directory', 'sub/run-0', (p, o) => symlinkSync(o, p), 'sub is not a directory'],
       ['a dangling symlink', 'sub/run-0', (p, o) => symlinkSync(path.join(o, 'nothing-here'), p), 'sub is not a directory'],
-      // A file in the directory's place: the resume read of run.json meets ENOTDIR first, still out-refused and still before any spawn.
-      ['a file', 'sub/run-0', (p) => writeFileSync(p, 'not a directory'), 'run-json-unreadable sub/run-0 ENOTDIR'],
+      // A file in the directory's place: the check-only walk of the name's parents answers first, still out-refused and still before any spawn.
+      ['a file', 'sub/run-0', (p) => writeFileSync(p, 'not a directory'), 'sub is not a directory'],
     ];
     for (const [label, name, plant, detail] of cases) {
       const b = t5Box('ccrc-replay-d5986-subdir-');
@@ -2095,6 +2095,36 @@ describe('fix round 1 (D-5986): no-follow, type-checked I/O under --out', () => 
     await claimedRun(t5job(ok, ok.up, 'box', 'deep/er/run-2'));
     expect(lstatSync(path.join(ok.out, 'deep', 'er')).isDirectory(), 'CONTROL: a nested name makes its real directories').toBe(true);
     expect(statSync(path.join(ok.out, 'deep')).mode & 0o777).toBe(0o700);
+  }, 60_000);
+
+  it('a run subdirectory that is a symlink to a directory HOLDING a matching leftover or finished run: the batch refuses out-refused before it reads, charges, removes or skips anything there', async () => {
+    // The check-only walk of a name's parents runs before the pre-pass settle and before finishedOutcome, because
+    // O_NOFOLLOW protects only the last component: an outside .part would be charged and deleted, and an outside
+    // finished run would resolve skipped with its cwd read from outside --out.
+    const part = t5Box('ccrc-replay-d5986-linked-part-');
+    const outsidePart = outsideDir();
+    writeFileSync(path.join(outsidePart, 'run-0.jsonl.part'), D6_STREAM);
+    symlinkSync(outsidePart, path.join(part.out, 'sub'));
+    const partJob = t5job(part, part.up, 'box', 'sub/run-0');
+    await expect(claimedBatch([partJob], { gate: T5_NO_GATE }), 'a leftover .part behind the link').rejects.toMatchObject({ word: 'out-refused', detail: 'sub is not a directory' });
+    expect(readFileSync(path.join(outsidePart, 'run-0.jsonl.part'), 'utf8'), 'the outside .part was not removed').toBe(D6_STREAM);
+    expect(replay.spentSoFar(part.out), 'and was not charged').toBe(0);
+    expect(stubLog(part.home), 'no spawn').toBeNull();
+
+    // A finished run made for the name 'sub/run-0' in a real run, then moved behind the link.
+    const done = t5Box('ccrc-replay-d5986-linked-done-');
+    const outsideDone = outsideDir();
+    await claimedRun(t5job(done, done.up, 'box', 'seed-0'));
+    const rec = JSON.parse(readFileSync(path.join(done.out, 'seed-0.run.json'), 'utf8'));
+    rec.name = 'sub/run-0';
+    writeFileSync(path.join(outsideDone, 'run-0.run.json'), JSON.stringify(rec) + '\n');
+    writeFileSync(path.join(outsideDone, 'run-0.jsonl'), readFileSync(path.join(done.out, 'seed-0.jsonl')));
+    symlinkSync(outsideDone, path.join(done.out, 'sub'));
+    const spawnsBefore = stubLog(done.home)?.length ?? 0;
+    const doneJob = t5job(done, done.up, 'box', 'sub/run-0');
+    await expect(claimedBatch([doneJob], { gate: T5_NO_GATE }), 'a finished run behind the link').rejects.toMatchObject({ word: 'out-refused', detail: 'sub is not a directory' });
+    await expect(claimedRun(doneJob), 'through launchRun').rejects.toMatchObject({ word: 'out-refused', detail: 'sub is not a directory' });
+    expect(stubLog(done.home)?.length ?? 0, 'no new spawn').toBe(spawnsBefore);
   }, 60_000);
 
   it('a run.json tmp, or a .pid tmp, planted as a symlink is refused out-refused and never written through', async () => {
