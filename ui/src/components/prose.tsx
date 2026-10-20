@@ -2,10 +2,10 @@
 //
 // A COMPOSITE WITH NO CHILDREN OF ITS OWN. It renders one element and imports
 // one stylesheet, which is unusual enough to say why: what makes prose prose
-// is seventy-six rules, not a tree. `MessageBubble` still owns the
-// `react-markdown` component map — WHICH element a token becomes is this app's
-// business, and how it LOOKS is this package's — so the only thing that needed
-// a home here was the look.
+// is rules — the seventy-six that moved, and the list markers since — not a
+// tree. `MessageBubble` still owns the `react-markdown` component map — WHICH
+// element a token becomes is this app's business, and how it LOOKS is this
+// package's — so the only thing that needed a home here was the look.
 //
 // IT IS NOT A `Well`. A well is a quoted surface with its own dark ground in
 // both themes; prose is the page's own ink on the page's own ground, with a

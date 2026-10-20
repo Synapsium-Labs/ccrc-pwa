@@ -105,6 +105,111 @@ export const Structure: Story = {
   },
 };
 
+/** Every list shape the markers have to hold — the preflight's `list-style:
+ *  none` kept them all bare until prose.css put the markers back.
+ *
+ *  CHECK the bullets step disc → circle → square with depth and an ordered
+ *  list nested in a bulleted one is still numbered; that `9.` through `11.`
+ *  sit inside the column, the two-digit numbers not hanging past its left
+ *  edge; that the task list draws its boxes and NO bullet beside them, the
+ *  empty box on the surface ground rather than a solid dark square; that a
+ *  nested task list drops BELOW its parent's label and steps in, and that only
+ *  the item whose own box is checked is dimmed and struck, never its parent
+ *  or its children; that in the LOOSE task list (each label its own
+ *  paragraph) the done item is dimmed and struck just the same, its box on
+ *  its first line; that the quote's numbered list stands apart from the
+ *  bullets above it while its heading keeps its own top margin; and that the
+ *  number inside the warning callout is legible on its tint. */
+export const Lists: Story = {
+  args: {
+    children: (
+      <>
+        <ul>
+          <li>
+            A top-level bullet, a disc.
+            <ul>
+              <li>
+                Nested once: a circle.
+                <ul>
+                  <li>Nested twice: a square.</li>
+                </ul>
+              </li>
+              <li>
+                An ordered list inside a bulleted one is still numbered.
+                <ol>
+                  <li>First step.</li>
+                  <li>Second step.</li>
+                </ol>
+              </li>
+            </ul>
+          </li>
+        </ul>
+        <ol start={9}>
+          <li>Starting at nine.</li>
+          <li>Ten — the first two-digit number, which must not hang past the column.</li>
+          <li>
+            Eleven, holding a nested ordered list.
+            <ol>
+              <li>Its own one.</li>
+              <li>Its own two.</li>
+            </ol>
+          </li>
+        </ol>
+        <ul className="contains-task-list">
+          <li className="task-list-item"><input type="checkbox" checked disabled /> A finished task.</li>
+          <li className="task-list-item">
+            <input type="checkbox" disabled /> One still open, whose child is done.
+            <ul className="contains-task-list">
+              <li className="task-list-item"><input type="checkbox" checked disabled /> The done child.</li>
+              <li className="task-list-item">
+                <input type="checkbox" disabled /> An open child.
+                <ul className="contains-task-list">
+                  <li className="task-list-item"><input type="checkbox" disabled /> An open grandchild.</li>
+                </ul>
+              </li>
+            </ul>
+          </li>
+          <li className="task-list-item">
+            <input type="checkbox" checked disabled /> A done parent, whose open child is not struck.
+            <ul className="contains-task-list">
+              <li className="task-list-item"><input type="checkbox" disabled /> Still open.</li>
+            </ul>
+          </li>
+        </ul>
+        <p>A loose task list, blank lines between its items:</p>
+        <ul className="contains-task-list">
+          <li className="task-list-item">
+            <p><input type="checkbox" checked disabled /> A loose item that is done, so dimmed and struck.</p>
+          </li>
+          <li className="task-list-item">
+            <p><input type="checkbox" disabled /> A loose item still open.</p>
+            <p>Its second paragraph, under the label.</p>
+          </li>
+        </ul>
+        <blockquote>
+          <p>A quote carrying two lists:</p>
+          <ul>
+            <li>A bullet.</li>
+            <li>Another bullet.</li>
+          </ul>
+          <ol>
+            <li>Then a numbered list, which must read as a second list.</li>
+          </ol>
+          <h3>A heading in the quote</h3>
+          <p>It keeps its own top margin.</p>
+        </blockquote>
+        <div className="callout" data-callout="warning">
+          <p>A callout carrying a list, on its own tint:</p>
+          <ol>
+            <li>The number takes the callout's body ink.</li>
+            <li>Not the page's tertiary one.</li>
+          </ol>
+        </div>
+      </>
+    ),
+  },
+};
+
 /** The callouts, whose five variants are the reason the contrast gate learned
  *  to re-measure a base rule once per variant. CHECK each label's hue against
  *  its own tint — a variant that rebinds `--callout-tint` to the well is the
