@@ -17,7 +17,7 @@ import {
   type DigestAnswer, type DigestCorrectBody, type DigestLine, type DigestLineKind, type DigestRowKind, type DigestTotals,
 } from '../../../shared/api.js';
 import { redactCommand } from './redact.js';
-import { insertSystemMailTx } from './rundefs.js';
+import { insertSystemMailTx } from './rundefsTx.js';
 import type { ApprovalRow, AskRow, CoordStore } from './store.js';
 
 /** The digest's own kebab words (its line kinds and its refusals), for `mail-routes.test.ts`'s scan of every quoted

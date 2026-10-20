@@ -83,10 +83,10 @@ const outsideForms = (src: string): boolean => new RegExp(`${STMT_START}import\\
  *  writer, and `../coord/store.js` a database: a door that imports one of their writers could persist a code. */
 const DOOR_ALLOWED: Record<string, readonly string[]> = {
   'node:crypto': ['createHash', 'randomBytes', 'timingSafeEqual'],
-  '../../../shared/agent-protocol.js': ['isClaimCode'],
+  // D-5896: `NODE_ID_RE` from its L0 home, so the door imports nothing from `../coord/store.js`, and no entry allows it.
+  '../../../shared/agent-protocol.js': ['NODE_ID_RE', 'isClaimCode'],
   '../../../shared/box-token.js': ['ClaimRefusal'],
   '../coord/token.js': ['matchDigestSlots'],
-  '../coord/store.js': ['NODE_ID_RE'],
   './policy.js': ['BURNED_CODES_KEPT', 'CLAIM_ALERT_EVERY_MS', 'MAX_PENDING', 'claimVerdict', 'codeExpiresAt', 'keepBurned',
     'ClaimDoorState', 'ClaimMatch'],
   './files.js': ['mintClaimCode'],   // a pure random-bytes mint: it writes nothing

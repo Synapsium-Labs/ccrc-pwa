@@ -312,3 +312,21 @@ describe('a superseded forced archive cannot act on a different session’s shee
     expect(screen.getByRole('button', { name: 'Archive anyway' })).not.toBeDisabled();
   });
 });
+
+// D-5971 (#549, ARCH-11b): the archive door's `registry-unmeasurable` answers the table's 502 now, where it answered
+// 503. The sheet branches on the WORD, not the status: a 502 with no stderr is not "the archive failed on the box"
+// when the box never ran the archive, and an older server's 503 says the same sentence.
+describe('a forced archive refused registry-unmeasurable (D-5971)', () => {
+  const refusedWith = (err: unknown): void => {
+    render(<ArchiveConflictSheet sessionId="demo-x" runs={RUNS} onClose={() => {}}
+                                 archive={vi.fn().mockRejectedValue(err)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive anyway' }));
+  };
+
+  it.each([502, 503])('at %i says the registry could not be read, never that the archive failed', async (status) => {
+    refusedWith(new ApiError(status, { ok: false, error: 'registry-unmeasurable' }));
+    expect(await screen.findByText(/registry could not be read/i)).toBeInTheDocument();
+    expect(screen.queryByText('the archive failed on the box')).toBeNull();
+    expect(screen.queryByText(/does not recognise/i)).toBeNull();
+  });
+});

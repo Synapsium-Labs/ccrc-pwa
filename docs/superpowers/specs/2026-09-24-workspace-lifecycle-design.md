@@ -214,7 +214,7 @@ The wire field is named for what it carries: `released` is already a member of `
 undone.
 
 1. **Measure, refuse nothing irreversible yet.**
-   - The id is safe and known. A registry that cannot be listed refuses `503 registry-unmeasurable`, never
+   - The id is safe and known. A registry that cannot be listed refuses `502 registry-unmeasurable` (503 before D-5971), never
      `404 unknown-session`.
    - The row is read.
    - Busy is read from the same live state the fleet frame uses: `status`/`hookState`, re-read on the request, for
