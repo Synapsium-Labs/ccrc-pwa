@@ -158,6 +158,7 @@ describe('review-waiting', () => {
     const entered = NOW - 2 * DAY;
     expect(kinds(input({ reviews: [review({ enteredAt: entered, lastClaimantMailAt: entered - 1 })] }))).toEqual(['review-waiting']);
     expect(kinds(input({ reviews: [review({ enteredAt: entered, lastClaimantMailAt: entered + 1 })] }))).toEqual([]);
+    expect(kinds(input({ reviews: [review({ enteredAt: entered, lastClaimantMailAt: entered })] }))).toEqual([]);
   });
   it('the investigation: an 18-day awaiting-review run', () => {
     const [f] = driftFindings(input({ reviews: [review({ id: 30, enteredAt: NOW - 18 * DAY })] }), NOW);
@@ -298,6 +299,18 @@ describe('the store reads', () => {
     const read = coord.driftAwaitingReview();
     expect(read.ok && read.rows).toEqual([{ id, program: 'program-a', claimedBy: 'coord-a', enteredAt: NOW - 18 * DAY, lastClaimantMailAt: NOW - 20 * DAY }]);
     if (read.ok) expect(kinds(input({ reviews: read.rows }))).toEqual(['review-waiting']);
+  });
+  it('driftAwaitingReview times a re-review from its latest entry, not its first', () => {
+    const { db, coord } = fresh();
+    const id = open(coord);
+    db.prepare("UPDATE runs SET state = 'awaiting-review' WHERE id = ?").run(id);
+    const ev = db.prepare('INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)');
+    ev.run(id, NOW - 18 * DAY, 'working', 'awaiting-review', 'coordinator', null);
+    ev.run(id, NOW - 10 * DAY, 'awaiting-review', 'working', 'coordinator', null);
+    ev.run(id, NOW - H, 'working', 'awaiting-review', 'coordinator', null);
+    const read = coord.driftAwaitingReview();
+    expect(read.ok && read.rows.map((r) => r.enteredAt)).toEqual([NOW - H]);
+    if (read.ok) expect(kinds(input({ reviews: read.rows }))).toEqual([]);
   });
   it('driftOutstandingDeliveries carries the gate and park columns of outstanding rows only', () => {
     const { db, coord } = fresh();

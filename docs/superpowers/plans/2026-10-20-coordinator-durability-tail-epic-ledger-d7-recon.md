@@ -279,8 +279,6 @@ Each task is a plain revert. DT2's and DT6's migrations are additive: a revert l
 
 This programme's block is D-5920 to 5929. This plan defines D-5920 to D-5927, one per task. 5928 and 5929 are issued and unused, written without the prefix so they seed no floor.
 
-**Issued and unused** (Task DT1's spares, without the prefix): 6014, 6015.
-
 - **D-5920** — `durability-ledger-order` (Task DT0; spec §3): the epic's build order is D1 → D3 → D2 → D4 → D5, then D7; D6 and D8 are recorded as inputs to the consolidation's W6 `RunBinding`, not built beside it; arming the `busy` gate (D2) and the dead-coordinator lane (D6) are the operator's acts after their shadow reviews.
 - **D-5921** — `drift-decider-pure` (Task DT1; spec §4.1, §4.2): drift is decided by one pure L1 function over plain rows with seven kinds in one L0 map; liveness is the reclaim ladder's verdict, typed through `deadCoordinator.ts`'s L1 `ClaimantReading` so the decider imports no IO, and `unmeasurable` is never a `claimant-gone`; `run-quiet` covers active runs only; the mail kinds read D1's park columns (#853).
 - **D-5922** — `drift-lane-records-and-pushes-once` (Task DT2; spec §4.1, §4.3 to §4.5): a separate 15-minute lane, not a stall arm, records findings in `drift_findings` (cleared only by re-measurement), and pushes once per finding past 24 h, once-only held by its own `pushedAt` column and the push sent through W1a's `notify` funnel (C1c), bounded by a first-pass summary, 3 per pass and 12 per UTC day counted from the table, the daily count over per-item pushes only (`pushedVia`), with live-stall-overlap, armed-dead-coordinator and D1-escalation suppression, and a `url` (and a run kind's `runId`) on every push; it runs as one W1b `LANE_SCHEDULE` row and acts through no door.
@@ -289,6 +287,8 @@ This programme's block is D-5920 to 5929. This plan defines D-5920 to D-5927, on
 - **D-5925** — `held-question-reseed` (Task DT5; spec §5): held and lapsed-ask state stays in the `asks` and `approvals` tables with no new column; the boot's unprimed tick fills a bounded pending set that every tick consumes before `tryHold`, re-seeding `heldAsks` (matched on `dialogId` and `askKey`, `askAt` re-stamped) and `heldApprovals` (by child, from a boot snapshot of `held` rows only, never `released` ones) on a measured matching pane, settling `stale` on a measured mismatch and leaving the row on doubt; D-2169's in-memory carrier stands.
 - **D-5926** — `claimant-uuid-on-claim` (Task DT6; spec §6.1, §6.3): the coordinator's uuid is stored beside `runs.claimedBy`, not in the worker's incarnation key, by the claim's existing writers; the heir's uuid is measured from the registry at reclaim; queued mail keeps moving through `reclaimProgram` unchanged.
 - **D-5927** — `claimant-revived-offer` (Task DT7; spec §6.2, §6.5): `openRun`'s `claimed-by-another` is refined to `409 claimant-revived` through the L1 `claimantContinuity` in `coord/drift.ts`; the asks and approvals doors are not refined (no stored uuid, no measured case); the door pushes nothing (the reconciler's `claimant-revived` finding is the one push); built only if a revival is recorded within 30 days that start once 5 open programmes carry a stored uuid, with the denominator recorded beside the count.
+
+**Issued and unused** (Task DT1's spares, without the prefix): 6014, 6015.
 
 ## Out of scope
 

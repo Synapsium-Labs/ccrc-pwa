@@ -57,4 +57,5 @@ cluster K10), not standalone builds (decision D-5920).
 
 D1 (#754) merged as #853, which opens D3 and the tail's DT1. DT1 (the pure drift decider, `server/src/coord/drift.ts`,
 and the store's four `drift*` reads; D-5921) is in review. Task DT5 (held questions and approvals across a restart) has no
-gate and may run now. DT2 waits for W1a's C1c, W1b and DT1.
+gate and may run now. DT2 waits for W1a's C1c, W1b and DT1. DT2 (on record or push) or DT3 (digest lines) must pass
+`DriftFinding.detail` through `redactCommand` (spec §9): DT1's import rule keeps `coord/redact.ts` out of `drift.ts`.
