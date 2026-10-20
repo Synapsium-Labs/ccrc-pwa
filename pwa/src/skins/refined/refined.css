@@ -51,3 +51,45 @@
     flex-wrap: nowrap;
   }
 }
+
+/* W2 Task S13b (D-5475): the grouped tool row, one line for a run of tool entries. Layout and type only: the row
+   paints no ground and declares no colour, so its sentence and count take the chat column's own ink and nothing here
+   is a new contrast identity. The line is cut, never wrapped, so the row is one fixed height (`itemHeight.ts`'s
+   `group` bucket); opened, it shows today's tool cards, spaced as the list spaces its rows. */
+.ref-tool-group-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: var(--weight-regular) var(--fs-meta) / 1 var(--family-mono);
+}
+.ref-tool-group-chev {
+  flex: none;
+  transition: transform var(--dur-base) var(--curve-swift);
+}
+.ref-tool-group-row[aria-expanded='true'] .ref-tool-group-chev {
+  transform: rotate(90deg);
+}
+.ref-tool-group-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ref-tool-group-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.ref-tool-group-body {
+  display: grid;
+  gap: var(--sp-2);
+  padding-top: var(--sp-1);
+}
