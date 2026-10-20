@@ -116,11 +116,16 @@ export const ccdRunner = (run: Runner, cfg: CcrcConfig): CcdRunner =>
   (argv) => ccd(run, cfg, argv);
 
 /** A linked worktree (or submodule) masquerading as a project: `.git` exists
- *  but is a FILE. readdir-null is the only file-vs-dir probe FleetIO affords —
- *  it succeeds for a directory and answers null for a plain file. A dir with
- *  NO .git at all is a legitimate non-git project (four exist on the fleet)
- *  and must never be skipped; an UNREADABLE workdir stays listed, same as
- *  today — this probe only ever removes what it positively identified.
+ *  but is a FILE. D-5967: the file-vs-dir answer is `lstatMeasured` on
+ *  `<workdir>/.git`, and ONLY a measured `regular` file condemns — a directory
+ *  (`other`) is a main checkout, a symlink is kept as it always was, and a
+ *  probe that could not answer (a remote timeout, an agent too old for the
+ *  `lstat` op, a permission error) keeps the project. Before this, a null
+ *  `readdir` of `.git` was read as "it is a file", so a transient failure
+ *  dropped a real project. A dir with NO .git at all is a legitimate non-git
+ *  project (four exist on the fleet) and must never be skipped; an UNREADABLE
+ *  workdir stays listed — this probe only ever removes what it positively
+ *  identified.
  *  `names`, when given, is a `readdir(workdir)` result the caller already
  *  holds (the root loop's directory-ness probe) — reused here so that door
  *  doesn't readdir the same directory twice; the union loop has no such
@@ -132,7 +137,8 @@ const isLinkedWorktree = async (
 ): Promise<boolean> => {
   const entries = names === undefined ? await io.readdir(workdir) : names;
   if (entries === null || !entries.includes('.git')) return false;
-  return (await io.readdir(path.join(workdir, '.git'))) === null;
+  const kind = await io.lstatMeasured(path.join(workdir, '.git'));
+  return kind.ok && kind.kind === 'regular'; // D-5967: unmeasured keeps
 };
 
 /**
