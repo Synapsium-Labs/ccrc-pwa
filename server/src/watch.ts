@@ -10476,7 +10476,7 @@ class DelegationLane {
   /** D-5832: the stall sampler, from the seam or the lane's own (made on first use). */
   private stall(): DelegationLaneStall { return this.seams.loopDelay ?? (this.sampler ??= createDelegationStallSampler()); }
   /** D-5832: reads the stall of the open stretch (charging it to that stretch's key) and opens `next`. The first read of a pass finds none
-   *  open: its value is the time before the flush and is discarded. A pass with no record reads nothing. */
+   *  open: its value is the time before the flush and is discarded, but no turn precedes it, so a stall from the phase before the flush can still be charged to `stallFlush` (review 705 F2). A pass with no record reads nothing. */
   private readStretch(pass: LanePass, next: LaneStretch): void {
     const t = this.timings.get(pass);
     if (t === undefined) return;
@@ -10539,7 +10539,7 @@ class DelegationLane {
       if (t !== null) {
         const ms = this.mono() - at;
         t.ms.set('rewrite', (t.ms.get('rewrite') ?? 0) + ms); t.rewrites += projects; t.rewriteEvents += events;
-        if (t.repairOpen) t.ms.set('repairRewrite', (t.ms.get('repairRewrite') ?? 0) + ms);   // D-5832: flush's share is `rewrite` less this
+        if (t.repairOpen) t.ms.set('repairRewrite', (t.ms.get('repairRewrite') ?? 0) + ms);   // D-5832: `rewrite` less this is every other caller's time, flush's included (review 705 F3)
       }
     }
   }
@@ -11012,7 +11012,7 @@ class DelegationLane {
       // order-independent and `unmeasured` is sticky), `replaced` stays sticky, and a cursor that steps back once is re-read and deduped by
       // the next pass.
       // R101: the owners this pass read are forgotten only now, and only for what the flush made durable (a cut pass's late flush too).
-      this.readStretch(pass, 'stallFlush');                             // D-5832: the stretch opens here; this read only discards what came before it
+      this.readStretch(pass, 'stallFlush');                             // D-5832: the stretch opens here; no turn precedes this read, so stallFlush may hold a stall from the phase before flush (review 705 F2)
       const endFlush = this.phase(pass, 'flush');
       try { this.forgetRead(pass, await this.flushPass(pass, durable)); } finally { endFlush(); }
       if (pass.signal.aborted) return;
