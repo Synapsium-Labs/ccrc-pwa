@@ -20,14 +20,41 @@ Run-level wave numbers map onto the spec's wave names as below. W0 (the spec) ne
 | # | spec name | scope | deploy class | PRs | state |
 |---|---|---|---|---|---|
 | — | W0 | the spec, this ledger, and the contract's rulings section | docs | #360 | **merged** `837a099c0` (2026-10-12 18:48); the contract section rides the first plan's docs PR |
-| 1 | W1a | the server's id gate (spec 2.3): `isRegistryId`, `readSessionRecord.kind`, `RegistryRead.refused`, the split of the 12 `readRegistry` callers, `knownId`, `POST /api/runs`, every stored-row argv seam and the two executor seams, and the stop builders' order | server | #397 | run **399 working**: landing round 3 sent 2026-10-19 (6749) under the operator's ruling — absorb main on the measured conflict, push, and pass the equivalence file in a full CI run (E9's arbiter is now CI); then a fresh review of the whole W1a range; the operator merges |
-| 2 | W1b | ccd's id fix (spec 2.4 to 2.6): the decision-flag loops, the predicates, the composed-id cap, the reap-lock order, the dot-leading entry rule, and the real-binary parity pins | **ccd/ccd** | #410 | **merged** `a38fed503` (2026-10-19 10:51), head `6968de956`, landed by a separate session at the operator's direction outside the run protocol; run **433 working**: the worker fast-forwards to the merged head and reports wave-done there (6748), then a final-head review, then close |
-| 2 | W1b correction | the census guard's `_reg_get_to`/`_reg_read_to` blind spot (review 575 F4), a mutation proof for the census rows `6968de956` added, and the records the landing left owed | server test + docs | — | not opened; a separate run on a fresh child (operator ruling 2026-10-19); lands before W2 |
-| 3 | W2 | absences and mounts (spec section 3) | ccd/ccd + server, fleet box first | — | not opened; plan in #436, which the operator merges; dispatches after #397 merges and run 399 closes, run 433 closes and the W1b correction lands; the four fenced consents of 2026-10-16 are re-confirmed with their holders before dispatch |
+| 1 | W1a | the server's id gate (spec 2.3): `isRegistryId`, `readSessionRecord.kind`, `RegistryRead.refused`, the split of the 12 `readRegistry` callers, `knownId`, `POST /api/runs`, every stored-row argv seam and the two executor seams, and the stop builders' order | server | #397 | **merged** `6ae03d2de` (2026-10-19 22:26), head `504ea889d`; landing round 3 absorbed main and passed the equivalence file in full CI run 39308366666 (E9's arbiter); reviews 643 and 649; run **399 closed** done (2026-10-19) |
+| 2 | W1b | ccd's id fix (spec 2.4 to 2.6): the decision-flag loops, the predicates, the composed-id cap, the reap-lock order, the dot-leading entry rule, and the real-binary parity pins | **ccd/ccd** | #410 | **merged** `a38fed503` (2026-10-19 10:51), head `6968de956`, landed by a separate session at the operator's direction; run 433 fast-forwarded to it, review 641 read the final head, run **433 closed** done |
+| 2 | W1b correction | the census guard's `_reg_get_to`/`_reg_read_to` blind spot (review 575 F4), a mutation proof for the census rows `6968de956` added, and the records the landing left owed | server test + docs | #735 | **merged** `397be1ec5` (2026-10-19 22:31), head `8f0d1121b`; review 647; run **640 closed** done (2026-10-19) |
+| 2 | W1 records follow-up | appended corrections to the W1a plan, the W1b plan and the spec, after reviews 647 and 649 | docs | #838 | **merged** `eb488c288` (2026-10-20 01:03), head `2d62a63e2`; reviews 661 and 663; run **655 closed** done |
+| 3 | W2 | absences and mounts (spec section 3) | ccd/ccd + server, fleet box first | — | run **652 working** (opened 2026-10-19 22:45, dispatched about 23:50 to a fresh child); plan merged with #436 (`5c30f8626`); the four consents re-confirmed against the merged plan and current main |
 | 4 | W3 | worktree path identity (spec section 4) | ccd/ccd | — | not opened; after W2; needs workspace-lifecycle's consent |
 
 ## Decisions & deviations
 
+- **2026-10-20 01:05 — W1'S RECORDS FOLLOW-UP LANDS (#838); RUNS 399, 640 AND 655 ARE CLOSED; W2 IS WORKING.**
+  - **Reviews 647 and 649** read the W1b correction at `8f0d1121b` and W1a's fix round 1 at `504ea889d`. Runs 399 and 640 then closed done. Rulings:
+    - 647 F1 is accepted: the census reading is pair-scoped, as the brief prescribed;
+    - 649 F2: the merged #397 body stays as it is;
+    - 649 F6: Task 16 Step 1's as-built no-number check is retired. A later ruling widened that to the whole W1a as-built section, including W1a's own D-5818 and D-5824, which stay as written (D-5981).
+    - 649 F1, F3, F4 and F5, and 647 F3, went to a records-only follow-up, run 655 (wave 2, issued 5981 and 5982).
+  - **Run 655, PR #838.**
+    - Review 661 found three faults: the new Row 3 correction said no rejection is recorded (false: `closeRun` records one and queues one mail), an attribution slip, and an unnamed fifth correction inside the as-built section.
+    - Fix round 1 (`2d62a63e2`) corrected all three, and recorded D-5981's widening in the tree.
+    - Review 663 then found two wording slips in that new sentence, both taken from the coordinator's ruling text. "Only its `calls` line cannot red" is wrong, because the run-state line cannot red either. "Reds on `out`" is wrong, because the dispatched case asserts inline and has no `out`. Ruled: they are carried to a later record (Carried constraints), not fixed in a third round.
+    - #838 merged as `eb488c288` (head `2d62a63e2`), and run 655 closed done. 5982 was unused and stays undefined.
+  - **W2 (run 652)** was dispatched to a fresh child with a binding annex: the full consent record; run 308's expanded off-limits list; main absorbed only on a worker clause-16 trigger; the equivalence file excluded from local shards and judged by a full CI run; and per-task routing. All four consents were re-confirmed on 2026-10-19 against the merged plan and current main: history, delegation, workspace-lifecycle and run 308.
+  - **Task 0 Step 5's STOP.** On the fleet box, counts only: 3 quarantine records and 3 slots stand, and all three ids hold a standing witness; one record is older than 24 hours. Every other STOP count is zero. Ruled: proceed under R2. TR4 keeps those witnesses while their slots stand, and R2 accepts that. The counts and the ruling go into W2's as-built record.
+  - **Coexistence with #722 (run 561).** Its coordinator consented in writing to W2 editing the seven paths #722 holds, on these terms:
+    - own lines only, ten lines clear of each line #722 changes;
+    - `leaf` may join lifecycle-wire's `MEAS` literal;
+    - `ccd/ccd`'s stamp is restamped, never hand-merged;
+    - #722 lands first.
+    #722's merge is not itself a trigger for W2 to absorb main. A measured conflict is one, and so is the coordinator naming W2 next to land.
+- **2026-10-19 22:50 — W1 IS LANDED; THE OPERATOR GIVES MERGE AUTHORITY; W2 OPENS.**
+  - **Merge authority.** The operator gave this coordinator full merge authority. It merges a ready PR with `gh pr merge <n> --squash --match-head-commit <head> --admin`; `main` has no merge queue and needs one approval.
+  - **Merged.** #436, the W2 plan and both ledgers, as `5c30f8626` (head `400a68fba`). #397, W1a, as `6ae03d2de` (head `504ea889d`). #735, the W1b correction, as `397be1ec5` (head `8f0d1121b`). Before #735 landed, the shared guards were run on its merge with the new main and passed.
+  - **Review 641 (W1b's final head).** No binding defect: hibernate refuses every dash-spelled id in every order. F1: `6968de956`'s `cmd_hibernate` also refuses dash-leading `--actor`/`--reason` prose and a dash-leading `--surface`, which the spec said W1b never narrows. **The operator ruled accept and record:** `ccd` stays as merged, and #735 records the narrowing (D-5820) and corrects the spec, R2, D-4982 and the residual. F2 to F4 (an untested `=`-form check, prose controls, a stale count) were fixed in #735. Run 433 then closed done.
+  - **Review 643 (W1a at `217f1def4`).** Six minor findings, ruled and fixed in fix round 1 (`504ea889d`). D-5844: the interrupt verdict's masked arm, and main's three new callers keep their if-chains. D-5845: the spec note and the `openRun.ts` move are departures from W1a's file boundary by coordinator ruling. D-5847: the README `stop` lines move to the flags-first order. D-5846 carries `pty-interrupt-record-takes-an-unchecked-id`: `/ws/pty/:id`'s interrupt record takes an unchecked id. That is main's code, composes no argv, and no coordinated programme owns it; it is raised with the operator.
+  - **Reviews 647 and 649.** The operator accepted both waves before the reviewers reported. Both reviews still run; their findings, if any, become follow-up work. Runs 399 and 640 wait at `merging` and close once each review reports.
+  - **W2.** Run 652 opened, with wave-time numbers 5960, 5961, 5962, 5963, 5964 and 5965 issued. The four fenced consents of 2026-10-16 are being re-confirmed against the merged plan, which differs from the consented blob only in vocabulary, and against current main.
 - **2026-10-19 17:40 — #410 MERGED OUTSIDE THE RUN PROTOCOL; FOUR OPERATOR RULINGS UNBLOCK THE PROGRAMME.**
   - **#410's landing.** #410 merged as `a38fed503` at 10:51 on 2026-10-19, head `6968de956`. A separate session landed it at the operator's direction with two commits: a merge of main (`adca4a843`, the sixth absorption; its only conflict was `ccd/ccd`'s stamp line, restamped) and a fix for main's new `hibernate` verb (`6968de956`: `cmd_hibernate` line-neutral in `ccd/ccd`, and the census and parity test files). No run-protocol step was taken, so run 433's worker branch still read `4a75bff66`, a strict ancestor of the merged head. Pull-request CI run 39234727750 ran 317 selected server files (15,926 passed, 89 skipped), the equivalence file among them at 100/100 with both E9 locales, on a merge-test commit whose tree equals the head's. No independent review has read `adca4a843` or `6968de956`.
   - **Ruling 1 — run 433.** The worker fast-forwards its own branch to `6968de956` (no new commit) and reports wave-done there with `prPhase: merged`; an independent review reads the final head; run 433 then closes. Sent as 6748.
@@ -621,22 +648,25 @@ Run-level wave numbers map onto the spec's wave names as below. W0 (the spec) ne
 - **Comment carries that need a `ccd/ccd` restamp** (items 29 to 31) ride the first wave that restamps `ccd/ccd`, which is W1b. They are worded line-neutrally, because the collector header sits under the frozen citation-corpus anchors.
 - **The macOS purge-refused red** (item 37) is a stated residual; reopen it only if it recurs.
 - **Review 500's exception is one row and its landing record only.** Bound wave 10's prose guard without weakening its assertions; require the outside-section relocation mutation to red. A structured empty findings list is a completed lens, while null/no output stays unverified. No other inherited EOF-slice repair is authorized.
-- **No merge authority follows from accepted content, a fingerprint, a report or a landing claim.** The pending approvals for #429, #434 and #436 remain separate. No W2 dispatch until its approved plan merges and both predecessors land and close as required; preserve programme continuity by opening the successor before the last producer closes.
+- **No merge authority follows from accepted content, a fingerprint, a report or a landing claim.** The pending approvals for #429, #434 and #436 remain separate. No W2 dispatch until its approved plan merges and both predecessors land and close as required; preserve programme continuity by opening the successor before the last producer closes. Since 2026-10-19 the operator has given this coordinator merge authority for the programme's PRs.
+- **The W1a plan's review-661 correction at Row 3's dispatched case carries two wording slips** (review 663; they came from the coordinator's ruling text). Under the close-gate mutant, the case reds on its first, inline assertion of the `closeRun` result, not on `out`. Its rejection and mail lines would red, and neither its `calls` line nor its run-state line can. This rides the next wave that appends to the W1a plan's records, or failing that the programme's closing records.
+- **`cmd_hibernate`'s header comment rides W2** (review 641 F1). It cites spec section 2.4 for a rule section 2.4 states the other way, and it needs a `ccd/ccd` restamp, so it rides the next wave that restamps `ccd/ccd`, which is W2. Name the departure, not section 2.4.
 
 ## Next-wave brief
 
-**State at 2026-10-19 17:40.** Runs 399 (W1a) and 433 (W1b) are `working` under this coordinator. The four operator rulings of 2026-10-19 (Decisions) replace every earlier hold on them; the older dated entries are history.
+**State at 2026-10-20 01:05.** W1 is landed and closed: W1a (#397), W1b (#410), the W1b correction (#735) and the records follow-up (#838). Runs 399, 433, 640 and 655 are closed. W2 is run 652, `working`, on a fresh child; its Task 0 STOP is ruled. The coordinator has merge authority.
 
-**Run 433 (W1b, #410 merged).** Await the worker's wave-done at `6968de95646c95b25ed2bfe7caa77c690e74e2aa` with `prPhase: merged` (sent 6748). Advance to `awaiting-review` with that fingerprint unchanged, then open a review run naming 433 and brief the held-out panel plus SAFETY over the landing delta `4a75bff66..6968de956` (the sixth absorption and the hibernate fix) and the whole W1b range at the final head. On an accepted report, advance to `merging`, prove #410 MERGED at `6968de956`, and close with `final:true`. Open the W1b correction's run before this close.
+**W2's landing.**
+- #722 lands first, then W2 absorbs main on a measured conflict or when named next to land.
+- Then W2 does the second-lander duties:
+  - restamp, never hand-merge the stamp;
+  - re-run `session-hook.test.ts` in full;
+  - re-measure the citation and census pins;
+  - run `ccd-collect-race-spawn-late` and `ccd-workspaces`;
+  - re-run `topology-clean` whole.
+- R39's full CI run at the exact head judges the equivalence file.
+- A review run reads W2's wave-done; the coordinator lands it.
 
-**W1b correction (a new wave-2 run, fresh child).** Scope as ruling 2. Allocate its block at open. It edits `server/test/ccd-id-cap.test.ts`, the W1b plan, the spec and the contract. #722 holds claims on those three documents, so the worker asks #722's worker for coexistence or waits for #722 to land. A review run reads it; the operator merges it; then it closes.
+**After W2.** W3's plan is written, and it needs workspace-lifecycle's consent per wave.
 
-**Run 399 (W1a, #397).** Await wave-done after landing round 3 (sent 6749): main absorbed, the named gates run locally in the foreground, a push, and a full CI run at the exact head with the equivalence file at 100 passed and both E9 locale groups. Then advance, run a fresh review of the whole W1a range at the new head, have the operator merge #397, and close. #722 also edits the W1a plan, so whichever lands second merges.
-
-**#436 (this ledger and the W2 plan).** The operator merges it once its checks are green. Then tell #722's worker (run 561) that the ledger has merged, so it can land-sync.
-
-**W2.** Dispatch only after #436 merges, #397 merges and run 399 closes, run 433 closes, and the W1b correction lands. Before dispatch, re-confirm the four fenced consents of 2026-10-16 with their holders (the plan has changed only in vocabulary since). Open W2's run, without a spent producer's session id, before the last producer closes.
-
-**W3.** Its plan is written after W2 lands, and it needs workspace-lifecycle's consent.
-
-Keep the seven carried constraints above.
+Keep the carried constraints above. The older dated entries are history.
