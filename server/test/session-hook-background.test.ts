@@ -200,3 +200,41 @@ describe('the Stop records delegated background work (D-5231)', () => {
       expect(pair()).toEqual(NEITHER);
     });
 });
+
+// D-6117 (ARCH-26, #533): the hook's `jq` lists held to the TypeScript lists by SET EQUALITY, in both directions.
+// The iterating cases above prove only TS ⊆ jq: a kind or status added to the `jq` alone would pass them and silently
+// stop counting. This case reads the two `IN(...)` lists out of `ccd/session-hook.sh` as text and asserts each equals
+// its TypeScript list as a set, with no duplicate and no entry that is not a plain string literal.
+describe('the hook’s jq lists equal the TypeScript lists as sets (D-6117)', () => {
+  /** The one `IN(...)` list after `<subject> | IN(` in the delegated-task program; every match, so a copy reds. */
+  const inLists = (text: string, subject: string): string[] => {
+    const esc = subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return [...text.matchAll(new RegExp(`\\(${esc} \\| IN\\(([^)]*)\\)\\) \\| not\\)`, 'g'))].map((m) => m[1]!);
+  };
+  /** The literals of one list; throws on anything that is not `"word"` separated by `, `. */
+  const literals = (list: string): string[] => {
+    const words = [...list.matchAll(/"([^"\\]*)"/g)].map((m) => m[1]!);
+    if (words.map((w) => `"${w}"`).join(', ') !== list.trim()) throw new Error(`not a plain literal list: ${list}`);
+    return words;
+  };
+  const asSet = (words: readonly string[]): string[] => [...new Set(words)].sort();
+  const hook = (): string => fs.readFileSync(HOOK, 'utf8');
+
+  it('CONTROL: the extractor reads a list, sees a copy, and refuses a non-literal entry', () => {
+    const one = 'select((kind | IN("shell", "dream")) | not) | select((.status | IN("killed")) | not)';
+    expect(inLists(one, 'kind').map(literals)).toEqual([['shell', 'dream']]);
+    expect(inLists(one, '.status').map(literals)).toEqual([['killed']]);
+    expect(inLists(`${one} ${one}`, 'kind')).toHaveLength(2);
+    expect(() => literals('"shell", $extra')).toThrow(/plain literal/);
+  });
+
+  it('the kind list is NON_DELEGATING_TASK_KINDS and the status list is TERMINAL_TASK_STATUSES, both ways', () => {
+    for (const [subject, ts] of [['kind', NON_DELEGATING_TASK_KINDS], ['.status', TERMINAL_TASK_STATUSES]] as const) {
+      const lists = inLists(hook(), subject);
+      expect(lists, `${subject}: exactly one jq IN(...) list`).toHaveLength(1);
+      const jq = literals(lists[0]!);
+      expect(jq, `${subject}: no duplicate in the jq list`).toHaveLength(new Set(jq).size);
+      expect(asSet(jq), `${subject}: jq ⊆ TS and TS ⊆ jq`).toEqual(asSet(ts));
+    }
+  });
+});
