@@ -56,6 +56,8 @@ interface Fake {
   reviewsOpen: Set<string>;
   /** D-6091: sessions a newer `planned` run names (run 50): today it is their newest run and an open one. */
   planned: Set<string>;
+  /** sibling-parked-run-takes-parked-clock: sessions an (older) run parked at review, merge or close names. */
+  parked: Set<string>;
   /** D-6091: run states `run(id)` answers (a hold's `run:` suffix); absent → `working`. 'unreadable' → `ok: false`. */
   runStates: Map<number, string>;
 }
@@ -63,7 +65,7 @@ interface Fake {
 function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; holdOk?: boolean } = {}): Fake {
   const f: Fake = {
     argv: [], feed: [], serialCalls: 0, runs: new Map(), openWorkers: new Set(), mailTo: new Set(), ccdOk: true,
-    atAct: new Map(), reviewsOpen: new Set(), planned: new Set(), runStates: new Map(),
+    atAct: new Map(), reviewsOpen: new Set(), planned: new Set(), parked: new Set(), runStates: new Map(),
     deps: undefined as unknown as StopDoneSweepDeps,
   };
   ids.forEach((id, i) => f.runs.set(id, { runId: 10 + i, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1 }));
@@ -82,6 +84,7 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
         }),
         openWorkers: asked.filter((id) => f.openWorkers.has(id) || f.planned.has(id)),
         openPlacedWorkers: asked.filter((id) => f.openWorkers.has(id)),
+        parkedPlacedWorkers: asked.filter((id) => f.parked.has(id)),
         openClaimants: ['lane-a-project-a'],
       }),
       activeClaims: () => [],
@@ -485,6 +488,17 @@ describe('stopDonePass: finished workers sleep at run close (D-6091)', () => {
       [HIBERNATE_AFTER_HOURS_FILE]);
     expect(f.argv).toEqual([HIB(ID)]);
     expect(after).not.toHaveBeenCalled();
+  });
+
+  it('a worker 11 minutes quiet after a done run, an older run of its parked at review, waits the parked 30 minutes', async () => {
+    const f = fake([ID]);
+    f.runs.set(ID, { runId: 10, state: 'done', closedAt: NOW - 11 * 60_000 });
+    f.parked.add(ID);
+    const quiet = (ms: number): StopDoneSweepDeps['mark'] => async () => ({ ...MARK_IDLE, turnAt: NOW - ms, stopAt: NOW - ms });
+    await stopDonePass({ ...f.deps, mark: quiet(11 * 60_000) }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+    await stopDonePass({ ...f.deps, mark: quiet(30 * 60_000) }, mem(), [row(ID)], [rec(ID)], []);
+    expect(f.argv).toEqual([HIB(ID)]);
   });
 
   it('HIBERNATE_HOLD_OK_CAP is a token ccd advertises (ccdCapTokens.ts)', () => {

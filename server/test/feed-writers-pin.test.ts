@@ -1079,7 +1079,7 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
           // D-6091: the run-done policy's placed reads — the same finished run, and no placed open one.
           lastPlaced: asked.map((sessionId) => ({ sessionId, runId: RUN, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1,
             program: 'p', programTitle: null, claimedBy: 'project-a-coordinator' })),
-          openPlacedWorkers: [] }),
+          openPlacedWorkers: [], parkedPlacedWorkers: [] }),
         activeClaims: () => [],
         outstandingMailFor: () => [] as never,
         recordFeedEvent: (epoch, ev) => rec.coord.recordFeedEvent(epoch, ev),

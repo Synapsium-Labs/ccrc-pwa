@@ -132,6 +132,9 @@ export type StopDoneStoreRead =
     /** An ACTIVE run names it (`openPlacedWorkers`: outside the idle and terminal sets, so an unnamed state counts;
      *  D-6091, narrowed by D-6092 so a producer's own parked run does not hold it). */
     readonly openWorker: boolean;
+    /** A run PARKED at review, merge or close names it, newest or not (`parkedPlacedWorkers`;
+     *  sibling-parked-run-takes-parked-clock): the marker's quiet is then measured against `STOP_DONE_PARKED_IDLE_MS`. */
+    readonly parkedWorker: boolean;
     readonly openClaimant: boolean;
     readonly claim: boolean;
     readonly mail: boolean;
@@ -254,7 +257,8 @@ export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
   const stamps = [m.turnAt, m.stopAt, m.restartAt].filter((t): t is number => t !== null);
   if (stamps.length === 0) return hold('recent');
   const idleMs = i.now - Math.max(...stamps);
-  if (idleMs < (parked ? STOP_DONE_PARKED_IDLE_MS : i.graceMs)) return hold('recent');
+  // sibling-parked-run-takes-parked-clock: an older parked run beside a newer done one keeps the parked clock.
+  if (idleMs < (parked || s.parkedWorker ? STOP_DONE_PARKED_IDLE_MS : i.graceMs)) return hold('recent');
   return r.held === null
     ? { act: 'hibernate', runId: s.last.runId, idleMs }
     : { act: 'hibernate', runId: s.last.runId, idleMs, holdOk: r.held };

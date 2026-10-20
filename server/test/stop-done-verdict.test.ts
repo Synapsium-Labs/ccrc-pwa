@@ -29,7 +29,7 @@ const base = (o: Partial<StopDoneInput> = {}): StopDoneInput => ({
   row: row(), heldKind: 'none', holdOkVerb: true,
   store: {
     ok: true, last: { runId: 7, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1 },
-    openWorker: false, openClaimant: false, claim: false, mail: false,
+    openWorker: false, parkedWorker: false, openClaimant: false, claim: false, mail: false,
   },
   viewer: false, sinceStartMs: PRESENCE_TTL_MS + 1, presenceTtlMs: PRESENCE_TTL_MS, verb: true, optedOut: false,
   live: { kind: 'read', word: { ok: true, word: 'idle' }, turn: 'idle', mark: MARK_DONE },
@@ -416,5 +416,19 @@ describe('stopDoneVerdict: finished per F5 (b) (D-6092)', () => {
     expect(stopDoneVerdict(base({ store: okStore({ ...(parked as object), mail: true }) }))).toEqual({ act: 'hold', reason: 'mail' });
     expect(stopDoneVerdict(base({ store: parked, viewer: true }))).toEqual({ act: 'hold', reason: 'viewer' });
     expect(stopDoneVerdict(base({ store: okStore({ ...(parked as object), openWorker: true }) }))).toEqual({ act: 'hold', reason: 'run-worker' });
+  });
+
+  // sibling-parked-run-takes-parked-clock: an OLDER run of the same producer parked at review, merge or close no longer
+  // holds `run-worker` (it is not active), so the newest done run's arm must not cut the parked run's 30 minutes short.
+  it('a done newest run beside an older parked run of the same worker takes the parked clock: 29 minutes quiet holds', () => {
+    const sibling = okStore({ parkedWorker: true });
+    expect(stopDoneVerdict(base({ store: sibling, live: quiet(STOP_DONE_GRACE_MS + MIN) }))).toEqual({ act: 'hold', reason: 'recent' });
+    expect(stopDoneVerdict(base({ store: sibling, live: quiet(STOP_DONE_PARKED_IDLE_MS - 1) }))).toEqual({ act: 'hold', reason: 'recent' });
+    expect(stopDoneVerdict(base({ store: sibling, live: quiet(STOP_DONE_PARKED_IDLE_MS) })))
+      .toEqual({ act: 'hibernate', runId: 7, idleMs: STOP_DONE_PARKED_IDLE_MS });
+  });
+
+  it('with no parked sibling, the done arm keeps the grace', () => {
+    expect(stopDoneVerdict(base({ live: quiet(STOP_DONE_GRACE_MS) }))).toEqual({ act: 'hibernate', runId: 7, idleMs: STOP_DONE_GRACE_MS });
   });
 });

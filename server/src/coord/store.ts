@@ -839,8 +839,10 @@ export type LastRunsResult =
      *  not yet dispatched uses nothing), and the asked sessions an ACTIVE run names (D-6092, W1-1b, F5 (b): outside
      *  the idle and terminal sets, the caps' predicate, so a state this build cannot name counts, and a producer's run
      *  parked at review, merge or close does not). The run-done policy's reads; `last` and `openWorkers` keep their
-     *  meaning for `fleet.ts` and `watch.ts`. */
-    lastPlaced: LastRun[]; openPlacedWorkers: string[];
+     *  meaning for `fleet.ts` and `watch.ts`. `parkedPlacedWorkers` (sibling-parked-run-takes-parked-clock): the asked
+     *  sessions a run PARKED at review, merge or close names (the idle set without `planned`), newest or not, so the
+     *  policy's parked clock is not cut short by a newer done run beside it. */
+    lastPlaced: LastRun[]; openPlacedWorkers: string[]; parkedPlacedWorkers: string[];
   }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
@@ -1113,6 +1115,9 @@ const INACTIVE_RUN_STATES_SQL = `('${[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES
  *  strands query, which binds the same L0 constant as bound placeholders
  *  (D-2794). */
 const TERMINAL_RUN_STATES_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
+/** The idle list, joined the same way (sibling-parked-run-takes-parked-clock): `lastRunBySession`'s parked read takes
+ *  it without `planned`, as `STOP_DONE_PARKED_STATES` does. */
+const IDLE_RUN_STATES_SQL = `('${IDLE_RUN_STATES.join("','")}')`;
 
 /** Design 2026-09-20 §6/§10 (W2): the node lease's predicates, built from L0's
  *  `SETTLED_UPDATE_STATES` by the `.join` `TERMINAL_DELIVERY_SQL` uses — never
@@ -3820,7 +3825,9 @@ export class CoordStore {
    */
   lastRunBySession(sessionIds: readonly string[]): LastRunsResult {
     if (sessionIds.length === 0) {
-      return { ok: true, last: [], openWorkers: [], openClaimants: [], lastPlaced: [], openPlacedWorkers: [] };
+      return {
+        ok: true, last: [], openWorkers: [], openClaimants: [], lastPlaced: [], openPlacedWorkers: [], parkedPlacedWorkers: [],
+      };
     }
     const ph = placeholders(sessionIds.length);
     const planned: RunState = 'planned';
@@ -3858,9 +3865,13 @@ export class CoordStore {
       `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state NOT IN ` +
       (activeOnly ? INACTIVE_RUN_STATES_SQL : TERMINAL_RUN_STATES_SQL),
     ).all(...sessionIds) as { sessionId: string }[]).map((r) => r.sessionId);
+    // sibling-parked-run-takes-parked-clock: the idle set without `planned` — the parked states.
+    const parked = (this.db.prepare(
+      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state IN ${IDLE_RUN_STATES_SQL} AND state <> ?`,
+    ).all(...sessionIds, planned) as { sessionId: string }[]).map((r) => r.sessionId);
     return {
       ok: true, last, openWorkers: open(false), openClaimants: this.openCoordinatorIds(),
-      lastPlaced, openPlacedWorkers: open(true),
+      lastPlaced, openPlacedWorkers: open(true), parkedPlacedWorkers: parked,
     };
   }
 

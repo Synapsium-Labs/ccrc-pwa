@@ -4590,7 +4590,8 @@ word and fail-closed turn verdict of `idle`, and a turn marker that reads `done`
 last Stop at least 10 minutes ago, and no `$REG/<id>.no-hibernate`. Its clock is the run's close, not hibernation's N
 (D-6091, the operator's ruling "stop workers at run close"): a finished worker sleeps about ten minutes after its run
 reads `done` or `failed`. A parked producer has no close, so its clock is the marker alone: it sleeps once its last
-Stop is 30 minutes old, and a send-back or a merge step wakes it as any sleeping session is woken. A programme hold (`program:<p> wave:<n>`, naming no run or a `done` or `failed` one) guards the
+Stop is 30 minutes old, and a send-back or a merge step wakes it as any sleeping session is woken. The same 30
+minutes apply when an older run of the worker is parked beside a newer finished one. A programme hold (`program:<p> wave:<n>`, naming no run or a `done` or `failed` one) guards the
 workspace's retirement, not its sleep: the lane passes it as `ccd hibernate --hold-ok <the exact text>` on a box whose
 `ccd caps` lists `hibernate-hold-ok`, and ccd re-reads the file byte for byte at the act. An operator's own hold, a hold
 naming an open or unreadable run, and a box without the token keep the worker awake (`held`). Immediately before the act, on

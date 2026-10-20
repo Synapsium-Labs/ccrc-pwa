@@ -122,6 +122,7 @@ function storeReadFor(
       ok: true,
       last: run === null ? null : { runId: run.runId, state: run.state, closedAt: run.closedAt },
       openWorker: last.openPlacedWorkers.includes(id),
+      parkedWorker: last.parkedPlacedWorkers.includes(id),
       openClaimant: last.openClaimants.includes(id),
       claim: claimants.has(id),
       // D-5838: a PARKED row does not veto (it waits on its box, up to 24 h, and
