@@ -374,6 +374,50 @@ A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** na
 
 **Exit (GATES):** inner-ring importers of `server.ts`/`watch.ts` go from 9 to 1 (`commands.ts`, pending, D-6004). The pin holds the count, and the emit is byte-identical. No new `ports/` or `domain/` directory exists. **Not in this task:** `Deps`'s move to a type-only `server/src/deps.ts`, its re-export from `server.ts`, `commands.ts`'s import, and ARCH-02b's justification line. All of these are the second half, after #850 lands.
 
+### Task C0j: the `ran` arm, step 1 of 2 — the runners say a command never ran, and the expiry and collect lanes read it first (D-6034; ARCH-10 (#543), its lower-churn landing path) — lands now
+
+A later W0 slice (spec §5.2), planned here so it has a section. ARCH-10 is a consolidation PREREQUISITE: the spec's mapping table says "the retire executor must tell transport failure from refusal". Both runners forge `code: 1` when the command never ran or the link failed: `remote/runner.ts`'s catch arm (a disconnect, a timeout, `forbidden`) and `exec.ts` (a non-numeric exit becomes 1). `cutShort` answers `UNMEASURED` there, but only `dispatch.ts` consults it, so at every other `runCcd` site an agent drop reads as a ccd refusal. **This step** takes the issue's allowed lower-churn path: `ran` is an ADDITIVE optional arm, and only the two refusal-classifying lanes the issue names read it. **Step 2** (after consolidation W1a lands) makes `ran` required and migrates every other site, with a per-site arm table the orchestrator reviews. **Routing:** native. The lane hunks sit on the destructive path (`ws-expire`, `ws-collect`), so they are band 3 by §Global constraints: written natively, two reviewers. **Lane:** server. Production bytes change (D-6035). **Needs:** nothing; no operator ruling (ARCH-10 names none). **Gates:** ARCH-03 (#894, #919) and working-state Task 12 (D-5240) merged; all three are. **Deploy:** rides the next server release; nothing on a box is touched.
+
+**Files:**
+- Modify `server/src/unmeasured.ts` (the pure vocabulary leaf): `NotRanReason` (`transport`, `spawn`, `timeout`) and `NotRan` (`{ ran: false; reason; detail }`), defined once for both layers.
+- Modify `server/src/exec.ts`: `ExecResult` becomes a union of today's shape with `ran?: true` and the same shape with `NotRan`. `realRunner` answers `ran: false, reason: 'spawn'` for a spawn error only (node names the syscall `spawn <cmd>`), and keeps every field it produced before, both kill halves included.
+- Modify `server/src/remote/runner.ts`: the catch arm adds `ran: false`, the reason and the detail beside the forged `code: 1` and the stderr it already sent, and still sends neither kill half. The reason is read off the error's `name`, because `client.ts` imports this file: `AgentOpError` (the agent declined) is `spawn`, a plain `Error('timeout')` is `timeout`, and everything else is `transport`.
+- Modify `server/src/coord/ports.ts`: `CcdResult` becomes the same two-arm union. On `ran: false` it keeps `ok: false` and every field it had before.
+- Modify `server/src/lifecycle.ts`: `ccd()` carries the arm. A ran answer gains no key, so every reader and every whole-object `toEqual` is unchanged. `cutShort` and `ccdEnding` are untouched.
+- Modify `server/src/coord/expireArchived.ts`: `expireAudit` reads `ran === false` before the document and answers `unreadable`, so the executor answers `audit-failed`. `expireAct` reads it before the box words and the composition dies and answers `failed`, resumable: the verb may have started, so this is the reader's own "may have been cut short" answer.
+- Modify `server/src/coord/collectTempRoot.ts`: `collectAudit` and the act read `ran === false` before their readers and answer `no-document`, exactly as a rejection does. The act may have acted, so the lane keeps the id and the slot; it never reads a recognised die off a runner's words.
+- Create `server/test/helpers/ranFakes.ts`: `ranOk(stdout, stderr)`, `ranExit(code, stdout, stderr)` and `notRan(reason, detail)`, so step 2's churn is mechanical.
+- Create `server/test/ran-arm.test.ts`. Add `runCcdOldFoldSites` to `server/test/consolidationCensus.ts`, with its rows in `consolidation-census.test.ts`.
+- Modify `server/test/remote-runner.test.ts`: the catch-arm pin was source text, because "the arm is unreachable through a client stub that resolves". It now drives a stub that rejects, and keeps its no-kill-claim source check. Modify `server/test/docs-source.test.ts`: the `ccd()` plant anchor moves one line, and the `res` helper takes the five shared fields, because `Partial` of the union would distribute over the new arm.
+
+- [ ] **Step 0: Re-ground.** Re-check the gates with `gh pr view`. List the `runCcd(` sites in `server/src` (44 at `bed67053e`). Run `gh pr list --state open` with each PR's files: no open PR touches a production file this task edits. #911 holds `archived-expiry-lane.test.ts` and `archived-expiry-policy.test.ts`, and #826 holds `lifecycle.test.ts`, so the new rows go in a new file.
+- [ ] **Step 1: Red.** `ran-arm.test.ts` and the fakes, copied onto a `git archive` of `origin/main`. It should give 23 red and 11 green (the controls, and the rows whose bytes do not change). The acceptance rows are red: a disconnect has no `ran`. An act whose runner words spell `ccd: bad token` is `composition` at expiry, which is never asked again, and the die `bad-token` at collect, which "acted nothing" and frees the slot.
+- [ ] **Step 2: Green.** Make the changes above. Both `tsc` projects should be clean.
+- [ ] **Step 3: Census.** `runCcdOldFoldSites` lists every `runCcd(` site not yet narrowed on `ran`. It skips a pass-through wrapper (`return await …runCcd(`) and a site whose assigned name is read as `<name>.ran === false` within 12 lines and before its declaration closes. It reports and pins no count (spec §5.1 rule 3): 44 sites, 1 pass-through and 4 migrated leave **39**, which step 2 drives to 0 and pins.
+- [ ] **Step 4: Mutation table, RUN** (on a `git archive` copy, never committed).
+
+  | Mutant | Check | Expected |
+  |---|---|---|
+  | the remote catch arm returns the old shape (no `ran`) | `ran-arm` | red: the disconnect acceptance row and every reason row |
+  | `notRanReason` loses its `timeout` line | `ran-arm` | red: the client's own wait reads `transport` |
+  | `notRanReason` loses its `AgentOpError` line | `ran-arm` | red: `forbidden` reads `transport` |
+  | `realRunner`'s spawn check dropped | `ran-arm` | red: a missing binary has no `ran` |
+  | `realRunner` says `ran: false` for any error | `ran-arm` | red: an exit 1 that ran carries `ran` |
+  | `ccd()` drops the carry | `ran-arm` | red: the `CcdResult` row and both lanes' rows |
+  | `ccd()` adds `ran` to a ran answer | `ran-arm` | red: "a ran answer reaches CcdResult with no new key" |
+  | `expireAudit` loses its `ran` read | `ran-arm` | red: the audit rows' detail does not name the reason |
+  | `expireAct` loses its `ran` read | `ran-arm` | red: `box` and `composition` come back |
+  | `expireAct` answers `resumable: false` | `ran-arm` | red: the act rows want resumable |
+  | the collect act loses its `ran` read | `ran-arm` | red: the die comes back |
+  | the collect audit loses its `ran` read | `ran-arm`; `consolidation-census` | EQUIVALENT at `ran-arm`: `parseCollectAudit` reads an empty stdout as `no-document` with the same stderr, and the read is kept so the order is stated, not inferred. Red at the census: the site returns to the old fold |
+  | the census drops its pass-through skip | `consolidation-census` | red: the fixture lists line 13 |
+  | the census reads past its declaration's close | `consolidation-census` | red: the fixture's line 3 borrows the next declaration's narrowing |
+  | D-6034 defined a second time, with another subject, in another plan | `deviation-refs` | red (one number, two subjects) |
+
+- [ ] **Step 5: Verify.** `tsc -p server` and `tsc -p server/test/tsconfig.tests.json`. Then, one at a time with `--maxWorkers=2`: `ran-arm` and `consolidation-census`; `remote-runner`, `exec`, `lifecycle`, `docs-source` and `dispatch-adopt` (cutShort's readers); `expire-archived`, `expire-id-boundary`, `archived-expiry-lane` and `archived-expiry-policy`; `collect-temp-root`, `collect-switch-executor`, `collect-readers`, `collect-lane-scans`, `collect-id-pins` and `ws-collect-wiring`; `reclaim-pause-pin`, `feed-writers-pin` and `mail-routes` (the kebab scan of `coord/`); `verb-gate`, `coord-policy-rings`, `inner-ring-host-imports` and `single-definition`. Then the doc suites from `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean` and `docs-grammar`.
+
+**Exit (GATES):** a remote runner disconnect returns `ran: false` with reason `transport`. At the expiry and collect lanes, `ran: false` is unmeasured and retryable (`audit-failed`, a resumable `failed`, `no-document`) and never a classified refusal, box word, die or composition error. Every other site's behaviour is byte-identical: its suites are green unchanged, and the census lists it on the old fold. **Not in this task:** making `ran` required, the other 39 sites, and the per-site arm table. All of these are step 2, after W1a lands.
+
 ## Operator acts in this wave
 
 - **OA-C1 (before C0f): the parser option for ARCH-00.** The ticket (#525) offers (a) a pinned `devDependency` alias of an older TypeScript, (b) a standalone parser package, or (c) `typescript/unstable/ast` behind the wrapper. The ask presents all three with the ticket's risk line; the plan does not choose. Nothing on a box is touched.
@@ -433,9 +477,20 @@ Task C0i was issued three numbers, 6003 to 6005.
 
 Issued and unused (Task C0i): 6005.
 
+### Issued for Task C0j and defined here
+
+Task C0j was issued three numbers, 6034 to 6036.
+
+- **D-6034** — `ran-arm-additive-step-1` (Task C0j; ARCH-10, #543): a runner says when a command never ran, or may not have. `ExecResult` and `CcdResult` each gain an additive arm, `{ ran: false; reason: 'transport' | 'spawn' | 'timeout'; detail }`, defined once in `unmeasured.ts`. On that arm every field a reader had before is unchanged: the forged `code: 1`, `ok: false`, the runner's stderr, and the kill halves or their absence. `spawn` means it was never started, and that is known: a local spawn error, or the agent declining the request. `transport` means the link failed. `timeout` means this server stopped waiting. In both of those, whether it ran is unknown. A ran answer carries no new key. The expiry and collect lanes read `ran === false` before any reader of the runner's words, and answer unmeasured and retryable: `audit-failed`, a resumable `failed`, `no-document`. They never answer a refusal, a box word, a die or a composition error. `ranOk`, `ranExit` and `notRan` (`server/test/helpers/ranFakes.ts`) are the fakes step 2 uses. `runCcdOldFoldSites` counts the sites still on the old fold.
+  - **Step 2 (ARCH-10, after W1a):** `ran` becomes required, every other `runCcd` site narrows on it, and the census pins 0. The PR lists each site's arm.
+- **D-6035** — `c0j-ships-production-bytes` (Task C0j): this slice edits `server/src`.
+  - **Departs from** this plan's Deploy class and §Global constraints ("Zero production bytes"). That rule is W0's characterization discipline: a pin must be green on `main`. ARCH-10 is a fix, not a pin, and the spec lists it among W0's later slices as a consolidation prerequisite. Every other constraint binds it, and its lane hunks are band 3.
+
+Issued and unused (Task C0j): 6036.
+
 ## Out of scope
 
-Every later W0 slice (spec §5.2) except ARCH-02a, which is Task C0h, and ARCH-03's ports half, which is Task C0i: ARCH-02b's programme ruling, ARCH-04, ARCH-23, ARCH-34, the pane corpus, the liveness truth table, the retire-verdict table. Any production byte.
+Every later W0 slice (spec §5.2) except ARCH-02a, which is Task C0h, ARCH-03's ports half, which is Task C0i, and ARCH-10's first step, which is Task C0j: ARCH-02b's programme ruling, ARCH-04, ARCH-23, ARCH-34, the pane corpus, the liveness truth table, the retire-verdict table. Any production byte outside C0j (D-6035).
 
 ## Review log
 

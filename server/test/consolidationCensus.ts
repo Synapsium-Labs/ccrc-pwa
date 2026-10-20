@@ -114,3 +114,36 @@ export function filesNaming(needles: readonly string[], root: string = REPO): st
     .map((f) => path.relative(root, f).split(path.sep).join('/'))
     .sort();
 }
+
+/** How many code lines after a `runCcd(` call `runCcdOldFoldSites` reads for the call's `ran` narrowing. */
+export const RAN_NARROW_WINDOW = 12;
+
+/** D-6034 (ARCH-10, #543): `runCcd(` call expressions under `server/src` still on the OLD fold, which reads `ok` or a
+ *  runner's forged code without first asking whether the command ran. A site is on the new fold when the variable it
+ *  assigns (`res = await deps.runCcd(…)`, with or without `const`/`let`) is read as `<name>.ran === false` within the
+ *  next `RAN_NARROW_WINDOW` code lines, and before a line that opens with `}` at column 0 (the end of the top-level
+ *  declaration the call sits in). A line that RETURNS the call's bare result (`return await …runCcd(`, a pass-through
+ *  wrapper) folds nothing, and is not a site. Step 2 drives this to 0, and its may-only-shrink pin lands then (spec
+ *  §5.1 rule 3). KNOWN WIDTH: a narrowing further down, or in a function the result is handed to, is not seen, and the
+ *  site is counted; so is a call whose result is not assigned to a name. */
+export function runCcdOldFoldSites(root: string = REPO): CensusSite[] {
+  const out: CensusSite[] = [];
+  for (const f of sourceFiles(root, 'server/src')) {
+    const file = path.relative(root, f).split(path.sep).join('/');
+    const lines = readFileSync(f, 'utf8').split('\n');
+    lines.forEach((text, i) => {
+      const code = codeOf(text);
+      if (!/\brunCcd\s*\(/.test(code) || /^\s*return\s+(?:await\s+)?[\w.]*\brunCcd\s*\(/.test(code)) return;
+      const name = /(?:^|[^\w$.])([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*await\s+[\w.]*\brunCcd\s*\(/.exec(code)?.[1];
+      if (name !== undefined) {
+        const narrow = new RegExp(`\\b${name}\\.ran\\s*===\\s*false\\b`);
+        for (const l of lines.slice(i + 1, i + 1 + RAN_NARROW_WINDOW)) {
+          if (/^\}/.test(l)) break;
+          if (narrow.test(codeOf(l))) return;
+        }
+      }
+      out.push({ file, line: i + 1, text });
+    });
+  }
+  return out;
+}
