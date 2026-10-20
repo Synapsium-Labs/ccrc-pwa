@@ -20,8 +20,9 @@ import {
 /** THE LANE'S LIVE SWITCH (the coordinator's safety ruling (E), the scope sweep's precedent). Until `$REG/<this>`
  *  exists the lane AUDITS and RECORDS "would expire <id>" — a feed row and an attention entry — and NEVER composes
  *  `ws-expire`. It has NO WRITER in the tree: the operator touches it by hand on the fleet box, and
- *  `single-definition.test.ts` pins that, beside `stall-watch-live`. Spelled here and nowhere else in `server/src`. */
-export const EXPIRE_LANE_LIVE_MARKER = 'expire-lane-live';
+ *  `single-definition.test.ts` pins that, beside `stall-watch-live`. Spelled once, in its `shared/switches.ts` row
+ *  (D-5855), and re-exported here. */
+export { EXPIRE_LANE_LIVE_MARKER } from '../../shared/switches.js';
 
 /** Every word `ws-expire` and `ws-audit --expire` refuse with — and NO other. `archived-expiry-policy.test.ts` holds
  *  this set equal to what ccd's EXPIRE region and the shared ladder (`_ws_reclaim_ladder`) emit, in both directions,
