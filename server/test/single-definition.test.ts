@@ -6572,8 +6572,11 @@ describe('the ask push body is built once, in server/src/askbody.ts (D-5302)', (
   it("watch.ts's ask raise sites call askPushBody, and no body there reads dialog.title", () => {
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
     expect(watch).toMatch(/import\s*\{[^}]*\baskPushBody\b[^}]*\}\s*from\s*'\.\/askbody\.js'/);
-    // Three since plan Task 16: the approval hold's snapshotted push (`tryHoldApproval`) is the third raise site.
-    expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(3);
+    // Two since D-5925: the first raise, and `askHoldPayload`, the one builder of a held push. `hold()`, the approval
+    // hold (`tryHoldApproval`, plan Task 16) and the restart re-seed all build through it.
+    expect(watch.match(/body:\s*askPushBody\(/g) ?? []).toHaveLength(2);
+    expect(watch.match(/\bev\s*=\s*askHoldPayload\(/g) ?? []).toHaveLength(2);
+    expect(watch.match(/\bev:\s*askHoldPayload\(/g) ?? []).toHaveLength(2);
     expect(watch).not.toMatch(/body:\s*dialog\.title/);
   });
 
@@ -6727,12 +6730,14 @@ describe('the ask window, its deadline and the untrusted-data fence are each def
     expect(holders(/\bASK_GRACE_MS\b/)).toEqual(['server/src/askwindow.ts']);
   });
 
-  it('askNotifyAt is defined in server/src/askwindow.ts alone, and the hold reads it once for both uses', () => {
+  // D-5925: the restart re-seed is the second reader, and it reads the deadline from the row's own mint time.
+  it('askNotifyAt is defined in server/src/askwindow.ts alone; the hold reads it once for both uses, the restart re-seed once from the row', () => {
     expect(holders(defines('askNotifyAt'))).toEqual(['server/src/askwindow.ts']);
     const watch = stallCode(path.join(ccrcRoot, 'server/src/watch.ts'));
-    expect(watch.match(/\baskNotifyAt\(/g) ?? []).toHaveLength(1);
+    expect(watch.match(/\baskNotifyAt\(/g) ?? []).toHaveLength(2);
     expect(watch).toMatch(/renderAskBrief\([^)]*\buntil\)/);
     expect(watch).toMatch(/return \{ until, askId,/);
+    expect(watch).toMatch(/until: askNotifyAt\(row\.at\)/);
   });
 
   it('untrustedBlock and its preface live in server/src/coord/untrusted.ts alone, and the brief calls it', () => {
@@ -7555,5 +7560,37 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 
   it('mail-disabled: hand-only, no writer in the tree', () => {
     expect(writersOf('mail-disabled')).toEqual([]);
+  });
+});
+
+// D-5841 (D3, #755; plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Durability). APPENDED. The
+// brief watch has ONE home: its two timers, its decider and the wave brief's subject are defined in
+// `server/src/coord/briefwatch.ts` alone, and the subject is spelled on no other source code line, so `dispatchRun`'s
+// brief and the pass that looks for it cannot drift apart. Code lines only (`stallCode`).
+describe('the brief watch is defined once (D-5841)', () => {
+  const holders = (re: RegExp): string[] =>
+    ALL.filter((f) => rel(f).startsWith('server/src/') && re.test(stallCode(f))).map(rel).sort();
+  const defines = (name: string): RegExp =>
+    new RegExp(`\\bfunction\\s+${name}\\b|\\b(?:const|let|var)\\s+${name}\\s*=`);
+  const HOME = 'server/src/coord/briefwatch.ts';
+
+  it('CONTROL: the patterns see a definition and pass over comment lines', () => {
+    expect(defines('briefStep').test('export function briefStep(b: B, now: number): BriefStep {')).toBe(true);
+    expect(stallCodeText("// the subject is 'wave-brief'\nconst x = 1;")).not.toMatch(/'wave-brief'/);
+  });
+
+  it('the two timers are 5 and 10 minutes, defined in briefwatch.ts alone', () => {
+    const src = stallCode(path.join(ccrcRoot, HOME));
+    expect(src).toMatch(/export const BRIEF_RETRY_MS = 5 \* 60_000;/);
+    expect(src).toMatch(/export const BRIEF_NOTICE_MS = 10 \* 60_000;/);
+    for (const name of ['BRIEF_RETRY_MS', 'BRIEF_NOTICE_MS', 'BRIEF_RETRY_DETAIL', 'BRIEF_NOTICE_DETAIL',
+      'WAVE_BRIEF_SUBJECT', 'briefStep', 'briefNotTakenSubject', 'briefNotTakenTag']) {
+      expect(holders(defines(name)), name).toEqual([HOME]);
+    }
+  });
+
+  it("the wave brief's subject is spelled on one source code line", () => {
+    expect(holders(/['"]wave-brief['"]/)).toEqual([HOME]);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/coord/dispatch.ts'))).toMatch(/subject: WAVE_BRIEF_SUBJECT\b/);
   });
 });
