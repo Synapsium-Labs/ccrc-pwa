@@ -1,0 +1,305 @@
+// `deploy/models-canary.mjs` — ONE request through a Codex lane's own proxy,
+// for one candidate model (auto-advance spec §2.3 step 3, D22; plan W2 Task
+// 10). Against the fake lane proxy (`spawnFakeLaneProxy`): a python child on
+// 127.0.0.1 and a kernel-chosen port, never a live lane's. Every case runs in a
+// `mkTmp` HOME with a key minted for the case. Neutral ids only.
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { mkTmp } from './tmpHelpers.js';
+import {
+  freePort, killLaneProcesses, laneProxyAnswersAs, laneProxyGets, laneProxyMode, laneProxyRequests, shimRefusedPrefix,
+  spawnFakeLaneProxy, type FakeLaneProxy, type LaneProxyMode,
+} from './codexLaneFixture.js';
+import { pythonOrSkip } from './ccgptHarness.js';
+import { REASON_MAX } from '../../shared/model-advance.mjs';
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const CANARY = path.join(REPO, 'deploy', 'models-canary.mjs');
+const SHIM_PY = path.join(REPO, 'ccd', 'ccgpt-proxy.py');
+const PY = pythonOrSkip();
+
+let home = '';
+let proxy: FakeLaneProxy;
+let key = '';
+const laneDir = (): string => path.join(home, '.ccrc', 'codex', 'lane-a');
+const envPath = (): string => path.join(laneDir(), 'runtime.env');
+const lanePath = (): string => path.join(laneDir(), 'lane.json');
+const plantLane = (port: number): void => {
+  fs.mkdirSync(laneDir(), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(lanePath(), `${JSON.stringify({ id: 'lane-a', proxyPort: port }, null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(envPath(), `LITELLM_MASTER_KEY=${key}\n`, { mode: 0o600 });
+};
+
+interface Canary { code: number | null; body: Record<string, unknown>; out: string; ms: number }
+/** The canary for `model-6.1-gamma` at effort `low`, 2 s deadline; `args`
+ *  override (the last value of a key wins). Exactly one line on stdout, always. */
+function canary(args: string[] = [], extraEnv: NodeJS.ProcessEnv = {}): Canary {
+  const t0 = Date.now();
+  const r = spawnSync(process.execPath,
+    [CANARY, '--id', 'lane-a', '--model', 'model-6.1-gamma', '--effort', 'low', '--timeout-s', '2', ...args],
+    { env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home, ...extraEnv }, encoding: 'utf8', timeout: 20_000 });
+  const stdout = r.stdout ?? '';
+  expect(r.signal, `the canary was killed at the test's own bound: ${stdout}${r.stderr ?? ''}`).toBeNull();
+  const lines = stdout.split('\n');
+  expect(lines.length, `stdout carried ${lines.length - 1} lines, not one: ${stdout}`).toBe(2);
+  expect(r.stderr ?? '', 'the canary writes nothing on stderr').toBe('');
+  return { code: r.status, body: JSON.parse(lines[0]!) as Record<string, unknown>, out: stdout, ms: Date.now() - t0 };
+}
+
+describe.skipIf(PY === null)('deploy/models-canary.mjs (auto-advance spec §2.3 step 3; plan W2 Task 10)', () => {
+  beforeEach(async () => {
+    home = mkTmp('ccrc-models-canary-');
+    key = `sk-${randomBytes(24).toString('hex')}`;
+    proxy = await spawnFakeLaneProxy(home);
+    plantLane(proxy.port);
+  });
+  afterEach(async () => {
+    await killLaneProcesses(home);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('a 200 with text passes; the request is streamed, names the candidate and the lowest effort, and carries the lane key', () => {
+    const c = canary();
+    expect(c.code).toBe(0);
+    expect(c.body).toEqual({ ok: true, op: 'canary', result: 'passed', status: 200, reason: null });
+    // The lane probe came first, and carried no key.
+    expect(laneProxyGets(proxy)).toEqual([expect.objectContaining({ n: 1, path: '/ccgpt/lane', authorization: null })]);
+    expect(laneProxyGets(proxy)[0]!.headerNames).not.toContain('authorization');
+    const [q] = laneProxyRequests(proxy);
+    expect(q!.path).toBe('/v1/messages');
+    // The vacuity control for every "the key never leaves" case below: it was read, and it went out here.
+    expect(q!.authorization).toBe(`Bearer ${key}`);
+    expect(q!.headerNames).toEqual(expect.arrayContaining(['accept', 'anthropic-version', 'authorization', 'content-type']));
+    expect(q!.body).toEqual({ model: 'model-6.1-gamma', max_tokens: 512, stream: true,
+      messages: [{ role: 'user', content: 'Reply with the single word OK.' }], output_config: { effort: 'low' } });
+  });
+
+  it("a listener that answers the lane probe as another lane is unavailable, and nothing carrying the key is sent", () => {
+    // Review Focus: a port is only a number. Another lane's leftover shim, or a
+    // stray listener, on lane-a's proxy port gets no key.
+    laneProxyAnswersAs(proxy, 'lane-b');
+    const c = canary();
+    expect(c.body).toEqual({ ok: true, op: 'canary', result: 'unavailable', status: null,
+      reason: `127.0.0.1:${proxy.port} does not answer as lane-a's shim, so the key was not sent` });
+    expect(laneProxyRequests(proxy)).toEqual([]);
+    expect(laneProxyGets(proxy).map((g) => g.authorization)).toEqual([null]);
+  });
+
+  it('a listener that does not answer the lane probe (404) is unavailable, and nothing is sent', () => {
+    laneProxyAnswersAs(proxy, null);
+    expect(canary().body).toMatchObject({ result: 'unavailable', status: null });
+    expect(laneProxyRequests(proxy)).toEqual([]);
+  });
+
+  it('--effort none sends no output_config', () => {
+    expect(canary(['--effort', 'none']).body['result']).toBe('passed');
+    expect(laneProxyRequests(proxy)[0]!.body).not.toHaveProperty('output_config');
+  });
+
+  it('an effort level a catalogue may carry, with an underscore or a capital, is sent as it is', () => {
+    expect(canary(['--effort', 'Extra_High']).body['result']).toBe('passed');
+    expect(laneProxyRequests(proxy)[0]!.body).toMatchObject({ output_config: { effort: 'Extra_High' } });
+  });
+
+  it('a 500 is failed, naming the status and the upstream error', () => {
+    laneProxyMode(proxy, '500');
+    expect(canary().body).toEqual({ ok: true, op: 'canary', result: 'failed', status: 500, reason: 'http 500: upstream error' });
+  });
+
+  it('an ordinary word that contains sk- is not redacted from a reason', () => {
+    laneProxyMode(proxy, '500-risk');
+    expect(canary().body['reason']).toBe('http 500: risk-averse upstream refused the task-queue');
+  });
+
+  it('an error body is read only up to its cap, so a huge one cannot flood the canary', () => {
+    laneProxyMode(proxy, '500-huge');
+    const reason = String(canary().body['reason']);
+    // Cut at 64 KiB, the body is no longer JSON, so the reason is its first characters, not the upstream message.
+    expect(reason.startsWith('http 500: {"pad": "xxxx')).toBe(true);
+    expect(reason).toHaveLength(REASON_MAX);
+    expect(reason).not.toContain('upstream error');
+  });
+
+  it("the shim's D-4933 502 (a refused gateway connection, waited out) is not-ready", () => {
+    laneProxyMode(proxy, '502-refused');
+    const c = canary();
+    expect(c.body).toMatchObject({ result: 'not-ready', status: 502 });
+    expect(String(c.body['reason']).startsWith(shimRefusedPrefix())).toBe(true);
+  });
+
+  it('a 502 that is not the D-4933 text, a reset during a LiteLLM restart, is failed: never not-ready and never passed', () => {
+    // Review Focus (false canary failures): classified by the table, never a silent pass.
+    laneProxyMode(proxy, '502-reset');
+    expect(canary().body).toEqual({ ok: true, op: 'canary', result: 'failed', status: 502,
+      reason: 'http 502: ccgpt-proxy: upstream unreachable: [Errno 104] Connection reset by peer' });
+  });
+
+  it("a refused connect on the shim's own port is not-ready", async () => {
+    const dead = await freePort();
+    plantLane(dead);
+    expect(canary().body).toEqual({ ok: true, op: 'canary', result: 'not-ready', status: null,
+      reason: `the lane's proxy on 127.0.0.1:${dead} refused the connection` });
+  });
+
+  it('a lane that never answers is not-ready at --timeout-s', () => {
+    laneProxyMode(proxy, 'hang');
+    const c = canary(['--timeout-s', '2']);
+    expect(c.body).toEqual({ ok: true, op: 'canary', result: 'not-ready', status: null,
+      reason: 'no text from the lane within 2s' });
+    expect(c.ms).toBeGreaterThanOrEqual(1900);
+    expect(c.ms).toBeLessThan(15_000);
+  });
+
+  it('a 200 that streams only thinking past the deadline is not-ready (D22), and says the lane answered', () => {
+    // Pinned as the spec decides it (§2.3 step 3: a canary that ends in its own
+    // timeout means not ready); the reason keeps it apart from a silent lane.
+    laneProxyMode(proxy, 'trickle');
+    const c = canary(['--timeout-s', '2']);
+    expect(c.body).toEqual({ ok: true, op: 'canary', result: 'not-ready', status: 200,
+      reason: 'the lane answered 200 but sent no text within 2s' });
+    expect(c.ms).toBeLessThan(15_000);
+  });
+
+  it('a 200 stream of more than 256 KiB with no text is failed at the read cap, well before the deadline', () => {
+    laneProxyMode(proxy, 'flood');
+    const c = canary(['--timeout-s', '10']);
+    expect(c.body).toEqual({ ok: true, op: 'canary', result: 'failed', status: 200,
+      reason: 'no-text: no text in the first 262144 bytes' });
+    expect(c.ms).toBeLessThan(9_000);
+  });
+
+  it('reasoning that exhausts max_tokens before any text is failed (no-text), never passed', () => {
+    // Review Focus (false canary failures).
+    laneProxyMode(proxy, 'thinking-only');
+    expect(canary().body).toEqual({ ok: true, op: 'canary', result: 'failed', status: 200,
+      reason: 'no-text: the stream ended (stop_reason max_tokens) before any text' });
+  });
+
+  it('a text delta that is only whitespace is not text', () => {
+    laneProxyMode(proxy, 'blank-text');
+    expect(canary().body).toMatchObject({ result: 'failed', reason: 'no-text: the stream ended (stop_reason end_turn) before any text' });
+  });
+
+  it('an error event in the stream is failed (stream-error)', () => {
+    laneProxyMode(proxy, 'stream-error');
+    expect(canary().body).toEqual({ ok: true, op: 'canary', result: 'failed', status: 200, reason: 'stream-error: overloaded_error' });
+  });
+
+  it('a 200 that is not a stream is failed (no-text)', () => {
+    laneProxyMode(proxy, 'json-200');
+    expect(canary().body).toMatchObject({ result: 'failed', reason: 'no-text: the answer was not a stream (application/json)' });
+  });
+
+  it('a 401 after the key was re-minted is failed, and the key it echoes back never leaves the process', () => {
+    // Review Focus (false canary failures): a LiteLLM 401 names the key it received.
+    laneProxyMode(proxy, '401-echo');
+    const c = canary();
+    expect(c.body).toMatchObject({ result: 'failed', status: 401 });
+    expect(c.body['reason']).toBe(
+      'http 401: Authentication Error, Invalid proxy server token passed. Received API Key = Bearer sk-<redacted>');
+    expect(c.out).not.toContain(key.slice(3));
+  });
+
+  it('a proxy variable in the environment is ignored', async () => {
+    // Review Focus (false canary failures): an environment proxy must not route the canary anywhere.
+    const via = `http://127.0.0.1:${await freePort()}`;
+    // NODE_NO_WARNINGS: a Node that knows NODE_USE_ENV_PROXY may print a notice about it on stderr, which is the
+    // runtime's line, not the canary's.
+    const c = canary([], { HTTP_PROXY: via, http_proxy: via, HTTPS_PROXY: via, https_proxy: via, ALL_PROXY: via,
+      all_proxy: via, NODE_USE_ENV_PROXY: '1', NODE_NO_WARNINGS: '1' });
+    expect(c.body['result']).toBe('passed');
+    expect(laneProxyRequests(proxy)).toHaveLength(1);
+  });
+
+  it.each([
+    ['an absent runtime.env', (): void => fs.rmSync(envPath()), 'runtime.env could not be read (ENOENT)'],
+    ['a runtime.env with a second line', (): void => fs.writeFileSync(envPath(), `LITELLM_MASTER_KEY=${key}\nOTHER=1\n`),
+      'runtime.env is not one LITELLM_MASTER_KEY line'],
+    ['a runtime.env whose key is not 48 hex digits', (): void => fs.writeFileSync(envPath(), 'LITELLM_MASTER_KEY=sk-short\n'),
+      'runtime.env is not one LITELLM_MASTER_KEY line'],
+    ['a runtime.env over 256 bytes', (): void => fs.writeFileSync(envPath(), `LITELLM_MASTER_KEY=${key}${' '.repeat(300)}\n`),
+      'runtime.env could not be read (ETOOBIG)'],
+    ['an absent lane.json', (): void => fs.rmSync(lanePath()), 'lane.json could not be read (ENOENT)'],
+    ['a lane.json that is not JSON', (): void => fs.writeFileSync(lanePath(), '{ not json'), 'lane.json could not be read (not JSON)'],
+    ['a lane.json whose proxyPort is not a port', (): void => fs.writeFileSync(lanePath(),
+      JSON.stringify({ id: 'lane-a', proxyPort: 70000 })), 'lane.json names no proxyPort from 1 to 65535'],
+    ['a lane.json over 64 KiB', (): void => fs.writeFileSync(lanePath(),
+      JSON.stringify({ id: 'lane-a', proxyPort: proxy.port, pad: 'x'.repeat(70_000) })), 'lane.json could not be read (ETOOBIG)'],
+  ] as [string, () => void, string][])('%s is unavailable, and nothing is sent', (_w, spoil, reason) => {
+    spoil();
+    const c = canary();
+    expect(c.code).toBe(0);
+    expect(c.body).toEqual({ ok: true, op: 'canary', result: 'unavailable', status: null, reason });
+    expect(laneProxyGets(proxy)).toEqual([]);
+    expect(laneProxyRequests(proxy)).toEqual([]);
+    expect(c.out).not.toContain(key.slice(3));
+  });
+
+  it('a FIFO at runtime.env is unavailable at once, never a block', () => {
+    fs.rmSync(envPath());
+    expect(spawnSync('mkfifo', [envPath()]).status, 'mkfifo is needed for this case').toBe(0);
+    const c = canary();
+    expect(c.body).toMatchObject({ result: 'unavailable', reason: 'runtime.env could not be read (ENOTREG)' });
+    expect(c.ms).toBeLessThan(10_000);
+    expect(laneProxyRequests(proxy)).toEqual([]);
+  });
+
+  it.each([
+    ['an id that is not a lane id', ['--id', '../x']],
+    ['a model that is not a model id', ['--model', 'not an id']],
+    ['an effort longer than 64 characters', ['--effort', 'x'.repeat(65)]],
+    ['an effort with a control character', ['--effort', 'lo\tw']],
+    ['a deadline of 0', ['--timeout-s', '0']],
+    ['an unknown key', ['--key', 'x']],
+  ] as [string, string[]][])('%s is a usage error at exit 2, and nothing is sent', (_w, args) => {
+    const c = canary(args);
+    expect(c.code).toBe(2);
+    expect(c.body).toMatchObject({ ok: false, error: 'bad-argv' });
+    expect(laneProxyGets(proxy)).toEqual([]);
+    expect(laneProxyRequests(proxy)).toEqual([]);
+  });
+
+  it('the key never leaves the process: no answer carries it, whatever the lane says', () => {
+    const modes: LaneProxyMode[] = ['ok', '500', '401-echo', '502-reset', 'stream-error', 'thinking-only', 'json-200'];
+    for (const mode of modes) {
+      laneProxyMode(proxy, mode);
+      expect(canary().out, mode).not.toContain(key.slice(3));
+    }
+    expect(laneProxyRequests(proxy).map((q) => q.authorization)).toEqual(modes.map(() => `Bearer ${key}`));
+  });
+});
+
+describe('deploy/models-canary.mjs in source (plan W2 Task 10)', () => {
+  // Read inside each case, so a missing file is that case's own red, not an
+  // error while the describe is collected.
+  const src = (): string => fs.readFileSync(CANARY, 'utf8');
+
+  it('imports no child_process, writes no environment variable and logs nothing', () => {
+    const s = src();
+    // The IMPORT forms only: the file's own comments may say what it does not do.
+    expect(s).not.toMatch(/\bfrom\s+['"](?:node:)?child_process['"]|\bimport\(\s*['"](?:node:)?child_process['"]|\brequire\(\s*['"](?:node:)?child_process['"]/);
+    expect(s).not.toMatch(/process\.env(?:\.[A-Za-z_]\w*|\[[^\]]+\])\s*=(?!=)/);
+    expect(s).not.toMatch(/\bconsole\./);
+    expect(s).not.toMatch(/process\.stderr/);
+    expect(s).toMatch(/new Agent\(/);
+    expect(s).toContain("host: '127.0.0.1'");
+  });
+
+  it("the D-4933 prefix is ccd/ccgpt-proxy.py's own text", () => {
+    const m = /^const D4933_PREFIX = '([^']+)';$/m.exec(src());
+    expect(m, 'the canary has no D4933_PREFIX constant').not.toBeNull();
+    expect(m![1]).toBe(shimRefusedPrefix());
+  });
+
+  it("the default deadline is longer than the shim's 60 s refused-connect wait", () => {
+    const m = /^const CANARY_TIMEOUT_S = (\d+);$/m.exec(src());
+    expect(m, 'the canary has no CANARY_TIMEOUT_S constant').not.toBeNull();
+    const shimS = Number(/^UPSTREAM_WAIT_DEFAULT_S = (\d+)$/m.exec(fs.readFileSync(SHIM_PY, 'utf8'))![1]);
+    expect(shimS).toBe(60);
+    expect(Number(m![1])).toBeGreaterThan(shimS);
+  });
+});

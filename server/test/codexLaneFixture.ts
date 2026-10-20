@@ -2081,3 +2081,261 @@ export const STATE_CHANGING =
 export const stateCallsNaming = (argv: readonly string[], unit: RegExp): string[] =>
   argv.filter((a) => STATE_CHANGING.test(a) && unit.test(a));
 // ── Plan 3a Task 10 — the flip's fixtures (end) ──────────────────────────
+
+// ════════════════════════════════════════════════════════════════════════
+// Auto-advance plan W2 Task 10 — a fake lane PROXY, for the canary.
+// A python child like every listener in this file, bound to 127.0.0.1 on a
+// port the kernel chose. It answers the shim's lane probe, `GET /ccgpt/lane`,
+// as the lane it was started for (or as another lane, or 404, by a `lane` file
+// in its record directory), and `POST /v1/messages` the way the lane's shim and
+// LiteLLM can, by a MODE FILE there (`mode.<model>` first, then `mode`, default
+// `ok`). It records every POST (its path, its header NAMES, its Authorization
+// VALUE and its body) to `req.<n>.json`, and every GET to `get.<n>.json`. The
+// key it records is the fixture's own, minted per case.
+// ════════════════════════════════════════════════════════════════════════
+
+/** One mode per row of the canary's classification table (plan §3.6), and the
+ *  caps it reads under. */
+export type LaneProxyMode = 'ok' | `slow-ok:${number}` | 'park' | 'hang' | 'trickle' | 'flood' | '500' | '500-huge'
+  | '500-risk' | '502-refused' | '502-reset' | '401-echo' | 'thinking-only' | 'blank-text' | 'stream-error' | 'json-200';
+
+/** The shim's 502 text for a refused gateway connection it waited out
+ *  (D-4933), up to its first interpolation, read out of `ccd/ccgpt-proxy.py`:
+ *  the ONE reader, for the fake's `502-refused` answer and the canary's parity
+ *  pin. Throws when that line moved. */
+export function shimRefusedPrefix(): string {
+  const src = readFileSync(join(REPO, 'ccd', 'ccgpt-proxy.py'), 'utf8');
+  const m = /f"(ccgpt-proxy: upstream unreachable: connection refused for )\{UPSTREAM_WAIT_S\}s: \{e\.last\}"/.exec(src);
+  if (m === null) throw new Error('ccd/ccgpt-proxy.py no longer carries the D-4933 refused-connect 502 text');
+  return m[1]!.trimEnd();
+}
+
+export const FAKE_LANE_PROXY_PY = `import json, os, socketserver, sys, threading, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ARGS = sys.argv[1:]
+def opt(name, default):
+    return ARGS[ARGS.index(name) + 1] if name in ARGS and ARGS.index(name) + 1 < len(ARGS) else default
+REC = opt("--rec", "")
+D4933 = opt("--d4933", "")
+LANE = opt("--lane", "")
+LOCK = threading.Lock()
+COUNT = [0]
+GETS = [0]
+def mode_for(model):
+    for name in (["mode." + model] if model else []) + ["mode"]:
+        p = os.path.join(REC, name)
+        if os.path.isfile(p):
+            with open(p) as f:
+                return f.read().strip()
+    return "ok"
+def lane_answer():
+    p = os.path.join(REC, "lane")
+    if os.path.isfile(p):
+        with open(p) as f:
+            v = f.read().strip()
+        return None if v == "-" else v
+    return LANE
+def start():
+    return ("message_start", {"type": "message_start", "message": {"id": "msg_fixture", "type": "message", "role": "assistant", "content": []}})
+def thinking(t):
+    return ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": t}})
+def text(t):
+    return [start(),
+            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": t}}),
+            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}}),
+            ("message_stop", {"type": "message_stop"})]
+THINKING = [start(),
+            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}}),
+            thinking("Considering the reply."),
+            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "max_tokens"}}),
+            ("message_stop", {"type": "message_stop"})]
+FLOOD = [start()] + [thinking("x" * 4096) for _ in range(80)] + [
+            ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "max_tokens"}}),
+            ("message_stop", {"type": "message_stop"})]
+STREAM_ERROR = [start(), ("error", {"type": "error", "error": {"type": "overloaded_error", "message": "fixture overload"}})]
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def log_message(self, *args):
+        pass
+    def _json(self, code, obj):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+    def _sse_head(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "close")
+        self.end_headers()
+    def _event(self, name, data):
+        self.wfile.write(("event: %s\\ndata: %s\\n\\n" % (name, json.dumps(data))).encode())
+        self.wfile.flush()
+    def _sse(self, events):
+        self._sse_head()
+        for name, data in events:
+            self._event(name, data)
+    def do_GET(self):
+        with LOCK:
+            GETS[0] += 1
+            n = GETS[0]
+        with open(os.path.join(REC, "get.%d.json" % n), "w") as f:
+            json.dump({"n": n, "path": self.path,
+                       "headerNames": sorted(k.lower() for k in self.headers.keys()),
+                       "authorization": self.headers.get("Authorization")}, f)
+        lane = lane_answer() if self.path == "/ccgpt/lane" else None
+        if lane is None:
+            return self._json(404, {"error": "not found"})
+        return self._json(200, {"lane": lane})
+    def do_POST(self):
+        raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        try:
+            body = json.loads(raw)
+        except Exception:
+            body = None
+        model = body.get("model") if isinstance(body, dict) else None
+        with LOCK:
+            COUNT[0] += 1
+            n = COUNT[0]
+        with open(os.path.join(REC, "req.%d.json" % n), "w") as f:
+            json.dump({"n": n, "path": self.path, "model": model,
+                       "headerNames": sorted(k.lower() for k in self.headers.keys()),
+                       "authorization": self.headers.get("Authorization"), "body": body}, f)
+        mode = mode_for(model or "")
+        if mode == "ok":
+            return self._sse(text("OK"))
+        if mode.startswith("slow-ok:"):
+            time.sleep(float(mode.split(":", 1)[1]))
+            return self._sse(text("OK"))
+        if mode == "park":
+            open(os.path.join(REC, "parked.%d" % n), "w").close()
+            deadline = time.time() + 60
+            while not os.path.exists(os.path.join(REC, "release")) and time.time() < deadline:
+                time.sleep(0.05)
+            return self._sse(text("OK"))
+        if mode == "hang":
+            time.sleep(60)
+            return
+        if mode == "trickle":
+            self._sse_head()
+            self._event(*start())
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                self._event(*thinking("still thinking"))
+                time.sleep(0.2)
+            return
+        if mode == "flood":
+            return self._sse(FLOOD)
+        if mode == "500":
+            return self._json(500, {"error": {"type": "api_error", "message": "upstream error"}})
+        if mode == "500-huge":
+            return self._json(500, {"pad": "x" * 70000, "error": {"type": "api_error", "message": "upstream error"}})
+        if mode == "500-risk":
+            return self._json(500, {"error": {"type": "api_error", "message": "risk-averse upstream refused the task-queue"}})
+        if mode == "502-refused":
+            return self._json(502, {"error": D4933 + " 60s: <urlopen error [Errno 111] Connection refused>"})
+        if mode == "502-reset":
+            return self._json(502, {"error": "ccgpt-proxy: upstream unreachable: [Errno 104] Connection reset by peer"})
+        if mode == "401-echo":
+            return self._json(401, {"error": {"type": "auth_error", "message": "Authentication Error, Invalid proxy server token passed. Received API Key = %s" % (self.headers.get("Authorization") or "")}})
+        if mode == "thinking-only":
+            return self._sse(THINKING)
+        if mode == "blank-text":
+            return self._sse(text(" "))
+        if mode == "stream-error":
+            return self._sse(STREAM_ERROR)
+        if mode == "json-200":
+            return self._json(200, {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "OK"}]})
+        return self._json(500, {"error": "fixture: unknown mode " + mode})
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+server = Server(("127.0.0.1", 0), Handler)
+print("READY %d" % server.server_address[1], flush=True)
+server.serve_forever()
+`;
+
+export interface FakeLaneProxy { port: number; rec: string; child: ChildProcess }
+export interface LaneProxyRequest {
+  n: number; path: string; model: string | null; headerNames: string[]; authorization: string | null; body: unknown;
+}
+export interface LaneProxyGet { n: number; path: string; headerNames: string[]; authorization: string | null }
+
+/** The fake lane proxy, a tracked python child of this process on a port the
+ *  kernel chose (held from the moment this resolves), answering the lane probe
+ *  as `lane`. Its record directory is `<home>/fake-lane-proxy`. Ended by
+ *  `killLaneProcesses(home)`, through its handle. */
+export async function spawnFakeLaneProxy(home: string, lane = 'lane-a'): Promise<FakeLaneProxy> {
+  const py = pythonOrSkip();
+  if (py === null) throw new Error('spawnFakeLaneProxy needs python3 — gate the describe with pythonOrSkip()');
+  const dir = path.join(home, 'fake-procs');
+  fs.mkdirSync(dir, { recursive: true });
+  const script = path.join(dir, 'lane-proxy.py');
+  if (!fs.existsSync(script)) fs.writeFileSync(script, FAKE_LANE_PROXY_PY);
+  const rec = path.join(home, 'fake-lane-proxy');
+  fs.mkdirSync(rec, { recursive: true });
+  const child = spawn(py, [script, '--rec', rec, '--d4933', shimRefusedPrefix(), '--lane', lane], {
+    cwd: home,
+    env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home, PYTHONDONTWRITEBYTECODE: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  trackChild(home, child);
+  const port = await new Promise<number>((resolve, reject) => {
+    let out = '';
+    let err = '';
+    const timer = setTimeout(() => reject(new Error(`the fake lane proxy reported no READY within 10s: ${err}`)), 10_000);
+    child.stdout?.on('data', (c: Buffer) => {
+      out += c.toString();
+      const m = /^READY (\d+)$/m.exec(out);
+      if (m) { clearTimeout(timer); resolve(Number(m[1])); }
+    });
+    child.stderr?.on('data', (c: Buffer) => { err += c.toString(); });
+    child.once('exit', (code, sig) => {
+      clearTimeout(timer);
+      reject(new Error(`the fake lane proxy exited (${code ?? sig}) before READY: ${err}`));
+    });
+  });
+  return { port, rec, child };
+}
+
+/** What the fake answers a POST with: for every model, or for `model` only. */
+export function laneProxyMode(p: FakeLaneProxy, mode: LaneProxyMode, model?: string): void {
+  writeFileSync(join(p.rec, model === undefined ? 'mode' : `mode.${model}`), `${mode}\n`);
+}
+
+/** Which lane the fake's lane probe answers as from now on; null: a 404. */
+export function laneProxyAnswersAs(p: FakeLaneProxy, lane: string | null): void {
+  writeFileSync(join(p.rec, 'lane'), `${lane ?? '-'}\n`);
+}
+
+const recorded = <T extends { n: number }>(p: FakeLaneProxy, re: RegExp): T[] =>
+  fs.readdirSync(p.rec).filter((f) => re.test(f))
+    .map((f) => JSON.parse(readFileSync(join(p.rec, f), 'utf8')) as T)
+    .sort((x, y) => x.n - y.n);
+
+/** Every POST the fake received, in arrival order. */
+export function laneProxyRequests(p: FakeLaneProxy): LaneProxyRequest[] {
+  return recorded<LaneProxyRequest>(p, /^req\.\d+\.json$/);
+}
+
+/** Every GET (the lane probe) the fake received, in arrival order. */
+export function laneProxyGets(p: FakeLaneProxy): LaneProxyGet[] {
+  return recorded<LaneProxyGet>(p, /^get\.\d+\.json$/);
+}
+
+/** How many requests are parked (`park` mode) right now, or were. */
+export function laneProxyParked(p: FakeLaneProxy): number {
+  return fs.readdirSync(p.rec).filter((f) => /^parked\.\d+$/.test(f)).length;
+}
+
+/** Lets every parked request answer, with a 200 and text. */
+export function laneProxyRelease(p: FakeLaneProxy): void {
+  writeFileSync(join(p.rec, 'release'), '');
+}
