@@ -700,6 +700,7 @@ describe('L1', () => {
   it('imports L0 alone — no node:, no fs, no fastify', () => {
     const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'deadCoordinator.ts'), 'utf8');
     const froms = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
-    expect(froms).toEqual(['../../shared/api.js']);
+    // D-5855: the live switch is re-exported from its row in the L0 switchboard.
+    expect(froms).toEqual(['../../shared/api.js', '../../shared/switches.js']);
   });
 });

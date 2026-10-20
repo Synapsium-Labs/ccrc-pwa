@@ -803,7 +803,9 @@ describe('wave 8\'s formula, imported: one definer', () => {
   it('the collector imports the derivation and both waits, and spells no formula of its own', () => {
     const lane = codeOnly(readFileSync(path.join(srcRoot, 'collectLane.ts'), 'utf8'));
     const from = [...new Set([...lane.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]))].sort();
-    expect(from, 'L1: L0 and the one L1 file whose formula it shares').toEqual(['../../shared/api.js', './childReclaimSweep.js']);
+    // `shared/switches.js` is L0: the lane's live marker is spelled once there (D-5855).
+    expect(from, 'L1: L0 and the one L1 file whose formula it shares')
+      .toEqual(['../../shared/api.js', '../../shared/switches.js', './childReclaimSweep.js']);
     const imported = /import\s*\{([^}]*)\}\s*from\s*'\.\/childReclaimSweep\.js'/.exec(lane)?.[1] ?? '';
     for (const name of ['childReclaimTierFrom', 'childReclaimTierPaceMs', 'childReclaimBackoffMs']) {
       expect(imported, name).toMatch(new RegExp(`\\b${name}\\b`));
