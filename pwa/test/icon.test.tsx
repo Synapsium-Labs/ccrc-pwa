@@ -128,7 +128,6 @@ describe('the text glyph constants', () => {
  *  characters it may hold, and why it waits. Keyed per character so a NEW emoji
  *  in a registered file still reds. */
 const REGISTERED: Record<string, { chars: string; why: string }> = {
-  'pwa/src/session/SessionHeader.tsx': { chars: '🤖', why: '#402 holds the file' },
   'ui/src/components/tool-card.tsx': { chars: '❓', why: 'the ask sheet half' },
   // D-5452: #402 now also edits FleetHead.tsx (the Docs door), so the Account
   // door's swap waits for it. 📄 is NOT listed: it reds here, and is swapped

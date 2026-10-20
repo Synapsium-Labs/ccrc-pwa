@@ -3,3 +3,46 @@
    tokens. Colour comes from the identity core's tokens and nothing here defines one (D-5094); every colour-bearing
    rule added later is a `contrast.test.ts` identity. Empty in S2b: the frame's grid is still `shell.css`'s; S4b moves
    Refined's desktop grid and the accounts top strip here. */
+
+/* W2 Task S7c (D-5471): Refined's session chrome, the short header. Layout only: every colour is the shared header's
+   (`chat.css`), so nothing here is a new contrast identity. Two rows: Back, the title and the doors; then ONE chip rail
+   that scrolls sideways inside itself instead of wrapping (spec §5.3: about 96px at 390, against 180 for the shared
+   header with the same session). */
+.ref-session-head {
+  flex-wrap: wrap;
+  row-gap: var(--sp-1);
+  padding-bottom: var(--sp-2);
+}
+.ref-session-title {
+  flex: 1;
+  min-width: 0;
+}
+.chat-head .ref-chip-rail {
+  order: 1;
+  flex-basis: 100%;
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.chat-head .ref-chip-rail::-webkit-scrollbar {
+  display: none;
+}
+.chat-head .ref-chip-rail > * {
+  flex: none;
+}
+/* The coordination line and the details read as rail items, one row, never a wrapped block. */
+.chat-head .ref-chip-rail .chat-coord {
+  flex-wrap: nowrap;
+  margin: 0;
+  white-space: nowrap;
+}
+.chat-head .ref-chip-rail .chat-facts {
+  display: contents;
+}
+.chat-head .ref-chip-rail .chat-fact,
+.chat-head .ref-chip-rail .sess-meta > * {
+  flex: none;
+  white-space: nowrap;
+}
