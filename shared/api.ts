@@ -4962,6 +4962,17 @@ export function isMailDeliveryState(v: unknown): v is MailDeliveryState {
 export const TERMINAL_DELIVERY_STATES = ['acked', 'rejected'] as const satisfies
   readonly MailDeliveryState[];
 
+/** The states a delivery sits in while it is still OUTSTANDING, DERIVED as the
+ *  complement of `terminal` within this vocabulary (D-5997, #532), so a member
+ *  added to `TERMINAL_DELIVERY_STATES` leaves this list in the same edit and both
+ *  of the store's guards move together. `unknown` is in neither list: a state this
+ *  build cannot name is not outstanding either (D-1406 stays open). A function so
+ *  the derivation itself can be measured against a different terminal list. */
+export function outstandingDeliveryStates(terminal: readonly MailDeliveryState[]): readonly MailDeliveryState[] {
+  return MAIL_DELIVERY_STATES.filter((s) => s !== 'unknown' && !terminal.includes(s));
+}
+export const OUTSTANDING_DELIVERY_STATES = outstandingDeliveryStates(TERMINAL_DELIVERY_STATES);
+
 /** ≤8KB, spec:114. Measured in UTF-8 BYTES, not string length — the same
  *  char-vs-byte care `hookstate.ts:128-135` already takes with its own cap. */
 export const MAIL_BODY_MAX_BYTES = 8 * 1024;
