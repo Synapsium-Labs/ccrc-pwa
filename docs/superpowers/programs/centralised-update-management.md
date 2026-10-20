@@ -2334,6 +2334,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - 12:55: v0.0.453 (#964) followed, unapplied; #722 still open. STATUS: fleet and server v0.0.443, newest
         v0.0.453, stable v0.0.328, intent dev/auto=off, backups fleet 202M/server 6452M, disk free fleet 208G/work
         volume 89G/server 26G, no anomalies.
+      - 13:55: both boxes moved to v0.0.455 (#936) by the operator's console tap, fleet 13:49:03 to 13:50:36, then
+        the server 13:51:46 to 13:53:22; both `done`, `from: pwa`, gates passed, doctor 0 failed on both boxes.
+        Server backups 6822M, 10 kept, the newest 795M. v0.0.456 (#826) followed, unapplied; #722 still open.
+        STATUS: fleet and server v0.0.455, newest v0.0.456, stable v0.0.328, intent dev/auto=off, backups fleet
+        203M/server 6822M, disk free fleet 208G/work volume 98G/server 26G, no anomalies.
       - v0.0.276 (#602) followed at 14:13, unapplied. STATUS: fleet and server v0.0.275, newest v0.0.276, intent
         dev/auto=stable, backups fleet 168M/server 1108M, disk free fleet 211G/work volume 90G/server 32G.
 
