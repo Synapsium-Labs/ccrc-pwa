@@ -2973,8 +2973,10 @@ function rowBytes(row) {
   return n;
 }
 
-/** This store's segment names in replay order, listed once per call (the run object is the call's). An absent directory is no
- *  segment; a listing that throws fails the chunk. The writer layout is not measured here: replayLayoutAt keeps it (D-5727). */
+/** This store's segment names in replay order, listed once per call (the run object is the call's): a readdir and one lstat per
+ *  segment name (store.mjs listSegments), opening no segment. An absent directory is no segment; a listing that throws fails the
+ *  phase advance into export-blobs (measureReplayLayout) or the export chunk that lists, and the next call lists again. The writer
+ *  layout is not measured here: the phase advance measures it and replayLayoutAt keeps it (D-5727). */
 function exportReplayListing(run) {
   if (run.exportListing === undefined) {
     const dir = `${run.P.root}/${EXPORT_DIR}/${run.storeId}`;
@@ -2983,39 +2985,53 @@ function exportReplayListing(run) {
   return run.exportListing;
 }
 
-/** The writer layout one export chunk replays with: measured ONCE per replay, kept in one meta key, and only ever widened
- *  (D-5727 (history-export-replay-layout-once), wave 5h-1 FR1, amending D-5726 for where the layout comes from). Called in the
- *  chunk's transaction, so the key and the marks the chunk writes commit together. Lib planReplayLayout decides which of three:
- *  - at the replay's first export-blobs chunk (`measuring`), the layout is the listing plus the store's marked names
- *    (markedSegmentNames, the two DISTINCT scans), and the key is written with this replay's version. That is the point at which the
- *    bind has left its marks and the replay has taken none off: the journal phases (index, apply) write no `exported_seg`
- *    (recoverPass runs no ingest, and recoverApplyChunk reaches only applyJournalRecord, then applyReplayAction, then replayVerdict
- *    and replayReceipt; none of those, nor ensureFamily, mergeFamily, chainEpoch, replayEpochLine or applyEventLine, writes a mark;
- *    the clears at writeChunk, ingestSidecar and storeBlob belong to live ingest only). A later change that adds a mark writer to
- *    the journal phases must move this measure;
- *  - at every later chunk, a key that parses and carries this replay's version is the layout so far, and this chunk's listing
- *    widens it; the key is written back only when the union widens it (a writer it lacked, a lower lo or a higher hi);
- *  - a key that is missing, malformed or of another version past the measuring point means an older build carried this replay
- *    past it: the layout is the WIDEST (every writer the listing or the marks name, over the whole seq line), never a fresh measure,
- *    which the older build's take-offs may have made narrower than the truth (probe M); the key is written with this version.
+/** The writer layout one export chunk replays with: measured ONCE per replay, at its phase advance into export-blobs
+ *  (measureReplayLayout), kept in one meta key, and only ever widened here (D-5727 (history-export-replay-layout-once), wave 5h-1
+ *  FR1, amended by FR2 for where the measure is taken; D-5726 for where the layout comes from). Called in the chunk's transaction, so
+ *  the key and the marks the chunk writes commit together. Lib planReplayLayout decides which of two:
+ *  - `widen`: a key that parses and carries this replay's version is the layout so far, and this chunk's listing widens it; the key
+ *    is written back only when the union widens it (a writer it lacked, a lower lo or a higher hi). A chunk never re-measures: a
+ *    re-entered export-blobs chunk with no file (a stalled last segment moved aside) widens the advance's key like any other;
+ *  - `widest`: a key that is missing, malformed or of another version means an older build carried this replay past the phase
+ *    advance (a rollout or rollback across an open recovery, or a cursor an older build advanced into export-blobs): the layout is the
+ *    WIDEST (every writer the listing or the marks name, over the whole seq line), never a fresh measure, which the older build's
+ *    take-offs may have made narrower than the truth (probe M); the key is written with this version.
+ *  The measure is taken at the PHASE ADVANCE, not at a chunk, because the advance opens no segment: a segment that cannot be read
+ *  fails the chunk that opens it, before that chunk's transaction, and the operator's way out (move it aside) would otherwise change
+ *  the listing the measure reads. The advance is the point at which the bind has left its marks and the replay has taken none off:
+ *  the journal phases (index, apply) write no `exported_seg` (recoverPass runs no ingest, and recoverApplyChunk reaches only
+ *  applyJournalRecord, then applyReplayAction, then replayVerdict and replayReceipt; none of those, nor ensureFamily, mergeFamily,
+ *  chainEpoch, replayEpochLine or applyEventLine, writes a mark; the clears at writeChunk, ingestSidecar and storeBlob belong to live
+ *  ingest only). A later change that adds a mark writer to the journal phases must move this measure.
  *  A range that only widens can turn a 'mark' into a 'keep' or a 'take-off', never the reverse, so a layout too wide costs
  *  re-exports and never a row. finishRecovery deletes the key. Rule 5 of lib decideReplayMark reads the CURRENT listing, not the key. */
-function replayLayoutAt(db, run, names, measuring) {
-  const plan = planReplayLayout({ text: getMeta(db, EXPORT_REPLAY_LAYOUT_META), version: run.version, measuring });
+function replayLayoutAt(db, run, names) {
+  const plan = planReplayLayout({ text: getMeta(db, EXPORT_REPLAY_LAYOUT_META), version: run.version });
   if (plan.word === 'widen') {
     const layout = replayWriterLayout(names, [], plan.ranges);
     if (layout.widened) setMeta(db, EXPORT_REPLAY_LAYOUT_META, formatReplayLayout({ version: run.version, ranges: layout.ranges }));
     return layout;
   }
   const marked = [...markedSegmentNames(db)];
-  const layout = plan.word === 'measure' ? replayWriterLayout(names, marked) : replayWriterLayout(names, [], widestReplayRanges([...names, ...marked]));
+  const layout = replayWriterLayout(names, [], widestReplayRanges([...names, ...marked]));
   setMeta(db, EXPORT_REPLAY_LAYOUT_META, formatReplayLayout({ version: run.version, ranges: layout.ranges }));
   return layout;
 }
 
-/** The distinct segment names the store's marks hold: blobs.exported_seg and entries.exported_seg, two DISTINCT scans. The one
- *  reader of them, for the check after a bind (which names the ones no segment is listed for) and for the measuring point of replay's
- *  writer layout (replayLayoutAt). */
+/** The replay's writer layout, MEASURED (D-5727, FR2): the store's segment listing (exportReplayListing: a readdir and one lstat per
+ *  name, opening no segment, so a segment that cannot be read cannot stop it) plus the names the store's marks hold
+ *  (markedSegmentNames), as replayWriterLayout ranges them, written to the layout key with this replay's version. recoveryStep calls it
+ *  in the transaction of the phase advance from apply into export-blobs, so the key and the cursor commit together. A listing that
+ *  throws fails the advance: the cursor stays at apply's end, recover_chunk_failed counts it, and the next call retries. */
+function measureReplayLayout(db, run) {
+  const { names } = exportReplayListing(run);
+  const layout = replayWriterLayout(names, [...markedSegmentNames(db)]);
+  setMeta(db, EXPORT_REPLAY_LAYOUT_META, formatReplayLayout({ version: run.version, ranges: layout.ranges }));
+}
+
+/** The distinct segment names the store's marks hold: blobs.exported_seg and entries.exported_seg, two DISTINCT scans. The readers of
+ *  them: the check after a bind (which names the ones no segment is listed for), and replay's writer layout (measureReplayLayout at
+ *  the phase advance into export-blobs; replayLayoutAt on a key it cannot trust). */
 function markedSegmentNames(db) {
   const named = new Set();
   for (const r of db.prepare('SELECT DISTINCT exported_seg AS seg FROM blobs WHERE exported_seg IS NOT NULL').all()) named.add(String(r.seg));
@@ -3177,7 +3193,7 @@ function exportPhaseChunk(db, run, cursor, kind) {
   try {
     next = withTx(db, 'NORMAL', () => {
       if (kind === 'bytes' && cursor.file === null) setMeta(db, HEALTH_META.exportSegmentNewer, '[]');
-      const layout = replayLayoutAt(db, run, names, kind === 'bytes' && cursor.file === null);   // D-5727: the measuring point is this chunk
+      const layout = replayLayoutAt(db, run, names);   // D-5727: the layout was measured at the phase advance into export-blobs; a chunk only widens it
       if (opened.verdict !== null && opened.verdict.word === 'replay') {
         page = kind === 'rows'
           ? replayRowPage(db, run, opened.sdb, dir, name, opened.verdict.meta, after, layout)
@@ -3342,8 +3358,13 @@ export async function recoveryStep(db, ctx, executors = RECOVER_EXECUTORS) {
         return { moved: true, done: true, held: false };
       }
       const next = { phase: RECOVER_PHASES[at + 1], file: null, offset: 0, blobId: null, groupSize: null, pairsAdded: run.pairsAdded };
+      // history-off is otherwise read only at the top of this loop, so a chunk in flight when it is touched still commits and
+      // the advance after it would too. No phase advances under it (D-5727, FR2): an advance under off waits one more tick.
+      if (existsSync(ctx.paths.off)) return { moved, done: false, held: true };
       withTx(db, 'NORMAL', () => {
         if (at === 0 && run.foreign.length > 0) bump(db, 'journal_head_mismatch', run.foreign.length);
+        // D-5727: the replay's writer layout is measured here, in the advance's transaction with the cursor (measureReplayLayout).
+        if (next.phase === 'export-blobs') measureReplayLayout(db, run);
         db.prepare(RECOVER_CURSOR_SQL).run(formatRecoverCursor(next), version);
       });
       cursor = next;
@@ -8915,8 +8936,8 @@ function measureSegmentListing(ctx) {
  *  batches included (O39; D-5632 (history-export-bind-check-batched)). */
 const EXPORT_MARKS_COUNTED_META = 'export_marks_counted';
 /** meta: the writer layout one recovery replay measured (D-5727 (history-export-replay-layout-once)): the recover row's version and each
- *  writer's `[lo, hi]` seq range (lib formatReplayLayout, parseReplayLayout). Written at the replay's first export-blobs chunk, widened
- *  by later chunks, deleted by finishRecovery. Sweep-private: neither status nor doctor reads it, and decideMarkCheck's bind facts
+ *  writer's `[lo, hi]` seq range (lib formatReplayLayout, parseReplayLayout). Written at the replay's phase advance into export-blobs, widened
+ *  by its export chunks, deleted by finishRecovery. Sweep-private: neither status nor doctor reads it, and decideMarkCheck's bind facts
  *  (`bound:<ms>`) never match it. It never rides the recover cursor (an older build refuses a cursor grammar it does not know, and the step stalls). */
 const EXPORT_REPLAY_LAYOUT_META = 'export_replay_layout';
 /** One page of the check's blob keyset: the blobs whose mark names a missing segment, pruned ones too (D-5396), from

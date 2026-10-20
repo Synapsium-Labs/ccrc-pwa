@@ -957,7 +957,7 @@ export function widenReplayRanges(base: ReplayRanges, add: ReplayRanges): { rang
 export function widestReplayRanges(names: Iterable<string>): Map<string, { lo: number; hi: number }>;
 export function formatReplayLayout(i: { version: number; ranges: ReplayRanges }): string;
 export function parseReplayLayout(text: string | null): { version: number; ranges: Map<string, { lo: number; hi: number }> } | null;
-export function planReplayLayout(i: { text: string | null; version: number; measuring: boolean }): { word: 'measure' } | { word: 'widen'; ranges: Map<string, { lo: number; hi: number }> } | { word: 'widest' };
+export function planReplayLayout(i: { text: string | null; version: number }): { word: 'widen'; ranges: Map<string, { lo: number; hi: number }> } | { word: 'widest' };
 export function decideReplayMark(i: { seg: string; held: string | null; fresh: boolean; layout: ReplayWriterLayout }): 'mark' | 'keep' | 'take-off';
 export function nextSegmentSeq(i: { onDisk: readonly number[]; recorded: number | null }): number;
 export function decideExportPass(i: { nowMs: number; lastPassMs: number | null; firstTickMs: number | null; lastAttemptMs?: number | null; intervalMs?: number }): 'run' | 'wait';

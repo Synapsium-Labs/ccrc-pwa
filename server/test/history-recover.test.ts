@@ -5566,7 +5566,7 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
   /** S and U: writer 0 carries the bodies and E0 (recovered once, so the store marks E0 by it); then writer 1's seq 2 (E0), writer 2's seq 3 (E0 and
    *  two variants) and writer 1's seq 5 (E0, no variants). Writer 1's seq 2 is the only segment that shows writer 1 starting below writer 2's seq 3,
    *  and no mark names it. The replay marks E0 by it, writer 2's seq 3 takes the mark off (a fork), and `2.W1` is moved aside from inside writer 2's
-   *  rows, before writer 1's seq 5 is replayed. `late`: seq 2 is planted AFTER the call that measured the layout (U), not before it (S). */
+   *  rows, before writer 1's seq 5 is replayed. `late`: seq 2 is planted AFTER the call that advanced into export-blobs, where the layout is measured (U), not before it (S). */
   const witnessCase = async (prefix: string, base: number, word: string, late: boolean): Promise<{ variants: number; seen: Array<Record<string, [number, number]> | null> }> => {
     const { box, ids, db } = x10Store(prefix);
     try {
@@ -5584,7 +5584,7 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
       rearm(db);
       const seen: Array<Record<string, [number, number]> | null> = [];
       if (late) {
-        await drive(box, ids, db, { until: () => true });   // the call that measures the layout
+        await drive(box, ids, db, { until: () => true });   // the call that advances into export-blobs, where the layout is measured (D-5727)
         seen.push(rangesOf(db));
         plantTwo();
         await drive(box, ids, db, { until: () => true });   // the first chunk to list seq 2
@@ -5605,19 +5605,19 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
     }
   };
 
-  it('D-5727 S (the witness is listed at the measuring point and named by no mark) writer 1\'s seq 2 is moved aside after writer 2\'s take-off and before writer 1\'s seq 5: the kept layout still reads a fork, so seq 5 never re-marks E0 and the rebuild holds E0\'s two variants', async () => {
+  it('D-5727 S (the witness is listed at the phase advance and named by no mark) writer 1\'s seq 2 is moved aside after writer 2\'s take-off and before writer 1\'s seq 5: the kept layout still reads a fork, so seq 5 never re-marks E0 and the rebuild holds E0\'s two variants', async () => {
     const out = await witnessCase('ccrc-history-d5727-s-', 0x2e00, 'zqd5727s', false);
     expect(out.variants, 'E0\'s variant rows survive in the export').toBe(2);
   }, 2 * HEAVY);
 
-  it('D-5727 U (the witness arrives after the measuring point) writer 1\'s seq 2 is planted after the call that measured the layout: the first chunk to list it widens the kept layout (writer 1 to [2, 5]), writer 2\'s seq 3 takes E0\'s mark off, and once seq 2 is moved aside seq 5 still never re-marks it', async () => {
+  it('D-5727 U (the witness arrives after the phase advance) writer 1\'s seq 2 is planted after the call that advanced into export-blobs and measured the layout: the first chunk to list it widens the kept layout (writer 1 to [2, 5]), writer 2\'s seq 3 takes E0\'s mark off, and once seq 2 is moved aside seq 5 still never re-marks it', async () => {
     const out = await witnessCase('ccrc-history-d5727-u-', 0x2f00, 'zqd5727u', true);
-    expect.soft(out.seen[0], 'the measuring point ranged the listing: writer 0 at 1, writer 2 at 3 and writer 1 at 5 alone').toEqual({ [W0]: [1, 1], [W2]: [3, 3], [W1]: [5, 5] });
+    expect.soft(out.seen[0], 'the advance ranged the listing: writer 0 at 1, writer 2 at 3 and writer 1 at 5 alone').toEqual({ [W0]: [1, 1], [W2]: [3, 3], [W1]: [5, 5] });
     expect.soft(out.seen[1], 'the next chunk listed seq 2 and the kept layout widened to it').toEqual({ [W0]: [1, 1], [W2]: [3, 3], [W1]: [2, 5] });
     expect(out.variants, 'E0\'s variant rows survive in the export').toBe(2);
   }, 2 * HEAVY);
 
-  it('D-5727 write-back (state pin) a segment of a NEW writer planted after the measuring point: the chunk that first lists it writes the widened layout back, naming that writer; a chunk that widens nothing writes nothing', async () => {
+  it('D-5727 write-back (state pin) a segment of a NEW writer planted after the phase advance: the chunk that first lists it writes the widened layout back, naming that writer; a chunk that widens nothing writes nothing', async () => {
     const { box, ids, db } = x10Store('ccrc-history-d5727-wb-');
     try {
       const t0 = Date.now() - 400 * X10_DAY;
@@ -5630,12 +5630,12 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
       for (const ev of ['INSERT', 'UPDATE']) db.exec(`CREATE TEMP TRIGGER keywrites_${ev} AFTER ${ev} ON main.meta WHEN NEW.k = '${LAYOUT_KEY}' BEGIN INSERT INTO keywrites VALUES (1); END`);
       const writes = (): number => Number((db.prepare('SELECT count(*) AS n FROM keywrites').get() as { n: number }).n);
       await drive(box, ids, db, { until: () => true });
-      expect(rangesOf(db), 'the measuring point ranged the listing').toEqual({ [W1]: [1, 2] });
-      expect(writes(), 'the measuring point wrote the key once').toBe(1);
+      expect(rangesOf(db), 'the advance ranged the listing').toEqual({ [W1]: [1, 2] });
+      expect(writes(), 'the advance wrote the key once').toBe(1);
       const before = getMeta(db, LAYOUT_KEY);
       await drive(box, ids, db, { until: ({ calls }) => calls >= 2 });
       expect(getMeta(db, LAYOUT_KEY), 'chunks that widen nothing leave the key as it was').toBe(before);
-      expect(writes(), 'and write nothing: the key was written once, at the measuring point').toBe(1);
+      expect(writes(), 'and write nothing: the key was written once, at the advance').toBe(1);
       plantSegment(box, ids.storeId, { seq: 4, writer: W2, blobs: [], rows: [] });
       await drive(box, ids, db, { until: () => true });
       expect(rangesOf(db), 'the chunk that first listed writer 2\'s segment ranged it').toEqual({ [W1]: [1, 2], [W2]: [4, 4] });
@@ -5647,7 +5647,7 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
     }
   }, 2 * HEAVY);
 
-  it('D-5727 S\' (the measuring point\'s listing) the shape of S, but writer 1\'s seq 2 is moved aside RIGHT AFTER the measuring call, before any later chunk lists it: only the measuring point\'s listing keeps writer 1 at [2, 5], so writer 2\'s seq 3 marks E0 and writer 1\'s seq 5 takes it off, and the rebuild holds E0\'s two variants (S pins the move after the take-off; S\' pins the listing at the measuring point)', async () => {
+  it('D-5727 S\' (the key of the call that advanced) the shape of S, but writer 1\'s seq 2 is moved aside RIGHT AFTER the call that advanced into export-blobs and ran its first chunk, before any later chunk lists it: the key that call wrote keeps writer 1 at [2, 5], so writer 2\'s seq 3 marks E0 and writer 1\'s seq 5 takes it off, and the rebuild holds E0\'s two variants (S pins the move after the take-off; the advance and the first chunk run in one call over one cached listing, so S\' does not pin the advance\'s own listing: T3b does)', async () => {
     const { box, ids, db } = x10Store('ccrc-history-d5727-sp-');
     try {
       const t0 = Date.now() - 400 * X10_DAY;
@@ -5661,9 +5661,9 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
       plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
       plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [], rows: x10Rows(e0) });
       rearm(db);
-      const first = await drive(box, ids, db, { until: () => true });   // the measuring call
+      const first = await drive(box, ids, db, { until: () => true });   // the call that advanced into export-blobs and ran its first chunk
       expect(first.done, 'the replay is open').toBe(false);
-      expect.soft(rangesOf(db), 'the measuring point ranged the listing, seq 2 included').toEqual({ [W0]: [1, 1], [W1]: [2, 5], [W2]: [3, 3] });
+      expect.soft(rangesOf(db), 'the key that call wrote ranged the listing, seq 2 included').toEqual({ [W0]: [1, 1], [W1]: [2, 5], [W2]: [3, 3] });
       moveAside(box, seg(2));
       const rest = await drive(box, ids, db);
       expect(rest.done, 'the replay completed').toBe(true);
@@ -5674,7 +5674,7 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
     }
   }, 2 * HEAVY);
 
-  it('D-5727 re-entry (the null-name arm) L\'s shape driven past E0\'s take-off, then the stored cursor rewound to export-blobs with no file (a state exportPhaseChunk stores only during the blob phase, so this is the rule the null-name arm reaches, not a state a run is known to leave): the measuring chunk widens the key it finds and does not re-measure it, so the fork stays and E0 stays owed; the rebuild holds E0\'s two variants', async () => {
+  it('D-5727 re-entry (the null-name arm) L\'s shape driven past E0\'s take-off, then the stored cursor rewound to export-blobs with no file (a state exportPhaseChunk stores only during the blob phase, so this is the rule the null-name arm reaches, not a state a run is known to leave): the re-entered chunk only widens the key it finds (a chunk never measures), so the fork stays and E0 stays owed; the rebuild holds E0\'s two variants', async () => {
     const { box, ids, db } = await plantL('ccrc-history-d5727-re-', 0x3600, 'zqd5727re');
     try {
       const stop = await drive(box, ids, db, { until: () => marksOf(db)[0] === null });
@@ -5683,7 +5683,7 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
       expect(rangesOf(db), 'the key holds the fork the marks witnessed').toEqual(whole);
       const at = cursorOn(db) ?? '';
       db.prepare("UPDATE derivation_state SET cursor = ? WHERE step = 'recover' AND completed_ms IS NULL").run(at.endsWith('+pairs') ? 'export-blobs+pairs' : 'export-blobs');
-      await drive(box, ids, db, { until: () => true });   // the re-entered measuring chunk
+      await drive(box, ids, db, { until: () => true });   // the re-entered export-blobs chunk
       expect.soft(rangesOf(db), 'the re-entered chunk widened the key and did not re-measure it (the marks no longer name seq 2)').toEqual(whole);
       const run = await drive(box, ids, db);
       expect(run.done).toBe(true);
@@ -5694,7 +5694,7 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
     }
   }, 2 * HEAVY);
 
-  it('D-5727 widest (a replay an older build carried past its measuring point) M\'s shape with the key deleted right after E0\'s take-off: the next chunk takes the widest layout (every writer over the whole seq line, a fork), writer 0, 1 and 2 stay forked, E0 stays unmarked, and the rebuild holds E0\'s two variants', async () => {
+  it('D-5727 widest (a replay an older build carried past its phase advance) M\'s shape with the key deleted right after E0\'s take-off: the next chunk takes the widest layout (every writer over the whole seq line, a fork), writer 0, 1 and 2 stay forked, E0 stays unmarked, and the rebuild holds E0\'s two variants', async () => {
     const { box, ids, db } = await plantL('ccrc-history-d5727-wide-', 0x3100, 'zqd5727w');
     try {
       const stop = await drive(box, ids, db, { until: () => marksOf(db)[0] === null });
@@ -5716,11 +5716,11 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
   it.each([
     ['stale key', 'the key carries another replay\'s version and narrow ranges (no fork)', (): string => recExport.formatReplayLayout({ version: 7, ranges: new Map([[W0, { lo: 1, hi: 1 }], [W2, { lo: 3, hi: 3 }], [W1, { lo: 5, hi: 5 }]]) })],
     ['torn key', 'the key is not a layout at all', (): string => '{"version":'],
-  ])('D-5727 %s (past the measuring point): L\'s shape, then %s: it is a mismatch, so the step completes on the widest layout, E0 comes off, and the rebuild holds E0\'s two variants', async (_name, _what, plant) => {
+  ])('D-5727 %s (past the phase advance): L\'s shape, then %s: it is a mismatch, so the step completes on the widest layout, E0 comes off, and the rebuild holds E0\'s two variants', async (_name, _what, plant) => {
     const { box, ids, db } = await plantL('ccrc-history-d5727-bad-', 0x3200, 'zqd5727b2');
     try {
       await drive(box, ids, db, { until: () => true });
-      expect.soft(getMeta(db, LAYOUT_KEY), 'the measuring point wrote this replay\'s key').not.toBeNull();
+      expect.soft(getMeta(db, LAYOUT_KEY), 'the phase advance wrote this replay\'s key').not.toBeNull();
       setMeta(db, LAYOUT_KEY, plant());
       await drive(box, ids, db, { until: () => true });
       const kept = recExport.parseReplayLayout(getMeta(db, LAYOUT_KEY));
@@ -5736,7 +5736,7 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
     }
   }, 2 * HEAVY);
 
-  it('D-5727 delete at done: the key stands from the measuring point to the last chunk, and finishRecovery\'s transaction deletes it', async () => {
+  it('D-5727 delete at done: the key stands from the phase advance to the last chunk, and finishRecovery\'s transaction deletes it', async () => {
     const { box, ids, db } = x10Store('ccrc-history-d5727-del-');
     try {
       const t0 = Date.now() - 400 * X10_DAY;
@@ -5792,6 +5792,59 @@ describe('D-5726: replay moves an export mark to a later carrier of the same wri
       } finally {
         closeWriter(again.db);
       }
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 T3b (the measure at the phase advance) the rebuild\'s FIRST listed segment, writer 1\'s seq 1 and the fork\'s only witness, cannot be read at the first export chunk and is moved aside as the message offers: the measure taken at the advance into export-blobs (which opens no segment) kept it, so writer 1 reads [1, 5], a fork with writer 2, and the rebuild holds E0\'s two variants', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5727-t3b-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x4600, 2, 'zqd5727t3b', t0);
+      const fam: X10Family = { uuid: x10U(0x46), path: '/home/u/gone/d5727t3b.jsonl', ino: 9406, texts };
+      const e0 = { ...fam, texts: [texts[0]!] };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W1, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      plantSegment(box, ids.storeId, { seq: 2, writer: W0, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      plantSegment(box, ids.storeId, { seq: 3, writer: W2, blobs: [], rows: [...x10Rows(e0), ...variantRows(fam, texts, t0)] });
+      plantSegment(box, ids.storeId, { seq: 5, writer: W1, blobs: [], rows: x10Rows(e0) });
+      fs.writeFileSync(path.join(exportDirOf(box), seg(1)), randomBytes(8192));   // the witness cannot be read
+      const stall = await drive(box, ids, db, { until: ({ calls }) => calls >= 4 });
+      expect.soft(stall.done, 'the replay waits on the unreadable first segment').toBe(false);
+      expect.soft(rangesOf(db), 'the advance measured the listing, the unreadable seq 1 included').toEqual({ [W0]: [2, 2], [W1]: [1, 5], [W2]: [3, 3] });
+      moveAside(box, seg(1));
+      const rest = await drive(box, ids, db);
+      expect(rest.done, 'the replay completed').toBe(true);
+      expect(await variantsAfterLoss(box, ids, db, seg(3, W2)), 'E0\'s variant rows survive in the export').toBe(2);
+    } finally {
+      closeWriter(db);
+    }
+  }, 2 * HEAVY);
+
+  it('D-5727 off race (no phase advances under history-off) history-off is touched during the last apply chunk, which still commits: the advance into export-blobs, with its measure, does not, so the step answers held with the cursor at apply and no layout key, and only index and apply ran; with the switch removed the next call advances', async () => {
+    const { box, ids, db } = x10Store('ccrc-history-d5727-off-');
+    try {
+      const t0 = Date.now() - 400 * X10_DAY;
+      const texts = x10Texts(0x4700, 1, 'zqd5727off', t0);
+      const fam: X10Family = { uuid: x10U(0x47), path: '/home/u/gone/d5727off.jsonl', ino: 9407, texts };
+      plantSegment(box, ids.storeId, { seq: 1, writer: W1, blobs: texts.map((t) => ({ text: t.text })), rows: x10Rows(fam) });
+      const P = historyPaths(box.home);
+      const ran: string[] = [];
+      const executors = Object.fromEntries(Object.entries(SW.RECOVER_EXECUTORS).map(([phase, fn]) =>
+        [phase, async (d: DatabaseSync, run: unknown, c: recExport.RecoverCursor): Promise<{ phaseDone: boolean }> => {
+          ran.push(phase);
+          const r = await (fn as (d: DatabaseSync, run: unknown, c: recExport.RecoverCursor) => Promise<{ phaseDone: boolean }>)(d, run, c);
+          if (phase === 'apply' && r.phaseDone) fs.writeFileSync(P.off, '');   // touched while the last apply chunk is in flight
+          return r;
+        }]));
+      const r = await SW.recoveryStep(db, stepCtx(box, ids), executors);
+      expect.soft(ran, 'only index and apply ran').toEqual(['index', 'apply']);
+      expect.soft(getMeta(db, LAYOUT_KEY), 'no layout key: the measure is the advance\'s').toBeNull();
+      expect.soft((cursorOn(db) ?? '').startsWith('apply'), `the stored cursor is still apply's (${cursorOn(db)})`).toBe(true);
+      expect(r, 'the step is held').toEqual({ moved: true, done: false, held: true });
+      fs.rmSync(P.off);
+      const rest = await drive(box, ids, db);
+      expect(rest.done, 'and with the switch removed the replay completes').toBe(true);
     } finally {
       closeWriter(db);
     }

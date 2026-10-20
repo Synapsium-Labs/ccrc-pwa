@@ -8187,19 +8187,16 @@ describe('W1-B4: segment names, their order and the next number (spec 9.15 "Writ
       expect(libSeg.replayWriterLayout(['3.0000000a.db', '4.0000000a.db'], [], libSeg.widestReplayRanges(['3.0000000a.db', '4.0000000a.db'])).forked, 'one writer alone is no fork').toBe(false);
       expect(libSeg.widestReplayRanges([]).size).toBe(0);
     });
-    it('planReplayLayout: the first export-blobs chunk measures, unless the key already carries its version (a re-entry widens); a later chunk widens a key of its own version; a key that is missing, malformed or of another version takes the widest', () => {
+    it('planReplayLayout answers two words: a key of this replay\'s version widens, and a key that is missing, malformed or of another version takes the widest (the measure is the phase advance\'s, never a chunk\'s)', () => {
       const kept = libSeg.formatReplayLayout({ version: 42, ranges: rs({ '0000000a': [2, 5] }) });
-      expect(libSeg.planReplayLayout({ text: libSeg.formatReplayLayout({ version: 41, ranges: rs({ '0000000a': [2, 5] }) }), version: 42, measuring: true }), 'at the measuring point a key of another replay is overwritten').toEqual({ word: 'measure' });
-      expect(libSeg.planReplayLayout({ text: 'torn{', version: 42, measuring: true }), 'and so is one that is not a layout').toEqual({ word: 'measure' });
-      const reentry = libSeg.planReplayLayout({ text: kept, version: 42, measuring: true });
-      expect(reentry.word, 'a key of this replay\'s version at a measuring chunk is a re-entry: it widens, and is never re-measured (a re-measure would read the marks after this replay\'s take-offs)').toBe('widen');
-      expect(reentry.word === 'widen' ? plain(reentry.ranges) : null).toEqual({ '0000000a': [2, 5] });
-      expect(libSeg.planReplayLayout({ text: null, version: 42, measuring: true })).toEqual({ word: 'measure' });
-      const widen = libSeg.planReplayLayout({ text: kept, version: 42, measuring: false });
+      const widen = libSeg.planReplayLayout({ text: kept, version: 42 });
       expect(widen.word).toBe('widen');
       expect(widen.word === 'widen' ? plain(widen.ranges) : null).toEqual({ '0000000a': [2, 5] });
       for (const [what, text] of [['missing', null], ['another version', libSeg.formatReplayLayout({ version: 41, ranges: rs({ '0000000a': [2, 5] }) })], ['torn', 'torn{'], ['not a layout', '{"version":42}']] as const) {
-        expect(libSeg.planReplayLayout({ text, version: 42, measuring: false }), what).toEqual({ word: 'widest' });
+        expect(libSeg.planReplayLayout({ text, version: 42 }), what).toEqual({ word: 'widest' });
+      }
+      for (const text of [kept, null, 'torn{']) {
+        expect(libSeg.planReplayLayout({ text, version: 42 }).word, 'no input answers measure').not.toBe('measure');
       }
     });
   });

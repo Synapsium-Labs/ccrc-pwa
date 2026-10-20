@@ -8313,25 +8313,22 @@ export function parseReplayLayout(text) {
   return { version: j.version, ranges };
 }
 
-/** What a replay does about its writer layout at one export chunk (D-5727 (history-export-replay-layout-once)). `measuring` is the
- *  replay's first export-blobs chunk, the one measuring point; `text` is the kept layout's meta value or null; `version` is this
- *  replay's (the recover row's).
- *  - `measure`: at the measuring point the layout is measured from the listing and the store's marks, unless the key already carries
- *    this replay's version (a re-entry at the measuring point: that key is widened, as at any later chunk, and never re-measured);
- *  - `widen`: past it, a key that parses and carries this replay's version is the layout so far (`ranges`), and the chunk's listing
- *    widens it;
- *  - `widest`: past it, a key that is missing, malformed or of another version means this replay passed its measuring point under a
- *    build that kept none (a rollout or rollback across an open recovery), and the marks that witnessed a fork may be gone. The
- *    layout is the widest, never a fresh measure, which would be narrower than the truth. Widening a range can only turn a 'mark'
- *    into a 'keep' or a 'take-off', or a 'keep' into a 'take-off' (decideReplayMark), so a layout too wide costs re-exports only. */
-export function planReplayLayout({ text, version, measuring }) {
+/** What a replay does about its writer layout at one export chunk (D-5727 (history-export-replay-layout-once)). The layout is
+ *  MEASURED once, at the replay's phase advance into export-blobs (the sweep's measureReplayLayout, which opens no segment), and
+ *  every export chunk after it plans from the kept key. `text` is the kept layout's meta value or null; `version` is this replay's
+ *  (the recover row's).
+ *  - `widen`: a key that parses and carries this replay's version is the layout so far (`ranges`), and the chunk's listing widens
+ *    it; the key is written back only when the union widens it. A chunk never re-measures, a re-entered one included (the
+ *    export-blobs cursor stored with no file: a stalled last segment moved aside), which would read the marks after this replay's
+ *    take-offs consumed them, narrower than the first measure;
+ *  - `widest`: a key that is missing, malformed or of another version means this replay passed its phase advance under a build that
+ *    kept none (a rollout or rollback across an open recovery, or a cursor an older build advanced into export-blobs), and the marks
+ *    that witnessed a fork may be gone. The layout is the widest, never a fresh measure, which would be narrower than the truth.
+ *    Widening a range can only turn a 'mark' into a 'keep' or a 'take-off', or a 'keep' into a 'take-off' (decideReplayMark), so a
+ *    layout too wide costs re-exports only. */
+export function planReplayLayout({ text, version }) {
   const kept = parseReplayLayout(text);
-  const mine = kept !== null && kept.version === version;
-  // A key of this replay's version at a measuring chunk is a RE-ENTRY, not the first measure: the export-blobs cursor can be stored with
-  // no file (a stalled last segment moved aside, the null-name arm of exportPhaseChunk) and a kill or a busy before the stubs move
-  // leaves it there. Re-measuring would read the marks after this replay's take-offs consumed them, narrower than the first measure.
-  if (measuring && !mine) return { word: 'measure' };
-  if (mine) return { word: 'widen', ranges: kept.ranges };
+  if (kept !== null && kept.version === version) return { word: 'widen', ranges: kept.ranges };
   return { word: 'widest' };
 }
 
@@ -8361,7 +8358,7 @@ export function planReplayLayout({ text, version, measuring }) {
  *  From the unlisted-held rule on, `held` is listed, so its writer is ranged (replayWriterLayout ranges the listed names), as is
  *  `seg`'s: a writer the layout does not range there is a caller's bug and throws, as an off-grammar `seg` does. `held` is the
  *  row's mark as the store holds it; a name off the segment grammar names no carrier and counts as null. `layout` is
- *  replayWriterLayout's answer: the replay's KEPT layout (D-5727, planReplayLayout: measured once from the listing and the store's
+ *  replayWriterLayout's answer: the replay's KEPT layout (D-5727, planReplayLayout: measured once, at the phase advance into export-blobs, from the listing and the store's
  *  marked names, then only widened) merged with the segments listed now. 'held is not listed' reads the current listing, never the
  *  kept ranges. `seg` is a listed name: off the grammar it is a caller's bug and throws, as segmentOrdersAfter does. */
 export function decideReplayMark({ seg, held, fresh, layout }) {
