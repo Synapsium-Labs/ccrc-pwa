@@ -875,7 +875,7 @@ export type AsksByChildResult =
  *  INTEGER wider than `Number.MAX_SAFE_INTEGER` into a JavaScript number, so a
  *  row a newer build wrote and a rollback left behind used to crash the read
  *  before any boundary could refuse in words — and there is no
- *  `app.setErrorHandler` anywhere in `server/src`, so that became Fastify's
+ *  `app.setErrorHandler` in `server/src` that shapes an answer (the root's only masks the message, D-5995), so that became Fastify's
  *  default bare 500. Reading them as TEXT and proving them afterwards is the
  *  idiom `openRun`'s already-protected duplicate-row arm uses (`:647`), reached
  *  here for the read surface. `CAST(NULL AS TEXT)` is `NULL`, so `waveOf`'s

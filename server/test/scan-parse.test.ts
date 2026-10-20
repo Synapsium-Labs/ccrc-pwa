@@ -40,6 +40,26 @@ const FIXTURE = [
   '',
 ].join('\n');
 
+// D-6045 (Task C0l; ARCH-04 (#545), stage 1): a type query is an import edge of its own kind, always type-only, so a
+// ring rule sees `import('fastify').FastifyReply` as it sees `import type { FastifyReply } from 'fastify'`.
+describe('scan/parse.ts lists a type query as a type-only edge (D-6045)', () => {
+  it('names the qualifier for import(…).T, none for typeof import(…), and in a nested type position too', () => {
+    const t = parseSource([
+      "let r: import('fastify').FastifyReply;",
+      "type M = typeof import('node:fs');",
+      "type Q = Promise<{ e: import('../shared/api').NotifyEvent[] }>;",
+      "type Deep = import('./a.js').Outer.Inner;",
+    ].join('\n'));
+    expect(t.imports.map(({ specifier, kind, typeOnly, names, line }) => ({ specifier, kind, typeOnly, names, line })))
+      .toEqual([
+        { specifier: 'fastify', kind: 'type-query', typeOnly: true, names: ['FastifyReply'], line: 1 },
+        { specifier: 'node:fs', kind: 'type-query', typeOnly: true, names: [], line: 2 },
+        { specifier: '../shared/api', kind: 'type-query', typeOnly: true, names: ['NotifyEvent'], line: 3 },
+        { specifier: './a.js', kind: 'type-query', typeOnly: true, names: ['Outer'], line: 4 },
+      ]);
+  });
+});
+
 describe('scan/parse.ts parses a fixture file (D-5853)', () => {
   let dir = '';
   let parsed: ParsedFile;
@@ -94,6 +114,39 @@ describe('scan/parse.ts parses a fixture file (D-5853)', () => {
     };
     expect(span('Holder.onTick')).toBe('onTick = (n: number): void => {\n    this.count += n;\n  };');
     expect(span('Holder.read.inner')).toBe('function inner(): number { return 1; }');
+  });
+
+  // D-5854 (Task C0g; ARCH-06 (#554)): the calls and bindings `scan/symbols.ts` and the literal source-pin ratchet read.
+  it('lists every call in source order, with its callee, its chain head, its literal arguments and its binding', () => {
+    expect(parsed.calls.map((c) => [c.callee, c.line])).toEqual([
+      ['String', 14], ['inner', 14],
+      ['readFileSync', 23], ['path.join', 23], ['walk', 23],
+      ['twice', 27],
+    ]);
+    const t = parseSource([
+      "const src = codeOnly(readFileSync(join(dir, 'watch.ts'), 'utf8'));",
+      "const body = src.slice(src.indexOf('  tick('), src.indexOf('\\n  }\\n'));",
+      "expect(body, 'the tick').not.toContain('sweep');",
+      'expect(body).toMatch(/a\\.b/g);',
+      'const read = (f: string): string => readFileSync(f, "utf8");',
+    ].join('\n'));
+    const pick = (c: (typeof t.calls)[number]): unknown =>
+      ({ name: c.name, head: c.head, headArgs: c.headArgs, args: c.args, boundTo: c.boundTo, line: c.line });
+    expect(t.calls.map(pick)).toEqual([
+      { name: 'codeOnly', head: 'codeOnly', headArgs: null, args: [{ kind: 'other', text: "readFileSync(join(dir, 'watch.ts'), 'utf8')" }], boundTo: 'src', line: 1 },
+      { name: 'readFileSync', head: 'readFileSync', headArgs: null, args: [{ kind: 'other', text: "join(dir, 'watch.ts')" }, { kind: 'string', text: 'utf8' }], boundTo: 'src', line: 1 },
+      { name: 'join', head: 'join', headArgs: null, args: [{ kind: 'other', text: 'dir' }, { kind: 'string', text: 'watch.ts' }], boundTo: 'src', line: 1 },
+      { name: 'slice', head: 'src', headArgs: null, args: [{ kind: 'other', text: "src.indexOf('  tick(')" }, { kind: 'other', text: "src.indexOf('\\n  }\\n')" }], boundTo: 'body', line: 2 },
+      { name: 'indexOf', head: 'src', headArgs: null, args: [{ kind: 'string', text: '  tick(' }], boundTo: 'body', line: 2 },
+      { name: 'indexOf', head: 'src', headArgs: null, args: [{ kind: 'string', text: '\n  }\n' }], boundTo: 'body', line: 2 },
+      { name: 'toContain', head: 'expect', headArgs: ['body', "'the tick'"], args: [{ kind: 'string', text: 'sweep' }], boundTo: null, line: 3 },
+      { name: 'expect', head: 'expect', headArgs: null, args: [{ kind: 'other', text: 'body' }, { kind: 'string', text: 'the tick' }], boundTo: null, line: 3 },
+      { name: 'toMatch', head: 'expect', headArgs: ['body'], args: [{ kind: 'regex', text: '/a\\.b/g' }], boundTo: null, line: 4 },
+      { name: 'expect', head: 'expect', headArgs: null, args: [{ kind: 'other', text: 'body' }], boundTo: null, line: 4 },
+      { name: 'readFileSync', head: 'readFileSync', headArgs: null, args: [{ kind: 'other', text: 'f' }, { kind: 'string', text: 'utf8' }], boundTo: null, line: 5 },
+    ]);
+    expect(t.bindings.map((b) => [b.name, b.line])).toEqual([['src', 1], ['body', 2], ['read', 5]]);
+    expect(t.bindings[1]!.init).toBe("src.slice(src.indexOf('  tick('), src.indexOf('\\n  }\\n'))");
   });
 
   it('parseSource takes text directly, and a .tsx name parses JSX', () => {
