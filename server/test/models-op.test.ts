@@ -2371,6 +2371,69 @@ describe('the advance file through init, set-class, rm and advance-backfill (aut
     ]);
   });
 
+  it.each([
+    ['a FIFO, which it cannot read', 'advance-file-unreadable', /could not be read: .*not a regular file/],
+    ['[], which is not an advance file', 'advance-file-invalid', /^an advance file must be a JSON object/],
+  ] as [string, string, RegExp][])('init codex over an advance file an earlier registry left that is %s creates the registry, answers one object, leaves that file as it is, and says so (D-5966)', (shape, word, reason) => {
+    withCodexRow();
+    const adv = advPath(CODEX_ROW.id);
+    fs.mkdirSync(path.dirname(adv), { recursive: true });
+    if (word === 'advance-file-unreadable') expect(spawnSync('mkfifo', [adv]).status, `mkfifo ${adv}`).toBe(0);
+    else plantAdvance(CODEX_ROW.id, '[]');
+    // Bounded, and the one-object contract asserted before the body is read: an op that crashed after its registry
+    // write prints nothing, and one that opened the FIFO would block.
+    const run = spawnSync(process.execPath, [OP, 'init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex'],
+      { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: NOW }, encoding: 'utf8', timeout: 10_000 });
+    expect(run.signal, `init over ${shape} did not exit by itself`).toBeNull();
+    expect(run.stdout.split('\n'), `stdout is not one JSON line: ${JSON.stringify(run.stdout)} ${run.stderr}`).toHaveLength(2);
+    const body = JSON.parse(run.stdout.split('\n')[0]!) as Record<string, unknown>;
+    expect([run.status, body['ok'], body['created']], run.stderr).toEqual([0, true, true]);
+    expect(fs.readFileSync(regPath(CODEX_ROW.id), 'utf8'), 'the registry init creates').toBe(SEEDED_REGISTRY_BYTES);
+    if (word === 'advance-file-unreadable') expect(fs.statSync(adv).isFIFO(), 'init replaced the FIFO').toBe(true);
+    else expect(fs.readFileSync(adv, 'utf8')).toBe('[]');
+    const note = String(body['advanceNote']);
+    expect(note.startsWith(`${word}: `), note).toBe(true);
+    expect(note.slice(word.length + 2)).toMatch(reason);
+    expect(note).toContain(adv);
+    expect(note).toMatch(/The class registry was created; the advance file an earlier registry left could not be read, so it was left as it is: its families are not re-seeded\./);
+    expect(note).not.toContain('Nothing was');
+    expect(run.stderr).toContain(`models-op: ${note}`);
+  });
+
+  it.each([
+    ['with no advance file', false, /The class registry was created; the lane has no advance file yet, and the next write of one creates it from the registry\.$/],
+    ['over an advance file an earlier registry left', true, /The class registry was created; the advance file an earlier registry left is as it was, its families not re-seeded\./],
+  ] as [string, boolean, RegExp][])("init codex %s whose advance-file write fails answers ok, says what was and was not written, and never 'Nothing was changed'", (_why, leftover, rest) => {
+    withCodexRow();
+    let left = '';
+    if (leftover) {
+      fs.mkdirSync(path.dirname(advPath(CODEX_ROW.id)), { recursive: true });
+      left = serializeAdvance(backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: null }));
+      plantAdvance(CODEX_ROW.id, left);
+    }
+    // The advance file's one write made to fail for real, in a COPY of the op (the set-class registry-write case's
+    // idiom): `writeAdvance` aims `writeJsonFile` under the registry FILE, which init has just written.
+    const src = fs.readFileSync(OP, 'utf8');
+    const WRITE = "return writeJsonFile(advancePath(id), parsed, 'advance-unwritable');";
+    expect(src.split(WRITE), 'writeAdvance has its one write').toHaveLength(2);
+    const copy = path.join(home, 'models-op-advance-unwritable.mjs');
+    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+      .replace(WRITE, "return writeJsonFile(path.join(registryPath(id), 'x'), parsed, 'advance-unwritable');"));
+    const run = spawnSync(process.execPath, [copy, 'init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex'],
+      { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: NOW }, encoding: 'utf8', timeout: 10_000 });
+    expect(run.stdout.split('\n'), `stdout is not one JSON line: ${JSON.stringify(run.stdout)} ${run.stderr}`).toHaveLength(2);
+    const body = JSON.parse(run.stdout.split('\n')[0]!) as Record<string, unknown>;
+    expect([run.status, body['ok'], body['created']], run.stderr).toEqual([0, true, true]);
+    expect(fs.readFileSync(regPath(CODEX_ROW.id), 'utf8')).toBe(SEEDED_REGISTRY_BYTES);
+    if (leftover) expect(fs.readFileSync(advPath(CODEX_ROW.id), 'utf8')).toBe(left);
+    else expect(fs.existsSync(advPath(CODEX_ROW.id))).toBe(false);
+    const note = String(body['advanceNote']);
+    expect(note).toMatch(/^advance-unwritable: .*could not be written: /);
+    expect(note).toMatch(rest);
+    expect(note).not.toContain('Nothing was changed');
+    expect(run.stderr).toContain(`models-op: ${note}`);
+  });
+
   it('set-class records a hand entry and rewrites the family from a pin that parses', () => {
     plantAdv();
     const r = opAt('set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'model-6-delta');

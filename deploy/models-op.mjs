@@ -397,9 +397,10 @@ function advanceReport(id) {
   return r.advance === null ? { state: 'absent' } : { state: 'ok', classes: r.advance.classes };
 }
 
-/** The sentence every `writeJsonFile` refusal ends with, named because two callers reword it where it would be
- *  false: a set-class whose hand intent is already on disk when its registry write fails (`handIntentLeft`), and a
- *  revert whose hold is already on disk when a later write fails (`revertLeft`). */
+/** The sentence every `writeJsonFile` refusal ends with, named because its callers reword it where it would be
+ *  false: a set-class whose hand intent is already on disk when its registry write fails (`handIntentLeft`), a
+ *  revert whose hold is already on disk when a later write fails, and an init whose registry is already created when
+ *  its advance-file write fails (both `sayWhatChanged`). */
 const NOTHING_CHANGED = 'Nothing was changed.';
 
 /** The ONE write of a hand-editable JSON file here — the class registry
@@ -495,11 +496,12 @@ function backfillOnce(id, registry) {
  *  cleared, because a revert to a pin of the registry that is gone would jump to an unrelated model; every family
  *  is written exactly as a fresh init of this probe writes it (its `SEED_FAMILIES` row, or no seed where it has
  *  none); `pending` is cleared; unknown keys are kept. `{created: true}`, `{reused: true}`, `{created: false}`
- *  (absent and not created), `{created: false, why}` for a file it cannot read (left as it is, as `backfillOnce`
- *  leaves one), or `{err, reusing}` when the write failed. */
+ *  (absent and not created), `{created: false, why, unread}` for a file it cannot read (left as it is, as
+ *  `backfillOnce` leaves one; `unread` is the read's `[word, detail]`, which init's `advanceNote` names), or
+ *  `{err, reusing}` when the write failed. */
 function seedForInit(id, registry, createIfAbsent) {
   const cur = readAdvance(id);
-  if (cur.err !== undefined) return { created: false, why: cur.err[0] };
+  if (cur.err !== undefined) return { created: false, why: cur.err[0], unread: cur.err };
   if (cur.advance === null) return createIfAbsent ? backfillOnce(id, registry) : { created: false };
   const fresh = backfillAdvance({ registry, seedFamilies: SEED_FAMILIES[registry.probe] ?? null });
   const next = { ...cur.advance, classes: { ...cur.advance.classes }, pending: null };
@@ -610,9 +612,10 @@ function holdOp(opName, a, account, registry, catalogue, win) {
   return 0;
 }
 
-/** A revert's refusal or note once its hold is on disk (D-5206): `writeJsonFile`'s closing `Nothing was changed.`
- *  is false by then, so it is replaced by `rest`, which says what did and did not change. */
-function revertLeft(detail, rest) {
+/** A refusal or note once something is already on disk — a revert's hold (D-5206), or init's new registry:
+ *  `writeJsonFile`'s closing `Nothing was changed.` is false by then, so it is replaced by `rest`, which says what did
+ *  and did not change. */
+function sayWhatChanged(detail, rest) {
   return `${detail.endsWith(NOTHING_CHANGED) ? detail.slice(0, -NOTHING_CHANGED.length) : `${detail} `}${rest}`;
 }
 
@@ -711,9 +714,9 @@ function revertOp(a, account, registry, catalogue, win) {
   if (w0 !== null) return refuse(1, w0[0], w0[1]);
   const w1 = writeRegistry(a.id, validated);
   if (w1 !== null) {
-    return refuse(1, w1[0], revertLeft(w1[1], `The registry was not changed. The hold this revert wrote to the lane's `
-      + `advance file stays, so ${a.class} is held now, on ${from ?? 'none'}, and its previous model is still on `
-      + 'record, so the revert can be run again.'));
+    return refuse(1, w1[0], sayWhatChanged(w1[1], 'The registry was not changed. The hold this revert wrote to the '
+      + `lane's advance file stays, so ${a.class} is held now, on ${from ?? 'none'}, and its previous model is still `
+      + 'on record, so the revert can be run again.'));
   }
   const mat = materialise(account, validated, catalogue, windowsOf(win));
   if (mat.err !== undefined) {
@@ -737,7 +740,7 @@ function revertOp(a, account, registry, catalogue, win) {
   const w2 = writeAdvance(a.id, done);
   const answer = { ok: true, op: 'revert', class: a.class, from, to, ...describe(account, validated, catalogue, win) };
   if (w2 !== null) {
-    answer.advanceNote = `${w2[0]}: ${revertLeft(w2[1], 'The class was reverted and is held, but this move is not in '
+    answer.advanceNote = `${w2[0]}: ${sayWhatChanged(w2[1], 'The class was reverted and is held, but this move is not in '
       + 'its history and its previous model is still on record: a second revert finds the class already on that '
       + 'model, so it clears that record and records no move.')}`;
     process.stderr.write(`${SELF}: ${answer.advanceNote}\n`);
@@ -1633,10 +1636,14 @@ function main(argv) {
     const answer = { ok: true, op: 'init', created: true, ...describe(account, registry, catalogue, win) };
     let advanceNote = null;
     if (seeded.err !== undefined) {
-      advanceNote = `${seeded.err[0]}: ${seeded.err[1]} The class registry was created; ${seeded.reusing
+      advanceNote = `${seeded.err[0]}: ${sayWhatChanged(seeded.err[1], `The class registry was created; ${seeded.reusing
         ? 'the advance file an earlier registry left is as it was, its families not re-seeded. Delete that file, '
           + 'and the next write re-creates it from the registry.'
-        : 'the lane has no advance file yet, and the next write of one creates it from the registry.'}`;
+        : 'the lane has no advance file yet, and the next write of one creates it from the registry.'}`)}`;
+    } else if (seeded.unread !== undefined) {
+      advanceNote = `${seeded.unread[0]}: ${seeded.unread[1]} The class registry was created; the advance file an `
+        + 'earlier registry left could not be read, so it was left as it is: its families are not re-seeded. Fix it '
+        + 'by hand, or delete it (the next write re-creates it from the registry, with no holds and no history).';
     } else if (seeded.reused === true) {
       advanceNote = 'the lane already had an advance file, left by an earlier class registry, and it was reused '
         + '(D-5966): each class keeps its hold and history, takes its family as a fresh init of '
