@@ -21,6 +21,7 @@ import {
   childReclaimTierFrom, childReclaimTierPaceMs,
   type ChildReclaimCollectInput, type ChildReclaimLaneNow, type ChildReclaimTierState,
 } from './childReclaimSweep.js';
+import { COLLECT_LANE_LIVE_MARKER } from '../../shared/switches.js';
 
 const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 /** A JSON object: never an array, never null. */
@@ -33,8 +34,9 @@ const isObject = (v: unknown): v is Readonly<Record<string, unknown>> =>
  *  It arms `ws-collect` only while it stands AND its journaled latch is unset; Settings is the other arm, and the
  *  resolver at this file's foot decides (`collectLaneEffective`). Nothing in the tree writes it: it is hand-touched, on
  *  the `expire-lane-live` precedent, and once a coherent listing proves it absent the latch retires it for good (§5.4).
- *  Spelled ONCE, here (L1, no `node:` import); its code holders are this file and the executor, nearest the argv. */
-export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';
+ *  Spelled ONCE, in its `shared/switches.ts` row (D-5855; L0, no `node:` import), and re-exported here; its code holders
+ *  are the row, this file and the executor, nearest the argv. */
+export { COLLECT_LANE_LIVE_MARKER };
 
 // ── the probe and refusal tables (spec §5.10) ───────────────────────────────────────────────────────────────────
 

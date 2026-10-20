@@ -1,4 +1,5 @@
 import { IDLE_COMPACT_NOTICE_PREFIXES, TASKS_STALE_MS, type AskState, type SessionLifecycle, type SessionStatus } from '../../shared/api.js';
+import { IDLE_NUDGE_DISABLED_MARKER } from '../../shared/switches.js';
 
 /**
  * `idle-compact-nudge` (D-5373). L1: pure decisions, no `fs`, no clock of its own.
@@ -18,7 +19,7 @@ import { IDLE_COMPACT_NOTICE_PREFIXES, TASKS_STALE_MS, type AskState, type Sessi
 
 /** Every reason the lane types nothing, enumerated once. */
 const IDLE_NUDGE_HOLD_MAP = {
-  disabled: 'the kill switch `$REG/idle-compact-nudge-disabled` exists',
+  disabled: `the kill switch \`$REG/${IDLE_NUDGE_DISABLED_MARKER}\` exists`,
   'no-store': 'no coordination store: the once-per-compaction record has nowhere durable to live',
   unmeasured: 'the fleet row, the registry identity or the live status could not be measured',
   'not-running': 'the session is not supervised and live (stopped, dead, orphaned, unmeasurable)',
@@ -44,7 +45,7 @@ export const IDLE_NUDGE_HOLDS = Object.keys(IDLE_NUDGE_HOLD_MAP) as IdleNudgeHol
 
 /** The kill switch: a whole file name in the registry listing. No writer in the tree; touched and removed by hand on
  *  the fleet box, the `stall-watch-disabled` precedent (`single-definition.test.ts` pins that). */
-export const IDLE_NUDGE_DISABLED_MARKER = 'idle-compact-nudge-disabled';
+export { IDLE_NUDGE_DISABLED_MARKER };
 export function idleNudgeDisabled(names: readonly string[]): boolean {
   return names.includes(IDLE_NUDGE_DISABLED_MARKER);
 }

@@ -2,7 +2,7 @@ import type { Deps } from './deps.js';
 import { readRegistry } from './registry.js';
 import { readLiveState } from './livestate.js';
 import { resolveTranscript } from './transcript/resolve.js';
-import { configDirFor } from './config.js';
+import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
 import type { SlashCommand } from '../../shared/api.js';
 
 /** Built-in slash commands, most-used first (compact / effort / model lead). */
