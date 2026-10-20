@@ -1,4 +1,4 @@
-import type { FleetSession } from '../../shared/api.js';
+import { IDLE_RUN_STATES, TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
 
 /**
  * STOP A FINISHED RUN'S WORKER (D-5370, `stop-worker-at-run-done`): the pure verdict.
@@ -29,9 +29,18 @@ import type { FleetSession } from '../../shared/api.js';
  * `hibernate-hold-ok`; an operator's own hold, a hold naming an open or unreadable run, and a box without the token
  * keep `held`. Hibernation's own sweep (`idle-hours`, `hibernateVerdict`) is untouched: it acts only once armed, and
  * `hibernate-disabled` stops this lane too. The words that are this lane's alone say why it is narrower: only a
- * dispatched child (`not-a-child`), only once its newest placed run is `done` (`no-run`, `not-done`,
+ * dispatched child (`not-a-child`), only once its newest placed run is finished (`no-run`, `not-done`,
  * `close-unplaced`) and a grace has passed (`grace`), only on a box whose ccd has the verb (`no-verb`), and only with
  * the fail-closed turn verdict idle (`turn`).
+ *
+ * "FINISHED" PER F5 (b) (D-6092, fleet capacity W1-1b; ruled 2026-10-20). A run is finished for this policy when it is
+ * `done` or `failed` and closed (`failed` is a change from D-5370, which slept `done` alone), or when it is a producer's
+ * run PARKED in `awaiting-review`, `merging` or `closing` (`STOP_DONE_PARKED_STATES`) and the turn marker has been
+ * quiet `STOP_DONE_PARKED_IDLE_MS`. A parked run has no close, so its clock is the marker alone. A send-back (advance to
+ * `working`) and a merge step reach a sleeping producer the way every sleeping session is reached: mail under the wake
+ * budget, or a dispatch's `ensure`. Another run still holds the worker (`run-worker`) only while it is ACTIVE
+ * (`openPlacedWorkers`, which counts a state this build cannot name, as the caps do), so a producer's own parked run
+ * never holds it.
  */
 
 /** Every reason the lane leaves a session running this pass — a `Record`, so the list below is derived and a word
@@ -48,10 +57,10 @@ const STOP_DONE_HOLD_MAP = {
   substrate: 'a substrate marker stands',
   'runs-unreadable': 'the coordination store could not answer its runs',
   'no-run': 'no placed run names it as worker (a `planned` run is not placed)',
-  'not-done': 'its newest placed run is not `done`',
-  'close-unplaced': 'its newest placed run reads `done` with no close time',
+  'not-done': 'its newest placed run is not finished: neither `done` nor `failed`, nor parked at `awaiting-review`, `merging` or `closing`',
+  'close-unplaced': 'its newest placed run reads `done` or `failed` with no close time',
   grace: 'its run closed less than the grace ago',
-  'run-worker': 'another placed open run names it as worker',
+  'run-worker': 'another active run names it as worker',
   'run-claimant': 'it claims an open run (it coordinates)',
   claim: 'it holds a live claim',
   mail: 'mail to it is outstanding',
@@ -68,7 +77,7 @@ const STOP_DONE_HOLD_MAP = {
   marker: 'its turn marker does not read a finished turn (`done`), or could not be read, or is not this process\'s',
   'marker-background': 'its turn marker\'s last Stop listed background work, or could not say (`bg` not exactly 0; −1 holds)',
   scheduled: 'its last Stop listed a session cron or wakeup, or the marker cannot say (`crons` not exactly 0; absent holds)',
-  recent: 'its last main event is less than the grace old, or the marker carries no stamp to age',
+  recent: 'its last main event is less than the grace old (`STOP_DONE_PARKED_IDLE_MS` for a parked run), or the marker carries no stamp to age',
 } as const satisfies Record<string, string>;
 
 export type StopDoneHold = keyof typeof STOP_DONE_HOLD_MAP;
@@ -78,6 +87,14 @@ export function stopDoneHoldText(h: StopDoneHold): string { return STOP_DONE_HOL
 /** How long after its run's close a worker is left alone, whatever else it reads — room for the coordinator's next
  *  wave to be opened onto it (`run-worker` then holds it). */
 export const STOP_DONE_GRACE_MS = 10 * 60_000;
+
+/** D-6092 (F5 (b)): how long a producer's run parked at review, merge or close must have left its turn marker quiet
+ *  before the worker is put to sleep. A parked run has no close, so this is its only clock. */
+export const STOP_DONE_PARKED_IDLE_MS = 30 * 60_000;
+
+/** D-6092 (F5 (b)): the run states a producer is PARKED in — `IDLE_RUN_STATES` but `planned` (a wave not yet
+ *  dispatched has no producer to park). Derived, never respelled. */
+export const STOP_DONE_PARKED_STATES: readonly string[] = IDLE_RUN_STATES.filter((st) => st !== 'planned');
 
 /** At most this many stops a pass, fleet-wide: a herd of stops is a herd of supervisors restarting on a re-dispatch,
  *  and a slower drain costs nothing (the 2026-08-14 usage-scan herd). */
@@ -112,8 +129,12 @@ export type StopDoneStoreRead =
     /** The session's newest PLACED run as worker (`lastRunBySession`'s `lastPlaced`: a `planned` run, a wave not yet
      *  dispatched, is left out; D-6091), or null when no placed run names it. */
     readonly last: { readonly runId: number; readonly state: string; readonly closedAt: number | null } | null;
-    /** A run outside the terminal set AND outside `planned` names it (`openPlacedWorkers`; D-6091). */
+    /** An ACTIVE run names it (`openPlacedWorkers`: outside the idle and terminal sets, so an unnamed state counts;
+     *  D-6091, narrowed by D-6092 so a producer's own parked run does not hold it). */
     readonly openWorker: boolean;
+    /** A run PARKED at review, merge or close names it, newest or not (`parkedPlacedWorkers`;
+     *  sibling-parked-run-takes-parked-clock): the marker's quiet is then measured against `STOP_DONE_PARKED_IDLE_MS`. */
+    readonly parkedWorker: boolean;
     readonly openClaimant: boolean;
     readonly claim: boolean;
     readonly mail: boolean;
@@ -202,9 +223,14 @@ export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
   const s = i.store;
   if (!s.ok) return hold('runs-unreadable');
   if (s.last === null) return hold('no-run');
-  if (s.last.state !== 'done') return hold('not-done');
-  if (s.last.closedAt === null) return hold('close-unplaced');
-  if (i.now - s.last.closedAt < i.graceMs) return hold('grace');
+  // D-6092 (F5 (b)): finished is terminal (`done` or `failed`) and closed, or parked at review, merge or close — whose clock is
+  // the marker's quiet alone (below), since a parked run has no close.
+  const parked = STOP_DONE_PARKED_STATES.includes(s.last.state);
+  if (!parked) {
+    if (!(TERMINAL_RUN_STATES as readonly string[]).includes(s.last.state)) return hold('not-done');
+    if (s.last.closedAt === null) return hold('close-unplaced');
+    if (i.now - s.last.closedAt < i.graceMs) return hold('grace');
+  }
   if (s.openWorker) return hold('run-worker');
   if (s.openClaimant) return hold('run-claimant');
   if (s.claim) return hold('claim');
@@ -231,7 +257,8 @@ export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
   const stamps = [m.turnAt, m.stopAt, m.restartAt].filter((t): t is number => t !== null);
   if (stamps.length === 0) return hold('recent');
   const idleMs = i.now - Math.max(...stamps);
-  if (idleMs < i.graceMs) return hold('recent');
+  // sibling-parked-run-takes-parked-clock: an older parked run beside a newer done one keeps the parked clock.
+  if (idleMs < (parked || s.parkedWorker ? STOP_DONE_PARKED_IDLE_MS : i.graceMs)) return hold('recent');
   return r.held === null
     ? { act: 'hibernate', runId: s.last.runId, idleMs }
     : { act: 'hibernate', runId: s.last.runId, idleMs, holdOk: r.held };

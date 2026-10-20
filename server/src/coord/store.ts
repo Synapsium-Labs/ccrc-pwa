@@ -836,9 +836,13 @@ export type LastRunsResult =
   | {
     ok: true; last: LastRun[]; openWorkers: string[]; openClaimants: string[];
     /** D-6091 (fleet capacity W1-1), additive: each asked session's newest run whose state is not `planned` (a wave
-     *  not yet dispatched uses nothing), and the asked sessions a run outside the terminal set AND outside `planned`
-     *  names. The run-done policy's reads; `last` and `openWorkers` keep their meaning for `fleet.ts` and `watch.ts`. */
-    lastPlaced: LastRun[]; openPlacedWorkers: string[];
+     *  not yet dispatched uses nothing), and the asked sessions an ACTIVE run names (D-6092, W1-1b, F5 (b): outside
+     *  the idle and terminal sets, the caps' predicate, so a state this build cannot name counts, and a producer's run
+     *  parked at review, merge or close does not). The run-done policy's reads; `last` and `openWorkers` keep their
+     *  meaning for `fleet.ts` and `watch.ts`. `parkedPlacedWorkers` (sibling-parked-run-takes-parked-clock): the asked
+     *  sessions a run PARKED at review, merge or close names (the idle set without `planned`), newest or not, so the
+     *  policy's parked clock is not cut short by a newer done run beside it. */
+    lastPlaced: LastRun[]; openPlacedWorkers: string[]; parkedPlacedWorkers: string[];
   }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
@@ -1111,6 +1115,9 @@ const INACTIVE_RUN_STATES_SQL = `('${[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES
  *  strands query, which binds the same L0 constant as bound placeholders
  *  (D-2794). */
 const TERMINAL_RUN_STATES_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
+/** The idle list, joined the same way (sibling-parked-run-takes-parked-clock): `lastRunBySession`'s parked read takes
+ *  it without `planned`, as `STOP_DONE_PARKED_STATES` does. */
+const IDLE_RUN_STATES_SQL = `('${IDLE_RUN_STATES.join("','")}')`;
 
 /** Design 2026-09-20 §6/§10 (W2): the node lease's predicates, built from L0's
  *  `SETTLED_UPDATE_STATES` by the `.join` `TERMINAL_DELIVERY_SQL` uses — never
@@ -3818,7 +3825,9 @@ export class CoordStore {
    */
   lastRunBySession(sessionIds: readonly string[]): LastRunsResult {
     if (sessionIds.length === 0) {
-      return { ok: true, last: [], openWorkers: [], openClaimants: [], lastPlaced: [], openPlacedWorkers: [] };
+      return {
+        ok: true, last: [], openWorkers: [], openClaimants: [], lastPlaced: [], openPlacedWorkers: [], parkedPlacedWorkers: [],
+      };
     }
     const ph = placeholders(sessionIds.length);
     const planned: RunState = 'planned';
@@ -3850,13 +3859,19 @@ export class CoordStore {
     if (!Array.isArray(last)) return { ok: false, kind: 'run-unreadable', detail: last.detail };
     const lastPlaced = newest(true);
     if (!Array.isArray(lastPlaced)) return { ok: false, kind: 'run-unreadable', detail: lastPlaced.detail };
-    const open = (placedOnly: boolean): string[] => (this.db.prepare(
-      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state NOT IN ${TERMINAL_RUN_STATES_SQL}` +
-      (placedOnly ? ' AND state <> ?' : ''),
-    ).all(...sessionIds, ...(placedOnly ? [planned] : [])) as { sessionId: string }[]).map((r) => r.sessionId);
+    // D-6092: the run-done policy's "another run still uses it" is the ACTIVE set, read by the caps' own negative
+    // predicate (`INACTIVE_RUN_STATES_SQL`, which leaves `planned` out too); `openWorkers` keeps the non-terminal one.
+    const open = (activeOnly: boolean): string[] => (this.db.prepare(
+      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state NOT IN ` +
+      (activeOnly ? INACTIVE_RUN_STATES_SQL : TERMINAL_RUN_STATES_SQL),
+    ).all(...sessionIds) as { sessionId: string }[]).map((r) => r.sessionId);
+    // sibling-parked-run-takes-parked-clock: the idle set without `planned` — the parked states.
+    const parked = (this.db.prepare(
+      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state IN ${IDLE_RUN_STATES_SQL} AND state <> ?`,
+    ).all(...sessionIds, planned) as { sessionId: string }[]).map((r) => r.sessionId);
     return {
       ok: true, last, openWorkers: open(false), openClaimants: this.openCoordinatorIds(),
-      lastPlaced, openPlacedWorkers: open(true),
+      lastPlaced, openPlacedWorkers: open(true), parkedPlacedWorkers: parked,
     };
   }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  STOP_DONE_GRACE_MS, STOP_DONE_HOLDS, mailOnly, stopDoneVerdict, type StopDoneHold, type StopDoneInput, type StopDoneRow,
+  STOP_DONE_GRACE_MS, STOP_DONE_HOLDS, STOP_DONE_PARKED_IDLE_MS, mailOnly, stopDoneVerdict, type StopDoneHold, type StopDoneInput, type StopDoneRow,
 } from '../src/stopDone.js';
 import { PRESENCE_TTL_MS } from '../../shared/api.js';
 import { HIBERNATE_HOLDS } from '../src/coord/hibernate.js';
@@ -29,7 +29,7 @@ const base = (o: Partial<StopDoneInput> = {}): StopDoneInput => ({
   row: row(), heldKind: 'none', holdOkVerb: true,
   store: {
     ok: true, last: { runId: 7, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1 },
-    openWorker: false, openClaimant: false, claim: false, mail: false,
+    openWorker: false, parkedWorker: false, openClaimant: false, claim: false, mail: false,
   },
   viewer: false, sinceStartMs: PRESENCE_TTL_MS + 1, presenceTtlMs: PRESENCE_TTL_MS, verb: true, optedOut: false,
   live: { kind: 'read', word: { ok: true, word: 'idle' }, turn: 'idle', mark: MARK_DONE },
@@ -60,7 +60,7 @@ describe('stopDoneVerdict (D-5370)', () => {
     ['substrate', { row: row({ substrate: { at: NOW, text: 't' } }) }],
     ['runs-unreadable', { store: { ok: false, detail: 'locked' } }],
     ['no-run', { store: okStore({ last: null }) }],
-    ['not-done', { store: okStore({ last: { runId: 7, state: 'failed', closedAt: NOW - STOP_DONE_GRACE_MS - 1 } }) }],
+    ['not-done', { store: okStore({ last: { runId: 7, state: 'working', closedAt: null } }) }],
     ['close-unplaced', { store: okStore({ last: { runId: 7, state: 'done', closedAt: null } }) }],
     ['grace', { store: okStore({ last: { runId: 7, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS + 1 } }) }],
     ['run-worker', { store: okStore({ openWorker: true }) }],
@@ -121,9 +121,9 @@ describe('stopDoneVerdict (D-5370)', () => {
     }
   });
 
-  it('an empty roster does not hold; only a done run is a finished one (failed, abandoned and open states hold)', () => {
+  it('an empty roster does not hold; a run outside done, failed and the parked states is not a finished one (D-6092)', () => {
     expect(stopDoneVerdict(base({ row: row({ subagents: [] }) }))).toEqual({ act: 'hibernate', runId: 7, idleMs: 7 * HOUR });
-    for (const state of ['failed', 'abandoned', 'merging', 'awaiting-review', 'closing', 'working', 'planned']) {
+    for (const state of ['abandoned', 'dispatched', 'working', 'unknown', 'planned', 'some-future-state']) {
       expect(stopDoneVerdict(base({ store: okStore({ last: { runId: 7, state, closedAt: NOW - STOP_DONE_GRACE_MS - 1 } }) })))
         .toEqual({ act: 'hold', reason: 'not-done' });
     }
@@ -221,9 +221,9 @@ describe('stopDoneVerdict: run-close timing, before and after (D-6091)', () => {
     expect(stopDoneVerdict(base({ optedOut: true }))).toEqual({ act: 'hold', reason: 'opted-out' });
   });
 
-  it('kept: an awaiting-review newest run holds not-done (W1-1b\'s row, not this task\'s)', () => {
+  it('W1-1b flipped this row (D-6092): an awaiting-review newest run, its marker quiet 7 hours, sleeps (was: not-done)', () => {
     expect(stopDoneVerdict(base({ store: okStore({ last: { runId: 7, state: 'awaiting-review', closedAt: null } }) })))
-      .toEqual({ act: 'hold', reason: 'not-done' });
+      .toEqual({ act: 'hibernate', runId: 7, idleMs: 7 * HOUR });
   });
 
   it('kept: inside the grace after close holds grace', () => {
@@ -317,3 +317,118 @@ describe('mailOnly (D-6091)', () => {
   });
 });
 
+
+// D-6092 (fleet capacity W1-1b), the characterization: "finished" per F5 (b) (2026-10-20). The "today:" rows are the
+// answers the behaviour commit flips; the "kept:" rows must not flip. Neutral fixtures: run 7.
+describe('stopDoneVerdict: "finished" per F5 (b), before and after (D-6092)', () => {
+  const MIN = 60_000;
+  const runAt = (state: string, closedAt: number | null) => okStore({ last: { runId: 7, state, closedAt } });
+  const quiet = (ms: number) => readLive({ mark: markAt({ turnAt: NOW - ms, stopAt: NOW - ms }) });
+
+  it('now: a failed newest run, closed 11 minutes ago, its marker quiet 11 minutes, sleeps (was: not-done)', () => {
+    expect(stopDoneVerdict(base({ store: runAt('failed', NOW - 11 * MIN), live: quiet(11 * MIN) })))
+      .toEqual({ act: 'hibernate', runId: 7, idleMs: 11 * MIN });
+  });
+
+  for (const state of ['awaiting-review', 'merging', 'closing']) {
+    it(`now: a producer parked at ${state}, its marker quiet 31 minutes, sleeps (was: not-done)`, () => {
+      expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(31 * MIN) })))
+        .toEqual({ act: 'hibernate', runId: 7, idleMs: 31 * MIN });
+    });
+  }
+
+  it('kept: a producer parked at awaiting-review, its marker quiet 29 minutes, holds', () => {
+    expect(stopDoneVerdict(base({ store: runAt('awaiting-review', null), live: quiet(29 * MIN) })).act).toBe('hold');
+  });
+
+  for (const state of ['working', 'dispatched', 'unknown']) {
+    it(`kept: an ${state === 'unknown' ? 'unknown' : 'active'} run (${state}) holds not-done, however quiet`, () => {
+      expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(7 * 60 * MIN) })))
+        .toEqual({ act: 'hold', reason: 'not-done' });
+    });
+  }
+});
+
+// D-6092 (fleet capacity W1-1b; F5 (b), 2026-10-20), the new rows: a run is finished for the run-done policy when it is
+// `done` or `failed` and closed (the grace from its close, then the grace of marker quiet), or a producer's run parked at
+// `awaiting-review`, `merging` or `closing` whose marker has been quiet `STOP_DONE_PARKED_IDLE_MS`.
+describe('stopDoneVerdict: finished per F5 (b) (D-6092)', () => {
+  const MIN = 60_000;
+  const runAt = (state: string, closedAt: number | null) => okStore({ last: { runId: 7, state, closedAt } });
+  const quiet = (ms: number) => readLive({ mark: markAt({ turnAt: NOW - ms, stopAt: NOW - ms }) });
+
+  it('the parked idle is 30 minutes, and longer than the grace', () => {
+    expect(STOP_DONE_PARKED_IDLE_MS).toBe(30 * MIN);
+    expect(STOP_DONE_PARKED_IDLE_MS).toBeGreaterThan(STOP_DONE_GRACE_MS);
+  });
+
+  it('a failed run\'s worker sleeps 10 minutes after close', () => {
+    expect(stopDoneVerdict(base({ store: runAt('failed', NOW - STOP_DONE_GRACE_MS), live: quiet(STOP_DONE_GRACE_MS) })))
+      .toEqual({ act: 'hibernate', runId: 7, idleMs: STOP_DONE_GRACE_MS });
+  });
+
+  it('a failed run inside the grace after its close holds grace', () => {
+    expect(stopDoneVerdict(base({ store: runAt('failed', NOW - STOP_DONE_GRACE_MS + 1) }))).toEqual({ act: 'hold', reason: 'grace' });
+  });
+
+  it('close-unplaced holds: a failed run with no close time', () => {
+    expect(stopDoneVerdict(base({ store: runAt('failed', null) }))).toEqual({ act: 'hold', reason: 'close-unplaced' });
+  });
+
+  for (const state of ['awaiting-review', 'merging', 'closing']) {
+    it(`a producer parked at ${state} sleeps after 30 minutes quiet`, () => {
+      expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(STOP_DONE_PARKED_IDLE_MS) })))
+        .toEqual({ act: 'hibernate', runId: 7, idleMs: STOP_DONE_PARKED_IDLE_MS });
+    });
+  }
+
+  it('a parked producer quiet 29 minutes holds', () => {
+    for (const state of ['awaiting-review', 'merging', 'closing']) {
+      expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(29 * MIN) })), state).toEqual({ act: 'hold', reason: 'recent' });
+      expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(STOP_DONE_PARKED_IDLE_MS - 1) })), state)
+        .toEqual({ act: 'hold', reason: 'recent' });
+    }
+  });
+
+  it('a parked producer whose marker carries no stamp holds recent', () => {
+    expect(stopDoneVerdict(base({
+      store: runAt('awaiting-review', null), live: readLive({ mark: markAt({ turnAt: null, stopAt: null, restartAt: null }) }),
+    }))).toEqual({ act: 'hold', reason: 'recent' });
+  });
+
+  it('a parked run\'s clock is its marker, not a close time: a stamped closedAt does not shorten it', () => {
+    expect(stopDoneVerdict(base({ store: runAt('merging', NOW - 7 * HOUR), live: quiet(11 * MIN) })))
+      .toEqual({ act: 'hold', reason: 'recent' });
+  });
+
+  it('an active run holds', () => {
+    for (const state of ['dispatched', 'working', 'unknown']) {
+      expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(7 * HOUR) })), state).toEqual({ act: 'hold', reason: 'not-done' });
+    }
+  });
+
+  it('a planned newest run is never parked: it holds not-done', () => {
+    expect(stopDoneVerdict(base({ store: runAt('planned', null), live: quiet(7 * HOUR) }))).toEqual({ act: 'hold', reason: 'not-done' });
+  });
+
+  it('every use-hold still holds a parked producer: mail, a viewer, another active run', () => {
+    const parked = runAt('awaiting-review', null);
+    expect(stopDoneVerdict(base({ store: okStore({ ...(parked as object), mail: true }) }))).toEqual({ act: 'hold', reason: 'mail' });
+    expect(stopDoneVerdict(base({ store: parked, viewer: true }))).toEqual({ act: 'hold', reason: 'viewer' });
+    expect(stopDoneVerdict(base({ store: okStore({ ...(parked as object), openWorker: true }) }))).toEqual({ act: 'hold', reason: 'run-worker' });
+  });
+
+  // sibling-parked-run-takes-parked-clock: an OLDER run of the same producer parked at review, merge or close no longer
+  // holds `run-worker` (it is not active), so the newest done run's arm must not cut the parked run's 30 minutes short.
+  it('a done newest run beside an older parked run of the same worker takes the parked clock: 29 minutes quiet holds', () => {
+    const sibling = okStore({ parkedWorker: true });
+    expect(stopDoneVerdict(base({ store: sibling, live: quiet(STOP_DONE_GRACE_MS + MIN) }))).toEqual({ act: 'hold', reason: 'recent' });
+    expect(stopDoneVerdict(base({ store: sibling, live: quiet(STOP_DONE_PARKED_IDLE_MS - 1) }))).toEqual({ act: 'hold', reason: 'recent' });
+    expect(stopDoneVerdict(base({ store: sibling, live: quiet(STOP_DONE_PARKED_IDLE_MS) })))
+      .toEqual({ act: 'hibernate', runId: 7, idleMs: STOP_DONE_PARKED_IDLE_MS });
+  });
+
+  it('with no parked sibling, the done arm keeps the grace', () => {
+    expect(stopDoneVerdict(base({ live: quiet(STOP_DONE_GRACE_MS) }))).toEqual({ act: 'hibernate', runId: 7, idleMs: STOP_DONE_GRACE_MS });
+  });
+});
