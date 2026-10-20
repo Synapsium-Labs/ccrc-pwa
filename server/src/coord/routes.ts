@@ -4543,21 +4543,13 @@ export function registerCoordRoutes(
         : taken.why === 'unknown-approval' ? 'unknown-approval' : 'not-held');
     }
     approvalInputs.delete(id);
-    // The journal's second record, beside the row: who ruled, and what, in the operator's name.
-    const log = deps.notifyLog;
-    if (log) {
-      try {
-        const ev = log.record({
-          kind: 'ask', sessionId: row.childId, runId: null, title: 'permission ruled',
-          body: `${fromId} ${verdict === 'allow' ? 'allowed' : 'denied'} ${row.childId}'s ${row.tool} call: ${reason}`,
-        });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn(`ccrc-server: recordFeedEvent failed (${err instanceof Error ? err.message : String(err)}) — ruling stored, feed archive degraded`);
-      } finally {
-        void log.flush();
-      }
-    }
+    // The journal's second record, beside the row: who ruled, and what, in the operator's name. Through the notice sink
+    // (D-5858), `'record-only'`: never pushed, whatever the presence, and AFTER the ruling is stored, so a failed archive
+    // costs the feed row only (the funnel catches it and says so), never the ruling or this 200.
+    notice({
+      kind: 'ask', sessionId: row.childId, runId: null, title: 'permission ruled',
+      body: `${fromId} ${verdict === 'allow' ? 'allowed' : 'denied'} ${row.childId}'s ${row.tool} call: ${reason}`,
+    }, 'record-only', { degraded: 'ruling stored, feed archive degraded' });
     watcher?.approvalRuled(row.childId, row.agentId, fromId, verdict);
     return { ok: true, state: verdict === 'allow' ? 'allowed' : 'denied' };
   });
