@@ -24,7 +24,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
 | 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; fix-round handoff `2f6caa48e` accepted by the server 2026-10-20 07:25 UTC, NEW review 685 dispatched 07:42 UTC; PR conflicts with main on the generated stamp; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED |
-| 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
+| 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | deferred by the operator 2026-10-20: the programme stops after 4b ships and its week is measured |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
 | 8 | 5 | the three skill clauses; review-panel's "resume before re-run"; run signals; `FleetSession.delegations` and its chip | skills, server, pwa | wave 6; landing-order wave 1's clauses | — | after wave 6 |
@@ -840,6 +840,14 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     absorbed merge. Route opus/xhigh, sonnet default, workflow on. Review 630 is not reused. A read-only check of
     the brief before dispatch found seven defects, all corrected first.
   - Tasks 1-4 remain unaccepted; Tasks 5 and 7 remain gated. No merge, rollout, restart, arming or settings act.
+- **2026-10-20 08:50 UTC - the operator stops the programme after wave 4b for now.**
+  - Asked how the programme continues after 4b, the operator chose to stop after 4b: ship it, verify it and take its
+    one-week measurement (Task 5), then pause. Waves 5-9 wait until the operator offers a scratch account for the
+    wave 5 spike; wave 5 is not planned meanwhile.
+  - The spike needs a rostered account carrying no real work: it drives that account into its five-hour limit twice,
+    swaps a scratch session off it and back, and changes one pane scope's memory policy (spec section 5.2).
+  - Wave 4b's own path is unchanged: review 685, then a fix round or landing, then delivery by the update mechanism
+    and Task 5's week. No merge, rollout, restart, arming or settings act is recorded here.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
