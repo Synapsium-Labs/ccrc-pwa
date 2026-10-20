@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=80e5ba0c681f492bd90953ea9dd7b3f0d72a08ce451946f812c3e1ec7cf1fff1
+# ccrc:generated 1 sha256=ad8b8ea76b8773c2eec587e8d578a28224611585f47713aafc1403d1288f81da
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32249,33 +32249,51 @@ _ws_leaf_uid() {   # path -> the uid that owns the path ITSELF (`ls -dn`: numeri
 }
 # ── does a leaf hold a checkout git records ELSEWHERE (child reclamation wave 6, spec §5.5, §5.6) ──
 WS_LEAF_CHECKOUTS_CAP=64   # the most `.git` entries one leaf's scan examines; more is unmeasured
-_WS_SMALL=''
-_ws_leaf_read_small() {   # file -> 0 with _WS_SMALL = its bytes, each NUL read as a newline; 1 when it is
-  #                            not a regular file or cannot be read; 2 when it holds more than 4096 bytes
+_WS_SMALL=''; _WS_SMALL_NUL=''
+_ws_leaf_read_small() {   # file -> 0 with _WS_SMALL = its bytes, each NUL read as a newline, and _WS_SMALL_NUL
+  #                            = `inner` (a NUL stands before a byte that is not NUL, CR or LF), `trailing` (every
+  #                            NUL is in the file's closing run of NUL, CR and LF bytes) or '' (it holds none); 1
+  #                            when it is not a regular file or cannot be read; 2 when it holds more than 4096
+  #                            bytes. On 1 and 2, _WS_SMALL and _WS_SMALL_NUL are both ''
   # A FILE READ AS A FILE, bounded: `-f` first (a FIFO would block), the size
   # before the bytes, and the read is the group's redirection (an unopenable file
-  # answers 1). A NUL becomes a newline, never dropped. What an INNER one means
-  # is each caller's: in the `.git` file it splits the line, unmeasured; in an
-  # admin directory's `gitdir` back-link it leaves a newline in the text that is
-  # compared with the `.git` path, so the tree is refused when that path holds no
-  # newline, accepted when the NUL sits at the offset of a newline the path does
-  # hold (a hand-crafted file: git writes no NUL), and unmeasured otherwise
-  # (the corner is the path-identity programme's). A TRAILING one is a line
-  # end each caller strips, so `gitdir: A\0` and `gitdir: A\n\0` both read as
-  # A. Git reads the second as `A\n` and fails; ccd answers measured, safely:
-  # an A inside the leaf passes before any back-link is read (removing the leaf
-  # removes all of it), and outside the leaf only a tree git back-links passes
-  # (`_ws_leaf_checkout_one` says which back-links count).
-  local f="$1" sz
-  _WS_SMALL=''
+  # answers 1). A NUL becomes a newline, never dropped, and where the NULs stood
+  # is reported beside the bytes (path-identity spec §3.6). What an INNER one
+  # means is each caller's: in the `.git` file it splits the line, unmeasured;
+  # in an admin directory's `gitdir` back-link it is refused
+  # (`_ws_leaf_checkout_one`): git never writes one, and read as a newline it
+  # would let a hand-made back-link read as a `.git` path holding a newline at
+  # its offset. A TRAILING one is a line end each caller strips, so
+  # `gitdir: A\0` and `gitdir: A\n\0` both read as A. Git reads the second as
+  # `A\n` and fails; ccd answers measured, safely: an A inside the leaf passes
+  # before any back-link is read (removing the leaf removes all of it), and
+  # outside the leaf only a tree git back-links passes (`_ws_leaf_checkout_one`
+  # says which back-links count).
+  # THE NUL MAP is the same bounded read again, each NUL read as N, each CR or
+  # LF as r and every other byte as x, so where the NULs stood is a question
+  # about a string the shell can hold (it holds no NUL): an N before an x is an
+  # inner NUL. A regex, never a two-star glob, so 4096 bytes match in linear
+  # time; its `=~` overwrites BASH_REMATCH, which no caller reads across this
+  # call. It is a SECOND read: a writer between the two can only make the map
+  # say inner (refused, safely), or miss a NUL the first read already turned
+  # into a newline, and that back-link is then compared exactly as before.
+  # A read that fails part-way leaves both globals '' (the contract above).
+  local f="$1" sz m
+  _WS_SMALL=''; _WS_SMALL_NUL=''
   [[ -f "$f" ]] || return 1
   { sz=$(LC_ALL=C wc -c < "$f"); } 2>/dev/null || return 1
   sz="${sz//[!0-9]/}"
   [[ -n "$sz" ]] || return 1
   (( 10#$sz <= 4096 )) || return 2
-  { _WS_SMALL=$( { LC_ALL=C head -c 4096 | LC_ALL=C tr '\000' '\n'; } < "$f" && printf x); } 2>/dev/null || return 1
+  { _WS_SMALL=$( { LC_ALL=C head -c 4096 | LC_ALL=C tr '\000' '\n'; } < "$f" && printf x); } 2>/dev/null || { _WS_SMALL=''; return 1; }
   [[ "$_WS_SMALL" == *x ]] || { _WS_SMALL=''; return 1; }
   _WS_SMALL="${_WS_SMALL%x}"
+  { m=$( { LC_ALL=C head -c 4096 | LC_ALL=C tr -c '\000\r\n' 'x' | LC_ALL=C tr '\000\r\n' 'Nrr'; } < "$f" && printf .); } 2>/dev/null \
+    || { _WS_SMALL=''; return 1; }
+  [[ "$m" == *. ]] || { _WS_SMALL=''; return 1; }
+  m="${m%.}"
+  if [[ "$m" =~ N.*x ]]; then _WS_SMALL_NUL=inner
+  elif [[ "$m" == *N* ]]; then _WS_SMALL_NUL=trailing; fi
   return 0
 }
 _WS_CHECKOUTS_WHY=''
@@ -32348,15 +32366,18 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry [alias accepted] -> 0 the
   # of any repository — or, under the collector's alias, the pre-move spelling
   # the two conditions below admit. Anything else is a tree git records
   # elsewhere: moved here, or an admin name a later worktree recycled. "Names
-  # THIS `.git` back" is a compare of text with each NUL of the back-link read
-  # as a newline, so it is literal only for a back-link without a NUL: one
-  # whose NUL sits at the offset of a newline in the `.git` path passes
-  # (`_ws_leaf_read_small` says which cases are refused and which are not).
+  # THIS `.git` back" is a compare of text, and the reader turns each NUL into
+  # a newline, so a back-link with a NUL INSIDE the path it names is refused
+  # first (path-identity spec §3.6): git never writes one, and a hand-made one
+  # whose NUL sits at the offset of a newline in the `.git` path would read as
+  # that path. A trailing NUL is a line end, stripped with the newlines below.
   _ws_reclaim_absent "$adp/gitdir"; rc=$?
   (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — whose tree $adp records was never asked"; return 2; }
   (( rc != 0 )) || { _WS_CHECKOUTS_WHY="$f names $adp as its git directory, which lies outside the leaf and holds no record of which tree it belongs to — the tree at $d is not provably the leaf's own"; return 1; }
   _ws_leaf_read_small "$adp/gitdir" \
     || { _WS_CHECKOUTS_WHY="$adp/gitdir could not be read whole, so whose tree $adp records was never asked"; return 2; }
+  [[ "$_WS_SMALL_NUL" != inner ]] \
+    || { _WS_CHECKOUTS_WHY="$adp/gitdir holds a NUL byte inside the path it names — git never writes one, so it is not git's record of the tree at $d"; return 1; }
   rec="$_WS_SMALL"
   while [[ "$rec" == *$'\n' ]]; do rec="${rec%$'\n'}"; done
   [[ "$rec" != "$f" ]] || { _ws_leaf_checkout_accepted "$adp" "$rec"; return 0; }
@@ -32415,9 +32436,9 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
   # directory it names resolved physically — absent refuses (git no longer
   # records the tree), unresolvable is unmeasured, inside the leaf passes;
   # outside it passes only as a linked worktree whose admin `gitdir` names
-  # this `.git` back (literally, or by its directory's physical path; each NUL
-  # of the back-link is read as a newline, so a hand-crafted one whose NUL sits
-  # at the offset of a newline in the `.git` path passes too), and
+  # this `.git` back (literally, or by its directory's physical path; a
+  # back-link with a NUL inside the path it names is refused, since git never
+  # writes one, and a trailing NUL is a line end), and
   # refuses otherwise. Anything else named `.git` is unmeasured. A refusal
   # outranks an unmeasured entry, whatever order the walk lists them in.
   # THE ALIAS (the collector's alone, spec §5.10): `alias` is the leaf's physical
