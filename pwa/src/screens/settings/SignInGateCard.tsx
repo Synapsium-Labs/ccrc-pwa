@@ -73,12 +73,16 @@ export function SignInGateCard({ auth }: { auth: AuthRead }): ReactNode {
  *  Settings › Security. The frame keeps it at one place in the tree on the index and on every section page, so it
  *  is mounted, and so announced (`role="alert"`), once per mount of the frame, not again on each page. It replaces
  *  the top-of-page paragraph that named a route. */
-export function SignInGateBanner({ auth }: { auth: AuthRead }): ReactNode {
+export function SignInGateBanner({ auth, onSecurity }: { auth: AuthRead; onSecurity: boolean }): ReactNode {
   if (gateState(auth, location.hostname) !== 'exposed') return null;
+  // On Security itself the card below holds the remedy, so the banner keeps its node and lead but links nowhere: a
+  // link to the page it is on would be a dead door.
   return (
     <div className="settings-unarmed" role="alert" data-gate-banner="">
       {`${SIGN_IN_GATE_TEXT.exposedLead} `}
-      <TextLink href="/settings/security" onClick={inAppClick('/settings/security')}>{SIGN_IN_GATE_TEXT.bannerLink}</TextLink>
+      {!onSecurity && (
+        <TextLink href="/settings/security" onClick={inAppClick('/settings/security')}>{SIGN_IN_GATE_TEXT.bannerLink}</TextLink>
+      )}
     </div>
   );
 }

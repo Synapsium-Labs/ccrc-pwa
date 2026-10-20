@@ -20,7 +20,7 @@ import {
 } from '../src/fleet/collectLaneWords';
 import { COORD_CONFIRM_MS } from '../src/fleet/coordWords';
 import { ApiError, COORD_UNSUPPORTED_TEXT, api, apiErrorText } from '../src/lib/api';
-import { ToastHost } from '@ccrc/ui';
+import { ToastHost, buttonVariants } from '@ccrc/ui';
 import { UNCONFIRMED_TEXT } from '../src/fleet/settingsText';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
@@ -568,7 +568,7 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     expect(write).toHaveBeenCalledTimes(1);
   });
 
-  describe('Pause all cleanup: nothing before a coord frame; a tap calls \'on\' once; "pausing…" until a frame reads set; unconfirmed after COORD_CONFIRM_MS; 501 inline; no Resume control', () => {
+  describe('Pause all cleanup: a skeleton before a coord frame; a tap calls \'on\' once; "pausing…" until a frame reads set; unconfirmed after COORD_CONFIRM_MS; 501 inline; no Resume control', () => {
     it("Cleanup pause's status is a skeleton before the first coord frame, never runs normally", async () => {
       const { store } = await mount(LIVE_HERE);
       expect(within(pauseCard()).getByRole('status', { name: 'Loading' })).toBeInTheDocument();
@@ -695,6 +695,11 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
       expect(within(pauseCard()).queryByRole('button')).toBeNull();
       const link = within(pauseCard()).getByRole('link', { name: COLLECT_PAUSE_TEXT.resume });
       expect(link).toHaveAttribute('href', '/runs');
+      // The resume door stands alone, so it is a control with the tap floor, not prose: the design system's ghost
+      // button on an anchor in the card's foot (TextLink's contract keeps a bare link for words inside a sentence).
+      for (const c of buttonVariants({ variant: 'ghost' }).split(/\s+/).filter(Boolean)) expect(link).toHaveClass(c);
+      expect(link.closest('.settings-card-foot')).not.toBeNull();
+      expect(link).not.toHaveAttribute('target');
       expect(within(pauseCard()).getByText(COLLECT_PAUSE_TEXT.paused).closest('p')).toHaveClass('settings-catalogue--amber');
       expect(pause).not.toHaveBeenCalledWith('off');
     });

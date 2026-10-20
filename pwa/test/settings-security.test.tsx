@@ -145,6 +145,9 @@ describe('the gate banner (spec §5.5, §11.1)', () => {
     for (const s of SETTINGS_SECTIONS) {
       act(() => navigate(`/settings/${s.id}`));
       expect(banner(), s.id).toBe(first);
+      // On Security itself the card below says the same words, so the banner keeps its node and lead but no link to
+      // the page it is already on.
+      expect(within(first).queryAllByRole('link'), s.id).toHaveLength(s.id === 'security' ? 0 : 1);
     }
     act(() => navigate('/settings'));
     expect(banner()).toBe(first);

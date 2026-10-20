@@ -32,7 +32,7 @@ import {
   COLLECT_LANE_CHOICES, type CollectLaneChoice, type CollectLaneConfirmRequired, type CollectLaneRequest,
   type CollectLaneView,
 } from '../../../shared/api';
-import { Button, QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Section, Skeleton, TextLink, useNow } from '@ccrc/ui';
+import { Button, QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Section, Skeleton, buttonVariants, cn, useNow } from '@ccrc/ui';
 import { api, apiErrorText } from '../lib/api';
 import {
   ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, SETTINGS_NOW_CLASS, SETTINGS_WHEN, UNCONFIRMED_TEXT, inAppClick,
@@ -274,9 +274,18 @@ export function PauseAllCleanup({
         <p className={SETTINGS_AMBER_NOTE} role="status">
           <span aria-hidden="true">{`${CHILD_RECLAIM_MARKER_GLYPH.set} `}</span><span>{COLLECT_PAUSE_TEXT.paused}</span>
         </p>
-        <p className="settings-note">
-          <TextLink href="/runs" onClick={inAppClick('/runs')}>{COLLECT_PAUSE_TEXT.resume}</TextLink>
-        </p>
+        {/* The one resume door stands alone, so it is a control with the tap floor, not a TextLink (whose contract is
+            a link inside a sentence): the ghost button on an anchor, in the foot where Pause stood (PrSheet's "Open on
+            GitHub" pattern; the anchor keeps its own hover and press, D-5101). */}
+        <div className="settings-card-foot">
+          <a
+            className={cn(buttonVariants({ variant: 'ghost' }), 'hover:bg-hover active:bg-pressed')}
+            href="/runs"
+            onClick={inAppClick('/runs')}
+          >
+            {COLLECT_PAUSE_TEXT.resume}
+          </a>
+        </div>
       </>
     );
   }

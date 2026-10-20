@@ -79,7 +79,7 @@ export function SettingsScreen(): ReactNode {
   }, [sectionId]);
 
   // The first child of the scaffold on every route, so React keeps one banner node across the index and the sections.
-  const banner = view === null ? null : <SignInGateBanner auth={view.auth} />;
+  const banner = view === null ? null : <SignInGateBanner auth={view.auth} onSecurity={sectionId === 'security'} />;
   if (section === null) {
     return (
       <PageScaffold

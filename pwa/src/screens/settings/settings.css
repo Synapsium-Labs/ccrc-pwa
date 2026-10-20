@@ -44,7 +44,8 @@
   line-height: var(--lh-normal);
   color: var(--ink-tertiary);
 }
-/* A card's foot: its one action alone after a hairline (spec §5.4's Pause all cleanup, §5.5's Rotate now). Layout
+/* A card's foot: its one action alone after a hairline (spec §5.4's Pause all cleanup, and its Resume door while
+   paused; §5.5's Rotate now adopts it later). Layout
    and a rule only; the hairline is the card's own edge token. */
 .settings-card-foot {
   display: grid;
