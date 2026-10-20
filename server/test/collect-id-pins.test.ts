@@ -2,7 +2,7 @@
 // already refuses a dash-leading, dot-leading or over-long id twice before any argv:
 // - the POPULATION gate (`collectPopulation`, `server/src/collectLane.ts`): a name under `$REG/tmproots` that fails
 //   `isTmpRootId` is counted in `refusedNames` and never becomes an id. So the learning audit (`learnCollect`, which
-//   asks no predicate of its own) never names it;
+//   since path-identity W2 asks the predicate itself too) never names it;
 // - the EXECUTOR's step 1 (`collectTempRoot`, `server/src/coord/collectTempRoot.ts`): `isTmpRootId(job.id)` again, on
 //   the job's own id, before `wsCollectAudit` or `wsCollect` is built.
 // `isTmpRootId` derives from L0's `isRegistryId`, so these cases read the shared lists of `registryIdCases.ts`. They

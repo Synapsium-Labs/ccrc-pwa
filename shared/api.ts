@@ -10266,9 +10266,9 @@ export function leafKeptWord(v: unknown): LeafKeptWord {
 export const REGISTRY_ID_MAX_CHARS = 255;
 
 /** THE ONE PREDICATE of a registry id (spec 2026-10-12 §2.3): length first, then the session-id shape, then no leading `.` or `-`.
- *  - The leading `-` is a SAFETY rule, not defence in depth (spec 2026-10-12 §2.1). ccd's verbs read their decision flags from any
- *    position, `--session`'s value included, and every such flag begins `--`. An id of `--actor` is read as a flag,
- *    and the verb binds another token as its id. The shape refuses `=`, so no `--flag=value` can be an id either.
+ *  - The leading `-` is a SAFETY rule (spec 2026-10-12 §2.1). A ccd older than path-identity W1b read its decision flags from any
+ *    position, `--session`'s value included, and every such flag begins `--`; since W1b each identity key takes its value whole,
+ *    so this rule is the server's half of the same refusal and closes the redirect on an older ccd too. The shape refuses `=`.
  *  - The leading `.` keeps `.`, `..` and a hidden name out, as ccd's own `_ws_tmproot_id_ok` does.
  *  - It is the rule for an id the server composes into an id-taking argv, whether the id came from a request, a
  *    stored run row, a registry file name or an executor's job.

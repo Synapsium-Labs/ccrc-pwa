@@ -1722,10 +1722,10 @@ const leafRunOf = (childOf: string | null): number | null =>
  *  A row whose id fails the temp-root id rule lists nothing, so no feed row is written for it. Any session can
  *  append a journal line, so the mirror's id is attribution, and this item puts it in a path a person is told
  *  to remove. The rule is L0's `isTmpRootId` (spec §5.10):
- *  - ccd's `_ws_tmproot_id_ok`, a session id's shape and no leading `.`. Without the dot clause, `.` would name
- *    `~/.cc-clips` (or `~/.cc-tmp`) itself as the thing a person removes, and `..` the directory above it;
- *  - no leading `-`, and at most 255 characters. These two clauses are the collector's, and here they change only
- *    what is listed: an id the collector never audits is not listed either.
+ *  - ccd's `_ws_tmproot_id_ok`, a session id's shape with no leading `.` or `-`. Without the dot clause, `.` would
+ *    name `~/.cc-clips` (or `~/.cc-tmp`) itself as the thing a person removes, and `..` the directory above it;
+ *  - at most 255 characters. That clause is the collector's, and here it changes only what is listed: an id the
+ *    collector never audits is not listed either.
  *
  *  `runId` is `meas.childOf` read through `CHILD_RUN_ID`, else null. The purge failures do not carry it,
  *  and a cut line has no `meas` at all. Ordered by session id. Pure and deterministic, so the coord frame's

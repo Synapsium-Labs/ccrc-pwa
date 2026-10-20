@@ -1524,10 +1524,10 @@ class IntentJournalFault extends Error {
  *  reclamation for good: this must accept EVERY string the writer can emit.
  *
  *  Neither side has a shape it can be split on. `from` is `runs.claimedBy`
- *  as sqlite reads it back; `POST /api/runs` checks it only with
- *  `claimedBy.trim() === ''` and no charset guard (`shared/api.ts`'s
- *  `isSessionIdShape` exists precisely because the route does not enforce
- *  one), so `from` may hold whitespace, a line terminator beside other
+ *  as sqlite reads it back. Before path-identity W1a, `POST /api/runs`
+ *  checked a claimant only with `claimedBy.trim() === ''`; it now refuses
+ *  one `isRegistryId` (`shared/api.ts`) refuses, but a `from` stored before
+ *  the gate may still hold whitespace, a line terminator beside other
  *  characters, its own ` -> `, or nothing at all — `trim` keeps NUL, and
  *  node:sqlite reads `"\u0000demo"` back truncated to `""`. `to` is the
  *  trimmed id `reclaimRun` (`reclaim.ts`) found as `<to>.uuid` in the
