@@ -117,8 +117,10 @@ real values: `deploy/reference-fleet.md` (gitignored).
   deny file), in any separator spelling, by redirection and the usual writers, through `find`, `xargs`, an interpreter
   naming the path, a `cd` and a variable, and by the edit tools (D-5994, D-6063, D-6064, D-6065, D-6066). Still open
   (D-6064's residuals): a symlink into the build directory, a `$VAR` fragment of the path, case variants, `..` in Bash
-  text, nine or more separators or flags, an archive extracted into a parent directory, and a script file, `eval`,
-  stdin or an interpreter that does not name the path. The `ccd claude …` switch verbs are the operator's, by hand; rolls and installs are ccrc's own
+  text, nine or more separators or flags, an archive extracted into a parent directory, a script file, `eval`,
+  stdin or an interpreter that does not name the path, and the spellings a later review measured (a `>` with no space
+  after a `cd`, `cd --`, some globs, `find` actions and variable forms, a permission change, a FIFO for the deny
+  file). The `ccd claude …` switch verbs are the operator's, by hand; rolls and installs are ccrc's own
   automatic acts. Account switching and the auto-swap are not touched: `ccd swap` is never blocked.
 - **NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly.** Each unit is a
   long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet. ONE scoped exception

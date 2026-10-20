@@ -601,8 +601,17 @@ describe('build guard D-6066: the upstream id, read from the deny file the insta
       .filter((c) => !(bash(c) ?? '').includes(BUILD_WHY));
     expect(missed).toEqual([]);
   });
-  it('regression: with no deny file, a symlinked one or an unparsable one, upstream-a update is allowed and main\'s denies stand', () => {
-    for (const setup of ['none', 'symlink', 'unparsable'] as const) {
+  // The deny file is one per box, so a child that could make it unreadable would open every child's deny arm: an
+  // unreadable or over-cap file passes nothing, and only the upstream-id arms go, as on main.
+  it('regression: with no deny file, a symlinked, unparsable, unreadable or over-cap one, upstream-a update is allowed and main\'s denies stand', () => {
+    const big = JSON.stringify({ permissions: { deny: [
+      ...(JSON.parse(denyFileText('upstream-a')) as { permissions: { deny: string[] } }).permissions.deny,
+      ...Array.from({ length: 6500 }, (_, i) => `Bash(padding-${i} install:*)`),
+    ] } });
+    expect(big.length).toBeGreaterThan(190_000);
+    const asRoot = process.getuid?.() === 0;
+    for (const setup of ['none', 'symlink', 'unparsable', 'mode 000', 'over the cap'] as const) {
+      if (setup === 'mode 000' && asRoot) continue;
       fs.rmSync(DENY(), { force: true });
       if (setup === 'symlink') {
         const real = path.join(home, 'real-deny.json');
@@ -610,11 +619,18 @@ describe('build guard D-6066: the upstream id, read from the deny file the insta
         fs.symlinkSync(real, DENY());
       }
       if (setup === 'unparsable') fs.writeFileSync(DENY(), '{"permissions":{"deny":["Bash(upstream-a install:*)",');
-      expect(bash('upstream-a update'), setup).toBeNull();
-      expect(bash('claude update'), setup).toContain(BUILD_WHY);
-      expect(bash('ccd ws-rm x'), setup).toContain('ccd ws-rm');
+      if (setup === 'mode 000') { useDenyFile('upstream-a'); fs.chmodSync(DENY(), 0o000); }
+      if (setup === 'over the cap') fs.writeFileSync(DENY(), big);
+      try {
+        expect(bash('upstream-a update'), setup).toBeNull();
+        expect(bash('claude update'), setup).toContain(BUILD_WHY);
+        expect(bash('ccd ws-rm x'), setup).toContain('ccd ws-rm');
+        expect(bash('ccrc-api approvals list'), setup).toContain('approval');
+      } finally {
+        if (setup === 'mode 000') fs.chmodSync(DENY(), 0o644);
+      }
     }
-  });
+  }, 60_000);
   it('a top-level session is not denied any of them', () => {
     useDenyFile('upstream-a');
     fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));

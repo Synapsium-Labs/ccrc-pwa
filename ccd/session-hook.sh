@@ -4419,11 +4419,13 @@ fi
 # `.ccrc` or `.cc-sessions`, by the build's `find`, `xargs`, interpreter, variable and parent-directory arms, and by an
 # edit tool; a trusted name may hold glob characters, a glob segment directly under either directory counts, and the
 # relative spelling does too. So spec §7.6's registry sentence holds for a child here too.
-# The roster's upstream id (D-6066) comes from that deny file, passed to this arm alone as `--rawfile deny` when it is
-# a regular file and not a symlink (the class-mode call passes none, so `$ARGS.named.deny // ""` reads empty there):
-# every head the file pairs as `Bash(<p> install:*)` AND `Bash(<p> update:*)`, minus `claude` (`ccrc update` stands
-# alone in every file, so one verb is not enough). `UPRE` is then a `claude…`-like head and a `~/.local/bin/<p>`
-# launcher; with no such head, or a missing, symlinked or unparsable file (`try`), it never matches, as on main.
+# The roster's upstream id (D-6066) comes from that deny file, read by the hook (`_hook_deny_text`, at most 64 KiB) and
+# passed to this arm alone as `--arg deny` when it is a regular file and not a symlink (the class-mode call passes
+# none, so `$ARGS.named.deny // ""` reads empty there): every head the file pairs as `Bash(<p> install:*)` AND
+# `Bash(<p> update:*)`, minus `claude` (`ccrc update` stands alone in every file, so one verb is not enough). `UPRE` is
+# then a `claude…`-like head and a `~/.local/bin/<p>` launcher; with no such head, or a missing, unreadable,
+# non-regular, symlinked, over-cap or unparsable file (`try`), it never matches, as on main. The file is shared by the
+# whole box, so a child that makes it unreadable costs every child only these upstream-id arms, which main never had.
 # A bypassed child raises no prompt, so this arm is its only enforcement. JavaScript's regexes are ASCII
 # where Oniguruma's are Unicode, so `\w` and `\b` are spelled as ASCII classes and `\s` as JavaScript's own set
 # (`WS`, built by `implode` so this file stays ASCII). `hbt` is the classifier's `headBeforeTail`: in one segment, the
@@ -4608,12 +4610,26 @@ if [[ "$event" == PreToolUse && -n "$id" && -e "$REG/$id.child" \
      || "$apf" == *anthropic-ai/claude-code* || "${apf,,}" == *downloads.claude.ai* || "${apf,,}" == *claude.ai/install* || "$apf" == *.local* \
      || "$apf" == *.cc-sessions* ]] || apf=""
 fi
+# The deny file is read once here, by a bounded builtin read, and its text passed as `--arg deny` (D-6066). Read by jq's
+# `--rawfile`, a file it could not open (mode 000, a directory, removed after the test) made jq exit 2 with no output,
+# so every arm below allowed, and the file is one per box; a FIFO, `/dev/zero` or a huge file blocked jq or ran it
+# unbounded, past the hook's timeout, which fails open too. The cap stays well under the 128 KiB a single `--arg` may
+# hold (E2BIG would fail open again). A FIFO still blocks the open: a residual, as in `install-session-hooks.sh`.
+APF_DENY_BYTES=65536
+_hook_deny_text() {   # <file> -> APF_DENY (its text; empty when it cannot be read or is over APF_DENY_BYTES bytes)
+  local LC_ALL=C t=""
+  APF_DENY=""
+  IFS= read -r -d '' -n $((APF_DENY_BYTES + 1)) t 2>/dev/null <"$1"
+  (( ${#t} <= APF_DENY_BYTES )) && APF_DENY=$t
+  return 0
+}
 if [[ -n "$apf" ]]; then
   case "${tool:-}" in
     Bash|Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob)
       adeny=()
       if [[ -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]]; then
-        adeny=(--rawfile deny "$REG/child-deny.settings.json")
+        _hook_deny_text "$REG/child-deny.settings.json"
+        [[ -n "$APF_DENY" ]] && adeny=(--arg deny "$APF_DENY")
       fi
       afw=$(jq -r --arg q "'" --arg mode deny "${adeny[@]}" "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || afw=""
       areason=""
