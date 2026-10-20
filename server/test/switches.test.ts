@@ -16,6 +16,8 @@ import { DEAD_COORDINATOR_LANE_LIVE_MARKER } from '../src/deadCoordinator.js';
 import { IDLE_NUDGE_DISABLED_MARKER } from '../src/idlenudge.js';
 import { STOP_DONE_DISABLED_MARKER } from '../src/stopDone.js';
 import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER } from '../src/turnidle.js';
+import { isMarkerState } from '../../shared/api.js';
+import { ASKS_DISABLED_MARKER, SWITCHES, markerSwitchNames, readSwitches } from '../../shared/switches.js';
 
 /** Today's marker values, typed once here as the table the switchboard must equal. `asks-disabled` is `watch.ts`'s
  *  private constant on the base, so it has no export to read; the switchboard rows below hold it. */
@@ -45,5 +47,61 @@ describe('characterization: every exported marker constant keeps its value (D-58
 
   it('every marker value equals today\'s, read through the module that exports it', () => {
     expect(EXPORTED).toEqual(TODAY);
+  });
+});
+
+describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
+  const rows = Object.entries(SWITCHES) as [string, (typeof SWITCHES)[keyof typeof SWITCHES]][];
+  const markerRows = rows.filter(([, r]) => 'marker' in r.storage);
+  const settingRows = rows.filter(([, r]) => 'setting' in r.storage);
+
+  it('every exported marker constant is a marker row, keyed by its own name', () => {
+    const markers = markerRows.map(([k, r]) => { expect('marker' in r.storage && r.storage.marker, k).toBe(k); return k; });
+    expect(ASKS_DISABLED_MARKER).toBe('asks-disabled');
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled'].sort());
+    expect([...markerSwitchNames].sort()).toEqual(markers.sort());
+  });
+
+  it('the settings switches are rows that name their table and column', () => {
+    expect(Object.fromEntries(settingRows.map(([k, r]) => [k, 'setting' in r.storage ? r.storage.setting : null]))).toEqual({
+      'stall-watch-level': 'stall_settings.level',
+      'collect-lane-choice': 'collect_lane_settings.choice',
+    });
+  });
+
+  it('every row has a non-empty meaning, default and writer, and an owner among the spec\'s contexts', () => {
+    for (const [k, r] of rows) {
+      expect(r.meaning.trim().length, `${k}: meaning`).toBeGreaterThan(10);
+      expect(r.default.trim().length, `${k}: default`).toBeGreaterThan(0);
+      expect(r.writer.trim().length, `${k}: writer`).toBeGreaterThan(0);
+      expect(r.owner, `${k}: owner`).toMatch(/^C[1-9]$/);
+    }
+  });
+
+  it('the writers are the ones the tree has: one route-backed verb, two settings routes, the rest by hand', () => {
+    const writers = Object.fromEntries(rows.filter(([, r]) => r.writer !== 'hand-only').map(([k, r]) => [k, r.writer]));
+    expect(writers).toEqual({
+      'reclaim-paused': 'ccd reclaim-pause, through POST /api/coord/reclaim-pause',
+      'stall-watch-level': 'POST /api/coord/stall-watch',
+      'collect-lane-choice': 'POST /api/coord/collect-lane',
+    });
+  });
+
+  it('a listing with reclaim-paused is set for it and clear for every other marker row', () => {
+    const r = readSwitches(['reclaim-paused', 'unrelated-file']);
+    for (const k of markerSwitchNames) expect(r[k], k).toBe(k === 'reclaim-paused' ? 'set' : 'clear');
+  });
+
+  it('an unlistable registry is never clear: a null listing is unmeasurable for every marker row', () => {
+    const r = readSwitches(null);
+    for (const k of markerSwitchNames) expect(r[k], k).toBe('unmeasurable');
+  });
+
+  it('every answer is the wire\'s MarkerState, and a settings row ignores the listing', () => {
+    const r: Record<string, unknown> = readSwitches(['stall-watch-level', 'collect-lane-choice', 'mail-disabled']);
+    for (const v of Object.values(r)) expect(isMarkerState(v)).toBe(true);
+    expect(Object.keys(r).sort()).toEqual([...markerSwitchNames].sort());
+    expect(r['stall-watch-level']).toBeUndefined();
+    expect(r['collect-lane-choice']).toBeUndefined();
   });
 });
