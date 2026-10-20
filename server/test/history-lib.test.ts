@@ -9962,7 +9962,9 @@ describe('redactAfter: a relayed batch is read with its stream\'s look-behind (D
   // D-6069 (b), the whole-branch review's residual, pinned as measured. A NAME that a colour sequence splits across the look-behind
   // boundary is found only by the joined reading, which differs from the batch inside the look-behind with no mark covering the
   // first difference, so relayRead's line-start fallback writes the look-behind's last line again, relayUnion's line alignment
-  // fails, and every line of the batch is a mark, with one line more than the batch held. Nothing leaks; availability is lost.
+  // fails, and every line of the batch is a mark, with one line more than the batch held. Nothing leaks; availability is lost. The cost
+  // runs wider (an earlier line's sequence makes every look-behind line from there on a mark) and so does the trigger (a sequence
+  // between a JSON key and its colon, or right after the colon); every case fails closed (review 711 F3).
   it('a NAME a colour sequence splits across the look-behind boundary: the value is masked, but the whole batch is written as marks, one line more than it held (D-6069)', () => {
     const name = ['"pass', '\x1b[0m', 'word":'].join('');   // a key-shaped NAME, assembled at run time
     const lookBehind = `file a.md ok\n{${name}`;
