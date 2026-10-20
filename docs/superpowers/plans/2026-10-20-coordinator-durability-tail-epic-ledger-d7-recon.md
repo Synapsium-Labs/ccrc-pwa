@@ -279,6 +279,8 @@ Each task is a plain revert. DT2's and DT6's migrations are additive: a revert l
 
 This programme's block is D-5920 to 5929. This plan defines D-5920 to D-5927, one per task. 5928 and 5929 are issued and unused, written without the prefix so they seed no floor.
 
+**Issued and unused** (Task DT1's spares, without the prefix): 6014, 6015.
+
 - **D-5920** — `durability-ledger-order` (Task DT0; spec §3): the epic's build order is D1 → D3 → D2 → D4 → D5, then D7; D6 and D8 are recorded as inputs to the consolidation's W6 `RunBinding`, not built beside it; arming the `busy` gate (D2) and the dead-coordinator lane (D6) are the operator's acts after their shadow reviews.
 - **D-5921** — `drift-decider-pure` (Task DT1; spec §4.1, §4.2): drift is decided by one pure L1 function over plain rows with seven kinds in one L0 map; liveness is the reclaim ladder's verdict, typed through `deadCoordinator.ts`'s L1 `ClaimantReading` so the decider imports no IO, and `unmeasurable` is never a `claimant-gone`; `run-quiet` covers active runs only; the mail kinds read D1's park columns (#853).
 - **D-5922** — `drift-lane-records-and-pushes-once` (Task DT2; spec §4.1, §4.3 to §4.5): a separate 15-minute lane, not a stall arm, records findings in `drift_findings` (cleared only by re-measurement), and pushes once per finding past 24 h, once-only held by its own `pushedAt` column and the push sent through W1a's `notify` funnel (C1c), bounded by a first-pass summary, 3 per pass and 12 per UTC day counted from the table, the daily count over per-item pushes only (`pushedVia`), with live-stall-overlap, armed-dead-coordinator and D1-escalation suppression, and a `url` (and a run kind's `runId`) on every push; it runs as one W1b `LANE_SCHEDULE` row and acts through no door.
