@@ -15420,22 +15420,573 @@ A departure the wave finds gets its own number, issued at its fix round and defi
 
 Each entry is filled at the fix round: one sub-bullet per slug or item, in task order.
 - **D-5170** (Task 1) `w2-task-1-plan-text`: the measured time of the 200,000-zero row on the old strip; R28's anchored form against the spec's unanchored one (identical results, measured).
+  - The 200,000-zero row on the old strip. The plan drafted about 300 s for the large case (three rows at about 100 s
+    each, scaled from 43.3 s at 131,000 zeros). Measured: 234.3 s in vitest (236 s wall) for the whole case, ending
+    `Test timed out in 20000ms`. Its values were already right; only the time was wrong. After the edit the file's three
+    cases pass in 0.74 to 0.83 s (wall 2 s), so the large case is far inside its 20 s budget.
+  - R28's anchored form `^0*([1-9][0-9]*)?$` against the spec's unanchored `^0*([0-9]*)$`: the results are identical,
+    measured. The padded rows of `ccd-collect-idle-token.test.ts` (47 passed) and the floor rows of
+    `ccd-collect-audit-rungs.test.ts` (60 passed) stand unedited and green. A direct comparison of the two captures on
+    28 knobs (all zeros, padded and unpadded, 1,000 to 3,000 leading zeros, a 20-digit value) printed the same floor for
+    every one, on bash 5.2.21 with glibc. The anchored form has one parse, so its answer does not depend on how a libc
+    orders the matches of a starred group. Linearity on a Darwin libc is unmeasured; the advisory macOS leg's timing of
+    `ccd-collect-floor-linear` is where it would show.
+  - T1.4's drafted prose, "the capture alone never refuses", is false once R28's status arm exists. A knob of `0x10`
+    reaches the capture, the capture fails, and the function answers rc 2 with out and err empty, so case 3's first
+    expect passes and no longer separates validation from capture. The row still reds, at its second expect: `knob
+    "0x10": expected 'WS_COLLECT_IDLE_FLOOR_S could not be read by its capture…' to contain 'not a whole number'`. That
+    `toContain` alone pins the validation.
+  - T1.3 and T1.5 are measured against the status arm, as T1.2 against the default. T1.2 reds the all-zero row with out
+    86400 and the error `((: 10#: invalid integer constant (error token is "10#")`. T1.3 reds the `1111111111` row as `{
+    rc '2', out '', why 'WS_COLLECT_IDLE_FLOOR_S could not be read by its capture…' }`, and idle-token's
+    `18446744073709551617` row the same. T1.5, which deletes the arm, reds the `one capture` case: `the capture’s status
+    is read: a capture that fails answers 2, never a silent 86400`.
 - **D-5171** (Task 2) `w2-task-2-plan-text`: the measured verdicts; the second read's race argument; the reading `read-small-partial-read-cleared` (the content read clears `_WS_SMALL` on a part-way failure, rows T2.7 and T2.8); the reading `nul-why-leads-with-the-admin-path` (the NUL reason leads with the admin path, against the Global Constraint's decisive words first) and the coordinator's ruling on it.
+  - The measured verdicts. An inner NUL at a newline's offset: 0 before, 1 now. An inner NUL elsewhere in a path that
+    holds a newline: 2 before, 1 now. An inner NUL elsewhere in a plain path: 1 before and now, and the why is now the
+    NUL reason. `_ws_leaf_remove` over such a back-link: 0 before, 1 now, and the files stand. Trailing-NUL rows are
+    unchanged (0, 0, and 1 for a CR LF pair), and an inner NUL in a `.git` FILE stays 2. The red run was 16 failed and 8
+    passed, every text as drafted. Rows T2.1 to T2.5 red 4, 13, 8, 3 and 13 cases of `ccd-leaf-nul-backlink.test.ts`.
+  - The second read's race argument. The NUL map is a second bounded read of the file. A writer between the two reads
+    can only make the map say `inner` (refused, safe), or miss a NUL that the first read already turned into a newline,
+    which is then compared exactly as it was before this task.
+  - The reading `read-small-partial-read-cleared`. The export's content read leaves partial bytes in `_WS_SMALL` on its
+    rc 1, which §Interfaces forbids (both globals `''` on every return other than 0), so its failure arm is now
+    `|| { _WS_SMALL=''; return 1; }`. No caller reads `_WS_SMALL` after a non-zero answer, so no behaviour changes. Rows
+    T2.7 and T2.8 pin it with a fault shim: T2.8 reds `['1','','partial']` against `['1','','']` for the content read,
+    and T2.7 reds `['1','','/aNbN']` for the map's own arm (its probe counts 3 because the file holds two other
+    `|| return 1` lines; the diff showed exactly one line changed). Ruled a sound departure after the wave's review.
+  - The reading `nul-why-leads-with-the-admin-path`. The NUL reason opens with the admin path (`$adp/gitdir`), as
+    §Interfaces and the sibling reasons do, against the Global Constraint's "decisive words first". In a 300-byte
+    journal row the words "holds a NUL byte" can therefore fall past the cut, at the cost of the explanation only: the
+    leaf is still refused. Ruled a sound departure after the wave's review.
+  - One case the drafted argument omits, now the stated residual `read-small-second-read-can-fail`. A writer that
+    unlinks or replaces the file between the two reads makes the map read fail, so the reader answers 1 where it
+    answered 0. Through `_ws_leaf_checkout_one` a measured answer becomes rc 2 (unmeasured), and in the compare-and-drop
+    the witness is moved back and kept. Both fail safe, and ws-expire's tail reaches it.
 - **D-5172** (Task 3) `w2-task-3-plan-text`: each case's measured rounds and final states; S2 to S6 measured; S1 deferred to Task 6.
+  - Round counts and final states. Both runs of the fence passed all six cases. `late-3` settled in 1 round
+    (`["not-witnessed"]`) and `late-4` in 2 (`["collectable","not-witnessed"]`), as drafted. No case ended in a state
+    other than the one drafted, so none is recorded by slug.
+  - S2 measured as drafted: with the line deleted (`left=0`), `late-2` and `late-5` red with `the reap held: the slug
+    was taken when it ran: expected false to be true`.
+  - S3 measured differently from the draft. Deleting the registry rung from `_ws_collect_eval` (5 copies became 3,
+    `_ws_collect_resume_eval` intact) reds `late-1`, `late-2`, `late-3` and `late-5`, but the next audit answers
+    `containment-unproven`, not the drafted `collectable`: its detail reads `<id>'s own registry row stands … a temp
+    root whose id has a row is never collected`. A later rung still refuses on the row, so the registry rung decides the
+    verdict word but is not the only refusal (`s3-later-rung-refuses-containment-unproven`). The whole-branch review's
+    fix wave reworded the fence header to match: "one for each guard in play at that boundary", with the `dropped` row
+    naming `_ws_collect_rows_clear`'s own-row check and the `witnessed` row naming the planted aged temp file.
+  - S4 measured as drafted: `applied=1`, `late-4` reds at `expected '<dev>:<ino>' not to be '<dev>:<ino>'` on the
+    new-inode assertion.
+  - S5 measured as drafted except for one count: `late-4` reds at `the CONTROL: step 5 refused in-use, and the putback
+    reached its seam: expected [ 'locked', 'consented', …(3) ] to include 'restoring'`. The draft printed `…(6)`; the
+    measured list has 5 gaps.
+  - S6 measured with one miscount. The sed changed exactly one line (the `removed)` arm), but the drafted check expects
+    `applied=1` and printed 2, because the same `after_move` line already stands once in the `moved)` arm
+    (`s6-applied-count-includes-moved-arm`). The mutation itself applied once and reds `late-6` as drafted: `the resume
+    entered the order at the slot's rmdir: expected [ 'locked', 'consented' ] to deeply equal [ 'locked', 'consented',
+    …(3) ]`.
+  - S1 was deferred to Task 6 (R30), because its generation-comparison mutation is measured once the drop helper stands.
+    It was measured there: `late-1` and `late-6` red, and the fence's other four stay green.
+  - Step 2's type check printed one error, TS2353 at the `restoring` key: it does not exist in
+    `Partial<Record<"consented" | "dropped" | …>>`. The plan drafted the union in declaration order and this tsc prints
+    it alphabetically; it is the same type.
+  - The unused `witnessOf` import in the new file, taken verbatim from the draft, was removed by the whole-branch
+    review's fix wave, in a change to comments and imports only.
 - **D-5173** (Task 4) `w2-task-4-plan-text`: T4.4's measured silence at the leaf; L6, the mode-000 leaf pin of P1; the tail's two leaves (TL1, TL2) and their wall time; the collector's `quarantine-kept` window; whether the file walks `/proc`.
+  - T4.4's measured silence at the leaf. The plan drafted that the helper returning `$?` instead of mapping to 2 reds
+    nothing at the leaf, because `_ws_leaf_remove` maps any non-zero answer to 2. Measured: exactly cases 1, 2, 6 and 7
+    red (4 failed, 21 passed), each as `expected '[rc=1] something is mounted at …' to be '[rc=2] …'`, and every `L`,
+    `TL` and `K1` row stays green. The helper's own pins are the mechanism.
+  - L6, the mode-000 leaf pin of P1. The leaf passes no `resolve`, so a mode-000 leaf keeps today's answer. L6 ran (the
+    run was non-root) and passes; T4.7, which makes ask 1 pass `resolve`, reds it with `[rc=2] <leaf> cannot be resolved
+    (<leaf> cannot be entered), so whether anything is mounted under it was never asked — nothing under <leaf> was
+    removed`, and reds `src-order` (length 1). As root L6 is skipped and only `src-order` reds.
+  - The tail's two leaves, through the real verb with the in-use probe stubbed to answer nobody: `TL1` (a mount under
+    the temp root) and `TL2` (a mount under the clips leaf) each answer `reclaimed` with that leaf kept `unmeasured` and
+    standing; `TL1` also asserts its witness byte-identical. Wall times: `TL1` 4774 ms, `TL2` 5151 ms. Both red under
+    T4.8 (both asks deleted) as `a kept leaf is said, not refused: expected null to be 'unmeasured'`.
+  - The collector's `quarantine-kept` window. `K1` makes a mount after step 5 has asked, and step 6 now answers
+    `failed quarantine-kept` with the record and the slot kept and nothing removed. Wall time 1559 ms. It reds under
+    T4.8 (`expected +0 to be 1`) and under T4.9, where ask 1 returning 1 puts the leaf back and refuses the terminal
+    `containment-unproven` where the kept record is needed.
+  - Whether the file walks `/proc`: it does not. Every verb, audit and evaluation call stubs the in-use probe (0 calls
+    without `NOBODY` or `PROBE_STUB`, by source), and the slowest case took 5.2 s, so `ccd-removal-mounts` is not joined
+    to CLAUDE.md's load-flake list and that file is untouched by this task. The red run was 22 failed and 3 passed, as
+    drafted.
+  - T4.2 (ask 1 moved below the owner bits) reds `L1b` only, as the frame predicts, and `L1` stays green. `src-order`
+    reds with `ask 1 directly follows the device compare: expected 38 to be 36` (ask 1 sits two lines lower, after the
+    owner-bits line). This pins `leaf-mount-ask-before-the-owner-bits`.
+  - The whole-branch review's fix wave corrected the helper's contract line from "(spec §3.5)" to "(path-identity spec
+    §3.5)", which re-wrapped the helper's header from 3 lines to 4, after line 19162.
 - **D-5174** (Task 5) `w2-task-5-plan-text`: `step-4-unresolvable-workdir-fails-before-keep-of`; `worktree-remove-failed-sentence-covers-a-mount`; the measured shim need of D2 and D3.
+  - `step-4-unresolvable-workdir-fails-before-keep-of`. The plan drafted it (P1): step 4 passes `resolve`, so a standing
+    workdir that cannot be resolved fails `worktree-remove-failed` before `keep_of`. Built as drafted. `C5` pins it by
+    failing `_ws_dir_physical` for the helper's `resolve` call alone: the detail starts with
+    `<workdir> cannot be resolved (stub:`, and `keep_of` is never asked of the tree.
+  - `worktree-remove-failed-sentence-covers-a-mount`. `server/src/wsaudit.ts` is not edited: its sentence ("…could not
+    prove that the tree … is its own…") already covers the refusal.
+  - The measured shim need of `D2` and `D3`: none. Both are green on Linux with `DARWIN_PRE` alone, so `DARWIN_SHIMS`
+    was not added.
+  - The tail's four mount reasons pass to `_ws_reclaim_fail` raw, not through `_ws_leaf_why_line`, as every existing
+    tail failure does (`pin-failed` beside them carries git's own output). Global Constraints' 300-byte cut is read as
+    governing the kept-leaf and collect reasons. A mount point holding a control byte that the kernel table does not
+    encode reaches the row raw, JSON-escaped.
+  - The red run was 17 failed of 17, as drafted (vitest prints `+0`, `[ Array(1) ]` and `…(6)` where the draft wrote
+    `0`, `[ '<path>' ]` and `…(4)`). All nine rows T5.1 to T5.9 red, none throwing. T5.8's measured order is mounts,
+    keep, remove, mounts on the checkout, as drafted.
+  - `E1` and `CONTROL E` walk the real `/proc` through the expiry ladder; the worst case was `CONTROL N` at 6632 ms
+    (8562 ms for `N1` at load 33 after the table), so CLAUDE.md's sentence for `ccd-reclaim-tail-mounts` says "about 10
+    s".
 - **D-5175** (Task 6) `w2-task-6-plan-text`: each rewritten pin by name; the race-crash reshape and its `it.each` split (R32); the WS-AUDIT-COLLECT header clause reworded; S1 measured; T6.13's uid row; row 10b and P15.
+  - The rewritten pins, by name, in `ccd-child-tmproot-witness-drop.test.ts` (its header and describe title now cite
+    path-identity spec §3.2 and §3.3). The plain-drop case, which asserted that the drop removed the witness whatever
+    stood at the leaf, is split into `a leaf that STANDS keeps its witness: the drop proves the absence again, answers
+    kept, and touches nothing` (rc 1, `its witness was kept: a leaf stands at`, witness byte-identical) and `the leaf
+    gone: the drop removes the witness and nothing else — tmproots/ stays` (`[rc=0] dropped|`).
+  - Three more rewritten pins in the same file. `a LINKED tmproots/ is never followed` was warned about with rc 0 and is
+    now unmeasured, rc 2, nothing printed, the file the link reaches standing. `an id no witness is named for (%j)` is
+    rc 1 with its reason in `_WS_WDROP_WHY` and nothing printed. `a witness that cannot be unlinked is warned about…` is
+    now `a directory at the witness name is no witness ccd wrote: unmeasured (rc 2), nothing printed, and it stands`.
+  - `THE WINDOW` (probe in use, probe unmeasured) is retitled. The drop proves the absence again, so a leaf that stands
+    when step 6 acts keeps its witness, byte for byte, where the old pin asserted the witness gone; its CONTROL says
+    that the drop's own ask is not step 6's, so it is answered for real. The Darwin row of the already-gone describe
+    gains `DEVINO_SHIM` (a Linux `stat -c '%d:%i'` standing in for `_plat_devino`'s BSD arm on a Linux host) and the
+    title `the drop takes its second-read path`.
+  - In `ccd-child-tmproot-witness.test.ts` the two `_ws_tmproot_remove` rows that asserted a warning and rc 0 now assert
+    `a witness ccd did not write, after the leaf is gone: the removal stands, and the helper answers 2 with the drop’s
+    reason, printing nothing` and `a LINKED tmproots/ is never followed: …, and the helper answers 2, printing nothing`.
+    `STUB` gains the leaf's `rm -rf` for rc 0 only; the rc 1 and rc 2 stubs are unchanged. T6.11 reds both rewritten
+    rows.
+  - The race-crash reshape and its `it.each` split (R32), in `ccd-collect-race-crash.test.ts`. The `it.each` over
+    `DROPPED by a later tail` and `ABSENT (deleted by hand)` is split into `ABSENT (deleted by hand)`, unchanged, and a
+    new `KEPT by a later tail’s drop beside the standing slot`, which asserts the witness stands byte for byte, then
+    that the record licenses the resume and its compare-and-drop takes the witness. The `REWRITTEN by a recycled spawn`
+    case is retitled ("its tail’s drop KEEPS the witness beside the record’s slot"), its CONTROL reads the witness's
+    `run` field as the recycled spawn's, and its `rounds[0]` message no longer says "found with no witness at all". The
+    header, the out-of-band describe's prose, the crash-at-moved comment and `g2Departs`'s docstring in
+    `collectRaceFixture.ts` say the same.
+  - The measured round counts, never asserted, taken with temporary instrumented copies: `REWRITTEN` 3 rounds (2
+    before), `KEPT` 2 (the `DROPPED` row had 2), `ABSENT` 2 (2), crash-at-moved 3 (2), and `ccd-collect-race-spawn`'s
+    `g2Departs` case 3 (2). R2's extra round lands where the departing child's witness is a newer generation than the
+    record's.
+  - The WS-AUDIT-COLLECT header clause, reworded in place as drafted (P14). "The reclaim tail's witness drop is not the
+    collector's (`tail-drop-ignores-a-recordless-slot`)" now says that since path-identity W2 (TR4 A; path-identity spec
+    §3.3) the tail's witness drop keeps the witness beside any slot of the id too
+    (`tail-drop-ignores-a-recordless-slot`, closed). The pause sentence before it is untouched, and
+    `ccd-collect-header-prose.test.ts` stays green and unedited.
+  - S1 measured (R30, the fence's generation row: the collector's compare-and-drop becomes a plain unlink). In
+    `ccd-tmproot-drop-exact.test.ts` cases 10 (`[rc=0] dropped|`), 10b (its move-back CONTROL) and 11
+    (`expected [ '--help' ] …`) red. In `ccd-collect-race-spawn-late.test.ts` `late-1` and `late-6` red with
+    `witness: 'dropped'` (2 failed, 4 passed), and the fence's other four stay green.
+  - T6.13's uid row. The plan drafted six terms in the second read's compare, the writer's own compare having no `uid`
+    or `at` term, with one mutation row per dropped term. `T6.13-run` reds case 13, and each other row reds its own
+    `13b` row. Measured: `T6.13-uid` reds the `only uid rewritten` row alone (1 failed), but at its CONTROL
+    `that one field was rewritten`, with `ENOENT: no such file or directory, open '…/tmproots/demo-quiet-mesa'`: the
+    witness was dropped, so the read of it reds before the drafted `[rc=0] dropped|` assertion. The `dev`, `ino`,
+    `btime` and `at` rows red the same way.
+  - Row 10b and P15. The plan drafted that the helper silences the reused compare-and-drop's one warning with
+    `2>/dev/null` and composes its own reason from `_WS_CAD` and a look at the witness's name. Built as drafted. Case
+    10b, `the move back fails as well: kept, nothing printed, the reason says the newer one stands at its aside`, pins
+    it. T6.14 (the stderr no longer dropped) reds it with
+    `the compare-and-drop’s own warning is silenced at the drop’s call`, and also reds the source case. T6.15 reds its
+    why (`could not be moved back from its comp…`), and T6.4, T6.5 and T6.8 red it too. The case stays green through
+    Task 11, which changes the compare-and-drop's own warning.
+  - T6.2 as drafted never applies. Its second needle, `its witness was kept: the quarantine slot`, stands on two lines,
+    the slots-listing line among them, so the mutation tool refused it (exit 3, nothing applied;
+    `t6-2-second-needle-on-two-lines`). A supplementary run with the unique needle
+    `its witness was kept: the quarantine slot ${_WS_QSLOTS` deletes the same two lines and reds case 7 and both `9`
+    rows (3 failed). The review verified that it reds exactly the drafted cases, and it was accepted as the row's
+    measurement.
+  - Reds that differ from the draft in text only. The pre-edit unbound-variable red is `expected 127 to be +0` where the
+    draft wrote `expected 1 to be 0`, because `set -u` aborts the snippet with bash rc 127. Vitest prints `+0` and
+    `…(1)`. The drafter's corrections 1 to 14 held as written, and the stale compare-and-drop header sentence was left
+    for Task 11 (R41).
+  - The whole-branch review's fix wave widened the shadow pin (case 16). It now seeds `_WS_CAD_WHY` and `_WS_QSLOTS` too
+    and expects `after sentinel sentinel sentinel sentinel 1:sentinel`. Deleting `local -a _WS_QSLOTS=()` reds it
+    (`… 0:`), and so does dropping `_WS_CAD_WHY=''` from the local line.
+  - Fix round 1 pinned three arms of the drop that no row turned on its own (the review's F1 and F4). T6.9 deletes the
+    re-proof's three lines together, so the re-proof's unmeasured arm was never mutated alone. Each row below was
+    applied to `ccd/ccd` in the worktree, restored by `cp`, and checked by `cmp` and `mark.mjs --check`; no shipped code
+    changed.
+  - T6.17 turns only the re-proof's unmeasured arm, `(( rc == 0 )) || {`, into `: || {`. It reds the helper case
+    `~/.cc-tmp that cannot be SEARCHED only when the drop proves the leaf's absence again: …`
+    (`expected '[rc=0] dropped|' to match …the absence of the leaf could not be proven again`) and, in
+    `ccd-tmproot-drop-propagation.test.ts`, the real verb's `D2 real, ~/.cc-tmp unsearchable only at the drop's re-proof:
+    …` (`the witness stands: never dropped over an absence that was not proven`). Both cases skip as root.
+  - T6.18 turns the fallback's unlink proof, `_ws_reclaim_absent "$w" || {`, into `: || {`. It reds
+    `simulated Darwin, the unlink fails (tmproots/ cannot be written): …`
+    (`expected '[rc=0] dropped|' to be '[rc=2] |its witness was kept: its unlink could not be proven (…)'`): a failed
+    unlink would be recorded as a complete drop while the witness stands. The case skips as root.
+  - T6.19 replaces the compare-and-drop's rc 2 arm with `|| :`. It reds
+    `the compare-and-drop cannot finish (stubbed, answering 2): …`
+    (`expected '[rc=1] |its witness was kept: a newer…' to be '[rc=2] |its witness was kept: the com…'`): rc 2 would
+    turn into rc 1 with another reason.
 - **D-5176** (Task 7) `w2-task-7-plan-text`: the independence measured; the real D1 row; THE WINDOW flipped in place; no in-use `/proc` walk (by `PROC_SPY`), the ws-expire case's walk through the expiry ladder, and the file's CLAUDE.md flake sentence (R45).
+  - The independence, as measured in Step 6. Each of T7.1 to T7.6 reds exactly its own caller's cases and the tabled
+    `THE WINDOW` row, and every other case stays green: T7.1 reds 4 (the three `D1` rows and the scan), T7.2 6, T7.3 7,
+    T7.4 5, T7.5 6 and T7.6 4. T7.1 reds the scan as well, which the frame's table did not list: the restored `|| :` is
+    itself a swallowed drop call.
+  - The real `D1` row, `D1 real, another device`, has been green since Task 6 mapped `D1`, and reds under T7.1.
+  - `THE WINDOW` flipped in place. One assertion in `ccd-child-tmproot-witness-drop.test.ts`,
+    `measOf(doneOf())['tmpRootKept']`, goes from `toBeUndefined()` to `toBe('unmeasured')`, and nothing else in that
+    file changes. T7.2 reds the in-use row and T7.3 the unmeasured row, each with
+    `expected undefined to be 'unmeasured'`. The window's detail ("no leaf stands, but its witness was kept: a leaf
+    stands at …") is not asserted, as drafted.
+  - No case walks `/proc` for the in-use probe, by `PROC_SPY`: its `proc-walks` file is absent in every verb case, which
+    `recorded` asserts. At the export `_ws_path_users` is called only by `_ws_reclaim_tmproot_quiet`, step 6 and the
+    collector, and by neither ladder.
+  - The ws-expire case does walk it, through the expiry ladder (R45). Its audit and verb run `_ws_expire_cwd_users` over
+    `_ws_expire_proc_root` unstubbed: by source, 0 lines stub those names and 2 call `expireToken(` and `expireVerb(`.
+    The case took 4362 ms in the combined run (4263 ms alone).
+  - The file's CLAUDE.md flake sentence. One sentence for `ccd-tmproot-drop-propagation` is appended to the Known load
+    flakes bullet, after the `ccd-reclaim-tail-mounts` sentence, and says "about 10 s": the worst case measured 4992 ms
+    (`D1 real`, in the combined run), rounded up. The file alone takes 51.6 s at a load of 13 to 16.
 - **D-5177** (Task 8) `w2-task-8-plan-text`: P10's extraction; T8.5's measured census blindness.
+  - P10's extraction. The plan drafted `_ws_tmproot_witness_parse PATH ID`, holding the reader's body parameterised by
+    path, with `_ws_tmproot_witness_read` calling it. Built as drafted, directly above the reader. The reader's header
+    line is byte-identical and its body is now: clear the fields, `_ws_tmproot_id_ok "$id" || return 2`, parse its
+    witness file. Its answers are unchanged, pinned by the existing reader table (`ccd-child-tmproot-witness`'s
+    `three answers`, 16 passed under T8.11) and by the new file's parse rows. T8.4 (the parse drops its id compare) and
+    T8.8 (the reader loses its own id check) red the two halves.
+  - T8.5's measured census blindness. With the composer spelled `.$id.drop.$pid` (no braces) and the census row deleted,
+    `ccd-id-cap` stays green (1 passed): its census is blind without the braces, and that is recorded. The added braces
+    pin reds instead: `only spelling`, "the braces are what ccd-id-cap’s census reads". T8.6, which deletes the census
+    row alone, reds `ccd-id-cap` with "a name embeds an id and no census row covers it".
+  - T8.8 measured differently from the draft. The existing reader row reds at `read('../x')`
+    (`expected '[rc=1] |||||' to be '[rc=2] |||||'`), not at `.tmp` as drafted. The new row reds as
+    `expected '[rc=0] 7|…' to be '[rc=2] |||||'`.
+  - T8.13 measured differently from the draft. Dropping the link check reds `LINKED tmproots` as
+    `{ rc: '0', asides: [] }` against `{ rc: '2', asides: [] }`: nothing is listed, because `find -P` does not follow a
+    start-point symlink, where the draft said the aside would be listed through the link. The guard still matters:
+    without it a linked `tmproots/` reads as "no aside".
 - **D-5178** (Task 9) `w2-task-9-plan-text`: the gates and mutations added (T9.7, T9.8); the parity pin's source equality; the reading `aside-half-not-in-the-id-argv-census` (the population's aside half is a gate the id census does not cite, and Task 15's one licensed `collectAudit` row edit does not add it) and the coordinator's ruling on it.
+  - The gates added to the drafted list. `id-argv-census`'s `collector-population` gate pins
+    `if (isTmpRootId(n)) witnessed.add(n); else refusedNames += 1;` byte for byte, and the line stands once after the
+    edit. `collect-readers` (the L1 import pin), `single-definition`, the tests-project `tsc` (rc 0) and the
+    session-hook citation passes (6 passed) run too: 29 files, 1557 tests, 20 of them `collect-lane-*` files, all green.
+  - The mutations added, T9.7 and T9.8. T9.7 (the `tmpquarantine` loop counts dot-leading names) reds
+    `under tmpquarantine` (`refusedNames: 1`, expected 0) and the sibling file's dot-leading row. T9.8 (the pid part
+    becomes `[0-9]*`) reds the grammar case (`expected '^\.(.+)\.drop\.([0-9]*)$' to be '^\.(.+)\.drop\.([0-9]+)$'`) and
+    `no pid at all` (`expected 'b-x' to be null`). All eight rows red and every restore is `cmp`-clean. T9.4's `g` flag
+    reds five cases, the grammar case and four through `lastIndex`.
+  - The parity pin's source equality. The pin compares the grammar's `re` text on both sides and nothing more. ccd's
+    `_ws_tmproot_id_ok` (through `_reg_id_ok`) carries no length cap, which the server's `TMPROOT_ID_MAX_CHARS` does, so
+    a 256-character aside id parses in ccd and not on the server, and bash's `.` matches a newline where JavaScript's
+    does not. The server is the stricter side in both.
+  - The reading `aside-half-not-in-the-id-argv-census`. The new aside half (`parseCollectAsideName`'s `isTmpRootId`) is
+    a third population path that the census row for `collectAudit` does not cite. The census stays green and unedited
+    (HARD BOUNDARY; R42 licenses no fourth edit), and Task 15's rewording of its docstring does not claim "only". Ruled
+    a stated residual after the wave's review: its `GATES` entry rides the next wave that may edit `id-argv-census`.
+  - Step 0 (l) printed two lines, not one: this plan's and an earlier wave's plan prose cite `collectLane.ts:999999`, at
+    or after `:320`. Neither is a real citation, and the coordinator ruled PASS.
 - **D-5179** (Task 10) `w2-task-10-plan-text`: P6's folded statement and its aside text; P11's three details; the WS-AUDIT-COLLECT population paragraph reworded; the scratch-file count; the 10/11 deployable unit; the reading `prelock-resets-a-pre-peek-aside-answer` (the pass clears the pre-peek aside answer, case 8b and row T10.12).
+  - P6's folded statement and its aside text. The plan drafted that an aside listing which fails before the lock joins
+    the existing "records could not be listed" `probe-unmeasured` statement in `cmd_ws_collect`, the records arm's text
+    byte-identical. Built as drafted, as one folded statement whose aside arm reads `no lock was taken, and nothing was
+    moved or removed: no witness stands for <id>, and its compare-and-drop asides could not be listed (…) — the
+    witness's path is …`. `cmd_ws_collect` still has 4 `probe-unmeasured` lines, and `archived-expiry-policy`'s site
+    census holds unedited.
+  - Two listing-failure texts, each spelled once. The aside judge's text (`the compare-and-drop asides of <id> could not
+    be listed (…), and no witness stands, so whether one of them is its witness was never asked`) differs from the
+    population check's. Case 6 and row T10.13 pin the audit population's arm, and case 13 and row T10.14 pin the judge's
+    answer, which keeps the probe word `witness`.
+  - P11's three details. Built as drafted, as two locals, `wof` and `wits`, set after the judgement, so the three
+    `witness-mismatch` details (no birth time, the directory its witness names, the identity) name the aside's path and
+    read byte-identically without an aside. Cases 9, 9b and 9c pin one each, and rows T10.9, T10.9b and T10.9c red them.
+    Case 9c and its row were added: the frame named the no-birth-time detail and no case pinned it. The whole-branch
+    review's fix wave carried `$wof` into the `device` probe's `what` and both terminal `quarantine-kept` details, with
+    case 9d, because for an aside-only id the audit journals that text (`aside-detail-texts-beyond-p11`, closed).
+  - The WS-AUDIT-COLLECT population paragraph. Only THE POPULATION paragraph is reworded, in place, to name the aside;
+    THE LOCK paragraph says "the population" without listing its members and stays byte-identical, and so does the rest
+    of the header. `ccd-collect-header-prose.test.ts` stays green and unedited.
+  - The scratch-file count. `_ws_collect_prelock`'s header said "it makes and removes two scratch files" (the records
+    listing's). It now says "up to six": the records listing's two, the aside judge's two before the registry peek, and
+    its two again inside the witness judgement when the peek proves no row. The old phrase now counts 0.
+  - The 10/11 deployable unit. Between the commits of Tasks 10 and 11, a verb given the right token for an aside-only id
+    would judge the aside, run the witness-only arm against an absent live name, write `done` with witness `absent` and
+    leave the aside, so the id would loop. The wave ships as one PR (#1008) and no intermediate commit is deployed; no
+    interim code was written. Task 11's cases 1 to 3 are the pins that red if the settle is missing.
+  - The reading `prelock-resets-a-pre-peek-aside-answer`. When the aside judge answers 2 before the registry peek and
+    the peek then opens the lock, `REAP_VERDICT`, `REAP_DETAIL` and `_WS_COLLECT_PROBE=aside` would stay set, and an
+    `in-progress` document would carry `"unmeasured":"aside"`. The pass therefore runs `_ws_collect_reset` after a
+    non-zero answer from the judge. Case 8b pins it, and row T10.12 reds it with `the pass’s first aside answer was
+    cleared before the peek: expected 'aside' to be null`. Ruled a sound departure after the wave's review.
+  - Reds measured differently from the draft. T10.5 reds at the exit code (the lock was taken and the ladder ended
+    `witness-mismatch` at exit 0) rather than at a later probe word. T10.10 reds at the detail lead and never reaches
+    its second assertion. Case 2 reds at its `toMatchObject`, and case 13's pre-implementation red is an
+    unbound-variable throw, where the draft said `command not found`.
+  - `stale-aside-beside-a-new-leaf-is-a-mismatch`, recorded under this slot as a stated residual: an old-generation
+    aside beside a new leaf answers the terminal `witness-mismatch`, with the aside's path in the detail, and is never
+    restored. Case 9 pins it. The slug `aside-probe-word` (R20) is the substantive departure and is defined once, above.
 - **D-5180** (Task 11) `w2-task-11-plan-text`: P9's warnings; the compare-and-drop's two warnings; the header rewording that closes `cad-header-calls-the-tail-drop-a-plain-unlink` (R41); #17's walk of `/proc` through the expiry ladder, and the file's CLAUDE.md flake sentence (R45).
+  - P9's warnings. The plan drafted that the settle prints nothing and answers by rc and by `_WS_ASIDE_DID` and
+    `_WS_ASIDE_WHY`; that the verb warns on `left`, and on rc 2 when the fork's answer outranks the doubt; and that the
+    tail warns on `left` and on rc 2 (R26). Built as drafted. The verb's `left` warning prints right after the settle,
+    and its rc 2 warning after the fork, because only then is it known whether the fork's answer outranks the doubt.
+    Cases 4, 4b, 5 and 7 pin the verb's `left` warning (T11.19), case 9 the doubt that the refusal outranks (T11.20),
+    and cases 14 and 15 the tail's two warnings (T11.21 and T11.22). The tail never sets `tmpRootKept`: T11.12 reds case
+    15 with `expected 'unmeasured' to be undefined`.
+  - The compare-and-drop's two warnings (R27). The warning now depends on whether the witness name stands. With it
+    standing, it says that a newer witness stands, that the older is left at the aside, and that the next settle leaves
+    it beside the newer one, warned. Without it, it says that the witness could not be moved back and that the next
+    settle restores it. Cases 12 and 12b pin the two texts, and T11.13 and T11.13b red them. The false clause "(no
+    reader takes a dot-leading name for an id)" is gone. The drop helper's call to the compare-and-drop stays
+    `2>/dev/null` (P15), and its row 10b stays green.
+  - The header rewording that closes `cad-header-calls-the-tail-drop-a-plain-unlink` (R41). Step 3f rewords
+    `_ws_collect_witness_cad`'s header paragraph in place: the "plain unlink" sentence and the dot-leading clause are
+    gone, and the paragraph names the settle. The slug closes with this commit.
+  - Case 17's walk of `/proc` through the expiry ladder, and the file's CLAUDE.md flake sentence (R45). The ws-expire
+    case runs `_ws_expire_cwd_users` unstubbed: by source, 0 lines stub the ladder's walk and 1 calls `expireEvalOf(` or
+    `expireVerb(`. The file therefore joins the Known load flakes bullet, with a sentence saying "about 10 s": the worst
+    case measured 5.2 s (case 14 at 5.19 s; 16a, 16b and 17 at about 5.1 s), and the file takes 56.5 s.
+  - The link spy, `aside-settle-link-spy-reads-tmproots-only`. The drafted assertions of cases 16a and 16b ("no link at
+    all" and "exactly one link") were never measured. The reclaim verb itself calls `link` three times under `$REG` (the
+    compactions lock-open twice, the generation read), on the base commit as well, so case 16a was red before the
+    implementation where the draft said green. The cases now keep only the logged link calls that name `/tmproots/`
+    (`tmprootLinks()`): none for 16a, exactly one for 16b. The intent is unchanged, and no code was altered.
+  - Reds measured at a different line from the draft, all still red. T11.3's case 4b reds at the `state-changed` line
+    (`expected undefined to be 'state-changed'`: the verb collected on the clobbered witness), not at the bytes line.
+    T11.10's case 16b reds at its link line. T11.16's red text is the lister's own id refusal, because the settle's id
+    guard is shadowed by `_ws_collect_asides_of`'s own refusal.
+  - Fix round 1 pinned the settle's parse guard on a sole aside with no witness (the review's F2). No case read it by
+    behaviour, and deleting the call reddened `#4b` only because its writer seam runs inside that call. `#18k` (the
+    settle alone: a sole aside whose body is `x`, no witness, the leaf standing) asserts rc 2, the why naming the
+    aside's path, the aside byte-identical and nothing at the witness's name. `#15b` (through the real reclaim tail)
+    asserts the reclaim completes, the aside stands, and the tail's warning names it.
+  - T11.26 keeps the call but accepts any regular file:
+    `{ _ws_tmproot_witness_parse "$a" "$id" || [[ -f "$a" ]]; } \`. It reds `#18k`
+    (`expected '[rc=0] restored|' to be '[rc=2] |the one compare-and-drop aside of …'`) and `#15b`
+    (`the aside stands: it was never linked to the witness's name`).
 - **D-5181** (Task 12) `w2-task-12-plan-text`: R15's widening; P3; P5; the measured line neutrality; the count's three spellings.
+  - R15's widening. The plan drafted that `_lc_json`'s last-resort line keeps `leaf`, so a collect line cut twice stays
+    decided. Built as drafted: the meas rung becomes `ev["meas"] = {"leaf": meas["leaf"]} if "leaf" in meas else None`
+    (still `truncated` true), and the last-resort literal gains
+    `, **({"meas": {"leaf": meas["leaf"]}} if "leaf" in meas else {})`, with no apostrophe added. T12.4
+    (`the meas rung kept leaf alone`), T12.5 (`the meas rung fired, not the last resort`) and T12.6
+    (`the last resort keeps leaf`) red them, and case 5b with T12.12 pins that a leafless last-resort line stays the
+    joinable minimum it always was. The optional ladder comment is not rewritten, because an older plan quotes it
+    verbatim.
+  - P3. The reviver gains `leaf: presentAsText(o, 'leaf')`, and `presentAsText` is appended at the foot of
+    `journalparse.ts`: absent or JSON null gives null, a string gives itself, any other present value gives its JSON
+    text. Case 8, with a `parseJournalLine` case, pins it. T12.9 reds the number, object and boolean rows
+    (`expected null to be '7'`, `'{}'`, `'true'`), T12.10 reds the string rows (`expected null to be 'gone'` and `''`)
+    and, beyond the draft, the number, object and boolean rows at the round trip (5 failed where 2 were drafted), and
+    T12.13 pins that a JSON null stays "not carried" (`expected 'null' to be null`). The docstring drops the frame label
+    "(P3)" and says why a JSON null means "not carried".
+  - P5. `lifecycle-wire.test.ts`'s literals gain `leaf` in the same commit as the member: the `MEAS` literal, the sorted
+    key list (`'leaf'` between `'inUnit'` and `'manifestBytes'`) and `nothing`, three lines in place. T12.11 drops the
+    member and its map key together, because dropping the member alone leaves `LIFECYCLE_MEAS_KEYS` at 35 at runtime. It
+    reds `tsc -p .` with TS2353 at `reviveMeas`, the tests project with TS2353 at the wire test's literals (39,85) and
+    (120,106) and, beyond the draft, TS2339 at the new test's five `.leaf` reads, and the contain test with
+    `drifted from the measured 35: expected 34 to be 35`.
+  - The measured line neutrality. `ccd/ccd` is 41193 lines before and after, `_lc_json` stays at 4815 and `_lc_emit` at
+    4944, line 4896 is still `def line(o):`, and the numstat is `4 4` (`5 5` after the restamp). `shared/api.ts` is
+    `20 8`, its lines from 8180 to the foot identical but the key-map line, and its last line unmoved (11711); the
+    `tmpRootKept` docstring is rewrapped from 7 lines to 6 and the freed line holds the `leaf` member, its words
+    unchanged. `journalparse.ts` is `13 3`, with the anchor at 283 and `reviveMeas` and `UNMODELLED` at 192 and 215.
+  - The count's three spellings. "Thirty-four", "a 35th key" and "thirty-FOUR" stand on two lines of `journalparse.ts`
+    (155 and 189). Task 0 counts them by occurrence and prints 3, and this task's Step 0 counts lines and prints 2; both
+    were measured. They become "thirty-five", "a 36th key" and "thirty-FIVE", and `ccd-lifecycle-contain.test.ts` goes
+    from 34 to 35 in its title, message and `toBe`, with a dated comment line.
+  - Reds measured differently from the draft, all still red. Case 7b reds as
+    `TypeError: COLLECT_LEAF_END_WORDS is not iterable`, not as an import refusal, because a named import resolves to
+    undefined under vitest. T12.8 (ccd no longer sources) reds all four verb cases with
+    `ccd/ccd: line 4904: syntax error near unexpected token '('`. Case 1 asserts the whole `meas`
+    (`{ leaf: 'removed' }`), which is stronger than the draft's `.leaf` plus an undefined `resumed`.
 - **D-5182** (Task 13) `w2-task-13-plan-text`: P4; P7; P12; P13; T13.10's measured rows; the three stated residuals pinned as they stand (both found-nothing yield arms and `absent-clause-names-a-drop-the-compare-kept`); `leaf-end-acts-spelled-twice` closed.
+  - P4, carried as written. `childReclaimLeafKeptSentence` gains a required fifth parameter, `tmpFoundNothing: boolean`,
+    with the clause before `LEAF_HORIZON` in both arms. The prose test's three calls gain `, false` and nothing else.
+    T13.5 (no `none-or-unreported` guard on the clause) reds decision case 7, and T13.6 (the clause in the kept arm
+    only) reds case 8.
+  - P7, carried as written. `ChildReclaimLeafEndRow` is a union: a `create` row has no `leaf`, and a `collect` row has a
+    required one. `child-reclaim-leaf-kept.test.ts` has six literals on five lines that gain
+    `leaf: { kind: 'keyless' }`, and its for-of pair becomes `as const`. Both `tsc` projects are clean, so TypeScript
+    forces every `collect` literal as R16 asks.
+  - P12, carried as written. The clause carries R17's words, `The collector found nothing at ~/.cc-tmp/<id> and dropped
+    its witness; if ~/.cc-tmp is a mount, check that it is mounted`, pinned against the composer
+    `childReclaimLeafFoundNothing` itself in Task 16's prose test. An item that ends on `absent` never joins the
+    `kept-many` collapse: T13.8 (`alone` ignored) reds the collapse case with one `kept-many` line of 7 and no single.
+  - P13, carried as written. `foundNothing: false` is added to the four `ChildReclaimLeafKept` literals of
+    `child-reclaim-leaf-kept.test.ts` (the two `toEqual` objects, the typed `y()` helper and the detail-text `leaf()`
+    helper) and to `collect-attention.test.ts`'s typed `leaf()` helper, and to nothing else (counts 4 and 1).
+  - T13.10's measured rows. T13.10 (the store narrows: it revives `meas.leaf` and decides a null itself) reds the store
+    case alone, and in it exactly one row, the cut row with no meas, `line('collect', T + 5, { truncated: true })`:
+    `-"kind": "truncated-keyless"` against `+"kind": "keyless"`. The `bogus`, `{leaf: 7}` and `{leaf: null}` rows stay
+    green, as P3 predicts.
+  - Two stated residuals, pinned as they stand. `found-nothing-clause-yields-to-a-collector-item`: a collector per-id
+    item that holds the id wins whole, and no item carries the clause. `found-nothing-clause-yields-to-a-reclaim-item`:
+    a reclaim item that holds the id (stuck, in the case) wins whole, and no item carries the clause. Each has its yield
+    case in `child-reclaim-leaf-end.test.ts`, with a CONTROL showing that the leaf item is a found-nothing one.
+  - The third stated residual, `absent-clause-names-a-drop-the-compare-kept`, is named and not pinned by a case. The
+    clause says "dropped its witness" even when the witness-only arm's compare kept a newer witness. No extra key was
+    added, and the commit message names it.
+  - The carry `leaf-end-acts-spelled-twice` is closed. `CHILD_RECLAIM_LEAF_END_ACTS` in `childReclaimSweep.ts` is read
+    by `LEAF_END_CREATE` and `LEAF_END_COLLECT` and by the store's one destructuring. The `spelled once` case pins it,
+    and T13.13 (the store re-spells the acts) reds that case. T13.12 (a hand copy of the words in
+    `childReclaimSweep.ts`) reds `single-definition`'s vocabulary scan.
+  - `satisfies-after-a-line-break-is-asi`. The drafted `CHILD_RECLAIM_LEAF_END_ACTS` puts `satisfies` at the start of a
+    new line, which TypeScript and vitest's transform cut off with an inserted semicolon (`[PARSE_ERROR] Expected a
+    semicolon … src/childReclaimSweep.ts:1590:12`, and every file failed to load). The line break moves to after
+    `satisfies`, with the same tokens and the same check, and no test or row reads that line's text. This is a plan-text
+    correction, not a departure. Step 3 also names the wrong describe: the file's last `});` closes the describe about
+    the lane's kind being derived in `shared/roster.ts`, not the `tmux unreachable` one, and the append is unaffected.
+    The `store.ts` line hints drifted by 55 lines.
+  - Fix round 1 pinned the `!collected &&` term of `foundNothing` (the review's F3). Cases 9a to 9e use a temp-root-only
+    item, which the list drops once its half ends, before the mark is read. Cases 9f, 9g and 9h carry an item whose
+    clips half stands, with collect reads [absent, removed], [removed, absent] and [keyless, absent]. Each asserts no
+    found-nothing clause (the `meas` shape reads as the clips half alone, and the cut shape says its temp root has since
+    been collected), and that the item, carrying no mark, counts toward the `kept-many` collapse.
+  - T13.15 deletes `!collected && `. It reds the three rows and nothing else (3 of 41): each item gains the
+    found-nothing clause and is set apart from the collapse.
 - **D-5183** (Task 14) `w2-task-14-plan-text`: item 36's measured set and count; case 3's measured verdict; any `w2-detail-past-the-cut-*`.
+  - Item 36's measured set and count. Task 0's set, this tip's set and their union are the same: 2 cases, both in
+    `ccd-review-335-pins.test.ts`, the clips leaf's unmeasured arm (`clipswhy`) and the temp root's unmeasured arm after
+    the removal helper ran (`tmpwhy`). Both red at TMPDIR lengths 81 and 67 and pass under `TMPDIR=/tmp`; the red is the
+    cut reason against the needle (`expected 'removing /tmp/…xxxxxxx…' to contain …`). 34 files were measured: length 81
+    printed the refused line in all 34 logs, so it ran under the fallback temp dir (a shorter HOME), and 67 in none. No
+    other file reddened, none is on the never-edit list, and no audit-document case is in the set.
+  - Case 3's measured verdict is `reclaimable`, as drafted: the standing child, its own record listed, beside the same
+    blank sibling. Case 2's three halves held on all seven gone-tree rows (the walk rc 1, the ladder `reclaimable`, the
+    verb `pin-failed`), so `sibling-entry-reach-differs` did not fire.
+  - `w2-detail-past-the-cut-*`: none was recorded. Only `ccd-review-335-pins.test.ts` was edited for item 36, R3 and R4
+    plus the `opensWithUpToTheCut` helper. R1 and R2 (the verb and resume device cases) did not red at 81 or 67, because
+    81 runs under the fallback temp dir and the 67 clause stays inside the cut, so they are not in the set and are
+    unedited.
+  - T14.1's measured count and T14.2's green. The frame called the own-entry silent-omission rows green under T14.1;
+    T14.1 reds 38, the 14 sibling rows and 24 own-entry rows, because a blank own entry never equals `<path>/.git`.
+    T14.2, which refuses only an entry named after the path, reds the 14 sibling rows and leaves the 24 green.
+  - Reds measured differently from the draft. T14.3 reds 3 cases, not the drafted 2: the two tmpdir rows that run the
+    maker under BSD argument order, and a `ccd-collect-quarantine.test.ts` maker case
+    (`on a setgid ~/.cc-tmp the quarantine it makes is 0700`) that asserts the logged chmod argv, which the continuation
+    reorders. T14.7 and T14.8 red one case each at the `measOf(done)` assertion on `clipsKept` and on `tmpRootKept`
+    (`expected undefined to be 'unmeasured'`), because the uncut reason with its control and non-UTF-8 bytes breaks the
+    done row's meas, not at `cleanReason`'s text.
+  - `item36-window-68-to-78-unmeasured`. Item 36 was measured at 67 and 81 only; lengths from 68 to about 78 were never
+    measured, so whether R1 and R2's device clause crosses the cut there is unmeasured.
+  - The whole-branch review's fix wave strengthened two pins here. `opensWithUpToTheCut` could pass on an empty cut, so
+    it now asserts `Buffer.byteLength(cut, 'utf8')` is exactly 300, measured in both F9 cases under both TMPDIRs. The
+    item-35 comment in `ccd-child-tmpdir.test.ts` no longer claims that a `--` after the mode would pass in
+    `ccd-collect-quarantine.test.ts`, which pins the argv exactly.
 - **D-5184** (Task 15) `w2-task-15-plan-text`: P2's `watch.ts` line; each carry closed.
+  - P2's `watch.ts` line. The plan drafted one line in `collectLearn`'s handler,
+    `if (answer.kind === 'id-refused') return;`. Built as drafted (numstat `1 0`). `collect-learn-id-gate.test.ts` pins
+    that the arm stands and comes first. T15.3 (the line deleted) reds the type check with TS2339 `Property 'audit' does
+    not exist on type '{ readonly kind: "id-refused"; } | …'`, one line at three columns, so tsc exits 1 where the plan
+    drafted 2, and reds the watch row `the id-refused arm stands: expected -1 to be greater than -1`. The plan's hint
+    for `collectLearn` was stale (4814, not 4434). The refusal leaves no trace, which is the reading
+    `learn-gate-refusal-leaves-no-trace`.
+  - `collector-learning-audit-relies-on-the-population-gate` is closed. `learnCollect` asks `isTmpRootId` before
+    `collectAudit`, and `CollectLearnAnswer` gains the distinct `id-refused` arm. The new file's cases cover 11 refused
+    ids (the frame's four included), their twin rows and 3 edge-accepted controls. T15.1 (the gate removed) and T15.2
+    (the arm answers `not-asked`) red 11 cases each, and T15.8 and T15.11 red the census row `collector-learn-gate`.
+  - `server-docstrings-call-ccds-predicate-dot-only` is closed. `childReclaimLeafKept`'s docstring now says ccd's
+    `_ws_tmproot_id_ok` refuses a leading `.` or `-`, and the next bullet loses its now-false "no leading `-`" clause (4
+    lines for 4). T15.4 reds two cases.
+  - `comments-say-ccd-scans-the-session-value` is closed for two comments only. `isRegistryId`'s docstring (3 lines for
+    3; the rewrite drops "not defence in depth" and the `--actor` example, which no test pins) and the comment in
+    `collect-l0.test.ts` (2 for 2) now say that this is true of a ccd older than path-identity W1b. T15.5 and T15.6 red
+    them. `registry-id-l0.test.ts` says the same in two comments and lies outside the boundary, so it stays the stated
+    residual `registry-id-l0-comments-say-ccd-scans-the-session-value`.
+  - `session-shape-prose-predates-the-id-gate` is closed: the store's docstring above the `reclaim:` reader (4 lines for 4)
+    says that a row was checked only for a non-empty claimant before the id gate. T15.7 reds it. The reading
+    `store-reclaim-to-prose-predates-the-heir-gate` stays, because the `to` sentence lies outside the four licensed
+    lines.
+  - `learning-audit-gate-prose-in-two-test-comments` is closed (R42). `collect-id-pins.test.ts`'s header no longer says
+    that `learnCollect` "asks no predicate of its own", and `id-argv-census.test.ts`'s `collector-population` docstring
+    no longer calls the population gate "the learning audit's only id check"; the census's `GATES` table gains the
+    `collector-learn-gate` row. T15.9 and T15.10 red the two comments and T15.11 the row. The aside half stays uncited.
+    The commit subject says "four comments" and edits six, because R42's pair was added after drafting.
 - **D-5185** (Task 16) `w2-task-16-plan-text`: the as-built record's own corrections.
+  - The spec's §3.10 draft sentences, corrected to the tip. Drop step 2: the absence is proven, else the answer is
+    unmeasured. Step 4: any non-zero answer is unmeasured. The compare-and-drop warning has two cases (a newer
+    generation stands, or the move back failed), and the helper picks its reason by looking at the name. The `//`
+    collapse is one leading `/`. The settle runs "before its evaluation", not "before its fork". "An item that ends on
+    absent never joins kept-many" became "an item that carries the clause". A present non-null leaf value is revived as
+    its text and reads malformed (fail closed). An equal aside is the same dev:ino or the same six fields. Item 36 is
+    rewritten: its two cases are the F9 cases, not "collect-why cases". §3.10 says that child-reclamation wave 10 built
+    items 38 and 40.
+  - The contract note's corrections. The R93 bullet first dropped "and W1b's run closed", as unverifiable from the tree,
+    and a run label the record did not support. The wave's review found the first true by the programme record, and fix
+    round 1 restored it. The note's census and line-count claims were verified from `git diff` against the base:
+    `ccd/ccd` hunks only at the stamp, at `_lc_json` (line-neutral) and after line 19162; `shared/api.ts` keeps every
+    line above its foot; `journalparse.ts` is line-neutral plus a foot function; there is no `die` and no new command.
+  - The "no merge" sentence. The drafted "`main` did not move between the wave's branch point and this note" was false,
+    because `main` was 52 commits ahead and not absorbed. The note says "No merge of `main` had been made when this note
+    was written"; Task 17's absorptions are recorded in this plan.
+  - The review of Task 16 made four corrections in fix round 1. The leaf-ask sentence of §3.10 said that nothing under
+    the leaf is touched, which is false of ask 2, because the owner-bits pass, the checkout question and the permission
+    pass may have changed modes first; it now says that a refusal is the leaf's 2, that nothing under the leaf is
+    removed, and that the first ask writes nothing. The found-nothing clause rides a line that was kept or cut, never a
+    clips-only item. The R93 bullet regained "W1b's run closed". The contract's opening paragraph, the spec's TR7 line,
+    the kept-many sentence and the R93 bullet were re-wrapped. Three cosmetic items were left: a short mid-paragraph
+    line and two wordings.
+  - `path-identity-w2-prose.test.ts` is larger than the draft. `FOUND_WHILE_BUILDING`, the plan's list, holds the ten
+    readings, and `BASE_RESIDUALS`, which the plan does not mention, holds the six residuals. T16.3 expected
+    `collect-switch-prose` to red, and it stays green: that case slices only up to the next heading, so the W2 note lies
+    outside it, while `collect-lane-prose`'s slice reaches it. Mutation rows T16.7 to T16.17 were added beside the
+    draft's six, with four closed carries decided from the code.
+  - The final fix wave corrected the note again. The Task 10 bullet said that the two terminal `quarantine-kept` details
+    and the `device` detail "still say" the witness of the id, and the wave's fix made that false. The bullet is
+    reworded in place (3 lines for 3): Task 10 named the aside only in the `witness-mismatch` details, and the final fix
+    closed the rest. The slug `aside-detail-texts-beyond-p11` stays named there and in `FOUND_WHILE_BUILDING`.
+  - Fix round 1 added two qualifiers to §3.10, in place. `audit-normalise-has-no-mount-ask` gains "including same-device
+    source chmod", and `human-gated-removals-ask-no-mounts` gains "including ignored-file and ignored-directory
+    crossing". The workspace-lifecycle consent names both, and the drafted wording had dropped them.
 - **D-5186** (Task 17) `w2-task-17-plan-text`: the base's absorptions; the full run's id; any literal the plan stated that was measured otherwise.
+  - The first absorption, at Task 17's start. `origin/main` was 36d0a92c1, 61 commits past the base 643c76cd4, and
+    `git merge-tree` read rc 1. One `git merge origin/main` made de253a3f6. Three conflicts, each resolved as follows.
+    `ccd/ccd` line 2, the stamp, took main's side and was restamped (`bash -n` ok, `mark.mjs --check`
+    `ccrc-unmodified`). The foot appends of `shared/api.ts` and `single-definition.test.ts` kept both sides, main's
+    block first and W2's (the `CollectLeafEndWord` block and the `path identity W2` describe) after it, each intact.
+    Package files had changed on main, so `npm ci` was re-run in `server`, `ui`, `agent` and `pwa`.
+  - The second absorption, after #722 merged. `origin/main` was a2ea1e3bd (b2c17f859 is #722, then #959, #961 and #947),
+    and `merge-tree` of 47b0991b5 read rc 1. One merge made 1e21d4155 (parents 47b0991b5 and a2ea1e3bd). The only
+    conflict was `ccd/ccd` line 2, three markers: main's line was taken and restamped. W2's `ccd/ccd` change set against
+    main stayed byte-identical to before (788 changed lines in 81 hunks). `feed-writers-pin`, `lifecycle-wire`,
+    `single-definition` and `shared/api.ts` merged without a conflict. No package, lockfile, tsconfig or vitest config
+    changed, so there was no `npm ci`.
+  - The third absorption, before the push. `origin/main` was 3cc6e5fce (3b5de0c10, then #973, #957 and #949), and
+    `merge-tree` read rc 1 on `shared/api.ts` alone, two foot appends. One merge made aa1267ab1 (parents 8d1750b1e and
+    3cc6e5fce): main's derived lists first, then W2's `CollectLeafEndWord` block, byte-identical to the resolution of a
+    trial merge that was aborted. `ccd/ccd` had not moved on main, so the stamp needed no restamp. No package or config
+    change.
+  - The push-time probe. `origin/main` was then 1128d3ab6 (e348195f0 is #962, b37cc30f0 is #950 and 1128d3ab6 is #988,
+    all past 3cc6e5fce). `merge-tree` of the head a03861c55 against it read rc 0: clean. The branch was pushed with no
+    fourth merge.
+  - The first full run, at 47b0991b5, before the second merge. 871 server test files, 870 of them run in 48 shards;
+    `ccd-tick-diet-equivalence` is excluded because it runs in CI only. A 24-way split was abandoned: shard 4 ran past
+    600 s and was killed (rc 137) at a load of 180, and shard 45 was killed once and re-run. Six files were red in the
+    first pass. Four are red on a clean `main` too, run the same way: `tmp-sweep`, `ccd-tool-adj`, `update-store-nodes`
+    (a 20 s timeout) and `ccrc-models-lock` (all 33 of its tests pass, and the harness's check names a leaked
+    `sleep 10`). Two were load reds that pass alone: `boot` (6.8 s against a 3 s bound) and `session-hook` (a strace
+    line-count case; the whole file passed, 709 tests). No file this wave changes was red. The agent suite (28 files,
+    592 tests) and the PWA suite (249 files, 8928 tests, type check clean) were green. The suite word reported is `red`,
+    because six files were red in the first pass.
+  - The full CI run (R39): id 39463359525, `workflow_dispatch`, mode `full`, on the pushed head a03861c55.
+  - `MAXREF`. The plan's `:19159` is the start of the compaction-card spec's range `ccd/ccd:19159-19162`. The highest
+    line any `CORPUS` document cites, measured over every `:N` and `:N-M` reference, is 19162 (R43). It measured 19162
+    again at both re-checks, with every function that starts at or before it unmoved, `_lc_json` at 128 lines on both
+    sides, and exactly three hunks at or before it, all in place: line 2, 4910 and 4937.
+  - The numbers re-pointed by Task 17b, at 1e21d4155 (the plan's value, then the measured one). `shared/api.ts`: foot
+    9715 to 10303, `tmpRootKept` docstring 7753 to 8292, `LifecycleMeas` close 7764 to 8303, key map 7785 to 8324, leaf
+    hunk 7763 to 8302 (`LifecycleMeas` starts at 8177, which the plan did not give). CLAUDE.md's flake bullet 127-144 to
+    167-184. Unchanged: `ccd/ccd`'s `_lc_json` 4815-4942 with its two in-place hunks at 4910 and 4937;
+    `journalparse.ts`'s anchor 283 with hunks at 155, 189 and 211; `single-definition.test.ts`'s base length 7999 with
+    its hunk at +8000.
+  - The numbers re-pointed by Task 17c, at a03861c55. `single-definition.test.ts`'s base length goes from 7999 to 8037
+    and its appended hunk from +8000 to +8038, because main added lines to that file. `ccd/contexts.tsv` joins the
+    licensed set, with seven lines added and none removed. Every other number is unchanged from the 17b list.
+  - `citations.test.ts` reads 1584 against its exact 1587 at the pushed head. The 1585 first expected was true of an
+    earlier `main`. A scratch counter that applies the test's own corpus and rule gives 1584 at the head and at the
+    merge base 3cc6e5fce, and 1585 at 3b5de0c10, a2ea1e3bd and 8d1750b1e. Main's own count fell when #949 took one
+    citation out of `single-definition.test.ts` (12 to 11), so this branch added and removed none and the test is red on
+    `main` too. #988, which landed after this branch's last merge, replaces the exact count with a ceiling plus an
+    added-lines rule.
+  - `single-definition`'s ratchet case, `literal source pins over W1a's files may only shrink`, times out at the default
+    20 s on a loaded box (26 s at the final head, and the same in a clean `main` tree) and passes alone with
+    `--testTimeout=300000`: `watch.ts` is at or under its ceiling of 114. The file's other cases pass.
 
 **Named, with no number: stated residuals.**
 - `tail-drop-not-noreplace-without-mv-no-copy`: on Darwin, and on a Linux `mv` without `--no-copy`, the drop is a re-read field compare and then `rm -f`. A writer between the re-read and the unlink loses its witness, and the collector never runs on such a box (R1).
