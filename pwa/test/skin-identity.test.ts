@@ -712,13 +712,17 @@ const BRANCH_REGISTRY: Readonly<Record<string, string>> = {
 };
 const SKIN_ID = /\bREFINED\b|\bINSTRUMENT\b|(['"`])(?:refined|instrument)\1/;
 const SETS_IMPORT = /\b(?:from|import)\s*\(?\s*['"][^'"]*\/skins(?:\/index)?(?:\.tsx?)?['"]/;
+/** A skin's own parts reached directly (`skins/refined/parts`, `skins/instrument/…`): anything under `skins/` but
+ *  the frame and the set's type, which every shared screen may use. `REFINED_SET` is no skin id to `SKIN_ID`, so
+ *  this is its own pattern. */
+const PARTS_IMPORT = /\b(?:from|import)\s*\(?\s*['"][^'"]*\/skins\/(?!(?:frame|types)(?:\.tsx?)?['"])[^'"]+['"]/;
 
 function branchCensus(tree: string, registry: Readonly<Record<string, string>> = BRANCH_REGISTRY): Census {
   const files = filesUnder(tree, 'pwa/src', (n) => /\.(?:tsx?|jsx?|mjs)$/.test(n) && notTestOrStory(n))
     .filter((f) => !f.startsWith('pwa/src/skins/'));
   const hits = files.filter((f) => {
     const text = stripJs(read(tree, f));
-    return SKIN_ID.test(text) || SETS_IMPORT.test(text);
+    return SKIN_ID.test(text) || SETS_IMPORT.test(text) || PARTS_IMPORT.test(text);
   });
   return {
     problems: [
@@ -1256,6 +1260,18 @@ describe('(o) no shared file imports the set map or compares a skin id, but the 
     const tree = plant(plantedTree(), 'pwa/src/session/ChatList.tsx',
       (s) => `import { SKIN_SETS } from '../skins';\nvoid SKIN_SETS;\n${s}`);
     expect(branchCensus(tree).problems).toEqual(['pwa/src/session/ChatList.tsx branches on the skin outside the registry']);
+  });
+
+  it("reds one skin's parts imported straight into ChatList.tsx, by a name that is no skin id", () => {
+    const tree = plant(plantedTree(), 'pwa/src/session/ChatList.tsx',
+      (s) => `import { REFINED_SET } from '../skins/refined/parts';\nvoid REFINED_SET;\n${s}`);
+    expect(branchCensus(tree).problems).toEqual(['pwa/src/session/ChatList.tsx branches on the skin outside the registry']);
+  });
+
+  it('reads the frame and the set type as shared, not as a skin', () => {
+    expect(PARTS_IMPORT.test("import { useFrameSet } from '../skins/frame';")).toBe(false);
+    expect(PARTS_IMPORT.test("import type { SkinSet } from '../skins/types';")).toBe(false);
+    expect(PARTS_IMPORT.test("import { INSTRUMENT_SET } from '../skins/instrument/parts';")).toBe(true);
   });
 
   it('reds a registered file that names no skin', () => {
