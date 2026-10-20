@@ -31,7 +31,8 @@ import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAg
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, capSupported, deviceActor,
+import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP,
+         capSupported, deviceActor,
          stopSurfaceSupported, verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
@@ -62,6 +63,8 @@ import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from '.
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes } from './linear/routes.js';
+import { resolveTitle } from './linear/resolve.js';
+import { classifyAddFailure, planCreate } from './workspaceCreate.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
@@ -1750,7 +1753,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `box-token-census.test.ts`'s lane sources read by name. `deps.tokenDriver`
   // is read at request time, so a box with no driver answers `no-claim`/`501`.
   registerTokenRoutes(app, deps);
-  registerLinearRoutes(app, { ccrcDir: deps.cfg.ccrcDir });
+  registerLinearRoutes(app, { ccrcDir: deps.cfg.ccrcDir, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs });
 
   // The native Docs reader's API (design 2026-10-01 section 3.4), registered from its own files as ONE encapsulated
   // plugin, so its provenance hook, its request-body error handler and its response policy reach its four routes and
@@ -2888,14 +2891,39 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/projects/:project/workspaces', async (req, reply) => {
     const { project } = req.params as { project: string };
-    const body = (req.body ?? {}) as { route?: unknown };
+    const body = (req.body ?? {}) as { route?: unknown; name?: unknown; wrapper?: unknown };
     const routed = parseOperatorRoute(reply, body.route);
     if (routed.reply !== null) return routed.reply;
+    // NAMED WORKSPACES (S5): what to do with `name`/`wrapper` is `planCreate`'s (L1, `workspaceCreate.ts`), decided
+    // before any argv exists; this handler only acts on it. `plain` is today's create, below, untouched.
+    const plan = planCreate(project, body, {
+      title: capSupported(deps.fleetState, WS_TITLE_CAP), wrapper: capSupported(deps.fleetState, WS_WRAPPER_CAP),
+    });
+    if (plan.kind === 'refuse') return reply.code(plan.refusal.status).send(plan.refusal.body);
     // The operator's create declares who made it (D-5301): `pwaDec`, the
     // human-driven routes' one dec, cap-gated so an old ccd gets the bare argv.
     // D-5369: the actor is the device actually used, not spec §8's literal
     // `--actor operator`.
-    return runCcdOr502(reply, CCD_ARGV.wsAdd(project, routed.route, pwaDec(req)));
+    if (plan.kind === 'plain') return runCcdOr502(reply, CCD_ARGV.wsAdd(project, routed.route, pwaDec(req)));
+
+    // The title is resolved HERE, at the create, with the preview's own `resolveTitle`, so the one the board shows is
+    // the one the sheet showed whenever Linear answers; every failure arm degrades to the offline title and the create
+    // goes on (M5). It is sanitised inside `resolveTitle`, so ccd's control-character and byte-cap refusals cannot turn a
+    // lookup into a 502. The id is ccd's `$project-$slug` (`cmd_ws_add`).
+    const { title } = await resolveTitle(plan.name, plan.ask, {
+      ccrcDir: deps.cfg.ccrcDir, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+    });
+    const slug = plan.ask.slug;
+    const res = await deps.runCcd(CCD_ARGV.wsAddNamed(project, slug, { title, wrapper: plan.wrapper }, routed.route, pwaDec(req)));
+    if (res.ok) return { ok: true, id: `${project}-${slug}`, slug, title };
+    const failure = classifyAddFailure(res);
+    switch (failure.kind) {
+      case 'slug-taken': return reply.code(409).send({ ok: false, error: 'slug-taken' });
+      case 'bad-slug': return reply.code(400).send({ ok: false, error: 'bad-slug' });
+      case 'account-refused':
+        return reply.code(409).send({ ok: false, error: 'account-refused', reason: failure.reason });
+      case 'other': return reply.code(502).send({ ok: false, stderr: res.stderr });
+    }
   });
 
   /**

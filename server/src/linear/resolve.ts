@@ -10,17 +10,15 @@
  * format (`title.ts`, L1) has not already decided. It never rejects, every Linear failure arm degrades to the
  * offline title carrying its fixed word as `reason`, and neither the key, its digest nor Linear's text leaves it.
  */
-import { deriveWorkspaceSlug, offlineTitle } from '../../../shared/slug.js';
+import { deriveWorkspaceSlug, offlineTitle, type SlugAsk } from '../../../shared/slug.js';
 import { lookupLinearIssue, sanitizeTitle, type FetchLike, type LinearFailure } from './client.js';
 import { readLinearKey } from './connection.js';
 import { ticketTitle } from './title.js';
+import { LINEAR_REF_MAX_CHARS } from '../workspaceCreate.js';
 
-/**
- * The longest name the server will parse. A pasted issue URL is about a hundred characters and a copied branch name a
- * little more; a kilobyte is generous for both and still a bound on what an authenticated caller can make the slug
- * grammar chew on. Characters, not bytes.
- */
-export const LINEAR_REF_MAX_CHARS = 1024;
+// The bound lives with the create's decisions (`../workspaceCreate.ts`, L1), which an L3 file may import and the
+// reverse would not be allowed; it is re-exported so the preview and the create can never hold two numbers.
+export { LINEAR_REF_MAX_CHARS };
 
 /**
  * What the sheet reads. `reason` is a refusal word (`NameRefusal`) when `kind` is `refused`, and the Linear failure
@@ -42,6 +40,32 @@ export interface ResolveDeps {
   timeoutMs?: number;
 }
 
+/** A name the grammar accepted: `deriveWorkspaceSlug`'s `named` arm. */
+export type NamedAsk = Extract<SlugAsk, { kind: 'named' }>;
+
+/** The display title of an accepted name and where it came from; `reason` is the Linear failure arm on an offline fallback. */
+export interface ResolvedTitle { title: string; source: 'linear' | 'offline'; reason?: LinearFailure }
+
+/**
+ * The title for a name the grammar ACCEPTED (`ask` is `deriveWorkspaceSlug(ref)`'s answer, so no refusal or auto arm can
+ * reach here). Linear's when the name is a ticket, a key is connected and Linear answers; otherwise the offline title.
+ * Always sanitised and within `WS_TITLE_MAX_BYTES`, so ccd's `--title` refusals cannot be reached by a lookup.
+ */
+export async function resolveTitle(ref: string, ask: NamedAsk, deps: ResolveDeps): Promise<ResolvedTitle> {
+  // `offlineTitle` is null only for an auto or refused name, which `ask` is not; the trimmed text is the operator's own.
+  const offline = sanitizeTitle(offlineTitle(ref) ?? ref.trim());
+  if (ask.ticket === null) return { title: offline, source: 'offline' };
+
+  const key = await readLinearKey(deps.ccrcDir);
+  const look = await lookupLinearIssue(ask.ticket, key, { fetch: deps.fetch, timeoutMs: deps.timeoutMs });
+  if (look.ok) {
+    // Composed, then sanitised AGAIN: the lookup's title fits the cap alone, and `ENG-1234 - ` in front of it may
+    // push the whole past it.
+    return { title: sanitizeTitle(ticketTitle(look.identifier, look.title)), source: 'linear' };
+  }
+  return { title: offline, source: 'offline', reason: look.reason };
+}
+
 /** The caller has checked `ref` is a string within `LINEAR_REF_MAX_CHARS`. */
 export async function resolveName(ref: string, deps: ResolveDeps): Promise<ResolveAnswer> {
   const ask = deriveWorkspaceSlug(ref);
@@ -49,20 +73,8 @@ export async function resolveName(ref: string, deps: ResolveDeps): Promise<Resol
   if (ask.kind === 'refused') {
     return { kind: 'refused', slug: null, title: null, source: 'offline', reason: ask.reason };
   }
-
-  // `offlineTitle` is null only for an auto or refused name, both answered above.
-  const offline = sanitizeTitle(offlineTitle(ref) ?? ref.trim());
-  if (ask.ticket === null) return { kind: 'named', slug: ask.slug, title: offline, source: 'offline' };
-
-  const key = await readLinearKey(deps.ccrcDir);
-  const look = await lookupLinearIssue(ask.ticket, key, { fetch: deps.fetch, timeoutMs: deps.timeoutMs });
-  if (look.ok) {
-    // Composed, then sanitised AGAIN: the lookup's title fits the cap alone, and `ENG-1234 - ` in front of it may
-    // push the whole past it.
-    return {
-      kind: 'named', slug: ask.slug, title: sanitizeTitle(ticketTitle(look.identifier, look.title)), source: 'linear',
-    };
-  }
-  const reason: LinearFailure = look.reason;
-  return { kind: 'named', slug: ask.slug, title: offline, source: 'offline', reason };
+  const t = await resolveTitle(ref, ask, deps);
+  return {
+    kind: 'named', slug: ask.slug, title: t.title, source: t.source, ...(t.reason === undefined ? {} : { reason: t.reason }),
+  };
 }
