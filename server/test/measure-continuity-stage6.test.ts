@@ -235,6 +235,11 @@ describe('the pressure comparison is B-relative and read-only', () => {
   // and the documented invocation (the plan's Task 5) runs under TZ=UTC. Both sides are pinned.
   const calendarWeek = ['--since', '2026-10-20', '--until', '2026-10-27', '--reap-baseline', '0'];
   it('a local calendar week across a DST change is refused: TZ=Europe/Berlin, 2026-10-20 to 2026-10-27', () => {
+    // Precondition: the zone must have loaded. Python reads an unknown TZ as UTC (604800 s), which would refuse
+    // nothing and fail the pin below as a guard regression; a box without Europe/Berlin fails here, by name (red, never skip).
+    const apart = execFileSync('python3', ['-I', '-c', 'import time; t = lambda d: time.mktime(time.strptime(d, "%Y-%m-%d")); print(int(t("2026-10-27") - t("2026-10-20")))'],
+      { encoding: 'utf8', env: { ...process.env, TZ: 'Europe/Berlin' } });
+    expect(Number(apart), 'TZ=Europe/Berlin did not load (is the Europe/Berlin zone missing from this box?): its endpoints should be 608400 s apart').toBe(608400);
     const r = stageIn('Europe/Berlin', calendarWeek);
     expect(r.status).not.toBe(0);
     expect(r.stdout).toBe('');

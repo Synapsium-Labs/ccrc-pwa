@@ -49,11 +49,14 @@ const transcript = (uuid: string, lines: string[], root = '.claude', project = '
   fs.utimesSync(file, T + 86400, T + 86400);
   return file;
 };
+/** The environment the instrument runs in: `read()` and the deep-row probe below share it, so the probe asks the
+ *  interpreter the question in the conditions the instrument will meet it in. */
+const instrumentEnv = (): NodeJS.ProcessEnv => (
+  { ...inheritedEnv(), HOME: h.home, TZ: 'UTC', XDG_RUNTIME_DIR: path.join(h.home, 'xdg') });
 const read = (extra: string[] = []): Reading => {
   const out = execFileSync('python3', ['-I', TOOL, '--home', h.home, '--stage', '6',
     '--journal', path.join(h.home, 'journal.json'), '--json', ...extra], {
-    encoding: 'utf8', timeout: 30_000,
-    env: { ...inheritedEnv(), HOME: h.home, TZ: 'UTC', XDG_RUNTIME_DIR: path.join(h.home, 'xdg') },
+    encoding: 'utf8', timeout: 30_000, env: instrumentEnv(),
   });
   const result = JSON.parse(out) as { stage6: { direct_pressure_kills?: Reading; reap_class_oom: unknown; inert_scopes: unknown } };
   expect(result.stage6.reap_class_oom).toBeDefined();
@@ -161,7 +164,10 @@ describe('well-formed notifications that are not pressure kills read as non-even
   it('shape (b): whole trailing system-reminder blocks after the closing tag do not spoil the envelope', () => {
     transcript(U1, [row(`${eventNote('ev1')}\n\n${reminder()}`),
       row(`${eventNote('ev2')}\n${reminder('first')}\n\n${reminder('second')}\n`),
-      row(`${note('done', 'completed', 'completed')}\n${reminder()}`)]);
+      row(`${note('done', 'completed', 'completed')}\n${reminder()}`),
+      // An envelope under one known non-killed status keeps the tolerance whatever its task-id count: batched, or none.
+      row(`${batched('stopped', ['b1', 'b2'])}\n${reminder()}`),
+      row(`${batched('completed', [])}\n\n${reminder('first')}\n${reminder('second')}`)]);
     expect(read()).toEqual(clean(0, 0, 1));
   });
 
@@ -184,6 +190,23 @@ describe('well-formed notifications that are not pressure kills read as non-even
   ])('the kill rule is unchanged: a %s followed by trailing reminder blocks stays unmeasured, as at the base and as frozen B was read', (_name, text) => {
     transcript(U1, [row(`${text}\n\n${reminder()}\n${reminder('again')}`)]);
     expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 1 });
+  });
+
+  // The strict killed envelope has two halves: nothing after its closing tag (above), and no closing tag inside its
+  // body. A stray second `</task-notification>` makes the lazy body swallow the first closing tag and any reminder
+  // before it, leaving `trailing` empty, so the body is checked too. The ruled non-event arms are not asked this.
+  it.each([
+    ['a reminder and then a stray second closing tag', `${note('k1')}\n${reminder()}\n</task-notification>`],
+    ['a stray second closing tag directly', `${note('k1')}\n</task-notification>`],
+    ['a stray second closing tag, under a summary that is not the pressure reason', `${note('k1', 'killed', 'stopped')}\n</task-notification>`],
+  ])('a killed envelope followed by %s is unmeasured, never a kill', (_name, text) => {
+    transcript(U1, [row(text)]);
+    expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 1 });
+  });
+
+  it('the stray closing tag is asked of the killed arm only: a known non-killed envelope with one stays a known non-event', () => {
+    transcript(U1, [row(`${batched('stopped', ['b1', 'b2'])}\n${reminder()}\n</task-notification>`)]);
+    expect(read()).toEqual(clean(0, 0, 1));
   });
 
   it('a batched killed envelope is unmeasured, never a kill (the kill rule is still exactly one task id)', () => {
@@ -290,8 +313,7 @@ describe('the scanner pins its own branches (D-4322 minors)', () => {
     'print(json.dumps({"outcome": outcome, "version": sys.version.split()[0]}))',
   ].join('\n');
   const probeDeepRow = (): { outcome: string; version: string } => JSON.parse(execFileSync('python3', ['-I', '-c', DEEP_PROBE, String(DEPTH)], {
-    encoding: 'utf8', timeout: 30_000,
-    env: { ...inheritedEnv(), HOME: h.home, TZ: 'UTC', XDG_RUNTIME_DIR: path.join(h.home, 'xdg') },
+    encoding: 'utf8', timeout: 30_000, env: instrumentEnv(),
   })) as { outcome: string; version: string };
 
   it('a JSON line nested deep enough to raise RecursionError is a malformed row, not a crash of the instrument', (ctx) => {
