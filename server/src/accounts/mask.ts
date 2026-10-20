@@ -1045,10 +1045,6 @@ function runClosed(s: string): boolean | 'spaces' | 'row' {
     // spaces after the run: closed unless only spaces (or an indent's cursor move) remain so far
     let j = k;
     while (j < t.length && (t[j] === ' ' || t[j] === '\t' || t[j] === '\0')) j++;
-    if (j < t.length && (t[j] === '│' || t[j] === '┃' || t[j] === '|')) {   // a box's right rule, its row end to come
-      j++;
-      while (j < t.length && (t[j] === ' ' || t[j] === '\t' || t[j] === '\0')) j++;
-    }
     return j < t.length ? true : 'spaces';
   }
   let j = k + nl[0].length;

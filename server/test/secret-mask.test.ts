@@ -1773,6 +1773,26 @@ describe('the follow-ups\' verification: a key wrapped twice under a cursor-move
     }
   });
 
+  it('a boxed key whose right rule arrives on its own after the hold has expired stays masked through its next row', () => {
+    vi.useFakeTimers();
+    const m = new SecretMasker();
+    for (const [name, k] of KEYS) {
+      for (const cut of [5, 12, 20]) {
+        const out: string[] = [];
+        const d = m.drawer((t) => out.push(t));
+        d.push(`│ export K=${k.slice(0, cut)}`);
+        vi.advanceTimersByTime(9);
+        d.push(' │');
+        vi.advanceTimersByTime(3);
+        d.push(`\r\n│ ${k.slice(cut)} │\r\n$ `);
+        vi.advanceTimersByTime(80);
+        const secret = name === 'JWT' ? k.slice(k.lastIndexOf('.') + 1) : k;
+        expect(leaksNone(out.join(''), secret), `${name} cut ${cut}: ${JSON.stringify(out)}`).toBe(true);
+        d.dispose();
+      }
+    }
+  });
+
   it('a boxed row that ends in an ordinary word, and a row indented by a cursor move under a short row, are drawn as typed', () => {
     const m = new SecretMasker();
     const box = `│ ${'plain words here'.padEnd(40)} │\r\n│ ${'more plain words'.padEnd(40)} │\r\n`;
