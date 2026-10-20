@@ -9345,9 +9345,12 @@ function createDelegationStallSampler(): DelegationLaneStall {
   };
 }
 export const DELEGATION_PASS_SLOW_PREFIX = 'ccrc-server: delegation pass slow:';
-/** D-5692: every key the line may carry, in the one order it is written. Phases and parts are elapsed ms (an awaited one holds its waits,
- *  it is never CPU time); everything after the times is a size or a count, measured where the pass held it. `ownerCount` is D-5693: the
- *  size of the owner list, `owners` being the phase that reads them. `dropped` is the formatter's own and is never an input. */
+/** D-5692: every key the line may carry, in the one order it is written. Phases, parts, `rewrite`, `repairRewrite` and `yields` are elapsed ms (an awaited
+ *  one holds its waits, it is never CPU time); `blockCpu` and the `*Cpu` keys are CPU ms (main-thread
+ *  CPU when `cpuThread=1`, else process CPU); `stallMax`, `stallP99` and the `stall*` stretches are stall ms; the rest are sizes and counts,
+ *  measured where the pass held them. `ownerCount` is D-5693: the size of the owner list, `owners` being the phase that reads them. The
+ *  formatter fills in list order, so the keys after `censusAge` (D-5832, D-5835) drop first under the bound; `blockCpu`, `stallMax`,
+ *  `stallP99` and `cpuThread` sit after `other` so they survive. `dropped` is the formatter's own and is never an input. */
 export const DELEGATION_PASS_SLOW_KEYS = [
   'block', 'cut', 'total', 'other',
   'blockCpu', 'stallMax', 'stallP99', 'cpuThread',
@@ -9514,7 +9517,8 @@ export interface DelegationLaneSeams {
   /** D-5832: the stall sampler. Production: ONE sampler owned by the lane (a row passes the key as `undefined` to select it). */
   loopDelay?: DelegationLaneStall;
   /** D-5835: one loop turn (the three between phases, and the wait before the line is read). Production: a `setTimeout` of
-   *  `DELEGATION_LOOP_TURN_MS`, through a reference captured at module load. */
+   *  `DELEGATION_LOOP_TURN_MS`, through a reference captured at module load. A rejecting turn (only a test seam can reject) ends the pass
+   *  like any throw out of `run`; only the line's wait is guarded. */
   loopTurn?: () => Promise<void>;
 }
 /** D-5832: what the lane reads of the event loop's stall. One sampler for the lane, never one per pass. */
@@ -10070,7 +10074,7 @@ class DelegationLane {
   /** Closes the applier's journal descriptor, if it was ever opened (tests, and a clean shutdown). */
   async close(): Promise<void> {
     this.sampler?.stop();                                                // D-5832: the lane's own stall sampler (its interval is unref'd, but a closed lane has none)
-    this.seams.loopDelay?.stop();
+    this.seams.loopDelay?.stop();   // a seam-supplied sampler is stopped too, deliberately: a test's sampler is stopped like the lane's own
     await this.opening?.catch(() => undefined);
     await this.durable?.close();
   }

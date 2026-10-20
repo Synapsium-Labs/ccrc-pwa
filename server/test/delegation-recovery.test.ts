@@ -82,7 +82,6 @@ import {
   type DelegationProjectionRepairReport,
 } from '../src/coord/delegation-checkpoint.js';
 import { unreadableDelegationBucketResult } from '../src/coord/delegation-ingest.js';
-import * as modelNs from '../src/coord/delegation-model.js';
 import * as checkpointNs from '../src/coord/delegation-checkpoint.js';
 
 // A pass-through of the journal's append planner that a test can switch to "skip everything". `createLease` calls the planner after its

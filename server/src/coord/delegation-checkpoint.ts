@@ -1489,7 +1489,7 @@ export class DelegationDurability {
   /** D-5836: the checkpoint revision the projection was last made to say (a successful `projectLocked` or full `repairLocked`), or null
    *  when that is unknown. Cleared wherever `projectionStale` is set and at the start of every `recover()`. */
   private projectedRevision: number | null = null;
-  /** D-5836: true once the lane's per-pass repair has run since the last `recover()` (`open` included); the first one is always full. */
+  /** D-5836: true once the lane's per-pass repair has been called since the last `recover()` (`open` included); the first one is always full. It is set before the try, so a failed call sets it too, which is safe because a failure marks the projection stale. */
   private perPassSeen = false;
   /** D-5836: the forced-full clock's reading at the last successful full repair, or at the last `recover()`. */
   private lastFullAt = 0;
