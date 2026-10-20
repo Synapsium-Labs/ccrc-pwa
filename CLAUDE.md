@@ -37,8 +37,8 @@ change should leave the code closer to that aim, never further from it:
   code; a move commit changes only the test's imports, and an intended behaviour change is a commit of its own.
 
 Adoption is incremental: fix what you touch, never a big-bang rewrite. The assessment, target design and a Rejected
-list no PR relitigates are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`; the consolidation
-wave's spec (one owner per job, the "legitimately different" catalogue) is its follow-up, not on `main` yet. The
+list no PR relitigates are in `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`; its follow-up is
+`docs/superpowers/specs/2026-10-19-ccrc-consolidation-wave-design.md` (the "legitimately different" catalogue). The
 binding ring rules are the **Rings / bounded contexts** bullet under *Conventions that shape every change* below.
 When a change and the aim conflict, or a change bends the rings, say so in the PR.
 
