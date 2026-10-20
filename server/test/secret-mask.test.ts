@@ -748,17 +748,20 @@ describe('the review findings: the mask stays cheap and the drawer stays live (D
     d.dispose();
   });
 
-  it('a keystroke echo that cannot start a shape goes at once, and a held one goes within 8 ms of its first hold', () => {
+  it('a keystroke echo that cannot start a shape goes at once, and a held one goes 6 ms after its first hold', () => {
     vi.useFakeTimers();
     const out: string[] = [];
     const d = new SecretMasker().drawer((t) => out.push(t));
     d.push('x');
     expect(out).toEqual(['x']);
-    d.push(' e');
-    vi.advanceTimersByTime(5);
-    d.push('y');                       // still a shape's possible start: held, the deadline does not restart
-    vi.advanceTimersByTime(3);
-    expect(out.join('')).toBe('x ey');
+    d.push(' e');                      // a shape's first byte is no hold in the shape-only mode
+    expect(out.join('')).toBe('x e');
+    d.push(' sk-');                    // a begun shape is held
+    expect(out.join('')).toBe('x e ');
+    vi.advanceTimersByTime(4);
+    d.push('y');                       // still held; the deadline does not restart
+    vi.advanceTimersByTime(2);
+    expect(out.join('')).toBe(`x e ${SECRET_MASK}`);   // 6 ms after the first hold, failed closed on the begun shape
     d.dispose();
   });
 });

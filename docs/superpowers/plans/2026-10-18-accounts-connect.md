@@ -737,7 +737,6 @@ Every task's header gives its **Routing** (band, and one or two reviewers), its 
   | the provisional mask resolved at its row end, before the next row (D-5995) | secret-mask | "a compatible key wrapped onto an indented next row that arrives after the hold…" |
   | no settle for a run that ends in blanks (D-5995) | secret-mask | "a run that ends in blanks with nothing after them…" |
   | a pending run kept past every fingerprinted length (D-5995) | secret-mask | "an expired hold on a run that cannot be a key goes unmasked…" |
-  | a spent frame reads each later string whole (D-5995) | secret-mask | "…a frame of 50 strings each at the run ceiling…" |
   | the frame ceiling counts distinct texts, not runs (D-5995) | secret-mask | "the frame ceiling counts runs, not distinct texts…" |
   | a hooked route's `preSerialization: maskAnswer` dropped (D-5995) | secret-mask | "every GET route and websocket is masked by the hook, masked inline, or exempt…" |
   | the restart's re-key not retried (D-5995) | secret-mask | "a restart under a rotated token asks for the re-key at once…" |
