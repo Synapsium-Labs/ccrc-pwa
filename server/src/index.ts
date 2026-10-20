@@ -1,5 +1,9 @@
 import { buildServer, type CollectLaneDeps, type Deps } from './server.js';
 import { derivedRoleNote, loadConfig } from './config.js';
+import { reloadRoster, rosterAnswerOf } from './config.js';
+import { reconcilingAccountOps } from './accounts/reconcile.js';
+import { bodyDigest } from '../../shared/mark.mjs';
+import { generateAccountsSh } from '../../shared/generate.mjs';
 import { readBuildInfo, type BuildInfo } from './buildinfo.js';
 import { realRunner, Tmux } from './exec.js';
 import { ccdRunner } from './lifecycle.js';
@@ -29,7 +33,7 @@ import { readLocalCcdCaps } from './localcaps.js';
 import { localUpdateSpawnFor } from './update/converge.js';
 import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
-import { AccountAudit } from './accounts/audit.js';
+import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { SecretMasker, fingerprintAnswerOf } from './accounts/mask.js';
 import { randomUUID } from 'node:crypto';
@@ -273,7 +277,31 @@ deps.tokenDriver = tokenDriver;
 // routes (A14 onward).
 const accountAudit = new AccountAudit(coord.db);
 deps.accountAudit = accountAudit;
-deps.accountOps = accountOpsFor(cfg, { client: fleetClient });
+// Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
+// roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown
+// runs the `roster` sub and writes a `reconcile` row. `masker` is read only when an answer lands, after it exists.
+const accountOps = reconcilingAccountOps(accountOpsFor(cfg, { client: fleetClient }), {
+  reload: (stdout) => {
+    const a = rosterAnswerOf(stdout, fingerprintAnswerOf);
+    return a === null ? null : reloadRoster(cfg, a, {
+      fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity),
+      fingerprints: { offer: (f, keep) => masker.offer(f, keep) },
+    });
+  },
+  audit: accountAudit,
+  fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity),
+  actor: actorOf('ccrc server', ''),
+});
+deps.accountOps = accountOps;
+// A roster the fleet holds that is not this server's (its `ready` frame's fingerprint) is reconciled once per
+// disagreement (spec §3.9: "whenever FleetHostBanner sees a roster mismatch"). The ready frame also invalidates the
+// fleet identity, which `reloadRoster` needs, so the check runs again when the inventory publishes it (D-6057 (6)).
+const reconcileRosterDivergence = (): void => {
+  const fleetFp = deps.fleetState?.rosterFp ?? null;
+  if (fleetFp !== null && fleetFp !== bodyDigest(generateAccountsSh(cfg.roster))) void accountOps.reconcileDivergence(fleetFp);
+};
+fleetClient?.onConnected(reconcileRosterDivergence);
+if (fleetClient !== null) fleetClient.identity.onKnown(reconcileRosterDivergence);
 // The egress mask (D-5513, accounts plan Task A10) over the same coord.db and the box token's holder: every server
 // egress of session-derived text passes it. It follows the holder's current value, keeps every previous generation
 // whose rows it holds in memory across a rotation, and asks for the re-keying `roster` sub, whose answer it ingests,
