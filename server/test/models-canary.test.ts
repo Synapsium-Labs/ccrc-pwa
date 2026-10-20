@@ -156,12 +156,13 @@ describe.skipIf(PY === null)('deploy/models-canary.mjs (auto-advance spec §2.3 
     const c = canary();
     expect(c.code).toBe(0);
     expect(c.body).toEqual({ ok: true, op: 'canary', result: 'passed', status: 200, reason: null });
-    // The lane probe came first, carried no key, and uses only its expected headers.
-    expect(laneProxyGets(proxy)).toEqual([{
+    // Check values first so a credential-bearing mutant never reaches a value-printing assertion.
+    const gets = laneProxyGets(proxy);
+    expectCleanProbe(gets);
+    expect(gets).toEqual([{
       n: 1, path: '/ccgpt/lane', authorization: null, headerNames: ['accept', 'connection', 'host'],
       headers: { accept: ['application/json'], connection: ['keep-alive'], host: [`127.0.0.1:${proxy.port}`] },
     }]);
-    expectCleanProbe(laneProxyGets(proxy));
     const [q] = laneProxyRequests(proxy);
     expect(q!.path).toBe('/v1/messages');
     // The vacuity control for every "the key never leaves" case below: it was read, and it went out here.
