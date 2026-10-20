@@ -367,8 +367,8 @@ A later W0 slice (spec §5.2), planned here so it has a section. **Routing:** na
   | `commands.ts` moved from the pending list to the outer list | CONTROL | red: `commands.ts` is not L4 or L5 by any ring fact |
   | `commands.ts` drains (its import removed) but stays pending | the pin | red: the pending entry must go with it |
   | the scan skips `import type` lines | CONTROL | red: the shape list loses `./server.js` and `./c.js` |
-  | the fastify fact dropped from the ring facts | CONTROL | red for `token/routes.ts` and `update/routes.ts` |
-  | D-6003 defined a second time, with another subject | `deviation-refs.test.ts` | red |
+  | the fastify fact dropped from the ring facts | CONTROL | red for `coord/routes.ts`, `token/routes.ts` and `update/routes.ts` |
+  | D-6003 defined a second time, with another subject, in another plan | `deviation-refs.test.ts` | red (one number, two subjects) |
 
 - [ ] **Step 5: Verify.** `tsc -p server`. Then, one at a time with `--maxWorkers=2`, the new pin, `coord-policy-rings`, `docs-source` (it imports `CcdResult` and `CcdRunner` from `lifecycle.ts`), `archive-door`, `dispatch-live-gate` and `single-definition`. Then the doc suites from `server/`, after `git fetch -q origin main`: `deviation-refs`, `dtbd`, `topology-clean` and `docs-grammar`.
 
