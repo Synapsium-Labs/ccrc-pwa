@@ -10,6 +10,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
 import { genFile } from './lifecycleHelpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
@@ -146,11 +147,9 @@ describe('the tick itself', () => {
     // that is not one of these three reds this test, which is a stricter
     // statement of the same rule than the blanket substring ever was — that one
     // could only say "none", and had no way to say "these, and nothing else".
-    const from = src.indexOf('  async sweepMail(');
-    expect(from, 'sweepMail was not found — this assertion would pass vacuously').toBeGreaterThan(-1);
-    const to = src.indexOf('\n  }\n', from);
-    expect(to, 'sweepMail has no two-space closing brace').toBeGreaterThan(from);
-    const body = src.slice(from, to);
+    // D-6114: keyed on the method's symbol (scan/symbols.ts), so the slice follows `sweepMail` wherever it moves; a
+    // renamed or missing method throws by name.
+    const body = sourceOfSymbol(path.join(srcRoot, 'watch.ts'), 'FleetWatcher.sweepMail');
     expect.soft(body.length).toBeGreaterThan(2000);
 
     // The producer and its neighbours stay out, by name.

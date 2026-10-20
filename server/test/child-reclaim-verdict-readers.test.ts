@@ -17,6 +17,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codeOnly } from './sourceScan.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
@@ -64,15 +65,10 @@ const expressionHits = (name: RegExp, allowed: readonly string[]): string[] =>
   sources().flatMap((f) => coverage(path.relative(srcRoot, f), codeOnly(readFileSync(f, 'utf8')), name, allowed)).sort();
 
 /** `FleetWatcher.sweepChildReclaim`, whole: from its signature to its closing
- *  brace, code only. */
-const sweepChildReclaimLines = (): string[] => {
-  const lines = codeOnly(readFileSync(path.join(srcRoot, 'watch.ts'), 'utf8')).split('\n');
-  const start = lines.findIndex((l) => l.startsWith('  async sweepChildReclaim('));
-  const end = lines.findIndex((l, i) => i > start && l === '  }');
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  return lines.slice(start, end + 1);
-};
+ *  brace, code only. Keyed on the method's symbol (D-6114, scan/symbols.ts), so it follows the method wherever it
+ *  moves; a renamed or missing method throws by name. */
+const sweepChildReclaimLines = (): string[] =>
+  codeOnly(sourceOfSymbol(path.join(srcRoot, 'watch.ts'), 'FleetWatcher.sweepChildReclaim')).split('\n');
 
 describe('the sweep’s verdicts are read by no decision (spec §5.9)', () => {
   const DECLARATION = 'private childReclaimJudged: ReadonlyMap<string, ChildReclaimSweepVerdict> | null = null';

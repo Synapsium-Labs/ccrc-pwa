@@ -29,17 +29,16 @@ import { COLLECT_BOX_LABELS } from '../../shared/api.js';
 import { collectRig, type CcdAnswer, type CollectRig } from './collectLaneFixture.js';
 import { FULL_CAPS } from './collectTempRootFixture.js';
 import { codeOnly } from './sourceScan.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
 const srcDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const watchSrc = (): string => codeOnly(readFileSync(path.join(srcDir, 'watch.ts'), 'utf8'));
-/** A method's code, from its signature to its closing brace at two spaces. */
-const methodOf = (src: string, sig: string): string => {
-  const at = src.indexOf(sig);
-  expect(at, `${sig.trim()} is gone`).toBeGreaterThan(-1);
-  return src.slice(at, src.indexOf('\n  }\n', at));
-};
+/** A `FleetWatcher` method's code, keyed on its symbol (D-6114, scan/symbols.ts): it follows the method wherever it
+ *  moves, and a renamed or missing method throws by name. */
+const methodOf = (name: string): string =>
+  codeOnly(sourceOfSymbol(path.join(srcDir, 'watch.ts'), `FleetWatcher.${name}`));
 /** The feed rows of one flip, by Task 5's own title and the body's kept prefixes (path-identity spec 2026-10-12 §5.5:
  *  the body names its source now, so a row is matched by the way it went, never by its whole text). */
 const flipRows = (f: CollectRig, live: boolean) => f.feed().filter((e) => e.title === COLLECT_FEED_TITLE.switch
@@ -68,7 +67,7 @@ describe('the lane’s constants are derived, and the tick dispatches it (spec �
   });
 
   it('the tick dispatches the pass, unawaited, after the dead-coordinator lane and before the mail lane', () => {
-    const src = watchSrc();
+    const src = methodOf('tick');
     const dead = src.indexOf('void this.sweepDeadCoordinators(records, registryRead.names)');
     const mine = src.indexOf('void this.sweepTempRootCollect(records, registryRead.names)');
     const mail = src.indexOf('void this.sweepMail()');
@@ -87,13 +86,12 @@ describe('the lane’s constants are derived, and the tick dispatches it (spec �
 
 describe('one gather, one pass at a time, a monotonic throttle (spec §5.10)', () => {
   it('the pass awaits ONE thing — the gather, after the throttle — never a call it queued, reads the pause, and hands its listing to the latch alone', () => {
-    const src = watchSrc();
-    const outer = methodOf(src, '  async sweepTempRootCollect(');
+    const outer = methodOf('sweepTempRootCollect');
     const stamp = outer.indexOf('this.lastCollectSweep = gate;');
     const guard = outer.indexOf('this.collectSweeping = true;');
     expect(stamp > -1 && guard > stamp, 'the throttle is stamped, then the guard raised').toBe(true);
     expect([...outer.matchAll(/\bawait\b/g)], 'the pass awaits its gather alone').toHaveLength(1);
-    const pass = methodOf(src, '  private async collectPass(');
+    const pass = methodOf('collectPass');
     const gather = pass.indexOf('await Promise.all([');
     expect([...pass.matchAll(/\bawait\b/g)].map((m) => m.index)).toEqual([gather]);
     expect(pass.indexOf('readCollectPopulation(this.deps.io, this.deps.cfg.registryDir)')).toBeGreaterThan(gather);

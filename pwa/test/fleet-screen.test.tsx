@@ -141,6 +141,22 @@ const seed = (store: FleetStore, patch: Partial<ReturnType<FleetStore['getState'
   });
 };
 
+/** D-6088: a project with no live member is rolled up by default; a case about what its body holds opens it first,
+ *  as the operator would, with the card's own ▾. */
+const expandProject = (project: string): void => {
+  const card = [...document.querySelectorAll('.proj-card')]
+    .find((c) => c.querySelector('.proj-card-name')?.textContent === project);
+  const toggle = card?.querySelector<HTMLElement>('.proj-card-toggle');
+  if (!toggle) throw new Error(`no card toggle for ${project}`);
+  fireEvent.click(toggle);
+};
+
+/** D-6088: a coordinator's two or more workers fold into one line; a case about the workers' own rows opens it
+ *  through the stored per-device preference, before mount. */
+const openWorkersOf = (coordinatorId: string): void => {
+  window.localStorage.setItem('ccrc.fleet-rollup.v1', JSON.stringify({ projects: {}, openChildren: [coordinatorId] }));
+};
+
 // — FleetScreen —
 
 describe('FleetScreen', () => {
@@ -1668,7 +1684,8 @@ describe('FleetScreen', () => {
 
       // Archived (Task 18): folded out of the live list by default, so its
       // row — and the ··· that opens this sheet — only reaches the DOM once
-      // the Archived (1) sub-fold is expanded.
+      // the Archived (1) sub-fold is expanded. Its project has no live member, so it is rolled up first (D-6088).
+      expandProject('alpha');
       fireEvent.click(screen.getByRole('button', { name: /archived \(1\)/i }));
       fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
       fireEvent.click(screen.getByText(/clean up workspace/i));
@@ -1707,6 +1724,7 @@ describe('FleetScreen', () => {
 
       // Archived (Task 18): see the sibling test above for why this fold has
       // to open first.
+      expandProject('alpha');
       fireEvent.click(screen.getByRole('button', { name: /archived \(1\)/i }));
       fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
       fireEvent.click(screen.getByText(/clean up workspace/i));
@@ -1767,6 +1785,7 @@ describe('FleetScreen', () => {
         ],
       });
 
+      expandProject('omega');
       fireEvent.click(screen.getByRole('button', { name: /archived \(2\)/i }));
       fireEvent.click(screen.getByRole('button', { name: /actions for alpha/i }));
       fireEvent.click(screen.getByText(/clean up workspace/i));
@@ -2203,7 +2222,8 @@ describe('a chip never names rows that are not on the screen', () => {
     expect(deadChip.querySelector('.bucket-head-count')).toHaveTextContent('1');
     const archivedChip = screen.getByText('Archived').closest('.bucket-head') as HTMLElement;
     expect(archivedChip.querySelector('.bucket-head-count')).toHaveTextContent('1');
-    // The fold holds both — the archived workspace and the stopped main checkout.
+    // The fold holds both — the archived workspace and the stopped main checkout (its project rolled up, D-6088).
+    expandProject('P');
     expect(screen.getByRole('button', { name: /^archived \(2\)$/i })).toBeInTheDocument();
     // …and the footer stays the WORKSPACE archive list (`archivedAt`): a main checkout has none, so it counts one.
     expect(screen.getByRole('button', { name: /^archived on disk · 1 · /i })).toBeInTheDocument();
@@ -2566,7 +2586,9 @@ describe('the programme tree on the fleet screen', () => {
     // line (the worker renders here — stating the run twice is the defect §6 names)…
     expect(alpha.querySelector('.proj-crossing')).toBeNull();
     expect(alpha.querySelector('.proj-abroad')).toBeNull();
-    // …and beta, emptied, says where its work went, as text with no control.
+    // …and beta, emptied, says where its work went, as text with no control — once opened: with no live member
+    // of its own it is rolled up (D-6088).
+    expandProject('beta');
     expect(beta.querySelector('.sess-line')).toBeNull();
     const line = beta.querySelector('.proj-elsewhere-line')!;
     expect(line.textContent).toBe('1 workspace under alpha');
@@ -3138,6 +3160,7 @@ describe('cross-project nesting on the fleet screen (D-5527)', () => {
     [...document.querySelectorAll('.proj-card')].find((c) => c.querySelector('.proj-card-name')?.textContent === name)!;
 
   it('nests the child under its coordinator inside the coordinator’s project card, beside a same-project child', () => {
+    openWorkersOf('lane-a-project-a');
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     seedCross(store);
@@ -3148,6 +3171,7 @@ describe('cross-project nesting on the fleet screen (D-5527)', () => {
   });
 
   it('the cross-project child names its project, and only it does', () => {
+    openWorkersOf('lane-a-project-a');
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     seedCross(store);
@@ -3160,6 +3184,7 @@ describe('cross-project nesting on the fleet screen (D-5527)', () => {
   });
 
   it('each child names its programme and wave — the CURRENT wave of a resumed workspace — and no run number', () => {
+    openWorkersOf('lane-a-project-a');
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     seedCross(store);
