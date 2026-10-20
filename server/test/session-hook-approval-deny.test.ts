@@ -669,6 +669,11 @@ describe('build guard D-6064 and D-6065, review hardening: parent-directory targ
     expect(r.stdout).toContain(BUILD_WHY);
     expect(denyJqMs(cmd)).toBeLessThan(3.5 * classMs);
   }, 180_000);
+  // The cap counts assignments, not distinct names: seventeen of one name used to fill a 17-match window that `unique`
+  // then shrank to one, so an eighteenth name's writer went unread.
+  it('seventeen assignments of one name, then a writer through another, is denied', () => {
+    expect(bash(`${'V=~/.local/bin/claude; '.repeat(17)}W=~/.local/bin/claude; cp /tmp/x $W`)).toContain(BUILD_WHY);
+  });
   it('a few build-path assignments and no writer are allowed; a writer through any of them is denied', () => {
     const vars = Array.from({ length: 12 }, (_, i) => `V${i}=~/.local/share/claude/versions; `).join('');
     expect(bash(`${vars}ls $V3`)).toBeNull();

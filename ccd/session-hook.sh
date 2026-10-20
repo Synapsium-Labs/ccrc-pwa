@@ -4536,8 +4536,8 @@ def xargsw($re): test(NB + "xargs" + NA) and test($re) and any(split("[\n;&]"; n
 def INTERP: NB + "(?:python[0-9.]{0,8}|node|perl|ruby|bun|deno)" + NA;
 def varw($re): test($re) and test("=") and (. as $c
   | [limit(17; match("(?:^|[" + WS + ";&|(])(?<n>[A-Za-z_][A-Za-z0-9_]{0,63})=(?<v>[^" + WS + ";&|()]{0,512})"; "g")
-      | select(.captures[1].string | test($re)) | .captures[0].string)] | unique
-  | length > 16 or (length > 0 and (. as $ns | $c | hbt(SEG; BWR; "\\$\\{?(?:" + ($ns | join("|")) + ")" + NA))));
+      | select(.captures[1].string | test($re)) | .captures[0].string)]
+  | length > 16 or (length > 0 and (unique as $ns | $c | hbt(SEG; BWR; "\\$\\{?(?:" + ($ns | join("|")) + ")" + NA))));
 def VERW: "(?:^|[" + WS + "(])(?:\\./{1,8}" + ENTW + "|" + VERS + ")" + CRUN;
 def CLOP: "claude(?=$|[" + WS + "/;&|)])";
 def LBOP: "bin" + SEPP + "(?:claude|" + UPRE + ")(?=$|[" + WS + ";&|)])";
