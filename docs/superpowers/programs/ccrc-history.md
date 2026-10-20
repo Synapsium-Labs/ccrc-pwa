@@ -360,6 +360,14 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
       in W2-4's plan by the commit that first cites it. They are not named here before that commit lands, so this
       file never names a number above the plans' high-water mark.
   - **W2-3 (run 636)** takes W2-4's F4: part 1 requires `box_init` to be non-null.
+  - **W2-3 (run 636)**, review 664: 4 important findings and 9 minor. Fix round 1 is ruled after two Opus checkers read
+    the draft.
+    - The gate's clusters are taken in key order, so its result no longer depends on input order.
+    - The hand-check share stays a signed default, read exactly; its other three members and Q18's procedure are fixed.
+    - The labeller's command arm refuses a further command-shaped piece, and a `./` path form is admitted.
+    - The validator binds step 0a, the census and the assignment to part 1's nodes and account.
+    - The decisions document is amended in place: W2-D18, W2-D25, W2-D63, W2-D71, W2-D79, W2-D81, section 4, section 7,
+      and W2-5a's entry.
   - **5h-2's brief** carries the fix of the stale "six PRs" comment in `server/test/lifecycle.test.ts`, which W2-4 left
     as it was, because 5h-2 edits that file.
 - **Later (coordinator), from the build:**

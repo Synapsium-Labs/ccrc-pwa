@@ -250,6 +250,8 @@ flowchart LR
 
 **Never touches:** `ccd/**`, `shared/**`, the spec, README.md, `deploy/history-gate.mjs`, `deploy/measure-history.py`, `.github/**`.
 
+**Amended (coordinator, 2026-10-20, W2-3 review 664, F3 and F8):** W2-5a's `power` reads `q18_settings` from the record. It calls q18Power once per power level, with rho = `rho_headline` and with rho = 0, and derives `covered_days` from `lookback_days`; q18Power takes rho, power, sims and gridStep as required parameters. It also adds the `flags_accepted` parity pin against W2-4's argv set.
+
 ### W2-5b (deploy): arms, judge, hand-check, uptake, marker and report
 
 **Ships:**
@@ -526,6 +528,8 @@ build · no · W2-3, then W2-1 · C-E.
   - the same seed gives the same verdict twice;
   - a different label gives a different stream.
 
+- **Amended (coordinator, 2026-10-20, W2-3 review 664, F1):** every seeded draw runs over a list first sorted by a stated key, compared by code unit, so the same inputs and seed give the same bytes in any caller order. decideGate takes its clusters in ascending `key` order and sorts copies, never its inputs; W2-5b passes `familyKey(store_id, ccrc_id, generation)` as each `key`. The quiz sample's order is in W2-D71, the judge order's in W2-D79.
+
 build · no · W2-3 · G8; QZ-11; QZ-14 checker (judge-order).
 
 **W2-D19. Assignment.**
@@ -676,6 +680,13 @@ build · no · W2-3 (validator), W2-4 (helper), W2-5a and W2-5b (each its own co
   - a null or missing validation context (`ctx`) is refused with `field-missing` at `ctx`, never read as a narrower check, and so is each context key the record needs, at `ctx.<key>`: `ctx.draft` and `ctx.frozen` for every final, and `ctx.predecessor` for a superseding draft;
   - the step 0a fields it checks follow W2-4's producer shape (step 0a's output as W2-4 writes it), and in part 1 `writer_init` and `judge_init` must be non-null.
   - **Amended (coordinator, 2026-10-20, W2-4 review, F4):** in part 1, `box_init` must be non-null as well. It is refused with the same word and path form as a null `writer_init` or `judge_init`. The box argv is the arm argv, and it alone carries `--allowedTools`, so a step 0a whose box run never reached init has not shown that flag accepted. The shape check runs first, so a null `*_init` is refused before `flag-rejected` can fire.
+  - **Amended (coordinator, 2026-10-20, W2-3 review 664, F3, F8, F9 and F10):** the validator also refuses, each with `value-outside-set`:
+    - a step 0a entry whose `flags_accepted` is empty (completeness against W2-4's argv set is W2-5a's parity pin, section 7);
+    - a step 0a entry whose `account` differs from part 1's `account`;
+    - a census entry whose `store_id` names no node or a store already bound, and a node with no census entry;
+    - an assignment family on a store that no node names;
+    - a `handcheck.share` of 0, or one it cannot read exactly;
+    - a `q18_settings` value that Q18's procedure cannot honour: `rho_headline` outside [0, 1), a power level outside (0, 1], a `sims` that is not a positive integer, and a `grid_step` that does not divide 1 − X.
 - **Accepted as written (coordinator, 2026-10-19, final W2-3/W2-4 plan review):** `recordSha256 = sha256(canonicalJson(record) + '\n')`; a null or missing `ctx` is `field-missing` at path `ctx`; a null where the schema allows none is `field-missing` everywhere, as a missing key is; and `decideGate` (W2-D89) answers a union tagged by `ok` (a verdict carries `ok: true`, its `question-not-run` refusal `ok: false`). W2-3 pins each with a case and a mutant (Task 9's M43, M33 and M36; Task 8's H21).
 - **Pins:** one refusal per bullet, including a Fable arm model, a non-Opus judge, a 13-day window, a pilot section signed under another `writer_input`, a step 0a entry on no named node, a step 0a entry under another settings mode than part 1's, and a rejected flag (no flag excused, under either settings mode).
 
@@ -1250,6 +1261,11 @@ build · no · W2-3 · QZ-2 with the quiz checker's QZ-2 finding (repo-relative 
 
 **Residual:** an answer relative to a git toplevel above the epoch's cwd is not correct.
 
+- **Amended (coordinator, 2026-10-20, W2-3 review 664, F4 and F13):**
+  - **command**, tightened: take v = collapseWs(value) and a bounded occurrence [i, j) of collapseWs(F). One backtick immediately before i and one immediately after j count as part of the occurrence, as a pair only. The value is correct only when neither the text before the occurrence nor the text after it, each tested on its own, holds `/\s(or|OR)\s/`, a flag token `/(^|\s)--?[A-Za-z0-9]/`, any of `;` `|` `&` `>` `<` `,` or a backtick, or `$(`. The answer protocol asks for one exact value (W2-D64), so a further command-shaped piece makes it another command. The **error** kind keeps the rule above, so an error answer may carry trailing context (section 7).
+  - **path**, widened by one form: `./` + R for each repo-relative form R, never `./` before the absolute form. The `./` is itself left-bounded (the start, or a character outside `[A-Za-z0-9._/~-]`), and a bounded occurrence is masked whole, `./` included, before the second-path-token test. `../src/app.ts` stays not correct.
+  - Pins, each with a mutant: the review's six command answers and `cd server && npm run test` are not correct; an exact F holding a flag, a pipe or `&&` is correct; `` `npm run test`. `` and "Run `npm run test` from the root" are correct; `./src/app.ts` is correct and `../src/app.ts` is not.
+
 build · **yes** (`D-5777`; void if the operator signs `sha_min_prefix: 40`) · W2-3 · QZ-3 with the quiz checker's labeller-block finding; G2 with the gate checkers' path and SHA fixes; C-B; §10.2:2706; the label-departure finding.
 
 **W2-D64. The answer protocol.**
@@ -1416,6 +1432,8 @@ Fewer than 60 questions or fewer than 12 families halts W2 for a ruling before p
 
 **Reporting:** every drop reason is counted. The same seed and store give the same list.
 
+**Amended (coordinator, 2026-10-20, W2-3 review 664, F1):** "seeded order" draws over the families sorted by `familyKey`, and within a family over its candidates sorted by candidate id, both by code unit (W2-D18).
+
 open-record-default · no · W2-5a · QZ-11; §10.2:2638, :2711-2713.
 
 **W2-D72. The question writer.**
@@ -1568,6 +1586,8 @@ build · no · W2-4 ((ii)), W2-5b ((i), (iii)) · W2-DQ3b; RA-2(d) reworded as t
 - a correct answer never reaches the judge;
 - under `v1`, a confident wrong value of another kind is `fabricated`.
 
+**Amended (coordinator, 2026-10-20, W2-3 review 664, F1):** the `'judge-order'` shuffle runs over the items sorted by (qid, arm), by code unit (W2-D18).
+
 open-record-default (the rubric id) · **yes** (`D-5778`) · W2-3 (RUBRICS, parseLabelLine), W2-5b (spawn) · QZ-14 with the quiz checker's judge findings; G2-uncertain-widened, made a signed default; §10.2:2707-2709; the label-departure finding.
 
 **W2-D80. Failed runs.**
@@ -1584,6 +1604,7 @@ open-record-default · no · W2-3 · QZ-15; the re-run-budget finding.
 **W2-D81. The hand-check.**
 - **The operator** labels the sheet. No model, coordinator, worker or subagent does, and the coordinator sees aggregates only.
 - **The sample:** a seeded 20% of the **judged** answers per arm, ceil(0.2·n), from the `'handcheck'` substream. Every `judge-failed` item is added outside the 20%.
+- **Amended (coordinator, 2026-10-20, W2-3 review 664, F3):** the sample's share is the record's `handcheck.share` (default 0.2), ceil(share·n) computed in integers from its exact decimal; the validator refuses a share of 0 or one it cannot read exactly. `of` ('judged'), `per_arm` (true) and `judge_failed` ('always') are fixed: no alternative to any of them is defined, and the code implements only these.
 - **The sheet** is written under `--out`. It shows the question, F and the redacted reply, with no arm and no judge label.
 - **Effect:**
   - the operator's label replaces the judge's on sampled items;
@@ -1592,7 +1613,7 @@ open-record-default · no · W2-3 · QZ-15; the re-run-budget finding.
   - agreement is reported split by arm.
 - **Where the code lives:** the sampler, the override and the agreement rule are W2-3's. The sheet writer and the label reader are W2-5b's.
 
-operator (labelling), open-record-default (the rule) · no · W2-3, W2-5b · QZ-18; W2-DQ6a and W2-DQ6b; split checker F9.
+operator (labelling), open-record-default (the share; amended 2026-10-20, F3), fixed (of, per_arm, judge_failed) · no · W2-3, W2-5b · QZ-18; W2-DQ6a and W2-DQ6b; split checker F9.
 
 **W2-D82. Quiz uptake.**
 - An uptake call is a Bash tool_use with `lib.isHistoryCommand(input.command)`, paired by id with a tool_result that is not `is_error`.
@@ -1722,7 +1743,7 @@ The pilot always precedes part 2 and the window. The earlier option to move it a
 
 | Field | Content | Status |
 |---|---|---|
-| `kind`, `version`, `part`, `drafted_ms`, `supersedes` | `'ccrc-history-w2-open-record'`, 1, `'draft'` | fixed |
+| `kind`, `version`, `part`, `drafted_ms`, `supersedes` | `'ccrc-history-w2-open-record'`, 1, `'draft'` | fixed; `drafted_ms` measured (amended: coordinator, 2026-10-20, W2-3 review F11) |
 | `nodes` | `[{label, store_id}]` | operator |
 | `account` | the account id; admitted by W2-D52 | operator |
 | `arm_model`, `writer_model`, `judge_model` | exact ids, never aliases; the arm model non-Fable, writer and judge Opus (validator-enforced) | operator |
@@ -1738,12 +1759,12 @@ The pilot always precedes part 2 and the window. The earlier option to move it a
 | `quiz` (plan) | `{kinds: FACT_KINDS, target: 100, min_families: 20, caps: {family: 5, boundary: 3, kind_per_family: 2}, halt_floor: {questions: 60, families: 12}, writer_input: 'excerpt', baseline_files: 'v1'}` | default (kinds fixed) |
 | `counters_def` | `'v1'` and the sha of `COUNTERS_DEF_V1` | default (sha fixed to the module's) |
 | `active_rule` | `{lookback_ms: 604800000, legacy_excluded: true, text}` | look-back default; `legacy_excluded` fixed `true` (D-5773) |
-| `q18_settings` | `{rho_headline: 0.3, power: [0.5, 0.8], lookback_days: 14, sims: 1000, grid_step: 0.005, procedure: 'bisection-on-grid-crn'}` | default |
-| `pilot` | `{seed, n_fidelity: 5, n_usage: 5, tolerance: 0.25, families, frozen_sha256, writer_model, used: {labeller, sha_min_prefix, writer_input, baseline_files, writer_prompt_sha256, answer_protocol_sha256}, code_shas, release_stamp, budget, spend}` | tolerance default; the rest measured (validator ties `used`, `code_shas` and `release_stamp` to part 1) |
+| `q18_settings` | `{rho_headline: 0.3, power: [0.5, 0.8], lookback_days: 14, sims: 1000, grid_step: 0.005, procedure: 'bisection-on-grid-crn'}` | default; `procedure` fixed (amended: coordinator, 2026-10-20, W2-3 review F3) |
+| `pilot` | `{seed, n_fidelity: 5, n_usage: 5, tolerance: 0.25, families, frozen_sha256, writer_model, used: {labeller, sha_min_prefix, writer_input, baseline_files, writer_prompt_sha256, answer_protocol_sha256}, code_shas, release_stamp, budget, spend}` | tolerance default; the rest measured (validator ties `used`, `code_shas` and `release_stamp` to part 1); `n_fidelity` and `n_usage` default 5 (amended: coordinator, 2026-10-20, W2-3 review F11) |
 | `limits` | `{threshold_pct: 70, max_age_ms: 3600000, batch_max: 10, concurrency: 2}` | default |
 | `pilot_budget` | 3,000,000 token-equivalents | default |
 | `halts` | `{handcheck_agreement_min: 0.8, run_failed_max: 0.05, absent_rate_max: 0.05}` | default |
-| `handcheck` | `{share: 0.2, of: 'judged', per_arm: true, judge_failed: 'always'}`; the actor is the operator | default |
+| `handcheck` | `{share: 0.2, of: 'judged', per_arm: true, judge_failed: 'always'}`; the actor is the operator | `share` default; `of`, `per_arm` and `judge_failed` fixed (amended: coordinator, 2026-10-20, W2-3 review F3, W2-D81) |
 | `freezes` | maintenance (W2-D7, from pilot sourcing); build (W2-D6, from the final rollout); the surface list | default |
 | `order` | `{quiz_arms_during_window: true}`; the pilot always precedes the window | default |
 | `gate_code` | `{release_tag, files: {deploy/history-gate.mjs, deploy/measure-history.py, deploy/history-replay.mjs, ccd/history/lib.mjs}}` | measured |
@@ -1752,7 +1773,7 @@ The pilot always precedes part 2 and the window. The earlier option to move it a
 
 | Field | Content | Status |
 |---|---|---|
-| `part`, `finalized_ms`, `supersedes` | `'final'`, the part-1 sha (or the superseded part 2's) | fixed |
+| `part`, `finalized_ms`, `supersedes` | `'final'`, the part-1 sha (or the superseded part 2's) | fixed; `finalized_ms` measured (amended: coordinator, 2026-10-20, W2-3 review F11) |
 | `census` | per node `{store_id, census_ms, census_sha256}`; **W2 open** is these instants | measured |
 | `registry_drops` | `[{store_id, ccrc_id, generation, reason}]`, from `verify --registry` | measured |
 | `q18` | the headline and 80% figures, rho 0 and rho_hat, per-node and per-family n_f, coverage, pre-window uptake, `power_output_sha256`, `decision` | measured plus operator |
@@ -1892,3 +1913,8 @@ Not spec text, but owed: the programme ledger's sentence "only the quiz waits on
   - A stream with no usable usage records 0, and a run killed by the timeout or by its driver's death falls back to the assistant-event sum, which misses an API call billed but still in flight.
   - The window between a child's spawn and its pid record's write: a driver killed in it leaves a leftover that is charged as dead, while its child may still spend unseen. A grandchild that calls setsid itself escapes the group kill, though it writes no stream.
   - The budget is a soft stop: up to c whole runs past it (W2-D55).
+- **W2-3's labeller and census, as built** (coordinator, 2026-10-20, W2-3 review 664).
+  - The command kind refuses prose outside the answer that holds a comma, `>`, `<`, `&` or a negative number, and it admits an extra operand or a `sudo` or `VAR=` prefix (W2-D63). The error kind keeps the bounded-occurrence rule, so an error answer may carry trailing context. Both arms are scored by the same rule.
+  - A bare last `QUESTION:` line falls back to the writer's earlier question (W2-D72's literal `(.+)`). That question was written by the writer, passes the leak check, and carries no arm information.
+  - A window with no turn 11, no next boundary and no truncation ends at the copy's last timed row at read time. This biases criterion 3 toward fail; W2-5b's report records the read instant.
+  - `flags_accepted` completeness, against W2-4's argv set, is not checked in W2-3, which knows no flag list. W2-5a, the first PR that loads both modules, adds the parity pin, beside the `CODE_SHA_FILES` one.
