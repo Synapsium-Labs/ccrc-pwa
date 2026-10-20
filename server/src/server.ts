@@ -94,6 +94,7 @@ import {
 import { ARCHIVE_REFUSALS, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
+import { noticeSink } from './notice.js';
 import type { Dialog, DigestAnswer, DigestCorrectAnswer } from '../../shared/api.js';
 import {
   archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, frameRowVerdict, refusedAtStop, worktreeOf, type ArchiveMeasure,
@@ -312,6 +313,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const app = Fastify({ logger: false });
   await app.register(fastifyWebsocket);
   await app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024 } });
+  // D-5857: the one notice sink this server's writers outside `watch.ts` raise their feed rows through (`notice.ts`).
+  const notice = noticeSink(deps);
 
   // Presence is cheap and needs no config, unlike `push` — a caller that
   // didn't wire one into Deps (an older test, a one-off script) still gets
@@ -1888,7 +1891,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         if (m.type === 'input' && typeof m.data === 'string') {
           p.write(m.data);   // D-5237: the bytes pass through unchanged; a lone ESC or Ctrl-C is also recorded
           const src = drawerInterruptSource(m.data);
-          if (src !== null && drawerInterrupts.admit(id, Date.now())) recordInterrupt(deps, id, src, 'sent');
+          if (src !== null && drawerInterrupts.admit(id, Date.now())) recordInterrupt({ notice }, id, src, 'sent');
         } else if (m.type === 'resize' && typeof m.cols === 'number' && typeof m.rows === 'number') {
           p.resize(m.cols, m.rows);
         }
@@ -2482,24 +2485,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // `settleAsk` (same order `/api/asks/:id/answer` uses) so that if
     // `settleAsk` then throws, at least one durable trace of the answer
     // survives. Independently optional, same as that route: a box with no
-    // `notifyLog` configured still answers the request.
-    const log = deps.notifyLog;
-    if (log) {
-      try {
-        const ev = log.record({
-          kind: 'ask', sessionId: id, runId: null,
-          title: 'question answered',
-          body: `operator answered ${id}'s question: ${held.question} → ` +
-                `${held.options[optionIndexes[0]!] ?? '?'}`,
-        });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — ask answered, feed archive degraded`);
-      } finally {
-        void log.flush();
-      }
-    }
+    // `notifyLog` configured still answers the request. Recorded whatever the
+    // presence, never pushed, and a failed archive never fails the answer
+    // (the notice sink's `'record-only'`, D-5857).
+    notice({
+      kind: 'ask', sessionId: id, runId: null,
+      title: 'question answered',
+      body: `operator answered ${id}'s question: ${held.question} → ` +
+            `${held.options[optionIndexes[0]!] ?? '?'}`,
+    }, 'record-only', { degraded: 'ask answered, feed archive degraded' });
 
     // GUARDED (Task 9's own lesson): the digit already landed above, so a
     // failure to record it must never turn a successful press into a 500.
@@ -2545,7 +2539,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return interruptVerdict({ word, ...(await liveRowWithHookFor(turnReads, read.record, identity.uuid)) });
     });
     // D-5237: every answer is recorded with the client's source (anything else is `unknown`) and its outcome; never pushed.
-    recordInterrupt(deps, id, interruptRouteSource((req.body as { source?: unknown } | null)?.source), res.ok ? 'sent' : res.error);
+    recordInterrupt({ notice }, id, interruptRouteSource((req.body as { source?: unknown } | null)?.source), res.ok ? 'sent' : res.error);
     return res.ok ? res : reply.code(409).send(res);
   });
 

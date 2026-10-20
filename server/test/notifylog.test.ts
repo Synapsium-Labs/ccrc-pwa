@@ -6,6 +6,7 @@ import { NotifyLog } from '../src/notifylog.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { recordInterrupt } from '../src/interruptlog.js';
+import { noticeSink } from '../src/notice.js';
 
 const dir = async () => mkdtemp(path.join(tmpdir(), 'notifylog-'));
 
@@ -111,7 +112,7 @@ describe('the interrupt kind (D-5237)', () => {
     const log = new NotifyLog(path.join(d, 'n.json'));
     await log.load();
     const coord = new CoordStore(openCoordDb(path.join(d, 'coord.db')));
-    recordInterrupt({ notifyLog: log, coord }, 'lane-a-project-a', 'keycap', 'sent');
+    recordInterrupt({ notice: noticeSink({ notifyLog: log, coord }) }, 'lane-a-project-a', 'keycap', 'sent');
     const tail = log.catchUp(log.epoch, 0).events;
     expect(tail.map((e) => [e.kind, e.sessionId, e.body])).toEqual([['interrupt', 'lane-a-project-a', 'source=keycap outcome=sent']]);
     expect(coord.feedEvents(10).map((e) => [e.kind, e.sessionId, e.body]))
@@ -122,7 +123,7 @@ describe('the interrupt kind (D-5237)', () => {
     const log = new NotifyLog(path.join(await dir(), 'n.json'));
     await log.load();
     const coord = { recordFeedEvent: () => { throw new Error('database is locked'); } };
-    expect(() => recordInterrupt({ notifyLog: log, coord }, 'lane-a-project-a', 'deny', 'not-busy')).not.toThrow();
+    expect(() => recordInterrupt({ notice: noticeSink({ notifyLog: log, coord }) }, 'lane-a-project-a', 'deny', 'not-busy')).not.toThrow();
     expect(log.catchUp(log.epoch, 0).events.map((e) => e.body)).toEqual(['source=deny outcome=not-busy']);
   });
 });
