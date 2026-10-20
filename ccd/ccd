@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=98a72da5ca74d57f4b9beb7aad4cb14d9e3373c2ad3ea95034e11199d7fadc50
+# ccrc:generated 1 sha256=11f1f2946feb7d35d241d8c93f4f6f33482f96f443df9d71287942ab2b2370a4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -26203,13 +26203,27 @@ _swap_beat() {   # id parent-pid — re-stamp `supervised` every SWAP_BEAT_INTER
   # the three lines was deleted in turn during the final review and the whole
   # 2585-test suite stayed green, which made this paragraph a safety claim
   # nothing defended, the finding this branch has now made four times.
-  local id="$1" parent="$2" i=0
+  #
+  # The sleep runs in the background and is WAITED on, behind a TERM trap that
+  # ends it (D-6113). `_swap_beat_stop` TERMs this subshell; a subshell killed
+  # while it sits in a FOREGROUND `sleep` dies alone and leaves the sleep
+  # running, reparented, still holding the stdout it inherited from `cmd_swap` —
+  # so anything capturing `ccd swap`'s output (the agent's execFile, a `$(…)`)
+  # waited for EOF up to SWAP_BEAT_INTERVAL after every swap. `wait` is
+  # interruptible by a trapped signal, a foreground child is not. The trap
+  # also waits on the sleep it kills, so the stamper is gone only once its
+  # sleep is. The trap is dropped on the way out so a foreground call leaves
+  # its caller's untouched.
+  local id="$1" parent="$2" i=0 s=''
+  trap '[[ -n "$s" ]] && { kill "$s"; wait "$s"; } 2>/dev/null; exit 0' TERM
   while (( i < SWAP_BEAT_MAX )); do
-    sleep "$SWAP_BEAT_INTERVAL"
-    kill -0 "$parent" 2>/dev/null || return 0
+    sleep "$SWAP_BEAT_INTERVAL" & s=$!
+    wait "$s"; s=''
+    kill -0 "$parent" 2>/dev/null || { trap - TERM; return 0; }
     _reg_set "$id" supervised "$(date +%s)"
     i=$((i + 1))
   done
+  trap - TERM
 }
 
 _swap_beat_stop() {   # pid — end the carry heartbeat. Safe on an empty/dead pid.
