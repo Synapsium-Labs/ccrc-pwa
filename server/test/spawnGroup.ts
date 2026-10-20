@@ -14,7 +14,13 @@
 //     count. A child that means a process to outlive it starts that process in a session of its own; one left in
 //     the group is a leak, and this helper is the leak check for the groups it creates, which
 //     `proc-leak.globalsetup.mjs` cannot see (it watches the suite's own group).
-// Converted so far: every timed spawn in `ccrc-account.test.ts`. The suite's other timed spawns move here as their
+//   * RETURNED with members left, from a caller that passed `{ strays: 'end' }`: a case that strands a process ON
+//     PURPOSE (a fixture that removes a deadline to prove a backstop) declares it, and the helper ends the
+//     leftovers through the group it created and returns normally. That is a handle this run holds, never a PID
+//     read back from a file or a listing (D-3533), which is why it lives here and not in the case.
+// Converted so far: every timed spawn in `ccrc-account.test.ts`, and the runners whose leaks the run-level check
+// found on its first CI run (`ccd-account-auth.test.ts`'s `drive`, `ccgpt-runtime.test.ts`'s `runOpts`,
+// `platform-hazards.test.ts`'s `bash`). The suite's other timed spawns move here as their
 // files are next touched, not in one sweep (D-5895); until then the run-level check in `proc-leak.globalsetup.mjs`
 // still reds a grandchild one of them leaves in the suite's group.
 // A detached child also leaves the suite's controlling terminal, so a Ctrl-C to vitest no longer reaches it; the
@@ -43,7 +49,8 @@ export function killGroup(pgid: number): void {
 
 /** `spawnSync` with a string encoding (every caller here reads text), in a process group of the child's own. */
 export function spawnSyncGroup(command: string, args: readonly string[],
-  options: SpawnSyncOptionsWithStringEncoding): SpawnSyncReturns<string> {
+  options: SpawnSyncOptionsWithStringEncoding, { strays = 'throw' }: { strays?: 'throw' | 'end' } = {}):
+  SpawnSyncReturns<string> {
   // `detached` is honoured by spawnSync at runtime (node's spawn_sync reads it, and the child's pid comes back as
   // its own pgid: measured) but @types/node leaves it out of SpawnSyncOptions, hence the widened type.
   const opts: SpawnSyncOptionsWithStringEncoding & { detached: boolean } = { ...options, detached: true };
@@ -59,5 +66,6 @@ export function spawnSyncGroup(command: string, args: readonly string[],
   while (groupAlive(pgid) && Date.now() < deadline) Atomics.wait(PAUSE, 0, 0, 25);
   if (!groupAlive(pgid)) return r;
   killGroup(pgid);
+  if (strays === 'end') return r;
   throw new Error(`spawnSyncGroup: ${command} returned but left processes in its group ${pgid}; they were killed`);
 }

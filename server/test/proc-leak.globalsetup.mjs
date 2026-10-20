@@ -13,8 +13,11 @@
 // process, and whose parent is neither this process (vitest's own helpers) nor a recorded one (a job the launching
 // shell started beside vitest) is a leak: a test's child whose parent was a worker, or an orphan reparented to init
 // or a subreaper. Teardown waits
-// `LEAK_GRACE_MS` for stragglers that are already dying, then names each survivor (pid and command), SIGKILLs it,
-// and sets `process.exitCode = 1`. It does not throw: measured against the vitest 4 this repo pins, an error
+// `LEAK_GRACE_MS` for stragglers that are already dying, then names each survivor (pid, age, command and working
+// directory: the cwd is usually a fixture directory, which names the test file that started it) and sets
+// `process.exitCode = 1`. It never signals what it names: a PID it OBSERVED is an observation, not a handle this run
+// holds, and a globalSetup carries no signal authority (D-3533, pinned in `ccrc-uninstall.test.ts`). The run is
+// red; the leak runs out its own bound or is ended by whoever reads the report. It does not throw: measured against the vitest 4 this repo pins, an error
 // thrown from a globalSetup teardown is printed as "error during close" and the run still EXITS 0.
 //
 // THE RECORD, NOT A PID OR A START TIME, keeps it off things the run did not start: `npm test | tee log` puts
@@ -23,13 +26,14 @@
 // WHAT IT DOES NOT SEE (by design). A child that leaves the group — `detached: true` (libuv's setsid()), `setsid`,
 // a daemon that double-forks into its own session, a tmux server — is in another group, invisible here. Nor is an
 // orphan whose new parent is itself a recorded member (a container whose init is the shell that launched vitest). That is
-// why `spawnGroup.ts`'s `spawnSyncGroup` kills the WHOLE group of a detached child it timed out, and refuses
+// why `spawnGroup.ts`'s `spawnSyncGroup` ends the WHOLE group of a detached child it timed out, and refuses
 // (throws) when a detached child it did not time out left members behind: the helper is the check for the
 // children it starts. A run killed by a signal skips teardown, so it is not checked either.
 //
 // WHY A `.mjs` THAT IMPORTS ONLY `node:` BUILTINS: `proc-leak.test.ts` imports it into a bare-node child, and the
 // node floor cannot strip types (`run-tmp.globalsetup.mjs` is the precedent).
 import { spawnSync } from 'node:child_process';
+import { readlinkSync } from 'node:fs';
 
 /** How long teardown waits for a member that is already exiting before calling it a leak. */
 export const LEAK_GRACE_MS = 2_000;
@@ -63,7 +67,7 @@ export function findLeaks(pgid, baseline, self = process.pid) {
 
 const sleep = (ms) => new Promise((res) => { setTimeout(res, ms); });
 
-/** Waits up to `graceMs` for leaks to exit; SIGKILLs and returns whatever is still alive then. */
+/** Waits up to `graceMs` for leaks to exit and returns whatever is still alive then. It signals nothing (D-3533). */
 export async function collectLeaks(pgid, baseline, { self = process.pid, graceMs = LEAK_GRACE_MS } = {}) {
   const deadline = Date.now() + graceMs;
   let leaks = findLeaks(pgid, baseline, self);
@@ -71,10 +75,28 @@ export async function collectLeaks(pgid, baseline, { self = process.pid, graceMs
     await sleep(100);
     leaks = findLeaks(pgid, baseline, self);
   }
-  for (const p of leaks) {
-    try { process.kill(p.pid, 'SIGKILL'); } catch { /* already gone */ }
-  }
   return leaks;
+}
+
+/** A leak's working directory: `/proc` where there is one, `lsof` (macOS) otherwise; '?' when neither answers. */
+export function cwdOf(pid) {
+  try { return readlinkSync(`/proc/${pid}/cwd`); } catch { /* no procfs, or the process is gone */ }
+  const r = spawnSync('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], { encoding: 'utf8' });
+  const line = (r.stdout ?? '').split('\n').find((l) => l.startsWith('n'));
+  return line ? line.slice(1) : '?';
+}
+
+/** A leak's elapsed time as `ps` spells it ([[dd-]hh:]mm:ss); '?' when the process is gone. */
+export function ageOf(pid) {
+  const r = spawnSync('ps', ['-o', 'etime=', '-p', String(pid)], { encoding: 'utf8' });
+  return (r.stdout ?? '').trim() || '?';
+}
+
+/** The report for `leaks`, one line per process. */
+export function leakReport(leaks) {
+  return `ccrc-test: ${leaks.length} process(es) a test started outlived the run and are still running`
+    + ' (this check names them and never signals them: D-3533):\n'
+    + leaks.map((p) => `  pid ${p.pid}, up ${ageOf(p.pid)}: ${p.command}\n    cwd ${cwdOf(p.pid)}\n`).join('');
 }
 
 export default async function setup() {
@@ -83,8 +105,7 @@ export default async function setup() {
   return async () => {
     const leaks = await collectLeaks(pgid, baseline);
     if (leaks.length === 0) return;
-    process.stderr.write(`ccrc-test: ${leaks.length} process(es) a test started outlived the run, now killed:\n`
-      + leaks.map((p) => `  pid ${p.pid}: ${p.command}\n`).join(''));
+    process.stderr.write(leakReport(leaks));
     process.exitCode = 1;
   };
 }

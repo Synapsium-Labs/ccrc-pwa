@@ -8669,11 +8669,15 @@ function snapshotHome(home: string): string[] {
  *  whole shape is "the second call sees the first call's variable", which one
  *  process per invocation can never show. */
 function sourceRun(home: string, script: string,
-  extraEnv: NodeJS.ProcessEnv = {}): Result {
+  extraEnv: NodeJS.ProcessEnv = {}, { strands = false }: { strands?: boolean } = {}): Result {
   const merged = { ...buildEnv(home), ...extraEnv };
   assertManagerStandIns(merged, home);
-  const r = spawnSync(BASH, ['-c', `. ${JSON.stringify(ccrcIn(home))}\n${script}\n`],
-    { env: merged, encoding: 'utf8', input: '' });
+  const argv = ['-c', `. ${JSON.stringify(ccrcIn(home))}\n${script}\n`];
+  // `strands`: the case strands a process ON PURPOSE, so the run leads its own process group (#172, D-5894) and
+  // what it leaves there is ended through that group when it returns, never by a pid it wrote down (D-3533).
+  const r = strands
+    ? spawnSyncGroup(BASH, argv, { env: merged, encoding: 'utf8', input: '', timeout: 60_000 }, { strays: 'end' })
+    : spawnSync(BASH, argv, { env: merged, encoding: 'utf8', input: '' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -10632,55 +10636,43 @@ describe('ccrc account check: the probe', () => {
       const real = spawnSync(BASH, ['-c', `command -v ${name}`], { encoding: 'utf8' })
         .stdout.trim();
       expect(real, `this box has no ${name} to link`).toBeTruthy();
-      if (name !== 'sleep') { symlinkSync(real, join(bin, name)); continue; }
-      // THE SLEEPER THIS CASE ORPHANS ON PURPOSE outlives it by up to its bound
-      // (10 s below), and the suite's leak check (#172, D-5894) rightly fails a
-      // run it outlives. So `sleep` here is the real one behind a wrapper that
-      // records its pid first (`exec`, so the pid is the sleeper's), and the
-      // `finally` below collects what this case started. Still a real `sleep` on
-      // PATH, which is all the guards ask.
-      writeFileSync(join(bin, 'sleep'),
-        `#!/bin/sh\necho $$ >> ${JSON.stringify(join(home, 'sleepers'))}\nexec ${JSON.stringify(real)} "$@"\n`,
-        { mode: 0o755 });
+      symlinkSync(real, join(bin, name));
     }
-    try {
-      // THE GUARDS ARE THE HALF THAT KEEPS THIS FROM PASSING VACUOUSLY: with a
-      // coreutils deadline binary still reachable the shim never reaches its
-      // fallback at all, and with no `sleep` the watcher exits before it can
-      // orphan anything. Either way the case would be green about nothing.
-      const guards = [
-        `export PATH=${JSON.stringify(bin)}`,
-        'if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then',
-        '  echo "a coreutils deadline binary is still reachable: the fallback never ran" >&2; exit 90',
-        'fi',
-        'command -v sleep >/dev/null 2>&1 || { echo "no sleep: the arm under test never runs" >&2; exit 91; }',
-      ];
-      const t0 = Date.now();
-      const r = sourceRun(home, [...guards,
-        'out="$(_plat_timeout 10 echo hi)"; rc=$?',
-        'printf \'%s|%s\' "$out" "$rc"'].join('\n'));
-      const ms = Date.now() - t0;
-      expect(r.code, r.stderr).toBe(0);
-      expect(r.stdout, 'the command\'s own answer did not survive the redirection').toBe('hi|0');
-      expect(ms, `the substitution blocked for ${ms}ms after the command had answered`)
-        .toBeLessThan(5000);
+    // THE SLEEPER THIS CASE ORPHANS ON PURPOSE outlives it by up to its bound
+    // (10 s below), and the suite's leak check (#172, D-5894) rightly fails a
+    // run it outlives. So both runs pass `strands` to `sourceRun`, whose own
+    // process group holds the sleeper and is ended when the run returns: the
+    // run's handle, never a pid read back from a file (D-3533).
+    // THE GUARDS ARE THE HALF THAT KEEPS THIS FROM PASSING VACUOUSLY: with a
+    // coreutils deadline binary still reachable the shim never reaches its
+    // fallback at all, and with no `sleep` the watcher exits before it can
+    // orphan anything. Either way the case would be green about nothing.
+    const guards = [
+      `export PATH=${JSON.stringify(bin)}`,
+      'if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then',
+      '  echo "a coreutils deadline binary is still reachable: the fallback never ran" >&2; exit 90',
+      'fi',
+      'command -v sleep >/dev/null 2>&1 || { echo "no sleep: the arm under test never runs" >&2; exit 91; }',
+    ];
+    const t0 = Date.now();
+    const r = sourceRun(home, [...guards,
+      'out="$(_plat_timeout 10 echo hi)"; rc=$?',
+      'printf \'%s|%s\' "$out" "$rc"'].join('\n'), {}, { strands: true });
+    const ms = Date.now() - t0;
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout, 'the command\'s own answer did not survive the redirection').toBe('hi|0');
+    expect(ms, `the substitution blocked for ${ms}ms after the command had answered`)
+      .toBeLessThan(5000);
 
-      // …AND THE DEADLINE STILL BITES. Closing the watcher's streams must not
-      // close the watcher: the same arm, on a command that never answers, still
-      // stamps, still signals, and still reports the code every call site here
-      // branches on.
-      const slow = sourceRun(home, [...guards,
-        'out="$(_plat_timeout 1 sleep 30)"; rc=$?',
-        'printf \'%s|%s\' "$out" "$rc"'].join('\n'));
-      expect(slow.code, slow.stderr).toBe(0);
-      expect(slow.stdout, 'the bounded call no longer reports expiry').toBe('|124');
-    } finally {
-      const sleepers = join(home, 'sleepers');
-      const pids = existsSync(sleepers) ? readFileSync(sleepers, 'utf8').split('\n').filter(Boolean) : [];
-      for (const pid of pids) {
-        try { process.kill(Number(pid), 'SIGKILL'); } catch { /* it ran out its bound already */ }
-      }
-    }
+    // …AND THE DEADLINE STILL BITES. Closing the watcher's streams must not
+    // close the watcher: the same arm, on a command that never answers, still
+    // stamps, still signals, and still reports the code every call site here
+    // branches on.
+    const slow = sourceRun(home, [...guards,
+      'out="$(_plat_timeout 1 sleep 30)"; rc=$?',
+      'printf \'%s|%s\' "$out" "$rc"'].join('\n'), {}, { strands: true });
+    expect(slow.code, slow.stderr).toBe(0);
+    expect(slow.stdout, 'the bounded call no longer reports expiry').toBe('|124');
 
     // ── THE POPULATION, MEASURED (D-2332) ──────────────────────────────────
     // A FLOOR AND NOT AN EXACT COUNT, deliberately: a new bounded call inside
