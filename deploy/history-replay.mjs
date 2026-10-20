@@ -320,16 +320,11 @@ function checkOut(abs, uid) {
   if (st.uid !== uid) refuse('out-refused', 'foreign-owner');
   const mode = st.mode & 0o7777;
   if (mode !== 0o700) refuse('out-refused', `mode ${mode.toString(8).padStart(4, '0')}`);
-  const marker = path.join(abs, OUT_MARKER);
-  let ms;
-  try { ms = lstatSync(marker); } catch (e) {
-    if (e?.code === 'ENOENT') refuse('out-refused', 'marker-absent');
-    throw e;
-  }
-  if (!ms.isFile() || ms.size > OUT_MARKER_MAX_BYTES) refuse('out-refused', 'marker-mismatch');
-  let text = null;
-  try { text = readFileSync(marker, 'utf8'); } catch { text = null; }   // a marker the driver cannot read back is not one it wrote
-  if (text !== OUT_KIND) refuse('out-refused', 'marker-mismatch');
+  // D-5986: one bounded, type-checked read (lstat, no-follow non-blocking open, fstat). Absent is marker-absent; a marker
+  // that is not a regular file, is over the bound, cannot be read back or holds other bytes is not one the driver wrote.
+  const read = readPlain(path.join(abs, OUT_MARKER), OUT_MARKER_MAX_BYTES);
+  if (read.state === 'absent') refuse('out-refused', 'marker-absent');
+  if (read.state !== 'bytes' || read.bytes.toString('utf8') !== OUT_KIND) refuse('out-refused', 'marker-mismatch');
   return realpathSync(abs);
 }
 
@@ -616,9 +611,11 @@ export function spendTokens(facts) {
 // directory planted there refuses `out-refused` (or is read as the caller's own bad state) and never follows a link
 // or blocks. Reads: lstat, then open O_RDONLY|O_NOFOLLOW|O_NONBLOCK, fstat isFile, then a bounded read. Appends open
 // O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW. Every other write is a tmp file created exclusively (O_EXCL|O_NOFOLLOW) and a
-// rename. Deliberately kept as they are, because they are not a write or read of a path an --out holder could have
-// planted: prepareOut's marker (written into the directory it just made, 'wx' = O_EXCL, and type-checked before it
-// is read back), and the reads of /proc, the roster, the release stamp, the wrapper and HOME's limits row.
+// rename. Every failure to read, list, create or write a path under --out refuses `out-refused` with the path relative
+// to --out and a cause (`<rel> unreadable <code>`, `<rel> unwritable <code>`, or the type refusals): an --out holder can
+// make each happen, and a raw errno is not a W2 stop word. Kept as they are: prepareOut's marker WRITE (into the
+// directory it just made, 'wx' = O_EXCL), and the reads outside --out (/proc, the roster, the release stamp, the
+// wrapper). The marker's read, and HOME's limits row, go through readPlain.
 
 /** The largest ledger or stream the driver reads back. */
 const OUT_STREAM_CAP = 256 * 1024 * 1024;
@@ -681,7 +678,10 @@ function writeAll(fd, bytes) {
 
 /** Append one line to `<out>/<rel>`: the file is opened O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW|O_NONBLOCK (a FIFO with no
  *  reader fails ENXIO instead of blocking) and must still be a regular file by fstat; one write. A link, a FIFO or any
- *  other type there refuses `out-refused` and nothing is written.
+ *  other type there refuses `out-refused` `<rel> is not a regular file` and nothing is written; an open, fstat or write
+ *  failure of any other kind (a ledger nobody may write: EACCES) refuses `out-refused` `<rel> unwritable <code>`, never a
+ *  raw errno. Every caller records a spend BEFORE it removes the `.part` and `.pid` the spend belongs to, so a spend line
+ *  that cannot be written leaves both in place for the next driver to charge.
  *  @param {string} out  @param {string} rel  @param {string} text */
 function appendPlain(out, rel, text) {
   let fd;
@@ -689,19 +689,25 @@ function appendPlain(out, rel, text) {
     fd = openSync(path.join(out, rel), constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
   } catch (e) {
     if (e?.code === 'ELOOP' || e?.code === 'ENXIO' || e?.code === 'EISDIR') refuse('out-refused', `${rel} is not a regular file`);
-    throw e;
+    refuse('out-refused', `${rel} unwritable ${errCode(e)}`);
   }
   try {
     if (!fstatSync(fd).isFile()) refuse('out-refused', `${rel} is not a regular file`);
     writeAll(fd, Buffer.from(text, 'utf8'));
+  } catch (e) {
+    if (e instanceof DriverRefusal) throw e;
+    refuse('out-refused', `${rel} unwritable ${errCode(e)}`);
   } finally {
     closeSync(fd);
   }
 }
 
 /** Create `<out>/<rel>` exclusively (O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, mode set exactly by fchmod on the descriptor) and
- *  answer the open descriptor. An existing entry refuses `out-refused`, with one exception when `replaceStale` is set: a
- *  REGULAR file there (a temp file an earlier driver of this pid left) is removed once and the create retried.
+ *  answer the open descriptor. An existing entry refuses `out-refused` `<rel> already exists`, with one exception when
+ *  `replaceStale` is set: a REGULAR file there (a temp file an earlier driver of this pid left) is removed once and the
+ *  create retried; on that first attempt an entry that is not a regular file says `<rel> already exists and is not a
+ *  regular file`, and a regular file met AGAIN on the retry says only `<rel> already exists`. Any other failure to create
+ *  (a directory nobody may write into: EACCES) refuses `out-refused` `<rel> unwritable <code>`, never a raw errno.
  *  @returns {number} */
 function createPlain(out, rel, mode, replaceStale) {
   const p = path.join(out, rel);
@@ -710,10 +716,10 @@ function createPlain(out, rel, mode, replaceStale) {
     try {
       fd = openSync(p, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode);
     } catch (e) {
-      if (e?.code !== 'EEXIST' && e?.code !== 'ELOOP') throw e;
-      const st = lstatOrNull(p);
+      if (e?.code !== 'EEXIST' && e?.code !== 'ELOOP') refuse('out-refused', `${rel} unwritable ${errCode(e)}`);
+      const st = lstatOrNull(out, rel);
       if (replaceStale && attempt === 0 && st !== null && st.isFile()) { rmSync(p, { force: true }); continue; }
-      refuse('out-refused', `${rel} already exists${replaceStale ? ' and is not a regular file' : ''}`);
+      refuse('out-refused', `${rel} already exists${replaceStale && attempt === 0 ? ' and is not a regular file' : ''}`);
     }
     fchmodSync(fd, mode);
     return fd;
@@ -725,7 +731,7 @@ function createPlain(out, rel, mode, replaceStale) {
  *  @param {string} out  @param {string} rel  @param {string | Buffer} bytes  @param {number} [mode] */
 function writePlain(out, rel, bytes, mode = 0o600) {
   const p = path.join(out, rel);
-  const have = lstatOrNull(p);
+  const have = lstatOrNull(out, rel);
   if (have !== null && !have.isFile()) refuse('out-refused', `${rel} is not a regular file`);
   const tmpRel = `${rel}.tmp-${process.pid}`;
   const tmp = path.join(out, tmpRel);
@@ -735,20 +741,21 @@ function writePlain(out, rel, bytes, mode = 0o600) {
   } catch (e) {
     closeSync(fd);
     rmSync(tmp, { force: true });
-    throw e;
+    refuse('out-refused', `${rel} unwritable ${errCode(e)}`);   // D-5986: a failed write (a full disk) is a refusal too
   }
   closeSync(fd);
   try {
     renameSync(tmp, p);
   } catch (e) {
     rmSync(tmp, { force: true });
-    throw e;
+    refuse('out-refused', `${rel} unwritable ${errCode(e)}`);
   }
 }
 
 /** Make sure every segment of `rel` under `out` is a real directory: an existing one must lstat as a directory (a link,
  *  dangling or not, or any other type refuses `out-refused` `<path so far> is not a directory`), a missing one is made
- *  0700, non-recursively.
+ *  0700, non-recursively; a mkdir that fails (a directory nobody may write into) refuses `out-refused`
+ *  `<path so far> unwritable <code>`.
  *  @param {string} out  @param {string} rel */
 function ensurePlainDir(out, rel) {
   let cur = out;
@@ -756,14 +763,15 @@ function ensurePlainDir(out, rel) {
   for (const seg of rel.split('/')) {
     cur = path.join(cur, seg);
     sofar = sofar === '' ? seg : `${sofar}/${seg}`;
-    let st = lstatOrNull(cur);
+    let st = lstatOrNull(out, sofar);
     if (st === null) {
       try {
         mkdirSync(cur, { mode: 0o700 });
         continue;
       } catch (e) {
-        if (e?.code !== 'EEXIST') throw e;
-        st = lstatSync(cur);
+        if (e?.code !== 'EEXIST') refuse('out-refused', `${sofar} unwritable ${errCode(e)}`);
+        st = lstatOrNull(out, sofar);   // made by someone else between the lstat and the mkdir: judge what is there
+        if (st === null) refuse('out-refused', `${sofar} unwritable EEXIST`);
       }
     }
     if (!st.isDirectory()) refuse('out-refused', `${sofar} is not a directory`);
@@ -779,12 +787,10 @@ function ensurePlainDir(out, rel) {
 function refuseLinkedDirs(out, name) {
   const dir = path.dirname(name);
   if (dir === '.') return;
-  let cur = out;
   let sofar = '';
   for (const seg of dir.split('/')) {
-    cur = path.join(cur, seg);
     sofar = sofar === '' ? seg : `${sofar}/${seg}`;
-    const st = lstatOrNull(cur);
+    const st = lstatOrNull(out, sofar);
     if (st === null) return;
     if (!st.isDirectory()) refuse('out-refused', `${sofar} is not a directory`);
   }
@@ -1085,13 +1091,15 @@ function writePidRecord(out, name, pid) {
   writePlain(out, `${name}.pid`, pidRecordText(pid));
 }
 
-/** lstat, answering null for ENOENT; any other failure is thrown (unmeasured never reads as absent). */
-function lstatOrNull(p) {
+/** lstat `<out>/<rel>`, answering null for ENOENT. Every caller is under --out, so any other failure (unmeasured never
+ *  reads as absent) refuses `out-refused` `<rel> unreadable <code>`, never a raw errno (D-5986).
+ *  @param {string} out  @param {string} rel */
+function lstatOrNull(out, rel) {
   try {
-    return lstatSync(p);
+    return lstatSync(path.join(out, rel));
   } catch (e) {
     if (e?.code === 'ENOENT') return null;
-    throw e;
+    refuse('out-refused', `${rel} unreadable ${errCode(e)}`);
   }
 }
 
@@ -1108,8 +1116,8 @@ function lstatOrNull(p) {
 function settleLeftover(out, name, live) {
   const { partPath, pidPath } = runPaths(out, name);
   refuseLinkedDirs(out, name);   // D-5986: before any path under the name is touched
-  const part = lstatOrNull(partPath);
-  const pid = lstatOrNull(pidPath);
+  const part = lstatOrNull(out, `${name}.jsonl.part`);
+  const pid = lstatOrNull(out, `${name}.pid`);
   if (part !== null && !part.isFile()) refuse('out-refused', `run-stream-invalid ${name}`);
   let rec = null;
   if (pid !== null) {
@@ -1144,7 +1152,9 @@ const liveClaims = new WeakSet();
 
 /** D-5985: take the --out lock. `<out>/.driver.lock` holds `{pid, start}` of its driver; it is created whole through an
  *  exclusive tmp file and `linkSync` (EEXIST means held), so a lock is never empty or torn. A holder that reads alive or
- *  unmeasured, a lock that is no regular file and one that is no record refuse `out-in-use`. A dead holder's lock is
+ *  unmeasured, a lock that is no regular file, a lock record that cannot be read (its errno in the detail) and one that
+ *  is no record refuse `out-in-use`. If the holder releases the lock between the failed link and the read (the read finds
+ *  nothing), the link is tried ONCE more before the driver refuses. A dead holder's lock is
  *  renamed to `<lock>.stale-<pid>`, re-read, and taken over only if it still names the same dead holder; if it names
  *  anyone else it is put back and the driver refuses. */
 function takeLock(out, live, afterHeld) {
@@ -1208,11 +1218,18 @@ function takeLock(out, live, afterHeld) {
 }
 
 /** Every run name with a `*.jsonl.part` or a `*.pid` under `out`, sorted: directories walked by Dirent type (a link is
- *  never followed), at most four levels. A name that is no RUN_NAME_RE name refuses `out-refused`. */
+ *  never followed), at most four levels. A name that is no RUN_NAME_RE name refuses `out-refused`, and so does a directory
+ *  that cannot be listed (`<rel or .> unreadable <code>`); claimOut releases its lock when this refuses. */
 function leftoverNames(out) {
   const names = new Set();
   const walk = (dir, rel, depth) => {
-    for (const d of readdirSync(dir, { withFileTypes: true })) {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch (e) {
+      refuse('out-refused', `${rel === '' ? '.' : rel} unreadable ${errCode(e)}`);   // D-5986: a directory nobody may list
+    }
+    for (const d of entries) {
       const r = rel === '' ? d.name : `${rel}/${d.name}`;
       if (d.isDirectory()) {
         if (depth < 3) walk(path.join(dir, d.name), r, depth + 1);
@@ -1392,12 +1409,7 @@ export async function launchRun(job, opts = {}) {
   // D-5811: a final stream path that is not a regular file (a directory, a symlink) refuses before the spawn, or the
   // rename after the spend line would fail and every resume would charge and spawn again. A regular file (a finished
   // spawn whose run.json was lost) goes on: the re-spawn's rename replaces it.
-  let finalSt = null;
-  try {
-    finalSt = lstatSync(runPaths(out, name).streamPath);
-  } catch (e) {
-    if (e?.code !== 'ENOENT') throw e;
-  }
+  const finalSt = lstatOrNull(out, `${name}.jsonl`);
   if (finalSt !== null && !finalSt.isFile()) refuse('out-refused', `run-stream-invalid ${name}`);
   const timeoutMs = job.timeoutMs ?? RUN_TIMEOUT_MS;
   if (typeof stdin !== 'string') throw new TypeError('launchRun: stdin must be a string');
@@ -1462,11 +1474,9 @@ export async function runBatch(jobs, opts = {}) {
   if (new Set(names).size !== names.length) throw new TypeError('runBatch: two jobs share one --out and name');
   const gate = opts.gate;
   for (const job of jobs) {
-    const { runJsonPath } = runPaths(job.out, job.name);
+    runPaths(job.out, job.name);   // a name that is no run name is a TypeError here, before anything is touched
     refuseLinkedDirs(job.out, job.name);   // D-5986: before the run.json lstat or the settle go through a link
-    let hasRunJson = true;
-    try { lstatSync(runJsonPath); } catch (e) { hasRunJson = e?.code !== 'ENOENT'; }
-    if (!hasRunJson) settleLeftover(job.out, job.name, liveNow);
+    if (lstatOrNull(job.out, `${job.name}.run.json`) === null) settleLeftover(job.out, job.name, liveNow);   // D-5986: an lstat failure refuses, as every read under --out does
   }
   const outcomes = new Array(jobs.length);
   let next = 0;
@@ -1544,41 +1554,20 @@ export function parseLimitsRow(text, nowS) {
   return { five, seven, ts, fiveResetAt, sevenResetAt, fiveRolledOver, sevenRolledOver, fiveInferred, sevenInferred };
 }
 
-/** `$HOME/.cc-limits/<accountId>.json`, read-only: lstat first (only a regular file is opened), then one bounded read
- *  through an O_NOFOLLOW|O_NONBLOCK descriptor whose fstat must still say regular. Every outcome is its own state. */
+/** `$HOME/.cc-limits/<accountId>.json`, read-only, through readPlain (D-5986): lstat first (only a regular file is
+ *  opened), then one bounded read through an O_NOFOLLOW|O_NONBLOCK descriptor whose fstat must still say regular. Every
+ *  outcome is its own state: `absent`; `not-regular` (a directory, a link, a FIFO, or a file replaced between the lstat
+ *  and the open); `malformed` (past LIMITS_ROW_CAP, or not a JSON object); `unreadable` with the errno in `code`; `row`. */
 export function readLimitsRow(home, accountId, nowS) {
   if (typeof accountId !== 'string' || !LIMITS_ID.test(accountId)) throw new TypeError(`not an account id: ${JSON.stringify(accountId)}`);
-  const p = path.join(home, '.cc-limits', `${accountId}.json`);
-  const codeOf = (e) => String(e?.code ?? 'EUNKNOWN');
-  let st;
-  try { st = lstatSync(p); } catch (e) {
-    return e?.code === 'ENOENT' ? { state: 'absent' } : { state: 'unreadable', code: codeOf(e) };
+  const read = readPlain(path.join(home, '.cc-limits', `${accountId}.json`), LIMITS_ROW_CAP);
+  if (read.state === 'absent') return { state: 'absent' };
+  if (read.state === 'bad') {
+    if (read.why === 'not-regular') return { state: 'not-regular' };
+    if (read.why === 'over-cap') return { state: 'malformed' };
+    return { state: 'unreadable', code: read.code };
   }
-  if (!st.isFile()) return { state: 'not-regular' };
-  let fd;
-  try { fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); } catch (e) {
-    if (e?.code === 'ENOENT') return { state: 'absent' };
-    if (e?.code === 'ELOOP') return { state: 'not-regular' };
-    return { state: 'unreadable', code: codeOf(e) };
-  }
-  let text;
-  try {
-    if (!fstatSync(fd).isFile()) return { state: 'not-regular' };   // replaced between the lstat and the open
-    const buf = Buffer.alloc(LIMITS_ROW_CAP + 1);
-    let n = 0;
-    while (n < buf.length) {
-      const got = readSync(fd, buf, n, buf.length - n, null);
-      if (got === 0) break;
-      n += got;
-    }
-    if (n > LIMITS_ROW_CAP) return { state: 'malformed' };
-    text = buf.toString('utf8', 0, n);
-  } catch (e) {
-    return { state: 'unreadable', code: codeOf(e) };
-  } finally {
-    closeSync(fd);
-  }
-  try { return { state: 'row', row: parseLimitsRow(text, nowS) }; } catch { return { state: 'malformed' }; }
+  try { return { state: 'row', row: parseLimitsRow(read.bytes.toString('utf8'), nowS) }; } catch { return { state: 'malformed' }; }
 }
 
 /** The limits stop (W2-D55): null admits the batch; otherwise the word and detail it stops with. */

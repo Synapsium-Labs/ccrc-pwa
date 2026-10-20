@@ -2233,12 +2233,79 @@ describe('fix round 1 (D-5986): no-follow, type-checked I/O under --out', () => 
     expect(existsSync(path.join(linked, '.driver.lock')), 'no lock taken').toBe(false);
   });
 
+  // D-5986: every failure to read, list, create or write a path under --out answers a driver refusal (out-refused), never
+  // a raw errno (exit 1): an --out holder can make each of these happen. Root ignores modes, so each case is skipped for
+  // uid 0 and restores the modes it changed in a finally, so the fixture's cleanup can remove the tree.
+  it('a spend.jsonl nobody may write (mode 000) met by a leftover to charge: claimOut refuses out-refused spend.jsonl unwritable EACCES, keeps the .part, and releases the lock', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const out = freshOut();
+    writeFileSync(path.join(out, 'lo-0.jsonl.part'), D6_STREAM);
+    const ledger = path.join(out, replay.SPEND_LEDGER);
+    writeFileSync(ledger, '');
+    chmodSync(ledger, 0o000);
+    try {
+      expect(thrown(() => replay.claimOut(out))).toMatchObject({ word: 'out-refused', detail: 'spend.jsonl unwritable EACCES' });
+      expect(existsSync(path.join(out, 'lo-0.jsonl.part')), 'the .part stays, for the next driver to charge').toBe(true);
+      expect(existsSync(path.join(out, '.driver.lock')), 'the lock was released').toBe(false);
+    } finally {
+      chmodSync(ledger, 0o600);
+    }
+  });
+
+  it('a run subdirectory nobody may list (mode 000): claimOut\'s walk refuses out-refused <sub> unreadable EACCES and releases the lock; a batch into it, on a claim taken before, refuses out-refused and spawns nothing', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const out = freshOut();
+    const sub = path.join(out, 'sub');
+    mkdirSync(sub);
+    chmodSync(sub, 0o000);
+    try {
+      expect(thrown(() => replay.claimOut(out))).toMatchObject({ word: 'out-refused', detail: 'sub unreadable EACCES' });
+      expect(existsSync(path.join(out, '.driver.lock')), 'the lock was released after the walk refused').toBe(false);
+    } finally {
+      chmodSync(sub, 0o700);
+    }
+    const b = t5Box('ccrc-replay-d5986-unlistable-');   // claims b.out first, as a subcommand does
+    const bsub = path.join(b.out, 'sub');
+    mkdirSync(bsub);
+    chmodSync(bsub, 0o000);
+    try {
+      await expect(claimedBatch([t5job(b, b.up, 'box', 'sub/run-0')], { gate: T5_NO_GATE }))
+        .rejects.toMatchObject({ word: 'out-refused', detail: 'sub/run-0.run.json unreadable EACCES' });
+      expect(stubLog(b.home), 'no spawn').toBeNull();
+    } finally {
+      chmodSync(bsub, 0o700);
+    }
+  }, 60_000);
+
+  it('a run subdirectory nobody may write into (mode 0500): the run refuses out-refused <name>.jsonl.part unwritable EACCES before it spawns, and a --out nobody may write to refuses to plant the poison bin', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const b = t5Box('ccrc-replay-d5986-unwritable-');
+    const sub = path.join(b.out, 'sub');
+    mkdirSync(sub);
+    chmodSync(sub, 0o500);
+    try {
+      await expect(claimedRun(t5job(b, b.up, 'box', 'sub/run-0')))
+        .rejects.toMatchObject({ word: 'out-refused', detail: 'sub/run-0.jsonl.part unwritable EACCES' });
+      expect(stubLog(b.home), 'no spawn, so no orphan').toBeNull();
+      expect(replay.spentSoFar(b.out), 'nothing spent').toBe(0);
+    } finally {
+      chmodSync(sub, 0o700);
+    }
+    const o = freshOut();
+    chmodSync(o, 0o500);
+    try {
+      expect(thrown(() => replay.ensurePoisonBin(o))).toMatchObject({ word: 'out-refused', detail: 'poison-bin unwritable EACCES' });
+    } finally {
+      chmodSync(o, 0o700);
+    }
+  }, 60_000);
+
   /** Run `body` (ESM, top-level await) in a child with a deadline; the driver is `D`, a scratch directory is `base`. */
   function inChild(body: string, ms: number): { out: string; err: string; signal: NodeJS.Signals | null; status: number | null } {
     const dir = mkTmp('ccrc-replay-d5986-child-');
     const script = path.join(dir, 'child.mjs');
     writeFileSync(script, `import * as D from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 const base = process.argv[2];
@@ -2280,9 +2347,8 @@ process.stdout.write(JSON.stringify(results));
     const r = inChild(`
 const sha = 'a'.repeat(64);
 { const p = join(base, 'in.fifo'); fifo(p); results.fifo = said(() => D.loadStep0a(p, sha)); }
-{ writeFileSync(join(base, 'real.json'), '{}\\n'); require_symlink(join(base, 'real.json'), join(base, 'in.link')); results.link = said(() => D.loadStep0a(join(base, 'in.link'), sha)); }
+{ writeFileSync(join(base, 'real.json'), '{}\\n'); symlinkSync(join(base, 'real.json'), join(base, 'in.link')); results.link = said(() => D.loadStep0a(join(base, 'in.link'), sha)); }
 { mkdirSync(join(base, 'in.dir')); results.dir = said(() => D.loadStep0a(join(base, 'in.dir'), sha)); }
-function require_symlink(t, p) { execFileSync('ln', ['-s', t, p]); }
 `, 30_000);
     expect(r.signal, `loadStep0a blocked on a FIFO: ${r.err}`).toBeNull();
     expect(r.status, r.err).toBe(0);
