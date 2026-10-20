@@ -311,6 +311,16 @@ describe.skipIf(!LINUX || !NO_COPY)('where a NOREPLACE rename exists: the collec
     expect(linesOf('rm-calls')).toContainEqual(expect.stringMatching(new RegExp(`^-f -- ${aside}$`)));
     expect(linesOf('rm-calls').filter((l) => l.endsWith(` ${w}`)), 'never the live name').toEqual([]);
   });
+
+  it('the compare-and-drop cannot finish (stubbed, answering 2): unmeasured, the reason says it was never compared and dropped, the witness byte-identical', () => {
+    const bytes = orphaned();
+    const CAD_UNFINISHED = '_ws_collect_witness_cad() { _WS_CAD=\'\'; _WS_CAD_WHY=\'stub: it could not be moved aside\'; return 2; };';
+    const r = drop(ID, CAD_UNFINISHED);
+    expect(r.out).toBe('[rc=2] |its witness was kept: the compare-and-drop could not finish, so it was never compared and dropped (stub: it could not be moved aside)');
+    expect(r.err).toBe('');
+    expect(fs.readFileSync(witness(), 'utf8'), 'the witness stands, byte-identical').toBe(bytes);
+    expect(fs.readdirSync(wdir()), 'and nothing is left beside it').toEqual([ID]);
+  });
 });
 
 describe('where none exists (Darwin, or an mv without --no-copy): a second read, six fields compared, then the unlink', () => {
@@ -340,6 +350,15 @@ describe('where none exists (Darwin, or an mv without --no-copy): a second read,
     expect(linesOf('lock-ran'), 'the CONTROL: tmproots/ was made unsearchable in the window').toEqual(['locked']);
     expect(r.out).toMatch(/^\[rc=2\] \|its witness was kept: on a second read no witness was read at its name, and its absence could not be proven \(/);
     expect(r.out).toContain('cannot be searched');
+    expect(r.err).toBe('');
+    expect(fs.readFileSync(witness(), 'utf8'), 'the witness stands, byte-identical').toBe(bytes);
+  });
+
+  it.skipIf(ROOT_USER)('simulated Darwin, the unlink fails (tmproots/ cannot be written): its unlink is never proven, so unmeasured, the witness byte-identical and not dropped', () => {
+    const bytes = orphaned();
+    const r = restoringMode(() => { fs.chmodSync(wdir(), 0o500); return drop(ID, DARWIN); });
+    expect(r.out, 'nothing was dropped, and the reason says the unlink was not proven').toBe(
+      `[rc=2] |its witness was kept: its unlink could not be proven (${witness()})`);
     expect(r.err).toBe('');
     expect(fs.readFileSync(witness(), 'utf8'), 'the witness stands, byte-identical').toBe(bytes);
   });
