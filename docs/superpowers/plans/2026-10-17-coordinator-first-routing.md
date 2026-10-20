@@ -1039,3 +1039,53 @@ Issued and unused (Task 16): none.
 - **D-5493** — `digest-as-built` (Task 17): eight decisions the Files list did not make. (1) One line per row, its FINAL coordinator decision, decided by one predicate per table (`askDecision`, `approvalDecision`, `server/src/coord/digest.ts`), which the correction route reads too, so the digest and `409 not-coordinator` cannot disagree: a row held for a coordinator and then answered (or allowed, denied) by it is that decision, a late answer after the lapse included (D-5289); `declined` is the hand-over; a held row the coordinator never ruled is the lapse, at `releasedAt` for a question and at `notifyAt` for an approval, whoever acted after; the operator's own answer inside the window, a row minted released and a stale question are no line. (2) A day with no decisions is CLAIMED with count 0 and sends no push, so the beat does not rebuild it every minute; `GET /api/digest` reports `pushed: false` for it. (3) The beat's one idempotence check is the claim (`INSERT OR IGNORE` into `digests`, before the push): no pre-read of the row, so a reader that agrees with the claim cannot mask its deletion (the mutation table's restart row). (4) A second correction on the same row while the first mail is still undelivered is `409 duplicate` (`queueSystemMail`'s outstanding-mail rule, said instead of dropped); the mail carries `runId` null. (5) The mail screen carries a standing Digest door, so a missed push loses nothing in the app either. (6) `POST /api/digest/correct` queues mail to a coordinator with no box token, so it joins `box-token-census.test.ts`'s session-only set beside the kickoff route, and `CLAUDE.md`'s bullet names it. (7) A day's push is a snapshot at its claim, and the GET re-reads the rows, so three edges are by design and lose nothing (the GET answers any day): a lapse that its coordinator later answers (late answer wins) moves from the lapse's day to the answer's, so the earlier day's GET can list fewer decisions than its push named; a server that starts, or comes back from an outage, just before the hour with yesterday unclaimed sends yesterday's digest and then today's minutes apart; and moving `~/.ccrc/digest-hour` later after the day was claimed leaves the shifted hours unpushed for that day. Task M reads a day's count drop in that light, not as a bug. (8) The route cases live in their own `server/test/digest-routes.test.ts` (on the approvals lane's fixture); `server/test/routes.test.ts`, which the Files list named, is unchanged. Held by `digest.test.ts`, `digest-routes.test.ts`, `digest-screen.test.tsx` and `box-token-census.test.ts`.
 
 Issued and unused (Task 17): none.
+
+### Durability (#752) — issued 2026-10-19 and defined here (D1, #754)
+
+The coordinator↔worker durability fixes (epic #752) live here because coordinator-first routing is the plan that
+owns the coordinator↔worker channel, and that channel is ordinary mail; no plan owns the mail lane's delivery states
+as such.
+
+- **D-5838** — `mail-parked-never-rejected-while-alive` (D1, #754): a mail is never rejected `undeliverable` while
+  its recipient session is alive. Measured on main before it: `sweepMail` rejected a never-delivered row on the FIRST
+  `enter-ignored` (the nudge in a fresh box) and on any refusal reaching `MAIL_MAX_ATTEMPTS` (in practice
+  `draft-present`, about 15 minutes of a human's unsent text), and told only the operator's feed, never the sending
+  session; 21 days lost five wave briefs and two done-mails that way. Now such a row PARKS (`CoordStore.parkDelivery`,
+  migration 27's four nullable `mail_deliveries` columns `parkedAt`/`parkReason`/`parkBox`/`parkEscalatedAt`). It stays
+  `state: 'queued'`, so every outstanding reader keeps it and an older build retries it as an ordinary row; the sweep
+  probes its recipient's input box (`readBoxText`, read-only, through the session's queue, at most every 30 s) and wakes
+  it when the box differs from what it held at the park; otherwise it is re-attempted every 10 minutes through every
+  gate, so a recipient that has since died, stopped or been purged is rejected by the lifecycle rungs exactly as before,
+  and a closed run still cancels it. An `enter-ignored` park types nothing while its box still holds the same text
+  (never the nudge under itself); on its retry timer, a box that holds exactly OUR OWN nudge goes to `sendPrompt`'s
+  `resumeIfOwn` arm, which presses Enter only after its correspondence check (`pressEnterAndConfirm`) and never types,
+  so the stranded wave brief is submitted without a human, at most once per 10-minute retry; any other text is held
+  with nothing pressed. A `parkBox` the park could not read (the box absent, or a menu up) is UNKNOWN, not empty
+  (`parkBoxSeen`): it wakes only on a box seen empty, and any other reading becomes its baseline
+  (`CoordStore.baselineParkBox`) without a press. The probe is grouped per recipient and claims `mailInFlight` for that
+  recipient while it waits, so a probe stuck behind another caller's queue slot holds only its own recipient, never the
+  whole lane. A parked row does not veto hibernation or stop-done (`hibernateSweep.ts`, `stopDoneSweep.ts`): it would
+  otherwise keep its session resident for up to 24 h; a hibernated recipient is still reached through the ensure-wake
+  gate on the retry, and a stopped one is rejected by the lifecycle rung as before. The sending session gets one system mail from `operator`
+  (`mail parked: <subject>`, saying why and what lands it; `tellSender`'s degrade rule holds: never a role, never a
+  session-less sender, never the recipient itself); the operator gets one push regardless of who sent it, tagged
+  `mail-parked-<delivery id>` and addressed to the sender's session or, for a role-sent mail, the recipient's, at
+  15 minutes parked, or at once for a park that followed the attempts ceiling, recorded in `parkEscalatedAt` so a
+  restart never repeats it. At 24 hours parked the row is rejected with `lastError` `parked 24 h, never delivered:
+  <reason>`, and the sender is mailed `mail rejected: <subject>`. On the wire: `MailSummary.parkedAt` (optional, only on
+  a `queued` row) and `RunHealth.mailParkedLive` (optional); the mail strip renders a `parked` line and head mark, and
+  the run board a `waiting` warning. The coordinator skill's `mail-envelope.md` says a park is not a give-up. What
+  holds it: `server/test/mail-sweep.test.ts`'s "a live recipient's mail PARKS, never rejects (D-5838)" block,
+  `pwa/test/mail-strip.test.tsx` and `pwa/test/runs-health.test.tsx`.
+- **D-5839** — `parked-word-two-senses` (D1, #754): `RunHealth.mailParked` and the run board's "N parked" already
+  meant a delivery the lane GAVE UP on (rejected, not a deliberate cancel), and that reader is unchanged. The new live
+  count is therefore a separate field, `mailParkedLive`, rendered as "N waiting", not a second "parked" with the
+  opposite meaning; the mail strip, which renders one delivery's state, says "parked". It departs from the brief's "expose
+  'parked' wherever delivery states are listed" only in the run board's word, and `MailDeliveryState` gains no member, so
+  every reader keyed on `state` (the stall watch's queued-mail verdict among them) is unchanged.
+- **D-5840** — `mail-gate-parked` (D1, #754): the `enter-ignored` park's pre-send hold (a box holding text that is
+  neither changed since the park nor our own nudge) is a refusal before the send,
+  and the D-792 ladder rule is that every such `continue` names a gate. So `MailGate` gains one member, `parked`
+  (additive on a closed union; `GATE_PHRASE` in the mail strip has its words), and the hold records it.
+
+Issued and unused (D1): none.

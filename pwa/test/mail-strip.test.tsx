@@ -230,6 +230,35 @@ describe('a blocked delivery is named before it is lost', () => {
   });
 });
 
+// D-5838 (#754): a PARKED delivery — outstanding, recipient alive, waiting
+// for this session's input box to change. Never "attempt N of 6": it is past
+// that budget and is not given up.
+describe('a parked delivery says so, and what lands it (D-5838)', () => {
+  const parked = (over: Partial<MailSummary> = {}) =>
+    m({ state: 'queued', attempts: 7, lastError: 'draft-present', parkedAt: T0 - 60_000, ...over });
+
+  it('names the park and the condition, in place of the attempt count', () => {
+    const { container } = render(<MailStrip mail={[parked()]} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    const line = container.querySelector('.mail-strip-parked')!;
+    expect(line.textContent).toContain('parked');
+    expect(line.textContent).toContain('submitted or cleared');
+    expect(container.textContent).not.toMatch(/attempt \d+ of/);
+  });
+
+  it('the COLLAPSED head carries a parked flag', () => {
+    const { container } = render(<MailStrip mail={[parked()]} />);
+    expect(container.querySelector('.mail-strip-head .mail-strip-parked-mark')).not.toBeNull();
+  });
+
+  it('a rejected row is abandoned even if it once parked, and an older server\'s row (no field) is not parked', () => {
+    const { container } = render(<MailStrip mail={[parked({ state: 'rejected' }), m({ id: 2, state: 'queued' })]} />);
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
+    expect(container.querySelector('.mail-strip-abandoned')).not.toBeNull();
+    expect(container.querySelector('.mail-strip-parked')).toBeNull();
+  });
+});
+
 describe('the session store takes the mail frame', () => {
   const snap = (): SessionSnapshot => ({
     events: [], offset: 0, uuid: null, status: null, statusUpdatedAt: null,
