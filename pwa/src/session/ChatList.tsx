@@ -14,6 +14,7 @@ import { MailCard, TaskCard, ToolCard, askCardLines } from '@ccrc/ui';
 import { RenderBoundary } from '../components/RenderBoundary';
 import { MsgPlain } from '../lib/markdown';
 import { useFrameSet } from '../skins/frame';
+import type { SkinSet } from '../skins/types';
 import type { PendingSend } from '../stores/session';
 import { MessageBubble, foldsAway, type MessageEvent } from './MessageBubble';
 import { buildChatItems, type ChatItem } from './chatItems';
@@ -23,6 +24,8 @@ import {
   type HeightBucket, type Measures, type MeasuredRow, type RowRecord, type RowShape,
 } from './itemHeight';
 import { PendingBubble } from './PendingBubble';
+import { groupToolRun, type TranscriptItem } from './toolSummary';
+import { TranscriptRowContext } from './transcriptRow';
 import './chat.css';
 
 /** Animated "Claude is working this turn" pulse — mirrors the terminal's
@@ -103,6 +106,38 @@ function ChatItemView(props: Parameters<typeof ChatItemBody>[0]): ReactNode {
   );
 }
 
+/** THE LIST THE TRANSCRIPT SHOWS (D-5475, W2 Task S13b). The set's declarative `transcriptGrouping` says whether
+ *  runs of tool entries fold into one row; this applies the one shared `groupToolRun` when it does, BEFORE the list
+ *  is handed to Virtuoso, because a fold changes the count, the indices and the seeded heights, which no per-item row
+ *  can. Data, not logic: nothing here compares a skin id (D-5469), and outside a frame (most suites) nothing folds. */
+function transcriptOf(grouping: SkinSet['transcriptGrouping'] | undefined, items: ChatItem[]): TranscriptItem[] {
+  return grouping === 'tool-runs' ? groupToolRun(items) : items;
+}
+
+/** One transcript row, drawn through the set's `TranscriptRow` part when it has one. The part takes no props
+ *  (D-5678): it reads its row from `TranscriptRowContext`, with the shared renderer for a plain item. With no part,
+ *  a plain item renders as it always has, and a group (which only a set with a row part asks for) as its entries. */
+function TranscriptRowView({
+  set,
+  item,
+  ...rest
+}: Omit<Parameters<typeof ChatItemBody>[0], 'item'> & { set: SkinSet | null; item: TranscriptItem }): ReactNode {
+  const renderItem = (it: ChatItem): ReactNode => <ChatItemView {...rest} item={it} />;
+  const Row = set?.TranscriptRow ?? null;
+  if (Row === null) return item.kind === 'tool-group' ? item.entries.map((e) => <div key={e.key}>{renderItem(e)}</div>) : renderItem(item);
+  return (
+    <TranscriptRowContext.Provider value={{ item, renderItem }}>
+      <RenderBoundary
+        where="chat item"
+        resetKey={item.key}
+        fallback={() => <p className="msg-plain-note">This item could not be shown.</p>}
+      >
+        <Row />
+      </RenderBoundary>
+    </TranscriptRowContext.Provider>
+  );
+}
+
 export interface ChatListProps {
   /** Session id — clip thumbnails resolve against `clipUrl(id, name)`. */
   id: string;
@@ -136,12 +171,14 @@ export function ChatListInner({
   answerLabel,
   onAnswer,
 }: ChatListProps): ReactNode {
-  const items = buildChatItems(events, pending, busy);
+  const set = useFrameSet();
+  const items = transcriptOf(set?.transcriptGrouping, buildChatItems(events, pending, busy));
   return (
     <div className="chat-inner">
       {items.map((item) => (
         <div key={item.key} className="chat-item">
-          <ChatItemView
+          <TranscriptRowView
+            set={set}
             item={item}
             id={id}
             onRetry={onRetry}
@@ -207,9 +244,11 @@ function messageShape(event: MessageEvent, m: Measures): RowShape {
  * holds there (`measuresOf`) — a bubble's at a bubble's width, the rest at a
  * paragraph's.
  */
-export function shapeOf(item: ChatItem, m: Measures = NOMINAL_MEASURES): RowShape {
+export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES): RowShape {
   switch (item.kind) {
     case 'divider': return { bucket: 'divider', lines: 1 };
+    // One collapsed line, however many calls it folds (D-5475); open, it is never sampled (`inOpeningForm`).
+    case 'tool-group': return { bucket: 'group', lines: 1 };
     case 'message': return messageShape(item.event, m);
     case 'tool': {
       const ask = askCardLines(item.use, item.result);
@@ -262,7 +301,7 @@ interface Opening {
   seed: { ranges: { startIndex: number; endIndex: number; size: number }[]; scrollTop: number } | null;
 }
 
-function openWith(items: readonly ChatItem[], m: Measures): Opening {
+function openWith(items: readonly TranscriptItem[], m: Measures): Opening {
   const record = rememberedRows();
   const models = modelsOf(record);
   // EVERY ROW GETS ITS OWN ESTIMATE, from what it shows. It can: the screen
@@ -403,7 +442,7 @@ function inOpeningForm(el: Element): boolean {
 
 /** What the meter needs of a row when it measures one: the row as it is now,
  *  and the session it belongs to. */
-interface MeteredRow { item: ChatItem; session: string }
+interface MeteredRow { item: TranscriptItem; session: string }
 
 /** One rendered row, measured for as long as virtuoso keeps it mounted. */
 function MeasuredItem({
@@ -412,7 +451,7 @@ function MeasuredItem({
   meter,
   children,
 }: {
-  item: ChatItem;
+  item: TranscriptItem;
   session: string;
   meter: RowMeter;
   children: ReactNode;
@@ -648,9 +687,13 @@ function ChatScroller({
   onAnswer,
   column,
 }: ChatListProps & { column: Column }): ReactNode {
+  // The GROUPED list when the set folds tool runs (D-5475): every index below — the count, the keys, the seeded
+  // sizes and Jump to latest's last item — is this list's, never the ungrouped one's.
+  const set = useFrameSet();
+  const grouping = set?.transcriptGrouping;
   const items = useMemo(
-    () => buildChatItems(events, pending, busy),
-    [events, pending, busy],
+    () => transcriptOf(grouping, buildChatItems(events, pending, busy)),
+    [events, pending, busy, grouping],
   );
   const virtuoso = useRef<VirtuosoHandle>(null);
   const [atBottom, setAtBottom] = useState(true);
@@ -730,7 +773,8 @@ function ChatScroller({
           if (!item) return null;
           return (
             <MeasuredItem item={item} session={id} meter={meter}>
-              <ChatItemView
+              <TranscriptRowView
+                set={set}
                 item={item}
                 id={id}
                 onRetry={onRetry}
