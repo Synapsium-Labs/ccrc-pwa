@@ -8,10 +8,15 @@
 // `-`, plus the first token's own hash and the token count — so a pin that
 // passes here passes for the committed entries too.
 import { describe, it, expect } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
-  EXEMPTIONS, PRIVATE_NAMES, PRIVATE_NAMES_DIGEST, entriesDigest, hashEntry, matchLine, tokens, entryOf, entriesOf,
-  hitsIn, maskText, pairHits,
+  EXEMPTIONS, PRIVATE_NAMES, PRIVATE_NAMES_DIGEST, entriesDigest, entryKey, hashEntry, matchLine, tokens, entryOf,
+  entriesOf, hitsIn, maskText, pairHits,
 } from './private-names.mjs';
+import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 const e = (text: string, mode: 'part' | 'exact' | 'run' | 'words') => {
   const ts = tokens(text).map((x) => x.t);
@@ -92,13 +97,21 @@ describe('matchLine', () => {
       expect(matchLine(s, rows), JSON.stringify(s)).not.toEqual([]);
   });
 
-  it('every default-ignorable or format character splits nothing, wherever it falls (D-5287)', () => {
+  it('every default-ignorable character splits nothing, wherever it falls (D-5287)', () => {
     // One case per class the fold once missed (LRM, RLM, LRI, CGJ, MVS) and the
     // ones it always dropped (ZWSP, SHY, WJ), each inside ONE token: a name
-    // split by any of them must still match whole.
+    // split by any of them must still match whole. Across a line break, the
+    // pairHits pins below.
     const rows = entriesOf('zzomega', 'part');
     for (const c of ['\u200e', '\u200f', '\u2066', '\u034f', '\u180e', '\u200b', '\u00ad', '\u2060'])
       expect(matchLine(`x zz${c}omega y`, rows), `U+${c.codePointAt(0)!.toString(16)}`).toEqual([h8(rows[0]!)]);
+  });
+
+  it('a format character that is not default-ignorable still ends a token (D-5287)', () => {
+    // U+0600 is format (Cf) and visible: dropped, it would join `zzomega` to the
+    // `x` after it, and the hit would be lost.
+    const rows = entriesOf('zzomega', 'part');
+    expect(matchLine('zzomega\u0600x', rows)).toEqual([h8(rows[0]!)]);
   });
 
   it('a row spelled in camelCase finds its lower-case spelling, and a lower-case row its camelCase one', () => {
@@ -180,6 +193,21 @@ describe('the class and scan helpers', () => {
     }
   });
 
+  it('pairHits reads through an invisible character that ends the first line (D-5287)', () => {
+    const rows = entriesOf('zed quux', 'words');
+    expect(pairHits('written by Zed\u200e', 'Quux on Monday', 'x.md', rows)).toEqual([h8(rows[0]!)]);
+  });
+
+  it('pairHits reads through an invisible character before the next line\'s marker (D-5287)', () => {
+    const rows = entriesOf('zed quux', 'words');
+    expect(pairHits('// written by Zed', '\u200b// Quux on Monday', 'x.md', rows)).toEqual([h8(rows[0]!)]);
+  });
+
+  it('pairHits reads through an invisible character after the next line\'s marker (D-5287)', () => {
+    const rows = entriesOf('zed quux', 'words');
+    expect(pairHits('// written by Zed', '// \u200bQuux on Monday', 'x.md', rows)).toEqual([h8(rows[0]!)]);
+  });
+
   it('the exemptions hold only in a history-programme document under docs/', () => {
     // The upstream entry's own h8, exactly as private-names.mjs names it; the hit
     // object stands in for one the matcher would build on `<name>@abcdef01`.
@@ -221,7 +249,9 @@ describe('tokens and hashEntry', () => {
 
 describe('the committed entries and the exemptions are pinned (D-5288)', () => {
   it('PRIVATE_NAMES is exactly what `hash --list` printed beside its digest', () => {
-    expect(entriesDigest(PRIVATE_NAMES), `${PRIVATE_NAMES.length} entries`).toBe(PRIVATE_NAMES_DIGEST);
+    expect(entriesDigest(PRIVATE_NAMES), `${PRIVATE_NAMES.length} entries: regenerate both with \`node `
+      + 'server/test/private-names.mjs hash --list <path>`, and paste its literal and its digest line together')
+      .toBe(PRIVATE_NAMES_DIGEST);
   });
 
   it('the digest moves when one entry is deleted or weakened', () => {
@@ -245,5 +275,69 @@ describe('the committed entries and the exemptions are pinned (D-5288)', () => {
     expect(rev.applies(doc, at('@abcdef0'))).toBe(true);
     for (const tail of ['@abcdef', '@abcdefg', '@abc', '@'])
       expect(rev.applies(doc, at(tail)), tail).toBe(false);
+  });
+
+  const doc = 'docs/superpowers/specs/x-ccrc-history-y.md';
+  const plugin = () => EXEMPTIONS.find((x) => x.name === 'upstream plugin phrase')!;
+  const hitIn = (folded: string) => {
+    const start = folded.indexOf('xxxx');
+    return { h8: '4dda1e70', start, end: start + 4, folded, origStart: start, origEnd: start + 4 };
+  };
+
+  it('the plugin-phrase exemption needs the phrase\'s prefix', () => {
+    expect(plugin().applies(doc, hitIn('lossless-claw, an xxxx plugin'))).toBe(true);
+    expect(plugin().applies(doc, hitIn('a rewrite, an xxxx plugin'))).toBe(false);
+  });
+
+  it('the plugin-phrase exemption needs the phrase\'s suffix', () => {
+    expect(plugin().applies(doc, hitIn('lossless-claw, an xxxx library'))).toBe(false);
+  });
+
+  it('the plugin-phrase exemption needs ccrc-history in the path, not only history', () => {
+    expect(plugin().applies('docs/superpowers/specs/x-history-y.md', hitIn('lossless-claw, an xxxx plugin')))
+      .toBe(false);
+  });
+
+  it('the revision-citation exemption needs the @ to follow the name directly', () => {
+    const rev = EXEMPTIONS.find((x) => x.name === 'upstream revision citation')!;
+    expect(rev.applies(doc, hitIn('xxxx@abcdef01'))).toBe(true);
+    expect(rev.applies(doc, hitIn('xxxx, pinned at x@abcdef01'))).toBe(false);
+  });
+
+  it('`hash --list` prints the canary first, no local row, and the digest of exactly what it printed', () => {
+    // A fixture list of synthetic tokens only, in the local list's five columns.
+    // No local row shares an entry with a pub row, so a local entry printed is a
+    // leak of the row, not a coincidence.
+    const dir = mkTmp('ccrc-private-names-');
+    try {
+      const list = path.join(dir, 'list');
+      writeFileSync(list, [
+        '# mode\ttoken\tstand-in\tclass\tvisibility',
+        'part\tzz-pubone\tproject-a\tproject\tpub',
+        'words\tzed pubtwo\ta person\tperson\tpub',
+        'part\tqq-localone\tproject-b\tproject\tlocal',
+        'run\tqq-localtwo\tlane-a\tlane\tlocal',
+        '',
+      ].join('\n'));
+      const pub = [...entriesOf('zz-pubone', 'part'), ...entriesOf('zed pubtwo', 'words')].map(entryKey);
+      const local = [...entriesOf('qq-localone', 'part'), ...entriesOf('qq-localtwo', 'run')].map(entryKey);
+      expect(local.filter((k) => pub.includes(k))).toEqual([]);
+      const mjs = fileURLToPath(new URL('./private-names.mjs', import.meta.url));
+      const out = execFileSync(process.execPath, [mjs, 'hash', '--list', list], { encoding: 'utf8' })
+        .trimEnd().split('\n');
+      const digestLine = out.pop()!;
+      const printed = out.map((line) => {
+        const m = /^ {2}\{ h: '([0-9a-f]{32})', f: '([0-9a-f]{32})', n: (\d+), mode: '([a-z]+)' \},(?: \/\/ CANARY)?$/
+          .exec(line);
+        expect(m, line).not.toBeNull();
+        return { h: m![1]!, f: m![2]!, n: Number(m![3]), mode: m![4]! as 'part' | 'exact' | 'run' | 'words' };
+      });
+      expect(out[0]).toMatch(/\/\/ CANARY$/);
+      expect(entryKey(printed[0]!)).toBe(entryKey(PRIVATE_NAMES[0]!));
+      expect(printed.slice(1).map(entryKey).sort()).toEqual([...new Set(pub)].sort());
+      expect(digestLine).toBe(`export const PRIVATE_NAMES_DIGEST = '${entriesDigest(printed)}';`);
+    } finally {
+      removeTmpFixtures();
+    }
   });
 });

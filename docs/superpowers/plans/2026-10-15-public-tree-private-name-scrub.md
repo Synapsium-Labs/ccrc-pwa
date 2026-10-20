@@ -78,7 +78,7 @@ future exception must be argued into this file").
 | # | Decision | Default (the operator may overrule at review) |
 |---|---|---|
 | 1 | Scope | The tree at the branch point, every tracked file, frozen docs included. Not history, release assets, the fork or old PR revisions |
-| 2 | Regrowth guard | Class 9 in `topology-clean.test.ts`, hashed entries for names already public in history; the local list holds every name and feeds the local scan and the pre-push hook |
+| 2 | Regrowth guard | Class 9 in `topology-clean.test.ts`, hashed entries for names already public in history; the local list holds every name and feeds the local scan, and the pre-push hook's next version after this PR merges |
 | 3 | The base64 literal lists in `topology-clean.test.ts` and `license.test.ts` | Every decoded literal is a list entry (already appended locally). The two classes made only of literals ("fleet account label", "operator residue") are removed; "tailnet name" keeps its `.ts.net` shape and synthetic catches; the registration pin becomes 7 (8 - 2 + 1). `license.test.ts`'s old-org check becomes a class 9 lookup that prints `#h8` |
 | 4 | Issue-tracker ticket ids | Each becomes the GitHub `#n` it is mirrored as (the list gives every mapping) |
 | 5 | Real person names | Roles: "the operator", "a colleague" |
@@ -207,7 +207,7 @@ it('never returns text', () => {
   `git -c color.ui=never diff --no-ext-diff --no-textconv <merge-base>...HEAD` (the `+` lines, keyed on each
   `+++ b/<path>` header, skipping `SELF` and binary paths), with the same git-config isolation the existing range
   row uses. An open branch is then charged only for what its tip adds, and clears by editing its tip. Commit
-  messages and branch names are not class 9 corpora; the pre-push hook and the push check above cover them. Add a
+  messages and branch names are not class 9 corpora; the push check above covers them, and the pre-push hook's next version will after this PR merges ("Not in this plan"). Add a
   fixture-repo row: a throwaway repo whose middle commit adds `CANARY` to a file and whose last commit removes it
   reads clean; one whose tip still adds it reads exactly one `#<canary h8>`; a `SELF` path addition reads none.
 
@@ -390,14 +390,26 @@ Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here whe
   published. Until #436 merged, this PR carried the file's 12 hits and class 9's tree row was red on that file alone.
   #436 has merged and this branch has merged `main` since, so nothing is carried. `ccd/ccd` was swept here with that
   programme's consent: comment lines only, then re-stamped.
-- **D-5287** — `every-ignorable-character-folds` (Task 1, Review Focus 4; review 662 F6): the tokenizer drops every
-  code point Unicode marks `Default_Ignorable_Code_Point` or format (`Cf`), not only the six it first listed. A name
-  split by a bidi mark or isolate, a combining grapheme joiner or a Mongolian vowel separator read as two tokens, so
-  class 9 and the scan both missed it. One unit pin per character class (LRM, RLM, LRI, CGJ, MVS, ZWSP, SHY, WJ)
-  reds when the fold is narrowed back (measured).
+- **D-5287** — `every-ignorable-character-folds` (Task 1, Review Focus 4; review 662 F6, review 673 F2 and F3): the
+  tokenizer drops every code point Unicode marks `Default_Ignorable_Code_Point`, not only the six it first listed, and
+  nothing else. A name split by a bidi mark or isolate, a combining grapheme joiner or a Mongolian vowel separator read
+  as two tokens, so class 9 and the scan both missed it. One unit pin per character class (LRM, RLM, LRI, CGJ, MVS,
+  ZWSP, SHY, WJ) reds when the fold is narrowed back (measured). The set is defined once, and every fold is built from
+  it: the in-line fold, the trailing blanks a phrase broken across a line break ends on, and both sides of the marker
+  a wrapped comment repeats on the next line. One pair pin for each of those three reds when it is narrowed back
+  (measured). Format characters (`Cf`) outside the set are not added: those 32 points are mostly visible, and dropping
+  a visible mark joins the tokens either side of it and loses a hit. A pin on U+0600 reds when `Cf` is restored
+  (measured). Measured on Node v24.14.1 (Unicode 17.0, ICU 78.2) and on the floor, Node v22.16.0 (Unicode 16.0, ICU
+  77.1), the latter in a throwaway `node:22.16.0` container with no network: every pinned point is default-ignorable
+  in both, U+0600 is not, and the pins hold in both.
 - **D-5288** — `the-guard-pins-itself` (Task 1 Steps 7-8, Review Focus 3 and 4; review 662 F7 and F8): the shape
   checks passed with an entry deleted. `PRIVATE_NAMES` is now pinned by `PRIVATE_NAMES_DIGEST`, a digest of every
   entry's four fields that `hash --list` prints beside the literal it regenerates, so a deleted, reordered or weakened
-  entry reds a unit pin (measured: one entry deleted). Each exemption's conjunct has a red-on-removal pin of its own:
-  the plugin phrase is exempt only in a history-programme document, and a revision citation needs seven or more hex
-  digits after the `@` (each measured).
+  entry reds a unit pin (measured: one entry deleted). Each exemption's conjunct, and the revision regex's `^` anchor,
+  has a red-on-removal pin of its own: the plugin phrase is exempt only in a history-programme document (a path
+  holding `ccrc-history`, not only `history`), only after its prefix and only before its suffix; a revision citation
+  needs seven or more hex digits after an `@` that directly follows the name (each measured; review 673 F7). The
+  digest pin's failure message names `hash --list` and says to paste the literal and its digest line together, and a
+  CLI pin runs `hash --list` over a fixture list of synthetic tokens: the canary prints first, no `local` row's entry
+  prints, and the printed digest is the digest of exactly the printed entries (measured: a digest of
+  `entries.slice(1)` reds; review 673 F8).

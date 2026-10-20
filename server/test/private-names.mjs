@@ -13,7 +13,7 @@
 //
 // WHAT A TOKEN IS. A line is folded one code point at a time — NFKC (so a
 // fullwidth or ligature form becomes its plain letters), Unicode hyphens to `-`,
-// default-ignorable and format characters dropped — then split at every camelCase
+// default-ignorable characters dropped — then split at every camelCase
 // boundary (`aB`, `9B`, and `ABc` before the `B`) and lower-cased; its tokens are
 // the maximal `[a-z0-9]+` pieces. Each token records the JOINER before it: `-`,
 // `.`, `_`, `·` or `case` (a camelCase boundary) join a run; `space` is
@@ -106,15 +106,19 @@ const NON_ASCII = /[^\x00-\x7f]/;
 const HYPHENS = /^[‐-–−﹣]$/;
 /** Invisible characters that split a name without showing: every code point
  *  Unicode marks Default_Ignorable_Code_Point (soft hyphen, zero-width
- *  characters, word joiner, BOM, bidi marks and isolates, CGJ, variation
- *  selectors, tags) or format (Cf, the Mongolian vowel separator included).
- *  Dropped (D-5287). */
-const INVISIBLE = /^[\p{Default_Ignorable_Code_Point}\p{Cf}]$/u;
+ *  characters, word joiner, BOM, bidi marks and isolates, CGJ, the Mongolian
+ *  vowel separator, variation selectors, tags), and nothing else. A format
+ *  character (Cf) outside that set is NOT added: most of them are visible, and
+ *  dropping a visible mark joins the tokens either side of it, losing a hit.
+ *  The one definition: every regex that drops, trims or skips an invisible
+ *  character is built from it (D-5287). */
+const IGNORABLE = '\\p{Default_Ignorable_Code_Point}';
+const INVISIBLE = new RegExp(`^[${IGNORABLE}]$`, 'u');
 
 /** The folded line, and for a non-ASCII line the original offset of every
  *  folded character (`map[k]`, with `map[length]` the line's length), so a hit
  *  can be located — and masked — in the text as written. */
-const RETYPED = /[\p{Default_Ignorable_Code_Point}\p{Cf}\u2010-\u2013\u2212\ufe63]/u;
+const RETYPED = new RegExp(`[${IGNORABLE}\\u2010-\\u2013\\u2212\\ufe63]`, 'u');
 function foldMapped(line) {
   if (!NON_ASCII.test(line)) return { s: line, map: null };
   // Most non-ASCII lines (an em dash, an arrow, a middle dot) fold to themselves.
@@ -469,8 +473,10 @@ export function hitsIn(line, file, entries) {
   return hits.length === 0 ? [] : [...new Set(hits.filter(exempt(file)).map((x) => x.h8))];
 }
 
-const TRAILING_BLANKS = /[\s\u00ad\u200b-\u200d\u2060\ufeff]+$/u;
-const CONTINUATION = /^\s*(?:\/\/+|\*+|#+|>+|--|;+)?\s*/;
+/** Whitespace and invisibles at the end of a line, and around the marker a
+ *  wrapped comment or quote repeats at the start of the next (D-5287). */
+const TRAILING_BLANKS = new RegExp(`[\\s${IGNORABLE}]+$`, 'u');
+const CONTINUATION = new RegExp(`^[\\s${IGNORABLE}]*(?:\\/\\/+|\\*+|#+|>+|--|;+)?[\\s${IGNORABLE}]*`, 'u');
 
 /** A `words` phrase broken across a line break: the hits in the facing ends of
  *  two adjacent lines that neither line holds alone. Reported against the
