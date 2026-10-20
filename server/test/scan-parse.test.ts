@@ -1,7 +1,7 @@
 // D-5853 (plan docs/superpowers/plans/2026-10-19-consolidation-w0-pins.md, Task C0f; ARCH-00 (#525)). The self-test of
 // `scan/parse.ts`, the one TypeScript parser the server's test scanners use. It parses a fixture FILE holding an
-// `import`, an `import type`, an exported literal union, a class method and an arrow property, and asserts what the
-// wrapper returns for each: syntax only, no type checker.
+// `import`, an `import type`, an exported literal union, a class method, an arrow property and functions nested in a
+// method, a function and a const arrow, and asserts what the wrapper returns for each: syntax only, no type checker.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -30,9 +30,13 @@ const FIXTURE = [
   '}',
   '',
   'export function top(): string {',
-  "  return readFileSync(path.join('a', 'b'), 'utf8');",
+  "  function walk(): string { return 'b'; }",
+  "  return readFileSync(path.join('a', walk()), 'utf8');",
   '}',
-  'export const helper = async (x: number): Promise<number> => x * 2;',
+  'export const helper = async (x: number): Promise<number> => {',
+  '  const twice = (n: number): number => n * 2;',
+  '  return twice(x);',
+  '};',
   '',
 ].join('\n');
 
@@ -69,14 +73,17 @@ describe('scan/parse.ts parses a fixture file (D-5853)', () => {
     ]);
   });
 
-  it('keys each symbol by its qualified name: a class method, an arrow property, a nested function', () => {
+  it('keys each symbol by its qualified name: a method, an arrow property, functions nested in a method, function, arrow',
+    () => {
     expect(parsed.symbols.map(({ name, kind, line, endLine }) => ({ name, kind, line, endLine }))).toEqual([
       { name: 'Holder', kind: 'class', line: 10, endLine: 19 },
       { name: 'Holder.read', kind: 'method', line: 12, endLine: 15 },
       { name: 'Holder.read.inner', kind: 'function', line: 13, endLine: 13 },
       { name: 'Holder.onTick', kind: 'arrow-property', line: 16, endLine: 18 },
-      { name: 'top', kind: 'function', line: 21, endLine: 23 },
-      { name: 'helper', kind: 'variable-function', line: 24, endLine: 24 },
+      { name: 'top', kind: 'function', line: 21, endLine: 24 },
+      { name: 'top.walk', kind: 'function', line: 22, endLine: 22 },
+      { name: 'helper', kind: 'variable-function', line: 25, endLine: 28 },
+      { name: 'helper.twice', kind: 'variable-function', line: 26, endLine: 26 },
     ]);
   });
 

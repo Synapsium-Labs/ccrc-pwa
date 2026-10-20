@@ -4,9 +4,10 @@
  *
  * The server builds with TypeScript 7, whose package exports no `createSourceFile` (only `typescript/unstable/*`). The
  * operator chose (2026-10-20, OA-C1, option (a)) the stable, documented TypeScript 6 compiler API, installed as the
- * dev-only alias `typescript-api` and pinned EXACTLY in `server/package.json`, so a TypeScript bump cannot change what a
- * scanner sees. Tests only: nothing under `server/src` imports it, and this file is its one importer
- * (`single-definition.test.ts`, the ARCH-40 describe). A later swap of the parser touches this file alone.
+ * dev-only alias `typescript-api` and pinned EXACTLY in `server/package.json`: the server's TypeScript bumps
+ * cannot change what a scanner sees, and a new parser version needs a reviewed PR. Tests only: nothing under
+ * `server/src` imports it, and this file is its one importer (`single-definition.test.ts`, the ARCH-40 describe). A
+ * later swap of the parser touches this file alone.
  *
  * Syntax only, no type checker: import-edge and symbol rules do not need one.
  * KNOWN WIDTH: a file that does not parse yields what the parser recovered (no throw); a computed member name, an
