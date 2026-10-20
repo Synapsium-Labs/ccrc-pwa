@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { ToastHost } from '@ccrc/ui';
 import type { ProjectRow, RosterWire } from '../../shared/api';
 import { NewSessionSheet, NEW_SESSION_NAME_TEXT } from '../src/fleet/NewSessionSheet';
-import { NAME_FIELD_TEXT } from '../src/fleet/WorkspaceNameField';
+import { NAME_FIELD_CLASS, NAME_FIELD_TEXT } from '../src/fleet/WorkspaceNameField';
 import { LINEAR_SETTINGS_PATH, LOOKUP_NOTE, NAME_DOOR_TEXT } from '../src/fleet/workspaceNameWords';
 import { api } from '../src/lib/api';
 import { ApiError } from '../src/lib/apiError';
@@ -159,6 +159,28 @@ describe('a name starts a workspace on the account that was picked', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('the toast names the title the SERVER answered, not the one the preview showed (the server resolves again at create)', async () => {
+    // The preview said Linear's title; by the time the create landed the box answered another (the ticket was renamed).
+    vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: true, id: 'demo-eng-1234', slug: 'eng-1234', title: 'ENG-1234 - Retitled upstream' });
+    await openAt();
+    await pickDemo();
+    type('ENG-1234');
+    await screen.findByText('from Linear');
+    fireEvent.click(start('Start ENG-1234 on team·max'));
+    expect(await screen.findByText('Starting ENG-1234 - Retitled upstream on team·max…')).toBeInTheDocument();
+    expect(screen.queryByText('Starting ENG-1234 - Fix the login flow on team·max…')).not.toBeInTheDocument();
+  });
+
+  it('an answer this build cannot read names no title at all: never the typed text, which the server may have resolved to another', async () => {
+    vi.spyOn(api, 'workspaceAdd').mockResolvedValue({ named: false });
+    await openAt();
+    await pickDemo();
+    type('Login cleanup');
+    fireEvent.click(start('Start Login cleanup on team·max'));
+    expect(await screen.findByText('Starting demo on team·max…')).toBeInTheDocument();
+    expect(screen.queryByText('Starting Login cleanup on team·max…')).not.toBeInTheDocument();
+  });
+
   it('a refused name disables the confirm and sends nothing', async () => {
     const create = vi.spyOn(api, 'createSession');
     const add = vi.spyOn(api, 'workspaceAdd');
@@ -225,13 +247,31 @@ describe('while a request is in flight everything it was built from is locked', 
     type('Login cleanup');
     fireEvent.click(start('Start Login cleanup on team·max'));
     await screen.findByRole('button', { name: 'Starting…' });
-    expect(field()).toHaveAttribute('readonly');
     expect(field()).toBeDisabled();
     expect(screen.getByRole('button', { name: /change/ })).toBeDisabled();
     expect(screen.getByPlaceholderText('Search projects')).toBeDisabled();
     for (const l of ['Class', 'Effort', 'Workflows']) expect(screen.getByLabelText(l)).toBeDisabled();
     // The project rows are inside the same disabled fieldset: tapping another changes nothing.
     expect(screen.getByText('demo').closest('fieldset')).toBeDisabled();
+  });
+
+  it('and the whole body is dimmed, in the same way the + sheet dims its field, and only once', async () => {
+    vi.spyOn(api, 'workspaceAdd').mockImplementation(() => new Promise(() => {}));
+    await openAt();
+    await pickDemo();
+    expect(field().closest('[data-locked]')).toBeNull();
+    type('Login cleanup');
+    fireEvent.click(start('Start Login cleanup on team·max'));
+    await screen.findByRole('button', { name: 'Starting…' });
+    const locked = field().closest('[data-locked]');
+    expect(locked).not.toBeNull();
+    for (const cls of NAME_FIELD_CLASS.locked.split(' ')) expect(locked).toHaveClass(cls);
+    // One dimmed ancestor: the field does not dim itself again inside the body's dim (the two would multiply).
+    expect(locked?.parentElement?.closest('[data-locked]') ?? null).toBeNull();
+    expect(locked?.querySelectorAll('[data-locked]').length).toBe(0);
+    // The project list and the selects are inside the same dimmed body.
+    expect(locked).toContainElement(screen.getByLabelText('Class'));
+    expect(locked).toContainElement(screen.getByPlaceholderText('Search projects'));
   });
 
   it('they unlock when the request fails, with the operator\'s text intact', async () => {
@@ -429,6 +469,24 @@ describe('closing and the Settings pointer', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(await screen.findByText(/can't sign in right now/)).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: /team·max/ })).toBeInTheDocument();
+    // Said for a sheet that is gone: it created nothing, and does not send the operator to an account step they left.
+    expect(screen.queryByText(/Pick another account/)).not.toBeInTheDocument();
+    expect(screen.getByText(/can't sign in right now\. Nothing was created\./)).toBeInTheDocument();
+  });
+
+  it('a taken slug that lands after the sheet was closed does not promise the text was kept', async () => {
+    let refuse!: (e: unknown) => void;
+    vi.spyOn(api, 'workspaceAdd').mockImplementation(() => new Promise((_resolve, reject) => { refuse = reject; }));
+    const { rerender } = await openAt();
+    await pickDemo();
+    type('ENG-1234');
+    fireEvent.click(start('Start ENG-1234 on team·max'));
+    rerender(false);
+    rerender(true);
+    await act(async () => { refuse(new ApiError(409, { ok: false, error: 'slug-taken' })); });
+    expect(await screen.findByText('demo-eng-1234 already exists. Open it from the board.')).toBeInTheDocument();
+    expect(screen.queryByText(/Your text is kept/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/change the name/)).not.toBeInTheDocument();
   });
 
   it('the pointer closes the sheet and goes to Settings → Security', async () => {

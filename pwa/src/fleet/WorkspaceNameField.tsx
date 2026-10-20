@@ -42,6 +42,22 @@ export const NAME_FIELD_CLASS = {
    *  a long name's confirm would push past the panel (measured at 360 and 390: the button ran to 632px). `minmax(0, 1fr)` is
    *  the column that never sizes past its container, the `.acct-list` rule's own fix (D-5570). */
   confirmRow: `${QC_ACTIONS} grid-cols-[minmax(0,1fr)]`,
+  /** THE LOCK'S LOOK, one for every door (second blind review, S4-2): a request in flight dims what it was built from.
+   *  The control is DISABLED (the platform's own inert state), and this is the dim that makes it read as one: a bare
+   *  `opacity`, no new colour, as the chat's `.pending-send-it:disabled` dims a send in flight. It rides a wrapper that
+   *  carries `data-locked`: the field's own wrapper at the doors that lock only the field (`+`, Rename), and the new-session
+   *  sheet's body, which locks its project list and selects too. Never both on one subtree: the two would multiply. */
+  locked: 'opacity-60',
+} as const;
+
+/** The preview's reserved height, by the tallest answer each door can draw, for three widths: under 380 (the 360 phone,
+ *  where the lines wrap most), from 380 (the 390 phone) and from `sm` (wide). `withNote` is the door that adds its own
+ *  line (the new-session sheet's "Creates a new workspace…"), two lines on a phone. Measured at 360, 390 and 1280 (the
+ *  tallest answer: ENG-2, "unauthorised"): 190.5 / 154.5 / 129 with the note, 150.5 / 114.5 / about 111 without.
+ *  Literal strings, so Tailwind sees them. */
+const PREVIEW_RESERVE = {
+  plain: 'min-h-40 min-[380px]:min-h-32 sm:min-h-28',
+  withNote: 'min-h-48 min-[380px]:min-h-40 sm:min-h-36',
 } as const;
 
 const BADGE: Record<Exclude<Lookup, 'none'>, { text: string; tone: string }> = {
@@ -68,8 +84,10 @@ export interface WorkspaceNameFieldProps {
   keepSlug?: string;
   /** The input's placeholder; the rename door says "title" where the create says "name". */
   placeholder?: string;
-  /** A request is in flight: the field keeps what it holds and takes no edit (read-only, not disabled, so it keeps the
-   *  focus and a phone's keyboard stays where it was). The preview must not move under a request already sent. */
+  /** A request is in flight: the field keeps what it holds and takes no edit. It is DISABLED and dimmed
+   *  (`NAME_FIELD_CLASS.locked`) exactly as the new-session sheet's own fieldset disables and dims its body, so no door
+   *  locks differently: a read-only field kept the focus ring lit and read as still editable. The new-session sheet
+   *  does not pass it, because its fieldset has already locked this field, and would dim it twice. */
   locked?: boolean;
   /** Enter in the field: the host's own submit, which the host gates exactly as its confirm button is gated. Absent, Enter does nothing. */
   onSubmit?: () => void;
@@ -85,13 +103,13 @@ export function WorkspaceNameField({
   const describedBy = `${id}-preview`;
   const disabled = disabledReason !== null;
   return (
-    <div className={NAME_FIELD_CLASS.stack}>
+    <div className={locked ? `${NAME_FIELD_CLASS.stack} ${NAME_FIELD_CLASS.locked}` : NAME_FIELD_CLASS.stack} data-locked={locked ? 'true' : undefined}>
       <label htmlFor={id} className={NAME_FIELD_CLASS.stack}>
         <span className="route-field-label">{NAME_FIELD_TEXT.label}</span>
         <TextInput
           id={id}
           value={value}
-          disabled={disabled}
+          disabled={disabled || locked}
           placeholder={placeholder}
           autoComplete="off"
           autoCapitalize="off"
@@ -99,7 +117,6 @@ export function WorkspaceNameField({
           spellCheck={false}
           aria-describedby={describedBy}
           aria-invalid={!disabled && preview.kind === 'refused' ? true : undefined}
-          readOnly={locked}
           onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
           onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
             // Not while an IME is composing: its Enter commits the candidate, and a submit then would send half a word.
@@ -109,9 +126,11 @@ export function WorkspaceNameField({
           }}
         />
       </label>
-      {/* THE PREVIEW'S HEIGHT IS RESERVED (`min-h-28`): a title, the id line and one note fit, so the sheet does not jump
-          when the first answer arrives or a lookup resolves. A sheet is anchored at its foot, so growth moves its top. */}
-      <div id={describedBy} aria-live="polite" className="grid min-h-28 content-start gap-1">
+      {/* THE PREVIEW'S HEIGHT IS RESERVED, FOR ITS TALLEST ANSWER (`PREVIEW_RESERVE`): the title, the id line, the door's
+          own note, a lookup's reason and, for the two reasons whose remedy is in Settings, the pointer (a 44px row). So
+          the sheet does not jump when the first answer arrives or a lookup resolves, whatever it says. A sheet is anchored
+          at its foot, so growth moves its top. Measured in a real Chrome (`browser/name-field.browser.test.tsx`). */}
+      <div id={describedBy} aria-live="polite" className={`grid content-start gap-1 ${namedNote === undefined ? PREVIEW_RESERVE.plain : PREVIEW_RESERVE.withNote}`}>
         {disabled ? (
           <p className={NAME_FIELD_CLASS.hint}>{disabledReason}</p>
         ) : preview.kind === 'empty' ? (

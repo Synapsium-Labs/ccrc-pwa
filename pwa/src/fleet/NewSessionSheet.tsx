@@ -317,7 +317,9 @@ export function NewSessionSheet({
       // (`nameReason`), so a name typed before a crossing project was picked is never sent.
       if (preview.kind === 'named') {
         const answer = await api.workspaceAdd(project.name, { name, wrapper, ...(hasRoute ? { route } : {}) });
-        toast(`Starting ${answer.named ? answer.title : preview.title} on ${accountLabel(roster, wrapper)}…`);
+        // THE TITLE IS THE SERVER'S: it resolves a ticket again at create, so the preview's title (or what was typed) may
+        // not be what it stored. An answer this build cannot read names none, rather than a guess.
+        toast(`Starting ${answer.named ? answer.title : project.name} on ${accountLabel(roster, wrapper)}…`);
         onClose();
         return;
       }
@@ -333,10 +335,12 @@ export function NewSessionSheet({
     } catch (err) {
       if (preview.kind === 'named') {
         const refusal = classifyAddError(err);
-        const text = addRefusalText(refusal, { door: 'new-session', project: project.name, slug: preview.slug, roster });
-        if (mine !== generation.current) {
+        const dismissed = mine !== generation.current;
+        const text = addRefusalText(refusal, { door: 'new-session', project: project.name, slug: preview.slug, roster, dismissed });
+        if (dismissed) {
           // The sheet was dismissed while the request was in flight: there is no sheet to hold the sentence, and the next
-          // opening must not inherit it, so it is said once, as an error toast.
+          // opening must not inherit it, so it is said once, as an error toast, in the words that are true without a
+          // sheet (its text is NOT kept, and there is no account step to return to).
           toast(text, 'error');
         } else {
           // The create's refusals stay in the sheet with the text intact (design §4.2); an account refusal sends the
@@ -406,8 +410,15 @@ export function NewSessionSheet({
       ) : (
         // LOCKED WHILE THE REQUEST IS IN FLIGHT: a disabled fieldset disables every control inside it (the change link, the
         // search, the project rows, the three selects), so nothing the request was built from can change under it.
-        // `contents` keeps it out of the layout. The confirm is the footer's, outside it.
-        <fieldset disabled={starting} className="contents">
+        // It is DIMMED with `NAME_FIELD_CLASS.locked`, the one look every door's lock has (it is a box, not `contents`: an
+        // opacity does nothing to a `display: contents` element); `min-w-0` takes off a fieldset's own min-content width.
+        // The name field inside is locked by this fieldset and is not passed `locked`, which would dim it twice.
+        // The confirm is the footer's, outside it.
+        <fieldset
+          disabled={starting}
+          data-locked={starting ? 'true' : undefined}
+          className={starting ? `min-w-0 ${NAME_FIELD_CLASS.locked}` : 'min-w-0'}
+        >
           <button
             type="button"
             className="acct-change"
@@ -467,7 +478,9 @@ export function NewSessionSheet({
           {/* The name field (named workspaces S8, design §2.1), after the project it belongs to. Empty is today's
               start on the main checkout; a name starts a workspace on the account picked at step 1. */}
           {project !== null && (
-            <div className="grid gap-2 mb-2">
+            // `mb-4`: a refusal under the field sat 14px above the routing row's first label (second blind review, S4-1),
+            // which the pinned confirm below then crops mid-row as the body scrolls; a full `--sp-4` parts them.
+            <div className="grid gap-2 mb-4">
               <WorkspaceNameField
                 value={name}
                 onChange={(v) => { setName(v); setNotice(null); }}
@@ -476,7 +489,6 @@ export function NewSessionSheet({
                 emptyHint={NEW_SESSION_NAME_TEXT.emptyHint}
                 disabledReason={nameReason}
                 namedNote={NEW_SESSION_NAME_TEXT.named}
-                locked={starting}
                 onSubmit={() => { if (canStart) void start(); }}
                 onOpenSettings={() => { onClose(); navigate(LINEAR_SETTINGS_PATH); }}
               />

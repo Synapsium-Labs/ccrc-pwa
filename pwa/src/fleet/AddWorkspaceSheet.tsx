@@ -90,12 +90,14 @@ export function AddWorkspaceSheet({ project, onClose, add, adding, placement, ro
     setRefusal(null);
     const outcome = await add(project, preview.kind === 'named' ? { name: value } : {});
     if (outcome.kind === 'busy') return;
+    const dismissed = mine !== generation.current;
     const failure = outcome.kind === 'refused'
-      ? addRefusalText(classifyAddError(outcome.error), { door: 'plus', project, slug: preview.kind === 'named' ? preview.slug : null, roster })
+      ? addRefusalText(classifyAddError(outcome.error), { door: 'plus', project, slug: preview.kind === 'named' ? preview.slug : null, roster, dismissed })
       : null;
-    if (mine !== generation.current) {
+    if (dismissed) {
       // The sheet was dismissed while the request was in flight: its words have no sheet to sit in, and the next opening
-      // must not inherit them, so a refusal is said once, as an error toast. A create that landed needs none (the board shows it).
+      // must not inherit them, so a refusal is said once, as an error toast, in the words that are true without the
+      // sheet (its text is NOT kept). A create that landed needs none (the board shows it).
       if (failure !== null) toast(failure, 'error');
       return;
     }

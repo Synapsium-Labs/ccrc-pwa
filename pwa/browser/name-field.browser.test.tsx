@@ -15,6 +15,7 @@ import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
 import { TEST_ROSTER } from '../test/rosterFixture';
+import { LOOKUP_NOTE, type LookupNote } from '../src/fleet/workspaceNameWords';
 
 const VIEWS: AppView[] = [
   { skin: REFINED, theme: PHOSPHOR, width: 360 },
@@ -235,6 +236,34 @@ describe('the new-session sheet', () => {
     }
   }, 60_000);
 
+  it('a refusal under the field sits a full 16px above the routing row, which the pinned confirm crops', async () => {
+    // Second blind review, S4-1: the error line sat 14px over the "Class" label. Footer and divider are the sheets' own
+    // (no pinned-footer sheet has a divider), so only the spacing is this field's.
+    for (const view of [VIEWS[0]!, VIEWS[1]!]) {
+      const { ctx, page } = await openApp(browser!, view, FIXTURE);
+      try {
+        await answerCreate(ctx, 409, { ok: false, error: 'slug-taken' });
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await page.goto(server!.origin + '/');
+        await page.getByRole('button', { name: /new session/i }).first().click();
+        await settle(page);
+        await page.getByRole('button', { name: /team·alt/ }).click();
+        await page.getByRole('button', { name: /^project-b/ }).click();
+        await page.getByLabel('Name or Linear ticket').fill('ENG-1234');
+        await page.getByRole('button', { name: /^Start ENG-1234/ }).click();
+        await page.getByRole('alert').waitFor({ timeout: 5_000 });
+        const gap = await page.evaluate((panelSelector) => {
+          const alert = document.querySelector(`${panelSelector} [role="alert"]`);
+          const label = [...document.querySelectorAll(`${panelSelector} .route-field-label`)].find((l) => l.textContent === 'Class');
+          return alert === null || label === undefined ? NaN : label.getBoundingClientRect().top - alert.getBoundingClientRect().bottom;
+        }, PANEL);
+        expect(gap, `${named(view)}: the refusal is ${gap}px above the Class label`).toBeGreaterThanOrEqual(16);
+      } finally {
+        await ctx.close();
+      }
+    }
+  }, 60_000);
+
   it('an overflow account closes the door with its sentence', async () => {
     const view = VIEWS[1]!;
     const { ctx, page } = await openApp(browser!, view, FIXTURE);
@@ -252,4 +281,142 @@ describe('the new-session sheet', () => {
       await ctx.close();
     }
   }, 60_000);
+});
+
+// A LOOKUP ANSWER MUST NOT MOVE THE SHEET (second blind review, S3-1). The preview's height is reserved, and the
+// answers that add a reason line, and for two of them the pointer to Settings, are the tallest states it has. Each is
+// staged by the ref typed (`ctx.route` by the `ref` query), on both doors and at every width: the panel's top, the
+// field's top and the preview's own height are the same empty, pending and answered, and everything the preview says
+// sits inside the block that was reserved for it.
+const ANSWERS: ReadonlyArray<{ ref: string; reason: LookupNote }> = [
+  { ref: 'ENG-9999', reason: 'not-found' },
+  { ref: 'ENG-1', reason: 'not-configured' },
+  { ref: 'ENG-2', reason: 'unauthorised' },
+];
+
+const answerResolve = async (ctx: BrowserContext): Promise<void> => {
+  await ctx.route('**/api/linear/resolve*', (route) => {
+    const ref = new URL(route.request().url()).searchParams.get('ref') ?? '';
+    const hit = ANSWERS.find((a) => a.ref === ref);
+    return route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ kind: 'named', slug: ref.toLowerCase(), title: ref, source: 'offline', reason: hit?.reason ?? 'not-found' }),
+    });
+  });
+};
+
+/** Where the sheet's top, the field's top and the preview's height are, and where the preview's last line ends. */
+const stance = (page: Page) => page.evaluate((panelSelector) => {
+  const panel = document.querySelector(panelSelector);
+  // The NAME field, not the project search above it on the new-session sheet: its description is its preview's.
+  const input = panel?.querySelector('input[aria-describedby$="-preview"]') ?? null;
+  const preview = input === null ? null : document.getElementById(input.getAttribute('aria-describedby') ?? '');
+  const last = preview?.lastElementChild ?? null;
+  return {
+    panelTop: panel?.getBoundingClientRect().top ?? NaN,
+    inputTop: input?.getBoundingClientRect().top ?? NaN,
+    previewHeight: preview?.getBoundingClientRect().height ?? NaN,
+    previewBottom: preview?.getBoundingClientRect().bottom ?? NaN,
+    contentBottom: last?.getBoundingClientRect().bottom ?? NaN,
+  };
+}, PANEL);
+
+const stays = (a: Awaited<ReturnType<typeof stance>>, b: Awaited<ReturnType<typeof stance>>, where: string): void => {
+  expect.soft(Math.abs(a.panelTop - b.panelTop), `${where}: the sheet's top moved`).toBeLessThanOrEqual(1);
+  expect.soft(Math.abs(a.inputTop - b.inputTop), `${where}: the field moved`).toBeLessThanOrEqual(1);
+  expect.soft(Math.abs(a.previewHeight - b.previewHeight), `${where}: the preview's height changed (${a.previewHeight} -> ${b.previewHeight})`).toBeLessThanOrEqual(1);
+  expect.soft(b.contentBottom, `${where}: the preview's last line runs past its reserved block`).toBeLessThanOrEqual(b.previewBottom + 0.5);
+};
+
+// A REQUEST IN FLIGHT LOCKS EVERY DOOR THE SAME WAY, AND VISIBLY (second blind review, S4-2): the field is disabled (no
+// focus ring to stay lit) and what it was built from is dimmed. The create is held open by a gate the test releases.
+describe('a request in flight', () => {
+  for (const door of ['the + sheet', 'the new-session sheet'] as const) {
+    it(`${door} dims the field, which is disabled and holds no focus`, async () => {
+      const view = VIEWS[1]!;
+      const { ctx, page } = await openApp(browser!, view, FIXTURE);
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      try {
+        await ctx.route('**/api/projects/*/workspaces', async (route) => {
+          await gate;
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        });
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await page.goto(server!.origin + '/');
+        if (door === 'the + sheet') {
+          await page.getByRole('button', { name: /New workspace on project-a/ }).click();
+          await settle(page);
+          await page.getByLabel('Name or Linear ticket').fill('Login cleanup');
+          await page.getByRole('button', { name: 'Add workspace' }).click();
+        } else {
+          await page.getByRole('button', { name: /new session/i }).first().click();
+          await settle(page);
+          await page.getByRole('button', { name: /team·alt/ }).click();
+          await page.getByRole('button', { name: /^project-b/ }).click();
+          await page.getByLabel('Name or Linear ticket').fill('Login cleanup');
+          await page.getByRole('button', { name: /^Start Login cleanup/ }).click();
+        }
+        await page.locator(`${PANEL} input:disabled`).first().waitFor({ timeout: 5_000 });
+        const look = await page.evaluate((panelSelector) => {
+          const input = document.querySelector(`${panelSelector} input[aria-describedby$="-preview"]`);
+          const locked = input?.closest('[data-locked]') ?? null;
+          return {
+            // `:disabled`, not the `disabled` property: an input in a disabled fieldset is inert and the property still reads false.
+            disabled: input?.matches(':disabled') === true,
+            readOnly: input instanceof HTMLInputElement && input.readOnly,
+            opacity: locked === null ? NaN : Number(getComputedStyle(locked).opacity),
+            focused: document.activeElement === input,
+          };
+        }, PANEL);
+        expect(look, `${door}: the field is not disabled`).toMatchObject({ disabled: true });
+        expect(look.readOnly, `${door}: the field is read-only instead of disabled`).toBe(false);
+        expect(look.opacity, `${door}: the locked field is not dimmed`).toBeLessThanOrEqual(0.7);
+        expect(look.focused, `${door}: a locked field holds the focus`).toBe(false);
+        await shot(page, `inflight-${door === 'the + sheet' ? 'plus' : 'session'}`, view);
+      } finally {
+        release();
+        await ctx.close();
+      }
+    }, 60_000);
+  }
+});
+
+describe('a lookup answer does not move the sheet', () => {
+  for (const view of VIEWS) {
+    for (const door of ['the + sheet', 'the new-session sheet'] as const) {
+      it(`${door}, ${named(view)}`, async () => {
+        const { ctx, page } = await openApp(browser!, view, FIXTURE);
+        try {
+          await answerResolve(ctx);
+          await page.emulateMedia({ reducedMotion: 'reduce' });
+          await page.goto(server!.origin + '/');
+          if (door === 'the + sheet') {
+            await page.getByRole('button', { name: /New workspace on project-a/ }).click();
+            await settle(page);
+          } else {
+            await page.getByRole('button', { name: /new session/i }).first().click();
+            await settle(page);
+            await page.getByRole('button', { name: /team·alt/ }).click();
+            await page.getByRole('button', { name: /^project-b/ }).click();
+          }
+          const field = page.getByLabel('Name or Linear ticket');
+          const empty = await stance(page);
+          for (const { ref, reason } of ANSWERS) {
+            const where = `${door}, ${named(view)}, ${ref} (${reason})`;
+            await field.fill(ref);
+            await page.getByText('looking up…').waitFor({ timeout: 5_000 });
+            stays(empty, await stance(page), `${where}, pending`);
+            await page.getByText(LOOKUP_NOTE[reason].hint).waitFor({ timeout: 5_000 });
+            stays(empty, await stance(page), `${where}, answered`);
+            const pointer = LOOKUP_NOTE[reason].pointer;
+            if (pointer !== null) await page.getByRole('button', { name: pointer }).waitFor({ timeout: 5_000 });
+            await shot(page, `lookup-${reason}-${door === 'the + sheet' ? 'plus' : 'session'}`, view);
+          }
+        } finally {
+          await ctx.close();
+        }
+      }, 60_000);
+    }
+  }
 });

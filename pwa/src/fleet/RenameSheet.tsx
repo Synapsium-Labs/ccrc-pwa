@@ -73,13 +73,18 @@ export function RenameSheet({ session, open, onClose, onRenamed }: RenameSheetPr
     try {
       const answer = await api.workspaceTitle(session.id, change);
       if (mine !== generation.current) return;
-      toast('clear' in change ? 'Title cleared' : `Renamed to ${answer === 'unreadable' || answer.title === null ? typed : answer.title}`);
+      // THE TITLE IS THE SERVER'S (second blind review, S4-3): it resolves a ticket itself, so it may have stored a title
+      // other than the text typed (Enter can save while the preview still says "looking up…"). An answer this build
+      // cannot read names none, rather than the typed text.
+      const saved = answer === 'unreadable' || answer.title === null ? null : answer.title;
+      toast('clear' in change ? 'Title cleared' : saved === null ? 'Title saved' : `Renamed to ${saved}`);
       onRenamed();
     } catch (err) {
-      const text = renameRefusalText(classifyRenameError(err));
-      // Dismissed while the request was in flight: the sentence has no sheet to sit in, so it is an error toast.
-      if (mine !== generation.current) { toast(text, 'error'); return; }
-      setRefusal(text);
+      const refusal = classifyRenameError(err);
+      // Dismissed while the request was in flight: the sentence has no sheet to sit in, so it is an error toast, in the
+      // words that are true without the field.
+      if (mine !== generation.current) { toast(renameRefusalText(refusal, { dismissed: true }), 'error'); return; }
+      setRefusal(renameRefusalText(refusal));
     } finally {
       if (mine === generation.current) setBusy(null);
     }

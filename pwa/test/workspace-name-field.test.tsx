@@ -194,7 +194,9 @@ describe('the lookup', () => {
     await settle(NAME_LOOKUP_DEBOUNCE_MS);
     const link = screen.getByRole('button', { name: LOOKUP_NOTE['not-configured'].pointer });
     expect(link).toHaveClass('border-0', 'underline');
-    expect(link.closest('[aria-live="polite"]')).toHaveClass('min-h-28');
+    // Reserved for the tallest answer (the reason line and this 44px pointer row); measured in a real Chrome by
+    // `browser/name-field.browser.test.tsx`. A door with its own note reserves a line more.
+    expect(link.closest('[aria-live="polite"]')).toHaveClass('min-h-40', 'min-[380px]:min-h-32', 'sm:min-h-28');
   });
 
   it.each([

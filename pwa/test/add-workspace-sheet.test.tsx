@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ToastHost } from '@ccrc/ui';
 import { AddWorkspaceSheet, type AddWorkspaceSheetProps } from '../src/fleet/AddWorkspaceSheet';
-import { NAME_FIELD_TEXT } from '../src/fleet/WorkspaceNameField';
+import { NAME_FIELD_CLASS, NAME_FIELD_TEXT } from '../src/fleet/WorkspaceNameField';
 import type { AddOutcome } from '../src/fleet/useProjectRows';
 import { LINEAR_SETTINGS_PATH, LOOKUP_NOTE } from '../src/fleet/workspaceNameWords';
 import { matchRoute } from '../src/lib/routes';
@@ -124,6 +124,16 @@ describe('a name', () => {
     fireEvent.click(confirm());
     expect(await screen.findByText('Added ENG-1234 - Fix the login flow')).toBeInTheDocument();
     expect(p.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('the toast names the title the box answered, not the preview\'s or the typed one (the server resolves again at create)', async () => {
+    const p = props({ add: vi.fn().mockResolvedValue({ kind: 'added', answer: { named: true, id: 'project-a-eng-1234', slug: 'eng-1234', title: 'ENG-1234 - Retitled upstream' } }) });
+    mount(p);
+    type('ENG-1234');
+    await screen.findByText('from Linear', undefined, { timeout: 2000 });
+    fireEvent.click(confirm());
+    expect(await screen.findByText('Added ENG-1234 - Retitled upstream')).toBeInTheDocument();
+    expect(screen.queryByText('Added ENG-1234 - Fix the login flow')).not.toBeInTheDocument();
   });
 
   it('a refused name disables the confirm, says why, and calls nothing', () => {
@@ -255,7 +265,15 @@ describe('a long name cannot widen the confirm', () => {
 describe('in flight', () => {
   it('locks the field: what is typed cannot change under a request already sent', () => {
     mount(props({ adding: true }));
-    expect(field()).toHaveAttribute('readonly');
+    expect(field()).toBeDisabled();
+  });
+
+  it('dims the field the way the new-session sheet dims its body, so the two doors lock alike', () => {
+    mount(props({ adding: true }));
+    for (const cls of NAME_FIELD_CLASS.locked.split(' ')) expect(field().closest('[data-locked]')).toHaveClass(cls);
+    cleanup();
+    mount(props({ adding: false }));
+    expect(field().closest('[data-locked]')).toBeNull();
   });
 
   it('stands the confirm down and says what it is doing', () => {
@@ -292,7 +310,11 @@ describe('closing', () => {
     await act(async () => { answer(refuse(409, { ok: false, error: 'slug-taken' })); });
     // Not inside the next opening, but not silent either: the refusal is said once, as an error toast.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(await screen.findByText(/project-a-eng-1234 already exists/)).toBeInTheDocument();
+    // And true without the sheet: the text was NOT kept (a closed sheet forgets), so the toast does not say it was, nor
+    // tell the operator to change a name they can no longer see.
+    expect(await screen.findByText('project-a-eng-1234 already exists. Open it from the board.')).toBeInTheDocument();
+    expect(screen.queryByText(/Your text is kept/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/change the name/)).not.toBeInTheDocument();
     expect(p.onClose).not.toHaveBeenCalled();
   });
 

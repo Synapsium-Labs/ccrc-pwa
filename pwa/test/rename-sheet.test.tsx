@@ -7,7 +7,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { ToastHost } from '@ccrc/ui';
 import type { FleetSession } from '../../shared/api';
 import { RenameSheet, type RenameSheetProps } from '../src/fleet/RenameSheet';
-import { NAME_FIELD_TEXT } from '../src/fleet/WorkspaceNameField';
+import { NAME_FIELD_CLASS, NAME_FIELD_TEXT } from '../src/fleet/WorkspaceNameField';
 import { RENAME_TEXT, classifyRenameError, renameRefusalText } from '../src/fleet/workspaceRenameWords';
 import { BLANK_TITLE_TEXT, LINEAR_SETTINGS_PATH, LOOKUP_NOTE } from '../src/fleet/workspaceNameWords';
 import { WS_TITLE_MAX_BYTES } from '../../shared/slug';
@@ -86,6 +86,31 @@ describe('saving a title', () => {
     await waitFor(() => expect(p.onRenamed).toHaveBeenCalledTimes(1));
     expect(await screen.findByText('Renamed to Upload retry spike')).toBeInTheDocument();
     expect(p.onClose).not.toHaveBeenCalled();
+  });
+
+  it('Enter while the lookup is still pending toasts the title the SERVER answered, never the text that was typed', async () => {
+    // The server resolves a ticket itself (`POST /api/sessions/:id/title`), so saving before the preview answers is
+    // safe, and the toast says what was saved: the resolved title, not "ENG-1301".
+    rename.mockResolvedValue({ title: 'ENG-1301 - Fix the upload retry' });
+    const p = props();
+    mount(p);
+    type('ENG-1301');
+    expect(screen.getByText(NAME_FIELD_TEXT.lookingUp)).toBeInTheDocument();
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await waitFor(() => expect(rename).toHaveBeenCalledWith('project-a-quiet-harbor', { title: 'ENG-1301' }));
+    expect(await screen.findByText('Renamed to ENG-1301 - Fix the upload retry')).toBeInTheDocument();
+    expect(screen.queryByText('Renamed to ENG-1301')).not.toBeInTheDocument();
+  });
+
+  it('an answer this build cannot read says the title was saved and names none: the typed text may not be what the box stored', async () => {
+    rename.mockResolvedValue('unreadable');
+    const p = props();
+    mount(p);
+    type('ENG-1301');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await waitFor(() => expect(p.onRenamed).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Title saved')).toBeInTheDocument();
+    expect(screen.queryByText('Renamed to ENG-1301')).not.toBeInTheDocument();
   });
 
   it('a ticket id is looked up, shown as the title the board will carry, and sent as typed for the server to resolve', async () => {
@@ -304,6 +329,20 @@ describe('a refusal that arrives after the sheet was dismissed', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(p.onRenamed).not.toHaveBeenCalled();
   });
+
+  it('does not tell the operator to retype a title in a field that is gone', async () => {
+    let fail: (e: unknown) => void = () => {};
+    rename.mockReturnValue(new Promise((_res, rej) => { fail = rej; }));
+    const p = props();
+    const r = mount(p);
+    type('Upload retry spike');
+    fireEvent.click(button(RENAME_TEXT.save));
+    await waitFor(() => expect(rename).toHaveBeenCalled());
+    rerenderWith(r, { ...p, open: false });
+    fail(refuse(400, { ok: false, error: 'name-too-long' }));
+    expect(await screen.findByText("That title was too long, so it wasn't changed.")).toBeInTheDocument();
+    expect(screen.queryByText(/Shorten it/)).not.toBeInTheDocument();
+  });
 });
 
 describe('Enter in the field', () => {
@@ -333,7 +372,11 @@ describe('Enter in the field', () => {
     mount(props());
     type('Upload retry spike');
     fireEvent.keyDown(field(), { key: 'Enter' });
-    await waitFor(() => expect(field()).toHaveAttribute('readonly'));
+    await waitFor(() => expect(field()).toBeDisabled());
+    // Dimmed like the other two doors' locks (`data-locked`), so a request in flight reads the same everywhere.
+    const locked = field().closest('[data-locked]');
+    expect(locked).not.toBeNull();
+    for (const cls of NAME_FIELD_CLASS.locked.split(' ')) expect(locked).toHaveClass(cls);
     fireEvent.keyDown(field(), { key: 'Enter' });
     expect(rename).toHaveBeenCalledTimes(1);
   });
