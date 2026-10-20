@@ -1,6 +1,6 @@
 # ccrc consolidation wave: one owner per job (design)
 
-**Status:** rev 2.1 (2026-10-19): rev 2 with two reviews of the W0 and W1a plans applied (§8); the rulings are unchanged. Rev 2 was **approved by the operator 2026-10-19**, in their words: "answers locked". They answered §6's twelve decisions through the visual companion, each at its recommended option (O1 clicked explicitly), and asked for the work to proceed. Rev 2 folds the rulings in (§6, and the body where they change it) and corrects what writing the first two plans measured (log in §8). The spec defines no D-numbers; the W0 and W1a plans define theirs.
+**Status:** rev 2.2 (2026-10-20): rev 2.1 with the operator's parser choice for ARCH-00 recorded (§8). Rev 2.1 (2026-10-19): rev 2 with two reviews of the W0 and W1a plans applied (§8); the rulings are unchanged. Rev 2 was **approved by the operator 2026-10-19**, in their words: "answers locked". They answered §6's twelve decisions through the visual companion, each at its recommended option (O1 clicked explicitly), and asked for the work to proceed. Rev 2 folds the rulings in (§6, and the body where they change it) and corrects what writing the first two plans measured (log in §8). The spec defines no D-numbers; the W0 and W1a plans define theirs.
 
 **The request (operator, 2026-10-19):** "I also feel like we have a lot of separate mechanisms that try to do similar stuff, and we should do a consolidation and refactoring wave that also gets us to DDD/CLEAN/SOLID state plus consolidation of similar functionality."
 
@@ -1051,3 +1051,11 @@ Two reviewers read the plans against `origin/main`. Each finding was re-measured
 | R4-5 | `readSwitches` would add a second vocabulary beside the wire's `MarkerState`, and readers map an unlistable registry differently | `shared/api.ts` `MarkerState`; `coord/routes.ts` stall-watch view vs the mail lanes | Applied: marker rows answer `MarkerState`; each reader keeps its unlistable mapping | K12 |
 | R4-6 | rev 1 remnants: "three modes", "10 of the 12 files", #745 listed open, `hasMailWithSubject` still replaced | the lines themselves | Applied | §2.2, K6, K12, Related, §4.1, §5.1 |
 | R4-7 | #397 merged | `gh pr view 397`: merged 2026-10-19 as `6ae03d2de` | Applied: Related and §5.3 record it; W1a's #397 gate is open | Related, §5.1 rule 6, §5.3 |
+
+### rev 2.1 → rev 2.2 (2026-10-20): the parser for ARCH-00 (OA-C1)
+
+The operator chose option (a) for ARCH-00 (#525) on 2026-10-20, replying "A" to the three options the ticket offers, and confirmed that the parser is used by tests only, never at runtime. This answers the one operator act W0 waited for (§5.2): ARCH-00 is Task C0f of the W0 plan (D-5853), and ARCH-06's W1a slice (Task C0g) follows it.
+
+| # | Finding (short) | Checked against | Outcome | Where |
+|---|---|---|---|---|
+| R5-1 | the test scanners need a TS parser, and the server's TypeScript has no stable one | `server/package.json`: `typescript` `^7.0.2`; `typeof require('typescript').createSourceFile` in `server/` is `undefined` on `origin/main` `248cb3c85`; only `typescript/unstable/*` is exported | Applied: option (a). TypeScript 6's compiler API is the stable, documented one, has no native binaries, and is unaffected by the server's TypeScript 7 upgrade. It is installed as the dev-only alias `typescript-api` (`npm:typescript@6.0.3`, the version the PWA already resolves), pinned exactly so a dependency bump cannot change what a scanner sees. `server/test/scan/parse.ts` wraps it (syntax only) and is its one importer, so a later swap touches one file. Not taken: (b) a standalone parser package (a native binary and a second AST vocabulary); (c) `typescript/unstable/ast` (can break on any 7.x minor). Cost: about 23 MB of dev-only install; no production byte | §5.2; the W0 plan's Task C0f; `single-definition.test.ts`'s ARCH-40 describe |
