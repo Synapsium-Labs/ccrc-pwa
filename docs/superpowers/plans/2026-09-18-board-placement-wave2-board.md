@@ -1006,7 +1006,7 @@ In `pwa/test/session-line.test.tsx`, add:
 describe('the repo label (board-placement wave 2, Task 6)', () => {
   it('sits INSIDE the row button\'s accessible name, so two same-slug rows are two names', () => {
     render(<SessionLine session={s()} repo="example-org/project-d" onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByRole('button', { name: /quiet-mesa.*Synapsium-Labs\/project-d/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /quiet-mesa.*example-org\/project-d/ })).toBeInTheDocument();
     expect(document.querySelector('.sess-repo')?.textContent).toBe('example-org/project-d');
   });
   it('renders nothing when the card already implies the repo', () => {
