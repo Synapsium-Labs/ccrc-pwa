@@ -31,7 +31,9 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /** The exact count in the tree. May only go DOWN (D-5893, revised). */
-const BASELINE = 1585;
+// 1585 -> 1582 for `ccd ws-gc --fast` (D-5886, #123): main already stood at 1584, and this branch
+// drops two stale compaction-card citations its re-measure removed from session-hook.test.ts.
+const BASELINE = 1582;
 
 const CODE = /\.(?:ts|tsx|mts|cts|mjs|cjs|js|sh|bats|py)$/;
 // `ccd/<name>` and `ccd/<dir>/<name>` with no extension: the bash executables.
