@@ -422,7 +422,7 @@ describe('every other egress of session-derived text (D-5513)', () => {
     clean((await app.inject({ method: 'GET', url: `/api/runs/${r.id}/items`, headers: H })).body);
 
     // mail
-    const mail = coord.insertMail({ fromId: ID, fromUuid: UUID_A, toId: 'claude-a-other', runId: null, kind: 'note',
+    const mail = coord.insertMail({ fromId: ID, fromUuid: UUID_A, toId: 'claude-a-other', runId: null, kind: 'status',
       subject: `key ${OAT}`, body: `or ${ORKEY}`, artifacts: [] });
     coord.queueDelivery(mail.id, 'claude-a-other', JSON.stringify({ subject: `key ${OAT}`, body: `or ${ORKEY}` }));
     clean((await app.inject({ method: 'GET', url: '/api/mail?to=claude-a-other&all=1', headers: H })).body);

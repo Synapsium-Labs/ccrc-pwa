@@ -1715,6 +1715,27 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX account_events_by_at ON account_events(at);
   `,
   // ── 27: user_version 26 -> 27 ─────────────────────────────────────────────
+  // D-5838 (durability #752, #754): the PARKED delivery state. A never-delivered row whose recipient
+  // is alive but whose input box will not take the nudge (`enter-ignored` at once, any other send refusal at
+  // `MAIL_MAX_ATTEMPTS`) is no longer rejected: it stays `queued` — so every outstanding-state reader keeps
+  // counting it — and these columns say it is parked. `parkedAt` is when the park began (NULL: not parked);
+  // `parkReason` the `sendPrompt` refusal that parked it; `parkBox` the input box's text when it last parked,
+  // which the sweep's probe compares against to wake the row on a change; `parkEscalatedAt` when the one
+  // operator push went (NULL: not yet). `markDelivered` clears all four.
+  //
+  // FOUR NULLABLE COLUMNS AND NOTHING ELSE: an older build opening a file at `user_version 27` takes rule 3 (it
+  // warns, reads as-is and migrates nothing), never names them, and retries a parked row as the ordinary
+  // `queued` row it still is. Every earlier entry is frozen. RE-MEASURE the slot immediately before the PR and
+  // before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail_deliveries ADD COLUMN parkedAt INTEGER;
+  ALTER TABLE mail_deliveries ADD COLUMN parkReason TEXT;
+  ALTER TABLE mail_deliveries ADD COLUMN parkBox TEXT;
+  ALTER TABLE mail_deliveries ADD COLUMN parkEscalatedAt INTEGER;
+  `,
+  // ── 28: user_version 27 -> 28 ─────────────────────────────────────────────
   // D-5513 (accounts-connect spec 2026-10-18 §3.3, plan Task A10): `secret_fingerprints`, the exact-bytes half of the
   // egress mask. One row per lane secret: `fp` is `HMAC-SHA256(box token, "ccrc-secret-fp-v1\0" ‖ secret)` in
   // lowercase hex, computed ON THE BOX by the account verbs (which hold both), and `gen` names the box-token
@@ -1722,7 +1743,7 @@ export const MIGRATIONS: readonly string[] = [
   // re-keyed ones land. `at` is epoch ms. The server never holds a lane secret, and this table is never served: its
   // ONE reader and writer is `SecretMasker` (`server/src/accounts/mask.ts`); A12's `reloadRoster` fills it through it.
   //
-  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 27` takes rule 3 (it warns, reads
+  // A NEW TABLE AND NOTHING ELSE: an older build opening a file at `user_version 28` takes rule 3 (it warns, reads
   // as-is and migrates nothing) and never names it. Every earlier entry is frozen. RE-MEASURE the slot immediately
   // before the PR and before merge:
   //     git fetch origin main

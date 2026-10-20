@@ -33,12 +33,13 @@ describe('the asks table', () => {
     // (`runs.unattributed`, D-5298), MIGRATIONS[23] (the `approvals` table,
     // plan Task 16), MIGRATIONS[24] (`digests` and `asks.corrected`,
     // D-5300, plan Task 17), MIGRATIONS[25] (`account_events`, D-5516,
-    // accounts plan Task A7) and MIGRATIONS[26] (`secret_fingerprints`,
-    // D-5513, accounts plan Task A10). Only MIGRATIONS[20] and MIGRATIONS[24]
+    // accounts plan Task A7), MIGRATIONS[26] (the mail_deliveries park
+    // columns, D-5838) and MIGRATIONS[27] (`secret_fingerprints`, D-5513,
+    // accounts plan Task A10). Only MIGRATIONS[20] and MIGRATIONS[24]
     // touch the asks table. This pin only needs the CURRENT total — it
     // asserts "no migration after the one this test knows about has changed
     // the asks table's columns", not anything about any of the twelve.
-    expect(COORD_SCHEMA_VERSION).toBe(27);
+    expect(COORD_SCHEMA_VERSION).toBe(28);
     const cols = (db.prepare("SELECT name FROM pragma_table_info('asks')").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(cols).toEqual([
