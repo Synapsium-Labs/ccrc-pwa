@@ -4575,21 +4575,28 @@ the old licence by a licensed request, nor by any request on a ccd whose audit b
 older ccd an unlicensed request keeps the gap from the executor's re-read to the act, the spec's stated
 residual.
 
-**A finished run's worker is put to sleep once idle (D-5370, D-5427).** A wave that is not the programme's last
+**A finished run's worker is put to sleep once idle (D-5370, D-5427, D-6091).** A wave that is not the programme's last
 leaves its child workspace in place — the reclaim sweep above waits for the programme — and, until this lane, its
 Claude Code process too, holding its memory for as long as the programme ran. The server's stop-done lane
 (`stopDoneSweep.ts`, its verdict the pure `stopDone.ts`; once a minute on the watcher's tick, never inside the run's
 transition) puts such a worker to sleep with `ccd hibernate <id>`, declared as the lane `sweep:stop-done`: only a
-dispatched child (a `.child` marker — never an operator's own session), whose newest run is `done` and closed at least
-10 minutes ago, which no other open run names as worker or claimant, with no live claim, no outstanding mail, no open
-run it reviews, nobody viewing it, no hold, pane menu, background work or subagents, a bucket of `idle`, a measured live
+dispatched child (a `.child` marker — never an operator's own session), whose newest placed run (a `planned` run, a
+wave not yet dispatched, does not count) is `done` and closed at least 10 minutes ago, which no other placed open run
+names as worker or claimant, with no live claim, no outstanding mail, nobody viewing it, no hold but its programme's
+(below), no pane menu, background work or subagents, a bucket of `idle`, a measured live
 word and fail-closed turn verdict of `idle`, and a turn marker that reads `done` with no background task (`bg` exactly
 0, so a shell or Monitor left running is never killed with the pane) and nothing scheduled (`crons` exactly 0) at its
-last Stop, more than N ago (hibernation's N, below), and no `$REG/<id>.no-hibernate`. Immediately before the act, on
+last Stop at least 10 minutes ago, and no `$REG/<id>.no-hibernate`. Its clock is the run's close, not hibernation's N
+(D-6091, the operator's ruling "stop workers at run close"): a finished worker sleeps about ten minutes after its run
+reads `done`. A programme hold (`program:<p> wave:<n>`, naming no run or a `done` or `failed` one) guards the
+workspace's retirement, not its sleep: the lane passes it as `ccd hibernate --hold-ok <the exact text>` on a box whose
+`ccd caps` lists `hibernate-hold-ok`, and ccd re-reads the file byte for byte at the act. An operator's own hold, a hold
+naming an open or unreadable run, and a box without the token keep the worker awake (`held`). Immediately before the act, on
 the coordination serialiser, the registry record and its row, the store, presence and the live state are read again,
 and `ccd` re-measures the box-local half (a terminal attached included). At most three acts a pass; a refused one is not
-asked again for an hour. The coordinator's feed gets one `Worker asleep` row per act. Since Task 17b it is hibernation
-for this population, not a separate stop (D-5427): it holds everything hibernation holds, and a worker it puts down
+asked again for an hour. The coordinator's feed gets one `Worker asleep` row per act, and one `Workers kept awake by
+unread mail: <n>` row whenever the count of finished workers nothing but unread mail holds changes. Since Task 17b it is hibernation
+for this population, not a separate stop (D-5427): it keeps every use hold hibernation holds, and a worker it puts down
 wakes as any sleeping session does — mail, a re-dispatch's `ccd ensure`, a Restart. It stays live under its own
 switches while hibernation's own sweep waits for the operator to arm it: `$REG/stop-done-disabled` (this lane only; no
 writer in the tree — touch and remove it by hand on the fleet box), `$REG/reclaim-paused` (every cleanup lane, above)
