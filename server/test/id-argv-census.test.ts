@@ -530,9 +530,9 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
       'POST /api/sessions/:id/archive',
       'POST /api/sessions/:id/archive',
     ]);
-    // The identity arm, which both routes share: `stopPairRefused` (the `stopPair` row's gate) answers 503 with no argv
+    // The identity arm, which both routes share: `stopPairRefused` (the `stopPair` row's gate) answers 502 (D-5971) with no argv
     // composed. It vets the row's `.project` and refuses the `.wrapper` fallback, so the wrapper is the vetted id's prefix.
-    const IDENTITY_ARM = /if \(identity === null \|\| stopPairRefused\(id, read\.record, identity\)\) \{\s*return reply\.code\(503\)\.send\(\{ ok: false, error: 'registry-unmeasurable' \}\);/;
+    const IDENTITY_ARM = /if \(identity === null \|\| stopPairRefused\(id, read\.record, identity\)\) \{\s*return refuseRoute\(reply, 'registry-unmeasurable'\);/;
     const GATES_OF: Readonly<Record<string, readonly (readonly [string, RegExp])[]>> = {
       'POST /api/sessions/:id/stop': [['its id gate', /\breadSessionRecord\(deps\.io, deps\.cfg, id\)/], ['stopPairRefused', IDENTITY_ARM]],
       'POST /api/sessions/:id/archive': [['its id gate', KNOWN_ID], ['stopPairRefused', IDENTITY_ARM]],

@@ -9,7 +9,8 @@
 // numbers, words and node labels only.
 import { valueDigestHex } from './files.js';
 import { ClaimDoor } from './door.js';
-import { NODE_ID_RE } from '../coord/store.js';
+// D-5896: `NODE_ID_RE` straight from its L0 home; through `coord/store.ts` it loaded the store and `node:sqlite`.
+import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import {
   DRIVER_TICK_MS, FAILURES_FOR_BANNER, ROTATE_NOW_MIN_INTERVAL_MS, STALL_ALERT_MS, TOKEN_FILE_REREAD_MS, applySyncResult,
   backoffMs, extendedGraceState, handedOutState, nextAction, nextScheduledAt, owe, mintedState, phaseOf, promotedState, rotationGate,

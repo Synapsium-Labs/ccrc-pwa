@@ -157,7 +157,7 @@ describe('POST /api/sessions/:id/swap — the pool pre-check', () => {
     expect(res.json()).toEqual({ ok: false, error: 'pool-unreadable', state: 'unreadable' });
   });
 
-  it('404s an id the registry does not list, and 503s a registry it could not list', async () => {
+  it('404s an id the registry does not list, and 502s a registry it could not list', async () => {
     app = await open();
     const missing = await app.inject({ method: 'POST', url: '/api/sessions/claude-nothing/swap', payload: { wrapper: 'claude' } });
     expect(missing.statusCode).toBe(404);
@@ -165,7 +165,7 @@ describe('POST /api/sessions/:id/swap — the pool pre-check', () => {
     await app.close();
     app = await open({ io: { ...localIO, readdir: async () => null } });
     const unlistable = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/swap`, payload: { wrapper: 'claude' } });
-    expect(unlistable.statusCode).toBe(503);
+    expect(unlistable.statusCode).toBe(502);
     expect(unlistable.json()).toEqual({ ok: false, error: 'registry-unmeasurable' });
   });
 });
@@ -454,11 +454,11 @@ describe('POST /api/sessions/:id/swap — each arm refuses before the queued cal
     expect(res.json()).toEqual({ ok: false, error: 'unknown-session' });
   });
 
-  it('answers the ordinary 503 while the slot is held', async () => {
+  it('answers the ordinary 502 registry-unmeasurable while the slot is held', async () => {
     const queue = new RecordingQueue();
     app = await open({ io: { ...localIO, readdir: async () => null }, queue });
     const res = await refusalAnswersWhileHeld(app, queue, ID, { wrapper: 'claude' });
-    expect(res.statusCode).toBe(503);
+    expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ ok: false, error: 'registry-unmeasurable' });
   });
 });

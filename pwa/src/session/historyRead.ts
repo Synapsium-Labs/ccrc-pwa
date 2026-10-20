@@ -7,7 +7,7 @@
 // about THIS drawer's refs and which answer is still wanted. What is here is
 // the part that only ever looked at the reply.
 import type { PaneHistoryReply } from '../../../shared/api';
-import { ApiError } from '../lib/api';
+import { ApiError } from '../lib/apiError';
 import type { HistoryPane } from './terminalFactory';
 
 export type Hist =

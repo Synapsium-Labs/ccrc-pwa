@@ -669,12 +669,12 @@ describe('the one Archive — the worker check, as it was', () => {
 // real: the base's 404 fold for a registry that did not list, and `ws-archive`'s `already archived` read as success
 // without checking that the measured-live pane was stopped.
 describe('the archive door, wave 3b', () => {
-  it('a registry that cannot be LISTED is 503 registry-unmeasurable — never folded into 404 unknown-session', async () => {
+  it('a registry that cannot be LISTED is 502 registry-unmeasurable — never folded into 404 unknown-session', async () => {
     const b = await box();
     seed(b.home, 'demo-amber');
     rmSync(path.join(b.home, '.cc-sessions'), { recursive: true, force: true });
     const res = await post(b.app, 'demo-amber');
-    expect(res.statusCode).toBe(503);
+    expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ ok: false, error: 'registry-unmeasurable' });
     expect(b.ccd()).toEqual([]);
   });
