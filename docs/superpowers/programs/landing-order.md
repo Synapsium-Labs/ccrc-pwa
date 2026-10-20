@@ -22,7 +22,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
 | 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | run 310 open (planned; the run's wave 4), block 4326–4335; to plan |
-| 3c | — | Task 7's re-run preconditions: `pr-state`'s per-workspace git cost, a sweep failure the server reports, the two suite flakes the queue turned into removals, the runbook's re-run changes | ccd, server, tests, plan text | wave 2's proof run | — | planned (plan added with this record); to dispatch |
+| 3c | — | Task 7's re-run preconditions: `pr-state`'s per-workspace git cost, a sweep failure the server reports, the two suite flakes the queue turned into removals, the runbook's re-run changes | ccd, server, tests, plan text | wave 2's proof run | plan #974 | plan merged 2026-10-20 (`afd71583`); run 710 dispatched 2026-10-20 18:07 (the run's wave 5; `ccrc-pwa-soft-delta`); a block of 10 issued at run-open, defined by the worker's commits |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
@@ -702,6 +702,17 @@ carries it (spec §5.1, amended 2026-09-24).
       - inside the window, (e) comes first, and a silent lane is a stop;
       - every entry is dequeued before any rollback;
       - a bypass merge during the window is recorded, not a stop.
+- **2026-10-20 18:07 — wave 3c dispatched: run 710.** The plan merged as #974 (`afd71583`, squash at 17:31 UTC)
+  after three plan reviews and a verification pass, all findings folded. Main's own citation ratchet was red on
+  every pull request that afternoon (a count one below an exact baseline), so #974 waited for #988's fix and then
+  merged main in. The dispatch at 17:33 was refused at the daily session cap and retried at 18:07.
+  - **The run.** Run 710 is this programme's wave 5 on the server; the ledger calls it wave 3c. Run 310 (wave 3b)
+    stays open and planned. A block of 10 deviation numbers was issued at run-open; the worker's commits define the
+    ones it uses.
+  - **Task order, by the claims at dispatch.** Two other runs held files this wave edits: run 308's worker held
+    `ccd/ccd` (Task 1), and the path-identity worker held `server/src/watch.ts`, `shared/api.ts` and
+    `server/test/single-definition.test.ts` (Task 2). So the brief runs Tasks 3, 4 and 5 first, Task 2 when its
+    files free, and Task 1 when `ccd/ccd` frees. A worker that runs out of free tasks pushes, reports and waits.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -751,7 +762,7 @@ carries it (spec §5.1, amended 2026-09-24).
 Waves 1–3 are merged (#231 `10f32755`, #234 `0087a045`, #248 `9a255a74`). Task 7's proof run on 2026-10-20 stopped
 on stop rule 3, and the queue is off (Decisions, 2026-10-20 13:00).
 
-**Wave 3c, Task 7's re-run preconditions, is planned next.** Its plan is
+**Wave 3c, Task 7's re-run preconditions, is dispatched as run 710 (2026-10-20 18:07).** Its plan is
 `docs/superpowers/plans/2026-10-20-landing-order-wave3c-task7-rerun-preconditions.md`. It carries:
 - `pr-state --project`'s per-workspace cost, with every answer unchanged;
 - a failed PR sweep that the server reports rather than hides;
