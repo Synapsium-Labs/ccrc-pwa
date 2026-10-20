@@ -6598,7 +6598,7 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
   # `CLAUDE_CODE_OAUTH_TOKEN` holds an OAuth token and its file is
   # `<id>-oauth.env` — §6:507, §7:472, §11 and §12.5's spelling, and the one
   # every anthropic lane on this fleet already has
-  # (`server/test/helpers.ts:69`) — while an api-key lane's file is
+  # (`server/test/adopt.test.ts`'s generated lanes) — while an api-key lane's file is
   # `<id>-<provider>.env`, §4.3:318's spelling. §5:413's `X-P.env` is the
   # general shape both obey. THE TWO DERIVATIONS MUST STAY ONE RULE: `add`
   # writes this path into `exec.secretsFile`, the generated wrapper sources
