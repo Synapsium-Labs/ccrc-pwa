@@ -156,7 +156,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `-audit-resume`, `-audit` and `-idle-token`, and under load they fail in two shapes: vitest's `Test timed out in
   <n>ms` when a case's ccd calls together outrun it, or an `unmeasured` `in-use` answer (`the walk of /proc did not
   finish within 10s`) when one walk passes its bound; a walk measured about 0.13 s at the median and 1.1 s at the worst
-  at load 11, so re-run the file alone.
+  at load 11, so re-run the file alone. `ccd-collect-race-spawn-late` (path-identity W2) forces a recycled spawn
+  through the real verb and a real `_child_tmpdir` at six late boundaries, Linux with `mv --no-copy` only; it stubs
+  the in-use probe, so it fails under load in one shape only: vitest's `Test timed out in <n>ms`. Any other red is a
+  real break. Re-run the file alone first.
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
   `ci.yml`, whose trigger picks a mode). **A pull request** runs the server tests its change can affect, chosen
   from a traced dependency map (`.github/ci/select-tests.mjs`) and sharded across runners behind the required
