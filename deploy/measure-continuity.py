@@ -626,7 +626,7 @@ S6_STALE_S = 300
 S6_NUM = r"(?:0|[1-9][0-9]{0,15})"
 S6_POS = r"(?:[1-9][0-9]{0,15})"
 S6_CPU = r"(?:0|[1-9][0-9]{0,19})"
-# `\S` below is ASCII whitespace only (the three record patterns compile with re.ASCII): the sweep folds exactly the six ASCII
+# `\S` below excludes only ASCII whitespace (the three record patterns compile with re.ASCII): the sweep folds exactly the six ASCII
 # whitespace characters out of a comm, and Python's Unicode `\s` would also split on \x1c-\x1f, \x85 and \xa0 that the fold leaves in.
 S6_UNIT = r"tmux-spawn-\S+\.scope"
 S6_HDR = re.compile(rf"# ccd-scope-sweep v1 tick=({S6_NUM}) up=({S6_NUM}) mode=(shadow|live)")

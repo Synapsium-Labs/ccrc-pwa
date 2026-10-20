@@ -903,9 +903,10 @@ describe('wave 4b residue: carries, zombies and complete record writes', () => {
     expect(stops()).toEqual(state === 'Z' ? [`--user stop --no-block ${u}`] : []);
   });
 
-  it('an outside child in state Z with live threads is a live child (a thread-group leader that has exited, its other threads running)', () => {
+  // 2 and 11: the exemption reads the count as the whole text `0*[01]`, so 11 (and 10-19, 100+) must not pass as "1…"
+  it.each([2, 11])('an outside child in state Z with %i threads is a live child (a thread-group leader that has exited, its other threads running)', (threads) => {
     const u = inert(1);
-    proc(3500, { age: 2 * 86400, ppid: 3001, state: 'Z', threads: 2, cg: '/elsewhere.scope' });
+    proc(3500, { age: 2 * 86400, ppid: 3001, state: 'Z', threads, cg: '/elsewhere.scope' });
     arm();
     expect(run().code).toBe(0);
     expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'parent-of-a-process-elsewhere' });
