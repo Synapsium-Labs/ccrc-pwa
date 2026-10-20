@@ -4065,13 +4065,13 @@ Where W2's code and its plan's text narrowed, corrected or spelled out the spec'
 mounts (TR1 to TR8 and TR12, spec §3.2 to §3.6 and §3.9), they now read as follows. This note amends; it edits no
 earlier text. It names each departure by slug and carries no deviation number. This wave's numbers were issued before
 its plan was committed, and the W2 plan's `## Deviations found` defines them. The spec records the same wave in its
-§3.10. Where the two differ, the spec governs, as this section's opening says. This
-wave's committed comments and test titles cite the spec, never this contract.
+§3.10. Where the two differ, the spec governs, as this section's opening says. This wave's committed comments and
+test titles cite the spec, never this contract.
 
 **R93 (the programme's shape).**
-- W2 was dispatched after #384, #397 and #410 merged. It ships as one pull request from a fresh child. Its `ccd/ccd`
-  edits went in series, one task at a time, and each was restamped with the repository's own tool. No merge of `main`
-  had been made when this note was written.
+- W2 was dispatched after #384, #397 and #410 merged and W1b's run, 433, closed. It ships as one pull request from a
+  fresh child. Its `ccd/ccd` edits went in series, one task at a time, and each was restamped with the repository's own
+  tool. No merge of `main` had been made when this note was written.
 - Workspace lifecycle's coordinator consented to the edits that ws-expire reaches through the shared tail:
   - steps 3, 4 and 6;
   - `_ws_tmproot_witness_drop`, `_ws_tmproot_remove`, `_ws_leaf_remove`, `_ws_leaf_read_small`,

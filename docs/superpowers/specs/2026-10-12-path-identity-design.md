@@ -681,7 +681,9 @@ made them, and W2 touched neither.
   built, `_ws_leaf_remove` asks directly after its device compare: before the owner-bits chmod of the leaf itself,
   before `_ws_leaf_checkouts`, and before `_ws_reclaim_normalise`. It asks again directly before `rm`. This is
   stricter: with a same-device bind at the leaf, the chmod would otherwise change the bind source's root first. Either
-  ask's refusal becomes the leaf's 2, unmeasured, and nothing under the leaf is touched.
+  ask's refusal becomes the leaf's 2, unmeasured, and nothing under the leaf is removed. The first ask writes nothing.
+  The second comes after the owner bits, the checkout question and the permission pass, which may have changed modes
+  under the leaf.
 - The leaf's path is physical by construction, because its root is resolved before the leaf is named. So is each
   standing nested checkout's path at step 3. Neither is resolved again, and a mode-000 leaf keeps the answer it had.
   Step 4 asks in the resolve mode, because a workdir may sit under a symlinked ancestor.
@@ -717,8 +719,9 @@ made them, and W2 touched neither.
 - The ends are monotone. A `removed` or keyless row after the source ends the temp-root half, wherever it falls among
   the rows. Otherwise, an `absent` row keeps the item until the 7-day horizon, with one clause added:
   `The collector found nothing at ~/.cc-tmp/<id> and dropped its witness; if ~/.cc-tmp is a mount, check that it is mounted.`
-- The clause rides only an item whose temp-root half was reported kept, and never a clips-only item. An item that
-  carries the clause never joins the `kept-many` collapse; that marker lives on the server's own type, not on the wire.
+- The clause rides only an item whose temp-root half was reported kept, or whose line was cut, and never a clips-only
+  item. An item that carries the clause never joins the `kept-many` collapse; that marker lives on the server's own
+  type, not on the wire.
   An unread collect row (malformed or truncated-keyless) adds no prose: the item reads as if no collect had happened.
 - `present-null-leaf-reads-as-legacy`: §3.4 says the server fails closed for a present malformed value. As built, a
   stored `"leaf":null` reads keyless, and on an uncut row it ends the item. The reason: the reviver writes every key,
@@ -768,8 +771,7 @@ made them, and W2 touched neither.
   of §3.6's `^0*([0-9]*)$`. The anchored form has exactly one parse, so its answer does not depend on how a regex
   library orders the matches of a starred group. Its results are the old strip's, and its status is read: a capture
   that fails answers 2, unmeasured, never a silent 24 h. Two pins hold it: a row of 200,000 zeros built in the shell,
-  and a structure pin. `ccd/ccrc` carries a copy of the old strip, which is left to its
-  owner.
+  and a structure pin. `ccd/ccrc` carries a copy of the old strip, which is left to its owner.
 - TR8: `_ws_leaf_read_small` also reports whether the file it read holds a NUL, and where. `_ws_leaf_checkout_one`
   refuses (1) a back-link that holds a NUL before any byte that is not a NUL, a CR or an LF, because git never writes
   one. A trailing NUL is still a line end, and a NUL in the `.git` file is still unmeasured (2).
