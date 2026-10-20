@@ -1709,9 +1709,8 @@ export function registerCoordRoutes(
         return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
       case 'unknown-session': return reply.code(404).send({ ok: false, error: 'unknown-session' });
       case 'no-claimant': return reply.code(409).send({ ok: false, refused: 'no-claimant' });
-      // 502, the coord-route family's status for this condition
-      // (`sendDispatchOutcome` above) — NOT the kickoff route's 503, which is
-      // server.ts's own vocabulary. `detail` rides along because it is a
+      // 502, the table's one status for this condition (`REFUSAL_STATUS`; the
+      // kickoff route's 503 was unified to it, D-5971). `detail` rides along because it is a
       // distinction this adapter RECEIVED: L1 measured WHICH read failed, and
       // this layer cannot recompute it.
       case 'registry-unmeasurable':
