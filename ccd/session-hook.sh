@@ -4393,13 +4393,15 @@ fi
 # 2026-10-18 §7.6) is deny mode's alone (`bmatch`, never read in `class` mode, so the classifier parity is untouched): a
 # write into `~/.local/share/claude/versions/` or onto the launcher, by Bash or an edit tool, and Claude Code's
 # `install`, `update` or `upgrade` (D-6063) under a `claude…` wrapper name, a `~/.local/bin/<id>` launcher, a `$VAR`
-# head, the build's own path (`…/versions/X.Y.Z`, `$CLAUDE_CODE_EXECPATH`, or `./X.Y.Z` after a `cd` into the build
+# head, the build's own path (any entry under `…/versions/`, `$CLAUDE_CODE_EXECPATH`, or `./<entry>` after a `cd` into
+# the build
 # directory) or a package runner of `@anthropic-ai/claude-code`, after up to eight flags (`CFLAGS`, each with at most
 # one value that does not start with `-`, `--` included). A print-mode word (`-p`, `--print`, `--print=…`) stops the
 # flags, so `claude -p "update …"` is a prompt, not one; a flag's value may swallow a prompt's first word once quotes
 # are removed (`claude -c "please update x"`), a false deny in the safe direction. `respawn` counts right after the
-# head only, where Claude Code runs it. The official installer's URLs and a global npm, pnpm, yarn or bun install of
-# `@anthropic-ai/claude-code` count too. A write (D-6064) is matched as `BUILDX`, the build directory or the launcher in
+# head only, where Claude Code runs it. The official installer's URLs (in any case) and a global npm, pnpm, yarn or bun
+# install of `@anthropic-ai/claude-code` (`-g`, `global`, `--prefix` to an absolute or home path, `npm_config_global=`)
+# count too. A write (D-6064) is matched as `BUILDX`, the build directory or the launcher in
 # any separator spelling (`SEPP`: `/`, `//`, `/./`, at most eight), absolute, home-anchored or relative at the start of
 # a word, the bare `.local/share/claude` or a glob segment under it included; by `BWR`, `WR`'s writers and more, with
 # a redirection to `/dev/null` or `>&N` not counted, in segments split without splitting a redirection (`SEG`); and
@@ -4429,7 +4431,7 @@ fi
 # top-level session, and a child's call whose payload names none of these, pay no fork: `ccd`, `ccrc` and `approval`
 # (the verbs and the surface); `install`, `update`, `upgrade` and `respawn`, each on its own (a Claude Code verb under
 # any head, `$CLAUDE_CODE_EXECPATH` and a runner included); `anthropic-ai/claude-code` (a global install by `add`);
-# `downloads.claude.ai`; `.local` (a write, in any spelling, after a `cd` too); and `.cc-sessions` (a trusted file;
+# `downloads.claude.ai` in any case; `.local` (a write, in any spelling, after a `cd` too); and `.cc-sessions` (a trusted file;
 # `~/.ccrc`'s are admitted by `ccrc`). Every pattern needs one
 # of those words literally (JSON escaping never touches ASCII letters). A real payload's `transcript_path` names
 # `.claude…`, so every child call naming `install` or `update` already forked one jq. A deny already set is
@@ -4482,7 +4484,8 @@ def PSTOP: "(?!(?:-p|--print)(?=" + SP + "|$)|--print=)";
 def CFLAGS: "(?:" + PSTOP + "-" + NS + "*(?:" + SP + "+(?!-)" + NS + "+)?" + SP + "+){0,8}";
 def CVERB: "(?:install|update|upgrade)" + NW;
 def VERS: "[0-9]{1,9}\\.[0-9]{1,9}\\.[0-9]{1,9}";
-def VERH: "\\.local" + SEPP + "share" + SEPP + "claude" + SEPP + "versions" + SEPP + VERS;
+def ENTW: "[^" + WS + "/;&|()<>`" + $q + "\"]{1,64}";
+def VERH: "\\.local" + SEPP + "share" + SEPP + "claude" + SEPP + "versions" + SEPP + ENTW;
 def EXECH: "\\$\\{?CLAUDE_CODE_EXECPATH\\}?";
 def RUNH: WB + "(?:npx|bunx|(?:pnpm|yarn)" + SP + "+dlx|(?:npm|pnpm)" + SP + "+exec)" + SP + "+(?:-" + NS + "*" + SP + "+){0,8}@anthropic-ai/claude-code(?:@" + NS + "{1,64})?";
 def CLI: "(?:" + WB + "claude[A-Za-z0-9-]*|" + WB + UPRE + "|" + SEPP + "\\.local" + SEPP + "bin" + SEPP + "[a-z][a-z0-9-]{0,31}|" + VERH + "|" + EXECH + "|" + RUNH + ")";
@@ -4515,7 +4518,7 @@ def BTR: "build\ta write to a file the Claude Code launcher, roll or guard trust
 def TNC: "claude-[A-Za-z0-9_.-]{1,64}";
 def TNS: "(?:claude-roll-[A-Za-z0-9_.-]{1,64}|[A-Za-z0-9_.-]{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|child-deny\\.settings\\.json)" + BT;
 def TRUST: "(?:" + SEPP + "\\.ccrc" + SEPP + TNC + "|" + SEPP + "\\.cc-sessions" + SEPP + TNS + ")";
-def VERW: "(?:^|[" + WS + "(])(?:\\./{1,8})?" + VERS + CRUN;
+def VERW: "(?:^|[" + WS + "(])(?:\\./{1,8}" + ENTW + "|" + VERS + ")" + CRUN;
 def CLOP: "claude(?=$|[" + WS + "/;&|)])";
 def LBOP: "bin" + SEPP + "(?:claude|" + UPRE + ")(?=$|[" + WS + ";&|)])";
 def bmatch:
@@ -4542,10 +4545,12 @@ def bmatch:
   (select(test(CLI + CRUN)) | BI),
   (select(test(WB + "(?:claude|" + UPRE + ")" + NW) and test(WB + EXP + SP + "+(?:" + FLAGS + "(?:install|update)" + NW + "|" + CFLAGS + CVERB + "|respawn" + NW + ")")) | BI),
   (select(cdthen(VERSD; VERW; test(VERW))) | BI),
-  (select(test("claude\\.ai/install\\.(?:sh|ps1|cmd)|downloads\\.claude\\.ai")) | BI),
+  (select(test("claude\\.ai/install\\.(?:sh|ps1|cmd)|downloads\\.claude\\.ai"; "i")) | BI),
   (select(test("@anthropic-ai/claude-code") and any(split("[\n;&|]"; null)[]; test(WB + "(?:npm|pnpm|yarn|bun)" + NW)
-     and test(SP + "(?:install|i|add|update|up|upgrade)" + NW) and test("@anthropic-ai/claude-code")
-     and test("(?:^|" + SP + ")(?:-g|--global|--location=global|global)" + NW))) | BI);
+     and test(SP + "(?:install|i|in|ins|inst|insta|instal|isnt|isnta|isntal|isntall|add|update|udpate|up|upgrade)" + NW)
+     and test("@anthropic-ai/claude-code")
+     and (test("(?:^|" + SP + ")(?:(?:-g|--global|--location=global|global)" + NW + "|--prefix(?:=|" + SP + "+)(?:~|\\$\\{?HOME|/))")
+       or test("(?:^|" + SP + ")npm_config_(?:global|location)="; "i")))) | BI);
 def pnorm: (if startswith("~/") then ($ENV.HOME // "~") + .[1:] else . end)
   | if startswith("/") then "/" + (split("/") | reduce .[] as $s ([]; if $s == "" or $s == "." then .
       elif $s == ".." then .[:-1] else . + [$s] end) | join("/")) else . end;
@@ -4577,7 +4582,7 @@ if [[ "$event" == PreToolUse && -n "$id" && -e "$REG/$id.child" \
   if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]]; then apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}; fi
   [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* \
      || "$apf" == *install* || "$apf" == *update* || "$apf" == *upgrade* || "$apf" == *respawn* \
-     || "$apf" == *anthropic-ai/claude-code* || "$apf" == *downloads.claude.ai* || "$apf" == *.local* \
+     || "$apf" == *anthropic-ai/claude-code* || "${apf,,}" == *downloads.claude.ai* || "$apf" == *.local* \
      || "$apf" == *.cc-sessions* ]] || apf=""
 fi
 if [[ -n "$apf" ]]; then
