@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=00e520b1f478339bf6a2b63227cf296b941102d51c6d66b9d523bfc4ac0b154a
+# ccrc:generated 1 sha256=44f18fcb8e37a68f6de963e3bd771ea3b15725143ae79eb0408c8b3a48358953
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -643,7 +643,7 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
   rm -f -- "$stamp" 2>/dev/null
   "$@" &
   pid=$!
-  # `|| exit 0` ON THE SLEEP, and it is the difference between a deadline and
+  # `|| exit 0` ON THE SLEEP (via `wait`), and it is the difference between a deadline and
   # a guillotine. If `sleep` is absent or refuses — a contained PATH, a box
   # with no coreutils — it returns INSTANTLY, and without this guard the
   # watcher would stamp and signal in the same breath: every call would report
@@ -656,9 +656,9 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
   # BETWEEN A DEADLINE AND A FLOOR (D-2272). Called inside a command
   # substitution the caller reads, this subshell inherits that pipe on fd 1 -
   # and on fd 2 as well wherever the call site joins the two, which
-  # `ccrc-doctor-checks` does. `kill -TERM` on the subshell below kills the
-  # SUBSHELL and orphans the sleeper it was waiting on, so the sleeper keeps the
-  # write end open and the substitution cannot see EOF until the full duration
+  # `ccrc-doctor-checks` does. `kill -TERM` on the subshell used to kill the
+  # SUBSHELL and orphan its sleeper (D-6123 now takes it along), so the sleeper kept the
+  # write end open and the substitution could not see EOF until the full duration
   # has run out, long after the command answered. MEASURED on a box with no
   # coreutils, a 10-second deadline and a command that answers instantly: 10 006
   # ms before this redirection, 9 ms after. Neither stream carries anything a
@@ -678,7 +678,7 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
   # a fix for the WHOLE call-site population, not for one new call site. The
   # population is measured in ccrc-account.test.ts rather than counted here, so
   # the claim cannot rot back into a claim about one caller.
-  ( s=''; trap '[ -n "$s" ] && kill "$s" 2>/dev/null; exit 0' TERM; sleep "$secs" 2>/dev/null & s=$!; wait "$s" || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  ( t=''; trap 't=1' TERM; sleep "$secs" 2>/dev/null & s=$!; trap 'kill "$s" 2>/dev/null; exit 0' TERM; [ -z "$t" ] || { kill "$s" 2>/dev/null; exit 0; }; wait "$s" || exit 0; trap 'exit 0' TERM; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watcher=$!
   wait "$pid" 2>/dev/null; rc=$?
   kill -TERM "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
