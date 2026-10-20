@@ -21,22 +21,25 @@
 //     branches on the viewer's screen or pointer.
 //
 // "Pause all cleanup" raises the one cleanup pause (POST /api/coord/reclaim-pause), the way ChildReclaimBanner does.
-// It renders nothing before a coord frame, is never optimistic, and settles on a later frame. It offers Pause only:
-// Resume stays on the cleanup row on Runs, so the switch keeps one resume door. Nothing here announces the stored
-// choice anywhere else.
+// Since settings Task R2b2 (D-5503; settings spec §5.4) it is NOT inside this card: it stops more than the collector,
+// so `PauseAllCleanup` is exported and Automation's Cleanup pause card mounts it. Its status is a skeleton before a
+// coord frame, it is never optimistic, and it settles on a later frame. It offers Pause only: Resume stays on the
+// cleanup row on Runs, which the paused card links to, so the switch keeps one resume door. Nothing here announces
+// the stored choice anywhere else.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   COLLECT_LANE_CHOICES, type CollectLaneChoice, type CollectLaneConfirmRequired, type CollectLaneRequest,
   type CollectLaneView,
 } from '../../../shared/api';
-import { Button, QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Skeleton, useNow } from '@ccrc/ui';
+import { Button, QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Section, Skeleton, TextLink, useNow } from '@ccrc/ui';
 import { api, apiErrorText } from '../lib/api';
 import {
-  ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_NOW_CLASS, UNCONFIRMED_TEXT, optionNote, useResultLine,
+  ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, SETTINGS_NOW_CLASS, SETTINGS_WHEN, UNCONFIRMED_TEXT, inAppClick,
+  optionNote, useResultLine,
 } from './settingsText';
 import { useFleetStore } from '../stores/fleet';
-import { childReclaimMarker } from './childReclaimWords';
+import { CHILD_RECLAIM_MARKER_GLYPH, childReclaimMarker } from './childReclaimWords';
 import { inlinePauseError } from './CoordBanner';
 import { COORD_CONFIRM_MS } from './coordWords';
 import {
@@ -54,45 +57,33 @@ const NOW_CLASS: Readonly<Record<'head' | 'note' | 'warn', string>> = SETTINGS_N
 
 type CleanupPause = (state: 'on' | 'off') => Promise<void>;
 
-/** The section: its heading, then one of five bodies. Not-available comes FIRST, before any landed view; an
- *  unmeasurable state comes next and is a stop; "don't know yet" never borrows "nothing there". */
-export function CollectLaneSection({
-  store = useFleetStore,
-  childReclaimPause = api.childReclaimPause,
-  poll,
-}: {
-  store?: typeof useFleetStore;
-  /** Injectable so a test drives "Pause all cleanup" without a server: ChildReclaimBanner's seam. */
-  childReclaimPause?: CleanupPause;
+/** The card (a `Section` with its scope and purpose, settings Task R2b2): its head, then one of five bodies.
+ *  Not-available comes FIRST, before any landed view; an unmeasurable state comes next and is a stop; "don't know
+ *  yet" never borrows "nothing there". It holds no Pause control: that is the Cleanup pause card's. */
+export function CollectLaneSection({ poll }: {
   /** The Settings frame's one read of the switch (`settings/SettingsDataProvider.tsx`, D-5504). */
   poll: CollectLanePoll;
 }): ReactNode {
-  const titleId = useId();
   const { view, failure } = poll;
+  const card = SETTINGS_CARDS.automation.collector;
   return (
-    <section className="settings-section" aria-labelledby={titleId}>
-      <h3 id={titleId} className="settings-section-title">{COLLECT_SECTION_TEXT.title}</h3>
+    <Section level={3} scope={card.scope} title={card.title} purpose={card.purpose}>
       {failure !== null && failure.kind === 'not-configured' ? (
         <p className="settings-note">{COLLECT_SECTION_TEXT.notAvailable}</p>
       ) : failure !== null && failure.kind === 'state-unmeasurable' ? (
-        <>
-          {collectUnmeasurableLines(failure.detail).map((line, i) => <p key={i} className={NOW_CLASS[line.tone]}>{line.text}</p>)}
-          <PauseAllCleanup store={store} childReclaimPause={childReclaimPause} />
-        </>
+        collectUnmeasurableLines(failure.detail).map((line, i) => <p key={i} className={NOW_CLASS[line.tone]}>{line.text}</p>)
       ) : view !== null ? (
-        <CollectLaneBody view={view} stale={failure !== null} poll={poll} store={store} childReclaimPause={childReclaimPause} />
+        <CollectLaneBody view={view} stale={failure !== null} poll={poll} />
       ) : failure !== null ? (
         <p className="settings-note">{COLLECT_SECTION_TEXT.unread}</p>
       ) : (
         <Skeleton lines={3} />
       )}
-    </section>
+    </Section>
   );
 }
 
-function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
-  view: CollectLaneView; stale: boolean; poll: CollectLanePoll; store: typeof useFleetStore; childReclaimPause: CleanupPause;
-}): ReactNode {
+function CollectLaneBody({ view, stale, poll }: { view: CollectLaneView; stale: boolean; poll: CollectLanePoll }): ReactNode {
   const { reload, settle } = poll;
   const offNoteId = useId();
   const choiceNoteBase = useId();
@@ -173,7 +164,6 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
 
   return (
     <>
-      <p className="settings-note">{COLLECT_SECTION_TEXT.purpose}</p>
       {stale && <p className={SETTINGS_AMBER_NOTE}>{COLLECT_SECTION_TEXT.stale}</p>}
       {collectNowLines(view).map((line, i) => <p key={i} className={NOW_CLASS[line.tone]}>{line.text}</p>)}
       {view.notice !== null && <p className="settings-note" role="status">{view.notice}</p>}
@@ -204,7 +194,7 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
       <ResultLine line={choiceLine.line} />
       {offHeld && offNote !== null && <p id={offNoteId} className="settings-note">{offNote}</p>}
       {inline !== null && <p className={SETTINGS_AMBER_NOTE} role="alert">{inline}</p>}
-      <p className="settings-note">{COLLECT_SECTION_TEXT.when}</p>
+      <p className={SETTINGS_WHEN}>{COLLECT_SECTION_TEXT.when}</p>
       {collectOffersReconfirm(view) && (
         <>
           <Button
@@ -216,10 +206,9 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
             {COLLECT_SECTION_TEXT.reconfirm}
           </Button>
           <ResultLine line={reconfirmLine.line} />
-          <p className="settings-note">{COLLECT_SECTION_TEXT.reconfirmWhen}</p>
+          <p className={SETTINGS_WHEN}>{COLLECT_SECTION_TEXT.reconfirmWhen}</p>
         </>
       )}
-      <PauseAllCleanup store={store} childReclaimPause={childReclaimPause} />
       <QuickConfirm
         open={pending !== null}
         title={COLLECT_SECTION_TEXT.confirmTitle}
@@ -234,17 +223,26 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
 
 type PausePhase = 'idle' | 'pausing' | 'unconfirmed';
 
-/** "Pause all cleanup": ChildReclaimBanner's toggle, Pause direction only. It renders nothing before a coord frame
- *  or for a server older than the switch (`childReclaimMarker` → null). While the pause stands it shows only the
- *  paused line. A tap asks 'on' once and settles only on a LATER frame reading `set`; `COORD_CONFIRM_MS` bounds the
- *  wait. A switch that reads `unmeasurable` still offers Pause: doubt fails toward stopping deletion. */
-function PauseAllCleanup({ store, childReclaimPause }: { store: typeof useFleetStore; childReclaimPause: CleanupPause }): ReactNode {
+/** The Cleanup pause card's body (settings spec §5.4): the status, then "Pause all cleanup" alone at the foot.
+ *  ChildReclaimBanner's toggle, Pause direction only. Before a coord frame the status is a skeleton, never "runs
+ *  normally"; a server older than the switch (`childReclaimMarker` → null) says the switch is not available. While the
+ *  pause stands it shows the paused status and the link to Runs, where Resume is. A tap asks 'on' once and settles
+ *  only on a LATER frame reading `set`; `COORD_CONFIRM_MS` bounds the wait. A switch that reads `unmeasurable` still
+ *  offers Pause: doubt fails toward stopping deletion. */
+export function PauseAllCleanup({
+  store = useFleetStore,
+  childReclaimPause = api.childReclaimPause,
+}: {
+  store?: typeof useFleetStore;
+  /** Injectable so a test drives "Pause all cleanup" without a server: ChildReclaimBanner's seam. */
+  childReclaimPause?: CleanupPause;
+}): ReactNode {
   const coord = store((s) => s.coord);
   const coordFrameSeen = store((s) => s.coordFrameSeen);
   const marker = childReclaimMarker(coord);
   const [phase, setPhase] = useState<PausePhase>('idle');
   const [error, setError] = useState<string | null>(null);
-  // Any other failure is said under the button too (D-5507), and toasted only once the section has gone.
+  // Any other failure is said under the button too (D-5507), and toasted only once the card has gone.
   const failed = useResultLine();
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -268,8 +266,20 @@ function PauseAllCleanup({ store, childReclaimPause }: { store: typeof useFleetS
 
   useEffect(() => () => clearTimer(), []);
 
-  if (!coordFrameSeen || coord === null || marker === null) return null;
-  if (marker === 'set') return <p className="settings-note" role="status">{COLLECT_PAUSE_TEXT.paused}</p>;
+  if (!coordFrameSeen) return <Skeleton lines={1} />;
+  if (coord === null || marker === null) return <p className="settings-note">{COLLECT_SECTION_TEXT.notAvailable}</p>;
+  if (marker === 'set') {
+    return (
+      <>
+        <p className={SETTINGS_AMBER_NOTE} role="status">
+          <span aria-hidden="true">{`${CHILD_RECLAIM_MARKER_GLYPH.set} `}</span><span>{COLLECT_PAUSE_TEXT.paused}</span>
+        </p>
+        <p className="settings-note">
+          <TextLink href="/runs" onClick={inAppClick('/runs')}>{COLLECT_PAUSE_TEXT.resume}</TextLink>
+        </p>
+      </>
+    );
+  }
 
   const onPause = (): void => {
     if (phase === 'pausing') return;
@@ -299,12 +309,18 @@ function PauseAllCleanup({ store, childReclaimPause }: { store: typeof useFleetS
 
   return (
     <>
-      <p className="settings-note">{COLLECT_PAUSE_TEXT.stops}</p>
-      <Button variant="ghost" className="settings-check" disabled={phase === 'pausing'} onClick={onPause}>
-        {label}
-      </Button>
-      <ResultLine line={failed.line} />
-      {error !== null && <p className={SETTINGS_AMBER_NOTE}>{error}</p>}
+      {marker === 'unmeasurable'
+        ? <p className={SETTINGS_AMBER_NOTE} role="status">{COLLECT_PAUSE_TEXT.unmeasurable}</p>
+        : <p className="settings-note" role="status">{COLLECT_PAUSE_TEXT.running}</p>}
+      {/* The foot: Pause alone after a hairline, one tap, ghost — it deletes nothing, so it is no danger action. */}
+      <div className="settings-card-foot">
+        <Button variant="ghost" className="settings-check" disabled={phase === 'pausing'} onClick={onPause}>
+          {label}
+        </Button>
+        <ResultLine line={failed.line} />
+        {error !== null && <p className={SETTINGS_AMBER_NOTE}>{error}</p>}
+        <p className={SETTINGS_WHEN}>{COLLECT_PAUSE_TEXT.when}</p>
+      </div>
     </>
   );
 }

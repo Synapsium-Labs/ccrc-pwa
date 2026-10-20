@@ -1,8 +1,10 @@
 /* Settings' frame (settings Task R2b1; spec §3.2, §4.1, §4.2; D-5503, D-5504).
    `PageScaffold` draws the header and the reading column (capped at `--page-max`, padded by `--gutter`), so this
-   sheet holds only the section page's heading and the index rows. NO COLOUR: every ink here is a utility over the
-   measured token pairs (`text-ink-*`, `text-phosphor`, `text-status-*-text` on the page's ground) or inherited, so
-   no rule needs a contrast-gate registration. Spacing reads the roles (`--pad-card`, `--gutter`), never `--sp-*`.
+   sheet holds only the section page's heading, the index rows and the cards' two shared parts. ONE INK: the
+   when-line's tertiary (settings Task R2b2), registered in design/audit.mjs's INHERITED_GROUNDS on the card's
+   `--bg-surface`; every other ink here is a utility over the measured token pairs (`text-ink-*`, `text-phosphor`,
+   `text-status-*-text` on the page's ground) or inherited. Spacing reads the roles (`--pad-card`, `--gutter`), never
+   `--sp-*`.
    The release rows and key/value lines already wrap at any pane width (`.settings-release`'s `minmax(0, 1fr)`
    column, flex-wrapped actions, `overflow-wrap: anywhere`), so no container query is needed for them yet; R2c's nav
    adds the pane query at `PAGE_NAV_MIN_PX`. */
@@ -32,3 +34,22 @@
    shell hides every other Back in the detail pane (shell.css, `.shell-detail .back-btn`), because the fleet sidebar
    is the way out of a screen, but the sidebar is not the way back to the sections index. */
 .shell-detail .back-btn.settings-section-back { display: inline-block; }
+
+/* The cards (settings Task R2b2; spec §3.3, §5; D-5503). Every card is `Section`'s, so its ground is `--bg-surface`.
+   The when-line, "when you would change it", is the tertiary step under a control's notes (`.settings-note` is the
+   secondary): the one colour this sheet sets, measured on the card it sits in. */
+.settings-when {
+  margin: 0;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-normal);
+  color: var(--ink-tertiary);
+}
+/* A card's foot: its one action alone after a hairline (spec §5.4's Pause all cleanup, §5.5's Rotate now). Layout
+   and a rule only; the hairline is the card's own edge token. */
+.settings-card-foot {
+  display: grid;
+  gap: calc(var(--pad-card) / 2);
+  min-width: 0;
+  padding-top: calc(var(--pad-card) / 2);
+  border-top: 1px solid var(--edge-subtle);
+}

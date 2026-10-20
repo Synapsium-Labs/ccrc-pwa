@@ -37,15 +37,15 @@ import {
 } from '../../../shared/api';
 import { stallDurationText } from '../../../shared/stall-watch';
 import {
-  QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Select, Skeleton,
+  QuickConfirm, RADIO_FIELDSET, RADIO_LEGEND, Radio, Section, Select, Skeleton,
 } from '@ccrc/ui';
 import {
   asStallWatchView, stallWriteRefusal, type StallWatchPoll,
 } from '../fleet/useStallWatchView';
 import { api } from '../lib/api';
 import {
-  ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_NOW_CLASS, STALL_LEVEL_NOTE, STALL_WORDS, UNCONFIRMED_TEXT, focusLeaves,
-  optionNote, setLead, stallQuietBoundsText, useResultLine,
+  ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, SETTINGS_NOW_CLASS, STALL_LEVEL_NOTE, STALL_WORDS, UNCONFIRMED_TEXT,
+  focusLeaves, optionNote, setLead, stallQuietBoundsText, useResultLine,
 } from '../fleet/settingsText';
 
 /** Fill each `{name}` slot of an L0 text from `slots`. A slot it was not given stays as written; a value is
@@ -242,14 +242,13 @@ export function stallConfirmLines(effect: StallWriteEffect, request: StallWatchR
   return lines;
 }
 
-/** The section: its heading, then one of four bodies. Not-configured comes FIRST, before any landed view (§13's one
+/** The card (a `Section` with its scope and purpose line, settings Task R2b2): its head, then one of four bodies. Not-configured comes FIRST, before any landed view (§13's one
  *  deliberate difference from the Updates section); "don't know yet" never borrows "nothing there". */
 export function StallWatchSection({ poll }: { poll: StallWatchPoll }): ReactNode {
-  const titleId = useId();
   const { view, failure } = poll;
+  const card = SETTINGS_CARDS.automation.stall;
   return (
-    <section className="settings-section" aria-labelledby={titleId}>
-      <h3 id={titleId} className="settings-section-title">{STALL_SECTION_TEXT.title}</h3>
+    <Section level={3} scope={card.scope} title={card.title} purpose={card.purpose}>
       {failure === 'not-configured' ? (
         <p className="settings-note">{STALL_NOT_AVAILABLE_TEXT}</p>
       ) : view !== null ? (
@@ -259,7 +258,7 @@ export function StallWatchSection({ poll }: { poll: StallWatchPoll }): ReactNode
       ) : (
         <Skeleton lines={3} />
       )}
-    </section>
+    </Section>
   );
 }
 
@@ -382,7 +381,6 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
 
   return (
     <>
-      <p className="settings-note">{STALL_WORDS.purpose}</p>
       {stale && <p className={SETTINGS_AMBER_NOTE}>{STALL_SECTION_TEXT.stale}</p>}
       {now.map((line, i) => <p key={i} className={NOW_CLASS[line.tone]}>{line.text}</p>)}
       {next !== null && <p className="settings-catalogue">{next.lead}</p>}

@@ -1150,7 +1150,7 @@ describe('every stylesheet under src/ is audited', () => {
       'src/docs/docs.css',
       'src/fleet/fleet.css',
       'src/screens/digest.css',   // the daily digest screen (D-5300)
-      'src/screens/settings/settings.css', // Settings' frame (settings Task R2b1, D-5504): layout only, no colour
+      'src/screens/settings/settings.css', // Settings' frame (R2b1, D-5504); one ink since R2b2: `.settings-when`
       'src/session/chat.css',
       'src/skins/instrument/instrument.css', // W2 Task S2b: header-only until S9
       'src/skins/refined/refined.css',       // W2 Task S2b: header-only until S4b
@@ -2137,5 +2137,20 @@ describe('the Docs chrome is measured, not left in the blind spot (M4.S1)', () =
     expect(text).not.toMatch(/#[0-9a-f]{3,8}\b/i);
     expect(text).not.toMatch(/(?<![\w-])(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i);
     expect(text).not.toMatch(NAMED);
+  });
+});
+
+// ── settings Task R2b2 (D-5503): the cards' when-line ───────────────────────
+describe("the Settings cards' when-line is measured on the card, not left in the blind spot", () => {
+  it('.settings-when is grounded on --bg-surface and clears 4.5:1 in every palette', () => {
+    const key = '.settings-when';
+    expect(report.uncovered, key).not.toContain(key);
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
+    const rows = rowsFor(key);
+    expect(rows, key).toHaveLength(THEME_COUNT);
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain('var(--ink-tertiary)');
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
   });
 });
