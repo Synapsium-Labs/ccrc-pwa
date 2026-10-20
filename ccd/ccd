@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5acab73a770062af2003e2cac92021580b8f74afa013731cc507c26d06ac20d7
+# ccrc:generated 1 sha256=179ad9f8fbf331cb47e7786d9e6977211a4b7686c8a028c9596bfd3eea49198d
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5377,7 +5377,7 @@ PR_GH_TIMEOUT=8           # gh pr list has no --timeout of its own; a blocking
 # had one, so the two budgets now add up, and what they have to stay inside is
 # the server's outer bound on this verb — the one that decides whether a slow
 # GitHub reaches the phone as an honest `unavailable` or as the child being
-# killed, which the server reads as `agent-down` and backs the whole project
+# killed, which the server reads as `cut-short` and backs the whole project
 # off on.
 #
 # THE OUTER BOUND IS 25 s, NOT 90, AND EVERY CALL HERE HAS TO FIT INSIDE IT.
@@ -5613,7 +5613,7 @@ _gh_pr_checks() {   # repo -> `[{number, statusCheckRollup}, …]` on stdout for
   # it makes ONE exec's wall clock scale with the number of workspaces on the
   # project, so a slow GitHub stops being an honest `unavailable` for that repo
   # and becomes the outer bound killing the child, which the server reads as
-  # `agent-down` and backs the whole project off on. Two calls is two calls
+  # `cut-short` and backs the whole project off on. Two calls is two calls
   # whatever the fleet grows to.
   local repo="$1" out rc
   out=$(_plat_timeout "$PR_GH_CHECKS_TIMEOUT" gh pr list --repo "$repo" --state open --limit 100 \
@@ -5664,9 +5664,9 @@ _pr_py() {   # mode [args…]; stdin = the gh rows JSON. One of ccd's embedded h
 import fcntl, json, os, re, stat, subprocess, sys, time
 
 mode = sys.argv[1]
-# `headRefOid` and `mergeCommit.oid` are GitHub-SOURCED, and `is_ours` puts the
-# first of them in a git argv. Spec §7: no GitHub-sourced string is ever placed
-# in a prompt, an argv, or a shell — so this is the boundary, not a formality.
+# `headRefOid` and `mergeCommit.oid` are GitHub-SOURCED; `ours_of` gives the first to git
+# on stdin after this shape check (`one_ours`, its fallback, in an argv). Spec §7: no GitHub-
+# sourced string is ever placed in a prompt, an argv, or a shell — this is the boundary.
 # Both ends are anchored and the floor is 7, and both are pinned: a row saying
 # `headRefOid: "main"` otherwise resolves as a REVISION and binds (main really
 # is an ancestor of our tip), and `{1,40}` would let a three-character hex ref
@@ -5699,45 +5699,45 @@ def rows_in():
 def git(main, *args):
     return subprocess.run(['git', '-C', main, *args], capture_output=True, text=True)
 
-def is_ours(main, tip, oid):
-    """Proof 0 — the PR's head commit exists locally AND, where we have a tip to
-    reach from, is reachable from it. This is what a recycled slug and a
-    stranger's fork both fail.
+def ours_of(main, tip, oids):
+    """Proof 0 for every row at once: the PR's head commit exists locally AND, where we have a tip to reach from, is
+    reachable from it, which a recycled slug and a stranger's fork both fail. The SAME answers as `one_ours`, from ONE
+    `cat-file --batch-check` and at most ONE `rev-list`, where the row loop cost a --project sweep ~200 spawns per
+    workspace (landing-order wave 3c). Oids go on STDIN, never an argv (spec §7), and only after `fullmatch`: `OID.match`
+    lets a trailing newline through, which on stdin would shift every later answer. Each is asked peeled (`X^{commit}`,
+    as cat-file -e asked) and bare (as merge-base resolves it), so a name ambiguous bare answers False where merge-base
+    refused it. `tip is None` (the registry's branch did not resolve) skips reachability, as before, and a tip rev-list
+    cannot read answers False. A batch that does not answer cleanly falls back to `one_ours` row by row."""
+    cands = sorted({o for o in oids if isinstance(o, str) and OID.fullmatch(o)})
+    full, amb = {}, set()
+    if cands:
+        r = subprocess.run(['git', '-C', main, 'cat-file', '--batch-check=%(objectname) %(objecttype)'],
+                           input=''.join(o + '^{commit}\n' + o + '\n' for o in cands), capture_output=True, text=True)
+        got = r.stdout.split('\n')
+        if r.returncode != 0 or len(got) != 2 * len(cands) + 1 or got[-1] != '':
+            return [one_ours(main, tip, o) for o in oids]
+        for k, o in enumerate(cands):
+            f = got[2 * k].split(' ')
+            if len(f) == 2 and f[1] == 'commit' and re.fullmatch(r'[0-9a-f]{40}', f[0]):
+                full[o] = f[0]
+            if got[2 * k + 1] == o + ' ambiguous':
+                amb.add(o)
+    reach = None
+    if tip is not None and full:
+        r = git(main, 'rev-list', '--end-of-options', tip, '--')
+        reach = set(r.stdout.split()) if r.returncode == 0 else set()
+    return [isinstance(o, str) and o in full and (reach is None or (full[o] in reach and o not in amb)) for o in oids]
 
-    The cat-file rung survives mutation and is kept deliberately: `merge-base
-    --is-ancestor` on an object this repository does not have exits 128 and so
-    already answers False. Kept because 128 is git's *"I could not do this"*
-    and 1 is its *"no"*, and this function must not start reading a fatal as an
-    answer if the ancestry call is ever changed. (`OID`'s `{7,40}` survives too:
-    `{1,40}` accepts the same strings any real headRefOid is — it bounds a
-    GitHub-sourced string rather than deciding anything, and the cat-file rung
-    is what actually rejects a value.)
-
-    `tip is None` is the registry's branch not resolving in $main — a hand
-    rename or a hand delete, which deviation 7 measured and calls ORDINARY.
-    There is then no anchor to reach FROM, and answering False demotes a bound
-    MERGED row to `no-commits` and clears the persisted number: a LOCAL fact
-    erasing GitHub's answer about a PR. So the ancestry rung is SKIPPED rather
-    than failed, and what remains is still three of four conjuncts plus "this
-    repository can still see that commit". The recycled slug — the case the
-    ancestry rung exists for — cannot be in this state: ws-add creates the
-    branch, so a recycled name always resolves and always gets the full proof.
-    The wire says which rung answered: `tip` is null beside `ours`."""
-    if not isinstance(oid, str) or not OID.match(oid):
+def one_ours(main, tip, oid):
+    """The one-row proof, kept for a batch that did not answer cleanly (its answers define ours_of's)."""
+    if not isinstance(oid, str) or not OID.match(oid) or git(main, 'cat-file', '-e', oid + '^{commit}').returncode != 0:
         return False
-    if git(main, 'cat-file', '-e', oid + '^{commit}').returncode != 0:
-        return False
-    if tip is None:
-        return True
-    return git(main, 'merge-base', '--is-ancestor', '--', oid, tip).returncode == 0
+    return tip is None or git(main, 'merge-base', '--is-ancestor', '--', oid, tip).returncode == 0
 
 def annotate(rows, main, tip, branch, base_short):
-    out = []
-    for r in rows:
-        if not isinstance(r, dict):
-            continue
-        r['ours'] = is_ours(main, tip, r.get('headRefOid'))
-        out.append(r)
+    out = [r for r in rows if isinstance(r, dict)]
+    for r, ours in zip(out, ours_of(main, tip, [r.get('headRefOid') for r in out])):
+        r['ours'] = ours
     return out
 
 def bound(r, branch, base_short):

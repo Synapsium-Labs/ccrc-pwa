@@ -6,6 +6,9 @@ import path from 'node:path';
 import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
 import { GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
 import { isFullLine, parsePrLines, phaseFor } from '../src/prstate.js';
+import { plantGitRecorder, type RecordedGitCall } from './ccdDocsHelpers.js';
+import { createHash } from 'node:crypto';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-prstate-'); });
@@ -266,7 +269,7 @@ describe('the project sweep fetches the rollup it reads, not the ninety-nine it 
   // A per-branch rollup call per session would be exact for merged and closed
   // rows too, and it is rejected here for a measured reason: it makes ONE
   // exec's wall clock scale with the number of workspaces, so a sick GitHub
-  // turns a whole project into `agent-down` (the outer bound killed the child)
+  // turns a whole project into `cut-short` (the outer bound killed the child)
   // instead of the honest `unavailable` this same wave taught the classifier to
   // say. Two calls is two calls whatever the fleet grows to.
   it('does not put the rollup in the wide window', () => {
@@ -702,8 +705,8 @@ describe('binding', () => {
     ['a branch name', 'main'],
     ['a SHORT hex-looking ref, which is why the regex floor is 7', 'abc'],
   ])('never lets gh hand it %s to resolve as a revision', (_what, ref) => {
-    // `headRefOid` is a GitHub-sourced string and `is_ours` concatenates it into
-    // `<oid>^{commit}` for `cat-file -e` and hands it to `merge-base`. §7 is that
+    // `headRefOid` is a GitHub-sourced string: `ours_of` asks git about it on stdin,
+    // and `one_ours`, its fallback, hands it to `cat-file -e` and `merge-base`. §7 is that
     // no GitHub-sourced string is ever placed in an argv, and the OID regex is
     // what enforces it here — without it gh can name ANY revision this
     // repository can resolve, and a row saying `headRefOid: "main"` would bind
@@ -766,6 +769,128 @@ describe('binding', () => {
     // Task 12's agreement test pins prstate.ts's phaseFor equal to.
     expect(o.reason).toBe('merge-unproven');
     expect(o.number).toBe(42);   // the PR is still identified — only the merge is not proven
+  });
+});
+
+describe('binding, batched (landing-order wave 3c)', () => {
+  /** A recorded call's subcommand and its arguments: what follows `-C <dir>`. */
+  const sub = (c: RecordedGitCall): string[] => c.argv.slice(c.argv.indexOf('-C') + 2);
+  /** Exactly the binding proof's shapes, old and new. `pr-state`'s own bash runs `rev-list --count … --` for `ahead`,
+   *  and no `cat-file -e` or `merge-base` (measured at review), so none of its calls match. */
+  const annotateCalls = (calls: RecordedGitCall[]): string[] =>
+    calls.map(sub).filter((a) =>
+      (a[0] === 'cat-file' && (a[1] === '-e' || a[1]?.startsWith('--batch-check') === true))
+      || (a[0] === 'merge-base' && a[1] === '--is-ancestor')
+      || (a[0] === 'rev-list' && a[1] === '--end-of-options'))
+      .map((a) => a.slice(0, 2).join(' '));
+  /** `git -C dir …` with `stdin`, under the env `h.git` builds on (`inheritedEnv`, HOME the fixture's); trimmed stdout. */
+  const gitWrite = (dir: string, argv: string[], stdin: string): string =>
+    execFileSync('git', ['-C', dir, ...argv],
+      { encoding: 'utf8', input: stdin, env: { ...inheritedEnv(), HOME: h.home } }).trim();
+
+  it('(a) reads every row of a session with one batch and one ancestry list', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    const rows = Array.from({ length: 20 }, (_, i) => mergedRow({ number: 100 + i, headRefName: `ws/other-${i}`, headRefOid: tip }));
+    rows.push(mergedRow({ headRefOid: tip }));
+    h.ghRows(rows);
+    const rec = plantGitRecorder(h.home);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.phase).toBe('merged');
+    expect(o.rows.every((r: { ours: boolean }) => r.ours === true)).toBe(true);
+    expect(annotateCalls(rec.calls())).toEqual(['cat-file --batch-check=%(objectname) %(objecttype)', 'rev-list --end-of-options']);
+  });
+
+  it('(b) a --project read makes two annotate calls per workspace, whatever the row count', () => {
+    // A REAL commit, so the batch finds it and the ancestry list runs for both workspaces (the worktrees share one
+    // object store); a missing oid would skip `rev-list` and prove less. The second workspace is added with `ws-add`
+    // alone, as the existing --project tests do: a second `workspaceWithCommit` would re-create the repo and die.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=still-cove cmd_ws_add demo`);
+    h.ghRows(Array.from({ length: 30 }, (_, i) => mergedRow({ number: 200 + i, headRefOid: tip })));
+    const rec = plantGitRecorder(h.home);
+    h.sh(`${GH_STUB} cmd_pr_state --project demo`);
+    const got = annotateCalls(rec.calls());
+    expect(got.filter((c) => c.startsWith('cat-file --batch-check'))).toHaveLength(2);
+    expect(got.filter((c) => c.startsWith('rev-list'))).toHaveLength(2);
+    expect(got.filter((c) => c === 'cat-file -e' || c.startsWith('merge-base'))).toEqual([]);
+  });
+
+  it('(c) dedupes an oid that two rows name, and still answers each row', () => {
+    const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.git(main, 'checkout', '-q', '-b', 'someone-else');
+    fs.writeFileSync(path.join(main, 'other.txt'), 'theirs\n');
+    h.git(main, 'add', 'other.txt');
+    h.git(main, 'commit', '-m', 'someone else');
+    const stranger = h.git(main, 'rev-parse', 'HEAD');
+    h.ghRows([
+      mergedRow({ number: 1, headRefOid: tip }), mergedRow({ number: 2, headRefOid: stranger }),
+      mergedRow({ number: 3, headRefOid: tip }), mergedRow({ number: 4, headRefOid: '0'.repeat(40) }),
+      mergedRow({ number: 5, headRefOid: tip.slice(0, 7) }),
+    ]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.rows.map((r: { ours: boolean }) => r.ours)).toEqual([true, false, true, false, true]);
+  });
+
+  it('(d) a trailing-newline oid is refused before the batch, and shifts no other answer', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([
+      mergedRow({ number: 1, headRefOid: `${tip.slice(0, 7)}\n` }),
+      mergedRow({ number: 2, headRefOid: tip }),
+      mergedRow({ number: 3, headRefOid: '0'.repeat(40) }),
+    ]);
+    const rec = plantGitRecorder(h.home);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.rows.map((r: { ours: boolean }) => r.ours)).toEqual([false, true, false]);
+    // The newline oid never reached the batch: one batch, one ancestry list, and no row-by-row fallback.
+    expect(annotateCalls(rec.calls())).toEqual(['cat-file --batch-check=%(objectname) %(objecttype)', 'rev-list --end-of-options']);
+  });
+
+  it('(e) pick mode with an empty tip answers false for an existing commit, as merge-base "" did', () => {
+    // `_ws_reap_eval` never passes an empty tip (its C0 returns first); this pins `pick` called directly.
+    const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
+    fs.writeFileSync(path.join(h.home, 'pick-rows.json'), JSON.stringify([mergedRow({ headRefOid: tip })]));
+    const out = h.sh(`_pr_py pick '${main}' ws/quiet-basin main '' < "$HOME/pick-rows.json"`);
+    expect(out.trim()).toBe('!pr-head-not-ours');
+  });
+
+  it('(f) a batch that fails answers row by row, exactly as before', () => {
+    const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.git(main, 'checkout', '-q', '-b', 'someone-else');
+    fs.writeFileSync(path.join(main, 'other.txt'), 'theirs\n');
+    h.git(main, 'add', 'other.txt');
+    h.git(main, 'commit', '-m', 'someone else');
+    const stranger = h.git(main, 'rev-parse', 'HEAD');
+    h.ghRows([mergedRow({ number: 1, headRefOid: tip }), mergedRow({ number: 2, headRefOid: stranger }),
+      mergedRow({ number: 3, headRefOid: '0'.repeat(40) })]);
+    const rec = plantGitRecorder(h.home, { failWhen: ['--batch-check'] });
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.rows.map((r: { ours: boolean }) => r.ours)).toEqual([true, false, false]);
+    expect(annotateCalls(rec.calls()).filter((c) => c === 'cat-file -e')).toHaveLength(3);
+  });
+
+  it('(g) an abbreviation ambiguous between a commit and a blob answers false, as merge-base refused it', () => {
+    // Build a 7-hex collision by a birthday search, about 2^14 candidates a side: commits whose parent is the tip
+    // (fixed dates, a varying message) against blobs `blob <j>\n`. The commit becomes the branch's tip, so it IS
+    // reachable: only the ambiguity of the bare name can answer false, exactly as `merge-base -- X tip` exits 128.
+    const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
+    const tree = h.git(main, 'rev-parse', `${tip}^{tree}`);
+    const id = (type: string, body: string): string =>
+      createHash('sha1').update(`${type} ${Buffer.byteLength(body)}\0${body}`).digest('hex');
+    const blobs = new Map<string, string>();
+    for (let j = 0; j < 400_000; j++) { const b = `blob ${j}\n`; blobs.set(id('blob', b).slice(0, 7), b); }
+    let commit = '', blob = '';
+    for (let i = 0; i < 400_000 && commit === ''; i++) {
+      const c = `tree ${tree}\nparent ${tip}\nauthor t <t@e> 1700000000 +0000\ncommitter t <t@e> 1700000000 +0000\n\nc ${i}\n`;
+      const p = id('commit', c).slice(0, 7);
+      if (blobs.has(p)) { commit = c; blob = blobs.get(p)!; }
+    }
+    expect(commit, 'no 7-hex collision found in the search bound').not.toBe('');
+    const csha = gitWrite(main, ['hash-object', '-w', '-t', 'commit', '--stdin'], commit);
+    gitWrite(main, ['hash-object', '-w', '--stdin'], blob);
+    h.git(main, 'update-ref', 'refs/heads/ws/quiet-basin', csha);
+    h.ghRows([mergedRow({ number: 1, headRefOid: csha.slice(0, 7) }), mergedRow({ number: 2, headRefOid: csha })]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.rows.map((r: { ours: boolean }) => r.ours)).toEqual([false, true]);
   });
 });
 
@@ -1433,7 +1558,7 @@ describe('ccd and prstate.ts agree about phase, always', () => {
     // shorthand for the others.
     ['other head name', { headRefName: 'ws/still-cove' }, 'none', null],
     // The `ours` rung, i.e. proof 0: a well-formed head oid this repository
-    // has never seen. `is_ours`'s `cat-file -e` rung answers False, ccd
+    // has never seen. `ours_of`'s `cat-file --batch-check` finds no commit, ccd
     // annotates `ours: false`, and both sides must then refuse to bind — this
     // is the row a recycled slug and a stranger's fork both produce.
     ['head commit we do not have', { headRefOid: 'b'.repeat(40) }, 'none', null],

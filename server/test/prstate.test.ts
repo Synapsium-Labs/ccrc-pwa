@@ -111,7 +111,7 @@ describe('boundRow', () => {
   });
 
   it('refuses a row bound to a DIFFERENT branch, however well everything else matches', () => {
-    // The `is_ours` class this plan was already bitten by once (Task 3's
+    // The `ours_of` class this plan was already bitten by once (Task 3's
     // review: an unpinned `headRefOid` let a row naming a different ref bind
     // and report merged). `headRefName` is a conjunct, not a hint — a row for
     // `ws/still-cove` must never bind a query for `ws/quiet-basin` just
