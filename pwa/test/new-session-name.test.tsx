@@ -331,8 +331,10 @@ describe('closing and the Settings pointer', () => {
     rerender(false);
     rerender(true);
     await act(async () => { refuse(new ApiError(409, { ok: false, error: 'account-refused', reason: 'claude:auth-dead' })); });
-    // The sheet is on its first step, fresh, and says nothing about a create it never made.
+    // The sheet is on its first step, fresh, and holds nothing about a create it never made; the refusal was said once,
+    // as an error toast, because a dismissed sheet has nowhere to put it.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(await screen.findByText(/can't sign in right now/)).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: /team·max/ })).toBeInTheDocument();
   });
 

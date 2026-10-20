@@ -328,13 +328,19 @@ export function NewSessionSheet({
       toast(`Starting ${project.name} on ${accountLabel(roster, wrapper)}…`);
       onClose();
     } catch (err) {
-      if (preview.kind === 'named' && mine === generation.current) {
-        // The create's refusals stay in the sheet with the text intact (design §4.2); an account refusal sends the
-        // operator back to the account step, where the remedy is, and keeps the project and the name.
+      if (preview.kind === 'named') {
         const refusal = classifyAddError(err);
         const text = addRefusalText(refusal, { project: project.name, slug: preview.slug, roster });
-        setNotice({ step: refusal.kind === 'account-refused' ? 'account' : 'name', text });
-        if (refusal.kind === 'account-refused') setWrapper(null);
+        if (mine !== generation.current) {
+          // The sheet was dismissed while the request was in flight: there is no sheet to hold the sentence, and the next
+          // opening must not inherit it, so it is said once, as an error toast.
+          toast(text, 'error');
+        } else {
+          // The create's refusals stay in the sheet with the text intact (design §4.2); an account refusal sends the
+          // operator back to the account step, where the remedy is, and keeps the project and the name.
+          setNotice({ step: refusal.kind === 'account-refused' ? 'account' : 'name', text });
+          if (refusal.kind === 'account-refused') setWrapper(null);
+        }
       } else if (preview.kind !== 'named') {
         toast(failedTo('start', err), 'error');
       }

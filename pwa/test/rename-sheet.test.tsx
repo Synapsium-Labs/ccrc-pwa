@@ -287,6 +287,24 @@ describe('the reset', () => {
   });
 });
 
+describe('a refusal that arrives after the sheet was dismissed', () => {
+  it('is said once as an error toast, and never shown inside a later opening', async () => {
+    let fail: (e: unknown) => void = () => {};
+    rename.mockReturnValue(new Promise((_res, rej) => { fail = rej; }));
+    const p = props();
+    const r = mount(p);
+    type('Upload retry spike');
+    fireEvent.click(button(RENAME_TEXT.save));
+    await waitFor(() => expect(rename).toHaveBeenCalled());
+    rerenderWith(r, { ...p, open: false });
+    rerenderWith(r, { ...p, open: true });
+    fail(refuse(404, { ok: false, error: 'unknown-session' }));
+    expect(await screen.findByText(renameRefusalText({ kind: 'unknown-session' }))).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(p.onRenamed).not.toHaveBeenCalled();
+  });
+});
+
 describe('while a request is in flight', () => {
   it('the confirm says so and a second tap sends nothing more', async () => {
     let finish: (v: { title: string }) => void = () => {};

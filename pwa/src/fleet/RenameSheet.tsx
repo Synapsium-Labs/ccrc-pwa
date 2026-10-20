@@ -76,8 +76,10 @@ export function RenameSheet({ session, open, onClose, onRenamed }: RenameSheetPr
       toast('clear' in change ? 'Title cleared' : `Renamed to ${answer === 'unreadable' || answer.title === null ? typed : answer.title}`);
       onRenamed();
     } catch (err) {
-      if (mine !== generation.current) return;
-      setRefusal(renameRefusalText(classifyRenameError(err)));
+      const text = renameRefusalText(classifyRenameError(err));
+      // Dismissed while the request was in flight: the sentence has no sheet to sit in, so it is an error toast.
+      if (mine !== generation.current) { toast(text, 'error'); return; }
+      setRefusal(text);
     } finally {
       if (mine === generation.current) setBusy(null);
     }

@@ -253,7 +253,9 @@ describe('closing', () => {
     rerenderWith(r, { ...p, project: null });
     rerenderWith(r, { ...p, project: 'project-a' });
     await act(async () => { answer(refuse(409, { ok: false, error: 'slug-taken' })); });
+    // Not inside the next opening, but not silent either: the refusal is said once, as an error toast.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(await screen.findByText(/project-a-eng-1234 already exists/)).toBeInTheDocument();
     expect(p.onClose).not.toHaveBeenCalled();
   });
 
