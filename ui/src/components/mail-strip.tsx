@@ -138,6 +138,9 @@ const GATE_PHRASE: Record<MailGate, string> = {
   // "held 3h 12m · the session has only just gone quiet" was measured. The
   // phrase now covers both arms and points at the one an operator can act on.
   'not-quiet': 'the session has no usable quiet-time stamp',
+  // D-5840: the parked `enter-ignored` hold — the nudge is still sitting in
+  // the box, and the lane will not press a blind Enter on it.
+  parked: 'its input box still holds an unsubmitted nudge — submit or clear it',
   // Worker stall watch §5.1: under `mail-gate-busy`, the session's turn marker
   // (`$REG/<id>.turn.json`) could not be read (unmeasured) or did not parse
   // (malformed). A FLEET FAULT, not a busy session, so it is not `not-idle`:
@@ -255,10 +258,19 @@ const heldLine = (h: { gate: string; forMs: number }): string =>
  * `abandoned` stays first: `rejected` is terminal and outranks any reading of
  * a row that is still in play. One line per row, one place that decides which.
  */
-type StatusArm = 'abandoned' | 'blocked' | 'held' | null;
+type StatusArm = 'abandoned' | 'parked' | 'blocked' | 'held' | null;
+
+/** D-5838: a PARKED delivery — outstanding, its recipient alive, waiting for
+ *  this session's input box to change. `!= null`, not `!== null`: an older
+ *  server omits the field, and absence means "nothing to say about a park". */
+const isParked = (item: MailSummary): boolean => item.state === 'queued' && item.parkedAt != null;
 
 function statusArm(item: MailSummary, held: { gate: string; forMs: number } | null): StatusArm {
   if (item.state === 'rejected') return 'abandoned';
+  // Before `held` and `blocked`: a park is the more specific fact, and its line
+  // says what lands it. Its "attempt N of 6" would be false — a park is past
+  // that budget and is not given up.
+  if (isParked(item)) return 'parked';
   if (held !== null) return 'held';
   return isBlocked(item) ? 'blocked' : null;
 }
@@ -293,7 +305,12 @@ export function MailStrip({ mail, now: nowProp }: { mail: MailSummary[]; now?: n
         <>
           {/* THE STRIP OPENS CLOSED, so a flag that only exists in the expanded
               rows is invisible in the state the operator is actually in. */}
-          {mail.some(isBlocked) && (
+          {mail.some(isParked) && (
+            <span className="mail-strip-blocked-mark mail-strip-parked-mark" title="A message is parked — this session's input box would not take it. It lands when the box is submitted or cleared.">
+              parked
+            </span>
+          )}
+          {!mail.some(isParked) && mail.some(isBlocked) && (
             <span className="mail-strip-blocked-mark" title="A message can't be delivered — this session's input box has unsent text.">
               blocked
             </span>
@@ -332,6 +349,10 @@ export function MailStrip({ mail, now: nowProp }: { mail: MailSummary[]; now?: n
           {arm[i] === 'abandoned' ? (
             <span className="mail-strip-abandoned" title="The delivery lane gave up retrying this before it was acked.">
               undeliverable — act on it directly
+            </span>
+          ) : arm[i] === 'parked' ? (
+            <span className="mail-strip-blocked mail-strip-parked" title="Parked, not lost: the lane retries it and delivers it the moment this session's input box changes. It is rejected only after 24 h parked.">
+              parked — this session's input box would not take it; it lands when the box is submitted or cleared
             </span>
           ) : arm[i] === 'blocked' ? (
             <span className="mail-strip-blocked" title="The lane is still retrying. Clear this session's input box and it will land.">

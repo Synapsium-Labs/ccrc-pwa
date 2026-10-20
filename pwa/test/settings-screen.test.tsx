@@ -46,7 +46,6 @@ import {
   nodeStateLine,
   reachabilityLine,
   refusedLine,
-  releaseDate,
   releaseDirection,
   releaseRunningText,
   requestLine,
@@ -54,10 +53,11 @@ import {
   sortReleases,
   verifiedAt,
 } from '../src/screens/updates';
+import { releaseDate } from '../src/lib/format';
 import {
   CATALOGUE_CHECK_MINUTES, CATALOGUE_EXPLAIN_TEXT, NOTIFICATIONS_TEXT, STALL_LEVEL_NOTE, STALL_WORDS, UPDATES_TEXT,
   nodeRollbackNote, stallQuietBoundsText,
-} from '../src/screens/settingsText';
+} from '../src/fleet/settingsText';
 import { ackNote } from '../src/fleet/updateAck';
 import { MOVE_REQUESTED_TEXT } from '../src/fleet/UpdateMoveSheet';
 import { navigate } from '../src/lib/router';
@@ -2725,7 +2725,7 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
 describe('SettingsScreen — stall watch: source scans (P6, P9)', () => {
   const sectionSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'StallWatchSection.tsx'), 'utf8');
   const hookSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'useStallWatchView.ts'), 'utf8');
-  const textSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'settingsText.ts'), 'utf8');
+  const textSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'settingsText.ts'), 'utf8');
   const DEVICE_WORD = /\b(phones?|mobiles?|desktops?|tablets?|laptops?|iphones?|ipads?|android|touchscreens?|handsets?)\b/i;
   const DEVICE_BRANCH = /matchMedia|useMediaQuery|userAgent|maxTouchPoints|ontouchstart|pointer:\s*coarse|innerWidth/;
   const l0Strings = (v: unknown): string[] =>

@@ -112,6 +112,9 @@ describe('the Claude Code version grammar and comparator (D-5695)', () => {
     expect(isClaudeVersion(2.1)).toBe(false);
     expect(isClaudeVersion(null)).toBe(false);
     expect(isClaudeVersion(undefined)).toBe(false);
+    // RegExp.test coerces its argument, so only the typeof guard refuses a
+    // one-element array of a valid build (D-5695).
+    expect(isClaudeVersion(['2.1.3'])).toBe(false);
   });
 
   it('compareClaudeVersions throws on a non-version, never orders it', () => {
@@ -311,6 +314,8 @@ describe('parseClaudeNodeFile: every field validator refuses (the leak guards, s
   ])('a non-version string in %s is refused', (path) => {
     expect(parse(withField(path, STDERR))).toBeNull();
     expect(parse(withField(path, 2.1))).toBeNull();
+    // A JSON array of one valid build coerces to that build in RegExp.test.
+    expect(parse(withField(path, ['2.1.300']))).toBeNull();
   });
 
   it('a non-version string in localHalts[] is refused', () => {
