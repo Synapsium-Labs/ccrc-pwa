@@ -2372,8 +2372,10 @@ function recValidate(record, ctx, checkLink) {
 
   // Each step 0a output bound to a named node and to part 1's settings mode, and every flag it measured accepted
   // (W2-D25, amended 2026-10-19 at the final W2-3/W2-4 plan review, and by the coordinator's settings-mode ruling).
-  // A store_id that names no node, or a settings_mode other than part 1's top-level one, is value-outside-set. Only
-  // part 1's settings_mode binds step 0a; part 2's pilot_result.settings_mode is a later record, never read here.
+  // A store_id that names no node (or one a second entry binds again), a settings_mode other than part 1's top-level one,
+  // an account other than part 1's top-level one, and an empty flags_accepted map are each value-outside-set (the last two
+  // are explained by the inline comments below). Only part 1's settings_mode binds step 0a; part 2's
+  // pilot_result.settings_mode is a later record, never read here.
   // A flag measured false is flag-rejected, with no exception: under spec §10.2's fallback settings mode step 0a
   // writes no --restricted key, so refusing every false loses nothing.
   // Step 0a is per node (decisions section 4, review fix round 1): a part 1 names at least one node, each node has
