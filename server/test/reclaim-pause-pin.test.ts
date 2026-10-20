@@ -62,30 +62,55 @@ const EIO = 'EIO: the registry listing failed';
 
 /** A `FleetIO` whose REGISTRY listings are scripted per call (1-based, counting registry listings only): `real` is the
  *  fixture's own listing, `present` and `absent` are that listing with the marker added or taken out, `null` is the
- *  adapters' fold and `reject` throws. Every other directory is the base adapter's. `listings()` counts the calls. */
+ *  adapters' fold and `reject` throws. Every other directory is the base adapter's. `listings()` counts the calls.
+ *  Both readers answer from the one script (D-5969): `readdirMeasured` answers `null` as `unreadable`, and the plain
+ *  `readdir` derives from it, as `localIO`'s does, so a reader moved onto the measured listing keeps its row. */
 const scripted = (base: FleetIO, reg: string, at: (n: number) => Listing | 'real') => {
   let n = 0;
+  const readdirMeasured: FleetIO['readdirMeasured'] = async (p, timeoutMs, signal) => {
+    if (p !== reg) return base.readdirMeasured(p, timeoutMs, signal);
+    n += 1;
+    const what = at(n);
+    if (what === 'reject') throw new Error(EIO);
+    if (what === 'null') return { ok: false, reason: 'unreadable' };
+    const listed = await base.readdirMeasured(p, timeoutMs, signal);
+    if (!listed.ok || what === 'real') return listed;
+    const without = listed.entries.filter((x) => x !== RECLAIM_PAUSE_MARKER);
+    return { ok: true, entries: what === 'present' ? [...without, RECLAIM_PAUSE_MARKER] : without };
+  };
   const io: FleetIO = {
     ...base,
-    readdir: async (p: string, timeoutMs?: number, signal?: AbortSignal) => {
-      if (p !== reg) return base.readdir(p, timeoutMs, signal);
-      n += 1;
-      const what = at(n);
-      if (what === 'reject') throw new Error(EIO);
-      if (what === 'null') return null;
-      const names = await base.readdir(p, timeoutMs, signal);
-      if (names === null || what === 'real') return names;
-      const without = names.filter((x) => x !== RECLAIM_PAUSE_MARKER);
-      return what === 'present' ? [...without, RECLAIM_PAUSE_MARKER] : without;
+    readdirMeasured,
+    readdir: async (p, timeoutMs, signal) => {
+      const r = await readdirMeasured(p, timeoutMs, signal);
+      return r.ok ? [...r.entries] : null;
     },
   };
   return { io, listings: (): number => n };
+};
+
+/** A `FleetIO` whose registry listings pass through `edit` (counted per registry listing, 1-based); both readers see it. */
+const edited = (base: FleetIO, reg: string, edit: (n: number, names: string[]) => string[]): FleetIO => {
+  let n = 0;
+  const readdirMeasured: FleetIO['readdirMeasured'] = async (p, t, sig) => {
+    const listed = await base.readdirMeasured(p, t, sig);
+    if (p !== reg || !listed.ok) return listed;
+    n += 1;
+    return { ok: true, entries: edit(n, [...listed.entries]) };
+  };
+  return { ...base, readdirMeasured, readdir: async (p, t, sig) => {
+    const r = await readdirMeasured(p, t, sig);
+    return r.ok ? [...r.entries] : null;
+  } };
 };
 
 // The sentences, as the readers word them today. Spelled here, not imported, so a reworded sentence is red.
 const RAISED_CLEANUP = 'reclaim-paused is raised: cleanup is paused fleet-wide';
 const RAISED_RECLAIM = 'reclaim-paused is raised: automatic reclamation is paused fleet-wide';
 const UNLISTABLE = 'the registry did not list, so a raised reclaim-paused cannot be ruled out';
+/** D-5969 (ARCH-08b, #534): the readers on the MEASURED listing name why it did not list; `null` and a rejecting port
+ *  both read `unreadable`. */
+const UNLISTABLE_UNREADABLE = 'the registry did not list (unreadable), so a raised reclaim-paused cannot be ruled out';
 const UNREAD_RECLAIM = `whether reclaim-paused is raised could not be read (${EIO})`;
 const RAISED_DURING = 'reclaim-paused was raised during the act';
 const DISARMED_DURING = 'the lane was disarmed during the act';
@@ -266,18 +291,19 @@ describe('childReclaim.ts — releaseRetiredChildHold step 6: the reclaim switch
 // ── 1c. collectSwitches, and the collect job's two reads ─────────────────────
 
 describe('collectTempRoot.ts — collectSwitches: both switches from one listing, a pause saying why', () => {
-  const io = (l: Listing): Pick<FleetIO, 'readdir'> => ({
-    readdir: async () => {
+  const io = (l: Listing): Pick<FleetIO, 'readdirMeasured'> => ({
+    readdirMeasured: async () => {
       if (l === 'reject') throw new Error(EIO);
-      if (l === 'null') return null;
-      return l === 'present' ? [COLLECT_LANE_LIVE_MARKER, RECLAIM_PAUSE_MARKER] : [COLLECT_LANE_LIVE_MARKER];
+      if (l === 'null') return { ok: false, reason: 'unreadable' };
+      return { ok: true, entries: l === 'present' ? [COLLECT_LANE_LIVE_MARKER, RECLAIM_PAUSE_MARKER] : [COLLECT_LANE_LIVE_MARKER] };
     },
   });
+  // D-5969: the unlistable pause carries the listing's `ReadFailure` reason.
   it.each<[Listing, unknown]>([
     ['present', { paused: true, why: 'raised', marker: true }],
     ['absent', { paused: false, marker: true }],
-    ['null', { paused: true, why: 'unlistable' }],
-    ['reject', { paused: true, why: 'unlistable' }],
+    ['null', { paused: true, why: 'unlistable', reason: 'unreadable' }],
+    ['reject', { paused: true, why: 'unlistable', reason: 'unreadable' }],
   ])('%s → %j', async (l, want) => {
     expect(await collectSwitches(io(l), '/reg')).toStrictEqual(want);
   });
@@ -376,7 +402,7 @@ const deadRig = async () => {
 };
 
 describe('endDeadCoordinator.ts — the executor\'s step 1: the switches, from one listing, nearest the act', () => {
-  it.each<[Listing, string]>([['present', RAISED_CLEANUP], ['null', UNLISTABLE], ['reject', UNLISTABLE]])(
+  it.each<[Listing, string]>([['present', RAISED_CLEANUP], ['null', UNLISTABLE_UNREADABLE], ['reject', UNLISTABLE_UNREADABLE]])(
     '%s → paused-at-server, its words, and abandon never reached', async (l, detail) => {
       const f = await deadRig();
       const s = scripted(f.base.io, f.reg, (n) => (n === 1 ? l : 'real'));
@@ -397,8 +423,8 @@ describe('endDeadCoordinator.ts — stillCrashed: the act\'s late switch verdict
   it.each<[Listing, unknown]>([
     ['present', { kind: 'switch', why: RAISED_DURING }],
     ['absent', null],
-    ['null', { kind: 'switch', why: UNLISTABLE }],
-    ['reject', { kind: 'switch', why: UNLISTABLE }],
+    ['null', { kind: 'switch', why: UNLISTABLE_UNREADABLE }],
+    ['reject', { kind: 'switch', why: UNLISTABLE_UNREADABLE }],
   ])('%s → %j', async (l, want) => {
     const f = await deadRig();
     const s = scripted(f.base.io, f.reg, () => l);
@@ -416,13 +442,7 @@ describe('endDeadCoordinator.ts — stillCrashed: the act\'s late switch verdict
 
   it('the lane disarmed during the act: deadCoordinatorLaneArmed is false at stillCrashed, the close does not run', async () => {
     const f = await deadRig();
-    let n = 0;
-    const io: FleetIO = { ...f.base.io, readdir: async (p, t, sig) => {
-      const names = await f.base.io.readdir(p, t, sig);
-      if (p !== f.reg || names === null) return names;
-      n += 1;
-      return n === 1 ? names : names.filter((x) => x !== DEAD_COORDINATOR_LANE_LIVE_MARKER);
-    } };
+    const io = edited(f.base.io, f.reg, (n, names) => (n === 1 ? names : names.filter((x) => x !== DEAD_COORDINATOR_LANE_LIVE_MARKER)));
     const out = await endDeadCoordinator(f.deps(io), CRASHED, DEAD_NOW);
     expect(out).toMatchObject({ kind: 'ended', programmes: [], stoppedBy: { kind: 'switch', why: DISARMED_DURING } });
     expect(f.stateOf()).toBe('planned');
@@ -465,7 +485,7 @@ const expireRig = async () => {
 };
 
 describe('expireArchived.ts — expirySwitches at step 2 (the first read)', () => {
-  it.each<[Listing, string | null]>([['present', RAISED_CLEANUP], ['absent', null], ['null', UNLISTABLE], ['reject', UNLISTABLE]])(
+  it.each<[Listing, string | null]>([['present', RAISED_CLEANUP], ['absent', null], ['null', UNLISTABLE_UNREADABLE], ['reject', UNLISTABLE_UNREADABLE]])(
     '%s → %s', async (l, detail) => {
       const f = await expireRig();
       const s = scripted(f.base.io, f.reg, (n) => (n === 1 ? l : 'absent'));
@@ -481,7 +501,7 @@ describe('expireArchived.ts — expirySwitches at step 2 (the first read)', () =
 });
 
 describe('expireArchived.ts — expirySwitches at step 6 (NEAREST THE ARGV)', () => {
-  it.each<[Listing, string | null]>([['present', RAISED_CLEANUP], ['absent', null], ['null', UNLISTABLE], ['reject', UNLISTABLE]])(
+  it.each<[Listing, string | null]>([['present', RAISED_CLEANUP], ['absent', null], ['null', UNLISTABLE_UNREADABLE], ['reject', UNLISTABLE_UNREADABLE]])(
     '%s at step 6 → %s', async (l, detail) => {
       const f = await expireRig();
       const s = scripted(f.base.io, f.reg, (n) => (n === 1 ? 'absent' : l));
@@ -505,13 +525,7 @@ describe('expireArchived.ts — expirySwitches at step 6 (NEAREST THE ARGV)', ()
 
   it('expire-lane-live removed during the audit: step 6 answers would-expire, nothing is deleted', async () => {
     const f = await expireRig();
-    let n = 0;
-    const io: FleetIO = { ...f.base.io, readdir: async (p, t, sig) => {
-      const names = await f.base.io.readdir(p, t, sig);
-      if (p !== f.reg || names === null) return names;
-      n += 1;
-      return n === 1 ? names : names.filter((x) => x !== EXPIRE_LANE_LIVE_MARKER);
-    } };
+    const io = edited(f.base.io, f.reg, (n, names) => (n === 1 ? names : names.filter((x) => x !== EXPIRE_LANE_LIVE_MARKER)));
     expect(await expireArchived(f.deps(io), f.req)).toMatchObject({ kind: 'would-expire' });
     expect(f.verbs).toEqual(['ws-audit']);
   });
