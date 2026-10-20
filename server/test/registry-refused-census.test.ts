@@ -133,7 +133,7 @@ const EXPECTED_SITES: readonly string[] = [
   'server.ts | GET /ws/fleet | readRegistryMeasured | stale',
   'coord/routes.ts | POST /api/mail | readRegistryMeasured | refuses',
   'coord/routes.ts | POST /api/mail/:id/ack | readRegistryMeasured | refuses',
-  'coord/routes.ts | attributionVerdict | readRegistry | raw-name',
+  'coord/routes.ts | attributionVerdict | readRegistryMeasured | refuses',
   'coord/routes.ts | POST /api/approvals | readRegistry | refuses',
   'coord/routes.ts | POST /api/approvals/:id/rule | readRegistry | refuses',
   'fleet.ts | assembleFleet | readRegistryMeasured | tests-only',
@@ -370,15 +370,15 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     expect(words('fleet.ts'), 'assembleFleet’s fallback is reached by tests alone').toEqual(['tests-only']);
     expect(words('lifecycle.ts'), 'listProjects reports registry').toEqual(['reports']);
     expect(words('server.ts'), 'GET /api/fleet, then the ws cold start').toEqual(['stale', 'stale']);
-    expect(words('coord/routes.ts'), 'POST /api/mail and its ack (D-5863), then GET /api/peers and the claims conflict')
-      .toEqual(['refuses', 'refuses', 'reports', 'reports']);
+    expect(words('coord/routes.ts'), 'attribution, POST /api/mail and its ack (D-5863), then GET /api/peers and the claims conflict')
+      .toEqual(['refuses', 'refuses', 'refuses', 'reports', 'reports']);
     expect(sitesOf('fleet.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('lifecycle.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('server.ts', 'readRegistry'), 'prTasks alone, placed knownId').toHaveLength(1);
-    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'attribution, placed raw-name; the two approval routes, placed refuses').toHaveLength(3);
+    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'the two approval routes, placed refuses').toHaveLength(2);
     const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
       allSites().filter((s) => s.reader === reader).length;
-    expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(8);
-    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(17);
+    expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(7);
+    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(18);
   });
 });

@@ -642,13 +642,14 @@ export function registerCoordRoutes(
   const attributionVerdict = async (
     whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid' | 'claimedByUuid' | 'sessionUuid',
   ): Promise<AttributionRead> => {
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
+    // One read (D-5863): `names` and `records` come from the same listing.
+    // [registry-refused:refuses] a refused row is in `names`, never in `records`: the ladder reads it as unmeasurable.
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!reg.listed) {
       return { ok: false, error: 'registry-unmeasurable',
         detail: 'the registry directory could not be listed — transient, not a fact about the sender' };
     }
-    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
-    const registry = await readRegistry(deps.io, deps.cfg);
+    const { names, records: registry } = reg;
     const row = registry.find((r) => r.id === whoId);
     if (!row) {
       if (names.includes(`${whoId}.uuid`)) {
