@@ -1089,9 +1089,10 @@ describe('D-5692 R7: a pass cut by its budget writes its line at its late settle
 
 // ══ Run 645: D-5832 (CPU and stall on the line), D-5834 (no attempts write when nothing is new), D-5835 (the turns), D-5836 (the repair) ══
 //
-// Every row below is written RED FIRST, before any of the code: against `main` it fails on its own assertion (a missing key, a call
+// The rows below were written RED FIRST, before the code they pin: against `main` each fails on its own assertion (a missing key, a call
 // count, a flag not yet run), except the rows marked "green by design" (parity guards and the trigger), which pass at `main` and are
-// reddened by the mutants named on them.
+// reddened by the mutants named on them. Rows a review's fix round added came after the code and state their own status in their
+// titles (several are green by design at that round's base and red at `main`); the bound row came with the code.
 
 /** The lane itself (private), for the fields a row sets or reads and the methods it spies. */
 const laneOf = (w: World): Record<string, unknown> => (w.watcher as unknown as { delegationLane(): Record<string, unknown> }).delegationLane();
@@ -1218,7 +1219,8 @@ describe('D-5832 R4 (owed from review 642 F6): a pass that throws out of run, an
  * phase and the one after the `load` phase. Each is reached the way the lane reaches it in production: the pass budget (a global timer)
  * fires while the phase's read is still open, `sweep` returns at the cut, and the cut pass's `run` takes the exit when the read answers
  * late. Under `noteSessions: 1001` its block is over the threshold before either exit, so the `finally` must write the one line (cut=1).
- * Green by design at main; MX2 (no line on a not-ready return) reds both rows on their line-count assertion.
+ * Green by design at main; MX2 (no line on a not-ready return) reds both rows on their line-count assertion. A fresh lane starts not ready,
+ * so the exits are proven by the phases announced and the one line, not by `notReady`.
  */
 describe('D-5832 R4 (review 677 F6): the two R109 cut-before-owners exits each write their one line at the late settle', () => {
   const lineAtTheLateSettle = async (
@@ -1239,7 +1241,6 @@ describe('D-5832 R4 (review 677 F6): the two R109 cut-before-owners exits each w
     expect(m.get('noteSessions')).toBe(1001);
     expect(m.get('block'), 'only noteSessions took block time').toBe(1001);
     expect(m.has('reconcile'), 'a cut pass reconciles nothing').toBe(false);
-    expect(laneOf(w)['notReady'], 'the lane is not ready after the exit').toBe(true);
     expect(w.calls.listings, 'no owner was listed').toEqual([]);
     return m;
   };
@@ -1383,7 +1384,7 @@ describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s th
 });
 
 describe('D-5832 (the bound): the new keys sit where the line\'s bound drops them last', () => {
-  it('D-5832: at realistic values (7 digits each) the whole line is 1,817 bytes and drops nothing; at the largest values the keys that drop are a suffix of the list and the first four new keys stay', () => {
+  it('D-5832: at realistic values (7 digits each) the whole line is 1,817 bytes and drops nothing; at the largest values (2,042 bytes, 77 of the 102 input keys kept, dropped=25) the keys that drop are a suffix of the list and the first four new keys stay', () => {
     const format = surface['delegationPassSlowLine'] as SlowLine | undefined;
     expect(typeof format, 'delegationPassSlowLine is exported').toBe('function');
     const keys = SLOW_KEYS.filter((k) => k !== 'dropped');
@@ -1397,14 +1398,18 @@ describe('D-5832 (the bound): the new keys sit where the line\'s bound drops the
     const MAX = Number.MAX_SAFE_INTEGER;
     const big = format!(Object.fromEntries(keys.map((k) => [k, MAX])));
     expect(Buffer.byteLength(big)).toBeLessThanOrEqual(2048);
+    expect(Buffer.byteLength(big), 'the greedy fill under the 2,048-byte bound ends at exactly this size').toBe(2042);
     const bp = parse(big);
     const present = keys.filter((k) => bp.has(k));
+    expect(present, 'exactly 77 of the 102 input keys are kept').toHaveLength(77);
+    expect(bp.size, 'the 77 kept keys and the `dropped` pair are the line\'s pairs').toBe(78);
     expect(present, 'with equal-width values the greedy fill keeps a prefix: the end of the list drops').toEqual(keys.slice(0, present.length));
     for (const k of ['blockCpu', 'stallMax', 'stallP99', 'cpuThread']) expect(bp.has(k), `${k} (right after other) is never the first to go`).toBe(true);
     for (const k of ['attemptsSkipped', 'repairSkipped', 'cpMapping', 'cpActivities', 'yields', 'repairRewrite', 'stallRepair', 'stallMid', 'stallFlush', 'ownersCpu']) {
       expect(bp.has(k), `${k} (after censusAge) drops at the largest values`).toBe(false);
     }
     expect(bp.get('dropped'), 'and the line counts them').toBe(keys.length - present.length);
+    expect(bp.get('dropped'), 'exactly 25 of them').toBe(25);
   });
 });
 
