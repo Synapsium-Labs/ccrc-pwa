@@ -1007,10 +1007,13 @@ describe('the real sweep\'s record is readable by the doctor and the stage-6 ins
 
   // D-4320: both readers take an `old` row's comm as one run of non-whitespace, so the writer
   // must fold EVERY whitespace character, not only a space — a process name carrying a TAB
-  // otherwise makes the whole record unreadable to both. "Whitespace" is ASCII whitespace: the six
-  // characters (space, \t, \n, \v, \f, \r) the `C`-locale fold replaces, which is also all the doctor's
-  // `[^[:space:]]` and the instrument's `re.ASCII` `\S` treat as a separator. Python's Unicode `\s`
-  // would also split on \x1c-\x1f, \x85 and \xa0, which the fold leaves alone (fix round 2, F1).
+  // otherwise makes the whole record unreadable to both. "Whitespace" is ASCII whitespace, in the `C`
+  // locale: the six characters (space, \t, \n, \v, \f, \r) the fold replaces, which is also all the
+  // doctor's `[^[:space:]]` treats as a separator there (these tests pin `LC_ALL=C` for both). Neither the
+  // sweep nor the doctor check sets `LC_ALL` itself, so under another locale (`C.UTF-8`, say) the fold and
+  // the doctor's class also take in non-ASCII space characters (U+2003); the instrument's `re.ASCII` `\S`
+  // reads the record folded either way. Python's Unicode `\s` would also split on \x1c-\x1f, \x85 and
+  // \xa0, which the `C`-locale fold leaves alone (fix round 2, F1).
   /** A live pane scope whose one long-lived process has `comm`; the sweep's `old` row for it is returned with the record's path. */
   const commRecord = (comm: string): { rec: string; row: Record<string, string> } => {
     const u = unitName(1); const cg = cgOf(u);

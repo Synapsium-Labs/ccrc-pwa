@@ -610,18 +610,19 @@ def stage4(ctx):
 # trailing whitespace and whole trailing `<system-reminder>…</system-reminder>`
 # blocks (optional whitespace between them) are removed, but only the shapes above
 # keep that reminder tolerance: a `killed` envelope must have nothing after its
-# closing tag and no `</task-notification>` inside its body (a stray second closing
-# tag), and a killed envelope that fails either is unmeasured, the strict envelope
-# the kill count was read under at the base and when frozen B was measured.
+# closing tag, and with trailing reminder blocks it is unmeasured, the strict
+# envelope the kill count was read under as Task 4 shipped it (the coordinator's R1
+# ruling). A known quirk kept as at the base (parked, O4): the lazy envelope match
+# lets a killed body swallow a stray second `</task-notification>` and anything
+# before it, so such text can still count a kill.
 # The kill rule has its own non-pressure case: a single-task `killed` envelope (one
 # readable status, one readable task id) with exactly one summary element, readable
-# and not the verified pressure reason, nothing after its closing tag and no closing
-# tag inside its body, is read as not this event too (with the pressure reason it is
-# the one kill). Every other shape is unmeasured: a status, task-id or summary
-# element the scanner cannot read (an attribute, markup in the value, a second
-# unreadable one) counts against the envelope, a `killed` envelope with no summary
-# or with two is unmeasured, and a batched `killed` envelope is unmeasured, never
-# a kill.
+# and not the verified pressure reason, and nothing after its closing tag, is read as
+# not this event too (with the pressure reason it is the one kill). Every other
+# shape is unmeasured: a status, task-id or summary element the scanner cannot read
+# (an attribute, markup in the value, a second unreadable one) counts against the
+# envelope, a `killed` envelope with no summary or with two is unmeasured, and a
+# batched `killed` envelope is unmeasured, never a kill.
 # A partial read (an unreadable file, a malformed row, an envelope with an
 # unreadable stamp or ambiguous fields) and an absent roster are reported as such
 # and are never a clean zero; a row whose stamp is no string, or whose JSON nests
@@ -635,8 +636,10 @@ S6_STALE_S = 300
 S6_NUM = r"(?:0|[1-9][0-9]{0,15})"
 S6_POS = r"(?:[1-9][0-9]{0,15})"
 S6_CPU = r"(?:0|[1-9][0-9]{0,19})"
-# `\S` below excludes only ASCII whitespace (the three record patterns compile with re.ASCII): the sweep folds exactly the six ASCII
-# whitespace characters out of a comm, and Python's Unicode `\s` would also split on \x1c-\x1f, \x85 and \xa0 that the fold leaves in.
+# `\S` below excludes only ASCII whitespace (the three record patterns compile with re.ASCII): in the C locale the sweep folds exactly the
+# six ASCII whitespace characters out of a comm, and Python's Unicode `\s` would also split on \x1c-\x1f, \x85 and \xa0 that the fold leaves in.
+# The sweep sets no `LC_ALL`, so under another locale (`C.UTF-8`, say) its fold also replaces non-ASCII space characters (U+2003, measured);
+# the ASCII reader reads a record folded either way.
 S6_UNIT = r"tmux-spawn-\S+\.scope"
 S6_HDR = re.compile(rf"# ccd-scope-sweep v1 tick=({S6_NUM}) up=({S6_NUM}) mode=(shadow|live)")
 S6_DEAD = re.compile(
@@ -835,15 +838,15 @@ def s6_pressure_comparison(reading, baseline):
 # trailing whitespace and any whole trailing `<system-reminder>…</system-reminder>`
 # blocks (each complete, optional whitespace between them, nothing else) are
 # removed; any other text after the closing tag leaves it no envelope. The ruled
-# non-event shapes keep that tolerance and ask no more; a `killed` envelope is
-# stricter, the envelope the kill count was read under at the base and when frozen B
-# was measured: one with any trailing reminder block (`trailing` names those blocks)
-# is unmeasured, and so is one whose body holds a `</task-notification>`, a stray
-# second closing tag that the lazy body swallows together with any reminder before
-# it (leaving `trailing` empty). A status or task-id or summary element is counted
-# by its OPENER (`<status\b`, `<task-id\b`, `<summary\b`, which also counts an
-# attribute and a longer name: the fail-safe direction) as well as by its readable
-# value, so an element the scanner cannot read is never a missing one.
+# non-event shapes keep that tolerance; a `killed` envelope does not: one with any
+# trailing reminder block is unmeasured, the strict envelope the kill count was read
+# under as Task 4 shipped it (`trailing` names those blocks). The lazy body match
+# is the base's and is kept as it was (parked, O4): a killed body swallows a stray
+# second `</task-notification>` and anything before it, so such text, with no
+# `trailing` left, can still count a kill. A status or task-id or summary element
+# is counted by its OPENER (`<status\b`, `<task-id\b`, `<summary\b`, which also
+# counts an attribute and a longer name: the fail-safe direction) as well as by its
+# readable value, so an element the scanner cannot read is never a missing one.
 S6_NOTIFICATION = re.compile(
     r"<task-notification>\s*(.*?)\s*</task-notification>"
     r"(?P<trailing>(?:\s*<system-reminder>(?:(?!</system-reminder>).)*</system-reminder>)*)", re.S
@@ -937,11 +940,11 @@ def s6_pressure_kills(ctx):
                         # batched envelope (several ids, one status) is a known non-event.
                         if status != "killed":
                             continue
-                        if envelope.group("trailing") or "</task-notification>" in body:
-                            # The killed arm keeps the strict envelope: trailing reminder blocks,
-                            # or a closing tag inside the body (a stray second one, which the lazy
-                            # body swallowed with any reminder before it), leave it unmeasured,
-                            # whatever its summary (it only moves readings toward unmeasured).
+                        if envelope.group("trailing"):
+                            # The killed arm keeps the strict envelope: trailing reminder blocks
+                            # leave it unmeasured, whatever its summary (it only moves readings
+                            # toward unmeasured). The lazy body match, which can swallow a stray
+                            # second closing tag, is the base's and is not asked more (O4).
                             file_unmeasured += 1
                             continue
                         if id_openers != 1 or len(ids) != 1:

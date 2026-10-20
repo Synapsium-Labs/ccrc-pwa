@@ -181,30 +181,20 @@ describe('well-formed notifications that are not pressure kills read as non-even
     expect(read()).toEqual(clean(0, 0, 1));
   });
 
-  // The kill rule is unchanged: a `killed` envelope keeps the strict envelope the kill count was read under at the base
-  // and when frozen B was measured, so trailing reminder blocks leave it unmeasured, whatever its summary. The reminder
-  // tolerance belongs to the three ruled non-event shapes above and stops at the killed arm.
+  // The kill rule is unchanged: a `killed` envelope keeps the strict envelope the kill count was read under as Task 4
+  // shipped it (the coordinator's R1 ruling), so trailing reminder blocks leave it unmeasured, whatever its summary. The
+  // reminder tolerance belongs to the three ruled non-event shapes above and stops at the killed arm.
   it.each([
     ['verified single-task killed envelope, the pressure summary', note('k1')],
     ['single-task killed envelope with one readable summary that is not the pressure reason', note('k1', 'killed', 'stopped')],
-  ])('the kill rule is unchanged: a %s followed by trailing reminder blocks stays unmeasured, as at the base and as frozen B was read', (_name, text) => {
+  ])('the kill rule is unchanged: a %s followed by trailing reminder blocks stays unmeasured, as at the base', (_name, text) => {
     transcript(U1, [row(`${text}\n\n${reminder()}\n${reminder('again')}`)]);
     expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 1 });
   });
 
-  // The strict killed envelope has two halves: nothing after its closing tag (above), and no closing tag inside its
-  // body. A stray second `</task-notification>` makes the lazy body swallow the first closing tag and any reminder
-  // before it, leaving `trailing` empty, so the body is checked too. The ruled non-event arms are not asked this.
-  it.each([
-    ['a reminder and then a stray second closing tag', `${note('k1')}\n${reminder()}\n</task-notification>`],
-    ['a stray second closing tag directly', `${note('k1')}\n</task-notification>`],
-    ['a stray second closing tag, under a summary that is not the pressure reason', `${note('k1', 'killed', 'stopped')}\n</task-notification>`],
-  ])('a killed envelope followed by %s is unmeasured, never a kill', (_name, text) => {
-    transcript(U1, [row(text)]);
-    expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 1 });
-  });
-
-  it('the stray closing tag is asked of the killed arm only: a known non-killed envelope with one stays a known non-event', () => {
+  // A known non-killed envelope is asked nothing beyond its status: a reminder and a stray second `</task-notification>`
+  // after it are swallowed by the lazy body, and it is still a known non-event.
+  it('a known non-killed envelope followed by a reminder and a stray second closing tag stays a known non-event', () => {
     transcript(U1, [row(`${batched('stopped', ['b1', 'b2'])}\n${reminder()}\n</task-notification>`)]);
     expect(read()).toEqual(clean(0, 0, 1));
   });
