@@ -7755,14 +7755,16 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 
   // D-5854 (Task C0g; ARCH-06 (#554), the W1a slice). The ratchet on literal source-text pins over W1a's files, by the
   // ticket's written counting rule, `literalSourcePins`: a test file counts when it reads one of W1A_FILES with
-  // `readFileSync` (directly, or through a function whose body reads it), and a pin counts when `indexOf`, `match`,
-  // `toContain` or `toMatch` (the `expect` spelling of `match`) is called with a string or regex literal on that read,
+  // `readFileSync` (directly, through a path constant one hop away, or through a function whose body reads it), and a
+  // pin counts when `indexOf`, `match`, `toContain` or `toMatch` (the `expect` spelling of `match`) is called with a
+  // string or regex literal on that read,
   // on a variable bound to it, or on one derived from such a variable (`const body = src.slice(…)`). A name resolves to
   // its innermost declaration (`parse.ts` `bindings`), so two describes' `src` stay apart. Each file's count is pinned at
   // what it measured on merge day and may only shrink: a new literal pin over a W1a file moves the region it reads onto
   // `scan/symbols.ts` (`sourceOfSymbol`, `callsIn`) instead. Security censuses keep their literal pins and move one per
-  // PR (ARCH-06's risk line). KNOWN WIDTH: a read through a parameter, an object field or a loop over file names, a pin
-  // on a value passed to a helper, and `includes`/`search`/`matchAll` are not counted.
+  // PR (ARCH-06's risk line). KNOWN WIDTH: a read through a parameter, an object field, a loop over file names or a
+  // constant more than one hop from the path literal, a pin on a value passed to a helper, and
+  // `includes`/`search`/`matchAll` are not counted.
   const W1A_FILES = ['server/src/watch.ts', 'server/src/server.ts', 'server/src/interruptlog.ts',
     'server/src/coord/routes.ts', 'server/src/coord/childReclaim.ts', 'server/src/coord/expireArchived.ts',
     'server/src/coord/collectTempRoot.ts', 'server/src/coord/endDeadCoordinator.ts', 'server/src/coord/rundefs.ts'];
@@ -7800,23 +7802,30 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       tracked.set(i, s);
       return s.size > n;
     };
+    /** The W1a files a `readFileSync(…)` call's text reads: named in it, or (one hop) in the initialiser of the binding
+     *  its first argument names when that argument is a bare identifier (`readFileSync(WATCH_TS, 'utf8')`). */
+    const readNames = (callText: string, at: number): string[] => {
+      const id = /^readFileSync\s*\(\s*([A-Za-z_$][\w$]*)\s*[,)]/.exec(callText)?.[1];
+      const j = id === undefined ? -1 : resolve(id, at);
+      return [...new Set([...namesW1aFile(callText), ...(j < 0 ? [] : namesW1aFile(p.bindings[j]!.init, callText))])];
+    };
     const readers = new Map<string, { fixed: string[]; context: string }>();
     for (const r of p.calls.filter((c) => c.name === 'readFileSync')) {
-      const names = namesW1aFile(raw(r));
+      const names = readNames(raw(r), r.start);
       if (r.boundTo !== null) { track(resolve(r.boundTo, r.start), names); continue; }
       const fn = p.symbols.filter((s) => s.kind !== 'class' && s.start <= r.start && s.end >= r.end)
         .sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
       if (fn) readers.set(fn.name.split('.').pop()!, { fixed: names, context: raw(r) });
     }
     /** The W1a files an expression reads inline: `reader('x.ts')…` or `readFileSync(…'x.ts'…)…`. */
-    const inlineRead = (expr: string): string[] => {
+    const inlineRead = (expr: string, at: number): string[] => {
       const m = /^([A-Za-z_$][\w$]*)\s*\(/.exec(expr);
       const rd = m ? readers.get(m[1]!) : undefined;
-      return !m ? [] : m[1] === 'readFileSync' ? namesW1aFile(expr)
+      return !m ? [] : m[1] === 'readFileSync' ? readNames(expr, at)
         : !rd ? [] : rd.fixed.length ? rd.fixed : namesW1aFile(expr, rd.context);
     };
     for (const c of p.calls) if (c.boundTo !== null && c.name !== null && c.callee === c.name && readers.has(c.name)) {
-      track(resolve(c.boundTo, c.start), inlineRead(raw(c)));
+      track(resolve(c.boundTo, c.start), inlineRead(raw(c), c.start));
     }
     for (let grew = true; grew;) {
       grew = false;
@@ -7838,7 +7847,8 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
         : (c.name === 'toContain' || c.name === 'toMatch') && c.head === 'expect' ? c.headArgs?.[0] ?? null : null;
       if (subject === null) continue;
       const id = /^[A-Za-z_$][\w$]*/.exec(subject)?.[0];
-      const targets = new Set([...inlineRead(subject), ...(id === undefined ? [] : tracked.get(resolve(id, c.start)) ?? [])]);
+      const targets = new Set([...inlineRead(subject, c.start),
+        ...(id === undefined ? [] : tracked.get(resolve(id, c.start)) ?? [])]);
       for (const t of targets) out.push({ line: c.line, target: t, method: c.name!, literal: a.text });
     }
     return out;
@@ -7884,12 +7894,22 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       "const watchSrc = (): string => readFileSync(join(dir, 'watch.ts'), 'utf8');",
       "it('c', () => { const w = watchSrc(); expect(w.indexOf('c')).toBe(1); });",
     ))).toEqual(['1 server.ts toContain a', '4 watch.ts indexOf c']);
+    // A read whose path sits in a constant resolves one hop through that constant's binding.
+    expect(pins(L(
+      "const W = path.resolve(dir, '../src/watch.ts');",
+      "expect(readFileSync(W, 'utf8')).toContain('x');",
+      "const S = path.join(root, 'server', 'src', 'server.ts');",
+      "const s = readFileSync(S, 'utf8');",
+      "expect(s.match(/y/)).not.toBeNull();",
+      "const A = path.join(root, 'agent', 'src', 'server.ts');",
+      "expect(readFileSync(A, 'utf8')).toContain('z');",
+    ))).toEqual(['2 watch.ts toContain x', '5 server.ts match /y/']);
   });
 
   it('literal source pins over W1a\'s files may only shrink (D-5854; ARCH-06\'s counting rule)', () => {
     // Measured on merge day. Lower a row when a pin moves onto scan/symbols.ts; never raise one.
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 108,
+      'server/src/watch.ts': 114,
       'server/src/server.ts': 31,
       'server/src/interruptlog.ts': 0,
       'server/src/coord/routes.ts': 40,
@@ -7902,7 +7922,8 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     const counts = literalSourcePinCounts();
     expect(Object.keys(counts)).toEqual(Object.keys(CEILING));
     for (const f of W1A_FILES) {
-      expect(counts[f], `${f}: a new literal source pin — key it on scan/symbols.ts (sourceOfSymbol) instead`)
+      expect(counts[f], `${f}: a new literal source pin — key it on scan/symbols.ts (sourceOfSymbol) `
+        + 'or a parse.ts-based census instead')
         .toBeLessThanOrEqual(CEILING[f]!);
     }
   });
