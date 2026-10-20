@@ -146,6 +146,10 @@ const GATE_PHRASE: Record<MailGate, string> = {
   // (malformed). A FLEET FAULT, not a busy session, so it is not `not-idle`:
   // the operator looks at the marker, not at the session's work.
   'turn-mark-unreadable': "this session's turn marker could not be read",
+  // D-5912: the lane stashes a human's draft around its nudge (Claude Code's own `C-s`), and the stash refused. Not a
+  // draft to wait out: with the stash working a draft never holds mail, so either word means something to look at.
+  'stash-failed': "the session's input box would not stash its draft — look at the pane",
+  'stash-occupied': 'the session already holds a stashed draft — ctrl+s there brings it back',
 };
 
 /** An UNKNOWN member renders the raw token rather than `undefined` — an older

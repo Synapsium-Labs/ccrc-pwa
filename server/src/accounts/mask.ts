@@ -246,21 +246,46 @@ function leadingRun(t: string, from: number): [number, number] | null {
   const run = TOKEN_RUN.exec(t);
   return run === null ? null : [at, at + run[0].length];
 }
-/** The row lengths of one text, from one index of its line breaks (D-5995: built once, in rows mode only). */
+/** A code point a terminal draws in no column of its own (D-5995): a mark (a variation selector among them), a format
+ *  character (a zero-width joiner or space, a tag), an emoji skin-tone modifier, a conjoining jamo vowel or final. */
+const ZERO_COLUMN = /^[\p{M}\p{Cf}\u{1F3FB}-\u{1F3FF}\u1160-\u11FF\uD7B0-\uD7FF]$/u;
+/** The columns of `t`'s span [a, b), never more than a terminal draws it in (D-5995): a row's UTF-16 length is its
+ *  width only in ASCII, and an emoji sequence (a flag, a ZWJ family, a skin tone, a keycap), a combining mark or a
+ *  surrogate pair holds more units than columns, so the row before a wrapped key read as fuller than the key's own
+ *  rows and its third and later rows were drawn in clear. A pair, and a code point a ZWJ joins, counts once at most;
+ *  a wide character counts one, which only reads a row as less full (the join goes on, never stops early). */
+function columnsOf(t: string, a: number, b: number): number {
+  let n = 0;
+  for (let i = a; i < b; i++) {
+    const c = t.charCodeAt(i);
+    if (c < 0x300) { n++; continue; }   // ASCII, Latin and a NUL indent: one column each (the common case)
+    if (c >= 0xdc00 && c <= 0xdfff) continue;   // a pair's second unit
+    if (i > a && t.charCodeAt(i - 1) === 0x200d) continue;   // joined to the code point before it
+    if (!ZERO_COLUMN.test(String.fromCodePoint(t.codePointAt(i)!))) n++;
+  }
+  return n;
+}
+/** The row widths of one text, in columns, from one index of its line breaks (D-5995: built once, in rows mode only;
+ *  each row is measured once, on first use). */
 class Rows {
   private readonly breaks: number[] = [];
+  private readonly widths = new Map<number, number>();
   constructor(private readonly t: string) {
     const re = /[\r\n]/g;
     for (let m = re.exec(t); m !== null; m = re.exec(t)) this.breaks.push(m.index);
   }
-  /** The length of the row `i` sits on. */
+  /** The width of the row `i` sits on. */
   length(i: number): number {
     const b = this.breaks;
     let lo = 0; let hi = b.length;   // first break at or after i
     while (lo < hi) { const mid = (lo + hi) >> 1; if (b[mid]! < i) lo = mid + 1; else hi = mid; }
-    const start = lo > 0 ? b[lo - 1]! + 1 : 0;
-    const end = lo < b.length ? b[lo]! : this.t.length;
-    return end - start;
+    let w = this.widths.get(lo);
+    if (w === undefined) {
+      const start = lo > 0 ? b[lo - 1]! + 1 : 0;
+      const end = lo < b.length ? b[lo]! : this.t.length;
+      this.widths.set(lo, (w = columnsOf(this.t, start, end)));
+    }
+    return w;
   }
 }
 
@@ -297,11 +322,11 @@ function joinWraps(t: string): Joined | null {
     cuts.push([e, next[0]]);
     // On through every row the run fills, while each is as full as the first.
     const rowStart = Math.max(t.lastIndexOf('\n', e - 1), t.lastIndexOf('\r', e - 1)) + 1;
-    const full = e - rowStart;
+    const full = columnsOf(t, rowStart, e);
     let [from, end] = next;
     for (;;) {
       const nextRowStart = Math.max(t.lastIndexOf('\n', from - 1), t.lastIndexOf('\r', from - 1)) + 1;
-      if (end - nextRowStart < full) break;
+      if (columnsOf(t, nextRowStart, end) < full) break;
       const more = continuationAfter(t, end);
       if (more === null) break;
       cuts.push([end, more[0]]);
