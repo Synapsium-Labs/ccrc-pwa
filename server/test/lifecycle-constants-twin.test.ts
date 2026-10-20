@@ -33,6 +33,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
 import {
   LC_DIR_NAME, LC_LINE_MAX, LC_GEN_MAX_BYTES, LC_GEN_KEEP, LC_REASON_MAX_BYTES,
 } from '../../shared/api.js';
@@ -189,6 +190,30 @@ describe('wave 3 — the reason cap, in BYTES, refused and never truncated', () 
       WAVE3.map((n, i) => `${n}=${present[i]}`).join(', ')
       + ' — wave 3 ships the cap, _lc_surface_norm and _lc_dec_ok together',
     ).not.toBe('half');
+  });
+
+  it('WS_TITLE_MAX_BYTES equals LC_REASON_MAX_BYTES — asserted with no ccd in the room', () => {
+    // PURE JS-TO-JS, so it is asserted UNCONDITIONALLY. The ccd probe in the
+    // next test cannot carry this relation: in the world this file exists to
+    // stay green in — ccd declaring none of wave 3 — that probe returns early
+    // having asserted NOTHING about the constant it is there to bind, and that
+    // is the one world where a drifted third copy ships unmeasured.
+    expect(WS_TITLE_MAX_BYTES, 'a third spelling of 512').toBe(LC_REASON_MAX_BYTES);
+  });
+
+  it('…and equals ccd’s _LC_DEC_MAX, because ws-add validates --title with _lc_dec_ok', () => {
+    // WHY ONE NUMBER COVERS BOTH, since a workspace TITLE and a lifecycle
+    // REASON are otherwise unrelated things: `cmd_ws_add` validates the title
+    // with `_lc_dec_ok` — the lifecycle decisions' own helper, which counts
+    // BYTES under `LC_ALL=C` and REFUSES rather than truncates — so ccd's
+    // answer for a title is `_LC_DEC_MAX` whether or not anyone intended a
+    // title to be a decision. `shared/slug.ts` measures the same bound so the
+    // PWA can answer 400 instead of letting that refusal reach the operator as
+    // a 502 that reads like a broken fleet. Lower ccd's cap alone and
+    // `titleFits` admits exactly the titles the box refuses.
+    const v = scalar('_LC_DEC_MAX');
+    if (v === null) { expect(twinWorld(WAVE3.map((n) => declared(n)))).toBe('absent'); return; }
+    expect(WS_TITLE_MAX_BYTES, 'ccd refuses a title this side would accept').toBe(Number(v));
   });
 
   it('_LC_DEC_MAX equals LC_REASON_MAX_BYTES', () => {
