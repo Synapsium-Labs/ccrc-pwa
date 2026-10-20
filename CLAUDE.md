@@ -100,6 +100,15 @@ real values: `deploy/reference-fleet.md` (gitignored).
   that archive and is re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
   **`ws-collect` is forbidden to every session too**: it is the SERVER's act on an ORPHANED, WITNESSED temp root only,
   behind a token re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
+- **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
+  `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
+  or onto the launcher (`~/.local/bin/claude`) are forbidden on a session's prompt (`FORBIDDEN_CCD_VERBS` and
+  `FORBIDDEN_PATTERNS`, `server/src/coord/approvalguard.ts`). `claude install` and `claude update` (under the roster's
+  upstream id too) are child deny rules (`childDenyRules`, `shared/api.ts`); a top-level session's prompt for them
+  escalates to the operator. A child runs with permissions bypassed, so the session hook's PreToolUse deny is what
+  stops it: the verbs, the writes, and `install`/`update` under any path head, a `claude…` wrapper name or a
+  `~/.local/bin/<id>` launcher (D-5994). The `ccd claude …` switch verbs are the operator's, by hand; rolls and installs are ccrc's own
+  automatic acts. Account switching and the auto-swap are not touched: `ccd swap` is never blocked.
 - **NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly.** Each unit is a
   long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet. ONE scoped exception
   (operator ruling 2026-08-21, R1): `ccrc update`'s step-4 supervisor sweep (`_upd_sweep`) and deploy.sh's
