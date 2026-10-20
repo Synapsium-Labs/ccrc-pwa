@@ -9189,9 +9189,7 @@ export class FleetWatcher {
       // subagent's held row neither withholds this push nor is marked `operator` when this dialog clears.
       const open = read.rows.filter((x) => x.agentId === '' && now < x.notifyAt && x.releaseReason === null);
       if (open.length === 0) return { kind: 'none' };
-      const ev: Parameters<FleetWatcher['pushOne']>[0] = {
-        kind: 'ask', sessionId: r.id, project: r.project, title: '❓ Question', body: askPushBody(hs, dialog),
-      };
+      const ev = askHoldPayload(r, hs, dialog, null); // the builder the restart re-seed shares (D-5925)
       this.pushOne({ ...ev, recordAlways: true, recordOnly: true }, this.activeProjects);
       this.heldApprovals.set(r.id, {
         until: Math.max(...open.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: open.map((x) => x.id), ev,

@@ -320,6 +320,68 @@ describe('held questions survive a restart (D-5925)', () => {
     expect(pushes[1]!.actions ?? []).toEqual([]);
   });
 
+  it('the same menu under a changed question (another askKey) settles stale, re-seeds nothing and pushes nothing', async () => {
+    at(T0);
+    const f = fixture();
+    const { askId } = await holdBeforeRestart(f);
+    at(T0 + 20_000);
+    f.writeHook({ questions: [{ question: 'Which flavour?', header: 'Flavour', multiSelect: false,
+      options: [{ label: 'Red' }, { label: 'Blue' }] }] });  // the pane still paints MENU_PANE: same dialog id
+    const w2 = f.watcher();
+    await w2.tick();
+    expect(okAsk(f.coord.askById(askId))!.state).toBe('stale');
+    expect(heldMap(w2).has(CHILD)).toBe(false);
+    at(T0 + ASK_GRACE_MS + ASK_SWEEP_MS);
+    await w2.tick();
+    await w2.sweepAsks();
+    expect(f.askPushes()).toEqual([]);
+    expect(f.askCount()).toBe(1);
+    expect(f.parentMail()).toBe(1);
+  });
+
+  it('a matching dialog with the hookstate unreadable at boot leaves the row held, then re-seeds once readable', async () => {
+    at(T0);
+    const f = fixture();
+    const { askId } = await holdBeforeRestart(f);
+    at(T0 + 20_000);
+    rmSync(path.join(f.reg, `${CHILD}.hookstate.json`), { force: true });
+    const w2 = f.watcher();
+    await w2.tick();                                        // boot: the dialog matches, the hookstate is missing
+    expect(okAsk(f.coord.askById(askId))!.state).toBe('held');
+    expect(heldMap(w2).has(CHILD)).toBe(false);
+    at(T0 + 22_000);
+    await w2.tick();
+    expect(okAsk(f.coord.askById(askId))!.state).toBe('held');
+    f.writeHook(oneQuestion);
+    at(T0 + 24_000);
+    await w2.tick();                                        // readable now: re-seeded from the row
+    expect(heldMap(w2).get(CHILD)?.askId).toBe(askId);
+    expect(heldMap(w2).get(CHILD)?.until).toBe(T0 + ASK_GRACE_MS);
+    await w2.tick();
+    expect(f.askCount()).toBe(1);
+    expect(f.parentMail()).toBe(1);
+    expect(f.askPushes()).toEqual([]);
+  });
+
+  it('an older held row of the same child naming another dialog settles stale at boot; the newest re-seeds', async () => {
+    at(T0);
+    const f = fixture();
+    const { askId: older } = await holdBeforeRestart(f);
+    f.coord.db.prepare(
+      'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, releasedAt, ' +
+      'releaseReason) SELECT at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, ' +
+      'releasedAt, releaseReason FROM asks WHERE id = ?',
+    ).run(older);
+    f.coord.db.prepare("UPDATE asks SET dialogId = 'an-earlier-dialog' WHERE id = ?").run(older);
+    const newer = (f.coord.db.prepare('SELECT MAX(id) AS id FROM asks').get() as { id: number }).id;
+    at(T0 + 20_000);
+    const w2 = f.watcher();
+    await w2.tick();
+    expect(okAsk(f.coord.askById(older))!.state).toBe('stale');
+    expect(okAsk(f.coord.askById(newer))!.state).toBe('held');
+    expect(heldMap(w2).get(CHILD)?.askId).toBe(newer);
+  });
+
   it('hold() and the re-seed build the same payload', async () => {
     at(T0);
     const f = fixture();
@@ -379,5 +441,52 @@ describe('held permission prompts survive a restart (D-5925, spec §5.3)', () =>
     at(T0 + APPROVAL_WINDOW_MS + 22_000);
     await w2.tick();
     expect(f.askPushes()).toHaveLength(1);
+  });
+
+  it('a measured pane painting a question, not a prompt, drops the snapshot and leaves the approval rows', async () => {
+    at(T0);
+    const f = fixture();
+    const { rowId } = await holdApprovalBeforeRestart(f);
+    at(T0 + 20_000);
+    f.writeHook(oneQuestion);
+    f.panes.set(CHILD, MENU_PANE);
+    const w2 = f.watcher();
+    await w2.tick();
+    expect(heldApprovalMap(w2).has(CHILD)).toBe(false);
+    const read = f.coord.approvalById(rowId);
+    expect(read.ok && read.row?.state).toBe('held');
+  });
+
+  it('a subagent\'s held row is never re-seeded, so a cleared prompt leaves it held (D-5491)', async () => {
+    at(T0);
+    const f = fixture();
+    const { rowId } = await holdApprovalBeforeRestart(f);
+    const subId = f.coord.insertApproval({
+      childId: CHILD, parentId: PARENT, runId: null, digest: 'e'.repeat(64), nonce: 'm'.repeat(32), agentId: 'sub',
+      tool: 'Bash', inputRedacted: 'ls', truncated: false, class: 'read', askAt: Date.now(),
+      notifyAt: Date.now() + APPROVAL_WINDOW_MS,
+    });
+    at(T0 + 20_000);
+    const w2 = f.watcher();
+    await w2.tick();
+    expect(heldApprovalMap(w2).get(CHILD)?.rowIds).toEqual([rowId]);
+    f.panes.set(CHILD, BARE_PROMPT);
+    at(T0 + 22_000);
+    await w2.tick();                                        // the prompt clears: only the main thread's row is marked
+    const main = f.coord.approvalById(rowId);
+    expect(main.ok && main.row?.state).toBe('operator');
+    const sub = f.coord.approvalById(subId);
+    expect(sub.ok && sub.row?.state).toBe('held');
+  });
+
+  it('the re-seeded prompt defers the very payload tryHoldApproval minted', async () => {
+    at(T0);
+    const f = fixture();
+    const { w1 } = await holdApprovalBeforeRestart(f);
+    const minted = heldApprovalMap(w1).get(CHILD)!.ev;
+    at(T0 + 20_000);
+    const w2 = f.watcher();
+    await w2.tick();
+    expect(heldApprovalMap(w2).get(CHILD)!.ev).toEqual(minted);
   });
 });
