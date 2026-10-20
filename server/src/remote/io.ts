@@ -140,11 +140,6 @@ export function createIo(client: FleetClient): FleetIO {
       }
     },
 
-    async readFileB64(path) {
-      const r = await this.readFileB64Measured(path);
-      return r.ok ? r.dataB64 : null;
-    },
-
     /** The `readdir` op's measured reader: it reads the wire's `absent` off a
      *  directory listing, where `names: null` WITH `absent: true` is a proven
      *  ENOENT. A bare `names: null` is what an older agent sends for every

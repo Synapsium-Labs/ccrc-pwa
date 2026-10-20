@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { FleetIO } from '../io.js';
+import type { FleetIO, MeasuredDirectoryRead } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { NotifyLog } from '../notifylog.js';
 import type { CoordStore } from './store.js';
@@ -156,9 +156,13 @@ export function deadCoordinatorJournalOf(coord: CoordStore, id: string, trust: D
 /** Is the claimant STILL crashed, and is the lane still armed and unpaused? `null` when it may go on; otherwise why
  *  it stops — typed (`DeadCoordinatorStop`), so the lane never re-splits the prose. */
 export async function stillCrashed(deps: EndDeadCoordinatorDeps, id: string): Promise<DeadCoordinatorStop | null> {
-  let names: readonly string[] | null;
-  try { names = await deps.io.readdir(deps.cfg.registryDir); } catch { names = null; }
-  if (names === null) return { kind: 'switch', why: `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out` };
+  // D-5969 (ARCH-08b): the MEASURED listing; a rejecting port is `unreadable`, and the stop says which it was.
+  let listed: MeasuredDirectoryRead;
+  try { listed = await deps.io.readdirMeasured(deps.cfg.registryDir); } catch { listed = { ok: false, reason: 'unreadable' }; }
+  if (!listed.ok) {
+    return { kind: 'switch', why: `the registry did not list (${listed.reason}), so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out` };
+  }
+  const names = listed.entries;
   if (names.includes(RECLAIM_PAUSE_MARKER)) return { kind: 'switch', why: `${RECLAIM_PAUSE_MARKER} was raised during the act` };
   if (!deadCoordinatorLaneArmed(names)) return { kind: 'switch', why: 'the lane was disarmed during the act' };
   // The journal's own trust FIRST, and whole: a mirror gone `unknown` or `stale` since the pass stops the act as the
@@ -187,11 +191,14 @@ export async function endDeadCoordinator(
   deps: EndDeadCoordinatorDeps, claimantId: string, _passNowMs: number,
 ): Promise<DeadCoordinatorActOutcome> {
   // 1 — the switches, from ONE listing, nearest the act.
-  let names: readonly string[] | null;
-  try { names = await deps.io.readdir(deps.cfg.registryDir); } catch { names = null; }
-  if (names === null) {
-    return { kind: 'paused-at-server', detail: `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out` };
+  // D-5969 (ARCH-08b): the MEASURED listing; a rejecting port is `unreadable`, and the pause says which it was.
+  let listed: MeasuredDirectoryRead;
+  try { listed = await deps.io.readdirMeasured(deps.cfg.registryDir); } catch { listed = { ok: false, reason: 'unreadable' }; }
+  if (!listed.ok) {
+    return { kind: 'paused-at-server',
+      detail: `the registry did not list (${listed.reason}), so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out` };
   }
+  const names = listed.entries;
   if (names.includes(RECLAIM_PAUSE_MARKER)) {
     return { kind: 'paused-at-server', detail: `${RECLAIM_PAUSE_MARKER} is raised: cleanup is paused fleet-wide` };
   }

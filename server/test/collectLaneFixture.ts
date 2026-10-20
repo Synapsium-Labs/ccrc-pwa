@@ -162,15 +162,21 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
       if (leaf === 'tmproots' && gate !== null) await gate;
       return base.io.lstatMeasured(p);
     },
-    async readdir(p, timeoutMs, signal) {
+    // The registry's listing is intercepted on the MEASURED reader, which the executor reads (D-5969); the plain
+    // `readdir` derives from it, as `localIO`'s does, so either reader sees the same fault.
+    async readdirMeasured(p, timeoutMs, signal) {
       if (p === reg) registryListings += 1;
       if (p === reg && listingHold !== null) {
         const h = listingHold;
         listingHold = null; park(h.id, 1);
         try { await h.promise; } finally { park(h.id, -1); }
       }
-      if (p === reg && unlistable) return null;
-      return base.io.readdir(p, timeoutMs, signal);
+      if (p === reg && unlistable) return { ok: false, reason: 'unreadable' };
+      return base.io.readdirMeasured(p, timeoutMs, signal);
+    },
+    async readdir(p, timeoutMs, signal) {
+      const r = await this.readdirMeasured(p, timeoutMs, signal);
+      return r.ok ? [...r.entries] : null;
     },
   };
   const fleetState = { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: [...FULL_CAPS] };
