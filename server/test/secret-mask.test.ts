@@ -1663,7 +1663,7 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
       for (const [type, payload] of [['fleet', sessions], ['runs', runs], ['coord', coord], ['notice', notice]] as const) {
         const before = calls;
         const seen = count(type);
-        bus.emit(type, payload as never);
+        bus.emit(type as never, payload as never);
         await until(() => count(type) === seen + N);
         expect(calls - before, type).toBe(1);
       }
