@@ -42,7 +42,7 @@
 1. **An oid with a trailing newline**, such as `"abc1234\n"`.
    - Today `OID.match` accepts it, because `$` matches before a final newline. `cat-file -e` then refuses it, so `ours` is false.
    - On stdin the newline would split one line into two and shift every later answer of the batch.
-   - The batched read must reject the oid before writing stdin. That row reads `ours: false`, and every other row keeps its own answer. (Task 1, Step 1 (d).)
+   - The batched read rejects the oid before writing stdin (`fullmatch`), so that row reads `ours: false` and the batch stays clean. What stops a stray line from shifting answers is the exact length check on the batch's output, which sends a misaligned batch to the row-by-row fallback. (Task 1, Step 1 (d) pins both: the answers, and that no fallback ran.)
 2. **The split runs every tick-diet row exactly once per locale.** No row is dropped and none runs twice, so the union of the two files' test names equals the old file's. (Task 4, Step 4.) (For Task 1, the same oid in two rows and an existing oid beside a missing one are pinned by Step 1 (c).)
 3. **`pick` mode's empty tip.**
    - `pick` mode takes its tip raw, with no `or None`. So an empty tip, if one ever came, reaches `merge-base … ""`, which exits 128, and the row answers false. `_ws_reap_eval` returns before calling `pick` without a tip today (its C0), so the case pins `pick` called directly.
@@ -62,7 +62,7 @@
 | `pwa/src/session/PrKeycap.tsx` | 2 | `REASON_TEXT['cut-short']` |
 | `server/test/pr-sweep.test.ts`, `server/test/prstate.test.ts`, `server/test/single-definition.test.ts` | 2 | tests; the count moves 12 → 13 |
 | `server/src/server.ts` | 2, 3 | the PR route's failure fold; the `onClose` hook awaits the caps write |
-| `server/test/server-caps.test.ts`, `server/test/fleetws.test.ts`, six stub-watcher tests | 3 | the close-waits case; the teardown; `serverCapsSettled` on each stub |
+| `server/test/server-caps.test.ts`, `server/test/fleetws.test.ts`, seven stub-watcher tests | 3 | the close-waits case; the teardown; `serverCapsSettled` on each stub |
 | `server/test/ccd-tick-diet-equivalence.test.ts`, new `server/test/ccdTickDietRunner.ts`, new `server/test/ccd-tick-diet-equivalence-utf8.test.ts` | 4 | the split |
 | `docs/superpowers/plans/2026-09-24-landing-order-wave2-native-queue.md` | 5 | Task 7's runbook |
 
@@ -128,7 +128,7 @@ Two shapes needed the code below and not the first draft:
 - **An abbreviation that is ambiguous between a commit and another object.** `cat-file -e X^{commit}` passes, because the hint picks the commit. But `merge-base --is-ancestor -- X tip` resolves the bare `X`, finds it ambiguous and exits 128. So the batch also sends each bare name, and a bare `ambiguous` answers False wherever the old code would have reached `merge-base`.
 - **A batch that does not answer cleanly** (a non-zero exit, or misaligned lines). It falls back to the old row-by-row proof. So one broken object still costs only its own row, never a bound MERGED row's persisted number.
 
-A 7-hex collision costs about 2^28 hashes to build, so the suite carries no case for it. The review harness is that evidence.
+A 7-hex collision is a birthday search, about 2^14 candidates per side, because both objects can be varied. The review built one in under a second, so the suite carries the case: Step 1 (g).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -197,8 +197,11 @@ describe('binding, batched (landing-order wave 3c)', () => {
       mergedRow({ number: 2, headRefOid: tip }),
       mergedRow({ number: 3, headRefOid: '0'.repeat(40) }),
     ]);
+    const rec = plantGitRecorder(h.home);
     const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
     expect(o.rows.map((r: { ours: boolean }) => r.ours)).toEqual([false, true, false]);
+    // The newline oid never reached the batch: one batch, one ancestry list, and no row-by-row fallback.
+    expect(annotateCalls(rec.calls())).toEqual(['cat-file --batch-check=%(objectname) %(objecttype)', 'rev-list --end-of-options']);
   });
 
   it('(e) pick mode with an empty tip answers false for an existing commit, as merge-base "" did', () => {
@@ -223,8 +226,35 @@ describe('binding, batched (landing-order wave 3c)', () => {
     expect(o.rows.map((r: { ours: boolean }) => r.ours)).toEqual([true, false, false]);
     expect(annotateCalls(rec.calls()).filter((c) => c === 'cat-file -e')).toHaveLength(3);
   });
+
+  it('(g) an abbreviation ambiguous between a commit and a blob answers false, as merge-base refused it', () => {
+    // Build a 7-hex collision by a birthday search, about 2^14 candidates a side: commits whose parent is the tip
+    // (fixed dates, a varying message) against blobs `blob <j>\n`. The commit becomes the branch's tip, so it IS
+    // reachable: only the ambiguity of the bare name can answer false, exactly as `merge-base -- X tip` exits 128.
+    const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
+    const tree = h.git(main, 'rev-parse', `${tip}^{tree}`);
+    const id = (type: string, body: string): string =>
+      createHash('sha1').update(`${type} ${Buffer.byteLength(body)}\0${body}`).digest('hex');
+    const blobs = new Map<string, string>();
+    for (let j = 0; j < 400_000; j++) { const b = `blob ${j}\n`; blobs.set(id('blob', b).slice(0, 7), b); }
+    let commit = '', blob = '';
+    for (let i = 0; i < 400_000 && commit === ''; i++) {
+      const c = `tree ${tree}\nparent ${tip}\nauthor t <t@e> 1700000000 +0000\ncommitter t <t@e> 1700000000 +0000\n\nc ${i}\n`;
+      const p = id('commit', c).slice(0, 7);
+      if (blobs.has(p)) { commit = c; blob = blobs.get(p)!; }
+    }
+    expect(commit, 'no 7-hex collision found in the search bound').not.toBe('');
+    const csha = gitWrite(main, ['hash-object', '-w', '-t', 'commit', '--stdin'], commit);
+    gitWrite(main, ['hash-object', '-w', '--stdin'], blob);
+    h.git(main, 'update-ref', 'refs/heads/ws/quiet-basin', csha);
+    h.ghRows([mergedRow({ number: 1, headRefOid: csha.slice(0, 7) }), mergedRow({ number: 2, headRefOid: csha })]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.rows.map((r: { ours: boolean }) => r.ours)).toEqual([false, true]);
+  });
 });
 ```
+
+(g) needs `import { createHash } from 'node:crypto';` and a `gitWrite(dir, argv, stdin)` helper that runs `git -C dir …` with that stdin and returns trimmed stdout. Build it on whatever `h.git` uses (read `ccdWsHelpers.ts`), so the spawn censuses (`raw-spawn-census`, `ccd-workspaces`) still accept the file; run both after adding it. The search is deterministic per tip and takes well under a second; if `commit` stays empty, raise the bound rather than skipping.
 
 - [ ] **Step 2: Run them and record the red**
 
@@ -232,7 +262,8 @@ Run: `cd server && ./node_modules/.bin/vitest run test/ccd-pr-state.test.ts -t '
 
 Expected on `main`'s `ccd/ccd`:
 - (a) and (b) fail: the recorder sees `cat-file -e` and `merge-base` per row (measured at review: 21 pairs for (a)).
-- (c), (d), (e) and (f) pass. They pin today's answers, which the change must keep. (f) passes on `main` because nothing there runs `--batch-check`.
+- (d) fails too: its call-shape assertion sees the per-row calls.
+- (c), (e), (f) and (g) pass. They pin today's answers, which the change must keep. (f) passes on `main` because nothing there runs `--batch-check`.
 
 Record the counts.
 
@@ -314,15 +345,17 @@ Expected:
 - Every case passes, the new ones included.
 - The census's `'ccd/ccd': 147` is unchanged. Measured at review: a 34-line block reds three census cases, and a 40-line block is green.
 - `ccd-pr-state`'s "names the SESSION…" case runs no git here and is load-sensitive (35 s at load 45). If it reds, re-run it alone.
+- `citations.test.ts` was measured RED on `main` itself at review (`1584 numeric line citations, below BASELINE 1587`), and Task 1 moves no citation. Run it on `main`'s tree first. If `main` is still red, it is an inherited red: name it in the wave-done, and do not lower `BASELINE` in Task 1's commit. If the PR's required check reds on it at landing, I rule the land-sync then.
 
 - [ ] **Step 5: Mutations, then commit**
 
 Record each red, then restore `ccd/ccd` byte for byte (`cmp`):
-- **M1:** `OID.fullmatch(o)` becomes `OID.match(o)`. Expected: (d) reds.
-- **M2:** `(reach is None or (full[o] in reach and o not in amb))` becomes `True`. Expected: three cases red, `'refuses a PR whose head commit IS here but is not reachable from our tip'`, (c) and (e).
-- **M3:** drop the `rev-list` call, so `reach` stays None for every tip. Expected: `'keeps a bound MERGED answer…'` and `'keeps rc 1 and rc 128 apart'` red (`describe` ≈813).
-- **M4:** the old per-row loop is restored. Expected: (a) and (b) red.
+- **M1:** `OID.fullmatch(o)` becomes `OID.match(o)`. Expected: (d) reds, through its call-shape assertion: the misaligned batch takes the fallback (measured at review: the answers alone stay green).
+- **M2:** `(reach is None or (full[o] in reach and o not in amb))` becomes `True`. Expected: four cases red: `'refuses a PR whose head commit IS here but is not reachable from our tip'`, (c), (e) and (g).
+- **M3:** drop the `rev-list` call, so `reach` stays None for every tip. Expected: six red: `'refuses a PR whose head commit IS here but is not reachable from our tip'`, (a), (b), (c) and (e), measured at review before (g) existed, and (g), whose ambiguity check sits behind the tip.
+- **M4:** the old per-row loop is restored. Expected: (a), (b) and (d) red, (d) through its call-shape assertion.
 - **M5:** the fallback `return [one_ours(…) …]` becomes `return [False for o in oids]`. Expected: (f) reds.
+- **M6:** `(full[o] in reach and o not in amb)` becomes `(full[o] in reach)`. Expected: (g) reds.
 
 ```bash
 git add ccd/ccd server/test/ccd-pr-state.test.ts
@@ -341,7 +374,7 @@ git commit -m "fix(pr-state): read a workspace's PR rows in two git calls, same 
   - `server/src/server.ts` (`GET /api/sessions/:id/pr`'s failure fold, ≈3561-3562);
   - `pwa/src/session/PrKeycap.tsx` (`REASON_TEXT` ≈70);
   - `server/test/single-definition.test.ts` (≈166).
-- Test: `server/test/prstate.test.ts`, `server/test/pr-sweep.test.ts` and `server/test/pr-routes.test.ts`.
+- Test: `server/test/prstate.test.ts`, `server/test/pr-sweep.test.ts`, `server/test/pr-routes.test.ts` and `pwa/test/pr-keycap.test.tsx`.
 
 **Interfaces:**
 - Consumes: `CcdResult` (`server/src/coord/ports.ts:20-33`) and `ccdEnding` (`server/src/lifecycle.ts`). Both `prstate.ts` and `lifecycle.ts` classify as L1, so the import is sideways.
@@ -383,7 +416,7 @@ describe('sweepFailureReason (landing-order wave 3c)', () => {
 
 (d) A logging case on the same fixture. Spy with `const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})` and `const sweeps = () => warn.mock.calls.map((c) => String(c[0])).filter((s) => s.includes('PR sweep of demo'))`. Restore the spy in a `finally`.
 
-Before every forced pass after the first, wait as the first case does: `await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0))`. Then set `lastPrSweep = 0` and clear `prBackoff`, or the single-flight latch and the backoff bounce the pass.
+After EVERY pass, wait as the first case does, `await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0))`, and only then assert that step's `sweeps()`. A step whose state does not change (step 2) would otherwise pass before its sweep has run. Then, before the next pass, set `lastPrSweep = 0` and clear `prBackoff`, or the single-flight latch and the backoff bounce it.
 
 The sequence:
 1. Fail.
@@ -400,6 +433,8 @@ Expected `sweeps()` after each step:
 (e) In `server/test/pr-routes.test.ts`, beside `'answers unknown/agent-down rather than 502 when ccd fails'` (≈116), add a case whose runner answers `{ code: 1, stdout: '', stderr: '', killed: true, signal: 'SIGTERM' }`. It expects `reason: 'cut-short'`.
 
 (f) In `server/test/single-definition.test.ts`, change `expect(PR_REASONS).toHaveLength(12)` to `13`.
+
+(g) In `pwa/test/pr-keycap.test.tsx`, add `['cut-short', /could not finish reading the PRs/i]` to the `it.each` table "every reason under unknown carries its own sentence" (≈238-266). `Record<PrReason, string>` only makes a missing key a compile error; this row pins the sentence.
 
 - [ ] **Step 2: Run them and record the red**
 
@@ -468,13 +503,13 @@ Expected: all pass, and both builds exit 0. `single-definition`'s "literal sourc
 - [ ] **Step 5: Mutations, then commit**
 
 Record each red, then restore:
-- **M6:** `sweepFailureReason(res)` becomes `'agent-down'` in `sweepPr`. Expected: (b), (c) and (d) red. (d) reds through its step-1 pattern.
-- **M7:** the latch test `!== reason` becomes `true`. Expected: (d) reds at its second step.
-- **M8:** delete the recovery line. Expected: (d) reds at step 3.
-- **M9:** the route's fold goes back to `'agent-down'`. Expected: (e) reds.
+- **M7:** `sweepFailureReason(res)` becomes `'agent-down'` in `sweepPr`. Expected: (b), (c) and (d) red. (d) reds through its step-1 pattern.
+- **M8:** the latch test `!== reason` becomes `true`. Expected: (d) reds at its second step (measured at review, with the wait after every pass).
+- **M9:** delete the recovery line. Expected: (d) reds at step 3.
+- **M10:** the route's fold goes back to `'agent-down'`. Expected: (e) reds.
 
 ```bash
-git add shared/api.ts server/src/prstate.ts server/src/watch.ts server/src/server.ts pwa/src/session/PrKeycap.tsx server/test/prstate.test.ts server/test/pr-sweep.test.ts server/test/pr-routes.test.ts server/test/single-definition.test.ts
+git add shared/api.ts server/src/prstate.ts server/src/watch.ts server/src/server.ts pwa/src/session/PrKeycap.tsx server/test/prstate.test.ts server/test/pr-sweep.test.ts server/test/pr-routes.test.ts server/test/single-definition.test.ts pwa/test/pr-keycap.test.tsx
 git commit -m "fix(pr-sweep): name a read that was cut short, and log a failed sweep once per change"
 ```
 
@@ -484,14 +519,15 @@ git commit -m "fix(pr-sweep): name a read that was cut short, and log a failed s
 
 **Files:**
 - Modify: `server/src/server.ts` (the `onClose` hook, ≈3908).
-- Modify six tests whose stub watcher (`{ …, stop: () => {} } as unknown as FleetWatcher`) gains `serverCapsSettled: async () => {}`:
+- Modify seven tests whose stub watcher (`{ …, stop: () => {} } as unknown as FleetWatcher`) gains `serverCapsSettled: async () => {}`:
   - `server/test/dispatch-live-gate.test.ts`;
   - `server/test/interrupt-route.test.ts`;
   - `server/test/lifecycle.test.ts`;
   - `server/test/projects-route-placement.test.ts`;
   - `server/test/archive-door.test.ts`;
-  - `server/test/auth-gate.test.ts`.
-  Measured at review: without the stub method, 49 of their 386 tests red with `TypeError: watcher.serverCapsSettled is not a function`. Find every stub with `git grep -n 'as unknown as FleetWatcher' server/test`, and give each one the method.
+  - `server/test/auth-gate.test.ts`;
+  - `server/test/coordinator-intent-route.test.ts` (≈126). Its `afterEach` swallows a rejected close (`close().catch(() => undefined)`), so it stays green without the method. Its closes would still reject, so it gets the method too.
+  Measured at review: without the stub method, 49 of the first six files' 386 tests red with `TypeError: watcher.serverCapsSettled is not a function`. `git grep -n 'as unknown as FleetWatcher' server/test` finds most stubs. It does not find `lifecycle.test.ts` (`as never`) or `auth-gate.test.ts` (an untyped object), which are listed here by name. The grep also finds `collect-lane-route.test.ts` and `stall-settings-route.test.ts`, whose stubs never reach `buildServer`; they need no method.
 - Modify: `server/test/fleetws.test.ts`'s `afterEach` (≈92-97).
 - Test: `server/test/server-caps.test.ts`.
 
@@ -567,7 +603,7 @@ In `fleetws.test.ts`'s `afterEach`, change `rmSync(home, { recursive: true, forc
 - [ ] **Step 4: Run the tests**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/server-caps.test.ts test/fleetws.test.ts test/dispatch-live-gate.test.ts test/interrupt-route.test.ts test/lifecycle.test.ts test/projects-route-placement.test.ts test/archive-door.test.ts test/auth-gate.test.ts
+cd server && ./node_modules/.bin/vitest run test/server-caps.test.ts test/fleetws.test.ts test/dispatch-live-gate.test.ts test/interrupt-route.test.ts test/lifecycle.test.ts test/projects-route-placement.test.ts test/archive-door.test.ts test/auth-gate.test.ts test/coordinator-intent-route.test.ts
 ./node_modules/.bin/vitest run test/boot.test.ts
 ```
 
@@ -575,10 +611,10 @@ Expected: all pass. `boot.test.ts`'s hung-ccd case is known red on a loaded box 
 
 - [ ] **Step 5: Mutation, then commit**
 
-- **M10:** drop `await watcher.serverCapsSettled();`. Expected: the new case reds. Restore it.
+- **M11:** drop `await watcher.serverCapsSettled();`. Expected: the new case reds. Restore it.
 
 ```bash
-git add server/src/server.ts server/test/server-caps.test.ts server/test/fleetws.test.ts server/test/dispatch-live-gate.test.ts server/test/interrupt-route.test.ts server/test/lifecycle.test.ts server/test/projects-route-placement.test.ts server/test/archive-door.test.ts server/test/auth-gate.test.ts
+git add server/src/server.ts server/test/server-caps.test.ts server/test/fleetws.test.ts server/test/dispatch-live-gate.test.ts server/test/interrupt-route.test.ts server/test/lifecycle.test.ts server/test/projects-route-placement.test.ts server/test/archive-door.test.ts server/test/auth-gate.test.ts server/test/coordinator-intent-route.test.ts
 git commit -m "fix(server): close waits for an in-flight server-caps write"
 ```
 
@@ -591,6 +627,7 @@ git commit -m "fix(server): close waits for an in-flight server-caps write"
 - Create: `server/test/ccd-tick-diet-equivalence-utf8.test.ts`.
 - Modify: `server/test/ccd-tick-diet-equivalence.test.ts`.
 - Never edit `server/test/fixtures/tick-diet-legacy.bash`. E0 pins its sha256. Its comment that names the old file stays as it is.
+- Modify: `server/test/ccd-harness-integrity.test.ts`, its `TEST_LOCAL_HELPERS` (≈110-111). The table is checked in both directions, and ten of its seventeen helpers for the old file are defined in code that moves. These gain a `'ccdTickDietRunner.ts'` entry: `__diet_caller __diet_side __hm2 __lfc __lfx __lj6 __rg4 __rt __rt_snap __seq`. The `'ccd-tick-diet-equivalence.test.ts'` entry keeps the seven that stay. Re-derive both lists from where each helper is defined after the move, rather than copying these.
 
 **Interfaces:**
 - Produces: `ccdTickDietRunner.ts` exports everything the seven per-locale blocks and the blocks that stay need:
@@ -627,7 +664,7 @@ Run it in the foreground. If the whole file cannot fit one call, run bounded par
 ```bash
 cd server && ./node_modules/.bin/vitest run test/ccd-tick-diet-equivalence.test.ts --reporter=json --outputFile.json=<scratch>/diet-c.json
 ./node_modules/.bin/vitest run test/ccd-tick-diet-equivalence-utf8.test.ts --reporter=json --outputFile.json=<scratch>/diet-utf8.json
-./node_modules/.bin/vitest run test/ccd-workspaces.test.ts test/raw-spawn-census.test.ts test/typecheck-tests.test.ts
+./node_modules/.bin/vitest run test/ccd-workspaces.test.ts test/raw-spawn-census.test.ts test/typecheck-tests.test.ts test/ccd-harness-integrity.test.ts
 ```
 
 Expected:
@@ -646,7 +683,7 @@ Until the next trusted `testtimes` artifact, `shards.mjs` gives the new file the
 - [ ] **Step 6: Commit**
 
 ```bash
-git add server/test/ccdTickDietRunner.ts server/test/ccd-tick-diet-equivalence.test.ts server/test/ccd-tick-diet-equivalence-utf8.test.ts
+git add server/test/ccdTickDietRunner.ts server/test/ccd-tick-diet-equivalence.test.ts server/test/ccd-tick-diet-equivalence-utf8.test.ts server/test/ccd-harness-integrity.test.ts
 git commit -m "test(tick-diet): run the differential file as two files, one per locale"
 ```
 
@@ -682,31 +719,34 @@ Keep `ruleset-rollback.json`: `gh api -X PUT "repos/{owner}/{repo}/rulesets/$RS"
 with
 
 ````markdown
-Keep `ruleset-rollback.json`: it restores the ruleset exactly as it was, maintain bypass included. **THE ROLLBACK empties the queue before it writes** (landing-order wave 3c): switching the requirement off with entries in it drops them silently. On 2026-10-20 four PRs read open, not queued and not armed, with no removal event; each timeline's last queue act stayed `Added`, so no lane could announce it. Every rollback, a stop rule's or an unplanned one, is this block:
+Keep `ruleset-rollback.json` and the shell's `RS`: they restore the ruleset exactly as it was, maintain bypass included. **THE ROLLBACK empties the queue before it writes** (landing-order wave 3c). Switching the requirement off with entries in it drops them silently. On 2026-10-20 four PRs then read open, not queued and not armed, with no removal event; each timeline's last queue act stayed `Added`, so no lane could announce it. Every rollback, a stop rule's or an unplanned one, is this block. It refuses to start without the (4a) directory and `RS`. In a new shell, `cd` to that directory and recompute `RS` as (4a) does. A queue armed in the UI has no rollback file, so the guard stops the block. Run its lines from `q=` through the `left=` read by hand, which dequeues without writing, and then restore the three settings in the UI (approvals 1, merge queue off, the maintain role back in the bypass list).
 
 ```bash
+[ -n "$RS" ] && [ -s ruleset-rollback.json ] && [ "$(jq -r .id ruleset-before.json 2>/dev/null)" = "$RS" ] \
+  || { echo 'STOP: cd to the (4a) directory and set RS as (4a) does; nothing dequeued or written'; exit 1; }
 q='query($o:String!,$n:String!){repository(owner:$o,name:$n){mergeQueue(branch:"main"){entries(first:50){nodes{state pullRequest{id number}}}}}}'
 dq='mutation($id:ID!){dequeuePullRequest(input:{id:$id}){mergeQueueEntry{state}}}'
+rd() { gh api graphql -F o='{owner}' -F n='{repo}' -f query="$q" \
+         --jq '(.data.repository.mergeQueue.entries.nodes // [])[] | [.state, .pullRequest.id, .pullRequest.number] | @tsv'; }
 seen=""
 for pass in 1 2 3 4 5 6 7 8 9 10; do
-  rows=$(gh api graphql -F o='{owner}' -F n='{repo}' -f query="$q" --jq '.data.repository.mergeQueue.entries.nodes[] | [.state, .pullRequest.id, .pullRequest.number] | @tsv')
+  rows=$(rd) || { echo "STOP: the queue read failed on pass $pass; the ruleset is NOT written"; exit 1; }
   [ -z "$rows" ] && break
   while IFS=$'\t' read -r st id num; do
-    seen="$seen $num"
+    case " $seen " in *" $num "*) ;; *) seen="$seen $num" ;; esac
     [ "$st" = LOCKED ] && continue        # already merging: let it land, and read again
     gh api graphql -F id="$id" -f query="$dq" >/dev/null || gh api graphql -F id="$id" -f query="$dq" >/dev/null \
       || echo "DEQUEUE FAILED #$num"
   done <<<"$rows"
   sleep 10
 done
+left=$(rd) || { echo "STOP: the final queue read failed; the ruleset is NOT written"; exit 1; }
+[ -z "$left" ] && echo 'queue empty' || printf 'STILL LISTED: #%s %s\n' $(printf '%s\n' "$left" | awk -F'\t' '{print $3, $1}')
 gh api -X PUT "repos/{owner}/{repo}/rulesets/$RS" --input ruleset-rollback.json --jq '{id, rules: [.rules[].type]}'
 echo "seen:$seen"
 ```
 
-Expected: the loop ends on an empty read, then the ruleset reads `rules: ["pull_request"]`. Re-read every PR in `seen` with (a2)'s timeline read: each one that did not merge ends in a `RemovedFromMergeQueueEvent`. Two cases are written anyway, and the PR is recorded as silently dropped, with a comment on it:
-- a `DEQUEUE FAILED` line;
-- an entry still listed after the tenth pass (a `LOCKED` one that never cleared, or entries that kept arriving).
-Comment on each removed PR that is not the proof's: say that the queue went off and the PR must be landed again by the pre-queue path.
+Expected: `queue empty`, then the ruleset reads `rules: ["pull_request"]`. A failed read stops the block before any write, with a `STOP:` line, because an unreadable queue is not an empty one. Re-read every PR in `seen` with (a2)'s timeline read: each one that did not merge ends in a `RemovedFromMergeQueueEvent`. Two cases are written anyway, and the PR is recorded as silently dropped, with a comment on it: a `DEQUEUE FAILED` line, and a `STILL LISTED` line (a `LOCKED` entry that never cleared, or entries that kept arriving). Comment on each removed PR that is not the proof's: say that the queue went off and the PR must be landed again by the pre-queue path.
 ````
 
 In Step 6, stop rule 3's sentence `Roll back: re-apply `ruleset-rollback.json` (queue off, approvals 1, maintain bypass back).` becomes `Roll back with Step 4's rollback block (the queue emptied first, then queue off, approvals 1, maintain bypass back).` Stop rule 5's `roll back as in 3` is unchanged.
@@ -714,18 +754,35 @@ In Step 6, stop rule 3's sentence `Roll back: re-apply `ruleset-rollback.json` (
 - [ ] **Step 3: (e) first inside the window, on the fourth PR (Step 5)**
 
 Move the (e) paragraph, with its code block and its Expected, from after (d) to directly after (a0)'s Expected. Then:
-- Replace its first sentence, `(e) **The dequeue lane** — enqueue a fourth trivial PR and remove it from the queue in GitHub's UI ("Remove from queue") before it lands; within one sweep (≤ 120 s):`, with `(e) **The dequeue lane, FIRST inside the window** — on the fourth PR, right after (a0) and before (a1) or any landing (landing-order wave 3c: a lane that cannot announce a removal must be found before the landings wait on it): once its required checks are green, enqueue it with the landing spelling, read the entry back with (a0)'s read, then remove it — GitHub's UI ("Remove from queue"), or `gh api graphql -F id=<its node id> -f query='mutation($id:ID!){dequeuePullRequest(input:{id:$id}){mergeQueueEntry{state}}}'`; within one sweep (≤ 120 s):`
-- In its Expected, delete the clause `and still NO `queue` event names any of the three PRs that landed in (a)–(b) — one that does is a spurious dequeue (stop rule 6)`. (a2) already reads the feed for that, after the landings.
-- Append to its Expected: `NO such event within 120 s is stop rule 8. (e) never runs on a PR that (a1) has pushed to: a push made outside a PR's workspace moves the PR's head off the workspace's own tip, the PR no longer binds, and its removal cannot reach the lane (2026-10-20).`
+- Replace its first sentence, `(e) **The dequeue lane** — enqueue a fourth trivial PR and remove it from the queue in GitHub's UI ("Remove from queue") before it lands; within one sweep (≤ 120 s):`, with:
 
-- [ ] **Step 4: Stop rule 8, and the bypass merge (Step 6)**
+  `(e) **The dequeue lane, FIRST inside the window** — on the fourth PR, right after (a0) and before (a1) or any landing (landing-order wave 3c: a lane that cannot announce a removal must be found before the landings wait on it). Once its required checks are green, enqueue it with the landing spelling, and read the entry back with (a0)'s read: a non-null `mergeQueueEntry` this time. Then remove it, with GitHub's UI ("Remove from queue") or with `gh api graphql -F id="$(gh pr view <pr-d> --json id -q .id)" -f query='mutation($id:ID!){dequeuePullRequest(input:{id:$id}){mergeQueueEntry{state}}}'`. Within one sweep (≤ 120 s):`
+- In its Expected, delete `; and still NO `queue` event names any of the three PRs that landed in (a)–(b) — one that does is a spurious dequeue (stop rule 6)`, leading `; ` included. (a2) already reads the feed for that, after the landings.
+- In its Expected, directly after the sentence that ends `so the lane records and mails nobody` (before `Close the fourth PR afterwards.`), insert: `No `queue` event naming the fourth PR's workspace within 120 s of the removal is stop rule 8. (e) never runs on a PR that (a1) has pushed to: a push made outside a PR's workspace moves the PR's head off the workspace's own tip, the PR no longer binds, and its removal cannot reach the lane (2026-10-20).`
 
-After stop rule 7, add:
+- [ ] **Step 4: Stop rules 6 and 8, the bypass merge, and Step 1's full-run lookup**
+
+- In stop rule 6, `**or a `queue` event names a PR that landed** ((a2), (e))` becomes `**or a `queue` event names a PR that landed** ((a2))`, because (e) now runs before any landing.
+- After stop rule 7, add:
 
 ```markdown
 8. **(e)'s removal was not announced within one sweep** — no `queue` event names the fourth PR's workspace 120 s after its removal, on a PR that still binds (`ccd pr-state --session` reads it `open`). The lane is blind: roll back with Step 4's rollback block before any landing is queued, and do not plan wave 2b.
 
 A merge to `main` through the admin bypass while the queue is on (another programme's landing; wave 2b's deny is not live) makes the queue rebuild its groups on the new base. It is recorded with its time and PR, and is not a stop by itself; a rebuilt group that then fails for a reason not its PR's own is stop rule 3.
+```
+
+- In Step 1's full-run block, the lookup filters by event at the source. On 2026-10-20, forty push runs filled `--limit 40`, the daily run was not among them, and the block said `NO FULL RUN YET`. Replace
+
+```bash
+for r in $(gh run list --workflow ci.yml --branch main --limit 40 --json databaseId,event \
+             --jq '.[] | select(.event == "schedule" or .event == "workflow_dispatch") | .databaseId'); do
+```
+
+with
+
+```bash
+for r in $( { gh run list --workflow ci.yml --branch main --event schedule --limit 10 --json databaseId --jq '.[].databaseId'
+              gh run list --workflow ci.yml --branch main --event workflow_dispatch --limit 10 --json databaseId --jq '.[].databaseId'; } ); do
 ```
 
 - [ ] **Step 5: Check and commit**
@@ -734,12 +791,13 @@ A merge to `main` through the admin bypass while the queue is on (another progra
 f=docs/superpowers/plans/2026-09-24-landing-order-wave2-native-queue.md
 grep -o 'dequeuePullRequest' "$f" | wc -l          # expected 2: the rollback block's mutation and (e)'s
 grep -o "Step 4's rollback block" "$f" | wc -l     # expected 2: stop rules 3 and 8
+grep -c -- '--event schedule' "$f"                 # expected 1
 cd server && ./node_modules/.bin/vitest run test/docs-grammar.test.ts test/deviation-refs.test.ts test/docs-policy.test.ts
 git add "$f"
 git commit -m "docs(landing-order): Task 7's runbook carries the re-run's changes"
 ```
 
-Measure both counts and record them as found. If they differ from the comments, say why in the wave-done, rather than editing the text to fit. If a docs test pins Task 7's text, update it in this commit and name it.
+Measure the counts and record them as found. If they differ from the comments, say why in the wave-done, rather than editing the text to fit. Then run the rollback block's logic against a stub `gh` (a PATH script, no network), covering a failing read, an empty read, a `LOCKED` entry that never clears, and two entries that dequeue. Record each output. Paste the applied Step 5 text of Task 7 into the wave-done and read it once end to end. If a docs test pins Task 7's text, update it in this commit and name it.
 
 ### Task 6: The wave's gate, the PR and the wave-done
 
@@ -750,11 +808,12 @@ Measure both counts and record them as found. If they differ from the comments, 
 - Server:
   - `ccd-pr-state`, `ccd-ws-audit`, `ccd-ws-reap`, `ccd-lifecycle-pairs`, `ccd-prhistory`, `ccd-pr-queue`, `ccd-bounded-reads`;
   - `pr-sweep`, `prstate`, `pr-routes`, `pr-queue-lane`, `remote-runner`, `pr-timeout-budget`;
-  - `server-caps`, `fleetws`, `boot`, and Task 3's six stub-watcher files;
-  - both tick-diet files, `ccd-workspaces`, `raw-spawn-census`;
+  - `server-caps`, `fleetws`, `boot`, and Task 3's seven stub-watcher files;
+  - both tick-diet files, `ccd-workspaces`, `raw-spawn-census`, `ccd-harness-integrity`;
   - `single-definition`, `typecheck-tests`, `ownership`, `mark-check`, `citations`, `deviation-refs` (after `git fetch origin main`), `docs-grammar`, `docs-policy`;
   - `session-hook -t 'the compaction card'`.
 - PWA: `test/pr-keycap.test.tsx`.
+- `citations` is a known inherited red on `main` (Task 1 Step 4); record it as found.
 - Builds: `server` and `pwa`, `npm run build`.
 
 The known load flakes are in `CLAUDE.md`, plus `single-definition`'s "literal source pins" case at 20 s. Re-run one alone before calling it a break, and name every re-run.

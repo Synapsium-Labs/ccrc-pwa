@@ -22,7 +22,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
 | 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | run 310 open (planned; the run's wave 4), block 4326–4335; to plan |
-| 3c | — | Task 7's re-run preconditions: `pr-state`'s per-workspace git cost, a sweep failure the server reports, the two suite flakes the queue turned into removals, the runbook's re-run changes | ccd, server, tests, plan text | wave 2's proof run | — | to plan |
+| 3c | — | Task 7's re-run preconditions: `pr-state`'s per-workspace git cost, a sweep failure the server reports, the two suite flakes the queue turned into removals, the runbook's re-run changes | ccd, server, tests, plan text | wave 2's proof run | — | planned (plan added with this record); to dispatch |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
@@ -660,8 +660,8 @@ carries it (spec §5.1, amended 2026-09-24).
     - **What stopped it.** At 12:01 another programme's ledger PR, #964, was merged through the admin bypass while
       the queue was on. `main` moved, and the queue rebuilt #942's group on the new base. In that group one server
       shard ran only `ccd-tick-diet-equivalence.test.ts` and hit the 30-minute job bound (run 39419159770). That
-      shard is slow everywhere: over the day's successful runs its median was 20.9 minutes and its 90th percentile
-      26.7, and one pull-request run hit the same bound. GitHub removed #942 at 12:32:35Z (`failed_checks`), and the
+      shard is slow everywhere: measured while planning wave 3c, its median over the day's successful runs was 20.9
+      minutes and its 90th percentile 26.7, and one pull-request run hit the same bound. GitHub removed #942 at 12:32:35Z (`failed_checks`), and the
       coordinator enqueued it again at 12:52:04Z, after reading why. #963's group failed in `fleetws.test.ts`:
       `ENOTEMPTY` from the `afterEach` removal of the test's home, which reads as a race with a write still landing
       (run 39423071534). GitHub removed it at 12:54:52Z (`failed_checks`). Neither failure was its PR's own.
