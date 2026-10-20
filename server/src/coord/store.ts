@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
-import { tx } from './db.js';
+import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import { redactCommand } from './redact.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
