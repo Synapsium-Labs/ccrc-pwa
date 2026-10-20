@@ -2407,6 +2407,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         - Owner: the ccrc history programme (W2-4, #826). Mail 7340 to its coordinator asks for the fix and a mail
           when it merges. Its send timed out during a server stall, and it landed. I do not touch the file. On the
           merge, a new full run, then the fast-forward on its green `full-suite`.
+        - 19:05: mail 7342, the owner verified the cause against the job and dispatched the fix as its run 713. The
+          fix is test-only: the key is tolerated only on Darwin and only when it was added, and the driver is
+          unchanged. Its PR's advisory test-macos leg is the macOS proof; if selection skips that leg, it asks me
+          for the macOS re-measure I offered. It mails me the merge sha.
         - The probe's NOTE at 18:58: `/health` was silent for 5 s and answered v0.0.472 on the retry. The broker's
           slow-pass lines at 18:57:11 and 18:58:15 read block 14.3 s and 16.9 s, flush 10.1 s and 12.9 s, rewrite
           6.6 s and 6.8 s, against block 12.9 s at 14:58. A stall again, not an update fault. For tomorrow's soak.
