@@ -13,20 +13,25 @@
 // is mocked as in `jump-latest.test.tsx`, so its props and its imperative
 // `scrollToIndex` are observable and its mounts countable.
 //
-// RED FIRST, measured on the task's base (see the PR): this file did not
-// compile there (no `skins/`). Against a planted `app.tsx` that renders the
-// spec's literal mechanism, `<SKIN_SETS[skin].Shell>{ladder}</…>` with two
-// distinct shell components and the providers above them, the cases that
-// hold state in the ladder went red; the table is in the PR body.
+// RED FIRST, measured on the task's base: this file did not compile there
+// (no `skins/`). Against a planted `app.tsx` that renders the spec's literal
+// mechanism, `<Shell>{ladder}</Shell>` with two distinct shell components per
+// skin and the providers above them, 10 of 16 went red: every case whose
+// state lives in the ladder. The six that held there are the ones mounted
+// above the frame (the route, the palette, the toast, New session, the
+// theme) and the frame-only focus case, which is the point of D-5467.
 //
 // MUTATION TABLE (plan Task S2b Step 3; RUN, each mutant applied to a copy,
-// this suite run alone):
-//   ShellFrame given key={set.id} ....................... every app case
-//   the ladder rendered inside set.Nav .................. composer text, same DOM node
-//   CommandLayer inside the frame, keyed per skin ....... the open palette
+// this suite run alone; all red):
+//   ShellFrame given key={set.id} ....................... the 10 ladder cases
+//   the ladder rendered inside set.Nav .................. composer text, sheets, drawer, focus, follow (9)
+//   CommandLayer inside the frame, keyed per skin ....... the open palette, the palette's focus (2)
 //   FleetFlows mounted inside set.Nav ................... the open sheet (New session)
-//   the detail child keyed detail-${set.id} ............. same DOM node, composer text
+//   the detail child keyed detail-${set.id} ............. same DOM node, composer text, and 8 more
 //   the toast host mounted inside a skin part ........... the toast
+//   ChatList never re-settles on a switch ............... the following reader
+//   the palette's close leaves focus where it fell ...... the palette's focus
+//   the frame drops focus when a replaced part held it .. the frame focus case
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
