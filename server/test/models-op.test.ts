@@ -184,17 +184,27 @@ function plantAdv(id: string = LEGACY_EXTERNAL_ID, registry: Registry = ADV_REGI
 const plantAdvance = (id: string, adv: Advance | string): void => {
   fs.writeFileSync(advPath(id), typeof adv === 'string' ? adv : serializeAdvance(adv));
 };
-/** `SEED_FAMILIES.codex`'s one literal word, read off the source rather than spelled: this repository is public. */
-const SEED_EMPTY_FAMILY: string = ((): string => {
+/** `SEED_FAMILIES.codex`'s one literal word, read off the source rather than spelled (this repository is public), or
+ *  null when the line has changed shape. Read when a case asks, never while vitest collects this file: a throw at
+ *  collection would fail the whole file as one error and hide every other case's own result (`writeOps()`'s rule in
+ *  ccrc-models-lock.test.ts). The case "SEED_FAMILIES.codex has its one literal word" names a reshaped line. */
+const seedEmptyFamily = (): string | null => {
   const src = fs.readFileSync(OP, 'utf8');
-  const m = /^\s*fable: '([a-z][a-z0-9]*)',$/m.exec(src.slice(src.indexOf('const SEED_FAMILIES')));
-  if (m === null) throw new Error('deploy/models-op.mjs has no SEED_FAMILIES literal');
-  return m[1]!;
-})();
-/** What `init codex` seeds: the families of SEEDED's three pins, and the literal for its empty class. */
+  return /^\s*fable: '([a-z][a-z0-9]*)',$/m.exec(src.slice(src.indexOf('const SEED_FAMILIES')))?.[1] ?? null;
+};
+/** What `init codex` seeds: the families of SEEDED's three pins, and the literal for its empty class, read lazily: a
+ *  case that needs the literal fails by name when it cannot be read. */
 const CODEX_SEEDS = {
   haiku: familyOf(SEEDED.classes.haiku), sonnet: familyOf(SEEDED.classes.sonnet),
-  opus: familyOf(SEEDED.classes.opus), fable: SEED_EMPTY_FAMILY,
+  opus: familyOf(SEEDED.classes.opus),
+  get fable(): string {
+    const word = seedEmptyFamily();
+    if (word === null) {
+      throw new Error('deploy/models-op.mjs has no SEED_FAMILIES literal for the empty class (the case '
+        + '"SEED_FAMILIES.codex has its one literal word" names it)');
+    }
+    return word;
+  },
 };
 
 beforeEach(() => { home = mkTmp('ccrc-models-op-'); seed(); });
@@ -2265,6 +2275,11 @@ describe('the advance file through init, set-class, rm and advance-backfill (aut
     fs.writeFileSync(regPath(id), SEEDED_REGISTRY_BYTES, { mode: 0o600 });
   };
 
+  it("SEED_FAMILIES.codex has its one literal word, the empty class's seed this file reads off the source", () => {
+    expect(seedEmptyFamily(), "deploy/models-op.mjs's SEED_FAMILIES has no `<class>: '<word>',` line for its empty class")
+      .not.toBeNull();
+  });
+
   it("init codex writes the advance file: every class's family, the empty class's seed included, 0600", () => {
     withCodexRow();
     const prev = process.umask(0o022);
@@ -2916,13 +2931,15 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
     expect(fs.existsSync(advPath(ID))).toBe(false);
   });
 
+  // `want` is a thunk: CODEX_SEEDS reads the seed literal when a case runs, never while vitest collects the table.
   it.each([
-    ['absent', (): void => {}, { state: 'absent' }],
+    ['absent', (): void => {}, () => ({ state: 'absent' })],
     ['ok', (): void => { plantAdvance(ID, backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS })); },
-      { state: 'ok', classes: backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS }).classes }],
-    ['invalid', (): void => { plantAdvance(ID, '{ this is not json'); }, { state: 'invalid' }],
-    ['unreadable', (): void => { fs.mkdirSync(advPath(ID)); }, { state: 'unreadable' }],
-  ] as [string, () => void, Record<string, unknown>][])('show carries the advance state: %s', (_why, plant, want) => {
+      () => ({ state: 'ok', classes: backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS }).classes })],
+    ['invalid', (): void => { plantAdvance(ID, '{ this is not json'); }, () => ({ state: 'invalid' })],
+    ['unreadable', (): void => { fs.mkdirSync(advPath(ID)); }, () => ({ state: 'unreadable' })],
+  ] as [string, () => void, () => Record<string, unknown>][])('show carries the advance state: %s', (_why, plant, wantOf) => {
+    const want = wantOf();
     plantAdv();
     plant();
     const r = op('show', '--file', rosterPath(), '--id', ID);
