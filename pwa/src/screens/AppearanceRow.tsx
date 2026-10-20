@@ -22,11 +22,17 @@
 // `<Radio>`, so the frame both fieldsets share lives here too.
 import type { ReactNode } from 'react';
 import { PHOSPHOR, RADIO_FIELDSET, RADIO_LEGEND, Radio } from '@ccrc/ui';
+import { doorMark } from '../command/door';
 
-/** One Appearance fieldset: the set, and its legend. */
-export function AppearanceFieldset({ legend, children }: { legend: string; children: ReactNode }): ReactNode {
+/** One Appearance fieldset: the set, and its legend. `command` is the
+ *  registry command whose argument the choice is (Switch theme, Switch
+ *  layout): the fieldset is that command's door, marked and not handled,
+ *  because the radios already act (`doorMark`, D-5469). */
+export function AppearanceFieldset(
+  { legend, command, children }: { legend: string; command: string; children: ReactNode },
+): ReactNode {
   return (
-    <fieldset className={RADIO_FIELDSET}>
+    <fieldset className={RADIO_FIELDSET} {...doorMark(command)}>
       <legend className={RADIO_LEGEND}>{legend}</legend>
       {children}
     </fieldset>

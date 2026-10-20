@@ -2260,7 +2260,8 @@ describe('a chip never names rows that are not on the screen', () => {
         session({ id: 'b', project: 'beta', bucket: 'idle' }),
       ],
     });
-    expect(screen.queryAllByRole('region')).toHaveLength(0);
+    // The fleet column itself is the one region (W2 Task S2b: the detail is the one main); no bucket adds another.
+    expect(screen.queryAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['Fleet']);
     expect(screen.getAllByRole('group').map((g) => g.getAttribute('aria-label')))
       .toEqual(['Attention', 'Idle']);
   });

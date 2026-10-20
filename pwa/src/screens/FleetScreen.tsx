@@ -227,7 +227,7 @@ export function FleetScreen({
   // (`runCard`'s docstring has the two fallbacks and why each is load-bearing).
 
   return (
-    <main className="fleet" data-conn={conn}>
+    <section aria-label="Fleet" className="fleet" data-conn={conn}>
       <FleetHead
         countLine={sessions.length > 0 ? countLine : null}
         poolLag={poolLag}
@@ -496,6 +496,6 @@ export function FleetScreen({
       {/* Wave 19, D-5124: the four surfaces show the stale sentence; this one region announces it, once. */}
       <div className="sr-only" role="status">{stale ? UPDATES_STALE_TEXT : null}</div>
       <BuildLine health={fleetHealth} nodes={updates.view?.nodes ?? null} staleNote={stale ? UPDATES_STALE_TEXT : null} />
-    </main>
+    </section>
   );
 }
