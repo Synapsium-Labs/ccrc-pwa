@@ -5656,6 +5656,9 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
           // A power row gives the validator both levels part 2 reads plus the row's value, so the row tests the per-entry check alone.
           const asSigned = field === 'power' ? [0.5, 0.8, v] : v;
           expect(q18(field, asSigned).length === 0, `validator: ${field} = ${String(v)}`).toBe(valid);
+          // q18Power is asked first with families [], where a dropped throw returns instead of looping, so a mutant reds here
+          // before the call below can hang the file.
+          if (!valid) expect(() => q18With({ [param]: v }), `q18Power, families []: ${param} = ${String(v)}`).toThrow(RangeError);
           // q18Power gets NON-EMPTY families, so a grid that hangs or throws on the draws is walked, not skipped.
           if (valid) expect(() => q18With({ families: FAMS, sims: 4, B: 40, [param]: v }), `q18Power: ${param} = ${String(v)}`).not.toThrow();
           else expect(() => q18With({ families: FAMS, sims: 4, B: 40, [param]: v }), `q18Power: ${param} = ${String(v)}`).toThrow(RangeError);
@@ -5690,14 +5693,17 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
     it('q18Power throws a RangeError, and returns at once, on each grid step and rho that would hang or throw on the draws', () => {
       expect(() => q18Run({}), 'CONTROL: the call runs').not.toThrow();
       // The validator is asked first, so a guard that lets one of these through reds here by assertion, before q18Power is
-      // called on a value that would hang it.
+      // called on a value that would hang it; then q18Power with families [], where a dropped throw returns instead of looping.
       for (const gridStep of [1e-17, 5e-308, 7.993605777301475e-16]) {
         expect(verdict(set(draft(), 'q18_settings.grid_step', gridStep)), `validator: grid step ${gridStep}`).toEqual([{ path: 'q18_settings.grid_step', word: VOS }]);
+        expect(() => q18With({ gridStep }), `q18Power, families []: grid step ${gridStep}`).toThrow(RangeError);
         expect(() => q18Run({ gridStep }), `grid step ${gridStep}`).toThrow(RangeError);
         expect(() => q18Run({ gridStep }), `grid step ${gridStep}`).toThrow(`q18Power: grid step ${gridStep} is so small that x.den * N is not a safe integer`);
       }
       expect(() => q18Run({ gridStep: 1e-15 }), 'CONTROL: a step of 1e-15 is still valid and runs').not.toThrow();
       expect(verdict(set(draft(), 'q18_settings.rho_headline', 1e-309)), 'validator: rho 1e-309').toEqual([{ path: 'q18_settings.rho_headline', word: VOS }]);
+      // Asked with families [] first: without q18Power's own throw that call returns, so this reds before q18Run can loop.
+      expect(() => q18With({ rho: 1e-309 }), 'q18Power, families []: rho 1e-309').toThrow(RangeError);
       expect(() => q18Run({ rho: 1e-309 })).toThrow(RangeError);
       expect(() => q18Run({ rho: 1e-309 })).toThrow('q18Power: rho 1e-309 is so small that (1 - rho)/rho is not finite');
       expect(() => q18Run({ rho: -0.1 })).toThrow('q18Power: rho -0.1 is outside [0, 1)');
@@ -5726,11 +5732,14 @@ describe('W2-3 Task 9: the counter definitions and the open record', () => {
         expect(one('grid_step', gridStep), `CONTROL: grid step ${gridStep} has a safe x.den·N`).toEqual([]);
         expect(() => q18Run({ gridStep }), `q18Power: grid step ${gridStep}`).not.toThrow();
       }
-      // The refused neighbours, validator asked first so a loosened guard reds by assertion, not by a hang.
+      // The refused neighbours, validator asked first so a loosened guard reds by assertion, not by a hang; then q18Power with
+      // families [], so a dropped q18Power throw also reds by assertion before q18Run can loop.
       expect(one('rho_headline', 5.562684646268003e-309), 'the largest rho below the edge, measured: (1 - rho)/rho overflows').toEqual(refused('rho_headline'));
+      expect(() => q18With({ rho: 5.562684646268003e-309 }), 'q18Power, families []: the same rho').toThrow(RangeError);
       expect(() => q18Run({ rho: 5.562684646268003e-309 })).toThrow(RangeError);
       for (const gridStep of [FIRST_UNSAFE, 9.99e-16]) {
         expect(one('grid_step', gridStep), `grid step ${gridStep}`).toEqual(refused('grid_step'));
+        expect(() => q18With({ gridStep }), `q18Power, families []: grid step ${gridStep}`).toThrow(RangeError);
         expect(() => q18Run({ gridStep }), `q18Power: grid step ${gridStep}`).toThrow(RangeError);
       }
     });
