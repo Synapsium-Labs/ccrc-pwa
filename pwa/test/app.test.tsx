@@ -290,3 +290,24 @@ describe('T13 review 5-2: /docs-x and /docs.md are not Docs', () => {
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'fleet');
   });
 });
+
+// W2 S2a review: the fleet's five sheets render from `FleetFlows`, which `app.tsx` mounts beside `.app-shell`
+// (D-5468). The fleet suites mount it themselves through test/fleetHost.tsx, so only the real App proves the
+// production mount: drop `<FleetFlows />` from app.tsx and the fleet's doors open nothing, and this goes red.
+describe('App mounts the fleet sheets (D-5468)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("the fleet's New session door and a session's ··· door each open their sheet", () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    act(() => useFleetStore.setState({ conn: 'open', sessions: [fleetSession({ id: 'a', project: 'alpha', workspace: 'quiet-mesa' })] }));
+    navigate('/');
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }));
+    expect(screen.getByRole('dialog', { name: /start a session/i })).toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
+    expect(screen.getByRole('button', { name: /restart session/i })).toBeInTheDocument();
+  });
+});

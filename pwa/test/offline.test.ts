@@ -2,7 +2,7 @@
 // fleet store hydrates from it at boot (conn stays 'connecting'), and the
 // fleet screen stale-marks hydrated data until the socket opens.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, screen } from '@testing-library/react';
 import { createElement } from 'react';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
@@ -10,6 +10,7 @@ import { loadFleetSnapshot, saveFleetSnapshot } from '../src/lib/offline';
 import { spawnVerdictChip } from '../src/fleet/spawnWords';
 import { createFleetStore } from '../src/stores/fleet';
 import { FleetScreen } from '../src/screens/FleetScreen';
+import { renderFleet } from './fleetHost';
 import { TEST_ROSTER } from './rosterFixture';
 
 const session = (id: string): FleetSession =>
@@ -539,7 +540,7 @@ describe('FleetScreen stale marking', () => {
   it('shows hydrated cards behind a last-known banner while connecting', () => {
     saveFleetSnapshot([session('claude:OpenClawHetzner')]);
     const store = createFleetStore({ makeSocket: (url) => new FakeSocket(url) as unknown as WebSocket });
-    render(createElement(FleetScreen, { store }));
+    renderFleet(createElement(FleetScreen, { store }));
 
     // Instant content from the snapshot, clearly marked stale.
     expect(screen.getByText('OpenClawHetzner')).toBeInTheDocument();
