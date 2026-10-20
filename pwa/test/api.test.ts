@@ -1092,6 +1092,39 @@ describe('account pools', () => {
     await expect(api.workspaceAdd('p', { name: 'ENG-1234' })).rejects.toMatchObject({ status: 409, body: { error: 'slug-taken' } });
   });
 
+  // NAMED WORKSPACES (S9): the rename. A title is sent trimmed, a clear is its own body, and the id rides the path
+  // percent-encoded. The 2xx is read: the title the box holds, `null` after a clear, `'unreadable'` for an answer this
+  // build cannot read (the exchange completed, so the rename landed).
+  it('workspaceTitle posts { title } (trimmed) to /api/sessions/:id/title and reads the answer', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 'p-x', title: 'ENG-1301 - Fix it' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const answer = await api.workspaceTitle('p x', { title: '  ENG-1301 ' });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/sessions/p%20x/title');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ title: 'ENG-1301' });
+    expect(answer).toEqual({ title: 'ENG-1301 - Fix it' });
+  });
+
+  it('workspaceTitle with { clear: true } posts exactly that, and reads the null title', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 'p-x', title: null }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const answer = await api.workspaceTitle('p-x', { clear: true });
+    expect(JSON.parse((fetchImpl.mock.calls[0] as [string, RequestInit])[1].body as string)).toEqual({ clear: true });
+    expect(answer).toEqual({ title: null });
+  });
+
+  it("workspaceTitle answers 'unreadable' for a 2xx it cannot read, and rejects a refusal with its ApiError body intact", async () => {
+    const garbled = createApi(vi.fn().mockResolvedValue(new Response('not json', { status: 200 })) as unknown as typeof fetch);
+    expect(await garbled.workspaceTitle('p-x', { title: 'x-1' })).toBe('unreadable');
+    const partial = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { ok: true })) as unknown as typeof fetch);
+    expect(await partial.workspaceTitle('p-x', { title: 'x-1' })).toBe('unreadable');
+    const refused = createApi(vi.fn().mockResolvedValue(jsonResponse(409, { ok: false, error: 'not-a-workspace' })) as unknown as typeof fetch);
+    await expect(refused.workspaceTitle('p-x', { clear: true })).rejects.toMatchObject({ status: 409, body: { error: 'not-a-workspace' } });
+  });
+
   it('linearResolve asks GET /api/linear/resolve with the text percent-encoded, and reads the answer', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, {
       kind: 'named', slug: 'eng-1234', title: 'ENG-1234 - Fix the login flow', source: 'linear', extra: 'ignored',

@@ -15,6 +15,9 @@ import { NAME_REFUSAL_TEXT, isNameRefusal, type NameRefusal } from '../../../sha
 /** The `ccd caps` tokens a 501 `unsupported` names in `needs`. */
 export type AddNeeds = 'ws-title-v1' | 'ws-wrapper-v1';
 
+/** The sentence for a request the server could not read, said by every name door (the create's and the rename's). */
+export const BAD_REQUEST_TEXT = "That request wasn't understood. Reload the page and try again.";
+
 export type AddRefusal =
   | { kind: 'bad-request' }
   | { kind: 'bad-project' }
@@ -106,7 +109,7 @@ const NEEDS_TEXT: Record<AddNeeds, string> = {
 /** One sentence per refusal, none a prefix of another (`workspace-add-words.test.ts` holds the set apart). */
 export function addRefusalText(r: AddRefusal, ctx: AddContext): string {
   switch (r.kind) {
-    case 'bad-request': return "That request wasn't understood. Reload the page and try again.";
+    case 'bad-request': return BAD_REQUEST_TEXT;
     case 'bad-project': return `"${ctx.project}" isn't a project a workspace can be added to.`;
     case 'name-too-long': return 'That name is too long. Shorten it, or paste just the ticket id.';
     case 'bad-name': return r.reason === null ? "That name can't be used. Change it and try again." : NAME_REFUSAL_TEXT[r.reason];

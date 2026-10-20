@@ -12,8 +12,9 @@
 // field and says it in one line, instead of leaving an input that silently ignores what is typed into it.
 import { useId } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
-import { Button, Chip, TextInput } from '@ccrc/ui';
+import { Button, Chip, QC_ACTIONS, TextInput } from '@ccrc/ui';
 import { LOOKUP_NOTE, type Lookup, type NamePreview } from './workspaceNameWords';
+import { slugStays } from './workspaceRenameWords';
 import './fleet.css';
 
 /** The words of the field itself. Each door's own sentences (its empty hint, its disabled reasons) are passed in. */
@@ -34,6 +35,12 @@ export const NAME_FIELD_CLASS = {
   refusal: 'm-0 text-ui text-status-dead-text',
   /** A confirm's label, cut with an ellipsis instead of wrapping: a long name must not push its account out of sight. */
   confirmLabel: 'min-w-0 truncate',
+  /** The body of a sheet that hosts the field: the field, then a refusal line under it. */
+  sheetBody: 'grid gap-3',
+  /** A sheet's confirm row. `QC_ACTIONS` is a grid with one `auto` column, which grows to its widest child's min-content:
+   *  a long name's confirm would push past the panel (measured at 360 and 390: the button ran to 632px). `minmax(0, 1fr)` is
+   *  the column that never sizes past its container, the `.acct-list` rule's own fix (D-5570). */
+  confirmRow: `${QC_ACTIONS} grid-cols-[minmax(0,1fr)]`,
 } as const;
 
 const BADGE: Record<Exclude<Lookup, 'none'>, { text: string; tone: string }> = {
@@ -54,10 +61,17 @@ export interface WorkspaceNameFieldProps {
   disabledReason?: string | null;
   /** Opens Settings, for the one line that points there. Absent: the pointer is not drawn. */
   onOpenSettings?: () => void;
+  /** RENAME MODE (named workspaces S9): the workspace's own slug, which a rename never changes. The slug line then
+   *  reads `slug stays <slug>` where a create reads the new id and branch, and the "shortened to fit" note, which
+   *  is about a slug being made, is not drawn. Absent: the create's field. */
+  keepSlug?: string;
+  /** The input's placeholder; the rename door says "title" where the create says "name". */
+  placeholder?: string;
 }
 
 export function WorkspaceNameField({
-  value, onChange, preview, project, emptyHint, disabledReason = null, onOpenSettings,
+  value, onChange, preview, project, emptyHint, disabledReason = null, onOpenSettings, keepSlug,
+  placeholder = NAME_FIELD_TEXT.placeholder,
 }: WorkspaceNameFieldProps): ReactNode {
   const id = useId();
   const describedBy = `${id}-preview`;
@@ -70,7 +84,7 @@ export function WorkspaceNameField({
           id={id}
           value={value}
           disabled={disabled}
-          placeholder={NAME_FIELD_TEXT.placeholder}
+          placeholder={placeholder}
           autoComplete="off"
           autoCapitalize="off"
           autoCorrect="off"
@@ -96,9 +110,9 @@ export function WorkspaceNameField({
               )}
             </p>
             <p className="m-0 font-mono text-meta text-ink-secondary [overflow-wrap:anywhere]">
-              {`new workspace ${project}-${preview.slug} · branch ws/${preview.slug}`}
+              {keepSlug === undefined ? `new workspace ${project}-${preview.slug} · branch ws/${preview.slug}` : slugStays(keepSlug)}
             </p>
-            {preview.shortened && <p className={NAME_FIELD_CLASS.hint}>{NAME_FIELD_TEXT.shortened}</p>}
+            {keepSlug === undefined && preview.shortened && <p className={NAME_FIELD_CLASS.hint}>{NAME_FIELD_TEXT.shortened}</p>}
             {preview.note !== null && (
               <p className={NAME_FIELD_CLASS.hint}>{LOOKUP_NOTE[preview.note].hint}</p>
             )}

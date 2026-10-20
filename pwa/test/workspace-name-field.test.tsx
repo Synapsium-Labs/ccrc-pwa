@@ -225,6 +225,48 @@ describe('the Settings pointer', () => {
   });
 });
 
+// RENAME MODE (named workspaces S9): the same field, told the slug it keeps. It must read `slug stays <slug>` where a
+// create reads the new id and branch, draw no "shortened" note (a slug is not being made), and take its own placeholder.
+describe('rename mode (keepSlug)', () => {
+  function RenameHarness({ initial }: { initial: string }): ReactNode {
+    const [value, setValue] = useState(initial);
+    const preview = useNamePreview(value);
+    return (
+      <WorkspaceNameField
+        value={value} onChange={setValue} preview={preview} project="project-a" emptyHint="Leave empty."
+        keepSlug="quiet-harbor" placeholder="A title, a ticket id or a link"
+      />
+    );
+  }
+
+  it('says the slug stays, and never says a workspace will be made', () => {
+    render(<RenameHarness initial="Upload retry spike" />);
+    expect(screen.getByText('slug stays quiet-harbor')).toBeInTheDocument();
+    expect(screen.queryByText(/new workspace/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/branch ws\//)).not.toBeInTheDocument();
+  });
+
+  it('draws no shortened note for a name that would not fit a slug', () => {
+    render(<RenameHarness initial={'a very long title that would never fit a slug '.repeat(2)} />);
+    expect(screen.queryByText(NAME_FIELD_TEXT.shortened)).not.toBeInTheDocument();
+    expect(screen.getByText('slug stays quiet-harbor')).toBeInTheDocument();
+  });
+
+  it('takes its own placeholder, and the create keeps its own', () => {
+    render(<RenameHarness initial="" />);
+    expect(field()).toHaveAttribute('placeholder', 'A title, a ticket id or a link');
+    cleanup();
+    render(<Harness />);
+    expect(field()).toHaveAttribute('placeholder', NAME_FIELD_TEXT.placeholder);
+  });
+
+  it('a refusal reads the same in both modes', () => {
+    render(<RenameHarness initial="!!" />);
+    expect(screen.getByText('That has no letters or numbers in it.')).toBeInTheDocument();
+    expect(screen.queryByText(/slug stays/)).not.toBeInTheDocument();
+  });
+});
+
 describe('a door that cannot take a name', () => {
   it('disables the field, says why, and previews nothing', async () => {
     const resolve = vi.spyOn(api, 'linearResolve');

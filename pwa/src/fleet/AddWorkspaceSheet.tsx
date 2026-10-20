@@ -16,7 +16,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { RosterWire } from '../../../shared/api';
-import { Button, QC_ACTIONS, Sheet, toast } from '@ccrc/ui';
+import { Button, Sheet, toast } from '@ccrc/ui';
 import { navigate } from '../lib/router';
 import { NAME_FIELD_CLASS, WorkspaceNameField } from './WorkspaceNameField';
 import { useNamePreview } from './useNamePreview';
@@ -108,10 +108,9 @@ export function AddWorkspaceSheet({ project, onClose, add, adding, placement, ro
       eyebrow={ADD_WORKSPACE_TEXT.eyebrow}
       title={`Add a workspace to ${name}`}
       footer={
-        // `QC_ACTIONS` is a grid with one `auto` column, which grows to its widest child's min-content: a long name's
-        // confirm would push past the panel (measured at 360 and 390: the button ran to 632px). `minmax(0, 1fr)` is
-        // the column that never sizes past its container, the `.acct-list` rule's own fix (D-5570).
-        <div className={`${QC_ACTIONS} grid-cols-[minmax(0,1fr)]`}>
+        // `NAME_FIELD_CLASS.confirmRow` is `QC_ACTIONS` with a `minmax(0, 1fr)` column, so a long name's confirm cannot push
+        // past the panel (its own comment has the measurement).
+        <div className={NAME_FIELD_CLASS.confirmRow}>
           <Button variant="primary" disabled={preview.kind === 'refused' || adding} onClick={() => void submit()}>
             {/* A long name is cut with an ellipsis, never wrapped: the confirm stays one line and whole. */}
             <span className={NAME_FIELD_CLASS.confirmLabel}>
@@ -124,7 +123,7 @@ export function AddWorkspaceSheet({ project, onClose, add, adding, placement, ro
         </div>
       }
     >
-      <div className="grid gap-3">
+      <div className={NAME_FIELD_CLASS.sheetBody}>
         {lands !== null && <p className={NAME_FIELD_CLASS.hint}>{lands}</p>}
         <WorkspaceNameField
           value={value}

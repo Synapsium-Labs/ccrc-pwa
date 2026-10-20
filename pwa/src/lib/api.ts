@@ -699,6 +699,19 @@ export function readWorkspaceAdd(raw: unknown): WorkspaceAddAnswer {
  *  byte for byte what it was before names existed. */
 export interface WorkspaceAddOptions { route?: RouteFields; name?: string; wrapper?: string }
 
+/** What a rename can ask of `POST /api/sessions/:id/title` (named workspaces S9): set the title to text the server
+ *  resolves (a plain title, a Linear ticket or a pasted link), or clear it, which hands the row back to the ai-title sweep. */
+export type WorkspaceTitleChange = { title: string } | { clear: true };
+
+/** A rename's 200: the title the box now holds, `null` after a clear. An answer this build cannot read is `'unreadable'`:
+ *  the exchange completed and answered 2xx, so the rename DID land and only the echo is lost; the board shows the truth. */
+export type WorkspaceTitleAnswer = { title: string | null } | 'unreadable';
+
+export function readWorkspaceTitle(raw: unknown): WorkspaceTitleAnswer {
+  if (isRecord(raw) && raw.ok === true && (raw.title === null || typeof raw.title === 'string')) return { title: raw.title };
+  return 'unreadable';
+}
+
 /** Injectable for tests; defaults to the real global fetch. */
 export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
   const request = async (path: string, init?: RequestInit): Promise<Response> => {
@@ -1051,6 +1064,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       return readWorkspaceAdd(await postRead<unknown>(`/api/projects/${encodeURIComponent(project)}/workspaces`, null,
         Object.keys(body).length === 0 ? undefined : body));
     },
+    /** `POST /api/sessions/:id/title` — rename an EXISTING workspace: the title only, the slug and branch never change
+     *  (named workspaces S9). A title is sent trimmed; `{clear: true}` removes it. A refusal rejects with its `ApiError`
+     *  (`workspaceRenameWords.ts` reads the word); a 2xx is READ, `'unreadable'` when this build cannot. */
+    workspaceTitle: async (id: string, change: WorkspaceTitleChange): Promise<WorkspaceTitleAnswer> =>
+      readWorkspaceTitle(await postRead<unknown>(`${sid(id)}/title`, null,
+        'clear' in change ? { clear: true } : { title: change.title.trim() })),
     /** `GET /api/linear/resolve?ref=` — what a typed or pasted name would become, with Linear's real title when it
      *  can be asked (named workspaces S4/S7). Session-gated like every PWA read. A refusal (`bad-ref`,
      *  `ref-too-long`, a signed-out 401) rejects with its `ApiError`; a 2xx this build cannot read is `'unreadable'`,
