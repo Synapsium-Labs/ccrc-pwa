@@ -193,6 +193,10 @@ export const NAME_REFUSAL_TEXT: Record<NameRefusal, string> = {
  */
 export const NAME_REFUSALS: NameRefusal[] = Object.keys(NAME_REFUSAL_TEXT) as NameRefusal[];
 
+/** The wire reader's guard: a refusal word from a peer is one of ours, or it is not read as one. */
+export const isNameRefusal = (v: unknown): v is NameRefusal =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(NAME_REFUSAL_TEXT, v);
+
 /**
  * What the operator asked for.
  *

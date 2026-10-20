@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { SLUG_MAX, deriveBranch } from '../src/naming.js';
 import {
-  WS_SLUG_MAX, WS_SLUG_MIN, WS_TITLE_MAX_BYTES, NAME_REFUSALS, NAME_REFUSAL_TEXT,
+  WS_SLUG_MAX, WS_SLUG_MIN, WS_TITLE_MAX_BYTES, NAME_REFUSALS, NAME_REFUSAL_TEXT, isNameRefusal,
   parseLinearRef, deriveWorkspaceSlug, offlineTitle, isWsProject, titleFits,
   slugifyWords, fitSlug,
 } from '../../shared/slug.js';
@@ -183,6 +183,13 @@ describe('deriveWorkspaceSlug', () => {
     expect(NAME_REFUSALS).toEqual(Object.keys(NAME_REFUSAL_TEXT));
     for (const r of NAME_REFUSALS) {
       expect(NAME_REFUSAL_TEXT[r], r).toMatch(/\S/);
+    }
+  });
+
+  it('isNameRefusal reads exactly the refusal words, and nothing an object inherits', () => {
+    for (const r of NAME_REFUSALS) expect(isNameRefusal(r), r).toBe(true);
+    for (const v of ['toString', 'constructor', '', 'too_short', null, undefined, 3, {}]) {
+      expect(isNameRefusal(v), String(v)).toBe(false);
     }
   });
 
