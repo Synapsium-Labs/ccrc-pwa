@@ -8,7 +8,7 @@
 // run time; no fixture names a real account, host or path.
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -1014,6 +1014,12 @@ const T5_STUB_SLEEP = 'stub-sleep-ms';
 const T5_STUB_STDERR = 'stub-stderr.txt';
 const T5_STUB_EXIT = 'stub-exit';
 const T5_STUB_SWAP = 'stub-swap-path';
+/** Optional stub acts (D-5986), each a file under $HOME holding a path, taken just before the stub exits: remove the path;
+ *  chmod the directory to 0500 (a run subdirectory nobody may then change); and, only in a box-mode run (the argv carries
+ *  the arms' `--tools Bash,Agent`), replace the path by a directory, as a same-user process could. */
+const T5_STUB_RM = 'stub-rm-path';
+const T5_STUB_CHMOD = 'stub-chmod-path';
+const T5_STUB_BOX_SWAP = 'stub-box-swap-path';
 /** When present, the stub leaves a mode-000 directory with a file in it in its cwd (D-5984: nobody may remove it). */
 const T5_STUB_LOCK = 'stub-lock-cwd';
 const T5_STUB_SOURCE = `#!/usr/bin/env node
@@ -1037,6 +1043,12 @@ const T5_STUB_SOURCE = `#!/usr/bin/env node
   // D-5986: replace the named path by a directory while the run is open, as a same-user process could.
   const swap = opt(${JSON.stringify(T5_STUB_SWAP)});
   if (swap !== null) { fs.rmSync(swap, { force: true }); fs.mkdirSync(swap); }
+  const rm = opt(${JSON.stringify(T5_STUB_RM)});
+  if (rm !== null) fs.rmSync(rm, { force: true });
+  const boxSwap = opt(${JSON.stringify(T5_STUB_BOX_SWAP)});
+  if (boxSwap !== null && process.argv.slice(2).includes('Bash,Agent')) { fs.rmSync(boxSwap, { force: true }); fs.mkdirSync(boxSwap); }
+  const chmod = opt(${JSON.stringify(T5_STUB_CHMOD)});
+  if (chmod !== null) fs.chmodSync(chmod, 0o500);
   if (opt(${JSON.stringify(T5_STUB_LOCK)}) !== null) {
     fs.mkdirSync(path.join(cwd, 'locked'), { mode: 0o700 });
     fs.writeFileSync(path.join(cwd, 'locked', 'f'), 'x');
@@ -2563,6 +2575,123 @@ describe('fix round 1 (D-5986): no-follow, type-checked I/O under --out', () => 
     }
   });
 
+  // D-5986: guards a seam reaches. Each case below is skipped as root (which ignores modes) and restores the modes it changed
+  // in a finally, so the fixture's cleanup can remove the tree.
+  it('the lock\'s link that fails for a reason other than EEXIST (the --out turns unwritable between the failed link and the retry) refuses out-refused .driver.lock unwritable EACCES and leaves no lock', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const out = freshOut();
+    writeFileSync(path.join(out, '.driver.lock'), recText(424270, null));
+    let held = 0;
+    try {
+      expect(thrown(() => replay.claimOut(out, { afterHeld: () => { held++; rmSync(path.join(out, '.driver.lock')); chmodSync(out, 0o500); } })))
+        .toMatchObject({ word: 'out-refused', detail: '.driver.lock unwritable EACCES' });
+      expect(held, 'the lock was found held once, so the retry is the link that failed').toBe(1);
+      expect(existsSync(path.join(out, '.driver.lock')), 'no lock was taken').toBe(false);
+    } finally {
+      chmodSync(out, 0o700);
+    }
+    expect(replay.claimOut(out, { liveness: () => 'dead' }).release, 'CONTROL: the mode restored, the same --out is claimed').toBeTypeOf('function');
+  });
+
+  /** A box whose stub, just before it exits, removes `rm` (when given) and then makes `sub` mode 0500. */
+  function subdirBox(prefix: string, rm: string | null): { b: ReturnType<typeof t5Box>; sub: string } {
+    const b = t5Box(prefix);
+    const sub = path.join(b.out, 'sub');
+    if (rm !== null) writeFileSync(path.join(b.home, 'stub-rm-path'), path.join(sub, rm));
+    writeFileSync(path.join(b.home, 'stub-chmod-path'), sub);
+    return { b, sub };
+  }
+  const ledgerLines = (out: string): string[] =>
+    existsSync(path.join(out, replay.SPEND_LEDGER)) ? readFileSync(path.join(out, replay.SPEND_LEDGER), 'utf8').split('\n').filter((l) => l !== '') : [];
+  /** After a refused run: release the case's claim and claim the --out again as a later driver would (the dead writer's
+   *  leftovers are charged again and removed), then answer the ledger's line count. */
+  function nextDriverCharges(b: { out: string }): number {
+    claimsByOut.get(b.out)?.release();
+    claimsByOut.delete(b.out);
+    replay.claimOut(b.out, { liveness: () => 'dead' }).release();
+    return ledgerLines(b.out).length;
+  }
+
+  it('launchRun\'s removal of the .pid after the spend line, in a run subdirectory the stub made mode 0500 before it exited: out-refused sub/<name>.pid unwritable EACCES, charged once, the .part and .pid left for the next driver', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const { b, sub } = subdirBox('ccrc-replay-d5986-postspend-pid-', null);
+    try {
+      await expect(claimedRun(t5job(b, b.up, 'box', 'sub/run-0')))
+        .rejects.toMatchObject({ word: 'out-refused', detail: 'sub/run-0.pid unwritable EACCES' });
+      expect(stubLog(b.home), 'the run spawned once').toHaveLength(1);
+      expect(ledgerLines(b.out), 'the spend line was written before the removal').toHaveLength(1);
+      expect(existsSync(path.join(sub, 'run-0.jsonl.part')), 'the .part stays').toBe(true);
+      expect(existsSync(path.join(sub, 'run-0.pid')), 'the .pid stays').toBe(true);
+      expect(existsSync(path.join(sub, 'run-0.jsonl')) || existsSync(path.join(sub, 'run-0.run.json')), 'no stream, no run.json').toBe(false);
+    } finally {
+      chmodSync(sub, 0o700);
+    }
+    expect(nextDriverCharges(b), 'the next driver charges the left .part again: an over-count, never a lost charge').toBe(2);
+    expect(existsSync(path.join(sub, 'run-0.jsonl.part')) || existsSync(path.join(sub, 'run-0.pid')), 'and removes both').toBe(false);
+  }, 60_000);
+
+  it('launchRun\'s rename of the .part, in a run subdirectory the stub made mode 0500 after it removed its own .pid: out-refused sub/<name>.jsonl unwritable EACCES, charged once, the .part left for the next driver', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const { b, sub } = subdirBox('ccrc-replay-d5986-rename-', 'run-1.pid');
+    try {
+      await expect(claimedRun(t5job(b, b.up, 'box', 'sub/run-1')))
+        .rejects.toMatchObject({ word: 'out-refused', detail: 'sub/run-1.jsonl unwritable EACCES' });
+      expect(stubLog(b.home), 'the run spawned once').toHaveLength(1);
+      expect(ledgerLines(b.out), 'the spend line was written before the rename').toHaveLength(1);
+      expect(existsSync(path.join(sub, 'run-1.jsonl.part')), 'the .part stays').toBe(true);
+      expect(existsSync(path.join(sub, 'run-1.pid')), 'the .pid was the stub\'s to remove, and it is gone').toBe(false);
+      expect(existsSync(path.join(sub, 'run-1.jsonl')) || existsSync(path.join(sub, 'run-1.run.json')), 'no stream, no run.json').toBe(false);
+    } finally {
+      chmodSync(sub, 0o700);
+    }
+    expect(nextDriverCharges(b), 'the next driver charges the left .part again').toBe(2);
+    expect(existsSync(path.join(sub, 'run-1.jsonl.part')), 'and removes it').toBe(false);
+  }, 60_000);
+
+  it('the .part\'s exclusive create: a regular file planted at <name>.jsonl.part after launchRun\'s settle and before the create (through a RunJob getter) refuses out-refused <name>.jsonl.part already exists, spawns nothing and keeps the planted bytes', async () => {
+    const b = t5Box('ccrc-replay-d5986-oexcl-');
+    const planted = path.join(b.out, 'ex-0.jsonl.part');
+    const job = t5job(b, b.up, 'box', 'ex-0');
+    let reads = 0;
+    Object.defineProperty(job, 'timeoutMs', {
+      enumerable: true,
+      // launchRun reads timeoutMs once, after settleLeftover and before runChild creates the .part
+      get: () => { reads++; writeFileSync(planted, 'PLANTED\n', { mode: 0o600 }); return 5_000; },
+    });
+    await expect(claimedRun(job)).rejects.toMatchObject({ word: 'out-refused', detail: 'ex-0.jsonl.part already exists' });
+    expect(reads, 'the getter planted the file once, at the place the case means').toBe(1);
+    expect(stubLog(b.home), 'no spawn').toBeNull();
+    expect(readFileSync(planted, 'utf8'), 'the planted file was not opened for writing').toBe('PLANTED\n');
+    expect(existsSync(path.join(b.out, 'ex-0.pid')), 'no .pid').toBe(false);
+    expect(ledgerLines(b.out), 'nothing spent').toEqual([]);
+  }, 60_000);
+
+  it('a launcher that vanished after admission: the spawn fails with its own error, the child-less .part and .pid are removed, and nothing is charged', async () => {
+    const b = t5Box('ccrc-replay-d5986-nospawn-');
+    rmSync(b.up.launcher);
+    const err = await t5caught(() => claimedRun(t5job(b, b.up, 'box', 'ns-0')));
+    expect(err, 'the spawn error is raised as it is').toMatchObject({ code: 'ENOENT' });
+    expect(err).not.toBeInstanceOf(replay.DriverRefusal);
+    expect(existsSync(path.join(b.out, 'ns-0.jsonl.part')), 'the .part of a spawn that produced no child is removed').toBe(false);
+    expect(existsSync(path.join(b.out, 'ns-0.pid')), 'no .pid').toBe(false);
+    expect(ledgerLines(b.out), 'nothing spent').toEqual([]);
+  }, 60_000);
+
+  it('prepareOut under a parent nobody may write into: the mkdir fails with its own EACCES (exit 1, a raw error, nothing created); an --out that cannot be made is not yet a claimed path', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();
+    const parent = outsideDir();
+    chmodSync(parent, 0o500);
+    try {
+      const err = thrown(() => replay.prepareOut(path.join(parent, 'out')));
+      expect(err).toMatchObject({ code: 'EACCES' });
+      expect(err).not.toBeInstanceOf(replay.DriverRefusal);
+    } finally {
+      chmodSync(parent, 0o700);
+    }
+    expect(readdirSync(parent), 'nothing was created').toEqual([]);
+    expect(replay.prepareOut(path.join(parent, 'out')), 'CONTROL: the mode restored, the same --out is made').toBe(path.join(realpathSync(parent), 'out'));
+  });
+
   /** Run `body` (ESM, top-level await) in a child with a deadline; the driver is `D`, a scratch directory is `base`. */
   function inChild(body: string, ms: number): { out: string; err: string; signal: NodeJS.Signals | null; status: number | null } {
     const dir = mkTmp('ccrc-replay-d5986-child-');
@@ -3969,6 +4098,25 @@ describe('W2-4 Task 8: step0a end to end', () => {
     const rec = JSON.parse(readFileSync(path.join(out, replay.STEP0A_FILE), 'utf8'));
     expect(rec).toMatchObject({ budget: 10 * T8_PER_RUN, spend: 3 * T8_PER_RUN });
     expect(rec.writer_init).toEqual(replay.readStreamJson(T8_STREAM).init);
+  }, 120_000);
+
+  // D-5986: the init read after the batch. The stub acts only in the box run (the last of the three): it replaces the writer's
+  // finished stream, which the earlier lane left a regular file, by a directory. Nothing between that run and the read
+  // looks at the writer's stream again, so the read is what finds it. (The box run's own stream is renamed by the driver
+  // after the stub has exited, so it cannot be the one the stub changes.)
+  it('step0a: a finished stream that stops being a regular file by the time the batch is done refuses out-refused run-stream-invalid step0a/writer from the init read, and writes no step0a json', () => {
+    const home = t8Home('ccrc-w2-t8-initread-');
+    const out = t8Out();
+    mkdirSync(path.dirname(out), { recursive: true });
+    const real = path.join(realpathSync(path.dirname(out)), 'out');
+    writeFileSync(path.join(home, 'stub-box-swap-path'), path.join(real, 'step0a', 'writer.jsonl'));
+    const r = t8Run(t8Tree(), home, t8Argv(out));
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toBe('ccrc history-replay: out-refused: run-stream-invalid step0a/writer\n');
+    expect(t8Runs(home).map(t8ModelOf), 'all three runs spawned and finished').toEqual([T8_MODELS.writer, T8_MODELS.judge, T8_MODELS.box]);
+    expect(lstatSync(path.join(out, 'step0a', 'writer.jsonl')).isDirectory(), 'the stub made the swap').toBe(true);
+    expect(existsSync(path.join(out, replay.STEP0A_FILE)), 'no step0a json').toBe(false);
+    expect(existsSync(path.join(out, 'step0a', 'box.run.json')), 'the box run itself was recorded').toBe(true);
   }, 120_000);
 
   // D-5812: step 0a pins the launch it measured (account, Claude Code version, wrapper sha256) before its first run.

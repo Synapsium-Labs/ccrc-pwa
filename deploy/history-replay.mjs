@@ -676,11 +676,13 @@ export function spendTokens(facts) {
 // ensurePlainDir); the removals and renames of the run's own bookkeeping (removePlain in settleLeftover, createPlain and
 // launchRun; the lock's link, rename and put-back in takeLock; launchRun's `.part` rename). A removal that fails AFTER the
 // spend line leaves the `.part`, which the next driver charges again (an over-count). Not covered, each for a stated
-// reason: runChild's stop-path `.part` removal and its child-error removals (only a signal or a spawn failure reaches
-// them, and a refusal there would hide the error that got it there); the best-effort removals, which use `dropQuietly` so
-// that a failed removal never becomes the answer, either on a path that is already refusing or after the work is done
-// (writePlain's tmp cleanups; takeLock's stale and tmp removals; the claim's release). Kept as they are: prepareOut's marker WRITE (into the directory it just
-// made, 'wx' = O_EXCL), and the reads outside --out (/proc, the roster, the release stamp, the wrapper). The marker's
+// reason: runChild's child-error removals (a spawn that produced no child; a refusal there would hide the spawn error
+// that got it there); the best-effort removals, which use `dropQuietly` so that a failed removal never becomes the
+// answer, either on a path that is already refusing or after the work is done (writePlain's tmp cleanups; takeLock's
+// stale and tmp removals; the claim's release). Kept as they are: prepareOut's creation of --out, its mkdir and its marker
+// WRITE (into the directory it just made, 'wx' = O_EXCL), whose failure is a raw error and exit 1 (a parent nobody may
+// write into, a full disk, or two drivers making the same fresh --out at once): an --out that cannot be made is not yet
+// a claimed path; and the reads outside --out (/proc, the roster, the release stamp, the wrapper). The marker's
 // read, and HOME's limits row, go through readPlain.
 
 /** The largest ledger or stream the driver reads back. */
