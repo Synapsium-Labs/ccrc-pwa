@@ -16,7 +16,7 @@ import type { RosterReload } from '../config.js';
  *  - `reconcileDivergence(fleetFp)` does the same when the fleet's roster fingerprint disagrees with this server's,
  *    with a laneless row (D-6057). Only while the fleet identity is known, and latched per fingerprint only once the
  *    roster landed or was refused as another fleet's; a failed one is retried at the next chance (D-6057 (6));
- *  - concurrent reconciles share one `roster` sub (D-6057 (8)).
+ *  - concurrent reconciles coalesce into one trailing `roster` sub, never a stale in-flight one (D-6057 (8)).
  * A reconcile never blocks an account switch or the auto-swap: it runs only the read-only `roster` sub.
  */
 /** The ports a reconcile takes (D-6058 (7)): it reads no roster file, parses no answer and mints no actor itself, so it
@@ -44,17 +44,27 @@ export function reconcilingAccountOps(inner: AccountOps, deps: ReconcileDeps): R
   const take = (r: AccountOpResult): RosterReload | null => {
     return r.kind !== 'exited' || r.code !== 0 ? null : deps.reload(r.stdout);
   };
-  // Concurrent reconciles share ONE `roster` sub (D-6057 (8)): N ops failing at once on a busy fleet box start one
-  // read-only run, not N; each caller still writes its own row.
-  let inflight: Promise<RosterReload | null> | null = null;
-  const rosterOnce = (): Promise<RosterReload | null> => {
-    if (inflight !== null) return inflight;
+  // Concurrent reconciles coalesce into a TRAILING `roster` sub (D-6057 (8), revised after #950): a caller with no sub
+  // in flight starts one; a caller that arrives while one is in flight never takes that sub's answer, which was read
+  // before its own op touched the box, but waits for ONE fresh sub that starts once the in-flight one settles, shared
+  // by every caller arriving meanwhile. N ops failing at once on a busy fleet box start at most two read-only runs,
+  // and every reconcile reloads a roster read after its op ended; each caller still writes its own row.
+  let running: Promise<RosterReload | null> | null = null;
+  let trailing: Promise<RosterReload | null> | null = null;
+  const start = (): Promise<RosterReload | null> => {
     const p = (async () => {
       try { return take(await inner.run('roster', null, {})); } catch { return null; }
     })();
-    inflight = p;
-    void p.then(() => { if (inflight === p) inflight = null; });
+    running = p;
+    void p.then(() => { if (running === p) running = null; });
     return p;
+  };
+  const rosterOnce = (): Promise<RosterReload | null> => {
+    if (running === null) return start();
+    if (trailing !== null) return trailing;
+    const t = running.then(() => { trailing = null; return start(); });
+    trailing = t;
+    return t;
   };
   const reconcile = async (laneId: string | null): Promise<RosterReload | null> => {
     const verdict = await rosterOnce();
