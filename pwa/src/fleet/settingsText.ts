@@ -10,6 +10,10 @@
 //     lands after its section unmounted is toasted instead, in the tone the line would have had.
 // Both are written with `createElement`, as `updateAck.ts`'s `AckConfirm` is, so this file stays the one `.ts` module
 // the sections already import.
+//
+// It sits in `fleet/`, not `screens/` (D-5897, ARCH-05): two of its readers are Settings sections that live in `fleet/`
+// (`CollectLaneSection.tsx`, `HaltBanner.tsx`), and a feature module that imports a screen is a back-edge.
+// `screens-back-edges.test.ts` pins the count at zero.
 import { createElement, Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FocusEvent, ReactNode } from 'react';
 import type { StallLevel } from '../../../shared/api';

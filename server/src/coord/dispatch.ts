@@ -19,11 +19,11 @@ import {
   MAIL_DISABLED_MARKER,
   clearRefusedDetail,
   holdReasonVerdict,
-  queueSystemMail,
   releaseIsSafe,
   survivorOf,
   type HoldReasonVerdict,
 } from './rundefs.js';
+import { queueSystemMail } from './rundefsTx.js';
 import {
   MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, armEventDetail, isRegistryId,
   parseRouteFields, WORKSPACE_SLUG_RE, routeFieldsOrNull, routeParseDetail, spawnVerdict, transitionsFor,

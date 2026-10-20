@@ -6,7 +6,8 @@ import {
 import { ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusal.js';
 import { PROVIDERS, PROVIDER_IDS, type ConnectMethod, type ProviderId } from '../../../shared/providers.js';
 import { ACCOUNT_ID_RE } from '../../../shared/roster.js';
-import { NODE_ID_RE } from '../coord/store.js';
+// D-5896: `NODE_ID_RE` straight from its L0 home; through `coord/store.ts` it loaded the store and `node:sqlite`.
+import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import type { CurrentFleetIdentity } from '../fleetidentity.js';
 
 /**

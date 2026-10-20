@@ -4,6 +4,7 @@
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
+import { ApiError } from './apiError';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, type SwapRefusal } from '../../../shared/api';
 import type { Dialog, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource } from '../../../shared/api';
@@ -39,27 +40,9 @@ function answered(body: unknown): DialogAnswered {
     : ANSWERED;
 }
 
-export class ApiError extends Error {
-  readonly status: number;
-  readonly body: unknown;
-  /** The response's `content-type` header; `null` has one meaning: the response carried none (Docs W5, spec 4.3:
-   *  the docs client's `unexpected-response` names it). A header that is present but empty is `''`, which the docs
-   *  client folds with `null` as "absent or empty". Absent from the constructor's arguments, also `null`. */
-  readonly contentType: string | null;
-
-  constructor(status: number, body: unknown, contentType: string | null = null) {
-    const serverError =
-      typeof body === 'object' && body !== null && 'error' in body
-        && typeof (body as { error: unknown }).error === 'string'
-        ? (body as { error: string }).error
-        : null;
-    super(serverError ?? `request failed (${status})`);
-    this.name = 'ApiError';
-    this.status = status;
-    this.body = body;
-    this.contentType = contentType;
-  }
-}
+// `ApiError` lives in `./apiError` (D-5897, ARCH-05), a leaf that imports nothing, so a pure word module can name
+// it without loading this fetch adapter. Re-exported: every existing import, and every screen, keeps its line.
+export { ApiError };
 
 /** Send failures the server names by code. Left raw these surfaced as bare
  *  slugs under the failed bubble ("dialog-open"), which says nothing about what
@@ -351,6 +334,15 @@ const API_ERROR_TEXT: Record<string, string> = {
   'pool-unreadable': 'The project\'s pool tag could not be read on the fleet host, so nothing here can decide. Fix or clear its file under ~/.cc-sessions/pools/ and try again.',
   'bad-pool-name': 'A pool name starts with a lowercase letter and holds only lowercase letters, digits and hyphens.',
 };
+
+/** `registry-unmeasurable`, read off the WORD (D-5971, #549, ARCH-11b). The
+ *  server answers it at the table's 502 everywhere (`shared/refusal.ts`), and
+ *  until then `server.ts` answered 503, so a reader that branched on the
+ *  status rendered it as a box failure or as a reason it did not recognise.
+ *  The four sheets that render it inline ask this BEFORE their status arms. */
+export const isRegistryUnmeasurable = (err: unknown): boolean =>
+  err instanceof ApiError && typeof err.body === 'object' && err.body !== null
+  && (err.body as { error?: unknown }).error === 'registry-unmeasurable';
 
 /** Human-readable failure text for a caught error.
  *

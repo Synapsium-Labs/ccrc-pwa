@@ -180,6 +180,20 @@ describe('the coord banner', () => {
     expect(document.querySelector('.toast')).toBeNull();
   });
 
+  // D-5971 (#549, ARCH-11b): `registry-unmeasurable` is the table's 502 everywhere now, and the banner reads the
+  // WORD: an older server's 503 of it still renders inline, in the registry's own sentence.
+  it.each([502, 503])('renders registry-unmeasurable at %i inline, in the registry sentence', async (status) => {
+    const store = makeStore();
+    act(() => { store.setState({ coord: coord({ pause: 'clear' }), coordFrameSeen: true }); });
+    const coordPause = vi.fn().mockRejectedValue(new ApiError(status, { ok: false, error: 'registry-unmeasurable' }));
+    render(<><CoordBanner store={store} coordPause={coordPause} /><ToastHost /></>);
+
+    fireEvent.click(screen.getByRole('button'));
+    expect(await screen.findByText(/registry could not be read/i)).toBeInTheDocument();
+    expect(document.querySelector('.coord-error')).not.toBeNull();
+    expect(document.querySelector('.toast')).toBeNull();
+  });
+
   // Whole-branch review, M1: the 502 arm used to extract `body.stderr` itself
   // and fall back to `apiErrorText(err)` — but `apiErrorText` is ALREADY
   // stderr-first (`lib/api.ts:153-164`), so the whole branch was byte-

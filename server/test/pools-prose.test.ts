@@ -47,7 +47,7 @@
 //
 //   1. DERIVED. Read a value out of the SOURCE, then check the prose against it:
 //      `ACCOUNT_KEYS`, the symbols `generate.mjs` emits, the two cooldown
-//      constants, the codes `refusePool` sends, the README line count. Move the
+//      constants, the codes `refusePool` sends. Move the
 //      number or name in the code and the prose goes red on the thing that
 //      moved. These hold a CLAIM. Three more assert over the SOURCE alone, with
 //      no prose on the other side: the write-call scan across `server/src` and
@@ -102,6 +102,7 @@ import { fileURLToPath } from 'node:url';
 // `single-definition.test.ts` enforces it — import the constant, never re-spell
 // it here (`readme-holds.test.ts` records the same rule).
 import { CCD } from './ccdWsHelpers.js';
+import { readmeSizeClaim } from './readmeSizeClaim.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (rel: string): string => readFileSync(path.join(root, rel), 'utf8');
@@ -869,20 +870,14 @@ describe('CLAUDE.md: the account-pools bullet is GROUNDED where it can be, QUOTE
       'CLAUDE.md says README is canonical — this bullet is over 25 lines').toBeLessThanOrEqual(25);
   });
 
-  it("keeps CLAUDE.md's README size claim within 100 lines of the real file", () => {
-    // This wave had to hand-bump this figure on EVERY round — the fix round and
-    // the main merge each moved README again — which is the evidence it goes
-    // stale, and why the ratchet lives beside the prose that moves it. No number
-    // is quoted here on purpose: a comment naming the very figure this assertion
-    // exists to keep honest went stale within one commit the first time.
-    // `oss-metadata` allows 10%; this is the tighter, closer ratchet.
-    const claimed = /README\.md` \(~?([0-9,]+) lines\)/.exec(read('CLAUDE.md'));
-    expect(claimed, 'CLAUDE.md no longer states the README size').not.toBeNull();
-    const said = Number(claimed![1]!.replace(/,/g, ''));
-    const real = readme().split('\n').length - 1;
-    expect(Math.abs(said - real),
-      `CLAUDE.md says ${said} lines, README.md is ${real} — re-measure it in this commit`)
-      .toBeLessThanOrEqual(100);
+  it('CLAUDE.md states no README size for this bullet to be measured against (D-5892, #558)', () => {
+    // This was a ratchet holding CLAUDE.md's README line count within 100 lines
+    // of the real file, and a wave had to hand-bump the figure on every round.
+    // The bullet above is capped by its own line count; README's size is not a
+    // rule about pools or anything else, so CLAUDE.md no longer states it
+    // (`oss-metadata.test.ts` holds the same absence for the whole file).
+    expect(readmeSizeClaim(read('CLAUDE.md')),
+      'CLAUDE.md states a README line count again — drop the number, do not re-measure it').toBeNull();
   });
 
   it('is grounded in the shipped mechanism it describes', () => {
