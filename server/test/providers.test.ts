@@ -57,32 +57,13 @@ function trackedFiles(): string[] {
   return out.split('\0').filter((p) => p !== '' && !BINARY.test(p));
 }
 
-describe('L0 stays import-free: the PWA bundles these files', () => {
-  // `shared/base-url.ts` got its row here in Task 2, the task that wrote the
-  // file — it is the SECOND `it` below (`:72`), after `providers.ts`'s own row.
-  // It could not have landed in THIS task (Task 1): asserting it here would
-  // have meant committing a suite with a known-red row — `ENOENT …
-  // shared/base-url.ts` — and this repo's rule is that every task ships green:
-  // a red row in a landed commit is indistinguishable, on the next run, from a
-  // regression.
-  it('shared/providers.ts imports nothing at all', () => {
-    expect(read('shared/providers.ts')).not.toMatch(/^\s*import /m);
-  });
-
-  it('shared/base-url.ts imports nothing at all', () => {
-    // The second of the two L0 files this wave adds, pinned in the SAME
-    // describe as the first so the rule has one home rather than two that can
-    // drift apart. It could not be written in the task that opened this
-    // describe: the file did not exist there, and a row asserted against an
-    // absent file is a committed red — indistinguishable, on the next run, from
-    // a regression.
-    expect(read('shared/base-url.ts')).not.toMatch(/^\s*import /m);
-  });
-
+// The L0 ring of shared/providers.ts and shared/base-url.ts (no import outside ./) is held by
+// server/test/rings/shared-imports.test.ts (D-6045); base-url.test.ts keeps its own stricter "imports nothing".
+describe("shared/roster.ts's import list", () => {
   it('shared/roster.ts imports L0 only — the whole list, so an addition must be stated here', () => {
     const imports = read('shared/roster.ts').split('\n').filter((l) => /^import\s/.test(l));
-    // Two lines, both `shared/*.ts`, both import-free themselves (pinned above),
-    // so the browser bundle gains no runtime dependency. `shared/api.ts` carries
+    // Two lines, both `shared/*.ts` siblings whose own imports the L0 ring rule
+    // holds (rings/shared-imports.test.ts), so the browser bundle gains no runtime dependency. `shared/api.ts` carries
     // the same shape and the same pin (peers-claims-l0.test.ts:156-161).
     expect(imports).toEqual([
       "import { PROVIDERS, PROVIDER_IDS, isProviderId, type ProviderId } from './providers.js';",
