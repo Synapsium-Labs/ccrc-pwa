@@ -1,0 +1,128 @@
+// Every way `POST /api/projects/:project/workspaces` can say no, read once and said in its own sentence (named
+// workspaces S7/S8, design 2026-10-20 §4.2). L1: pure, no I/O. The sheets keep the operator's text on EVERY one of
+// these and show the sentence beside the field, so what matters here is that no two refusals read alike and that
+// none of them shows the server's own text except ccd's stderr (the 502, which is all the operator has to go on).
+//
+// TWO FUNCTIONS, ON PURPOSE. `classifyAddError` turns what was thrown into a typed refusal (it is the wire reader:
+// status AND word, never a status alone: 400 means five different things here); `addRefusalText` turns that into
+// the sentence. The class is what a sheet branches on (an account refusal returns the operator to the account
+// step); the sentence is what it shows.
+import { ApiError } from '../lib/apiError';
+import { accountLabel } from '../lib/accounts';
+import type { RosterWire } from '../../../shared/api';
+import { NAME_REFUSAL_TEXT, isNameRefusal, type NameRefusal } from '../../../shared/slug';
+
+/** The `ccd caps` tokens a 501 `unsupported` names in `needs`. */
+export type AddNeeds = 'ws-title-v1' | 'ws-wrapper-v1';
+
+export type AddRefusal =
+  | { kind: 'bad-request' }
+  | { kind: 'bad-project' }
+  | { kind: 'name-too-long' }
+  /** `reason` is null for a word this build does not know: the sentence is then the generic one. */
+  | { kind: 'bad-name'; reason: NameRefusal | null }
+  | { kind: 'bad-wrapper' }
+  | { kind: 'bad-slug' }
+  | { kind: 'slug-taken' }
+  /** ccd's own `<lane>:<why>`, kept whole: the sentence is built from its two halves. */
+  | { kind: 'account-refused'; reason: string }
+  /** `needs` is null when the 501 named no token (a routing class the box cannot parse yet). */
+  | { kind: 'unsupported'; needs: AddNeeds | null }
+  /** The fleet box ran ccd and ccd failed: its stderr, trimmed, or null when there was none to show. */
+  | { kind: 'ccd-failed'; stderr: string | null }
+  /** The request never produced an answer (offline, a dropped connection): the create may or may not have landed. */
+  | { kind: 'unreached' }
+  /** An answer this build has no word for. The status is kept for the sentence. */
+  | { kind: 'other'; status: number };
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+export function classifyAddError(err: unknown): AddRefusal {
+  if (!(err instanceof ApiError)) return { kind: 'unreached' };
+  const body = isRecord(err.body) ? err.body : {};
+  const word = typeof body.error === 'string' ? body.error : null;
+  if (err.status === 400) {
+    switch (word) {
+      case 'bad-request': return { kind: 'bad-request' };
+      case 'bad-project': return { kind: 'bad-project' };
+      case 'name-too-long': return { kind: 'name-too-long' };
+      case 'bad-name': return { kind: 'bad-name', reason: isNameRefusal(body.reason) ? body.reason : null };
+      case 'bad-wrapper': return { kind: 'bad-wrapper' };
+      case 'bad-slug': return { kind: 'bad-slug' };
+    }
+  }
+  if (err.status === 409) {
+    if (word === 'slug-taken') return { kind: 'slug-taken' };
+    if (word === 'account-refused') {
+      return { kind: 'account-refused', reason: typeof body.reason === 'string' && body.reason !== '' ? body.reason : 'refused' };
+    }
+  }
+  if (err.status === 501 && word === 'unsupported') {
+    return { kind: 'unsupported', needs: body.needs === 'ws-title-v1' || body.needs === 'ws-wrapper-v1' ? body.needs : null };
+  }
+  if (err.status === 502) {
+    const stderr = typeof body.stderr === 'string' ? body.stderr.trim() : '';
+    return { kind: 'ccd-failed', stderr: stderr === '' ? null : stderr };
+  }
+  return { kind: 'other', status: err.status };
+}
+
+/** What a sentence may name: the project, the slug the operator asked for (null when they asked for none), the roster for labels. */
+export interface AddContext {
+  project: string;
+  slug: string | null;
+  roster: readonly RosterWire[];
+}
+
+/**
+ * ccd's per-lane reason (`_ws_wrapper_why`: `<lane>:<why>`) as a sentence. The `why` words are ccd's:
+ * `not-home-able`, `auth-dead`, `missing`, `disabled`, `pool=<name>`, `projection=<word>`, `class=<class>-unservable`,
+ * and, with the lane slot holding `tag`, `tag:<state> <file>` for a project whose pool tag cannot be read (the file
+ * path is the fleet box's and is never shown). A word this build does not know is shown as ccd wrote it, beside the
+ * lane, never swallowed.
+ */
+export function accountRefusedText(reason: string, roster: readonly RosterWire[]): string {
+  const at = reason.indexOf(':');
+  const lane = at === -1 ? '' : reason.slice(0, at);
+  const why = at === -1 ? reason : reason.slice(at + 1);
+  if (lane === 'tag') return "This project's pool tag can't be read on the fleet box, so no account can be chosen for it.";
+  const who = lane === '' ? 'That account' : accountLabel(roster, lane);
+  if (why === 'not-home-able') return `${who} is an overflow account, and workspaces don't start there.`;
+  if (why === 'auth-dead') return `${who} can't sign in right now.`;
+  if (why === 'missing') return `${who} isn't set up on the fleet box.`;
+  if (why === 'disabled') return `${who} is switched off.`;
+  if (why.startsWith('pool=')) return `${who} is in pool ${why.slice('pool='.length)}, which isn't this project's pool.`;
+  if (why.startsWith('projection=')) return `${who}'s pool can't be checked on the fleet box right now (${why.slice('projection='.length)}).`;
+  const cls = /^class=(.+)-unservable$/.exec(why);
+  if (cls !== null) return `${who} can't serve the ${cls[1]} class today.`;
+  return `${who} can't take a new workspace (${why}).`;
+}
+
+const NEEDS_TEXT: Record<AddNeeds, string> = {
+  'ws-title-v1': "The fleet box's ccd is too old to name a workspace. Update the fleet box, or clear the name to add one with an automatic name.",
+  'ws-wrapper-v1': "The fleet box's ccd is too old to start a named workspace on the account you picked. Update the fleet box, or clear the name to start on the main checkout.",
+};
+
+/** One sentence per refusal, none a prefix of another (`workspace-add-words.test.ts` holds the set apart). */
+export function addRefusalText(r: AddRefusal, ctx: AddContext): string {
+  switch (r.kind) {
+    case 'bad-request': return "That request wasn't understood. Reload the page and try again.";
+    case 'bad-project': return `"${ctx.project}" isn't a project a workspace can be added to.`;
+    case 'name-too-long': return 'That name is too long. Shorten it, or paste just the ticket id.';
+    case 'bad-name': return r.reason === null ? "That name can't be used. Change it and try again." : NAME_REFUSAL_TEXT[r.reason];
+    case 'bad-wrapper': return "That account name isn't valid. Pick the account again.";
+    case 'bad-slug': return "The fleet box refused that name's short form. Try a different name.";
+    case 'slug-taken': return ctx.slug === null
+      ? 'A workspace with that name already exists. Open it from the board, or change the name. Your text is kept.'
+      : `${ctx.project}-${ctx.slug} already exists. Open it from the board, or change the name. Your text is kept.`;
+    case 'account-refused': return `${accountRefusedText(r.reason, ctx.roster)} Pick another account. Nothing was created.`;
+    case 'unsupported': return r.needs === null
+      ? "The fleet box's ccd doesn't support that yet. Update the fleet box, or change the options."
+      : NEEDS_TEXT[r.needs];
+    case 'ccd-failed': return r.stderr === null
+      ? "The fleet box couldn't create the workspace, and gave no reason."
+      : `The fleet box couldn't create the workspace: ${r.stderr}`;
+    case 'unreached': return "Couldn't reach the server, so the workspace may not have been created. Check the board before trying again.";
+    case 'other': return `The workspace wasn't created (the server answered ${r.status}).`;
+  }
+}
