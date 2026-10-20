@@ -6373,7 +6373,7 @@ describe("one 'tmux unreachable' sentence (design-system wave)", () => {
       'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/ArchiveSheet.tsx',
       // D-5545: the fleet row's and the header's facts are decided in `sessionFacts.ts` now, not `SessionMeta.tsx`.
       'pwa/src/fleet/sessionFacts.ts', 'pwa/src/screens/SessionScreen.tsx',
-      'pwa/src/session/SessionHeader.tsx', 'pwa/src/session/PrSheet.tsx',
+      'pwa/src/session/SessionFlows.tsx', 'pwa/src/session/PrSheet.tsx', // W2 Task S2d: the ⋯ menu moved there
     ]) {
       expect(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)
         .toMatch(/substrateFaultT(ext|itle)\(/);
@@ -7245,6 +7245,42 @@ describe('the account gate, the audit and the AccountOps port each have one home
   it('the arm is chosen in one place, and constructed by the composition root alone', () => {
     expect(holders(/\baccountOpsFor\(/)).toEqual(['server/src/accounts/ops.ts', 'server/src/index.ts']);
     expect(holders(/\blocalAccountOps\(/)).toEqual(['server/src/accounts/ops.ts']);
+  });
+});
+
+// D-5517, D-5518, D-5513 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A12). The state word, its
+// thresholds and the lane-state grammar have one home in `shared/accounts.ts`, L0 beside the words; the wire shapes one
+// in `shared/api.ts`; the roster is swapped by `reloadRoster` alone; reconcile, the lanes wire and the lane-state read
+// each have one file.
+describe('the state word, the roster reload and the lanes wire each have one home (D-5517, D-5518)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('stateWordFor').test('export function stateWordFor(i: StateWordInput): AccountStateAnswer {')).toBe(true);
+    expect(decl('stateWordFor').test('state: stateWordFor({ disabled, authDead })')).toBe(false);
+    expect(/\bcfg\.roster\s*=(?!=)/.test('    cfg.roster = roster;')).toBe(true);
+    expect(/\bcfg\.roster\s*=(?!=)/.test('if (ownRosterFpOf?.roster !== deps.cfg.roster)')).toBe(false);
+  });
+  it('the words, their thresholds and the lane-state grammar are declared once, in shared/accounts.ts', () => {
+    for (const c of ['stateWordFor', 'ACCOUNT_STATE_WORDS', 'AccountStateWord', 'AccountStateAnswer', 'StateWordInput',
+      'SIGNED_IN_WITHIN_MS', 'MINTED_TOKEN_LIFETIME_MS', 'MINTED_TOKEN_EXPIRING_MS', 'CREDIT_EXPIRING_FRACTION',
+      'MINTED_KEY_EXPIRING_MS', 'WINDOW_LIMITED_PCT', 'LaneState', 'LaneStateRead', 'laneStateOf', 'laneNotReadyReason',
+      'KEY_HINT_RE', 'LANE_IDENTITY_MAX']) {
+      expect(holders(decl(c)), c).toEqual(['shared/accounts.ts']);
+    }
+  });
+  it('the wire shapes are declared once, in shared/api.ts', () => {
+    for (const c of ['LaneWire', 'AccountsConnect', 'LANE_NOT_READY_REASONS', 'LaneNotReadyReason', 'ACCOUNT_CAPS', 'AccountCap']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the roster is swapped in one place, and reconcile, the lanes wire and the lane-state read each live in one file', () => {
+    expect(holders(/\bcfg\.roster\s*=(?!=)/)).toEqual(['server/src/config.ts']);
+    for (const c of ['reloadRoster', 'rosterAnswerOf', 'RosterAnswer']) expect(holders(decl(c)), c).toEqual(['server/src/config.ts']);
+    expect(holders(decl('reconcilingAccountOps'))).toEqual(['server/src/accounts/reconcile.ts']);
+    for (const c of ['lanesWire', 'accountsConnect']) expect(holders(decl(c)), c).toEqual(['server/src/accounts/lanes.ts']);
+    expect(holders(decl('readLaneStates'))).toEqual(['server/src/limits.ts']);
+    expect(holders(decl('LANE_STATE_DIR_NAME'))).toEqual(['shared/agent-protocol.ts']);
   });
 });
 
