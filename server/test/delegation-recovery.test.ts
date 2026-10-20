@@ -2763,9 +2763,9 @@ describe('the repair reads the journal as few times as it can (fix round 1, M3)'
   const records = evidenceChain([1, 2, 3, 4, 5, 6].map((n) => sessionStart(n)));
   const checkpoint = recoverDelegation(null, records).state.checkpoint;
   /** Recovery's count of the evidence records, built inside the test that uses it. */
-  const countsOf = (): DelegationEvidenceIndex => {
+  const countsOf = (over: readonly DelegationJournalRecordV1[] = records): DelegationEvidenceIndex => {
     const evidence = new DelegationEvidenceIndex();
-    for (const r of records) if (r.entry.kind === 'evidence-accepted') evidence.add(r.sequence);
+    for (const r of over) if (r.entry.kind === 'evidence-accepted') evidence.add(r.sequence);
     return evidence;
   };
 
@@ -2784,11 +2784,11 @@ describe('the repair reads the journal as few times as it can (fix round 1, M3)'
       },
       eventStats: () => ({ count: held.size, maxSequence: held.size === 0 ? null : Math.max(...held) }),
     };
-    return { port, calls };
+    return { port, calls, sequences: () => [...held].sort((a, b) => a - b) };
   }
-  function journalOf() {
+  function journalOf(over: readonly DelegationJournalRecordV1[] = records) {
     const seen = { passes: 0 };
-    return { seen, journal: () => { seen.passes++; return (async function* () { for (const r of records) yield r; })(); } };
+    return { seen, journal: () => { seen.passes++; return (async function* () { for (const r of over) yield r; })(); } };
   }
 
   it('skips the whole-journal pass when SQLite\'s (count, max) matches what recovery counted', async () => {
@@ -2847,6 +2847,43 @@ describe('the repair reads the journal as few times as it can (fix round 1, M3)'
     expect(j.seen.passes).toBe(3);                                       // the counting pass, the full pass, the wipe's replay
     expect(report).toMatchObject({ journalPasses: 3, fullReplay: true, wipedAll: true });
     expect(port.eventStats(), 'SQLite ends holding exactly the journal\'s sequences').toEqual({ count: 6, maxSequence: 6 });
+  });
+
+  it('review 716 G2: a foreign max BELOW the journal\'s last (SQLite {1,2,4}, journal evidence {1,2,3,5}) reads in full, wipes, and ends equal to the journal, with recovery\'s counts', async () => {
+    const base = evidenceChain([sessionStart(1), subagentStart(2, X), sessionStart(3)]);
+    const act = activityOf(recoverDelegation(null, base).state.checkpoint, X)!;
+    const lease = chainOf([leaseEntryFor(act.activityId)], 4, base[2]!.digest);                // a real lease-created record at 4: the journal holds no evidence there
+    const journalRecords = [...base, ...lease, ...evidenceChain([sessionStart(5)], 5, lease[0]!.digest)];
+    const cp = recoverDelegation(null, journalRecords).state.checkpoint;
+    const counts = countsOf(journalRecords);
+    expect([counts.total, counts.last], 'the journal\'s evidence is 1, 2, 3 and 5').toEqual([4, 5]);
+    const control = fakeProjection([1, 2, 3, 5]);
+    const c = journalOf(journalRecords);
+    expect(await repairDelegationProjection({ projection: control.port, checkpoint: cp, journal: c.journal, evidence: countsOf(journalRecords) }), 'the control, SQLite in sync, reads nothing').toMatchObject({ journalPasses: 0, fullReplay: false });
+    const { port, sequences } = fakeProjection([1, 2, 4]);               // count 3 as the journal's up to 4, max 4: below the journal's last, and no evidence there
+    const j = journalOf(journalRecords);
+    const report = await repairDelegationProjection({ projection: port, checkpoint: cp, journal: j.journal, evidence: countsOf(journalRecords) });
+    // the full pass inserts 3 and 5 and the foreign 4 stays, so SQLite holds five against the journal's four and the last resort wipes it
+    expect(j.seen.passes).toBe(2);
+    expect(report).toMatchObject({ journalPasses: 2, fullReplay: true, wipedAll: true });
+    expect(sequences(), 'SQLite ends holding exactly the journal\'s evidence sequences').toEqual([1, 2, 3, 5]);
+    expect(port.eventStats(), 'the per-pass short check passes: SQLite\'s (count, max) is the journal\'s').toEqual({ count: counts.total, maxSequence: counts.last });
+  });
+
+  it('review 716 G2: a foreign max at the journal\'s last + 1 (SQLite {1,2,3,4,5,7}, journal evidence 1 to 6) reads in full, wipes, and ends equal to the journal, with recovery\'s counts', async () => {
+    const counts = countsOf();
+    expect([counts.total, counts.last], 'the journal\'s evidence is 1 to 6').toEqual([6, 6]);
+    const control = fakeProjection([1, 2, 3, 4, 5, 6]);
+    const c = journalOf();
+    expect(await repairDelegationProjection({ projection: control.port, checkpoint, journal: c.journal, evidence: countsOf() }), 'the control, SQLite in sync, reads nothing').toMatchObject({ journalPasses: 0, fullReplay: false });
+    const { port, sequences } = fakeProjection([1, 2, 3, 4, 5, 7]);       // count 6 as the journal's, max 7: one past the journal's last, and no evidence there
+    const j = journalOf();
+    const report = await repairDelegationProjection({ projection: port, checkpoint, journal: j.journal, evidence: countsOf() });
+    // the full pass inserts the sixth and 7 stays, so SQLite holds seven against the journal's six and the last resort wipes it
+    expect(j.seen.passes).toBe(2);
+    expect(report).toMatchObject({ journalPasses: 2, fullReplay: true, wipedAll: true });
+    expect(sequences(), 'SQLite ends holding exactly the journal\'s evidence sequences').toEqual([1, 2, 3, 4, 5, 6]);
+    expect(port.eventStats(), 'the per-pass short check passes: SQLite\'s (count, max) is the journal\'s').toEqual({ count: counts.total, maxSequence: counts.last });
   });
 
   it('heals every drifted session in ONE journal pass, deleting them one session at a time with the loop yielded between', async () => {
