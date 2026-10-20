@@ -675,6 +675,7 @@ build · no · W2-3 (validator), W2-4 (helper), W2-5a and W2-5b (each its own co
   - every amendment's `detail_sha256` is recomputed from its `detail`, and a mismatch refuses with `amendment-detail-mismatch`;
   - a null or missing validation context (`ctx`) is refused with `field-missing` at `ctx`, never read as a narrower check, and so is each context key the record needs, at `ctx.<key>`: `ctx.draft` and `ctx.frozen` for every final, and `ctx.predecessor` for a superseding draft;
   - the step 0a fields it checks follow W2-4's producer shape (step 0a's output as W2-4 writes it), and in part 1 `writer_init` and `judge_init` must be non-null.
+  - **Amended (coordinator, 2026-10-20, W2-4 review, F4):** in part 1, `box_init` must be non-null as well. It is refused with the same word and path form as a null `writer_init` or `judge_init`. The box argv is the arm argv, and it alone carries `--allowedTools`, so a step 0a whose box run never reached init has not shown that flag accepted. The shape check runs first, so a null `*_init` is refused before `flag-rejected` can fire.
 - **Accepted as written (coordinator, 2026-10-19, final W2-3/W2-4 plan review):** `recordSha256 = sha256(canonicalJson(record) + '\n')`; a null or missing `ctx` is `field-missing` at path `ctx`; a null where the schema allows none is `field-missing` everywhere, as a missing key is; and `decideGate` (W2-D89) answers a union tagged by `ok` (a verdict carries `ok: true`, its `question-not-run` refusal `ok: false`). W2-3 pins each with a case and a mutant (Task 9's M43, M33 and M36; Task 8's H21).
 - **Pins:** one refusal per bullet, including a Fable arm model, a non-Opus judge, a 13-day window, a pilot section signed under another `writer_input`, a step 0a entry on no named node, a step 0a entry under another settings mode than part 1's, and a rejected flag (no flag excused, under either settings mode).
 
@@ -1056,6 +1057,7 @@ build · no · W2-4 · PS6; §10.2:2625-2705; the store-access finding.
   - a `hidden` account;
   - an `upstream` account whose config dir is not exactly `$HOME/.claude`.
 - The launch path and config dir come from the roster.
+- **Amended (coordinator, 2026-10-19, W2-4 plan ruling 4; recorded here 2026-10-20):** a `generated` account with no declared `provider` reads as `anthropic`, which is the roster's own default, and is admitted when its secrets file passes. An `external` account with no declared provider stays refused by its kind.
 
 build · no · W2-4 · CHK1-F5(b, c); RP3; RP9.
 
@@ -1089,6 +1091,11 @@ Before each batch, the driver reads `~/.cc-limits/<account id>.json` read-only, 
 - **From part 2:** part 2's `spend_budget`, which is the pilot's extrapolation for the frozen list × 1.25.
 
 Before part 1, the limits values used are the driver's defaults, which part 1 then records in `limits`. A batch is at most 10 spawns. A stop exits non-zero, and the batch can be resumed.
+
+**Amended (coordinator, 2026-10-20, W2-4 review, F1, F2 and F3):**
+- **The budget is a soft stop on admission.** The gate admits a spawn while the spend is below the budget, and a run's spend lands only when the run closes. So the ledger can end up to c whole runs past the budget, where c is the batch's concurrency (step 0a 1; the probe and the arm batches 2). The operator sets each budget at least c runs' spend below any total that must not be crossed. The limits threshold stop is separate.
+- **One driver per `--out`.** The driver takes an exclusive lock under `--out` before it reads the ledger. A live holder, or one whose liveness cannot be measured, is refused with `out-in-use`.
+- **No unseen child.** Each child runs in its own process group. A signal to the driver stops admission, kills the groups and refuses with `interrupted`. A leftover run whose recorded child is alive, or cannot be measured, is never charged, removed or re-spawned: it refuses with `run-live`. Every subcommand that spawns goes through one claim step (the lock, then every leftover under `--out`), which the batch runner requires.
 
 open-record-default (the values) plus build · no · W2-4 · W2-DQ9 with CHK1-F2 and DRV-4; §10.2:2697; both checkers' pre-record-spend findings.
 
@@ -1126,6 +1133,10 @@ build · no · W2-4 (mechanism), W2-5b (wiring, the amendment) · W2-DQ8b; CHK1-
 - **Amended (coordinator, 2026-10-19, W2-3/W2-4 plan review): reading the turn bound.** It reads held only when the result event shows the max-turns stop (stream-json's `error_max_turns` result subtype) and the run shows at most 12 assistant turns. A run showing more than 12 turns reads false (the bound did not hold); every other reading is unmeasured, never held. The `error_max_turns` value is unmeasured until step 0b's turn-bound run first reaches the bound: W2-5b's step 0b verifies it, and a different spelling is a coordinator ruling before the pilot proceeds.
 - **Amended (coordinator, 2026-10-19, W2-3/W2-4 plan review):** every spawn argv carries `--verbose`, which print mode needs for `--output-format stream-json`; step 0a's accepted-flags check covers it (section 6, E26).
 - A node added after the draft (W2-D8) runs step 0a before the draft is superseded.
+- **Amended (coordinator, 2026-10-20, W2-4 review, F4 and F16):**
+  - Step 0a also records the box run's init event (`box_init`). Part 1 requires all three `*_init` to be non-null (W2-D25).
+  - `flags_accepted[flag]` is true only when a run carrying the flag reached its init event and no run named the flag unknown, and false otherwise. So false means rejected or not reached, and each run's `run.json` holds the unknown-option names. To recover from a refused record, re-run step 0a on a fresh `--out`: a re-run on the same `--out` re-reads the same finished runs.
+  - **The W2 convention for a printed sha:** every W2 subcommand that prints a sha256 prints `sha256 <hex>` and one newline on stderr, and nothing on stdout. That covers `open` (W2-D25), `freeze` (W2-D73), and W2-4's `step0a` and `probe`. W2-5a's `pilot-source` and W2-5b's `report` follow it.
 
 operator act (run), build (mechanism) · no · W2-4 (0a, 0b mechanics), W2-5b (0b arm assertions) · W2-DQ8a with DRV-3, DRV-9 and CHK1-F7.
 
@@ -1151,6 +1162,11 @@ build · no · W2-5b · split checkers F7/X7; §10.2 Tools.
 - `assignment-mismatch` (W2-D73's `open --finalize` re-derivation);
 - `out-refused`.
 - **Amended (coordinator, 2026-10-19, W2-3/W2-4 plan review, and the rulings that followed it the same day):** W2-4 adds four coordinator-ruled words, each a refusal with a driver word rather than an internal error or a `moved` word (W2-D56): `code-unmeasured` (a `gate_code` file whose sha cannot be measured; preflight and step 0a), `version-unmeasured` (a `<launcher> --version` that cannot be measured; step 0a's `--version` and preflight's version check), `tree-unmeasured` (a release stamp absent, unreadable, malformed or untagged; preflight and step 0a) and `wrapper-unmeasured` (a generated account's wrapper that cannot be read; `wrapper-moved` stays a measured mismatch only). And `recallOffPresence` maps an id that lib's `recallOffPath` rejects to `input-invalid` (one of W2-4's own words), rather than letting the TypeError exit 1 with no word.
+- **Amended (coordinator, 2026-10-20, W2-4 review, F1 and F2):** W2-4 also adds three words, appended after its nine:
+  - `run-live`: a leftover run whose recorded child is alive, or whose liveness cannot be measured;
+  - `out-in-use`: another driver holds the `--out` lock, or the lock cannot be read;
+  - `interrupted`: SIGINT, SIGTERM or SIGHUP stopped the batch.
+  Each is a stop, which W2-5b classifies (section 7).
 They are printed on stderr with a non-zero exit. They are never REASONS, and the §8.7 table and SKILL.md are untouched.
 
 build · no · W2-4 (list), each owner PR adds its own · C-J; W2-DQ3b.
@@ -1710,7 +1726,7 @@ The pilot always precedes part 2 and the window. The earlier option to move it a
 | `nodes` | `[{label, store_id}]` | operator |
 | `account` | the account id; admitted by W2-D52 | operator |
 | `arm_model`, `writer_model`, `judge_model` | exact ids, never aliases; the arm model non-Fable, writer and judge Opus (validator-enforced) | operator |
-| `step0a` | per node, W2-4's fifteen `Step0aOutput` keys: `kind`, `v`, `measured_ms`, `account`, `settings_mode`, `claude_code_version`, `wrapper_sha256` (or null), `flags_accepted` (a `Record<string, boolean>`, one entry per flag the contract uses), `writer_init` and `judge_init` (each non-null in part 1), `box_init` (or null), `code_shas` (the four `gate_code` files), `release_stamp`, `budget`, `spend`; plus `label` and `store_id`, which `open --draft` adds when it binds each output to its node (W2-D25) (amended: coordinator, 2026-10-19, W2-3/W2-4 plan review). Each `store_id` must name a node, each `settings_mode` must equal part 1's, and a `false` flag is refused, with no exception (W2-D25, amended at the final plan review and by the settings-mode ruling) | measured |
+| `step0a` | per node, W2-4's fifteen `Step0aOutput` keys: `kind`, `v`, `measured_ms`, `account`, `settings_mode`, `claude_code_version`, `wrapper_sha256` (or null), `flags_accepted` (a `Record<string, boolean>`, one entry per flag the contract uses), `writer_init`, `judge_init` and `box_init` (each non-null in part 1; `box_init` amended: coordinator, 2026-10-20, W2-4 review F4, W2-D25), `code_shas` (the four `gate_code` files), `release_stamp`, `budget`, `spend`; plus `label` and `store_id`, which `open --draft` adds when it binds each output to its node (W2-D25) (amended: coordinator, 2026-10-19, W2-3/W2-4 plan review). Each `store_id` must name a node, each `settings_mode` must equal part 1's, and a `false` flag is refused, with no exception (W2-D25, amended at the final plan review and by the settings-mode ruling) | measured |
 | `settings_mode` | `'restricted'`, or `'fallback'` (spec §10.2's fallback, recorded before the full run). Only part 1's `settings_mode` binds step 0a: each step 0a entry's `settings_mode` must equal it (`value-outside-set`, W2-D25, amended), and it excuses no rejected flag. A switch recorded in part 2's `pilot_result.settings_mode` is a later record, not an excuse | default (the pilot may switch it; recorded in part 2) |
 | `window_plan` | `{planned_days: 14}` | default |
 | `k`, `k_unit`, `x`, `metric` | 10, `K_UNIT`, {1, 10}, the ruled metric text | fixed |
@@ -1766,7 +1782,7 @@ Public: shas, counts, K, X, k_unit, the method, the window times, the Q18 figure
 
 **Step 0a, pilot sourcing, part 1**
 
-7. Run step 0a on each node: `history-replay.mjs step0a --budget <N>` (version, wrapper sha, flags, writer and judge init, code shas, release stamp). Post each output's sha256.
+7. Run step 0a on each node: `history-replay.mjs step0a --out <dir> --account <id> --budget <N> --writer-model <id> --judge-model <id> --arm-model <id>` (version, wrapper sha, flags, writer, judge and box init, code shas, release stamp). Post each output's sha256, which is printed on stderr. Amended (coordinator, 2026-10-20, W2-4 review, F14): every flag is required. A record that part 1 would refuse is re-run on a fresh `--out`.
 8. **The maintenance freeze begins** (W2-D7). Record its time.
 9. Run `pilot-source --step0a <file> --step0a-sha256 <hex> --budget <N>` on the node or nodes holding the pilot families. This spends on the account and reads the homes' CLAUDE.md and memory files. Record the pilot frozen sha.
 10. Run `open --draft` with the step 0a and `pilot-source` outputs. Save part 1 with mode 0600 off-repo. Post its sha256.
@@ -1870,4 +1886,9 @@ Not spec text, but owed: the programme ledger's sentence "only the quiz waits on
 - **The gate's newest-family order is a second spelling**, held equal to recall.mjs's by a parity pin, not by one definition (W2-D20).
 - **A counter descoped at open** takes a D-number at that point (W2-D87). None is reserved now.
 - **The four `gate_code` paths are spelled twice**: W2-4's `CODE_SHA_FILES` in history-replay.mjs and W2-3's `GATE_CODE_FILES` in history-gate.mjs (W2-D24). Neither PR loads the other's module, so no pin ties the two lists, and a drift would surface only at open time, as a validator refusal (`field-unknown` or `field-missing` on a step 0a entry's `code_shas`), not at build. The first PR that loads both modules (W2-5a) is where a parity assertion (`CODE_SHA_FILES` deep-equals `GATE_CODE_FILES`) fits.
-- **The unmeasured stop words are not yet classified** (coordinator, 2026-10-19). W2-D80's "A stop is not a failure" names `limits-*`, `budget-exhausted` and the `moved`/`changed` stops, but not the four unmeasured words W2-4 adds (W2-D56, W2-D59): `code-unmeasured`, `version-unmeasured`, `tree-unmeasured` and `wrapper-unmeasured`. W2-5b's plan must classify each of them as a stop beside the `moved`/`changed` ones, so a question not spawned, or cut off, because of one is `not-run`: it never consumes its re-run and is resumed after the stop clears. No W2-5b plan exists yet, so this residual is carried to it.
+- **The unmeasured stop words are not yet classified** (coordinator, 2026-10-19). W2-D80's "A stop is not a failure" names `limits-*`, `budget-exhausted` and the `moved`/`changed` stops, but not the four unmeasured words W2-4 adds (W2-D56, W2-D59): `code-unmeasured`, `version-unmeasured`, `tree-unmeasured` and `wrapper-unmeasured`. W2-5b's plan must classify each of them as a stop beside the `moved`/`changed` ones, so a question not spawned, or cut off, because of one is `not-run`: it never consumes its re-run and is resumed after the stop clears. No W2-5b plan exists yet, so this residual is carried to it. **Amended (coordinator, 2026-10-20, W2-4 review, F1, F2 and F15):** W2-5b classifies W2-4's three later stop words the same way: `run-live`, `out-in-use` and `interrupted` (W2-D59).
+- **W2-4's spend under-counts and overshoot** (coordinator, 2026-10-20, W2-4 review 657). The driver's spend ledger is fail-closed for the cases it models. These remain, each stated in W2-4's plan and PR:
+  - **C6.** Spend reads the result event's usage. Whether that usage includes Agent-subagent spend is unmeasured, and arm and box runs both carry `--tools Bash,Agent`. W2-5b's pilot measures it before any arm batch and, if it is missing, charges it.
+  - A stream with no usable usage records 0, and a run killed by the timeout or by its driver's death falls back to the assistant-event sum, which misses an API call billed but still in flight.
+  - The window between a child's spawn and its pid record's write: a driver killed in it leaves a leftover that is charged as dead, while its child may still spend unseen. A grandchild that calls setsid itself escapes the group kill, though it writes no stream.
+  - The budget is a soft stop: up to c whole runs past it (W2-D55).
