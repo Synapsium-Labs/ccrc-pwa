@@ -103,6 +103,37 @@ describe('the generated palettes are what the seeds produce', () => {
   });
 });
 
+// THE SHEET'S DESKTOP ARM IS LIFTED BY `--elev-pop` (D-5933), a centred downward shadow every palette states with its
+// own shadow colour, as it does `--elev-sheet`. Ten palettes get it from the generator (the row above holds those);
+// the two hand-written defaults, dark `:root` and `[data-theme='light']`, sit above the generated block, where
+// `--check` does not look, so this row reads every palette block, both kinds. Instrument replaces it with the one
+// recipe its elevation rule allows: a hairline on `--edge-strong`.
+describe('every palette declares --elev-pop (D-5933)', () => {
+  /** Each palette block's body, by selector: `:root` (the first, the dark default) and every `[data-theme='…']`. */
+  const palettes = (): Map<string, string> => {
+    const css = readFileSync(TOKENS, 'utf8');
+    const out = new Map<string, string>();
+    for (const m of css.matchAll(/^(:root|\[data-theme='[a-z0-9-]+'\])\s*\{([\s\S]*?)^\}/gm)) {
+      if (!out.has(m[1] as string)) out.set(m[1] as string, m[2] as string);
+    }
+    return out;
+  };
+
+  it('every palette, including the two hand-written defaults, declares --elev-pop', () => {
+    const blocks = palettes();
+    expect(blocks.size, 'the default and every selectable palette').toBe(THEMES.length);
+    const missing = [...blocks].filter(([, body]) => !/^\s*--elev-pop:\s*\S/m.test(body)).map(([sel]) => sel);
+    expect(missing).toEqual([]);
+    // Downward and centred: never the sheet's upward lift (D-6019).
+    for (const [sel, body] of blocks) expect(/--elev-pop:\s*0 -/.test(body), sel).toBe(false);
+  });
+
+  it("Instrument's --elev-pop is the hairline", () => {
+    const skins = readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'styles', 'skins.css'), 'utf8');
+    expect(skins).toMatch(/^\s*--elev-pop:\s*0 0 0 1px var\(--edge-strong\);/m);
+  });
+});
+
 describe('Storybook stamps themes the way the app does', () => {
   // WHY THIS GUARD EXISTS, MEASURED.
   //

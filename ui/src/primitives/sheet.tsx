@@ -1,12 +1,17 @@
 // Bottom sheet — vaul (shadcn's Drawer: radix dialog underneath, so focus is
 // trapped and Esc dismisses) wearing the Phosphor & Ink chrome: scrim,
-// spring-up panel with r-xl top corners, grabber, safe-area padded.
+// spring-up panel with r-xl top corners, grabber, safe-area padded. From 900
+// it is a centred dialog instead (D-5933): the same Root, re-placed by CSS.
 import { Drawer } from 'vaul';
 import { useCallback, useEffect, useRef } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { cn } from '../lib/cn';
 import { EYEBROW } from '../lib/text';
-import { SHEET_MOTION_VARS, VAUL_MOTION } from '../lib/motion';
+import { FOCUS_RING } from '../lib/focus';
+import { PRESS_FEEDBACK } from '../lib/press';
+import { SHEET_DESK_MOTION_VARS, SHEET_MOTION_VARS, VAUL_MOTION } from '../lib/motion';
+import { useDesk } from '../lib/use-media-query';
+import { Icon } from './icon';
 
 interface SheetBaseProps {
   open: boolean;
@@ -40,6 +45,9 @@ export type SheetProps = SheetBaseProps & (
        *  panel's own side padding and safe-area bottom. Every confirm's `QC_ACTIONS` row goes here, never in the
        *  children. */
       footer?: ReactNode;
+      /** The centred dialog's width from 900 (D-5933): `sm` 440, `md` 560 (the default), `lg` 720 px, each capped by
+       *  the gutters. Below 900 every size is the full-width bottom sheet. */
+      size?: SheetSize;
     }
   | {
       /** Full-height variant — the terminal drawer's chrome: a --bg-well panel
@@ -47,8 +55,39 @@ export type SheetProps = SheetBaseProps & (
        *  title goes screen-reader-only so the glass keeps its full height. */
       full: true;
       footer?: never;
+      size?: never;
     }
 );
+
+export type SheetSize = 'sm' | 'md' | 'lg';
+
+/** EVERY CLASS HERE IS WRITTEN LITERALLY (Tailwind emits only what it reads in the source). */
+const DESK_WIDTH: { readonly [S in SheetSize]: string } = {
+  sm: 'min-[900px]:w-[min(440px,calc(100vw-2*var(--sp-8)))]',
+  md: 'min-[900px]:w-[min(560px,calc(100vw-2*var(--sp-8)))]',
+  lg: 'min-[900px]:w-[min(720px,calc(100vw-2*var(--sp-8)))]',
+};
+
+/** THE DESKTOP ARM'S PLACEMENT (D-5933, spec §2.2), from CSS alone so a crossing remounts nothing: all four insets
+ *  0, auto margins and a content height centre the panel, at most the viewport less two `--sp-8` gutters tall, round
+ *  on every corner, on `--elev-pop`. vaul draws an `::after` under a bottom drawer (`top: 100%; height: 200%`, the
+ *  panel's own ground) to cover an overscroll pull; under a centred panel it is a strip of sheet below the dialog.
+ *  vaul injects that rule unlayered, so only importance removes it (the handle-ground precedent below). The motion
+ *  replaces vaul's slide with the arm's fade (`theme.css`'s `sheet-pop-in`/`-out`), timed by `VAUL_MOTION`'s
+ *  variables, which `SHEET_DESK_MOTION_VARS` sets at this width. */
+const DESK_PANEL =
+  'min-[900px]:inset-0 min-[900px]:m-auto min-[900px]:h-fit min-[900px]:max-h-[calc(100dvh-2*var(--sp-8))]'
+  + ' min-[900px]:rounded-xl min-[900px]:shadow-pop min-[900px]:pt-4 min-[900px]:pb-card'
+  + ' min-[900px]:after:content-none!'
+  + ' min-[900px]:data-[state=open]:[animation-name:sheet-pop-in]!'
+  + ' min-[900px]:data-[state=closed]:[animation-name:sheet-pop-out]!';
+
+/** The dialog's close (D-6033): lucide's `x` in a tap target, at the top right, over the head of the body; the title
+ *  and the eyebrow pad clear of it at the desk width. */
+const CLOSE_BUTTON =
+  'sheet-close absolute right-2 top-2 flex min-w-tap min-h-tap items-center justify-center rounded-md border-none'
+  + ' bg-transparent text-ink-secondary hover:text-ink-primary cursor-pointer'
+  + ` ${PRESS_FEEDBACK} ${FOCUS_RING}`;
 
 /** A field that raises a phone's keyboard when focused. */
 const isTextField = (el: HTMLElement): boolean =>
@@ -128,8 +167,14 @@ export function Sheet({
   onEscapeKeyDown,
   initialFocus,
   footer,
+  size = 'md',
 }: SheetProps): ReactNode {
   const panelRef = useSheetFocus(open, initialFocus);
+  // THE ARM IS CHOSEN BY WIDTH, NEVER BY SKIN (D-5933; the skins spec §5.3). One reading turns the grabber and the
+  // drag off and draws the ✕; the layout is CSS's. Nothing is keyed on it, so a crossing keeps every child's state.
+  // The full variant (the terminal drawer) is the same at every width.
+  const atDesk = useDesk();
+  const desk = atDesk && !full;
   // The visible title rides INSIDE the scroller, above the children it heads.
   // Outside it, the header row is flex-none and uncapped while only the body
   // scrolls — so a long title (a real AskUserQuestion runs to ~15 lines on a
@@ -145,7 +190,7 @@ export function Sheet({
             // snake_case identifiers included, and the panel is position:fixed
             // with nothing to clip against. Capped at 38vh so a long question
             // can never push the options out of reach.
-            'sheet-title max-h-[38vh] flex-none overflow-y-auto mb-4 font-ui text-lg font-semibold leading-tight text-ink-primary [overflow-wrap:anywhere]'
+            cn('sheet-title max-h-[38vh] flex-none overflow-y-auto mb-4 font-ui text-lg font-semibold leading-tight text-ink-primary [overflow-wrap:anywhere]', desk && 'pe-10')
           : 'sr-only'
       }
     >
@@ -164,7 +209,10 @@ export function Sheet({
       // swipe over the console collapsed the drawer instead of scrolling it.
       // `handleOnly` leaves exactly one place that drags the panel: the
       // grabber, which is why it becomes a real `Drawer.Handle` below.
-      handleOnly={full}
+      // THE DESKTOP ARM HAS NO DRAG AT ALL (D-5933): `handleOnly` with no
+      // handle rendered leaves vaul nothing to drag. The ✕, Escape and the
+      // scrim close it.
+      handleOnly={full || desk}
       // THE KEYBOARD IS COUNTED ONCE. vaul's `repositionInputs` shrinks the panel
       // to the visual viewport whenever a textarea has focus, and the terminal
       // already pads its own bottom by the keyboard's height (`useKeyboardInset`,
@@ -182,7 +230,7 @@ export function Sheet({
       <Drawer.Portal>
         <Drawer.Overlay
           // The scrim fades on vaul's keyframes at the panel's pace (D-5930).
-          className={cn('sheet-scrim fixed inset-0 z-sheet bg-scrim', VAUL_MOTION, SHEET_MOTION_VARS)}
+          className={cn('sheet-scrim fixed inset-0 z-sheet bg-scrim', VAUL_MOTION, SHEET_MOTION_VARS, !full && SHEET_DESK_MOTION_VARS)}
           data-testid="sheet-overlay"
           onClick={onClose}
         />
@@ -224,7 +272,12 @@ export function Sheet({
                 'sheet-panel--full z-drawer h-[calc(100dvh-var(--safe-top)-var(--sp-6))] rounded-t-xl bg-well shadow-sheet px-0 pt-2 pb-[calc(var(--sp-2)+var(--safe-bottom))]'
               : // The sides pad with the card role (D-5093, Task 14b): 16px in
                 // Refined, the --sp-4 it used before, and 12px in Instrument.
-                'z-sheet max-h-[calc(100dvh-var(--sp-12)-var(--safe-top))] rounded-t-xl bg-sheet shadow-sheet px-card pt-2 pb-[calc(var(--sp-4)+var(--safe-bottom))]',
+                cn(
+                  'z-sheet max-h-[calc(100dvh-var(--sp-12)-var(--safe-top))] rounded-t-xl bg-sheet shadow-sheet px-card pt-2 pb-[calc(var(--sp-4)+var(--safe-bottom))]',
+                  SHEET_DESK_MOTION_VARS,
+                  DESK_PANEL,
+                  DESK_WIDTH[size],
+                ),
             className,
           )}
         >
@@ -250,15 +303,20 @@ export function Sheet({
                 aria-hidden="true"
                 className="sheet-grabber mx-auto mt-1 mb-2 h-1 w-9 flex-none rounded-full bg-ink-on-well/30!"
               />
-            : <div
-                aria-hidden="true"
-                className="sheet-grabber mx-auto mt-1 mb-4 h-1 w-9 flex-none rounded-full bg-edge-strong"
-              />}
+            : desk
+              ? <button type="button" aria-label="Close" className={CLOSE_BUTTON} onClick={onClose}>
+                  <Icon name="x" size={20} />
+                </button>
+              : <div
+                  aria-hidden="true"
+                  className="sheet-grabber mx-auto mt-1 mb-4 h-1 w-9 flex-none rounded-full bg-edge-strong"
+                />}
           {eyebrow ? (
             <p
               className={cn(
                 `sheet-eyebrow mb-2 flex-none ${EYEBROW} [overflow-wrap:anywhere]`,
                 full ? 'px-4 text-ink-on-well/55' : 'text-ink-tertiary',
+                desk && 'pe-10',
               )}
             >
               {eyebrow}

@@ -1123,6 +1123,8 @@ export const KEYFRAME_TROUGHS = {
   'theme.css dot-breathe 0.55': 'status lamps (.dot--busy, .dot--attention). Reduced motion: animation none, opacity 0.85 — registered and measured above',
   'theme.css skel-shimmer 1': 'a background-position shimmer; the stops set no opacity below 1',
   'theme.css toast-in 0': 'a one-shot entrance from opacity 0; the resting state is opacity 1',
+  'theme.css sheet-pop-in 0': 'the Sheet\'s desktop arm\'s one-shot entrance from opacity 0 (D-5933); the resting state is opacity 1, and reduced motion takes it to 1ms',
+  'theme.css sheet-pop-out 0': 'the Sheet\'s desktop arm\'s one-shot exit to opacity 0 as the dialog unmounts (D-5933); reduced motion takes it to 1ms',
   'task-strip.css task-breathe 0.55': 'the running task mark (.task-mark--running). Reduced motion: animation none, opacity 0.85 — registered and measured above',
   'chat.css jump-in 0': 'a one-shot entrance for the jump-to-latest button; the resting state is opacity 1',
   'chat.css caret-blink 0': 'the terminal caret, a step-end blink between 1 and 0. A caret is a cursor, not content',

@@ -410,6 +410,8 @@
   /* Dark theme depth comes from layer + hairline, barely from shadow. */
   --elev-card:  0 1px 2px rgba(0, 0, 0, 0.3);
   --elev-sheet: 0 -8px 40px rgba(0, 0, 0, 0.55);
+  /* The centred dialog's and the popover's (D-5933): the same depth, falling down. */
+  --elev-pop:   0 12px 40px rgba(0, 0, 0, 0.55);
 
   /* The signature: phosphor bloom. Two tight rings + one wide soft halo.
      Apply to a pseudo-element and animate ITS opacity (compositor-cheap),
@@ -527,6 +529,7 @@
   /* Light theme earns real shadows; glow dims to a halo (a lamp in daylight). */
   --elev-card:  0 1px 3px rgba(26, 32, 27, 0.10), 0 1px 2px rgba(26, 32, 27, 0.06);
   --elev-sheet: 0 -8px 40px rgba(26, 32, 27, 0.22);
+  --elev-pop:   0 12px 40px rgba(26, 32, 27, 0.22);
 
   --glow-busy:
     0 0 0 1px   rgba(23, 138, 72, 0.35),
@@ -610,6 +613,7 @@
   --diff-del:                #ED8A92;
   --elev-card:               0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.28);
   --elev-sheet:              0 -8px 40px rgba(0, 0, 0, 0.55);
+  --elev-pop:                0 12px 40px rgba(0, 0, 0, 0.55);
   --glow-busy:               
     0 0 0 1px   rgba(163, 190, 140, 0.35),
     0 0 16px    rgba(163, 190, 140, 0.18),
@@ -680,6 +684,7 @@
   --diff-del:                #F7768E;
   --elev-card:               0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.28);
   --elev-sheet:              0 -8px 40px rgba(0, 0, 0, 0.55);
+  --elev-pop:                0 12px 40px rgba(0, 0, 0, 0.55);
   --glow-busy:               
     0 0 0 1px   rgba(158, 206, 106, 0.35),
     0 0 16px    rgba(158, 206, 106, 0.18),
@@ -750,6 +755,7 @@
   --diff-del:                #FE716C;
   --elev-card:               0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.28);
   --elev-sheet:              0 -8px 40px rgba(0, 0, 0, 0.55);
+  --elev-pop:                0 12px 40px rgba(0, 0, 0, 0.55);
   --glow-busy:               
     0 0 0 1px   rgba(80, 250, 123, 0.35),
     0 0 16px    rgba(80, 250, 123, 0.18),
@@ -820,6 +826,7 @@
   --diff-del:                #F38BA8;
   --elev-card:               0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.28);
   --elev-sheet:              0 -8px 40px rgba(0, 0, 0, 0.55);
+  --elev-pop:                0 12px 40px rgba(0, 0, 0, 0.55);
   --glow-busy:               
     0 0 0 1px   rgba(166, 227, 161, 0.35),
     0 0 16px    rgba(166, 227, 161, 0.18),
@@ -890,6 +897,7 @@
   --diff-del:                #FD725E;
   --elev-card:               0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.28);
   --elev-sheet:              0 -8px 40px rgba(0, 0, 0, 0.55);
+  --elev-pop:                0 12px 40px rgba(0, 0, 0, 0.55);
   --glow-busy:               
     0 0 0 1px   rgba(184, 187, 38, 0.35),
     0 0 16px    rgba(184, 187, 38, 0.18),
@@ -960,6 +968,7 @@
   --diff-del:                #F57F87;
   --elev-card:               0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.28);
   --elev-sheet:              0 -8px 40px rgba(0, 0, 0, 0.55);
+  --elev-pop:                0 12px 40px rgba(0, 0, 0, 0.55);
   --glow-busy:               
     0 0 0 1px   rgba(152, 195, 121, 0.35),
     0 0 16px    rgba(152, 195, 121, 0.18),
@@ -1030,6 +1039,7 @@
   --diff-del:                #FD6A5F;
   --elev-card:               0 1px 2px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.28);
   --elev-sheet:              0 -8px 40px rgba(0, 0, 0, 0.55);
+  --elev-pop:                0 12px 40px rgba(0, 0, 0, 0.55);
   --glow-busy:               
     0 0 0 1px   rgba(133, 153, 0, 0.35),
     0 0 16px    rgba(133, 153, 0, 0.18),
@@ -1102,6 +1112,7 @@
   --diff-del:                #FF807A;
   --elev-card:               0 1px 3px rgba(26, 32, 27, 0.10), 0 1px 2px rgba(26, 32, 27, 0.06);
   --elev-sheet:              0 -8px 40px rgba(26, 32, 27, 0.22);
+  --elev-pop:                0 12px 40px rgba(26, 32, 27, 0.22);
   --glow-busy:               
     0 0 0 1px   rgba(35, 133, 61, 0.35),
     0 0 16px    rgba(35, 133, 61, 0.18),
@@ -1174,6 +1185,7 @@
   --diff-del:                #FE7F73;
   --elev-card:               0 1px 3px rgba(26, 32, 27, 0.10), 0 1px 2px rgba(26, 32, 27, 0.06);
   --elev-sheet:              0 -8px 40px rgba(26, 32, 27, 0.22);
+  --elev-pop:                0 12px 40px rgba(26, 32, 27, 0.22);
   --glow-busy:               
     0 0 0 1px   rgba(112, 129, 1, 0.35),
     0 0 16px    rgba(112, 129, 1, 0.18),
@@ -1246,6 +1258,7 @@
   --diff-del:                #FD7077;
   --elev-card:               0 1px 3px rgba(26, 32, 27, 0.10), 0 1px 2px rgba(26, 32, 27, 0.06);
   --elev-sheet:              0 -8px 40px rgba(26, 32, 27, 0.22);
+  --elev-pop:                0 12px 40px rgba(26, 32, 27, 0.22);
   --glow-busy:               
     0 0 0 1px   rgba(46, 144, 20, 0.35),
     0 0 16px    rgba(46, 144, 20, 0.18),

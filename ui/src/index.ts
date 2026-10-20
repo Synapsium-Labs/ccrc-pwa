@@ -137,3 +137,5 @@ export { FOCUS_RING } from './lib/focus';
 export { useNow } from './lib/use-now';
 export { elapsedWords, elapsedShort } from './lib/elapsed';
 export { prefersReducedMotion } from './lib/use-reduced-motion';
+// The desk width, written once (D-5933): the Sheet's desktop arm and the app's shell read the same reading.
+export { DESK_QUERY, useDesk, useMediaQuery } from './lib/use-media-query';

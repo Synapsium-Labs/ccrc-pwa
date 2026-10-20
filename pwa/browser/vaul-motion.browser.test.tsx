@@ -8,6 +8,9 @@
 // computes from them: the open Sheet ("Keyboard shortcuts", `?`) and the open palette (Ctrl+K), under `no-preference`
 // and under `reduce`, at 360, 390, 1280 and 1920 in both skins and both Phosphor palettes; the closing panel's
 // curve; and vaul's snap-back after a short drag, an inline transition the same helper retimes.
+// From 900 the Sheet is its desktop arm (D-5933): it runs at that arm's pace, `--dur-base` in and `--dur-fast` out on
+// the swift curve, and has no drag, so the snap-back rows are the phone widths' (the arm's own rows are in
+// `sheet-desktop-arm.browser.test.tsx`).
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/vaul-motion.browser.test.tsx )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -89,17 +92,21 @@ async function openPalette(page: Page): Promise<Read> {
 
 describe("the Sheet's motion is vaul's keyframes on the tokens (D-5930)", () => {
   for (const view of VIEWS) {
-    it(`the open Sheet's animationDuration is --dur-sheet under no-preference — ${named(view)}`, async () => {
+    // The desktop arm's pace from 900 (D-5933); the bottom sheet's below it.
+    const desk = view.width >= 900;
+    const inDur = desk ? '--dur-base' : '--dur-sheet';
+    it(`the open Sheet's animationDuration is ${inDur} under no-preference — ${named(view)}`, async () => {
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
         await page.emulateMedia({ reducedMotion: 'no-preference' });
         await boot(page, view);
-        const want = ms(await token(page, '--dur-sheet'));
-        expect(want, '--dur-sheet resolves to a real pace').toBeGreaterThan(100);
+        const want = ms(await token(page, inDur));
+        expect(want, `${inDur} resolves to a real pace`).toBeGreaterThan(100);
         const { panel, overlay } = await openSheet(page);
         expect(ms(panel.duration), 'panel').toBe(want);
         expect(ms(overlay.duration), 'overlay').toBe(want);
-        expect(flat(panel.curve), 'the entrance springs').toBe(flat(await token(page, '--curve-spring')));
+        expect(flat(panel.curve), desk ? 'the arm enters on the swift curve' : 'the entrance springs')
+          .toBe(flat(await token(page, desk ? '--curve-swift' : '--curve-spring')));
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
@@ -164,7 +171,8 @@ describe("the Sheet's motion is vaul's keyframes on the tokens (D-5930)", () => 
         await page.keyboard.press('Escape');
         const read = await page.evaluate(() => (window as unknown as { __closing: Promise<Read> }).__closing);
         expect(flat(read.curve)).toBe(flat(await token(page, '--curve-swift')));
-        expect(ms(read.duration), 'the exit runs at --dur-slow').toBe(ms(await token(page, '--dur-slow')));
+        expect(ms(read.duration), `the exit runs at ${desk ? '--dur-fast' : '--dur-slow'}`)
+          .toBe(ms(await token(page, desk ? '--dur-fast' : '--dur-slow')));
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
@@ -172,8 +180,9 @@ describe("the Sheet's motion is vaul's keyframes on the tokens (D-5930)", () => 
     });
 
     // vaul's snap-back after a drag that does not dismiss is an inline TRANSITION (`resetDrawer`: `transform .5s`),
-    // not a keyframe; only an important declaration beats an inline style, so VAUL_MOTION retimes it too.
-    for (const motion of ['no-preference', 'reduce'] as const) {
+    // not a keyframe; only an important declaration beats an inline style, so VAUL_MOTION retimes it too. The desktop
+    // arm has no drag (D-5933), so these rows are the phone widths'.
+    for (const motion of desk ? [] : ['no-preference', 'reduce'] as const) {
       it(`the snap-back after a short drag runs on the tokens under ${motion} — ${named(view)}`, async () => {
         const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
         try {

@@ -91,6 +91,7 @@ const ROLE_BEARING: Readonly<Record<string, RoleBearing>> = {
     allow: [
       { cls: 'text-lg', why: "the sheet's title is 17px, a title's size, and no role's Refined value is 17" },
       { cls: 'h-1', why: 'the grabber is a 4px bar drawn as a hint, not a row or a control' },
+      TAP_FLOOR, // the desktop arm's ✕ (D-5933, D-6033)
       { cls: 'min-h-0', why: "the body's permission to shrink inside the panel's flex column, so it scrolls: not a size" },
       { cls: 'h-[calc(100dvh-var(--safe-top)-var(--sp-6))]', why: "the full drawer arm rises to the safe-area line: the viewport's height, not a density" },
     ],
