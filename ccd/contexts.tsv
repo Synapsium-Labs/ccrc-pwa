@@ -203,6 +203,7 @@ _gc_declined	C4
 _gc_incomplete	C4
 _ws_gc_dirty	C4
 _ws_gc_row	C4
+_ws_gc_manifest_bytes	C4
 _ws_gc_scan	C4
 _ws_gc_merged	C4
 _ws_gc_reclaimable	C4
