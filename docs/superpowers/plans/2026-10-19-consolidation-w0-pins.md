@@ -495,10 +495,16 @@ The allocator issued the consolidation wave a block of 30 numbers, 5848 to 5877,
 - **D-5854** — `symbol-slices-for-w1a` (Task C0g; ARCH-06, first slice): `scan/symbols.ts` replaces literal source slices, and the suites that pin W1a's moved regions move onto it first, with the ticket's ratchet predicate applied to W1a's files.
   - **Departs from ARCH-06:** the ticket's exemplar suites (the stall-sweep tick order, the coord-store UPDATE census) are not W1a's and move in a later slice; this slice moves the suites W1a needs.
 
-### A departure entered by the coordinator
+### Departures entered by the coordinator
 
 - **D-5865** — `pause-pin-tick-fold-for-lane-sites` (Task C0e, #871; extends D-5852): the four `watch.ts` lane sites and `stopDonePass` take the tick's listing, which cannot be `null` by type, so their `null` and rejecting legs are pinned once, at the tick, not per site: neither reaches any lane, a `null` listing gives an `unmeasurable` coord frame, and a rejecting one emits no frame at all.
   - **Departs from** Task C0e's "four listings per site" for those five sites only; every executor site keeps all four. The worker named it by slug and the coordinator entered it from the wave's held numbers, as this plan's header requires.
+
+- **D-6059** — `c0g-no-rescuable-pins` (Task C0g, #929; extends D-5854): Step 0 found no literal pin over a W1a-moved region that symbol keying could rescue, so "each moves onto `symbols.ts`" moved nothing and Step 1's "red before" had no suite to show. The three in-region literal pins are W1a's rewrites (C1a, C1b).
+- **D-6060** — `parse-calls-bindings` (Task C0g, #929; extends D-5853 and D-5854): C0g adds `calls` and `bindings` to C0f's `scan/parse.ts`, which C0g's Files line did not list, because `callsIn` and the counting rule need the syntax tree and only `scan/parse.ts` may import the parser.
+- **D-6061** — `ratchet-counts-tomatch` (Task C0g, #929; extends D-5854): the literal-pin counting rule also counts `toMatch`, the `expect` spelling of the ticket's `match`.
+- **D-6062** — `c0g-censuses-to-c1a` (Task C0g, #929; extends D-5854): the two `single-definition` holder-census blocks that C0g's Files line moved stay for C1a. They are whole-file censuses that W1a rewrites, and the W1a plan gives them to C1a (its Files, A1), so the W1a plan's line supersedes this plan's here.
+- **The parser pin and Dependabot** (Task C0f, #915; D-5853): the `/server` block of `.github/dependabot.yml` ignores `typescript-api`, so a grouped minor or patch PR cannot move the exact pin the scanners rely on. A new version of the parser is a reviewed PR that edits the pin.
 
 ### Issued for Task C0l and defined here
 
