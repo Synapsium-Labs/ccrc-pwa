@@ -91,7 +91,7 @@ export const STOP_DONE_ACTOR = 'sweep:stop-done';
 
 /** The kill switch: while `$REG/stop-done-disabled` is listed the lane does nothing at all. The operator's to touch and
  *  remove BY HAND — nothing in the tree writes it (`single-definition.test.ts`). */
-export const STOP_DONE_DISABLED_MARKER = 'stop-done-disabled';
+export { STOP_DONE_DISABLED_MARKER } from '../../shared/switches.js';
 
 /** The registry row's facts the verdict reads — the fleet frame's own row, so the lane sees what the PWA shows. */
 export type StopDoneRow = Pick<FleetSession,
