@@ -8,7 +8,7 @@
 // run time; no fixture names a real account, host or path.
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -2713,6 +2713,98 @@ process.stdout.write(said);
     expect(r.stdout).toBe('out-refused: marker-unwritable EFBIG');
     expect(readdirSync(path.join(dir, 'out')), 'the directory was made; the marker was created empty').toEqual([replay.OUT_MARKER]);
     expect(readFileSync(path.join(dir, 'out', replay.OUT_MARKER), 'utf8'), 'its bytes were not written').toBe('');
+  });
+
+  // D-5985, D-5986: the same file-size seam reaches writeWhole's write arm through the lock's tmp (claimOut on a made --out):
+  // the tmp's write fails EFBIG, the tmp is dropped and no lock is made. Under --fsize=0 the marker itself would fail, so the parent makes --out.
+  it.skipIf(!existsSync('/usr/bin/prlimit'))('claimOut whose lock tmp cannot be written (a file-size limit of 0): out-refused .driver.lock.tmp-<pid> unwritable EFBIG, the tmp dropped and no lock made; a large limit does not refuse', () => {
+    const dir = mkTmp('ccrc-replay-d5985-locktmp-');
+    const out = replay.prepareOut(path.join(dir, 'out'));
+    const script = path.join(dir, 'child.mjs');
+    writeFileSync(script, `import * as D from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
+let said;
+try { D.claimOut(process.argv[2]); said = 'no refusal'; } catch (e) { said = e?.word ? e.word + ': ' + e.detail : 'RAW ' + (e?.code ?? e); }
+process.stdout.write(said);
+`);
+    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const r = run(0);
+    expect(r.signal, r.stderr).toBeNull();
+    expect(r.stdout).toMatch(/^out-refused: \.driver\.lock\.tmp-\d+ unwritable EFBIG$/);
+    expect(readdirSync(out).filter((n) => n === '.driver.lock' || n.startsWith('.driver.lock.tmp-')), 'the tmp was dropped and no lock was made').toEqual([]);
+    const c = run(1_000_000);
+    expect(c.signal, c.stderr).toBeNull();
+    expect(c.stdout, 'CONTROL: a large limit does not refuse').toBe('no refusal');
+  });
+
+  // D-5986: the same arm through writePlain (ensurePoisonBin): poison-bin/gh unwritable EFBIG, the tmp dropped, no target.
+  it.skipIf(!existsSync('/usr/bin/prlimit'))('ensurePoisonBin whose tmp cannot be written (a file-size limit of 0): out-refused poison-bin/gh unwritable EFBIG, nothing left; a large limit does not refuse', () => {
+    const dir = mkTmp('ccrc-replay-d5986-poison-');
+    const out = replay.prepareOut(path.join(dir, 'out'));
+    const script = path.join(dir, 'child.mjs');
+    writeFileSync(script, `import * as D from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
+let said;
+try { D.ensurePoisonBin(process.argv[2]); said = 'no refusal'; } catch (e) { said = e?.word ? e.word + ': ' + e.detail : 'RAW ' + (e?.code ?? e); }
+process.stdout.write(said);
+`);
+    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const r = run(0);
+    expect(r.signal, r.stderr).toBeNull();
+    expect(r.stdout).toBe('out-refused: poison-bin/gh unwritable EFBIG');
+    expect(existsSync(path.join(out, 'poison-bin', 'gh')), 'no target').toBe(false);
+    expect(readdirSync(path.join(out, 'poison-bin')).filter((n) => n.startsWith('gh.tmp-')), 'the tmp was dropped').toEqual([]);
+    const c = run(1_000_000);
+    expect(c.signal, c.stderr).toBeNull();
+    expect(c.stdout, 'CONTROL: a large limit does not refuse').toBe('no refusal');
+    expect(existsSync(path.join(out, 'poison-bin', 'gh')), 'CONTROL: the target exists').toBe(true);
+  });
+
+  // D-5986: appendPlain's write arm through recordSpend. The limit is EXACTLY the ledger's size: a larger one makes a partial
+  // write and a torn line. The refusal leaves the ledger's bytes as they were.
+  it.skipIf(!existsSync('/usr/bin/prlimit'))('recordSpend whose ledger is at the file-size limit: out-refused spend.jsonl unwritable EFBIG, the ledger unchanged; a large limit appends one line', () => {
+    const dir = mkTmp('ccrc-replay-d5986-spend-');
+    const out = replay.prepareOut(path.join(dir, 'out'));
+    replay.recordSpend(out, 'old', 1);
+    const ledger = path.join(out, replay.SPEND_LEDGER);
+    const before = readFileSync(ledger);
+    const script = path.join(dir, 'child.mjs');
+    writeFileSync(script, `import * as D from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
+let said;
+try { D.recordSpend(process.argv[2], 'j0', 5); said = 'no refusal'; } catch (e) { said = e?.word ? e.word + ': ' + e.detail : 'RAW ' + (e?.code ?? e); }
+process.stdout.write(said);
+`);
+    const run = (fsize: number) => spawnSync('/usr/bin/prlimit', [`--fsize=${fsize}`, process.execPath, script, out], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
+    const r = run(before.length);
+    expect(r.signal, r.stderr).toBeNull();
+    expect(r.stdout).toBe('out-refused: spend.jsonl unwritable EFBIG');
+    expect(readFileSync(ledger).equals(before), 'the ledger is byte for byte what it was').toBe(true);
+    const c = run(1_000_000);
+    expect(c.signal, c.stderr).toBeNull();
+    expect(c.stdout, 'CONTROL: a large limit does not refuse').toBe('no refusal');
+    const lines = readFileSync(ledger, 'utf8').split('\n').filter((l) => l !== '');
+    expect(lines.length, 'CONTROL: exactly one line was added').toBe(2);
+    expect(lines[1]).toContain('"j0"');
+  });
+
+  // D-5986: appendPlain's fstat arm. A FIFO at spend.jsonl with a reader held open lets the no-follow O_NONBLOCK open succeed, so
+  // only the fstat type check refuses (without the held reader the open fails ENXIO, which is the open arm, pinned elsewhere).
+  it('recordSpend onto a FIFO ledger with a reader held open: out-refused spend.jsonl is not a regular file, and nothing went into the FIFO', () => {
+    const dir = mkTmp('ccrc-replay-d5986-fifo-');
+    const out = replay.prepareOut(path.join(dir, 'out'));
+    const p = path.join(out, replay.SPEND_LEDGER);
+    const mk = spawnSync('mkfifo', [p], { encoding: 'utf8' });
+    expect(mk.status, mk.stderr).toBe(0);
+    const rd = openSync(p, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const err = thrown(() => replay.recordSpend(out, 'j0', 5));
+      expect(err).toBeInstanceOf(replay.DriverRefusal);
+      expect(err).toMatchObject({ word: 'out-refused', detail: 'spend.jsonl is not a regular file' });
+      // A non-blocking read of a FIFO with no writer answers 0 (end of file), or EAGAIN when a writer is open: either way no bytes.
+      let got = 0;
+      try { got = readSync(rd, Buffer.alloc(64), 0, 64, null); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EAGAIN') throw e; }
+      expect(got, 'the FIFO holds no bytes: nothing of the spend line went into it').toBe(0);
+    } finally {
+      closeSync(rd);
+    }
   });
 
   /** Run `body` (ESM, top-level await) in a child with a deadline; the driver is `D`, a scratch directory is `base`. */

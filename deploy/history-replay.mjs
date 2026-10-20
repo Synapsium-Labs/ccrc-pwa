@@ -858,9 +858,10 @@ function createPlain(out, rel, mode, replaceStale) {
   }
 }
 
-/** Write `bytes` to the descriptor of an exclusively created tmp file and close it. A failed write (a full disk) closes the
- *  descriptor, removes the tmp file quietly and refuses `out-refused` `<rel> unwritable <code>`, never a raw errno
- *  (D-5986). `rel` is the name the refusal gives: the target's, or for the lock the tmp file's own.
+/** Write `bytes` to the descriptor of an exclusively created tmp file and close it. A failed write (a full disk, or a file-size
+ *  limit: RLIMIT_FSIZE answers EFBIG, the seam the pins use) closes the descriptor, removes the tmp file quietly and
+ *  refuses `out-refused` `<rel> unwritable <code>`, never a raw errno (D-5986). `rel` is the name the refusal
+ *  gives: the target's, or for the lock the tmp file's own.
  *  @param {number} fd  @param {Buffer} bytes  @param {string} tmp the tmp file's path  @param {string} rel */
 function writeWhole(fd, bytes, tmp, rel) {
   try {
