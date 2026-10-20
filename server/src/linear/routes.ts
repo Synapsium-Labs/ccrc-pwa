@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify';
-import { deriveWorkspaceSlug, offlineTitle } from '../../../shared/slug.js';
-import { lookupLinearIssue, sanitizeTitle, type FetchLike, type LinearFailure } from './client.js';
-import { readLinearKey } from './connection.js';
-import { ticketTitle } from './title.js';
+import { type FetchLike } from './client.js';
+import { LINEAR_REF_MAX_CHARS, resolveName, type ResolveAnswer } from './resolve.js';
+
+// Kept importable from here: the route's own tests and the preview's callers name them beside the route.
+export { LINEAR_REF_MAX_CHARS, type ResolveAnswer };
 
 export interface LinearRouteOpts {
   /** The config's ccrc dir (`cfg.ccrcDir`), where `linear.key` lives. */
@@ -10,27 +11,6 @@ export interface LinearRouteOpts {
   /** Test seams: the network and the deadline. Absent in production. */
   fetch?: FetchLike;
   timeoutMs?: number;
-}
-
-/**
- * The longest `ref` the route will parse. A pasted issue URL is about a hundred
- * characters and a copied branch name a little more; a kilobyte is generous for
- * both and still a bound on what an authenticated caller can make the slug
- * grammar chew on. Characters, not bytes: the query string is already a string.
- */
-export const LINEAR_REF_MAX_CHARS = 1024;
-
-/**
- * What the sheet reads. `reason` is a refusal word (`NameRefusal`) when `kind` is
- * `refused`, and the Linear failure arm when a ticket fell back to
- * `source: 'offline'`; `kind` says which vocabulary it is.
- */
-export interface ResolveAnswer {
-  kind: 'auto' | 'named' | 'refused';
-  slug: string | null;
-  title: string | null;
-  source: 'linear' | 'offline';
-  reason?: string;
 }
 
 const NO_STORE = 'no-store';
@@ -41,10 +21,11 @@ const NO_STORE = 'no-store';
  * asked, before the operator commits to a slug they cannot change.
  *
  * Session-gated like every PWA read (it is NOT in `auth/gate.ts`'s EXEMPT table)
- * and carries no box token. L4: it parses, asks, and replies; the grammar is
- * `shared/slug.ts`, the lookup is `client.ts`, and every failure arm degrades to
- * the offline title with its fixed word as `reason`. The key is read at use time
- * from its file, so a key connected a moment ago is used on the next request.
+ * and carries no box token. L4: it validates the query and replies; the answer
+ * itself is `resolve.ts`'s (shared with the create route), the grammar is
+ * `shared/slug.ts`, and every failure arm degrades to the offline title with its
+ * fixed word as `reason`. The key is read at use time from its file, so a key
+ * connected a moment ago is used on the next request.
  *
  * Nothing is written here. A 401 from Linear is reported as `unauthorised`; the
  * Settings stage owns marking the connection rejected, and the digest the client
@@ -59,31 +40,6 @@ export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts
     const ref = typeof q === 'object' && q !== null && 'ref' in q ? (q as { ref: unknown }).ref : undefined;
     if (typeof ref !== 'string') return reply.code(400).send({ ok: false, error: 'bad-ref' });
     if (ref.length > LINEAR_REF_MAX_CHARS) return reply.code(400).send({ ok: false, error: 'ref-too-long' });
-
-    const ask = deriveWorkspaceSlug(ref);
-    if (ask.kind === 'auto') {
-      return { kind: 'auto', slug: null, title: null, source: 'offline' } satisfies ResolveAnswer;
-    }
-    if (ask.kind === 'refused') {
-      return { kind: 'refused', slug: null, title: null, source: 'offline', reason: ask.reason } satisfies ResolveAnswer;
-    }
-
-    // `offlineTitle` is null only for an auto or refused name, both answered above.
-    const offline = sanitizeTitle(offlineTitle(ref) ?? ref.trim());
-    if (ask.ticket === null) {
-      return { kind: 'named', slug: ask.slug, title: offline, source: 'offline' } satisfies ResolveAnswer;
-    }
-
-    const key = await readLinearKey(opts.ccrcDir);
-    const look = await lookupLinearIssue(ask.ticket, key, { fetch: opts.fetch, timeoutMs: opts.timeoutMs });
-    if (look.ok) {
-      // Composed, then sanitised AGAIN: the lookup's title fits the cap alone, and
-      // `ENG-1234 - ` in front of it may push the whole past it.
-      return {
-        kind: 'named', slug: ask.slug, title: sanitizeTitle(ticketTitle(look.identifier, look.title)), source: 'linear',
-      } satisfies ResolveAnswer;
-    }
-    const reason: LinearFailure = look.reason;
-    return { kind: 'named', slug: ask.slug, title: offline, source: 'offline', reason } satisfies ResolveAnswer;
+    return resolveName(ref, { ccrcDir: opts.ccrcDir, fetch: opts.fetch, timeoutMs: opts.timeoutMs });
   });
 }
