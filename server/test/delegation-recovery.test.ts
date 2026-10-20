@@ -3990,9 +3990,9 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
     const recovered = await l.dur.recover();
     expect(recovered.failure).toBeNull();
     await expectFull(l, 'the first per-pass repair right after the recover');
-    await expectShort(l, 'the second, right after the recover (a clock still counting from the earlier full repair would force a full here)');
+    await expectShort(l, 'the second, right after the recover');
     l.vclock.ms += FULL_MS - 1000;
-    await expectShort(l, 'just inside the interval counted from the recover');
+    await expectShort(l, 'just inside the interval counted from the recover (a clock still counting from the earlier full repair would force a full here)');
     l.vclock.ms += 2000;
     await expectFull(l, 'just past DELEGATION_REPAIR_FULL_MS counted from the recover');
   });

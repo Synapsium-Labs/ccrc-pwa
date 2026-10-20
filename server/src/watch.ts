@@ -10138,7 +10138,7 @@ class DelegationLane {
               insertEvents: (rows) => coord.insertDelegationEvents(rows),
               eventStats: () => coord.delegationEventStats(),
             },
-            now: () => Date.now(), randomUUID: () => randomUUID(), warn: (m) => console.warn(m),
+            now: () => Date.now(), monotonicMs: () => this.mono(), randomUUID: () => randomUUID(), warn: (m) => console.warn(m),
           }));
           this.durable = d;
           this.lastRecoverAt = Date.now();                                // open() has just recovered: a retry waits its interval
@@ -11266,7 +11266,7 @@ class DelegationLane {
     if (repair && !pass.signal.aborted) {
       const endRepair = this.phase(pass, 'repair');
       let report: Awaited<ReturnType<DelegationDurability['repairProjection']>> = null;
-      try { report = await durable.repairProjection(); }
+      try { report = await durable.repairProjection({ perPass: true }); }
       catch (err) { console.warn(`ccrc-server: the delegation projection could not be repaired: ${err instanceof Error ? err.message : String(err)}`); }
       finally { endRepair(); }
       if (report !== null) {                                             // D-5692: read only; a throw or no report leaves these off the line
