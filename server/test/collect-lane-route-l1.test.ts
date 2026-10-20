@@ -143,7 +143,7 @@ describe('the POST decision follows R11 and R24', () => {
     ['listed, the marker absent', { switches: { paused: false, marker: false } }],
     ['listed, the marker standing', { switches: { paused: false, marker: true } }],
     ['paused, the marker standing', { switches: { paused: true, why: 'raised', marker: true } }],
-    ['an unlistable registry', { switches: { paused: true, why: 'unlistable' } }],
+    ['an unlistable registry', { switches: { paused: true, why: 'unlistable', reason: 'unreadable' } }],
     ['an epoch moved during the listing', { epoch: { before: 3, after: 4 }, node: known(4) }],
     ['a node not measured', { node: { kind: 'unmeasured', connectionEpoch: 3 } }],
   ];
@@ -198,7 +198,7 @@ describe('the POST decision follows R11 and R24', () => {
 
   it('Live is unmeasurable on an unlistable listing, an epoch moved during the await, or a node unmeasured or in collision', () => {
     const cases: [string, Partial<CollectPostInput>][] = [
-      ['an unlistable registry', { switches: { paused: true, why: 'unlistable' } }],
+      ['an unlistable registry', { switches: { paused: true, why: 'unlistable', reason: 'unreadable' } }],
       ['an epoch moved during the listing', { epoch: { before: 3, after: 4 }, node: known(4) }],
       ['a node not measured yet', { node: { kind: 'unmeasured', connectionEpoch: 3 } }],
       ['a node id in collision', { node: { kind: 'collision', connectionEpoch: 3 } }],

@@ -4814,6 +4814,26 @@ describe('docs section H is declared once, in shared/docs.ts (docs W1a)', () => 
   }
 });
 
+// D-5930: vaul's keyframes are retimed in one place, `ui/src/lib/motion.ts`. The Sheet once retimed them with
+// transition utilities a keyframe never reads, and the command palette carried a private recipe of its own; a
+// third surface spelling `animation-duration:` would be a third pace nothing keeps on the tokens. Every file type
+// under `ui/src`, comments included: a literal-absence pin, and CSS is where the next copy is likeliest.
+describe("vaul's motion is retimed once, in ui/src/lib/motion.ts (D-5930)", () => {
+  const UI_SRC = path.join(ccrcRoot, 'ui', 'src');
+  const walk = (dir: string): string[] => readdirSync(dir).flatMap((e) => {
+    if (e.startsWith('__')) return [];
+    const p = path.join(dir, e);
+    return statSync(p).isDirectory() ? walk(p) : /\.(tsx?|css|mjs)$/.test(p) ? [p] : [];
+  });
+
+  it('no animation-duration: or animation-timing-function: literal exists in ui/src outside ui/src/lib/motion.ts', () => {
+    const files = walk(UI_SRC);
+    expect(files.map(rel), 'the scan reaches the primitives').toContain('ui/src/primitives/command-palette.tsx');
+    const holders = files.filter((f) => /animation-(?:duration|timing-function):/.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders).toEqual(['ui/src/lib/motion.ts']);
+  });
+});
+
 // Docs W1a, Task 5 (spec 2026-10-01 3.1, 3.2, 3.8): the page grammar, the pin and the one docs API URL builder
 // are declared once, in shared/docs.ts. The server's L1 query parser (W2) and the PWA's router and loaders (W5)
 // import them; a second parser or builder is a second grammar nothing forces to agree. The marker header word
@@ -7560,5 +7580,69 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 
   it('mail-disabled: hand-only, no writer in the tree', () => {
     expect(writersOf('mail-disabled')).toEqual([]);
+  });
+});
+
+// D-5841 (D3, #755; plan docs/superpowers/plans/2026-10-17-coordinator-first-routing.md, Durability). APPENDED. The
+// brief watch has ONE home: its two timers, its decider and the wave brief's subject are defined in
+// `server/src/coord/briefwatch.ts` alone, and the subject is spelled on no other source code line, so `dispatchRun`'s
+// brief and the pass that looks for it cannot drift apart. Code lines only (`stallCode`).
+describe('the brief watch is defined once (D-5841)', () => {
+  const holders = (re: RegExp): string[] =>
+    ALL.filter((f) => rel(f).startsWith('server/src/') && re.test(stallCode(f))).map(rel).sort();
+  const defines = (name: string): RegExp =>
+    new RegExp(`\\bfunction\\s+${name}\\b|\\b(?:const|let|var)\\s+${name}\\s*=`);
+  const HOME = 'server/src/coord/briefwatch.ts';
+
+  it('CONTROL: the patterns see a definition and pass over comment lines', () => {
+    expect(defines('briefStep').test('export function briefStep(b: B, now: number): BriefStep {')).toBe(true);
+    expect(stallCodeText("// the subject is 'wave-brief'\nconst x = 1;")).not.toMatch(/'wave-brief'/);
+  });
+
+  it('the two timers are 5 and 10 minutes, defined in briefwatch.ts alone', () => {
+    const src = stallCode(path.join(ccrcRoot, HOME));
+    expect(src).toMatch(/export const BRIEF_RETRY_MS = 5 \* 60_000;/);
+    expect(src).toMatch(/export const BRIEF_NOTICE_MS = 10 \* 60_000;/);
+    for (const name of ['BRIEF_RETRY_MS', 'BRIEF_NOTICE_MS', 'BRIEF_RETRY_DETAIL', 'BRIEF_NOTICE_DETAIL',
+      'WAVE_BRIEF_SUBJECT', 'briefStep', 'briefNotTakenSubject', 'briefNotTakenTag']) {
+      expect(holders(defines(name)), name).toEqual([HOME]);
+    }
+  });
+
+  it("the wave brief's subject is spelled on one source code line", () => {
+    expect(holders(/['"]wave-brief['"]/)).toEqual([HOME]);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/coord/dispatch.ts'))).toMatch(/subject: WAVE_BRIEF_SUBJECT\b/);
+  });
+});
+
+// D-5513 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A10). APPENDED. The credential shapes have
+// one home, `CREDENTIAL_MASKS` in `shared/api.ts`, beside the mask's two words; the egress mask has one home,
+// `server/src/accounts/mask.ts`; and `redact.ts`'s approval-row redactor reads its generic `sk-` and JWT shapes from
+// the registry rather than keeping a second copy that could drift from the egress mask's.
+describe('the credential shapes and the egress mask each have one home (D-5513)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('CREDENTIAL_MASKS').test('export const CREDENTIAL_MASKS = [')).toBe(true);
+    expect(decl('CREDENTIAL_MASKS').test("import { CREDENTIAL_MASKS } from '../../../shared/api.js';")).toBe(false);
+  });
+  it('the shapes and the mask words are declared once, in shared/api.ts', () => {
+    for (const c of ['CREDENTIAL_MASKS', 'CredentialMask', 'CredentialMaskId', 'credentialMaskSource', 'SECRET_MASK',
+      'SECRET_MASK_TOO_LARGE']) {
+      expect(holders(decl(c)), c).toEqual(['shared/api.ts']);
+    }
+  });
+  it('the mask lives in its one file', () => {
+    for (const c of ['SecretMasker', 'DrawerMask', 'SHAPE_ONLY_MASKER', 'fingerprintOf', 'fingerprintGeneration', 'shapeMatchers',
+      'fingerprintRow', 'fingerprintAnswerOf']) {   // the last two: D-5996
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/mask.ts']);
+    }
+  });
+  it("maskSecretAssigns's file and mask.ts read the shapes from CREDENTIAL_MASKS, and no other file spells one", () => {
+    expect(holders(/\bcredentialMaskSource\('genericSk'\)/)).toEqual(['server/src/coord/redact.ts']);
+    expect(holders(/\bcredentialMaskSource\('jwt'\)/)).toEqual(['server/src/coord/redact.ts']);
+    expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/mask.ts']);
+    // A second copy of a shape's source: the Anthropic family's prefix, the generic rule, or the JWT header pair.
+    expect(holders(/sk-ant-\[|sk-\[A-Za-z0-9_-\]\{8,\}|eyJ\[A-Za-z0-9_-\]\+\\\.eyJ/)).toEqual(['shared/api.ts']);
   });
 });

@@ -13,6 +13,7 @@ import {
   makeCcdHarness, ghContainedEnv, harnessBin, seedAccountsSh, CCD, type CcdHarness,
 } from './ccdWsHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { markGenerated } from '../../shared/mark.mjs';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
 
@@ -2065,8 +2066,12 @@ describe('ccd-account-auth — the pane-bound spawn has to END (D-2734..D-2737)'
     }, { systemd: true, tmux: true });
     // 20s is well under vitest's own patience and well over every case here;
     // a case that reaches it has HUNG, which is the defect being pinned.
-    try { execFileSync('bash', ['-c', script], { env, cwd: h.home, timeout: 20_000, stdio: 'ignore' }); }
-    catch { /* a hang throws ETIMEDOUT; the file below is then absent or stale */ }
+    // IN A PROCESS GROUP OF ITS OWN (#172, D-5894): a hang is killed with everything it started, and a
+    // `noDeadline` run, which strands its mint ON PURPOSE (the pump's backstop TERMs the pty wrapper and the
+    // mint under it runs on), has that mint ended through the group when it returns. A hang leaves the file
+    // below absent or stale.
+    spawnSyncGroup('bash', ['-c', script], { env, cwd: h.home, timeout: 20_000, stdio: 'ignore', encoding: 'utf8' },
+      { strays: opts.noDeadline ? 'end' : 'throw' });
     if (!fs.existsSync(out)) return { hung: 'yes' };
     return Object.fromEntries(fs.readFileSync(out, 'utf8').trim().split('\n')
       .map((l) => l.split('=') as [string, string]));

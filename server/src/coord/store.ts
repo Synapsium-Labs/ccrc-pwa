@@ -14,6 +14,11 @@ import type { LastRun } from './released.js';
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
 import type { StallDeliveryRow, StallMailRow, StallReadFailure, StallRunRow, StallWriteMiss } from './stall.js';
+// The drift decider's row shapes (D-5921) are declared by their consumer, the L1 `drift.ts`; the `drift*` reads below
+// implement them. `parseStallDetail` is the one reader of a stall observation's detail, so `driftOpenRuns` never
+// counts one as an act.
+import type { DriftAskRow, DriftDeliveryRow, DriftReviewRow, DriftRunRow } from './drift.js';
+import { parseStallDetail } from './stall.js';
 // Stall watch settings (design 2026-10-05 §8, §11): the settings row's port and the notice-count row are declared by
 // their consumer, the L1 `stallsettings.ts`; the insert arm starts from its seed, and the no-op skip asks its compare.
 import { STALL_SETTINGS_SEED, stallPatchIsNoOp } from './stallsettings.js';
@@ -60,6 +65,7 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
+import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
 import {
   DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
@@ -935,6 +941,17 @@ const persistedInt = (text: string, column: string): PersistedInt => {
     ? { ok: true, value }
     : { ok: false, detail: `${column} is not a positive safe integer` };
 };
+
+/** The drift reads' answer (D-5921): the rows, or a read that failed, with its detail. */
+export type DriftReadResult<T> = { ok: true; rows: T[] } | { ok: false; detail: string };
+
+/** A drift read's integer, proven: a non-negative safe integer, or the read fails naming the column (no value). */
+const driftInt = (v: unknown, column: string): number => {
+  const n = typeof v === 'bigint' ? Number(v) : v;
+  if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0) throw new Error(`${column} is not a non-negative safe integer`);
+  return n;
+};
+const driftIntOrNull = (v: unknown, column: string): number | null => (v === null ? null : driftInt(v, column));
 
 /** A held-set detail (`deadCoordinatorBreakerHeldDetail`'s encoding, the `run_events` record's and the typed state's
  *  snapshot alike) read back into members, ALL-OR-FAILURE: a text `splitDeadCoordinatorBreakerHeld` refuses, or an
@@ -2333,6 +2350,10 @@ export class CoordStore {
    *     park keeps it outstanding, so nothing this arm counts moves. `runHealth`
    *     gains a second narrow-predicate count beside the one above,
    *     `mailParkedLive`, which a re-queued row joins only while parked.
+   *   `absorbParkEscalation` (D-5841, the brief watch) — writes only
+   *     `parkEscalatedAt` on a wave brief's own delivery, which a re-queued row
+   *     never is (it belongs to a `POST /api/mail` mail, not a `coordinator`
+   *     brief); nothing this arm counts moves.
    *
    * BOUNDED by the role-addressed reports of ONE program that parked while its
    * coordinator was dead, at most one new row per `mail` row, and deliberately
@@ -4577,6 +4598,95 @@ export class CoordStore {
     });
   }
 
+  // ── the drift decider's reads (coordinator-durability tail spec §4.2, D-5921) ─────────────────────────────
+  // Each is `{ ok: true, rows } | { ok: false, detail }`: a thrown statement or a value this process cannot prove is a
+  // failure with its detail, never a throw and never an overloaded null. They read; the decider (`drift.ts`) judges.
+
+  /** Every non-terminal run, with the `at` of its newest ACT row: a `run_events` row that is neither a stall
+   *  observation (`parseStallDetail` reads it) nor caused by `'operator'` (the lanes write as the operator), or null
+   *  when there is none. */
+  driftOpenRuns(): DriftReadResult<DriftRunRow> {
+    try {
+      const runs = this.db.prepare(
+        `SELECT id, program, state, claimedBy, openedAt FROM runs WHERE state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
+      ).all() as { id: unknown; program: string; state: string; claimedBy: string | null; openedAt: unknown }[];
+      const events = this.db.prepare(
+        "SELECT at, causedBy, CAST(detail AS TEXT) AS detail FROM run_events WHERE runId = ? AND causedBy <> 'operator' " +
+        'ORDER BY at DESC, id DESC',
+      );
+      const out: DriftRunRow[] = [];
+      for (const r of runs) {
+        let lastActAt: number | null = null;
+        for (const e of events.all(r.id as number) as { at: unknown; causedBy: string; detail: string | null }[]) {
+          if (parseStallDetail(e.detail) !== null) continue;
+          lastActAt = driftInt(e.at, 'run_events at');
+          break;
+        }
+        out.push({ id: driftInt(r.id, 'runs id'), program: r.program, state: r.state, claimedBy: r.claimedBy,
+          openedAt: driftInt(r.openedAt, 'runs openedAt'), lastActAt });
+      }
+      return { ok: true, rows: out };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Every QUEUED delivery with its gate columns and D1's park columns (#853): both mail kinds are about a row never
+   *  delivered (a parked row stays `queued`), so a `delivered` one is not read. The literal `'queued'`, not
+   *  `OUTSTANDING_STATES_SQL`: this read is not a holder of the outstanding predicate the re-queue's walk counts. */
+  driftOutstandingDeliveries(): DriftReadResult<DriftDeliveryRow> {
+    try {
+      const rows = this.db.prepare(
+        'SELECT id, toId, state, lastGate, gateSince, parkedAt, parkEscalatedAt FROM mail_deliveries ' +
+        "WHERE state = 'queued' ORDER BY id",
+      ).all() as { id: unknown; toId: string; state: string; lastGate: string | null; gateSince: unknown;
+        parkedAt: unknown; parkEscalatedAt: unknown }[];
+      return { ok: true, rows: rows.map((r) => ({
+        id: driftInt(r.id, 'mail_deliveries id'), toId: r.toId, state: r.state, lastGate: r.lastGate,
+        gateSince: driftIntOrNull(r.gateSince, 'mail_deliveries gateSince'),
+        parkedAt: driftIntOrNull(r.parkedAt, 'mail_deliveries parkedAt'),
+        parkEscalatedAt: driftIntOrNull(r.parkEscalatedAt, 'mail_deliveries parkEscalatedAt'),
+      })) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Every run at `awaiting-review`: when it ENTERED that state (its newest transition row into it from another
+   *  state; null when no row says) and its claimant's newest mail naming the run (null: none). */
+  driftAwaitingReview(): DriftReadResult<DriftReviewRow> {
+    try {
+      const rows = this.db.prepare(
+        'SELECT r.id AS id, r.program AS program, r.claimedBy AS claimedBy, ' +
+        "(SELECT MAX(e.at) FROM run_events e WHERE e.runId = r.id AND e.toState = 'awaiting-review' " +
+        "AND e.fromState <> 'awaiting-review') AS enteredAt, " +
+        '(SELECT MAX(m.at) FROM mail m WHERE m.runId = r.id AND m.fromId = r.claimedBy) AS lastClaimantMailAt ' +
+        "FROM runs r WHERE r.state = 'awaiting-review' ORDER BY r.id",
+      ).all() as { id: unknown; program: string; claimedBy: string | null; enteredAt: unknown; lastClaimantMailAt: unknown }[];
+      return { ok: true, rows: rows.map((r) => ({
+        id: driftInt(r.id, 'runs id'), program: r.program, claimedBy: r.claimedBy,
+        enteredAt: driftIntOrNull(r.enteredAt, 'run_events at'),
+        lastClaimantMailAt: driftIntOrNull(r.lastClaimantMailAt, 'mail at'),
+      })) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Every `held` or `answering` asks row. */
+  driftHeldQuestions(): DriftReadResult<DriftAskRow> {
+    try {
+      const rows = this.db.prepare(
+        "SELECT id, at, childId, state FROM asks WHERE state IN ('held', 'answering') ORDER BY id",
+      ).all() as { id: unknown; at: unknown; childId: string; state: string }[];
+      return { ok: true, rows: rows.map((r) => ({
+        id: driftInt(r.id, 'asks id'), at: driftInt(r.at, 'asks at'), childId: r.childId, state: r.state,
+      })) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   /** The notice-count read (§11): every `run_events` row at or after `since`, unordered (the counts are order-free,
    *  and an `ORDER BY id` would invite a rowid scan on a database that never sees ANALYZE). It plans a SEARCH on
    *  `run_events_by_at`, which `stall-settings-store.test.ts` pins. It spells no detail head: L1's
@@ -5645,6 +5755,20 @@ export class CoordStore {
     ).run(at, id).changes) > 0;
   }
 
+  /** Absorb the park's operator escalation into a more specific notice
+   *  (D-5841, #755): the brief-not-taken notice has told the claimant and pushed
+   *  the operator about this delivery, so its park — now, or a later one —
+   *  escalates nothing more. Unlike `markParkEscalated` it needs no `parkedAt`:
+   *  a brief still on its failure ladder at 10 minutes parks after the notice.
+   *  Writes only an outstanding, never-delivered row not yet escalated, and a
+   *  delivery clears it with the other park columns. */
+  absorbParkEscalation(id: number, at: number): boolean {
+    return Number(this.db.prepare(
+      'UPDATE mail_deliveries SET parkEscalatedAt = ? ' +
+      `WHERE id = ? AND state IN ${OUTSTANDING_STATES_SQL} AND deliveredAt IS NULL AND parkEscalatedAt IS NULL`,
+    ).run(at, id).changes) > 0;
+  }
+
   /** Set a parked row's box baseline when the park could not read it (D-5838,
    *  verification round): `parkBox` NULL means UNKNOWN, and the first reading
    *  after the park becomes what later readings are compared against. Writes
@@ -5669,6 +5793,30 @@ export class CoordStore {
       `FROM mail_deliveries WHERE state IN ${OUTSTANDING_STATES_SQL} AND parkedAt IS NOT NULL AND deliveredAt IS NULL ORDER BY id`,
     ).all() as unknown as { id: number; mailId: number; toId: string; parkedAt: number; parkReason: string | null;
                             parkBox: string | null; parkEscalatedAt: number | null; nextAttemptAt: number }[];
+  }
+
+  /** Every UNLANDED wave brief of an ACTIVE run (D-5841, #755), for the mail
+   *  sweep's brief pass: the brief's LATEST delivery has no `ingestedAt` and is
+   *  not `acked`, it was queued at or after `since`, and its run carries no
+   *  `brief-not-taken` row yet. `retried` is whether the run carries its
+   *  `brief-retry` row. A read only; the pass's writes are its own. */
+  unlandedBriefs(since: number): UnlandedBrief[] {
+    const rows = this.db.prepare(
+      'SELECT r.id AS runId, r.program AS program, r.wave AS wave, r.waveOf AS waveOf, ' +
+      'd.id AS deliveryId, m.id AS mailId, d.toId AS toId, m.at AS queuedAt, d.state AS state, ' +
+      'd.deliveredAt AS deliveredAt, d.parkedAt AS parkedAt, d.parkReason AS parkReason, ' +
+      'd.lastGate AS lastGate, d.lastError AS lastError, ' +
+      'EXISTS (SELECT 1 FROM run_events e WHERE e.runId = r.id AND e.detail = ?) AS retried ' +
+      'FROM mail m JOIN runs r ON r.id = m.runId ' +
+      'JOIN mail_deliveries d ON d.id = (SELECT MAX(x.id) FROM mail_deliveries x WHERE x.mailId = m.id) ' +
+      "WHERE m.fromId = 'coordinator' AND m.subject = ? AND m.at >= ? " +
+      `AND r.state NOT IN ${INACTIVE_RUN_STATES_SQL} ` +
+      "AND d.ingestedAt IS NULL AND d.state != 'acked' " +
+      'AND NOT EXISTS (SELECT 1 FROM run_events e WHERE e.runId = r.id AND e.detail = ?) ' +
+      'ORDER BY r.id',
+    ).all(BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, since, BRIEF_NOTICE_DETAIL) as unknown as
+      (Omit<UnlandedBrief, 'retried'> & { retried: number })[];
+    return rows.map((r) => ({ ...r, retried: Number(r.retried) === 1 }));
   }
 
   recordRejection(r: { code: MailRejectCode; fromId?: string; fromUuid?: string; toId?: string;

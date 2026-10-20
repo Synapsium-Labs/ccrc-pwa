@@ -50,13 +50,13 @@ describe('remote FleetIO — file ops over the agent WS', () => {
     expect(await f.io.readFileFrom(file, 4)).toEqual({ data: 'efghij', size: 10 });
   });
 
-  it('readFileB64 round-trips binary bytes as base64, null when missing', async () => {
+  it('readFileB64Measured round-trips binary bytes as base64, absent when missing', async () => {
     const f = await connected();
     const file = path.join(fixture!.home, '.cc-clips', 'clip.png');
     const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
     writeFileSync(file, bytes);
-    expect(await f.io.readFileB64(file)).toBe(bytes.toString('base64'));
-    expect(await f.io.readFileB64(path.join(fixture!.home, '.cc-clips', 'nope.png'))).toBeNull();
+    expect(await f.io.readFileB64Measured(file)).toEqual({ ok: true, dataB64: bytes.toString('base64') });
+    expect(await f.io.readFileB64Measured(path.join(fixture!.home, '.cc-clips', 'nope.png'))).toEqual({ ok: false, reason: 'absent' });
   });
 
   it('an over-cap clip reads as {ok:false, reason:"too-large"} with the real size, not as missing', async () => {
@@ -65,8 +65,6 @@ describe('remote FleetIO — file ops over the agent WS', () => {
     writeFileSync(file, '');
     truncateSync(file, MAX_READ_B64_BYTES + 1);
     expect(await f.io.readFileB64Measured(file)).toEqual({ ok: false, reason: 'too-large', size: MAX_READ_B64_BYTES + 1 });
-    // And the derived method still answers today's null, so its one caller is untouched until Task 8.
-    expect(await f.io.readFileB64(file)).toBeNull();
   });
 
   it('readdir lists names, null when missing', async () => {

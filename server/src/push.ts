@@ -5,6 +5,7 @@
 import webpush, { type PushSubscription, WebPushError } from 'web-push';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { SHAPE_ONLY_MASKER, type SecretMasker } from './accounts/mask.js';
 
 export interface PushConfig {
   publicKey: string;
@@ -27,6 +28,12 @@ export interface PushPayload {
 export class PushService {
   private subs = new Map<string, PushSubscription>(); // keyed by endpoint
   private loaded = false;
+  /** Every payload's `title`, `body` and action titles came off a session (the pane-parsed ask, a mail subject): masked
+   *  here, the one door to a push service, before serialization (D-5513, accounts plan Task A10). The composition root
+   *  hands the wired masker in with `setMasker`, since the service is built before coord.db is open. */
+  private masker: SecretMasker = SHAPE_ONLY_MASKER;
+
+  setMasker(m: SecretMasker): void { this.masker = m; }
 
   constructor(private cfg: PushConfig, private storePath: string) {
     webpush.setVapidDetails(cfg.subject, cfg.publicKey, cfg.privateKey);
@@ -69,7 +76,7 @@ export class PushService {
   async notify(payload: PushPayload): Promise<void> {
     await this.ensureLoaded();
     if (this.subs.size === 0) return;
-    const body = JSON.stringify(payload);
+    const body = JSON.stringify(this.masker.maskDeep(payload));
     let pruned = false;
     await Promise.all(
       [...this.subs.values()].map(async (sub) => {

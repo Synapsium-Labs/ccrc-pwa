@@ -2,7 +2,7 @@ import type { Tmux } from '../exec.js';
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { Deps } from '../server.js';
+import type { RunCcd } from './ports.js';
 import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
 import type { SessionRecord } from '../registry.js';
@@ -24,6 +24,7 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import { queueSystemMail } from './rundefsTx.js';
+import { WAVE_BRIEF_SUBJECT } from './briefwatch.js';
 import {
   MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, armEventDetail, isRegistryId,
   parseRouteFields, WORKSPACE_SLUG_RE, routeFieldsOrNull, routeParseDetail, spawnVerdict, transitionsFor,
@@ -82,7 +83,7 @@ export const kickoffPrefixFor = (kind: RunKind): string =>
  */
 export interface DispatchRunDeps {
   coord: CoordStore;
-  io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState;
+  io: FleetIO; cfg: CcrcConfig; runCcd: RunCcd; fleetState?: FleetState;
   tmux: Tmux; queue: KeyedQueue;
   /**
    * A wrapper's config dir, or `undefined` when this box's roster does not
@@ -1255,7 +1256,7 @@ export async function dispatchRun(
     // is the standing claim in that function's own dedupe comment, so there is
     // nothing here for the answer to change.
     queueSystemMail(coord, run, { fromId: 'coordinator', toId: sessionId, runId: id,
-      kind: 'status', subject: 'wave-brief', body });
+      kind: 'status', subject: WAVE_BRIEF_SUBJECT, body });
   }
 
   return { ok: true, id, sessionId, resumed, clearedAt, briefQueued, clearError,

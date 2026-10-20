@@ -292,7 +292,7 @@ pins asserting each walk visited a non-zero minimum; docstring-claim rule.
 
 | Item | Status | Held by, or finished by |
 |---|---|---|
-| Import-direction test | partly | per-ring pins in `single-definition.test.ts` ("the coord ring …", "the update ring …", "the docs ring …"); the repo-wide scanner over the rules above is ARCH-04 (#545), stages 1 to 4, and its exemptions drain in ARCH-05 (#551) |
+| Import-direction test | partly | per-ring pins in `single-definition.test.ts` ("the coord ring …", "the update ring …", "the docs ring …"); the repo-wide scanner over the rules above is ARCH-04 (#545), stages 1 to 4, and its exemptions drain in ARCH-05 (#551); no file below L4 imports `server.ts` or `watch.ts`, even for a type: `inner-ring-host-imports.test.ts` (D-6003; `commands.ts` pending until `Deps` moves, D-6004) |
 | No `reply` below L4 | open | ARCH-04 stage 1 (L4-only fastify) |
 | `single-definition` over the account roster | done | single-definition's "the account roster — runtime data, no compile-time copies" and "the account roster — config dir is data, joined in one place" |
 | Cross-language fixture test (ccd's bash copies against the roster) | done | `wrapper-roster-fixture.test.ts`, `roster-exec-parity.test.ts` |

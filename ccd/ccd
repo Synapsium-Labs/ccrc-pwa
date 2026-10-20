@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ed704b618c3dfd4beab603eb7d52b063c52389068dda8b7cd4d59b4c2da4ec01
+# ccrc:generated 1 sha256=0f9a22e52e5aa4528405efe5ec1cf8b0cdd8238371bd4542bd21e2bcd43d0153
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -21736,8 +21736,19 @@ _route_apply_check() {   # id — the supervise tick's applier. Always 0: a tick
 # is needed (and ERE has none): the interleaved alternative cannot match a reset
 # and `[^\e]` cannot match an ESC, so the match physically cannot run past the
 # first terminator.
+#
+# D-5910 widens both ends to `DIM_SPAN`'s encodings, held by the shared corpus
+# (server/test/fixtures/panes/box/, ccd's verdict column in
+# ccd-pane-box-draft.test.ts). The open is any code whose leading parameters are
+# `0;`, `1;` then `2` (`\e[2;3m`, and `\e[0;2m` after a bold cell, D-6006); the
+# close also takes a dim-off `22` (bare or combined), so the interleaved case
+# excludes a first parameter of exactly `22` as well as one starting with `0`.
+# D-6006 mid-run: a reset that turns dim straight back on (`\e[0;2m`, `\e[0;1;2m`,
+# tmux's write of an italic/inverse/bold drop inside a dim run) continues the
+# run, so the first rule rewrites it to a bare `\e[2m` (an open outside a run,
+# an interleaved code inside one). The close also takes a parameterless `\e[m`.
 _pane_box_plain() {   # ANSI (`capture-pane -e`) pane-text on stdin -> dim ghosts and SGR removed
-  LC_ALL=C sed -E $'s/\033\\[2m((\033\\[[1-9][0-9;]*m)|[^\033])*\033\\[0[0-9;]*m//g; s/\033\\[[0-9;]*m//g'
+  LC_ALL=C sed -E $'s/\033\\[0;(1;)?2(;[0-9;]*)?m/\033[2m/g; s/\033\\[(0;)?(1;)?2(;[0-9;]*)?m((\033\\[([13-9][0-9;]*|2|2[013-9;][0-9;]*|22[0-9][0-9;]*)m)|[^\033])*\033\\[(0[0-9;]*|22(;[0-9;]*)?)?m//g; s/\033\\[[0-9;]*m//g'
 }
 
 _pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own marker row, or empty

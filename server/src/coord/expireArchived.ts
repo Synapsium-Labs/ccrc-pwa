@@ -1,7 +1,7 @@
-import type { FleetIO } from '../io.js';
+import type { FleetIO, MeasuredDirectoryRead } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { Deps } from '../server.js';
+import type { RunCcd } from './ports.js';
 import type { Presence } from '../presence.js';
 import type { NotifyLog } from '../notifylog.js';
 import { CCD_ARGV, EXPIRE_CAP, capSupported, sweepDec, verbSupported } from '../ccdargv.js';
@@ -45,7 +45,7 @@ import { isRegistryId } from '../../../shared/api.js';
 /** The executor's ports (L2, declared by this consumer) — `ChildReclaimDeps`'s shape. */
 export interface ExpireArchivedDeps {
   coord: CoordStore;
-  io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState;
+  io: FleetIO; cfg: CcrcConfig; runCcd: RunCcd; fleetState?: FleetState;
   presence?: Pick<Presence, 'isVisible'>;
   notifyLog?: NotifyLog;
 }
@@ -137,14 +137,16 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
 }
 
 /** The two switches, from ONE registry listing: `reclaim-paused` (or a listing that could not be taken, which cannot
- *  rule it out) is `paused`; otherwise whether `expire-lane-live` stands. A rejecting `readdir` is a listing that
- *  could not be taken. */
+ *  rule it out) is `paused`; otherwise whether `expire-lane-live` stands. A rejecting `readdirMeasured` is a listing
+ *  that could not be taken, `unreadable`. */
 async function expirySwitches(deps: ExpireArchivedDeps): Promise<{ kind: 'paused'; detail: string } | { kind: 'clear'; live: boolean }> {
-  let names: readonly string[] | null;
-  try { names = await deps.io.readdir(deps.cfg.registryDir); } catch { names = null; }
-  if (names === null) {
-    return { kind: 'paused', detail: `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out` };
+  // D-5969 (ARCH-08b): the MEASURED listing; a rejecting port is `unreadable`, and the pause says which it was.
+  let listed: MeasuredDirectoryRead;
+  try { listed = await deps.io.readdirMeasured(deps.cfg.registryDir); } catch { listed = { ok: false, reason: 'unreadable' }; }
+  if (!listed.ok) {
+    return { kind: 'paused', detail: `the registry did not list (${listed.reason}), so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out` };
   }
+  const names = listed.entries;
   if (names.includes(RECLAIM_PAUSE_MARKER)) {
     return { kind: 'paused', detail: `${RECLAIM_PAUSE_MARKER} is raised: cleanup is paused fleet-wide` };
   }
