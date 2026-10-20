@@ -784,6 +784,112 @@ describe('W2-3 Task 1: raw window rows', () => {
     expect(b2.models).toEqual([null]);
     expect(copyOf(fam, f.b1, f1).models).toEqual([null]);
   });
+
+  describe('review fix round 1: families mode reads one snapshot (D-5790)', () => {
+    /** families_report over the real read-only connection, wrapped so that a second connection runs `writeSql` and
+     *  commits right after the first SELECT whose text holds `needle` (the empty needle: the report's FIRST SELECT).
+     *  Prints [[boundary_uuid, [file_id, …]], …] for demo-a. Census mode's racing wrapper, for families mode. */
+    const race = (f: Planted, needle: string, writeSql: string[]): { status: number | null; stderr: string; seen: Array<[string, number[]]> } => {
+      const RACE = [
+        'import importlib.util, json, sqlite3, sys',
+        "spec = importlib.util.spec_from_file_location('mh', sys.argv[1]); mh = importlib.util.module_from_spec(spec); spec.loader.exec_module(mh)",
+        'ro = mh.open_db(sys.argv[2])',
+        'rw = sqlite3.connect(sys.argv[2])',
+        'needle, writes = sys.argv[3], json.loads(sys.argv[4])',
+        'class Racing:',
+        '    def __init__(self, c):',
+        '        self.c, self.fired = c, False',
+        '    def __getattr__(self, k):',
+        '        return getattr(self.c, k)',
+        '    def execute(self, sql, *a):',
+        '        cur = self.c.execute(sql, *a)',
+        "        if sql.lstrip()[:6].upper() == 'SELECT' and needle in sql and not self.fired:",
+        '            self.fired = True',
+        '            for w in writes:',
+        '                rw.execute(w)',
+        '            rw.commit()',
+        '        return cur',
+        "r = mh.families_report(Racing(ro), [('demo-a', sys.argv[5])], 1500, 6000, 400)",
+        "print(json.dumps([[b['boundary_uuid'], [c['file_id'] for c in b['copies']]] for b in r[0]['boundaries']]))",
+      ].join('\n');
+      const r = spawnSync('python3', [...PY_ISOLATED, '-c', RACE, SCRIPT, f.db, needle, JSON.stringify(writeSql), G1],
+        { encoding: 'utf8', env: { ...scrubbedEnv(process.env), PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
+      return { status: r.status, stderr: r.stderr ?? '', seen: r.status === 0 ? (JSON.parse(r.stdout) as Array<[string, number[]]>) : [] };
+    };
+    /** A new MAIN boundary of demo-a at ts 5500 (inside [1500, 6000)), held by f1 (ino 101) at line 30. */
+    const NEW_BOUNDARY = [
+      "INSERT INTO entries (uuid, transcript_pk, type, ts_ms, is_compact_summary, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id) "
+      + `SELECT 'e-race', transcript_pk, 'system', 5500, 0, 'harness', 1, 1, 1, (SELECT blob_id FROM blobs LIMIT 1) FROM transcripts WHERE cc_session_uuid = '${U1}' AND agent_id = ''`,
+      "INSERT INTO boundaries (entry_id, transcript_pk, ord) SELECT entry_id, transcript_pk, 9 FROM entries WHERE uuid = 'e-race'",
+      "INSERT INTO memberships (file_id, entry_id, line) SELECT (SELECT file_id FROM ingest_files WHERE ino = 101), entry_id, 30 FROM entries WHERE uuid = 'e-race'",
+    ];
+
+    it('a main boundary a writer commits after the first read is not in the report, and a fresh run sees it (CONTROL)', () => {
+      const f = plantedStore();
+      const r = race(f, '', NEW_BOUNDARY);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.seen.map((b) => b[0])).toEqual([f.b1, f.b2]);
+      const fresh = demoA(report(W2_ARGS(f, '400')));
+      expect(fresh.boundaries.map((b) => b.boundary_uuid), 'CONTROL: the writer committed, and the next run sees it').toEqual([f.b1, f.b2, 'e-race']);
+    });
+
+    it('main() reads --families through families_report: the real entry point, raced after the family lookup, holds the snapshot too', () => {
+      const f = plantedStore();
+      const MAIN = [
+        'import importlib.util, json, sqlite3, sys',
+        "spec = importlib.util.spec_from_file_location('mh', sys.argv[1]); mh = importlib.util.module_from_spec(spec); spec.loader.exec_module(mh)",
+        'real_open, writes = mh.open_db, json.loads(sys.argv[3])',
+        'rw = sqlite3.connect(sys.argv[2])',
+        'class Racing:',
+        '    def __init__(self, c):',
+        '        self.c, self.fired = c, False',
+        '    def __getattr__(self, k):',
+        '        return getattr(self.c, k)',
+        '    def execute(self, sql, *a):',
+        '        cur = self.c.execute(sql, *a)',
+        "        if 'FROM sessions WHERE ccrc_id' in sql and not self.fired:",
+        '            self.fired = True',
+        '            for w in writes:',
+        '                rw.execute(w)',
+        '            rw.commit()',
+        '        return cur',
+        'mh.open_db = lambda path: Racing(real_open(path))',
+        "sys.argv = ['measure-history.py', '--db', sys.argv[2], '--families', sys.argv[4], '--window-start', '1500', '--window-end', '6000', '--row-cap', '400']",
+        'mh.main()',
+      ].join('\n');
+      const r = spawnSync('python3', [...PY_ISOLATED, '-c', MAIN, SCRIPT, f.db, JSON.stringify(NEW_BOUNDARY), f.families],
+        { encoding: 'utf8', env: { ...scrubbedEnv(process.env), PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
+      expect(r.status, r.stderr).toBe(0);
+      expect(demoA(JSON.parse(r.stdout) as Report).boundaries.map((b) => b.boundary_uuid)).toEqual([f.b1, f.b2]);
+      expect(demoA(report(W2_ARGS(f, '400'))).boundaries.map((b) => b.boundary_uuid), 'CONTROL: the writer committed').toContain('e-race');
+    });
+
+    it('the BEGIN sits behind the in_transaction guard: a connection already inside a transaction is read as it is, never a nested BEGIN', () => {
+      const f = plantedStore();
+      const PRE = [
+        'import importlib.util, json, sys',
+        "spec = importlib.util.spec_from_file_location('mh', sys.argv[1]); mh = importlib.util.module_from_spec(spec); spec.loader.exec_module(mh)",
+        'ro = mh.open_db(sys.argv[2])',
+        "ro.execute('BEGIN')",
+        "r = mh.families_report(ro, [('demo-a', sys.argv[3])], 1500, 6000, 400)",
+        "print(json.dumps([ro.in_transaction, [b['boundary_uuid'] for b in r[0]['boundaries']]]))",
+      ].join('\n');
+      const r = spawnSync('python3', [...PY_ISOLATED, '-c', PRE, SCRIPT, f.db, G1],
+        { encoding: 'utf8', env: { ...scrubbedEnv(process.env), PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
+      expect(r.status, r.stderr).toBe(0);
+      expect(JSON.parse(r.stdout)).toEqual([true, [f.b1, f.b2]]);
+    });
+
+    it('a membership a writer deletes after boundary_copies probed it does not vanish under copy_record: exit 0, the copies are still read', () => {
+      const f = plantedStore();
+      const [f2, f1] = fileIdsByIno(f.db);
+      const r = race(f, 'SELECT 1 FROM memberships', ["DELETE FROM memberships WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = 'e-3')"]);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.seen).toEqual([[f.b1, [f2, f1]], [f.b2, [f1]]]);
+      const fresh = demoA(report(W2_ARGS(f, '400')));
+      expect(fresh.boundaries.find((b) => b.boundary_uuid === f.b1)!.copies, 'CONTROL: the delete committed, and the next run finds no copy').toEqual([]);
+    });
+  });
 });
 
 // ── W2-3 Task 2: the gate module is pure and its words are its own (W2-D11, W2-D12; D-5774, D-5775) ──────────

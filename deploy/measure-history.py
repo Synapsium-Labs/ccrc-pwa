@@ -244,6 +244,19 @@ def family_report(db, ccrc_id, generation, start_ms, end_ms, row_cap):
                            for entry_id, tpk, uuid, ts in bounds]}
 
 
+def families_report(db, families, start_ms, end_ms, row_cap):
+    """The listed families' raw rows (W2-D13), in the given order: family_report for each (ccrc_id, generation),
+    as load_families returns them.
+
+    One read snapshot, as census_report reads one: a live store ticks while this runs (families mode runs on live
+    nodes at window end, W2-D85), so every query below reads one transaction, opened here and ended by main's
+    db.close(). Within it a copy's next-boundary probe and its rows read the same instant, and a membership that
+    boundary_copies probed cannot vanish before copy_record reads it. (D-5790)"""
+    if not db.in_transaction:
+        db.execute('BEGIN')   # one read snapshot: see the docstring
+    return [family_report(db, ccrc_id, generation, start_ms, end_ms, row_cap) for ccrc_id, generation in families]
+
+
 def w1e_statistic(counters):
     """W1-e (spec 2026-10-05 §10.7, §8.6; ruling RC3): the card line's delivery, from the counters alone. The
     sweep counts each prediction file a later main boundary consumed as card_consumed:<scope>, by the scope marker
@@ -358,9 +371,9 @@ def main():
         }
         report['w1e'] = w1e_statistic(report['counters'])
         if a.families is not None:
-            report['w2'] = {'row_cap': a.row_cap, 'window_start_ms': a.window_start, 'window_end_ms': a.window_end, 'families': [
-                family_report(db, ccrc_id, generation, a.window_start, a.window_end, a.row_cap)
-                for ccrc_id, generation in load_families(a.families, store_id)]}
+            report['w2'] = {'row_cap': a.row_cap, 'window_start_ms': a.window_start, 'window_end_ms': a.window_end,
+                            'families': families_report(db, load_families(a.families, store_id), a.window_start,
+                                                        a.window_end, a.row_cap)}
         if a.census:
             report['census'] = census_report(db, a.as_of, a.since, a.row_cap)
     except sqlite3.Error as e:
