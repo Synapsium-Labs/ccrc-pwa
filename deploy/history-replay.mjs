@@ -391,7 +391,7 @@ function createOut(abs) {
   try {
     writeFileSync(path.join(abs, OUT_MARKER), OUT_KIND, { mode: 0o600, flag: 'wx' });
   } catch (e) {
-    refuse('out-refused', `marker-unwritable ${errCode(e)}`);
+    refuse('out-refused', `marker-unwritable ${errCode(e)}; --out was created: remove it before a re-run`);   // D-5986: nothing in the tree removes --out
   }
 }
 
@@ -702,7 +702,8 @@ export function spendTokens(facts) {
 // refuseLinkedDirs, leftoverNames); the appends (appendPlain); the creates and writes (createPlain, writePlain,
 // ensurePlainDir); the removals and renames of the run's own bookkeeping (removePlain in settleLeftover, createPlain and
 // launchRun; the lock's link, rename and put-back in takeLock; launchRun's `.part` rename); and prepareOut's creation of
-// --out (its mkdir `create-failed <code>`, its marker write `marker-unwritable <code>`). A removal that fails AFTER the
+// --out (its mkdir `create-failed <code>`, its marker write `marker-unwritable <code>`, with the instruction to
+// remove --out). A removal that fails AFTER the
 // spend line leaves the `.part`, which the next driver charges again (an over-count). Not covered, each for a stated
 // reason: runChild's child-error removals (a spawn that produced no child; a refusal there would hide the spawn error
 // that got it there); the best-effort removals, which use `dropQuietly` so that a failed removal never becomes the

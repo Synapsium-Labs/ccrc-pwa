@@ -2697,7 +2697,7 @@ describe('fix round 1 (D-5986): no-follow, type-checked I/O under --out', () => 
     expect(replay.prepareOut(path.join(parent, 'out')), 'CONTROL: the mode restored, the same --out is made').toBe(path.join(realpathSync(parent), 'out'));
   });
 
-  // D-5986: the marker write refuses out-refused marker-unwritable <errno>. A file-size limit of 0 (prlimit, an argv, no shell)
+  // D-5986: the marker write refuses out-refused marker-unwritable <errno>, telling the operator to remove --out. A file-size limit of 0 (prlimit, an argv, no shell)
   // makes the write of the marker's bytes fail EFBIG after mkdir and the exclusive create succeeded: node ignores SIGXFSZ.
   it.skipIf(!existsSync('/usr/bin/prlimit'))('prepareOut whose marker cannot be written (a file-size limit of 0): out-refused marker-unwritable EFBIG, the directory made and the marker left empty', () => {
     const dir = mkTmp('ccrc-replay-d5986-marker-');
@@ -2710,7 +2710,7 @@ process.stdout.write(said);
 `);
     const r = spawnSync('/usr/bin/prlimit', ['--fsize=0', process.execPath, script, dir], { encoding: 'utf8', timeout: 60_000, killSignal: 'SIGKILL', env: { ...scrubbedEnv(process.env), HOME: dir } });
     expect(r.signal, r.stderr).toBeNull();
-    expect(r.stdout).toBe('out-refused: marker-unwritable EFBIG');
+    expect(r.stdout).toBe('out-refused: marker-unwritable EFBIG; --out was created: remove it before a re-run');
     expect(readdirSync(path.join(dir, 'out')), 'the directory was made; the marker was created empty').toEqual([replay.OUT_MARKER]);
     expect(readFileSync(path.join(dir, 'out', replay.OUT_MARKER), 'utf8'), 'its bytes were not written').toBe('');
   });
