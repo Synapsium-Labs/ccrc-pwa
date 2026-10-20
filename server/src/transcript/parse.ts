@@ -22,13 +22,19 @@ const TOOL_INPUT_MAX = 4_000;
  * only when it cut something would make those two conditions indistinguishable
  * — the exact collapse the three states exist to prevent.
  */
-const truncate = (s: string, max: number): { text: string; truncatedBytes: number } =>
-  (s.length > max
-    ? {
-      text: s.slice(0, max),
-      truncatedBytes: Buffer.byteLength(s, 'utf8') - Buffer.byteLength(s.slice(0, max), 'utf8'),
-    }
-    : { text: s, truncatedBytes: 0 });
+/** A cut never splits a run that could be a key (D-5995): it backs off to the last delimiter within 256 characters
+ *  (past any lane key's length; a longer run is cut where it is), so the masker downstream sees a key whole or not at
+ *  all. Shapes are already masked on the decoded value before the cut. */
+const RUN_DELIM = /[\s"'=:,;&}\]`\\]/;
+const cutAt = (s: string, max: number): number => {
+  for (let i = max; i > 0 && max - i <= 256; i--) if (RUN_DELIM.test(s[i]!)) return i;
+  return max;
+};
+const truncate = (s: string, max: number): { text: string; truncatedBytes: number } => {
+  if (s.length <= max) return { text: s, truncatedBytes: 0 };
+  const text = s.slice(0, cutAt(s, max));
+  return { text, truncatedBytes: Buffer.byteLength(s, 'utf8') - Buffer.byteLength(text, 'utf8') };
+};
 
 /** Flatten a tool_result block's content (string, or array of text blocks) to one string. */
 function flattenContent(content: unknown): string {

@@ -544,6 +544,19 @@ describe('the review findings: shapes reach every client masked (D-5995)', () =>
     expect(leaksNone(frame, OPAQUE_REFRESH), frame.slice(0, 400)).toBe(true);
   });
 
+  it('a compatible key that a tool input\'s 4,000-character cut would split is never shown in part', async () => {
+    // the serialized input is `{"content":"` (12 characters) then the content: the key starts 20 characters before the cut
+    const content = `${'a '.repeat((4_000 - 20 - 12) / 2)}${CMP} tail`;
+    const tool = JSON.stringify({ type: 'assistant', uuid: 'u-cut', timestamp: '2026-10-18T10:00:00.000Z', message: {
+      role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 't2', name: 'Write', input: { content } }],
+    } });
+    const { m } = maskerOver(() => TOKEN_1, [CMP]);
+    const frame = await backlogFrame(`${tool}\n`, m);
+    expect(frame).toContain('a a a');
+    expect(leaksNone(frame, CMP), frame.slice(-300)).toBe(true);
+    m.close();
+  });
+
   it('a tmux redraw positions a wrapped key with cursor moves, or puts ESC(B ESC[m or an OSC 8 link in it, and no byte of it leaks', () => {
     const m = new SecretMasker();
     const cases = [
