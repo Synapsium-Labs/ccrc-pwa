@@ -6804,7 +6804,7 @@ describe('D-5370: the stop-done lane’s kill switch has no writer, and its cons
 describe('idle-compact-nudge: the kill switch has no writer, and the prompt is spelled once (D-5373)', () => {
   it('idle-compact-nudge-disabled: no shell line names it, and its one TS holder is its pure definer', () => {
     const name = 'idle-compact-nudge-disabled';
-    const definer = 'server/src/idlenudge.ts';
+    const definer = 'shared/switches.ts'; // its switchboard row since D-5855; idlenudge.ts re-exports it
     expect(holdersOf(name), `${name}: a line of shell names it`).toEqual([]);
     expect(ALL.filter((f) => stallCode(f).includes(name)).map(rel).sort(), `${name}: spelled on a code line outside ${definer}`)
       .toEqual([definer]);
