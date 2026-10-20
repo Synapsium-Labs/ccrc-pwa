@@ -3,7 +3,7 @@
 // offline/notice banners, skeletons while the first snapshot is in flight, a
 // friendly first-run block, and a floating "+" within thumb reach that opens
 // the NewSessionSheet.
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import {
   ATTENTION_DOT, BareRow, BuildLine, Button, Select, Skeleton, useNow,
@@ -22,7 +22,9 @@ import { BucketBar } from '../fleet/BucketBar';
 import { FleetHead } from '../fleet/FleetHead';
 import { anyDispatchPending, isRunClosed } from '../fleet/runWords';
 import { useFolded, useRollupPrefs } from '../fleet/foldState';
-import { anyRecent, prunePrefs, rollupFleet, toggleChildren, toggleProject } from '../fleet/rollup';
+import { useHoldView } from '../fleet/useHoldView';
+import { useRollupClock } from '../fleet/useRollupClock';
+import { prunePrefs, rollupFleet, toggleChildren, toggleProject } from '../fleet/rollup';
 import { useProjectedHome } from '../fleet/useProjectedHome';
 import { useFleetChrome } from '../fleet/FleetChrome';
 import { useFleetFlows } from '../fleet/FleetFlows';
@@ -173,10 +175,10 @@ export function FleetScreen({
   // Fold state persists across navigation (foldState.ts) — useState here would
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
-  // D-6088: the rollup's per-device preferences, and the clock its 30-minute window reads. The clock ticks a minute
-  // at a time and ONLY while some row's last change is inside the window, so a quiet fleet still runs no timer.
+  // D-6088: the rollup's per-device preferences, and the clock its 30-minute window reads: fresh on every render, and
+  // one timer for the next window end only (`useRollupClock`), so a quiet fleet still runs no timer.
   const [rollupPrefs, updateRollup] = useRollupPrefs();
-  const rollNow = useNow(60_000, anyRecent(sessions, Date.now()));
+  const rollNow = useRollupClock(sessions);
   // The tree the cards draw, once, and its rollup over the same groups (D-6088).
   const tree = fleetTree(sessions, projects.knownProjects, activeRuns, acks);
   const rollup = rollupFleet(tree, rollupPrefs, Math.max(nowMs, rollNow), selectedId);
@@ -191,6 +193,9 @@ export function FleetScreen({
     updateRollup((p) => prunePrefs(p, rollup, ids) ?? p);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `pruneKey` is the dependency: it names every input read.
   }, [fleetFrameSeen, pruneKey, updateRollup]);
+  // D-6090: a card rolled up or out on its own must not move the one the operator is reading (`useHoldView`).
+  const listRef = useRef<HTMLDivElement>(null);
+  useHoldView(listRef, [...rollup.cards].map(([p, c]) => `${p}:${c.collapsed ? '-' : c.rows.length}`).join('|'));
   // One poll of /api/fleet/health feeds both the banner and BuildLine below
   // (spec §6) — the chrome owns it (D-5468) so neither issues its own request.
   // The same for /api/updates (centralised-update §13): ONE 60 s poll, its
@@ -406,7 +411,7 @@ export function FleetScreen({
         <>
           <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />
 
-          <div className="fleet-list">
+          <div className="fleet-list" ref={listRef}>
             {tree.map((g) => (
               <ProjectCard
                 key={g.project}

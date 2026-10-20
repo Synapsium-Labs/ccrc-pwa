@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetTree } from '../src/fleet/fleetTree';
 import {
-  NO_ROLLUP_PREFS, operatorAsk, prunePrefs, rollupFleet, toggleChildren, toggleProject,
+  NO_ROLLUP_PREFS, ROLLUP_RECENT_MS, nextRollupBoundary, operatorAsk, prunePrefs, rollupFleet, toggleChildren, toggleProject,
   type CardRollup, type RolledRow, type RollupPrefs,
 } from '../src/fleet/rollup';
 import {
@@ -93,7 +93,7 @@ describe('rollup — children (rules 6 and 7)', () => {
     const { sessions, runs } = coordinatorFleet(asking());
     const c = card(roll(sessions, runs), 'project-c');
     expect(shape(c.rows)).toEqual([
-      ['coord', 0], ['» 5 workers · 2 working · 2 idle · 1 needs you', 1], ['w5', 1],
+      ['coord', 0], ['» 5 workers · 1 needs you · 2 working · 2 idle', 1], ['w5', 1],
     ]);
   });
 
@@ -180,5 +180,43 @@ describe('rollup — the operator\'s own toggle (rule 4)', () => {
     expect(prunePrefs(NO_ROLLUP_PREFS, r, new Set(['a1']))).toBeNull();
     const withGone = toggleChildren(NO_ROLLUP_PREFS, 'gone-coord');
     expect(prunePrefs(withGone, r, new Set(['a1']))?.openChildren).toEqual([]);
+  });
+});
+
+describe('rollup — the fixes after review (D-6088)', () => {
+  it('puts needs you straight after the total, and hands the line over as parts so a wrap never splits a count', () => {
+    const { sessions, runs } = coordinatorFleet(asking());
+    const line = card(roll(sessions, runs), 'project-c').rows[1];
+    expect(line).toMatchObject({ kind: 'summary' });
+    if (line?.kind !== 'summary') throw new Error('no summary line');
+    expect(line.parts).toEqual([
+      { n: 5, word: 'workers' }, { n: 1, word: 'needs you' }, { n: 2, word: 'working' }, { n: 2, word: 'idle' },
+    ]);
+    expect(line.text).toBe(line.parts.map((p) => `${p.n} ${p.word}`).join(' · '));
+  });
+
+  it('opens a quiet project that holds the open session (a deep link or a jump lands on a visible row)', () => {
+    const quiet = [sess('q1', 'project-q', { statusUpdatedAt: NOW - 3 * HOUR, bucketSince: NOW - 3 * HOUR })];
+    const c = card(roll(quiet, [], NO_ROLLUP_PREFS, NOW, 'q1'), 'project-q');
+    expect([c.cls, c.collapsed]).toEqual(['inactive', false]);
+    // The operator may still roll it up on purpose, and that collapse is kept.
+    const shut = toggleProject(NO_ROLLUP_PREFS, c, 'project-q');
+    expect(card(roll(quiet, [], shut, NOW, 'q1'), 'project-q').collapsed).toBe(true);
+    // Without the open session the default rolls it up again.
+    expect(card(roll(quiet, [], NO_ROLLUP_PREFS, NOW, null), 'project-q').collapsed).toBe(true);
+  });
+
+  it('drops a stored toggle for a project the fresh frame no longer carries', () => {
+    const quiet = [sess('a1', 'project-a')];
+    const opened = toggleProject(NO_ROLLUP_PREFS, card(roll(quiet), 'project-a'), 'project-a');
+    const gone = rollupFleet(fleetTree([sess('b1', 'project-b')], [], []), opened, NOW, null);
+    expect(prunePrefs(opened, gone, new Set(['b1']))?.projects).toEqual({});
+  });
+
+  it('names the next instant a project leaves the 30-minute window, and none in a quiet fleet', () => {
+    const a = sess('a1', 'project-a', { statusUpdatedAt: NOW - 29 * MIN, bucketSince: NOW - 29 * MIN });
+    const b = sess('b1', 'project-b', { statusUpdatedAt: NOW - 10 * MIN, bucketSince: NOW - 10 * MIN });
+    expect(nextRollupBoundary([a, b], NOW)).toBe(NOW - 29 * MIN + ROLLUP_RECENT_MS);
+    expect(nextRollupBoundary([sess('q', 'project-q')], NOW)).toBeNull();
   });
 });

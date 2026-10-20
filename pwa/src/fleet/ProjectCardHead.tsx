@@ -127,13 +127,15 @@ export function ProjectCardHead({
           type="button"
           className="proj-card-toggle"
           aria-expanded={!collapsed}
-          disabled={pinnedOpen}
-          title={pinnedOpen ? 'held open: a question here is waiting on you' : undefined}
+          /* D-6088 rule 5: held open, the ▾ stays focusable (aria-disabled, never `disabled`) and its reason is text a
+             screen reader reads, not a `title` no touch or keyboard reaches; `toggleProject` ignores the click. */
+          aria-disabled={pinnedOpen ? true : undefined}
           onClick={() => onToggle?.(group.project)}
         >
           <span className="proj-card-chevron" aria-hidden="true">
             {collapsed ? '▸' : '▾'}
           </span>
+          {pinnedOpen && <span className="sr-only">held open: a question here is waiting on you</span>}
           <span className="proj-card-name">{group.project}</span>
           {/* A badge that reads `1` on every card carries no information. Every
               project on the live fleet holds exactly one session. */}

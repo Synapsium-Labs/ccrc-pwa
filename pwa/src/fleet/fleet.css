@@ -1758,6 +1758,11 @@ button.sess-held {
   font-size: var(--fs-meta);
   color: var(--ink-tertiary);
 }
+/* D-6088: a coordinator's worker line wraps only BETWEEN its counts, never inside `1 needs you`; that count wears the
+   attention ink the row's own `needs you` wears. */
+.proj-children-parts { min-width: 0; }
+.proj-children-part { white-space: nowrap; }
+.proj-children-part--needs-you { color: var(--status-attention-text); }
 
 /* A fold hides the selected row exactly as it would hide a pending dialog, so
    the card name says "the one you are in" on the folded card, in the selected

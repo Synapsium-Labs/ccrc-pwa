@@ -37,12 +37,22 @@ export const NO_ROLLUP_PREFS: RollupPrefs = { projects: {}, openChildren: [] };
 /** A card body's row: `nestFleet`'s, or the line a coordinator's folded workers become. */
 export type RolledRow =
   | FleetRow
-  | { kind: 'summary'; depth: 1; parentId: string; expanded: boolean; total: number; text: string };
+  | {
+    kind: 'summary'; depth: 1; parentId: string; expanded: boolean; total: number;
+    /** The line's counts in drawing order; each `n word` is drawn unbreakable, so a wrap falls only between them. */
+    parts: readonly SummaryPart[];
+    text: string;
+  };
+
+/** One count of a coordinator's worker line: `5 workers`, `1 needs you`. */
+export interface SummaryPart { readonly n: number; readonly word: string }
 
 export interface CardRollup {
   readonly cls: ActivityClass;
   /** The body is not drawn; the header stands for the card. */
   readonly collapsed: boolean;
+  /** What `collapsed` is with no stored ▾: rolled up when inactive, unless the card holds the open session. */
+  readonly byDefault: boolean;
   /** An operator-facing question is on this card: it is never rolled up and its ▾ does nothing (rule 5). */
   readonly pinnedOpen: boolean;
   /** The latest change of a live member, epoch ms, or `null` when none is known. */
@@ -63,9 +73,20 @@ const lastChange = (s: FleetSession): number | null => {
   return at.length === 0 ? null : Math.max(...at);
 };
 
-/** Whether any of these rows changed state inside the window — the only case the rollup needs a ticking clock for. */
-export const anyRecent = (sessions: readonly FleetSession[], now: number): boolean =>
-  sessions.some((s) => s.bucket !== 'archived' && (lastChange(s) ?? -Infinity) >= now - ROLLUP_RECENT_MS);
+/** Whether any of these rows changed state inside the window. */
+export const anyRecent = (sessions: readonly FleetSession[], now: number): boolean => nextRollupBoundary(sessions, now) !== null;
+
+/** The next instant a row's last change leaves the 30-minute window, or `null` when none is inside it: the one moment
+ *  a quiet fleet's rollup can change with no frame, so the screen sets ONE timer for it and none in a quiet fleet. */
+export function nextRollupBoundary(sessions: readonly FleetSession[], now: number): number | null {
+  let next: number | null = null;
+  for (const s of sessions) {
+    const t = s.bucket === 'archived' ? null : lastChange(s);
+    if (t === null || t + ROLLUP_RECENT_MS < now) continue;
+    next = next === null ? t + ROLLUP_RECENT_MS : Math.min(next, t + ROLLUP_RECENT_MS);
+  }
+  return next;
+}
 
 /** A child's word in the summary line: the row's own state word (`rowStateWord`), `needs you` for an
  *  operator-facing ask. */
@@ -75,14 +96,15 @@ const childWord = (row: FleetRow): string => {
   return operatorAsk(s) ? 'needs you' : rowStateWord(s);
 };
 
-/** The summary line's order: the brief's own (`2 working · 5 idle · 1 needs you`), the rest in the bucket order. */
-const WORD_ORDER = ['working', 'waiting', 'done', 'idle', 'merged', 'asleep', 'exited', 'archived', 'spawning', 'needs you'];
+/** The summary line's order: `needs you` straight after the total, so the count the operator most needs is never the
+ *  one a narrow column pushes to a second line; the rest in the bucket order. */
+const WORD_ORDER = ['needs you', 'working', 'waiting', 'done', 'idle', 'merged', 'asleep', 'exited', 'archived', 'spawning'];
 
-function summaryText(children: readonly FleetRow[]): string {
+function summaryParts(children: readonly FleetRow[]): SummaryPart[] {
   const counts = new Map<string, number>();
   for (const c of children) counts.set(childWord(c), (counts.get(childWord(c)) ?? 0) + 1);
-  const parts = [...counts].sort(([a], [b]) => WORD_ORDER.indexOf(a) - WORD_ORDER.indexOf(b)).map(([w, n]) => `${n} ${w}`);
-  return [`${children.length} ${children.length === 1 ? 'worker' : 'workers'}`, ...parts].join(' · ');
+  const parts = [...counts].sort(([a], [b]) => WORD_ORDER.indexOf(a) - WORD_ORDER.indexOf(b)).map(([word, n]) => ({ n, word }));
+  return [{ n: children.length, word: children.length === 1 ? 'worker' : 'workers' }, ...parts];
 }
 
 /** Rules 6 and 7 over one card's rows: each coordinator with `CHILD_FOLD_MIN` children or more gets one summary line;
@@ -101,7 +123,9 @@ function foldChildren(rows: readonly FleetRow[], open: ReadonlySet<string>, sele
       continue;
     }
     const expanded = open.has(head.session.id);
-    out.push({ kind: 'summary', depth: 1, parentId: head.session.id, expanded, total: kids.length, text: summaryText(kids) });
+    const parts = summaryParts(kids);
+    const text = parts.map((p) => `${p.n} ${p.word}`).join(' · ');
+    out.push({ kind: 'summary', depth: 1, parentId: head.session.id, expanded, total: kids.length, parts, text });
     out.push(...(expanded ? kids : kids.filter((k) => k.kind === 'session' && (operatorAsk(k.session) || k.session.id === selectedId))));
   }
   return out;
@@ -118,8 +142,11 @@ export function rollupCard(g: FleetTreeGroup, prefs: RollupPrefs, now: number, s
   const cls: ActivityClass = active ? 'active' : 'inactive';
   const pinnedOpen = g.sessions.some(operatorAsk);
   const own = prefs.projects[g.project];
-  const collapsed = pinnedOpen ? false : own !== undefined && own.cls === cls ? own.collapsed : cls === 'inactive';
-  return { cls, collapsed, pinnedOpen, lastActive, rows: foldChildren(g.rows, new Set(prefs.openChildren), selectedId) };
+  // A card holding the open session is open by default (a deep link or a jump lands on a visible row); the operator
+  // may still roll it up, and toggleProject stores that because it departs from this default.
+  const byDefault = cls === 'inactive' && !(selectedId !== null && live.some((s) => s.id === selectedId));
+  const collapsed = pinnedOpen ? false : own !== undefined && own.cls === cls ? own.collapsed : byDefault;
+  return { cls, collapsed, byDefault, pinnedOpen, lastActive, rows: foldChildren(g.rows, new Set(prefs.openChildren), selectedId) };
 }
 
 /** The whole fleet's rollup, by project. */
@@ -136,7 +163,7 @@ export function toggleProject(prefs: RollupPrefs, card: CardRollup, project: str
   const collapsed = !card.collapsed;
   const { [project]: _old, ...rest } = prefs.projects;
   void _old;
-  const projects = collapsed === (card.cls === 'inactive') ? rest : { ...rest, [project]: { collapsed, cls: card.cls } };
+  const projects = collapsed === card.byDefault ? rest : { ...rest, [project]: { collapsed, cls: card.cls } };
   return { ...prefs, projects };
 }
 
@@ -146,14 +173,14 @@ export function toggleChildren(prefs: RollupPrefs, parentId: string): RollupPref
   return { ...prefs, openChildren: open ? prefs.openChildren.filter((id) => id !== parentId) : [...prefs.openChildren, parentId] };
 }
 
-/** Rule 4's reset, from a FRESH frame only: drop a project's ▾ made in the other class, and an open worker line whose
- *  coordinator the fleet no longer carries. `null` when nothing changes, so the caller writes nothing. */
+/** Rule 4's reset, from a FRESH frame only: drop a project's ▾ made in the other class or for a project the frame no
+ *  longer carries, and an open worker line whose coordinator the fleet no longer carries. `null` when nothing changes, so the caller writes nothing. */
 export function prunePrefs(
   prefs: RollupPrefs, roll: { readonly cards: ReadonlyMap<string, CardRollup> }, sessionIds: ReadonlySet<string>,
 ): RollupPrefs | null {
   const projects = Object.fromEntries(Object.entries(prefs.projects).filter(([p, o]) => {
     const c = roll.cards.get(p);
-    return c === undefined || c.cls === o.cls;
+    return c !== undefined && c.cls === o.cls;
   }));
   const openChildren = prefs.openChildren.filter((id) => sessionIds.has(id));
   const same = Object.keys(projects).length === Object.keys(prefs.projects).length

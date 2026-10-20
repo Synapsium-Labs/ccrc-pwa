@@ -329,7 +329,17 @@ export function ProjectCard({
         onClick={() => onToggleChildren?.(row.parentId)}
       >
         <span className="proj-card-chevron" aria-hidden="true">{row.expanded ? '▾' : '▸'}</span>
-        {row.text}
+        {/* D-6088: each count unbreakable, so a narrow column wraps only between counts; `needs you` in its ink. */}
+        <span className="proj-children-parts">
+          {row.parts.map((p, i) => (
+            <Fragment key={p.word}>
+              {i > 0 && ' · '}
+              <span className={`proj-children-part${p.word === 'needs you' ? ' proj-children-part--needs-you' : ''}`}>
+                {`${p.n} ${p.word}`}
+              </span>
+            </Fragment>
+          ))}
+        </span>
       </BareRow>
     );
 
