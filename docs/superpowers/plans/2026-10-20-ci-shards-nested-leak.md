@@ -39,10 +39,15 @@ eight processes that belonged to OTHER tests of the same shard (ccrc-codex-life'
 - The leak check is not weakened, for real runs or for the nested ones. `proc-leak.globalsetup.mjs` is untouched.
   The nested run still fails on its own leaks. `spawnSyncGroup` also throws, and ends the group, when the nested
   run returns with members still in it. The parent shard's check still sees everything left in the parent's group.
+- `spawnSyncGroup`'s stray error now carries the child's exit status and output. A nested run that leaks its own
+  process prints its leak report (which test, which pid) on stderr; before, the thrown error dropped it and said
+  only that something was left. `strays: 'end'` was the other way to surface it, and was not taken: it would end,
+  silently, a stray the nested run's own check does not count (one no test started).
 
 ## Task 1: isolate the nested runs (D-6112)
 
-**Files:** `server/test/ci-shards.test.ts`; this plan.
+**Files:** `server/test/ci-shards.test.ts`; `server/test/spawnGroup.ts` and `server/test/proc-leak.test.ts` (the
+stray error's output); this plan.
 
 **Steps:**
 1. Red first: add the case "a nested vitest run checks only what it started (D-6112)", with `nestedVitest` in
@@ -50,6 +55,8 @@ eight processes that belonged to OTHER tests of the same shard (ccrc-codex-life'
    orphan.
 2. Switch `nestedVitest` to `spawnSyncGroup` and route the four existing nested runs through it.
 3. Run the whole file. It is green.
+4. Red first: in `proc-leak.test.ts`, a child that exits 4 with output and leaves a member in its group; the case
+   asserts the stray error carries the status and both streams. Red on the bare message, green after.
 
 **Red test:** the new case. It fails on `origin/main`'s spawn shape and passes after. The orphan is stopped through
 the stop-file it watches, never by a PID (D-3533), and each wait is bounded, so a red leaves nothing behind
