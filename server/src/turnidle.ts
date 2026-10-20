@@ -55,6 +55,7 @@
  * guard is a tripwire for a build where `shell` stopped meaning idle, or a stale `done` marker. It is never a second
  * check on an `idle` that needs none.
  */
+import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER } from '../../shared/switches.js';
 
 /** The gate's mode. `shell` is the default. `strict` restores the pre-wave-1 rule, under which only `idle`
  *  delivers. `busy-shadow` and `busy` also read `busy` through the turn marker. */
@@ -64,14 +65,14 @@ export type MailTurnMode = 'strict' | 'shell' | 'busy-shadow' | 'busy';
  *  is touched. The operator touches it and removes it BY HAND on the fleet box (`touch` to set, `rm -f` to clear);
  *  nothing in the tree writes it. It is read by LISTING, from the one listing `sweepMail` already takes, so an
  *  unlistable registry has already failed the sweep shut before any mode is read. */
-export const MAIL_GATE_STRICT_MARKER = 'mail-gate-strict';
+export { MAIL_GATE_STRICT_MARKER };
 /** `$REG/mail-gate-busy`: deliver on `busy` when the turn marker says the main turn has ended (§5.1). The second
  *  of the two hand-armed steps. Touched and removed by hand, like the others; nothing in the tree writes it. */
-export const MAIL_GATE_BUSY_MARKER = 'mail-gate-busy';
+export { MAIL_GATE_BUSY_MARKER };
 /** `$REG/mail-gate-busy-shadow`: the first step. The gate decides `busy` exactly as the busy mode would, delivers
  *  nothing, and `watch.ts` logs each delivery it would have made, once, for the operator to check against the
  *  transcript before touching the busy marker. Nothing in the tree writes it. */
-export const MAIL_GATE_BUSY_SHADOW_MARKER = 'mail-gate-busy-shadow';
+export { MAIL_GATE_BUSY_SHADOW_MARKER };
 
 /** Exact names in the listing, never substrings: a registry directory holds `<id>.<field>` files, and only the
  *  markers themselves count. The most conservative marker present wins. */
