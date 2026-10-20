@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8be7ed88cc3c82be2381ea0fab8c74b36a274e5b3d5e91fe827294a97a44e887
+# ccrc:generated 1 sha256=069445e8c5812c12690d75c38f2b52f92ef63d897649c9f85fc7d31e1d074431
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22738,7 +22738,12 @@ _child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPA
 # in this wave reaps it: a stated residue. No id names it
 # (`_ws_tmproot_id_ok` refuses every dot-leading name, at the reader, the
 # writer and `_ws_tmproot_remove`), so a collector walking `tmproots/` skips
-# or reaps dot-leading names and never takes one for an id.
+# or reaps dot-leading names and never takes one for an id, save ONE shape
+# (path-identity spec §3.6): the compare-and-drop's aside, `.<id>.drop.<pid>`,
+# composed by `_ws_tmproot_aside_path` alone. It is read for the id it is for
+# only through its exact parser `_ws_collect_aside_id` and its lister
+# `_ws_collect_asides_of`, never by a prefix, and its body only through
+# `_ws_tmproot_witness_parse`, the witness's own parser.
 #
 # WHEN. Every rc-0 answer of `_child_tmpdir` asks; the file is WRITTEN (temp
 # file, then `mv`) only when it is absent, unparseable, or its dev, ino or
@@ -22764,6 +22769,9 @@ _child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPA
 # witness records, beside no quarantine slot of the id, and only in the
 # generation it read. A drop that cannot say all of that keeps the witness.
 _ws_tmproot_witness_file() { printf '%s' "$REG/tmproots/${1-}"; }   # id -> the witness's path (a path, not a decision)
+# A COMPARE-AND-DROP ASIDE'S NAME (path-identity spec §3.6), composed here and nowhere else: `.<id>.drop.<pid>`
+# beside the witness, <pid> the moving process's own. `ccd-id-cap.test.ts`'s census reads this spelling, braces and all.
+_ws_tmproot_aside_path() { local id="${1-}" pid="${2-}"; printf '%s' "$REG/tmproots/.${id}.drop.${pid}"; }   # id pid -> an aside's path (a path, not a decision)
 
 # THE ID A VERB MAY BIND (path-identity spec §2.4): the registry charset, read under LC_ALL=C, and never
 # dash-leading, because a dash-leading word is a flag spelling and every decision flag the server appends begins `--`.
@@ -22797,19 +22805,23 @@ _reg_id_cap() {   # id -> 0 iff its BYTES fit _REG_ID_MAX; 1 sets _REG_ID_CAP_WH
 # dash-leading, and never dot-leading either — `.`, `..` and the writer's `.<id>.*.tmp` names live there.
 _ws_tmproot_id_ok() { _reg_id_ok "${1-}" && [[ "${1-}" != .* ]]; }   # id -> 0 iff a witness, a token verb or its audit may name it
 
-_ws_tmproot_witness_read() {   # id -> 0 parsed (sets _WS_WIT_DEV _WS_WIT_INO _WS_WIT_BTIME _WS_WIT_RUN _WS_WIT_UID _WS_WIT_AT) | 1 absent | 2 unreadable or malformed
-  # THREE ANSWERS: a directory or a link planted at the name is not absent,
-  # and a `tmproots/` that is ITSELF a link is never followed: both answer 2.
-  # Every field is cleared first, so a failed read never leaves a previous
+_ws_tmproot_witness_parse() {   # path id -> 0 parsed (sets _WS_WIT_DEV _WS_WIT_INO _WS_WIT_BTIME _WS_WIT_RUN _WS_WIT_UID _WS_WIT_AT) | 1 absent | 2 unreadable or malformed
+  # THE ONE WITNESS-BODY PARSER (path-identity spec §3.6). The witness at its
+  # own name, and a compare-and-drop aside at `_ws_tmproot_aside_path`'s, are
+  # read by these lines alone, so an aside "parses" exactly when it would read
+  # sound as the witness once restored. It asks no id question of its own: its
+  # callers do (`_ws_tmproot_witness_read` asks `_ws_tmproot_id_ok` first), and
+  # the body's `id=` must equal the id exactly, never as a prefix.
+  # THREE ANSWERS: a directory or a link planted at the path is not absent,
+  # and a parent directory that is ITSELF a link is never followed: both answer
+  # 2. Every field is cleared first, so a failed read never leaves a previous
   # read's values standing. The run is judged by `_child_runid_valid`, the
   # one run-id grammar, never a re-spelt pattern — and BASH_REMATCH is copied
   # before that call, whose own `=~` resets it.
-  local LC_ALL=C id="${1-}" w body="" line fd
+  local LC_ALL=C w="${1-}" id="${2-}" body="" line fd
   local -a m
   local re='^v=1 id=([A-Za-z0-9._-]+) run=([^ ]+) dev=([0-9]+) ino=([0-9]+) btime=([1-9][0-9]*|-) uid=([0-9]+) at=([0-9]{13})$'
   _WS_WIT_DEV=''; _WS_WIT_INO=''; _WS_WIT_BTIME=''; _WS_WIT_RUN=''; _WS_WIT_UID=''; _WS_WIT_AT=''
-  _ws_tmproot_id_ok "$id" || return 2
-  w=$(_ws_tmproot_witness_file "$id")
   [[ ! -L "${w%/*}" ]] || return 2
   [[ -e "$w" || -L "$w" ]] || return 1
   [[ -f "$w" && ! -L "$w" ]] || return 2
@@ -22825,6 +22837,15 @@ _ws_tmproot_witness_read() {   # id -> 0 parsed (sets _WS_WIT_DEV _WS_WIT_INO _W
   _WS_WIT_RUN="${m[2]}"; _WS_WIT_DEV="${m[3]}"; _WS_WIT_INO="${m[4]}"
   _WS_WIT_BTIME="${m[5]}"; _WS_WIT_UID="${m[6]}"; _WS_WIT_AT="${m[7]}"
   return 0
+}
+
+_ws_tmproot_witness_read() {   # id -> 0 parsed (sets _WS_WIT_DEV _WS_WIT_INO _WS_WIT_BTIME _WS_WIT_RUN _WS_WIT_UID _WS_WIT_AT) | 1 absent | 2 unreadable or malformed
+  # The witness at its id's own name, through the one body parser above. An id
+  # no witness is named for answers 2 with every field cleared, as it always has.
+  local id="${1-}"
+  _WS_WIT_DEV=''; _WS_WIT_INO=''; _WS_WIT_BTIME=''; _WS_WIT_RUN=''; _WS_WIT_UID=''; _WS_WIT_AT=''
+  _ws_tmproot_id_ok "$id" || return 2
+  _ws_tmproot_witness_parse "$(_ws_tmproot_witness_file "$id")" "$id"
 }
 
 _ws_tmproot_witness_write() {   # id leaf run -> 0 written or already current | 1 not written (the caller warns)
@@ -34855,6 +34876,22 @@ _ws_collect_rec_id() {   # name -> 0 with _WS_REC_ID = the id a `<id>.<ns>.<pid>
   _WS_REC_ID="$got"
 }
 
+_WS_ASIDE_ID=''   # the id `_ws_collect_aside_id` last parsed; '' after a refusal
+_ws_collect_aside_id() {   # name -> 0 with _WS_ASIDE_ID = the id a `.<id>.drop.<pid>` name is for: the leading dot and
+  #                            the trailing `.drop.<digits>` stripped, and nothing else; 1 when the name is no such name
+  # A COMPARE-AND-DROP ASIDE'S NAME (path-identity spec §3.6), the one dot-leading
+  # shape a collector reads for an id. EXACT, NEVER A PREFIX: the longest part
+  # between the leading dot and the last `.drop.<digits>` is the id, and it must
+  # itself be an id a witness is named for. The server's lane holds this grammar
+  # too, pinned equal to this body's one `re=` by a parity test.
+  local LC_ALL=C re='^\.(.+)\.drop\.([0-9]+)$' got
+  _WS_ASIDE_ID=''
+  [[ "${1-}" =~ $re ]] || return 1
+  got="${BASH_REMATCH[1]}"
+  _ws_tmproot_id_ok "$got" || return 1
+  _WS_ASIDE_ID="$got"
+}
+
 _ws_collect_qrec_dir() { printf '%s' "$REG/tmpquarantine"; }   # -> the quarantine records' directory (a path, not a decision)
 
 _WS_QPATH=''; _WS_QPATH_WHY=''
@@ -35008,6 +35045,40 @@ _ws_collect_records_of() {   # id -> 0 with _WS_QRECS = the path of every record
     _ws_collect_rec_id "${n##*/}" && [[ "$_WS_REC_ID" == "$id" ]] || continue
     _WS_QRECS+=("$n")
     printf '%s\n' "$n"
+  done < "$outf"
+  rm -f "$outf"
+  return 0
+}
+
+_WS_ASIDES=(); _WS_ASIDES_WHY=''
+_ws_collect_asides_of() {   # id -> 0 with _WS_ASIDES = the path of every compare-and-drop aside of id EXACTLY (none
+  #                             when tmproots/ is PROVEN absent); 2 (_WS_ASIDES_WHY) when id is no id an aside is
+  #                             named for, or tmproots/ is a link, not a directory, or could not be listed. Prints nothing
+  # AN ASIDE IS NEVER INVISIBLE, as a record is not (`_ws_collect_records_of`):
+  # an unlistable `tmproots/`, one that is a link, or a file where it should
+  # be answers 2, never "no aside". Only `.<id>.drop.<pid>` names are asked
+  # (`_ws_collect_aside_id`, exact, never a prefix): the witness itself, the
+  # writer's temp files and another id's aside are skipped.
+  local LC_ALL=C id="${1-}" dir="$REG/tmproots" outf errf err rc n
+  _WS_ASIDES=(); _WS_ASIDES_WHY=''
+  _ws_tmproot_id_ok "$id" || { _WS_ASIDES_WHY="'$id' is not an id an aside is named for"; return 2; }
+  [[ ! -L "$dir" ]] || { _WS_ASIDES_WHY="$dir is a link, which is never followed, so its asides were never listed"; return 2; }
+  _ws_reclaim_absent "$dir"; rc=$?
+  (( rc != 0 )) || return 0
+  (( rc != 2 )) || { _WS_ASIDES_WHY="$_WS_ABSENT_WHY — whether an aside of $id stands was never asked"; return 2; }
+  [[ -d "$dir" ]] || { _WS_ASIDES_WHY="$dir is not a directory, so its asides were never listed"; return 2; }
+  outf=$(_plat_mktemp) || { _WS_ASIDES_WHY="could not make a scratch file to list $dir"; return 2; }
+  errf=$(_plat_mktemp) || { rm -f "$outf"; _WS_ASIDES_WHY="could not make a scratch file to list $dir"; return 2; }
+  find -P "$REG/tmproots" -mindepth 1 -maxdepth 1 -name '.*.drop.*' -print0 >"$outf" 2>"$errf"; rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc != 0 )) || [[ -n "$err" ]]; then
+    rm -f "$outf"
+    _WS_ASIDES_WHY="could not list $dir (find exit $rc${err:+: ${err%%$'\n'*}}), so whether an aside of $id stands was never asked"
+    return 2
+  fi
+  while IFS= read -r -d '' n; do
+    _ws_collect_aside_id "${n##*/}" && [[ "$_WS_ASIDE_ID" == "$id" ]] || continue
+    _WS_ASIDES+=("$n")
   done < "$outf"
   rm -f "$outf"
   return 0
@@ -36295,14 +36366,14 @@ _ws_collect_witness_cad() {   # id dev ino btime run at -> 0 with _WS_CAD = drop
   # aside by one NOREPLACE rename to a dot-leading name no reader takes for an
   # id, the moved copy is read, and it is unlinked only when it is, field for
   # field, the witness this collection acted on. Anything else is moved back.
-  local id="$1" dev="$2" ino="$3" bt="$4" run="$5" at="$6" w aside line='' mid pre suf rc
+  local id="$1" dev="$2" ino="$3" bt="$4" run="$5" at="$6" w aside line='' mid pre suf rc me="$BASHPID"
   _WS_CAD=''; _WS_CAD_WHY=''
   w=$(_ws_tmproot_witness_file "$id")
   [[ ! -L "${w%/*}" ]] || { _WS_CAD_WHY="${w%/*} is a link, never followed"; return 2; }
   _ws_reclaim_absent "$w"; rc=$?
   (( rc != 0 )) || { _WS_CAD=absent; return 0; }
   (( rc != 2 )) || { _WS_CAD_WHY="$_WS_ABSENT_WHY"; return 2; }
-  aside="${w%/*}/.$id.drop.$BASHPID"
+  aside=$(_ws_tmproot_aside_path "$id" "$me")   # this process's own pid, read before the composer's subshell
   _ws_reclaim_absent "$aside" || { _WS_CAD_WHY="$aside already stands, so the witness was not moved aside"; return 2; }
   _ws_collect_mv "$w" "$aside" 2>/dev/null || :
   if [[ ! -f "$aside" || -L "$aside" ]]; then
