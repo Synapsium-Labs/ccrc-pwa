@@ -8575,6 +8575,10 @@ EOF
   # three numbers this comment carried before — 153, 175, 180 — had all
   # rotted, and nothing reds when they do.)
   echo stop-surface
+  # `hibernate-hold-ok` says THIS copy of `cmd_hibernate` takes `--hold-ok <text>` (D-6091): a programme hold the
+  # server names verbatim no longer refuses `held`. The server passes the flag only when it reads this token
+  # (`capSupported`, false on no evidence), so a box without it keeps today's `held`. Same channel, same obligation.
+  echo hibernate-hold-ok
   # `lifecycle-v1` says THIS copy of ccd writes `$REG/.lifecycle/`. It gates a
   # SERVER DECISION — sweep at all — not a file: absent means the mirror never
   # sweeps and every surface says "this box's ccd does not write the lifecycle
@@ -28302,6 +28306,24 @@ _hib_wake_clear() {   # id — a start or an ensure ends a hibernation: `.hibern
   return 0
 }
 
+_hold_is_programme() {   # text -> 0 iff it is a programme hold: `program:<slug> wave:<n>[/<m>][ run:<id>]`, nothing else.
+  # ccd stores any hold text (`cmd_ws_hold`); the server validates the programme grammar (`HOLD_REASON_PATTERN`,
+  # `server/src/coord/rundefs.ts`). THIS is that pattern's one ccd spelling, and `hold-programme-parity.test.ts`
+  # crosses the two over one fixture list. `LC_ALL=C` keeps the bracket classes ASCII.
+  local LC_ALL=C re='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'
+  [[ $1 =~ $re ]]
+}
+
+_hib_hold_ok() {   # id text -> 0 iff `$REG/<id>.hold` may be passed for the run-done policy (D-6091); 1 holds.
+  # Passes ONLY when the file is a regular readable file, reads BYTE-IDENTICAL to the text the server classified
+  # (a hold rewritten between the server's pass and this act refuses), and that text is a programme hold. An
+  # operator's own hold text (anything outside the grammar), an unreadable or special file, or any doubt holds.
+  local f="$REG/$1.hold"
+  [[ -f "$f" && -r "$f" && ! -L "$f" ]] || return 1
+  _hold_is_programme "$2" || return 1
+  cmp -s -- "$f" <(printf '%s' "$2")
+}
+
 cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id> — stop a long-idle session cleanly; `ccd ensure` wakes it.
   # ONE POSITIONAL, AND THAT IS `cmd_ensure`'s SECURITY BOUNDARY: the agent grants the bare `['hibernate']` prefix, after
   # which tokens are unconstrained, so the arity rule below is the only bound on what a caller can put here. The dec flags
@@ -28311,6 +28333,7 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
   # and leave the surface word as the id. A dash-leading value is refused with the usage line; the id passes `_reg_id_ok`.
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
+  local lc_gh=0 lc_holdok=''   # `--hold-ok <text>` (D-6091)
   while (( $# )); do
     case "$1" in
       --surface)   [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_gs=1; lc_surface="$2"; shift 2 ;;
@@ -28319,10 +28342,17 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
       --actor=*)   [[ ${1#--actor=} != -* ]] || die "$usage"; lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
       --reason)    [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_gr=1; lc_reason="$2"; shift 2 ;;
       --reason=*)  [[ ${1#--reason=} != -* ]] || die "$usage"; lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      # D-6091: the programme hold the server classified, verbatim — see `_hib_hold_ok` above.
+      --hold-ok)   [[ $# -ge 2 && $2 != -* ]] || die "$usage"; lc_gh=1; lc_holdok="$2"; shift 2 ;;
+      --hold-ok=*) [[ ${1#--hold-ok=} != -* ]] || die "$usage"; lc_gh=1; lc_holdok="${1#--hold-ok=}"; shift ;;
       *)           lc_args+=("$1"); shift ;;
     esac
   done
   set -- "${lc_args[@]}"
+  if (( lc_gh )); then
+    [[ -n "$lc_holdok" ]] || die "$usage"
+    _lc_dec_ok "$lc_holdok" || die "--hold-ok is longer than $_LC_DEC_MAX bytes"
+  fi
   if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
   if (( lc_ga )); then
     [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
@@ -28340,7 +28370,12 @@ cmd_hibernate() {   # [--surface <word>] [--actor <text>] [--reason <text>] <id>
   if [[ -e "$REG/$id.hibernated" && "$(_session_verdict "$id")" == gone ]]; then echo "already hibernated $id"; return 0; fi
   # ── the re-measure, cheapest first ──
   # `-e` not `-f`, the hold readers' polarity: a hold or an opt-out that cannot be read still holds.
-  [[ -e "$REG/$id.hold" ]] && _hib_refuse held "$id is held: a program has declared it is mid-flight here"
+  # D-6091: `--hold-ok <text>` lets ONE kind of hold pass — a programme hold the server read, classified and named
+  # verbatim (`_hib_hold_ok`). Every other hold, and every doubt, still refuses `held`.
+  if [[ -e "$REG/$id.hold" ]]; then
+    (( lc_gh )) && _hib_hold_ok "$id" "$lc_holdok" \
+      || _hib_refuse held "$id is held: a program has declared it is mid-flight here"
+  fi
   [[ -e "$REG/$id.no-hibernate" ]] && _hib_refuse opted-out "$id carries a no-hibernate marker"
   local now last
   _now_s_to now; _reg_get_to last "$id" lastswap
