@@ -2697,8 +2697,9 @@ describe('fix round 1 (D-5986): no-follow, type-checked I/O under --out', () => 
     expect(replay.prepareOut(path.join(parent, 'out')), 'CONTROL: the mode restored, the same --out is made').toBe(path.join(realpathSync(parent), 'out'));
   });
 
-  // D-5986: the marker write refuses out-refused marker-unwritable <errno>, telling the operator to remove --out. A file-size limit of 0 (prlimit, an argv, no shell)
-  // makes the write of the marker's bytes fail EFBIG after mkdir and the exclusive create succeeded: node ignores SIGXFSZ.
+  // D-5986: the marker write refuses out-refused marker-unwritable <errno>, telling the operator to remove --out. A file-size
+  // limit of 0 (prlimit, an argv, no shell) makes the write of the marker's bytes fail EFBIG after mkdir and the exclusive
+  // create succeeded: node ignores SIGXFSZ.
   it.skipIf(!existsSync('/usr/bin/prlimit'))('prepareOut whose marker cannot be written (a file-size limit of 0): out-refused marker-unwritable EFBIG, the directory made and the marker left empty', () => {
     const dir = mkTmp('ccrc-replay-d5986-marker-');
     const script = path.join(dir, 'child.mjs');
@@ -2716,7 +2717,8 @@ process.stdout.write(said);
   });
 
   // D-5985, D-5986: the same file-size seam reaches writeWhole's write arm through the lock's tmp (claimOut on a made --out):
-  // the tmp's write fails EFBIG, the tmp is dropped and no lock is made. Under --fsize=0 the marker itself would fail, so the parent makes --out.
+  // the tmp's write fails EFBIG, the tmp is dropped and no lock is made. Under --fsize=0 the marker itself would fail, so
+  // the parent makes --out.
   it.skipIf(!existsSync('/usr/bin/prlimit'))('claimOut whose lock tmp cannot be written (a file-size limit of 0): out-refused .driver.lock.tmp-<pid> unwritable EFBIG, the tmp dropped and no lock made; a large limit does not refuse', () => {
     const dir = mkTmp('ccrc-replay-d5985-locktmp-');
     const out = replay.prepareOut(path.join(dir, 'out'));

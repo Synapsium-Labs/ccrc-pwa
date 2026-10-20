@@ -696,24 +696,24 @@ export function spendTokens(facts) {
 // planted there refuses `out-refused` (or is read as the caller's own bad state) and never follows a link or blocks.
 // Reads: lstat, then open O_RDONLY|O_NOFOLLOW|O_NONBLOCK, fstat isFile, then a bounded read. Appends open
 // O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW. Every other write is an exclusive create (O_EXCL|O_NOFOLLOW): a tmp file and then a
-// rename or a link, or the `.part`, which the child writes in place. A failure to read, list, create or write at the sites below refuses `out-refused` with the path relative to
-// --out and a cause (`<rel> unreadable <code>`, `<rel> unwritable <code>`, or the type refusals): an --out holder can make
-// each happen, and a raw errno is not a W2 stop word. Covered: the reads and the claim walk (readPlain, lstatOrNull,
-// refuseLinkedDirs, leftoverNames); the appends (appendPlain); the creates and writes (createPlain, writePlain,
-// ensurePlainDir); the removals and renames of the run's own bookkeeping (removePlain in settleLeftover, createPlain and
-// launchRun; the lock's link, rename and put-back in takeLock; launchRun's `.part` rename); and prepareOut's creation of
-// --out (its mkdir `create-failed <code>`, its marker write `marker-unwritable <code>`, with the instruction to
-// remove --out). A removal that fails AFTER the
-// spend line leaves the `.part`, which the next driver charges again (an over-count). Not covered, each for a stated
-// reason: runChild's child-error removals (a spawn that produced no child; a refusal there would hide the spawn error
-// that got it there); the best-effort removals, which use `dropQuietly` so that a failed removal never becomes the
-// answer, either on a path that is already refusing or after the work is done (writePlain's tmp cleanups; takeLock's
-// stale and tmp removals; the claim's release). Still a raw error and exit 1, each only through a race: prepareOut's
-// checkOut lstat (--out removed between prepareOut's lstat and checkOut's) and its realpath (the same removal, a step
-// later). Not under --out, each answering its own state or refusal: the reads outside --out (/proc, the roster, the
-// release stamp, the wrapper, the gate_code files). readPlain's O_NONBLOCK is reached only through a race too (a regular
-// file swapped for a FIFO between the lstat and the open), but it never exits 1: the open passes and the fstat answers
-// not-regular. The marker's read, and HOME's limits row, go through readPlain.
+// rename or a link, or the `.part`, which the child writes in place. A failure to read, list, create or write at the sites
+// below refuses `out-refused` with the path relative to --out and a cause (`<rel> unreadable <code>`, `<rel> unwritable
+// <code>`, or the type refusals): an --out holder can make each happen, and a raw errno is not a W2 stop word. Covered: the
+// reads and the claim walk (readPlain, lstatOrNull, refuseLinkedDirs, leftoverNames); the appends (appendPlain); the
+// creates and writes (createPlain, writePlain, ensurePlainDir); the removals and renames of the run's own bookkeeping
+// (removePlain in settleLeftover, createPlain and launchRun; the lock's link, rename and put-back in takeLock; launchRun's
+// `.part` rename); and prepareOut's creation of --out (its mkdir `create-failed <code>`, its marker write
+// `marker-unwritable <code>`, with the instruction to remove --out). A removal that fails AFTER the spend line leaves the
+// `.part`, which the next driver charges again (an over-count). Not covered, each for a stated reason: runChild's
+// child-error removals (a spawn that produced no child; a refusal there would hide the spawn error that got it there); the
+// best-effort removals, which use `dropQuietly` so that a failed removal never becomes the answer, either on a path that is
+// already refusing or after the work is done (writePlain's tmp cleanups; takeLock's stale and tmp removals; the claim's
+// release). Still a raw error and exit 1, each only through a race: prepareOut's checkOut lstat (--out removed between
+// prepareOut's lstat and checkOut's) and its realpath (the same removal, a step later). Not under --out, each answering its
+// own state or refusal: the reads outside --out (/proc, the roster, the release stamp, the wrapper, the gate_code files).
+// readPlain's O_NONBLOCK is reached only through a race too (a regular file swapped for a FIFO between the lstat and the
+// open), but it never exits 1: the open passes and the fstat answers not-regular. The marker's read, and HOME's limits row,
+// go through readPlain.
 
 /** The largest ledger or stream the driver reads back. */
 const OUT_STREAM_CAP = 256 * 1024 * 1024;
