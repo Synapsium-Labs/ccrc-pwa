@@ -334,6 +334,9 @@ describe('a reader following a running turn', () => {
     act(() => getSessionStore(S.id).setState({ status: 'busy' }));
     expect(made.virtuoso, 'the list rendered').not.toBeNull();
     const mounts = made.virtuosoMounts;
+    // The list has finished opening: its own settle window is over (a wheel
+    // ends it at once), so only the switch can open another.
+    fireEvent.wheel(document.querySelector('.chat-list')!);
     toInstrument();
     expect(made.virtuosoMounts, 'the list was not opened again').toBe(mounts);
     // The re-wrap moves the list off the bottom on its own; a reader who was
