@@ -93,6 +93,62 @@
         "draft": ""
       },
       "_pane_box_draft": ""
+    },
+    "stash-after-cs.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": ""
+    },
+    "stash-held-with-text.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "second thing typed"
+      },
+      "_pane_box_draft": "second thing typed"
+    },
+    "stash-held-during-turn.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": ""
+    },
+    "stash-restored.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "half typed operator note"
+      },
+      "_pane_box_draft": "half typed operator note"
+    },
+    "stash-restored-multi-line.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "first line of a note"
+      },
+      "_pane_box_draft": "first line of a note"
+    },
+    "stash-restored-paste-chip.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "first line of a note[Pasted text #1 +30 lines]"
+      },
+      "_pane_box_draft": "first line of a note[Pasted text #1 +30 lines]"
+    },
+    "stash-clear-restored.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "first line of a note[Pasted text #1 +30 lines]"
+      },
+      "_pane_box_draft": "first line of a note[Pasted text #1 +30 lines]"
+    },
+    "stash-draft.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "half typed operator note"
+      },
+      "_pane_box_draft": "half typed operator note"
     }
   }
 }
