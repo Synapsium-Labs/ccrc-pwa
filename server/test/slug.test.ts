@@ -15,7 +15,7 @@ import {
 } from '../../shared/slug.js';
 import { LC_REASON_MAX_BYTES } from '../../shared/api.js';
 // The path to the script is spelled in ONE test file and imported everywhere
-// else — `single-definition.test.ts:267` fails the build on a second spelling,
+// else — `single-definition.test.ts`'s one-path scan (the seven-files case) fails the build on a second spelling,
 // and it caught this file writing its own. Measured: red before this import.
 import { CCD } from './ccdWsHelpers.js';
 
@@ -30,7 +30,7 @@ const linearUrl = (...segments: string[]): string => [LINEAR_ORIGIN, ...segments
 
 /**
  * ccd's `_ws_slug_valid` regex, READ OUT OF THE SHIPPED BINARY rather than
- * re-typed here. Same idiom as `wsaudit.test.ts:53-63` and `coord-token.test.ts`'s
+ * re-typed here. Same idiom as `wsaudit.test.ts`'s "refusal-token <-> sentence linkage" and `coord-token.test.ts`'s
  * placeholder tie: the grammar has ONE definition, on the box, and this suite's
  * job is to fail the build when what we generate stops satisfying it — not to
  * hold a second copy that can drift silently.

@@ -45,6 +45,14 @@ import type { ClaimRefusal } from './box-token.js';
 import type { AccountGateRefusal, ApprovalRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, RunRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { SWAP_REFUSALS } from './api.js';
 
+/**
+ * The named workspace create's own words (named workspaces S5): decided by `planCreate` (`server/src/workspaceCreate.ts`,
+ * L1) before any argv exists and sent by the route through `refuseRoute` with a computed word, so they are a typed
+ * vocabulary of their own rather than `GenericRefusal`s, whose "still sent" scan reads only literal words at a send.
+ */
+export const WS_CREATE_REFUSALS = ['bad-project', 'name-too-long', 'bad-name', 'bad-wrapper'] as const;
+export type WsCreateRefusal = (typeof WS_CREATE_REFUSALS)[number];
+
 /** The mail codes a route answers in `error`. The done-authority codes travel
  *  as a run advance's `reject.code` and `undeliverable` is a delivery outcome;
  *  neither is an HTTP `error` word. */
@@ -70,12 +78,14 @@ export const GENERIC_REFUSALS = [
   'unknown-session', 'unmeasured', 'unrouteable-record', 'unsupported', 'unsupported-type',
   // The Linear routes (named workspaces S4 and S4b): the preview read's two and the connection routes' six.
   'bad-ref', 'ref-too-long', 'bad-key', 'key-rejected', 'not-connected', 'unreachable', 'timeout', 'malformed',
+  // The named workspace create (named workspaces S5): ccd's three refusals, mapped by the route.
+  'slug-taken', 'bad-slug', 'account-refused',
 ] as const;
 export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
-  | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal;
+  | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -141,6 +151,11 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'bad-ref': 400, 'ref-too-long': 400, 'bad-key': 400, 'key-rejected': 400,
   'not-connected': 409,
   'unreachable': 503, 'timeout': 503, 'malformed': 503,
+  // The named workspace create (named workspaces S5): CHOSEN — 400 for a name, project or wrapper the operator can
+  // retype, 409 for a slug already in use and an account ccd will not place this workspace on (the request was
+  // well-formed; the box's state refused it). A missing ccd cap answers the existing `unsupported` (501).
+  'bad-project': 400, 'name-too-long': 400, 'bad-name': 400, 'bad-wrapper': 400, 'bad-slug': 400,
+  'slug-taken': 409, 'account-refused': 409,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */

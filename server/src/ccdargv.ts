@@ -393,6 +393,27 @@ export const CCD_ARGV = {
    *  `cmd_ws_add` bound a flag's first token as the slug (D-410). */
   wsAdd:     (p: string, route: RouteFields | null = null, dec: ActorFlags | null = null) =>
                argv(['ws-add', ...routeFlags(route), p, ...decFlags(dec)]),
+  /** The operator's NAMED create (named workspaces S5, design 2026-10-20 §4.1-4.2): `ws-add` with a display `title`, the
+   *  operator's own `slug`, and, from the new-session sheet, the `wrapper` (account) they picked. A NEW KEY, never a
+   *  widened `wsAdd`: `whitelist-subset.test.ts`'s key equality fails on a new key and not on a widened optional, so
+   *  the grant's reach stays a decision somebody made.
+   *
+   *  `--title` AND `--wrapper` LEAD, before the project — `--no-rc` and `--route`'s own position — and the slug sits
+   *  right behind the project. An older ccd binds an unknown `--` token as a POSITIONAL (D-6113): leading, `--title`
+   *  lands in the project slot and is refused by `_ws_project_valid`; trailing, after `project slug`, it would be
+   *  dropped unread and the workspace created unnamed — and on the least-loaded lane when the dropped flag was
+   *  `--wrapper` — with exit 0. The caller ALSO gates each on its `ccd caps` token (`WS_TITLE_CAP`, `WS_WRAPPER_CAP`),
+   *  and a `null` wrapper omits the pair entirely rather than send an empty token (ccd refuses a blank `--wrapper`).
+   *  `title` is never optional: ccd writes `named`, the sweep's exemption, ONLY when it is given.
+   *
+   *  `route` and `dec` ride as on `wsAdd` (a named create keeps the class route and the device actor, D-5301), the dec
+   *  trailing the slug, where `wsAddWorker` puts its own. `slug` is the operator's, ALREADY through `shared/slug.ts`'s
+   *  `deriveWorkspaceSlug`, so it starts with a letter or digit and can never be read as a flag; the caller never
+   *  passes an empty one (`['ws-add','demo','']` draws a random slug and exits 0). */
+  wsAddNamed: (p: string, slug: string, name: { title: string; wrapper: string | null },
+               route: RouteFields | null = null, dec: ActorFlags | null = null) =>
+                 argv(['ws-add', '--title', name.title, ...(name.wrapper === null ? [] : ['--wrapper', name.wrapper]),
+                   ...routeFlags(route), p, slug, ...decFlags(dec)]),
   /** The dispatch path's ws-add: a dispatched program worker spawns WITHOUT
    *  --remote-control (the 2026-08-13 ruling, task #37) — declared at
    *  creation, the only moment worker-ness is known (`hold` is written after

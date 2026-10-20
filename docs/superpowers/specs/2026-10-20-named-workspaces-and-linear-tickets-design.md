@@ -187,7 +187,7 @@ caps gate is the control, and the leading position is the defence behind it.
   - `isWsProject(project)` false → 400 `bad-project` **before any argv exists** (the argv-smuggling defect the old
     review found: `POST /api/projects/--no-rc/workspaces` let ccd's strip loop eat the flag);
   - name refused → 400 `bad-name` with the reason, **no argv built**;
-  - `wrapper` given without `WS_WRAPPER_CAP` → 501 `not-supported`; `name` without `WS_TITLE_CAP` → 501;
+  - `wrapper` given without `WS_WRAPPER_CAP` → 501 `unsupported` (the existing word for a ccd verb or flag the box lacks); `name` without `WS_TITLE_CAP` → 501;
   - a blank name **omits** the slug token, never sends `''` (`['ws-add','demo','']` draws a random slug and
     exits 0, so the route would answer 200 for a workspace nobody named);
   - ccd stderr `slug in use: ` → 409 `slug-taken` (the sheet stays open with the field intact);
