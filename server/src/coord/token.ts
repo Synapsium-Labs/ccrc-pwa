@@ -287,7 +287,7 @@ export class BoxTokenHolder {
     return this.slots.pending.find((p) => p.id === id)?.value ?? null;
   }
 
-  /** For the both-role writer and the retirement self-check only. */
+  /** For the both-role writer, the retirement self-check and the egress mask's fingerprint key (D-5513) only. */
   currentValue(): string | null { return this.slots.current; }
 
   /** The slot `presented` matches, or null. All five slots are compared every

@@ -681,11 +681,12 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // spec §5.2), MIGRATIONS[22] (runs.unattributed, D-5298,
     // coordinator-first Task 11b), MIGRATIONS[23] (the approvals table,
     // D-5298, coordinator-first Task 16) and MIGRATIONS[24] (the digests table
-    // and asks.corrected, D-5300, coordinator-first Task 17) and MIGRATIONS[25]
-    // (account_events, D-5516, accounts plan Task A7) and MIGRATIONS[26]
-    // (the mail_deliveries park columns, D-5838).
-    expect(COORD_SCHEMA_VERSION).toBe(27);
-    expect(MIGRATIONS.length).toBe(27);
+    // and asks.corrected, D-5300, coordinator-first Task 17), MIGRATIONS[25]
+    // (account_events, D-5516, accounts plan Task A7), MIGRATIONS[26]
+    // (the mail_deliveries park columns, D-5838) and MIGRATIONS[27]
+    // (secret_fingerprints, D-5513, accounts plan Task A10).
+    expect(COORD_SCHEMA_VERSION).toBe(28);
+    expect(MIGRATIONS.length).toBe(28);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -747,9 +748,10 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // (dead_coordinator_breaker_state), MIGRATIONS[19]
     // (collect_lane_settings), MIGRATIONS[20] (asks.releaseReason),
     // MIGRATIONS[21] (the six delegation_* tables), MIGRATIONS[22]
-    // (runs.unattributed), MIGRATIONS[23] (approvals), MIGRATIONS[24] (digests, asks.corrected) and MIGRATIONS[25]
-    // (account_events) and MIGRATIONS[26] (the mail_deliveries park columns); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(27);
+    // (runs.unattributed), MIGRATIONS[23] (approvals), MIGRATIONS[24] (digests, asks.corrected), MIGRATIONS[25]
+    // (account_events), MIGRATIONS[26] (the mail_deliveries park columns) and MIGRATIONS[27] (secret_fingerprints);
+    // the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(28);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
