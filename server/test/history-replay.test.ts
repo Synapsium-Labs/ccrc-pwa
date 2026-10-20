@@ -2739,6 +2739,19 @@ describe('W2-4 Task 8: step0a end to end', () => {
     expect(stubLog(home)).toBeNull();
   }, 60_000);
 
+  // D-5813: the ':' check also runs on the realpath prepareOut answers, so an --out under an ancestor symlink to a
+  // directory whose name holds ':' is a driver word, not spawnEnv's TypeError (exit 1) after the first spawn.
+  it("an --out under an ancestor symlink to a path holding ':' is refused args-invalid before any spawn", () => {
+    const home = t8Home('ccrc-w2-t8-colonlink-');
+    const base = mkTmp('ccrc-w2-t8-colonlink-base-');
+    mkdirSync(path.join(base, 'a:b'));
+    symlinkSync(path.join(base, 'a:b'), path.join(base, 'link'));
+    const r = t8Run(t8Tree(), home, t8Argv(path.join(base, 'link', 'out')));
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toBe("ccrc history-replay: args-invalid: out contains ':'\n");
+    expect(stubLog(home)).toBeNull();
+  }, 60_000);
+
   it('a settings mode outside SETTINGS_MODES is refused args-invalid before any spawn', () => {
     const home = t8Home('ccrc-w2-t8-settings-');
     const r = t8Run(t8Tree(), home, t8Argv(t8Out(), { 'settings-mode': 'open' }));
@@ -3171,6 +3184,10 @@ describe('W2-4 Task 9: the probe checks every required flag before --out is made
       ({ id, label: id, configDirSuffix: suffix, exec, homeAble: true, hue: 'cyan', telemetry: 'anthropic' });
     writeRoster(home, [acct('up-a', '.claude', { kind: 'upstream' }), acct('ext-n', '.ext-n', { kind: 'external' })]);
     plantStub(home, 'up-a');
+    const now = Math.floor(Date.now() / 1000);
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-limits', 'up-a.json'),
+      JSON.stringify({ five: 10, seven: 10, ts: now, fiveResetAt: now + 3600, sevenResetAt: now + 86_400 }));   // fresh, so only the ':' check can stop it
     return { home, out: path.join(base, 'out') };
   }
   const argvOf = (out: string, account: string, drop: string | null): string[] => {
@@ -3183,6 +3200,17 @@ describe('W2-4 Task 9: the probe checks every required flag before --out is made
     expect(r.code, r.stderr).toBe(2);
     expect(r.stderr).toBe(`ccrc history-replay: args-invalid: ${flag}-required\n`);
     expect(existsSync(out), `a missing --${flag} left --out behind`).toBe(false);
+    expect(stubLog(home)).toBeNull();
+  });
+  // D-5813: as step0a, the ':' check also runs on prepareOut's realpath (an ancestor symlink to a path holding ':').
+  it("an --out under an ancestor symlink to a path holding ':' is refused args-invalid before any spawn", () => {
+    const { home } = box('ccrc-replay-t9-colonlink-');
+    const base = mkTmp('ccrc-replay-t9-colonlink-base-');
+    mkdirSync(path.join(base, 'a:b'));
+    symlinkSync(path.join(base, 'a:b'), path.join(base, 'link'));
+    const r = runDriver(home, argvOf(path.join(base, 'link', 'out'), 'up-a', null));
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toBe("ccrc history-replay: args-invalid: out contains ':'\n");
     expect(stubLog(home)).toBeNull();
   });
   it('a missing --budget with an unadmissible account answers budget-required, not account-refused, and makes no --out', () => {

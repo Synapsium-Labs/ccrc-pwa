@@ -1343,6 +1343,14 @@ const STEP0A_RUNS = Object.freeze([
  *  refuseUnusableInputs and prepareOut, so a missing flag never leaves a fresh --out behind. */
 const STEP0A_REQUIRED = Object.freeze(['out', 'account', 'budget', 'writer-model', 'judge-model', 'arm-model']);
 
+/** D-5813: --out's realpath, which prepareOut answers, must not hold ':' either: an ancestor symlink can lead to a path
+ *  that does while the spelling given did not, and the realpath is what spawnEnv receives. Called right after prepareOut,
+ *  before any roster read or spawn.
+ *  @param {string} out prepareOut's answer */
+function refuseColonInRealOut(out) {
+  if (out.includes(':')) refuse('args-invalid', "out contains ':'");
+}
+
 /** D-5813: the operator inputs that would otherwise surface as a TypeError (exit 1) from spawnArgv or spawnEnv after
  *  --out is made, or after step 0a's writer run has spent. HOME and the resolved --out must not hold ':' (PATH's
  *  separator), and every model flag given must be a model id (MODEL_RE). A model flag that is absent is left to its
@@ -1431,6 +1439,7 @@ export async function step0aCommand(flags, env) {
   const outArg = flags.out;
   refuseUnusableInputs(home, outArg, STEP0A_RUNS.map((r) => [r.modelFlag, flags[r.modelFlag]]));
   const out = prepareOut(outArg);
+  refuseColonInRealOut(out);
   const { json, roster } = readRoster(home);
   const launch = admitAccount(json, roster, flags.account, home);
   const budget = flags.budget;
@@ -1581,6 +1590,7 @@ export async function probeCommand(flags, env) {
   const home = path.resolve(env.HOME);   // D-5813: one spelling of HOME for the argv, the prompts and probe.json
   refuseUnusableInputs(home, flags.out, [['arm-model', flags['arm-model']]]);
   const out = prepareOut(flags.out);
+  refuseColonInRealOut(out);
   const { json, roster } = readRoster(home);
   const launch = admitAccount(json, roster, flags.account, home);
   // D-5813: an absent or non-executable launcher is an account that cannot be launched, a driver refusal, not a raw spawn error.
