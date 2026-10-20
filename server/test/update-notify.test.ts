@@ -191,7 +191,7 @@ describe('the release push copy (plan W3 Task 3, design 2026-09-20 §13)', () =>
       title: 'ccrc v0.0.9 is out',
       body: 'On stable — fleet and server are on v0.0.7. Tap to see what\'s new.',
       tag: 'release-v0.0.9',
-      url: '/settings',
+      url: '/settings/updates',
     });
   });
 
@@ -200,9 +200,9 @@ describe('the release push copy (plan W3 Task 3, design 2026-09-20 §13)', () =>
       .toBe('On dev — fleet v0.0.7 · server v0.0.9. Tap to see what\'s new.');
   });
 
-  it('the collapse tag is release-<tag>, spelled once, and the tap lands on /settings', () => {
+  it('the collapse tag is release-<tag>, spelled once, and the tap lands on /settings/updates (D-5504)', () => {
     expect(releasePushTag('v0.0.10')).toBe('release-v0.0.10');
     expect(releasePushCopy(n, 'x').tag).toBe(releasePushTag(n.tag));
-    expect(RELEASE_PUSH_URL).toBe('/settings');
+    expect(RELEASE_PUSH_URL).toBe('/settings/updates');
   });
 });

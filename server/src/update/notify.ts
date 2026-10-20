@@ -100,8 +100,9 @@ export function releaseToNotify(input: NotifyInput): ReleaseNotification | null 
 // real caller, `watch.ts`'s `pushRelease`, never composed through it — it picks sides itself), so this file
 // spells no part of it and imports nothing new.
 
-/** Where the tap lands: the settings screen's release list (push-sw.js prefers a payload `url`, Task 4). */
-export const RELEASE_PUSH_URL = '/settings';
+/** Where the tap lands: Settings › Updates, the release list with the waiting release's notes open (push-sw.js
+ *  prefers a payload `url`, Task 4; the Settings section routes, D-5504). */
+export const RELEASE_PUSH_URL = '/settings/updates';
 
 /** The tray collapse key — the ONE spelling, as `mergedKey` is the one spelling of the merged tag
  *  (`watch.ts`'s `mergedKey`). One tag, one notification: a repeat (which the persisted mark exists to prevent)

@@ -14,6 +14,7 @@ import {
 } from './ccdWsHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
+import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
 import { markGenerated } from '../../shared/mark.mjs';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
 
@@ -1925,22 +1926,14 @@ describe('ccd-account-auth — advertised, shipped, taken back off, and agent-fi
   });
 
   it('the capability is named in the list that partitions caps output', () => {
-    // `ccd-archive.test.ts`'s KNOWN_CAPABILITY_TOKENS is HAND-MAINTAINED and is
-    // what tells a capability token apart from a verb. Said here too, because
-    // the file that adds the token and the file that classifies it are two
-    // packages apart in a reader's head even though they are not on disk.
+    // The capability-token list (`ccdCapTokens.ts`, D-6051; `ccd-archive.test.ts`'s KNOWN_CAPABILITY_TOKENS is
+    // it) is HAND-MAINTAINED and is what tells a capability token apart from a verb. Said here too, because the
+    // file that adds the token and the file that classifies it are two packages apart in a reader's head.
     //
-    // MEMBERSHIP, NOT THE WHOLE ARRAY (D-2595). This quoted the entire literal
-    // until the
-    // account-pools merge added `pools-v1` to it — a false red over a list
-    // doing its job. What this test is FOR is that `account-v1` is classified
-    // at all; the exactness of the rest is `ccd-archive.test.ts`'s own business
-    // and it holds the set equal to the advertised one in both directions.
-    const arr = /const KNOWN_CAPABILITY_TOKENS = \[([^\]]*)\]/
-      .exec(read('server', 'test', 'ccd-archive.test.ts'));
-    expect(arr, 'ccd-archive.test.ts has no KNOWN_CAPABILITY_TOKENS array').not.toBeNull();
-    expect(arr![1]!.split(',').map((t) => t.trim().replace(/^'|'$/g, '')))
-      .toContain('account-v1');
+    // MEMBERSHIP, NOT THE WHOLE ARRAY (D-2595): what this test is FOR is that `account-v1` is classified at all;
+    // the exactness of the rest is `ccd-archive.test.ts`'s own business, and it holds the set equal to the
+    // advertised one in both directions.
+    expect(CCD_CAPABILITY_TOKENS).toContain('account-v1');
   });
 
   it('_inst_bins places the helper on BOTH platform arms', () => {
