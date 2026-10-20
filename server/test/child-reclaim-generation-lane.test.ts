@@ -11,7 +11,7 @@
 // The executor is stubbed at `Deps.childReclaimExec`, the lane's one seam (`child-reclaim-sweep.test.ts`'s idiom).
 // FIXTURE HOMEs only: every registry path is under a `mkTmp` HOME, and the runner is a recording stub.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Bus } from '../src/bus.js';
@@ -28,6 +28,7 @@ import { holdReason } from '../../shared/api.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { codeOnly } from './sourceScan.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -251,10 +252,8 @@ describe('the reads are gathered before the loop, so the loop stays synchronous 
   });
 
   it('the pass awaits twice: the gather, after the throttle and before the decision clock and every loop, and the acts at its end', () => {
-    const src = codeOnly(readFileSync(path.join(srcDir, 'watch.ts'), 'utf8'));
-    const start = src.indexOf('  async sweepChildReclaim(');
-    expect(start).toBeGreaterThan(-1);
-    const body = src.slice(start, src.indexOf('\n  }\n', start));
+    // D-6114: keyed on the method's symbol (scan/symbols.ts), so the slice follows `sweepChildReclaim` wherever it moves.
+    const body = codeOnly(sourceOfSymbol(path.join(srcDir, 'watch.ts'), 'FleetWatcher.sweepChildReclaim'));
     const throttle = body.indexOf('this.lastChildReclaimSweep = gate;');
     const gather = body.indexOf('await this.childReclaimGatherGenerations(records)');
     const decisionClock = body.indexOf('const asked = this.childReclaimLaneNow();');

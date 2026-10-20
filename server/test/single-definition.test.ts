@@ -7847,15 +7847,20 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   const W1A_FILES = ['server/src/watch.ts', 'server/src/server.ts', 'server/src/interruptlog.ts',
     'server/src/coord/routes.ts', 'server/src/coord/childReclaim.ts', 'server/src/coord/expireArchived.ts',
     'server/src/coord/collectTempRoot.ts', 'server/src/coord/endDeadCoordinator.ts', 'server/src/coord/rundefs.ts'];
-  /** The W1a files a read's source text names: its basename quoted or after a `/`; `routes.ts` only beside `coord`;
-   *  nothing when the text (or the reading function's, `context`) names another package. */
+  // D-6114 (Task C0o; ARCH-06 (#554), the W1b slice). The same counting rule over W1b's files: `watch.ts` and
+  // `coord/routes.ts` (shared with W1a), and the three only W1b moves.
+  const W1B_FILES = ['server/src/watch.ts', 'server/src/coord/routes.ts', 'server/src/ccdargv.ts',
+    'server/src/registry.ts', 'server/src/coord/redact.ts'];
+  const RATCHET_FILES = [...new Set([...W1A_FILES, ...W1B_FILES])];
+  /** The ratcheted files a read's source text names: its basename quoted or after a `/`; `routes.ts` and `redact.ts`
+   *  only beside `coord`; nothing when the text (or the reading function's, `context`) names another package. */
   const namesW1aFile = (text: string, context = ''): string[] => {
     const all = `${text}\n${context}`;
     if (/['"`/](?:agent|pwa|ui|ccd|shared)['"`/]/.test(all)) return [];
-    return W1A_FILES.filter((f) => {
+    return RATCHET_FILES.filter((f) => {
       const base = path.basename(f);
       if (!new RegExp(`['"\`/]${esc(base)}['"\`]`).test(text)) return false;
-      return base !== 'routes.ts' || /['"`/]coord['"`/]/.test(all);
+      return (base !== 'routes.ts' && base !== 'redact.ts') || /['"`/]coord['"`/]/.test(all);
     });
   };
   interface SourcePin { line: number; target: string; method: string; literal: string }
@@ -7932,14 +7937,16 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     }
     return out;
   };
-  /** Every tracked or new untracked .ts file under server/test, and its pins' count per W1a file. */
-  const literalSourcePinCounts = (): Record<string, number> => {
+  /** Every tracked or new untracked .ts file under server/test, and its pins' count per file of `files`. */
+  const literalSourcePinCounts = (files: readonly string[] = W1A_FILES): Record<string, number> => {
     const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'server/test/*.ts'],
       { cwd: ccrcRoot, encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
-    const counts: Record<string, number> = Object.fromEntries(W1A_FILES.map((f) => [f, 0]));
+    const counts: Record<string, number> = Object.fromEntries(files.map((f) => [f, 0]));
     for (const f of new Set(r.stdout.split('\0').filter((x) => x && existsSync(path.join(ccrcRoot, x))))) {
-      for (const pin of literalSourcePins(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)) counts[pin.target]! += 1;
+      for (const pin of literalSourcePins(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)) {
+        if (pin.target in counts) counts[pin.target]! += 1;
+      }
     }
     return counts;
   };
@@ -8001,6 +8008,43 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     const counts = literalSourcePinCounts();
     expect(Object.keys(counts)).toEqual(Object.keys(CEILING));
     for (const f of W1A_FILES) {
+      expect(counts[f], `${f}: a new literal source pin — key it on scan/symbols.ts (sourceOfSymbol) `
+        + 'or a parse.ts-based census instead')
+        .toBeLessThanOrEqual(CEILING[f]!);
+    }
+  });
+
+  it('CONTROL (fixture, D-6114): W1b\'s three files are counted the same way, and `redact.ts` only beside `coord`', () => {
+    const pins = (code: string): string[] =>
+      literalSourcePins(code).map((x) => `${x.line} ${x.target.replace('server/src/', '')} ${x.method} ${x.literal}`);
+    expect(pins([
+      "const a = readFileSync(path.join(srcDir, 'ccdargv.ts'), 'utf8');",
+      "expect(a).toContain('x');",
+      "const b = readFileSync(path.join(srcDir, 'registry.ts'), 'utf8');",
+      "expect(b.indexOf('y')).toBe(1);",
+      "const c = readFileSync(path.join(srcDir, 'coord', 'redact.ts'), 'utf8');",
+      'expect(c).toMatch(/z/);',
+      "const d = readFileSync(path.join(srcDir, 'docs', 'redact.ts'), 'utf8');",
+      "expect(d).toContain('w');",
+      "const e = readFileSync(path.join(root, 'pwa', 'src', 'command', 'registry.ts'), 'utf8');",
+      "expect(e).toContain('v');",
+    ].join('\n'))).toEqual(['2 ccdargv.ts toContain x', '4 registry.ts indexOf y', '6 coord/redact.ts toMatch /z/']);
+    expect(Object.keys(literalSourcePinCounts(W1B_FILES))).toEqual(W1B_FILES);
+  });
+
+  // D-6114 (Task C0o; ARCH-06 (#554), the W1b slice). The same rule over W1b's files, its own ceiling, so a slice moved
+  // onto scan/symbols.ts ahead of W1b lowers a row here. Measured on this slice's tip; may only shrink.
+  it('literal source pins over W1b\'s files may only shrink (D-6114; ARCH-06\'s counting rule)', () => {
+    const CEILING: Record<string, number> = {
+      'server/src/watch.ts': 85,
+      'server/src/coord/routes.ts': 40,
+      'server/src/ccdargv.ts': 6,
+      'server/src/registry.ts': 2,
+      'server/src/coord/redact.ts': 0,
+    };
+    const counts = literalSourcePinCounts(W1B_FILES);
+    expect(Object.keys(counts)).toEqual(Object.keys(CEILING));
+    for (const f of W1B_FILES) {
       expect(counts[f], `${f}: a new literal source pin — key it on scan/symbols.ts (sourceOfSymbol) `
         + 'or a parse.ts-based census instead')
         .toBeLessThanOrEqual(CEILING[f]!);
