@@ -7244,6 +7244,36 @@ describe("the account op's builder, wire vocabulary and spawn port each have one
   });
 });
 
+// D-5935 (plan docs/superpowers/plans/2026-10-20-sheet-desktop-arm-and-session-workflow-controls-.md, Task P3-6a).
+// Inserted here, above every open PR's hunk and below every line cited by number. Which workflow controls a Claude
+// Code version has is server-only knowledge: `WORKFLOW_CONTROLS`, its recipe and drive types and its slot list are
+// declared once, in server/src/workflows/controls.ts, so the table never reaches `shared/` (the PWA bundle) or the PWA
+// itself, where the PWA would start deciding what a version can do. The act names are the wire's, declared once in
+// shared/workflows.ts.
+describe('the workflow-control table is defined once, in server/src (D-5935)', () => {
+  const holders = (re: RegExp, planted: readonly (readonly [string, string])[] = []): string[] =>
+    [...ALL.map((f) => [rel(f), stallCode(f)] as const), ...planted].filter(([, t]) => re.test(t)).map(([p]) => p).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  const SERVER_ONLY = ['WORKFLOW_CONTROLS', 'WORKFLOW_CONTROL_SLOTS', 'WorkflowControlSlot', 'WorkflowControlDrive',
+    'WorkflowControlRecipe', 'WorkflowControlTable'] as const;
+  it('CONTROL: the pattern sees a declaration and passes over a use; a copy in shared/ is seen beside the original', () => {
+    expect(decl('WORKFLOW_CONTROLS').test('export const WORKFLOW_CONTROLS: WorkflowControlTable = {};')).toBe(true);
+    expect(decl('WorkflowControlDrive').test('export type WorkflowControlDrive =')).toBe(true);
+    expect(decl('WORKFLOW_CONTROLS').test('const recipe = WORKFLOW_CONTROLS[version];')).toBe(false);
+    expect(holders(decl('WORKFLOW_CONTROLS'), [['shared/workflows.ts', 'export const WORKFLOW_CONTROLS = {};']]))
+      .toEqual(['server/src/workflows/controls.ts', 'shared/workflows.ts']);
+  });
+  it('the table and its types are declared once, in server/src/workflows/controls.ts', () => {
+    for (const c of SERVER_ONLY) expect(holders(decl(c)), c).toEqual(['server/src/workflows/controls.ts']);
+  });
+  it('WorkflowControlAct is declared once, in shared/workflows.ts', () => {
+    expect(holders(decl('WorkflowControlAct'))).toEqual(['shared/workflows.ts']);
+  });
+  it('nothing under shared/ or pwa/ names the table', () => {
+    expect(holders(/\bWORKFLOW_CONTROLS\b/).filter((p) => !p.startsWith('server/src/'))).toEqual([]);
+  });
+});
+
 // Docs W5 part 1, Task 1 (spec 2026-10-01 3.11, amended 2026-10-13): the permalink builder, its answer type and the
 // one private URL assembler are declared once, in shared/docs.ts. A second `githubUrlAt` anywhere in the four roots
 // is a second assembler (M3.17's drift), and a second `githubPermalink` is a second Share link rule. APPENDED after

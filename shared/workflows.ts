@@ -67,3 +67,9 @@ export const WORKFLOW_EVICT_MS = 30_000;
 
 /** The most agents one row carries on the wire; a run measured up to 629. */
 export const WORKFLOW_AGENTS_MAX = 120;
+
+/** The workflow controls a run may offer (D-5935, #641), and only these three.
+ *  Which of them a Claude Code version has, and how each is driven, is the
+ *  server's measured table (`server/src/workflows/controls.ts`), never this
+ *  bundle's: `shared/` ships in the PWA, so the table does not live here. */
+export type WorkflowControlAct = 'stop-run' | 'stop-agent' | 'skip-agent';
