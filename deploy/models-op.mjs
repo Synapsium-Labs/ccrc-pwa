@@ -76,8 +76,8 @@ import {
   modelEnvBlock, readRegular,
 } from '../shared/modelenv.mjs';
 import {
-  AdvanceInvalid, backfillAdvance, canaryEffort, chooseCandidate, familyOf, parseAdvance, reconcilePending,
-  recordFailure, recordMove, resolveEffort,
+  AdvanceInvalid, REASON_MAX, backfillAdvance, canaryEffort, chooseCandidate, familyOf, parseAdvance,
+  reconcilePending, recordFailure, recordMove, resolveEffort,
 } from '../shared/model-advance.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
@@ -470,14 +470,33 @@ function writeAdvance(id, advance) {
  *  comes back is not what is on disk (created here, or an intent settled), so the caller writes even when its own
  *  change is a no-op. ANY lane: a hand act is recorded whatever the probe, and a probe with no `SEED_FAMILIES` row
  *  seeds no family, so its empty classes stay unfilled; only the codex arm ever advances a class (`advance-backfill`
- *  and `advance-plan` say why not for every other lane). */
+ *  and `advance-plan` say why not for every other lane).
+ *  WHAT A SETTLED INTENT RECORDED, when it had LANDED (D-5216), for the caller's answer: once the caller writes, the
+ *  intent is gone from disk, so no later writer could report it. Every writer that settles one names it
+ *  (`recoveredField`), so a move the hourly step never sees, because a hand verb settled it first, still reaches
+ *  whoever ran that verb.
+ *    `recoveredMove`  `{class, from, to, how}`, else null. `how` is the intent's own: `advance` for an automatic
+ *                     advance's (its intent carries no `how`), `hand` for a hand set-class's (`beginHandMove`,
+ *                     written before that verb's registry rename). A landed hand move is reported as hand, never
+ *                     as an advance: it records the operator's own act, and owes no push.
+ *    `recovered`      true only for a landed automatic advance, the one whose history entry carries the
+ *                     `recovered: true` mark. `reconcilePending` answers `recovered: true` for a landed intent of
+ *                     EITHER shape, so the intent's `how` is read here, before it is settled. */
 function advanceForWrite(id, registry) {
   const cur = readAdvance(id);
   if (cur.err !== undefined) return { err: cur.err };
   const base = cur.advance ?? backfillAdvance({ registry, seedFamilies: SEED_FAMILIES[registry.probe] ?? null });
+  const intent = base.pending;
   const { advance, recovered } = reconcilePending(base, registry);
-  return { advance, recovered, dirty: cur.advance === null || base.pending !== null };
+  const dirty = cur.advance === null || intent !== null;
+  if (!recovered) return { advance, recovered: false, recoveredMove: null, dirty };
+  const how = intent.how === 'hand' ? 'hand' : 'advance';
+  return { advance, recovered: how === 'advance', dirty,
+    recoveredMove: { class: intent.class, from: intent.from, to: intent.to, how } };
 }
+
+/** An answer's `recoveredMove` field (`advanceForWrite`, D-5216): present only when a settled intent had landed. */
+const recoveredField = (move) => (move === null ? {} : { recoveredMove: move });
 
 /** Create the lane's advance file from its registry when there is none, and NEVER rewrite one that exists,
  *  readable or not: `{created: true}`, `{created: false, why}` (`present`, or the read's own word), or `{err}` when
@@ -524,16 +543,18 @@ function seedForInit(id, registry, createIfAbsent) {
  *  off-grammar id, D-5195, `previous` untouched), or drops it when the rename never happened.
  *  Loaded through `advanceForWrite(id, before)`: an intent an earlier crash left is settled first, and an absent file
  *  is backfilled from the registry BEFORE this change. It never refuses, because set-class never has: `{note: null}`
- *  when the intent is on disk, else `{note}` naming what failed, and the registry change goes ahead unrecorded. A
+ *  when the intent is on disk, else `{note}` naming what failed, and the registry change goes ahead unrecorded.
+ *  `recoveredMove` is the earlier intent's move when it had landed and this write recorded it (D-5216), else null:
+ *  set-class names it in its answer. A
  *  registry write that then fails leaves the intent behind; the next locked writer drops it, the pin still `from`,
  *  except where `from` and `to` are one (`none` on a class already empty), whose only effect, the family cleared, is
  *  what the call asked for. */
 function beginHandMove(id, before, after, cls) {
   const loaded = advanceForWrite(id, before);
   if (loaded.err !== undefined) {
-    return { note: `${loaded.err[0]}: ${loaded.err[1]} The class registry was written; the advance file was left as `
-      + 'it is, so this change has no history entry and no class family was rewritten. Fix or delete that file (the '
-      + 'next write re-creates it from the registry, with no holds and no history).' };
+    return { recoveredMove: null, note: `${loaded.err[0]}: ${loaded.err[1]} The class registry was written; the `
+      + 'advance file was left as it is, so this change has no history entry and no class family was rewritten. Fix '
+      + 'or delete that file (the next write re-creates it from the registry, with no holds and no history).' };
   }
   const intent = {
     how: 'hand', class: cls, from: before.classes[cls], to: after.classes[cls],
@@ -541,8 +562,12 @@ function beginHandMove(id, before, after, cls) {
     at: now(),
   };
   const w = writeAdvance(id, { ...loaded.advance, pending: intent });
-  return { note: w === null ? null : `${w[0]}: ${w[1]} The class registry was written; the advance file is as it `
-    + 'was, so this change has no history entry and no class family was rewritten.' };
+  // A write that failed recorded nothing, the earlier intent included: it stays for the next locked writer to report.
+  if (w !== null) {
+    return { recoveredMove: null, note: `${w[0]}: ${w[1]} The class registry was written; the advance file is as it `
+      + 'was, so this change has no history entry and no class family was rewritten.' };
+  }
+  return { recoveredMove: loaded.recoveredMove, note: null };
 }
 
 /** A set-class's registry-write refusal once its hand intent is on disk (`beginHandMove` answered no note):
@@ -588,17 +613,33 @@ function advanceIneligible(account, registry) {
 }
 
 /** `advance-backfill` (auto-advance spec §2.1): give a codex-kind lane whose registry probe is `codex` its advance
- *  file when it has none (`backfillOnce`), and never rewrite one that exists. A lane with a class registry that is
- *  not codex-kind, or whose registry probe is not `codex`, answers `created: false` with why (`lane-not-codex-kind`,
- *  `probe-not-codex`: `advanceIneligible`'s word), never a refusal (D-5198); so does a file it cannot read, with the
- *  read's word. An Anthropic lane and a lane with no class registry never reach here: `main`'s gates refuse them
- *  first (`anthropic-lane`, `no-registry`), and the hourly step (W2) asks neither: only a lane whose probe is `codex`
- *  and whose probe, materialise and LiteLLM render all succeeded. */
+ *  file when it has none (`backfillOnce`). In a file that EXISTS it settles a pending intent under the same lock and
+ *  rewrites nothing else (plan W2 Task 9, D-5215): the hourly advance step calls this first, so a move a SIGTERM cut
+ *  short after its registry rename is recorded within the hour even when its class then has no candidate, and so is
+ *  a hand set-class cut short after its rename (W1's hand intent). `recoveredMove` appears only when that intent had
+ *  landed, with the intent's `how`: `advance`, or `hand` for a hand set-class's, which is reported as hand and never
+ *  as an advance (D-5216). A lane with a class registry that is not codex-kind, or whose registry probe is not
+ *  `codex`, answers `created: false` with why (`lane-not-codex-kind`, `probe-not-codex`: `advanceIneligible`'s
+ *  word), never a refusal (D-5198); so does a file it cannot read, with the read's word. An Anthropic lane and a
+ *  lane with no class registry never reach here: `main`'s gates refuse them first (`anthropic-lane`,
+ *  `no-registry`), and the hourly step (W2) asks neither: only a lane whose probe is `codex` and whose probe,
+ *  materialise and LiteLLM render all succeeded. */
 function backfillOp(a, account, registry) {
   const why = advanceIneligible(account, registry);
   const b = why === null ? backfillOnce(a.id, registry) : { created: false, why };
   if (b.err !== undefined) return refuse(1, b.err[0], b.err[1]);
-  out({ ok: true, op: 'advance-backfill', id: a.id, created: b.created, ...(b.created ? {} : { why: b.why }) });
+  let recoveredMove = null;
+  if (b.created === false && b.why === 'present') {
+    const s = advanceForWrite(a.id, registry);
+    if (s.err !== undefined) return refuse(1, s.err[0], s.err[1]);
+    if (s.dirty) {
+      const w = writeAdvance(a.id, s.advance);
+      if (w !== null) return refuse(1, w[0], w[1]);
+    }
+    recoveredMove = s.recoveredMove;
+  }
+  out({ ok: true, op: 'advance-backfill', id: a.id, created: b.created, ...(b.created ? {} : { why: b.why }),
+    ...recoveredField(recoveredMove) });
   return 0;
 }
 
@@ -612,7 +653,8 @@ const refuseAdvance = (err, opName, id) => refuse(1, err[0], `${err[1]} ${opName
  *  brake the automatic advance honours. They touch only the lane's advance file — the registry, its pins and the
  *  lane's settings stay as they are, so nothing re-materialises. A hold records WHEN (`now()`) and the ACT that set
  *  it, `hand` here (D-5190). A second hold, or a release of a class not held, changes nothing and says so
- *  (`changed: false`); a pending intent found on the way is still settled and written. */
+ *  (`changed: false`); a pending intent found on the way is still settled and written, and the answer names its move
+ *  when it had landed (`recoveredMove`, D-5216). */
 function holdOp(opName, a, account, registry, catalogue, win) {
   const loaded = advanceForWrite(a.id, registry);
   if (loaded.err !== undefined) return refuseAdvance(loaded.err, opName, a.id);
@@ -630,7 +672,8 @@ function holdOp(opName, a, account, registry, catalogue, win) {
     const w = writeAdvance(a.id, loaded.advance);
     if (w !== null) return refuse(1, w[0], w[1]);
   }
-  out({ ok: true, op: opName, class: a.class, changed, ...describe(account, registry, catalogue, win) });
+  out({ ok: true, op: opName, class: a.class, changed, ...describe(account, registry, catalogue, win),
+    ...recoveredField(loaded.recoveredMove) });
   return 0;
 }
 
@@ -666,6 +709,8 @@ function sayWhatChanged(detail, rest) {
  *    never happened. A pin already on `previous.model` at ANOTHER level (a hand set-class back to it keeps the
  *    class's level) has the level put back, and that change is recorded: a `revert` entry whose `from` and `to` are
  *    that one model, with the `effort` pair. The final write's note says, for each shape, what is not recorded.
+ *  - A PENDING INTENT found on the way is settled into the hold's write, the brake's, and the answer names its move
+ *    when it had landed (`recoveredMove`, D-5216). A revert of the very class that move advanced reverts it.
  */
 function revertOp(a, account, registry, catalogue, win) {
   const loaded = advanceForWrite(a.id, registry);
@@ -766,7 +811,8 @@ function revertOp(a, account, registry, catalogue, win) {
     ...(effortFrom !== effortTo ? { effort: { from: effortFrom, to: effortTo } } : {}),
   });
   const w2 = writeAdvance(a.id, done);
-  const answer = { ok: true, op: 'revert', class: a.class, from, to, ...describe(account, validated, catalogue, win) };
+  const answer = { ok: true, op: 'revert', class: a.class, from, to, ...describe(account, validated, catalogue, win),
+    ...recoveredField(loaded.recoveredMove) };
   if (w2 !== null) {
     // What the file still says, true for each shape: previous is on record, the hold is on disk, and the history
     // lacks the move or the level's change this run made, if it made one.
@@ -1143,11 +1189,15 @@ const OPS = {
   // as every caller before it expects. Any other value is refused.
   materialise: { keys: ['file', 'id', 'check'], required: ['file', 'id'], writes: true },
   rm: { keys: ['file', 'id'], required: ['file', 'id'], writes: true },
-  // auto-advance spec §2.1: create the lane's advance file when it has none (`backfillOp`); never rewrites one.
+  // auto-advance spec §2.1: create the lane's advance file when it has none (`backfillOp`), and settle a pending
+  // intent in one that exists (plan W2 Task 9, D-5215); it rewrites nothing else.
   'advance-backfill': { keys: ['file', 'id'], required: ['file', 'id'], writes: true },
   // Auto-advance plan W2 Task 8: what the hourly refresh may advance on this
   // lane, and to what. READ-ONLY: the backfill is `advance-backfill`'s.
   'advance-plan': { keys: ['file', 'id'], required: ['file', 'id'], writes: false },
+  // Auto-advance plan W2 Task 9: one class's move, or one failed canary's
+  // record. It writes, and ONLY under the lane-files lock its bash caller holds.
+  'advance-commit': { keys: ['file', 'id', 'class', 'from', 'to', 'canary', 'reason'], required: ['file', 'id', 'class', 'from', 'to', 'canary'], writes: true },
   // auto-advance spec §2.7 (D12): the hold the automatic advance honours, and the one-act revert.
   hold: { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
   release: { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
@@ -1342,6 +1392,34 @@ function windowOp(opName, a, account, registry, catalogue, reading) {
   return 0;
 }
 
+/** One class's candidate this hour and the two effort levels that go with it (auto-advance spec §2.2 to §2.3):
+ *  `chooseCandidate`'s `{candidate, reason, blocked}`, plus
+ *    `effortTo`      the level the class would carry on the candidate (`resolveEffort`, ranked by its pin's own row,
+ *                    D-5200; null: none);
+ *    `canaryEffort`  the lowest level the candidate lists (null: it lists none).
+ *  Both null with no candidate. ONE computation for `advance-plan`, which reports it before the canary, and
+ *  `advance-commit`, which re-checks it under the lock after the canary and writes its `effortTo`, so the level a
+ *  plan names and the level a commit writes cannot differ. `family` is the class's stored family, which
+ *  `chooseCandidate` reads for an EMPTY class only (D-5992). */
+function candidateFor(registry, catalogue, cls, family) {
+  const choice = chooseCandidate({ registry, catalogue, cls, family });
+  if (choice.candidate === null) return { ...choice, effortTo: null, canaryEffort: null };
+  const rowOf = (id) => catalogue.models.find((m) => m.id === id);
+  const pin = registry.classes[cls];
+  const next = rowOf(choice.candidate);
+  const prev = pin === null ? undefined : rowOf(pin);
+  const newEfforts = next === undefined ? [] : next.efforts;
+  return {
+    ...choice,
+    effortTo: resolveEffort({
+      stored: isObj(registry.effort) ? registry.effort[cls] : undefined,
+      oldEfforts: prev === undefined ? null : prev.efforts,
+      newEfforts,
+    }) ?? null,
+    canaryEffort: canaryEffort(newEfforts),
+  };
+}
+
 /** `advance-plan` (auto-advance spec §2.2 to §2.3; plan W2 Task 8): READ-ONLY.
  *  Which classes of this lane the hourly refresh may advance, and to what — the
  *  question the refresh asks before it asks anything of the lane itself.
@@ -1368,7 +1446,8 @@ function windowOp(opName, a, account, registry, catalogue, reading) {
  *  Per candidate, `effortTo` is the level the class would carry on the new
  *  model (`resolveEffort`, ranked by the old pin's row, D-5200; null: none)
  *  and `canaryEffort` the lowest level the new model lists (null: it lists
- *  none). A HELD class is reported with its candidate and `held: true`. A
+ *  none), both from `candidateFor`, which `advance-commit` re-checks with. A
+ *  HELD class is reported with its candidate and `held: true`. A
  *  class `chooseCandidate` blocks (`pin-grammar`, `shared-family`) has no
  *  candidate. A candidate on a lane whose windows file cannot be read is
  *  KEPT and blocked `windows-unreadable` (D-5193): the commit would abandon on
@@ -1394,27 +1473,213 @@ function advancePlanOp(a, account, registry, catalogue, win) {
       candidate: null, reason: null, blocked: null, effortTo: null, canaryEffort: null,
     };
     if (why !== null) return row;
-    const choice = chooseCandidate({ registry, catalogue, cls, family: stored });
-    row.candidate = choice.candidate;
-    row.reason = choice.reason;
-    row.blocked = choice.blocked;
-    if (choice.candidate !== null) {
-      const next = catalogue.models.find((m) => m.id === choice.candidate);
-      const prev = pin === null ? undefined : catalogue.models.find((m) => m.id === pin);
-      const newEfforts = next === undefined ? [] : next.efforts;
-      row.effortTo = resolveEffort({
-        stored: isObj(registry.effort) ? registry.effort[cls] : undefined,
-        oldEfforts: prev === undefined ? null : prev.efforts,
-        newEfforts,
-      }) ?? null;
-      row.canaryEffort = canaryEffort(newEfforts);
-      if (row.blocked === null && win.state === 'unreadable') row.blocked = 'windows-unreadable';
+    Object.assign(row, candidateFor(registry, catalogue, cls, stored));
+    if (row.candidate !== null && row.blocked === null && win.state === 'unreadable') {
+      row.blocked = 'windows-unreadable';
     }
     return row;
   });
   out({ ok: true, op: 'advance-plan', id: a.id, eligible: why === null, why,
     file: adv === null ? 'absent' : 'ok', classes });
   return 0;
+}
+
+/** A history `reason` as the advance file's reader accepts it (plan §3.1):
+ *  printable ASCII, at most `REASON_MAX` characters, the one number
+ *  `shared/model-advance.mjs` defines and its `parseAdvance` holds every
+ *  reason to. Every reason this file records passes through it, the canary's
+ *  (`--reason`) and its own, because one the reader refused would make the
+ *  whole advance file unreadable, and every later advance on the lane blocked
+ *  behind it. */
+const historyReason = (text) =>
+  String(text).replace(/[^\x20-\x7e]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, REASON_MAX);
+
+/** `advance-commit` (auto-advance spec §2.1 D21 and §2.3 steps 4 to 6; plan W2
+ *  Task 9): one class's move, or one failed canary's record, under the
+ *  lane-files lock THE CALLER holds (`ccd/ccrc`'s `_models_node_locked`; this
+ *  file takes no lock). `outcome` is `moved`, `failed` or `abandoned` (with
+ *  `why`); `push` is true for a move and for a failure not already on record
+ *  (D-5192).
+ *
+ *  THE ORDER of skeleton §3.3. A lane the advance step never touches
+ *  (`advanceIneligible`: not codex-kind, or its probe not codex) abandons
+ *  `not-eligible` before anything is read (D-5198). Otherwise the advance file
+ *  is loaded through the one writer loader, `advanceForWrite`, and any pending
+ *  intent SETTLED FIRST, so a crash gap heals even when this commit then
+ *  abandons; an abandon writes the file only when that load changed it
+ *  (`dirty`: created, or an intent settled), as W1's verbs do. `recoveredMove`
+ *  names an intent that had landed, with its `how`, so a hand set-class's is
+ *  reported as hand and never as an advance; `recovered` is true for a landed
+ *  automatic advance only (D-5216).
+ *
+ *  THE RE-CHECK (D21). The canary ran OUTSIDE the lock, so what it was planned
+ *  on is read again here, under it, and the move is ABANDONED when any of it
+ *  changed:
+ *    `catalogue-stale`     the catalogue is absent or stale (a passed canary);
+ *    `windows-unreadable`  the measured windows cannot be read, so the env block
+ *                          the move would write cannot be decided (a passed
+ *                          canary; D-5193);
+ *    `held`                a Hold landed during the canary: the Hold wins;
+ *    `pin-moved`           the class no longer pins `--from` (a hand set-class,
+ *                          or an overlapping refresh that moved it first);
+ *    `candidate-changed`   the family rule no longer answers `--to`
+ *                          (`candidateFor`, advance-plan's own computation, so
+ *                          the effort the commit writes is the one the plan
+ *                          named).
+ *
+ *  THE MOVE: validate the moved registry and its env block; write the INTENT
+ *  (`pending`) to the advance file; rename the registry; materialise; and only
+ *  then write `previous`, the history entry and clear `pending`. A SIGTERM
+ *  between the rename and the materialise (the refresh unit's 300 s bound)
+ *  leaves the intent on disk, and the next locked writer reconciles it
+ *  (D-5188; the hourly step's backfill is the first,
+ *  D-5215). A materialise that fails restores the
+ *  previous registry under the same lock and materialises it again, and
+ *  records a failed advance whose reason names both outcomes; `restored` says
+ *  whether the previous registry AND its files are back
+ *  (D-5208). When even the previous registry cannot
+ *  be written back, the failure is recorded and the intent KEPT
+ *  (D-5217): the registry does pin `--to`, so
+ *  the next locked writer records the move as landed once the next refresh's
+ *  own materialise has rewritten the lane's files from it. `previous` carries
+ *  the effort the class had (D-5189), so a Revert
+ *  restores it.
+ *
+ *  A failed advance's history entry records what the canary answered:
+ *  `failed` for a refused canary, `passed` for a move that failed after it
+ *  (`fail` sets it on the entry `recordFailure` returns). A moved registry that
+ *  does not validate is a failed advance too, so doctor names it
+ *  (D-5207). */
+function advanceCommitOp(a, account, registry, catalogue, win) {
+  if (!CLASSES.includes(a.class)) {
+    return refuse(1, 'unknown-class', `"${a.class}" is not a class: the four are ${CLASSES.join(', ')}.`, 'class');
+  }
+  if (a.canary !== 'passed' && a.canary !== 'failed') {
+    return refuse(2, 'bad-argv', `--canary takes passed or failed (got ${JSON.stringify(a.canary)}).`);
+  }
+  if (a.from !== 'none' && !MODEL_ID_RE.test(a.from)) {
+    return refuse(1, 'bad-model-id', `--from "${a.from}" is neither a model id nor "none".`, 'from');
+  }
+  if (!MODEL_ID_RE.test(a.to)) return refuse(1, 'bad-model-id', `--to "${a.to}" is not a model id.`, 'to');
+  const cls = a.class;
+  const from = a.from === 'none' ? null : a.from;
+  const effortFrom = isObj(registry.effort) && typeof registry.effort[cls] === 'string' ? registry.effort[cls] : null;
+  let effortTo = null;
+  let recovered = false;
+  let recoveredMove = null;
+  const answer = (outcome, extra = {}) => {
+    out({ ok: true, op: 'advance-commit', id: a.id, class: cls, outcome, from, to: a.to,
+      effort: { from: effortFrom, to: effortTo }, push: false, recovered, ...recoveredField(recoveredMove), ...extra });
+    return 0;
+  };
+
+  // 1. A lane the advance step never touches: nothing is read or written.
+  if (advanceIneligible(account, registry) !== null) return answer('abandoned', { why: 'not-eligible' });
+  // 2. The advance file, through the one writer loader: a pending intent a
+  //    SIGTERM left behind is settled before anything is re-checked.
+  const loaded = advanceForWrite(a.id, registry);
+  if (loaded.err !== undefined) return refuse(1, loaded.err[0], loaded.err[1]);
+  let adv = loaded.advance;
+  recovered = loaded.recovered;
+  recoveredMove = loaded.recoveredMove;
+  const abandon = (why) => {
+    if (loaded.dirty) {
+      const w = writeAdvance(a.id, adv);
+      if (w !== null) return refuse(1, w[0], w[1]);
+    }
+    return answer('abandoned', { why });
+  };
+
+  // 3. The re-check: what the move needs, then the Hold, the pin and (passed
+  //    only) the candidate.
+  if (a.canary === 'passed') {
+    if (catalogue === null || catalogue.stale) return abandon('catalogue-stale');
+    if (win.state === 'unreadable') return abandon('windows-unreadable');
+  }
+  if (adv.classes[cls].hold !== null) return abandon('held');
+  if (registry.classes[cls] !== from) return abandon('pin-moved');
+  /** One failed advance on record (D-5192), with what the
+   *  canary answered, and `pending` as given (null: cleared). W1's
+   *  `recordFailure` writes `canary: 'failed'` on the entry it records — always
+   *  the class's NEWEST, updated or appended — so a move that failed after a
+   *  PASSED canary says so on that entry. */
+  const fail = (reason, canary, extra = {}, pending = null) => {
+    const f = recordFailure(adv, cls, { at: now(), from, to: a.to, reason });
+    const history = f.advance.classes[cls].history;
+    history[history.length - 1].canary = canary;
+    const w = writeAdvance(a.id, { ...f.advance, pending });
+    if (w !== null) return refuse(1, w[0], w[1]);
+    return answer('failed', { reason, push: f.isNew, ...extra });
+  };
+  if (a.canary === 'failed') return fail(historyReason(a.reason ?? '') || 'the canary failed', 'failed');
+  const choice = candidateFor(registry, catalogue, cls, adv.classes[cls].family);
+  if (choice.blocked !== null || choice.candidate !== a.to) return abandon('candidate-changed');
+
+  // 4. The moved registry, its effort resolved against the old pin's row
+  //    (`candidateFor`: the level advance-plan named).
+  effortTo = choice.effortTo;
+  const next = JSON.parse(JSON.stringify(registry));
+  next.classes[cls] = a.to;
+  if (effortTo === null) {
+    if (isObj(next.effort)) {
+      delete next.effort[cls];
+      if (Object.keys(next.effort).length === 0) delete next.effort;
+    }
+  } else {
+    next.effort = { ...(isObj(next.effort) ? next.effort : {}), [cls]: effortTo };
+  }
+
+  // 5. Validate before anything is written (rule 2).
+  const windows = windowsOf(win);
+  let validated;
+  try {
+    validated = parseRegistry(next, catalogue);
+    modelEnvBlock(validated, catalogue, windows);
+  } catch (e) {
+    if (!(e instanceof RegistryInvalid) && !(e instanceof ModelEnvInvalid)) throw e;
+    return fail(historyReason(`the moved registry does not validate: ${e.message}`), 'passed', { restored: true });
+  }
+
+  // 6. The intent, BEFORE the rename (D-5188).
+  const at = now();
+  const intent = { class: cls, from, to: a.to, effortFrom, effortTo, at };
+  let w = writeAdvance(a.id, { ...adv, pending: intent });
+  if (w !== null) return refuse(1, w[0], w[1]);
+
+  // 7. The rename, then 8. materialise, or 9. the restore.
+  w = writeRegistry(a.id, validated);
+  if (w !== null) {
+    return fail(historyReason(`the moved registry could not be written (${w[0]}): ${w[1]}`), 'passed', { restored: true });
+  }
+  const mat = materialise(account, validated, catalogue, windows);
+  if (mat.err !== undefined) {
+    const back = writeRegistry(a.id, registry);
+    if (back !== null) {
+      // The registry still pins `--to`: the failure is recorded (doctor's
+      // held-back reads it) and the intent is KEPT, so the next locked writer
+      // records the move as landed (D-5217).
+      return fail(historyReason(`materialise failed (${mat.err[0]}) and the previous registry could not be written `
+        + `back (${back[0]}): ${mat.err[1]}`), 'passed', { restored: false }, intent);
+    }
+    const again = materialise(account, registry, catalogue, windows);
+    if (again.err !== undefined) {
+      return fail(historyReason(`materialise failed (${mat.err[0]}) and re-materialising the previous registry failed `
+        + `too (${again.err[0]}): ${mat.err[1]}`), 'passed', { restored: false });
+    }
+    return fail(historyReason(`materialise failed (${mat.err[0]}), so the previous registry was restored: ${mat.err[1]}`),
+      'passed', { restored: true });
+  }
+
+  // 10. The commit: previous with its effort, the ok entry, no intent.
+  adv = recordMove({ ...adv, pending: null,
+    classes: { ...adv.classes, [cls]: { ...adv.classes[cls], previous: { model: from, effort: effortFrom } } } },
+  cls, { at, how: 'advance', from, to: a.to, ok: true, canary: 'passed',
+    ...(effortFrom === effortTo ? {} : { effort: { from: effortFrom, to: effortTo } }) });
+  w = writeAdvance(a.id, adv);
+  // A history that could not be written leaves the intent on disk: the next
+  // locked writer records the move as landed. The class DID move.
+  return answer('moved', { push: true,
+    ...(w === null ? {} : { reason: historyReason(`moved, but its history could not be written (${w[0]})`) }) });
 }
 
 /** `--key value` pairs, refused rather than ignored, with a strict `i += 2`
@@ -1798,6 +2063,7 @@ function main(argv) {
   // (the gate above), and both are refused on an Anthropic lane (the gate
   // before the catalogue read), as every op but `show` is.
   if (opName === 'advance-plan') return advancePlanOp(a, account, registry, catalogue, win);
+  if (opName === 'advance-commit') return advanceCommitOp(a, account, registry, catalogue, win);
   const next = JSON.parse(JSON.stringify(registry));
 
   if (opName === 'set-class') {
@@ -2013,7 +2279,8 @@ function main(argv) {
   const mat = materialise(account, validated, catalogue, windowsOf(win));
   if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
   const advanceNote = hand === null ? null : (hand.note ?? settleHandMove(a.id, validated));
-  const answer = { ok: true, op: opName, ...extra, ...describe(account, validated, catalogue, win) };
+  const answer = { ok: true, op: opName, ...extra, ...describe(account, validated, catalogue, win),
+    ...recoveredField(hand === null ? null : hand.recoveredMove) };
   if (advanceNote !== null) {
     answer.advanceNote = advanceNote;
     process.stderr.write(`${SELF}: ${advanceNote}\n`);

@@ -27,7 +27,7 @@ import type { ModelClass, Registry } from '../../shared/models.js';
 import { parseRegistry } from '../../shared/models.js';
 // Auto-advance plan W2 (Tasks 8 and 9). Only names this file does not bind yet:
 // W1 already imports `parseRegistry` and the type `Advance`.
-import { BLOCKED_CAUSES } from '../../shared/model-advance.mjs';
+import { BLOCKED_CAUSES, REASON_MAX } from '../../shared/model-advance.mjs';
 import type { ClassAdvance } from '../../shared/model-advance.mjs';
 import { contextWindowFor, modelEnvBlock } from '../../shared/modelenv.mjs';
 import { parseCatalogue, parseWindows } from '../../shared/models.js';
@@ -3208,6 +3208,7 @@ describe('the account-id guard applies to every op, not just rm (C6)', () => {
     ['release', ['--class', 'opus']],
     ['revert', ['--class', 'opus']],
     ['advance-plan', []],
+    ['advance-commit', ['--class', 'opus', '--from', 'none', '--to', 'model-6-delta', '--canary', 'passed']],
   ] as [string, string[]][])('%s refuses a bad --id', (opName, extra) => {
     const r = op(opName, '--file', rosterPath(), '--id', '../etc/passwd', ...extra);
     expect(r.code).toBe(1);
@@ -3700,5 +3701,407 @@ describe('advance-plan (auto-advance spec §2.2 to §2.3; plan W2 Task 8)', () =
     expect(r.code, r.stdout + r.stderr).toBe(code);
     expect(plan().code).toBe(code);
     expect(snapshot()).toEqual(before);
+  });
+});
+
+describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)', () => {
+  const NOW = '2026-10-22T10:05:12Z';
+  const LATER = '2026-10-22T11:05:09Z';
+  const HOLD = { at: '2026-10-22T09:00:00Z', by: 'hand' };
+  /** The intent an opus move leaves under the lock before its registry rename. */
+  const INTENT = { class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma', effortFrom: 'max', effortTo: 'xhigh',
+    at: '2026-10-22T09:05:11Z' };
+  /** lane-a's registry as that move's rename left it: opus already on the new model. */
+  const MOVED_REGISTRY = `${JSON.stringify({ ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-6.1-gamma' },
+    effort: { ...STEP_REGISTRY.effort, opus: 'xhigh' } }, null, 2)}\n`;
+  /** What an answer names for that move once a locked writer settles it as landed: an automatic advance's. */
+  const RECOVERED = { class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma', how: 'advance' };
+  /** A hand set-class's intent (W1 Task 5's `beginHandMove`), written before ITS registry rename
+   *  (D-5188): fable set by hand to the delta model. */
+  const HAND_INTENT = { how: 'hand', class: 'fable', from: null, to: 'model-6-delta', emptied: [],
+    at: '2026-10-22T09:05:11Z' };
+  /** lane-a's registry as that set-class's rename left it: fable already on the delta model. */
+  const HAND_REGISTRY = `${JSON.stringify({ ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes,
+    fable: 'model-6-delta' } }, null, 2)}\n`;
+  /** The entry that hand move becomes: the operator's act, so no `recovered` mark (W1 Task 3). */
+  const HAND_ENTRY = { at: '2026-10-22T09:05:11Z', how: 'hand', from: null, to: 'model-6-delta', ok: true,
+    canary: 'not-run' };
+  /** What an answer names for it: reported as hand, never as an advance (D-5216). */
+  const HAND_MOVE = { class: 'fable', from: null, to: 'model-6-delta', how: 'hand' };
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  const commit = (o: { id?: string; cls?: string; from?: string; to?: string; canary?: string; reason?: string;
+    now?: string } = {}): Result =>
+    opEnv({ CCRC_MODELS_NOW: o.now ?? NOW }, 'advance-commit', '--file', rosterPath(), '--id', o.id ?? 'lane-a',
+      '--class', o.cls ?? 'opus', '--from', o.from ?? 'model-5.6-gamma', '--to', o.to ?? 'model-6.1-gamma',
+      '--canary', o.canary ?? 'passed', ...(o.reason === undefined ? [] : ['--reason', o.reason]));
+  const backfill = (): Result =>
+    opEnv({ CCRC_MODELS_NOW: NOW }, 'advance-backfill', '--file', rosterPath(), '--id', 'lane-a');
+  const opusOf = (): ClassAdvance => laneAdvance().classes.opus;
+  const env = (): Record<string, string> => settingsOf(STEP_SETTINGS).env;
+  /** `advanceCommitOp`'s own source, for the two order pins no fixture can stop between two writes. */
+  const commitSource = (): string => {
+    const src = fs.readFileSync(OP, 'utf8');
+    const start = src.indexOf('function advanceCommitOp(');
+    expect(start, 'deploy/models-op.mjs has no advanceCommitOp').toBeGreaterThan(0);
+    return src.slice(start, src.indexOf('\n}\n', start));
+  };
+
+  beforeEach(() => { seed(stepRoster({ ...STEP_PORTS, authDir: codexAuthDir('lane-a') })); });
+
+  it('a passed canary moves the class: pin, resolved effort, settings env, previous, the ok entry, no pending, a push', () => {
+    plantStep();
+    const r = commit();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toEqual({ ok: true, op: 'advance-commit', id: 'lane-a', class: 'opus', outcome: 'moved',
+      from: 'model-5.6-gamma', to: 'model-6.1-gamma', effort: { from: 'max', to: 'xhigh' }, push: true,
+      recovered: false });
+    expect(classesOf('lane-a')['opus']).toBe('model-6.1-gamma');
+    expect((registryOf('lane-a')['effort'] as Record<string, string>)['opus']).toBe('xhigh');
+    expect(env()['ANTHROPIC_DEFAULT_OPUS_MODEL']).toBe('model-6.1-gamma');
+    expect(env()['ANTHROPIC_MODEL']).toBe('model-6.1-gamma');
+    expect(laneAdvance().pending).toBeNull();
+    expect(opusOf().previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
+    expect(opusOf().history).toEqual([{ at: NOW, how: 'advance', from: 'model-5.6-gamma', to: 'model-6.1-gamma',
+      ok: true, canary: 'passed', effort: { from: 'max', to: 'xhigh' } }]);
+  });
+
+  it('an empty class with a stored family is filled, and carries no effort it never had', () => {
+    plantStep({ advance: stepAdvance({ fable: { family: 'delta' } }) });
+    const r = commit({ cls: 'fable', from: 'none', to: 'model-6-delta' });
+    expect(r.body).toMatchObject({ outcome: 'moved', from: null, to: 'model-6-delta', effort: { from: null, to: null } });
+    expect(classesOf('lane-a')['fable']).toBe('model-6-delta');
+    expect(laneAdvance().classes.fable.previous).toEqual({ model: null, effort: null });
+  });
+
+  it('a hold that appeared since the plan abandons the move, writing nothing', () => {
+    // Review Focus (races and locks): the Hold wins.
+    plantStep({ advance: stepAdvance({ opus: { hold: HOLD } }) });
+    const before = snapshot();
+    const r = commit();
+    expect(r.body).toMatchObject({ ok: true, outcome: 'abandoned', why: 'held', push: false });
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('a failed canary on a class held since the plan abandons too, and records no failure', () => {
+    plantStep({ advance: stepAdvance({ opus: { hold: HOLD } }) });
+    const before = snapshot();
+    expect(commit({ canary: 'failed', reason: 'http 500: upstream error' }).body)
+      .toMatchObject({ outcome: 'abandoned', why: 'held', push: false });
+    expect(snapshot()).toEqual(before);
+  });
+
+  it.each([
+    ['the pin moved since the plan', 'pin-moved', { from: 'model-5.6-alpha' }, (): void => {}],
+    ['a newer candidate appeared since the plan', 'candidate-changed', {}, (): void => {
+      writeCatalogue('lane-a', { ...STEP_CATALOGUE, models: [...STEP_CATALOGUE.models, stepRow('model-6.2-gamma')] });
+    }],
+    ['the candidate left the catalogue', 'candidate-changed', {}, (): void => {
+      writeCatalogue('lane-a', { ...STEP_CATALOGUE,
+        models: STEP_CATALOGUE.models.filter((m) => m.id !== 'model-6.1-gamma') });
+    }],
+    ['a stale catalogue', 'catalogue-stale', {}, (): void => {
+      writeCatalogue('lane-a', { ...STEP_CATALOGUE, stale: true });
+    }],
+    ['an unreadable windows file', 'windows-unreadable', {}, (): void => { plantWindows('lane-a', '{ not json'); }],
+  ] as [string, string, { from?: string }, () => void][])('%s abandons with %s, writing nothing', (_w, why, args, spoil) => {
+    plantStep();
+    spoil();
+    const before = snapshot();
+    const r = commit(args);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ outcome: 'abandoned', why, push: false });
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('a lane that is not codex-kind abandons not-eligible', () => {
+    plantStep({ id: 'lane-b' });
+    expect(commit({ id: 'lane-b' }).body).toMatchObject({ outcome: 'abandoned', why: 'not-eligible' });
+    expect(classesOf('lane-b')['opus']).toBe('model-5.6-gamma');
+  });
+
+  it('a second commit of the same move, as an overlapping refresh sends it, abandons pin-moved and writes nothing', () => {
+    // Review Focus (races and locks): two refreshes canary the same candidate;
+    // the lane lock serialises their commits, and the second finds the pin moved.
+    plantStep();
+    expect(commit().body['outcome']).toBe('moved');
+    const after = snapshot();
+    const second = commit({ now: LATER });
+    expect(second.body).toMatchObject({ outcome: 'abandoned', why: 'pin-moved', push: false });
+    expect(snapshot()).toEqual(after);
+    expect(opusOf().history).toHaveLength(1);
+  });
+
+  it('a failed materialise whose restore cannot rewrite the files either: registry restored, one failure, restored false', () => {
+    plantStep();
+    const regBefore = fs.readFileSync(regPath('lane-a'), 'utf8');
+    const tsv = path.join(home, '.ccrc', 'models', 'lane-a.classes.tsv');
+    fs.rmSync(tsv);
+    fs.mkdirSync(tsv);
+    const r = commit();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ outcome: 'failed', restored: false, push: true });
+    expect(String(r.body['reason'])).toMatch(
+      /^materialise failed \(materialise-failed\) and re-materialising the previous registry failed too \(materialise-failed\): /);
+    expect(fs.readFileSync(regPath('lane-a'), 'utf8')).toBe(regBefore);
+    expect(env()['ANTHROPIC_DEFAULT_OPUS_MODEL']).toBe('model-5.6-gamma');
+    expect(laneAdvance().pending).toBeNull();
+    expect(opusOf().previous).toBeNull();
+    expect(opusOf().history).toEqual([expect.objectContaining({
+      how: 'advance', from: 'model-5.6-gamma', to: 'model-6.1-gamma', ok: false, canary: 'passed' })]);
+    const again = commit({ now: LATER });
+    expect(again.body).toMatchObject({ outcome: 'failed', push: false });
+    expect(opusOf().history).toEqual([expect.objectContaining({ ok: false, tries: 2, lastAt: LATER })]);
+  });
+
+  // Root ignores a directory's write bit, so this proves nothing there: a
+  // visible skip, not a false red.
+  it.skipIf(isRoot)('a materialise that cannot rewrite settings.json restores the old registry and its files: restored true', () => {
+    plantStep();
+    const regBefore = fs.readFileSync(regPath('lane-a'), 'utf8');
+    const settings = path.join(home, STEP_SETTINGS, 'settings.json');
+    const settingsBefore = fs.readFileSync(settings, 'utf8');
+    fs.chmodSync(path.dirname(settings), 0o555);
+    const r = ((): Result => {
+      try {
+        return commit();
+      } finally {
+        fs.chmodSync(path.dirname(settings), 0o755);
+      }
+    })();
+    expect(r.body).toMatchObject({ outcome: 'failed', restored: true, push: true });
+    expect(String(r.body['reason'])).toMatch(/^materialise failed \(settings-unwritable\), so the previous registry was restored: /);
+    expect(fs.readFileSync(regPath('lane-a'), 'utf8')).toBe(regBefore);
+    expect(fs.readFileSync(settings, 'utf8')).toBe(settingsBefore);
+  });
+
+  it('a failed canary records one deduplicated failure and leaves the registry and settings untouched', () => {
+    plantStep();
+    const reg = fs.readFileSync(regPath('lane-a'), 'utf8');
+    const settings = JSON.stringify(env());
+    expect(commit({ canary: 'failed', reason: 'http 500: upstream error' }).body)
+      .toMatchObject({ outcome: 'failed', push: true, reason: 'http 500: upstream error' });
+    expect(commit({ canary: 'failed', reason: 'http 500: upstream error', now: LATER }).body)
+      .toMatchObject({ outcome: 'failed', push: false });
+    expect(opusOf().history).toEqual([expect.objectContaining({ how: 'advance', from: 'model-5.6-gamma',
+      to: 'model-6.1-gamma', ok: false, canary: 'failed', reason: 'http 500: upstream error', tries: 2, lastAt: LATER })]);
+    expect(fs.readFileSync(regPath('lane-a'), 'utf8')).toBe(reg);
+    expect(JSON.stringify(env())).toBe(settings);
+  });
+
+  it('a reason is stored as printable ASCII of at most REASON_MAX characters, so the advance file stays readable', () => {
+    plantStep();
+    const r = commit({ canary: 'failed', reason: `${'é'.repeat(10)}${'x'.repeat(REASON_MAX + 100)}` });
+    expect(r.body['reason']).toBe('x'.repeat(REASON_MAX));
+    expect(String(opusOf().history[0]!.reason)).toMatch(new RegExp(`^[\\x20-\\x7e]{1,${REASON_MAX}}$`));
+    expect(op('advance-plan', '--file', rosterPath(), '--id', 'lane-a').code).toBe(0);
+  });
+
+  it('the crash gap: an intent left between the rename and the materialise is recorded as landed by the next locked writer', () => {
+    // Review Focus (the crash gap): a SIGTERM at the unit's 300 s bound after
+    // the registry rename and before materialise leaves `pending` on disk, the
+    // registry already at `to` and the lane's files still the old ones. Here
+    // the next locked writer is a commit for another class.
+    plantStep({ advance: stepAdvance({ fable: { family: 'delta' } }, INTENT) });
+    fs.writeFileSync(regPath('lane-a'), MOVED_REGISTRY);
+    expect(env()['ANTHROPIC_DEFAULT_OPUS_MODEL']).toBe('model-5.6-gamma');
+    const r = commit({ cls: 'fable', from: 'none', to: 'model-6-delta' });
+    expect(r.body).toMatchObject({ outcome: 'moved', recovered: true, recoveredMove: RECOVERED });
+    expect(laneAdvance().pending).toBeNull();
+    expect(opusOf().previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
+    expect(opusOf().history).toEqual([expect.objectContaining({ how: 'advance', from: 'model-5.6-gamma',
+      to: 'model-6.1-gamma', ok: true, recovered: true })]);
+    // This commit's own materialise rewrote the lane's files from the whole registry.
+    expect(env()['ANTHROPIC_DEFAULT_OPUS_MODEL']).toBe('model-6.1-gamma');
+  });
+
+  it('the crash gap, every hour: advance-backfill settles a landed intent and names the move in its answer', () => {
+    // Review Focus (the crash gap): the realistic path. After the gap the moved
+    // class pins its family's newest model, so no commit runs for it; the
+    // hourly step's first locked writer, the backfill, settles the intent.
+    plantStep({ advance: stepAdvance({}, INTENT) });
+    fs.writeFileSync(regPath('lane-a'), MOVED_REGISTRY);
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toEqual({ ok: true, op: 'advance-backfill', id: 'lane-a', created: false, why: 'present',
+      recoveredMove: RECOVERED });
+    expect(laneAdvance().pending).toBeNull();
+    expect(opusOf().previous).toEqual({ model: 'model-5.6-gamma', effort: 'max' });
+    expect(opusOf().history).toEqual([expect.objectContaining({ ok: true, recovered: true, to: 'model-6.1-gamma',
+      effort: { from: 'max', to: 'xhigh' } })]);
+    // Settled once: the next hour's backfill writes nothing.
+    const bytes = fs.readFileSync(advPath('lane-a'), 'utf8');
+    expect(backfill().body).toEqual({ ok: true, op: 'advance-backfill', id: 'lane-a', created: false, why: 'present' });
+    expect(fs.readFileSync(advPath('lane-a'), 'utf8')).toBe(bytes);
+  });
+
+  it('advance-backfill drops an intent whose rename never happened, and names no move', () => {
+    plantStep({ advance: stepAdvance({}, INTENT) });
+    expect(backfill().body).toEqual({ ok: true, op: 'advance-backfill', id: 'lane-a', created: false, why: 'present' });
+    expect(laneAdvance().pending).toBeNull();
+    expect(opusOf().history).toEqual([]);
+    expect(classesOf('lane-a')['opus']).toBe('model-5.6-gamma');
+  });
+
+  it('an intent whose rename never happened is dropped by a commit, and leaves no history', () => {
+    plantStep({ advance: stepAdvance({}, INTENT) });
+    const r = commit({ canary: 'failed', reason: 'http 500: upstream error' });
+    expect(r.body).toMatchObject({ outcome: 'failed', recovered: false });
+    expect(r.body).not.toHaveProperty('recoveredMove');
+    expect(laneAdvance().pending).toBeNull();
+    expect(opusOf().history).toEqual([expect.objectContaining({ ok: false, canary: 'failed' })]);
+    expect(classesOf('lane-a')['opus']).toBe('model-5.6-gamma');
+  });
+
+  it('a hand set-class cut short after its rename is settled by advance-backfill and reported as hand: no recovered mark, no advance', () => {
+    // Review Focus (the crash gap, a hand set-class cut short): W1's set-class
+    // writes its intent before the rename, and W1's `reconcilePending` answers
+    // `recovered: true` for it as for an advance, so `advanceForWrite` reads the
+    // intent's `how` before it settles it (D-5216).
+    plantStep({ advance: stepAdvance({}, HAND_INTENT) });
+    fs.writeFileSync(regPath('lane-a'), HAND_REGISTRY);
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toEqual({ ok: true, op: 'advance-backfill', id: 'lane-a', created: false, why: 'present',
+      recoveredMove: HAND_MOVE });
+    const fable = laneAdvance().classes.fable;
+    expect(laneAdvance().pending).toBeNull();
+    expect(fable.history).toEqual([HAND_ENTRY]);
+    expect([fable.family, fable.previous]).toEqual(['delta', null]);
+  });
+
+  it('a commit that settles a landed hand intent reports it as hand, recovered false, and still moves its own class', () => {
+    plantStep({ advance: stepAdvance({}, HAND_INTENT) });
+    fs.writeFileSync(regPath('lane-a'), HAND_REGISTRY);
+    const r = commit();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ outcome: 'moved', push: true, recovered: false, recoveredMove: HAND_MOVE });
+    expect(laneAdvance().pending).toBeNull();
+    expect(laneAdvance().classes.fable.history).toEqual([HAND_ENTRY]);
+    expect(opusOf().history).toEqual([expect.objectContaining({ how: 'advance', to: 'model-6.1-gamma', ok: true })]);
+  });
+
+  it.each([
+    ['hold', ['hold', '--class', 'sonnet']],
+    ['release', ['release', '--class', 'sonnet']],
+    ['revert', ['revert', '--class', 'opus']],
+    ['a hand set-class', ['set-class', '--class', 'fable', '--model', 'model-6-delta']],
+  ] as [string, string[]][])('%s run first after a crashed automatic advance records that move and names it in its answer', (_w, argv) => {
+    // Review Focus (the crash gap): the lane's next locked writer may be a hand
+    // verb rather than the hourly step, and it settles the landed intent in its
+    // own write, as every writer does. So its answer names the move too
+    // (D-5216): the intent is gone from disk after this, and no later writer
+    // could report it.
+    plantStep({ advance: stepAdvance({}, INTENT) });
+    fs.writeFileSync(regPath('lane-a'), MOVED_REGISTRY);
+    const [verb, ...args] = argv;
+    const r = opEnv({ CCRC_MODELS_NOW: NOW }, verb!, '--file', rosterPath(), '--id', 'lane-a', ...args);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['recoveredMove']).toEqual(RECOVERED);
+    expect(laneAdvance().pending).toBeNull();
+    expect(opusOf().history[0]).toEqual({ at: INTENT.at, how: 'advance', from: 'model-5.6-gamma',
+      to: 'model-6.1-gamma', ok: true, canary: 'passed', effort: { from: 'max', to: 'xhigh' }, recovered: true });
+  });
+
+  it('an abandoned commit still writes back an intent it reconciled, and nothing else', () => {
+    plantStep({ advance: stepAdvance({ opus: { hold: HOLD } }, { class: 'haiku', from: 'model-5.6-alpha',
+      to: 'model-6-alpha', effortFrom: 'high', effortTo: 'high', at: '2026-10-22T09:05:11Z' }) });
+    const reg = fs.readFileSync(regPath('lane-a'), 'utf8');
+    const r = commit();
+    expect(r.body).toMatchObject({ outcome: 'abandoned', why: 'held', recovered: true });
+    expect(laneAdvance().pending).toBeNull();
+    expect(laneAdvance().classes.haiku.history).toEqual([expect.objectContaining({ ok: true, recovered: true })]);
+    expect(fs.readFileSync(regPath('lane-a'), 'utf8')).toBe(reg);
+  });
+
+  it('a stale catalogue abandons only after the pending intent is settled (skeleton §3.3: step 2 before step 3)', () => {
+    plantStep({ advance: stepAdvance({}, INTENT) });
+    fs.writeFileSync(regPath('lane-a'), MOVED_REGISTRY);
+    writeCatalogue('lane-a', { ...STEP_CATALOGUE, stale: true });
+    const r = commit({ from: 'model-6.1-gamma', to: 'model-6.2-gamma' });
+    expect(r.body).toMatchObject({ outcome: 'abandoned', why: 'catalogue-stale', recovered: true, recoveredMove: RECOVERED });
+    expect(laneAdvance().pending).toBeNull();
+    expect(opusOf().history).toEqual([expect.objectContaining({ ok: true, recovered: true })]);
+  });
+
+  it('the intent is written before the registry is renamed, in source', () => {
+    // The crash gap's ORDER has no fixture that can stop the op between two
+    // writes, so it is pinned where it lives.
+    const body = commitSource();
+    const intent = body.indexOf('writeAdvance(a.id, { ...adv, pending: intent })');
+    const rename = body.indexOf('writeRegistry(a.id, validated)');
+    expect(intent).toBeGreaterThan(0);
+    expect(rename).toBeGreaterThan(intent);
+  });
+
+  it('a move whose previous registry cannot be written back records the failure and keeps the intent, in source', () => {
+    // No fixture can let the first rename through and refuse the second inside
+    // one op, so this arm is pinned where it lives (D-5217).
+    const body = commitSource();
+    const arm = body.slice(body.indexOf('if (back !== null) {'), body.indexOf('const again = materialise('));
+    expect(arm, 'advanceCommitOp has no back !== null arm').not.toBe('');
+    expect(arm).toMatch(/return fail\([\s\S]*'passed', \{ restored: false \}, intent\);/);
+  });
+
+  it('moving to a model with no measured window drops the lane to the default window rule', () => {
+    plantStep();
+    plantWindows('lane-a', windowsFor({ 'model-6-alpha': 400000, 'model-6-beta': 400000, 'model-5.6-gamma': 400000 }));
+    expect(op('materialise', '--file', rosterPath(), '--id', 'lane-a').code).toBe(0);
+    expect(env()['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('400000');
+    expect(commit().body['outcome']).toBe('moved');
+    const next = parseRegistry(registryOf('lane-a'));
+    const cat = parseCatalogue(STEP_CATALOGUE);
+    const windows = parseWindows(JSON.parse(fs.readFileSync(winPath('lane-a'), 'utf8')));
+    expect(contextWindowFor(next, cat, windows).rule).toBe('default');
+    expect(env()).toMatchObject(modelEnvBlock(next, cat, windows));
+    expect(env()['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('200000');
+  });
+
+  it('moving to a model already measured keeps the measured rule, so the move passes the windows on', () => {
+    plantStep();
+    plantWindows('lane-a', windowsFor({ 'model-6-alpha': 400000, 'model-6-beta': 400000, 'model-5.6-gamma': 400000,
+      'model-6.1-gamma': 300000 }));
+    expect(commit().body['outcome']).toBe('moved');
+    expect(env()['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('300000');
+  });
+
+  it('an absent advance file is backfilled in memory, and the commit writes it', () => {
+    plantStep({ advance: null });
+    expect(commit().body['outcome']).toBe('moved');
+    const adv = laneAdvance();
+    expect(adv.classes.haiku.family).toBe('alpha');
+    expect(typeof adv.classes.fable.family).toBe('string');
+    expect(adv.classes.opus.history).toHaveLength(1);
+  });
+
+  it('the moved registry is still what an older parser reads: known keys only, in writeRegistry\'s own bytes', () => {
+    plantStep();
+    expect(commit().body['outcome']).toBe('moved');
+    const keys = /const REGISTRY_KEYS = \[([^\]]*)\];/.exec(fs.readFileSync(path.join(REPO, 'shared', 'models.mjs'), 'utf8'));
+    expect(keys, 'shared/models.mjs has no REGISTRY_KEYS literal').not.toBeNull();
+    const known = keys![1]!.split(',').map((s) => s.trim().replace(/^'|'$/g, '')).filter((s) => s !== '');
+    const text = fs.readFileSync(regPath('lane-a'), 'utf8');
+    const json = JSON.parse(text) as Record<string, unknown>;
+    for (const k of Object.keys(json)) expect(known).toContain(k);
+    expect(text).toBe(`${JSON.stringify(parseRegistry(json), null, 2)}\n`);
+  });
+
+  it.each([
+    ['a class that is not one', ['--class', 'subagent'], 1, 'unknown-class'],
+    ['a --canary that is neither passed nor failed', ['--canary', 'not-ready'], 2, 'bad-argv'],
+    ['a --from that is not a model id', ['--from', '../x'], 1, 'bad-model-id'],
+    ['a --to that is not a model id', ['--to', 'not an id'], 1, 'bad-model-id'],
+  ] as [string, string[], number, string][])('%s is refused', (_w, args, code, word) => {
+    plantStep();
+    const base: Record<string, string> = { '--class': 'opus', '--from': 'model-5.6-gamma', '--to': 'model-6.1-gamma',
+      '--canary': 'passed' };
+    base[args[0]!] = args[1]!;
+    const r = opEnv({ CCRC_MODELS_NOW: NOW }, 'advance-commit', '--file', rosterPath(), '--id', 'lane-a',
+      ...Object.entries(base).flat());
+    expect(r.code).toBe(code);
+    expect(r.body['error']).toBe(word);
+  });
+
+  it('an Anthropic lane refuses it, as it refuses every op but show', () => {
+    expect(commit({ id: 'lane-c' }).body['error']).toBe('anthropic-lane');
   });
 });

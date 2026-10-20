@@ -2190,7 +2190,7 @@ MODELS_SUBS="clear-window discovery hold init release revert rm set-class set-ef
 # `deploy/models-op.mjs`'s `OPS` rows marked `writes: true`, which `single-definition.test.ts` checks in both
 # directions; `ccrc-models-lock.test.ts` forbids a bare call of any of them (`materialise --check true` excepted,
 # since it writes nothing).
-MODELS_WRITE_OPS="advance-backfill clear-window discovery hold init materialise release revert rm set-class set-effort set-subagent set-window"
+MODELS_WRITE_OPS="advance-backfill advance-commit clear-window discovery hold init materialise release revert rm set-class set-effort set-subagent set-window"
 
 # The BOX-WIDE subcommands this build implements — a different question from a
 # lane's own classes, on a different cadence (§5).
