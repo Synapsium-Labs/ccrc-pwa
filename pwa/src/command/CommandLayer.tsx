@@ -149,7 +149,6 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   // stays open over them.
   useEffect(() => {
     if (enabled) return;
-    opener.current = null;
     close();
     setSheet(false);
   }, [enabled]);

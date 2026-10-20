@@ -555,7 +555,7 @@ describe('the palette hands focus back where it came from (D-5679)', () => {
       const { lost } = useAuthLost();
       return lost ? <div role="dialog" aria-modal="true"><input type="password" aria-label="Passphrase" /></div> : null;
     }
-    render(<><Cover /><textarea aria-label="Message" /><CommandLayer openNewSession={vi.fn()} /></>);
+    render(<><Cover /><main id="content" tabIndex={-1}><textarea aria-label="Message" /></main><CommandLayer openNewSession={vi.fn()} /></>);
     const composer = screen.getByRole('textbox', { name: 'Message' });
     act(() => composer.focus());
     fireEvent.keyDown(composer, { key: 'k', metaKey: true });
@@ -565,6 +565,7 @@ describe('the palette hands focus back where it came from (D-5679)', () => {
     act(() => (document.activeElement as HTMLElement | null)?.blur());
     await wait(1300);
     expect(document.activeElement).not.toBe(composer);
+    expect(document.activeElement, 'nor the landmark behind the cover').not.toBe(document.getElementById('content'));
   });
 
   it('to the main landmark when the element that opened it can no longer take focus', async () => {
