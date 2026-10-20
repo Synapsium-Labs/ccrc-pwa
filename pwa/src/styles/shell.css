@@ -10,10 +10,47 @@
  * centered 640 column, a FAB pinned to that column); at the breakpoint we
  * re-contain those to their pane. The accounts strip is rendered at the shell
  * level only on desktop (app.tsx / useMediaQuery); on mobile it lives in the
- * fleet screen, so there's only ever one instance. */
+ * fleet screen, so there's only ever one instance.
+ *
+ * THESE ARE THE FRAME'S RULES (D-5466, W2 Task S2b): `.app-shell` is
+ * `skins/frame.tsx`'s `ShellFrame`, the same element in both skins, and every
+ * rule here is shared by them: the phone swap, the detail pane's scroll
+ * region, the chat exception, the back-chevron rule and the overlays. A
+ * skin's own layout goes in its own stylesheet on its `ref-*` or `ins-*`
+ * classes (`skins/refined/refined.css`, `skins/instrument/instrument.css`);
+ * S4b moves Refined's desktop grid and the accounts top strip there. */
 
 .app-shell {
   min-height: 100dvh;
+}
+
+/* The skip link (W2 Task S2b): the frame's first focusable element, visually
+ * hidden until it has focus, then a self-grounded chip over the frame's top
+ * corner. `position: absolute` either way, so it never takes a grid cell and
+ * moves no pixel of the shell. Its click moves focus to `#content`. */
+.skip-link {
+  position: absolute;
+  top: var(--sp-2);
+  left: var(--sp-2);
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.skip-link:focus {
+  z-index: var(--z-block);
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  height: auto;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-4);
+  overflow: visible;
+  clip-path: none;
+  background: var(--bg-page);
+  color: var(--ink-primary);
+  font: var(--weight-medium) var(--fs-base) / var(--lh-normal) var(--family-ui);
 }
 
 /* ---- Mobile: full-screen swap (unchanged) ---------------------------- */

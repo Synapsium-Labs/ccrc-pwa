@@ -144,17 +144,21 @@ describe('the desktop detail pane scrolls by default (D-161)', () => {
   });
 
   it('the breakpoint is the SAME number in all three places it is written', () => {
-    // The number lives in three files and none of them can derive it from
-    // another: the desktop block, the mobile block's complement, and app.tsx's
-    // `useMediaQuery`, which decides whether the sidebar is rendered AT ALL.
-    // Move one and you get a dead band — a 900 → 901 edit in the stylesheet
-    // alone leaves nothing matching at exactly 900px while the JS still reports
-    // desktop (seen for real in this worktree during the D-161 review). This is
-    // the ledger that says they must move together.
+    // The number lives in three places and none of them can derive it from
+    // another: the desktop block, the mobile block's complement, and the JS
+    // width query, which decides whether the desk bar and the desk sidebar are
+    // rendered AT ALL. Move one and you get a dead band — a 900 → 901 edit in
+    // the stylesheet alone leaves nothing matching at exactly 900px while the
+    // JS still reports desktop (seen for real in this worktree during the D-161
+    // review). This is the ledger that says they must move together.
+    // Since W2 Task S2b the query is `DESK_QUERY` (fleet/FleetColumn.tsx),
+    // read by the fleet column and by the frame (skins/frame.tsx), and by no
+    // literal anywhere else.
     expect(shellCss).toContain(`@media (max-width: ${BREAKPOINT - 0.02}px)`);
-    const appTsx = readFileSync(
-      path.join(import.meta.dirname, '..', 'src', 'app.tsx'), 'utf8');
-    expect(appTsx).toContain(`useMediaQuery('(min-width: ${BREAKPOINT}px)')`);
+    const src = (rel: string): string => readFileSync(path.join(import.meta.dirname, '..', 'src', rel), 'utf8');
+    expect(src('fleet/FleetColumn.tsx')).toContain(`DESK_QUERY = '(min-width: ${BREAKPOINT}px)'`);
+    for (const rel of ['fleet/FleetColumn.tsx', 'skins/frame.tsx']) expect(src(rel), rel).toContain('useMediaQuery(DESK_QUERY)');
+    expect(src('app.tsx'), 'no second spelling in the shell').not.toMatch(/min-width:\s*\d+px/);
   });
 
   it('keeps the two sizing floors the grid needs', () => {

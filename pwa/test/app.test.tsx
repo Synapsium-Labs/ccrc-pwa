@@ -7,11 +7,12 @@
 // server/test/fleet.test.ts and pwa/test/archive-screen.test.tsx); see
 // task-19-report.md.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { App } from '../src/app';
 import { navigate } from '../src/lib/router';
+import { matchRoute, ROUTES } from '../src/lib/routes';
 import { useFleetStore } from '../src/stores/fleet';
 
 const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', status: 'dead', branch: 'ws/quiet-basin', archivedAt: 1785300123, archivedBytes: 1_200_000_000, ...over }));
@@ -309,5 +310,62 @@ describe('App mounts the fleet sheets (D-5468)', () => {
     fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
     fireEvent.click(screen.getByRole('button', { name: /actions for quiet-mesa/i }));
     expect(screen.getByRole('button', { name: /restart session/i })).toBeInTheDocument();
+  });
+});
+
+// ── the route table and the ladder are one table (D-5466, W2 Task S2b) ─────────
+
+describe('ROUTES and the ladder, both ways', () => {
+  // Every path the ladder has ever routed, plus near misses. A probe that a
+  // ROUTES row matches must render that row's own screen; a probe no row
+  // matches must render the fleet's placeholder. So a row dropped while the
+  // ladder kept its own test, or a ladder rung the table never named, reds.
+  const PROBES = [
+    '/', `/s/${encodeURIComponent('demo-quiet-basin')}`, '/archive', '/accounts', '/mail', '/runs', '/settings',
+    '/digest', '/docs', '/docs/notes/a.md', '/nope', '/docsearch', '/docs-x', '/s/', '/runsx', '/mail/x',
+  ];
+  const placeholder = (): Element | null => document.querySelector('.shell-placeholder');
+
+  it('every ROUTES row is reached by a probe, and every probe renders what the table says', () => {
+    for (const r of ROUTES) expect(PROBES.some((p) => r.pattern.test(p)), `no probe for ${r.id}`).toBe(true);
+    for (const p of PROBES) {
+      navigate(p);
+      const view = render(<App />);
+      const at = matchRoute(p);
+      if (at === null || at.route.id === 'fleet') {
+        expect(placeholder(), `${p} is the fleet`).not.toBeNull();
+        expect(document.querySelector('.app-shell'), p).toHaveAttribute('data-view', 'fleet');
+      } else {
+        expect(placeholder(), `${p} renders its own screen (${at.route.id})`).toBeNull();
+        expect(document.querySelector('.app-shell'), p).toHaveAttribute('data-view', 'session');
+      }
+      view.unmount();
+    }
+  });
+});
+
+describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
+  it('exactly one main landmark, #content, holding the detail; the fleet column is a section named Fleet', () => {
+    navigate('/runs');
+    render(<App />);
+    const mains = screen.getAllByRole('main');
+    expect(mains).toHaveLength(1);
+    expect(mains[0]).toHaveAttribute('id', 'content');
+    expect(mains[0]).toHaveClass('shell-detail');
+    expect(within(mains[0]!).getByRole('heading', { name: /^runs$/i })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Fleet' })).toHaveClass('fleet');
+  });
+
+  it('the skip link is the first focusable element and moves focus to #content', () => {
+    navigate('/runs');
+    render(<App />);
+    const focusable = document.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    const skip = screen.getByRole('link', { name: 'Skip to content' });
+    expect(focusable[0]).toBe(skip);
+    expect(document.querySelector('.app-shell')!.firstElementChild).toBe(skip);
+    fireEvent.click(skip);
+    expect(document.activeElement).toBe(document.getElementById('content'));
   });
 });
