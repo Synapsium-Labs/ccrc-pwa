@@ -25,6 +25,7 @@ import { WebSocket } from 'ws';
 import { buildServer, type Deps as ServerDeps } from '../src/server.js';
 import { HEADS_BOOT_WAIT_MS } from '../src/watch.js';
 import { okRuns } from './coordReadHelpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 /** The repo root, for the one source-text assertion below. */
 const ccrcRoot = path.resolve(__dirname, '../..');
@@ -1192,13 +1193,11 @@ describe('sweepDivergences feeds the build-9 arms from what it has already read'
   it('reads the heartbeat off the SAME records the tick already measured — no second registry read', () => {
     // The lane takes one registry listing per sweep interval and no more; a
     // `supervisedAt` re-read here would be a whole-fleet field read a minute.
-    // The slice ends on the method's OWN two-space closing brace (`:1618`),
-    // not on the next member, so it cannot silently widen.
-    const src = readFileSync(path.join(ccrcRoot, 'server/src/watch.ts'), 'utf8');
-    const from = src.indexOf('  async sweepDivergences(');
-    expect(from, 'sweepDivergences was not found — this assertion would pass vacuously')
-      .toBeGreaterThan(-1);
-    const body = src.slice(from, src.indexOf('\n  }\n', from));
+    // The slice is the method's own span (its symbol), from its first token
+    // to its own closing brace, never the next member's, so it cannot silently widen.
+    // D-6114: keyed on the method's symbol (scan/symbols.ts), so the slice follows `sweepDivergences` wherever it
+    // moves; a renamed or missing method throws by name.
+    const body = sourceOfSymbol(path.join(ccrcRoot, 'server/src/watch.ts'), 'FleetWatcher.sweepDivergences');
     expect(body.length, 'the slice collapsed — this assertion would pass vacuously')
       .toBeGreaterThan(2000);
     // D-1157 REWROTE THIS ASSERTION. It used to read
