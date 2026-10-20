@@ -5041,7 +5041,7 @@ describe('workspace lifecycle wave 4: the expiry lane’s own words type no peri
 // holder on a code line is its definer, an L1 file that reaches no `node:` module and so cannot write it.
 describe('workspace lifecycle wave 4: the dead-coordinator lane’s live switch has no writer in the tree', () => {
   const NAME = 'dead-coordinator-lane-live';
-  const DEFINER = 'server/src/deadCoordinator.ts';
+  const DEFINER = 'shared/switches.ts'; // its switchboard row since D-5855; deadCoordinator.ts re-exports it
 
   it('no shell line names it, and its one TS holder is its definer', () => {
     expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
@@ -5053,11 +5053,11 @@ describe('workspace lifecycle wave 4: the dead-coordinator lane’s live switch 
 
   // THE WIDER WRITER, the expiry pin's argument: a file that imports the ONE spelling and holds an `io` could write it
   // without spelling its name. The files whose code names the constant are pinned, and none of them reaches a write.
-  it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
+  it('the files that name its constant are the definer, its re-exporter and the executor, and none reaches a write', () => {
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
     const holders = ALL.filter((f) => stallCode(f).includes('DEAD_COORDINATOR_LANE_LIVE_MARKER')).map(rel).sort();
-    expect(holders).toEqual(['server/src/coord/endDeadCoordinator.ts', DEFINER]);
+    expect(holders).toEqual(['server/src/coord/endDeadCoordinator.ts', 'server/src/deadCoordinator.ts', DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
 });
