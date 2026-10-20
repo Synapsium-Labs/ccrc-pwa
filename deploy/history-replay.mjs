@@ -171,25 +171,24 @@ export function paneRefusal(env) {
 // The wait after a leader's exit is bounded (spawnGroup): a STOP_GRACE_MS timer from the leader's 'exit', cleared at
 // 'close', SIGKILLs the leader's group and destroys the streams, so a process that outlives the leader and holds a pipe
 // cannot hold the driver, its lock or a signal's answer.
-// Residuals, named: that yield-to-spawn window (up to c children); the post-last-check window (a signal that arrives
-// after runBatch's last check, when every child has closed, is not handled: main removes its listeners before the loop
-// polls, the result is written, and the driver exits 0, or, when the signal comes after that removal, ends by the
-// signal's default action); a
-// driver killed between spawn() and its `.pid` record leaves a `.part` with no record,
-// charged as D-5811 says; a grandchild that calls setsid escapes every group kill and keeps running, and it no longer holds
-// the driver (if it inherited the run's stdout, it can still write into the stream after the charge: for a RECORDED run,
-// with its run.json written and its stream renamed to `<name>.jsonl`, a resume then refuses the changed stream; but on the
-// stop path launchRun charges the run and removes its `.part`, and settleLeftover does the same to a leftover it charges, so
-// the escapee's later writes go to an unlinked file that no batch sees, and a resume spawns the job again beside the escapee
-// that is still running; it is not the process that spends, since the Claude Code leader is killed and charged); a process
-// in the run's group that holds no pipe to the driver (on the stop path, one that also ignores SIGTERM; the leftover path
-// settles a driver that was SIGKILLed, where no group signal was sent, so any member that keeps the stream survives): close
-// fires at once, the timer is cleared, and it can outlive its leader; if it kept the run's stdout it can still write into
-// the stream after the charge, with the same two outcomes, a refused resume for a recorded run and a re-spawned job beside
-// it after a stop or a leftover's charge; and a group id reused by an
-// unrelated process after the run's group emptied (the setsid case leaves it empty), which the bound's, the stop's and the
-// timeout's group SIGKILL would then reach: it needs a pid wrap within the grace, and only the registry check, which
-// catches a reuse by our own sibling, stands in the way.
+// Residuals, named: that yield-to-spawn window (up to c children); the post-last-check window (a signal that arrives after
+// runBatch's last check, when every child has closed, is not handled: main removes its listeners before the loop polls, the
+// result is written, and the driver exits 0, or, when the signal comes after that removal, ends by the signal's default
+// action); a driver killed between spawn() and its `.pid` record leaves a `.part` with no record, charged as D-5811 says; a
+// grandchild that calls setsid escapes every group kill and keeps running, and it no longer holds the driver (if it
+// inherited the run's stdout, it can still write into the stream after the charge: for a RECORDED run, with its run.json
+// written and its stream renamed to `<name>.jsonl`, a resume then refuses the changed stream; but on the stop path
+// launchRun charges the run and removes its `.part`, and settleLeftover does the same to a leftover it charges, so the
+// escapee's later writes go to an unlinked file that no batch sees, and a resume spawns the job again beside the escapee
+// that is still running; it is not the process that spends: the Claude Code leader, which spends, is dead when it is
+// charged, and on the stop path was killed); a process in the run's group that holds no pipe to the driver (on the stop
+// path, one that also ignores SIGTERM; the leftover path settles a driver that was SIGKILLed, where no group signal was
+// sent, so any member that keeps the stream survives): close fires at once, the timer is cleared, and it can outlive its
+// leader; if it kept the run's stdout it can still write into the stream after the charge, with the same two outcomes, a
+// refused resume for a recorded run and a re-spawned job beside it after a stop or a leftover's charge; and a group id
+// reused by an unrelated process after the run's group emptied (the setsid case leaves it empty), which the bound's, the
+// stop's and the timeout's group SIGKILL would then reach: it needs a pid wrap within the grace, and only the registry
+// check, which catches a reuse by our own sibling, stands in the way.
 /** Every live child, keyed by its pid (which is its process-group id). A Map, not a Set of pids, so 'close' can tell its
  *  own entry from a newer child's: the kernel may hand a reaped child's pid to a sibling spawned before the old child's
  *  'close' fires, and the old 'close' must not drop that newer entry (D-5984). No test reaches this: the reuse window
@@ -1036,7 +1035,7 @@ export function spentSoFar(out) {
 // the bounded wait after the leader's exit, spawnGroup, no longer lets it hold the driver; if it inherited the run's stdout
 // it can still write into the stream after the charge: a resume refuses the changed stream only for a recorded run, and
 // after a stop or a leftover's charge, which removes the `.part`, its late writes go to an unlinked file that no batch
-// sees, and a resume spawns the job again beside it; the leader, which spends, was killed and charged). The over-count
+// sees, and a resume spawns the job again beside it; the leader, which spends, is dead when it is charged). The over-count
 // windows are spend line to rename, rename to run.json, and a leftover's charge to its `.part`'s removal (the `.pid`
 // goes first, then the `.part`). A run whose run.json exists is never spawned again (W2-D53, W2-D55).
 // The child's LANG arrives as RunJob.lang, threaded from main's env: this section never reads process.env.
@@ -1722,8 +1721,8 @@ export async function runBatch(jobs, opts = {}) {
   let stop = null;
   const lane = async () => {
     for (;;) {
-      // D-5984: a signal that arrived before this yield's poll phase is handled here; one in a sibling's yield-to-spawn
-      // stretch is not (up to c children)
+      // D-5984: a signal that arrived before this yield's poll phase is handled here; one that arrives after it, in a
+      // sibling's yield-to-spawn stretch, is not (up to c children)
       await yieldToSignals();
       if (stop !== null || next >= jobs.length) return;   // re-read after the yield: a sibling may have failed meanwhile
       const i = next++;
