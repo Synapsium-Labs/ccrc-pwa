@@ -4345,6 +4345,16 @@ describe('W2-3 Task 8: run classes, the hand-check and the gate', () => {
       expect(() => (gateT8.handcheckSample as unknown as (s: string, i: unknown[]) => string[])(SEED, one), 'a missing third argument').toThrow(/share must be/);
       expect(() => gateT8.handcheckSample(SEED, one, 0.2), 'CONTROL: 0.2 does not throw').not.toThrow();
     });
+
+    it('a bad share throws on an input with no judged items too, so the check does not wait for an arm to draw from', () => {
+      const failedOnly = items('control', 0, 2);
+      const sample = gateT8.handcheckSample as unknown as (s: string, i: unknown[], sh?: unknown) => string[];
+      for (const bad of [0, 1.5, undefined]) {
+        expect(() => sample(SEED, failedOnly, bad), `judge-failed only, ${String(bad)}`).toThrow(/share must be/);
+        expect(() => sample(SEED, [], bad), `no items, ${String(bad)}`).toThrow(/share must be/);
+      }
+      expect(() => sample(SEED, [], 0.2), 'CONTROL: no items and a valid share does not throw').not.toThrow();
+    });
   });
 });
 

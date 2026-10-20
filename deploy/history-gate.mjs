@@ -1439,8 +1439,9 @@ export function parseLabelLine(reply) {
 //     code-unmeasured, which are GATE_REASONS words too.
 //   handcheckSample / applyHandcheck / handcheckAgreement (W2-D81): a seeded ceil(share * n) of the judged answers per
 //     arm from the 'handcheck' substream, the share being the record's signed handcheck.share (a required argument,
-//     read as an exact decimal; HANDCHECK_SHARE, 1/5, is only the default part 1 offers; D-5788), plus every judge-failed item; the operator's label replaces the judge's on the
-//     items the operator labelled; agreement is an exact fraction, per arm and over both.
+//     read as an exact decimal; HANDCHECK_SHARE, 1/5, is only the default part 1 offers), plus every judge-failed
+//     item; the operator's label replaces the judge's on the items the operator labelled; agreement is an exact
+//     fraction, per arm and over both.
 //   decideGate (W2-D89) restates spec §10.2:2713-2718 with every operator exact (cross-multiplied fractions, never a
 //     float): three criteria, their denominators, four halts and one hold. The fourth halt, empty-arm, is the
 //     coordinator's W2-3 ruling: a treatment set with no cluster left halts, and is never bootstrapped. The changed
@@ -1455,7 +1456,7 @@ export function parseLabelLine(reply) {
 const AUTH_FAILED = 'authentication_failed';
 
 /** W2-D81's default share of the judged answers per arm, 20%, as an exact fraction. It is the value part 1 offers
- *  (OPEN_RECORD_V1's handcheck.share), no longer what handcheckSample draws with: that takes the signed share (D-5788). */
+ *  (OPEN_RECORD_V1's handcheck.share), no longer what handcheckSample draws with: that takes the signed share. */
 const HANDCHECK_SHARE = Object.freeze({ num: 1, den: 5 });
 /** W2-D81's other three terms, which handcheckSample implements and nothing else: the share is of the judged answers (`of`),
  *  drawn per arm, and every judge-failed item is checked outside it. validateOpenRecord refuses a record signing others. */
@@ -2292,14 +2293,14 @@ function recValidate(record, ctx, checkLink) {
     ['active_rule.legacy_excluded', r.active_rule.legacy_excluded, true],
     // Four fixed values (W2-D81, W2-D21): the decisions define no alternative and the code implements only these, so a
     // signed different value would be validated, then ignored. The share is not among them: it is a signed default the
-    // validator bounds below (D-5788).
+    // validator bounds below.
     ['handcheck.of', r.handcheck.of, HANDCHECK_RULE.of], ['handcheck.per_arm', r.handcheck.per_arm, HANDCHECK_RULE.per_arm],
     ['handcheck.judge_failed', r.handcheck.judge_failed, HANDCHECK_RULE.judge_failed],
     ['q18_settings.procedure', r.q18_settings.procedure, Q18_DEFAULTS.procedure],
   ];
   for (const [p, got, want] of fixed) if (!recSame(got, want)) refuse(p, 'constant-mismatch');
 
-  // The hand-check share is a signed default handcheckSample reads exactly: 0 would draw nothing (D-5788).
+  // The hand-check share is a signed default handcheckSample reads exactly: 0 would draw nothing.
   if (r.handcheck.share === 0 || !decimalFrac(r.handcheck.share, false).ok) refuse('handcheck.share', 'value-outside-set');
 
   // Closed sets (W2-D63, W2-D79, W2-D72, W2-D87).
