@@ -382,9 +382,22 @@ Run 561 was issued D-5277 to D-5288 at dispatch. Each number is defined here whe
   (a comment's example then still renders as its stand-in), a name built from string parts, and a `run` name inside a
   hyphen run. Decision 10's `/home/<x>` became `/home/u` in files with no list hit too, the producer and the expectation
   together. The 29-character id (Task 6 Step 2) is `project-h-id-pad-keen-prairie` on all four lines that state the
-  length.
-- **D-5286** — `a-ledger-sweeps-itself` (Task 2, Task 7 Step 1): `docs/superpowers/programs/path-identity.md` is not
-  swept here. By ruling, its programme sweeps it on that programme's own ledger PR, which carries other edits not yet
-  published, so this PR carries its 12 hits and class 9's tree row stays red on that file alone until that PR merges.
-  The wave-done follows that merge and one merge of `main`. `ccd/ccd` was swept here with that programme's consent:
-  comment lines only, then re-stamped.
+  length. Review 662 found two more: a person's first name alone, swept to a role and now also a local-only `part`
+  row, and the public org's stem with a possessive naming the private project it measured. These hand-swept forms have
+  no committed regrowth guard: only the local scan and the `grep -F` cross-check see them.
+- **D-5286** — `a-ledger-sweeps-itself` (Task 2, Task 7 Step 1): `docs/superpowers/programs/path-identity.md` was not
+  swept here. By ruling, its programme swept it on its own ledger PR (#436), which carried other edits not yet
+  published. Until #436 merged, this PR carried the file's 12 hits and class 9's tree row was red on that file alone.
+  #436 has merged and this branch has merged `main` since, so nothing is carried. `ccd/ccd` was swept here with that
+  programme's consent: comment lines only, then re-stamped.
+- **D-5287** — `every-ignorable-character-folds` (Task 1, Review Focus 4; review 662 F6): the tokenizer drops every
+  code point Unicode marks `Default_Ignorable_Code_Point` or format (`Cf`), not only the six it first listed. A name
+  split by a bidi mark or isolate, a combining grapheme joiner or a Mongolian vowel separator read as two tokens, so
+  class 9 and the scan both missed it. One unit pin per character class (LRM, RLM, LRI, CGJ, MVS, ZWSP, SHY, WJ)
+  reds when the fold is narrowed back (measured).
+- **D-5288** — `the-guard-pins-itself` (Task 1 Steps 7-8, Review Focus 3 and 4; review 662 F7 and F8): the shape
+  checks passed with an entry deleted. `PRIVATE_NAMES` is now pinned by `PRIVATE_NAMES_DIGEST`, a digest of every
+  entry's four fields that `hash --list` prints beside the literal it regenerates, so a deleted, reordered or weakened
+  entry reds a unit pin (measured: one entry deleted). Each exemption's conjunct has a red-on-removal pin of its own:
+  the plugin phrase is exempt only in a history-programme document, and a revision citation needs seven or more hex
+  digits after the `@` (each measured).
