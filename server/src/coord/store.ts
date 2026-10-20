@@ -14,6 +14,11 @@ import type { LastRun } from './released.js';
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
 import type { StallDeliveryRow, StallMailRow, StallReadFailure, StallRunRow, StallWriteMiss } from './stall.js';
+// The drift decider's row shapes (D-5921) are declared by their consumer, the L1 `drift.ts`; the `drift*` reads below
+// implement them. `parseStallDetail` is the one reader of a stall observation's detail, so `driftOpenRuns` never
+// counts one as an act.
+import type { DriftAskRow, DriftDeliveryRow, DriftReviewRow, DriftRunRow } from './drift.js';
+import { parseStallDetail } from './stall.js';
 // Stall watch settings (design 2026-10-05 §8, §11): the settings row's port and the notice-count row are declared by
 // their consumer, the L1 `stallsettings.ts`; the insert arm starts from its seed, and the no-op skip asks its compare.
 import { STALL_SETTINGS_SEED, stallPatchIsNoOp } from './stallsettings.js';
@@ -935,6 +940,17 @@ const persistedInt = (text: string, column: string): PersistedInt => {
     ? { ok: true, value }
     : { ok: false, detail: `${column} is not a positive safe integer` };
 };
+
+/** The drift reads' answer (D-5921): the rows, or a read that failed, with its detail. */
+export type DriftReadResult<T> = { ok: true; rows: T[] } | { ok: false; detail: string };
+
+/** A drift read's integer, proven: a non-negative safe integer, or the read fails naming the column (no value). */
+const driftInt = (v: unknown, column: string): number => {
+  const n = typeof v === 'bigint' ? Number(v) : v;
+  if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0) throw new Error(`${column} is not a non-negative safe integer`);
+  return n;
+};
+const driftIntOrNull = (v: unknown, column: string): number | null => (v === null ? null : driftInt(v, column));
 
 /** A held-set detail (`deadCoordinatorBreakerHeldDetail`'s encoding, the `run_events` record's and the typed state's
  *  snapshot alike) read back into members, ALL-OR-FAILURE: a text `splitDeadCoordinatorBreakerHeld` refuses, or an
@@ -4575,6 +4591,95 @@ export class CoordStore {
       }
       return { kind: 'written', before, after: this.stallSettings() };
     });
+  }
+
+  // ── the drift decider's reads (coordinator-durability tail spec §4.2, D-5921) ─────────────────────────────
+  // Each is `{ ok: true, rows } | { ok: false, detail }`: a thrown statement or a value this process cannot prove is a
+  // failure with its detail, never a throw and never an overloaded null. They read; the decider (`drift.ts`) judges.
+
+  /** Every non-terminal run, with the `at` of its newest ACT row: a `run_events` row that is neither a stall
+   *  observation (`parseStallDetail` reads it) nor caused by `'operator'` (the lanes write as the operator), or null
+   *  when there is none. */
+  driftOpenRuns(): DriftReadResult<DriftRunRow> {
+    try {
+      const runs = this.db.prepare(
+        `SELECT id, program, state, claimedBy, openedAt FROM runs WHERE state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
+      ).all() as { id: unknown; program: string; state: string; claimedBy: string | null; openedAt: unknown }[];
+      const events = this.db.prepare(
+        "SELECT at, causedBy, CAST(detail AS TEXT) AS detail FROM run_events WHERE runId = ? AND causedBy <> 'operator' " +
+        'ORDER BY at DESC, id DESC',
+      );
+      const out: DriftRunRow[] = [];
+      for (const r of runs) {
+        let lastActAt: number | null = null;
+        for (const e of events.all(r.id as number) as { at: unknown; causedBy: string; detail: string | null }[]) {
+          if (parseStallDetail(e.detail) !== null) continue;
+          lastActAt = driftInt(e.at, 'run_events at');
+          break;
+        }
+        out.push({ id: driftInt(r.id, 'runs id'), program: r.program, state: r.state, claimedBy: r.claimedBy,
+          openedAt: driftInt(r.openedAt, 'runs openedAt'), lastActAt });
+      }
+      return { ok: true, rows: out };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Every QUEUED delivery with its gate columns and D1's park columns (#853): both mail kinds are about a row never
+   *  delivered (a parked row stays `queued`), so a `delivered` one is not read. The literal `'queued'`, not
+   *  `OUTSTANDING_STATES_SQL`: this read is not a holder of the outstanding predicate the re-queue's walk counts. */
+  driftOutstandingDeliveries(): DriftReadResult<DriftDeliveryRow> {
+    try {
+      const rows = this.db.prepare(
+        'SELECT id, toId, state, lastGate, gateSince, parkedAt, parkEscalatedAt FROM mail_deliveries ' +
+        "WHERE state = 'queued' ORDER BY id",
+      ).all() as { id: unknown; toId: string; state: string; lastGate: string | null; gateSince: unknown;
+        parkedAt: unknown; parkEscalatedAt: unknown }[];
+      return { ok: true, rows: rows.map((r) => ({
+        id: driftInt(r.id, 'mail_deliveries id'), toId: r.toId, state: r.state, lastGate: r.lastGate,
+        gateSince: driftIntOrNull(r.gateSince, 'mail_deliveries gateSince'),
+        parkedAt: driftIntOrNull(r.parkedAt, 'mail_deliveries parkedAt'),
+        parkEscalatedAt: driftIntOrNull(r.parkEscalatedAt, 'mail_deliveries parkEscalatedAt'),
+      })) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Every run at `awaiting-review`: when it ENTERED that state (its newest transition row into it from another
+   *  state; null when no row says) and its claimant's newest mail naming the run (null: none). */
+  driftAwaitingReview(): DriftReadResult<DriftReviewRow> {
+    try {
+      const rows = this.db.prepare(
+        'SELECT r.id AS id, r.program AS program, r.claimedBy AS claimedBy, ' +
+        "(SELECT MAX(e.at) FROM run_events e WHERE e.runId = r.id AND e.toState = 'awaiting-review' " +
+        "AND e.fromState <> 'awaiting-review') AS enteredAt, " +
+        '(SELECT MAX(m.at) FROM mail m WHERE m.runId = r.id AND m.fromId = r.claimedBy) AS lastClaimantMailAt ' +
+        "FROM runs r WHERE r.state = 'awaiting-review' ORDER BY r.id",
+      ).all() as { id: unknown; program: string; claimedBy: string | null; enteredAt: unknown; lastClaimantMailAt: unknown }[];
+      return { ok: true, rows: rows.map((r) => ({
+        id: driftInt(r.id, 'runs id'), program: r.program, claimedBy: r.claimedBy,
+        enteredAt: driftIntOrNull(r.enteredAt, 'run_events at'),
+        lastClaimantMailAt: driftIntOrNull(r.lastClaimantMailAt, 'mail at'),
+      })) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Every `held` or `answering` asks row. */
+  driftHeldQuestions(): DriftReadResult<DriftAskRow> {
+    try {
+      const rows = this.db.prepare(
+        "SELECT id, at, childId, state FROM asks WHERE state IN ('held', 'answering') ORDER BY id",
+      ).all() as { id: unknown; at: unknown; childId: string; state: string }[];
+      return { ok: true, rows: rows.map((r) => ({
+        id: driftInt(r.id, 'asks id'), at: driftInt(r.at, 'asks at'), childId: r.childId, state: r.state,
+      })) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   /** The notice-count read (§11): every `run_events` row at or after `since`, unordered (the counts are order-free,
