@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const captured = vi.hoisted(() => ({
   onRegisteredSW: null as null | ((url: string, reg?: ServiceWorkerRegistration) => void),
   rendered: 0,
+  tree: null as unknown,
 }));
 
 vi.mock('virtual:pwa-register', () => ({
@@ -25,7 +26,7 @@ vi.mock('virtual:pwa-register', () => ({
 }));
 
 vi.mock('react-dom/client', () => ({
-  createRoot: () => ({ render: () => { captured.rendered += 1; }, unmount: () => {} }),
+  createRoot: () => ({ render: (el: unknown) => { captured.rendered += 1; captured.tree = el; }, unmount: () => {} }),
 }));
 
 const UPDATE_CHECK_MS = 15 * 60 * 1000;
@@ -43,6 +44,26 @@ beforeEach(async () => {
 });
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+/** Every element type in a React element tree, by name, without rendering it. */
+function typeNames(node: unknown, out: string[] = []): string[] {
+  if (Array.isArray(node)) { for (const n of node) typeNames(n, out); return out; }
+  if (node === null || typeof node !== 'object' || !('type' in node)) return out;
+  const el = node as { type: unknown; props: { children?: unknown } };
+  const t = el.type as { name?: string; displayName?: string } | string | symbol;
+  out.push(typeof t === 'string' ? t : typeof t === 'symbol' ? String(t) : (t.displayName ?? t.name ?? '?'));
+  typeNames(el.props.children, out);
+  return out;
+}
+
+describe('main.tsx mounts the app alone under the root boundary (D-5467)', () => {
+  it('the command layer is not beside the app any more: app.tsx mounts it above the skin frame', () => {
+    const names = typeNames(captured.tree);
+    expect(names).toContain('App');
+    expect(names).toContain('RenderBoundary');
+    expect(names).not.toContain('CommandLayer');
+  });
+});
 
 describe('main.tsx boots the app and asks for its own updates', () => {
   it('renders once, and hands `registerSW` a registration callback', () => {

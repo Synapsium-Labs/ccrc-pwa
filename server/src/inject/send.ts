@@ -15,6 +15,9 @@ export interface SendDeps {
   /** Clock behind the clear's wall-clock budget; injectable so a test can prove
    *  the budget bounds the loop without spending the budget. */
   now?: () => number;
+  /** The egress mask over a box reading (D-5995). The `draft` a 409 hands back reached its client masked, so
+   *  `submitEnter`'s correspondence gate also accepts a claim equal to the box's reading in that masked form. */
+  maskDraft?: (text: string) => string;
 }
 
 export type SendResult =
@@ -1688,8 +1691,14 @@ export function submitEnter(
         ? { ok: false, error: 'blank-first-row' as const }
         : { ok: false, error: 'nothing-to-submit' as const };
     }
-    // A box holding something, but not what the caller was shown.
-    if (draft !== expect.trim()) return { ok: false, error: 'box-mismatch' as const };
+    // A box holding something, but not what the caller was shown. What it was shown is the 409's `draft`, which
+    // left the server masked (D-5995): a box whose reading masks to the claim holds what the caller was shown. That
+    // 409 was masked as a whole answer under one exact-bytes budget; a reading whose two masked forms differ once that
+    // budget is spent is refused here as a mismatch, the safe refusal.
+    const claim = expect.trim();
+    if (draft !== claim && (d.maskDraft === undefined || d.maskDraft(draft).trim() !== claim)) {
+      return { ok: false, error: 'box-mismatch' as const };
+    }
 
     await d.tmux.sendKey(id, 'Enter');
     // The same proof sendPrompt uses: OUR TEXT left the box, not "the box is
