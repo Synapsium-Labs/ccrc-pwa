@@ -2866,19 +2866,11 @@ export function registerCoordRoutes(
       return collectRefuse(reply, 'write-failed', `the write failed at its ${w.phase} step`);
     }
     const change = w.kind === 'written' ? collectLaneSettingChange(w.before, w.after, w.journalBefore) : null;
-    const log = deps.notifyLog;
-    if (change !== null && log) {
+    // Through the notice sink (D-5858), `'record-only'`, as the stall-watch door's row (the actor read only with a ring).
+    if (change !== null && deps.notifyLog) {
       const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
-      try {
-        const ev = log.record({ kind: 'coord', sessionId: '', title: COLLECT_SETTING_FEED_TITLE, body: `${change}; by ${actor}`, runId: null });
-        coord.recordFeedEvent(log.epoch, ev);
-      } catch (err) {
-        console.warn('ccrc-server: recordFeedEvent failed ' +
-          `(${err instanceof Error ? err.message : String(err)}) — collector setting written, feed archive degraded`);
-      } finally {
-        // The caps door's reason: `record()` minted the seq, so its persistence follows `record()`.
-        void log.flush();
-      }
+      notice({ kind: 'coord', sessionId: '', title: COLLECT_SETTING_FEED_TITLE, body: `${change}; by ${actor}`, runId: null },
+        'record-only', { degraded: 'collector setting written, feed archive degraded' });
     }
     const proof = collectControlNow({ coord, journal: lane.journal });
     const proofRow = proof.row;
