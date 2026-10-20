@@ -1692,7 +1692,9 @@ export function submitEnter(
         : { ok: false, error: 'nothing-to-submit' as const };
     }
     // A box holding something, but not what the caller was shown. What it was shown is the 409's `draft`, which
-    // left the server masked (D-5995): a box whose reading masks to the claim holds what the caller was shown.
+    // left the server masked (D-5995): a box whose reading masks to the claim holds what the caller was shown. That
+    // 409 was masked as a whole answer under one exact-bytes budget; a reading whose two masked forms differ once that
+    // budget is spent is refused here as a mismatch, the safe refusal.
     const claim = expect.trim();
     if (draft !== claim && (d.maskDraft === undefined || d.maskDraft(draft).trim() !== claim)) {
       return { ok: false, error: 'box-mismatch' as const };

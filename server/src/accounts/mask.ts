@@ -126,13 +126,18 @@ export function fingerprintAnswerOf(stdout: string): FingerprintAnswer | null {
 
 /** Every ECMA-48 escape: CSI; OSC to BEL or ST; DCS, SOS, PM and APC to ST; ESC + intermediates + final. */
 const ESC_SEQ = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[ -/]*[0-~])/g;
-/** A row move's stand-in (D-5995): a newline, with a NUL indent when it lands past the first column. */
+/** The most columns of indent a cursor move stands for in a view: a wider move is a screen's, never a wrap's. */
+const INDENT_COLUMNS_MAX = 512;
+/** `n` columns of indent: one NUL per column, so a row's view length is its width in columns (D-5995). */
+const indentOf = (n: number): string => '\0'.repeat(Math.min(Math.max(n, 0), INDENT_COLUMNS_MAX));
+/** A row move's stand-in (D-5995): a newline, with a NUL per column of indent when it lands past the first column
+ *  (a CUP or HVP's column is known; a move down keeps an unknown column, one NUL). */
 function rowMove(e: string): string | null {
   if (e.length === 2) return e === '\x1bE' ? '\n' : e === '\x1bD' ? '\n\0' : null;
   if (e[1] !== '[' || !'HfEFdB'.includes(e[e.length - 1]!)) return null;   // the common escape: no regex (D-5995)
   const m = /^\x1b\[([0-9;]*)([HfEFdB])$/.exec(e);
   if (m !== null) {
-    if (m[2] === 'H' || m[2] === 'f') return Number(m[1]!.split(';')[1] || '1') > 1 ? '\n\0' : '\n';
+    if (m[2] === 'H' || m[2] === 'f') return `\n${indentOf(Number(m[1]!.split(';')[1] || '1') - 1)}`;
     return m[2] === 'E' || m[2] === 'F' ? '\n' : '\n\0';
   }
   if (e === '\x1bE') return '\n';
@@ -151,21 +156,39 @@ function viewOf(s: string, sep: '' | '\0'): View {
   const k = sep === '' ? 0 : 1;
   return viewMemo.v[k] ??= buildView(s, sep);
 }
+/** A cursor move forward (CUF) of `n` columns, or null. */
+function cursorForward(e: string): number | null {
+  if (e[1] !== '[' || e[e.length - 1] !== 'C') return null;
+  const m = /^\x1b\[([0-9]*)C$/.exec(e);
+  return m === null ? null : Number(m[1] || '1');
+}
 function buildView(s: string, sep: '' | '\0'): View {
   const parts: string[] = [];
-  const map = new Int32Array(s.length + 1);
+  let map = new Int32Array(s.length + 1);
   let n = 0;
   let from = 0;
+  // Whether nothing but escapes lies between the last row break and here: a cursor move forward there is an indent,
+  // drawn as one NUL per column in both views, so a wrapped row measures as wide as the terminal drew it (D-5995).
+  let rowStart = true;
   const copy = (a: number, b: number): void => {
     if (b <= a) return;
     parts.push(s.slice(a, b));
     for (let i = a; i < b; i++) map[n++] = i;
+    rowStart = s[b - 1] === '\n' || s[b - 1] === '\r';
   };
   ESC_SEQ.lastIndex = 0;
   for (let m = ESC_SEQ.exec(s); m !== null; m = ESC_SEQ.exec(s)) {
     copy(from, m.index);
-    const put = rowMove(m[0]) ?? sep;
+    const move = rowMove(m[0]);
+    const cuf = move === null && rowStart ? cursorForward(m[0]) : null;
+    const put = move ?? (cuf === null ? sep : indentOf(cuf));
+    if (move !== null) rowStart = true;
     if (put !== '') parts.push(put);
+    if (n + put.length + s.length - m.index >= map.length) {   // an indent wider than its escape: room for the rest
+      const grown = new Int32Array(map.length * 2 + put.length);
+      grown.set(map.subarray(0, n));
+      map = grown;
+    }
     for (let k = 0; k < put.length; k++) map[n++] = m.index;
     from = m.index + m[0].length;
   }
@@ -194,7 +217,18 @@ const SHAPES = shapeMatchers();
  *  wrap is INDENTED (Claude Code indents the rows a long line wraps into; tmux may draw that indent as a cursor move,
  *  which both views read as a NUL), so a next row with no indent is a new line, never a wrap. Sticky expressions:
  *  nothing is sliced, so a text with many matches stays linear (D-5995). */
-const ROW_END = /[ \t\0]*(?:\r\n|\r|\n)/y;
+const ROW_END = /[ \t\0]*(?:[│┃|][ \t\0]*)?(?:\r\n|\r|\n)/y;
+/** Where a row's text ends before its row end at `e` (D-5995): back over blanks, a box's right rule (a side-bordered
+ *  dialog draws one on every row a key wraps across, mirroring `ROW_INDENT`'s left rule) and the blanks before it. */
+function rowTextEnd(t: string, e: number): number {
+  const blank = (c: string | undefined): boolean => c === ' ' || c === '\t' || c === '\0';
+  while (e > 0 && blank(t[e - 1])) e--;
+  if (e > 0 && (t[e - 1] === '│' || t[e - 1] === '┃' || t[e - 1] === '|')) {
+    e--;
+    while (e > 0 && blank(t[e - 1])) e--;
+  }
+  return e;
+}
 const ROW_INDENT = /(?:[ \t\0]|│|┃|\|)+/y;
 const TOKEN_RUN = /[A-Za-z0-9_+/.-]+/y;
 const TEXT_END = /[ \t\0]*(?:\r\n|\r|\n)?$/y;
@@ -250,8 +284,7 @@ function joinWraps(t: string): Joined | null {
   LINE_BREAK_ANY.lastIndex = 0;
   for (let b = LINE_BREAK_ANY.exec(t); b !== null; b = LINE_BREAK_ANY.exec(t)) {
     if (cuts.length > 0 && b.index < cuts[cuts.length - 1]![1]) continue;   // inside a join already made
-    let e = b.index;
-    while (e > 0 && (t[e - 1] === ' ' || t[e - 1] === '\t' || t[e - 1] === '\0')) e--;
+    const e = rowTextEnd(t, b.index);
     let a = e;
     while (a > 0 && e - a < RUN_MAX_BYTES && isRunByte(t.charCodeAt(a - 1))) a--;
     if (a === e) continue;
@@ -734,8 +767,7 @@ export class SecretMasker {
       seen = 0;
       LINE_BREAK.lastIndex = 0;
       for (let m = LINE_BREAK.exec(t); m !== null && seen < limit; m = LINE_BREAK.exec(t)) {
-        let e = m.index;
-        while (e > 0 && (t[e - 1] === ' ' || t[e - 1] === '\t' || t[e - 1] === '\0')) e--;
+        const e = rowTextEnd(t, m.index);
         const aFine = runStartBefore(t, e, true, longest + 1);
         if (e - aFine > longest) continue;
         const aCoarse = runStartBefore(t, aFine, false, longest + 1 - (e - aFine));
@@ -789,8 +821,7 @@ export class SecretMasker {
     LINE_BREAK.lastIndex = 0;
     for (let b = LINE_BREAK.exec(t); b !== null; b = LINE_BREAK.exec(t)) {
       if (best !== null && b.index >= best) break;
-      let e = b.index;
-      while (e > 0 && (t[e - 1] === ' ' || t[e - 1] === '\t' || t[e - 1] === '\0')) e--;
+      const e = rowTextEnd(t, b.index);
       const a = runStartBefore(t, e, false, Infinity);
       if (a < e) { best = Math.min(best ?? Infinity, a); break; }
     }
@@ -943,7 +974,7 @@ function rowTailAt(t: string, fpMax: number | null): number | null {
   while (j > 0 && ' \t\0│┃|'.includes(t[j - 1]!)) j--;
   if (j === 0) return null;
   if (t[j - 1] === '\n') { j--; if (j > 0 && t[j - 1] === '\r') j--; } else if (t[j - 1] === '\r') j--; else return null;
-  while (j > 0 && (t[j - 1] === ' ' || t[j - 1] === '\t' || t[j - 1] === '\0')) j--;
+  j = rowTextEnd(t, j);
   let i = j;
   while (i > 0 && j - i <= DRAWER_HELD_MAX && !OPEN_DELIM.test(t[i - 1]!)) i--;
   if (i === j) return null;
@@ -1014,6 +1045,10 @@ function runClosed(s: string): boolean | 'spaces' | 'row' {
     // spaces after the run: closed unless only spaces (or an indent's cursor move) remain so far
     let j = k;
     while (j < t.length && (t[j] === ' ' || t[j] === '\t' || t[j] === '\0')) j++;
+    if (j < t.length && (t[j] === '│' || t[j] === '┃' || t[j] === '|')) {   // a box's right rule, its row end to come
+      j++;
+      while (j < t.length && (t[j] === ' ' || t[j] === '\t' || t[j] === '\0')) j++;
+    }
     return j < t.length ? true : 'spaces';
   }
   let j = k + nl[0].length;

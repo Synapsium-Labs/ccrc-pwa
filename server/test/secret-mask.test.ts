@@ -1531,6 +1531,22 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
     expect((await app.inject({ method: 'POST', url: '/api/token/test-raw', payload: {} })).body).toBe(`token ${OAT}`);
   });
 
+  it('an octet-stream body passes byte for byte, and a thrown non-Error on any route answers 500 with its text masked', async () => {
+    app = await appOver(() => '');
+    const bytes = Buffer.from([0xff, 0xfe, 0x00, 0x41]);
+    app.post('/api/test-octet', async (_req, reply) => reply.type('application/octet-stream').send(bytes));
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- the shape under test
+    app.get('/api/test-throw-string', async () => { throw `read failed: ${OAT}`; });
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- the shape under test
+    app.post('/api/token/test-throw-string', async () => { throw `token failed: ${ORKEY}`; });
+    expect((await app.inject({ method: 'POST', url: '/api/test-octet', payload: {} })).rawPayload).toEqual(bytes);
+    for (const [method, url, k] of [['GET', '/api/test-throw-string', OAT], ['POST', '/api/token/test-throw-string', ORKEY]] as const) {
+      const r = await app.inject({ method, url, payload: method === 'POST' ? {} : undefined });
+      expect(r.statusCode, url).toBe(500);
+      clean(r.body, k);
+    }
+  });
+
   it('the answer backstop and the error mask are each registered once, on the root, and no other route file sets its own error handler but the exempt docs plugin', () => {
     const read = (f: string[]): string => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', ...f), 'utf8');
     const server = read(['server.ts']);
@@ -1668,5 +1684,100 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
       for (const ws of sockets) ws.close();
       m.close();
     }
+  });
+});
+
+describe('the follow-ups\' verification: a key wrapped twice under a cursor-move indent, and inside a bordered box (D-5995)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const PROJ = [SK, 'proj', fill(48, 'pj')].join('-');
+  const GEN = [SK, fill(40, 'gn')].join('-');
+  const KEYS: [string, string][] = [['sk-ant', OAT], ['sk-proj', PROJ], ['generic sk-', GEN], ['JWT', JWT]];
+  const W = 40;
+  /** The cursor-move indents a terminal redraw writes before a wrapped row: two columns in, row `r` of the screen. */
+  const MOVES: [string, (r: number) => string][] = [
+    ['CRLF CUF', () => '\r\n\x1b[2C'],
+    ['EL CRLF CUF', () => '\x1b[K\r\n\x1b[2C'],
+    ['CUP', (r) => `\x1b[${r};3H`],
+  ];
+  /** `k` cut after `cut` bytes on a full row of `W` columns, its rest on rows indented two columns, `W - 2` bytes each. */
+  const wrapped = (k: string, cut: number, move: (r: number) => string): string[] => {
+    const rows = [`${'x'.repeat(W - cut - 1)} ${k.slice(0, cut)}`];
+    for (let at = cut, r = 3; at < k.length; at += W - 2, r++) rows.push(`${move(r)}${k.slice(at, at + W - 2)}`);
+    return rows;
+  };
+
+  it('a key wrapped two or more times onto rows indented by a cursor move leaves no byte of it, at every cut, in rows mode', () => {
+    const m = new SecretMasker();
+    for (const [name, k] of KEYS) {
+      for (const cut of [1, 2, 3, 5, 9, 20]) {
+        for (const [mv, move] of MOVES) {
+          const rows = wrapped(k, cut, move);
+          if (k.length - cut > 2 * (W - 2)) expect(rows.length, `${name} cut ${cut}`).toBeGreaterThanOrEqual(4);
+          const o = m.maskText(`hello\r\n${rows.join('')} done\r\n$ `, { rows: true });
+          expect(leaksNone(o, k), `${name} cut ${cut} ${mv}: ${JSON.stringify(o)}`).toBe(true);
+          expect(o, `${name} cut ${cut} ${mv}`).toContain(' done\r\n$ ');
+        }
+      }
+    }
+  });
+
+  it('the same wrap written one row per drawer push, back to back or within the row settle, leaves no byte of it', () => {
+    vi.useFakeTimers();
+    const m = new SecretMasker();
+    for (const [name, k] of KEYS) {
+      for (const cut of [1, 2, 3, 5, 9, 20]) {
+        for (const [mv, move] of MOVES) {
+          for (const gap of [0, 9]) {
+            const out: string[] = [];
+            const d = m.drawer((t) => out.push(t));
+            const rows = wrapped(k, cut, move);
+            d.push(`hello\r\n${rows[0]}`);
+            for (const row of rows.slice(1)) { if (gap > 0) vi.advanceTimersByTime(gap); d.push(row); }
+            d.push(' done\r\n$ ');
+            vi.advanceTimersByTime(80);
+            // A JWT whose header a push split from its first row shows its header and payload, never its signature (item 14).
+            const secret = name === 'JWT' ? k.slice(k.lastIndexOf('.') + 1) : k;
+            expect(leaksNone(out.join(''), secret), `${name} cut ${cut} ${mv} gap ${gap}: ${JSON.stringify(out)}`).toBe(true);
+            d.dispose();
+          }
+        }
+      }
+    }
+  });
+
+  /** `k` after `export K=` inside a box `inner` columns wide with a rule on both sides, wrapped after `cut` bytes. */
+  const boxed = (k: string, cut: number, inner = 40): string[] => {
+    const rows = [`│ ${'x'.repeat(inner - cut - 3)} K=${k.slice(0, cut)} │`];
+    for (let at = cut; at < k.length; at += inner) rows.push(`│ ${k.slice(at, at + inner).padEnd(inner)} │`);
+    return rows;
+  };
+
+  it('a key wrapped inside a box with a right rule leaves no byte of it, at every cut, in rows mode and across one drawer push per row', () => {
+    vi.useFakeTimers();
+    const m = new SecretMasker();
+    for (const [name, k] of KEYS) {
+      for (let cut = 1; cut <= 20; cut++) {
+        const rows = boxed(k, cut);
+        const o = m.maskText(`╭${'─'.repeat(42)}╮\r\n${rows.join('\r\n')}\r\n╰${'─'.repeat(42)}╯\r\n`, { rows: true });
+        expect(leaksNone(o, k), `${name} cut ${cut}: ${JSON.stringify(o)}`).toBe(true);
+        expect(o, `${name} cut ${cut}`).toContain(`╰${'─'.repeat(42)}╯`);
+        const out: string[] = [];
+        const d = m.drawer((t) => out.push(t));
+        for (const row of rows) d.push(`${row}\r\n`);
+        d.push('$ ');
+        vi.advanceTimersByTime(80);
+        const secret = name === 'JWT' ? k.slice(k.lastIndexOf('.') + 1) : k;   // item 14: a JWT's signature
+        expect(leaksNone(out.join(''), secret), `${name} cut ${cut} drawer: ${JSON.stringify(out)}`).toBe(true);
+        d.dispose();
+      }
+    }
+  });
+
+  it('a boxed row that ends in an ordinary word, and a row indented by a cursor move under a short row, are drawn as typed', () => {
+    const m = new SecretMasker();
+    const box = `│ ${'plain words here'.padEnd(40)} │\r\n│ ${'more plain words'.padEnd(40)} │\r\n`;
+    expect(m.maskText(box, { rows: true })).toBe(box);
+    const moved = `hello\r\n${'x'.repeat(30)}\r\n\x1b[2Cnext row\r\n\x1b[6;3Hlast row\r\n`;
+    expect(m.maskText(moved, { rows: true })).toBe(moved);
   });
 });

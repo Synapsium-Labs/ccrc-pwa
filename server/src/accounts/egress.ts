@@ -7,7 +7,7 @@ import { SECRET_MASK_TOO_LARGE, type FleetSession } from '../../../shared/api.js
 import type { SecretMasker } from './mask.js';
 
 /** A body of these media types is bytes, not text: decoding it to mask it would corrupt it, so it passes as it is. */
-const BINARY_TYPE = /^\s*(?:(?:image|audio|video|font)\/|application\/(?:pdf|zip|gzip|wasm)\b)/i;
+const BINARY_TYPE = /^\s*(?:(?:image|audio|video|font)\/|application\/(?:pdf|zip|gzip|wasm|octet-stream)\b)/i;
 /** The most of a streamed text body that is read and masked; the rest is cut with the too-large notice. */
 export const STREAM_BODY_MAX = 16 * 1024 * 1024;
 
@@ -50,10 +50,12 @@ function maskStream(mk: SecretMasker, src: Readable): Readable {
 }
 
 /** The error with its message masked (D-5995), for the root error handler: the default handler sends `err.message`.
+ *  A thrown non-Error becomes an Error carrying its masked text.
  *  The same error when nothing in it matched; otherwise a view over it with only the message replaced, so its status,
  *  code and type read through. */
 export function maskedError(mk: SecretMasker, err: unknown): unknown {
-  if (!(err instanceof Error)) return err;
+  // A thrown non-Error would be sent as it is: as an Error, the default handler answers 500 with its text masked.
+  if (!(err instanceof Error)) return new Error(mk.maskText(String(err)));
   const message = mk.maskText(err.message);
   if (message === err.message) return err;
   return Object.create(err, { message: { value: message, writable: true, configurable: true } }) as Error;
