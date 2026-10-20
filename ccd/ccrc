@@ -7768,8 +7768,15 @@ _acct_on_term() {    # the TERM trap `cmd_account` installs
   exit 143
 }
 
+# THE LOCKS DIRECTORY IS SPELLED ONCE in this file, on `_models_lock_path`'s
+# line (auto-advance spec D21's single-definition pin); a lane lock lives
+# beside the models locks, so its directory is derived from that one spelling
+# (D-5755 (14)).
+_acct_locks_dir() { local p; p="$(_models_lock_path _)"; printf '%s' "${p%/*}"; }
+
 _acct_lane_lock() {   # <id> <what-still-stands> -> lock held on ACCT_LANE_LOCK_FD until exit
-  local id="$1" stands="$2" dir="$HOME/.ccrc/locks"
+  local id="$1" stands="$2" dir
+  dir="$(_acct_locks_dir)"
   [ -z "$ACCT_LANE_LOCK_FD" ] || return 0
   [ -z "$ACCT_MARKER_LOCK_FD" ] \
     || _acct_refuse 1 lock-order "this verb asked for lane $id's lock while it already held the box-wide placement lock, which is the order that lets two verbs wait on each other. This is a bug in ccrc, not a fact about your box. $stands"
@@ -16831,7 +16838,8 @@ _inst_lane_state() {
   # D-5756: an upgraded darwin node's existing `~/.cc-secrets` was never
   # excluded from Time Machine; this step excludes it (advisory, silent on Linux).
   [ ! -d "$ACCT_SECRETS_DIR" ] || _acct_backup_exclude "$ACCT_SECRETS_DIR"
-  local sh="$HOME/.ccrc/accounts.sh" op="$CCRC_HERE/../deploy/account-op.mjs" locks="$HOME/.ccrc/locks"
+  local sh="$HOME/.ccrc/accounts.sh" op="$CCRC_HERE/../deploy/account-op.mjs" locks
+  locks="$(_acct_locks_dir)"
   local listed="" id="" rc=0 wrote=0 kept=0 busy=0 failed=0
   if ! listed="$(
     . "$sh" >/dev/null || exit 1

@@ -7469,9 +7469,13 @@ describe('the advance file and its clock, each spelled once (auto-advance spec �
 // ── auto-advance spec D21: the lane-files lock, and the one list of ops that run under it ──────────────────────
 describe('the lane-files lock: one path outside ~/.ccrc/models, and one list of writing ops (auto-advance spec D21)', () => {
   it('the lock path is spelled once, in ccd/ccrc, on _models_lock_path\'s one line, and by no node or TypeScript source', () => {
-    expect(holdersOf('.ccrc/locks')).toEqual(['ccd/ccrc']);
+    // The accounts plan's lane locks (Task A11; D-5755 (14)) share the directory: `ccrc` derives it from this one line
+    // (`_acct_locks_dir`), and `ccd-account-health`, a separate program the timer runs, spells it once on its own.
+    expect(holdersOf('.ccrc/locks')).toEqual(['ccd/ccd-account-health', 'ccd/ccrc']);
     expect(codeLines(path.join(ccrcRoot, 'ccd', 'ccrc')).filter((l) => l.includes('.ccrc/locks')))
       .toEqual(['_models_lock_path() { printf \'%s\' "$HOME/.ccrc/locks/models-$1.lock"; }']);
+    expect(codeLines(path.join(ccrcRoot, 'ccd', 'ccd-account-health')).filter((l) => l.includes('.ccrc/locks')))
+      .toEqual(['AH_LOCKS_DIR="$HOME/.ccrc/locks"']);
     const mjs = (d: string): string[] => readdirSync(path.join(ccrcRoot, d)).filter((f) => f.endsWith('.mjs'))
       .map((f) => path.join(ccrcRoot, d, f));
     expect([...ALL, ...mjs('deploy'), ...mjs('shared')].filter((f) => readFileSync(f, 'utf8').includes('.ccrc/locks')).map(rel))

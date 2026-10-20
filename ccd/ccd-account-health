@@ -187,14 +187,17 @@ _ah_clear() { rm -f "$REG/$1-authdead"; }
 # written. A 403 scope answer proves the token, not the lane, and `enable`'s
 # readiness (A13) reads `check`, so this timer never writes `ok`.
 LANE_STATE_OP="$HOME/ccrc/deploy/account-op.mjs"
+# The lane locks' directory, `ccrc`'s `_acct_locks_dir`. This separate program
+# cannot source `ccrc`, so it spells the path once, here (D-5755 (14)).
+AH_LOCKS_DIR="$HOME/.ccrc/locks"
 _ah_lane_state() {   # <id> <verdict>
   local at="" rc=0
   [ -r "$LANE_STATE_OP" ] \
     || { _ah_say "$1: lane state not written — the writer at \$HOME/ccrc/deploy/account-op.mjs is missing"; return 0; }
   at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || { _ah_say "$1: lane state not written — no clock"; return 0; }
-  mkdir -p -m 0700 "$HOME/.ccrc/locks" \
-    || { _ah_say "$1: lane state not written — cannot create \$HOME/.ccrc/locks"; return 0; }
-  flock -n -E 75 "$HOME/.ccrc/locks/$1.lock" \
+  mkdir -p -m 0700 "$AH_LOCKS_DIR" \
+    || { _ah_say "$1: lane state not written — cannot create $AH_LOCKS_DIR"; return 0; }
+  flock -n -E 75 "$AH_LOCKS_DIR/$1.lock" \
     node "$LANE_STATE_OP" lane-state --id "$1" --check-verdict "$2" --check-at "$at" >/dev/null || rc=$?
   case "$rc" in
     0) : ;;
