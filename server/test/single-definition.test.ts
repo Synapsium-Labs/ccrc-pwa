@@ -7744,6 +7744,15 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(rowless, 'a marker constant with no SWITCHES row').toEqual([]);
   });
 
+  // D-5856 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1b; ARCH-70 (#805)).
+  // Every reclaim-paused reader, at the pass and at the act, goes through `readSwitches`: the private parse sites fold
+  // 10 -> 1 on C1b's tip. The one left is the stop-done lane's (`stopDoneSweep.ts`), which W4 moves. May only shrink.
+  it('reclaim-paused is parsed at <= 1 site outside readSwitches (may only shrink)', () => {
+    const sites = reclaimPauseParseSites();
+    expect(sites.length, 'a private includes(RECLAIM_PAUSE_MARKER): read it through readSwitches').toBeLessThanOrEqual(1);
+    expect(sites.map((x) => x.file)).toEqual(sites.length === 0 ? [] : ['server/src/stopDoneSweep.ts']);
+  });
+
   // D-5853 (Task C0f; ARCH-00 (#525)). The test scanners' TS parser, the operator's option (a) (a TypeScript 6 alias),
   // has ONE importer, `server/test/scan/parse.ts`, and an exact version. The corpus is every tracked or new untracked
   // .ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs file (not .d.*ts), with comment lines dropped (`stallCodeText`). Under
