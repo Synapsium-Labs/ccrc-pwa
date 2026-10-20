@@ -116,7 +116,7 @@ const seedTurnMark = (home: string, id: string, over: Record<string, unknown> = 
 const fleetRow = (id: string, over: Partial<FleetSession> = {}): FleetSession => ({
   hibernatedAt: null,
   id, wrapper: 'claude', home: '/home/rc', project: 'demo', workdir: '/w/demo',
-  workspace: `${id}-ws`, name: null, status: 'idle', statusUpdatedAt: IDLE_AT, limits: null,
+  workspace: `${id}-ws`, name: null, title: null, status: 'idle', statusUpdatedAt: IDLE_AT, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, background: null, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,

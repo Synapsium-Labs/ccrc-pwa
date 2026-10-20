@@ -592,7 +592,7 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
     const row: FleetSession = {
       hibernatedAt: null,
       id: 'lane-a-project-a', wrapper: 'lane-a', home: '/home/fixture', project: 'project-a', workdir: '/data/projects/project-a',
-      workspace: null, name: null, status: 'busy', statusUpdatedAt: 1000, limits: null,
+      workspace: null, name: null, title: null, status: 'busy', statusUpdatedAt: 1000, limits: null,
       dialogPending: false, version: null, model: null, effort: null, ultracode: false,
       branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
       hookState: 'done', askSummary: null, subagents: null, background: null, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'working', bucketSince: 1000,
@@ -814,7 +814,7 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
     const row: FleetSession = {
       hibernatedAt: null,
       id: 'project-a-quiet-basin', wrapper: 'lane-a', home: '/home/fixture', project: 'project-a', workdir: '/data/projects/project-a',
-      workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: 1000, limits: null,
+      workspace: 'quiet-basin', name: null, title: null, status: 'idle', statusUpdatedAt: 1000, limits: null,
       dialogPending: false, version: null, model: null, effort: null, ultracode: false,
       branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
       hookState: 'waiting', askSummary: null, subagents: null, background: null, withCoordinator: WC, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'working', bucketSince: 4000,

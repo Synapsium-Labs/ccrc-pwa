@@ -105,7 +105,7 @@ const seedTranscript = (home: string, rows: readonly object[]): void => {
 const fleetRow = (over: Partial<FleetSession> = {}): FleetSession => ({
   hibernatedAt: null,
   id: ID, wrapper: 'claude', home: '/home/rc', project: 'demo', workdir: WORKDIR,
-  workspace: `${ID}-ws`, name: null, status: 'idle', statusUpdatedAt: T_NOTICE, limits: null,
+  workspace: `${ID}-ws`, name: null, title: null, status: 'idle', statusUpdatedAt: T_NOTICE, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, background: null, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,

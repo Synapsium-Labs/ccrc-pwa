@@ -788,7 +788,7 @@ describe('the review findings: every egress of session text is masked (D-5995)',
   const session = (id: string): FleetSession => ({
     id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
     // The live name is the operator's (a server-built field, kept as typed): the keys ride in session text.
-    workspace: null, name: 'n demo', status: 'idle', statusUpdatedAt: null, limits: null,
+    workspace: null, name: 'n demo', title: null, status: 'idle', statusUpdatedAt: null, limits: null,
     dialogPending: false, version: null, model: null, effort: null, ultracode: false,
     branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
     hookState: null, askSummary: `paste ${ORKEY} then ${OAT}`, subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
@@ -1590,7 +1590,7 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
   const SKNAME = 'demo-sk-abcdefgh';
   const fleetRow = (): FleetSession => ({
     id: `claude-${SKNAME}`, wrapper: 'claude', home: '/home/rc', project: SKNAME, workdir: `/data/projects/${SKNAME}/ws/${SKNAME}`,
-    workspace: SKNAME, name: SKNAME, status: 'idle', statusUpdatedAt: null, limits: null,
+    workspace: SKNAME, name: SKNAME, title: null, status: 'idle', statusUpdatedAt: null, limits: null,
     dialogPending: false, version: null, model: null, effort: null, ultracode: false,
     branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
     hookState: null, askSummary: `paste ${ORKEY} and ${CMP}`, subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,

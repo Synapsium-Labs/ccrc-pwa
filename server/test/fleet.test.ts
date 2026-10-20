@@ -707,6 +707,22 @@ describe('PR state on the wire', () => {
     // the wire as null, not as an empty string a chip would render blank.
     expect(fleet.find((x) => x.id === 'demo-still-lake')!.held).toBeNull();
   });
+
+  // Named workspaces S6: `title: r.title` is the assembly's one line for the operator's title, and the registry's
+  // own tests never reach `assembleFleet`, so `title: null` here would leave every named workspace unlabelled on the
+  // phone while the rest of the suite stayed green. The `.title` file, verbatim; absence (and an empty file, which
+  // the registry maps to null) is null on the wire.
+  it('carries the operator title straight through, null when there is none', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-quiet-basin', 'claude', { workspace: 'quiet-basin', title: 'ENG-1234 - Fix the login flow' });
+    seedSession(home, 'demo-still-lake', 'claude', { workspace: 'still-lake' });
+    seedSession(home, 'demo-calm-mesa', 'claude', { workspace: 'calm-mesa', title: '' });
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ code: 1, stdout: '', stderr: '' })));
+    expect(fleet.find((x) => x.id === 'demo-quiet-basin')!.title).toBe('ENG-1234 - Fix the login flow');
+    expect(fleet.find((x) => x.id === 'demo-still-lake')!.title).toBeNull();
+    expect(fleet.find((x) => x.id === 'demo-calm-mesa')!.title).toBeNull();
+  });
 });
 
 describe('archived size on the wire', () => {

@@ -94,6 +94,11 @@ export interface FleetSession {
    *  main checkout. Grouping and ws-rm both key off its presence. */
   workspace: string | null;
   name: string | null;                       // live display name from sessions/<pid>.json
+  /** The operator's display title for a named workspace (`$REG/<id>.title`, written by `ccd ws-add --title` /
+   *  `ws-title`); null = none was given. `sessionLabel` reads it FIRST, before `name`. Additive, no `FLEET_PROTO`
+   *  bump: `reviveFleetSession` below reads it with `optStr`, so an older peer that omits it revives as null, and a
+   *  present non-string rejects the session like `name` does. */
+  title: string | null;
   status: SessionStatus;
   statusUpdatedAt: number | null;            // epoch ms
   limits: { five: number | null; seven: number | null } | null;  // account of current wrapper
@@ -3209,6 +3214,7 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       workdir: reqStr(o, 'workdir'),
       workspace: optStr(o, 'workspace'),
       name: optStr(o, 'name'),
+      title: optStr(o, 'title'),
       status: status as SessionStatus,
       statusUpdatedAt: optNum(o, 'statusUpdatedAt'),
       limits,

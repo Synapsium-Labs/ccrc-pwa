@@ -11,7 +11,7 @@ const REL: ReleasedFrom = {
 const session: FleetSession = {
   hibernatedAt: null,
   id: 'demo-amber', wrapper: 'claude', home: '/home/rc', project: 'demo', workdir: '/data/projects/demo',
-  workspace: 'amber', name: null, status: 'idle', statusUpdatedAt: null, limits: null,
+  workspace: 'amber', name: null, title: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, background: null, lastEnd: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
@@ -63,5 +63,21 @@ describe('reviveFleetSession carries releasedFrom', () => {
     const s = reviveFleetSession(raw({ releasedFrom: bad }));
     expect(s).not.toBeNull();
     expect(s!.releasedFrom).toBeNull();
+  });
+});
+
+describe('reviveFleetSession carries title (named workspaces S6)', () => {
+  it('round-trips a title', () => {
+    expect(reviveFleetSession(raw({ title: 'ENG-1234 - Fix the login flow' }))!.title).toBe('ENG-1234 - Fix the login flow');
+  });
+
+  it('revives an absent key as null — an older peer predates the field', () => {
+    const o = raw();
+    delete o['title'];
+    expect(reviveFleetSession(o)!.title).toBeNull();
+  });
+
+  it('rejects a non-string title rather than laundering it into "no title"', () => {
+    expect(reviveFleetSession(raw({ title: 7 }))).toBeNull();
   });
 });

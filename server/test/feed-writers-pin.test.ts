@@ -297,7 +297,7 @@ const nudgeRig = async (o: { notifyLog?: boolean } = {}) => {
   const row: FleetSession = {
     hibernatedAt: null,
     id: A, wrapper: 'claude', home: '/home/demo', project: 'project-a', workdir: NUDGE_WORKDIR,
-    workspace: `${A}-ws`, name: null, status: 'idle', statusUpdatedAt: T_NOTICE, limits: null,
+    workspace: `${A}-ws`, name: null, title: null, status: 'idle', statusUpdatedAt: T_NOTICE, limits: null,
     dialogPending: false, version: null, model: null, effort: null, ultracode: false,
     branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
     hookState: null, askSummary: null, subagents: null, background: null, lastEnd: null, graphQueries: null,
